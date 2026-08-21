@@ -157,7 +157,13 @@ namespace gamescope::config
                 if ( const nlohmann::json *pPreSharpen = JGetObject( *pReshade, "pre_sharpen" ) )
                 {
                     s.reshade.pre_sharpen.enabled = JGetBool( *pPreSharpen, "enabled", s.reshade.pre_sharpen.enabled );
-                    s.reshade.pre_sharpen.strength = JGetOptFloat( *pPreSharpen, "strength" );
+                    // Only overwrite the struct's compiled-in default (M6 resolved
+                    // this field's TBD to 0.5f, see ConfigSchema.h) when the file
+                    // actually has a number - a pre-M6 config on disk explicitly
+                    // wrote "strength": null (the TBD placeholder), which must
+                    // still resolve to today's real default, not stay null forever.
+                    if ( std::optional<float> flStrength = JGetOptFloat( *pPreSharpen, "strength" ) )
+                        s.reshade.pre_sharpen.strength = flStrength;
                 }
 
                 if ( const nlohmann::json *pAdaptive = JGetObject( *pReshade, "adaptive_brightness" ) )
