@@ -246,7 +246,10 @@ namespace gamescope::chrome
 		constexpr ImU32 kIconIdleU32      = IM_COL32( 255, 255, 255, 153 );
 		constexpr ImU32 kIconHoverU32     = IM_COL32( 255, 255, 255, 191 );
 
-		bool s_bPanelOpen[(size_t)PanelId::Count] = { true, true, true, true, true };
+		// Display open, everything else closed -- see Chrome.h's IsPanelOpen()
+		// comment: exactly one panel is open on first show, SetPanelOpen()
+		// keeps it that way from then on.
+		bool s_bPanelOpen[(size_t)PanelId::Count] = { true, false, false, false, false };
 
 		Icon IconForPanel( PanelId id )
 		{
@@ -305,6 +308,15 @@ namespace gamescope::chrome
 
 	void SetPanelOpen( PanelId id, bool bOpen )
 	{
+		if ( bOpen )
+		{
+			// Exclusive: opening one panel closes every other one, so the
+			// dock always behaves as "switch between panels" and never
+			// leaves more than one panel's default position stacked on top
+			// of another -- see the comment on IsPanelOpen() in Chrome.h.
+			for ( size_t i = 0; i < (size_t)PanelId::Count; i++ )
+				s_bPanelOpen[i] = false;
+		}
 		s_bPanelOpen[(size_t)id] = bOpen;
 	}
 

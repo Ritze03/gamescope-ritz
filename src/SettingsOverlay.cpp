@@ -312,57 +312,26 @@ namespace gamescope
 		s_flCurrentAlpha = s_flFadeAtAnchor + ( flTarget - s_flFadeAtAnchor ) * flT;
 	}
 
-	// M8 part 3 (issue #15): this window is now hosted through
-	// chrome::BeginPanelWindow() as the dock's "FPS HUD" panel (see
-	// Overlay/Chrome.h) -- SPEC.md's UI structure lists an "FPS HUD panel"
-	// hosting exactly FpsDisplay_DrawSettingsPanel()'s controls, which this
-	// window already did from M4 onward. The M1 render-shell diagnostics
-	// below (dummy slider/checkbox/text input, the fade-alpha readout) are
-	// kept as-is rather than stripped -- they're still live, still exercise
-	// M2's input-capture path during manual verification, and removing
-	// working diagnostic content isn't this milestone's job (chrome/hosting
-	// only, see the M8p3 task brief's scope boundary).
-	static void DrawPlaceholderWindow()
+	// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow() as the
+	// dock's "FPS HUD" panel (see Overlay/Chrome.h) -- SPEC.md's UI structure
+	// lists an "FPS HUD panel" hosting exactly FpsDisplay_DrawSettingsPanel()'s
+	// controls, which this window has done since M4.
+	//
+	// The M1 render-shell scaffolding that used to live in this window
+	// (the "Settings overlay render shell -- Milestone 1" heading, its proof-
+	// of-pipeline paragraph, the "Layer alpha" readout, a dummy slider/toggle,
+	// the toggle-hotkey hint line, and an M2 capture-check text field) has
+	// been removed here -- it was developer-only scaffolding that was never
+	// meant to ship to end users. Removing it does not remove the *ability*
+	// to manually verify input capture: the real panels already have plenty
+	// of sliders/toggles (Display, Shaders) and a text field (Config/Profiles'
+	// "New profile name"), so those are the manual-test surface for pointer/
+	// keyboard capture now.
+	static void DrawFpsHudPanel()
 	{
 		if ( !gamescope::chrome::BeginPanelWindow( "FPS HUD", gamescope::chrome::PanelId::Fps,
 			ImVec2( 64.0f, 64.0f ), ImVec2( 460.0f, 640.0f ) ) )
 			return;
-
-		ImGui::TextUnformatted( "Settings overlay render shell -- Milestone 1" );
-		ImGui::Separator();
-		ImGui::TextWrapped(
-			"This proves the render pipeline end to end: ImGui draws on the "
-			"general Vulkan queue, gets composited as a normal layer, and "
-			"fades in/out on toggle." );
-		ImGui::Spacing();
-
-		// ponytail: "Layer alpha: 0.85" mixes the "Layer alpha:" label word
-		// into the same Value (mono) run as its number rather than
-		// splitting into two Text() calls on two fonts -- the design
-		// guide's "never mix a number into a sans run" rule is really about
-		// standalone value readouts (see FpsDisplay.cpp's DrawReadout for a
-		// real one); this is throwaway M1 placeholder text, not worth the
-		// extra SameLine()-split code for.
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		ImGui::Text( "Layer alpha: %.2f", s_flCurrentAlpha );
-		ImGui::PopFont();
-
-		static float flDummySlider = 0.5f;
-		ImGui::SliderFloat( "Dummy slider", &flDummySlider, 0.0f, 1.0f );
-
-		static bool bDummyToggle = false;
-		gamescope::widgets::Toggle( "Dummy toggle", &bDummyToggle ); // M8 part 2 (issue #14)
-
-		ImGui::Spacing();
-		// Meta role (Mono 400, per the design guide -- hints/disabled text
-		// is mono in this design, same as numeric readouts).
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled(
-			"Toggle: Ctrl+Shift+O, `toggle_settings_overlay`, or `settings_overlay_visible 0|1`." );
-		ImGui::PopFont();
-
-		static char szTextInputScratch[128] = "";
-		ImGui::InputText( "Type here (M2 capture check)", szTextInputScratch, sizeof( szTextInputScratch ) );
 
 		gamescope::FpsDisplay_DrawSettingsPanel(); // M4 (see FpsDisplay.h)
 
@@ -525,7 +494,7 @@ namespace gamescope
 
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
-		DrawPlaceholderWindow();
+		DrawFpsHudPanel();
 		PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
 		PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
 		PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
