@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ConfigSchema.h"
 
@@ -104,6 +106,61 @@ namespace gamescope::config
     // Blocks until every currently-queued write has been flushed to disk. For
     // orderly shutdown and for tests - not for use on the steamcompmgr thread.
     void FlushPendingWrites();
+
+    // Directory listing for the Config/Profiles panel (SPEC.md's UI structure
+    // section) - sanitized profile names / game app ids currently on disk,
+    // sorted, with no ".json" suffix. Empty when the respective directory
+    // doesn't exist yet. Still blocking directory I/O like every other
+    // function in this header - callers should cache and refresh on an
+    // explicit user action (panel open, profile created/applied), not call
+    // every frame a panel is drawn.
+    std::vector<std::string> ListProfiles();
+    std::vector<std::string> ListGameIds();
+
+    // Session-wide "where do a live-edited panel's writes belong" routing,
+    // shared by every panel that keeps its own locally-cached Settings and
+    // persists it on every edit (PanelDisplay, PanelShaders, FpsDisplay,
+    // PanelConfig - see each file's own EnsureConfigLoaded()/QueueSave()
+    // pair). SessionAppId() resolves once and is cached for the rest of the
+    // process's life, matching SPEC.md's "no live app-id reload" decision
+    // (Feature 6). IsSessionOverrideActive() is a small cached bool, lazily
+    // seeded from an on-disk check the first time anything asks and from then
+    // on kept current only by SetSessionOverrideActive() (PanelConfig calls
+    // it right after it enables/clears/replaces the per-game snapshot) - so
+    // answering "which file does this edit belong in?" on every keystroke
+    // never needs a blocking disk read (see this header's threading note).
+    const std::optional<std::string> &SessionAppId();
+    bool IsSessionOverrideActive();
+    void SetSessionOverrideActive( bool bActive );
+
+    // Bumped by PanelConfig whenever one of its own actions (override
+    // enabled/cleared, profile applied, another game's config copied in)
+    // changes what's authoritative for the current session - never by an
+    // ordinary per-slider edit in another panel. Every panel's own
+    // EnsureConfigLoaded() compares this against the generation it last
+    // loaded at and reloads via ResolveEffective() when they differ - the
+    // whole mechanism "pick a profile, other already-open panels pick it up"
+    // relies on, without a shared observer/event system.
+    uint64_t ConfigGeneration();
+    void BumpConfigGeneration();
+
+    // Persists `settings` to whichever file SessionAppId()/
+    // IsSessionOverrideActive() currently say is authoritative for this
+    // session - games/<AppId>.json (as a full snapshot, DECISIONS.md #19)
+    // when a per-game override is active, global.json otherwise. Every panel
+    // with a locally-cached Settings struct should call this instead of
+    // EnqueueGlobalWrite() directly so "Override Global Config" routes every
+    // panel's writes the same way.
+    void EnqueueRoutedWrite( const Settings &settings );
+
+    // Test-only: resets every piece of the session-routing cache above
+    // (SessionAppId/IsSessionOverrideActive/ConfigGeneration) as if this
+    // were a fresh process. Production code never calls this - an app id is
+    // resolved once for the life of the real process by design (SPEC.md's
+    // "no live app-id reload" decision, Feature 6); tests/test_config.cpp
+    // needs it purely because catch2 runs every [config]-tagged TEST_CASE in
+    // one shared process, and each test wants its own session identity.
+    void ResetSessionRoutingForTests();
 
     // Debug-only: a pretty-printed JSON dump of the effective config for
     // `oAppId` (global.json when std::nullopt), plus which layer won. M0 ships

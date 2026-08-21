@@ -126,6 +126,7 @@ src = [
   'Overlay/FpsDisplay.cpp',
   'Overlay/PanelShaders.cpp',
   'Overlay/PanelAudio.cpp',
+  'Overlay/PanelConfig.cpp',
   'backend.cpp',
   'x11cursor.cpp',
   'InputEmulation.cpp',

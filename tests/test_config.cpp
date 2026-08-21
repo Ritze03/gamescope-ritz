@@ -254,3 +254,152 @@ TEST_CASE( "queued writes flush to disk without blocking the caller inline", "[c
 
     REQUIRE( LoadGlobal().gamescope.filter == "PIXEL" );
 }
+
+namespace
+{
+    // Points GS_RITZ_APPID at `sAppId` (highest-precedence env var,
+    // ResolveAppId's decision 21 order) for the lifetime of the object, and
+    // resets ConfigManager's session-routing cache (SessionAppId/
+    // IsSessionOverrideActive/ConfigGeneration) on both construction and
+    // destruction - production never re-resolves an app id mid-process, but
+    // catch2 runs every [config]-tagged TEST_CASE in one shared process, so
+    // each M7 routing test needs its own clean session identity.
+    struct ScopedSessionAppId
+    {
+        explicit ScopedSessionAppId( const char *pszAppId )
+        {
+            ResetSessionRoutingForTests();
+            if ( pszAppId )
+                setenv( "GS_RITZ_APPID", pszAppId, 1 );
+            else
+                unsetenv( "GS_RITZ_APPID" );
+        }
+
+        ~ScopedSessionAppId()
+        {
+            unsetenv( "GS_RITZ_APPID" );
+            ResetSessionRoutingForTests();
+        }
+    };
+}
+
+TEST_CASE( "EnqueueRoutedWrite goes to global.json until override is active", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "77" );
+
+    REQUIRE_FALSE( IsSessionOverrideActive() ); // no games/77.json on disk yet
+
+    Settings s{};
+    s.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( s );
+    FlushPendingWrites();
+
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( "77" ) ) ); // M7's core "no speculative file" requirement
+}
+
+TEST_CASE( "EnqueueRoutedWrite switches to the per-game file once override is active, and stays a frozen snapshot", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "77" );
+
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+
+    // Mirrors PanelConfig.cpp's EnableOverride(): snapshot the currently
+    // effective settings, then flip the routing flag.
+    Settings snapshot = ResolveEffective( SessionAppId() );
+    EnqueuePerGameSnapshot( "77", snapshot );
+    SetSessionOverrideActive( true );
+    BumpConfigGeneration();
+    FlushPendingWrites();
+    REQUIRE( std::filesystem::exists( GamePath( "77" ) ) );
+
+    // Every further routed write from any panel now lands in games/77.json,
+    // never global.json.
+    Settings edited{};
+    edited.gamescope.filter = "NIS";
+    EnqueueRoutedWrite( edited );
+    FlushPendingWrites();
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "77" } ).gamescope.filter == "NIS" );
+
+    // A later change to global.json itself (as if a different, non-
+    // overridden game edited it) must not reach app 77 - it's a snapshot,
+    // not a live reference (DECISIONS.md #19), and the routing wiring must
+    // not accidentally reintroduce a merge.
+    Settings changedGlobal{};
+    changedGlobal.gamescope.filter = "PIXEL";
+    REQUIRE( SaveGlobal( changedGlobal ) );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "77" } ).gamescope.filter == "NIS" );
+}
+
+TEST_CASE( "EnqueueRoutedWrite falls back to global.json when no app id was resolved", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr ); // no GS_RITZ_APPID/Steam env vars at all
+
+    REQUIRE( SessionAppId() == std::nullopt );
+    // Even a stray SetSessionOverrideActive(true) (shouldn't happen -
+    // PanelConfig.cpp's checkbox is disabled with no app id - but defend
+    // against it anyway) must not create a per-game file with no app id to
+    // name it after.
+    SetSessionOverrideActive( true );
+
+    Settings s{};
+    s.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( s );
+    FlushPendingWrites();
+
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+}
+
+TEST_CASE( "ListProfiles and ListGameIds report what's actually on disk, sorted", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( ListProfiles().empty() ); // no profiles/ directory yet at all
+    REQUIRE( ListGameIds().empty() );  // no games/ directory yet at all
+
+    REQUIRE( SaveProfile( "Casual", Settings{} ) );
+    REQUIRE( SaveProfile( "FPS", Settings{} ) );
+    REQUIRE( SnapshotPerGameOverride( "200", Settings{} ) );
+    REQUIRE( SnapshotPerGameOverride( "10", Settings{} ) );
+
+    std::vector<std::string> profiles = ListProfiles();
+    REQUIRE( profiles == std::vector<std::string>{ "Casual", "FPS" } );
+
+    std::vector<std::string> games = ListGameIds();
+    REQUIRE( games == std::vector<std::string>{ "10", "200" } );
+}
+
+TEST_CASE( "copying another game's config is a one-time snapshot, not a link between the two games", "[config]" )
+{
+    TempConfigHome home;
+
+    // App 10 already has its own overridden config.
+    Settings source{};
+    source.gamescope.filter = "FSR";
+    source.gamescope.sharpness = 18;
+    REQUIRE( SnapshotPerGameOverride( "10", source ) );
+
+    // Mirrors PanelConfig.cpp's CopySelectedGameConfig(): read app 10's
+    // config and snapshot it as app 20's own.
+    std::optional<Settings> oSource = LoadPerGameOverride( "10" );
+    REQUIRE( oSource.has_value() );
+    REQUIRE( SnapshotPerGameOverride( "20", *oSource ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "20" } ).gamescope.filter == "FSR" );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "20" } ).gamescope.sharpness == 18 );
+
+    // Editing app 10's config afterwards must not retroactively change the
+    // copy app 20 already took - copying is a snapshot, exactly like
+    // enabling the override itself (DECISIONS.md #19) and applying a
+    // profile (DECISIONS.md #20).
+    Settings editedSource{};
+    editedSource.gamescope.filter = "NIS";
+    REQUIRE( SnapshotPerGameOverride( "10", editedSource ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "20" } ).gamescope.filter == "FSR" );
+}

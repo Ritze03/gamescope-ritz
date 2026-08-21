@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 #include "main.hpp"
 #include "steamcompmgr.hpp"
@@ -50,29 +51,43 @@ extern bool g_bSteamIsActiveWindow;
 namespace gamescope
 {
 	// Lazily-loaded, mutated in place as the user edits controls, and
-	// persisted via EnqueueGlobalWrite() on every change.
-	//
-	// ponytail: always reads/writes global.json, never the per-game override
-	// file from Feature 6 -- "Override Global Config" snapshot semantics
-	// (games/<AppId>.json, DECISIONS.md #19) are a real chunk of work on
-	// their own and out of scope for M3's "S"-sized live-options panel. The
-	// live controls themselves are correct and fully functional either way,
-	// since they write the live globals/ConVars directly; only *which file*
-	// persists the choice across a restart is simplified here.
+	// persisted via EnqueueRoutedWrite() on every change -- global.json or
+	// the current session's games/<AppId>.json snapshot, whichever
+	// config::IsSessionOverrideActive() says is authoritative (M7, see
+	// Config/ConfigManager.h's session-routing section and PanelConfig.cpp,
+	// which is the only thing that ever flips that flag). Superseded M3's
+	// original "always global.json" simplification.
 	static bool s_bConfigLoaded = false;
+	static uint64_t s_ulLoadedGeneration = 0;
 	static config::Settings s_CachedSettings;
+
+	static void PushCachedSettingsToLiveState();
 
 	static void EnsureConfigLoaded()
 	{
-		if ( s_bConfigLoaded )
+		const uint64_t ulGeneration = config::ConfigGeneration();
+		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
-		s_CachedSettings = config::LoadGlobal();
+
+		const bool bIsReload = s_bConfigLoaded; // false only on this panel's very first draw
+		s_CachedSettings = config::ResolveEffective( config::SessionAppId() );
+		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
+
+		// The very first load's values are already applied to the live
+		// globals/ConVars by main.cpp's apply_ritz_config_to_startup_state()
+		// before this panel ever draws -- only a later reload (PanelConfig
+		// applied a profile, enabled/cleared override, or copied another
+		// game's config in, bumping the generation) needs pushing here too,
+		// or this panel's sliders would show new values that never actually
+		// took effect.
+		if ( bIsReload )
+			PushCachedSettingsToLiveState();
 	}
 
 	static void QueueSave()
 	{
-		config::EnqueueGlobalWrite( s_CachedSettings );
+		config::EnqueueRoutedWrite( s_CachedSettings );
 	}
 
 	static const char *FilterToString( GamescopeUpscaleFilter eFilter )
@@ -99,6 +114,40 @@ namespace gamescope
 			case GamescopeUpscaleScaler::STRETCH:  return "STRETCH";
 			default:                                return "AUTO";
 		}
+	}
+
+	static GamescopeUpscaleFilter FilterFromString( const std::string &sValue )
+	{
+		if ( sValue == "NEAREST" ) return GamescopeUpscaleFilter::NEAREST;
+		if ( sValue == "FSR" )     return GamescopeUpscaleFilter::FSR;
+		if ( sValue == "NIS" )     return GamescopeUpscaleFilter::NIS;
+		if ( sValue == "PIXEL" )   return GamescopeUpscaleFilter::PIXEL;
+		return GamescopeUpscaleFilter::LINEAR;
+	}
+
+	static GamescopeUpscaleScaler ScalerFromString( const std::string &sValue )
+	{
+		if ( sValue == "INTEGER" ) return GamescopeUpscaleScaler::INTEGER;
+		if ( sValue == "FIT" )     return GamescopeUpscaleScaler::FIT;
+		if ( sValue == "FILL" )    return GamescopeUpscaleScaler::FILL;
+		if ( sValue == "STRETCH" ) return GamescopeUpscaleScaler::STRETCH;
+		return GamescopeUpscaleScaler::AUTO;
+	}
+
+	// Mirrors main.cpp's apply_ritz_config_to_startup_state() (file-local
+	// there, so not directly reusable) for the fields this panel owns --
+	// pushes a freshly (re)loaded s_CachedSettings into the same live
+	// globals/ConVars this panel's own Set*() handlers write, so a
+	// PanelConfig-triggered reload (profile applied, override toggled) takes
+	// effect immediately rather than only on the next restart.
+	static void PushCachedSettingsToLiveState()
+	{
+		g_wantedUpscaleFilter = FilterFromString( s_CachedSettings.gamescope.filter );
+		g_wantedUpscaleScaler = ScalerFromString( s_CachedSettings.gamescope.scaler );
+		g_upscaleFilterSharpness = s_CachedSettings.gamescope.sharpness;
+		cv_adaptive_sync = s_CachedSettings.gamescope.vrr_enabled;
+		cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
+		cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
 	}
 
 	// One slider, always "higher = sharper" regardless of which filter is
