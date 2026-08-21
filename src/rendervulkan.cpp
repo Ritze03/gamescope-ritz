@@ -4076,6 +4076,19 @@ extern uint32_t g_reshade_technique_idx;
 
 ReshadeEffectPipeline *g_pLastReshadeEffect = nullptr;
 
+// M6 (superdoc/planning/SPEC.md Feature 2, DECISIONS.md #15): the Shaders panel
+// greys out ReShade effect controls -- with an explanation -- whenever the
+// base/game layer isn't SDR (LINEAR/SRGB), rather than silently applying
+// effect math that assumes clamped 0..1 SDR RGB to scRGB/HDR10_PQ content.
+// Stashed here, on the same per-frame cadence this function already reads the
+// base layer's colourspace at, independent of whether a ReShade effect is
+// actually loaded (g_reshade_effect can be empty while this still needs to be
+// current, so the panel knows what it *would* apply to). Read from
+// PanelShaders.cpp on the same (steamcompmgr) thread -- relaxed atomic is the
+// same pattern FpsDisplay.cpp's g_ulLastAppFrametimeNs (src/commit.cpp) uses
+// for the same single-writer-thread, cross-file-read shape.
+std::atomic<GamescopeAppTextureColorspace> g_eLastBaseLayerColorspace{ GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB };
+
 std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pPipewireTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride, bool increment, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer )
 {
 	EOTF outputTF = frameInfo->outputEncodingEOTF;
@@ -4083,6 +4096,9 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 		outputTF = EOTF_Count; //Disable blending stuff.
 
 	g_pLastReshadeEffect = nullptr;
+	if (frameInfo->layers.get( 0 ).tex)
+		g_eLastBaseLayerColorspace.store( frameInfo->layers.get( 0 ).colorspace, std::memory_order_relaxed );
+
 	if (!g_reshade_effect.empty())
 	{
 		if (frameInfo->layers.get( 0 ).tex)

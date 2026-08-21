@@ -55,9 +55,12 @@ namespace gamescope::config
     struct ReshadePreSharpenSettings
     {
         bool enabled = false;
-        // Range/default TBD per SPEC.md Feature 2 - null until picked during M6
-        // implementation.
-        std::optional<float> strength;
+        // Unsharp-mask amount, range 0.0..2.0. Picked during M6 implementation
+        // (SPEC.md Feature 2 flagged this TBD) - 0.5 matches the order of
+        // magnitude of common reference ReShade sharpen defaults. Stays
+        // std::optional so a config predating M6 (still null on disk) resolves
+        // to this compiled-in default rather than a hard schema-version bump.
+        std::optional<float> strength = 0.5f;
     };
 
     struct ReshadeAdaptiveBrightnessSettings
