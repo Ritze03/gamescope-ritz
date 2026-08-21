@@ -27,6 +27,7 @@
 
 #include "Config/ConfigManager.h"
 #include "Widgets.h"
+#include "Chrome.h"
 
 #include "imgui.h"
 
@@ -348,12 +349,11 @@ namespace gamescope
 	{
 		EnsureInitialized();
 
-		// Placed clear of the M1 placeholder, M3 Display, and M6 Shaders
-		// windows so all four are visible at once during manual testing.
-		ImGui::SetNextWindowPos( ImVec2( 520.0f, 380.0f ), ImGuiCond_FirstUseEver );
-		ImGui::SetNextWindowSize( ImVec2( 430.0f, 320.0f ), ImGuiCond_FirstUseEver );
-
-		ImGui::Begin( "Config", nullptr, ImGuiWindowFlags_NoCollapse );
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// see Overlay/Chrome.h -- position/size unchanged from M7.
+		if ( !chrome::BeginPanelWindow( "CONFIG / PROFILES", chrome::PanelId::Config,
+			ImVec2( 520.0f, 380.0f ), ImVec2( 430.0f, 320.0f ) ) )
+			return;
 
 		if ( ImGui::BeginTabBar( "ConfigTabs" ) )
 		{
@@ -370,6 +370,6 @@ namespace gamescope
 			ImGui::EndTabBar();
 		}
 
-		ImGui::End();
+		chrome::EndPanelWindow();
 	}
 }

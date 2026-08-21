@@ -35,6 +35,7 @@
 #include "Config/AppId.h"
 #include "Fonts.h"
 #include "Widgets.h"
+#include "Chrome.h"
 
 #include "imgui.h"
 
@@ -308,17 +309,14 @@ namespace gamescope
 	{
 		EnsureConfigLoaded();
 
-		// Placed clear of the M1 placeholder window (64,64 / 440x260) so
-		// both are visible at once during M2/M3 manual testing.
-		ImGui::SetNextWindowPos( ImVec2( 64.0f, 340.0f ), ImGuiCond_FirstUseEver );
-		ImGui::SetNextWindowSize( ImVec2( 440.0f, 300.0f ), ImGuiCond_FirstUseEver );
-
-		// See SettingsOverlay.cpp's DrawPlaceholderWindow() for why wrapping
-		// just the Begin() call styles the real title bar text (M8 part 1,
-		// issue #13).
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Title ) );
-		ImGui::Begin( "DISPLAY", nullptr, ImGuiWindowFlags_NoCollapse );
-		ImGui::PopFont();
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// which is what makes this panel show/hide from the dock instead of
+		// always being on screen -- see Overlay/Chrome.h. Position/size below
+		// are the same values this panel has used since M3, just no longer
+		// applied by hand.
+		if ( !chrome::BeginPanelWindow( "DISPLAY", chrome::PanelId::Display,
+			ImVec2( 64.0f, 340.0f ), ImVec2( 440.0f, 300.0f ) ) )
+			return;
 
 		if ( g_bSteamIsActiveWindow )
 		{
@@ -340,6 +338,6 @@ namespace gamescope
 		ImGui::Separator();
 		DrawLiveToggles();
 
-		ImGui::End();
+		chrome::EndPanelWindow();
 	}
 }

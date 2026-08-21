@@ -19,6 +19,7 @@
 
 #include "../Audio/Volume.h"
 #include "Widgets.h"
+#include "Chrome.h"
 
 #include <cmath>
 
@@ -30,12 +31,11 @@ namespace gamescope
 	{
 		const Audio::VolumeState state = Audio::GetState();
 
-		// Placed clear of the M1 placeholder window and the M3/M6 panels so
-		// all four are visible at once during manual testing.
-		ImGui::SetNextWindowPos( ImVec2( 520.0f, 340.0f ), ImGuiCond_FirstUseEver );
-		ImGui::SetNextWindowSize( ImVec2( 380.0f, 180.0f ), ImGuiCond_FirstUseEver );
-
-		ImGui::Begin( "Audio", nullptr, ImGuiWindowFlags_NoCollapse );
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// see Overlay/Chrome.h -- position/size unchanged from M5.
+		if ( !chrome::BeginPanelWindow( "AUDIO", chrome::PanelId::Audio,
+			ImVec2( 520.0f, 340.0f ), ImVec2( 380.0f, 180.0f ) ) )
+			return;
 
 		if ( !state.bWpctlAvailable )
 		{
@@ -45,7 +45,7 @@ namespace gamescope
 			ImGui::TextColored( ImVec4( 0.95f, 0.35f, 0.35f, 1.0f ),
 				"audio: wpctl not found" );
 			ImGui::TextDisabled( "Install WirePlumber's CLI (wpctl) to control per-app volume." );
-			ImGui::End();
+			chrome::EndPanelWindow();
 			return;
 		}
 
@@ -89,6 +89,6 @@ namespace gamescope
 				state.nMatchedNodes == 1 ? "" : "s" );
 		}
 
-		ImGui::End();
+		chrome::EndPanelWindow();
 	}
 }
