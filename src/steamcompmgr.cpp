@@ -2945,15 +2945,32 @@ paint_all( global_focus_t *pFocus, bool async )
 		frameInfo.applyOutputColorMgmt = false;
 	}
 
-	// M1 settings overlay: drawn last so it composites above every other layer
-	// built above (including the cursor). Rendering-only for now -- see
-	// SettingsOverlay.h; input capture is Milestone M2.
-	gamescope::SettingsOverlay_AddLayer( &frameInfo );
+	// A/B flicker test kit (superdoc/planning/flicker-ab-test-plan.md): when
+	// GAMESCOPE_RITZ_AB_NO_OVERLAY=1, skip both calls below entirely rather
+	// than relying on each function's own "nothing to draw" early-return.
+	// That guarantees the settings overlay and FPS HUD stay fully inert for
+	// the whole process lifetime -- no ImGui context ever created, no
+	// offscreen textures allocated, no layer ever pushed -- so a variant
+	// build/run can rule the overlay subsystem in or out of a reported
+	// rendering artifact with certainty, not just "it happened to be closed
+	// this run".
+	static const bool s_bRitzAbNoOverlay = []() {
+		const char *pszEnv = getenv( "GAMESCOPE_RITZ_AB_NO_OVERLAY" );
+		return pszEnv && pszEnv[0] == '1';
+	}();
 
-	// M4 FPS display: independent visibility flag from the settings overlay
-	// above (see FpsDisplay.h) -- it renders every frame the readout is
-	// enabled, whether or not the settings panel itself is open.
-	gamescope::FpsDisplay_AddLayer( &frameInfo );
+	if ( !s_bRitzAbNoOverlay )
+	{
+		// M1 settings overlay: drawn last so it composites above every other layer
+		// built above (including the cursor). Rendering-only for now -- see
+		// SettingsOverlay.h; input capture is Milestone M2.
+		gamescope::SettingsOverlay_AddLayer( &frameInfo );
+
+		// M4 FPS display: independent visibility flag from the settings overlay
+		// above (see FpsDisplay.h) -- it renders every frame the readout is
+		// enabled, whether or not the settings panel itself is open.
+		gamescope::FpsDisplay_AddLayer( &frameInfo );
+	}
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 	{

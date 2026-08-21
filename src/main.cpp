@@ -801,7 +801,16 @@ int main(int argc, char **argv)
 	// main() having run yet.
 	std::optional<std::string> oRitzAppId = gamescope::config::ResolveAppId();
 	gamescope::config::Settings ritzConfig = gamescope::config::ResolveEffective( oRitzAppId );
-	apply_ritz_config_to_startup_state( ritzConfig );
+	// A/B flicker test kit (superdoc/planning/flicker-ab-test-plan.md):
+	// GAMESCOPE_RITZ_AB_NO_CONVAR_SEED=1 skips this call so cv_adaptive_sync/
+	// cv_hdr_enabled/cv_tearing_enabled and the filter/scaler/sharpness
+	// globals keep whatever their upstream defaults are instead of being
+	// seeded from gamescope-ritz's config system before argv parsing --
+	// isolating that seeding step from the rest of the diff. An explicit
+	// CLI flag (e.g. --adaptive-sync) still applies as usual below either way.
+	const char *pszNoConVarSeed = getenv( "GAMESCOPE_RITZ_AB_NO_CONVAR_SEED" );
+	if ( !pszNoConVarSeed || pszNoConVarSeed[0] != '1' )
+		apply_ritz_config_to_startup_state( ritzConfig );
 
 	static std::string optstring = build_optstring(gamescope_options);
 	gamescope_optstring = optstring.c_str();
