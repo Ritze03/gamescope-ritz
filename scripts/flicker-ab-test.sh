@@ -74,7 +74,33 @@
 #                        --output via hyprctl, falling back to 280)
 #   --width W            output width for -W (default: autodetected, falling back to 1920)
 #   --height H           output height for -H (default: autodetected, falling back to 1080)
-#   --client CMD         test client launched inside gamescope (default: vkcube)
+#   --nested-width W      nested/client width for -w -- the resolution the client
+#                        actually renders at (default: same as --width, i.e. 1:1 with
+#                        the output, no scaling required -- every run before this flag
+#                        existed used that default). THE LEADING HYPOTHESIS as of
+#                        2026-08-21: the user's own working gaming launch always scales
+#                        (-w 1280 -h 960 against -W 1920 -H 1080) and no test in this
+#                        investigation had ever done that until this flag existed. See
+#                        superdoc/planning/client-variation-test.md.
+#   --nested-height H     nested/client height for -h (default: same as --height)
+#   --client CMD         test client launched inside gamescope (default: vkcube). Any
+#                        of vkcube, vkcubepp, vkgears, glxgears (installed on this
+#                        system today; vkcube-wayland/glmark2 are NOT installed — this
+#                        script never installs anything).
+#   --present-mode N     append --present_mode N to a vkcube/vkcubepp client (0
+#                        immediate, 1 mailbox, 2 fifo, 3 fifo-relaxed — see vkcube
+#                        --help). No effect on non-vkcube clients. vkcube's own
+#                        built-in default (no flag at all) is already FIFO (2), per
+#                        upstream Vulkan-Tools cube.cpp — so --present-mode 2 should be
+#                        a behavioural no-op vs. the plain default; the informative
+#                        comparison is --present-mode 0 (immediate, tears by design)
+#                        against no flag at all.
+#   --extra-args "STR"   extra raw args appended to the gamescope command line, split
+#                        on whitespace (e.g. a gaming-style launch:
+#                        --extra-args "--immediate-flips --filter fsr --sharpness 5
+#                        -S stretch --force-grab-cursor --expose-wayland" — this is
+#                        the user's actual running CS2 launch's flag set, minus the
+#                        per-run -W/-H/-S sizing).
 #   --backend NAME        gamescope --backend (default: sdl — nested under the host
 #                        compositor, matching the user's own two-layer VRR setup)
 #   -h, --help           show this help
@@ -149,13 +175,17 @@ REFRESH_HZ=""
 OUT_W=""
 OUT_H=""
 CLIENT_CMD="vkcube"
+PRESENT_MODE=""
+EXTRA_ARGS=""
+NESTED_W=""
+NESTED_H=""
 BACKEND="sdl"
 VARIANT=""
 
 log()  { echo "[flicker-ab] $*"; }
 fail() { log "FAIL: $*"; exit 1; }
 
-usage() { sed -n '2,84p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,107p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # ---------- args ----------
 if [[ $# -eq 0 ]]; then usage; exit 1; fi
@@ -172,6 +202,10 @@ while [[ $# -gt 0 ]]; do
     --width) OUT_W="$2"; shift 2 ;;
     --height) OUT_H="$2"; shift 2 ;;
     --client) CLIENT_CMD="$2"; shift 2 ;;
+    --present-mode) PRESENT_MODE="$2"; shift 2 ;;
+    --extra-args) EXTRA_ARGS="$2"; shift 2 ;;
+    --nested-width) NESTED_W="$2"; shift 2 ;;
+    --nested-height) NESTED_H="$2"; shift 2 ;;
     --backend) BACKEND="$2"; shift 2 ;;
     overlay-inert|no-dynamic-rendering-ext|no-convar-seed|normal|upstream|upstream-3.16.25|upstream-prebuffermemo|upstream-wlroots020|upstream-3.16.24-debug|packaged-3.16.24-release)
       VARIANT="$1"; shift ;;
@@ -179,6 +213,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$VARIANT" ]] || fail "no variant given. One of: overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020 upstream-3.16.24-debug packaged-3.16.24-release (see --help)"
+
+# ---------- build the client command line (client + optional --present_mode) ----------
+# CLIENT_CMD is word-split, not shell-eval'd -- keep it to plain space-separated
+# tokens (matches every client this script targets: vkcube, vkcubepp, vkgears,
+# glxgears take no arguments that need quoting).
+read -ra CLIENT_ARGS <<<"$CLIENT_CMD"
+if [[ -n "$PRESENT_MODE" ]]; then
+  case "${CLIENT_ARGS[0]}" in
+    *vkcube*) CLIENT_ARGS+=(--present_mode "$PRESENT_MODE") ;;
+    *) log "WARNING: --present-mode has no effect on client '${CLIENT_ARGS[0]}' (only vkcube/vkcubepp support it) -- ignoring" ;;
+  esac
+fi
+read -ra EXTRA_ARGS_ARR <<<"$EXTRA_ARGS"
 
 # ---------- resolve binary + env for the chosen variant ----------
 GAMESCOPE_BIN=""
@@ -249,6 +296,14 @@ fi
 [[ -z "$OUT_W" || "$OUT_W" == "null" ]] && OUT_W=1920
 [[ -z "$OUT_H" || "$OUT_H" == "null" ]] && OUT_H=1080
 [[ -z "$REFRESH_HZ" || "$REFRESH_HZ" == "null" ]] && REFRESH_HZ=280
+# Nested (-w/-h, the client's own render size) defaults to the output size (-W/-H) --
+# i.e. 1:1, no scaling required. That default matches every run before this flag
+# existed. Pass --nested-width/--nested-height smaller than --width/--height to force
+# gamescope to scale every frame -- the user's own working gaming launch always does
+# this (-w 1280 -h 960 against -W 1920 -H 1080), which no test in this investigation
+# had done until this flag existed. See superdoc/planning/client-variation-test.md.
+[[ -z "$NESTED_W" ]] && NESTED_W="$OUT_W"
+[[ -z "$NESTED_H" ]] && NESTED_H="$OUT_H"
 
 # ---------- teardown ----------
 GS_PID=""
@@ -287,18 +342,21 @@ else
   log "variant env       : ${VARIANT_ENV[*]}"
 fi
 log "output/refresh    : $TARGET_OUTPUT, ${OUT_W}x${OUT_H}@${REFRESH_HZ}Hz"
+log "nested (-w/-h)     : ${NESTED_W}x${NESTED_H} $([[ "$NESTED_W" == "$OUT_W" && "$NESTED_H" == "$OUT_H" ]] && echo '(1:1, no scaling)' || echo '(SCALED to output)')"
 log "adaptive-sync      : $([[ $DO_VRR -eq 1 ]] && echo yes || echo no)"
 log "backend            : $BACKEND"
-log "client             : $CLIENT_CMD"
+log "client             : ${CLIENT_ARGS[*]}"
+log "extra gamescope args: ${EXTRA_ARGS_ARR[*]:-(none)}"
 log "XDG_CONFIG_HOME    : $CONFIG_TMP (throwaway)"
 log "=============================================================="
 
 # ---------- launch ----------
-ARGS=(--backend "$BACKEND" -W "$OUT_W" -H "$OUT_H" -w "$OUT_W" -h "$OUT_H" -r "$REFRESH_HZ" -O "$TARGET_OUTPUT" -f)
+ARGS=(--backend "$BACKEND" -W "$OUT_W" -H "$OUT_H" -w "$NESTED_W" -h "$NESTED_H" -r "$REFRESH_HZ" -O "$TARGET_OUTPUT" -f)
 [[ "$DO_VRR" -eq 1 ]] && ARGS+=(--adaptive-sync)
+[[ ${#EXTRA_ARGS_ARR[@]} -gt 0 ]] && ARGS+=("${EXTRA_ARGS_ARR[@]}")
 
-log "launching: $GAMESCOPE_BIN ${ARGS[*]} -- $CLIENT_CMD"
-"$GAMESCOPE_BIN" "${ARGS[@]}" -- "$CLIENT_CMD" &
+log "launching: $GAMESCOPE_BIN ${ARGS[*]} -- ${CLIENT_ARGS[*]}"
+"$GAMESCOPE_BIN" "${ARGS[@]}" -- "${CLIENT_ARGS[@]}" &
 GS_PID=$!
 log "pid $GS_PID"
 
