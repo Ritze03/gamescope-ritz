@@ -1,0 +1,10 @@
+[wrap-git]
+directory = imgui
+
+# Stock (non-docking) branch tag v1.92.9b -- see SPEC.md's Architecture section
+# for why docking is deliberately not used here.
+url = https://github.com/ocornut/imgui.git
+revision = f1cc2ae15e53a861a874c3034aae6798fde194ab
+depth = 1
+
+patch_directory = imgui

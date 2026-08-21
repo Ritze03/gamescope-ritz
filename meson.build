@@ -54,6 +54,8 @@ glm_proj = subproject('glm')
 glm_dep = glm_proj.get_variable('glm_dep')
 stb_proj = subproject('stb')
 stb_dep = stb_proj.get_variable('stb_dep')
+imgui_proj = subproject('imgui')
+imgui_dep = imgui_proj.get_variable('imgui_dep')
 
 if get_option('enable_openvr_support')
   openvr_dep = dependency('openvr', version: '>= 2.7', required : false)
