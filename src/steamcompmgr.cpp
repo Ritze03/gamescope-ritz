@@ -2133,6 +2133,20 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->tex = lastCommit->GetTexture( layer->filter, g_upscaleScaler, layer->colorspace );
 
+	// Issue #20 fix: if GetTexture() above handed back
+	// lastCommit->upscaledTexture (the commit was pre-emptively upscaled,
+	// see ShouldPreemptivelyUpscale() and the vulkan_composite() call
+	// around HELD_COMMIT_BASE import below), that texture already went
+	// through vulkan_composite()'s ReShade pass -- pre-upscale, at source
+	// resolution -- as part of building it. Tell vulkan_composite() not to
+	// run ReShade on it again here at (now) output resolution; see the
+	// flag's comment in rendervulkan.hpp for why re-running it caused an
+	// unrecoverable black screen (per-frame full pipeline recompilation).
+	if ( layer == &frameInfo->layers.get( 0 ) &&
+		 lastCommit->upscaledTexture &&
+		 lastCommit->upscaledTexture->pTexture == layer->tex )
+		frameInfo->bBaseLayerReshaded = true;
+
 	if ( flags & PaintWindowFlag::NoScale )
 	{
 		sourceWidth = currentOutputWidth;

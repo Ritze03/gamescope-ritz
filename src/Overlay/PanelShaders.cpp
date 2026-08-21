@@ -3,7 +3,7 @@
 // Brightness").
 //
 // Two sharpness controls exist in this overlay on purpose (DECISIONS.md
-// #12): PanelDisplay.cpp's "Upscale Sharpness" is gamescope's own built-in
+// #12): PanelDisplay.cpp's "Sharpness" control is gamescope's own built-in
 // post-upscale RCAS/NIS sharpen (only live when Filter is FSR or NIS); this
 // panel's "Pre-Sharpen" is a separate ReShade pass that runs pre-upscale,
 // at source resolution, and works regardless of which filter is active
@@ -232,7 +232,7 @@ namespace gamescope
 			QueueSave();
 		}
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "Pre-upscale -- works with any Filter, unlike Upscale Sharpness (Display panel)." );
+		ImGui::TextDisabled( "Pre-upscale -- works with any Filter, unlike Sharpness (Display panel)." );
 		ImGui::PopFont();
 
 		if ( !s.enabled )

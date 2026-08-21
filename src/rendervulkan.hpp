@@ -286,6 +286,22 @@ struct FrameInfo_t
 	BlurMode blurLayer0;
 	int blurRadius;
 
+	// Issue #20 fix: set by steamcompmgr's preemptive-upscale path
+	// (commit_t::ShouldPreemptivelyUpscale(), paint_window_commit() in
+	// steamcompmgr.cpp) when layers.get(0).tex is *already* the
+	// pre-upscaled, output-resolution texture that a prior, separate
+	// vulkan_composite() call this same frame produced -- ReShade (if
+	// active) already ran on it there, pre-upscale, at source resolution,
+	// per the #11 design intent. Without this, vulkan_composite()'s ReShade
+	// block below would run a *second* time on that same content, now
+	// post-upscale, with a different ReshadeEffectKey (different buffer
+	// dimensions) than the first call used. Since ReshadeEffectManager
+	// caches only one pipeline, the two calls' keys never match each
+	// other and every vulkan_composite() call -- both of them, every
+	// frame -- tears down and fully recompiles the FX pipeline inline on
+	// this thread. See rendervulkan.cpp's vulkan_composite().
+	bool bBaseLayerReshaded;
+
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];
 	gamescope::Rc<CVulkanTexture> lut3D[EOTF_Count];
 
