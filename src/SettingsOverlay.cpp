@@ -40,6 +40,7 @@
 // across both families, or add the release/acquire barrier pair.
 
 #include "SettingsOverlay.h"
+#include "Overlay/PanelDisplay.h"
 
 #include <algorithm>
 #include <memory>
@@ -453,6 +454,7 @@ namespace gamescope
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
 		DrawPlaceholderWindow();
+		PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
 		ImGui::Render();
 
 		if ( !RenderAndSubmit() )
