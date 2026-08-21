@@ -2,13 +2,13 @@ catch2_dep = dependency('catch2-with-main', required: true)
 
 srcdir = '../src'
 unittest_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp']
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp']
 	unittest_src += srcdir / src
 endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp'],
+	unittest_src + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep],
 	cpp_args: gamescope_cpp_args,
@@ -16,3 +16,4 @@ gamescope_tests = executable(
 test('convar', gamescope_tests, args: ['[convar]'])
 test('process', gamescope_tests, args: ['[process]'])
 test('config', gamescope_tests, args: ['[config]'])
+test('audio_volume', gamescope_tests, args: ['[audio_volume]'])
