@@ -185,7 +185,12 @@ namespace gamescope::config
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
+            {
                 s.overlay.fade_ms = JGetOptInt( *pOverlay, "fade_ms" );
+                s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
+                s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
+                s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
+            }
 
             return s;
         }
@@ -250,6 +255,9 @@ namespace gamescope::config
                 jOverlay[ "fade_ms" ] = s.overlay.fade_ms.has_value()
                     ? nlohmann::json( *s.overlay.fade_ms )
                     : nlohmann::json( nullptr );
+                jOverlay[ "startup_announce_enabled" ] = s.overlay.startup_announce_enabled;
+                jOverlay[ "capture_all_keyboard_input" ] = s.overlay.capture_all_keyboard_input;
+                jOverlay[ "keyboard_navigation_enabled" ] = s.overlay.keyboard_navigation_enabled;
                 j[ "overlay" ] = std::move( jOverlay );
             }
 

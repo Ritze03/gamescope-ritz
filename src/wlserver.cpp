@@ -375,7 +375,18 @@ static void wlserver_dispatch_key( wlr_keyboard *keyboard, uint32_t uLinuxKeycod
 
 	if ( bPressed )
 	{
-		if ( gamescope::SettingsOverlay_IsCapturingInput() )
+		// SettingsOverlay_IsCapturingKeyboard(), not the plain
+		// SettingsOverlay_IsCapturingInput() every other input path here
+		// uses -- this is the one gate the keyboard-control toggle
+		// (settings_overlay_capture_keyboard / ConfigSchema.h's
+		// capture_all_keyboard_input) affects; mouse routing deliberately
+		// keeps using SettingsOverlay_IsCapturingInput() unchanged, so that
+		// toggle can never touch mouse capture. Whichever this evaluates to
+		// AT PRESS TIME is what the matching RELEASE below looks up via the
+		// tracking sets -- unaffected by the toggle (or overlay visibility)
+		// changing again before the key is let go, same airtight-release
+		// guarantee this function already gave M2.
+		if ( gamescope::SettingsOverlay_IsCapturingKeyboard() )
 		{
 			s_setKeysForwardedToOverlay.insert( uLinuxKeycode );
 			gamescope::SettingsOverlay_QueueKeyEvent( uLinuxKeycode, true );
