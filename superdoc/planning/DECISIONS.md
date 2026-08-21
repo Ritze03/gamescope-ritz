@@ -478,6 +478,36 @@ to `vkcube` unless a decision explicitly calls for a real game (e.g. app id
 
 ---
 
+### 25. Toast notifications: placement is global-only, muting is per-game
+**Status:** DECIDED
+
+**Why:** The task's own design split. Where toasts appear on screen is a
+personal preference about the player's physical setup (monitor layout,
+where their eyes naturally rest) that has nothing to do with any one
+game, so it lives on `OverlaySettings` (`ConfigSchema.h`) - the same
+process-level, global-only slot `fade_ms` already occupies, exempted from
+`SettingsToJson`'s per-game/profile snapshot the same way (`bIncludeOverlay`).
+Whether toasts should appear *at all*, by contrast, is naturally a
+per-game decision (a competitive shooter's player wants silence, a strategy
+game's player doesn't), so `NotificationSettings::muted` is an ordinary
+per-layer field - it rides along in a full per-game snapshot exactly like
+`fps_display.enabled` does, resolved by the config system's existing
+two-level (global vs. per-game full-snapshot) layering (decision 19) with
+no special-casing needed.
+
+**Consequences:** A game with "Override Global Config" enabled still uses
+the *global* placement - its own snapshot file never contains an `overlay`
+object at all, so `Notifications.cpp` must read placement from
+`LoadGlobal()` directly rather than from the per-game-resolved effective
+`Settings`, or it would silently fall back to the compiled-in default
+instead of the user's real choice. `tests/test_config.cpp` covers this
+resolution explicitly (`"notification placement is global-only..."`,
+`"notification muting resolves per-game override vs. global..."`).
+
+**Source:** Task brief (this milestone); `src/Overlay/Notifications.h`.
+
+---
+
 ## Still open
 
 One genuine open item remains: the ReShade manager's single-effect-at-a-time

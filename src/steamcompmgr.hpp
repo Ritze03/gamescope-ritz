@@ -46,6 +46,12 @@ static const uint32_t g_zposSettingsOverlay = 6;
 // or not the settings panel itself is open (see SPEC.md Feature 3's
 // lifetime note: the two have separate visibility flags by design).
 static const uint32_t g_zposFpsDisplay = 7;
+// Toast notifications: topmost of all, above even the settings overlay and
+// FPS HUD -- a toast confirming an action (e.g. a config profile applied
+// from inside the settings panel) must stay visible whether or not the
+// settings panel itself is open, same independent-lifetime reasoning as
+// g_zposFpsDisplay above (see Overlay/Notifications.h).
+static const uint32_t g_zposNotifications = 8;
 
 extern bool g_bHDRItmEnable;
 extern bool g_bForceHDRSupportDebug;

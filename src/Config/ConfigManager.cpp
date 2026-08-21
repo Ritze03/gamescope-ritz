@@ -187,7 +187,13 @@ namespace gamescope::config
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
+            {
                 s.overlay.fade_ms = JGetOptInt( *pOverlay, "fade_ms" );
+                s.overlay.notification_placement = JGetString( *pOverlay, "notification_placement", s.overlay.notification_placement );
+            }
+
+            if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
+                s.notifications.muted = JGetBool( *pNotifications, "muted", s.notifications.muted );
 
             return s;
         }
@@ -240,11 +246,15 @@ namespace gamescope::config
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
 
+            nlohmann::json jNotifications = nlohmann::json::object();
+            jNotifications[ "muted" ] = s.notifications.muted;
+
             nlohmann::json j = nlohmann::json::object();
             j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
             j[ "reshade" ] = std::move( jReshade );
+            j[ "notifications" ] = std::move( jNotifications );
 
             // Process-level UI preference, only ever present on global.json -
             // see ConfigSchema.h's OverlaySettings comment.
@@ -254,6 +264,7 @@ namespace gamescope::config
                 jOverlay[ "fade_ms" ] = s.overlay.fade_ms.has_value()
                     ? nlohmann::json( *s.overlay.fade_ms )
                     : nlohmann::json( nullptr );
+                jOverlay[ "notification_placement" ] = s.overlay.notification_placement;
                 j[ "overlay" ] = std::move( jOverlay );
             }
 
@@ -637,6 +648,7 @@ namespace gamescope::config
         target.gamescope = oProfile->gamescope;
         target.fps_display = oProfile->fps_display;
         target.reshade = oProfile->reshade;
+        target.notifications = oProfile->notifications;
 
         return true;
     }

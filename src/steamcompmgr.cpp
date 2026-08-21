@@ -97,6 +97,7 @@
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
+#include "Overlay/Notifications.h"
 #include "Audio/Volume.h"
 #include "BufferMemo.h"
 #include "Utils/Process.h"
@@ -2970,6 +2971,11 @@ paint_all( global_focus_t *pFocus, bool async )
 		// above (see FpsDisplay.h) -- it renders every frame the readout is
 		// enabled, whether or not the settings panel itself is open.
 		gamescope::FpsDisplay_AddLayer( &frameInfo );
+
+		// Toast notifications: same independent-lifetime reasoning as the FPS
+		// display above (see Overlay/Notifications.h) -- drawn topmost of
+		// all (g_zposNotifications) whether or not the settings panel is open.
+		gamescope::Notifications::AddLayer( &frameInfo );
 	}
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)

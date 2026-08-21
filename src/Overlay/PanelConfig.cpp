@@ -29,6 +29,7 @@
 #include "Config/ConfigManager.h"
 #include "Widgets.h"
 #include "Chrome.h"
+#include "Notifications.h"
 
 #include "imgui.h"
 
@@ -104,6 +105,7 @@ namespace gamescope
 			config::BumpConfigGeneration();
 			s_bOverrideActive = true;
 			s_sStatus = "Override enabled -- current settings snapshotted for this game.";
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
 			RefreshLists();
 		}
 
@@ -130,6 +132,7 @@ namespace gamescope
 			config::BumpConfigGeneration();
 			s_bOverrideActive = false;
 			s_sStatus = "Override disabled -- this game's config file was removed; back to global.";
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Info );
 			RefreshLists();
 		}
 
@@ -157,6 +160,7 @@ namespace gamescope
 			config::EnqueueRoutedWrite( target );
 			config::BumpConfigGeneration();
 			s_sStatus = "Applied profile '" + sName + "'.";
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
 		}
 
 		// Saves whichever config is currently in effect (per-game if
@@ -373,6 +377,16 @@ namespace gamescope
 			if ( ImGui::BeginTabItem( "General" ) )
 			{
 				DrawGeneralTab();
+				ImGui::EndTabItem();
+			}
+			// Toast notification system's own settings (global placement
+			// picker, per-game/global mute) -- see Overlay/Notifications.h.
+			// A new tab rather than a new dock panel: PanelId (Overlay/Chrome.h)
+			// is a sibling worker's file this task must not touch, and a tab
+			// here needs no changes there at all.
+			if ( ImGui::BeginTabItem( "Notifications" ) )
+			{
+				gamescope::Notifications::DrawSettingsPanel();
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();
