@@ -41,7 +41,7 @@ namespace gamescope::fonts
 {
 	namespace
 	{
-		constexpr int kStyleCount = 6; // keep in sync with Style's enumerator count
+		constexpr int kStyleCount = 10; // keep in sync with Style's enumerator count
 
 		int IndexForStyle( Style style )
 		{
@@ -55,12 +55,13 @@ namespace gamescope::fonts
 		};
 
 		// One TTF per weight actually used (see Fonts.h's per-Style comment
-		// for which role uses which). Plex Mono SemiBold is baked twice, at
-		// two different pixel sizes (Title and Hero) -- ImGui bakes a
+		// for which role uses which). Several weights are baked more than
+		// once at different pixel sizes (e.g. Mono SemiBold for both Title
+		// and Hero, Mono Medium for Value/SegmentLabel) -- ImGui bakes a
 		// separate ImFont per AddFont call regardless of shared source data,
-		// so this is still just "5 files, 6 baked fonts", matching the
-		// design guide's own "~4-6 distinct family/weight/size combos"
-		// budget in its ImGui feasibility table.
+		// so this is "5 files, 10 baked fonts": still just the spec's own
+		// §2 "bake only the combinations actually used" set, not a general
+		// arbitrary-size atlas.
 		const FontFace kSansRegular   = { g_Font_IBMPlexSans_Regular_Data,   g_Font_IBMPlexSans_Regular_Size };
 		const FontFace kSansMedium    = { g_Font_IBMPlexSans_Medium_Data,    g_Font_IBMPlexSans_Medium_Size };
 		const FontFace kMonoRegular   = { g_Font_IBMPlexMono_Regular_Data,   g_Font_IBMPlexMono_Regular_Size };
@@ -75,15 +76,19 @@ namespace gamescope::fonts
 			const char *pszDebugName;
 		};
 
-		// The design guide's "Scale observed" bullets (ui-design-guide.md),
+		// superdoc/planning/ui-mockup-precise-spec.md §2's Typography table,
 		// one row each -- see Fonts.h's Style comment for the same mapping.
 		const StyleSpec kSpecs[kStyleCount] = {
-			{ Style::Title,   &kMonoSemiBold, 11.0f, "Plex Mono SemiBold 11px (Title)" },
-			{ Style::Section, &kSansMedium,   12.5f, "Plex Sans Medium 12.5px (Section)" },
-			{ Style::Label,   &kSansRegular,  12.0f, "Plex Sans Regular 12px (Label)" },
-			{ Style::Value,   &kMonoMedium,   12.5f, "Plex Mono Medium 12.5px (Value)" },
-			{ Style::Meta,    &kMonoRegular,  10.0f, "Plex Mono Regular 10px (Meta)" },
-			{ Style::Hero,    &kMonoSemiBold, 18.0f, "Plex Mono SemiBold 18px (Hero)" },
+			{ Style::Title,         &kMonoSemiBold, 11.0f, "Plex Mono SemiBold 11px (Title)" },
+			{ Style::Section,       &kSansMedium,   13.0f, "Plex Sans Medium 13px (Group name)" },
+			{ Style::Label,         &kSansRegular,  11.5f, "Plex Sans Regular 11.5px (Param label)" },
+			{ Style::Value,         &kMonoMedium,   13.0f, "Plex Mono Medium 13px (Value)" },
+			{ Style::Meta,          &kMonoRegular,  10.5f, "Plex Mono Regular 10.5px (Meta)" },
+			{ Style::Hero,          &kMonoSemiBold, 18.0f, "Plex Mono SemiBold 18px (Hero)" },
+			{ Style::SegmentLabel,  &kMonoMedium,   11.5f, "Plex Mono Medium 11.5px (Segment inactive)" },
+			{ Style::SegmentActive, &kMonoSemiBold, 11.5f, "Plex Mono SemiBold 11.5px (Segment active)" },
+			{ Style::ScaleMark,     &kMonoRegular,   9.5f, "Plex Mono Regular 9.5px (Scale mark)" },
+			{ Style::DockHotkey,    &kMonoMedium,    8.0f, "Plex Mono Medium 8px (Dock hotkey)" },
 		};
 
 		struct FontSet

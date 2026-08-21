@@ -47,7 +47,14 @@
 #include <cmath>
 #include <cstddef>
 
+// ImVec2 operator+/- (used below by the status-dot glow, dock top-edge
+// marker, and hint-line shadow offset) aren't exported by imgui.h by
+// default -- must be defined before *any* include of imgui.h in this
+// translation unit, so Palette.h (which also includes imgui.h) is pulled in
+// only after this, same ordering rule as Widgets.cpp.
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
+#include "Palette.h"
 
 namespace gamescope::chrome
 {
@@ -228,23 +235,27 @@ namespace gamescope::chrome
 	namespace
 	{
 		// Local-only color tokens for the chrome elements this file draws
-		// itself (dock buttons, the icon/status-dot sub-header, the accent
-		// left-edge). Deliberately NOT written into ImGuiStyle.Colors[] --
-		// that shared array is SettingsOverlay.cpp's ApplyDesignGuideStyle()
-		// (issue #14 territory, see this file's top comment) -- these are
-		// only ever passed straight to ImDrawList calls this file makes.
-		// Values are the design guide's own tokens (ui-design-guide.md's
-		// Color palette table), converted from its oklch/rgba notation to
-		// sRGB bytes once, here.
-		constexpr ImU32 kAccentU32        = IM_COL32( 0x4f, 0xb8, 0xd6, 255 );
-		constexpr ImU32 kAccentHiU32      = IM_COL32( 0xdd, 0xf3, 0xf8, 255 );
-		constexpr ImU32 kAccentSoftBgU32  = IM_COL32( 0x4f, 0xb8, 0xd6, 56 );
-		constexpr ImU32 kHairlineU32      = IM_COL32( 255, 255, 255, 26 );
-		constexpr ImU32 kHairlineStrongU32= IM_COL32( 255, 255, 255, 41 );
-		constexpr ImU32 kRaisedU32        = IM_COL32( 255, 255, 255, 13 );
-		constexpr ImU32 kRaisedHoverU32   = IM_COL32( 255, 255, 255, 20 );
-		constexpr ImU32 kIconIdleU32      = IM_COL32( 255, 255, 255, 153 );
-		constexpr ImU32 kIconHoverU32     = IM_COL32( 255, 255, 255, 191 );
+		// itself (dock buttons, the title-bar sub-header, the dock's active
+		// top-edge marker). Deliberately NOT written into ImGuiStyle.Colors[]
+		// -- that shared array is Widgets.cpp's ApplyStyle() (issue #14
+		// territory, see this file's top comment) -- these are only ever
+		// passed straight to ImDrawList calls this file makes. Values come
+		// from Palette.h (superdoc/planning/ui-mockup-precise-spec.md §1's
+		// Color tokens table) -- see that header's comment for why the hex
+		// lives there once instead of being re-typed per file.
+		constexpr ImU32 kAccentU32         = gamescope::palette::kAccent;
+		constexpr ImU32 kAccentIconU32     = gamescope::palette::kAccentIcon;
+		// Dock icon idle/hover -- spec §2 "icon idle" dock row (.62), §12
+		// hover invention (+80% on hover, applied here as the glyph's own
+		// alpha rather than a full white@80%).
+		constexpr ImU32 kIconIdleU32       = IM_COL32( 255, 255, 255, 158 ); // #EFF5FB @ 62%
+		constexpr ImU32 kIconHoverU32      = IM_COL32( 255, 255, 255, 204 );
+		// Title-bar sub-header icon idle -- spec §2 "icon idle" title-bar row (.45-.5).
+		constexpr ImU32 kTitleIconIdleU32  = IM_COL32( 255, 255, 255, 122 ); // #EFF5FB @ 48%
+		constexpr ImU32 kHairlineU32       = IM_COL32( 255, 255, 255, 26 );  // #FFFFFF @ 10% -- spec §1 hairline
+		constexpr ImU32 kHairlineStrongU32 = IM_COL32( 255, 255, 255, 46 );  // in-style hover invention
+		constexpr ImU32 kDockIdleFillU32   = IM_COL32( 255, 255, 255, 11 );  // #FFFFFF @ 4.5% -- spec §8 dock idle fill
+		constexpr ImU32 kDockHoverFillU32  = IM_COL32( 255, 255, 255, 20 );  // in-style hover invention
 
 		// Display open, everything else closed -- see Chrome.h's IsPanelOpen()
 		// comment: exactly one panel is open on first show, SetPanelOpen()
@@ -265,39 +276,70 @@ namespace gamescope::chrome
 		}
 
 		// Slim icon + status-dot sub-header, drawn as ordinary window
-		// content right under ImGui's own native title bar, plus the 2px
-		// accent left-edge on the window frame while focused. See this
-		// file's top ponytail comment for why this isn't one literal
-		// custom title-bar row.
+		// content right under ImGui's own native title bar. See this file's
+		// top ponytail comment for why this isn't one literal single-row
+		// custom title bar replacing ImGui's own -- that ponytail call
+		// stands; what changed here (spec §5, gap list items 4-5) is this
+		// row's own paint: a real gradient fill spanning the full window
+		// width (not just content padding), a 6x6 SQUARE status dot (the
+		// spec's own shape -- a previous pass drew a circle) with a glow
+		// when live, and the meta text recolored/resized to spec. The
+		// full-height accent left-edge stripe this used to draw here is
+		// REMOVED per the spec's gap list item 5 ("we invented a full-height
+		// accent left stripe that does not exist in the design") -- the
+		// focused-window accent *border* BeginPanelWindow() already applies
+		// is the design's actual, sole focus indicator (spec §4).
 		void DrawPanelChromeHeader( PanelId id )
 		{
-			if ( ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows ) )
-			{
-				ImDrawList *pDrawList = ImGui::GetWindowDrawList();
-				const ImVec2 windowPos = ImGui::GetWindowPos();
-				const ImVec2 windowSize = ImGui::GetWindowSize();
-				pDrawList->AddRectFilled( windowPos, ImVec2( windowPos.x + 2.0f, windowPos.y + windowSize.y ), kAccentU32 );
-			}
+			const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
 
 			ImDrawList *pDrawList = ImGui::GetWindowDrawList();
-			constexpr float kDotRadius = 3.0f;
-			constexpr float kIconSize = 14.0f;
-			constexpr float kRowHeight = kIconSize;
+			const ImVec2 windowPos = ImGui::GetWindowPos();
+			const ImVec2 windowSize = ImGui::GetWindowSize();
 			const ImVec2 cursor = ImGui::GetCursorScreenPos();
 
-			const ImVec2 dotCenter( cursor.x + kDotRadius, cursor.y + kRowHeight * 0.5f );
-			pDrawList->AddCircleFilled( dotCenter, kDotRadius, kAccentU32 );
+			constexpr float kDotSize = 6.0f;   // spec §5: "6x6px square status dot"
+			constexpr float kIconSize = 14.0f;
+			constexpr float kRowHeight = 22.0f; // pushes native-bar + this row's combined height toward spec's 34px total (see file-top ponytail note -- two rows, not a pixel-exact single 34px bar)
+			constexpr float kPadX = 12.0f;      // spec §5 title-bar horizontal padding
 
-			const float flIconLeft = cursor.x + kDotRadius * 2.0f + 6.0f;
-			const ImVec2 iconCenter( flIconLeft + kIconSize * 0.5f, cursor.y + kRowHeight * 0.5f );
-			DrawIcon( pDrawList, IconForPanel( id ), iconCenter, kIconSize, kIconIdleU32 );
+			// Gradient fill spanning the full window width, flush with the
+			// window's own left/right edges (not just the content column) --
+			// spec §5: white 6%->1.5% (unfocused), accent 16%->white 2%
+			// (focused).
+			const ImVec2 barMin( windowPos.x, cursor.y );
+			const ImVec2 barMax( windowPos.x + windowSize.x, cursor.y + kRowHeight );
+			const ImU32 gradTop = bFocused ? ImGui::GetColorU32( gamescope::palette::Accent( 0.16f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.06f ) );
+			const ImU32 gradBot = bFocused ? ImGui::GetColorU32( gamescope::palette::White( 0.02f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.015f ) );
+			pDrawList->AddRectFilledMultiColor( barMin, barMax, gradTop, gradTop, gradBot, gradBot );
+			const ImU32 borderCol = bFocused ? ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.10f ) );
+			pDrawList->AddLine( ImVec2( barMin.x, barMax.y ), ImVec2( barMax.x, barMax.y ), borderCol, 1.0f );
 
-			ImGui::Dummy( ImVec2( flIconLeft + kIconSize + 6.0f - cursor.x, kRowHeight ) );
-			ImGui::SameLine();
+			const float flContentLeft = windowPos.x + kPadX;
+			const float flRowCenterY = cursor.y + kRowHeight * 0.5f;
+
+			// 6x6 square status dot, always "live" (this panel's window is
+			// only ever drawn while its subsystem is on) with an approximated
+			// glow -- spec §5: "glow 0 0 8px accent@80% ~= one 10x10 rect
+			// behind it @25% accent".
+			const ImVec2 dotCenter( flContentLeft + kDotSize * 0.5f, flRowCenterY );
+			pDrawList->AddRectFilled( dotCenter - ImVec2( 5.0f, 5.0f ), dotCenter + ImVec2( 5.0f, 5.0f ), ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
+			pDrawList->AddRectFilled( dotCenter - ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), dotCenter + ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), kAccentU32 );
+
+			const float flIconLeft = flContentLeft + kDotSize + 6.0f;
+			const ImVec2 iconCenter( flIconLeft + kIconSize * 0.5f, flRowCenterY );
+			DrawIcon( pDrawList, IconForPanel( id ), iconCenter, kIconSize, kTitleIconIdleU32 );
+
+			// Meta text -- spec §5: Mono 400 10.5 @30% (title-bar meta).
 			ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
-			ImGui::TextDisabled( "gamescope-ritz" );
+			const char *pszMeta = "gamescope-ritz";
+			const ImVec2 metaSize = ImGui::CalcTextSize( pszMeta );
+			pDrawList->AddText( ImVec2( flIconLeft + kIconSize + 6.0f, flRowCenterY - metaSize.y * 0.5f ),
+				ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), pszMeta );
 			ImGui::PopFont();
-			ImGui::Separator();
+
+			ImGui::SetCursorScreenPos( ImVec2( cursor.x, barMax.y ) );
+			ImGui::Dummy( ImVec2( windowSize.x, 1.0f ) );
 		}
 	}
 
@@ -320,6 +362,21 @@ namespace gamescope::chrome
 		s_bPanelOpen[(size_t)id] = bOpen;
 	}
 
+	namespace
+	{
+		// One-frame-stale focus cache: spec §4's "unfocused windows: whole
+		// window x94% opacity" needs to be applied via
+		// ImGuiStyleVar_Alpha, which only affects colors computed *after*
+		// it's pushed -- but ImGui::Begin() itself draws the window
+		// background/border using whatever style.Alpha is active the
+		// instant it's called, before this function can know the *new*
+		// frame's focus result. Using last frame's cached focus state is a
+		// one-frame-late approximation on the exact frame focus changes,
+		// imperceptible for a settings panel, and avoids the alternative
+		// (a two-pass Begin) entirely.
+		bool s_bPanelWasFocused[(size_t)PanelId::Count] = {};
+	}
+
 	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 defaultPos, ImVec2 defaultSize )
 	{
 		if ( !IsPanelOpen( id ) )
@@ -328,15 +385,14 @@ namespace gamescope::chrome
 		ImGui::SetNextWindowPos( defaultPos, ImGuiCond_FirstUseEver );
 		ImGui::SetNextWindowSize( defaultSize, ImGuiCond_FirstUseEver );
 
-		// Design guide "Spacing & layout": window corner radius 3-4px
-		// (controls stay flat/0px -- that's Widgets.cpp's ApplyStyle(),
-		// unaffected by this window-scoped push). "Focused window: accent
-		// border at ~42% opacity ... the *only* focus indicator" -- pushed
-		// unconditionally and popped after End() rather than branched on
-		// focus, since ImGui doesn't know this window's focus state until
-		// after Begin() returns; the border color itself is corrected to
-		// accent-vs-hairline below, inside the window, once focus is known.
+		// Spec §4: window corner radius 4px (controls stay flat/0px --
+		// that's Widgets.cpp's ApplyStyle(), unaffected by this
+		// window-scoped push).
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowRounding, 4.0f );
+		// Spec §4 "unfocused windows: whole window x94% opacity" -- see
+		// s_bPanelWasFocused's comment above for why this reads last
+		// frame's cached value rather than this frame's (not yet known).
+		ImGui::PushStyleVar( ImGuiStyleVar_Alpha, s_bPanelWasFocused[(size_t)id] ? 1.0f : 0.94f );
 
 		bool bStillOpen = true;
 		ImGui::PushFont( fonts::Get( fonts::Style::Title ) );
@@ -346,13 +402,17 @@ namespace gamescope::chrome
 		if ( !bStillOpen )
 			SetPanelOpen( id, false );
 
-		// The window's Border color is a single shared ImGuiStyle value
-		// (Widgets.cpp's `hairline` token) -- recolor just *this* window's
-		// border here, per-frame, rather than trying to give every window a
-		// different static style color. PopStyleColor in EndPanelWindow().
+		// Spec §4: "Focused window: border becomes accent@42% ... Focused
+		// window renders last (on top)" -- ImGui's own Begin()/focus-follows-
+		// click z-ordering already gives the second half of that for free;
+		// only the border color needs correcting per-window here (the
+		// window's Border color is otherwise a single shared ImGuiStyle
+		// value, Widgets.cpp's `hairline` token). PopStyleColor in
+		// EndPanelWindow().
 		const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
+		s_bPanelWasFocused[(size_t)id] = bFocused;
 		ImGui::PushStyleColor( ImGuiCol_Border,
-			bFocused ? ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.42f )
+			bFocused ? gamescope::palette::ToVec4( gamescope::palette::kAccent, 0.42f )
 			         : ImGui::GetStyle().Colors[ImGuiCol_Border] );
 
 		DrawPanelChromeHeader( id );
@@ -364,7 +424,7 @@ namespace gamescope::chrome
 	{
 		ImGui::PopStyleColor(); // ImGuiCol_Border, pushed in BeginPanelWindow()
 		ImGui::End();
-		ImGui::PopStyleVar(); // WindowRounding, pushed in BeginPanelWindow()
+		ImGui::PopStyleVar( 2 ); // ImGuiStyleVar_Alpha, WindowRounding -- both pushed in BeginPanelWindow()
 	}
 
 	namespace
@@ -384,6 +444,13 @@ namespace gamescope::chrome
 			{ PanelId::Config,  Icon::Profiles,    "Config / Profiles" },
 		};
 
+		// Per spec §8 Dock: idle fill white@4.5%/border white@10%/icon
+		// white@62%; open/active fill accent@13%/border accent@50%/icon
+		// accent-icon (#A3E3F6), plus a 2px accent-edge top marker (inset
+		// 8px each side, i.e. 38px wide, flush with the button's own top
+		// border) with an approximated glow underneath it. A previous pass
+		// here used a full accent border + a much stronger (22%) fill and
+		// had no top-edge marker at all -- gap list item 7.
 		bool DrawDockButton( ImDrawList *pDrawList, Icon icon, bool bActive, const char *pszLabel, float flSize )
 		{
 			ImGui::PushID( pszLabel );
@@ -391,12 +458,29 @@ namespace gamescope::chrome
 			const bool bClicked = ImGui::InvisibleButton( "##dockbtn", ImVec2( flSize, flSize ) );
 			const bool bHovered = ImGui::IsItemHovered();
 
-			const ImU32 bgCol = bActive ? kAccentSoftBgU32 : ( bHovered ? kRaisedHoverU32 : kRaisedU32 );
-			const ImU32 borderCol = bActive ? kAccentU32 : ( bHovered ? kHairlineStrongU32 : kHairlineU32 );
-			const ImU32 iconCol = bActive ? kAccentHiU32 : ( bHovered ? kIconHoverU32 : kIconIdleU32 );
+			const ImU32 bgCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.13f ) )
+				: ( bHovered ? kDockHoverFillU32 : kDockIdleFillU32 );
+			const ImU32 borderCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.50f ) )
+				: ( bHovered ? kHairlineStrongU32 : kHairlineU32 );
+			const ImU32 iconCol = bActive ? kAccentIconU32 : ( bHovered ? kIconHoverU32 : kIconIdleU32 );
 
 			pDrawList->AddRectFilled( pos, ImVec2( pos.x + flSize, pos.y + flSize ), bgCol );
 			pDrawList->AddRect( pos, ImVec2( pos.x + flSize, pos.y + flSize ), borderCol );
+
+			if ( bActive )
+			{
+				constexpr float kEdgeInset = 8.0f;
+				constexpr float kEdgeThickness = 2.0f;
+				const ImVec2 edgeMin( pos.x + kEdgeInset, pos.y );
+				const ImVec2 edgeMax( pos.x + flSize - kEdgeInset, pos.y + kEdgeThickness );
+				// Glow: spec "0 0 10px accent@90% ~= one 42x6px rect under
+				// it @25% accent".
+				pDrawList->AddRectFilled( ImVec2( pos.x + flSize * 0.5f - 21.0f, pos.y ),
+					ImVec2( pos.x + flSize * 0.5f + 21.0f, pos.y + 6.0f ),
+					ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
+				pDrawList->AddRectFilled( edgeMin, edgeMax, ImGui::GetColorU32( gamescope::palette::kAccentEdge ) );
+			}
+
 			DrawIcon( pDrawList, icon, ImVec2( pos.x + flSize * 0.5f, pos.y + flSize * 0.5f ), flSize * 0.4f, iconCol );
 
 			if ( bHovered )
@@ -429,6 +513,10 @@ namespace gamescope::chrome
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( kPad, kPad ) );
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowRounding, 4.0f );
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 1.0f );
+		// Dock fill is .86 alpha, distinct from windows' .88 (spec §1
+		// `surface` vs §8's own "fill rgba(9,10,12,.86)") -- push a
+		// dock-only override rather than changing the shared WindowBg token.
+		ImGui::PushStyleColor( ImGuiCol_WindowBg, gamescope::palette::SurfaceVec4( 0.86f ) );
 		ImGui::Begin( "##gamescope_ritz_overlay_dock", nullptr,
 			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
@@ -442,7 +530,7 @@ namespace gamescope::chrome
 		// there is nothing for a click on this one to open).
 		{
 			const ImVec2 pos = ImGui::GetCursorScreenPos();
-			pDrawList->AddRectFilled( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), kRaisedU32 );
+			pDrawList->AddRectFilled( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), kDockIdleFillU32 );
 			pDrawList->AddRect( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), kHairlineU32 );
 			DrawIcon( pDrawList, Icon::Settings, ImVec2( pos.x + kButtonSize * 0.5f, pos.y + kButtonSize * 0.5f ),
 				kButtonSize * 0.4f, kAccentU32 );
@@ -473,8 +561,13 @@ namespace gamescope::chrome
 			const bool bClicked = ImGui::InvisibleButton( "##dock_close_overlay", ImVec2( kButtonSize, kButtonSize ) );
 			const bool bHovered = ImGui::IsItemHovered();
 
-			pDrawList->AddRectFilled( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), bHovered ? kRaisedHoverU32 : kRaisedU32 );
-			pDrawList->AddRect( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), bHovered ? kHairlineStrongU32 : kHairlineU32 );
+			// Spec §8 "Close button (after divider): fill white@3%, border
+			// white@8%" -- distinct (dimmer) from the idle panel-toggle
+			// buttons' 4.5%/10%.
+			const ImU32 closeFill = ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.07f : 0.03f ) );
+			const ImU32 closeBorder = ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.12f : 0.08f ) );
+			pDrawList->AddRectFilled( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), closeFill );
+			pDrawList->AddRect( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), closeBorder );
 			DrawIcon( pDrawList, Icon::Close, ImVec2( pos.x + kButtonSize * 0.5f, pos.y + kButtonSize * 0.5f ),
 				kButtonSize * 0.4f, bHovered ? kIconHoverU32 : kIconIdleU32 );
 
@@ -484,7 +577,34 @@ namespace gamescope::chrome
 				SettingsOverlay_ToggleVisible();
 		}
 
+		const ImVec2 dockWindowPos = ImGui::GetWindowPos();
+		const ImVec2 dockWindowSize = ImGui::GetWindowSize();
+
 		ImGui::End();
+		ImGui::PopStyleColor(); // ImGuiCol_WindowBg
 		ImGui::PopStyleVar( 3 );
+
+		// Hint line, centered under the dock container -- spec §8: Mono 400
+		// 10.5 @42% with a text shadow, 10px gap. Drawn on the background
+		// draw list (own tiny "window") so it isn't clipped to the dock's
+		// own bounds and doesn't participate in the dock's padding/layout.
+		{
+			ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
+			// Our actual binding is Ctrl+Shift+O (SettingsOverlay.cpp's
+			// cv_toggle hotkey), not the mockup's own Shift+Tab -- spec §8's
+			// own copy-pattern note says to substitute the real binding
+			// rather than print a key we don't bind.
+			static constexpr const char *kHintText = "CTRL+SHIFT+O toggle overlay \xC2\xB7 game input paused";
+			const ImVec2 hintSize = ImGui::CalcTextSize( kHintText );
+			const ImVec2 hintPos(
+				dockWindowPos.x + dockWindowSize.x * 0.5f - hintSize.x * 0.5f,
+				dockWindowPos.y + dockWindowSize.y + 10.0f );
+
+			ImDrawList *pFgDrawList = ImGui::GetForegroundDrawList();
+			const ImU32 shadowCol = ImGui::GetColorU32( gamescope::palette::Black( 0.90f ) );
+			pFgDrawList->AddText( hintPos + ImVec2( 0.0f, 1.0f ), shadowCol, kHintText );
+			pFgDrawList->AddText( hintPos, ImGui::GetColorU32( gamescope::palette::White( 0.42f ) ), kHintText );
+			ImGui::PopFont();
+		}
 	}
 }

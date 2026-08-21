@@ -91,4 +91,16 @@ namespace gamescope::widgets
 	// active. `nCount` options starting at pszLabels[0]; returns true (and
 	// updates *pnSelected) the frame a different segment is clicked.
 	bool SegmentedControl( const char *pszId, int *pnSelected, const char *const *pszLabels, int nCount );
+
+	// superdoc/planning/ui-mockup-precise-spec.md §7's "Read-only readout
+	// strip" component: a full-width, non-interactive box (white@3% fill,
+	// no border) for a system-measured or otherwise never-editable value --
+	// "never show a value the overlay didn't verify" as a look, not just a
+	// behavior. Content is drawn Mono @34% (spec's own fixed alpha for this
+	// role). bLeadingDot draws the same 6x6 square status dot the title bar
+	// uses (spec: "the leading dot should be the 6x6 square status dot, not
+	// a circle") before the text, for rows that are also asserting "this
+	// subsystem is live" (e.g. PanelConfig's app-id row) rather than just
+	// showing a value.
+	void ReadoutStrip( const char *pszText, bool bLeadingDot = false );
 }

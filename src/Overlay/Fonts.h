@@ -12,39 +12,45 @@ struct ImFont;
 
 namespace gamescope::fonts
 {
-	// One enumerator per role the design guide's Typography section names
-	// under "Scale observed" (superdoc/planning/ui-design-guide.md). Sizes
-	// and weights are the guide's own values (its ranges' midpoints where a
-	// range is given); see Fonts.cpp's kSpecs table for the exact numbers.
+	// One enumerator per typography role named in
+	// superdoc/planning/ui-mockup-precise-spec.md §2 ("Typography"), the
+	// pixel-measured spec that supersedes the earlier descriptive design
+	// guide (see that file's own provenance note). Sizes/weights below are
+	// its table's own numbers; see Fonts.cpp's kSpecs for the exact figures.
 	enum class Style
 	{
-		Title,   // Mono 600, 11px -- window/section title-bar text.
+		Title,   // Mono 600, 11px -- window title-bar text.
 		         // Uppercase the string yourself (Fonts.cpp doesn't); the
-		         // guide's ~.15-.16em letter-spacing/tracking on top of that
-		         // is NOT applied -- ImGui has no letter-spacing primitive,
-		         // and the task brief calls faking it badly worse than
-		         // saying so. Real tracking would need per-glyph manual
-		         // AddText() advance-offset code, which is out of scope for
-		         // a typography-only pass; left for whichever of #14/#15
-		         // ends up custom-drawing title chrome.
-		Section, // Sans 500, 12.5px -- group/section names.
-		Label,   // Sans 400, 12px -- parameter labels, body/prose text.
+		         // spec's ~.16em letter-spacing on top of that is explicitly
+		         // marked "skipped" (spec §2, §13) -- ImGui has no
+		         // letter-spacing primitive, and faking it badly is worse
+		         // than not.
+		Section, // Sans 500, 13px -- group/section names (spec §2 "Group name").
+		Label,   // Sans 400, 11.5px -- parameter labels, body/prose text
+		         // (spec §2 "Parameter label").
 		         // This is also the atlas's default font (ImGuiIO::FontDefault),
 		         // so every pre-existing ImGui::Text/Checkbox/Slider/etc.
 		         // call that never explicitly pushes a Style gets Sans for
 		         // free, with no per-callsite change needed.
-		Value,   // Mono 500, 12.5px -- numeric/unit/state-word readouts
-		         // drawn as plain text (ImGui::Text/AddText), tabular by
-		         // construction since Plex Mono is genuinely monospaced.
+		Value,   // Mono 500, 13px -- numeric/unit/state-word readouts
+		         // (spec §2 "Value readout"), drawn as plain text
+		         // (ImGui::Text/AddText), tabular by construction since Plex
+		         // Mono is genuinely monospaced.
 		         // Does NOT reach text baked into a stock ImGui widget's own
 		         // internal draw (e.g. SliderInt's live value overlay) --
 		         // ImGui draws that with whatever font is active for the
-		         // whole widget, not a separately stylable run; giving those
-		         // their own custom draw code is issue #14's job (widget
-		         // rendering), not this one.
-		Meta,    // Mono 400, 10px -- units, hints, disabled/meta text.
+		         // whole widget, not a separately stylable run; Widgets.cpp's
+		         // custom slider draws its own value/mark text instead.
+		Meta,    // Mono 400, 10.5px -- units, hints, disabled/meta text,
+		         // title-bar meta, dock hint line (spec §2 rows "Title-bar
+		         // meta" / "Meta/status line" / "Dock hint line" share this
+		         // one size).
 		Hero,    // Mono 600, 18px -- large standalone numeric readouts
-		         // (the FPS display's number).
+		         // (the FPS display's number; spec §2 "HUD FPS number").
+		SegmentLabel,  // Mono 500, 11.5px -- inactive segmented-control cell text (spec §2 "Segment label").
+		SegmentActive, // Mono 600, 11.5px -- active segmented-control cell text.
+		ScaleMark,     // Mono 400, 9.5px -- slider min/max scale marks (spec §2 "Scale min/max").
+		DockHotkey,    // Mono 500, 8px -- dock button hotkey glyph (spec §2 "Dock hotkey glyph").
 	};
 
 	// Builds the IBM Plex atlas for the *currently current* ImGui context

@@ -20,6 +20,7 @@
 #include "PanelConfig.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -232,7 +233,14 @@ namespace gamescope
 			}
 			else
 			{
-				ImGui::Text( "Game app id: %s", s_oAppId->c_str() );
+				// Spec §7 "Read-only readout strip", gap list item 11: a
+				// system-verified value ("this is the app id we resolved"),
+				// styled as never-editable-looking rather than a
+				// full-brightness plain ImGui::Text() row, with the same 6x6
+				// square status dot the title bar uses (not a circle).
+				char szAppId[128];
+				std::snprintf( szAppId, sizeof( szAppId ), "app id: %s", s_oAppId->c_str() );
+				widgets::ReadoutStrip( szAppId, /*bLeadingDot=*/ true );
 				ImGui::TextUnformatted( s_bOverrideActive
 					? "Editing: this game's own config (games/<id>.json) -- frozen snapshot, independent of global."
 					: "Editing: global config (global.json) -- shared with every other game that doesn't override it." );

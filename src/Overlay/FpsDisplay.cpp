@@ -52,6 +52,7 @@
 #include "Config/AppId.h"
 #include "Fonts.h"
 #include "Widgets.h"
+#include "Palette.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -350,32 +351,70 @@ namespace gamescope
 			ImVec4( textColorBase.x, textColorBase.y, textColorBase.z, cfg.text_opacity ) );
 
 		// Right-justified in a fixed 3-character field (blank-, not zero-,
-		// padded) -- 0-999 is plenty for a frame-rate readout. The unit
-		// suffix is drawn in the same Mono run as the number, per the
-		// design guide's "IBM Plex Mono ... for every number, unit, and
-		// state word" rule.
-		char szReadout[16];
-		snprintf( szReadout, sizeof( szReadout ), "%3d FPS", std::clamp( nFps, 0, 999 ) );
-		const ImVec2 textSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szReadout );
+		// padded) -- 0-999 is plenty for a frame-rate readout.
+		char szNum[8];
+		snprintf( szNum, sizeof( szNum ), "%3d", std::clamp( nFps, 0, 999 ) );
+		const ImVec2 numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szNum );
 
-		// ponytail: fixed top-left corner, no configurable position --
-		// SPEC.md's fps_display schema (Feature 3 / config schema) doesn't
-		// list one, and the task brief is explicit about not inventing
-		// settings the spec doesn't ask for.
-		const ImVec2 origin( 16.0f, 16.0f );
-		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		// Spec §10 Row 1: number (Hero) -> "FPS" unit (Meta, dim) -> spacer
+		// -> frametime in ms (accent-tinted) -- was one flat "%3d FPS" run
+		// in a single color/size; split so the unit and the ms readout can
+		// each carry their own spec'd size/color (gap list item 6).
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		static constexpr const char *kUnitText = " FPS";
+		const ImVec2 unitSize = ImGui::CalcTextSize( kUnitText );
+		ImGui::PopFont();
+
+		char szMs[16];
+		snprintf( szMs, sizeof( szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		const ImVec2 msSize = bAdditive ? ImVec2( 0.0f, 0.0f ) : ImGui::CalcTextSize( szMs );
+		ImGui::PopFont();
+
+		const ImVec2 textSize( numSize.x + unitSize.x + msSize.x, std::max( numSize.y, std::max( unitSize.y, msSize.y ) ) );
+
+		// Spec §10: "Default anchor: top-right, offset 32/32" -- was a fixed
+		// top-left 16/16 (gap list item 6); this context's io.DisplaySize is
+		// the actual output resolution (see FpsDisplay_AddLayer()), so the
+		// right/top offsets are computed against it rather than hand-tuned.
+		constexpr float kAnchorOffset = 32.0f;
+		const ImVec2 io_display = ImGui::GetIO().DisplaySize;
+		const ImVec2 rectMax( io_display.x - kAnchorOffset, kAnchorOffset + textSize.y + cfg.backdrop_padding * 2.0f );
+		const ImVec2 rectMin( rectMax.x - textSize.x - cfg.backdrop_padding * 2.0f, kAnchorOffset );
+		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding, rectMin.y + cfg.backdrop_padding );
 
 		if ( bDrawBackdrop )
 		{
-			const ImVec2 rectMin = origin;
-			const ImVec2 rectMax(
-				origin.x + textSize.x + cfg.backdrop_padding * 2.0f,
-				origin.y + textSize.y + cfg.backdrop_padding * 2.0f );
-			const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0.03f, 0.035f, 0.04f, cfg.backdrop_opacity ) );
+			// Spec §10: "square corners (radius 0 -- unlike windows)" is the
+			// mockup's own default, but backdrop_rounding stays a real user
+			// setting (M4's own control, still exposed in
+			// FpsDisplay_DrawSettingsPanel below) rather than forced to 0.
+			const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity ) );
 			pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, cfg.backdrop_rounding );
+			pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), cfg.backdrop_rounding );
 		}
 
-		pDrawList->AddText( pFont, flFontSize, textPos, textColor, szReadout );
+		ImVec2 cursor = textPos;
+		pDrawList->AddText( pFont, flFontSize, cursor, textColor, szNum );
+		cursor.x += numSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		const ImU32 unitColor = ImGui::GetColorU32( gamescope::palette::White( 0.50f ) );
+		pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( numSize.y - unitSize.y ) ), unitColor, kUnitText );
+		cursor.x += unitSize.x;
+		ImGui::PopFont();
+
+		if ( !bAdditive )
+		{
+			// Spec §10: frametime readout color oklch(.86 .09 218) = #89E0F8
+			// -- close to, but distinct from, the general accent-value token
+			// (#78DBF6), so it's kept as its own literal rather than routed
+			// through Palette.h's accent family.
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+			const ImU32 msColor = ImGui::GetColorU32( ImVec4( 0x89 / 255.0f, 0xe0 / 255.0f, 0xf8 / 255.0f, cfg.text_opacity ) );
+			pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( numSize.y - msSize.y ) ), msColor, szMs );
+			ImGui::PopFont();
+		}
 	}
 
 	static bool RenderAndSubmit()
