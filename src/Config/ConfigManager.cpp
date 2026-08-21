@@ -1,5 +1,6 @@
 #include "ConfigManager.h"
 
+#include <algorithm>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "AppId.h"
 #include "Utils/DirHelpers.h"
 #include "log.hpp"
 
@@ -669,6 +671,109 @@ namespace gamescope::config
     void FlushPendingWrites()
     {
         ConfigWriter::Instance().Flush();
+    }
+
+    // ---- directory listings ---------------------------------------------------
+
+    namespace
+    {
+        std::vector<std::string> ListJsonStems( const std::string &sDir )
+        {
+            std::vector<std::string> out;
+            std::error_code ec;
+            std::filesystem::directory_iterator it( sDir, ec );
+            if ( ec )
+                return out; // directory doesn't exist yet - empty, not an error
+
+            for ( const std::filesystem::directory_entry &entry : it )
+            {
+                std::error_code ecFile;
+                if ( !entry.is_regular_file( ecFile ) || ecFile )
+                    continue;
+                const std::filesystem::path &path = entry.path();
+                if ( path.extension() != ".json" )
+                    continue;
+                out.push_back( path.stem().string() );
+            }
+            std::sort( out.begin(), out.end() );
+            return out;
+        }
+    }
+
+    std::vector<std::string> ListProfiles()
+    {
+        return ListJsonStems( ProfilesDir() );
+    }
+
+    std::vector<std::string> ListGameIds()
+    {
+        return ListJsonStems( GamesDir() );
+    }
+
+    // ---- session routing -------------------------------------------------------
+
+    namespace
+    {
+        std::optional<std::string> s_oSessionAppId;
+        bool s_bSessionAppIdResolved = false;
+        bool s_bSessionOverrideActive = false;
+        bool s_bSessionOverrideResolved = false;
+        uint64_t s_ulConfigGeneration = 0;
+    }
+
+    const std::optional<std::string> &SessionAppId()
+    {
+        if ( !s_bSessionAppIdResolved )
+        {
+            s_oSessionAppId = ResolveAppId();
+            s_bSessionAppIdResolved = true;
+        }
+        return s_oSessionAppId;
+    }
+
+    bool IsSessionOverrideActive()
+    {
+        if ( !s_bSessionOverrideResolved )
+        {
+            const std::optional<std::string> &oAppId = SessionAppId();
+            s_bSessionOverrideActive = oAppId.has_value() && LoadPerGameOverride( *oAppId ).has_value();
+            s_bSessionOverrideResolved = true;
+        }
+        return s_bSessionOverrideActive;
+    }
+
+    void SetSessionOverrideActive( bool bActive )
+    {
+        s_bSessionOverrideActive = bActive;
+        s_bSessionOverrideResolved = true;
+    }
+
+    uint64_t ConfigGeneration()
+    {
+        return s_ulConfigGeneration;
+    }
+
+    void BumpConfigGeneration()
+    {
+        s_ulConfigGeneration++;
+    }
+
+    void EnqueueRoutedWrite( const Settings &settings )
+    {
+        const std::optional<std::string> &oAppId = SessionAppId();
+        if ( oAppId.has_value() && IsSessionOverrideActive() )
+            EnqueuePerGameSnapshot( *oAppId, settings );
+        else
+            EnqueueGlobalWrite( settings );
+    }
+
+    void ResetSessionRoutingForTests()
+    {
+        s_oSessionAppId.reset();
+        s_bSessionAppIdResolved = false;
+        s_bSessionOverrideActive = false;
+        s_bSessionOverrideResolved = false;
+        s_ulConfigGeneration = 0;
     }
 
     std::string DebugDumpEffective( const std::optional<std::string> &oAppId )
