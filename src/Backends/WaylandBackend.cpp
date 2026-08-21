@@ -1086,6 +1086,34 @@ namespace gamescope
 
             bNeedsFullComposite |= !!(g_uCompositeDebug & CompositeDebugFlag::Heatmap);
 
+            // Not every layer can be handed to a native Wayland plane/
+            // subsurface directly: that path (below) requires each layer's
+            // texture to have already been exported as a dmabuf and
+            // imported into this backend (CVulkanTexture::BInit()'s
+            // bFlippable path -- see CWaylandPlane::Present(Layer_t*)'s own
+            // comment). Internally-rendered layers that are only ever meant
+            // to be sampled by the compute composite -- the settings
+            // overlay and FPS HUD's offscreen ImGui render targets
+            // (SettingsOverlay.cpp/FpsDisplay.cpp) -- are not flippable and
+            // have no backend Fb. Presenting one as a bare plane is not
+            // possible, so force the full vulkan_composite() path instead:
+            // that flattens every layer (including these) into one
+            // composited, flippable output image before any plane gets
+            // touched, the same fallback DRMBackend.cpp's drm_prepare()
+            // already falls into via drm_prepare_liftoff()'s equivalent
+            // per-layer backend-Fb check. Without this, the direct-plane
+            // path below would hand such a layer straight to
+            // CWaylandPlane::Present(), which used to crash on the null
+            // IBackendFb* (now just silently drops the layer instead) --
+            // dropping the overlay/FPS HUD from the screen is still wrong,
+            // just not fatal.
+            for ( int i = 0; !bNeedsFullComposite && i < pFrameInfo->layers.count(); i++ )
+            {
+                const FrameInfo_t::Layer_t &layer = pFrameInfo->layers.get( i );
+                if ( !layer.tex || !layer.tex->GetBackendFb() )
+                    bNeedsFullComposite = true;
+            }
+
             if ( !bNeedsFullComposite )
             {
                 bool bNeedsBacking = true;
@@ -1640,7 +1668,23 @@ namespace gamescope
 
     void CWaylandPlane::Present( const FrameInfo_t::Layer_t *pLayer )
     {
-        CWaylandFb *pWaylandFb = pLayer && pLayer->tex != nullptr ? static_cast<CWaylandFb*>( pLayer->tex->GetBackendFb()->EnsureImported() ) : nullptr;
+        // A layer's texture only has a backend Fb (and therefore something
+        // EnsureImported() can be called on) if it was created bFlippable --
+        // i.e. actually exported as a dmabuf and imported into this backend.
+        // Internally-rendered layers that are only ever sampled by the
+        // compute composite (e.g. the settings overlay/FPS HUD's offscreen
+        // ImGui render targets, SettingsOverlay.cpp/FpsDisplay.cpp) are not
+        // flippable and have no backend Fb -- GetBackendFb() is nullptr for
+        // them, same as CDRMFb's equivalent lookup in DRMBackend.cpp's
+        // drm_prepare_liftoff() already guards against. Presenting one of
+        // those directly as a Wayland plane isn't possible; the caller
+        // (CWaylandConnector::Present()) is responsible for detecting this
+        // and forcing a full vulkan_composite() pass instead so the layer
+        // still ends up on screen -- this is just the last-line defence
+        // against dereferencing a null IBackendFb*.
+        CWaylandFb *pWaylandFb = ( pLayer && pLayer->tex && pLayer->tex->GetBackendFb() )
+            ? static_cast<CWaylandFb*>( pLayer->tex->GetBackendFb()->EnsureImported() )
+            : nullptr;
         wl_buffer *pBuffer = pWaylandFb ? pWaylandFb->GetHostBuffer() : nullptr;
 
         if ( pBuffer )
