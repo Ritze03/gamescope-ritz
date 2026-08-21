@@ -4,8 +4,11 @@ A fork of Valve's [gamescope](https://github.com/ValveSoftware/gamescope), a Way
 micro-compositor for gaming that runs games nested in a window or as the primary
 DRM/KMS output on a display. Written in C++, built with Meson.
 
-This fork's active divergence from upstream is concentrated in the OpenVR backend and
-in steamcompmgr's (X11 window manager) focus-handling logic — see recent commits.
+This repo's base commit is exactly upstream `ValveSoftware/gamescope` HEAD (`fcc1341`)
+— the recent OpenVR-backend and steamcompmgr focus-handling commits are Valve's own
+upstream work, not this fork's divergence. This fork's actual own work is additive on
+top: the settings-overlay/FPS-HUD system (see `superdoc/planning/
+overlay-presentation-architecture.md`).
 
 <!-- superdoc:start v2 -->
 ## Docs: read before you touch, update after you change

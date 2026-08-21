@@ -192,23 +192,32 @@ rendervulkan.cpp:vulkan_composite (:4030)   [reshade → scale/upscale → color
 IBackendConnector::Present                  [DRM atomic commit | swapchain | dmabuf]
 ```
 
-## This fork's divergence from upstream gamescope
+## Recent upstream focus-arbitration work (NOT this fork's divergence)
 
-The fork's changes are concentrated almost entirely in two places, both covered in
-depth on their own pages rather than repeated here:
+**Correction (2026-08-21): this repo has not diverged from upstream in the OpenVR
+backend or steamcompmgr's focus logic.** This section previously described the commits
+below as "this fork's divergence from upstream gamescope". That was wrong: this repo's
+base commit `fcc1341` is confirmed (via `git merge-base --is-ancestor`) to be *exactly*
+upstream `ValveSoftware/gamescope` HEAD, so every commit at or before it — including
+all five listed here — is Valve's own upstream work, not something this fork produced.
+This fork's actual own work is additive on top of that base (the overlay/HUD system;
+see [overlay-presentation-architecture](../planning/overlay-presentation-architecture.md)),
+not the OpenVR/focus commits. Both are still worth knowing about — recent upstream
+history happened to be dense with focus-arbitration fixes right at this repo's base —
+covered in depth on their own pages rather than repeated here:
 
 - [backend-openvr](../features/backend-openvr.md) — `COpenVRConnector::UpdateVisibility`
-  (`src/Backends/OpenVRBackend.cpp:1842`) now **takes** keyboard/mouse focus on the
-  visible-edge transition (since commit `fcc1341`) instead of only reacting to a
-  SteamVR-granted focus event, closing a window where a launching app's overlay could
-  leave gamescope's focus bookkeeping frozen on the previous app. This behavior has no
-  equivalent in upstream gamescope.
+  (`src/Backends/OpenVRBackend.cpp:1842`) **takes** keyboard/mouse focus on the
+  visible-edge transition (since upstream commit `fcc1341`, this repo's own base
+  commit) instead of only reacting to a SteamVR-granted focus event, closing a window
+  where a launching app's overlay could leave gamescope's focus bookkeeping frozen on
+  the previous app.
 - [steamcompmgr-focus](../features/steamcompmgr-focus.md) — five of the last ten
-  commits on this branch are focus-arbitration fixes here: preserving X11 keyboard
-  focus on a CEF subwindow across a no-op reroll (`0f8dc34`), reclaiming focus when it
-  lands on `None` (`396794a`), and two crash/UB fixes in the property read/write path
-  (`1efc919`, `1f0321c`) that make an empty/absent input-focus window safe to publish
-  and read back.
+  commits in this codebase's history are upstream focus-arbitration fixes here:
+  preserving X11 keyboard focus on a CEF subwindow across a no-op reroll (`0f8dc34`),
+  reclaiming focus when it lands on `None` (`396794a`), and two crash/UB fixes in the
+  property read/write path (`1efc919`, `1f0321c`) that make an empty/absent
+  input-focus window safe to publish and read back.
 
 ## Where to look for X
 

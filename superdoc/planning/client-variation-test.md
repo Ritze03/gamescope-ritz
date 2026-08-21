@@ -1,5 +1,22 @@
 # Flicker: client/present-mode/backend/scaling variation test
 
+> ## RESOLVED — 2026-08-21 (later same day). The backend WAS the answer, not scaling.
+>
+> This doc correctly spotted backend as a real variable (finding #1 below) but then
+> deprioritized it in favor of the **resolution-scaling hypothesis** ("the standout
+> difference", tests #1–#3) as the leading suspect. That hypothesis is **wrong** — it
+> is a red herring. The confirmed cause is the **SDL backend itself**, independent of
+> scaling: `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f -- vkcube` flickers
+> badly at 1:1 with no scaling and no extra args at all; the identical binary with no
+> `--backend` flag (auto-selecting Wayland) is completely clean, also at 1:1. The
+> user's packaged upstream 3.16.24 flickers under SDL too. So test #4 below ("backend
+> alone, isolated from scaling") is actually the one that matters — treat it as the
+> primary test, not the fallback-if-ambiguous one plan order below makes it. Every
+> "flickers" result up to this point traces back to `scripts/flicker-ab-test.sh`
+> defaulting `--backend` to `sdl` (now fixed — see the "WHY NOT SDL" comment near the
+> top of that script). Draft upstream report:
+> `superdoc/planning/upstream-sdl-backend-flicker-report.md`.
+
 **2026-08-21.** Every test run so far in this investigation (see
 `superdoc/planning/flicker-ab-test-plan.md` and
 `superdoc/planning/upstream-flicker-regression.md`) held four things constant that the

@@ -101,8 +101,14 @@
 #                        -S stretch --force-grab-cursor --expose-wayland" — this is
 #                        the user's actual running CS2 launch's flag set, minus the
 #                        per-run -W/-H/-S sizing).
-#   --backend NAME        gamescope --backend (default: sdl — nested under the host
-#                        compositor, matching the user's own two-layer VRR setup)
+#   --backend NAME        gamescope --backend. Default: none passed at all — gamescope's
+#                        own auto_select_backend() picks (Wayland, when WAYLAND_DISPLAY
+#                        is set, exactly like a real user's session). See the "WHY NOT
+#                        SDL" block near the top of this file before changing this
+#                        default back to sdl. Pass --backend sdl explicitly when you
+#                        deliberately want the known-broken SDL path — it's confirmed
+#                        broken, so running it on purpose is a regression check now,
+#                        not the default.
 #   -h, --help           show this help
 #
 # Binary locations (override with these env vars if your layout differs):
@@ -150,9 +156,25 @@
 #      upstream-3.16.24-debug / packaged-3.16.24-release pair below.
 # A result without both numbers recorded cannot be interpreted.
 #
-# Backend note: the default below is "sdl", but the user's reported setup -- and the
-# code under suspicion (src/Backends/WaylandBackend.cpp) -- is the WAYLAND backend.
-# Pass --backend wayland to exercise it; --backend sdl does not go through that file.
+# =============================================================================
+# WHY NOT SDL (2026-08-21) — READ BEFORE CHANGING THE BACKEND DEFAULT BACK
+# =============================================================================
+# RESOLVED: the flicker this whole kit was built to chase is an SDL-BACKEND BUG,
+# confirmed on real hardware. `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f
+# -- vkcube` flickers badly; the identical binary with NO --backend (which auto-selects
+# Wayland — see auto_select_backend() in src/main.cpp) is completely clean. The user's
+# packaged upstream 3.16.24 also flickers under SDL, so this is an upstream SDL-backend
+# defect, not ours, and it is version-independent -- it explains every "flickers"
+# result this investigation ever produced, because every one of them came through this
+# script defaulting to --backend sdl. Every "clean" result was a manual run with no
+# --backend, or the user's real (Wayland-session) gaming.
+#
+# The default below is therefore NO --backend flag at all (gamescope auto-selects,
+# same as a real user's Wayland session), not "sdl" and not a hardcoded "wayland" --
+# this is what actually gets exercised in the field. --backend sdl remains available
+# and is still useful: it is now a *known-broken* regression check, not blind coverage.
+# Draft upstream report: superdoc/planning/upstream-sdl-backend-flicker-report.md.
+# =============================================================================
 
 set -u -o pipefail
 
@@ -179,7 +201,11 @@ PRESENT_MODE=""
 EXTRA_ARGS=""
 NESTED_W=""
 NESTED_H=""
-BACKEND="sdl"
+# "auto" = pass no --backend flag at all; gamescope's own auto_select_backend() then
+# picks (Wayland, under a real Wayland session) -- NOT "sdl". See the "WHY NOT SDL"
+# block above: every flicker this kit ever reproduced went through --backend sdl, and
+# the SDL backend is now a confirmed upstream bug. Do not default this back to sdl.
+BACKEND="auto"
 VARIANT=""
 
 log()  { echo "[flicker-ab] $*"; }
@@ -344,14 +370,16 @@ fi
 log "output/refresh    : $TARGET_OUTPUT, ${OUT_W}x${OUT_H}@${REFRESH_HZ}Hz"
 log "nested (-w/-h)     : ${NESTED_W}x${NESTED_H} $([[ "$NESTED_W" == "$OUT_W" && "$NESTED_H" == "$OUT_H" ]] && echo '(1:1, no scaling)' || echo '(SCALED to output)')"
 log "adaptive-sync      : $([[ $DO_VRR -eq 1 ]] && echo yes || echo no)"
-log "backend            : $BACKEND"
+log "backend            : $([[ "$BACKEND" == "auto" ]] && echo "auto (no --backend flag -- gamescope auto-selects, see WHY NOT SDL above)" || echo "$BACKEND")"
 log "client             : ${CLIENT_ARGS[*]}"
 log "extra gamescope args: ${EXTRA_ARGS_ARR[*]:-(none)}"
 log "XDG_CONFIG_HOME    : $CONFIG_TMP (throwaway)"
 log "=============================================================="
 
 # ---------- launch ----------
-ARGS=(--backend "$BACKEND" -W "$OUT_W" -H "$OUT_H" -w "$NESTED_W" -h "$NESTED_H" -r "$REFRESH_HZ" -O "$TARGET_OUTPUT" -f)
+ARGS=(-W "$OUT_W" -H "$OUT_H" -w "$NESTED_W" -h "$NESTED_H" -r "$REFRESH_HZ" -O "$TARGET_OUTPUT" -f)
+# "auto" means: pass no --backend flag, let gamescope auto-select (see WHY NOT SDL).
+[[ "$BACKEND" != "auto" ]] && ARGS+=(--backend "$BACKEND")
 [[ "$DO_VRR" -eq 1 ]] && ARGS+=(--adaptive-sync)
 [[ ${#EXTRA_ARGS_ARR[@]} -gt 0 ]] && ARGS+=("${EXTRA_ARGS_ARR[@]}")
 

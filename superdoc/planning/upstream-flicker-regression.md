@@ -1,6 +1,29 @@
 # Upstream flicker regression: bisection plan
 
-> ## 2026-08-21 — THE PREMISE OF THIS DOC IS PROBABLY WRONG. READ THIS FIRST.
+> ## 2026-08-21 — RESOLVED. Both premises below (83-commit bisection AND the
+> ## optimisation-confound theory) are superseded. READ THIS FIRST.
+>
+> The flicker is an **SDL-backend bug**, confirmed on real hardware: `DISABLE_LSFG=1
+> ./build/src/gamescope --backend sdl -f -- vkcube` flickers badly; the identical
+> binary with **no `--backend` flag** (auto-selects Wayland — see
+> `auto_select_backend()` in `src/main.cpp`) is completely clean. The user's packaged
+> upstream 3.16.24 also flickers under SDL, so this is an **upstream SDL-backend
+> defect present in every version tested (3.16.24 through fcc1341), not a regression
+> introduced by any of the 83 commits**, and not an optimisation/VRR-engagement
+> artifact either — both theories below were built on results gathered through
+> `scripts/flicker-ab-test.sh`, which defaulted `--backend` to `sdl`. Every "flickers"
+> result in this investigation, at every commit tested, came from that broken default;
+> every "clean" result came from a manual run with no `--backend`, or real gaming
+> (which runs Wayland-session, i.e. the Wayland backend). There is no regressive
+> commit to find — do not resume this bisection. The 83-commit analysis and the
+> rebase-to-3.16.24 assessment below are kept for the record (the reasoning and the
+> file-conflict findings may still be useful context for future upstream-merge work)
+> but their motivating premise is gone. Draft upstream report:
+> `superdoc/planning/upstream-sdl-backend-flicker-report.md`.
+>
+> ---
+>
+> ## 2026-08-21 (earlier, also superseded) — THE PREMISE OF THIS DOC IS PROBABLY WRONG. READ THIS FIRST.
 >
 > This plan rests on "pure upstream `fcc1341` flickers, packaged `3.16.24` does not, so
 > it is one of the 83 commits between them". **That comparison was confounded**: every

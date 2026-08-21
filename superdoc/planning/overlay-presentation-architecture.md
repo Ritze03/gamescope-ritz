@@ -1,5 +1,42 @@
 # Overlay presentation architecture
 
+> ## RESOLVED — 2026-08-21 (later same day). The "unexplained" fullscreen VRR
+> ## artifacting from the "CONCURRENT fix did not cure it" section is an SDL-backend
+> ## bug. Read this before relying on that section's "unexplained" framing or the
+> ## stacked-VRR hypothesis.
+>
+> Confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f
+> -- vkcube` flickers badly; the identical binary with **no `--backend` flag** (auto-
+> selecting Wayland — `auto_select_backend()` in `src/main.cpp`) is completely clean.
+> The user's packaged upstream 3.16.24 flickers under SDL too — matching exactly what
+> the "Stock-vs-ours comparison" below found ("indistinguishable... consistent with
+> the tearing is not our defect") and explaining it fully: **that whole comparison
+> ran `--backend sdl` for both binaries** (see the command line quoted there), so
+> "indistinguishable" was correctly observed but for the wrong reason — not "both are
+> equally fine", but "both hit the same upstream SDL-backend bug". Consequences for
+> the rest of this doc:
+>
+> - The **"stacked adaptive-sync layers" hypothesis is superseded/ruled out**: Hyprland's
+>   `vrr = 3` engages the host VRR layer for *any* fullscreen game/video-content
+>   window regardless of which gamescope backend is running underneath, yet only the
+>   SDL backend flickers — so double VRR stacking alone is not sufficient to cause
+>   the symptom. Don't chase "set DP-1's `vrr` to `0`" as the next test; the SDL vs.
+>   no-`--backend` A/B already is the decisive test, and it's done.
+> - **Section 0's queue-family `CONCURRENT` fix and the wait-stage-mask sync-validation
+>   fix remain correct, worthwhile fixes on their own merits** — they just were never
+>   going to cure this symptom, because the symptom lives in the SDL backend, not in
+>   our overlay texture production. No further action needed on either.
+> - **Defect A ("the artifacting") is explained; revisit-trigger #2 in the final
+>   section ("if the stacked-VRR hypothesis is ruled out") is now moot** — the
+>   injected-texture-path rewrite decision below stands, on firmer footing than
+>   before.
+> - Draft upstream report: `superdoc/planning/upstream-sdl-backend-flicker-report.md`.
+>
+> The `Status:` line below and everything through "the CONCURRENT fix did not cure
+> the artifacting" is kept for the record (Section 0's Vulkan spec-violation fix,
+> the sync-validation findings, and the ImGui context hardening are all real,
+> independent fixes worth keeping) — just read it with the above in mind.
+
 Status: decided, **with Section 0's root-cause claim retracted** — see
 "2026-08-21: the CONCURRENT fix did not cure the artifacting" at the end of this
 file before relying on anything in Section 0.

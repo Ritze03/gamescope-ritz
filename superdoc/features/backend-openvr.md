@@ -43,8 +43,12 @@ instead of hotplug.
   steal focus SteamVR deliberately handed to a different, currently-visible connector.
   This does not fix per-app controller activation (that still follows SteamVR's own
   grant) — it only keeps gamescope's own focus bookkeeping correct while that first
-  launch is dead. This whole take-on-visible behaviour is specific to this fork; it has
-  no equivalent in upstream gamescope's OpenVR backend.
+  launch is dead. This whole take-on-visible behaviour is itself upstream
+  `ValveSoftware/gamescope` code, not this fork's — it landed in commit `fcc1341`
+  ("OpenVRBackend: take input focus when a connector becomes visible"), which *is*
+  this fork's base commit (confirmed exactly equal to upstream HEAD via
+  `git merge-base --is-ancestor`). This repo is upstream plus additive overlay work
+  on top; it has not diverged from upstream in the OpenVR backend.
 - Both paths converge on the same two atomics, so [steamcompmgr-focus](steamcompmgr-focus.md)'s
   `GetCurrentFocus()` / `GetCurrentMouseFocus()` never need to know which path granted
   focus, only which connector currently holds it.
