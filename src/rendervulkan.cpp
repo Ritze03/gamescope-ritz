@@ -36,6 +36,7 @@
 #include "steamcompmgr.hpp"
 #include "log.hpp"
 #include "Utils/Process.h"
+#include "SettingsOverlay.h"
 
 #include "cs_composite_blit.h"
 #include "cs_composite_blur.h"
@@ -578,6 +579,13 @@ bool CVulkanDevice::createDevice()
 	enabledExtensions.push_back( VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME );
 
 	enabledExtensions.push_back( VK_EXT_ROBUSTNESS_2_EXTENSION_NAME );
+
+	// We chain VkPhysicalDeviceVulkan13Features::dynamicRendering = VK_TRUE below,
+	// but never actually enabled the extension string -- ImGui's Vulkan backend
+	// (imgui_impl_vulkan.h) documents needing VK_KHR_dynamic_rendering enabled
+	// explicitly "even for Vulkan 1.3", and conformant 1.3 implementations still
+	// enumerate promoted-to-core extensions, so this is safe to always request.
+	enabledExtensions.push_back( VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME );
 #if 0
 	enabledExtensions.push_back( VK_KHR_MAINTENANCE_5_EXTENSION_NAME );
 #endif
@@ -1281,7 +1289,7 @@ std::unique_ptr<CVulkanCmdBuffer> CVulkanDevice::commandBuffer()
 			return nullptr;
 		}
 
-		cmdBuffer = std::make_unique<CVulkanCmdBuffer>(this, rawCmdBuffer, queue(), queueFamily());
+		cmdBuffer = std::make_unique<CVulkanCmdBuffer>(this, rawCmdBuffer, m_commandPool, queue(), queueFamily());
 	}
 	else
 	{
@@ -1289,6 +1297,36 @@ std::unique_ptr<CVulkanCmdBuffer> CVulkanDevice::commandBuffer()
 		m_unusedCmdBufs.pop_back();
 	}
 
+	cmdBuffer->begin();
+	return cmdBuffer;
+}
+
+std::unique_ptr<CVulkanCmdBuffer> CVulkanDevice::generalCommandBuffer()
+{
+	VkCommandBuffer rawCmdBuffer;
+	VkCommandBufferAllocateInfo commandBufferAllocateInfo = {
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.commandPool = m_generalCommandPool,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandBufferCount = 1
+	};
+
+	VkResult res = vk.AllocateCommandBuffers( device(), &commandBufferAllocateInfo, &rawCmdBuffer );
+	if ( res != VK_SUCCESS )
+	{
+		vk_errorf( res, "vkAllocateCommandBuffers failed" );
+		return nullptr;
+	}
+
+	// ponytail: unlike commandBuffer() above, this always allocates fresh rather
+	// than reusing m_unusedCmdBufs -- that freelist assumes every entry came from
+	// the same VkCommandPool/queue family (m_commandPool/queue()), and mixing in
+	// general-queue buffers would hand them back out through the compute-only
+	// commandBuffer() factory. This path is only exercised once per frame while
+	// the settings overlay is visible/fading, so a fresh alloc+free per frame is
+	// cheap. If this ever needs to be hot, give it its own dedicated freelist
+	// mirroring m_unusedCmdBufs/m_pendingCmdBufs instead.
+	auto cmdBuffer = std::make_unique<CVulkanCmdBuffer>(this, rawCmdBuffer, m_generalCommandPool, generalQueue(), generalQueueFamily());
 	cmdBuffer->begin();
 	return cmdBuffer;
 }
@@ -1533,14 +1571,18 @@ void CVulkanDevice::resetCmdBuffers(uint64_t sequence)
 	m_pendingCmdBufs.erase(m_pendingCmdBufs.begin(), ++last);
 }
 
-CVulkanCmdBuffer::CVulkanCmdBuffer(CVulkanDevice *parent, VkCommandBuffer cmdBuffer, VkQueue queue, uint32_t queueFamily)
-	: m_cmdBuffer(cmdBuffer), m_device(parent), m_queue(queue), m_queueFamily(queueFamily)
+CVulkanCmdBuffer::CVulkanCmdBuffer(CVulkanDevice *parent, VkCommandBuffer cmdBuffer, VkCommandPool cmdPool, VkQueue queue, uint32_t queueFamily)
+	: m_cmdBuffer(cmdBuffer), m_device(parent), m_cmdPool(cmdPool), m_queue(queue), m_queueFamily(queueFamily)
 {
 }
 
 CVulkanCmdBuffer::~CVulkanCmdBuffer()
 {
-	m_device->vk.FreeCommandBuffers(m_device->device(), m_device->commandPool(), 1, &m_cmdBuffer);
+	// Must free from the pool this buffer was actually allocated from -- was
+	// unconditionally m_device->commandPool() (the compute pool) before, which
+	// only happened to be correct because nothing but commandBuffer() ever
+	// constructed one of these. generalCommandBuffer() breaks that assumption.
+	m_device->vk.FreeCommandBuffers(m_device->device(), m_cmdPool, 1, &m_cmdBuffer);
 }
 
 void CVulkanCmdBuffer::reset()
@@ -3975,6 +4017,11 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo, 
 
 	auto cmdBuffer = g_device.commandBuffer();
 
+	// Same cross-queue sync point as vulkan_composite() -- a screenshot taken
+	// while the settings overlay is up is a second consumer of its texture,
+	// on its own separate compute submission.
+	gamescope::SettingsOverlay_WaitForRender( cmdBuffer.get() );
+
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);
 
@@ -4073,6 +4120,12 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	const uint32_t uOutputRotation = pOutputOverride ? 0u : g_uOutputRotation;
 
 	auto cmdBuffer = pInCommandBuffer ? std::move( pInCommandBuffer ) : g_device.commandBuffer();
+
+	// Cross-queue sync point: if the settings overlay drew a new frame on the
+	// general queue this vblank, make this (compute-queue) submission wait on
+	// its timeline semaphore before it can be recorded to sample that texture,
+	// so vulkan_composite() never reads a torn/still-in-progress overlay frame.
+	gamescope::SettingsOverlay_WaitForRender( cmdBuffer.get() );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);

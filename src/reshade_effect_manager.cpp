@@ -1012,7 +1012,7 @@ bool ReshadeEffectPipeline::init(CVulkanDevice *device, const ReshadeEffectKey &
 			return false;
 		}
 
-        m_cmdBuffer.emplace(device, cmdBuffer, device->generalQueue(), device->generalQueueFamily());
+        m_cmdBuffer.emplace(device, cmdBuffer, device->generalCommandPool(), device->generalQueue(), device->generalQueueFamily());
     }
 
     // Create Uniform Buffer

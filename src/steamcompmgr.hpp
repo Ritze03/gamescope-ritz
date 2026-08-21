@@ -37,6 +37,10 @@ static const uint32_t g_zposExternalOverlay = 2;
 static const uint32_t g_zposOverlay = 3;
 static const uint32_t g_zposCursor = 4;
 static const uint32_t g_zposMuraCorrection = 5;
+// Settings overlay (M1): drawn topmost, above even the cursor -- matches how
+// the Steam overlay/settings panels of other compositors sit above pointer
+// decoration once open.
+static const uint32_t g_zposSettingsOverlay = 6;
 
 extern bool g_bHDRItmEnable;
 extern bool g_bForceHDRSupportDebug;

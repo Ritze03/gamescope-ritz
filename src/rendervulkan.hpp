@@ -816,6 +816,12 @@ public:
 	VkPipeline pipeline(ShaderType type, uint32_t layerCount = 1, uint32_t ycbcrMask = 0, uint32_t blur_layers = 0, uint32_t colorspace_mask = 0, uint32_t output_eotf = EOTF_Gamma22, bool itm_enable = false);
 	int32_t findMemoryType( VkMemoryPropertyFlags properties, uint32_t requiredTypeBits );
 	std::unique_ptr<CVulkanCmdBuffer> commandBuffer();
+	// A command buffer allocated against the general (graphics+compute) queue/pool
+	// instead of the compute-only queue commandBuffer() above uses. Callers own the
+	// buffer directly (submitInternal(), not submit()) rather than handing it into
+	// the compute-queue-only m_unusedCmdBufs/m_pendingCmdBufs freelist below, which
+	// assumes every entry came from the same VkCommandPool/queue family.
+	std::unique_ptr<CVulkanCmdBuffer> generalCommandBuffer();
 	uint64_t submit( std::unique_ptr<CVulkanCmdBuffer> cmdBuf);
 	uint64_t submitInternal( CVulkanCmdBuffer* cmdBuf );
 	void wait(uint64_t sequence, bool reset = true);
@@ -967,7 +973,7 @@ struct TextureState
 class CVulkanCmdBuffer
 {
 public:
-	CVulkanCmdBuffer(CVulkanDevice *parent, VkCommandBuffer cmdBuffer, VkQueue queue, uint32_t queueFamily);
+	CVulkanCmdBuffer(CVulkanDevice *parent, VkCommandBuffer cmdBuffer, VkCommandPool cmdPool, VkQueue queue, uint32_t queueFamily);
 	~CVulkanCmdBuffer();
 	CVulkanCmdBuffer(const CVulkanCmdBuffer& other) = delete;
 	CVulkanCmdBuffer(CVulkanCmdBuffer&& other) = delete;
@@ -1012,6 +1018,12 @@ public:
 private:
 	VkCommandBuffer m_cmdBuffer;
 	CVulkanDevice *m_device;
+
+	// The pool this buffer was allocated from -- freed from here on destruction,
+	// not unconditionally from the device's default (compute) commandPool(). A
+	// buffer allocated from generalCommandPool() must be freed from that same
+	// pool, per VUID-vkFreeCommandBuffers-pCommandBuffers-parent.
+	VkCommandPool m_cmdPool;
 
 	VkQueue m_queue;
 	uint32_t m_queueFamily;
