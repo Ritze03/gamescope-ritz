@@ -135,17 +135,7 @@ namespace gamescope::config
         float opacity_notifications = 0.9f;      // 0.3..1 - consumed by Notifications.* (sibling milestone). Field/default/range only.
         float background_blur = 0.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0, already wired - see SettingsOverlay.cpp's nOverlayBlurRadius). Consumed by SettingsOverlay.cpp (sibling milestone; that file is off-limits here, see this worker's task scope) - field/default/range only.
         float background_darkening = 0.0f;       // 0..1 - a native-compositor dim multiply on the game layer, meant to sit alongside background_blur in whatever consumes FrameInfo_t (SettingsOverlay.cpp, sibling milestone). Field/default/range only - not yet consumed anywhere.
-    };
 
-    // Toast notification system (this fork's own addition, see
-    // Overlay/Notifications.h and DECISIONS.md #25). Unlike OverlaySettings
-    // above, this is a normal per-layer field - shared via global.json
-    // unless a game has "Override Global Config" on, exactly like
-    // FpsDisplaySettings::enabled, so a game can mute toasts for itself
-    // without affecting any other game or the global default.
-    struct NotificationSettings
-    {
-        bool muted = false;
         // Whether the brief startup announcement (animated "gamescope-ritz is
         // active" toast, with the Ctrl+Shift+O hint) plays on process start.
         // Process-level UI preference, same rules as fade_ms above - read
@@ -178,6 +168,18 @@ namespace gamescope::config
         // toggling it carries none of capture_all_keyboard_input's release-
         // routing risk.
         bool keyboard_navigation_enabled = true;
+    };
+
+    // Toast notification system (this fork's own addition, see
+    // Overlay/Notifications.h and DECISIONS.md #25). Unlike OverlaySettings
+    // above, this is a normal per-layer field - shared via global.json
+    // unless a game has "Override Global Config" on, exactly like
+    // FpsDisplaySettings::enabled, so a game can mute toasts for itself
+    // without affecting any other game or the global default.
+    struct NotificationSettings
+    {
+        bool muted = false;
+
     };
 
     // The full settings shape shared by global.json, profiles/<name>.json, and
