@@ -35,6 +35,10 @@ namespace gamescope
 	// frame.
 	void FpsDisplay_WaitForRender( CVulkanCmdBuffer *pComputeCmdBuffer );
 
+	// Issue #22, same contract as SettingsOverlay_CommitReads() -- call once
+	// the compute submission is on the queue. No-op when nothing is pending.
+	void FpsDisplay_CommitReads();
+
 	// Draws this feature's own settings controls (enabled toggle, font
 	// size, backdrop group, blend mode, text opacity) using whichever ImGui
 	// context is *currently active* at the call site -- meant to be invoked

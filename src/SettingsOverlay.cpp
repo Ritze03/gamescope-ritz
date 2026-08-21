@@ -145,6 +145,35 @@ namespace gamescope
 	static bool s_bHasPendingWaitPoint = false;
 	static uint64_t s_ulPendingWaitPoint = 0;
 
+	// Issue #22, return half of the cross-queue handshake.
+	//
+	// s_pTimelineSemaphore above only orders render -> composite (general
+	// queue writes the texture, compute queue then samples it). Nothing
+	// ordered composite -> next render, so the next frame's
+	// VK_ATTACHMENT_LOAD_OP_CLEAR could begin on the general queue while the
+	// compute queue was still sampling the same image: a write-after-read
+	// race over a full-screen, alpha-blended layer, ie. corruption anywhere
+	// on screen rather than just in the overlay's own pixels.
+	//
+	// Every vulkan_composite() submission that could sample this texture
+	// signals s_pReadDoneSemaphore at a fresh point, and the next
+	// RenderAndSubmit() makes its general-queue submission WAIT on the last
+	// such point before it clears. That closes the window rather than
+	// narrowing it, and needs no second texture -- the reverted
+	// double-buffering attempt (e171f72) only moved the race one vblank
+	// further out.
+	//
+	// Deadlock safety: a point is only ever waited on after it has been
+	// promoted to s_ulRegisteredReadDonePoint, which happens exclusively in
+	// SettingsOverlay_CommitReads(), called only once the compute submission
+	// carrying that signal has actually been handed to the queue. A pending
+	// point belonging to a command buffer that got dropped is simply never
+	// promoted, and the general queue never blocks on it.
+	static std::shared_ptr<VulkanTimelineSemaphore_t> s_pReadDoneSemaphore;
+	static uint64_t s_ulReadDoneCounter = 0;
+	static uint64_t s_ulPendingReadDonePoint = 0;
+	static uint64_t s_ulRegisteredReadDonePoint = 0;
+
 	static bool s_bWasVisible = false;
 	static unsigned int s_uFadeAnchorTimeMs = 0;
 	static float s_flFadeAtAnchor = 0.0f;
@@ -191,6 +220,7 @@ namespace gamescope
 		gamescope::fonts::Load();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
+		s_pReadDoneSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 
 		static VkFormat s_ColorAttachmentFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
@@ -225,16 +255,52 @@ namespace gamescope
 		s_bImguiInitialized = true;
 	}
 
+	// CPU-waits for our own previous general-queue submission to retire, then
+	// releases its command buffer. Two callers: RenderAndSubmit(), where it is
+	// expected to return immediately and only guards reuse of the command
+	// buffer, and EnsureTexture(), where it additionally guarantees nothing is
+	// still writing the texture we are about to drop.
+	static void DrainPrevSubmission()
+	{
+		if ( !s_bHasPrevSubmission )
+			return;
+
+		VkSemaphoreWaitInfo waitInfo = {
+			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+			.semaphoreCount = 1,
+			.pSemaphores = &s_pTimelineSemaphore->pVkSemaphore,
+			.pValues = &s_ulPrevSignalPoint,
+		};
+		g_device.vk.WaitSemaphores( g_device.device(), &waitInfo, UINT64_MAX );
+		s_pPrevCmdBuffer.reset();
+		s_bHasPrevSubmission = false;
+	}
+
 	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight )
 	{
 		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
 			return true;
+
+		// Output resolution changed (or first ever texture). Unlike the
+		// compute side -- whose CVulkanCmdBuffer::m_textureRefs holds its own
+		// Rc<> on everything it sampled -- the general-queue ImGui submission
+		// references the texture only as a raw VkImage/VkImageView in its
+		// VkRenderingAttachmentInfo, so it keeps nothing alive. Dropping
+		// s_pOverlayTexture below while that submission is still in flight
+		// could therefore destroy an image the GPU is actively rendering
+		// into. Resizes are rare, so just drain first rather than building
+		// deferred-destruction machinery for it.
+		DrainPrevSubmission();
 
 		OwningRc<CVulkanTexture> pNewTexture = new CVulkanTexture();
 
 		CVulkanTexture::createFlags flags;
 		flags.bSampled = true;
 		flags.bColorAttachment = true;
+		// See createFlags::bGeneralQueueShared. This texture is written on the
+		// general queue (RenderAndSubmit) and sampled on the compute queue
+		// (vulkan_composite), which are different queue families on AMD.
+		flags.bGeneralQueueShared = true;
 
 		// Render-target + sampled, per superdoc/planning/SPEC.md's Architecture
 		// section -- no new CVulkanTexture usage flag is needed for this.
@@ -310,22 +376,11 @@ namespace gamescope
 	// success. Returns false (nothing submitted) on failure.
 	static bool RenderAndSubmit()
 	{
-		if ( s_bHasPrevSubmission )
-		{
-			// See the file-level comment: this CPU wait only guards freeing our
-			// own previous frame's command buffer, not the compute queue's
-			// read of the texture (that's the GPU-side wait added in
-			// SettingsOverlay_WaitForRender()). Expected to return immediately.
-			VkSemaphoreWaitInfo waitInfo = {
-				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-				.semaphoreCount = 1,
-				.pSemaphores = &s_pTimelineSemaphore->pVkSemaphore,
-				.pValues = &s_ulPrevSignalPoint,
-			};
-			g_device.vk.WaitSemaphores( g_device.device(), &waitInfo, UINT64_MAX );
-			s_pPrevCmdBuffer.reset();
-			s_bHasPrevSubmission = false;
-		}
+		// Guards freeing our own previous frame's command buffer. The compute
+		// queue's *read* of the texture is handled separately, by the
+		// s_pReadDoneSemaphore dependency added below -- GPU-side, so it does
+		// not stall the CPU. Expected to return immediately.
+		DrainPrevSubmission();
 
 		if ( !g_device.vk.CmdBeginRendering || !g_device.vk.CmdEndRendering )
 		{
@@ -340,6 +395,13 @@ namespace gamescope
 		auto cmdBuffer = g_device.generalCommandBuffer();
 		if ( !cmdBuffer )
 			return false;
+
+		// Issue #22: don't let this frame's LOAD_OP_CLEAR start until the
+		// compute queue has finished sampling the texture for the last
+		// composite that was actually submitted. GPU-side wait, so the CPU
+		// does not stall here. See s_pReadDoneSemaphore's comment.
+		if ( s_ulRegisteredReadDonePoint )
+			cmdBuffer->AddDependency( s_pReadDoneSemaphore, s_ulRegisteredReadDonePoint );
 
 		VkCommandBuffer rawCmdBuffer = cmdBuffer->rawBuffer();
 
@@ -499,6 +561,30 @@ namespace gamescope
 			return;
 
 		pComputeCmdBuffer->AddDependency( s_pTimelineSemaphore, s_ulPendingWaitPoint );
+
+		// Issue #22 return half: have this compute submission tell us when it
+		// is done reading the texture, so the next RenderAndSubmit() can wait
+		// for it. Signalled unconditionally for any composite that reached
+		// here, even one whose FrameInfo_t happens not to carry our layer
+		// (the commit_t::ShouldPreemptivelyUpscale() composite, for one) --
+		// over-synchronising by one submission is free, and it keeps this
+		// independent of which layers ended up in the frame.
+		s_ulPendingReadDonePoint = ++s_ulReadDoneCounter;
+		pComputeCmdBuffer->AddSignal( s_pReadDoneSemaphore, s_ulPendingReadDonePoint );
+	}
+
+	// Called by vulkan_composite() immediately after the compute submission is
+	// handed to the queue. Only now is the pending read-done point guaranteed
+	// to be reachable, so only now may a later general-queue submission wait
+	// on it. See s_pReadDoneSemaphore's comment for why this ordering is what
+	// makes the handshake deadlock-free.
+	void SettingsOverlay_CommitReads()
+	{
+		if ( !s_ulPendingReadDonePoint )
+			return;
+
+		s_ulRegisteredReadDonePoint = s_ulPendingReadDonePoint;
+		s_ulPendingReadDonePoint = 0;
 	}
 
 	// ======================================================================

@@ -142,6 +142,7 @@ public:
 			bExportable = false;
 			bOutputImage = false;
 			bColorAttachment = false;
+			bGeneralQueueShared = false;
 			imageType = VK_IMAGE_TYPE_2D;
 		}
 
@@ -155,6 +156,24 @@ public:
 		bool bExportable : 1;
 		bool bOutputImage : 1;
 		bool bColorAttachment : 1;
+		// Set for images that are WRITTEN on the general/graphics queue
+		// (CVulkanDevice::generalCommandBuffer(), ie. the settings overlay and
+		// FPS HUD's ImGui render targets) and SAMPLED on the compute queue in
+		// vulkan_composite(). On a device where those are two different queue
+		// families -- AMD exposes a compute-only family, so this is the normal
+		// case, not a corner case -- a VK_SHARING_MODE_EXCLUSIVE image accessed
+		// from a second family without an explicit queue family ownership
+		// transfer has UNDEFINED contents (Vulkan 1.3 spec 7.7.4). A timeline
+		// semaphore does NOT satisfy this: it gives execution + memory
+		// dependency, but ownership transfer is a separate, additional
+		// requirement. Declaring the image CONCURRENT over both families
+		// removes the requirement entirely, which is what we want here: the
+		// number of vulkan_composite() reads per frame is variable (one
+		// normally, two when commit_t::ShouldPreemptivelyUpscale() fires, zero
+		// when the connector is not visible), so hand-matched release/acquire
+		// barrier pairs would be fragile in exactly the way that matters.
+		// The cost is losing DCC on these two UI textures, which is noise.
+		bool bGeneralQueueShared : 1;
 		VkImageType imageType;
 	};
 
@@ -184,6 +203,11 @@ public:
 	inline VkImage vkImage() { return m_vkImage; }
 	inline bool outputImage() { return m_bOutputImage; }
 	inline bool externalImage() { return m_bExternal; }
+	// See createFlags::bGeneralQueueShared. True once the image was actually
+	// created CONCURRENT (ie. the flag was asked for AND the two families
+	// really differ); insertBarrier() uses it to skip ownership transfers,
+	// which are meaningless -- and wrong to emit -- for a concurrent image.
+	inline bool generalQueueShared() const { return m_bGeneralQueueShared; }
 	inline VkDeviceSize totalSize() const { return m_size; }
 	inline uint32_t drmFormat() const { return m_drmFormat; }
 
@@ -211,6 +235,7 @@ private:
 	bool m_bInitialized = false;
 	bool m_bExternal = false;
 	bool m_bOutputImage = false;
+	bool m_bGeneralQueueShared = false;
 
 	uint32_t m_drmFormat = DRM_FORMAT_INVALID;
 
