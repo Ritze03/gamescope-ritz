@@ -316,6 +316,16 @@ namespace gamescope::chrome
 		ImGui::SetNextWindowPos( defaultPos, ImGuiCond_FirstUseEver );
 		ImGui::SetNextWindowSize( defaultSize, ImGuiCond_FirstUseEver );
 
+		// Design guide "Spacing & layout": window corner radius 3-4px
+		// (controls stay flat/0px -- that's Widgets.cpp's ApplyStyle(),
+		// unaffected by this window-scoped push). "Focused window: accent
+		// border at ~42% opacity ... the *only* focus indicator" -- pushed
+		// unconditionally and popped after End() rather than branched on
+		// focus, since ImGui doesn't know this window's focus state until
+		// after Begin() returns; the border color itself is corrected to
+		// accent-vs-hairline below, inside the window, once focus is known.
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowRounding, 4.0f );
+
 		bool bStillOpen = true;
 		ImGui::PushFont( fonts::Get( fonts::Style::Title ) );
 		ImGui::Begin( pszTitle, &bStillOpen, ImGuiWindowFlags_NoCollapse );
@@ -324,6 +334,15 @@ namespace gamescope::chrome
 		if ( !bStillOpen )
 			SetPanelOpen( id, false );
 
+		// The window's Border color is a single shared ImGuiStyle value
+		// (Widgets.cpp's `hairline` token) -- recolor just *this* window's
+		// border here, per-frame, rather than trying to give every window a
+		// different static style color. PopStyleColor in EndPanelWindow().
+		const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
+		ImGui::PushStyleColor( ImGuiCol_Border,
+			bFocused ? ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.42f )
+			         : ImGui::GetStyle().Colors[ImGuiCol_Border] );
+
 		DrawPanelChromeHeader( id );
 
 		return true;
@@ -331,7 +350,9 @@ namespace gamescope::chrome
 
 	void EndPanelWindow()
 	{
+		ImGui::PopStyleColor(); // ImGuiCol_Border, pushed in BeginPanelWindow()
 		ImGui::End();
+		ImGui::PopStyleVar(); // WindowRounding, pushed in BeginPanelWindow()
 	}
 
 	namespace
