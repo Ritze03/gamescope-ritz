@@ -181,21 +181,68 @@ namespace gamescope
 
 	static uint64_t s_ulLastFrameTimeNanos = 0;
 
+	// This file's own ImGui context. Held explicitly rather than relying on
+	// whatever happens to be globally current: there are TWO ImGui contexts in
+	// this process (this one and Overlay/FpsDisplay.cpp's independent FPS HUD),
+	// each with its own ImGui_ImplVulkan backend data, font atlas, descriptor
+	// pool and per-frame vertex/index buffers. Rendering one context's draw data
+	// while the other's backend is current would hand ImGui the wrong buffers and
+	// descriptor sets entirely.
+	//
+	// Previously this file relied on ImGui::CreateContext() leaving its context
+	// current forever and on FpsDisplay always restoring it. That happened to
+	// hold, but only because of the exact init order and FpsDisplay's discipline
+	// -- it was a global-state coupling between two files with no enforcement.
+	// Both files now save/set/restore symmetrically, so neither depends on the
+	// other's behaviour.
+	static ImGuiContext *s_pImguiContext = nullptr;
+
+	// RAII save/restore for the globally-current ImGui context. Every exit path
+	// out of the draw pass below restores what was current on entry.
+	struct ScopedImguiContext
+	{
+		ImGuiContext *pPrev;
+		explicit ScopedImguiContext( ImGuiContext *pUse )
+			: pPrev( ImGui::GetCurrentContext() )
+		{
+			if ( pUse )
+				ImGui::SetCurrentContext( pUse );
+		}
+		~ScopedImguiContext() { ImGui::SetCurrentContext( pPrev ); }
+		ScopedImguiContext( const ScopedImguiContext & ) = delete;
+		ScopedImguiContext &operator=( const ScopedImguiContext & ) = delete;
+	};
+
+	// Creates this file's context if needed and leaves it CURRENT on success.
+	// The caller is responsible for restoring the previous context (see
+	// ScopedImguiContext) -- mirrors FpsDisplay.cpp's EnsureImguiInit().
 	static void EnsureImguiInit()
 	{
 		if ( s_bImguiInitialized )
+		{
+			ImGui::SetCurrentContext( s_pImguiContext );
 			return;
+		}
 
 		// Guards against leaking a context if ImGui_ImplVulkan_Init() below
 		// fails: EnsureImguiInit() is retried every frame while the overlay is
 		// visible (s_bImguiInitialized only ever latches true, never false),
 		// so without this a repeated failure would call CreateContext() again
-		// on every single frame.
-		if ( ImGui::GetCurrentContext() != nullptr )
+		// on every single frame. Keyed on our OWN context handle now, not on
+		// "is any context current" -- the old form also aborted init whenever
+		// another file's context merely happened to be current, which with two
+		// contexts in the process is not a safe thing to key on.
+		if ( s_pImguiContext != nullptr )
+		{
+			ImGui::SetCurrentContext( s_pImguiContext );
 			return;
+		}
 
 		IMGUI_CHECKVERSION();
-		ImGui::CreateContext();
+		s_pImguiContext = ImGui::CreateContext();
+		// CreateContext() only makes the new context current when there was no
+		// current context; be explicit rather than depend on that.
+		ImGui::SetCurrentContext( s_pImguiContext );
 
 		ImGuiIO &io = ImGui::GetIO();
 		io.IniFilename = nullptr; // no persisted window layout in M1
@@ -480,6 +527,12 @@ namespace gamescope
 	void SettingsOverlay_AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		UpdateFadeAlpha();
+
+		// Save/restore the globally-current ImGui context across this entire
+		// pass (see s_pImguiContext). Covers DrainInputQueue() below too, which
+		// writes ImGuiIO and so must run against OUR context, not whichever one
+		// the caller happened to leave current.
+		ScopedImguiContext imguiScope( s_pImguiContext );
 
 		// M2: drain queued input even while fully hidden (alpha == 0), not
 		// just while visible/fading -- see DrainInputQueue()'s own comment

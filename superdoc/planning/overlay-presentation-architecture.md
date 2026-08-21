@@ -1,7 +1,8 @@
 # Overlay presentation architecture
 
-Status: decided. Written while root-causing the VRR fullscreen artifacting
-(issue #22 and the "settings overlay causes screen artifacting" report).
+Status: decided, **with Section 0's root-cause claim retracted** — see
+"2026-08-21: the CONCURRENT fix did not cure the artifacting" at the end of this
+file before relying on anything in Section 0.
 
 This document answers three questions the user asked, in the order that makes
 the answers make sense:
@@ -346,3 +347,216 @@ The root cause is a spec violation that is certain from reading the code and
 confirmed against this GPU's actual queue-family configuration. That it
 *explains* every reported symptom is strong but circumstantial. The user's own
 eyes on DP-1 remain the confirming test.
+
+> **Superseded 2026-08-21.** The user has now run that confirming test and the
+> artifacting is still present. The claim that this spec violation explained the
+> symptom is retracted — see the next section.
+
+---
+
+## 2026-08-21: the CONCURRENT fix did not cure the artifacting
+
+Hardware retest by the user, on the build that already carries the
+`bGeneralQueueShared` / `VK_SHARING_MODE_CONCURRENT` fix from Section 0:
+
+> Major tearing with fullscreen enabled, independent of FPS Overlay, Overlay
+> open/closed or the Filter.
+
+**Section 0's root-cause claim is therefore retracted.** The
+`EXCLUSIVE`-without-ownership-transfer finding was a real Vulkan spec violation
+and the fix is kept on its own merits, but it did **not** cause the symptom the
+user reports. The artifacting is **unexplained**. Its per-symptom explanations
+("worse with non-Linear filters", "only fullscreen, only VRR") are now
+contradicted by the user's observation that the symptom is independent of
+overlay state and filter.
+
+### Stock-vs-ours comparison (the experiment that partitions the problem)
+
+Both binaries run identically: `--backend sdl -f -W 1920 -H 1080 -r 280
+--adaptive-sync -- vkcube`, then moved to DP-1 and fullscreened, with the
+fullscreen state **asserted** (`fullscreen=2`) rather than assumed.
+
+| | stock `/usr/bin/gamescope` 3.16.24 | ours (`4f027b6`) |
+|---|---|---|
+| fullscreen on DP-1 | `fullscreen=2` | `fullscreen=2` |
+| DP-1 `vrr` | `true` | `true` |
+| DP-1 `solitary` (direct scanout) | our window | our window |
+| DP-1 `activelyTearing` | `false` | `false` |
+| refresh cycle reported | 3.57 ms | 3.57 ms |
+| GPUVM / device-loss markers | 0 | 0 |
+| abort on SIGTERM shutdown | **yes** (`Aborted`, core dumped) | intermittently yes |
+
+On every host-observable axis the two are **indistinguishable**. That is
+consistent with "the tearing is not our defect", but it is not proof: tearing is
+a scanout-level visual artifact and no instrument available here can see it.
+**The user's own A/B on DP-1 is still the confirming test.**
+
+The shutdown abort is **upstream behaviour**, reproduced on stock. Our overlay
+work did not introduce it.
+
+### Environmental finding: two stacked adaptive-sync layers, always on
+
+`~/.config/hypr/subcfgs/monitors.lua` sets **`vrr = 3`** on DP-1. Hyprland's
+mode 3 means "VRR on for a fullscreen window whose content type is game/video".
+Measured consequence:
+
+- gamescope's window reports `contentType: game`.
+- Running gamescope fullscreen on DP-1 **with `--adaptive-sync` omitted
+  entirely** still drives DP-1 to `vrr=true`.
+
+So the host VRR layer engages **unconditionally** whenever gamescope is
+fullscreen on DP-1 — regardless of gamescope's own adaptive-sync setting, and
+regardless of the overlay's "VRR / Adaptive Sync" toggle. Whenever gamescope's
+own adaptive sync is also on, two adaptive-sync layers are stacked on a 280 Hz
+panel. This is true for stock gamescope too.
+
+**Why this matters:** it explains the one thing the overlay hypothesis never
+could — why the symptom is independent of the overlay, the FPS HUD and the
+filter. It is also the only mechanism found so far that is gated on *fullscreen*
+specifically, which is the user's stated trigger.
+
+**Highest-value next test, and it is one line:** set DP-1's `vrr` to `0` in that
+file, reload Hyprland, and see whether the artifacting stops.
+
+`cv_tearing_enabled` is **not** the mechanism: it defaults false, and `bTearing`
+additionally requires `GetBackend()->SupportsTearing()`, which the Wayland
+backend hard-codes to `false` (`src/Backends/WaylandBackend.cpp`).
+
+### What sync validation found
+
+`vulkan-validation-layers` is **not** installed system-wide. The Arch package is
+unpacked into the session scratchpad and pointed at with `VK_LAYER_PATH` +
+`LD_LIBRARY_PATH` per run, so nothing outside the scratchpad changed.
+
+1. **`VUID-vkQueueSubmit-pWaitDstStageMask-00066` — fixed.**
+   `CVulkanDevice::submitInternal()` named `VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT`
+   as a wait stage for *every* external dependency, including on the
+   **compute-only** queue `vulkan_composite()` submits to — a graphics-only stage
+   on a queue family that does not support it. Upstream carries the same
+   unconditional line, but it is latent there; our overlay attaches an external
+   dependency to the composite submission on **every frame**, so the violation
+   fired continuously. Now masked to the target queue family's capabilities.
+   Verified: 10 occurrences before, 0 after.
+
+2. **`VUID-vkCmdDraw-None-09600` — open, not fixed.** An ImGui draw binds
+   descriptors declaring `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL` while the
+   images are actually in `VK_IMAGE_LAYOUT_GENERAL` (4 distinct images, one
+   command buffer). Left alone deliberately: `GENERAL` is a valid layout to
+   sample from and RADV will not fault on it, the mechanism is not understood
+   yet, and the standing rule is not to ship an unreproduced fix.
+
+Remaining validation output is pre-existing upstream noise from gamescope's
+dmabuf import path and its YCbCr composite descriptor set.
+
+### Defect B (GPU fault on resize) did NOT reproduce
+
+Driving real host-window resizes with both ImGui contexts live (FPS HUD on via
+config, settings overlay on via the `settings_overlay_visible` convar — both
+confirmed rendering in a captured screenshot, not assumed):
+
+- SDL backend: **300** resizes, **305** swapchain recreations — no fault.
+- Wayland backend: **200** resizes — no fault.
+- Under sync validation: no sync hazard reported on either overlay texture.
+
+The resize fault is **not reproduced on this machine by this method**, and no fix
+for it is claimed. Two prior passes shipped unreproduced fixes for this and both
+were wrong; this pass does not add a third.
+
+A silent trap worth recording, because it invalidated the first attempt:
+**Hyprland >= 0.56 dispatches are Lua-only.** `hyprctl dispatch
+resizewindowpixel ...` (and every classic string dispatch, including through the
+raw IPC socket) is rejected with "expected a dispatcher" *while hyprctl still
+exits 0*. The first 40-resize run therefore resized nothing and "passed"
+vacuously. Working form:
+
+```
+hyprctl dispatch 'hl.dsp.window.resize({ window = "address:0x...", x = W, y = H, exact = true })'
+```
+
+and the window must be floated first. `scripts/overlay-test-harness.sh` had the
+same dead syntax in its `--fullscreen` reinforcement — fixed in this pass, so
+`--fullscreen` now actually reaches `fullscreen=2` on the target output and says
+so, instead of silently testing a tiled window.
+
+### Texture-lifecycle audit: the Rc<> claim checks out
+
+Section 0's resize-safety argument depends on a compute submission holding a
+live reference to the overlay texture. Verified against `src/rc.h`: a *public*
+`Rc<T>` bumps the private (lifetime) count on its 0→1 transition, so
+`CVulkanCmdBuffer::m_textureRefs` (a `std::vector<Rc<CVulkanTexture>>`) does keep
+the image alive. `EnsureTexture()`'s comment is correct as written.
+
+### ImGui context handling — hardened
+
+Two independent ImGui contexts live in this process, each with its own
+`ImGui_ImplVulkan` backend data, font atlas, descriptor pool and per-frame
+vertex/index buffers. `Overlay/FpsDisplay.cpp` saved/set/restored the
+globally-current context around its pass; `SettingsOverlay.cpp` **never called
+`SetCurrentContext` at all**, relying on `CreateContext()` leaving its context
+current forever and on FpsDisplay's discipline to put it back. That held only
+because of the exact init order — an unenforced global-state coupling between two
+files. `SettingsOverlay.cpp` now owns an explicit `s_pImguiContext` and uses an
+RAII `ScopedImguiContext` guard across its whole pass (covering `DrainInputQueue()`,
+which writes `ImGuiIO`). Its init guard is also keyed on its own context handle
+rather than "is any context current", which previously aborted init whenever the
+*other* file's context merely happened to be current.
+
+### Fork-vs-upstream divergence: there is none in the base
+
+Checked, not assumed: our `master` base is **exactly** upstream `master`
+(`fcc1341`), confirmed with `git merge-base --is-ancestor`. Every commit above it
+is additive overlay work. There are therefore **no upstream fixes we are missing**
+in the render/present paths, and the premise that "our fork has drifted" is
+false. The one place we now diverge inside upstream code is `submitInternal()`'s
+wait-stage mask, which diverges *toward* spec compliance.
+
+Consequences, recorded so they are not re-litigated:
+
+- There are **no upstream fixes to pull in**. If a bug reproduces on stock
+  `/usr/bin/gamescope`, it is present in current upstream too — the stock
+  comparison above is a test of upstream HEAD, not of an older baseline.
+- There is **no separate Steam Deck implementation to copy**. The Deck runs this
+  code. `GAMESCOPE_EXTERNAL_OVERLAY` really is just a zpos assignment, and at the
+  compositing layer "copy how the Deck does it" is already satisfied.
+
+### Decision: keep the injected-texture path for now — but this is the real divergence
+
+The one thing we genuinely do that the Deck does not is **produce the overlay's
+pixels**. Steam's overlay is a separate Wayland client committing real buffers
+through gamescope's ordinary client-commit path (`src/commit.cpp`, dmabuf import,
+`CVulkanTexture` from a dmabuf) — a path exercised for every game every frame,
+and therefore extremely well tested for exactly the three things we keep finding
+bugs in: queue-family ownership, resize, and lifetime. Ours renders ImGui into an
+internally-created `CVulkanTexture` and injects it straight into `FrameInfo_t`,
+on a path nothing else in the codebase uses.
+
+That is a genuinely strong prior for rewriting. **The evidence gathered in this
+pass does not support acting on it yet:**
+
+- **Defect A does not point here.** The symptom is independent of the overlay
+  being open, of the FPS HUD, and of the filter — i.e. independent of whether the
+  injected texture is being produced or composited at all. And stock gamescope,
+  which has no injected texture, is indistinguishable from ours on every measured
+  axis in the failing configuration. A buffer-production rewrite cannot fix a
+  symptom that is present with the producer switched off.
+- **Defect B does not point here either — yet.** 500 real resizes across two
+  backends, with both contexts live and sync validation on, produced no fault and
+  no sync hazard on either overlay texture. There is currently no reproduction to
+  attribute to the injected path.
+- The overlay-attributable defect sync validation *did* find (the wait-stage mask)
+  is in shared submit code and would have existed identically for a
+  client-committed buffer.
+
+So rewriting now would be a large, risky change justified by a prior rather than
+by evidence — the same mistake as the two unreproduced resize fixes.
+
+**Revisit immediately if any of these become true**, at which point the rewrite is
+the right answer and should be taken:
+
+1. Defect B reproduces and the fault is attributable to `EnsureTexture()`,
+   `s_pOverlayTexture`'s lifetime, or the general-queue submission.
+2. The artifacting is shown to track overlay *visibility* after the stacked-VRR
+   hypothesis above is ruled out.
+3. Sync validation reports a hazard on an overlay texture that cannot be fixed
+   without hand-rolling the ownership/lifetime bookkeeping the client-commit path
+   already does correctly.

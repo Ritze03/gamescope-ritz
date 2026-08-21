@@ -1358,11 +1358,27 @@ uint64_t CVulkanDevice::submitInternal( CVulkanCmdBuffer* cmdBuffer )
 		ulSignalPoints.push_back( dep.ulPoint );
 	}
 
+	// Wait stages must be supported by the queue family this buffer is submitted
+	// to (VUID-vkQueueSubmit-pWaitDstStageMask-00066). COLOR_ATTACHMENT_OUTPUT is
+	// a graphics-only stage, so naming it unconditionally is invalid usage on the
+	// compute-only queue that vulkan_composite() submits to -- which on this GPU
+	// (RADV/Navi31: compute family 1, general family 0) is every composite.
+	//
+	// Upstream carries the unconditional form; it is latent there because upstream
+	// rarely attaches external dependencies to a composite submission. Our overlay
+	// attaches one EVERY frame (SettingsOverlay_WaitForRender /
+	// FpsDisplay_WaitForRender), so the violation fires continuously. Caught by
+	// VK_LAYER_KHRONOS_validation, not by inspection.
+	const bool bGeneralQueue = cmdBuffer->queueFamily() == generalQueueFamily();
+	const VkPipelineStageFlags uWaitStages = bGeneralQueue
+		? ( VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT )
+		: ( VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT );
+
 	for ( auto &dep : cmdBuffer->GetExternalDependencies() )
 	{
 		pWaitSemaphores.push_back( dep.pTimelineSemaphore->pVkSemaphore );
 		ulWaitPoints.push_back( dep.ulPoint );
-		uWaitStageFlags.push_back( VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT );
+		uWaitStageFlags.push_back( uWaitStages );
 	}
 
 	VkTimelineSemaphoreSubmitInfo timelineInfo = {
