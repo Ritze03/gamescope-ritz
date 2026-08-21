@@ -43,13 +43,21 @@ namespace gamescope::chrome
 		Count,
 	};
 
-	// Whether a panel's window is currently shown. Defaults to true for
-	// every panel (matches this milestone's starting point, where all
-	// panels were unconditionally visible) -- ponytail: no persisted
-	// open/closed state across overlay toggles or process restarts; SPEC's
-	// Build order gives per-game *window position* persistence as a stretch
-	// goal already deferred past v1's floating-window milestones, and dock
-	// open/closed state is the same class of "nice later, not now" as that.
+	// Whether a panel's window is currently shown. Exactly one panel is open
+	// by default (Display) rather than all five -- five independently-
+	// positioned windows all defaulting to their first-use position land
+	// stacked directly on top of each other, which buries panels (Audio was
+	// unreachable without dragging) instead of giving a coherent first-open
+	// state. Opening a panel (SetPanelOpen(id, true), whether from the dock
+	// or elsewhere) is exclusive: it closes every other panel first, so the
+	// dock always reads as "one panel visible, switch between them" and the
+	// user is never left with an overlapping pile to untangle. Panels stay
+	// independently *movable* once open -- this only bounds how many are
+	// open at once, not where they sit. ponytail: no persisted open/closed
+	// state across overlay toggles or process restarts; SPEC's Build order
+	// gives per-game *window position* persistence as a stretch goal already
+	// deferred past v1's floating-window milestones, and dock open/closed
+	// state is the same class of "nice later, not now" as that.
 	bool IsPanelOpen( PanelId id );
 	void SetPanelOpen( PanelId id, bool bOpen );
 
