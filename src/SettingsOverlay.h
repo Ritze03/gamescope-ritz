@@ -16,9 +16,9 @@ namespace gamescope
 {
 	// Called once per paint_all(), on the steamcompmgr thread, right before the
 	// frame is handed to the backend's Present(). If the overlay is visible or
-	// still fading out, this draws the M1 placeholder window into an offscreen
-	// texture on the general (graphics) queue and appends a Layer_t for it to
-	// *pFrameInfo. A no-op (adds nothing) when fully hidden.
+	// still fading out, this draws the settings overlay's panels/dock into an
+	// offscreen texture on the general (graphics) queue and appends a Layer_t
+	// for it to *pFrameInfo. A no-op (adds nothing) when fully hidden.
 	//
 	// ponytail: relies on pFrameInfo already containing at least one valid
 	// layer for paint_all()'s own bValidContents check (computed earlier in
