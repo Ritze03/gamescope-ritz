@@ -223,7 +223,8 @@ namespace gamescope
 		// replaces the stock (inherently circular, unthemeable-to-flat)
 		// ImGui::RadioButton row this used to be.
 		{
-			static const char *const kLabels[] = { "Linear", "Nearest", "FSR", "NIS", "Pixel" };
+			// Spec §7 Segmented control: cell labels are lowercase.
+			static const char *const kLabels[] = { "linear", "nearest", "fsr", "nis", "pixel" };
 			int nSelected = 0;
 			for ( size_t i = 0; i < std::size( kFilters ); i++ )
 				if ( g_wantedUpscaleFilter == kFilters[i].eValue )
@@ -249,7 +250,7 @@ namespace gamescope
 
 		ImGui::TextUnformatted( "Scaler" );
 		{
-			static const char *const kLabels[] = { "Auto", "Integer", "Fit", "Fill", "Stretch" };
+			static const char *const kLabels[] = { "auto", "integer", "fit", "fill", "stretch" };
 			int nSelected = 0;
 			for ( size_t i = 0; i < std::size( kScalers ); i++ )
 				if ( g_wantedUpscaleScaler == kScalers[i].eValue )
