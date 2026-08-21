@@ -340,11 +340,18 @@ namespace gamescope
 			ImGui::Separator();
 		}
 
+		// Sharpness is Filter's own parameter (it remaps per-filter and only
+		// affects FSR/NIS's output, not the Scaler), so it's kept directly
+		// under Filter with just Spacing() between them -- no Separator() --
+		// while a full Separator() marks the boundary to Scaler, which is an
+		// unrelated setting. Mirrors the group-boundary-via-Separator()
+		// idiom PanelShaders.cpp's DrawVibrancyGroup()/DrawPreSharpenGroup()
+		// already use, rather than inventing a new grouping treatment.
 		DrawFilterRow();
 		ImGui::Spacing();
-		DrawScalerRow();
-		ImGui::Spacing();
 		DrawSharpnessSlider();
+		ImGui::Separator();
+		DrawScalerRow();
 		ImGui::Separator();
 		DrawLiveToggles();
 
