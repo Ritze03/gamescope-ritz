@@ -338,7 +338,15 @@ namespace gamescope
 	static void DrawPlaceholderWindow()
 	{
 		ImGui::SetNextWindowPos( ImVec2( 64.0f, 64.0f ), ImGuiCond_FirstUseEver );
-		ImGui::SetNextWindowSize( ImVec2( 440.0f, 260.0f ), ImGuiCond_FirstUseEver );
+		// Issue #20 fix: this window also hosts FpsDisplay_DrawSettingsPanel()
+		// (M4) below, which the original 440x260 M1 placeholder size predates
+		// -- at that size several FPS controls render below the visible
+		// area by default. The window is already resizable (no
+		// ImGuiWindowFlags_NoResize), and io.IniFilename is null (no
+		// persisted layout, see below), so ImGuiCond_FirstUseEver's
+		// default applies fresh every launch -- picking a size tall enough
+		// for the current content is what actually fixes the clipping.
+		ImGui::SetNextWindowSize( ImVec2( 460.0f, 640.0f ), ImGuiCond_FirstUseEver );
 
 		// M8 part 1 (issue #13): the window title is drawn by ImGui::Begin()
 		// itself, using whichever font is active *at the Begin() call*
