@@ -23,6 +23,22 @@
 #                               base) — the control. Needs its own build directory,
 #                               see the test plan doc for the one-time setup command.
 #
+# Upstream regression bisection variants (pure upstream, zero of our code — see
+# superdoc/planning/upstream-flicker-regression.md for what each isolates):
+#   upstream-3.16.25            upstream at the 3.16.25 tag — 20 commits after 3.16.24
+#                               (known clean), 63 before fcc1341 (known flickers).
+#   upstream-prebuffermemo      upstream one commit before eb1b304 ("BufferMemo: do not
+#                               assert when a destroyed buffer still has texture
+#                               references") — a debug build, so if that commit's race
+#                               is the cause this variant should *assert/abort*, not
+#                               flicker, giving an unambiguous signal instead of a
+#                               "watch and squint" one.
+#   upstream-wlroots020         upstream right after the wlroots 0.20 bump (fc6a965),
+#                               which also carries the earlier wlroots 0.19 bump and the
+#                               BufferMemo fix — brackets everything up to the final
+#                               rendervulkan layer-stack refactor (6ab4a7d) and the
+#                               steamcompmgr focus-window churn after it.
+#
 # Options:
 #   --no-vrr            do not pass --adaptive-sync (default: pass it). Use this to
 #                        check whether the flicker survives without VRR at all.
@@ -37,9 +53,15 @@
 #   -h, --help           show this help
 #
 # Binary locations (override with these env vars if your layout differs):
-#   GAMESCOPE_RITZ_AB_HEAD_BIN      our HEAD binary (default: <repo>/build/src/gamescope)
-#   GAMESCOPE_RITZ_AB_UPSTREAM_BIN  upstream fcc1341 binary
-#                                   (default: <repo>/build-upstream-fcc1341/src/gamescope)
+#   GAMESCOPE_RITZ_AB_HEAD_BIN                our HEAD binary (default: <repo>/build/src/gamescope)
+#   GAMESCOPE_RITZ_AB_UPSTREAM_BIN             upstream fcc1341 binary
+#                                              (default: <repo>/build-upstream-fcc1341/src/gamescope)
+#   GAMESCOPE_RITZ_AB_UPSTREAM_31625_BIN       upstream 3.16.25 tag binary
+#                                              (default: ../gamescope-upstream-3.16.25/build/src/gamescope)
+#   GAMESCOPE_RITZ_AB_UPSTREAM_PREBUFFERMEMO_BIN  upstream eb1b304~1 binary
+#                                              (default: ../gamescope-upstream-prebuffermemo/build/src/gamescope)
+#   GAMESCOPE_RITZ_AB_UPSTREAM_WLROOTS020_BIN  upstream fc6a965 binary
+#                                              (default: ../gamescope-upstream-wlroots020/build/src/gamescope)
 #
 # Fullscreen note: gamescope's own -f/--fullscreen (SDL_WINDOW_FULLSCREEN_DESKTOP) is
 # used and verified to have actually landed, via a READ-ONLY `hyprctl clients -j` check
@@ -70,6 +92,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 HEAD_BIN="${GAMESCOPE_RITZ_AB_HEAD_BIN:-$REPO_ROOT/build/src/gamescope}"
 UPSTREAM_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_BIN:-$REPO_ROOT/build-upstream-fcc1341/src/gamescope}"
+UPSTREAM_31625_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_31625_BIN:-$REPO_ROOT/../gamescope-upstream-3.16.25/build/src/gamescope}"
+UPSTREAM_PREBUFFERMEMO_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_PREBUFFERMEMO_BIN:-$REPO_ROOT/../gamescope-upstream-prebuffermemo/build/src/gamescope}"
+UPSTREAM_WLROOTS020_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_WLROOTS020_BIN:-$REPO_ROOT/../gamescope-upstream-wlroots020/build/src/gamescope}"
 
 DO_VRR=1
 TARGET_OUTPUT="DP-1"
@@ -83,14 +108,14 @@ VARIANT=""
 log()  { echo "[flicker-ab] $*"; }
 fail() { log "FAIL: $*"; exit 1; }
 
-usage() { sed -n '2,58p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,84p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # ---------- args ----------
 if [[ $# -eq 0 ]]; then usage; exit 1; fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --list)
-      echo "overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream"
+      echo "overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020"
       exit 0
       ;;
     -h|--help) usage; exit 0 ;;
@@ -101,12 +126,12 @@ while [[ $# -gt 0 ]]; do
     --height) OUT_H="$2"; shift 2 ;;
     --client) CLIENT_CMD="$2"; shift 2 ;;
     --backend) BACKEND="$2"; shift 2 ;;
-    overlay-inert|no-dynamic-rendering-ext|no-convar-seed|normal|upstream)
+    overlay-inert|no-dynamic-rendering-ext|no-convar-seed|normal|upstream|upstream-3.16.25|upstream-prebuffermemo|upstream-wlroots020)
       VARIANT="$1"; shift ;;
     *) fail "unknown argument: $1 (see --help)" ;;
   esac
 done
-[[ -n "$VARIANT" ]] || fail "no variant given. One of: overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream (see --help)"
+[[ -n "$VARIANT" ]] || fail "no variant given. One of: overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020 (see --help)"
 
 # ---------- resolve binary + env for the chosen variant ----------
 GAMESCOPE_BIN=""
@@ -129,6 +154,15 @@ case "$VARIANT" in
     ;;
   upstream)
     GAMESCOPE_BIN="$UPSTREAM_BIN"
+    ;;
+  upstream-3.16.25)
+    GAMESCOPE_BIN="$UPSTREAM_31625_BIN"
+    ;;
+  upstream-prebuffermemo)
+    GAMESCOPE_BIN="$UPSTREAM_PREBUFFERMEMO_BIN"
+    ;;
+  upstream-wlroots020)
+    GAMESCOPE_BIN="$UPSTREAM_WLROOTS020_BIN"
     ;;
 esac
 
