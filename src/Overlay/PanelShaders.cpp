@@ -40,6 +40,7 @@
 #include "rendervulkan.hpp"
 #include "Config/ConfigManager.h"
 #include "Fonts.h"
+#include "Chrome.h"
 
 #include "imgui.h"
 
@@ -252,17 +253,11 @@ namespace gamescope
 	{
 		EnsureConfigLoaded();
 
-		// Placed clear of the M1 placeholder and M3 Display windows so all
-		// three are visible at once during manual testing.
-		ImGui::SetNextWindowPos( ImVec2( 520.0f, 64.0f ), ImGuiCond_FirstUseEver );
-		ImGui::SetNextWindowSize( ImVec2( 430.0f, 300.0f ), ImGuiCond_FirstUseEver );
-
-		// See SettingsOverlay.cpp's DrawPlaceholderWindow() for why wrapping
-		// just the Begin() call styles the real title bar text (M8 part 1,
-		// issue #13).
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Title ) );
-		ImGui::Begin( "SHADERS", nullptr, ImGuiWindowFlags_NoCollapse );
-		ImGui::PopFont();
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// see Overlay/Chrome.h -- position/size unchanged from M6.
+		if ( !chrome::BeginPanelWindow( "SHADERS", chrome::PanelId::Shaders,
+			ImVec2( 520.0f, 64.0f ), ImVec2( 430.0f, 300.0f ) ) )
+			return;
 
 		// SDR-only gate (DECISIONS.md #15): a deliberate v1 limitation, not
 		// an oversight -- naive vibrancy/sharpen math assumes clamped 0..1
@@ -288,6 +283,6 @@ namespace gamescope
 		if ( !bSdr )
 			ImGui::EndDisabled();
 
-		ImGui::End();
+		chrome::EndPanelWindow();
 	}
 }

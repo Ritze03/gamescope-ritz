@@ -46,6 +46,7 @@
 #include "Overlay/PanelAudio.h"
 #include "Overlay/PanelConfig.h"
 #include "Overlay/Fonts.h"
+#include "Overlay/Chrome.h"
 
 #include <algorithm>
 #include <atomic>
@@ -335,31 +336,21 @@ namespace gamescope
 		s_flCurrentAlpha = s_flFadeAtAnchor + ( flTarget - s_flFadeAtAnchor ) * flT;
 	}
 
+	// M8 part 3 (issue #15): this window is now hosted through
+	// chrome::BeginPanelWindow() as the dock's "FPS HUD" panel (see
+	// Overlay/Chrome.h) -- SPEC.md's UI structure lists an "FPS HUD panel"
+	// hosting exactly FpsDisplay_DrawSettingsPanel()'s controls, which this
+	// window already did from M4 onward. The M1 render-shell diagnostics
+	// below (dummy slider/checkbox/text input, the fade-alpha readout) are
+	// kept as-is rather than stripped -- they're still live, still exercise
+	// M2's input-capture path during manual verification, and removing
+	// working diagnostic content isn't this milestone's job (chrome/hosting
+	// only, see the M8p3 task brief's scope boundary).
 	static void DrawPlaceholderWindow()
 	{
-		ImGui::SetNextWindowPos( ImVec2( 64.0f, 64.0f ), ImGuiCond_FirstUseEver );
-		// Issue #20 fix: this window also hosts FpsDisplay_DrawSettingsPanel()
-		// (M4) below, which the original 440x260 M1 placeholder size predates
-		// -- at that size several FPS controls render below the visible
-		// area by default. The window is already resizable (no
-		// ImGuiWindowFlags_NoResize), and io.IniFilename is null (no
-		// persisted layout, see below), so ImGuiCond_FirstUseEver's
-		// default applies fresh every launch -- picking a size tall enough
-		// for the current content is what actually fixes the clipping.
-		ImGui::SetNextWindowSize( ImVec2( 460.0f, 640.0f ), ImGuiCond_FirstUseEver );
-
-		// M8 part 1 (issue #13): the window title is drawn by ImGui::Begin()
-		// itself, using whichever font is active *at the Begin() call*
-		// (imgui.cpp's RenderWindowTitleBarContents() runs inside Begin(),
-		// before it returns) -- so pushing/popping the Title font around
-		// just this one call is enough to style the real title bar text,
-		// with no custom-drawn chrome needed. Uppercasing is a plain string
-		// transform (done here); the guide's ~.15-.16em letter-spacing on
-		// top of that is not applied -- see Fonts.h's Style::Title comment
-		// for why.
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Title ) );
-		ImGui::Begin( "GAMESCOPE-RITZ SETTINGS (M1 PLACEHOLDER)", nullptr, ImGuiWindowFlags_NoCollapse );
-		ImGui::PopFont();
+		if ( !gamescope::chrome::BeginPanelWindow( "FPS HUD", gamescope::chrome::PanelId::Fps,
+			ImVec2( 64.0f, 64.0f ), ImVec2( 460.0f, 640.0f ) ) )
+			return;
 
 		ImGui::TextUnformatted( "Settings overlay render shell -- Milestone 1" );
 		ImGui::Separator();
@@ -399,7 +390,7 @@ namespace gamescope
 
 		gamescope::FpsDisplay_DrawSettingsPanel(); // M4 (see FpsDisplay.h)
 
-		ImGui::End();
+		gamescope::chrome::EndPanelWindow();
 	}
 
 	// Records the ImGui draw into s_pOverlayTexture on the general queue and
@@ -559,6 +550,10 @@ namespace gamescope
 		PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
 		PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
 		PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
+		// M8 part 3 (issue #15): drawn last so the dock's own window lands on
+		// top of the panel windows above in ImGui's per-frame Begin-order Z
+		// stack -- see Overlay/Chrome.h's DrawDock() comment.
+		chrome::DrawDock();
 		ImGui::Render();
 
 		if ( !RenderAndSubmit() )
