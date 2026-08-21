@@ -586,7 +586,16 @@ bool CVulkanDevice::createDevice()
 	// (imgui_impl_vulkan.h) documents needing VK_KHR_dynamic_rendering enabled
 	// explicitly "even for Vulkan 1.3", and conformant 1.3 implementations still
 	// enumerate promoted-to-core extensions, so this is safe to always request.
-	enabledExtensions.push_back( VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME );
+	//
+	// A/B flicker test kit (superdoc/planning/flicker-ab-test-plan.md): this is
+	// one of the few device-creation changes that touches every frame, not just
+	// the overlay's, so GAMESCOPE_RITZ_AB_NO_DYNAMIC_RENDERING_EXT=1 lets a
+	// variant run skip requesting the string while leaving the 1.3 feature bit
+	// (already core, above) untouched -- isolating "did enabling this string
+	// specifically change anything" from the overlay entirely.
+	const char *pszNoDynamicRenderingExt = getenv( "GAMESCOPE_RITZ_AB_NO_DYNAMIC_RENDERING_EXT" );
+	if ( !pszNoDynamicRenderingExt || pszNoDynamicRenderingExt[0] != '1' )
+		enabledExtensions.push_back( VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME );
 #if 0
 	enabledExtensions.push_back( VK_KHR_MAINTENANCE_5_EXTENSION_NAME );
 #endif
