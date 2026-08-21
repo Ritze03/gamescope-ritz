@@ -95,6 +95,7 @@
 #include "refresh_rate.h"
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
+#include "SettingsOverlay.h"
 #include "BufferMemo.h"
 #include "Utils/Process.h"
 #include "Utils/Algorithm.h"
@@ -2927,6 +2928,11 @@ paint_all( global_focus_t *pFocus, bool async )
 		// Blending needs to be done in Gamma 2.2 space for mura correction to work.
 		frameInfo.applyOutputColorMgmt = false;
 	}
+
+	// M1 settings overlay: drawn last so it composites above every other layer
+	// built above (including the cursor). Rendering-only for now -- see
+	// SettingsOverlay.h; input capture is Milestone M2.
+	gamescope::SettingsOverlay_AddLayer( &frameInfo );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 	{
