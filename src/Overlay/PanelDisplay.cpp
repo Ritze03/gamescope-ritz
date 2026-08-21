@@ -32,6 +32,7 @@
 #include "convar.h"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
+#include "Fonts.h"
 
 #include "imgui.h"
 
@@ -174,7 +175,9 @@ namespace gamescope
 			if ( ImGui::RadioButton( kFilters[i].pszLabel, bSelected ) )
 				SetFilter( kFilters[i].eValue );
 		}
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 		ImGui::TextDisabled( "Pixel: sharp only when the scale factor is a whole number." );
+		ImGui::PopFont();
 	}
 
 	static void DrawScalerRow()
@@ -218,7 +221,9 @@ namespace gamescope
 		if ( !bApplies )
 		{
 			ImGui::EndDisabled();
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 			ImGui::TextDisabled( "No effect on Linear/Nearest/Pixel -- only FSR and NIS sharpen." );
+			ImGui::PopFont();
 		}
 	}
 
@@ -258,7 +263,12 @@ namespace gamescope
 		ImGui::SetNextWindowPos( ImVec2( 64.0f, 340.0f ), ImGuiCond_FirstUseEver );
 		ImGui::SetNextWindowSize( ImVec2( 440.0f, 300.0f ), ImGuiCond_FirstUseEver );
 
-		ImGui::Begin( "Display", nullptr, ImGuiWindowFlags_NoCollapse );
+		// See SettingsOverlay.cpp's DrawPlaceholderWindow() for why wrapping
+		// just the Begin() call styles the real title bar text (M8 part 1,
+		// issue #13).
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Title ) );
+		ImGui::Begin( "DISPLAY", nullptr, ImGuiWindowFlags_NoCollapse );
+		ImGui::PopFont();
 
 		if ( g_bSteamIsActiveWindow )
 		{

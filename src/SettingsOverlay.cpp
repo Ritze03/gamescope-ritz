@@ -43,6 +43,7 @@
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/PanelShaders.h"
+#include "Overlay/Fonts.h"
 
 #include <algorithm>
 #include <atomic>
@@ -149,10 +150,9 @@ namespace gamescope
 
 	// Applies the "glass instrument" palette from ui-design-guide.md: flat/
 	// square corners, 1px hairline borders, cyan accent, near-black
-	// translucent surfaces. Cheap to do via ImGuiStyle -- custom fonts
-	// (IBM Plex Sans/Mono) are not (they need embedding font data), so those
-	// are deliberately left for the M8 polish milestone; ImGui's built-in
-	// default font is used here instead.
+	// translucent surfaces. The IBM Plex Sans/Mono typography system itself
+	// (M8 part 1, issue #13) is built separately -- see gamescope::fonts::Load()
+	// below, called once the ImGui context exists.
 	static void ApplyDesignGuideStyle()
 	{
 		ImGuiStyle &style = ImGui::GetStyle();
@@ -237,6 +237,12 @@ namespace gamescope
 		// visible at all while the overlay owns it.
 		io.MouseDrawCursor = true;
 		ApplyDesignGuideStyle();
+
+		// M8 part 1 (issue #13): builds the IBM Plex font atlas for this
+		// context. Must happen before ImGui_ImplVulkan_Init() below -- the
+		// Vulkan backend uploads whatever io.Fonts holds at Init() time, so
+		// the atlas has to be finished first (see Overlay/Fonts.h).
+		gamescope::fonts::Load();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 
@@ -332,7 +338,18 @@ namespace gamescope
 		ImGui::SetNextWindowPos( ImVec2( 64.0f, 64.0f ), ImGuiCond_FirstUseEver );
 		ImGui::SetNextWindowSize( ImVec2( 440.0f, 260.0f ), ImGuiCond_FirstUseEver );
 
-		ImGui::Begin( "gamescope-ritz settings (M1 placeholder)", nullptr, ImGuiWindowFlags_NoCollapse );
+		// M8 part 1 (issue #13): the window title is drawn by ImGui::Begin()
+		// itself, using whichever font is active *at the Begin() call*
+		// (imgui.cpp's RenderWindowTitleBarContents() runs inside Begin(),
+		// before it returns) -- so pushing/popping the Title font around
+		// just this one call is enough to style the real title bar text,
+		// with no custom-drawn chrome needed. Uppercasing is a plain string
+		// transform (done here); the guide's ~.15-.16em letter-spacing on
+		// top of that is not applied -- see Fonts.h's Style::Title comment
+		// for why.
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Title ) );
+		ImGui::Begin( "GAMESCOPE-RITZ SETTINGS (M1 PLACEHOLDER)", nullptr, ImGuiWindowFlags_NoCollapse );
+		ImGui::PopFont();
 
 		ImGui::TextUnformatted( "Settings overlay render shell -- Milestone 1" );
 		ImGui::Separator();
@@ -342,7 +359,16 @@ namespace gamescope
 			"fades in/out on toggle." );
 		ImGui::Spacing();
 
+		// ponytail: "Layer alpha: 0.85" mixes the "Layer alpha:" label word
+		// into the same Value (mono) run as its number rather than
+		// splitting into two Text() calls on two fonts -- the design
+		// guide's "never mix a number into a sans run" rule is really about
+		// standalone value readouts (see FpsDisplay.cpp's DrawReadout for a
+		// real one); this is throwaway M1 placeholder text, not worth the
+		// extra SameLine()-split code for.
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
 		ImGui::Text( "Layer alpha: %.2f", s_flCurrentAlpha );
+		ImGui::PopFont();
 
 		static float flDummySlider = 0.5f;
 		ImGui::SliderFloat( "Dummy slider", &flDummySlider, 0.0f, 1.0f );
@@ -351,8 +377,12 @@ namespace gamescope
 		ImGui::Checkbox( "Dummy toggle", &bDummyToggle );
 
 		ImGui::Spacing();
+		// Meta role (Mono 400, per the design guide -- hints/disabled text
+		// is mono in this design, same as numeric readouts).
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 		ImGui::TextDisabled(
 			"Toggle: Ctrl+Shift+O, `toggle_settings_overlay`, or `settings_overlay_visible 0|1`." );
+		ImGui::PopFont();
 
 		static char szTextInputScratch[128] = "";
 		ImGui::InputText( "Type here (M2 capture check)", szTextInputScratch, sizeof( szTextInputScratch ) );
