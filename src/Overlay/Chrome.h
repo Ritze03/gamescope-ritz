@@ -43,56 +43,74 @@ namespace gamescope::chrome
 		Count,
 	};
 
-	// Whether a panel's window is currently shown. Exactly one panel is open
-	// by default (Display) rather than all five -- five independently-
-	// positioned windows all defaulting to their first-use position land
-	// stacked directly on top of each other, which buries panels (Audio was
-	// unreachable without dragging) instead of giving a coherent first-open
-	// state. Opening a panel (SetPanelOpen(id, true), whether from the dock
-	// or elsewhere) is exclusive: it closes every other panel first, so the
-	// dock always reads as "one panel visible, switch between them" and the
-	// user is never left with an overlapping pile to untangle. Panels stay
-	// independently *movable* once open -- this only bounds how many are
-	// open at once, not where they sit. ponytail: no persisted open/closed
-	// state across overlay toggles or process restarts; SPEC's Build order
-	// gives per-game *window position* persistence as a stretch goal already
-	// deferred past v1's floating-window milestones, and dock open/closed
-	// state is the same class of "nice later, not now" as that.
+	// Whether a panel's window is currently shown. Independent per panel --
+	// opening one no longer closes the others (that "exclusive" behavior was
+	// a stopgap for a real bug: five windows all defaulting to the same
+	// first-use position landed stacked directly on top of each other,
+	// burying panels like Audio without dragging). The actual fix is
+	// BeginPanelWindow()'s own per-panel default position (see its comment)
+	// -- with that in place, multiple panels can be open at once (the
+	// user's own ask) without landing in a pile. Panels stay independently
+	// *movable* once open. ponytail: no persisted open/closed state across
+	// overlay toggles or process restarts; SPEC's Build order gives per-game
+	// *window position* persistence as a stretch goal already deferred past
+	// v1's floating-window milestones, and dock open/closed state is the
+	// same class of "nice later, not now" as that.
 	bool IsPanelOpen( PanelId id );
 	void SetPanelOpen( PanelId id, bool bOpen );
 
 	// Wraps ImGui::Begin() for one of the five panel windows. Returns false
 	// (and the caller must NOT call EndPanelWindow() or draw anything) when
 	// the panel is closed at the dock -- this is what actually makes "closed"
-	// mean "not drawn" rather than just "not interactable". When it returns
-	// true, the caller must call EndPanelWindow() exactly once before
-	// returning, mirroring ImGui::Begin()/End()'s own pairing contract.
+	// mean "not drawn" rather than just "not interactable" -- or while the
+	// panel is collapsed (see below): the window itself is still drawn (its
+	// title bar stays visible/draggable/re-expandable), just not the panel's
+	// own body content this frame. When it returns true, the caller must
+	// call EndPanelWindow() exactly once before returning, mirroring
+	// ImGui::Begin()/End()'s own pairing contract; when it returns false,
+	// the window (if any) has already been fully closed out internally --
+	// the caller must NOT call EndPanelWindow() in that case either way.
 	//
-	// pszTitle/defaultPos/defaultSize are passed straight through to
-	// ImGui::Begin()/SetNextWindowPos()/SetNextWindowSize() (ImGuiCond_FirstUseEver)
-	// -- callers keep whatever layout position they already tuned, this only
-	// changes *whether* and *how* the window gets opened, not where.
+	// pszTitle is the window's title, shown UPPERCASE in the custom title
+	// bar (spec §5) -- pass it already-uppercased (every current call site
+	// does: "DISPLAY", "SHADERS", "AUDIO", "CONFIG / PROFILES"). defaultSize
+	// is used verbatim (windows are fixed-size, no resize grip -- spec §4:
+	// "free-floating, draggable by title bar only, no resize"). defaultPos
+	// is intentionally NOT used for position any more: with multiple panels
+	// allowed open at once (see IsPanelOpen()'s comment), each panel gets a
+	// fixed, non-overlapping tile position keyed off its own PanelId (see
+	// Chrome.cpp's TiledDefaultPos()) instead of whatever position each
+	// panel's own call site happened to hardcode -- that's what actually
+	// solves "five windows stacked on each other" rather than just papering
+	// over it with exclusivity. Applied via ImGuiCond_FirstUseEver, so it
+	// only ever matters the very first time a given panel is shown for the
+	// life of the process -- once a user drags a panel, ImGui's own window
+	// state remembers that position for as long as the overlay's ImGui
+	// context lives, including across this panel being closed and reopened
+	// ("remember position while open").
 	//
-	// Draws this milestone's window chrome once Begin() succeeds: 4px window
-	// corner radius (design guide's "window corner radius 3-4px" -- controls
-	// stay flat/0px, that's Widgets.cpp's job, unaffected by this
-	// window-scoped push/pop), the design guide's Title font on the native
-	// title bar text (unchanged from M8 part 1), a slim icon+status-dot
-	// sub-header row *inside* the content area just under the native title
-	// bar (see Chrome.cpp's file comment for why this sits next to, not on
-	// top of, ImGui's own title bar), a 2px accent left-edge stripe on the
-	// window frame while it's the focused window -- the design guide's
-	// "active/live group" affordance, applied at panel-window granularity
-	// since this design's top-level nav is free-floating windows, not a
-	// docked tab strip (SPEC.md's UI structure) -- and the whole window's
-	// border recoloring to accent @ 42% alpha while focused (the guide's
-	// separate, chrome-level "Focused window" rule: "accent border at ~42%
-	// opacity ... the *only* focus indicator"). Clicking the native
-	// title-bar close button closes the panel the same way un-toggling its
-	// dock button does (both write the same IsPanelOpen() state) -- SPEC's
-	// own scope note about the "18x18 bare glyph" close/collapse buttons is
-	// deliberately not reimplemented per-widget here (ponytail, see
-	// Chrome.cpp).
+	// Draws this milestone's window chrome once Begin() succeeds: a fully
+	// custom-drawn 34px title bar (spec §5 -- status dot, UPPERCASE title,
+	// meta text, focus-dependent gradient fill, 18x18 collapse/close glyph
+	// buttons) replacing ImGui's own native title bar outright (see
+	// Chrome.cpp's file comment for why the earlier "native title bar + a
+	// second custom row underneath" compromise is gone -- it read as the
+	// under-styled, nearly-invisible bar this replaces), 4px window corner
+	// radius, a focused-window accent border @ 42% alpha plus an accent glow
+	// (spec §4's "unmistakable" focus treatment) and accent header gradient,
+	// and the whole window at 94% opacity while unfocused. The custom title
+	// bar reimplements drag (via ImGui::StartMouseMovingWindow() -- the
+	// exact internal primitive ImGui's own native title bar drag calls, not
+	// a from-scratch reimplementation), collapse (a hand-rolled "shrink to
+	// just the title bar" toggle, since ImGui's native collapse mechanism is
+	// wired to its native title bar, which no longer exists once
+	// ImGuiWindowFlags_NoTitleBar is set -- double-click the bar, or the
+	// collapse glyph, both deferred to next frame exactly like ImGui's own
+	// window->WantCollapseToggle is) and close (the collapse/close glyph
+	// buttons are ButtonBehavior()-based InvisibleButtons, the same
+	// primitive every other custom widget in this overlay -- Widgets.cpp's
+	// Toggle()/Checkbox(), DrawDockButton() below -- is built on, so hover/
+	// press/keyboard-nav semantics match a real ImGui button).
 	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 defaultPos, ImVec2 defaultSize );
 	void EndPanelWindow();
 

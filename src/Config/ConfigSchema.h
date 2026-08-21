@@ -110,6 +110,31 @@ namespace gamescope::config
         // rather than becoming a per-game-eligible field the way
         // NotificationSettings::muted is.
         std::string notification_placement = "top-right";
+        // ---- window-chrome overhaul: General-tab scale/opacity/effects ----
+        // (kept contiguous on purpose - a sibling worker is adding its own
+        // fields to this struct concurrently and this block is the seam we
+        // agreed to keep merge-clean). Same "process-level, global.json only"
+        // rule as fade_ms above: ApplyProfile() never touches `overlay`, and
+        // SettingsToJson()'s bIncludeOverlay is false for every profile/
+        // per-game write - so a per-game override or an applied profile can
+        // never change any of these. Every field here takes effect live (no
+        // restart) - see Overlay/Chrome.cpp's EnsureLiveThemeLoaded() and
+        // Overlay/PanelConfig.cpp's General tab for the read/write side, and
+        // each field's own comment for who *consumes* it (some are drawn by
+        // Chrome.cpp/Widgets.cpp directly; dock_scale is the odd one out -
+        // notification_scale/opacity_notifications/background_blur/
+        // background_darkening are only ever read by sibling milestones'
+        // files - Notifications.* and SettingsOverlay.cpp - which this
+        // worker does not own and does not touch).
+        float dock_scale = 1.0f;                 // 0.85..1.5 - Chrome.cpp's DrawDock() button/gap/padding scale. Spec §1 note: keep the 54px dock button >=44px physical, hence the 0.85 floor (54*0.85 ~= 46px).
+        float display_scale = 1.0f;              // 0.8..1.4 - overall UI scale. Drives ImGuiIO::FontGlobalScale only (see Chrome.cpp's EnsureLiveThemeLoaded() comment for why that's the deliberate ceiling: the font atlas in Fonts.cpp is baked at fixed pixel sizes, so text softens above ~1.4x instead of resampling crisply, and every hand-drawn widget geometry in Widgets.cpp/Chrome.cpp is spec-exact fixed pixels that does not scale with it - full geometric rescaling would mean rebuilding the atlas per scale step and re-deriving every hardcoded constant, out of scope for this pass).
+        float notification_scale = 1.0f;         // 0.6..1.6 - consumed by Notifications.* (sibling milestone, not touched here). Field/default/range only.
+        float opacity_background = 0.0f;         // 0..1 - alpha of a full-screen dim veil Chrome.cpp draws behind the whole overlay (GetBackgroundDrawList(), spec §14's "whether we dim the game while the overlay is open" - left off by default, matching the spec's own "not a measured requirement" note). Distinct from background_darkening below: this is an ImGui-drawn flat tint, off unless the user opts in; background_darkening is a native-compositor multiply on the game layer itself.
+        float opacity_windows = 0.88f;           // 0.3..1 - panel window/popup surface alpha, spec §1 `surface` default (rgba(9,10,12,.88)).
+        float opacity_dock = 0.86f;              // 0.3..1 - dock container alpha, spec §8 default.
+        float opacity_notifications = 0.9f;      // 0.3..1 - consumed by Notifications.* (sibling milestone). Field/default/range only.
+        float background_blur = 0.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0, already wired - see SettingsOverlay.cpp's nOverlayBlurRadius). Consumed by SettingsOverlay.cpp (sibling milestone; that file is off-limits here, see this worker's task scope) - field/default/range only.
+        float background_darkening = 0.0f;       // 0..1 - a native-compositor dim multiply on the game layer, meant to sit alongside background_blur in whatever consumes FrameInfo_t (SettingsOverlay.cpp, sibling milestone). Field/default/range only - not yet consumed anywhere.
     };
 
     // Toast notification system (this fork's own addition, see

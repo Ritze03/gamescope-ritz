@@ -656,4 +656,43 @@ namespace gamescope::widgets
 		pDrawList->AddText( ImVec2( flTextX, pos.y + kPadY ), ImGui::GetColorU32( gamescope::palette::White( 0.34f ) ), pszText );
 		ImGui::PopFont();
 	}
+
+	bool BeginGroupBlock( const char *pszId, bool bActive )
+	{
+		// Spec §6: fill white@2.2% (active: 3.2%), border white@6% (active:
+		// 7%), 12px padding, 10px row gap, square corners.
+		ImGui::PushStyleColor( ImGuiCol_ChildBg, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.032f : 0.022f ) ) );
+		ImGui::PushStyleColor( ImGuiCol_Border, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.07f : 0.06f ) ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 0.0f );
+		ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 1.0f );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 12.0f, 12.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 8.0f, 10.0f ) );
+
+		ImGui::PushID( pszId );
+		return ImGui::BeginChild( "##group", ImVec2( 0.0f, 0.0f ),
+			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
+	}
+
+	void EndGroupBlock( bool bActive )
+	{
+		ImGui::EndChild();
+		ImGui::PopID();
+		ImGui::PopStyleVar( 4 ); // ItemSpacing, WindowPadding, ChildBorderSize, ChildRounding
+		ImGui::PopStyleColor( 2 ); // Border, ChildBg
+
+		if ( bActive )
+		{
+			// 2px accent left edge replacing the left border -- spec §6's
+			// "featured/active group" treatment. Drawn over the just-closed
+			// child's own rect: GetItemRect*() reflects the child now that
+			// EndChild() has registered it as an item on the *parent*
+			// window, same trick BeginGroupBlock()'s caller-visible geometry
+			// relies on nowhere else -- this is the only place that needs it.
+			const ImVec2 mn = ImGui::GetItemRectMin();
+			const ImVec2 mx = ImGui::GetItemRectMax();
+			ImGui::GetWindowDrawList()->AddRectFilled( mn, ImVec2( mn.x + 2.0f, mx.y ),
+				ImGui::GetColorU32( gamescope::palette::Accent( 0.80f ) ) );
+		}
+	}
 }
