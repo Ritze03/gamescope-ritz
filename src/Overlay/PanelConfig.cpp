@@ -29,6 +29,8 @@
 #include "Config/ConfigManager.h"
 #include "Widgets.h"
 #include "Chrome.h"
+#include "Palette.h"
+#include "Fonts.h"
 
 #include "imgui.h"
 
@@ -57,6 +59,16 @@ namespace gamescope
 		// clicks, not a toast/notification queue.
 		std::string s_sStatus;
 
+		// ---- window-chrome overhaul: General tab (scale/opacity/effects) --
+		// Unlike the Per-Game tab's fields above, this DOES keep its own
+		// cached config::Settings -- see DrawGeneralTab()'s own comment for
+		// why these fields specifically can't reuse PanelDisplay/PanelShaders/
+		// PanelAudio's EnsureConfigLoaded()+ResolveEffective() pattern
+		// (overlay.* is global.json-only, never routed through the per-game
+		// session file).
+		bool s_bGeneralSettingsLoaded = false;
+		config::Settings s_GeneralSettings;
+
 		void RefreshLists()
 		{
 			s_ProfileNames = config::ListProfiles();
@@ -71,6 +83,67 @@ namespace gamescope
 				s_nSelectedProfile = s_ProfileNames.empty() ? -1 : 0;
 			if ( s_nSelectedCopyGame >= (int)s_OtherGameIds.size() )
 				s_nSelectedCopyGame = s_OtherGameIds.empty() ? -1 : 0;
+		}
+
+		// overlay.* is process-level/global.json-only (ConfigSchema.h's own
+		// comment on OverlaySettings) -- deliberately config::LoadGlobal(),
+		// never config::ResolveEffective(config::SessionAppId()) the way the
+		// Per-Game tab's own fields would: a per-game override file is
+		// always written with its `overlay` object omitted entirely
+		// (ConfigManager.cpp's SettingsToJson(), bIncludeOverlay=false for
+		// every per-game/profile write), so resolving through the current
+		// session's per-game file while an override is active would show
+		// (and, on the next edit, persist) compiled *defaults* here instead
+		// of the user's real General-tab preferences. Loaded once per
+		// process, matching every other panel's "cache locally, push on
+		// every edit" shape (PanelDisplay.cpp's EnsureConfigLoaded() is the
+		// canonical example) -- and unlike those panels, this one never
+		// needs a config::ConfigGeneration() reload check: profile-apply/
+		// override-toggle (PanelConfig's own Per-Game tab, the only thing
+		// that bumps that generation) never touch `overlay` at all
+		// (ConfigManager.h's ApplyProfile() doc comment), so nothing outside
+		// this tab itself can ever make s_GeneralSettings stale.
+		void EnsureGeneralSettingsLoaded()
+		{
+			if ( s_bGeneralSettingsLoaded )
+				return;
+			s_bGeneralSettingsLoaded = true;
+			s_GeneralSettings = config::LoadGlobal();
+		}
+
+		// Pushes the fields this worker's own Chrome.cpp/Widgets.cpp read
+		// live (dock/display scale, window/dock/background opacity) into
+		// gamescope::palette::g_LiveTheme so the change is visible the very
+		// next frame -- the task's own "must take effect live, not on
+		// restart" requirement. notification_scale/opacity_notifications/
+		// background_blur/background_darkening have no such push: they're
+		// consumed by sibling milestones' files (Notifications.*,
+		// SettingsOverlay.cpp) this worker doesn't touch -- see each field's
+		// own comment in ConfigSchema.h. Persisting the value here (below)
+		// still happens for all nine either way, so a sibling that reads
+		// config::LoadGlobal() itself already sees the up to date value even
+		// before it's wired to consume it live.
+		void PushLiveTheme()
+		{
+			auto &live = gamescope::palette::g_LiveTheme;
+			const auto &o = s_GeneralSettings.overlay;
+			live.flDockScale = o.dock_scale;
+			live.flDisplayScale = o.display_scale;
+			live.flWindowAlpha = o.opacity_windows;
+			live.flDockAlpha = o.opacity_dock;
+			live.flBackgroundVeilAlpha = o.opacity_background;
+			ImGui::GetIO().FontGlobalScale = o.display_scale;
+		}
+
+		// overlay.* is process-level, never per-game/profile-routed (see
+		// EnsureGeneralSettingsLoaded()'s comment) -- so this always writes
+		// straight to global.json, unlike every other panel's QueueSave(),
+		// which goes through config::EnqueueRoutedWrite() to respect
+		// "Override Global Config".
+		void QueueGeneralSave()
+		{
+			PushLiveTheme();
+			config::EnqueueGlobalWrite( s_GeneralSettings );
 		}
 
 		void EnsureInitialized()
@@ -328,28 +401,73 @@ namespace gamescope
 			}
 		}
 
-		// General settings for gamescope-ritz itself. Deliberately thin:
-		// the task brief's only named General-section setting is the
-		// Lossless.dll path, and that's explicitly out of scope (LSFG-VK
-		// was cut from this roadmap, DECISIONS.md #1); config-system.md's
-		// own open question 5 turned up nothing else in the source pass
-		// either. Rather than invent settings the spec doesn't ask for,
-		// this tab is an honest placeholder plus one genuinely useful piece
-		// of read-only info (where the config files actually live, for
-		// anyone hand-editing/backing them up).
+		// One scale/opacity/effect slider, wired the same way every time:
+		// widgets::SliderFloat edits the cached field directly, then
+		// QueueGeneralSave() pushes it live (this worker's own fields) and
+		// persists the whole cached struct to global.json.
+		void DrawLiveFloatSlider( const char *pszLabel, float *pflValue, float flMin, float flMax, const char *pszFormat = "%.2f" )
+		{
+			if ( widgets::SliderFloat( pszLabel, pflValue, flMin, flMax, pszFormat ) )
+				QueueGeneralSave();
+		}
+
+		// General settings for gamescope-ritz itself -- window-chrome
+		// overhaul's own General-tab scale/opacity/effect controls
+		// (dock/display/notification scale, background/windows/dock/
+		// notifications opacity, background blur/darkening), grouped into
+		// spec §6 group blocks (this worker's own Widgets.h addition -- see
+		// that header's BeginGroupBlock() comment; this is the group-block
+		// API's first real caller). Every slider here takes effect on the
+		// very next frame (QueueGeneralSave() -> PushLiveTheme()) -- see
+		// that function's comment for which fields this worker's own
+		// Chrome.cpp/Widgets.cpp consume directly vs. which are field-only
+		// definitions for a sibling milestone to consume (Notifications.*,
+		// SettingsOverlay.cpp).
 		void DrawGeneralTab()
 		{
-			ImGui::TextUnformatted( "gamescope-ritz" );
+			EnsureGeneralSettingsLoaded();
+			auto &o = s_GeneralSettings.overlay;
+
+			if ( widgets::BeginGroupBlock( "##scale" ) )
+			{
+				ImGui::TextUnformatted( "UI Scale" );
+				DrawLiveFloatSlider( "Dock", &o.dock_scale, 0.85f, 1.5f );
+				DrawLiveFloatSlider( "Display (overall UI)", &o.display_scale, 0.8f, 1.4f );
+				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+				ImGui::TextDisabled( "Display scale resizes text only (FontGlobalScale) -- widget/window"
+					" geometry stays spec-exact, so very large values can overflow fixed-size controls." );
+				ImGui::PopFont();
+				DrawLiveFloatSlider( "Notifications", &o.notification_scale, 0.6f, 1.6f );
+			}
+			widgets::EndGroupBlock();
+
+			if ( widgets::BeginGroupBlock( "##opacity" ) )
+			{
+				ImGui::TextUnformatted( "Transparency" );
+				DrawLiveFloatSlider( "Background veil", &o.opacity_background, 0.0f, 1.0f );
+				DrawLiveFloatSlider( "Windows", &o.opacity_windows, 0.3f, 1.0f );
+				DrawLiveFloatSlider( "Dock", &o.opacity_dock, 0.3f, 1.0f );
+				DrawLiveFloatSlider( "Notifications", &o.opacity_notifications, 0.3f, 1.0f );
+			}
+			widgets::EndGroupBlock();
+
+			if ( widgets::BeginGroupBlock( "##effects" ) )
+			{
+				ImGui::TextUnformatted( "Background Effects" );
+				DrawLiveFloatSlider( "Blur", &o.background_blur, 0.0f, 1.0f );
+				DrawLiveFloatSlider( "Darkening", &o.background_darkening, 0.0f, 1.0f );
+				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+				ImGui::TextDisabled( "Native compositor pass -- drives FrameInfo_t::blurRadius / the game-layer dim multiply." );
+				ImGui::PopFont();
+			}
+			widgets::EndGroupBlock();
+
 			ImGui::Separator();
 			ImGui::TextUnformatted( "Config directory:" );
 			ImGui::TextWrapped( "%s", config::ConfigRoot().c_str() );
-			ImGui::Spacing();
 			ImGui::TextDisabled(
 				"Lossless.dll path (LSFG-VK) is out of scope for this roadmap -- "
 				"LSFG-VK integration was cut (see DECISIONS.md #1)." );
-			ImGui::TextDisabled(
-				"No other gamescope-ritz-wide settings exist yet -- see this file's "
-				"comment before adding one that isn't asked for by the spec." );
 		}
 	}
 

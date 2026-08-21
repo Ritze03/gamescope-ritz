@@ -185,7 +185,20 @@ namespace gamescope::config
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
+            {
                 s.overlay.fade_ms = JGetOptInt( *pOverlay, "fade_ms" );
+
+                // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
+                s.overlay.dock_scale = JGetFloat( *pOverlay, "dock_scale", s.overlay.dock_scale );
+                s.overlay.display_scale = JGetFloat( *pOverlay, "display_scale", s.overlay.display_scale );
+                s.overlay.notification_scale = JGetFloat( *pOverlay, "notification_scale", s.overlay.notification_scale );
+                s.overlay.opacity_background = JGetFloat( *pOverlay, "opacity_background", s.overlay.opacity_background );
+                s.overlay.opacity_windows = JGetFloat( *pOverlay, "opacity_windows", s.overlay.opacity_windows );
+                s.overlay.opacity_dock = JGetFloat( *pOverlay, "opacity_dock", s.overlay.opacity_dock );
+                s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
+                s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
+                s.overlay.background_darkening = JGetFloat( *pOverlay, "background_darkening", s.overlay.background_darkening );
+            }
 
             return s;
         }
@@ -250,6 +263,18 @@ namespace gamescope::config
                 jOverlay[ "fade_ms" ] = s.overlay.fade_ms.has_value()
                     ? nlohmann::json( *s.overlay.fade_ms )
                     : nlohmann::json( nullptr );
+
+                // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
+                jOverlay[ "dock_scale" ] = s.overlay.dock_scale;
+                jOverlay[ "display_scale" ] = s.overlay.display_scale;
+                jOverlay[ "notification_scale" ] = s.overlay.notification_scale;
+                jOverlay[ "opacity_background" ] = s.overlay.opacity_background;
+                jOverlay[ "opacity_windows" ] = s.overlay.opacity_windows;
+                jOverlay[ "opacity_dock" ] = s.overlay.opacity_dock;
+                jOverlay[ "opacity_notifications" ] = s.overlay.opacity_notifications;
+                jOverlay[ "background_blur" ] = s.overlay.background_blur;
+                jOverlay[ "background_darkening" ] = s.overlay.background_darkening;
+
                 j[ "overlay" ] = std::move( jOverlay );
             }
 
