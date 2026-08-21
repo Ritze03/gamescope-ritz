@@ -46,6 +46,7 @@
 #include "Overlay/PanelAudio.h"
 #include "Overlay/PanelConfig.h"
 #include "Overlay/Fonts.h"
+#include "Overlay/Widgets.h"
 
 #include <algorithm>
 #include <atomic>
@@ -150,70 +151,6 @@ namespace gamescope
 
 	static uint64_t s_ulLastFrameTimeNanos = 0;
 
-	// Applies the "glass instrument" palette from ui-design-guide.md: flat/
-	// square corners, 1px hairline borders, cyan accent, near-black
-	// translucent surfaces. The IBM Plex Sans/Mono typography system itself
-	// (M8 part 1, issue #13) is built separately -- see gamescope::fonts::Load()
-	// below, called once the ImGui context exists.
-	static void ApplyDesignGuideStyle()
-	{
-		ImGuiStyle &style = ImGui::GetStyle();
-
-		style.WindowRounding = 0.0f;
-		style.ChildRounding = 0.0f;
-		style.FrameRounding = 0.0f;
-		style.PopupRounding = 0.0f;
-		style.ScrollbarRounding = 0.0f;
-		style.GrabRounding = 0.0f;
-		style.TabRounding = 0.0f;
-
-		style.WindowBorderSize = 1.0f;
-		style.ChildBorderSize = 1.0f;
-		style.FrameBorderSize = 1.0f;
-		style.PopupBorderSize = 1.0f;
-
-		style.WindowPadding = ImVec2( 12.0f, 10.0f );
-		style.FramePadding = ImVec2( 8.0f, 4.0f );
-		style.ItemSpacing = ImVec2( 8.0f, 6.0f );
-
-		const ImVec4 accent     = ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 1.00f );
-		const ImVec4 accentSoft = ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.22f );
-		const ImVec4 surface    = ImVec4( 0x09 / 255.0f, 0x0a / 255.0f, 0x0c / 255.0f, 0.88f );
-		const ImVec4 raised     = ImVec4( 1.00f, 1.00f, 1.00f, 0.05f );
-		const ImVec4 hairline   = ImVec4( 1.00f, 1.00f, 1.00f, 0.10f );
-		const ImVec4 text       = ImVec4( 0.92f, 0.94f, 0.95f, 1.00f );
-		const ImVec4 textDim    = ImVec4( 0.92f, 0.94f, 0.95f, 0.50f );
-		const ImVec4 transparent = ImVec4( 0.0f, 0.0f, 0.0f, 0.0f );
-
-		ImVec4 *colors = style.Colors;
-		colors[ImGuiCol_Text]             = text;
-		colors[ImGuiCol_TextDisabled]     = textDim;
-		colors[ImGuiCol_WindowBg]         = surface;
-		colors[ImGuiCol_ChildBg]          = transparent;
-		colors[ImGuiCol_PopupBg]          = surface;
-		colors[ImGuiCol_Border]           = hairline;
-		colors[ImGuiCol_BorderShadow]     = transparent;
-		colors[ImGuiCol_FrameBg]          = raised;
-		colors[ImGuiCol_FrameBgHovered]   = accentSoft;
-		colors[ImGuiCol_FrameBgActive]    = accentSoft;
-		colors[ImGuiCol_TitleBg]          = raised;
-		colors[ImGuiCol_TitleBgActive]    = raised;
-		colors[ImGuiCol_TitleBgCollapsed] = raised;
-		colors[ImGuiCol_CheckMark]        = accent;
-		colors[ImGuiCol_SliderGrab]       = accent;
-		colors[ImGuiCol_SliderGrabActive] = accent;
-		colors[ImGuiCol_Button]           = raised;
-		colors[ImGuiCol_ButtonHovered]    = accentSoft;
-		colors[ImGuiCol_ButtonActive]     = accent;
-		colors[ImGuiCol_Header]           = accentSoft;
-		colors[ImGuiCol_HeaderHovered]    = accentSoft;
-		colors[ImGuiCol_HeaderActive]     = accent;
-		colors[ImGuiCol_Separator]        = hairline;
-		colors[ImGuiCol_ResizeGrip]       = accentSoft;
-		colors[ImGuiCol_ResizeGripHovered]= accent;
-		colors[ImGuiCol_ResizeGripActive] = accent;
-	}
-
 	static void EnsureImguiInit()
 	{
 		if ( s_bImguiInitialized )
@@ -238,7 +175,13 @@ namespace gamescope
 		// cursor into the offscreen texture instead so the pointer is
 		// visible at all while the overlay owns it.
 		io.MouseDrawCursor = true;
-		ApplyDesignGuideStyle();
+		// M8 part 2 (issue #14): applies the "glass instrument" ImGuiStyle
+		// palette/metrics from ui-design-guide.md's Component styling
+		// section -- see Overlay/Widgets.h/.cpp for the full styling (this
+		// used to be a function local to this file; moved out because #14
+		// owns widget-level styling, see Widgets.h's file comment for the
+		// scope boundary with #15, which owns window/panel chrome instead).
+		gamescope::widgets::ApplyStyle();
 
 		// M8 part 1 (issue #13): builds the IBM Plex font atlas for this
 		// context. Must happen before ImGui_ImplVulkan_Init() below -- the
@@ -384,7 +327,7 @@ namespace gamescope
 		ImGui::SliderFloat( "Dummy slider", &flDummySlider, 0.0f, 1.0f );
 
 		static bool bDummyToggle = false;
-		ImGui::Checkbox( "Dummy toggle", &bDummyToggle );
+		gamescope::widgets::Toggle( "Dummy toggle", &bDummyToggle ); // M8 part 2 (issue #14)
 
 		ImGui::Spacing();
 		// Meta role (Mono 400, per the design guide -- hints/disabled text
