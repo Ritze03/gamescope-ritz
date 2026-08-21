@@ -4095,11 +4095,26 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	if (!frameInfo->applyOutputColorMgmt)
 		outputTF = EOTF_Count; //Disable blending stuff.
 
-	g_pLastReshadeEffect = nullptr;
 	if (frameInfo->layers.get( 0 ).tex)
 		g_eLastBaseLayerColorspace.store( frameInfo->layers.get( 0 ).colorspace, std::memory_order_relaxed );
 
-	if (!g_reshade_effect.empty())
+	if (g_reshade_effect.empty())
+	{
+		g_pLastReshadeEffect = nullptr;
+		g_reshadeManager.clear();
+	}
+	// Issue #20 fix: skip re-applying ReShade to a base layer that was
+	// already ReShaded by an earlier vulkan_composite() call this same
+	// frame (steamcompmgr's preemptive-upscale path -- see the flag's
+	// comment in rendervulkan.hpp). Re-running it here would double-apply
+	// the effect on already-upscaled, output-resolution content, and would
+	// build a ReshadeEffectKey with different buffer dimensions than the
+	// first call's, defeating ReshadeEffectManager's single-entry pipeline
+	// cache and forcing a full FX recompile on literally every composite
+	// call. Deliberately leave g_pLastReshadeEffect/g_reshadeManager's
+	// cached pipeline untouched here -- they still reflect the pipeline
+	// the earlier call in this frame already built and ran.
+	else if (!frameInfo->bBaseLayerReshaded)
 	{
 		if (frameInfo->layers.get( 0 ).tex)
 		{
@@ -4122,10 +4137,6 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 				g_device.wait(seq);
 			}
 		}
-	}
-	else
-	{
-		g_reshadeManager.clear();
 	}
 
 	gamescope::Rc<CVulkanTexture> compositeImage;
