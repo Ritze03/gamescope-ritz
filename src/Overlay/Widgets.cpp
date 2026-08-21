@@ -12,6 +12,7 @@
 // literally by reusing the original's own behavior code rather than
 // reimplementing it.
 #include "Widgets.h"
+#include "Fonts.h"
 
 // ImVec2/ImRect operator+ etc. aren't exported by imgui.h by default (to
 // avoid clashing with a host app's own math types) -- every one of ImGui's
@@ -22,6 +23,8 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
 #include "imgui_internal.h"
+
+#include <cstdio>
 
 namespace gamescope::widgets
 {
@@ -298,5 +301,120 @@ namespace gamescope::widgets
 					pDrawList->AddRectFilled( markMin, markMax, markFill );
 				}
 			} );
+	}
+
+	// Shared by SliderFloat()/SliderInt(): draws `pszValueText` centered
+	// over whatever rect the just-drawn stock slider item occupies, in
+	// Style::Value + accent -- see Widgets.h's comment for why this can't
+	// just be ImGuiStyle/PushFont on the stock widget itself.
+	namespace
+	{
+		void OverlaySliderValueText( const char *pszValueText )
+		{
+			const ImVec2 rectMin = ImGui::GetItemRectMin();
+			const ImVec2 rectMax = ImGui::GetItemRectMax();
+
+			ImGui::PushFont( fonts::Get( fonts::Style::Value ) );
+			const ImVec2 textSize = ImGui::CalcTextSize( pszValueText );
+			const ImVec2 pos(
+				( rectMin.x + rectMax.x ) * 0.5f - textSize.x * 0.5f,
+				( rectMin.y + rectMax.y ) * 0.5f - textSize.y * 0.5f );
+			// Accent, per the guide's "Value readout ... usually accent-colored" --
+			// same sRGB conversion as Widgets.cpp's ApplyStyle()/Chrome.cpp's
+			// kAccentU32.
+			const ImU32 accent = ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 1.00f ) );
+			ImGui::GetWindowDrawList()->AddText( pos, accent, pszValueText );
+			ImGui::PopFont();
+		}
+	}
+
+	bool SliderFloat( const char *pszLabel, float *pflValue, float flMin, float flMax, const char *pszValueFormat, int nFlags )
+	{
+		const bool bChanged = ImGui::SliderFloat( pszLabel, pflValue, flMin, flMax, "", (ImGuiSliderFlags)nFlags );
+
+		char szValue[32];
+		std::snprintf( szValue, sizeof( szValue ), pszValueFormat, (double)*pflValue );
+		OverlaySliderValueText( szValue );
+
+		return bChanged;
+	}
+
+	bool SliderInt( const char *pszLabel, int *pnValue, int nMin, int nMax, const char *pszValueFormat, int nFlags )
+	{
+		const bool bChanged = ImGui::SliderInt( pszLabel, pnValue, nMin, nMax, "", (ImGuiSliderFlags)nFlags );
+
+		char szValue[32];
+		std::snprintf( szValue, sizeof( szValue ), pszValueFormat, *pnValue );
+		OverlaySliderValueText( szValue );
+
+		return bChanged;
+	}
+
+	bool SegmentedControl( const char *pszId, int *pnSelected, const char *const *pszLabels, int nCount )
+	{
+		if ( nCount <= 0 )
+			return false;
+
+		ImGui::PushID( pszId );
+
+		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
+		ImDrawList *pDrawList = pWindow->DrawList;
+
+		constexpr float kGap = 3.0f;
+		constexpr float kPadY = 6.0f;
+		const float flAvailWidth = ImGui::GetContentRegionAvail().x;
+		const float flSegWidth = ( flAvailWidth - kGap * ( nCount - 1 ) ) / nCount;
+		const float flSegHeight = ImGui::GetFontSize() + kPadY * 2.0f;
+
+		bool bChanged = false;
+
+		for ( int i = 0; i < nCount; i++ )
+		{
+			if ( i > 0 )
+				ImGui::SameLine( 0.0f, kGap );
+
+			ImGui::PushID( i );
+			const ImVec2 pos = ImGui::GetCursorScreenPos();
+			const ImVec2 size( flSegWidth, flSegHeight );
+			const bool bClicked = ImGui::InvisibleButton( "##seg", size );
+			const bool bHovered = ImGui::IsItemHovered();
+			const bool bActive = ( i == *pnSelected );
+
+			if ( bClicked && !bActive )
+			{
+				*pnSelected = i;
+				bChanged = true;
+			}
+
+			// Inactive: rgba(255,255,255,.04-.045) fill, rgba(255,255,255,.07-.08)
+			// border, Mono 500 ~45-50% white. Active: accent fill 20-24% alpha,
+			// accent border ~60% alpha, Mono 600 bright accent -- per the guide's
+			// Tabs / segmented controls section.
+			const ImU32 fill = bActive
+				? ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.22f ) )
+				: ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, bHovered ? 0.07f : 0.045f ) );
+			const ImU32 border = bActive
+				? ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.60f ) )
+				: ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, bHovered ? 0.12f : 0.08f ) );
+			const ImU32 text = bActive
+				? ImGui::GetColorU32( ImVec4( 0xcf / 255.0f, 0xef / 255.0f, 0xf7 / 255.0f, 1.00f ) )
+				: ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, 0.48f ) );
+
+			pDrawList->AddRectFilled( pos, pos + size, fill ); // 0px radius -- controls stay flat/square
+			pDrawList->AddRect( pos, pos + size, border );
+
+			ImGui::PushFont( fonts::Get( bActive ? fonts::Style::Value : fonts::Style::Meta ) );
+			const ImVec2 textSize = ImGui::CalcTextSize( pszLabels[i] );
+			const ImVec2 textPos(
+				pos.x + ( size.x - textSize.x ) * 0.5f,
+				pos.y + ( size.y - textSize.y ) * 0.5f );
+			pDrawList->AddText( textPos, text, pszLabels[i] );
+			ImGui::PopFont();
+
+			ImGui::PopID();
+		}
+
+		ImGui::PopID();
+		return bChanged;
 	}
 }

@@ -218,13 +218,19 @@ namespace gamescope
 		};
 
 		ImGui::TextUnformatted( "Filter" );
-		for ( size_t i = 0; i < std::size( kFilters ); i++ )
+		// Design guide's "Tabs / segmented controls" section names "filter
+		// type" as its own example of this component -- widgets::SegmentedControl
+		// replaces the stock (inherently circular, unthemeable-to-flat)
+		// ImGui::RadioButton row this used to be.
 		{
-			if ( i > 0 )
-				ImGui::SameLine();
-			const bool bSelected = ( g_wantedUpscaleFilter == kFilters[i].eValue );
-			if ( ImGui::RadioButton( kFilters[i].pszLabel, bSelected ) )
-				SetFilter( kFilters[i].eValue );
+			static const char *const kLabels[] = { "Linear", "Nearest", "FSR", "NIS", "Pixel" };
+			int nSelected = 0;
+			for ( size_t i = 0; i < std::size( kFilters ); i++ )
+				if ( g_wantedUpscaleFilter == kFilters[i].eValue )
+					nSelected = (int)i;
+
+			if ( widgets::SegmentedControl( "##filter", &nSelected, kLabels, (int)std::size( kLabels ) ) )
+				SetFilter( kFilters[nSelected].eValue );
 		}
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 		ImGui::TextDisabled( "Pixel: sharp only when the scale factor is a whole number." );
@@ -242,13 +248,15 @@ namespace gamescope
 		};
 
 		ImGui::TextUnformatted( "Scaler" );
-		for ( size_t i = 0; i < std::size( kScalers ); i++ )
 		{
-			if ( i > 0 )
-				ImGui::SameLine();
-			const bool bSelected = ( g_wantedUpscaleScaler == kScalers[i].eValue );
-			if ( ImGui::RadioButton( kScalers[i].pszLabel, bSelected ) )
-				SetScaler( kScalers[i].eValue );
+			static const char *const kLabels[] = { "Auto", "Integer", "Fit", "Fill", "Stretch" };
+			int nSelected = 0;
+			for ( size_t i = 0; i < std::size( kScalers ); i++ )
+				if ( g_wantedUpscaleScaler == kScalers[i].eValue )
+					nSelected = (int)i;
+
+			if ( widgets::SegmentedControl( "##scaler", &nSelected, kLabels, (int)std::size( kLabels ) ) )
+				SetScaler( kScalers[nSelected].eValue );
 		}
 	}
 
@@ -266,7 +274,9 @@ namespace gamescope
 		if ( !bApplies )
 			ImGui::BeginDisabled();
 
-		if ( ImGui::SliderInt( "Sharpness", &nUiPercent, 0, 100, "%d%% sharper" ) )
+		// widgets::SliderInt draws the numeric readout in Mono/accent per the
+		// design guide's numerals-are-always-Mono rule -- see Widgets.h.
+		if ( widgets::SliderInt( "Sharpness", &nUiPercent, 0, 100, "%d%% sharper" ) )
 			SetSharpnessUiPercent( eWanted, nUiPercent );
 
 		if ( !bApplies )
