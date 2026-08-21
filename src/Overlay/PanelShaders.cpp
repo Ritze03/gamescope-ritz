@@ -204,7 +204,9 @@ namespace gamescope
 		if ( !v.enabled )
 			ImGui::BeginDisabled();
 
-		if ( ImGui::SliderFloat( "Strength##vibrancy", &v.strength, -1.0f, 1.0f, "%.2f" ) )
+		// widgets::SliderFloat draws the numeric readout in Mono/accent per
+		// the design guide's numerals-are-always-Mono rule -- see Widgets.h.
+		if ( widgets::SliderFloat( "Strength##vibrancy", &v.strength, -1.0f, 1.0f, "%.2f" ) )
 		{
 			SetRuntimeUniformFloat( "vibrancy_strength", v.strength );
 			QueueSave();
@@ -240,7 +242,7 @@ namespace gamescope
 		if ( !s.enabled )
 			ImGui::BeginDisabled();
 
-		if ( ImGui::SliderFloat( "Strength##presharpen", &( *s.strength ), 0.0f, 2.0f, "%.2f" ) )
+		if ( widgets::SliderFloat( "Strength##presharpen", &( *s.strength ), 0.0f, 2.0f, "%.2f" ) )
 		{
 			SetRuntimeUniformFloat( "pre_sharpen_strength", *s.strength );
 			QueueSave();

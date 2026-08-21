@@ -65,20 +65,26 @@ namespace gamescope::chrome
 	// -- callers keep whatever layout position they already tuned, this only
 	// changes *whether* and *how* the window gets opened, not where.
 	//
-	// Draws this milestone's window chrome once Begin() succeeds: the
-	// design guide's Title font on the native title bar text (unchanged from
-	// M8 part 1), a slim icon+status-dot sub-header row *inside* the content
-	// area just under the native title bar (see Chrome.cpp's file comment
-	// for why this sits next to, not on top of, ImGui's own title bar), and
-	// a 2px accent left-edge stripe on the window frame while it's the
-	// focused window -- the design guide's "active/live group" affordance,
-	// applied at panel-window granularity since this design's top-level nav
-	// is free-floating windows, not a docked tab strip (SPEC.md's UI
-	// structure). Clicking the native title-bar close button closes the
-	// panel the same way un-toggling its dock button does (both write the
-	// same IsPanelOpen() state) -- SPEC's own scope note about the "18x18
-	// bare glyph" close/collapse buttons is deliberately not reimplemented
-	// per-widget here (ponytail, see Chrome.cpp).
+	// Draws this milestone's window chrome once Begin() succeeds: 4px window
+	// corner radius (design guide's "window corner radius 3-4px" -- controls
+	// stay flat/0px, that's Widgets.cpp's job, unaffected by this
+	// window-scoped push/pop), the design guide's Title font on the native
+	// title bar text (unchanged from M8 part 1), a slim icon+status-dot
+	// sub-header row *inside* the content area just under the native title
+	// bar (see Chrome.cpp's file comment for why this sits next to, not on
+	// top of, ImGui's own title bar), a 2px accent left-edge stripe on the
+	// window frame while it's the focused window -- the design guide's
+	// "active/live group" affordance, applied at panel-window granularity
+	// since this design's top-level nav is free-floating windows, not a
+	// docked tab strip (SPEC.md's UI structure) -- and the whole window's
+	// border recoloring to accent @ 42% alpha while focused (the guide's
+	// separate, chrome-level "Focused window" rule: "accent border at ~42%
+	// opacity ... the *only* focus indicator"). Clicking the native
+	// title-bar close button closes the panel the same way un-toggling its
+	// dock button does (both write the same IsPanelOpen() state) -- SPEC's
+	// own scope note about the "18x18 bare glyph" close/collapse buttons is
+	// deliberately not reimplemented per-widget here (ponytail, see
+	// Chrome.cpp).
 	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 defaultPos, ImVec2 defaultSize );
 	void EndPanelWindow();
 

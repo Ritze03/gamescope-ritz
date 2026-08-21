@@ -58,4 +58,37 @@ namespace gamescope::widgets
 	// which names exactly that control ("FPS HUD's row toggles: 11x11
 	// checkbox + label") as the checkbox-style repeating row pattern.
 	bool Checkbox( const char *pszLabel, bool *pbValue );
+
+	// Design guide's typography "hard rule": never mix a number into a sans
+	// run -- every numeric readout is Plex Mono, tabular, and (per the
+	// guide's Sliders section) usually accent-colored. Stock
+	// ImGui::SliderFloat/SliderInt bake their live value into the *same*
+	// draw call as the trailing label, in whatever font is active for the
+	// whole widget (see Fonts.h's Style::Value comment) -- there is no way
+	// to give the label Sans and the value Mono from ImGuiStyle/PushFont
+	// alone. These wrap the stock slider with format="" (suppressing its
+	// own in-box text) and redraw just the numeric value on top, centered
+	// in the same box, in Style::Value + accent -- same geometry/behavior
+	// as ImGui::SliderFloat/SliderInt (drag, click, keyboard, scroll all
+	// still come from the stock widget), only the value's font/color differ.
+	// pszValueFormat formats the value alone (e.g. "%.2f", "%d%%"), not the
+	// whole slider line -- unlike ImGui's own `format`, which historically
+	// also had to contain the widget's %-spec placement quirks.
+	// nFlags forwards straight to the underlying ImGui::SliderFloat/SliderInt
+	// (e.g. ImGuiSliderFlags_AlwaysClamp) -- typed int here so this header
+	// doesn't need to include imgui.h, same reasoning as DrawIcon()'s ImU32
+	// below.
+	bool SliderFloat( const char *pszLabel, float *pflValue, float flMin, float flMax, const char *pszValueFormat = "%.2f", int nFlags = 0 );
+	bool SliderInt( const char *pszLabel, int *pnValue, int nMin, int nMax, const char *pszValueFormat = "%d", int nFlags = 0 );
+
+	// Design guide's "Tabs / segmented controls" component -- explicitly
+	// named for "mode pickers like filter type" (ui-design-guide.md), which
+	// is exactly PanelDisplay's Filter/Scaler rows. Replaces stock
+	// ImGui::RadioButton (an inherently circular widget with no flat/square
+	// equivalent reachable via ImGuiStyle) with a row of equal-width flat
+	// segments: hairline border + dim fill + Mono 500 dim text when
+	// inactive, accent fill/border + Mono 600 bright-accent text when
+	// active. `nCount` options starting at pszLabels[0]; returns true (and
+	// updates *pnSelected) the frame a different segment is clicked.
+	bool SegmentedControl( const char *pszId, int *pnSelected, const char *const *pszLabels, int nCount );
 }

@@ -59,7 +59,9 @@ namespace gamescope
 		// 0..1.5 display-fraction, so convert only at this edge -- no
 		// curve is applied here, that already happened inside Volume.cpp.
 		int nUiPercent = (int)std::lround( state.flVolume * 100.0f );
-		if ( ImGui::SliderInt( "Volume", &nUiPercent, 0, 150, "%d%%",
+		// widgets::SliderInt draws the numeric readout in Mono/accent per the
+		// design guide's numerals-are-always-Mono rule -- see Widgets.h.
+		if ( widgets::SliderInt( "Volume", &nUiPercent, 0, 150, "%d%%",
 			ImGuiSliderFlags_AlwaysClamp ) )
 		{
 			Audio::RequestVolume( nUiPercent / 100.0f );
