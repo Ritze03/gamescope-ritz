@@ -37,6 +37,7 @@
 #include "log.hpp"
 #include "Utils/Process.h"
 #include "SettingsOverlay.h"
+#include "Overlay/FpsDisplay.h"
 
 #include "cs_composite_blit.h"
 #include "cs_composite_blur.h"
@@ -4021,6 +4022,7 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo, 
 	// while the settings overlay is up is a second consumer of its texture,
 	// on its own separate compute submission.
 	gamescope::SettingsOverlay_WaitForRender( cmdBuffer.get() );
+	gamescope::FpsDisplay_WaitForRender( cmdBuffer.get() );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);
@@ -4126,6 +4128,7 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	// its timeline semaphore before it can be recorded to sample that texture,
 	// so vulkan_composite() never reads a torn/still-in-progress overlay frame.
 	gamescope::SettingsOverlay_WaitForRender( cmdBuffer.get() );
+	gamescope::FpsDisplay_WaitForRender( cmdBuffer.get() );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);

@@ -41,6 +41,7 @@
 
 #include "SettingsOverlay.h"
 #include "Overlay/PanelDisplay.h"
+#include "Overlay/FpsDisplay.h"
 
 #include <algorithm>
 #include <memory>
@@ -315,6 +316,8 @@ namespace gamescope
 			"Toggle: `toggle_settings_overlay` or `settings_overlay_visible 0|1`." );
 		ImGui::TextDisabled(
 			"Input capture lands in Milestone 2 -- these widgets aren't clickable yet." );
+
+		gamescope::FpsDisplay_DrawSettingsPanel(); // M4 (see FpsDisplay.h)
 
 		ImGui::End();
 	}

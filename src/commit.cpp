@@ -1,3 +1,5 @@
+#include <atomic>
+
 #include "wlserver.hpp"
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
@@ -6,6 +8,19 @@
 #include "gpuvis_trace_utils.h"
 
 extern gamescope::CAsyncWaiter<gamescope::Rc<commit_t>> g_ImageWaiter;
+
+// M4 FPS display (superdoc/planning/SPEC.md Feature 3, DECISIONS.md #16/#17):
+// the game's own frametime, mirroring what feeds mangoapp's app_frametime_ns
+// below -- but read from here instead of mangoapp's own mangoapp_msg_v1,
+// because that struct is a single shared message-queue payload two
+// independent call sites overwrite (this one, and mangoapp_output_update()'s
+// visible-frametime path), so app_frametime_ns can transiently read back as
+// mangoapp's own "not available" sentinel depending on write order. This
+// global is written only here, so an in-process reader never sees that race.
+// Atomic since Signal() can run off the steamcompmgr thread (g_ImageWaiter's
+// own waiter thread, see AddWaitable() below) -- there is no other
+// synchronization on this value.
+std::atomic<uint64_t> g_ulLastAppFrametimeNs{ 0 };
 
 commit_t::commit_t()
 {
@@ -75,6 +90,7 @@ void commit_t::Signal()
         static uint64_t lastFrameTime = now;
         frametime = now - lastFrameTime;
         lastFrameTime = now;
+        g_ulLastAppFrametimeNs.store( frametime, std::memory_order_relaxed );
     }
 
     // TODO: Move this so it's called in the main loop.
