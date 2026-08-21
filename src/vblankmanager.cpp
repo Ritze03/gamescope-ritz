@@ -95,12 +95,24 @@ namespace gamescope
 
 	VBlankScheduleTime CVBlankTimer::CalcNextWakeupTime( bool bPreemptive )
 	{
-		const GamescopeScreenType eScreenType = GetBackend()->GetScreenType();
+		// ponytail: GetBackend() can already be null here. The present-wait thread
+		// that drives MarkVBlank()/ArmNextVBlank() on the Vulkan-swapchain path
+		// (present_wait_thread_func, src/rendervulkan.cpp) is detached and keeps
+		// running until the process actually exits, even after steamcompmgr's
+		// shutdown path tears the backend down (IBackend::Set(nullptr),
+		// src/steamcompmgr.cpp) -- a pre-existing shutdown race, reproduced here
+		// independent of any Vulkan layer, that only bit reliably once something
+		// (e.g. a present-hooking layer) stretches out the shutdown window. Treat
+		// a torn-down backend the same way GetScreenType() already treats a
+		// connector-less one: an internal screen with no VRR, rather than
+		// dereferencing a null IBackend*.
+		IBackend *pBackend = GetBackend();
+		const GamescopeScreenType eScreenType = pBackend ? pBackend->GetScreenType() : GAMESCOPE_SCREEN_TYPE_INTERNAL;
 
 		const int nRefreshRate = GetRefresh();
 		const uint64_t ulRefreshInterval = mHzToRefreshCycle( nRefreshRate );
 
-		bool bVRR = GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive();
+		bool bVRR = pBackend && pBackend->GetCurrentConnector() && pBackend->GetCurrentConnector()->IsVRRActive();
 		uint64_t ulOffset = 0;
 		if ( !bVRR )
 		{
