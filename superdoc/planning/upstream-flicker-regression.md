@@ -1,5 +1,35 @@
 # Upstream flicker regression: bisection plan
 
+> ## 2026-08-21 — THE PREMISE OF THIS DOC IS PROBABLY WRONG. READ THIS FIRST.
+>
+> This plan rests on "pure upstream `fcc1341` flickers, packaged `3.16.24` does not, so
+> it is one of the 83 commits between them". **That comparison was confounded**: every
+> control we built is `buildtype=debug, optimization=0`; the packaged binary is an
+> optimised release build. Measured on DP-1 (1920x1080@280Hz, `--backend wayland`,
+> fullscreen, vkcube):
+>
+> | binary | source | build | measured fps | VRR actually engaged? |
+> |---|---|---|---|---|
+> | `../gamescope-upstream-3.16.24/build/src/gamescope` | 3.16.24 | debug `-O0` | **231.2** | yes -- below the 280Hz cap |
+> | `/usr/bin/gamescope` (CachyOS) | 3.16.24 | release | **281.6** | no -- pinned at the cap |
+>
+> Same source, same host, same client, same arguments. **Optimisation level alone moves
+> the frame rate across the 280Hz threshold**, and a panel only varies its refresh below
+> its maximum -- above it, it pins at max, which is fixed-refresh behaviour. So the
+> debug build exercises the VRR path and the packaged one does not.
+>
+> *Why:* if that is the whole story, the "stock is clean" comparison was measuring
+> **optimisation level, not source version**, the 83-commit bisection below is moot, and
+> the bug is a VRR-path issue present in every version. It also explains the
+> "flickers *sometimes*" that made this so hard: whether a run flickered depended on
+> whether it happened to dip below 280 fps.
+>
+> **Confirm before spending any more eyes-on-screen minutes on the bisection:**
+> `scripts/flicker-ab-test.sh upstream-3.16.24-debug --backend wayland` vs
+> `scripts/flicker-ab-test.sh packaged-3.16.24-release --backend wayland`.
+> If the debug build flickers, stop bisecting. See
+> `superdoc/planning/wayland-vrr-buffer-lifetime.md` for the instrumented findings.
+
 **2026-08-21.** Written after `superdoc/planning/flicker-ab-test-plan.md` fully cleared
 our own diff: **pure upstream `fcc1341`, built by us, flickers on DP-1 1920x1080@280Hz**,
 and the user's packaged `/usr/bin/gamescope` `3.16.24` does not. So the regression is one

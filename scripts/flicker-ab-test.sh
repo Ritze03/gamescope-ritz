@@ -33,6 +33,33 @@
 #                               is the cause this variant should *assert/abort*, not
 #                               flicker, giving an unambiguous signal instead of a
 #                               "watch and squint" one.
+# Optimisation-confound variants (THE PAIR THAT MATTERS -- run these two first).
+# Both are gamescope 3.16.24, the exact same source. The ONLY difference is the
+# optimisation level, and that alone decides whether VRR ever engages:
+#
+#     3.16.24 debug/-O0  (upstream-3.16.24-debug)     measured 231 fps  -> BELOW 280Hz
+#     3.16.24 release    (packaged-3.16.24-release)   measured 282 fps  -> AT the cap
+#
+# A panel only varies its refresh when the frame rate is BELOW its maximum. Above it,
+# the panel pins at max, which is fixed-refresh behaviour -- VRR is effectively off.
+# So the debug build exercises the VRR path and the release build does not, from
+# identical source. If the debug build flickers and the packaged one does not, then
+# "stock gamescope is clean" was measuring optimisation level, not source version, and
+# the 3.16.24 -> fcc1341 bisection above is moot.
+#   upstream-3.16.24-debug      upstream at tag 3.16.24 -- the user's exact packaged
+#                               version -- but built debug/-O0 to match every other
+#                               control here. One-time setup:
+#                                 git clone --recurse-submodules -b 3.16.24 \
+#                                   https://github.com/ValveSoftware/gamescope.git \
+#                                   ../gamescope-upstream-3.16.24
+#                                 cp subprojects/catch2.wrap ../gamescope-upstream-3.16.24/subprojects/
+#                                 meson setup ../gamescope-upstream-3.16.24/build \
+#                                   --buildtype=debug -Doptimization=0
+#                                 ninja -C ../gamescope-upstream-3.16.24/build src/gamescope
+#   packaged-3.16.24-release    the user's installed /usr/bin/gamescope 3.16.24 (a
+#                               CachyOS optimised release build) -- the same source as
+#                               the variant above, so the pair isolates optimisation.
+#
 #   upstream-wlroots020         upstream right after the wlroots 0.20 bump (fc6a965),
 #                               which also carries the earlier wlroots 0.19 bump and the
 #                               BufferMemo fix — brackets everything up to the final
@@ -83,6 +110,24 @@
 # scripts/overlay-test-harness.sh's RUN_PGID pattern) so it can never touch another
 # run's or another shell's processes.
 
+# RECORD THE FRAME RATE AND THE BUILD TYPE WITH EVERY RESULT.
+# Two hidden variables have already invalidated conclusions in this investigation, and
+# both looked like "it's intermittent":
+#   1. Frame rate. VRR only varies the refresh interval when the frame rate is BELOW
+#      the panel's maximum (280Hz on DP-1). An uncapped vkcube on this GPU sits at or
+#      above that, which pins the panel at max = fixed refresh = the VRR path is never
+#      exercised. A "clean" result from an uncapped run says nothing about this bug.
+#   2. Optimisation level. Every control built for this investigation is debug/-O0;
+#      the packaged /usr/bin/gamescope is an optimised release build. Measured, that
+#      difference alone moves vkcube from 231 fps to 282 fps -- i.e. across the 280Hz
+#      threshold, so it decides whether VRR engages at all. See the
+#      upstream-3.16.24-debug / packaged-3.16.24-release pair below.
+# A result without both numbers recorded cannot be interpreted.
+#
+# Backend note: the default below is "sdl", but the user's reported setup -- and the
+# code under suspicion (src/Backends/WaylandBackend.cpp) -- is the WAYLAND backend.
+# Pass --backend wayland to exercise it; --backend sdl does not go through that file.
+
 set -u -o pipefail
 
 export DISABLE_LSFG=1
@@ -95,6 +140,8 @@ UPSTREAM_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_BIN:-$REPO_ROOT/build-upstream-fcc134
 UPSTREAM_31625_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_31625_BIN:-$REPO_ROOT/../gamescope-upstream-3.16.25/build/src/gamescope}"
 UPSTREAM_PREBUFFERMEMO_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_PREBUFFERMEMO_BIN:-$REPO_ROOT/../gamescope-upstream-prebuffermemo/build/src/gamescope}"
 UPSTREAM_WLROOTS020_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_WLROOTS020_BIN:-$REPO_ROOT/../gamescope-upstream-wlroots020/build/src/gamescope}"
+UPSTREAM_31624_DEBUG_BIN="${GAMESCOPE_RITZ_AB_UPSTREAM_31624_DEBUG_BIN:-$REPO_ROOT/../gamescope-upstream-3.16.24/build/src/gamescope}"
+PACKAGED_BIN="${GAMESCOPE_RITZ_AB_PACKAGED_BIN:-/usr/bin/gamescope}"
 
 DO_VRR=1
 TARGET_OUTPUT="DP-1"
@@ -115,7 +162,7 @@ if [[ $# -eq 0 ]]; then usage; exit 1; fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --list)
-      echo "overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020"
+      echo "overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020 upstream-3.16.24-debug packaged-3.16.24-release"
       exit 0
       ;;
     -h|--help) usage; exit 0 ;;
@@ -131,7 +178,7 @@ while [[ $# -gt 0 ]]; do
     *) fail "unknown argument: $1 (see --help)" ;;
   esac
 done
-[[ -n "$VARIANT" ]] || fail "no variant given. One of: overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020 (see --help)"
+[[ -n "$VARIANT" ]] || fail "no variant given. One of: overlay-inert no-dynamic-rendering-ext no-convar-seed normal upstream upstream-3.16.25 upstream-prebuffermemo upstream-wlroots020 upstream-3.16.24-debug packaged-3.16.24-release (see --help)"
 
 # ---------- resolve binary + env for the chosen variant ----------
 GAMESCOPE_BIN=""
@@ -163,6 +210,12 @@ case "$VARIANT" in
     ;;
   upstream-wlroots020)
     GAMESCOPE_BIN="$UPSTREAM_WLROOTS020_BIN"
+    ;;
+  upstream-3.16.24-debug)
+    GAMESCOPE_BIN="$UPSTREAM_31624_DEBUG_BIN"
+    ;;
+  packaged-3.16.24-release)
+    GAMESCOPE_BIN="$PACKAGED_BIN"
     ;;
 esac
 
