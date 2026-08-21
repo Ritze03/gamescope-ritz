@@ -1,12 +1,15 @@
 # GitHub Issue Breakdown — gamescope-ritz Overlay
 
-This is a draft set of GitHub issues derived from
+This is the set of GitHub issues derived from
 [`SPEC.md`](./SPEC.md) (the master design spec) and
 [`DECISIONS.md`](./DECISIONS.md) (the settled decisions behind it). It turns
 the spec's 11-milestone build order (M0–M9b) into issues a developer could
-pick up and work, in dependency order. **Nothing here has been posted to
-GitHub** — this is a review draft; each block below is written so it can be
-pasted into a GitHub issue as-is once approved.
+pick up and work, in dependency order. **All 18 issues below have been
+posted to `Ritze03/gamescope-ritz` on GitHub as issues #1–#18**, in the same
+order as drafted here — each heading below now carries its assigned number.
+The bodies published on GitHub were patched to reference dependencies with
+real `#N` links; this local copy still names dependencies by title (see the
+"Dependencies" line under each issue for the matching number).
 
 Two setup issues precede the milestones because the spec's Architecture
 section names vendoring work (ImGui, `nlohmann::json`) that isn't itself a
@@ -23,7 +26,7 @@ milestone's size across its child issues where applicable.
 
 ---
 
-## Issue 1: Vendor `nlohmann::json` via the subprojects wrap pattern
+## Issue 1: Vendor `nlohmann::json` via the subprojects wrap pattern  *(GitHub #1)*
 
 **Body:** The config system (Issue 3 / M0) needs a JSON library and none is
 vendored today. The repo has a live, exact-match precedent for vendoring a
@@ -52,7 +55,7 @@ and Build order M0.
 
 ---
 
-## Issue 2: Vendor ImGui via the subprojects wrap pattern
+## Issue 2: Vendor ImGui via the subprojects wrap pattern  *(GitHub #2)*
 
 **Body:** The ImGui render shell (Issue 4 / M1) needs ImGui vendored before
 any overlay code can be written. Same precedent as Issue 1
@@ -81,7 +84,7 @@ model, which plain `ImGui::Begin` + `SetNextWindowPos` already provides. See
 
 ---
 
-## Issue 3: Build the config system foundation (M0)
+## Issue 3: Build the config system foundation (M0)  *(GitHub #3)*
 
 **Body:** JSON load/save, schema v1, atomic writes, migration scaffolding,
 and app-id resolution — the layer every other feature's persistence plugs
@@ -114,7 +117,7 @@ testable in complete isolation from the overlay.
 
 ---
 
-## Issue 4: Add the ImGui render shell to the composite path (M1)
+## Issue 4: Add the ImGui render shell to the composite path (M1)  *(GitHub #4)*
 
 **Body:** Proves the render path — general-queue command buffer/pool,
 descriptor pool, offscreen render target, `Layer_t` injection into
@@ -164,7 +167,7 @@ called done, not just the acceptance run below.
 
 ---
 
-## Issue 5: Spike — prove the input-capture gating pattern (M2, part 1 of 3)
+## Issue 5: Spike — prove the input-capture gating pattern (M2, part 1 of 3)  *(GitHub #5)*
 
 **Body:** Input capture is the highest-uncertainty milestone in the whole
 roadmap (`SPEC.md` Risks #1: "genuinely new territory with no adaptable
@@ -196,7 +199,7 @@ genuinely skipped, not just not-yet-observed.
 
 ---
 
-## Issue 6: Capture keyboard input into the overlay (M2, part 2 of 3)
+## Issue 6: Capture keyboard input into the overlay (M2, part 2 of 3)  *(GitHub #6)*
 
 **Body:** Full keyboard capture and release, building on the gating pattern
 proven in Issue 5. Extend the gate to all of `wlserver_handle_key`'s forward
@@ -222,7 +225,7 @@ time here; there is no crash/edge-case history in this codebase to lean on.
 
 ---
 
-## Issue 7: Capture pointer input into the overlay (M2, part 3 of 3)
+## Issue 7: Capture pointer input into the overlay (M2, part 3 of 3)  *(GitHub #7)*
 
 **Body:** Full pointer (mouse motion/button/axis) capture and release,
 using the same gating pattern as Issue 6 but applied to the pointer
@@ -246,7 +249,7 @@ other, only both after the spike.
 
 ---
 
-## Issue 8: Build the live gamescope options tab (M3)
+## Issue 8: Build the live gamescope options tab (M3)  *(GitHub #8)*
 
 **Body:** Filter/scaler segmented controls, the auto-corrected sharpness
 slider, and VRR/HDR/tearing toggles. This is the cheapest feature in the
@@ -286,7 +289,7 @@ Live gamescope options".
 
 ---
 
-## Issue 9: Add the always-on FPS display (M4)
+## Issue 9: Add the always-on FPS display (M4)  *(GitHub #9)*
 
 **Body:** An always-drawn frame-rate readout, independent of the settings
 panel's open/closed state, with configurable font size, backdrop, and blend
@@ -319,7 +322,7 @@ settings table: `SPEC.md` § "Per-feature sections → 3. FPS display".
 
 ---
 
-## Issue 10: Add PipeWire volume control to the overlay (M5)
+## Issue 10: Add PipeWire volume control to the overlay (M5)  *(GitHub #10)*
 
 **Body:** Shows and controls the system-level PipeWire volume of the hosted
 game's process (a Stream node, not the whole-output Sink/Device). **v1
@@ -360,7 +363,7 @@ task. Full detail: `SPEC.md` § "Per-feature sections → 5. PipeWire volume",
 
 ---
 
-## Issue 11: Build the combined ReShade effect (Vibrancy + Pre-Sharpen) and Shaders panel (M6)
+## Issue 11: Build the combined ReShade effect (Vibrancy + Pre-Sharpen) and Shaders panel (M6)  *(GitHub #11)*
 
 **Body:** The real `gamescope-ritz.fx` plus the Shaders panel UI, kept as
 one issue rather than split because the uniform names in the `.fx` file and
@@ -411,7 +414,7 @@ sections → 2. ReShade effects", [`reshade-shaders.md`](./reshade-shaders.md).
 
 ---
 
-## Issue 12: Wire full config persistence into the overlay panels (M7)
+## Issue 12: Wire full config persistence into the overlay panels (M7)  *(GitHub #12)*
 
 **Body:** Connects Issue 3's config system to Issues 8/9/11's live panels so
 edits actually persist, plus the "Override Global Config" full-snapshot
@@ -446,7 +449,7 @@ worker) — per Issue 3's debounce design. Full detail: `SPEC.md` §
 
 ---
 
-## Issue 13: Build the IBM Plex typography system (M8, part 1 of 4)
+## Issue 13: Build the IBM Plex typography system (M8, part 1 of 4)  *(GitHub #13)*
 
 **Body:** First of four M8 sub-issues. M8 is split because "nearly every
 control in this design deviates from stock ImGui's default rendering"
@@ -474,7 +477,7 @@ guide's typography calls for.
 
 ---
 
-## Issue 14: Build custom ImDrawList widget rendering (M8, part 2 of 4)
+## Issue 14: Build custom ImDrawList widget rendering (M8, part 2 of 4)  *(GitHub #14)*
 
 **Body:** Second of four M8 sub-issues (see Issue 13 for the split
 rationale). Custom `ImDrawList` draw code replacing stock ImGui's rounded
@@ -494,7 +497,7 @@ checkbox introduced by Issues 8, 9, 10, 11, and 12.
 
 ---
 
-## Issue 15: Build window and dock chrome (M8, part 3 of 4)
+## Issue 15: Build window and dock chrome (M8, part 3 of 4)  *(GitHub #15)*
 
 **Body:** Third of four M8 sub-issues (see Issue 13 for the split
 rationale). Window chrome (accent border/glow on focus, status dots), dock
@@ -517,7 +520,7 @@ primitive).
 
 ---
 
-## Issue 16: Author the overlay icon SVG set (M8, part 4 of 4)
+## Issue 16: Author the overlay icon SVG set (M8, part 4 of 4)  *(GitHub #16)*
 
 **Body:** Fourth of four M8 sub-issues (see Issue 13 for the split
 rationale) — this one is pure asset authoring with no functional
@@ -545,7 +548,7 @@ be dropped if six panel icons plus chrome icons fit without overflow.
 
 ---
 
-## Issue 17: Spike — verify persistent-texture behavior for Adaptive Brightness (M9a, deferred)
+## Issue 17: Spike — verify persistent-texture behavior for Adaptive Brightness (M9a, deferred)  *(GitHub #17)*
 
 **Body:** **Deferred and off the critical path** — nothing above depends on
 this, and it has no dependency of its own (it is CLI-flag driven, not
@@ -576,7 +579,7 @@ Adaptive Brightness specifically".
 
 ---
 
-## Issue 18: Add Adaptive Brightness to the combined effect (M9b, deferred)
+## Issue 18: Add Adaptive Brightness to the combined effect (M9b, deferred)  *(GitHub #18)*
 
 **Body:** **Deferred and off the critical path.** Appends the Adaptive
 Brightness passes to the `gamescope-ritz.fx` file Issue 11 already shipped
@@ -606,24 +609,24 @@ persistent-texture assumption holds.
 
 ## Suggested order of work
 
-1. Vendor `nlohmann::json` via the subprojects wrap pattern
-2. Vendor ImGui via the subprojects wrap pattern
-3. Build the config system foundation (M0)
-4. Add the ImGui render shell to the composite path (M1)
-5. Spike — prove the input-capture gating pattern (M2, part 1 of 3)
-6. Capture keyboard input into the overlay (M2, part 2 of 3)
-7. Capture pointer input into the overlay (M2, part 3 of 3)
-8. Build the live gamescope options tab (M3)
-9. Add the always-on FPS display (M4)
-10. Add PipeWire volume control to the overlay (M5)
-11. Build the combined ReShade effect (Vibrancy + Pre-Sharpen) and Shaders panel (M6)
-12. Wire full config persistence into the overlay panels (M7)
-13. Build the IBM Plex typography system (M8, part 1 of 4)
-14. Build custom ImDrawList widget rendering (M8, part 2 of 4)
-15. Build window and dock chrome (M8, part 3 of 4)
-16. Author the overlay icon SVG set (M8, part 4 of 4)
-17. Spike — verify persistent-texture behavior for Adaptive Brightness (M9a, deferred)
-18. Add Adaptive Brightness to the combined effect (M9b, deferred)
+1. Vendor `nlohmann::json` via the subprojects wrap pattern — GitHub #1
+2. Vendor ImGui via the subprojects wrap pattern — GitHub #2
+3. Build the config system foundation (M0) — GitHub #3
+4. Add the ImGui render shell to the composite path (M1) — GitHub #4
+5. Spike — prove the input-capture gating pattern (M2, part 1 of 3) — GitHub #5
+6. Capture keyboard input into the overlay (M2, part 2 of 3) — GitHub #6
+7. Capture pointer input into the overlay (M2, part 3 of 3) — GitHub #7
+8. Build the live gamescope options tab (M3) — GitHub #8
+9. Add the always-on FPS display (M4) — GitHub #9
+10. Add PipeWire volume control to the overlay (M5) — GitHub #10
+11. Build the combined ReShade effect (Vibrancy + Pre-Sharpen) and Shaders panel (M6) — GitHub #11
+12. Wire full config persistence into the overlay panels (M7) — GitHub #12
+13. Build the IBM Plex typography system (M8, part 1 of 4) — GitHub #13
+14. Build custom ImDrawList widget rendering (M8, part 2 of 4) — GitHub #14
+15. Build window and dock chrome (M8, part 3 of 4) — GitHub #15
+16. Author the overlay icon SVG set (M8, part 4 of 4) — GitHub #16
+17. Spike — verify persistent-texture behavior for Adaptive Brightness (M9a, deferred) — GitHub #17
+18. Add Adaptive Brightness to the combined effect (M9b, deferred) — GitHub #18
 
 Issues 6 and 7 (keyboard/pointer capture) can be worked in parallel once
 Issue 5's spike lands. Issues 13–16 (M8's four sub-issues) can likewise be
