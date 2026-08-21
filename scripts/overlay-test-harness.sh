@@ -43,12 +43,23 @@
 #                           a silent no-op.
 #
 # ponytail: screenshot capture is exactly one method (gamescope's own `screenshot`
-# convar over gamescopectl, base_plane_only). grim-on-host was investigated and does NOT
-# work here because the nested gamescope window has no host-compositor surface grim can
-# address in this SDL-nested setup — see the printed environment note. If a milestone
-# later needs the composited overlay layer (not just the base plane), extend the
-# TakeScreenshot call to pass screenshot_type=2 (full_composition); gamescopectl's CLI
-# only forwards a single arg today so that needs a source change, not a flag here.
+# convar over gamescopectl). grim-on-host was investigated and does NOT work here
+# because the nested gamescope window has no host-compositor surface grim can
+# address in this SDL-nested setup — see the printed environment note.
+#
+# M2 update: this now requests screenshot_type=3 (full_composition, see
+# protocol/gamescope-control.xml's screenshot_type enum), not the M1-era default
+# (base_plane_only, type 1) — M1 lost real time to base_plane_only structurally
+# truncating any layer above zpos 2, which silently excludes the settings overlay
+# from every screenshot this harness takes. Passing the type through required a
+# small source fix, not just a flag: gamescopectl's own CLI and the
+# gamescope_private.execute Wayland request only ever carried a command name plus
+# ONE opaque value string, so a second "type" argument had nowhere to go on the
+# wire. Fixed at the source (src/wlserver.cpp's gamescope_private_execute(), which
+# now splits that value string on spaces the same way ConCommand::CallWithArgString()
+# already splits a typed console command line) rather than widening the protocol —
+# so from here, passing "$SHOT_PATH $SCREENSHOT_TYPE" as a single shell argument
+# (space embedded, quoted) is sufficient; gamescopectl itself needed no change.
 
 set -u -o pipefail
 
@@ -206,20 +217,65 @@ SETTLE_S="$(awk -v ms="$SETTLE_MS" 'BEGIN{printf "%.3f", ms/1000}')"
 sleep "$SETTLE_S"
 
 # ---------- optional input ----------
+# ydotool's `key` subcommand takes RAW numeric evdev keycodes only ("Since
+# there's no way to know how many keyboard layouts are there in the world,
+# we're using raw keycodes now" -- ydotool's own --help) and its own docs say
+# a non-numeric token ("ctrl", "shift", ...) is silently treated as a bare
+# delay, not an error and not a key press. M1/M2 both wrote this harness's
+# --toggle/--key as space-separated NAMES ("ctrl shift o"), which ydotool
+# was therefore silently ignoring the whole time -- no key event was ever
+# actually sent, despite `ydotool key ...` exiting 0. Fixed here with an
+# explicit name->keycode table (linux/input-event-codes.h) rather than
+# passing names through; unmapped names now fail loudly instead of
+# silently no-opping, matching this script's own stated ydotool-availability
+# philosophy ("report plainly, don't pretend").
+keycode_for_name()
+{
+  case "$1" in
+    ctrl|leftctrl)   echo 29 ;;
+    rightctrl)       echo 97 ;;
+    shift|leftshift) echo 42 ;;
+    rightshift)      echo 54 ;;
+    alt|leftalt)     echo 56 ;;
+    rightalt)        echo 100 ;;
+    super|meta|leftmeta) echo 125 ;;
+    rightmeta)       echo 126 ;;
+    o) echo 24 ;;
+    a) echo 30 ;; b) echo 48 ;; c) echo 46 ;; d) echo 32 ;; e) echo 18 ;;
+    f) echo 33 ;; g) echo 34 ;; h) echo 35 ;; i) echo 23 ;; j) echo 36 ;;
+    k) echo 37 ;; l) echo 38 ;; m) echo 50 ;; n) echo 49 ;; p) echo 25 ;;
+    q) echo 16 ;; r) echo 19 ;; s) echo 31 ;; t) echo 20 ;; u) echo 22 ;;
+    v) echo 47 ;; w) echo 17 ;; x) echo 45 ;; y) echo 21 ;; z) echo 44 ;;
+    0) echo 11 ;; 1) echo 2 ;; 2) echo 3 ;; 3) echo 4 ;; 4) echo 5 ;;
+    5) echo 6 ;; 6) echo 7 ;; 7) echo 8 ;; 8) echo 9 ;; 9) echo 10 ;;
+    space) echo 57 ;; enter|return) echo 28 ;; tab) echo 15 ;; esc|escape) echo 1 ;;
+    *) echo "" ;;
+  esac
+}
+
 if [[ "$DO_TOGGLE" -eq 1 && -z "$KEY_COMBO" ]]; then
   KEY_COMBO="ctrl shift o"   # the overlay toggle hotkey per SPEC.md
 fi
 if [[ -n "$KEY_COMBO" ]]; then
   if [[ "$YDOTOOL_OK" -eq 1 ]]; then
-    # translate space-separated keysym names to ydotool's key1:1 key1:0 down/up pairs
     read -r -a KEYS <<<"$KEY_COMBO"
-    DOWN=(); UP=()
-    for k in "${KEYS[@]}"; do DOWN+=("$k:1"); UP=("$k:0" "${UP[@]}"); done
-    log "sending key combo: $KEY_COMBO"
-    if ydotool key "${DOWN[@]}" "${UP[@]}" 2>>"$SUMMARY"; then
-      log "ydotool key send: ok"
-    else
-      log "ydotool key send: FAILED (non-fatal, continuing)"
+    DOWN=(); UP=(); BAD=0
+    for k in "${KEYS[@]}"; do
+      code="$(keycode_for_name "$k")"
+      if [[ -z "$code" ]]; then
+        log "unknown key name in --key/--toggle: '$k' (add it to keycode_for_name() in this script) — aborting this key send"
+        BAD=1
+        break
+      fi
+      DOWN+=("$code:1"); UP=("$code:0" "${UP[@]}")
+    done
+    if [[ "$BAD" -eq 0 ]]; then
+      log "sending key combo: $KEY_COMBO (evdev codes: ${DOWN[*]} ${UP[*]})"
+      if ydotool key "${DOWN[@]}" "${UP[@]}" 2>>"$SUMMARY"; then
+        log "ydotool key send: ok"
+      else
+        log "ydotool key send: FAILED (non-fatal, continuing)"
+      fi
     fi
   else
     log "skipping key send ('$KEY_COMBO') — ydotool not usable, see note above"
@@ -230,8 +286,12 @@ sleep 0.3
 
 # ---------- screenshot ----------
 SHOT_PATH="$OUT_DIR/screenshot.png"
+# screenshot_type 3 == full_composition (protocol/gamescope-control.xml) -- see the
+# M2 update note above the top-of-file ponytail comment for why this has to be a
+# single shell argument with the type embedded after a space, not a separate one.
+SCREENSHOT_TYPE=3
 if [[ -n "$GAMESCOPECTL_BIN" ]]; then
-  GAMESCOPE_WAYLAND_DISPLAY="$GS_WL_DISPLAY" "$GAMESCOPECTL_BIN" screenshot "$SHOT_PATH" >>"$SUMMARY" 2>&1
+  GAMESCOPE_WAYLAND_DISPLAY="$GS_WL_DISPLAY" "$GAMESCOPECTL_BIN" screenshot "$SHOT_PATH $SCREENSHOT_TYPE" >>"$SUMMARY" 2>&1
   # screenshot_taken is reported async; poll briefly rather than guessing one sleep
   for _ in $(seq 1 20); do [[ -s "$SHOT_PATH" ]] && break; sleep 0.25; done
   if [[ -s "$SHOT_PATH" ]]; then

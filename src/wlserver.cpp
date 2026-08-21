@@ -59,6 +59,7 @@
 #include "hdmi.h"
 #include "main.hpp"
 #include "steamcompmgr.hpp"
+#include "SettingsOverlay.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -78,6 +79,7 @@
 #include <algorithm>
 #include <list>
 #include <set>
+#include <unordered_set>
 
 static LogScope wl_log("wlserver");
 
@@ -287,6 +289,155 @@ static void bump_input_counter()
 	nudge_steamcompmgr();
 }
 
+// ============================================================================
+// M2: settings overlay input capture and release.
+//
+// See superdoc/planning/SPEC.md's "Input capture and release" section and
+// superdoc/planning/ISSUES.md issues #5-#7. Everything in this section runs
+// on the MAIN thread (wlserver_run()'s event loop calls every listener in
+// this file) -- it never touches ImGuiIO directly, only
+// gamescope::SettingsOverlay_Queue*() (SettingsOverlay.cpp), which appends
+// to a mutex-guarded queue the steamcompmgr thread drains once per frame.
+// See the matching file-level comment in SettingsOverlay.cpp for why.
+// ============================================================================
+
+// Ctrl+Shift+O toggles the overlay (DECISIONS.md #6). Detected here, inside
+// wlserver_process_hotkeys(), rather than as a separate check in each of
+// wlserver_handle_key()/wlserver_key(), because this is the one place that
+// already tracks a reliable per-keyboard "which syms are currently held"
+// set (wlserver.mapPressedHotkeyKeys) that works identically across every
+// backend. A naive xkb_state_mod_name_is_active(keyboard->xkb_state, ...)
+// check would NOT work uniformly here: wlserver_key() -- the entry point
+// every backend except DRM/libinput's own keyboard group uses (SDL,
+// Wayland-nested, OpenVR, ime, InputEmulation) -- only ever calls
+// wlr_seat_keyboard_notify_key(), never wlr_keyboard_notify_key()/
+// notify_modifiers() on wlserver.wlr.virtual_keyboard_device itself, so
+// that device's own xkb_state never advances and its modifier-depressed
+// bits can't be trusted. The already-existing pressed-syms set sidesteps
+// that entirely.
+static bool s_bOverlayHotkeyOwnsO = false;
+
+static bool wlserver_check_settings_overlay_toggle( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
+{
+	if ( press )
+	{
+		if ( normalizedKeysym != XKB_KEY_O )
+			return false;
+
+		const bool bCtrl = setPressedKeySyms.contains( XKB_KEY_Control_L ) || setPressedKeySyms.contains( XKB_KEY_Control_R );
+		const bool bShift = setPressedKeySyms.contains( XKB_KEY_Shift_L ) || setPressedKeySyms.contains( XKB_KEY_Shift_R );
+		if ( !bCtrl || !bShift )
+			return false;
+
+		// Own this physical key's eventual release too (below), regardless
+		// of whether Ctrl/Shift are still held by then -- otherwise the
+		// release would fall through to wlserver_dispatch_key() and get
+		// forwarded/queued as an ordinary (unmatched) 'O' release.
+		s_bOverlayHotkeyOwnsO = true;
+		gamescope::SettingsOverlay_ToggleVisible();
+		return true;
+	}
+
+	if ( normalizedKeysym == XKB_KEY_O && s_bOverlayHotkeyOwnsO )
+	{
+		s_bOverlayHotkeyOwnsO = false;
+		return true;
+	}
+
+	return false;
+}
+
+// Which side (the focused game's wl_seat, or the settings overlay) actually
+// received a given key/mouse-button's PRESS, keyed by raw linux keycode/
+// button code. Consulted on RELEASE so a press-and-release pair always goes
+// to the same destination even if overlay capture toggles in between --
+// e.g. a key held down before the overlay opens must still have its release
+// delivered to the GAME (not swallowed into the overlay just because
+// capture is on by the time the user lets go), and symmetrically a key
+// pressed while the overlay is open must have its release delivered to the
+// OVERLAY even if the overlay has since closed (so ImGui doesn't retain a
+// stuck "held" key/button -- SettingsOverlay.cpp's DrainInputQueue() also
+// backstops this with io.ClearInputKeys()/ClearInputMouse() on the
+// capturing->not-capturing edge, but routing releases correctly here is
+// what keeps the GAME's side airtight, which that backstop can't do).
+static std::unordered_set<uint32_t> s_setKeysForwardedToGame;
+static std::unordered_set<uint32_t> s_setKeysForwardedToOverlay;
+static std::unordered_set<uint32_t> s_setMouseButtonsForwardedToGame;
+static std::unordered_set<uint32_t> s_setMouseButtonsForwardedToOverlay;
+
+// Routes one key transition to either the game or the overlay -- see the
+// tracking-set comment above. Called after wlserver_process_hotkeys() has
+// already had first refusal, so the toggle key itself and any other bound
+// combo never reach here.
+static void wlserver_dispatch_key( wlr_keyboard *keyboard, uint32_t uLinuxKeycode, bool bPressed, uint32_t uTimeMs )
+{
+	assert( keyboard != nullptr );
+
+	if ( bPressed )
+	{
+		if ( gamescope::SettingsOverlay_IsCapturingInput() )
+		{
+			s_setKeysForwardedToOverlay.insert( uLinuxKeycode );
+			gamescope::SettingsOverlay_QueueKeyEvent( uLinuxKeycode, true );
+		}
+		else
+		{
+			s_setKeysForwardedToGame.insert( uLinuxKeycode );
+			wlr_seat_set_keyboard( wlserver.wlr.seat, keyboard );
+			wlr_seat_keyboard_notify_key( wlserver.wlr.seat, uTimeMs, uLinuxKeycode, bPressed );
+		}
+	}
+	else
+	{
+		if ( s_setKeysForwardedToOverlay.erase( uLinuxKeycode ) )
+		{
+			gamescope::SettingsOverlay_QueueKeyEvent( uLinuxKeycode, false );
+		}
+		else if ( s_setKeysForwardedToGame.erase( uLinuxKeycode ) )
+		{
+			wlr_seat_set_keyboard( wlserver.wlr.seat, keyboard );
+			wlr_seat_keyboard_notify_key( wlserver.wlr.seat, uTimeMs, uLinuxKeycode, bPressed );
+		}
+		// else: a release with no tracked matching press (e.g. the very
+		// first event this process ever saw for this key) -- nothing to
+		// release cleanly on either side, drop it.
+	}
+}
+
+// Mouse-button analogue of wlserver_dispatch_key(). No hotkey layer sits in
+// front of this one (mouse buttons aren't part of the toggle combo), so
+// every caller can route straight through it.
+static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed, uint32_t uTimeMs )
+{
+	if ( bPressed )
+	{
+		if ( gamescope::SettingsOverlay_IsCapturingInput() )
+		{
+			s_setMouseButtonsForwardedToOverlay.insert( uLinuxButton );
+			gamescope::SettingsOverlay_QueueMouseButton( uLinuxButton, true );
+		}
+		else
+		{
+			s_setMouseButtonsForwardedToGame.insert( uLinuxButton );
+			wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_PRESSED );
+			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+		}
+	}
+	else
+	{
+		if ( s_setMouseButtonsForwardedToOverlay.erase( uLinuxButton ) )
+		{
+			gamescope::SettingsOverlay_QueueMouseButton( uLinuxButton, false );
+		}
+		else if ( s_setMouseButtonsForwardedToGame.erase( uLinuxButton ) )
+		{
+			wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_RELEASED );
+			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+		}
+		// else: unmatched release, drop -- see wlserver_dispatch_key()'s comment.
+	}
+}
+
 static void wlserver_handle_modifiers(struct wl_listener *listener, void *data)
 {
 	struct wlr_keyboard *keyboard = &wlserver.keyboard_group->keyboard;
@@ -341,8 +492,7 @@ static void wlserver_handle_key(struct wl_listener *listener, void *data)
 	
 	if ( !wlserver_process_hotkeys( keyboard, event->keycode, event->state == WL_KEYBOARD_KEY_STATE_PRESSED ) )
 	{
-		wlr_seat_set_keyboard( wlserver.wlr.seat, keyboard );
-		wlr_seat_keyboard_notify_key( wlserver.wlr.seat, event->time_msec, event->keycode, event->state );
+		wlserver_dispatch_key( keyboard, event->keycode, event->state == WL_KEYBOARD_KEY_STATE_PRESSED, event->time_msec );
 	}
 
 	bump_input_counter();
@@ -382,13 +532,27 @@ static void wlserver_handle_pointer_button(struct wl_listener *listener, void *d
 	struct wlserver_pointer *pointer = wl_container_of( listener, pointer, button );
 	struct wlr_pointer_button_event *event = (struct wlr_pointer_button_event *) data;
 
-	wlr_seat_pointer_notify_button( wlserver.wlr.seat, event->time_msec, event->button, event->state );
+	// M2: this is the DRM/libinput raw-device path, which bypasses
+	// wlserver_mousebutton() entirely -- route through the same
+	// game-vs-overlay dispatch so it isn't a gap in capture on that backend.
+	wlserver_dispatch_mouse_button( event->button, event->state == WL_POINTER_BUTTON_STATE_PRESSED, event->time_msec );
 }
 
 static void wlserver_handle_pointer_axis(struct wl_listener *listener, void *data)
 {
 	struct wlserver_pointer *pointer = wl_container_of( listener, pointer, axis );
 	struct wlr_pointer_axis_event *event = (struct wlr_pointer_axis_event *) data;
+
+	// M2: same rationale as wlserver_handle_pointer_button() above -- this
+	// raw path bypasses wlserver_mousewheel(), so gate it here too. No
+	// press/release pairing to track for a scroll tick, unlike buttons/keys.
+	if ( gamescope::SettingsOverlay_IsCapturingInput() )
+	{
+		const double flX = event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? event->delta : 0.0;
+		const double flY = event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL ? event->delta : 0.0;
+		gamescope::SettingsOverlay_QueueMouseWheel( flX, flY );
+		return;
+	}
 
 	wlr_seat_pointer_notify_axis( wlserver.wlr.seat, event->time_msec, event->orientation, event->delta, event->delta_discrete, event->source, event->relative_direction );
 }
@@ -1427,7 +1591,16 @@ static void gamescope_private_execute( struct wl_client *client, struct wl_resou
 {
 	std::vector<std::string_view> args;
 	args.emplace_back( cvar_name );
-	args.emplace_back( value );
+	// `value` is one wire string but may itself carry more than one
+	// space-separated argument (e.g. gamescopectl's "screenshot" command
+	// wants a path AND a screenshot_type -- see overlay-test-harness.sh's
+	// use of this for a full-composition capture that actually shows the
+	// M2 overlay, since gamescopectl's own CLI collapses everything after
+	// the command name into this single field). Split it the same way
+	// ConCommand::CallWithArgString() (convar.h) already splits a typed
+	// console/script command line, rather than inventing a second
+	// mini-parser here.
+	gamescope::Split( args, value, " " );
 	if ( gamescope::ConCommand::Exec( std::span<std::string_view>{ args } ) )
 		gamescope_private_send_command_executed( resource );
 }
@@ -2406,12 +2579,14 @@ void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain )
 bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press )
 {
 	xkb_keycode_t keycode = key + 8;
+	xkb_keysym_t normalizedKeysym = XKB_KEY_NoSymbol;
 
 	// Remember the sym at press time so a release erases exactly what the press inserted.
 	if ( press )
 	{
 		xkb_keysym_t keysym = xkb_state_key_get_one_sym( keyboard->xkb_state, keycode );
-		wlserver.mapPressedHotkeyKeys[ { keyboard, keycode } ] = NormalizeKeysymForHotkey( keysym );
+		normalizedKeysym = NormalizeKeysymForHotkey( keysym );
+		wlserver.mapPressedHotkeyKeys[ { keyboard, keycode } ] = normalizedKeysym;
 	}
 	else
 	{
@@ -2421,18 +2596,23 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 		if ( it == wlserver.mapPressedHotkeyKeys.end() )
 			return false;
 
-		xkb_keysym_t released = it->second;
+		normalizedKeysym = it->second;
 		wlserver.mapPressedHotkeyKeys.erase( it );
 
 		// Two keycodes can resolve to the same sym, so only a release that actually drops the sym can end a binding.
 		for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
-			if ( uKeySym == released )
+			if ( uKeySym == normalizedKeysym )
 				return false;
 	}
 
 	std::unordered_set<xkb_keysym_t> setPressedKeySyms;
 	for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
 		setPressedKeySyms.emplace( uKeySym );
+
+	// M2: Ctrl+Shift+O, checked before the external-binding search below so
+	// it always wins the combo regardless of what else might be registered.
+	if ( wlserver_check_settings_overlay_toggle( normalizedKeysym, press, setPressedKeySyms ) )
+		return true;
 
 	if ( log_binding.Enabled( LOG_DEBUG ) )
 	{
@@ -2476,9 +2656,7 @@ void wlserver_key( uint32_t key, bool press, uint32_t time )
 
 	if ( !wlserver_process_hotkeys( keyboard, key, press ) )
 	{
-		assert( keyboard != nullptr );
-		wlr_seat_set_keyboard( wlserver.wlr.seat, keyboard );
-		wlr_seat_keyboard_notify_key( wlserver.wlr.seat, time, key, press );
+		wlserver_dispatch_key( keyboard, key, press, time );
 	}
 
 	bump_input_counter();
@@ -2807,6 +2985,16 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 	dx *= g_mouseSensitivity;
 	dy *= g_mouseSensitivity;
 
+	// M2: the relative/grabbed-pointer path (SDL relative mouse mode, real
+	// libinput pointer motion via wlserver_handle_pointer_motion(), OpenVR,
+	// etc). Windowed SDL mouse motion instead goes through
+	// wlserver_touchmotion() below -- see that function's own gate.
+	if ( gamescope::SettingsOverlay_IsCapturingInput() )
+	{
+		gamescope::SettingsOverlay_QueueMouseMotionDelta( dx, dy );
+		return;
+	}
+
 	wlserver_perform_rel_pointer_motion( dx, dy );
 
 	if ( !wlserver_apply_constraint( &dx, &dy ) )
@@ -2863,13 +3051,18 @@ void wlserver_mousebutton( int button, bool press, uint32_t time )
 
 	wlserver_oncursorevent();
 
-	wlr_seat_pointer_notify_button( wlserver.wlr.seat, time, button, press ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED );
-	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+	wlserver_dispatch_mouse_button( (uint32_t)button, press, time );
 }
 
 void wlserver_mousewheel( double flX, double flY, uint32_t time )
 {
 	assert( wlserver_is_lock_held() );
+
+	if ( gamescope::SettingsOverlay_IsCapturingInput() )
+	{
+		gamescope::SettingsOverlay_QueueMouseWheel( flX, flY );
+		return;
+	}
 
 	wlr_seat_pointer_notify_axis( wlserver.wlr.seat, time, WL_POINTER_AXIS_HORIZONTAL_SCROLL, flX, flX * WLR_POINTER_AXIS_DISCRETE_STEP, WL_POINTER_AXIS_SOURCE_WHEEL, WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL );
 	wlr_seat_pointer_notify_axis( wlserver.wlr.seat, time, WL_POINTER_AXIS_VERTICAL_SCROLL, flY, flY * WLR_POINTER_AXIS_DISCRETE_STEP, WL_POINTER_AXIS_SOURCE_WHEEL, WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL );
@@ -2968,6 +3161,26 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
 void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor, gamescope::IBackendConnector* connector )
 {
 	assert( wlserver_is_lock_held() );
+
+	// M2: this is the path SDL's windowed (non-relative-grab) mouse motion
+	// takes -- see wlserver_mousemotion()'s own comment for why that path
+	// alone isn't enough to cover the SDL backend this project is tested
+	// against. Real touchscreen input also arrives here; routing it to the
+	// overlay too while capturing is deliberate (a touch is just another
+	// pointer as far as the overlay is concerned).
+	//
+	// ponytail: unlike the game-focused path below, this doesn't apply
+	// apply_touchscreen_orientation(), so a rotated panel's touch
+	// coordinates would be off while the overlay is open. Out of scope for
+	// M2 (no rotated-panel hardware in this milestone's test matrix);
+	// upgrade path is applying the same orientation correction before
+	// queuing.
+	if ( gamescope::SettingsOverlay_IsCapturingInput() )
+	{
+		gamescope::SettingsOverlay_QueueMouseMotionAbsolute( x, y );
+		bump_input_counter();
+		return;
+	}
 
 	if ( wlserver.mouse_focus_surface != NULL )
 	{

@@ -45,7 +45,12 @@
 #include "Overlay/PanelShaders.h"
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <vector>
+
+#include <linux/input-event-codes.h>
 
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
@@ -60,20 +65,42 @@ namespace gamescope
 {
 	static LogScope s_OverlayLog( "settings_overlay" );
 
-	// M1: testable from the console without any input work (Milestone M2 owns
-	// actually routing keyboard/mouse into this). `settings_overlay_visible 1`
-	// or `toggle_settings_overlay` both work.
+	// M2: the single source of truth for "does the overlay currently own all
+	// input" is g_bSettingsOverlayCapturing (below), a std::atomic<bool> so
+	// wlserver's input handlers (main thread) can read it without racing the
+	// ConVar's own plain, non-atomic m_Value (read every frame on the
+	// steamcompmgr thread by UpdateFadeAlpha() below -- a pre-existing M1
+	// simplification this milestone doesn't need to fix, since the atomic
+	// mirror is now the thing anything correctness-sensitive reads). The
+	// ConVar's callback keeps the mirror in sync however the ConVar changes
+	// (gamescopectl, the console, or SettingsOverlay_ToggleVisible() below).
+	static std::atomic<bool> g_bSettingsOverlayCapturing = false;
+
 	static ConVar<bool> cv_settings_overlay_visible(
 		"settings_overlay_visible", false,
-		"Show/hide the M1 settings overlay placeholder. Rendering only -- "
-		"there is no input capture yet (Milestone M2)." );
+		"Show/hide the settings overlay. Ctrl+Shift+O toggles it too.",
+		[]( ConVar<bool> &cv )
+		{
+			g_bSettingsOverlayCapturing.store( cv.Get(), std::memory_order_release );
+		},
+		/* bRunCallbackAtStartup = */ true );
 
 	static ConCommand cc_toggle_settings_overlay(
-		"toggle_settings_overlay", "Toggle the M1 settings overlay placeholder.",
+		"toggle_settings_overlay", "Toggle the settings overlay.",
 		[]( std::span<std::string_view> args )
 		{
 			cv_settings_overlay_visible.SetValue( !cv_settings_overlay_visible.Get() );
 		} );
+
+	void SettingsOverlay_ToggleVisible()
+	{
+		cv_settings_overlay_visible.SetValue( !cv_settings_overlay_visible.Get() );
+	}
+
+	bool SettingsOverlay_IsCapturingInput()
+	{
+		return g_bSettingsOverlayCapturing.load( std::memory_order_acquire );
+	}
 
 	// Fade in/out on toggle (decision: replaces the dropped backdrop-blur
 	// treatment, see DECISIONS.md #5). SPEC leaves the exact duration as a
@@ -203,6 +230,12 @@ namespace gamescope
 
 		ImGuiIO &io = ImGui::GetIO();
 		io.IniFilename = nullptr; // no persisted window layout in M1
+		// M2: no wl_surface/hardware cursor plane is driven for the overlay
+		// (out of scope, see the ponytail note near SettingsOverlay_QueueMouseMotionAbsolute's
+		// caller in wlserver.cpp) -- ask ImGui to draw its own software
+		// cursor into the offscreen texture instead so the pointer is
+		// visible at all while the overlay owns it.
+		io.MouseDrawCursor = true;
 		ApplyDesignGuideStyle();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
@@ -272,7 +305,12 @@ namespace gamescope
 
 	static void UpdateFadeAlpha()
 	{
-		const bool bVisible = cv_settings_overlay_visible.Get();
+		// Reads the atomic mirror, not the ConVar directly -- see the
+		// comment above g_bSettingsOverlayCapturing's declaration. This is
+		// the steamcompmgr thread; the ConVar can change from wlserver's
+		// main-thread hotkey handler or from gamescopectl/console on
+		// whatever thread issues that command.
+		const bool bVisible = SettingsOverlay_IsCapturingInput();
 		const unsigned int uNow = get_time_in_milliseconds();
 
 		if ( bVisible != s_bWasVisible )
@@ -314,9 +352,10 @@ namespace gamescope
 
 		ImGui::Spacing();
 		ImGui::TextDisabled(
-			"Toggle: `toggle_settings_overlay` or `settings_overlay_visible 0|1`." );
-		ImGui::TextDisabled(
-			"Input capture lands in Milestone 2 -- these widgets aren't clickable yet." );
+			"Toggle: Ctrl+Shift+O, `toggle_settings_overlay`, or `settings_overlay_visible 0|1`." );
+
+		static char szTextInputScratch[128] = "";
+		ImGui::InputText( "Type here (M2 capture check)", szTextInputScratch, sizeof( szTextInputScratch ) );
 
 		gamescope::FpsDisplay_DrawSettingsPanel(); // M4 (see FpsDisplay.h)
 
@@ -427,9 +466,27 @@ namespace gamescope
 		return true;
 	}
 
+	// Forward-declared here, defined in the M2 section at the end of this
+	// file (after SettingsOverlay_WaitForRender) so the M1 render-shell code
+	// above stays contiguous. Drains the producer-side input queue into
+	// ImGuiIO -- see its own definition for the full comment.
+	static void DrainInputQueue();
+
 	void SettingsOverlay_AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		UpdateFadeAlpha();
+
+		// M2: drain queued input even while fully hidden (alpha == 0), not
+		// just while visible/fading -- see DrainInputQueue()'s own comment
+		// for why a key/button release delivered after the overlay has
+		// already faded all the way out would otherwise sit in the queue
+		// forever, leaking a stuck "held" state into ImGui next time the
+		// overlay reopens. Only runs once the context exists; before that
+		// the queue can only be empty, since wlserver only ever queues
+		// while g_bSettingsOverlayCapturing is true, which requires having
+		// opened the overlay (and therefore initialized ImGui) at least once.
+		if ( s_bImguiInitialized )
+			DrainInputQueue();
 
 		if ( s_flCurrentAlpha <= 0.0f )
 			return;
@@ -493,5 +550,401 @@ namespace gamescope
 			return;
 
 		pComputeCmdBuffer->AddDependency( s_pTimelineSemaphore, s_ulPendingWaitPoint );
+	}
+
+	// ======================================================================
+	// M2: input capture and release.
+	//
+	// wlserver's input handlers (wlserver_key/wlserver_handle_key,
+	// wlserver_mousemotion/wlserver_touchmotion/wlserver_mousebutton/
+	// wlserver_mousewheel and their DRM-raw-listener equivalents) run on the
+	// MAIN thread (wlserver_run()'s event loop). ImGuiIO is only ever
+	// touched from the STEAMCOMPMGR thread, inside SettingsOverlay_AddLayer()
+	// -- ImGui's own context is not thread-safe, and this repo's own
+	// threading model (see architecture/overview.md) already keeps the
+	// render loop single-threaded for the same class of reason the M1
+	// header comment gives for drawing ImGui on steamcompmgr in the first
+	// place. So the producer (wlserver, any event) never calls into ImGui
+	// directly -- it only appends a small POD event to s_InputQueue under
+	// s_InputQueueLock; DrainInputQueue() (steamcompmgr thread, called from
+	// SettingsOverlay_AddLayer() every paint_all()) is the only consumer and
+	// the only code that calls ImGuiIO's Add*Event() functions. This is the
+	// exact same producer/queue-drains-under-lock shape
+	// gamescope_xwayland_server_t::retrieve_commits() already uses for its
+	// own cross-thread handoff (wlserver.cpp) -- reused here rather than
+	// inventing a second cross-thread pattern.
+	//
+	// Release safety (see SPEC.md's "Release must be airtight" risk): a key
+	// or mouse button whose PRESS was routed to the game must have its
+	// RELEASE routed to the game too, even if the overlay toggles open in
+	// between (and symmetrically for a press routed to the overlay). This is
+	// NOT decided here by "is the overlay open right now" -- it's decided by
+	// wlserver.cpp's own s_setKeysForwardedToGame/Overlay (and the mouse-
+	// button equivalent) tracking sets, keyed by which side actually
+	// received the press. See the comment on wlserver_route_key_to_overlay()
+	// in wlserver.cpp for the full reasoning. On this side, DrainInputQueue()
+	// adds a second, independent backstop: the moment it observes the
+	// overlay transition from capturing to not-capturing, it calls
+	// io.ClearInputKeys()/io.ClearInputMouse() so ImGui can never retain a
+	// stuck "held" widget-interaction key/button/drag state (e.g. a slider
+	// mid-drag) across the next time the overlay reopens, regardless of
+	// whether every individual release made it through the queue in time.
+	// ======================================================================
+
+	namespace
+	{
+		struct QueuedInputEvent
+		{
+			enum class Kind : uint8_t
+			{
+				Key,
+				MouseMotionDelta,
+				MouseMotionAbsolute,
+				MouseButton,
+				MouseWheel,
+			};
+
+			Kind kind;
+			uint32_t uCode = 0;    // linux keycode (Key) or button code (MouseButton)
+			bool bPressed = false; // Key, MouseButton
+			double x = 0.0;        // dx (MouseMotionDelta) / normalized X (MouseMotionAbsolute) / wheel X
+			double y = 0.0;        // dy (MouseMotionDelta) / normalized Y (MouseMotionAbsolute) / wheel Y
+		};
+	}
+
+	static std::mutex s_InputQueueLock;
+	static std::vector<QueuedInputEvent> s_InputQueue;
+
+	// ---- Producer side (main thread) --------------------------------------
+
+	static void QueueEvent( QueuedInputEvent ev )
+	{
+		std::lock_guard<std::mutex> lock( s_InputQueueLock );
+		s_InputQueue.push_back( ev );
+	}
+
+	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed )
+	{
+		QueueEvent( { .kind = QueuedInputEvent::Kind::Key, .uCode = uLinuxKeycode, .bPressed = bPressed } );
+	}
+
+	void SettingsOverlay_QueueMouseMotionDelta( double dx, double dy )
+	{
+		QueueEvent( { .kind = QueuedInputEvent::Kind::MouseMotionDelta, .x = dx, .y = dy } );
+	}
+
+	void SettingsOverlay_QueueMouseMotionAbsolute( double flNormalizedX, double flNormalizedY )
+	{
+		QueueEvent( { .kind = QueuedInputEvent::Kind::MouseMotionAbsolute, .x = flNormalizedX, .y = flNormalizedY } );
+	}
+
+	void SettingsOverlay_QueueMouseButton( uint32_t uLinuxButton, bool bPressed )
+	{
+		QueueEvent( { .kind = QueuedInputEvent::Kind::MouseButton, .uCode = uLinuxButton, .bPressed = bPressed } );
+	}
+
+	void SettingsOverlay_QueueMouseWheel( double flX, double flY )
+	{
+		QueueEvent( { .kind = QueuedInputEvent::Kind::MouseWheel, .x = flX, .y = flY } );
+	}
+
+	// ---- Consumer side (steamcompmgr thread, inside DrainInputQueue()) ----
+
+	// Overlay-local cursor position, in overlay-texture pixels. Kept here
+	// (not read back from ImGuiIO) so relative-motion deltas (from
+	// wlserver_mousemotion(), the grabbed/relative-pointer path) have
+	// something to accumulate onto between drains.
+	static double s_flCursorX = 0.0;
+	static double s_flCursorY = 0.0;
+	static bool s_bCursorInitialized = false;
+
+	// Physical modifier keys currently held, tracked independently of xkb:
+	// the virtual keyboard device most backends feed through (everything
+	// except the DRM/libinput keyboard group) never receives
+	// wlr_keyboard_notify_key()/notify_modifiers() calls of its own (only
+	// wlr_seat_keyboard_notify_key(), which updates the *seat's* state, not
+	// the device's xkb_state) -- see wlserver_key() in wlserver.cpp. So
+	// keyboard->xkb_state's modifier-depressed bits can't be trusted equally
+	// across all backends. Tracking the handful of modifier keycodes
+	// ourselves, evdev-code-in/ImGui-flag-out, sidesteps that entirely and
+	// is correct on every backend by construction.
+	static int s_nCtrlHeld = 0;
+	static int s_nShiftHeld = 0;
+	static int s_nAltHeld = 0;
+	static int s_nSuperHeld = 0;
+
+	static bool s_bWasCapturingLastDrain = false;
+
+	// ponytail: a hardcoded US-QWERTY ASCII table, not layout-aware --
+	// correct typing requires actually tracking xkb layout/state per key,
+	// which (per the comment above) no backend but the DRM/libinput one
+	// reliably provides today. Good enough to type into a text field for
+	// M2's acceptance test and for everyday ASCII entry (profile names,
+	// etc.); upgrade path is wiring a real xkb_state for the virtual
+	// keyboard device (calling wlr_keyboard_notify_key on it too) and
+	// reading characters from that instead of this table.
+	static char AsciiForKeycode( uint32_t uLinuxKeycode, bool bShift )
+	{
+		if ( uLinuxKeycode >= KEY_1 && uLinuxKeycode <= KEY_9 )
+		{
+			static const char szShifted[] = "!@#$%^&*(";
+			return bShift ? szShifted[ uLinuxKeycode - KEY_1 ] : char( '1' + ( uLinuxKeycode - KEY_1 ) );
+		}
+
+		switch ( uLinuxKeycode )
+		{
+			case KEY_0:         return bShift ? ')' : '0';
+			case KEY_SPACE:     return ' ';
+			case KEY_MINUS:     return bShift ? '_' : '-';
+			case KEY_EQUAL:     return bShift ? '+' : '=';
+			case KEY_LEFTBRACE: return bShift ? '{' : '[';
+			case KEY_RIGHTBRACE:return bShift ? '}' : ']';
+			case KEY_SEMICOLON: return bShift ? ':' : ';';
+			case KEY_APOSTROPHE:return bShift ? '"' : '\'';
+			case KEY_GRAVE:     return bShift ? '~' : '`';
+			case KEY_BACKSLASH: return bShift ? '|' : '\\';
+			case KEY_COMMA:     return bShift ? '<' : ',';
+			case KEY_DOT:       return bShift ? '>' : '.';
+			case KEY_SLASH:     return bShift ? '?' : '/';
+			default: break;
+		}
+
+		// Letters: evdev keycodes for A-Z aren't alphabetically contiguous
+		// (they follow QWERTY row order), so map the actual scan codes.
+		static constexpr uint32_t k_uLetterKeycodesQwerty[26] = {
+			KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+			KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+			KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+		};
+		for ( int i = 0; i < 26; i++ )
+		{
+			if ( k_uLetterKeycodesQwerty[i] == uLinuxKeycode )
+				return char( ( bShift ? 'A' : 'a' ) + i );
+		}
+
+		return 0;
+	}
+
+	static ImGuiKey ImGuiKeyForKeycode( uint32_t uLinuxKeycode )
+	{
+		switch ( uLinuxKeycode )
+		{
+			case KEY_LEFTCTRL:   return ImGuiKey_LeftCtrl;
+			case KEY_RIGHTCTRL:  return ImGuiKey_RightCtrl;
+			case KEY_LEFTSHIFT:  return ImGuiKey_LeftShift;
+			case KEY_RIGHTSHIFT: return ImGuiKey_RightShift;
+			case KEY_LEFTALT:    return ImGuiKey_LeftAlt;
+			case KEY_RIGHTALT:   return ImGuiKey_RightAlt;
+			case KEY_LEFTMETA:   return ImGuiKey_LeftSuper;
+			case KEY_RIGHTMETA:  return ImGuiKey_RightSuper;
+
+			case KEY_TAB:        return ImGuiKey_Tab;
+			case KEY_LEFT:       return ImGuiKey_LeftArrow;
+			case KEY_RIGHT:      return ImGuiKey_RightArrow;
+			case KEY_UP:         return ImGuiKey_UpArrow;
+			case KEY_DOWN:       return ImGuiKey_DownArrow;
+			case KEY_PAGEUP:     return ImGuiKey_PageUp;
+			case KEY_PAGEDOWN:   return ImGuiKey_PageDown;
+			case KEY_HOME:       return ImGuiKey_Home;
+			case KEY_END:        return ImGuiKey_End;
+			case KEY_INSERT:     return ImGuiKey_Insert;
+			case KEY_DELETE:     return ImGuiKey_Delete;
+			case KEY_BACKSPACE:  return ImGuiKey_Backspace;
+			case KEY_SPACE:      return ImGuiKey_Space;
+			case KEY_ENTER:      return ImGuiKey_Enter;
+			case KEY_KPENTER:    return ImGuiKey_KeypadEnter;
+			case KEY_ESC:        return ImGuiKey_Escape;
+
+			case KEY_0: return ImGuiKey_0;
+			case KEY_1: return ImGuiKey_1;
+			case KEY_2: return ImGuiKey_2;
+			case KEY_3: return ImGuiKey_3;
+			case KEY_4: return ImGuiKey_4;
+			case KEY_5: return ImGuiKey_5;
+			case KEY_6: return ImGuiKey_6;
+			case KEY_7: return ImGuiKey_7;
+			case KEY_8: return ImGuiKey_8;
+			case KEY_9: return ImGuiKey_9;
+
+			case KEY_A: return ImGuiKey_A;
+			case KEY_B: return ImGuiKey_B;
+			case KEY_C: return ImGuiKey_C;
+			case KEY_D: return ImGuiKey_D;
+			case KEY_E: return ImGuiKey_E;
+			case KEY_F: return ImGuiKey_F;
+			case KEY_G: return ImGuiKey_G;
+			case KEY_H: return ImGuiKey_H;
+			case KEY_I: return ImGuiKey_I;
+			case KEY_J: return ImGuiKey_J;
+			case KEY_K: return ImGuiKey_K;
+			case KEY_L: return ImGuiKey_L;
+			case KEY_M: return ImGuiKey_M;
+			case KEY_N: return ImGuiKey_N;
+			case KEY_O: return ImGuiKey_O;
+			case KEY_P: return ImGuiKey_P;
+			case KEY_Q: return ImGuiKey_Q;
+			case KEY_R: return ImGuiKey_R;
+			case KEY_S: return ImGuiKey_S;
+			case KEY_T: return ImGuiKey_T;
+			case KEY_U: return ImGuiKey_U;
+			case KEY_V: return ImGuiKey_V;
+			case KEY_W: return ImGuiKey_W;
+			case KEY_X: return ImGuiKey_X;
+			case KEY_Y: return ImGuiKey_Y;
+			case KEY_Z: return ImGuiKey_Z;
+
+			case KEY_F1:  return ImGuiKey_F1;
+			case KEY_F2:  return ImGuiKey_F2;
+			case KEY_F3:  return ImGuiKey_F3;
+			case KEY_F4:  return ImGuiKey_F4;
+			case KEY_F5:  return ImGuiKey_F5;
+			case KEY_F6:  return ImGuiKey_F6;
+			case KEY_F7:  return ImGuiKey_F7;
+			case KEY_F8:  return ImGuiKey_F8;
+			case KEY_F9:  return ImGuiKey_F9;
+			case KEY_F10: return ImGuiKey_F10;
+			case KEY_F11: return ImGuiKey_F11;
+			case KEY_F12: return ImGuiKey_F12;
+
+			default: return ImGuiKey_None;
+		}
+	}
+
+	static int ImGuiMouseButtonForLinuxButton( uint32_t uLinuxButton )
+	{
+		switch ( uLinuxButton )
+		{
+			case BTN_LEFT:   return ImGuiMouseButton_Left;
+			case BTN_RIGHT:  return ImGuiMouseButton_Right;
+			case BTN_MIDDLE: return ImGuiMouseButton_Middle;
+			default:         return -1;
+		}
+	}
+
+	static void HandleKeyEvent( ImGuiIO &io, uint32_t uLinuxKeycode, bool bPressed )
+	{
+		// Modifiers: feed the specific Left/Right key (so ImGui's own
+		// per-key state is exact) plus the recomputed merged Mod flag (the
+		// form widgets/shortcuts actually query) -- this is the standard
+		// pattern ImGui's own platform backends use.
+		switch ( uLinuxKeycode )
+		{
+			case KEY_LEFTCTRL: case KEY_RIGHTCTRL:
+				s_nCtrlHeld = std::max( 0, s_nCtrlHeld + ( bPressed ? 1 : -1 ) );
+				io.AddKeyEvent( ImGuiKeyForKeycode( uLinuxKeycode ), bPressed );
+				io.AddKeyEvent( ImGuiMod_Ctrl, s_nCtrlHeld > 0 );
+				return;
+			case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT:
+				s_nShiftHeld = std::max( 0, s_nShiftHeld + ( bPressed ? 1 : -1 ) );
+				io.AddKeyEvent( ImGuiKeyForKeycode( uLinuxKeycode ), bPressed );
+				io.AddKeyEvent( ImGuiMod_Shift, s_nShiftHeld > 0 );
+				return;
+			case KEY_LEFTALT: case KEY_RIGHTALT:
+				s_nAltHeld = std::max( 0, s_nAltHeld + ( bPressed ? 1 : -1 ) );
+				io.AddKeyEvent( ImGuiKeyForKeycode( uLinuxKeycode ), bPressed );
+				io.AddKeyEvent( ImGuiMod_Alt, s_nAltHeld > 0 );
+				return;
+			case KEY_LEFTMETA: case KEY_RIGHTMETA:
+				s_nSuperHeld = std::max( 0, s_nSuperHeld + ( bPressed ? 1 : -1 ) );
+				io.AddKeyEvent( ImGuiKeyForKeycode( uLinuxKeycode ), bPressed );
+				io.AddKeyEvent( ImGuiMod_Super, s_nSuperHeld > 0 );
+				return;
+			default: break;
+		}
+
+		const ImGuiKey key = ImGuiKeyForKeycode( uLinuxKeycode );
+		if ( key != ImGuiKey_None )
+			io.AddKeyEvent( key, bPressed );
+
+		// Text input: only on press, only for keys with a printable ASCII
+		// mapping (see AsciiForKeycode's ponytail note).
+		if ( bPressed )
+		{
+			const char c = AsciiForKeycode( uLinuxKeycode, s_nShiftHeld > 0 );
+			if ( c != 0 )
+				io.AddInputCharacter( (unsigned int)(unsigned char)c );
+		}
+	}
+
+	static void ClampCursorToTexture()
+	{
+		s_flCursorX = std::clamp( s_flCursorX, 0.0, double( s_uTextureWidth > 0 ? s_uTextureWidth - 1 : 0 ) );
+		s_flCursorY = std::clamp( s_flCursorY, 0.0, double( s_uTextureHeight > 0 ? s_uTextureHeight - 1 : 0 ) );
+	}
+
+	static void DrainInputQueue()
+	{
+		// Note: still proceeds to the capturing-edge check below even when
+		// nothing was queued this drain -- a toggle-off with no further
+		// input at all must still clear ImGui's held state.
+		std::vector<QueuedInputEvent> events;
+		{
+			std::lock_guard<std::mutex> lock( s_InputQueueLock );
+			events.swap( s_InputQueue );
+		}
+
+		ImGuiIO &io = ImGui::GetIO();
+
+		if ( !s_bCursorInitialized && s_uTextureWidth > 0 && s_uTextureHeight > 0 )
+		{
+			s_flCursorX = s_uTextureWidth * 0.5;
+			s_flCursorY = s_uTextureHeight * 0.5;
+			s_bCursorInitialized = true;
+		}
+
+		bool bCursorMoved = false;
+
+		for ( const QueuedInputEvent &ev : events )
+		{
+			switch ( ev.kind )
+			{
+				case QueuedInputEvent::Kind::Key:
+					HandleKeyEvent( io, ev.uCode, ev.bPressed );
+					break;
+
+				case QueuedInputEvent::Kind::MouseMotionDelta:
+					s_flCursorX += ev.x;
+					s_flCursorY += ev.y;
+					bCursorMoved = true;
+					break;
+
+				case QueuedInputEvent::Kind::MouseMotionAbsolute:
+					s_flCursorX = ev.x * s_uTextureWidth;
+					s_flCursorY = ev.y * s_uTextureHeight;
+					bCursorMoved = true;
+					break;
+
+				case QueuedInputEvent::Kind::MouseButton:
+				{
+					const int nButton = ImGuiMouseButtonForLinuxButton( ev.uCode );
+					if ( nButton >= 0 )
+						io.AddMouseButtonEvent( nButton, ev.bPressed );
+					break;
+				}
+
+				case QueuedInputEvent::Kind::MouseWheel:
+					io.AddMouseWheelEvent( (float)ev.x, (float)ev.y );
+					break;
+			}
+		}
+
+		if ( bCursorMoved )
+		{
+			ClampCursorToTexture();
+			io.AddMousePosEvent( (float)s_flCursorX, (float)s_flCursorY );
+		}
+
+		// Release-safety backstop (see the file-level M2 comment): the
+		// instant capturing drops, forcibly clear anything ImGui still
+		// thinks is held/dragging, regardless of whether every individual
+		// release event made it through the queue by now.
+		const bool bCapturingNow = SettingsOverlay_IsCapturingInput();
+		if ( s_bWasCapturingLastDrain && !bCapturingNow )
+		{
+			io.ClearInputKeys();
+			io.ClearInputMouse();
+			s_nCtrlHeld = s_nShiftHeld = s_nAltHeld = s_nSuperHeld = 0;
+		}
+		s_bWasCapturingLastDrain = bCapturingNow;
 	}
 }
