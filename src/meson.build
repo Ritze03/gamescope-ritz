@@ -146,6 +146,7 @@ src = [
   'Overlay/Chrome.cpp',
   'Overlay/PanelDisplay.cpp',
   'Overlay/FpsDisplay.cpp',
+  'Overlay/Notifications.cpp',
   'Overlay/PanelShaders.cpp',
   'Overlay/PanelAudio.cpp',
   'Overlay/PanelConfig.cpp',

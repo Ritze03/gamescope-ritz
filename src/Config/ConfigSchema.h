@@ -89,6 +89,30 @@ namespace gamescope::config
         // Process-level UI preference: present only in global.json, never in a
         // profile or per-game snapshot (see SPEC.md's config schema section).
         std::optional<int> fade_ms;
+
+        // Toast notification system (this fork's own addition, see
+        // Overlay/Notifications.h and DECISIONS.md #25): where toasts anchor
+        // on screen. One of the 9 values Notifications.cpp's kPlacements
+        // lists ("top-left" .. "bottom-right"). Deliberately placed here,
+        // not on NotificationSettings below - like fade_ms above, this is a
+        // process-level UI preference that is *always* global, by explicit
+        // design (DECISIONS.md #25's "placement is global, muting is
+        // per-game" split), so it gets fade_ms's same exemption from
+        // profile/per-game snapshots (SettingsToJson's bIncludeOverlay)
+        // rather than becoming a per-game-eligible field the way
+        // NotificationSettings::muted is.
+        std::string notification_placement = "top-right";
+    };
+
+    // Toast notification system (this fork's own addition, see
+    // Overlay/Notifications.h and DECISIONS.md #25). Unlike OverlaySettings
+    // above, this is a normal per-layer field - shared via global.json
+    // unless a game has "Override Global Config" on, exactly like
+    // FpsDisplaySettings::enabled, so a game can mute toasts for itself
+    // without affecting any other game or the global default.
+    struct NotificationSettings
+    {
+        bool muted = false;
     };
 
     // The full settings shape shared by global.json, profiles/<name>.json, and
@@ -100,5 +124,6 @@ namespace gamescope::config
         FpsDisplaySettings fps_display;
         ReshadeSettings reshade;
         OverlaySettings overlay;
+        NotificationSettings notifications;
     };
 }

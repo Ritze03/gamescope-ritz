@@ -208,6 +208,74 @@ TEST_CASE( "override_global snapshot wins over global, and is a frozen snapshot"
     REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "NIS" );
 }
 
+TEST_CASE( "notification muting resolves per-game override vs. global exactly like every other setting", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.notifications.muted = false;
+    REQUIRE( SaveGlobal( global ) );
+
+    // No override yet -- every app id (and no app id at all) reads the
+    // global value.
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "1" } ).notifications.muted );
+    REQUIRE_FALSE( ResolveEffective( std::nullopt ).notifications.muted );
+
+    // Enabling the override for app 1 with muted:true must not affect any
+    // other app id or the global default itself (DECISIONS.md #19's full
+    // snapshot, not a diff -- same mechanism NotificationSettings::muted
+    // rides on as fps_display.enabled etc.).
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "1" } );
+    snapshot.notifications.muted = true;
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).notifications.muted );
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "2" } ).notifications.muted );
+    REQUIRE_FALSE( ResolveEffective( std::nullopt ).notifications.muted );
+
+    // Clearing the override falls back to global (still unmuted) again.
+    REQUIRE( ClearPerGameOverride( "1" ) );
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "1" } ).notifications.muted );
+}
+
+TEST_CASE( "notification placement is global-only and never rides along in a per-game snapshot", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.overlay.notification_placement = "bottom-left";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( LoadGlobal().overlay.notification_placement == "bottom-left" );
+
+    // Enabling "Override Global Config" for a game snapshots the full
+    // effective settings (mirrors PanelConfig.cpp's EnableOverride) -- but
+    // SettingsToJson's bIncludeOverlay=false for per-game files means the
+    // `overlay` object (and therefore notification_placement) is never
+    // written there at all, by design (ConfigSchema.h's OverlaySettings
+    // comment, DECISIONS.md #25).
+    Settings snapshot = ResolveEffective( std::nullopt );
+    REQUIRE( SnapshotPerGameOverride( "9", snapshot ) );
+
+    std::optional<Settings> oPerGame = LoadPerGameOverride( "9" );
+    REQUIRE( oPerGame.has_value() );
+    // Never present in the per-game file -> resolves back to the
+    // compiled-in default, NOT the real global value -- proving placement
+    // genuinely isn't per-game-eligible the way notifications.muted is.
+    REQUIRE( oPerGame->overlay.notification_placement == "top-right" );
+
+    // The real global placement is still reachable via LoadGlobal()
+    // directly, regardless of any game's override state -- this is the
+    // read path Notifications.cpp's own EnsureConfigLoaded() relies on.
+    REQUIRE( LoadGlobal().overlay.notification_placement == "bottom-left" );
+
+    // Changing global placement afterward must not require touching the
+    // per-game file at all -- it was never in there to begin with.
+    Settings changedGlobal = global;
+    changedGlobal.overlay.notification_placement = "top-center";
+    REQUIRE( SaveGlobal( changedGlobal ) );
+    REQUIRE( LoadGlobal().overlay.notification_placement == "top-center" );
+}
+
 TEST_CASE( "a per-game file with override_global: false behaves as absent", "[config]" )
 {
     TempConfigHome home;
@@ -229,6 +297,7 @@ TEST_CASE( "ApplyProfile copies values in once, not a live reference", "[config]
     Settings profile{};
     profile.gamescope.filter = "FSR";
     profile.gamescope.sharpness = 15;
+    profile.notifications.muted = true;
     REQUIRE( SaveProfile( "FPS", profile ) );
 
     Settings target{};
@@ -236,6 +305,7 @@ TEST_CASE( "ApplyProfile copies values in once, not a live reference", "[config]
     REQUIRE( ApplyProfile( target, "FPS" ) );
     REQUIRE( target.gamescope.filter == "FSR" );
     REQUIRE( target.gamescope.sharpness == 15 );
+    REQUIRE( target.notifications.muted == true ); // NotificationSettings::muted is a normal per-layer field, copied like fps_display/reshade above
 
     // Editing the profile afterwards must not retroactively change `target`
     // (DECISIONS.md #20 - a one-time copy, not a live reference).

@@ -38,6 +38,7 @@
 #include "Utils/Process.h"
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
+#include "Overlay/Notifications.h"
 
 #include "cs_composite_blit.h"
 #include "cs_composite_blur.h"
@@ -4064,6 +4065,7 @@ std::optional<uint64_t> vulkan_screenshot( const struct FrameInfo_t *frameInfo, 
 	// on its own separate compute submission.
 	gamescope::SettingsOverlay_WaitForRender( cmdBuffer.get() );
 	gamescope::FpsDisplay_WaitForRender( cmdBuffer.get() );
+	gamescope::Notifications::WaitForRender( cmdBuffer.get() );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);
@@ -4197,6 +4199,7 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	// so vulkan_composite() never reads a torn/still-in-progress overlay frame.
 	gamescope::SettingsOverlay_WaitForRender( cmdBuffer.get() );
 	gamescope::FpsDisplay_WaitForRender( cmdBuffer.get() );
+	gamescope::Notifications::WaitForRender( cmdBuffer.get() );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);
@@ -4386,6 +4389,7 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	// that will never come.
 	gamescope::SettingsOverlay_CommitReads();
 	gamescope::FpsDisplay_CommitReads();
+	gamescope::Notifications::CommitReads();
 
 	if ( !GetBackend()->UsesVulkanSwapchain() && pOutputOverride == nullptr && increment )
 	{
