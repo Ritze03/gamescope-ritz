@@ -116,14 +116,37 @@ namespace gamescope
 
 	static bool s_bImguiInitialized = false;
 
-	static OwningRc<CVulkanTexture> s_pOverlayTexture;
+	// Double-buffered: two textures, alternated every RenderAndSubmit() call
+	// (see EnsureTexture()/RenderAndSubmit()). Why two and not one: the
+	// general queue (writer, here) and the compute queue (reader, inside
+	// vulkan_composite() via bind_all_layers()) run as independent,
+	// concurrently-scheduled GPU submissions -- the only explicit sync
+	// between them is the one-directional wait in
+	// SettingsOverlay_WaitForRender() (compute waits for THIS frame's
+	// general-queue render to finish before sampling it). Nothing enforces
+	// the reverse: with a single texture, the *next* frame's general-queue
+	// write (a fresh VK_ATTACHMENT_LOAD_OP_CLEAR + redraw) could begin
+	// while the *previous* frame's compute-queue composite might still be
+	// mid-sample of that exact same image -- a write-after-read hazard with
+	// no barrier preventing it, which reads back as visible tearing/
+	// corruption on whatever the overlay layer is blended over (the whole
+	// screen, since this layer covers it). Alternating between two textures
+	// means a given texture is only written once every *other* frame, so
+	// the compute-queue read from two frames ago has a full extra vblank
+	// period to retire before this same texture is touched again --
+	// removing the same-frame race entirely rather than just shortening it.
+	static constexpr uint32_t k_uOverlayTextureCount = 2;
+	static OwningRc<CVulkanTexture> s_pOverlayTextures[ k_uOverlayTextureCount ];
+	static uint32_t s_uCurrentTextureIndex = 0;
 	static uint32_t s_uTextureWidth = 0;
 	static uint32_t s_uTextureHeight = 0;
 	// The freshly-(re)created texture has never been rendered into, so its
 	// layout is still VK_IMAGE_LAYOUT_UNDEFINED and needs an explicit initial
-	// transition. Every other frame it's already GENERAL from the previous
-	// frame's own end-of-render state -- see the file-level comment.
-	static bool s_bTextureNeedsInitialBarrier = true;
+	// transition. Every other time a given slot is reused it's already
+	// GENERAL from that slot's own previous end-of-render state -- see the
+	// file-level comment. One flag per slot since the two textures reach
+	// their first use independently.
+	static bool s_bTextureNeedsInitialBarrier[ k_uOverlayTextureCount ] = { true, true };
 
 	// The general-queue command buffer from the previous frame we rendered,
 	// kept alive only long enough to CPU-confirm it's done (see file-level
@@ -227,31 +250,41 @@ namespace gamescope
 
 	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight )
 	{
-		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
+		if ( s_pOverlayTextures[0] && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
 			return true;
 
-		OwningRc<CVulkanTexture> pNewTexture = new CVulkanTexture();
+		OwningRc<CVulkanTexture> pNewTextures[ k_uOverlayTextureCount ];
 
-		CVulkanTexture::createFlags flags;
-		flags.bSampled = true;
-		flags.bColorAttachment = true;
-
-		// Render-target + sampled, per superdoc/planning/SPEC.md's Architecture
-		// section -- no new CVulkanTexture usage flag is needed for this.
-		if ( !pNewTexture->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+		for ( uint32_t i = 0; i < k_uOverlayTextureCount; i++ )
 		{
-			s_OverlayLog.errorf( "failed to (re)create the overlay's offscreen texture at %ux%u", uWidth, uHeight );
-			return false;
+			pNewTextures[i] = new CVulkanTexture();
+
+			CVulkanTexture::createFlags flags;
+			flags.bSampled = true;
+			flags.bColorAttachment = true;
+
+			// Render-target + sampled, per superdoc/planning/SPEC.md's Architecture
+			// section -- no new CVulkanTexture usage flag is needed for this.
+			if ( !pNewTextures[i]->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+			{
+				s_OverlayLog.errorf( "failed to (re)create the overlay's offscreen texture %u at %ux%u", i, uWidth, uHeight );
+				return false;
+			}
 		}
 
-		// If a compute submission from a previous frame is still sampling the
-		// old s_pOverlayTexture, its own Rc<> ref (held by that submission's
-		// CVulkanCmdBuffer::m_textureRefs) keeps it alive until that
-		// submission is recycled -- replacing our own reference here is safe.
-		s_pOverlayTexture = std::move( pNewTexture );
+		// If a compute submission from a previous frame is still sampling one
+		// of the old s_pOverlayTextures, its own Rc<> ref (held by that
+		// submission's CVulkanCmdBuffer::m_textureRefs) keeps it alive until
+		// that submission is recycled -- replacing our own references here is
+		// safe.
+		for ( uint32_t i = 0; i < k_uOverlayTextureCount; i++ )
+		{
+			s_pOverlayTextures[i] = std::move( pNewTextures[i] );
+			s_bTextureNeedsInitialBarrier[i] = true;
+		}
 		s_uTextureWidth = uWidth;
 		s_uTextureHeight = uHeight;
-		s_bTextureNeedsInitialBarrier = true;
+		s_uCurrentTextureIndex = 0;
 		return true;
 	}
 
@@ -336,11 +369,15 @@ namespace gamescope
 		gamescope::chrome::EndPanelWindow();
 	}
 
-	// Records the ImGui draw into s_pOverlayTexture on the general queue and
-	// submits it, signaling s_pTimelineSemaphore at the returned point on
-	// success. Returns false (nothing submitted) on failure.
+	// Records the ImGui draw into the *other* one of the two s_pOverlayTextures
+	// slots (see their declaration comment) on the general queue and submits
+	// it, signaling s_pTimelineSemaphore at the returned point on success.
+	// Returns false (nothing submitted) on failure.
 	static bool RenderAndSubmit()
 	{
+		s_uCurrentTextureIndex = ( s_uCurrentTextureIndex + 1 ) % k_uOverlayTextureCount;
+		CVulkanTexture *pTexture = s_pOverlayTextures[ s_uCurrentTextureIndex ].get();
+
 		if ( s_bHasPrevSubmission )
 		{
 			// See the file-level comment: this CPU wait only guards freeing our
@@ -374,7 +411,7 @@ namespace gamescope
 
 		VkCommandBuffer rawCmdBuffer = cmdBuffer->rawBuffer();
 
-		if ( s_bTextureNeedsInitialBarrier )
+		if ( s_bTextureNeedsInitialBarrier[ s_uCurrentTextureIndex ] )
 		{
 			VkImageMemoryBarrier barrier = {
 				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -384,7 +421,7 @@ namespace gamescope
 				.newLayout = VK_IMAGE_LAYOUT_GENERAL,
 				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.image = s_pOverlayTexture->vkImage(),
+				.image = pTexture->vkImage(),
 				.subresourceRange = {
 					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 					.levelCount = 1,
@@ -394,7 +431,7 @@ namespace gamescope
 			g_device.vk.CmdPipelineBarrier( rawCmdBuffer,
 				VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 				0, 0, nullptr, 0, nullptr, 1, &barrier );
-			s_bTextureNeedsInitialBarrier = false;
+			s_bTextureNeedsInitialBarrier[ s_uCurrentTextureIndex ] = false;
 		}
 
 		// Rendering (not sampling) view: the UNORM interpretation of the
@@ -406,7 +443,7 @@ namespace gamescope
 		// same treatment any other sRGB client texture gets.
 		VkRenderingAttachmentInfo colorAttachment = {
 			.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-			.imageView = s_pOverlayTexture->srgbView(),
+			.imageView = pTexture->srgbView(),
 			.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
 			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 			.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -506,7 +543,7 @@ namespace gamescope
 		if ( !layer )
 			return; // out of layer slots this frame -- see SettingsOverlay.h
 
-		layer->tex = s_pOverlayTexture;
+		layer->tex = s_pOverlayTextures[ s_uCurrentTextureIndex ];
 		layer->zpos = g_zposSettingsOverlay;
 		layer->offset = { 0.0f, 0.0f };
 		layer->scale = { 1.0f, 1.0f };

@@ -151,10 +151,21 @@ namespace gamescope
 	static ImGuiContext *s_pImguiContext = nullptr;
 	static bool s_bImguiInitialized = false;
 
-	static OwningRc<CVulkanTexture> s_pOverlayTexture;
+	// Double-buffered for the same reason SettingsOverlay.cpp's own
+	// s_pOverlayTextures[] is: the general queue (writer, here) and the
+	// compute queue (reader, inside vulkan_composite()) are only
+	// synchronized one way (compute waits for this frame's render to
+	// finish -- FpsDisplay_WaitForRender()), so a single texture could have
+	// its *next* frame's clear+redraw race a *previous* frame's still-in-
+	// flight compute-queue sample of the same image. Alternating between
+	// two textures removes that same-frame race entirely -- see
+	// SettingsOverlay.cpp's declaration comment for the full reasoning.
+	static constexpr uint32_t k_uOverlayTextureCount = 2;
+	static OwningRc<CVulkanTexture> s_pOverlayTextures[ k_uOverlayTextureCount ];
+	static uint32_t s_uCurrentTextureIndex = 0;
 	static uint32_t s_uTextureWidth = 0;
 	static uint32_t s_uTextureHeight = 0;
-	static bool s_bTextureNeedsInitialBarrier = true;
+	static bool s_bTextureNeedsInitialBarrier[ k_uOverlayTextureCount ] = { true, true };
 
 	static std::unique_ptr<CVulkanCmdBuffer> s_pPrevCmdBuffer;
 	static std::shared_ptr<VulkanTimelineSemaphore_t> s_pTimelineSemaphore;
@@ -248,25 +259,34 @@ namespace gamescope
 
 	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight )
 	{
-		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
+		if ( s_pOverlayTextures[0] && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
 			return true;
 
-		OwningRc<CVulkanTexture> pNewTexture = new CVulkanTexture();
+		OwningRc<CVulkanTexture> pNewTextures[ k_uOverlayTextureCount ];
 
-		CVulkanTexture::createFlags flags;
-		flags.bSampled = true;
-		flags.bColorAttachment = true;
-
-		if ( !pNewTexture->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+		for ( uint32_t i = 0; i < k_uOverlayTextureCount; i++ )
 		{
-			s_FpsLog.errorf( "failed to (re)create the FPS display's offscreen texture at %ux%u", uWidth, uHeight );
-			return false;
+			pNewTextures[i] = new CVulkanTexture();
+
+			CVulkanTexture::createFlags flags;
+			flags.bSampled = true;
+			flags.bColorAttachment = true;
+
+			if ( !pNewTextures[i]->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+			{
+				s_FpsLog.errorf( "failed to (re)create the FPS display's offscreen texture %u at %ux%u", i, uWidth, uHeight );
+				return false;
+			}
 		}
 
-		s_pOverlayTexture = std::move( pNewTexture );
+		for ( uint32_t i = 0; i < k_uOverlayTextureCount; i++ )
+		{
+			s_pOverlayTextures[i] = std::move( pNewTextures[i] );
+			s_bTextureNeedsInitialBarrier[i] = true;
+		}
 		s_uTextureWidth = uWidth;
 		s_uTextureHeight = uHeight;
-		s_bTextureNeedsInitialBarrier = true;
+		s_uCurrentTextureIndex = 0;
 		return true;
 	}
 
@@ -339,6 +359,9 @@ namespace gamescope
 
 	static bool RenderAndSubmit()
 	{
+		s_uCurrentTextureIndex = ( s_uCurrentTextureIndex + 1 ) % k_uOverlayTextureCount;
+		CVulkanTexture *pTexture = s_pOverlayTextures[ s_uCurrentTextureIndex ].get();
+
 		if ( s_bHasPrevSubmission )
 		{
 			VkSemaphoreWaitInfo waitInfo = {
@@ -364,7 +387,7 @@ namespace gamescope
 
 		VkCommandBuffer rawCmdBuffer = cmdBuffer->rawBuffer();
 
-		if ( s_bTextureNeedsInitialBarrier )
+		if ( s_bTextureNeedsInitialBarrier[ s_uCurrentTextureIndex ] )
 		{
 			VkImageMemoryBarrier barrier = {
 				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -374,7 +397,7 @@ namespace gamescope
 				.newLayout = VK_IMAGE_LAYOUT_GENERAL,
 				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.image = s_pOverlayTexture->vkImage(),
+				.image = pTexture->vkImage(),
 				.subresourceRange = {
 					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 					.levelCount = 1,
@@ -384,12 +407,12 @@ namespace gamescope
 			g_device.vk.CmdPipelineBarrier( rawCmdBuffer,
 				VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 				0, 0, nullptr, 0, nullptr, 1, &barrier );
-			s_bTextureNeedsInitialBarrier = false;
+			s_bTextureNeedsInitialBarrier[ s_uCurrentTextureIndex ] = false;
 		}
 
 		VkRenderingAttachmentInfo colorAttachment = {
 			.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-			.imageView = s_pOverlayTexture->srgbView(),
+			.imageView = pTexture->srgbView(),
 			.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
 			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 			.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -481,7 +504,7 @@ namespace gamescope
 		if ( !layer )
 			return; // out of layer slots this frame
 
-		layer->tex = s_pOverlayTexture;
+		layer->tex = s_pOverlayTextures[ s_uCurrentTextureIndex ];
 		layer->zpos = g_zposFpsDisplay;
 		layer->offset = { 0.0f, 0.0f };
 		layer->scale = { 1.0f, 1.0f };
