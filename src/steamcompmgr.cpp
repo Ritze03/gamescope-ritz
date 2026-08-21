@@ -97,6 +97,7 @@
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
+#include "Audio/Volume.h"
 #include "BufferMemo.h"
 #include "Utils/Process.h"
 #include "Utils/Algorithm.h"
@@ -8648,9 +8649,19 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 	// This allows us to launch stuff alongside Gamescope if we ever wanted -- rather
 	// than being under it. (eg. if we wanted a drm janitor or something.)
 
+	// M5: start the volume backend's polling thread now, unconditionally --
+	// harmless (and a no-op past the first call) even when there's no
+	// primary child yet, so the Audio panel has a live state to read as
+	// soon as the overlay itself can open. See src/Audio/Volume.h.
+	gamescope::Audio::Init();
+
 	if ( ppPrimaryChildArgv && *ppPrimaryChildArgv )
 	{
 		pid_t nPrimaryChildPid = gamescope::Process::SpawnProcessInWatchdog( ppPrimaryChildArgv, false );
+
+		// M5: point the volume backend at the game's process tree so it can
+		// find its PipeWire stream node -- see src/Audio/Volume.h.
+		gamescope::Audio::SetTargetPid( nPrimaryChildPid );
 
 		std::thread waitThread([ nPrimaryChildPid ]()
 		{
