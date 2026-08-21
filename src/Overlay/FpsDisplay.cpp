@@ -51,6 +51,7 @@
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
 #include "Fonts.h"
+#include "Widgets.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -520,7 +521,11 @@ namespace gamescope
 		ImGui::PopFont();
 
 		bool bChanged = false;
-		bChanged |= ImGui::Checkbox( "Show FPS counter", &cfg.enabled );
+		// Widgets::Checkbox, not ::Toggle: this settings block IS the design
+		// guide's own named example of the "List rows" checkbox-row pattern
+		// ("FPS HUD's row toggles: 11x11 checkbox + label") -- see Widgets.h's
+		// Checkbox() comment.
+		bChanged |= widgets::Checkbox( "Show FPS counter", &cfg.enabled );
 
 		ImGui::BeginDisabled( !cfg.enabled );
 		bChanged |= ImGui::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
@@ -541,7 +546,7 @@ namespace gamescope
 		// the render side regardless of what's stored here.
 		const bool bBackdropAvailable = cfg.blend_mode != "additive";
 		ImGui::BeginDisabled( !bBackdropAvailable );
-		bChanged |= ImGui::Checkbox( "Backdrop", &cfg.backdrop_enabled );
+		bChanged |= widgets::Checkbox( "Backdrop", &cfg.backdrop_enabled );
 		ImGui::BeginDisabled( !( bBackdropAvailable && cfg.backdrop_enabled ) );
 		bChanged |= ImGui::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
 		bChanged |= ImGui::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
