@@ -1,3 +1,6 @@
 glm-*
 packagecache
 stb
+nlohmann_json
+Catch2-*
+.wraplock
