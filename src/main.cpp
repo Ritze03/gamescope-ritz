@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <float.h>
 #include <climits>
+#include <strings.h>
 
 #include "main.hpp"
 #include "steamcompmgr.hpp"
@@ -32,6 +33,8 @@
 #include "Utils/Version.h"
 #include "Utils/Process.h"
 #include "Utils/Defer.h"
+#include "Config/AppId.h"
+#include "Config/ConfigManager.h"
 
 #include "backends.h"
 #include "refresh_rate.h"
@@ -47,6 +50,9 @@ using namespace std::literals;
 EStreamColorspace g_ForcedNV12ColorSpace = k_EStreamColorspace_Unknown;
 extern gamescope::ConVar<bool> cv_adaptive_sync;
 extern gamescope::ConVar<bool> cv_shutdown_on_primary_child_death;
+// cv_hdr_enabled/cv_tearing_enabled live in steamcompmgr.cpp; only
+// cv_tearing_enabled is already extern'd via steamcompmgr.hpp.
+extern gamescope::ConVar<bool> cv_hdr_enabled;
 
 const char *gamescope_optstring = nullptr;
 const char *g_pOriginalDisplay = nullptr;
@@ -59,6 +65,7 @@ int g_nCursorScaleHeight = -1;
 const struct option *gamescope_options = (struct option[]){
 	{ "help", no_argument, nullptr, 0 },
 	{ "version", no_argument, nullptr, 0 },
+	{ "ritz-dump-config", no_argument, nullptr, 0 },
 	{ "nested-width", required_argument, nullptr, 'w' },
 	{ "nested-height", required_argument, nullptr, 'h' },
 	{ "nested-refresh", required_argument, nullptr, 'r' },
@@ -424,6 +431,64 @@ static enum GamescopeUpscaleFilter parse_upscaler_filter(const char *str)
 	}
 }
 
+// Config-driven equivalents of parse_upscaler_scaler/parse_upscaler_filter
+// above that never exit(1) on a bad value - a hand-edited/stale global.json
+// entry must fall back to a sane default with a loud log, not kill gamescope
+// at startup (see superdoc/planning/SPEC.md's config malformed-file policy).
+// Case-insensitive since the on-disk schema uses uppercase ("FSR") but this
+// stays forgiving either way.
+static GamescopeUpscaleFilter ritz_config_parse_filter(const std::string &sValue)
+{
+	if (!strcasecmp(sValue.c_str(), "LINEAR"))
+		return GamescopeUpscaleFilter::LINEAR;
+	else if (!strcasecmp(sValue.c_str(), "NEAREST"))
+		return GamescopeUpscaleFilter::NEAREST;
+	else if (!strcasecmp(sValue.c_str(), "FSR"))
+		return GamescopeUpscaleFilter::FSR;
+	else if (!strcasecmp(sValue.c_str(), "NIS"))
+		return GamescopeUpscaleFilter::NIS;
+	else if (!strcasecmp(sValue.c_str(), "PIXEL"))
+		return GamescopeUpscaleFilter::PIXEL;
+
+	fprintf(stderr, "gamescope: config: unknown gamescope.filter \"%s\", defaulting to LINEAR\n", sValue.c_str());
+	return GamescopeUpscaleFilter::LINEAR;
+}
+
+static GamescopeUpscaleScaler ritz_config_parse_scaler(const std::string &sValue)
+{
+	if (!strcasecmp(sValue.c_str(), "AUTO"))
+		return GamescopeUpscaleScaler::AUTO;
+	else if (!strcasecmp(sValue.c_str(), "INTEGER"))
+		return GamescopeUpscaleScaler::INTEGER;
+	else if (!strcasecmp(sValue.c_str(), "FIT"))
+		return GamescopeUpscaleScaler::FIT;
+	else if (!strcasecmp(sValue.c_str(), "FILL"))
+		return GamescopeUpscaleScaler::FILL;
+	else if (!strcasecmp(sValue.c_str(), "STRETCH"))
+		return GamescopeUpscaleScaler::STRETCH;
+
+	fprintf(stderr, "gamescope: config: unknown gamescope.scaler \"%s\", defaulting to AUTO\n", sValue.c_str());
+	return GamescopeUpscaleScaler::AUTO;
+}
+
+// Seeds the same globals/ConVars the CLI flags below set, from gamescope-ritz's
+// config system, before argv parsing - so a global.json (or a resolved
+// per-game override) sets the starting point and an explicit CLI flag, if
+// given, still wins exactly as it already does today (see the 'S'/'F'/etc.
+// cases in the getopt loop below). Plain globals (filter/scaler/sharpness) are
+// set directly; VRR/HDR/tearing already have real ConVars (see
+// superdoc/planning/config-system.md's ConVar hybrid section).
+static void apply_ritz_config_to_startup_state(const gamescope::config::Settings &config)
+{
+	g_wantedUpscaleFilter = ritz_config_parse_filter(config.gamescope.filter);
+	g_wantedUpscaleScaler = ritz_config_parse_scaler(config.gamescope.scaler);
+	g_upscaleFilterSharpness = config.gamescope.sharpness;
+
+	cv_adaptive_sync = config.gamescope.vrr_enabled;
+	cv_hdr_enabled = config.gamescope.hdr_enabled;
+	cv_tearing_enabled = config.gamescope.tearing_enabled;
+}
+
 static enum gamescope::GamescopeBackend parse_backend_name(const char *str)
 {
 	if (strcmp(str, "auto") == 0) {
@@ -728,6 +793,16 @@ int main(int argc, char **argv)
 	// Force disable this horrible broken layer.
 	setenv("DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1", "1", 1);
 
+	// gamescope-ritz config system (M0): resolve which game (if any) this
+	// session belongs to, and load its effective settings - as early as
+	// architecturally possible, before wlserver/backend/steamcompmgr init, per
+	// superdoc/planning/SPEC.md's Feature 6 and DECISIONS.md #21. This is a
+	// pure env-var read + file load; it does not depend on anything else in
+	// main() having run yet.
+	std::optional<std::string> oRitzAppId = gamescope::config::ResolveAppId();
+	gamescope::config::Settings ritzConfig = gamescope::config::ResolveEffective( oRitzAppId );
+	apply_ritz_config_to_startup_state( ritzConfig );
+
 	static std::string optstring = build_optstring(gamescope_options);
 	gamescope_optstring = optstring.c_str();
 
@@ -795,6 +870,11 @@ int main(int argc, char **argv)
 				} else if (strcmp(opt_name, "version") == 0) {
 					gamescope::PrintVersion();
 					return 0;
+				} else if (strcmp(opt_name, "ritz-dump-config") == 0) {
+					// Temporary M0 acceptance hook (SPEC.md's Build order) - no
+					// UI exists yet to show the resolved config. A later
+					// milestone's overlay/gamescopectl command replaces this.
+					fprintf( stderr, "%s\n", gamescope::config::DebugDumpEffective( oRitzAppId ).c_str() );
 				} else if (strcmp(opt_name, "debug-layers") == 0) {
 					g_bDebugLayers = true;
 				} else if (strcmp(opt_name, "disable-color-management") == 0) {
