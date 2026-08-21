@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none">
+  <g stroke="currentColor" stroke-width="1.5" stroke-linecap="square">
+    <line x1="3.5" y1="5.5" x2="13" y2="5.5"/>
+    <line x1="3.5" y1="10" x2="13" y2="10"/>
+    <line x1="3.5" y1="14.5" x2="13" y2="14.5"/>
+  </g>
+  <g fill="currentColor">
+    <circle cx="15.7" cy="5.5" r="1.15"/>
+    <circle cx="15.7" cy="10" r="1.15"/>
+    <circle cx="15.7" cy="14.5" r="1.15"/>
+  </g>
+</svg>
