@@ -43,6 +43,14 @@ namespace gamescope::config
         float backdrop_padding = 6.0f;
         std::string blend_mode = "alpha"; // alpha | additive
         float text_opacity = 1.0f;
+
+        // Row toggles (spec §11's "ROWS checkbox list") -- independent of
+        // `enabled` above (the HUD as a whole); these just show/hide the
+        // frametime graph and percentile-stats rows within it, reusing this
+        // struct's existing font_size/backdrop_*/blend_mode/text_opacity
+        // fields rather than defining a second set per row.
+        bool graph_enabled = true;
+        bool percentiles_enabled = true;
     };
 
     struct ReshadeVibrancySettings

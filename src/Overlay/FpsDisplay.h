@@ -39,8 +39,9 @@ namespace gamescope
 	// the compute submission is on the queue. No-op when nothing is pending.
 	void FpsDisplay_CommitReads();
 
-	// Draws this feature's own settings controls (enabled toggle, font
-	// size, backdrop group, blend mode, text opacity) using whichever ImGui
+	// Draws this feature's own settings controls (enabled toggle, row
+	// toggles for the frametime graph and percentile row, font size,
+	// backdrop group, blend mode, text opacity) using whichever ImGui
 	// context is *currently active* at the call site -- meant to be invoked
 	// from inside the settings overlay's own panel draw, so its widgets
 	// render as part of that panel. Edits are persisted to gamescope-ritz's

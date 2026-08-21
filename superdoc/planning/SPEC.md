@@ -366,6 +366,21 @@ clients, not in-process code.
 | `fps_display.backdrop_padding` | float (px) | 0–24 | 6 | |
 | `fps_display.blend_mode` | enum | `alpha` \| `additive` | `alpha` | additive + backdrop rect interact oddly (the backdrop itself would glow) — UI should auto-disable/warn, not silently combine them |
 | `fps_display.text_opacity` | float | 0.0–1.0 | 1.0 | independent of backdrop |
+| `fps_display.graph_enabled` | bool | – | true | row toggle for the frametime graph (spec §10 Row 2) |
+| `fps_display.percentiles_enabled` | bool | – | true | row toggle for the 1%/0.1%/avg percentile row (spec §10 Row 3) |
+
+**Frametime graph and percentile row (shipped alongside the readout).** Both read
+from the same `g_ulLastAppFrametimeNs` atomic as the headline number — never
+mangoapp's shared `mangoapp_msg_v1` struct — into a 240-sample ring buffer
+(`FpsDisplay.cpp`'s `kHistoryCapacity`, matching `ui-mockup-precise-spec.md` §11's
+own footer text "sampling 500 ms · 240-frame window"). The graph's y-axis ceiling is
+a slow EMA of the window's max frametime (not the raw max), so a single stutter
+doesn't yank the whole graph's scale; a fresh spike still reads clearly in the
+meantime because it's drawn capped at full bar height and in the spec's amber
+outlier color before the ceiling catches up. Percentiles (1% low, 0.1% low, average)
+recompute at most every 500ms and use the standard "mean of the worst bucket"
+definition — with a 240-frame window, the 0.1% bucket rounds up to just the single
+worst sample, a known coarseness worth remembering when reading that number.
 
 **Risks:** none load-bearing beyond the general ImGui-render-pipeline risks already
 covered — this is the cheapest of the five features once the overlay shell exists,
