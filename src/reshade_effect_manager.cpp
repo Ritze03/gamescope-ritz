@@ -1223,7 +1223,22 @@ bool ReshadeEffectPipeline::init(CVulkanDevice *device, const ReshadeEffectKey &
             tex = findTexture(sampler.texture_name);
             if (!tex)
             {
-                reshade_log.errorf("Couldn't find texture with name: %s", sampler.texture_name.c_str());
+                // A texture declared with a semantic (eg. "texture texColor :
+                // COLOR;") is deliberately never allocated above (semantic
+                // check at the top of the "Create Textures" loop) -- it's
+                // gamescope's implicit input image, bound from execute()'s
+                // inImage argument instead (see execute() below). findTexture()
+                // correctly returning null for it is expected, not an error;
+                // only warn when the name doesn't correspond to any known
+                // semantic texture at all.
+                const bool bIsSemanticTexture = std::ranges::any_of(m_module->textures,
+                    [&](const reshadefx::texture_info& texInfo)
+                    {
+                        return texInfo.unique_name == sampler.texture_name && !texInfo.semantic.empty();
+                    });
+
+                if (!bIsSemanticTexture)
+                    reshade_log.errorf("Couldn't find texture with name: %s", sampler.texture_name.c_str());
             }
 
             VkFilter            minFilter;
