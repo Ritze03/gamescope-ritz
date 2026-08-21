@@ -12,7 +12,10 @@
 #include <thread>
 #include <vector>
 
+#include <cerrno>
+#include <csignal>
 #include <fcntl.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
@@ -380,6 +383,80 @@ namespace gamescope::config
             return true;
         }
 
+        // Removes this config file's own orphaned atomic-write temp files
+        // (`<sPath>.tmp-<pid>`, see WriteFileAtomic above) left behind when a
+        // previous process was killed between the temp write and the rename
+        // - observed for real as a `global.json.tmp-<pid>` left beside a
+        // valid global.json after a test process was killed mid-write (#21).
+        //
+        // The temp name embeds the writing process's pid, so a file is only
+        // ever removed once kill(pid, 0) reports that pid as no longer
+        // running (errno == ESRCH). Anything else - the pid is alive, or we
+        // simply can't tell (e.g. EPERM, a live pid owned by another user) -
+        // is left alone, since the file may belong to a concurrently
+        // running gamescope-ritz instance mid-write right now; deleting
+        // that would corrupt a live write rather than just clean up litter.
+        // Only files matching this exact "<basename>.tmp-<digits>" shape in
+        // this file's own directory are ever considered.
+        //
+        // ponytail: a pid can in theory be reused by an unrelated process
+        // between the original writer's death and this check, which would
+        // make a truly stale temp file look "alive" and get skipped - the
+        // file just stays as litter until a later load re-checks it once
+        // that new process is also gone, not corruption (this only ever
+        // skips-on-doubt, never deletes-on-doubt), so a stronger liveness
+        // check (e.g. /proc/<pid>/exe identity or a pidfd) isn't needed for
+        // gamescope-ritz's usage.
+        void SweepStaleTempFiles( const std::string &sPath )
+        {
+            std::filesystem::path path( sPath );
+            std::string sDir = path.parent_path().string();
+            std::string sPrefix = path.filename().string() + ".tmp-";
+
+            std::error_code ec;
+            std::filesystem::directory_iterator it( sDir, ec );
+            if ( ec )
+                return; // directory doesn't exist yet - nothing to sweep
+
+            for ( const std::filesystem::directory_entry &entry : it )
+            {
+                std::error_code ecFile;
+                if ( !entry.is_regular_file( ecFile ) || ecFile )
+                    continue;
+
+                const std::string sName = entry.path().filename().string();
+                if ( sName.compare( 0, sPrefix.size(), sPrefix ) != 0 )
+                    continue;
+
+                std::string sPidPart = sName.substr( sPrefix.size() );
+                if ( sPidPart.empty() || sPidPart.find_first_not_of( "0123456789" ) != std::string::npos )
+                    continue; // doesn't match "<prefix><digits>" exactly - not confidently ours
+
+                errno = 0;
+                char *pszEnd = nullptr;
+                long lPid = std::strtol( sPidPart.c_str(), &pszEnd, 10 );
+                if ( lPid <= 0 || pszEnd == sPidPart.c_str() || errno == ERANGE )
+                    continue;
+
+                errno = 0;
+                if ( ::kill( (pid_t)lPid, 0 ) == 0 || errno != ESRCH )
+                    continue; // pid is alive, or liveness is uncertain - may be a live writer, leave it
+
+                std::error_code ecRemove;
+                std::filesystem::remove( entry.path(), ecRemove );
+                if ( ecRemove )
+                {
+                    s_ConfigLog.errorf( "failed to remove stale temp file %s: %s",
+                        entry.path().c_str(), ecRemove.message().c_str() );
+                }
+                else
+                {
+                    s_ConfigLog.infof( "removed orphaned atomic-write temp file %s (pid %ld no longer running)",
+                        entry.path().c_str(), lPid );
+                }
+            }
+        }
+
         std::string DumpJson( const nlohmann::json &j )
         {
             // error_handler_t::replace: defense in depth against abort()-on-
@@ -461,6 +538,7 @@ namespace gamescope::config
     Settings LoadGlobal()
     {
         std::string sPath = GlobalConfigPath();
+        SweepStaleTempFiles( sPath );
         std::optional<std::string> oText = ReadWholeFile( sPath );
         if ( !oText )
             return Settings{};
@@ -475,6 +553,7 @@ namespace gamescope::config
     std::optional<Settings> LoadProfile( std::string_view svSanitizedName )
     {
         std::string sPath = ProfilePath( svSanitizedName );
+        SweepStaleTempFiles( sPath );
         std::optional<std::string> oText = ReadWholeFile( sPath );
         if ( !oText )
             return std::nullopt;
@@ -489,6 +568,7 @@ namespace gamescope::config
     std::optional<Settings> LoadPerGameOverride( std::string_view svAppId )
     {
         std::string sPath = GamePath( svAppId );
+        SweepStaleTempFiles( sPath );
         std::optional<std::string> oText = ReadWholeFile( sPath );
         if ( !oText )
             return std::nullopt;

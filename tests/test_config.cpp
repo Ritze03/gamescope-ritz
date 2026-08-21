@@ -7,6 +7,9 @@
 #include <map>
 #include <string>
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
 
@@ -402,4 +405,57 @@ TEST_CASE( "copying another game's config is a one-time snapshot, not a link bet
     REQUIRE( SnapshotPerGameOverride( "10", editedSource ) );
 
     REQUIRE( ResolveEffective( std::optional<std::string>{ "20" } ).gamescope.filter == "FSR" );
+}
+
+TEST_CASE( "loading sweeps this config's own stale atomic-write temp files, but never a live writer's", "[config]" )
+{
+    // Covers #21: WriteFileAtomic's write-temp-then-rename can be
+    // interrupted (process killed) between the temp write and the rename,
+    // orphaning a "<path>.tmp-<pid>" file that nothing used to clean up.
+    TempConfigHome home;
+
+    Settings s{};
+    s.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( s ) );
+
+    std::string sGlobalPath = GlobalConfigPath();
+
+    // A dead pid: fork a child that exits immediately and reap it, so its
+    // pid is guaranteed to no longer be running by the time we use it -
+    // this is what the sweep must remove.
+    pid_t deadPid = fork();
+    REQUIRE( deadPid >= 0 );
+    if ( deadPid == 0 )
+        _exit( 0 );
+    int status = 0;
+    REQUIRE( waitpid( deadPid, &status, 0 ) == deadPid );
+
+    std::string sStaleTemp = sGlobalPath + ".tmp-" + std::to_string( (long)deadPid );
+    std::string sLiveTemp = sGlobalPath + ".tmp-" + std::to_string( (long)getpid() );
+
+    {
+        std::ofstream stale( sStaleTemp );
+        stale << "{}";
+    }
+    {
+        std::ofstream live( sLiveTemp );
+        live << "{}";
+    }
+    REQUIRE( std::filesystem::exists( sStaleTemp ) );
+    REQUIRE( std::filesystem::exists( sLiveTemp ) );
+
+    // LoadGlobal() sweeps global.json's own temp files as a side effect.
+    LoadGlobal();
+
+    // The dead pid's temp file is orphaned litter - gone.
+    REQUIRE_FALSE( std::filesystem::exists( sStaleTemp ) );
+    // This process's own pid is alive (it's us), so a temp file "owned" by
+    // it must never be touched - it could belong to a write in flight.
+    REQUIRE( std::filesystem::exists( sLiveTemp ) );
+
+    // The real config file itself must be untouched by the sweep.
+    REQUIRE( std::filesystem::exists( sGlobalPath ) );
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+
+    std::filesystem::remove( sLiveTemp );
 }
