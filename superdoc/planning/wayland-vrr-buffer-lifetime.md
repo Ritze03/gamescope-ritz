@@ -1,5 +1,31 @@
 # Wayland backend, VRR host: buffer lifetime findings
 
+> ## RESOLVED — 2026-08-21 (later same day). The flicker this doc chased is an
+> ## SDL-backend bug; the Wayland backend (which every test in this doc correctly used)
+> ## is clean for it.
+>
+> Confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f
+> -- vkcube` flickers badly; the identical binary with no `--backend` flag (auto-
+> selecting Wayland — `auto_select_backend()` in `src/main.cpp`) is completely clean.
+> The user's packaged upstream 3.16.24 flickers under SDL too. So:
+>
+> - **Findings 1 and 2 stand as written** — the optimisation confound is real
+>   background context, and the buffer-refcount hypothesis was correctly disproved by
+>   this doc's own instrumented `--backend wayland` testing (not an SDL artifact — this
+>   is one of the few docs in this investigation that used the right backend
+>   throughout). The `m_bCompositorAcquired` → `m_uCompositorAcquisitions` fix
+>   described under "What was changed" is a real, worthwhile correctness fix on its own
+>   merits — keep it — it is just, as the doc already says, **not** a fix for the
+>   flicker.
+> - **Finding 3 is re-scoped, not disproved.** The client-pause / stale-scanout
+>   behaviour is real and was correctly measured on the Wayland backend, but it is no
+>   longer "the strongest surviving lead" for *the* reported flicker — that flicker
+>   has a confirmed, different, SDL-backend-only cause (see
+>   `superdoc/planning/upstream-sdl-backend-flicker-report.md`). Finding 3 may still
+>   describe a genuine (and possibly expected/host-side) VRR characteristic worth
+>   understanding on its own, but treat it as a separate question, not a step toward
+>   explaining the flicker this investigation was chasing.
+
 **2026-08-21.** An instrumented pass over `src/Backends/WaylandBackend.cpp` to test one
 specific hypothesis about the fullscreen VRR flicker, plus two findings that came out of
 it. Written so the next agent does not re-run any of this.

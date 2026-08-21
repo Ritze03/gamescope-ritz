@@ -20,6 +20,26 @@
 # --fullscreen, --backend/--all-backends, --soak with GPU-fault log scanning, and a real
 # pass/fail exit status — see the option descriptions below for what each one buys.
 #
+# =============================================================================
+# WHY NOT SDL (2026-08-21) — READ BEFORE CHANGING THE --backend DEFAULT BACK
+# =============================================================================
+# The fullscreen VRR flicker chased for many rounds across this repo's planning docs is
+# an SDL-BACKEND BUG, confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope
+# --backend sdl -f -- vkcube` flickers badly; the identical binary with NO --backend
+# flag (which auto-selects Wayland — see auto_select_backend() in src/main.cpp) is
+# completely clean. The user's packaged upstream 3.16.24 also flickers under SDL, so
+# this is an upstream SDL-backend defect, not ours, and version-independent. It went
+# unnoticed for a long time because a real user on a Wayland session never takes the
+# SDL path — but this harness previously did, by defaulting --backend to sdl, and
+# every earlier "SDL-only" run in this file's own history (see the note above) was
+# quietly hiding that. The default below is "auto" (no --backend flag at all, so
+# gamescope decides same as it would for a real user), not "sdl" and not a hardcoded
+# "wayland". --backend sdl remains available and --all-backends still sweeps it — SDL
+# coverage is still useful, now as a known-broken regression check, not blind default
+# coverage. Draft upstream report:
+# superdoc/planning/upstream-sdl-backend-flicker-report.md.
+# =============================================================================
+#
 # Usage:
 #   scripts/overlay-test-harness.sh [options]
 #
@@ -48,7 +68,11 @@
 #                         `hyprctl monitors`) whether VRR is actually reported active on
 #                         the target output afterwards — a VRR test that silently isn't
 #                         running VRR is worse than no test.
-#   --backend NAME        gamescope backend: sdl (default), wayland, headless, drm, openvr
+#   --backend NAME        gamescope backend: auto (default — no --backend flag passed,
+#                         gamescope's own auto_select_backend() picks, same as a real
+#                         user's session), or explicitly sdl, wayland, headless, drm,
+#                         openvr. See the "WHY NOT SDL" block near the top of this file
+#                         before changing this default back to sdl.
 #   --all-backends         sweep sdl, wayland, headless against the same check and report
 #                         PASS/FAIL per backend (see run_all_backends()). drm/openvr are
 #                         excluded from the sweep: drm would try to take over a real KMS
@@ -144,7 +168,10 @@ NESTED_SIZE=""
 OUTPUT_SIZE=""
 REFRESH_HZ=""
 TARGET_OUTPUT=""
-BACKEND="sdl"
+# "auto" = pass no --backend flag; gamescope's own auto_select_backend() then picks
+# (Wayland, under a real Wayland session) -- NOT "sdl". See the "WHY NOT SDL" block
+# above: the SDL backend is a confirmed upstream flicker bug. Do not default back to sdl.
+BACKEND="auto"
 ALL_BACKENDS=0
 DO_FULLSCREEN=0
 DO_ADAPTIVE_SYNC=0
@@ -155,7 +182,7 @@ SCRATCH_ROOT="/tmp/claude-1000/-home-mo-GitHubProjects-gamescope-ritz/4093488d-4
 OUT_DIR=""
 USE_REAL_CONFIG=0
 YDOTOOL_SOCKET_DEFAULT="/home/mo/.YDOTOOL-SOCKET"
-KNOWN_BACKENDS="sdl wayland headless drm openvr"
+KNOWN_BACKENDS="auto sdl wayland headless drm openvr"
 SWEEP_BACKENDS="sdl wayland headless"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -487,7 +514,9 @@ run_one_backend() {
   local gs_log="$run_dir/gamescope.log"
   local run_failed=0
 
-  local args=(--backend "$backend" -w "$NESTED_W" -h "$NESTED_H" -W "$OUTPUT_W" -H "$OUTPUT_H")
+  local args=(-w "$NESTED_W" -h "$NESTED_H" -W "$OUTPUT_W" -H "$OUTPUT_H")
+  # "auto" means: pass no --backend flag, let gamescope auto-select (see WHY NOT SDL).
+  [[ "$backend" != "auto" ]] && args+=(--backend "$backend")
   [[ -n "$REFRESH_HZ" ]] && args+=(-r "$REFRESH_HZ")
   [[ "$DO_FULLSCREEN" -eq 1 ]] && args+=(-f)
   [[ "$DO_ADAPTIVE_SYNC" -eq 1 ]] && args+=(--adaptive-sync)

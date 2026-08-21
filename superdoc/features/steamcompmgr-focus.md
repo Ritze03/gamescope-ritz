@@ -2,9 +2,14 @@
 
 Decides, every reroll, which window is *the* focused window per output connector, which
 window gets X11 keyboard focus, which gets the mouse, and which override/underlay/
-decoration windows get composited on top of it. This is the fork's most heavily-patched
-subsystem: five of the last ten commits on this codebase are focus-arbitration edge-case
-fixes here or in the OpenVR backend that feeds it (see [backend-openvr](backend-openvr.md)).
+decoration windows get composited on top of it. This is the most heavily-patched
+subsystem in the commit history leading up to this repo's base commit: five of the last
+ten commits on this codebase are focus-arbitration edge-case fixes here or in the OpenVR
+backend that feeds it (see [backend-openvr](backend-openvr.md)). **These are upstream
+`ValveSoftware/gamescope` commits, not this fork's own patches** — this repo's base
+commit `fcc1341` is exactly upstream HEAD (confirmed via `git merge-base
+--is-ancestor`), so this whole run of focus-arbitration fixes is Valve's own recent
+work, inherited by this fork, not something this fork diverged to produce.
 
 ## How it works
 
@@ -111,9 +116,10 @@ if ( keyboardFocusWindow && ctx->currentKeyboardFocusWindow &&
 
 ### Two crash/undefined-behaviour fixes in the property path
 
-- *Why (`1efc919`, "do not read zero-element properties in `get_prop`"):* `get_prop`
-  (`src/steamcompmgr.cpp:3342`) calls `XGetWindowProperty`, which — as this fork
-  discovered — hands back a non-null allocation even when the property holds **zero**
+- *Why (`1efc919`, "do not read zero-element properties in `get_prop`", an upstream
+  Valve commit — see the note at the top of this doc):* `get_prop`
+  (`src/steamcompmgr.cpp:3342`) calls `XGetWindowProperty`, which hands back a
+  non-null allocation even when the property holds **zero**
   elements (e.g. the focused-app atom when nothing is focused). The old code
   unconditionally `memcpy`'d `sizeof(unsigned int)` bytes out of that allocation
   regardless of `n` (the returned element count), reading uninitialized memory whenever

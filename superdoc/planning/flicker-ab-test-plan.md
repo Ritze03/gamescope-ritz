@@ -1,5 +1,23 @@
 # Flicker A/B test plan
 
+> **RESOLVED — 2026-08-21.** The flicker this plan was chasing is an **SDL-backend
+> bug**, confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope --backend
+> sdl -f -- vkcube` flickers badly; the identical binary with **no `--backend` flag**
+> (which auto-selects Wayland — see `auto_select_backend()` in `src/main.cpp`) is
+> completely clean. The user's packaged upstream 3.16.24 also flickers under SDL, so
+> this is an **upstream SDL-backend defect, not ours**, and version-independent. It
+> went unnoticed because a real user on a Wayland session never takes the SDL path —
+> but `scripts/flicker-ab-test.sh` defaulted `--backend` to `sdl`, so **every single
+> "flickers" result this plan ever produced went through the broken backend**, and
+> every "clean" result (the `upstream` control here included, when run manually
+> without `--backend`) was actually a Wayland-backend run. The premise below —
+> "the cause is somewhere in our diff against upstream" — is **wrong**: there is no
+> such diff-based cause. The script's `--backend` default has been changed to auto
+> (no flag, i.e. gamescope's own auto-selection) — see the "WHY NOT SDL" comment near
+> the top of `scripts/flicker-ab-test.sh`. The reasoning below is kept for the record
+> but every conclusion in it is superseded by the above. Draft upstream report:
+> `superdoc/planning/upstream-sdl-backend-flicker-report.md`.
+
 **2026-08-21.** Written for a ten-minute testing session, not an hour. You are the
 instrument here — nothing available in this repo can measure the artifact, only your
 eyes on real hardware can. Ground truth so far: stock `/usr/bin/gamescope
@@ -166,5 +184,6 @@ it still flickers without VRR, it isn't.
 `scripts/flicker-ab-test.sh <variant> [options]` — `--help` for the full option list.
 Variants: `overlay-inert`, `no-dynamic-rendering-ext`, `no-convar-seed`, `normal`,
 `upstream`. Useful options: `--no-vrr`, `--output NAME` (default `DP-1`), `--client
-CMD` (default `vkcube`), `--backend NAME` (default `sdl`, matching your nested
-Hyprland setup).
+CMD` (default `vkcube`), `--backend NAME` (default: none passed — gamescope
+auto-selects, same as a real user's session; **no longer `sdl`**, see the resolution
+note at the top of this doc — SDL is the confirmed bug).
