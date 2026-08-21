@@ -190,10 +190,6 @@ namespace gamescope::config
             {
                 s.overlay.fade_ms = JGetOptInt( *pOverlay, "fade_ms" );
                 s.overlay.notification_placement = JGetString( *pOverlay, "notification_placement", s.overlay.notification_placement );
-            }
-
-            if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
-                s.notifications.muted = JGetBool( *pNotifications, "muted", s.notifications.muted );
 
                 // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
                 s.overlay.dock_scale = JGetFloat( *pOverlay, "dock_scale", s.overlay.dock_scale );
@@ -206,6 +202,9 @@ namespace gamescope::config
                 s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
                 s.overlay.background_darkening = JGetFloat( *pOverlay, "background_darkening", s.overlay.background_darkening );
             }
+
+            if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
+                s.notifications.muted = JGetBool( *pNotifications, "muted", s.notifications.muted );
 
             return s;
         }
