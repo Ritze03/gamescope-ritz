@@ -18,6 +18,7 @@
 #include "PanelAudio.h"
 
 #include "../Audio/Volume.h"
+#include "Widgets.h"
 
 #include <cmath>
 
@@ -65,7 +66,7 @@ namespace gamescope
 		}
 
 		bool bMuted = state.bMuted;
-		if ( ImGui::Checkbox( "Mute", &bMuted ) )
+		if ( widgets::Toggle( "Mute", &bMuted ) )
 			Audio::RequestMute( bMuted );
 
 		if ( bDisabled )

@@ -40,6 +40,7 @@
 #include "rendervulkan.hpp"
 #include "Config/ConfigManager.h"
 #include "Fonts.h"
+#include "Widgets.h"
 
 #include "imgui.h"
 
@@ -191,7 +192,7 @@ namespace gamescope
 	{
 		auto &v = s_CachedSettings.reshade.vibrancy;
 
-		if ( ImGui::Checkbox( "Vibrancy##enabled", &v.enabled ) )
+		if ( widgets::Toggle( "Vibrancy##enabled", &v.enabled ) )
 		{
 			if ( v.enabled )
 				EnsureEffectLoaded();
@@ -208,7 +209,7 @@ namespace gamescope
 			QueueSave();
 		}
 
-		if ( ImGui::Checkbox( "Protect skin tones", &v.protect_skin_tones ) )
+		if ( widgets::Toggle( "Protect skin tones", &v.protect_skin_tones ) )
 		{
 			SetRuntimeUniformBool( "vibrancy_protect_skin_tones", v.protect_skin_tones );
 			QueueSave();
@@ -224,7 +225,7 @@ namespace gamescope
 		if ( !s.strength.has_value() )
 			s.strength = 0.5f;
 
-		if ( ImGui::Checkbox( "Pre-Sharpen##enabled", &s.enabled ) )
+		if ( widgets::Toggle( "Pre-Sharpen##enabled", &s.enabled ) )
 		{
 			if ( s.enabled )
 				EnsureEffectLoaded();

@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "Config/ConfigManager.h"
+#include "Widgets.h"
 
 #include "imgui.h"
 
@@ -236,7 +237,7 @@ namespace gamescope
 					: "Editing: global config (global.json) -- shared with every other game that doesn't override it." );
 
 				bool bOverride = s_bOverrideActive;
-				if ( ImGui::Checkbox( "Override Global Config", &bOverride ) )
+				if ( widgets::Toggle( "Override Global Config", &bOverride ) )
 				{
 					if ( bOverride )
 						EnableOverride();

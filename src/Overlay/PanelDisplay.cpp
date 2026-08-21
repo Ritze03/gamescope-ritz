@@ -34,6 +34,7 @@
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
 #include "Fonts.h"
+#include "Widgets.h"
 
 #include "imgui.h"
 
@@ -279,7 +280,7 @@ namespace gamescope
 	static void DrawLiveToggles()
 	{
 		bool bVrr = cv_adaptive_sync.Get();
-		if ( ImGui::Checkbox( "VRR / Adaptive Sync", &bVrr ) )
+		if ( widgets::Toggle( "VRR / Adaptive Sync", &bVrr ) )
 		{
 			cv_adaptive_sync = bVrr;
 			s_CachedSettings.gamescope.vrr_enabled = bVrr;
@@ -287,7 +288,7 @@ namespace gamescope
 		}
 
 		bool bHdr = cv_hdr_enabled.Get();
-		if ( ImGui::Checkbox( "HDR", &bHdr ) )
+		if ( widgets::Toggle( "HDR", &bHdr ) )
 		{
 			cv_hdr_enabled = bHdr;
 			s_CachedSettings.gamescope.hdr_enabled = bHdr;
@@ -295,7 +296,7 @@ namespace gamescope
 		}
 
 		bool bTearing = cv_tearing_enabled.Get();
-		if ( ImGui::Checkbox( "Allow Tearing", &bTearing ) )
+		if ( widgets::Toggle( "Allow Tearing", &bTearing ) )
 		{
 			cv_tearing_enabled = bTearing;
 			s_CachedSettings.gamescope.tearing_enabled = bTearing;
