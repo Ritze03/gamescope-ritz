@@ -101,6 +101,7 @@ src = [
   'Utils/TempFiles.cpp',
   'Utils/Version.cpp',
   'Utils/Process.cpp',
+  'Audio/Volume.cpp',
   'Script/Script.cpp',
   'BufferMemo.cpp',
   'steamcompmgr.cpp',

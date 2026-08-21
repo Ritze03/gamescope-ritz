@@ -3,6 +3,7 @@
 #include <optional>
 #include <functional>
 #include <span>
+#include <vector>
 
 #include <sys/types.h>
 
@@ -10,6 +11,10 @@ namespace gamescope::Process
 {
     void BecomeSubreaper();
     void SetDeathSignal( int nSignal );
+
+    // Direct children of nPid, read from /proc/*/stat. Does not recurse -
+    // see KillProcessTree for the pattern to walk a full descendant tree.
+    std::vector<pid_t> GetChildPids( pid_t nPid );
 
     void KillAllChildren( pid_t nParentPid, int nSignal );
     void KillProcess( pid_t nPid, int nSignal );
