@@ -1961,6 +1961,13 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
 		if (image->queueFamily == VK_QUEUE_FAMILY_IGNORED)
 			image->queueFamily = m_queueFamily;
 
+		// A CONCURRENT image (createFlags::bGeneralQueueShared) is usable from
+		// every family it was created with, so it has no owner to transfer.
+		// Emitting a transfer for one is invalid usage, and the tracked
+		// image->queueFamily would be a lie anyway: these images are written
+		// from the general queue behind insertBarrier()'s back.
+		const bool bConcurrent = image->generalQueueShared();
+
 		VkImageMemoryBarrier memoryBarrier =
 		{
 			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -1968,8 +1975,8 @@ void CVulkanCmdBuffer::insertBarrier(bool flush)
 			.dstAccessMask = flush ? 0u : read_bits | write_bits,
 			.oldLayout = state.discarded ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
 			.newLayout = isPresent ? GetBackend()->GetPresentLayout() : VK_IMAGE_LAYOUT_GENERAL,
-			.srcQueueFamilyIndex = isExport ? image->queueFamily : state.needsImport ? externalQueue : image->queueFamily,
-			.dstQueueFamilyIndex = isExport ? externalQueue : state.needsImport ? m_queueFamily : m_queueFamily,
+			.srcQueueFamilyIndex = bConcurrent ? VK_QUEUE_FAMILY_IGNORED : isExport ? image->queueFamily : state.needsImport ? externalQueue : image->queueFamily,
+			.dstQueueFamilyIndex = bConcurrent ? VK_QUEUE_FAMILY_IGNORED : isExport ? externalQueue : state.needsImport ? m_queueFamily : m_queueFamily,
 			.image = image->vkImage(),
 			.subresourceRange = subResRange
 		};
@@ -2122,6 +2129,13 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 
 	m_bExternal = pDMA || flags.bExportable == true;
 
+	// See createFlags::bGeneralQueueShared. Only actually go CONCURRENT when
+	// the two families really are distinct -- when they are the same family
+	// (some Intel/NVIDIA setups) EXCLUSIVE is already correct, and CONCURRENT
+	// with duplicate indices is invalid usage.
+	const uint32_t uSharedQueueFamilies[2] = { g_device.queueFamily(), g_device.generalQueueFamily() };
+	m_bGeneralQueueShared = flags.bGeneralQueueShared && uSharedQueueFamilies[0] != uSharedQueueFamilies[1];
+
 	// Possible extensions for below
 	wsi_image_create_info wsiImageCreateInfo = {};
 	VkExternalMemoryImageCreateInfo externalImageCreateInfo = {};
@@ -2143,7 +2157,9 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 		.samples = VK_SAMPLE_COUNT_1_BIT,
 		.tiling = tiling,
 		.usage = usage,
-		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.sharingMode = m_bGeneralQueueShared ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+		.queueFamilyIndexCount = m_bGeneralQueueShared ? 2u : 0u,
+		.pQueueFamilyIndices = m_bGeneralQueueShared ? uSharedQueueFamilies : nullptr,
 	};
 
 	assert( imageInfo.format != VK_FORMAT_UNDEFINED );
@@ -4337,6 +4353,14 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	}
 
 	uint64_t sequence = g_device.submit(std::move(cmdBuffer));
+
+	// Issue #22: the read-done points recorded by *_WaitForRender() above are
+	// only reachable now that this submission is on the queue. Promoting them
+	// here (and only here) is what lets the overlays' next general-queue
+	// render safely wait on them without any chance of waiting on a signal
+	// that will never come.
+	gamescope::SettingsOverlay_CommitReads();
+	gamescope::FpsDisplay_CommitReads();
 
 	if ( !GetBackend()->UsesVulkanSwapchain() && pOutputOverride == nullptr && increment )
 	{

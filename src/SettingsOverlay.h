@@ -39,6 +39,15 @@ namespace gamescope
 	// queues. A no-op if the overlay didn't render anything this frame.
 	void SettingsOverlay_WaitForRender( CVulkanCmdBuffer *pComputeCmdBuffer );
 
+	// Issue #22. Call from vulkan_composite() immediately after the compute
+	// submission built with the command buffer passed to
+	// SettingsOverlay_WaitForRender() has been handed to the queue. Publishes
+	// that submission's "done sampling the overlay texture" timeline point so
+	// the overlay's next general-queue render can wait on it before clearing
+	// and redrawing the texture. Safe to call when no overlay render is
+	// pending -- it is then a no-op.
+	void SettingsOverlay_CommitReads();
+
 	// ------------------------------------------------------------------
 	// M2: input capture and release.
 	//

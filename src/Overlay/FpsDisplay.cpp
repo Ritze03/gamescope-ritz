@@ -165,6 +165,16 @@ namespace gamescope
 	static bool s_bHasPendingWaitPoint = false;
 	static uint64_t s_ulPendingWaitPoint = 0;
 
+	// Issue #22 return half. Identical mechanism to SettingsOverlay.cpp's
+	// s_pReadDoneSemaphore -- see that file's comment for the full rationale.
+	// This context is deliberately independent of the settings overlay's: the
+	// HUD stays up while the settings panel is closed, so it owns its own
+	// texture, its own semaphores and its own read-done bookkeeping.
+	static std::shared_ptr<VulkanTimelineSemaphore_t> s_pReadDoneSemaphore;
+	static uint64_t s_ulReadDoneCounter = 0;
+	static uint64_t s_ulPendingReadDonePoint = 0;
+	static uint64_t s_ulRegisteredReadDonePoint = 0;
+
 	static uint64_t s_ulLastFrameTimeNanos = 0;
 
 	static void EnsureImguiInit()
@@ -210,6 +220,7 @@ namespace gamescope
 		gamescope::fonts::Load();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
+		s_pReadDoneSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 
 		static VkFormat s_ColorAttachmentFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
@@ -246,16 +257,46 @@ namespace gamescope
 		ImGui::SetCurrentContext( pPrevContext );
 	}
 
+	// CPU-waits for our own previous general-queue submission to retire, then
+	// releases its command buffer. Mirrors SettingsOverlay.cpp's function of
+	// the same name; called from RenderAndSubmit() (where it should return
+	// immediately) and from EnsureTexture() before a resize drops the texture.
+	static void DrainPrevSubmission()
+	{
+		if ( !s_bHasPrevSubmission )
+			return;
+
+		VkSemaphoreWaitInfo waitInfo = {
+			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+			.semaphoreCount = 1,
+			.pSemaphores = &s_pTimelineSemaphore->pVkSemaphore,
+			.pValues = &s_ulPrevSignalPoint,
+		};
+		g_device.vk.WaitSemaphores( g_device.device(), &waitInfo, UINT64_MAX );
+		s_pPrevCmdBuffer.reset();
+		s_bHasPrevSubmission = false;
+	}
+
 	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight )
 	{
 		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
 			return true;
+
+		// Drain before dropping the old texture (see DrainPrevSubmission) -- the in-flight general-queue
+		// submission holds no Rc<> on it (it only names a raw VkImageView in
+		// its VkRenderingAttachmentInfo). Same reasoning as the identical call
+		// in SettingsOverlay.cpp's EnsureTexture().
+		DrainPrevSubmission();
 
 		OwningRc<CVulkanTexture> pNewTexture = new CVulkanTexture();
 
 		CVulkanTexture::createFlags flags;
 		flags.bSampled = true;
 		flags.bColorAttachment = true;
+		// Written on the general queue, sampled on the compute queue: needs
+		// CONCURRENT sharing across both families. See
+		// CVulkanTexture::createFlags::bGeneralQueueShared.
+		flags.bGeneralQueueShared = true;
 
 		if ( !pNewTexture->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
 		{
@@ -339,18 +380,7 @@ namespace gamescope
 
 	static bool RenderAndSubmit()
 	{
-		if ( s_bHasPrevSubmission )
-		{
-			VkSemaphoreWaitInfo waitInfo = {
-				.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-				.semaphoreCount = 1,
-				.pSemaphores = &s_pTimelineSemaphore->pVkSemaphore,
-				.pValues = &s_ulPrevSignalPoint,
-			};
-			g_device.vk.WaitSemaphores( g_device.device(), &waitInfo, UINT64_MAX );
-			s_pPrevCmdBuffer.reset();
-			s_bHasPrevSubmission = false;
-		}
+		DrainPrevSubmission();
 
 		if ( !g_device.vk.CmdBeginRendering || !g_device.vk.CmdEndRendering )
 		{
@@ -361,6 +391,11 @@ namespace gamescope
 		auto cmdBuffer = g_device.generalCommandBuffer();
 		if ( !cmdBuffer )
 			return false;
+
+		// Issue #22: block this frame's LOAD_OP_CLEAR on the GPU until the
+		// last submitted composite finished sampling the texture.
+		if ( s_ulRegisteredReadDonePoint )
+			cmdBuffer->AddDependency( s_pReadDoneSemaphore, s_ulRegisteredReadDonePoint );
 
 		VkCommandBuffer rawCmdBuffer = cmdBuffer->rawBuffer();
 
@@ -501,6 +536,24 @@ namespace gamescope
 			return;
 
 		pComputeCmdBuffer->AddDependency( s_pTimelineSemaphore, s_ulPendingWaitPoint );
+
+		// Issue #22 return half -- see s_pReadDoneSemaphore.
+		s_ulPendingReadDonePoint = ++s_ulReadDoneCounter;
+		pComputeCmdBuffer->AddSignal( s_pReadDoneSemaphore, s_ulPendingReadDonePoint );
+	}
+
+	// Called by vulkan_composite() once the compute submission is actually on
+	// the queue, promoting the pending read-done point to one it is safe for a
+	// later general-queue submission to wait on. See SettingsOverlay.cpp's
+	// SettingsOverlay_CommitReads() for why the promotion must happen here and
+	// not at record time.
+	void FpsDisplay_CommitReads()
+	{
+		if ( !s_ulPendingReadDonePoint )
+			return;
+
+		s_ulRegisteredReadDonePoint = s_ulPendingReadDonePoint;
+		s_ulPendingReadDonePoint = 0;
 	}
 
 	void FpsDisplay_DrawSettingsPanel()
