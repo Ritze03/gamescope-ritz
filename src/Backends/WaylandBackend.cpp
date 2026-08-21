@@ -503,7 +503,12 @@ namespace gamescope
         CWaylandBackend *m_pBackend = nullptr;
         wl_buffer *m_pHostBuffer = nullptr;
         wlr_buffer *m_pClientBuffer = nullptr;
-        bool m_bCompositorAcquired = false;
+        // How many times this buffer is currently attached-and-committed to a host
+        // surface. The host sends one wl_buffer.release per attach+commit, and
+        // gamescope can have the same buffer live on several planes (or re-present it
+        // on the same plane) at once, so this has to be a count -- see the comment on
+        // OnCompositorAcquire().
+        uint32_t m_uCompositorAcquisitions = 0;
     };
     const wl_buffer_listener CWaylandFb::s_BufferListener =
     {
@@ -945,29 +950,29 @@ namespace gamescope
 
     void CWaylandFb::OnCompositorAcquire()
     {
-        // If the compositor has acquired us, track that
-        // and increment the ref count.
-        if ( !m_bCompositorAcquired )
-        {
-            m_bCompositorAcquired = true;
-            IncRef();
-        }
+        // The host compositor sends exactly one wl_buffer.release per attach+commit,
+        // and gamescope can have one buffer attached to several plane surfaces at the
+        // same time (and re-attaches whatever is current to every plane on every
+        // frame -- CWaylandConnector::Present() always follows each plane's Present()
+        // with a Commit()). So acquisitions nest, and this has to count them rather
+        // than latch a bool: a bool would swallow the second IncRef, and then the
+        // *first* release would drop our reference while the host is still scanning
+        // the buffer out for the second attach.
+        m_uCompositorAcquisitions++;
+        IncRef();
     }
 
     void CWaylandFb::OnCompositorRelease()
     {
         // Compositor has released us, decrement rc.
-        //assert( m_bCompositorAcquired );
-
-        if ( m_bCompositorAcquired )
-        {
-            m_bCompositorAcquired = false;
-            DecRef();
-        }
-        else
+        if ( !m_uCompositorAcquisitions )
         {
             xdg_log.errorf( "Compositor released us but we were not acquired. Oh no." );
+            return;
         }
+
+        m_uCompositorAcquisitions--;
+        DecRef();
     }
 
     void CWaylandFb::Wayland_Buffer_Release( wl_buffer *pBuffer )
