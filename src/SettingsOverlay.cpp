@@ -43,6 +43,7 @@
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/PanelShaders.h"
+#include "Overlay/PanelConfig.h"
 
 #include <algorithm>
 #include <memory>
@@ -460,6 +461,7 @@ namespace gamescope
 		DrawPlaceholderWindow();
 		PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
 		PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
+		PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
 		ImGui::Render();
 
 		if ( !RenderAndSubmit() )
