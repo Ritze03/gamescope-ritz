@@ -61,6 +61,7 @@ namespace gamescope
 	static constexpr const char *k_pszEffectPath = "gamescope-ritz.fx";
 
 	static bool s_bConfigLoaded = false;
+	static uint64_t s_ulLoadedGeneration = 0;
 	static config::Settings s_CachedSettings;
 
 	// Set once the combined effect has actually been handed to
@@ -69,9 +70,13 @@ namespace gamescope
 	// life once it's true.
 	static bool s_bEffectLoaded = false;
 
+	// M7: routes through config::IsSessionOverrideActive() instead of always
+	// writing global.json -- PanelConfig.cpp is the only thing that ever
+	// flips that flag. Superseded M6's original "always global.json"
+	// simplification.
 	static void QueueSave()
 	{
-		config::EnqueueGlobalWrite( s_CachedSettings );
+		config::EnqueueRoutedWrite( s_CachedSettings );
 	}
 
 	// Every parameter this panel exposes MUST go through one of these two
@@ -141,9 +146,18 @@ namespace gamescope
 
 	static void EnsureConfigLoaded()
 	{
-		if ( s_bConfigLoaded )
+		const uint64_t ulGeneration = config::ConfigGeneration();
+		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
-		s_CachedSettings = config::LoadGlobal();
+
+		// M7: resolves against the current session's effective config
+		// (per-game snapshot when active, global.json otherwise) instead of
+		// always global.json -- see config::ResolveEffective(). Re-run on
+		// every PanelConfig-triggered generation bump too (profile applied,
+		// override toggled, another game's config copied in), not just the
+		// first draw.
+		s_CachedSettings = config::ResolveEffective( config::SessionAppId() );
+		s_ulLoadedGeneration = ulGeneration;
 
 		// Defensive: ConfigSchema.h's default member initializer already
 		// gives this a value (0.5f) and ConfigManager.cpp's loader
@@ -155,10 +169,11 @@ namespace gamescope
 
 		s_bConfigLoaded = true;
 
-		// A restart with a config saved from a previous session (effects
-		// already enabled) must apply immediately on the first composited
-		// frame, not wait for the user to touch a widget -- load the
-		// effect and push its full state now if anything was left on.
+		// A (re)load with effects enabled -- whether from a previous
+		// session's saved config on the very first draw, or a
+		// PanelConfig-triggered profile/override change mid-session -- must
+		// apply immediately, not wait for the user to touch a widget: load
+		// the effect and push its full state now if anything is on.
 		if ( s_CachedSettings.reshade.vibrancy.enabled || s_CachedSettings.reshade.pre_sharpen.enabled )
 			EnsureEffectLoaded();
 		PushAllUniformsToShader();

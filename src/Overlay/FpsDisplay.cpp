@@ -37,6 +37,7 @@
 #include <atomic>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <span>
@@ -70,24 +71,32 @@ namespace gamescope
 	// -------------------------------------------------------------------
 
 	static bool s_bConfigLoaded = false;
+	static uint64_t s_ulLoadedGeneration = 0;
 	static config::Settings s_Settings;
 
-	// ponytail: always resolves/saves against global.json, never a
-	// per-game override snapshot -- the "Override Global Config" flow
-	// (SPEC.md Feature 6) is owned by the Config/Profiles panel, which
-	// doesn't exist yet. Fine for M4: a game-specific FPS-display style is
-	// a nice-to-have, not part of this milestone's acceptance criteria.
+	// M7: reloads whenever PanelConfig.cpp bumps config::ConfigGeneration()
+	// (profile applied, override toggled, another game's config copied in),
+	// not just on this file's very first draw -- s_Settings.fps_display is
+	// read directly every frame in DrawReadout()/FpsDisplay_AddLayer(), so a
+	// plain reload is all a mid-session change needs here (unlike
+	// PanelDisplay.cpp/PanelShaders.cpp, nothing else caches a "live" copy
+	// of these fields to push).
 	static void EnsureConfigLoaded()
 	{
-		if ( s_bConfigLoaded )
+		const uint64_t ulGeneration = config::ConfigGeneration();
+		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
-		s_Settings = config::ResolveEffective( config::ResolveAppId() );
+		s_Settings = config::ResolveEffective( config::SessionAppId() );
+		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
 	}
 
+	// M7: routes through config::IsSessionOverrideActive() instead of
+	// always writing global.json -- superseded M4's original "always
+	// global.json" simplification.
 	static void PersistSettings()
 	{
-		config::EnqueueGlobalWrite( s_Settings );
+		config::EnqueueRoutedWrite( s_Settings );
 	}
 
 	// Console/gamescopectl affordance for testing without input capture
