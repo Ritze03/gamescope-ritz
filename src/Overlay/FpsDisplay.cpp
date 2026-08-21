@@ -40,7 +40,6 @@
 #include <cstdio>
 #include <memory>
 #include <span>
-#include <string>
 #include <string_view>
 
 #include "rendervulkan.hpp"
@@ -50,6 +49,7 @@
 #include "convar.h"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
+#include "Fonts.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -168,10 +168,36 @@ namespace gamescope
 		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
 
 		IMGUI_CHECKVERSION();
-		s_pImguiContext = ImGui::CreateContext(); // also makes it current
+		s_pImguiContext = ImGui::CreateContext();
+		// M8 part 1 (issue #13) fix: the vendored ImGui version's own
+		// CreateContext() only leaves the *new* context current when there
+		// was no previous context -- otherwise it explicitly restores
+		// whatever was current before the call (imgui.cpp's CreateContext():
+		// "Restore previous context if any, else keep new one."). Since
+		// SettingsOverlay.cpp's context is usually already current by the
+		// time this runs (both are driven from the same paint_all() call),
+		// relying on CreateContext() to leave s_pImguiContext current was
+		// wrong -- it silently left SettingsOverlay's context active, so
+		// every line below (GetIO(), fonts::Load(), ImGui_ImplVulkan_Init())
+		// was operating on the WRONG context/atlas, corrupting
+		// SettingsOverlay's font atlas and asserting
+		// ("Already initialized a renderer backend!") the moment
+		// ImGui_ImplVulkan_Init() tried to double-init that same IO. Found
+		// while verifying M8's per-context font loading (Overlay/Fonts.cpp)
+		// with both the settings overlay and the FPS HUD enabled together --
+		// a real pre-existing latent bug, not something typography
+		// introduced, but one this milestone's own correctness depends on.
+		ImGui::SetCurrentContext( s_pImguiContext );
 
 		ImGuiIO &io = ImGui::GetIO();
 		io.IniFilename = nullptr;
+
+		// M8 part 1 (issue #13): builds the IBM Plex font atlas for this
+		// context (a separate context/atlas from SettingsOverlay's own --
+		// see the file-level comment and Overlay/Fonts.h). Must happen
+		// before ImGui_ImplVulkan_Init() below, same reasoning as
+		// SettingsOverlay.cpp's own EnsureImguiInit().
+		gamescope::fonts::Load();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 
@@ -234,41 +260,6 @@ namespace gamescope
 		return true;
 	}
 
-	// Draws one glyph per call at a fixed cell pitch (the widest digit's
-	// measured width), so the readout's digits can't jitter horizontally
-	// as the number changes even though ImGui's built-in default font
-	// isn't a real tabular-figures font. Right-aligned within nDigits
-	// cells: unused leading cells are left blank rather than zero-padded.
-	//
-	// ponytail: this stands in for "IBM Plex Mono, tabular figures"
-	// (ui-design-guide.md) until a real font atlas is built -- flagged as
-	// M8 polish in FpsDisplay.h. This function is what actually satisfies
-	// the "digits don't jitter" requirement in the meantime.
-	static float DrawTabularInt( ImDrawList *pDrawList, ImFont *pFont, float flFontSize,
-		ImVec2 pos, ImU32 col, int nValue, int nDigits )
-	{
-		float flPitch = 0.0f;
-		for ( char c = '0'; c <= '9'; ++c )
-		{
-			char sz[2] = { c, 0 };
-			flPitch = std::max( flPitch, pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, sz ).x );
-		}
-
-		std::string sDigits = std::to_string( std::clamp( nValue, 0, 999 ) );
-		const int nPad = std::max( 0, nDigits - (int)sDigits.size() );
-
-		float x = pos.x + flPitch * (float)nPad;
-		for ( char c : sDigits )
-		{
-			char sz[2] = { c, 0 };
-			const float flGlyphWidth = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, sz ).x;
-			pDrawList->AddText( pFont, flFontSize, ImVec2( x + ( flPitch - flGlyphWidth ) * 0.5f, pos.y ), col, sz );
-			x += flPitch;
-		}
-
-		return flPitch * (float)( nPad + (int)sDigits.size() );
-	}
-
 	static void DrawReadout()
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -276,8 +267,16 @@ namespace gamescope
 		const int nFps = (int)std::lround( UpdateAndGetSmoothedFps() );
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
-		ImFont *pFont = ImGui::GetFont();
-		const float flFontSize = cfg.font_size;
+		// M8 part 1 (issue #13): IBM Plex Mono is genuinely monospaced, so
+		// a fixed-width formatted string ("%3d FPS") is tabular by
+		// construction -- every digit occupies the same advance width, so
+		// the readout can no longer jitter horizontally as the number
+		// changes. This replaces the former DrawTabularInt() helper, which
+		// existed only to fake that property (per-glyph draws at a hand-
+		// measured pitch) before a real tabular-figures font existed; now
+		// that one does, the workaround is gone.
+		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
+		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested, same mechanism the pre-M8 code already relied on
 
 		const bool bAdditive = cfg.blend_mode == "additive";
 		// additive + a filled backdrop rect would make the backdrop
@@ -299,15 +298,14 @@ namespace gamescope
 		const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(
 			ImVec4( textColorBase.x, textColorBase.y, textColorBase.z, cfg.text_opacity ) );
 
-		char szSuffix[8];
-		snprintf( szSuffix, sizeof( szSuffix ), " FPS" );
-		const ImVec2 suffixSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szSuffix );
-
-		const float flDigitsPitch = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, "0" ).x;
-		constexpr int kFpsDigits = 3; // 0-999 is plenty for a frame-rate readout
-		const float flNumberWidth = flDigitsPitch * (float)kFpsDigits;
-		const float flTextWidth = flNumberWidth + suffixSize.x;
-		const float flTextHeight = std::max( flDigitsPitch, suffixSize.y );
+		// Right-justified in a fixed 3-character field (blank-, not zero-,
+		// padded) -- 0-999 is plenty for a frame-rate readout. The unit
+		// suffix is drawn in the same Mono run as the number, per the
+		// design guide's "IBM Plex Mono ... for every number, unit, and
+		// state word" rule.
+		char szReadout[16];
+		snprintf( szReadout, sizeof( szReadout ), "%3d FPS", std::clamp( nFps, 0, 999 ) );
+		const ImVec2 textSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szReadout );
 
 		// ponytail: fixed top-left corner, no configurable position --
 		// SPEC.md's fps_display schema (Feature 3 / config schema) doesn't
@@ -320,15 +318,13 @@ namespace gamescope
 		{
 			const ImVec2 rectMin = origin;
 			const ImVec2 rectMax(
-				origin.x + flTextWidth + cfg.backdrop_padding * 2.0f,
-				origin.y + flTextHeight + cfg.backdrop_padding * 2.0f );
+				origin.x + textSize.x + cfg.backdrop_padding * 2.0f,
+				origin.y + textSize.y + cfg.backdrop_padding * 2.0f );
 			const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0.03f, 0.035f, 0.04f, cfg.backdrop_opacity ) );
 			pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, cfg.backdrop_rounding );
 		}
 
-		float x = textPos.x;
-		x += DrawTabularInt( pDrawList, pFont, flFontSize, ImVec2( x, textPos.y ), textColor, nFps, kFpsDigits );
-		pDrawList->AddText( pFont, flFontSize, ImVec2( x, textPos.y ), textColor, szSuffix );
+		pDrawList->AddText( pFont, flFontSize, textPos, textColor, szReadout );
 	}
 
 	static bool RenderAndSubmit()
@@ -504,7 +500,15 @@ namespace gamescope
 
 		ImGui::Spacing();
 		ImGui::Separator();
+		// Section role (Sans 500). This draws inside SettingsOverlay's own
+		// ImGui context/atlas (see this function's declared contract in
+		// FpsDisplay.h), not this file's own separate FPS-readout context,
+		// so it's safe to pull a font from gamescope::fonts::Get() here --
+		// SettingsOverlay.cpp's EnsureImguiInit() already called Load() on
+		// that context before any panel draws.
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Section ) );
 		ImGui::TextUnformatted( "FPS display (M4)" );
+		ImGui::PopFont();
 
 		bool bChanged = false;
 		bChanged |= ImGui::Checkbox( "Show FPS counter", &cfg.enabled );
