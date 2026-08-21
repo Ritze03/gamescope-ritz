@@ -20,9 +20,14 @@
 // including imgui.h/imgui_internal.h (see imgui_widgets.cpp's own top-of-
 // file #define of the same name); this file's ButtonBehavior()-based
 // widgets below need the same ImVec2 arithmetic Checkbox() itself uses.
+// Must come before *any* include of imgui.h in this translation unit
+// (imgui_internal.h itself #errors otherwise) -- so Palette.h, which also
+// includes imgui.h, is pulled in only after this and the real imgui.h
+// include below, not before.
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "Palette.h"
 
 #include <cstdio>
 
@@ -53,16 +58,15 @@ namespace gamescope::widgets
 		style.FrameBorderSize  = 1.0f;
 		style.PopupBorderSize  = 1.0f;
 
-		style.WindowPadding    = ImVec2( 12.0f, 10.0f ); // guide: window padding 14px, close enough (#15 also has a say via chrome)
+		style.WindowPadding    = ImVec2( 14.0f, 14.0f ); // spec §3: "window padding 14px all sides" -- was 12/10 (gap list item 10)
 		style.FramePadding     = ImVec2( 8.0f, 4.0f );
 		style.ItemSpacing      = ImVec2( 8.0f, 6.0f );   // guide: control groups 12-13px -- ItemSpacing is the per-row analog
 		style.ItemInnerSpacing = ImVec2( 6.0f, 4.0f );   // guide: label->control gap ~5px
 
-		// Slider grab: the guide's 8x18px fixed rectangular handle can't come
-		// from style alone (ImGui only exposes grab *width* via GrabMinSize;
-		// grab height always equals the frame height) -- GrabMinSize gets us
-		// the width, which is the achievable part; see the ponytail note
-		// below for why the full geometry isn't custom-drawn on top of that.
+		// Feeds ImGui::SliderBehavior()'s own grab-position math (used by
+		// SliderControl() below) so the 8px-wide fraction it computes lines
+		// up with the spec's 8x18px handle that gets custom-drawn on top of
+		// it -- see SliderControl()'s comment for the full slider story.
 		style.GrabMinSize = 8.0f;
 
 		// Disabled controls: guide's "Sliders" section calls the 34%-opacity
@@ -76,11 +80,14 @@ namespace gamescope::widgets
 
 		// ---- Palette ---------------------------------------------------
 		// oklch(.74 .12 218) (cyan accent) and its siblings, converted to
-		// sRGB once per the design guide's own note that ImGui needs plain
-		// RGBA -- see ui-design-guide.md's Color palette table for the
-		// source values this was converted from.
-		const ImVec4 accent      = ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 1.00f );
-		const ImVec4 accentHi    = ImVec4( 0xcf / 255.0f, 0xef / 255.0f, 0xf7 / 255.0f, 1.00f ); // "brightest accent tone" -- handles/knobs
+		// sRGB once and pixel-verified against the rendered mockup -- see
+		// superdoc/planning/ui-mockup-precise-spec.md §1's Color tokens
+		// table (Palette.h carries the same numbers for Chrome.cpp/
+		// FpsDisplay.cpp so all three files stay byte-identical instead of
+		// three independent hex transcriptions -- see the spec's gap list
+		// item 1 for what happens when they drift).
+		const ImVec4 accent      = ImVec4( 0x36 / 255.0f, 0xbd / 255.0f, 0xdd / 255.0f, 1.00f );
+		const ImVec4 accentHi    = ImVec4( 0xba / 255.0f, 0xe7 / 255.0f, 0xf4 / 255.0f, 1.00f ); // accent-handle -- brightest accent tone, handles/knobs
 		const ImVec4 accentSoft  = ImVec4( accent.x, accent.y, accent.z, 0.22f );                // active-state fills, 12-24% alpha band
 		const ImVec4 surface     = ImVec4( 0x09 / 255.0f, 0x0a / 255.0f, 0x0c / 255.0f, 0.88f );
 		const ImVec4 raised      = ImVec4( 1.00f, 1.00f, 1.00f, 0.05f );
@@ -165,19 +172,215 @@ namespace gamescope::widgets
 		// override is needed.
 	}
 
-	// ponytail: the design guide's slider look (a thin 5px track separate
-	// from a taller frame, an accent/.5->accent gradient fill, and a fixed
-	// 8x18px rectangular handle) genuinely can't come entirely from
-	// ImGuiStyle -- but a stock ImGui::SliderInt/SliderFloat styled via
-	// ApplyStyle() above (flat FrameBg track, 0px rounding, accent grab,
-	// GrabMinSize=8) already reads as "flat, square, accent-highlighted
-	// slider," which is the design's actual intent; only the exact track/
-	// handle proportions differ. The task brief calls a hand-rolled widget
-	// that looks like a styled stock one "pure liability" -- writing ~40
-	// lines of ImDrawList code to move the handle from "full-frame-height
-	// rect" to "8x18 rect" for a purely cosmetic difference isn't worth that
-	// liability. Sliders are therefore left as ImGui::SliderInt/SliderFloat,
-	// style-only, everywhere in this overlay.
+	// Slider: superdoc/planning/ui-mockup-precise-spec.md §7 measures a
+	// track/handle geometry a styled stock ImGui::SliderInt/SliderFloat
+	// genuinely cannot reach (a 5px track separate from an 18px hit-height,
+	// an accent-gradient fill, and a fixed 8x18px handle with a glow, versus
+	// stock's one full-height frame + grab) -- an earlier pass here left
+	// sliders as style-only stock widgets on the theory that the remaining
+	// gap was cosmetic; the spec's own pixel comparison (its gap list item
+	// 2) says otherwise ("value text *inside* the bar" reads as a
+	// fundamentally different control, not a close approximation). This
+	// implementation keeps the *behavior* byte-for-byte stock by reusing
+	// ImGui's own internal primitives move-for-move -- ItemAdd(),
+	// ItemHoverable(), SliderBehavior() (the drag/keyboard/gamepad math),
+	// and TempInputScalar() (ctrl+click / Enter-to-type) are all the exact
+	// functions ImGui::SliderScalar() itself calls (imgui_widgets.cpp) --
+	// and only replaces the final draw call with the spec's geometry, the
+	// same "reuse the primitive, replace the paint" shape Toggle()/
+	// Checkbox() above already use via ButtonBehavior().
+	namespace
+	{
+		// Shared by SliderFloat()/SliderInt() below -- one generic scalar
+		// implementation, matching how ImGui::SliderFloat/SliderInt
+		// themselves both funnel into ImGui::SliderScalar(). pszValueText/
+		// pszMinText/pszMaxText are pre-formatted by the caller (each knows
+		// its own %-spec type; %f vs %d can't be branched on generically
+		// here without duplicating a printf parser).
+		bool SliderControl( const char *pszLabel, ImGuiDataType eDataType, void *pValue,
+			const void *pMin, const void *pMax, const char *pszFormat, ImGuiSliderFlags nFlags,
+			const char *pszValueText, const char *pszMinText, const char *pszMaxText )
+		{
+			ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
+			if ( pWindow->SkipItems )
+				return false;
+
+			ImGuiContext &g = *GImGui;
+			const ImGuiStyle &style = g.Style;
+			const ImGuiID id = pWindow->GetID( pszLabel );
+			const char *pszLabelEnd = ImGui::FindRenderedTextEnd( pszLabel );
+			const float flWidth = ImGui::CalcItemWidth();
+
+			// ---- Layout: label+value line, 5px gap, 18px track hit-row,
+			// 5px gap, min/max line -- spec §3/§7. ----
+			ImGui::PushFont( fonts::Get( fonts::Style::Label ) );
+			const ImVec2 labelSize = ImGui::CalcTextSize( pszLabel, pszLabelEnd, false );
+			ImGui::PopFont();
+			ImGui::PushFont( fonts::Get( fonts::Style::Value ) );
+			const ImVec2 valueSize = ImGui::CalcTextSize( pszValueText );
+			ImGui::PopFont();
+			ImGui::PushFont( fonts::Get( fonts::Style::ScaleMark ) );
+			const ImVec2 minTextSize = pszMinText ? ImGui::CalcTextSize( pszMinText ) : ImVec2( 0.0f, 0.0f );
+			const ImVec2 maxTextSize = pszMaxText ? ImGui::CalcTextSize( pszMaxText ) : ImVec2( 0.0f, 0.0f );
+			const float flMarkRowH = ImMax( minTextSize.y, maxTextSize.y );
+			ImGui::PopFont();
+
+			constexpr float kLabelTrackGap = 5.0f;
+			constexpr float kTrackMarkGap = 5.0f;
+			constexpr float kHitHeight = 18.0f; // "row hit-height 18px"
+			constexpr float kTrackHeight = 5.0f;
+			constexpr float kTrackRounding = 3.0f;
+			constexpr float kHandleW = 8.0f;
+			constexpr float kHandleH = 18.0f;
+
+			const float flLabelRowH = ImMax( labelSize.y, valueSize.y );
+			const bool bHasMarks = pszMinText != nullptr || pszMaxText != nullptr;
+
+			const ImVec2 pos = pWindow->DC.CursorPos;
+			const float flTrackTop = pos.y + flLabelRowH + kLabelTrackGap;
+			const ImRect trackHitBB( ImVec2( pos.x, flTrackTop ), ImVec2( pos.x + flWidth, flTrackTop + kHitHeight ) );
+
+			float flTotalH = ( flTrackTop - pos.y ) + kHitHeight;
+			if ( bHasMarks )
+				flTotalH += kTrackMarkGap + flMarkRowH;
+			const ImRect totalBB( pos, ImVec2( pos.x + flWidth, pos.y + flTotalH ) );
+
+			// ---- Item registration + interaction: verbatim
+			// ImGui::SliderScalar() shape (imgui_widgets.cpp), just against
+			// trackHitBB instead of a single frame_bb. ----
+			const bool bTempInputAllowed = ( nFlags & ImGuiSliderFlags_NoInput ) == 0;
+			ImGui::ItemSize( totalBB, style.FramePadding.y );
+			if ( !ImGui::ItemAdd( totalBB, id, &trackHitBB, bTempInputAllowed ? ImGuiItemFlags_Inputable : 0 ) )
+				return false;
+
+			const bool bHovered = ImGui::ItemHoverable( trackHitBB, id, g.LastItemData.ItemFlags );
+			bool bTempInputActive = bTempInputAllowed && ImGui::TempInputIsActive( id );
+			if ( !bTempInputActive )
+			{
+				const bool bClicked = bHovered && ImGui::IsMouseClicked( ImGuiMouseButton_Left, ImGuiInputFlags_None, id );
+				const bool bMakeActive = ( bClicked || g.NavActivateId == id );
+				if ( bMakeActive && bClicked )
+					ImGui::SetKeyOwner( ImGuiKey_MouseLeft, id );
+				if ( bMakeActive && bTempInputAllowed )
+					if ( ( bClicked && g.IO.KeyCtrl ) || ( g.NavActivateId == id && ( g.NavActivateFlags & ImGuiActivateFlags_PreferInput ) ) )
+						bTempInputActive = true;
+
+				if ( bMakeActive )
+					memcpy( &g.ActiveIdValueOnActivation, pValue, ImGui::DataTypeGetInfo( eDataType )->Size );
+
+				if ( bMakeActive && !bTempInputActive )
+				{
+					ImGui::SetActiveID( id, pWindow );
+					ImGui::SetFocusID( id, pWindow );
+					ImGui::FocusWindow( pWindow );
+					g.ActiveIdUsingNavDirMask |= ( 1 << ImGuiDir_Left ) | ( 1 << ImGuiDir_Right );
+				}
+			}
+
+			if ( bTempInputActive )
+			{
+				// Ctrl+click / Enter-to-type -- same fallback ImGui's own
+				// SliderScalar() uses; drawn as a plain text input box over
+				// the (18px-tall) track hit-row rather than the spec's
+				// track/handle art, since there's nothing to draw a
+				// track/handle *for* while the value is literal free text.
+				const bool bClampEnabled = ( nFlags & ImGuiSliderFlags_ClampOnInput ) != 0;
+				return ImGui::TempInputScalar( trackHitBB, id, pszLabel, eDataType, pValue, pszFormat,
+					bClampEnabled ? pMin : nullptr, bClampEnabled ? pMax : nullptr );
+			}
+
+			ImRect grabBB;
+			const bool bChanged = ImGui::SliderBehavior( trackHitBB, id, eDataType, pValue, pMin, pMax, pszFormat, nFlags, &grabBB );
+			if ( bChanged )
+				ImGui::MarkItemEdited( id );
+
+			ImGui::RenderNavCursor( trackHitBB, id );
+
+			// ---- Draw: spec §7 geometry. grabBB's X center (computed by
+			// SliderBehavior() against style.GrabMinSize=8, ApplyStyle())
+			// is reused as the 8x18 handle's center so the handle tracks
+			// the exact same fraction stock dragging/keyboard math drives. ----
+			ImDrawList *pDrawList = pWindow->DrawList;
+
+			ImGui::PushFont( fonts::Get( fonts::Style::Label ) );
+			pDrawList->AddText( ImVec2( pos.x, pos.y + ( flLabelRowH - labelSize.y ) * 0.5f ),
+				ImGui::GetColorU32( gamescope::palette::Text( 0.62f ) ), pszLabel, pszLabelEnd );
+			ImGui::PopFont();
+
+			ImGui::PushFont( fonts::Get( fonts::Style::Value ) );
+			pDrawList->AddText( ImVec2( pos.x + flWidth - valueSize.x, pos.y + ( flLabelRowH - valueSize.y ) * 0.5f ),
+				ImGui::GetColorU32( gamescope::palette::kAccentValue ), pszValueText );
+			ImGui::PopFont();
+
+			const float flTrackCenterY = trackHitBB.GetCenter().y;
+			const ImVec2 trackMin( pos.x, flTrackCenterY - kTrackHeight * 0.5f );
+			const ImVec2 trackMax( pos.x + flWidth, flTrackCenterY + kTrackHeight * 0.5f );
+			pDrawList->AddRectFilled( trackMin, trackMax, ImGui::GetColorU32( gamescope::palette::White( 0.09f ) ), kTrackRounding );
+
+			// Spec §12 "Disabled-but-visible control": on top of the whole
+			// row's automatic x34% opacity (ImGui::BeginDisabled() already
+			// multiplies style.Alpha, which every ImGui::GetColorU32() call
+			// below picks up for free -- see ApplyStyle()'s DisabledAlpha
+			// comment), the fill/handle hue itself turns plain white
+			// (@30%/@45%) instead of staying accent-tinted-but-dim. Checked
+			// via the same ImGuiItemFlags_Disabled flag BeginDisabled()
+			// itself sets, exactly like stock ImGui widgets check it.
+			const bool bDisabled = ( g.CurrentItemFlags & ImGuiItemFlags_Disabled ) != 0;
+
+			const float flHandleCenterX = ImClamp( grabBB.GetCenter().x, trackMin.x, trackMax.x );
+			if ( flHandleCenterX > trackMin.x )
+			{
+				if ( bDisabled )
+				{
+					const ImU32 fillWhite = ImGui::GetColorU32( gamescope::palette::White( 0.30f ) );
+					pDrawList->AddRectFilled( trackMin, ImVec2( flHandleCenterX, trackMax.y ), fillWhite, kTrackRounding );
+				}
+				else
+				{
+					const ImU32 fillLo = ImGui::GetColorU32( gamescope::palette::Accent( 0.50f ) );
+					const ImU32 fillHi = ImGui::GetColorU32( gamescope::palette::kAccentGradHi );
+					pDrawList->AddRectFilledMultiColor( trackMin, ImVec2( flHandleCenterX, trackMax.y ), fillLo, fillHi, fillHi, fillLo );
+				}
+			}
+
+			const ImVec2 handleCenter( flHandleCenterX, flTrackCenterY );
+
+			if ( !bDisabled )
+			{
+				// Handle glow, approximating spec's `0 0 12px accent@80%`
+				// box-shadow as two enlarged, low-alpha rects behind the
+				// handle (same recipe spec §4/§7/§8 gives for every glow
+				// ImGui has no primitive for) -- skipped while disabled: an
+				// inert control glowing like a live one would contradict
+				// the "plain white" look the spec gives it.
+				const ImU32 glowOuter = ImGui::GetColorU32( gamescope::palette::Accent( 0.18f ) );
+				const ImU32 glowInner = ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) );
+				pDrawList->AddRectFilled( handleCenter - ImVec2( 8.0f, 13.0f ), handleCenter + ImVec2( 8.0f, 13.0f ), glowOuter, 6.0f );
+				pDrawList->AddRectFilled( handleCenter - ImVec2( 6.0f, 11.0f ), handleCenter + ImVec2( 6.0f, 11.0f ), glowInner, 5.0f );
+			}
+
+			const ImU32 handleColor = bDisabled
+				? ImGui::GetColorU32( gamescope::palette::White( 0.45f ) )
+				: ImGui::GetColorU32( gamescope::palette::kAccentHandle );
+			pDrawList->AddRectFilled( handleCenter - ImVec2( kHandleW * 0.5f, kHandleH * 0.5f ),
+				handleCenter + ImVec2( kHandleW * 0.5f, kHandleH * 0.5f ),
+				handleColor, 1.0f );
+
+			if ( bHasMarks )
+			{
+				const float flMarkY = trackHitBB.Max.y + kTrackMarkGap;
+				const ImU32 markColor = ImGui::GetColorU32( gamescope::palette::White( 0.26f ) );
+				ImGui::PushFont( fonts::Get( fonts::Style::ScaleMark ) );
+				if ( pszMinText )
+					pDrawList->AddText( ImVec2( pos.x, flMarkY ), markColor, pszMinText );
+				if ( pszMaxText )
+					pDrawList->AddText( ImVec2( pos.x + flWidth - maxTextSize.x, flMarkY ), markColor, pszMaxText );
+				ImGui::PopFont();
+			}
+
+			return bChanged;
+		}
+	}
 
 	// Shared implementation for Toggle()/Checkbox() below: both are ImGui
 	// items built on ButtonBehavior()/ItemAdd(), differing only in the
@@ -241,17 +444,35 @@ namespace gamescope::widgets
 		return BooleanControl( pszLabel, pbValue, kTrackSize,
 			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
 			{
-				// Track: always accent-tinted regardless of on/off (the
-				// design guide's own stated rule -- see Widgets.h's Toggle()
-				// comment and DECISIONS.md/the guide's open question 6 for
-				// why "off" has no distinct captured color). Hover nudges
-				// the alpha up slightly so the control still reads as
-				// interactive, without inventing an "off" palette the
-				// source material never specified.
-				const float flTrackAlpha = bHovered ? 0.4f : 0.3f;
-				const ImU32 trackFill   = ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, flTrackAlpha ) );
-				const ImU32 trackBorder = ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.65f ) );
-				const ImU32 knobFill    = ImGui::GetColorU32( ImVec4( 0xcf / 255.0f, 0xef / 255.0f, 0xf7 / 255.0f, 1.00f ) );
+				// On: track accent@30% (35% hovered), border accent@65%,
+				// per spec §7 Toggle -- these are measured values, not an
+				// invention.
+				//
+				// ponytail/invented (spec §7, §14: "the off-state track
+				// color is not captured anywhere in the handoff -- every
+				// toggle in the mockup is shown on"): off uses the spec's
+				// own proposed in-style invention -- track white@7%, border
+				// white@18%, knob white@55% -- flagged here exactly as the
+				// spec flags it, not presented as measured.
+				// Routed through ImGui::GetColorU32(ImU32) rather than passed
+				// as raw palette:: constants -- that overload multiplies in
+				// g.Style.Alpha, which is how ImGui::BeginDisabled()'s
+				// DisabledAlpha (spec §12's "whole row x34% opacity" rule)
+				// reaches a custom-drawn widget; skipping it would silently
+				// stop these controls from dimming when disabled.
+				ImU32 trackFill, trackBorder, knobFill;
+				if ( bValue )
+				{
+					trackFill   = ImGui::GetColorU32( gamescope::palette::Accent( bHovered ? 0.35f : 0.30f ) );
+					trackBorder = ImGui::GetColorU32( gamescope::palette::Accent( 0.65f ) );
+					knobFill    = ImGui::GetColorU32( gamescope::palette::kAccentKnob );
+				}
+				else
+				{
+					trackFill   = ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.10f : 0.07f ) );
+					trackBorder = ImGui::GetColorU32( gamescope::palette::White( 0.18f ) );
+					knobFill    = ImGui::GetColorU32( gamescope::palette::White( 0.55f ) );
+				}
 
 				pDrawList->AddRectFilled( bb.Min, bb.Max, trackFill ); // 0px radius -- "no radius (square)"
 				pDrawList->AddRect( bb.Min, bb.Max, trackBorder, 0.0f, 0, 1.0f );
@@ -275,16 +496,20 @@ namespace gamescope::widgets
 		return BooleanControl( pszLabel, pbValue, kBoxSize,
 			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
 			{
+				// Per spec §7 Checkbox: checked border accent@70%, fill
+				// accent@20%; unchecked border white@18%, fill white@4%.
+				// Hover nudges the fill alpha up slightly (in-style
+				// invention, spec §12 -- hover was never designed).
 				ImU32 fill, border;
 				if ( bValue )
 				{
-					fill   = ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, bHovered ? 0.28f : 0.20f ) );
-					border = ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.70f ) );
+					fill   = ImGui::GetColorU32( gamescope::palette::Accent( bHovered ? 0.28f : 0.20f ) );
+					border = ImGui::GetColorU32( gamescope::palette::Accent( 0.70f ) );
 				}
 				else
 				{
-					fill   = ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, bHovered ? 0.07f : 0.04f ) );
-					border = ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, 0.18f ) );
+					fill   = ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.07f : 0.04f ) );
+					border = ImGui::GetColorU32( gamescope::palette::White( 0.18f ) );
 				}
 
 				pDrawList->AddRectFilled( bb.Min, bb.Max, fill );
@@ -292,62 +517,37 @@ namespace gamescope::widgets
 
 				if ( bValue )
 				{
-					// "a filled square (not a checkmark glyph)", centered.
+					// "a filled square (not a checkmark glyph)", centered,
+					// accent-knob colored per spec §7.
 					const ImVec2 markMin(
 						bb.Min.x + ( bb.GetWidth() - kMarkSize ) * 0.5f,
 						bb.Min.y + ( bb.GetHeight() - kMarkSize ) * 0.5f );
 					const ImVec2 markMax = markMin + ImVec2( kMarkSize, kMarkSize );
-					const ImU32 markFill = ImGui::GetColorU32( ImVec4( 0xcf / 255.0f, 0xef / 255.0f, 0xf7 / 255.0f, 1.00f ) );
-					pDrawList->AddRectFilled( markMin, markMax, markFill );
+					pDrawList->AddRectFilled( markMin, markMax, ImGui::GetColorU32( gamescope::palette::kAccentKnob ) );
 				}
 			} );
 	}
 
-	// Shared by SliderFloat()/SliderInt(): draws `pszValueText` centered
-	// over whatever rect the just-drawn stock slider item occupies, in
-	// Style::Value + accent -- see Widgets.h's comment for why this can't
-	// just be ImGuiStyle/PushFont on the stock widget itself.
-	namespace
-	{
-		void OverlaySliderValueText( const char *pszValueText )
-		{
-			const ImVec2 rectMin = ImGui::GetItemRectMin();
-			const ImVec2 rectMax = ImGui::GetItemRectMax();
-
-			ImGui::PushFont( fonts::Get( fonts::Style::Value ) );
-			const ImVec2 textSize = ImGui::CalcTextSize( pszValueText );
-			const ImVec2 pos(
-				( rectMin.x + rectMax.x ) * 0.5f - textSize.x * 0.5f,
-				( rectMin.y + rectMax.y ) * 0.5f - textSize.y * 0.5f );
-			// Accent, per the guide's "Value readout ... usually accent-colored" --
-			// same sRGB conversion as Widgets.cpp's ApplyStyle()/Chrome.cpp's
-			// kAccentU32.
-			const ImU32 accent = ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 1.00f ) );
-			ImGui::GetWindowDrawList()->AddText( pos, accent, pszValueText );
-			ImGui::PopFont();
-		}
-	}
-
 	bool SliderFloat( const char *pszLabel, float *pflValue, float flMin, float flMax, const char *pszValueFormat, int nFlags )
 	{
-		const bool bChanged = ImGui::SliderFloat( pszLabel, pflValue, flMin, flMax, "", (ImGuiSliderFlags)nFlags );
-
-		char szValue[32];
+		char szValue[32], szMin[32], szMax[32];
 		std::snprintf( szValue, sizeof( szValue ), pszValueFormat, (double)*pflValue );
-		OverlaySliderValueText( szValue );
+		std::snprintf( szMin, sizeof( szMin ), pszValueFormat, (double)flMin );
+		std::snprintf( szMax, sizeof( szMax ), pszValueFormat, (double)flMax );
 
-		return bChanged;
+		return SliderControl( pszLabel, ImGuiDataType_Float, pflValue, &flMin, &flMax,
+			pszValueFormat, (ImGuiSliderFlags)nFlags, szValue, szMin, szMax );
 	}
 
 	bool SliderInt( const char *pszLabel, int *pnValue, int nMin, int nMax, const char *pszValueFormat, int nFlags )
 	{
-		const bool bChanged = ImGui::SliderInt( pszLabel, pnValue, nMin, nMax, "", (ImGuiSliderFlags)nFlags );
-
-		char szValue[32];
+		char szValue[32], szMin[32], szMax[32];
 		std::snprintf( szValue, sizeof( szValue ), pszValueFormat, *pnValue );
-		OverlaySliderValueText( szValue );
+		std::snprintf( szMin, sizeof( szMin ), pszValueFormat, nMin );
+		std::snprintf( szMax, sizeof( szMax ), pszValueFormat, nMax );
 
-		return bChanged;
+		return SliderControl( pszLabel, ImGuiDataType_S32, pnValue, &nMin, &nMax,
+			pszValueFormat, (ImGuiSliderFlags)nFlags, szValue, szMin, szMax );
 	}
 
 	bool SegmentedControl( const char *pszId, int *pnSelected, const char *const *pszLabels, int nCount )
@@ -386,24 +586,25 @@ namespace gamescope::widgets
 				bChanged = true;
 			}
 
-			// Inactive: rgba(255,255,255,.04-.045) fill, rgba(255,255,255,.07-.08)
-			// border, Mono 500 ~45-50% white. Active: accent fill 20-24% alpha,
-			// accent border ~60% alpha, Mono 600 bright accent -- per the guide's
-			// Tabs / segmented controls section.
+			// Per spec §7 Segmented control: inactive fill white@4%, border
+			// white@8%, Mono 500 text @50% white; active fill accent@24%,
+			// border accent@60%, Mono 600 text accent-seg-text (#A9EAFD).
+			// Hover nudge on the inactive cell is an in-style invention
+			// (spec §12 -- hover was never designed).
 			const ImU32 fill = bActive
-				? ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.22f ) )
-				: ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, bHovered ? 0.07f : 0.045f ) );
+				? ImGui::GetColorU32( gamescope::palette::Accent( 0.24f ) )
+				: ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.07f : 0.04f ) );
 			const ImU32 border = bActive
-				? ImGui::GetColorU32( ImVec4( 0x4f / 255.0f, 0xb8 / 255.0f, 0xd6 / 255.0f, 0.60f ) )
-				: ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, bHovered ? 0.12f : 0.08f ) );
+				? ImGui::GetColorU32( gamescope::palette::Accent( 0.60f ) )
+				: ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.12f : 0.08f ) );
 			const ImU32 text = bActive
-				? ImGui::GetColorU32( ImVec4( 0xcf / 255.0f, 0xef / 255.0f, 0xf7 / 255.0f, 1.00f ) )
-				: ImGui::GetColorU32( ImVec4( 1.0f, 1.0f, 1.0f, 0.48f ) );
+				? ImGui::GetColorU32( gamescope::palette::kAccentSegText )
+				: ImGui::GetColorU32( gamescope::palette::White( 0.50f ) );
 
 			pDrawList->AddRectFilled( pos, pos + size, fill ); // 0px radius -- controls stay flat/square
 			pDrawList->AddRect( pos, pos + size, border );
 
-			ImGui::PushFont( fonts::Get( bActive ? fonts::Style::Value : fonts::Style::Meta ) );
+			ImGui::PushFont( fonts::Get( bActive ? fonts::Style::SegmentActive : fonts::Style::SegmentLabel ) );
 			const ImVec2 textSize = ImGui::CalcTextSize( pszLabels[i] );
 			const ImVec2 textPos(
 				pos.x + ( size.x - textSize.x ) * 0.5f,
@@ -416,5 +617,43 @@ namespace gamescope::widgets
 
 		ImGui::PopID();
 		return bChanged;
+	}
+
+	void ReadoutStrip( const char *pszText, bool bLeadingDot )
+	{
+		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
+		if ( pWindow->SkipItems )
+			return;
+
+		constexpr float kPadX = 9.0f;
+		constexpr float kPadY = 6.0f;
+		constexpr float kDotSize = 6.0f;
+
+		ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
+		const ImVec2 textSize = ImGui::CalcTextSize( pszText );
+		ImGui::PopFont();
+
+		const float flWidth = ImGui::GetContentRegionAvail().x;
+		const float flTextLeftInset = bLeadingDot ? kDotSize + 6.0f : 0.0f;
+		const ImVec2 size( flWidth, textSize.y + kPadY * 2.0f );
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+
+		ImGui::Dummy( size ); // register the item -- this row has no interaction
+
+		ImDrawList *pDrawList = pWindow->DrawList;
+		pDrawList->AddRectFilled( pos, pos + size, ImGui::GetColorU32( gamescope::palette::White( 0.03f ) ) );
+
+		float flTextX = pos.x + kPadX;
+		if ( bLeadingDot )
+		{
+			const ImVec2 dotCenter( pos.x + kPadX + kDotSize * 0.5f, pos.y + size.y * 0.5f );
+			pDrawList->AddRectFilled( dotCenter - ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ),
+				dotCenter + ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), ImGui::GetColorU32( gamescope::palette::kAccent ) );
+			flTextX = pos.x + kPadX + flTextLeftInset;
+		}
+
+		ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
+		pDrawList->AddText( ImVec2( flTextX, pos.y + kPadY ), ImGui::GetColorU32( gamescope::palette::White( 0.34f ) ), pszText );
+		ImGui::PopFont();
 	}
 }
