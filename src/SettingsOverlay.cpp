@@ -51,6 +51,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -113,6 +114,54 @@ namespace gamescope
 	// reasonable default, matching gamescope's own fade-out duration order of
 	// magnitude elsewhere (g_FadeOutDuration).
 	static constexpr unsigned int k_uOverlayFadeMs = 200;
+
+	// EXPERIMENTAL (blurred-background branch): DECISIONS.md #5 dropped true
+	// backdrop blur because ImGui itself cannot sample-and-blur what's behind
+	// a window. But gamescope's *compositor* already can: FrameInfo_t::
+	// blurLayer0 (rendervulkan.hpp) drives a real two-pass separable Gaussian
+	// blur of layer 0 (src/shaders/cs_gaussian_blur_horizontal.comp +
+	// cs_composite_blur.comp) that's been shipping for years as the "blur the
+	// game behind Steam's own overlay/QAM" feature (g_BlurMode, driven by the
+	// GAMESCOPE_BLUR_MODE X11 property, see steamcompmgr.cpp). That is
+	// *exactly* the primitive this design needs: blur the base layer, draw
+	// our translucent panel layer -- already at the design's 0.88 `surface`
+	// alpha, see Overlay/Widgets.cpp -- on top of it, unblurred. So instead of
+	// inventing a second blur pass/pipeline, this reuses that one: below,
+	// SettingsOverlay_AddLayer() requests it on *pFrameInfo directly (via
+	// std::max against whatever Steam's own g_BlurMode already asked for, so
+	// the two requests compose instead of one clobbering the other) whenever
+	// the overlay is visible or still fading, entirely inside this file --
+	// no changes to steamcompmgr.cpp, rendervulkan.{hpp,cpp}, or a new shader
+	// needed.
+	//
+	// Radius: BlitPushData_t turns FrameInfo_t::blurRadius into the shader's
+	// u_blur_radius as (blurRadius*2)-1 (rendervulkan.cpp), and blur.h's
+	// gaussian_blur() picks its weight/offset table by thresholding that
+	// value -- u_blur_radius=21 selects the table whose offsets extend to
+	// ~20.4px (the "radius<=21" branch), landing almost exactly on the design
+	// guide's specified blur(20-22px). Solving (blurRadius*2)-1=21 gives
+	// blurRadius=11, so that's the constant used below.
+	static constexpr int k_nOverlayBlurRadius = 11;
+
+	// ponytail: this blurs the *entire* base layer uniformly while the
+	// overlay is visible, not a per-window region sampled from directly
+	// behind each floating panel (true CSS-style backdrop-filter). That's a
+	// real, deliberate simplification from the design guide's "blur behind
+	// every floating window" wording -- but it is exactly what this
+	// codebase's existing Steam-blur feature already does (blur everything,
+	// draw overlay layers sharp on top), so it's reusing an established
+	// pattern rather than inventing a cheaper one. A true per-window masked
+	// blur would need the blur pass to know each panel's screen rect and
+	// composite region-by-region -- meaningfully more machinery for a look
+	// that, with the panels' own near-opaque 0.88 alpha, reads very similarly
+	// in practice. See the task's measured screenshots/verdict for whether
+	// that gap matters visually.
+	//
+	// ponytail: does not add the design guide's `saturate(1.1-1.15)` boost --
+	// that needs its own shader tap (or a change to the existing blur
+	// shaders, which are shared with Steam's own blur feature and out of
+	// this branch's shader-touching budget); the blur radius alone is the
+	// experiment's one thing to get right.
 
 	static bool s_bImguiInitialized = false;
 
@@ -606,6 +655,35 @@ namespace gamescope
 		layer->ctm = nullptr;
 		layer->hdr_metadata_blob = nullptr;
 		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
+
+		// EXPERIMENTAL: request the compositor's existing blur-behind pass
+		// (see k_nOverlayBlurRadius's comment above for why this reuses
+		// Steam's own blurLayer0 primitive instead of a new one). Ramp the
+		// radius by the same s_flCurrentAlpha the panel layer's own opacity
+		// just used above, so the blur fades in/out in lockstep with the
+		// panels instead of snapping to full strength the instant the fade
+		// starts -- otherwise a hard-edged full blur would "pop" in while the
+		// glass panels are still fading up.
+		//
+		// vulkan_composite() picks exactly one of {FSR, NIS, blur, plain
+		// blit} per call (rendervulkan.cpp) -- if the base layer's own
+		// upscale filter already requested FSR/NIS this frame, blurLayer0
+		// here would silently lose that if/else and never run. Clear both so
+		// our request actually takes effect; this matches the precedent
+		// steamcompmgr.cpp's own g_BlurMode path already sets when *it*
+		// requests blurLayer0 (falling back to plain bilinear/nearest on the
+		// now-blurred base layer -- upscale sharpness doesn't matter once
+		// it's blurred anyway).
+		const int nOverlayBlurRadius = std::clamp(
+			(int)std::lround( k_nOverlayBlurRadius * s_flCurrentAlpha ), 0, k_nOverlayBlurRadius );
+
+		if ( nOverlayBlurRadius > 0 )
+		{
+			pFrameInfo->blurLayer0 = std::max( pFrameInfo->blurLayer0, BLUR_MODE_ALWAYS );
+			pFrameInfo->blurRadius = std::max( pFrameInfo->blurRadius, nOverlayBlurRadius );
+			pFrameInfo->useFSRLayer0 = false;
+			pFrameInfo->useNISLayer0 = false;
+		}
 	}
 
 	void SettingsOverlay_WaitForRender( CVulkanCmdBuffer *pComputeCmdBuffer )
