@@ -555,18 +555,43 @@ run_one_backend() {
   # "insufficient" case this exists for, so it degrades to a logged WARNING and keeps
   # going rather than chasing an undocumented, version-specific Lua API here.
   if [[ "$DO_FULLSCREEN" -eq 1 && "$backend" != "headless" ]]; then
-    if command -v hyprctl >/dev/null 2>&1; then
-      # SDL's window title is "gamescope"; the Wayland-backend/libdecor title is
-      # "Gamescope" with app_id "gamescope" — match either case-insensitively.
-      if hyprctl dispatch focuswindow 'class:(?i)^gamescope$' >>"$SUMMARY" 2>&1; then
-        [[ -n "$TARGET_OUTPUT" ]] && hyprctl dispatch movewindow "mon:$TARGET_OUTPUT" >>"$SUMMARY" 2>&1
-        hyprctl dispatch fullscreen 0 >>"$SUMMARY" 2>&1
-        log "[$backend] hyprctl: focused + fullscreened gamescope window on ${TARGET_OUTPUT:-current output}"
+    if command -v hyprctl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+      # Hyprland >= 0.56 dispatches are LUA ONLY. The classic
+      # `hyprctl dispatch <name> <args>` string form is rejected (by hyprctl AND
+      # by the raw IPC socket) with "expected a dispatcher (e.g.
+      # hl.dsp.window.close())" — which hyprctl reports on stderr while still
+      # exiting 0, so the old code here silently believed it had fullscreened
+      # the window when it had done nothing at all. Every --fullscreen run on
+      # this machine was therefore testing a TILED window, which is precisely
+      # the configuration the VRR artifacting cannot be reproduced in.
+      #
+      # Correct form: pass a Lua expression that RETURNS a dispatcher; hyprctl
+      # wraps it in hl.dispatch(...) itself. Resolve the window by address, not
+      # by focusing a class regex, and ASSERT the end state — window.fullscreen()
+      # toggles, so firing it blind can just as easily leave the window windowed.
+      local addr
+      addr="$(hyprctl clients -j 2>/dev/null | jq -r '[.[] | select(.class|test("(?i)^gamescope$"))][0].address')"
+      if [[ -n "$addr" && "$addr" != "null" ]]; then
+        [[ -n "$TARGET_OUTPUT" ]] && hyprctl dispatch \
+          "hl.dsp.window.move({ window = \"address:$addr\", monitor = \"$TARGET_OUTPUT\" })" >>"$SUMMARY" 2>&1
+        sleep 0.5
+        local fsnow
+        fsnow="$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" '.[] | select(.address==$a) | .fullscreen')"
+        if [[ "$fsnow" != "2" ]]; then
+          hyprctl dispatch "hl.dsp.window.fullscreen({ window = \"address:$addr\", mode = 0 })" >>"$SUMMARY" 2>&1
+          sleep 0.5
+          fsnow="$(hyprctl clients -j 2>/dev/null | jq -r --arg a "$addr" '.[] | select(.address==$a) | .fullscreen')"
+        fi
+        if [[ "$fsnow" == "2" ]]; then
+          log "[$backend] hyprctl: gamescope window is FULLSCREEN on ${TARGET_OUTPUT:-current output} (verified fullscreen=2)"
+        else
+          log "[$backend] WARNING: gamescope window is NOT fullscreen (fullscreen=$fsnow) — the fullscreen-only VRR path is NOT being exercised"
+        fi
       else
-        log "[$backend] WARNING: hyprctl could not focus the gamescope window by class — fullscreen reinforcement skipped (gamescope's own -f flag was still passed)"
+        log "[$backend] WARNING: could not find the gamescope window by class via hyprctl clients — fullscreen reinforcement skipped"
       fi
     else
-      log "[$backend] WARNING: --fullscreen requested but hyprctl not found — relying on gamescope's own -f flag only"
+      log "[$backend] WARNING: --fullscreen needs hyprctl+jq — relying on gamescope's own -f flag only"
     fi
   fi
 
