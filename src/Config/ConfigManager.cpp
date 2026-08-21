@@ -147,6 +147,8 @@ namespace gamescope::config
                 s.fps_display.backdrop_padding = JGetFloat( *pFps, "backdrop_padding", s.fps_display.backdrop_padding );
                 s.fps_display.blend_mode = JGetString( *pFps, "blend_mode", s.fps_display.blend_mode );
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
+                s.fps_display.graph_enabled = JGetBool( *pFps, "graph_enabled", s.fps_display.graph_enabled );
+                s.fps_display.percentiles_enabled = JGetBool( *pFps, "percentiles_enabled", s.fps_display.percentiles_enabled );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -209,6 +211,8 @@ namespace gamescope::config
             jFps[ "backdrop_padding" ] = s.fps_display.backdrop_padding;
             jFps[ "blend_mode" ] = s.fps_display.blend_mode;
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
+            jFps[ "graph_enabled" ] = s.fps_display.graph_enabled;
+            jFps[ "percentiles_enabled" ] = s.fps_display.percentiles_enabled;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
