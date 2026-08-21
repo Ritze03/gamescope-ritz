@@ -201,6 +201,10 @@ namespace gamescope::config
                 s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
                 s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
                 s.overlay.background_darkening = JGetFloat( *pOverlay, "background_darkening", s.overlay.background_darkening );
+
+                s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
+                s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
+                s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -288,6 +292,9 @@ namespace gamescope::config
                 jOverlay[ "background_blur" ] = s.overlay.background_blur;
                 jOverlay[ "background_darkening" ] = s.overlay.background_darkening;
 
+                jOverlay[ "startup_announce_enabled" ] = s.overlay.startup_announce_enabled;
+                jOverlay[ "capture_all_keyboard_input" ] = s.overlay.capture_all_keyboard_input;
+                jOverlay[ "keyboard_navigation_enabled" ] = s.overlay.keyboard_navigation_enabled;
                 j[ "overlay" ] = std::move( jOverlay );
             }
 

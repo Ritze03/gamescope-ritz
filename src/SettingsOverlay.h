@@ -72,6 +72,16 @@ namespace gamescope
 	// route the event into the queue below instead of forwarding it.
 	bool SettingsOverlay_IsCapturingInput();
 
+	// Keyboard-control toggle (see ConfigSchema.h's OverlaySettings
+	// comment): true only when the overlay is open/capturing AND the
+	// "capture all keyboard input" setting is on. wlserver_dispatch_key()
+	// (wlserver.cpp) uses this instead of SettingsOverlay_IsCapturingInput()
+	// to decide where a keypress goes -- mouse routing is untouched by this
+	// setting and keeps using SettingsOverlay_IsCapturingInput() directly.
+	// Thread-safe the same way SettingsOverlay_IsCapturingInput() is (reads
+	// only atomics/ConVars, no locking).
+	bool SettingsOverlay_IsCapturingKeyboard();
+
 	// Producer side (main thread). uLinuxKeycode is a raw evdev keycode
 	// (KEY_* from linux/input-event-codes.h, NOT an xkb keycode -- no +8),
 	// the same convention wlserver_key()/wlserver_handle_key() already use

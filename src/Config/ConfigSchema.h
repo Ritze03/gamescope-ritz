@@ -146,6 +146,38 @@ namespace gamescope::config
     struct NotificationSettings
     {
         bool muted = false;
+        // Whether the brief startup announcement (animated "gamescope-ritz is
+        // active" toast, with the Ctrl+Shift+O hint) plays on process start.
+        // Process-level UI preference, same rules as fade_ms above - read
+        // once by SettingsOverlay.cpp directly via LoadGlobal(), never via
+        // ResolveEffective()/a per-game override. Default true so a fresh
+        // install still gets the hint at least once per launch; the General
+        // tab surfaces this as a checkbox.
+        bool startup_announce_enabled = true;
+
+        // Keyboard-control toggles for the overlay's own input capture (M2)
+        // while it is open - see wlserver.cpp's wlserver_dispatch_key() and
+        // SettingsOverlay.cpp's SettingsOverlay_IsCapturingKeyboard(). Also
+        // process-level, same rules as fade_ms above.
+        //
+        // capture_all_keyboard_input: true (default, matches M2's shipped
+        // behavior) means every keystroke goes to the overlay while it's
+        // open, none reach the game. false lets keyboard input pass straight
+        // through to the game even while the overlay is open (mouse capture
+        // is unaffected either way) - useful for a controller/mouse-only
+        // overlay workflow where the player wants to keep typing/using
+        // hotkeys in the game itself. Ctrl+Shift+O still always works to
+        // close the overlay regardless of this setting, since the hotkey
+        // check runs before this gate (wlserver_process_hotkeys()).
+        bool capture_all_keyboard_input = true;
+
+        // keyboard_navigation_enabled: whether Tab/arrow-key ImGui keyboard
+        // navigation of the overlay's own widgets is enabled while it holds
+        // keyboard capture (ImGuiConfigFlags_NavEnableKeyboard). Purely an
+        // ImGui-side flag - never changes what wlserver.cpp routes where, so
+        // toggling it carries none of capture_all_keyboard_input's release-
+        // routing risk.
+        bool keyboard_navigation_enabled = true;
     };
 
     // The full settings shape shared by global.json, profiles/<name>.json, and

@@ -2848,8 +2848,31 @@ paint_all( global_focus_t *pFocus, bool async )
 		pFocus->cursor->undirty();
 	}
 
-	// Draw cursor if we need to
-	if (input && ShouldDrawCursor() && cv_paint_cursor_plane) {
+	// Draw cursor if we need to.
+	//
+	// Redundant-cursor fix: while the settings overlay is open (capturing
+	// input), it draws its own software cursor into its own texture/layer
+	// (ImGuiIO::MouseDrawCursor, see SettingsOverlay.cpp), positioned from
+	// the overlay-local pointer position wlserver.cpp's input queue feeds
+	// it. This game/host-composited cursor below is a *different* cursor --
+	// positioned from wlserver.mouse_surface_cursorx/y, which the overlay's
+	// input-capture gate in wlserver_mousemotion()/wlserver_touchmotion()
+	// stops updating for as long as the overlay is capturing (motion is
+	// routed into the overlay's own queue instead, see those functions'
+	// comments) -- so without this check it would keep being painted every
+	// frame, frozen at wherever it was when the overlay opened, underneath
+	// (g_zposCursor < g_zposSettingsOverlay) the overlay's own live cursor:
+	// two visibly different cursors at once, one of them a stale ghost. This
+	// is what --force-grab-cursor (g_bForceRelativeMouse) makes into a
+	// *persistent* bug rather than a one-frame flash: it makes
+	// ShouldDrawCursor() unconditionally true, so this plane paints on every
+	// frame regardless of window-manager nested-hint logic. Suppressing this
+	// plane whenever the overlay owns input leaves exactly the overlay's own
+	// cursor visible while it's open, and hands the plane straight back
+	// (fresh position, no staleness -- wlserver resumes updating
+	// mouse_surface_cursorx/y the instant capture drops) the moment it
+	// closes.
+	if (input && ShouldDrawCursor() && cv_paint_cursor_plane && !gamescope::SettingsOverlay_IsCapturingInput()) {
 		pFocus->cursor->paint(
 			input, w == input ? override : nullptr,
 			&frameInfo);
