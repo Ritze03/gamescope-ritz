@@ -173,7 +173,7 @@ while [[ $# -gt 0 ]]; do
     --height) OUT_H="$2"; shift 2 ;;
     --client) CLIENT_CMD="$2"; shift 2 ;;
     --backend) BACKEND="$2"; shift 2 ;;
-    overlay-inert|no-dynamic-rendering-ext|no-convar-seed|normal|upstream|upstream-3.16.25|upstream-prebuffermemo|upstream-wlroots020)
+    overlay-inert|no-dynamic-rendering-ext|no-convar-seed|normal|upstream|upstream-3.16.25|upstream-prebuffermemo|upstream-wlroots020|upstream-3.16.24-debug|packaged-3.16.24-release)
       VARIANT="$1"; shift ;;
     *) fail "unknown argument: $1 (see --help)" ;;
   esac
