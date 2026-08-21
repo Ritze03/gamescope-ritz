@@ -39,6 +39,7 @@
 #include "reshade_effect_manager.hpp"
 #include "rendervulkan.hpp"
 #include "Config/ConfigManager.h"
+#include "Fonts.h"
 
 #include "imgui.h"
 
@@ -230,7 +231,9 @@ namespace gamescope
 			SetRuntimeUniformBool( "pre_sharpen_enabled", s.enabled );
 			QueueSave();
 		}
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 		ImGui::TextDisabled( "Pre-upscale -- works with any Filter, unlike Upscale Sharpness (Display panel)." );
+		ImGui::PopFont();
 
 		if ( !s.enabled )
 			ImGui::BeginDisabled();
@@ -254,7 +257,12 @@ namespace gamescope
 		ImGui::SetNextWindowPos( ImVec2( 520.0f, 64.0f ), ImGuiCond_FirstUseEver );
 		ImGui::SetNextWindowSize( ImVec2( 430.0f, 300.0f ), ImGuiCond_FirstUseEver );
 
-		ImGui::Begin( "Shaders", nullptr, ImGuiWindowFlags_NoCollapse );
+		// See SettingsOverlay.cpp's DrawPlaceholderWindow() for why wrapping
+		// just the Begin() call styles the real title bar text (M8 part 1,
+		// issue #13).
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Title ) );
+		ImGui::Begin( "SHADERS", nullptr, ImGuiWindowFlags_NoCollapse );
+		ImGui::PopFont();
 
 		// SDR-only gate (DECISIONS.md #15): a deliberate v1 limitation, not
 		// an oversight -- naive vibrancy/sharpen math assumes clamped 0..1
@@ -266,7 +274,9 @@ namespace gamescope
 		{
 			ImGui::TextColored( ImVec4( 0.95f, 0.65f, 0.25f, 1.0f ),
 				"Effects are SDR-only for now -- disable HDR to use them." );
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 			ImGui::TextDisabled( "Deliberate v1 limitation, not a bug (DECISIONS.md #15)." );
+			ImGui::PopFont();
 			ImGui::Separator();
 			ImGui::BeginDisabled();
 		}

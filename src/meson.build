@@ -74,6 +74,25 @@ shader_src = [
 
 spirv_shaders = glsl_generator.process(shader_src)
 
+# M8 typography (issue #13): embeds the bundled IBM Plex Sans/Mono weights
+# (OFL-licensed, see Overlay/fonts/LICENSE-OFL.txt) as C byte arrays, the
+# same generated-header shape glsl_generator already uses above for shaders
+# -- reused here instead of adding a whole new build-time tool/dependency
+# just to get font bytes into the binary. See Overlay/fonts/embed_font.py.
+font_embed_gen = generator(
+  find_program('Overlay/fonts/embed_font.py'),
+  output    : ['@BASENAME@.h'],
+  arguments : ['@INPUT@', '@OUTPUT@'],
+)
+
+font_headers = font_embed_gen.process([
+  'Overlay/fonts/IBMPlexSans-Regular.ttf',
+  'Overlay/fonts/IBMPlexSans-Medium.ttf',
+  'Overlay/fonts/IBMPlexMono-Regular.ttf',
+  'Overlay/fonts/IBMPlexMono-Medium.ttf',
+  'Overlay/fonts/IBMPlexMono-SemiBold.ttf',
+])
+
 reshade_src = [
   'reshade/source/effect_codegen_spirv.cpp',
   'reshade/source/effect_expression.cpp',
@@ -122,6 +141,7 @@ src = [
   'Timeline.cpp',
   'reshade_effect_manager.cpp',
   'SettingsOverlay.cpp',
+  'Overlay/Fonts.cpp',
   'Overlay/PanelDisplay.cpp',
   'Overlay/FpsDisplay.cpp',
   'Overlay/PanelShaders.cpp',
@@ -163,6 +183,7 @@ gamescope_cpp_args += '-DHAVE_LIBEIS=@0@'.format(eis_dep.found().to_int())
 gamescope_cpp_args += '-DHAVE_SCRIPTING=1'
 
 src += spirv_shaders
+src += font_headers
 src += protocols_server_src
 src += protocols_client_src
 
