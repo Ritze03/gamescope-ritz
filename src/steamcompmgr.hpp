@@ -41,6 +41,11 @@ static const uint32_t g_zposMuraCorrection = 5;
 // the Steam overlay/settings panels of other compositors sit above pointer
 // decoration once open.
 static const uint32_t g_zposSettingsOverlay = 6;
+// FPS display (M4): its own always-drawn HUD layer, topmost of all --
+// independent of g_zposSettingsOverlay so it stays visible/on top whether
+// or not the settings panel itself is open (see SPEC.md Feature 3's
+// lifetime note: the two have separate visibility flags by design).
+static const uint32_t g_zposFpsDisplay = 7;
 
 extern bool g_bHDRItmEnable;
 extern bool g_bForceHDRSupportDebug;

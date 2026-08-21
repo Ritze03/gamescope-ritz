@@ -121,6 +121,7 @@ src = [
   'Timeline.cpp',
   'reshade_effect_manager.cpp',
   'SettingsOverlay.cpp',
+  'Overlay/FpsDisplay.cpp',
   'backend.cpp',
   'x11cursor.cpp',
   'InputEmulation.cpp',

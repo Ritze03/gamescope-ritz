@@ -96,6 +96,7 @@
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
+#include "Overlay/FpsDisplay.h"
 #include "BufferMemo.h"
 #include "Utils/Process.h"
 #include "Utils/Algorithm.h"
@@ -2933,6 +2934,11 @@ paint_all( global_focus_t *pFocus, bool async )
 	// built above (including the cursor). Rendering-only for now -- see
 	// SettingsOverlay.h; input capture is Milestone M2.
 	gamescope::SettingsOverlay_AddLayer( &frameInfo );
+
+	// M4 FPS display: independent visibility flag from the settings overlay
+	// above (see FpsDisplay.h) -- it renders every frame the readout is
+	// enabled, whether or not the settings panel itself is open.
+	gamescope::FpsDisplay_AddLayer( &frameInfo );
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 	{
