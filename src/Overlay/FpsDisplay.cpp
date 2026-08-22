@@ -53,6 +53,7 @@
 #include "Fonts.h"
 #include "Widgets.h"
 #include "Palette.h"
+#include "Metrics/SystemStats.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -518,6 +519,27 @@ namespace gamescope
 	static constexpr float kRowGap = 4.0f;
 	static constexpr float kGraphHeight = 18.0f;
 
+	// Shared box backdrop for every module (issue #28: factored out of what
+	// was originally DrawFpsModuleContent's own inline block, so the CPU/
+	// GPU/Media modules below draw an identical backdrop rather than a
+	// second copy of the same four lines). Colours are Palette.h's own
+	// tokens/§1 literals -- no new tokens invented, per this issue's own
+	// scope note that #29 owns per-module colour customization.
+	static void DrawModuleBackdrop( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, bool bDrawBackdrop, const config::FpsDisplaySettings &cfg )
+	{
+		if ( !bDrawBackdrop )
+			return;
+
+		const ImVec2 rectMin = origin;
+		const ImVec2 rectMax( origin.x + boxSize.x, origin.y + boxSize.y );
+		// Spec §10: "square corners (radius 0)" is the mockup's own default,
+		// but backdrop_rounding stays a real user setting -- see
+		// DrawFpsModuleContent's own identical comment.
+		const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity ) );
+		pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, cfg.backdrop_rounding );
+		pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), cfg.backdrop_rounding );
+	}
+
 	// -------------------------------------------------------------------
 	// Placement: 9 anchor positions (issue #26/#27's shared 3x3 grid
 	// model), stored on disk as one of the strings below
@@ -570,16 +592,16 @@ namespace gamescope
 	// Module framework (issue #27): the readout is a fixed sequence of
 	// content modules -- FPS, CPU, GPU, Media, in that order (task brief,
 	// verbatim) -- each its own backdrop-boxed block, stacked from the
-	// selected anchor's edge inward. Only the FPS module (this file's
-	// pre-existing number/unit/ms + optional frametime graph + percentile
-	// row content) has real content today; CPU/GPU/Media are issue #28's
-	// job. Adding one there is meant to be small: write a
-	// Measure<X>Module()/Draw<X>Module() pair with the same shape as
-	// MeasureFpsModule()/DrawFpsModuleContent() below, give it a case in
-	// MeasureModule()/DrawModule(), and list it in kModuleOrder. A module
-	// with no content yet reports zero size from its measure function,
-	// which is this framework's contract for "not present" -- it draws
-	// nothing and reserves no stack space or gap.
+	// selected anchor's edge inward. Issue #28 filled in the CPU/GPU/Media
+	// content (search this file for "CPU/GPU/Media modules (issue #28)");
+	// every module now reports real content from Metrics/SystemStats.h's
+	// background-polled snapshot, following the same
+	// Measure<X>Module()/Draw<X>Module() shape MeasureFpsModule()/
+	// DrawFpsModuleContent() established. A module still reports zero size
+	// from its measure function when its own per-module `enabled` toggle
+	// (config::FpsDisplaySettings::cpu_enabled/gpu_enabled/media_enabled)
+	// is off -- this framework's contract for "not present" is unchanged:
+	// it draws nothing and reserves no stack space or gap.
 	//
 	// Order is FIXED and EDGE-RELATIVE, not a fixed top-to-bottom screen
 	// order: kModuleOrder's first entry (FPS) always ends up the module
@@ -755,19 +777,9 @@ namespace gamescope
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
 		const ImVec2 rectMin = origin;
-		const ImVec2 rectMax( origin.x + boxSize.x, origin.y + boxSize.y );
 		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding, rectMin.y + cfg.backdrop_padding );
 
-		if ( L.bDrawBackdrop )
-		{
-			// Spec §10: "square corners (radius 0 -- unlike windows)" is the
-			// mockup's own default, but backdrop_rounding stays a real user
-			// setting (M4's own control, still exposed in
-			// FpsDisplay_DrawSettingsPanel below) rather than forced to 0.
-			const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity ) );
-			pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, cfg.backdrop_rounding );
-			pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), cfg.backdrop_rounding );
-		}
+		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size;
@@ -809,31 +821,370 @@ namespace gamescope
 		}
 	}
 
-	// Measures one module in stacking order, returning its full box size
-	// (content + 2*backdrop_padding on each axis, matching what
-	// DrawFpsModuleContent() above expects as boxSize) -- (0,0) means "not
-	// present," this frame's framework-level contract for a module with no
-	// content (today: every module but Fps; issue #28 fills these in).
-	static ImVec2 MeasureModule( ModuleKind kind, int nFps, FpsModuleLayout &outFpsLayout )
+	// -------------------------------------------------------------------
+	// CPU/GPU/Media modules (issue #28) -- fill in the stubs #27 left.
+	// Same measure/draw split as the FPS module above: a Measure*Module()
+	// call builds every string/size the draw half needs (so the framework
+	// can learn a module's box size before it has an origin to draw at),
+	// and a Draw*ModuleContent() draws into [origin, origin+boxSize).
+	//
+	// Values come from Metrics::Get*State() (Metrics/SystemStats.h) -- a
+	// cheap mutex-guarded copy of a background thread's last poll, never a
+	// direct sysfs/proc read or `playerctl` spawn on this (steamcompmgr)
+	// thread. See that header's own comment for the full threading
+	// contract and data-source rationale (verified live on this machine's
+	// AMD RX 7900 XTX for the GPU sysfs paths).
+	//
+	// Every numeric field below is drawn through Fonts::Style::Value/Meta
+	// (both IBM Plex Mono, genuinely monospaced) at a fixed printf field
+	// width, the same "digits do not jitter" convention MeasureFpsModule's
+	// own comment documents -- e.g. "%3d%%" for GPU busy, not "%d%%".
+	// -------------------------------------------------------------------
+
+	// ---- CPU/RAM module -------------------------------------------------
+
+	struct CpuModuleLayout
 	{
+		bool bDrawBackdrop = false;
+		char szLoadValue[16] = "";  // e.g. " 1.23" or "  n/a"
+		char szRamValue[24] = "";   // e.g. " 6.1/31.9GB" or " n/a"
+		ImVec2 loadLabelSize{}, loadValueSize{}, ramLabelSize{}, ramValueSize{};
+		float flContentWidth = 0.0f;
+		float flContentHeight = 0.0f;
+	};
+
+	static constexpr const char *kCpuLoadLabel = "CPU";
+	static constexpr const char *kCpuRamLabel = "  RAM";
+
+	static CpuModuleLayout MeasureCpuModule()
+	{
+		CpuModuleLayout L;
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		L.bDrawBackdrop = cfg.backdrop_enabled && cfg.blend_mode != "additive";
+
+		const gamescope::Metrics::CpuState cpu = gamescope::Metrics::GetCpuState();
+
+		// Fixed-width fields (see this section's header comment) -- a
+		// missing /proc/loadavg or /proc/meminfo read (this issue's own
+		// "degrade gracefully" ask, though far less likely than a missing
+		// amdgpu node) reads as "n/a" in the same field width rather than
+		// a fabricated 0.
+		if ( cpu.bLoadAvailable )
+			snprintf( L.szLoadValue, sizeof( L.szLoadValue ), " %4.2f", cpu.flLoad1 );
+		else
+			snprintf( L.szLoadValue, sizeof( L.szLoadValue ), "  n/a" );
+
+		if ( cpu.bMemAvailable )
+		{
+			const float flUsedGb = (float)cpu.ulMemUsedKb / ( 1024.0f * 1024.0f );
+			const float flTotalGb = (float)cpu.ulMemTotalKb / ( 1024.0f * 1024.0f );
+			snprintf( L.szRamValue, sizeof( L.szRamValue ), " %4.1f/%4.1fGB", flUsedGb, flTotalGb );
+		}
+		else
+		{
+			snprintf( L.szRamValue, sizeof( L.szRamValue ), " n/a" );
+		}
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		L.loadLabelSize = ImGui::CalcTextSize( kCpuLoadLabel );
+		L.ramLabelSize = ImGui::CalcTextSize( kCpuRamLabel );
+		ImGui::PopFont();
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		L.loadValueSize = ImGui::CalcTextSize( L.szLoadValue );
+		L.ramValueSize = ImGui::CalcTextSize( L.szRamValue );
+		ImGui::PopFont();
+
+		L.flContentWidth = L.loadLabelSize.x + L.loadValueSize.x + L.ramLabelSize.x + L.ramValueSize.x;
+		L.flContentHeight = std::max( { L.loadLabelSize.y, L.loadValueSize.y, L.ramLabelSize.y, L.ramValueSize.y } );
+		return L;
+	}
+
+	static void DrawCpuModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const CpuModuleLayout &L )
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
+
+		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) ); // matches Row 3's own "55% white" meta treatment
+		const ImU32 valueColor = ImGui::GetColorU32( gamescope::palette::White( cfg.text_opacity ) );
+
+		ImVec2 cursor = textPos;
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		pDrawList->AddText( cursor, labelColor, kCpuLoadLabel );
+		ImGui::PopFont();
+		cursor.x += L.loadLabelSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		pDrawList->AddText( cursor, valueColor, L.szLoadValue );
+		ImGui::PopFont();
+		cursor.x += L.loadValueSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		pDrawList->AddText( cursor, labelColor, kCpuRamLabel );
+		ImGui::PopFont();
+		cursor.x += L.ramLabelSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		pDrawList->AddText( cursor, valueColor, L.szRamValue );
+		ImGui::PopFont();
+	}
+
+	// ---- GPU module -------------------------------------------------------
+
+	struct GpuModuleLayout
+	{
+		bool bDrawBackdrop = false;
+		bool bGpuFound = false;
+		char szUnavailableLine[40] = "";
+		char szBusyValue[8] = "";     // " 63%"
+		char szVramValue[24] = "";    // " 12.1/24.0GB"
+		char szSensorsLine[40] = "";  // " 63.0C   96.0W" or "sensors unavailable"
+		ImVec2 unavailableSize{};
+		ImVec2 busyLabelSize{}, busyValueSize{}, vramLabelSize{}, vramValueSize{}, sensorsLineSize{};
+		float flRow1Height = 0.0f;
+		float flContentWidth = 0.0f;
+		float flContentHeight = 0.0f;
+	};
+
+	static constexpr const char *kGpuBusyLabel = "GPU";
+	static constexpr const char *kGpuVramLabel = "  VRAM";
+
+	static GpuModuleLayout MeasureGpuModule()
+	{
+		GpuModuleLayout L;
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		L.bDrawBackdrop = cfg.backdrop_enabled && cfg.blend_mode != "additive";
+
+		const gamescope::Metrics::GpuState gpu = gamescope::Metrics::GetGpuState();
+		L.bGpuFound = gpu.bGpuFound;
+
+		if ( !gpu.bGpuFound )
+		{
+			// No amdgpu DRM device found this session -- non-AMD hardware,
+			// or an AMD card whose driver hasn't bound. Honest
+			// "unavailable" line rather than a fabricated 0% or a crash on
+			// a missing sysfs file -- this issue's own explicit
+			// requirement (this machine is AMD; NVIDIA/Intel were never
+			// testable here, so this path is the honest fallback for them).
+			snprintf( L.szUnavailableLine, sizeof( L.szUnavailableLine ), "GPU  unavailable (no amdgpu)" );
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			L.unavailableSize = ImGui::CalcTextSize( L.szUnavailableLine );
+			ImGui::PopFont();
+			L.flContentWidth = L.unavailableSize.x;
+			L.flContentHeight = L.unavailableSize.y;
+			return L;
+		}
+
+		snprintf( L.szBusyValue, sizeof( L.szBusyValue ), " %3d%%", gpu.nBusyPercent );
+		const float flUsedGb = (float)gpu.ulVramUsedBytes / ( 1024.0f * 1024.0f * 1024.0f );
+		const float flTotalGb = (float)gpu.ulVramTotalBytes / ( 1024.0f * 1024.0f * 1024.0f );
+		snprintf( L.szVramValue, sizeof( L.szVramValue ), " %4.1f/%4.1fGB", flUsedGb, flTotalGb );
+
+		if ( gpu.bHwmonFound )
+			snprintf( L.szSensorsLine, sizeof( L.szSensorsLine ), "%5.1fC   %5.1fW", gpu.flTempC, gpu.flPowerWatts );
+		else
+			snprintf( L.szSensorsLine, sizeof( L.szSensorsLine ), "sensors unavailable" ); // amdgpu DRM node found, but no matching hwmon node -- temp/power specifically unavailable
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		L.busyLabelSize = ImGui::CalcTextSize( kGpuBusyLabel );
+		L.vramLabelSize = ImGui::CalcTextSize( kGpuVramLabel );
+		L.sensorsLineSize = ImGui::CalcTextSize( L.szSensorsLine );
+		ImGui::PopFont();
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		L.busyValueSize = ImGui::CalcTextSize( L.szBusyValue );
+		L.vramValueSize = ImGui::CalcTextSize( L.szVramValue );
+		ImGui::PopFont();
+
+		const float flRow1Width = L.busyLabelSize.x + L.busyValueSize.x + L.vramLabelSize.x + L.vramValueSize.x;
+		L.flRow1Height = std::max( { L.busyLabelSize.y, L.busyValueSize.y, L.vramLabelSize.y, L.vramValueSize.y } );
+		L.flContentWidth = std::max( flRow1Width, L.sensorsLineSize.x );
+		L.flContentHeight = L.flRow1Height + kRowGap + L.sensorsLineSize.y;
+		return L;
+	}
+
+	static void DrawGpuModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const GpuModuleLayout &L )
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
+
+		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) );
+		const ImU32 valueColor = ImGui::GetColorU32( gamescope::palette::White( cfg.text_opacity ) );
+
+		if ( !L.bGpuFound )
+		{
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			pDrawList->AddText( textPos, labelColor, L.szUnavailableLine );
+			ImGui::PopFont();
+			return;
+		}
+
+		ImVec2 cursor = textPos;
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		pDrawList->AddText( cursor, labelColor, kGpuBusyLabel );
+		ImGui::PopFont();
+		cursor.x += L.busyLabelSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		pDrawList->AddText( cursor, valueColor, L.szBusyValue );
+		ImGui::PopFont();
+		cursor.x += L.busyValueSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		pDrawList->AddText( cursor, labelColor, kGpuVramLabel );
+		ImGui::PopFont();
+		cursor.x += L.vramLabelSize.x;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		pDrawList->AddText( cursor, valueColor, L.szVramValue );
+		ImGui::PopFont();
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		pDrawList->AddText( ImVec2( textPos.x, textPos.y + L.flRow1Height + kRowGap ), labelColor, L.szSensorsLine );
+		ImGui::PopFont();
+	}
+
+	// ---- Media module -------------------------------------------------------
+
+	// Byte-truncation, not UTF-8-aware: acceptable here since this only
+	// clips an already-rare long title/artist string for display width,
+	// and a clipped multibyte glyph at the very tail is a cosmetic edge
+	// case (the font atlas renders whatever bytes remain, at worst one
+	// stray/missing glyph), not a correctness one.
+	static std::string TruncateForDisplay( const std::string &s, size_t nMaxLen )
+	{
+		if ( s.size() <= nMaxLen )
+			return s;
+		return s.substr( 0, nMaxLen ) + "...";
+	}
+
+	struct MediaModuleLayout
+	{
+		bool bDrawBackdrop = false;
+		bool bPlayerAvailable = false;
+		char szStatusLine[24] = "";
+		char szTrackLine[160] = "";
+		ImVec2 statusSize{}, trackSize{};
+		float flContentWidth = 0.0f;
+		float flContentHeight = 0.0f;
+	};
+
+	static MediaModuleLayout MeasureMediaModule()
+	{
+		MediaModuleLayout L;
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		L.bDrawBackdrop = cfg.backdrop_enabled && cfg.blend_mode != "additive";
+
+		const gamescope::Metrics::MediaState media = gamescope::Metrics::GetMediaState();
+		L.bPlayerAvailable = media.bPlayerAvailable;
+
+		if ( !media.bPlayerAvailable )
+		{
+			// No MPRIS player currently open (playerctl missing, or simply
+			// nothing playing) -- an honestly-empty module, not an error,
+			// per this issue's own acceptance criterion.
+			snprintf( L.szStatusLine, sizeof( L.szStatusLine ), "no media playing" );
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			L.statusSize = ImGui::CalcTextSize( L.szStatusLine );
+			ImGui::PopFont();
+			L.flContentWidth = L.statusSize.x;
+			L.flContentHeight = L.statusSize.y;
+			return L;
+		}
+
+		const char *pszStatusWord = "media";
+		switch ( media.eStatus )
+		{
+		case gamescope::Metrics::PlaybackStatus::Playing: pszStatusWord = "playing"; break;
+		case gamescope::Metrics::PlaybackStatus::Paused:  pszStatusWord = "paused";  break;
+		case gamescope::Metrics::PlaybackStatus::Stopped: pszStatusWord = "stopped"; break;
+		default: break;
+		}
+		snprintf( L.szStatusLine, sizeof( L.szStatusLine ), "MEDIA  %s", pszStatusWord );
+
+		const std::string sTitle = TruncateForDisplay( media.sTitle.empty() ? "(unknown title)" : media.sTitle, 40 );
+		const std::string sTrack = media.sArtist.empty() ? sTitle : ( sTitle + "  -  " + TruncateForDisplay( media.sArtist, 24 ) );
+		snprintf( L.szTrackLine, sizeof( L.szTrackLine ), "%s", sTrack.c_str() );
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		L.statusSize = ImGui::CalcTextSize( L.szStatusLine );
+		ImGui::PopFont();
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		L.trackSize = ImGui::CalcTextSize( L.szTrackLine );
+		ImGui::PopFont();
+
+		L.flContentWidth = std::max( L.statusSize.x, L.trackSize.x );
+		L.flContentHeight = L.statusSize.y + kRowGap + L.trackSize.y;
+		return L;
+	}
+
+	static void DrawMediaModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const MediaModuleLayout &L )
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
+
+		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) );
+		const ImU32 valueColor = ImGui::GetColorU32( gamescope::palette::White( cfg.text_opacity ) );
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		pDrawList->AddText( textPos, labelColor, L.szStatusLine );
+		ImGui::PopFont();
+
+		if ( !L.bPlayerAvailable )
+			return;
+
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		pDrawList->AddText( ImVec2( textPos.x, textPos.y + L.statusSize.y + kRowGap ), valueColor, L.szTrackLine );
+		ImGui::PopFont();
+	}
+
+	// Measures one module in stacking order, returning its full box size
+	// (content + 2*backdrop_padding on each axis, matching what each
+	// Draw*ModuleContent() above expects as boxSize) -- (0,0) means "not
+	// present," this framework's contract for a module with no content
+	// (still used by any module whose own `enabled` toggle is off -- see
+	// DrawReadout()'s per-module gating below).
+	static ImVec2 MeasureModule( ModuleKind kind, int nFps, FpsModuleLayout &outFpsLayout, CpuModuleLayout &outCpuLayout, GpuModuleLayout &outGpuLayout, MediaModuleLayout &outMediaLayout )
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		switch ( kind )
 		{
 		case ModuleKind::Fps:
 		{
 			outFpsLayout = MeasureFpsModule( nFps );
-			const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 			return ImVec2( outFpsLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outFpsLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
 		}
 		case ModuleKind::Cpu:
+		{
+			if ( !cfg.cpu_enabled )
+				return ImVec2( 0.0f, 0.0f );
+			outCpuLayout = MeasureCpuModule();
+			return ImVec2( outCpuLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outCpuLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
+		}
 		case ModuleKind::Gpu:
+		{
+			if ( !cfg.gpu_enabled )
+				return ImVec2( 0.0f, 0.0f );
+			outGpuLayout = MeasureGpuModule();
+			return ImVec2( outGpuLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outGpuLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
+		}
 		case ModuleKind::Media:
+		{
+			if ( !cfg.media_enabled )
+				return ImVec2( 0.0f, 0.0f );
+			outMediaLayout = MeasureMediaModule();
+			return ImVec2( outMediaLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outMediaLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
+		}
 		default:
-			// #28: no real content yet.
 			return ImVec2( 0.0f, 0.0f );
 		}
 	}
 
-	static void DrawModule( ModuleKind kind, ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &fpsLayout )
+	static void DrawModule( ModuleKind kind, ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &fpsLayout, const CpuModuleLayout &cpuLayout, const GpuModuleLayout &gpuLayout, const MediaModuleLayout &mediaLayout )
 	{
 		switch ( kind )
 		{
@@ -841,10 +1192,16 @@ namespace gamescope
 			DrawFpsModuleContent( pDrawList, origin, boxSize, fpsLayout );
 			break;
 		case ModuleKind::Cpu:
+			DrawCpuModuleContent( pDrawList, origin, boxSize, cpuLayout );
+			break;
 		case ModuleKind::Gpu:
+			DrawGpuModuleContent( pDrawList, origin, boxSize, gpuLayout );
+			break;
 		case ModuleKind::Media:
+			DrawMediaModuleContent( pDrawList, origin, boxSize, mediaLayout );
+			break;
 		default:
-			break; // #28
+			break;
 		}
 	}
 
@@ -876,16 +1233,22 @@ namespace gamescope
 				order[i] = kModuleOrder[i];
 		}
 
-		// Pass 1: measure every module in stacking order (only Fps has
-		// real content today -- see kModuleOrder's block comment).
+		// Pass 1: measure every module in stacking order. Every module now
+		// has real content (issue #28) -- a module still reports zero size
+		// (this framework's own "not present" contract) when its own
+		// `enabled` toggle is off, exactly like a module with no content
+		// would have before this issue.
 		FpsModuleLayout fpsLayout;
+		CpuModuleLayout cpuLayout;
+		GpuModuleLayout gpuLayout;
+		MediaModuleLayout mediaLayout;
 		ImVec2 sizes[kModuleCount];
 		float flStackWidth = 0.0f;
 		float flStackHeight = 0.0f;
 		int nPresent = 0;
 		for ( int i = 0; i < kModuleCount; ++i )
 		{
-			sizes[i] = MeasureModule( order[i], nFps, fpsLayout );
+			sizes[i] = MeasureModule( order[i], nFps, fpsLayout, cpuLayout, gpuLayout, mediaLayout );
 			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
 			if ( !bPresent )
 				continue;
@@ -927,7 +1290,7 @@ namespace gamescope
 			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
 			if ( !bPresent )
 				continue;
-			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), sizes[i], fpsLayout );
+			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), sizes[i], fpsLayout, cpuLayout, gpuLayout, mediaLayout );
 			flCursorY += sizes[i].y + kModuleGap;
 		}
 	}
@@ -1015,6 +1378,16 @@ namespace gamescope
 	void FpsDisplay_AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		EnsureConfigLoaded();
+
+		// Issue #28: starts the CPU/GPU/media background poll thread
+		// (Metrics/SystemStats.h -- mirrors Audio::Init()'s own
+		// call-unconditionally-every-frame, only-first-call-has-effect
+		// shape). Cheap: an atomic exchange check once the thread is up.
+		// Started here rather than gated on `enabled` below so the first
+		// numbers are already warm by the time a user opens the panel and
+		// turns the readout on, rather than starting cold.
+		gamescope::Metrics::Init();
+
 		if ( !s_Settings.fps_display.enabled )
 			return;
 
@@ -1192,6 +1565,15 @@ namespace gamescope
 		// rather than getting their own.
 		bChanged |= widgets::Checkbox( "Frametime graph", &cfg.graph_enabled );
 		bChanged |= widgets::Checkbox( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
+
+		// Issue #28: per-module enable toggles for the CPU/GPU/Media
+		// modules issue #27's ordering framework reserved slots for --
+		// same List-rows checkbox pattern as the two row toggles above,
+		// independent of `enabled` (the readout as a whole).
+		ImGui::Spacing();
+		bChanged |= widgets::Checkbox( "CPU module (load, RAM)", &cfg.cpu_enabled );
+		bChanged |= widgets::Checkbox( "GPU module (usage, VRAM, temp, power)", &cfg.gpu_enabled );
+		bChanged |= widgets::Checkbox( "Media module (now playing)", &cfg.media_enabled );
 
 		SetStockSliderFullWidth( "Font size" );
 		bChanged |= ImGui::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );

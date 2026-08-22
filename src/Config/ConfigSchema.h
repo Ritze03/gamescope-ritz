@@ -81,6 +81,18 @@ namespace gamescope::config
         // constant with two config-driven values (issue #27).
         float margin_vertical = 32.0f;   // px, Spec §10 "offset 32/32"
         float margin_horizontal = 32.0f; // px, Spec §10 "offset 32/32"
+
+        // Issue #28 (System Monitor part 2/3): per-module enable toggles for
+        // the three modules issue #27's kModuleOrder framework reserved
+        // slots for (FpsDisplay.cpp's ModuleKind::Cpu/Gpu/Media). Independent
+        // of `enabled` above (the readout as a whole) -- same relationship
+        // graph_enabled/percentiles_enabled already have to the FPS module's
+        // own rows. Default true: once a user turns the System Monitor on,
+        // every module it now has real content for shows by default, same
+        // as graph_enabled/percentiles_enabled's own default-on choice.
+        bool cpu_enabled = true;
+        bool gpu_enabled = true;
+        bool media_enabled = true;
     };
 
     struct ReshadeVibrancySettings

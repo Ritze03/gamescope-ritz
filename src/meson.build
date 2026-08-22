@@ -123,6 +123,7 @@ src = [
   'Config/AppId.cpp',
   'Config/ConfigManager.cpp',
   'Audio/Volume.cpp',
+  'Metrics/SystemStats.cpp',
   'Script/Script.cpp',
   'BufferMemo.cpp',
   'steamcompmgr.cpp',
