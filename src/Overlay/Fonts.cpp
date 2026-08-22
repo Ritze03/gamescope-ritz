@@ -17,12 +17,62 @@
 // mean linking/using fontconfig here) and just always using the bundled
 // data is the simpler thing that's correct either way.
 //
-// ponytail: no runtime UI-scale/rebuild support -- SPEC.md's UI structure
-// doesn't call for a user-facing font-size setting, and rebuilding a live
-// atlas means re-uploading the Vulkan font texture (a real cost the task
-// brief explicitly warns against taking on speculatively). If that's ever
-// needed, Load() would need to become idempotent-per-size instead of
-// idempotent-per-context.
+// Issue #38: Load() is no longer idempotent-per-context-only -- it now takes
+// an effective-scale parameter and can be called again later to re-bake a
+// context's atlas at a new scale (RebuildAll() below does exactly that, from
+// every context that has ever called it). This replaces the milestone-8
+// "no runtime UI-scale/rebuild support" limitation the comment used to note
+// here.
+//
+// Empirical correction to #38's own premise (the task brief explicitly asked
+// for this to be checked at runtime, not assumed from the header): this
+// ImGui version's font system is NOT the older "one fixed-size bake,
+// FontGlobalScale just stretches the bitmap" model #38 was written against.
+// It lazily bakes a fresh, fully crisp ImFontBaked per *exact* pixel size on
+// first use of that size (ImFont::GetFontBaked()/ImFontAtlasBakedGetOrAdd(),
+// imgui_draw.cpp) -- and both ImGuiIO::FontGlobalScale/style.FontScaleMain
+// (imgui.cpp's UpdateCurrentFontSize(), which folds them into g.FontSize
+// before g.Font->GetFontBaked(g.FontSize)) and every explicit-size draw call
+// this codebase already makes (Notifications.cpp/Widgets.cpp's
+// AddText(font, size, ...)/CalcTextSizeA(size, ...)) already go through that
+// exact same size-keyed path. Confirmed by measurement, not just reading:
+// FpsDisplay's own font_size slider already renders the HUD number crisp at
+// several times its atlas AddFont() size with zero code here involved.
+// So this rebuild is not fixing observed soft/blurry text -- there wasn't
+// any to find. What it does do, and why it's still worth having: it keeps
+// every Style's ImFont::LegacySize (the *default* size ImGui::PushFont()
+// falls back to with no explicit size -- imgui.cpp's PushFont(), "font->
+// LegacySize > 0.0f ? font->LegacySize : ...") matching the real effective
+// scale, which is what ordinary ImGui::Text()/Checkbox()/etc. calls actually
+// render at; without it those would stay pinned to the compiled-in baseline
+// size regardless of display_scale. Given that's genuinely useful and #38
+// asks for it explicitly (and un-widening the #24 clamp is a separate
+// issue), this still implements a real, working rebuild -- just with an
+// honest account of what problem it does and doesn't solve here.
+//
+// No manual texture create/destroy call to pair this with: this ImGui
+// version's Vulkan backend (subprojects/imgui/backends/imgui_impl_vulkan.cpp)
+// removed ImGui_ImplVulkan_CreateFontsTexture()/DestroyFontsTexture() in
+// favour of ImGuiBackendFlags_RendererHasTextures -- each ImTextureData in
+// ImDrawData::Textures carries its own Create/Update/Destroy status, and
+// ImGui_ImplVulkan_RenderDrawData() walks that list and does the upload/
+// teardown itself, deferring actual destruction until the backend's own
+// ImageCount-frame-old check confirms nothing in flight still samples it
+// (see that file's ImGui_ImplVulkan_UpdateTexture()/DestroyTexture()).
+//
+// But this doesn't mean "just call Clear() and re-add fonts" is safe, and
+// that DID need an actual run to find, not just the header: ImFontAtlas::
+// Clear() also calls the now-"[OBSOLETE]" ClearTexData(), which frees every
+// existing ImTextureData's CPU pixel buffer outright -- fine for a context's
+// very first build (nothing exists yet), but on a real rebuild of an
+// already-rendered atlas it frees Pixels out from under a texture object
+// that's still sitting in atlas->TexList with Status still ImTextureStatus_OK
+// (nothing has told the backend to actually retire it), so the very next
+// glyph the dynamic packer tries to rasterize into that texture calls
+// ImTextureData::GetPixelsAt() on a NULL buffer and asserts/crashes -- this
+// reliably reproduced the first time a rebuild was actually exercised
+// against a warm context. See Load()'s own comment for the fix (ClearFonts()
+// instead of Clear()) and why it's the actually-supported live-rebuild path.
 
 #include "Fonts.h"
 
@@ -94,27 +144,70 @@ namespace gamescope::fonts
 		struct FontSet
 		{
 			ImFont *fonts[kStyleCount] = {};
+			// 0.0f is the sentinel for "never built" -- flScale is always a
+			// real positive display_scale value (never 0) once Load() has
+			// actually run for this context, so this can never collide with
+			// a legitimate already-built scale.
+			float flBuiltScale = 0.0f;
 		};
 
-		// Keyed by ImGuiContext*, not process-global: SettingsOverlay.cpp
-		// and FpsDisplay.cpp each own a separate ImGui context (see
-		// FpsDisplay.h's file comment), and ImFont* pointers are only valid
-		// against the ImFontAtlas of the context they were baked into --
-		// mixing them across contexts would sample the wrong atlas texture.
-		// There are only ever one or two live contexts in this process, so
-		// a small map is simple and cheap; this is not meant to scale past
-		// that.
+		// Keyed by ImGuiContext*, not process-global: SettingsOverlay.cpp,
+		// FpsDisplay.cpp and Notifications.cpp each own a separate ImGui
+		// context (see FpsDisplay.h's file comment), and ImFont* pointers
+		// are only valid against the ImFontAtlas of the context they were
+		// baked into -- mixing them across contexts would sample the wrong
+		// atlas texture. There are only ever up to three live contexts in
+		// this process, so a small map is simple and cheap; this is not
+		// meant to scale past that. Also doubles as RebuildAll()'s "every
+		// context that has ever built an atlas" set -- see that function.
 		std::unordered_map<ImGuiContext *, FontSet> g_FontSets;
 	}
 
-	void Load()
+	void Load( float flScale )
 	{
 		ImGuiContext *pContext = ImGui::GetCurrentContext();
 		if ( pContext == nullptr )
 			return; // nothing to build into -- caller's EnsureImguiInit() didn't create a context
 
-		ImGuiIO &io = ImGui::GetIO();
 		FontSet &set = g_FontSets[pContext];
+		if ( set.flBuiltScale == flScale )
+			return; // already built at this exact scale -- nothing to do (see RebuildAll())
+
+		ImGuiIO &io = ImGui::GetIO();
+
+		// Issue #38: safe to call this more than once per context now --
+		// ClearFonts() releases the atlas's previously-built font/glyph
+		// bookkeeping before every fresh AddFontFromMemoryTTF() pass below,
+		// including the very first call for a context (ClearFonts() on an
+		// already-empty atlas is a harmless no-op, so this doesn't need an
+		// "is this the first build" branch).
+		//
+		// Deliberately ClearFonts(), NOT the full Clear(): this needed an
+		// actual runtime check, not just reading the header (per the task
+		// brief) -- Clear() additionally calls the now-"[OBSOLETE]"
+		// ClearTexData(), which frees every existing ImTextureData's CPU
+		// pixel buffer immediately (DestroyPixels()) without changing its
+		// Status away from ImTextureStatus_OK. On a context that has
+		// already rendered at least one frame (i.e. every real rebuild --
+		// the very first Load() for a context never hits this), that
+		// leaves atlas->TexData pointing at a texture whose Pixels is NULL
+		// but whose Status still claims it's live and packable; the very
+		// next glyph the dynamic atlas tries to rasterize into it calls
+		// ImTextureData::GetPixelsAt(), which asserts Pixels != NULL and
+		// crashes (confirmed empirically -- calling Clear() here reliably
+		// reproduced exactly that crash the first time this was actually
+		// exercised against a warm context, e.g. via the General tab's
+		// Display-scale slider). ClearFonts() alone -- imgui.h's own
+		// comment: "Clear input+output font data/glyphs. New fonts and
+		// textures will be recreated afterwards." -- never touches
+		// TexList/Pixels at all: the freed Style slots just become
+		// reclaimable space the dynamic packer reuses (or grows into a
+		// new ImTextureData for) as AddFontFromMemoryTTF()'s new fonts get
+		// their glyphs baked on demand, with every existing ImTextureData
+		// staying exactly as valid as it already was. This is the
+		// supported live-rebuild path for this backend generation, not
+		// Clear()'s.
+		io.Fonts->ClearFonts();
 
 		ImFontConfig cfg;
 		cfg.FontDataOwnedByAtlas = false; // the byte arrays are static const, compiled-in data -- never ask ImGui to free() them
@@ -136,7 +229,7 @@ namespace gamescope::fonts
 
 			ImFont *pFont = io.Fonts->AddFontFromMemoryTTF(
 				(void *)spec.pFace->pData, (int)spec.pFace->uSize,
-				spec.flSizePixels, &fontCfg, pGlyphRanges );
+				spec.flSizePixels * flScale, &fontCfg, pGlyphRanges );
 
 			if ( pFont == nullptr )
 				bOk = false;
@@ -150,23 +243,49 @@ namespace gamescope::fonts
 			// whatever partial atlas state the failed attempt above left
 			// behind and fall back cleanly to ImGui's own built-in default
 			// font for every role, rather than rendering with a half-built
-			// atlas or leaving any Style unresolved/null.
-			io.Fonts->Clear();
+			// atlas or leaving any Style unresolved/null. ClearFonts(), not
+			// Clear() -- same live-atlas reasoning as above; this fallback
+			// path is just as reachable on a rebuild (a bad flScale is not
+			// exclusive to first boot) as the main path is.
+			io.Fonts->ClearFonts();
 			ImFont *pDefault = io.Fonts->AddFontDefault();
 			io.FontDefault = pDefault;
 			for ( int i = 0; i < kStyleCount; i++ )
 				set.fonts[i] = pDefault;
+			set.flBuiltScale = flScale;
 			return;
 		}
 
 		for ( int i = 0; i < kStyleCount; i++ )
 			set.fonts[i] = builtFonts[i];
+		set.flBuiltScale = flScale;
 
 		// Style::Label (Plex Sans Regular, body text) becomes the atlas's
 		// default -- every pre-existing ImGui::Text/Checkbox/SliderFloat/
 		// etc. call that never explicitly pushes a Style picks this up for
 		// free, matching the design guide's "IBM Plex Sans for prose".
 		io.FontDefault = set.fonts[ IndexForStyle( Style::Label ) ];
+	}
+
+	void RebuildAll( float flScale )
+	{
+		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
+
+		// g_FontSets already holds exactly "every context whose
+		// EnsureImguiInit() has run at least once" -- Load() populates an
+		// entry (via operator[]) the first time it runs for a context, and
+		// nothing ever erases one. A context that has never called Load()
+		// (an FPS HUD the user has never enabled, or a Notifications
+		// context that has never shown a toast) simply isn't in this map
+		// yet, and correctly picks up flScale on its own the first time it
+		// does call Load() -- see Fonts.h's comment.
+		for ( auto &kv : g_FontSets )
+		{
+			ImGui::SetCurrentContext( kv.first );
+			Load( flScale );
+		}
+
+		ImGui::SetCurrentContext( pPrevContext );
 	}
 
 	ImFont *Get( Style style )

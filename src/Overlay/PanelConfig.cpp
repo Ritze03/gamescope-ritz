@@ -542,6 +542,28 @@ namespace gamescope
 				QueueGeneralSave();
 		}
 
+		// Issue #38: display_scale doubles as the effective font-atlas scale,
+		// so on top of DrawLiveFloatSlider()'s usual live-push/persist this
+		// one slider also needs to re-bake every ImGui context's atlas --
+		// gamescope::fonts::RebuildAll() clears and re-adds every font across
+		// all three contexts (SettingsOverlay, FpsDisplay, Notifications),
+		// which is real work not to repeat on every intermediate drag value.
+		// Debounced to the slider's release: widgets::SliderFloat() (like
+		// stock ImGui::SliderFloat()) returns true on every tick while
+		// dragging, so QueueGeneralSave() below still fires every tick same
+		// as any other slider (matches every other field's existing "live as
+		// you drag" behavior for the value itself), but the rebuild only
+		// runs once, on the single frame ImGui::IsItemDeactivatedAfterEdit()
+		// reports the item went inactive after having actually changed --
+		// mouse release (or Enter after ctrl+click-to-type), not every tick.
+		void DrawDisplayScaleSlider( float *pflValue )
+		{
+			if ( widgets::SliderFloat( "Display (overall UI)", pflValue, 0.8f, 1.4f ) )
+				QueueGeneralSave();
+			if ( ImGui::IsItemDeactivatedAfterEdit() )
+				gamescope::fonts::RebuildAll( *pflValue );
+		}
+
 		// General settings for gamescope-ritz itself -- window-chrome
 		// overhaul's own General-tab scale/opacity/effect controls
 		// (dock/display/notification scale, window-focused/unfocused/dock/
@@ -569,10 +591,11 @@ namespace gamescope
 			{
 				ImGui::TextUnformatted( "UI Scale" );
 				DrawLiveFloatSlider( "Dock", &o.dock_scale, 0.85f, 1.5f );
-				DrawLiveFloatSlider( "Display (overall UI)", &o.display_scale, 0.8f, 1.4f );
+				DrawDisplayScaleSlider( &o.display_scale );
 				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-				ImGui::TextDisabled( "Display scale resizes text only (FontGlobalScale) -- widget/window"
-					" geometry stays spec-exact, so very large values can overflow fixed-size controls." );
+				ImGui::TextDisabled( "Display scale re-bakes the font atlas at the new size on release, so"
+					" text stays crisp -- widget/window geometry stays spec-exact, so very large values"
+					" can overflow fixed-size controls." );
 				ImGui::PopFont();
 				DrawLiveFloatSlider( "Notifications", &o.notification_scale, 0.6f, 1.6f );
 			}
