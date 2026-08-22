@@ -55,7 +55,15 @@ namespace gamescope::config
         float backdrop_opacity = 0.5f;
         float backdrop_rounding = 4.0f;
         float backdrop_padding = 6.0f;
-        std::string blend_mode = "alpha"; // alpha | additive
+        // Issue #29: "inverted" is a third value alongside alpha/additive --
+        // see FpsDisplay.cpp's AddTextInverted()/blend_mode header comment
+        // for what it draws (a black-outline/white-fill pairing rather
+        // than a literal per-pixel GPU-blend invert of the actual game
+        // frame, and why -- this HUD renders into its own isolated
+        // offscreen texture, composited onto the game only afterward on a
+        // different queue, so "the destination" is never real game content
+        // during this file's own draw pass).
+        std::string blend_mode = "alpha"; // alpha | additive | inverted
         float text_opacity = 1.0f;
 
         // Row toggles (spec §11's "ROWS checkbox list") -- independent of
@@ -94,6 +102,38 @@ namespace gamescope::config
         bool cpu_enabled = true;
         bool gpu_enabled = true;
         bool media_enabled = true;
+
+        // Issue #29 (System Monitor part 3/3): gap between stacked module
+        // boxes -- was a fixed 8px constant (FpsDisplay.cpp's old
+        // kModuleGap); now a real slider so tightly-packed HUD stacks (or
+        // extra breathing room next to another overlay) are a user choice
+        // rather than a hardcoded constant. This is this issue's own "at
+        // least one new styling option" acceptance criterion -- see
+        // FpsDisplay.cpp's settings panel for the two options considered
+        // and rejected (corner rounding independent of the backdrop:
+        // redundant with backdrop_rounding, which already exists; a
+        // font-weight-per-module override: this codebase has no baked
+        // alternate-weight glyphs to switch to, so it would be a no-op).
+        float module_spacing = 8.0f;
+
+        // Issue #29: optional per-module colour override for each module's
+        // "value" (prominent readout) text -- FPS's Hero number, CPU's
+        // load/RAM figures, GPU's busy/VRAM figures, Media's track line.
+        // std::optional, same nullable-field shape as OverlaySettings::
+        // fade_ms -- unset (the common/default case) means "derive from
+        // Palette.h's accent family" (FpsDisplay.cpp's ModuleColorU32()),
+        // so every module's default colour moves together if #37's
+        // hue-selectable accent work changes what those Palette.h tokens
+        // resolve to at runtime. A *set* value is a deliberate, explicit
+        // user override (picked via a stock ImGui::ColorEdit3 in the
+        // settings panel) and intentionally does NOT track the accent hue
+        // -- the user asked for exactly this colour. Packed 0xRRGGBB
+        // (24-bit, no stored alpha -- text_opacity already governs alpha
+        // uniformly across every module, same as today).
+        std::optional<int> color_fps;
+        std::optional<int> color_cpu;
+        std::optional<int> color_gpu;
+        std::optional<int> color_media;
     };
 
     struct ReshadeVibrancySettings

@@ -163,6 +163,12 @@ namespace gamescope::config
                 s.fps_display.cpu_enabled = JGetBool( *pFps, "cpu_enabled", s.fps_display.cpu_enabled );
                 s.fps_display.gpu_enabled = JGetBool( *pFps, "gpu_enabled", s.fps_display.gpu_enabled );
                 s.fps_display.media_enabled = JGetBool( *pFps, "media_enabled", s.fps_display.media_enabled );
+                // Issue #29: module spacing + optional per-module colour overrides.
+                s.fps_display.module_spacing = JGetFloat( *pFps, "module_spacing", s.fps_display.module_spacing );
+                s.fps_display.color_fps = JGetOptInt( *pFps, "color_fps" );
+                s.fps_display.color_cpu = JGetOptInt( *pFps, "color_cpu" );
+                s.fps_display.color_gpu = JGetOptInt( *pFps, "color_gpu" );
+                s.fps_display.color_media = JGetOptInt( *pFps, "color_media" );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -308,6 +314,15 @@ namespace gamescope::config
             jFps[ "cpu_enabled" ] = s.fps_display.cpu_enabled;
             jFps[ "gpu_enabled" ] = s.fps_display.gpu_enabled;
             jFps[ "media_enabled" ] = s.fps_display.media_enabled;
+            jFps[ "module_spacing" ] = s.fps_display.module_spacing;
+            jFps[ "color_fps" ] = s.fps_display.color_fps.has_value()
+                ? nlohmann::json( *s.fps_display.color_fps ) : nlohmann::json( nullptr );
+            jFps[ "color_cpu" ] = s.fps_display.color_cpu.has_value()
+                ? nlohmann::json( *s.fps_display.color_cpu ) : nlohmann::json( nullptr );
+            jFps[ "color_gpu" ] = s.fps_display.color_gpu.has_value()
+                ? nlohmann::json( *s.fps_display.color_gpu ) : nlohmann::json( nullptr );
+            jFps[ "color_media" ] = s.fps_display.color_media.has_value()
+                ? nlohmann::json( *s.fps_display.color_media ) : nlohmann::json( nullptr );
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
