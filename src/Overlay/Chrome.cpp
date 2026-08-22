@@ -416,13 +416,27 @@ namespace gamescope::chrome
 
 			constexpr float kMarginX = 40.0f;
 			constexpr float kMarginY = 40.0f;
-			constexpr float kRowHeight = 400.0f; // clears every panel's auto-height in row 0
+			constexpr float kRowHeight = 400.0f; // clears every panel's auto-height in row 0 at 1.0x
+			constexpr float kMinColWidth = 460.0f; // 1.0x floor -- see OpeningSize()'s 1.5x default multiplier
+
+			// Issue #49: every one of these is a *distance in this grid*, and
+			// OpeningSize() below now scales each panel's own opening size by
+			// DisplayScale() (issue #47) -- so the grid that's supposed to
+			// keep those panels apart has to grow by the same factor, or a
+			// panel whose footprint has doubled at 2.0x simply spills past a
+			// cell sized for its 1.0x footprint into its neighbor's slot.
+			// io.DisplaySize itself deliberately stays unscaled here (it's
+			// already real host pixels, the same source #31's clamp below
+			// reads from) -- only the *tile geometry* carved out of it needs
+			// the display_scale factor, exactly the way OpeningSize() scales
+			// the panel size and not the host window it's placed inside.
+			const float flScale = gamescope::palette::DisplayScale();
 
 			const ImGuiIO &io = ImGui::GetIO();
-			const float flColWidth = ImMax( 460.0f, ( io.DisplaySize.x - kMarginX * 2.0f ) / 3.0f );
+			const float flColWidth = ImMax( kMinColWidth * flScale, ( io.DisplaySize.x - kMarginX * flScale * 2.0f ) / 3.0f );
 
 			const Slot &slot = kSlots[(size_t)id];
-			return ImVec2( kMarginX + slot.col * flColWidth, kMarginY + slot.row * kRowHeight );
+			return ImVec2( kMarginX * flScale + slot.col * flColWidth, kMarginY * flScale + slot.row * kRowHeight * flScale );
 		}
 
 		// ---- Live theme (General tab settings, see Palette.h's LiveTheme) --
