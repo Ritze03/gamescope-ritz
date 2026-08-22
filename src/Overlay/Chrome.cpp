@@ -288,6 +288,44 @@ namespace gamescope::chrome
 		// g_LiveTheme-derived value in this file.
 		float TitleBarHeight() { return 42.0f * gamescope::palette::DisplayScale(); }
 
+		// Issue #64: the dock must keep equal margin above and below itself,
+		// which in turn reduces the usable area panel windows may occupy
+		// above it. kDockMargin is that one gap, reused for both sides --
+		// DrawDock() below already offset the dock this far off the true
+		// bottom edge (previously a bare "38.0f" literal with no
+		// above-the-dock counterpart at all, issue #64's actual bug); this
+		// gives that number a name so the same value provably governs both
+		// margins rather than the top one being a second, separately-tuned
+		// literal that could drift from the bottom one.
+		constexpr float kDockMargin = 38.0f;
+
+		// Total vertical space the dock's own band occupies at the bottom of
+		// the display: the margin below it (kDockMargin, unchanged from
+		// before #64), the dock's own height (mirrors DrawDock()'s own
+		// kButtonSize/kPad formula -- 54/6 base px scaled live by
+		// flDockScale, the General tab's dock_scale -- rather than a second
+		// literal that could drift from it), and the new #64 margin above it.
+		float DockReservedHeight()
+		{
+			const float flDockScale = gamescope::palette::g_LiveTheme.flDockScale;
+			const float flDockHeight = 54.0f * flDockScale + 2.0f * ( 6.0f * flDockScale );
+			return kDockMargin * 2.0f + flDockHeight;
+		}
+
+		// The lowest y a panel window's own bottom edge may reach -- full
+		// display height minus the dock's reserved band above (#64). #31's
+		// on-screen clamp and #58's resize-size constraint both read this
+		// instead of io.DisplaySize.y directly, so "on screen" now means
+		// "above the dock" for panel windows, not literally to the bottom
+		// pixel -- the single source both the clamp (position: already-open
+		// or freshly-tiled windows, #49) and the resize constraint (size:
+		// #58) consult, so neither can independently let a panel end up
+		// underneath the dock.
+		float UsableBottom()
+		{
+			return ImMax( 0.0f, ImGui::GetIO().DisplaySize.y - DockReservedHeight() );
+		}
+
 		// Display open, everything else closed on first-ever show -- a
 		// reasonable non-overwhelming default, not a hard limit: see Chrome.h's
 		// IsPanelOpen() comment, opening more no longer closes this one.
@@ -977,13 +1015,19 @@ namespace gamescope::chrome
 		// at. Cheap: SetWindowPos() only runs on frames the clamp actually
 		// changes something, e.g. right after a shrink or while an edge is
 		// being dragged past a boundary -- not every frame.
+		// Issue #64: the y bound is UsableBottom() (display height minus the
+		// dock's reserved band), not the raw display height -- so this same
+		// clamp that already pulls a window back on screen also keeps it
+		// from ever sitting (or landing, on its first-ever-tiled frame,
+		// #49) underneath the dock. x is unaffected -- the dock only
+		// reduces the usable area vertically.
 		{
 			const ImGuiIO &io = ImGui::GetIO();
 			const ImVec2 wp = ImGui::GetWindowPos();
 			const ImVec2 ws = ImGui::GetWindowSize();
 			const ImVec2 clampedPos(
 				ImClamp( wp.x, 0.0f, ImMax( 0.0f, io.DisplaySize.x - ws.x ) ),
-				ImClamp( wp.y, 0.0f, ImMax( 0.0f, io.DisplaySize.y - ws.y ) ) );
+				ImClamp( wp.y, 0.0f, ImMax( 0.0f, UsableBottom() - ws.y ) ) );
 			if ( clampedPos.x != wp.x || clampedPos.y != wp.y )
 				ImGui::SetWindowPos( clampedPos );
 		}
@@ -1338,7 +1382,10 @@ namespace gamescope::chrome
 			+ kGap + 1.0f + kGap                                           // divider
 			+ kButtonSize;                                                 // close overlay
 
-		ImGui::SetNextWindowPos( ImVec2( io.DisplaySize.x * 0.5f, io.DisplaySize.y - 38.0f ),
+		// Issue #64: kDockMargin (not a separate literal) -- the same value
+		// UsableBottom() reserves a second time *above* the dock, so the two
+		// margins are provably equal rather than independently tuned.
+		ImGui::SetNextWindowPos( ImVec2( io.DisplaySize.x * 0.5f, io.DisplaySize.y - kDockMargin ),
 			ImGuiCond_Always, ImVec2( 0.5f, 1.0f ) );
 		ImGui::SetNextWindowSize( ImVec2( flContentWidth + kPad * 2.0f, kButtonSize + kPad * 2.0f ), ImGuiCond_Always );
 
