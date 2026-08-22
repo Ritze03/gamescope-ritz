@@ -174,6 +174,18 @@ namespace gamescope::config
         float opacity_windows_unfocused = 0.9f;  // 0.3..1 - every other (unfocused) panel window/popup surface alpha.
         float opacity_dock = 0.7f;               // 0.3..1 - dock container alpha, spec §8 default.
         float opacity_notifications = 0.9f;      // 0.3..1 - Notifications.cpp's DrawToasts() GetUiOpacity(): multiplies each toast card's bg/border/accent/text alpha uniformly.
+        // Issue #37: hue-only accent picker. Degrees, OKLCH hue (0..360,
+        // wraps). Saturation/lightness (OKLCH C/L) are NOT user-tunable -
+        // every accent token in Overlay/Palette.h keeps its own spec'd C/L
+        // and only rotates hue, so no combination can produce a muddy or
+        // blown-out accent. Default 218 reproduces the spec's own #36BDDD
+        // family exactly (Palette.cpp's per-token OKLCH table). Read live by
+        // Overlay/Chrome.cpp's EnsureLiveThemeLoaded() into
+        // gamescope::palette::g_LiveTheme.flAccentHue, then
+        // gamescope::palette::UpdateAccentFamily() regenerates every
+        // kAccent* token from it - same live, no-restart pattern as every
+        // other field in this block.
+        float accent_hue = 218.0f;
         float background_blur = 1.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0), linearly mapped onto 0..k_nMaxOverlayBlurRadius in SettingsOverlay.cpp (0 == no blur pass requested at all, not a minimum blur).
         float background_darkening = 0.8f;       // 0..1 - a native-compositor dim multiply on the game layer (FrameInfo_t::Layer_t::ctm on layers[0]), SettingsOverlay.cpp's GetDarkeningCtmBlob(). Composes with background_blur above (blur.h's gaussian_blur() applies this ctm on its final/vertical pass too, see that file's comment) - both default on now that they compose correctly, so a fresh install shows the design's intended look immediately.
 

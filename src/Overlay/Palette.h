@@ -18,17 +18,44 @@
 
 namespace gamescope::palette
 {
-	// ---- Accent family (oklch(.74 .12 218) base = #36BDDD) ----------------
-	constexpr ImU32 kAccent        = IM_COL32( 0x36, 0xBD, 0xDD, 255 ); // status dot, slider fill lo-end, active borders, dock top-edge base
-	constexpr ImU32 kAccentEdge    = IM_COL32( 0x4F, 0xD0, 0xF1, 255 ); // dock active 2px top edge
-	constexpr ImU32 kAccentGradHi  = IM_COL32( 0x47, 0xCA, 0xEA, 255 ); // slider fill gradient end (right/handle end)
-	constexpr ImU32 kAccentValue   = IM_COL32( 0x78, 0xDB, 0xF6, 255 ); // numeric value readouts
-	constexpr ImU32 kAccentText    = IM_COL32( 0x71, 0xD4, 0xEF, 255 ); // chip text, link-style labels
-	constexpr ImU32 kAccentSegText = IM_COL32( 0xA9, 0xEA, 0xFD, 255 ); // active segmented-control label
-	constexpr ImU32 kAccentKnob    = IM_COL32( 0x93, 0xDE, 0xF4, 255 ); // toggle knob, checkbox inner mark
-	constexpr ImU32 kAccentIcon    = IM_COL32( 0xA3, 0xE3, 0xF6, 255 ); // active dock icon strokes
-	constexpr ImU32 kAccentHandle  = IM_COL32( 0xBA, 0xE7, 0xF4, 255 ); // slider handle fill
-	constexpr ImU32 kAccentLinkDim = IM_COL32( 0x6B, 0xCD, 0xE9, 255 ); // footer action text ("live", title-bar meta)
+	// ---- Accent family (oklch(L C 218) per-token, hue is live -- issue #37)
+	// §1's table gives each token's own OKLCH L/C at the spec's hue (218);
+	// only the hue is ever user-tunable (LiveTheme::flAccentHue below), L/C
+	// stay exactly as spec'd so a hue change can't wash a token out or blow
+	// it out. These used to be `constexpr` (baked for hue 218 only); they are
+	// now regular globals, recomputed by UpdateAccentFamily() every time the
+	// hue changes (once at process start from Chrome.cpp's
+	// EnsureLiveThemeLoaded(), and again on every General-tab hue-slider
+	// edit) -- every existing call site (Widgets.cpp, Chrome.cpp,
+	// FpsDisplay.cpp, Notifications.cpp) keeps reading these as plain values,
+	// completely unchanged. Defined in Palette.cpp, alongside the OKLCH->sRGB
+	// conversion and the per-token L/C table.
+	extern ImU32 kAccent;        // oklch(.74 .12 h) -- status dot, slider fill lo-end, active borders, dock top-edge base
+	extern ImU32 kAccentEdge;    // oklch(.8  .12 h) -- dock active 2px top edge
+	extern ImU32 kAccentGradHi;  // oklch(.78 .12 h) -- slider fill gradient end (right/handle end)
+	extern ImU32 kAccentValue;   // oklch(.84 .10 h) -- numeric value readouts
+	extern ImU32 kAccentText;    // oklch(.82 .10 h) -- chip text, link-style labels
+	extern ImU32 kAccentSegText; // oklch(.9  .07 h) -- active segmented-control label
+	extern ImU32 kAccentKnob;    // oklch(.86 .08 h) -- toggle knob, checkbox inner mark
+	extern ImU32 kAccentIcon;    // oklch(.88 .07 h) -- active dock icon strokes
+	extern ImU32 kAccentHandle;  // oklch(.9  .05 h) -- slider handle fill
+	extern ImU32 kAccentLinkDim; // oklch(.8  .10 h) -- footer action text ("live", title-bar meta)
+
+	// One OKLCH color (Oklab-based, D65), converted to a packed sRGB ImU32 at
+	// the given alpha -- the same conversion the spec's own hex values were
+	// derived from (superdoc/planning/ui-mockup-precise-spec.md §1). Exposed
+	// (not Palette.cpp-local) so PanelConfig.cpp's hue slider can render a
+	// live hue-ring/gradient preview using the exact same math the accent
+	// family itself uses, rather than an approximate HSV gradient that would
+	// visibly disagree with the real accent at some hues.
+	ImU32 OklchToImU32( float flL, float flC, float flHueDegrees, float flAlpha = 1.0f );
+
+	// Recomputes every kAccent* token above from LiveTheme::flAccentHue --
+	// call after changing that field. Idempotent; cheap enough (10 OKLCH
+	// conversions) to call on every hue-slider edit, same as every other
+	// General-tab control's "write straight into g_LiveTheme on every edit"
+	// pattern.
+	void UpdateAccentFamily();
 
 	// ---- Neutrals (alpha layers -- alpha is load-bearing) -----------------
 	constexpr ImU32 kSurfaceRgb    = IM_COL32( 0x09, 0x0A, 0x0C, 255 ); // window/panel/dock base color, .88/.86 alpha applied by callers
@@ -39,11 +66,10 @@ namespace gamescope::palette
 	// fill, .24 active segment fill, .3 toggle track, .42 focused border,
 	// .5 dock active border, .6 active segment border, .65 toggle border,
 	// .8 active-group left edge / handle glow) without a named constant
-	// per step.
-	constexpr ImU32 Accent( float flAlpha )
-	{
-		return IM_COL32( 0x36, 0xBD, 0xDD, (int)( flAlpha * 255.0f + 0.5f ) );
-	}
+	// per step. No longer `constexpr` (issue #37): the base RGB is now
+	// hue-live, tracking kAccent's own bytes (kept in sync by
+	// UpdateAccentFamily() below, not recomputed per call).
+	ImU32 Accent( float flAlpha );
 
 	constexpr ImU32 White( float flAlpha )
 	{
@@ -88,8 +114,7 @@ namespace gamescope::palette
 	// EnsureLiveThemeLoaded() seeds this once from global.json at first use,
 	// and PanelConfig.cpp's General tab writes straight into it on every edit
 	// (see that file's DrawGeneralTab()) -- every other reader (here,
-	// Widgets.cpp, DrawDock()) only ever reads. Defined in Chrome.cpp (this
-	// header has no matching .cpp of its own).
+	// Widgets.cpp, DrawDock()) only ever reads. Defined in Chrome.cpp.
 	struct LiveTheme
 	{
 		float flDockScale          = 1.0f;  // OverlaySettings::dock_scale
@@ -97,6 +122,14 @@ namespace gamescope::palette
 		float flWindowAlphaFocused   = 1.0f; // OverlaySettings::opacity_windows_focused
 		float flWindowAlphaUnfocused = 0.9f; // OverlaySettings::opacity_windows_unfocused
 		float flDockAlpha          = 0.86f; // OverlaySettings::opacity_dock
+		// OverlaySettings::accent_hue, degrees, OKLCH hue -- issue #37.
+		// Default 218 reproduces today's #36BDDD family exactly (see
+		// Palette.cpp's per-token L/C table). Setting this alone does
+		// nothing to the drawn colors on its own -- always follow with
+		// UpdateAccentFamily() (PanelConfig.cpp's DrawGeneralTab() and
+		// Chrome.cpp's EnsureLiveThemeLoaded() both do) so kAccent* actually
+		// picks up the new hue.
+		float flAccentHue         = 218.0f;
 	};
 	extern LiveTheme g_LiveTheme;
 }
