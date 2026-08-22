@@ -214,7 +214,7 @@ gcr_install_extras() {
 		gcr_warn "default_extras_install.sh not found at $script, skipping extras."
 		return 0
 	fi
-	gcr_info "installing scripts/, looks/ and reshade/ to ${prefix_root}/share/gamescope-ritz ..."
+	gcr_info "installing scripts/, looks/, reshade/ and the font license to ${prefix_root}/share/gamescope-ritz ..."
 	GCR_PRIV_DIR="$prefix_root" gcr_as_priv env \
 		MESON_SOURCE_ROOT="$repo_root" \
 		MESON_INSTALL_PREFIX="$prefix_root" \

@@ -1,5 +1,5 @@
 // M8 part 1 (issue #13) -- see Fonts.h for the API this implements and the
-// per-Style rationale. This file owns the actual atlas build: five IBM Plex
+// per-Style rationale. This file owns the actual atlas build: five Geist
 // weights (OFL-licensed, see Overlay/fonts/LICENSE-OFL.txt), embedded as C
 // byte arrays at build time (Overlay/fonts/embed_font.py, wired in
 // src/meson.build) rather than loaded from a filesystem path -- gamescope
@@ -8,14 +8,36 @@
 // be present for basic UI legibility is worth compiling in rather than
 // depending on an install-time copy step succeeding.
 //
-// System-font check (per the task brief): `fc-list | grep -i plex` on the
-// machine this milestone was built on found no IBM Plex install, so this
+// System-font check (per the task brief): `fc-list | grep -i geist` on the
+// machine this milestone was built on found no Geist install, so this
 // bundles the fonts rather than trying to locate a system copy -- and even
 // if this *build* machine had one, a user's machine might not, so runtime
 // fontconfig discovery would still need this exact bundle-and-fall-back
 // path to exist anyway. Skipping runtime system-font detection (which would
 // mean linking/using fontconfig here) and just always using the bundled
 // data is the simpler thing that's correct either way.
+//
+// Issue #53: swapped the bundled typeface from IBM Plex to Geist
+// (https://github.com/vercel/geist-font, SIL OFL 1.1, same license family
+// as Plex -- see Overlay/fonts/LICENSE-OFL.txt, which is now Geist's own
+// OFL.txt copied verbatim). Geist ships static TTF instances for every
+// weight this file needs (Regular/Medium Sans, Regular/Medium/SemiBold
+// Mono) alongside its variable-font files, so no variable-to-static export
+// step was needed -- ImGui's atlas builder (stb_truetype-based
+// AddFontFromMemoryTTF()) takes a plain static TTF exactly like the IBM
+// Plex files it replaces; nothing about the atlas/bake/rebuild machinery
+// below changed, only which five files get embedded. Role-to-family
+// mapping (which Style uses Sans vs Mono) is unchanged from the IBM Plex
+// version: Sans for prose (Section/Label), Mono for every
+// numeric/tabular/technical-looking readout and chrome label (Title,
+// Value, Meta, Hero, Segment*, ScaleMark, DockHotkey) -- Geist offers the
+// same Regular/Medium/SemiBold weight names IBM Plex did, so this is a
+// like-for-like family swap at unchanged weights, not a redesign of which
+// role gets which family. Baseline pixel sizes needed re-tuning against
+// Geist's own metrics, since Geist is not visually the same size/weight as
+// Plex was at identical pixel values -- see kSpecs below and
+// superdoc/planning/ui-mockup-precise-spec.md's Typography table for the
+// specific deltas and why.
 //
 // Issue #38: Load() is no longer idempotent-per-context-only -- it now takes
 // an effective-scale parameter and can be called again later to re-bake a
@@ -78,11 +100,11 @@
 
 #include "imgui.h"
 
-#include "IBMPlexSans-Regular.h"
-#include "IBMPlexSans-Medium.h"
-#include "IBMPlexMono-Regular.h"
-#include "IBMPlexMono-Medium.h"
-#include "IBMPlexMono-SemiBold.h"
+#include "Geist-Regular.h"
+#include "Geist-Medium.h"
+#include "GeistMono-Regular.h"
+#include "GeistMono-Medium.h"
+#include "GeistMono-SemiBold.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -112,11 +134,11 @@ namespace gamescope::fonts
 		// so this is "5 files, 10 baked fonts": still just the spec's own
 		// §2 "bake only the combinations actually used" set, not a general
 		// arbitrary-size atlas.
-		const FontFace kSansRegular   = { g_Font_IBMPlexSans_Regular_Data,   g_Font_IBMPlexSans_Regular_Size };
-		const FontFace kSansMedium    = { g_Font_IBMPlexSans_Medium_Data,    g_Font_IBMPlexSans_Medium_Size };
-		const FontFace kMonoRegular   = { g_Font_IBMPlexMono_Regular_Data,   g_Font_IBMPlexMono_Regular_Size };
-		const FontFace kMonoMedium    = { g_Font_IBMPlexMono_Medium_Data,    g_Font_IBMPlexMono_Medium_Size };
-		const FontFace kMonoSemiBold  = { g_Font_IBMPlexMono_SemiBold_Data,  g_Font_IBMPlexMono_SemiBold_Size };
+		const FontFace kSansRegular   = { g_Font_Geist_Regular_Data,       g_Font_Geist_Regular_Size };
+		const FontFace kSansMedium    = { g_Font_Geist_Medium_Data,        g_Font_Geist_Medium_Size };
+		const FontFace kMonoRegular   = { g_Font_GeistMono_Regular_Data,   g_Font_GeistMono_Regular_Size };
+		const FontFace kMonoMedium    = { g_Font_GeistMono_Medium_Data,    g_Font_GeistMono_Medium_Size };
+		const FontFace kMonoSemiBold  = { g_Font_GeistMono_SemiBold_Data,  g_Font_GeistMono_SemiBold_Size };
 
 		struct StyleSpec
 		{
@@ -135,16 +157,16 @@ namespace gamescope::fonts
 		// §2 Typography table for a note pointing back here so a future pass
 		// doesn't "fix" these back down to match the mockup pixels.
 		const StyleSpec kSpecs[kStyleCount] = {
-			{ Style::Title,         &kMonoSemiBold, 13.5f, "Plex Mono SemiBold 13.5px (Title)" },
-			{ Style::Section,       &kSansMedium,   16.0f, "Plex Sans Medium 16px (Group name)" },
-			{ Style::Label,         &kSansRegular,  14.0f, "Plex Sans Regular 14px (Param label)" },
-			{ Style::Value,         &kMonoMedium,   16.0f, "Plex Mono Medium 16px (Value)" },
-			{ Style::Meta,          &kMonoRegular,  13.0f, "Plex Mono Regular 13px (Meta)" },
-			{ Style::Hero,          &kMonoSemiBold, 22.0f, "Plex Mono SemiBold 22px (Hero)" },
-			{ Style::SegmentLabel,  &kMonoMedium,   14.0f, "Plex Mono Medium 14px (Segment inactive)" },
-			{ Style::SegmentActive, &kMonoSemiBold, 14.0f, "Plex Mono SemiBold 14px (Segment active)" },
-			{ Style::ScaleMark,     &kMonoRegular,  11.5f, "Plex Mono Regular 11.5px (Scale mark)" },
-			{ Style::DockHotkey,    &kMonoMedium,    8.0f, "Plex Mono Medium 8px (Dock hotkey)" }, // dock-owned, unchanged
+			{ Style::Title,         &kMonoSemiBold, 13.5f, "Geist Mono SemiBold 13.5px (Title)" },
+			{ Style::Section,       &kSansMedium,   16.0f, "Geist Sans Medium 16px (Group name)" },
+			{ Style::Label,         &kSansRegular,  14.0f, "Geist Sans Regular 14px (Param label)" },
+			{ Style::Value,         &kMonoMedium,   16.0f, "Geist Mono Medium 16px (Value)" },
+			{ Style::Meta,          &kMonoRegular,  13.0f, "Geist Mono Regular 13px (Meta)" },
+			{ Style::Hero,          &kMonoSemiBold, 22.0f, "Geist Mono SemiBold 22px (Hero)" },
+			{ Style::SegmentLabel,  &kMonoMedium,   14.0f, "Geist Mono Medium 14px (Segment inactive)" },
+			{ Style::SegmentActive, &kMonoSemiBold, 14.0f, "Geist Mono SemiBold 14px (Segment active)" },
+			{ Style::ScaleMark,     &kMonoRegular,  11.5f, "Geist Mono Regular 11.5px (Scale mark)" },
+			{ Style::DockHotkey,    &kMonoMedium,    8.0f, "Geist Mono Medium 8px (Dock hotkey)" }, // dock-owned, unchanged
 		};
 
 		struct FontSet
@@ -312,10 +334,10 @@ namespace gamescope::fonts
 			set.fonts[i] = builtFonts[i];
 		set.flBuiltScale = flScale;
 
-		// Style::Label (Plex Sans Regular, body text) becomes the atlas's
+		// Style::Label (Geist Sans Regular, body text) becomes the atlas's
 		// default -- every pre-existing ImGui::Text/Checkbox/SliderFloat/
 		// etc. call that never explicitly pushes a Style picks this up for
-		// free, matching the design guide's "IBM Plex Sans for prose".
+		// free, matching the design guide's "Geist Sans for prose".
 		io.FontDefault = set.fonts[ IndexForStyle( Style::Label ) ];
 	}
 

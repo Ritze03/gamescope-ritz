@@ -339,11 +339,12 @@ namespace gamescope
 		ImGuiIO &io = ImGui::GetIO();
 		io.IniFilename = nullptr;
 
-		// M8 part 1 (issue #13): builds the IBM Plex font atlas for this
-		// context (a separate context/atlas from SettingsOverlay's own --
-		// see the file-level comment and Overlay/Fonts.h). Must happen
-		// before ImGui_ImplVulkan_Init() below, same reasoning as
-		// SettingsOverlay.cpp's own EnsureImguiInit().
+		// M8 part 1 (issue #13, typeface swapped to Geist by #53): builds
+		// the Geist font atlas for this context (a separate context/atlas
+		// from SettingsOverlay's own -- see the file-level comment and
+		// Overlay/Fonts.h). Must happen before ImGui_ImplVulkan_Init()
+		// below, same reasoning as SettingsOverlay.cpp's own
+		// EnsureImguiInit().
 		gamescope::fonts::Load();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
@@ -795,8 +796,9 @@ namespace gamescope
 		float flContentHeight = 0.0f;
 	};
 
-	// M8 part 1 (issue #13): IBM Plex Mono is genuinely monospaced, so a
-	// fixed-width formatted string ("%3d FPS") is tabular by construction
+	// M8 part 1 (issue #13, typeface swapped to Geist by #53): Geist Mono
+	// is genuinely monospaced, so a fixed-width formatted string
+	// ("%3d FPS") is tabular by construction
 	// -- every digit occupies the same advance width, so the readout
 	// cannot jitter horizontally as the number changes. This replaces the
 	// former DrawTabularInt() helper, which existed only to fake that
@@ -980,7 +982,7 @@ namespace gamescope
 	// AMD RX 7900 XTX for the GPU sysfs paths).
 	//
 	// Every numeric field below is drawn through Fonts::Style::Value/Meta
-	// (both IBM Plex Mono, genuinely monospaced) at a fixed printf field
+	// (both Geist Mono, genuinely monospaced) at a fixed printf field
 	// width, the same "digits do not jitter" convention MeasureFpsModule's
 	// own comment documents -- e.g. "%3d%%" for GPU busy, not "%d%%".
 	// -------------------------------------------------------------------

@@ -144,6 +144,13 @@ default.
 
 **Source:** `superdoc/planning/ui-design-guide.md`.
 
+**Update (2026-08-22) — typeface swapped to Geist (issue #53):** the
+Sans/Mono role split itself is unchanged, but the bundled family is now
+Geist Sans/Geist Mono (SIL OFL 1.1, same license family as Plex), not IBM
+Plex. See `src/Overlay/Fonts.cpp`'s top-of-file comment and
+`superdoc/planning/ui-mockup-precise-spec.md`'s Typography table for the
+font-file and size details.
+
 ---
 
 ### 8. Dark theme only, no light theme
