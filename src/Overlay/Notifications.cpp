@@ -48,8 +48,32 @@ namespace gamescope::Notifications
 	// the compiled-in default instead of the user's real placement choice.
 	static config::OverlaySettings s_GlobalOverlay;
 
+	// Definition of the live scale/opacity state declared in Notifications.h
+	// -- see that header's comment for the full seed-once/push-on-edit
+	// contract this follows (Palette.h's g_LiveTheme's own shape).
+	LiveTheme g_LiveTheme;
+
+	static bool s_bLiveThemeLoaded = false;
+
+	static void EnsureLiveThemeLoaded()
+	{
+		if ( s_bLiveThemeLoaded )
+			return;
+		s_bLiveThemeLoaded = true;
+		// Seeded straight from global.json, not from s_GlobalOverlay below --
+		// this only ever needs to run once (PanelConfig.cpp's DrawGeneralTab()
+		// keeps g_LiveTheme current after this), and notification_scale/
+		// opacity_notifications are process-level/global.json-only fields
+		// (ConfigSchema.h's OverlaySettings comment), same as everything
+		// s_GlobalOverlay itself loads.
+		const config::OverlaySettings &o = config::LoadGlobal().overlay;
+		g_LiveTheme.flScale = o.notification_scale;
+		g_LiveTheme.flOpacity = o.opacity_notifications;
+	}
+
 	static void EnsureConfigLoaded()
 	{
+		EnsureLiveThemeLoaded();
 		const uint64_t ulGeneration = config::ConfigGeneration();
 		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
@@ -123,18 +147,20 @@ namespace gamescope::Notifications
 	}
 
 	// -------------------------------------------------------------------
-	// UI scale: a sibling worker (see the task brief) is adding a
-	// notification/UI scale field to ConfigSchema.h in the Chrome/Widgets
-	// scope, in a separate worktree, in parallel with this one. Every size
-	// this file draws already routes through this one function, so wiring
-	// that field in later -- once it exists to consume -- is a one-line
-	// change here instead of touching every call site. Until then, 1.0f
-	// (no scaling) is the neutral value.
+	// UI scale/opacity: every size this file draws already routes through
+	// GetUiScale(), and every toast's alpha already routes through
+	// DrawToasts()'s flAlpha, so both live fields (g_LiveTheme, see
+	// Notifications.h) only need wiring in these two spots.
 	// -------------------------------------------------------------------
 
 	static float GetUiScale()
 	{
-		return 1.0f;
+		return g_LiveTheme.flScale;
+	}
+
+	static float GetUiOpacity()
+	{
+		return g_LiveTheme.flOpacity;
 	}
 
 	// -------------------------------------------------------------------
@@ -253,14 +279,17 @@ namespace gamescope::Notifications
 		"notify_test", "Queue a test toast notification (args: [kind] [text...], kind = info|success|warning|error).",
 		[]( std::span<std::string_view> args )
 		{
+			// args[0] is always this command's own name (ConCommand::Exec /
+			// CallWithArgString both prepend it -- see convar.cpp/.h) --
+			// real arguments start at args[1].
 			Kind kind = Kind::Info;
-			size_t uTextStart = 0;
-			if ( !args.empty() )
+			size_t uTextStart = 1;
+			if ( args.size() > 1 )
 			{
-				if ( args[0] == "success" ) { kind = Kind::Ok; uTextStart = 1; }
-				else if ( args[0] == "warning" ) { kind = Kind::Warning; uTextStart = 1; }
-				else if ( args[0] == "error" )   { kind = Kind::Error;   uTextStart = 1; }
-				else if ( args[0] == "info" )    { kind = Kind::Info;    uTextStart = 1; }
+				if ( args[1] == "success" ) { kind = Kind::Ok; uTextStart = 2; }
+				else if ( args[1] == "warning" ) { kind = Kind::Warning; uTextStart = 2; }
+				else if ( args[1] == "error" )   { kind = Kind::Error;   uTextStart = 2; }
+				else if ( args[1] == "info" )    { kind = Kind::Info;    uTextStart = 2; }
 			}
 
 			std::string sText;
@@ -420,6 +449,7 @@ namespace gamescope::Notifications
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
 		const ImVec2 io_display = ImGui::GetIO().DisplaySize;
 		const float flScale = GetUiScale();
+		const float flOpacity = GetUiOpacity();
 
 		int nVert = 0, nHoriz = 2;
 		ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
@@ -483,7 +513,12 @@ namespace gamescope::Notifications
 			const ImVec2 rectMin( flX + flOutwardX * flOffset, flCursorY + flOutwardY * flOffset );
 			const ImVec2 rectMax( rectMin.x + card.size.x, rectMin.y + card.size.y );
 
-			const float flAlpha = card.flVisibility;
+			// opacity_notifications scales the whole card uniformly (bg,
+			// border, accent bar, text all key off flAlpha below) -- same
+			// multiplicative role Chrome.cpp's flWindowAlpha plays for panel
+			// windows, just applied here instead of via ImGuiStyle since
+			// toasts draw straight into the background draw list.
+			const float flAlpha = card.flVisibility * flOpacity;
 
 			const ImU32 uBg = ImGui::ColorConvertFloat4ToU32( gamescope::palette::SurfaceVec4( 0.92f * flAlpha ) );
 			pDrawList->AddRectFilled( rectMin, rectMax, uBg, flRounding );

@@ -114,13 +114,15 @@ namespace gamescope
 
 		// Pushes the fields this worker's own Chrome.cpp/Widgets.cpp read
 		// live (dock/display scale, window/dock/background opacity) into
-		// gamescope::palette::g_LiveTheme so the change is visible the very
+		// gamescope::palette::g_LiveTheme, and notification_scale/
+		// opacity_notifications into gamescope::Notifications::g_LiveTheme
+		// (Notifications.cpp's own consumer, wired the same way -- see that
+		// file's Notifications.h comment) so the change is visible the very
 		// next frame -- the task's own "must take effect live, not on
-		// restart" requirement. notification_scale/opacity_notifications/
-		// background_blur/background_darkening have no such push: they're
-		// consumed by sibling milestones' files (Notifications.*,
-		// SettingsOverlay.cpp) this worker doesn't touch -- see each field's
-		// own comment in ConfigSchema.h. Persisting the value here (below)
+		// restart" requirement. background_blur/background_darkening have
+		// no such push: they're consumed by SettingsOverlay.cpp, a sibling
+		// milestone this worker doesn't touch -- see each field's own
+		// comment in ConfigSchema.h. Persisting the value here (below)
 		// still happens for all nine either way, so a sibling that reads
 		// config::LoadGlobal() itself already sees the up to date value even
 		// before it's wired to consume it live.
@@ -134,6 +136,10 @@ namespace gamescope
 			live.flDockAlpha = o.opacity_dock;
 			live.flBackgroundVeilAlpha = o.opacity_background;
 			ImGui::GetIO().FontGlobalScale = o.display_scale;
+
+			auto &liveNotif = gamescope::Notifications::g_LiveTheme;
+			liveNotif.flScale = o.notification_scale;
+			liveNotif.flOpacity = o.opacity_notifications;
 		}
 
 		// overlay.* is process-level, never per-game/profile-routed (see
