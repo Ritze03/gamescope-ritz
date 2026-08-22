@@ -268,6 +268,25 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<CursorInfo> info ) = 0;
         virtual void SetRelativeMouseMode( bool bRelative ) = 0;
         virtual void SetVisible( bool bVisible ) = 0;
+
+        // Issue #69 (doubled cursor): while the settings overlay is
+        // capturing input, it draws its own software cursor (ImGui,
+        // see SettingsOverlay.cpp) on top of whatever this backend
+        // draws for the host/game pointer. The embedded (DRM) path
+        // handles its equivalent case by gating the composited cursor
+        // plane on SettingsOverlay_IsCapturingInput() directly in
+        // steamcompmgr.cpp (see commit 252cbfd) -- there's no
+        // INestedHints involved there, since DRM doesn't implement
+        // this interface. Nested backends that show a real host-level
+        // cursor (SDL: SDL_ShowCursor(); Wayland: wl_pointer_set_cursor())
+        // need the mirror of that: hide their own cursor for exactly as
+        // long as the overlay has input, so exactly one cursor is ever
+        // visible. Default no-op -- backends with no separate host
+        // cursor (OpenVR, which relies solely on the same composited
+        // plane as DRM and leaves SetCursorImage() a no-op) have
+        // nothing to suppress.
+        virtual void SetCursorSuppressed( bool bSuppressed ) {}
+
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) = 0;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) = 0;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) = 0;

@@ -2930,6 +2930,23 @@ paint_all( global_focus_t *pFocus, bool async )
 			&frameInfo);
 	}
 
+	// Same fix as above, mirrored for nested backends' own host-level
+	// cursor (SDL_ShowCursor() / wl_pointer_set_cursor(), see
+	// INestedHints::SetCursorSuppressed()'s comment in backend.h) rather
+	// than the composited plane. Independent of ShouldDrawCursor() /
+	// cv_paint_cursor_plane above -- those gate the composited plane
+	// only, whereas a nested backend's host cursor is a separate,
+	// OS-level cursor source that exists whether or not that plane is
+	// even in play (e.g. under --force-grab-cursor, ShouldDrawCursor()
+	// is unconditionally true so the plane always paints, but this SDL/
+	// Wayland cursor still needs its own independent suppression).
+	// Called every frame rather than only on the capture-state edge, so
+	// it's self-correcting if the overlay closes abruptly or a frame is
+	// otherwise missed -- the backend-side setters no-op when the value
+	// hasn't changed, so this doesn't spam their event queues.
+	if ( pConnector && pConnector->GetNestedHints() )
+		pConnector->GetNestedHints()->SetCursorSuppressed( gamescope::SettingsOverlay_IsCapturingInput() );
+
 	if ( !bValidContents || GetBackend()->IsPaused() )
 	{
 		return;

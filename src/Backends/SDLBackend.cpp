@@ -51,6 +51,7 @@ namespace gamescope
 		GAMESCOPE_SDL_EVENT_VISIBLE,
 		GAMESCOPE_SDL_EVENT_GRAB,
 		GAMESCOPE_SDL_EVENT_CURSOR,
+		GAMESCOPE_SDL_EVENT_CURSOR_SUPPRESS,
 
 		GAMESCOPE_SDL_EVENT_COUNT,
 	};
@@ -114,6 +115,7 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info ) override;
         virtual void SetRelativeMouseMode( bool bRelative ) override;
         virtual void SetVisible( bool bVisible ) override;
+        virtual void SetCursorSuppressed( bool bSuppressed ) override;
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
@@ -179,6 +181,7 @@ namespace gamescope
         void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info );
         void SetRelativeMouseMode( bool bRelative );
         void SetVisible( bool bVisible );
+        void SetCursorSuppressed( bool bSuppressed );
         void SetTitle( std::shared_ptr<std::string> szTitle );
         void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels );
         void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection );
@@ -200,6 +203,7 @@ namespace gamescope
 
 		std::atomic<bool> m_bApplicationGrabbed = { false };
 		std::atomic<bool> m_bApplicationVisible = { false };
+		std::atomic<bool> m_bCursorSuppressed = { false };
 		std::atomic<std::shared_ptr<INestedHints::CursorInfo>> m_pApplicationCursor;
 		std::atomic<std::shared_ptr<std::string>> m_pApplicationTitle;
 		std::atomic<std::shared_ptr<std::vector<uint32_t>>> m_pApplicationIcon;
@@ -372,6 +376,10 @@ namespace gamescope
 	{
 		m_pBackend->SetVisible( bVisible );
 	}
+	void CSDLConnector::SetCursorSuppressed( bool bSuppressed )
+	{
+		m_pBackend->SetCursorSuppressed( bSuppressed );
+	}
 	void CSDLConnector::SetTitle( std::shared_ptr<std::string> szTitle )
 	{
 		m_pBackend->SetTitle( std::move( szTitle ) );
@@ -543,6 +551,19 @@ namespace gamescope
 	{
 		m_bApplicationVisible = bVisible;
 		PushUserEvent( GAMESCOPE_SDL_EVENT_VISIBLE );
+	}
+	void CSDLBackend::SetCursorSuppressed( bool bSuppressed )
+	{
+		// Idempotency guard: unlike the other INestedHints setters (which are
+		// only ever called on a real state change), this one is driven every
+		// frame from paint_all()'s cursor-suppression check (see
+		// steamcompmgr.cpp) to stay symmetric with the DRM plane's
+		// per-frame gate -- so skip the SDL round-trip unless the value
+		// actually flipped, or the event queue would get spammed at frame
+		// rate for no visible effect.
+		if ( m_bCursorSuppressed.exchange( bSuppressed ) == bSuppressed )
+			return;
+		PushUserEvent( GAMESCOPE_SDL_EVENT_CURSOR_SUPPRESS );
 	}
 	void CSDLBackend::SetTitle( std::shared_ptr<std::string> szTitle )
 	{
@@ -965,6 +986,13 @@ namespace gamescope
 						}
 
 						SDL_SetCursor( m_pCursor );
+					}
+					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_CURSOR_SUPPRESS ) )
+					{
+						// Hides/shows the OS cursor without touching m_pCursor's
+						// image, so whatever SetCursorImage() last set reappears
+						// unchanged (no staleness) the instant suppression lifts.
+						SDL_ShowCursor( m_bCursorSuppressed ? SDL_DISABLE : SDL_ENABLE );
 					}
 				}
 				break;
