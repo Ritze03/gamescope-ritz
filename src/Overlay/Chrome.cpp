@@ -326,6 +326,32 @@ namespace gamescope::chrome
 			return ImMax( 0.0f, ImGui::GetIO().DisplaySize.y - DockReservedHeight() );
 		}
 
+		// Issue #58: SetNextWindowSizeConstraints()'s plain size_max bounds a
+		// resize to an absolute size regardless of the window's own
+		// position -- harmless pinned at the origin, but a panel resized
+		// from its bottom-right grip keeps its top-left position fixed
+		// (ImGui's own resize behavior), so growing it past
+		// (usable area - Pos) always overflows *from that position* even
+		// though the raw size is still under the absolute max. The #31
+		// on-screen clamp used to be the only thing catching that overflow,
+		// and it clamps by *moving* the window back on screen after the
+		// fact -- which is exactly #58's bug: the grip is at the
+		// bottom-right, so "move the window to fit" reads as "the window
+		// grew from the opposite (top-left) side" instead of "growth
+		// stopped at the edge". Fix: stop the overflow at its source with
+		// SetNextWindowSizeConstraints()'s own position-aware callback
+		// (ImGuiSizeCallbackData::Pos is the window's real current position,
+		// unaffected by this frame's own resize) so the resize itself never
+		// produces a size the #31 clamp would have to correct by moving the
+		// window -- growth simply stops at the display's right edge (x) or
+		// the dock-reduced usable area's bottom edge (y, #64).
+		void ClampPanelResizeToUsableArea( ImGuiSizeCallbackData *pData )
+		{
+			const ImGuiIO &io = ImGui::GetIO();
+			pData->DesiredSize.x = ImMin( pData->DesiredSize.x, ImMax( 0.0f, io.DisplaySize.x - pData->Pos.x ) );
+			pData->DesiredSize.y = ImMin( pData->DesiredSize.y, ImMax( 0.0f, UsableBottom() - pData->Pos.y ) );
+		}
+
 		// Display open, everything else closed on first-ever show -- a
 		// reasonable non-overwhelming default, not a hard limit: see Chrome.h's
 		// IsPanelOpen() comment, opening more no longer closes this one.
@@ -926,8 +952,15 @@ namespace gamescope::chrome
 		// the resize grip itself is being dragged rather than corrected a
 		// frame late -- skipped while collapsed, matching exactly when
 		// NoResize (below) is present anyway.
+		// Issue #58: size_max is still ImGui::GetIO().DisplaySize (kept, so
+		// the constraint is enabled at all -- CalcWindowSizeAfterConstraint()
+		// only applies a callback when both min and max are >= 0), but the
+		// callback tightens it live against the window's actual position and
+		// the dock-reduced usable area (#64) -- see
+		// ClampPanelResizeToUsableArea()'s own comment for why that, not a
+		// flat max, is what actually fixes #58.
 		if ( !bCollapsed )
-			ImGui::SetNextWindowSizeConstraints( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+			ImGui::SetNextWindowSizeConstraints( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize, ClampPanelResizeToUsableArea );
 
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
 		// that's Widgets.cpp's ApplyStyle(), unaffected by this
