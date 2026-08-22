@@ -462,6 +462,7 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info ) override;
         virtual void SetRelativeMouseMode( bool bRelative ) override;
         virtual void SetVisible( bool bVisible ) override;
+        virtual void SetCursorSuppressed( bool bSuppressed ) override;
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
@@ -699,6 +700,7 @@ namespace gamescope
 
         void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info );
         void SetRelativeMouseMode( wl_surface *pSurface, bool bRelative );
+        void SetCursorSuppressed( bool bSuppressed );
         void UpdateCursor();
 
         friend CWaylandConnector;
@@ -854,6 +856,14 @@ namespace gamescope
         uint32_t m_uKeyboardEnterSerial = 0;
         bool m_bKeyboardEntered = false;
 
+        // Issue #69: mirrors the DRM path's per-frame gate on
+        // SettingsOverlay_IsCapturingInput() (see backend.h's
+        // INestedHints::SetCursorSuppressed comment). Plain bool, not
+        // atomic -- consistent with the rest of this cursor/pointer state
+        // (m_bPointerLocked etc.), which is likewise written only from
+        // whatever thread calls the INestedHints setters and read back by
+        // UpdateCursor() with no additional synchronization.
+        bool m_bCursorSuppressed = false;
         std::shared_ptr<INestedHints::CursorInfo> m_pCursorInfo;
         wl_surface *m_pCursorSurface = nullptr;
         std::shared_ptr<INestedHints::CursorInfo> m_pDefaultCursorInfo;
@@ -1283,6 +1293,10 @@ namespace gamescope
 
         m_bVisible = bVisible;
         force_repaint();
+    }
+    void CWaylandConnector::SetCursorSuppressed( bool bSuppressed )
+    {
+        m_pBackend->SetCursorSuppressed( bSuppressed );
     }
     void CWaylandConnector::SetTitle( std::shared_ptr<std::string> pAppTitle )
     {
@@ -2500,6 +2514,15 @@ namespace gamescope
         }
     }
 
+    void CWaylandBackend::SetCursorSuppressed( bool bSuppressed )
+    {
+        if ( m_bCursorSuppressed == bSuppressed )
+            return;
+
+        m_bCursorSuppressed = bSuppressed;
+        UpdateCursor();
+    }
+
     void CWaylandBackend::UpdateCursor()
     {
         bool bUseHostCursor = false;
@@ -2512,13 +2535,18 @@ namespace gamescope
 		else
 			bUseHostCursor = !m_bKeyboardEntered && m_pDefaultCursorSurface;
 
-        if ( bUseHostCursor )
+        // Issue #69: while the settings overlay has input, it draws its own
+        // software cursor -- never show this backend's host cursor
+        // alongside it, in either of the branches below (see
+        // SetCursorSuppressed()'s declaration in backend.h for the full
+        // rationale, and steamcompmgr.cpp's paint_all() for the call site).
+        if ( bUseHostCursor && !m_bCursorSuppressed )
         {
             wl_pointer_set_cursor( m_pPointer, m_uPointerEnterSerial, m_pDefaultCursorSurface, m_pDefaultCursorInfo->uXHotspot, m_pDefaultCursorInfo->uYHotspot );
         }
         else
         {
-			bool bHideCursor = m_bPointerLocked || !m_pCursorSurface;
+			bool bHideCursor = m_bPointerLocked || !m_pCursorSurface || m_bCursorSuppressed;
 
             if ( bHideCursor )
                 wl_pointer_set_cursor( m_pPointer, m_uPointerEnterSerial, nullptr, 0, 0 );
