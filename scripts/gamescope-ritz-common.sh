@@ -109,29 +109,96 @@ gcr_refuse_root_build() {
 	fi
 }
 
-# Configure (if needed) and build the release binary. Never runs as root.
-# "Highest optimisations": buildtype=release + -Doptimization=3, plus LTO
+# True (0) if any of the submodules meson needs are not checked out yet.
+# Without this, meson fails deep in configure with a confusing error like
+# "Include dir reshade/source does not exist" — this checks up front instead.
+gcr_submodules_missing() {
+	local repo_root="$1"
+	local marker markers=(
+		"src/reshade/source"
+		"subprojects/wlroots/meson.build"
+		"subprojects/libdisplay-info/meson.build"
+		"subprojects/libliftoff/meson.build"
+		"thirdparty/SPIRV-Headers/include"
+	)
+	for marker in "${markers[@]}"; do
+		[ -e "$repo_root/$marker" ] || return 0
+	done
+	return 1
+}
+
+# Initialise submodules if any required one is missing. Safe to call always.
+gcr_ensure_submodules() {
+	local repo_root="$1"
+	if gcr_submodules_missing "$repo_root"; then
+		gcr_info "required submodules are not initialised — running git submodule update --init --recursive ..."
+		( cd -- "$repo_root" && git submodule update --init --recursive )
+	fi
+}
+
+# Configure a build directory, coping with an existing one that can't just be
+# reconfigured in place (e.g. incompatible cached options): try --reconfigure
+# first, and if that fails, wipe and configure clean rather than leaving the
+# caller to figure it out.
+gcr_meson_configure() {
+	local repo_root="$1" build_dir="$2"; shift 2
+	local opts=("$@")
+	if [ -f "$build_dir/build.ninja" ]; then
+		gcr_info "reconfiguring existing $build_dir (${opts[*]})..."
+		if ! ( cd -- "$repo_root" && meson setup --reconfigure "$build_dir" "${opts[@]}" ); then
+			gcr_warn "reconfigure failed — wiping $build_dir and configuring clean..."
+			( cd -- "$repo_root" && meson setup --wipe "$build_dir" "${opts[@]}" )
+		fi
+	else
+		gcr_info "configuring $build_dir (${opts[*]})..."
+		( cd -- "$repo_root" && meson setup "$build_dir" "${opts[@]}" )
+	fi
+}
+
+# Configure (if needed) and build $build_dir for the given meson buildtype.
+# Never runs as root. Ensures submodules first, since a from-scratch configure
+# needs them. Extra meson options beyond buildtype may be passed through.
+#
+# "Highest optimisations" for buildtype=release: -Doptimization=3, plus LTO
 # (-Db_lto=true). LTO was verified (2026-08-22) to build cleanly and to leave
 # `meson test` fully green on this tree, adding negligible wall-clock time
 # (~17s for a from-scratch 10-core build of just the gamescope binary) — so it
 # stays on. If a future LTO bump ever regresses build time or breaks the
 # build, drop -Db_lto=true here rather than fighting it: working beats maximal.
+#
+# Which ninja target to build defaults to just the gamescope binary; set
+# GCR_NINJA_TARGET="" before calling to build everything (needed for tests).
+# Set GCR_NINJA_JOBS to cap parallelism (passed to ninja -j).
+gcr_build() {
+	local repo_root="$1" build_dir="$2" buildtype="$3"; shift 3
+	local extra_opts=("$@")
+	gcr_refuse_root_build
+	gcr_ensure_submodules "$repo_root"
+
+	local opts=(--buildtype="$buildtype")
+	if [ "$buildtype" = "release" ]; then
+		opts+=(-Doptimization=3 -Db_lto=true)
+	fi
+	opts+=("${extra_opts[@]}")
+
+	gcr_meson_configure "$repo_root" "$build_dir" "${opts[@]}"
+
+	local ninja_args=(-C "$build_dir")
+	[ -n "${GCR_NINJA_JOBS:-}" ] && ninja_args+=(-j "$GCR_NINJA_JOBS")
+	local ninja_target="${GCR_NINJA_TARGET-src/gamescope}"
+	if [ -n "$ninja_target" ]; then
+		gcr_info "building (ninja ${ninja_args[*]} $ninja_target)..."
+		ninja "${ninja_args[@]}" "$ninja_target"
+	else
+		gcr_info "building (ninja ${ninja_args[*]})..."
+		ninja "${ninja_args[@]}"
+	fi
+}
+
+# Back-compat wrapper: the release build exactly as install/update need it.
 gcr_build_release() {
 	local repo_root="$1" build_dir="$2"
-	gcr_refuse_root_build
-
-	if [ -f "$build_dir/build.ninja" ]; then
-		gcr_info "reconfiguring existing $build_dir to make sure release flags are applied..."
-		( cd -- "$repo_root" && meson setup --reconfigure "$build_dir" \
-			--buildtype=release -Doptimization=3 -Db_lto=true )
-	else
-		gcr_info "configuring a release build in $build_dir (buildtype=release, optimization=3, LTO)..."
-		( cd -- "$repo_root" && meson setup "$build_dir" \
-			--buildtype=release -Doptimization=3 -Db_lto=true )
-	fi
-
-	gcr_info "building (ninja -C $build_dir)..."
-	ninja -C "$build_dir" src/gamescope
+	gcr_build "$repo_root" "$build_dir" release
 }
 
 # Run default_extras_install.sh (installs scripts/, looks/, and reshade/)
