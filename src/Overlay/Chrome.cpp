@@ -288,6 +288,85 @@ namespace gamescope::chrome
 		// g_LiveTheme-derived value in this file.
 		float TitleBarHeight() { return 42.0f * gamescope::palette::DisplayScale(); }
 
+		// Issue #64: the dock must keep equal margin above and below itself,
+		// which in turn reduces the usable area panel windows may occupy
+		// above it. kDockMargin is that one gap, reused for both sides --
+		// DrawDock() below already offset the dock this far off the true
+		// bottom edge (previously a bare "38.0f" literal with no
+		// above-the-dock counterpart at all, issue #64's actual bug); this
+		// gives that number a name so the same value provably governs both
+		// margins rather than the top one being a second, separately-tuned
+		// literal that could drift from the bottom one.
+		constexpr float kDockMargin = 38.0f;
+
+		// Total vertical space the dock's own band occupies at the bottom of
+		// the display: the margin below it (kDockMargin, unchanged from
+		// before #64), the dock's own height (mirrors DrawDock()'s own
+		// kButtonSize/kPad formula -- 54/6 base px scaled live by
+		// flDockScale, the General tab's dock_scale -- rather than a second
+		// literal that could drift from it), and the new #64 margin above it.
+		float DockReservedHeight()
+		{
+			const float flDockScale = gamescope::palette::g_LiveTheme.flDockScale;
+			const float flDockHeight = 54.0f * flDockScale + 2.0f * ( 6.0f * flDockScale );
+			return kDockMargin * 2.0f + flDockHeight;
+		}
+
+		// The lowest y a panel window's own bottom edge may reach -- full
+		// display height minus the dock's reserved band above (#64). #31's
+		// on-screen clamp and #58's resize-size constraint both read this
+		// instead of io.DisplaySize.y directly, so "on screen" now means
+		// "above the dock" for panel windows, not literally to the bottom
+		// pixel -- the single source both the clamp (position: already-open
+		// or freshly-tiled windows, #49) and the resize constraint (size:
+		// #58) consult, so neither can independently let a panel end up
+		// underneath the dock.
+		float UsableBottom()
+		{
+			return ImMax( 0.0f, ImGui::GetIO().DisplaySize.y - DockReservedHeight() );
+		}
+
+		// Issue #57: hard 250x250 pixel floor, deliberately NOT scaled by
+		// display_scale. A scaled minimum (250 * flDisplayScale) would sink
+		// well under 250 real pixels at any scale below 1.0x -- 125px at the
+		// General tab's own 0.5x floor -- defeating the point of a *minimum
+		// usable* size: "usable" is a property of real screen pixels a title
+		// bar, its collapse/close glyphs, and a panel's own controls need to
+		// render at, not of the panel's logical/1.0x-unit footprint, which
+		// is exactly what #47's scaling already treats display_scale as
+		// growing everything else, fonts and controls included, right along
+		// with the window -- a panel that ends up relatively larger against
+		// a small/low-scale display at the floor is still internally
+		// consistent (nothing inside it is undersized relative to the
+		// window), just not edge-to-edge tight against that display.
+		constexpr float kMinPanelSize = 250.0f;
+
+		// Issue #58: SetNextWindowSizeConstraints()'s plain size_max bounds a
+		// resize to an absolute size regardless of the window's own
+		// position -- harmless pinned at the origin, but a panel resized
+		// from its bottom-right grip keeps its top-left position fixed
+		// (ImGui's own resize behavior), so growing it past
+		// (usable area - Pos) always overflows *from that position* even
+		// though the raw size is still under the absolute max. The #31
+		// on-screen clamp used to be the only thing catching that overflow,
+		// and it clamps by *moving* the window back on screen after the
+		// fact -- which is exactly #58's bug: the grip is at the
+		// bottom-right, so "move the window to fit" reads as "the window
+		// grew from the opposite (top-left) side" instead of "growth
+		// stopped at the edge". Fix: stop the overflow at its source with
+		// SetNextWindowSizeConstraints()'s own position-aware callback
+		// (ImGuiSizeCallbackData::Pos is the window's real current position,
+		// unaffected by this frame's own resize) so the resize itself never
+		// produces a size the #31 clamp would have to correct by moving the
+		// window -- growth simply stops at the display's right edge (x) or
+		// the dock-reduced usable area's bottom edge (y, #64).
+		void ClampPanelResizeToUsableArea( ImGuiSizeCallbackData *pData )
+		{
+			const ImGuiIO &io = ImGui::GetIO();
+			pData->DesiredSize.x = ImMin( pData->DesiredSize.x, ImMax( 0.0f, io.DisplaySize.x - pData->Pos.x ) );
+			pData->DesiredSize.y = ImMin( pData->DesiredSize.y, ImMax( 0.0f, UsableBottom() - pData->Pos.y ) );
+		}
+
 		// Display open, everything else closed on first-ever show -- a
 		// reasonable non-overwhelming default, not a hard limit: see Chrome.h's
 		// IsPanelOpen() comment, opening more no longer closes this one.
@@ -481,6 +560,27 @@ namespace gamescope::chrome
 			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
 			pLiveTheme->flAccentHue = s.overlay.accent_hue;
 			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
+			// Issue #56: panels must resize only from the bottom-right
+			// corner grip, not from any edge or any other corner. Stock
+			// ImGui's own default (io.ConfigWindowsResizeFromEdges = true)
+			// offers both edge-drag resizing on all four sides AND a second
+			// grip at the bottom-left, in addition to the bottom-right one
+			// -- imgui.cpp's Begin() computes resize_grip_count = 2 and
+			// resize_border_mask = 0x0F whenever this is true, vs. grip
+			// count 1 (bottom-right only, resize_grip_def[0] -- see
+			// imgui.cpp's own "Lower-right" comment on that array) and no
+			// border mask at all when false. Setting it false here is a
+			// single IO flag rather than a per-window flag because ImGui
+			// has no per-window equivalent since 1.63 (the old per-window
+			// ImGuiWindowFlags_ResizeFromAnySide was removed in favor of
+			// this global toggle) -- harmless scope-wise, since this
+			// context's only other resizable-by-default window is the dock
+			// (ImGuiWindowFlags_NoResize, unaffected), and FpsDisplay.cpp
+			// runs its own separate ImGui context with its own IO, so this
+			// doesn't reach that overlay at all. Set once here (not
+			// per-frame) for the same reason FontGlobalScale just above is:
+			// this whole function only runs once per process.
+			ImGui::GetIO().ConfigWindowsResizeFromEdges = false;
 			// Regenerates kAccent/kAccentEdge/etc. (Palette.h) for the hue
 			// just loaded -- issue #37. Must run after flAccentHue is set
 			// above, and before this process ever draws a frame using them.
@@ -888,8 +988,19 @@ namespace gamescope::chrome
 		// the resize grip itself is being dragged rather than corrected a
 		// frame late -- skipped while collapsed, matching exactly when
 		// NoResize (below) is present anyway.
+		// Issue #57: size_min is now kMinPanelSize on both axes (a hard
+		// pixel floor -- see that constant's own comment for the scaling
+		// decision) instead of (0,0), so an interactive resize can't shrink
+		// a panel below 250x250 real px.
+		// Issue #58: size_max is still ImGui::GetIO().DisplaySize (kept, so
+		// the constraint is enabled at all -- CalcWindowSizeAfterConstraint()
+		// only applies a callback when both min and max are >= 0), but the
+		// callback tightens it live against the window's actual position and
+		// the dock-reduced usable area (#64) -- see
+		// ClampPanelResizeToUsableArea()'s own comment for why that, not a
+		// flat max, is what actually fixes #58.
 		if ( !bCollapsed )
-			ImGui::SetNextWindowSizeConstraints( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+			ImGui::SetNextWindowSizeConstraints( ImVec2( kMinPanelSize, kMinPanelSize ), ImGui::GetIO().DisplaySize, ClampPanelResizeToUsableArea );
 
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
 		// that's Widgets.cpp's ApplyStyle(), unaffected by this
@@ -977,13 +1088,19 @@ namespace gamescope::chrome
 		// at. Cheap: SetWindowPos() only runs on frames the clamp actually
 		// changes something, e.g. right after a shrink or while an edge is
 		// being dragged past a boundary -- not every frame.
+		// Issue #64: the y bound is UsableBottom() (display height minus the
+		// dock's reserved band), not the raw display height -- so this same
+		// clamp that already pulls a window back on screen also keeps it
+		// from ever sitting (or landing, on its first-ever-tiled frame,
+		// #49) underneath the dock. x is unaffected -- the dock only
+		// reduces the usable area vertically.
 		{
 			const ImGuiIO &io = ImGui::GetIO();
 			const ImVec2 wp = ImGui::GetWindowPos();
 			const ImVec2 ws = ImGui::GetWindowSize();
 			const ImVec2 clampedPos(
 				ImClamp( wp.x, 0.0f, ImMax( 0.0f, io.DisplaySize.x - ws.x ) ),
-				ImClamp( wp.y, 0.0f, ImMax( 0.0f, io.DisplaySize.y - ws.y ) ) );
+				ImClamp( wp.y, 0.0f, ImMax( 0.0f, UsableBottom() - ws.y ) ) );
 			if ( clampedPos.x != wp.x || clampedPos.y != wp.y )
 				ImGui::SetWindowPos( clampedPos );
 		}
@@ -1338,7 +1455,10 @@ namespace gamescope::chrome
 			+ kGap + 1.0f + kGap                                           // divider
 			+ kButtonSize;                                                 // close overlay
 
-		ImGui::SetNextWindowPos( ImVec2( io.DisplaySize.x * 0.5f, io.DisplaySize.y - 38.0f ),
+		// Issue #64: kDockMargin (not a separate literal) -- the same value
+		// UsableBottom() reserves a second time *above* the dock, so the two
+		// margins are provably equal rather than independently tuned.
+		ImGui::SetNextWindowPos( ImVec2( io.DisplaySize.x * 0.5f, io.DisplaySize.y - kDockMargin ),
 			ImGuiCond_Always, ImVec2( 0.5f, 1.0f ) );
 		ImGui::SetNextWindowSize( ImVec2( flContentWidth + kPad * 2.0f, kButtonSize + kPad * 2.0f ), ImGuiCond_Always );
 
