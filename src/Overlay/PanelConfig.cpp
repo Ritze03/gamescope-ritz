@@ -32,6 +32,7 @@
 #include "Notifications.h"
 #include "Palette.h"
 #include "Fonts.h"
+#include "../SettingsOverlay.h"
 
 #include "imgui.h"
 
@@ -114,18 +115,16 @@ namespace gamescope
 
 		// Pushes the fields this worker's own Chrome.cpp/Widgets.cpp read
 		// live (dock/display scale, window/dock/background opacity) into
-		// gamescope::palette::g_LiveTheme, and notification_scale/
+		// gamescope::palette::g_LiveTheme, notification_scale/
 		// opacity_notifications into gamescope::Notifications::g_LiveTheme
 		// (Notifications.cpp's own consumer, wired the same way -- see that
-		// file's Notifications.h comment) so the change is visible the very
-		// next frame -- the task's own "must take effect live, not on
-		// restart" requirement. background_blur/background_darkening have
-		// no such push: they're consumed by SettingsOverlay.cpp, a sibling
-		// milestone this worker doesn't touch -- see each field's own
-		// comment in ConfigSchema.h. Persisting the value here (below)
-		// still happens for all nine either way, so a sibling that reads
-		// config::LoadGlobal() itself already sees the up to date value even
-		// before it's wired to consume it live.
+		// file's Notifications.h comment), and background_blur/
+		// background_darkening into gamescope::g_BackgroundLiveTheme
+		// (SettingsOverlay.cpp's own consumer -- see SettingsOverlay.h's
+		// comment) so every change is visible the very next frame -- the
+		// task's own "must take effect live, not on restart" requirement.
+		// Persisting the value here (below) still happens for all nine
+		// either way.
 		void PushLiveTheme()
 		{
 			auto &live = gamescope::palette::g_LiveTheme;
@@ -140,6 +139,10 @@ namespace gamescope
 			auto &liveNotif = gamescope::Notifications::g_LiveTheme;
 			liveNotif.flScale = o.notification_scale;
 			liveNotif.flOpacity = o.opacity_notifications;
+
+			auto &liveBackground = gamescope::g_BackgroundLiveTheme;
+			liveBackground.flBlur = o.background_blur;
+			liveBackground.flDarkening = o.background_darkening;
 		}
 
 		// overlay.* is process-level, never per-game/profile-routed (see
@@ -430,9 +433,9 @@ namespace gamescope
 		// API's first real caller). Every slider here takes effect on the
 		// very next frame (QueueGeneralSave() -> PushLiveTheme()) -- see
 		// that function's comment for which fields this worker's own
-		// Chrome.cpp/Widgets.cpp consume directly vs. which are field-only
-		// definitions for a sibling milestone to consume (Notifications.*,
-		// SettingsOverlay.cpp).
+		// Chrome.cpp/Widgets.cpp consume directly vs. which are pushed on
+		// for a sibling consumer (Notifications.*, SettingsOverlay.cpp) to
+		// read live.
 		void DrawGeneralTab()
 		{
 			EnsureGeneralSettingsLoaded();
