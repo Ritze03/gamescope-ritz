@@ -671,3 +671,146 @@ TEST_CASE( "loading sweeps this config's own stale atomic-write temp files, but 
 
     std::filesystem::remove( sLiveTemp );
 }
+
+// ---- issue #43: disabling an override must never delete the config file ----
+// (DECISIONS.md #19's amendment.)
+
+TEST_CASE( "disabling override deactivates the file in place - it is never deleted", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings snapshot{};
+    snapshot.gamescope.filter = "FSR";
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+
+    // This is the exact call PanelConfig.cpp's DisableOverride() makes.
+    REQUIRE( ClearPerGameOverride( "1" ) );
+
+    // The file must still be on disk - the whole point of this fix.
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+
+    // But it must no longer be authoritative: resolution falls back to
+    // global, exactly as if the file had been deleted.
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "LINEAR" );
+    REQUIRE_FALSE( LoadPerGameOverride( "1" ).has_value() );
+
+    // And the saved values are still readable via the "is there something
+    // to restore" path.
+    REQUIRE( HasSavedPerGameConfig( "1" ) );
+}
+
+TEST_CASE( "re-enabling override after a disable restores the saved file - it is never re-snapshotted", "[config]" )
+{
+    TempConfigHome home;
+
+    // Global starts as "LINEAR" ...
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+
+    // ... but this game's saved override is "FSR" (what the user actually
+    // wants for this game).
+    Settings snapshot{};
+    snapshot.gamescope.filter = "FSR";
+    snapshot.gamescope.sharpness = 7;
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+    REQUIRE( ClearPerGameOverride( "1" ) ); // user turns override off
+
+    // Global changes again while the override is off, the way it would in
+    // real use between the disable and the re-enable.
+    Settings changedGlobal{};
+    changedGlobal.gamescope.filter = "NIS";
+    REQUIRE( SaveGlobal( changedGlobal ) );
+
+    // Re-enabling: PanelConfig.cpp's EnableOverride() calls
+    // HasSavedPerGameConfig()/RestorePerGameOverride() first, and only
+    // falls back to a fresh snapshot when that fails.
+    REQUIRE( HasSavedPerGameConfig( "1" ) );
+    REQUIRE( RestorePerGameOverride( "1" ) );
+
+    // The restored file must have the ORIGINAL per-game values ("FSR"/7),
+    // never the current global ("NIS") - re-snapshotting here would be the
+    // exact same data loss issue #43 was about, one step later.
+    Settings restored = ResolveEffective( std::optional<std::string>{ "1" } );
+    REQUIRE( restored.gamescope.filter == "FSR" );
+    REQUIRE( restored.gamescope.sharpness == 7 );
+    REQUIRE( LoadPerGameOverride( "1" ).has_value() );
+}
+
+TEST_CASE( "enabling override with no existing file still snapshots from the currently effective settings", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.gamescope.filter = "NIS";
+    REQUIRE( SaveGlobal( global ) );
+
+    // No games/2.json exists yet at all.
+    REQUIRE_FALSE( HasSavedPerGameConfig( "2" ) );
+    REQUIRE_FALSE( RestorePerGameOverride( "2" ) ); // nothing to restore
+
+    // EnableOverride()'s fallback path: snapshot whatever is currently
+    // effective.
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "2" } );
+    REQUIRE( SnapshotPerGameOverride( "2", snapshot ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "2" } ).gamescope.filter == "NIS" );
+    REQUIRE( LoadPerGameOverride( "2" ).has_value() );
+}
+
+TEST_CASE( "DeletePerGameOverride removes only the intended file", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SnapshotPerGameOverride( "1", Settings{} ) );
+    REQUIRE( SnapshotPerGameOverride( "2", Settings{} ) );
+    Settings global{};
+    global.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( global ) );
+
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE( std::filesystem::exists( GamePath( "2" ) ) );
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+
+    REQUIRE( DeletePerGameOverride( "1" ) );
+
+    // Only app id 1's file is gone.
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE_FALSE( HasSavedPerGameConfig( "1" ) );
+    // App id 2's file, and global.json, are untouched.
+    REQUIRE( std::filesystem::exists( GamePath( "2" ) ) );
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+
+    // Deleting an already-absent file is still success (matches
+    // ClearPerGameOverride's old missing-file-is-success contract).
+    REQUIRE( DeletePerGameOverride( "1" ) );
+}
+
+TEST_CASE( "DeletePerGameOverride refuses a path-escaping app id", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SnapshotPerGameOverride( "1", Settings{} ) );
+    Settings global{};
+    global.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( SaveProfile( "MyProfile", Settings{} ) );
+
+    // None of these should ever be able to reach outside GamesDir().
+    REQUIRE_FALSE( DeletePerGameOverride( "../global" ) );
+    REQUIRE_FALSE( DeletePerGameOverride( "../profiles/MyProfile" ) );
+    REQUIRE_FALSE( DeletePerGameOverride( "." ) );
+    REQUIRE_FALSE( DeletePerGameOverride( ".." ) );
+    REQUIRE_FALSE( DeletePerGameOverride( "" ) );
+
+    // Untouched.
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+    REQUIRE( std::filesystem::exists( ProfilePath( "MyProfile" ) ) );
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+}

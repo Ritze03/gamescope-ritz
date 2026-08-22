@@ -78,9 +78,45 @@ namespace gamescope::config
     // never created.
     bool SnapshotPerGameOverride( std::string_view svAppId, const Settings &snapshot );
 
-    // Deletes games/<AppId>.json ("turn the override back off"). Missing file is
-    // treated as success.
+    // "Turn the override back off" (DECISIONS.md #19's amendment, issue #43):
+    // marks games/<AppId>.json inactive by flipping its own override_global
+    // field to false, in place - it deliberately does NOT delete the file.
+    // The saved values stay on disk so a later EnableOverride (see
+    // RestorePerGameOverride below) can bring them back. Missing file is
+    // treated as success (nothing to deactivate). Deleting the file outright
+    // is a separate, explicit, user-confirmed action - see
+    // DeletePerGameOverride.
     bool ClearPerGameOverride( std::string_view svAppId );
+
+    // True when games/<AppId>.json exists and parses, regardless of its own
+    // override_global flag - i.e. "is there a saved per-game config to
+    // restore or delete", independent of whether it's currently active. Used
+    // by the Per-Game tab to decide between "Override enabled: restored" and
+    // "Override enabled: snapshotted", and to show the honest "a saved
+    // config exists but isn't in use" state (DECISIONS.md #19's amendment).
+    bool HasSavedPerGameConfig( std::string_view svAppId );
+
+    // Re-activates an existing games/<AppId>.json by flipping its
+    // override_global field back to true IN PLACE, preserving every value
+    // already on disk rather than re-snapshotting from global (DECISIONS.md
+    // #19's amendment) - "I turned this off and back on" restores what was
+    // there, it does not silently discard it. Returns false, writing
+    // nothing, if the file doesn't exist or fails to parse; the caller
+    // (PanelConfig's EnableOverride) falls back to SnapshotPerGameOverride
+    // in that case.
+    bool RestorePerGameOverride( std::string_view svAppId );
+
+    // The ONLY function in this file that actually deletes games/<AppId>.json
+    // (issue #43: a toggle must never do this - only an explicit,
+    // user-confirmed action may). Refuses (returns false, deletes nothing)
+    // unless svAppId is a bare id with no path separator and isn't "." or
+    // "..", and unless the resulting path's parent directory is exactly
+    // GamesDir() - defense in depth in the same spirit as
+    // SanitizeProfileName's profiles/ containment, even though app ids come
+    // from ResolveAppId()/env vars rather than free-text UI input. Never
+    // touches global.json or anything under profiles/. Missing file is
+    // treated as success.
+    bool DeletePerGameOverride( std::string_view svAppId );
 
     // Applying a profile copies its values into `target` once (DECISIONS.md
     // #20) - not a live reference. `target.overlay` (a process-level, not a

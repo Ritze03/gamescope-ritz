@@ -671,10 +671,74 @@ namespace gamescope::config
         return WriteFileAtomic( GamePath( svAppId ), DumpJson( j ) );
     }
 
+    namespace
+    {
+        // Reads games/<AppId>.json regardless of its own override_global
+        // flag and returns the parsed object - unlike LoadPerGameOverride
+        // (ConfigSchema-typed, gated on the flag), this is "is there
+        // anything on disk to restore/deactivate/delete at all", which
+        // ClearPerGameOverride/RestorePerGameOverride/HasSavedPerGameConfig
+        // below all need to answer without caring whether it's currently
+        // active.
+        std::optional<nlohmann::json> ReadGameFileJson( std::string_view svAppId )
+        {
+            std::string sPath = GamePath( svAppId );
+            std::optional<std::string> oText = ReadWholeFile( sPath );
+            if ( !oText )
+                return std::nullopt;
+            return ParseConfigFile( *oText, sPath );
+        }
+    }
+
     bool ClearPerGameOverride( std::string_view svAppId )
     {
+        std::optional<nlohmann::json> oJson = ReadGameFileJson( svAppId );
+        if ( !oJson )
+            return true; // nothing on disk - nothing to deactivate
+
+        ( *oJson )[ "override_global" ] = false;
+        return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
+    }
+
+    bool HasSavedPerGameConfig( std::string_view svAppId )
+    {
+        return ReadGameFileJson( svAppId ).has_value();
+    }
+
+    bool RestorePerGameOverride( std::string_view svAppId )
+    {
+        std::optional<nlohmann::json> oJson = ReadGameFileJson( svAppId );
+        if ( !oJson )
+            return false;
+
+        ( *oJson )[ "override_global" ] = true;
+        return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
+    }
+
+    bool DeletePerGameOverride( std::string_view svAppId )
+    {
+        // Bare-id guard: no path separator, and not "." / ".." - mirrors
+        // SanitizeProfileName's profiles/ containment in spirit (see
+        // ConfigManager.h's comment on this function).
+        if ( svAppId.empty() || svAppId.find( '/' ) != std::string_view::npos ||
+            svAppId == "." || svAppId == ".." )
+        {
+            s_ConfigLog.errorf( "DeletePerGameOverride: refusing suspicious app id '%.*s'",
+                (int)svAppId.size(), svAppId.data() );
+            return false;
+        }
+
+        std::filesystem::path path( GamePath( svAppId ) );
+        // Containment check: the path this function is about to remove must
+        // resolve to a direct child of GamesDir(), never anything else -
+        // GamePath() can only ever produce that shape given the guard above,
+        // but this is checked again anyway so the delete path never relies
+        // on a single layer of defense.
+        if ( path.parent_path() != std::filesystem::path( GamesDir() ) )
+            return false;
+
         std::error_code ec;
-        std::filesystem::remove( GamePath( svAppId ), ec );
+        std::filesystem::remove( path, ec );
         return !ec || ec == std::errc::no_such_file_or_directory;
     }
 
