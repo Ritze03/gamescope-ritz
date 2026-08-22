@@ -197,7 +197,10 @@ namespace gamescope
 		cv_adaptive_sync = s_CachedSettings.gamescope.vrr_enabled;
 		cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
 		cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
-		g_bForceRelativeMouse = s_CachedSettings.gamescope.force_grab_cursor;
+		// Issue #68: routed through steamcompmgr_set_force_relative_mouse()
+		// rather than writing g_bForceRelativeMouse directly -- see that
+		// function's comment for why a direct write has no live effect.
+		steamcompmgr_set_force_relative_mouse( s_CachedSettings.gamescope.force_grab_cursor );
 
 		set_color_sdr_gamut_wideness( s_CachedSettings.gamescope.sdr_gamut_wideness );
 		set_sdr_on_hdr_brightness( s_CachedSettings.gamescope.sdr_on_hdr_brightness_nits );
@@ -305,9 +308,20 @@ namespace gamescope
 	// external reader of that property (e.g. the Steam client) -- it is
 	// just no longer the thing this panel relies on for the limit to
 	// actually take effect.
+	// Issue #67: the valid range is 0 (unlimited) or [kMinFpsLimit,
+	// kMaxFpsLimit] -- NOT a plain 0..kMaxFpsLimit continuum. 1-9fps is a
+	// trap: at that rate this very overlay repaints only a few times a
+	// second, so a user who lands there can no longer practically drive the
+	// UI to undo it. Clamping any nonzero request up to the floor (rather
+	// than leaving 1..9 reachable) closes that trap at the single choke
+	// point every write path (slider, ConCommand, gamescope_control) already
+	// goes through.
+	static constexpr int kMinFpsLimit = 10;
+	static constexpr int kMaxFpsLimit = 480;
+
 	static void SetFpsLimit( int nFps )
 	{
-		nFps = std::clamp( nFps, 0, 240 );
+		nFps = ( nFps <= 0 ) ? 0 : std::clamp( nFps, kMinFpsLimit, kMaxFpsLimit );
 		s_CachedSettings.gamescope.fps_limit = nFps;
 		QueueSave();
 
@@ -462,17 +476,6 @@ namespace gamescope
 			QueueSave();
 		}
 
-		bool bHdr = cv_hdr_enabled.Get();
-		if ( widgets::Toggle( "HDR", &bHdr ) )
-		{
-			cv_hdr_enabled = bHdr;
-			s_CachedSettings.gamescope.hdr_enabled = bHdr;
-			QueueSave();
-		}
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "More HDR controls live under the HDR tab once this is on." );
-		ImGui::PopFont();
-
 		bool bTearing = cv_tearing_enabled.Get();
 		if ( widgets::Toggle( "Allow Tearing", &bTearing ) )
 		{
@@ -483,18 +486,28 @@ namespace gamescope
 
 		ImGui::Separator();
 
-		// force-grab-cursor (issue #25): promoted from a --force-grab-cursor
-		// startup-only CLI flag to a live toggle here. g_bForceRelativeMouse
-		// is read every frame on this same thread -- ShouldDrawCursor()
-		// (steamcompmgr.cpp:2531) and the cursor-nesting-hint check (:9413)
-		// -- so writing it directly, the same way SetFilter()/SetScaler() do
-		// above, has an immediate live effect; this is genuinely NOT
-		// startup-only despite the CLI flag's name suggesting otherwise, so
-		// no "needs relaunch" note is needed here.
+		// force-grab-cursor (issue #25, fixed in #68): promoted from a
+		// --force-grab-cursor startup-only CLI flag to a panel toggle here.
+		// #25's own verification only confirmed this *rendered* and *held
+		// state* -- it never confirmed cursor behavior actually changed, and
+		// it didn't: writing g_bForceRelativeMouse directly (as this used to
+		// do, matching SetFilter()/SetScaler() above) has NO live effect.
+		// Being read every frame is not the same as being ACTED on every
+		// frame -- the two actual consumers (CWaylandConnector::Init() /
+		// CSDLBackend::Run()) only ever check it once, at backend startup;
+		// the per-frame path in steamcompmgr.cpp deliberately skips itself
+		// entirely whenever this flag is true (see its own
+		// "!g_bForceRelativeMouse" guard). So a live toggle-on after startup
+		// wrote the bool and nothing then called SetRelativeMouseMode() --
+		// same shape as #25's frame limiter. Routed through
+		// steamcompmgr_set_force_relative_mouse() now, which pushes the mode
+		// to every focused window's own INestedHints immediately instead of
+		// relying on that nonexistent live path -- see its definition
+		// comment in steamcompmgr.cpp.
 		bool bForceGrabCursor = g_bForceRelativeMouse;
 		if ( widgets::Toggle( "Force Grab Cursor", &bForceGrabCursor ) )
 		{
-			g_bForceRelativeMouse = bForceGrabCursor;
+			steamcompmgr_set_force_relative_mouse( bForceGrabCursor );
 			s_CachedSettings.gamescope.force_grab_cursor = bForceGrabCursor;
 			QueueSave();
 		}
@@ -503,14 +516,57 @@ namespace gamescope
 		ImGui::PopFont();
 	}
 
+	// Issue #67: 0..kMaxFpsLimit widened to 0..480, but NOT as one continuous
+	// slider -- widgets::SliderInt has no notion of a gap in its range, and a
+	// plain 0..480 slider would let the user strand themselves at 1-9fps
+	// (see kMinFpsLimit's comment above). Split into an "Unlimited" toggle
+	// (0) plus a slider that only ever offers [kMinFpsLimit, kMaxFpsLimit],
+	// rather than extending Widgets.cpp with a new gapped-slider primitive
+	// -- out of scope here (owned by another concurrently-running agent) and
+	// a single on/off + range combo reads clearly for a two-state-shaped
+	// control anyway.
+	//
+	// Achievable values are further quantized by the compositor itself on
+	// the non-VRR path -- it resolves to an integer vblank divisor of the
+	// output refresh (#25 measured 27->30fps, 59->60fps on a 120Hz output)
+	// -- but this control keeps presenting a continuous 10-480 range rather
+	// than snapping to per-refresh-rate steps: the achievable set depends on
+	// the *current* output refresh, which can change (different display,
+	// VRR on/off), so a slider that quantized to it would need to
+	// re-quantize live and would show different step points on different
+	// displays for the same nominal setting. A continuous control that gets
+	// silently rounded by the compositor is simpler and already matches how
+	// the pre-existing 0..240 slider behaved.
+	static int s_nLastFpsLimit = 60;
+
 	static void DrawFrameLimiterTab()
 	{
 		int nFps = s_CachedSettings.gamescope.fps_limit;
-		if ( widgets::SliderInt( "FPS Limit", &nFps, 0, 240, "%d fps" ) )
-			SetFpsLimit( nFps );
+		bool bUnlimited = ( nFps == 0 );
+		if ( !bUnlimited )
+			s_nLastFpsLimit = nFps;
+
+		if ( widgets::Toggle( "Unlimited", &bUnlimited ) )
+			SetFpsLimit( bUnlimited ? 0 : std::max( s_nLastFpsLimit, kMinFpsLimit ) );
+
+		ImGui::Spacing();
+
+		if ( bUnlimited )
+			ImGui::BeginDisabled();
+
+		int nSliderFps = std::clamp( bUnlimited ? s_nLastFpsLimit : nFps, kMinFpsLimit, kMaxFpsLimit );
+		if ( widgets::SliderInt( "FPS Limit", &nSliderFps, kMinFpsLimit, kMaxFpsLimit, "%d fps" ) )
+		{
+			s_nLastFpsLimit = nSliderFps;
+			SetFpsLimit( nSliderFps );
+		}
+
+		if ( bUnlimited )
+			ImGui::EndDisabled();
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "0 = unlimited. Applies immediately." );
+		ImGui::TextDisabled( "Unlimited = no cap. Otherwise 10-480fps -- below 10fps the overlay itself "
+			"becomes too slow to drive, including to undo this. Applies immediately." );
 		ImGui::PopFont();
 	}
 
@@ -579,6 +635,26 @@ namespace gamescope
 
 	static void DrawHdrTab()
 	{
+		// Main HDR toggle (issue #66): moved here from the Display tab so
+		// the switch lives with the settings it gates instead of being
+		// split across tabs. Taxonomically HDR-enable is a Display-ish
+		// setting, but once a dedicated HDR tab exists, separating the
+		// toggle from what it governs costs more (a control the user has
+		// to remember lives elsewhere) than the tidier categorisation
+		// gains -- deliberate call, see superdoc/planning/ISSUES.md and
+		// issue #66 itself. cv_hdr_enabled/s_CachedSettings.gamescope.
+		// hdr_enabled are unchanged -- only where this is drawn moved, not
+		// what it drives (issue #25's frame-limiter regression is the
+		// cautionary precedent here).
+		bool bHdr = cv_hdr_enabled.Get();
+		if ( widgets::Toggle( "HDR", &bHdr ) )
+		{
+			cv_hdr_enabled = bHdr;
+			s_CachedSettings.gamescope.hdr_enabled = bHdr;
+			QueueSave();
+		}
+		ImGui::Separator();
+
 		const bool bHdrEnabled = cv_hdr_enabled.Get();
 		if ( !bHdrEnabled )
 		{
@@ -588,7 +664,7 @@ namespace gamescope
 			// inventing a new one: these settings are meaningless while HDR
 			// itself is off.
 			ImGui::TextColored( ImVec4( 0.95f, 0.65f, 0.25f, 1.0f ),
-				"HDR is off -- enable it on the Display tab first; these controls do nothing until then." );
+				"HDR is off -- these controls do nothing until it's on." );
 			ImGui::Separator();
 		}
 
@@ -668,8 +744,10 @@ namespace gamescope
 		// Tabs (issue #25), same ImGui::BeginTabBar()/BeginTabItem() pattern
 		// PanelConfig.cpp already uses for Per-Game/General -- Upscaling
 		// keeps the pre-existing filter/scaler/sharpness controls unchanged;
-		// Display keeps VRR/HDR-enable/tearing and gains Force Grab Cursor;
-		// Frame Limiter and HDR are new.
+		// Display keeps VRR/tearing and gains Force Grab Cursor; Frame
+		// Limiter and HDR are new. The HDR-enable toggle itself moved from
+		// Display onto the HDR tab in issue #66 -- it now owns its own
+		// on/off switch alongside the settings it gates.
 		if ( ImGui::BeginTabBar( "GamescopeTabs" ) )
 		{
 			if ( ImGui::BeginTabItem( "Upscaling" ) )
