@@ -47,6 +47,7 @@
 #include "../SettingsOverlay.h"
 #include "Config/ConfigManager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <map>
@@ -1222,14 +1223,50 @@ namespace gamescope::chrome
 			const bool bClicked = ImGui::InvisibleButton( "##dockbtn", ImVec2( flSize, flSize ) );
 			const bool bHovered = ImGui::IsItemHovered();
 
-			const ImU32 bgCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.13f ) )
-				: ( bHovered ? kDockHoverFillU32 : kDockIdleFillU32 );
-			const ImU32 borderCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.50f ) )
-				: ( bHovered ? kHairlineStrongU32 : kHairlineU32 );
-			const ImU32 iconCol = bActive ? gamescope::palette::kAccentIcon : ( bHovered ? kIconHoverU32 : kIconIdleU32 );
+			// Design-exploration variant (issue #41, "calm"): the dock's own
+			// hover treatment was flagged (its own code comment, kDockHover-
+			// FillU32/kIconHoverU32 above) as an unmeasured, never-checked-
+			// in-motion invention -- and an instant color flip on
+			// IsItemHovered() genuinely doesn't read as motion at all, just
+			// a flicker. Two changes, both purely about *how* the existing
+			// hover state gets to the screen, not what it draws: (1) every
+			// color below now eases toward its target over ~120ms
+			// (framerate-independent exponential smoothing, same shape as a
+			// UI animation curve, not a linear ramp) instead of snapping;
+			// (2) a hovered button lifts 1.5px on its own Y (icon + fill +
+			// border together, NOT the InvisibleButton hit-box itself --
+			// moving the hit-box would fight its own hover state one frame
+			// after a lift begins). Persisted per-button via ImGui's own
+			// window state storage, keyed on this button's own ID -- no new
+			// global array to size/index against PanelId, unlike this
+			// file's other per-panel state arrays.
+			ImGuiStorage *pStorage = ImGui::GetStateStorage();
+			const ImGuiID animId = ImGui::GetID( "##hoveranim" );
+			float flAnim = pStorage->GetFloat( animId, 0.0f );
+			const float flTarget = bHovered ? 1.0f : 0.0f;
+			const float flRate = std::clamp( ImGui::GetIO().DeltaTime * 12.0f, 0.0f, 1.0f );
+			flAnim += ( flTarget - flAnim ) * flRate;
+			pStorage->SetFloat( animId, flAnim );
 
-			pDrawList->AddRectFilled( pos, ImVec2( pos.x + flSize, pos.y + flSize ), bgCol );
-			pDrawList->AddRect( pos, ImVec2( pos.x + flSize, pos.y + flSize ), borderCol );
+			const ImVec4 idleFillV = gamescope::palette::ToVec4( kDockIdleFillU32 );
+			const ImVec4 hoverFillV = gamescope::palette::ToVec4( kDockHoverFillU32 );
+			const ImVec4 idleBorderV = gamescope::palette::ToVec4( kHairlineU32 );
+			const ImVec4 hoverBorderV = gamescope::palette::ToVec4( kHairlineStrongU32 );
+			const ImVec4 idleIconV = gamescope::palette::ToVec4( kIconIdleU32 );
+			const ImVec4 hoverIconV = gamescope::palette::ToVec4( kIconHoverU32 );
+
+			const ImU32 bgCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.13f ) )
+				: ImGui::ColorConvertFloat4ToU32( ImLerp( idleFillV, hoverFillV, flAnim ) );
+			const ImU32 borderCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.50f ) )
+				: ImGui::ColorConvertFloat4ToU32( ImLerp( idleBorderV, hoverBorderV, flAnim ) );
+			const ImU32 iconCol = bActive ? gamescope::palette::kAccentIcon
+				: ImGui::ColorConvertFloat4ToU32( ImLerp( idleIconV, hoverIconV, flAnim ) );
+
+			const float flRatio = flSize / 54.0f;
+			const ImVec2 drawPos = pos - ImVec2( 0.0f, 1.5f * flRatio * flAnim );
+
+			pDrawList->AddRectFilled( drawPos, ImVec2( drawPos.x + flSize, drawPos.y + flSize ), bgCol );
+			pDrawList->AddRect( drawPos, ImVec2( drawPos.x + flSize, drawPos.y + flSize ), borderCol );
 
 			if ( bActive )
 			{
@@ -1237,20 +1274,19 @@ namespace gamescope::chrome
 				// to the 54px canonical button -- dock_scale, General tab,
 				// resizes this whole button, so these markers scale with it
 				// too instead of drifting off-proportion at non-1.0 scale).
-				const float flRatio = flSize / 54.0f;
 				const float kEdgeInset = 8.0f * flRatio;
 				const float kEdgeThickness = 2.0f * flRatio;
-				const ImVec2 edgeMin( pos.x + kEdgeInset, pos.y );
-				const ImVec2 edgeMax( pos.x + flSize - kEdgeInset, pos.y + kEdgeThickness );
+				const ImVec2 edgeMin( drawPos.x + kEdgeInset, drawPos.y );
+				const ImVec2 edgeMax( drawPos.x + flSize - kEdgeInset, drawPos.y + kEdgeThickness );
 				// Glow: spec "0 0 10px accent@90% ~= one 42x6px rect under
 				// it @25% accent".
-				pDrawList->AddRectFilled( ImVec2( pos.x + flSize * 0.5f - 21.0f * flRatio, pos.y ),
-					ImVec2( pos.x + flSize * 0.5f + 21.0f * flRatio, pos.y + 6.0f * flRatio ),
+				pDrawList->AddRectFilled( ImVec2( drawPos.x + flSize * 0.5f - 21.0f * flRatio, drawPos.y ),
+					ImVec2( drawPos.x + flSize * 0.5f + 21.0f * flRatio, drawPos.y + 6.0f * flRatio ),
 					ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
 				pDrawList->AddRectFilled( edgeMin, edgeMax, ImGui::GetColorU32( gamescope::palette::kAccentEdge ) );
 			}
 
-			DrawIcon( pDrawList, icon, ImVec2( pos.x + flSize * 0.5f, pos.y + flSize * 0.5f ), flSize * 0.4f, iconCol );
+			DrawIcon( pDrawList, icon, ImVec2( drawPos.x + flSize * 0.5f, drawPos.y + flSize * 0.5f ), flSize * 0.4f, iconCol );
 
 			if ( bHovered )
 				ImGui::SetTooltip( "%s", pszLabel );
