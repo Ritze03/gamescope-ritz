@@ -564,19 +564,55 @@ namespace gamescope::chrome
 
 		if ( bFocused )
 		{
-			// Accent glow, spec §4: "0 0 40px -20px accent@60% ~= approximate
-			// as 2 rect expansions (+4px @.10, +10px @.04 accent)" -- the
-			// part of the focus treatment an alpha-only border can't convey
-			// on its own (task feedback: "make focus unmistakable"). Drawn
-			// on the foreground draw list, not this window's own, so it's
+			// Accent glow, spec §4: "0 0 40px -20px accent@60%" -- a blurred
+			// CSS box-shadow, which has no ImDrawList equivalent without an
+			// actual blur pass (out of scope here -- "keep it cheap"). The
+			// previous approximation was 2 flat-alpha rings, which is exactly
+			// what "steppy" describes: 2 layers means 2 hard edges. Two changes
+			// make the same trick read as a continuous glow instead:
+			//
+			// 1. More (kGlowLayers), thinner rings whose alpha follows an
+			//    *exponential* falloff rather than a linear one -- a blurred
+			//    shadow's brightness decays roughly like a Gaussian, not
+			//    linearly, so matching that curve hides the seams in far fewer
+			//    layers than a linear ramp needs. Ring width also grows outward
+			//    (offsets spaced by t^1.5, not t) so sampling is densest right
+			//    at the border -- where the eye is looking and the gradient is
+			//    steepest -- and coarsest far out, where alpha is already near
+			//    zero and a wide step goes unnoticed.
+			// 2. Each ring's corner radius is the window's own radius PLUS that
+			//    ring's own outward offset, instead of an independent hand-
+			//    picked radius per layer. Offsetting a rounded rect outward by
+			//    d is a Minkowski sum: radius r becomes exactly r+d. Rings that
+			//    don't track this drift out of concentricity fastest at the
+			//    corners -- why corners are where banding is always worst first.
+			//
+			// Drawn on the foreground draw list, not this window's own, so it's
 			// never clipped to the window's bounds.
 			ImDrawList *pFg = ImGui::GetForegroundDrawList();
 			const ImVec2 wp = ImGui::GetWindowPos();
 			const ImVec2 ws = ImGui::GetWindowSize();
-			pFg->AddRect( wp - ImVec2( 10.0f, 10.0f ), wp + ws + ImVec2( 10.0f, 10.0f ),
-				ImGui::GetColorU32( gamescope::palette::Accent( 0.04f ) ), 6.0f, 0, 10.0f );
-			pFg->AddRect( wp - ImVec2( 4.0f, 4.0f ), wp + ws + ImVec2( 4.0f, 4.0f ),
-				ImGui::GetColorU32( gamescope::palette::Accent( 0.10f ) ), 5.0f, 0, 6.0f );
+			constexpr float kWindowRadius = 4.0f;  // spec §4 "Corner radius 4px" == WindowRounding pushed above
+			constexpr int   kGlowLayers   = 5;
+			constexpr float kGlowReach    = 20.0f; // outermost ring's offset from the window edge, px
+			constexpr float kGlowPeakA    = 0.22f; // alpha of the innermost (thinnest, brightest) ring
+			constexpr float kGlowDecay    = 2.5f;  // exponential falloff rate over the 0..1 layer range
+
+			float flPrevOffset = 0.0f;
+			for ( int i = 1; i <= kGlowLayers; ++i )
+			{
+				const float t = (float)i / (float)kGlowLayers;
+				const float flOffset = kGlowReach * powf( t, 1.5f );
+				const float flThickness = flOffset - flPrevOffset;
+				const float flMid = ( flPrevOffset + flOffset ) * 0.5f;
+				const float flAlpha = kGlowPeakA * expf( -kGlowDecay * t );
+
+				pFg->AddRect( wp - ImVec2( flMid, flMid ), wp + ws + ImVec2( flMid, flMid ),
+					ImGui::GetColorU32( gamescope::palette::Accent( flAlpha ) ),
+					kWindowRadius + flMid, 0, flThickness );
+
+				flPrevOffset = flOffset;
+			}
 		}
 
 		DrawTitleBar( pszTitle, id, bFocused, bCollapsed );

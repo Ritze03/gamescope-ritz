@@ -428,6 +428,39 @@ TEST_CASE( "EnqueueRoutedWrite falls back to global.json when no app id was reso
     REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
 }
 
+TEST_CASE( "a General-tab overlay edit is not clobbered by a later routed write from a stale panel cache", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // Simulates PanelDisplay.cpp's EnsureConfigLoaded(): loads the full
+    // effective Settings once, at panel-open time, before the user ever
+    // touches the General tab.
+    Settings displayPanelCache = ResolveEffective( SessionAppId() );
+
+    // User edits a General-tab slider: PanelConfig.cpp's QueueGeneralSave()
+    // mutates just the overlay field on its own cache and writes the whole
+    // struct.
+    Settings generalTabCache = LoadGlobal();
+    generalTabCache.overlay.dock_scale = 1.3f;
+    EnqueueGlobalWrite( generalTabCache );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().overlay.dock_scale == 1.3f );
+
+    // User now edits a Display-tab slider. PanelDisplay never reloaded its
+    // cache (only PanelConfig-driven profile-apply/override-toggle bump
+    // ConfigGeneration - a General-tab edit deliberately never does), so its
+    // own `overlay` sub-object is still whatever was loaded at panel-open
+    // time (dock_scale == 1.0, the default) - before the General-tab edit.
+    displayPanelCache.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( displayPanelCache );
+    FlushPendingWrites();
+
+    // The General tab's dock_scale must survive an unrelated Display-tab
+    // edit.
+    REQUIRE( LoadGlobal().overlay.dock_scale == 1.3f );
+}
+
 TEST_CASE( "ListProfiles and ListGameIds report what's actually on disk, sorted", "[config]" )
 {
     TempConfigHome home;
