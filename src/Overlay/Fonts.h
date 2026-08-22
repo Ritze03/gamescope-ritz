@@ -83,6 +83,16 @@ namespace gamescope::fonts
 	// ImGui's built-in default font and every Style resolves to that same
 	// default font instead -- text still renders, just not in Plex. Never
 	// leaves the atlas empty and never crashes.
+	//
+	// Issue #48: also resets the current context's ImGuiIO::FontGlobalScale
+	// to 1.0f every time it runs. The atlas above is baked at the effective
+	// scale already (flSizePixels * flScale), so it is the sole scaling
+	// mechanism for this context's fonts once Load()/RebuildAll() has run;
+	// a stray FontGlobalScale left set to display_scale by another call site
+	// would double-apply the factor on the pushed-font draw path
+	// (ImGui::Text()/TextDisabled()) without affecting explicit-size
+	// AddText() calls, which is exactly issue #48's scale^2 bug. See
+	// Fonts.cpp's Load() for the full rationale.
 	void Load( float flScale = 1.0f );
 
 	// Re-bakes every context that has ever called Load() (i.e. every
