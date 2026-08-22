@@ -1130,6 +1130,16 @@ namespace gamescope
 			std::string sUtf8Text; // Key press only -- layout-correct text already resolved
 			                       // against the real xkb_state in wlserver.cpp; see
 			                       // SettingsOverlay_QueueKeyEvent()'s comment in the header.
+			// Real wall-clock arrival time (get_time_in_nanos(), same clock
+			// flDeltaTime is built from below), stamped at QueueEvent() time --
+			// i.e. as close to the real libinput/wlserver event as this
+			// cross-thread handoff gets. See DrainInputQueue()'s file comment
+			// on why this is needed: without it, several events queued between
+			// two frames (e.g. a fast double-click's down/up/down/up at a low
+			// framerate) all get folded into one drain and lose any notion of
+			// how far apart they really happened, making click timing track
+			// frame duration instead of wall-clock time.
+			uint64_t ulTimestampNanos = 0;
 		};
 	}
 
@@ -1140,6 +1150,7 @@ namespace gamescope
 
 	static void QueueEvent( QueuedInputEvent ev )
 	{
+		ev.ulTimestampNanos = get_time_in_nanos();
 		std::lock_guard<std::mutex> lock( s_InputQueueLock );
 		s_InputQueue.push_back( std::move( ev ) );
 	}
@@ -1368,8 +1379,56 @@ namespace gamescope
 
 		bool bCursorMoved = false;
 
-		for ( const QueuedInputEvent &ev : events )
+		// Frame-rate-independent double-click fix -- see the QueuedInputEvent::
+		// ulTimestampNanos comment for the "why" and superdoc/planning/
+		// overlay-presentation-architecture.md for the investigation.
+		//
+		// Recap: when this drain collects more than one MouseButton event (a
+		// low framerate, or any frame that simply lags a beat, lets the
+		// producer queue several real events before the next drain), handing
+		// them all to ImGui via one shared NewFrame() call is not neutral --
+		// ImGui's own input-event trickling (io.ConfigInputTrickleEventQueue,
+		// on by default) applies only ONE same-button transition per
+		// NewFrame() call and defers the rest to subsequent calls, so a fast
+		// double-click's down/up/down/up ends up spread across several
+		// *frames*, each one only becoming a "click" (and getting stamped
+		// with ImGui's internal clock, g.Time) once its own later NewFrame()
+		// runs. g.Time always advances by the real DeltaTime of whichever
+		// NewFrame() call is doing the advancing, so the delay this
+		// introduces between the two clicks' registered times is N real
+		// frame periods, not the real N milliseconds the clicks were
+		// actually apart -- at low framerate that easily blows past
+		// io.MouseDoubleClickTime's default 0.3s, breaking a double-click
+		// that a wall clock would call well within the window. (Confirmed by
+		// instrumentation before this fix: a realistic 150ms double-click
+		// registers correctly for framerates down to ~8fps and silently
+		// stops registering below that, purely from frame-period growth --
+		// exactly the reported "double-click window depends on framerate"
+		// symptom, with no change to real click timing at all.)
+		//
+		// Simply turning trickling off is NOT the fix (tried and measured):
+		// without it, ImGui applies every event in the batch but keeps only
+		// the NET button-state change for the frame, so a whole press+release
+		// landing in one drain (routine at low fps, since a real click's own
+		// down-to-up gap is often under one frame period) collapses to no
+		// click at all -- worse than the bug it was meant to cure.
+		//
+		// Fix: give each MouseButton event in this batch, other than the
+		// batch's last event, its own correctly-timed "micro" NewFrame()/
+		// EndFrame() cycle (no windows opened, nothing rendered) with
+		// DeltaTime set to the REAL gap since the last time ImGui's clock was
+		// advanced -- so g.Time tracks real elapsed wall-clock time between
+		// transitions instead of render-frame count, while every other event
+		// kind (motion/wheel/key) is applied without a pump of its own,
+		// exactly as before. The batch's last event is left pending for the
+		// caller's own real, visible NewFrame() (SettingsOverlay_AddLayer(),
+		// right after this function returns), so the real render cadence and
+		// its DeltaTime are untouched -- this only tightens the timing of
+		// transitions that would otherwise be trickle-delayed within the
+		// *same* drain.
+		for ( size_t i = 0; i < events.size(); i++ )
 		{
+			const QueuedInputEvent &ev = events[i];
 			switch ( ev.kind )
 			{
 				case QueuedInputEvent::Kind::Key:
@@ -1392,7 +1451,30 @@ namespace gamescope
 				{
 					const int nButton = ImGuiMouseButtonForLinuxButton( ev.uCode );
 					if ( nButton >= 0 )
+					{
 						io.AddMouseButtonEvent( nButton, ev.bPressed );
+
+						const bool bLastEventInBatch = ( i + 1 == events.size() );
+						if ( !bLastEventInBatch )
+						{
+							if ( bCursorMoved )
+							{
+								ClampCursorToTexture();
+								io.AddMousePosEvent( (float)s_flCursorX, (float)s_flCursorY );
+								bCursorMoved = false;
+							}
+
+							float flMicroDeltaTime = s_ulLastFrameTimeNanos == 0
+								? ( 1.0f / 60.0f )
+								: float( ev.ulTimestampNanos - s_ulLastFrameTimeNanos ) / 1e9f;
+							flMicroDeltaTime = std::clamp( flMicroDeltaTime, 1.0f / 1000.0f, 1.0f );
+							s_ulLastFrameTimeNanos = ev.ulTimestampNanos;
+
+							io.DeltaTime = flMicroDeltaTime;
+							ImGui::NewFrame();
+							ImGui::EndFrame();
+						}
+					}
 					break;
 				}
 
