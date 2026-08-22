@@ -1,5 +1,32 @@
 # Gamescope Script/Config Files
 
+## Installing and updating gamescope-ritz
+
+`install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the
+`gamescope-ritz-common.sh` helper library they share) install this fork to
+**`/usr/bin/gamescope-ritz`** — never `/usr/bin/gamescope`, which both
+scripts hard-refuse to touch, since that's the user's packaged, known-good
+gamescope. See the header comment in each script for full option lists
+(`--help` also prints it).
+
+```sh
+scripts/install-gamescope-ritz.sh      # interactive: symlink vs copy, builds
+                                        # a release binary first if none exists
+scripts/update-gamescope-ritz.sh       # git pull --ff-only, rebuild release,
+                                        # refresh the install (copy mode only —
+                                        # a symlink install is live immediately)
+scripts/install-gamescope-ritz.sh --uninstall
+```
+
+Both build into a separate `build-release/` directory (`--buildtype=release
+-Doptimization=3 -Db_lto=true`), leaving a developer's `build/` untouched.
+Writing to `/usr/bin` uses `sudo` only for that one step, and the build
+itself never runs as root.
+
+These are unrelated to the `.lua` scripting system documented below — this
+directory doubles as the home for both this fork's dev/ops scripts and the
+Lua config scripts gamescope loads at runtime.
+
 ## ⚠️ Health Warning ⚠️
 
 Gamescope scripting/configuration is currently experimental and subject to change massively.
