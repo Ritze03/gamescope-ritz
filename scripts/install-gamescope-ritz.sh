@@ -27,7 +27,8 @@
 #   --rebuild           rebuild even if a release binary already exists
 #   --prefix DIR        install directory (default: /usr/bin)
 #   --build-dir DIR     release build directory (default: build-release)
-#   --uninstall         remove /usr/bin/gamescope-ritz and exit
+#   --uninstall         remove /usr/bin/gamescope-ritz and its
+#                       share/gamescope-ritz data dir, and exit
 #   -h, --help          show this help and exit
 #
 # Examples:
@@ -49,7 +50,7 @@ PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
 DO_UNINSTALL=0
 
-print_help() { sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -79,19 +80,48 @@ TARGET="$PREFIX_DIR/$GCR_BIN_NAME"
 gcr_check_target_safety "$TARGET"
 
 if [ "$DO_UNINSTALL" = "1" ]; then
-	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
-		gcr_info "$TARGET does not exist, nothing to uninstall."
+	PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
+	EXTRAS_DIR=$(gcr_extras_dir "$PREFIX_ROOT")
+
+	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && [ ! -e "$EXTRAS_DIR" ]; then
+		gcr_info "$TARGET does not exist and $EXTRAS_DIR does not exist, nothing to uninstall."
 		exit 0
 	fi
-	if [ -L "$TARGET" ]; then
-		gcr_info "$TARGET is a symlink -> $(readlink -f -- "$TARGET" 2>/dev/null || readlink -- "$TARGET")"
-	else
-		gcr_info "$TARGET is a regular file ($(du -h -- "$TARGET" | cut -f1))."
+
+	if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
+		if [ -L "$TARGET" ]; then
+			gcr_info "$TARGET is a symlink -> $(readlink -f -- "$TARGET" 2>/dev/null || readlink -- "$TARGET")"
+		else
+			gcr_info "$TARGET is a regular file ($(du -h -- "$TARGET" | cut -f1))."
+		fi
+		gcr_confirm "Remove $TARGET?" y || { gcr_info "aborted, nothing removed."; exit 1; }
+		GCR_PRIV_DIR="$PREFIX_DIR"
+		gcr_as_priv rm -f -- "$TARGET"
+		gcr_info "removed $TARGET."
 	fi
-	gcr_confirm "Remove $TARGET?" y || { gcr_info "aborted, nothing removed."; exit 1; }
-	GCR_PRIV_DIR="$PREFIX_DIR"
-	gcr_as_priv rm -f -- "$TARGET"
-	gcr_info "removed $TARGET. (share/gamescope extras, if installed, were left in place.)"
+
+	if [ -e "$EXTRAS_DIR" ]; then
+		# Safety check mirrors gcr_check_target_safety's spirit: only ever
+		# remove our own namespaced data directory, never plain
+		# $PREFIX_ROOT/share/gamescope (a distro-packaged gamescope's).
+		case "$EXTRAS_DIR" in
+			*/share/gamescope-ritz)
+				if gcr_confirm "Also remove $EXTRAS_DIR (scripts/looks/reshade extras)?" y; then
+					GCR_PRIV_DIR="$PREFIX_ROOT"
+					gcr_as_priv rm -rf -- "$EXTRAS_DIR"
+					gcr_info "removed $EXTRAS_DIR."
+				else
+					gcr_info "left $EXTRAS_DIR in place."
+				fi
+				;;
+			*)
+				gcr_err "internal error: refusing to remove unexpected extras dir '$EXTRAS_DIR'"
+				exit 1
+				;;
+		esac
+	else
+		gcr_info "$EXTRAS_DIR does not exist, nothing to remove there."
+	fi
 	exit 0
 fi
 
@@ -160,12 +190,11 @@ gcr_info "installed: $TARGET ($MODE mode)"
 PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
 if [ -z "$EXTRAS" ]; then
 	echo
-	echo "default_extras_install.sh copies this repo's scripts/ and looks/ into"
-	echo "${PREFIX_ROOT}/share/gamescope — a directory NOT namespaced by binary"
-	echo "name, so it is shared with any other gamescope install on this system,"
-	echo "including a distro-packaged /usr/bin/gamescope, and will overwrite its"
-	echo "scripts/ and looks/. Needed for gamescope-ritz's ReShade/looks features"
-	echo "to find their files."
+	echo "default_extras_install.sh copies this repo's scripts/, looks/ and"
+	echo "reshade/ into ${PREFIX_ROOT}/share/gamescope-ritz — namespaced by"
+	echo "binary name, so it never touches a distro-packaged /usr/bin/gamescope's"
+	echo "own share/gamescope. Needed for gamescope-ritz's scripts/ReShade/looks"
+	echo "features to find their files."
 	if gcr_confirm "Run it now?" n; then EXTRAS="yes"; else EXTRAS="no"; fi
 fi
 if [ "$EXTRAS" = "yes" ]; then

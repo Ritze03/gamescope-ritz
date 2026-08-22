@@ -55,12 +55,14 @@ extern std::atomic<GamescopeAppTextureColorspace> g_eLastBaseLayerColorspace;
 namespace gamescope
 {
 	// Install path for the combined effect: default_extras_install.sh
-	// installs this repo's reshade/ tree to $prefix/share/gamescope/reshade,
+	// installs this repo's reshade/ tree to $prefix/share/gamescope-ritz/reshade,
 	// matching exactly what ReshadeEffectPipeline::init()
 	// (src/reshade_effect_manager.cpp) looks under (it prefixes this path
-	// with ".../share/gamescope/reshade/Shaders/", local-usr then
-	// global-usr). See reshade/Shaders/gamescope-ritz.fx for the effect
-	// itself.
+	// with ".../share/gamescope-ritz/reshade/Shaders/", local-usr then
+	// global-usr, falling back to the plain unnamespaced
+	// .../share/gamescope/reshade/Shaders/ at each scope for a user's
+	// pre-existing shader library). See reshade/Shaders/gamescope-ritz.fx
+	// for the effect itself.
 	static constexpr const char *k_pszEffectPath = "gamescope-ritz.fx";
 
 	static bool s_bConfigLoaded = false;

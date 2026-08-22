@@ -134,13 +134,12 @@ gcr_build_release() {
 	ninja -C "$build_dir" src/gamescope
 }
 
-# Run default_extras_install.sh (installs scripts/, looks/, and — per its own
-# logic, read before wiring this up — whatever it actually copies) against
-# $prefix_root/share/gamescope. NOTE this directory is NOT namespaced by
-# binary name: it is shared with any other gamescope install on the system,
-# including a distro-packaged /usr/bin/gamescope, which also reads from it.
-# Running this will overwrite that shared scripts/ and looks/, which is why
-# the caller prompts (default: no) before invoking this.
+# Run default_extras_install.sh (installs scripts/, looks/, and reshade/)
+# against $prefix_root/share/gamescope-ritz. Namespaced by binary name so it
+# is its own directory, never $prefix_root/share/gamescope -- that path
+# belongs to any other gamescope install on the system, including a
+# distro-packaged /usr/bin/gamescope, and default_extras_install.sh's own
+# safety guard now refuses to rm -rf anything outside share/gamescope-ritz.
 gcr_install_extras() {
 	local repo_root="$1" prefix_root="$2"
 	local script="$repo_root/default_extras_install.sh"
@@ -148,10 +147,18 @@ gcr_install_extras() {
 		gcr_warn "default_extras_install.sh not found at $script, skipping extras."
 		return 0
 	fi
-	gcr_info "installing scripts/ and looks/ to ${prefix_root}/share/gamescope ..."
+	gcr_info "installing scripts/, looks/ and reshade/ to ${prefix_root}/share/gamescope-ritz ..."
 	GCR_PRIV_DIR="$prefix_root" gcr_as_priv env \
 		MESON_SOURCE_ROOT="$repo_root" \
 		MESON_INSTALL_PREFIX="$prefix_root" \
 		DESTDIR="" \
 		sh "$script"
+}
+
+# Path to gamescope-ritz's own namespaced data directory under a given
+# prefix root -- what --uninstall removes, and nothing else (never plain
+# $prefix_root/share/gamescope, which may belong to a different install).
+gcr_extras_dir() {
+	local prefix_root="$1"
+	printf '%s/share/gamescope-ritz\n' "$prefix_root"
 }

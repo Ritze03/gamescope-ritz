@@ -178,8 +178,10 @@ parser/codegen library (`effect_parser.hpp`, `effect_codegen.hpp`,
 `effect_preprocessor.hpp`, included from `reshade_effect_manager.cpp:11`-`:13`) — it
 is not checked out in this working tree and, even checked out, is a compiler library,
 not a shader collection. `ReshadeEffectPipeline::init()` loads FX source from
-`$prefix/share/gamescope/reshade/Shaders/<key.path>` (local-usr then global-usr,
-`:939`-`:957`) — that install path doesn't exist anywhere in this tree either. All
+`$prefix/share/gamescope-ritz/reshade/Shaders/<key.path>` (local-usr then global-usr,
+falling back to the plain unnamespaced `$prefix/share/gamescope/reshade/Shaders/<key.path>`
+at each scope for a user's pre-existing shader library, `:939`-`:975`) — that install path
+doesn't exist anywhere in this tree either. All
 three effects must be authored (or ported from the community `crosire/reshade-shaders`
 library and adapted, since stock `ui_*`-only uniforms are inert here per Q1).
 
@@ -378,8 +380,10 @@ at all.
   worth an audit before an overlay drives effect switches more frequently than the
   current CLI/protocol-only usage pattern does.
 - **No shader assets ship in-repo**, and the install path
-  (`share/gamescope/reshade/Shaders/`) doesn't exist in this tree (Q4) — packaging/
+  (`share/gamescope-ritz/reshade/Shaders/`) doesn't exist in this tree (Q4) — packaging/
   install wiring for wherever the three new `.fx` files live is itself unscoped work.
+  (Superseded by M6: `reshade/Shaders/gamescope-ritz.fx` now ships in-repo and
+  `default_extras_install.sh` installs it to that path.)
 - **Stock community ReShade shaders are inert here** (Q1) — reusing an existing
   community effect as a shortcut requires retrofitting `source` annotations onto every
   parameter meant to be ImGui-controlled; it is not a drop-in.
