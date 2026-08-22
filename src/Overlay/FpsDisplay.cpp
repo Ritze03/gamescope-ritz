@@ -1647,27 +1647,6 @@ namespace gamescope
 		s_ulPendingReadDonePoint = 0;
 	}
 
-	// Stock ImGui::SliderFloat() sizes its frame via CalcItemWidth(), which
-	// defaults to 65% of the window width (imgui.cpp's
-	// window->DC.ItemWidthDefault) and leaves the rest of the row for the
-	// trailing label -- so every slider below stopped two-thirds of the
-	// way across the panel with no override (reported: "sliders are not
-	// spanning the full width"). Size the frame explicitly instead: full
-	// row width minus exactly what the label needs, so frame+label
-	// together reach the row's right edge -- same "row spans full width,
-	// track fills what the label/value doesn't need" fix
-	// widgets::SliderControl() applies for its own sliders (Widgets.cpp);
-	// this file's sliders are plain stock ImGui rather than that custom
-	// widget (see this function's own header comment), so the fix has to
-	// be applied per call site here instead of in one shared place.
-	static void SetStockSliderFullWidth( const char *pszLabel )
-	{
-		const ImGuiStyle &style = ImGui::GetStyle();
-		const float flLabelW = ImGui::CalcTextSize( pszLabel ).x;
-		const float flGap = flLabelW > 0.0f ? style.ItemInnerSpacing.x : 0.0f;
-		ImGui::SetNextItemWidth( std::max( 1.0f, ImGui::GetContentRegionAvail().x - flLabelW - flGap ) );
-	}
-
 	// -------------------------------------------------------------------
 	// Statistics tab (issue #40): 60-second graphs built on
 	// Metrics::GetHistorySnapshot(), gated on tab *selection* alone (see
@@ -1698,8 +1677,10 @@ namespace gamescope
 		// scope like the rest of issue #29's settings-panel helpers) because
 		// issue #40's restructure relocated every settings-panel-only helper
 		// here when it split the old single-panel FpsDisplay_DrawSettingsPanel()
-		// into DrawModulesTab()/DrawStatisticsTab() -- called from
-		// DrawModulesTab() below.
+		// into DrawModulesTab()/DrawStatisticsTab() -- issue #59 later split
+		// DrawModulesTab() itself into DrawGeneralTab()/DrawFpsTab()/
+		// DrawCpuTab()/DrawGpuTab()/DrawMediaTab(), each of which calls this
+		// helper for its own module's colour row.
 		bool DrawModuleColorPicker( const char *pszLabel, std::optional<int> &oColor, ImU32 defaultColor )
 		{
 			bool bChanged = false;
@@ -1982,11 +1963,34 @@ namespace gamescope
 			s_flFpsCeiling, 30.0f, true );
 	}
 
-	// The pre-#40 checkbox/slider content (placement, margins, row/module
-	// toggles, font/backdrop/opacity) -- unchanged from before this issue
-	// except for being pulled into its own function so it can sit behind
-	// the new "Modules" tab alongside "Statistics" below.
-	static void DrawModulesTab( config::FpsDisplaySettings &cfg, bool &bChanged )
+	// Issue #59: the old single "Modules" tab (placement/margins/row-toggles/
+	// per-module-enable/font/blend/opacity/backdrop/colours, all stacked in
+	// one long scroll -- "really clunky, unordered and bloated", the user's
+	// own words) is split into one tab per module (FPS/CPU/GPU/Media) plus a
+	// "General" tab for the settings that are genuinely shared across every
+	// module rather than belonging to one of them: placement, margins,
+	// module spacing, font size, blend mode, text opacity, and the backdrop
+	// group. Those seven are layout/paint-pipeline knobs that apply to the
+	// whole readout at once (DrawModuleBackdrop(), MeasureFpsModule() etc.
+	// all read them directly off `cfg`, never per-module) -- putting them in
+	// a per-module tab would either duplicate the same control four times or
+	// arbitrarily pick one module to own them, both worse than a fifth
+	// "General" tab holding exactly the settings that are actually general.
+	// The master "Show FPS counter" toggle also lives in General: despite
+	// its name (a pre-#27 holdover from when this readout only ever showed
+	// FPS -- left as-is here since renaming it further is a separate,
+	// cosmetic change this reorg doesn't need to make) it gates the *entire*
+	// panel below it, CPU/GPU/Media included (see FpsDisplay_AddLayer()'s
+	// own `if ( !s_Settings.fps_display.enabled ) return;`), so General is
+	// the only tab it can honestly sit in.
+	//
+	// Each per-module tab keeps exactly that module's own two concerns: its
+	// content toggles (FPS's graph/percentile rows; CPU/GPU/Media's own
+	// enabled switch) and its issue #29 colour override -- nothing here was
+	// dropped, only regrouped. See this function's sibling Draw*Tab()s below
+	// and superdoc/planning/overlay-presentation-architecture.md for the
+	// full before/after control inventory.
+	static void DrawGeneralTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		// Widgets::Checkbox, not ::Toggle: this settings block IS the design
 		// guide's own named example of the "List rows" checkbox-row pattern
@@ -2012,37 +2016,22 @@ namespace gamescope
 			bChanged = true;
 		}
 
-		SetStockSliderFullWidth( "Vertical margin" );
-		bChanged |= ImGui::SliderFloat( "Vertical margin", &cfg.margin_vertical, 0.0f, 128.0f, "%.0f px" );
-		SetStockSliderFullWidth( "Horizontal margin" );
-		bChanged |= ImGui::SliderFloat( "Horizontal margin", &cfg.margin_horizontal, 0.0f, 128.0f, "%.0f px" );
+		// Issue #61: every slider in this file now routes through the same
+		// widgets::SliderControl() the SHADERS panel uses (Widgets.h), which
+		// already spans the full row width on its own -- the old per-call
+		// SetStockSliderFullWidth() workaround for stock ImGui::SliderFloat()
+		// is gone along with the last of its call sites.
+		bChanged |= widgets::SliderFloat( "Vertical margin", &cfg.margin_vertical, 0.0f, 128.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Horizontal margin", &cfg.margin_horizontal, 0.0f, 128.0f, "%.0f px" );
 		ImGui::Spacing();
-
-		// Spec §11's "ROWS checkbox list" -- Row 2 (frametime graph) / Row 3
-		// (percentile stats), independently toggleable, sharing every other
-		// setting on this panel (font size, backdrop, blend mode, opacity)
-		// rather than getting their own.
-		bChanged |= widgets::Checkbox( "Frametime graph", &cfg.graph_enabled );
-		bChanged |= widgets::Checkbox( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
-
-		// Issue #28: per-module enable toggles for the CPU/GPU/Media
-		// modules issue #27's ordering framework reserved slots for --
-		// same List-rows checkbox pattern as the two row toggles above,
-		// independent of `enabled` (the readout as a whole).
-		ImGui::Spacing();
-		bChanged |= widgets::Checkbox( "CPU module (load, RAM)", &cfg.cpu_enabled );
-		bChanged |= widgets::Checkbox( "GPU module (usage, VRAM, temp, power)", &cfg.gpu_enabled );
-		bChanged |= widgets::Checkbox( "Media module (now playing)", &cfg.media_enabled );
 
 		// Issue #29's own "at least one new styling option" -- see
 		// ConfigSchema.h's module_spacing field comment for the two
 		// alternatives considered and rejected (corner rounding
 		// independent of the backdrop, a font-weight-per-module override).
-		SetStockSliderFullWidth( "Module spacing" );
-		bChanged |= ImGui::SliderFloat( "Module spacing", &cfg.module_spacing, 0.0f, 32.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Module spacing", &cfg.module_spacing, 0.0f, 32.0f, "%.0f px" );
 
-		SetStockSliderFullWidth( "Font size" );
-		bChanged |= ImGui::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
 
 		// Issue #29: "inverted" is a third value -- see AddTextInverted()'s
 		// own header comment for what it draws and why.
@@ -2054,8 +2043,7 @@ namespace gamescope
 			bChanged = true;
 		}
 
-		SetStockSliderFullWidth( "Text opacity" );
-		bChanged |= ImGui::SliderFloat( "Text opacity", &cfg.text_opacity, 0.0f, 1.0f );
+		bChanged |= widgets::SliderFloat( "Text opacity", &cfg.text_opacity, 0.0f, 1.0f );
 
 		// Additive pairs oddly with a filled backdrop (the backdrop itself
 		// would glow) and inverted's own outline/fill pair is already
@@ -2069,37 +2057,93 @@ namespace gamescope
 		ImGui::BeginDisabled( !bBackdropAvailable );
 		bChanged |= widgets::Checkbox( "Backdrop", &cfg.backdrop_enabled );
 		ImGui::BeginDisabled( !( bBackdropAvailable && cfg.backdrop_enabled ) );
-		SetStockSliderFullWidth( "Backdrop opacity" );
-		bChanged |= ImGui::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
-		SetStockSliderFullWidth( "Backdrop rounding" );
-		bChanged |= ImGui::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
-		SetStockSliderFullWidth( "Backdrop padding" );
-		bChanged |= ImGui::SliderFloat( "Backdrop padding", &cfg.backdrop_padding, 0.0f, 24.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
+		bChanged |= widgets::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Backdrop padding", &cfg.backdrop_padding, 0.0f, 24.0f, "%.0f px" );
 		ImGui::EndDisabled();
 		ImGui::EndDisabled();
 
-		// Issue #29: per-module colour overrides -- ignored while Inverted
-		// is active (that mode's whole point is a guaranteed-legible pair
-		// no fixed hue can improve on), same "greyed out, mode owns the
-		// treatment" precedent additive already sets for the backdrop
-		// controls above.
+		ImGui::EndDisabled(); // !cfg.enabled
+	}
+
+	// FPS module's own tab: Row 2/Row 3 toggles (frametime graph, percentile
+	// row -- both content that belongs to the FPS module specifically, see
+	// MeasureFpsModule()) plus its issue #29 colour override. There is no
+	// separate "FPS module enabled" switch to put here -- unlike CPU/GPU/
+	// Media, the FPS module has always shared the General tab's master
+	// "Show FPS counter" toggle as its own enable (kModuleOrder's first,
+	// always-present entry) rather than getting an independent one, and this
+	// reorg doesn't add one that didn't exist before.
+	static void DrawFpsTab( config::FpsDisplaySettings &cfg, bool &bChanged )
+	{
+		ImGui::BeginDisabled( !cfg.enabled );
+
+		// Spec §11's "ROWS checkbox list" -- Row 2 (frametime graph) / Row 3
+		// (percentile stats), independently toggleable, sharing every other
+		// setting on the General tab (font size, backdrop, blend mode,
+		// opacity) rather than getting their own.
+		bChanged |= widgets::Checkbox( "Frametime graph", &cfg.graph_enabled );
+		bChanged |= widgets::Checkbox( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
+
+		// Issue #29: per-module colour override -- ignored while Inverted is
+		// active (that mode's whole point is a guaranteed-legible pair no
+		// fixed hue can improve on), same "greyed out, mode owns the
+		// treatment" precedent additive already sets for General's backdrop
+		// controls.
 		ImGui::Spacing();
-		ImGui::TextUnformatted( "Module colours" );
 		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "FPS", cfg.color_fps, gamescope::palette::kAccentValue );
+		ImGui::EndDisabled();
+
+		ImGui::EndDisabled(); // !cfg.enabled
+	}
+
+	// CPU/GPU/Media tabs: each is just its own issue #28 enable toggle plus
+	// its issue #29 colour override -- genuinely all three modules have, so
+	// three near-identical small tabs rather than three near-identical large
+	// ones is an honest reflection of how little is actually per-module here
+	// (flagged in this issue's own report rather than papered over: these
+	// are lean tabs, not empty ones -- each carries a real toggle plus a
+	// real colour-override group, not a single switch alone).
+	static void DrawCpuTab( config::FpsDisplaySettings &cfg, bool &bChanged )
+	{
+		ImGui::BeginDisabled( !cfg.enabled );
+		bChanged |= widgets::Checkbox( "CPU module (load, RAM)", &cfg.cpu_enabled );
+		ImGui::Spacing();
+		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "CPU", cfg.color_cpu, gamescope::palette::kAccentIcon );
+		ImGui::EndDisabled();
+		ImGui::EndDisabled(); // !cfg.enabled
+	}
+
+	static void DrawGpuTab( config::FpsDisplaySettings &cfg, bool &bChanged )
+	{
+		ImGui::BeginDisabled( !cfg.enabled );
+		bChanged |= widgets::Checkbox( "GPU module (usage, VRAM, temp, power)", &cfg.gpu_enabled );
+		ImGui::Spacing();
+		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "GPU", cfg.color_gpu, gamescope::palette::kAccentKnob );
+		ImGui::EndDisabled();
+		ImGui::EndDisabled(); // !cfg.enabled
+	}
+
+	static void DrawMediaTab( config::FpsDisplaySettings &cfg, bool &bChanged )
+	{
+		ImGui::BeginDisabled( !cfg.enabled );
+		bChanged |= widgets::Checkbox( "Media module (now playing)", &cfg.media_enabled );
+		ImGui::Spacing();
+		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "Media", cfg.color_media, gamescope::palette::kAccentHandle );
 		ImGui::EndDisabled();
-
-		ImGui::EndDisabled();
-
-		// Persistence for any change made in this tab is handled by the
-		// caller (FpsDisplay_DrawSettingsPanel()), which shares this same
-		// bChanged flag with its own tab-selection change -- one
-		// PersistSettings() call covers both, rather than this function
-		// writing a second time for the same frame's edit.
+		ImGui::EndDisabled(); // !cfg.enabled
 	}
+
+	// Persistence for any change made in any of the tabs above is handled by
+	// the shared caller (FpsDisplay_DrawSettingsPanel()), which folds this
+	// same bChanged flag together with its own tab-selection change -- one
+	// PersistSettings() call covers whichever tab was actually edited this
+	// frame, rather than each Draw*Tab() writing a second time for the same
+	// frame's edit.
 
 	void FpsDisplay_DrawSettingsPanel()
 	{
@@ -2125,8 +2169,10 @@ namespace gamescope
 		ImGui::TextUnformatted( "System Monitor" );
 		ImGui::PopFont();
 
-		// Issue #40: "Modules" (the pre-#40 checkbox/slider content above)
-		// and "Statistics" (the new 60-second graphs) -- same
+		// Issue #59: split the old single "Modules" tab into "General" +
+		// one tab per module (FPS/CPU/GPU/Media) -- see DrawGeneralTab()'s
+		// own header comment for the full reasoning on where each setting
+		// landed. "Statistics" (#40's 60-second graphs) is unchanged. Same
 		// ImGui::BeginTabBar()/BeginTabItem() pattern PanelLog.cpp's LOG
 		// panel (#39) established, reused here rather than a second
 		// tab-bar idiom. Selection is persisted the instant it changes,
@@ -2147,6 +2193,17 @@ namespace gamescope
 		// Statistics tab's background collection (FpsDisplay_AddLayer())
 		// -- a selection that only saved on some later edit could lose a
 		// just-made tab switch if the process exits before one happens.
+		//
+		// The field itself stays a two-state "modules"/"statistics" value,
+		// unchanged by the five-way split above: only the Statistics-vs-
+		// everything-else distinction was ever load-bearing (it's what
+		// gates the 60s history collection), so General/FPS/CPU/GPU/Media
+		// all still write "modules" when selected -- MarkModulesTabActive()
+		// below, called from whichever of those five is the active tab
+		// this frame. Which *specific* one of the five was last open is
+		// intentionally not persisted; on reopen the non-Statistics side
+		// always lands back on General, the same landing spot "Modules"
+		// itself was before this split.
 		//
 		// The persisted selection is force-applied to the tab bar's own
 		// visual state (ImGuiTabItemFlags_SetSelected) once per "freshly
@@ -2169,20 +2226,53 @@ namespace gamescope
 
 		bool bChanged = false;
 
+		auto MarkModulesTabActive = [&]()
+		{
+			if ( s_Settings.overlay.system_monitor_tab != "modules" )
+			{
+				s_Settings.overlay.system_monitor_tab = "modules";
+				config::EnqueueSystemMonitorTabWrite( "modules" );
+			}
+		};
+
 		if ( ImGui::BeginTabBar( "SystemMonitorTabs" ) )
 		{
 			const bool bWantModules = s_Settings.overlay.system_monitor_tab != "statistics";
-			ImGuiTabItemFlags modulesFlags = ( bJustReopened && bWantModules ) ? ImGuiTabItemFlags_SetSelected : 0;
+			ImGuiTabItemFlags generalFlags = ( bJustReopened && bWantModules ) ? ImGuiTabItemFlags_SetSelected : 0;
 			ImGuiTabItemFlags statsFlags = ( bJustReopened && !bWantModules ) ? ImGuiTabItemFlags_SetSelected : 0;
 
-			if ( ImGui::BeginTabItem( "Modules", nullptr, modulesFlags ) )
+			if ( ImGui::BeginTabItem( "General", nullptr, generalFlags ) )
 			{
-				if ( s_Settings.overlay.system_monitor_tab != "modules" )
-				{
-					s_Settings.overlay.system_monitor_tab = "modules";
-					config::EnqueueSystemMonitorTabWrite( "modules" );
-				}
-				DrawModulesTab( cfg, bChanged );
+				MarkModulesTabActive();
+				DrawGeneralTab( cfg, bChanged );
+				ImGui::EndTabItem();
+			}
+
+			if ( ImGui::BeginTabItem( "FPS", nullptr ) )
+			{
+				MarkModulesTabActive();
+				DrawFpsTab( cfg, bChanged );
+				ImGui::EndTabItem();
+			}
+
+			if ( ImGui::BeginTabItem( "CPU", nullptr ) )
+			{
+				MarkModulesTabActive();
+				DrawCpuTab( cfg, bChanged );
+				ImGui::EndTabItem();
+			}
+
+			if ( ImGui::BeginTabItem( "GPU", nullptr ) )
+			{
+				MarkModulesTabActive();
+				DrawGpuTab( cfg, bChanged );
+				ImGui::EndTabItem();
+			}
+
+			if ( ImGui::BeginTabItem( "Media", nullptr ) )
+			{
+				MarkModulesTabActive();
+				DrawMediaTab( cfg, bChanged );
 				ImGui::EndTabItem();
 			}
 
