@@ -172,3 +172,9 @@ MouseCursor *steamcompmgr_get_server_cursor(uint32_t serverId);
 extern gamescope::ConVar<bool> cv_tearing_enabled;
 
 extern void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType type, int override_fps, bool change_refresh, bool change_fps_cap );
+
+// Issue #68: the only live-effect entry point for g_bForceRelativeMouse --
+// see this function's own definition comment in steamcompmgr.cpp for why
+// writing the global directly (as the pre-#68 PanelDisplay.cpp did) has no
+// effect once the process is already running.
+extern void steamcompmgr_set_force_relative_mouse( bool bForce );

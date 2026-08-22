@@ -1026,6 +1026,57 @@ void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType
 	update_app_target_refresh_cycle();
 }
 
+// Issue #68: g_bForceRelativeMouse (extern'd in main.hpp) has always been a
+// startup-only CLI flag (--force-grab-cursor) in practice, despite the
+// Overlay's Force Grab Cursor toggle (PanelDisplay.cpp) writing it live the
+// same way the pre-#25-fix frame limiter wrote g_nSteamCompMgrTargetFPS
+// directly. Two consumers exist, and neither gives a *live* toggle any
+// effect:
+//   - CWaylandConnector::Init()/CSDLBackend::Run() each read it exactly
+//     once, at backend startup, to call SetRelativeMouseMode(true) if it
+//     was already set by the CLI flag before the backend ever came up.
+//   - The per-frame cursor-visibility path below (this function's own
+//     caller loop, "if ( pPaintFocus->GetNestedHints() &&
+//     !g_bForceRelativeMouse )") is deliberately a no-op whenever the flag
+//     is true -- correct for the CLI-flag case (the one-time init call
+//     already put the backend in relative mode, so the per-frame flip
+//     logic should stay out of the way), but it means nothing EVER calls
+//     SetRelativeMouseMode() again after that -- so flipping the panel's
+//     toggle on mid-session writes the bool and then nothing acts on it.
+// Fix mirrors #25's: route every live write through one function that also
+// pushes the new mode to every focused window's own INestedHints right now,
+// instead of relying on a startup-only call path. Turning the toggle off
+// works either way already (the per-frame path resumes and corrects the
+// mode within a frame), but pushing it explicitly here too keeps both
+// directions equally immediate rather than one edge lagging by a frame.
+void steamcompmgr_set_force_relative_mouse( bool bForce )
+{
+	g_bForceRelativeMouse = bForce;
+
+	for ( auto &iter : g_VirtualConnectorFocuses )
+	{
+		global_focus_t *pPaintFocus = &iter.second;
+		if ( pPaintFocus->GetNestedHints() )
+			pPaintFocus->GetNestedHints()->SetRelativeMouseMode( bForce );
+	}
+}
+
+gamescope::ConCommand cc_debug_set_force_relative_mouse( "debug_set_force_relative_mouse", "Set force-relative-mouse mode (debug)",
+[](std::span<std::string_view> svArgs)
+{
+	if ( svArgs.size() < 2 )
+		return;
+
+	std::optional<bool> obForce = gamescope::Parse<bool>( svArgs[1] );
+	if ( !obForce )
+	{
+		console_log.errorf( "Failed to parse bool." );
+		return;
+	}
+
+	steamcompmgr_set_force_relative_mouse( *obForce );
+});
+
 gamescope::ConCommand cc_debug_set_fps_limit( "debug_set_fps_limit", "Set refresh cycle (debug)",
 [](std::span<std::string_view> svArgs)
 {

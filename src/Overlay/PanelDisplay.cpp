@@ -197,7 +197,10 @@ namespace gamescope
 		cv_adaptive_sync = s_CachedSettings.gamescope.vrr_enabled;
 		cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
 		cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
-		g_bForceRelativeMouse = s_CachedSettings.gamescope.force_grab_cursor;
+		// Issue #68: routed through steamcompmgr_set_force_relative_mouse()
+		// rather than writing g_bForceRelativeMouse directly -- see that
+		// function's comment for why a direct write has no live effect.
+		steamcompmgr_set_force_relative_mouse( s_CachedSettings.gamescope.force_grab_cursor );
 
 		set_color_sdr_gamut_wideness( s_CachedSettings.gamescope.sdr_gamut_wideness );
 		set_sdr_on_hdr_brightness( s_CachedSettings.gamescope.sdr_on_hdr_brightness_nits );
@@ -483,18 +486,28 @@ namespace gamescope
 
 		ImGui::Separator();
 
-		// force-grab-cursor (issue #25): promoted from a --force-grab-cursor
-		// startup-only CLI flag to a live toggle here. g_bForceRelativeMouse
-		// is read every frame on this same thread -- ShouldDrawCursor()
-		// (steamcompmgr.cpp:2531) and the cursor-nesting-hint check (:9413)
-		// -- so writing it directly, the same way SetFilter()/SetScaler() do
-		// above, has an immediate live effect; this is genuinely NOT
-		// startup-only despite the CLI flag's name suggesting otherwise, so
-		// no "needs relaunch" note is needed here.
+		// force-grab-cursor (issue #25, fixed in #68): promoted from a
+		// --force-grab-cursor startup-only CLI flag to a panel toggle here.
+		// #25's own verification only confirmed this *rendered* and *held
+		// state* -- it never confirmed cursor behavior actually changed, and
+		// it didn't: writing g_bForceRelativeMouse directly (as this used to
+		// do, matching SetFilter()/SetScaler() above) has NO live effect.
+		// Being read every frame is not the same as being ACTED on every
+		// frame -- the two actual consumers (CWaylandConnector::Init() /
+		// CSDLBackend::Run()) only ever check it once, at backend startup;
+		// the per-frame path in steamcompmgr.cpp deliberately skips itself
+		// entirely whenever this flag is true (see its own
+		// "!g_bForceRelativeMouse" guard). So a live toggle-on after startup
+		// wrote the bool and nothing then called SetRelativeMouseMode() --
+		// same shape as #25's frame limiter. Routed through
+		// steamcompmgr_set_force_relative_mouse() now, which pushes the mode
+		// to every focused window's own INestedHints immediately instead of
+		// relying on that nonexistent live path -- see its definition
+		// comment in steamcompmgr.cpp.
 		bool bForceGrabCursor = g_bForceRelativeMouse;
 		if ( widgets::Toggle( "Force Grab Cursor", &bForceGrabCursor ) )
 		{
-			g_bForceRelativeMouse = bForceGrabCursor;
+			steamcompmgr_set_force_relative_mouse( bForceGrabCursor );
 			s_CachedSettings.gamescope.force_grab_cursor = bForceGrabCursor;
 			QueueSave();
 		}
