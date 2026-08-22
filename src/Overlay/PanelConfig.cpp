@@ -114,8 +114,8 @@ namespace gamescope
 		}
 
 		// Pushes the fields this worker's own Chrome.cpp/Widgets.cpp read
-		// live (dock/display scale, window/dock/background opacity) into
-		// gamescope::palette::g_LiveTheme, notification_scale/
+		// live (dock/display scale, window-focused/unfocused/dock opacity)
+		// into gamescope::palette::g_LiveTheme, notification_scale/
 		// opacity_notifications into gamescope::Notifications::g_LiveTheme
 		// (Notifications.cpp's own consumer, wired the same way -- see that
 		// file's Notifications.h comment), and background_blur/
@@ -123,17 +123,16 @@ namespace gamescope
 		// (SettingsOverlay.cpp's own consumer -- see SettingsOverlay.h's
 		// comment) so every change is visible the very next frame -- the
 		// task's own "must take effect live, not on restart" requirement.
-		// Persisting the value here (below) still happens for all nine
-		// either way.
+		// Persisting the value here (below) still happens either way.
 		void PushLiveTheme()
 		{
 			auto &live = gamescope::palette::g_LiveTheme;
 			const auto &o = s_GeneralSettings.overlay;
 			live.flDockScale = o.dock_scale;
 			live.flDisplayScale = o.display_scale;
-			live.flWindowAlpha = o.opacity_windows;
+			live.flWindowAlphaFocused = o.opacity_windows_focused;
+			live.flWindowAlphaUnfocused = o.opacity_windows_unfocused;
 			live.flDockAlpha = o.opacity_dock;
-			live.flBackgroundVeilAlpha = o.opacity_background;
 			ImGui::GetIO().FontGlobalScale = o.display_scale;
 
 			auto &liveNotif = gamescope::Notifications::g_LiveTheme;
@@ -426,7 +425,7 @@ namespace gamescope
 
 		// General settings for gamescope-ritz itself -- window-chrome
 		// overhaul's own General-tab scale/opacity/effect controls
-		// (dock/display/notification scale, background/windows/dock/
+		// (dock/display/notification scale, window-focused/unfocused/dock/
 		// notifications opacity, background blur/darkening), grouped into
 		// spec §6 group blocks (this worker's own Widgets.h addition -- see
 		// that header's BeginGroupBlock() comment; this is the group-block
@@ -436,6 +435,12 @@ namespace gamescope
 		// Chrome.cpp/Widgets.cpp consume directly vs. which are pushed on
 		// for a sibling consumer (Notifications.*, SettingsOverlay.cpp) to
 		// read live.
+		//
+		// Two named groups, matching the user's own naming: "Transparency"
+		// (the four plain alpha sliders) and "Background Effects" (the two
+		// native-compositor passes on the game layer itself -- blur and
+		// darkening). The former "Background veil" slider (opacity_background)
+		// is gone -- see ConfigSchema.h's comment on its removal.
 		void DrawGeneralTab()
 		{
 			EnsureGeneralSettingsLoaded();
@@ -457,8 +462,8 @@ namespace gamescope
 			if ( widgets::BeginGroupBlock( "##opacity" ) )
 			{
 				ImGui::TextUnformatted( "Transparency" );
-				DrawLiveFloatSlider( "Background veil", &o.opacity_background, 0.0f, 1.0f );
-				DrawLiveFloatSlider( "Windows", &o.opacity_windows, 0.3f, 1.0f );
+				DrawLiveFloatSlider( "Window (focused)", &o.opacity_windows_focused, 0.3f, 1.0f );
+				DrawLiveFloatSlider( "Window (unfocused)", &o.opacity_windows_unfocused, 0.3f, 1.0f );
 				DrawLiveFloatSlider( "Dock", &o.opacity_dock, 0.3f, 1.0f );
 				DrawLiveFloatSlider( "Notifications", &o.opacity_notifications, 0.3f, 1.0f );
 			}

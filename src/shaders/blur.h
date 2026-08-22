@@ -502,6 +502,14 @@ vec4 gaussian_blur(sampler2D layerSampler, uint layerIdx, vec2 pos, uint radius,
 
     if (vertical)
     {
+        // Mirrors sampleLayerEx() in composite.h (ctm applied right before
+        // color mgmt): the blurred path reads layer 0's pixels straight out
+        // of the pre-blurred VKR_BLUR_EXTRA_SLOT texture via textureCond()
+        // above, bypassing sampleLayerEx() entirely -- so without this,
+        // background_darkening's ctm (SettingsOverlay.cpp) was silently
+        // dropped whenever background_blur was also active, since nothing
+        // downstream of this function ever multiplies it in.
+        color.rgb = vec4(color.rgb, 1.0f) * u_ctm[layerIdx];
         color.rgb = apply_layer_color_mgmt(color.rgb, layerIdx, colorspace);
     }
 
