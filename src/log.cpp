@@ -4,11 +4,46 @@
 #include <cerrno>
 
 #include <format>
+#include <mutex>
+#include <vector>
 
 #include "Utils/Process.h"
 #include "Utils/Defer.h"
 #include "convar.h"
 #include "log.hpp"
+
+// Issue #39: process-wide registry of every live LogScope, and every
+// "whole log" listener that should be attached to all of them -- see
+// log.hpp's AddGlobalLoggingListener() comment for why this exists.
+// One mutex guards both, since scopes and listeners can register from
+// different threads. Kept file-local rather than exposed on the class
+// itself: LogScope's own header only needs the two static methods below.
+namespace
+{
+	std::mutex &GlobalLogRegistryMutex()
+	{
+		static std::mutex s_Mutex;
+		return s_Mutex;
+	}
+
+	std::vector<LogScope *> &AllLogScopes()
+	{
+		static std::vector<LogScope *> s_vecScopes;
+		return s_vecScopes;
+	}
+
+	std::unordered_map<uintptr_t, LogScope::LoggingListenerFunc> &GlobalLogListeners()
+	{
+		static std::unordered_map<uintptr_t, LogScope::LoggingListenerFunc> s_Listeners;
+		return s_Listeners;
+	}
+
+	uintptr_t NextGlobalLogListenerId()
+	{
+		static uintptr_t s_ulNextId = 1;
+		return s_ulNextId++;
+	}
+}
 
 static constexpr std::string_view GetLogPriorityText( LogPriority ePriority )
 {
@@ -82,10 +117,38 @@ LogScope::LogScope( std::string_view psvName, std::string_view psvPrefix, LogPri
 	, m_eMaxPriority{ eMaxPriority }
 	, m_pEnableConVar{ std::make_unique<LogConVar_t>( this, psvName, eMaxPriority ) }
 {
+	std::lock_guard<std::mutex> lock( GlobalLogRegistryMutex() );
+	AllLogScopes().push_back( this );
+	// Pick up every "whole log" listener already registered -- a scope
+	// constructed after AddGlobalLoggingListener() was called (most
+	// LogScopes are file-scope statics, but not all: some are constructed
+	// lazily) still needs to end up captured.
+	for ( auto &[ ulId, func ] : GlobalLogListeners() )
+		m_LoggingListeners[ ulId ] = func;
 }
 
 LogScope::~LogScope()
 {
+	std::lock_guard<std::mutex> lock( GlobalLogRegistryMutex() );
+	std::erase( AllLogScopes(), this );
+}
+
+uintptr_t LogScope::AddGlobalLoggingListener( LoggingListenerFunc func )
+{
+	std::lock_guard<std::mutex> lock( GlobalLogRegistryMutex() );
+	const uintptr_t ulId = NextGlobalLogListenerId();
+	GlobalLogListeners()[ ulId ] = func;
+	for ( LogScope *pScope : AllLogScopes() )
+		pScope->m_LoggingListeners[ ulId ] = func;
+	return ulId;
+}
+
+void LogScope::RemoveGlobalLoggingListener( uintptr_t ulListenerId )
+{
+	std::lock_guard<std::mutex> lock( GlobalLogRegistryMutex() );
+	GlobalLogListeners().erase( ulListenerId );
+	for ( LogScope *pScope : AllLogScopes() )
+		pScope->m_LoggingListeners.erase( ulListenerId );
 }
 
 bool LogScope::Enabled( LogPriority ePriority ) const

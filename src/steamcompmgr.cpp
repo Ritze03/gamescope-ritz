@@ -98,6 +98,7 @@
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
+#include "Overlay/LogCapture.h"
 #include "Audio/Volume.h"
 #include "BufferMemo.h"
 #include "Utils/Process.h"
@@ -8715,9 +8716,29 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 	// soon as the overlay itself can open. See src/Audio/Volume.h.
 	gamescope::Audio::Init();
 
+	// Issue #39: LOG panel's Gamescope tab -- registers the global
+	// LogScope listener. Harmless if the overlay never opens the panel;
+	// the ring buffer just sits there capped at LogCapture.cpp's
+	// kMaxLines. Started here, not lazily from the panel's own draw call,
+	// so nothing logged before the overlay's first frame is missed.
+	gamescope::LogCapture::InitGamescopeCapture();
+
 	if ( ppPrimaryChildArgv && *ppPrimaryChildArgv )
 	{
-		pid_t nPrimaryChildPid = gamescope::Process::SpawnProcessInWatchdog( ppPrimaryChildArgv, false );
+		// Issue #39: LOG panel's Game tab -- best-effort capture of the
+		// primary child's stdout/stderr. See LogCapture.h's file comment
+		// for the full pipe lifecycle; StartGameCapture() itself already
+		// starts the reader threads draining before the child can write.
+		gamescope::LogCapture::GameCaptureHandles logCapture = gamescope::LogCapture::StartGameCapture();
+
+		pid_t nPrimaryChildPid = gamescope::Process::SpawnProcessInWatchdog( ppPrimaryChildArgv, false,
+			logCapture.fnPreambleInChild, logCapture.vecExtraKeepFds );
+
+		// Must run right after SpawnProcess returns, in this (gamescope's
+		// own) process -- see StartGameCapture()'s comment on why leaving
+		// these open here would mean the reader threads never see EOF.
+		if ( logCapture.fnCloseParentWriteEnds )
+			logCapture.fnCloseParentWriteEnds();
 
 		// M5: point the volume backend at the game's process tree so it can
 		// find its PipeWire stream node -- see src/Audio/Volume.h.

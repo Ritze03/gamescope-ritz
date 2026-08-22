@@ -147,6 +147,13 @@ namespace gamescope
 			live.flDockAlpha = o.opacity_dock;
 			ImGui::GetIO().FontGlobalScale = o.display_scale;
 
+			// Issue #37: hue-only accent picker. Regenerates every
+			// kAccent*/Accent() token (Palette.h/.cpp) from the new hue --
+			// must run after live.flAccentHue is set, same ordering as
+			// Chrome.cpp's EnsureLiveThemeLoaded().
+			live.flAccentHue = o.accent_hue;
+			gamescope::palette::UpdateAccentFamily();
+
 			auto &liveNotif = gamescope::Notifications::g_LiveTheme;
 			liveNotif.flScale = o.notification_scale;
 			liveNotif.flOpacity = o.opacity_notifications;
@@ -542,6 +549,58 @@ namespace gamescope
 				QueueGeneralSave();
 		}
 
+		// Issue #37: hue-only accent picker. A full-width hue gradient strip,
+		// click/drag to set *pflHueDegrees (0..360) -- sampled from the exact
+		// same OklchToImU32() the real accent family is built from (Palette.h/
+		// .cpp), at the base token's own L/C (.74/.12), so what's shown here
+		// is never an approximate rainbow that could visibly disagree with
+		// the actual accent at some hue. A bespoke ImDrawList/InvisibleButton
+		// control rather than a Widgets.h addition -- widgets::SliderFloat's
+		// spec-exact geometry has no gradient-track mode, and this is its
+		// only caller (out of this task's Widgets.* scope besides). Returns
+		// true the frame the value changes, mirroring widgets::SliderFloat's
+		// own return contract so callers can drive QueueGeneralSave() the
+		// same way.
+		bool DrawAccentHueGradient( float *pflHueDegrees )
+		{
+			ImDrawList *pDrawList = ImGui::GetWindowDrawList();
+			const ImVec2 pos = ImGui::GetCursorScreenPos();
+			const float flWidth = ImGui::GetContentRegionAvail().x;
+			const float flHeight = 14.0f;
+
+			constexpr int kStops = 24;
+			for ( int i = 0; i < kStops; i++ )
+			{
+				const ImU32 colA = gamescope::palette::OklchToImU32( 0.74f, 0.12f, ( 360.0f * i ) / kStops );
+				const ImU32 colB = gamescope::palette::OklchToImU32( 0.74f, 0.12f, ( 360.0f * ( i + 1 ) ) / kStops );
+				const float x0 = pos.x + flWidth * ( (float)i / (float)kStops );
+				const float x1 = pos.x + flWidth * ( (float)( i + 1 ) / (float)kStops );
+				pDrawList->AddRectFilledMultiColor( ImVec2( x0, pos.y ), ImVec2( x1, pos.y + flHeight ), colA, colB, colB, colA );
+			}
+
+			float flNorm = *pflHueDegrees / 360.0f;
+			flNorm = flNorm < 0.0f ? 0.0f : ( flNorm > 1.0f ? 1.0f : flNorm );
+			const float flMarkerX = pos.x + flWidth * flNorm;
+			pDrawList->AddLine( ImVec2( flMarkerX, pos.y - 2.0f ), ImVec2( flMarkerX, pos.y + flHeight + 2.0f ), gamescope::palette::White( 0.95f ), 2.0f );
+			pDrawList->AddCircleFilled( ImVec2( flMarkerX, pos.y + flHeight * 0.5f ), 3.0f, gamescope::palette::Black( 0.8f ) );
+
+			ImGui::InvisibleButton( "##accent_hue_gradient", ImVec2( flWidth, flHeight ) );
+
+			bool bChanged = false;
+			if ( ImGui::IsItemActive() )
+			{
+				float flMouseNorm = ( ImGui::GetIO().MousePos.x - pos.x ) / flWidth;
+				flMouseNorm = flMouseNorm < 0.0f ? 0.0f : ( flMouseNorm > 1.0f ? 1.0f : flMouseNorm );
+				const float flNewHue = flMouseNorm * 360.0f;
+				if ( flNewHue != *pflHueDegrees )
+				{
+					*pflHueDegrees = flNewHue;
+					bChanged = true;
+				}
+			}
+			return bChanged;
+		}
+
 		// Issue #38: display_scale doubles as the effective font-atlas scale,
 		// so on top of DrawLiveFloatSlider()'s usual live-push/persist this
 		// one slider also needs to re-bake every ImGui context's atlas --
@@ -586,6 +645,34 @@ namespace gamescope
 		{
 			EnsureGeneralSettingsLoaded();
 			auto &o = s_GeneralSettings.overlay;
+
+			if ( widgets::BeginGroupBlock( "##accent" ) )
+			{
+				ImGui::TextUnformatted( "Accent Color" );
+				ImGui::SameLine();
+				{
+					// Live swatch of the exact resulting accent -- reads
+					// gamescope::palette::kAccent directly, so it reflects
+					// whatever UpdateAccentFamily() last computed (including
+					// on process start, before this tab is ever opened).
+					const float flSwatch = ImGui::GetTextLineHeight();
+					const ImVec2 p = ImGui::GetCursorScreenPos();
+					ImDrawList *pDrawList = ImGui::GetWindowDrawList();
+					pDrawList->AddRectFilled( p, ImVec2( p.x + flSwatch, p.y + flSwatch ), gamescope::palette::kAccent, 3.0f );
+					pDrawList->AddRect( p, ImVec2( p.x + flSwatch, p.y + flSwatch ), gamescope::palette::White( 0.3f ), 3.0f );
+					ImGui::Dummy( ImVec2( flSwatch, flSwatch ) );
+				}
+
+				if ( DrawAccentHueGradient( &o.accent_hue ) )
+					QueueGeneralSave();
+				ImGui::Spacing();
+				DrawLiveFloatSlider( "Hue", &o.accent_hue, 0.0f, 360.0f, "%.0f deg" );
+				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+				ImGui::TextDisabled( "Saturation/lightness stay fixed -- only the hue rotates, so the accent"
+					" family (sliders, toggles, dock, notifications) always keeps the design's contrast." );
+				ImGui::PopFont();
+			}
+			widgets::EndGroupBlock();
 
 			if ( widgets::BeginGroupBlock( "##scale" ) )
 			{
