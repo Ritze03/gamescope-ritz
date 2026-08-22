@@ -32,6 +32,24 @@ namespace gamescope::Notifications
 		Error,
 	};
 
+	// Live-tunable scale/opacity for the toast stack (window-chrome overhaul's
+	// General tab, Config/ConfigSchema.h's OverlaySettings::notification_scale /
+	// opacity_notifications). Same live-push shape as Palette.h's g_LiveTheme:
+	// process-level and global.json-only (ApplyProfile() never touches
+	// `overlay`, so a per-game override or applied profile never changes
+	// these), seeded once from global.json by this file's own
+	// EnsureConfigLoaded(), then written straight into by
+	// PanelConfig.cpp's DrawGeneralTab() on every slider edit -- that bypass
+	// is what makes the change visible the very next frame instead of
+	// waiting on a config-generation bump that General-tab edits never
+	// trigger. This file is the only reader.
+	struct LiveTheme
+	{
+		float flScale = 1.0f;   // OverlaySettings::notification_scale
+		float flOpacity = 0.9f; // OverlaySettings::opacity_notifications
+	};
+	extern LiveTheme g_LiveTheme;
+
 	// Queues one toast for display. This is the "clean internal API...the
 	// rest of the codebase can call" the task brief asks for -- e.g.
 	// PanelConfig.cpp calls this when a profile is applied or an override is
