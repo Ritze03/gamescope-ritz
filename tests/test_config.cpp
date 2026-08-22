@@ -190,6 +190,22 @@ TEST_CASE( "SaveGlobal / LoadGlobal round-trip atomically", "[config]" )
     REQUIRE( loaded.fps_display.font_size == 24.0f );
 }
 
+TEST_CASE( "overlay.display_scale round-trips through SaveGlobal/LoadGlobal at every UI-reachable value", "[config]" )
+{
+    for ( float flValue : { 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.overlay.display_scale = flValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.overlay.display_scale == flValue );
+    }
+}
+
 TEST_CASE( "no per-game file is ever created until override is enabled", "[config]" )
 {
     TempConfigHome home;
