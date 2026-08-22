@@ -261,9 +261,13 @@ namespace gamescope::chrome
 		// passed straight to ImDrawList calls this file makes. Values come
 		// from Palette.h (superdoc/planning/ui-mockup-precise-spec.md §1's
 		// Color tokens table) -- see that header's comment for why the hex
-		// lives there once instead of being re-typed per file.
-		constexpr ImU32 kAccentU32         = gamescope::palette::kAccent;
-		constexpr ImU32 kAccentIconU32     = gamescope::palette::kAccentIcon;
+		// lives there once instead of being re-typed per file. No longer
+		// aliased into local `constexpr`s (issue #37: kAccent/kAccentIcon are
+		// hue-live now, not compile-time constants) -- every former use of
+		// kAccentU32/kAccentIconU32 below now reads gamescope::palette::
+		// kAccent/kAccentIcon directly, so a hue change reaches these draws
+		// too instead of the alias going stale at whatever hue was live when
+		// this translation unit's statics ran.
 		// Dock icon idle/hover -- spec §2 "icon idle" dock row (.62), §12
 		// hover invention (+80% on hover, applied here as the glyph's own
 		// alpha rather than a full white@80%).
@@ -446,7 +450,12 @@ namespace gamescope::chrome
 			pLiveTheme->flWindowAlphaFocused = s.overlay.opacity_windows_focused;
 			pLiveTheme->flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
 			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
+			pLiveTheme->flAccentHue = s.overlay.accent_hue;
 			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
+			// Regenerates kAccent/kAccentEdge/etc. (Palette.h) for the hue
+			// just loaded -- issue #37. Must run after flAccentHue is set
+			// above, and before this process ever draws a frame using them.
+			gamescope::palette::UpdateAccentFamily();
 
 			// Issue #35: seed the saved-geometry table TiledDefaultPos()/
 			// OpeningSize() below consult on each panel's first-ever-shown
@@ -541,7 +550,7 @@ namespace gamescope::chrome
 			// approximated as one 10x10 rect behind it @25% accent.
 			const ImVec2 dotCenter( flCursorX + kDotSize * 0.5f, flCenterY );
 			pDrawList->AddRectFilled( dotCenter - ImVec2( 5.0f, 5.0f ), dotCenter + ImVec2( 5.0f, 5.0f ), ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
-			pDrawList->AddRectFilled( dotCenter - ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), dotCenter + ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), kAccentU32 );
+			pDrawList->AddRectFilled( dotCenter - ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), dotCenter + ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), gamescope::palette::kAccent );
 			flCursorX += kDotSize + 10.0f; // spec §3: 10px row gap in title bars
 
 			// Title -- Mono 600 11 UPPER, spec §2: @86% unfocused / 94% focused.
@@ -1070,7 +1079,7 @@ namespace gamescope::chrome
 				: ( bHovered ? kDockHoverFillU32 : kDockIdleFillU32 );
 			const ImU32 borderCol = bActive ? ImGui::GetColorU32( gamescope::palette::Accent( 0.50f ) )
 				: ( bHovered ? kHairlineStrongU32 : kHairlineU32 );
-			const ImU32 iconCol = bActive ? kAccentIconU32 : ( bHovered ? kIconHoverU32 : kIconIdleU32 );
+			const ImU32 iconCol = bActive ? gamescope::palette::kAccentIcon : ( bHovered ? kIconHoverU32 : kIconIdleU32 );
 
 			pDrawList->AddRectFilled( pos, ImVec2( pos.x + flSize, pos.y + flSize ), bgCol );
 			pDrawList->AddRect( pos, ImVec2( pos.x + flSize, pos.y + flSize ), borderCol );
@@ -1150,7 +1159,7 @@ namespace gamescope::chrome
 			pDrawList->AddRectFilled( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), kDockIdleFillU32 );
 			pDrawList->AddRect( pos, ImVec2( pos.x + kButtonSize, pos.y + kButtonSize ), kHairlineU32 );
 			DrawIcon( pDrawList, Icon::Settings, ImVec2( pos.x + kButtonSize * 0.5f, pos.y + kButtonSize * 0.5f ),
-				kButtonSize * 0.4f, kAccentU32 );
+				kButtonSize * 0.4f, gamescope::palette::kAccent );
 			ImGui::Dummy( ImVec2( kButtonSize, kButtonSize ) );
 		}
 
