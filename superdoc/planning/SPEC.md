@@ -178,6 +178,31 @@ Straightforward once the above exists: ImGui renders into an offscreen
 waits on the same timeline point before sampling it — no different in kind from any
 other layer's texture, just a new producer of one.
 
+### ImGui version and widget behavior (note added 2026-08-22, answering a standing question)
+
+This is real, stock (non-docking) **Dear ImGui v1.92.9b**, vendored via
+`subprojects/imgui.wrap` (`revision = f1cc2ae15e53a861a874c3034aae6798fde194ab`, per
+that wrap file's own comment: "stock (non-docking) branch tag v1.92.9b — see SPEC.md's
+Architecture section for why docking is deliberately not used here"), built against
+ImGui's own Vulkan backend (`backends/imgui_impl_vulkan.cpp`, see the vendoring
+paragraph above) — not a from-scratch reimplementation and not a fork with behavioral
+patches. The overlay's own hand-drawn look (flat/square/hairline chrome, no rounded
+corners, custom sliders/toggles/segmented controls) comes entirely from `ImDrawList`
+calls in `src/Overlay/Widgets.cpp` and `src/Overlay/Chrome.cpp`, not from a modified
+ImGui core.
+
+Every custom widget in `Widgets.cpp` is built on ImGui's own internal interaction
+primitives rather than reimplementing hit-testing/hover/press/keyboard-nav from
+scratch: `ImGui::ButtonBehavior()` (`Toggle()`/`Checkbox()`/`DrawTitleGlyphButton()`-
+style buttons), `ImGui::SliderBehavior()` (the custom slider's drag/keyboard/gamepad
+math), `ImGui::ItemAdd()`/`ImGui::ItemHoverable()` (layout/clipping/hover
+registration), and `ImGui::RenderNavCursor()` (the keyboard-focus outline) — all
+`imgui_internal.h` calls, confirmed present in `Widgets.cpp`. The practical
+consequence: hover, press, keyboard navigation, and gamepad navigation on every
+custom widget in this overlay match stock ImGui's real behavior (the same functions
+`imgui_widgets.cpp`'s own built-in `SliderFloat`/`Checkbox`/etc. call internally),
+only the drawing is custom.
+
 ---
 
 ## Per-feature sections
