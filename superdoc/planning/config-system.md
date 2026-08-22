@@ -178,7 +178,8 @@ scripting console) and `SPIRV-Headers` — no JSON library either place.
 system (`src/Script/Script.h:37`, `CScriptManager`) already has a `Config.Base` /
 `Config.KnownDisplays` Lua-table convention (`Script.cpp:103`-`107`) and an established
 user-config directory precedent: `cv_script_use_user_scripts`
-(`Script.cpp:18`) gates loading `$XDG_CONFIG_HOME/gamescope/scripts` via
+(`Script.cpp:18`) gates loading `$XDG_CONFIG_HOME/gamescope-ritz/scripts` (falling back to
+the plain unnamespaced `$XDG_CONFIG_HOME/gamescope/scripts` for a pre-existing setup) via
 `gamescope::GetConfigDir()` (`src/Utils/DirHelpers.h:10`/`.cpp:31`, itself
 `XDG_CONFIG_HOME` with a `$HOME/.config` fallback). This is real precedent for "gamescope
 already loads user files from a config directory," but it's the wrong shape for this

@@ -936,23 +936,48 @@ bool ReshadeEffectPipeline::init(CVulkanDevice *device, const ReshadeEffectKey &
     pp.add_macro_definition("GAMESCOPE", "1");
     pp.add_macro_definition("GAMESCOPE_SDR_ON_HDR_NITS", std::to_string(g_ColorMgmt.pending.flSDROnHDRBrightness));
 
-    std::string gamescope_reshade_share_path = "/share/gamescope/reshade";
+    // Namespaced to gamescope-ritz (not plain "gamescope") so this fork's
+    // data dir never collides with a packaged /usr/bin/gamescope's own
+    // share/gamescope/reshade -- see default_extras_install.sh, which
+    // installs this repo's reshade/ tree to $prefix/share/gamescope-ritz/reshade.
+    std::string gamescope_reshade_share_path = "/share/gamescope-ritz/reshade";
+    // Fallback (checked after the namespaced path above, at both local-usr
+    // and global-usr scope): a plain, unnamespaced .../gamescope/reshade
+    // tree a user already had shaders in before this rename. Falling back
+    // costs little and keeps an existing shader library working instead of
+    // silently going unread.
+    std::string gamescope_reshade_share_path_fallback = "/share/gamescope/reshade";
 
     std::string local_reshade_path = gamescope::GetLocalUsrDir() + gamescope_reshade_share_path;
+    std::string local_reshade_path_fallback = gamescope::GetLocalUsrDir() + gamescope_reshade_share_path_fallback;
     std::string global_reshade_path = gamescope::GetUsrDir() + gamescope_reshade_share_path;
+    std::string global_reshade_path_fallback = gamescope::GetUsrDir() + gamescope_reshade_share_path_fallback;
 
     pp.add_include_path(local_reshade_path + "/Shaders");
+    pp.add_include_path(local_reshade_path_fallback + "/Shaders");
 	pp.add_include_path(global_reshade_path + "/Shaders");
+    pp.add_include_path(global_reshade_path_fallback + "/Shaders");
 
     std::string local_shader_file_path = local_reshade_path + "/Shaders/" + key.path;
+    std::string local_shader_file_path_fallback = local_reshade_path_fallback + "/Shaders/" + key.path;
     std::string global_shader_file_path = global_reshade_path + "/Shaders/" + key.path;
+    std::string global_shader_file_path_fallback = global_reshade_path_fallback + "/Shaders/" + key.path;
 
 	if (!pp.append_file(local_shader_file_path))
 	{
-        if (!pp.append_file(global_shader_file_path))
+        if (!pp.append_file(local_shader_file_path_fallback))
         {
-            reshade_log.errorf("Failed to load reshade fx file: %s (%s or %s) - %s", key.path.c_str(), local_shader_file_path.c_str(), global_shader_file_path.c_str(), pp.errors().c_str());
-            return false;
+            if (!pp.append_file(global_shader_file_path))
+            {
+                if (!pp.append_file(global_shader_file_path_fallback))
+                {
+                    reshade_log.errorf("Failed to load reshade fx file: %s (tried %s, %s, %s, %s) - %s", key.path.c_str(),
+                        local_shader_file_path.c_str(), local_shader_file_path_fallback.c_str(),
+                        global_shader_file_path.c_str(), global_shader_file_path_fallback.c_str(),
+                        pp.errors().c_str());
+                    return false;
+                }
+            }
         }
 	}
 

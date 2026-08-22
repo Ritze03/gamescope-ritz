@@ -48,9 +48,12 @@
 #include "Overlay/Fonts.h"
 #include "Overlay/Widgets.h"
 #include "Overlay/Chrome.h"
+#include "Overlay/Palette.h"
+#include "Config/ConfigManager.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <memory>
 #include <mutex>
@@ -98,6 +101,30 @@ namespace gamescope
 			cv_settings_overlay_visible.SetValue( !cv_settings_overlay_visible.Get() );
 		} );
 
+	// Keyboard-control toggles (see ConfigSchema.h's OverlaySettings comment
+	// for the interpretation these implement, and SettingsOverlay.h for the
+	// exact contract each has with wlserver.cpp).
+	//
+	// Seeded from global.json once at startup (below, alongside the startup
+	// announcement's own config read -- see EnsureStartupAnnounceConfigLoaded())
+	// rather than left at their compiled-in defaults forever: both are
+	// process-level "how the overlay behaves" preferences, the same class as
+	// fade_ms, so a value the user has previously chosen (were a future
+	// panel to expose these) should stick across launches. Runtime changes
+	// via the console/gamescopectl only affect the current session, exactly
+	// like every other ConVar in this codebase -- persisting a live edit
+	// back to disk is future work for whichever panel ends up hosting these
+	// (see this task's report).
+	static ConVar<bool> cv_settings_overlay_capture_keyboard(
+		"settings_overlay_capture_keyboard", true,
+		"true (default): the overlay captures all keyboard input while open, none reaches the game (M2 behavior). "
+		"false: keyboard input passes through to the game even while the overlay is open (mouse capture is unaffected). "
+		"Ctrl+Shift+O always still works to close the overlay either way." );
+
+	static ConVar<bool> cv_settings_overlay_keyboard_nav(
+		"settings_overlay_keyboard_nav", true,
+		"Whether Tab/arrow-key ImGui keyboard navigation of the overlay's own widgets is enabled while it holds keyboard capture." );
+
 	void SettingsOverlay_ToggleVisible()
 	{
 		cv_settings_overlay_visible.SetValue( !cv_settings_overlay_visible.Get() );
@@ -106,6 +133,11 @@ namespace gamescope
 	bool SettingsOverlay_IsCapturingInput()
 	{
 		return g_bSettingsOverlayCapturing.load( std::memory_order_acquire );
+	}
+
+	bool SettingsOverlay_IsCapturingKeyboard()
+	{
+		return SettingsOverlay_IsCapturingInput() && cv_settings_overlay_capture_keyboard.Get();
 	}
 
 	// Fade in/out on toggle (decision: replaces the dropped backdrop-blur
@@ -140,8 +172,13 @@ namespace gamescope
 	// value -- u_blur_radius=21 selects the table whose offsets extend to
 	// ~20.4px (the "radius<=21" branch), landing almost exactly on the design
 	// guide's specified blur(20-22px). Solving (blurRadius*2)-1=21 gives
-	// blurRadius=11, so that's the constant used below.
-	static constexpr int k_nOverlayBlurRadius = 11;
+	// blurRadius=11, so that's the constant used below -- now as the CEILING
+	// of the range OverlaySettings::background_blur (0..1, General tab) maps
+	// onto, rather than a fixed value: background_blur=1.0 reproduces the
+	// original design-matched ~20.4px blur exactly, background_blur=0.0
+	// means no blur pass is requested at all (see the radius computation
+	// below), and everything in between scales linearly.
+	static constexpr int k_nMaxOverlayBlurRadius = 11;
 
 	// ponytail: this blurs the *entire* base layer uniformly while the
 	// overlay is visible, not a per-window region sampled from directly
@@ -229,6 +266,29 @@ namespace gamescope
 	static float s_flCurrentAlpha = 0.0f;
 
 	static uint64_t s_ulLastFrameTimeNanos = 0;
+
+	// Definition of the live blur/darkening state declared in
+	// SettingsOverlay.h -- see that header's comment for the full seed-once/
+	// push-on-edit contract this follows (Palette.h's/Notifications.h's
+	// g_LiveTheme shape).
+	BackgroundLiveTheme g_BackgroundLiveTheme;
+
+	static bool s_bBackgroundLiveThemeLoaded = false;
+
+	static void EnsureBackgroundLiveThemeLoaded()
+	{
+		if ( s_bBackgroundLiveThemeLoaded )
+			return;
+		s_bBackgroundLiveThemeLoaded = true;
+		// Seeded straight from global.json -- this only ever needs to run
+		// once (PanelConfig.cpp's DrawGeneralTab() keeps g_BackgroundLiveTheme
+		// current after this), and background_blur/background_darkening are
+		// process-level/global.json-only fields (ConfigSchema.h's
+		// OverlaySettings comment).
+		const config::OverlaySettings &o = config::LoadGlobal().overlay;
+		g_BackgroundLiveTheme.flBlur = o.background_blur;
+		g_BackgroundLiveTheme.flDarkening = o.background_darkening;
+	}
 
 	// This file's own ImGui context. Held explicitly rather than relying on
 	// whatever happens to be globally current: there are TWO ImGui contexts in
@@ -442,9 +502,13 @@ namespace gamescope
 	}
 
 	// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow() as the
-	// dock's "FPS HUD" panel (see Overlay/Chrome.h) -- SPEC.md's UI structure
-	// lists an "FPS HUD panel" hosting exactly FpsDisplay_DrawSettingsPanel()'s
-	// controls, which this window has done since M4.
+	// dock's "System Monitor" panel (see Overlay/Chrome.h) -- SPEC.md's UI
+	// structure lists an "FPS HUD panel" hosting exactly
+	// FpsDisplay_DrawSettingsPanel()'s controls, which this window has done
+	// since M4; issue #27 renamed the panel/dock label/PanelId to "System
+	// Monitor" (the panel now hosts a module framework, not just FPS) while
+	// leaving the underlying FpsDisplay* file/function names alone (see
+	// FpsDisplay.h's own header comment for why).
 	//
 	// The M1 render-shell scaffolding that used to live in this window
 	// (the "Settings overlay render shell -- Milestone 1" heading, its proof-
@@ -458,13 +522,188 @@ namespace gamescope
 	// keyboard capture now.
 	static void DrawFpsHudPanel()
 	{
-		if ( !gamescope::chrome::BeginPanelWindow( "FPS HUD", gamescope::chrome::PanelId::Fps,
+		if ( !gamescope::chrome::BeginPanelWindow( "SYSTEM MONITOR", gamescope::chrome::PanelId::SystemMonitor,
 			ImVec2( 64.0f, 64.0f ), ImVec2( 460.0f, 640.0f ) ) )
 			return;
 
 		gamescope::FpsDisplay_DrawSettingsPanel(); // M4 (see FpsDisplay.h)
 
 		gamescope::chrome::EndPanelWindow();
+	}
+
+	// ----------------------------------------------------------------------
+	// Startup announcement: a brief, self-dismissing "gamescope-ritz is
+	// active" toast with the Ctrl+Shift+O hint, shown once per process
+	// launch regardless of whether the user ever opens the settings overlay
+	// (task brief: "on start, show some kind of animation ... with a hint on
+	// how to open the overlay"). Drawn straight onto the same offscreen
+	// texture/ImGui context/frame as the settings overlay itself (no second
+	// Vulkan pipeline, no second timeline handshake) but entirely
+	// independent of cv_settings_overlay_visible -- see
+	// SettingsOverlay_AddLayer()'s bNeedsRender/bDrawPanels split below.
+	// ----------------------------------------------------------------------
+
+	// Total budget kept short and one-shot deliberately (task brief: "appears
+	// over the game every launch, so anything slow or loud becomes an
+	// irritation by the tenth time"): ~2.6s end to end, most of it the
+	// (non-blocking, purely cosmetic) hold phase.
+	static constexpr unsigned int k_uStartupAnnounceFadeInMs  = 280;
+	static constexpr unsigned int k_uStartupAnnounceHoldMs    = 1800;
+	static constexpr unsigned int k_uStartupAnnounceFadeOutMs = 550;
+	static constexpr unsigned int k_uStartupAnnounceTotalMs =
+		k_uStartupAnnounceFadeInMs + k_uStartupAnnounceHoldMs + k_uStartupAnnounceFadeOutMs;
+
+	static bool s_bStartupAnnounceConfigLoaded = false;
+	static bool s_bStartupAnnounceEnabled = true;
+	static bool s_bStartupAnnounceStarted = false;
+	static unsigned int s_uStartupAnnounceStartMs = 0;
+
+	// Lazy, one-time read of the disable switch -- matches the established
+	// pattern every panel's own EnsureConfigLoaded() already uses for its
+	// first draw (see e.g. PanelDisplay.cpp), so this isn't a new kind of
+	// blocking-I/O-on-the-steamcompmgr-thread exception, just the same one.
+	// LoadGlobal() directly, not ResolveEffective() -- OverlaySettings is a
+	// process-level preference that only ever lives in global.json (see
+	// ConfigSchema.h's comment on OverlaySettings), so a per-game override
+	// file is never the right place to look this up.
+	static void EnsureStartupAnnounceConfigLoaded()
+	{
+		if ( s_bStartupAnnounceConfigLoaded )
+			return;
+		s_bStartupAnnounceConfigLoaded = true;
+		s_bStartupAnnounceEnabled = config::LoadGlobal().overlay.startup_announce_enabled;
+	}
+
+	// flT in 0..1: fade-in (ease-out cubic, feels snappier/more "game-like"
+	// than linear for a slide-and-fade entrance), full hold, then a plain
+	// linear fade-out. Returns 0 once the whole thing has finished.
+	static float StartupAnnounceAlpha( unsigned int uElapsedMs )
+	{
+		if ( uElapsedMs < k_uStartupAnnounceFadeInMs )
+		{
+			const float t = float( uElapsedMs ) / float( k_uStartupAnnounceFadeInMs );
+			return 1.0f - ( 1.0f - t ) * ( 1.0f - t ) * ( 1.0f - t );
+		}
+
+		const unsigned int uAfterHold = k_uStartupAnnounceFadeInMs + k_uStartupAnnounceHoldMs;
+		if ( uElapsedMs < uAfterHold )
+			return 1.0f;
+
+		if ( uElapsedMs < k_uStartupAnnounceTotalMs )
+		{
+			const float t = float( uElapsedMs - uAfterHold ) / float( k_uStartupAnnounceFadeOutMs );
+			return 1.0f - t;
+		}
+
+		return 0.0f;
+	}
+
+	// Draws the toast card with the ImGui foreground draw list of the
+	// current frame -- deliberately not an ImGui::Begin() window: it needs
+	// no title bar, no focus/Z-order interaction with the dock/panel windows
+	// (Chrome.h's territory, not touched here), and no input at all (it is
+	// purely decorative and self-dismissing). Every color this draws bakes
+	// flAlpha in directly (rather than relying on the FrameInfo_t layer's
+	// own opacity, which SettingsOverlay_AddLayer() may set to something
+	// else entirely if the settings overlay's own panels happen to be
+	// rendering in the same frame -- see that function's comment) so the
+	// toast's own fade is correct standalone regardless.
+	static void DrawStartupAnnounce( float flAlpha, unsigned int uElapsedMs )
+	{
+		flAlpha = std::clamp( flAlpha, 0.0f, 1.0f );
+		if ( flAlpha <= 0.0f )
+			return;
+
+		ImDrawList *pDrawList = ImGui::GetForegroundDrawList();
+
+		// Slide down into place on the way in (ease-out, matching
+		// StartupAnnounceAlpha's own curve so the motion and the fade read
+		// as one movement); holds still once fully in; drifts up slightly on
+		// the way out. Purely a Y offset -- keeps this a simple, cheap
+		// animation rather than needing a transform on every draw call.
+		float flSlideOffsetY = 0.0f;
+		if ( uElapsedMs < k_uStartupAnnounceFadeInMs )
+		{
+			const float t = float( uElapsedMs ) / float( k_uStartupAnnounceFadeInMs );
+			const float eased = 1.0f - ( 1.0f - t ) * ( 1.0f - t ) * ( 1.0f - t );
+			flSlideOffsetY = ( 1.0f - eased ) * -18.0f;
+		}
+		else
+		{
+			const unsigned int uAfterHold = k_uStartupAnnounceFadeInMs + k_uStartupAnnounceHoldMs;
+			if ( uElapsedMs > uAfterHold )
+			{
+				const float t = std::clamp( float( uElapsedMs - uAfterHold ) / float( k_uStartupAnnounceFadeOutMs ), 0.0f, 1.0f );
+				flSlideOffsetY = -8.0f * t;
+			}
+		}
+
+		const float flCardWidth = 480.0f;
+		const float flPadX = 22.0f;
+		const float flPadTop = 16.0f;
+		const char *pszTitle = "GAMESCOPE-RITZ ACTIVE";
+		const char *pszHint = "opens the settings overlay";
+		const char *pszHotkey = "CTRL + SHIFT + O";
+
+		ImFont *pTitleFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
+		ImFont *pHintFont = gamescope::fonts::Get( gamescope::fonts::Style::Meta );
+		const float flTitleSize = 20.0f;
+		const float flHintSize = 13.0f;
+
+		const ImVec2 titleSize = pTitleFont->CalcTextSizeA( flTitleSize, FLT_MAX, 0.0f, pszTitle );
+		const ImVec2 hotkeySize = pHintFont->CalcTextSizeA( flHintSize, FLT_MAX, 0.0f, pszHotkey );
+		const ImVec2 hintSize = pHintFont->CalcTextSizeA( flHintSize, FLT_MAX, 0.0f, pszHint );
+
+		const float flUnderlineY = flPadTop + titleSize.y + 10.0f;
+		const float flHintY = flUnderlineY + 12.0f;
+		const float flCardHeight = flHintY + hintSize.y + 14.0f;
+
+		const float flOutputWidth = (float)s_uTextureWidth;
+		const float flCardX = ( flOutputWidth - flCardWidth ) * 0.5f;
+		const float flCardY = 56.0f + flSlideOffsetY;
+
+		const ImVec2 cardMin( flCardX, flCardY );
+		const ImVec2 cardMax( flCardX + flCardWidth, flCardY + flCardHeight );
+
+		// Card: surface fill + hairline border, same tokens the rest of the
+		// overlay's chrome uses (Palette.h) so this reads as the same
+		// product, not a bolted-on splash screen.
+		pDrawList->AddRectFilled( cardMin, cardMax, palette::Black( 0.35f * flAlpha ), 4.0f );
+		pDrawList->AddRectFilled( cardMin, cardMax, IM_COL32( 0x09, 0x0A, 0x0C, (int)( 0.90f * flAlpha * 255.0f + 0.5f ) ), 4.0f );
+		pDrawList->AddRect( cardMin, cardMax, palette::White( 0.10f * flAlpha ), 4.0f );
+
+		// Status dot -- the same 6x6 square dot used in the overlay's own
+		// title bars (Widgets::ReadoutStrip's bLeadingDot), so "the product
+		// is alive" reads consistently everywhere it appears.
+		const float flDotSize = 6.0f;
+		const ImVec2 dotMin( cardMin.x + flPadX, cardMin.y + flPadTop + titleSize.y * 0.5f - flDotSize * 0.5f );
+		pDrawList->AddRectFilled( dotMin, ImVec2( dotMin.x + flDotSize, dotMin.y + flDotSize ), palette::Accent( flAlpha ) );
+
+		const ImVec2 titlePos( dotMin.x + flDotSize + 10.0f, cardMin.y + flPadTop );
+		pDrawList->AddText( pTitleFont, flTitleSize, titlePos, palette::Text( 0.94f * flAlpha ), pszTitle );
+
+		// Animated accent underline: grows in from the left during the
+		// fade-in/hold, matching the design guide's accent-underline
+		// treatment elsewhere (dock active top edge, focused-group left
+		// edge) -- this is the one clearly "animated, not just faded" touch
+		// beyond the slide, per the task's "animate it, don't just print
+		// static text" instruction.
+		const float flUnderlineGrowMs = k_uStartupAnnounceFadeInMs + 260.0f;
+		const float flGrowT = std::clamp( float( uElapsedMs ) / flUnderlineGrowMs, 0.0f, 1.0f );
+		const float flUnderlineWidth = ( flCardWidth - flPadX * 2.0f ) * flGrowT;
+		const float flUnderlineY0 = cardMin.y + flUnderlineY;
+		pDrawList->AddRectFilled(
+			ImVec2( cardMin.x + flPadX, flUnderlineY0 ),
+			ImVec2( cardMin.x + flPadX + flUnderlineWidth, flUnderlineY0 + 2.0f ),
+			palette::Accent( 0.85f * flAlpha ) );
+
+		// Hint line: "CTRL + SHIFT + O" in accent (matches the hotkey-glyph
+		// treatment the dock uses for its own per-button hotkeys) followed
+		// by the dim explainer in Meta.
+		const ImVec2 hotkeyPos( cardMin.x + flPadX, cardMin.y + flHintY );
+		pDrawList->AddText( pHintFont, flHintSize, hotkeyPos, palette::Accent( 0.9f * flAlpha ), pszHotkey );
+		const ImVec2 hintPos( hotkeyPos.x + hotkeySize.x + 8.0f, cardMin.y + flHintY );
+		pDrawList->AddText( pHintFont, flHintSize, hintPos, palette::Text( 0.55f * flAlpha ), pszHint );
 	}
 
 	// Records the ImGui draw into s_pOverlayTexture on the general queue and
@@ -573,9 +812,42 @@ namespace gamescope
 	// ImGuiIO -- see its own definition for the full comment.
 	static void DrainInputQueue();
 
+	// Caches the CTM blob background_darkening builds (see
+	// SettingsOverlay_AddLayer() below) so a steady-state frame -- the
+	// overwhelmingly common case once the fade-in finishes -- reuses the
+	// same shared_ptr instead of asking the backend for a fresh blob every
+	// single frame (a real drmModeCreatePropertyBlob() ioctl + a matching
+	// free of the old one on the DRM backend; see BackendBlob's own "no-op
+	// on non-DRM backends" comment in backend.h for why this is cheap
+	// everywhere else but still worth not doing 60+ times a second on the
+	// target this ships to). Only rebuilds when flStrength has visibly
+	// moved since the last call -- e.g. during the fade in/out ramp -- via a
+	// coarser-than-float-epsilon threshold, since nothing downstream can
+	// tell a <1/512 change in dim strength apart anyway.
+	static std::shared_ptr<gamescope::BackendBlob> GetDarkeningCtmBlob( float flStrength )
+	{
+		static std::shared_ptr<gamescope::BackendBlob> s_pBlob;
+		static float s_flCachedStrength = -1.0f;
+
+		if ( !s_pBlob || std::fabs( flStrength - s_flCachedStrength ) > ( 1.0f / 512.0f ) )
+		{
+			const float k = 1.0f - flStrength;
+			s_pBlob = GetBackend()->CreateBackendBlob( glm::mat3x4
+			{
+				k, 0, 0, 0,
+				0, k, 0, 0,
+				0, 0, k, 0
+			} );
+			s_flCachedStrength = flStrength;
+		}
+
+		return s_pBlob;
+	}
+
 	void SettingsOverlay_AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		UpdateFadeAlpha();
+		EnsureBackgroundLiveThemeLoaded();
 
 		// Save/restore the globally-current ImGui context across this entire
 		// pass (see s_pImguiContext). Covers DrainInputQueue() below too, which
@@ -595,7 +867,26 @@ namespace gamescope
 		if ( s_bImguiInitialized )
 			DrainInputQueue();
 
-		if ( s_flCurrentAlpha <= 0.0f )
+		// Startup announcement: timed independently of the settings
+		// overlay's own visibility (cv_settings_overlay_visible /
+		// s_flCurrentAlpha) -- it must play even if the user never opens the
+		// overlay this session. Started the first time this function ever
+		// runs (effectively process start, since paint_all() calls this
+		// every frame from very early on).
+		EnsureStartupAnnounceConfigLoaded();
+		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted )
+		{
+			s_bStartupAnnounceStarted = true;
+			s_uStartupAnnounceStartMs = get_time_in_milliseconds();
+		}
+		const unsigned int uStartupElapsedMs = s_bStartupAnnounceStarted
+			? ( get_time_in_milliseconds() - s_uStartupAnnounceStartMs )
+			: 0;
+		const bool bStartupAnnounceActive = s_bStartupAnnounceStarted && uStartupElapsedMs < k_uStartupAnnounceTotalMs;
+		const float flStartupAlpha = bStartupAnnounceActive ? StartupAnnounceAlpha( uStartupElapsedMs ) : 0.0f;
+
+		const bool bDrawPanels = s_flCurrentAlpha > 0.0f;
+		if ( !bDrawPanels && flStartupAlpha <= 0.0f )
 			return;
 
 		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
@@ -619,17 +910,33 @@ namespace gamescope
 		io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
 		io.DeltaTime = flDeltaTime;
 
+		// Keyboard-control toggle (see ConfigSchema.h's OverlaySettings
+		// comment): purely an ImGui-side flag, re-applied every frame this
+		// context draws so a runtime console/gamescopectl change takes
+		// effect immediately -- never touches wlserver.cpp's own capture
+		// routing (SettingsOverlay_IsCapturingKeyboard()), so this can never
+		// regress M2's release-safety guarantees.
+		if ( cv_settings_overlay_keyboard_nav.Get() )
+			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+		else
+			io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
-		DrawFpsHudPanel();
-		PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
-		PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
-		PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
-		PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
-		// M8 part 3 (issue #15): drawn last so the dock's own window lands on
-		// top of the panel windows above in ImGui's per-frame Begin-order Z
-		// stack -- see Overlay/Chrome.h's DrawDock() comment.
-		chrome::DrawDock();
+		if ( bDrawPanels )
+		{
+			DrawFpsHudPanel();
+			PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
+			PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
+			PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
+			PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
+			// M8 part 3 (issue #15): drawn last so the dock's own window lands on
+			// top of the panel windows above in ImGui's per-frame Begin-order Z
+			// stack -- see Overlay/Chrome.h's DrawDock() comment.
+			chrome::DrawDock();
+		}
+		if ( flStartupAlpha > 0.0f )
+			DrawStartupAnnounce( flStartupAlpha, uStartupElapsedMs );
 		ImGui::Render();
 
 		if ( !RenderAndSubmit() )
@@ -643,7 +950,17 @@ namespace gamescope
 		layer->zpos = g_zposSettingsOverlay;
 		layer->offset = { 0.0f, 0.0f };
 		layer->scale = { 1.0f, 1.0f };
-		layer->opacity = s_flCurrentAlpha;
+		// The settings-panel layer's own fade always drives this when the
+		// panels are actually drawing this frame; when only the startup
+		// toast is (the overwhelmingly common case -- the panels are closed
+		// by default), the toast's own baked-in-per-pixel alpha
+		// (DrawStartupAnnounce()'s flAlpha parameter) is the only fade that
+		// matters, so the layer itself can stay fully opaque. The one edge
+		// case this doesn't perfectly decouple -- the user toggles the
+		// overlay open in the ~2.6s the toast is still playing -- leaves the
+		// toast very slightly extra-dimmed by s_flCurrentAlpha's own fade-in
+		// for a moment; not worth a second Vulkan layer to close.
+		layer->opacity = bDrawPanels ? s_flCurrentAlpha : 1.0f;
 		layer->filter = GamescopeUpscaleFilter::LINEAR;
 		layer->blackBorder = false;
 		layer->applyColorMgmt = false; // drm-plane-only; not exercised by the SDL/vkcube M1 test path
@@ -656,14 +973,19 @@ namespace gamescope
 		layer->hdr_metadata_blob = nullptr;
 		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
 
-		// EXPERIMENTAL: request the compositor's existing blur-behind pass
-		// (see k_nOverlayBlurRadius's comment above for why this reuses
-		// Steam's own blurLayer0 primitive instead of a new one). Ramp the
-		// radius by the same s_flCurrentAlpha the panel layer's own opacity
-		// just used above, so the blur fades in/out in lockstep with the
-		// panels instead of snapping to full strength the instant the fade
-		// starts -- otherwise a hard-edged full blur would "pop" in while the
-		// glass panels are still fading up.
+		// Request the compositor's existing blur-behind pass (see
+		// k_nMaxOverlayBlurRadius's comment above for why this reuses Steam's
+		// own blurLayer0 primitive instead of a new one). The radius is
+		// General tab's background_blur (0..1, g_BackgroundLiveTheme.flBlur)
+		// linearly mapped onto 0..k_nMaxOverlayBlurRadius -- flBlur=0 means
+		// no blur pass is requested at all (nOverlayBlurRadius stays 0 below,
+		// so blurLayer0/blurRadius/useFSRLayer0/useNISLayer0 are left
+		// untouched), not a minimum blur. On top of that, ramp by the same
+		// s_flCurrentAlpha the panel layer's own opacity just used above, so
+		// the blur fades in/out in lockstep with the panels instead of
+		// snapping to full strength the instant the fade starts -- otherwise
+		// a hard-edged full blur would "pop" in while the glass panels are
+		// still fading up.
 		//
 		// vulkan_composite() picks exactly one of {FSR, NIS, blur, plain
 		// blit} per call (rendervulkan.cpp) -- if the base layer's own
@@ -675,7 +997,8 @@ namespace gamescope
 		// now-blurred base layer -- upscale sharpness doesn't matter once
 		// it's blurred anyway).
 		const int nOverlayBlurRadius = std::clamp(
-			(int)std::lround( k_nOverlayBlurRadius * s_flCurrentAlpha ), 0, k_nOverlayBlurRadius );
+			(int)std::lround( k_nMaxOverlayBlurRadius * g_BackgroundLiveTheme.flBlur * s_flCurrentAlpha ),
+			0, k_nMaxOverlayBlurRadius );
 
 		if ( nOverlayBlurRadius > 0 )
 		{
@@ -683,6 +1006,39 @@ namespace gamescope
 			pFrameInfo->blurRadius = std::max( pFrameInfo->blurRadius, nOverlayBlurRadius );
 			pFrameInfo->useFSRLayer0 = false;
 			pFrameInfo->useNISLayer0 = false;
+		}
+
+		// background_darkening (General tab, g_BackgroundLiveTheme.flDarkening):
+		// a *native-compositor* dim -- multiplies the base game layer's
+		// (layers[0]) own pixels directly in the composite shader, via
+		// FrameInfo_t::Layer_t::ctm, the exact primitive steamcompmgr.cpp
+		// already uses for e.g. its 709->2020 and mura-correction color
+		// matrices (composite.h: `color.rgb = vec4(color.rgb,1) * u_ctm[i]`).
+		// The former opacity_background ImGui-drawn flat veil control was
+		// removed (ConfigSchema.h's comment) as redundant now that this is a
+		// real, working dim -- see blur.h's gaussian_blur() comment for why
+		// it didn't used to work at all when background_blur was also on.
+		//
+		// Same s_flCurrentAlpha ramp as the blur above, so darkening also
+		// fades in/out with the overlay rather than snapping.
+		//
+		// ponytail: steamcompmgr.cpp's own ctm assignments are always a
+		// direct overwrite (nullptr or exactly one blob), never composed
+		// with another matrix already on the layer -- so this follows that
+		// same precedent instead of inventing matrix composition nothing
+		// else in the codebase does. If layers[0] already carries a
+		// meaningful ctm (HDR wide-gamut conversion, mura correction), this
+		// intentionally backs off rather than risk silently corrupting that
+		// color-managed pipeline for a cosmetic dim -- darkening simply has
+		// no visible effect in that (uncommon, non-SDR-desktop) case.
+		const float flDarkenStrength = std::clamp(
+			g_BackgroundLiveTheme.flDarkening * s_flCurrentAlpha, 0.0f, 1.0f );
+
+		if ( flDarkenStrength > 0.0f && pFrameInfo->layers.count() > 0 )
+		{
+			FrameInfo_t::Layer_t &baseLayer = pFrameInfo->layers.get( 0 );
+			if ( !baseLayer.ctm )
+				baseLayer.ctm = GetDarkeningCtmBlob( flDarkenStrength );
 		}
 	}
 
@@ -775,6 +1131,19 @@ namespace gamescope
 			bool bPressed = false; // Key, MouseButton
 			double x = 0.0;        // dx (MouseMotionDelta) / normalized X (MouseMotionAbsolute) / wheel X
 			double y = 0.0;        // dy (MouseMotionDelta) / normalized Y (MouseMotionAbsolute) / wheel Y
+			std::string sUtf8Text; // Key press only -- layout-correct text already resolved
+			                       // against the real xkb_state in wlserver.cpp; see
+			                       // SettingsOverlay_QueueKeyEvent()'s comment in the header.
+			// Real wall-clock arrival time (get_time_in_nanos(), same clock
+			// flDeltaTime is built from below), stamped at QueueEvent() time --
+			// i.e. as close to the real libinput/wlserver event as this
+			// cross-thread handoff gets. See DrainInputQueue()'s file comment
+			// on why this is needed: without it, several events queued between
+			// two frames (e.g. a fast double-click's down/up/down/up at a low
+			// framerate) all get folded into one drain and lose any notion of
+			// how far apart they really happened, making click timing track
+			// frame duration instead of wall-clock time.
+			uint64_t ulTimestampNanos = 0;
 		};
 	}
 
@@ -785,13 +1154,14 @@ namespace gamescope
 
 	static void QueueEvent( QueuedInputEvent ev )
 	{
+		ev.ulTimestampNanos = get_time_in_nanos();
 		std::lock_guard<std::mutex> lock( s_InputQueueLock );
-		s_InputQueue.push_back( ev );
+		s_InputQueue.push_back( std::move( ev ) );
 	}
 
-	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed )
+	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed, std::string sUtf8Text )
 	{
-		QueueEvent( { .kind = QueuedInputEvent::Kind::Key, .uCode = uLinuxKeycode, .bPressed = bPressed } );
+		QueueEvent( { .kind = QueuedInputEvent::Kind::Key, .uCode = uLinuxKeycode, .bPressed = bPressed, .sUtf8Text = std::move( sUtf8Text ) } );
 	}
 
 	void SettingsOverlay_QueueMouseMotionDelta( double dx, double dy )
@@ -840,56 +1210,9 @@ namespace gamescope
 	static int s_nSuperHeld = 0;
 
 	static bool s_bWasCapturingLastDrain = false;
-
-	// ponytail: a hardcoded US-QWERTY ASCII table, not layout-aware --
-	// correct typing requires actually tracking xkb layout/state per key,
-	// which (per the comment above) no backend but the DRM/libinput one
-	// reliably provides today. Good enough to type into a text field for
-	// M2's acceptance test and for everyday ASCII entry (profile names,
-	// etc.); upgrade path is wiring a real xkb_state for the virtual
-	// keyboard device (calling wlr_keyboard_notify_key on it too) and
-	// reading characters from that instead of this table.
-	static char AsciiForKeycode( uint32_t uLinuxKeycode, bool bShift )
-	{
-		if ( uLinuxKeycode >= KEY_1 && uLinuxKeycode <= KEY_9 )
-		{
-			static const char szShifted[] = "!@#$%^&*(";
-			return bShift ? szShifted[ uLinuxKeycode - KEY_1 ] : char( '1' + ( uLinuxKeycode - KEY_1 ) );
-		}
-
-		switch ( uLinuxKeycode )
-		{
-			case KEY_0:         return bShift ? ')' : '0';
-			case KEY_SPACE:     return ' ';
-			case KEY_MINUS:     return bShift ? '_' : '-';
-			case KEY_EQUAL:     return bShift ? '+' : '=';
-			case KEY_LEFTBRACE: return bShift ? '{' : '[';
-			case KEY_RIGHTBRACE:return bShift ? '}' : ']';
-			case KEY_SEMICOLON: return bShift ? ':' : ';';
-			case KEY_APOSTROPHE:return bShift ? '"' : '\'';
-			case KEY_GRAVE:     return bShift ? '~' : '`';
-			case KEY_BACKSLASH: return bShift ? '|' : '\\';
-			case KEY_COMMA:     return bShift ? '<' : ',';
-			case KEY_DOT:       return bShift ? '>' : '.';
-			case KEY_SLASH:     return bShift ? '?' : '/';
-			default: break;
-		}
-
-		// Letters: evdev keycodes for A-Z aren't alphabetically contiguous
-		// (they follow QWERTY row order), so map the actual scan codes.
-		static constexpr uint32_t k_uLetterKeycodesQwerty[26] = {
-			KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
-			KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
-			KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
-		};
-		for ( int i = 0; i < 26; i++ )
-		{
-			if ( k_uLetterKeycodesQwerty[i] == uLinuxKeycode )
-				return char( ( bShift ? 'A' : 'a' ) + i );
-		}
-
-		return 0;
-	}
+	// Keyboard-only capture-toggle release-safety backstop -- see
+	// DrainInputQueue()'s own comment on the two independent `if`s.
+	static bool s_bWasCapturingKeyboardLastDrain = false;
 
 	static ImGuiKey ImGuiKeyForKeycode( uint32_t uLinuxKeycode )
 	{
@@ -987,7 +1310,7 @@ namespace gamescope
 		}
 	}
 
-	static void HandleKeyEvent( ImGuiIO &io, uint32_t uLinuxKeycode, bool bPressed )
+	static void HandleKeyEvent( ImGuiIO &io, uint32_t uLinuxKeycode, bool bPressed, const std::string &sUtf8Text )
 	{
 		// Modifiers: feed the specific Left/Right key (so ImGui's own
 		// per-key state is exact) plus the recomputed merged Mod flag (the
@@ -1022,14 +1345,14 @@ namespace gamescope
 		if ( key != ImGuiKey_None )
 			io.AddKeyEvent( key, bPressed );
 
-		// Text input: only on press, only for keys with a printable ASCII
-		// mapping (see AsciiForKeycode's ponytail note).
-		if ( bPressed )
-		{
-			const char c = AsciiForKeycode( uLinuxKeycode, s_nShiftHeld > 0 );
-			if ( c != 0 )
-				io.AddInputCharacter( (unsigned int)(unsigned char)c );
-		}
+		// Text input: only on press, and only the already layout-translated
+		// UTF-8 text wlserver_dispatch_key() resolved against the keyboard's
+		// real xkb_state (see SettingsOverlay_QueueKeyEvent()'s comment in
+		// the header) -- correct on any layout, and AddInputCharactersUTF8()
+		// takes the whole multi-byte string in one call so umlauts and other
+		// non-ASCII characters aren't truncated to a single byte.
+		if ( bPressed && !sUtf8Text.empty() )
+			io.AddInputCharactersUTF8( sUtf8Text.c_str() );
 	}
 
 	static void ClampCursorToTexture()
@@ -1060,12 +1383,60 @@ namespace gamescope
 
 		bool bCursorMoved = false;
 
-		for ( const QueuedInputEvent &ev : events )
+		// Frame-rate-independent double-click fix -- see the QueuedInputEvent::
+		// ulTimestampNanos comment for the "why" and superdoc/planning/
+		// overlay-presentation-architecture.md for the investigation.
+		//
+		// Recap: when this drain collects more than one MouseButton event (a
+		// low framerate, or any frame that simply lags a beat, lets the
+		// producer queue several real events before the next drain), handing
+		// them all to ImGui via one shared NewFrame() call is not neutral --
+		// ImGui's own input-event trickling (io.ConfigInputTrickleEventQueue,
+		// on by default) applies only ONE same-button transition per
+		// NewFrame() call and defers the rest to subsequent calls, so a fast
+		// double-click's down/up/down/up ends up spread across several
+		// *frames*, each one only becoming a "click" (and getting stamped
+		// with ImGui's internal clock, g.Time) once its own later NewFrame()
+		// runs. g.Time always advances by the real DeltaTime of whichever
+		// NewFrame() call is doing the advancing, so the delay this
+		// introduces between the two clicks' registered times is N real
+		// frame periods, not the real N milliseconds the clicks were
+		// actually apart -- at low framerate that easily blows past
+		// io.MouseDoubleClickTime's default 0.3s, breaking a double-click
+		// that a wall clock would call well within the window. (Confirmed by
+		// instrumentation before this fix: a realistic 150ms double-click
+		// registers correctly for framerates down to ~8fps and silently
+		// stops registering below that, purely from frame-period growth --
+		// exactly the reported "double-click window depends on framerate"
+		// symptom, with no change to real click timing at all.)
+		//
+		// Simply turning trickling off is NOT the fix (tried and measured):
+		// without it, ImGui applies every event in the batch but keeps only
+		// the NET button-state change for the frame, so a whole press+release
+		// landing in one drain (routine at low fps, since a real click's own
+		// down-to-up gap is often under one frame period) collapses to no
+		// click at all -- worse than the bug it was meant to cure.
+		//
+		// Fix: give each MouseButton event in this batch, other than the
+		// batch's last event, its own correctly-timed "micro" NewFrame()/
+		// EndFrame() cycle (no windows opened, nothing rendered) with
+		// DeltaTime set to the REAL gap since the last time ImGui's clock was
+		// advanced -- so g.Time tracks real elapsed wall-clock time between
+		// transitions instead of render-frame count, while every other event
+		// kind (motion/wheel/key) is applied without a pump of its own,
+		// exactly as before. The batch's last event is left pending for the
+		// caller's own real, visible NewFrame() (SettingsOverlay_AddLayer(),
+		// right after this function returns), so the real render cadence and
+		// its DeltaTime are untouched -- this only tightens the timing of
+		// transitions that would otherwise be trickle-delayed within the
+		// *same* drain.
+		for ( size_t i = 0; i < events.size(); i++ )
 		{
+			const QueuedInputEvent &ev = events[i];
 			switch ( ev.kind )
 			{
 				case QueuedInputEvent::Kind::Key:
-					HandleKeyEvent( io, ev.uCode, ev.bPressed );
+					HandleKeyEvent( io, ev.uCode, ev.bPressed, ev.sUtf8Text );
 					break;
 
 				case QueuedInputEvent::Kind::MouseMotionDelta:
@@ -1084,12 +1455,39 @@ namespace gamescope
 				{
 					const int nButton = ImGuiMouseButtonForLinuxButton( ev.uCode );
 					if ( nButton >= 0 )
+					{
 						io.AddMouseButtonEvent( nButton, ev.bPressed );
+
+						const bool bLastEventInBatch = ( i + 1 == events.size() );
+						if ( !bLastEventInBatch )
+						{
+							if ( bCursorMoved )
+							{
+								ClampCursorToTexture();
+								io.AddMousePosEvent( (float)s_flCursorX, (float)s_flCursorY );
+								bCursorMoved = false;
+							}
+
+							float flMicroDeltaTime = s_ulLastFrameTimeNanos == 0
+								? ( 1.0f / 60.0f )
+								: float( ev.ulTimestampNanos - s_ulLastFrameTimeNanos ) / 1e9f;
+							flMicroDeltaTime = std::clamp( flMicroDeltaTime, 1.0f / 1000.0f, 1.0f );
+							s_ulLastFrameTimeNanos = ev.ulTimestampNanos;
+
+							io.DeltaTime = flMicroDeltaTime;
+							ImGui::NewFrame();
+							ImGui::EndFrame();
+						}
+					}
 					break;
 				}
 
 				case QueuedInputEvent::Kind::MouseWheel:
-					io.AddMouseWheelEvent( (float)ev.x, (float)ev.y );
+					// Inverted on both axes: libinput's wheel sign is the
+					// opposite of what feels right in the overlay.
+					// ponytail: hardcoded rather than a setting -- make it
+					// one if anyone actually wants the other direction.
+					io.AddMouseWheelEvent( -(float)ev.x, -(float)ev.y );
 					break;
 			}
 		}
@@ -1105,12 +1503,39 @@ namespace gamescope
 		// thinks is held/dragging, regardless of whether every individual
 		// release event made it through the queue by now.
 		const bool bCapturingNow = SettingsOverlay_IsCapturingInput();
+		const bool bCapturingKeyboardNow = SettingsOverlay_IsCapturingKeyboard();
+
+		bool bClearedKeysAlready = false;
 		if ( s_bWasCapturingLastDrain && !bCapturingNow )
 		{
 			io.ClearInputKeys();
 			io.ClearInputMouse();
 			s_nCtrlHeld = s_nShiftHeld = s_nAltHeld = s_nSuperHeld = 0;
+			bClearedKeysAlready = true;
 		}
+
+		// Same backstop, narrower trigger: the keyboard-only capture toggle
+		// (settings_overlay_capture_keyboard) can drop while the overlay
+		// stays open and still capturing the mouse -- e.g. the user flips it
+		// off mid-session with a key held for keyboard navigation. From that
+		// instant, wlserver.cpp routes all further key events straight to
+		// the game (see SettingsOverlay_IsCapturingKeyboard()), so no more
+		// releases for anything already-held-in-ImGui will ever reach this
+		// queue. Independent `if`, not `else if` -- both edges can fire the
+		// same drain (overlay closing always implies this one too, per
+		// SettingsOverlay_IsCapturingKeyboard()'s definition), and re-running
+		// an already-empty ClearInputKeys() is harmless, whereas skipping it
+		// on a s_bWasCapturingKeyboardLastDrain that's gone stale (see below)
+		// would not be. Clears keys only, never ClearInputMouse() -- this
+		// toggle never affects mouse capture, so a mouse drag still
+		// legitimately owned by the overlay must survive it.
+		if ( !bClearedKeysAlready && s_bWasCapturingKeyboardLastDrain && !bCapturingKeyboardNow )
+		{
+			io.ClearInputKeys();
+			s_nCtrlHeld = s_nShiftHeld = s_nAltHeld = s_nSuperHeld = 0;
+		}
+
 		s_bWasCapturingLastDrain = bCapturingNow;
+		s_bWasCapturingKeyboardLastDrain = bCapturingKeyboardNow;
 	}
 }

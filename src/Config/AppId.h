@@ -26,5 +26,21 @@ namespace gamescope::config
     // Meant to be called once, at the very top of main(), before any subsystem
     // init - see SPEC.md's Feature 6 for why that ordering matters (this is a
     // pure env-var read; it does not depend on wlserver/steamcompmgr existing).
+    //
+    // Deliberately does NOT consult steamcompmgr.cpp's get_appid_from_pid()
+    // (the post-startup, per-window /proc scrape for a "reaper" ancestor's
+    // "AppId=<n>" argv token) - verified behaviour, not an oversight. In the
+    // launch-option-wrapper topology (`gamescope -- %command%`) the env vars
+    // above are already present before main() runs, so nothing is gained by
+    // also scraping. In the persistent-session topology (gamescope started
+    // standalone, a game launched into it afterward) none of these env vars
+    // were ever set on gamescope's own process, so this correctly - not as a
+    // bug - resolves to std::nullopt and everything falls through to
+    // global.json; wiring the scrape in to recover an id there would mean
+    // hot-switching config mid-session, which SPEC.md's Feature 6 and
+    // DECISIONS.md #21 rejected as confusing (settings visibly changing
+    // after launch). See superdoc/planning/appid-detection.md §4 for the
+    // topology split and DECISIONS.md #21 for the resolution order this
+    // implements - both closed as tested, not just designed.
     std::optional<std::string> ResolveAppId( const EnvLookupFn &lookup = nullptr );
 }

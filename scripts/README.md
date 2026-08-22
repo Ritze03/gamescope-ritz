@@ -1,5 +1,72 @@
 # Gamescope Script/Config Files
 
+## Building gamescope-ritz
+
+`build-gamescope-ritz.sh` is the single entry point for building — one command
+instead of remembering the meson invocation or rediscovering this repo's
+submodule/test quirks. `install-gamescope-ritz.sh` and
+`update-gamescope-ritz.sh` (below) call the same shared build helpers in
+`gamescope-ritz-common.sh`, so all three stay in sync.
+
+```sh
+scripts/build-gamescope-ritz.sh              # release -> build-release/ (default)
+scripts/build-gamescope-ritz.sh --debug       # debug   -> build/
+scripts/build-gamescope-ritz.sh --test        # release build, then `meson test` (63/63)
+scripts/build-gamescope-ritz.sh --clean --jobs 8
+```
+
+Options: `--release` (default), `--debug`, `--test`, `--clean`, `--jobs N`,
+`-h`/`--help` (full details in the script's header comment).
+
+- **Two build trees, on purpose.** `build-release/`
+  (`--buildtype=release -Doptimization=3 -Db_lto=true`, ~5.4MB binary) and
+  `build/` (`--buildtype=debug`, ~45MB binary) never overwrite each other.
+  This project once lost real time chasing a VRR bug that only reproduced on
+  an unoptimised `-O0` binary — which tree you're running should always be
+  obvious, so the script always prints buildtype, build dir, and a warning
+  banner on debug builds.
+- **Submodules.** If `src/reshade`, `subprojects/wlroots`,
+  `libdisplay-info`, `libliftoff`, or `SPIRV-Headers` aren't checked out yet,
+  the script detects it and runs `git submodule update --init --recursive`
+  before configuring, instead of letting meson fail with a confusing
+  "Include dir reshade/source does not exist".
+- **Tests.** `-Denable_tests=false` (the meson default override some briefs
+  ask for) and passing tests are contradictory — you can't run a suite that's
+  disabled. `--test` does the sane thing: configures with
+  `-Denable_tests=true`, builds the test binary, and runs `meson test`.
+- **Never runs as root** — a root-owned build directory would silently break
+  a developer's normal non-root `meson compile`/`ninja` workflow afterwards.
+- A build directory that can't be reconfigured cleanly (incompatible cached
+  options) is wiped and reconfigured automatically; `--clean` forces this
+  up front.
+
+## Installing and updating gamescope-ritz
+
+`install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the
+`gamescope-ritz-common.sh` helper library they share) install this fork to
+**`/usr/bin/gamescope-ritz`** — never `/usr/bin/gamescope`, which both
+scripts hard-refuse to touch, since that's the user's packaged, known-good
+gamescope. See the header comment in each script for full option lists
+(`--help` also prints it).
+
+```sh
+scripts/install-gamescope-ritz.sh      # interactive: symlink vs copy, builds
+                                        # a release binary first if none exists
+scripts/update-gamescope-ritz.sh       # git pull --ff-only, rebuild release,
+                                        # refresh the install (copy mode only —
+                                        # a symlink install is live immediately)
+scripts/install-gamescope-ritz.sh --uninstall
+```
+
+Both build into a separate `build-release/` directory (`--buildtype=release
+-Doptimization=3 -Db_lto=true`), leaving a developer's `build/` untouched.
+Writing to `/usr/bin` uses `sudo` only for that one step, and the build
+itself never runs as root.
+
+These are unrelated to the `.lua` scripting system documented below — this
+directory doubles as the home for both this fork's dev/ops scripts and the
+Lua config scripts gamescope loads at runtime.
+
 ## ⚠️ Health Warning ⚠️
 
 Gamescope scripting/configuration is currently experimental and subject to change massively.
@@ -11,11 +78,13 @@ Scripts and configs working between revisions is not guaranteed to work, it shou
 Gamescope uses Lua for it's configuration and scripting system.
 
 Scripts ending in `.lua` are executed recursively in alphabetical order from the following directories:
- - `/usr/share/gamescope`
- - `/etc/gamescope`
- - `$XDG_CONFIG_DIR/gamescope`
+ - `/usr/share/gamescope-ritz`
+ - `/etc/gamescope-ritz`
+ - `$XDG_CONFIG_DIR/gamescope-ritz`
 
-You can develop easily without overriding your installation by setting `script_use_local_scripts` which will eliminate `/usr/share/gamescope` and `/etc/gamescope` from being read, and instead read from `../config` of where Gamescope is run instead of those.
+...and, as a fallback so an existing plain-gamescope script setup keeps working, also from the unnamespaced `/usr/share/gamescope`, `/etc/gamescope` and `$XDG_CONFIG_DIR/gamescope`.
+
+You can develop easily without overriding your installation by setting `script_use_local_scripts` which will eliminate all of the above from being read, and instead read from `../config` of where Gamescope is run instead of those.
 
 When errors are encountered, it will simply output that to the terminal. There is no visual indicator of this currently.
 
@@ -23,9 +92,9 @@ Things should mostly fail-safe, unless you actually made an egregious mistake in
 
 # Making modifications as a user
 
-If you wish to make modifications that will persist as a user, simply make a new `.lua` file in `$XDG_CONFIG_DIR/gamescope` which is usually `$HOME/.config/gamescope` with what you want to change.
+If you wish to make modifications that will persist as a user, simply make a new `.lua` file in `$XDG_CONFIG_DIR/gamescope-ritz` which is usually `$HOME/.config/gamescope-ritz` with what you want to change (`$HOME/.config/gamescope` also still works, as a fallback).
 
-For example, to make the Steam Deck LCD use spec colorimetry instead of the measured colorimetry you could create the following file `~/.config/gamescope/my_deck_lcd_colorimetry.lua` with the following contents:
+For example, to make the Steam Deck LCD use spec colorimetry instead of the measured colorimetry you could create the following file `~/.config/gamescope-ritz/my_deck_lcd_colorimetry.lua` with the following contents:
 
 ```lua
 local steamdeck_lcd_colorimetry_spec = {
@@ -40,7 +109,7 @@ gamescope.config.known_displays.steamdeck_lcd.colorimetry = steamdeck_lcd_colori
 
 and it would override that.
 
-You could also place this in `/etc/gamescope` if you really want it to apply to all users/system-wide, but that would need root privelages.
+You could also place this in `/etc/gamescope-ritz` if you really want it to apply to all users/system-wide, but that would need root privelages.
 
 # Features
 

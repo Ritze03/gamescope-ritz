@@ -115,16 +115,134 @@ namespace gamescope
 		} );
 
 	// -------------------------------------------------------------------
-	// Smoothing: a single-pole EMA over the raw per-commit frametime.
-	// ponytail: this is the entire "short rolling average" this feature
-	// needs -- a raw per-frame number is unreadable (SPEC's own framing),
-	// but a ring buffer/history is more than a corner readout warrants.
+	// Smoothing: a single-pole EMA over the raw per-commit frametime, for
+	// the headline number (DECISIONS.md #16: the game's own frame rate).
 	// -------------------------------------------------------------------
 
 	static uint64_t s_ulLastRawFrametimeNs = 0;
 	// Seeded at a plausible 60fps so the very first frames show a sane
 	// number instead of 0/infinity before the first real sample arrives.
 	static float s_flSmoothedFrametimeMs = 1000.0f / 60.0f;
+
+	// -------------------------------------------------------------------
+	// Frametime history: a ring buffer of raw (unsmoothed) per-frame game
+	// frametimes, feeding both the frametime graph and the percentile row.
+	// Every entry is a real g_ulLastAppFrametimeNs sample (commit_t::Signal()'s
+	// game-frame delta, DECISIONS.md #16/#17) -- never the compositor's
+	// composite rate or the display's refresh rate, so the graph/percentiles
+	// stay on the same clock as the headline number, per this feature's task
+	// brief.
+	//
+	// Sized at 240 samples to match this repo's own spec text for this exact
+	// feature (ui-mockup-precise-spec.md §11's FPS-config-window footer:
+	// "sampling 500 ms · 240-frame window") rather than an invented number.
+	// At typical 60-240fps that's roughly 1-4 seconds of real play: long
+	// enough that a stutter is still on-screen a moment after it happened
+	// and that the 1%/0.1% low buckets have more than a couple of samples to
+	// average (240 * 1% = 2.4 -> 2 samples; 240 * 0.1% = 0.24 -> rounds up to
+	// the single worst frame in the window -- a real limitation of a 240-deep
+	// window worth knowing: a proper 0.1% low usually wants thousands of
+	// frames, so this one reads more like "worst frame in the last few
+	// seconds" than a statistically deep percentile; still an honest number
+	// over its stated window, just a coarse one), short enough that the
+	// graph reads as "right now" instead of a stale minute-old trace. The
+	// on-screen graph draws only as many bars as fit the HUD's width (well
+	// under 240 at typical container sizes) from the tail of this buffer;
+	// the percentile math uses the buffer's full span.
+	static constexpr int kHistoryCapacity = 240;
+	static float s_flFrametimeHistoryMs[kHistoryCapacity] = {};
+	static int s_nHistoryCount = 0;  // valid samples so far (caps at kHistoryCapacity)
+	static int s_nHistoryHead = 0;   // index the NEXT sample will be written to
+
+	static void PushFrametimeSample( float flMs )
+	{
+		s_flFrametimeHistoryMs[s_nHistoryHead] = flMs;
+		s_nHistoryHead = ( s_nHistoryHead + 1 ) % kHistoryCapacity;
+		if ( s_nHistoryCount < kHistoryCapacity )
+			++s_nHistoryCount;
+	}
+
+	// Graph y-axis ceiling (ms mapped to the top of the 18px strip). Chases
+	// the window's worst sample with a slow EMA rather than the window's raw
+	// max, specifically so a single stutter doesn't yank the whole graph's
+	// scale around (the task brief's own ask: "a scale that does not
+	// rescale distractingly on every spike"). A fresh spike still reads
+	// clearly in the meantime -- it's drawn capped at the strip's full
+	// height and in the amber outlier color (see DrawFrametimeGraph) before
+	// the ceiling has caught up to it, exactly the "obvious at a glance"
+	// treatment the brief asks for, and the ceiling only widens to
+	// accommodate it a little at a time. Floored at a 60fps-equivalent
+	// frametime so a rock-steady high-fps game doesn't get zoomed in so far
+	// that sub-millisecond GPU noise reads as huge bars.
+	static float s_flGraphCeilingMs = ( 1000.0f / 60.0f ) * 1.5f;
+
+	static void UpdateGraphCeiling()
+	{
+		if ( s_nHistoryCount == 0 )
+			return;
+
+		float flMaxMs = 0.0f;
+		for ( int i = 0; i < s_nHistoryCount; ++i )
+			flMaxMs = std::max( flMaxMs, s_flFrametimeHistoryMs[i] );
+
+		const float flDesiredCeiling = std::max( flMaxMs * 1.15f, 1000.0f / 60.0f );
+		constexpr float kCeilingAlpha = 0.03f; // slow -- see this block's own comment for why
+		s_flGraphCeilingMs = s_flGraphCeilingMs * ( 1.0f - kCeilingAlpha ) + flDesiredCeiling * kCeilingAlpha;
+	}
+
+	// -------------------------------------------------------------------
+	// Percentiles: 1% low, 0.1% low, average -- all computed over the same
+	// kHistoryCapacity window and the same game-frametime clock as the
+	// headline number and the graph (never mixed with mangoapp's composited/
+	// display clocks). Recomputed at most every 500ms (matching the spec's
+	// own "sampling 500 ms" footer text) rather than every frame: sorting up
+	// to 240 floats every single draw is wasted work when the result would
+	// otherwise change (and visually jitter) every frame for no benefit --
+	// stats like these are meant to be read as a settled number, not a
+	// twitchy one.
+	// -------------------------------------------------------------------
+
+	static float s_flAverageFps = 60.0f;
+	static float s_flOnePercentLowFps = 60.0f;
+	static float s_flPointOnePercentLowFps = 60.0f;
+	static uint64_t s_ulLastPercentileComputeNanos = 0;
+
+	// Average fps of the worst flFraction of samples in the window (e.g.
+	// 0.01 for 1% low, 0.001 for 0.1% low) -- the standard "1% low" gamer
+	// definition (mean of the slowest bucket), not the single value at that
+	// percentile rank. pSortedMs must be ascending by frametime, so the
+	// worst (highest-ms/lowest-fps) samples are its tail.
+	static float WorstBucketAverageFps( const float *pSortedMs, int nCount, float flFraction )
+	{
+		const int nBucket = std::clamp( (int)std::lround( nCount * flFraction ), 1, nCount );
+		float flSumMs = 0.0f;
+		for ( int i = nCount - nBucket; i < nCount; ++i )
+			flSumMs += pSortedMs[i];
+		return 1000.0f / std::max( flSumMs / nBucket, 0.01f );
+	}
+
+	static void RecomputePercentilesIfDue( uint64_t ulNowNanos )
+	{
+		if ( s_nHistoryCount == 0 )
+			return;
+
+		constexpr uint64_t kRecomputeIntervalNs = 500ull * 1000000ull; // spec §11 footer: "sampling 500 ms"
+		if ( s_ulLastPercentileComputeNanos != 0 && ulNowNanos - s_ulLastPercentileComputeNanos < kRecomputeIntervalNs )
+			return;
+		s_ulLastPercentileComputeNanos = ulNowNanos;
+
+		float flSorted[kHistoryCapacity];
+		std::copy( s_flFrametimeHistoryMs, s_flFrametimeHistoryMs + s_nHistoryCount, flSorted );
+		std::sort( flSorted, flSorted + s_nHistoryCount );
+
+		float flSumMs = 0.0f;
+		for ( int i = 0; i < s_nHistoryCount; ++i )
+			flSumMs += flSorted[i];
+		s_flAverageFps = 1000.0f / std::max( flSumMs / s_nHistoryCount, 0.01f );
+
+		s_flOnePercentLowFps = WorstBucketAverageFps( flSorted, s_nHistoryCount, 0.01f );
+		s_flPointOnePercentLowFps = WorstBucketAverageFps( flSorted, s_nHistoryCount, 0.001f );
+	}
 
 	static float UpdateAndGetSmoothedFps()
 	{
@@ -138,6 +256,12 @@ namespace gamescope
 			const float flMs = std::clamp( (float)ulRaw / 1e6f, 0.1f, 2000.0f );
 			constexpr float kAlpha = 0.10f;
 			s_flSmoothedFrametimeMs = s_flSmoothedFrametimeMs * ( 1.0f - kAlpha ) + flMs * kAlpha;
+
+			// Same raw sample feeds the graph/percentile history -- one
+			// history entry per real game frame, exactly matching the
+			// headline number's own clock.
+			PushFrametimeSample( flMs );
+			UpdateGraphCeiling();
 		}
 		return 1000.0f / s_flSmoothedFrametimeMs;
 	}
@@ -312,30 +436,233 @@ namespace gamescope
 		return true;
 	}
 
-	static void DrawReadout()
+	// Spec §7 "Meters and graphs" / §10 Row 2: vertical bars, 1px gaps,
+	// bottom-aligned in an 18px-tall strip; normal bar accent @ 60%, outlier
+	// bar spike-amber @ 80%; bar heights 33-100% of the strip. Draws the most
+	// recent bars that fit flWidth, right-aligned (newest at the right edge,
+	// reading left-to-right as old-to-new, the universal waveform/graph
+	// convention) out of the shared kHistoryCapacity history -- see that
+	// buffer's own comment for why 240 samples is comfortably more history
+	// than a HUD-width graph ever draws in one frame.
+	static void DrawFrametimeGraph( ImDrawList *pDrawList, ImVec2 origin, float flWidth, float flHeight )
+	{
+		constexpr float kBarWidth = 2.0f;
+		constexpr float kBarGap = 1.0f; // spec §7: "1px gaps"
+		constexpr float kPitch = kBarWidth + kBarGap;
+
+		const int nBarsFit = std::max( 1, (int)( flWidth / kPitch ) );
+		const int nBars = std::min( nBarsFit, s_nHistoryCount );
+		const float flBottom = origin.y + flHeight;
+
+		// A bar reads as a stutter when it's meaningfully worse than the
+		// *current* short-term pace (the same EMA the headline number uses),
+		// not some stale window-wide average -- otherwise a game that has
+		// genuinely settled into a lower framerate would paint its entire
+		// graph amber forever. 50% slower AND at least 2ms slower (so a
+		// 240fps game's sub-millisecond jitter doesn't false-positive).
+		const float flBaselineMs = s_flSmoothedFrametimeMs;
+
+		float flX = origin.x + flWidth - kBarWidth;
+		for ( int i = 0; i < nBars && flX >= origin.x; ++i )
+		{
+			// s_nHistoryHead is the next WRITE slot, so head-1 is the most
+			// recently written sample; walk backwards through the ring.
+			const int nIdx = ( s_nHistoryHead - 1 - i + kHistoryCapacity ) % kHistoryCapacity;
+			const float flMs = s_flFrametimeHistoryMs[nIdx];
+
+			const float flFrac = std::clamp( flMs / std::max( s_flGraphCeilingMs, 0.001f ), 0.0f, 1.0f );
+			const float flHeightFrac = 0.33f + 0.67f * flFrac; // spec: "bar heights 33-100% of strip"
+			const float flBarHeight = flHeightFrac * flHeight;
+
+			const bool bOutlier = flMs > flBaselineMs * 1.5f && flMs > flBaselineMs + 2.0f;
+			const ImU32 barColor = bOutlier
+				? IM_COL32( 0xF3, 0x82, 0x1D, 204 ) // spec §7 outlier bar: #F3821D @ 80% (0.80*255 = 204)
+				: gamescope::palette::Accent( 0.60f ); // spec §7 normal bar: accent @ 60%
+
+			pDrawList->AddRectFilled( ImVec2( flX, flBottom - flBarHeight ), ImVec2( flX + kBarWidth, flBottom ), barColor );
+			flX -= kPitch;
+		}
+	}
+
+	// Spec §10 Row 3: three Mono 400 10 @ 55% white items, 10px gaps. Task
+	// brief substitutes "average" for the mockup's temperature slot (a
+	// reading this feature has no honest data source for) -- 1% low, 0.1%
+	// low, average, all from the same history window as the graph. Draws
+	// pre-measured strings (see DrawReadout, which builds these once and
+	// reuses the same strings/sizes for both layout and drawing).
+	static void DrawPercentileRow( ImDrawList *pDrawList, ImVec2 origin, float flTextOpacity,
+		const char *const ( &items )[3], const ImVec2 ( &sizes )[3] )
+	{
+		constexpr float kItemGap = 10.0f; // spec §10: "10px gaps"
+		const ImU32 color = ImGui::GetColorU32( gamescope::palette::White( 0.55f * flTextOpacity ) ); // spec: "@ 55% white"
+
+		// PushFont, then the 3-arg AddText(pos, col, text) overload (implicit
+		// current font/size) -- same pattern as Row 1's unit/ms text below,
+		// not pFont->CalcTextSizeA's explicit-size form (that one's reserved
+		// for Row 1's Hero number, whose size is the user's font_size slider
+		// rather than the Meta style's own baked size).
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		float flX = origin.x;
+		for ( int i = 0; i < 3; ++i )
+		{
+			pDrawList->AddText( ImVec2( flX, origin.y ), color, items[i] );
+			flX += sizes[i].x + kItemGap;
+		}
+		ImGui::PopFont();
+	}
+
+	// Row 1's unit-text run ("FPS"), needed by both the measure and draw
+	// halves of the FPS module below.
+	static constexpr const char *kUnitText = " FPS";
+	// spec §10 row2: "4px above/below gaps" / "18px tall".
+	static constexpr float kRowGap = 4.0f;
+	static constexpr float kGraphHeight = 18.0f;
+
+	// -------------------------------------------------------------------
+	// Placement: 9 anchor positions (issue #26/#27's shared 3x3 grid
+	// model), stored on disk as one of the strings below
+	// (ConfigSchema.h's FpsDisplaySettings::placement). This is this
+	// file's own copy of the same kPlacements/ParsePlacement shape
+	// Notifications.cpp uses for notification_placement -- kept as a
+	// separate copy rather than a shared header since Notifications.cpp's
+	// own version is a file-local static, not exported, and the two
+	// features' placement fields are independently persisted (this one is
+	// a normal per-layer field; notification_placement is deliberately
+	// global-only -- see that field's own ConfigSchema.h comment).
+	// -------------------------------------------------------------------
+
+	namespace
+	{
+		// [vertical: top/center/bottom][horizontal: left/center/right]
+		constexpr const char *kPlacements[3][3] = {
+			{ "top-left",    "top-center",    "top-right"    },
+			{ "center-left", "center",        "center-right" },
+			{ "bottom-left", "bottom-center", "bottom-right" },
+		};
+
+		void ParsePlacement( const std::string &sPlacement, int &nVert, int &nHoriz )
+		{
+			for ( int v = 0; v < 3; v++ )
+			{
+				for ( int h = 0; h < 3; h++ )
+				{
+					if ( sPlacement == kPlacements[v][h] )
+					{
+						nVert = v;
+						nHoriz = h;
+						return;
+					}
+				}
+			}
+			// Unrecognized/legacy value -- fall back to this readout's
+			// original hardcoded default (top-right).
+			nVert = 0;
+			nHoriz = 2;
+		}
+
+		std::string ComposePlacement( int nVert, int nHoriz )
+		{
+			return kPlacements[std::clamp( nVert, 0, 2 )][std::clamp( nHoriz, 0, 2 )];
+		}
+	}
+
+	// -------------------------------------------------------------------
+	// Module framework (issue #27): the readout is a fixed sequence of
+	// content modules -- FPS, CPU, GPU, Media, in that order (task brief,
+	// verbatim) -- each its own backdrop-boxed block, stacked from the
+	// selected anchor's edge inward. Only the FPS module (this file's
+	// pre-existing number/unit/ms + optional frametime graph + percentile
+	// row content) has real content today; CPU/GPU/Media are issue #28's
+	// job. Adding one there is meant to be small: write a
+	// Measure<X>Module()/Draw<X>Module() pair with the same shape as
+	// MeasureFpsModule()/DrawFpsModuleContent() below, give it a case in
+	// MeasureModule()/DrawModule(), and list it in kModuleOrder. A module
+	// with no content yet reports zero size from its measure function,
+	// which is this framework's contract for "not present" -- it draws
+	// nothing and reserves no stack space or gap.
+	//
+	// Order is FIXED and EDGE-RELATIVE, not a fixed top-to-bottom screen
+	// order: kModuleOrder's first entry (FPS) always ends up the module
+	// nearest whichever edge the anchor selects, with later entries
+	// (CPU, GPU, Media) stacking further from that edge, inward. This is
+	// the literal reading of the task brief's own "coming from the
+	// selected edge" phrasing, and it resolves the one placement question
+	// the issue explicitly left for the implementer: for a BOTTOM-edge
+	// anchor, FPS sits closest to the bottom edge and the stack grows
+	// UPWARD from it (CPU above FPS, then GPU, then Media) -- i.e. the
+	// on-screen top-to-bottom reading is Media/GPU/CPU/FPS, the mirror
+	// image of a top-edge anchor's FPS/CPU/GPU/Media. The alternative
+	// (keep FPS visually topmost regardless of anchor) was rejected
+	// because it would make "first in the fixed order" mean a different
+	// module depending on which edge is picked, which is not what "fixed
+	// order coming from the selected edge" describes -- an edge-relative
+	// order is the only reading where the rule is the same rule at every
+	// anchor. Center-row anchors (center-left/center/center-right) use
+	// the task brief's own explicit default for centred views -- "top
+	// first" -- so they take the same (unmirrored) order as a top-edge
+	// anchor.
+	// -------------------------------------------------------------------
+
+	enum class ModuleKind { Fps, Cpu, Gpu, Media, Count };
+	static constexpr int kModuleCount = (int)ModuleKind::Count;
+
+	// Fixed stacking order, edge-relative -- see the block comment above.
+	static constexpr ModuleKind kModuleOrder[kModuleCount] = {
+		ModuleKind::Fps, ModuleKind::Cpu, ModuleKind::Gpu, ModuleKind::Media,
+	};
+
+	// Vertical gap between stacked module boxes -- distinct from kRowGap
+	// (the gap between a module's own internal rows).
+	static constexpr float kModuleGap = 8.0f;
+
+	// FPS module's measured layout: every string/size the draw half needs,
+	// computed once by MeasureFpsModule() and consumed by
+	// DrawFpsModuleContent() -- split so the module framework can learn
+	// this module's size (for stacking) before it has an origin to draw
+	// at.
+	struct FpsModuleLayout
+	{
+		bool bAdditive = false;
+		bool bDrawBackdrop = false;
+		ImU32 textColor = 0;
+		char szNum[8] = "";
+		ImVec2 numSize{};
+		ImVec2 unitSize{};
+		char szMs[16] = "";
+		ImVec2 msSize{};
+		ImVec2 textSize{};
+		bool bShowGraph = false;
+		bool bShowPercentiles = false;
+		char szOnePct[24] = "";
+		char szPointOnePct[24] = "";
+		char szAvg[24] = "";
+		ImVec2 percentileSizes[3] = {};
+		float flPercentileRowWidth = 0.0f;
+		float flPercentileRowHeight = 0.0f;
+		float flContentWidth = 0.0f;
+		float flContentHeight = 0.0f;
+	};
+
+	// M8 part 1 (issue #13): IBM Plex Mono is genuinely monospaced, so a
+	// fixed-width formatted string ("%3d FPS") is tabular by construction
+	// -- every digit occupies the same advance width, so the readout
+	// cannot jitter horizontally as the number changes. This replaces the
+	// former DrawTabularInt() helper, which existed only to fake that
+	// property (per-glyph draws at a hand-measured pitch) before a real
+	// tabular-figures font existed; now that one does, the workaround is
+	// gone. Issue #27: any future module (#28's CPU/GPU/Media) showing a
+	// number must follow this same fixed-width-field convention.
+	static FpsModuleLayout MeasureFpsModule( int nFps )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		FpsModuleLayout L;
 
-		const int nFps = (int)std::lround( UpdateAndGetSmoothedFps() );
-
-		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
-		// M8 part 1 (issue #13): IBM Plex Mono is genuinely monospaced, so
-		// a fixed-width formatted string ("%3d FPS") is tabular by
-		// construction -- every digit occupies the same advance width, so
-		// the readout can no longer jitter horizontally as the number
-		// changes. This replaces the former DrawTabularInt() helper, which
-		// existed only to fake that property (per-glyph draws at a hand-
-		// measured pitch) before a real tabular-figures font existed; now
-		// that one does, the workaround is gone.
-		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
-		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested, same mechanism the pre-M8 code already relied on
-
-		const bool bAdditive = cfg.blend_mode == "additive";
+		L.bAdditive = cfg.blend_mode == "additive";
 		// additive + a filled backdrop rect would make the backdrop
 		// itself glow (SPEC.md B5) -- auto-disable rather than combine
 		// them, matching the settings panel's own auto-disable of the
 		// backdrop controls in additive mode (FpsDisplay_DrawSettingsPanel).
-		const bool bDrawBackdrop = cfg.backdrop_enabled && !bAdditive;
+		L.bDrawBackdrop = cfg.backdrop_enabled && !L.bAdditive;
 
 		// Gamescope's own layer blend modes (rendervulkan.hpp) are
 		// PREMULTIPLIED/COVERAGE/NONE -- there is no whole-layer additive
@@ -344,46 +671,94 @@ namespace gamescope
 		// rather than literal GPU ADD blend-func compositing against the
 		// scene -- SPEC.md flags this exact interaction as a design-guide
 		// call, not a technical one.
-		const ImVec4 textColorBase = bAdditive
+		const ImVec4 textColorBase = L.bAdditive
 			? ImVec4( 0x7d / 255.0f, 0xe6 / 255.0f, 0xf7 / 255.0f, 1.0f ) // brighter cyan "glow"
 			: ImVec4( 0.92f, 0.94f, 0.95f, 1.0f );
-		const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(
+		L.textColor = ImGui::ColorConvertFloat4ToU32(
 			ImVec4( textColorBase.x, textColorBase.y, textColorBase.z, cfg.text_opacity ) );
 
 		// Right-justified in a fixed 3-character field (blank-, not zero-,
 		// padded) -- 0-999 is plenty for a frame-rate readout.
-		char szNum[8];
-		snprintf( szNum, sizeof( szNum ), "%3d", std::clamp( nFps, 0, 999 ) );
-		const ImVec2 numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szNum );
+		snprintf( L.szNum, sizeof( L.szNum ), "%3d", std::clamp( nFps, 0, 999 ) );
+		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
+		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested, same mechanism the pre-M8 code already relied on
+		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
 
 		// Spec §10 Row 1: number (Hero) -> "FPS" unit (Meta, dim) -> spacer
 		// -> frametime in ms (accent-tinted) -- was one flat "%3d FPS" run
 		// in a single color/size; split so the unit and the ms readout can
 		// each carry their own spec'd size/color (gap list item 6).
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		static constexpr const char *kUnitText = " FPS";
-		const ImVec2 unitSize = ImGui::CalcTextSize( kUnitText );
+		L.unitSize = ImGui::CalcTextSize( kUnitText );
 		ImGui::PopFont();
 
-		char szMs[16];
-		snprintf( szMs, sizeof( szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
+		snprintf( L.szMs, sizeof( L.szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		const ImVec2 msSize = bAdditive ? ImVec2( 0.0f, 0.0f ) : ImGui::CalcTextSize( szMs );
+		L.msSize = L.bAdditive ? ImVec2( 0.0f, 0.0f ) : ImGui::CalcTextSize( L.szMs );
 		ImGui::PopFont();
 
-		const ImVec2 textSize( numSize.x + unitSize.x + msSize.x, std::max( numSize.y, std::max( unitSize.y, msSize.y ) ) );
+		L.textSize = ImVec2( L.numSize.x + L.unitSize.x + L.msSize.x, std::max( L.numSize.y, std::max( L.unitSize.y, L.msSize.y ) ) );
 
-		// Spec §10: "Default anchor: top-right, offset 32/32" -- was a fixed
-		// top-left 16/16 (gap list item 6); this context's io.DisplaySize is
-		// the actual output resolution (see FpsDisplay_AddLayer()), so the
-		// right/top offsets are computed against it rather than hand-tuned.
-		constexpr float kAnchorOffset = 32.0f;
-		const ImVec2 io_display = ImGui::GetIO().DisplaySize;
-		const ImVec2 rectMax( io_display.x - kAnchorOffset, kAnchorOffset + textSize.y + cfg.backdrop_padding * 2.0f );
-		const ImVec2 rectMin( rectMax.x - textSize.x - cfg.backdrop_padding * 2.0f, kAnchorOffset );
+		// Row 2 (graph) / Row 3 (percentiles): both independently toggleable
+		// (spec §11's "ROWS checkbox list"), reusing Row 1's font_size/
+		// backdrop/blend_mode/text_opacity rather than a second set of
+		// per-row settings.
+		L.bShowGraph = cfg.graph_enabled;
+		L.bShowPercentiles = cfg.percentiles_enabled;
+
+		if ( L.bShowPercentiles )
+		{
+			// %3d, same reasoning as szNum above: fixed-width digits so
+			// neither an individual number nor the row's total width
+			// jitters as a value crosses a digit boundary (task brief:
+			// "digits do not jitter").
+			snprintf( L.szOnePct, sizeof( L.szOnePct ), "1%% %3d", std::clamp( (int)std::lround( s_flOnePercentLowFps ), 0, 999 ) );
+			snprintf( L.szPointOnePct, sizeof( L.szPointOnePct ), "0.1%% %3d", std::clamp( (int)std::lround( s_flPointOnePercentLowFps ), 0, 999 ) );
+			snprintf( L.szAvg, sizeof( L.szAvg ), "avg %3d", std::clamp( (int)std::lround( s_flAverageFps ), 0, 999 ) );
+
+			const char *const percentileItems[3] = { L.szOnePct, L.szPointOnePct, L.szAvg };
+			constexpr float kItemGap = 10.0f; // spec §10 row3: "10px gaps"
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			for ( int i = 0; i < 3; ++i )
+			{
+				L.percentileSizes[i] = ImGui::CalcTextSize( percentileItems[i] );
+				L.flPercentileRowHeight = std::max( L.flPercentileRowHeight, L.percentileSizes[i].y );
+			}
+			ImGui::PopFont();
+			L.flPercentileRowWidth = L.percentileSizes[0].x + kItemGap + L.percentileSizes[1].x + kItemGap + L.percentileSizes[2].x;
+		}
+
+		// Spec §10: "container ... min-width 186px" -- convert to a content-
+		// width floor using whatever padding is actually configured (rather
+		// than assuming the spec's own fixed 8px/11px split, which this
+		// readout already collapses to one symmetric backdrop_padding value)
+		// so the HUD still reads as "at least this wide" regardless of the
+		// padding slider.
+		constexpr float kMinContainerWidth = 186.0f;
+		const float flContentWidthFloor = kMinContainerWidth - cfg.backdrop_padding * 2.0f;
+		L.flContentWidth = std::max( { L.textSize.x, L.flPercentileRowWidth, flContentWidthFloor } );
+
+		L.flContentHeight = L.textSize.y;
+		if ( L.bShowGraph )
+			L.flContentHeight += kRowGap + kGraphHeight;
+		if ( L.bShowPercentiles )
+			L.flContentHeight += kRowGap + L.flPercentileRowHeight;
+
+		return L;
+	}
+
+	// Draws the FPS module's backdrop + content into the box
+	// [origin, origin+boxSize) -- boxSize is exactly what MeasureFpsModule()
+	// implied (content size + 2*backdrop_padding), computed by MeasureModule().
+	static void DrawFpsModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &L )
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+
+		const ImVec2 rectMin = origin;
+		const ImVec2 rectMax( origin.x + boxSize.x, origin.y + boxSize.y );
 		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding, rectMin.y + cfg.backdrop_padding );
 
-		if ( bDrawBackdrop )
+		if ( L.bDrawBackdrop )
 		{
 			// Spec §10: "square corners (radius 0 -- unlike windows)" is the
 			// mockup's own default, but backdrop_rounding stays a real user
@@ -394,17 +769,20 @@ namespace gamescope
 			pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), cfg.backdrop_rounding );
 		}
 
+		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
+		const float flFontSize = cfg.font_size;
+
 		ImVec2 cursor = textPos;
-		pDrawList->AddText( pFont, flFontSize, cursor, textColor, szNum );
-		cursor.x += numSize.x;
+		pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
+		cursor.x += L.numSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 		const ImU32 unitColor = ImGui::GetColorU32( gamescope::palette::White( 0.50f ) );
-		pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( numSize.y - unitSize.y ) ), unitColor, kUnitText );
-		cursor.x += unitSize.x;
+		pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) ), unitColor, kUnitText );
+		cursor.x += L.unitSize.x;
 		ImGui::PopFont();
 
-		if ( !bAdditive )
+		if ( !L.bAdditive )
 		{
 			// Spec §10: frametime readout color oklch(.86 .09 218) = #89E0F8
 			// -- close to, but distinct from, the general accent-value token
@@ -412,8 +790,145 @@ namespace gamescope
 			// through Palette.h's accent family.
 			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
 			const ImU32 msColor = ImGui::GetColorU32( ImVec4( 0x89 / 255.0f, 0xe0 / 255.0f, 0xf8 / 255.0f, cfg.text_opacity ) );
-			pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( numSize.y - msSize.y ) ), msColor, szMs );
+			pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( L.numSize.y - L.msSize.y ) ), msColor, L.szMs );
 			ImGui::PopFont();
+		}
+
+		float flCursorY = textPos.y + L.textSize.y;
+		if ( L.bShowGraph )
+		{
+			flCursorY += kRowGap;
+			DrawFrametimeGraph( pDrawList, ImVec2( textPos.x, flCursorY ), L.flContentWidth, kGraphHeight );
+			flCursorY += kGraphHeight;
+		}
+		if ( L.bShowPercentiles )
+		{
+			flCursorY += kRowGap;
+			const char *const percentileItems[3] = { L.szOnePct, L.szPointOnePct, L.szAvg };
+			DrawPercentileRow( pDrawList, ImVec2( textPos.x, flCursorY ), cfg.text_opacity, percentileItems, L.percentileSizes );
+		}
+	}
+
+	// Measures one module in stacking order, returning its full box size
+	// (content + 2*backdrop_padding on each axis, matching what
+	// DrawFpsModuleContent() above expects as boxSize) -- (0,0) means "not
+	// present," this frame's framework-level contract for a module with no
+	// content (today: every module but Fps; issue #28 fills these in).
+	static ImVec2 MeasureModule( ModuleKind kind, int nFps, FpsModuleLayout &outFpsLayout )
+	{
+		switch ( kind )
+		{
+		case ModuleKind::Fps:
+		{
+			outFpsLayout = MeasureFpsModule( nFps );
+			const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+			return ImVec2( outFpsLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outFpsLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
+		}
+		case ModuleKind::Cpu:
+		case ModuleKind::Gpu:
+		case ModuleKind::Media:
+		default:
+			// #28: no real content yet.
+			return ImVec2( 0.0f, 0.0f );
+		}
+	}
+
+	static void DrawModule( ModuleKind kind, ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &fpsLayout )
+	{
+		switch ( kind )
+		{
+		case ModuleKind::Fps:
+			DrawFpsModuleContent( pDrawList, origin, boxSize, fpsLayout );
+			break;
+		case ModuleKind::Cpu:
+		case ModuleKind::Gpu:
+		case ModuleKind::Media:
+		default:
+			break; // #28
+		}
+	}
+
+	static void DrawReadout()
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+
+		const int nFps = (int)std::lround( UpdateAndGetSmoothedFps() );
+		RecomputePercentilesIfDue( get_time_in_nanos() );
+
+		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
+
+		int nVert = 0, nHoriz = 2;
+		ParsePlacement( cfg.placement, nVert, nHoriz );
+
+		// Edge-relative stacking order -- see kModuleOrder's block comment
+		// for the bottom-edge mirroring rationale. nVert: 0=top, 1=center,
+		// 2=bottom (ParsePlacement's convention, matching kPlacements'
+		// row order above).
+		ModuleKind order[kModuleCount];
+		if ( nVert == 2 ) // bottom edge: mirrored so FPS ends up nearest it
+		{
+			for ( int i = 0; i < kModuleCount; ++i )
+				order[i] = kModuleOrder[kModuleCount - 1 - i];
+		}
+		else // top edge, or centre row defaulting to the top-first reading
+		{
+			for ( int i = 0; i < kModuleCount; ++i )
+				order[i] = kModuleOrder[i];
+		}
+
+		// Pass 1: measure every module in stacking order (only Fps has
+		// real content today -- see kModuleOrder's block comment).
+		FpsModuleLayout fpsLayout;
+		ImVec2 sizes[kModuleCount];
+		float flStackWidth = 0.0f;
+		float flStackHeight = 0.0f;
+		int nPresent = 0;
+		for ( int i = 0; i < kModuleCount; ++i )
+		{
+			sizes[i] = MeasureModule( order[i], nFps, fpsLayout );
+			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
+			if ( !bPresent )
+				continue;
+			flStackWidth = std::max( flStackWidth, sizes[i].x );
+			if ( nPresent > 0 )
+				flStackHeight += kModuleGap;
+			flStackHeight += sizes[i].y;
+			++nPresent;
+		}
+
+		if ( nPresent == 0 )
+			return; // nothing to draw (shouldn't happen while fps_display.enabled, but safe)
+
+		// Anchor the whole stack (all modules share one column, width =
+		// widest present module) against the selected 3x3 cell, offset by
+		// the independent vertical/horizontal margins -- replaces the old
+		// hardcoded top-right kAnchorOffset=32 constant. This context's
+		// io.DisplaySize is the actual output resolution (see
+		// FpsDisplay_AddLayer()).
+		const ImVec2 io_display = ImGui::GetIO().DisplaySize;
+
+		const float flX = ( nHoriz == 0 ) ? cfg.margin_horizontal
+			: ( nHoriz == 1 ) ? ( io_display.x - flStackWidth ) * 0.5f
+			: ( io_display.x - cfg.margin_horizontal - flStackWidth );
+		const float flStartY = ( nVert == 0 ) ? cfg.margin_vertical
+			: ( nVert == 1 ) ? ( io_display.y - flStackHeight ) * 0.5f
+			: ( io_display.y - cfg.margin_vertical - flStackHeight );
+
+		// Clamp so a large margin (or, once #28 lands, several stacked
+		// modules) can never push the stack off-screen -- issue #27's own
+		// verification ask ("does not clip off-screen at any anchor").
+		const float flClampedX = std::clamp( flX, 0.0f, std::max( 0.0f, io_display.x - flStackWidth ) );
+		const float flClampedY = std::clamp( flStartY, 0.0f, std::max( 0.0f, io_display.y - flStackHeight ) );
+
+		// Pass 2: draw each present module at its stacked position.
+		float flCursorY = flClampedY;
+		for ( int i = 0; i < kModuleCount; ++i )
+		{
+			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
+			if ( !bPresent )
+				continue;
+			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), sizes[i], fpsLayout );
+			flCursorY += sizes[i].y + kModuleGap;
 		}
 	}
 
@@ -595,6 +1110,27 @@ namespace gamescope
 		s_ulPendingReadDonePoint = 0;
 	}
 
+	// Stock ImGui::SliderFloat() sizes its frame via CalcItemWidth(), which
+	// defaults to 65% of the window width (imgui.cpp's
+	// window->DC.ItemWidthDefault) and leaves the rest of the row for the
+	// trailing label -- so every slider below stopped two-thirds of the
+	// way across the panel with no override (reported: "sliders are not
+	// spanning the full width"). Size the frame explicitly instead: full
+	// row width minus exactly what the label needs, so frame+label
+	// together reach the row's right edge -- same "row spans full width,
+	// track fills what the label/value doesn't need" fix
+	// widgets::SliderControl() applies for its own sliders (Widgets.cpp);
+	// this file's sliders are plain stock ImGui rather than that custom
+	// widget (see this function's own header comment), so the fix has to
+	// be applied per call site here instead of in one shared place.
+	static void SetStockSliderFullWidth( const char *pszLabel )
+	{
+		const ImGuiStyle &style = ImGui::GetStyle();
+		const float flLabelW = ImGui::CalcTextSize( pszLabel ).x;
+		const float flGap = flLabelW > 0.0f ? style.ItemInnerSpacing.x : 0.0f;
+		ImGui::SetNextItemWidth( std::max( 1.0f, ImGui::GetContentRegionAvail().x - flLabelW - flGap ) );
+	}
+
 	void FpsDisplay_DrawSettingsPanel()
 	{
 		EnsureConfigLoaded();
@@ -609,7 +1145,14 @@ namespace gamescope
 		// SettingsOverlay.cpp's EnsureImguiInit() already called Load() on
 		// that context before any panel draws.
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Section ) );
-		ImGui::TextUnformatted( "FPS display (M4)" );
+		// Issue #27: renamed from "FPS display (M4)" -- this panel now
+		// hosts the whole module framework (FPS today; #28 adds CPU/GPU/
+		// Media), not just the FPS readout, so "System Monitor" is the
+		// name that actually describes it. File/function names stay
+		// FpsDisplay* internally (this file's own header comment) to
+		// avoid churning M4's existing surface for a rename that gains
+		// nothing outside the UI-visible strings.
+		ImGui::TextUnformatted( "System Monitor" );
 		ImGui::PopFont();
 
 		bool bChanged = false;
@@ -620,6 +1163,37 @@ namespace gamescope
 		bChanged |= widgets::Checkbox( "Show FPS counter", &cfg.enabled );
 
 		ImGui::BeginDisabled( !cfg.enabled );
+
+		// Issue #27: 3x3 placement grid + independent margins, replacing
+		// the old hardcoded top-right/32px constant. widgets::PositionGrid
+		// is issue #26's shared widget (Widgets.h/.cpp) -- reused verbatim
+		// rather than forking a second grid control, per the coordinator's
+		// note: same 9-cell model this file's ParsePlacement/ComposePlacement
+		// already speak (kPlacements above).
+		ImGui::Spacing();
+		ImGui::TextUnformatted( "Placement" );
+		int nVert = 0, nHoriz = 2;
+		ParsePlacement( cfg.placement, nVert, nHoriz );
+		if ( widgets::PositionGrid( "##SysMonPlacement", &nVert, &nHoriz ) )
+		{
+			cfg.placement = ComposePlacement( nVert, nHoriz );
+			bChanged = true;
+		}
+
+		SetStockSliderFullWidth( "Vertical margin" );
+		bChanged |= ImGui::SliderFloat( "Vertical margin", &cfg.margin_vertical, 0.0f, 128.0f, "%.0f px" );
+		SetStockSliderFullWidth( "Horizontal margin" );
+		bChanged |= ImGui::SliderFloat( "Horizontal margin", &cfg.margin_horizontal, 0.0f, 128.0f, "%.0f px" );
+		ImGui::Spacing();
+
+		// Spec §11's "ROWS checkbox list" -- Row 2 (frametime graph) / Row 3
+		// (percentile stats), independently toggleable, sharing every other
+		// setting on this panel (font size, backdrop, blend mode, opacity)
+		// rather than getting their own.
+		bChanged |= widgets::Checkbox( "Frametime graph", &cfg.graph_enabled );
+		bChanged |= widgets::Checkbox( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
+
+		SetStockSliderFullWidth( "Font size" );
 		bChanged |= ImGui::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
 
 		static const char *s_BlendModes[] = { "alpha", "additive" };
@@ -630,6 +1204,7 @@ namespace gamescope
 			bChanged = true;
 		}
 
+		SetStockSliderFullWidth( "Text opacity" );
 		bChanged |= ImGui::SliderFloat( "Text opacity", &cfg.text_opacity, 0.0f, 1.0f );
 
 		// Additive pairs oddly with a filled backdrop (the backdrop itself
@@ -640,8 +1215,11 @@ namespace gamescope
 		ImGui::BeginDisabled( !bBackdropAvailable );
 		bChanged |= widgets::Checkbox( "Backdrop", &cfg.backdrop_enabled );
 		ImGui::BeginDisabled( !( bBackdropAvailable && cfg.backdrop_enabled ) );
+		SetStockSliderFullWidth( "Backdrop opacity" );
 		bChanged |= ImGui::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
+		SetStockSliderFullWidth( "Backdrop rounding" );
 		bChanged |= ImGui::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
+		SetStockSliderFullWidth( "Backdrop padding" );
 		bChanged |= ImGui::SliderFloat( "Backdrop padding", &cfg.backdrop_padding, 0.0f, 24.0f, "%.0f px" );
 		ImGui::EndDisabled();
 		ImGui::EndDisabled();

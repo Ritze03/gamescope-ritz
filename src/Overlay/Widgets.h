@@ -103,4 +103,42 @@ namespace gamescope::widgets
 	// subsystem is live" (e.g. PanelConfig's app-id row) rather than just
 	// showing a value.
 	void ReadoutStrip( const char *pszText, bool bLeadingDot = false );
+
+	// superdoc/planning/ui-mockup-precise-spec.md §6's "Group blocks" --
+	// dense, self-contained settings sections with their own padding/border/
+	// fill, previously the largest unimplemented item on the spec's gap
+	// list (item #8: "current windows are a flat control list with plain
+	// separators"). Wraps ImGui::BeginChild()/EndChild() -- the only stock
+	// primitive that gives an independently-clipped, auto-height region with
+	// its own background/border, which is exactly this component's shape,
+	// rather than hand-rolling a second "draw everything on the parent's own
+	// draw list" container the way the title bar/dock do.
+	//
+	// Same always-call-the-matching-End-call contract as ImGui::BeginChild()/
+	// EndChild() itself: EndGroupBlock() must be called once for every
+	// BeginGroupBlock(), regardless of BeginGroupBlock()'s return value.
+	// `pszId` only needs to be unique within the enclosing window (ImGui's
+	// own ID stack scopes it, same as every other widget ID here).
+	// `bActive` is spec §6's "featured/active group" variant (fill 3.2% vs
+	// 2.2%, border 7% vs 6%, and a 2px accent left edge replacing the left
+	// border) -- pass the *same* bActive to both calls, mirroring how the
+	// design guide names this "the group currently doing something" (e.g. a
+	// panel's own currently-selected mode). Callers draw their own header
+	// row (name/toggle/chips -- spec §6's own header-row list) as ordinary
+	// content immediately after BeginGroupBlock(); this deliberately doesn't
+	// take a title string itself, since several of the spec's group headers
+	// need more than plain text (a toggle before the name, chips after it).
+	bool BeginGroupBlock( const char *pszId, bool bActive = false );
+	void EndGroupBlock( bool bActive = false );
+
+	// superdoc/planning/ui-mockup-precise-spec.md §11's "ANCHOR block" --
+	// a 3x3 grid of 30x30px cells, 3px gaps (cells: fill white@5%, border
+	// white@9%; selected: fill accent@30%, border accent@70%). Used for
+	// any "pick one of nine screen positions" picker (notification
+	// placement -- issue #26; System Monitor position -- issue #27), so
+	// this lives here rather than being duplicated per caller. `*pnVert`/
+	// `*pnHoriz` are each 0..2 (row/column); returns true (and updates
+	// them) the frame a different cell is clicked, same "changed this
+	// frame" contract as SegmentedControl() above.
+	bool PositionGrid( const char *pszId, int *pnVert, int *pnHoriz );
 }

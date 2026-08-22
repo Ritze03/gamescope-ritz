@@ -125,14 +125,31 @@ namespace gamescope
         }
         else
         {
+            // SCRIPT_DIR is this fork's own bundled default scripts
+            // (installed by default_extras_install.sh to
+            // $prefix/share/gamescope-ritz/scripts) -- strictly namespaced,
+            // no fallback needed since it's package data we own, not
+            // something a user could have pre-existing content in.
             RunFolder( SCRIPT_DIR, true );
+            RunFolder( "/etc/gamescope-ritz/scripts", true );
+            // Fallback: also read the plain (unnamespaced) system scripts
+            // dir an admin may already have set up for a packaged
+            // gamescope install. Namespacing the path above must not
+            // silently stop reading an existing /etc/gamescope/scripts
+            // setup someone already relies on.
             RunFolder( "/etc/gamescope/scripts", true );
         }
 
         if ( cv_script_use_user_scripts )
         {
-            std::string sUserConfigs = std::string{ GetConfigDir() } + "/gamescope/scripts";
+            std::string sUserConfigs = std::string{ GetConfigDir() } + "/gamescope-ritz/scripts";
             RunFolder( sUserConfigs, true );
+
+            // Fallback, same reasoning as the /etc case above: keep reading
+            // a user's existing $XDG_CONFIG_HOME/gamescope/scripts instead
+            // of silently orphaning it after this rename.
+            std::string sUserConfigsFallback = std::string{ GetConfigDir() } + "/gamescope/scripts";
+            RunFolder( sUserConfigsFallback, true );
         }
     }
 

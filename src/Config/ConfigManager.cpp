@@ -153,6 +153,12 @@ namespace gamescope::config
                 s.fps_display.backdrop_padding = JGetFloat( *pFps, "backdrop_padding", s.fps_display.backdrop_padding );
                 s.fps_display.blend_mode = JGetString( *pFps, "blend_mode", s.fps_display.blend_mode );
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
+                s.fps_display.graph_enabled = JGetBool( *pFps, "graph_enabled", s.fps_display.graph_enabled );
+                s.fps_display.percentiles_enabled = JGetBool( *pFps, "percentiles_enabled", s.fps_display.percentiles_enabled );
+                // Issue #27: placement/margins, same field-shape as OverlaySettings::notification_placement.
+                s.fps_display.placement = JGetString( *pFps, "placement", s.fps_display.placement );
+                s.fps_display.margin_vertical = JGetFloat( *pFps, "margin_vertical", s.fps_display.margin_vertical );
+                s.fps_display.margin_horizontal = JGetFloat( *pFps, "margin_horizontal", s.fps_display.margin_horizontal );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -191,7 +197,36 @@ namespace gamescope::config
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
+            {
                 s.overlay.fade_ms = JGetOptInt( *pOverlay, "fade_ms" );
+                s.overlay.notification_placement = JGetString( *pOverlay, "notification_placement", s.overlay.notification_placement );
+
+                // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
+                s.overlay.dock_scale = JGetFloat( *pOverlay, "dock_scale", s.overlay.dock_scale );
+                s.overlay.display_scale = JGetFloat( *pOverlay, "display_scale", s.overlay.display_scale );
+                s.overlay.notification_scale = JGetFloat( *pOverlay, "notification_scale", s.overlay.notification_scale );
+                // opacity_background removed (see ConfigSchema.h) - deliberately
+                // not read here any more. An old config's leftover key is simply
+                // never looked up, which is exactly what "ignore an unknown field
+                // gracefully" means for this named-lookup (not iterate-and-
+                // validate) parse style.
+                s.overlay.opacity_windows_focused = JGetFloat( *pOverlay, "opacity_windows_focused", s.overlay.opacity_windows_focused );
+                s.overlay.opacity_windows_unfocused = JGetFloat( *pOverlay, "opacity_windows_unfocused", s.overlay.opacity_windows_unfocused );
+                s.overlay.opacity_dock = JGetFloat( *pOverlay, "opacity_dock", s.overlay.opacity_dock );
+                s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
+                s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
+                s.overlay.background_darkening = JGetFloat( *pOverlay, "background_darkening", s.overlay.background_darkening );
+
+                s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
+                s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
+                s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
+            }
+
+            if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
+                s.notifications.muted = JGetBool( *pNotifications, "muted", s.notifications.muted );
+
+            if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
+                s.audio.manual_node_binary = JGetString( *pAudio, "manual_node_binary", s.audio.manual_node_binary );
 
             return s;
         }
@@ -221,6 +256,11 @@ namespace gamescope::config
             jFps[ "backdrop_padding" ] = s.fps_display.backdrop_padding;
             jFps[ "blend_mode" ] = s.fps_display.blend_mode;
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
+            jFps[ "graph_enabled" ] = s.fps_display.graph_enabled;
+            jFps[ "percentiles_enabled" ] = s.fps_display.percentiles_enabled;
+            jFps[ "placement" ] = s.fps_display.placement;
+            jFps[ "margin_vertical" ] = s.fps_display.margin_vertical;
+            jFps[ "margin_horizontal" ] = s.fps_display.margin_horizontal;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
@@ -248,11 +288,19 @@ namespace gamescope::config
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
 
+            nlohmann::json jNotifications = nlohmann::json::object();
+            jNotifications[ "muted" ] = s.notifications.muted;
+
+            nlohmann::json jAudio = nlohmann::json::object();
+            jAudio[ "manual_node_binary" ] = s.audio.manual_node_binary;
+
             nlohmann::json j = nlohmann::json::object();
             j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
             j[ "reshade" ] = std::move( jReshade );
+            j[ "notifications" ] = std::move( jNotifications );
+            j[ "audio" ] = std::move( jAudio );
 
             // Process-level UI preference, only ever present on global.json -
             // see ConfigSchema.h's OverlaySettings comment.
@@ -262,6 +310,22 @@ namespace gamescope::config
                 jOverlay[ "fade_ms" ] = s.overlay.fade_ms.has_value()
                     ? nlohmann::json( *s.overlay.fade_ms )
                     : nlohmann::json( nullptr );
+                jOverlay[ "notification_placement" ] = s.overlay.notification_placement;
+
+                // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
+                jOverlay[ "dock_scale" ] = s.overlay.dock_scale;
+                jOverlay[ "display_scale" ] = s.overlay.display_scale;
+                jOverlay[ "notification_scale" ] = s.overlay.notification_scale;
+                jOverlay[ "opacity_windows_focused" ] = s.overlay.opacity_windows_focused;
+                jOverlay[ "opacity_windows_unfocused" ] = s.overlay.opacity_windows_unfocused;
+                jOverlay[ "opacity_dock" ] = s.overlay.opacity_dock;
+                jOverlay[ "opacity_notifications" ] = s.overlay.opacity_notifications;
+                jOverlay[ "background_blur" ] = s.overlay.background_blur;
+                jOverlay[ "background_darkening" ] = s.overlay.background_darkening;
+
+                jOverlay[ "startup_announce_enabled" ] = s.overlay.startup_announce_enabled;
+                jOverlay[ "capture_all_keyboard_input" ] = s.overlay.capture_all_keyboard_input;
+                jOverlay[ "keyboard_navigation_enabled" ] = s.overlay.keyboard_navigation_enabled;
                 j[ "overlay" ] = std::move( jOverlay );
             }
 
@@ -626,10 +690,74 @@ namespace gamescope::config
         return WriteFileAtomic( GamePath( svAppId ), DumpJson( j ) );
     }
 
+    namespace
+    {
+        // Reads games/<AppId>.json regardless of its own override_global
+        // flag and returns the parsed object - unlike LoadPerGameOverride
+        // (ConfigSchema-typed, gated on the flag), this is "is there
+        // anything on disk to restore/deactivate/delete at all", which
+        // ClearPerGameOverride/RestorePerGameOverride/HasSavedPerGameConfig
+        // below all need to answer without caring whether it's currently
+        // active.
+        std::optional<nlohmann::json> ReadGameFileJson( std::string_view svAppId )
+        {
+            std::string sPath = GamePath( svAppId );
+            std::optional<std::string> oText = ReadWholeFile( sPath );
+            if ( !oText )
+                return std::nullopt;
+            return ParseConfigFile( *oText, sPath );
+        }
+    }
+
     bool ClearPerGameOverride( std::string_view svAppId )
     {
+        std::optional<nlohmann::json> oJson = ReadGameFileJson( svAppId );
+        if ( !oJson )
+            return true; // nothing on disk - nothing to deactivate
+
+        ( *oJson )[ "override_global" ] = false;
+        return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
+    }
+
+    bool HasSavedPerGameConfig( std::string_view svAppId )
+    {
+        return ReadGameFileJson( svAppId ).has_value();
+    }
+
+    bool RestorePerGameOverride( std::string_view svAppId )
+    {
+        std::optional<nlohmann::json> oJson = ReadGameFileJson( svAppId );
+        if ( !oJson )
+            return false;
+
+        ( *oJson )[ "override_global" ] = true;
+        return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
+    }
+
+    bool DeletePerGameOverride( std::string_view svAppId )
+    {
+        // Bare-id guard: no path separator, and not "." / ".." - mirrors
+        // SanitizeProfileName's profiles/ containment in spirit (see
+        // ConfigManager.h's comment on this function).
+        if ( svAppId.empty() || svAppId.find( '/' ) != std::string_view::npos ||
+            svAppId == "." || svAppId == ".." )
+        {
+            s_ConfigLog.errorf( "DeletePerGameOverride: refusing suspicious app id '%.*s'",
+                (int)svAppId.size(), svAppId.data() );
+            return false;
+        }
+
+        std::filesystem::path path( GamePath( svAppId ) );
+        // Containment check: the path this function is about to remove must
+        // resolve to a direct child of GamesDir(), never anything else -
+        // GamePath() can only ever produce that shape given the guard above,
+        // but this is checked again anyway so the delete path never relies
+        // on a single layer of defense.
+        if ( path.parent_path() != std::filesystem::path( GamesDir() ) )
+            return false;
+
         std::error_code ec;
-        std::filesystem::remove( GamePath( svAppId ), ec );
+        std::filesystem::remove( path, ec );
         return !ec || ec == std::errc::no_such_file_or_directory;
     }
 
@@ -641,10 +769,15 @@ namespace gamescope::config
 
         // One-time copy (DECISIONS.md #20) - not a live reference. `overlay` is
         // a process-level preference, not part of a profile's shape, so it's
-        // deliberately left untouched on `target`.
+        // deliberately left untouched on `target`. `audio.manual_node_binary`
+        // is deliberately left untouched too - it names one specific game's
+        // process, so copying it in from a profile (meant to be reusable
+        // across different games) would silently point volume control at the
+        // wrong process for every other game the profile is applied to.
         target.gamescope = oProfile->gamescope;
         target.fps_display = oProfile->fps_display;
         target.reshade = oProfile->reshade;
+        target.notifications = oProfile->notifications;
 
         return true;
     }
@@ -741,8 +874,40 @@ namespace gamescope::config
         };
     }
 
+    namespace
+    {
+        // In-process mirror of the most recently *known-good* `overlay`
+        // sub-object, updated synchronously (no disk round trip) by every
+        // EnqueueGlobalWrite() call below. Exists so EnqueueRoutedWrite()'s
+        // global-write branch (further down) can pull a fresh `overlay`
+        // without racing the background ConfigWriter thread: a disk read
+        // right before enqueueing looks fresh but isn't, if an
+        // just-enqueued-but-not-yet-flushed overlay write from the same
+        // frame hasn't hit disk yet -- reading this in-memory value instead
+        // always reflects the latest enqueued write instantly, flushed or
+        // not.
+        bool s_bLastKnownOverlayLoaded = false;
+        OverlaySettings s_LastKnownOverlay;
+
+        const OverlaySettings &CurrentOverlaySettings()
+        {
+            if ( !s_bLastKnownOverlayLoaded )
+            {
+                // First call this process (nothing has written global.json's
+                // overlay yet this session, e.g. the very first edit the
+                // user makes is on a non-General tab) -- fall back to a
+                // one-time disk read, same as before this cache existed.
+                s_LastKnownOverlay = LoadGlobal().overlay;
+                s_bLastKnownOverlayLoaded = true;
+            }
+            return s_LastKnownOverlay;
+        }
+    }
+
     void EnqueueGlobalWrite( Settings settings )
     {
+        s_LastKnownOverlay = settings.overlay;
+        s_bLastKnownOverlayLoaded = true;
         ConfigWriter::Instance().Enqueue( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
     }
 
@@ -854,9 +1019,33 @@ namespace gamescope::config
     {
         const std::optional<std::string> &oAppId = SessionAppId();
         if ( oAppId.has_value() && IsSessionOverrideActive() )
+        {
             EnqueuePerGameSnapshot( *oAppId, settings );
-        else
-            EnqueueGlobalWrite( settings );
+            return;
+        }
+
+        // global.json is the one file every panel can end up writing to
+        // (whenever no per-game override is active), but `overlay` is
+        // deliberately process-level/General-tab-owned (ConfigSchema.h's
+        // OverlaySettings comment: "process-level and global.json-only").
+        // No caller of EnqueueRoutedWrite() owns that field -- PanelConfig's
+        // General tab persists overlay edits through EnqueueGlobalWrite()
+        // directly (PanelConfig.cpp's QueueGeneralSave()), never through
+        // here. Every OTHER panel's cached `settings.overlay` here is
+        // whatever it happened to load at panel-open time, which goes stale
+        // the instant the General tab writes a change: a General-tab edit
+        // deliberately never bumps ConfigGeneration (see
+        // EnsureGeneralSettingsLoaded()'s own comment), so nothing reloads
+        // these callers' caches. Forwarding that stale `overlay` straight
+        // through used to silently overwrite every General-tab change on
+        // the very next unrelated routed write from any other panel --
+        // "changed General settings, they don't stick" was this exact bug.
+        // Fix: substitute in the freshest known `overlay` (see
+        // CurrentOverlaySettings() above) immediately before writing,
+        // instead of forwarding this caller's own stale copy.
+        Settings toWrite = settings;
+        toWrite.overlay = CurrentOverlaySettings();
+        EnqueueGlobalWrite( std::move( toWrite ) );
     }
 
     void ResetSessionRoutingForTests()
@@ -866,6 +1055,13 @@ namespace gamescope::config
         s_bSessionOverrideActive = false;
         s_bSessionOverrideResolved = false;
         s_ulConfigGeneration = 0;
+        // CurrentOverlaySettings()'s cache (above) is process-wide, same
+        // hazard every other piece of session-routing state here has:
+        // catch2 runs every [config] TEST_CASE in one shared process, each
+        // against its own fresh TempConfigHome, so a value cached against a
+        // prior test's (already-deleted) temp directory must not leak into
+        // the next one.
+        s_bLastKnownOverlayLoaded = false;
     }
 
     std::string DebugDumpEffective( const std::optional<std::string> &oAppId )

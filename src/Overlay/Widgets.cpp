@@ -209,7 +209,23 @@ namespace gamescope::widgets
 			const ImGuiStyle &style = g.Style;
 			const ImGuiID id = pWindow->GetID( pszLabel );
 			const char *pszLabelEnd = ImGui::FindRenderedTextEnd( pszLabel );
-			const float flWidth = ImGui::CalcItemWidth();
+
+			// Deliberately *not* ImGui::CalcItemWidth(): with no caller
+			// override that falls back to window->DC.ItemWidth, whose
+			// un-pushed default is window->Size.x * 0.65f -- a heuristic
+			// imgui.cpp itself sizes for the classic "frame + trailing
+			// label" stock-widget row, which this custom widget doesn't
+			// draw (its label lives on its own line above the track, see
+			// below). Every caller inherited that 65% cap with nothing to
+			// its right filling the rest, i.e. exactly the reported "sliders
+			// are not spanning the full width". Spec §7's Slider entry
+			// itself says "Track: full width", so default to the row's full
+			// available width -- while still honoring an explicit
+			// ImGui::SetNextItemWidth()/negative-width caller override via
+			// CalcItemWidth(), same as every other ImGui item.
+			const float flWidth = ( g.NextItemData.HasFlags & ImGuiNextItemDataFlags_HasWidth )
+				? ImGui::CalcItemWidth()
+				: ImGui::GetContentRegionAvail().x;
 
 			// ---- Layout: label+value line, 5px gap, 18px track hit-row,
 			// 5px gap, min/max line -- spec §3/§7. ----
@@ -439,7 +455,14 @@ namespace gamescope::widgets
 		// canonical size per 2b").
 		static constexpr ImVec2 kTrackSize( 30.0f, 15.0f );
 		static constexpr float kKnobSize = 11.0f;
-		static constexpr float kInset = 1.0f; // "1px inset padding"
+		// Spec's "1px inset content padding" is measured from the *inside*
+		// of the 1px track border, not from the track's outer edge -- using
+		// it as the sole offset from bb.Min/Max put the knob flush against
+		// the border's inner face (reported: "the lever needs one
+		// horizontal pixel of additional spacing towards the edge"). 2px
+		// here = 1px border + 1px content padding, matching the vertical
+		// inset the centering below already produces ((15-11)/2 = 2px).
+		static constexpr float kInset = 2.0f;
 
 		return BooleanControl( pszLabel, pbValue, kTrackSize,
 			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
@@ -619,6 +642,67 @@ namespace gamescope::widgets
 		return bChanged;
 	}
 
+	bool PositionGrid( const char *pszId, int *pnVert, int *pnHoriz )
+	{
+		ImGui::PushID( pszId );
+
+		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
+		ImDrawList *pDrawList = pWindow->DrawList;
+
+		// Spec §11 ANCHOR block: 30x30px cells, 3px gaps.
+		constexpr float kCellSize = 30.0f;
+		constexpr float kGap = 3.0f;
+
+		bool bChanged = false;
+		const ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
+
+		for ( int v = 0; v < 3; v++ )
+		{
+			for ( int h = 0; h < 3; h++ )
+			{
+				ImGui::PushID( v * 3 + h );
+
+				const ImVec2 pos( gridOrigin.x + h * ( kCellSize + kGap ), gridOrigin.y + v * ( kCellSize + kGap ) );
+				ImGui::SetCursorScreenPos( pos );
+
+				const ImVec2 size( kCellSize, kCellSize );
+				const bool bClicked = ImGui::InvisibleButton( "##cell", size );
+				const bool bHovered = ImGui::IsItemHovered();
+				const bool bActive = ( v == *pnVert && h == *pnHoriz );
+
+				if ( bClicked && !bActive )
+				{
+					*pnVert = v;
+					*pnHoriz = h;
+					bChanged = true;
+				}
+
+				// Spec §11: cells fill white@5%/border white@9%; selected
+				// fill accent@30%/border accent@70%. Hover nudge on the
+				// inactive cell is the same in-style invention
+				// SegmentedControl() above makes (spec §12: hover was
+				// never designed).
+				const ImU32 fill = bActive
+					? ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) )
+					: ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.08f : 0.05f ) );
+				const ImU32 border = bActive
+					? ImGui::GetColorU32( gamescope::palette::Accent( 0.70f ) )
+					: ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.14f : 0.09f ) );
+
+				pDrawList->AddRectFilled( pos, pos + size, fill ); // 0px radius -- flat/square, same as every other control here
+				pDrawList->AddRect( pos, pos + size, border );
+
+				ImGui::PopID();
+			}
+		}
+
+		ImGui::SetCursorScreenPos( ImVec2( gridOrigin.x, gridOrigin.y + 3 * kCellSize + 2 * kGap ) );
+		ImGui::Dummy( ImVec2( 3 * kCellSize + 2 * kGap, 0.0f ) ); // register the full grid footprint as one item block
+
+		ImGui::PopID();
+		return bChanged;
+	}
+
 	void ReadoutStrip( const char *pszText, bool bLeadingDot )
 	{
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
@@ -655,5 +739,44 @@ namespace gamescope::widgets
 		ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
 		pDrawList->AddText( ImVec2( flTextX, pos.y + kPadY ), ImGui::GetColorU32( gamescope::palette::White( 0.34f ) ), pszText );
 		ImGui::PopFont();
+	}
+
+	bool BeginGroupBlock( const char *pszId, bool bActive )
+	{
+		// Spec §6: fill white@2.2% (active: 3.2%), border white@6% (active:
+		// 7%), 12px padding, 10px row gap, square corners.
+		ImGui::PushStyleColor( ImGuiCol_ChildBg, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.032f : 0.022f ) ) );
+		ImGui::PushStyleColor( ImGuiCol_Border, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.07f : 0.06f ) ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 0.0f );
+		ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 1.0f );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 12.0f, 12.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 8.0f, 10.0f ) );
+
+		ImGui::PushID( pszId );
+		return ImGui::BeginChild( "##group", ImVec2( 0.0f, 0.0f ),
+			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
+	}
+
+	void EndGroupBlock( bool bActive )
+	{
+		ImGui::EndChild();
+		ImGui::PopID();
+		ImGui::PopStyleVar( 4 ); // ItemSpacing, WindowPadding, ChildBorderSize, ChildRounding
+		ImGui::PopStyleColor( 2 ); // Border, ChildBg
+
+		if ( bActive )
+		{
+			// 2px accent left edge replacing the left border -- spec §6's
+			// "featured/active group" treatment. Drawn over the just-closed
+			// child's own rect: GetItemRect*() reflects the child now that
+			// EndChild() has registered it as an item on the *parent*
+			// window, same trick BeginGroupBlock()'s caller-visible geometry
+			// relies on nowhere else -- this is the only place that needs it.
+			const ImVec2 mn = ImGui::GetItemRectMin();
+			const ImVec2 mx = ImGui::GetItemRectMax();
+			ImGui::GetWindowDrawList()->AddRectFilled( mn, ImVec2( mn.x + 2.0f, mx.y ),
+				ImGui::GetColorU32( gamescope::palette::Accent( 0.80f ) ) );
+		}
 	}
 }

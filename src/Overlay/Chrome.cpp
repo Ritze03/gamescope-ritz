@@ -26,35 +26,52 @@
 // this solves (five always-on overlapping windows -> five windows shown/
 // hidden from a bottom dock, per SPEC.md's UI structure).
 //
-// ponytail: the design guide's single 30-34px title-bar header row (status
-// dot + icon + title + meta + collapse/close glyph-button cluster, all in
-// one row replacing ImGui's own title bar) is NOT reimplemented as one
-// literal custom-drawn row here. Doing that means reimplementing ImGui's
-// title-bar hit-testing/drag/collapse/close behavior by hand (Begin()'s own
-// title bar already does all of that correctly, for free) just to move a
-// few pixels of decoration into the same visual row. Instead: keep ImGui's
-// native title bar (drag, the Title font from M8 part 1, and a native close
-// X wired to this panel's open/closed dock state), and add a slim second
-// row of icon + status dot + meta text as ordinary window content directly
-// underneath it. Same information, same "this panel is X and it's live"
-// read, a fraction of the risk. If a future pass wants the literal single-
-// row treatment, this is the seam to replace.
+// Title bar history: an earlier pass here deliberately kept ImGui's native
+// title bar and added a second custom-drawn row underneath it (icon+status
+// dot+meta), on the theory that reimplementing drag/collapse/close by hand
+// wasn't worth it just to merge two rows into one. That compromise is what
+// screenshot evidence showed as "the top bar is far too transparent" -- the
+// native bar's own TitleBg/TitleBgActive fill (Widgets.cpp's `raised` token,
+// white @ 4-5%) is nearly invisible against a bright game, and it reads as
+// two thin, mismatched strips instead of one solid 34px bar. This pass
+// removes the native title bar outright (ImGuiWindowFlags_NoTitleBar) and
+// draws the whole spec §5 bar as one thing -- see DrawTitleBar() below for
+// how drag/collapse/close are reimplemented on ImGui's own primitives
+// (StartMouseMovingWindow, ButtonBehavior via InvisibleButton) rather than
+// by hand from nothing.
 #include "Chrome.h"
 
 #include "Fonts.h"
 #include "../SettingsOverlay.h"
+#include "Config/ConfigManager.h"
 
 #include <cmath>
 #include <cstddef>
 
 // ImVec2 operator+/- (used below by the status-dot glow, dock top-edge
-// marker, and hint-line shadow offset) aren't exported by imgui.h by
-// default -- must be defined before *any* include of imgui.h in this
-// translation unit, so Palette.h (which also includes imgui.h) is pulled in
-// only after this, same ordering rule as Widgets.cpp.
+// marker, hint-line shadow offset, and the custom title bar's own layout)
+// aren't exported by imgui.h by default -- must be defined before *any*
+// include of imgui.h in this translation unit, so Palette.h (which also
+// includes imgui.h) is pulled in only after this, same ordering rule as
+// Widgets.cpp.
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
+// imgui_internal.h for ImGui::StartMouseMovingWindow()/GetCurrentWindow() --
+// the custom title bar's drag reimplementation calls the exact same
+// internal primitive ImGui's own native title bar drag path uses (see
+// imgui.cpp's RenderWindowTitleBarContents()/UpdateMouseMovingWindowNewFrame()
+// callers), not a from-scratch mouse-delta hack. Same precedent as
+// Widgets.cpp, which already includes this for ButtonBehavior()/
+// SliderBehavior().
+#include "imgui_internal.h"
 #include "Palette.h"
+
+namespace gamescope::palette
+{
+	// Definition for the extern declared in Palette.h -- see that header's
+	// LiveTheme comment for why this specific storage lives here.
+	LiveTheme g_LiveTheme;
+}
 
 namespace gamescope::chrome
 {
@@ -250,96 +267,232 @@ namespace gamescope::chrome
 		// alpha rather than a full white@80%).
 		constexpr ImU32 kIconIdleU32       = IM_COL32( 255, 255, 255, 158 ); // #EFF5FB @ 62%
 		constexpr ImU32 kIconHoverU32      = IM_COL32( 255, 255, 255, 204 );
-		// Title-bar sub-header icon idle -- spec §2 "icon idle" title-bar row (.45-.5).
-		constexpr ImU32 kTitleIconIdleU32  = IM_COL32( 255, 255, 255, 122 ); // #EFF5FB @ 48%
 		constexpr ImU32 kHairlineU32       = IM_COL32( 255, 255, 255, 26 );  // #FFFFFF @ 10% -- spec §1 hairline
 		constexpr ImU32 kHairlineStrongU32 = IM_COL32( 255, 255, 255, 46 );  // in-style hover invention
 		constexpr ImU32 kDockIdleFillU32   = IM_COL32( 255, 255, 255, 11 );  // #FFFFFF @ 4.5% -- spec §8 dock idle fill
 		constexpr ImU32 kDockHoverFillU32  = IM_COL32( 255, 255, 255, 20 );  // in-style hover invention
 
-		// Display open, everything else closed -- see Chrome.h's IsPanelOpen()
-		// comment: exactly one panel is open on first show, SetPanelOpen()
-		// keeps it that way from then on.
-		bool s_bPanelOpen[(size_t)PanelId::Count] = { true, false, false, false, false };
+		constexpr float kTitleBarHeight = 34.0f; // spec §5
 
-		Icon IconForPanel( PanelId id )
+		// Display open, everything else closed on first-ever show -- a
+		// reasonable non-overwhelming default, not a hard limit: see Chrome.h's
+		// IsPanelOpen() comment, opening more no longer closes this one.
+		bool s_bPanelOpen[(size_t)PanelId::Count] = { true, false, false, false, false };
+		// Per-panel "shrunk to just the title bar" state -- this file's own
+		// stand-in for ImGui's native window collapse, which only exists on
+		// the native title bar path (ImGuiWindowFlags_NoTitleBar disables it
+		// entirely, see imgui.cpp's Begin()). Toggled by DrawTitleBar()'s
+		// collapse glyph and by double-clicking the bar's drag zone --
+		// mirrors the native double-click-title-bar-to-collapse gesture.
+		bool s_bPanelCollapsed[(size_t)PanelId::Count] = {};
+		// One-frame-stale focus cache: spec §4's "unfocused windows: whole
+		// window x94% opacity" (and this pass's focused-border *thickness*)
+		// need to be applied via style pushes that ImGui::Begin() itself
+		// consumes to draw the window background/border, before this
+		// function can know the *new* frame's focus result. Using last
+		// frame's cached focus state is a one-frame-late approximation on
+		// the exact frame focus changes, imperceptible for a settings
+		// panel, and avoids the alternative (a two-pass Begin) entirely.
+		bool s_bPanelWasFocused[(size_t)PanelId::Count] = {};
+
+		// Sensible non-overlapping default positions, one fixed slot per
+		// PanelId, replacing whatever position each panel's own call site
+		// used to hardcode (Chrome.h's BeginPanelWindow() comment explains
+		// why: multiple panels can now be open at once, so their *first-ever*
+		// positions actually have to not collide). A 3-column x 2-row tile
+		// grid sized off io.DisplaySize (so it still spreads out sanely at
+		// non-1920x1080 resolutions), generous enough that every panel's own
+		// fixed width (380-500px, see each panel's own defaultSize argument)
+		// fits inside its cell without touching its neighbor. Only ever
+		// consulted the first time a given panel is shown (ImGuiCond_FirstUseEver,
+		// in BeginPanelWindow()) -- once dragged, ImGui's own window state
+		// remembers where the user put it for as long as this process's
+		// ImGui context lives, satisfying "remember position while open"
+		// without any extra bookkeeping here.
+		ImVec2 TiledDefaultPos( PanelId id )
 		{
-			switch ( id )
-			{
-				case PanelId::Display: return Icon::Display;
-				case PanelId::Shaders: return Icon::Shaders;
-				case PanelId::Fps:     return Icon::Performance;
-				case PanelId::Audio:   return Icon::Audio;
-				case PanelId::Config:  return Icon::Profiles;
-				default:                return Icon::Settings;
-			}
+			struct Slot { int col, row; };
+			constexpr Slot kSlots[(size_t)PanelId::Count] = {
+				{ 0, 0 }, // Display
+				{ 1, 0 }, // Shaders
+				{ 2, 0 }, // Fps
+				{ 0, 1 }, // Audio
+				{ 1, 1 }, // Config
+			};
+
+			constexpr float kMarginX = 40.0f;
+			constexpr float kMarginY = 40.0f;
+			constexpr float kRowHeight = 400.0f; // clears every panel's auto-height in row 0
+
+			const ImGuiIO &io = ImGui::GetIO();
+			const float flColWidth = ImMax( 460.0f, ( io.DisplaySize.x - kMarginX * 2.0f ) / 3.0f );
+
+			const Slot &slot = kSlots[(size_t)id];
+			return ImVec2( kMarginX + slot.col * flColWidth, kMarginY + slot.row * kRowHeight );
 		}
 
-		// Slim icon + status-dot sub-header, drawn as ordinary window
-		// content right under ImGui's own native title bar. See this file's
-		// top ponytail comment for why this isn't one literal single-row
-		// custom title bar replacing ImGui's own -- that ponytail call
-		// stands; what changed here (spec §5, gap list items 4-5) is this
-		// row's own paint: a real gradient fill spanning the full window
-		// width (not just content padding), a 6x6 SQUARE status dot (the
-		// spec's own shape -- a previous pass drew a circle) with a glow
-		// when live, and the meta text recolored/resized to spec. The
-		// full-height accent left-edge stripe this used to draw here is
-		// REMOVED per the spec's gap list item 5 ("we invented a full-height
-		// accent left stripe that does not exist in the design") -- the
-		// focused-window accent *border* BeginPanelWindow() already applies
-		// is the design's actual, sole focus indicator (spec §4).
-		void DrawPanelChromeHeader( PanelId id )
-		{
-			const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
+		// ---- Live theme (General tab settings, see Palette.h's LiveTheme) --
+		gamescope::palette::LiveTheme *pLiveTheme = &gamescope::palette::g_LiveTheme;
+		bool s_bLiveThemeLoaded = false;
 
+		void EnsureLiveThemeLoaded()
+		{
+			if ( s_bLiveThemeLoaded )
+				return;
+			s_bLiveThemeLoaded = true;
+
+			// overlay.* is process-level/global-only (ConfigSchema.h's own
+			// comment on OverlaySettings) -- deliberately config::LoadGlobal(),
+			// never ResolveEffective(): a per-game override file is always
+			// written with bIncludeOverlay=false (ConfigManager.cpp's
+			// SettingsToJson), so resolving through the current session's
+			// per-game file while an override is active would silently read
+			// back compiled *defaults* for every one of these fields instead
+			// of the user's real preference. Loaded exactly once per process
+			// (LoadGlobal() does blocking file I/O -- ConfigManager.h's
+			// threading note: not on the vblank-paced render loop);
+			// PanelConfig.cpp's General tab is the only thing that changes
+			// these again after this, and it writes straight into
+			// gamescope::palette::g_LiveTheme itself on every edit -- no
+			// generation-bump reload path to wire up the way the per-game
+			// panels need, because profile-apply/override-toggle never touch
+			// `overlay` at all (ConfigManager.h's ApplyProfile() doc comment).
+			const config::Settings s = config::LoadGlobal();
+			pLiveTheme->flDockScale = s.overlay.dock_scale;
+			pLiveTheme->flDisplayScale = s.overlay.display_scale;
+			pLiveTheme->flWindowAlphaFocused = s.overlay.opacity_windows_focused;
+			pLiveTheme->flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
+			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
+			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
+		}
+
+		// WindowBg/PopupBg's alpha is baked once at init by Widgets.cpp's
+		// ApplyStyle() -- re-applied here every frame so General tab's
+		// opacity_windows_focused/unfocused sliders (task requirement: "must
+		// take effect live, not on restart") actually reach every popup/
+		// combo/tooltip drawn with the shared style (nothing here has a
+		// focus concept of its own, so they get the unfocused value as their
+		// steady-state default). Panel windows themselves override this
+		// per-window in BeginPanelWindow() below, using the same
+		// one-frame-cached focus state that already drives their border-
+		// alpha/thickness focus treatment.
+		void ApplyLiveWindowAlpha()
+		{
+			ImGuiStyle &style = ImGui::GetStyle();
+			style.Colors[ImGuiCol_WindowBg].w = pLiveTheme->flWindowAlphaUnfocused;
+			style.Colors[ImGuiCol_PopupBg].w = pLiveTheme->flWindowAlphaUnfocused;
+		}
+
+		// One 18x18px hit box for the collapse/close glyph cluster --
+		// ButtonBehavior()-based (via InvisibleButton, same primitive every
+		// other custom widget in this overlay uses -- Widgets.cpp's
+		// Toggle()/Checkbox(), DrawDockButton() below), so hover/press/
+		// keyboard-nav semantics match a real ImGui button. Spec §5: "18x18px
+		// hit boxes ... stroke #EFF5FB@45% (50% focused) ... no hover state
+		// was designed -- use @80% on hover as the in-style invention".
+		bool DrawTitleGlyphButton( ImDrawList *pDrawList, const char *pszId, ImVec2 pos, Icon icon, bool bFocused )
+		{
+			ImGui::SetCursorScreenPos( pos );
+			const bool bClicked = ImGui::InvisibleButton( pszId, ImVec2( 18.0f, 18.0f ) );
+			const bool bHovered = ImGui::IsItemHovered();
+			const float flAlpha = bHovered ? 0.80f : ( bFocused ? 0.50f : 0.45f );
+			DrawIcon( pDrawList, icon, pos + ImVec2( 9.0f, 9.0f ), 12.0f, ImGui::GetColorU32( gamescope::palette::White( flAlpha ) ) );
+			return bClicked;
+		}
+
+		// The full spec §5 title bar, drawn as one literal 34px row of
+		// window content flush against the window's top edge -- see this
+		// file's top comment for why ImGui's native title bar is gone
+		// outright rather than kept-and-decorated. Handles its own hit
+		// testing for drag/collapse/close (Chrome.h's BeginPanelWindow()
+		// comment has the full rationale for each).
+		void DrawTitleBar( const char *pszTitle, PanelId id, bool bFocused, bool bCollapsed )
+		{
 			ImDrawList *pDrawList = ImGui::GetWindowDrawList();
 			const ImVec2 windowPos = ImGui::GetWindowPos();
 			const ImVec2 windowSize = ImGui::GetWindowSize();
-			const ImVec2 cursor = ImGui::GetCursorScreenPos();
+			const float flContentLeftX = ImGui::GetCursorScreenPos().x; // Pos.x + WindowPadding.x, for handing back to the caller's own content below
 
-			constexpr float kDotSize = 6.0f;   // spec §5: "6x6px square status dot"
-			constexpr float kIconSize = 14.0f;
-			constexpr float kRowHeight = 22.0f; // pushes native-bar + this row's combined height toward spec's 34px total (see file-top ponytail note -- two rows, not a pixel-exact single 34px bar)
-			constexpr float kPadX = 12.0f;      // spec §5 title-bar horizontal padding
+			constexpr float kPadX = 12.0f; // spec §5 title-bar horizontal padding
+			constexpr float kDotSize = 6.0f;
+			constexpr float kButtonSize = 18.0f;
+			constexpr float kButtonGap = 2.0f;
 
-			// Gradient fill spanning the full window width, flush with the
-			// window's own left/right edges (not just the content column) --
-			// spec §5: white 6%->1.5% (unfocused), accent 16%->white 2%
-			// (focused).
-			const ImVec2 barMin( windowPos.x, cursor.y );
-			const ImVec2 barMax( windowPos.x + windowSize.x, cursor.y + kRowHeight );
+			const ImVec2 barMin = windowPos;
+			const ImVec2 barMax( windowPos.x + windowSize.x, windowPos.y + kTitleBarHeight );
+
+			// Fill: spec §5 vertical gradient, white 6%->1.5% unfocused,
+			// accent 16%->white 2% focused. Bottom border 1px, white@10%
+			// unfocused / accent@30% focused.
 			const ImU32 gradTop = bFocused ? ImGui::GetColorU32( gamescope::palette::Accent( 0.16f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.06f ) );
 			const ImU32 gradBot = bFocused ? ImGui::GetColorU32( gamescope::palette::White( 0.02f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.015f ) );
 			pDrawList->AddRectFilledMultiColor( barMin, barMax, gradTop, gradTop, gradBot, gradBot );
 			const ImU32 borderCol = bFocused ? ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.10f ) );
 			pDrawList->AddLine( ImVec2( barMin.x, barMax.y ), ImVec2( barMax.x, barMax.y ), borderCol, 1.0f );
 
-			const float flContentLeft = windowPos.x + kPadX;
-			const float flRowCenterY = cursor.y + kRowHeight * 0.5f;
+			const float flCenterY = windowPos.y + kTitleBarHeight * 0.5f;
+			float flCursorX = windowPos.x + kPadX;
 
-			// 6x6 square status dot, always "live" (this panel's window is
-			// only ever drawn while its subsystem is on) with an approximated
-			// glow -- spec §5: "glow 0 0 8px accent@80% ~= one 10x10 rect
-			// behind it @25% accent".
-			const ImVec2 dotCenter( flContentLeft + kDotSize * 0.5f, flRowCenterY );
+			// 6x6 square status dot -- spec §5: always "live" (this panel's
+			// window is only ever drawn while its subsystem is on), glow
+			// approximated as one 10x10 rect behind it @25% accent.
+			const ImVec2 dotCenter( flCursorX + kDotSize * 0.5f, flCenterY );
 			pDrawList->AddRectFilled( dotCenter - ImVec2( 5.0f, 5.0f ), dotCenter + ImVec2( 5.0f, 5.0f ), ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
 			pDrawList->AddRectFilled( dotCenter - ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), dotCenter + ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), kAccentU32 );
+			flCursorX += kDotSize + 10.0f; // spec §3: 10px row gap in title bars
 
-			const float flIconLeft = flContentLeft + kDotSize + 6.0f;
-			const ImVec2 iconCenter( flIconLeft + kIconSize * 0.5f, flRowCenterY );
-			DrawIcon( pDrawList, IconForPanel( id ), iconCenter, kIconSize, kTitleIconIdleU32 );
-
-			// Meta text -- spec §5: Mono 400 10.5 @30% (title-bar meta).
-			ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
-			const char *pszMeta = "gamescope-ritz";
-			const ImVec2 metaSize = ImGui::CalcTextSize( pszMeta );
-			pDrawList->AddText( ImVec2( flIconLeft + kIconSize + 6.0f, flRowCenterY - metaSize.y * 0.5f ),
-				ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), pszMeta );
+			// Title -- Mono 600 11 UPPER, spec §2: @86% unfocused / 94% focused.
+			ImGui::PushFont( fonts::Get( fonts::Style::Title ) );
+			const ImVec2 titleSize = ImGui::CalcTextSize( pszTitle );
+			pDrawList->AddText( ImVec2( flCursorX, flCenterY - titleSize.y * 0.5f ),
+				ImGui::GetColorU32( gamescope::palette::Text( bFocused ? 0.94f : 0.86f ) ), pszTitle );
+			flCursorX += titleSize.x + 10.0f;
 			ImGui::PopFont();
 
-			ImGui::SetCursorScreenPos( ImVec2( cursor.x, barMax.y ) );
-			ImGui::Dummy( ImVec2( windowSize.x, 1.0f ) );
+			// Meta -- Mono 400 10.5 @30%, spec §5/§2.
+			ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
+			static constexpr const char *kMeta = "gamescope-ritz";
+			const ImVec2 metaSize = ImGui::CalcTextSize( kMeta );
+			pDrawList->AddText( ImVec2( flCursorX, flCenterY - metaSize.y * 0.5f ),
+				ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), kMeta );
+			ImGui::PopFont();
+
+			// Glyph button cluster, right-aligned: close then collapse
+			// reading left-to-right (i.e. collapse sits left of close),
+			// matching spec §5's own listed order ("... -> glyph buttons"
+			// with collapse drawn before close in every mockup screenshot's
+			// left-to-right reading).
+			const ImVec2 closePos( barMax.x - kPadX - kButtonSize, windowPos.y + ( kTitleBarHeight - kButtonSize ) * 0.5f );
+			const ImVec2 collapsePos( closePos.x - kButtonGap - kButtonSize, closePos.y );
+
+			if ( DrawTitleGlyphButton( pDrawList, "##collapse", collapsePos, Icon::Collapse, bFocused ) )
+				s_bPanelCollapsed[(size_t)id] = !s_bPanelCollapsed[(size_t)id];
+			if ( DrawTitleGlyphButton( pDrawList, "##close", closePos, Icon::Close, bFocused ) )
+				SetPanelOpen( id, false );
+
+			// Drag zone: the whole bar minus the button cluster. Calling
+			// ImGui::StartMouseMovingWindow() on click-down is the same
+			// internal primitive ImGui's own native title bar drag uses
+			// (imgui.cpp) -- not a from-scratch mouse-delta reimplementation,
+			// so multi-viewport clamping/focus-on-move/etc. all come along
+			// for free exactly like a real title bar. A double-click toggles
+			// collapse, mirroring the native double-click-title-bar gesture
+			// (imgui.cpp's own WantCollapseToggle path, which this window
+			// can't reach any more once ImGuiWindowFlags_NoTitleBar is set --
+			// see Chrome.h's BeginPanelWindow() comment).
+			ImGui::SetCursorScreenPos( barMin );
+			ImGui::InvisibleButton( "##titledrag", ImVec2( collapsePos.x - kButtonGap - barMin.x, kTitleBarHeight ) );
+			if ( ImGui::IsItemHovered() )
+			{
+				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) )
+					ImGui::StartMouseMovingWindow( ImGui::GetCurrentWindow() );
+				if ( ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) )
+					s_bPanelCollapsed[(size_t)id] = !s_bPanelCollapsed[(size_t)id];
+			}
+
+			(void)bCollapsed; // no distinct collapsed-state paint on the bar itself yet -- same icon/geometry either way
+
+			ImGui::SetCursorScreenPos( ImVec2( flContentLeftX, barMax.y + ImGui::GetStyle().WindowPadding.y ) );
 		}
 	}
 
@@ -350,81 +503,207 @@ namespace gamescope::chrome
 
 	void SetPanelOpen( PanelId id, bool bOpen )
 	{
-		if ( bOpen )
-		{
-			// Exclusive: opening one panel closes every other one, so the
-			// dock always behaves as "switch between panels" and never
-			// leaves more than one panel's default position stacked on top
-			// of another -- see the comment on IsPanelOpen() in Chrome.h.
-			for ( size_t i = 0; i < (size_t)PanelId::Count; i++ )
-				s_bPanelOpen[i] = false;
-		}
 		s_bPanelOpen[(size_t)id] = bOpen;
 	}
 
-	namespace
-	{
-		// One-frame-stale focus cache: spec §4's "unfocused windows: whole
-		// window x94% opacity" needs to be applied via
-		// ImGuiStyleVar_Alpha, which only affects colors computed *after*
-		// it's pushed -- but ImGui::Begin() itself draws the window
-		// background/border using whatever style.Alpha is active the
-		// instant it's called, before this function can know the *new*
-		// frame's focus result. Using last frame's cached focus state is a
-		// one-frame-late approximation on the exact frame focus changes,
-		// imperceptible for a settings panel, and avoids the alternative
-		// (a two-pass Begin) entirely.
-		bool s_bPanelWasFocused[(size_t)PanelId::Count] = {};
-	}
-
-	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 defaultPos, ImVec2 defaultSize )
+	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 /*defaultPos*/, ImVec2 defaultSize )
 	{
 		if ( !IsPanelOpen( id ) )
 			return false;
 
-		ImGui::SetNextWindowPos( defaultPos, ImGuiCond_FirstUseEver );
-		ImGui::SetNextWindowSize( defaultSize, ImGuiCond_FirstUseEver );
+		EnsureLiveThemeLoaded();
+		ApplyLiveWindowAlpha();
+
+		const bool bCollapsed = s_bPanelCollapsed[(size_t)id];
+
+		ImGui::SetNextWindowPos( TiledDefaultPos( id ), ImGuiCond_FirstUseEver );
+		// Fixed size (spec §4: "no resize") -- ImGuiCond_Always is safe here
+		// specifically because ImGuiWindowFlags_NoResize (below) means
+		// nothing else ever changes this window's size, so re-asserting it
+		// every frame is a no-op except on the frame collapse toggles, which
+		// is exactly the point: that's this file's own "shrink to just the
+		// title bar" stand-in for ImGui's native collapse (see
+		// s_bPanelCollapsed's comment above).
+		ImGui::SetNextWindowSize( bCollapsed ? ImVec2( defaultSize.x, kTitleBarHeight ) : defaultSize, ImGuiCond_Always );
 
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
 		// that's Widgets.cpp's ApplyStyle(), unaffected by this
 		// window-scoped push).
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowRounding, 4.0f );
-		// Spec §4 "unfocused windows: whole window x94% opacity" -- see
-		// s_bPanelWasFocused's comment above for why this reads last
-		// frame's cached value rather than this frame's (not yet known).
-		ImGui::PushStyleVar( ImGuiStyleVar_Alpha, s_bPanelWasFocused[(size_t)id] ? 1.0f : 0.94f );
+		// Spec §4 "unfocused windows: whole window x94% opacity", and this
+		// pass's own thicker focused border (2px vs the shared 1px hairline
+		// -- spec's 42%-alpha border alone tested as too subtle, task
+		// feedback: "make focus unmistakable") -- both read last frame's
+		// cached focus (s_bPanelWasFocused's comment above explains why:
+		// Begin() itself draws using these before this frame's focus is
+		// knowable).
+		const bool bWasFocused = s_bPanelWasFocused[(size_t)id];
+		ImGui::PushStyleVar( ImGuiStyleVar_Alpha, bWasFocused ? 1.0f : 0.94f );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, bWasFocused ? 2.0f : 1.0f );
 
-		bool bStillOpen = true;
-		ImGui::PushFont( fonts::Get( fonts::Style::Title ) );
-		ImGui::Begin( pszTitle, &bStillOpen, ImGuiWindowFlags_NoCollapse );
-		ImGui::PopFont();
+		// Focused-vs-unfocused window opacity split (opacity_windows_focused/
+		// opacity_windows_unfocused, ConfigSchema.h) -- overrides the shared
+		// WindowBg alpha ApplyLiveWindowAlpha() just set (that stays the
+		// popup/combo default, which has no per-window focus concept) for
+		// exactly this window. Must be pushed before Begin(), which reads
+		// WindowBg immediately to paint the background; same one-frame-
+		// cached bWasFocused the Alpha/WindowBorderSize pushes above already
+		// use, for the same reason (this frame's real focus isn't knowable
+		// until after Begin()).
+		{
+			ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+			bg.w = bWasFocused ? pLiveTheme->flWindowAlphaFocused : pLiveTheme->flWindowAlphaUnfocused;
+			ImGui::PushStyleColor( ImGuiCol_WindowBg, bg );
+		}
 
-		if ( !bStillOpen )
-			SetPanelOpen( id, false );
+		// No native title bar (see this file's top comment) -- DrawTitleBar()
+		// below draws the whole thing as content instead. No native p_open:
+		// the close glyph calls SetPanelOpen() itself, and the native close-
+		// button path lives inside RenderWindowTitleBarContents(), which
+		// Begin() never calls once NoTitleBar is set. Fixed size (no resize
+		// grip) per spec §4.
+		//
+		// NoScrollbar/NoScrollWithMouse: this outer window must never scroll
+		// itself -- see the "##body" child BeginChild() below for why. Scroll
+		// (wheel or scrollbar-grip drag alike) lives entirely on that child
+		// now.
+		ImGui::Begin( pszTitle, nullptr,
+			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
 
-		// Spec §4: "Focused window: border becomes accent@42% ... Focused
-		// window renders last (on top)" -- ImGui's own Begin()/focus-follows-
-		// click z-ordering already gives the second half of that for free;
-		// only the border color needs correcting per-window here (the
-		// window's Border color is otherwise a single shared ImGuiStyle
-		// value, Widgets.cpp's `hairline` token). PopStyleColor in
-		// EndPanelWindow().
 		const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
 		s_bPanelWasFocused[(size_t)id] = bFocused;
+
+		// Spec §4: "Focused window: border becomes accent@42%". ImGui's own
+		// Begin()/focus-follows-click z-ordering already gives "focused
+		// window renders last (on top)" for free.
 		ImGui::PushStyleColor( ImGuiCol_Border,
 			bFocused ? gamescope::palette::ToVec4( gamescope::palette::kAccent, 0.42f )
 			         : ImGui::GetStyle().Colors[ImGuiCol_Border] );
 
-		DrawPanelChromeHeader( id );
+		if ( bFocused )
+		{
+			// Accent glow, spec §4: "0 0 40px -20px accent@60%" -- a blurred
+			// CSS box-shadow, which has no ImDrawList equivalent without an
+			// actual blur pass (out of scope here -- "keep it cheap"). The
+			// previous approximation was 2 flat-alpha rings, which is exactly
+			// what "steppy" describes: 2 layers means 2 hard edges. Two changes
+			// make the same trick read as a continuous glow instead:
+			//
+			// 1. More (kGlowLayers), thinner rings whose alpha follows an
+			//    *exponential* falloff rather than a linear one -- a blurred
+			//    shadow's brightness decays roughly like a Gaussian, not
+			//    linearly, so matching that curve hides the seams in far fewer
+			//    layers than a linear ramp needs. Ring width also grows outward
+			//    (offsets spaced by t^1.5, not t) so sampling is densest right
+			//    at the border -- where the eye is looking and the gradient is
+			//    steepest -- and coarsest far out, where alpha is already near
+			//    zero and a wide step goes unnoticed.
+			// 2. Each ring's corner radius is the window's own radius PLUS that
+			//    ring's own outward offset, instead of an independent hand-
+			//    picked radius per layer. Offsetting a rounded rect outward by
+			//    d is a Minkowski sum: radius r becomes exactly r+d. Rings that
+			//    don't track this drift out of concentricity fastest at the
+			//    corners -- why corners are where banding is always worst first.
+			//
+			// Drawn on the foreground draw list, not this window's own, so it's
+			// never clipped to the window's bounds.
+			ImDrawList *pFg = ImGui::GetForegroundDrawList();
+			const ImVec2 wp = ImGui::GetWindowPos();
+			const ImVec2 ws = ImGui::GetWindowSize();
+			constexpr float kWindowRadius = 4.0f;  // spec §4 "Corner radius 4px" == WindowRounding pushed above
+			constexpr int   kGlowLayers   = 5;
+			constexpr float kGlowReach    = 20.0f; // outermost ring's offset from the window edge, px
+			constexpr float kGlowPeakA    = 0.22f; // alpha of the innermost (thinnest, brightest) ring
+			constexpr float kGlowDecay    = 2.5f;  // exponential falloff rate over the 0..1 layer range
+
+			float flPrevOffset = 0.0f;
+			for ( int i = 1; i <= kGlowLayers; ++i )
+			{
+				const float t = (float)i / (float)kGlowLayers;
+				const float flOffset = kGlowReach * powf( t, 1.5f );
+				const float flThickness = flOffset - flPrevOffset;
+				const float flMid = ( flPrevOffset + flOffset ) * 0.5f;
+				const float flAlpha = kGlowPeakA * expf( -kGlowDecay * t );
+
+				pFg->AddRect( wp - ImVec2( flMid, flMid ), wp + ws + ImVec2( flMid, flMid ),
+					ImGui::GetColorU32( gamescope::palette::Accent( flAlpha ) ),
+					kWindowRadius + flMid, 0, flThickness );
+
+				flPrevOffset = flOffset;
+			}
+		}
+
+		DrawTitleBar( pszTitle, id, bFocused, bCollapsed );
+
+		if ( bCollapsed )
+		{
+			// Mirrors ImGui's own native "collapsed windows still draw their
+			// title bar, nothing else" behavior -- the window (title bar,
+			// border, focus glow) is fully drawn above; there's simply no
+			// body to show while shrunk to kTitleBarHeight tall. Must
+			// balance this Begin() with End() (and every push above) right
+			// here, since the caller is told NOT to call EndPanelWindow()
+			// when this returns false (Chrome.h's contract).
+			//
+			// Crash fix: DrawTitleBar() unconditionally ends with
+			// SetCursorScreenPos() to hand the cursor back to the caller's
+			// content below the bar -- fine on every other frame, since the
+			// caller then goes on to submit real widgets that grow
+			// CursorMaxPos past that position. Collapsed, nothing is drawn
+			// after DrawTitleBar(): End() below would be the very next
+			// call, and ImGui 1.92's
+			// ErrorCheckUsingSetCursorPosToExtendParentBoundaries() hard
+			// asserts (not the pre-1.89 silent-fixup path) whenever
+			// SetCursorPos()/SetCursorScreenPos() pushed the cursor past
+			// the window's content bounds with no item submitted to justify
+			// it -- exactly what a title-bar-only, kTitleBarHeight-tall
+			// collapsed window's tiny content region triggers. A zero-size
+			// Dummy() is ImGui's own documented fix (imgui.cpp's
+			// ErrorCheckUsingSetCursorPosToExtendParentBoundaries comment):
+			// it "submits" the position without drawing or resizing
+			// anything, so the boundary check is satisfied instead of
+			// tripping. Repro was double-clicking (or collapse-glyph-
+			// clicking) a panel's title bar, which crashed the whole
+			// process one frame later via SIGABRT (assert -> abort()) --
+			// see superdoc/planning/ISSUES.md.
+			ImGui::Dummy( ImVec2( 0.0f, 0.0f ) );
+			ImGui::PopStyleColor( 2 ); // Border, WindowBg
+			ImGui::End();
+			ImGui::PopStyleVar( 3 ); // WindowBorderSize, Alpha, WindowRounding
+			return false;
+		}
+
+		// Scroll fix: the panel's body goes in its own child window/region
+		// from here down, rather than directly as more of the outer
+		// window's own content the way it did before this pass. Root cause
+		// of "scrollbar grip shrinks (so content height IS computed right)
+		// but the view never moves, wheel or grip-drag alike": DrawTitleBar()
+		// hands the cursor back to the caller via the outer window's own
+		// screen-space cursor, anchored off ImGui::GetWindowPos() (constant,
+		// NOT scroll-adjusted, which is exactly right for a header that must
+		// stay pinned on screen while the body beneath it scrolls). But the
+		// outer window was ALSO the thing scrolling (nothing suppressed its
+		// own scrollbar), so every subsequent widget's on-screen position
+		// worked out to windowPos + a fixed offset regardless of
+		// window->Scroll -- the scroll and unscroll canceled out
+		// algebraically, pinning the *entire* body to the header's fixed
+		// screen position no matter how far the window had scrolled. A
+		// child region gets its own independent Scroll/ClipRect, so it
+		// scrolls correctly on its own, while NoScrollbar/NoScrollWithMouse
+		// above keep the outer window itself from ever having scroll state
+		// to cancel against in the first place.
+		ImGui::BeginChild( "##body", ImVec2( 0.0f, 0.0f ) );
 
 		return true;
 	}
 
 	void EndPanelWindow()
 	{
-		ImGui::PopStyleColor(); // ImGuiCol_Border, pushed in BeginPanelWindow()
+		ImGui::EndChild(); // "##body", opened in BeginPanelWindow()
+		ImGui::PopStyleColor( 2 ); // ImGuiCol_Border, ImGuiCol_WindowBg -- both pushed in BeginPanelWindow()
 		ImGui::End();
-		ImGui::PopStyleVar( 2 ); // ImGuiStyleVar_Alpha, WindowRounding -- both pushed in BeginPanelWindow()
+		ImGui::PopStyleVar( 3 ); // WindowBorderSize, Alpha, WindowRounding -- all pushed in BeginPanelWindow()
 	}
 
 	namespace
@@ -439,7 +718,7 @@ namespace gamescope::chrome
 		constexpr DockEntry kDockEntries[] = {
 			{ PanelId::Display, Icon::Display,     "Gamescope" },
 			{ PanelId::Shaders, Icon::Shaders,     "Shaders" },
-			{ PanelId::Fps,     Icon::Performance, "FPS HUD" },
+			{ PanelId::SystemMonitor, Icon::Performance, "System Monitor" }, // issue #27: renamed from "FPS HUD" / PanelId::Fps
 			{ PanelId::Audio,   Icon::Audio,       "Audio" },
 			{ PanelId::Config,  Icon::Profiles,    "Config / Profiles" },
 		};
@@ -469,14 +748,19 @@ namespace gamescope::chrome
 
 			if ( bActive )
 			{
-				constexpr float kEdgeInset = 8.0f;
-				constexpr float kEdgeThickness = 2.0f;
+				// Proportional to flSize (spec's own numbers are all relative
+				// to the 54px canonical button -- dock_scale, General tab,
+				// resizes this whole button, so these markers scale with it
+				// too instead of drifting off-proportion at non-1.0 scale).
+				const float flRatio = flSize / 54.0f;
+				const float kEdgeInset = 8.0f * flRatio;
+				const float kEdgeThickness = 2.0f * flRatio;
 				const ImVec2 edgeMin( pos.x + kEdgeInset, pos.y );
 				const ImVec2 edgeMax( pos.x + flSize - kEdgeInset, pos.y + kEdgeThickness );
 				// Glow: spec "0 0 10px accent@90% ~= one 42x6px rect under
 				// it @25% accent".
-				pDrawList->AddRectFilled( ImVec2( pos.x + flSize * 0.5f - 21.0f, pos.y ),
-					ImVec2( pos.x + flSize * 0.5f + 21.0f, pos.y + 6.0f ),
+				pDrawList->AddRectFilled( ImVec2( pos.x + flSize * 0.5f - 21.0f * flRatio, pos.y ),
+					ImVec2( pos.x + flSize * 0.5f + 21.0f * flRatio, pos.y + 6.0f * flRatio ),
 					ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
 				pDrawList->AddRectFilled( edgeMin, edgeMax, ImGui::GetColorU32( gamescope::palette::kAccentEdge ) );
 			}
@@ -493,10 +777,13 @@ namespace gamescope::chrome
 
 	void DrawDock()
 	{
+		EnsureLiveThemeLoaded();
+
 		ImGuiIO &io = ImGui::GetIO();
-		constexpr float kButtonSize = 54.0f;
-		constexpr float kGap = 5.0f;
-		constexpr float kPad = 6.0f;
+		const float flDockScale = gamescope::palette::g_LiveTheme.flDockScale;
+		const float kButtonSize = 54.0f * flDockScale; // spec §1: keep >=44px physical -- dock_scale's own 0.85 floor (ConfigSchema.h) guarantees that
+		const float kGap = 5.0f * flDockScale;
+		const float kPad = 6.0f * flDockScale;
 		constexpr int kPanelCount = (int)PanelId::Count;
 
 		const float flContentWidth =
@@ -516,7 +803,8 @@ namespace gamescope::chrome
 		// Dock fill is .86 alpha, distinct from windows' .88 (spec §1
 		// `surface` vs §8's own "fill rgba(9,10,12,.86)") -- push a
 		// dock-only override rather than changing the shared WindowBg token.
-		ImGui::PushStyleColor( ImGuiCol_WindowBg, gamescope::palette::SurfaceVec4( 0.86f ) );
+		// opacity_dock (General tab) drives this live via g_LiveTheme.
+		ImGui::PushStyleColor( ImGuiCol_WindowBg, gamescope::palette::SurfaceVec4( gamescope::palette::g_LiveTheme.flDockAlpha ) );
 		ImGui::Begin( "##gamescope_ritz_overlay_dock", nullptr,
 			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |

@@ -77,7 +77,7 @@ endif
 add_project_arguments(
   '-DHAVE_PIPEWIRE=@0@'.format(pipewire_dep.found().to_int()),
   '-DHAVE_OPENVR=@0@'.format(openvr_dep.found().to_int()),
-  '-DSCRIPT_DIR="@0@"'.format(prefix / data_dir / 'gamescope/scripts'),
+  '-DSCRIPT_DIR="@0@"'.format(prefix / data_dir / 'gamescope-ritz/scripts'),
   language: 'cpp',
 )
 

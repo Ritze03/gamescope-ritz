@@ -178,6 +178,31 @@ Straightforward once the above exists: ImGui renders into an offscreen
 waits on the same timeline point before sampling it — no different in kind from any
 other layer's texture, just a new producer of one.
 
+### ImGui version and widget behavior (note added 2026-08-22, answering a standing question)
+
+This is real, stock (non-docking) **Dear ImGui v1.92.9b**, vendored via
+`subprojects/imgui.wrap` (`revision = f1cc2ae15e53a861a874c3034aae6798fde194ab`, per
+that wrap file's own comment: "stock (non-docking) branch tag v1.92.9b — see SPEC.md's
+Architecture section for why docking is deliberately not used here"), built against
+ImGui's own Vulkan backend (`backends/imgui_impl_vulkan.cpp`, see the vendoring
+paragraph above) — not a from-scratch reimplementation and not a fork with behavioral
+patches. The overlay's own hand-drawn look (flat/square/hairline chrome, no rounded
+corners, custom sliders/toggles/segmented controls) comes entirely from `ImDrawList`
+calls in `src/Overlay/Widgets.cpp` and `src/Overlay/Chrome.cpp`, not from a modified
+ImGui core.
+
+Every custom widget in `Widgets.cpp` is built on ImGui's own internal interaction
+primitives rather than reimplementing hit-testing/hover/press/keyboard-nav from
+scratch: `ImGui::ButtonBehavior()` (`Toggle()`/`Checkbox()`/`DrawTitleGlyphButton()`-
+style buttons), `ImGui::SliderBehavior()` (the custom slider's drag/keyboard/gamepad
+math), `ImGui::ItemAdd()`/`ImGui::ItemHoverable()` (layout/clipping/hover
+registration), and `ImGui::RenderNavCursor()` (the keyboard-focus outline) — all
+`imgui_internal.h` calls, confirmed present in `Widgets.cpp`. The practical
+consequence: hover, press, keyboard navigation, and gamepad navigation on every
+custom widget in this overlay match stock ImGui's real behavior (the same functions
+`imgui_widgets.cpp`'s own built-in `SliderFloat`/`Checkbox`/etc. call internally),
+only the drawing is custom.
+
 ---
 
 ## Per-feature sections
@@ -287,7 +312,7 @@ the decision above — Vibrancy and Sharpness first, Adaptive Brightness in M9):
 | `reshade.vibrancy.protect_skin_tones` | bool | — | true | ships in M6 |
 | `reshade.pre_sharpen.enabled` | bool | — | false | ships in M6 |
 | `reshade.pre_sharpen.strength` | float | TBD | TBD | unsharp-mask amount; no existing reference value in this codebase — pick during implementation, mark TBD in schema until then; ships in M6 |
-| `reshade.adaptive_brightness.enabled` | bool | — | false | **deferred to M9** — reserved in schema now, not built until then |
+| `reshade.adaptive_brightness.enabled` | bool | — | false | ships in M9 (experimental) |
 | `reshade.adaptive_brightness.target_luminance` | float | 0.1–0.9 | 0.5 | normalized, M9 |
 | `reshade.adaptive_brightness.adapt_up_speed` | float | 0.1–5.0 | 1.0 | seconds to ~63% of target, brightening, M9 |
 | `reshade.adaptive_brightness.adapt_down_speed` | float | 0.1–5.0 | 1.0 | same, darkening, M9 |
@@ -366,6 +391,21 @@ clients, not in-process code.
 | `fps_display.backdrop_padding` | float (px) | 0–24 | 6 | |
 | `fps_display.blend_mode` | enum | `alpha` \| `additive` | `alpha` | additive + backdrop rect interact oddly (the backdrop itself would glow) — UI should auto-disable/warn, not silently combine them |
 | `fps_display.text_opacity` | float | 0.0–1.0 | 1.0 | independent of backdrop |
+| `fps_display.graph_enabled` | bool | – | true | row toggle for the frametime graph (spec §10 Row 2) |
+| `fps_display.percentiles_enabled` | bool | – | true | row toggle for the 1%/0.1%/avg percentile row (spec §10 Row 3) |
+
+**Frametime graph and percentile row (shipped alongside the readout).** Both read
+from the same `g_ulLastAppFrametimeNs` atomic as the headline number — never
+mangoapp's shared `mangoapp_msg_v1` struct — into a 240-sample ring buffer
+(`FpsDisplay.cpp`'s `kHistoryCapacity`, matching `ui-mockup-precise-spec.md` §11's
+own footer text "sampling 500 ms · 240-frame window"). The graph's y-axis ceiling is
+a slow EMA of the window's max frametime (not the raw max), so a single stutter
+doesn't yank the whole graph's scale; a fresh spike still reads clearly in the
+meantime because it's drawn capped at full bar height and in the spec's amber
+outlier color before the ceiling catches up. Percentiles (1% low, 0.1% low, average)
+recompute at most every 500ms and use the standard "mean of the worst bucket"
+definition — with a 240-frame window, the 0.1% bucket rounds up to just the single
+worst sample, a known coarseness worth remembering when reading that number.
 
 **Risks:** none load-bearing beyond the general ImGui-render-pipeline risks already
 covered — this is the cheapest of the five features once the overlay shell exists,
@@ -889,7 +929,13 @@ is phrased as a concrete `vkcube` run.
   slider/toggle/checkbox geometry) with the overlay open over a running `vkcube`;
   no functional regression versus M1–M7's behavior.
 
-- **M9a — Adaptive Brightness persistence spike.** *Size: S. Deferred (decision) —
+- **M9a — Adaptive Brightness persistence spike. DONE (2026-08-21).** Result:
+  **persistence survives** — confirmed on real hardware (RADV/AMD 7900XTX), not
+  just inferred from barrier code. Full method, evidence, and two extra findings
+  (a zero-uniform-buffer crash unrelated to persistence, and a recompile-storm
+  if the implicit-output pass isn't last) are recorded in
+  `superdoc/planning/DECISIONS.md` #14 and `reshade-shaders.md`.
+  *Size: S. Deferred (decision) —
   not on the critical path; nothing above depends on it, and it can be pulled
   forward and run any time after M2 if someone wants to retire the risk early, but
   is sequenced last here for clarity since Adaptive Brightness itself ships last.*
@@ -906,16 +952,28 @@ is phrased as a concrete `vkcube` run.
   milestone exists specifically to catch that before real engineering time is
   spent on a feature that was already deferred once.
 
-- **M9b — Adaptive Brightness, appended to the combined effect.** *Size: M.*
-  Appends the Adaptive Brightness passes to the `gamescope-ritz.fx` M6 already
-  shipped (per Feature 2's decision, the file was built to allow exactly this
-  without restructuring Vibrancy/Sharpness), plus its group in the Shaders panel.
-  Depends on M6 (the file to append to) and M9a (persistence confirmed).
+- **M9b — Adaptive Brightness, appended to the combined effect. DONE
+  (2026-08-22, on master).** Implemented in `reshade/Shaders/gamescope-ritz.fx`
+  and `src/Overlay/PanelShaders.cpp` (originally landed on an experimental
+  branch 2026-08-21, rebased onto master's M8 restyle and merged 2026-08-22).
+  *Size: M.* Appends the Adaptive Brightness passes to the `gamescope-ritz.fx`
+  M6 already shipped (per Feature 2's decision, the file was built to allow
+  exactly this without restructuring Vibrancy/Sharpness), plus its group in the
+  Shaders panel. Depends on M6 (the file to append to) and M9a (persistence
+  confirmed).
   **Acceptance (vkcube):** `gamescope-ritz -- vkcube`; open the Shaders panel,
   toggle Adaptive Brightness on, confirm no recompile stutter on toggle (same
   uniform-gated-pass proof as M6, now for the third pass) and confirm Vibrancy/
   Sharpness (M6) still work unchanged with Adaptive Brightness enabled alongside
   them, proving the passes compose rather than conflict.
+  **Additional acceptance, real content (2026-08-22):** a real `mpv` client
+  playing a genuinely time-varying (looping dark/bright) video through the full
+  pipeline (`--filter fsr --sharpness 5`, `DISABLE_LSFG=1`) showed the on/off
+  luminance range compress roughly 3× (1.43× down to ~1.1× between dark- and
+  bright-scene means) with the effect enabled, measured via `gamescopectl
+  screenshot 3` (full composition, so it actually includes ReShade's output)
+  and ImageMagick mean-luminance. Compile log ("Compiling pass") stayed at
+  exactly 4 lines (one per pass) throughout. Full numbers in `DECISIONS.md` #14.
 
 ---
 
@@ -943,16 +1001,15 @@ noted for each:
    overlay toggling on a timer for an hour against a driver with strict validation
    layers enabled) is the real retiring test before M1 is called done.
 
-3. **Adaptive Brightness's persistent-texture assumption is unverified by any
-   shipped effect in this repo.** `discardImage()`'s Vulkan-spec-implementation-
-   defined behavior on an `UNDEFINED`-sourced transition could mean content does
-   not actually survive frame-to-frame the way the design assumes. Lower urgency
-   than the other risks here since Adaptive Brightness itself is deferred to M9
-   (decision) and nothing else is blocked on it. **Retiring experiment: M9a,
-   already built into the build order as its own milestone before any real
-   engineering time goes into the full effect** — cheapest possible way to answer
-   the question, and can be run any time after M2 if someone wants the answer
-   before M9 formally starts.
+3. **RESOLVED (2026-08-21/22).** Adaptive Brightness's persistent-texture
+   assumption was unverified by any shipped effect in this repo.
+   `discardImage()`'s Vulkan-spec-implementation-defined behavior on an
+   `UNDEFINED`-sourced transition could have meant content does not actually
+   survive frame-to-frame the way the design assumes. The M9a spike retired
+   this: persistence confirmed empirically on real hardware (RADV/AMD), and
+   M9b (the full effect) has since landed on master and been re-validated
+   against genuinely time-varying real content, not just the spike's
+   throwaway prototype. See `DECISIONS.md` #14 for both.
 
 4. **The `VK_KHR_dynamic_rendering` extension-string gap.** Gamescope requests the
    Vulkan 1.3 *feature bit* but never adds the extension string to

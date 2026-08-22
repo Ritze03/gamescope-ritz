@@ -101,6 +101,33 @@ TEST_CASE( "ResolveAppId precedence", "[config]" )
         auto lookup = MakeLookup( {} );
         REQUIRE( ResolveAppId( lookup ) == std::nullopt );
     }
+
+    // Persistent-session topology (DECISIONS.md #21's "topology split"):
+    // gamescope's process predates the game, so none of GS_RITZ_APPID/
+    // STEAM_COMPAT_APP_ID/SteamAppId/STEAM_COMPAT_DATA_PATH were ever set on
+    // it - this is indistinguishable from "nothing set" above, and that's
+    // deliberate, not a gap: it must resolve to nothing, never to a stale or
+    // wrong id. Named explicitly because it's the case decision 21 flagged
+    // as unverified.
+    SECTION( "persistent-session topology (no launch-time env vars) resolves to nothing, not a stale id" )
+    {
+        auto lookup = MakeLookup( {} );
+        REQUIRE( ResolveAppId( lookup ) == std::nullopt );
+    }
+
+    // The dangerous case, guarded explicitly: "AppId=<n>" is a command-line
+    // argument steamcompmgr.cpp's get_appid_from_pid() scrapes from a
+    // "reaper" ancestor process's /proc/<pid>/cmdline, post-startup, per
+    // window - it is NOT an environment variable, and never has been (see
+    // superdoc/planning/appid-detection.md §3). If a future edit ever added
+    // a bare "AppId" env-var lookup here (confusing the two), it would let a
+    // leftover/unrelated "AppId" var from the launching shell silently
+    // resolve to the wrong game. Assert it is never read.
+    SECTION( "a bare \"AppId\" env var is never read - that name is the reaper's argv token, not an env var" )
+    {
+        auto lookup = MakeLookup( { { "AppId", "999999" } } );
+        REQUIRE( ResolveAppId( lookup ) == std::nullopt );
+    }
 }
 
 TEST_CASE( "SanitizeProfileName rejects path escapes", "[config]" )
@@ -208,6 +235,156 @@ TEST_CASE( "override_global snapshot wins over global, and is a frozen snapshot"
     REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "NIS" );
 }
 
+// End-to-end pass for the launch-option-wrapper topology, using app id
+// 3746030 - the id the user offered as this feature's test subject
+// (DECISIONS.md #21). Closes the "not yet tested" flag: env var in, correct
+// games/<id>.json read out, and no other app id's file is touched.
+TEST_CASE( "app id 3746030 (launch-option-wrapper topology): env var resolves and reads its own games/<id>.json", "[config]" )
+{
+    TempConfigHome home;
+
+    auto lookup = MakeLookup( { { "STEAM_COMPAT_APP_ID", "3746030" } } );
+    std::optional<std::string> oAppId = ResolveAppId( lookup );
+    REQUIRE( oAppId == "3746030" );
+    REQUIRE( GamePath( *oAppId ) == GamesDir() + "/3746030.json" );
+
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+
+    // No override yet - falls through to global, and creates nothing.
+    REQUIRE( ResolveEffective( oAppId ).gamescope.filter == "LINEAR" );
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( *oAppId ) ) );
+
+    Settings snapshot = ResolveEffective( oAppId );
+    snapshot.gamescope.filter = "FSR";
+    REQUIRE( SnapshotPerGameOverride( *oAppId, snapshot ) );
+    REQUIRE( std::filesystem::exists( GamePath( "3746030" ) ) );
+
+    // Resolves from its own file now, and a different app id is unaffected.
+    REQUIRE( ResolveEffective( oAppId ).gamescope.filter == "FSR" );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "LINEAR" );
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( "1" ) ) );
+}
+
+TEST_CASE( "notification muting resolves per-game override vs. global exactly like every other setting", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.notifications.muted = false;
+    REQUIRE( SaveGlobal( global ) );
+
+    // No override yet -- every app id (and no app id at all) reads the
+    // global value.
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "1" } ).notifications.muted );
+    REQUIRE_FALSE( ResolveEffective( std::nullopt ).notifications.muted );
+
+    // Enabling the override for app 1 with muted:true must not affect any
+    // other app id or the global default itself (DECISIONS.md #19's full
+    // snapshot, not a diff -- same mechanism NotificationSettings::muted
+    // rides on as fps_display.enabled etc.).
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "1" } );
+    snapshot.notifications.muted = true;
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).notifications.muted );
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "2" } ).notifications.muted );
+    REQUIRE_FALSE( ResolveEffective( std::nullopt ).notifications.muted );
+
+    // Clearing the override falls back to global (still unmuted) again.
+    REQUIRE( ClearPerGameOverride( "1" ) );
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "1" } ).notifications.muted );
+}
+
+TEST_CASE( "notification placement is global-only and never rides along in a per-game snapshot", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.overlay.notification_placement = "bottom-left";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( LoadGlobal().overlay.notification_placement == "bottom-left" );
+
+    // Enabling "Override Global Config" for a game snapshots the full
+    // effective settings (mirrors PanelConfig.cpp's EnableOverride) -- but
+    // SettingsToJson's bIncludeOverlay=false for per-game files means the
+    // `overlay` object (and therefore notification_placement) is never
+    // written there at all, by design (ConfigSchema.h's OverlaySettings
+    // comment, DECISIONS.md #25).
+    Settings snapshot = ResolveEffective( std::nullopt );
+    REQUIRE( SnapshotPerGameOverride( "9", snapshot ) );
+
+    std::optional<Settings> oPerGame = LoadPerGameOverride( "9" );
+    REQUIRE( oPerGame.has_value() );
+    // Never present in the per-game file -> resolves back to the
+    // compiled-in default, NOT the real global value -- proving placement
+    // genuinely isn't per-game-eligible the way notifications.muted is.
+    REQUIRE( oPerGame->overlay.notification_placement == "top-right" );
+
+    // The real global placement is still reachable via LoadGlobal()
+    // directly, regardless of any game's override state -- this is the
+    // read path Notifications.cpp's own EnsureConfigLoaded() relies on.
+    REQUIRE( LoadGlobal().overlay.notification_placement == "bottom-left" );
+
+    // Changing global placement afterward must not require touching the
+    // per-game file at all -- it was never in there to begin with.
+    Settings changedGlobal = global;
+    changedGlobal.overlay.notification_placement = "top-center";
+    REQUIRE( SaveGlobal( changedGlobal ) );
+    REQUIRE( LoadGlobal().overlay.notification_placement == "top-center" );
+}
+
+TEST_CASE( "audio manual node selection resolves per-game override vs. global exactly like every other setting", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.audio.manual_node_binary = "";
+    REQUIRE( SaveGlobal( global ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).audio.manual_node_binary.empty() );
+
+    // Picking a manual stream for app 1 (PanelAudio.cpp's "Use this
+    // stream" button) must not affect any other app id or the global
+    // default - same full-snapshot mechanism as every other per-game
+    // field (DECISIONS.md #19).
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "1" } );
+    snapshot.audio.manual_node_binary = "game.exe";
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).audio.manual_node_binary == "game.exe" );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "2" } ).audio.manual_node_binary.empty() );
+    REQUIRE( ResolveEffective( std::nullopt ).audio.manual_node_binary.empty() );
+
+    // Clearing the override (PanelAudio.cpp's "Clear manual override")
+    // falls back to global (still empty, i.e. automatic detection) again.
+    REQUIRE( ClearPerGameOverride( "1" ) );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).audio.manual_node_binary.empty() );
+}
+
+TEST_CASE( "ApplyProfile never carries a manual audio node selection into another game", "[config]" )
+{
+    TempConfigHome home;
+
+    // A profile saved while some game's manual override happened to be set
+    // (Settings is a full snapshot - PanelConfig.cpp's "Save as new
+    // profile" has no reason to strip it out).
+    Settings profile{};
+    profile.gamescope.filter = "FSR";
+    profile.audio.manual_node_binary = "specific-game.exe";
+    REQUIRE( SaveProfile( "FPS", profile ) );
+
+    // Applying that profile to a different game's settings must not point
+    // its volume control at "specific-game.exe" - naming one game's
+    // process has no meaning for another game the profile gets applied to.
+    Settings target{};
+    target.audio.manual_node_binary = "other-game.exe";
+    REQUIRE( ApplyProfile( target, "FPS" ) );
+    REQUIRE( target.gamescope.filter == "FSR" ); // the rest of the profile did apply
+    REQUIRE( target.audio.manual_node_binary == "other-game.exe" ); // untouched
+}
+
 TEST_CASE( "a per-game file with override_global: false behaves as absent", "[config]" )
 {
     TempConfigHome home;
@@ -229,6 +406,7 @@ TEST_CASE( "ApplyProfile copies values in once, not a live reference", "[config]
     Settings profile{};
     profile.gamescope.filter = "FSR";
     profile.gamescope.sharpness = 15;
+    profile.notifications.muted = true;
     REQUIRE( SaveProfile( "FPS", profile ) );
 
     Settings target{};
@@ -236,6 +414,7 @@ TEST_CASE( "ApplyProfile copies values in once, not a live reference", "[config]
     REQUIRE( ApplyProfile( target, "FPS" ) );
     REQUIRE( target.gamescope.filter == "FSR" );
     REQUIRE( target.gamescope.sharpness == 15 );
+    REQUIRE( target.notifications.muted == true ); // NotificationSettings::muted is a normal per-layer field, copied like fps_display/reshade above
 
     // Editing the profile afterwards must not retroactively change `target`
     // (DECISIONS.md #20 - a one-time copy, not a live reference).
@@ -358,6 +537,39 @@ TEST_CASE( "EnqueueRoutedWrite falls back to global.json when no app id was reso
     REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
 }
 
+TEST_CASE( "a General-tab overlay edit is not clobbered by a later routed write from a stale panel cache", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // Simulates PanelDisplay.cpp's EnsureConfigLoaded(): loads the full
+    // effective Settings once, at panel-open time, before the user ever
+    // touches the General tab.
+    Settings displayPanelCache = ResolveEffective( SessionAppId() );
+
+    // User edits a General-tab slider: PanelConfig.cpp's QueueGeneralSave()
+    // mutates just the overlay field on its own cache and writes the whole
+    // struct.
+    Settings generalTabCache = LoadGlobal();
+    generalTabCache.overlay.dock_scale = 1.3f;
+    EnqueueGlobalWrite( generalTabCache );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().overlay.dock_scale == 1.3f );
+
+    // User now edits a Display-tab slider. PanelDisplay never reloaded its
+    // cache (only PanelConfig-driven profile-apply/override-toggle bump
+    // ConfigGeneration - a General-tab edit deliberately never does), so its
+    // own `overlay` sub-object is still whatever was loaded at panel-open
+    // time (dock_scale == 1.0, the default) - before the General-tab edit.
+    displayPanelCache.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( displayPanelCache );
+    FlushPendingWrites();
+
+    // The General tab's dock_scale must survive an unrelated Display-tab
+    // edit.
+    REQUIRE( LoadGlobal().overlay.dock_scale == 1.3f );
+}
+
 TEST_CASE( "ListProfiles and ListGameIds report what's actually on disk, sorted", "[config]" )
 {
     TempConfigHome home;
@@ -458,4 +670,147 @@ TEST_CASE( "loading sweeps this config's own stale atomic-write temp files, but 
     REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
 
     std::filesystem::remove( sLiveTemp );
+}
+
+// ---- issue #43: disabling an override must never delete the config file ----
+// (DECISIONS.md #19's amendment.)
+
+TEST_CASE( "disabling override deactivates the file in place - it is never deleted", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings snapshot{};
+    snapshot.gamescope.filter = "FSR";
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+
+    // This is the exact call PanelConfig.cpp's DisableOverride() makes.
+    REQUIRE( ClearPerGameOverride( "1" ) );
+
+    // The file must still be on disk - the whole point of this fix.
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+
+    // But it must no longer be authoritative: resolution falls back to
+    // global, exactly as if the file had been deleted.
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "LINEAR" );
+    REQUIRE_FALSE( LoadPerGameOverride( "1" ).has_value() );
+
+    // And the saved values are still readable via the "is there something
+    // to restore" path.
+    REQUIRE( HasSavedPerGameConfig( "1" ) );
+}
+
+TEST_CASE( "re-enabling override after a disable restores the saved file - it is never re-snapshotted", "[config]" )
+{
+    TempConfigHome home;
+
+    // Global starts as "LINEAR" ...
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+
+    // ... but this game's saved override is "FSR" (what the user actually
+    // wants for this game).
+    Settings snapshot{};
+    snapshot.gamescope.filter = "FSR";
+    snapshot.gamescope.sharpness = 7;
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+    REQUIRE( ClearPerGameOverride( "1" ) ); // user turns override off
+
+    // Global changes again while the override is off, the way it would in
+    // real use between the disable and the re-enable.
+    Settings changedGlobal{};
+    changedGlobal.gamescope.filter = "NIS";
+    REQUIRE( SaveGlobal( changedGlobal ) );
+
+    // Re-enabling: PanelConfig.cpp's EnableOverride() calls
+    // HasSavedPerGameConfig()/RestorePerGameOverride() first, and only
+    // falls back to a fresh snapshot when that fails.
+    REQUIRE( HasSavedPerGameConfig( "1" ) );
+    REQUIRE( RestorePerGameOverride( "1" ) );
+
+    // The restored file must have the ORIGINAL per-game values ("FSR"/7),
+    // never the current global ("NIS") - re-snapshotting here would be the
+    // exact same data loss issue #43 was about, one step later.
+    Settings restored = ResolveEffective( std::optional<std::string>{ "1" } );
+    REQUIRE( restored.gamescope.filter == "FSR" );
+    REQUIRE( restored.gamescope.sharpness == 7 );
+    REQUIRE( LoadPerGameOverride( "1" ).has_value() );
+}
+
+TEST_CASE( "enabling override with no existing file still snapshots from the currently effective settings", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.gamescope.filter = "NIS";
+    REQUIRE( SaveGlobal( global ) );
+
+    // No games/2.json exists yet at all.
+    REQUIRE_FALSE( HasSavedPerGameConfig( "2" ) );
+    REQUIRE_FALSE( RestorePerGameOverride( "2" ) ); // nothing to restore
+
+    // EnableOverride()'s fallback path: snapshot whatever is currently
+    // effective.
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "2" } );
+    REQUIRE( SnapshotPerGameOverride( "2", snapshot ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "2" } ).gamescope.filter == "NIS" );
+    REQUIRE( LoadPerGameOverride( "2" ).has_value() );
+}
+
+TEST_CASE( "DeletePerGameOverride removes only the intended file", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SnapshotPerGameOverride( "1", Settings{} ) );
+    REQUIRE( SnapshotPerGameOverride( "2", Settings{} ) );
+    Settings global{};
+    global.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( global ) );
+
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE( std::filesystem::exists( GamePath( "2" ) ) );
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+
+    REQUIRE( DeletePerGameOverride( "1" ) );
+
+    // Only app id 1's file is gone.
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE_FALSE( HasSavedPerGameConfig( "1" ) );
+    // App id 2's file, and global.json, are untouched.
+    REQUIRE( std::filesystem::exists( GamePath( "2" ) ) );
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+
+    // Deleting an already-absent file is still success (matches
+    // ClearPerGameOverride's old missing-file-is-success contract).
+    REQUIRE( DeletePerGameOverride( "1" ) );
+}
+
+TEST_CASE( "DeletePerGameOverride refuses a path-escaping app id", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SnapshotPerGameOverride( "1", Settings{} ) );
+    Settings global{};
+    global.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( SaveProfile( "MyProfile", Settings{} ) );
+
+    // None of these should ever be able to reach outside GamesDir().
+    REQUIRE_FALSE( DeletePerGameOverride( "../global" ) );
+    REQUIRE_FALSE( DeletePerGameOverride( "../profiles/MyProfile" ) );
+    REQUIRE_FALSE( DeletePerGameOverride( "." ) );
+    REQUIRE_FALSE( DeletePerGameOverride( ".." ) );
+    REQUIRE_FALSE( DeletePerGameOverride( "" ) );
+
+    // Untouched.
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+    REQUIRE( std::filesystem::exists( ProfilePath( "MyProfile" ) ) );
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
 }

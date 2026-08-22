@@ -8,12 +8,35 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 class CVulkanCmdBuffer;
 struct FrameInfo_t;
 
 namespace gamescope
 {
+	// Live-tunable background blur/darkening (window-chrome overhaul's
+	// General tab, Config/ConfigSchema.h's OverlaySettings::background_blur /
+	// background_darkening) -- same seed-once/push-on-edit shape as
+	// Overlay/Palette.h's gamescope::palette::g_LiveTheme and
+	// Overlay/Notifications.h's gamescope::Notifications::g_LiveTheme:
+	// process-level and global.json-only (ApplyProfile() never touches
+	// `overlay`, so a per-game override or applied profile never changes
+	// these), seeded once from global.json by this file's own
+	// EnsureBackgroundLiveThemeLoaded() (SettingsOverlay.cpp), then written
+	// straight into by Overlay/PanelConfig.cpp's DrawGeneralTab() on every
+	// slider edit -- that bypass is what makes the change visible the very
+	// next frame instead of waiting on a config-generation bump that
+	// General-tab edits never trigger. SettingsOverlay.cpp is the only
+	// reader (see SettingsOverlay_AddLayer()'s blur-radius/darkening-ctm
+	// consumers).
+	struct BackgroundLiveTheme
+	{
+		float flBlur = 0.0f;      // OverlaySettings::background_blur, 0..1
+		float flDarkening = 0.0f; // OverlaySettings::background_darkening, 0..1
+	};
+	extern BackgroundLiveTheme g_BackgroundLiveTheme;
+
 	// Called once per paint_all(), on the steamcompmgr thread, right before the
 	// frame is handed to the backend's Present(). If the overlay is visible or
 	// still fading out, this draws the settings overlay's panels/dock into an
@@ -72,13 +95,30 @@ namespace gamescope
 	// route the event into the queue below instead of forwarding it.
 	bool SettingsOverlay_IsCapturingInput();
 
+	// Keyboard-control toggle (see ConfigSchema.h's OverlaySettings
+	// comment): true only when the overlay is open/capturing AND the
+	// "capture all keyboard input" setting is on. wlserver_dispatch_key()
+	// (wlserver.cpp) uses this instead of SettingsOverlay_IsCapturingInput()
+	// to decide where a keypress goes -- mouse routing is untouched by this
+	// setting and keeps using SettingsOverlay_IsCapturingInput() directly.
+	// Thread-safe the same way SettingsOverlay_IsCapturingInput() is (reads
+	// only atomics/ConVars, no locking).
+	bool SettingsOverlay_IsCapturingKeyboard();
+
 	// Producer side (main thread). uLinuxKeycode is a raw evdev keycode
 	// (KEY_* from linux/input-event-codes.h, NOT an xkb keycode -- no +8),
 	// the same convention wlserver_key()/wlserver_handle_key() already use
-	// for everything except xkb lookups. All keysym/ImGuiKey/text
-	// translation happens on the consumer side (SettingsOverlay.cpp) so
-	// wlserver.cpp does not need to know anything about ImGui.
-	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed );
+	// for everything except xkb lookups. ImGuiKey mapping still happens on
+	// the consumer side (SettingsOverlay.cpp) so wlserver.cpp does not need
+	// to know anything about ImGui -- but layout-correct TEXT can only be
+	// produced where the real xkb_state lives (wlserver.cpp, next to the
+	// keyboard), so wlserver_dispatch_key() resolves it there (via
+	// xkb_state_key_get_utf8() against the keyboard that actually received
+	// the press) and passes the already-translated UTF-8 through here.
+	// sUtf8Text is empty for a release, for keys with no printable mapping,
+	// and for control characters (Enter/Tab/Backspace/Escape/...) -- those
+	// stay pure key events, never text, regardless of layout.
+	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed, std::string sUtf8Text = std::string() );
 
 	// Producer side. Relative pointer motion (already sensitivity-scaled by
 	// the caller, matching wlserver_mousemotion()'s own convention) --

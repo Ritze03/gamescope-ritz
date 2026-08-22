@@ -38,8 +38,11 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
   true (`meson.build:105`).
 - `default_extras_install.sh` is a Meson install-time hook (invoked with `MESON_SOURCE_ROOT`/
   `MESON_INSTALL_PREFIX`/`DESTDIR` env vars set by Meson) that replaces any previously
-  installed `scripts`/`looks` directories under `share/gamescope` with the ones from the
-  source tree, so a reinstall doesn't leave stale default assets behind.
+  installed `scripts`/`looks`/`reshade` directories under `share/gamescope-ritz` (namespaced,
+  not plain `share/gamescope` — this fork installs alongside a packaged `/usr/bin/gamescope`
+  and must never touch its data dir; the script's own `rm -rf` calls are guarded to refuse
+  any path outside `share/gamescope-ritz`) with the ones from the source tree, so a reinstall
+  doesn't leave stale default assets behind.
 
 ### SteamOS device tooling (`tools/`)
 

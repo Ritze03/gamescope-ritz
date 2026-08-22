@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 #include "Audio/Volume.h"
 
 using namespace gamescope::Audio;
@@ -132,4 +134,201 @@ TEST_CASE( "Fresh state before any target PID is set reports not detected", "[au
 	VolumeState state = GetState();
 	REQUIRE_FALSE( state.bDetected );
 	REQUIRE( state.nMatchedNodes == 0 );
+}
+
+// ---- SelectCandidate (detection strategies 2-4 of Volume.h's header
+// comment) -- pure logic, no subprocess/filesystem involved. NodeInfo below
+// stands in for what a real `wpctl status`+`inspect` pass would have parsed
+// out, matching the fields verified present on real Stream/Output/Audio
+// nodes (application.process.id/binary, application.name, object.serial -
+// see superdoc/planning/pipewire-loudness.md §2 and this feature's own
+// live-system checks).
+
+TEST_CASE( "SelectCandidate: manual override wins outright, by binary or by app name", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "pacat", "paplay", pid_t{ 111 }, 100L },
+		{ 20, "game.exe", "", pid_t{ 222 }, 200L },
+	};
+
+	SECTION( "matches application.process.binary" )
+	{
+		auto result = Parse::SelectCandidate( nodes, {}, {}, std::nullopt, std::string{ "game.exe" } );
+		REQUIRE( result.eMethod == DetectionMethod::Manual );
+		REQUIRE( result.onSelectedNodeId == 20 );
+		REQUIRE( result.vecMatchedNodeIds == std::vector<int>{ 20 } );
+	}
+
+	SECTION( "falls back to application.name when binary doesn't match" )
+	{
+		auto result = Parse::SelectCandidate( nodes, {}, {}, std::nullopt, std::string{ "paplay" } );
+		REQUIRE( result.eMethod == DetectionMethod::Manual );
+		REQUIRE( result.onSelectedNodeId == 10 );
+	}
+
+	SECTION( "case-insensitive" )
+	{
+		auto result = Parse::SelectCandidate( nodes, {}, {}, std::nullopt, std::string{ "GAME.EXE" } );
+		REQUIRE( result.onSelectedNodeId == 20 );
+	}
+
+	SECTION( "wins over a PID match that would otherwise apply" )
+	{
+		// node 10's pid (111) is a real descendant, but the manual pick
+		// (node 20's identity) must still win outright.
+		auto result = Parse::SelectCandidate( nodes, { 111 }, {}, std::nullopt, std::string{ "game.exe" } );
+		REQUIRE( result.eMethod == DetectionMethod::Manual );
+		REQUIRE( result.onSelectedNodeId == 20 );
+	}
+}
+
+TEST_CASE( "SelectCandidate: manual override set but not currently streaming reports stale, not a guess", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "pacat", "paplay", pid_t{ 111 }, 100L },
+	};
+
+	// "some-other-game" never appears in `nodes` - even though node 10 is a
+	// perfectly good PID match, the manual override must never silently
+	// fall back to it.
+	auto result = Parse::SelectCandidate( nodes, { 111 }, {}, std::nullopt, std::string{ "some-other-game" } );
+	REQUIRE( result.eMethod == DetectionMethod::Manual );
+	REQUIRE_FALSE( result.onSelectedNodeId.has_value() );
+	REQUIRE( result.vecMatchedNodeIds.empty() );
+}
+
+TEST_CASE( "SelectCandidate: PID-tree match is used when no manual override is set", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "pacat", "paplay", pid_t{ 111 }, 100L },
+		{ 20, "other", "Other App", pid_t{ 999 }, 200L }, // not a descendant
+	};
+
+	auto result = Parse::SelectCandidate( nodes, { 111 }, {}, std::nullopt, std::nullopt );
+	REQUIRE( result.eMethod == DetectionMethod::Pid );
+	REQUIRE( result.onSelectedNodeId == 10 );
+	REQUIRE( result.vecMatchedNodeIds == std::vector<int>{ 10 } );
+	REQUIRE( result.nCandidatesAtWinningTier == 1 );
+}
+
+TEST_CASE( "SelectCandidate: several distinct descendant PIDs both matched are reported as ambiguous, most recent wins", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "launcher", "", pid_t{ 111 }, 100L }, // e.g. a launcher process
+		{ 20, "game.exe", "", pid_t{ 222 }, 500L }, // the actual game, created later
+	};
+
+	auto result = Parse::SelectCandidate( nodes, { 111, 222 }, {}, std::nullopt, std::nullopt );
+	REQUIRE( result.eMethod == DetectionMethod::Pid );
+	REQUIRE( result.nCandidatesAtWinningTier == 2 ); // exposed, not silently resolved
+	REQUIRE( result.onSelectedNodeId == 20 );         // the more recently created one
+	REQUIRE( result.vecMatchedNodeIds == std::vector<int>{ 20 } );
+}
+
+TEST_CASE( "SelectCandidate: process-name match covers a sandboxed PID mismatch", "[audio_volume]" )
+{
+	// The stream's application.process.id (a container-namespace PID) never
+	// appears in gamescope's own /proc walk - the classic pressure-vessel/
+	// bwrap case - but the stream's own binary name matches a descendant's
+	// /proc/<pid>/comm.
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "game.exe", "", pid_t{ 99999 }, 100L },
+	};
+	std::vector<pid_t> vecDescendantPids = { 111 }; // gamescope's own view - no overlap with 99999
+	std::vector<std::string> vecDescendantNames = { "game.exe" };
+
+	auto result = Parse::SelectCandidate( nodes, vecDescendantPids, vecDescendantNames, std::nullopt, std::nullopt );
+	REQUIRE( result.eMethod == DetectionMethod::ProcessName );
+	REQUIRE( result.onSelectedNodeId == 10 );
+}
+
+TEST_CASE( "SelectCandidate: newest-since-launch is a last resort, and needs a baseline first", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "", "", std::nullopt, 100L }, // pre-existing, no identity at all (e.g. a visualizer client)
+		{ 20, "", "", std::nullopt, 400L }, // appeared after the baseline
+	};
+
+	SECTION( "without a baseline, nothing is considered new" )
+	{
+		auto result = Parse::SelectCandidate( nodes, {}, {}, std::nullopt, std::nullopt );
+		REQUIRE( result.eMethod == DetectionMethod::NotDetected );
+	}
+
+	SECTION( "with a baseline, only the newer node counts, and it's picked" )
+	{
+		auto result = Parse::SelectCandidate( nodes, {}, {}, 200L, std::nullopt );
+		REQUIRE( result.eMethod == DetectionMethod::Newest );
+		REQUIRE( result.onSelectedNodeId == 20 );
+		REQUIRE( result.nCandidatesAtWinningTier == 1 );
+	}
+}
+
+TEST_CASE( "SelectCandidate: nothing matches anywhere reports NotDetected, not a crash", "[audio_volume]" )
+{
+	auto result = Parse::SelectCandidate( {}, {}, {}, 0L, std::nullopt );
+	REQUIRE( result.eMethod == DetectionMethod::NotDetected );
+	REQUIRE_FALSE( result.onSelectedNodeId.has_value() );
+	REQUIRE( result.vecMatchedNodeIds.empty() );
+}
+
+// ---- Issue #36: panel-wide enumeration (every active stream gets its own
+// row, primary excluded from the "other streams" list by node id) relies on
+// VolumeState::vecMatchedNodeIds carrying *every* node id behind the winning
+// match, not just the one flVolume/bMuted is read from (e.g. a stereo pair
+// of streams sharing one PID/identity, both of which a volume/mute command
+// must apply to). These two cases were previously only exercised through
+// nCandidatesAtWinningTier's *count* of distinct candidates, never the
+// number of node ids actually in vecMatchedNodeIds for a single winning
+// candidate.
+
+TEST_CASE( "SelectCandidate: a PID match spanning several nodes reports all of their ids, not just the best one", "[audio_volume]" )
+{
+	// A real client can open more than one Stream/Output/Audio node under
+	// the same pid (e.g. a separate node per channel/sink) - every one of
+	// them must end up in vecMatchedNodeIds so RequestVolume()/RequestMute()
+	// apply to all of them, and so the panel's primary-exclusion filter
+	// (matching against vecMatchedNodeIds) hides every one of them from the
+	// "other streams" list, not just the highest-serial one.
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "game.exe", "", pid_t{ 222 }, 100L },
+		{ 11, "game.exe", "", pid_t{ 222 }, 105L },
+	};
+
+	auto result = Parse::SelectCandidate( nodes, { 222 }, {}, std::nullopt, std::nullopt );
+	REQUIRE( result.eMethod == DetectionMethod::Pid );
+	REQUIRE( result.onSelectedNodeId == 11 ); // higher serial within the winning pid
+	std::vector<int> vecExpected{ 10, 11 };
+	std::vector<int> vecActual = result.vecMatchedNodeIds;
+	std::sort( vecActual.begin(), vecActual.end() );
+	REQUIRE( vecActual == vecExpected );
+}
+
+TEST_CASE( "SelectCandidate: manual override matching several nodes by identity reports all of their ids", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 30, "pacat", "paplay", pid_t{ 111 }, 100L },
+		{ 31, "pacat", "paplay", pid_t{ 111 }, 150L },
+		{ 40, "other.exe", "", pid_t{ 222 }, 200L },
+	};
+
+	auto result = Parse::SelectCandidate( nodes, {}, {}, std::nullopt, std::string{ "pacat" } );
+	REQUIRE( result.eMethod == DetectionMethod::Manual );
+	REQUIRE( result.onSelectedNodeId == 31 );
+	std::vector<int> vecExpected{ 30, 31 };
+	std::vector<int> vecActual = result.vecMatchedNodeIds;
+	std::sort( vecActual.begin(), vecActual.end() );
+	REQUIRE( vecActual == vecExpected );
+}
+
+TEST_CASE( "StreamCandidate carries its own live volume/mute snapshot, defaulted sanely", "[audio_volume]" )
+{
+	// Every row the Audio panel draws for GetAvailableStreams() binds
+	// straight to a StreamCandidate's own flVolume/bMuted (Volume.cpp reads
+	// each node's volume back independently every poll) rather than a
+	// shared/aliased value - this just pins the struct's default so an
+	// un-populated candidate never displays as silent/zero by accident.
+	StreamCandidate candidate;
+	REQUIRE( candidate.flVolume == 1.0f );
+	REQUIRE_FALSE( candidate.bMuted );
 }
