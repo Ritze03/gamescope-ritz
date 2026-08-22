@@ -485,13 +485,134 @@ namespace gamescope
 		}
 	}
 
+	// -------------------------------------------------------------------
+	// Issue #29 (System Monitor part 3/3): blend_mode gains "inverted"
+	// alongside alpha/additive, and each module (FPS/CPU/GPU/Media) gets an
+	// optional per-module colour override. Shared helpers for both below --
+	// placed ahead of DrawPercentileRow() since that function (and every
+	// module's own Draw*ModuleContent() further down) calls AddTextInverted().
+	// -------------------------------------------------------------------
+
+	// A filled backdrop only makes sense in "alpha" mode -- additive
+	// already auto-disables it (a filled rect would itself glow, SPEC.md
+	// B5) and inverted does too, for the same reason this issue's own text
+	// anticipates: a static backdrop fill sits behind the outline/fill
+	// treatment AddTextInverted() draws and would just read as visual
+	// noise rather than helping legibility (verified below -- see the
+	// settings panel's blend-mode combo and this file's own commit
+	// message for the explicit "tested together" combination).
+	static bool ModuleBackdropAllowed( const config::FpsDisplaySettings &cfg )
+	{
+		return cfg.blend_mode == "alpha";
+	}
+
+	// Packs an ImVec4 (0..1 floats, alpha ignored) into the 0xRRGGBB int
+	// config::FpsDisplaySettings::color_fps/cpu/gpu/media store on disk.
+	static int PackColorRgb( ImVec4 col )
+	{
+		auto Channel = []( float f ) { return std::clamp( (int)( f * 255.0f + 0.5f ), 0, 255 ); };
+		return ( Channel( col.x ) << 16 ) | ( Channel( col.y ) << 8 ) | Channel( col.z );
+	}
+
+	static ImVec4 UnpackColorRgb( int nPacked, float flAlpha = 1.0f )
+	{
+		return ImVec4(
+			( ( nPacked >> 16 ) & 0xFF ) / 255.0f,
+			( ( nPacked >> 8 ) & 0xFF ) / 255.0f,
+			( nPacked & 0xFF ) / 255.0f,
+			flAlpha );
+	}
+
+	// Resolves one module's "value" text colour: the user's explicit
+	// ColorEdit3 override when set, else `defaultColor` -- a Palette.h
+	// accent-family token (never an invented literal, per this issue's own
+	// instruction). An unset override therefore moves automatically if
+	// issue #37's hue-selectable accent work changes what that Palette.h
+	// token resolves to at runtime; a set override is a deliberate,
+	// explicit user choice and intentionally does NOT track the accent hue
+	// -- see ConfigSchema.h's color_fps/cpu/gpu/media field comment for the
+	// full rationale this file was asked to document.
+	static ImVec4 ModuleColorVec4( const std::optional<int> &oOverride, ImU32 defaultColor, float flAlpha = 1.0f )
+	{
+		ImVec4 col = oOverride.has_value() ? UnpackColorRgb( *oOverride ) : gamescope::palette::ToVec4( defaultColor );
+		col.w = flAlpha;
+		return col;
+	}
+
+	static ImU32 ModuleColorU32( const std::optional<int> &oOverride, ImU32 defaultColor, float flAlpha )
+	{
+		return ImGui::ColorConvertFloat4ToU32( ModuleColorVec4( oOverride, defaultColor, flAlpha ) );
+	}
+
+	// Issue #29's "Inverted" blend mode. What "inverted" means here, and
+	// why it is NOT a literal per-pixel GPU-blend destination-invert
+	// (VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR against the actual composited
+	// game frame), is worth being explicit about rather than silently
+	// under-delivering the task brief's own literal wording:
+	//
+	// This whole readout renders into its own isolated offscreen texture
+	// (s_pOverlayTexture, cleared to transparent every frame -- see
+	// RenderAndSubmit()'s VK_ATTACHMENT_LOAD_OP_CLEAR) on the general
+	// queue, entirely independent of the game's own frame. It is handed to
+	// paint_all() as one more Layer_t and composited onto the actual game
+	// content LATER, on the compute queue, by vulkan_composite() -- using
+	// one of exactly three fixed per-layer blend equations baked into that
+	// compute shader (rendervulkan.hpp's AlphaBlendingMode_t: PREMULTIPLIED
+	// / COVERAGE / NONE; see rendervulkan.cpp's u_alphaMode packing). A
+	// literal "invert whatever's underneath" blend mode is a property of
+	// THAT later compositing step, not of this file's own draw pass --
+	// this file's "destination" during its own ImGui rendering is only
+	// ever this texture's own (normally transparent) prior content, never
+	// the game frame, so no amount of Vulkan blend-state work confined to
+	// this file can make a real per-pixel invert of the actual game
+	// picture happen. Reaching that would need a fourth blend mode in
+	// rendervulkan.hpp's compute shader (this issue's scope note keeps
+	// this file out of rendervulkan.hpp/.comp) or safe cross-queue sharing
+	// of the app's own texture into this pass (the kind of setup
+	// s_pOverlayTexture's own bGeneralQueueShared flag needed for THIS
+	// file's texture) -- both genuinely out of this issue's scope, flagged
+	// here as the honest follow-up rather than attempted blind.
+	//
+	// What IS both real and fully in-scope: pairing a black outline with a
+	// white fill is the same "reads over anything" technique real
+	// injected overlays (RTSS, MangoHud) rely on, and it is a content-
+	// INDEPENDENT guarantee by construction (mostly-transparent glyph
+	// shapes rather than one large flat-color block, which is also the
+	// literal "useful for OLED" property the task brief asks for) rather
+	// than a fixed single colour that can still fail against a
+	// similar-toned background the way plain "alpha" mode's text can.
+	// Backdrop is auto-disabled in this mode (ModuleBackdropAllowed()) --
+	// a solid backdrop fill behind an outline/fill pair that's already
+	// legible on its own just reads as noise, exactly as issue #29's own
+	// text anticipated for this combination.
+	static void AddTextInverted( ImDrawList *pDrawList, ImVec2 pos, const char *pszText )
+	{
+		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+		const ImU32 outlineColor = IM_COL32( 0, 0, 0, 235 );
+		for ( const ImVec2 &off : kOffsets )
+			pDrawList->AddText( ImVec2( pos.x + off.x, pos.y + off.y ), outlineColor, pszText );
+		pDrawList->AddText( pos, IM_COL32( 255, 255, 255, 255 ), pszText );
+	}
+
+	// Same, for the explicit-font/size AddText overload (FPS module's Hero
+	// number, which draws at the user's font_size slider rather than a
+	// font style's own baked size).
+	static void AddTextInvertedSized( ImDrawList *pDrawList, ImFont *pFont, float flFontSize, ImVec2 pos, const char *pszText )
+	{
+		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+		const ImU32 outlineColor = IM_COL32( 0, 0, 0, 235 );
+		for ( const ImVec2 &off : kOffsets )
+			pDrawList->AddText( pFont, flFontSize, ImVec2( pos.x + off.x, pos.y + off.y ), outlineColor, pszText );
+		pDrawList->AddText( pFont, flFontSize, pos, IM_COL32( 255, 255, 255, 255 ), pszText );
+	}
+
 	// Spec §10 Row 3: three Mono 400 10 @ 55% white items, 10px gaps. Task
 	// brief substitutes "average" for the mockup's temperature slot (a
 	// reading this feature has no honest data source for) -- 1% low, 0.1%
 	// low, average, all from the same history window as the graph. Draws
 	// pre-measured strings (see DrawReadout, which builds these once and
 	// reuses the same strings/sizes for both layout and drawing).
-	static void DrawPercentileRow( ImDrawList *pDrawList, ImVec2 origin, float flTextOpacity,
+	static void DrawPercentileRow( ImDrawList *pDrawList, ImVec2 origin, float flTextOpacity, bool bInverted,
 		const char *const ( &items )[3], const ImVec2 ( &sizes )[3] )
 	{
 		constexpr float kItemGap = 10.0f; // spec §10: "10px gaps"
@@ -506,7 +627,10 @@ namespace gamescope
 		float flX = origin.x;
 		for ( int i = 0; i < 3; ++i )
 		{
-			pDrawList->AddText( ImVec2( flX, origin.y ), color, items[i] );
+			if ( bInverted )
+				AddTextInverted( pDrawList, ImVec2( flX, origin.y ), items[i] );
+			else
+				pDrawList->AddText( ImVec2( flX, origin.y ), color, items[i] );
 			flX += sizes[i].x + kItemGap;
 		}
 		ImGui::PopFont();
@@ -634,8 +758,12 @@ namespace gamescope
 	};
 
 	// Vertical gap between stacked module boxes -- distinct from kRowGap
-	// (the gap between a module's own internal rows).
-	static constexpr float kModuleGap = 8.0f;
+	// (the gap between a module's own internal rows). Issue #29: was a
+	// fixed constant here; now config::FpsDisplaySettings::module_spacing,
+	// a real user-facing slider (this issue's own "at least one new
+	// styling option" acceptance criterion) -- see DrawReadout(), which
+	// reads cfg.module_spacing directly at both of this constant's old use
+	// sites.
 
 	// FPS module's measured layout: every string/size the draw half needs,
 	// computed once by MeasureFpsModule() and consumed by
@@ -645,6 +773,7 @@ namespace gamescope
 	struct FpsModuleLayout
 	{
 		bool bAdditive = false;
+		bool bInverted = false;
 		bool bDrawBackdrop = false;
 		ImU32 textColor = 0;
 		char szNum[8] = "";
@@ -680,11 +809,14 @@ namespace gamescope
 		FpsModuleLayout L;
 
 		L.bAdditive = cfg.blend_mode == "additive";
-		// additive + a filled backdrop rect would make the backdrop
-		// itself glow (SPEC.md B5) -- auto-disable rather than combine
-		// them, matching the settings panel's own auto-disable of the
-		// backdrop controls in additive mode (FpsDisplay_DrawSettingsPanel).
-		L.bDrawBackdrop = cfg.backdrop_enabled && !L.bAdditive;
+		L.bInverted = cfg.blend_mode == "inverted";
+		// additive/inverted + a filled backdrop rect would make the
+		// backdrop itself glow (additive, SPEC.md B5) or just read as
+		// noise behind an already-legible outline/fill pair (inverted) --
+		// auto-disable rather than combine them, matching the settings
+		// panel's own auto-disable of the backdrop controls in either mode
+		// (FpsDisplay_DrawSettingsPanel).
+		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
 
 		// Gamescope's own layer blend modes (rendervulkan.hpp) are
 		// PREMULTIPLIED/COVERAGE/NONE -- there is no whole-layer additive
@@ -692,10 +824,12 @@ namespace gamescope
 		// the draw-list level (no backdrop, brighter/accent-tinted text)
 		// rather than literal GPU ADD blend-func compositing against the
 		// scene -- SPEC.md flags this exact interaction as a design-guide
-		// call, not a technical one.
+		// call, not a technical one. "Inverted" draws via AddTextInverted()
+		// instead (see that function's own comment) rather than a flat
+		// L.textColor, so its value here is unused when L.bInverted.
 		const ImVec4 textColorBase = L.bAdditive
 			? ImVec4( 0x7d / 255.0f, 0xe6 / 255.0f, 0xf7 / 255.0f, 1.0f ) // brighter cyan "glow"
-			: ImVec4( 0.92f, 0.94f, 0.95f, 1.0f );
+			: ModuleColorVec4( cfg.color_fps, gamescope::palette::kAccentValue );
 		L.textColor = ImGui::ColorConvertFloat4ToU32(
 			ImVec4( textColorBase.x, textColorBase.y, textColorBase.z, cfg.text_opacity ) );
 
@@ -785,12 +919,18 @@ namespace gamescope
 		const float flFontSize = cfg.font_size;
 
 		ImVec2 cursor = textPos;
-		pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
+		if ( L.bInverted )
+			AddTextInvertedSized( pDrawList, pFont, flFontSize, cursor, L.szNum );
+		else
+			pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
 		cursor.x += L.numSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		const ImU32 unitColor = ImGui::GetColorU32( gamescope::palette::White( 0.50f ) );
-		pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) ), unitColor, kUnitText );
+		const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
+		if ( L.bInverted )
+			AddTextInverted( pDrawList, unitPos, kUnitText );
+		else
+			pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
 		cursor.x += L.unitSize.x;
 		ImGui::PopFont();
 
@@ -801,8 +941,11 @@ namespace gamescope
 			// (#78DBF6), so it's kept as its own literal rather than routed
 			// through Palette.h's accent family.
 			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-			const ImU32 msColor = ImGui::GetColorU32( ImVec4( 0x89 / 255.0f, 0xe0 / 255.0f, 0xf8 / 255.0f, cfg.text_opacity ) );
-			pDrawList->AddText( ImVec2( cursor.x, cursor.y + ( L.numSize.y - L.msSize.y ) ), msColor, L.szMs );
+			const ImVec2 msPos( cursor.x, cursor.y + ( L.numSize.y - L.msSize.y ) );
+			if ( L.bInverted )
+				AddTextInverted( pDrawList, msPos, L.szMs );
+			else
+				pDrawList->AddText( msPos, ImGui::GetColorU32( ImVec4( 0x89 / 255.0f, 0xe0 / 255.0f, 0xf8 / 255.0f, cfg.text_opacity ) ), L.szMs );
 			ImGui::PopFont();
 		}
 
@@ -817,7 +960,7 @@ namespace gamescope
 		{
 			flCursorY += kRowGap;
 			const char *const percentileItems[3] = { L.szOnePct, L.szPointOnePct, L.szAvg };
-			DrawPercentileRow( pDrawList, ImVec2( textPos.x, flCursorY ), cfg.text_opacity, percentileItems, L.percentileSizes );
+			DrawPercentileRow( pDrawList, ImVec2( textPos.x, flCursorY ), cfg.text_opacity, L.bInverted, percentileItems, L.percentileSizes );
 		}
 	}
 
@@ -860,7 +1003,7 @@ namespace gamescope
 	{
 		CpuModuleLayout L;
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		L.bDrawBackdrop = cfg.backdrop_enabled && cfg.blend_mode != "additive";
+		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
 
 		const gamescope::Metrics::CpuState cpu = gamescope::Metrics::GetCpuState();
 
@@ -906,27 +1049,28 @@ namespace gamescope
 		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
 
 		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		const bool bInverted = cfg.blend_mode == "inverted";
 		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) ); // matches Row 3's own "55% white" meta treatment
-		const ImU32 valueColor = ImGui::GetColorU32( gamescope::palette::White( cfg.text_opacity ) );
+		const ImU32 valueColor = ModuleColorU32( cfg.color_cpu, gamescope::palette::kAccentIcon, cfg.text_opacity );
 
 		ImVec2 cursor = textPos;
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		pDrawList->AddText( cursor, labelColor, kCpuLoadLabel );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, kCpuLoadLabel ); else pDrawList->AddText( cursor, labelColor, kCpuLoadLabel );
 		ImGui::PopFont();
 		cursor.x += L.loadLabelSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		pDrawList->AddText( cursor, valueColor, L.szLoadValue );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szLoadValue ); else pDrawList->AddText( cursor, valueColor, L.szLoadValue );
 		ImGui::PopFont();
 		cursor.x += L.loadValueSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		pDrawList->AddText( cursor, labelColor, kCpuRamLabel );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, kCpuRamLabel ); else pDrawList->AddText( cursor, labelColor, kCpuRamLabel );
 		ImGui::PopFont();
 		cursor.x += L.ramLabelSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		pDrawList->AddText( cursor, valueColor, L.szRamValue );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szRamValue ); else pDrawList->AddText( cursor, valueColor, L.szRamValue );
 		ImGui::PopFont();
 	}
 
@@ -954,7 +1098,7 @@ namespace gamescope
 	{
 		GpuModuleLayout L;
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		L.bDrawBackdrop = cfg.backdrop_enabled && cfg.blend_mode != "additive";
+		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
 
 		const gamescope::Metrics::GpuState gpu = gamescope::Metrics::GetGpuState();
 		L.bGpuFound = gpu.bGpuFound;
@@ -1010,39 +1154,41 @@ namespace gamescope
 		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
 
 		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		const bool bInverted = cfg.blend_mode == "inverted";
 		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) );
-		const ImU32 valueColor = ImGui::GetColorU32( gamescope::palette::White( cfg.text_opacity ) );
+		const ImU32 valueColor = ModuleColorU32( cfg.color_gpu, gamescope::palette::kAccentKnob, cfg.text_opacity );
 
 		if ( !L.bGpuFound )
 		{
 			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			pDrawList->AddText( textPos, labelColor, L.szUnavailableLine );
+			if ( bInverted ) AddTextInverted( pDrawList, textPos, L.szUnavailableLine ); else pDrawList->AddText( textPos, labelColor, L.szUnavailableLine );
 			ImGui::PopFont();
 			return;
 		}
 
 		ImVec2 cursor = textPos;
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		pDrawList->AddText( cursor, labelColor, kGpuBusyLabel );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, kGpuBusyLabel ); else pDrawList->AddText( cursor, labelColor, kGpuBusyLabel );
 		ImGui::PopFont();
 		cursor.x += L.busyLabelSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		pDrawList->AddText( cursor, valueColor, L.szBusyValue );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szBusyValue ); else pDrawList->AddText( cursor, valueColor, L.szBusyValue );
 		ImGui::PopFont();
 		cursor.x += L.busyValueSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		pDrawList->AddText( cursor, labelColor, kGpuVramLabel );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, kGpuVramLabel ); else pDrawList->AddText( cursor, labelColor, kGpuVramLabel );
 		ImGui::PopFont();
 		cursor.x += L.vramLabelSize.x;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		pDrawList->AddText( cursor, valueColor, L.szVramValue );
+		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szVramValue ); else pDrawList->AddText( cursor, valueColor, L.szVramValue );
 		ImGui::PopFont();
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		pDrawList->AddText( ImVec2( textPos.x, textPos.y + L.flRow1Height + kRowGap ), labelColor, L.szSensorsLine );
+		const ImVec2 sensorsPos( textPos.x, textPos.y + L.flRow1Height + kRowGap );
+		if ( bInverted ) AddTextInverted( pDrawList, sensorsPos, L.szSensorsLine ); else pDrawList->AddText( sensorsPos, labelColor, L.szSensorsLine );
 		ImGui::PopFont();
 	}
 
@@ -1075,7 +1221,7 @@ namespace gamescope
 	{
 		MediaModuleLayout L;
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		L.bDrawBackdrop = cfg.backdrop_enabled && cfg.blend_mode != "additive";
+		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
 
 		const gamescope::Metrics::MediaState media = gamescope::Metrics::GetMediaState();
 		L.bPlayerAvailable = media.bPlayerAvailable;
@@ -1127,18 +1273,20 @@ namespace gamescope
 		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
 
 		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
+		const bool bInverted = cfg.blend_mode == "inverted";
 		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) );
-		const ImU32 valueColor = ImGui::GetColorU32( gamescope::palette::White( cfg.text_opacity ) );
+		const ImU32 valueColor = ModuleColorU32( cfg.color_media, gamescope::palette::kAccentHandle, cfg.text_opacity );
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		pDrawList->AddText( textPos, labelColor, L.szStatusLine );
+		if ( bInverted ) AddTextInverted( pDrawList, textPos, L.szStatusLine ); else pDrawList->AddText( textPos, labelColor, L.szStatusLine );
 		ImGui::PopFont();
 
 		if ( !L.bPlayerAvailable )
 			return;
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		pDrawList->AddText( ImVec2( textPos.x, textPos.y + L.statusSize.y + kRowGap ), valueColor, L.szTrackLine );
+		const ImVec2 trackPos( textPos.x, textPos.y + L.statusSize.y + kRowGap );
+		if ( bInverted ) AddTextInverted( pDrawList, trackPos, L.szTrackLine ); else pDrawList->AddText( trackPos, valueColor, L.szTrackLine );
 		ImGui::PopFont();
 	}
 
@@ -1254,7 +1402,7 @@ namespace gamescope
 				continue;
 			flStackWidth = std::max( flStackWidth, sizes[i].x );
 			if ( nPresent > 0 )
-				flStackHeight += kModuleGap;
+				flStackHeight += cfg.module_spacing;
 			flStackHeight += sizes[i].y;
 			++nPresent;
 		}
@@ -1291,7 +1439,7 @@ namespace gamescope
 			if ( !bPresent )
 				continue;
 			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), sizes[i], fpsLayout, cpuLayout, gpuLayout, mediaLayout );
-			flCursorY += sizes[i].y + kModuleGap;
+			flCursorY += sizes[i].y + cfg.module_spacing;
 		}
 	}
 
@@ -1504,6 +1652,41 @@ namespace gamescope
 		ImGui::SetNextItemWidth( std::max( 1.0f, ImGui::GetContentRegionAvail().x - flLabelW - flGap ) );
 	}
 
+	// Issue #29: one module's optional colour override -- a checkbox to
+	// toggle the override on/off (ColorEdit3 alone has no "unset" concept)
+	// plus, while on, a stock ImGui::ColorEdit3 (this issue's own
+	// acceptance criterion: "no custom widget needed here"). Unchecked
+	// shows/edits `defaultColor` (the Palette.h accent token this module
+	// falls back to) as a preview only -- it never gets written back to
+	// `oColor` unless the checkbox is actually on, so leaving it alone
+	// keeps the module tracking Palette.h (and, transitively, #37's
+	// accent-hue selection) exactly as ConfigSchema.h's field comment
+	// promises.
+	static bool DrawModuleColorPicker( const char *pszLabel, std::optional<int> &oColor, ImU32 defaultColor )
+	{
+		bool bChanged = false;
+		bool bCustom = oColor.has_value();
+		char szCheckLabel[32];
+		snprintf( szCheckLabel, sizeof( szCheckLabel ), "Custom %s colour", pszLabel );
+		if ( widgets::Checkbox( szCheckLabel, &bCustom ) )
+		{
+			oColor = bCustom ? std::optional<int>( PackColorRgb( gamescope::palette::ToVec4( defaultColor ) ) ) : std::nullopt;
+			bChanged = true;
+		}
+		if ( bCustom )
+		{
+			ImVec4 col = ModuleColorVec4( oColor, defaultColor );
+			float rgb[3] = { col.x, col.y, col.z };
+			ImGui::SameLine();
+			if ( ImGui::ColorEdit3( pszLabel, rgb, ImGuiColorEditFlags_NoInputs ) )
+			{
+				oColor = PackColorRgb( ImVec4( rgb[0], rgb[1], rgb[2], 1.0f ) );
+				bChanged = true;
+			}
+		}
+		return bChanged;
+	}
+
 	void FpsDisplay_DrawSettingsPanel()
 	{
 		EnsureConfigLoaded();
@@ -1575,12 +1758,21 @@ namespace gamescope
 		bChanged |= widgets::Checkbox( "GPU module (usage, VRAM, temp, power)", &cfg.gpu_enabled );
 		bChanged |= widgets::Checkbox( "Media module (now playing)", &cfg.media_enabled );
 
+		// Issue #29's own "at least one new styling option" -- see
+		// ConfigSchema.h's module_spacing field comment for the two
+		// alternatives considered and rejected (corner rounding
+		// independent of the backdrop, a font-weight-per-module override).
+		SetStockSliderFullWidth( "Module spacing" );
+		bChanged |= ImGui::SliderFloat( "Module spacing", &cfg.module_spacing, 0.0f, 32.0f, "%.0f px" );
+
 		SetStockSliderFullWidth( "Font size" );
 		bChanged |= ImGui::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
 
-		static const char *s_BlendModes[] = { "alpha", "additive" };
-		int nBlendIdx = cfg.blend_mode == "additive" ? 1 : 0;
-		if ( ImGui::Combo( "Blend mode", &nBlendIdx, s_BlendModes, 2 ) )
+		// Issue #29: "inverted" is a third value -- see AddTextInverted()'s
+		// own header comment for what it draws and why.
+		static const char *s_BlendModes[] = { "alpha", "additive", "inverted" };
+		int nBlendIdx = cfg.blend_mode == "additive" ? 1 : ( cfg.blend_mode == "inverted" ? 2 : 0 );
+		if ( ImGui::Combo( "Blend mode", &nBlendIdx, s_BlendModes, 3 ) )
 		{
 			cfg.blend_mode = s_BlendModes[nBlendIdx];
 			bChanged = true;
@@ -1590,10 +1782,14 @@ namespace gamescope
 		bChanged |= ImGui::SliderFloat( "Text opacity", &cfg.text_opacity, 0.0f, 1.0f );
 
 		// Additive pairs oddly with a filled backdrop (the backdrop itself
-		// would glow) -- auto-disable rather than let the two silently
-		// combine (SPEC.md B5); DrawReadout() enforces the same rule on
-		// the render side regardless of what's stored here.
-		const bool bBackdropAvailable = cfg.blend_mode != "additive";
+		// would glow) and inverted's own outline/fill pair is already
+		// legible without one (a filled backdrop behind it just reads as
+		// noise) -- auto-disable rather than let either combine with a
+		// backdrop (SPEC.md B5, and this issue's own predicted "Inverted +
+		// backdrop" combination); DrawReadout() enforces the same rule
+		// (ModuleBackdropAllowed()) on the render side regardless of what's
+		// stored here.
+		const bool bBackdropAvailable = ModuleBackdropAllowed( cfg );
 		ImGui::BeginDisabled( !bBackdropAvailable );
 		bChanged |= widgets::Checkbox( "Backdrop", &cfg.backdrop_enabled );
 		ImGui::BeginDisabled( !( bBackdropAvailable && cfg.backdrop_enabled ) );
@@ -1604,6 +1800,20 @@ namespace gamescope
 		SetStockSliderFullWidth( "Backdrop padding" );
 		bChanged |= ImGui::SliderFloat( "Backdrop padding", &cfg.backdrop_padding, 0.0f, 24.0f, "%.0f px" );
 		ImGui::EndDisabled();
+		ImGui::EndDisabled();
+
+		// Issue #29: per-module colour overrides -- ignored while Inverted
+		// is active (that mode's whole point is a guaranteed-legible pair
+		// no fixed hue can improve on), same "greyed out, mode owns the
+		// treatment" precedent additive already sets for the backdrop
+		// controls above.
+		ImGui::Spacing();
+		ImGui::TextUnformatted( "Module colours" );
+		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
+		bChanged |= DrawModuleColorPicker( "FPS", cfg.color_fps, gamescope::palette::kAccentValue );
+		bChanged |= DrawModuleColorPicker( "CPU", cfg.color_cpu, gamescope::palette::kAccentIcon );
+		bChanged |= DrawModuleColorPicker( "GPU", cfg.color_gpu, gamescope::palette::kAccentKnob );
+		bChanged |= DrawModuleColorPicker( "Media", cfg.color_media, gamescope::palette::kAccentHandle );
 		ImGui::EndDisabled();
 
 		ImGui::EndDisabled();
