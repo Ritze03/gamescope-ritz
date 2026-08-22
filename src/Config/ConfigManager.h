@@ -156,6 +156,18 @@ namespace gamescope::config
     // ConfigSchema.h's PanelGeometry comment for why not the PanelId enum).
     void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry );
 
+    // Issue #40: same shape as EnqueueGeometryWrite() immediately above --
+    // patches OverlaySettings::system_monitor_tab onto the freshest known
+    // `overlay` in-memory and writes that, rather than going through
+    // EnqueueRoutedWrite() (FpsDisplay.cpp's usual persistence path for
+    // every OTHER System Monitor setting), which deliberately discards
+    // any caller-supplied `overlay` and substitutes the freshest known
+    // copy instead (see that function's own comment) -- exactly the
+    // "don't own this field" protection that would otherwise silently
+    // drop a tab-selection edit made through it. sTab is "modules" or
+    // "statistics" (ConfigSchema.h's OverlaySettings::system_monitor_tab).
+    void EnqueueSystemMonitorTabWrite( const std::string &sTab );
+
     // Blocks until every currently-queued write has been flushed to disk. For
     // orderly shutdown and for tests - not for use on the steamcompmgr thread.
     void FlushPendingWrites();

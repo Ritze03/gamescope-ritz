@@ -19,6 +19,13 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+// Same per-commit game frametime FpsDisplay.cpp's own graph/percentile
+// history reads (src/commit.cpp) -- issue #40's Statistics tab FPS graph
+// samples this directly, at this file's own 2Hz poll cadence, rather than
+// deriving it from FpsDisplay.cpp's separate per-frame buffer (see
+// SystemStats.h's HistorySample comment).
+extern std::atomic<uint64_t> g_ulLastAppFrametimeNs;
+
 namespace gamescope::Metrics
 {
 	static LogScope s_MetricsLog( "system_stats" );
@@ -36,6 +43,11 @@ namespace gamescope::Metrics
 	static constexpr int kPollIntervalMs = 500;                  // 2Hz: CPU/GPU sysfs
 	static constexpr int kMediaPollDivisorTicks = 4;              // every 4th tick = ~2s: media (playerctl)
 
+	// SystemStats.h's kStatsHistorySampleIntervalMs documents itself as
+	// "== kPollIntervalMs" -- this keeps that claim honest if this
+	// constant is ever tuned without updating the header comment.
+	static_assert( kPollIntervalMs == kStatsHistorySampleIntervalMs, "SystemStats.h's kStatsHistorySampleIntervalMs must track this file's own poll cadence" );
+
 	// ---- Shared snapshot state, mirroring Audio/Volume.cpp's g_StateMutex/
 	// g_State mailbox pattern exactly. -----------------------------------------
 	namespace
@@ -44,6 +56,16 @@ namespace gamescope::Metrics
 		CpuState g_CpuState;
 		GpuState g_GpuState;
 		MediaState g_MediaState;
+
+		// ---- Issue #40: 60-second history for the Statistics tab, guarded
+		// by g_StateMutex above (one lock covers both the latest-snapshot
+		// state and this history -- both are written from the same poll
+		// tick). g_bHistoryCollecting is a separate atomic, not mutex-
+		// guarded, since it's flipped every frame from the render thread
+		// (FpsDisplay_AddLayer) and only ever needs a relaxed read/exchange,
+		// never a lock -- see SetHistoryCollectionEnabled()'s own comment.
+		std::atomic<bool> g_bHistoryCollecting{ false };
+		std::vector<HistorySample> g_vecHistory; // capped at kStatsHistoryCapacity, oldest dropped from the front
 
 		std::atomic<bool> g_bInitStarted{ false };
 
@@ -391,19 +413,40 @@ namespace gamescope::Metrics
 				CpuState cpu = PollCpu();
 				GpuState gpu = PollGpu( gpuPaths );
 
-				if ( nTick % kMediaPollDivisorTicks == 0 )
+				// Issue #40: one history sample per tick, at this poll
+				// loop's own 2Hz cadence -- only while a caller has
+				// switched collection on (Statistics tab selected; see
+				// SetHistoryCollectionEnabled()). Reading the atomic here
+				// costs nothing while collection is off, which is the
+				// common case (most users never open the Statistics tab).
+				const bool bCollectHistory = g_bHistoryCollecting.load( std::memory_order_relaxed );
+				HistorySample sample;
+				if ( bCollectHistory )
 				{
-					MediaState media = PollMedia();
-					std::lock_guard<std::mutex> lock( g_StateMutex );
-					g_CpuState = cpu;
-					g_GpuState = gpu;
-					g_MediaState = media;
+					sample.flCpuLoad1 = cpu.bLoadAvailable ? cpu.flLoad1 : 0.0f;
+					sample.nGpuBusyPercent = gpu.bGpuFound ? gpu.nBusyPercent : 0;
+					sample.flGpuTempC = gpu.bHwmonFound ? gpu.flTempC : 0.0f;
+					sample.flGpuPowerWatts = gpu.bHwmonFound ? gpu.flPowerWatts : 0.0f;
+
+					const uint64_t ulFrametimeNs = g_ulLastAppFrametimeNs.load( std::memory_order_relaxed );
+					sample.flFps = ulFrametimeNs != 0 ? 1000.0f / std::max( (float)ulFrametimeNs / 1e6f, 0.01f ) : 0.0f;
 				}
-				else
+
+				const bool bMediaTick = ( nTick % kMediaPollDivisorTicks ) == 0;
+				std::optional<MediaState> oMedia = bMediaTick ? std::optional( PollMedia() ) : std::nullopt;
+
 				{
 					std::lock_guard<std::mutex> lock( g_StateMutex );
 					g_CpuState = cpu;
 					g_GpuState = gpu;
+					if ( oMedia )
+						g_MediaState = *oMedia;
+					if ( bCollectHistory )
+					{
+						g_vecHistory.push_back( sample );
+						if ( g_vecHistory.size() > (size_t)kStatsHistoryCapacity )
+							g_vecHistory.erase( g_vecHistory.begin() ); // capacity is small (120) -- an O(n) shift here is negligible at 2Hz
+					}
 				}
 
 				++nTick;
@@ -437,5 +480,32 @@ namespace gamescope::Metrics
 	{
 		std::lock_guard<std::mutex> lock( g_StateMutex );
 		return g_MediaState;
+	}
+
+	void SetHistoryCollectionEnabled( bool bEnabled )
+	{
+		// exchange() returns the *previous* value -- only a real
+		// false->true transition needs the clear below; every other call
+		// (the common case: called every frame with the same value) is
+		// just this one atomic op. See this function's header comment in
+		// SystemStats.h for why true->false deliberately does NOT clear.
+		if ( g_bHistoryCollecting.exchange( bEnabled, std::memory_order_acq_rel ) == bEnabled )
+			return;
+
+		if ( bEnabled )
+		{
+			std::lock_guard<std::mutex> lock( g_StateMutex );
+			g_vecHistory.clear();
+		}
+	}
+
+	HistorySnapshot GetHistorySnapshot()
+	{
+		std::lock_guard<std::mutex> lock( g_StateMutex );
+		HistorySnapshot snap;
+		snap.vecSamples = g_vecHistory;
+		snap.bGpuFound = g_GpuState.bGpuFound;
+		snap.bHwmonFound = g_GpuState.bHwmonFound;
+		return snap;
 	}
 }
