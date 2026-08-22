@@ -20,6 +20,26 @@ scaled with `dock_scale` — so the on-screen size at the default 1.0× display 
 20–25%-raised baseline, and at other display-scale values it is that baseline times the
 live scale factor, not this table's own numbers at any setting.
 
+**2026-08-22 — issue #53, typeface swapped from IBM Plex to Geist, sizes left unchanged.**
+`src/Overlay/Fonts.cpp`'s kSpecs table now bakes Geist Sans/Geist Mono
+(`src/Overlay/fonts/Geist-*.ttf`/`GeistMono-*.ttf`, SIL OFL 1.1 — see
+`src/Overlay/fonts/LICENSE-OFL.txt`, which is now Geist's own license text, copied
+verbatim) instead of IBM Plex, at the *same* pixel sizes #23 already raised above this
+file's own numbers — no further re-tuning turned out to be needed. Checked by rendering
+both side by side (same `--filter fsr` Upscaling panel, same window geometry, real
+screenshots, not eyeballed): Geist and Plex read as visually the same size/weight at
+identical pixel values here, unlike the concern this issue was scoped expecting ("Geist
+at the same pixel sizes will not look identically sized as Plex did") — that concern
+doesn't hold for this specific weight/size combination. The segmented filter row
+(`linear`/`nearest`/`fsr`/`nis`/`pixel`) — the row #46's shrink-to-fit logic was tuned
+against Plex's advance widths for, and this issue's own highest-risk area — still fits
+`nearest` with room to spare at both 1.0× and 2.0×, so #46's constants needed no change
+either; the shrink-to-fit logic itself is metric-derived (measures the real font's
+advance widths at draw time), so it would have adapted on its own even if Geist's metrics
+had differed more. If a future pass finds a role that *does* need re-tuning, change only
+that role's line in kSpecs and record the delta and why here, next to this note — do not
+revert this note's "no change needed" finding for the roles that were actually checked.
+
 **Provenance and method.** The handoff (`Game Overlay UI Mockups-handoff.zip`) is a Claude
 Design bundle whose mockups are literal HTML/CSS — every dimension and color below is read
 from that source, not eyeballed. The authoritative artboards are **2a** (final composite,
@@ -105,10 +125,13 @@ Alt themes (1f; accent hue swap only, only if/when a theme picker ships): ember 
 
 ## 2. Typography
 
-IBM Plex Sans + IBM Plex Mono (already bundled in `src/Overlay/fonts/`). Mono carries
-**every number, unit, path, state word, and title**; Sans carries prose labels only. Plex
-Mono is monospaced, so tabular figures are automatic — but only if numbers are never set
-in Sans (hard rule from 2b).
+The mockup itself was built against IBM Plex Sans + IBM Plex Mono, and the table below
+records what was *measured* from it — but as of issue #53 the actually-bundled family is
+Geist Sans + Geist Mono (`src/Overlay/fonts/`), not Plex; see this file's 2026-08-22 #53
+note above for why the swap needed no numeric changes here. Mono carries **every number,
+unit, path, state word, and title**; Sans carries prose labels only. The Mono family is
+monospaced (true of both Plex Mono and Geist Mono), so tabular figures are automatic —
+but only if numbers are never set in Sans (hard rule from 2b).
 
 | Role | Family/weight | Size | Case | Color | Notes |
 |---|---|---|---|---|---|

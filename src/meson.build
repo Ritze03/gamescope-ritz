@@ -74,11 +74,12 @@ shader_src = [
 
 spirv_shaders = glsl_generator.process(shader_src)
 
-# M8 typography (issue #13): embeds the bundled IBM Plex Sans/Mono weights
-# (OFL-licensed, see Overlay/fonts/LICENSE-OFL.txt) as C byte arrays, the
-# same generated-header shape glsl_generator already uses above for shaders
-# -- reused here instead of adding a whole new build-time tool/dependency
-# just to get font bytes into the binary. See Overlay/fonts/embed_font.py.
+# M8 typography (issue #13, swapped to Geist by issue #53): embeds the
+# bundled Geist Sans/Mono weights (OFL-licensed, see
+# Overlay/fonts/LICENSE-OFL.txt) as C byte arrays, the same generated-header
+# shape glsl_generator already uses above for shaders -- reused here instead
+# of adding a whole new build-time tool/dependency just to get font bytes
+# into the binary. See Overlay/fonts/embed_font.py.
 font_embed_gen = generator(
   find_program('Overlay/fonts/embed_font.py'),
   output    : ['@BASENAME@.h'],
@@ -86,11 +87,11 @@ font_embed_gen = generator(
 )
 
 font_headers = font_embed_gen.process([
-  'Overlay/fonts/IBMPlexSans-Regular.ttf',
-  'Overlay/fonts/IBMPlexSans-Medium.ttf',
-  'Overlay/fonts/IBMPlexMono-Regular.ttf',
-  'Overlay/fonts/IBMPlexMono-Medium.ttf',
-  'Overlay/fonts/IBMPlexMono-SemiBold.ttf',
+  'Overlay/fonts/Geist-Regular.ttf',
+  'Overlay/fonts/Geist-Medium.ttf',
+  'Overlay/fonts/GeistMono-Regular.ttf',
+  'Overlay/fonts/GeistMono-Medium.ttf',
+  'Overlay/fonts/GeistMono-SemiBold.ttf',
 ])
 
 reshade_src = [

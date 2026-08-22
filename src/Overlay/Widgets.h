@@ -60,7 +60,7 @@ namespace gamescope::widgets
 	bool Checkbox( const char *pszLabel, bool *pbValue );
 
 	// Design guide's typography "hard rule": never mix a number into a sans
-	// run -- every numeric readout is Plex Mono, tabular, and (per the
+	// run -- every numeric readout is Geist Mono, tabular, and (per the
 	// guide's Sliders section) usually accent-colored. Stock
 	// ImGui::SliderFloat/SliderInt bake their live value into the *same*
 	// draw call as the trailing label, in whatever font is active for the

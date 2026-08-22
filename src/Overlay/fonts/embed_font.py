@@ -22,8 +22,8 @@ def main():
     with open( in_path, "rb" ) as f:
         data = f.read()
 
-    # Derive a valid C identifier from the input's basename (IBM Plex
-    # filenames use hyphens, e.g. "IBMPlexSans-Regular.ttf").
+    # Derive a valid C identifier from the input's basename (Geist
+    # filenames use hyphens, e.g. "GeistMono-Regular.ttf").
     import os
     stem = os.path.splitext( os.path.basename( in_path ) )[0]
     ident = "".join( c if ( c.isalnum() or c == "_" ) else "_" for c in stem )

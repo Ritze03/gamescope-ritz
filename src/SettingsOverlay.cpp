@@ -370,10 +370,11 @@ namespace gamescope
 		// scope boundary with #15, which owns window/panel chrome instead).
 		gamescope::widgets::ApplyStyle();
 
-		// M8 part 1 (issue #13): builds the IBM Plex font atlas for this
-		// context. Must happen before ImGui_ImplVulkan_Init() below -- the
-		// Vulkan backend uploads whatever io.Fonts holds at Init() time, so
-		// the atlas has to be finished first (see Overlay/Fonts.h).
+		// M8 part 1 (issue #13, typeface swapped to Geist by #53): builds
+		// the Geist font atlas for this context. Must happen before
+		// ImGui_ImplVulkan_Init() below -- the Vulkan backend uploads
+		// whatever io.Fonts holds at Init() time, so the atlas has to be
+		// finished first (see Overlay/Fonts.h).
 		gamescope::fonts::Load();
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );

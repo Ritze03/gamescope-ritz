@@ -22,7 +22,7 @@ GAMESCOPE_RITZ_DATA_DIR="${DESTDIR}/${MESON_INSTALL_PREFIX}/share/gamescope-ritz
 gcr_extras_safe_rm() {
 	target="$1"
 	case "$target" in
-		"${GAMESCOPE_RITZ_DATA_DIR}"/scripts|"${GAMESCOPE_RITZ_DATA_DIR}"/looks|"${GAMESCOPE_RITZ_DATA_DIR}"/reshade)
+		"${GAMESCOPE_RITZ_DATA_DIR}"/scripts|"${GAMESCOPE_RITZ_DATA_DIR}"/looks|"${GAMESCOPE_RITZ_DATA_DIR}"/reshade|"${GAMESCOPE_RITZ_DATA_DIR}"/fonts)
 			rm -rf "$target"
 			;;
 		*)
@@ -37,6 +37,17 @@ gcr_extras_safe_rm "${GAMESCOPE_RITZ_DATA_DIR}/scripts"
 gcr_extras_safe_rm "${GAMESCOPE_RITZ_DATA_DIR}/looks"
 cp -r "${MESON_SOURCE_ROOT}/scripts" "${GAMESCOPE_RITZ_DATA_DIR}/scripts"
 cp -r "${MESON_SOURCE_ROOT}/looks" "${GAMESCOPE_RITZ_DATA_DIR}/looks"
+
+# Issue #53: the bundled Geist Sans/Mono weights are compiled directly into the
+# binary (Overlay/fonts/embed_font.py via src/meson.build's font_embed_gen), not
+# copied from disk at runtime -- but the OFL requires the license to travel
+# with any redistribution of the font, and shipping a compositor binary with
+# the glyphs baked into its atlas counts as redistribution. So install just
+# the license text here, alongside every other gamescope-ritz data asset,
+# rather than leaving it sitting only in the source tree.
+gcr_extras_safe_rm "${GAMESCOPE_RITZ_DATA_DIR}/fonts"
+mkdir -p "${GAMESCOPE_RITZ_DATA_DIR}/fonts"
+cp "${MESON_SOURCE_ROOT}/src/Overlay/fonts/LICENSE-OFL.txt" "${GAMESCOPE_RITZ_DATA_DIR}/fonts/LICENSE-OFL.txt"
 
 # M6: the built-in Vibrancy/Pre-Sharpen ReShade effect (superdoc/planning/SPEC.md
 # Feature 2). ReshadeEffectPipeline::init() (src/reshade_effect_manager.cpp) loads

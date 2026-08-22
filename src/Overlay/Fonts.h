@@ -1,6 +1,7 @@
-// M8 part 1 (issue #13): the settings overlay's typography system --
-// IBM Plex Sans for prose, IBM Plex Mono for every number/unit/state-word,
-// per superdoc/planning/ui-design-guide.md's "Typography" section.
+// M8 part 1 (issue #13; typeface swapped from IBM Plex to Geist by issue
+// #53): the settings overlay's typography system -- Geist Sans for prose,
+// Geist Mono for every number/unit/state-word, per
+// superdoc/planning/ui-design-guide.md's "Typography" section.
 //
 // A small named-style API, not a general typography engine (per the task
 // brief): the design guide's "Scale observed" list names a finite set of

@@ -190,11 +190,12 @@ gcr_info "installed: $TARGET ($MODE mode)"
 PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
 if [ -z "$EXTRAS" ]; then
 	echo
-	echo "default_extras_install.sh copies this repo's scripts/, looks/ and"
-	echo "reshade/ into ${PREFIX_ROOT}/share/gamescope-ritz — namespaced by"
-	echo "binary name, so it never touches a distro-packaged /usr/bin/gamescope's"
-	echo "own share/gamescope. Needed for gamescope-ritz's scripts/ReShade/looks"
-	echo "features to find their files."
+	echo "default_extras_install.sh copies this repo's scripts/, looks/,"
+	echo "reshade/ and the bundled font license into ${PREFIX_ROOT}/share/gamescope-ritz"
+	echo "— namespaced by binary name, so it never touches a distro-packaged"
+	echo "/usr/bin/gamescope's own share/gamescope. Needed for gamescope-ritz's"
+	echo "scripts/ReShade/looks features to find their files, and for the"
+	echo "Geist font's OFL license to travel with the install."
 	if gcr_confirm "Run it now?" n; then EXTRAS="yes"; else EXTRAS="no"; fi
 fi
 if [ "$EXTRAS" = "yes" ]; then
