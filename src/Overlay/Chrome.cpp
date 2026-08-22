@@ -437,7 +437,7 @@ namespace gamescope::chrome
 		};
 
 		constexpr DockEntry kDockEntries[] = {
-			{ PanelId::Display, Icon::Display,     "Display" },
+			{ PanelId::Display, Icon::Display,     "Gamescope" },
 			{ PanelId::Shaders, Icon::Shaders,     "Shaders" },
 			{ PanelId::Fps,     Icon::Performance, "FPS HUD" },
 			{ PanelId::Audio,   Icon::Audio,       "Audio" },

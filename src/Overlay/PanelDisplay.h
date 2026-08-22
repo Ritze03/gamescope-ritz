@@ -1,12 +1,19 @@
-// Milestone M3 -- the "Display" panel of the settings overlay: gamescope's
-// own live upscale filter/scaler, the auto-corrected sharpness slider, and
-// the VRR/HDR/tearing toggles. See superdoc/planning/SPEC.md's Feature 4
-// ("Live gamescope options") and Build order M3.
+// Milestone M3, renamed/expanded in issue #25 -- the "GAMESCOPE" panel of the
+// settings overlay (window title "GAMESCOPE", chrome::PanelId::Display
+// unchanged): gamescope's own live upscale filter/scaler, the auto-corrected
+// sharpness slider, VRR/HDR/tearing/force-grab-cursor toggles, a frame
+// limiter, and an HDR tuning tab, organized into tabs. See
+// superdoc/planning/SPEC.md's Feature 4 ("Live gamescope options") and Build
+// order M3.
 //
 // This panel needs almost no new plumbing -- every value it edits is already
-// a fully live, runtime-mutable global or ConVar that paint_all() reads every
-// frame (see superdoc/planning/runtime-knobs-and-fps.md Part A). The panel's
-// entire job is drawing ImGui widgets that write those same variables.
+// a fully live, runtime-mutable global, ConVar, or gamescope_color_mgmt_t
+// setter that paint_all()/update_color_mgmt() reads/diffs every frame (see
+// superdoc/planning/runtime-knobs-and-fps.md Part A). The panel's entire job
+// is drawing ImGui widgets that write those same variables -- except the
+// Frame Limiter tab, which round-trips through an X11 property since
+// GAMESCOPE_FPS_LIMIT has no plain-global equivalent (see PanelDisplay.cpp's
+// SetFpsLimit() comment).
 #pragma once
 
 namespace gamescope
