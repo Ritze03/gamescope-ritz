@@ -195,8 +195,13 @@ namespace gamescope::config
                 s.overlay.dock_scale = JGetFloat( *pOverlay, "dock_scale", s.overlay.dock_scale );
                 s.overlay.display_scale = JGetFloat( *pOverlay, "display_scale", s.overlay.display_scale );
                 s.overlay.notification_scale = JGetFloat( *pOverlay, "notification_scale", s.overlay.notification_scale );
-                s.overlay.opacity_background = JGetFloat( *pOverlay, "opacity_background", s.overlay.opacity_background );
-                s.overlay.opacity_windows = JGetFloat( *pOverlay, "opacity_windows", s.overlay.opacity_windows );
+                // opacity_background removed (see ConfigSchema.h) - deliberately
+                // not read here any more. An old config's leftover key is simply
+                // never looked up, which is exactly what "ignore an unknown field
+                // gracefully" means for this named-lookup (not iterate-and-
+                // validate) parse style.
+                s.overlay.opacity_windows_focused = JGetFloat( *pOverlay, "opacity_windows_focused", s.overlay.opacity_windows_focused );
+                s.overlay.opacity_windows_unfocused = JGetFloat( *pOverlay, "opacity_windows_unfocused", s.overlay.opacity_windows_unfocused );
                 s.overlay.opacity_dock = JGetFloat( *pOverlay, "opacity_dock", s.overlay.opacity_dock );
                 s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
                 s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
@@ -285,8 +290,8 @@ namespace gamescope::config
                 jOverlay[ "dock_scale" ] = s.overlay.dock_scale;
                 jOverlay[ "display_scale" ] = s.overlay.display_scale;
                 jOverlay[ "notification_scale" ] = s.overlay.notification_scale;
-                jOverlay[ "opacity_background" ] = s.overlay.opacity_background;
-                jOverlay[ "opacity_windows" ] = s.overlay.opacity_windows;
+                jOverlay[ "opacity_windows_focused" ] = s.overlay.opacity_windows_focused;
+                jOverlay[ "opacity_windows_unfocused" ] = s.overlay.opacity_windows_unfocused;
                 jOverlay[ "opacity_dock" ] = s.overlay.opacity_dock;
                 jOverlay[ "opacity_notifications" ] = s.overlay.opacity_notifications;
                 jOverlay[ "background_blur" ] = s.overlay.background_blur;

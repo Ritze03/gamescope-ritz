@@ -131,12 +131,21 @@ namespace gamescope::config
         float dock_scale = 1.0f;                 // 0.85..1.5 - Chrome.cpp's DrawDock() button/gap/padding scale. Spec §1 note: keep the 54px dock button >=44px physical, hence the 0.85 floor (54*0.85 ~= 46px).
         float display_scale = 1.0f;              // 0.8..1.4 - overall UI scale. Drives ImGuiIO::FontGlobalScale only (see Chrome.cpp's EnsureLiveThemeLoaded() comment for why that's the deliberate ceiling: the font atlas in Fonts.cpp is baked at fixed pixel sizes, so text softens above ~1.4x instead of resampling crisply, and every hand-drawn widget geometry in Widgets.cpp/Chrome.cpp is spec-exact fixed pixels that does not scale with it - full geometric rescaling would mean rebuilding the atlas per scale step and re-deriving every hardcoded constant, out of scope for this pass).
         float notification_scale = 1.0f;         // 0.6..1.6 - Notifications.cpp's DrawToasts() GetUiScale(): scales toast card size/font/padding/slide distance.
-        float opacity_background = 0.0f;         // 0..1 - alpha of a full-screen dim veil Chrome.cpp draws behind the whole overlay (GetBackgroundDrawList(), spec §14's "whether we dim the game while the overlay is open" - left off by default, matching the spec's own "not a measured requirement" note). Distinct from background_darkening below: this is an ImGui-drawn flat tint, off unless the user opts in; background_darkening is a native-compositor multiply on the game layer itself.
-        float opacity_windows = 0.88f;           // 0.3..1 - panel window/popup surface alpha, spec §1 `surface` default (rgba(9,10,12,.88)).
-        float opacity_dock = 0.86f;              // 0.3..1 - dock container alpha, spec §8 default.
+        // opacity_background ("Background veil", an ImGui-drawn flat dim tint
+        // behind the whole overlay) was removed 2026-08-22: with
+        // background_darkening below now a real, working native-compositor
+        // dim, a second control that also just dims the screen was exactly
+        // the redundant-controls confusion the user flagged ("two controls
+        // that dim the screen"). An old config on disk carrying this key
+        // parses fine - ConfigManager.cpp's read side never looked it up by
+        // iterating the JSON object, only by explicit named lookups, so a
+        // leftover key is simply never read, not an error.
+        float opacity_windows_focused = 1.0f;    // 0.3..1 - focused panel window/popup surface alpha (the window currently holding overlay input focus). Chrome.cpp's BeginPanelWindow() applies this vs. opacity_windows_unfocused per-window using the same one-frame-cached focus state that already drives its border-alpha/thickness focus treatment.
+        float opacity_windows_unfocused = 0.9f;  // 0.3..1 - every other (unfocused) panel window/popup surface alpha.
+        float opacity_dock = 0.7f;               // 0.3..1 - dock container alpha, spec §8 default.
         float opacity_notifications = 0.9f;      // 0.3..1 - Notifications.cpp's DrawToasts() GetUiOpacity(): multiplies each toast card's bg/border/accent/text alpha uniformly.
-        float background_blur = 0.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0), linearly mapped onto 0..k_nMaxOverlayBlurRadius in SettingsOverlay.cpp (0 == no blur pass requested at all, not a minimum blur).
-        float background_darkening = 0.0f;       // 0..1 - a native-compositor dim multiply on the game layer (FrameInfo_t::Layer_t::ctm on layers[0]), SettingsOverlay.cpp's GetDarkeningCtmBlob() - distinct in mechanism from opacity_background's ImGui-drawn veil above (both stay: PanelConfig.cpp's General tab labels them separately, "Background veil" vs "Background Effects").
+        float background_blur = 1.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0), linearly mapped onto 0..k_nMaxOverlayBlurRadius in SettingsOverlay.cpp (0 == no blur pass requested at all, not a minimum blur).
+        float background_darkening = 0.8f;       // 0..1 - a native-compositor dim multiply on the game layer (FrameInfo_t::Layer_t::ctm on layers[0]), SettingsOverlay.cpp's GetDarkeningCtmBlob(). Composes with background_blur above (blur.h's gaussian_blur() applies this ctm on its final/vertical pass too, see that file's comment) - both default on now that they compose correctly, so a fresh install shows the design's intended look immediately.
 
         // Whether the brief startup announcement (animated "gamescope-ritz is
         // active" toast, with the Ctrl+Shift+O hint) plays on process start.

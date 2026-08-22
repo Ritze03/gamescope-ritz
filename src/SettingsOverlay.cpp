@@ -1005,19 +1005,15 @@ namespace gamescope
 		}
 
 		// background_darkening (General tab, g_BackgroundLiveTheme.flDarkening):
-		// a *native-compositor* dim, distinct from opacity_background's
-		// ImGui-drawn flat veil (Overlay/Chrome.cpp's DrawBackgroundVeil() --
-		// a rect blended into this file's own offscreen overlay texture,
-		// composited on top of everything at this layer's own alpha).
-		// Instead this multiplies the base game layer's (layers[0]) own
-		// pixels directly in the composite shader, via FrameInfo_t::
-		// Layer_t::ctm -- the exact primitive steamcompmgr.cpp already uses
-		// for e.g. its 709->2020 and mura-correction color matrices
-		// (composite.h: `color.rgb = vec4(color.rgb,1) * u_ctm[i]`), so this
-		// is genuinely available and genuinely distinct in mechanism, not a
-		// reimplementation of the veil under a different name -- see this
-		// file's header comment / PanelConfig.cpp's General tab tooltip for
-		// why both controls stay.
+		// a *native-compositor* dim -- multiplies the base game layer's
+		// (layers[0]) own pixels directly in the composite shader, via
+		// FrameInfo_t::Layer_t::ctm, the exact primitive steamcompmgr.cpp
+		// already uses for e.g. its 709->2020 and mura-correction color
+		// matrices (composite.h: `color.rgb = vec4(color.rgb,1) * u_ctm[i]`).
+		// The former opacity_background ImGui-drawn flat veil control was
+		// removed (ConfigSchema.h's comment) as redundant now that this is a
+		// real, working dim -- see blur.h's gaussian_blur() comment for why
+		// it didn't used to work at all when background_blur was also on.
 		//
 		// Same s_flCurrentAlpha ramp as the blur above, so darkening also
 		// fades in/out with the overlay rather than snapping.

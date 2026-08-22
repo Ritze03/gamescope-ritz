@@ -360,23 +360,27 @@ namespace gamescope::chrome
 			const config::Settings s = config::LoadGlobal();
 			pLiveTheme->flDockScale = s.overlay.dock_scale;
 			pLiveTheme->flDisplayScale = s.overlay.display_scale;
-			pLiveTheme->flWindowAlpha = s.overlay.opacity_windows;
+			pLiveTheme->flWindowAlphaFocused = s.overlay.opacity_windows_focused;
+			pLiveTheme->flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
 			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
-			pLiveTheme->flBackgroundVeilAlpha = s.overlay.opacity_background;
 			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
 		}
 
 		// WindowBg/PopupBg's alpha is baked once at init by Widgets.cpp's
 		// ApplyStyle() -- re-applied here every frame so General tab's
-		// opacity_windows slider (task requirement: "must take effect live,
-		// not on restart") actually reaches every window/popup/combo/
-		// tooltip drawn with the shared style, not just the panels that
-		// happen to redraw their own background on top.
+		// opacity_windows_focused/unfocused sliders (task requirement: "must
+		// take effect live, not on restart") actually reach every popup/
+		// combo/tooltip drawn with the shared style (nothing here has a
+		// focus concept of its own, so they get the unfocused value as their
+		// steady-state default). Panel windows themselves override this
+		// per-window in BeginPanelWindow() below, using the same
+		// one-frame-cached focus state that already drives their border-
+		// alpha/thickness focus treatment.
 		void ApplyLiveWindowAlpha()
 		{
 			ImGuiStyle &style = ImGui::GetStyle();
-			style.Colors[ImGuiCol_WindowBg].w = pLiveTheme->flWindowAlpha;
-			style.Colors[ImGuiCol_PopupBg].w = pLiveTheme->flWindowAlpha;
+			style.Colors[ImGuiCol_WindowBg].w = pLiveTheme->flWindowAlphaUnfocused;
+			style.Colors[ImGuiCol_PopupBg].w = pLiveTheme->flWindowAlphaUnfocused;
 		}
 
 		// One 18x18px hit box for the collapse/close glyph cluster --
@@ -537,6 +541,21 @@ namespace gamescope::chrome
 		ImGui::PushStyleVar( ImGuiStyleVar_Alpha, bWasFocused ? 1.0f : 0.94f );
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, bWasFocused ? 2.0f : 1.0f );
 
+		// Focused-vs-unfocused window opacity split (opacity_windows_focused/
+		// opacity_windows_unfocused, ConfigSchema.h) -- overrides the shared
+		// WindowBg alpha ApplyLiveWindowAlpha() just set (that stays the
+		// popup/combo default, which has no per-window focus concept) for
+		// exactly this window. Must be pushed before Begin(), which reads
+		// WindowBg immediately to paint the background; same one-frame-
+		// cached bWasFocused the Alpha/WindowBorderSize pushes above already
+		// use, for the same reason (this frame's real focus isn't knowable
+		// until after Begin()).
+		{
+			ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+			bg.w = bWasFocused ? pLiveTheme->flWindowAlphaFocused : pLiveTheme->flWindowAlphaUnfocused;
+			ImGui::PushStyleColor( ImGuiCol_WindowBg, bg );
+		}
+
 		// No native title bar (see this file's top comment) -- DrawTitleBar()
 		// below draws the whole thing as content instead. No native p_open:
 		// the close glyph calls SetPanelOpen() itself, and the native close-
@@ -649,7 +668,7 @@ namespace gamescope::chrome
 			// process one frame later via SIGABRT (assert -> abort()) --
 			// see superdoc/planning/ISSUES.md.
 			ImGui::Dummy( ImVec2( 0.0f, 0.0f ) );
-			ImGui::PopStyleColor();
+			ImGui::PopStyleColor( 2 ); // Border, WindowBg
 			ImGui::End();
 			ImGui::PopStyleVar( 3 ); // WindowBorderSize, Alpha, WindowRounding
 			return false;
@@ -682,7 +701,7 @@ namespace gamescope::chrome
 	void EndPanelWindow()
 	{
 		ImGui::EndChild(); // "##body", opened in BeginPanelWindow()
-		ImGui::PopStyleColor(); // ImGuiCol_Border, pushed in BeginPanelWindow()
+		ImGui::PopStyleColor( 2 ); // ImGuiCol_Border, ImGuiCol_WindowBg -- both pushed in BeginPanelWindow()
 		ImGui::End();
 		ImGui::PopStyleVar( 3 ); // WindowBorderSize, Alpha, WindowRounding -- all pushed in BeginPanelWindow()
 	}
@@ -756,27 +775,9 @@ namespace gamescope::chrome
 		}
 	}
 
-	// Full-screen dim veil behind the whole overlay (opacity_background,
-	// ConfigSchema.h) -- off by default, matching spec §14's "whether we dim
-	// the game while the overlay is open is a product decision, not a
-	// measured requirement". Drawn on the background draw list, which always
-	// composites before every ImGui window regardless of call order within
-	// the frame, so it doesn't matter that this runs from DrawDock() (the
-	// last thing SettingsOverlay.cpp calls each frame, per Chrome.h's own
-	// "call once per frame, after every panel's own Begin/Draw/End").
-	void DrawBackgroundVeil()
-	{
-		if ( gamescope::palette::g_LiveTheme.flBackgroundVeilAlpha <= 0.0f )
-			return;
-		const ImGuiIO &io = ImGui::GetIO();
-		ImGui::GetBackgroundDrawList()->AddRectFilled( ImVec2( 0.0f, 0.0f ), io.DisplaySize,
-			ImGui::GetColorU32( gamescope::palette::Black( gamescope::palette::g_LiveTheme.flBackgroundVeilAlpha ) ) );
-	}
-
 	void DrawDock()
 	{
 		EnsureLiveThemeLoaded();
-		DrawBackgroundVeil();
 
 		ImGuiIO &io = ImGui::GetIO();
 		const float flDockScale = gamescope::palette::g_LiveTheme.flDockScale;

@@ -515,8 +515,9 @@ namespace gamescope::Notifications
 
 			// opacity_notifications scales the whole card uniformly (bg,
 			// border, accent bar, text all key off flAlpha below) -- same
-			// multiplicative role Chrome.cpp's flWindowAlpha plays for panel
-			// windows, just applied here instead of via ImGuiStyle since
+			// multiplicative role Chrome.cpp's flWindowAlphaFocused/
+			// flWindowAlphaUnfocused play for panel windows, just applied
+			// here instead of via ImGuiStyle since
 			// toasts draw straight into the background draw list.
 			const float flAlpha = card.flVisibility * flOpacity;
 

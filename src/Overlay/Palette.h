@@ -82,7 +82,7 @@ namespace gamescope::palette
 	// ---- Live-tunable overlay theme (window-chrome overhaul's General tab,
 	// Config/ConfigSchema.h's OverlaySettings) -------------------------------
 	// Everything else in this header is a compile-time constant matching the
-	// spec exactly; these five are the exception -- General-tab settings that
+	// spec exactly; these are the exception -- General-tab settings that
 	// must take effect the instant the user moves a slider, with no restart
 	// (the task's own requirement). Chrome.cpp is the sole owner: its
 	// EnsureLiveThemeLoaded() seeds this once from global.json at first use,
@@ -94,9 +94,9 @@ namespace gamescope::palette
 	{
 		float flDockScale          = 1.0f;  // OverlaySettings::dock_scale
 		float flDisplayScale       = 1.0f;  // OverlaySettings::display_scale -- see ConfigSchema.h's ceiling note
-		float flWindowAlpha        = 0.88f; // OverlaySettings::opacity_windows
+		float flWindowAlphaFocused   = 1.0f; // OverlaySettings::opacity_windows_focused
+		float flWindowAlphaUnfocused = 0.9f; // OverlaySettings::opacity_windows_unfocused
 		float flDockAlpha          = 0.86f; // OverlaySettings::opacity_dock
-		float flBackgroundVeilAlpha = 0.0f; // OverlaySettings::opacity_background
 	};
 	extern LiveTheme g_LiveTheme;
 }
