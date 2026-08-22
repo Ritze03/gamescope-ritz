@@ -218,6 +218,7 @@ namespace gamescope::config
                 s.overlay.opacity_windows_unfocused = JGetFloat( *pOverlay, "opacity_windows_unfocused", s.overlay.opacity_windows_unfocused );
                 s.overlay.opacity_dock = JGetFloat( *pOverlay, "opacity_dock", s.overlay.opacity_dock );
                 s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
+                s.overlay.accent_hue = JGetFloat( *pOverlay, "accent_hue", s.overlay.accent_hue );
                 s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
                 s.overlay.background_darkening = JGetFloat( *pOverlay, "background_darkening", s.overlay.background_darkening );
 
@@ -366,6 +367,7 @@ namespace gamescope::config
                 jOverlay[ "opacity_windows_unfocused" ] = s.overlay.opacity_windows_unfocused;
                 jOverlay[ "opacity_dock" ] = s.overlay.opacity_dock;
                 jOverlay[ "opacity_notifications" ] = s.overlay.opacity_notifications;
+                jOverlay[ "accent_hue" ] = s.overlay.accent_hue;
                 jOverlay[ "background_blur" ] = s.overlay.background_blur;
                 jOverlay[ "background_darkening" ] = s.overlay.background_darkening;
 
