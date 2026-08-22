@@ -400,6 +400,7 @@ namespace gamescope::chrome
 				{ 2, 0 }, // Fps
 				{ 0, 1 }, // Audio
 				{ 1, 1 }, // Config
+				{ 2, 1 }, // Log -- issue #39
 			};
 
 			constexpr float kMarginX = 40.0f;
@@ -1048,6 +1049,7 @@ namespace gamescope::chrome
 			{ PanelId::SystemMonitor, Icon::Performance, "System Monitor" }, // issue #27: renamed from "FPS HUD" / PanelId::Fps
 			{ PanelId::Audio,   Icon::Audio,       "Audio" },
 			{ PanelId::Config,  Icon::Profiles,    "Config / Profiles" },
+			{ PanelId::Log,     Icon::DockMore,    "Log" }, // issue #39 -- DockMore is otherwise-unused as a dock button today, closest generic glyph on hand
 		};
 
 		// Per spec §8 Dock: idle fill white@4.5%/border white@10%/icon

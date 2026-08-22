@@ -45,6 +45,7 @@
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelAudio.h"
 #include "Overlay/PanelConfig.h"
+#include "Overlay/PanelLog.h"
 #include "Overlay/Fonts.h"
 #include "Overlay/Widgets.h"
 #include "Overlay/Chrome.h"
@@ -960,6 +961,7 @@ namespace gamescope
 			PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
 			PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
 			PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
+			PanelLog_Draw(); // issue #39: Log panel, see Overlay/PanelLog.cpp
 			// M8 part 3 (issue #15): drawn last so the dock's own window lands on
 			// top of the panel windows above in ImGui's per-frame Begin-order Z
 			// stack -- see Overlay/Chrome.h's DrawDock() comment.

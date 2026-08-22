@@ -46,8 +46,12 @@ namespace gamescope::Process
     // Returns whether there was anything stashed to put back.
     bool RestoreSteamOverlayPreload();
 
-    pid_t SpawnProcess( char **argv, std::function<void()> fnPreambleInChild = nullptr, bool bDoubleFork = false );
-    pid_t SpawnProcessInWatchdog( char **argv, bool bRespawn = false, std::function<void()> fnPreambleInChild = nullptr );
+    // nExtraKeepFds: issue #39 -- fds (e.g. a log-capture pipe's write end)
+    // that must survive CloseAllFds() in the forked child so fnPreambleInChild
+    // can dup2() them onto stdout/stderr before exec. Empty by default; every
+    // existing call site is unaffected.
+    pid_t SpawnProcess( char **argv, std::function<void()> fnPreambleInChild = nullptr, bool bDoubleFork = false, std::span<const int> nExtraKeepFds = {} );
+    pid_t SpawnProcessInWatchdog( char **argv, bool bRespawn = false, std::function<void()> fnPreambleInChild = nullptr, std::span<const int> nExtraKeepFds = {} );
 
     bool HasCapSysNice();
     void SetNice( int nNice );

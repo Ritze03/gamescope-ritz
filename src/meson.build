@@ -151,6 +151,8 @@ src = [
   'Overlay/PanelShaders.cpp',
   'Overlay/PanelAudio.cpp',
   'Overlay/PanelConfig.cpp',
+  'Overlay/LogCapture.cpp',
+  'Overlay/PanelLog.cpp',
   'backend.cpp',
   'x11cursor.cpp',
   'InputEmulation.cpp',
