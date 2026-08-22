@@ -716,7 +716,7 @@ namespace gamescope::chrome
 		};
 
 		constexpr DockEntry kDockEntries[] = {
-			{ PanelId::Display, Icon::Display,     "Display" },
+			{ PanelId::Display, Icon::Display,     "Gamescope" },
 			{ PanelId::Shaders, Icon::Shaders,     "Shaders" },
 			{ PanelId::SystemMonitor, Icon::Performance, "System Monitor" }, // issue #27: renamed from "FPS HUD" / PanelId::Fps
 			{ PanelId::Audio,   Icon::Audio,       "Audio" },

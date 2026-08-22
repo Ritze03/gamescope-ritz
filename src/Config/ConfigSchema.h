@@ -31,6 +31,19 @@ namespace gamescope::config
         bool vrr_enabled = false;
         bool hdr_enabled = false;
         bool tearing_enabled = false;
+
+        // GAMESCOPE panel additions (issue #25). All live via the same
+        // mechanisms the fields above already use -- see PanelDisplay.cpp.
+        int fps_limit = 0;                     // 0 = unlimited, matches g_nSteamCompMgrTargetFPS's own semantics; live via the GAMESCOPE_FPS_LIMIT X11 property
+        bool force_grab_cursor = false;        // mirrors --force-grab-cursor's runtime effect on g_bForceRelativeMouse; genuinely live, not startup-only
+
+        // HDR tab -- gamescope_color_mgmt_t fields (rendervulkan.hpp) via
+        // their existing set_*() functions. Meaningless while hdr_enabled is
+        // false; the panel greys these out accordingly.
+        float sdr_gamut_wideness = -1.0f;      // 0..1, -1 = unset/display-native; gamescope_color_mgmt_t::sdrGamutWideness
+        float sdr_on_hdr_brightness_nits = 203.0f; // gamescope_color_mgmt_t::flSDROnHDRBrightness
+        float hdr_input_gain = 1.0f;           // gamescope_color_mgmt_t::flHDRInputGain
+        float sdr_input_gain = 1.0f;           // gamescope_color_mgmt_t::flSDRInputGain
     };
 
     struct FpsDisplaySettings

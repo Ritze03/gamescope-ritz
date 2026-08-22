@@ -135,6 +135,12 @@ namespace gamescope::config
                 s.gamescope.vrr_enabled = JGetBool( *pGamescope, "vrr_enabled", s.gamescope.vrr_enabled );
                 s.gamescope.hdr_enabled = JGetBool( *pGamescope, "hdr_enabled", s.gamescope.hdr_enabled );
                 s.gamescope.tearing_enabled = JGetBool( *pGamescope, "tearing_enabled", s.gamescope.tearing_enabled );
+                s.gamescope.fps_limit = JGetInt( *pGamescope, "fps_limit", s.gamescope.fps_limit );
+                s.gamescope.force_grab_cursor = JGetBool( *pGamescope, "force_grab_cursor", s.gamescope.force_grab_cursor );
+                s.gamescope.sdr_gamut_wideness = JGetFloat( *pGamescope, "sdr_gamut_wideness", s.gamescope.sdr_gamut_wideness );
+                s.gamescope.sdr_on_hdr_brightness_nits = JGetFloat( *pGamescope, "sdr_on_hdr_brightness_nits", s.gamescope.sdr_on_hdr_brightness_nits );
+                s.gamescope.hdr_input_gain = JGetFloat( *pGamescope, "hdr_input_gain", s.gamescope.hdr_input_gain );
+                s.gamescope.sdr_input_gain = JGetFloat( *pGamescope, "sdr_input_gain", s.gamescope.sdr_input_gain );
             }
 
             if ( const nlohmann::json *pFps = JGetObject( j, "fps_display" ) )
@@ -234,6 +240,12 @@ namespace gamescope::config
             jGamescope[ "vrr_enabled" ] = s.gamescope.vrr_enabled;
             jGamescope[ "hdr_enabled" ] = s.gamescope.hdr_enabled;
             jGamescope[ "tearing_enabled" ] = s.gamescope.tearing_enabled;
+            jGamescope[ "fps_limit" ] = s.gamescope.fps_limit;
+            jGamescope[ "force_grab_cursor" ] = s.gamescope.force_grab_cursor;
+            jGamescope[ "sdr_gamut_wideness" ] = s.gamescope.sdr_gamut_wideness;
+            jGamescope[ "sdr_on_hdr_brightness_nits" ] = s.gamescope.sdr_on_hdr_brightness_nits;
+            jGamescope[ "hdr_input_gain" ] = s.gamescope.hdr_input_gain;
+            jGamescope[ "sdr_input_gain" ] = s.gamescope.sdr_input_gain;
 
             nlohmann::json jFps = nlohmann::json::object();
             jFps[ "enabled" ] = s.fps_display.enabled;
