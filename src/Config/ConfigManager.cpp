@@ -210,6 +210,9 @@ namespace gamescope::config
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
                 s.notifications.muted = JGetBool( *pNotifications, "muted", s.notifications.muted );
 
+            if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
+                s.audio.manual_node_binary = JGetString( *pAudio, "manual_node_binary", s.audio.manual_node_binary );
+
             return s;
         }
 
@@ -264,12 +267,16 @@ namespace gamescope::config
             nlohmann::json jNotifications = nlohmann::json::object();
             jNotifications[ "muted" ] = s.notifications.muted;
 
+            nlohmann::json jAudio = nlohmann::json::object();
+            jAudio[ "manual_node_binary" ] = s.audio.manual_node_binary;
+
             nlohmann::json j = nlohmann::json::object();
             j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
+            j[ "audio" ] = std::move( jAudio );
 
             // Process-level UI preference, only ever present on global.json -
             // see ConfigSchema.h's OverlaySettings comment.
@@ -674,7 +681,11 @@ namespace gamescope::config
 
         // One-time copy (DECISIONS.md #20) - not a live reference. `overlay` is
         // a process-level preference, not part of a profile's shape, so it's
-        // deliberately left untouched on `target`.
+        // deliberately left untouched on `target`. `audio.manual_node_binary`
+        // is deliberately left untouched too - it names one specific game's
+        // process, so copying it in from a profile (meant to be reusable
+        // across different games) would silently point volume control at the
+        // wrong process for every other game the profile is applied to.
         target.gamescope = oProfile->gamescope;
         target.fps_display = oProfile->fps_display;
         target.reshade = oProfile->reshade;

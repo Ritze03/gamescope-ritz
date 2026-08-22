@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -149,6 +150,234 @@ namespace gamescope::Audio
 			snprintf( szBuf, sizeof( szBuf ), "%ld.%04ld", lWhole, lFrac );
 			return szBuf;
 		}
+
+		// ---- Candidate selection ---------------------------------------
+
+		namespace
+		{
+			bool EqualsCI( std::string_view a, std::string_view b )
+			{
+				if ( a.size() != b.size() )
+					return false;
+				for ( size_t i = 0; i < a.size(); i++ )
+					if ( std::tolower( (unsigned char)a[ i ] ) != std::tolower( (unsigned char)b[ i ] ) )
+						return false;
+				return true;
+			}
+
+			bool ContainsCI( const std::vector<std::string> &vecHaystack, const std::string &sNeedle )
+			{
+				if ( sNeedle.empty() )
+					return false;
+				for ( const std::string &sItem : vecHaystack )
+					if ( EqualsCI( sItem, sNeedle ) )
+						return true;
+				return false;
+			}
+
+			long SerialOr( const NodeInfo &node )
+			{
+				return node.olSerial.value_or( -1 );
+			}
+
+			// The identity a node is grouped/matched by once PID matching is
+			// off the table: application.process.binary if the client set
+			// it, else application.name, else empty (no stable identity -
+			// such a node can only ever be reached by the "newest" tier, on
+			// its own).
+			std::string IdentityKey( const NodeInfo &node )
+			{
+				return !node.sBinary.empty() ? node.sBinary : node.sAppName;
+			}
+		}
+
+		SelectionResult SelectCandidate(
+			const std::vector<NodeInfo> &nodes,
+			const std::vector<pid_t> &vecDescendantPids,
+			const std::vector<std::string> &vecDescendantNames,
+			std::optional<long> olBaselineSerial,
+			const std::optional<std::string> &osManualBinary )
+		{
+			SelectionResult result;
+
+			// Tier 0: manual override. Always wins outright, and never
+			// silently falls back to a heuristic if the chosen stream isn't
+			// currently present - that's reported via an empty
+			// onSelectedNodeId (VolumeState::bManualSelectionStale), not
+			// replaced by a guess the user didn't ask for.
+			if ( osManualBinary && !osManualBinary->empty() )
+			{
+				result.eMethod = DetectionMethod::Manual;
+				for ( const NodeInfo &node : nodes )
+				{
+					if ( ( !node.sBinary.empty() && EqualsCI( node.sBinary, *osManualBinary ) ) ||
+					     ( !node.sAppName.empty() && EqualsCI( node.sAppName, *osManualBinary ) ) )
+						result.vecMatchedNodeIds.push_back( node.nNodeId );
+				}
+
+				if ( !result.vecMatchedNodeIds.empty() )
+				{
+					result.nCandidatesAtWinningTier = (int)result.vecMatchedNodeIds.size();
+					const NodeInfo *pBest = nullptr;
+					for ( const NodeInfo &node : nodes )
+					{
+						if ( std::find( result.vecMatchedNodeIds.begin(), result.vecMatchedNodeIds.end(), node.nNodeId ) == result.vecMatchedNodeIds.end() )
+							continue;
+						if ( !pBest || SerialOr( node ) > SerialOr( *pBest ) )
+							pBest = &node;
+					}
+					result.onSelectedNodeId = pBest->nNodeId;
+				}
+				return result;
+			}
+
+			// Tier 1: PID-tree match - highest confidence when it works,
+			// but exactly the one broken by pressure-vessel/bwrap PID
+			// namespace sandboxing.
+			{
+				std::vector<pid_t> vecDistinctPids;
+				for ( const NodeInfo &node : nodes )
+				{
+					if ( !node.onPid )
+						continue;
+					if ( std::find( vecDescendantPids.begin(), vecDescendantPids.end(), *node.onPid ) == vecDescendantPids.end() )
+						continue;
+					if ( std::find( vecDistinctPids.begin(), vecDistinctPids.end(), *node.onPid ) == vecDistinctPids.end() )
+						vecDistinctPids.push_back( *node.onPid );
+				}
+
+				if ( !vecDistinctPids.empty() )
+				{
+					pid_t nWinningPid = vecDistinctPids.front();
+					long lWinningSerial = -2;
+					for ( pid_t nPid : vecDistinctPids )
+					{
+						long lBest = -1;
+						for ( const NodeInfo &node : nodes )
+							if ( node.onPid && *node.onPid == nPid )
+								lBest = std::max( lBest, SerialOr( node ) );
+						if ( lBest > lWinningSerial )
+						{
+							lWinningSerial = lBest;
+							nWinningPid = nPid;
+						}
+					}
+
+					result.eMethod = DetectionMethod::Pid;
+					result.nCandidatesAtWinningTier = (int)vecDistinctPids.size();
+					const NodeInfo *pBest = nullptr;
+					for ( const NodeInfo &node : nodes )
+					{
+						if ( !node.onPid || *node.onPid != nWinningPid )
+							continue;
+						result.vecMatchedNodeIds.push_back( node.nNodeId );
+						if ( !pBest || SerialOr( node ) > SerialOr( *pBest ) )
+							pBest = &node;
+					}
+					result.onSelectedNodeId = pBest->nNodeId;
+					return result;
+				}
+			}
+
+			// Tier 2: process-name match - application.process.binary /
+			// application.name against a descendant's own /proc comm.
+			// Covers the sandboxed case: the PID doesn't line up, but the
+			// process's own self-reported name does.
+			{
+				std::vector<std::string> vecDistinctIdentities;
+				for ( const NodeInfo &node : nodes )
+				{
+					bool bMatch = ( !node.sBinary.empty() && ContainsCI( vecDescendantNames, node.sBinary ) ) ||
+					              ( !node.sAppName.empty() && ContainsCI( vecDescendantNames, node.sAppName ) );
+					if ( !bMatch )
+						continue;
+					std::string sKey = IdentityKey( node );
+					if ( sKey.empty() )
+						continue;
+					if ( !ContainsCI( vecDistinctIdentities, sKey ) )
+						vecDistinctIdentities.push_back( sKey );
+				}
+
+				if ( !vecDistinctIdentities.empty() )
+				{
+					std::string sWinningKey = vecDistinctIdentities.front();
+					long lWinningSerial = -2;
+					for ( const std::string &sKey : vecDistinctIdentities )
+					{
+						long lBest = -1;
+						for ( const NodeInfo &node : nodes )
+							if ( EqualsCI( IdentityKey( node ), sKey ) )
+								lBest = std::max( lBest, SerialOr( node ) );
+						if ( lBest > lWinningSerial )
+						{
+							lWinningSerial = lBest;
+							sWinningKey = sKey;
+						}
+					}
+
+					result.eMethod = DetectionMethod::ProcessName;
+					result.nCandidatesAtWinningTier = (int)vecDistinctIdentities.size();
+					const NodeInfo *pBest = nullptr;
+					for ( const NodeInfo &node : nodes )
+					{
+						if ( !EqualsCI( IdentityKey( node ), sWinningKey ) )
+							continue;
+						result.vecMatchedNodeIds.push_back( node.nNodeId );
+						if ( !pBest || SerialOr( node ) > SerialOr( *pBest ) )
+							pBest = &node;
+					}
+					result.onSelectedNodeId = pBest->nNodeId;
+					return result;
+				}
+			}
+
+			// Tier 3: "newest stream since launch" - last resort. Strong
+			// specifically because the common real case is "the hosted game
+			// is the only new audio stream." Skipped entirely until a
+			// baseline exists (SetTargetPid() establishes one on the first
+			// poll after the target changes) - otherwise every pre-existing
+			// stream would look "new."
+			if ( olBaselineSerial.has_value() )
+			{
+				std::vector<const NodeInfo *> vecNew;
+				for ( const NodeInfo &node : nodes )
+					if ( node.olSerial && *node.olSerial > *olBaselineSerial )
+						vecNew.push_back( &node );
+
+				if ( !vecNew.empty() )
+				{
+					const NodeInfo *pBest = vecNew.front();
+					for ( const NodeInfo *pNode : vecNew )
+						if ( SerialOr( *pNode ) > SerialOr( *pBest ) )
+							pBest = pNode;
+
+					result.eMethod = DetectionMethod::Newest;
+					result.nCandidatesAtWinningTier = (int)vecNew.size();
+					std::string sWinningKey = IdentityKey( *pBest );
+					for ( const NodeInfo *pNode : vecNew )
+					{
+						if ( !sWinningKey.empty() )
+						{
+							if ( !EqualsCI( IdentityKey( *pNode ), sWinningKey ) )
+								continue;
+						}
+						else if ( pNode != pBest )
+						{
+							// No stable identity to group by - only the
+							// single most-recent node counts, not every
+							// other identity-less node that happens to
+							// also be "new."
+							continue;
+						}
+						result.vecMatchedNodeIds.push_back( pNode->nNodeId );
+					}
+					result.onSelectedNodeId = pBest->nNodeId;
+					return result;
+				}
+			}
+
+			return result; // DetectionMethod::NotDetected
+		}
 	}
 
 	// ---- wpctl shell-out ----------------------------------------------------
@@ -199,6 +428,30 @@ namespace gamescope::Audio
 			return sOutput;
 		}
 
+		// Best-effort /proc/<pid>/comm read, used only for the process-name
+		// detection tier - a missing/unreadable entry (pid already exited)
+		// just means that pid contributes no name, not an error.
+		std::optional<std::string> ReadProcComm( pid_t nPid )
+		{
+			char szPath[ 64 ];
+			snprintf( szPath, sizeof( szPath ), "/proc/%d/comm", (int)nPid );
+			FILE *pFile = fopen( szPath, "r" );
+			if ( !pFile )
+				return std::nullopt;
+
+			char szBuf[ 256 ];
+			size_t nRead = fread( szBuf, 1, sizeof( szBuf ) - 1, pFile );
+			fclose( pFile );
+			if ( nRead == 0 )
+				return std::nullopt;
+
+			szBuf[ nRead ] = '\0';
+			std::string sName = szBuf;
+			while ( !sName.empty() && ( sName.back() == '\n' || sName.back() == '\r' ) )
+				sName.pop_back();
+			return sName.empty() ? std::nullopt : std::optional<std::string>( sName );
+		}
+
 		// ---- Mailbox state, mirroring the pattern pipewire.cpp uses for its
 		// own dedicated PipeWire thread: a background thread does all the
 		// blocking work, and hands snapshots back through a small guarded
@@ -215,10 +468,14 @@ namespace gamescope::Audio
 
 		std::mutex g_StateMutex;
 		VolumeState g_State;
+		std::vector<StreamCandidate> g_AvailableStreams;
 
 		std::atomic<pid_t> g_nTargetRootPid{ 0 };
 
-		void CollectDescendants( pid_t nPid, std::vector<pid_t> &vecOut, int nDepth = 0 )
+		std::mutex g_ManualMutex;
+		std::optional<std::string> g_osManualSelection;
+
+		void CollectDescendants( pid_t nPid, std::vector<pid_t> &vecPidsOut, std::vector<std::string> &vecNamesOut, int nDepth = 0 )
 		{
 			// Bound the recursion - a runaway process tree shouldn't be
 			// able to wedge this thread; real game trees are a handful
@@ -226,9 +483,12 @@ namespace gamescope::Audio
 			if ( nDepth > 32 )
 				return;
 
-			vecOut.push_back( nPid );
+			vecPidsOut.push_back( nPid );
+			if ( std::optional<std::string> osName = ReadProcComm( nPid ) )
+				vecNamesOut.push_back( std::move( *osName ) );
+
 			for ( pid_t nChild : gamescope::Process::GetChildPids( nPid ) )
-				CollectDescendants( nChild, vecOut, nDepth + 1 );
+				CollectDescendants( nChild, vecPidsOut, vecNamesOut, nDepth + 1 );
 		}
 
 		void PollThreadMain()
@@ -237,6 +497,9 @@ namespace gamescope::Audio
 			// missing wpctl is confirmed and reported before anything else
 			// touches it.
 			RunWpctl( "--help" );
+
+			pid_t nLastSeenTargetPid = 0;
+			std::optional<long> olBaselineSerial;
 
 			for ( ;; )
 			{
@@ -247,21 +510,35 @@ namespace gamescope::Audio
 					g_PendingCommand = {};
 				}
 
+				std::optional<std::string> osManualSelection;
+				{
+					std::lock_guard<std::mutex> lock( g_ManualMutex );
+					osManualSelection = g_osManualSelection;
+				}
+
 				VolumeState newState;
 				newState.bWpctlAvailable = !g_bWpctlUnavailable.load( std::memory_order_relaxed );
+				newState.sManualSelection = osManualSelection.value_or( std::string{} );
 
 				pid_t nRootPid = g_nTargetRootPid.load( std::memory_order_relaxed );
-
-				if ( nRootPid > 0 && newState.bWpctlAvailable )
+				if ( nRootPid != nLastSeenTargetPid )
 				{
-					std::vector<pid_t> vecDescendants;
-					CollectDescendants( nRootPid, vecDescendants );
+					// A new target means "newest since launch" (tier 3)
+					// needs a fresh baseline - established below, from
+					// this same poll's node snapshot, so nothing that
+					// already existed can ever count as "new."
+					nLastSeenTargetPid = nRootPid;
+					olBaselineSerial.reset();
+				}
 
+				std::vector<StreamCandidate> vecAvailable;
+
+				if ( newState.bWpctlAvailable )
+				{
 					std::optional<std::string> osStatus = RunWpctl( "status" );
 					if ( osStatus )
 					{
-						std::vector<int> vecMatchedNodeIds;
-						std::vector<pid_t> vecMatchedPids;
+						std::vector<Parse::NodeInfo> vecNodes;
 
 						for ( const auto &[ nNodeId, sName ] : Parse::StatusStreamNodes( *osStatus ) )
 						{
@@ -269,40 +546,72 @@ namespace gamescope::Audio
 							if ( !osInspect || !Parse::IsAudioOutputStream( *osInspect ) )
 								continue;
 
-							std::optional<std::string> osPid = Parse::InspectField( *osInspect, "application.process.id" );
-							if ( !osPid )
-								continue;
+							Parse::NodeInfo node;
+							node.nNodeId = nNodeId;
+							node.sBinary = Parse::InspectField( *osInspect, "application.process.binary" ).value_or( std::string{} );
+							node.sAppName = Parse::InspectField( *osInspect, "application.name" ).value_or( std::string{} );
+							if ( std::optional<std::string> osPid = Parse::InspectField( *osInspect, "application.process.id" ) )
+								node.onPid = (pid_t)std::atoi( osPid->c_str() );
+							if ( std::optional<std::string> osSerial = Parse::InspectField( *osInspect, "object.serial" ) )
+								node.olSerial = std::atol( osSerial->c_str() );
 
-							pid_t nStreamPid = (pid_t)std::atoi( osPid->c_str() );
-							if ( std::find( vecDescendants.begin(), vecDescendants.end(), nStreamPid ) == vecDescendants.end() )
-								continue;
+							StreamCandidate candidate;
+							candidate.nNodeId = nNodeId;
+							candidate.sLabel = sName;
+							candidate.sBinary = node.sBinary;
+							candidate.sAppName = node.sAppName;
+							candidate.nPid = node.onPid.value_or( 0 );
+							vecAvailable.push_back( std::move( candidate ) );
 
-							vecMatchedNodeIds.push_back( nNodeId );
-							if ( std::find( vecMatchedPids.begin(), vecMatchedPids.end(), nStreamPid ) == vecMatchedPids.end() )
-								vecMatchedPids.push_back( nStreamPid );
+							vecNodes.push_back( std::move( node ) );
 						}
 
-						// Apply to every matched process - wpctl's --pid
-						// already fans one call out to all of that
-						// process's own nodes, so this is at most one call
-						// per distinct matched PID, not per node.
-						if ( !vecMatchedPids.empty() && ( cmd.oflLinearVolume || cmd.obMuted ) )
+						newState.nTotalAudioStreams = (int)vecNodes.size();
+
+						if ( !olBaselineSerial.has_value() )
 						{
-							for ( pid_t nPid : vecMatchedPids )
+							// First poll for this target: the baseline is
+							// "whatever already exists," so tier 3 only
+							// ever matches streams that appear afterward.
+							long lMax = -1;
+							for ( const Parse::NodeInfo &node : vecNodes )
+								lMax = std::max( lMax, node.olSerial.value_or( -1 ) );
+							olBaselineSerial = lMax;
+						}
+
+						std::vector<pid_t> vecDescendants;
+						std::vector<std::string> vecDescendantNames;
+						if ( nRootPid > 0 )
+							CollectDescendants( nRootPid, vecDescendants, vecDescendantNames );
+
+						Parse::SelectionResult selection = Parse::SelectCandidate(
+							vecNodes, vecDescendants, vecDescendantNames, olBaselineSerial, osManualSelection );
+
+						newState.eMethod = selection.eMethod;
+						newState.bDetected = selection.onSelectedNodeId.has_value();
+						newState.nMatchedNodes = (int)selection.vecMatchedNodeIds.size();
+						newState.nCandidatesAtWinningTier = selection.nCandidatesAtWinningTier;
+						newState.bManualSelectionStale = osManualSelection.has_value() && !osManualSelection->empty() && !newState.bDetected;
+
+						// Apply pending commands directly by node id, never
+						// via `--pid` - that's exactly the path a PID
+						// namespace mismatch breaks, so it would silently
+						// undo everything the process-name/newest tiers
+						// exist to fix.
+						if ( !selection.vecMatchedNodeIds.empty() && ( cmd.oflLinearVolume || cmd.obMuted ) )
+						{
+							for ( int nNodeId : selection.vecMatchedNodeIds )
 							{
 								if ( cmd.oflLinearVolume )
-									RunWpctl( "set-volume --pid " + std::to_string( nPid ) + " " + Parse::FormatLinearVolume( *cmd.oflLinearVolume ) );
+									RunWpctl( "set-volume " + std::to_string( nNodeId ) + " " + Parse::FormatLinearVolume( *cmd.oflLinearVolume ) );
 								if ( cmd.obMuted )
-									RunWpctl( "set-mute --pid " + std::to_string( nPid ) + " " + ( *cmd.obMuted ? "1" : "0" ) );
+									RunWpctl( "set-mute " + std::to_string( nNodeId ) + " " + ( *cmd.obMuted ? "1" : "0" ) );
 							}
 						}
 
-						newState.nMatchedNodes = (int)vecMatchedNodeIds.size();
-						newState.bDetected = !vecMatchedNodeIds.empty();
-
-						if ( newState.bDetected )
+						if ( selection.onSelectedNodeId )
 						{
-							std::optional<std::string> osVol = RunWpctl( "get-volume " + std::to_string( vecMatchedNodeIds.front() ) );
+							std::optional<std::string> osVol = RunWpctl( "get-volume " + std::to_string( *selection.onSelectedNodeId ) );
 							if ( osVol )
 							{
 								if ( auto oReading = Parse::GetVolumeOutput( *osVol ) )
@@ -318,6 +627,7 @@ namespace gamescope::Audio
 				{
 					std::lock_guard<std::mutex> lock( g_StateMutex );
 					g_State = newState;
+					g_AvailableStreams = std::move( vecAvailable );
 				}
 
 				// ponytail: fixed poll cadence rather than PipeWire registry
@@ -348,6 +658,20 @@ namespace gamescope::Audio
 	{
 		std::lock_guard<std::mutex> lock( g_StateMutex );
 		return g_State;
+	}
+
+	std::vector<StreamCandidate> GetAvailableStreams()
+	{
+		std::lock_guard<std::mutex> lock( g_StateMutex );
+		return g_AvailableStreams;
+	}
+
+	void SetManualSelection( std::optional<std::string> sBinaryOrAppName )
+	{
+		std::lock_guard<std::mutex> lock( g_ManualMutex );
+		if ( sBinaryOrAppName && sBinaryOrAppName->empty() )
+			sBinaryOrAppName.reset();
+		g_osManualSelection = std::move( sBinaryOrAppName );
 	}
 
 	void RequestVolume( float flDisplayFraction )
