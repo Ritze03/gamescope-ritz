@@ -597,3 +597,65 @@ the right answer and should be taken:
 3. Sync validation reports a hazard on an overlay texture that cannot be fixed
    without hand-rolling the ownership/lifetime bookkeeping the client-commit path
    already does correctly.
+
+## 2026-08-22: frame-rate-dependent double-click, root-caused and fixed
+
+Unrelated to the artifacting investigation above -- a separate report: the max
+delay between clicks for a title-bar double-click (roll shade in/out,
+`Overlay/Chrome.cpp`'s drag zone, `ImGui::IsMouseDoubleClicked`) tracked
+framerate. `IsMouseDoubleClicked` and `flDeltaTime` (real `get_time_in_nanos()`
+deltas, clamped, fed to `io.DeltaTime` every frame) were both already correct
+and were not the cause.
+
+**Root cause**: `DrainInputQueue()` (`src/SettingsOverlay.cpp`) batches every
+event queued since the last frame and hands the whole batch to ImGui in one
+pass, right before that frame's single `ImGui::NewFrame()` call. ImGui's own
+input-event trickling (`io.ConfigInputTrickleEventQueue`, on by default,
+never touched by this codebase) applies only **one** same-button transition
+per `NewFrame()` call and defers the rest to later calls -- so a fast
+double-click's down/up/down/up, once backlogged into one drain (routine at
+low framerate, or on any single slow frame), gets spread across several
+*frames*. Each transition only becomes a "click" (and gets timestamped with
+ImGui's internal `g.Time`, which advances by the real `DeltaTime` of whichever
+`NewFrame()` call is doing the advancing) once its own later frame runs -- so
+the gap between the two registered clicks tracks real frame *period* × frame
+*count*, not the real time the clicks were actually apart. Confirmed by a
+standalone instrumentation harness linking this repo's vendored
+`subprojects/imgui` directly (not the gamescope binary): a realistic 150ms
+double-click (comfortably under the 300ms default `MouseDoubleClickTime`)
+registered correctly for simulated framerates down to ~8fps and silently
+stopped registering below that -- with the simulated *real* click timing held
+fixed the whole time. That is the reported symptom, reproduced in isolation.
+
+**A tempting non-fix, measured and rejected**: setting
+`io.ConfigInputTrickleEventQueue = false` does NOT fix this -- it makes ImGui
+apply every event in a batch but keep only the *net* button-state change for
+that frame, so a whole press+release landing in one drain (the common case at
+low fps, since a real click's own down-to-up gap is often shorter than one
+frame period there) collapses to **no click detected at all**. Measured
+across the same framerate sweep: this "fix" broke even isolated single clicks
+at framerates below ~60fps. Worse than the bug it was meant to cure -- do not
+reach for this switch here.
+
+**Actual fix**: `DrainInputQueue()` now gives every `MouseButton` event in a
+batch, other than the batch's last event, its own correctly-timed "micro"
+`NewFrame()`/`EndFrame()` cycle (no windows opened, nothing rendered) with
+`DeltaTime` set to the real wall-clock gap since ImGui's clock was last
+advanced -- using a new `ulTimestampNanos` field on the queued-event struct,
+stamped from `get_time_in_nanos()` at `QueueEvent()` time (the producer side,
+so as close to the real libinput event as this cross-thread handoff gets).
+This makes `g.Time` track real elapsed time between transitions instead of
+render-frame count, for exactly the transitions that would otherwise be
+trickle-delayed within the same drain. Every other event kind (motion/wheel/
+key) is untouched -- applied without a pump of its own, same as before -- and
+the batch's last event is left pending for the caller's real, visible
+`NewFrame()` (`SettingsOverlay_AddLayer()`, right after `DrainInputQueue()`
+returns), so real render cadence and its `DeltaTime` are unaffected. Re-ran
+the same instrumentation harness with this scheme: the 150ms double-click now
+registers at every framerate down to 2fps; an isolated single click still
+registers as exactly one click at every framerate; two genuinely separate
+clicks 500ms apart never falsely merge into a double-click at any framerate.
+Verified `ninja -C build` and `meson test -C build` (63/63) after the change;
+M2's release-safety backstop (`io.ClearInputKeys()`/`ClearInputMouse()` on a
+capturing-to-not-capturing edge) is untouched -- it still runs once, after
+the whole batch, unaffected by the added micro-pumps.
