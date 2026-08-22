@@ -305,9 +305,20 @@ namespace gamescope
 	// external reader of that property (e.g. the Steam client) -- it is
 	// just no longer the thing this panel relies on for the limit to
 	// actually take effect.
+	// Issue #67: the valid range is 0 (unlimited) or [kMinFpsLimit,
+	// kMaxFpsLimit] -- NOT a plain 0..kMaxFpsLimit continuum. 1-9fps is a
+	// trap: at that rate this very overlay repaints only a few times a
+	// second, so a user who lands there can no longer practically drive the
+	// UI to undo it. Clamping any nonzero request up to the floor (rather
+	// than leaving 1..9 reachable) closes that trap at the single choke
+	// point every write path (slider, ConCommand, gamescope_control) already
+	// goes through.
+	static constexpr int kMinFpsLimit = 10;
+	static constexpr int kMaxFpsLimit = 480;
+
 	static void SetFpsLimit( int nFps )
 	{
-		nFps = std::clamp( nFps, 0, 240 );
+		nFps = ( nFps <= 0 ) ? 0 : std::clamp( nFps, kMinFpsLimit, kMaxFpsLimit );
 		s_CachedSettings.gamescope.fps_limit = nFps;
 		QueueSave();
 
@@ -492,14 +503,57 @@ namespace gamescope
 		ImGui::PopFont();
 	}
 
+	// Issue #67: 0..kMaxFpsLimit widened to 0..480, but NOT as one continuous
+	// slider -- widgets::SliderInt has no notion of a gap in its range, and a
+	// plain 0..480 slider would let the user strand themselves at 1-9fps
+	// (see kMinFpsLimit's comment above). Split into an "Unlimited" toggle
+	// (0) plus a slider that only ever offers [kMinFpsLimit, kMaxFpsLimit],
+	// rather than extending Widgets.cpp with a new gapped-slider primitive
+	// -- out of scope here (owned by another concurrently-running agent) and
+	// a single on/off + range combo reads clearly for a two-state-shaped
+	// control anyway.
+	//
+	// Achievable values are further quantized by the compositor itself on
+	// the non-VRR path -- it resolves to an integer vblank divisor of the
+	// output refresh (#25 measured 27->30fps, 59->60fps on a 120Hz output)
+	// -- but this control keeps presenting a continuous 10-480 range rather
+	// than snapping to per-refresh-rate steps: the achievable set depends on
+	// the *current* output refresh, which can change (different display,
+	// VRR on/off), so a slider that quantized to it would need to
+	// re-quantize live and would show different step points on different
+	// displays for the same nominal setting. A continuous control that gets
+	// silently rounded by the compositor is simpler and already matches how
+	// the pre-existing 0..240 slider behaved.
+	static int s_nLastFpsLimit = 60;
+
 	static void DrawFrameLimiterTab()
 	{
 		int nFps = s_CachedSettings.gamescope.fps_limit;
-		if ( widgets::SliderInt( "FPS Limit", &nFps, 0, 240, "%d fps" ) )
-			SetFpsLimit( nFps );
+		bool bUnlimited = ( nFps == 0 );
+		if ( !bUnlimited )
+			s_nLastFpsLimit = nFps;
+
+		if ( widgets::Toggle( "Unlimited", &bUnlimited ) )
+			SetFpsLimit( bUnlimited ? 0 : std::max( s_nLastFpsLimit, kMinFpsLimit ) );
+
+		ImGui::Spacing();
+
+		if ( bUnlimited )
+			ImGui::BeginDisabled();
+
+		int nSliderFps = std::clamp( bUnlimited ? s_nLastFpsLimit : nFps, kMinFpsLimit, kMaxFpsLimit );
+		if ( widgets::SliderInt( "FPS Limit", &nSliderFps, kMinFpsLimit, kMaxFpsLimit, "%d fps" ) )
+		{
+			s_nLastFpsLimit = nSliderFps;
+			SetFpsLimit( nSliderFps );
+		}
+
+		if ( bUnlimited )
+			ImGui::EndDisabled();
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "0 = unlimited. Applies immediately." );
+		ImGui::TextDisabled( "Unlimited = no cap. Otherwise 10-480fps -- below 10fps the overlay itself "
+			"becomes too slow to drive, including to undo this. Applies immediately." );
 		ImGui::PopFont();
 	}
 
