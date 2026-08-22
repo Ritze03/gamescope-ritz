@@ -45,6 +45,16 @@ namespace gamescope
 		std::optional<std::string> s_oAppId;
 		bool s_bOverrideActive = false;
 
+		// Cached alongside s_bOverrideActive (refreshed by RefreshLists(),
+		// same as s_ProfileNames/s_OtherGameIds below): whether
+		// games/<AppId>.json exists on disk right now, regardless of
+		// whether it's currently active. Issue #43 -- disabling the
+		// override no longer deletes this file, so "off, but a saved
+		// config is sitting there" is a real state the Per-Game tab needs
+		// to show (and the delete button needs to gate on), not just
+		// something inferred from s_bOverrideActive.
+		bool s_bHasSavedPerGameConfig = false;
+
 		std::vector<std::string> s_ProfileNames;
 		// games/<AppId>.json entries other than the current session's own --
 		// "copy another game's config" only ever makes sense as copying
@@ -73,6 +83,8 @@ namespace gamescope
 
 		void RefreshLists()
 		{
+			s_bHasSavedPerGameConfig = s_oAppId.has_value() && config::HasSavedPerGameConfig( *s_oAppId );
+
 			s_ProfileNames = config::ListProfiles();
 			s_OtherGameIds.clear();
 			for ( std::string &sId : config::ListGameIds() )
@@ -171,39 +183,57 @@ namespace gamescope
 		// own EnsureConfigLoaded() picks up the change on their very next
 		// draw, without needing a restart -- see those files' M7 comments.
 
-		// "Override Global Config" ON: captures a FULL SNAPSHOT of whatever
-		// is currently effective (global.json, since override was off) into
-		// games/<AppId>.json (DECISIONS.md #19) -- not a sparse delta, and
-		// later global.json edits will not reach this game from this point
-		// on.
+		// "Override Global Config" ON (DECISIONS.md #19, amended -- issue
+		// #43): if games/<AppId>.json already has saved values on disk (left
+		// behind by a previous DisableOverride, which no longer deletes it --
+		// see that function below), RESTORE them in place rather than
+		// re-snapshotting from global. "I turned this off and then on again"
+		// is expected to bring back what was there, not silently discard it
+		// -- re-snapshotting here would reintroduce the exact data loss issue
+		// #43 was about, one step later. Only when no saved file exists at
+		// all does this fall back to the original behaviour: a FULL SNAPSHOT
+		// of whatever is currently effective (global.json) -- not a sparse
+		// delta, and later global.json edits won't reach this game from this
+		// point on.
 		void EnableOverride()
 		{
 			if ( !s_oAppId )
 				return;
-			config::Settings snapshot = config::ResolveEffective( s_oAppId );
-			config::EnqueuePerGameSnapshot( *s_oAppId, snapshot );
+
+			if ( config::HasSavedPerGameConfig( *s_oAppId ) && config::RestorePerGameOverride( *s_oAppId ) )
+			{
+				s_sStatus = "Override enabled -- restored this game's previously saved config.";
+			}
+			else
+			{
+				config::Settings snapshot = config::ResolveEffective( s_oAppId );
+				config::EnqueuePerGameSnapshot( *s_oAppId, snapshot );
+				s_sStatus = "Override enabled -- current settings snapshotted for this game.";
+			}
+
 			config::SetSessionOverrideActive( true );
 			config::BumpConfigGeneration();
 			s_bOverrideActive = true;
-			s_sStatus = "Override enabled -- current settings snapshotted for this game.";
 			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
 			RefreshLists();
 		}
 
-		// "Override Global Config" OFF: deletes games/<AppId>.json outright
-		// (ConfigManager.h's ClearPerGameOverride comment: "turn the
-		// override back off") so this game falls back to reading
-		// global.json again, per Feature 6's strictly-two-level resolution
-		// (never a merge of both).
+		// "Override Global Config" OFF (issue #43): deactivates
+		// games/<AppId>.json by flipping its own override_global field to
+		// false IN PLACE -- it no longer deletes the file. This game falls
+		// back to reading global.json again, per Feature 6's strictly-
+		// two-level resolution (never a merge of both), but the saved
+		// per-game values stay on disk so EnableOverride above can restore
+		// them later. Deleting the file outright is now a separate,
+		// explicit, confirmed action -- see DeleteSavedPerGameConfig().
 		//
 		// ponytail: called inline (not via an Enqueue* background-thread
-		// path) -- ClearPerGameOverride() is a bare std::filesystem::remove
-		// (a single unlink(), no fsync()/rename()), and this only runs once
-		// per checkbox click, not once per slider tick the way
-		// EnqueueRoutedWrite() below does. The Enqueue* family exists for
-		// the fsync()+rename() write paths that can be hit continuously by
-		// a slider drag; a one-off unlink from a button click doesn't need
-		// the same treatment.
+		// path) -- ClearPerGameOverride() is a single atomic rewrite, and
+		// this only runs once per checkbox click, not once per slider tick
+		// the way EnqueueRoutedWrite() below does. The Enqueue* family
+		// exists for the fsync()+rename() write paths that can be hit
+		// continuously by a slider drag; a one-off rewrite from a button
+		// click doesn't need the same treatment.
 		void DisableOverride()
 		{
 			if ( !s_oAppId )
@@ -212,8 +242,36 @@ namespace gamescope
 			config::SetSessionOverrideActive( false );
 			config::BumpConfigGeneration();
 			s_bOverrideActive = false;
-			s_sStatus = "Override disabled -- this game's config file was removed; back to global.";
+			s_sStatus = "Override disabled -- back to global. This game's saved config was kept, not deleted.";
 			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Info );
+			RefreshLists();
+		}
+
+		// The only action in this panel that actually destroys a config file
+		// (issue #43: "There can be a button for it, but never delete
+		// configs automatically"). Only ever targets games/<AppId>.json for
+		// the currently-resolved app id -- never global.json, never anything
+		// under profiles/ -- and DeletePerGameOverride() itself refuses to
+		// touch anything outside GamesDir() as a second layer of defense.
+		// Called from the confirmation modal in DrawPerGameTab(), never
+		// directly from the delete button.
+		void DeleteSavedPerGameConfig()
+		{
+			if ( !s_oAppId )
+				return;
+
+			bool bOk = config::DeletePerGameOverride( *s_oAppId );
+			if ( s_bOverrideActive )
+			{
+				config::SetSessionOverrideActive( false );
+				config::BumpConfigGeneration();
+				s_bOverrideActive = false;
+			}
+			s_sStatus = bOk
+				? "Deleted this game's saved config. Back to global."
+				: "Failed to delete this game's saved config.";
+			gamescope::Notifications::Show( s_sStatus,
+				bOk ? gamescope::Notifications::Kind::Info : gamescope::Notifications::Kind::Error );
 			RefreshLists();
 		}
 
@@ -338,7 +396,68 @@ namespace gamescope
 					else
 						DisableOverride();
 				}
-				ImGui::TextDisabled( "Takes a full snapshot of the current settings; later global changes won't reach this game." );
+				ImGui::TextDisabled(
+					"Snapshots the current settings the first time you turn this on. If this game already "
+					"has a saved config, turning it back on restores that instead of starting over." );
+
+				// Issue #43's UI-honesty requirement: disabling the override
+				// no longer deletes games/<AppId>.json (DisableOverride()'s
+				// own comment above), so "off, but a saved config is still
+				// sitting on disk" is a real, reachable state now -- without
+				// this line, turning the toggle back on and getting the OLD
+				// values back (EnableOverride()'s restore path, per the
+				// user's own decision -- DECISIONS.md #19's amendment) would
+				// look like a bug instead of the intended behaviour.
+				if ( !s_bOverrideActive && s_bHasSavedPerGameConfig )
+				{
+					ImGui::TextColored( ImVec4( 0.55f, 0.75f, 0.95f, 1.0f ),
+						"A saved config exists for this game (games/%s.json). "
+						"Turning Override back on loads it -- it won't be re-created from global.",
+						s_oAppId->c_str() );
+				}
+
+				// The only destructive action left in this panel (issue #43:
+				// "It shouldnt do that. There can be a button for it, but
+				// never delete configs automatically.") -- styled as clearly
+				// destructive and gated behind a confirmation modal, since
+				// this is now the sole path in the whole app that can ever
+				// destroy a per-game config file. Only ever targets this
+				// session's own games/<AppId>.json; DeletePerGameOverride()
+				// itself refuses anything outside GamesDir() as a second
+				// layer of defense (Config/ConfigManager.cpp).
+				if ( s_bHasSavedPerGameConfig )
+				{
+					ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( 0.55f, 0.18f, 0.16f, 1.0f ) );
+					ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( 0.70f, 0.22f, 0.18f, 1.0f ) );
+					ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( 0.80f, 0.26f, 0.20f, 1.0f ) );
+					if ( ImGui::Button( "Delete Saved Config..." ) )
+						ImGui::OpenPopup( "Delete Saved Config?" );
+					ImGui::PopStyleColor( 3 );
+
+					if ( ImGui::BeginPopupModal( "Delete Saved Config?", nullptr, ImGuiWindowFlags_AlwaysAutoResize ) )
+					{
+						ImGui::TextWrapped(
+							"This permanently deletes games/%s.json and everything saved in it. "
+							"This cannot be undone.", s_oAppId->c_str() );
+						ImGui::Separator();
+
+						ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( 0.55f, 0.18f, 0.16f, 1.0f ) );
+						ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( 0.70f, 0.22f, 0.18f, 1.0f ) );
+						ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( 0.80f, 0.26f, 0.20f, 1.0f ) );
+						if ( ImGui::Button( "Delete Permanently", ImVec2( 160.0f, 0.0f ) ) )
+						{
+							DeleteSavedPerGameConfig();
+							ImGui::CloseCurrentPopup();
+						}
+						ImGui::PopStyleColor( 3 );
+
+						ImGui::SameLine();
+						if ( ImGui::Button( "Cancel", ImVec2( 120.0f, 0.0f ) ) )
+							ImGui::CloseCurrentPopup();
+
+						ImGui::EndPopup();
+					}
+				}
 			}
 
 			ImGui::Separator();

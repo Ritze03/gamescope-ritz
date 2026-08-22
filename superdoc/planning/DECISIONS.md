@@ -492,7 +492,7 @@ depends on the app id resolution order in decision 21.
 ---
 
 ### 19. "Override Global Config" takes a full snapshot, not a diff
-**Status:** DECIDED
+**Status:** DECIDED — amended 2026-08-22, see update below.
 
 **Why:** When enabled for a game, the per-game file captures every setting
 value at that moment; subsequent changes to the global config do not
@@ -506,6 +506,66 @@ surfacing config state should make "this game is snapshotted and frozen"
 visible.
 
 **Source:** `superdoc/planning/config-system.md`.
+
+---
+
+**Update (2026-08-22) — turning the override off no longer deletes
+`games/<AppId>.json`, and turning it back on now restores that file instead
+of re-snapshotting. Issue #43 (config-UI review): "Override Global Config"
+off was found to immediately call `remove()` on the per-game file — a
+destructive action hidden behind an ordinary toggle, with no confirmation
+and no undo. The user's own instruction: "It shouldnt do that. There can be
+a button for it, but never delete configs automatically."
+
+**Status: DECIDED**, by the user.
+
+**What changed:**
+- Disabling the override (`ConfigManager.cpp`'s `ClearPerGameOverride`) now
+  flips the file's own `override_global` field to `false` **in place** and
+  leaves the rest of the file untouched, instead of deleting it. The file
+  stops being authoritative (`LoadPerGameOverride`/`ResolveEffective` fall
+  through to global exactly as before), but the values survive on disk.
+- This reopens a question decision 19 (above) didn't anticipate: with a file
+  now able to survive a disable, what should re-enabling do when one already
+  exists? Two options were considered — (a) restore the existing file's
+  values, or (b) re-snapshot from whatever is currently effective (the
+  letter of decision 19, "captures every setting value at that moment").
+  Option (b) was rejected: it would silently discard the saved per-game
+  values the very first time the user toggled override off and back on,
+  reintroducing the same data loss issue #43 was about, one step later.
+- **The user confirmed directly: "It should just load those settings."**
+  `EnableOverride()` (`PanelConfig.cpp`) now checks
+  `HasSavedPerGameConfig()` first; if a saved file exists, it calls the new
+  `RestorePerGameOverride()` (flips `override_global` back to `true` in
+  place, values untouched) instead of snapshotting. Decision 19's original
+  full-snapshot behavior is now specifically the **first-time** path — it
+  only runs when no saved file exists yet for this game.
+- A new, explicit, user-confirmed **"Delete Saved Config..."** button
+  (Per-Game tab) is now the only path in the entire app that can delete
+  `games/<AppId>.json` — gated behind a confirmation modal
+  ("This permanently deletes ... This cannot be undone."), and implemented
+  by the new `DeletePerGameOverride()`, which refuses any app id containing
+  a path separator or resolving outside `GamesDir()` and never touches
+  `global.json` or anything under `profiles/`.
+- The Per-Game tab now shows an explicit line — "A saved config exists for
+  this game (`games/<id>.json`). Turning Override back on loads it — it
+  won't be re-created from global." — whenever the override is off but a
+  saved file still exists, so the restore behavior above doesn't look like
+  a bug the next time the user flips the toggle back on.
+
+**Consequences:** "Override Global Config" is no longer purely a live
+routing switch — turning it off is now a state-preserving pause, not a
+teardown. `games/<AppId>.json` can now exist in a state its filename alone
+doesn't reveal: present on disk but inactive (`override_global: false`).
+Every reader must keep checking the flag (as `LoadPerGameOverride` already
+does) rather than inferring activeness from the file's mere existence
+(as `HasSavedPerGameConfig`/`ListGameIds` correctly still do, for different
+questions). Config sprawl is a little more likely now (a disabled-and-never-
+re-enabled game's file lingers instead of vanishing) — accepted, since
+silent data loss is worse.
+
+**Source:** `superdoc/planning/config-system.md`; `src/Overlay/PanelConfig.cpp`;
+`src/Config/ConfigManager.{h,cpp}`; issue #43.
 
 ---
 
