@@ -29,6 +29,7 @@
 #include "imgui_internal.h"
 #include "Palette.h"
 
+#include <cfloat>
 #include <cstdio>
 
 namespace gamescope::widgets
@@ -714,13 +715,41 @@ namespace gamescope::widgets
 			// own clearly-bordered cell", which stays legible as a row of
 			// distinct segments at any scale, same principle
 			// ImGui::RenderTextClipped() applies to stock widgets.
+			// Issue #46: issue #23 deliberately chose clip-don't-widen for a
+			// label that doesn't fit its cell (this control's own comment
+			// above explains why -- widening one cell only pushes a LATER
+			// one off the row entirely, worse than a clipped label). That
+			// choice is kept as the hard floor here, but a clipped label
+			// ("inea", "eares" -- confirmed by screenshot at 2.0x
+			// display_scale) is still a real legibility loss when it's
+			// avoidable at zero layout cost: unlike widening the cell,
+			// *shrinking the label's own font size* to fit costs nothing
+			// else on the row. Only engages when the label actually
+			// overflows (flShrink < 1); every label that already fits draws
+			// at the normal size, unchanged. Floor of 0.72x keeps a shrunk
+			// label from going illegibly small on a genuinely tiny cell --
+			// past that floor, the clip rect below is still there as the
+			// same safety net #23 already relied on.
 			ImGui::PushFont( fonts::Get( bActive ? fonts::Style::SegmentActive : fonts::Style::SegmentLabel ) );
-			const ImVec2 textSize = ImGui::CalcTextSize( pszLabels[i] );
+			ImFont *pFont = ImGui::GetFont();
+			const float flNominalSize = ImGui::GetFontSize();
+			const float kCellInnerPad = 4.0f * flScale;
+			const float flMaxTextWidth = ImMax( size.x - kCellInnerPad, 1.0f );
+
+			ImVec2 textSize = ImGui::CalcTextSize( pszLabels[i] );
+			float flDrawSize = flNominalSize;
+			if ( textSize.x > flMaxTextWidth )
+			{
+				const float flShrink = ImClamp( flMaxTextWidth / textSize.x, 0.72f, 1.0f );
+				flDrawSize = flNominalSize * flShrink;
+				textSize = pFont->CalcTextSizeA( flDrawSize, FLT_MAX, 0.0f, pszLabels[i] );
+			}
+
 			const ImVec2 textPos(
 				pos.x + ( size.x - textSize.x ) * 0.5f,
 				pos.y + ( size.y - textSize.y ) * 0.5f );
 			pDrawList->PushClipRect( pos, pos + size, true );
-			pDrawList->AddText( textPos, text, pszLabels[i] );
+			pDrawList->AddText( pFont, flDrawSize, textPos, text, pszLabels[i] );
 			pDrawList->PopClipRect();
 			ImGui::PopFont();
 
