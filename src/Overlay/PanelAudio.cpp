@@ -28,7 +28,10 @@
 #include "Widgets.h"
 #include "Chrome.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <unordered_map>
 
 #include "imgui.h"
 
@@ -46,6 +49,74 @@ namespace gamescope
 		config::Settings s_CachedSettings;
 
 		int s_nSelectedStream = -1; // index into the last-drawn GetAvailableStreams() list, picker-local only
+
+		// ---- Volume jump-back fix -------------------------------------
+		// Audio::GetState()/GetAvailableStreams() are cheap snapshots of
+		// the background poll thread's *last* 750ms-cadence tick (see
+		// Volume.cpp) - between the instant a slider calls RequestVolume*()
+		// and the next tick landing, every intervening frame's read of
+		// state/candidate.flVolume is still the pre-change value. Reading
+		// it fresh every frame (the old behavior) therefore made the
+		// slider visibly snap back to the old value the instant the user
+		// let go, then jump forward again once the poll thread caught up.
+		//
+		// Fix is UI-side optimistic local state, not a longer poll
+		// interval (which would only make the same window wider, not go
+		// away): remember the value each row just requested and when, and
+		// keep displaying that instead of the polled value until either
+		// the poll thread reports back a value that agrees (fastest path -
+		// Volume.cpp also now applies a row's own command and re-reads it
+		// back within that same poll tick, so this is often well under
+		// 750ms) or a short timeout elapses (a safety net against a wpctl
+		// call that silently failed). The poll thread was not also made to
+		// suppress its own readback after applying a command - it already
+		// applies a command and reads the result back synchronously
+		// within one tick (Volume.cpp's PollThreadMain), so there is no
+		// separate "still settling" race for it to guard against; the
+		// only staleness is this UI-side one, between ticks.
+		struct PendingRowState
+		{
+			bool bHasVolume = false;
+			float flVolume = 0.0f;
+			bool bHasMute = false;
+			bool bMuted = false;
+			std::chrono::steady_clock::time_point tWhen{};
+		};
+
+		constexpr std::chrono::milliseconds k_PendingTimeout{ 1000 };
+		constexpr float k_flVolumeConfirmEpsilon = 0.005f; // ~0.5%, well under a whole UI percent
+
+		PendingRowState s_PendingPrimary; // the panel's first/"the game" slider - no stable node id from the UI's POV (see VolumeState::vecMatchedNodeIds), so kept separate from the per-node map below
+		std::unordered_map<int, PendingRowState> s_PendingByNode; // every other stream row, keyed by its own node id
+
+		// Returns what to display right now, clearing the override once
+		// the poll thread's own value agrees or the timeout passes.
+		float ResolveDisplayVolume( PendingRowState &pending, float flLiveVolume )
+		{
+			if ( !pending.bHasVolume )
+				return flLiveVolume;
+
+			const bool bConfirmed = std::abs( flLiveVolume - pending.flVolume ) < k_flVolumeConfirmEpsilon;
+			if ( bConfirmed || ( std::chrono::steady_clock::now() - pending.tWhen ) > k_PendingTimeout )
+			{
+				pending.bHasVolume = false;
+				return flLiveVolume;
+			}
+			return pending.flVolume;
+		}
+
+		bool ResolveDisplayMute( PendingRowState &pending, bool bLiveMuted )
+		{
+			if ( !pending.bHasMute )
+				return bLiveMuted;
+
+			if ( bLiveMuted == pending.bMuted || ( std::chrono::steady_clock::now() - pending.tWhen ) > k_PendingTimeout )
+			{
+				pending.bHasMute = false;
+				return bLiveMuted;
+			}
+			return pending.bMuted;
+		}
 
 		void PushManualSelectionToLiveState()
 		{
@@ -109,6 +180,42 @@ namespace gamescope
 		std::string CandidateIdentity( const Audio::StreamCandidate &candidate )
 		{
 			return !candidate.sBinary.empty() ? candidate.sBinary : candidate.sAppName;
+		}
+
+		// One slider+mute row for a single stream from GetAvailableStreams(),
+		// independently controllable regardless of whether it's the
+		// detected/guessed "game" stream. Targets `candidate.nNodeId`
+		// directly via Audio::Request*ForNode() -- never the primary
+		// Audio::RequestVolume()/RequestMute() path, so dragging one
+		// stream's slider can never bleed onto another stream's node.
+		void DrawStreamRow( const Audio::StreamCandidate &candidate )
+		{
+			ImGui::PushID( candidate.nNodeId );
+
+			PendingRowState &pending = s_PendingByNode[ candidate.nNodeId ];
+
+			int nUiPercent = (int)std::lround( ResolveDisplayVolume( pending, candidate.flVolume ) * 100.0f );
+			if ( widgets::SliderInt( "Volume", &nUiPercent, 0, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp ) )
+			{
+				float flFrac = nUiPercent / 100.0f;
+				Audio::RequestVolumeForNode( candidate.nNodeId, flFrac );
+				pending.bHasVolume = true;
+				pending.flVolume = flFrac;
+				pending.tWhen = std::chrono::steady_clock::now();
+			}
+
+			bool bMuted = ResolveDisplayMute( pending, candidate.bMuted );
+			if ( widgets::Toggle( "Mute", &bMuted ) )
+			{
+				Audio::RequestMuteForNode( candidate.nNodeId, bMuted );
+				pending.bHasMute = true;
+				pending.bMuted = bMuted;
+				pending.tWhen = std::chrono::steady_clock::now();
+			}
+
+			ImGui::TextDisabled( "%s", CandidateLabel( candidate ).c_str() );
+
+			ImGui::PopID();
 		}
 
 		void DrawManualPicker( const Audio::VolumeState &state )
@@ -200,35 +307,45 @@ namespace gamescope
 			return;
 		}
 
-		const bool bDisabled = !state.bDetected;
-
-		if ( bDisabled )
-			ImGui::BeginDisabled();
-
-		// UI works in whole percent (0..150, matching the optional 150%
-		// boost from SPEC.md's Audio panel row); Audio:: itself wants the
-		// 0..1.5 display-fraction, so convert only at this edge -- no
-		// curve is applied here, that already happened inside Volume.cpp.
-		int nUiPercent = (int)std::lround( state.flVolume * 100.0f );
-		// widgets::SliderInt draws the numeric readout in Mono/accent per the
-		// design guide's numerals-are-always-Mono rule -- see Widgets.h.
-		if ( widgets::SliderInt( "Volume", &nUiPercent, 0, 150, "%d%%",
-			ImGuiSliderFlags_AlwaysClamp ) )
-		{
-			Audio::RequestVolume( nUiPercent / 100.0f );
-		}
-
-		bool bMuted = state.bMuted;
-		if ( widgets::Toggle( "Mute", &bMuted ) )
-			Audio::RequestMute( bMuted );
-
-		if ( bDisabled )
-			ImGui::EndDisabled();
-
-		ImGui::Separator();
-
+		// ---- Primary row: the detected (or guessed) game stream --------
+		// Issue #36: the panel used to draw exactly this one control and
+		// hide it entirely when detection failed. It's still drawn first
+		// when there's anything to show (bDetected covers both a
+		// confident match and the last-resort "newest stream" guess -- see
+		// Volume.h's DetectionMethod), but a failed match is no longer
+		// fatal: every currently active stream is listed below regardless,
+		// so the user can just pick the right slider directly.
 		if ( state.bDetected )
 		{
+			ImGui::TextUnformatted( "Game audio" );
+
+			// UI works in whole percent (0..150, matching the optional 150%
+			// boost from SPEC.md's Audio panel row); Audio:: itself wants
+			// the 0..1.5 display-fraction, so convert only at this edge --
+			// no curve is applied here, that already happened inside
+			// Volume.cpp.
+			int nUiPercent = (int)std::lround( ResolveDisplayVolume( s_PendingPrimary, state.flVolume ) * 100.0f );
+			// widgets::SliderInt draws the numeric readout in Mono/accent per
+			// the design guide's numerals-are-always-Mono rule -- see Widgets.h.
+			if ( widgets::SliderInt( "Volume", &nUiPercent, 0, 150, "%d%%",
+				ImGuiSliderFlags_AlwaysClamp ) )
+			{
+				float flFrac = nUiPercent / 100.0f;
+				Audio::RequestVolume( flFrac );
+				s_PendingPrimary.bHasVolume = true;
+				s_PendingPrimary.flVolume = flFrac;
+				s_PendingPrimary.tWhen = std::chrono::steady_clock::now();
+			}
+
+			bool bMuted = ResolveDisplayMute( s_PendingPrimary, state.bMuted );
+			if ( widgets::Toggle( "Mute", &bMuted ) )
+			{
+				Audio::RequestMute( bMuted );
+				s_PendingPrimary.bHasMute = true;
+				s_PendingPrimary.bMuted = bMuted;
+				s_PendingPrimary.tWhen = std::chrono::steady_clock::now();
+			}
+
 			ImGui::TextColored( ImVec4( 0.45f, 0.85f, 0.45f, 1.0f ),
 				"audio: %s (%d stream%s)", DetectionMethodLabel( state.eMethod ),
 				state.nMatchedNodes, state.nMatchedNodes == 1 ? "" : "s" );
@@ -257,12 +374,51 @@ namespace gamescope
 			}
 			else
 			{
-				ImGui::TextDisabled( "%d audio stream%s on the system, but none matched this game "
-					"(PID and process-name heuristics both came up empty -- common for sandboxed "
-					"Proton titles). Pick the right one below.",
+				ImGui::TextDisabled( "%d audio stream%s active below -- none matched this game "
+					"automatically (PID and process-name heuristics both came up empty -- common "
+					"for sandboxed Proton titles). Control any of them directly, or pick the right "
+					"one below so the picker remembers it.",
 					state.nTotalAudioStreams, state.nTotalAudioStreams == 1 ? "" : "s" );
 			}
 		}
+
+		ImGui::Separator();
+
+		// ---- Every other active stream -----------------------------------
+		// Issue #36: show a slider for every active PipeWire stream, not
+		// just the one detection resolved. The primary row above (if any)
+		// already covers state.vecMatchedNodeIds, so those are skipped
+		// here to avoid listing the same stream twice.
+		std::vector<Audio::StreamCandidate> vecStreams = Audio::GetAvailableStreams();
+		std::sort( vecStreams.begin(), vecStreams.end(),
+			[]( const Audio::StreamCandidate &a, const Audio::StreamCandidate &b )
+			{
+				return a.nNodeId < b.nNodeId;
+			} );
+
+		ImGui::TextUnformatted( state.bDetected ? "Other active streams" : "Active streams" );
+
+		bool bDrewAny = false;
+		for ( const Audio::StreamCandidate &candidate : vecStreams )
+		{
+			const bool bIsPrimary = std::find( state.vecMatchedNodeIds.begin(), state.vecMatchedNodeIds.end(), candidate.nNodeId )
+				!= state.vecMatchedNodeIds.end();
+			if ( bIsPrimary )
+				continue;
+			bDrewAny = true;
+			DrawStreamRow( candidate );
+		}
+		if ( !bDrewAny )
+			ImGui::TextDisabled( "No other PipeWire audio streams active right now." );
+
+		// Drop optimistic overrides for rows that no longer exist -- there's
+		// nothing left to confirm them against, and this keeps the map from
+		// growing across a long session of streams coming and going.
+		std::erase_if( s_PendingByNode, [ & ]( const auto &kv )
+		{
+			return std::none_of( vecStreams.begin(), vecStreams.end(),
+				[ & ]( const Audio::StreamCandidate &c ) { return c.nNodeId == kv.first; } );
+		} );
 
 		ImGui::Separator();
 		DrawManualPicker( state );
