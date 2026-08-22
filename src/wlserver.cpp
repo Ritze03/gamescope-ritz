@@ -307,14 +307,25 @@ static void bump_input_counter()
 // already tracks a reliable per-keyboard "which syms are currently held"
 // set (wlserver.mapPressedHotkeyKeys) that works identically across every
 // backend. A naive xkb_state_mod_name_is_active(keyboard->xkb_state, ...)
-// check would NOT work uniformly here: wlserver_key() -- the entry point
-// every backend except DRM/libinput's own keyboard group uses (SDL,
-// Wayland-nested, OpenVR, ime, InputEmulation) -- only ever calls
-// wlr_seat_keyboard_notify_key(), never wlr_keyboard_notify_key()/
-// notify_modifiers() on wlserver.wlr.virtual_keyboard_device itself, so
-// that device's own xkb_state never advances and its modifier-depressed
-// bits can't be trusted. The already-existing pressed-syms set sidesteps
-// that entirely.
+// check would NOT work uniformly here: wlserver.wlr.virtual_keyboard_device
+// -- the device wlserver_key() (SDL, Wayland-nested, OpenVR, ime,
+// InputEmulation) attributes every event to -- is a *member* of
+// wlserver.keyboard_group (grouped in wlserver_new_input() like any real
+// keyboard), and wlr_keyboard_group forwards a member's own
+// wlr_keyboard_notify_key()/notify_modifiers() on to the *group's* keyboard
+// as a second, synchronous emission. So even though wlserver_key() does
+// keep this device's xkb_state genuinely live (see its own comment for how
+// and why -- needed for correct text resolution), calling
+// wlr_keyboard_notify_key() on it directly would re-enter
+// wlserver_handle_key() for the same physical transition under the
+// *group's* wlr_keyboard pointer, i.e. process every key twice under two
+// different {keyboard, keycode} identities. wlserver_key() therefore never
+// calls wlr_keyboard_notify_key() on this device (it advances xkb_state and
+// the device's keycode/modifier bookkeeping by hand instead -- see its
+// comment) and, like every non-DRM path, only ever calls
+// wlr_seat_keyboard_notify_key() to actually deliver the event to a client.
+// The already-existing pressed-syms set is what lets this function detect
+// the combo without needing to trust any device's live modifier bits.
 static bool s_bOverlayHotkeyOwnsO = false;
 
 static bool wlserver_check_settings_overlay_toggle( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
@@ -2719,12 +2730,55 @@ void wlserver_key( uint32_t key, bool press, uint32_t time )
 	// forwarding before wlserver_handle_key() ever runs). This is what
 	// gives wlserver_dispatch_key() a real, layout-and-modifier-correct
 	// xkb_state to translate keycodes into text with.
-	wlr_keyboard_key_event event{};
-	event.time_msec = time;
-	event.keycode = key;
-	event.update_state = true;
-	event.state = press ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
-	wlr_keyboard_notify_key( keyboard, &event );
+	//
+	// Deliberately NOT done via wlr_keyboard_notify_key(): this device is a
+	// *member* of wlserver.keyboard_group (wlserver_new_input() groups every
+	// keyboard, including this one -- see wlserver_init()), and
+	// wlr_keyboard_group's internal listener reacts to a member's
+	// events.key by re-emitting the same transition on the *group's*
+	// keyboard. That would re-enter wlserver_handle_key(), which calls
+	// wlserver_process_hotkeys() a second time for this same key under the
+	// group's wlr_keyboard pointer -- a different {keyboard, keycode}
+	// identity than the one below, so mapPressedHotkeyKeys wouldn't
+	// coalesce the two, and every hotkey (Ctrl+Shift+O included) would
+	// toggle twice per press, i.e. visibly do nothing. So this replicates
+	// only the pieces of wlr_keyboard_notify_key() that matter here --
+	// xkb_state, the pressed-keycode set, and the serialized modifier bits
+	// (both read back by wlserver_keyboardfocus()'s notify_enter so a
+	// newly-focused surface doesn't see stuck modifiers) -- without its
+	// events.key/events.modifiers emission.
+	xkb_keycode_t xkbKeycode = key + 8;
+	if ( keyboard->xkb_state != nullptr )
+	{
+		xkb_state_update_key( keyboard->xkb_state, xkbKeycode,
+			press ? XKB_KEY_DOWN : XKB_KEY_UP );
+
+		keyboard->modifiers.depressed = xkb_state_serialize_mods( keyboard->xkb_state, XKB_STATE_MODS_DEPRESSED );
+		keyboard->modifiers.latched = xkb_state_serialize_mods( keyboard->xkb_state, XKB_STATE_MODS_LATCHED );
+		keyboard->modifiers.locked = xkb_state_serialize_mods( keyboard->xkb_state, XKB_STATE_MODS_LOCKED );
+		keyboard->modifiers.group = xkb_state_serialize_layout( keyboard->xkb_state, XKB_STATE_LAYOUT_EFFECTIVE );
+	}
+
+	if ( press )
+	{
+		bool bAlreadyDown = false;
+		for ( size_t i = 0; i < keyboard->num_keycodes; i++ )
+			bAlreadyDown = bAlreadyDown || keyboard->keycodes[ i ] == key;
+		if ( !bAlreadyDown && keyboard->num_keycodes < WLR_KEYBOARD_KEYS_CAP )
+			keyboard->keycodes[ keyboard->num_keycodes++ ] = key;
+	}
+	else
+	{
+		for ( size_t i = 0; i < keyboard->num_keycodes; i++ )
+		{
+			if ( keyboard->keycodes[ i ] == key )
+			{
+				keyboard->keycodes[ i ] = keyboard->keycodes[ keyboard->num_keycodes - 1 ];
+				keyboard->num_keycodes--;
+				break;
+			}
+		}
+	}
 
 	if ( !wlserver_process_hotkeys( keyboard, key, press ) )
 	{
