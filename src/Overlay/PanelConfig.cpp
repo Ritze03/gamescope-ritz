@@ -173,7 +173,33 @@ namespace gamescope
 			live.flWindowAlphaFocused = o.opacity_windows_focused;
 			live.flWindowAlphaUnfocused = o.opacity_windows_unfocused;
 			live.flDockAlpha = o.opacity_dock;
-			ImGui::GetIO().FontGlobalScale = o.display_scale;
+
+			// Issue #54: FontGlobalScale folds on top of whatever this
+			// context's atlas is *currently* baked at (Fonts.cpp's Load()'s
+			// own comment on UpdateCurrentFontSize()), not on top of a fixed
+			// 1.0x baseline -- so assigning o.display_scale here directly
+			// only previews correctly the very first time a context is ever
+			// scaled away from the compiled-in 1.0x default. On every later
+			// drag the atlas is already baked at whatever the *previous*
+			// release left it at (say 1.5x), so this same per-tick
+			// assignment stacks the live drag value on top of that leftover
+			// baked scale instead of replacing it: dragging from a 1.5x
+			// atlas back down to 1.0x renders every implicit-size text call
+			// (ImGui::Text()/Checkbox()/etc -- most of this UI; explicit-
+			// size AddText() calls read DisplayScale() directly and are
+			// unaffected) at a stuck 1.5x for the whole drag, then snaps to
+			// the true 1.0x the instant DrawDisplayScaleSlider()'s
+			// RebuildAll() re-bakes on release -- the reported "drastic
+			// jump". Dividing out gamescope::fonts::BuiltScale() here keeps
+			// the preview's implicit-size text tracking the live value the
+			// same linear way Widgets.cpp/Chrome.cpp's DisplayScale()-driven
+			// geometry already does (that path was already correct -- only
+			// this text path was compounding), so RebuildAll()'s later
+			// re-bake (and its own FontGlobalScale reset to 1.0, Fonts.cpp's
+			// Load()) lands on the exact value the preview already showed:
+			// no jump. BuiltScale() never returns 0, so this division is
+			// always safe.
+			ImGui::GetIO().FontGlobalScale = o.display_scale / gamescope::fonts::BuiltScale();
 
 			// Issue #37: hue-only accent picker. Regenerates every
 			// kAccent*/Accent() token (Palette.h/.cpp) from the new hue --
