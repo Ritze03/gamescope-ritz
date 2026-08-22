@@ -599,6 +599,15 @@ namespace gamescope::chrome
 		// else: priming -- ImGuiWindowFlags_AlwaysAutoResize (below) drives
 		// size entirely this frame; no SetNextWindowSize call at all.
 
+		// Issue #31, size half: now that windows are resizable (#34), an
+		// interactive drag-resize could otherwise grow one past the current
+		// display bounds. Native ImGui size constraint, enforced live while
+		// the resize grip itself is being dragged rather than corrected a
+		// frame late -- skipped while collapsed/priming, matching exactly
+		// when NoResize (below) is present anyway.
+		if ( !bCollapsed && !bPriming )
+			ImGui::SetNextWindowSizeConstraints( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
 		// that's Widgets.cpp's ApplyStyle(), unaffected by this
 		// window-scoped push).
@@ -653,6 +662,34 @@ namespace gamescope::chrome
 		else if ( bPriming )
 			windowFlags |= ImGuiWindowFlags_AlwaysAutoResize;
 		ImGui::Begin( pszTitle, nullptr, windowFlags );
+
+		// Issue #31: keep the window fully on screen. Runs unconditionally
+		// every frame, which covers both cases the issue calls out with one
+		// code path -- reactively pulling a window back in bounds after the
+		// host window shrinks (nothing else here re-checks position against
+		// io.DisplaySize on any frame after the first: SetNextWindowPos()
+		// above is ImGuiCond_FirstUseEver, a no-op from then on), and
+		// proactively stopping a title-bar drag from ever placing an edge
+		// past the boundary (DrawTitleBar()'s StartMouseMovingWindow() hands
+		// off to ImGui's own per-frame move logic, which has no bound of its
+		// own). Uses the window's real current position/size -- the same
+		// GetWindowPos()/GetWindowSize() calls the focus glow block below
+		// already makes -- so a collapsed window clamps against its actual
+		// title-bar-only height (not its expanded #34 size), and a
+		// freshly-resized window clamps against whatever size it's really
+		// at. Cheap: SetWindowPos() only runs on frames the clamp actually
+		// changes something, e.g. right after a shrink or while an edge is
+		// being dragged past a boundary -- not every frame.
+		{
+			const ImGuiIO &io = ImGui::GetIO();
+			const ImVec2 wp = ImGui::GetWindowPos();
+			const ImVec2 ws = ImGui::GetWindowSize();
+			const ImVec2 clampedPos(
+				ImClamp( wp.x, 0.0f, ImMax( 0.0f, io.DisplaySize.x - ws.x ) ),
+				ImClamp( wp.y, 0.0f, ImMax( 0.0f, io.DisplaySize.y - ws.y ) ) );
+			if ( clampedPos.x != wp.x || clampedPos.y != wp.y )
+				ImGui::SetWindowPos( clampedPos );
+		}
 
 		const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
 		s_bPanelWasFocused[(size_t)id] = bFocused;
