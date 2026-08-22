@@ -209,7 +209,23 @@ namespace gamescope::widgets
 			const ImGuiStyle &style = g.Style;
 			const ImGuiID id = pWindow->GetID( pszLabel );
 			const char *pszLabelEnd = ImGui::FindRenderedTextEnd( pszLabel );
-			const float flWidth = ImGui::CalcItemWidth();
+
+			// Deliberately *not* ImGui::CalcItemWidth(): with no caller
+			// override that falls back to window->DC.ItemWidth, whose
+			// un-pushed default is window->Size.x * 0.65f -- a heuristic
+			// imgui.cpp itself sizes for the classic "frame + trailing
+			// label" stock-widget row, which this custom widget doesn't
+			// draw (its label lives on its own line above the track, see
+			// below). Every caller inherited that 65% cap with nothing to
+			// its right filling the rest, i.e. exactly the reported "sliders
+			// are not spanning the full width". Spec §7's Slider entry
+			// itself says "Track: full width", so default to the row's full
+			// available width -- while still honoring an explicit
+			// ImGui::SetNextItemWidth()/negative-width caller override via
+			// CalcItemWidth(), same as every other ImGui item.
+			const float flWidth = ( g.NextItemData.HasFlags & ImGuiNextItemDataFlags_HasWidth )
+				? ImGui::CalcItemWidth()
+				: ImGui::GetContentRegionAvail().x;
 
 			// ---- Layout: label+value line, 5px gap, 18px track hit-row,
 			// 5px gap, min/max line -- spec §3/§7. ----
@@ -439,7 +455,14 @@ namespace gamescope::widgets
 		// canonical size per 2b").
 		static constexpr ImVec2 kTrackSize( 30.0f, 15.0f );
 		static constexpr float kKnobSize = 11.0f;
-		static constexpr float kInset = 1.0f; // "1px inset padding"
+		// Spec's "1px inset content padding" is measured from the *inside*
+		// of the 1px track border, not from the track's outer edge -- using
+		// it as the sole offset from bb.Min/Max put the knob flush against
+		// the border's inner face (reported: "the lever needs one
+		// horizontal pixel of additional spacing towards the edge"). 2px
+		// here = 1px border + 1px content padding, matching the vertical
+		// inset the centering below already produces ((15-11)/2 = 2px).
+		static constexpr float kInset = 2.0f;
 
 		return BooleanControl( pszLabel, pbValue, kTrackSize,
 			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
