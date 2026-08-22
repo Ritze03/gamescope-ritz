@@ -543,8 +543,14 @@ namespace gamescope::chrome
 		// button path lives inside RenderWindowTitleBarContents(), which
 		// Begin() never calls once NoTitleBar is set. Fixed size (no resize
 		// grip) per spec §4.
+		//
+		// NoScrollbar/NoScrollWithMouse: this outer window must never scroll
+		// itself -- see the "##body" child BeginChild() below for why. Scroll
+		// (wheel or scrollbar-grip drag alike) lives entirely on that child
+		// now.
 		ImGui::Begin( pszTitle, nullptr,
-			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize );
+			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
 
 		const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
 		s_bPanelWasFocused[(size_t)id] = bFocused;
@@ -584,17 +590,62 @@ namespace gamescope::chrome
 			// balance this Begin() with End() (and every push above) right
 			// here, since the caller is told NOT to call EndPanelWindow()
 			// when this returns false (Chrome.h's contract).
+			//
+			// Crash fix: DrawTitleBar() unconditionally ends with
+			// SetCursorScreenPos() to hand the cursor back to the caller's
+			// content below the bar -- fine on every other frame, since the
+			// caller then goes on to submit real widgets that grow
+			// CursorMaxPos past that position. Collapsed, nothing is drawn
+			// after DrawTitleBar(): End() below would be the very next
+			// call, and ImGui 1.92's
+			// ErrorCheckUsingSetCursorPosToExtendParentBoundaries() hard
+			// asserts (not the pre-1.89 silent-fixup path) whenever
+			// SetCursorPos()/SetCursorScreenPos() pushed the cursor past
+			// the window's content bounds with no item submitted to justify
+			// it -- exactly what a title-bar-only, kTitleBarHeight-tall
+			// collapsed window's tiny content region triggers. A zero-size
+			// Dummy() is ImGui's own documented fix (imgui.cpp's
+			// ErrorCheckUsingSetCursorPosToExtendParentBoundaries comment):
+			// it "submits" the position without drawing or resizing
+			// anything, so the boundary check is satisfied instead of
+			// tripping. Repro was double-clicking (or collapse-glyph-
+			// clicking) a panel's title bar, which crashed the whole
+			// process one frame later via SIGABRT (assert -> abort()) --
+			// see superdoc/planning/ISSUES.md.
+			ImGui::Dummy( ImVec2( 0.0f, 0.0f ) );
 			ImGui::PopStyleColor();
 			ImGui::End();
 			ImGui::PopStyleVar( 3 ); // WindowBorderSize, Alpha, WindowRounding
 			return false;
 		}
 
+		// Scroll fix: the panel's body goes in its own child window/region
+		// from here down, rather than directly as more of the outer
+		// window's own content the way it did before this pass. Root cause
+		// of "scrollbar grip shrinks (so content height IS computed right)
+		// but the view never moves, wheel or grip-drag alike": DrawTitleBar()
+		// hands the cursor back to the caller via the outer window's own
+		// screen-space cursor, anchored off ImGui::GetWindowPos() (constant,
+		// NOT scroll-adjusted, which is exactly right for a header that must
+		// stay pinned on screen while the body beneath it scrolls). But the
+		// outer window was ALSO the thing scrolling (nothing suppressed its
+		// own scrollbar), so every subsequent widget's on-screen position
+		// worked out to windowPos + a fixed offset regardless of
+		// window->Scroll -- the scroll and unscroll canceled out
+		// algebraically, pinning the *entire* body to the header's fixed
+		// screen position no matter how far the window had scrolled. A
+		// child region gets its own independent Scroll/ClipRect, so it
+		// scrolls correctly on its own, while NoScrollbar/NoScrollWithMouse
+		// above keep the outer window itself from ever having scroll state
+		// to cancel against in the first place.
+		ImGui::BeginChild( "##body", ImVec2( 0.0f, 0.0f ) );
+
 		return true;
 	}
 
 	void EndPanelWindow()
 	{
+		ImGui::EndChild(); // "##body", opened in BeginPanelWindow()
 		ImGui::PopStyleColor(); // ImGuiCol_Border, pushed in BeginPanelWindow()
 		ImGui::End();
 		ImGui::PopStyleVar( 3 ); // WindowBorderSize, Alpha, WindowRounding -- all pushed in BeginPanelWindow()
