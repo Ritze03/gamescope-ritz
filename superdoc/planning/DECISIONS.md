@@ -405,15 +405,45 @@ launches — so none of those env vars are inherited, and only a
 post-startup window/property scrape (of the kind `get_appid_from_pid`
 already performs) can resolve the app id in that topology.
 
-**Consequences:** Two distinct code paths are required: an env-var read
-(wrapper topology) and a process/window scrape (persistent-session
-topology), with the resolution order above applying only within whichever
-path is live. The user offered app id `3746030` as a test subject for this
-resolution logic — **not yet tested**.
+**Consequences:** Two distinct signals exist — the env-var read (wrapper
+topology) and `get_appid_from_pid`'s process/window scrape
+(persistent-session topology) — but only the first is wired into config
+resolution. `ResolveAppId()`/`SessionAppId()` resolve once, at the very top
+of `main()`, purely from env vars; the scrape is never consulted by the
+config system. In the persistent-session topology this means resolution
+correctly, deliberately lands on "no app id" and every setting falls
+through to `global.json` — not a gap, per `config-system.md`'s "mid-session
+appid arrival is out of scope for v1" and `ConfigManager.h`'s
+`SessionAppId()`'s "no live app-id reload" (a resolved id never changes
+mid-process, so there is nothing to hot-switch to even if the scrape were
+wired in — and hot-switching was independently rejected as confusing,
+settings visibly changing after launch). `PanelConfig.cpp`'s
+`DrawPerGameTab()` shows this state honestly ("No game identified for this
+session ... All changes made in the other panels are going to global.json")
+whenever `SessionAppId()` is `std::nullopt`.
+
+**2026-08-22 verification (closes "not yet tested"):** Built and ran with
+`--ritz-dump-config` under a temporary `XDG_CONFIG_HOME`, both topologies
+simulated directly, using the user's offered app id `3746030`:
+- Wrapper topology (`STEAM_COMPAT_APP_ID=3746030` set before exec) →
+  `resolved_app_id: "3746030"`, reads/writes `games/3746030.json` only.
+- Persistent-session topology (none of the four env vars set) →
+  `resolved_app_id: null`, falls through to `global.json`, creates nothing.
+No input in either topology produced a *wrong* app id — the dangerous case
+(silently attaching one game's settings to a different game) does not
+occur; the only failure mode possible is the honest "no id" degradation.
+Also confirmed by code reading: `gamescope::config::` is never referenced
+anywhere in `steamcompmgr.cpp` — the scrape and the config system are
+completely disjoint today. Regression tests added in
+`tests/test_config.cpp` ("persistent-session topology ... resolves to
+nothing, not a stale id"; "a bare \"AppId\" env var is never read"; the
+3746030 end-to-end wrapper-topology test) guard both claims going forward.
 
 **Source:** `superdoc/planning/appid-detection.md`;
 `src/steamcompmgr.cpp:5285` (`get_appid_from_pid`),
-`src/steamcompmgr.cpp:5465` (call site).
+`src/steamcompmgr.cpp:5465` (call site); `src/Config/AppId.cpp`;
+`src/main.cpp` (`ResolveAppId`/`ResolveEffective` call site, top of `main()`);
+`tests/test_config.cpp`.
 
 ---
 

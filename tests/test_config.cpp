@@ -101,6 +101,33 @@ TEST_CASE( "ResolveAppId precedence", "[config]" )
         auto lookup = MakeLookup( {} );
         REQUIRE( ResolveAppId( lookup ) == std::nullopt );
     }
+
+    // Persistent-session topology (DECISIONS.md #21's "topology split"):
+    // gamescope's process predates the game, so none of GS_RITZ_APPID/
+    // STEAM_COMPAT_APP_ID/SteamAppId/STEAM_COMPAT_DATA_PATH were ever set on
+    // it - this is indistinguishable from "nothing set" above, and that's
+    // deliberate, not a gap: it must resolve to nothing, never to a stale or
+    // wrong id. Named explicitly because it's the case decision 21 flagged
+    // as unverified.
+    SECTION( "persistent-session topology (no launch-time env vars) resolves to nothing, not a stale id" )
+    {
+        auto lookup = MakeLookup( {} );
+        REQUIRE( ResolveAppId( lookup ) == std::nullopt );
+    }
+
+    // The dangerous case, guarded explicitly: "AppId=<n>" is a command-line
+    // argument steamcompmgr.cpp's get_appid_from_pid() scrapes from a
+    // "reaper" ancestor process's /proc/<pid>/cmdline, post-startup, per
+    // window - it is NOT an environment variable, and never has been (see
+    // superdoc/planning/appid-detection.md §3). If a future edit ever added
+    // a bare "AppId" env-var lookup here (confusing the two), it would let a
+    // leftover/unrelated "AppId" var from the launching shell silently
+    // resolve to the wrong game. Assert it is never read.
+    SECTION( "a bare \"AppId\" env var is never read - that name is the reaper's argv token, not an env var" )
+    {
+        auto lookup = MakeLookup( { { "AppId", "999999" } } );
+        REQUIRE( ResolveAppId( lookup ) == std::nullopt );
+    }
 }
 
 TEST_CASE( "SanitizeProfileName rejects path escapes", "[config]" )
@@ -206,6 +233,38 @@ TEST_CASE( "override_global snapshot wins over global, and is a frozen snapshot"
     // Clearing the override falls back to (the now-changed) global again.
     REQUIRE( ClearPerGameOverride( "1" ) );
     REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "NIS" );
+}
+
+// End-to-end pass for the launch-option-wrapper topology, using app id
+// 3746030 - the id the user offered as this feature's test subject
+// (DECISIONS.md #21). Closes the "not yet tested" flag: env var in, correct
+// games/<id>.json read out, and no other app id's file is touched.
+TEST_CASE( "app id 3746030 (launch-option-wrapper topology): env var resolves and reads its own games/<id>.json", "[config]" )
+{
+    TempConfigHome home;
+
+    auto lookup = MakeLookup( { { "STEAM_COMPAT_APP_ID", "3746030" } } );
+    std::optional<std::string> oAppId = ResolveAppId( lookup );
+    REQUIRE( oAppId == "3746030" );
+    REQUIRE( GamePath( *oAppId ) == GamesDir() + "/3746030.json" );
+
+    Settings global{};
+    global.gamescope.filter = "LINEAR";
+    REQUIRE( SaveGlobal( global ) );
+
+    // No override yet - falls through to global, and creates nothing.
+    REQUIRE( ResolveEffective( oAppId ).gamescope.filter == "LINEAR" );
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( *oAppId ) ) );
+
+    Settings snapshot = ResolveEffective( oAppId );
+    snapshot.gamescope.filter = "FSR";
+    REQUIRE( SnapshotPerGameOverride( *oAppId, snapshot ) );
+    REQUIRE( std::filesystem::exists( GamePath( "3746030" ) ) );
+
+    // Resolves from its own file now, and a different app id is unaffected.
+    REQUIRE( ResolveEffective( oAppId ).gamescope.filter == "FSR" );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).gamescope.filter == "LINEAR" );
+    REQUIRE_FALSE( std::filesystem::exists( GamePath( "1" ) ) );
 }
 
 TEST_CASE( "notification muting resolves per-game override vs. global exactly like every other setting", "[config]" )
