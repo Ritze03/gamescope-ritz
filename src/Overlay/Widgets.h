@@ -130,4 +130,15 @@ namespace gamescope::widgets
 	// need more than plain text (a toggle before the name, chips after it).
 	bool BeginGroupBlock( const char *pszId, bool bActive = false );
 	void EndGroupBlock( bool bActive = false );
+
+	// superdoc/planning/ui-mockup-precise-spec.md §11's "ANCHOR block" --
+	// a 3x3 grid of 30x30px cells, 3px gaps (cells: fill white@5%, border
+	// white@9%; selected: fill accent@30%, border accent@70%). Used for
+	// any "pick one of nine screen positions" picker (notification
+	// placement -- issue #26; System Monitor position -- issue #27), so
+	// this lives here rather than being duplicated per caller. `*pnVert`/
+	// `*pnHoriz` are each 0..2 (row/column); returns true (and updates
+	// them) the frame a different cell is clicked, same "changed this
+	// frame" contract as SegmentedControl() above.
+	bool PositionGrid( const char *pszId, int *pnVert, int *pnHoriz );
 }

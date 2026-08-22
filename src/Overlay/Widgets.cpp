@@ -642,6 +642,67 @@ namespace gamescope::widgets
 		return bChanged;
 	}
 
+	bool PositionGrid( const char *pszId, int *pnVert, int *pnHoriz )
+	{
+		ImGui::PushID( pszId );
+
+		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
+		ImDrawList *pDrawList = pWindow->DrawList;
+
+		// Spec §11 ANCHOR block: 30x30px cells, 3px gaps.
+		constexpr float kCellSize = 30.0f;
+		constexpr float kGap = 3.0f;
+
+		bool bChanged = false;
+		const ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
+
+		for ( int v = 0; v < 3; v++ )
+		{
+			for ( int h = 0; h < 3; h++ )
+			{
+				ImGui::PushID( v * 3 + h );
+
+				const ImVec2 pos( gridOrigin.x + h * ( kCellSize + kGap ), gridOrigin.y + v * ( kCellSize + kGap ) );
+				ImGui::SetCursorScreenPos( pos );
+
+				const ImVec2 size( kCellSize, kCellSize );
+				const bool bClicked = ImGui::InvisibleButton( "##cell", size );
+				const bool bHovered = ImGui::IsItemHovered();
+				const bool bActive = ( v == *pnVert && h == *pnHoriz );
+
+				if ( bClicked && !bActive )
+				{
+					*pnVert = v;
+					*pnHoriz = h;
+					bChanged = true;
+				}
+
+				// Spec §11: cells fill white@5%/border white@9%; selected
+				// fill accent@30%/border accent@70%. Hover nudge on the
+				// inactive cell is the same in-style invention
+				// SegmentedControl() above makes (spec §12: hover was
+				// never designed).
+				const ImU32 fill = bActive
+					? ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) )
+					: ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.08f : 0.05f ) );
+				const ImU32 border = bActive
+					? ImGui::GetColorU32( gamescope::palette::Accent( 0.70f ) )
+					: ImGui::GetColorU32( gamescope::palette::White( bHovered ? 0.14f : 0.09f ) );
+
+				pDrawList->AddRectFilled( pos, pos + size, fill ); // 0px radius -- flat/square, same as every other control here
+				pDrawList->AddRect( pos, pos + size, border );
+
+				ImGui::PopID();
+			}
+		}
+
+		ImGui::SetCursorScreenPos( ImVec2( gridOrigin.x, gridOrigin.y + 3 * kCellSize + 2 * kGap ) );
+		ImGui::Dummy( ImVec2( 3 * kCellSize + 2 * kGap, 0.0f ) ); // register the full grid footprint as one item block
+
+		ImGui::PopID();
+		return bChanged;
+	}
+
 	void ReadoutStrip( const char *pszText, bool bLeadingDot )
 	{
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
