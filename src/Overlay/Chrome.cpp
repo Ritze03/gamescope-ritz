@@ -545,6 +545,27 @@ namespace gamescope::chrome
 			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
 			pLiveTheme->flAccentHue = s.overlay.accent_hue;
 			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
+			// Issue #56: panels must resize only from the bottom-right
+			// corner grip, not from any edge or any other corner. Stock
+			// ImGui's own default (io.ConfigWindowsResizeFromEdges = true)
+			// offers both edge-drag resizing on all four sides AND a second
+			// grip at the bottom-left, in addition to the bottom-right one
+			// -- imgui.cpp's Begin() computes resize_grip_count = 2 and
+			// resize_border_mask = 0x0F whenever this is true, vs. grip
+			// count 1 (bottom-right only, resize_grip_def[0] -- see
+			// imgui.cpp's own "Lower-right" comment on that array) and no
+			// border mask at all when false. Setting it false here is a
+			// single IO flag rather than a per-window flag because ImGui
+			// has no per-window equivalent since 1.63 (the old per-window
+			// ImGuiWindowFlags_ResizeFromAnySide was removed in favor of
+			// this global toggle) -- harmless scope-wise, since this
+			// context's only other resizable-by-default window is the dock
+			// (ImGuiWindowFlags_NoResize, unaffected), and FpsDisplay.cpp
+			// runs its own separate ImGui context with its own IO, so this
+			// doesn't reach that overlay at all. Set once here (not
+			// per-frame) for the same reason FontGlobalScale just above is:
+			// this whole function only runs once per process.
+			ImGui::GetIO().ConfigWindowsResizeFromEdges = false;
 			// Regenerates kAccent/kAccentEdge/etc. (Palette.h) for the hue
 			// just loaded -- issue #37. Must run after flAccentHue is set
 			// above, and before this process ever draws a frame using them.
