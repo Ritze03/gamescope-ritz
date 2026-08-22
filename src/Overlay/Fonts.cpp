@@ -422,4 +422,17 @@ namespace gamescope::fonts
 		// not expected to be hit in practice.
 		return ImGui::GetIO().FontDefault;
 	}
+
+	float BuiltScale()
+	{
+		ImGuiContext *pContext = ImGui::GetCurrentContext();
+		if ( pContext == nullptr )
+			return 1.0f;
+
+		auto it = g_FontSets.find( pContext );
+		if ( it == g_FontSets.end() || it->second.flBuiltScale <= 0.0f )
+			return 1.0f; // never built yet (FontSet's own "never built" sentinel) -- nothing baked in to divide out
+
+		return it->second.flBuiltScale;
+	}
 }

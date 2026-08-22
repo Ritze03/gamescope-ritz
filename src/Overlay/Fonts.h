@@ -144,4 +144,15 @@ namespace gamescope::fonts
 	// Style::Label is already the atlas's default font, so ordinary
 	// ImGui::Text/Checkbox/SliderFloat/etc. calls pick it up automatically.
 	ImFont *Get( Style style );
+
+	// Issue #54: the effective scale the *currently-current* context's atlas
+	// is baked at right now (Fonts.cpp's Load()'s own flBuiltScale), or 1.0f
+	// if Load() has never run for this context yet (nothing baked in to
+	// divide against -- same "never built" sentinel Load()'s FontSet uses).
+	// PanelConfig.cpp's PushLiveTheme() divides its per-tick FontGlobalScale
+	// preview by this so the preview tracks the atlas's *actual* current
+	// baseline instead of assuming it's always the compiled-in 1.0x -- see
+	// that call site's comment, and Load()'s own comment on how
+	// FontGlobalScale folds on top of whatever scale is already baked in.
+	float BuiltScale();
 }
