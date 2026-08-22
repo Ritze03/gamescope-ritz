@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 class CVulkanCmdBuffer;
 struct FrameInfo_t;
@@ -107,10 +108,17 @@ namespace gamescope
 	// Producer side (main thread). uLinuxKeycode is a raw evdev keycode
 	// (KEY_* from linux/input-event-codes.h, NOT an xkb keycode -- no +8),
 	// the same convention wlserver_key()/wlserver_handle_key() already use
-	// for everything except xkb lookups. All keysym/ImGuiKey/text
-	// translation happens on the consumer side (SettingsOverlay.cpp) so
-	// wlserver.cpp does not need to know anything about ImGui.
-	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed );
+	// for everything except xkb lookups. ImGuiKey mapping still happens on
+	// the consumer side (SettingsOverlay.cpp) so wlserver.cpp does not need
+	// to know anything about ImGui -- but layout-correct TEXT can only be
+	// produced where the real xkb_state lives (wlserver.cpp, next to the
+	// keyboard), so wlserver_dispatch_key() resolves it there (via
+	// xkb_state_key_get_utf8() against the keyboard that actually received
+	// the press) and passes the already-translated UTF-8 through here.
+	// sUtf8Text is empty for a release, for keys with no printable mapping,
+	// and for control characters (Enter/Tab/Backspace/Escape/...) -- those
+	// stay pure key events, never text, regardless of layout.
+	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed, std::string sUtf8Text = std::string() );
 
 	// Producer side. Relative pointer motion (already sensitivity-scaled by
 	// the caller, matching wlserver_mousemotion()'s own convention) --
