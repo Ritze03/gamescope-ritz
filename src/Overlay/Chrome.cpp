@@ -495,19 +495,23 @@ namespace gamescope::chrome
 			// internal primitive ImGui's own native title bar drag uses
 			// (imgui.cpp) -- not a from-scratch mouse-delta reimplementation,
 			// so multi-viewport clamping/focus-on-move/etc. all come along
-			// for free exactly like a real title bar. A double-click toggles
-			// collapse, mirroring the native double-click-title-bar gesture
-			// (imgui.cpp's own WantCollapseToggle path, which this window
-			// can't reach any more once ImGuiWindowFlags_NoTitleBar is set --
-			// see Chrome.h's BeginPanelWindow() comment).
+			// for free exactly like a real title bar.
+			//
+			// Issue #33: right-click toggles shade/collapse (replacing the
+			// previous double-click gesture -- the collapse glyph button
+			// stays as the other path to the same toggle), middle-click
+			// closes the window via the same SetPanelOpen() call the close
+			// glyph button already makes.
 			ImGui::SetCursorScreenPos( barMin );
 			ImGui::InvisibleButton( "##titledrag", ImVec2( collapsePos.x - kButtonGap - barMin.x, kTitleBarHeight ) );
 			if ( ImGui::IsItemHovered() )
 			{
 				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) )
 					ImGui::StartMouseMovingWindow( ImGui::GetCurrentWindow() );
-				if ( ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) )
+				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Right ) )
 					s_bPanelCollapsed[(size_t)id] = !s_bPanelCollapsed[(size_t)id];
+				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Middle ) )
+					SetPanelOpen( id, false );
 			}
 
 			(void)bCollapsed; // no distinct collapsed-state paint on the bar itself yet -- same icon/geometry either way
