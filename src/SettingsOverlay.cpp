@@ -960,11 +960,32 @@ namespace gamescope
 		layer->filter = GamescopeUpscaleFilter::LINEAR;
 		layer->blackBorder = false;
 		layer->applyColorMgmt = false; // drm-plane-only; not exercised by the SDL/vkcube M1 test path
-		// ImGui's default pipeline blend state produces straight (non-
-		// premultiplied) alpha, not gamescope's default premultiplied
-		// assumption -- COVERAGE is the mode this codebase already uses for
-		// the same reason (cv_overlay_unmultiplied_alpha, the Steam overlay).
-		layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE;
+		// Issue #32: this was ALPHA_BLENDING_MODE_COVERAGE on the theory that
+		// ImGui's blend state produces straight (non-premultiplied) alpha --
+		// true of the *inputs* to each draw call, but not of the *offscreen
+		// target's* accumulated pixels, which is what actually gets sampled
+		// here. ImGui's Vulkan backend blends every draw with
+		// SrcAlpha/OneMinusSrcAlpha for color, standard "over"; cleared to
+		// transparent black (0,0,0,0) above (RenderAndSubmit()'s clearValue)
+		// each frame. "Over" onto a transparent destination always yields a
+		// PREMULTIPLIED result (out.rgb = src.rgb * src.a) wherever the
+		// destination stayed low-alpha -- i.e. exactly the open-background
+		// case. Where the destination was already near-opaque (another
+		// window's own fill, drawn earlier in the same offscreen pass), the
+		// accumulated alpha is ~1, so premultiplied and straight read the
+		// same and the bug is invisible -- exactly issue #32's reported
+		// "shows over other windows, vanishes over the game" pattern.
+		// COVERAGE's shader path (BlendLayer(), alphamode.h) multiplies this
+		// already-premultiplied layerColor by layerAlpha a *second* time,
+		// squaring alpha for every translucent-over-background pixel -- the
+		// focus glow's faint outer rings (well under 10% alpha) get squared
+		// toward zero, reading as invisible. PREMULTIPLIED's shader path
+		// takes layerColor as-is (correct for an already-premultiplied
+		// source) and only applies opacity, matching what this offscreen
+		// texture actually contains. Confirmed by tracing the accumulation,
+		// not by tuning kGlowPeakA -- cranking that up would have "fixed"
+		// the symptom while leaving the real double-multiply in place.
+		layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_PREMULTIPLIED;
 		layer->ctm = nullptr;
 		layer->hdr_metadata_blob = nullptr;
 		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
