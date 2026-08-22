@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <unordered_map>
 
 #include <sys/wait.h>
 
@@ -466,6 +467,14 @@ namespace gamescope::Audio
 		std::mutex g_PendingMutex;
 		PendingCommand g_PendingCommand;
 
+		// Per-node commands for the Audio panel's "every other active
+		// stream" rows - each targets one specific node id directly,
+		// independent of whatever g_PendingCommand/detection resolves as
+		// the primary stream this poll. Keyed by node id; drained (and,
+		// like g_PendingCommand, cleared) once per poll tick.
+		std::mutex g_PendingNodeMutex;
+		std::unordered_map<int, PendingCommand> g_PendingNodeCommands;
+
 		std::mutex g_StateMutex;
 		VolumeState g_State;
 		std::vector<StreamCandidate> g_AvailableStreams;
@@ -508,6 +517,13 @@ namespace gamescope::Audio
 					std::lock_guard<std::mutex> lock( g_PendingMutex );
 					cmd = g_PendingCommand;
 					g_PendingCommand = {};
+				}
+
+				std::unordered_map<int, PendingCommand> nodeCommands;
+				{
+					std::lock_guard<std::mutex> lock( g_PendingNodeMutex );
+					nodeCommands = std::move( g_PendingNodeCommands );
+					g_PendingNodeCommands.clear();
 				}
 
 				std::optional<std::string> osManualSelection;
@@ -555,14 +571,40 @@ namespace gamescope::Audio
 							if ( std::optional<std::string> osSerial = Parse::InspectField( *osInspect, "object.serial" ) )
 								node.olSerial = std::atol( osSerial->c_str() );
 
+							// Apply this node's own pending command (if any)
+							// before reading its volume back below, so a
+							// change made through this row's own slider is
+							// reflected in this same poll tick rather than
+							// waiting a further 750ms.
+							auto itNodeCmd = nodeCommands.find( nNodeId );
+							if ( itNodeCmd != nodeCommands.end() )
+							{
+								if ( itNodeCmd->second.oflLinearVolume )
+									RunWpctl( "set-volume " + std::to_string( nNodeId ) + " " + Parse::FormatLinearVolume( *itNodeCmd->second.oflLinearVolume ) );
+								if ( itNodeCmd->second.obMuted )
+									RunWpctl( "set-mute " + std::to_string( nNodeId ) + " " + ( *itNodeCmd->second.obMuted ? "1" : "0" ) );
+							}
+
 							StreamCandidate candidate;
 							candidate.nNodeId = nNodeId;
 							candidate.sLabel = sName;
 							candidate.sBinary = node.sBinary;
 							candidate.sAppName = node.sAppName;
 							candidate.nPid = node.onPid.value_or( 0 );
-							vecAvailable.push_back( std::move( candidate ) );
 
+							// Every row in the Audio panel's stream list
+							// binds straight to this - a per-node live
+							// readback, not a second GetState()-shaped call.
+							if ( std::optional<std::string> osVol = RunWpctl( "get-volume " + std::to_string( nNodeId ) ) )
+							{
+								if ( auto oReading = Parse::GetVolumeOutput( *osVol ) )
+								{
+									candidate.flVolume = LinearToDisplayVolume( oReading->flLinear );
+									candidate.bMuted = oReading->bMuted;
+								}
+							}
+
+							vecAvailable.push_back( candidate );
 							vecNodes.push_back( std::move( node ) );
 						}
 
@@ -590,6 +632,7 @@ namespace gamescope::Audio
 						newState.eMethod = selection.eMethod;
 						newState.bDetected = selection.onSelectedNodeId.has_value();
 						newState.nMatchedNodes = (int)selection.vecMatchedNodeIds.size();
+						newState.vecMatchedNodeIds = selection.vecMatchedNodeIds;
 						newState.nCandidatesAtWinningTier = selection.nCandidatesAtWinningTier;
 						newState.bManualSelectionStale = osManualSelection.has_value() && !osManualSelection->empty() && !newState.bDetected;
 
@@ -618,6 +661,23 @@ namespace gamescope::Audio
 								{
 									newState.flVolume = LinearToDisplayVolume( oReading->flLinear );
 									newState.bMuted = oReading->bMuted;
+
+									// The primary command (if any) was
+									// applied above, after this node's own
+									// candidate.flVolume/bMuted was already
+									// read - keep vecAvailable's copy of the
+									// primary node in sync so it isn't
+									// stale for one extra poll tick if it's
+									// ever also listed as an "other" row.
+									for ( StreamCandidate &candidate : vecAvailable )
+									{
+										if ( candidate.nNodeId == *selection.onSelectedNodeId )
+										{
+											candidate.flVolume = newState.flVolume;
+											candidate.bMuted = newState.bMuted;
+											break;
+										}
+									}
 								}
 							}
 						}
@@ -684,5 +744,17 @@ namespace gamescope::Audio
 	{
 		std::lock_guard<std::mutex> lock( g_PendingMutex );
 		g_PendingCommand.obMuted = bMuted;
+	}
+
+	void RequestVolumeForNode( int nNodeId, float flDisplayFraction )
+	{
+		std::lock_guard<std::mutex> lock( g_PendingNodeMutex );
+		g_PendingNodeCommands[ nNodeId ].oflLinearVolume = DisplayToLinearVolume( flDisplayFraction );
+	}
+
+	void RequestMuteForNode( int nNodeId, bool bMuted )
+	{
+		std::lock_guard<std::mutex> lock( g_PendingNodeMutex );
+		g_PendingNodeCommands[ nNodeId ].obMuted = bMuted;
 	}
 }

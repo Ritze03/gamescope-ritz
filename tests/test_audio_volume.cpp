@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 #include "Audio/Volume.h"
 
 using namespace gamescope::Audio;
@@ -268,4 +270,65 @@ TEST_CASE( "SelectCandidate: nothing matches anywhere reports NotDetected, not a
 	REQUIRE( result.eMethod == DetectionMethod::NotDetected );
 	REQUIRE_FALSE( result.onSelectedNodeId.has_value() );
 	REQUIRE( result.vecMatchedNodeIds.empty() );
+}
+
+// ---- Issue #36: panel-wide enumeration (every active stream gets its own
+// row, primary excluded from the "other streams" list by node id) relies on
+// VolumeState::vecMatchedNodeIds carrying *every* node id behind the winning
+// match, not just the one flVolume/bMuted is read from (e.g. a stereo pair
+// of streams sharing one PID/identity, both of which a volume/mute command
+// must apply to). These two cases were previously only exercised through
+// nCandidatesAtWinningTier's *count* of distinct candidates, never the
+// number of node ids actually in vecMatchedNodeIds for a single winning
+// candidate.
+
+TEST_CASE( "SelectCandidate: a PID match spanning several nodes reports all of their ids, not just the best one", "[audio_volume]" )
+{
+	// A real client can open more than one Stream/Output/Audio node under
+	// the same pid (e.g. a separate node per channel/sink) - every one of
+	// them must end up in vecMatchedNodeIds so RequestVolume()/RequestMute()
+	// apply to all of them, and so the panel's primary-exclusion filter
+	// (matching against vecMatchedNodeIds) hides every one of them from the
+	// "other streams" list, not just the highest-serial one.
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 10, "game.exe", "", pid_t{ 222 }, 100L },
+		{ 11, "game.exe", "", pid_t{ 222 }, 105L },
+	};
+
+	auto result = Parse::SelectCandidate( nodes, { 222 }, {}, std::nullopt, std::nullopt );
+	REQUIRE( result.eMethod == DetectionMethod::Pid );
+	REQUIRE( result.onSelectedNodeId == 11 ); // higher serial within the winning pid
+	std::vector<int> vecExpected{ 10, 11 };
+	std::vector<int> vecActual = result.vecMatchedNodeIds;
+	std::sort( vecActual.begin(), vecActual.end() );
+	REQUIRE( vecActual == vecExpected );
+}
+
+TEST_CASE( "SelectCandidate: manual override matching several nodes by identity reports all of their ids", "[audio_volume]" )
+{
+	std::vector<Parse::NodeInfo> nodes = {
+		{ 30, "pacat", "paplay", pid_t{ 111 }, 100L },
+		{ 31, "pacat", "paplay", pid_t{ 111 }, 150L },
+		{ 40, "other.exe", "", pid_t{ 222 }, 200L },
+	};
+
+	auto result = Parse::SelectCandidate( nodes, {}, {}, std::nullopt, std::string{ "pacat" } );
+	REQUIRE( result.eMethod == DetectionMethod::Manual );
+	REQUIRE( result.onSelectedNodeId == 31 );
+	std::vector<int> vecExpected{ 30, 31 };
+	std::vector<int> vecActual = result.vecMatchedNodeIds;
+	std::sort( vecActual.begin(), vecActual.end() );
+	REQUIRE( vecActual == vecExpected );
+}
+
+TEST_CASE( "StreamCandidate carries its own live volume/mute snapshot, defaulted sanely", "[audio_volume]" )
+{
+	// Every row the Audio panel draws for GetAvailableStreams() binds
+	// straight to a StreamCandidate's own flVolume/bMuted (Volume.cpp reads
+	// each node's volume back independently every poll) rather than a
+	// shared/aliased value - this just pins the struct's default so an
+	// un-populated candidate never displays as silent/zero by accident.
+	StreamCandidate candidate;
+	REQUIRE( candidate.flVolume == 1.0f );
+	REQUIRE_FALSE( candidate.bMuted );
 }

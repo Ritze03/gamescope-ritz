@@ -72,6 +72,10 @@ namespace gamescope::Audio
 	// One Stream/Output/Audio node as `wpctl status`+`inspect` currently
 	// report it - the picker's raw material (GetAvailableStreams()) and
 	// also what SelectCandidate() (Volume.h's Parse namespace) scores.
+	// Also what the Audio panel now binds a per-stream slider row to
+	// directly (flVolume/bMuted below), one row per candidate, so every
+	// active stream gets a live, independently-controllable control, not
+	// just whichever one detection resolved as "the game."
 	struct StreamCandidate
 	{
 		int nNodeId = 0;
@@ -79,6 +83,8 @@ namespace gamescope::Audio
 		std::string sBinary;   // application.process.binary, empty if the client never set it
 		std::string sAppName;  // application.name, empty if the client never set it
 		pid_t nPid = 0;        // application.process.id, 0 if absent/unparsable
+		float flVolume = 1.0f; // this node's own live display-curve volume, 0..1.5 - see DisplayToLinearVolume
+		bool bMuted = false;   // this node's own live mute state
 	};
 
 	// A UI-facing snapshot of the last poll. Cheap to copy, safe to read
@@ -89,6 +95,7 @@ namespace gamescope::Audio
 		bool bDetected = false;       // a node is currently being controlled (see eMethod for how it was found)
 		DetectionMethod eMethod = DetectionMethod::NotDetected;
 		int nMatchedNodes = 0;        // node(s) actually being controlled this poll (0 when not detected)
+		std::vector<int> vecMatchedNodeIds; // the actual node id(s) behind nMatchedNodes - lets the panel skip re-listing the primary stream in the "every other active stream" section below it
 		int nCandidatesAtWinningTier = 0; // how many distinct candidates tied at the winning strategy before the most-recent one was preferred (1 == unambiguous; >1 means the manual picker may be worth a look)
 		int nTotalAudioStreams = 0;   // every Stream/Output/Audio node currently on the system, matched or not - lets the panel say "nothing is playing anywhere yet" vs "N streams exist, none are this game"
 		bool bManualSelectionStale = false; // a manual override is set but didn't match any current stream (game not outputting audio right now, or the pick no longer applies)
@@ -147,10 +154,20 @@ namespace gamescope::Audio
 	// this again after a config (re)load.
 	void SetManualSelection( std::optional<std::string> sBinaryOrAppName );
 
-	// Queues a volume/mute change to be applied on the background thread.
+	// Queues a volume/mute change to be applied on the background thread,
+	// targeting whichever node(s) the *current* detection/manual-override
+	// result resolves as "the game" at apply time (VolumeState::
+	// vecMatchedNodeIds) - i.e. the panel's primary/first slider.
 	// flDisplayFraction is in display-curve units (see above), 0..1.5.
 	void RequestVolume( float flDisplayFraction );
 	void RequestMute( bool bMuted );
+
+	// Same as above, but targets one specific node id directly, regardless
+	// of what detection currently resolves - for the Audio panel's "every
+	// other active stream" rows, each of which controls its own node and
+	// is otherwise unrelated to game detection.
+	void RequestVolumeForNode( int nNodeId, float flDisplayFraction );
+	void RequestMuteForNode( int nNodeId, bool bMuted );
 
 	// ---- Parsing + candidate-selection helpers -----------------------------
 	// Pure functions with no subprocess/thread/filesystem involvement,
