@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace gamescope::Metrics
 {
@@ -98,4 +99,65 @@ namespace gamescope::Metrics
 	CpuState GetCpuState();
 	GpuState GetGpuState();
 	MediaState GetMediaState();
+
+	// ---- 60-second history for the System Monitor's Statistics tab
+	// (issue #40) ------------------------------------------------------------
+	// Sampled at this poll thread's own native cadence (kPollIntervalMs in
+	// SystemStats.cpp, 2Hz) -- 60s of history is only
+	// kStatsHistoryCapacity samples at that rate, so no downsampling is
+	// needed the way FpsDisplay.cpp's per-frame 240-sample buffer would
+	// need if grown to cover 60s (that buffer stays exactly as-is; see its
+	// own comment for why 60s is 15-60x longer than it was ever sized
+	// for). FPS is read directly off g_ulLastAppFrametimeNs (src/commit.cpp)
+	// on this same 2Hz cadence -- an independent, coarser sample of the
+	// same underlying per-commit value FpsDisplay.cpp's own buffer tracks,
+	// not derived from that buffer.
+	inline constexpr int kStatsHistorySampleIntervalMs = 500; // == kPollIntervalMs (SystemStats.cpp)
+	inline constexpr int kStatsHistoryCapacity = 120;         // 120 * 500ms = 60s
+
+	struct HistorySample
+	{
+		float flCpuLoad1 = 0.0f;
+		int   nGpuBusyPercent = 0;   // only meaningful if the snapshot's bGpuFound is true
+		float flGpuTempC = 0.0f;     // only meaningful if the snapshot's bHwmonFound is true
+		float flGpuPowerWatts = 0.0f; // only meaningful if the snapshot's bHwmonFound is true
+		float flFps = 0.0f;          // 0 if no game frame had committed yet at sample time
+	};
+
+	struct HistorySnapshot
+	{
+		// Oldest-to-newest, holding only the samples actually collected
+		// since collection last (re)started -- fewer than
+		// kStatsHistoryCapacity entries during warm-up. Never stretched or
+		// reinterpreted to fill the window; the caller is expected to plot
+		// exactly this many samples and leave the rest of a 60s-wide axis
+		// visibly blank (see the task's own "do not stretch a handful of
+		// samples across the full width" requirement).
+		std::vector<HistorySample> vecSamples;
+		bool bGpuFound = false;   // mirrors GpuState::bGpuFound as of the latest poll
+		bool bHwmonFound = false; // mirrors GpuState::bHwmonFound as of the latest poll
+	};
+
+	// Gates whether the background thread is appending to the 60-second
+	// history right now. This is issue #40's explicit requirement: the
+	// Statistics tab collects while it is the *selected* System Monitor
+	// sub-tab, independent of the settings overlay's own open/closed
+	// state -- not while the overlay happens to be visible. Call this
+	// unconditionally every frame with the current "is Statistics
+	// selected" value (FpsDisplay_AddLayer() does, from the persisted
+	// config field, so a persisted "statistics" selection resumes
+	// collecting from shortly after process start, before the panel is
+	// ever drawn).
+	//
+	// A false->true transition clears the history and starts a fresh
+	// warm-up -- re-selecting the tab after tabbing away always begins
+	// empty, never resumes a stale or gapped trace (explicit acceptance
+	// criterion). A true->false transition deliberately leaves the buffer
+	// alone (the *next* selection is what resets it); repeated calls with
+	// the same value are a cheap no-op (one atomic compare-exchange).
+	// Safe to call from any thread.
+	void SetHistoryCollectionEnabled( bool bEnabled );
+
+	// Non-blocking snapshot copy, safe every frame -- mirrors Get*State().
+	HistorySnapshot GetHistorySnapshot();
 }

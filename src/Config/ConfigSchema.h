@@ -309,6 +309,30 @@ namespace gamescope::config
         // back to Chrome.cpp's TiledDefaultPos()/measured opening size,
         // unchanged from #34's own default-placement behavior.
         std::map<std::string, PanelGeometry> panel_geometry;
+
+        // Issue #40 (System Monitor part 3/3): which sub-tab of the
+        // System Monitor panel is currently selected -- "modules" (the
+        // pre-#40 checkbox/slider content, issue #27/#28) or "statistics"
+        // (the new 60-second graphs). Process-level UI navigation state,
+        // same "global.json only, never profile/per-game" rule as every
+        // other field in this struct (panel_geometry above is the closest
+        // precedent: which window is where is not a per-game concept
+        // either). Deliberately NOT placed on FpsDisplaySettings alongside
+        // `placement`/`margin_vertical`/`margin_horizontal` (issue #27)
+        // despite living in the same panel -- those are genuinely
+        // per-game-overridable HUD behaviour, while which *tab* is open
+        // is pure navigation, not something a per-game override should
+        // ever need to touch.
+        //
+        // This field is also what makes gating Statistics-tab collection
+        // on tab *selection* rather than the panel's own open/closed
+        // state actually work end to end: FpsDisplay_AddLayer() reads it
+        // every composited frame (via SystemStats::SetHistoryCollectionEnabled(),
+        // independent of whether the System Monitor panel is currently
+        // drawn), so a user who leaves "statistics" selected keeps
+        // collecting from shortly after process start on the next launch,
+        // not from whenever they next happen to click the tab.
+        std::string system_monitor_tab = "modules"; // "modules" | "statistics"
     };
 
     // Toast notification system (this fork's own addition, see
