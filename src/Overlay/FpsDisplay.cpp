@@ -1664,7 +1664,7 @@ namespace gamescope
 
 	namespace
 	{
-		// Issue #29: one module's optional colour override -- a checkbox to
+		// Issue #29: one module's optional colour override -- a switch to
 		// toggle the override on/off (ColorEdit3 alone has no "unset" concept)
 		// plus, while on, a stock ImGui::ColorEdit3 (this issue's own
 		// acceptance criterion: "no custom widget needed here"). Unchecked
@@ -1687,7 +1687,7 @@ namespace gamescope
 			bool bCustom = oColor.has_value();
 			char szCheckLabel[32];
 			snprintf( szCheckLabel, sizeof( szCheckLabel ), "Custom %s colour", pszLabel );
-			if ( widgets::Checkbox( szCheckLabel, &bCustom ) )
+			if ( widgets::Toggle( szCheckLabel, &bCustom ) )
 			{
 				oColor = bCustom ? std::optional<int>( PackColorRgb( gamescope::palette::ToVec4( defaultColor ) ) ) : std::nullopt;
 				bChanged = true;
@@ -1992,11 +1992,15 @@ namespace gamescope
 	// full before/after control inventory.
 	static void DrawGeneralTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
-		// Widgets::Checkbox, not ::Toggle: this settings block IS the design
-		// guide's own named example of the "List rows" checkbox-row pattern
-		// ("FPS HUD's row toggles: 11x11 checkbox + label") -- see Widgets.h's
-		// Checkbox() comment.
-		bChanged |= widgets::Checkbox( "Show FPS counter", &cfg.enabled );
+		// Issue #60: was widgets::Checkbox here, citing the design guide's
+		// "List rows" checkbox-row pattern ("FPS HUD's row toggles: 11x11
+		// checkbox + label") -- that pattern predates #60's switches-everywhere
+		// decision and, on inspection, every row it names (this one included)
+		// is an independent binary on/off, not a multi-select list, so the
+		// checkbox visual carried no semantic weight the switch doesn't also
+		// carry. Swept to widgets::Toggle for consistency with every other
+		// on/off control in this panel.
+		bChanged |= widgets::Toggle( "Show FPS counter", &cfg.enabled );
 
 		ImGui::BeginDisabled( !cfg.enabled );
 
@@ -2055,7 +2059,7 @@ namespace gamescope
 		// stored here.
 		const bool bBackdropAvailable = ModuleBackdropAllowed( cfg );
 		ImGui::BeginDisabled( !bBackdropAvailable );
-		bChanged |= widgets::Checkbox( "Backdrop", &cfg.backdrop_enabled );
+		bChanged |= widgets::Toggle( "Backdrop", &cfg.backdrop_enabled );
 		ImGui::BeginDisabled( !( bBackdropAvailable && cfg.backdrop_enabled ) );
 		bChanged |= widgets::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
 		bChanged |= widgets::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
@@ -2082,8 +2086,8 @@ namespace gamescope
 		// (percentile stats), independently toggleable, sharing every other
 		// setting on the General tab (font size, backdrop, blend mode,
 		// opacity) rather than getting their own.
-		bChanged |= widgets::Checkbox( "Frametime graph", &cfg.graph_enabled );
-		bChanged |= widgets::Checkbox( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
+		bChanged |= widgets::Toggle( "Frametime graph", &cfg.graph_enabled );
+		bChanged |= widgets::Toggle( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
 
 		// Issue #29: per-module colour override -- ignored while Inverted is
 		// active (that mode's whole point is a guaranteed-legible pair no
@@ -2108,7 +2112,7 @@ namespace gamescope
 	static void DrawCpuTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
-		bChanged |= widgets::Checkbox( "CPU module (load, RAM)", &cfg.cpu_enabled );
+		bChanged |= widgets::Toggle( "CPU module (load, RAM)", &cfg.cpu_enabled );
 		ImGui::Spacing();
 		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "CPU", cfg.color_cpu, gamescope::palette::kAccentIcon );
@@ -2119,7 +2123,7 @@ namespace gamescope
 	static void DrawGpuTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
-		bChanged |= widgets::Checkbox( "GPU module (usage, VRAM, temp, power)", &cfg.gpu_enabled );
+		bChanged |= widgets::Toggle( "GPU module (usage, VRAM, temp, power)", &cfg.gpu_enabled );
 		ImGui::Spacing();
 		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "GPU", cfg.color_gpu, gamescope::palette::kAccentKnob );
@@ -2130,7 +2134,7 @@ namespace gamescope
 	static void DrawMediaTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
-		bChanged |= widgets::Checkbox( "Media module (now playing)", &cfg.media_enabled );
+		bChanged |= widgets::Toggle( "Media module (now playing)", &cfg.media_enabled );
 		ImGui::Spacing();
 		ImGui::BeginDisabled( cfg.blend_mode == "inverted" );
 		bChanged |= DrawModuleColorPicker( "Media", cfg.color_media, gamescope::palette::kAccentHandle );
