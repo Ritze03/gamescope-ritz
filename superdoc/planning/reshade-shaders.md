@@ -247,6 +247,24 @@ The subset of ReShade FX gamescope actually implements, verified against
   time to the full adaptive-brightness pipeline, to settle this empirically on target
   hardware/drivers rather than trust this read of the barrier code.
 
+  **Update (2026-08-21):** that spike ran — persistence confirmed empirically on
+  real hardware (RADV/AMD 7900 XTX), not just inferred from the barrier code, plus
+  two unrelated findings (a zero-uniform-buffer crash in `ReshadeEffectPipeline::init()`,
+  and a same-execute() recompile hazard if the implicit-output pass isn't last).
+  Full method and evidence in `superdoc/planning/DECISIONS.md` #14's update block.
+  Adaptive Brightness is now implemented on an experimental branch
+  (`reshade/Shaders/gamescope-ritz.fx`, `src/Overlay/PanelShaders.cpp`).
+
+  **Update (2026-08-22):** landed on master. Re-validated against a real `mpv`
+  client playing a genuinely time-varying (looping dark/bright) video through the
+  full pipeline, not just `vkcube` — luminance range compressed roughly 3× with
+  the effect on vs off. Full method/numbers in `DECISIONS.md` #14's second update
+  block. One gotcha worth keeping here: `gamescopectl screenshot`'s default
+  screenshot type (`base_plane_only`) bypasses `vulkan_composite()` — and
+  therefore ReShade — entirely; measuring ReShade's effect on a screenshot
+  requires explicitly passing type `3` (`full_composition`) as the command's
+  second argument.
+
 ## Q5 — Parameters to expose per effect
 
 See **Per-effect design** below for the concrete list; summarized here for reference:

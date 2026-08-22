@@ -147,6 +147,13 @@ namespace gamescope
 		SetRuntimeUniformBool( "vibrancy_protect_skin_tones", r.vibrancy.protect_skin_tones );
 		SetRuntimeUniformBool( "pre_sharpen_enabled", r.pre_sharpen.enabled );
 		SetRuntimeUniformFloat( "pre_sharpen_strength", *r.pre_sharpen.strength );
+		SetRuntimeUniformBool( "adaptive_brightness_enabled", r.adaptive_brightness.enabled );
+		SetRuntimeUniformFloat( "adaptive_brightness_target_luminance", r.adaptive_brightness.target_luminance );
+		SetRuntimeUniformFloat( "adaptive_brightness_adapt_up_speed", r.adaptive_brightness.adapt_up_speed );
+		SetRuntimeUniformFloat( "adaptive_brightness_adapt_down_speed", r.adaptive_brightness.adapt_down_speed );
+		SetRuntimeUniformFloat( "adaptive_brightness_min_gain", r.adaptive_brightness.min_gain );
+		SetRuntimeUniformFloat( "adaptive_brightness_max_gain", r.adaptive_brightness.max_gain );
+		SetRuntimeUniformFloat( "adaptive_brightness_strength", r.adaptive_brightness.strength );
 	}
 
 	static void EnsureConfigLoaded()
@@ -179,7 +186,7 @@ namespace gamescope
 		// PanelConfig-triggered profile/override change mid-session -- must
 		// apply immediately, not wait for the user to touch a widget: load
 		// the effect and push its full state now if anything is on.
-		if ( s_CachedSettings.reshade.vibrancy.enabled || s_CachedSettings.reshade.pre_sharpen.enabled )
+		if ( s_CachedSettings.reshade.vibrancy.enabled || s_CachedSettings.reshade.pre_sharpen.enabled || s_CachedSettings.reshade.adaptive_brightness.enabled )
 			EnsureEffectLoaded();
 		PushAllUniformsToShader();
 	}
@@ -254,14 +261,79 @@ namespace gamescope
 			ImGui::EndDisabled();
 	}
 
+	// M9 (spike #17, then #18): unlike Vibrancy/Pre-Sharpen, this effect
+	// carries persistent inter-frame state (texAdaptedLuminance in
+	// gamescope-ritz.fx). See that file's header comment for what the spike
+	// proved safe. Experimental -- see DECISIONS.md #14 and the spike
+	// writeup in reshade-shaders.md for why this stays flagged as such.
+	static void DrawAdaptiveBrightnessGroup()
+	{
+		auto &a = s_CachedSettings.reshade.adaptive_brightness;
+
+		if ( widgets::Toggle( "Adaptive Brightness##enabled", &a.enabled ) )
+		{
+			if ( a.enabled )
+				EnsureEffectLoaded();
+			SetRuntimeUniformBool( "adaptive_brightness_enabled", a.enabled );
+			QueueSave();
+		}
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+		ImGui::TextDisabled( "Experimental -- adapts exposure to scene brightness over time." );
+		ImGui::PopFont();
+
+		if ( !a.enabled )
+			ImGui::BeginDisabled();
+
+		if ( widgets::SliderFloat( "Target brightness", &a.target_luminance, 0.1f, 0.9f, "%.2f" ) )
+		{
+			SetRuntimeUniformFloat( "adaptive_brightness_target_luminance", a.target_luminance );
+			QueueSave();
+		}
+
+		if ( widgets::SliderFloat( "Brighten speed", &a.adapt_up_speed, 0.1f, 5.0f, "%.1fs" ) )
+		{
+			SetRuntimeUniformFloat( "adaptive_brightness_adapt_up_speed", a.adapt_up_speed );
+			QueueSave();
+		}
+
+		if ( widgets::SliderFloat( "Darken speed", &a.adapt_down_speed, 0.1f, 5.0f, "%.1fs" ) )
+		{
+			SetRuntimeUniformFloat( "adaptive_brightness_adapt_down_speed", a.adapt_down_speed );
+			QueueSave();
+		}
+
+		if ( widgets::SliderFloat( "Min gain", &a.min_gain, 0.5f, 1.0f, "%.2f" ) )
+		{
+			SetRuntimeUniformFloat( "adaptive_brightness_min_gain", a.min_gain );
+			QueueSave();
+		}
+
+		if ( widgets::SliderFloat( "Max gain", &a.max_gain, 1.0f, 2.0f, "%.2f" ) )
+		{
+			SetRuntimeUniformFloat( "adaptive_brightness_max_gain", a.max_gain );
+			QueueSave();
+		}
+
+		if ( widgets::SliderFloat( "Strength##adaptivebrightness", &a.strength, 0.0f, 1.0f, "%.2f" ) )
+		{
+			SetRuntimeUniformFloat( "adaptive_brightness_strength", a.strength );
+			QueueSave();
+		}
+
+		if ( !a.enabled )
+			ImGui::EndDisabled();
+	}
+
 	void PanelShaders_Draw()
 	{
 		EnsureConfigLoaded();
 
 		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
-		// see Overlay/Chrome.h -- position/size unchanged from M6.
+		// see Overlay/Chrome.h -- default size bumped taller for M9's
+		// Adaptive Brightness group (six extra rows); the window is user-
+		// resizable regardless, same as every other panel.
 		if ( !chrome::BeginPanelWindow( "SHADERS", chrome::PanelId::Shaders,
-			ImVec2( 520.0f, 64.0f ), ImVec2( 430.0f, 300.0f ) ) )
+			ImVec2( 520.0f, 64.0f ), ImVec2( 430.0f, 540.0f ) ) )
 			return;
 
 		// SDR-only gate (DECISIONS.md #15): a deliberate v1 limitation, not
@@ -284,6 +356,8 @@ namespace gamescope
 		DrawVibrancyGroup();
 		ImGui::Separator();
 		DrawPreSharpenGroup();
+		ImGui::Separator();
+		DrawAdaptiveBrightnessGroup();
 
 		if ( !bSdr )
 			ImGui::EndDisabled();

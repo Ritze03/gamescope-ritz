@@ -257,7 +257,7 @@ constraint in the ReShade manager itself is not being fixed — see
 ---
 
 ### 14. Adaptive Brightness is deferred; Vibrancy and Sharpness ship first
-**Status:** DECIDED
+**Status:** DECIDED — landed on master 2026-08-22, see updates below.
 
 **Why:** Adaptive Brightness needs persistent inter-frame texture state that
 no shipped effect in the repo exercises, so it carries real risk relative to
@@ -269,6 +269,158 @@ assumption before real engineering time is spent on it. It is explicitly off
 the critical path for v1.
 
 **Source:** `superdoc/planning/reshade-shaders.md`; `superdoc/planning/SPEC.md`.
+
+---
+
+**Update (2026-08-21) — M9a spike result: persistence confirmed, plus two
+unrelated findings.** Run on an experimental branch (issues #17/#18), on real
+hardware (RADV/AMD Radeon RX 7900 XTX), not inferred from reading barrier
+code.
+
+**Method:** a throwaway `.fx` (never shipped) with a persistent 1×1 `R32F`
+texture, incremented one way or another each real frame, read back the
+following frame and displayed as a brightness ramp. Launched via
+`--reshade-effect` against `vkcube` (renamed to a binary name outside
+`lsfg-vk`'s per-game profile list — `vkcube`'s own default profile crashes
+the process even with `DISABLE_LSFGVK=1` set on the parent, since gamescope's
+child-spawn passes env through but the profile still matches on `exe` name).
+Screenshots taken via `gamescopectl screenshot` at timed intervals with a
+temporary `HOME`/`XDG_CONFIG_HOME`, decoded with Pillow.
+
+**Result: persistence survives.** A `RenderTarget` texture's contents
+carry over from one `vulkan_composite()`/`execute()` call to the next,
+confirmed two ways: (a) a value written one frame and read the next produced
+a visibly progressing, wrapping ramp across three screenshots taken seconds
+apart (88 → 195 → 139, consistent with a mod-64 cycle), with the pipeline
+compiling exactly once (no reinit destroying the texture); (b) later, in the
+real implementation, a synthetic time-varying brightness signal produced a
+gain that was demonstrably *not* a constant multiplier (the with/without
+luminance ratio varied 9.26→1.44 across a sweep) — proof the persisted,
+self-sampled `texAdaptedLuminance` value genuinely evolves frame to frame.
+
+**Two unrelated findings surfaced while isolating this, both worth recording
+so nobody re-discovers them the hard way:**
+
+- **A shader declaring zero `uniform` variables crashes RADV during pipeline
+  creation**, regardless of what its passes do. Root cause:
+  `m_module->total_uniform_size` is 0, so `ReshadeEffectPipeline::init()`
+  calls `vkCreateBuffer` with `size = 0` for the uniform buffer
+  (`reshade_effect_manager.cpp` "Create Uniform Buffer" block) — invalid per
+  the Vulkan spec, and RADV segfaults on it rather than erroring cleanly.
+  Confirmed by isolation: two structurally identical throwaway shaders,
+  one with a (used or unused) `uniform` declared and one without, only the
+  uniform-free one crashed; adding a dummy `uniform` to the *same*
+  self-sampling shader that had just crashed made it run clean. **This is a
+  non-issue for any real effect** — every effect in `gamescope-ritz.fx`
+  declares several uniforms — but is a genuine latent crash if anyone ever
+  authors a uniform-free ReShade effect for this fork. Not fixed here (out
+  of scope for this experimental branch); worth a defensive check in
+  `reshade_effect_manager.cpp` (skip/guard the buffer create when
+  `total_uniform_size == 0`) if this ever bites a real effect.
+- **Self-sampling (a pass reading, via a sampler, the very texture that is
+  that pass's own `RenderTarget`) does not crash and reads sane values**,
+  once the zero-uniform issue above is out of the way. This was initially
+  mistaken for the crash cause; isolating the two variables separately
+  showed self-sampling alone is fine on this driver. This directly
+  simplified the Adaptive Brightness implementation: no ping-pong/relay
+  buffers needed, just one persistent texture, read-blend-write in a single
+  pass — the standard pattern real ReShade auto-exposure community shaders
+  already use.
+- **(Carried over, still true, not new.)** The pass with no explicit
+  `RenderTarget` (the implicit default output) must be the *last* pass in a
+  technique's pass list, or `ReshadeEffectKey`'s single-entry cache goes
+  unstable and the pipeline recompiles every single frame instead of caching
+  once — confirmed by counting `"Compiling pass"` log lines (1 compile event
+  with the implicit-output pass last across an 8s run; continuous
+  recompilation with it reordered earlier). `gamescope-ritz.fx`'s own header
+  comment had already anticipated this ("if it's the new last pass") before
+  it was empirically confirmed here.
+
+**Resolution changes:** unchanged from the original risk note below — a
+resize still creates a new `ReshadeEffectKey` (different `bufferWidth`/
+`bufferHeight`), rebuilding the pipeline from scratch and resetting
+`texAdaptedLuminance` to its cleared (zero) initial state. This is accepted,
+not fixed, consistent with the original risk assessment. Issue #20's fix
+(`FrameInfo_t::bBaseLayerReshaded`) is directly relevant here and was
+double-checked: on the preemptive-upscale path, ReShade — and therefore
+Adaptive Brightness's adaptation state — only updates once per real frame
+(the second, post-upscale `vulkan_composite()` call skips ReShade entirely),
+so there is no double-counting or resolution-mismatch hazard from that path;
+the only resolution-driven reset is the ordinary one described above.
+
+**Consequence: M9b (implementation) proceeded** on the same experimental
+branch — see `reshade/Shaders/gamescope-ritz.fx` and
+`src/Overlay/PanelShaders.cpp`. Stays experimental/unmerged pending further
+real-world (non-`vkcube`) testing; see `SPEC.md` M9a/M9b for status.
+
+---
+
+**Update (2026-08-22) — M9b landed on master; validated against real,
+time-varying content, not just `vkcube`.** The experimental branch's own
+verdict was honest that it had "validated only against vkcube with a
+synthetic pulse, never against a real game's natural brightness variation."
+This pass closes that gap before merge.
+
+**Rebase notes:** `reshade/Shaders/gamescope-ritz.fx`'s reserved M9 section
+(the file's own header comment promised appending needed no changes above
+it) held exactly as designed — the three-pass technique, the
+`texPreSharpenOut` named-target change, and all seven `source`-tagged
+uniforms carried over unmodified from the experimental branch. The Shaders
+panel (`src/Overlay/PanelShaders.cpp`) had been restyled since the branch
+was cut (M8 part 2's `widgets::Toggle`/`widgets::SliderFloat`, M8 part 3's
+`chrome::BeginPanelWindow`) — `DrawAdaptiveBrightnessGroup()` was rewritten
+against the current widget API rather than reintroducing the old raw-ImGui
+styling; `ConfigSchema.h`'s `adaptive_brightness` fields needed zero changes,
+having been reserved with the exact field names/ranges the branch already
+used.
+
+**Validation method:** a 24s synthetic-but-really-decoded MP4 (`ffmpeg`
+`testsrc2` alternating `eq=brightness=-0.45`/`+0.35` in 6s segments, looped)
+played by a real `mpv` client through the full pipeline — Wayland → Xwayland
+→ gamescope base layer → ReShade's 3-pass technique → FSR upscale →
+composite — at `-W 1920 -H 1080 -w 1280 -h 960 -S stretch --filter fsr
+--sharpness 5`, `DISABLE_LSFG=1`, a temporary `XDG_CONFIG_HOME` pre-seeded
+with `adaptive_brightness.enabled`. This is a materially different (and
+more honest) test than the branch's own vkcube-plus-synthetic-pulse: real
+decode timing, real scene-cut jumps, real upscale/compositing in the loop.
+`gamescopectl screenshot` was used with **screenshot type 3
+(`full_composition`)**, not the default type 1 (`base_plane_only`) —
+confirmed by reading `steamcompmgr.cpp`'s screenshot handler that
+`base_plane_only` repaints the focused window at render resolution via
+`paint_window()`/`vulkan_screenshot()` directly, bypassing
+`vulkan_composite()` entirely, which is where ReShade actually runs; using
+the default type would have silently screenshotted *pre-ReShade* content.
+Worth remembering next time this needs re-checking.
+
+**Result:** eight `full_composition` screenshots spaced 3s apart (one full
+24s loop), mean luminance measured with ImageMagick (`-colorspace Gray
+-format "%[fx:mean]"`):
+
+| | dark-scene mean | bright-scene mean | range | ratio |
+|---|---|---|---|---|
+| Adaptive Brightness off | 0.605 | 0.864 | 0.259 | 1.43× |
+| Adaptive Brightness on (up/down speed 0.5s, target 0.5) | 0.681–0.698 | 0.746–0.768 | ~0.08 | ~1.1× |
+
+The on/off luminance range compresses roughly 3× on genuinely varying real
+content, in the direction the design predicts (both scenes pulled toward
+the shader's internal 5×5-grid-measured target, not toward the same
+full-frame mean ImageMagick measures — the two disagree in absolute value
+by design, only the *compression* is the claim being checked here). Compile
+log ("Compiling pass") stayed at exactly 4 lines (one per pass) across the
+whole sequence, both with the effect on and off — confirming M9b's own
+per-pass-uniform-gating design still holds and no per-frame recompile
+regressed back in during the M8 restyle.
+
+**Ready-to-ship assessment:** ready to ship as the same "experimental"-
+labeled effect the branch shipped it as (the Shaders panel group still says
+so) — the persistence/self-sampling/recompile risks are real-hardware-
+confirmed and the adaptation direction is now confirmed against real,
+scene-cut-driven content, not just a synthetic pulse. Still provisional in
+the sense M9a/M9b always were: only tested against one driver (RADV/AMD),
+one synthetic-content video, and a `-w 1280 -h 960` render size — not
+against an actual game's organic brightness variation, and not across
+vendors. Resolution-change reset-to-zero (documented above) is accepted,
+unchanged, un-fixed behaviour, not a regression.
 
 ---
 
