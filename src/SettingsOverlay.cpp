@@ -1448,7 +1448,11 @@ namespace gamescope
 				}
 
 				case QueuedInputEvent::Kind::MouseWheel:
-					io.AddMouseWheelEvent( (float)ev.x, (float)ev.y );
+					// Inverted on both axes: libinput's wheel sign is the
+					// opposite of what feels right in the overlay.
+					// ponytail: hardcoded rather than a setting -- make it
+					// one if anyone actually wants the other direction.
+					io.AddMouseWheelEvent( -(float)ev.x, -(float)ev.y );
 					break;
 			}
 		}
