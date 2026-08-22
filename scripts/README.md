@@ -1,5 +1,45 @@
 # Gamescope Script/Config Files
 
+## Building gamescope-ritz
+
+`build-gamescope-ritz.sh` is the single entry point for building — one command
+instead of remembering the meson invocation or rediscovering this repo's
+submodule/test quirks. `install-gamescope-ritz.sh` and
+`update-gamescope-ritz.sh` (below) call the same shared build helpers in
+`gamescope-ritz-common.sh`, so all three stay in sync.
+
+```sh
+scripts/build-gamescope-ritz.sh              # release -> build-release/ (default)
+scripts/build-gamescope-ritz.sh --debug       # debug   -> build/
+scripts/build-gamescope-ritz.sh --test        # release build, then `meson test` (63/63)
+scripts/build-gamescope-ritz.sh --clean --jobs 8
+```
+
+Options: `--release` (default), `--debug`, `--test`, `--clean`, `--jobs N`,
+`-h`/`--help` (full details in the script's header comment).
+
+- **Two build trees, on purpose.** `build-release/`
+  (`--buildtype=release -Doptimization=3 -Db_lto=true`, ~5.4MB binary) and
+  `build/` (`--buildtype=debug`, ~45MB binary) never overwrite each other.
+  This project once lost real time chasing a VRR bug that only reproduced on
+  an unoptimised `-O0` binary — which tree you're running should always be
+  obvious, so the script always prints buildtype, build dir, and a warning
+  banner on debug builds.
+- **Submodules.** If `src/reshade`, `subprojects/wlroots`,
+  `libdisplay-info`, `libliftoff`, or `SPIRV-Headers` aren't checked out yet,
+  the script detects it and runs `git submodule update --init --recursive`
+  before configuring, instead of letting meson fail with a confusing
+  "Include dir reshade/source does not exist".
+- **Tests.** `-Denable_tests=false` (the meson default override some briefs
+  ask for) and passing tests are contradictory — you can't run a suite that's
+  disabled. `--test` does the sane thing: configures with
+  `-Denable_tests=true`, builds the test binary, and runs `meson test`.
+- **Never runs as root** — a root-owned build directory would silently break
+  a developer's normal non-root `meson compile`/`ninja` workflow afterwards.
+- A build directory that can't be reconfigured cleanly (incompatible cached
+  options) is wiped and reconfigured automatically; `--clean` forces this
+  up front.
+
 ## Installing and updating gamescope-ritz
 
 `install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the
