@@ -655,8 +655,17 @@ namespace gamescope::chrome
 		// itself -- see the "##body" child BeginChild() below for why. Scroll
 		// (wheel or scrollbar-grip drag alike) lives entirely on that child
 		// now.
+		// Issue #42: NoMove -- without it, stock ImGui treats a title-less
+		// window (NoTitleBar, set above) specially: with no title-bar hit
+		// region of its own to restrict dragging to, it falls back to making
+		// the *entire* window body draggable-to-move on left-click. The
+		// custom title bar's own drag zone (DrawTitleBar()'s
+		// StartMouseMovingWindow() call) invokes the same internal primitive
+		// directly, not gated on this flag, so it's unaffected -- this only
+		// removes the unintentional second, whole-body path to the same
+		// move.
 		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMove;
 		if ( bCollapsed )
 			windowFlags |= ImGuiWindowFlags_NoResize;
 		else if ( bPriming )
