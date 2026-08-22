@@ -172,8 +172,13 @@ namespace gamescope
 	// value -- u_blur_radius=21 selects the table whose offsets extend to
 	// ~20.4px (the "radius<=21" branch), landing almost exactly on the design
 	// guide's specified blur(20-22px). Solving (blurRadius*2)-1=21 gives
-	// blurRadius=11, so that's the constant used below.
-	static constexpr int k_nOverlayBlurRadius = 11;
+	// blurRadius=11, so that's the constant used below -- now as the CEILING
+	// of the range OverlaySettings::background_blur (0..1, General tab) maps
+	// onto, rather than a fixed value: background_blur=1.0 reproduces the
+	// original design-matched ~20.4px blur exactly, background_blur=0.0
+	// means no blur pass is requested at all (see the radius computation
+	// below), and everything in between scales linearly.
+	static constexpr int k_nMaxOverlayBlurRadius = 11;
 
 	// ponytail: this blurs the *entire* base layer uniformly while the
 	// overlay is visible, not a per-window region sampled from directly
@@ -261,6 +266,29 @@ namespace gamescope
 	static float s_flCurrentAlpha = 0.0f;
 
 	static uint64_t s_ulLastFrameTimeNanos = 0;
+
+	// Definition of the live blur/darkening state declared in
+	// SettingsOverlay.h -- see that header's comment for the full seed-once/
+	// push-on-edit contract this follows (Palette.h's/Notifications.h's
+	// g_LiveTheme shape).
+	BackgroundLiveTheme g_BackgroundLiveTheme;
+
+	static bool s_bBackgroundLiveThemeLoaded = false;
+
+	static void EnsureBackgroundLiveThemeLoaded()
+	{
+		if ( s_bBackgroundLiveThemeLoaded )
+			return;
+		s_bBackgroundLiveThemeLoaded = true;
+		// Seeded straight from global.json -- this only ever needs to run
+		// once (PanelConfig.cpp's DrawGeneralTab() keeps g_BackgroundLiveTheme
+		// current after this), and background_blur/background_darkening are
+		// process-level/global.json-only fields (ConfigSchema.h's
+		// OverlaySettings comment).
+		const config::OverlaySettings &o = config::LoadGlobal().overlay;
+		g_BackgroundLiveTheme.flBlur = o.background_blur;
+		g_BackgroundLiveTheme.flDarkening = o.background_darkening;
+	}
 
 	// This file's own ImGui context. Held explicitly rather than relying on
 	// whatever happens to be globally current: there are TWO ImGui contexts in
@@ -780,9 +808,42 @@ namespace gamescope
 	// ImGuiIO -- see its own definition for the full comment.
 	static void DrainInputQueue();
 
+	// Caches the CTM blob background_darkening builds (see
+	// SettingsOverlay_AddLayer() below) so a steady-state frame -- the
+	// overwhelmingly common case once the fade-in finishes -- reuses the
+	// same shared_ptr instead of asking the backend for a fresh blob every
+	// single frame (a real drmModeCreatePropertyBlob() ioctl + a matching
+	// free of the old one on the DRM backend; see BackendBlob's own "no-op
+	// on non-DRM backends" comment in backend.h for why this is cheap
+	// everywhere else but still worth not doing 60+ times a second on the
+	// target this ships to). Only rebuilds when flStrength has visibly
+	// moved since the last call -- e.g. during the fade in/out ramp -- via a
+	// coarser-than-float-epsilon threshold, since nothing downstream can
+	// tell a <1/512 change in dim strength apart anyway.
+	static std::shared_ptr<gamescope::BackendBlob> GetDarkeningCtmBlob( float flStrength )
+	{
+		static std::shared_ptr<gamescope::BackendBlob> s_pBlob;
+		static float s_flCachedStrength = -1.0f;
+
+		if ( !s_pBlob || std::fabs( flStrength - s_flCachedStrength ) > ( 1.0f / 512.0f ) )
+		{
+			const float k = 1.0f - flStrength;
+			s_pBlob = GetBackend()->CreateBackendBlob( glm::mat3x4
+			{
+				k, 0, 0, 0,
+				0, k, 0, 0,
+				0, 0, k, 0
+			} );
+			s_flCachedStrength = flStrength;
+		}
+
+		return s_pBlob;
+	}
+
 	void SettingsOverlay_AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		UpdateFadeAlpha();
+		EnsureBackgroundLiveThemeLoaded();
 
 		// Save/restore the globally-current ImGui context across this entire
 		// pass (see s_pImguiContext). Covers DrainInputQueue() below too, which
@@ -908,14 +969,19 @@ namespace gamescope
 		layer->hdr_metadata_blob = nullptr;
 		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
 
-		// EXPERIMENTAL: request the compositor's existing blur-behind pass
-		// (see k_nOverlayBlurRadius's comment above for why this reuses
-		// Steam's own blurLayer0 primitive instead of a new one). Ramp the
-		// radius by the same s_flCurrentAlpha the panel layer's own opacity
-		// just used above, so the blur fades in/out in lockstep with the
-		// panels instead of snapping to full strength the instant the fade
-		// starts -- otherwise a hard-edged full blur would "pop" in while the
-		// glass panels are still fading up.
+		// Request the compositor's existing blur-behind pass (see
+		// k_nMaxOverlayBlurRadius's comment above for why this reuses Steam's
+		// own blurLayer0 primitive instead of a new one). The radius is
+		// General tab's background_blur (0..1, g_BackgroundLiveTheme.flBlur)
+		// linearly mapped onto 0..k_nMaxOverlayBlurRadius -- flBlur=0 means
+		// no blur pass is requested at all (nOverlayBlurRadius stays 0 below,
+		// so blurLayer0/blurRadius/useFSRLayer0/useNISLayer0 are left
+		// untouched), not a minimum blur. On top of that, ramp by the same
+		// s_flCurrentAlpha the panel layer's own opacity just used above, so
+		// the blur fades in/out in lockstep with the panels instead of
+		// snapping to full strength the instant the fade starts -- otherwise
+		// a hard-edged full blur would "pop" in while the glass panels are
+		// still fading up.
 		//
 		// vulkan_composite() picks exactly one of {FSR, NIS, blur, plain
 		// blit} per call (rendervulkan.cpp) -- if the base layer's own
@@ -927,7 +993,8 @@ namespace gamescope
 		// now-blurred base layer -- upscale sharpness doesn't matter once
 		// it's blurred anyway).
 		const int nOverlayBlurRadius = std::clamp(
-			(int)std::lround( k_nOverlayBlurRadius * s_flCurrentAlpha ), 0, k_nOverlayBlurRadius );
+			(int)std::lround( k_nMaxOverlayBlurRadius * g_BackgroundLiveTheme.flBlur * s_flCurrentAlpha ),
+			0, k_nMaxOverlayBlurRadius );
 
 		if ( nOverlayBlurRadius > 0 )
 		{
@@ -935,6 +1002,43 @@ namespace gamescope
 			pFrameInfo->blurRadius = std::max( pFrameInfo->blurRadius, nOverlayBlurRadius );
 			pFrameInfo->useFSRLayer0 = false;
 			pFrameInfo->useNISLayer0 = false;
+		}
+
+		// background_darkening (General tab, g_BackgroundLiveTheme.flDarkening):
+		// a *native-compositor* dim, distinct from opacity_background's
+		// ImGui-drawn flat veil (Overlay/Chrome.cpp's DrawBackgroundVeil() --
+		// a rect blended into this file's own offscreen overlay texture,
+		// composited on top of everything at this layer's own alpha).
+		// Instead this multiplies the base game layer's (layers[0]) own
+		// pixels directly in the composite shader, via FrameInfo_t::
+		// Layer_t::ctm -- the exact primitive steamcompmgr.cpp already uses
+		// for e.g. its 709->2020 and mura-correction color matrices
+		// (composite.h: `color.rgb = vec4(color.rgb,1) * u_ctm[i]`), so this
+		// is genuinely available and genuinely distinct in mechanism, not a
+		// reimplementation of the veil under a different name -- see this
+		// file's header comment / PanelConfig.cpp's General tab tooltip for
+		// why both controls stay.
+		//
+		// Same s_flCurrentAlpha ramp as the blur above, so darkening also
+		// fades in/out with the overlay rather than snapping.
+		//
+		// ponytail: steamcompmgr.cpp's own ctm assignments are always a
+		// direct overwrite (nullptr or exactly one blob), never composed
+		// with another matrix already on the layer -- so this follows that
+		// same precedent instead of inventing matrix composition nothing
+		// else in the codebase does. If layers[0] already carries a
+		// meaningful ctm (HDR wide-gamut conversion, mura correction), this
+		// intentionally backs off rather than risk silently corrupting that
+		// color-managed pipeline for a cosmetic dim -- darkening simply has
+		// no visible effect in that (uncommon, non-SDR-desktop) case.
+		const float flDarkenStrength = std::clamp(
+			g_BackgroundLiveTheme.flDarkening * s_flCurrentAlpha, 0.0f, 1.0f );
+
+		if ( flDarkenStrength > 0.0f && pFrameInfo->layers.count() > 0 )
+		{
+			FrameInfo_t::Layer_t &baseLayer = pFrameInfo->layers.get( 0 );
+			if ( !baseLayer.ctm )
+				baseLayer.ctm = GetDarkeningCtmBlob( flDarkenStrength );
 		}
 	}
 

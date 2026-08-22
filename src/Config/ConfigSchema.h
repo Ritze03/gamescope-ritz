@@ -125,9 +125,9 @@ namespace gamescope::config
         // notification_scale/opacity_notifications are read live by
         // Notifications.cpp (gamescope::Notifications::g_LiveTheme, pushed
         // by PanelConfig.cpp's PushLiveTheme() alongside the Chrome fields);
-        // background_blur/background_darkening are only ever read by
-        // SettingsOverlay.cpp, a sibling milestone which this worker does
-        // not own and does not touch).
+        // background_blur/background_darkening are read live by
+        // SettingsOverlay.cpp (gamescope::g_BackgroundLiveTheme, pushed the
+        // same way) -- see SettingsOverlay.h's comment).
         float dock_scale = 1.0f;                 // 0.85..1.5 - Chrome.cpp's DrawDock() button/gap/padding scale. Spec §1 note: keep the 54px dock button >=44px physical, hence the 0.85 floor (54*0.85 ~= 46px).
         float display_scale = 1.0f;              // 0.8..1.4 - overall UI scale. Drives ImGuiIO::FontGlobalScale only (see Chrome.cpp's EnsureLiveThemeLoaded() comment for why that's the deliberate ceiling: the font atlas in Fonts.cpp is baked at fixed pixel sizes, so text softens above ~1.4x instead of resampling crisply, and every hand-drawn widget geometry in Widgets.cpp/Chrome.cpp is spec-exact fixed pixels that does not scale with it - full geometric rescaling would mean rebuilding the atlas per scale step and re-deriving every hardcoded constant, out of scope for this pass).
         float notification_scale = 1.0f;         // 0.6..1.6 - Notifications.cpp's DrawToasts() GetUiScale(): scales toast card size/font/padding/slide distance.
@@ -135,8 +135,8 @@ namespace gamescope::config
         float opacity_windows = 0.88f;           // 0.3..1 - panel window/popup surface alpha, spec §1 `surface` default (rgba(9,10,12,.88)).
         float opacity_dock = 0.86f;              // 0.3..1 - dock container alpha, spec §8 default.
         float opacity_notifications = 0.9f;      // 0.3..1 - Notifications.cpp's DrawToasts() GetUiOpacity(): multiplies each toast card's bg/border/accent/text alpha uniformly.
-        float background_blur = 0.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0, already wired - see SettingsOverlay.cpp's nOverlayBlurRadius). Consumed by SettingsOverlay.cpp (sibling milestone; that file is off-limits here, see this worker's task scope) - field/default/range only.
-        float background_darkening = 0.0f;       // 0..1 - a native-compositor dim multiply on the game layer, meant to sit alongside background_blur in whatever consumes FrameInfo_t (SettingsOverlay.cpp, sibling milestone). Field/default/range only - not yet consumed anywhere.
+        float background_blur = 0.0f;            // 0..1 - drives FrameInfo_t::blurRadius (via blurLayer0), linearly mapped onto 0..k_nMaxOverlayBlurRadius in SettingsOverlay.cpp (0 == no blur pass requested at all, not a minimum blur).
+        float background_darkening = 0.0f;       // 0..1 - a native-compositor dim multiply on the game layer (FrameInfo_t::Layer_t::ctm on layers[0]), SettingsOverlay.cpp's GetDarkeningCtmBlob() - distinct in mechanism from opacity_background's ImGui-drawn veil above (both stay: PanelConfig.cpp's General tab labels them separately, "Background veil" vs "Background Effects").
 
         // Whether the brief startup announcement (animated "gamescope-ritz is
         // active" toast, with the Ctrl+Shift+O hint) plays on process start.

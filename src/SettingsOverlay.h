@@ -14,6 +14,28 @@ struct FrameInfo_t;
 
 namespace gamescope
 {
+	// Live-tunable background blur/darkening (window-chrome overhaul's
+	// General tab, Config/ConfigSchema.h's OverlaySettings::background_blur /
+	// background_darkening) -- same seed-once/push-on-edit shape as
+	// Overlay/Palette.h's gamescope::palette::g_LiveTheme and
+	// Overlay/Notifications.h's gamescope::Notifications::g_LiveTheme:
+	// process-level and global.json-only (ApplyProfile() never touches
+	// `overlay`, so a per-game override or applied profile never changes
+	// these), seeded once from global.json by this file's own
+	// EnsureBackgroundLiveThemeLoaded() (SettingsOverlay.cpp), then written
+	// straight into by Overlay/PanelConfig.cpp's DrawGeneralTab() on every
+	// slider edit -- that bypass is what makes the change visible the very
+	// next frame instead of waiting on a config-generation bump that
+	// General-tab edits never trigger. SettingsOverlay.cpp is the only
+	// reader (see SettingsOverlay_AddLayer()'s blur-radius/darkening-ctm
+	// consumers).
+	struct BackgroundLiveTheme
+	{
+		float flBlur = 0.0f;      // OverlaySettings::background_blur, 0..1
+		float flDarkening = 0.0f; // OverlaySettings::background_darkening, 0..1
+	};
+	extern BackgroundLiveTheme g_BackgroundLiveTheme;
+
 	// Called once per paint_all(), on the steamcompmgr thread, right before the
 	// frame is handed to the backend's Present(). If the overlay is visible or
 	// still fading out, this draws the settings overlay's panels/dock into an
