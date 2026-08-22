@@ -139,6 +139,23 @@ namespace gamescope::config
     void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot );
     void EnqueueProfileWrite( std::string sSanitizedName, Settings settings );
 
+    // Issue #35: writes `overlay` (only) to global.json, without the caller
+    // needing to hold a fresh copy of every other section - merges onto the
+    // freshest full Settings this process has seen (CurrentFullSettings(),
+    // ConfigManager.cpp), the same "don't clobber a section you don't own"
+    // protection EnqueueRoutedWrite() already gives `overlay` itself,
+    // pointed the other way.
+    void EnqueueOverlayWrite( const OverlaySettings &overlay );
+
+    // Issue #35: the call Chrome.cpp's panel-geometry autosave actually
+    // makes - patches a single PanelGeometry entry onto the freshest known
+    // `overlay` in-memory (see ConfigManager.cpp's CurrentOverlaySettings())
+    // and writes that, so Chrome.cpp never needs to keep its own copy of
+    // every other General-tab overlay field just to save one panel's
+    // position/size. sPanelKey is a stable per-panel string (see
+    // ConfigSchema.h's PanelGeometry comment for why not the PanelId enum).
+    void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry );
+
     // Blocks until every currently-queued write has been flushed to disk. For
     // orderly shutdown and for tests - not for use on the steamcompmgr thread.
     void FlushPendingWrites();

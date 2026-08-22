@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <optional>
 #include <string>
 
@@ -133,6 +134,24 @@ namespace gamescope::config
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
     };
 
+    // Issue #35: one panel window's saved screen position/size, restored on
+    // the next launch (Overlay/Chrome.cpp's BeginPanelWindow()). Keyed by a
+    // stable string on OverlaySettings::panel_geometry below, deliberately
+    // NOT Chrome.h's PanelId enum ordinal/name -- that enum has already been
+    // renamed once (issue #27: Fps -> SystemMonitor) and may be again; a key
+    // that survives a rename means an old config's entry for a since-renamed
+    // panel is simply never looked up again (harmless -- see
+    // panel_geometry's own comment) instead of a stale ordinal silently
+    // landing on the wrong panel, or a schema-version bump being needed for
+    // what is otherwise a purely additive, non-breaking change.
+    struct PanelGeometry
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+    };
+
     struct OverlaySettings
     {
         // Motion timing TBD per SPEC.md Feature 1 - null until picked.
@@ -221,6 +240,23 @@ namespace gamescope::config
         // toggling it carries none of capture_all_keyboard_input's release-
         // routing risk.
         bool keyboard_navigation_enabled = true;
+
+        // Issue #35: per-panel window position/size, restored on next
+        // launch - replaces the "remembered only for the life of the ImGui
+        // context" behavior ImGuiCond_FirstUseEver alone gives (Chrome.h's
+        // IsPanelOpen() comment). Process-level UI preference, same
+        // "global.json only, never profile/per-game" rule as every other
+        // field in this struct - a window's screen position is about the
+        // player's physical display setup, not the game running. Keyed by
+        // a stable string (see PanelGeometry's own comment above); an entry
+        // for a panel key this build no longer recognizes parses into the
+        // map same as any other and is simply never looked up by
+        // Chrome.cpp, not treated as a schema error - so one stale/renamed
+        // key never costs the other panels their saved geometry. A panel
+        // with no entry here (fresh install, or never moved/resized) falls
+        // back to Chrome.cpp's TiledDefaultPos()/measured opening size,
+        // unchanged from #34's own default-placement behavior.
+        std::map<std::string, PanelGeometry> panel_geometry;
     };
 
     // Toast notification system (this fork's own addition, see

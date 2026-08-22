@@ -47,6 +47,8 @@
 
 #include <cmath>
 #include <cstddef>
+#include <map>
+#include <string>
 
 // ImVec2 operator+/- (used below by the status-dot glow, dock top-edge
 // marker, hint-line shadow offset, and the custom title bar's own layout)
@@ -311,6 +313,54 @@ namespace gamescope::chrome
 		ImVec2 s_lastExpandedSize[(size_t)PanelId::Count] = {};
 		bool s_bPanelWasCollapsedLastFrame[(size_t)PanelId::Count] = {};
 
+		// Issue #35: persisted window position/size, keyed by a stable string
+		// per panel rather than PanelId's own ordinal -- see ConfigSchema.h's
+		// PanelGeometry comment for why (the enum has already been renamed
+		// once, issue #27). An id this switch doesn't recognize (e.g. a new
+		// panel added by a sibling worker before this file's own next merge)
+		// returns "" -- TiledDefaultPos()/OpeningSize() below simply never
+		// find a map entry for that key, and the write side below never
+		// queues a write under it either, so an unrecognized id degrades to
+		// "geometry persistence not wired up for this panel yet", never a
+		// crash or a misdirected save.
+		const char *PanelKey( PanelId id )
+		{
+			switch ( id )
+			{
+				case PanelId::Display:       return "display";
+				case PanelId::Shaders:       return "shaders";
+				case PanelId::SystemMonitor: return "system_monitor";
+				case PanelId::Audio:         return "audio";
+				case PanelId::Config:        return "config";
+				default:                     return "";
+			}
+		}
+
+		// Loaded once by EnsureLiveThemeLoaded() below (config::Settings::
+		// overlay.panel_geometry, ConfigSchema.h) -- every entry this
+		// process's config had on disk at startup, regardless of whether
+		// this build's PanelKey() set still has a case for that string (see
+		// PanelKey()'s own comment: an unrecognized key is simply never
+		// looked up again, not filtered out here).
+		std::map<std::string, config::PanelGeometry> s_SavedGeometry;
+
+		// Geometry-autosave debounce state (BeginPanelWindow()'s write side,
+		// below) -- s_bGeometryTracked marks whether a panel has drawn at
+		// least one expanded frame yet this process, so its first-ever-shown
+		// pos/size (a restored geometry, or TiledDefaultPos()/OpeningSize()'s
+		// own computed default) counts as already "saved" and never queues a
+		// write just for having been drawn once. s_lastFramePos/Size hold
+		// last frame's values (to detect "held still for two frames running"
+		// -- an active drag/resize never does), s_lastSavedPos/Size hold
+		// what's currently reflected in (or already queued to) config, so a
+		// settled value already saved doesn't get queued again every
+		// subsequent still frame.
+		bool s_bGeometryTracked[(size_t)PanelId::Count] = {};
+		ImVec2 s_lastFramePos[(size_t)PanelId::Count] = {};
+		ImVec2 s_lastFrameSize[(size_t)PanelId::Count] = {};
+		ImVec2 s_lastSavedPos[(size_t)PanelId::Count] = {};
+		ImVec2 s_lastSavedSize[(size_t)PanelId::Count] = {};
+
 		// Sensible non-overlapping default positions, one fixed slot per
 		// PanelId, replacing whatever position each panel's own call site
 		// used to hardcode (Chrome.h's BeginPanelWindow() comment explains
@@ -327,6 +377,22 @@ namespace gamescope::chrome
 		// without any extra bookkeeping here.
 		ImVec2 TiledDefaultPos( PanelId id )
 		{
+			// Issue #35: a saved position (from a previous session's drag)
+			// replaces this function's own computed tile position outright --
+			// this function is only ever consulted the first time a panel is
+			// shown (ImGuiCond_FirstUseEver, BeginPanelWindow()) in the first
+			// place, exactly the condition a fresh-install tiled default
+			// already relies on, so a saved value simply substitutes in as
+			// "the" default rather than adding a second code path. Restored
+			// geometry still goes through BeginPanelWindow()'s existing #31
+			// on-screen clamp (runs unconditionally every frame after
+			// Begin(), including this one) exactly like any other position --
+			// a saved position from a since-changed/removed display gets
+			// pulled back on screen the same way a title-bar drag past the
+			// edge already does, not left stranded off screen.
+			if ( auto it = s_SavedGeometry.find( PanelKey( id ) ); it != s_SavedGeometry.end() )
+				return ImVec2( it->second.x, it->second.y );
+
 			struct Slot { int col, row; };
 			constexpr Slot kSlots[(size_t)PanelId::Count] = {
 				{ 0, 0 }, // Display
@@ -380,6 +446,14 @@ namespace gamescope::chrome
 			pLiveTheme->flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
 			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
 			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
+
+			// Issue #35: seed the saved-geometry table TiledDefaultPos()/
+			// OpeningSize() below consult on each panel's first-ever-shown
+			// frame this process. Loaded once here, same as every other
+			// overlay.* field above -- see this function's own comment for
+			// why (process-level/global.json-only, LoadGlobal() rather than
+			// ResolveEffective()).
+			s_SavedGeometry = s.overlay.panel_geometry;
 
 			// Issue #38: every context's atlas is eagerly built at the
 			// compiled-in default scale (1.0) by its own EnsureImguiInit(),
@@ -590,8 +664,20 @@ namespace gamescope::chrome
 		// the task's own "no taller than needed" qualifier, using
 		// defaultSize.y as the best available stand-in for "what the
 		// content needs" absent a live measurement.
+		// Issue #35: a saved size replaces this computed opening size outright,
+		// the same substitution TiledDefaultPos() above makes for position --
+		// still only ever consulted on a panel's first-ever-shown frame
+		// (ImGuiCond_FirstUseEver below), and still subject to
+		// SetNextWindowSizeConstraints() a few lines down (#31), so a saved
+		// size larger than the current display gets capped by that
+		// constraint on this very first frame exactly like an interactive
+		// resize past the edge already is -- restored geometry goes through
+		// the existing clamp, not around it.
 		constexpr float kHeightPad = 48.0f; // breathing room once content is already the limiting factor
-		const ImVec2 openSize( defaultSize.x * 1.5f, ImMin( defaultSize.y * 1.5f, defaultSize.y + kHeightPad ) );
+		const auto itSavedSize = s_SavedGeometry.find( PanelKey( id ) );
+		const ImVec2 openSize = itSavedSize != s_SavedGeometry.end()
+			? ImVec2( itSavedSize->second.w, itSavedSize->second.h )
+			: ImVec2( defaultSize.x * 1.5f, ImMin( defaultSize.y * 1.5f, defaultSize.y + kHeightPad ) );
 
 		ImVec2 &lastExpandedSize = s_lastExpandedSize[(size_t)id];
 		bool &bWasCollapsed = s_bPanelWasCollapsedLastFrame[(size_t)id];
@@ -733,7 +819,60 @@ namespace gamescope::chrome
 		// so a later collapse, or a later reopen after being closed at the
 		// dock, always has the right value to freeze/restore.
 		if ( !bCollapsed )
+		{
 			lastExpandedSize = ImGui::GetWindowSize();
+
+			// Issue #35: autosave this panel's position/size, debounced to
+			// "the user let go" rather than every frame of an active drag/
+			// resize -- that changes pos/size every single frame, which
+			// would be a write-storm, and every config write already has to
+			// go through ConfigManager's queued background writer rather
+			// than happening inline on a frame that also renders regardless
+			// (see EnqueueGeometryWrite()'s own comment), so debouncing down
+			// to one write per settled change matters for disk I/O, not just
+			// thread safety. Two-stage check: (1) this frame's pos/size must
+			// equal LAST frame's -- an active drag or resize grip never
+			// holds perfectly still two frames running, so this alone rules
+			// out every mid-drag frame; (2) once stable, only queue a write
+			// if the settled value actually differs from what's already
+			// considered saved, so holding a panel still for many frames
+			// after release doesn't re-queue an identical write every frame
+			// after that.
+			const size_t idx = (size_t)id;
+			const ImVec2 curPos = ImGui::GetWindowPos();
+			const ImVec2 &curSize = lastExpandedSize;
+
+			if ( !s_bGeometryTracked[idx] )
+			{
+				// First expanded frame this process for this panel --
+				// whatever it just opened at (a just-restored geometry, or
+				// TiledDefaultPos()/OpeningSize()'s own computed default)
+				// counts as already "saved": merely drawing a panel must
+				// never itself queue a write, only the user actually moving
+				// or resizing it from there.
+				s_bGeometryTracked[idx] = true;
+				s_lastSavedPos[idx] = curPos;
+				s_lastSavedSize[idx] = curSize;
+			}
+			else if ( curPos.x == s_lastFramePos[idx].x && curPos.y == s_lastFramePos[idx].y &&
+			          curSize.x == s_lastFrameSize[idx].x && curSize.y == s_lastFrameSize[idx].y &&
+			          ( curPos.x != s_lastSavedPos[idx].x || curPos.y != s_lastSavedPos[idx].y ||
+			            curSize.x != s_lastSavedSize[idx].x || curSize.y != s_lastSavedSize[idx].y ) )
+			{
+				s_lastSavedPos[idx] = curPos;
+				s_lastSavedSize[idx] = curSize;
+
+				config::PanelGeometry geometry;
+				geometry.x = curPos.x;
+				geometry.y = curPos.y;
+				geometry.w = curSize.x;
+				geometry.h = curSize.y;
+				config::EnqueueGeometryWrite( PanelKey( id ), geometry );
+			}
+
+			s_lastFramePos[idx] = curPos;
+			s_lastFrameSize[idx] = curSize;
+		}
 		bWasCollapsed = bCollapsed;
 
 		// Spec §4: "Focused window: border becomes accent@42%". ImGui's own

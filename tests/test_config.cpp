@@ -814,3 +814,126 @@ TEST_CASE( "DeletePerGameOverride refuses a path-escaping app id", "[config]" )
     REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
     REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
 }
+
+// ---- Issue #35: per-panel window geometry persistence ----------------
+
+TEST_CASE( "panel geometry round-trips through SaveGlobal/LoadGlobal, and is excluded from a per-game snapshot", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.overlay.panel_geometry[ "display" ] = PanelGeometry{ 120.0f, 80.0f, 500.0f, 360.0f };
+    global.overlay.panel_geometry[ "audio" ] = PanelGeometry{ 900.0f, 40.0f, 420.0f, 220.0f };
+    REQUIRE( SaveGlobal( global ) );
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.overlay.panel_geometry.size() == 2 );
+    REQUIRE( loaded.overlay.panel_geometry.at( "display" ).x == 120.0f );
+    REQUIRE( loaded.overlay.panel_geometry.at( "display" ).y == 80.0f );
+    REQUIRE( loaded.overlay.panel_geometry.at( "display" ).w == 500.0f );
+    REQUIRE( loaded.overlay.panel_geometry.at( "display" ).h == 360.0f );
+    REQUIRE( loaded.overlay.panel_geometry.at( "audio" ).w == 420.0f );
+
+    // Process-level UI preference, same "global.json only" rule as
+    // notification_placement/fade_ms (ConfigSchema.h's OverlaySettings
+    // comment) - a window's screen position is about the player's physical
+    // display, not the game running, so it must never ride along in a
+    // per-game snapshot.
+    Settings snapshot = ResolveEffective( std::nullopt );
+    REQUIRE( SnapshotPerGameOverride( "41", snapshot ) );
+    std::optional<Settings> oPerGame = LoadPerGameOverride( "41" );
+    REQUIRE( oPerGame.has_value() );
+    REQUIRE( oPerGame->overlay.panel_geometry.empty() );
+}
+
+TEST_CASE( "an unrecognized panel_geometry key in an old config is ignored, not fatal", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    // "fps" is the pre-issue-#27 key for the panel Chrome.h's PanelId enum
+    // now calls SystemMonitor (Fps -> SystemMonitor rename, Chrome.h's own
+    // comment) - an old config on disk can still carry it under a build
+    // that no longer has a case for it in Chrome.cpp's PanelKey(). It must
+    // parse harmlessly alongside a normal, currently-recognized entry, and
+    // must not disturb an unrelated section of the same file.
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "schema_version": 1,
+        "gamescope": { "filter": "FSR" },
+        "overlay": {
+            "panel_geometry": {
+                "fps": { "x": 10.0, "y": 10.0, "w": 300.0, "h": 200.0 },
+                "system_monitor": { "x": 50.0, "y": 60.0, "w": 480.0, "h": 300.0 }
+            }
+        }
+    })";
+
+    Settings s = LoadGlobal();
+    REQUIRE( s.gamescope.filter == "FSR" ); // unrelated section untouched
+    REQUIRE( s.overlay.panel_geometry.count( "fps" ) == 1 ); // parsed, not dropped
+    REQUIRE( s.overlay.panel_geometry.at( "system_monitor" ).w == 480.0f );
+}
+
+TEST_CASE( "a malformed single panel_geometry entry is skipped, not the whole map or file", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "schema_version": 1,
+        "gamescope": { "filter": "NIS" },
+        "overlay": {
+            "panel_geometry": {
+                "shaders": "not an object",
+                "audio": { "x": 5.0, "y": 5.0, "w": -10.0, "h": 200.0 },
+                "config": { "x": 15.0, "y": 25.0, "w": 400.0, "h": 240.0 }
+            }
+        }
+    })";
+
+    Settings s = LoadGlobal();
+    REQUIRE( s.gamescope.filter == "NIS" );          // unrelated section untouched
+    REQUIRE( s.overlay.panel_geometry.count( "shaders" ) == 0 ); // not an object
+    REQUIRE( s.overlay.panel_geometry.count( "audio" ) == 0 );   // non-positive width
+    REQUIRE( s.overlay.panel_geometry.at( "config" ).w == 400.0f ); // the one valid entry survives
+}
+
+TEST_CASE( "EnqueueGeometryWrite saves one panel's geometry without clobbering an unrelated concurrent write", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // Simulates PanelDisplay.cpp writing a GAMESCOPE-tab change first
+    // (EnqueueRoutedWrite -> EnqueueGlobalWrite for the no-override case).
+    Settings displayEdit = LoadGlobal();
+    displayEdit.gamescope.filter = "FSR";
+    EnqueueGlobalWrite( displayEdit );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+
+    // Chrome.cpp's own geometry autosave never loads or holds gamescope.*
+    // at all - it must not revert the Display-tab edit above just because
+    // it only means to save one panel's position (EnqueueGeometryWrite's
+    // own comment: merges onto CurrentOverlaySettings()/
+    // CurrentFullSettings() rather than a caller-supplied whole struct).
+    PanelGeometry geom{ 200.0f, 150.0f, 440.0f, 300.0f };
+    EnqueueGeometryWrite( "audio", geom );
+    FlushPendingWrites();
+
+    Settings after = LoadGlobal();
+    REQUIRE( after.gamescope.filter == "FSR" ); // survived the geometry write
+    REQUIRE( after.overlay.panel_geometry.at( "audio" ).x == 200.0f );
+    REQUIRE( after.overlay.panel_geometry.at( "audio" ).w == 440.0f );
+
+    // And the reverse direction: a later General-tab edit (PanelConfig.cpp's
+    // QueueGeneralSave(), which always starts from a fresh LoadGlobal())
+    // must not lose the just-saved geometry either.
+    Settings generalEdit = LoadGlobal();
+    generalEdit.overlay.dock_scale = 1.2f;
+    EnqueueGlobalWrite( generalEdit );
+    FlushPendingWrites();
+
+    Settings final_ = LoadGlobal();
+    REQUIRE( final_.overlay.dock_scale == 1.2f );
+    REQUIRE( final_.overlay.panel_geometry.at( "audio" ).w == 440.0f );
+}
