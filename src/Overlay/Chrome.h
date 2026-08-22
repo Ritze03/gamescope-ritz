@@ -125,7 +125,21 @@ namespace gamescope::chrome
 	// primitive every other custom widget in this overlay -- Widgets.cpp's
 	// Toggle()/Checkbox(), DrawDockButton() below -- is built on, so hover/
 	// press/keyboard-nav semantics match a real ImGui button).
-	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 defaultPos, ImVec2 defaultSize );
+	// pszBadgeOverride: issue #43 (config-UI intuitiveness pass) recommendation
+	// #1. The title bar's meta slot (Chrome.cpp's DrawTitleBar()) used to be a
+	// hardcoded "gamescope-ritz" on every panel -- five windows repeating the
+	// app's own name, the least informative thing that slot could show. It
+	// now names which file THIS panel's edits actually land in: "global" or
+	// "app <id>", computed from Config/ConfigManager.h's own session-routing
+	// state (SessionAppId()/IsSessionOverrideActive() -- the same state
+	// EnqueueRoutedWrite() reads) when pszBadgeOverride is null (every call
+	// site but one). Pass a non-null override only for a routing rule that
+	// state can't express on its own -- today just PanelConfig.cpp's General/
+	// Notifications tabs, which always write global.json regardless of the
+	// per-game override (see that file's own comment on why it passes
+	// "global only" one frame lagged behind its own tab selection). Optional
+	// so every other call site is unaffected.
+	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 defaultPos, ImVec2 defaultSize, const char *pszBadgeOverride = nullptr );
 	void EndPanelWindow();
 
 	// Draws the bottom dock (design guide's Dock component): a brand glyph,
