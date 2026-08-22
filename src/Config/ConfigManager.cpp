@@ -220,6 +220,45 @@ namespace gamescope::config
                 s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
                 s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
                 s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
+
+                // Issue #35: per-panel saved window geometry (ConfigSchema.h's
+                // PanelGeometry/OverlaySettings::panel_geometry comments).
+                // Iterates every key present rather than a fixed named-lookup
+                // list (every other field above) precisely because the key
+                // set here is open-ended and forward/backward compatible by
+                // design - an entry whose key this build's PanelId no longer
+                // has a string for (a since-renamed or since-removed panel)
+                // is parsed into the map exactly like any other and simply
+                // never looked up again, not an error, and does not affect
+                // any other entry in the map.
+                if ( const nlohmann::json *pGeometry = JGetObject( *pOverlay, "panel_geometry" ) )
+                {
+                    for ( auto it = pGeometry->begin(); it != pGeometry->end(); ++it )
+                    {
+                        if ( !it->is_object() )
+                            continue; // malformed entry for this one key - skip it, not the whole map
+
+                        PanelGeometry g;
+                        g.x = JGetFloat( *it, "x", g.x );
+                        g.y = JGetFloat( *it, "y", g.y );
+                        g.w = JGetFloat( *it, "w", g.w );
+                        g.h = JGetFloat( *it, "h", g.h );
+
+                        // A non-positive size is never valid saved geometry
+                        // (PanelGeometry{}'s own 0,0 default, or a corrupt/
+                        // hand-edited entry) - skip it so Chrome.cpp's
+                        // TiledDefaultPos()/measured-size fallback applies to
+                        // that one panel instead of opening a zero/negative-
+                        // size window. Position is deliberately NOT bounds-
+                        // checked here - Chrome.cpp's existing on-screen
+                        // clamp (#31) already pulls an out-of-bounds saved
+                        // position back on screen every frame, including the
+                        // first, so re-validating it here would just be a
+                        // second, redundant copy of that same policy.
+                        if ( g.w > 0.0f && g.h > 0.0f )
+                            s.overlay.panel_geometry[ it.key() ] = g;
+                    }
+                }
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -326,6 +365,22 @@ namespace gamescope::config
                 jOverlay[ "startup_announce_enabled" ] = s.overlay.startup_announce_enabled;
                 jOverlay[ "capture_all_keyboard_input" ] = s.overlay.capture_all_keyboard_input;
                 jOverlay[ "keyboard_navigation_enabled" ] = s.overlay.keyboard_navigation_enabled;
+
+                // Issue #35: per-panel saved window geometry - see the parse
+                // side above and ConfigSchema.h's PanelGeometry/
+                // OverlaySettings::panel_geometry comments.
+                nlohmann::json jGeometry = nlohmann::json::object();
+                for ( const auto &[ sKey, g ] : s.overlay.panel_geometry )
+                {
+                    nlohmann::json jg = nlohmann::json::object();
+                    jg[ "x" ] = g.x;
+                    jg[ "y" ] = g.y;
+                    jg[ "w" ] = g.w;
+                    jg[ "h" ] = g.h;
+                    jGeometry[ sKey ] = std::move( jg );
+                }
+                jOverlay[ "panel_geometry" ] = std::move( jGeometry );
+
                 j[ "overlay" ] = std::move( jOverlay );
             }
 
@@ -902,13 +957,74 @@ namespace gamescope::config
             }
             return s_LastKnownOverlay;
         }
+
+        // Issue #35: same hazard as CurrentOverlaySettings() above, but for
+        // the *rest* of a Settings object. Chrome.cpp's panel-geometry
+        // autosave (EnqueueOverlayWrite() below) only ever changes
+        // `overlay`, but EnqueueGlobalWrite() always writes the *entire*
+        // Settings object to disk (SettingsToJson() has no partial-write
+        // mode) - so a geometry-only write still needs a correct, current
+        // value for every other section (gamescope/fps_display/reshade/
+        // notifications/audio), or it would silently revert whatever any
+        // other panel most recently wrote there. Mirrors
+        // CurrentOverlaySettings()'s own fix, pointed the other way: an
+        // in-memory, no-disk-read-on-the-common-path cache of the whole
+        // struct, kept current by every EnqueueGlobalWrite() call.
+        bool s_bLastKnownSettingsLoaded = false;
+        Settings s_LastKnownSettings;
+
+        const Settings &CurrentFullSettings()
+        {
+            if ( !s_bLastKnownSettingsLoaded )
+            {
+                // First write this process (nothing has gone through
+                // EnqueueGlobalWrite() yet) - one-time blocking disk read,
+                // same tradeoff CurrentOverlaySettings() already accepts
+                // above, for the identical reason.
+                s_LastKnownSettings = LoadGlobal();
+                s_bLastKnownSettingsLoaded = true;
+            }
+            return s_LastKnownSettings;
+        }
     }
 
     void EnqueueGlobalWrite( Settings settings )
     {
         s_LastKnownOverlay = settings.overlay;
         s_bLastKnownOverlayLoaded = true;
+        s_LastKnownSettings = settings;
+        s_bLastKnownSettingsLoaded = true;
         ConfigWriter::Instance().Enqueue( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
+    }
+
+    // Issue #35: writes `overlay` only, merging onto CurrentFullSettings()
+    // (above) for every other section so a geometry autosave can never
+    // clobber a concurrent edit from another panel - see that function's
+    // comment. Chrome.cpp's panel-geometry autosave is the only caller
+    // today; PanelConfig's General tab keeps using EnqueueGlobalWrite()
+    // directly (QueueGeneralSave()), since it already holds a fresh,
+    // just-loaded full Settings of its own.
+    void EnqueueOverlayWrite( const OverlaySettings &overlay )
+    {
+        Settings toWrite = CurrentFullSettings();
+        toWrite.overlay = overlay;
+        EnqueueGlobalWrite( std::move( toWrite ) );
+    }
+
+    // Issue #35: the actual call Chrome.cpp's panel-geometry autosave makes.
+    // Patches a single panel_geometry entry onto CurrentOverlaySettings()
+    // (the freshest known `overlay`, in-memory) rather than taking a whole
+    // OverlaySettings from the caller - Chrome.cpp otherwise has no reason
+    // to keep its own up-to-date copy of every General-tab scalar
+    // (dock_scale, opacity_*, ...) just to avoid reverting them the moment
+    // it wants to save one panel's position, and a stale copy of those
+    // would hit EnqueueOverlayWrite() the same way a stale full Settings
+    // would hit EnqueueGlobalWrite() - see that function's own comment.
+    void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry )
+    {
+        OverlaySettings overlay = CurrentOverlaySettings();
+        overlay.panel_geometry[ sPanelKey ] = geometry;
+        EnqueueOverlayWrite( overlay );
     }
 
     void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot )
@@ -1062,6 +1178,9 @@ namespace gamescope::config
         // prior test's (already-deleted) temp directory must not leak into
         // the next one.
         s_bLastKnownOverlayLoaded = false;
+        // Issue #35: CurrentFullSettings()'s cache (above) is the same
+        // process-wide hazard, for the same reason.
+        s_bLastKnownSettingsLoaded = false;
     }
 
     std::string DebugDumpEffective( const std::optional<std::string> &oAppId )
