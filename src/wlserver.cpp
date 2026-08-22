@@ -365,6 +365,37 @@ static std::unordered_set<uint32_t> s_setKeysForwardedToOverlay;
 static std::unordered_set<uint32_t> s_setMouseButtonsForwardedToGame;
 static std::unordered_set<uint32_t> s_setMouseButtonsForwardedToOverlay;
 
+// Resolves one key PRESS into the text it actually produces on the
+// keyboard's current layout, level and modifier state -- using the real,
+// live xkb_state that lives on this keyboard device (either the DRM/
+// libinput keyboard-group's, already advanced by wlroots itself, or the
+// virtual device's, advanced by wlserver_key() -- see its comment). Correct
+// for Shift/AltGr/dead keys and non-ASCII output (umlauts etc.) because
+// it's the same mechanism the rest of the compositor uses, not a hand-
+// rolled table.
+//
+// Returns empty for: no xkb_state (shouldn't happen post-wlserver_init(),
+// but cheap to guard), no mapping at this level, and ASCII control
+// characters -- Enter/Tab/Backspace/Escape/etc. already have their own
+// ImGuiKey handling on the consumer side (SettingsOverlay.cpp) and must
+// stay pure key events, never text.
+static std::string wlserver_utf8_for_key_press( wlr_keyboard *keyboard, uint32_t uLinuxKeycode )
+{
+	if ( keyboard == nullptr || keyboard->xkb_state == nullptr )
+		return {};
+
+	xkb_keycode_t keycode = uLinuxKeycode + 8;
+	char buf[16];
+	int len = xkb_state_key_get_utf8( keyboard->xkb_state, keycode, buf, sizeof( buf ) );
+	if ( len <= 0 )
+		return {};
+
+	if ( (unsigned char)buf[0] < 0x20 || (unsigned char)buf[0] == 0x7f )
+		return {};
+
+	return std::string( buf, (size_t)len );
+}
+
 // Routes one key transition to either the game or the overlay -- see the
 // tracking-set comment above. Called after wlserver_process_hotkeys() has
 // already had first refusal, so the toggle key itself and any other bound
@@ -389,7 +420,7 @@ static void wlserver_dispatch_key( wlr_keyboard *keyboard, uint32_t uLinuxKeycod
 		if ( gamescope::SettingsOverlay_IsCapturingKeyboard() )
 		{
 			s_setKeysForwardedToOverlay.insert( uLinuxKeycode );
-			gamescope::SettingsOverlay_QueueKeyEvent( uLinuxKeycode, true );
+			gamescope::SettingsOverlay_QueueKeyEvent( uLinuxKeycode, true, wlserver_utf8_for_key_press( keyboard, uLinuxKeycode ) );
 		}
 		else
 		{
@@ -2249,6 +2280,16 @@ bool wlserver_init( void ) {
 	wlserver.keyboard_group_key.notify = wlserver_handle_key;
 	wl_signal_add(&keyboard->events.key, &wlserver.keyboard_group_key);
 
+	// Give the virtual (non-DRM-backend) keyboard device the same keymap --
+	// same xkb_keymap object, xkb_keymap_ref'd, so wlr_seat_set_keyboard()
+	// (wlserver_dispatch_key()/wlserver_keyboardfocus()) never sees the
+	// keymap "change" when the seat's active device switches between this
+	// one and the group's. This is what gives wlserver_key()'s path (SDL,
+	// nested Wayland, OpenVR, and LibInputHandler's direct evdev read under
+	// any of those) a live xkb_state to translate keycodes with -- see
+	// wlserver_key()'s own comment on why it must be kept advancing.
+	wlr_keyboard_set_keymap(kbd, keymap);
+
 	wlserver.wlr.renderer = vulkan_renderer_create();
 
 	wlr_renderer_init_wl_display(wlserver.wlr.renderer, wlserver.display);
@@ -2664,6 +2705,26 @@ void wlserver_key( uint32_t key, bool press, uint32_t time )
 	assert( wlserver_is_lock_held() );
 
 	wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
+
+	// This is the one path (SDL, nested Wayland, OpenVR, and
+	// LibInputHandler's direct evdev read under any of those) whose
+	// keyboard device's xkb_state nothing else advances -- everywhere else
+	// this function only ever calls wlr_seat_keyboard_notify_key(), which
+	// updates the *seat's* forwarded-to-client state, never the device's
+	// own (see the M2 comment above wlserver_dispatch_key()). Advance it
+	// here, once per event, BEFORE hotkey/dispatch processing reads it, so
+	// both see this key's own down/up transition already applied -- the
+	// same as-of-this-event ordering the DRM/libinput group keyboard gets
+	// for free (its xkb_state is advanced by wlroots' own keyboard-group
+	// forwarding before wlserver_handle_key() ever runs). This is what
+	// gives wlserver_dispatch_key() a real, layout-and-modifier-correct
+	// xkb_state to translate keycodes into text with.
+	wlr_keyboard_key_event event{};
+	event.time_msec = time;
+	event.keycode = key;
+	event.update_state = true;
+	event.state = press ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
+	wlr_keyboard_notify_key( keyboard, &event );
 
 	if ( !wlserver_process_hotkeys( keyboard, key, press ) )
 	{

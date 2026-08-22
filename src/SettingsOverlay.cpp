@@ -1131,6 +1131,9 @@ namespace gamescope
 			bool bPressed = false; // Key, MouseButton
 			double x = 0.0;        // dx (MouseMotionDelta) / normalized X (MouseMotionAbsolute) / wheel X
 			double y = 0.0;        // dy (MouseMotionDelta) / normalized Y (MouseMotionAbsolute) / wheel Y
+			std::string sUtf8Text; // Key press only -- layout-correct text already resolved
+			                       // against the real xkb_state in wlserver.cpp; see
+			                       // SettingsOverlay_QueueKeyEvent()'s comment in the header.
 		};
 	}
 
@@ -1142,12 +1145,12 @@ namespace gamescope
 	static void QueueEvent( QueuedInputEvent ev )
 	{
 		std::lock_guard<std::mutex> lock( s_InputQueueLock );
-		s_InputQueue.push_back( ev );
+		s_InputQueue.push_back( std::move( ev ) );
 	}
 
-	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed )
+	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed, std::string sUtf8Text )
 	{
-		QueueEvent( { .kind = QueuedInputEvent::Kind::Key, .uCode = uLinuxKeycode, .bPressed = bPressed } );
+		QueueEvent( { .kind = QueuedInputEvent::Kind::Key, .uCode = uLinuxKeycode, .bPressed = bPressed, .sUtf8Text = std::move( sUtf8Text ) } );
 	}
 
 	void SettingsOverlay_QueueMouseMotionDelta( double dx, double dy )
@@ -1199,56 +1202,6 @@ namespace gamescope
 	// Keyboard-only capture-toggle release-safety backstop -- see
 	// DrainInputQueue()'s own comment on the two independent `if`s.
 	static bool s_bWasCapturingKeyboardLastDrain = false;
-
-	// ponytail: a hardcoded US-QWERTY ASCII table, not layout-aware --
-	// correct typing requires actually tracking xkb layout/state per key,
-	// which (per the comment above) no backend but the DRM/libinput one
-	// reliably provides today. Good enough to type into a text field for
-	// M2's acceptance test and for everyday ASCII entry (profile names,
-	// etc.); upgrade path is wiring a real xkb_state for the virtual
-	// keyboard device (calling wlr_keyboard_notify_key on it too) and
-	// reading characters from that instead of this table.
-	static char AsciiForKeycode( uint32_t uLinuxKeycode, bool bShift )
-	{
-		if ( uLinuxKeycode >= KEY_1 && uLinuxKeycode <= KEY_9 )
-		{
-			static const char szShifted[] = "!@#$%^&*(";
-			return bShift ? szShifted[ uLinuxKeycode - KEY_1 ] : char( '1' + ( uLinuxKeycode - KEY_1 ) );
-		}
-
-		switch ( uLinuxKeycode )
-		{
-			case KEY_0:         return bShift ? ')' : '0';
-			case KEY_SPACE:     return ' ';
-			case KEY_MINUS:     return bShift ? '_' : '-';
-			case KEY_EQUAL:     return bShift ? '+' : '=';
-			case KEY_LEFTBRACE: return bShift ? '{' : '[';
-			case KEY_RIGHTBRACE:return bShift ? '}' : ']';
-			case KEY_SEMICOLON: return bShift ? ':' : ';';
-			case KEY_APOSTROPHE:return bShift ? '"' : '\'';
-			case KEY_GRAVE:     return bShift ? '~' : '`';
-			case KEY_BACKSLASH: return bShift ? '|' : '\\';
-			case KEY_COMMA:     return bShift ? '<' : ',';
-			case KEY_DOT:       return bShift ? '>' : '.';
-			case KEY_SLASH:     return bShift ? '?' : '/';
-			default: break;
-		}
-
-		// Letters: evdev keycodes for A-Z aren't alphabetically contiguous
-		// (they follow QWERTY row order), so map the actual scan codes.
-		static constexpr uint32_t k_uLetterKeycodesQwerty[26] = {
-			KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
-			KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
-			KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
-		};
-		for ( int i = 0; i < 26; i++ )
-		{
-			if ( k_uLetterKeycodesQwerty[i] == uLinuxKeycode )
-				return char( ( bShift ? 'A' : 'a' ) + i );
-		}
-
-		return 0;
-	}
 
 	static ImGuiKey ImGuiKeyForKeycode( uint32_t uLinuxKeycode )
 	{
@@ -1346,7 +1299,7 @@ namespace gamescope
 		}
 	}
 
-	static void HandleKeyEvent( ImGuiIO &io, uint32_t uLinuxKeycode, bool bPressed )
+	static void HandleKeyEvent( ImGuiIO &io, uint32_t uLinuxKeycode, bool bPressed, const std::string &sUtf8Text )
 	{
 		// Modifiers: feed the specific Left/Right key (so ImGui's own
 		// per-key state is exact) plus the recomputed merged Mod flag (the
@@ -1381,14 +1334,14 @@ namespace gamescope
 		if ( key != ImGuiKey_None )
 			io.AddKeyEvent( key, bPressed );
 
-		// Text input: only on press, only for keys with a printable ASCII
-		// mapping (see AsciiForKeycode's ponytail note).
-		if ( bPressed )
-		{
-			const char c = AsciiForKeycode( uLinuxKeycode, s_nShiftHeld > 0 );
-			if ( c != 0 )
-				io.AddInputCharacter( (unsigned int)(unsigned char)c );
-		}
+		// Text input: only on press, and only the already layout-translated
+		// UTF-8 text wlserver_dispatch_key() resolved against the keyboard's
+		// real xkb_state (see SettingsOverlay_QueueKeyEvent()'s comment in
+		// the header) -- correct on any layout, and AddInputCharactersUTF8()
+		// takes the whole multi-byte string in one call so umlauts and other
+		// non-ASCII characters aren't truncated to a single byte.
+		if ( bPressed && !sUtf8Text.empty() )
+			io.AddInputCharactersUTF8( sUtf8Text.c_str() );
 	}
 
 	static void ClampCursorToTexture()
@@ -1424,7 +1377,7 @@ namespace gamescope
 			switch ( ev.kind )
 			{
 				case QueuedInputEvent::Kind::Key:
-					HandleKeyEvent( io, ev.uCode, ev.bPressed );
+					HandleKeyEvent( io, ev.uCode, ev.bPressed, ev.sUtf8Text );
 					break;
 
 				case QueuedInputEvent::Kind::MouseMotionDelta:
