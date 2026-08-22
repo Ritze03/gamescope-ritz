@@ -384,5 +384,24 @@ namespace gamescope::config
         OverlaySettings overlay;
         NotificationSettings notifications;
         AudioSettings audio;
+
+        // Issue #43 (config-UI intuitiveness pass) recommendation #10: a
+        // plain provenance breadcrumb, not a live link -- DECISIONS.md #20's
+        // one-time-copy semantics for profile apply stay exactly as they
+        // are (see ConfigManager.cpp's ApplyProfile(), the sole writer of
+        // this field). Empty means "no profile has ever been applied to
+        // this file" (or it predates this field -- an old config on disk
+        // with no key here just parses to ""). Deliberately top-level, not
+        // nested under any of the structs above: it describes the *file*
+        // (which profile last touched it), not any one settings group, and
+        // unlike `overlay` it IS meaningful on every file this schema is
+        // used for (global/profile/per-game alike), so it is never gated
+        // behind SettingsToJson()'s bIncludeOverlay. Overwritten on every
+        // ApplyProfile() call; left untouched by every other write path (a
+        // slider edit does not un-set "where this game's values last came
+        // from"). Displayed as "last applied profile: X", never "current" --
+        // editing settings afterward does not clear it, same honesty rule
+        // PanelConfig.cpp's status line already follows.
+        std::string last_applied_profile;
     };
 }

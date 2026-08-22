@@ -532,7 +532,7 @@ namespace gamescope::chrome
 		// outright rather than kept-and-decorated. Handles its own hit
 		// testing for drag/collapse/close (Chrome.h's BeginPanelWindow()
 		// comment has the full rationale for each).
-		void DrawTitleBar( const char *pszTitle, PanelId id, bool bFocused, bool bCollapsed )
+		void DrawTitleBar( const char *pszTitle, PanelId id, bool bFocused, bool bCollapsed, const char *pszBadgeOverride )
 		{
 			ImDrawList *pDrawList = ImGui::GetWindowDrawList();
 			const ImVec2 windowPos = ImGui::GetWindowPos();
@@ -611,16 +611,40 @@ namespace gamescope::chrome
 
 			// Meta -- Mono 400 10.5 @30%, spec §5/§2. Skipped outright (not
 			// just clipped) once the title alone has already reached the
-			// button cluster -- secondary "gamescope-ritz" branding text has
-			// no business fighting the title for the last few px of room.
+			// button cluster -- secondary text has no business fighting the
+			// title for the last few px of room.
+			//
+			// Issue #43 recommendation #1: this used to be a hardcoded
+			// "gamescope-ritz" on all five panels -- five windows repeating
+			// the app's own name, the least informative use this slot could
+			// have. Now it names which file THIS panel's edits actually
+			// land in. There are four routing rules in this codebase
+			// (Config/ConfigManager.h's session-routing section) and,
+			// before this change, the UI stated one of them, in one tab, in
+			// prose. Chrome.h's own comment on pszBadgeOverride explains
+			// the one rule this generic computation can't know on its own.
 			if ( flCursorX < flTextClipRight )
 			{
 				ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
-				static constexpr const char *kMeta = "gamescope-ritz";
-				const ImVec2 metaSize = ImGui::CalcTextSize( kMeta );
+
+				std::string sBadge;
+				if ( pszBadgeOverride )
+				{
+					sBadge = pszBadgeOverride;
+				}
+				else if ( config::IsSessionOverrideActive() && config::SessionAppId() )
+				{
+					sBadge = "app " + *config::SessionAppId();
+				}
+				else
+				{
+					sBadge = "global";
+				}
+
+				const ImVec2 metaSize = ImGui::CalcTextSize( sBadge.c_str() );
 				pDrawList->PushClipRect( ImVec2( flCursorX, barMin.y ), ImVec2( flTextClipRight, barMax.y ), true );
 				pDrawList->AddText( ImVec2( flCursorX, flCenterY - metaSize.y * 0.5f ),
-					ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), kMeta );
+					ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), sBadge.c_str() );
 				pDrawList->PopClipRect();
 				ImGui::PopFont();
 			}
@@ -701,7 +725,7 @@ namespace gamescope::chrome
 		s_bPanelOpen[(size_t)id] = bOpen;
 	}
 
-	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 /*defaultPos*/, ImVec2 defaultSize )
+	bool BeginPanelWindow( const char *pszTitle, PanelId id, ImVec2 /*defaultPos*/, ImVec2 defaultSize, const char *pszBadgeOverride )
 	{
 		if ( !IsPanelOpen( id ) )
 			return false;
@@ -1032,7 +1056,7 @@ namespace gamescope::chrome
 			}
 		}
 
-		DrawTitleBar( pszTitle, id, bFocused, bCollapsed );
+		DrawTitleBar( pszTitle, id, bFocused, bCollapsed, pszBadgeOverride );
 
 		if ( bCollapsed )
 		{

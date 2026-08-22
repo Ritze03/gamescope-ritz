@@ -282,6 +282,13 @@ namespace gamescope::config
             if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
                 s.audio.manual_node_binary = JGetString( *pAudio, "manual_node_binary", s.audio.manual_node_binary );
 
+            // Issue #43 recommendation #10: top-level, not nested -- see
+            // ConfigSchema.h's Settings::last_applied_profile comment. A
+            // config predating this field has no key here and JGetString's
+            // own default-value contract makes that "" (the "never applied"
+            // state), not a parse failure.
+            s.last_applied_profile = JGetString( j, "last_applied_profile", s.last_applied_profile );
+
             return s;
         }
 
@@ -367,6 +374,12 @@ namespace gamescope::config
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "audio" ] = std::move( jAudio );
+
+            // Issue #43 recommendation #10: top-level, unconditional --
+            // meaningful on every file this schema writes (global/profile/
+            // per-game alike), unlike `overlay` below. See ConfigSchema.h's
+            // Settings::last_applied_profile comment.
+            j[ "last_applied_profile" ] = s.last_applied_profile;
 
             // Process-level UI preference, only ever present on global.json -
             // see ConfigSchema.h's OverlaySettings comment.
@@ -865,6 +878,13 @@ namespace gamescope::config
         target.fps_display = oProfile->fps_display;
         target.reshade = oProfile->reshade;
         target.notifications = oProfile->notifications;
+
+        // Issue #43 recommendation #10: record provenance, still as a
+        // one-time copy -- `target.last_applied_profile` is just data now,
+        // with no memory of where it came from either; editing the profile
+        // later does not retroactively change this string, same as every
+        // other field this function just copied.
+        target.last_applied_profile = std::string( svSanitizedName );
 
         return true;
     }

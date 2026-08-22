@@ -65,6 +65,23 @@ namespace gamescope
 		int s_nSelectedCopyGame = -1;
 		char s_szNewProfileName[ 64 ] = {};
 
+		// Issue #43 recommendation #10: provenance readout, refreshed
+		// alongside s_bHasSavedPerGameConfig/s_ProfileNames above by
+		// RefreshLists() -- the name of whichever profile was last applied
+		// to the file currently in effect (per-game if the override is
+		// active, else global), read from that file's own
+		// Settings::last_applied_profile (ConfigSchema.h). Empty means
+		// "never applied", not "not loaded yet" -- see RefreshLists().
+		std::string s_sLastAppliedProfile;
+
+		// Issue #43 recommendation #1: one-frame-lagged tracking of whether
+		// the tab drawn *last* frame was General/Notifications (always
+		// global.json, see EnsureGeneralSettingsLoaded()'s comment below) --
+		// see PanelConfig_Draw()'s own comment on why the badge can only
+		// ever be a frame behind the tab bar's own selection, same
+		// principle Chrome.cpp already accepts for s_bPanelWasFocused.
+		bool s_bLastTabWasGlobalOnly = false;
+
 		// Transient one-line feedback for the last action taken in this
 		// panel (e.g. "Applied profile 'FPS'") -- ponytail: a single static
 		// string is enough for a UI where actions are user-initiated button
@@ -97,6 +114,17 @@ namespace gamescope
 				s_nSelectedProfile = s_ProfileNames.empty() ? -1 : 0;
 			if ( s_nSelectedCopyGame >= (int)s_OtherGameIds.size() )
 				s_nSelectedCopyGame = s_OtherGameIds.empty() ? -1 : 0;
+
+			// Issue #43 recommendation #10: re-read whichever file is
+			// currently authoritative (same "per-game if override active,
+			// else global" rule ApplySelectedProfile()/SaveCurrentAsNewProfile()
+			// already use below) for its provenance breadcrumb. A real read,
+			// not free -- but this only runs on RefreshLists()'s own
+			// trigger points (init + after an action), never once per frame.
+			config::Settings current = ( s_bOverrideActive && s_oAppId )
+				? config::ResolveEffective( s_oAppId )
+				: config::LoadGlobal();
+			s_sLastAppliedProfile = current.last_applied_profile;
 		}
 
 		// overlay.* is process-level/global.json-only (ConfigSchema.h's own
@@ -307,6 +335,14 @@ namespace gamescope
 			config::BumpConfigGeneration();
 			s_sStatus = "Applied profile '" + sName + "'.";
 			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
+
+			// Issue #43 recommendation #10: set directly from `target`
+			// (already in memory, and what config::ApplyProfile() just set
+			// its own last_applied_profile to) rather than a RefreshLists()
+			// disk re-read -- EnqueueRoutedWrite() above is a queued
+			// background write, so a synchronous re-read here could race it
+			// and briefly show the old value.
+			s_sLastAppliedProfile = sName;
 		}
 
 		// Saves whichever config is currently in effect (per-game if
@@ -470,6 +506,14 @@ namespace gamescope
 			ImGui::Separator();
 			ImGui::TextUnformatted( "Profiles" );
 
+			// Issue #43 recommendation #10: provenance, not a live link --
+			// DECISIONS.md #20 stays a one-time copy (RefreshLists()/
+			// ApplySelectedProfile()'s own comments). "last applied", never
+			// "current": editing settings afterward doesn't clear this, so
+			// it names where the values *started*, not what's live now.
+			if ( !s_sLastAppliedProfile.empty() )
+				ImGui::TextDisabled( "last applied profile: %s", s_sLastAppliedProfile.c_str() );
+
 			if ( s_ProfileNames.empty() )
 			{
 				ImGui::TextDisabled( "No profiles saved yet." );
@@ -623,6 +667,37 @@ namespace gamescope
 				gamescope::fonts::RebuildAll( *pflValue );
 		}
 
+		// Issue #43 recommendation #3: a small "reset" link, right-aligned
+		// on a group's own header row. With live apply and no Cancel
+		// anywhere in this overlay, reset *is* the undo -- and, until now,
+		// there was none. ui-mockup-precise-spec.md §1 already reserves an
+		// `accent-link-dim` token for exactly this ("footer action text --
+		// reset, save as preset, live") -- specified, never built; this is
+		// closing that spec gap, not inventing a new control.
+		//
+		// Deliberately a small local ImGui::SmallButton(), not a Widgets.h
+		// addition -- a sibling worker is on Widgets.cpp right now (issue
+		// #46, segmented-control label sizing), so this task stays out of
+		// that file entirely. If a shared version is wanted later, this is
+		// the one caller to fold into it.
+		//
+		// pszLabel follows ImGui's own "visible text##id" convention so
+		// every call site can share the literal "reset" without an ID
+		// collision (SmallButton()'s ID -- and therefore its click state --
+		// is everything including and after "##", not just what's drawn).
+		bool DrawResetLink( const char *pszLabel )
+		{
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.42f, 0.80f, 0.85f, 0.85f ) ); // accent-link-dim-ish, ui-mockup-precise-spec.md §1
+			ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( 0.0f, 0.0f, 0.0f, 0.0f ) );
+			ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( 1.0f, 1.0f, 1.0f, 0.08f ) );
+			ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( 1.0f, 1.0f, 1.0f, 0.14f ) );
+			const bool bClicked = ImGui::SmallButton( pszLabel );
+			ImGui::PopStyleColor( 4 );
+			ImGui::PopFont();
+			return bClicked;
+		}
+
 		// General settings for gamescope-ritz itself -- window-chrome
 		// overhaul's own General-tab scale/opacity/effect controls
 		// (dock/display/notification scale, window-focused/unfocused/dock/
@@ -649,6 +724,12 @@ namespace gamescope
 			if ( widgets::BeginGroupBlock( "##accent" ) )
 			{
 				ImGui::TextUnformatted( "Accent Color" );
+				ImGui::SameLine();
+				if ( DrawResetLink( "reset##accent" ) )
+				{
+					o.accent_hue = config::OverlaySettings{}.accent_hue;
+					QueueGeneralSave();
+				}
 				ImGui::SameLine();
 				{
 					// Live swatch of the exact resulting accent -- reads
@@ -677,6 +758,19 @@ namespace gamescope
 			if ( widgets::BeginGroupBlock( "##scale" ) )
 			{
 				ImGui::TextUnformatted( "UI Scale" );
+				ImGui::SameLine();
+				if ( DrawResetLink( "reset##scale" ) )
+				{
+					const config::OverlaySettings defaults{};
+					o.dock_scale = defaults.dock_scale;
+					o.display_scale = defaults.display_scale;
+					o.notification_scale = defaults.notification_scale;
+					QueueGeneralSave();
+					// Same rebuild DrawDisplayScaleSlider() triggers on
+					// release -- a direct assignment never fires that
+					// slider's own IsItemDeactivatedAfterEdit() check.
+					gamescope::fonts::RebuildAll( o.display_scale );
+				}
 				DrawLiveFloatSlider( "Dock", &o.dock_scale, 0.85f, 2.0f );
 				DrawDisplayScaleSlider( &o.display_scale );
 				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
@@ -691,6 +785,16 @@ namespace gamescope
 			if ( widgets::BeginGroupBlock( "##opacity" ) )
 			{
 				ImGui::TextUnformatted( "Transparency" );
+				ImGui::SameLine();
+				if ( DrawResetLink( "reset##opacity" ) )
+				{
+					const config::OverlaySettings defaults{};
+					o.opacity_windows_focused = defaults.opacity_windows_focused;
+					o.opacity_windows_unfocused = defaults.opacity_windows_unfocused;
+					o.opacity_dock = defaults.opacity_dock;
+					o.opacity_notifications = defaults.opacity_notifications;
+					QueueGeneralSave();
+				}
 				DrawLiveFloatSlider( "Window (focused)", &o.opacity_windows_focused, 0.3f, 1.0f );
 				DrawLiveFloatSlider( "Window (unfocused)", &o.opacity_windows_unfocused, 0.3f, 1.0f );
 				DrawLiveFloatSlider( "Dock", &o.opacity_dock, 0.3f, 1.0f );
@@ -701,6 +805,14 @@ namespace gamescope
 			if ( widgets::BeginGroupBlock( "##effects" ) )
 			{
 				ImGui::TextUnformatted( "Background Effects" );
+				ImGui::SameLine();
+				if ( DrawResetLink( "reset##effects" ) )
+				{
+					const config::OverlaySettings defaults{};
+					o.background_blur = defaults.background_blur;
+					o.background_darkening = defaults.background_darkening;
+					QueueGeneralSave();
+				}
 				DrawLiveFloatSlider( "Blur", &o.background_blur, 0.0f, 1.0f );
 				DrawLiveFloatSlider( "Darkening", &o.background_darkening, 0.0f, 1.0f );
 				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
@@ -724,10 +836,25 @@ namespace gamescope
 
 		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
 		// see Overlay/Chrome.h -- position/size unchanged from M7.
+		//
+		// Issue #43 recommendation #1: this panel is the one place the
+		// title-bar badge can't be computed from session-routing state
+		// alone (Chrome.h's own comment on pszBadgeOverride) -- General/
+		// Notifications always write global.json regardless of the
+		// per-game override (EnsureGeneralSettingsLoaded()'s comment
+		// below), a routing rule distinct from the Per-Game tab's. But
+		// BeginPanelWindow() -- and therefore the title bar -- draws
+		// *before* the tab bar below picks this frame's active tab, so the
+		// override can only ever reflect *last* frame's tab. Same one-
+		// frame lag Chrome.cpp already accepts for its own per-panel focus
+		// state; harmless here since the badge only needs to catch up
+		// within a frame of a tab switch, not synchronously.
+		const char *pszBadgeOverride = s_bLastTabWasGlobalOnly ? "global only" : nullptr;
 		if ( !chrome::BeginPanelWindow( "CONFIG / PROFILES", chrome::PanelId::Config,
-			ImVec2( 520.0f, 380.0f ), ImVec2( 430.0f, 320.0f ) ) )
+			ImVec2( 520.0f, 380.0f ), ImVec2( 430.0f, 320.0f ), pszBadgeOverride ) )
 			return;
 
+		bool bGlobalOnlyTabActiveThisFrame = false;
 		if ( ImGui::BeginTabBar( "ConfigTabs" ) )
 		{
 			if ( ImGui::BeginTabItem( "Per-Game" ) )
@@ -737,6 +864,7 @@ namespace gamescope
 			}
 			if ( ImGui::BeginTabItem( "General" ) )
 			{
+				bGlobalOnlyTabActiveThisFrame = true;
 				DrawGeneralTab();
 				ImGui::EndTabItem();
 			}
@@ -747,11 +875,13 @@ namespace gamescope
 			// here needs no changes there at all.
 			if ( ImGui::BeginTabItem( "Notifications" ) )
 			{
+				bGlobalOnlyTabActiveThisFrame = true;
 				gamescope::Notifications::DrawSettingsPanel();
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();
 		}
+		s_bLastTabWasGlobalOnly = bGlobalOnlyTabActiveThisFrame;
 
 		chrome::EndPanelWindow();
 	}
