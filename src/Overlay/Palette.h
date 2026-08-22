@@ -88,6 +88,30 @@ namespace gamescope::palette
 		return IM_COL32( 0, 0, 0, (int)( flAlpha * 255.0f + 0.5f ) );
 	}
 
+	// ---- Low-alpha "dark grey" text/rail tier (issue #62) -------------------
+	// Three complaints in a row have landed on the same shape: some near-
+	// white element sits at the original spec's own meta/rail alpha (§1's
+	// 9-36% band) and reads as too dark to comfortably see against the
+	// panel's dark surface -- #44's dock hint, an earlier bottom-bar hint,
+	// and now the slider's own scale-marks/rail. Each prior fix bumped one
+	// call site's own alpha literal by hand (see #44's own commit), which
+	// fixes that one site and leaves the next occurrence exactly where it
+	// was -- the third instance of the same report. Named centrally here
+	// instead, so a call site reads "the readable dark-grey tier" once and
+	// any future brightness tweak is one edit, not a hunt through every
+	// panel's own literals.
+	//
+	// Deliberately NOT a change to White()/Text() themselves: those still
+	// mean exactly what their alpha argument says, and plenty of *other*
+	// low-alpha uses (group-block fills at 2-3%, hairline borders at 6-10%,
+	// disabled-state dimming at 30-45%) are low on purpose, not a
+	// readability bug -- blanket-brightening the whole White()/Text() range
+	// would wash those out along with fixing the actual complaint. Only the
+	// specific tiers named below move.
+	constexpr float kRailAlpha     = 0.16f; // was 0.09 (old spec §7 "track #FFFFFF @ 9%") -- slider track/rail, White()
+	constexpr float kMarkAlpha     = 0.38f; // was 0.26 (old spec §7 "meta-faint 26%") -- slider min/max scale marks, White()
+	constexpr float kMetaTextAlpha = 0.44f; // was 0.34 (old spec §1 "meta 30-36%") -- read-only system-measured text (ReadoutStrip), White()
+
 	// surface (§1: rgba(9,10,12,.88)) as an ImVec4, for ImGuiStyle.Colors[]
 	// slots that want a float color rather than a packed ImU32.
 	inline ImVec4 SurfaceVec4( float flAlpha = 0.88f )
