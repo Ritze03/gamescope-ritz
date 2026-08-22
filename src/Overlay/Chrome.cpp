@@ -568,6 +568,27 @@ namespace gamescope::chrome
 			const float flCenterY = windowPos.y + flTitleBarHeight * 0.5f;
 			float flCursorX = windowPos.x + kPadX;
 
+			// Glyph button cluster position, computed here (before the title/
+			// meta text below) rather than at its old spot right before
+			// DrawTitleGlyphButton() -- both only ever depended on
+			// barMax/kPadX/kButtonSize/kButtonGap, never on title/meta text
+			// width, so this reorder changes no positions. Needed early now:
+			// issue #23 half two's flTextClipRight below clips title/meta
+			// text against collapsePos, which requires knowing it before
+			// drawing that text, not after.
+			const ImVec2 closePos( barMax.x - kPadX - kButtonSize, windowPos.y + ( flTitleBarHeight - kButtonSize ) * 0.5f );
+			const ImVec2 collapsePos( closePos.x - kButtonGap - kButtonSize, closePos.y );
+			// Issue #23 half two: at a large enough raised-baseline x
+			// display_scale combination, "GAMESCOPE" + "gamescope-ritz" can
+			// render wider than a panel's fixed window width -- #24's
+			// "panel titles clip off the window edge", confirmed at 2.0x.
+			// Clipping the title/meta draws to end here (with one row-gap
+			// of breathing room) keeps long text from painting straight
+			// through the collapse/close glyphs, which is what "clip"
+			// actually looked like before this: the two literally
+			// overlapped, not just visually crowded.
+			const float flTextClipRight = collapsePos.x - kRowGap;
+
 			// 6x6 square status dot -- spec §5: always "live" (this panel's
 			// window is only ever drawn while its subsystem is on), glow
 			// approximated as one 10x10 rect behind it @25% accent.
@@ -580,27 +601,34 @@ namespace gamescope::chrome
 			// Title -- Mono 600 11 UPPER, spec §2: @86% unfocused / 94% focused.
 			ImGui::PushFont( fonts::Get( fonts::Style::Title ) );
 			const ImVec2 titleSize = ImGui::CalcTextSize( pszTitle );
+			pDrawList->PushClipRect( ImVec2( flCursorX, barMin.y ), ImVec2( flTextClipRight, barMax.y ), true );
 			pDrawList->AddText( ImVec2( flCursorX, flCenterY - titleSize.y * 0.5f ),
 				ImGui::GetColorU32( gamescope::palette::Text( bFocused ? 0.94f : 0.86f ) ), pszTitle );
+			pDrawList->PopClipRect();
 			flCursorX += titleSize.x + kRowGap;
 			ImGui::PopFont();
 
-			// Meta -- Mono 400 10.5 @30%, spec §5/§2.
-			ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
-			static constexpr const char *kMeta = "gamescope-ritz";
-			const ImVec2 metaSize = ImGui::CalcTextSize( kMeta );
-			pDrawList->AddText( ImVec2( flCursorX, flCenterY - metaSize.y * 0.5f ),
-				ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), kMeta );
-			ImGui::PopFont();
+			// Meta -- Mono 400 10.5 @30%, spec §5/§2. Skipped outright (not
+			// just clipped) once the title alone has already reached the
+			// button cluster -- secondary "gamescope-ritz" branding text has
+			// no business fighting the title for the last few px of room.
+			if ( flCursorX < flTextClipRight )
+			{
+				ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
+				static constexpr const char *kMeta = "gamescope-ritz";
+				const ImVec2 metaSize = ImGui::CalcTextSize( kMeta );
+				pDrawList->PushClipRect( ImVec2( flCursorX, barMin.y ), ImVec2( flTextClipRight, barMax.y ), true );
+				pDrawList->AddText( ImVec2( flCursorX, flCenterY - metaSize.y * 0.5f ),
+					ImGui::GetColorU32( gamescope::palette::White( 0.30f ) ), kMeta );
+				pDrawList->PopClipRect();
+				ImGui::PopFont();
+			}
 
 			// Glyph button cluster, right-aligned: close then collapse
 			// reading left-to-right (i.e. collapse sits left of close),
 			// matching spec §5's own listed order ("... -> glyph buttons"
 			// with collapse drawn before close in every mockup screenshot's
 			// left-to-right reading).
-			const ImVec2 closePos( barMax.x - kPadX - kButtonSize, windowPos.y + ( flTitleBarHeight - kButtonSize ) * 0.5f );
-			const ImVec2 collapsePos( closePos.x - kButtonGap - kButtonSize, closePos.y );
-
 			if ( DrawTitleGlyphButton( pDrawList, "##collapse", collapsePos, Icon::Collapse, bFocused, kButtonSize ) )
 				s_bPanelCollapsed[(size_t)id] = !s_bPanelCollapsed[(size_t)id];
 			if ( DrawTitleGlyphButton( pDrawList, "##close", closePos, Icon::Close, bFocused, kButtonSize ) )

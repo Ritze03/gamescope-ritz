@@ -642,42 +642,25 @@ namespace gamescope::widgets
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
 		ImDrawList *pDrawList = pWindow->DrawList;
 
-		// Issue #23: kGap/kPadY baseline raised ~20-25% (3/6 -> 3.5/7).
-		// kPadX is new -- horizontal breathing room used below to derive a
-		// per-segment minimum width from the labels' own measured text
-		// width, rather than only ever dividing the available width evenly.
-		// That minimum is the actual fix for #24's "segmented filter buttons
-		// visibly merge at 2.0x UI Scale": flSegHeight already tracked the
-		// active font's real size via GetFontSize() (which itself already
-		// reflects FontGlobalScale/the rebuilt atlas, Fonts.cpp), so height
-		// never had this problem -- width was the one dimension still purely
-		// even-division-of-available-space, with no floor tied to how wide
-		// the label text actually renders, so a big-enough font (either via
-		// this issue's own baseline raise or a high display_scale) could
-		// render wider than the segment that was about to contain it.
-		// Self-maintaining like the row-height derivation already was: as
-		// text grows for *any* reason (baseline raise, display_scale, a
-		// translated label), the minimum grows with it with no separate
-		// scale constant to keep in sync by hand.
-		// Issue #23 half two: kGap/kPadY/kPadX also scale live by
-		// display_scale, same pattern as every other geometry constant in
-		// this file -- flMaxLabelWidth below needs no such multiply itself,
-		// since ImGui::CalcTextSize() already reads the current (already
-		// scale-rebuilt, Fonts.cpp #38) font metrics on its own.
+		// Issue #23: kGap/kPadY baseline raised ~20-25% (3/6 -> 3.5/7), and
+		// (half two) both scale live by display_scale, same pattern as
+		// every other geometry constant in this file. flSegWidth stays a
+		// strict even division of the available width -- deliberately
+		// *not* widened to fit each label's own measured text (a version
+		// of this tried that first; reverted -- with nCount cells and a
+		// container of genuinely fixed width, one cell asking for more than
+		// its even share only ever takes it from cutting a later cell off
+		// the visible row entirely, which is worse than the merge it was
+		// meant to fix: a clipped/tight label is still there and clickable,
+		// a cell pushed past the window's own edge is neither). Height
+		// already tracked the active font's real size via GetFontSize()
+		// (itself already reflecting FontGlobalScale/the rebuilt atlas,
+		// Fonts.cpp), so it never had this problem.
 		const float flScale = gamescope::palette::DisplayScale();
 		const float kGap = 3.5f * flScale;
 		const float kPadY = 7.0f * flScale;
-		const float kPadX = 8.0f * flScale;
 		const float flAvailWidth = ImGui::GetContentRegionAvail().x;
-		const float flEvenWidth = ( flAvailWidth - kGap * ( nCount - 1 ) ) / nCount;
-
-		float flMaxLabelWidth = 0.0f;
-		ImGui::PushFont( fonts::Get( fonts::Style::SegmentActive ) ); // bold face -- the wider of the two weights this control ever draws
-		for ( int i = 0; i < nCount; i++ )
-			flMaxLabelWidth = ImMax( flMaxLabelWidth, ImGui::CalcTextSize( pszLabels[i] ).x );
-		ImGui::PopFont();
-
-		const float flSegWidth = ImMax( flEvenWidth, flMaxLabelWidth + kPadX * 2.0f );
+		const float flSegWidth = ( flAvailWidth - kGap * ( nCount - 1 ) ) / nCount;
 		const float flSegHeight = ImGui::GetFontSize() + kPadY * 2.0f;
 
 		bool bChanged = false;
@@ -718,12 +701,27 @@ namespace gamescope::widgets
 			pDrawList->AddRectFilled( pos, pos + size, fill ); // 0px radius -- controls stay flat/square
 			pDrawList->AddRect( pos, pos + size, border );
 
+			// Issue #23 half two: clipped to this cell's own rect -- the
+			// actual fix for #24's "segmented filter buttons visibly merge
+			// at 2.0x UI Scale". A big-enough font (this issue's own raised
+			// baseline, stacked with a high display_scale) can render a
+			// label wider than an even-division cell; without a clip rect
+			// that overflow used to paint straight across the border into
+			// the next cell, reading as one fused blob rather than two
+			// separate segments -- the borders/fills above were never what
+			// merged, only the unclipped text was. Clipping confines that
+			// same case to "this label's tail is cut off, still inside its
+			// own clearly-bordered cell", which stays legible as a row of
+			// distinct segments at any scale, same principle
+			// ImGui::RenderTextClipped() applies to stock widgets.
 			ImGui::PushFont( fonts::Get( bActive ? fonts::Style::SegmentActive : fonts::Style::SegmentLabel ) );
 			const ImVec2 textSize = ImGui::CalcTextSize( pszLabels[i] );
 			const ImVec2 textPos(
 				pos.x + ( size.x - textSize.x ) * 0.5f,
 				pos.y + ( size.y - textSize.y ) * 0.5f );
+			pDrawList->PushClipRect( pos, pos + size, true );
 			pDrawList->AddText( textPos, text, pszLabels[i] );
+			pDrawList->PopClipRect();
 			ImGui::PopFont();
 
 			ImGui::PopID();
