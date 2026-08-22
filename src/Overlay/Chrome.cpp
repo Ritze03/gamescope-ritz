@@ -1067,7 +1067,17 @@ namespace gamescope::chrome
 			ImDrawList *pFgDrawList = ImGui::GetForegroundDrawList();
 			const ImU32 shadowCol = ImGui::GetColorU32( gamescope::palette::Black( 0.90f ) );
 			pFgDrawList->AddText( hintPos + ImVec2( 0.0f, 1.0f ), shadowCol, kHintText );
-			pFgDrawList->AddText( hintPos, ImGui::GetColorU32( gamescope::palette::White( 0.42f ) ), kHintText );
+			// Issue #44: spec §8's own @42% meta-level alpha is calibrated for
+			// de-emphasised annotation text sitting *on a panel surface*
+			// (near-opaque, low-detail background) -- this line instead sits
+			// directly over the game, with no such backing, and its entire
+			// job is to be read by someone who doesn't yet know the overlay
+			// exists. Deliberately raised to near-title-bar-focused strength
+			// (Text(), not White() -- see Palette.h's LiveTheme comment for
+			// why Text()'s base differs from White()'s) rather than left at
+			// meta level. Do not "fix" this back to @42% to match the spec
+			// table -- that table's contrast assumption doesn't hold here.
+			pFgDrawList->AddText( hintPos, ImGui::GetColorU32( gamescope::palette::Text( 0.85f ) ), kHintText );
 			ImGui::PopFont();
 		}
 	}
