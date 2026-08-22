@@ -266,28 +266,52 @@ namespace gamescope
 		QueueSave();
 	}
 
-	// Frame Limiter tab. GAMESCOPE_FPS_LIMIT only ever reaches
-	// g_nSteamCompMgrTargetFPS through steamcompmgr's own PropertyNotify
-	// handler (steamcompmgr.cpp:6662-6665) -- unlike g_wantedUpscaleFilter/
-	// g_upscaleFilterSharpness above, there is no plain "g_wanted*" global
-	// this panel could write directly and have paint_all() pick up next
-	// frame. SPEC.md's Feature 4 section is explicit that the overlay's job
-	// for exactly this shape of knob is to write the real X11 property
-	// (XChangeProperty), not invent a second code path -- so, unlike
-	// Set*() above, this one round-trips: write the property on the root
-	// Xwayland server's own connection, the same connection steamcompmgr
-	// itself already selects PropertyNotify on, which is what makes the
-	// write visible back to steamcompmgr's event loop at all. Still safe
-	// with no new synchronization for the same reason as every other Set*()
-	// here: this call only ever happens on the steamcompmgr thread, the
-	// same thread that owns that Display* connection for everything else it
-	// does with it (the many other XChangeProperty() calls throughout
-	// steamcompmgr.cpp).
+	// Frame Limiter tab.
+	//
+	// Originally this only wrote the legacy GAMESCOPE_FPS_LIMIT X11 property
+	// and relied on steamcompmgr's own PropertyNotify handler
+	// (steamcompmgr.cpp's handle_property_notify(), the `gamescopeFPSLimit`
+	// branch) to land it in g_nSteamCompMgrTargetFPS. That write *does*
+	// land -- but it doesn't stick: paint_all() calls
+	// update_app_target_refresh_cycle() every frame
+	// (steamcompmgr.cpp:2918), which unconditionally recomputes
+	// g_nSteamCompMgrTargetFPS from a *different* variable,
+	// g_nCombinedAppRefreshCycleOverride[type] (steamcompmgr.cpp:975-1011),
+	// zeroing it first and only restoring a nonzero value if that override
+	// is itself set. Nothing sets that override from the X property path,
+	// so the very next frame after the PropertyNotify handler wrote a
+	// nonzero g_nSteamCompMgrTargetFPS, this stomps it back to 0 -- this is
+	// issue #25's bug: the control visibly writes, the FPS HUD never moves.
+	// (Verified live: 28fps and 60fps both left the HUD sitting at 120fps.)
+	//
+	// The property write above isn't wrong, exactly -- it is just no longer
+	// the mechanism upstream's own frame-pacing code actually reads on a
+	// steady-state basis; g_nCombinedAppRefreshCycleOverride is. The real
+	// setter for that variable is steamcompmgr_set_app_refresh_cycle_override()
+	// (steamcompmgr.hpp:174), an ordinary extern'd function call -- not an
+	// X11 round-trip -- already used for exactly this by both the
+	// gamescope_control Wayland protocol's set_app_refresh_cycle request
+	// (wlserver.cpp:1370) and the "debug_set_fps_limit" ConCommand
+	// (steamcompmgr.cpp, cc_debug_set_fps_limit). This call mirrors that
+	// ConCommand exactly (change_refresh=true, change_fps_cap=true). Being a
+	// plain global write, it's safe with no new synchronization for the same
+	// reason as every other Set*() above (see the file-top threading-safety
+	// comment): PanelDisplay_Draw() only ever runs on the steamcompmgr
+	// thread, the same thread paint_all()/update_app_target_refresh_cycle()
+	// run on.
+	//
+	// The XChangeProperty write is kept alongside it (not removed) so
+	// GAMESCOPE_FPS_LIMIT still reflects the panel's current value for any
+	// external reader of that property (e.g. the Steam client) -- it is
+	// just no longer the thing this panel relies on for the limit to
+	// actually take effect.
 	static void SetFpsLimit( int nFps )
 	{
 		nFps = std::clamp( nFps, 0, 240 );
 		s_CachedSettings.gamescope.fps_limit = nFps;
 		QueueSave();
+
+		steamcompmgr_set_app_refresh_cycle_override( GetBackend()->GetScreenType(), nFps, true, true );
 
 		gamescope_xwayland_server_t *pRootServer = wlserver_get_xwayland_server( 0 );
 		if ( pRootServer && pRootServer->ctx )
@@ -486,7 +510,7 @@ namespace gamescope
 			SetFpsLimit( nFps );
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "0 = unlimited. Applies immediately -- writes GAMESCOPE_FPS_LIMIT, the same live property the Steam client itself drives this with." );
+		ImGui::TextDisabled( "0 = unlimited. Applies immediately." );
 		ImGui::PopFont();
 	}
 
