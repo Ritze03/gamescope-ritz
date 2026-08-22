@@ -722,12 +722,11 @@ namespace gamescope::Notifications
 		int nVert = 0, nHoriz = 2;
 		ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
 
-		static const char *s_VertLabels[] = { "Top", "Center", "Bottom" };
-		static const char *s_HorizLabels[] = { "Left", "Center", "Right" };
-		bool bPlacementChanged = false;
-		bPlacementChanged |= widgets::SegmentedControl( "##NotifVert", &nVert, s_VertLabels, 3 );
-		bPlacementChanged |= widgets::SegmentedControl( "##NotifHoriz", &nHoriz, s_HorizLabels, 3 );
-		if ( bPlacementChanged )
+		// Spec §11 ANCHOR block (widgets::PositionGrid -- shared with the
+		// System Monitor position picker, issue #27): one 3x3 grid reads
+		// directly as "where on screen will this toast appear," unlike the
+		// two independent segmented controls this replaces.
+		if ( widgets::PositionGrid( "##NotifPlacement", &nVert, &nHoriz ) )
 		{
 			s_GlobalOverlay.notification_placement = ComposePlacement( nVert, nHoriz );
 			PersistPlacement();
