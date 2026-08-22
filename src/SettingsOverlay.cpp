@@ -930,6 +930,19 @@ namespace gamescope
 		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
 			return;
 
+		// Issue #51: apply any font-atlas rebuild PanelConfig.cpp's General
+		// tab queued (RebuildAll(), on the Display-scale slider's release)
+		// before this frame draws anything -- ScopedImguiContext above
+		// already made our context current, so this only ever touches our
+		// own pending rebuild, if any (a no-op every other frame). Doing
+		// this here, rather than letting RebuildAll() rebuild synchronously
+		// from wherever PanelConfig.cpp calls it (mid-frame, from inside
+		// this same context's own widget-drawing pass, since that call
+		// happens further down this very call stack), is the fix: see
+		// Fonts.cpp's RebuildAll() for why a same-frame rebuild corrupts
+		// whatever this frame already drew before reaching that call.
+		gamescope::fonts::ApplyPendingRebuild();
+
 		const uint64_t ulNowNanos = get_time_in_nanos();
 		float flDeltaTime = s_ulLastFrameTimeNanos == 0
 			? ( 1.0f / 60.0f )

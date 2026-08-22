@@ -155,6 +155,12 @@ namespace gamescope::fonts
 			// actually run for this context, so this can never collide with
 			// a legitimate already-built scale.
 			float flBuiltScale = 0.0f;
+
+			// Issue #51: deferred-rebuild request for THIS context -- see
+			// RebuildAll()/ApplyPendingRebuild() below for why this exists
+			// and who is expected to consume it.
+			bool bRebuildPending = false;
+			float flPendingScale = 0.0f;
 		};
 
 		// Keyed by ImGuiContext*, not process-global: SettingsOverlay.cpp,
@@ -317,21 +323,84 @@ namespace gamescope::fonts
 	{
 		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
 
-		// g_FontSets already holds exactly "every context whose
-		// EnsureImguiInit() has run at least once" -- Load() populates an
-		// entry (via operator[]) the first time it runs for a context, and
-		// nothing ever erases one. A context that has never called Load()
-		// (an FPS HUD the user has never enabled, or a Notifications
-		// context that has never shown a toast) simply isn't in this map
-		// yet, and correctly picks up flScale on its own the first time it
-		// does call Load() -- see Fonts.h's comment.
+		// Issue #51: every real call site (Chrome.cpp's EnsureLiveThemeLoaded()
+		// catch-up, PanelConfig.cpp's DrawDisplayScaleSlider() on slider
+		// release) runs from *inside* pPrevContext's own active ImGui frame
+		// -- i.e. after that context's ImGui::NewFrame() and before its
+		// Render(), mid-way through a widget-drawing pass. Rebuilding
+		// pPrevContext's atlas synchronously right here -- Load()'s
+		// ClearFonts() deletes every ImFont/ImFontBaked/glyph-rect this
+		// context has, including the ones already used by whatever this
+		// same frame already drew before reaching this call (the dock/
+		// title bar, earlier General-tab rows, ...) -- invalidates glyph
+		// state those already-recorded draw commands still reference. This
+		// is the classic ImGui dynamic-atlas rebuild trap: it reliably
+		// reproduced as corrupted/"awful" text for whatever had already
+		// drawn this frame, confirmed by reading imgui_draw.cpp's own
+		// packer (ImFontAtlasPackAddRect can call
+		// ImFontAtlasTextureMakeSpace(), whose own comment warns "may
+		// recreate a new texture and therefore change atlas->TexData" --
+		// exactly the kind of mid-frame texture-identity change that would
+		// strand earlier-this-frame draw commands pointing at a texture
+		// object that's about to stop being the one actually bound) --
+		// see this file's top-of-file comment for the write-up.
+		//
+		// Every *other* context in g_FontSets is safe to rebuild
+		// immediately, right here: RebuildAll() is only ever reached from
+		// code that runs inside pPrevContext's own frame, and nothing
+		// re-enters another context's NewFrame()/Render() bracket from
+		// within that call stack (SettingsOverlay.cpp, FpsDisplay.cpp and
+		// Notifications.cpp each drive their own frame independently, one
+		// at a time) -- so any other context sitting in this map is
+		// between its own frames right now, with nothing outstanding that
+		// could reference glyph state Load() is about to invalidate.
+		//
+		// So: defer pPrevContext's own rebuild to the start of its NEXT
+		// frame (ApplyPendingRebuild(), called once per frame before any
+		// widget draws -- see SettingsOverlay.cpp's call site), and apply
+		// every other context's rebuild immediately, same as before.
 		for ( auto &kv : g_FontSets )
 		{
+			if ( kv.first == pPrevContext )
+				continue; // handled below, uniformly with "never built an atlas yet" below
+
 			ImGui::SetCurrentContext( kv.first );
 			Load( flScale );
 		}
 
+		// pPrevContext itself may not be in g_FontSets yet (Chrome.cpp's
+		// startup catch-up can run before this context's very first Load()
+		// ever populated an entry) -- g_FontSets[pPrevContext] here
+		// default-constructs one (flBuiltScale == 0.0f, "never built"),
+		// which ApplyPendingRebuild() below then fills in on this
+		// context's next frame, same as every other path into this map.
+		if ( pPrevContext != nullptr )
+		{
+			FontSet &set = g_FontSets[ pPrevContext ];
+			set.bRebuildPending = true;
+			set.flPendingScale = flScale;
+		}
+
 		ImGui::SetCurrentContext( pPrevContext );
+	}
+
+	void ApplyPendingRebuild()
+	{
+		ImGuiContext *pContext = ImGui::GetCurrentContext();
+		if ( pContext == nullptr )
+			return;
+
+		auto it = g_FontSets.find( pContext );
+		if ( it == g_FontSets.end() || !it->second.bRebuildPending )
+			return; // nothing pending for this context -- the common case, every frame but the one right after a rebuild request
+
+		// Clear the flag before calling Load(), not after: Load() itself
+		// only touches g_FontSets[pContext].flBuiltScale/fonts, so this
+		// ordering doesn't matter for correctness here, but it keeps the
+		// "pending" flag's lifetime obviously scoped to exactly one
+		// ApplyPendingRebuild() call rather than however long Load() takes.
+		it->second.bRebuildPending = false;
+		Load( it->second.flPendingScale );
 	}
 
 	ImFont *Get( Style style )

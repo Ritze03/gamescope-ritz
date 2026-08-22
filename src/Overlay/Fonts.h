@@ -107,6 +107,26 @@ namespace gamescope::fonts
 	// drag value -- see that file's own comment for why.
 	void RebuildAll( float flScale );
 
+	// Issue #51: applies a rebuild RebuildAll() deferred for the
+	// *currently-current* context, if one is pending -- a no-op otherwise
+	// (the common case, every frame but the one right after a rebuild was
+	// requested). RebuildAll() always defers the rebuild of whichever
+	// context is current when it's called (every real call site runs
+	// mid-frame, from inside that context's own active NewFrame()/Render()
+	// bracket -- rebuilding the atlas synchronously right there deletes
+	// glyph state this same frame's earlier draw calls already reference,
+	// which reproduced as corrupted/"awful" text; see Fonts.cpp's
+	// RebuildAll() for the full write-up), so every context that ever
+	// calls RebuildAll() -- today, only SettingsOverlay.cpp -- MUST call
+	// this once per frame, before any widget is drawn (right after
+	// EnsureImguiInit(), before ImGui::NewFrame()), or a requested rebuild
+	// will simply never take effect for that context. FpsDisplay.cpp and
+	// Notifications.cpp don't need to call this: RebuildAll() rebuilds
+	// every *other* context immediately, since none of them are mid-frame
+	// at the moment RebuildAll() runs (nothing re-enters another context's
+	// frame from inside the call stack that reaches RebuildAll()).
+	void ApplyPendingRebuild();
+
 	// Returns the ImFont* for a role on the currently-current context. Once
 	// Load() has run for that context (as SettingsOverlay.cpp/FpsDisplay.cpp's
 	// EnsureImguiInit() always does before any drawing) this is never null:
