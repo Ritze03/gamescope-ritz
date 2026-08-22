@@ -37,7 +37,9 @@
 // removes the native title bar outright (ImGuiWindowFlags_NoTitleBar) and
 // draws the whole spec §5 bar as one thing -- see DrawTitleBar() below for
 // how drag/collapse/close are reimplemented on ImGui's own primitives
-// (StartMouseMovingWindow, ButtonBehavior via InvisibleButton) rather than
+// (InvisibleButton for hit-testing all three gestures; issue #42's fix
+// comment on the drag zone explains why the move itself is a hand-rolled
+// SetWindowPos() delta rather than StartMouseMovingWindow()) rather than
 // by hand from nothing.
 #include "Chrome.h"
 
@@ -58,13 +60,12 @@
 // Widgets.cpp.
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
-// imgui_internal.h for ImGui::StartMouseMovingWindow()/GetCurrentWindow() --
-// the custom title bar's drag reimplementation calls the exact same
-// internal primitive ImGui's own native title bar drag path uses (see
-// imgui.cpp's RenderWindowTitleBarContents()/UpdateMouseMovingWindowNewFrame()
-// callers), not a from-scratch mouse-delta hack. Same precedent as
-// Widgets.cpp, which already includes this for ButtonBehavior()/
-// SliderBehavior().
+// imgui_internal.h for ImMax()/ImMin()/ImClamp() -- small math helpers used
+// throughout this file's layout code (window-bounds clamping, opening-size
+// computation) that imgui.h doesn't expose publicly. Not used for the title
+// bar's drag primitive any more (issue #42's fix comment on the drag zone in
+// DrawTitleBar() explains why StartMouseMovingWindow() had to go), but still
+// needed for these.
 #include "imgui_internal.h"
 #include "Palette.h"
 
@@ -634,12 +635,31 @@ namespace gamescope::chrome
 			if ( DrawTitleGlyphButton( pDrawList, "##close", closePos, Icon::Close, bFocused, kButtonSize ) )
 				SetPanelOpen( id, false );
 
-			// Drag zone: the whole bar minus the button cluster. Calling
-			// ImGui::StartMouseMovingWindow() on click-down is the same
-			// internal primitive ImGui's own native title bar drag uses
-			// (imgui.cpp) -- not a from-scratch mouse-delta reimplementation,
-			// so multi-viewport clamping/focus-on-move/etc. all come along
-			// for free exactly like a real title bar.
+			// Drag zone: the whole bar minus the button cluster.
+			//
+			// Issue #42 regression fix: this used to call
+			// ImGui::StartMouseMovingWindow() on click-down, on the theory
+			// that it's the same internal primitive ImGui's own native
+			// title-bar drag uses and would come with multi-viewport
+			// clamping/focus-on-move/etc "for free". That theory was wrong --
+			// imgui.cpp's StartMouseMovingWindow() itself checks
+			// `window->Flags & ImGuiWindowFlags_NoMove` (or the root
+			// window's) and, when set, still sets ActiveID but leaves
+			// g.MovingWindow null, i.e. refuses to move the window. There is
+			// no separate gate for "called from the real title bar" vs
+			// "ImGui's own click-anywhere-in-the-body fallback" -- it is one
+			// function, one flag, checked once. BeginPanelWindow() sets
+			// ImGuiWindowFlags_NoMove precisely to kill that click-anywhere
+			// fallback (see its comment), so the exact same call from here
+			// was a dead end too: body-drag correctly stopped moving the
+			// window, but so did title-bar drag, because both funneled
+			// through the one gated primitive.
+			// Fix: drag the window by hand instead, bypassing
+			// StartMouseMovingWindow() (and therefore NoMove) entirely --
+			// SetWindowPos() has no NoMove check, it just writes
+			// window->Pos directly. Focus-on-click still comes for free:
+			// ButtonBehavior() (imgui_widgets.cpp) calls FocusWindow() for
+			// any item that becomes active, InvisibleButton included.
 			//
 			// Issue #33: right-click toggles shade/collapse (replacing the
 			// previous double-click gesture -- the collapse glyph button
@@ -648,10 +668,17 @@ namespace gamescope::chrome
 			// glyph button already makes.
 			ImGui::SetCursorScreenPos( barMin );
 			ImGui::InvisibleButton( "##titledrag", ImVec2( collapsePos.x - kButtonGap - barMin.x, flTitleBarHeight ) );
+			if ( ImGui::IsItemActive() )
+			{
+				const ImVec2 delta = ImGui::GetIO().MouseDelta;
+				if ( delta.x != 0.0f || delta.y != 0.0f )
+				{
+					const ImVec2 pos = ImGui::GetWindowPos();
+					ImGui::SetWindowPos( ImVec2( pos.x + delta.x, pos.y + delta.y ) );
+				}
+			}
 			if ( ImGui::IsItemHovered() )
 			{
-				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) )
-					ImGui::StartMouseMovingWindow( ImGui::GetCurrentWindow() );
 				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Right ) )
 					s_bPanelCollapsed[(size_t)id] = !s_bPanelCollapsed[(size_t)id];
 				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Middle ) )
@@ -832,13 +859,21 @@ namespace gamescope::chrome
 		// now.
 		// Issue #42: NoMove -- without it, stock ImGui treats a title-less
 		// window (NoTitleBar, set above) specially: with no title-bar hit
-		// region of its own to restrict dragging to, it falls back to making
-		// the *entire* window body draggable-to-move on left-click. The
-		// custom title bar's own drag zone (DrawTitleBar()'s
-		// StartMouseMovingWindow() call) invokes the same internal primitive
-		// directly, not gated on this flag, so it's unaffected -- this only
-		// removes the unintentional second, whole-body path to the same
-		// move.
+		// region of its own to restrict dragging to (UpdateMouseMovingWindowEndFrame()'s
+		// "cancel moving if clicked outside of title bar" check is itself gated
+		// on the window having a title bar), it falls back to making the
+		// *entire* window body draggable-to-move on left-click. NoMove
+		// correctly kills that fallback: imgui.cpp's StartMouseMovingWindow()
+		// checks this exact flag and refuses to set g.MovingWindow when it's
+		// present.
+		// That check is not scoped to the implicit fallback, though -- it
+		// applies to *every* caller of StartMouseMovingWindow(), title bar
+		// included, which is why DrawTitleBar()'s drag zone no longer calls it
+		// (see that function's own comment, issue #42's fix): a window
+		// carrying NoMove has no supported way to opt back into
+		// StartMouseMovingWindow()-driven dragging for just one region, so the
+		// title bar drags via a hand-rolled SetWindowPos() delta instead, which
+		// has no NoMove check of its own.
 		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMove;
 		if ( bCollapsed )
@@ -852,9 +887,9 @@ namespace gamescope::chrome
 		// io.DisplaySize on any frame after the first: SetNextWindowPos()
 		// above is ImGuiCond_FirstUseEver, a no-op from then on), and
 		// proactively stopping a title-bar drag from ever placing an edge
-		// past the boundary (DrawTitleBar()'s StartMouseMovingWindow() hands
-		// off to ImGui's own per-frame move logic, which has no bound of its
-		// own). Uses the window's real current position/size -- the same
+		// past the boundary (DrawTitleBar()'s hand-rolled SetWindowPos()
+		// drag, issue #42, has no bound of its own). Uses the window's real
+		// current position/size -- the same
 		// GetWindowPos()/GetWindowSize() calls the focus glow block below
 		// already makes -- so a collapsed window clamps against its actual
 		// title-bar-only height (not its expanded #34 size), and a

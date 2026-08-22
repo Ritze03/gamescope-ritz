@@ -109,14 +109,18 @@ namespace gamescope::chrome
 	// radius, a focused-window accent border @ 42% alpha plus an accent glow
 	// (spec §4's "unmistakable" focus treatment) and accent header gradient,
 	// and the whole window at 94% opacity while unfocused. The custom title
-	// bar reimplements drag (via ImGui::StartMouseMovingWindow() -- the
-	// exact internal primitive ImGui's own native title bar drag calls, not
-	// a from-scratch reimplementation), collapse (a hand-rolled "shrink to
+	// bar reimplements drag (issue #42: a hand-rolled per-frame
+	// SetWindowPos() delta while the drag zone's InvisibleButton is
+	// active -- not ImGui::StartMouseMovingWindow(), which the window's
+	// own NoMove flag, added by the same issue to kill
+	// click-anywhere-in-the-body dragging, blocks unconditionally for
+	// every caller), collapse (a hand-rolled "shrink to
 	// just the title bar" toggle, since ImGui's native collapse mechanism is
 	// wired to its native title bar, which no longer exists once
-	// ImGuiWindowFlags_NoTitleBar is set -- double-click the bar, or the
-	// collapse glyph, both deferred to next frame exactly like ImGui's own
-	// window->WantCollapseToggle is) and close (the collapse/close glyph
+	// ImGuiWindowFlags_NoTitleBar is set -- right-click the bar (issue #33),
+	// or the collapse glyph, both deferred to next frame exactly like
+	// ImGui's own window->WantCollapseToggle is) and close (middle-click
+	// the bar (issue #33), or the collapse/close glyph
 	// buttons are ButtonBehavior()-based InvisibleButtons, the same
 	// primitive every other custom widget in this overlay -- Widgets.cpp's
 	// Toggle()/Checkbox(), DrawDockButton() below -- is built on, so hover/
