@@ -276,7 +276,7 @@ const char usage[] =
 	"  --hdr-debug-heatmap            displays a heatmap-style debug view of HDR luminence across the scene in nits."
 	"\n"
 	"Reshade shader options:\n"
-	"  --reshade-effect               sets the name of a reshade shader to use in either /usr/share/gamescope/reshade/Shaders or ~/.local/share/gamescope/reshade/Shaders\n"
+	"  --reshade-effect               sets the name of a reshade shader to use in either /usr/share/gamescope-ritz/reshade/Shaders or ~/.local/share/gamescope-ritz/reshade/Shaders (the plain /usr/share/gamescope/... and ~/.local/share/gamescope/... paths are also checked as a fallback)\n"
 	"  --reshade-technique-idx        sets technique idx to use from the reshade effect\n"
 	"\n"
 	"Steam Deck options:\n"

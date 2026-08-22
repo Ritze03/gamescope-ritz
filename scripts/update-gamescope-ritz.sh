@@ -130,9 +130,10 @@ fi
 PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
 if [ -z "$EXTRAS" ]; then
 	echo
-	echo "Also refresh scripts/ and looks/ in ${PREFIX_ROOT}/share/gamescope?"
-	echo "(shared with any other gamescope install, including a distro-packaged"
-	echo "/usr/bin/gamescope — see install-gamescope-ritz.sh for details.)"
+	echo "Also refresh scripts/, looks/ and reshade/ in ${PREFIX_ROOT}/share/gamescope-ritz?"
+	echo "(namespaced by binary name — never touches a distro-packaged"
+	echo "/usr/bin/gamescope's own share/gamescope — see install-gamescope-ritz.sh"
+	echo "for details.)"
 	if gcr_confirm "Run default_extras_install.sh now?" n; then EXTRAS="yes"; else EXTRAS="no"; fi
 fi
 if [ "$EXTRAS" = "yes" ]; then
