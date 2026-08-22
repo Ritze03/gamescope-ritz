@@ -775,8 +775,40 @@ namespace gamescope::config
         };
     }
 
+    namespace
+    {
+        // In-process mirror of the most recently *known-good* `overlay`
+        // sub-object, updated synchronously (no disk round trip) by every
+        // EnqueueGlobalWrite() call below. Exists so EnqueueRoutedWrite()'s
+        // global-write branch (further down) can pull a fresh `overlay`
+        // without racing the background ConfigWriter thread: a disk read
+        // right before enqueueing looks fresh but isn't, if an
+        // just-enqueued-but-not-yet-flushed overlay write from the same
+        // frame hasn't hit disk yet -- reading this in-memory value instead
+        // always reflects the latest enqueued write instantly, flushed or
+        // not.
+        bool s_bLastKnownOverlayLoaded = false;
+        OverlaySettings s_LastKnownOverlay;
+
+        const OverlaySettings &CurrentOverlaySettings()
+        {
+            if ( !s_bLastKnownOverlayLoaded )
+            {
+                // First call this process (nothing has written global.json's
+                // overlay yet this session, e.g. the very first edit the
+                // user makes is on a non-General tab) -- fall back to a
+                // one-time disk read, same as before this cache existed.
+                s_LastKnownOverlay = LoadGlobal().overlay;
+                s_bLastKnownOverlayLoaded = true;
+            }
+            return s_LastKnownOverlay;
+        }
+    }
+
     void EnqueueGlobalWrite( Settings settings )
     {
+        s_LastKnownOverlay = settings.overlay;
+        s_bLastKnownOverlayLoaded = true;
         ConfigWriter::Instance().Enqueue( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
     }
 
@@ -888,9 +920,33 @@ namespace gamescope::config
     {
         const std::optional<std::string> &oAppId = SessionAppId();
         if ( oAppId.has_value() && IsSessionOverrideActive() )
+        {
             EnqueuePerGameSnapshot( *oAppId, settings );
-        else
-            EnqueueGlobalWrite( settings );
+            return;
+        }
+
+        // global.json is the one file every panel can end up writing to
+        // (whenever no per-game override is active), but `overlay` is
+        // deliberately process-level/General-tab-owned (ConfigSchema.h's
+        // OverlaySettings comment: "process-level and global.json-only").
+        // No caller of EnqueueRoutedWrite() owns that field -- PanelConfig's
+        // General tab persists overlay edits through EnqueueGlobalWrite()
+        // directly (PanelConfig.cpp's QueueGeneralSave()), never through
+        // here. Every OTHER panel's cached `settings.overlay` here is
+        // whatever it happened to load at panel-open time, which goes stale
+        // the instant the General tab writes a change: a General-tab edit
+        // deliberately never bumps ConfigGeneration (see
+        // EnsureGeneralSettingsLoaded()'s own comment), so nothing reloads
+        // these callers' caches. Forwarding that stale `overlay` straight
+        // through used to silently overwrite every General-tab change on
+        // the very next unrelated routed write from any other panel --
+        // "changed General settings, they don't stick" was this exact bug.
+        // Fix: substitute in the freshest known `overlay` (see
+        // CurrentOverlaySettings() above) immediately before writing,
+        // instead of forwarding this caller's own stale copy.
+        Settings toWrite = settings;
+        toWrite.overlay = CurrentOverlaySettings();
+        EnqueueGlobalWrite( std::move( toWrite ) );
     }
 
     void ResetSessionRoutingForTests()
@@ -900,6 +956,13 @@ namespace gamescope::config
         s_bSessionOverrideActive = false;
         s_bSessionOverrideResolved = false;
         s_ulConfigGeneration = 0;
+        // CurrentOverlaySettings()'s cache (above) is process-wide, same
+        // hazard every other piece of session-routing state here has:
+        // catch2 runs every [config] TEST_CASE in one shared process, each
+        // against its own fresh TempConfigHome, so a value cached against a
+        // prior test's (already-deleted) temp directory must not leak into
+        // the next one.
+        s_bLastKnownOverlayLoaded = false;
     }
 
     std::string DebugDumpEffective( const std::optional<std::string> &oAppId )
