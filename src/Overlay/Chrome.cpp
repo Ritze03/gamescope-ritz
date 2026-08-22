@@ -326,6 +326,21 @@ namespace gamescope::chrome
 			return ImMax( 0.0f, ImGui::GetIO().DisplaySize.y - DockReservedHeight() );
 		}
 
+		// Issue #57: hard 250x250 pixel floor, deliberately NOT scaled by
+		// display_scale. A scaled minimum (250 * flDisplayScale) would sink
+		// well under 250 real pixels at any scale below 1.0x -- 125px at the
+		// General tab's own 0.5x floor -- defeating the point of a *minimum
+		// usable* size: "usable" is a property of real screen pixels a title
+		// bar, its collapse/close glyphs, and a panel's own controls need to
+		// render at, not of the panel's logical/1.0x-unit footprint, which
+		// is exactly what #47's scaling already treats display_scale as
+		// growing everything else, fonts and controls included, right along
+		// with the window -- a panel that ends up relatively larger against
+		// a small/low-scale display at the floor is still internally
+		// consistent (nothing inside it is undersized relative to the
+		// window), just not edge-to-edge tight against that display.
+		constexpr float kMinPanelSize = 250.0f;
+
 		// Issue #58: SetNextWindowSizeConstraints()'s plain size_max bounds a
 		// resize to an absolute size regardless of the window's own
 		// position -- harmless pinned at the origin, but a panel resized
@@ -973,6 +988,10 @@ namespace gamescope::chrome
 		// the resize grip itself is being dragged rather than corrected a
 		// frame late -- skipped while collapsed, matching exactly when
 		// NoResize (below) is present anyway.
+		// Issue #57: size_min is now kMinPanelSize on both axes (a hard
+		// pixel floor -- see that constant's own comment for the scaling
+		// decision) instead of (0,0), so an interactive resize can't shrink
+		// a panel below 250x250 real px.
 		// Issue #58: size_max is still ImGui::GetIO().DisplaySize (kept, so
 		// the constraint is enabled at all -- CalcWindowSizeAfterConstraint()
 		// only applies a callback when both min and max are >= 0), but the
@@ -981,7 +1000,7 @@ namespace gamescope::chrome
 		// ClampPanelResizeToUsableArea()'s own comment for why that, not a
 		// flat max, is what actually fixes #58.
 		if ( !bCollapsed )
-			ImGui::SetNextWindowSizeConstraints( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize, ClampPanelResizeToUsableArea );
+			ImGui::SetNextWindowSizeConstraints( ImVec2( kMinPanelSize, kMinPanelSize ), ImGui::GetIO().DisplaySize, ClampPanelResizeToUsableArea );
 
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
 		// that's Widgets.cpp's ApplyStyle(), unaffected by this
