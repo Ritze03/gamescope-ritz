@@ -175,11 +175,51 @@ namespace gamescope::fonts
 		if ( pContext == nullptr )
 			return; // nothing to build into -- caller's EnsureImguiInit() didn't create a context
 
+		ImGuiIO &io = ImGui::GetIO();
+
+		// Issue #48: the atlas bake below (flSizePixels * flScale per Style)
+		// is the *sole* scaling mechanism for this context's fonts. Two
+		// other call sites (Chrome.cpp's EnsureLiveThemeLoaded(),
+		// PanelConfig.cpp's PushLiveTheme()) also assign
+		// ImGuiIO::FontGlobalScale = display_scale on this same context --
+		// a second, pre-#38 scaling mechanism that, left alone, stacks on
+		// top of this one: ImGui folds FontGlobalScale into the resolved
+		// font size on every pushed-font draw (imgui.cpp's
+		// UpdateCurrentFontSize(), which reads g.Font->LegacySize --
+		// itself already flSizePixels * flScale from this bake -- then
+		// multiplies by FontGlobalScale/FontScaleMain before
+		// GetFontBaked()), so ImGui::Text()/TextDisabled() render at
+		// roughly scale^2 while explicit-size AddText() calls (the title
+		// bar; Notifications.cpp/Widgets.cpp scale their own literal pixel
+		// size by DisplayScale() directly and never touch FontGlobalScale)
+		// stay correct at scale^1 -- confirmed by pixel measurement: the
+		// two paths visibly disagreed before this fix.
+		//
+		// The atlas bake is kept as the one true mechanism, not
+		// FontGlobalScale: #38 rebuilds the atlas at the effective scale
+		// specifically so glyphs are crisp at that size rather than
+		// resampled from a fixed-size bake (see this file's top-of-file
+		// comment); leaving FontGlobalScale live instead would silently
+		// re-introduce that resampled softness at 2.0x and effectively
+		// revert #38. Rather than edit those two other call sites directly
+		// -- Chrome.cpp is another worker's active file for #49;
+		// PanelConfig.cpp's write exists only to give the numeric value
+		// itself a live per-tick preview while a drag is in progress, ahead
+		// of the debounced-to-release RebuildAll() call that actually
+		// re-bakes the atlas (see DrawDisplayScaleSlider()'s own comment)
+		// -- Load() (the one place that actually knows the atlas's true
+		// baked-in scale) unconditionally neutralizes FontGlobalScale back
+		// to a no-op every time it runs, so the atlas bake is the only
+		// mechanism left in effect once a context is at rest (its steady
+		// state after a Load()/RebuildAll() call -- what every measurement
+		// in #48's verification, and every other reader of a font's
+		// resolved size, actually observes). At flScale == 1.0 this is a
+		// true no-op both ways (1.0 * 1.0), so 1.0x rendering is unchanged.
+		io.FontGlobalScale = 1.0f;
+
 		FontSet &set = g_FontSets[pContext];
 		if ( set.flBuiltScale == flScale )
 			return; // already built at this exact scale -- nothing to do (see RebuildAll())
-
-		ImGuiIO &io = ImGui::GetIO();
 
 		// Issue #38: safe to call this more than once per context now --
 		// ClearFonts() releases the atlas's previously-built font/glyph
