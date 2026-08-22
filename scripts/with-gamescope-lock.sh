@@ -19,15 +19,30 @@
 #   Hold the lock for the WHOLE session -- launch, drive, screenshot, tear down.
 #   Locking only the launch defeats the point.
 #
-#   --timeout N   seconds to wait for the lock (default 900). Exits 75 if the
+#   --timeout N   seconds to wait for the lock (default 120). Exits 75 if the
 #                 wait expires, so a caller can distinguish "busy" from "failed".
 #
-# ponytail: one flock, no queue fairness or priority. If waits get long,
-# stagger dispatches rather than building a scheduler.
+# HOLD IT BRIEFLY, AND IN THE FOREGROUND
+#   Two failure modes have already cost real time here:
+#
+#   1. Backgrounding the wait and pausing for a notification. Nothing will
+#      notify you. Run the locked command in the FOREGROUND and let flock
+#      block -- it returns when it acquires.
+#   2. Sleeping inside the lock. A `sleep 600` was observed holding this for
+#      nearly 8 minutes with no gamescope running at all, blocking every
+#      other caller for no benefit. Wait on a real signal (a log line, a
+#      socket appearing) with a short bounded timeout instead.
+#
+#   Exit 75 means busy, not broken: retry once, then continue without
+#   pointer verification and say so in your report. Never park indefinitely.
+#
+# ponytail: one flock, no queue fairness or priority, and no enforced maximum
+# hold time -- a caller that sleeps inside the lock still blocks everyone.
+# Add a watchdog only if that keeps happening after the docs above.
 set -euo pipefail
 
 LOCK_FILE="${GAMESCOPE_TEST_LOCK:-/tmp/gamescope-ritz-test.lock}"
-TIMEOUT=900
+TIMEOUT=120
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
