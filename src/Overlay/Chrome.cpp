@@ -762,11 +762,45 @@ namespace gamescope::chrome
 		// constraint on this very first frame exactly like an interactive
 		// resize past the edge already is -- restored geometry goes through
 		// the existing clamp, not around it.
+		//
+		// Issue #47: defaultSize is authored in 1.0x units (every panel's own
+		// call site, e.g. PanelDisplay.cpp's (440, 360)), but everything
+		// *inside* the window -- fonts, controls, the title bar -- already
+		// scales with display_scale (Palette.h's DisplayScale(), same
+		// pattern DrawDock() already uses via flDockScale below). Without
+		// also scaling the window's own outer size, 2.0x content has nowhere
+		// to go but overflow/clip, which is exactly #47's bug. Applied as one
+		// multiply at the very end of the flat-default computation -- not
+		// baked into defaultSize.x/y above, and not touching kHeightPad's own
+		// 1.0x-unit constant -- so the width/height math immediately above
+		// stays exactly the ratio it was tuned at (1.5x, content-plus-pad)
+		// and only the final result grows with scale; kHeightPad's breathing
+		// room grows right along with it since it's inside that same
+		// multiply, so it stays proportional to defaultSize.y instead of
+		// shrinking toward irrelevance (or itself becoming the overflow) as
+		// scale increases.
+		//
+		// A saved size does NOT get this same flat multiply -- it was
+		// already real on-screen pixels the user (or a previous run of this
+		// same code, at whatever scale was live then) settled on, so
+		// reapplying today's DisplayScale() on top would double-scale it.
+		// Instead it's rescaled relative to the scale it was saved under
+		// (PanelGeometry::scale, issue #47) -- unchanged when that matches
+		// today's scale (the common case, and pixel-identical to the saved
+		// value), proportionally resized when the user has since changed
+		// display_scale, so a size saved at 1.0x reopens at roughly its
+		// 1.0x-equivalent footprint at 2.0x instead of being reused verbatim
+		// (which would just reintroduce #47 through the persistence path) --
+		// still just a starting point, still fully subject to the existing
+		// SetNextWindowSizeConstraints() clamp (#31) a few lines down like
+		// every other path here.
 		constexpr float kHeightPad = 48.0f; // breathing room once content is already the limiting factor
+		const float flDisplayScale = gamescope::palette::DisplayScale();
 		const auto itSavedSize = s_SavedGeometry.find( PanelKey( id ) );
 		const ImVec2 openSize = itSavedSize != s_SavedGeometry.end()
-			? ImVec2( itSavedSize->second.w, itSavedSize->second.h )
-			: ImVec2( defaultSize.x * 1.5f, ImMin( defaultSize.y * 1.5f, defaultSize.y + kHeightPad ) );
+			? ImVec2( itSavedSize->second.w, itSavedSize->second.h ) *
+				( flDisplayScale / ( itSavedSize->second.scale > 0.0f ? itSavedSize->second.scale : 1.0f ) )
+			: ImVec2( defaultSize.x * 1.5f, ImMin( defaultSize.y * 1.5f, defaultSize.y + kHeightPad ) ) * flDisplayScale;
 
 		ImVec2 &lastExpandedSize = s_lastExpandedSize[(size_t)id];
 		bool &bWasCollapsed = s_bPanelWasCollapsedLastFrame[(size_t)id];
@@ -964,6 +998,11 @@ namespace gamescope::chrome
 				geometry.y = curPos.y;
 				geometry.w = curSize.x;
 				geometry.h = curSize.y;
+				// Issue #47: record the display_scale this size was saved
+				// under, so a later restore at a different scale can rescale
+				// rather than reuse it verbatim (see PanelGeometry::scale's
+				// comment and this function's own openSize computation).
+				geometry.scale = gamescope::palette::DisplayScale();
 				config::EnqueueGeometryWrite( PanelKey( id ), geometry );
 			}
 
