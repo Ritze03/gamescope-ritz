@@ -462,17 +462,6 @@ namespace gamescope
 			QueueSave();
 		}
 
-		bool bHdr = cv_hdr_enabled.Get();
-		if ( widgets::Toggle( "HDR", &bHdr ) )
-		{
-			cv_hdr_enabled = bHdr;
-			s_CachedSettings.gamescope.hdr_enabled = bHdr;
-			QueueSave();
-		}
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "More HDR controls live under the HDR tab once this is on." );
-		ImGui::PopFont();
-
 		bool bTearing = cv_tearing_enabled.Get();
 		if ( widgets::Toggle( "Allow Tearing", &bTearing ) )
 		{
@@ -579,6 +568,26 @@ namespace gamescope
 
 	static void DrawHdrTab()
 	{
+		// Main HDR toggle (issue #66): moved here from the Display tab so
+		// the switch lives with the settings it gates instead of being
+		// split across tabs. Taxonomically HDR-enable is a Display-ish
+		// setting, but once a dedicated HDR tab exists, separating the
+		// toggle from what it governs costs more (a control the user has
+		// to remember lives elsewhere) than the tidier categorisation
+		// gains -- deliberate call, see superdoc/planning/ISSUES.md and
+		// issue #66 itself. cv_hdr_enabled/s_CachedSettings.gamescope.
+		// hdr_enabled are unchanged -- only where this is drawn moved, not
+		// what it drives (issue #25's frame-limiter regression is the
+		// cautionary precedent here).
+		bool bHdr = cv_hdr_enabled.Get();
+		if ( widgets::Toggle( "HDR", &bHdr ) )
+		{
+			cv_hdr_enabled = bHdr;
+			s_CachedSettings.gamescope.hdr_enabled = bHdr;
+			QueueSave();
+		}
+		ImGui::Separator();
+
 		const bool bHdrEnabled = cv_hdr_enabled.Get();
 		if ( !bHdrEnabled )
 		{
@@ -588,7 +597,7 @@ namespace gamescope
 			// inventing a new one: these settings are meaningless while HDR
 			// itself is off.
 			ImGui::TextColored( ImVec4( 0.95f, 0.65f, 0.25f, 1.0f ),
-				"HDR is off -- enable it on the Display tab first; these controls do nothing until then." );
+				"HDR is off -- these controls do nothing until it's on." );
 			ImGui::Separator();
 		}
 
@@ -668,8 +677,10 @@ namespace gamescope
 		// Tabs (issue #25), same ImGui::BeginTabBar()/BeginTabItem() pattern
 		// PanelConfig.cpp already uses for Per-Game/General -- Upscaling
 		// keeps the pre-existing filter/scaler/sharpness controls unchanged;
-		// Display keeps VRR/HDR-enable/tearing and gains Force Grab Cursor;
-		// Frame Limiter and HDR are new.
+		// Display keeps VRR/tearing and gains Force Grab Cursor; Frame
+		// Limiter and HDR are new. The HDR-enable toggle itself moved from
+		// Display onto the HDR tab in issue #66 -- it now owns its own
+		// on/off switch alongside the settings it gates.
 		if ( ImGui::BeginTabBar( "GamescopeTabs" ) )
 		{
 			if ( ImGui::BeginTabItem( "Upscaling" ) )
