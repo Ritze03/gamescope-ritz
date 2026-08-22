@@ -53,23 +53,49 @@ namespace gamescope::fonts
 		DockHotkey,    // Mono 500, 8px -- dock button hotkey glyph (spec §2 "Dock hotkey glyph").
 	};
 
-	// Builds the IBM Plex atlas for the *currently current* ImGui context
-	// and must be called after ImGui::CreateContext() but before
-	// ImGui_ImplVulkan_Init() -- the Vulkan backend uploads the font atlas
-	// texture from whatever ImGui::GetIO().Fonts holds at Init() time, so
-	// the atlas has to be finished building before that call, not after.
+	// Builds the IBM Plex atlas for the *currently current* ImGui context at
+	// the given effective UI scale (every Style's baseline pixel size in
+	// Fonts.cpp's kSpecs, multiplied by flScale) and must be called after
+	// ImGui::CreateContext() but before ImGui_ImplVulkan_Init() -- the
+	// Vulkan backend uploads whatever ImGui::GetIO().Fonts holds at Init()
+	// time, so the atlas has to be finished building before that call, not
+	// after.
+	//
+	// Issue #38: no longer idempotent-per-context-only -- safe to call again
+	// later for a context that already has an atlas built, to re-bake it at
+	// a new flScale (a no-op if flScale matches what that context is
+	// currently built at). See Fonts.cpp for the ClearFonts()-then-rebuild
+	// shape -- deliberately ClearFonts(), not the full (and, on an
+	// already-rendered atlas, crash-on-next-glyph) Clear() -- and for why
+	// no manual texture create/destroy call is needed to pair with it
+	// against this ImGui version's dynamic-texture Vulkan backend. Callers
+	// other than a context's own EnsureImguiInit() should go through
+	// RebuildAll() below instead of calling this directly, so every context
+	// stays in sync.
 	//
 	// ImGui font atlases are per-IO/per-context, not shared across contexts
-	// -- SettingsOverlay.cpp and FpsDisplay.cpp each own a separate ImGui
-	// context (see FpsDisplay.h's file comment for why), so each calls this
-	// once, from its own EnsureImguiInit().
+	// -- SettingsOverlay.cpp, FpsDisplay.cpp and Notifications.cpp each own
+	// a separate ImGui context (see FpsDisplay.h's file comment for why), so
+	// each calls this once at init, from its own EnsureImguiInit().
 	//
 	// Fallback (required, not optional): if the bundled IBM Plex data fails
 	// to build into the atlas for any reason, this leaves the atlas on
 	// ImGui's built-in default font and every Style resolves to that same
 	// default font instead -- text still renders, just not in Plex. Never
 	// leaves the atlas empty and never crashes.
-	void Load();
+	void Load( float flScale = 1.0f );
+
+	// Re-bakes every context that has ever called Load() (i.e. every
+	// context whose EnsureImguiInit() has actually run at least once this
+	// process -- an unopened FPS HUD or a Notifications context that has
+	// never shown a toast yet simply isn't in that set, and picks up
+	// flScale on its own from whatever its own first Load() call passes)
+	// at the given effective scale, temporarily making each one current in
+	// turn and restoring whatever was current on entry. Called from
+	// PanelConfig.cpp's General tab, debounced to fire once when the
+	// Display-scale slider is released rather than on every intermediate
+	// drag value -- see that file's own comment for why.
+	void RebuildAll( float flScale );
 
 	// Returns the ImFont* for a role on the currently-current context. Once
 	// Load() has run for that context (as SettingsOverlay.cpp/FpsDisplay.cpp's

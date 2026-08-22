@@ -364,6 +364,18 @@ namespace gamescope::chrome
 			pLiveTheme->flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
 			pLiveTheme->flDockAlpha = s.overlay.opacity_dock;
 			ImGui::GetIO().FontGlobalScale = s.overlay.display_scale;
+
+			// Issue #38: every context's atlas is eagerly built at the
+			// compiled-in default scale (1.0) by its own EnsureImguiInit(),
+			// since none of them can see a saved display_scale before this
+			// (process-level-only, global.json) has actually loaded. Apply
+			// the real persisted value here too, the first time it's known,
+			// so a restart with a non-default scale doesn't wait for the
+			// user to touch the General tab's slider before text is baked
+			// crisp -- a one-time catch-up, not a per-frame cost (this whole
+			// function only runs once, guarded by s_bLiveThemeLoaded above).
+			// A no-op if display_scale is the compiled-in default.
+			gamescope::fonts::RebuildAll( s.overlay.display_scale );
 		}
 
 		// WindowBg/PopupBg's alpha is baked once at init by Widgets.cpp's
