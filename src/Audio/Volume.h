@@ -79,7 +79,20 @@ namespace gamescope::Audio
 	struct StreamCandidate
 	{
 		int nNodeId = 0;
-		std::string sLabel;    // the name wpctl status prints (usually == application.name)
+		// application.name, falling back to media.name, falling back to
+		// whatever `wpctl status` itself printed for the node (usually
+		// node.name) -- issue #63: same precedence ncpamixer uses
+		// (PA_PROP_APPLICATION_NAME, else its "Module" placeholder next to
+		// the stream's own PulseAudio-visible name, which is media.name over
+		// the pulse/PipeWire bridge) and what a `pactl list sink-inputs`
+		// Properties dump shows per stream. Plenty of real streams never set
+		// application.name at all -- e.g. a bluez passthrough sink-input,
+		// confirmed live via `pactl list sink-inputs`, sets only node.name
+		// ("bluez_input.AA_BB_..." -- exactly the raw identifier this issue
+		// is about) and media.name ("iPhone von Moritz (codec AAC)"), so
+		// media.name is the tier that actually rescues that case. See
+		// PollThreadMain in Volume.cpp for where this is assembled.
+		std::string sLabel;
 		std::string sBinary;   // application.process.binary, empty if the client never set it
 		std::string sAppName;  // application.name, empty if the client never set it
 		pid_t nPid = 0;        // application.process.id, 0 if absent/unparsable
@@ -213,6 +226,12 @@ namespace gamescope::Audio
 			std::string sAppName;            // application.name, empty if absent
 			std::optional<pid_t> onPid;      // application.process.id, parsed
 			std::optional<long> olSerial;    // object.serial, parsed - PipeWire's own never-reused monotonic counter
+			// Appended after the above (rather than next to sAppName) so
+			// existing positional aggregate-initializers (see
+			// tests/test_audio_volume.cpp's SelectCandidate() cases) don't
+			// silently shift -- media.name, empty if absent. Issue #63's
+			// fallback display name when application.name isn't set.
+			std::string sMediaName;
 		};
 
 		struct SelectionResult

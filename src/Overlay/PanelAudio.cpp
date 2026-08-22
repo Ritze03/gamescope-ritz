@@ -158,10 +158,13 @@ namespace gamescope
 			}
 		}
 
-		// "334 - paplay (pacat) [pid 3922017]", trimmed to whatever fields
+		// "334 - Floorp (floorp) [pid 3922017]", trimmed to whatever fields
 		// this particular stream actually reported -- clients populate
-		// application.* voluntarily (pipewire-loudness.md §2), so several
-		// of these can be empty.
+		// application.*/media.name voluntarily (pipewire-loudness.md §2), so
+		// several of these can be empty. candidate.sLabel is already the
+		// application.name/media.name/wpctl-status precedence chain issue
+		// #63 asked for (see Volume.cpp's PollThreadMain) -- this function
+		// only adds the binary/pid suffix on top of that resolved name.
 		std::string CandidateLabel( const Audio::StreamCandidate &candidate )
 		{
 			std::string sLabel = std::to_string( candidate.nNodeId ) + " - " +

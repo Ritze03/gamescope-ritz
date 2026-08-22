@@ -566,6 +566,7 @@ namespace gamescope::Audio
 							node.nNodeId = nNodeId;
 							node.sBinary = Parse::InspectField( *osInspect, "application.process.binary" ).value_or( std::string{} );
 							node.sAppName = Parse::InspectField( *osInspect, "application.name" ).value_or( std::string{} );
+							node.sMediaName = Parse::InspectField( *osInspect, "media.name" ).value_or( std::string{} );
 							if ( std::optional<std::string> osPid = Parse::InspectField( *osInspect, "application.process.id" ) )
 								node.onPid = (pid_t)std::atoi( osPid->c_str() );
 							if ( std::optional<std::string> osSerial = Parse::InspectField( *osInspect, "object.serial" ) )
@@ -587,7 +588,17 @@ namespace gamescope::Audio
 
 							StreamCandidate candidate;
 							candidate.nNodeId = nNodeId;
-							candidate.sLabel = sName;
+							// Issue #63: application.name first (what
+							// ncpamixer/pactl treat as the real app name),
+							// then media.name (ncpamixer's own fallback
+							// tier -- rescues streams like a bluez
+							// passthrough sink-input that only ever sets
+							// media.name/node.name), then whatever `wpctl
+							// status` printed as a last resort so a stream
+							// with neither property still gets *some*
+							// label rather than "(unnamed stream)".
+							candidate.sLabel = !node.sAppName.empty() ? node.sAppName :
+								!node.sMediaName.empty() ? node.sMediaName : sName;
 							candidate.sBinary = node.sBinary;
 							candidate.sAppName = node.sAppName;
 							candidate.nPid = node.onPid.value_or( 0 );
