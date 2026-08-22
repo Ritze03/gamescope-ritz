@@ -337,6 +337,24 @@ namespace gamescope::Notifications
 
 	static uint64_t s_ulLastFrameTimeNanos = 0;
 
+	// Issue #30 looked at this file's own EnsureImguiInit()/EnsureTexture()
+	// as a structurally-identical latent case of the settings overlay's
+	// startup hitch (same lazy-first-use shape), and asked to fix it too "if
+	// a fix is cheap alongside this issue" -- deliberately left lazy here,
+	// not eagerly warmed at launch like SettingsOverlay.cpp's own pair now
+	// is. The two aren't actually the same situation: SettingsOverlay's hitch
+	// came from an *unconditional* startup timer (the announcement) racing
+	// its own one-time setup on the exact same frame, which is what made
+	// eager warm-up the correct fix there. This context's own first use is
+	// never startup-triggered by default -- nothing calls Show() at process
+	// start (see #30's own root-cause writeup), so its lazy init only ever
+	// runs the first time a real toast fires, i.e. genuine first use, not a
+	// launch-time cost. Eagerly warming this context's ImGui/Vulkan setup
+	// (a second, independent context/pipeline/texture from SettingsOverlay's
+	// own) at every launch regardless of whether a toast is ever shown this
+	// session would be pure added cost with no observed hitch to fix,
+	// against the task's own "moving the cost is the goal, not adding to
+	// it" constraint -- so this stays exactly as lazy as it already was.
 	static void EnsureImguiInit()
 	{
 		if ( s_bImguiInitialized )

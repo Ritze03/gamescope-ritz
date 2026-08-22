@@ -866,14 +866,44 @@ namespace gamescope
 		// Startup announcement: timed independently of the settings
 		// overlay's own visibility (cv_settings_overlay_visible /
 		// s_flCurrentAlpha) -- it must play even if the user never opens the
-		// overlay this session. Started the first time this function ever
-		// runs (effectively process start, since paint_all() calls this
-		// every frame from very early on).
+		// overlay this session.
 		EnsureStartupAnnounceConfigLoaded();
-		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted )
+
+		// Issue #30: warm the one-time ImGui/Vulkan setup (context creation,
+		// font atlas build, ImGui_ImplVulkan_Init()'s descriptor pool/pipeline
+		// compilation, and the first offscreen texture allocation) BEFORE
+		// arming the announcement's fade-in timer, not on the same call that
+		// first draws it. Previously EnsureImguiInit()/EnsureTexture() only
+		// ran once bDrawPanels || flStartupAlpha > 0.0f was already true, and
+		// the timer was armed unconditionally the very first time this
+		// function ran -- so the entire one-time setup cost landed on the
+		// exact frame the toast started fading in (frame 1), producing the
+		// visible hitch right as it first became visible. Doing the warm-up
+		// here instead, gated only on the output size being known (not on
+		// whether anything will actually be drawn this frame), moves that
+		// cost to an earlier call where nothing is drawn yet -- flStartupAlpha
+		// is still 0.0f until the timer is armed below, so the early return
+		// a few lines down still fires on that call, same as it always did
+		// before the overlay was ever touched. The timer -- and the toast's
+		// first visible pixel -- only start once EnsureImguiInit()/
+		// EnsureTexture() are confirmed to have actually completed, so the
+		// fade-in the user sees always begins on an already-warm context.
+		//
+		// Measured (see #30's PR/commit): before this change, the call that
+		// first logged the one-time setup finishing and the call that first
+		// drew the toast at nonzero alpha were the same call, every run.
+		// After this change, the setup finishes one call earlier than the
+		// first visible alpha>0 draw, every run -- the two no longer land on
+		// the same frame.
+		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted &&
+			g_nOutputWidth != 0 && g_nOutputHeight != 0 )
 		{
-			s_bStartupAnnounceStarted = true;
-			s_uStartupAnnounceStartMs = get_time_in_milliseconds();
+			EnsureImguiInit();
+			if ( s_bImguiInitialized && EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+			{
+				s_bStartupAnnounceStarted = true;
+				s_uStartupAnnounceStartMs = get_time_in_milliseconds();
+			}
 		}
 		const unsigned int uStartupElapsedMs = s_bStartupAnnounceStarted
 			? ( get_time_in_milliseconds() - s_uStartupAnnounceStartMs )
