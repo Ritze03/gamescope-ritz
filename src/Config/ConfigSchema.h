@@ -193,6 +193,32 @@ namespace gamescope::config
 
     };
 
+    // M5 addition (see Audio/Volume.h, superdoc/planning/DECISIONS.md #22/#23):
+    // a manual override for which PipeWire stream this game's volume control
+    // targets, set from the Audio panel's picker when automatic detection
+    // (PID-tree walk, then process-name match, then "newest stream since
+    // launch") fails or picks the wrong one.
+    struct AudioSettings
+    {
+        // The stream's application.process.binary (falling back to
+        // application.name if the client never set .binary) - a value
+        // that's stable across relaunches, unlike the wpctl node id, which
+        // is a fresh integer every session. Empty means "no manual
+        // override, use automatic detection." A normal per-layer field
+        // (like NotificationSettings::muted above), but in practice only
+        // ever meaningful per-game - "which stream is this game" has no
+        // sensible global default.
+        //
+        // Distinct from volume/mute themselves (Audio/Volume.h's header
+        // comment): this is a node *selection*, not a volume level -
+        // WirePlumber already owns remembering the volume value itself
+        // (node.stream.restore-props), so gamescope deliberately doesn't
+        // duplicate that, but WirePlumber has no concept of "which stream
+        // did the user mean," so there's nothing else that could remember
+        // this choice.
+        std::string manual_node_binary;
+    };
+
     // The full settings shape shared by global.json, profiles/<name>.json, and
     // games/<AppId>.json. `overlay` is only meaningful on the global instance -
     // see OverlaySettings above.
@@ -203,5 +229,6 @@ namespace gamescope::config
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;
+        AudioSettings audio;
     };
 }

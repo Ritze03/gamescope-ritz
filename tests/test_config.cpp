@@ -335,6 +335,56 @@ TEST_CASE( "notification placement is global-only and never rides along in a per
     REQUIRE( LoadGlobal().overlay.notification_placement == "top-center" );
 }
 
+TEST_CASE( "audio manual node selection resolves per-game override vs. global exactly like every other setting", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    global.audio.manual_node_binary = "";
+    REQUIRE( SaveGlobal( global ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).audio.manual_node_binary.empty() );
+
+    // Picking a manual stream for app 1 (PanelAudio.cpp's "Use this
+    // stream" button) must not affect any other app id or the global
+    // default - same full-snapshot mechanism as every other per-game
+    // field (DECISIONS.md #19).
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "1" } );
+    snapshot.audio.manual_node_binary = "game.exe";
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).audio.manual_node_binary == "game.exe" );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "2" } ).audio.manual_node_binary.empty() );
+    REQUIRE( ResolveEffective( std::nullopt ).audio.manual_node_binary.empty() );
+
+    // Clearing the override (PanelAudio.cpp's "Clear manual override")
+    // falls back to global (still empty, i.e. automatic detection) again.
+    REQUIRE( ClearPerGameOverride( "1" ) );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).audio.manual_node_binary.empty() );
+}
+
+TEST_CASE( "ApplyProfile never carries a manual audio node selection into another game", "[config]" )
+{
+    TempConfigHome home;
+
+    // A profile saved while some game's manual override happened to be set
+    // (Settings is a full snapshot - PanelConfig.cpp's "Save as new
+    // profile" has no reason to strip it out).
+    Settings profile{};
+    profile.gamescope.filter = "FSR";
+    profile.audio.manual_node_binary = "specific-game.exe";
+    REQUIRE( SaveProfile( "FPS", profile ) );
+
+    // Applying that profile to a different game's settings must not point
+    // its volume control at "specific-game.exe" - naming one game's
+    // process has no meaning for another game the profile gets applied to.
+    Settings target{};
+    target.audio.manual_node_binary = "other-game.exe";
+    REQUIRE( ApplyProfile( target, "FPS" ) );
+    REQUIRE( target.gamescope.filter == "FSR" ); // the rest of the profile did apply
+    REQUIRE( target.audio.manual_node_binary == "other-game.exe" ); // untouched
+}
+
 TEST_CASE( "a per-game file with override_global: false behaves as absent", "[config]" )
 {
     TempConfigHome home;
