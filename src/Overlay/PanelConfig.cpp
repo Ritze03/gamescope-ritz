@@ -558,7 +558,7 @@ namespace gamescope
 		// mouse release (or Enter after ctrl+click-to-type), not every tick.
 		void DrawDisplayScaleSlider( float *pflValue )
 		{
-			if ( widgets::SliderFloat( "Display (overall UI)", pflValue, 0.8f, 1.4f ) )
+			if ( widgets::SliderFloat( "Display (overall UI)", pflValue, 0.5f, 2.0f ) )
 				QueueGeneralSave();
 			if ( ImGui::IsItemDeactivatedAfterEdit() )
 				gamescope::fonts::RebuildAll( *pflValue );
@@ -590,7 +590,7 @@ namespace gamescope
 			if ( widgets::BeginGroupBlock( "##scale" ) )
 			{
 				ImGui::TextUnformatted( "UI Scale" );
-				DrawLiveFloatSlider( "Dock", &o.dock_scale, 0.85f, 1.5f );
+				DrawLiveFloatSlider( "Dock", &o.dock_scale, 0.85f, 2.0f );
 				DrawDisplayScaleSlider( &o.display_scale );
 				ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 				ImGui::TextDisabled( "Display scale re-bakes the font atlas at the new size on release, so"

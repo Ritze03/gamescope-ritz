@@ -159,6 +159,10 @@ namespace gamescope::config
                 s.fps_display.placement = JGetString( *pFps, "placement", s.fps_display.placement );
                 s.fps_display.margin_vertical = JGetFloat( *pFps, "margin_vertical", s.fps_display.margin_vertical );
                 s.fps_display.margin_horizontal = JGetFloat( *pFps, "margin_horizontal", s.fps_display.margin_horizontal );
+                // Issue #28: per-module enable toggles.
+                s.fps_display.cpu_enabled = JGetBool( *pFps, "cpu_enabled", s.fps_display.cpu_enabled );
+                s.fps_display.gpu_enabled = JGetBool( *pFps, "gpu_enabled", s.fps_display.gpu_enabled );
+                s.fps_display.media_enabled = JGetBool( *pFps, "media_enabled", s.fps_display.media_enabled );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -300,6 +304,9 @@ namespace gamescope::config
             jFps[ "placement" ] = s.fps_display.placement;
             jFps[ "margin_vertical" ] = s.fps_display.margin_vertical;
             jFps[ "margin_horizontal" ] = s.fps_display.margin_horizontal;
+            jFps[ "cpu_enabled" ] = s.fps_display.cpu_enabled;
+            jFps[ "gpu_enabled" ] = s.fps_display.gpu_enabled;
+            jFps[ "media_enabled" ] = s.fps_display.media_enabled;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;

@@ -82,6 +82,18 @@ namespace gamescope::config
         // constant with two config-driven values (issue #27).
         float margin_vertical = 32.0f;   // px, Spec §10 "offset 32/32"
         float margin_horizontal = 32.0f; // px, Spec §10 "offset 32/32"
+
+        // Issue #28 (System Monitor part 2/3): per-module enable toggles for
+        // the three modules issue #27's kModuleOrder framework reserved
+        // slots for (FpsDisplay.cpp's ModuleKind::Cpu/Gpu/Media). Independent
+        // of `enabled` above (the readout as a whole) -- same relationship
+        // graph_enabled/percentiles_enabled already have to the FPS module's
+        // own rows. Default true: once a user turns the System Monitor on,
+        // every module it now has real content for shows by default, same
+        // as graph_enabled/percentiles_enabled's own default-on choice.
+        bool cpu_enabled = true;
+        bool gpu_enabled = true;
+        bool media_enabled = true;
     };
 
     struct ReshadeVibrancySettings
@@ -177,8 +189,8 @@ namespace gamescope::config
         // background_blur/background_darkening are read live by
         // SettingsOverlay.cpp (gamescope::g_BackgroundLiveTheme, pushed the
         // same way) -- see SettingsOverlay.h's comment).
-        float dock_scale = 1.0f;                 // 0.85..1.5 - Chrome.cpp's DrawDock() button/gap/padding scale. Spec §1 note: keep the 54px dock button >=44px physical, hence the 0.85 floor (54*0.85 ~= 46px).
-        float display_scale = 1.0f;              // 0.8..1.4 - overall UI scale. Drives ImGuiIO::FontGlobalScale only (see Chrome.cpp's EnsureLiveThemeLoaded() comment for why that's the deliberate ceiling: the font atlas in Fonts.cpp is baked at fixed pixel sizes, so text softens above ~1.4x instead of resampling crisply, and every hand-drawn widget geometry in Widgets.cpp/Chrome.cpp is spec-exact fixed pixels that does not scale with it - full geometric rescaling would mean rebuilding the atlas per scale step and re-deriving every hardcoded constant, out of scope for this pass).
+        float dock_scale = 1.0f;                 // 0.85..2.0 - Chrome.cpp's DrawDock() button/gap/padding scale. Spec §1 note: keep the 54px dock button >=44px physical, hence the 0.85 floor (54*0.85 ~= 46px). Ceiling widened to match display_scale (#24); dock geometry already scales with this field (Chrome.cpp's kButtonSize = 54.0f * flDockScale), so the ceiling was never atlas-bound the way display_scale's was.
+        float display_scale = 1.0f;              // 0.5..2.0 - overall UI scale (#24). Drives ImGuiIO::FontGlobalScale AND, on slider release, gamescope::fonts::RebuildAll() re-bakes the font atlas at the new effective size across all three ImGui contexts (#38), so text stays crisp across the whole range rather than resampling a fixed-size bake. Widget/window geometry in Widgets.cpp/Chrome.cpp is still spec-exact fixed pixels that this field does NOT scale (only dock_scale's own geometry scales) - see issue #23 for raising those baseline constants and making them scale-aware; at the low/high ends of this range, controls do not shrink/grow to match the text.
         float notification_scale = 1.0f;         // 0.6..1.6 - Notifications.cpp's DrawToasts() GetUiScale(): scales toast card size/font/padding/slide distance.
         // opacity_background ("Background veil", an ImGui-drawn flat dim tint
         // behind the whole overlay) was removed 2026-08-22: with
