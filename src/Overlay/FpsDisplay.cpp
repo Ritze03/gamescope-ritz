@@ -1647,27 +1647,6 @@ namespace gamescope
 		s_ulPendingReadDonePoint = 0;
 	}
 
-	// Stock ImGui::SliderFloat() sizes its frame via CalcItemWidth(), which
-	// defaults to 65% of the window width (imgui.cpp's
-	// window->DC.ItemWidthDefault) and leaves the rest of the row for the
-	// trailing label -- so every slider below stopped two-thirds of the
-	// way across the panel with no override (reported: "sliders are not
-	// spanning the full width"). Size the frame explicitly instead: full
-	// row width minus exactly what the label needs, so frame+label
-	// together reach the row's right edge -- same "row spans full width,
-	// track fills what the label/value doesn't need" fix
-	// widgets::SliderControl() applies for its own sliders (Widgets.cpp);
-	// this file's sliders are plain stock ImGui rather than that custom
-	// widget (see this function's own header comment), so the fix has to
-	// be applied per call site here instead of in one shared place.
-	static void SetStockSliderFullWidth( const char *pszLabel )
-	{
-		const ImGuiStyle &style = ImGui::GetStyle();
-		const float flLabelW = ImGui::CalcTextSize( pszLabel ).x;
-		const float flGap = flLabelW > 0.0f ? style.ItemInnerSpacing.x : 0.0f;
-		ImGui::SetNextItemWidth( std::max( 1.0f, ImGui::GetContentRegionAvail().x - flLabelW - flGap ) );
-	}
-
 	// -------------------------------------------------------------------
 	// Statistics tab (issue #40): 60-second graphs built on
 	// Metrics::GetHistorySnapshot(), gated on tab *selection* alone (see
@@ -2037,21 +2016,22 @@ namespace gamescope
 			bChanged = true;
 		}
 
-		SetStockSliderFullWidth( "Vertical margin" );
-		bChanged |= ImGui::SliderFloat( "Vertical margin", &cfg.margin_vertical, 0.0f, 128.0f, "%.0f px" );
-		SetStockSliderFullWidth( "Horizontal margin" );
-		bChanged |= ImGui::SliderFloat( "Horizontal margin", &cfg.margin_horizontal, 0.0f, 128.0f, "%.0f px" );
+		// Issue #61: every slider in this file now routes through the same
+		// widgets::SliderControl() the SHADERS panel uses (Widgets.h), which
+		// already spans the full row width on its own -- the old per-call
+		// SetStockSliderFullWidth() workaround for stock ImGui::SliderFloat()
+		// is gone along with the last of its call sites.
+		bChanged |= widgets::SliderFloat( "Vertical margin", &cfg.margin_vertical, 0.0f, 128.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Horizontal margin", &cfg.margin_horizontal, 0.0f, 128.0f, "%.0f px" );
 		ImGui::Spacing();
 
 		// Issue #29's own "at least one new styling option" -- see
 		// ConfigSchema.h's module_spacing field comment for the two
 		// alternatives considered and rejected (corner rounding
 		// independent of the backdrop, a font-weight-per-module override).
-		SetStockSliderFullWidth( "Module spacing" );
-		bChanged |= ImGui::SliderFloat( "Module spacing", &cfg.module_spacing, 0.0f, 32.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Module spacing", &cfg.module_spacing, 0.0f, 32.0f, "%.0f px" );
 
-		SetStockSliderFullWidth( "Font size" );
-		bChanged |= ImGui::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Font size", &cfg.font_size, 10.0f, 48.0f, "%.0f px" );
 
 		// Issue #29: "inverted" is a third value -- see AddTextInverted()'s
 		// own header comment for what it draws and why.
@@ -2063,8 +2043,7 @@ namespace gamescope
 			bChanged = true;
 		}
 
-		SetStockSliderFullWidth( "Text opacity" );
-		bChanged |= ImGui::SliderFloat( "Text opacity", &cfg.text_opacity, 0.0f, 1.0f );
+		bChanged |= widgets::SliderFloat( "Text opacity", &cfg.text_opacity, 0.0f, 1.0f );
 
 		// Additive pairs oddly with a filled backdrop (the backdrop itself
 		// would glow) and inverted's own outline/fill pair is already
@@ -2078,12 +2057,9 @@ namespace gamescope
 		ImGui::BeginDisabled( !bBackdropAvailable );
 		bChanged |= widgets::Checkbox( "Backdrop", &cfg.backdrop_enabled );
 		ImGui::BeginDisabled( !( bBackdropAvailable && cfg.backdrop_enabled ) );
-		SetStockSliderFullWidth( "Backdrop opacity" );
-		bChanged |= ImGui::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
-		SetStockSliderFullWidth( "Backdrop rounding" );
-		bChanged |= ImGui::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
-		SetStockSliderFullWidth( "Backdrop padding" );
-		bChanged |= ImGui::SliderFloat( "Backdrop padding", &cfg.backdrop_padding, 0.0f, 24.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Backdrop opacity", &cfg.backdrop_opacity, 0.0f, 1.0f );
+		bChanged |= widgets::SliderFloat( "Backdrop rounding", &cfg.backdrop_rounding, 0.0f, 16.0f, "%.0f px" );
+		bChanged |= widgets::SliderFloat( "Backdrop padding", &cfg.backdrop_padding, 0.0f, 24.0f, "%.0f px" );
 		ImGui::EndDisabled();
 		ImGui::EndDisabled();
 
