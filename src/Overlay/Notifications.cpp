@@ -771,7 +771,7 @@ namespace gamescope::Notifications
 			? "Mute (this game's own overridden config)"
 			: "Mute (global -- applies to every game without its own override)" );
 		bool bMuted = s_Settings.notifications.muted;
-		if ( widgets::Checkbox( "Mute toast notifications", &bMuted ) )
+		if ( widgets::Toggle( "Mute toast notifications", &bMuted ) )
 		{
 			s_Settings.notifications.muted = bMuted;
 			PersistMuted();
