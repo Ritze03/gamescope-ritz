@@ -252,9 +252,26 @@ namespace gamescope::widgets
 			// display_scale outright while FontGlobalScale grew the text
 			// around it. `const`, not `constexpr`, now that these read a
 			// live value each call rather than a compile-time one.
+			//
+			// Issue #61: kLabelTrackGap/kTrackMarkGap raised 6->8 -- the
+			// user's own read of the SHADERS panel (the one place these
+			// sliders are stacked directly, no BeginGroupBlock() padding
+			// between them) was "good, they only need a bit more vertical
+			// spacing in between elements" -- see
+			// superdoc/planning/slider-widget-spec.md's §4 for the measured
+			// before/after. This is the only geometry #61 changes;
+			// track/handle proportions were already correct (verified by
+			// pixel-sampling a real render, same spec doc) and are left
+			// alone. Bumping these two also pushes the very next widget
+			// (registered by ItemSize() against this control's now-taller
+			// totalBB) further down, so consecutive sliders gain the same
+			// breathing room without touching the *global*
+			// style.ItemSpacing.y that Toggle()/Checkbox() rows also share
+			// -- an unscoped global change would have moved widgets #61
+			// never measured or asked about.
 			const float flScale = gamescope::palette::DisplayScale();
-			const float kLabelTrackGap = 6.0f * flScale;
-			const float kTrackMarkGap = 6.0f * flScale;
+			const float kLabelTrackGap = 8.0f * flScale;
+			const float kTrackMarkGap = 8.0f * flScale;
 			const float kHitHeight = 22.0f * flScale; // was "row hit-height 18px"
 			const float kTrackHeight = 6.0f * flScale;
 			const float kTrackRounding = 3.5f * flScale;
@@ -356,7 +373,10 @@ namespace gamescope::widgets
 			const float flTrackCenterY = trackHitBB.GetCenter().y;
 			const ImVec2 trackMin( pos.x, flTrackCenterY - kTrackHeight * 0.5f );
 			const ImVec2 trackMax( pos.x + flWidth, flTrackCenterY + kTrackHeight * 0.5f );
-			pDrawList->AddRectFilled( trackMin, trackMax, ImGui::GetColorU32( gamescope::palette::White( 0.09f ) ), kTrackRounding );
+			// Issue #62: rail alpha now reads from the palette's shared
+			// kRailAlpha (was a local 0.09f literal here) -- see Palette.h's
+			// own comment on why this moved and what it's now worth.
+			pDrawList->AddRectFilled( trackMin, trackMax, ImGui::GetColorU32( gamescope::palette::White( gamescope::palette::kRailAlpha ) ), kTrackRounding );
 
 			// Spec §12 "Disabled-but-visible control": on top of the whole
 			// row's automatic x34% opacity (ImGui::BeginDisabled() already
@@ -417,7 +437,9 @@ namespace gamescope::widgets
 			if ( bHasMarks )
 			{
 				const float flMarkY = trackHitBB.Max.y + kTrackMarkGap;
-				const ImU32 markColor = ImGui::GetColorU32( gamescope::palette::White( 0.26f ) );
+				// Issue #62: was White( 0.26f ) -- now the palette's shared
+				// kMarkAlpha (see Palette.h's own comment).
+				const ImU32 markColor = ImGui::GetColorU32( gamescope::palette::White( gamescope::palette::kMarkAlpha ) );
 				ImGui::PushFont( fonts::Get( fonts::Style::ScaleMark ) );
 				if ( pszMinText )
 					pDrawList->AddText( ImVec2( pos.x, flMarkY ), markColor, pszMinText );
@@ -864,8 +886,10 @@ namespace gamescope::widgets
 			flTextX = pos.x + kPadX + flTextLeftInset;
 		}
 
+		// Issue #62: was White( 0.34f ) -- now the palette's shared
+		// kMetaTextAlpha (see Palette.h's own comment).
 		ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
-		pDrawList->AddText( ImVec2( flTextX, pos.y + kPadY ), ImGui::GetColorU32( gamescope::palette::White( 0.34f ) ), pszText );
+		pDrawList->AddText( ImVec2( flTextX, pos.y + kPadY ), ImGui::GetColorU32( gamescope::palette::White( gamescope::palette::kMetaTextAlpha ) ), pszText );
 		ImGui::PopFont();
 	}
 

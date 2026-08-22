@@ -4,6 +4,16 @@ Date: 2026-08-21. Companion to `ui-design-guide.md` (descriptive level); this fi
 number level. Implementation should follow this file; on conflict with the design guide,
 this file wins (it was measured, not estimated).
 
+**2026-08-23 — issues #61/#62, slider geometry/spacing and dark-grey text/rail brightness.**
+§7's "Slider" entry below is now superseded by a dedicated, separately-measured page:
+`planning/slider-widget-spec.md`, measured from a real render of the shipped
+`widgets::SliderControl()` (not this file's mockup-derived numbers). It documents #61's
+label→track/track→mark gap raise (6px→8px, "a bit more vertical spacing") and #62's
+brightened rail/mark-text alpha (`Palette.h`'s new `kRailAlpha`/`kMarkAlpha`/
+`kMetaTextAlpha`, 9%→16% / 26%→38% / 34%→44%). Track/handle proportions themselves were
+re-verified against a real render and left unchanged. Do not re-derive slider numbers from
+this file's §7 below — read the dedicated page instead.
+
 **2026-08-22 — issue #23, deliberate baseline departure from this file's own numbers.**
 Every font size in §2's table and every control-geometry constant in §3/§5/§6/§7 (except
 the dock, which is explicitly out of scope for #23 and still matches this file exactly)
