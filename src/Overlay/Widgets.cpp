@@ -241,13 +241,16 @@ namespace gamescope::widgets
 			const float flMarkRowH = ImMax( minTextSize.y, maxTextSize.y );
 			ImGui::PopFont();
 
-			constexpr float kLabelTrackGap = 5.0f;
-			constexpr float kTrackMarkGap = 5.0f;
-			constexpr float kHitHeight = 18.0f; // "row hit-height 18px"
-			constexpr float kTrackHeight = 5.0f;
-			constexpr float kTrackRounding = 3.0f;
-			constexpr float kHandleW = 8.0f;
-			constexpr float kHandleH = 18.0f;
+			// Issue #23: baseline raised ~20-25% above the spec's measured
+			// values (5/5/18/5/3/8/18 -> 6/6/22/6/3.5/10/22) at the user's
+			// explicit request -- see ui-mockup-precise-spec.md's own note.
+			constexpr float kLabelTrackGap = 6.0f;
+			constexpr float kTrackMarkGap = 6.0f;
+			constexpr float kHitHeight = 22.0f; // was "row hit-height 18px"
+			constexpr float kTrackHeight = 6.0f;
+			constexpr float kTrackRounding = 3.5f;
+			constexpr float kHandleW = 10.0f;
+			constexpr float kHandleH = 22.0f;
 
 			const float flLabelRowH = ImMax( labelSize.y, valueSize.y );
 			const bool bHasMarks = pszMinText != nullptr || pszMaxText != nullptr;
@@ -369,10 +372,17 @@ namespace gamescope::widgets
 				// ImGui has no primitive for) -- skipped while disabled: an
 				// inert control glowing like a live one would contradict
 				// the "plain white" look the spec gives it.
+				// Derived from kHandleW/kHandleH (outer ring: handle half-size
+				// + 4px margin, inner ring: + 2px margin) rather than two
+				// independently hand-picked rect sizes -- keeps the glow
+				// locked to the handle's own geometry so raising/scaling the
+				// handle (issue #23) can't leave the glow's proportions
+				// behind the way two separately-tracked literals would.
 				const ImU32 glowOuter = ImGui::GetColorU32( gamescope::palette::Accent( 0.18f ) );
 				const ImU32 glowInner = ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) );
-				pDrawList->AddRectFilled( handleCenter - ImVec2( 8.0f, 13.0f ), handleCenter + ImVec2( 8.0f, 13.0f ), glowOuter, 6.0f );
-				pDrawList->AddRectFilled( handleCenter - ImVec2( 6.0f, 11.0f ), handleCenter + ImVec2( 6.0f, 11.0f ), glowInner, 5.0f );
+				const ImVec2 handleHalf( kHandleW * 0.5f, kHandleH * 0.5f );
+				pDrawList->AddRectFilled( handleCenter - ( handleHalf + ImVec2( 4.0f, 4.0f ) ), handleCenter + ( handleHalf + ImVec2( 4.0f, 4.0f ) ), glowOuter, 6.0f );
+				pDrawList->AddRectFilled( handleCenter - ( handleHalf + ImVec2( 2.0f, 2.0f ) ), handleCenter + ( handleHalf + ImVec2( 2.0f, 2.0f ) ), glowInner, 5.0f );
 			}
 
 			const ImU32 handleColor = bDisabled
@@ -451,18 +461,23 @@ namespace gamescope::widgets
 
 	bool Toggle( const char *pszLabel, bool *pbValue )
 	{
-		// 30x15px, per the design guide's Toggles section ("30x15 is the
-		// canonical size per 2b").
-		static constexpr ImVec2 kTrackSize( 30.0f, 15.0f );
-		static constexpr float kKnobSize = 11.0f;
+		// Issue #23: baseline raised ~20-25% above the design guide's
+		// original 30x15/11/2 -- kTrackSize stays derived from
+		// kKnobSize/kInset (height = knob + 2*inset, width = 2*height,
+		// same 2:1 track ratio the original 30x15 already had) rather than
+		// an independently hand-picked pair, so the three stay coherent
+		// automatically instead of needing to be re-balanced by hand.
+		static constexpr float kKnobSize = 13.5f;
 		// Spec's "1px inset content padding" is measured from the *inside*
 		// of the 1px track border, not from the track's outer edge -- using
 		// it as the sole offset from bb.Min/Max put the knob flush against
 		// the border's inner face (reported: "the lever needs one
-		// horizontal pixel of additional spacing towards the edge"). 2px
-		// here = 1px border + 1px content padding, matching the vertical
-		// inset the centering below already produces ((15-11)/2 = 2px).
-		static constexpr float kInset = 2.0f;
+		// horizontal pixel of additional spacing towards the edge"). The
+		// inset here = 1px border + content padding, matching the vertical
+		// inset the centering below already produces ((track height - knob) / 2).
+		static constexpr float kInset = 2.5f;
+		static constexpr float kTrackHeight = kKnobSize + kInset * 2.0f;
+		static constexpr ImVec2 kTrackSize( kTrackHeight * 2.0f, kTrackHeight );
 
 		return BooleanControl( pszLabel, pbValue, kTrackSize,
 			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
@@ -512,9 +527,11 @@ namespace gamescope::widgets
 
 	bool Checkbox( const char *pszLabel, bool *pbValue )
 	{
-		// 12x12px, per the design guide's Checkboxes section.
-		static constexpr ImVec2 kBoxSize( 12.0f, 12.0f );
-		static constexpr float kMarkSize = 5.0f;
+		// Issue #23: baseline raised ~20-25% above the design guide's
+		// original 12x12/5 -- kept coherent (mark stays roughly 40% of the
+		// box, same as before: 5/12 -> 6/14.5).
+		static constexpr ImVec2 kBoxSize( 14.5f, 14.5f );
+		static constexpr float kMarkSize = 6.0f;
 
 		return BooleanControl( pszLabel, pbValue, kBoxSize,
 			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
@@ -583,10 +600,36 @@ namespace gamescope::widgets
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
 		ImDrawList *pDrawList = pWindow->DrawList;
 
-		constexpr float kGap = 3.0f;
-		constexpr float kPadY = 6.0f;
+		// Issue #23: kGap/kPadY baseline raised ~20-25% (3/6 -> 3.5/7).
+		// kPadX is new -- horizontal breathing room used below to derive a
+		// per-segment minimum width from the labels' own measured text
+		// width, rather than only ever dividing the available width evenly.
+		// That minimum is the actual fix for #24's "segmented filter buttons
+		// visibly merge at 2.0x UI Scale": flSegHeight already tracked the
+		// active font's real size via GetFontSize() (which itself already
+		// reflects FontGlobalScale/the rebuilt atlas, Fonts.cpp), so height
+		// never had this problem -- width was the one dimension still purely
+		// even-division-of-available-space, with no floor tied to how wide
+		// the label text actually renders, so a big-enough font (either via
+		// this issue's own baseline raise or a high display_scale) could
+		// render wider than the segment that was about to contain it.
+		// Self-maintaining like the row-height derivation already was: as
+		// text grows for *any* reason (baseline raise, display_scale, a
+		// translated label), the minimum grows with it with no separate
+		// scale constant to keep in sync by hand.
+		constexpr float kGap = 3.5f;
+		constexpr float kPadY = 7.0f;
+		constexpr float kPadX = 8.0f;
 		const float flAvailWidth = ImGui::GetContentRegionAvail().x;
-		const float flSegWidth = ( flAvailWidth - kGap * ( nCount - 1 ) ) / nCount;
+		const float flEvenWidth = ( flAvailWidth - kGap * ( nCount - 1 ) ) / nCount;
+
+		float flMaxLabelWidth = 0.0f;
+		ImGui::PushFont( fonts::Get( fonts::Style::SegmentActive ) ); // bold face -- the wider of the two weights this control ever draws
+		for ( int i = 0; i < nCount; i++ )
+			flMaxLabelWidth = ImMax( flMaxLabelWidth, ImGui::CalcTextSize( pszLabels[i] ).x );
+		ImGui::PopFont();
+
+		const float flSegWidth = ImMax( flEvenWidth, flMaxLabelWidth + kPadX * 2.0f );
 		const float flSegHeight = ImGui::GetFontSize() + kPadY * 2.0f;
 
 		bool bChanged = false;
@@ -649,9 +692,10 @@ namespace gamescope::widgets
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
 		ImDrawList *pDrawList = pWindow->DrawList;
 
-		// Spec §11 ANCHOR block: 30x30px cells, 3px gaps.
-		constexpr float kCellSize = 30.0f;
-		constexpr float kGap = 3.0f;
+		// Spec §11 ANCHOR block: 30x30px cells, 3px gaps -- issue #23 raises
+		// both ~20-25% (30/3 -> 36/3.5).
+		constexpr float kCellSize = 36.0f;
+		constexpr float kGap = 3.5f;
 
 		bool bChanged = false;
 		const ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
@@ -709,9 +753,14 @@ namespace gamescope::widgets
 		if ( pWindow->SkipItems )
 			return;
 
-		constexpr float kPadX = 9.0f;
-		constexpr float kPadY = 6.0f;
-		constexpr float kDotSize = 6.0f;
+		// Issue #23: baseline raised ~20-25% (9/6/6 -> 11/7/7). kDotSize
+		// matches the title bar's own status-dot size (Chrome.cpp's
+		// DrawTitleBar()) -- this is "the same 6x6 square status dot the
+		// title bar uses" per this function's own header comment, so the
+		// two stay in lockstep deliberately, not by coincidence.
+		constexpr float kPadX = 11.0f;
+		constexpr float kPadY = 7.0f;
+		constexpr float kDotSize = 7.0f;
 
 		ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
 		const ImVec2 textSize = ImGui::CalcTextSize( pszText );
@@ -744,13 +793,18 @@ namespace gamescope::widgets
 	bool BeginGroupBlock( const char *pszId, bool bActive )
 	{
 		// Spec §6: fill white@2.2% (active: 3.2%), border white@6% (active:
-		// 7%), 12px padding, 10px row gap, square corners.
+		// 7%), 12px padding, 10px row gap, square corners. Issue #23 raises
+		// the two pixel geometries ~20-25% (12/12 -> 15/15 padding, 8/10 ->
+		// 10/12 spacing); border stays the project's flat 1px hairline
+		// (unscaled, same as every other hairline border here and in
+		// Chrome.cpp's dock -- "1px hairline everywhere" is a fixed idiom,
+		// not a measured size meant to grow).
 		ImGui::PushStyleColor( ImGuiCol_ChildBg, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.032f : 0.022f ) ) );
 		ImGui::PushStyleColor( ImGuiCol_Border, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.07f : 0.06f ) ) );
 		ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 0.0f );
 		ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 1.0f );
-		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 12.0f, 12.0f ) );
-		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 8.0f, 10.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 15.0f, 15.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 10.0f, 12.0f ) );
 
 		ImGui::PushID( pszId );
 		return ImGui::BeginChild( "##group", ImVec2( 0.0f, 0.0f ),
@@ -775,7 +829,7 @@ namespace gamescope::widgets
 			// relies on nowhere else -- this is the only place that needs it.
 			const ImVec2 mn = ImGui::GetItemRectMin();
 			const ImVec2 mx = ImGui::GetItemRectMax();
-			ImGui::GetWindowDrawList()->AddRectFilled( mn, ImVec2( mn.x + 2.0f, mx.y ),
+			ImGui::GetWindowDrawList()->AddRectFilled( mn, ImVec2( mn.x + 2.5f, mx.y ), // issue #23: 2px -> 2.5px
 				ImGui::GetColorU32( gamescope::palette::Accent( 0.80f ) ) );
 		}
 	}

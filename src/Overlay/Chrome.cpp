@@ -278,7 +278,7 @@ namespace gamescope::chrome
 		constexpr ImU32 kDockIdleFillU32   = IM_COL32( 255, 255, 255, 11 );  // #FFFFFF @ 4.5% -- spec §8 dock idle fill
 		constexpr ImU32 kDockHoverFillU32  = IM_COL32( 255, 255, 255, 20 );  // in-style hover invention
 
-		constexpr float kTitleBarHeight = 34.0f; // spec §5
+		constexpr float kTitleBarHeight = 42.0f; // spec §5's 34px, raised ~25% (issue #23)
 
 		// Display open, everything else closed on first-ever show -- a
 		// reasonable non-overwhelming default, not a hard limit: see Chrome.h's
@@ -495,20 +495,27 @@ namespace gamescope::chrome
 			style.Colors[ImGuiCol_PopupBg].w = pLiveTheme->flWindowAlphaUnfocused;
 		}
 
-		// One 18x18px hit box for the collapse/close glyph cluster --
-		// ButtonBehavior()-based (via InvisibleButton, same primitive every
-		// other custom widget in this overlay uses -- Widgets.cpp's
-		// Toggle()/Checkbox(), DrawDockButton() below), so hover/press/
-		// keyboard-nav semantics match a real ImGui button. Spec §5: "18x18px
-		// hit boxes ... stroke #EFF5FB@45% (50% focused) ... no hover state
-		// was designed -- use @80% on hover as the in-style invention".
-		bool DrawTitleGlyphButton( ImDrawList *pDrawList, const char *pszId, ImVec2 pos, Icon icon, bool bFocused )
+		// Hit box for the collapse/close glyph cluster -- ButtonBehavior()-
+		// based (via InvisibleButton, same primitive every other custom
+		// widget in this overlay uses -- Widgets.cpp's Toggle()/Checkbox(),
+		// DrawDockButton() below), so hover/press/keyboard-nav semantics
+		// match a real ImGui button. Spec §5's original 18x18px hit box /
+		// 12px icon (issue #23 raises both ~20-25%, see DrawTitleBar()'s
+		// kButtonSize): flButtonSize is threaded in from the caller's own
+		// kButtonSize rather than re-declared here as a second literal that
+		// would have to be hand-kept equal to it -- the icon size is derived
+		// from it (12/18 of the hit box, the original spec's own ratio)
+		// rather than a third independent number. Stroke #EFF5FB@45% (50%
+		// focused) ... no hover state was designed -- use @80% on hover as
+		// the in-style invention.
+		bool DrawTitleGlyphButton( ImDrawList *pDrawList, const char *pszId, ImVec2 pos, Icon icon, bool bFocused, float flButtonSize )
 		{
 			ImGui::SetCursorScreenPos( pos );
-			const bool bClicked = ImGui::InvisibleButton( pszId, ImVec2( 18.0f, 18.0f ) );
+			const bool bClicked = ImGui::InvisibleButton( pszId, ImVec2( flButtonSize, flButtonSize ) );
 			const bool bHovered = ImGui::IsItemHovered();
 			const float flAlpha = bHovered ? 0.80f : ( bFocused ? 0.50f : 0.45f );
-			DrawIcon( pDrawList, icon, pos + ImVec2( 9.0f, 9.0f ), 12.0f, ImGui::GetColorU32( gamescope::palette::White( flAlpha ) ) );
+			const float flIconSize = flButtonSize * ( 12.0f / 18.0f );
+			DrawIcon( pDrawList, icon, pos + ImVec2( flButtonSize * 0.5f, flButtonSize * 0.5f ), flIconSize, ImGui::GetColorU32( gamescope::palette::White( flAlpha ) ) );
 			return bClicked;
 		}
 
@@ -525,10 +532,15 @@ namespace gamescope::chrome
 			const ImVec2 windowSize = ImGui::GetWindowSize();
 			const float flContentLeftX = ImGui::GetCursorScreenPos().x; // Pos.x + WindowPadding.x, for handing back to the caller's own content below
 
-			constexpr float kPadX = 12.0f; // spec §5 title-bar horizontal padding
-			constexpr float kDotSize = 6.0f;
-			constexpr float kButtonSize = 18.0f;
-			constexpr float kButtonGap = 2.0f;
+			// Issue #23: baseline raised ~20-25% (12/6/18/2 -> 15/7/22/2.5).
+			// kDotSize matches ReadoutStrip's own leading-dot size
+			// (Widgets.cpp) -- that function's header comment calls this out
+			// explicitly as "the same 6x6 square status dot the title bar
+			// uses", so the two are kept in lockstep deliberately.
+			constexpr float kPadX = 15.0f; // spec §5 title-bar horizontal padding
+			constexpr float kDotSize = 7.0f;
+			constexpr float kButtonSize = 22.0f;
+			constexpr float kButtonGap = 2.5f;
 
 			const ImVec2 barMin = windowPos;
 			const ImVec2 barMax( windowPos.x + windowSize.x, windowPos.y + kTitleBarHeight );
@@ -577,9 +589,9 @@ namespace gamescope::chrome
 			const ImVec2 closePos( barMax.x - kPadX - kButtonSize, windowPos.y + ( kTitleBarHeight - kButtonSize ) * 0.5f );
 			const ImVec2 collapsePos( closePos.x - kButtonGap - kButtonSize, closePos.y );
 
-			if ( DrawTitleGlyphButton( pDrawList, "##collapse", collapsePos, Icon::Collapse, bFocused ) )
+			if ( DrawTitleGlyphButton( pDrawList, "##collapse", collapsePos, Icon::Collapse, bFocused, kButtonSize ) )
 				s_bPanelCollapsed[(size_t)id] = !s_bPanelCollapsed[(size_t)id];
-			if ( DrawTitleGlyphButton( pDrawList, "##close", closePos, Icon::Close, bFocused ) )
+			if ( DrawTitleGlyphButton( pDrawList, "##close", closePos, Icon::Close, bFocused, kButtonSize ) )
 				SetPanelOpen( id, false );
 
 			// Drag zone: the whole bar minus the button cluster. Calling

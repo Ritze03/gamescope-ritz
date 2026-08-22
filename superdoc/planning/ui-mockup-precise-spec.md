@@ -4,6 +4,22 @@ Date: 2026-08-21. Companion to `ui-design-guide.md` (descriptive level); this fi
 number level. Implementation should follow this file; on conflict with the design guide,
 this file wins (it was measured, not estimated).
 
+**2026-08-22 — issue #23, deliberate baseline departure from this file's own numbers.**
+Every font size in §2's table and every control-geometry constant in §3/§5/§6/§7 (except
+the dock, which is explicitly out of scope for #23 and still matches this file exactly)
+now ships in `src/Overlay/Fonts.cpp`/`Widgets.cpp`/`Chrome.cpp` **20–25% larger** than the
+pixel-measured values recorded below, per an explicit user request to make fonts and
+controls "a little bigger" by raising the origin constants themselves, not by layering a
+scale multiplier over them. Do not "fix" the code back down to match this table — this
+file's own numbers are still correct as *what the mockup measured*, they are simply no
+longer what shipped. If this file is ever regenerated from a fresh mockup measurement,
+re-apply the same ~20-25% uplift to the new baseline rather than reverting to 1:1.
+Additionally, since #24, every one of these constants also scales live with
+`OverlaySettings::display_scale` (0.5–2.0×) the same way the dock's own geometry already
+scaled with `dock_scale` — so the on-screen size at the default 1.0× display scale is this
+20–25%-raised baseline, and at other display-scale values it is that baseline times the
+live scale factor, not this table's own numbers at any setting.
+
 **Provenance and method.** The handoff (`Game Overlay UI Mockups-handoff.zip`) is a Claude
 Design bundle whose mockups are literal HTML/CSS — every dimension and color below is read
 from that source, not eyeballed. The authoritative artboards are **2a** (final composite,
