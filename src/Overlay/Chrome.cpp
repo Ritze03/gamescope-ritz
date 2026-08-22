@@ -417,26 +417,33 @@ namespace gamescope::chrome
 			constexpr float kMarginX = 40.0f;
 			constexpr float kMarginY = 40.0f;
 			constexpr float kRowHeight = 400.0f; // clears every panel's auto-height in row 0 at 1.0x
-			constexpr float kMinColWidth = 460.0f; // 1.0x floor -- see OpeningSize()'s 1.5x default multiplier
+			constexpr float kMinColWidth = 460.0f; // 1.0x floor
 
-			// Issue #49: every one of these is a *distance in this grid*, and
-			// OpeningSize() below now scales each panel's own opening size by
-			// DisplayScale() (issue #47) -- so the grid that's supposed to
-			// keep those panels apart has to grow by the same factor, or a
-			// panel whose footprint has doubled at 2.0x simply spills past a
-			// cell sized for its 1.0x footprint into its neighbor's slot.
-			// io.DisplaySize itself deliberately stays unscaled here (it's
-			// already real host pixels, the same source #31's clamp below
-			// reads from) -- only the *tile geometry* carved out of it needs
-			// the display_scale factor, exactly the way OpeningSize() scales
-			// the panel size and not the host window it's placed inside.
-			const float flScale = gamescope::palette::DisplayScale();
-
+			// This whole block -- kMarginX/kMarginY/kRowHeight/kMinColWidth and
+			// the io.DisplaySize.x split three ways -- is deliberately the
+			// *original*, unscaled 1.0x formula, untouched: io.DisplaySize
+			// itself is real host pixels (the same source #31's clamp below
+			// reads from), not something with its own "1.0x version", so it's
+			// wrong to fold DisplayScale() into the subtraction/division here.
 			const ImGuiIO &io = ImGui::GetIO();
-			const float flColWidth = ImMax( kMinColWidth * flScale, ( io.DisplaySize.x - kMarginX * flScale * 2.0f ) / 3.0f );
+			const float flColWidth = ImMax( kMinColWidth, ( io.DisplaySize.x - kMarginX * 2.0f ) / 3.0f );
 
 			const Slot &slot = kSlots[(size_t)id];
-			return ImVec2( kMarginX * flScale + slot.col * flColWidth, kMarginY * flScale + slot.row * kRowHeight * flScale );
+			const ImVec2 pos1x( kMarginX + slot.col * flColWidth, kMarginY + slot.row * kRowHeight );
+
+			// Issue #49: scale the *whole* 1.0x tile position by DisplayScale(),
+			// the same single-multiply-at-the-end pattern OpeningSize() below
+			// uses for each panel's own opening size (issue #47) -- so at any
+			// scale, the ratio between a column's width and the (also
+			// flScale-scaled) panel footprint it holds stays exactly what it
+			// was at 1.0x, instead of drifting as flScale grows. Folding
+			// flScale into the ImMax()'s two branches individually (an earlier
+			// version of this fix) let them swap which one dominates at
+			// different scales, which *changed* that ratio instead of
+			// preserving it -- worse overlap at 2.0x than at 1.0x rather than
+			// the same proportional overlap scaled up.
+			const float flScale = gamescope::palette::DisplayScale();
+			return ImVec2( pos1x.x * flScale, pos1x.y * flScale );
 		}
 
 		// ---- Live theme (General tab settings, see Palette.h's LiveTheme) --
