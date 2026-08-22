@@ -190,6 +190,19 @@ namespace gamescope::config
         float y = 0.0f;
         float w = 0.0f;
         float h = 0.0f;
+
+        // Issue #47: the overlay.display_scale in effect when w/h were saved.
+        // BeginPanelWindow() rescales a restored size by
+        // (current DisplayScale() / this) rather than reusing it verbatim --
+        // without this, a size saved at 1.0x would reopen unchanged at 2.0x
+        // and reintroduce #47's overflow through the persistence path. Default
+        // 1.0f (and JGetFloat's own "key absent" fallback on parse, below)
+        // deliberately matches every geometry saved before this field
+        // existed: pre-#47, the window's own outer size never scaled with
+        // display_scale in the first place, so an old entry's w/h really do
+        // reflect a 1.0x-shaped window regardless of what display_scale was
+        // live when it was saved.
+        float scale = 1.0f;
     };
 
     struct OverlaySettings

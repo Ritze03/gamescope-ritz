@@ -254,6 +254,11 @@ namespace gamescope::config
                         g.y = JGetFloat( *it, "y", g.y );
                         g.w = JGetFloat( *it, "w", g.w );
                         g.h = JGetFloat( *it, "h", g.h );
+                        // Issue #47: absent on any file written before this
+                        // field existed -- g's own default (1.0f) is exactly
+                        // the right fallback there (PanelGeometry::scale's
+                        // comment explains why).
+                        g.scale = JGetFloat( *it, "scale", g.scale );
 
                         // A non-positive size is never valid saved geometry
                         // (PanelGeometry{}'s own 0,0 default, or a corrupt/
@@ -405,6 +410,7 @@ namespace gamescope::config
                     jg[ "y" ] = g.y;
                     jg[ "w" ] = g.w;
                     jg[ "h" ] = g.h;
+                    jg[ "scale" ] = g.scale; // issue #47 -- see PanelGeometry::scale's comment
                     jGeometry[ sKey ] = std::move( jg );
                 }
                 jOverlay[ "panel_geometry" ] = std::move( jGeometry );
