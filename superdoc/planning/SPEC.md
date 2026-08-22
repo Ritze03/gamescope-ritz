@@ -287,7 +287,7 @@ the decision above — Vibrancy and Sharpness first, Adaptive Brightness in M9):
 | `reshade.vibrancy.protect_skin_tones` | bool | — | true | ships in M6 |
 | `reshade.pre_sharpen.enabled` | bool | — | false | ships in M6 |
 | `reshade.pre_sharpen.strength` | float | TBD | TBD | unsharp-mask amount; no existing reference value in this codebase — pick during implementation, mark TBD in schema until then; ships in M6 |
-| `reshade.adaptive_brightness.enabled` | bool | — | false | **deferred to M9** — reserved in schema now, not built until then |
+| `reshade.adaptive_brightness.enabled` | bool | — | false | ships in M9 (experimental) |
 | `reshade.adaptive_brightness.target_luminance` | float | 0.1–0.9 | 0.5 | normalized, M9 |
 | `reshade.adaptive_brightness.adapt_up_speed` | float | 0.1–5.0 | 1.0 | seconds to ~63% of target, brightening, M9 |
 | `reshade.adaptive_brightness.adapt_down_speed` | float | 0.1–5.0 | 1.0 | same, darkening, M9 |
@@ -904,7 +904,13 @@ is phrased as a concrete `vkcube` run.
   slider/toggle/checkbox geometry) with the overlay open over a running `vkcube`;
   no functional regression versus M1–M7's behavior.
 
-- **M9a — Adaptive Brightness persistence spike.** *Size: S. Deferred (decision) —
+- **M9a — Adaptive Brightness persistence spike. DONE (2026-08-21).** Result:
+  **persistence survives** — confirmed on real hardware (RADV/AMD 7900XTX), not
+  just inferred from barrier code. Full method, evidence, and two extra findings
+  (a zero-uniform-buffer crash unrelated to persistence, and a recompile-storm
+  if the implicit-output pass isn't last) are recorded in
+  `superdoc/planning/DECISIONS.md` #14 and `reshade-shaders.md`.
+  *Size: S. Deferred (decision) —
   not on the critical path; nothing above depends on it, and it can be pulled
   forward and run any time after M2 if someone wants to retire the risk early, but
   is sequenced last here for clarity since Adaptive Brightness itself ships last.*
@@ -921,16 +927,28 @@ is phrased as a concrete `vkcube` run.
   milestone exists specifically to catch that before real engineering time is
   spent on a feature that was already deferred once.
 
-- **M9b — Adaptive Brightness, appended to the combined effect.** *Size: M.*
-  Appends the Adaptive Brightness passes to the `gamescope-ritz.fx` M6 already
-  shipped (per Feature 2's decision, the file was built to allow exactly this
-  without restructuring Vibrancy/Sharpness), plus its group in the Shaders panel.
-  Depends on M6 (the file to append to) and M9a (persistence confirmed).
+- **M9b — Adaptive Brightness, appended to the combined effect. DONE
+  (2026-08-22, on master).** Implemented in `reshade/Shaders/gamescope-ritz.fx`
+  and `src/Overlay/PanelShaders.cpp` (originally landed on an experimental
+  branch 2026-08-21, rebased onto master's M8 restyle and merged 2026-08-22).
+  *Size: M.* Appends the Adaptive Brightness passes to the `gamescope-ritz.fx`
+  M6 already shipped (per Feature 2's decision, the file was built to allow
+  exactly this without restructuring Vibrancy/Sharpness), plus its group in the
+  Shaders panel. Depends on M6 (the file to append to) and M9a (persistence
+  confirmed).
   **Acceptance (vkcube):** `gamescope-ritz -- vkcube`; open the Shaders panel,
   toggle Adaptive Brightness on, confirm no recompile stutter on toggle (same
   uniform-gated-pass proof as M6, now for the third pass) and confirm Vibrancy/
   Sharpness (M6) still work unchanged with Adaptive Brightness enabled alongside
   them, proving the passes compose rather than conflict.
+  **Additional acceptance, real content (2026-08-22):** a real `mpv` client
+  playing a genuinely time-varying (looping dark/bright) video through the full
+  pipeline (`--filter fsr --sharpness 5`, `DISABLE_LSFG=1`) showed the on/off
+  luminance range compress roughly 3× (1.43× down to ~1.1× between dark- and
+  bright-scene means) with the effect enabled, measured via `gamescopectl
+  screenshot 3` (full composition, so it actually includes ReShade's output)
+  and ImageMagick mean-luminance. Compile log ("Compiling pass") stayed at
+  exactly 4 lines (one per pass) throughout. Full numbers in `DECISIONS.md` #14.
 
 ---
 
@@ -958,16 +976,15 @@ noted for each:
    overlay toggling on a timer for an hour against a driver with strict validation
    layers enabled) is the real retiring test before M1 is called done.
 
-3. **Adaptive Brightness's persistent-texture assumption is unverified by any
-   shipped effect in this repo.** `discardImage()`'s Vulkan-spec-implementation-
-   defined behavior on an `UNDEFINED`-sourced transition could mean content does
-   not actually survive frame-to-frame the way the design assumes. Lower urgency
-   than the other risks here since Adaptive Brightness itself is deferred to M9
-   (decision) and nothing else is blocked on it. **Retiring experiment: M9a,
-   already built into the build order as its own milestone before any real
-   engineering time goes into the full effect** — cheapest possible way to answer
-   the question, and can be run any time after M2 if someone wants the answer
-   before M9 formally starts.
+3. **RESOLVED (2026-08-21/22).** Adaptive Brightness's persistent-texture
+   assumption was unverified by any shipped effect in this repo.
+   `discardImage()`'s Vulkan-spec-implementation-defined behavior on an
+   `UNDEFINED`-sourced transition could have meant content does not actually
+   survive frame-to-frame the way the design assumes. The M9a spike retired
+   this: persistence confirmed empirically on real hardware (RADV/AMD), and
+   M9b (the full effect) has since landed on master and been re-validated
+   against genuinely time-varying real content, not just the spike's
+   throwaway prototype. See `DECISIONS.md` #14 for both.
 
 4. **The `VK_KHR_dynamic_rendering` extension-string gap.** Gamescope requests the
    Vulkan 1.3 *feature bit* but never adds the extension string to
