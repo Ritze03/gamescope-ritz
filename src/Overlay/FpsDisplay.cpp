@@ -1867,7 +1867,37 @@ namespace gamescope
 		// tick is spaced evenly at that cadence.
 		const float flElapsedSeconds = (float)nSamples * ( gamescope::Metrics::kStatsHistorySampleIntervalMs / 1000.0f );
 		if ( nSamples < gamescope::Metrics::kStatsHistoryCapacity )
+		{
 			ImGui::TextDisabled( "Collecting... %.0fs of 60s", flElapsedSeconds );
+
+			// Design-exploration variant (issue #41, "calm"): the warm-up
+			// state used to be text-only -- true to the requirement above
+			// ("never let a partially-filled window read as a complete
+			// one"), but with no sense of *how much longer*, a user has to
+			// do the s-of-60 math themselves. A slim fill bar makes the
+			// same information legible at a glance, same visual language
+			// (track/fill, 3px radius) the slider control already uses
+			// elsewhere in this overlay, so it doesn't introduce a new
+			// idiom -- just applies the existing one to a read-only
+			// progress value instead of an editable one.
+			const float flScale = gamescope::palette::DisplayScale();
+			const float flFrac = std::clamp( (float)nSamples / (float)gamescope::Metrics::kStatsHistoryCapacity, 0.0f, 1.0f );
+			const float kBarHeight = 3.0f * flScale;
+			const ImVec2 pos = ImGui::GetCursorScreenPos();
+			const float flWidth = ImGui::GetContentRegionAvail().x;
+			ImDrawList *pDrawList = ImGui::GetWindowDrawList();
+			pDrawList->AddRectFilled( pos, ImVec2( pos.x + flWidth, pos.y + kBarHeight ),
+				ImGui::GetColorU32( gamescope::palette::White( 0.09f ) ), kBarHeight * 0.5f );
+			if ( flFrac > 0.0f )
+			{
+				pDrawList->AddRectFilledMultiColor(
+					pos, ImVec2( pos.x + flWidth * flFrac, pos.y + kBarHeight ),
+					gamescope::palette::Accent( 0.5f ), gamescope::palette::kAccentGradHi,
+					gamescope::palette::kAccentGradHi, gamescope::palette::Accent( 0.5f ) );
+			}
+			ImGui::Dummy( ImVec2( flWidth, kBarHeight ) );
+			ImGui::Spacing();
+		}
 		else
 			ImGui::TextDisabled( "Last 60 seconds" );
 

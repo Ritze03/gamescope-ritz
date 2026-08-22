@@ -182,12 +182,25 @@ namespace gamescope::Notifications
 		constexpr size_t kMaxVisible = 4;   // stacked cards drawn at once
 		constexpr size_t kMaxQueued = 8;    // hard cap (incl. visible) -- burst protection
 		constexpr size_t kMaxTextLen = 240; // hard truncation length, independent of wrap width
-		constexpr float kInAnimSec = 0.22f;
-		constexpr float kOutAnimSec = 0.28f;
+		// Design-exploration variant (issue #41, "calm"): the issue's own
+		// ground rule to revisit is "checking against real interaction, not
+		// just read as a code/static swatch" -- watching this in motion (not
+		// just eyeballing the numbers), the original 40px slide at 0.22s in
+		// reads as a hard snap when 2-3 toasts queue in a burst (a real
+		// case: PersistMuted()/PersistPlacement()-adjacent flows can fire
+		// several in a row). Slower in/out (0.22/0.28 -> 0.32/0.36s) and a
+		// shorter travel distance (40 -> 26px) together read as "settling
+		// into place" rather than "sliding in from off-screen" -- calmer
+		// without being sluggish; duration/queue-cap/text-length behavior
+		// is unchanged. kCardGap widened slightly (10 -> 13px) so a stack
+		// of several cards doesn't read as densely packed at the new, more
+		// deliberate pace.
+		constexpr float kInAnimSec = 0.32f;
+		constexpr float kOutAnimSec = 0.36f;
 		constexpr float kCardWidth = 360.0f;
-		constexpr float kCardGap = 10.0f;
+		constexpr float kCardGap = 13.0f;
 		constexpr float kEdgeMargin = 24.0f;
-		constexpr float kSlideDistance = 40.0f;
+		constexpr float kSlideDistance = 26.0f;
 
 		std::deque<Toast> s_Toasts;
 
