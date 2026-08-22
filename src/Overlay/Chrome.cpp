@@ -278,7 +278,13 @@ namespace gamescope::chrome
 		constexpr ImU32 kDockIdleFillU32   = IM_COL32( 255, 255, 255, 11 );  // #FFFFFF @ 4.5% -- spec §8 dock idle fill
 		constexpr ImU32 kDockHoverFillU32  = IM_COL32( 255, 255, 255, 20 );  // in-style hover invention
 
-		constexpr float kTitleBarHeight = 42.0f; // spec §5's 34px, raised ~25% (issue #23)
+		// spec §5's 34px, raised ~25% (issue #23) to 42px baseline, then
+		// (half two) scaled live by display_scale -- a function rather than
+		// a constant since both BeginPanelWindow() and DrawTitleBar() need
+		// this every frame and display_scale can change live (General tab),
+		// same "read live, don't cache" contract as every other
+		// g_LiveTheme-derived value in this file.
+		float TitleBarHeight() { return 42.0f * gamescope::palette::DisplayScale(); }
 
 		// Display open, everything else closed on first-ever show -- a
 		// reasonable non-overwhelming default, not a hard limit: see Chrome.h's
@@ -536,14 +542,19 @@ namespace gamescope::chrome
 			// kDotSize matches ReadoutStrip's own leading-dot size
 			// (Widgets.cpp) -- that function's header comment calls this out
 			// explicitly as "the same 6x6 square status dot the title bar
-			// uses", so the two are kept in lockstep deliberately.
-			constexpr float kPadX = 15.0f; // spec §5 title-bar horizontal padding
-			constexpr float kDotSize = 7.0f;
-			constexpr float kButtonSize = 22.0f;
-			constexpr float kButtonGap = 2.5f;
+			// uses", so the two are kept in lockstep deliberately. Issue #23
+			// half two: all four (plus the row gap below) also scale live by
+			// display_scale, same pattern as TitleBarHeight() above.
+			const float flScale = gamescope::palette::DisplayScale();
+			const float kPadX = 15.0f * flScale; // spec §5 title-bar horizontal padding
+			const float kDotSize = 7.0f * flScale;
+			const float kButtonSize = 22.0f * flScale;
+			const float kButtonGap = 2.5f * flScale;
+			const float kRowGap = 10.0f * flScale; // spec §3: 10px row gap in title bars
 
+			const float flTitleBarHeight = TitleBarHeight();
 			const ImVec2 barMin = windowPos;
-			const ImVec2 barMax( windowPos.x + windowSize.x, windowPos.y + kTitleBarHeight );
+			const ImVec2 barMax( windowPos.x + windowSize.x, windowPos.y + flTitleBarHeight );
 
 			// Fill: spec §5 vertical gradient, white 6%->1.5% unfocused,
 			// accent 16%->white 2% focused. Bottom border 1px, white@10%
@@ -554,23 +565,24 @@ namespace gamescope::chrome
 			const ImU32 borderCol = bFocused ? ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) ) : ImGui::GetColorU32( gamescope::palette::White( 0.10f ) );
 			pDrawList->AddLine( ImVec2( barMin.x, barMax.y ), ImVec2( barMax.x, barMax.y ), borderCol, 1.0f );
 
-			const float flCenterY = windowPos.y + kTitleBarHeight * 0.5f;
+			const float flCenterY = windowPos.y + flTitleBarHeight * 0.5f;
 			float flCursorX = windowPos.x + kPadX;
 
 			// 6x6 square status dot -- spec §5: always "live" (this panel's
 			// window is only ever drawn while its subsystem is on), glow
 			// approximated as one 10x10 rect behind it @25% accent.
 			const ImVec2 dotCenter( flCursorX + kDotSize * 0.5f, flCenterY );
-			pDrawList->AddRectFilled( dotCenter - ImVec2( 5.0f, 5.0f ), dotCenter + ImVec2( 5.0f, 5.0f ), ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
+			const ImVec2 dotGlowHalf( 5.0f * flScale, 5.0f * flScale );
+			pDrawList->AddRectFilled( dotCenter - dotGlowHalf, dotCenter + dotGlowHalf, ImGui::GetColorU32( gamescope::palette::Accent( 0.25f ) ) );
 			pDrawList->AddRectFilled( dotCenter - ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), dotCenter + ImVec2( kDotSize * 0.5f, kDotSize * 0.5f ), gamescope::palette::kAccent );
-			flCursorX += kDotSize + 10.0f; // spec §3: 10px row gap in title bars
+			flCursorX += kDotSize + kRowGap;
 
 			// Title -- Mono 600 11 UPPER, spec §2: @86% unfocused / 94% focused.
 			ImGui::PushFont( fonts::Get( fonts::Style::Title ) );
 			const ImVec2 titleSize = ImGui::CalcTextSize( pszTitle );
 			pDrawList->AddText( ImVec2( flCursorX, flCenterY - titleSize.y * 0.5f ),
 				ImGui::GetColorU32( gamescope::palette::Text( bFocused ? 0.94f : 0.86f ) ), pszTitle );
-			flCursorX += titleSize.x + 10.0f;
+			flCursorX += titleSize.x + kRowGap;
 			ImGui::PopFont();
 
 			// Meta -- Mono 400 10.5 @30%, spec §5/§2.
@@ -586,7 +598,7 @@ namespace gamescope::chrome
 			// matching spec §5's own listed order ("... -> glyph buttons"
 			// with collapse drawn before close in every mockup screenshot's
 			// left-to-right reading).
-			const ImVec2 closePos( barMax.x - kPadX - kButtonSize, windowPos.y + ( kTitleBarHeight - kButtonSize ) * 0.5f );
+			const ImVec2 closePos( barMax.x - kPadX - kButtonSize, windowPos.y + ( flTitleBarHeight - kButtonSize ) * 0.5f );
 			const ImVec2 collapsePos( closePos.x - kButtonGap - kButtonSize, closePos.y );
 
 			if ( DrawTitleGlyphButton( pDrawList, "##collapse", collapsePos, Icon::Collapse, bFocused, kButtonSize ) )
@@ -607,7 +619,7 @@ namespace gamescope::chrome
 			// closes the window via the same SetPanelOpen() call the close
 			// glyph button already makes.
 			ImGui::SetCursorScreenPos( barMin );
-			ImGui::InvisibleButton( "##titledrag", ImVec2( collapsePos.x - kButtonGap - barMin.x, kTitleBarHeight ) );
+			ImGui::InvisibleButton( "##titledrag", ImVec2( collapsePos.x - kButtonGap - barMin.x, flTitleBarHeight ) );
 			if ( ImGui::IsItemHovered() )
 			{
 				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) )
@@ -714,7 +726,7 @@ namespace gamescope::chrome
 			// task's acceptance criteria still wants Always for (the other
 			// is the un-collapse restore just below).
 			const float flWidth = lastExpandedSize.x > 0.0f ? lastExpandedSize.x : openSize.x;
-			ImGui::SetNextWindowSize( ImVec2( flWidth, kTitleBarHeight ), ImGuiCond_Always );
+			ImGui::SetNextWindowSize( ImVec2( flWidth, TitleBarHeight() ), ImGuiCond_Always );
 		}
 		else if ( bWasCollapsed )
 		{
@@ -964,7 +976,7 @@ namespace gamescope::chrome
 			// Mirrors ImGui's own native "collapsed windows still draw their
 			// title bar, nothing else" behavior -- the window (title bar,
 			// border, focus glow) is fully drawn above; there's simply no
-			// body to show while shrunk to kTitleBarHeight tall. Must
+			// body to show while shrunk to TitleBarHeight() tall. Must
 			// balance this Begin() with End() (and every push above) right
 			// here, since the caller is told NOT to call EndPanelWindow()
 			// when this returns false (Chrome.h's contract).
@@ -980,7 +992,7 @@ namespace gamescope::chrome
 			// asserts (not the pre-1.89 silent-fixup path) whenever
 			// SetCursorPos()/SetCursorScreenPos() pushed the cursor past
 			// the window's content bounds with no item submitted to justify
-			// it -- exactly what a title-bar-only, kTitleBarHeight-tall
+			// it -- exactly what a title-bar-only, TitleBarHeight()-tall
 			// collapsed window's tiny content region triggers. A zero-size
 			// Dummy() is ImGui's own documented fix (imgui.cpp's
 			// ErrorCheckUsingSetCursorPosToExtendParentBoundaries comment):

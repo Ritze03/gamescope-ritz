@@ -132,4 +132,16 @@ namespace gamescope::palette
 		float flAccentHue         = 218.0f;
 	};
 	extern LiveTheme g_LiveTheme;
+
+	// Issue #23 half two: the effective control-geometry scale factor --
+	// OverlaySettings::display_scale (0.5..2.0, ConfigSchema.h), read fresh
+	// every call rather than cached, same live-tunable contract as every
+	// other g_LiveTheme field. Widgets.cpp/Chrome.cpp multiply their own
+	// baseline pixel constants by this, mirroring the exact pattern
+	// Chrome.cpp's DrawDock()/DrawDockButton() already use for flDockScale
+	// (kButtonSize = 54.0f * flDockScale, etc.) -- display_scale used to
+	// drive ImGuiIO::FontGlobalScale (and the font atlas rebuild, #38) only;
+	// this closes the gap #24 found, where every hand-drawn widget/chrome
+	// pixel constant ignored it outright while text scaled around them.
+	inline float DisplayScale() { return g_LiveTheme.flDisplayScale; }
 }
