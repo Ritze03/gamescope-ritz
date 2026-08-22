@@ -49,6 +49,15 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Build and tooling](features/build-and-tooling.md) — Meson build, dev tooling.
 - [Process management](features/process-management.md) — process/Xwayland lifecycle management.
 
+## planning/ — overlay UI implementation notes
+
+- [UI mockup — pixel-exact spec](planning/ui-mockup-precise-spec.md) — the settings
+  overlay's full chrome/color/typography/control spec, measured from the original design
+  mockup.
+- [Slider widget spec](planning/slider-widget-spec.md) — the shared `widgets::SliderControl()`
+  slider, measured from a real render (supersedes the mockup spec's own §7 for anything the
+  two disagree on).
+
 ## claude-instructions/ — mandatory rules for agents
 
 - [Working with the Docs](claude-instructions/documentation.md) — read before you touch, update after you change.
