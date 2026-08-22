@@ -29,14 +29,19 @@ namespace gamescope::chrome
 {
 	// One entry per panel hosted in its own floating window, in dock
 	// left-to-right order. Matches SPEC.md's "UI structure" panel list
-	// (Gamescope/Display, Shaders, FPS HUD, Audio, Config/Profiles) --
-	// deliberately excludes ReShade's future M9 Adaptive Brightness group
-	// (that's content *inside* the Shaders panel, not a new panel).
+	// (Gamescope/Display, Shaders, System Monitor, Audio, Config/Profiles)
+	// -- deliberately excludes ReShade's future M9 Adaptive Brightness
+	// group (that's content *inside* the Shaders panel, not a new panel).
 	enum class PanelId
 	{
 		Display,
 		Shaders,
-		Fps,
+		// Issue #27: renamed from Fps -- this panel now hosts the whole
+		// module framework (FPS today; #28 adds CPU/GPU/Media), not just
+		// the FPS readout. The underlying feature file stays FpsDisplay.*
+		// (see that file's own header comment on why), but the identity
+		// this enum exposes to the rest of Chrome.* is the new name.
+		SystemMonitor,
 		Audio,
 		Config,
 

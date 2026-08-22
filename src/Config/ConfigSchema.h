@@ -51,6 +51,23 @@ namespace gamescope::config
         // fields rather than defining a second set per row.
         bool graph_enabled = true;
         bool percentiles_enabled = true;
+
+        // Issue #27 (System Monitor part 1/3): one of the 9 anchor strings
+        // Notifications.cpp's kPlacements/OverlaySettings::notification_placement
+        // already use ("top-left" .. "bottom-right", issue #26's model) --
+        // this readout gets its own copy of that field/string-set rather than
+        // sharing OverlaySettings::notification_placement, since that field
+        // is explicitly process-level/global-only (see its own comment)
+        // while this one is a normal per-layer field like every other
+        // fps_display.* setting (global default, per-game overridable).
+        // Replaces the old hardcoded top-right kAnchorOffset
+        // (FpsDisplay.cpp) -- see that file for the 3x3 grid math.
+        std::string placement = "top-right"; // Spec §10: "Default anchor: top-right"
+        // Independent vertical/horizontal margins from whichever edge(s)
+        // the placement selects, replacing the old single kAnchorOffset=32
+        // constant with two config-driven values (issue #27).
+        float margin_vertical = 32.0f;   // px, Spec §10 "offset 32/32"
+        float margin_horizontal = 32.0f; // px, Spec §10 "offset 32/32"
     };
 
     struct ReshadeVibrancySettings
