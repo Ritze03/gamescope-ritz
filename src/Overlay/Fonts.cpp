@@ -128,17 +128,23 @@ namespace gamescope::fonts
 
 		// superdoc/planning/ui-mockup-precise-spec.md §2's Typography table,
 		// one row each -- see Fonts.h's Style comment for the same mapping.
+		// Issue #23: every role except DockHotkey (dock-owned, explicitly
+		// excluded -- "except the dock") raised ~20-25% above the spec's own
+		// measured values, at the user's explicit request to depart from the
+		// mockup baseline -- see superdoc/planning/ui-mockup-precise-spec.md's
+		// §2 Typography table for a note pointing back here so a future pass
+		// doesn't "fix" these back down to match the mockup pixels.
 		const StyleSpec kSpecs[kStyleCount] = {
-			{ Style::Title,         &kMonoSemiBold, 11.0f, "Plex Mono SemiBold 11px (Title)" },
-			{ Style::Section,       &kSansMedium,   13.0f, "Plex Sans Medium 13px (Group name)" },
-			{ Style::Label,         &kSansRegular,  11.5f, "Plex Sans Regular 11.5px (Param label)" },
-			{ Style::Value,         &kMonoMedium,   13.0f, "Plex Mono Medium 13px (Value)" },
-			{ Style::Meta,          &kMonoRegular,  10.5f, "Plex Mono Regular 10.5px (Meta)" },
-			{ Style::Hero,          &kMonoSemiBold, 18.0f, "Plex Mono SemiBold 18px (Hero)" },
-			{ Style::SegmentLabel,  &kMonoMedium,   11.5f, "Plex Mono Medium 11.5px (Segment inactive)" },
-			{ Style::SegmentActive, &kMonoSemiBold, 11.5f, "Plex Mono SemiBold 11.5px (Segment active)" },
-			{ Style::ScaleMark,     &kMonoRegular,   9.5f, "Plex Mono Regular 9.5px (Scale mark)" },
-			{ Style::DockHotkey,    &kMonoMedium,    8.0f, "Plex Mono Medium 8px (Dock hotkey)" },
+			{ Style::Title,         &kMonoSemiBold, 13.5f, "Plex Mono SemiBold 13.5px (Title)" },
+			{ Style::Section,       &kSansMedium,   16.0f, "Plex Sans Medium 16px (Group name)" },
+			{ Style::Label,         &kSansRegular,  14.0f, "Plex Sans Regular 14px (Param label)" },
+			{ Style::Value,         &kMonoMedium,   16.0f, "Plex Mono Medium 16px (Value)" },
+			{ Style::Meta,          &kMonoRegular,  13.0f, "Plex Mono Regular 13px (Meta)" },
+			{ Style::Hero,          &kMonoSemiBold, 22.0f, "Plex Mono SemiBold 22px (Hero)" },
+			{ Style::SegmentLabel,  &kMonoMedium,   14.0f, "Plex Mono Medium 14px (Segment inactive)" },
+			{ Style::SegmentActive, &kMonoSemiBold, 14.0f, "Plex Mono SemiBold 14px (Segment active)" },
+			{ Style::ScaleMark,     &kMonoRegular,  11.5f, "Plex Mono Regular 11.5px (Scale mark)" },
+			{ Style::DockHotkey,    &kMonoMedium,    8.0f, "Plex Mono Medium 8px (Dock hotkey)" }, // dock-owned, unchanged
 		};
 
 		struct FontSet

@@ -241,13 +241,24 @@ namespace gamescope::widgets
 			const float flMarkRowH = ImMax( minTextSize.y, maxTextSize.y );
 			ImGui::PopFont();
 
-			constexpr float kLabelTrackGap = 5.0f;
-			constexpr float kTrackMarkGap = 5.0f;
-			constexpr float kHitHeight = 18.0f; // "row hit-height 18px"
-			constexpr float kTrackHeight = 5.0f;
-			constexpr float kTrackRounding = 3.0f;
-			constexpr float kHandleW = 8.0f;
-			constexpr float kHandleH = 18.0f;
+			// Issue #23: baseline raised ~20-25% above the spec's measured
+			// values (5/5/18/5/3/8/18 -> 6/6/22/6/3.5/10/22) at the user's
+			// explicit request -- see ui-mockup-precise-spec.md's own note.
+			// Issue #23 half two: every one of these also now scales live
+			// with display_scale (0.5-2.0x, ConfigSchema.h), the same
+			// pattern Chrome.cpp's DrawDock()/DrawDockButton() already use
+			// for dock_scale -- #24 found this file's geometry ignored
+			// display_scale outright while FontGlobalScale grew the text
+			// around it. `const`, not `constexpr`, now that these read a
+			// live value each call rather than a compile-time one.
+			const float flScale = gamescope::palette::DisplayScale();
+			const float kLabelTrackGap = 6.0f * flScale;
+			const float kTrackMarkGap = 6.0f * flScale;
+			const float kHitHeight = 22.0f * flScale; // was "row hit-height 18px"
+			const float kTrackHeight = 6.0f * flScale;
+			const float kTrackRounding = 3.5f * flScale;
+			const float kHandleW = 10.0f * flScale;
+			const float kHandleH = 22.0f * flScale;
 
 			const float flLabelRowH = ImMax( labelSize.y, valueSize.y );
 			const bool bHasMarks = pszMinText != nullptr || pszMaxText != nullptr;
@@ -305,17 +316,30 @@ namespace gamescope::widgets
 					bClampEnabled ? pMin : nullptr, bClampEnabled ? pMax : nullptr );
 			}
 
+			// Issue #23 half two: push GrabMinSize to match this call's own
+			// (now scale-aware) kHandleW instead of leaving it at
+			// ApplyStyle()'s compile-time-constant 8.0f. SliderBehavior()'s
+			// grab-position math reads style.GrabMinSize directly (see the
+			// comment below) -- without this, kHandleW growing via
+			// display_scale would desync the drawn 10x22+ handle from the
+			// narrower hit-target SliderBehavior() itself computes,
+			// regressing hit-testing at every scale but 1.0. Scoped to this
+			// call only (pushed/popped around SliderBehavior()), so it never
+			// leaks into any other widget's own grab sizing.
+			ImGui::PushStyleVar( ImGuiStyleVar_GrabMinSize, kHandleW );
 			ImRect grabBB;
 			const bool bChanged = ImGui::SliderBehavior( trackHitBB, id, eDataType, pValue, pMin, pMax, pszFormat, nFlags, &grabBB );
+			ImGui::PopStyleVar();
 			if ( bChanged )
 				ImGui::MarkItemEdited( id );
 
 			ImGui::RenderNavCursor( trackHitBB, id );
 
 			// ---- Draw: spec §7 geometry. grabBB's X center (computed by
-			// SliderBehavior() against style.GrabMinSize=8, ApplyStyle())
-			// is reused as the 8x18 handle's center so the handle tracks
-			// the exact same fraction stock dragging/keyboard math drives. ----
+			// SliderBehavior() against style.GrabMinSize, pushed to kHandleW
+			// just above) is reused as the handle's center so the handle
+			// tracks the exact same fraction stock dragging/keyboard math
+			// drives, at any display_scale. ----
 			ImDrawList *pDrawList = pWindow->DrawList;
 
 			ImGui::PushFont( fonts::Get( fonts::Style::Label ) );
@@ -369,10 +393,17 @@ namespace gamescope::widgets
 				// ImGui has no primitive for) -- skipped while disabled: an
 				// inert control glowing like a live one would contradict
 				// the "plain white" look the spec gives it.
+				// Derived from kHandleW/kHandleH (outer ring: handle half-size
+				// + 4px margin, inner ring: + 2px margin) rather than two
+				// independently hand-picked rect sizes -- keeps the glow
+				// locked to the handle's own geometry so raising/scaling the
+				// handle (issue #23) can't leave the glow's proportions
+				// behind the way two separately-tracked literals would.
 				const ImU32 glowOuter = ImGui::GetColorU32( gamescope::palette::Accent( 0.18f ) );
 				const ImU32 glowInner = ImGui::GetColorU32( gamescope::palette::Accent( 0.30f ) );
-				pDrawList->AddRectFilled( handleCenter - ImVec2( 8.0f, 13.0f ), handleCenter + ImVec2( 8.0f, 13.0f ), glowOuter, 6.0f );
-				pDrawList->AddRectFilled( handleCenter - ImVec2( 6.0f, 11.0f ), handleCenter + ImVec2( 6.0f, 11.0f ), glowInner, 5.0f );
+				const ImVec2 handleHalf( kHandleW * 0.5f, kHandleH * 0.5f );
+				pDrawList->AddRectFilled( handleCenter - ( handleHalf + ImVec2( 4.0f, 4.0f ) ), handleCenter + ( handleHalf + ImVec2( 4.0f, 4.0f ) ), glowOuter, 6.0f );
+				pDrawList->AddRectFilled( handleCenter - ( handleHalf + ImVec2( 2.0f, 2.0f ) ), handleCenter + ( handleHalf + ImVec2( 2.0f, 2.0f ) ), glowInner, 5.0f );
 			}
 
 			const ImU32 handleColor = bDisabled
@@ -404,8 +435,20 @@ namespace gamescope::widgets
 	// what each represents design-wise.
 	namespace
 	{
-		bool BooleanControl( const char *pszLabel, bool *pbValue, ImVec2 controlSize,
-			void ( *DrawFn )( ImDrawList *pDrawList, const ImRect &controlBB, bool bValue, bool bHovered, bool bHeld ) )
+		// Issue #23 half two: templated on DrawFn (was a plain function
+		// pointer) so Toggle()/Checkbox() below can pass a *capturing*
+		// lambda -- each needs the current display_scale-derived geometry
+		// inside its draw callback, and a raw function pointer can't close
+		// over its caller's locals, which would otherwise force the exact
+		// same scale computation to be duplicated (and kept in sync by
+		// hand) once outside the lambda for sizing and again inside it for
+		// drawing. A template keeps the single computation the lambda
+		// itself closes over as the only copy, at zero runtime cost over
+		// the old function-pointer version (the call still inlines/
+		// devirtualizes the same way any other statically-typed callable
+		// does).
+		template <typename DrawFn>
+		bool BooleanControl( const char *pszLabel, bool *pbValue, ImVec2 controlSize, DrawFn &&drawFn )
 		{
 			ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
 			if ( pWindow->SkipItems )
@@ -436,7 +479,7 @@ namespace gamescope::widgets
 			}
 
 			ImGui::RenderNavCursor( totalBB, id );
-			DrawFn( pWindow->DrawList, controlBB, *pbValue, bHovered, bHeld );
+			drawFn( pWindow->DrawList, controlBB, *pbValue, bHovered, bHeld );
 
 			if ( labelSize.x > 0.0f )
 			{
@@ -451,21 +494,32 @@ namespace gamescope::widgets
 
 	bool Toggle( const char *pszLabel, bool *pbValue )
 	{
-		// 30x15px, per the design guide's Toggles section ("30x15 is the
-		// canonical size per 2b").
-		static constexpr ImVec2 kTrackSize( 30.0f, 15.0f );
-		static constexpr float kKnobSize = 11.0f;
+		// Issue #23: baseline raised ~20-25% above the design guide's
+		// original 30x15/11/2 -- kTrackSize stays derived from
+		// kKnobSize/kInset (height = knob + 2*inset, width = 2*height,
+		// same 2:1 track ratio the original 30x15 already had) rather than
+		// an independently hand-picked pair, so the three stay coherent
+		// automatically instead of needing to be re-balanced by hand.
+		// Issue #23 half two: also scaled live by display_scale -- `const`,
+		// computed once per call and captured by the draw lambda below
+		// (BooleanControl() is now a template exactly so this capture is
+		// possible; see its own comment) rather than re-read a second time
+		// inside the lambda.
+		const float flScale = gamescope::palette::DisplayScale();
+		const float kKnobSize = 13.5f * flScale;
 		// Spec's "1px inset content padding" is measured from the *inside*
 		// of the 1px track border, not from the track's outer edge -- using
 		// it as the sole offset from bb.Min/Max put the knob flush against
 		// the border's inner face (reported: "the lever needs one
-		// horizontal pixel of additional spacing towards the edge"). 2px
-		// here = 1px border + 1px content padding, matching the vertical
-		// inset the centering below already produces ((15-11)/2 = 2px).
-		static constexpr float kInset = 2.0f;
+		// horizontal pixel of additional spacing towards the edge"). The
+		// inset here = 1px border + content padding, matching the vertical
+		// inset the centering below already produces ((track height - knob) / 2).
+		const float kInset = 2.5f * flScale;
+		const float kTrackHeight = kKnobSize + kInset * 2.0f;
+		const ImVec2 kTrackSize( kTrackHeight * 2.0f, kTrackHeight );
 
 		return BooleanControl( pszLabel, pbValue, kTrackSize,
-			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
+			[kKnobSize, kInset]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
 			{
 				// On: track accent@30% (35% hovered), border accent@65%,
 				// per spec §7 Toggle -- these are measured values, not an
@@ -512,12 +566,17 @@ namespace gamescope::widgets
 
 	bool Checkbox( const char *pszLabel, bool *pbValue )
 	{
-		// 12x12px, per the design guide's Checkboxes section.
-		static constexpr ImVec2 kBoxSize( 12.0f, 12.0f );
-		static constexpr float kMarkSize = 5.0f;
+		// Issue #23: baseline raised ~20-25% above the design guide's
+		// original 12x12/5 -- kept coherent (mark stays roughly 40% of the
+		// box, same as before: 5/12 -> 6/14.5). Issue #23 half two: also
+		// scaled live by display_scale, same capture-into-the-draw-lambda
+		// shape as Toggle() above.
+		const float flScale = gamescope::palette::DisplayScale();
+		const ImVec2 kBoxSize( 14.5f * flScale, 14.5f * flScale );
+		const float kMarkSize = 6.0f * flScale;
 
 		return BooleanControl( pszLabel, pbValue, kBoxSize,
-			[]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
+			[kMarkSize]( ImDrawList *pDrawList, const ImRect &bb, bool bValue, bool bHovered, bool /*bHeld*/ )
 			{
 				// Per spec §7 Checkbox: checked border accent@70%, fill
 				// accent@20%; unchecked border white@18%, fill white@4%.
@@ -583,8 +642,23 @@ namespace gamescope::widgets
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
 		ImDrawList *pDrawList = pWindow->DrawList;
 
-		constexpr float kGap = 3.0f;
-		constexpr float kPadY = 6.0f;
+		// Issue #23: kGap/kPadY baseline raised ~20-25% (3/6 -> 3.5/7), and
+		// (half two) both scale live by display_scale, same pattern as
+		// every other geometry constant in this file. flSegWidth stays a
+		// strict even division of the available width -- deliberately
+		// *not* widened to fit each label's own measured text (a version
+		// of this tried that first; reverted -- with nCount cells and a
+		// container of genuinely fixed width, one cell asking for more than
+		// its even share only ever takes it from cutting a later cell off
+		// the visible row entirely, which is worse than the merge it was
+		// meant to fix: a clipped/tight label is still there and clickable,
+		// a cell pushed past the window's own edge is neither). Height
+		// already tracked the active font's real size via GetFontSize()
+		// (itself already reflecting FontGlobalScale/the rebuilt atlas,
+		// Fonts.cpp), so it never had this problem.
+		const float flScale = gamescope::palette::DisplayScale();
+		const float kGap = 3.5f * flScale;
+		const float kPadY = 7.0f * flScale;
 		const float flAvailWidth = ImGui::GetContentRegionAvail().x;
 		const float flSegWidth = ( flAvailWidth - kGap * ( nCount - 1 ) ) / nCount;
 		const float flSegHeight = ImGui::GetFontSize() + kPadY * 2.0f;
@@ -627,12 +701,27 @@ namespace gamescope::widgets
 			pDrawList->AddRectFilled( pos, pos + size, fill ); // 0px radius -- controls stay flat/square
 			pDrawList->AddRect( pos, pos + size, border );
 
+			// Issue #23 half two: clipped to this cell's own rect -- the
+			// actual fix for #24's "segmented filter buttons visibly merge
+			// at 2.0x UI Scale". A big-enough font (this issue's own raised
+			// baseline, stacked with a high display_scale) can render a
+			// label wider than an even-division cell; without a clip rect
+			// that overflow used to paint straight across the border into
+			// the next cell, reading as one fused blob rather than two
+			// separate segments -- the borders/fills above were never what
+			// merged, only the unclipped text was. Clipping confines that
+			// same case to "this label's tail is cut off, still inside its
+			// own clearly-bordered cell", which stays legible as a row of
+			// distinct segments at any scale, same principle
+			// ImGui::RenderTextClipped() applies to stock widgets.
 			ImGui::PushFont( fonts::Get( bActive ? fonts::Style::SegmentActive : fonts::Style::SegmentLabel ) );
 			const ImVec2 textSize = ImGui::CalcTextSize( pszLabels[i] );
 			const ImVec2 textPos(
 				pos.x + ( size.x - textSize.x ) * 0.5f,
 				pos.y + ( size.y - textSize.y ) * 0.5f );
+			pDrawList->PushClipRect( pos, pos + size, true );
 			pDrawList->AddText( textPos, text, pszLabels[i] );
+			pDrawList->PopClipRect();
 			ImGui::PopFont();
 
 			ImGui::PopID();
@@ -649,9 +738,12 @@ namespace gamescope::widgets
 		ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
 		ImDrawList *pDrawList = pWindow->DrawList;
 
-		// Spec §11 ANCHOR block: 30x30px cells, 3px gaps.
-		constexpr float kCellSize = 30.0f;
-		constexpr float kGap = 3.0f;
+		// Spec §11 ANCHOR block: 30x30px cells, 3px gaps -- issue #23 raises
+		// both ~20-25% (30/3 -> 36/3.5), and (half two) scales both live by
+		// display_scale, same pattern as every other geometry constant here.
+		const float flScale = gamescope::palette::DisplayScale();
+		const float kCellSize = 36.0f * flScale;
+		const float kGap = 3.5f * flScale;
 
 		bool bChanged = false;
 		const ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
@@ -709,16 +801,23 @@ namespace gamescope::widgets
 		if ( pWindow->SkipItems )
 			return;
 
-		constexpr float kPadX = 9.0f;
-		constexpr float kPadY = 6.0f;
-		constexpr float kDotSize = 6.0f;
+		// Issue #23: baseline raised ~20-25% (9/6/6 -> 11/7/7). kDotSize
+		// matches the title bar's own status-dot size (Chrome.cpp's
+		// DrawTitleBar()) -- this is "the same 6x6 square status dot the
+		// title bar uses" per this function's own header comment, so the
+		// two stay in lockstep deliberately, not by coincidence (both also
+		// scale by the same display_scale factor, half two below).
+		const float flScale = gamescope::palette::DisplayScale();
+		const float kPadX = 11.0f * flScale;
+		const float kPadY = 7.0f * flScale;
+		const float kDotSize = 7.0f * flScale;
 
 		ImGui::PushFont( fonts::Get( fonts::Style::Meta ) );
 		const ImVec2 textSize = ImGui::CalcTextSize( pszText );
 		ImGui::PopFont();
 
 		const float flWidth = ImGui::GetContentRegionAvail().x;
-		const float flTextLeftInset = bLeadingDot ? kDotSize + 6.0f : 0.0f;
+		const float flTextLeftInset = bLeadingDot ? kDotSize + 6.0f * flScale : 0.0f;
 		const ImVec2 size( flWidth, textSize.y + kPadY * 2.0f );
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 
@@ -744,13 +843,20 @@ namespace gamescope::widgets
 	bool BeginGroupBlock( const char *pszId, bool bActive )
 	{
 		// Spec §6: fill white@2.2% (active: 3.2%), border white@6% (active:
-		// 7%), 12px padding, 10px row gap, square corners.
+		// 7%), 12px padding, 10px row gap, square corners. Issue #23 raises
+		// the two pixel geometries ~20-25% (12/12 -> 15/15 padding, 8/10 ->
+		// 10/12 spacing), and (half two) scales both live by display_scale;
+		// border stays the project's flat 1px hairline (unscaled, same as
+		// every other hairline border here and in Chrome.cpp's dock --
+		// "1px hairline everywhere" is a fixed idiom, not a measured size
+		// meant to grow).
+		const float flScale = gamescope::palette::DisplayScale();
 		ImGui::PushStyleColor( ImGuiCol_ChildBg, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.032f : 0.022f ) ) );
 		ImGui::PushStyleColor( ImGuiCol_Border, gamescope::palette::ToVec4( gamescope::palette::White( bActive ? 0.07f : 0.06f ) ) );
 		ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 0.0f );
 		ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 1.0f );
-		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 12.0f, 12.0f ) );
-		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 8.0f, 10.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 15.0f, 15.0f ) * flScale );
+		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 10.0f, 12.0f ) * flScale );
 
 		ImGui::PushID( pszId );
 		return ImGui::BeginChild( "##group", ImVec2( 0.0f, 0.0f ),
@@ -775,7 +881,8 @@ namespace gamescope::widgets
 			// relies on nowhere else -- this is the only place that needs it.
 			const ImVec2 mn = ImGui::GetItemRectMin();
 			const ImVec2 mx = ImGui::GetItemRectMax();
-			ImGui::GetWindowDrawList()->AddRectFilled( mn, ImVec2( mn.x + 2.0f, mx.y ),
+			const float flEdgeWidth = 2.5f * gamescope::palette::DisplayScale(); // issue #23: 2px -> 2.5px baseline, scaled live (half two)
+			ImGui::GetWindowDrawList()->AddRectFilled( mn, ImVec2( mn.x + flEdgeWidth, mx.y ),
 				ImGui::GetColorU32( gamescope::palette::Accent( 0.80f ) ) );
 		}
 	}
