@@ -346,7 +346,7 @@ namespace gamescope::Process
         return true;
     }
 
-    pid_t SpawnProcess( char **argv, std::function<void()> fnPreambleInChild, bool bDoubleFork )
+    pid_t SpawnProcess( char **argv, std::function<void()> fnPreambleInChild, bool bDoubleFork, std::span<const int> nExtraKeepFds )
     {
         // Create a pipe for the child to return the grandchild's
         // PID into.
@@ -373,15 +373,19 @@ namespace gamescope::Process
         }
         else if ( nChild == 0 )
         {
-            std::array<int, 5> nExcludedFds =
-            {{
+            std::vector<int> vecExcludedFds =
+            {
                 STDIN_FILENO,
                 STDOUT_FILENO,
                 STDERR_FILENO,
                 nPidPipe[0], // -1 if !bDoubleFork, which is fine.
                 nPidPipe[1],
-            }};
-            CloseAllFds( nExcludedFds );
+            };
+            // Issue #39: e.g. a log-capture pipe's write end, kept alive
+            // past CloseAllFds() so fnPreambleInChild can dup2() it onto
+            // stdout/stderr before exec.
+            vecExcludedFds.insert( vecExcludedFds.end(), nExtraKeepFds.begin(), nExtraKeepFds.end() );
+            CloseAllFds( vecExcludedFds );
 
             ProcessPreSpawn();
 
@@ -456,7 +460,7 @@ namespace gamescope::Process
         }
     }
 
-    pid_t SpawnProcessInWatchdog( char **argv, bool bRespawn, std::function<void()> fnPreambleInChild )
+    pid_t SpawnProcessInWatchdog( char **argv, bool bRespawn, std::function<void()> fnPreambleInChild, std::span<const int> nExtraKeepFds )
     {
         std::vector<char *> args;
         args.push_back( (char *)"gamescopereaper" );
@@ -469,7 +473,7 @@ namespace gamescope::Process
             argv++;
         }
         args.push_back( NULL );
-        return SpawnProcess( args.data(), fnPreambleInChild );
+        return SpawnProcess( args.data(), fnPreambleInChild, false, nExtraKeepFds );
     }
 
     bool HasCapSysNice()

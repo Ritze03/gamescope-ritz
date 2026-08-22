@@ -44,6 +44,7 @@ namespace gamescope::chrome
 		SystemMonitor,
 		Audio,
 		Config,
+		Log, // issue #39: gamescope's own log + the launched game's captured stdout/stderr, two tabs
 
 		Count,
 	};
