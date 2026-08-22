@@ -502,9 +502,13 @@ namespace gamescope
 	}
 
 	// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow() as the
-	// dock's "FPS HUD" panel (see Overlay/Chrome.h) -- SPEC.md's UI structure
-	// lists an "FPS HUD panel" hosting exactly FpsDisplay_DrawSettingsPanel()'s
-	// controls, which this window has done since M4.
+	// dock's "System Monitor" panel (see Overlay/Chrome.h) -- SPEC.md's UI
+	// structure lists an "FPS HUD panel" hosting exactly
+	// FpsDisplay_DrawSettingsPanel()'s controls, which this window has done
+	// since M4; issue #27 renamed the panel/dock label/PanelId to "System
+	// Monitor" (the panel now hosts a module framework, not just FPS) while
+	// leaving the underlying FpsDisplay* file/function names alone (see
+	// FpsDisplay.h's own header comment for why).
 	//
 	// The M1 render-shell scaffolding that used to live in this window
 	// (the "Settings overlay render shell -- Milestone 1" heading, its proof-
@@ -518,7 +522,7 @@ namespace gamescope
 	// keyboard capture now.
 	static void DrawFpsHudPanel()
 	{
-		if ( !gamescope::chrome::BeginPanelWindow( "FPS HUD", gamescope::chrome::PanelId::Fps,
+		if ( !gamescope::chrome::BeginPanelWindow( "SYSTEM MONITOR", gamescope::chrome::PanelId::SystemMonitor,
 			ImVec2( 64.0f, 64.0f ), ImVec2( 460.0f, 640.0f ) ) )
 			return;
 
