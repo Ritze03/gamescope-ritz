@@ -74,8 +74,12 @@ namespace gamescope::chrome
 	// pszTitle is the window's title, shown UPPERCASE in the custom title
 	// bar (spec §5) -- pass it already-uppercased (every current call site
 	// does: "DISPLAY", "SHADERS", "AUDIO", "CONFIG / PROFILES"). defaultSize
-	// is used verbatim (windows are fixed-size, no resize grip -- spec §4:
-	// "free-floating, draggable by title bar only, no resize"). defaultPos
+	// is only a fallback bootstrap value now (issue #34: windows are
+	// resizable, and their real first-ever-shown size is measured from the
+	// panel's own content and grown from there -- see Chrome.cpp's
+	// BeginPanelWindow() for the full algorithm); defaultSize is used
+	// verbatim only if a panel is collapsed before its own measurement ever
+	// finishes, which otherwise never happens in normal use. defaultPos
 	// is intentionally NOT used for position any more: with multiple panels
 	// allowed open at once (see IsPanelOpen()'s comment), each panel gets a
 	// fixed, non-overlapping tile position keyed off its own PanelId (see

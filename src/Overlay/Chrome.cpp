@@ -295,6 +295,26 @@ namespace gamescope::chrome
 		// panel, and avoids the alternative (a two-pass Begin) entirely.
 		bool s_bPanelWasFocused[(size_t)PanelId::Count] = {};
 
+		// Issue #34 state: resizable panels, opening ~50% larger than their
+		// measured natural content size. s_nSizeMeasureFrame counts a
+		// panel's first few frames spent in an ImGuiWindowFlags_AlwaysAutoResize
+		// "priming" pass (see BeginPanelWindow()) before it's ever shown at a
+		// real size; saturates at kSizeMeasureFrames once done, never used
+		// again after that. s_lastExpandedSize is the single source of truth
+		// for "what size should this window be while expanded" from then on
+		// -- written once by the priming pass's own measurement, then kept
+		// live every subsequent expanded frame from the window's actual
+		// (possibly user-resized) size, so collapse/un-collapse always has
+		// the right value to freeze/restore. s_bPanelWasCollapsedLastFrame
+		// detects the un-collapse transition frame specifically (see its use
+		// below) -- separate from s_bPanelWasFocused, which is cached for a
+		// different reason (style pushes needing last frame's focus before
+		// this frame's is knowable) despite the similar "one-frame-stale"
+		// shape.
+		int s_nSizeMeasureFrame[(size_t)PanelId::Count] = {};
+		ImVec2 s_lastExpandedSize[(size_t)PanelId::Count] = {};
+		bool s_bPanelWasCollapsedLastFrame[(size_t)PanelId::Count] = {};
+
 		// Sensible non-overlapping default positions, one fixed slot per
 		// PanelId, replacing whatever position each panel's own call site
 		// used to hardcode (Chrome.h's BeginPanelWindow() comment explains
@@ -517,14 +537,67 @@ namespace gamescope::chrome
 		const bool bCollapsed = s_bPanelCollapsed[(size_t)id];
 
 		ImGui::SetNextWindowPos( TiledDefaultPos( id ), ImGuiCond_FirstUseEver );
-		// Fixed size (spec §4: "no resize") -- ImGuiCond_Always is safe here
-		// specifically because ImGuiWindowFlags_NoResize (below) means
-		// nothing else ever changes this window's size, so re-asserting it
-		// every frame is a no-op except on the frame collapse toggles, which
-		// is exactly the point: that's this file's own "shrink to just the
-		// title bar" stand-in for ImGui's native collapse (see
-		// s_bPanelCollapsed's comment above).
-		ImGui::SetNextWindowSize( bCollapsed ? ImVec2( defaultSize.x, kTitleBarHeight ) : defaultSize, ImGuiCond_Always );
+
+		// Issue #34: resizable windows, opening ~50% larger than their
+		// natural content size (width real growth; height content-driven
+		// with only breathing-room padding -- see kHeightPad below, and the
+		// measurement-finish block after Begin() for why height isn't also
+		// just multiplied by 1.5). "Natural" is measured, not guessed: the
+		// first kSizeMeasureFrames frames a panel is ever shown, it's drawn
+		// with ImGuiWindowFlags_AlwaysAutoResize (below) and no
+		// SetNextWindowSize call at all, so ImGui fits the window to this
+		// panel's own real widget layout. ImGui computes each frame's
+		// auto-fit size from the PREVIOUS frame's submitted content
+		// (imgui.cpp's CalcWindowAutoFitSize(), called at End()), so more
+		// than one frame is needed before a reading is trustworthy -- 3
+		// gives it margin over simple, static panel layouts like these.
+		// Once measured, the result seeds s_lastExpandedSize exactly once
+		// (ImGuiCond_FirstUseEver below), after which ordinary ImGui
+		// window-size persistence takes over and the user's own resizes
+		// stick -- no per-frame re-assertion fighting them back, unlike the
+		// old fixed-size scheme this replaces.
+		constexpr int kSizeMeasureFrames = 3;
+		constexpr float kHeightPad = 48.0f; // breathing room once content is already the limiting factor
+
+		int &nMeasureFrame = s_nSizeMeasureFrame[(size_t)id];
+		ImVec2 &lastExpandedSize = s_lastExpandedSize[(size_t)id];
+		bool &bWasCollapsed = s_bPanelWasCollapsedLastFrame[(size_t)id];
+
+		const bool bPriming = !bCollapsed && nMeasureFrame < kSizeMeasureFrames;
+
+		if ( bCollapsed )
+		{
+			// Shrunk to just the title bar (s_bPanelCollapsed's own stand-in
+			// for native collapse) -- width follows whatever the window was
+			// last expanded to, not defaultSize, so shading doesn't silently
+			// change a window's width out from under the user. Always: this
+			// is one of the two collapse-toggle transition directions the
+			// task's acceptance criteria still wants Always for (the other
+			// is the un-collapse restore just below).
+			const float flWidth = lastExpandedSize.x > 0.0f ? lastExpandedSize.x : defaultSize.x * 1.5f;
+			ImGui::SetNextWindowSize( ImVec2( flWidth, kTitleBarHeight ), ImGuiCond_Always );
+		}
+		else if ( !bPriming && bWasCollapsed )
+		{
+			// Un-collapsing this frame: restore exactly what the window was
+			// before shading, rather than snapping to the opening size
+			// (task's own "not left in an inconsistent size after
+			// un-shading").
+			ImGui::SetNextWindowSize( lastExpandedSize, ImGuiCond_Always );
+		}
+		else if ( !bPriming )
+		{
+			// Steady state (including the first real frame right after
+			// measurement finishes): seed with the last known expanded size.
+			// ImGuiCond_FirstUseEver makes every call here a no-op once
+			// consumed once, exactly like SetNextWindowPos() above already
+			// does every frame for position -- so the user's own drag-resize
+			// (ImGuiWindowFlags_NoResize is gone below) sticks across
+			// frames.
+			ImGui::SetNextWindowSize( lastExpandedSize, ImGuiCond_FirstUseEver );
+		}
+		// else: priming -- ImGuiWindowFlags_AlwaysAutoResize (below) drives
+		// size entirely this frame; no SetNextWindowSize call at all.
 
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
 		// that's Widgets.cpp's ApplyStyle(), unaffected by this
@@ -560,19 +633,61 @@ namespace gamescope::chrome
 		// below draws the whole thing as content instead. No native p_open:
 		// the close glyph calls SetPanelOpen() itself, and the native close-
 		// button path lives inside RenderWindowTitleBarContents(), which
-		// Begin() never calls once NoTitleBar is set. Fixed size (no resize
-		// grip) per spec §4.
+		// Begin() never calls once NoTitleBar is set.
+		//
+		// Issue #34: resizable, so NoResize is no longer unconditional --
+		// still forced while collapsed (frozen at title-bar height, no grip
+		// to offer -- resizing a shaded window would either do nothing
+		// visible or leave it inconsistent once un-shaded, so this just
+		// doesn't offer the grip at all) and while priming (AlwaysAutoResize
+		// already owns sizing those frames; NoResize would conflict with it).
 		//
 		// NoScrollbar/NoScrollWithMouse: this outer window must never scroll
 		// itself -- see the "##body" child BeginChild() below for why. Scroll
 		// (wheel or scrollbar-grip drag alike) lives entirely on that child
 		// now.
-		ImGui::Begin( pszTitle, nullptr,
-			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
+		ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+		if ( bCollapsed )
+			windowFlags |= ImGuiWindowFlags_NoResize;
+		else if ( bPriming )
+			windowFlags |= ImGuiWindowFlags_AlwaysAutoResize;
+		ImGui::Begin( pszTitle, nullptr, windowFlags );
 
 		const bool bFocused = ImGui::IsWindowFocused( ImGuiFocusedFlags_RootAndChildWindows );
 		s_bPanelWasFocused[(size_t)id] = bFocused;
+
+		// Issue #34 bookkeeping: advance/finish the measurement pass, or
+		// (once past it) keep s_lastExpandedSize tracking the window's real,
+		// possibly user-resized size every frame -- so a later collapse, or
+		// a later reopen after being closed at the dock, always has the
+		// right value to freeze/restore.
+		if ( bPriming )
+		{
+			if ( ++nMeasureFrame == kSizeMeasureFrames )
+			{
+				// This frame's GetWindowSize() is ImGui's own converged
+				// auto-fit result for the panel's actual widget layout --
+				// the "measured natural size" this issue asks for, not a
+				// guess. Width: flat 1.5x, real growth for breathing room.
+				// Height: capped to content-plus-padding rather than also
+				// multiplied by 1.5 -- the auto-fit content height already
+				// IS "what's needed" (zero slack by construction), so any
+				// multiplier above 1.0 already overshoots it; a small fixed
+				// pad reads as intentional breathing room instead of the
+				// dead vertical space the task's "never taller than needed"
+				// qualifier is asking to avoid.
+				const ImVec2 natural = ImGui::GetWindowSize();
+				lastExpandedSize = ImVec2(
+					natural.x * 1.5f,
+					ImMin( natural.y * 1.5f, natural.y + kHeightPad ) );
+			}
+		}
+		else if ( !bCollapsed )
+		{
+			lastExpandedSize = ImGui::GetWindowSize();
+		}
+		bWasCollapsed = bCollapsed;
 
 		// Spec §4: "Focused window: border becomes accent@42%". ImGui's own
 		// Begin()/focus-follows-click z-ordering already gives "focused
