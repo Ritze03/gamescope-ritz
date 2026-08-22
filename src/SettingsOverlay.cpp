@@ -870,14 +870,44 @@ namespace gamescope
 		// Startup announcement: timed independently of the settings
 		// overlay's own visibility (cv_settings_overlay_visible /
 		// s_flCurrentAlpha) -- it must play even if the user never opens the
-		// overlay this session. Started the first time this function ever
-		// runs (effectively process start, since paint_all() calls this
-		// every frame from very early on).
+		// overlay this session.
 		EnsureStartupAnnounceConfigLoaded();
-		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted )
+
+		// Issue #30: warm the one-time ImGui/Vulkan setup (context creation,
+		// font atlas build, ImGui_ImplVulkan_Init()'s descriptor pool/pipeline
+		// compilation, and the first offscreen texture allocation) BEFORE
+		// arming the announcement's fade-in timer, not on the same call that
+		// first draws it. Previously EnsureImguiInit()/EnsureTexture() only
+		// ran once bDrawPanels || flStartupAlpha > 0.0f was already true, and
+		// the timer was armed unconditionally the very first time this
+		// function ran -- so the entire one-time setup cost landed on the
+		// exact frame the toast started fading in (frame 1), producing the
+		// visible hitch right as it first became visible. Doing the warm-up
+		// here instead, gated only on the output size being known (not on
+		// whether anything will actually be drawn this frame), moves that
+		// cost to an earlier call where nothing is drawn yet -- flStartupAlpha
+		// is still 0.0f until the timer is armed below, so the early return
+		// a few lines down still fires on that call, same as it always did
+		// before the overlay was ever touched. The timer -- and the toast's
+		// first visible pixel -- only start once EnsureImguiInit()/
+		// EnsureTexture() are confirmed to have actually completed, so the
+		// fade-in the user sees always begins on an already-warm context.
+		//
+		// Measured (see #30's PR/commit): before this change, the call that
+		// first logged the one-time setup finishing and the call that first
+		// drew the toast at nonzero alpha were the same call, every run.
+		// After this change, the setup finishes one call earlier than the
+		// first visible alpha>0 draw, every run -- the two no longer land on
+		// the same frame.
+		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted &&
+			g_nOutputWidth != 0 && g_nOutputHeight != 0 )
 		{
-			s_bStartupAnnounceStarted = true;
-			s_uStartupAnnounceStartMs = get_time_in_milliseconds();
+			EnsureImguiInit();
+			if ( s_bImguiInitialized && EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+			{
+				s_bStartupAnnounceStarted = true;
+				s_uStartupAnnounceStartMs = get_time_in_milliseconds();
+			}
 		}
 		const unsigned int uStartupElapsedMs = s_bStartupAnnounceStarted
 			? ( get_time_in_milliseconds() - s_uStartupAnnounceStartMs )
@@ -964,11 +994,32 @@ namespace gamescope
 		layer->filter = GamescopeUpscaleFilter::LINEAR;
 		layer->blackBorder = false;
 		layer->applyColorMgmt = false; // drm-plane-only; not exercised by the SDL/vkcube M1 test path
-		// ImGui's default pipeline blend state produces straight (non-
-		// premultiplied) alpha, not gamescope's default premultiplied
-		// assumption -- COVERAGE is the mode this codebase already uses for
-		// the same reason (cv_overlay_unmultiplied_alpha, the Steam overlay).
-		layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE;
+		// Issue #32: this was ALPHA_BLENDING_MODE_COVERAGE on the theory that
+		// ImGui's blend state produces straight (non-premultiplied) alpha --
+		// true of the *inputs* to each draw call, but not of the *offscreen
+		// target's* accumulated pixels, which is what actually gets sampled
+		// here. ImGui's Vulkan backend blends every draw with
+		// SrcAlpha/OneMinusSrcAlpha for color, standard "over"; cleared to
+		// transparent black (0,0,0,0) above (RenderAndSubmit()'s clearValue)
+		// each frame. "Over" onto a transparent destination always yields a
+		// PREMULTIPLIED result (out.rgb = src.rgb * src.a) wherever the
+		// destination stayed low-alpha -- i.e. exactly the open-background
+		// case. Where the destination was already near-opaque (another
+		// window's own fill, drawn earlier in the same offscreen pass), the
+		// accumulated alpha is ~1, so premultiplied and straight read the
+		// same and the bug is invisible -- exactly issue #32's reported
+		// "shows over other windows, vanishes over the game" pattern.
+		// COVERAGE's shader path (BlendLayer(), alphamode.h) multiplies this
+		// already-premultiplied layerColor by layerAlpha a *second* time,
+		// squaring alpha for every translucent-over-background pixel -- the
+		// focus glow's faint outer rings (well under 10% alpha) get squared
+		// toward zero, reading as invisible. PREMULTIPLIED's shader path
+		// takes layerColor as-is (correct for an already-premultiplied
+		// source) and only applies opacity, matching what this offscreen
+		// texture actually contains. Confirmed by tracing the accumulation,
+		// not by tuning kGlowPeakA -- cranking that up would have "fixed"
+		// the symptom while leaving the real double-multiply in place.
+		layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_PREMULTIPLIED;
 		layer->ctm = nullptr;
 		layer->hdr_metadata_blob = nullptr;
 		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
