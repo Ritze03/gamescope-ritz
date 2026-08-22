@@ -263,6 +263,10 @@ namespace gamescope::config
                             s.overlay.panel_geometry[ it.key() ] = g;
                     }
                 }
+
+                // Issue #40: selected System Monitor sub-tab (ConfigSchema.h's
+                // OverlaySettings::system_monitor_tab comment).
+                s.overlay.system_monitor_tab = JGetString( *pOverlay, "system_monitor_tab", s.overlay.system_monitor_tab );
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -387,6 +391,10 @@ namespace gamescope::config
                     jGeometry[ sKey ] = std::move( jg );
                 }
                 jOverlay[ "panel_geometry" ] = std::move( jGeometry );
+
+                // Issue #40: selected System Monitor sub-tab (see the parse
+                // side above and ConfigSchema.h's own comment).
+                jOverlay[ "system_monitor_tab" ] = s.overlay.system_monitor_tab;
 
                 j[ "overlay" ] = std::move( jOverlay );
             }
@@ -1031,6 +1039,18 @@ namespace gamescope::config
     {
         OverlaySettings overlay = CurrentOverlaySettings();
         overlay.panel_geometry[ sPanelKey ] = geometry;
+        EnqueueOverlayWrite( overlay );
+    }
+
+    // Issue #40: identical shape to EnqueueGeometryWrite() immediately
+    // above, patching one field instead of one map entry -- see this
+    // function's own header comment (ConfigManager.h) for why
+    // FpsDisplay.cpp's usual EnqueueRoutedWrite() path can't be used for
+    // this particular field.
+    void EnqueueSystemMonitorTabWrite( const std::string &sTab )
+    {
+        OverlaySettings overlay = CurrentOverlaySettings();
+        overlay.system_monitor_tab = sTab;
         EnqueueOverlayWrite( overlay );
     }
 

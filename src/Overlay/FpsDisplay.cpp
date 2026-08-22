@@ -42,6 +42,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
@@ -1388,6 +1389,19 @@ namespace gamescope
 		// turns the readout on, rather than starting cold.
 		gamescope::Metrics::Init();
 
+		// Issue #40: gate the Statistics tab's 60-second history on tab
+		// *selection* (the persisted config field), not on this readout's
+		// own `enabled` toggle or the settings overlay's open/closed
+		// state -- called unconditionally, every composited frame,
+		// regardless of either. This is deliberately ABOVE the `enabled`
+		// early-return below: a user who leaves Statistics selected while
+		// the FPS counter itself is off, or with the overlay closed
+		// entirely, still gets a continuously warm 60s window (see
+		// ConfigSchema.h's OverlaySettings::system_monitor_tab and
+		// SystemStats.h's SetHistoryCollectionEnabled() for the full
+		// rationale).
+		gamescope::Metrics::SetHistoryCollectionEnabled( s_Settings.overlay.system_monitor_tab == "statistics" );
+
 		if ( !s_Settings.fps_display.enabled )
 			return;
 
@@ -1504,31 +1518,256 @@ namespace gamescope
 		ImGui::SetNextItemWidth( std::max( 1.0f, ImGui::GetContentRegionAvail().x - flLabelW - flGap ) );
 	}
 
-	void FpsDisplay_DrawSettingsPanel()
+	// -------------------------------------------------------------------
+	// Statistics tab (issue #40): 60-second graphs built on
+	// Metrics::GetHistorySnapshot(), gated on tab *selection* alone (see
+	// FpsDisplay_AddLayer()'s SetHistoryCollectionEnabled() call and
+	// ConfigSchema.h's OverlaySettings::system_monitor_tab) rather than
+	// this panel's own open/closed state, so the history stays warm
+	// across a settings-overlay close/reopen. Deliberately its own block
+	// of functions, kept separate from the CPU/GPU/Media *module* drawing
+	// above (DrawCpuModuleContent() etc, which style the always-on-screen
+	// HUD readout -- a different draw path entirely) -- other in-flight
+	// work (issue #29) is actively restyling those, so this tab staying
+	// contiguous and self-contained avoids fighting that in the same
+	// functions, per the coordinator's own scoping note.
+	// -------------------------------------------------------------------
+
+	namespace
 	{
-		EnsureConfigLoaded();
-		config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		// One EMA ceiling per graphed metric, chasing each metric's own
+		// recent worst/highest sample the same slow way
+		// DrawFrametimeGraph's UpdateGraphCeiling() does (this issue's own
+		// acceptance criterion: "same EMA-smoothed-ceiling style ... not a
+		// raw-max-jitter scale") -- recomputed from the fresh
+		// GetHistorySnapshot() copy every draw rather than kept as an
+		// internal ring buffer, since SystemStats' own history already is
+		// this tab's buffer. 0.0f means "never initialized" (a fresh
+		// warm-up): the first real value is taken as-is instead of easing
+		// up from zero over several seconds.
+		float s_flCpuCeiling = 0.0f;
+		float s_flGpuTempCeiling = 0.0f;
+		float s_flGpuPowerCeiling = 0.0f;
+		float s_flFpsCeiling = 0.0f;
+		// Detects a collection restart (re-selecting the tab after
+		// tabbing away starts SystemStats' buffer over from empty -- see
+		// SetHistoryCollectionEnabled()) by the sample count going
+		// backwards, since the buffer can only ever grow while a
+		// selection stays live. Reset every ceiling above on that edge so
+		// a previous selection's scale never biases the first few bars of
+		// a fresh warm-up. Starts at -1 (rather than 0) purely so the
+		// very first draw's comparison (nSamples=0 < -1 == false) is a
+		// no-op, not a spurious reset -- harmless either way since the
+		// ceilings already start at 0.0f/uninitialized, but avoids the
+		// pointless extra assignment on the common case of a process's
+		// first-ever Statistics draw.
+		int s_nLastSeenSampleCount = -1;
+	}
+
+	// Chases flDesired the same slow-alpha way DrawFrametimeGraph's
+	// UpdateGraphCeiling() does -- flCeiling == 0.0f (never initialized)
+	// snaps straight to flDesired instead of easing up from zero.
+	static void ChaseCeiling( float &flCeiling, float flDesired )
+	{
+		if ( flCeiling <= 0.0f )
+		{
+			flCeiling = flDesired;
+			return;
+		}
+		constexpr float kCeilingAlpha = 0.05f; // slow -- see DrawFrametimeGraph's own kCeilingAlpha comment for why
+		flCeiling = flCeiling * ( 1.0f - kCeilingAlpha ) + flDesired * kCeilingAlpha;
+	}
+
+	// Draws one metric's 60-second bar graph: a fixed-width axis spanning
+	// Metrics::kStatsHistoryCapacity samples (60s), bars laid down
+	// left-to-right in collection order (oldest at the left, growing
+	// rightward) rather than DrawFrametimeGraph's own right-aligned/
+	// newest-at-the-right convention -- deliberately different here,
+	// because a partially-filled 60s window must visibly grow from the
+	// left as data arrives, never get stretched to fill the full width
+	// (this issue's own explicit requirement: a handful of samples
+	// spanning the whole axis reads as a complete window when it isn't).
+	// The unfilled remainder of the axis is simply left blank.
+	// bEmaCeiling=false is for metrics with a genuine fixed scale (GPU
+	// busy%, 0-100) -- flCeilingFloor IS the ceiling every call, no
+	// chasing.
+	template <typename ExtractFn>
+	static void DrawStatGraph( ImDrawList *pDrawList, ImVec2 origin, float flWidth, float flHeight,
+		const std::vector<gamescope::Metrics::HistorySample> &vecSamples, ExtractFn fnExtract,
+		float &flCeiling, float flCeilingFloor, bool bEmaCeiling )
+	{
+		constexpr float kBarWidth = 2.0f;
+		constexpr float kBarGap = 1.0f; // matches DrawFrametimeGraph's own 1px gap
+		constexpr float kPitch = kBarWidth + kBarGap;
+		const float flBottom = origin.y + flHeight;
+
+		if ( vecSamples.empty() )
+			return;
+
+		if ( bEmaCeiling )
+		{
+			float flMax = flCeilingFloor;
+			for ( const gamescope::Metrics::HistorySample &sample : vecSamples )
+				flMax = std::max( flMax, fnExtract( sample ) );
+			ChaseCeiling( flCeiling, std::max( flMax * 1.15f, flCeilingFloor ) );
+		}
+		else
+		{
+			flCeiling = flCeilingFloor;
+		}
+
+		float flX = origin.x;
+		for ( size_t i = 0; i < vecSamples.size() && flX + kBarWidth <= origin.x + flWidth; ++i )
+		{
+			const float flVal = fnExtract( vecSamples[i] );
+			const float flFrac = std::clamp( flVal / std::max( flCeiling, 0.001f ), 0.0f, 1.0f );
+			const float flBarHeight = std::max( 1.0f, flFrac * flHeight );
+			pDrawList->AddRectFilled( ImVec2( flX, flBottom - flBarHeight ), ImVec2( flX + kBarWidth, flBottom ), gamescope::palette::Accent( 0.60f ) ); // same accent-@-60% normal-bar color DrawFrametimeGraph uses
+			flX += kPitch;
+		}
+	}
+
+	// One labelled row: current value, a faint track backdrop the same
+	// width as the full 60s axis (so the unfilled portion of a warming-up
+	// graph still reads as "part of the graph," not stray blank space),
+	// then the bars themselves.
+	template <typename ExtractFn>
+	static void DrawStatRow( const char *pszLabel, const char *pszValueText,
+		const std::vector<gamescope::Metrics::HistorySample> &vecSamples, ExtractFn fnExtract,
+		float &flCeiling, float flCeilingFloor, bool bEmaCeiling )
+	{
+		constexpr float kGraphHeight = 40.0f;
+
+		ImGui::TextUnformatted( pszLabel );
+		ImGui::SameLine();
+		ImGui::TextColored( gamescope::palette::ToVec4( gamescope::palette::kAccentValue ), "%s", pszValueText );
+
+		const float flWidth = ImGui::GetContentRegionAvail().x;
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		ImDrawList *pDrawList = ImGui::GetWindowDrawList();
+		pDrawList->AddRectFilled( origin, ImVec2( origin.x + flWidth, origin.y + kGraphHeight ), ImGui::GetColorU32( gamescope::palette::White( 0.04f ) ) );
+		DrawStatGraph( pDrawList, origin, flWidth, kGraphHeight, vecSamples, fnExtract, flCeiling, flCeilingFloor, bEmaCeiling );
+		ImGui::Dummy( ImVec2( flWidth, kGraphHeight ) );
+		ImGui::Spacing();
+	}
+
+	static void DrawStatisticsTab()
+	{
+		using gamescope::Metrics::HistorySample;
+		using gamescope::Metrics::HistorySnapshot;
+
+		const HistorySnapshot snap = gamescope::Metrics::GetHistorySnapshot();
+		const int nSamples = (int)snap.vecSamples.size();
+
+		// A collection restart resets every ceiling the instant the
+		// sample count drops (see s_nLastSeenSampleCount's own comment).
+		if ( nSamples < s_nLastSeenSampleCount )
+		{
+			s_flCpuCeiling = 0.0f;
+			s_flGpuTempCeiling = 0.0f;
+			s_flGpuPowerCeiling = 0.0f;
+			s_flFpsCeiling = 0.0f;
+		}
+		s_nLastSeenSampleCount = nSamples;
 
 		ImGui::Spacing();
-		ImGui::Separator();
-		// Section role (Sans 500). This draws inside SettingsOverlay's own
-		// ImGui context/atlas (see this function's declared contract in
-		// FpsDisplay.h), not this file's own separate FPS-readout context,
-		// so it's safe to pull a font from gamescope::fonts::Get() here --
-		// SettingsOverlay.cpp's EnsureImguiInit() already called Load() on
-		// that context before any panel draws.
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Section ) );
-		// Issue #27: renamed from "FPS display (M4)" -- this panel now
-		// hosts the whole module framework (FPS today; #28 adds CPU/GPU/
-		// Media), not just the FPS readout, so "System Monitor" is the
-		// name that actually describes it. File/function names stay
-		// FpsDisplay* internally (this file's own header comment) to
-		// avoid churning M4's existing surface for a rename that gains
-		// nothing outside the UI-visible strings.
-		ImGui::TextUnformatted( "System Monitor" );
-		ImGui::PopFont();
 
-		bool bChanged = false;
+		// Warm-up indicator -- this issue's own explicit requirement:
+		// never let a partially-filled window read as a complete one.
+		// Elapsed time is sample-count * the poll thread's own fixed
+		// cadence, exact (not a wall-clock guess) since every collected
+		// tick is spaced evenly at that cadence.
+		const float flElapsedSeconds = (float)nSamples * ( gamescope::Metrics::kStatsHistorySampleIntervalMs / 1000.0f );
+		if ( nSamples < gamescope::Metrics::kStatsHistoryCapacity )
+			ImGui::TextDisabled( "Collecting... %.0fs of 60s", flElapsedSeconds );
+		else
+			ImGui::TextDisabled( "Last 60 seconds" );
+
+		if ( nSamples == 0 )
+		{
+			ImGui::Spacing();
+			ImGui::TextDisabled( "No samples yet -- the graphs below fill in over the next 60 seconds." );
+			return;
+		}
+
+		ImGui::Spacing();
+
+		const HistorySample &latest = snap.vecSamples.back();
+
+		// ---- Metrics graphed here, and why: frame rate, CPU load, and
+		// (where the amdgpu sysfs nodes exist) GPU busy%/temperature/
+		// power are the readings that genuinely reward a 60s time series
+		// -- each one drifts and spikes in ways a single instantaneous
+		// number hides. Media (now-playing track/artist) is deliberately
+		// NOT graphed here -- it has no meaningful numeric series, only a
+		// state change every few minutes at most, which the Modules tab's
+		// live text already shows perfectly well. VRAM is also left out
+		// of this first pass (its own byte-count scale doesn't share the
+		// other GPU readings' natural units and would need its own
+		// row/ceiling policy) -- not ruled out, just not in this pass.
+		char szCpuVal[32];
+		snprintf( szCpuVal, sizeof( szCpuVal ), "%.2f", latest.flCpuLoad1 );
+		DrawStatRow( "CPU load (1m avg)", szCpuVal, snap.vecSamples,
+			[]( const HistorySample &s ) { return s.flCpuLoad1; },
+			s_flCpuCeiling, 1.0f, true );
+
+		if ( snap.bGpuFound )
+		{
+			char szGpuVal[16];
+			snprintf( szGpuVal, sizeof( szGpuVal ), "%d%%", latest.nGpuBusyPercent );
+			static float s_flGpuBusyCeiling = 100.0f; // fixed scale (bEmaCeiling=false) -- never actually chased, kept only so DrawStatRow's ref parameter has somewhere to write
+			DrawStatRow( "GPU busy", szGpuVal, snap.vecSamples,
+				[]( const HistorySample &s ) { return (float)s.nGpuBusyPercent; },
+				s_flGpuBusyCeiling, 100.0f, false );
+		}
+		else
+		{
+			ImGui::TextDisabled( "GPU busy: no amdgpu device found on this system." );
+			ImGui::Spacing();
+		}
+
+		if ( snap.bHwmonFound )
+		{
+			char szTempVal[16];
+			snprintf( szTempVal, sizeof( szTempVal ), "%.1fC", latest.flGpuTempC );
+			DrawStatRow( "GPU temperature", szTempVal, snap.vecSamples,
+				[]( const HistorySample &s ) { return s.flGpuTempC; },
+				s_flGpuTempCeiling, 40.0f, true );
+
+			char szPowerVal[16];
+			snprintf( szPowerVal, sizeof( szPowerVal ), "%.1fW", latest.flGpuPowerWatts );
+			DrawStatRow( "GPU power", szPowerVal, snap.vecSamples,
+				[]( const HistorySample &s ) { return s.flGpuPowerWatts; },
+				s_flGpuPowerCeiling, 10.0f, true );
+		}
+		else
+		{
+			ImGui::TextDisabled( "GPU temperature/power: no amdgpu hwmon node found." );
+			ImGui::Spacing();
+		}
+
+		// FPS-over-60s (issue #40's task brief explicitly leaves this
+		// optional -- included here since it's one of the metrics that
+		// genuinely rewards a time series). Sampled independently of
+		// FpsDisplay.cpp's own per-frame frametime buffer, directly off
+		// g_ulLastAppFrametimeNs at this history's 2Hz cadence -- see
+		// SystemStats.h's HistorySample comment for why (a 60s window is
+		// far too long to serve from that 240-sample/1-4s buffer). 0
+		// means no game frame had committed yet at that sample's tick --
+		// an honest gap (drawn as a zero-height bar), not fabricated.
+		char szFpsVal[16];
+		snprintf( szFpsVal, sizeof( szFpsVal ), "%.0f", latest.flFps );
+		DrawStatRow( "Frame rate", szFpsVal, snap.vecSamples,
+			[]( const HistorySample &s ) { return s.flFps; },
+			s_flFpsCeiling, 30.0f, true );
+	}
+
+	// The pre-#40 checkbox/slider content (placement, margins, row/module
+	// toggles, font/backdrop/opacity) -- unchanged from before this issue
+	// except for being pulled into its own function so it can sit behind
+	// the new "Modules" tab alongside "Statistics" below.
+	static void DrawModulesTab( config::FpsDisplaySettings &cfg, bool &bChanged )
+	{
 		// Widgets::Checkbox, not ::Toggle: this settings block IS the design
 		// guide's own named example of the "List rows" checkbox-row pattern
 		// ("FPS HUD's row toggles: 11x11 checkbox + label") -- see Widgets.h's
@@ -1607,6 +1846,112 @@ namespace gamescope
 		ImGui::EndDisabled();
 
 		ImGui::EndDisabled();
+
+		// Persistence for any change made in this tab is handled by the
+		// caller (FpsDisplay_DrawSettingsPanel()), which shares this same
+		// bChanged flag with its own tab-selection change -- one
+		// PersistSettings() call covers both, rather than this function
+		// writing a second time for the same frame's edit.
+	}
+
+	void FpsDisplay_DrawSettingsPanel()
+	{
+		EnsureConfigLoaded();
+		config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		// Section role (Sans 500). This draws inside SettingsOverlay's own
+		// ImGui context/atlas (see this function's declared contract in
+		// FpsDisplay.h), not this file's own separate FPS-readout context,
+		// so it's safe to pull a font from gamescope::fonts::Get() here --
+		// SettingsOverlay.cpp's EnsureImguiInit() already called Load() on
+		// that context before any panel draws.
+		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Section ) );
+		// Issue #27: renamed from "FPS display (M4)" -- this panel now
+		// hosts the whole module framework (FPS today; #28 adds CPU/GPU/
+		// Media), not just the FPS readout, so "System Monitor" is the
+		// name that actually describes it. File/function names stay
+		// FpsDisplay* internally (this file's own header comment) to
+		// avoid churning M4's existing surface for a rename that gains
+		// nothing outside the UI-visible strings.
+		ImGui::TextUnformatted( "System Monitor" );
+		ImGui::PopFont();
+
+		// Issue #40: "Modules" (the pre-#40 checkbox/slider content above)
+		// and "Statistics" (the new 60-second graphs) -- same
+		// ImGui::BeginTabBar()/BeginTabItem() pattern PanelLog.cpp's LOG
+		// panel (#39) established, reused here rather than a second
+		// tab-bar idiom. Selection is persisted the instant it changes,
+		// through config::EnqueueSystemMonitorTabWrite() -- deliberately
+		// NOT this panel's usual bChanged/PersistSettings() (which routes
+		// through EnqueueRoutedWrite(), and that function explicitly
+		// discards any caller-supplied `overlay` and substitutes in the
+		// freshest known copy instead, precisely because `overlay` is
+		// process-level/General-tab-owned -- see EnqueueRoutedWrite()'s
+		// own comment in ConfigManager.cpp. Routing this field through the
+		// normal path silently dropped every tab switch during manual
+		// testing: the in-memory selection and the Statistics tab's
+		// gating both still worked within the running process, but
+		// nothing ever reached disk, so a restart always came back up on
+		// "modules" regardless of what was last selected. Persisting
+		// immediately (not batched with unrelated edits) matters here
+		// because overlay.system_monitor_tab is what gates the
+		// Statistics tab's background collection (FpsDisplay_AddLayer())
+		// -- a selection that only saved on some later edit could lose a
+		// just-made tab switch if the process exits before one happens.
+		//
+		// The persisted selection is force-applied to the tab bar's own
+		// visual state (ImGuiTabItemFlags_SetSelected) once per "freshly
+		// (re)opened" event -- detected by an elapsed-time gap since this
+		// function was last called, since this function only runs at all
+		// while both the settings overlay and this specific panel are
+		// open (SettingsOverlay.cpp's DrawFpsHudPanel()/bDrawPanels), so
+		// any gap longer than a frame means the panel was just reopened.
+		// Without this, ImGui's own tab-bar state (which is otherwise
+		// left to remember the last-clicked tab on its own, since
+		// io.IniFilename is null -- no on-disk ImGui layout persistence)
+		// could show the wrong tab selected on reopen if ImGui's periodic
+		// memory-compaction ever collects this window's state during a
+		// long close, even though the underlying collection-gating config
+		// field remains correct the whole time regardless.
+		static uint32_t s_uLastPanelDrawMs = 0;
+		const uint32_t uNowMs = get_time_in_milliseconds();
+		const bool bJustReopened = s_uLastPanelDrawMs == 0 || ( uNowMs - s_uLastPanelDrawMs ) > 200;
+		s_uLastPanelDrawMs = uNowMs;
+
+		bool bChanged = false;
+
+		if ( ImGui::BeginTabBar( "SystemMonitorTabs" ) )
+		{
+			const bool bWantModules = s_Settings.overlay.system_monitor_tab != "statistics";
+			ImGuiTabItemFlags modulesFlags = ( bJustReopened && bWantModules ) ? ImGuiTabItemFlags_SetSelected : 0;
+			ImGuiTabItemFlags statsFlags = ( bJustReopened && !bWantModules ) ? ImGuiTabItemFlags_SetSelected : 0;
+
+			if ( ImGui::BeginTabItem( "Modules", nullptr, modulesFlags ) )
+			{
+				if ( s_Settings.overlay.system_monitor_tab != "modules" )
+				{
+					s_Settings.overlay.system_monitor_tab = "modules";
+					config::EnqueueSystemMonitorTabWrite( "modules" );
+				}
+				DrawModulesTab( cfg, bChanged );
+				ImGui::EndTabItem();
+			}
+
+			if ( ImGui::BeginTabItem( "Statistics", nullptr, statsFlags ) )
+			{
+				if ( s_Settings.overlay.system_monitor_tab != "statistics" )
+				{
+					s_Settings.overlay.system_monitor_tab = "statistics";
+					config::EnqueueSystemMonitorTabWrite( "statistics" );
+				}
+				DrawStatisticsTab();
+				ImGui::EndTabItem();
+			}
+
+			ImGui::EndTabBar();
+		}
 
 		if ( bChanged )
 			PersistSettings();
