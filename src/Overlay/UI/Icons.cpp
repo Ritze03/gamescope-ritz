@@ -37,8 +37,12 @@ namespace gamescope::ui
 		// =================================================================
 		//  THE SET (SPEC §8.0)
 		// =================================================================
-		// Eleven glyphs, one 24-unit grid, one stroke weight, transcribed
-		// from index.html's ICONS table.
+		// Twelve glyphs, one 24-unit grid, one stroke weight. Eleven are
+		// transcribed from index.html's ICONS table (SPEC §8.0's own count);
+		// display.general is the twelfth, added when the user's direct
+		// correction to D13.1 (2026-08-24) gave DISPLAY a new rail item that
+		// predates neither SPEC nor index.html, so it has no source to
+		// transcribe from -- see PanelDisplay.cpp's RegisterGeneral().
 		//
 		// THE ACCEPTANCE CRITERION THIS TABLE IS WRITTEN AGAINST is not
 		// "does it look like the thing" -- it is "is it ONE SILHOUETTE at 12
@@ -60,6 +64,17 @@ namespace gamescope::ui
 		// one square, a stack, a frame. None of them is another one.
 		constexpr Icon kIcons[] = {
 		// ---- DISPLAY ------------------------------------------------------
+		{ "display.general", 4, {
+			// Two toggle switches, one off (knob left) and one on (knob
+			// right) -- the "quick toggle" mark. Distinct from Mixer's
+			// vertical fader tracks (audio.mixer, below) and from every
+			// other glyph's shape mix: no other icon pairs a bare line with
+			// a single offset circle.
+			Line( { 4.0f, 8.0f }, { 20.0f, 8.0f } ),
+			Circ( 8.5f, 8.0f, 2.3f ),
+			Line( { 4.0f, 16.0f }, { 20.0f, 16.0f } ),
+			Circ( 15.5f, 16.0f, 2.3f ) } },
+
 		{ "display.upscaling", 3, {
 			// Two corner brackets pulling away from a centre square: the
 			// mark for "resample up to a bigger frame".
