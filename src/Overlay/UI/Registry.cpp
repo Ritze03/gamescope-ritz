@@ -36,8 +36,27 @@ namespace gamescope::ui
 			case Law::UniqueId:       return "id uniqueness";
 			case Law::HelpRequired:   return "Help() is required";
 			case Law::ReasonRequired: return "DisabledUnless() requires a reason";
+			case Law::Escaped:        return "an escaped area cannot also be populated";
 		}
 		return "unknown law";
+	}
+
+	const char *KindName( Kind eKind )
+	{
+		switch ( eKind )
+		{
+			case Kind::Switch:    return "switch";
+			case Kind::Slider:    return "slider";
+			case Kind::Stepper:   return "stepper";
+			case Kind::Choice:    return "choice";
+			case Kind::Text:      return "text";
+			case Kind::Bank:      return "bank";
+			case Kind::Action:    return "action";
+			case Kind::Meter:     return "meter";
+			case Kind::Facts:     return "facts";
+			case Kind::Composite: return "composite";
+		}
+		return "unknown";
 	}
 
 	LawRecorder::LawRecorder()
@@ -301,6 +320,32 @@ namespace gamescope::ui
 	Area &Area::Summary( std::function<std::string()> fn )  { m_Summary = std::move( fn ); return *this; }
 	Area &Area::AvailableWhen( std::function<bool()> fn )    { m_Available = std::move( fn ); return *this; }
 
+	// MIGRATION SEAM -- see Registry.h's Escape() comment. P3 deletes this.
+	//
+	// The one rule that keeps it from becoming permanent: an area is legacy
+	// or it is E2, never both. A half-migrated area -- three real rows plus
+	// an escaped tail -- is the shape that would survive P3 indefinitely,
+	// because "it mostly works" is the strongest argument against finishing
+	// anything. So the mixture is a registration violation in BOTH
+	// directions: escaping a populated area, and populating an escaped one
+	// (Emit() re-checks below).
+	Area &Area::Escape( std::function<void()> fn )
+	{
+		if ( !fn )
+		{
+			ReportViolation( Law::Escaped, m_sId, "Escape() was given an empty function." );
+			return *this;
+		}
+		if ( !m_Entries.empty() )
+		{
+			ReportViolation( Law::Escaped, m_sId,
+				"an area with registered entries cannot also be escaped -- migrate it fully or not at all." );
+			return *this;
+		}
+		m_Escape = std::move( fn );
+		return *this;
+	}
+
 	void Area::Group( const char *pszName )
 	{
 		m_Groups.push_back( { pszName ? pszName : "", false, m_Entries.size() } );
@@ -318,6 +363,13 @@ namespace gamescope::ui
 		if ( sId.empty() )
 		{
 			ReportViolation( Law::UniqueId, m_sId, "an entry was registered with an empty id." );
+			return SinkEntry();
+		}
+		// The other half of the escape hatch's exclusivity -- see Escape().
+		if ( m_Escape )
+		{
+			ReportViolation( Law::Escaped, m_sId,
+				"an escaped area cannot register entries -- migrate it fully or not at all." );
 			return SinkEntry();
 		}
 		if ( m_pRegistry && !m_pRegistry->ClaimId( sId ) )
@@ -423,6 +475,22 @@ namespace gamescope::ui
 		}
 		m_ClaimedIds.push_back( sId );
 		return true;
+	}
+
+	const Area *Registry::FindArea( const std::string &sId ) const
+	{
+		for ( const auto &pArea : m_Areas )
+			if ( pArea->Id() == sId )
+				return pArea.get();
+		return nullptr;
+	}
+
+	size_t Registry::EscapeCount() const
+	{
+		size_t n = 0;
+		for ( const auto &pArea : m_Areas )
+			n += pArea->IsEscaped() ? 1u : 0u;
+		return n;
 	}
 
 	const Entry *Registry::FindEntry( const std::string &sId ) const

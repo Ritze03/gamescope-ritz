@@ -52,6 +52,7 @@ namespace gamescope::ui
 		UniqueId,        // an id already registered
 		HelpRequired,    // .Help() missing or empty
 		ReasonRequired,  // .DisabledUnless() with an empty reason
+		Escaped,         // P2 migration seam: an area that is both escaped and populated
 	};
 
 	const char *LawName( Law eLaw );
@@ -152,6 +153,11 @@ namespace gamescope::ui
 	};
 
 	enum class CompositeKind : uint8_t { Anchor, Hue, Strip, Graph, Color };
+
+	// The kind's own name, for Details' binding grid. A lookup rather than a
+	// string a call site passes, so the grid cannot be told a kind that is
+	// not the one the registration actually has.
+	const char *KindName( Kind eKind );
 
 	// SPEC §2.3's table, as a function, "which the helper decides from the
 	// control kind, never the caller". A control that can display its own
@@ -309,6 +315,16 @@ namespace gamescope::ui
 		bool ReadOnly() const;
 		bool UsesValue() const { return UsesValueColumn( m_eKind ); }
 
+		// ---- read side, for the shell -----------------------------------
+		// The shell renders a registration; these are how it reads one.
+		// Deliberately all const and all trivial: there is no way to reach
+		// the stored std::functions themselves, only to ask them for their
+		// current answer, so a renderer cannot rebind anything it draws.
+		const std::string &Verb() const  { return m_sVerb; }
+		void Invoke() const              { if ( m_Action ) m_Action(); }
+		std::string SummaryText() const  { return m_Summary ? m_Summary() : std::string(); }
+		double Scalar() const            { return m_Scalar ? m_Scalar() : 0.0; }
+
 		// The disabled predicate's reason, or "" when enabled.
 		std::string DisabledReason() const;
 
@@ -376,11 +392,51 @@ namespace gamescope::ui
 		Entry &Composite( const char *pszId, const char *pszTitle, CompositeKind eKind,
 		                  AnyBind bindA, AnyBind bindB = {} );
 
+		// ================================================================
+		//  MIGRATION SEAM -- API.md §13. TEMPORARY. P3 DELETES THIS.
+		// ================================================================
+		// "A category whose body is still legacy panel code, hosted verbatim
+		// in the sheet." The shell runs `fn` inside the sheet body's child
+		// window with the LEGACY ImGuiStyle pushed, then pops.
+		//
+		// It looks wrong on purpose -- it is visibly the un-migrated part.
+		// This is the ONLY function in the API that permits arbitrary ImGui,
+		// and it is the only way a call site can put a pixel in the sheet
+		// without going through the Row grammar. Every property P1 built
+		// (the right-bound law, the one control height, the four laws) is
+		// suspended inside it, because the code it hosts predates all of
+		// them.
+		//
+		// Deliberate limits, so it cannot grow into a supported feature:
+		//
+		//   * an escaped area has NO ENTRIES, and mixing the two is a
+		//     registration violation (Law::Escaped). Half-migrated is the
+		//     state that would make this permanent, so it is unreachable:
+		//     an area is legacy or it is E2, never both.
+		//   * it reaches the SHEET only. There is deliberately no Inspector
+		//     equivalent -- SPEC §5.2 clause 0 says the Inspector has no
+		//     authoring API, and an escape hatch into it would be exactly
+		//     the fifth generator that clause exists to forbid. An escaped
+		//     area therefore shows Overview (§5.5) and nothing else.
+		//   * `EscapeCount()` is what a future `ui_lint` counts as severity
+		//     `migration`. Expected to reach zero during P3.
+		Area &Escape( std::function<void()> fn );
+		bool  IsEscaped() const { return (bool)m_Escape; }
+		const std::function<void()> &EscapeBody() const { return m_Escape; }
+
 		const std::string &Id() const    { return m_sId; }
 		const std::string &Title() const { return m_sTitle; }
 		Section GetSection() const       { return m_eSection; }
 		size_t  EntryCount() const       { return m_Entries.size(); }
 		const Entry &EntryAt( size_t i ) const { return *m_Entries[ i ]; }
+
+		// Whether this area is currently offerable at all (SPEC's rail hides
+		// what a machine cannot do). No predicate means always available.
+		bool Available() const { return !m_Available || m_Available(); }
+
+		// The area's own one-line summary, for the Overview card. Empty when
+		// none was registered.
+		std::string SummaryText() const { return m_Summary ? m_Summary() : std::string(); }
 
 		struct GroupBand { std::string sName; bool bCounted = false; size_t nFirstEntry = 0; };
 		const std::vector<GroupBand> &Groups() const { return m_Groups; }
@@ -394,6 +450,7 @@ namespace gamescope::ui
 		Section     m_eSection = Section::Display;
 		std::function<std::string()> m_Summary;
 		std::function<bool()>        m_Available;
+		std::function<void()>        m_Escape;   // migration seam -- see Escape()
 		std::vector<std::unique_ptr<Entry>> m_Entries;
 		std::vector<GroupBand>       m_Groups;
 		Registry   *m_pRegistry = nullptr;
@@ -409,6 +466,13 @@ namespace gamescope::ui
 
 		size_t AreaCount() const { return m_Areas.size(); }
 		const Area &AreaAt( size_t i ) const { return *m_Areas[ i ]; }
+		const Area *FindArea( const std::string &sId ) const;
+
+		// P2 migration seam only. The number of areas still hosting a legacy
+		// panel body through Area::Escape(). `ui_lint` reports this as
+		// severity `migration`; P3 drives it to zero and then deletes both
+		// this and Escape() itself.
+		size_t EscapeCount() const;
 
 		// Every registered id, Params included. Lookup for the palette, and
 		// the uniqueness law's own bookkeeping.
