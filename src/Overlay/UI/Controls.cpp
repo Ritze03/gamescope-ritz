@@ -1,0 +1,740 @@
+#include "Controls.h"
+#include "Colors.h"
+
+#include "../Fonts.h"
+#include "../Palette.h"
+
+// imgui_internal.h is what makes these atoms behave like stock widgets:
+// ItemAdd(), ButtonBehavior(), SliderBehavior(), RenderNavCursor() and
+// MarkItemEdited() are the same primitives ImGui's own Checkbox and
+// SliderScalar are built from, which is what "identical behaviour" means here
+// -- the same hit-testing, the same keyboard/nav handling, the same disabled
+// semantics, the same ID scoping. Same route Widgets.cpp already takes.
+#include "imgui.h"
+#include "imgui_internal.h"
+
+#include <cstdio>
+#include <cstring>
+
+namespace gamescope::ui
+{
+	// =====================================================================
+	//  Text
+	// =====================================================================
+	namespace
+	{
+		// A type role names a FAMILY and a WEIGHT; the size comes from the
+		// token, drawn at that size rather than at whatever the atlas happens
+		// to be baked at. That is what stops a caller putting a number in Sans
+		// (SPEC §7.6) without this file having to own a second font set.
+		fonts::Style FaceFor( TypeRole eRole )
+		{
+			switch ( eRole )
+			{
+				case TypeRole::Title:   return fonts::Style::Title;         // Mono 600
+				case TypeRole::Section: return fonts::Style::SegmentLabel;  // Mono 500
+				case TypeRole::Label:   return fonts::Style::Label;         // Sans 400
+				case TypeRole::Body:    return fonts::Style::Label;         // Sans 400
+				case TypeRole::Value:   return fonts::Style::Value;         // Mono 500
+				case TypeRole::Meta:    return fonts::Style::Meta;          // Mono 400
+				default: break;
+			}
+			return fonts::Style::Label;
+		}
+	}
+
+	ImVec2 MeasureText( TypeRole eRole, const char *pszText, const char *pszEnd )
+	{
+		if ( !pszText || !*pszText )
+			return ImVec2( 0.0f, 0.0f );
+
+		ImFont *pFont = fonts::Get( FaceFor( eRole ) );
+		const float flSize = TypeSizePx( eRole );
+		return pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, pszText, pszEnd );
+	}
+
+	void DrawText( const ImRect &rcClip, TypeRole eRole, ImU32 col, const char *pszText, TextAlign eAlign )
+	{
+		if ( !pszText || !*pszText || rcClip.GetWidth() <= 0.0f )
+			return;
+
+		ImFont *pFont = fonts::Get( FaceFor( eRole ) );
+		const float flSize = TypeSizePx( eRole );
+		const ImVec2 size  = pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, pszText );
+
+		float flX = rcClip.Min.x;
+		if ( eAlign == TextAlign::Right )
+			flX = rcClip.Max.x - size.x;
+		else if ( eAlign == TextAlign::Center )
+			flX = rcClip.Min.x + ( rcClip.GetWidth() - size.x ) * 0.5f;
+
+		const ImVec2 pos( flX, rcClip.Min.y + ( rcClip.GetHeight() - size.y ) * 0.5f );
+
+		// Text that does not fit is clipped to the rect the allocator gave it,
+		// never allowed to overrun into the next column -- which is what makes
+		// the four column lines unbroken from the top of a sheet to the bottom.
+		const ImVec4 clip( rcClip.Min.x, rcClip.Min.y, rcClip.Max.x, rcClip.Max.y );
+		ImGui::GetCurrentWindow()->DrawList->AddText( pFont, flSize, pos, col, pszText, nullptr, 0.0f, &clip );
+	}
+
+	// =====================================================================
+	//  Shared atom plumbing
+	// =====================================================================
+	namespace
+	{
+		struct Atom
+		{
+			ImRect  rc;                  // THE rect. Registered and drawn; there is no second one.
+			ImGuiID id       = 0;
+			bool    bHovered = false;
+			bool    bHeld    = false;
+			bool    bPressed = false;
+			bool    bValid   = false;
+
+			explicit operator bool() const { return bValid; }
+		};
+
+		// Registers `rc` with ImGui and runs stock ButtonBehavior on it. The
+		// caller draws into `out.rc` -- the same object -- so a drawn atom
+		// cannot disagree with its own hit box.
+		//
+		// ItemSize() is deliberately NOT called: the kit lays rows out
+		// absolutely from RowCtx, so advancing ImGui's cursor would be a
+		// second, competing layout system. ItemAdd() alone is what registers
+		// hit-testing and keyboard navigation.
+		Atom Begin( const ImRect &rc, const char *pszId, ImGuiButtonFlags nFlags = 0 )
+		{
+			Atom a;
+			a.rc = rc;
+
+			ImGuiWindow *pWindow = ImGui::GetCurrentWindow();
+			if ( !pWindow || pWindow->SkipItems )
+				return a;
+
+			a.id = pWindow->GetID( pszId );
+			if ( !ImGui::ItemAdd( a.rc, a.id ) )
+				return a;
+
+			a.bPressed = ImGui::ButtonBehavior( a.rc, a.id, &a.bHovered, &a.bHeld, nFlags );
+			a.bValid   = true;
+			ImGui::RenderNavCursor( a.rc, a.id );
+			return a;
+		}
+
+		ImDrawList *Dl() { return ImGui::GetCurrentWindow()->DrawList; }
+
+		// A 1px control boundary at the current scale (SPEC §8.3).
+		void Boundary( const ImRect &rc, ImU32 col, float flRounding = 0.0f )
+		{
+			Dl()->AddRect( rc.Min, rc.Max, col, flRounding, 0, Hairline() );
+		}
+
+		// ---- one measurement, two consumers ---------------------------
+		// Segmented cells and chip-bank cells are CONTENT-SIZED (B's design,
+		// SPEC §3.2/§3.12), so their width has to be measured. This is the
+		// only function that measures them. `SegmentedFits` is that measure
+		// compared with the lane, and the layout below walks the same widths
+		// -- a control can never be laid out to a width its own fit test did
+		// not see.
+		struct CellRun
+		{
+			std::vector<float> widths;
+			float flTotal = 0.0f;
+		};
+
+		CellRun MeasureCells( const Option *pOptions, size_t nOptions, TypeRole eRole,
+		                      float flPadXBase, float flGapBase )
+		{
+			CellRun run;
+			run.widths.reserve( nOptions );
+
+			const float flPad = Px( flPadXBase );
+			const float flGap = Px( flGapBase );
+
+			for ( size_t i = 0; i < nOptions; ++i )
+			{
+				const float flW = MeasureText( eRole, pOptions[ i ].pszLabel ).x + flPad * 2.0f;
+				run.widths.push_back( flW );
+				run.flTotal += flW + ( i + 1 < nOptions ? flGap : 0.0f );
+			}
+			return run;
+		}
+	}
+
+	// =====================================================================
+	//  Switch -- SPEC §3.1
+	// =====================================================================
+	namespace controls
+	{
+		bool Switch( const RowCtx &row, const char *pszId, bool *pbValue )
+		{
+			// The hit box is the full kControlH-tall rect (SPEC §3.0); the
+			// 40 x 20 graphic is centred in it. Two rects, but only one of
+			// them is ever hit-tested and the other is derived from it, so
+			// they cannot disagree about where the control is.
+			const Atom a = Begin( row.Place( tok::kSwitchW ), pszId );
+			if ( !a )
+				return false;
+
+			bool bChanged = false;
+			if ( a.bPressed )
+			{
+				*pbValue = !*pbValue;
+				bChanged = true;
+				ImGui::MarkItemEdited( a.id );
+			}
+
+			const float flTrackH = Px( tok::kSwitchH );
+			const ImRect track(
+				a.rc.Min.x, a.rc.GetCenter().y - flTrackH * 0.5f,
+				a.rc.Max.x, a.rc.GetCenter().y + flTrackH * 0.5f );
+
+			// B's colours verbatim, except the off-border, which B draws at
+			// 18% (1.69:1 -- below the 3:1 floor for an interactive boundary)
+			// and SPEC §3.1 raises to LineControl.
+			const ImU32 colTrack  = *pbValue ? Accent( 0.30f ) : palette::White( 0.07f );
+			const ImU32 colBorder = *pbValue ? Accent( 0.65f ) : Col( Role::LineControl );
+			const ImU32 colKnob   = *pbValue ? Col( Role::AccentKnob ) : Col( Role::TextKnobOff );
+
+			Dl()->AddRectFilled( track.Min, track.Max, colTrack );
+			Boundary( track, colBorder );
+			if ( a.bHovered )
+				Dl()->AddRectFilled( track.Min, track.Max, palette::White( 0.05f ) );
+
+			// The knob's travel is a token derived from the track and the knob
+			// (Tokens.h), never a second literal.
+			const float flKnob  = Px( tok::kSwitchKnob );
+			const float flInset = Px( tok::kSwitchInset ) * 0.5f;   // 1 unit: the border
+			const float flX = track.Min.x + flInset + ( *pbValue ? Px( tok::kSwitchTrvl ) : 0.0f );
+			Dl()->AddRectFilled( ImVec2( flX, track.GetCenter().y - flKnob * 0.5f ),
+			                     ImVec2( flX + flKnob, track.GetCenter().y + flKnob * 0.5f ), colKnob );
+
+			return bChanged;
+		}
+
+		// =================================================================
+		//  Slider -- SPEC §3.4
+		// =================================================================
+		namespace
+		{
+			// THE ONE PLACE A SLIDER GRAB IS SIZED.
+			//
+			// SliderBehavior() derives the draggable grab from
+			// style.GrabMinSize and hands the resulting rect back. This pushes
+			// the token into GrabMinSize, calls it, pops, and returns that
+			// rect. The painter below draws *that rect* -- it is never told
+			// how wide a handle is supposed to be.
+			//
+			// That is what makes issue #23's bug class unrepresentable rather
+			// than fixed: there is one number, and the code that draws cannot
+			// see it, so a future edit to the token moves the drawn handle and
+			// the hit target together or not at all.
+			bool SliderGrab( const ImRect &rcTrackHit, ImGuiID id, ImGuiDataType eType,
+			                 void *pValue, const void *pMin, const void *pMax,
+			                 const char *pszFormat, ImRect *pOutGrab )
+			{
+				ImGui::PushStyleVar( ImGuiStyleVar_GrabMinSize, Px( tok::kHandleW ) );
+				const bool bChanged = ImGui::SliderBehavior(
+					rcTrackHit, id, eType, pValue, pMin, pMax, pszFormat,
+					ImGuiSliderFlags_AlwaysClamp, pOutGrab );
+				ImGui::PopStyleVar();
+				return bChanged;
+			}
+
+			// The shared paint. `rcGrab` is SliderBehavior()'s own output.
+			void PaintSlider( const ImRect &rcHit, const ImRect &rcGrab,
+			                  float flFraction, float flDefaultFraction, bool bHasDefault )
+			{
+				const float flTrackH = Px( tok::kTrack );
+				const float flRound  = Px( tok::kTrackRound );
+				const float flCy     = rcHit.GetCenter().y;
+
+				const ImVec2 trackMin( rcHit.Min.x, flCy - flTrackH * 0.5f );
+				const ImVec2 trackMax( rcHit.Max.x, flCy + flTrackH * 0.5f );
+
+				// B's 16% unfilled track measures 1.57:1; SPEC §3.4 moves it to
+				// TrackOff (34%, 3.07:1) -- "the rail is the part of the
+				// control that tells you where the range ends".
+				Dl()->AddRectFilled( trackMin, trackMax, Col( Role::TrackOff ), flRound );
+
+				const float flFillMax = rcHit.Min.x + rcHit.GetWidth() * ImClamp( flFraction, 0.0f, 1.0f );
+				if ( flFillMax > trackMin.x )
+				{
+					// B's left-to-right gradient, accent@50% -> AccentGradHi.
+					Dl()->AddRectFilledMultiColor(
+						trackMin, ImVec2( flFillMax, trackMax.y ),
+						Accent( 0.50f ), Col( Role::AccentGradHi ),
+						Col( Role::AccentGradHi ), Accent( 0.50f ) );
+				}
+
+				if ( bHasDefault )
+				{
+					// SPEC §3.4's 1px default tick, at 52%.
+					const float flTickX = rcHit.Min.x + rcHit.GetWidth() * ImClamp( flDefaultFraction, 0.0f, 1.0f );
+					Dl()->AddRectFilled( ImVec2( flTickX, trackMin.y ),
+					                     ImVec2( flTickX + Hairline(), trackMax.y ),
+					                     palette::White( 0.52f ) );
+				}
+
+				// The handle: x from SliderBehavior's grab, height from the
+				// token. Nothing here restates the grab's width.
+				const float flHandleH = Px( tok::kHandleH );
+				const ImVec2 hMin( rcGrab.Min.x, flCy - flHandleH * 0.5f );
+				const ImVec2 hMax( rcGrab.Max.x, flCy + flHandleH * 0.5f );
+				const float flHalo = Px( tok::kHandleHalo );
+				Dl()->AddRectFilled( ImVec2( hMin.x - flHalo, hMin.y - flHalo ),
+				                     ImVec2( hMax.x + flHalo, hMax.y + flHalo ), Accent( 0.18f ) );
+				Dl()->AddRectFilled( hMin, hMax, Col( Role::AccentHandle ), Px( tok::kHandleRound ) );
+			}
+		}
+
+		bool Slider( const RowCtx &row, const char *pszId, float *pflValue,
+		             float flMin, float flMax, float flDefault, bool bHasDefault )
+		{
+			// PlaceFull: the track IS the range (SPEC §2.2's table).
+			const Atom a = Begin( row.PlaceFull(), pszId, ImGuiButtonFlags_None );
+			if ( !a )
+				return false;
+
+			ImRect grab;
+			const bool bChanged = SliderGrab( a.rc, a.id, ImGuiDataType_Float, pflValue,
+			                                  &flMin, &flMax, "%.3f", &grab );
+			if ( bChanged )
+				ImGui::MarkItemEdited( a.id );
+
+			const float flSpan = ( flMax - flMin );
+			const float flFrac = flSpan != 0.0f ? ( *pflValue - flMin ) / flSpan : 0.0f;
+			const float flDef  = flSpan != 0.0f ? ( flDefault - flMin ) / flSpan : 0.0f;
+			PaintSlider( a.rc, grab, flFrac, flDef, bHasDefault );
+			return bChanged;
+		}
+
+		bool SliderInt( const RowCtx &row, const char *pszId, int *pnValue,
+		                int nMin, int nMax, int nDefault, bool bHasDefault )
+		{
+			const Atom a = Begin( row.PlaceFull(), pszId, ImGuiButtonFlags_None );
+			if ( !a )
+				return false;
+
+			ImRect grab;
+			const bool bChanged = SliderGrab( a.rc, a.id, ImGuiDataType_S32, pnValue,
+			                                  &nMin, &nMax, "%d", &grab );
+			if ( bChanged )
+				ImGui::MarkItemEdited( a.id );
+
+			const float flSpan = (float)( nMax - nMin );
+			const float flFrac = flSpan != 0.0f ? (float)( *pnValue - nMin ) / flSpan : 0.0f;
+			const float flDef  = flSpan != 0.0f ? (float)( nDefault - nMin ) / flSpan : 0.0f;
+			PaintSlider( a.rc, grab, flFrac, flDef, bHasDefault );
+			return bChanged;
+		}
+
+		// =================================================================
+		//  Stepper -- SPEC §3.5
+		// =================================================================
+		bool Stepper( const RowCtx &row, const char *pszId, int *pnValue,
+		              int nMin, int nMax, int nStep )
+		{
+			// B's borderless "- +": two 18-wide glyph hit boxes, 8 apart. The
+			// number is NOT here -- it lives in the value column, which is
+			// what SPEC §2.3's amendment is about.
+			const ImRect rcGroup = row.Place( tok::kStepperW );
+			const float flGlyphW = Px( tok::kStepperGlyphW );
+
+			ImGui::PushID( pszId );
+			bool bChanged = false;
+
+			const ImRect rcMinus( rcGroup.Min.x, rcGroup.Min.y, rcGroup.Min.x + flGlyphW, rcGroup.Max.y );
+			const ImRect rcPlus ( rcGroup.Max.x - flGlyphW, rcGroup.Min.y, rcGroup.Max.x, rcGroup.Max.y );
+
+			// SPEC §3.5's "Step() accelerates after 400 ms" comes from ImGui's
+			// own held-button repeat (ImGuiItemFlags_ButtonRepeat, timed by
+			// io.KeyRepeatDelay/Rate) rather than a hand-rolled timer -- the
+			// same reason every atom here is built on stock behaviours.
+			ImGui::PushItemFlag( ImGuiItemFlags_ButtonRepeat, true );
+			const Atom aMinus = Begin( rcMinus, "-" );
+			if ( aMinus && aMinus.bPressed )
+			{
+				*pnValue = ImMax( nMin, *pnValue - nStep );
+				bChanged = true;
+				ImGui::MarkItemEdited( aMinus.id );
+			}
+
+			const Atom aPlus = Begin( rcPlus, "+" );
+			ImGui::PopItemFlag();
+			if ( aPlus && aPlus.bPressed )
+			{
+				*pnValue = ImMin( nMax, *pnValue + nStep );
+				bChanged = true;
+				ImGui::MarkItemEdited( aPlus.id );
+			}
+
+			DrawText( rcMinus, TypeRole::Value,
+				aMinus.bHovered ? Col( Role::AccentSeg ) : Col( Role::TextStepGlyph ), "-", TextAlign::Center );
+			DrawText( rcPlus, TypeRole::Value,
+				aPlus.bHovered ? Col( Role::AccentSeg ) : Col( Role::TextStepGlyph ), "+", TextAlign::Center );
+
+			ImGui::PopID();
+			return bChanged;
+		}
+
+		// =================================================================
+		//  Choice -- segmented (SPEC §3.2) or dropdown (§3.3)
+		// =================================================================
+		ChoiceResult Choice( const RowCtx &row, const char *pszId, int *pnValue,
+		                     const Option *pOptions, size_t nOptions, bool bPopupOpen )
+		{
+			ChoiceResult res;
+			if ( !pOptions || nOptions == 0 )
+				return res;
+
+			// SPEC §3.2: mutually exclusive, <= 5 options, <= 8 chars each,
+			// static set -- "and the helper measures and auto-downgrades to a
+			// dropdown if any of the three conditions fails OR if the measured
+			// group does not fit the lane". ONE predicate, every host.
+			constexpr size_t kSegMaxOptions = 5;
+			constexpr size_t kSegMaxChars   = 8;
+
+			bool bSeg = nOptions <= kSegMaxOptions;
+			for ( size_t i = 0; bSeg && i < nOptions; ++i )
+				bSeg = pOptions[ i ].pszLabel && strlen( pOptions[ i ].pszLabel ) <= kSegMaxChars;
+
+			CellRun run;
+			if ( bSeg )
+			{
+				run  = MeasureCells( pOptions, nOptions, TypeRole::Meta, tok::kSegPadX, tok::kGapSeg );
+				bSeg = run.flTotal <= row.CtlWidthPx();
+			}
+			res.bSegmented = bSeg;
+
+			ImGui::PushID( pszId );
+
+			if ( bSeg )
+			{
+				// The group is right-bound; its cells are content-sized and
+				// deliberately NOT stretched to fill the lane -- a stretched
+				// cell set reads as a tab bar, and there is no tab bar in this
+				// product (SPEC §3.2).
+				const ImRect rcGroup = row.PlacePx( run.flTotal );
+				const float  flGap   = Px( tok::kGapSeg );
+
+				float flX = rcGroup.Min.x;
+				for ( size_t i = 0; i < nOptions; ++i )
+				{
+					const ImRect rcCell( flX, rcGroup.Min.y, flX + run.widths[ i ], rcGroup.Max.y );
+					flX += run.widths[ i ] + flGap;
+
+					const bool bOn = ( *pnValue == pOptions[ i ].nValue );
+					const Atom a = Begin( rcCell, pOptions[ i ].pszLabel );
+					if ( a && a.bPressed && !bOn )
+					{
+						*pnValue = pOptions[ i ].nValue;
+						res.bChanged = true;
+						ImGui::MarkItemEdited( a.id );
+					}
+
+					const ImU32 colFill = bOn ? Accent( 0.24f )
+					                          : ( a.bHovered ? palette::White( 0.11f ) : palette::White( 0.04f ) );
+					Dl()->AddRectFilled( rcCell.Min, rcCell.Max, colFill );
+					Boundary( rcCell, bOn ? Accent( 0.60f ) : Col( Role::LineControl ) );
+
+					// B's inactive text is 50% (4.96:1) and its active cell is
+					// Mono 600; the weight change is carried by the face, so
+					// the active cell asks for a different role.
+					DrawText( rcCell, bOn ? TypeRole::Section : TypeRole::Meta,
+						bOn ? Col( Role::AccentSeg ) : Col( Role::TextSegInactive ),
+						pOptions[ i ].pszLabel, TextAlign::Center );
+				}
+			}
+			else
+			{
+				// B's dropdown is NOT a box: the resolved value in Mono 500 16
+				// followed by a caret in Meta, with a hairline appearing on
+				// hover and focus. Full lane, so the caret's right edge stays
+				// on the control line.
+				const Atom a = Begin( row.PlaceFull(), "dd" );
+				if ( a && a.bPressed )
+					res.bWantsPopup = true;
+
+				const char *pszLabel = "";
+				for ( size_t i = 0; i < nOptions; ++i )
+					if ( pOptions[ i ].nValue == *pnValue )
+						pszLabel = pOptions[ i ].pszLabel;
+
+				if ( bPopupOpen )
+				{
+					Dl()->AddRectFilled( a.rc.Min, a.rc.Max, Accent( 0.14f ) );
+					Boundary( a.rc, Col( Role::AccentBase ) );
+				}
+				else if ( a.bHovered )
+				{
+					Dl()->AddRectFilled( a.rc.Min, a.rc.Max, palette::White( 0.06f ) );
+					Boundary( a.rc, Col( Role::LineControl ) );
+				}
+
+				const float flPad   = Px( tok::kSelfPadX );
+				const float flGap   = Px( tok::kS );
+				const ImVec2 caret  = MeasureText( TypeRole::Meta, "v" );
+				const ImRect rcCaret( a.rc.Max.x - flPad - caret.x, a.rc.Min.y, a.rc.Max.x - flPad, a.rc.Max.y );
+				const ImRect rcValue( a.rc.Min.x + flPad, a.rc.Min.y, rcCaret.Min.x - flGap, a.rc.Max.y );
+
+				// The value ellipsizes from the left of the group so the
+				// caret's right edge stays on the lane (SPEC §3.3); DrawText's
+				// clip rect is what implements that.
+				DrawText( rcValue, TypeRole::Value,
+					bPopupOpen ? Col( Role::AccentSeg ) : Col( Role::TextPrimary ),
+					pszLabel, TextAlign::Right );
+				DrawText( rcCaret, TypeRole::Meta, Col( Role::TextMeta ), "v", TextAlign::Right );
+			}
+
+			ImGui::PopID();
+			return res;
+		}
+
+		// =================================================================
+		//  Text -- SPEC §3.6
+		// =================================================================
+		bool Text( const RowCtx &row, const char *pszId, std::string *psValue,
+		           bool *pbEditing, const char *pszPlaceholder, const char *pszError )
+		{
+			ImGui::PushID( pszId );
+			const ImRect rc = row.PlaceFull();
+			bool bCommitted = false;
+
+			if ( pbEditing && *pbEditing )
+			{
+				// A real input, swapped in: caret Accent, 1px Accent bottom
+				// edge, raised fill. Enter commits, Esc reverts, an outside
+				// click commits.
+				Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::SurfaceRaised ) );
+				Dl()->AddRectFilled( ImVec2( rc.Min.x, rc.Max.y - Hairline() ), rc.Max,
+					pszError ? Col( Role::Danger ) : Col( Role::AccentBase ) );
+
+				char szBuf[ 256 ];
+				snprintf( szBuf, sizeof( szBuf ), "%s", psValue->c_str() );
+
+				ImGui::SetCursorScreenPos( ImVec2( rc.Min.x + Px( tok::kSelfPadX ), rc.Min.y ) );
+				ImGui::SetNextItemWidth( rc.GetWidth() - Px( tok::kSelfPadX ) * 2.0f );
+				ImGui::PushStyleColor( ImGuiCol_FrameBg, IM_COL32_BLACK_TRANS );
+				ImGui::PushStyleColor( ImGuiCol_Text, Col( Role::TextPrimary ) );
+				if ( ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive() )
+					ImGui::SetKeyboardFocusHere();
+				if ( ImGui::InputText( "##edit", szBuf, sizeof( szBuf ), ImGuiInputTextFlags_EnterReturnsTrue ) )
+				{
+					*psValue = szBuf;
+					*pbEditing = false;
+					bCommitted = true;
+				}
+				else if ( ImGui::IsItemDeactivated() )
+				{
+					if ( !ImGui::IsKeyPressed( ImGuiKey_Escape ) )
+					{
+						*psValue = szBuf;
+						bCommitted = true;
+					}
+					*pbEditing = false;
+				}
+				ImGui::PopStyleColor( 2 );
+			}
+			else
+			{
+				// Closed state: B's value + pencil, same grammar as the
+				// dropdown -- hairline on hover, no box at rest.
+				const Atom a = Begin( rc, "tin" );
+				if ( a && a.bPressed && pbEditing )
+					*pbEditing = true;
+
+				if ( pszError )
+					Boundary( rc, Col( Role::Danger ) );
+				else if ( a.bHovered )
+				{
+					Dl()->AddRectFilled( rc.Min, rc.Max, palette::White( 0.06f ) );
+					Boundary( rc, Col( Role::LineControl ) );
+				}
+
+				const bool bEmpty = psValue->empty();
+				const float flPad = Px( tok::kSelfPadX );
+				const float flGap = Px( tok::kS );
+				const ImVec2 pen  = MeasureText( TypeRole::Meta, "*" );
+				const ImRect rcPen( rc.Max.x - flPad - pen.x, rc.Min.y, rc.Max.x - flPad, rc.Max.y );
+				const ImRect rcVal( rc.Min.x + flPad, rc.Min.y, rcPen.Min.x - flGap, rc.Max.y );
+
+				// A placeholder is Meta, not a deleted TextFaint role (§7.1).
+				DrawText( rcVal, TypeRole::Value,
+					bEmpty ? Col( Role::TextMeta ) : Col( Role::TextPrimary ),
+					bEmpty ? ( pszPlaceholder ? pszPlaceholder : "" ) : psValue->c_str(),
+					TextAlign::Right );
+				DrawText( rcPen, TypeRole::Meta, Col( Role::TextMeta ), "*", TextAlign::Right );
+			}
+
+			ImGui::PopID();
+			return bCommitted;
+		}
+
+		// =================================================================
+		//  Chip bank -- SPEC §3.12
+		// =================================================================
+		bool Bank( const RowCtx &row, const char *pszId, uint32_t *pnMask,
+		           const Option *pOptions, size_t nOptions )
+		{
+			if ( !pOptions || nOptions == 0 )
+				return false;
+
+			// Same single measurement path the segmented control uses, at the
+			// bank's own padding and text role.
+			const CellRun run = MeasureCells( pOptions, nOptions, TypeRole::Meta, tok::kBankPadX, tok::kGapSeg );
+			const ImRect rcGroup = row.PlacePx( run.flTotal );
+			const float  flGap   = Px( tok::kGapSeg );
+
+			ImGui::PushID( pszId );
+			bool bChanged = false;
+			float flX = rcGroup.Min.x;
+
+			for ( size_t i = 0; i < nOptions; ++i )
+			{
+				const ImRect rcCell( flX, rcGroup.Min.y, flX + run.widths[ i ], rcGroup.Max.y );
+				flX += run.widths[ i ] + flGap;
+
+				const uint32_t nBit = 1u << (uint32_t)pOptions[ i ].nValue;
+				const bool bOn = ( *pnMask & nBit ) != 0;
+
+				const Atom a = Begin( rcCell, pOptions[ i ].pszLabel );
+				if ( a && a.bPressed )
+				{
+					*pnMask ^= nBit;
+					bChanged = true;
+					ImGui::MarkItemEdited( a.id );
+				}
+
+				const ImU32 colFill = bOn ? Accent( 0.22f )
+				                          : ( a.bHovered ? palette::White( 0.11f ) : palette::White( 0.05f ) );
+				Dl()->AddRectFilled( rcCell.Min, rcCell.Max, colFill );
+				Boundary( rcCell, bOn ? Accent( 0.55f ) : Col( Role::LineControl ) );
+				DrawText( rcCell, TypeRole::Meta,
+					bOn ? Col( Role::AccentSeg ) : Col( Role::TextMeta ),
+					pOptions[ i ].pszLabel, TextAlign::Center );
+			}
+
+			ImGui::PopID();
+			return bChanged;
+		}
+
+		// =================================================================
+		//  Meter -- SPEC §3.8, read-only
+		// =================================================================
+		void Meter( const RowCtx &row, float flValue, float flMin, float flMax )
+		{
+			// No ItemAdd: a meter is read-only, takes no input and must not
+			// enter the keyboard nav order.
+			const ImRect rc = row.PlaceFull();
+			const float flSpan = flMax - flMin;
+			const float flFrac = flSpan != 0.0f ? ImClamp( ( flValue - flMin ) / flSpan, 0.0f, 1.0f ) : 0.0f;
+
+			const int   nSegs = (int)tok::kMeterSegs;
+			const float flGap = Px( tok::kMeterGap );
+			const float flSegW = ( rc.GetWidth() - flGap * (float)( nSegs - 1 ) ) / (float)nSegs;
+			const float flH    = Px( tok::kTrack );
+			const float flCy   = rc.GetCenter().y;
+			const int   nLit   = (int)( flFrac * (float)nSegs + 0.5f );
+
+			for ( int i = 0; i < nSegs; ++i )
+			{
+				const float flX = rc.Min.x + (float)i * ( flSegW + flGap );
+				Dl()->AddRectFilled( ImVec2( flX, flCy - flH * 0.5f ),
+				                     ImVec2( flX + flSegW, flCy + flH * 0.5f ),
+				                     i < nLit ? Accent( 0.85f ) : palette::White( 0.14f ) );
+			}
+		}
+
+		// =================================================================
+		//  Verb chip -- SPEC §3.9
+		// =================================================================
+		bool Verb( const RowCtx &row, const char *pszId, const char *pszVerb,
+		           Intent eIntent, bool bEnabled )
+		{
+			const float flW = MeasureText( TypeRole::Meta, pszVerb ).x + Px( tok::kVerbPadX ) * 2.0f;
+			const Atom a = Begin( row.PlacePx( flW ), pszId );
+			if ( !a )
+				return false;
+
+			ImU32 colFill, colText;
+			switch ( eIntent )
+			{
+				case Intent::Danger:
+					// SPEC §3.9: fill Danger@14%, text DangerText. Danger is
+					// hue-fixed and outside the accent family on purpose.
+					colFill = Dim( Col( Role::Danger ), a.bHovered ? 0.26f : 0.14f );
+					colText = Col( Role::DangerText );
+					break;
+				case Intent::Neutral:
+					colFill = palette::White( 0.05f );
+					colText = Col( Role::TextBody );
+					break;
+				default:
+					colFill = Accent( a.bHovered ? 0.26f : 0.16f );
+					colText = a.bHovered ? Col( Role::AccentSeg ) : Col( Role::AccentText );
+					break;
+			}
+
+			if ( !bEnabled )
+			{
+				colFill = Dim( colFill, 0.45f );
+				colText = Dim( colText, 0.45f );
+			}
+
+			Dl()->AddRectFilled( a.rc.Min, a.rc.Max, colFill );
+			// The one place a verb gets a border: `neutral`, whose text is
+			// dimmer than an accent verb's, so the fill alone would not
+			// identify it (SPEC §3.9).
+			if ( eIntent == Intent::Neutral )
+				Boundary( a.rc, Col( Role::LineControl ) );
+
+			DrawText( a.rc, TypeRole::Meta, colText, pszVerb, TextAlign::Center );
+			return bEnabled && a.bPressed;
+		}
+
+		// =================================================================
+		//  Anchor grid -- SPEC §4.3, the composite body that fix #3 names
+		// =================================================================
+		bool AnchorGrid( const ImRect &rcBody, const char *pszId, int *pnVert, int *pnHoriz )
+		{
+			ImGui::PushID( pszId );
+			bool bChanged = false;
+
+			const float flGap  = Px( tok::kGapSeg );
+			const float flCell = ( rcBody.GetWidth() - flGap * 2.0f ) / 3.0f;
+
+			for ( int nRow = 0; nRow < 3; ++nRow )
+			{
+				for ( int nCol = 0; nCol < 3; ++nCol )
+				{
+					const ImRect rcCell(
+						rcBody.Min.x + (float)nCol * ( flCell + flGap ),
+						rcBody.Min.y + (float)nRow * ( flCell + flGap ),
+						rcBody.Min.x + (float)nCol * ( flCell + flGap ) + flCell,
+						rcBody.Min.y + (float)nRow * ( flCell + flGap ) + flCell );
+
+					char szCell[ 8 ];
+					snprintf( szCell, sizeof( szCell ), "%d%d", nRow, nCol );
+
+					const bool bOn = ( *pnVert == nRow && *pnHoriz == nCol );
+					const Atom a = Begin( rcCell, szCell );
+					if ( a && a.bPressed && !bOn )
+					{
+						*pnVert = nRow;
+						*pnHoriz = nCol;
+						bChanged = true;
+						ImGui::MarkItemEdited( a.id );
+					}
+
+					Dl()->AddRectFilled( rcCell.Min, rcCell.Max,
+						bOn ? Accent( 0.30f ) : ( a.bHovered ? palette::White( 0.14f ) : palette::White( 0.05f ) ) );
+					Boundary( rcCell, bOn ? Accent( 0.65f ) : Col( Role::LineControl ) );
+				}
+			}
+
+			ImGui::PopID();
+			return bChanged;
+		}
+	}
+}

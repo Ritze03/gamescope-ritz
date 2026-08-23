@@ -12,6 +12,78 @@ cheap.
 
 ## 2026-08-23
 
+### D11 · Ten calls taken while building P1, the kit foundation
+
+P1 is `src/Overlay/UI/` — tokens, the registry and its laws, the row grammar, the control
+atoms, and two test suites. Build clean, **66/66 tests** (the 64 that existed, plus
+`overlay_ui` and `overlay_atoms`). Full write-up:
+`round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D11.1 · `src/Overlay/UI/`, not `src/Overlay/Kit/`.** The task brief offered `Kit/` as an
+example; `API.md`'s own "Proposed location" section names `src/Overlay/UI/` *and lists the
+filenames*. **Why:** the contract already spells the paths, and picking a different one
+would make every path reference in `API.md` wrong before a line shipped.
+
+**D11.2 · `SPEC.md` §2.2's lane clamp is a transcription slip; the bounds are literal.**
+Both `SPEC.md` §2.2 and `API.md` §6 print `Lw = clamp( round(0.46 × W), W − 420, W − 200 )`.
+Those bounds cannot be right: §8.3 works the same formula at W = 804 and states
+`clamp(370, 384, 604) = 370`, which is false — 370 is below its own lower bound. Read as
+**literal widths of the label+value zone**, `clamp( round(0.46 × W), 200, 420 )`, every
+number in §8.3 comes out exactly (Lw 370, label 358, control 394, and the columns sum to
+804), and §2.2's own prose about a "470-wide" control zone at the 1.0× sheet width is
+reproduced too (468). **Chose** the literal reading. **Rejected** implementing the printed
+bounds, which would put the control zone at 380 and contradict §8.3 and §2.2 both.
+*Cheap to reverse:* it is one clamp in `Lane.cpp`, and two tests pin the numbers.
+
+**D11.3 · The C++ class is `ui::Parameter`, not `ui::Param`.** C++ forbids a member function
+whose name matches its enclosing class, and `API.md` §7's chained `.Param()` declarations
+need exactly that member. **Why not rename the method instead:** the method name is what
+appears in every category file for the rest of the project; the class name appears almost
+nowhere. Rename the cheaper one.
+
+**D11.4 · `Parameter::Param()` is a *sibling* factory.** `API.md` §4.2 says a Param "has no
+`.Param()`", but §7 and §8 both chain one off a Param. Resolved by making it forward to the
+owning `Entry` and return another child of that same Entry. **Why this keeps the law:** the
+id is *always* synthesised from the Entry, so there is no operation on any type that
+produces a Param owned by a Param. One Level survives as a type-level guarantee; only the
+spelling was reconciled.
+
+**D11.5 · The value type role is 16, not `SPEC.md` §7.6's 15.** §7.6's table says Mono 500
+15; §2.3 says the value is "B's `.val` size", and the mockup draws `.val`, `.dd .tv` and
+`.tin .tv` all at 16. **Why:** the brief makes the mockup the tiebreaker, and two of the
+three sources already say 16.
+
+**D11.6 · A law violation aborts, with a test-only recorder as the single seam.** The
+project builds `-fno-exceptions`, so a violation cannot be thrown. **Chose:** print and
+`abort()` — a malformed registry is a boot failure, since `RegisterAll()` runs once at
+startup. `ui::LawRecorder` changes only *what happens after* a violation fires, never
+whether it fires, so the tests can assert which law caught what without killing the binary.
+**Rejected:** returning an error code (nobody would check it) and logging a warning (that
+is a convention, which is the exact thing §5.2 exists to replace).
+
+**D11.7 · The kit owns its own copy of `display_scale`.** `ui::SetScale()` / `ui::Scale()`,
+seeded by the shell once per frame, instead of every file calling
+`palette::DisplayScale()`. **Why:** that accessor reads `palette::g_LiveTheme`, which is
+*defined in `Chrome.cpp`* — binding the kit to it would drag 1,600 lines of legacy dock
+machinery into anything that wants a row height, including the tests. One reader of
+display_scale in the whole kit is also just better design.
+
+**D11.8 · Band geometry lives in its own file, not in `Controls.cpp`.** `API.md` puts it in
+`Composite.cpp`; it is here as `Band.h/.cpp`. **Why:** a band is row *grammar*, not a
+control atom, and keeping it free of ImGui is what makes SPEC §4.2's four clauses directly
+testable.
+
+**D11.9 · The stepper's repeat uses ImGui's own timing, not SPEC §3.5's stated 400 ms.**
+`ImGuiItemFlags_ButtonRepeat` and `io.KeyRepeatDelay` (0.275 s by default). **Why:** every
+other behaviour in the atoms is stock on purpose; introducing a hand-rolled timer to hit one
+number would be the only bespoke input path in the kit. Trivially changed later by setting
+the io field if the difference is ever felt.
+
+**D11.10 · Six things are deferred, each for a stated reason** — the dropdown popup and
+text validation (the mockup itself calls the popup "shell furniture"), `Repeat()`, `Cfg()`,
+`Escape()`, and `ui_lint`/`ui_snapshot`. All five need either the shell (P2) or a populated
+registry (P3) to attach to. Listed with reasoning in `IMPLEMENTATION.md`.
+
 ### D10 · The implementation is phased, coexists with the old UI behind a ConVar, and only flips at the end
 
 **Baseline before starting:** master at `c108ee4`, build clean, **64/64 tests**, 7,713 lines in the
