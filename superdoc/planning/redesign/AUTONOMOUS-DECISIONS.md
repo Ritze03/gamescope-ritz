@@ -12,6 +12,99 @@ cheap.
 
 ## 2026-08-23
 
+### D12 · Eleven calls taken while building P2, the shell
+
+P2 is the three-region shell — `src/Overlay/UI/Layout.*` (pure geometry) and `Shell.*` (the
+ImGui half) — behind the `overlay_e2` ConVar, hosting the five existing panels plus
+FpsDisplay's settings half verbatim. Build clean, **67/67 tests** (P1's 66 plus
+`overlay_shell`). Full write-up: `round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D12.1 · The ConVar is `overlay_e2`, not `overlay.e2`.** The task brief and the phase plan
+both name it with a dot. **Why the underscore:** every one of gamescope's ~200 ConVars is
+snake_case, and a single dotted name would be the only one in the system — a reader
+grepping `cv_` finds it, a reader grepping the docs' spelling does not. The concept,
+default and gating are exactly as specified. *Cheap to reverse:* one string literal.
+
+**D12.2 · The ConVar is runtime-only; no config field, no on-disk key.** **Rejected:**
+adding `overlay.e2` to `OverlaySettings` so a user could persist the choice. **Why:** the
+brief's hardest rule is that no on-disk key or format changes this phase, and a schema field
+is exactly that. Off-by-default plus opt-in-per-session is also the correct shape for a
+half-built UI: a persisted flag would survive a restart into whatever state P3 left the
+shell in. The persistence question belongs to the phase that flips the default.
+
+**D12.3 · One genuinely-E2 area (`setup.shell`) ships alongside the six escaped ones.**
+**Rejected:** escaping all seven and leaving the Inspector permanently on Overview. **Why:**
+SPEC §5.2 clause 0 makes the Inspector a pure function of a *registration*, and an escaped
+area has no entries by construction — so with only escaped areas there is no selection
+anywhere in the product, and CONFIGURE and DETAILS would both ship as untested dead code in
+the phase whose job is to prove the shell holds them. `setup.shell` describes the shell
+itself: a Choice with one Param (Configure), a Facts row with three `.Live()` readouts
+(Details), and an Action. Every binding is to shell runtime state or to a ConVar — **never
+to a config field** — so D12.2's rule is not bent to satisfy this one.
+
+**D12.4 · Escape() is sheet-only, and an area is legacy or E2, never both.** `API.md` §13
+describes the hatch but not its limits. **Chose:** two, both enforced by
+`Law::Escaped`. (a) No Inspector equivalent — SPEC §5.2 clause 0 says the Inspector has no
+authoring API, and a hatch into it would be the fifth generator that clause forbids; an
+escaped area therefore shows Overview and nothing else. (b) Escaping a populated area and
+populating an escaped one both fire. **Why (b):** the half-migrated area — three real rows
+plus an escaped tail — is the shape that mostly works and therefore never gets finished,
+which is how a temporary hatch becomes permanent. `Registry::EscapeCount()` is the number a
+future `ui_lint` reports as severity `migration`.
+
+**D12.5 · The panels were split, not copied.** Each `Panel*_Draw()` became a file-static
+`DrawBodyContent()` plus a thin window wrapper, with a new public `Panel*_DrawBody()`.
+**Rejected:** a second drawing path per panel for the E2 sheet. **Why:** two copies of a
+panel body would both have to be maintained through P3, and they would drift. The legacy
+path is unchanged; the one behavioural difference is `Audio::GetState()` moving inside the
+body (a pure read under a mutex).
+
+**D12.6 · `chrome::EnsureLiveThemeLoaded()` was exported rather than duplicated.** It is the
+one-shot that pulls `display_scale` and the accent hue out of `global.json`, and it has only
+ever been reachable from `BeginPanelWindow()` and `DrawDock()` — issue #79. The E2 shell
+draws neither, so under `overlay_e2 1` the trap would have been *permanent* rather than
+first-frame: the shell would render at 1.0× for the life of the process. **Chose:** a
+`chrome::EnsureThemeLoaded()` forwarder the shell calls once per frame. **Rejected:**
+re-reading `global.json` in the shell (two loaders, two answers) and moving the loader out
+of Chrome.cpp (a bigger refactor than P2 should carry).
+
+**D12.7 · Two console commands, `overlay_e2_host` and `overlay_e2_select`.** Not in the
+spec. **Why:** the shell's state — which area, which row, which host — was otherwise
+addressable only by pointer, and pointer injection is permanently forbidden (D4). Without
+them P2 could not be verified at all, and a bug report could not say which host it was in.
+They reach exactly the three things Ctrl+I and a click reach, they are not persisted, and
+they are the project's own idiom rather than a new one. The host preference now has **one**
+storage — the ConVar itself — so the console, Ctrl+I, the spine, the close glyph and the
+`setup.shell` row cannot disagree.
+
+**D12.8 · The rail draws initials, not SPEC §8.0's eleven icons.** **Why:** eleven stroked
+24-unit glyphs are a self-contained piece of work with their own acceptance criteria (one
+recognisable silhouette at 12 px, no new detail at 48 px), and they belong with the area
+rewrites that name them. P2's job is that the region is the right width and the active item
+carries its accent edge through the collapse — both of which are visible and testable with a
+placeholder glyph.
+
+**D12.9 · The icon rail's collapse is decided by the ladder, never by the animated width.**
+Found by screenshot: `DrawRail` re-derived "is this the icon rail" from the width it was
+handed, and that width is animated. `Approach()` is an exponential and never lands exactly
+on 60, so the rail was permanently a fraction too wide to count as collapsed and drew full
+labels into a 60-wide strip. **The general rule this encodes:** a presentation value must
+not make a semantic decision. The animation now also snaps within a physical pixel so it
+terminates.
+
+**D12.10 · The inspector is one child window, because that is what buys z-order.** The
+drawer initially rendered *behind* the sheet: its background was painted onto the slab's
+draw list, and ImGui renders every child after its parent's own commands. **Chose:** put the
+whole region in a child begun after the sheet's, which puts it above by the same rule.
+**Rejected:** `ImDrawListSplitter` channels, which would have made the region's paint order
+a thing every future edit has to know about.
+
+**D12.11 · Six type roles map onto five baked font styles, and that is left alone.**
+`Fonts.cpp` bakes what the *legacy* design guide needed; SPEC §7.6 wants six. A sixth style
+is an atlas change, which is a rebuild, which is issue #51's territory. **Why defer:** a
+role landing one style off costs half a point of size, not a layout, and P3 does the
+typography pass anyway. Recorded so it is not mistaken for an oversight.
+
 ### D11 · Ten calls taken while building P1, the kit foundation
 
 P1 is `src/Overlay/UI/` — tokens, the registry and its laws, the row grammar, the control

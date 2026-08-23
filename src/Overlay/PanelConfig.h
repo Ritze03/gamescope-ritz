@@ -22,4 +22,9 @@ namespace gamescope
 	// read by those panels' own EnsureConfigLoaded() on that same thread
 	// with no lock of its own.
 	void PanelConfig_Draw();
+
+	// E2 MIGRATION SEAM (P2), temporary -- see PanelDisplay.h's
+	// PanelDisplay_DrawBody() for the full note. The same body with no
+	// window around it, for ui::Area::Escape() to host in the E2 sheet.
+	void PanelConfig_DrawBody();
 }

@@ -150,6 +150,17 @@ namespace gamescope::chrome
 	// panel windows in ImGui's per-frame Begin-order Z stack.
 	void DrawDock();
 
+	// Loads the overlay's process-level theme (display_scale, accent hue,
+	// opacities, saved panel geometry) out of global.json into
+	// palette::g_LiveTheme, exactly once per process. Idempotent and free
+	// after the first call.
+	//
+	// Historically this was reachable only from BeginPanelWindow()/DrawDock()
+	// -- which is issue #79: nothing sees the user's real display_scale until
+	// the legacy dock has drawn once. The E2 shell draws neither, so it calls
+	// this itself; see Chrome.cpp's definition for the full note.
+	void EnsureThemeLoaded();
+
 	// ----------------------------------------------------------------------
 	// Icons: hand-transcribed from data/icons/*.svg (see Chrome.cpp's file
 	// comment for why -- no SVG rasterizer/atlas step, just the same

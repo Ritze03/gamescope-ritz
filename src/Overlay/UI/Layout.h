@@ -1,0 +1,166 @@
+// The shell's geometry -- SPEC.md §8.1's three regions and §8.3's responsive
+// ladder, as pure arithmetic.
+//
+// This file is the P2 counterpart of what Lane.h is to P1: the one place a
+// region's size is decided, kept free of imgui.h so it can be pinned by a unit
+// test that never opens a window. Shell.cpp turns the rects below into ImGui
+// child windows and draws in them; it does not compute a single one of them.
+//
+// The three quantities that live here and nowhere else:
+//
+//   1. THE SLAB      -- min(surfW x 0.90, max(1560 x scale, 1180))
+//                       x min(surfH x 0.86, 940 x scale)          (SPEC §8.1)
+//   2. THE LADDER    -- rail 232 -> 60, inspector column -> drawer -> hidden,
+//                       from ONE comparison applied twice          (SPEC §8.3)
+//   3. THE REGIONS   -- rail / sheet / inspector / spine rects derived from
+//                       (1) and (2), so they cannot disagree about a boundary.
+//
+// Plus one decision that is arithmetic in disguise: which Inspector mode a
+// selection opens in (SPEC §5.1, "automatic and stateless").
+//
+// PROVENANCE. Every number below is transcribed from index.html's `ladder()`
+// (the mockup is the tiebreaker per the design brief) and cross-checked
+// against SPEC §8.3's table. Where the two agree the number is uncommented;
+// where SPEC.md is silent and only the mockup decides, there is a comment.
+#pragma once
+
+#include "Registry.h"   // ui::Kind, for ModeFor(). Registry.h is imgui-free.
+
+namespace gamescope::ui
+{
+	// A rectangle in physical pixels, window-space. Deliberately not ImRect:
+	// that type lives in imgui_internal.h and this header must stay usable
+	// from a test that links no ImGui at all. Shell.cpp converts.
+	struct Rect
+	{
+		float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+
+		float Width()  const { return x1 - x0; }
+		float Height() const { return y1 - y0; }
+		bool  Empty()  const { return x1 <= x0 || y1 <= y0; }
+		bool  Contains( float x, float y ) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
+	};
+
+	// SPEC §8.1 / §8.05. The Inspector is one region in three hosts, never
+	// three regions: `Column` sits in the flow and takes width from the sheet;
+	// `Drawer` overlays the sheet's right edge; `Hidden` leaves only the
+	// 20-base spine (E1's, adopted verbatim -- SPEC §8.05).
+	enum class InspectorHost : unsigned char { Column, Drawer, Hidden };
+
+	// SPEC §5.1, after the 2026-08-23 amendment: three modes became two.
+	enum class InspectorMode : unsigned char { Configure, Details };
+
+	// ---- the shell's fixed budget (SPEC §8.3) ---------------------------
+	// Base units, i.e. px at display_scale 1.0. Named here because the ladder
+	// is the only consumer and a magic 232 in Shell.cpp would be exactly the
+	// class of number Tokens.h's rule 1 exists to forbid.
+	namespace shelltok
+	{
+		inline constexpr float kRailFull   = 232.0f;
+		inline constexpr float kRailIcons  =  60.0f;
+		inline constexpr float kInspector  = 400.0f;
+		inline constexpr float kSheetMin   = 560.0f;
+		inline constexpr float kSpine      =  20.0f;   // SPEC §8.05's "20-base vertical spine"
+
+		inline constexpr float kSlabBaseW  = 1560.0f;  // the 1.0x slab
+		inline constexpr float kSlabMinW   = 1180.0f;  // the floor the max() sets
+		inline constexpr float kSlabBaseH  =  940.0f;
+		inline constexpr float kSurfFracW  =   0.90f;
+		inline constexpr float kSurfFracH  =   0.86f;
+
+		// Chrome heights, base units, from index.html's CSS.
+		inline constexpr float kSlabBar    =  40.0f;   // .slabbar
+		inline constexpr float kSheetHead  =  56.0f;   // .sheethead
+		inline constexpr float kSheetFoot  =  40.0f;   // .sheetfoot
+		inline constexpr float kModeStrip  =  56.0f;   // .modestrip
+
+		// Column-count thresholds, base units of sheet width. index.html's
+		// `byWidth = sheet>=1680 ? 3 : sheet>=840 ? 2 : 1`. SPEC §8.3 prints
+		// the resulting column counts but never these two numbers, so the
+		// mockup is the only source -- hence the named constants.
+		inline constexpr float kThreeColMin = 1680.0f;
+		inline constexpr float kTwoColMin   =  840.0f;
+
+		// SPEC §8.3: "columns = min( widthAllows, ceil( rows / 12 ) )".
+		inline constexpr int   kRowsPerColumn = 12;
+	}
+
+	// The slab, in both units. Base is what the ladder reasons in; px is what
+	// gets drawn. Computed once so the two can never be derived separately.
+	struct Slab
+	{
+		float flScale    = 1.0f;
+		float flWidthPx  = 0.0f, flHeightPx = 0.0f;
+		float flWidthBase= 0.0f, flHeightBase = 0.0f;
+
+		// SPEC §8.1's slab formula, verbatim.
+		static Slab For( float flSurfaceWPx, float flSurfaceHPx, float flScale );
+	};
+
+	// The ladder's answer for one frame.
+	struct LadderResult
+	{
+		float flRailBase      = shelltok::kRailFull;
+		float flInspectorBase = shelltok::kInspector;
+		InspectorHost eHost   = InspectorHost::Column;
+		float flSheetBase     = 0.0f;   // the sheet's own width, after the host takes its cut
+		int   nColumns        = 1;      // after the content cap
+		int   nWidthColumns   = 1;      // before the content cap -- what the width alone allows
+		int   nStep           = 0;      // SPEC §8.3's "Step" column: -1 .. 3
+
+		bool RailIsIcons() const { return flRailBase <= shelltok::kRailIcons; }
+	};
+
+	// SPEC §8.3. `ePreferred` is the user's own Ctrl+I choice, which the
+	// ladder may OVERRIDE downward but never upward: asking for a column on a
+	// slab that cannot seat one yields a drawer, while asking for `Hidden`
+	// is always honoured (that is what keeps step 3 -- and with it the
+	// Reachability Law -- exercised daily rather than only on a 2.0x machine).
+	//
+	// nRowsInArea feeds the content cap; pass 0 for an area with no rows (a
+	// P2 escaped panel), which yields one column.
+	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea );
+
+	// The four region rects, in physical pixels relative to the slab's own
+	// top-left (0,0). Derived from one Slab and one LadderResult, so no two
+	// regions can disagree about where the boundary between them is.
+	struct Regions
+	{
+		Rect rcSlabBar;     // the 40-base title strip across the top
+		Rect rcBody;        // everything below it -- the three regions' container
+		Rect rcRail;
+		Rect rcSheet;       // the WHOLE sheet region (head + body + foot)
+		Rect rcSheetHead;
+		Rect rcSheetBody;   // where a category's rows -- or an escaped panel -- draw
+		Rect rcSheetFoot;
+		Rect rcInspector;   // empty when the host is Hidden
+		Rect rcModeStrip;   // empty when the host is Hidden
+		Rect rcInspectorBody;
+		Rect rcSpine;       // empty UNLESS the host is Hidden
+
+		static Regions For( const Slab &slab, const LadderResult &ladder );
+	};
+
+	// SPEC §5.1: "Mode selection is automatic and stateless: selecting a
+	// Facts, Meter or Graph row opens Details; everything else opens
+	// Configure." One function, because the shell asks this in two places
+	// (selection change, and the palette's jump) and a second copy would be a
+	// second answer.
+	//
+	// `Graph` is a CompositeKind, not a Kind, so a composite has to be asked
+	// about both -- hence the two-argument form.
+	InspectorMode ModeFor( Kind eKind, CompositeKind eComposite );
+
+	// The mode strip's two counters (SPEC §5.1: "each carries the count of
+	// what it holds, so the strip stays ... visible proof of how much is (and
+	// is not) hiding behind the row"). Configure counts the row's own control
+	// plus its Params; Details counts the binding-grid facts plus .Live()
+	// readouts. `bReadOnly` marks Configure's `ro` form.
+	struct ModeCounts
+	{
+		int  nConfigure = 0;
+		int  nDetails   = 0;
+		bool bReadOnly  = false;
+	};
+	ModeCounts CountsFor( const Entry &entry );
+}

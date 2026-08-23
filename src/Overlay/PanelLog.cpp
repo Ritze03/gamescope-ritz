@@ -136,19 +136,20 @@ namespace gamescope
 		}
 	}
 
-	void PanelLog_Draw()
+	// Kept cheap even while the panel is closed: a generation compare per
+	// tab, no copy unless something actually changed -- matches every other
+	// panel calling its own Ensure*Loaded()/GetState() unconditionally each
+	// frame (PanelAudio_Draw() etc).
+	static void RefreshBothTabs()
 	{
-		// Kept cheap even while the panel is closed: a generation compare
-		// per tab, no copy unless something actually changed -- matches
-		// every other panel calling its own Ensure*Loaded()/GetState()
-		// unconditionally each frame (PanelAudio_Draw() etc).
 		RefreshTab( s_GamescopeTab, LogCapture::GetGamescopeLogGeneration(), LogCapture::GetGamescopeLog );
 		RefreshTab( s_GameTab, LogCapture::GetGameLogGeneration(), LogCapture::GetGameLog );
+	}
 
-		if ( !chrome::BeginPanelWindow( "LOG", chrome::PanelId::Log,
-			ImVec2( 64.0f, 64.0f ), ImVec2( 620.0f, 420.0f ) ) )
-			return;
-
+	// The panel's body, with no window around it -- see PanelLog.h's
+	// PanelLog_DrawBody(). Verbatim from PanelLog_Draw().
+	static void DrawBodyContent()
+	{
 		if ( ImGui::BeginTabBar( "LogTabs" ) )
 		{
 			if ( ImGui::BeginTabItem( "Gamescope" ) )
@@ -179,7 +180,24 @@ namespace gamescope
 			}
 			ImGui::EndTabBar();
 		}
+	}
+
+	void PanelLog_Draw()
+	{
+		RefreshBothTabs();
+
+		if ( !chrome::BeginPanelWindow( "LOG", chrome::PanelId::Log,
+			ImVec2( 64.0f, 64.0f ), ImVec2( 620.0f, 420.0f ) ) )
+			return;
+
+		DrawBodyContent();
 
 		chrome::EndPanelWindow();
+	}
+
+	void PanelLog_DrawBody()
+	{
+		RefreshBothTabs();
+		DrawBodyContent();
 	}
 }

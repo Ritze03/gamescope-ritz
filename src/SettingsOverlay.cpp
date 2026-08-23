@@ -50,6 +50,7 @@
 #include "Overlay/Widgets.h"
 #include "Overlay/Chrome.h"
 #include "Overlay/Palette.h"
+#include "Overlay/UI/Shell.h"
 #include "Config/ConfigManager.h"
 
 #include <algorithm>
@@ -970,16 +971,47 @@ namespace gamescope
 		ImGui::NewFrame();
 		if ( bDrawPanels )
 		{
-			DrawFpsHudPanel();
-			PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
-			PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
-			PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
-			PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
-			PanelLog_Draw(); // issue #39: Log panel, see Overlay/PanelLog.cpp
-			// M8 part 3 (issue #15): drawn last so the dock's own window lands on
-			// top of the panel windows above in ImGui's per-frame Begin-order Z
-			// stack -- see Overlay/Chrome.h's DrawDock() comment.
-			chrome::DrawDock();
+			// ------------------------------------------------------------
+			// THE E2 GATE (redesign phase 2). One branch, one frame, no
+			// mixture.
+			// ------------------------------------------------------------
+			// `overlay_e2` is false by default, so the else-branch below is
+			// byte-for-byte the behaviour every existing user has: the same
+			// five floating panels and the same dock, drawn in the same
+			// order.
+			//
+			// When it is true, the E2 shell replaces ALL of it -- including
+			// the dock, the window frames and the whole floating-window
+			// layer. Deliberately an either/or rather than a shell that
+			// hosts the old windows: running both would mean two competing
+			// ideas of where a panel lives on one screen, which is the
+			// state that made the old layer expensive in the first place.
+			//
+			// The two paths share no ImGui window ids (the shell's are all
+			// "##e2*"), so flipping the ConVar mid-session leaves nothing
+			// behind for the other path to trip over.
+			//
+			// The FPS HUD over the game is drawn by FpsDisplay.cpp's own
+			// context and is NOT in this branch at all -- neither path
+			// touches it. Only the HUD's settings half moves, and in the
+			// E2 path it is hosted as the `system.monitor` area.
+			if ( gamescope::ui::shell::Enabled() )
+			{
+				gamescope::ui::shell::Draw();
+			}
+			else
+			{
+				DrawFpsHudPanel();
+				PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
+				PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
+				PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
+				PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
+				PanelLog_Draw(); // issue #39: Log panel, see Overlay/PanelLog.cpp
+				// M8 part 3 (issue #15): drawn last so the dock's own window lands on
+				// top of the panel windows above in ImGui's per-frame Begin-order Z
+				// stack -- see Overlay/Chrome.h's DrawDock() comment.
+				chrome::DrawDock();
+			}
 		}
 		if ( flStartupAlpha > 0.0f )
 			DrawStartupAnnounce( flStartupAlpha, uStartupElapsedMs );

@@ -164,6 +164,8 @@ src = [
   'Overlay/UI/Band.cpp',
   'Overlay/UI/Registry.cpp',
   'Overlay/UI/Controls.cpp',
+  'Overlay/UI/Layout.cpp',
+  'Overlay/UI/Shell.cpp',
   'backend.cpp',
   'x11cursor.cpp',
   'InputEmulation.cpp',

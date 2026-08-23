@@ -11,4 +11,9 @@ namespace gamescope
 	// place every other panel is (SettingsOverlay's draw loop), same
 	// contract as PanelAudio_Draw() etc.
 	void PanelLog_Draw();
+
+	// E2 MIGRATION SEAM (P2), temporary -- see PanelDisplay.h's
+	// PanelDisplay_DrawBody() for the full note. The same body with no
+	// window around it, for ui::Area::Escape() to host in the E2 sheet.
+	void PanelLog_DrawBody();
 }

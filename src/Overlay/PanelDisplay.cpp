@@ -728,19 +728,12 @@ namespace gamescope
 		DrawHdrAppMetadataReadout();
 	}
 
-	void PanelDisplay_Draw()
+	// The panel's body, with no window around it. Split out for E2's sheet
+	// (Overlay/UI/Shell.cpp hosts it through ui::Area::Escape()); the
+	// contents below are byte-for-byte what used to sit inline in
+	// PanelDisplay_Draw(), so the legacy floating-window path is unchanged.
+	static void DrawBodyContent()
 	{
-		EnsureConfigLoaded();
-
-		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
-		// which is what makes this panel show/hide from the dock instead of
-		// always being on screen -- see Overlay/Chrome.h. Renamed
-		// "DISPLAY" -> "GAMESCOPE" and grew a bit taller for the new tabs
-		// (issue #25); position unchanged since M3.
-		if ( !chrome::BeginPanelWindow( "GAMESCOPE", chrome::PanelId::Display,
-			ImVec2( 64.0f, 340.0f ), ImVec2( 440.0f, 360.0f ) ) )
-			return;
-
 		// Tabs (issue #25), same ImGui::BeginTabBar()/BeginTabItem() pattern
 		// PanelConfig.cpp already uses for Per-Game/General -- Upscaling
 		// keeps the pre-existing filter/scaler/sharpness controls unchanged;
@@ -772,7 +765,29 @@ namespace gamescope
 			}
 			ImGui::EndTabBar();
 		}
+	}
+
+	void PanelDisplay_Draw()
+	{
+		EnsureConfigLoaded();
+
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// which is what makes this panel show/hide from the dock instead of
+		// always being on screen -- see Overlay/Chrome.h. Renamed
+		// "DISPLAY" -> "GAMESCOPE" and grew a bit taller for the new tabs
+		// (issue #25); position unchanged since M3.
+		if ( !chrome::BeginPanelWindow( "GAMESCOPE", chrome::PanelId::Display,
+			ImVec2( 64.0f, 340.0f ), ImVec2( 440.0f, 360.0f ) ) )
+			return;
+
+		DrawBodyContent();
 
 		chrome::EndPanelWindow();
+	}
+
+	void PanelDisplay_DrawBody()
+	{
+		EnsureConfigLoaded();
+		DrawBodyContent();
 	}
 }
