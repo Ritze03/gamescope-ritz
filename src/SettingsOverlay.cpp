@@ -48,7 +48,6 @@
 #include "Overlay/PanelLog.h"
 #include "Overlay/Fonts.h"
 #include "Overlay/Widgets.h"
-#include "Overlay/Chrome.h"
 #include "Overlay/Palette.h"
 #include "Overlay/UI/Shell.h"
 #include "Config/ConfigManager.h"
@@ -504,36 +503,6 @@ namespace gamescope
 		s_flCurrentAlpha = s_flFadeAtAnchor + ( flTarget - s_flFadeAtAnchor ) * flT;
 	}
 
-	// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow() as the
-	// dock's "System Monitor" panel (see Overlay/Chrome.h) -- SPEC.md's UI
-	// structure lists an "FPS HUD panel" hosting exactly
-	// FpsDisplay_DrawSettingsPanel()'s controls, which this window has done
-	// since M4; issue #27 renamed the panel/dock label/PanelId to "System
-	// Monitor" (the panel now hosts a module framework, not just FPS) while
-	// leaving the underlying FpsDisplay* file/function names alone (see
-	// FpsDisplay.h's own header comment for why).
-	//
-	// The M1 render-shell scaffolding that used to live in this window
-	// (the "Settings overlay render shell -- Milestone 1" heading, its proof-
-	// of-pipeline paragraph, the "Layer alpha" readout, a dummy slider/toggle,
-	// the toggle-hotkey hint line, and an M2 capture-check text field) has
-	// been removed here -- it was developer-only scaffolding that was never
-	// meant to ship to end users. Removing it does not remove the *ability*
-	// to manually verify input capture: the real panels already have plenty
-	// of sliders/toggles (Display, Shaders) and a text field (Config/Profiles'
-	// "New profile name"), so those are the manual-test surface for pointer/
-	// keyboard capture now.
-	static void DrawFpsHudPanel()
-	{
-		if ( !gamescope::chrome::BeginPanelWindow( "SYSTEM MONITOR", gamescope::chrome::PanelId::SystemMonitor,
-			ImVec2( 64.0f, 64.0f ), ImVec2( 460.0f, 640.0f ) ) )
-			return;
-
-		gamescope::FpsDisplay_DrawSettingsPanel(); // M4 (see FpsDisplay.h)
-
-		gamescope::chrome::EndPanelWindow();
-	}
-
 	// ----------------------------------------------------------------------
 	// Startup announcement: a brief, self-dismissing "gamescope-ritz is
 	// active" toast with the Ctrl+Shift+O hint, shown once per process
@@ -604,7 +573,7 @@ namespace gamescope
 	// Draws the toast card with the ImGui foreground draw list of the
 	// current frame -- deliberately not an ImGui::Begin() window: it needs
 	// no title bar, no focus/Z-order interaction with the dock/panel windows
-	// (Chrome.h's territory, not touched here), and no input at all (it is
+	// (window chrome, deleted in P5), and no input at all (it is
 	// purely decorative and self-dismissing). Every color this draws bakes
 	// flAlpha in directly (rather than relying on the FrameInfo_t layer's
 	// own opacity, which SettingsOverlay_AddLayer() may set to something
@@ -979,46 +948,21 @@ namespace gamescope
 		if ( bDrawPanels )
 		{
 			// ------------------------------------------------------------
-			// THE E2 GATE (redesign phase 2). One branch, one frame, no
-			// mixture.
+			// The E2 shell. One path, one frame.
 			// ------------------------------------------------------------
-			// `overlay_e2` is false by default, so the else-branch below is
-			// byte-for-byte the behaviour every existing user has: the same
-			// five floating panels and the same dock, drawn in the same
-			// order.
-			//
-			// When it is true, the E2 shell replaces ALL of it -- including
-			// the dock, the window frames and the whole floating-window
-			// layer. Deliberately an either/or rather than a shell that
-			// hosts the old windows: running both would mean two competing
-			// ideas of where a panel lives on one screen, which is the
-			// state that made the old layer expensive in the first place.
-			//
-			// The two paths share no ImGui window ids (the shell's are all
-			// "##e2*"), so flipping the ConVar mid-session leaves nothing
-			// behind for the other path to trip over.
+			// P5 deleted the else-branch this used to have: the five
+			// floating panels, their window chrome and the dock. While both
+			// existed the gate was deliberately either/or rather than a
+			// shell hosting the old windows, because running both would
+			// mean two competing ideas of where a panel lives on one
+			// screen -- which is what made the floating layer expensive in
+			// the first place. There is now only the shell.
 			//
 			// The FPS HUD over the game is drawn by FpsDisplay.cpp's own
-			// context and is NOT in this branch at all -- neither path
-			// touches it. Only the HUD's settings half moves, and in the
-			// E2 path it is hosted as the `system.monitor` area.
-			if ( gamescope::ui::shell::Enabled() )
-			{
-				gamescope::ui::shell::Draw();
-			}
-			else
-			{
-				DrawFpsHudPanel();
-				PanelDisplay_Draw(); // M3: Display panel, see Overlay/PanelDisplay.cpp
-				PanelShaders_Draw(); // M6: Shaders panel, see Overlay/PanelShaders.cpp
-				PanelAudio_Draw(); // M5: Audio panel, see Overlay/PanelAudio.cpp
-				PanelConfig_Draw(); // M7: Config panel, see Overlay/PanelConfig.cpp
-				PanelLog_Draw(); // issue #39: Log panel, see Overlay/PanelLog.cpp
-				// M8 part 3 (issue #15): drawn last so the dock's own window lands on
-				// top of the panel windows above in ImGui's per-frame Begin-order Z
-				// stack -- see Overlay/Chrome.h's DrawDock() comment.
-				chrome::DrawDock();
-			}
+			// context and is NOT here at all -- this never touched it.
+			// Only the HUD's settings half moved, hosted as the
+			// `system.monitor` area.
+			gamescope::ui::shell::Draw();
 		}
 		if ( flStartupAlpha > 0.0f )
 			DrawStartupAnnounce( flStartupAlpha, uStartupElapsedMs );

@@ -41,7 +41,6 @@
 #include "Row.h"
 #include "Tokens.h"
 
-#include "Overlay/Chrome.h"
 #include "Overlay/Fonts.h"
 #include "Overlay/Palette.h"
 #include "Overlay/PanelAudio.h"
@@ -4508,11 +4507,11 @@ namespace gamescope::ui::shell
 
 	void Draw()
 	{
-		// Issue #79's fix for this path -- see Chrome.h. Without it the
+		// Issue #79's fix for this path -- see Palette.h. Without it the
 		// shell would render at display_scale 1.0 for the life of the
 		// process, because the lazy loader used to hang off the legacy
 		// dock, which E2 never draws.
-		gamescope::chrome::EnsureThemeLoaded();
+		gamescope::palette::EnsureThemeLoaded();
 
 		// The kit's ONE scale input (Tokens.h). Pushed once, here, per
 		// frame; nothing downstream reads palette:: directly.

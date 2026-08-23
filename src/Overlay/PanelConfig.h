@@ -26,19 +26,4 @@ namespace gamescope
 	// overlay is open); Appearance is not.
 	void PanelConfig_RegisterAreas( ui::Registry &reg );
 
-	// Draws the Config panel's ImGui window. Must be called from the same
-	// place/thread SettingsOverlay draws its own window (steamcompmgr
-	// thread, between ImGui::NewFrame() and ImGui::Render()) -- same
-	// requirement as PanelDisplay_Draw()/PanelShaders_Draw(), since this
-	// panel's actions (SetSessionOverrideActive, BumpConfigGeneration) are
-	// read by those panels' own EnsureConfigLoaded() on that same thread
-	// with no lock of its own.
-	void PanelConfig_Draw();
-
-	// E2 MIGRATION SEAM (P2), temporary -- see Overlay/UI/Registry.h's
-	// Escape() comment for why the hatch exists and what deletes it. The
-	// same body with no window around it, for ui::Area::Escape() to host in
-	// the E2 sheet. (P3 part A migrated Display and Shaders off this seam;
-	// this area is a later part of P3 and still uses it.)
-	void PanelConfig_DrawBody();
 }

@@ -20,7 +20,6 @@
 #include "Config/ConfigManager.h"
 #include "Fonts.h"
 #include "Palette.h"
-#include "Widgets.h"
 #include "UI/Registry.h"
 
 #include "imgui.h"
@@ -741,55 +740,11 @@ namespace gamescope::Notifications
 		s_ulPendingReadDonePoint = 0;
 	}
 
-	void DrawSettingsPanel()
-	{
-		EnsureConfigLoaded();
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Section ) );
-		ImGui::TextUnformatted( "Notifications" );
-		ImGui::PopFont();
-		ImGui::Spacing();
-
-		ImGui::TextUnformatted( "Placement (global -- shared by every game)" );
-		int nVert = 0, nHoriz = 2;
-		ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
-
-		// Spec §11 ANCHOR block (widgets::PositionGrid -- shared with the
-		// System Monitor position picker, issue #27): one 3x3 grid reads
-		// directly as "where on screen will this toast appear," unlike the
-		// two independent segmented controls this replaces.
-		if ( widgets::PositionGrid( "##NotifPlacement", &nVert, &nHoriz ) )
-		{
-			s_GlobalOverlay.notification_placement = ComposePlacement( nVert, nHoriz );
-			PersistPlacement();
-		}
-
-		ImGui::Spacing();
-		ImGui::Separator();
-
-		const bool bPerGame = config::SessionAppId().has_value() && config::IsSessionOverrideActive();
-		ImGui::TextUnformatted( bPerGame
-			? "Mute (this game's own overridden config)"
-			: "Mute (global -- applies to every game without its own override)" );
-		bool bMuted = s_Settings.notifications.muted;
-		if ( widgets::Toggle( "Mute toast notifications", &bMuted ) )
-		{
-			s_Settings.notifications.muted = bMuted;
-			PersistMuted();
-		}
-		ImGui::TextDisabled( "Same Override Global Config rule as every other per-game setting -- see the Config/Profiles panel's Per-Game tab." );
-
-		ImGui::Spacing();
-		ImGui::BeginDisabled( s_Settings.notifications.muted );
-		if ( ImGui::Button( "Send test notification" ) )
-			Show( "This is a test notification.", Kind::Info );
-		ImGui::EndDisabled();
-	}
-
 	// =====================================================================
 	//  P3 part B -- the E2 registrations
 	// =====================================================================
-	// The same three settings DrawSettingsPanel() draws, declared instead.
+	// The same three settings the deleted legacy panel drew, declared
+	// instead.
 	// They live here rather than in the area file for the reason stated in
 	// Notifications.h: everything they bind to is file-static in this
 	// translation unit, and a second writer of notification_placement is

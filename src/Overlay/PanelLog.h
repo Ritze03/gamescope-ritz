@@ -15,8 +15,4 @@ namespace gamescope
 	// text itself (Area::Content -- the shell draws it; this file only
 	// supplies lines).
 	void PanelLog_RegisterArea( ui::Registry &reg );
-
-	// The legacy floating window. Still reachable under `overlay_e2 0`,
-	// which must stay byte-identical, so it keeps its own body.
-	void PanelLog_Draw();
 }

@@ -34,16 +34,12 @@
 
 #include <string>
 
-// palette::g_LiveTheme is defined in Chrome.cpp -- the legacy overlay's 1600
-// lines of dock/window/drag machinery. Linking that in so Palette.cpp can read
-// one float would drag the entire old UI into a test binary, which is exactly
-// the coupling this harness exists in spite of. Defining the storage here is
-// what makes a headless atom test possible at all.
-//
-// The kit itself never reads it: ui::SetScale() is the kit's one scale input
-// (see Tokens.h's note on why). This only satisfies Palette.cpp's own accent
-// recomputation, which the colour roles sit on.
-namespace gamescope::palette { LiveTheme g_LiveTheme; }
+// palette::g_LiveTheme used to be defined HERE, because its real definition
+// lived in Chrome.cpp -- the legacy overlay's 1600 lines of dock/window/drag
+// machinery -- and linking that in so Palette.cpp could read one float would
+// have dragged the entire old UI into a test binary. P5 deleted that file and
+// moved the storage to Palette.cpp, which this harness already links, so the
+// stub is gone and the test now shares the product's own definition.
 
 using namespace gamescope;
 using Catch::Matchers::WithinAbs;

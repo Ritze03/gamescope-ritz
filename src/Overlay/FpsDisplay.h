@@ -41,19 +41,13 @@ namespace gamescope
 	// the compute submission is on the queue. No-op when nothing is pending.
 	void FpsDisplay_CommitReads();
 
-	// LEGACY (`overlay_e2 0`) -- the six-tab settings panel, hosted by
-	// SettingsOverlay.cpp's own dock window. Draws with whichever ImGui
-	// context is current at the call site. Kept verbatim while both shells
-	// coexist; retired with the flag, not before.
-	void FpsDisplay_DrawSettingsPanel();
-
 	// Declares this feature's settings as the E2 `system.monitor` area:
 	// the master switch, the seven module toggles, the placement anchor and
 	// its margins, the appearance controls, the per-module colour overrides
 	// and the 60-second statistics history.
 	//
-	// This REPLACES FpsDisplay_DrawSettingsPanel(), the six-tab panel issue
-	// #59 built. It is a declaration, not a draw call: it places no pixel,
+	// This REPLACED FpsDisplay_DrawSettingsPanel(), the six-tab panel issue
+	// #59 built and P5 deleted. It is a declaration, not a draw call: it places no pixel,
 	// runs at startup rather than per frame, and takes no ImGui context --
 	// which is what let the last escape hatch for this area go.
 	//
