@@ -70,6 +70,37 @@ enforced by a test) since it postdates the eleven-icon set `index.html` was tran
 from. Added in `Icons.cpp`: two toggle switches, one off one on — the twelfth glyph, kept
 distinguishable from `audio.mixer`'s vertical fader tracks and everything else in the set.
 
+## 2026-08-24 (type scale — the small end raised, per direct user feedback)
+
+### D23 · Which roles moved, which didn't, and by how much
+
+The user's ask was directional, not a table: *"increase the smallest of the used fonts by
+1-2px"*, naming row/control labels, category labels, and titles as "really small". Turning
+that into six concrete numbers in `src/Overlay/UI/Tokens.cpp`'s `Type()` was left to
+judgment, same as issue #23's "raise the origin constants, don't nudge with a multiplier"
+precedent. **Decided, needs confirmation:**
+
+- `Title` 11 -> 13, `Section` 10.5 -> 12, `Label`/`Body` 14 -> 15. The three named roles all
+  move; `Body` moves too though it wasn't named, because it has always shared `Label`'s
+  literal and diverging them would be a new, uncalled-for defect.
+- `Value` (16) and `Meta` (11.5) are **left unchanged** — neither was named, `Value` is
+  already the largest role, and `Meta` is deliberately the quietest auxiliary tier (units,
+  marks, chips). This is the one place this decision could be second-guessed: "the
+  smallest of the used fonts" could be read literally as `Meta`/`Section` by number rather
+  than as the three roles the complaint actually pointed at. Reading it as the named roles
+  was chosen because the complaint's own examples (labels, category labels, titles) are
+  specific, not a size threshold.
+- Consequence accepted rather than avoided: `Meta` (11.5, untouched) is now numerically the
+  *smallest* role, having previously sat between `Section` and `Title`. Reasoned to be
+  correct rather than a defect — `Meta` is supposed to read quieter than navigation labels,
+  not larger — but it's a visible reordering and worth the user's eyes.
+
+Full before/after table, gap analysis and the contrast/crispness re-check live in
+`superdoc/planning/redesign/round-2/e2-inspector-plus/SPEC.md`'s 2026-08-24 amendment;
+not duplicated here.
+
+*Cheap to reverse:* six `float` literals in one table.
+
 ---
 
 ## 2026-08-23 (P5 — the deletion, and the flag)

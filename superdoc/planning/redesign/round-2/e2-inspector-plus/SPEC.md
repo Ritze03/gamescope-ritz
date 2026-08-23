@@ -10,6 +10,63 @@ Companion files: `API.md` (the helper layer), `FEASIBILITY.md` (ImGui assessment
 
 ## Amendments
 
+### 2026-08-24 — shipped type scale departs from §7.6 at the small end
+
+Direct user feedback: *"All of the descriptive fonts (control elements names/labels) and
+category labels are really small (including titles and such). So we probably need to
+increase the smallest of the used fonts by 1-2px."* Applied in `src/Overlay/UI/Tokens.cpp`
+only — this file's §7.6 table below is left as the original measured spec, and the
+departure is recorded here and at the value, the same discipline issue #23 set for the
+control-height baseline (see that entry's note in `superdoc/planning/ui-mockup-precise-spec.md`):
+raise the origin constants themselves, don't paper over it with a runtime multiplier, and
+write down why so a later pass doesn't "correct" it back.
+
+The complaint named three roles: row/control labels, category (group/section) labels, and
+titles. Those three move; `Value` (already the largest, unnamed) and `Meta` (the
+deliberately-quietest auxiliary tier — units, marks, chips — unnamed) do not:
+
+| Role | §7.6 spec | Shipped | Delta |
+|---|---|---|---|
+| `Title` | 11 | **13** | +2.0 (+18%) |
+| `Section` | 10.5 | **12** | +1.5 (+14%) |
+| `Label` | 14 | **15** | +1.0 (+7%) |
+| `Body` | 14 | **15** | +1.0 (tied to `Label`, not independently named — see below) |
+| `Value` | 15 (16 shipped, §7.6's own mockup-tiebreak note) | 16 | unchanged |
+| `Meta` | 11.5 | 11.5 | unchanged |
+
+`Body` is not named by the complaint but was kept in lockstep with `Label`: the two have
+always shared one literal (Sans 400 14) because row labels and Inspector prose read as the
+same register, and moving one without the other would newly mismatch two things the table
+has always tied together.
+
+New ascending order: `Meta` 11.5 < `Section` 12 < `Title` 13 < `Label`/`Body` 15 < `Value`
+16 — `Meta` becomes the numeric floor (it was third-smallest before), which is the right
+outcome: its job is to read quieter than the labels and titles a user reads for
+navigation, not to out-rank them in size. Every adjacent gap is >= 0.5 base units, and
+`Section`→`Title` itself widened from 0.5 to 1.0, so raising the small end did not
+collapse it into the next role up.
+
+Consequences checked, not just asserted:
+
+- **Row/control geometry is untouched.** `kRowH` (44) and `kControlH` (28) both clear
+  every new size with more headroom than before; nothing needed to grow to fit the larger
+  type.
+- **0.5x and 2.0x** — before/after screenshots on `system.monitor` (dense: row labels,
+  group labels, a breadcrumb title, and the Inspector) confirm the increase reads at the
+  smallest absolute size (0.5x) and that nothing overflows its row or lane at the largest
+  (2.0x).
+- **Contrast** — every role's colour token is unchanged; all six sizes stay well under the
+  WCAG large-text threshold, so the 4.5:1 small-text floor still applies to all of them
+  (never the relaxed 3:1) and raising a size only widens that margin. The worst text case
+  on record, `TextSegInactive` at 4.96:1 (§7.3, this table's `Section` role in its inactive
+  segmented-cell form), is unaffected and still clears the floor.
+- **Crispness at 2.0x** — unaffected: the atlas bakes a fresh `ImFontBaked` per exact pixel
+  size (`Fonts.cpp`, #38), so a new `flSizeBase` gets baked crisp on first use rather than
+  resampled from a fixed bake.
+
+See `src/Overlay/UI/Tokens.cpp`'s `Type()` for the full rationale inline at the value, and
+`superdoc/planning/redesign/AUTONOMOUS-DECISIONS.md` (2026-08-24) for the decision record.
+
 ### 2026-08-23 — user critique, second pass
 
 Applied to this document and to `index.html` together. Sections below have been rewritten
