@@ -10,6 +10,56 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — the pre-P5 shell test, and the eight defects it fixed
+
+Not a phase: an exhaustive test pass over everything P1–P4.1 built, before P5
+deletes the legacy UI. Full evidence, with counts and what could **not** be
+tested: `SHELL-TEST-REPORT.md`. Decisions taken without the user:
+`../../AUTONOMOUS-DECISIONS.md` **D19**. Build clean; **68/68** meson tests plus
+one new `overlay_atoms` case (that suite: 8 → 9 cases, 79 assertions).
+
+Method: 23 nested sessions driven by `overlay_e2_key` and the other console
+surfaces, 85 `grim` captures. No pointer input (D4).
+
+**Fixed (commit `885242e`):**
+
+| # | Defect | Where |
+|---|---|---|
+| 1 | `overlay_e2_palette query shell.` **aborted the compositor** — `FormatLadder()` called `ImGui::GetIO()` from the console thread. The surface size is now published into two atomics by `Draw()`. | `Shell.cpp` |
+| 2 | An armed `Delete saved config` **survived `Esc` and survived moving the selection**, so one press afterwards deleted the file. SPEC §3.9 and `Select()`'s own comment both already claimed otherwise. | `Shell.cpp` |
+| 3 | `controls::Bank` **laid its full measured run out from the lane's left edge**, so an over-wide bank ran 104 px past the sheet at 2.0× with the drawer open. Scaled into the lane; pinned by a mutation-checked test. | `Controls.cpp` |
+| 4 | A Bank was **the only control with no keyboard route at all**. `←/→` now move a chip cursor and `Space`/`Enter` toggles it, in both hosts, with SPEC §7.3's focus ring. | `Shell.cpp`, `Controls.cpp` |
+| 5 | **`RowCtx::Affordance()` finally has call sites.** SPEC §2.4's chevron and lock were specified in P1 and drawn by nobody through P4 (D18's own still-open list). | `Shell.cpp`, `Controls.cpp` |
+| 6 | The sheet header was missing **`differs N`** and **`inspector hidden`**, the only two chips §1.1's D9 amendment permits it besides the breadcrumb. | `Shell.cpp` |
+| 7 | A composite's value was **the raw axis-A int** in the palette and in Details' binding grid, contradicting the band two lines above. | `Shell.cpp` |
+| 8 | `overlay_e2_select` was **a second selection path** — it skipped `Select()`'s focus reset, explain-page close and disarm, so console-driven keyboard tests exercised a state the product never reaches. | `Shell.cpp` |
+
+**The seventh "renders but does nothing", found and NOT fixed:** `Solve()`
+computes `nColumns` (3 at 0.5×, 2 at 0.75×/1.0×/1.75× for a 25-row area),
+`shell.layout` prints it, and `DrawSheetBody()` draws **one column at every
+scale**. `grep -n nColumns src/Overlay/UI/` returns the assignment, the field and
+the `printf`, and nothing else. Left for P5 with the evidence attached — D19.9
+says why guessing at it here would have repeated D16.2's mistake.
+
+**Also still open, and named rather than glossed:** the rail draws letters
+instead of SPEC §8.0's eleven icons (and at ladder step ≥ 1 three pairs of areas
+become indistinguishable); `Kind::Meter` has zero registrations; SPEC §6.3's
+inline param expansion does not exist (the comment above `DrawExplainPage()`
+claiming "params render inline (P3)" is **wrong** — the Reachability *guarantee*
+holds through `Ctrl+/` and `Ctrl+K`, the *mechanism* is unbuilt); the Overview
+card and Details' binding grid are both partial against §5.5/§5.1; and
+`widgets::Checkbox` is still declared with no callers, which §3.1 says should be
+deleted. All in `SHELL-TEST-REPORT.md` §6–§8.
+
+**Verified good:** config safety (a seeded pre-existing `global.json`,
+`games/*.json` and `profiles/*.json` all keep their sha256 **and** their mtime
+across a full navigation session, unknown keys included); legacy mode (five
+`overlay_e2` flips leave the dock pixel-identical and the log assert-free); and
+the HUD (legacy vs E2 differ by **less** than two legacy frames differ from each
+other).
+
+---
+
 ## 2026-08-23 — P4.1, the three deferred defects
 
 D17's 2.0× lane fix, the glyph decision, and P4's five keyboard gaps. Build clean;

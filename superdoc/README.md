@@ -66,6 +66,10 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   tiebreaker mockup, and [`IMPLEMENTATION.md`](planning/redesign/round-2/e2-inspector-plus/IMPLEMENTATION.md)
   the phase-by-phase log of what exists in C++ (`src/Overlay/UI/`) and where it departed
   from the spec.
+  [`SHELL-TEST-REPORT.md`](planning/redesign/round-2/e2-inspector-plus/SHELL-TEST-REPORT.md)
+  is the exhaustive pre-P5 test pass — what was exercised, with counts; what failed and
+  was fixed; what was left and why; and what could not be tested at all. Read it before
+  deleting the legacy UI.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.

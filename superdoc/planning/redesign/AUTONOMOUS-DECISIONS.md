@@ -10,6 +10,94 @@ cheap.
 
 ---
 
+## 2026-08-23 (last, the pre-P5 test pass)
+
+### D19 · Nine calls taken while testing the E2 shell exhaustively before P5 deletes the old UI
+
+Full write-up, with counts and evidence:
+`round-2/e2-inspector-plus/SHELL-TEST-REPORT.md`. Build clean, **68/68** meson
+tests plus one new `overlay_atoms` case.
+
+**D19.1 · A registry getter may not touch ImGui, and the fix is a published surface
+size rather than a guard.** `shell.layout`'s Facts summary is `FormatLadder()`, which
+called `ImGui::GetIO()`; `overlay_e2_palette query shell.` runs it on the console
+thread, where there is no context, and gamescope aborted. The obvious repair is
+`if ( !ImGui::GetCurrentContext() ) return {}` at each site. **Rejected:** it makes
+every future getter's author responsible for remembering, which is the same process
+defence SPEC §5.2 exists to replace. Chosen instead: `Draw()` publishes the surface
+size into two atomics once a frame and every reader takes it from there, so the
+question "does this getter have a context" stops being askable. This is D15's
+`fonts::RebuildAll()` lesson applied to the read side.
+
+**D19.2 · Esc disarms, and so does moving the selection — chosen over a shorter
+timeout.** An armed `Delete saved config` survived both, so arm → Esc → re-select →
+one press deleted the file inside the 6 s window. Shortening `kArmTimeout` would have
+narrowed the window without closing it, and would have made the *honest* two-press
+path flakier. The disarm lives in `Select()` (every selection route goes through it)
+and unconditionally at the top of the Esc ladder (Esc is the user saying "no", before
+any region bookkeeping).
+
+**D19.3 · An over-wide chip bank is SCALED into the lane, not right-bound out of
+it.** SPEC §2.2 makes the right edge invariant and `Bank()` broke it. Three repairs
+were possible. *Right-binding the full run* pushes the first chips out of the lane's
+left side and under the label — worse, because the chips that vanish are the ones
+nobody would look for. *Downgrading to a dropdown like `Choice()`* is wrong for a set:
+a dropdown shows one value, and a bank's value is several. *Scaling* keeps every chip
+inside the lane, hit-testable, and proportional; the text clips inside the narrower
+cells, which is the same loss `DrawText`'s left-align fallback already accepts
+elsewhere. At 1.0x nothing scales and nothing moves.
+
+**D19.4 · The bank gets a chip cursor rather than a new kind of control.** A Bank was
+the only control in the product with no keyboard route at all — `AdjustValue()`
+refuses the kind, and there is no popup — so `log.sources` and `log.severity` were
+pointer-only, in a project that forbids synthetic pointer input and therefore could
+not test them either. The cursor is one shell int (`s_nBankChip`), reset with the
+selection exactly like `s_nInspectorFocus`, and it reuses SPEC §8.2's existing verbs
+unchanged: Left/Right is "inside a control: adjust", Space/Enter is "activate /
+toggle". **Rejected:** a bank-specific popup list, which would have introduced a
+second modal surface and a second set of keys for one kind.
+
+**D19.5 · The focus ring is the atom's job, and it is SPEC §7.3's measured value.** A
+cursor nobody can see is not a cursor, so `Bank()` takes the focused index and draws
+the ring itself — the alternative, letting the shell paint a rect over the atom's
+output, is the drawn-vs-hit-tested divergence `Controls.h` exists to prevent. The
+colour is `Accent @ 85%`, which §7.3 already measures at 6.49:1, so no new token.
+
+**D19.6 · SPEC §2.4's affordance column is BUILT, not deleted from the spec.** It had
+had no call sites since P1 (D18's own still-open list), so a reviewer could reasonably
+have concluded the design had dropped it. It is kept because with the Inspector hidden
+the chevron is the sheet's only sign that a row has depth at all — the Reachability
+Law's discoverability half. The lock is a **drawn** glyph on D18.2's reasoning: no
+bundled Geist face carries U+2337, so a wider baked range could not have produced it.
+The column is **suppressed inside the Inspector**: a chevron there would point at the
+depth you are already standing in.
+
+**D19.7 · A composite's value is its resolved string everywhere it is printed.** The
+palette and Details' binding grid read the A-axis binding and showed `0` / `8116985`
+two lines from a band reading `top-right · 32 / 32`. `CompositeValue()` already
+existed and is now the single answer, so there is no second formatting of the same
+declaration to drift.
+
+**D19.8 · `overlay_e2_select` goes through `Select()`.** It had duplicated `Select()`'s
+body minus the Inspector focus reset and the explain-page close — a second selection
+path, which meant every keyboard test driven from the console was exercising a state
+the product never reaches. Recorded as a decision and not just a fix because it is the
+testing tool's own correctness: a console selection that is not a real selection
+quietly invalidates the evidence gathered with it.
+
+**D19.9 · The multi-column sheet is REPORTED, not built.** `Solve()` computes
+`nColumns` (3 at 0.5x, 2 at 0.75x/1.0x/1.75x for a 25-row area), `shell.layout`
+prints it, and `DrawSheetBody()` has one y-cursor and draws one column at every
+scale. That is the seventh instance of this branch's dominant defect class, and it is
+the largest one — but building a balanced multi-column sheet touches group bands,
+composites, the content body, selection and the clipper, which is a phase of work
+rather than a test-pass fix, and guessing at it here would have repeated exactly the
+mistake D16.2 declined to make. Left for P5 with the evidence attached. The readout
+was deliberately **not** patched to print `1`: an honest number that disagrees with
+the screen is what made this findable.
+
+---
+
 ## 2026-08-23
 
 ### D16 · Eight calls taken while building the command palette and the keyboard, P4
