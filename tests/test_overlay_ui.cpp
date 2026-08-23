@@ -452,6 +452,55 @@ TEST_CASE( "band: line 1 reads as a row and the body is on the control line", "[
 	REQUIRE( band.rcBody.Max.y <= band.rcBand.Max.y + 1e-3f );
 }
 
+TEST_CASE( "band: the four clauses hold at every display scale", "[overlay_ui]" )
+{
+	// The anchor grid is the control under the most scrutiny in this design
+	// (fix #3), and 2.0x is where a band would break first: the body is the
+	// only part of a row whose size is a token rather than a measurement, so
+	// a missing Px() would leave a 96x96 grid pinned at 96 physical pixels
+	// inside a band that had doubled around it. Checked at every rung of the
+	// responsive ladder rather than only at 1.0x, because at 1.0x a scale bug
+	// is invisible by definition.
+	for ( float flScale : { 0.5f, 1.0f, 1.25f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		INFO( "display_scale " << flScale );
+
+		const ui::Lane lane = ui::Lane::ForColumn( 804.0f );
+		const ui::RowCtx plainRow = ui::RowCtx::ForRow( lane, 0.0f, 0.0f );
+		const ui::BandLayout band = ui::LayOutBand( lane, 0.0f, 0.0f, ui::CompositeKind::Anchor );
+
+		// Clause 1: exactly n x 44, IN PIXELS, so the clipper's uniform step
+		// stays exact at this scale too.
+		REQUIRE_THAT( band.rcBand.GetHeight(),
+			WithinAbs( 3.0f * ui::Px( ui::tok::kRowH ), 1e-3f ) );
+
+		// Clause 2: line 1 is still an ordinary row -- same height, same
+		// control edge, same affordance column as a switch above it.
+		REQUIRE_THAT( band.line1.Bounds().GetHeight(),
+			WithinAbs( plainRow.Bounds().GetHeight(), 1e-4f ) );
+		REQUIRE_THAT( band.line1.PlaceFull().Max.x,
+			WithinAbs( plainRow.PlaceFull().Max.x, 1e-4f ) );
+
+		// Clause 3: right-bound to the same vertical as every other control,
+		// and the body scales with everything else rather than staying at its
+		// base size.
+		REQUIRE_THAT( band.rcBody.Max.x, WithinAbs( plainRow.PlaceFull().Max.x, 1e-4f ) );
+		REQUIRE_THAT( band.rcBody.GetWidth(),  WithinAbs( ui::Px( 96.0f ), 1e-3f ) );
+		REQUIRE_THAT( band.rcBody.GetHeight(), WithinAbs( ui::Px( 96.0f ), 1e-3f ) );
+
+		// The body stays inside its band at every scale -- the 96 base body
+		// against a 3 x 44 band has 36 base units of headroom, which is only
+		// headroom if both sides scale together.
+		REQUIRE( band.rcBody.Min.y >= band.rcBand.Min.y - 1e-3f );
+		REQUIRE( band.rcBody.Max.y <= band.rcBand.Max.y + 1e-3f );
+
+		// Clause 4 is structural: the body's left edge never reaches back
+		// into the label column, so lines 2..n stay air.
+		REQUIRE( band.rcBody.Min.x > band.line1.Bounds().Min.x );
+	}
+}
+
 TEST_CASE( "band: a full-bleed body still ends on the control line", "[overlay_ui]" )
 {
 	ScopedScale s( 1.0f );

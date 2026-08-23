@@ -129,6 +129,13 @@ namespace gamescope::ui::shell
 		float         s_flArmedAt = 0.0f;
 		constexpr float kArmTimeout = 6.0f;   // seconds
 
+		// P3c: the id of the Text row currently being EDITED. controls::Text
+		// owns the display/input transition but needs one bit of caller
+		// state to hold it in; one string, for the same reason as the two
+		// above -- exactly one field can be open, and per-row state is the
+		// category this shell exists to not have.
+		std::string   s_sEditingText;
+
 		// The one animated quantity: SPEC §8.4's 160 ms region duration,
 		// used for the rail's collapse so the icon rail does not snap.
 		float s_flRailAnim = shelltok::kRailFull;
@@ -886,6 +893,38 @@ namespace gamescope::ui::shell
 					}
 					return false;
 				}
+				case Kind::Bank:
+				{
+					// The mask travels as an int because Value has no
+					// unsigned alternative; the atom wants uint32_t. One
+					// conversion each way, in the one place that knows both.
+					uint32_t nMask = (uint32_t)( std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0 );
+					if ( controls::Bank( row, pszId, &nMask,
+						decl.Options().data(), decl.Options().size() ) )
+					{
+						decl.Binding().Set( Value{ (int)nMask } );
+						return true;
+					}
+					return false;
+				}
+				case Kind::Text:
+				{
+					std::string s = std::holds_alternative<std::string>( v )
+						? std::get<std::string>( v ) : std::string();
+					bool bEditing = ( s_sEditingText == sPopupKey );
+					if ( controls::Text( row, pszId, &s, &bEditing ) )
+					{
+						decl.Binding().Set( Value{ s } );
+						// Fall through to the state sync below rather than
+						// returning early: the atom can commit a value and
+						// close the field on the same frame.
+					}
+					if ( bEditing )
+						s_sEditingText = sPopupKey;
+					else if ( s_sEditingText == sPopupKey )
+						s_sEditingText.clear();
+					return false;
+				}
 				default:
 					return false;
 			}
@@ -1217,6 +1256,15 @@ namespace gamescope::ui::shell
 				case Kind::Slider:
 				case Kind::Stepper:
 				case Kind::Choice:
+				// Bank and Text reached this switch's `default: break` until
+				// P3c and therefore DREW NOTHING -- no area had used either
+				// kind before the Log, so two declared, law-abiding, fully
+				// bound controls rendered as an empty control column. That is
+				// #25 and #68 exactly, produced by an unhandled enumerator
+				// rather than by a missing implementation: both atoms have
+				// existed in Controls.cpp since P1.
+				case Kind::Bank:
+				case Kind::Text:
 					DrawSharedControl( entry, row, "ctl", entry.Id() );
 					break;
 				case Kind::Action:
