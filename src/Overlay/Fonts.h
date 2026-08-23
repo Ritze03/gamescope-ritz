@@ -9,6 +9,8 @@
 // nothing here is meant to grow arbitrary new sizes/weights on request.
 #pragma once
 
+#include <cstdint>
+
 struct ImFont;
 
 namespace gamescope::fonts
@@ -188,4 +190,31 @@ namespace gamescope::fonts
 	// that call site's comment, and Load()'s own comment on how
 	// FontGlobalScale folds on top of whatever scale is already baked in.
 	float BuiltScale();
+
+	// ---- the baked range, and a way to ask whether text fits in it -------
+	// The atlas bakes Basic Latin + Latin-1 Supplement (U+0020..U+00FF).
+	// Anything outside it renders as a fallback box.
+	//
+	// D18: this was found the expensive way -- "inspector ›" shipped with a
+	// box in it, in the one region a user only visits after hiding the
+	// Inspector, which is exactly where nobody looks. A box glyph in a rarely
+	// visited corner is the sort of thing that ships, so the range stops
+	// being a comment in Fonts.cpp and becomes something callable.
+	//
+	// The consumer is `overlay_e2_glyphs`, which sweeps the LIVE registry --
+	// every area title, setting name, help sentence, option label and unit --
+	// because those are declarations in a dozen files that no unit-test
+	// fixture sees.
+	inline constexpr uint32_t kBakedFirst = 0x0020;
+	inline constexpr uint32_t kBakedLast  = 0x00FF;
+
+	// Returns the first code point in `pszUtf8` that the atlas cannot draw,
+	// or 0 when every character is inside the baked range. Pure: no atlas, no
+	// ImGui context, no font is consulted, so it is unit-testable and safe to
+	// call from the console thread.
+	//
+	// Malformed UTF-8 is REPORTED rather than skipped -- a truncated sequence
+	// is a bug in whatever produced the string, and silently ignoring it is
+	// how a mojibake label survives review.
+	uint32_t FirstUnbakedCodepoint( const char *pszUtf8 );
 }

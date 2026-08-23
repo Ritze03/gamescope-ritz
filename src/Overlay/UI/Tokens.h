@@ -129,6 +129,18 @@ namespace gamescope::ui
 		inline constexpr float kVerbPadX = 9.0f;
 		inline constexpr float kSelfPadX = 6.0f;  // dropdown / text field inner padding
 
+		// ---- Drawn glyphs (D18) -------------------------------------------
+		// The shell DRAWS its icons instead of typing them. Fonts.cpp bakes
+		// Basic Latin + Latin-1, and the bundled Geist faces do not contain
+		// U+25B8 or U+2315 at all -- so the mockup's triangle and magnifier
+		// could not be baked even with a wider range. See Controls.h's
+		// `glyph` namespace for the full argument.
+		//
+		// Sizes are the glyph's BOX, base units; the shapes below are
+		// authored on a unit square and multiplied by it.
+		inline constexpr float kGlyphChevron = 9.0f;   // dropdown caret, spine
+		inline constexpr float kGlyphSearch  = 13.0f;  // the palette's prompt
+
 		// ---- Composite bands (SPEC §4.2) ----------------------------------
 		inline constexpr int   kBandMinLines = 2;
 		inline constexpr int   kBandMaxLines = 3;

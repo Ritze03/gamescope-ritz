@@ -20,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "Overlay/Fonts.h"
 #include "Overlay/UI/Band.h"
 #include "Overlay/UI/Lane.h"
 #include "Overlay/UI/Registry.h"
@@ -257,6 +258,82 @@ TEST_CASE( "lane: a degenerate column produces no inverted rect", "[overlay_ui]"
 		REQUIRE( lane.LabelWidth() >= 0.0f );
 		REQUIRE( lane.flCtlMin <= lane.flCtlMax );
 	}
+}
+
+// =========================================================================
+//  The baked glyph range (D18)
+// =========================================================================
+// The shell shipped "inspector ›" with a fallback box in it. U+203A is inside
+// Geist but outside the atlas's baked Basic Latin + Latin-1, and the spine is
+// only visible after the Inspector is hidden -- a corner nobody visits, which
+// is where a box glyph survives longest.
+//
+// FirstUnbakedCodepoint() turns "is this string drawable" into a question, and
+// `overlay_e2_glyphs` asks it of every registered string. These tests pin the
+// decoder, because a checker that silently passes bad input is worse than no
+// checker at all.
+TEST_CASE( "glyphs: plain ASCII and Latin-1 are inside the baked range", "[overlay_ui]" )
+{
+	REQUIRE( fonts::FirstUnbakedCodepoint( "" ) == 0 );
+	REQUIRE( fonts::FirstUnbakedCodepoint( nullptr ) == 0 );
+	REQUIRE( fonts::FirstUnbakedCodepoint( "inspector" ) == 0 );
+	REQUIRE( fonts::FirstUnbakedCodepoint( "^I  inspector      Tab  region" ) == 0 );
+
+	// The two multi-byte characters the shell DOES use, both Latin-1 and both
+	// genuinely baked: the middle dot in every separator, and the degree sign
+	// on the colour-temperature row.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "rail 60 \xC2\xB7 sheet 804" ) == 0 );
+	REQUIRE( fonts::FirstUnbakedCodepoint( "6500\xC2\xB0" ) == 0 );
+
+	// The exact ends of the range.
+	REQUIRE( fonts::FirstUnbakedCodepoint( " " ) == 0 );          // U+0020
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xC3\xBF" ) == 0 );   // U+00FF
+}
+
+TEST_CASE( "glyphs: the three marks the design wanted are all rejected", "[overlay_ui]" )
+{
+	// This is the test that would have caught the shipped defect.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "inspector \xE2\x80\xBA" ) == 0x203A );  // ›
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xE2\x96\xB8" ) == 0x25B8 );            // ▸
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xE2\x8C\x95" ) == 0x2315 );            // ⌕
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xE2\x86\x92" ) == 0x2192 );            // →
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xE2\x80\xA6" ) == 0x2026 );            // …
+
+	// The FIRST offender is reported, not the last -- so a string with two
+	// problems names the one a reader will hit first.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "a\xE2\x96\xB8\x62\xE2\x8C\x95" ) == 0x25B8 );
+
+	// Reported from anywhere in the string, including the very end, which is
+	// exactly where the spine's marker sat.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "trailing\xE2\x80\xBA" ) == 0x203A );
+
+	// Four-byte sequences decode rather than being mistaken for malformed.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xF0\x9F\x99\x82" ) == 0x1F642 );       // an emoji
+}
+
+TEST_CASE( "glyphs: malformed UTF-8 is reported, never skipped", "[overlay_ui]" )
+{
+	// A truncated or stray sequence is a bug in whatever produced the string.
+	// Silently ignoring it is how a mojibake label survives review, so the
+	// checker returns the replacement character rather than 0.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xE2\x96" )     == 0xFFFD );   // truncated 3-byte
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xC2" )         == 0xFFFD );   // truncated 2-byte
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\x80" )         == 0xFFFD );   // stray continuation
+	REQUIRE( fonts::FirstUnbakedCodepoint( "\xF8\x88\x80" ) == 0xFFFD );   // 5-byte lead
+	REQUIRE( fonts::FirstUnbakedCodepoint( "ok\xE2\x96" )   == 0xFFFD );   // after valid text
+}
+
+TEST_CASE( "glyphs: tab and newline are not glyphs", "[overlay_ui]" )
+{
+	// Help text is authored with line breaks in it. Those never reach the
+	// atlas, so treating them as unbaked would make every multi-line help
+	// string a false positive and the sweep useless.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "line one\nline two" ) == 0 );
+	REQUIRE( fonts::FirstUnbakedCodepoint( "a\tb\r\n" ) == 0 );
+
+	// Other C0 controls are NOT excused -- they would draw a box like
+	// anything else outside the range.
+	REQUIRE( fonts::FirstUnbakedCodepoint( "bell\x07" ) == 0x07 );
 }
 
 // =========================================================================

@@ -232,6 +232,7 @@ namespace gamescope::ui::shell
 		void SelectById( std::span<std::string_view> args );
 		void SetById( std::span<std::string_view> args );
 		void PaletteCmd( std::span<std::string_view> args );
+		void GlyphSweep( std::span<std::string_view> args );
 
 		// The palette's two helpers the console command reaches before the
 		// drawing section defines them.
@@ -293,6 +294,20 @@ namespace gamescope::ui::shell
 			"list | reach. Through gamescopectl the verb and its argument must be ONE quoted "
 			"argument: gamescopectl overlay_e2_palette \"open margin\".",
 			PaletteCmd );
+
+		// D18. The shell shipped "inspector ›" with a box in it, in the one
+		// region you only see AFTER hiding the Inspector -- a corner nobody
+		// visits, which is where a box glyph survives longest. Every string
+		// the shell draws is a declaration in one of a dozen area files, so
+		// no fixture-based test covers them; this walks the LIVE registry
+		// instead, which is the only place all of them exist at once.
+		ConCommand cc_overlay_e2_glyphs(
+			"overlay_e2_glyphs",
+			"Sweep every registered E2 string -- area titles, row and parameter names, help text, "
+			"option labels and units -- for characters outside the font atlas's baked range "
+			"(U+0020..U+00FF), which render as fallback boxes. Prints one line per offender and a "
+			"total; prints nothing but the total when the registry is clean.",
+			GlyphSweep );
 
 		// =================================================================
 		//  Registration
@@ -465,6 +480,60 @@ namespace gamescope::ui::shell
 			if ( s_bModeOverridden )
 				return s_eMode;
 			return ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
+		}
+
+		// D18's live sweep. See cc_overlay_e2_glyphs for why this walks the
+		// registry rather than being a unit test: the strings it checks are
+		// declared across a dozen area files and only ever coexist here.
+		void GlyphSweep( std::span<std::string_view> args )
+		{
+			(void)args;
+			int nBad = 0;
+
+			// One checker, called on every string, so a new text-bearing
+			// field cannot be half-covered: it is either passed to this or it
+			// is not swept at all, and "not swept at all" is visible here.
+			const auto Check = [ & ]( const char *pszWhere, const char *pszWhat,
+			                          const std::string &s ) {
+				const uint32_t cp = fonts::FirstUnbakedCodepoint( s.c_str() );
+				if ( cp == 0 )
+					return;
+				nBad++;
+				console_log.errorf( "  U+%04X in %s %s: \"%s\"",
+					cp, pszWhere, pszWhat, s.c_str() );
+			};
+
+			for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+			{
+				const Area &area = Reg().AreaAt( a );
+				Check( area.Id().c_str(), "title", area.Title() );
+
+				for ( size_t i = 0; i < area.EntryCount(); ++i )
+				{
+					const Entry &e = area.EntryAt( i );
+					Check( e.Id().c_str(), "title", e.Title() );
+					Check( e.Id().c_str(), "help",  e.HelpText() );
+					Check( e.Id().c_str(), "unit",  e.Unit() );
+					for ( const Option &o : e.Options() )
+						Check( e.Id().c_str(), "option", o.pszLabel ? o.pszLabel : "" );
+
+					for ( size_t p = 0; p < e.ParamCount(); ++p )
+					{
+						const Parameter &pa = e.ParamAt( p );
+						Check( pa.Id().c_str(), "param title", pa.Title() );
+						Check( pa.Id().c_str(), "param help",  pa.HelpText() );
+						Check( pa.Id().c_str(), "param unit",  pa.Unit() );
+						for ( const Option &o : pa.Options() )
+							Check( pa.Id().c_str(), "param option", o.pszLabel ? o.pszLabel : "" );
+					}
+				}
+			}
+
+			if ( nBad == 0 )
+				console_log.infof( "E2 glyphs: registry clean -- every string inside U+%04X..U+%04X",
+					fonts::kBakedFirst, fonts::kBakedLast );
+			else
+				console_log.errorf( "E2 glyphs: %d string(s) would draw a fallback box", nBad );
 		}
 
 		void SelectById( std::span<std::string_view> args )
@@ -2221,25 +2290,38 @@ namespace gamescope::ui::shell
 			// variant means a second baked atlas for eleven characters.
 			// Stacked letters keep both, and at 20 base units wide the
 			// column is one glyph wide either way.
-			static const char *const kSpineText = "inspector ›";
+			// D18: the marker after the word was "›" (U+203A), which is
+			// OUTSIDE Fonts.cpp's baked Latin-1 range and drew as a fallback
+			// box -- the one real box glyph the shell had. It is a chevron
+			// now, and a drawn one.
+			//
+			// It points DOWN, which is the faithful reading of the mockup
+			// rather than a departure from it: index.html sets the spine
+			// `writing-mode: vertical-rl`, so its `›` is rotated a quarter
+			// turn clockwise along with the letters and points down on
+			// screen. The letters here are stacked instead of rotated, so
+			// the mark is rotated to match what the mockup actually shows.
+			static const char *const kSpineText = "inspector";
 			const ImU32 col = bHovered ? Col( Role::AccentSeg ) : Col( Role::TextMeta );
 			ImGui::PushFont( FontFor( TypeRole::Meta ) );
 			const float flLineH = ImGui::GetFontSize() * 0.92f;
+			// Nine letters, one blank line, one chevron -- the same eleven
+			// slots the string used to occupy, so the spine's vertical
+			// centring is unchanged.
 			const float flTotal = flLineH * 11.0f;
 			float y = rc.y0 + ( rc.Height() - flTotal ) * 0.5f;
-			for ( const char *p = kSpineText; *p; )
+			for ( const char *p = kSpineText; *p; ++p )
 			{
-				// Step one UTF-8 code point at a time -- the trailing "›"
-				// is multi-byte and drawing half of it draws nothing.
-				const char *pNext = p + 1;
-				while ( ( *pNext & 0xC0 ) == 0x80 ) pNext++;
-				const ImVec2 size = ImGui::CalcTextSize( p, pNext );
+				const ImVec2 size = ImGui::CalcTextSize( p, p + 1 );
 				ImGui::GetWindowDrawList()->AddText(
-					ImVec2( rc.x0 + ( rc.Width() - size.x ) * 0.5f, y ), col, p, pNext );
+					ImVec2( rc.x0 + ( rc.Width() - size.x ) * 0.5f, y ), col, p, p + 1 );
 				y += flLineH;
-				p = pNext;
 			}
 			ImGui::PopFont();
+
+			y += flLineH;   // the blank slot the space used to hold
+			glyph::Chevron( ImVec2( rc.x0 + rc.Width() * 0.5f, y + flLineH * 0.5f ),
+			                Px( tok::kGlyphChevron ), glyph::Dir::Down, col );
 		}
 
 		// =================================================================
@@ -2533,13 +2615,15 @@ namespace gamescope::ui::shell
 			                0.0f, 0, Hairline() );
 
 			// ---- query line ------------------------------------------------
-			// The prompt is ">" and not the mockup's magnifier: Fonts.cpp
-			// bakes Basic Latin + Latin-1 only (this UI is English-only), and
-			// U+2315 would draw as a fallback box. Every glyph the palette
-			// uses is inside that range for the same reason.
+			// D18: the prompt is the mockup's magnifier again. P4 substituted
+			// ">" because U+2315 falls outside Fonts.cpp's baked Latin-1
+			// range -- correct at the time, but widening the range would not
+			// have helped: no bundled Geist face carries U+2315 at all. It is
+			// drawn instead, so it is immune to both.
 			const Rect rcQ = { rc.x0, rc.y0, rc.x1, rc.y0 + flQH };
-			Label( { rcQ.x0 + flPad, rcQ.y0, rcQ.x1, rcQ.y1 }, TypeRole::Value,
-			       Col( Role::AccentValue ), ">" );
+			glyph::Magnifier( ImVec2( rcQ.x0 + flPad + Px( tok::kGlyphSearch ) * 0.5f,
+			                          ( rcQ.y0 + rcQ.y1 ) * 0.5f ),
+			                  Px( tok::kGlyphSearch ), Col( Role::AccentValue ) );
 
 			const float flQTextX = rcQ.x0 + flPad + Px( 26.0f );
 			if ( s_sPaletteQuery.empty() )
