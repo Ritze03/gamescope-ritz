@@ -70,6 +70,11 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   is the exhaustive pre-P5 test pass — what was exercised, with counts; what failed and
   was fixed; what was left and why; and what could not be tested at all. Read it before
   deleting the legacy UI.
+  [`CONFORMANCE-AUDIT.md`](planning/redesign/round-2/e2-inspector-plus/CONFORMANCE-AUDIT.md)
+  is the first side-by-side comparison of the built shell against the approved mockup —
+  24 divergences with paired screenshots in `audit-shots/`, each marked as explained by a
+  recorded decision or as unexplained drift. Read it before trusting a phase report's
+  claim of conformance.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.
