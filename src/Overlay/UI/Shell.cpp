@@ -79,13 +79,6 @@ namespace gamescope::ui::shell
 		// is snake_case and a lone dotted name would be the only one. The
 		// concept is unchanged; see AUTONOMOUS-DECISIONS.md D12.
 		//
-		// Runtime-only and deliberately NOT a config field: P2 must not add
-		// an on-disk key, and "off by default, opt in per session" is what
-		// makes the phase safe to land.
-		ConVar<bool> cv_overlay_e2(
-			"overlay_e2", false,
-			"Use the E2 settings shell (rail / sheet / inspector) instead of the legacy dock and floating panels." );
-
 		// =================================================================
 		//  Shell state -- ALL of it. This list is meant to stay short.
 		// =================================================================
@@ -589,12 +582,6 @@ namespace gamescope::ui::shell
 					return Fact{ "display scale", sz };
 				} )
 				.Live( "regions", []{ return Fact{ "regions", FormatLadder() }; } );
-
-			shell.Action( "shell.classic", "Classic UI", "switch back",
-				[]{ cv_overlay_e2.SetValue( false ); } )
-				.Help( "Turn the E2 shell off for this session and return to the dock and its "
-				       "floating panels. The same as `overlay_e2 0` from the console." )
-				.Keywords( "legacy dock classic old panels windows" );
 		}
 
 		Registry &Reg()
@@ -3228,7 +3215,7 @@ namespace gamescope::ui::shell
 			Label( { rc.x0 + Px( tok::kM ) + flDot + Px( tok::kS ), rc.y0, rc.x1, rc.y1 },
 			       TypeRole::Title, Col( Role::TextPrimary ), "GAMESCOPE-RITZ" );
 			Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kM ), rc.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ), "E2 shell · overlay_e2", TextAlign::Right );
+			       TypeRole::Meta, Col( Role::TextMeta ), "settings", TextAlign::Right );
 		}
 
 		// =================================================================
@@ -4500,11 +4487,6 @@ namespace gamescope::ui::shell
 	// =====================================================================
 	//  Public surface
 	// =====================================================================
-	bool Enabled()
-	{
-		return cv_overlay_e2.Get();
-	}
-
 	void Draw()
 	{
 		// Issue #79's fix for this path -- see Palette.h. Without it the
