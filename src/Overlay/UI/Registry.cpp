@@ -120,8 +120,23 @@ namespace gamescope::ui
 	//  Parameter
 	// =====================================================================
 	Parameter &Parameter::Default( Value v )        { m_Default = std::move( v ); return *this; }
-	Parameter &Parameter::Range( float lo, float hi ) { m_flLo = lo; m_flHi = hi; m_bHasRange = true; return *this; }
 	Parameter &Parameter::Step( float s )           { m_flStep = s; return *this; }
+
+	// A param never names its own control (AddParam()'s comment): options
+	// present means Choice, a range means Slider, neither means Switch. So
+	// Range() is the declaration that resolves the kind -- the caller states a
+	// FACT about the value ("it is bounded"), and the kind follows from it.
+	// Guarded against clobbering a Choice, because "a bounded set of options"
+	// is still a Choice.
+	Parameter &Parameter::Range( float lo, float hi )
+	{
+		m_flLo = lo;
+		m_flHi = hi;
+		m_bHasRange = true;
+		if ( m_eKind != Kind::Choice )
+			m_eKind = Kind::Slider;
+		return *this;
+	}
 	Parameter &Parameter::Unit( const char *psz )   { m_sUnit = psz ? psz : ""; return *this; }
 	Parameter &Parameter::ZeroMeans( const char *psz ) { m_sZeroMeans = psz ? psz : ""; return *this; }
 	Parameter &Parameter::Keywords( const char *psz )  { m_sKeywords = psz ? psz : ""; return *this; }
@@ -156,6 +171,18 @@ namespace gamescope::ui
 		m_Enabled = std::move( pred );
 		m_sReason = pszReason;
 		return *this;
+	}
+
+	// Deliberately does NOT walk to Owner(): see the header. A param is
+	// disabled only by its own predicate; the renderer greys a param under a
+	// disabled parent by drawing the whole block dim, which is the inherit
+	// half, and a param that IS the cause stays live because nothing here
+	// asks the parent.
+	std::string Parameter::DisabledReason() const
+	{
+		if ( !m_Enabled || m_Enabled() )
+			return {};
+		return m_sReason;
 	}
 
 	Parameter &Parameter::Param( const char *pszLeaf, const char *pszTitle, AnyBind bind )

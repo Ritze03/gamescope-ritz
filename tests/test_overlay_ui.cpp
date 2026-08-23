@@ -780,3 +780,155 @@ TEST_CASE( "registry: a binding round-trips its value", "[overlay_ui]" )
 	REQUIRE( ui::ValueToString( ui::Value( true ) ) == "on" );
 	REQUIRE( ui::ValueToString( ui::Value( false ) ) == "off" );
 }
+
+// ===========================================================================
+//  P3 part A -- the read side a POPULATED registry needs
+// ===========================================================================
+// P2 had one real area, three rows, and none of the kinds below. P3 part A is
+// the first phase that declares sliders, steppers, units, zero-words and group
+// bands, so these pin the pieces the renderer now reads off a registration.
+
+TEST_CASE( "param: the kind follows from the declaration, never from a name", "[overlay_ui]" )
+{
+	// Registry.cpp's AddParam(): "a param never names its own control".
+	// Options present means Choice, a range means Slider, neither means
+	// Switch. The point is that a caller states a FACT about the value and the
+	// control follows -- so a param cannot be declared as one kind and bound
+	// as another.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
+
+	bool  bOn = false;
+	float flStrength = 0.5f;
+	int   nVariant = 0;
+
+	ui::Entry &e = area.Switch( "image.shaders.vibrancy", "Vibrancy", ui::Bind( &bOn ) ).Help( "h" );
+
+	const ui::Parameter &pSwitch = e.Param( "protect_skin", "Protect skin", ui::Bind( &bOn ) ).Help( "h" );
+	const ui::Parameter &pSlider = e.Param( "strength", "Strength", ui::Bind( &flStrength ) )
+		.Help( "h" ).Range( -1.0f, 1.0f ).Unit( "x" );
+
+	static const ui::Option kOpts[] = { { 0, "a" }, { 1, "b" } };
+	const ui::Parameter &pChoice = e.Param( "variant", "Variant", ui::Bind( &nVariant ), kOpts, 2 ).Help( "h" );
+
+	REQUIRE( pSwitch.GetKind() == ui::Kind::Switch );
+	REQUIRE( pSlider.GetKind() == ui::Kind::Slider );
+	REQUIRE( pChoice.GetKind() == ui::Kind::Choice );
+
+	// A Choice that is also given a range stays a Choice -- "a bounded set of
+	// options" is still a Choice, not a slider over option indices.
+	const ui::Parameter &pBoth = e.Param( "both", "Both", ui::Bind( &nVariant ), kOpts, 2 )
+		.Help( "h" ).Range( 0.0f, 1.0f );
+	REQUIRE( pBoth.GetKind() == ui::Kind::Choice );
+
+	// The renderer reads the bounds and the unit off the declaration.
+	REQUIRE( pSlider.HasRange() );
+	REQUIRE( pSlider.Lo() == -1.0f );
+	REQUIRE( pSlider.Hi() ==  1.0f );
+	REQUIRE( pSlider.Unit() == "x" );
+
+	// And a Slider uses the value column while a Choice does not -- the same
+	// the-kind-decides-it rule an Entry obeys (SPEC §2.3).
+	REQUIRE( pSlider.UsesValue() );
+	REQUIRE_FALSE( pChoice.UsesValue() );
+
+	ui::LawRecorder rec;
+	REQUIRE( reg.SelfTest() == 0 );
+}
+
+TEST_CASE( "param: a param's disabled reason is its own, never its parent's", "[overlay_ui]" )
+{
+	// SPEC §3.13: "A parameter inherits its parent's reason, EXCEPT when it is
+	// the cause of it -- otherwise turning Mute on would disable the Mute
+	// switch, which was a real bug in the first version."
+	//
+	// That exception is why Parameter::DisabledReason() reads only the param's
+	// OWN predicate and never walks to Owner(). The inherit half is the
+	// renderer's job (it dims the whole block); the exception is structural,
+	// and this is what pins it.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+
+	bool  bMuted  = true;
+	float flVolume = -6.0f;
+
+	ui::Entry &e = area.Slider( "audio.volume", "Volume", ui::Bind( &flVolume ) )
+		.Help( "h" ).Range( -60.0f, 0.0f )
+		.DisabledUnless( [ & ]{ return !bMuted; }, "the stream is muted" );
+
+	const ui::Parameter &pMute = e.Param( "mute", "Mute", ui::Bind( &bMuted ) ).Help( "h" );
+
+	// The parent is disabled BECAUSE the param is on...
+	REQUIRE( e.DisabledReason() == "the stream is muted" );
+	// ...and the param that caused it is still live, so it can be turned off.
+	REQUIRE( pMute.DisabledReason().empty() );
+
+	bMuted = false;
+	REQUIRE( e.DisabledReason().empty() );
+
+	ui::LawRecorder rec;
+	REQUIRE( reg.SelfTest() == 0 );
+}
+
+TEST_CASE( "area: an entry remembers the group band open when it was declared", "[overlay_ui]" )
+{
+	// The sheet emits a band when the group index CHANGES, so the index has to
+	// come from the entry rather than from a first-entry range comparison --
+	// otherwise a band declared with no entries under it would still claim the
+	// next one, and the sheet would draw a heading over rows that belong to a
+	// different group.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "display.upscaling", "Upscaling", ui::Section::Display );
+
+	bool b = false;
+	area.Group( "Scaling filter" );
+	area.Switch( "display.a", "A", ui::Bind( &b ) ).Help( "h" );
+	area.Switch( "display.b", "B", ui::Bind( &b ) ).Help( "h" );
+	area.Group( "Empty" );              // declared, never populated
+	area.Group( "Presentation" );
+	area.Switch( "display.c", "C", ui::Bind( &b ) ).Help( "h" );
+
+	REQUIRE( area.Groups().size() == 3 );
+	REQUIRE( area.EntryCount() == 3 );
+	REQUIRE( area.GroupOf( 0 ) == 0 );
+	REQUIRE( area.GroupOf( 1 ) == 0 );
+	// The empty band (index 1) owns nothing, so nothing points at it and the
+	// sheet never emits a heading with no rows under it.
+	REQUIRE( area.GroupOf( 2 ) == 2 );
+	REQUIRE( area.Groups()[ 2 ].sName == "Presentation" );
+
+	ui::LawRecorder rec;
+	REQUIRE( reg.SelfTest() == 0 );
+}
+
+TEST_CASE( "entry: zero-means and unit are declared, never baked into a value", "[overlay_ui]" )
+{
+	// index.html's stated rule: "units are declared with `u`, never baked into
+	// the value string." The frame limiter is the row that needs both -- 0 is
+	// the word "Unlimited", every other value is "<n> fps".
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "display.frame_limiter", "Frame limiter", ui::Section::Display );
+
+	int nFps = 0;
+	ui::Entry &e = area.Stepper( "display.fps_limit", "FPS limit", ui::Bind( &nFps ) )
+		.Help( "h" ).Range( 0.0f, 480.0f ).Step( 10.0f ).Unit( "fps" ).ZeroMeans( "Unlimited" );
+
+	REQUIRE( e.GetKind() == ui::Kind::Stepper );
+	REQUIRE( e.Unit() == "fps" );
+	REQUIRE( e.ZeroWord() == "Unlimited" );
+
+	// ISSUE #67's gap, expressed as arithmetic rather than as a special case.
+	// The valid set is 0 OR [10, 480] -- 1-9 fps is a trap, because at that
+	// rate the overlay itself repaints a few times a second and can no longer
+	// practically be driven, including to undo the setting. With a step of 10
+	// anchored at 0 the reachable set IS {0, 10, 20, ...}: the step is what
+	// creates the hole, so there is no special case for anyone to maintain.
+	REQUIRE( e.StepSize() == 10.0f );
+	REQUIRE( e.Lo() == 0.0f );
+	const int nStep = (int)e.StepSize();
+	REQUIRE( 0 + nStep == 10 );          // up from unlimited lands on the floor
+	REQUIRE( 10 - nStep == 0 );          // down from the floor lands on unlimited
+
+	ui::LawRecorder rec;
+	REQUIRE( reg.SelfTest() == 0 );
+}

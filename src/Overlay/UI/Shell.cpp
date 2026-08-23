@@ -102,6 +102,20 @@ namespace gamescope::ui::shell
 		bool          s_bModeOverridden  = false;
 		InspectorMode s_eMode            = InspectorMode::Configure;
 
+		// P3: the id of the row whose Choice has downgraded to a dropdown AND
+		// is currently open. One string, because exactly one dropdown can be
+		// open at a time -- the alternative (a bool per row) is per-row state,
+		// which is the category this shell exists to not have.
+		//
+		// It is needed at all because controls::Choice() auto-downgrades when
+		// the segmented group does not fit the lane (API.md §12.6 -- "a caller
+		// cannot pick wrong because a caller does not pick"). P2 had one Choice
+		// with three short options and never saw the downgrade; a five-option
+		// filter row in a narrow sheet does, and without a popup the control
+		// would render correctly while doing nothing -- the exact failure mode
+		// issues #25 and #68 were.
+		std::string   s_sOpenDropdown;
+
 		// The one animated quantity: SPEC §8.4's 160 ms region duration,
 		// used for the rail's collapse so the icon rail does not snap.
 		float s_flRailAnim = shelltok::kRailFull;
@@ -137,6 +151,35 @@ namespace gamescope::ui::shell
 		}
 
 		void SelectById( std::span<std::string_view> args );
+		void SetById( std::span<std::string_view> args );
+
+		// P3. The same argument that produced overlay_e2_select above, applied
+		// to the other half of the problem: a registration's SELECTION was
+		// unaddressable from a script, and so is its VALUE.
+		//
+		// This matters more than it sounds. There is no synthetic-pointer
+		// route to a control here -- pointer injection is permanently
+		// forbidden for this project (AUTONOMOUS-DECISIONS.md D4, after
+		// injected clicks twice landed in the user's own windows) -- so
+		// without this, "does this row actually drive the compositor, or does
+		// it merely render?" cannot be answered by anything except a human
+		// with a mouse. That question is not academic: issues #25 (frame
+		// limiter) and #68 (force grab cursor) were both controls that
+		// rendered correctly while doing nothing, and both survived review.
+		//
+		// It writes through Entry::Binding().Set() -- the SAME call a click
+		// makes, not a parallel path -- so a value that lands here lands
+		// exactly where a click's would. Deliberately NOT a way to reach
+		// anything a click cannot: it can only address registered ids, and it
+		// refuses a read-only kind rather than pretending to set one.
+		ConCommand cc_overlay_e2_set(
+			"overlay_e2_set",
+			"Set an E2 row or parameter by id: overlay_e2_set <id> <value>. Writes through the same "
+			"binding a click writes through, which is what makes a binding verifiable without "
+			"pointer input. Values: on/off for a switch, a number otherwise. "
+			"Through gamescopectl the id and value must be ONE quoted argument: "
+			"gamescopectl overlay_e2_set \"display.fps_limit 60\".",
+			SetById );
 
 		ConCommand cc_overlay_e2_select(
 			"overlay_e2_select",
@@ -352,6 +395,69 @@ namespace gamescope::ui::shell
 				s_sSelectedEntry = sRow;
 				s_eMode = ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
 			}
+		}
+
+		// See cc_overlay_e2_set's comment for why this exists. Writes through
+		// the binding, never around it.
+		void SetById( std::span<std::string_view> args )
+		{
+			if ( args.size() < 3 )
+			{
+				console_log.errorf( "usage: overlay_e2_set <id> <value>" );
+				return;
+			}
+
+			const std::string sId( args[ 1 ] );
+			const std::string sVal( args[ 2 ] );
+
+			// A Param is addressable by the id the Prefix Law synthesised,
+			// exactly as the palette addresses it -- so a parameter is as
+			// verifiable as a row, which is the point.
+			const Entry     *pEntry = Reg().FindEntry( sId );
+			const Parameter *pParam = pEntry ? nullptr : Reg().FindParam( sId );
+			if ( !pEntry && !pParam )
+			{
+				console_log.errorf( "no such E2 id: %s", sId.c_str() );
+				return;
+			}
+
+			const Kind    eKind = pEntry ? pEntry->GetKind() : pParam->GetKind();
+			const AnyBind &bind = pEntry ? pEntry->Binding() : pParam->Binding();
+
+			if ( IsReadOnly( eKind ) || !bind.IsBound() )
+			{
+				console_log.errorf( "'%s' is a %s -- there is nothing to set",
+					sId.c_str(), KindName( eKind ) );
+				return;
+			}
+
+			// The TYPE comes from what the binding currently holds, never from
+			// the string's shape. Set() ignores a variant of the wrong
+			// alternative, so guessing here would fail silently -- the one
+			// failure mode this command exists to expose.
+			const Value vNow = bind.Get();
+			if ( std::holds_alternative<bool>( vNow ) )
+			{
+				const bool b = ( sVal == "1" || sVal == "on" || sVal == "true" );
+				bind.Set( Value{ b } );
+			}
+			else if ( std::holds_alternative<int>( vNow ) )
+			{
+				bind.Set( Value{ (int)strtol( sVal.c_str(), nullptr, 10 ) } );
+			}
+			else if ( std::holds_alternative<float>( vNow ) )
+			{
+				bind.Set( Value{ strtof( sVal.c_str(), nullptr ) } );
+			}
+			else
+			{
+				bind.Set( Value{ sVal } );
+			}
+
+			// Read back rather than echo the request: what the binding
+			// actually holds afterwards is the answer, and a setter that
+			// clamped (SetFpsLimit does) should be seen to have clamped.
+			console_log.infof( "%s = %s", sId.c_str(), ValueToString( bind.Get() ).c_str() );
 		}
 
 		// =================================================================
@@ -574,8 +680,171 @@ namespace gamescope::ui::shell
 			       "^I  inspector      Tab  region      Esc  close" );
 		}
 
-		// One Inspector/sheet row of the Row grammar, for the real area.
-		// P3 generalises this; P2 needs exactly the kinds setup.shell uses.
+		// =================================================================
+		//  The row painter -- SPEC §2.2's grammar, one implementation
+		// =================================================================
+		// SPEC §3.13's disabled treatment ("row x 0.55") is applied with
+		// ui::ScopedDim, which sits under Col()/Accent() in Colors.cpp rather
+		// than at the call sites here -- see Colors.h for why the control
+		// atoms cannot be dimmed any other way.
+
+		// The value string for a row, with SPEC §2.3's two modifiers applied
+		// in the order the spec states them: ZeroMeans replaces the whole
+		// string (0 is a WORD -- "Unlimited", not "0 fps"), and the unit is
+		// appended, never baked into the value by a call site. index.html's
+		// rule, verbatim: "units are declared with `u`, never baked into the
+		// value string."
+		//
+		// Templated over Entry and Parameter deliberately. They are distinct
+		// TYPES on purpose -- that is what makes "a Param owning a Param"
+		// unsayable (Registry.h) -- but SPEC §5.3 requires a Param to render
+		// identically to the Entry it could be promoted into. One function
+		// over both is what guarantees that; two functions would be two things
+		// to keep in step, and they would drift.
+		template <typename TDecl>
+		std::string FormatDeclValue( const TDecl &decl )
+		{
+			if ( !decl.Binding().IsBound() )
+				return {};
+			const Value v = decl.Binding().Get();
+
+			if ( !decl.ZeroWord().empty() )
+			{
+				const bool bZero =
+					( std::holds_alternative<int>( v )   && std::get<int>( v ) == 0 ) ||
+					( std::holds_alternative<float>( v ) && std::get<float>( v ) == 0.0f );
+				if ( bZero )
+					return decl.ZeroWord();
+			}
+
+			std::string s = ValueToString( v );
+			if ( !decl.Unit().empty() )
+				s += " " + decl.Unit();
+			return s;
+		}
+
+		// The four kinds an Entry and a Parameter both have. Entry-only kinds
+		// (Action, Facts, Meter, Composite) stay in DrawEntryRow, because a
+		// Parameter cannot be one and the type system should keep saying so.
+		//
+		// A Slider's INT-vs-FLOAT form is decided by what the binding actually
+		// holds, never by a second declaration -- the same rule that makes the
+		// slider handle come from SliderBehavior() rather than a constant
+		// (Controls.h). A caller cannot declare an int slider and bind a float.
+		template <typename TDecl>
+		bool DrawSharedControl( const TDecl &decl, const RowCtx &row, const char *pszId,
+		                        const std::string &sPopupKey )
+		{
+			if ( !decl.Binding().IsBound() )
+				return false;
+
+			const Value v = decl.Binding().Get();
+			switch ( decl.GetKind() )
+			{
+				case Kind::Switch:
+				{
+					bool b = std::holds_alternative<bool>( v ) && std::get<bool>( v );
+					if ( controls::Switch( row, pszId, &b ) )
+					{
+						decl.Binding().Set( Value{ b } );
+						return true;
+					}
+					return false;
+				}
+				case Kind::Slider:
+				{
+					if ( std::holds_alternative<int>( v ) )
+					{
+						int n = std::get<int>( v );
+						const int nDef = std::holds_alternative<int>( decl.DefaultValue() )
+							? std::get<int>( decl.DefaultValue() ) : 0;
+						if ( controls::SliderInt( row, pszId, &n, (int)decl.Lo(), (int)decl.Hi(),
+							nDef, std::holds_alternative<int>( decl.DefaultValue() ) ) )
+						{
+							decl.Binding().Set( Value{ n } );
+							return true;
+						}
+						return false;
+					}
+					float f = std::holds_alternative<float>( v ) ? std::get<float>( v ) : 0.0f;
+					const bool bHasDef = std::holds_alternative<float>( decl.DefaultValue() );
+					const float flDef = bHasDef ? std::get<float>( decl.DefaultValue() ) : 0.0f;
+					if ( controls::Slider( row, pszId, &f, decl.Lo(), decl.Hi(), flDef, bHasDef ) )
+					{
+						decl.Binding().Set( Value{ f } );
+						return true;
+					}
+					return false;
+				}
+				case Kind::Stepper:
+				{
+					int n = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
+					const int nStep = decl.StepSize() > 0.0f ? (int)decl.StepSize() : 1;
+					if ( controls::Stepper( row, pszId, &n, (int)decl.Lo(), (int)decl.Hi(), nStep ) )
+					{
+						decl.Binding().Set( Value{ n } );
+						return true;
+					}
+					return false;
+				}
+				case Kind::Choice:
+				{
+					int n = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
+					const bool bOpen = ( s_sOpenDropdown == sPopupKey );
+					const controls::ChoiceResult res = controls::Choice(
+						row, pszId, &n, decl.Options().data(), decl.Options().size(), bOpen );
+
+					if ( res.bChanged )
+					{
+						decl.Binding().Set( Value{ n } );
+						return true;
+					}
+					if ( !res.bSegmented )
+					{
+						// The dropdown half. Opened here, drawn here, closed
+						// here -- so a downgraded Choice is a working control
+						// rather than a correct-looking one that does nothing.
+						if ( res.bWantsPopup )
+						{
+							s_sOpenDropdown = sPopupKey;
+							ImGui::OpenPopup( "##dd" );
+						}
+						const ImRect rcRow = row.Bounds();
+						ImGui::SetNextWindowPos( ImVec2( rcRow.Min.x, rcRow.Max.y ) );
+						if ( ImGui::BeginPopup( "##dd" ) )
+						{
+							bool bPicked = false;
+							for ( const Option &opt : decl.Options() )
+							{
+								if ( ImGui::Selectable( opt.pszLabel ? opt.pszLabel : "",
+									opt.nValue == n ) )
+								{
+									decl.Binding().Set( Value{ opt.nValue } );
+									bPicked = true;
+								}
+							}
+							ImGui::EndPopup();
+							if ( bPicked )
+							{
+								s_sOpenDropdown.clear();
+								return true;
+							}
+						}
+						else if ( bOpen )
+						{
+							// ImGui closed it (click-away, Esc). Track that,
+							// or the caret would stay lit forever.
+							s_sOpenDropdown.clear();
+						}
+					}
+					return false;
+				}
+				default:
+					return false;
+			}
+		}
+
+		// One Inspector/sheet row of the Row grammar.
 		bool DrawEntryRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
 		                   bool bSelected )
 		{
@@ -599,13 +868,27 @@ namespace gamescope::ui::shell
 			}
 			HLine( rcRow.Min.x, rcRow.Max.x, rcRow.Max.y - Hairline(), Col( Role::Line ) );
 
+			// SPEC §3.13: a disabled row draws at 0.55 AND owes a reason,
+			// which Configure shows. The reason is the predicate's own -- a
+			// row is never greyed by a flag someone set separately, so a
+			// greyed control that cannot say why is unrepresentable.
+			const bool bDisabled = !entry.DisabledReason().empty();
+			const ScopedDim dim( bDisabled );
+
 			// The value string. Facts summarise themselves; everything else
-			// prints its bound value.
+			// prints its bound value, with unit and zero-word applied.
 			std::string sValue;
 			if ( entry.GetKind() == Kind::Facts )
 				sValue = entry.SummaryText();
-			else if ( entry.Binding().IsBound() )
-				sValue = ValueToString( entry.Binding().Get() );
+			else if ( entry.GetKind() == Kind::Meter )
+			{
+				char sz[ 32 ];
+				snprintf( sz, sizeof( sz ), "%.0f%s", entry.Scalar(),
+					entry.Unit().empty() ? "" : entry.Unit().c_str() );
+				sValue = sz;
+			}
+			else
+				sValue = FormatDeclValue( entry );
 
 			ImRect rcLabel, rcValue;
 			const float flValueW = entry.UsesValue() && !sValue.empty()
@@ -613,37 +896,39 @@ namespace gamescope::ui::shell
 			row.SplitLabelZone( flValueW, &rcLabel, &rcValue );
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
-			       TypeRole::Label, bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
+			       TypeRole::Label,
+			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 			       entry.Title().c_str() );
 			if ( flValueW > 0.0f )
 				Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
-				       TypeRole::Value, Col( Role::TextPrimary ), sValue.c_str(), TextAlign::Right );
+				       TypeRole::Value, Col( Role::TextPrimary ),
+				       sValue.c_str(), TextAlign::Right );
 
 			// The control. Every atom is right-bound by construction --
 			// RowCtx has no other kind of allocator (see Row.h).
+			//
+			// BeginDisabled() is what makes a greyed row NON-INTERACTIVE;
+			// ScopedDim above is what makes it LOOK greyed. Both are needed --
+			// the kit paints on the draw list, which ImGui's own alpha never
+			// reaches -- and both are driven off the same one predicate, so
+			// they cannot disagree about which rows are disabled.
+			if ( bDisabled )
+				ImGui::BeginDisabled();
+
 			switch ( entry.GetKind() )
 			{
 				case Kind::Switch:
-				{
-					const Value v = entry.Binding().Get();
-					bool b = std::holds_alternative<bool>( v ) && std::get<bool>( v );
-					if ( controls::Switch( row, "sw", &b ) )
-						entry.Binding().Set( Value{ b } );
-					break;
-				}
+				case Kind::Slider:
+				case Kind::Stepper:
 				case Kind::Choice:
-				{
-					const Value v = entry.Binding().Get();
-					int n = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
-					const controls::ChoiceResult res =
-						controls::Choice( row, "ch", &n, entry.Options().data(), entry.Options().size() );
-					if ( res.bChanged )
-						entry.Binding().Set( Value{ n } );
+					DrawSharedControl( entry, row, "ctl", entry.Id() );
 					break;
-				}
 				case Kind::Action:
 					if ( controls::Verb( row, "verb", entry.Verb().c_str() ) )
 						entry.Invoke();
+					break;
+				case Kind::Meter:
+					controls::Meter( row, (float)entry.Scalar(), entry.Lo(), entry.Hi() );
 					break;
 				case Kind::Facts:
 				{
@@ -664,8 +949,60 @@ namespace gamescope::ui::shell
 					break;   // the rest carry no control
 			}
 
+			if ( bDisabled )
+				ImGui::EndDisabled();
+
 			ImGui::PopID();
 			return bClicked;
+		}
+
+		// SPEC §2.5's group band: "Mono 500 10.5 UPPER TextMeta, 16 above /
+		// 8 below, no box, no fill, no border. Right slot carries at most one
+		// thing: a `4 / 7` count for a switch set, or all/none, or nothing."
+		//
+		// The count is computed here from the band's own entries rather than
+		// supplied by a call site -- GroupCount() takes a name and nothing
+		// else. That is the same rule as the rail counter (SPEC §8.1: "the
+		// counter means exactly one thing"): a number nobody can type is a
+		// number that cannot lie about what it counts.
+		float DrawGroupBand( const Area &area, size_t nGroup, const Rect &rcCol, float y )
+		{
+			const Area::GroupBand &band = area.Groups()[ nGroup ];
+			if ( band.sName.empty() )
+				return y;
+
+			y += Px( tok::kGroupSpaceAbove );
+			const float flH = Px( 14.0f );
+
+			std::string sUpper = band.sName;
+			for ( char &c : sUpper )
+				c = (char)toupper( (unsigned char)c );
+			Label( { rcCol.x0, y, rcCol.x1, y + flH }, TypeRole::Section,
+			       Col( Role::TextMeta ), sUpper.c_str() );
+
+			if ( band.bCounted )
+			{
+				int nOn = 0, nTotal = 0;
+				for ( size_t i = 0; i < area.EntryCount(); ++i )
+				{
+					const Entry &e = area.EntryAt( i );
+					if ( area.GroupOf( i ) != nGroup || e.GetKind() != Kind::Switch )
+						continue;
+					++nTotal;
+					const Value v = e.Binding().Get();
+					if ( std::holds_alternative<bool>( v ) && std::get<bool>( v ) )
+						++nOn;
+				}
+				if ( nTotal )
+				{
+					char sz[ 24 ];
+					snprintf( sz, sizeof( sz ), "%d / %d", nOn, nTotal );
+					Label( { rcCol.x0, y, rcCol.x1, y + flH }, TypeRole::Section,
+					       Col( Role::TextMeta ), sz, TextAlign::Right );
+				}
+			}
+
+			return y + flH + Px( tok::kGroupSpaceBelow );
 		}
 
 		void DrawSheetBody( const Rect &rc, const Area *pArea )
@@ -717,11 +1054,25 @@ namespace gamescope::ui::shell
 				const float flPad   = Px( tok::kSheetPad );
 				const float flColW  = rc.Width() - 2.0f * flPad;
 				const Lane  lane    = Lane::ForColumn( flColW / Scale() );
+				const Rect  rcCol   { rc.x0 + flPad, rc.y0, rc.x0 + flPad + flColW, rc.y1 };
 				float       y       = rc.y0 + Px( tok::kM );
+
+				// A band is emitted when the group index CHANGES, so a group
+				// declared with no entries under it draws nothing at all --
+				// an empty heading is the one thing a band must never be.
+				size_t nLastGroup = (size_t)-1;
 
 				for ( size_t i = 0; i < pArea->EntryCount(); ++i )
 				{
 					const Entry &entry = pArea->EntryAt( i );
+
+					const size_t nGroup = pArea->GroupOf( i );
+					if ( nGroup != nLastGroup && nGroup < pArea->Groups().size() )
+					{
+						y = DrawGroupBand( *pArea, nGroup, rcCol, y );
+						nLastGroup = nGroup;
+					}
+
 					const bool bSel = ( SelectedEntry() == &entry );
 					if ( DrawEntryRow( entry, lane, rc.x0 + flPad, y, bSel ) )
 					{
@@ -867,30 +1218,67 @@ namespace gamescope::ui::shell
 			DrawEntryRow( entry, lane, rcIn.x0, y, false );
 			y += Px( tok::kRowH );
 
+			// index.html's `parameters  <n> of 6` header. The denominator is
+			// the Six Budget itself, so the header is also the place the
+			// budget is visible to a user rather than only to a test.
+			if ( entry.ParamCount() )
+			{
+				y += Px( tok::kM );
+				char szHead[ 48 ];
+				snprintf( szHead, sizeof( szHead ), "PARAMETERS   %d of 6", (int)entry.ParamCount() );
+				Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
+				       Col( Role::TextMeta ), szHead );
+				y += Px( 20.0f );
+			}
+
 			for ( size_t i = 0; i < entry.ParamCount(); ++i )
 			{
 				const Parameter &param = entry.ParamAt( i );
 				const RowCtx row = RowCtx::ForRow( lane, rcIn.x0, y );
 				HLine( row.Bounds().Min.x, row.Bounds().Max.x, row.Bounds().Max.y - Hairline(), Col( Role::Line ) );
 
+				// SPEC §3.13's inheritance: a param under a disabled parent is
+				// itself disabled, EXCEPT when it is the cause -- which is why
+				// this is an OR of two independent predicates rather than a
+				// walk up to the owner. `bReason` is the param's own; `sReason`
+				// (the parent's, computed above) supplies the inherit half.
+				const std::string sParamReason = param.DisabledReason();
+				const bool bParamDisabled = !sParamReason.empty() || !sReason.empty();
+				const ScopedDim dimParam( bParamDisabled );
+
 				ImRect rcLabel, rcValue;
-				std::string sValue = param.Binding().IsBound()
-					? ValueToString( param.Binding().Get() ) : std::string();
-				row.SplitLabelZone( sValue.empty() ? 0.0f : MeasureText( TypeRole::Value, sValue.c_str() ).x,
-				                    &rcLabel, &rcValue );
+				const std::string sValue = FormatDeclValue( param );
+				const float flValueW = param.UsesValue() && !sValue.empty()
+					? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
+				row.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
+				if ( flValueW > 0.0f )
+					Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
+					       TypeRole::Value, Col( Role::TextPrimary ),
+					       sValue.c_str(), TextAlign::Right );
 
 				ImGui::PushID( (int)i + 1000 );
-				if ( param.GetKind() == Kind::Switch && param.Binding().IsBound() )
-				{
-					Value v = param.Binding().Get();
-					bool b = std::holds_alternative<bool>( v ) ? std::get<bool>( v ) : false;
-					if ( controls::Switch( row, "psw", &b ) )
-						param.Binding().Set( Value{ b } );
-				}
+				if ( bParamDisabled )
+					ImGui::BeginDisabled();
+				// The SAME painter the sheet row uses -- SPEC §5.3's "a
+				// promoted parameter ends up in the Sheet" only holds if the
+				// two are literally one code path.
+				DrawSharedControl( param, row, "pctl", param.Id() );
+				if ( bParamDisabled )
+					ImGui::EndDisabled();
 				ImGui::PopID();
 				y += Px( tok::kRowH );
+
+				// The param's own reason, under its row. The parent's is
+				// already printed once at the top; repeating it per param
+				// would be noise.
+				if ( !sParamReason.empty() )
+				{
+					y = DrawWrapped( rcIn, TypeRole::Meta, Col( Role::WarnText ),
+					                 sParamReason.c_str(), y ) + Px( tok::kXS );
+				}
 			}
 		}
 

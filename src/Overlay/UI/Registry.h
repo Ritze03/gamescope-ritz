@@ -245,6 +245,28 @@ namespace gamescope::ui
 		const Entry *Owner() const       { return m_pOwner; }
 		const std::vector<Option> &Options() const { return m_Options; }
 
+		// ---- P3 read side ------------------------------------------------
+		// SPEC §5.3: a Param is drawn "at the same 44 height and the same
+		// grammar" as its parent, and §5.2's promotion path turns one into an
+		// Entry outright. So the renderer must be able to ask a Param exactly
+		// what it asks an Entry -- these are Entry's accessors, name for name,
+		// and deliberately not one more. A Param still cannot SAY anything an
+		// Entry cannot; it can now only be READ the same way.
+		bool  HasRange() const           { return m_bHasRange; }
+		float Lo() const                 { return m_flLo; }
+		float Hi() const                 { return m_flHi; }
+		float StepSize() const           { return m_flStep; }
+		const std::string &Unit() const  { return m_sUnit; }
+		const std::string &ZeroWord() const { return m_sZeroMeans; }
+		bool  UsesValue() const          { return UsesValueColumn( m_eKind ); }
+
+		// SPEC §3.13: "A parameter inherits its parent's reason, EXCEPT when
+		// it is the cause of it." That exception is why this reads the Param's
+		// OWN predicate and never walks to Owner() -- a param that gates its
+		// parent must stay reachable while the parent is greyed, which was a
+		// real bug in the first version.
+		std::string DisabledReason() const;
+
 	private:
 		friend class Entry;
 
@@ -297,6 +319,7 @@ namespace gamescope::ui
 		const std::string &Title() const    { return m_sTitle; }
 		const std::string &HelpText() const { return m_sHelp; }
 		const std::string &Unit() const     { return m_sUnit; }
+		const std::string &ZeroWord() const { return m_sZeroMeans; }
 		Kind  GetKind() const               { return m_eKind; }
 		CompositeKind GetCompositeKind() const { return m_eComposite; }
 		const AnyBind &Binding() const      { return m_Bind; }
@@ -440,6 +463,13 @@ namespace gamescope::ui
 
 		struct GroupBand { std::string sName; bool bCounted = false; size_t nFirstEntry = 0; };
 		const std::vector<GroupBand> &Groups() const { return m_Groups; }
+
+		// Which band entry `i` sits under. Recorded on the Entry when it was
+		// emitted -- i.e. the band that was open at the moment of declaration
+		// -- rather than re-derived from nFirstEntry ranges at draw time. The
+		// two would agree today; only one of them stays right if a band is
+		// ever declared with no entries under it.
+		size_t GroupOf( size_t i ) const { return m_Entries[ i ]->m_nGroup; }
 
 	private:
 		friend class Registry;
