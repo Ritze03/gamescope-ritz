@@ -725,9 +725,11 @@ namespace gamescope
 	// Measure<X>Module()/Draw<X>Module() shape MeasureFpsModule()/
 	// DrawFpsModuleContent() established. A module still reports zero size
 	// from its measure function when its own per-module `enabled` toggle
-	// (config::FpsDisplaySettings::cpu_enabled/gpu_enabled/media_enabled)
-	// is off -- this framework's contract for "not present" is unchanged:
-	// it draws nothing and reserves no stack space or gap.
+	// (config::FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/
+	// media_enabled -- issue #70 gave FPS the same per-module toggle the
+	// other three already had) is off -- this framework's contract for
+	// "not present" is unchanged: it draws nothing and reserves no stack
+	// space or gap.
 	//
 	// Order is FIXED and EDGE-RELATIVE, not a fixed top-to-bottom screen
 	// order: kModuleOrder's first entry (FPS) always ends up the module
@@ -783,6 +785,7 @@ namespace gamescope
 		ImVec2 unitSize{};
 		char szMs[16] = "";
 		ImVec2 msSize{};
+		bool bShowMs = false; // issue #71: frametime_enabled && !bAdditive
 		ImVec2 textSize{};
 		bool bShowGraph = false;
 		bool bShowPercentiles = false;
@@ -847,13 +850,22 @@ namespace gamescope
 		// -> frametime in ms (accent-tinted) -- was one flat "%3d FPS" run
 		// in a single color/size; split so the unit and the ms readout can
 		// each carry their own spec'd size/color (gap list item 6).
+		// Issue #73: the unit label is independently hideable
+		// (fps_label_enabled) so the module can show just the number --
+		// zero-sized when off, same "not present reserves no space"
+		// contract MeasureModule() uses for a whole disabled module.
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.unitSize = ImGui::CalcTextSize( kUnitText );
+		L.unitSize = cfg.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
 		ImGui::PopFont();
 
+		// Issue #71: the numeric frametime readout, independently of
+		// graph_enabled's Row 2 graph -- off either because the user
+		// disabled it (frametime_enabled) or because additive mode already
+		// drops it (L.bAdditive, pre-existing rule, unchanged).
+		L.bShowMs = cfg.frametime_enabled && !L.bAdditive;
 		snprintf( L.szMs, sizeof( L.szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		L.msSize = L.bAdditive ? ImVec2( 0.0f, 0.0f ) : ImGui::CalcTextSize( L.szMs );
+		L.msSize = L.bShowMs ? ImGui::CalcTextSize( L.szMs ) : ImVec2( 0.0f, 0.0f );
 		ImGui::PopFont();
 
 		L.textSize = ImVec2( L.numSize.x + L.unitSize.x + L.msSize.x, std::max( L.numSize.y, std::max( L.unitSize.y, L.msSize.y ) ) );
@@ -928,16 +940,19 @@ namespace gamescope
 			pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
 		cursor.x += L.numSize.x;
 
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
-		if ( L.bInverted )
-			AddTextInverted( pDrawList, unitPos, kUnitText );
-		else
-			pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
+		if ( cfg.fps_label_enabled ) // issue #73
+		{
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
+			if ( L.bInverted )
+				AddTextInverted( pDrawList, unitPos, kUnitText );
+			else
+				pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
+			ImGui::PopFont();
+		}
 		cursor.x += L.unitSize.x;
-		ImGui::PopFont();
 
-		if ( !L.bAdditive )
+		if ( L.bShowMs ) // issue #71
 		{
 			// Spec §10: frametime readout color oklch(.86 .09 218) = #89E0F8
 			// -- close to, but distinct from, the general accent-value token
@@ -1306,6 +1321,10 @@ namespace gamescope
 		{
 		case ModuleKind::Fps:
 		{
+			// Issue #70: FPS now has its own enable toggle, same "(0,0) ==
+			// not present" contract Cpu/Gpu/Media already use below.
+			if ( !cfg.fps_enabled )
+				return ImVec2( 0.0f, 0.0f );
 			outFpsLayout = MeasureFpsModule( nFps );
 			return ImVec2( outFpsLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outFpsLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
 		}
@@ -1435,13 +1454,48 @@ namespace gamescope
 		const float flClampedY = std::clamp( flStartY, 0.0f, std::max( 0.0f, io_display.y - flStackHeight ) );
 
 		// Pass 2: draw each present module at its stacked position.
+		//
+		// Issue #72: every module's box is drawn at flStackWidth (the
+		// widest present module this frame), not its own sizes[i].x, so
+		// backdrops line up into one aligned block instead of each module
+		// keeping its natural, ragged width. Content itself (text, graph,
+		// percentile row) stays exactly where Draw*ModuleContent() already
+		// puts it -- left-aligned off `origin + backdrop_padding`, same as
+		// before -- only the backdrop rectangle widens to the right.
+		//
+		// Width strategy: recomputed every frame (flStackWidth above, from
+		// this frame's real measured content), not cached at startup or
+		// grow-only. A once-at-startup width would visibly jump the first
+		// time a module changes shape (a module toggled on/off mid-session,
+		// GPU going from "unavailable" to found, a media title's length
+		// changing on track change) -- exactly the "hold stable, then jump
+		// later" failure this issue calls out. Recomputing instead sounds
+		// like it risks the opposite failure (twitching every frame as
+		// values change), but it doesn't in practice: every numeric field
+		// in every module (FPS, CPU load/RAM, GPU busy/VRAM/temp/power) is
+		// already formatted through fixed printf field widths (this file's
+		// long-standing "digits do not jitter" convention -- see
+		// MeasureFpsModule()'s szNum comment), so a value changing --
+		// 9 fps to 144 fps, CPU load crossing 100% -- does not itself
+		// change any module's measured width frame to frame. flStackWidth
+		// only actually changes on genuine content-shape events (a module's
+		// enabled toggle, GPU/CPU/media availability flipping, a media
+		// track's title/artist length changing on song change) -- rare,
+		// discrete events where a re-layout is exactly what should happen,
+		// not continuous per-frame noise. So "recompute every frame" and
+		// "only move on a real change" are the same behavior here, given
+		// the fixed-width-field discipline already in place; a separate
+		// once-per-N-frames cadence or a one-way grow-only latch would only
+		// add complexity (and, for grow-only, a width that never shrinks
+		// back down after a long media title scrolls by) without buying
+		// any additional stability.
 		float flCursorY = flClampedY;
 		for ( int i = 0; i < kModuleCount; ++i )
 		{
 			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
 			if ( !bPresent )
 				continue;
-			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), sizes[i], fpsLayout, cpuLayout, gpuLayout, mediaLayout );
+			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), ImVec2( flStackWidth, sizes[i].y ), fpsLayout, cpuLayout, gpuLayout, mediaLayout );
 			flCursorY += sizes[i].y + cfg.module_spacing;
 		}
 	}
@@ -1976,13 +2030,15 @@ namespace gamescope
 	// a per-module tab would either duplicate the same control four times or
 	// arbitrarily pick one module to own them, both worse than a fifth
 	// "General" tab holding exactly the settings that are actually general.
-	// The master "Show FPS counter" toggle also lives in General: despite
-	// its name (a pre-#27 holdover from when this readout only ever showed
-	// FPS -- left as-is here since renaming it further is a separate,
-	// cosmetic change this reorg doesn't need to make) it gates the *entire*
-	// panel below it, CPU/GPU/Media included (see FpsDisplay_AddLayer()'s
-	// own `if ( !s_Settings.fps_display.enabled ) return;`), so General is
-	// the only tab it can honestly sit in.
+	// The master "Show System Monitor" toggle also lives in General: it
+	// gates the *entire* panel below it, CPU/GPU/Media (and, since #70,
+	// FPS's own fps_enabled) included (see FpsDisplay_AddLayer()'s own
+	// `if ( !s_Settings.fps_display.enabled ) return;`), so General is the
+	// only tab it can honestly sit in. Issue #70 renamed this from "Show
+	// FPS counter" -- a pre-#27 holdover from when this readout only ever
+	// showed FPS -- now that FPS has its own per-module toggle like every
+	// other module, the master's name no longer needs to double as FPS's
+	// own enable, and can just say what it actually gates.
 	//
 	// Each per-module tab keeps exactly that module's own two concerns: its
 	// content toggles (FPS's graph/percentile rows; CPU/GPU/Media's own
@@ -2000,7 +2056,12 @@ namespace gamescope
 		// checkbox visual carried no semantic weight the switch doesn't also
 		// carry. Swept to widgets::Toggle for consistency with every other
 		// on/off control in this panel.
-		bChanged |= widgets::Toggle( "Show FPS counter", &cfg.enabled );
+		//
+		// Issue #70: renamed from "Show FPS counter" to "Show System
+		// Monitor" -- it gates the whole panel (CPU/GPU/Media/FPS), not
+		// just an FPS readout, and now that FPS has its own fps_enabled
+		// toggle (DrawFpsTab below) the old name's double duty is gone.
+		bChanged |= widgets::Toggle( "Show System Monitor", &cfg.enabled );
 
 		ImGui::BeginDisabled( !cfg.enabled );
 
@@ -2070,22 +2131,37 @@ namespace gamescope
 		ImGui::EndDisabled(); // !cfg.enabled
 	}
 
-	// FPS module's own tab: Row 2/Row 3 toggles (frametime graph, percentile
-	// row -- both content that belongs to the FPS module specifically, see
-	// MeasureFpsModule()) plus its issue #29 colour override. There is no
-	// separate "FPS module enabled" switch to put here -- unlike CPU/GPU/
-	// Media, the FPS module has always shared the General tab's master
-	// "Show FPS counter" toggle as its own enable (kModuleOrder's first,
-	// always-present entry) rather than getting an independent one, and this
-	// reorg doesn't add one that didn't exist before.
+	// FPS module's own tab: its issue #70 enable switch, Row 1's frametime-
+	// readout and label toggles (issues #71/#73), Row 2/Row 3 toggles
+	// (frametime graph, percentile row -- both content that belongs to the
+	// FPS module specifically, see MeasureFpsModule()), plus its issue #29
+	// colour override. Before #70, FPS had no switch of its own here --
+	// unlike CPU/GPU/Media it shared the General tab's master toggle as its
+	// own enable (kModuleOrder's first, always-present entry). Now it gets
+	// the same independent switch every other module already has; the
+	// master keeps gating the whole panel (renamed "Show System Monitor"
+	// in DrawGeneralTab), same relationship it already has to CPU/GPU/Media.
 	static void DrawFpsTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
 
-		// Spec §11's "ROWS checkbox list" -- Row 2 (frametime graph) / Row 3
-		// (percentile stats), independently toggleable, sharing every other
-		// setting on the General tab (font size, backdrop, blend mode,
-		// opacity) rather than getting their own.
+		// Issue #70: FPS module's own enable, same shape/placement as
+		// CPU/GPU/Media's own toggle at the top of their tabs below.
+		bChanged |= widgets::Toggle( "FPS module", &cfg.fps_enabled );
+
+		// Issue #73: toggling this off hides Row 1's " FPS" unit label,
+		// leaving just the number. FPS-only as asked -- see this field's
+		// ConfigSchema.h comment for whether CPU/GPU/Media should get the
+		// same control.
+		bChanged |= widgets::Toggle( "\"FPS\" label", &cfg.fps_label_enabled );
+
+		// Spec §11's "ROWS checkbox list" -- Row 1's numeric frametime
+		// readout (issue #71, distinct from the Row 2 graph below), Row 2
+		// (frametime graph), Row 3 (percentile stats) -- independently
+		// toggleable, sharing every other setting on the General tab (font
+		// size, backdrop, blend mode, opacity) rather than getting their
+		// own.
+		bChanged |= widgets::Toggle( "Frametime readout (ms)", &cfg.frametime_enabled );
 		bChanged |= widgets::Toggle( "Frametime graph", &cfg.graph_enabled );
 		bChanged |= widgets::Toggle( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
 

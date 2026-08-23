@@ -74,6 +74,37 @@ namespace gamescope::config
         bool graph_enabled = true;
         bool percentiles_enabled = true;
 
+        // Issue #70: `enabled` above used to double as both "HUD as a
+        // whole" and "FPS module specifically" -- the FPS module was the
+        // only one of the four (kModuleOrder's Fps/Cpu/Gpu/Media) with no
+        // toggle of its own, precisely because the master was standing in
+        // for it. This is that toggle, same shape/default as
+        // cpu_enabled/gpu_enabled/media_enabled below. `enabled` now means
+        // only "gate the whole panel" (renamed to "Show System Monitor" in
+        // the settings panel); this field means "show the FPS module
+        // within it," checked in MeasureModule()'s ModuleKind::Fps case the
+        // same way the other three modules already check their own field.
+        bool fps_enabled = true;
+
+        // Issue #71: the numeric frametime readout ("16.7 ms", drawn next
+        // to the FPS number in Row 1 -- MeasureFpsModule()'s L.szMs) is a
+        // distinct element from graph_enabled's Row 2 frametime *graph*
+        // above; this toggles the numeric readout on its own, default true
+        // to match every other row toggle's default-on choice. Auto-off
+        // whenever blend_mode is "additive" is unaffected -- that stays a
+        // separate, mode-driven rule (see FpsDisplay.cpp's L.bAdditive
+        // handling), this field only controls the normal alpha/inverted
+        // case.
+        bool frametime_enabled = true;
+
+        // Issue #73: hides Row 1's " FPS" unit label (kUnitText in
+        // FpsDisplay.cpp) so the module shows just the number. FPS-only, as
+        // asked -- CPU/GPU/Media's own row labels ("CPU", "RAM", "GPU",
+        // "VRAM", "MEDIA") are a different, multi-label-per-row shape and
+        // are deliberately not covered by this same field; see the issue's
+        // own report for why generalizing wasn't done silently.
+        bool fps_label_enabled = true;
+
         // Issue #27 (System Monitor part 1/3): one of the 9 anchor strings
         // Notifications.cpp's kPlacements/OverlaySettings::notification_placement
         // already use ("top-left" .. "bottom-right", issue #26's model) --
