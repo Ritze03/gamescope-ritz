@@ -155,6 +155,15 @@ src = [
   'Overlay/PanelConfig.cpp',
   'Overlay/LogCapture.cpp',
   'Overlay/PanelLog.cpp',
+  # E2 overlay kit (superdoc/planning/redesign/round-2/e2-inspector-plus).
+  # Phase 1: foundation only -- nothing here is called by the running UI yet.
+  'Overlay/UI/Tokens.cpp',
+  'Overlay/UI/Colors.cpp',
+  'Overlay/UI/Lane.cpp',
+  'Overlay/UI/Row.cpp',
+  'Overlay/UI/Band.cpp',
+  'Overlay/UI/Registry.cpp',
+  'Overlay/UI/Controls.cpp',
   'backend.cpp',
   'x11cursor.cpp',
   'InputEmulation.cpp',
