@@ -785,6 +785,7 @@ namespace gamescope
 		ImVec2 unitSize{};
 		char szMs[16] = "";
 		ImVec2 msSize{};
+		bool bShowMs = false; // issue #71: frametime_enabled && !bAdditive
 		ImVec2 textSize{};
 		bool bShowGraph = false;
 		bool bShowPercentiles = false;
@@ -853,9 +854,14 @@ namespace gamescope
 		L.unitSize = ImGui::CalcTextSize( kUnitText );
 		ImGui::PopFont();
 
+		// Issue #71: the numeric frametime readout, independently of
+		// graph_enabled's Row 2 graph -- off either because the user
+		// disabled it (frametime_enabled) or because additive mode already
+		// drops it (L.bAdditive, pre-existing rule, unchanged).
+		L.bShowMs = cfg.frametime_enabled && !L.bAdditive;
 		snprintf( L.szMs, sizeof( L.szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		L.msSize = L.bAdditive ? ImVec2( 0.0f, 0.0f ) : ImGui::CalcTextSize( L.szMs );
+		L.msSize = L.bShowMs ? ImGui::CalcTextSize( L.szMs ) : ImVec2( 0.0f, 0.0f );
 		ImGui::PopFont();
 
 		L.textSize = ImVec2( L.numSize.x + L.unitSize.x + L.msSize.x, std::max( L.numSize.y, std::max( L.unitSize.y, L.msSize.y ) ) );
@@ -939,7 +945,7 @@ namespace gamescope
 		cursor.x += L.unitSize.x;
 		ImGui::PopFont();
 
-		if ( !L.bAdditive )
+		if ( L.bShowMs ) // issue #71
 		{
 			// Spec §10: frametime readout color oklch(.86 .09 218) = #89E0F8
 			// -- close to, but distinct from, the general accent-value token
@@ -2118,16 +2124,16 @@ namespace gamescope
 		ImGui::EndDisabled(); // !cfg.enabled
 	}
 
-	// FPS module's own tab: its issue #70 enable switch, Row 2/Row 3
-	// toggles (frametime graph, percentile row -- both content that
-	// belongs to the FPS module specifically, see MeasureFpsModule()) plus
-	// its issue #29 colour override. Before #70, FPS had no switch of its
-	// own here -- unlike CPU/GPU/Media it shared the General tab's master
-	// toggle as its own enable (kModuleOrder's first, always-present
-	// entry). Now it gets the same independent switch every other module
-	// already has; the master keeps gating the whole panel (renamed "Show
-	// System Monitor" in DrawGeneralTab), same relationship it already has
-	// to CPU/GPU/Media.
+	// FPS module's own tab: its issue #70 enable switch, Row 1's numeric
+	// frametime-readout toggle (issue #71), Row 2/Row 3 toggles (frametime
+	// graph, percentile row -- both content that belongs to the FPS module
+	// specifically, see MeasureFpsModule()) plus its issue #29 colour
+	// override. Before #70, FPS had no switch of its own here -- unlike
+	// CPU/GPU/Media it shared the General tab's master toggle as its own
+	// enable (kModuleOrder's first, always-present entry). Now it gets the
+	// same independent switch every other module already has; the master
+	// keeps gating the whole panel (renamed "Show System Monitor" in
+	// DrawGeneralTab), same relationship it already has to CPU/GPU/Media.
 	static void DrawFpsTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
@@ -2136,10 +2142,13 @@ namespace gamescope
 		// CPU/GPU/Media's own toggle at the top of their tabs below.
 		bChanged |= widgets::Toggle( "FPS module", &cfg.fps_enabled );
 
-		// Spec §11's "ROWS checkbox list" -- Row 2 (frametime graph) / Row 3
-		// (percentile stats), independently toggleable, sharing every other
-		// setting on the General tab (font size, backdrop, blend mode,
-		// opacity) rather than getting their own.
+		// Spec §11's "ROWS checkbox list" -- Row 1's numeric frametime
+		// readout (issue #71, distinct from the Row 2 graph below), Row 2
+		// (frametime graph), Row 3 (percentile stats) -- independently
+		// toggleable, sharing every other setting on the General tab (font
+		// size, backdrop, blend mode, opacity) rather than getting their
+		// own.
+		bChanged |= widgets::Toggle( "Frametime readout (ms)", &cfg.frametime_enabled );
 		bChanged |= widgets::Toggle( "Frametime graph", &cfg.graph_enabled );
 		bChanged |= widgets::Toggle( "Percentile row (1% / 0.1% / avg)", &cfg.percentiles_enabled );
 

@@ -86,6 +86,17 @@ namespace gamescope::config
         // same way the other three modules already check their own field.
         bool fps_enabled = true;
 
+        // Issue #71: the numeric frametime readout ("16.7 ms", drawn next
+        // to the FPS number in Row 1 -- MeasureFpsModule()'s L.szMs) is a
+        // distinct element from graph_enabled's Row 2 frametime *graph*
+        // above; this toggles the numeric readout on its own, default true
+        // to match every other row toggle's default-on choice. Auto-off
+        // whenever blend_mode is "additive" is unaffected -- that stays a
+        // separate, mode-driven rule (see FpsDisplay.cpp's L.bAdditive
+        // handling), this field only controls the normal alpha/inverted
+        // case.
+        bool frametime_enabled = true;
+
         // Issue #27 (System Monitor part 1/3): one of the 9 anchor strings
         // Notifications.cpp's kPlacements/OverlaySettings::notification_placement
         // already use ("top-left" .. "bottom-right", issue #26's model) --

@@ -241,6 +241,36 @@ TEST_CASE( "a config predating #70 loads fps_enabled at its compiled-in default"
     REQUIRE( loaded.fps_display.fps_enabled == true );
 }
 
+// Issue #71: fps_display.frametime_enabled (the numeric "16.7 ms" readout,
+// distinct from graph_enabled's graph) round-trips the same way.
+TEST_CASE( "fps_display.frametime_enabled round-trips", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.frametime_enabled = bValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.frametime_enabled == bValue );
+    }
+}
+
+TEST_CASE( "a config predating #71 loads frametime_enabled at its compiled-in default", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true, "graph_enabled": true}})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.graph_enabled == true );
+    REQUIRE( loaded.fps_display.frametime_enabled == true );
+}
+
 TEST_CASE( "no per-game file is ever created until override is enabled", "[config]" )
 {
     TempConfigHome home;
