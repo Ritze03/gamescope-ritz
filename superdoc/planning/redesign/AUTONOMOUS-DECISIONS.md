@@ -12,6 +12,121 @@ cheap.
 
 ## 2026-08-23
 
+### D14 · Eleven calls taken while migrating Audio and Config, P3 part B
+
+P3 part B replaces the `Escape()` hatches on `audio.mixer` and `setup.config`, and fixes the
+Inspector scroll defect P3a found and left. `EscapeCount()` 4 → 2. Build clean, **67/67
+tests** (`overlay_ui` 34 → 45, `overlay_shell` 16 → 19, `config` 38 → 40). Full write-up:
+`round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D14.1 · The Inspector scrolls by moving its ORIGIN, not by gaining a second layout path.**
+The bodies lay out with an absolute `y` painted onto the draw list. The bug was never that
+grammar — it was that `y` started at the *region's* `y0`, a fixed screen coordinate, and that
+nothing told ImGui how tall the result was. Both halves are fixed in the body child: the
+origin is now the **child's own cursor** (from which ImGui has already subtracted the scroll
+offset, so the existing absolute arithmetic pans correctly), and each body returns its bottom
+edge, which becomes a `Dummy` and therefore a scroll range. **Rejected:** rewriting the bodies
+onto ImGui's cursor with `Dummy`/`SameLine` spacing — that leaves one layout model in the
+sheet and another in the Inspector, which is exactly what SPEC §5.3 forbids, since a promoted
+parameter must land in the sheet unchanged. *Note how thin the margin was:* at 2.0× the six
+param rows came to 736.0 px against a 736.8 px body, which is why only the **last** row
+clipped rather than the whole block.
+
+**D14.2 · Dynamic rows get an identity from the STREAM, never from a position — and that is
+why the registry changed rather than the audio file.** The cheap workaround is a fixed pool of
+N slots, each bound to "whichever stream is at index *i*", greyed when there are fewer. It
+fits every existing law with **zero** registry changes. **Rejected anyway**, because slot
+identity would be positional: a stream ending shifts every stream below it up one slot, so the
+slider under the pointer silently starts controlling a different application. That is not a
+cosmetic problem — it is the volume of the wrong program moving. **Chose:**
+`ui::Area::Rebuilds( generation, builder )`, with ids of the form
+`audio.node.<pipewire-node-id>`. This is P1's deferred `Area::Repeat()` finally landing; P1
+said it "needs the shell's frame loop to have a topology-change hook", and
+`Registry::SyncDynamicAreas()` at the top of `Draw()` is that hook.
+
+**D14.3 · The law a dynamic area breaks is HELP IS REQUIRED, and it is closed rather than
+waived.** Id uniqueness survives because a rebuild *releases* its ids before it builds; the
+Prefix Law and the Six Budget are untouched because a rebuilt Entry goes through the same
+synthesis and the same per-Entry check. But `Registry::SelfTest()` runs **once**, after
+`RegisterAll()`, so a row built later had never been through it — a generated row could ship
+with no `Help()` at all. `SyncIfStale()` now re-runs the help and prefix checks over its own
+area. **The cost, stated plainly:** a violation aborts (D11.6) and a rebuild happens
+mid-session, so a malformed dynamic row is a **mid-session abort**, not a boot failure. That is
+a real widening of when the guillotine can fall, and it is acceptable only because a dynamic
+row is *generated* — no human types one — so one test against a fabricated stream list covers
+every row the generator will ever emit. **The empty stream set has its own test**, because it
+is the common case at startup and is precisely when the row-building code does *not* run.
+
+**D14.4 · Issue #63's name precedence is CONSUMED, never re-derived.** `StreamCandidate.sLabel`
+already *is* the `application.name` → `media.name` → `wpctl`-label chain, assembled in
+`Volume.cpp` from ncpamixer's source. The area reads it and adds nothing. **Why it matters
+enough to record:** a second copy of that precedence would be a second answer to the same
+question, and the tier that actually rescues the hard case (a stream with **no**
+`application.name` at all) is the middle one — verified live, where such a stream resolved to
+*"iPhone von Moritz (codec AAC)"* rather than its raw `bluez_input.AA_BB_…` node name.
+
+**D14.5 · Issue #36's jump-back fix is REUSED, not reimplemented.** Every volume and mute
+binding goes through the existing `ResolveDisplayVolume()` / `ResolveDisplayMute()` optimistic-
+pending layer. Audio's poll thread is on a 750 ms cadence, so a naive read between letting go
+of a slider and the next tick still returns the old value and the slider snaps back. Binding
+straight to `candidate.flVolume` would have reintroduced exactly the bug the brief warned
+about.
+
+**D14.6 · The Config panel's three tabs became THREE AREAS, on D13.1's precedent.** `setup.config`
+is gone; `setup.profiles`, `setup.pergame` and `setup.appearance` replace it, which is what
+`index.html` — the declared tiebreaker — lists as rail items. The rail is now the **eleven**
+items SPEC §8.1 names, which is also the count D12.8 deferred eleven icons for. *Cost:*
+`overlay_e2_select setup.config` no longer resolves.
+
+**D14.7 · The layer badge is an AREA property, not a row one.** It answers issue #43's
+question — *where does what I change here get written?* — with `global`, `app <id>` or `global
+only`, right-aligned in the sheet header. **Why per-area:** it describes the file a whole sheet
+routes to, and the awkward case cannot be derived from session state at all — Appearance writes
+`global.json` even for a game with an override active, because `overlay.*` is process-level.
+That is the same rule that forced the old title bar to take a per-tab override string and
+accept a one-frame lag; a derived per-area badge has neither.
+
+**D14.8 · Reset was MISSING, and this is where it landed.** D6 decided reset moves into the
+Inspector, but no phase implemented it — so the E2 shell could not reset anything, and
+migrating Config would have silently dropped its four per-group links. **Chose:** per-row
+reset that **also covers the row's parameters**, which is what makes it the successor to a
+*group* link rather than something weaker — the old "UI Scale" group *is* the `UI scale` row
+plus its dock and notification params. A row with no declared `Default` shows no affordance
+rather than resetting to zero, and float comparison uses a tolerance so a config that had
+merely been saved and reloaded does not light the link forever. **Still open:** D6's other
+half, the accent left edge marking "differs from default" on the sheet.
+
+**D14.9 · A destructive action is armed by its DECLARATION.** The user, after an agent wiped
+one of their configs: *"There can be a button for it, but never delete configs
+automatically."* `Entry::Confirm( prompt )` makes the first press swap the verb and redden the
+chip, and only the second perform it; it disarms on a timeout, so an overlay someone walked
+away from is never one click from destroying a file. **Rejected:** a modal the call site
+opens. A confirmation a call site must remember to build is one the next call site forgets —
+and a category file cannot place a pixel at all (SPEC §5.2 clause 0), so it could not open one
+anyway. `config.delete` is the only action in the product that destroys anything, and it
+exists only when there is a saved config to destroy.
+
+**D14.10 · Two affordances lost fidelity, both because the kit cannot yet express them.** The
+accent hue's **gradient strip and live swatch** are not carried over — the hue *setting* is,
+as a slider with a degree unit. The notification **3×3 placement grid** is one nine-option
+Choice. **Why not the grid:** `ui::Kind::Composite` is declared in the taxonomy and
+`controls::AnchorGrid()` exists, but the shell does not render a composite at all — it falls
+through to `default: break`. An Anchor here would be a control that registers correctly and
+draws nothing, which is precisely issues #25 and #68. A nine-option Choice is still **one
+setting with one value**, which is what issue #27 was actually about when it replaced two
+independent segmented controls with the grid. Both return when Composite lands.
+
+**D14.11 · `overlay_e2_scroll`, and a crash the console path found.** Scrolling is a pointer
+gesture and pointer injection is permanently forbidden here (D4), so a third console command
+follows D12.7 and D13.8 — without it the scroll fix is unverifiable by anything but a hand. It
+is a *request*, pushed into ImGui only on the frame it changes, so the wheel stays
+authoritative. Separately, `overlay_e2_set` earned its keep again: a registration's setter is
+reachable from the **console thread**, which has no ImGui context, and `PushLiveTheme()` wrote
+`ImGui::GetIO()` unguarded — `overlay_e2_set overlay.display_scale 1.0` killed the compositor.
+Guarded now; that line is purely the live drag preview, and a console write is not a drag. The
+general lesson is worth more than the fix: **any** binding that touches ImGui state is now
+reachable off the draw thread.
+
 ### D13 · Nine calls taken while migrating Display and Shaders, P3 part A
 
 P3 part A replaces the `Escape()` hatches on `display.gamescope` and `image.shaders` with real

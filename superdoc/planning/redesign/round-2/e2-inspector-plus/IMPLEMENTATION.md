@@ -10,6 +10,206 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P3 part B, Audio and Config, plus the Inspector's scroll
+
+**Status: `audio.mixer` and the Config panel are real registrations.** `EscapeCount()`
+**4 → 2** — only Monitor and Log still host a legacy body. The rail is now the **eleven**
+items SPEC §8.1 names. No config key, value range, format or setter changed; the legacy
+panels still draw unchanged under `overlay_e2 0`.
+
+Judgement calls: `../../AUTONOMOUS-DECISIONS.md` **D14**.
+
+### The Inspector could not scroll — fixed first, deliberately
+
+P3a found it and left it. At 2.0× an entry on the six-parameter budget (adaptive
+brightness, D13.4) overflowed the drawer and the last row clipped. Nothing failed; the
+pixels just stopped.
+
+The cause was **not** the row grammar. Each body laid out with an absolute `y` seeded from
+the *region's* `y0` — a fixed screen coordinate — and nothing ever told ImGui how tall the
+result was. So no scroll range existed, and a fixed origin would not have moved if one had.
+
+Both halves are fixed inside the body child, **without a second layout path**:
+
+- the origin is now the **child's own cursor**, from which ImGui has already subtracted the
+  scroll offset. The existing absolute arithmetic therefore pans correctly — every row,
+  control and hairline derives from it.
+- each body **returns its bottom edge**, which becomes a `Dummy`, which is the content size
+  ImGui measures a scroll range from.
+
+*Rejected:* rewriting the bodies onto ImGui's cursor with `Dummy`/`SameLine` spacing. That
+would leave one layout model in the sheet and another in the Inspector — precisely what
+SPEC §5.3 forbids, since a promoted parameter has to land in the sheet unchanged.
+
+`ui::ConfigureRowsHeight()` (`Layout.h`) makes the overflow a **number**, so "this body is
+taller than its region" is a comparison a unit test makes with no window open. It is a
+deliberate *lower bound* — the help paragraph needs font metrics — which is the safe
+direction. Two shared constants (`shelltok::kSectionLine`, `kTitleLine`) replace the bare
+`20`s and `24`s so the arithmetic and the drawing cannot drift.
+
+**The margin was 0.8 px.** At 2.0× the six param rows alone came to 736.0 against a 736.8
+body — which is exactly why only the *last* row clipped rather than the whole block.
+
+### Dynamic areas: the registry's answer to a row set that changes
+
+Audio is the first area whose rows are **not known when `RegisterAll()` runs**. A row
+exists because an application is making a sound right now, and streams appear and disappear
+while the overlay is open.
+
+`ui::Area::Rebuilds( generation, builder )` declares such an area. The registry rebuilds it
+when the generation moves, **releasing the ids the previous build claimed first**. This is
+P1's deferred `Area::Repeat()`, landed — P1 noted it "needs the shell's frame loop to have a
+topology-change hook"; `Registry::SyncDynamicAreas()`, called once at the top of `Draw()`,
+is that hook.
+
+**Rejected: a fixed pool of N positional slots**, each bound to "whichever stream is at
+index *i*" and greyed when there are fewer. It needs no registry change at all — and it is
+wrong. Slot identity would be *positional*, so a stream ending shifts every stream below it
+up one slot and the slider under the pointer silently starts controlling a different
+application. That is not cosmetic; it is the volume of the wrong program moving. Identity
+has to come from the stream, so the row id does too: `audio.node.<pipewire-node-id>`.
+
+How the four laws survive:
+
+| Law | How |
+|---|---|
+| **ID uniqueness** | a rebuild releases before it builds; node ids are unique among live nodes |
+| **The Prefix Law** | untouched — a rebuilt Entry mints Params through the same synthesis |
+| **The Six Budget** | untouched — checked per Entry as it is built, exactly as at startup |
+| **Help is required** | **the one that changes.** `SelfTest()` runs once after `RegisterAll()`, so a row built later never sees it. A rebuild now re-runs the help and prefix checks over its own area. |
+
+**The consequence, stated rather than hidden:** a violation aborts (D11.6) and a rebuild
+happens mid-session, so a malformed dynamic row is a **mid-session abort**, not a boot
+failure. That is a real widening of when the guillotine can fall. It is acceptable only
+because a dynamic row is *generated* — no human types one — so one unit test against a
+fabricated stream list covers every row the generator will ever emit. Five do, including
+the **empty** stream set, which is the common case at startup and the reason the help hole
+needed closing at all: with no streams, the row-building code never runs.
+
+`Law::Dynamic` keeps an area escaped **or** dynamic, never both — the same argument as
+`Law::Escaped`.
+
+### The setting inventory, before and after
+
+Nothing was dropped. Prose status lines became `.Live()` facts (D13.5's precedent).
+
+| Legacy panel / tab | Setting | Now | Config key (unchanged) |
+|---|---|---|---|
+| Audio | Game volume + Mute | `audio.volume` + **1 param** (only when detected) | — (live PipeWire state) |
+| Audio | per-stream slider + mute (#36) | `audio.node.<id>` + **1 param**, one per live stream | — |
+| Audio | manual picker combo + 2 buttons | `audio.stream`, one Choice; "Automatic" *is* the old clear | `audio.manual_node_binary` |
+| Audio | *wpctl-missing / detection / multi-candidate / stale-override prose* | → `audio.server` `.Live()` ×6 | — |
+| Audio | *greyed unpinnable combo rows + tooltip* | → `audio.server` `.Live()` "not pinnable" | — |
+| Config ▸ Per-Game | Override Global Config | `setup.pergame` ▸ `config.override` | session routing |
+| Config ▸ Per-Game | Copy another game's config | `config.copy` + `source` param | — |
+| Config ▸ Per-Game | Delete Saved Config + modal | `config.delete`, armed by `Confirm()` | — |
+| Config ▸ Per-Game | *app-id / "Editing:" / layer prose* | → **`Area::Badge`** + `config.routing` `.Live()` ×6 | — |
+| Config ▸ Per-Game | profile picker + Apply | `setup.profiles` ▸ `profiles.list`, `profiles.apply` | — |
+| Config ▸ Per-Game | new name field + Save | `profiles.name` (validated) + `profiles.save` | — |
+| Config ▸ Per-Game | *last applied profile* (#43 #10) | → `profiles.facts` `.Live()` | `last_applied_profile` |
+| Config ▸ General | Accent hue | `setup.appearance` ▸ `overlay.accent_hue` | `overlay.accent_hue` |
+| Config ▸ General | Dock / Display / Notification scale | `overlay.display_scale` + **2 params** | `overlay.*_scale` |
+| Config ▸ General | 4 opacity sliders | 4 rows under ▸ Transparency | `overlay.opacity_*` |
+| Config ▸ General | Blur / Darkening | 2 rows under ▸ Backdrop | `overlay.background_*` |
+| Config ▸ General | *config directory readout* | → `overlay.appearance_facts` `.Live()` | — |
+| Config ▸ General | 4 per-group **reset links** | → **`Entry::ResetToDefault()`** in the Inspector | — |
+| Config ▸ Notifications | 3×3 placement grid | `overlay.notification_placement`, one 9-option Choice | `overlay.notification_placement` |
+| Config ▸ Notifications | Mute toggle | `notifications.muted` | `notifications.muted` |
+| Config ▸ Notifications | Send test notification | `notifications.test` | — |
+
+**Two affordances changed shape** (both in D14, with reasons): the accent **hue gradient
+strip and swatch** are not carried over — the hue *setting* is, as a slider — and the
+placement **3×3 grid** is a nine-option Choice, because `Kind::Composite` is in the taxonomy
+but the shell does not render one yet, so an Anchor would register correctly and draw
+nothing (issues #25, #68).
+
+### Reset finally exists
+
+D6 decided reset moves into the Inspector; **no phase had implemented it**, so E2 could not
+reset anything at all, and migrating Config would have silently dropped its four per-group
+links. It is per-row **and covers the row's parameters**, which is what makes it the
+successor to a *group* link: the old "UI Scale" group *is* the `UI scale` row plus its dock
+and notification params, so one reset restores exactly what the old link did. A row with no
+declared `Default` shows no affordance rather than resetting to zero. Float comparison uses
+a tolerance, or a config that had merely been saved and reloaded would light the link
+forever.
+
+D6's other half — the accent left edge marking "differs from default" **on the sheet** — is
+still unimplemented, and is now the only way that decision is incomplete.
+
+### Deletion is armed, never automatic
+
+The user, after an agent wiped one of their configs: *"There can be a button for it, but
+never delete configs automatically."* `Entry::Confirm( prompt )` makes the two-press flow a
+property of the **declaration**: the first press swaps the verb and reddens the chip, only
+the second performs it, and it disarms on a timeout so a walked-away-from overlay is never
+one click from destroying a file.
+
+It is in the registry rather than at the call site because a confirmation a call site has to
+remember to build is one the next call site forgets — and a category file cannot open a
+modal anyway (SPEC §5.2 clause 0). `config.delete` is the only action in the product that
+destroys anything, and it exists only when there is a saved config to destroy.
+
+### A crash, found by `overlay_e2_set`
+
+A registration's setter is reachable from the **console thread**, which has no ImGui
+context. `PushLiveTheme()` wrote `ImGui::GetIO().FontGlobalScale` unguarded, so
+`overlay_e2_set overlay.display_scale 1.0` killed the compositor. That line is purely the
+live **drag preview**, and a console write is not a drag, so it is now guarded; the value
+still reaches the UI through `g_LiveTheme`, and `fonts::RebuildAll()` already tolerates a
+null current context by design.
+
+This is the second time D13.8's command has paid for itself, and it generalises: **any**
+binding that touches ImGui state is now reachable off the draw thread.
+
+### Verified
+
+- `nice -n 19 ninja -C build` clean; **67/67** (`overlay_ui` 34 → 45, `overlay_shell` 16 →
+  19, `config` 38 → 40).
+- Live session under `scripts/with-gamescope-lock.sh`, `DISABLE_LSFG=1`, no `--backend sdl`,
+  no pointer injection — driven entirely by `overlay_e2_*` ConVars and `grim -g` bounded to
+  the tracked PID's own window.
+- **Audio names, against real streams from two applications.** A `pw-play` stream with
+  `application.name` deliberately **empty** and a `media.name` set (issue #63's bluetooth
+  case) resolved to *"iPhone von Moritz (codec AAC)"* — the `media.name` tier rescuing it —
+  rather than its raw `bluez_input.AA_BB_…` node name. mpv, TeamSpeak, Spotify and
+  speech-dispatcher all named correctly alongside it. Audio was **silent** on purpose: the
+  point is the metadata, not the sound.
+- **A stream ending does not disturb the others.** With five rows on screen, killing mpv
+  removed *its* row and left every other row's identity **and value** untouched (TeamSpeak
+  97 %, Spotify 52 %), and the counts fell 5 → 4 streams, 7 → 6 rows. That is the property
+  the positional-slot design would have broken.
+- **All three badge values** seen on screen: `global` (no app id), `app 1174180` (override
+  on) and `global only` (Appearance).
+- **Inspector scrolling**, at 2.0× on adaptive brightness: the scrollbar appears and **Max
+  gain**, the sixth parameter, is reachable. The whole body pans as one; the lane and row
+  grammar are unchanged.
+- **An existing config loads untouched, verified on disk not on screen.** A pre-E2
+  `global.json` with eleven non-default values loads with every one intact **and with its
+  mtime, size and bytes unchanged** — reading a config must not write one. A per-game file
+  survives the override being turned off and is *restored* when it is turned back on; only
+  the explicit delete removes it. Both are permanent tests in `tests/test_config.cpp`.
+- **Legacy UI unchanged under `overlay_e2 0`.** Toggled off, on, and off again: every opaque
+  UI region (panel title bar, tab strip, dock, hint line) is **pixel-identical**. A
+  full-frame compare is meaningless here because vkcube animates behind a translucent
+  overlay. The stronger evidence is the diff: the **only** line removed from any legacy file
+  in this whole part is the `GetIO()` crash fix.
+
+### Known rough edges, recorded rather than hidden
+
+- **A dynamic area is empty until the overlay has been drawn once.** `SyncIfStale()` runs in
+  `Draw()`, so `overlay_e2_select` from the console lists no `audio.node.*` rows until the
+  overlay has been opened. Harmless for a user (the rows exist whenever they can be seen)
+  but it surprises a script, which is why it is written down.
+- **`audio.volume` and `profiles.list` exist conditionally** — the first only when detection
+  resolved a game stream, the second only when a profile is saved. `overlay_e2_select`
+  correctly reports "no such E2 row" otherwise; that is the registration being honest, not a
+  failure.
+- **The accent hue gradient and the placement grid** are the two affordances that lost
+  fidelity. Both are listed above with their reasons.
+
+---
+
 ## 2026-08-23 — P3 part A, Display and Shaders
 
 **Status: `display.gamescope` and `image.shaders` are real registrations.** `EscapeCount()`
