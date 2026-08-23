@@ -366,6 +366,60 @@ TEST_CASE( "atoms: a segmented group's cells are right-bound and never overlap",
 	h.EndFrame();
 }
 
+TEST_CASE( "atoms: a chip bank never escapes the lane", "[overlay_atoms]" )
+{
+	// SPEC §2.2's right-bound law is universal, and a Bank is the one measured
+	// atom with NO downgrade to fall back to (Choice() has the dropdown). Its
+	// run used to be laid out at full measured width from the lane's left
+	// edge, so an over-wide bank ran straight out of the control zone -- at
+	// 2.0x with the drawer open, `log.severity`'s four chips finished 80 base
+	// units past the sheet's right edge, where the last of them was invisible
+	// and unclickable.
+	Headless &h = Headless::Get();
+
+	static constexpr ui::Option kFour[] = {
+		{ 0, "error" }, { 1, "warn" }, { 2, "info" }, { 3, "debug" },
+	};
+
+	// The measurements are taken inside the frame and asserted after it, so a
+	// failing REQUIRE cannot leave ImGui mid-frame and cascade into every test
+	// that runs afterwards.
+	SECTION( "a run that fits is untouched and ends on the lane" )
+	{
+		ScopedScale s( 1.0f );
+		h.BeginFrame();
+		const ui::RowCtx row = MakeRow();
+		uint32_t nMask = 0b0101;
+		ui::controls::Bank( row, "bank", &nMask, kFour, IM_ARRAYSIZE( kFour ) );
+		const ImRect rcLast = LastItemRect();
+		const ImRect rcLane = row.PlaceFull();
+		h.EndFrame();
+
+		REQUIRE_THAT( rcLast.Max.x, WithinAbs( rcLane.Max.x, 1.0f ) );
+	}
+
+	SECTION( "a run too wide for the lane is scaled into it, not spilled out of it" )
+	{
+		// D17's occluded lane: 2.0x with the drawer open leaves the sheet a
+		// 368-base column, which is the case that produced the defect.
+		ScopedScale s( 2.0f );
+		h.BeginFrame();
+		const ui::RowCtx narrow =
+			ui::RowCtx::ForRow( ui::Lane::ForColumn( 756.0f, 388.0f ), 40.0f, 300.0f );
+		uint32_t nMask = 0b1111;
+		ui::controls::Bank( narrow, "banknarrow", &nMask, kFour, IM_ARRAYSIZE( kFour ) );
+		const ImRect rcLast = LastItemRect();
+		const ImRect rcLane = narrow.PlaceFull();
+		h.EndFrame();
+
+		// The last chip is the rightmost, and it must land ON the lane, never
+		// past it.
+		REQUIRE( rcLast.Max.x <= rcLane.Max.x + 1.0f );
+		REQUIRE( rcLast.Min.x >= rcLane.Min.x - 1.0f );
+		REQUIRE( rcLast.GetWidth() > 0.0f );
+	}
+}
+
 TEST_CASE( "atoms: nothing crashes or inverts at the extremes of display_scale", "[overlay_atoms]" )
 {
 	// The ladder reaches 0.5x and 2.0x, and a narrow three-column sheet at

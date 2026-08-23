@@ -169,6 +169,27 @@ namespace gamescope::ui
 			               ImVec2( vCenterPx.x + flSizePx * 0.46f, vCenterPx.y + flSizePx * 0.46f ),
 			               col, flStroke );
 		}
+
+		void Lock( ImVec2 vCenterPx, float flSizePx, ImU32 col )
+		{
+			const float flStroke = StrokePx( flSizePx );
+
+			// A body and a shackle, on the same unit square the other two
+			// glyphs use. The body is FILLED because a lock's silhouette is
+			// what identifies it at 0.5x -- a hollow rectangle at 12 physical
+			// px reads as an empty box, which is exactly the fallback glyph
+			// this whole set exists to avoid.
+			const float w = flSizePx * 0.34f;
+			const float yTop = vCenterPx.y - flSizePx * 0.04f;
+			const float yBot = vCenterPx.y + flSizePx * 0.42f;
+			Dl()->AddRectFilled( ImVec2( vCenterPx.x - w, yTop ), ImVec2( vCenterPx.x + w, yBot ),
+			                     col, flSizePx * 0.06f );
+
+			// The shackle is a half-circle sitting on the body's top edge.
+			const float flR = flSizePx * 0.21f;
+			Dl()->PathArcTo( ImVec2( vCenterPx.x, yTop ), flR, IM_PI, IM_PI * 2.0f );
+			Dl()->PathStroke( col, ImDrawFlags_None, flStroke );
+		}
 	}
 
 	// =====================================================================
@@ -676,16 +697,34 @@ namespace gamescope::ui
 		//  Chip bank -- SPEC §3.12
 		// =================================================================
 		bool Bank( const RowCtx &row, const char *pszId, uint32_t *pnMask,
-		           const Option *pOptions, size_t nOptions )
+		           const Option *pOptions, size_t nOptions, int nFocusChip )
 		{
 			if ( !pOptions || nOptions == 0 )
 				return false;
 
 			// Same single measurement path the segmented control uses, at the
 			// bank's own padding and text role.
-			const CellRun run = MeasureCells( pOptions, nOptions, TypeRole::Meta, tok::kBankPadX, tok::kGapSeg );
+			CellRun run = MeasureCells( pOptions, nOptions, TypeRole::Meta, tok::kBankPadX, tok::kGapSeg );
+
+			// A bank has no dropdown to fall back to the way a Choice does
+			// (Choice() above tests exactly this and downgrades), so an
+			// over-wide run used to be laid out at full size from the lane's
+			// LEFT edge and ran straight out of the lane -- past the sheet's
+			// right edge and under the drawer at 2.0x, where the last chips
+			// were invisible and unclickable. SPEC §2.2's right-bound law is
+			// not optional, so the run is scaled to the lane instead: every
+			// chip stays inside it, stays hit-testable, and keeps its share
+			// of the width. At 1.0x nothing is scaled and nothing moves.
+			float flGap = Px( tok::kGapSeg );
+			if ( run.flTotal > row.CtlWidthPx() && run.flTotal > 0.0f )
+			{
+				const float flShrink = row.CtlWidthPx() / run.flTotal;
+				for ( float &flW : run.widths )
+					flW *= flShrink;
+				flGap *= flShrink;
+				run.flTotal = row.CtlWidthPx();
+			}
 			const ImRect rcGroup = row.PlacePx( run.flTotal );
-			const float  flGap   = Px( tok::kGapSeg );
 
 			ImGui::PushID( pszId );
 			bool bChanged = false;
@@ -714,6 +753,17 @@ namespace gamescope::ui
 				DrawText( rcCell, TypeRole::Meta,
 					bOn ? Col( Role::AccentSeg ) : Col( Role::TextMeta ),
 					pOptions[ i ].pszLabel, TextAlign::Center );
+
+				// SPEC §7.3's focus ring, at its measured Accent @ 85%. Drawn
+				// OUTSIDE the cell so it cannot be confused with the on-state
+				// border it sits next to.
+				if ( (int)i == nFocusChip )
+				{
+					const float flO = Px( 2.0f );
+					Dl()->AddRect( ImVec2( rcCell.Min.x - flO, rcCell.Min.y - flO ),
+					               ImVec2( rcCell.Max.x + flO, rcCell.Max.y + flO ),
+					               Accent( 0.85f ), 0.0f, 0, std::max( 1.0f, Px( 1.5f ) ) );
+				}
 			}
 
 			ImGui::PopID();

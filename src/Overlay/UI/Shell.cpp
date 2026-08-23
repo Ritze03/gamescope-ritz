@@ -70,6 +70,7 @@
 #include <linux/input-event-codes.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <string>
@@ -193,6 +194,21 @@ namespace gamescope::ui::shell
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
 
+		// The last surface size Draw() saw, in physical pixels.
+		//
+		// WHY THIS EXISTS AND NOT ImGui::GetIO(). Every getter a registration
+		// declares is reachable from the CONSOLE THREAD as well as from the
+		// render thread -- overlay_e2_set, overlay_e2_palette and the glyph
+		// sweep all call them -- and ImGui has no context there, so GetIO()
+		// asserts and takes the compositor down with it. That is exactly the
+		// class of bug D15 already fixed once for fonts::RebuildAll();
+		// shell.layout's own Facts summary is FormatLadder(), so
+		// `overlay_e2_palette query shell.` aborted gamescope. Two floats
+		// written once a frame by the one thread that has a context, read by
+		// anyone.
+		std::atomic<float> s_flSurfaceW = 0.0f;
+		std::atomic<float> s_flSurfaceH = 0.0f;
+
 		// =================================================================
 		//  P5-adjacent: the three keyboard holes P4 reported (D18)
 		// =================================================================
@@ -220,6 +236,21 @@ namespace gamescope::ui::shell
 		// highlight yet", so a popup opened by a click does not silently move
 		// its own selection on the first Enter.
 		int s_nPopupFocus = -1;
+
+		// The chip the keyboard is pointed at inside the focused Bank.
+		//
+		// A Bank is the one kind AdjustValue() refuses (Registry.cpp: "Text,
+		// Bank and Action have no ordering an arrow key could follow"), and it
+		// has no popup either -- so before this it was the only control in the
+		// product that a keyboard could not operate AT ALL. Both drawn
+		// instances are the Log's filters, and this project may not synthesise
+		// a pointer, so they were unreachable and untestable at once.
+		//
+		// The grammar is SPEC §8.2's, unchanged: Left/Right is "inside a
+		// control: adjust" and Space/Enter is "activate / toggle". One index,
+		// reset with the selection like s_nInspectorFocus, because a chip
+		// index must not outlive the bank it indexes.
+		int s_nBankChip = 0;
 
 		// SPEC §6.3's Reachability Law: "with the Inspector closed, `?` or
 		// `Ctrl+/` on a selected row opens Configure AND Details as one
@@ -497,7 +528,12 @@ namespace gamescope::ui::shell
 				.Keywords( "ladder slab scale columns rail step layout" )
 				.Live( "slab", []{
 					char sz[ 96 ];
-					const Slab slab = Slab::For( ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y, Scale() );
+					// s_flSurfaceW/H, not ImGui::GetIO() -- see the comment
+					// above FormatLadder(). A .Live() runs on the render
+					// thread today, but nothing in the registry's contract
+					// says it must, and the two readings must not disagree.
+					const Slab slab = Slab::For( s_flSurfaceW.load( std::memory_order_relaxed ),
+					                             s_flSurfaceH.load( std::memory_order_relaxed ), Scale() );
 					snprintf( sz, sizeof( sz ), "%.0f x %.0f px  (%.0f x %.0f base)",
 						slab.flWidthPx, slab.flHeightPx, slab.flWidthBase, slab.flHeightBase );
 					return Fact{ "slab", sz };
@@ -577,6 +613,20 @@ namespace gamescope::ui::shell
 			// console -- goes through this function, which is what stops the
 			// index outliving the thing it indexes.
 			s_nInspectorFocus = 0;
+			s_nBankChip       = 0;
+
+			// SPEC §3.9's two-stage arm only means anything while the armed
+			// chip is the thing under the user's hands. Moving the selection
+			// used to leave `s_sArmedAction` set -- so arming `Delete saved
+			// config`, walking away, and coming back made the NEXT SINGLE
+			// PRESS destroy the file, which is the exact failure Confirm()
+			// exists to make impossible. (This function's own comment above
+			// already claimed "walking away disarms it"; it did not.)
+			// Disarmed here rather than at each caller for the same reason
+			// the focus index is: every route into a selection comes through
+			// this function.
+			if ( !s_sArmedAction.empty() && s_sArmedAction != s_sSelectedEntry )
+				s_sArmedAction.clear();
 
 			// The explain page shows the current selection, so moving the
 			// selection while it is open would silently swap the page out from
@@ -834,8 +884,15 @@ namespace gamescope::ui::shell
 				return;
 			}
 			s_sSelectedArea = sArea;
-			s_sSelectedEntry.clear();
-			s_bModeOverridden = false;
+
+			// Through Select(), never around it. This used to assign
+			// s_sSelectedEntry/s_eMode by hand -- a second selection path,
+			// which then skipped the Inspector focus reset, the explain-page
+			// close and (since it was added) the destructive-action disarm.
+			// A console selection has to leave exactly the state a click
+			// leaves, or every keyboard test driven from here is testing a
+			// state the product never actually reaches.
+			Select( nullptr );
 
 			if ( args.size() >= 3 )
 			{
@@ -846,8 +903,7 @@ namespace gamescope::ui::shell
 					console_log.errorf( "no such E2 row: %s", sRow.c_str() );
 					return;
 				}
-				s_sSelectedEntry = sRow;
-				s_eMode = ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
+				Select( pEntry );
 			}
 		}
 
@@ -1061,8 +1117,12 @@ namespace gamescope::ui::shell
 
 		std::string FormatLadder()
 		{
-			const ImGuiIO &io = ImGui::GetIO();
-			const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
+			const float flW = s_flSurfaceW.load( std::memory_order_relaxed );
+			const float flH = s_flSurfaceH.load( std::memory_order_relaxed );
+			if ( flW <= 0.0f || flH <= 0.0f )
+				return "not drawn yet";
+
+			const Slab slab = Slab::For( flW, flH, Scale() );
 			const Area *pArea = SelectedArea();
 			const LadderResult L = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );
 
@@ -1198,7 +1258,7 @@ namespace gamescope::ui::shell
 		// =================================================================
 		//  Region 2 -- the sheet (SPEC §8.1)
 		// =================================================================
-		void DrawSheetHead( const Rect &rc, const Area *pArea )
+		void DrawSheetHead( const Rect &rc, const Area *pArea, bool bInspectorHidden )
 		{
 			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Col( Role::LineRegion ) );
 
@@ -1230,13 +1290,58 @@ namespace gamescope::ui::shell
 			}
 			else if ( pArea )
 			{
-				// The layer badge (Area::Badge) -- issue #43's "where does
-				// this get written?", answered in the one place that is on
-				// screen no matter which row is selected.
+				// SPEC §8.1's header, and §1.1's D9 amendment naming exactly
+				// what may live here: "the breadcrumb, the `differs N` chip,
+				// and the `inspector hidden` chip -- never a live line-count,
+				// a row-height count, a column count, a ladder-step number,
+				// or a raw pixel-budget readout". The breadcrumb and the
+				// layer badge shipped; the two chips did not, so a sheet
+				// could not answer "have I changed anything here" without
+				// scanning every row's state edge, and a hidden Inspector
+				// announced itself only by the spine.
+				//
+				// `differs` is counted here from the area's own entries and
+				// their params, on the rail counter's rule (SPEC §8.1: "the
+				// counter means exactly one thing" -- a number nobody types
+				// is a number that cannot lie about what it counts).
+				int nDiffers = 0;
+				for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+				{
+					const Entry &e = pArea->EntryAt( i );
+					if ( e.HasDefault() && !e.IsAtDefault() )
+						nDiffers++;
+					for ( size_t p = 0; p < e.ParamCount(); ++p )
+					{
+						const Parameter &pa = e.ParamAt( p );
+						if ( pa.HasDefault() && !pa.IsAtDefault() )
+							nDiffers++;
+					}
+				}
+
+				std::string sChips;
+				if ( bInspectorHidden )
+					sChips = "inspector hidden";
+				if ( nDiffers )
+				{
+					if ( !sChips.empty() )
+						sChips += "   ";
+					sChips += "differs " + std::to_string( nDiffers );
+				}
+
+				// Two labels, not one string, because the badge is the
+				// area's own text and the chips are the shell's -- and the
+				// badge keeps the right edge it has always had.
 				const std::string sBadge = pArea->BadgeText();
+				float flRight = rc.x1 - Px( tok::kSheetPad );
 				if ( !sBadge.empty() )
-					Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
+				{
+					Label( { rc.x0, rc.y0, flRight, rc.y1 },
 					       TypeRole::Meta, Col( Role::TextMeta ), sBadge.c_str(), TextAlign::Right );
+					flRight -= MeasureText( TypeRole::Meta, sBadge.c_str() ).x + Px( tok::kL );
+				}
+				if ( !sChips.empty() )
+					Label( { rc.x0, rc.y0, flRight, rc.y1 },
+					       TypeRole::Meta, Col( Role::TextMeta ), sChips.c_str(), TextAlign::Right );
 			}
 		}
 
@@ -1301,7 +1406,7 @@ namespace gamescope::ui::shell
 		// (Controls.h). A caller cannot declare an int slider and bind a float.
 		template <typename TDecl>
 		bool DrawSharedControl( const TDecl &decl, const RowCtx &row, const char *pszId,
-		                        const std::string &sPopupKey )
+		                        const std::string &sPopupKey, int nBankChip = -1 )
 		{
 			if ( !decl.Binding().IsBound() )
 				return false;
@@ -1416,7 +1521,7 @@ namespace gamescope::ui::shell
 					// conversion each way, in the one place that knows both.
 					uint32_t nMask = (uint32_t)( std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0 );
 					if ( controls::Bank( row, pszId, &nMask,
-						decl.Options().data(), decl.Options().size() ) )
+						decl.Options().data(), decl.Options().size(), nBankChip ) )
 					{
 						decl.Binding().Set( Value{ (int)nMask } );
 						return true;
@@ -1568,8 +1673,36 @@ namespace gamescope::ui::shell
 		// 2 made literal: "scanning the sheet, a composite is
 		// indistinguishable from a row until your eye reaches the control
 		// column."
+		// SPEC §2.4's affordance column: 28 base units holding AT MOST ONE
+		// glyph, by a fixed priority -- chevron for depth, lock for read-only,
+		// otherwise nothing.
+		//
+		// `RowCtx::Affordance()` shipped in P1 and had NO CALL SITES through
+		// P4 (recorded as still-open in D18), so the column was allocated on
+		// every row of the product and never painted: a sheet gave no sign
+		// whatever that a row had parameters or a Details page behind it. With
+		// the Inspector hidden that is the whole advertisement of depth, and
+		// it is why the mockup's `▸` was never needed in the C++.
+		//
+		// The priority is a chain of returns rather than three independent
+		// tests, so "never two" is structural (SPEC §2.4's "first match wins").
+		void DrawAffordance( const Entry &entry, const RowCtx &row )
+		{
+			const ImRect rc = row.Affordance();
+			const ImVec2 vC = rc.GetCenter();
+			const float  flSize = Px( 11.0f );
+
+			if ( entry.ParamCount() > 0 || entry.GetKind() == Kind::Facts )
+			{
+				glyph::Chevron( vC, flSize, glyph::Dir::Right, Col( Role::TextMeta ) );
+				return;
+			}
+			if ( entry.ReadOnly() )
+				glyph::Lock( vC, flSize, Col( Role::TextMeta ) );
+		}
+
 		bool DrawCompositeBand( const Entry &entry, const Lane &laneBase, float flOriginPx,
-		                        float flTopPx, bool bSelected )
+		                        float flTopPx, bool bSelected, bool bAffordance )
 		{
 			const BandLayout bl = LayOutBand( laneBase, flOriginPx, flTopPx, entry.GetCompositeKind() );
 			const ImRect rcBand = bl.rcBand;
@@ -1685,19 +1818,25 @@ namespace gamescope::ui::shell
 			if ( bDisabled )
 				ImGui::EndDisabled();
 
+			// Clause 2: "line 1 reads as a row" -- including its affordance,
+			// which is how a Graph band advertises that it is read-only and
+			// how the Anchor advertises its two margins.
+			if ( bAffordance )
+				DrawAffordance( entry, bl.line1 );
+
 			ImGui::PopID();
 			return bClicked;
 		}
 
 		// One Inspector/sheet row of the Row grammar.
 		bool DrawEntryRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
-		                   bool bSelected )
+		                   bool bSelected, bool bAffordance = true )
 		{
 			// A composite is NOT a row (SPEC §4.2), and this is the one place
 			// that says so. Everything downstream -- selection, the keyboard,
 			// Configure -- goes on treating it as one declaration.
 			if ( entry.GetKind() == Kind::Composite )
-				return DrawCompositeBand( entry, laneBase, flOriginPx, flTopPx, bSelected );
+				return DrawCompositeBand( entry, laneBase, flOriginPx, flTopPx, bSelected, bAffordance );
 
 			const RowCtx row = RowCtx::ForRow( laneBase, flOriginPx, flTopPx );
 			const ImRect rcRow = row.Bounds();
@@ -1781,7 +1920,15 @@ namespace gamescope::ui::shell
 				// existed in Controls.cpp since P1.
 				case Kind::Bank:
 				case Kind::Text:
-					DrawSharedControl( entry, row, "ctl", entry.Id() );
+					// bAffordance also tells the two hosts apart: it is true
+					// only for the sheet. The focus ring therefore appears in
+					// the one region the arrow keys are actually driving,
+					// rather than on both copies of a selected row's bank.
+					DrawSharedControl( entry, row, "ctl", entry.Id(),
+						( bAffordance
+							? ( s_eFocusRegion == Region::Sheet && bSelected )
+							: ( s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 ) )
+						? s_nBankChip : -1 );
 					break;
 				case Kind::Action:
 				{
@@ -1835,6 +1982,9 @@ namespace gamescope::ui::shell
 
 			if ( bDisabled )
 				ImGui::EndDisabled();
+
+			if ( bAffordance )
+				DrawAffordance( entry, row );
 
 			ImGui::PopID();
 			return bClicked;
@@ -2249,7 +2399,12 @@ namespace gamescope::ui::shell
 			// thing, because the Inspector only ever shows one entry.
 			const bool bFocusOwnRow =
 				( s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 );
-			DrawEntryRow( entry, lane, rcIn.x0, y, bFocusOwnRow );
+			// SPEC §2.4's affordance column belongs to the SHEET: it
+			// advertises that there is depth behind a row. Inside the
+			// Inspector you are already in that depth, so a chevron here
+			// would point at nothing -- and a lock is redundant next to the
+			// mode strip's own `ro` marker.
+			DrawEntryRow( entry, lane, rcIn.x0, y, bFocusOwnRow, /* bAffordance */ false );
 			y += Px( tok::kRowH ) * (float)LinesFor( entry );
 
 			// index.html's `parameters  <n> of 6` header. The denominator is
@@ -2311,7 +2466,9 @@ namespace gamescope::ui::shell
 				// The SAME painter the sheet row uses -- SPEC §5.3's "a
 				// promoted parameter ends up in the Sheet" only holds if the
 				// two are literally one code path.
-				DrawSharedControl( param, row, "pctl", param.Id() );
+				DrawSharedControl( param, row, "pctl", param.Id(),
+					( s_eFocusRegion == Region::Inspector &&
+					  s_nInspectorFocus == (int)i + 1 ) ? s_nBankChip : -1 );
 				if ( bParamDisabled )
 					ImGui::EndDisabled();
 				ImGui::PopID();
@@ -2359,8 +2516,14 @@ namespace gamescope::ui::shell
 				y = std::max( y + Px( 20.0f ), yAfter + Px( tok::kXS ) );
 			};
 
+			// A composite's `now` is its RESOLVED value, the same string the
+			// band's line 1 and the palette show. Printing its A-axis
+			// binding put `0` under a VALUES line reading
+			// `top-right · 32 / 32`, two lines apart on the same page.
 			Grid( "NOW", entry.GetKind() == Kind::Facts
 				? entry.SummaryText()
+				: entry.GetKind() == Kind::Composite
+					? CompositeValue( entry )
 				: ( entry.Binding().IsBound() ? ValueToString( entry.Binding().Get() ) : std::string() ) );
 			Grid( "DEFAULT", ValueToString( entry.DefaultValue() ) );
 			if ( entry.HasRange() )
@@ -2913,6 +3076,13 @@ namespace gamescope::ui::shell
 			const Kind eKind = pE ? pE->GetKind() : pP->GetKind();
 			if ( eKind == Kind::Action )
 				return {};
+			// A composite's value is its RESOLVED value -- `top-right ·
+			// 32 / 32`, `#6ED274` -- which the band already computes. Reading
+			// its A-axis binding straight out printed the raw int (`0` for an
+			// anchor, `8116985` for a colour), so the palette showed one
+			// thing and the row it jumps to showed another.
+			if ( eKind == Kind::Composite && pE )
+				return CompositeValue( *pE );
 			if ( eKind == Kind::Facts )
 				return pE ? pE->SummaryText() : std::string();
 
@@ -3340,6 +3510,41 @@ namespace gamescope::ui::shell
 			Select( &pArea->EntryAt( (size_t)nNext ) );
 		}
 
+		// SPEC §3.12's bank, driven by SPEC §8.2's keys. One implementation,
+		// shared by the sheet and the Inspector, so a bank cannot behave
+		// differently in its two hosts -- the same rule DrawSharedControl
+		// exists for. Returns true when it consumed the press.
+		template <typename TDecl>
+		bool RunBankKeyboard( const TDecl &decl, bool bActivate, int nDir )
+		{
+			const size_t nOpts = decl.Options().size();
+			if ( decl.GetKind() != Kind::Bank || nOpts == 0 || !decl.Binding().IsBound() )
+				return false;
+
+			s_nBankChip = std::clamp( s_nBankChip, 0, (int)nOpts - 1 );
+
+			if ( nDir != 0 )
+			{
+				// Stops at both ends rather than wrapping -- D16.6's rule for
+				// a choice, and the same reason: a held key has to settle.
+				const int nNext = std::clamp( s_nBankChip + nDir, 0, (int)nOpts - 1 );
+				if ( nNext == s_nBankChip )
+					return false;   // at an end: let the caller treat it as a region edge
+				s_nBankChip = nNext;
+				return true;
+			}
+
+			if ( bActivate )
+			{
+				const Value v = decl.Binding().Get();
+				const uint32_t nMask = (uint32_t)( std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0 );
+				const uint32_t nBit  = 1u << (uint32_t)decl.Options()[ (size_t)s_nBankChip ].nValue;
+				decl.Binding().Set( Value{ (int)( nMask ^ nBit ) } );
+				return true;
+			}
+			return false;
+		}
+
 		void RunKeyboard()
 		{
 			const ImGuiIO &io = ImGui::GetIO();
@@ -3508,6 +3713,12 @@ namespace gamescope::ui::shell
 			// itself (which SettingsOverlay.cpp owns).
 			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
 			{
+				// SPEC §3.9: "the second fires, and Esc disarms." Esc's
+				// region ladder below can leave the selection somewhere that
+				// still holds the armed row, so the disarm is unconditional
+				// and happens first -- Esc is the user saying "no".
+				s_sArmedAction.clear();
+
 				// D18: the explain page is the topmost rung below the
 				// palette -- it REPLACES the sheet, so Esc has to give the
 				// sheet back before it starts closing regions underneath it.
@@ -3610,7 +3821,12 @@ namespace gamescope::ui::shell
 					const Kind eKind = bOwnRow ? pIn->GetKind() : pParam->GetKind();
 					const AnyBind &bind = bOwnRow ? pIn->Binding() : pParam->Binding();
 
-					if ( eKind == Kind::Switch && bind.IsBound() )
+					if ( eKind == Kind::Bank )
+					{
+						if ( bOwnRow ) RunBankKeyboard( *pIn,    true, 0 );
+						else           RunBankKeyboard( *pParam, true, 0 );
+					}
+					else if ( eKind == Kind::Switch && bind.IsBound() )
 					{
 						const Value v = bind.Get();
 						if ( const bool *p = std::get_if<bool>( &v ) )
@@ -3656,9 +3872,13 @@ namespace gamescope::ui::shell
 					// The SAME adjuster the sheet and the palette use, over
 					// the same Adjustable view -- D16.6's "one adjuster", now
 					// with a third host rather than a third implementation.
-					const bool bMoved = bOwnRow
-						? AdjustValue( Adjustable::Of( *pIn ), nDirIn, io.KeyShift )
-						: AdjustValue( Adjustable::Of( *pParam ), nDirIn, io.KeyShift );
+					const Kind eDirKind = bOwnRow ? pIn->GetKind() : pParam->GetKind();
+					const bool bMoved = eDirKind == Kind::Bank
+						? ( bOwnRow ? RunBankKeyboard( *pIn,    false, nDirIn )
+						            : RunBankKeyboard( *pParam, false, nDirIn ) )
+						: bOwnRow
+							? AdjustValue( Adjustable::Of( *pIn ), nDirIn, io.KeyShift )
+							: AdjustValue( Adjustable::Of( *pParam ), nDirIn, io.KeyShift );
 
 					// A kind with no ordered value (Text, Bank, Action) has
 					// nothing to adjust, so Left there is a region edge --
@@ -3684,7 +3904,11 @@ namespace gamescope::ui::shell
 			                       ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false );
 			if ( bActivate && pSel->DisabledReason().empty() )
 			{
-				if ( pSel->GetKind() == Kind::Switch && pSel->Binding().IsBound() )
+				if ( pSel->GetKind() == Kind::Bank )
+				{
+					RunBankKeyboard( *pSel, true, 0 );
+				}
+				else if ( pSel->GetKind() == Kind::Switch && pSel->Binding().IsBound() )
 				{
 					const Value v = pSel->Binding().Get();
 					if ( const bool *p = std::get_if<bool>( &v ) )
@@ -3734,7 +3958,12 @@ namespace gamescope::ui::shell
 			const int nDir = ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) ? +1
 			               : ImGui::IsKeyPressed( ImGuiKey_LeftArrow,  true ) ? -1 : 0;
 			if ( nDir != 0 && pSel->DisabledReason().empty() )
-				AdjustValue( Adjustable::Of( *pSel ), nDir, io.KeyShift );
+			{
+				if ( pSel->GetKind() == Kind::Bank )
+					RunBankKeyboard( *pSel, false, nDir );
+				else
+					AdjustValue( Adjustable::Of( *pSel ), nDir, io.KeyShift );
+			}
 		}
 	}
 
@@ -3759,6 +3988,12 @@ namespace gamescope::ui::shell
 		SetScale( gamescope::palette::DisplayScale() );
 
 		const ImGuiIO &io = ImGui::GetIO();
+
+		// Publish the surface size for every reader that has no ImGui
+		// context -- the console thread's, above all. See FormatLadder().
+		s_flSurfaceW.store( io.DisplaySize.x, std::memory_order_relaxed );
+		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
+
 		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )
 			return;
@@ -3876,7 +4111,8 @@ namespace gamescope::ui::shell
 			DrawSlabBar( Off( regions.rcSlabBar ) );
 			DrawRail( Off( regions.rcRail ), ladder.RailIsIcons() );
 
-			DrawSheetHead( Off( regions.rcSheetHead ), pArea );
+			DrawSheetHead( Off( regions.rcSheetHead ), pArea,
+			               ladderDrawn.eHost == InspectorHost::Hidden );
 
 			// D17. A drawer overlays the sheet instead of taking width from
 			// it, so at 2.0x it covered the sheet's entire control column. The

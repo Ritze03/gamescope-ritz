@@ -93,6 +93,11 @@ namespace gamescope::ui
 		// The palette's magnifier -- a circle and a handle, which is all the
 		// mark has ever been.
 		void Magnifier( ImVec2 vCenterPx, float flSizePx, ImU32 col );
+
+		// SPEC §2.4's read-only mark. Drawn, for the same reason the chevron
+		// is: U+2337 is not in any bundled face's cmap, so a baked range
+		// cannot produce it (AUTONOMOUS-DECISIONS D18.2).
+		void Lock( ImVec2 vCenterPx, float flSizePx, ImU32 col );
 	}
 
 	namespace controls
@@ -138,8 +143,14 @@ namespace gamescope::ui
 		// ---- SPEC §3.12 -- a multi-select whose value is a set -------------
 		// One setting whose value is a set. N independent binaries are still N
 		// switch rows -- that rule, not the bank, is what a reviewer holds.
+		// nFocusChip is the index of the chip the KEYBOARD is pointed at, or
+		// -1 for none. A bank is the one kind with no ordered value for an
+		// arrow key to walk (SPEC §3.12: "one setting whose value is a set"),
+		// so the cursor has to be a chip -- and a cursor nobody can see is not
+		// a cursor, which is why the ring is the atom's job and not the
+		// caller's.
 		bool Bank( const RowCtx &row, const char *pszId, uint32_t *pnMask,
-		           const Option *pOptions, size_t nOptions );
+		           const Option *pOptions, size_t nOptions, int nFocusChip = -1 );
 
 		// ---- SPEC §3.8 -- a live scalar, read-only ------------------------
 		void Meter( const RowCtx &row, float flValue, float flMin, float flMax );
