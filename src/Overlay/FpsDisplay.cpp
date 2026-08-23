@@ -850,8 +850,12 @@ namespace gamescope
 		// -> frametime in ms (accent-tinted) -- was one flat "%3d FPS" run
 		// in a single color/size; split so the unit and the ms readout can
 		// each carry their own spec'd size/color (gap list item 6).
+		// Issue #73: the unit label is independently hideable
+		// (fps_label_enabled) so the module can show just the number --
+		// zero-sized when off, same "not present reserves no space"
+		// contract MeasureModule() uses for a whole disabled module.
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.unitSize = ImGui::CalcTextSize( kUnitText );
+		L.unitSize = cfg.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
 		ImGui::PopFont();
 
 		// Issue #71: the numeric frametime readout, independently of
@@ -936,14 +940,17 @@ namespace gamescope
 			pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
 		cursor.x += L.numSize.x;
 
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
-		if ( L.bInverted )
-			AddTextInverted( pDrawList, unitPos, kUnitText );
-		else
-			pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
+		if ( cfg.fps_label_enabled ) // issue #73
+		{
+			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
+			const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
+			if ( L.bInverted )
+				AddTextInverted( pDrawList, unitPos, kUnitText );
+			else
+				pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
+			ImGui::PopFont();
+		}
 		cursor.x += L.unitSize.x;
-		ImGui::PopFont();
 
 		if ( L.bShowMs ) // issue #71
 		{
@@ -2124,16 +2131,16 @@ namespace gamescope
 		ImGui::EndDisabled(); // !cfg.enabled
 	}
 
-	// FPS module's own tab: its issue #70 enable switch, Row 1's numeric
-	// frametime-readout toggle (issue #71), Row 2/Row 3 toggles (frametime
-	// graph, percentile row -- both content that belongs to the FPS module
-	// specifically, see MeasureFpsModule()) plus its issue #29 colour
-	// override. Before #70, FPS had no switch of its own here -- unlike
-	// CPU/GPU/Media it shared the General tab's master toggle as its own
-	// enable (kModuleOrder's first, always-present entry). Now it gets the
-	// same independent switch every other module already has; the master
-	// keeps gating the whole panel (renamed "Show System Monitor" in
-	// DrawGeneralTab), same relationship it already has to CPU/GPU/Media.
+	// FPS module's own tab: its issue #70 enable switch, Row 1's frametime-
+	// readout and label toggles (issues #71/#73), Row 2/Row 3 toggles
+	// (frametime graph, percentile row -- both content that belongs to the
+	// FPS module specifically, see MeasureFpsModule()), plus its issue #29
+	// colour override. Before #70, FPS had no switch of its own here --
+	// unlike CPU/GPU/Media it shared the General tab's master toggle as its
+	// own enable (kModuleOrder's first, always-present entry). Now it gets
+	// the same independent switch every other module already has; the
+	// master keeps gating the whole panel (renamed "Show System Monitor"
+	// in DrawGeneralTab), same relationship it already has to CPU/GPU/Media.
 	static void DrawFpsTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
@@ -2141,6 +2148,12 @@ namespace gamescope
 		// Issue #70: FPS module's own enable, same shape/placement as
 		// CPU/GPU/Media's own toggle at the top of their tabs below.
 		bChanged |= widgets::Toggle( "FPS module", &cfg.fps_enabled );
+
+		// Issue #73: toggling this off hides Row 1's " FPS" unit label,
+		// leaving just the number. FPS-only as asked -- see this field's
+		// ConfigSchema.h comment for whether CPU/GPU/Media should get the
+		// same control.
+		bChanged |= widgets::Toggle( "\"FPS\" label", &cfg.fps_label_enabled );
 
 		// Spec §11's "ROWS checkbox list" -- Row 1's numeric frametime
 		// readout (issue #71, distinct from the Row 2 graph below), Row 2

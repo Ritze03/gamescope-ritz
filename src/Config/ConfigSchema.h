@@ -97,6 +97,14 @@ namespace gamescope::config
         // case.
         bool frametime_enabled = true;
 
+        // Issue #73: hides Row 1's " FPS" unit label (kUnitText in
+        // FpsDisplay.cpp) so the module shows just the number. FPS-only, as
+        // asked -- CPU/GPU/Media's own row labels ("CPU", "RAM", "GPU",
+        // "VRAM", "MEDIA") are a different, multi-label-per-row shape and
+        // are deliberately not covered by this same field; see the issue's
+        // own report for why generalizing wasn't done silently.
+        bool fps_label_enabled = true;
+
         // Issue #27 (System Monitor part 1/3): one of the 9 anchor strings
         // Notifications.cpp's kPlacements/OverlaySettings::notification_placement
         // already use ("top-left" .. "bottom-right", issue #26's model) --

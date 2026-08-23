@@ -271,6 +271,36 @@ TEST_CASE( "a config predating #71 loads frametime_enabled at its compiled-in de
     REQUIRE( loaded.fps_display.frametime_enabled == true );
 }
 
+// Issue #73: fps_display.fps_label_enabled (hides Row 1's " FPS" unit
+// label) round-trips the same way.
+TEST_CASE( "fps_display.fps_label_enabled round-trips", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.fps_label_enabled = bValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.fps_label_enabled == bValue );
+    }
+}
+
+TEST_CASE( "a config predating #73 loads fps_label_enabled at its compiled-in default", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true, "percentiles_enabled": true}})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.percentiles_enabled == true );
+    REQUIRE( loaded.fps_display.fps_label_enabled == true );
+}
+
 TEST_CASE( "no per-game file is ever created until override is enabled", "[config]" )
 {
     TempConfigHome home;

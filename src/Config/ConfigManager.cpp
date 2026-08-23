@@ -157,6 +157,7 @@ namespace gamescope::config
                 s.fps_display.percentiles_enabled = JGetBool( *pFps, "percentiles_enabled", s.fps_display.percentiles_enabled );
                 s.fps_display.fps_enabled = JGetBool( *pFps, "fps_enabled", s.fps_display.fps_enabled );
                 s.fps_display.frametime_enabled = JGetBool( *pFps, "frametime_enabled", s.fps_display.frametime_enabled );
+                s.fps_display.fps_label_enabled = JGetBool( *pFps, "fps_label_enabled", s.fps_display.fps_label_enabled );
                 // Issue #27: placement/margins, same field-shape as OverlaySettings::notification_placement.
                 s.fps_display.placement = JGetString( *pFps, "placement", s.fps_display.placement );
                 s.fps_display.margin_vertical = JGetFloat( *pFps, "margin_vertical", s.fps_display.margin_vertical );
@@ -328,6 +329,7 @@ namespace gamescope::config
             jFps[ "percentiles_enabled" ] = s.fps_display.percentiles_enabled;
             jFps[ "fps_enabled" ] = s.fps_display.fps_enabled;
             jFps[ "frametime_enabled" ] = s.fps_display.frametime_enabled;
+            jFps[ "fps_label_enabled" ] = s.fps_display.fps_label_enabled;
             jFps[ "placement" ] = s.fps_display.placement;
             jFps[ "margin_vertical" ] = s.fps_display.margin_vertical;
             jFps[ "margin_horizontal" ] = s.fps_display.margin_horizontal;
