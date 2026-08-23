@@ -10,6 +10,119 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P3 part A, Display and Shaders
+
+**Status: `display.gamescope` and `image.shaders` are real registrations.** `EscapeCount()`
+**6 → 4**. No config key, value range, format or setter changed — this is a presentation change,
+and the legacy panels still draw unchanged under `overlay_e2 0`.
+
+Judgement calls taken during P3 part A: `../../AUTONOMOUS-DECISIONS.md` **D13**.
+
+### The setting inventory, before and after
+
+Nothing was dropped. The two panels' 17 settings map 1:1; three pieces of *prose* became
+`.Live()` facts rather than rows (D13.5), and the frame limiter's two controls became one
+(D13.3).
+
+| Legacy tab / group | Setting | Now | Config key (unchanged) |
+|---|---|---|---|
+| Upscaling | Filter | `display.upscaling` ▸ Scaling filter | `gamescope.filter` |
+| Upscaling | Sharpness | ″ (disabled unless FSR/NIS) | `gamescope.sharpness` |
+| Upscaling | Scaler | ″ | `gamescope.scaler` |
+| Upscaling | *Steam-override banner* | → `display.upscaling_facts` `.Live()` | — |
+| Display | Allow Tearing | `display.upscaling` ▸ Presentation | `gamescope.tearing_enabled` |
+| Display | Force Grab Cursor | ″ | `gamescope.force_grab_cursor` |
+| Display | VRR / Adaptive Sync | `display.frame_limiter` | `gamescope.vrr_enabled` |
+| Frame Limiter | Unlimited **+** FPS Limit | `display.fps_limit`, **one** Stepper | `gamescope.fps_limit` |
+| HDR | HDR | `display.hdr` ▸ Output | `gamescope.hdr_enabled` |
+| HDR | SDR Gamut Wideness | ″ | `gamescope.sdr_gamut_wideness` |
+| HDR | SDR-on-HDR Brightness | ″ | `gamescope.sdr_on_hdr_brightness_nits` |
+| HDR | HDR Input Gain | `display.hdr` ▸ Input gain | `gamescope.hdr_input_gain` |
+| HDR | SDR Input Gain | ″ | `gamescope.sdr_input_gain` |
+| HDR | *app metadata strip* | → `display.hdr_facts` `.Live()` ×4 | — |
+| HDR | *tonemap "deferred" note* | → `display.hdr_facts` `.Live()` | — |
+| Shaders | Vibrancy + 2 controls | `image.shaders.vibrancy` + **2 params** | `reshade.vibrancy.*` |
+| Shaders | Pre-Sharpen + 1 control | `image.shaders.presharpen` + **1 param** | `reshade.pre_sharpen.*` |
+| Shaders | Adaptive Brightness + 6 | `image.shaders.adaptive_brightness` + **6 params** | `reshade.adaptive_brightness.*` |
+
+### Tabs became areas, not groups
+
+`display.gamescope` no longer exists. SPEC §8.1's rail is the product's only navigation and
+`index.html` declares Upscaling, Frame limiter and HDR as separate rail items, so a four-tab
+panel becomes three areas — a four-group sheet would be the same tab bar redrawn as headings.
+The old **Display** tab has no successor: presentation joins Upscaling, VRR joins the limiter.
+`display.output` from the mockup was deliberately **not** built — there are no such settings in
+this codebase. D13.1, D13.2.
+
+### The Six Budget, reported rather than routed around
+
+**Adaptive brightness owns exactly six params — the budget, with zero headroom.** It fits. It is
+called out in `PanelShaders.cpp` and shown to the user as `PARAMETERS 6 of 6`, because the next
+parameter added to that effect is not an overflow to work around: it is the signal that the
+effect has become a *category*. D13.4.
+
+### What the kit gained (the shared prerequisite)
+
+P2's shell could draw Switch, Choice, Action and Facts — the four kinds `setup.shell` used. A
+populated registry needs more:
+
+- **`DrawSharedControl()`**, one painter templated over `Entry` *and* `Parameter`. They are
+  distinct types on purpose, but SPEC §5.3 requires a Param to render identically to the Entry it
+  could be promoted into — one function over both is what guarantees that.
+- **Slider, SliderInt, Stepper, Meter** rows; int-vs-float is decided by what the binding holds.
+- **Group bands** (SPEC §2.5), including `GroupCount()`'s `n / m`, computed from the band's own
+  switch rows so the number cannot be typed.
+- **Units and zero-words** — `ZeroMeans("Unlimited")` replaces the value, the unit is appended.
+  Never baked into a value by a call site.
+- **`ui::ScopedDim`**, under `Col()`/`Accent()`. SPEC §3.13's "row × 0.55" includes the control,
+  and the atoms paint on the draw list where ImGui's disabled alpha never reaches. D13.6.
+- **The Choice dropdown**, for when the segmented group does not fit its lane. P2 ignored
+  `bWantsPopup`; a five-option filter row in a narrow sheet needs it. D13.7.
+- **`Parameter`'s read side** — `HasRange/Lo/Hi/StepSize/Unit/ZeroWord/UsesValue/DisabledReason`,
+  matching `Entry`'s name for name. `Range()` now also resolves the kind to Slider.
+
+### Verified
+
+`ninja -C build` clean. `meson test -C build` **67/67**; `[overlay_ui]` 30 → **34** cases,
+285 assertions. Mutation-checked: removing `Range()`'s kind resolution fails the new param test.
+
+Launched under `scripts/with-gamescope-lock.sh` at display_scale **1.0× and 2.0×**, in CONFIGURE
+and DETAILS, on all four migrated areas, against a temporary `XDG_CONFIG_HOME`. Group bands, the
+`0 / 3` effect count, `PARAMETERS 6 of 6`, dimmed disabled rows with their amber reason, units
+(`25 %`, `203 nits`, `1 x`, `30 fps`) and the Facts/Live blocks all render as the mockup shows.
+
+**A binding was proven to drive the compositor, not just the UI.** Writing through
+`overlay_e2_set` — the same `Binding().Set()` a click calls — moved gamescope's own frame pacing
+every time:
+
+```
+display.fps_limit = 60  ->  Swapchain received new refresh cycle: 16.67ms
+display.fps_limit = 30  ->  Swapchain received new refresh cycle: 33.33ms
+display.fps_limit = 5   ->  clamped to 10, cycle 100.00ms   <- issue #67's floor holds
+display.fps_limit = 0   ->  Swapchain received new refresh cycle: 3.57ms (uncapped)
+```
+
+That is issue #25's exact failure mode tested directly: the control writes, and this time the
+value sticks.
+
+### Known rough edges, recorded rather than hidden
+
+- **The Inspector does not scroll.** At 2.0× the ladder gives a drawer, and Adaptive brightness's
+  six params overflow its bottom edge — the last row is clipped. P2 never hit this because its
+  one real area had three rows and no params. `DrawConfigure()` lays out with absolute `y` on the
+  draw list rather than through ImGui's cursor, so a scrollbar is real work, not a flag. Belongs
+  to the P3 part that has the most params, not to this one.
+- **`display.gamescope` as an id is gone.** Anything scripted against
+  `overlay_e2_select display.gamescope` needs the three new ids.
+
+### Still deferred
+
+Unchanged from P2's list: the eleven rail icons, `Ctrl+K`, multi-column sheets, a sixth baked font
+style, `Cfg()`, `Repeat()`, `ui_lint`, `ui_snapshot`. The four remaining escaped areas
+(`audio.mixer`, `system.monitor`, `system.log`, `setup.config`) are the later parts of P3.
+
+---
+
 ## 2026-08-23 — P2, the shell
 
 **Status: the shell exists and is off by default.** `overlay_e2 0` (the default) draws the

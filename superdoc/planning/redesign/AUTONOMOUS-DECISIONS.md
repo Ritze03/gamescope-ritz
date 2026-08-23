@@ -12,6 +12,85 @@ cheap.
 
 ## 2026-08-23
 
+### D13 · Nine calls taken while migrating Display and Shaders, P3 part A
+
+P3 part A replaces the `Escape()` hatches on `display.gamescope` and `image.shaders` with real
+registrations. `EscapeCount()` 6 → 4. Build clean, **67/67 tests** (`overlay_ui` 30 → 34 cases).
+Full write-up: `round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D13.1 · The four Gamescope tabs became three AREAS, not one area with four groups.**
+`display.gamescope` is gone; `display.upscaling`, `display.frame_limiter` and `display.hdr`
+replace it. **Rejected:** keeping one `display.gamescope` area with four group bands — the
+smaller, more reversible change. **Why:** the rail is the product's only navigation (SPEC §8.1
+lists exactly these as rail items, and `index.html` — the declared tiebreaker — declares them as
+separate areas), and a four-group sheet is a tab bar redrawn as headings. The old **Display** tab
+has no successor on purpose: its three settings are two presentation ones (tearing, cursor grab)
+and one refresh one (VRR), so they joined the areas that already own those concerns rather than
+forming a fourth area with no theme. *Cost, stated plainly:* the rail grew from 7 items to 9, and
+`overlay_e2_select display.gamescope` no longer resolves.
+
+**D13.2 · `display.output` from the mockup was NOT created.** The mockup's fourth Display area
+holds resolution, refresh rate, colour range and rotation. **Why not:** gamescope-ritz has no
+config keys and no setters for any of them. Building the area would mean inventing four settings,
+and the brief's hardest rule is that this is a presentation change. The mockup is the tiebreaker
+for *how a thing should look*, not a list of features to add.
+
+**D13.3 · The frame limiter is ONE Stepper, not a toggle plus a slider.** Issue #67's valid set is
+0 **or** [10, 480], with a real hole — 1-9 fps is a trap, because at that rate the overlay itself
+is too slow to drive, including too slow to undo. The legacy tab spent two controls on that hole
+(an "Unlimited" switch plus a 10-480 slider) because `widgets::SliderInt` cannot express a gap.
+**Chose:** `Stepper.Range(0, 480).Step(10).ZeroMeans("Unlimited")`. With a step of 10 anchored at
+0 the reachable set *is* {0, 10, 20, …}: the hole is a consequence of the step, not a special case
+anyone maintains, and one setting is one row again. `SetFpsLimit()` still clamps every write, so
+the floor holds for the ConCommand and `gamescope_control` paths too. *Cost:* values that are not
+multiples of 10 are no longer reachable **by stepping** (an existing 144 loads, displays and works;
+stepping from it moves to 154). Nothing on disk changed.
+
+**D13.4 · Adaptive brightness sits on exactly six params, and that was left visible rather than
+worked around.** Six is the budget; a seventh aborts registration. It fits with zero headroom.
+**Chose:** declare all six, and say in the code and in the Inspector (`PARAMETERS 6 of 6`) that
+the next one is a design signal, not an obstacle — the effect would have become a *category*.
+**Rejected:** pre-emptively promoting it to its own area now, or demoting a param to make room.
+
+**D13.5 · Three settings that were prose in the old panels became `.Live()` facts, not rows.**
+The Upscaling tab's orange "Steam is focused — filter/scaler forced to Fit/Linear" banner, the HDR
+tab's read-only app-metadata strip, and the HDR tab's "Tonemap Operator: deferred" note are all
+statements about live state, not settings. **Chose:** each is a readout on that area's Diagnostics
+`Facts` row. **Why:** a `Facts` row cannot be given a control at all (`.Live()` has no `Bind`
+overload), which is a stronger guarantee than the legacy "never editable here" comment was — and
+the tonemap note in particular records *why there is no control*, which is the one thing dropping
+it would have lost.
+
+**D13.6 · The disabled dim moved under `Col()`/`Accent()` as `ui::ScopedDim`.** SPEC §3.13 says
+"row × 0.55", meaning label, value **and** control. The control atoms paint straight onto the draw
+list with token colours, so ImGui's `BeginDisabled()` alpha never reaches them — the first
+implementation dimmed only the text, and HDR's greyed sliders stayed fully lit. **Rejected:**
+giving every atom a `bool bDisabled` parameter; the first atom that forgot it would be a control
+that greys everywhere except where it matters. The factor now lives under the two functions every
+pixel already goes through, so a new atom is dimmed correctly before it is written.
+
+**D13.7 · The downgraded Choice got its dropdown implemented.** `controls::Choice()` auto-
+downgrades to a dropdown when the segmented group does not fit its lane, and P2's shell ignored
+`bWantsPopup` — it had one Choice with three short options and never saw the downgrade. A
+five-option filter row in a narrow sheet does. **Why this mattered enough to do now:** without it
+the control renders correctly and does nothing, which is precisely the shape of issues #25 and
+#68.
+
+**D13.8 · A new console command, `overlay_e2_set <id> <value>`.** It writes through
+`Entry::Binding().Set()` — the same call a click makes, not a parallel path. **Why:** pointer
+injection is permanently forbidden here (D4), and no keyboard-injection tool is installed either,
+so "does this row actually drive the compositor, or does it merely render?" had **no** answer
+available to a script. That is not academic — #25 and #68 were both controls that rendered
+correctly while doing nothing, and both passed review. This is the same argument that produced
+`overlay_e2_select` in D12, applied to a registration's value instead of its selection. It can
+only address registered ids and refuses a read-only kind.
+
+**D13.9 · The legacy panels were left completely intact.** `PanelDisplay_Draw()` and
+`PanelShaders_Draw()` and every `DrawXxxTab()` still exist and still run under `overlay_e2 0`.
+Only the two `Panel*_DrawBody()` escape hatches were deleted. **Why:** D10 says the two UIs
+coexist behind the ConVar until the default flips at the end of the phase; deleting the legacy
+body now would make `overlay_e2 0` a worse UI than it is today, mid-phase.
+
 ### D12 · Eleven calls taken while building P2, the shell
 
 P2 is the three-region shell — `src/Overlay/UI/Layout.*` (pure geometry) and `Shell.*` (the

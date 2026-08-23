@@ -231,8 +231,7 @@ namespace gamescope::ui::shell
 			// bar becomes rail items -- a four-group sheet would be the same
 			// tab bar redrawn as headings. AUTONOMOUS-DECISIONS.md D13.1.
 			PanelDisplay_RegisterAreas( reg );
-			reg.Add( "image.shaders", "Shaders", Section::Display )
-				.Escape( []{ PanelShaders_DrawBody(); } );
+			PanelShaders_RegisterArea( reg );
 
 			// ---- SYSTEM --------------------------------------------------
 			// Mixer leads SYSTEM, ahead of Monitor and Log -- SPEC §8.1's
