@@ -38,6 +38,7 @@
 // escape hatch dies with the last one.
 #include "Shell.h"
 
+#include "Band.h"
 #include "Colors.h"
 #include "Controls.h"
 #include "Layout.h"
@@ -892,10 +893,230 @@ namespace gamescope::ui::shell
 			}
 		}
 
+		// =================================================================
+		//  Composites -- SPEC §4.2's band
+		// =================================================================
+		// How many 44-tall lines a declaration occupies. ONE for every row in
+		// the taxonomy; n for a Composite, and that n comes from Band.cpp's
+		// kSpecs table rather than from anything a call site said (SPEC §4.2
+		// clause 1: "n x 44, n in {2,3}. Nothing else.").
+		//
+		// Every place that advances a y cursor past a declaration goes
+		// through this, so the sheet and the Inspector cannot disagree about
+		// how tall a band is.
+		int LinesFor( const Entry &entry )
+		{
+			if ( entry.GetKind() != Kind::Composite )
+				return 1;
+			return ImClamp( Band( entry.GetCompositeKind() ).nLines,
+			                tok::kBandMinLines, tok::kBandMaxLines );
+		}
+
+		// The nine anchors, named. A lookup and not a format string, so the
+		// value column cannot be told a corner the grid cannot express.
+		const char *AnchorName( int nVert, int nHoriz )
+		{
+			static const char *const kNames[ 3 ][ 3 ] = {
+				{ "top-left",    "top",    "top-right"    },
+				{ "left",        "centre", "right"        },
+				{ "bottom-left", "bottom", "bottom-right" },
+			};
+			return kNames[ ImClamp( nVert, 0, 2 ) ][ ImClamp( nHoriz, 0, 2 ) ];
+		}
+
+		int AsInt( const Value &v )
+		{
+			if ( std::holds_alternative<int>( v ) )   return std::get<int>( v );
+			if ( std::holds_alternative<float>( v ) ) return (int)std::get<float>( v );
+			return 0;
+		}
+
+		float AsFloat( const Value &v )
+		{
+			if ( std::holds_alternative<float>( v ) ) return std::get<float>( v );
+			if ( std::holds_alternative<int>( v ) )   return (float)std::get<int>( v );
+			return 0.0f;
+		}
+
+		// SPEC §4.2 clause 2: line 1 carries the composite's RESOLVED VALUE
+		// in the value column -- "the value column already tells you they are
+		// 32 / 32 without showing two steppers, which is the whole calming
+		// move in miniature" (§4.3).
+		std::string CompositeValue( const Entry &entry )
+		{
+			switch ( entry.GetCompositeKind() )
+			{
+				case CompositeKind::Anchor:
+				{
+					std::string s = AnchorName( AsInt( entry.Binding().Get() ),
+					                            AsInt( entry.BindingB().Get() ) );
+					// The margins are Params (§4.3), so they are read from
+					// the params themselves -- there is no second copy of
+					// them for the value line to drift away from.
+					if ( entry.ParamCount() >= 2 )
+					{
+						s += "  ·  " + ValueToString( entry.ParamAt( 0 ).Binding().Get() )
+						   + " / "   + ValueToString( entry.ParamAt( 1 ).Binding().Get() );
+					}
+					return s;
+				}
+				case CompositeKind::Hue:
+				{
+					char sz[ 16 ];
+					snprintf( sz, sizeof( sz ), "%.0f°", AsFloat( entry.Binding().Get() ) );
+					return sz;
+				}
+				case CompositeKind::Color:
+				{
+					char sz[ 16 ];
+					snprintf( sz, sizeof( sz ), "#%06X", AsInt( entry.Binding().Get() ) & 0xFFFFFF );
+					return sz;
+				}
+				case CompositeKind::Graph:
+				case CompositeKind::Strip:
+					return entry.SummaryText();
+			}
+			return {};
+		}
+
+		// One composite band. Structurally the same function as DrawEntryRow
+		// -- same selection fill, same hairline, same label/value split, same
+		// affordance column -- differing only in that its bounds are n rows
+		// tall and its control is a body rather than an atom. That is clause
+		// 2 made literal: "scanning the sheet, a composite is
+		// indistinguishable from a row until your eye reaches the control
+		// column."
+		bool DrawCompositeBand( const Entry &entry, const Lane &laneBase, float flOriginPx,
+		                        float flTopPx, bool bSelected )
+		{
+			const BandLayout bl = LayOutBand( laneBase, flOriginPx, flTopPx, entry.GetCompositeKind() );
+			const ImRect rcBand = bl.rcBand;
+
+			ImGui::SetCursorScreenPos( rcBand.Min );
+			ImGui::PushID( entry.Id().c_str() );
+
+			// The band's own hit box covers line 1 ONLY. The body owns the
+			// rest, and a click there must reach the grid rather than being
+			// swallowed by a full-band selector drawn on top of it.
+			const ImRect rcHit( rcBand.Min.x, rcBand.Min.y, bl.rcBody.Min.x, bl.line1.Bounds().Max.y );
+			ImGui::SetCursorScreenPos( rcHit.Min );
+			const bool bClicked = ImGui::InvisibleButton( "##band", rcHit.GetSize() );
+			const bool bHovered = ImGui::IsItemHovered();
+
+			if ( bSelected )
+				Fill( { rcBand.Min.x, rcBand.Min.y, rcBand.Max.x, rcBand.Max.y }, Accent( 0.08f ) );
+			else if ( bHovered )
+				Fill( { rcBand.Min.x, rcBand.Min.y, rcBand.Max.x, rcBand.Max.y },
+				      IM_COL32( 255, 255, 255, 10 ) );
+
+			// Clause 1's consequence: the state edge spans the WHOLE band,
+			// not just its first line, or a selected composite would look
+			// like a selected row with n-1 unselected ones stacked under it.
+			if ( bSelected )
+			{
+				const ImRect rcEdge = bl.line1.StateEdge();
+				Fill( { rcEdge.Min.x, rcBand.Min.y, rcEdge.Max.x, rcBand.Max.y }, Col( Role::AccentBase ) );
+			}
+			HLine( rcBand.Min.x, rcBand.Max.x, rcBand.Max.y - Hairline(), Col( Role::Line ) );
+
+			const bool bDisabled = !entry.DisabledReason().empty();
+			const ScopedDim dim( bDisabled );
+
+			// Clause 2: the label and the resolved value land in the SHEET's
+			// own columns, through line 1's ordinary RowCtx.
+			const std::string sValue = CompositeValue( entry );
+			ImRect rcLabel, rcValue;
+			const float flValueW = !sValue.empty()
+				? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
+			bl.line1.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+
+			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
+			       TypeRole::Label,
+			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
+			       entry.Title().c_str() );
+			if ( flValueW > 0.0f )
+				Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
+				       TypeRole::Value, Col( Role::TextPrimary ), sValue.c_str(), TextAlign::Right );
+
+			// Clause 4 needs nothing here: the only rect this function draws
+			// into below line 1 is bl.rcBody, which Band.cpp right-bound. The
+			// label column of lines 2..n is air because nothing allocates it.
+			if ( bDisabled )
+				ImGui::BeginDisabled();
+
+			switch ( entry.GetCompositeKind() )
+			{
+				case CompositeKind::Anchor:
+				{
+					int nV = AsInt( entry.Binding().Get() );
+					int nH = AsInt( entry.BindingB().Get() );
+					if ( controls::AnchorGrid( bl.rcBody, "grid", &nV, &nH ) )
+					{
+						entry.Binding().Set( Value{ nV } );
+						entry.BindingB().Set( Value{ nH } );
+					}
+					break;
+				}
+				case CompositeKind::Hue:
+				{
+					float flHue = AsFloat( entry.Binding().Get() );
+					if ( controls::HueBody( bl.rcBody, "hue", &flHue ) )
+						entry.Binding().Set( Value{ flHue } );
+					break;
+				}
+				case CompositeKind::Color:
+				{
+					// The stored value is, and stays, a packed 0xRRGGBB int
+					// -- the control edits OKLCH and converts back on every
+					// edit, so no config format changed for this row to
+					// exist.
+					const int nPacked = AsInt( entry.Binding().Get() );
+					float flL = 0.0f, flC = 0.0f, flH = 0.0f;
+					palette::ImU32ToOklch( IM_COL32( ( nPacked >> 16 ) & 0xFF,
+					                                 ( nPacked >> 8 ) & 0xFF,
+					                                 nPacked & 0xFF, 255 ), &flL, &flC, &flH );
+					if ( controls::ColorBody( bl.rcBody, "col", &flL, &flC, &flH ) )
+					{
+						const ImU32 col = palette::OklchToImU32( flL, flC, flH );
+						entry.Binding().Set( Value{ (int)(
+							( (int)( ( col >> IM_COL32_R_SHIFT ) & 0xFF ) << 16 ) |
+							( (int)( ( col >> IM_COL32_G_SHIFT ) & 0xFF ) << 8 ) |
+							  (int)( ( col >> IM_COL32_B_SHIFT ) & 0xFF ) ) } );
+					}
+					break;
+				}
+				case CompositeKind::Graph:
+				{
+					const SampleWindow win = entry.SampleData();
+					controls::GraphBody( bl.rcBody, win.pflSamples, win.nCount,
+					                     win.flCeiling, win.flOutlier );
+					break;
+				}
+				case CompositeKind::Strip:
+					// No call site registers a Strip: the audio fader stayed
+					// a Slider row in P3b. Deliberately draws nothing rather
+					// than inventing a body no declaration asks for -- a
+					// control that renders and does nothing is #25 and #68.
+					break;
+			}
+
+			if ( bDisabled )
+				ImGui::EndDisabled();
+
+			ImGui::PopID();
+			return bClicked;
+		}
+
 		// One Inspector/sheet row of the Row grammar.
 		bool DrawEntryRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
 		                   bool bSelected )
 		{
+			// A composite is NOT a row (SPEC §4.2), and this is the one place
+			// that says so. Everything downstream -- selection, the keyboard,
+			// Configure -- goes on treating it as one declaration.
+			if ( entry.GetKind() == Kind::Composite )
+				return DrawCompositeBand( entry, laneBase, flOriginPx, flTopPx, bSelected );
+
 			const RowCtx row = RowCtx::ForRow( laneBase, flOriginPx, flTopPx );
 			const ImRect rcRow = row.Bounds();
 
@@ -1151,7 +1372,9 @@ namespace gamescope::ui::shell
 						Select( &entry );
 						s_eFocusRegion = Region::Sheet;
 					}
-					y += Px( tok::kRowH );
+					// n x 44 for a composite, 44 for everything else -- from
+					// Band.cpp, never from a call site (SPEC §4.2 clause 1).
+					y += Px( tok::kRowH ) * (float)LinesFor( entry );
 				}
 			}
 			ImGui::EndChild();
@@ -1320,7 +1543,7 @@ namespace gamescope::ui::shell
 
 			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
 			DrawEntryRow( entry, lane, rcIn.x0, y, false );
-			y += Px( tok::kRowH );
+			y += Px( tok::kRowH ) * (float)LinesFor( entry );
 
 			// index.html's `parameters  <n> of 6` header. The denominator is
 			// the Six Budget itself, so the header is also the place the

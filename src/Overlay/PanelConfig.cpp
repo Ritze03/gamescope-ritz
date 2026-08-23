@@ -1245,13 +1245,30 @@ namespace gamescope
 		{
 			a.Group( "Theme" );
 
-			a.Slider( "overlay.accent_hue", "Accent colour",
+			// SPEC §4.4's "Accent hue" composite: a 2-line band whose body is
+			// the hue rail plus its eight preset swatches, and whose value
+			// column reads a plain `218°`.
+			//
+			// This was issue #37's gradient control, which P3b had to
+			// downgrade to a plain Slider because Kind::Composite rendered
+			// nothing at the time -- the hue was still settable, but the
+			// strip that shows WHICH hue, sampled from the real
+			// OklchToImU32(), was gone. It is restored here, on the band, not
+			// as a second bespoke widget: Controls.cpp's Rail() samples the
+			// same accent math the legacy strip did, so the two cannot
+			// disagree about what a hue looks like.
+			a.Composite( "overlay.accent_hue", "Accent colour", ui::CompositeKind::Hue,
 				ui::AnyBind::Of<float>(
 					[]{ EnsureGeneralSettingsLoaded(); return s_GeneralSettings.overlay.accent_hue; },
 					[]( float flHue )
 					{
 						EnsureGeneralSettingsLoaded();
 						s_GeneralSettings.overlay.accent_hue = flHue;
+						// QueueGeneralSave() pushes the live theme before it
+						// enqueues the write, so every accent token is
+						// recomputed on the same frame the rail moves --
+						// which is what makes the band's own swatches, and
+						// the rest of the overlay, follow the drag.
 						QueueGeneralSave();
 					} ) )
 				.Help( "One hue drives the whole accent family -- sliders, toggles, the rail's active "

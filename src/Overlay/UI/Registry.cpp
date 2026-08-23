@@ -256,9 +256,17 @@ namespace gamescope::ui
 			m_Bind.Set( m_Default );
 	}
 
+	// All three of these treat the SECOND AXIS exactly like the first.
+	// A composite bound to two values (the anchor's row and column) is one
+	// setting, so "differs from default" and "reset" have to mean the pair
+	// -- an anchor sitting at the right column but the wrong row is not at
+	// its default, and resetting it must move both. Reading only m_Bind
+	// would leave the grid able to show an un-resettable half.
 	bool Entry::HasDefault() const
 	{
 		if ( !std::holds_alternative<std::monostate>( m_Default ) )
+			return true;
+		if ( !std::holds_alternative<std::monostate>( m_DefaultB ) )
 			return true;
 		for ( const auto &pParam : m_Params )
 			if ( pParam->HasDefault() )
@@ -270,6 +278,9 @@ namespace gamescope::ui
 	{
 		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
 			if ( !ValueEquals( m_Bind.Get(), m_Default ) )
+				return false;
+		if ( !std::holds_alternative<std::monostate>( m_DefaultB ) && m_BindB.IsBound() )
+			if ( !ValueEquals( m_BindB.Get(), m_DefaultB ) )
 				return false;
 
 		// The row's parameters count as part of the row -- that is what
@@ -284,8 +295,16 @@ namespace gamescope::ui
 	{
 		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
 			m_Bind.Set( m_Default );
+		if ( !std::holds_alternative<std::monostate>( m_DefaultB ) && m_BindB.IsBound() )
+			m_BindB.Set( m_DefaultB );
 		for ( const auto &pParam : m_Params )
 			pParam->ResetToDefault();
+	}
+
+	Entry &Entry::Samples( std::function<SampleWindow()> fn )
+	{
+		m_Samples = std::move( fn );
+		return *this;
 	}
 
 	Entry &Entry::Confirm( const char *pszPrompt )

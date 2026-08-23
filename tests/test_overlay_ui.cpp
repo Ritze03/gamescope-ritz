@@ -1261,6 +1261,54 @@ TEST_CASE( "reset: a row restores itself and its parameters together", "[overlay
 	REQUIRE( rec.Count() == 0 );
 }
 
+TEST_CASE( "reset: a composite's SECOND axis counts as part of the row", "[overlay_ui]" )
+{
+	// An anchor is one setting whose value is a PAIR. If "differs from
+	// default" and "reset" read only the first binding, an anchor sitting at
+	// the right column but the wrong row reports itself as unchanged -- and
+	// the half that did move can never be reset. That is the state edge (D6)
+	// lying about the sheet, so it is checked here rather than left to the
+	// renderer.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "system.monitor", "Monitor", ui::Section::System );
+
+	int nV = 0, nH = 2;
+	a.Composite( "monitor.anchor", "Placement", ui::CompositeKind::Anchor,
+			ui::Bind( &nV ), ui::Bind( &nH ) )
+		.Default( 0, 2 )
+		.Help( "Which screen corner the monitor is anchored to." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "monitor.anchor" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( pEntry->HasDefault() );
+	REQUIRE( pEntry->IsAtDefault() );
+
+	// Axis A alone moving is enough.
+	nV = 2;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( nV == 0 );
+	REQUIRE( nH == 2 );
+
+	// Axis B alone moving is equally enough -- this is the half that a
+	// single-binding implementation silently drops.
+	nH = 0;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( nV == 0 );
+	REQUIRE( nH == 2 );
+
+	// And both at once, in one action.
+	nV = 1; nH = 1;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( nV == 0 );
+	REQUIRE( nH == 2 );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
 TEST_CASE( "reset: a row with no declared default offers nothing to reset to", "[overlay_ui]" )
 {
 	// The alternative -- treating "no default" as zero -- would let a reset

@@ -118,5 +118,53 @@ namespace gamescope::ui
 		// 3x3 cells on the control module, so the grid agrees with every other
 		// control instead of being a foreign object (fix #3).
 		bool AnchorGrid( const ImRect &rcBody, const char *pszId, int *pnVert, int *pnHoriz );
+
+		// ===================================================================
+		//  The other composite bodies -- SPEC §4.4's table
+		// ===================================================================
+		// Each takes the rcBody that Band.cpp computed and nothing else: the
+		// band decides how tall and how wide, the body only decides what goes
+		// inside it. That split is the whole reason two Position Grid call
+		// sites cannot drift apart again -- geometry has exactly one author.
+		//
+		// A body atom never asks ImGui for a cursor, a content region or a
+		// window width. If one did, it would be choosing its own size, and
+		// Band.cpp's four clauses would stop being the only answer.
+
+		// A gradient rail: a track whose fill is sampled from `fnColorAt`
+		// (t in 0..1) rather than a flat colour, with a marker at the current
+		// value. Click or drag anywhere on it to set.
+		//
+		// WHY A COLOUR FUNCTION AND NOT A COLOUR PAIR. Issue #37's accent
+		// gradient samples the REAL OklchToImU32() the accent family is built
+		// from, so the strip can never be an approximate rainbow that
+		// visibly disagrees with the accent it is choosing. Interpolating
+		// between two endpoint colours would reintroduce exactly that lie.
+		using RailColorFn = ImU32 ( * )( float flT, void *pUser );
+		bool Rail( const ImRect &rcRail, const char *pszId, float *pflValue,
+		           float flMin, float flMax, RailColorFn fnColorAt, void *pUser = nullptr );
+
+		// ---- SPEC §4.4 -- Accent hue: hue rail + 8 swatches ---------------
+		// The swatches are the eight 45-degree stops. They are PRESETS on the
+		// same one value the rail sets, not a second setting -- which is why
+		// they share *pflHue and return through the same bool.
+		bool HueBody( const ImRect &rcBody, const char *pszId, float *pflHue );
+
+		// ---- SPEC §4.4 -- Colour override: L/C/H rails + swatch -----------
+		// Operates in OKLCH because that is the space the accent family and
+		// every palette token already live in (Palette.h), so a colour picked
+		// here is expressible in the same terms as everything around it.
+		// The caller owns the sRGB<->OKLCH round trip, so the config format
+		// (a packed RGB int) is untouched by this control existing.
+		bool ColorBody( const ImRect &rcBody, const char *pszId,
+		                float *pflL, float *pflC, float *pflH );
+
+		// ---- SPEC §4.4 -- Frametime graph: a 240-sample sparkline ---------
+		// Read-only (Entry::ReadOnly() returns true for CompositeKind::Graph),
+		// so it takes no binding and returns nothing. Samples are newest-last.
+		// `flOutlierMs` marks the threshold above which a bar is drawn in the
+		// warn colour; pass 0 to mark none.
+		void GraphBody( const ImRect &rcBody, const float *pflSamples, size_t nSamples,
+		                float flCeiling, float flOutlierMs );
 	}
 }
