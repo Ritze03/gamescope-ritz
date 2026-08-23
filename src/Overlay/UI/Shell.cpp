@@ -255,8 +255,10 @@ namespace gamescope::ui::shell
 			// Mixer leads SYSTEM, ahead of Monitor and Log -- SPEC §8.1's
 			// amendment is explicit that the fold keeps the original
 			// relative order.
-			reg.Add( "audio.mixer", "Mixer", Section::System )
-				.Escape( []{ PanelAudio_DrawBody(); } );
+			// P3 part B. The first DYNAMIC area: its rows are one per live
+			// PipeWire stream, discovered at runtime rather than declared
+			// here. See ui::Area::Rebuilds().
+			PanelAudio_RegisterArea( reg );
 			reg.Add( "system.monitor", "Monitor", Section::System )
 				// FpsDisplay.cpp does two jobs; this is the SETTINGS half
 				// only. The HUD over the game is drawn from its own,
@@ -1687,6 +1689,13 @@ namespace gamescope::ui::shell
 			return;
 
 		RunKeyboard();
+
+		// Dynamic areas resynchronise HERE, at the top of the frame, before
+		// anything reads a row out of one. A rebuild frees every Entry the
+		// area held, so no Entry pointer may be held across it -- doing it
+		// once, first, is what guarantees nothing does. Selection is by id
+		// string and survives (Registry.h's Rebuilds()).
+		Reg().SyncDynamicAreas();
 
 		const Area *pArea = SelectedArea();
 		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );

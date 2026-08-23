@@ -19,6 +19,18 @@
 
 namespace gamescope
 {
+	namespace ui { class Registry; class Area; }
+
+	// P3 part B: the E2 registration for `audio.mixer`, replacing the
+	// Escape() hatch below.
+	//
+	// This is the first DYNAMIC area in the product -- its row set is one
+	// row per live PipeWire stream, and streams appear and disappear while
+	// the overlay is open. See ui::Area::Rebuilds() in Overlay/UI/Registry.h
+	// for how that is reconciled with a registry designed around startup
+	// declaration, and AUTONOMOUS-DECISIONS.md D14 for why the alternative
+	// (a fixed pool of positional slots) was rejected.
+	void PanelAudio_RegisterArea( ui::Registry &reg );
 	// Draws the Audio panel's ImGui window. Must be called from the same
 	// place/thread SettingsOverlay draws its own window (steamcompmgr
 	// thread, between ImGui::NewFrame() and ImGui::Render()), matching

@@ -932,3 +932,192 @@ TEST_CASE( "entry: zero-means and unit are declared, never baked into a value", 
 	ui::LawRecorder rec;
 	REQUIRE( reg.SelfTest() == 0 );
 }
+
+// =========================================================================
+//  Dynamic areas (P3b) -- the registry's answer to a row set that changes
+// =========================================================================
+// Audio is the first area whose rows are not known when RegisterAll() runs:
+// a row exists because an application is making a sound right now. These
+// tests exist because that widens WHEN a law violation can fire -- from
+// boot only, to any frame -- and the mitigation is that a dynamic row is
+// GENERATED, so one test against a fabricated stream list covers every row
+// the generator will ever emit. See Registry.h's Rebuilds().
+namespace
+{
+	// Stands in for Audio::StreamCandidate. The point of the tests below is
+	// the registry's contract, not PipeWire's -- a fake keeps them runnable
+	// with no audio server, which is the only way they run in CI at all.
+	struct FakeStream
+	{
+		int         nNodeId;
+		std::string sName;
+	};
+
+	std::vector<FakeStream> g_vecFakeStreams;
+
+	uint64_t FakeGeneration()
+	{
+		uint64_t ulHash = 1469598103934665603ull;
+		for ( const FakeStream &s : g_vecFakeStreams )
+		{
+			for ( unsigned char c : ( std::to_string( s.nNodeId ) + s.sName ) )
+			{
+				ulHash ^= c;
+				ulHash *= 1099511628211ull;
+			}
+		}
+		return ulHash;
+	}
+
+	// The shape of Audio's real builder: one Slider per stream, id derived
+	// from the NODE, one mute Param each.
+	void BuildFakeArea( ui::Area &a )
+	{
+		a.Group( "Streams" );
+		for ( const FakeStream &s : g_vecFakeStreams )
+		{
+			const std::string sId = "audio.node." + std::to_string( s.nNodeId );
+			a.Slider( sId.c_str(), s.sName.c_str(), ui::AnyBind() )
+				.Help( "Volume of this application's audio stream." )
+				.Range( 0.0f, 150.0f )
+				.Unit( "%" )
+				.Param( "mute", "Mute", ui::AnyBind() )
+					.Help( "Silences this stream without changing its volume." );
+		}
+	}
+}
+
+TEST_CASE( "dynamic: a rebuild tracks the row set as streams come and go", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams = { { 244, "eldenring.exe" }, { 334, "Floorp" } };
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, BuildFakeArea );
+
+	REQUIRE( a.IsDynamic() );
+	REQUIRE( a.EntryCount() == 0 );          // nothing is built until the first sync
+
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( a.EntryCount() == 2 );
+	REQUIRE( reg.FindEntry( "audio.node.244" ) != nullptr );
+	REQUIRE( reg.FindEntry( "audio.node.334" ) != nullptr );
+
+	// An unchanged generation must NOT rebuild -- a rebuild under the
+	// pointer would drop the row being dragged.
+	REQUIRE( reg.SyncDynamicAreas() == 0 );
+	REQUIRE( a.EntryCount() == 2 );
+
+	// A stream ends.
+	g_vecFakeStreams = { { 334, "Floorp" } };
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( a.EntryCount() == 1 );
+	REQUIRE( reg.FindEntry( "audio.node.244" ) == nullptr );
+	REQUIRE( reg.FindEntry( "audio.node.334" ) != nullptr );
+
+	// A new one starts, and the SURVIVING row keeps its id -- this is the
+	// property a positional slot pool would not have. 334 is still Floorp
+	// after 512 appears, so a slider mid-drag still means Floorp.
+	g_vecFakeStreams = { { 334, "Floorp" }, { 512, "mpv" } };
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( reg.FindEntry( "audio.node.334" ) != nullptr );
+	REQUIRE( reg.FindEntry( "audio.node.512" ) != nullptr );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "dynamic: rebuilding the same ids does not trip id uniqueness", "[overlay_ui]" )
+{
+	// The law that a dynamic area is most likely to break, and the reason
+	// SyncIfStale() releases its ids before the builder runs. Without that
+	// release the SECOND build of the same stream would abort the process.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams = { { 244, "eldenring.exe" } };
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, BuildFakeArea );
+	reg.SyncDynamicAreas();
+
+	// Same ids, different titles -- a rename, which is a real rebuild
+	// (media.name changes when a browser tab does).
+	g_vecFakeStreams = { { 244, "Elden Ring" } };
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( a.EntryCount() == 1 );
+	REQUIRE( a.EntryAt( 0 ).Title() == "Elden Ring" );
+	REQUIRE( a.EntryAt( 0 ).Id() == "audio.node.244" );
+
+	// Params are released with their parent, or the second build's `mute`
+	// would collide with the first's.
+	REQUIRE( reg.FindParam( "audio.node.244.mute" ) != nullptr );
+	REQUIRE( rec.Caught( ui::Law::UniqueId ) == false );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "dynamic: a row built after SelfTest is still held to the laws", "[overlay_ui]" )
+{
+	// The hole a dynamic area opens: Registry::SelfTest() runs once after
+	// RegisterAll(), so a row built later has never been through it. If a
+	// rebuild did not re-check, a generated row could ship with no Help()
+	// at all -- and Help is the Inspector's only description.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams = { { 244, "eldenring.exe" } };
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, []( ui::Area &area )
+	{
+		// Deliberately malformed: no Help().
+		area.Slider( "audio.node.244", "eldenring.exe", ui::AnyBind() ).Range( 0.0f, 150.0f );
+	} );
+
+	REQUIRE( reg.SelfTest() == 0 );   // nothing built yet -- nothing to catch
+	reg.SyncDynamicAreas();
+
+	// The rebuild's own self-test caught it, mid-session, exactly as boot
+	// would have.
+	REQUIRE( rec.Caught( ui::Law::HelpRequired ) );
+}
+
+TEST_CASE( "dynamic: an area is escaped or dynamic, never both", "[overlay_ui]" )
+{
+	// Same argument as Law::Escaped: an escaped area has no entries by
+	// construction, and a dynamic one exists precisely to have them. The
+	// half-and-half area is the shape that would make the migration seam
+	// permanent.
+	{
+		ui::Registry reg;
+		ui::LawRecorder rec;
+		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+		a.Escape( []{} );
+		a.Rebuilds( FakeGeneration, BuildFakeArea );
+		REQUIRE( rec.Caught( ui::Law::Dynamic ) );
+		REQUIRE( !a.IsDynamic() );
+	}
+	{
+		ui::Registry reg;
+		ui::LawRecorder rec;
+		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+		a.Rebuilds( FakeGeneration, nullptr );
+		REQUIRE( rec.Caught( ui::Law::Dynamic ) );
+		REQUIRE( !a.IsDynamic() );
+	}
+}
+
+TEST_CASE( "dynamic: an empty stream set is a valid build, not a violation", "[overlay_ui]" )
+{
+	// Silence is the common case at startup, and it must not look like a
+	// failure -- this is also why the help law needs its own test above:
+	// with no streams the row-building code never runs at all.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams.clear();
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, BuildFakeArea );
+	reg.SyncDynamicAreas();
+
+	REQUIRE( a.EntryCount() == 0 );
+	REQUIRE( rec.Count() == 0 );
+}
