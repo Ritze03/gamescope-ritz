@@ -57,6 +57,10 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Slider widget spec](planning/slider-widget-spec.md) — the shared `widgets::SliderControl()`
   slider, measured from a real render (supersedes the mockup spec's own §7 for anything the
   two disagree on).
+- [Overlay redesign proposals](planning/redesign/) — three preserved design directions (A
+  console, B command palette, E inspector rail) with interactive mockups, specs, proposed
+  helper APIs and feasibility. **Nothing implemented**; kept so a regression can be rolled
+  back against stated design intent.
 
 ## claude-instructions/ — mandatory rules for agents
 
