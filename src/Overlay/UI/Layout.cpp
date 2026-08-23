@@ -1,0 +1,219 @@
+#include "Layout.h"
+
+#include <algorithm>
+#include <cmath>
+#include <variant>
+
+namespace gamescope::ui
+{
+	// =====================================================================
+	//  The slab (SPEC §8.1)
+	// =====================================================================
+	Slab Slab::For( float flSurfaceWPx, float flSurfaceHPx, float flScale )
+	{
+		Slab slab;
+		slab.flScale = flScale <= 0.0f ? 1.0f : flScale;
+
+		//   min( surfaceW x 0.90, max( 1560 x scale, 1180 ) )
+		//   min( surfaceH x 0.86, 940 x scale )
+		//
+		// Note the asymmetry, which is SPEC.md's own and not a slip: width
+		// has a 1180 FLOOR inside the max() -- so a small surface still gets
+		// a slab wide enough for rail + inspector + a usable sheet -- while
+		// height has none, because a short slab merely scrolls.
+		slab.flWidthPx  = std::min( flSurfaceWPx * shelltok::kSurfFracW,
+		                            std::max( shelltok::kSlabBaseW * slab.flScale, shelltok::kSlabMinW ) );
+		slab.flHeightPx = std::min( flSurfaceHPx * shelltok::kSurfFracH,
+		                            shelltok::kSlabBaseH * slab.flScale );
+
+		// Never wider or taller than the surface itself: the max(…,1180)
+		// above can exceed a genuinely tiny surface, and a slab hanging off
+		// the screen edge is worse than a cramped one.
+		slab.flWidthPx  = std::min( slab.flWidthPx,  flSurfaceWPx );
+		slab.flHeightPx = std::min( slab.flHeightPx, flSurfaceHPx );
+
+		slab.flWidthPx  = std::max( slab.flWidthPx,  0.0f );
+		slab.flHeightPx = std::max( slab.flHeightPx, 0.0f );
+
+		slab.flWidthBase  = slab.flWidthPx  / slab.flScale;
+		slab.flHeightBase = slab.flHeightPx / slab.flScale;
+		return slab;
+	}
+
+	// =====================================================================
+	//  The ladder (SPEC §8.3)
+	// =====================================================================
+	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea )
+	{
+		LadderResult out;
+		const float Wb = slab.flWidthBase;
+
+		out.flRailBase      = shelltok::kRailFull;
+		out.flInspectorBase = shelltok::kInspector;
+		out.eHost           = InspectorHost::Column;
+
+		// "The ladder is one comparison applied twice." Literally twice, on
+		// purpose: the first application collapses the rail, and the SAME
+		// predicate is then re-asked with the narrower rail already in hand.
+		// Writing it as one helper called twice is what makes it impossible
+		// for the two steps to drift apart.
+		const auto Cramped = [ & ]() {
+			return out.flRailBase + out.flInspectorBase + shelltok::kSheetMin >= Wb;
+		};
+		if ( Cramped() ) out.flRailBase = shelltok::kRailIcons;
+		if ( Cramped() ) out.eHost      = InspectorHost::Drawer;
+
+		// The user's preference, applied against the ladder's answer.
+		//
+		// THE LADDER WINS DOWNWARD, THE USER WINS AT THE BOTTOM. Asking for
+		// a column on a slab the ladder already demoted to a drawer does not
+		// promote it back (that is what "the ladder wins over preference" in
+		// index.html's own comment means). Asking for Hidden always works,
+		// because step 3 is specified as reachable "by choice and persisted,
+		// not only by width".
+		if ( ePreferred == InspectorHost::Hidden )
+			out.eHost = InspectorHost::Hidden;
+		else if ( ePreferred == InspectorHost::Drawer && out.eHost == InspectorHost::Column )
+			out.eHost = InspectorHost::Drawer;
+
+		// What the sheet is left with. A drawer OVERLAYS, so it costs the
+		// sheet nothing; hidden costs exactly the spine's 20.
+		const float flHostCost =
+			out.eHost == InspectorHost::Column ? out.flInspectorBase :
+			out.eHost == InspectorHost::Hidden ? shelltok::kSpine    : 0.0f;
+		out.flSheetBase = std::max( 0.0f, Wb - out.flRailBase - flHostCost );
+
+		out.nWidthColumns = out.flSheetBase >= shelltok::kThreeColMin ? 3
+		                  : out.flSheetBase >= shelltok::kTwoColMin   ? 2 : 1;
+
+		// SPEC §8.3: "Columns are capped by content, not only by width" --
+		// "a 7-row category never spreads into two columns just because it
+		// fits", because half-empty columns were the worst thing about E's
+		// dense sheets.
+		const int nByContent = std::max( 1,
+			(int)std::ceil( (double)std::max( 0, nRowsInArea ) / (double)shelltok::kRowsPerColumn ) );
+		out.nColumns = std::min( out.nWidthColumns, nByContent );
+
+		// SPEC §8.3's "Step" column. Reported rather than used, so a test --
+		// and the Shell's own diagnostics area -- can assert the table.
+		out.nStep = out.eHost == InspectorHost::Hidden ? 3
+		          : out.eHost == InspectorHost::Drawer ? 2
+		          : out.RailIsIcons()                  ? 1
+		          : out.nWidthColumns == 3             ? -1 : 0;
+		return out;
+	}
+
+	// =====================================================================
+	//  The regions (SPEC §8.1)
+	// =====================================================================
+	Regions Regions::For( const Slab &slab, const LadderResult &ladder )
+	{
+		Regions r;
+		const float s  = slab.flScale;
+		const float W  = slab.flWidthPx;
+		const float H  = slab.flHeightPx;
+
+		const float flBarH   = shelltok::kSlabBar   * s;
+		const float flHeadH  = shelltok::kSheetHead * s;
+		const float flFootH  = shelltok::kSheetFoot * s;
+		const float flStripH = shelltok::kModeStrip * s;
+
+		r.rcSlabBar = { 0.0f, 0.0f, W, std::min( flBarH, H ) };
+		r.rcBody    = { 0.0f, r.rcSlabBar.y1, W, H };
+
+		const float flRailPx  = ladder.flRailBase      * s;
+		const float flInspPx  = ladder.flInspectorBase * s;
+		const float flSpinePx = shelltok::kSpine       * s;
+
+		r.rcRail = { r.rcBody.x0, r.rcBody.y0, r.rcBody.x0 + flRailPx, r.rcBody.y1 };
+
+		// The sheet's right edge is the ONE place the host difference lands.
+		// A column takes width from the sheet; a drawer does not (it floats
+		// over it); hidden takes only the spine. Everything else about the
+		// sheet is identical in all three, which is why the host change is a
+		// 160 ms region animation and not a relayout.
+		float flSheetRight = r.rcBody.x1;
+		if ( ladder.eHost == InspectorHost::Column )      flSheetRight -= flInspPx;
+		else if ( ladder.eHost == InspectorHost::Hidden ) flSheetRight -= flSpinePx;
+		flSheetRight = std::max( flSheetRight, r.rcRail.x1 );
+
+		r.rcSheet = { r.rcRail.x1, r.rcBody.y0, flSheetRight, r.rcBody.y1 };
+
+		r.rcSheetHead = { r.rcSheet.x0, r.rcSheet.y0, r.rcSheet.x1,
+		                  std::min( r.rcSheet.y0 + flHeadH, r.rcSheet.y1 ) };
+		r.rcSheetFoot = { r.rcSheet.x0, std::max( r.rcSheet.y1 - flFootH, r.rcSheetHead.y1 ),
+		                  r.rcSheet.x1, r.rcSheet.y1 };
+		r.rcSheetBody = { r.rcSheet.x0, r.rcSheetHead.y1, r.rcSheet.x1, r.rcSheetFoot.y0 };
+
+		if ( ladder.eHost == InspectorHost::Hidden )
+		{
+			// SPEC §8.05: the spine "holds its own width, so the sheet lane
+			// shrinks by 20 rather than the sheet being overlapped by an
+			// invisible hit strip". That is why it is carved out of the
+			// sheet above rather than drawn on top of it here.
+			r.rcSpine = { r.rcBody.x1 - flSpinePx, r.rcBody.y0, r.rcBody.x1, r.rcBody.y1 };
+		}
+		else
+		{
+			// Column and drawer share one rect -- right-aligned, full body
+			// height. They differ only in z-order and in whether the sheet
+			// already gave up the width (above), never in geometry.
+			r.rcInspector = { std::max( r.rcBody.x1 - flInspPx, r.rcRail.x1 ),
+			                  r.rcBody.y0, r.rcBody.x1, r.rcBody.y1 };
+			r.rcModeStrip = { r.rcInspector.x0, r.rcInspector.y0, r.rcInspector.x1,
+			                  std::min( r.rcInspector.y0 + flStripH, r.rcInspector.y1 ) };
+			r.rcInspectorBody = { r.rcInspector.x0, r.rcModeStrip.y1,
+			                      r.rcInspector.x1, r.rcInspector.y1 };
+		}
+		return r;
+	}
+
+	// =====================================================================
+	//  Mode selection (SPEC §5.1)
+	// =====================================================================
+	InspectorMode ModeFor( Kind eKind, CompositeKind eComposite )
+	{
+		// "Selecting a Facts, Meter or Graph row opens Details; everything
+		// else -- including arriving from the palette on a parameter --
+		// opens Configure."
+		//
+		// Graph is the composite that has no control in it at all, so it
+		// belongs with the other two read-only kinds even though its Kind is
+		// Composite. Asking Registry.h's own IsReadOnly() would NOT be
+		// equivalent: that predicate is about whether a control can be
+		// constructed, and a Composite is writable in general.
+		if ( eKind == Kind::Facts || eKind == Kind::Meter )
+			return InspectorMode::Details;
+		if ( eKind == Kind::Composite && eComposite == CompositeKind::Graph )
+			return InspectorMode::Details;
+		return InspectorMode::Configure;
+	}
+
+	ModeCounts CountsFor( const Entry &entry )
+	{
+		ModeCounts c;
+		c.bReadOnly = entry.ReadOnly();
+
+		// CONFIGURE holds "the row's own control drawn as an Inspector row,
+		// followed by its <= 6 parameters". A read-only row's values block
+		// is replaced by one sentence, so it contributes no settable rows
+		// and its counter reads `ro` -- represented here as 0 + bReadOnly,
+		// with the "ro" spelling left to the drawing code.
+		c.nConfigure = c.bReadOnly ? 0 : 1;
+		c.nConfigure += (int)entry.ParamCount();
+
+		// DETAILS holds the derived binding grid, plus the .Live() block.
+		// Only the grid rows that ACTUALLY have a value are counted -- a
+		// counter that always read 9 would be decoration, and SPEC §5.1 is
+		// explicit that the strip is "a readout of what depth this selection
+		// actually has".
+		int nGrid = 1;                                    // `now`  -- always present
+		if ( !std::holds_alternative<std::monostate>( entry.DefaultValue() ) ) nGrid++;  // default
+		if ( entry.HasRange() )               nGrid++;    // range
+		if ( !entry.Options().empty() )       nGrid++;    // options
+		nGrid++;                                          // kind   -- always present
+		nGrid++;                                          // key    -- always present (the id)
+		c.nDetails = nGrid + (int)entry.LiveCount();
+		return c;
+	}
+}
