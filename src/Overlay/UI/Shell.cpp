@@ -1813,6 +1813,27 @@ namespace gamescope::ui::shell
 		// in the value column -- "the value column already tells you they are
 		// 32 / 32 without showing two steppers, which is the whole calming
 		// move in miniature" (§4.3).
+		// A Meter's value comes from its SCALAR, not a binding -- it has no
+		// binding at all (Registry.h: the kind is read-only and Area::Meter()
+		// takes a std::function<double()>). Both the sheet's value column and
+		// the palette need the same string, so it is computed once here.
+		//
+		// This existing as a function is the fix for the third instance of
+		// one bug: PaletteValueText() special-cased Composite and Facts and
+		// fell through to the binding for everything else, so a Meter --
+		// bindingless -- printed EMPTY in the palette while the sheet showed
+		// a number. Exactly what the composite rows did before D19.7 printed
+		// the raw axis-A integer. A kind whose value is not in its binding
+		// has to be taught to every formatter, so there is now one formatter
+		// to teach.
+		std::string MeterValue( const Entry &entry )
+		{
+			char sz[ 32 ];
+			snprintf( sz, sizeof( sz ), "%.0f%s", entry.Scalar(),
+				entry.Unit().empty() ? "" : entry.Unit().c_str() );
+			return sz;
+		}
+
 		std::string CompositeValue( const Entry &entry )
 		{
 			switch ( entry.GetCompositeKind() )
@@ -2090,12 +2111,7 @@ namespace gamescope::ui::shell
 			if ( entry.GetKind() == Kind::Facts )
 				sValue = entry.SummaryText();
 			else if ( entry.GetKind() == Kind::Meter )
-			{
-				char sz[ 32 ];
-				snprintf( sz, sizeof( sz ), "%.0f%s", entry.Scalar(),
-					entry.Unit().empty() ? "" : entry.Unit().c_str() );
-				sValue = sz;
-			}
+				sValue = MeterValue( entry );
 			else
 				sValue = FormatDeclValue( entry );
 
@@ -3430,6 +3446,11 @@ namespace gamescope::ui::shell
 				return CompositeValue( *pE );
 			if ( eKind == Kind::Facts )
 				return pE ? pE->SummaryText() : std::string();
+			// A Meter's value is its scalar; it has no binding to fall
+			// through to, so without this the palette printed nothing for
+			// the one row whose whole point is a live number.
+			if ( eKind == Kind::Meter && pE )
+				return MeterValue( *pE );
 
 			const AnyBind &bind = pE ? pE->Binding() : pP->Binding();
 			if ( !bind.IsBound() )
