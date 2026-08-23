@@ -1048,3 +1048,125 @@ TEST_CASE( "EnqueueGeometryWrite saves one panel's geometry without clobbering a
     REQUIRE( final_.overlay.dock_scale == 1.2f );
     REQUIRE( final_.overlay.panel_geometry.at( "audio" ).w == 440.0f );
 }
+
+// =========================================================================
+//  P3b -- the E2 overlay redesign must not disturb an existing config
+// =========================================================================
+// The user's two standing rules, and the ones this project has actually
+// broken before: an existing config keeps loading with its values intact,
+// and nothing deletes or rewrites one on its own. The overlay rework is a
+// PRESENTATION change, so both must survive it -- and "it looked right on
+// screen" is not evidence, which is why these assert against the bytes on
+// disk rather than against anything the UI reports.
+TEST_CASE( "a config written before the E2 rework loads with every value intact", "[config]" )
+{
+    TempConfigHome home;
+
+    // A config as a user would already have it on disk -- every key the
+    // three new Setup areas bind to, at a non-default value, so a field
+    // silently reverting to its default is a failure rather than a
+    // coincidence.
+    const std::string sGlobal = R"({
+  "version": 1,
+  "overlay": {
+    "accent_hue": 291.0,
+    "display_scale": 1.75,
+    "dock_scale": 1.4,
+    "notification_scale": 1.1,
+    "opacity_windows_focused": 0.77,
+    "opacity_windows_unfocused": 0.55,
+    "opacity_dock": 0.66,
+    "opacity_notifications": 0.88,
+    "background_blur": 0.42,
+    "background_darkening": 0.31,
+    "notification_placement": "bottom-left"
+  },
+  "notifications": { "muted": true },
+  "audio": { "manual_node_binary": "floorp" },
+  "last_applied_profile": "Handheld 40 fps"
+})";
+
+    const std::filesystem::path pathGlobal = home.dir / "gamescope-ritz" / "global.json";
+    std::filesystem::create_directories( pathGlobal.parent_path() );
+    {
+        std::ofstream f( pathGlobal );
+        f << sGlobal;
+    }
+
+    const auto tWritten = std::filesystem::last_write_time( pathGlobal );
+    const auto nSizeWritten = std::filesystem::file_size( pathGlobal );
+
+    Settings g = LoadGlobal();
+
+    REQUIRE( g.overlay.accent_hue == 291.0f );
+    REQUIRE( g.overlay.display_scale == 1.75f );
+    REQUIRE( g.overlay.dock_scale == 1.4f );
+    REQUIRE( g.overlay.notification_scale == 1.1f );
+    REQUIRE( g.overlay.opacity_windows_focused == 0.77f );
+    REQUIRE( g.overlay.opacity_windows_unfocused == 0.55f );
+    REQUIRE( g.overlay.opacity_dock == 0.66f );
+    REQUIRE( g.overlay.opacity_notifications == 0.88f );
+    REQUIRE( g.overlay.background_blur == 0.42f );
+    REQUIRE( g.overlay.background_darkening == 0.31f );
+    REQUIRE( g.overlay.notification_placement == "bottom-left" );
+    REQUIRE( g.notifications.muted == true );
+    REQUIRE( g.audio.manual_node_binary == "floorp" );
+
+    // Issue #43 recommendation #10's provenance field survives a plain
+    // load -- it names where the values started, and nothing about
+    // reading them may clear it.
+    REQUIRE( g.last_applied_profile == "Handheld 40 fps" );
+
+    // READING A CONFIG MUST NOT WRITE ONE. The file is byte-for-byte the
+    // one that was placed there, with the same mtime -- a load that
+    // "helpfully" normalises the file would show up here as a changed
+    // timestamp even if every value still round-tripped.
+    REQUIRE( std::filesystem::last_write_time( pathGlobal ) == tWritten );
+    REQUIRE( std::filesystem::file_size( pathGlobal ) == nSizeWritten );
+
+    std::ifstream in( pathGlobal );
+    const std::string sOnDisk( ( std::istreambuf_iterator<char>( in ) ),
+                                 std::istreambuf_iterator<char>() );
+    REQUIRE( sOnDisk == sGlobal );
+}
+
+TEST_CASE( "nothing deletes a per-game config except the explicit delete", "[config]" )
+{
+    // The user, after an agent wiped one of their configs: "There can be a
+    // button for it, but never delete configs automatically." and "It
+    // should just load those settings."
+    TempConfigHome home;
+
+    // Only PER-GAME-ROUTED fields are used here. overlay.* is deliberately
+    // process-level and never rides along in a per-game snapshot (see the
+    // notification-placement test above), which is exactly why the E2
+    // Appearance area's layer badge reads "global only".
+    Settings snapshot;
+    snapshot.audio.manual_node_binary = "eldenring.exe";
+    snapshot.notifications.muted = true;
+    SnapshotPerGameOverride( "1174180", snapshot );
+
+    const std::filesystem::path pathGame =
+        home.dir / "gamescope-ritz" / "games" / "1174180.json";
+    REQUIRE( std::filesystem::exists( pathGame ) );
+    REQUIRE( HasSavedPerGameConfig( "1174180" ) );
+
+    // Turning the override OFF deactivates the file in place. It must
+    // still be on disk afterwards -- this is the exact step that used to
+    // destroy it.
+    ClearPerGameOverride( "1174180" );
+    REQUIRE( std::filesystem::exists( pathGame ) );
+
+    // And turning it back on RESTORES those values rather than
+    // re-snapshotting from global, so "off and on again" is not a way to
+    // lose them either.
+    REQUIRE( RestorePerGameOverride( "1174180" ) );
+    auto oRestored = LoadPerGameOverride( "1174180" );
+    REQUIRE( oRestored.has_value() );
+    REQUIRE( oRestored->audio.manual_node_binary == "eldenring.exe" );
+    REQUIRE( oRestored->notifications.muted == true );
+
+    // Only the explicit, confirmed action removes it.
+    REQUIRE( DeletePerGameOverride( "1174180" ) );
+    REQUIRE( !std::filesystem::exists( pathGame ) );
+}

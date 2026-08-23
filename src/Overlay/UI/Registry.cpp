@@ -1,6 +1,7 @@
 #include "Registry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -37,6 +38,7 @@ namespace gamescope::ui
 			case Law::HelpRequired:   return "Help() is required";
 			case Law::ReasonRequired: return "DisabledUnless() requires a reason";
 			case Law::Escaped:        return "an escaped area cannot also be populated";
+			case Law::Dynamic:        return "a dynamic area is malformed";
 		}
 		return "unknown law";
 	}
@@ -218,6 +220,80 @@ namespace gamescope::ui
 	Entry &Entry::Keywords( const char *psz )        { m_sKeywords = psz ? psz : ""; return *this; }
 	Entry &Entry::Validate( std::function<std::string( const std::string & )> fn ) { m_Validate = std::move( fn ); return *this; }
 
+	// ---- reset (P3b) ----------------------------------------------------
+	namespace
+	{
+		// Two Values are "the same setting value" if they agree. Floats get a
+		// tolerance because a default declared as 0.9f and a value that has
+		// been through a JSON round-trip are the same setting to a user, and
+		// a reset chip that never switches off would be worse than none.
+		bool ValueEquals( const Value &a, const Value &b )
+		{
+			if ( const float *pA = std::get_if<float>( &a ) )
+			{
+				if ( const float *pB = std::get_if<float>( &b ) )
+					return std::fabs( *pA - *pB ) < 1e-4f;
+			}
+			return a == b;
+		}
+	}
+
+	bool Parameter::HasDefault() const
+	{
+		return !std::holds_alternative<std::monostate>( m_Default );
+	}
+
+	bool Parameter::IsAtDefault() const
+	{
+		if ( !HasDefault() || !m_Bind.IsBound() )
+			return true;
+		return ValueEquals( m_Bind.Get(), m_Default );
+	}
+
+	void Parameter::ResetToDefault() const
+	{
+		if ( HasDefault() && m_Bind.IsBound() )
+			m_Bind.Set( m_Default );
+	}
+
+	bool Entry::HasDefault() const
+	{
+		if ( !std::holds_alternative<std::monostate>( m_Default ) )
+			return true;
+		for ( const auto &pParam : m_Params )
+			if ( pParam->HasDefault() )
+				return true;
+		return false;
+	}
+
+	bool Entry::IsAtDefault() const
+	{
+		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
+			if ( !ValueEquals( m_Bind.Get(), m_Default ) )
+				return false;
+
+		// The row's parameters count as part of the row -- that is what
+		// makes one reset the successor to a whole group link.
+		for ( const auto &pParam : m_Params )
+			if ( !pParam->IsAtDefault() )
+				return false;
+		return true;
+	}
+
+	void Entry::ResetToDefault() const
+	{
+		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
+			m_Bind.Set( m_Default );
+		for ( const auto &pParam : m_Params )
+			pParam->ResetToDefault();
+	}
+
+	Entry &Entry::Confirm( const char *pszPrompt )
+	{
+		m_sConfirm = pszPrompt ? pszPrompt : "";
+		return *this;
+	}
+
 	Entry &Entry::Help( const char *pszHelp )
 	{
 		if ( !pszHelp || !*pszHelp )
@@ -346,6 +422,7 @@ namespace gamescope::ui
 	Area &Area::Keywords( const char *psz )                 { m_sKeywords = psz ? psz : ""; return *this; }
 	Area &Area::Summary( std::function<std::string()> fn )  { m_Summary = std::move( fn ); return *this; }
 	Area &Area::AvailableWhen( std::function<bool()> fn )    { m_Available = std::move( fn ); return *this; }
+	Area &Area::Badge( std::function<std::string()> fn )     { m_Badge = std::move( fn ); return *this; }
 
 	// MIGRATION SEAM -- see Registry.h's Escape() comment. P3 deletes this.
 	//
@@ -371,6 +448,72 @@ namespace gamescope::ui
 		}
 		m_Escape = std::move( fn );
 		return *this;
+	}
+
+	// ---- dynamic areas (P3b) --------------------------------------------
+	// See Registry.h's Rebuilds() comment for why this exists and what it
+	// costs. The guards mirror Escape()'s: the two are mutually exclusive,
+	// because an escaped area has no entries by construction and a dynamic
+	// one exists precisely to have them.
+	Area &Area::Rebuilds( std::function<uint64_t()> fnGeneration,
+	                      std::function<void( Area & )> fnBuild )
+	{
+		if ( !fnGeneration || !fnBuild )
+		{
+			ReportViolation( Law::Dynamic, m_sId,
+				"Rebuilds() needs both a generation function and a builder." );
+			return *this;
+		}
+		if ( m_Escape )
+		{
+			ReportViolation( Law::Dynamic, m_sId,
+				"an escaped area cannot also be dynamic -- an escaped area has no entries by "
+				"construction, and a dynamic one exists to have them." );
+			return *this;
+		}
+		m_Generation = std::move( fnGeneration );
+		m_Build      = std::move( fnBuild );
+		return *this;
+	}
+
+	bool Area::SyncIfStale()
+	{
+		if ( !m_Build )
+			return false;
+
+		const uint64_t ulGen = m_Generation();
+		if ( m_bBuilt && ulGen == m_ulGeneration )
+			return false;
+
+		// Give back every id the previous build claimed, params included,
+		// so the rebuild does not collide with the build it replaces. This
+		// is the whole reason ID UNIQUENESS survives a dynamic area.
+		if ( m_pRegistry )
+		{
+			for ( const auto &pEntry : m_Entries )
+			{
+				for ( size_t j = 0; j < pEntry->ParamCount(); ++j )
+					m_pRegistry->ReleaseId( pEntry->ParamAt( j ).Id() );
+				m_pRegistry->ReleaseId( pEntry->Id() );
+			}
+		}
+
+		m_Entries.clear();
+		m_Groups.clear();
+
+		m_Build( *this );
+		m_ulGeneration = ulGen;
+		m_bBuilt = true;
+
+		// HELP IS REQUIRED, and the Prefix Law, over the rows that were
+		// just built. Registry::SelfTest() ran once after RegisterAll() and
+		// has no way to see these -- without this line a dynamic row could
+		// ship with no Help() at all, which is the one law a rebuild would
+		// otherwise slip past.
+		if ( m_pRegistry )
+			m_pRegistry->SelfTestArea( *this );
+
+		return true;
 	}
 
 	void Area::Group( const char *pszName )
@@ -504,6 +647,13 @@ namespace gamescope::ui
 		return true;
 	}
 
+	void Registry::ReleaseId( const std::string &sId )
+	{
+		auto it = std::find( m_ClaimedIds.begin(), m_ClaimedIds.end(), sId );
+		if ( it != m_ClaimedIds.end() )
+			m_ClaimedIds.erase( it );
+	}
+
 	const Area *Registry::FindArea( const std::string &sId ) const
 	{
 		for ( const auto &pArea : m_Areas )
@@ -545,6 +695,26 @@ namespace gamescope::ui
 	size_t Registry::SelfTest()
 	{
 		size_t nFound = 0;
+		for ( const auto &pArea : m_Areas )
+			nFound += SelfTestArea( *pArea );
+		return nFound;
+	}
+
+	size_t Registry::SyncDynamicAreas()
+	{
+		size_t nRebuilt = 0;
+		for ( auto &pArea : m_Areas )
+			nRebuilt += pArea->SyncIfStale() ? 1u : 0u;
+		return nRebuilt;
+	}
+
+	// One area's worth of SelfTest(). Split out so a dynamic area can be
+	// re-checked after every rebuild (Area::SyncIfStale) against exactly
+	// the same two laws, rather than against a second, drifting copy of
+	// them.
+	size_t Registry::SelfTestArea( const Area &area )
+	{
+		size_t nFound = 0;
 
 		auto RequireHelp = [ & ]( const std::string &sId, const std::string &sHelp, const char *pszWhat )
 		{
@@ -558,29 +728,26 @@ namespace gamescope::ui
 				"other way to author one (SPEC.md 5.2 clause 1)." );
 		};
 
-		for ( const auto &pArea : m_Areas )
+		for ( size_t i = 0; i < area.EntryCount(); ++i )
 		{
-			for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+			const Entry &e = area.EntryAt( i );
+			RequireHelp( e.Id(), e.HelpText(), "entry" );
+
+			for ( size_t j = 0; j < e.ParamCount(); ++j )
 			{
-				const Entry &e = pArea->EntryAt( i );
-				RequireHelp( e.Id(), e.HelpText(), "entry" );
+				const Parameter &p = e.ParamAt( j );
+				RequireHelp( p.Id(), p.HelpText(), "param" );
 
-				for ( size_t j = 0; j < e.ParamCount(); ++j )
+				// The Prefix Law, re-checked. Synthesis already guarantees
+				// it; verifying it anyway is what turns "unrepresentable"
+				// into something a test can actually observe.
+				const std::string sWant = e.Id() + ".";
+				if ( p.Id().compare( 0, sWant.size(), sWant ) != 0 )
 				{
-					const Parameter &p = e.ParamAt( j );
-					RequireHelp( p.Id(), p.HelpText(), "param" );
-
-					// The Prefix Law, re-checked. Synthesis already guarantees
-					// it; verifying it anyway is what turns "unrepresentable"
-					// into something a test can actually observe.
-					const std::string sWant = e.Id() + ".";
-					if ( p.Id().compare( 0, sWant.size(), sWant ) != 0 )
-					{
-						++nFound;
-						ReportViolation( Law::Prefix, p.Id(),
-							"'" + p.Id() + "' is not a child of '" + e.Id() + "'. A Param's id "
-							"must be '<parent>.<leaf>' (SPEC.md 5.2 clause 2)." );
-					}
+					++nFound;
+					ReportViolation( Law::Prefix, p.Id(),
+						"'" + p.Id() + "' is not a child of '" + e.Id() + "'. A Param's id "
+						"must be '<parent>.<leaf>' (SPEC.md 5.2 clause 2)." );
 				}
 			}
 		}

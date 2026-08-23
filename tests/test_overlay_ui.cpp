@@ -932,3 +932,378 @@ TEST_CASE( "entry: zero-means and unit are declared, never baked into a value", 
 	ui::LawRecorder rec;
 	REQUIRE( reg.SelfTest() == 0 );
 }
+
+// =========================================================================
+//  Dynamic areas (P3b) -- the registry's answer to a row set that changes
+// =========================================================================
+// Audio is the first area whose rows are not known when RegisterAll() runs:
+// a row exists because an application is making a sound right now. These
+// tests exist because that widens WHEN a law violation can fire -- from
+// boot only, to any frame -- and the mitigation is that a dynamic row is
+// GENERATED, so one test against a fabricated stream list covers every row
+// the generator will ever emit. See Registry.h's Rebuilds().
+namespace
+{
+	// Stands in for Audio::StreamCandidate. The point of the tests below is
+	// the registry's contract, not PipeWire's -- a fake keeps them runnable
+	// with no audio server, which is the only way they run in CI at all.
+	struct FakeStream
+	{
+		int         nNodeId;
+		std::string sName;
+	};
+
+	std::vector<FakeStream> g_vecFakeStreams;
+
+	uint64_t FakeGeneration()
+	{
+		uint64_t ulHash = 1469598103934665603ull;
+		for ( const FakeStream &s : g_vecFakeStreams )
+		{
+			for ( unsigned char c : ( std::to_string( s.nNodeId ) + s.sName ) )
+			{
+				ulHash ^= c;
+				ulHash *= 1099511628211ull;
+			}
+		}
+		return ulHash;
+	}
+
+	// The shape of Audio's real builder: one Slider per stream, id derived
+	// from the NODE, one mute Param each.
+	void BuildFakeArea( ui::Area &a )
+	{
+		a.Group( "Streams" );
+		for ( const FakeStream &s : g_vecFakeStreams )
+		{
+			const std::string sId = "audio.node." + std::to_string( s.nNodeId );
+			a.Slider( sId.c_str(), s.sName.c_str(), ui::AnyBind() )
+				.Help( "Volume of this application's audio stream." )
+				.Range( 0.0f, 150.0f )
+				.Unit( "%" )
+				.Param( "mute", "Mute", ui::AnyBind() )
+					.Help( "Silences this stream without changing its volume." );
+		}
+	}
+}
+
+TEST_CASE( "dynamic: a rebuild tracks the row set as streams come and go", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams = { { 244, "eldenring.exe" }, { 334, "Floorp" } };
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, BuildFakeArea );
+
+	REQUIRE( a.IsDynamic() );
+	REQUIRE( a.EntryCount() == 0 );          // nothing is built until the first sync
+
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( a.EntryCount() == 2 );
+	REQUIRE( reg.FindEntry( "audio.node.244" ) != nullptr );
+	REQUIRE( reg.FindEntry( "audio.node.334" ) != nullptr );
+
+	// An unchanged generation must NOT rebuild -- a rebuild under the
+	// pointer would drop the row being dragged.
+	REQUIRE( reg.SyncDynamicAreas() == 0 );
+	REQUIRE( a.EntryCount() == 2 );
+
+	// A stream ends.
+	g_vecFakeStreams = { { 334, "Floorp" } };
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( a.EntryCount() == 1 );
+	REQUIRE( reg.FindEntry( "audio.node.244" ) == nullptr );
+	REQUIRE( reg.FindEntry( "audio.node.334" ) != nullptr );
+
+	// A new one starts, and the SURVIVING row keeps its id -- this is the
+	// property a positional slot pool would not have. 334 is still Floorp
+	// after 512 appears, so a slider mid-drag still means Floorp.
+	g_vecFakeStreams = { { 334, "Floorp" }, { 512, "mpv" } };
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( reg.FindEntry( "audio.node.334" ) != nullptr );
+	REQUIRE( reg.FindEntry( "audio.node.512" ) != nullptr );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "dynamic: rebuilding the same ids does not trip id uniqueness", "[overlay_ui]" )
+{
+	// The law that a dynamic area is most likely to break, and the reason
+	// SyncIfStale() releases its ids before the builder runs. Without that
+	// release the SECOND build of the same stream would abort the process.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams = { { 244, "eldenring.exe" } };
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, BuildFakeArea );
+	reg.SyncDynamicAreas();
+
+	// Same ids, different titles -- a rename, which is a real rebuild
+	// (media.name changes when a browser tab does).
+	g_vecFakeStreams = { { 244, "Elden Ring" } };
+	REQUIRE( reg.SyncDynamicAreas() == 1 );
+	REQUIRE( a.EntryCount() == 1 );
+	REQUIRE( a.EntryAt( 0 ).Title() == "Elden Ring" );
+	REQUIRE( a.EntryAt( 0 ).Id() == "audio.node.244" );
+
+	// Params are released with their parent, or the second build's `mute`
+	// would collide with the first's.
+	REQUIRE( reg.FindParam( "audio.node.244.mute" ) != nullptr );
+	REQUIRE( rec.Caught( ui::Law::UniqueId ) == false );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "dynamic: a row built after SelfTest is still held to the laws", "[overlay_ui]" )
+{
+	// The hole a dynamic area opens: Registry::SelfTest() runs once after
+	// RegisterAll(), so a row built later has never been through it. If a
+	// rebuild did not re-check, a generated row could ship with no Help()
+	// at all -- and Help is the Inspector's only description.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams = { { 244, "eldenring.exe" } };
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, []( ui::Area &area )
+	{
+		// Deliberately malformed: no Help().
+		area.Slider( "audio.node.244", "eldenring.exe", ui::AnyBind() ).Range( 0.0f, 150.0f );
+	} );
+
+	REQUIRE( reg.SelfTest() == 0 );   // nothing built yet -- nothing to catch
+	reg.SyncDynamicAreas();
+
+	// The rebuild's own self-test caught it, mid-session, exactly as boot
+	// would have.
+	REQUIRE( rec.Caught( ui::Law::HelpRequired ) );
+}
+
+TEST_CASE( "dynamic: an area is escaped or dynamic, never both", "[overlay_ui]" )
+{
+	// Same argument as Law::Escaped: an escaped area has no entries by
+	// construction, and a dynamic one exists precisely to have them. The
+	// half-and-half area is the shape that would make the migration seam
+	// permanent.
+	{
+		ui::Registry reg;
+		ui::LawRecorder rec;
+		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+		a.Escape( []{} );
+		a.Rebuilds( FakeGeneration, BuildFakeArea );
+		REQUIRE( rec.Caught( ui::Law::Dynamic ) );
+		REQUIRE( !a.IsDynamic() );
+	}
+	{
+		ui::Registry reg;
+		ui::LawRecorder rec;
+		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+		a.Rebuilds( FakeGeneration, nullptr );
+		REQUIRE( rec.Caught( ui::Law::Dynamic ) );
+		REQUIRE( !a.IsDynamic() );
+	}
+}
+
+TEST_CASE( "dynamic: an empty stream set is a valid build, not a violation", "[overlay_ui]" )
+{
+	// Silence is the common case at startup, and it must not look like a
+	// failure -- this is also why the help law needs its own test above:
+	// with no streams the row-building code never runs at all.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	g_vecFakeStreams.clear();
+	ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
+	a.Rebuilds( FakeGeneration, BuildFakeArea );
+	reg.SyncDynamicAreas();
+
+	REQUIRE( a.EntryCount() == 0 );
+	REQUIRE( rec.Count() == 0 );
+}
+
+// =========================================================================
+//  Destructive actions (P3b)
+// =========================================================================
+// The user's rule, after an agent wiped one of their configs: "There can be
+// a button for it, but never delete configs automatically." Confirm() is
+// that rule expressed in the declaration, so an action that destroys
+// something is armed by construction rather than by a call site remembering
+// to open a modal.
+TEST_CASE( "confirm: a destructive action declares its own second press", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.pergame", "Per-game", ui::Section::Setup );
+
+	int nInvocations = 0;
+	a.Action( "config.delete", "Delete saved config", "delete...",
+		[ &nInvocations ]{ ++nInvocations; } )
+		.Confirm( "delete permanently?" )
+		.Help( "Permanently deletes this game's saved config." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "config.delete" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( pEntry->NeedsConfirm() );
+	REQUIRE( pEntry->ConfirmPrompt() == "delete permanently?" );
+
+	// The declaration alone invokes nothing -- registering a destructive
+	// action must never perform it.
+	REQUIRE( nInvocations == 0 );
+
+	// And the binding is still reachable exactly once when it IS invoked,
+	// so arming cannot double-fire.
+	pEntry->Invoke();
+	REQUIRE( nInvocations == 1 );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "confirm: an ordinary action does not ask", "[overlay_ui]" )
+{
+	// The complement, and the thing that keeps the prompt meaningful: if
+	// every action asked, the second press would become reflex.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
+
+	a.Action( "profiles.apply", "Apply profile", "apply", []{} )
+		.Help( "Copies the selected profile's values in." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "profiles.apply" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( !pEntry->NeedsConfirm() );
+	REQUIRE( pEntry->ConfirmPrompt().empty() );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "badge: an area declares which config layer it writes to", "[overlay_ui]" )
+{
+	// Issue #43's question -- "where does what I change here get written?"
+	// The awkward case is the one that made a per-area badge necessary:
+	// Appearance writes global.json even when a per-game override is
+	// active, which no amount of session state can express.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	bool bOverrideActive = false;
+	ui::Area &pergame = reg.Add( "setup.pergame", "Per-game", ui::Section::Setup );
+	pergame.Badge( [ &bOverrideActive ]{
+		return bOverrideActive ? std::string( "app 1174180" ) : std::string( "global" );
+	} );
+
+	ui::Area &appearance = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+	appearance.Badge( []{ return std::string( "global only" ); } );
+
+	REQUIRE( pergame.BadgeText() == "global" );
+	bOverrideActive = true;
+	REQUIRE( pergame.BadgeText() == "app 1174180" );
+
+	// Unchanged by the override -- the whole point.
+	REQUIRE( appearance.BadgeText() == "global only" );
+
+	// An area that never declared one has none, rather than an empty box.
+	ui::Area &shell = reg.Add( "setup.shell", "Shell", ui::Section::Setup );
+	REQUIRE( shell.BadgeText().empty() );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+// =========================================================================
+//  Reset (P3b)
+// =========================================================================
+// D6 decided reset moves into the Inspector, but no phase had implemented
+// it -- so the E2 shell could not reset anything, and migrating the Config
+// panel would have silently dropped its four per-group reset links (#43).
+// Reset covers the row AND its parameters, which is what makes it the
+// successor to a GROUP link: the old "UI Scale" group is exactly the
+// `UI scale` row plus its dock and notification params.
+TEST_CASE( "reset: a row restores itself and its parameters together", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+
+	float flScale = 1.0f, flDock = 1.0f, flNotif = 1.0f;
+	a.Slider( "overlay.display_scale", "UI scale", ui::Bind( &flScale ) )
+		.Help( "Multiplies every base unit in the overlay." )
+		.Range( 0.5f, 2.0f )
+		.Default( 1.0f )
+		.Param( "dock", "Dock scale", ui::Bind( &flDock ) )
+			.Help( "Size of the dock." ).Range( 0.85f, 2.0f ).Default( 1.0f )
+		.Param( "notifications", "Notification scale", ui::Bind( &flNotif ) )
+			.Help( "Size of toasts." ).Range( 0.6f, 1.6f ).Default( 1.0f );
+
+	const ui::Entry *pEntry = reg.FindEntry( "overlay.display_scale" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( pEntry->HasDefault() );
+	REQUIRE( pEntry->IsAtDefault() );
+
+	// A PARAMETER differing is enough to arm the row's reset -- otherwise a
+	// group link would not restore what the old one did.
+	flDock = 1.4f;
+	REQUIRE( !pEntry->IsAtDefault() );
+
+	pEntry->ResetToDefault();
+	REQUIRE( flDock == 1.0f );
+	REQUIRE( pEntry->IsAtDefault() );
+
+	// And the row's own value, together with its params, in one action.
+	flScale = 1.75f;
+	flDock  = 1.4f;
+	flNotif = 1.1f;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( flScale == 1.0f );
+	REQUIRE( flDock  == 1.0f );
+	REQUIRE( flNotif == 1.0f );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "reset: a row with no declared default offers nothing to reset to", "[overlay_ui]" )
+{
+	// The alternative -- treating "no default" as zero -- would let a reset
+	// link destroy a value it was never told how to restore.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
+
+	std::string sName = "Handheld 40 fps";
+	a.Text( "profiles.name", "Name", ui::Bind( &sName ) )
+		.Help( "Name for a new profile." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "profiles.name" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( !pEntry->HasDefault() );
+
+	// Resetting is a no-op rather than a clear.
+	pEntry->ResetToDefault();
+	REQUIRE( sName == "Handheld 40 fps" );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_ui]" )
+{
+	// A value that has been through JSON and back is the same SETTING to a
+	// user. Exact float equality here would leave the reset link lit
+	// forever on a config that was merely saved and reloaded.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+
+	float flBlur = 1.0f;
+	a.Slider( "overlay.background_blur", "Backdrop blur", ui::Bind( &flBlur ) )
+		.Help( "How much the game behind the overlay is blurred." )
+		.Range( 0.0f, 1.0f )
+		.Default( 0.9f );
+
+	const ui::Entry *pEntry = reg.FindEntry( "overlay.background_blur" );
+	flBlur = 0.89999998f;                 // what 0.9 comes back as
+	REQUIRE( pEntry->IsAtDefault() );
+
+	flBlur = 0.8f;                        // a real difference still registers
+	REQUIRE( !pEntry->IsAtDefault() );
+
+	REQUIRE( rec.Count() == 0 );
+}

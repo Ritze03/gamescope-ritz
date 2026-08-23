@@ -1,4 +1,5 @@
 #include "Layout.h"
+#include "Tokens.h"   // tok::kRowH / kS / kM -- constants only, imgui-free
 
 #include <algorithm>
 #include <cmath>
@@ -215,5 +216,28 @@ namespace gamescope::ui
 		nGrid++;                                          // key    -- always present (the id)
 		c.nDetails = nGrid + (int)entry.LiveCount();
 		return c;
+	}
+
+	// Mirrors the row arithmetic in Shell.cpp's DrawConfigure, band for
+	// band. Kept here rather than there because Shell.cpp cannot be reached
+	// from a test -- it needs an ImGui context -- and this is the quantity
+	// the scroll range exists to accommodate.
+	float ConfigureRowsHeight( int nParams, float flScale )
+	{
+		// The chrome above the rows that is also a fixed height: the body's
+		// top pad and the title's line. Only the help paragraph and any
+		// disabled reason are left out, because only those need font
+		// metrics -- and both can only make the real body taller.
+		float flH = ( tok::kInspectorPad + shelltok::kTitleLine ) * flScale;
+
+		// The VALUES band: the rule's gap, the section label's line, and
+		// the entry's own row at the one control height.
+		flH += ( tok::kS + shelltok::kSectionLine + tok::kRowH ) * flScale;
+
+		// The PARAMETERS band, only when there is one.
+		if ( nParams > 0 )
+			flH += ( tok::kM + shelltok::kSectionLine + (float)nParams * tok::kRowH ) * flScale;
+
+		return flH;
 	}
 }

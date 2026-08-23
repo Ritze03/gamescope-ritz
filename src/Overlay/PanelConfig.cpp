@@ -19,14 +19,18 @@
 // sliders itself, which would just duplicate those three panels' widgets.
 #include "PanelConfig.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "Config/ConfigManager.h"
+#include "UI/Registry.h"
 #include "Widgets.h"
 #include "Chrome.h"
 #include "Notifications.h"
@@ -199,7 +203,22 @@ namespace gamescope
 			// Load()) lands on the exact value the preview already showed:
 			// no jump. BuiltScale() never returns 0, so this division is
 			// always safe.
-			ImGui::GetIO().FontGlobalScale = o.display_scale / gamescope::fonts::BuiltScale();
+			//
+			// GUARDED (P3b): every legacy caller of this function runs from
+			// inside an ImGui frame, but `overlay.display_scale` is now a
+			// registered row, and a registration's setter is also reachable
+			// from `overlay_e2_set` -- which runs on the CONSOLE thread,
+			// where there is no ImGui context at all. Unguarded, that is an
+			// assert in ImGui::GetIO() and the compositor dies; it did.
+			//
+			// Skipping the write there is not a compromise: this line is
+			// purely the live DRAG PREVIEW described above, and a console
+			// write is not a drag. The value still reaches the UI, because
+			// live.flDisplayScale below is what the kit reads, and
+			// fonts::RebuildAll() re-bakes the atlas properly (it already
+			// tolerates a null current context by design -- see Fonts.cpp).
+			if ( ImGui::GetCurrentContext() != nullptr )
+				ImGui::GetIO().FontGlobalScale = o.display_scale / gamescope::fonts::BuiltScale();
 
 			// Issue #37: hue-only accent picker. Regenerates every
 			// kAccent*/Accent() token (Palette.h/.cpp) from the new hue --
@@ -926,5 +945,477 @@ namespace gamescope
 	{
 		EnsureInitialized();
 		DrawBodyContent();
+	}
+
+	// =====================================================================
+	//  P3 part B -- the E2 registrations
+	// =====================================================================
+	// The Config/Profiles panel's three tabs become THREE AREAS, following
+	// D13.1 exactly: the rail is the product's only navigation, and
+	// index.html -- the declared tiebreaker -- lists setup.profiles,
+	// setup.pergame and setup.appearance as separate rail items. A three-
+	// group sheet would be the same tab bar redrawn as headings.
+	//
+	// Nothing about what these WRITE changed. Same config keys, same
+	// EnableOverride/DisableOverride/ApplySelectedProfile/... functions,
+	// same routing rules -- including the awkward one that makes the badge
+	// necessary: Appearance always writes global.json, even for a game with
+	// an override active, while Per-game's own toggle routes per session.
+	namespace
+	{
+		// ---- the layer badge (issue #43) -------------------------------
+		// "Where does what I change here get written?" -- the question a
+		// settings UI must never leave ambiguous, and the one the old
+		// title-bar badge answered with a one-frame lag off the active tab
+		// (see PanelConfig_Draw's comment). As an Area::Badge it is derived
+		// per area instead, so there is no lag and no shared flag.
+		std::string RoutedBadge()
+		{
+			EnsureInitialized();
+			if ( !s_oAppId )
+				return "global";
+			return s_bOverrideActive ? ( "app " + *s_oAppId ) : "global";
+		}
+
+		std::string PerGameFilePath()
+		{
+			return s_oAppId ? ( "games/" + *s_oAppId + ".json" ) : std::string( "(no app id)" );
+		}
+
+		// ---- profiles ---------------------------------------------------
+		// ui::Option holds a const char *, and the profile list is refreshed
+		// from disk, so the option text needs storage that outlives the
+		// registration and never reallocates under a live pointer. Same
+		// deque reasoning as PanelAudio.cpp's stream options.
+		std::deque<std::string> s_dqProfileText;
+		std::vector<ui::Option> s_vecProfileOptions;
+		std::deque<std::string> s_dqGameText;
+		std::vector<ui::Option> s_vecGameOptions;
+
+		// Profiles and other-game configs are BOTH dynamic sets -- a profile
+		// appears the moment one is saved, and another game's config appears
+		// the moment that game first overrides. So Setup uses the same
+		// rebuild mechanism Audio does (ui::Area::Rebuilds).
+		uint64_t ConfigGenerationHash()
+		{
+			EnsureInitialized();
+
+			uint64_t ulHash = 1469598103934665603ull;
+			const auto Mix = [ &ulHash ]( std::string_view sv )
+			{
+				for ( unsigned char c : sv )
+				{
+					ulHash ^= c;
+					ulHash *= 1099511628211ull;
+				}
+				ulHash ^= 0xff;
+				ulHash *= 1099511628211ull;
+			};
+
+			Mix( s_oAppId ? *s_oAppId : std::string( "-" ) );
+			Mix( s_bOverrideActive ? "override" : "global" );
+			Mix( s_bHasSavedPerGameConfig ? "saved" : "nosaved" );
+			for ( const std::string &s : s_ProfileNames )
+				Mix( s );
+			for ( const std::string &s : s_OtherGameIds )
+				Mix( s );
+			return ulHash;
+		}
+
+		void RebuildProfileOptions()
+		{
+			s_dqProfileText.clear();
+			s_vecProfileOptions.clear();
+			for ( size_t i = 0; i < s_ProfileNames.size(); ++i )
+			{
+				s_dqProfileText.emplace_back( s_ProfileNames[ i ] );
+				s_vecProfileOptions.push_back( { (int)i, s_dqProfileText.back().c_str() } );
+			}
+
+			s_dqGameText.clear();
+			s_vecGameOptions.clear();
+			for ( size_t i = 0; i < s_OtherGameIds.size(); ++i )
+			{
+				s_dqGameText.emplace_back( "app " + s_OtherGameIds[ i ] );
+				s_vecGameOptions.push_back( { (int)i, s_dqGameText.back().c_str() } );
+			}
+		}
+
+		// ---- Per-game ---------------------------------------------------
+		void BuildPerGameArea( ui::Area &a )
+		{
+			RebuildProfileOptions();
+
+			a.Group( "Routing" );
+
+			a.Switch( "config.override", "Override global config",
+				ui::AnyBind::Of<bool>(
+					[]{ return s_bOverrideActive; },
+					[]( bool bOn )
+					{
+						if ( bOn )
+							EnableOverride();
+						else
+							DisableOverride();
+					} ) )
+				.Help( "When on, every routed setting is written to this game's own file instead of "
+				       "the global one. Turning it on the first time snapshots whatever is currently "
+				       "effective. Turning it OFF keeps that file -- it is deactivated, never deleted "
+				       "-- so turning it back on restores those values rather than starting over." )
+				.Default( false )
+				.Keywords( "override per game routing config file app id snapshot" )
+				.DisabledUnless( []{ return s_oAppId.has_value(); },
+					"no game was identified for this session -- gamescope-ritz was launched without "
+					"GS_RITZ_APPID or a Steam app-id, so there is no per-game file to write. Every "
+					"other panel is writing to global.json." );
+
+			// Copying another game's config. The SOURCE is a parameter
+			// rather than a second row: SPEC §5.3's whole argument is that
+			// an action's operand is depth, and the sheet keeps the verb.
+			if ( !s_OtherGameIds.empty() )
+			{
+				a.Action( "config.copy", "Copy another game's config", "copy",
+					[]{ CopySelectedGameConfig(); } )
+					.Help( "Replaces this game's config with a copy of another game's, and turns "
+					       "Override Global Config on -- there is no other file a per-game copy could "
+					       "land in. A one-time copy: later edits to that game do not follow." )
+					.Keywords( "copy clone import another game config" )
+					.DisabledUnless( []{ return s_oAppId.has_value(); },
+					                 "no game was identified for this session" )
+					.Param( "source", "From",
+						ui::AnyBind::Of<int>(
+							[]{ return std::max( s_nSelectedCopyGame, 0 ); },
+							[]( int n ) { s_nSelectedCopyGame = n; } ),
+						s_vecGameOptions.data(), s_vecGameOptions.size() )
+						.Help( "Which game's saved config is copied. Only games that have their own "
+						       "override are listed." )
+						.Default( 0 );
+			}
+
+			// The ONE destructive action in the whole product. It is armed
+			// by Confirm(), so a single press cannot delete anything -- the
+			// user's rule, in the declaration rather than in a modal a call
+			// site has to remember to open.
+			if ( s_bHasSavedPerGameConfig )
+			{
+				a.Action( "config.delete", "Delete saved config", "delete...",
+					[]{ DeleteSavedPerGameConfig(); } )
+					.Confirm( "delete permanently?" )
+					.Help( "Permanently deletes this game's saved config file and everything in it. "
+					       "This cannot be undone, and it is the only action anywhere that destroys a "
+					       "config -- nothing here ever deletes one on its own. Press once to arm, "
+					       "again to confirm." )
+					.Keywords( "delete remove destroy per game config file" );
+			}
+
+			a.Group( "Diagnostics" );
+			a.Facts( "config.routing", "Resolution order",
+				[]{ return s_bOverrideActive ? std::string( "2 layers" ) : std::string( "global only" ); } )
+				.Help( "Where a value comes from when more than one file could supply it. Resolution "
+				       "is strictly two-level and never a merge of both." )
+				.Keywords( "routing resolution order layers provenance app id" )
+				.Live( "app_id", []{
+					return ui::Fact{ "resolved app id", s_oAppId ? *s_oAppId : "none -- no app id for this session" };
+				} )
+				.Live( "layer1", []{
+					return ui::Fact{ "1 - per-game", s_bOverrideActive
+						? ( PerGameFilePath() + "  (active)" )
+						: ( s_bHasSavedPerGameConfig
+							? ( PerGameFilePath() + "  (saved, not active)" )
+							: std::string( "none" ) ) };
+				} )
+				.Live( "layer2", []{
+					return ui::Fact{ "2 - global", s_bOverrideActive ? "global.json (shadowed)" : "global.json (active)" };
+				} )
+				.Live( "layer3", []{
+					return ui::Fact{ "3 - default", "compiled in" };
+				} )
+				.Live( "root", []{
+					return ui::Fact{ "config directory", config::ConfigRoot() };
+				} )
+				.Live( "status", []{
+					return ui::Fact{ "last action", s_sStatus.empty() ? "none this session" : s_sStatus };
+				} );
+		}
+
+		// ---- Profiles ---------------------------------------------------
+		void BuildProfilesArea( ui::Area &a )
+		{
+			RebuildProfileOptions();
+
+			a.Group( "Saved profiles" );
+
+			if ( !s_ProfileNames.empty() )
+			{
+				a.Choice( "profiles.list", "Profile",
+					ui::AnyBind::Of<int>(
+						[]{ return std::max( s_nSelectedProfile, 0 ); },
+						[]( int n ) { s_nSelectedProfile = n; } ),
+					s_vecProfileOptions.data(), s_vecProfileOptions.size() )
+					.Help( "Which saved profile the apply action targets. A profile is a named "
+					       "snapshot of every setting, taken when it was saved." )
+					.Default( 0 )
+					.Keywords( "profile preset saved snapshot pick" );
+
+				a.Action( "profiles.apply", "Apply profile", "apply",
+					[]{ ApplySelectedProfile(); } )
+					.Help( "Copies the selected profile's values into whichever file is currently "
+					       "authoritative. A ONE-TIME copy: editing the profile afterwards does not "
+					       "retroactively change anything it was applied to." )
+					.Keywords( "apply profile preset load restore" );
+			}
+
+			a.Group( "New profile" );
+
+			a.Text( "profiles.name", "Name",
+				ui::AnyBind::Of<std::string>(
+					[]{ return std::string( s_szNewProfileName ); },
+					[]( std::string s )
+					{
+						std::snprintf( s_szNewProfileName, sizeof( s_szNewProfileName ), "%s", s.c_str() );
+					} ) )
+				.Help( "Name for a new profile. Letters, digits, space, hyphen and underscore only -- "
+				       "the name becomes a filename, so it is sanitised before it is ever used as a "
+				       "path." )
+				.Keywords( "profile name new save" )
+				.Validate( []( const std::string &s ) -> std::string
+				{
+					if ( s.empty() )
+						return "";
+					if ( !config::SanitizeProfileName( s ) )
+						return "letters, digits, space, hyphen and underscore only";
+					if ( std::find( s_ProfileNames.begin(), s_ProfileNames.end(), s ) != s_ProfileNames.end() )
+						return "a profile with that name already exists";
+					return "";
+				} );
+
+			a.Action( "profiles.save", "Save current settings", "save as profile",
+				[]{ SaveCurrentAsNewProfile(); } )
+				.Help( "Writes whatever config is currently in effect into a new named profile." )
+				.Keywords( "save profile new snapshot store" )
+				.DisabledUnless( []{ return s_szNewProfileName[ 0 ] != '\0'; },
+				                 "type a name first" );
+
+			a.Group( "Diagnostics" );
+			a.Facts( "profiles.facts", "Profiles",
+				[]{ return std::to_string( s_ProfileNames.size() ) + " saved"; } )
+				.Help( "What is saved and what was last applied. Read-only." )
+				.Keywords( "profile provenance last applied count diagnostics" )
+				.Live( "count", []{
+					return ui::Fact{ "saved profiles", s_ProfileNames.empty()
+						? "none yet" : std::to_string( s_ProfileNames.size() ) };
+				} )
+				// Issue #43 recommendation #10: provenance, not a live link.
+				// "last applied", never "current" -- editing settings
+				// afterwards does not clear it, so it names where the values
+				// STARTED, not what is live now.
+				.Live( "last_applied", []{
+					return ui::Fact{ "last applied profile", s_sLastAppliedProfile.empty()
+						? "none has ever been applied to this config"
+						: s_sLastAppliedProfile };
+				} )
+				.Live( "target", []{
+					return ui::Fact{ "apply writes to", s_bOverrideActive && s_oAppId
+						? PerGameFilePath() : std::string( "global.json" ) };
+				} );
+		}
+
+		// ---- Appearance -------------------------------------------------
+		// Every row here writes global.json unconditionally, which is why
+		// this area's badge reads "global only" regardless of the per-game
+		// override. That routing rule predates E2 (see
+		// EnsureGeneralSettingsLoaded) and is unchanged.
+		ui::AnyBind BindOverlayFloat( float config::OverlaySettings::*pField )
+		{
+			return ui::AnyBind::Of<float>(
+				[ pField ]() -> float
+				{
+					EnsureGeneralSettingsLoaded();
+					return s_GeneralSettings.overlay.*pField;
+				},
+				[ pField ]( float flValue )
+				{
+					EnsureGeneralSettingsLoaded();
+					s_GeneralSettings.overlay.*pField = flValue;
+					QueueGeneralSave();
+				} );
+		}
+
+		void BuildAppearanceArea( ui::Area &a )
+		{
+			a.Group( "Theme" );
+
+			a.Slider( "overlay.accent_hue", "Accent colour",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureGeneralSettingsLoaded(); return s_GeneralSettings.overlay.accent_hue; },
+					[]( float flHue )
+					{
+						EnsureGeneralSettingsLoaded();
+						s_GeneralSettings.overlay.accent_hue = flHue;
+						QueueGeneralSave();
+					} ) )
+				.Help( "One hue drives the whole accent family -- sliders, toggles, the rail's active "
+				       "edge, notifications. Saturation and lightness are fixed per role, so no hue "
+				       "can wash out or blow out the design's contrast." )
+				.Range( 0.0f, 360.0f )
+				.Default( config::OverlaySettings{}.accent_hue )
+				.Unit( "deg" )
+				.Keywords( "accent colour hue theme tint" );
+
+			a.Slider( "overlay.display_scale", "UI scale",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureGeneralSettingsLoaded(); return s_GeneralSettings.overlay.display_scale; },
+					[]( float flScale )
+					{
+						EnsureGeneralSettingsLoaded();
+						s_GeneralSettings.overlay.display_scale = flScale;
+						QueueGeneralSave();
+						// The font atlas is re-baked at the new size. The
+						// legacy slider did this on release via
+						// IsItemDeactivatedAfterEdit; a registration has no
+						// such hook, so it happens on the write.
+						gamescope::fonts::RebuildAll( flScale );
+					} ) )
+				.Help( "Multiplies every base unit in the overlay and re-bakes the font atlas, so "
+				       "text stays crisp. Widget geometry stays spec-exact, so very large values can "
+				       "overflow fixed-size controls. The responsive ladder decides what collapses "
+				       "as this rises." )
+				.Range( 0.5f, 2.0f )
+				.Default( config::OverlaySettings{}.display_scale )
+				.Unit( "x" )
+				.Keywords( "scale ui size dpi zoom display_scale font atlas" )
+				.Param( "dock", "Dock scale", BindOverlayFloat( &config::OverlaySettings::dock_scale ) )
+					.Help( "Size of the legacy dock, independently of the overall UI scale." )
+					.Range( 0.85f, 2.0f )
+					.Default( config::OverlaySettings{}.dock_scale )
+				.Param( "notifications", "Notification scale",
+					BindOverlayFloat( &config::OverlaySettings::notification_scale ) )
+					.Help( "Size of toast notifications, independently of the overall UI scale." )
+					.Range( 0.6f, 1.6f )
+					.Default( config::OverlaySettings{}.notification_scale );
+
+			a.Group( "Backdrop" );
+
+			a.Slider( "overlay.background_blur", "Backdrop blur",
+				BindOverlayFloat( &config::OverlaySettings::background_blur ) )
+				.Help( "How much the game behind the overlay is blurred. A native compositor pass -- "
+				       "it drives FrameInfo_t's blur radius, not a shader effect." )
+				.Range( 0.0f, 1.0f )
+				.Default( config::OverlaySettings{}.background_blur )
+				.Keywords( "blur backdrop frost background compositor" );
+
+			a.Slider( "overlay.background_darkening", "Backdrop darkening",
+				BindOverlayFloat( &config::OverlaySettings::background_darkening ) )
+				.Help( "How far the game behind the overlay is dimmed. The overlay's contrast is "
+				       "measured against this, so lowering it lowers legibility." )
+				.Range( 0.0f, 1.0f )
+				.Default( config::OverlaySettings{}.background_darkening )
+				.Keywords( "darken dim backdrop veil contrast background" );
+
+			a.Group( "Transparency" );
+
+			a.Slider( "overlay.opacity_windows_focused", "Window (focused)",
+				BindOverlayFloat( &config::OverlaySettings::opacity_windows_focused ) )
+				.Help( "Opacity of an overlay window while it holds input focus." )
+				.Range( 0.3f, 1.0f )
+				.Default( config::OverlaySettings{}.opacity_windows_focused )
+				.Keywords( "opacity transparency window focused alpha" );
+
+			a.Slider( "overlay.opacity_windows_unfocused", "Window (unfocused)",
+				BindOverlayFloat( &config::OverlaySettings::opacity_windows_unfocused ) )
+				.Help( "Opacity of an overlay window while another surface holds input focus." )
+				.Range( 0.3f, 1.0f )
+				.Default( config::OverlaySettings{}.opacity_windows_unfocused )
+				.Keywords( "opacity transparency window unfocused alpha fade" );
+
+			a.Slider( "overlay.opacity_dock", "Dock",
+				BindOverlayFloat( &config::OverlaySettings::opacity_dock ) )
+				.Help( "Opacity of the legacy dock strip." )
+				.Range( 0.3f, 1.0f )
+				.Default( config::OverlaySettings{}.opacity_dock )
+				.Keywords( "opacity transparency dock alpha" );
+
+			a.Slider( "overlay.opacity_notifications", "Notifications",
+				BindOverlayFloat( &config::OverlaySettings::opacity_notifications ) )
+				.Help( "Opacity of toast notifications." )
+				.Range( 0.3f, 1.0f )
+				.Default( config::OverlaySettings{}.opacity_notifications )
+				.Keywords( "opacity transparency notification toast alpha" );
+
+			// The Config panel's third tab. Registered from Notifications.cpp
+			// because everything it binds to is file-static there -- see
+			// Notifications.h's RegisterRows() comment.
+			gamescope::Notifications::RegisterRows( a );
+
+			a.Group( "Diagnostics" );
+			a.Facts( "overlay.appearance_facts", "Appearance",
+				[]{
+					EnsureGeneralSettingsLoaded();
+					char sz[ 64 ];
+					std::snprintf( sz, sizeof( sz ), "hue %.0f deg  ·  scale %.2fx",
+						s_GeneralSettings.overlay.accent_hue, s_GeneralSettings.overlay.display_scale );
+					return std::string( sz );
+				} )
+				.Help( "Where these settings are stored, and what the font atlas is currently baked "
+				       "at. Read-only." )
+				.Keywords( "appearance diagnostics global routing atlas scale" )
+				.Live( "routing", []{
+					return ui::Fact{ "written to",
+						"global.json always -- overlay appearance is process-level, so a per-game "
+						"override does not apply to it" };
+				} )
+				.Live( "atlas", []{
+					char sz[ 48 ];
+					std::snprintf( sz, sizeof( sz ), "%.2fx", gamescope::fonts::BuiltScale() );
+					return ui::Fact{ "font atlas baked at", sz };
+				} )
+				.Live( "root", []{
+					return ui::Fact{ "config directory", config::ConfigRoot() };
+				} );
+		}
+	}
+
+	void PanelConfig_RegisterAreas( ui::Registry &reg )
+	{
+		// ---- Profiles ------------------------------------------------
+		ui::Area &profiles = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
+		profiles.Keywords( "profile preset snapshot save apply named config" );
+		profiles.Summary( []{
+			EnsureInitialized();
+			return std::to_string( s_ProfileNames.size() ) + " saved";
+		} );
+		profiles.Badge( RoutedBadge );
+		profiles.Rebuilds( ConfigGenerationHash, BuildProfilesArea );
+
+		// ---- Per-game ------------------------------------------------
+		ui::Area &pergame = reg.Add( "setup.pergame", "Per-game", ui::Section::Setup );
+		pergame.Keywords( "per game override routing config file app id copy delete" );
+		pergame.Summary( []{
+			EnsureInitialized();
+			if ( !s_oAppId )
+				return std::string( "no game identified -- everything writes to global.json" );
+			return s_bOverrideActive
+				? ( "override on  ·  " + PerGameFilePath() )
+				: std::string( "global only" );
+		} );
+		pergame.Badge( RoutedBadge );
+		pergame.Rebuilds( ConfigGenerationHash, BuildPerGameArea );
+
+		// ---- Appearance ----------------------------------------------
+		// Not dynamic -- its row set is fixed. Built once, here.
+		ui::Area &appearance = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+		appearance.Keywords( "appearance theme accent hue scale opacity backdrop blur notification" );
+		appearance.Summary( []{
+			EnsureGeneralSettingsLoaded();
+			char sz[ 96 ];
+			std::snprintf( sz, sizeof( sz ), "hue %.0f deg  ·  scale %.2fx",
+				s_GeneralSettings.overlay.accent_hue, s_GeneralSettings.overlay.display_scale );
+			return std::string( sz );
+		} );
+		// Always global, even for a game with an override active -- the one
+		// routing rule the session state cannot express, and the reason the
+		// old title bar needed a per-tab override at all.
+		appearance.Badge( []{ return std::string( "global only" ); } );
+		BuildAppearanceArea( appearance );
 	}
 }

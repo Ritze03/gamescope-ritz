@@ -83,6 +83,16 @@ namespace gamescope::ui
 
 		// SPEC §8.3: "columns = min( widthAllows, ceil( rows / 12 ) )".
 		inline constexpr int   kRowsPerColumn = 12;
+
+		// One Inspector section label (VALUES, PARAMETERS, LIVE) plus the
+		// gap under it. Named because ConfigureRowsHeight() and the drawing
+		// code in Shell.cpp must agree on it -- a bare 20 in both places is
+		// two numbers that only look like one.
+		inline constexpr float kSectionLine = 20.0f;
+
+		// The Inspector title's line plus the gap under it, in DrawConfigure
+		// and DrawDetails alike. Same reasoning as kSectionLine.
+		inline constexpr float kTitleLine = 24.0f;
 	}
 
 	// The slab, in both units. Base is what the ladder reasons in; px is what
@@ -163,4 +173,24 @@ namespace gamescope::ui
 		bool bReadOnly  = false;
 	};
 	ModeCounts CountsFor( const Entry &entry );
+
+	// ---- how tall a CONFIGURE body's rows are (P3b) ---------------------
+	// The fixed-height part of the Inspector's CONFIGURE body: the VALUES
+	// band (its section label plus the entry's own row) and, when the entry
+	// has parameters, the PARAMETERS band (its label plus one row each).
+	//
+	// WHY THIS IS A FUNCTION AND NOT A COMMENT. P3a shipped an Inspector
+	// that could not scroll, and the way it was found was a screenshot --
+	// at 2.0x an entry with six params ran off the bottom of the drawer and
+	// the last row was simply not there. Nothing failed; the pixels just
+	// stopped. Expressing the row arithmetic here makes "this body is
+	// taller than the region it draws into" a comparison a unit test can
+	// make against Regions::rcInspectorBody, with no window open.
+	//
+	// It is a LOWER BOUND, deliberately. The title, the help paragraph and
+	// any disabled reasons all need font metrics to measure, and this
+	// header is imgui-free on purpose. Excluding them can only make the
+	// answer too small, which is the safe direction: if even the lower
+	// bound overflows, the real body certainly does.
+	float ConfigureRowsHeight( int nParams, float flScale );
 }

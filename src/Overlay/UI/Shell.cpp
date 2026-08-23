@@ -116,6 +116,18 @@ namespace gamescope::ui::shell
 		// issues #25 and #68 were.
 		std::string   s_sOpenDropdown;
 
+		// P3b: the id of the destructive Action currently ARMED -- one press
+		// in, one press from happening (Entry::Confirm). One string for the
+		// same reason as the dropdown above: exactly one can be armed, and
+		// per-row state is the category this shell exists to not have.
+		//
+		// It DISARMS on a timeout, which is the property that matters: an
+		// action left armed by someone who walked away must not be one click
+		// from destroying a file when they come back.
+		std::string   s_sArmedAction;
+		float         s_flArmedAt = 0.0f;
+		constexpr float kArmTimeout = 6.0f;   // seconds
+
 		// The one animated quantity: SPEC §8.4's 160 ms region duration,
 		// used for the rail's collapse so the icon rail does not snap.
 		float s_flRailAnim = shelltok::kRailFull;
@@ -149,6 +161,24 @@ namespace gamescope::ui::shell
 		{
 			cv_overlay_e2_host.SetValue( (int)eHost );
 		}
+
+		// P3b. The Inspector body scrolls now (see DrawInspector), and a
+		// scroll is a POINTER gesture -- precisely the input this project is
+		// permanently forbidden to synthesise (D4). So the same argument that
+		// produced overlay_e2_select and overlay_e2_set applies a third time:
+		// without a console route, "does the Inspector actually scroll, and
+		// does the sixth parameter become reachable?" can be answered only by
+		// a human with a wheel, and the defect this fixes was one that no test
+		// and no screenshot of the DEFAULT state could see.
+		//
+		// It is a REQUEST, not the scroll's storage. The value is pushed into
+		// ImGui only on the frame it changes, so the wheel stays authoritative
+		// the rest of the time and the two cannot fight each other.
+		ConVar<float> cv_overlay_e2_scroll(
+			"overlay_e2_scroll", 0.0f,
+			"Scroll the E2 Inspector body to this pixel offset; a negative value scrolls to the "
+			"bottom. Exists so the Inspector's scrolling is verifiable without pointer input." );
+		float s_flScrollApplied = 0.0f;
 
 		void SelectById( std::span<std::string_view> args );
 		void SetById( std::span<std::string_view> args );
@@ -237,8 +267,10 @@ namespace gamescope::ui::shell
 			// Mixer leads SYSTEM, ahead of Monitor and Log -- SPEC §8.1's
 			// amendment is explicit that the fold keeps the original
 			// relative order.
-			reg.Add( "audio.mixer", "Mixer", Section::System )
-				.Escape( []{ PanelAudio_DrawBody(); } );
+			// P3 part B. The first DYNAMIC area: its rows are one per live
+			// PipeWire stream, discovered at runtime rather than declared
+			// here. See ui::Area::Rebuilds().
+			PanelAudio_RegisterArea( reg );
 			reg.Add( "system.monitor", "Monitor", Section::System )
 				// FpsDisplay.cpp does two jobs; this is the SETTINGS half
 				// only. The HUD over the game is drawn from its own,
@@ -248,8 +280,11 @@ namespace gamescope::ui::shell
 				.Escape( []{ PanelLog_DrawBody(); } );
 
 			// ---- SETUP ---------------------------------------------------
-			reg.Add( "setup.config", "Config", Section::Setup )
-				.Escape( []{ PanelConfig_DrawBody(); } );
+			// P3 part B. The Config panel's three tabs became three areas,
+			// on D13.1's reasoning -- setup.profiles, setup.pergame,
+			// setup.appearance. The rail is now the eleven items SPEC §8.1
+			// names.
+			PanelConfig_RegisterAreas( reg );
 
 			Area &shell = reg.Add( "setup.shell", "Shell", Section::Setup );
 			shell.Summary( []{ return std::string( "How the settings surface itself is laid out." ); } );
@@ -673,6 +708,16 @@ namespace gamescope::ui::shell
 				Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 				       TypeRole::Meta, Col( Role::WarnText ), "legacy body", TextAlign::Right );
 			}
+			else if ( pArea )
+			{
+				// The layer badge (Area::Badge) -- issue #43's "where does
+				// this get written?", answered in the one place that is on
+				// screen no matter which row is selected.
+				const std::string sBadge = pArea->BadgeText();
+				if ( !sBadge.empty() )
+					Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
+					       TypeRole::Meta, Col( Role::TextMeta ), sBadge.c_str(), TextAlign::Right );
+			}
 		}
 
 		void DrawSheetFoot( const Rect &rc )
@@ -927,9 +972,33 @@ namespace gamescope::ui::shell
 					DrawSharedControl( entry, row, "ctl", entry.Id() );
 					break;
 				case Kind::Action:
-					if ( controls::Verb( row, "verb", entry.Verb().c_str() ) )
-						entry.Invoke();
+				{
+					// A destructive action is ARMED by its first press and
+					// performed only by its second (Entry::Confirm). The
+					// armed row is remembered by id, so exactly one action
+					// can be armed at a time and walking away disarms it.
+					const bool bArmed = entry.NeedsConfirm() && s_sArmedAction == entry.Id();
+					if ( controls::Verb( row, "verb",
+						bArmed ? entry.ConfirmPrompt().c_str() : entry.Verb().c_str(),
+						entry.NeedsConfirm() ? controls::Intent::Danger : controls::Intent::Accent ) )
+					{
+						if ( !entry.NeedsConfirm() )
+						{
+							entry.Invoke();
+						}
+						else if ( bArmed )
+						{
+							entry.Invoke();
+							s_sArmedAction.clear();
+						}
+						else
+						{
+							s_sArmedAction = entry.Id();
+							s_flArmedAt = (float)ImGui::GetTime();
+						}
+					}
 					break;
+				}
 				case Kind::Meter:
 					controls::Meter( row, (float)entry.Scalar(), entry.Lo(), entry.Hi() );
 					break;
@@ -1175,7 +1244,12 @@ namespace gamescope::ui::shell
 		}
 
 		// ---- CONFIGURE (SPEC §5.1, §5.3) ---------------------------------
-		void DrawConfigure( const Rect &rc, const Entry &entry )
+		// Returns the y of the content's bottom edge. Every Inspector body
+		// returns it, and DrawInspector turns the total into the child's
+		// scroll range -- see the note there. The layout below is otherwise
+		// untouched: still one absolute `y` walking down, still the same row
+		// grammar and the same lane.
+		float DrawConfigure( const Rect &rc, const Entry &entry )
 		{
 			const float flPad = Px( tok::kInspectorPad );
 			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
@@ -1183,7 +1257,7 @@ namespace gamescope::ui::shell
 
 			Label( { rcIn.x0, y, rcIn.x1, y + Px( 18.0f ) }, TypeRole::Title,
 			       Col( Role::TextPrimary ), entry.Title().c_str() );
-			y += Px( 24.0f );
+			y += Px( shelltok::kTitleLine );
 
 			// Generator 1: .Help(). Required by law, so this is never empty.
 			y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextBody ), entry.HelpText().c_str(), y );
@@ -1202,9 +1276,8 @@ namespace gamescope::ui::shell
 				// SPEC §5.1: "For a read-only row the values block is
 				// replaced by one sentence saying so and pointing at
 				// Details."
-				DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
+				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
 					"This row is a readout -- there is nothing here to set. Its live values are in DETAILS.", y );
-				return;
 			}
 
 			// The values block: the row's own control as an Inspector row,
@@ -1215,7 +1288,35 @@ namespace gamescope::ui::shell
 			y += Px( tok::kS );
 			Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 			       Col( Role::TextMeta ), "VALUES" );
-			y += Px( 20.0f );
+
+			// The reset link, right-aligned on the VALUES header -- D6's
+			// "reset moves into the Inspector", and the successor to the
+			// legacy Config panel's per-group links (issue #43). It resets
+			// the row AND its parameters together, which is what makes it a
+			// GROUP reset and not merely a row one: the old "UI Scale" group
+			// is exactly the `UI scale` row plus its two params.
+			//
+			// It appears only when there is something to undo, so the
+			// Inspector does not carry a permanently-dead affordance.
+			if ( entry.HasDefault() && !entry.IsAtDefault() )
+			{
+				const char *pszReset = "reset";
+				const float flResetW = MeasureText( TypeRole::Meta, pszReset ).x + Px( tok::kS ) * 2.0f;
+				const Rect rcReset { rcIn.x1 - flResetW, y - Px( tok::kXS ),
+				                     rcIn.x1, y + Px( 18.0f ) };
+				ImGui::SetCursorScreenPos( ImVec2( rcReset.x0, rcReset.y0 ) );
+				ImGui::PushID( "##resetrow" );
+				const bool bReset = ImGui::InvisibleButton( "r",
+					ImVec2( rcReset.Width(), rcReset.Height() ) );
+				const bool bHover = ImGui::IsItemHovered();
+				ImGui::PopID();
+				Label( rcReset, TypeRole::Meta,
+				       bHover ? Col( Role::AccentBase ) : Col( Role::TextMeta ),
+				       pszReset, TextAlign::Center );
+				if ( bReset )
+					entry.ResetToDefault();
+			}
+			y += Px( shelltok::kSectionLine );
 
 			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
 			DrawEntryRow( entry, lane, rcIn.x0, y, false );
@@ -1231,7 +1332,7 @@ namespace gamescope::ui::shell
 				snprintf( szHead, sizeof( szHead ), "PARAMETERS   %d of 6", (int)entry.ParamCount() );
 				Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 				       Col( Role::TextMeta ), szHead );
-				y += Px( 20.0f );
+				y += Px( shelltok::kSectionLine );
 			}
 
 			for ( size_t i = 0; i < entry.ParamCount(); ++i )
@@ -1283,10 +1384,11 @@ namespace gamescope::ui::shell
 					                 sParamReason.c_str(), y ) + Px( tok::kXS );
 				}
 			}
+			return y;
 		}
 
 		// ---- DETAILS (SPEC §5.1, §5.4) -----------------------------------
-		void DrawDetails( const Rect &rc, const Entry &entry )
+		float DrawDetails( const Rect &rc, const Entry &entry )
 		{
 			const float flPad = Px( tok::kInspectorPad );
 			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
@@ -1346,7 +1448,7 @@ namespace gamescope::ui::shell
 				y += Px( tok::kM );
 				Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 				       Col( Role::TextMeta ), "LIVE" );
-				y += Px( 20.0f );
+				y += Px( shelltok::kSectionLine );
 
 				for ( size_t i = 0; i < entry.LiveCount(); ++i )
 				{
@@ -1358,17 +1460,18 @@ namespace gamescope::ui::shell
 					y += Px( tok::kXS );
 				}
 			}
+			return y;
 		}
 
 		// ---- OVERVIEW (SPEC §5.5) ----------------------------------------
-		void DrawOverview( const Rect &rc, const Area *pArea )
+		float DrawOverview( const Rect &rc, const Area *pArea )
 		{
 			const float flPad = Px( tok::kInspectorPad );
 			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
 			float y = rcIn.y0;
 
 			if ( !pArea )
-				return;
+				return y;
 
 			char szTitle[ 128 ];
 			snprintf( szTitle, sizeof( szTitle ), "%s / %s",
@@ -1397,9 +1500,8 @@ namespace gamescope::ui::shell
 					"It has no registered rows yet, so the Inspector has nothing to derive and no "
 					"selection is possible here.", y );
 				y += Px( tok::kM );
-				DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ),
+				return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ),
 					"sheet: legacy escape  ·  inspector 0 params  ·  migration pending", y );
-				return;
 			}
 
 			// SPEC §5.5's budget line: "sheet 9 rows · inspector 14 params
@@ -1414,7 +1516,7 @@ namespace gamescope::ui::shell
 			char szBudget[ 128 ];
 			snprintf( szBudget, sizeof( szBudget ), "sheet %d rows · inspector %d params · 0 unreachable",
 				(int)pArea->EntryCount(), nParams );
-			DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), szBudget, y );
+			return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), szBudget, y );
 		}
 
 		void DrawInspector( const Regions &regions, const LadderResult &ladder )
@@ -1463,12 +1565,68 @@ namespace gamescope::ui::shell
 					ImVec2( regions.rcInspectorBody.Width(), regions.rcInspectorBody.Height() ),
 					ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
 				{
+					// -------------------------------------------------
+					// WHY THIS IS NOT A SECOND LAYOUT PATH.
+					// -------------------------------------------------
+					// The bodies lay out with an absolute `y` painted
+					// onto the draw list, which is what keeps the row
+					// grammar and the lane identical to the sheet's. The
+					// bug was never that grammar -- it was that `y`
+					// started at the REGION's y0, a fixed screen
+					// coordinate, and that nothing ever told ImGui how
+					// tall the result was. So content taller than the
+					// drawer simply ran off the bottom: no scroll range
+					// existed, and even if it had, a fixed origin would
+					// not have moved.
+					//
+					// Both halves are fixed here, in four lines, without
+					// touching a single body:
+					//
+					//   * the origin is the CHILD's own cursor, from
+					//     which ImGui has already subtracted the scroll
+					//     offset. Laying out from a y that moves is what
+					//     makes the existing absolute arithmetic scroll
+					//     correctly -- every row, control and hairline
+					//     pans together because they all derive from it.
+					//   * the returned bottom edge becomes a Dummy, which
+					//     is the content size ImGui measures its scroll
+					//     range from.
+					//
+					// The alternative -- rewriting the bodies onto
+					// ImGui's cursor with Dummy/SameLine spacing -- would
+					// have meant one layout model in the sheet and
+					// another in the Inspector, which is precisely the
+					// second path SPEC §5.3 exists to prevent (a promoted
+					// parameter has to land in the sheet unchanged).
+					// The console's scroll request, applied only on the frame
+				// it changes -- see cv_overlay_e2_scroll.
+				const float flScrollReq = cv_overlay_e2_scroll.Get();
+				if ( flScrollReq != s_flScrollApplied )
+				{
+					s_flScrollApplied = flScrollReq;
+					ImGui::SetScrollY( flScrollReq < 0.0f
+						? ImGui::GetScrollMaxY() : flScrollReq );
+				}
+
+				const ImVec2 vOrigin = ImGui::GetCursorScreenPos();
+					Rect rcBody = regions.rcInspectorBody;
+					rcBody.y0 = vOrigin.y;
+					rcBody.y1 = vOrigin.y + regions.rcInspectorBody.Height();
+
+					float flBottom = vOrigin.y;
 					if ( !pEntry )
-						DrawOverview( regions.rcInspectorBody, SelectedArea() );
+						flBottom = DrawOverview( rcBody, SelectedArea() );
 					else if ( CurrentMode( pEntry ) == InspectorMode::Configure )
-						DrawConfigure( regions.rcInspectorBody, *pEntry );
+						flBottom = DrawConfigure( rcBody, *pEntry );
 					else
-						DrawDetails( regions.rcInspectorBody, *pEntry );
+						flBottom = DrawDetails( rcBody, *pEntry );
+
+					// The trailing pad is the same one the top has, so a
+					// fully-scrolled body does not end flush against the
+					// frame.
+					ImGui::SetCursorScreenPos( vOrigin );
+					ImGui::Dummy( ImVec2( 1.0f,
+						std::max( 0.0f, flBottom - vOrigin.y ) + Px( tok::kInspectorPad ) ) );
 				}
 				ImGui::EndChild();
 			}
@@ -1608,6 +1766,22 @@ namespace gamescope::ui::shell
 			return;
 
 		RunKeyboard();
+
+		// Dynamic areas resynchronise HERE, at the top of the frame, before
+		// anything reads a row out of one. A rebuild frees every Entry the
+		// area held, so no Entry pointer may be held across it -- doing it
+		// once, first, is what guarantees nothing does. Selection is by id
+		// string and survives (Registry.h's Rebuilds()).
+		Reg().SyncDynamicAreas();
+
+		// An armed destructive action disarms itself. Left armed, it would
+		// be one press from deleting a file for as long as the overlay
+		// stayed open -- which is exactly the "never delete a config
+		// automatically" rule, one step removed.
+		if ( !s_sArmedAction.empty() &&
+		     ( (float)ImGui::GetTime() - s_flArmedAt > kArmTimeout ||
+		       !Reg().FindEntry( s_sArmedAction ) ) )
+			s_sArmedAction.clear();
 
 		const Area *pArea = SelectedArea();
 		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );

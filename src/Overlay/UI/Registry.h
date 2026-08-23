@@ -53,6 +53,7 @@ namespace gamescope::ui
 		HelpRequired,    // .Help() missing or empty
 		ReasonRequired,  // .DisabledUnless() with an empty reason
 		Escaped,         // P2 migration seam: an area that is both escaped and populated
+		Dynamic,         // P3b: an area that is both escaped and rebuilt, or rebuilt with no builder
 	};
 
 	const char *LawName( Law eLaw );
@@ -267,6 +268,11 @@ namespace gamescope::ui
 		// real bug in the first version.
 		std::string DisabledReason() const;
 
+		// ---- reset (P3b) -------------------------------------------------
+		bool HasDefault() const;
+		bool IsAtDefault() const;
+		void ResetToDefault() const;
+
 	private:
 		friend class Entry;
 
@@ -301,6 +307,27 @@ namespace gamescope::ui
 		Entry &DisabledUnless( std::function<bool()> pred, const char *pszReason );
 
 		Entry &Validate( std::function<std::string( const std::string & )> fn );
+
+		// ---- destructive actions (P3b) -----------------------------------
+		// Arms an Action so that ONE press cannot perform it: the first press
+		// swaps the verb for `pszPrompt` and reddens the chip, and only a
+		// second, deliberate press invokes. Disarms on a timeout, on
+		// selecting something else, or on the Inspector closing.
+		//
+		// WHY THIS IS A REGISTRY FEATURE RATHER THAN A MODAL THE CALLER
+		// OPENS. This user has been explicit, after an agent wiped a config:
+		// "There can be a button for it, but never delete configs
+		// automatically." A confirmation that a call site has to remember to
+		// build is a confirmation the next call site forgets -- and the
+		// registry has no way to host a modal anyway, because a category
+		// file cannot place a pixel (SPEC §5.2 clause 0). Declaring the
+		// prompt makes the two-press flow a property of the DECLARATION, so
+		// an action that destroys something is armed by construction.
+		//
+		// Only meaningful on Kind::Action; it is the verb chip that arms.
+		Entry &Confirm( const char *pszPrompt );
+		const std::string &ConfirmPrompt() const { return m_sConfirm; }
+		bool  NeedsConfirm() const { return !m_sConfirm.empty(); }
 
 		// ---- generator 3: Configure rows ---------------------------------
 		// Takes a LEAF, never an id. The full id is synthesised from the
@@ -351,6 +378,27 @@ namespace gamescope::ui
 		// The disabled predicate's reason, or "" when enabled.
 		std::string DisabledReason() const;
 
+		// ---- reset (P3b) -------------------------------------------------
+		// D6 decided that "differs from default" is shown by the accent left
+		// edge and that the RESET ACTION moves into the Inspector -- but no
+		// phase had implemented either half, so until now the E2 shell had
+		// no way to reset anything at all. The legacy Config panel's four
+		// per-group reset links (issue #43) would have been silently lost by
+		// migrating that panel, which is exactly the kind of quiet feature
+		// loss this project has suffered before.
+		//
+		// Reset is per-ROW and includes the row's PARAMETERS, because that
+		// is what makes it the successor to a group link rather than a
+		// weaker thing: the legacy "UI Scale" group is, in E2, the `UI scale`
+		// row with dock and notification scale as its parameters, so one
+		// reset there restores exactly what the old link did.
+		//
+		// A row that never declared a Default has nothing to reset TO, and
+		// says so by having no affordance rather than by resetting to zero.
+		bool HasDefault() const;
+		bool IsAtDefault() const;
+		void ResetToDefault() const;
+
 	private:
 		friend class Area;
 		friend class Registry;
@@ -360,6 +408,7 @@ namespace gamescope::ui
 		                     const Option *pOptions, size_t nOptions );
 
 		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason;
+		std::string m_sConfirm;   // Confirm() -- a destructive Action's second-press prompt
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;
@@ -393,6 +442,21 @@ namespace gamescope::ui
 		Area &Keywords( const char *pszKeywords );
 		Area &Summary( std::function<std::string()> fn );
 		Area &AvailableWhen( std::function<bool()> fn );
+
+		// ---- the layer badge (P3b) ---------------------------------------
+		// A short tag drawn right-aligned in the sheet header. It exists for
+		// issue #43's question, which a settings UI must never leave
+		// ambiguous: WHERE DOES WHAT I CHANGE HERE GET WRITTEN? For the
+		// config areas that is "global", "app <id>" or "global only", and
+		// the answer differs per area -- Appearance always writes
+		// global.json even when a per-game override is active, which is a
+		// routing rule the session state alone cannot express.
+		//
+		// It is an AREA property, not a row one, because it describes the
+		// file a whole sheet routes to. A row-level badge would repeat the
+		// same word down the sheet and still not be visible from Overview.
+		Area &Badge( std::function<std::string()> fn );
+		std::string BadgeText() const { return m_Badge ? m_Badge() : std::string(); }
 
 		void Group( const char *pszName );
 		void GroupCount( const char *pszName );
@@ -447,6 +511,68 @@ namespace gamescope::ui
 		bool  IsEscaped() const { return (bool)m_Escape; }
 		const std::function<void()> &EscapeBody() const { return m_Escape; }
 
+		// ================================================================
+		//  DYNAMIC AREAS -- P3b
+		// ================================================================
+		// An area whose ROW SET is discovered at runtime instead of being
+		// declared at startup. Audio is the first and, so far, the only
+		// one: PipeWire streams appear and disappear while the overlay is
+		// open, so "one row per active stream" cannot be written down in
+		// RegisterAll().
+		//
+		// WHY THIS IS A REGISTRY FEATURE AND NOT A TRICK IN THE AUDIO
+		// FILE. The obvious workaround is a fixed pool of N slots, each
+		// bound to "whichever stream is currently at index i" and greyed
+		// when there are fewer than i streams. That fits the existing laws
+		// with no changes at all -- and it is wrong, for a reason worth
+		// recording: slot identity would be POSITIONAL. A stream ending
+		// shifts every stream after it down one slot, so the slider under
+		// the pointer silently changes which application it controls. That
+		// is not a cosmetic problem; it is the volume of the wrong program
+		// moving. Identity has to come from the stream, so the row's id
+		// has to come from the stream, so the row set has to be rebuilt.
+		//
+		// HOW THE FOUR LAWS SURVIVE IT:
+		//
+		//   * ID UNIQUENESS holds because a rebuild RELEASES the ids the
+		//     previous build claimed before the builder runs. Ids are also
+		//     derived from the PipeWire node id, which the server does not
+		//     reuse while a node lives, so two live streams cannot collide.
+		//   * THE PREFIX LAW is untouched -- a rebuilt Entry mints its
+		//     Params through the same synthesis every other Entry uses.
+		//   * THE SIX BUDGET is untouched, and is checked per Entry as it
+		//     is built, exactly as at startup.
+		//   * HELP IS REQUIRED is the one that genuinely changes, and it
+		//     is stated plainly rather than hidden: Registry::SelfTest()
+		//     runs once after RegisterAll(), so a row built later has
+		//     never been through it. SyncIfStale() therefore re-runs the
+		//     help and prefix checks over THIS AREA after every rebuild.
+		//
+		// THE CONSEQUENCE, STATED. A law violation aborts (D11.6), and a
+		// rebuild happens mid-session, so a malformed dynamic row is a
+		// mid-session abort rather than a boot failure. That is a real
+		// widening of when the guillotine can fall. It is acceptable only
+		// because a dynamic row is GENERATED -- no human types one -- so
+		// the failure is in one code path that a unit test can run against
+		// a fabricated stream list without a compositor. tests/
+		// test_overlay_ui.cpp does exactly that.
+		//
+		// `fnGeneration` is polled every frame and must be cheap; the
+		// builder runs only when its answer changes. Make it a function of
+		// everything the ROWS depend on (the set of streams AND their
+		// names), never of the values those rows read -- a generation that
+		// changed with the volume would rebuild the area mid-drag.
+		Area &Rebuilds( std::function<uint64_t()> fnGeneration,
+		                std::function<void( Area & )> fnBuild );
+		bool  IsDynamic() const { return (bool)m_Build; }
+
+		// Rebuilds if the generation moved. Returns true if it rebuilt.
+		// The shell calls this once per frame, BEFORE it reads anything
+		// out of the area -- a rebuild frees every Entry the area held, so
+		// no Entry pointer may be held across it. Selection is by id
+		// string and therefore survives.
+		bool SyncIfStale();
+
 		const std::string &Id() const    { return m_sId; }
 		const std::string &Title() const { return m_sTitle; }
 		Section GetSection() const       { return m_eSection; }
@@ -479,8 +605,13 @@ namespace gamescope::ui
 		std::string m_sId, m_sTitle, m_sKeywords;
 		Section     m_eSection = Section::Display;
 		std::function<std::string()> m_Summary;
+		std::function<std::string()> m_Badge;
 		std::function<bool()>        m_Available;
 		std::function<void()>        m_Escape;   // migration seam -- see Escape()
+		std::function<uint64_t()>    m_Generation;  // dynamic areas -- see Rebuilds()
+		std::function<void( Area & )> m_Build;
+		uint64_t                     m_ulGeneration = 0;
+		bool                         m_bBuilt = false;
 		std::vector<std::unique_ptr<Entry>> m_Entries;
 		std::vector<GroupBand>       m_Groups;
 		Registry   *m_pRegistry = nullptr;
@@ -520,12 +651,27 @@ namespace gamescope::ui
 		// Returns the number of violations reported.
 		size_t SelfTest();
 
+		// The same two checks SelfTest() makes, over ONE area. A dynamic
+		// area's rows are built after SelfTest() has already run, so this
+		// is how they are still held to the laws -- see Area::Rebuilds().
+		size_t SelfTestArea( const Area &area );
+
+		// Rebuilds every dynamic area whose generation moved. The shell
+		// calls this once per frame, before it reads anything out of an
+		// area. Returns how many rebuilt. See Area::Rebuilds().
+		size_t SyncDynamicAreas();
+
 	private:
 		friend class Area;
 		friend class Entry;
 
 		// Returns false (and reports Law::UniqueId) if the id is taken.
 		bool ClaimId( const std::string &sId );
+
+		// Gives an id back, so a dynamic area's rebuild does not collide
+		// with the build it replaces. Only Area::SyncIfStale() calls this,
+		// and only for ids that area itself claimed.
+		void ReleaseId( const std::string &sId );
 
 		std::vector<std::unique_ptr<Area>> m_Areas;
 		std::vector<std::string>           m_ClaimedIds;
