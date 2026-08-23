@@ -29,13 +29,6 @@
 // (column / drawer / hidden, Ctrl+I). It is a single enum, it is not a
 // geometry, and the ladder may override it downward -- see Layout.cpp.
 //
-// ---------------------------------------------------------------------------
-// WHAT P2 DOES NOT DO
-// ---------------------------------------------------------------------------
-// The five legacy panels still draw their own bodies, verbatim, through
-// ui::Area::Escape(). They are not migrated; the sheet is only proving it can
-// hold them. P3 rewrites them area by area against the Row grammar, and the
-// escape hatch dies with the last one.
 #include "Shell.h"
 
 #include "Band.h"
@@ -48,7 +41,6 @@
 #include "Row.h"
 #include "Tokens.h"
 
-#include "Overlay/Chrome.h"
 #include "Overlay/Fonts.h"
 #include "Overlay/Palette.h"
 #include "Overlay/PanelAudio.h"
@@ -87,13 +79,6 @@ namespace gamescope::ui::shell
 		// is snake_case and a lone dotted name would be the only one. The
 		// concept is unchanged; see AUTONOMOUS-DECISIONS.md D12.
 		//
-		// Runtime-only and deliberately NOT a config field: P2 must not add
-		// an on-disk key, and "off by default, opt in per session" is what
-		// makes the phase safe to land.
-		ConVar<bool> cv_overlay_e2(
-			"overlay_e2", false,
-			"Use the E2 settings shell (rail / sheet / inspector) instead of the legacy dock and floating panels." );
-
 		// =================================================================
 		//  Shell state -- ALL of it. This list is meant to stay short.
 		// =================================================================
@@ -193,6 +178,13 @@ namespace gamescope::ui::shell
 
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
+
+		// How far the rail is scrolled, in physical px. Non-zero only when
+		// the item column is taller than the rail -- which it is from 2.0x
+		// (and at 1.75x on a short slab). DrawRail() clamps it every frame,
+		// so a scale change that makes the rail fit again resets it to 0
+		// without needing to be told.
+		float s_flRailScroll = 0.0f;
 
 		// The last surface size Draw() saw, in physical pixels.
 		//
@@ -590,12 +582,6 @@ namespace gamescope::ui::shell
 					return Fact{ "display scale", sz };
 				} )
 				.Live( "regions", []{ return Fact{ "regions", FormatLadder() }; } );
-
-			shell.Action( "shell.classic", "Classic UI", "switch back",
-				[]{ cv_overlay_e2.SetValue( false ); } )
-				.Help( "Turn the E2 shell off for this session and return to the dock and its "
-				       "floating panels. The same as `overlay_e2 0` from the console." )
-				.Keywords( "legacy dock classic old panels windows" );
 		}
 
 		Registry &Reg()
@@ -925,8 +911,7 @@ namespace gamescope::ui::shell
 				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
 				{
 					const Area &a = Reg().AreaAt( i );
-					console_log.infof( "  %-20s %-12s %s", a.Id().c_str(), a.Title().c_str(),
-						a.IsEscaped() ? "(legacy body)" : "" );
+					console_log.infof( "  %-20s %s", a.Id().c_str(), a.Title().c_str() );
 					for ( size_t j = 0; j < a.EntryCount(); ++j )
 						console_log.infof( "      %s", a.EntryAt( j ).Id().c_str() );
 				}
@@ -1179,7 +1164,7 @@ namespace gamescope::ui::shell
 		// straight back.
 		bool AreaIsUnsplittable( const Area *pArea )
 		{
-			return pArea && ( pArea->IsEscaped() || pArea->HasContent() );
+			return pArea && pArea->HasContent();
 		}
 
 		std::string FormatLadder()
@@ -1233,40 +1218,102 @@ namespace gamescope::ui::shell
 
 			const float flItemH = Px( 40.0f );        // index.html's .ri
 			const float flPadX  = Px( 16.0f );
-			float       y       = rc.y0 + Px( tok::kS );
+			const float flSecH  = Px( 26.0f );
 
-			Section eLastSection = Section::Setup;
-			bool    bFirst       = true;
+			// ---- the rail's vertical walk, defined ONCE ------------------
+			//
+			// WHY A WALK AND NOT A DRAW LOOP. The rail's height is fixed by
+			// the slab; its content is not. At 2.0x eleven items plus three
+			// section breaks are TALLER than the rail, and until this the
+			// surplus was drawn past rc.y1 and simply lost: Appearance and
+			// Shell fell off the bottom, unreachable by pointer. (The
+			// palette still found them, which is why P4 did not notice.)
+			// Scrolling needs the content height BEFORE the first item is
+			// drawn, so the walk below is the single definition of where an
+			// item sits and how tall the whole column is; the measure pass
+			// and the draw pass call it with different visitors rather than
+			// keeping two copies of the same arithmetic in step by hand.
+			const float flSecAdvance = bIcons ? Px( 20.0f ) : ( flSecH + Px( tok::kXS ) );
 
-			for ( size_t i = 0; i < Reg().AreaCount(); ++i )
+			const auto Walk = [ & ]( auto &&fnSection, auto &&fnItem ) -> float
 			{
-				const Area &area = Reg().AreaAt( i );
-				if ( !area.Available() )
-					continue;
+				float   y            = rc.y0 + Px( tok::kS );
+				Section eLastSection = Section::Setup;
+				bool    bFirst       = true;
 
-				if ( bFirst || area.GetSection() != eLastSection )
+				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
 				{
-					eLastSection = area.GetSection();
-					bFirst = false;
+					const Area &area = Reg().AreaAt( i );
+					if ( !area.Available() )
+						continue;
+
+					if ( bFirst || area.GetSection() != eLastSection )
+					{
+						eLastSection = area.GetSection();
+						bFirst = false;
+						fnSection( area.GetSection(), y );
+						y += flSecAdvance;
+					}
+
+					fnItem( i, area, y );
+					y += flItemH;
+				}
+				return y;
+			};
+
+			const auto NoSection = []( Section, float ) {};
+			const auto NoItem    = []( size_t, const Area &, float ) {};
+
+			// Measure, then decide the scroll offset. Content height carries
+			// the same top pad at the bottom so the last item does not sit
+			// flush against the edge when the rail is scrolled fully down.
+			const float flContentH  = ( Walk( NoSection, NoItem ) - rc.y0 ) + Px( tok::kS );
+			const float flMaxScroll = std::max( 0.0f, flContentH - rc.Height() );
+
+			// Keep the ACTIVE item on screen. StepArea() moves the selection
+			// with Up/Down in the rail region, so following the selection is
+			// what makes every area keyboard-reachable again; the wheel is
+			// the pointer's equivalent and is the only reason a hover test
+			// appears here.
+			if ( flMaxScroll > 0.0f
+			  && ImGui::IsMouseHoveringRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), false ) )
+				s_flRailScroll -= ImGui::GetIO().MouseWheel * flItemH;
+
+			float flActiveTop = -1.0f;
+			Walk( NoSection, [ & ]( size_t, const Area &area, float y ) {
+				if ( &area == SelectedArea() )
+					flActiveTop = y - rc.y0;      // RailScroll() works rail-relative
+			} );
+
+			s_flRailScroll = RailScroll( s_flRailScroll, flContentH, rc.Height(),
+			                             flActiveTop, flItemH, Px( tok::kS ) );
+
+			// Clip so an off-screen item is neither painted over the sheet
+			// nor clickable -- ImGui culls an InvisibleButton outside the
+			// window clip rect, which is exactly the wanted hit-test.
+			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
+
+			Walk(
+				[ & ]( Section eSection, float yRaw )
+				{
+					const float y = yRaw - s_flRailScroll;
 					if ( bIcons )
 					{
 						// The icon rail keeps the section BREAK but drops
 						// the word: a divider rule, not a heading. SPEC
 						// §8.0's collapse is about width, and a heading is
 						// the one thing that cannot survive it.
-						y += Px( 10.0f );
-						HLine( rc.x0 + Px( tok::kM ), rc.x1 - Px( tok::kM ), y, Col( Role::Line ) );
-						y += Px( 10.0f );
+						HLine( rc.x0 + Px( tok::kM ), rc.x1 - Px( tok::kM ), y + Px( 10.0f ), Col( Role::Line ) );
 					}
 					else
 					{
-						const float flSecH = Px( 26.0f );
 						Label( { rc.x0 + flPadX, y + Px( tok::kM ), rc.x1, y + flSecH },
-						       TypeRole::Section, Col( Role::TextMeta ), SectionName( area.GetSection() ) );
-						y += flSecH + Px( tok::kXS );
+						       TypeRole::Section, Col( Role::TextMeta ), SectionName( eSection ) );
 					}
-				}
-
+				},
+				[ & ]( size_t i, const Area &area, float yRaw )
+			{
+				const float y = yRaw - s_flRailScroll;
 				const Rect rcItem { rc.x0, y, rc.x1, y + flItemH };
 				const bool bActive = ( &area == SelectedArea() );
 
@@ -1337,8 +1384,22 @@ namespace gamescope::ui::shell
 					       TypeRole::Label, bActive ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 					       area.Title().c_str() );
 				}
+			} );
 
-				y += flItemH;
+			ImGui::PopClipRect();
+
+			// A scrollable rail says so: a thumb proportional to the visible
+			// fraction, on the rail's own divider line. Without it the only
+			// cue that Shell exists below the fold is pressing Down.
+			if ( flMaxScroll > 0.0f )
+			{
+				const float flTrackX = rc.x1 - Px( 3.0f );
+				const float flFrac   = rc.Height() / flContentH;
+				const float flThumbH = std::max( Px( 24.0f ), rc.Height() * flFrac );
+				const float flThumbY = rc.y0 + ( rc.Height() - flThumbH )
+				                     * ( s_flRailScroll / flMaxScroll );
+				Fill( { flTrackX, flThumbY, flTrackX + Px( 2.0f ), flThumbY + flThumbH },
+				      Accent( 0.45f ) );
 			}
 		}
 
@@ -1367,15 +1428,7 @@ namespace gamescope::ui::shell
 			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 			       TypeRole::Section, Col( Role::TextPrimary ), szCrumb );
 
-			if ( pArea && pArea->IsEscaped() )
-			{
-				// The migration seam is visible in the UI, not only in the
-				// source. An un-migrated category should look un-migrated:
-				// that is the pressure that gets P3 finished.
-				Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
-				       TypeRole::Meta, Col( Role::WarnText ), "legacy body", TextAlign::Right );
-			}
-			else if ( pArea )
+			if ( pArea )
 			{
 				// SPEC §8.1's header, and §1.1's D9 amendment naming exactly
 				// what may live here: "the breadcrumb, the `differs N` chip,
@@ -1435,9 +1488,45 @@ namespace gamescope::ui::shell
 		void DrawSheetFoot( const Rect &rc )
 		{
 			HLine( rc.x0, rc.x1, rc.y0, Col( Role::LineRegion ) );
-			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ),
-			       "^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back" );
+
+			const Rect  rcText  = { rc.x0 + Px( tok::kSheetPad ), rc.y0,
+			                        rc.x1 - Px( tok::kSheetPad ), rc.y1 };
+			const float flAvail = rcText.x1 - rcText.x0;
+
+			// The legend is the only place the shell advertises its own
+			// shortcuts, and at 2.0x the full form does not fit the sheet --
+			// so DrawText's left-align fallback clipped the TAIL, which is
+			// where `Esc back` is. That is the worst possible thing to lose:
+			// a user who cannot read the rest of the line is precisely the
+			// user who needs to know how to get out of it.
+			//
+			// So the line drops hints from the LEFT instead, cheapest first,
+			// and `Esc back` is the last thing standing. Chosen by
+			// measurement rather than by scale, because the sheet's width
+			// depends on the Inspector's host and the drawer as well as on
+			// the ladder step.
+			static const char *const kForms[] = {
+				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back",
+				"^K search    ^I inspector    ^/ explain    Tab region    Esc back",
+				"^K search    ^I inspector    Tab region    Esc back",
+				"^K search    Tab region    Esc back",
+				"^K search    Esc back",
+				"Esc back",
+			};
+
+			// Falls back to the shortest form, which is also the one that
+			// fits every width this shell can produce.
+			const char *pszLegend = kForms[ IM_ARRAYSIZE( kForms ) - 1 ];
+			for ( const char *pszForm : kForms )
+			{
+				if ( MeasureText( TypeRole::Meta, pszForm ).x <= flAvail )
+				{
+					pszLegend = pszForm;
+					break;
+				}
+			}
+
+			Label( rcText, TypeRole::Meta, Col( Role::TextMeta ), pszLegend );
 		}
 
 		// =================================================================
@@ -1724,6 +1813,27 @@ namespace gamescope::ui::shell
 		// in the value column -- "the value column already tells you they are
 		// 32 / 32 without showing two steppers, which is the whole calming
 		// move in miniature" (§4.3).
+		// A Meter's value comes from its SCALAR, not a binding -- it has no
+		// binding at all (Registry.h: the kind is read-only and Area::Meter()
+		// takes a std::function<double()>). Both the sheet's value column and
+		// the palette need the same string, so it is computed once here.
+		//
+		// This existing as a function is the fix for the third instance of
+		// one bug: PaletteValueText() special-cased Composite and Facts and
+		// fell through to the binding for everything else, so a Meter --
+		// bindingless -- printed EMPTY in the palette while the sheet showed
+		// a number. Exactly what the composite rows did before D19.7 printed
+		// the raw axis-A integer. A kind whose value is not in its binding
+		// has to be taught to every formatter, so there is now one formatter
+		// to teach.
+		std::string MeterValue( const Entry &entry )
+		{
+			char sz[ 32 ];
+			snprintf( sz, sizeof( sz ), "%.0f%s", entry.Scalar(),
+				entry.Unit().empty() ? "" : entry.Unit().c_str() );
+			return sz;
+		}
+
 		std::string CompositeValue( const Entry &entry )
 		{
 			switch ( entry.GetCompositeKind() )
@@ -2001,12 +2111,7 @@ namespace gamescope::ui::shell
 			if ( entry.GetKind() == Kind::Facts )
 				sValue = entry.SummaryText();
 			else if ( entry.GetKind() == Kind::Meter )
-			{
-				char sz[ 32 ];
-				snprintf( sz, sizeof( sz ), "%.0f%s", entry.Scalar(),
-					entry.Unit().empty() ? "" : entry.Unit().c_str() );
-				sValue = sz;
-			}
+				sValue = MeterValue( entry );
 			else
 				sValue = FormatDeclValue( entry );
 
@@ -2279,7 +2384,7 @@ namespace gamescope::ui::shell
 		// The Log is the only one. Everything about how it LOOKS is decided
 		// here, in the shell, because the registration hands over data and
 		// nothing else -- no font, no colour, no width, no cursor. That is
-		// what makes this a content view rather than a second Escape().
+		// what makes this a content view rather than an escape hatch.
 		//
 		// Severity is a small int on the line, mapped to a role here, so a
 		// category cannot introduce a colour the palette does not have.
@@ -2367,43 +2472,6 @@ namespace gamescope::ui::shell
 		{
 			if ( !pArea )
 				return;
-
-			if ( pArea->IsEscaped() )
-			{
-				// ---------------------------------------------------------
-				// THE MIGRATION SEAM, at its one call site.
-				// ---------------------------------------------------------
-				// API.md §13: "Escape() pushes the old ImGuiStyle, runs the
-				// old code inside the sheet's child, pops." Concretely, the
-				// legacy panels assume ImGui's own cursor-driven layout --
-				// SameLine, item spacing, indent, a window content region
-				// that starts at a padded origin. The kit assumes none of
-				// that and pushes zero padding for its own rows. So the
-				// hatch restores the padding the legacy code expects,
-				// scoped to the child, and puts it back afterwards.
-				//
-				// It looks wrong on purpose. There is no styling here that
-				// tries to make a legacy body blend into an E2 sheet: a
-				// half-convincing blend is how a migration stops being
-				// urgent.
-				ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding,
-					ImVec2( Px( tok::kSheetPad ), Px( tok::kM ) ) );
-				ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
-				// Both scrollbars, deliberately. The legacy panels were
-				// authored for a ~440-wide resizable window and some of
-				// them lay out wider than the sheet column gives them; a
-				// control the user cannot reach is a worse outcome than a
-				// scrollbar in a region that will not have one after P3.
-				if ( ImGui::BeginChild( "##escape", ImVec2( rc.Width(), rc.Height() ),
-					ImGuiChildFlags_None,
-					ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar ) )
-				{
-					pArea->EscapeBody()();
-				}
-				ImGui::EndChild();
-				ImGui::PopStyleVar();
-				return;
-			}
 
 			ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
 			if ( ImGui::BeginChild( "##sheetrows", ImVec2( rc.Width(), rc.Height() ),
@@ -2895,23 +2963,6 @@ namespace gamescope::ui::shell
 				y += Px( tok::kM );
 			}
 
-			if ( pArea->IsEscaped() )
-			{
-				// Overview is honest about what this category currently is.
-				// SPEC §5.5 calls the Overview "the most useful screen in
-				// the product" precisely because it answers "what state am
-				// I in" before you have clicked anything -- and for a
-				// legacy body the true answer is that the shell cannot see
-				// inside it yet.
-				y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::WarnText ),
-					"This category still draws its original panel body, hosted verbatim in the sheet. "
-					"It has no registered rows yet, so the Inspector has nothing to derive and no "
-					"selection is possible here.", y );
-				y += Px( tok::kM );
-				return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ),
-					"sheet: legacy escape  ·  inspector 0 params  ·  migration pending", y );
-			}
-
 			// SPEC §5.5's budget line: "sheet 9 rows · inspector 14 params
 			// · 0 unreachable". The count that would say so if the
 			// Inspector ever did become a junk drawer.
@@ -3180,7 +3231,7 @@ namespace gamescope::ui::shell
 			Label( { rc.x0 + Px( tok::kM ) + flDot + Px( tok::kS ), rc.y0, rc.x1, rc.y1 },
 			       TypeRole::Title, Col( Role::TextPrimary ), "GAMESCOPE-RITZ" );
 			Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kM ), rc.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ), "E2 shell · overlay_e2", TextAlign::Right );
+			       TypeRole::Meta, Col( Role::TextMeta ), "settings", TextAlign::Right );
 		}
 
 		// =================================================================
@@ -3395,6 +3446,11 @@ namespace gamescope::ui::shell
 				return CompositeValue( *pE );
 			if ( eKind == Kind::Facts )
 				return pE ? pE->SummaryText() : std::string();
+			// A Meter's value is its scalar; it has no binding to fall
+			// through to, so without this the palette printed nothing for
+			// the one row whose whole point is a live number.
+			if ( eKind == Kind::Meter && pE )
+				return MeterValue( *pE );
 
 			const AnyBind &bind = pE ? pE->Binding() : pP->Binding();
 			if ( !bind.IsBound() )
@@ -3573,14 +3629,36 @@ namespace gamescope::ui::shell
 			// Beyond that the answer is a better query, not more scrolling --
 			// and it bounds the per-frame draw cost regardless of registry
 			// size.
-			const int nShown  = std::min( (int)items.size(), 60 );
-			const int nVisible= std::min( nShown, 9 );
-			const float flListH = nShown > 0 ? flRowH * (float)nVisible : Px( 60.0f );
+			const int nShown = std::min( (int)items.size(), 60 );
+
+			const float x0 = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
+			const float y0 = rcSlab.y0 + ( rcSlab.y1 - rcSlab.y0 ) * 0.14f;
+
+			// HOW MANY ROWS ACTUALLY FIT, decided BEFORE the panel is sized.
+			//
+			// This used to take nine rows unconditionally and then clamp the
+			// finished panel to the slab. The clamp moved rc.y1, and the
+			// footer is drawn from rc.y1 -- so at 2.0x, where nine rows plus
+			// the query line no longer fit, the footer slid up over the last
+			// result row. The rows themselves were still laid out against
+			// the unclamped flListH, so the two disagreed by exactly the
+			// amount the clamp had removed.
+			//
+			// Deciding the row count from the space available makes the
+			// panel's height a CONSEQUENCE of what it contains rather than
+			// something trimmed afterwards, so there is nothing left to
+			// clamp and the footer cannot be reached by the list.
+			const float flAvailH = ( rcSlab.y1 - Px( tok::kM ) ) - y0;
+			const int   nFits    = (int)std::floor( ( flAvailH - flQH - flFootH ) / flRowH );
+			// At least one row: a palette showing none of its results is
+			// worse than one that overlaps its legend.
+			const int   nVisible = std::clamp( std::min( nShown, 9 ), 1, std::max( 1, nFits ) );
+
+			const float flListH = nShown > 0 ? flRowH * (float)nVisible
+			                                 : std::min( Px( 60.0f ), std::max( 0.0f, flAvailH - flQH - flFootH ) );
 
 			const float flH = flQH + flListH + flFootH;
-			const float x0  = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
-			const float y0  = rcSlab.y0 + ( rcSlab.y1 - rcSlab.y0 ) * 0.14f;
-			const Rect  rc  = { x0, y0, x0 + flW, std::min( y0 + flH, rcSlab.y1 - Px( tok::kM ) ) };
+			const Rect  rc  = { x0, y0, x0 + flW, y0 + flH };
 
 			ImDrawList *pDraw = ImGui::GetWindowDrawList();
 
@@ -4430,18 +4508,13 @@ namespace gamescope::ui::shell
 	// =====================================================================
 	//  Public surface
 	// =====================================================================
-	bool Enabled()
-	{
-		return cv_overlay_e2.Get();
-	}
-
 	void Draw()
 	{
-		// Issue #79's fix for this path -- see Chrome.h. Without it the
+		// Issue #79's fix for this path -- see Palette.h. Without it the
 		// shell would render at display_scale 1.0 for the life of the
 		// process, because the lazy loader used to hang off the legacy
 		// dock, which E2 never draws.
-		gamescope::chrome::EnsureThemeLoaded();
+		gamescope::palette::EnsureThemeLoaded();
 
 		// The kit's ONE scale input (Tokens.h). Pushed once, here, per
 		// frame; nothing downstream reads palette:: directly.

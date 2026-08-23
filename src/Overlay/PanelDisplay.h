@@ -1,5 +1,5 @@
 // Milestone M3, renamed/expanded in issue #25 -- the "GAMESCOPE" panel of the
-// settings overlay (window title "GAMESCOPE", chrome::PanelId::Display
+// settings overlay, now the E2 `display.*` areas
 // unchanged): gamescope's own live upscale filter/scaler, the auto-corrected
 // sharpness slider, VRR/HDR/tearing/force-grab-cursor toggles, a frame
 // limiter, and an HDR tuning tab, organized into tabs. See
@@ -20,16 +20,6 @@
 
 namespace gamescope
 {
-	// Draws the Display panel's ImGui window. Must be called from the same
-	// place/thread SettingsOverlay draws its own window (steamcompmgr thread,
-	// between ImGui::NewFrame() and ImGui::Render()) -- every control here
-	// writes plain (non-atomic) globals and ConVars that paint_all() and
-	// vulkan_composite() read per-frame on that same thread with no locking,
-	// so same-thread-only is a correctness requirement, not just a style
-	// preference. See PanelDisplay.cpp's file-level comment for the thread-
-	// safety argument in full.
-	void PanelDisplay_Draw();
-
 	// E2 (P3). This panel's settings, DECLARED rather than drawn: three
 	// areas -- Upscaling, Frame limiter, HDR -- covering exactly what the
 	// four legacy tabs above cover, with the same config keys, the same
@@ -37,10 +27,12 @@ namespace gamescope
 	//
 	// Called once at startup from Overlay/UI/Shell.cpp's RegisterAll().
 	// Registration is data and touches no ImGui, so it has no thread
-	// contract of its own; the BINDINGS it installs are invoked during the
-	// shell's draw and inherit PanelDisplay_Draw()'s contract above.
-	//
-	// P2's PanelDisplay_DrawBody() -- the ui::Area::Escape() hatch that
-	// hosted the legacy body verbatim in the E2 sheet -- is gone with this.
+	// contract of its own. The BINDINGS it installs are invoked during the
+	// shell's draw, on the steamcompmgr thread: every control here writes
+	// plain (non-atomic) globals and ConVars that paint_all() and
+	// vulkan_composite() read per-frame on that same thread with no
+	// locking, so same-thread-only is a correctness requirement, not a
+	// style preference. See PanelDisplay.cpp's file-level comment for the
+	// thread-safety argument in full.
 	void PanelDisplay_RegisterAreas( ui::Registry &reg );
 }

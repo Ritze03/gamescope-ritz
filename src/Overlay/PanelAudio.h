@@ -21,8 +21,7 @@ namespace gamescope
 {
 	namespace ui { class Registry; class Area; }
 
-	// P3 part B: the E2 registration for `audio.mixer`, replacing the
-	// Escape() hatch below.
+	// P3 part B: the E2 registration for `audio.mixer`.
 	//
 	// This is the first DYNAMIC area in the product -- its row set is one
 	// row per live PipeWire stream, and streams appear and disappear while
@@ -31,20 +30,4 @@ namespace gamescope
 	// declaration, and AUTONOMOUS-DECISIONS.md D14 for why the alternative
 	// (a fixed pool of positional slots) was rejected.
 	void PanelAudio_RegisterArea( ui::Registry &reg );
-	// Draws the Audio panel's ImGui window. Must be called from the same
-	// place/thread SettingsOverlay draws its own window (steamcompmgr
-	// thread, between ImGui::NewFrame() and ImGui::Render()), matching
-	// PanelDisplay_Draw()/PanelShaders_Draw() -- Audio::GetState() and
-	// Audio::Request*()/SetManualSelection() are internally synchronized
-	// (Volume.cpp's own mutex/atomics) so this isn't a correctness
-	// requirement here the way it is for the other panels, but keeping
-	// every panel draw on one thread is the established pattern.
-	void PanelAudio_Draw();
-
-	// E2 MIGRATION SEAM (P2), temporary -- see Overlay/UI/Registry.h's
-	// Escape() comment for why the hatch exists and what deletes it. The
-	// same body with no window around it, for ui::Area::Escape() to host in
-	// the E2 sheet. (P3 part A migrated Display and Shaders off this seam;
-	// this area is a later part of P3 and still uses it.)
-	void PanelAudio_DrawBody();
 }

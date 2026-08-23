@@ -52,8 +52,7 @@ namespace gamescope::ui
 		UniqueId,        // an id already registered
 		HelpRequired,    // .Help() missing or empty
 		ReasonRequired,  // .DisabledUnless() with an empty reason
-		Escaped,         // P2 migration seam: an area that is both escaped and populated
-		Dynamic,         // P3b: an area that is both escaped and rebuilt, or rebuilt with no builder
+		Dynamic,         // P3b: a dynamic area rebuilt with no builder
 	};
 
 	const char *LawName( Law eLaw );
@@ -535,38 +534,6 @@ namespace gamescope::ui
 		                  AnyBind bindA, AnyBind bindB = {} );
 
 		// ================================================================
-		//  MIGRATION SEAM -- API.md §13. TEMPORARY. P3 DELETES THIS.
-		// ================================================================
-		// "A category whose body is still legacy panel code, hosted verbatim
-		// in the sheet." The shell runs `fn` inside the sheet body's child
-		// window with the LEGACY ImGuiStyle pushed, then pops.
-		//
-		// It looks wrong on purpose -- it is visibly the un-migrated part.
-		// This is the ONLY function in the API that permits arbitrary ImGui,
-		// and it is the only way a call site can put a pixel in the sheet
-		// without going through the Row grammar. Every property P1 built
-		// (the right-bound law, the one control height, the four laws) is
-		// suspended inside it, because the code it hosts predates all of
-		// them.
-		//
-		// Deliberate limits, so it cannot grow into a supported feature:
-		//
-		//   * an escaped area has NO ENTRIES, and mixing the two is a
-		//     registration violation (Law::Escaped). Half-migrated is the
-		//     state that would make this permanent, so it is unreachable:
-		//     an area is legacy or it is E2, never both.
-		//   * it reaches the SHEET only. There is deliberately no Inspector
-		//     equivalent -- SPEC §5.2 clause 0 says the Inspector has no
-		//     authoring API, and an escape hatch into it would be exactly
-		//     the fifth generator that clause exists to forbid. An escaped
-		//     area therefore shows Overview (§5.5) and nothing else.
-		//   * `EscapeCount()` is what a future `ui_lint` counts as severity
-		//     `migration`. Expected to reach zero during P3.
-		Area &Escape( std::function<void()> fn );
-		bool  IsEscaped() const { return (bool)m_Escape; }
-		const std::function<void()> &EscapeBody() const { return m_Escape; }
-
-		// ================================================================
 		//  CONTENT AREAS -- P3c
 		// ================================================================
 		// An area whose body is CONTENT rather than a list of settings.
@@ -575,14 +542,21 @@ namespace gamescope::ui
 		// thousands of them through the Six Budget and the Prefix Law for
 		// no reason.
 		//
-		// THIS IS NOT Escape() UNDER A NEW NAME, and the difference is the
-		// whole point. Escape() hands a call site the sheet's child window
-		// and lets it run arbitrary ImGui with every law suspended --
-		// that is why it was always temporary. Content() hands the shell
-		// DATA and nothing else: a function returning lines. The call site
-		// still cannot place a pixel (SPEC §5.2 clause 0), cannot choose a
-		// font, a colour or a width, and cannot lay anything out. The
-		// shell draws the view, exactly as it draws every control.
+		// Content() HANDS THE SHELL DATA AND NOTHING ELSE: a function
+		// returning lines. The call site cannot place a pixel (SPEC §5.2
+		// clause 0), cannot choose a font, a colour or a width, and cannot
+		// lay anything out. The shell draws the view, exactly as it draws
+		// every control.
+		//
+		// That distinction is why this outlived the migration seam it was
+		// written to be contrasted with. P5 deleted Area::Escape(), which
+		// handed a call site the sheet's own child window and let it run
+		// arbitrary ImGui with every law suspended; it was temporary from
+		// the day it was written and reached zero call sites in P3c. The
+		// difference was never the amount of code -- it is that an escape
+		// hatch takes the DRAWING away from the shell, and this does not.
+		// Keep it that way: a Content() overload that took a draw callback
+		// would be Escape() again under a third name.
 		//
 		// A content area STILL DECLARES ROWS, and they are still ordinary
 		// rows: Log's filter bank, its text filter and its buffer facts all
@@ -699,7 +673,6 @@ namespace gamescope::ui
 		std::function<std::string()> m_Summary;
 		std::function<std::string()> m_Badge;
 		std::function<bool()>        m_Available;
-		std::function<void()>        m_Escape;   // migration seam -- see Escape()
 		std::function<std::vector<ContentLine>()> m_Content;  // content areas -- see Content()
 		std::function<bool()>        m_FollowTail;
 		std::function<uint64_t()>    m_Generation;  // dynamic areas -- see Rebuilds()
@@ -722,12 +695,6 @@ namespace gamescope::ui
 		size_t AreaCount() const { return m_Areas.size(); }
 		const Area &AreaAt( size_t i ) const { return *m_Areas[ i ]; }
 		const Area *FindArea( const std::string &sId ) const;
-
-		// P2 migration seam only. The number of areas still hosting a legacy
-		// panel body through Area::Escape(). `ui_lint` reports this as
-		// severity `migration`; P3 drives it to zero and then deletes both
-		// this and Escape() itself.
-		size_t EscapeCount() const;
 
 		// Every registered id, Params included. Lookup for the palette, and
 		// the uniqueness law's own bookkeeping.
@@ -797,6 +764,12 @@ namespace gamescope::ui
 		bool                        bHasRange = false;
 		float                       flLo = 0.0f, flHi = 0.0f, flStep = 0.0f;
 		const std::vector<Option>  *pOptions = nullptr;
+
+		// Which composite, when eKind is Composite. Carried because not
+		// every composite has an ordering an arrow key can follow: an
+		// Anchor's axes and a Hue's degrees do, a packed 0xRRGGBB colour
+		// does not. Anchor for a Parameter, which is never a composite.
+		CompositeKind               eComposite = CompositeKind::Anchor;
 
 		static Adjustable Of( const Entry &e );
 		static Adjustable Of( const Parameter &p );

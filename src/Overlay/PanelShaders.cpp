@@ -40,8 +40,6 @@
 #include "rendervulkan.hpp"
 #include "Config/ConfigManager.h"
 #include "Fonts.h"
-#include "Widgets.h"
-#include "Chrome.h"
 
 #include "imgui.h"
 
@@ -198,138 +196,11 @@ namespace gamescope
 			|| eColorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
 	}
 
-	static void DrawVibrancyGroup()
-	{
-		auto &v = s_CachedSettings.reshade.vibrancy;
-
-		if ( widgets::Toggle( "Vibrancy##enabled", &v.enabled ) )
-		{
-			if ( v.enabled )
-				EnsureEffectLoaded();
-			SetRuntimeUniformBool( "vibrancy_enabled", v.enabled );
-			QueueSave();
-		}
-
-		if ( !v.enabled )
-			ImGui::BeginDisabled();
-
-		// widgets::SliderFloat draws the numeric readout in Mono/accent per
-		// the design guide's numerals-are-always-Mono rule -- see Widgets.h.
-		if ( widgets::SliderFloat( "Strength##vibrancy", &v.strength, -1.0f, 1.0f, "%.2f" ) )
-		{
-			SetRuntimeUniformFloat( "vibrancy_strength", v.strength );
-			QueueSave();
-		}
-
-		if ( widgets::Toggle( "Protect skin tones", &v.protect_skin_tones ) )
-		{
-			SetRuntimeUniformBool( "vibrancy_protect_skin_tones", v.protect_skin_tones );
-			QueueSave();
-		}
-
-		if ( !v.enabled )
-			ImGui::EndDisabled();
-	}
-
-	static void DrawPreSharpenGroup()
-	{
-		auto &s = s_CachedSettings.reshade.pre_sharpen;
-		if ( !s.strength.has_value() )
-			s.strength = 0.5f;
-
-		if ( widgets::Toggle( "Pre-Sharpen##enabled", &s.enabled ) )
-		{
-			if ( s.enabled )
-				EnsureEffectLoaded();
-			SetRuntimeUniformBool( "pre_sharpen_enabled", s.enabled );
-			QueueSave();
-		}
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "Pre-upscale -- works with any Filter, unlike Sharpness (Display panel)." );
-		ImGui::PopFont();
-
-		if ( !s.enabled )
-			ImGui::BeginDisabled();
-
-		if ( widgets::SliderFloat( "Strength##presharpen", &( *s.strength ), 0.0f, 2.0f, "%.2f" ) )
-		{
-			SetRuntimeUniformFloat( "pre_sharpen_strength", *s.strength );
-			QueueSave();
-		}
-
-		if ( !s.enabled )
-			ImGui::EndDisabled();
-	}
-
-	// M9 (spike #17, then #18): unlike Vibrancy/Pre-Sharpen, this effect
-	// carries persistent inter-frame state (texAdaptedLuminance in
-	// gamescope-ritz.fx). See that file's header comment for what the spike
-	// proved safe. Experimental -- see DECISIONS.md #14 and the spike
-	// writeup in reshade-shaders.md for why this stays flagged as such.
-	static void DrawAdaptiveBrightnessGroup()
-	{
-		auto &a = s_CachedSettings.reshade.adaptive_brightness;
-
-		if ( widgets::Toggle( "Adaptive Brightness##enabled", &a.enabled ) )
-		{
-			if ( a.enabled )
-				EnsureEffectLoaded();
-			SetRuntimeUniformBool( "adaptive_brightness_enabled", a.enabled );
-			QueueSave();
-		}
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		ImGui::TextDisabled( "Experimental -- adapts exposure to scene brightness over time." );
-		ImGui::PopFont();
-
-		if ( !a.enabled )
-			ImGui::BeginDisabled();
-
-		if ( widgets::SliderFloat( "Target brightness", &a.target_luminance, 0.1f, 0.9f, "%.2f" ) )
-		{
-			SetRuntimeUniformFloat( "adaptive_brightness_target_luminance", a.target_luminance );
-			QueueSave();
-		}
-
-		if ( widgets::SliderFloat( "Brighten speed", &a.adapt_up_speed, 0.1f, 5.0f, "%.1fs" ) )
-		{
-			SetRuntimeUniformFloat( "adaptive_brightness_adapt_up_speed", a.adapt_up_speed );
-			QueueSave();
-		}
-
-		if ( widgets::SliderFloat( "Darken speed", &a.adapt_down_speed, 0.1f, 5.0f, "%.1fs" ) )
-		{
-			SetRuntimeUniformFloat( "adaptive_brightness_adapt_down_speed", a.adapt_down_speed );
-			QueueSave();
-		}
-
-		if ( widgets::SliderFloat( "Min gain", &a.min_gain, 0.5f, 1.0f, "%.2f" ) )
-		{
-			SetRuntimeUniformFloat( "adaptive_brightness_min_gain", a.min_gain );
-			QueueSave();
-		}
-
-		if ( widgets::SliderFloat( "Max gain", &a.max_gain, 1.0f, 2.0f, "%.2f" ) )
-		{
-			SetRuntimeUniformFloat( "adaptive_brightness_max_gain", a.max_gain );
-			QueueSave();
-		}
-
-		if ( widgets::SliderFloat( "Strength##adaptivebrightness", &a.strength, 0.0f, 1.0f, "%.2f" ) )
-		{
-			SetRuntimeUniformFloat( "adaptive_brightness_strength", a.strength );
-			QueueSave();
-		}
-
-		if ( !a.enabled )
-			ImGui::EndDisabled();
-	}
-
 	// =====================================================================
 	//  E2 (P3) -- the same three effects, declared instead of drawn
 	// =====================================================================
-	// Replaces the three groups above for the E2 shell only; the legacy
-	// path (PanelShaders_Draw()) is untouched and still runs under
-	// `overlay_e2 0` -- AUTONOMOUS-DECISIONS.md D10.
+	// P5 deleted the three legacy group drawers this replaced, along with
+	// the floating window that hosted them.
 	//
 	// SHAPE: three switch rows, one per effect, each owning its own
 	// parameters. This is the taxonomy's intended shape for exactly this
@@ -549,54 +420,4 @@ namespace gamescope
 			} );
 	}
 
-	// The panel's body, with no window around it. Still the LEGACY path's
-	// body -- PanelShaders_Draw() below is its only caller now that the E2
-	// sheet declares this area instead of hosting it (see the "E2 (P3)"
-	// section above). Kept split out because the split costs nothing and the
-	// legacy path must stay byte-for-byte what it was under `overlay_e2 0`.
-	static void DrawBodyContent()
-	{
-		// SDR-only gate (DECISIONS.md #15): a deliberate v1 limitation, not
-		// an oversight -- naive vibrancy/sharpen math assumes clamped 0..1
-		// SDR RGB and produces silently wrong results (over-saturating/
-		// clipping) on scRGB/HDR10_PQ content. Say so in the UI rather than
-		// just disabling controls with no explanation.
-		const bool bSdr = IsBaseLayerSdr();
-		if ( !bSdr )
-		{
-			ImGui::TextColored( ImVec4( 0.95f, 0.65f, 0.25f, 1.0f ),
-				"Effects are SDR-only for now -- disable HDR to use them." );
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			ImGui::TextDisabled( "Deliberate v1 limitation, not a bug (DECISIONS.md #15)." );
-			ImGui::PopFont();
-			ImGui::Separator();
-			ImGui::BeginDisabled();
-		}
-
-		DrawVibrancyGroup();
-		ImGui::Separator();
-		DrawPreSharpenGroup();
-		ImGui::Separator();
-		DrawAdaptiveBrightnessGroup();
-
-		if ( !bSdr )
-			ImGui::EndDisabled();
-	}
-
-	void PanelShaders_Draw()
-	{
-		EnsureConfigLoaded();
-
-		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
-		// see Overlay/Chrome.h -- default size bumped taller for M9's
-		// Adaptive Brightness group (six extra rows); the window is user-
-		// resizable regardless, same as every other panel.
-		if ( !chrome::BeginPanelWindow( "SHADERS", chrome::PanelId::Shaders,
-			ImVec2( 520.0f, 64.0f ), ImVec2( 430.0f, 540.0f ) ) )
-			return;
-
-		DrawBodyContent();
-
-		chrome::EndPanelWindow();
-	}
 }

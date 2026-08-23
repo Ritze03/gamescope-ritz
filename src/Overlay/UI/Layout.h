@@ -246,4 +246,30 @@ namespace gamescope::ui
 	// answer too small, which is the safe direction: if even the lower
 	// bound overflows, the real body certainly does.
 	float ConfigureRowsHeight( int nParams, float flScale );
+
+	// ---- how far the rail is scrolled (P5) ------------------------------
+	// The rail's item column is taller than the rail itself from 2.0x: at
+	// that scale eleven areas and three section breaks do not fit, and
+	// before P5 the surplus was drawn past the rail's bottom edge and lost,
+	// leaving Appearance and Shell unreachable by pointer.
+	//
+	// Given the current offset and where the ACTIVE item sits, answer the
+	// offset the next frame should use: unchanged when the item is already
+	// fully visible, otherwise the smallest scroll that brings it back --
+	// then clamped into [0, contentH - viewH]. All distances are rail-
+	// relative physical px, so flActiveTop is the item's top measured from
+	// the rail's own y0.
+	//
+	// WHY THIS IS A FUNCTION AND NOT FOUR LINES IN DrawRail. Same argument
+	// as ConfigureRowsHeight above: the clamp is the part that can be
+	// wrong, and it is wrong in a way that only a screenshot at one
+	// particular scale would show. As a pure function it is a table of
+	// cases a unit test can walk with no window open -- including the two
+	// that matter most, "content fits, so never scroll" and "scrolled to
+	// the bottom stays pinned to the bottom".
+	//
+	// Pass flActiveTop < 0 when no item is active; the offset is then only
+	// clamped, never moved.
+	float RailScroll( float flCurrent, float flContentH, float flViewH,
+	                  float flActiveTop, float flItemH, float flPad );
 }

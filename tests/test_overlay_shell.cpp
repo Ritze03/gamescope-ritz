@@ -378,65 +378,25 @@ TEST_CASE( "the mode strip counts what the registration actually holds", "[overl
 }
 
 // =========================================================================
-//  The migration seam's one law
+//  Area lookup
 // =========================================================================
-TEST_CASE( "an area is legacy or E2, never both", "[overlay_shell]" )
-{
-	// Area::Escape() is P2's temporary hatch for hosting a legacy panel
-	// body in the sheet. The state that would let it survive P3 forever is
-	// the HALF-migrated area -- a few real rows plus an escaped tail, which
-	// mostly works and therefore never gets finished. So the mixture is a
-	// violation in both directions.
-	SECTION( "escaping a populated area fires" )
-	{
-		bool b = false;
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		ui::Area &area = reg.Add( "a", "A", ui::Section::Display );
-		area.Switch( "a.s", "S", ui::Bind( &b ) ).Help( "h" ).Default( false );
-		area.Escape( []{} );
-		REQUIRE( rec.Caught( ui::Law::Escaped ) );
-		REQUIRE( !area.IsEscaped() );
-	}
-	SECTION( "populating an escaped area fires" )
-	{
-		bool b = false;
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		ui::Area &area = reg.Add( "a", "A", ui::Section::Display );
-		area.Escape( []{} );
-		area.Switch( "a.s", "S", ui::Bind( &b ) ).Help( "h" ).Default( false );
-		REQUIRE( rec.Caught( ui::Law::Escaped ) );
-		REQUIRE( area.EntryCount() == 0 );
-	}
-	SECTION( "an empty escape function fires" )
-	{
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		reg.Add( "a", "A", ui::Section::Display ).Escape( nullptr );
-		REQUIRE( rec.Caught( ui::Law::Escaped ) );
-	}
-	SECTION( "EscapeCount is what a lint would report as migration debt" )
-	{
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		reg.Add( "a", "A", ui::Section::Display ).Escape( []{} );
-		reg.Add( "b", "B", ui::Section::System ).Escape( []{} );
-		reg.Add( "c", "C", ui::Section::Setup );
-		REQUIRE( reg.EscapeCount() == 2 );
-		REQUIRE( reg.SelfTest() == 0 );   // an escaped area needs no Help()
-	}
-}
-
-TEST_CASE( "an escaped area is found by id like any other", "[overlay_shell]" )
+// What survives the migration seam's deletion. P5 removed Area::Escape()
+// and Law::Escaped along with the four cases that covered them -- the hatch
+// had zero call sites from P3c onward, so those cases were testing a
+// feature the product no longer contained. This case is the part of that
+// block that was never about escaping: an area is findable by id, and an
+// unknown id answers null rather than a sink.
+TEST_CASE( "an area is found by id, and an unknown id is not", "[overlay_shell]" )
 {
 	ui::Registry reg;
 	ui::LawRecorder rec;
-	reg.Add( "display.gamescope", "Gamescope", ui::Section::Display ).Escape( []{} );
+	reg.Add( "display.gamescope", "Gamescope", ui::Section::Display );
+
 	const ui::Area *pArea = reg.FindArea( "display.gamescope" );
 	REQUIRE( pArea != nullptr );
-	REQUIRE( pArea->IsEscaped() );
+	REQUIRE( pArea->Id() == "display.gamescope" );
 	REQUIRE( pArea->EntryCount() == 0 );
+
 	REQUIRE( reg.FindArea( "nope" ) == nullptr );
 }
 
@@ -505,6 +465,72 @@ TEST_CASE( "a parameterless entry still fits its body at every scale", "[overlay
 		INFO( "scale " << flScale );
 		REQUIRE( ui::ConfigureRowsHeight( 0, flScale ) < regions.rcInspectorBody.Height() );
 	}
+}
+
+// =========================================================================
+//  The rail's scroll range (P5)
+// =========================================================================
+// Exactly the P3a failure above, one region to the left, and found the same
+// way: at 2.0x the rail's eleven items and three section breaks are taller
+// than the rail, and DrawRail() drew them from an absolute y with no clip.
+// The surplus was painted past the bottom edge and lost -- Appearance and
+// Shell were unreachable by pointer, while the command palette still found
+// them, which is why P4's keyboard sweep did not notice.
+//
+// RailScroll() is the offset that fixes it, and these cases are the ones
+// where a scroll offset is normally got wrong.
+TEST_CASE( "a rail whose content fits is never scrolled", "[overlay_shell]" )
+{
+	// The most important case: below 2.0x nothing should move at all. A
+	// scroll that only LOOKS right when it is needed is a regression waiting
+	// for a scale change.
+	const float flFits = ui::RailScroll( 0.0f, 400.0f, 900.0f, 360.0f, 40.0f, 8.0f );
+	REQUIRE_THAT( flFits, WithinAbs( 0.0f, 0.001f ) );
+
+	// And a stale offset left over from a taller scale is discarded, not
+	// preserved -- so stepping the ladder back down self-corrects.
+	REQUIRE_THAT( ui::RailScroll( 220.0f, 400.0f, 900.0f, 0.0f, 40.0f, 8.0f ),
+	              WithinAbs( 0.0f, 0.001f ) );
+}
+
+TEST_CASE( "the rail scrolls exactly far enough to show the active item", "[overlay_shell]" )
+{
+	const float flContent = 1200.0f, flView = 800.0f, flItem = 40.0f, flPad = 8.0f;
+
+	// An item already fully visible must not move the rail. Anything else
+	// makes the rail twitch on every step of the selection.
+	REQUIRE_THAT( ui::RailScroll( 0.0f, flContent, flView, 300.0f, flItem, flPad ),
+	              WithinAbs( 0.0f, 0.001f ) );
+
+	// An item below the fold comes to rest against the bottom edge, one pad
+	// clear -- the SMALLEST scroll that reveals it, not a recentring.
+	const float flDown = ui::RailScroll( 0.0f, flContent, flView, 1000.0f, flItem, flPad );
+	REQUIRE_THAT( flDown, WithinAbs( ( 1000.0f + flItem + flPad ) - flView, 0.001f ) );
+
+	// ...and it really is visible afterwards, which is the property the
+	// arithmetic exists to produce rather than a restatement of it.
+	REQUIRE( 1000.0f - flDown >= 0.0f );
+	REQUIRE( 1000.0f + flItem - flDown <= flView );
+
+	// An item above the fold comes to rest against the top edge.
+	REQUIRE_THAT( ui::RailScroll( 500.0f, flContent, flView, 100.0f, flItem, flPad ),
+	              WithinAbs( 100.0f - flPad, 0.001f ) );
+}
+
+TEST_CASE( "the rail's scroll is clamped to its content", "[overlay_shell]" )
+{
+	const float flContent = 1200.0f, flView = 800.0f;
+	const float flMax = flContent - flView;
+
+	// Never past the end (the wheel can ask for it), and never negative.
+	REQUIRE_THAT( ui::RailScroll( 5000.0f, flContent, flView, -1.0f, 40.0f, 8.0f ),
+	              WithinAbs( flMax, 0.001f ) );
+	REQUIRE_THAT( ui::RailScroll( -5000.0f, flContent, flView, -1.0f, 40.0f, 8.0f ),
+	              WithinAbs( 0.0f, 0.001f ) );
+
+	// The last item -- the one that was actually lost -- is reachable: at
+	// full scroll the bottom of the content sits exactly on the view's edge.
+	REQUIRE_THAT( flMax + flView, WithinAbs( flContent, 0.001f ) );
 }
 
 // =========================================================================

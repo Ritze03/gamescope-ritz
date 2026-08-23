@@ -146,7 +146,6 @@ src = [
   'Overlay/Fonts.cpp',
   'Overlay/Palette.cpp',
   'Overlay/Widgets.cpp',
-  'Overlay/Chrome.cpp',
   'Overlay/PanelDisplay.cpp',
   'Overlay/FpsDisplay.cpp',
   'Overlay/Notifications.cpp',

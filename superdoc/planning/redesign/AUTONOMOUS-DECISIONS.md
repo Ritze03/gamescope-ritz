@@ -10,6 +10,80 @@ cheap.
 
 ---
 
+## 2026-08-23 (P5 — the deletion, and the flag)
+
+### D21 · The `overlay_e2` ConVar is REMOVED, not kept as a no-op
+
+P5's brief allowed either: keep the flag as a no-op for one release, or remove it
+outright. **Removed.**
+
+**Why.** Once the legacy path is gone there is nothing to turn off *to*. A ConVar that
+accepts `overlay_e2 0` and still draws the E2 shell is a control that renders and does
+nothing — which is the exact defect class this redesign has spent five phases removing
+(#25, #68, the computed-but-never-drawn `nColumns`, the declared-but-never-registered
+`Kind::Meter`). Shipping a seventh instance of that smell *as the closing act of the
+phase that deleted the other six* would be incoherent.
+
+Second: a silently-dead setting is worse than an absent one. `overlay_e2 0` appearing to
+be accepted while nothing changes reads as "this setting is broken", which costs more
+trust than a missing command does.
+
+**What removal actually costs, measured rather than assumed.** An unknown ConVar in
+gamescope logs `Command not found.` and continues (`src/convar.cpp`) — it is not fatal.
+So a stale `overlay_e2 1` in someone's launch script degrades to one warning line, not a
+failed session. That asymmetry is the whole argument: the cost of removing is bounded and
+visible, the cost of keeping is an invisible lie.
+
+**Config compatibility is not in question.** D12 deliberately kept this runtime-only and
+**never** a config field, so no config file has ever contained the key and none can fail
+to load without it. Verified live: a seeded pre-branch `global.json` (including two keys
+the schema does not know) loads unchanged and is byte-identical afterwards.
+
+`shell.classic` — the setup.shell Action row offering "switch back" — goes for the same
+reason in miniature: a button whose verb has nowhere to go is a button that lies.
+
+*Cheap to reverse:* re-adding a ConVar is three lines. What would not be cheap is
+re-adding the legacy path, and that is deliberate.
+
+### D21.1 · `Kind::Meter` is REGISTERED, not deleted
+
+The pre-P5 report (§7.2) left this open as "either register it or drop the kind".
+Registered, as `display.budget_meter` in the frame limiter's Diagnostics group.
+
+**Why build rather than delete.** SPEC §3.8 does not merely declare the kind, it *names
+the instance*: "`display.budget_meter` is the drawn instance". And D20.2 had already set
+the precedent one day earlier by building the multi-column sheet rather than deleting the
+column count that computed it. Deleting a kind the spec specifies, in the same phase that
+built the thing the spec asked for, would be two different answers to the same question.
+
+**A percentage of budget, not milliseconds** — a Meter's range is fixed at registration
+and the frame budget is not (it is the FPS cap when one is set, the output's refresh
+interval otherwise), so a millisecond range would be wrong the moment either changed.
+
+*Found by registering it:* the palette printed a **blank** value for the row, because
+`PaletteValueText()` special-cased Composite and Facts and fell through to the binding
+for everything else — and a Meter has no binding. That is the same bug D19.7 fixed for
+composites. Fixed with one shared `MeterValue()` both the sheet and the palette call.
+
+### D21.2 · Deleted by call graph, and `Chrome.cpp` was sorted before it was removed
+
+The brief's warning was correct: `Chrome.cpp` owned both the dock and things the shell
+uses. It was **not** deleted as a file until its contents were sorted by caller.
+`palette::g_LiveTheme` and `EnsureThemeLoaded()` had a live caller and **moved to
+Palette.cpp** — the file that owns the theme they load, and where the storage arguably
+should have been all along (it was *declared* in `Palette.h` and *defined* in
+`Chrome.cpp`). Two lines inside the loader were legacy-only and went with the dock:
+`ConfigWindowsResizeFromEdges` (only ever mattered for resizable panel windows) and the
+`panel_geometry` read. **The config key is untouched** — existing files still load, the
+value is simply no longer consumed.
+
+*The proof the coupling is really gone:* `tests/test_overlay_atoms.cpp` carried its own
+definition of `g_LiveTheme` purely to avoid linking Chrome.cpp's 1600 lines into a
+headless test binary. That stub is now deleted and the test shares the product's real
+definition.
+
+---
+
 ## 2026-08-23 (last, closing the three pre-P5 gaps)
 
 ### D20 · Three calls taken closing the gaps the pre-P5 test pass left open

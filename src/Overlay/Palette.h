@@ -151,9 +151,8 @@ namespace gamescope::palette
 	// must take effect the instant the user moves a slider, with no restart
 	// (the task's own requirement). Chrome.cpp is the sole owner: its
 	// EnsureLiveThemeLoaded() seeds this once from global.json at first use,
-	// and PanelConfig.cpp's General tab writes straight into it on every edit
-	// (see that file's DrawGeneralTab()) -- every other reader (here,
-	// Widgets.cpp, DrawDock()) only ever reads. Defined in Chrome.cpp.
+	// and the Appearance area writes straight into it on every edit --
+	// every other reader only ever reads. Defined in Palette.cpp.
 	struct LiveTheme
 	{
 		float flDockScale          = 1.0f;  // OverlaySettings::dock_scale
@@ -166,7 +165,7 @@ namespace gamescope::palette
 		// Palette.cpp's per-token L/C table). Setting this alone does
 		// nothing to the drawn colors on its own -- always follow with
 		// UpdateAccentFamily() (PanelConfig.cpp's DrawGeneralTab() and
-		// Chrome.cpp's EnsureLiveThemeLoaded() both do) so kAccent* actually
+		// EnsureThemeLoaded() below does) so kAccent* actually
 		// picks up the new hue.
 		float flAccentHue         = 218.0f;
 	};
@@ -183,4 +182,11 @@ namespace gamescope::palette
 	// this closes the gap #24 found, where every hand-drawn widget/chrome
 	// pixel constant ignored it outright while text scaled around them.
 	inline float DisplayScale() { return g_LiveTheme.flDisplayScale; }
+
+	// Loads the overlay's process-level theme (display_scale, accent hue,
+	// opacities) out of global.json into g_LiveTheme, exactly once per
+	// process. Idempotent and free after the first call. The shell calls it
+	// once per frame; see Palette.cpp for why it is a lazy one-shot and not
+	// startup code.
+	void EnsureThemeLoaded();
 }

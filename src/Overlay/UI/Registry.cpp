@@ -37,7 +37,6 @@ namespace gamescope::ui
 			case Law::UniqueId:       return "id uniqueness";
 			case Law::HelpRequired:   return "Help() is required";
 			case Law::ReasonRequired: return "DisabledUnless() requires a reason";
-			case Law::Escaped:        return "an escaped area cannot also be populated";
 			case Law::Dynamic:        return "a dynamic area is malformed";
 		}
 		return "unknown law";
@@ -443,22 +442,13 @@ namespace gamescope::ui
 	Area &Area::AvailableWhen( std::function<bool()> fn )    { m_Available = std::move( fn ); return *this; }
 	Area &Area::Badge( std::function<std::string()> fn )     { m_Badge = std::move( fn ); return *this; }
 
-	// MIGRATION SEAM -- see Registry.h's Escape() comment. P3 deletes this.
-	//
-	// The one rule that keeps it from becoming permanent: an area is legacy
-	// or it is E2, never both. A half-migrated area -- three real rows plus
-	// an escaped tail -- is the shape that would survive P3 indefinitely,
-	// because "it mostly works" is the strongest argument against finishing
-	// anything. So the mixture is a registration violation in BOTH
-	// directions: escaping a populated area, and populating an escaped one
-	// (Emit() re-checks below).
+	// A content body and registered rows are the CORRECT shape together --
+	// Log's filter bank and text filter are what make its lines usable, so
+	// an area is never "rows or content", it is rows AND, optionally, a
+	// content body beneath them. See Registry.h's Content() comment for the
+	// distinction this has to keep from the escape hatch P5 deleted.
 	Area &Area::Content( std::function<std::vector<ContentLine>()> fn )
 	{
-		// Deliberately NOT subject to Law::Escaped's "no entries" rule --
-		// that rule exists because a half-migrated escaped area would make
-		// the migration permanent. A content area is the opposite: its rows
-		// are the filter that makes its content usable, so entries plus a
-		// content body is the CORRECT shape, not a half-finished one.
 		m_Content = std::move( fn );
 		return *this;
 	}
@@ -469,28 +459,9 @@ namespace gamescope::ui
 		return *this;
 	}
 
-	Area &Area::Escape( std::function<void()> fn )
-	{
-		if ( !fn )
-		{
-			ReportViolation( Law::Escaped, m_sId, "Escape() was given an empty function." );
-			return *this;
-		}
-		if ( !m_Entries.empty() )
-		{
-			ReportViolation( Law::Escaped, m_sId,
-				"an area with registered entries cannot also be escaped -- migrate it fully or not at all." );
-			return *this;
-		}
-		m_Escape = std::move( fn );
-		return *this;
-	}
-
 	// ---- dynamic areas (P3b) --------------------------------------------
 	// See Registry.h's Rebuilds() comment for why this exists and what it
-	// costs. The guards mirror Escape()'s: the two are mutually exclusive,
-	// because an escaped area has no entries by construction and a dynamic
-	// one exists precisely to have them.
+	// costs.
 	Area &Area::Rebuilds( std::function<uint64_t()> fnGeneration,
 	                      std::function<void( Area & )> fnBuild )
 	{
@@ -498,13 +469,6 @@ namespace gamescope::ui
 		{
 			ReportViolation( Law::Dynamic, m_sId,
 				"Rebuilds() needs both a generation function and a builder." );
-			return *this;
-		}
-		if ( m_Escape )
-		{
-			ReportViolation( Law::Dynamic, m_sId,
-				"an escaped area cannot also be dynamic -- an escaped area has no entries by "
-				"construction, and a dynamic one exists to have them." );
 			return *this;
 		}
 		m_Generation = std::move( fnGeneration );
@@ -569,13 +533,6 @@ namespace gamescope::ui
 		if ( sId.empty() )
 		{
 			ReportViolation( Law::UniqueId, m_sId, "an entry was registered with an empty id." );
-			return SinkEntry();
-		}
-		// The other half of the escape hatch's exclusivity -- see Escape().
-		if ( m_Escape )
-		{
-			ReportViolation( Law::Escaped, m_sId,
-				"an escaped area cannot register entries -- migrate it fully or not at all." );
 			return SinkEntry();
 		}
 		if ( m_pRegistry && !m_pRegistry->ClaimId( sId ) )
@@ -698,14 +655,6 @@ namespace gamescope::ui
 		return nullptr;
 	}
 
-	size_t Registry::EscapeCount() const
-	{
-		size_t n = 0;
-		for ( const auto &pArea : m_Areas )
-			n += pArea->IsEscaped() ? 1u : 0u;
-		return n;
-	}
-
 	const Entry *Registry::FindEntry( const std::string &sId ) const
 	{
 		for ( const auto &pArea : m_Areas )
@@ -797,7 +746,8 @@ namespace gamescope::ui
 	Adjustable Adjustable::Of( const Entry &e )
 	{
 		return Adjustable{ e.GetKind(), &e.Binding(), e.HasRange(),
-		                   e.Lo(), e.Hi(), e.StepSize(), &e.Options() };
+		                   e.Lo(), e.Hi(), e.StepSize(), &e.Options(),
+		                   e.GetCompositeKind() };
 	}
 
 	Adjustable Adjustable::Of( const Parameter &p )
@@ -869,9 +819,24 @@ namespace gamescope::ui
 				return true;
 			}
 
+			// A Color composite's value is a PACKED 0xRRGGBB int, so the
+			// generic int step below moved it by one -- i.e. it nudged the
+			// blue channel's least significant bit. Harmless, imperceptible
+			// and meaningless: a colour is not an ordered scalar, and there
+			// is no direction "right" could sensibly mean. Refused here for
+			// the same reason a Bank is (SPEC 3.12), and like the Bank it
+			// keeps its own route -- the Inspector's OKLCH body, which is
+			// the control the row actually offers.
+			//
+			// Anchor and Hue are NOT refused: an anchor's axes and a hue's
+			// degrees are both genuinely ordered.
+			case Kind::Composite:
+				if ( adj.eComposite == CompositeKind::Color )
+					return false;
+				[[fallthrough]];
+
 			case Kind::Slider:
 			case Kind::Stepper:
-			case Kind::Composite:
 			{
 				if ( const int *p = std::get_if<int>( &vNow ) )
 				{

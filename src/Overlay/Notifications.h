@@ -88,17 +88,6 @@ namespace gamescope::Notifications
 	// submission is on the queue. No-op when nothing is pending.
 	void CommitReads();
 
-	// Draws this feature's own settings controls (the global placement
-	// picker, the per-game/global mute toggle, a "send test notification"
-	// button) using whichever ImGui context is *currently active* at the
-	// call site -- meant to be invoked from inside the settings overlay's
-	// own panel draw (PanelConfig.cpp's "Notifications" tab), same contract
-	// as FpsDisplay_DrawSettingsPanel(). Edits are persisted to
-	// gamescope-ritz's config (placement always to global.json -- see
-	// ConfigSchema.h's OverlaySettings comment -- mute through the same
-	// session-routed write every other per-game-eligible panel uses).
-	void DrawSettingsPanel();
-
 	// P3 part B: the same three settings as E2 registrations, added into an
 	// area the caller owns (Appearance hosts them). Declared here, and
 	// implemented in Notifications.cpp, because the state they bind to --
@@ -107,7 +96,7 @@ namespace gamescope::Notifications
 	// would be a second writer of notification_placement.
 	//
 	// The nine placements are ONE Choice rather than the 3x3 grid
-	// DrawSettingsPanel() draws. Not a preference: ui::Kind::Composite is
+	// the deleted legacy panel drew. Not a preference: ui::Kind::Composite is
 	// declared in the taxonomy but the shell does not render one yet, so an
 	// Anchor here would be a control that registers correctly and draws
 	// nothing -- precisely issues #25 and #68. One nine-option Choice is

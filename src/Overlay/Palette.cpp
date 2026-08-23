@@ -3,7 +3,12 @@
 // this file is only their implementation and the per-token OKLCH table.
 #include "Palette.h"
 
+#include "Fonts.h"
+#include "Config/ConfigManager.h"
+
 #include <cmath>
+
+#include "imgui.h"
 
 namespace gamescope::palette
 {
@@ -163,5 +168,71 @@ namespace gamescope::palette
 	ImU32 Accent( float flAlpha )
 	{
 		return IM_COL32( s_nAccentBaseR, s_nAccentBaseG, s_nAccentBaseB, (int)( flAlpha * 255.0f + 0.5f ) );
+	}
+
+	// Definition for the extern declared in Palette.h.
+	LiveTheme g_LiveTheme;
+
+	namespace
+	{
+		bool s_bLiveThemeLoaded = false;
+	}
+
+	// ----------------------------------------------------------------------
+	// Issue #79 / E2. The one-shot that pulls display_scale, the accent hue
+	// and the opacities out of global.json into g_LiveTheme.
+	//
+	// WHY THIS LIVES HERE NOW. It used to sit in Chrome.cpp and be reachable
+	// only from BeginPanelWindow() and DrawDock() -- i.e. only once the
+	// legacy dock had drawn a frame, which is the trap behind #79: a
+	// config-only launch rendered at display_scale 1.0 no matter what the
+	// config said, until something opened a panel. The E2 shell draws
+	// neither a dock nor a panel window, so it called the forwarder itself.
+	// P5 deleted the dock and the panel windows outright, and with them the
+	// rest of Chrome.cpp; this is the part that had callers, so it moved to
+	// the file that owns the theme it loads rather than keeping a file alive
+	// around it.
+	void EnsureThemeLoaded()
+	{
+		if ( s_bLiveThemeLoaded )
+			return;
+		s_bLiveThemeLoaded = true;
+
+		// overlay.* is process-level/global-only (ConfigSchema.h's own
+		// comment on OverlaySettings) -- deliberately config::LoadGlobal(),
+		// never ResolveEffective(): a per-game override file is always
+		// written with bIncludeOverlay=false (ConfigManager.cpp's
+		// SettingsToJson), so resolving through the current session's
+		// per-game file while an override is active would silently read
+		// back compiled *defaults* for every one of these fields instead
+		// of the user's real preference. Loaded exactly once per process
+		// (LoadGlobal() does blocking file I/O -- ConfigManager.h's
+		// threading note: not on the vblank-paced render loop); the
+		// Appearance area is the only thing that changes these again after
+		// this, and it writes straight into g_LiveTheme on every edit.
+		const config::Settings s = config::LoadGlobal();
+		g_LiveTheme.flDockScale            = s.overlay.dock_scale;
+		g_LiveTheme.flDisplayScale         = s.overlay.display_scale;
+		g_LiveTheme.flWindowAlphaFocused   = s.overlay.opacity_windows_focused;
+		g_LiveTheme.flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
+		g_LiveTheme.flDockAlpha            = s.overlay.opacity_dock;
+		g_LiveTheme.flAccentHue            = s.overlay.accent_hue;
+		ImGui::GetIO().FontGlobalScale     = s.overlay.display_scale;
+
+		// Regenerates kAccent/kAccentEdge/etc. for the hue just loaded --
+		// issue #37. Must run after flAccentHue is set above, and before
+		// this process ever draws a frame using them.
+		UpdateAccentFamily();
+
+		// Issue #38: every context's atlas is eagerly built at the
+		// compiled-in default scale (1.0) by its own EnsureImguiInit(),
+		// since none of them can see a saved display_scale before this
+		// (process-level-only, global.json) has actually loaded. Apply the
+		// real persisted value here too, the first time it is known, so a
+		// restart with a non-default scale does not wait for the user to
+		// touch the Appearance slider before text is baked crisp -- a
+		// one-time catch-up, not a per-frame cost. A no-op if display_scale
+		// is the compiled-in default.
+		gamescope::fonts::RebuildAll( s.overlay.display_scale );
 	}
 }
