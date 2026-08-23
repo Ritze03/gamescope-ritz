@@ -388,6 +388,22 @@ namespace gamescope::chrome
 		// panel, and avoids the alternative (a two-pass Begin) entirely.
 		bool s_bPanelWasFocused[(size_t)PanelId::Count] = {};
 
+		// Issue #74: one-frame-stale "is this panel's title bar currently
+		// being dragged" cache, same pattern and same reason as
+		// s_bPanelWasFocused above -- DrawTitleBar()'s drag zone (the thing
+		// that actually knows) only runs *after* BeginPanelWindow() has
+		// already had to decide whether to hand ClampPanelResizeToUsableArea()
+		// to SetNextWindowSizeConstraints() for this frame. Last frame's
+		// answer is close enough: a real drag holds ImGui's ActiveId across
+		// many consecutive frames (the mouse button stays down the whole
+		// time), so this is stale for at most the first frame of a new drag
+		// (delta is ~0 that frame anyway -- nothing to clamp yet) and the
+		// first frame after release (the constraint stays suspended one
+		// frame too long, harmless -- the window isn't moving any more).
+		// See BeginPanelWindow()'s own comment on why the constraint must be
+		// skipped entirely while this is true, not just loosened.
+		bool s_bPanelBeingDragged[(size_t)PanelId::Count] = {};
+
 		// Issue #34 state: resizable panels, opening ~50% larger than today's
 		// fixed defaults (see BeginPanelWindow() for the sizing algorithm and
 		// why it isn't a live content measurement). s_lastExpandedSize is the
@@ -814,6 +830,12 @@ namespace gamescope::chrome
 			// glyph button already makes.
 			ImGui::SetCursorScreenPos( barMin );
 			ImGui::InvisibleButton( "##titledrag", ImVec2( collapsePos.x - kButtonGap - barMin.x, flTitleBarHeight ) );
+			// Issue #74: record drag-active state for BeginPanelWindow()'s
+			// next-frame use (s_bPanelBeingDragged's own comment explains the
+			// one-frame-cache pattern) -- IsItemActive() alone, not gated on
+			// delta being nonzero, so the very first (zero-delta) frame of a
+			// press already marks "dragging" for the frame after it.
+			s_bPanelBeingDragged[(size_t)id] = ImGui::IsItemActive();
 			if ( ImGui::IsItemActive() )
 			{
 				const ImVec2 delta = ImGui::GetIO().MouseDelta;
@@ -999,7 +1021,39 @@ namespace gamescope::chrome
 		// the dock-reduced usable area (#64) -- see
 		// ClampPanelResizeToUsableArea()'s own comment for why that, not a
 		// flat max, is what actually fixes #58.
-		if ( !bCollapsed )
+		//
+		// Issue #74 regression: ImGui::Begin() runs this constraint every
+		// single frame it's set, not only while the resize grip is
+		// actively being dragged -- ClampPanelResizeToUsableArea() reads
+		// ImGuiSizeCallbackData::Pos, which is simply window->Pos *at
+		// Begin() time this frame*, i.e. wherever the title bar's own
+		// hand-rolled SetWindowPos() (#42, DrawTitleBar()'s drag zone,
+		// which runs *after* this Begin()) left it last frame. So while
+		// the title bar is being dragged toward the right or bottom edge,
+		// each frame's Begin() sees a Pos one step closer to that edge,
+		// and this same #58 callback -- whose whole job is "cap the
+		// desired size to what fits from Pos" -- dutifully shrinks
+		// DesiredSize to match, even though window->SizeFull never
+		// actually asked to grow: a move, not a resize, was in progress.
+		// (That framing also covers the left-edge "contents shift"
+		// report: a real drag is rarely perfectly axis-aligned, so a
+		// mostly-leftward drag still nudges Pos.y a little, tightening
+		// the y half of this same constraint on some frames without
+		// visibly touching the x edge -- one bug, two faces, not two
+		// bugs.)
+		// Fix: skip handing this constraint to Begin() at all while a
+		// title-bar drag is in flight (s_bPanelBeingDragged, set by
+		// DrawTitleBar() -- see its own comment on the one-frame lag).
+		// Nothing else needs to change: the #31 clamp right below this
+		// Begin() call already stops the window's *position* dead at the
+		// screen/dock edge every frame regardless, which is exactly
+		// "stop, don't shrink" -- it just must not be able to reach for
+		// SizeFull to do it, which is what this guard prevents. A real
+		// resize-grip drag never touches s_bPanelBeingDragged (that's a
+		// wholly separate ImGui ActiveId, driven by ImGui's own internal
+		// manual-resize logic, not the "##titledrag" InvisibleButton), so
+		// #58's original fix is untouched for that gesture.
+		if ( !bCollapsed && !s_bPanelBeingDragged[(size_t)id] )
 			ImGui::SetNextWindowSizeConstraints( ImVec2( kMinPanelSize, kMinPanelSize ), ImGui::GetIO().DisplaySize, ClampPanelResizeToUsableArea );
 
 		// Spec §4: window corner radius 4px (controls stay flat/0px --
