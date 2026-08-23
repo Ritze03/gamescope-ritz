@@ -10,6 +10,119 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P2, the shell
+
+**Status: the shell exists and is off by default.** `overlay_e2 0` (the default) draws the
+legacy dock and its five floating windows exactly as before; `overlay_e2 1` replaces all of
+it. No on-disk config key or format changed.
+
+Phase plan: `../../AUTONOMOUS-DECISIONS.md` D10. Judgement calls taken during P2: **D12**.
+
+### What was added
+
+| File | What it owns | ImGui? |
+|---|---|---|
+| `UI/Layout.h/.cpp` | the slab, SPEC §8.3's ladder, the region rects, mode selection, the mode-strip counters | **no** |
+| `UI/Shell.h/.cpp` | the slab window, the three regions, the keyboard map, the registry | yes |
+| `tests/test_overlay_shell.cpp` | `[overlay_shell]` — the ladder table, region arithmetic, mode selection, `Law::Escaped` | no |
+
+Plus: `Area::Escape()` and `Law::Escaped` in `Registry.*`; the registry's read side
+(`Verb()`, `Invoke()`, `SummaryText()`, `Scalar()`, `Area::Available()`,
+`Registry::FindArea()`, `KindName()`); a `Panel*_DrawBody()` on each of the five panels; and
+`chrome::EnsureThemeLoaded()`.
+
+### The three-region split, and why it is shaped this way
+
+ImGui here is **1.92.9b stock, non-docking** — no dock-space, no splitter. But the reason
+the split is hand-rolled is not availability: **a splitter is stored, mutable, per-user
+geometry**, which is the exact category of state whose bug history motivated the redesign.
+
+- **One top-level window — the slab.** `NoMove | NoResize | NoCollapse | NoSavedSettings |
+  NoBringToFrontOnFocus`, no title bar, positioned and sized every frame from `Layout.h`.
+  Its geometry is a pure function of surface size and `display_scale`; there is no stored
+  layout to corrupt, migrate or reset.
+- **The regions are child windows inside it.** A child gives clipping and independent
+  scrolling — all the split needs — and gives no drag, no resize and no z-order, which is
+  all the split must never acquire.
+
+**Shell state, in full:** selected area, selected row, host preference, mode override. No
+window positions, no sizes, no z-order, no open/closed set. That list *is* the difference
+between this and what it replaces.
+
+**Z-order is bought with begin-order, deliberately.** The drawer must paint over the sheet;
+ImGui renders every child after its parent's own commands, so an inspector background on the
+slab's draw list loses to the sheet's child no matter how late it is drawn. The whole
+inspector region is therefore one child begun *after* the sheet's. `ImDrawListSplitter` was
+rejected — it would make paint order a thing every future edit has to know about.
+
+### `Escape()` — the migration seam
+
+```cpp
+reg.Add( "display.gamescope", "Gamescope", Section::Display )
+   .Escape( []{ PanelDisplay_DrawBody(); } );
+```
+
+The shell pushes the padding legacy code expects, runs the body in the sheet's child, pops.
+Six areas use it. **It looks wrong on purpose** — the sheet head labels the category
+`legacy body` in `WarnText` and Overview says the shell cannot see inside it. There is no
+styling that tries to blend a legacy body into an E2 sheet, because a half-convincing blend
+is how a migration stops being urgent.
+
+Two limits, both `Law::Escaped`, both in `AUTONOMOUS-DECISIONS.md` D12.4:
+
+- **Sheet only.** No Inspector equivalent, ever — that would be SPEC §5.2 clause 0's
+  forbidden fifth generator.
+- **Legacy or E2, never both.** Escaping a populated area and populating an escaped one both
+  fire. The half-migrated area is the shape that survives P3 indefinitely.
+
+`Registry::EscapeCount()` is what a future `ui_lint` reports as severity `migration`.
+It is **6** today and P3 drives it to zero, deleting `Escape()` with the last one.
+
+### What the shell registers
+
+Seven areas in SPEC §8.1's three sections (after D8's fold): `display.gamescope`,
+`image.shaders` | `audio.mixer`, `system.monitor`, `system.log` | `setup.config`,
+`setup.shell`. The first six are escaped. `setup.shell` is genuinely E2 and exists so both
+Inspector modes ship exercised rather than as dead code — see D12.3. **Every one of its
+bindings is to shell runtime state or a ConVar, never to a config field.**
+
+### Verified
+
+`ninja -C build` clean. `meson test -C build` **67/67** — P1's 66 plus `overlay_shell`.
+
+`[overlay_shell]` pins SPEC §8.3's worked table row by row across `display_scale`
+0.5×–2.0×, the ladder's step *order*, host preference in both directions, the content cap on
+columns, the slab's surface clamp and purity, region rects tiling the slab at four scales in
+all three hosts, the drawer overlapping where a column does not, the spine carved out rather
+than laid over, mode selection per kind, the derived counters, and `Law::Escaped` in both
+directions. Verified to fail under a deliberate mutation (swapping the ladder's two steps
+fails at 1.5×, the only scale that separates them).
+
+Visually confirmed under `scripts/with-gamescope-lock.sh` at 1.0× and 2.0×, in all three
+inspector hosts, in both modes, on an escaped area, and with the ConVar toggled off again —
+the dock returns identically, with no leftover state. At 2.0× the ladder reproduces §8.3's
+row exactly: slab 1728 × 929 px (864 × 464 base), rail 60, drawer 400, sheet 804, step 2.
+
+### Deferred to P3, deliberately
+
+- **SPEC §8.0's eleven rail icons.** The rail draws initials. D12.8.
+- **The command palette, `Ctrl+K`.** It walks a populated registry; there is one real area.
+- **Multi-column sheets.** `LadderResult::nColumns` is computed and tested; the sheet draws
+  one column, because the only area with rows has three of them.
+- **A sixth baked font style.** Six type roles map onto five. D12.11.
+- **`Cfg()`, `Repeat()`, `ui_lint`, `ui_snapshot`.** Unchanged from P1's list — all need a
+  populated registry.
+
+### Known rough edges, recorded rather than hidden
+
+- A legacy body wider than its sheet column gets a **horizontal scrollbar**. The panels were
+  authored for a ~440-wide resizable window. An unreachable control is worse than a
+  scrollbar in a region that will not have one after P3.
+- **`Tab` region cycling is tracked but not yet wired to ImGui focus.** `s_eFocusRegion`
+  moves; nothing reads it. Arrow-key navigation within a region is P3's, with the rows.
+
+---
+
 ## 2026-08-23 — P1, the kit foundation
 
 **Status: new code only. Nothing here is called by the running UI.** The only
