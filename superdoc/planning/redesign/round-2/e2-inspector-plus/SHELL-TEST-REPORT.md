@@ -25,7 +25,8 @@ temporary `XDG_CONFIG_HOME`.
 | Defects and spec gaps found | **20** |
 | **Fixed** | **8** — §3, one commit (`885242e`) |
 | **Left, with reasons** | **12** — §6 (one), §7 (ten), §8 (one) |
-| **Closed since, by D20** | **3** — the rail icons (§7.1), the multi-column sheet (§6), and the Reachability Law's mechanism (§7.3). **9 remain open** for P5. |
+| **Closed since, by D20** | **3** — the rail icons (§7.1), the multi-column sheet (§6), and the Reachability Law's mechanism (§7.3). |
+| **Closed by P5 (D21)** | **5 of the 9** — the collapsed rail's scrolling, `Kind::Meter` (§7.2), the Colour composite's arrow keys, the palette footer and the sheet legend (§7.3). **4 remain open**, listed with reasons in §7.3. |
 | A seventh "renders but does nothing"? | **Yes — the multi-column sheet.** §6 — **now built, D20.2** |
 | Config safety | **PASS** — §4 |
 | Legacy mode (`overlay_e2 0`) | **PASS** — §5 |
@@ -351,7 +352,17 @@ acceptance criteria (one silhouette at 12 px, no new detail at 48 px) is a self-
 piece of work, exactly as that comment says. **Recommended for P5, ahead of the deletion**
 — it is the last thing the icon rail is missing.
 
-### 7.2 `Kind::Meter` has zero registrations — **left, and it is the inverse defect**
+### 7.2 `Kind::Meter` has zero registrations — ~~left~~ **CLOSED**
+
+> **CLOSED 2026-08-23 by D21.1 — registered, not deleted.** SPEC §3.8 does not only
+> declare the kind, it names the instance, so the kind was built out rather than
+> dropped: `display.budget_meter` in the frame limiter's Diagnostics group, reporting
+> the share of one frame's budget the game actually spent. A **percentage**, because a
+> Meter's range is fixed at registration and the budget is not. Verified live at
+> `39 %`. Registering it immediately exposed a second defect — the palette printed a
+> **blank** value, because `PaletteValueText()` fell through to the binding and a Meter
+> has none. That is D19.7's composite bug a third time; fixed with one shared
+> `MeterValue()` the sheet and the palette both call.
 
 The kind is declared, `controls::Meter()` is implemented, `UsesValueColumn` and
 `IsReadOnly` both handle it — and `grep -rn '\.Meter('` over `src/Overlay/` returns **0**.
@@ -362,10 +373,13 @@ either way it is a registry decision, not a shell fix.
 
 ### 7.3 Smaller things, recorded rather than fixed
 
-- **A Colour composite's `←/→` steps the packed `0xRRGGBB` integer by one**, i.e. it moves
-  the blue channel's least significant bit. Harmless and imperceptible, but meaningless;
-  a colour is not an ordered scalar. `AdjustValue()` should probably refuse
-  `CompositeKind::Colour` the way it refuses a Bank, now that the Bank has its own route.
+- ~~**A Colour composite's `←/→` steps the packed `0xRRGGBB` integer by one.**~~
+  **CLOSED 2026-08-23 by P5.** Refused, exactly as suggested. `Adjustable` grew the
+  composite kind so the refusal is specific to `Color`: an Anchor's axes and a Hue's
+  degrees are genuinely ordered and still adjust. One test covers both halves and
+  asserts the binding is **unwritten** on refusal, not merely that the call returned
+  false — a refusal that still moved the value would be worse than the bug.
+  Mutation-checked.
 - ~~**SPEC §6.3's inline param expansion does not exist.**~~ **CLOSED 2026-08-23 by
   D20.3 — built, and the comment corrected.** `DrawInlineParams()` renders a row's
   params beneath it in the Sheet's own Row grammar whenever the Inspector is hidden,
@@ -392,9 +406,28 @@ either way it is a registry decision, not a shell fix.
 - **`controls::Text` uses `*` as its edit glyph** where SPEC §3.6 asks for `✎`. `*` is in
   the baked range and `✎` is not; the honest repair is a drawn glyph, like the chevron
   and the lock.
-- **The sheet's footer legend clips at 2.0×** (`Esc back` is cut). Cosmetic.
-- **`widgets::Checkbox` still exists** with zero callers, which SPEC §3.1 says should be
-  *deleted, not deprecated*. Same class as `Escape()` — a P5 atomic removal.
+- ~~**The sheet's footer legend clips at 2.0×** (`Esc back` is cut).~~ **CLOSED
+  2026-08-23 by P5.** The line now drops hints from the **left** through progressively
+  shorter forms, chosen by measuring rather than by scale (the sheet's width depends on
+  the Inspector's host and the drawer, not the ladder step alone), so `Esc back` is the
+  last thing standing. Losing the tail was losing the one thing a user who cannot read
+  the rest of the line actually needs.
+- ~~**`widgets::Checkbox` still exists** with zero callers.~~ **CLOSED 2026-08-23 by
+  P5**, together with eight of its nine neighbours in `Widgets.cpp` and with
+  `Escape()` itself, as that entry predicted. Only `ApplyStyle()` survives, because
+  the shell's own ImGui context still needs a styled baseline.
+- ~~**The palette footer overlaps its last row at 2.0×.**~~ **CLOSED 2026-08-23 by
+  P5.** `DrawPalette()` took nine rows unconditionally, summed the panel height from
+  that, then clamped the finished panel to the slab — and the footer is drawn *from*
+  the clamped edge while the rows were laid out against the unclamped height. The row
+  count is now decided from the space available before the panel is sized, so there is
+  nothing left to clamp.
+- **The Overview card and Details' binding grid are still partial** — the two entries
+  above them in this list. **Left consciously in P5** and the reason is worth writing
+  down: they are *incomplete*, not *broken*, and the legacy path was never a fallback
+  for them, because the legacy UI had no Overview and no Details page at all. Deleting
+  it cannot make either worse. They are the largest remaining pieces of SPEC §5.1/§5.5
+  and want a phase of their own.
 - **A stray ImGui nav-cursor rectangle was seen once** on an unselected bank chip after a
   long key sequence, and could **not** be reproduced in a clean session. Recorded because
   D18(d) turned ImGui's nav off for E2's frames and this looked like a survivor.
@@ -454,3 +487,56 @@ Stated plainly, because an untested claim in a report is worse than a gap.
 8. **Sustained soak.** Sessions ran for tens of seconds each, not hours; no memory or
    atlas-growth measurement was taken across repeated scale changes (the atlas rebuilds
    per effective scale, #38).
+
+---
+
+## 10. P5 addendum — the deletion pass (2026-08-23)
+
+Added after this report was written, when P5 closed its open list and deleted the
+legacy UI. Decisions: `../../AUTONOMOUS-DECISIONS.md` **D21**.
+
+### 10.1 One defect this report missed entirely: the rail does not scroll
+
+Not in §7 because it was never looked for. At 2.0× the rail's eleven items and three
+section breaks are **taller than the rail**, and `DrawRail()` drew them from an absolute
+y with no clip and no scroll — so the surplus was painted past the bottom edge and lost.
+**Appearance and Shell were unreachable by pointer.** The command palette still found
+them, which is exactly why §2.4's keyboard sweep scored every area as reachable and this
+went unrecorded.
+
+Pre-existing (it clipped letters before D20.1's icons landed), but P5 removes the
+fallback, so it became the only behaviour. **Fixed** — the walk is now defined once and
+used by both the measure and draw passes; the offset is `RailScroll()` in `Layout.cpp`,
+imgui-free for the same reason `ConfigureRowsHeight()` is. Three `overlay_shell` cases,
+mutation-checked.
+
+*The lesson for the next report:* "reachable by keyboard" and "reachable by pointer" were
+treated as one property here, and they are not. The palette can reach anything the
+registry contains whether or not it is on screen.
+
+### 10.2 Re-verified after the deletion
+
+| Check | Result |
+|---|---|
+| All eleven areas selected at 1.0× and 2.0× | no errors |
+| Ladder vs SPEC §8.3 | `rail 232 · column 400 · sheet 928 · step 0` and `rail 60 · drawer 400 · sheet 804 · step 2` — matches |
+| `display.budget_meter` (the first live `Kind::Meter`) | reads `39 %` |
+| Glyph range (`overlay_e2_glyphs`) | clean, every string U+0020..U+00FF |
+| `assert|abort|SIGSEGV` over every session log | **0** |
+| **§3.2's armed delete, re-verified** | arm → `Esc` → one more press: **file survived** |
+| **§4.1 config safety, re-verified** | every sha256 and mtime byte-identical after a full passive walk; both unknown keys still present |
+| HUD parity | **proved, not sampled** — `git diff` over `FpsDisplay.cpp` across the phase has zero added code lines |
+| `meson test -C build` | **68/68**, `overlay_shell` 28 cases / 300 assertions |
+
+### 10.3 What this pass could not do — one new item for §9
+
+**No screenshots.** `grim -g` captures an **output region**, not a window, so a nested
+gamescope that is not frontmost yields the host desktop instead — useless as evidence,
+and a capture of the user's own screen. A first attempt did exactly that; its output was
+destroyed unread and the pass was redone entirely through the overlay's own console
+commands. Everything in 10.2 is a value read back out of the running compositor.
+
+**So visual confirmation of the post-deletion result is still owed.** Nothing here proves
+a pixel was drawn — only that the state behind it is right. That is a weaker claim than
+§2.3's, and it is the one thing P5 leaves for the next pass to close.
+

@@ -10,6 +10,113 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P5: the deletion, and the flip
+
+The last phase. Decisions: `../../AUTONOMOUS-DECISIONS.md` **D21**. Build clean,
+**68/68** meson tests (`overlay_shell` 25 → 28 cases, 290 → 300 assertions;
+`overlay_palette` +1 case).
+
+**Net: 5,191 deletions against 140 insertions in the deletion commit alone**
+(the phase total is larger; the fixes and the flip are separate commits). The
+phase plan predicted a net reduction and it landed.
+
+### Order: every open item that could BREAK was fixed before anything was deleted
+
+Deleting the legacy path removes the fallback, so the fixes went first:
+
+| Open item | Outcome |
+|---|---|
+| The collapsed rail does not scroll (2.0×) | **Fixed.** `DrawRail()` now walks its vertical layout once through a visitor used by both the measure pass and the draw pass, so content height and drawn positions cannot drift. The offset is `RailScroll()` in `Layout.cpp` — imgui-free, for the same reason `ConfigureRowsHeight()` is. Follows the active item (which is what restores keyboard reachability), moves the least amount that reveals it, clips the region so an off-screen item is neither painted nor clickable, and shows a thumb only when scrollable. **3 tests, mutation-checked.** |
+| `Kind::Meter` has zero registrations | **Built** as `display.budget_meter` — D21.1. |
+| A Colour composite's `←/→` steps the packed integer | **Fixed** — refused, like a Bank. `Adjustable` grew the composite kind so Anchor and Hue, which *are* ordered, keep working. 1 test, mutation-checked. |
+| The palette footer overlaps its last row at 2.0× | **Fixed.** The row count is now decided from the space available *before* the panel is sized, so the panel's height is a consequence of its content rather than something clamped afterwards — there is nothing left to clamp and the list cannot reach the footer. |
+| The sheet's footer legend clips at 2.0× | **Fixed.** Drops hints from the **left** through progressively shorter forms, chosen by measurement, so `Esc back` is last standing — losing the tail was losing the one thing a stuck user needs. |
+| The Overview card is partial (SPEC §5.5) | **Left.** See below. |
+| Details' binding grid is partial (§5.1) | **Left.** See below. |
+| A Facts summary clips its tail rather than ellipsising | **Left** — cosmetic, and the left-align fallback is the documented D15 behaviour. |
+| `controls::Text` uses `*` where §3.6 asks for `✎` | **Left** — the honest repair is a drawn glyph, a self-contained piece of work. |
+| A stray ImGui nav-cursor rectangle, seen once | **Left** — never reproduced in a clean session; nothing to fix against. |
+
+**Left consciously, with the reason:** the Overview card and the Details grid are
+*incomplete*, not *broken*, and — unlike the rail — the legacy path was never a
+fallback for them, because the legacy UI had no Overview and no Details page at
+all. Deleting the old path therefore cannot make either worse. They are the
+largest remaining pieces of SPEC §5.1/§5.5 and want a phase, not a phase's tail.
+
+### The deletion, established by call graph rather than by file
+
+`SettingsOverlay.cpp`'s E2 gate was the single branch reaching any of it.
+Deleting the else-branch orphaned the six `Panel*_Draw()` wrappers, which
+orphaned `BeginPanelWindow`/`EndPanelWindow`/`DrawDock`, which orphaned the panel
+state tables, and outward from there. Each step was checked for remaining callers
+before cutting, and **`-Wunused-function` was left to find what fell dead behind
+each cut** — `DrawStreamRow`, `CandidateLabel`, `s_nSelectedStream` and
+`s_bLastTabWasGlobalOnly` all surfaced that way rather than by inspection.
+
+Gone: the dock, the five floating windows, the custom title bars, and the whole
+drag/resize/collapse/z-order/tiling layer; the six legacy panel bodies;
+`Area::Escape()` with `IsEscaped()`, `EscapeBody()`, `EscapeCount()` and
+`Law::Escaped` (zero call sites since P3c); `Notifications::DrawSettingsPanel()`;
+`FpsDisplay_DrawSettingsPanel()` and its six tabs; and nine of `Widgets.cpp`'s
+ten functions — including `widgets::Checkbox`, which SPEC §3.1 said to delete
+rather than deprecate and which has had no callers since #60. `ApplyStyle()`
+survives because the shell's own ImGui context still needs a styled baseline.
+
+**What was shared and therefore survived** — see D21.2 for `Chrome.cpp`'s sorting,
+and `ChaseCeiling()`, which was defined inside the deleted Statistics tab but is
+still used by the Monitor area's graph rows.
+
+### Tests deleted with the code, and what was kept
+
+The four sections of *"an area is legacy or E2, never both"* tested `Law::Escaped`
+and went with it — they covered a feature the product no longer contains. Two
+things in that block were never about escaping and are **kept**: area lookup by id
+including the null answer for an unknown one, and, in `overlay_ui`, the
+dynamic-area guard, re-pointed at the half still reachable (a rebuild declared
+with only one of its two functions). No coverage of surviving behaviour was lost.
+
+### The HUD is provably identical
+
+Not sampled — proved. `git diff` over `FpsDisplay.cpp` across the whole phase has
+**zero added code lines** (ten added lines, all comments); every deletion is a
+settings-panel function. The HUD's own draw path is byte-identical, which is
+stronger evidence than a pixel comparison whose same-mode noise floor was already
+measured at ~11%.
+
+### Post-deletion walkthrough
+
+Driven entirely through the overlay's own console commands under
+`with-gamescope-lock.sh`, with a temporary `XDG_CONFIG_HOME`.
+
+**No screenshots this pass, deliberately, and this is a real gap:** `grim -g`
+captures an **output region**, not a window, so a nested gamescope that is not
+frontmost yields the host desktop instead — which is useless as evidence *and*
+captures the user's own screen. A first attempt did exactly that and its output
+was destroyed unread. Everything below is read back out of the running
+compositor instead; visual confirmation of the drawn result is still owed.
+
+- All eleven areas selected at **1.0×** and **2.0×**, no errors.
+- The ladder matches SPEC §8.3 at both: `rail 232 · column 400 · sheet 928 · step 0`
+  and `rail 60 · drawer 400 · sheet 804 · step 2`.
+- `display.budget_meter` reads a live value (`39 %`) — `Kind::Meter` renders.
+- Glyph sweep clean: every registry string inside U+0020..U+00FF.
+- `grep -icE 'assert|abort|SIGSEGV'` over every session log: **0**.
+- **The armed delete still does not survive `Esc`** (§3.2's fix, re-verified after
+  the deletion): arm, `Esc`, one more press — `games/424242.json` survived.
+- **Config safety PASS.** A seeded pre-branch config — including two keys the
+  schema does not know — was walked through all eleven areas with navigation,
+  explain pages, `Ctrl+I` cycling, `Tab` and the palette. Every sha256 and every
+  mtime byte-identical afterwards; both unknown keys still present.
+  *An earlier run of this check appeared to fail; the cause was the test itself
+  calling `overlay_e2_set`, which is a real edit and correctly persists.*
+
+**One finding outside this phase's scope:** when a config write does legitimately
+happen, unknown keys are dropped. `src/Config/` is untouched by this phase, so
+this is pre-existing serializer behaviour, not a regression — recorded rather than
+fixed.
+
+---
+
 ## 2026-08-23 — closing the three gaps the pre-P5 test pass left open
 
 Also not a phase: the three items `SHELL-TEST-REPORT.md` found and recommended
