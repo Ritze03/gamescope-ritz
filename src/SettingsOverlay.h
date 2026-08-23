@@ -7,6 +7,7 @@
 // superdoc/planning/ISSUES.md issues #5-#7 for the design this follows.
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -15,6 +16,40 @@ struct FrameInfo_t;
 
 namespace gamescope
 {
+	// ------------------------------------------------------------------
+	// Motion-event sanity checks (#65, #75, #76) -- see the "Motion-event
+	// sanity checks" comment in SettingsOverlay.cpp for the full story:
+	// DrainInputQueue() used to accept every raw motion coordinate/delta
+	// with no validation, and a spurious out-of-range sample (normalized
+	// X == exactly -1.0, or a relative delta of -32768.0px) reliably
+	// hijacked ImGui's focus mid-drag. Kept here (header-only, no
+	// ImGui/Vulkan dependency) rather than static in the .cpp so
+	// tests/test_settings_overlay_input.cpp can exercise the exact
+	// boundary values without linking the whole overlay renderer.
+	// ------------------------------------------------------------------
+
+	// Real absolute coordinates from Wayland_Pointer_Motion() are always
+	// normalized to the surface's own [0, 1] space. A small epsilon
+	// tolerates real motion landing exactly on an edge pixel plus float
+	// rounding; anything further out (X == -1.0 being the concrete
+	// garbage value seen live) is not a real position.
+	inline bool SettingsOverlay_IsSaneNormalizedCoord( double v )
+	{
+		return std::isfinite( v ) && v > -0.05 && v < 1.05;
+	}
+
+	// No single relative-motion event a real mouse produces between two
+	// Wayland events comes remotely close to this bound -- it exists
+	// purely to reject the -32768px sentinel (and anything of similar
+	// magnitude) without touching legitimate fast-flick deltas.
+	inline constexpr double k_flSettingsOverlayMaxSaneMotionDeltaPx = 10000.0;
+	inline bool SettingsOverlay_IsSaneMotionDelta( double dx, double dy )
+	{
+		return std::isfinite( dx ) && std::isfinite( dy ) &&
+			std::fabs( dx ) < k_flSettingsOverlayMaxSaneMotionDeltaPx &&
+			std::fabs( dy ) < k_flSettingsOverlayMaxSaneMotionDeltaPx;
+	}
+
 	// Live-tunable background blur/darkening (window-chrome overhaul's
 	// General tab, Config/ConfigSchema.h's OverlaySettings::background_blur /
 	// background_darkening) -- same seed-once/push-on-edit shape as

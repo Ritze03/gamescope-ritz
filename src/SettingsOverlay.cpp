@@ -1459,28 +1459,12 @@ namespace gamescope
 	// coordinate that ImGui treats as real motion to a real place, just the
 	// wrong one. The fix has to reject the bad sample before it ever
 	// perturbs s_flCursorX/Y, not clean up the value afterwards.
-
-	// Real absolute coordinates from Wayland_Pointer_Motion() are always
-	// normalized to the surface's own [0, 1] space. A small epsilon
-	// tolerates real motion landing exactly on an edge pixel plus float
-	// rounding; anything further out (X == -1.0 being the concrete garbage
-	// value seen live) is not a real position.
-	static bool IsSaneNormalizedCoord( double v )
-	{
-		return std::isfinite( v ) && v > -0.05 && v < 1.05;
-	}
-
-	// No single relative-motion event a real mouse produces between two
-	// Wayland events comes remotely close to this bound -- it exists purely
-	// to reject the -32768px sentinel (and anything of similar magnitude)
-	// without touching legitimate fast-flick deltas.
-	static constexpr double k_flMaxSaneMotionDeltaPx = 10000.0;
-	static bool IsSaneMotionDelta( double dx, double dy )
-	{
-		return std::isfinite( dx ) && std::isfinite( dy ) &&
-			std::fabs( dx ) < k_flMaxSaneMotionDeltaPx &&
-			std::fabs( dy ) < k_flMaxSaneMotionDeltaPx;
-	}
+	//
+	// The actual predicates (SettingsOverlay_IsSaneNormalizedCoord() /
+	// SettingsOverlay_IsSaneMotionDelta()) live in SettingsOverlay.h, not
+	// here -- header-only and free of ImGui/Vulkan so
+	// tests/test_settings_overlay_input.cpp can exercise the exact boundary
+	// values without linking the whole overlay renderer.
 
 	// Rate-limited so a host that spams the bad sample can't flood the log.
 	static void LogRejectedMotion( const char *pszKind, double x, double y )
@@ -1573,7 +1557,7 @@ namespace gamescope
 					break;
 
 				case QueuedInputEvent::Kind::MouseMotionDelta:
-					if ( IsSaneMotionDelta( ev.x, ev.y ) )
+					if ( SettingsOverlay_IsSaneMotionDelta( ev.x, ev.y ) )
 					{
 						s_flCursorX += ev.x;
 						s_flCursorY += ev.y;
@@ -1586,7 +1570,7 @@ namespace gamescope
 					break;
 
 				case QueuedInputEvent::Kind::MouseMotionAbsolute:
-					if ( IsSaneNormalizedCoord( ev.x ) && IsSaneNormalizedCoord( ev.y ) )
+					if ( SettingsOverlay_IsSaneNormalizedCoord( ev.x ) && SettingsOverlay_IsSaneNormalizedCoord( ev.y ) )
 					{
 						s_flCursorX = ev.x * s_uTextureWidth;
 						s_flCursorY = ev.y * s_uTextureHeight;

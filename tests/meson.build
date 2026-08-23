@@ -8,7 +8,7 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp'],
+	unittest_src + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep],
 	cpp_args: gamescope_cpp_args,
@@ -17,3 +17,4 @@ test('convar', gamescope_tests, args: ['[convar]'])
 test('process', gamescope_tests, args: ['[process]'])
 test('config', gamescope_tests, args: ['[config]'])
 test('audio_volume', gamescope_tests, args: ['[audio_volume]'])
+test('settings_overlay_input', gamescope_tests, args: ['[settings_overlay_input]'])
