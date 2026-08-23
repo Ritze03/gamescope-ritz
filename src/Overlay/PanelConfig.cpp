@@ -1290,8 +1290,17 @@ namespace gamescope
 						// The font atlas is re-baked at the new size. The
 						// legacy slider did this on release via
 						// IsItemDeactivatedAfterEdit; a registration has no
-						// such hook, so it happens on the write.
-						gamescope::fonts::RebuildAll( flScale );
+						// such hook, so it is REQUESTED on the write and
+						// performed by the render thread at the top of its
+						// next frame.
+						//
+						// Requested, not done here: this setter is reachable
+						// from the console thread through overlay_e2_set, and
+						// RebuildAll() there clears a font atlas out from
+						// under a live draw pass -- a hard abort as soon as
+						// anything on screen needs a glyph baked at the new
+						// size. See Fonts.h's RequestRebuild().
+						gamescope::fonts::RequestRebuild( flScale );
 					} ) )
 				.Help( "Multiplies every base unit in the overlay and re-bakes the font atlas, so "
 				       "text stays crisp. Widget geometry stays spec-exact, so very large values can "

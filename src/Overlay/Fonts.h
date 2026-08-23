@@ -128,6 +128,38 @@ namespace gamescope::fonts
 	// frame from inside the call stack that reaches RebuildAll()).
 	void ApplyPendingRebuild();
 
+	// ---- rebuilding from a thread that is not the render thread ----------
+	// Records a rebuild request; PumpRequestedRebuild() performs it, on the
+	// render thread, at the start of its next frame.
+	//
+	// WHY THIS IS NOT JUST RebuildAll(). RebuildAll() MUTATES font state --
+	// Load() calls ClearFonts(), which deletes every ImFont, ImFontBaked and
+	// glyph rect a context owns. Its whole deferral scheme is built on one
+	// assumption: that it is being called from the render thread, inside
+	// pPrevContext's own live frame, so every OTHER context in the map is
+	// safely between frames. Read ImGui's current context is a process-wide
+	// global, and that assumption is exactly what a registration setter
+	// breaks -- `overlay_e2_set overlay.display_scale 2.0` reaches the setter
+	// on the CONSOLE thread, where the "current" context is whatever the
+	// render thread is drawing with at that instant. RebuildAll() there
+	// clears an atlas out from under a live draw pass, and the next glyph
+	// that needs baking walks an ImFont whose Sources vector has already been
+	// freed: `ImVector<ImFontConfig*>::operator[]` asserts and the whole
+	// compositor aborts.
+	//
+	// That is not hypothetical and it is not rare once something on screen
+	// needs a glyph baked at the new size -- a composite band's value string
+	// reproduced it on the first frame after the request, every time.
+	//
+	// So: any caller that is not certain it is on the render thread inside a
+	// live frame uses these two instead of RebuildAll().
+	void RequestRebuild( float flScale );
+
+	// Performs a pending RequestRebuild(), if any. Call once per frame from
+	// the render thread, immediately before ApplyPendingRebuild(), so the
+	// rebuild it schedules for this context lands on this same frame.
+	void PumpRequestedRebuild();
+
 	// Returns the ImFont* for a role on the currently-current context. Once
 	// Load() has run for that context (as SettingsOverlay.cpp/FpsDisplay.cpp's
 	// EnsureImguiInit() always does before any drawing) this is never null:

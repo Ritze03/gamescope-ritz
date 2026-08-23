@@ -62,11 +62,24 @@ namespace gamescope::ui
 		const float flSize = TypeSizePx( eRole );
 		const ImVec2 size  = pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, pszText );
 
+		// Alignment only has meaning while the text FITS. Once it is wider
+		// than the rect it gets left-aligned regardless of what was asked
+		// for, so the clip takes the tail rather than the head.
+		//
+		// Right-aligning an overlong string puts its start off the left edge
+		// and clips there, which reads as garbage rather than as truncation:
+		// SPEC §2.3 caps a value at 60% of the label zone, so a long value in
+		// the narrow Inspector lane rendered `bottom-right · 64 / 32` as
+		// `.ght`. Losing the end of a string is legible; losing the
+		// beginning is not.
 		float flX = rcClip.Min.x;
-		if ( eAlign == TextAlign::Right )
-			flX = rcClip.Max.x - size.x;
-		else if ( eAlign == TextAlign::Center )
-			flX = rcClip.Min.x + ( rcClip.GetWidth() - size.x ) * 0.5f;
+		if ( size.x <= rcClip.GetWidth() )
+		{
+			if ( eAlign == TextAlign::Right )
+				flX = rcClip.Max.x - size.x;
+			else if ( eAlign == TextAlign::Center )
+				flX = rcClip.Min.x + ( rcClip.GetWidth() - size.x ) * 0.5f;
+		}
 
 		const ImVec2 pos( flX, rcClip.Min.y + ( rcClip.GetHeight() - size.y ) * 0.5f );
 
