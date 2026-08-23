@@ -739,7 +739,109 @@ uses config presets, ConVars, `grim` screenshots and keyboard only.
 
 ---
 
-## 2026-08-23 (later)
+## 2026-08-23 (later still)
+
+### D18 · The three deferred defects, and the four more that closing them uncovered
+
+D17's lane fix, the glyph decision, and P4's five keyboard gaps. Build clean, **68/68
+tests**, nine new cases (`overlay_ui` 47 → 54, `overlay_shell` 19 → 21). Full write-up:
+`round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D18.1 · The 2.0× lane clamp is ONE line, placed before every derivation.** D17 chose the
+lane; the only open question was *which* lane quantity gives way. Holding `Lw` at its
+full-width value and pulling in only the control zone — the obvious reading of "the right
+edge moves" — **does not work**: at 2.0× `Lw` is 348 and the visible width 368, so the
+control zone would be 20 units, i.e. zero after the affordance. So the occlusion is
+subtracted from `flWidth` at the *top* of `ForColumn()` and everything else — `Lw`, the
+control zone, the affordance — follows from the reduced width. The occluded case is
+therefore the *same arithmetic* as the ordinary one rather than a second branch that can
+drift. `rcCol` takes its right edge from the lane too, so group bands and a content body
+retreat with the rows instead of sliding under the drawer. **Cost, as D17 predicted:** the
+control zone is 128 base instead of 368, so a long-labelled segmented control downgrades to
+a dropdown sooner. **Verified by mutation**, not by reading: with the clamp disabled the
+control column's right edge is 1624 px against a drawer starting at 928.
+
+**D18.2 · Glyphs are DRAWN, and the deciding fact is not a preference.** The brief offered
+"extend the baked range" or "draw shapes". Extending the range **cannot work for two of the
+three marks**: the bundled Geist faces — all five, Sans and Mono — have no U+25B8 (`▸`) and
+no U+2315 (`⌕`) in their cmap at all, so a wider range would bake a fallback box just as
+faithfully as a narrow one. The choice was never atlas-vs-draw; it was *draw, or ship a
+different typeface*. Drawing also costs nothing at bake time, which matters here because
+the atlas is rebuilt per effective scale (#38).
+
+**D18.3 · The sweep found ONE box glyph, and the brief's premise was half wrong — recorded
+rather than quietly corrected.** `›` (U+203A) in the spine's `"inspector ›"` was the only
+non-Latin-1 character the shell could emit. **`▸`, `⌕` and the arrow glyphs are not in the
+C++ at all** — they live in `index.html`, and the depth affordance `▸` belongs to is
+unimplemented (`RowCtx::Affordance()` has *no call sites*, which is its own finding).
+`…` and `→` appear only in comments; `™` in `main.cpp` is terminal `--help` output, not the
+overlay. The knock-on benefit of drawing: the palette's `>` prompt and the dropdown's
+lowercase `v` caret — two letters pretending to be icons, both introduced *because* of the
+range — became the marks they were standing in for.
+
+**D18.4 · The range stops being a comment and becomes callable.**
+`fonts::FirstUnbakedCodepoint()` turns "is this string drawable" into a question, and
+`overlay_e2_glyphs` asks it of every registered area title, row and param name, help
+sentence, option label and unit — strings declared across a dozen files that no fixture
+sees. **Live answer today: clean.** Malformed UTF-8 is *reported*, not skipped, because
+silently ignoring it is how a mojibake label survives review. *Why a console command and not
+a test:* same argument as D16.8 — those strings only ever coexist in the live registry.
+
+**D18.5 · One index covers the whole Inspector, and the mode strip is index −1.** Rather
+than a focus flag per thing in it: −1 the strip, 0 the entry's own row, 1..n its params.
+The strip is not a separate mode because SPEC §8.2 *already* says what arrows do ("move
+selection within the focused region"; "inside a control: adjust") and the strip **is** a
+two-cell segmented control — so Up onto it and Left/Right across it is the existing grammar,
+with no new key to learn or document. Left/Right there takes its value from the direction
+(D16.6's rule), so holding a key settles.
+
+**D18.6 · A Choice opens its popup from the keyboard only when it ACTUALLY drew as one.**
+`controls::Choice` decides segmented-vs-dropdown by measuring against the lane it got, so
+the answer depends on font, scale and drawer. The shell must not re-derive it — a second
+copy of that decision is precisely the drawn-vs-hit-tested divergence `Controls.h` exists to
+prevent — so the row painter *records* which ids drew as dropdowns and the keyboard reads
+the previous frame's record. **Without it, Enter on a segmented Choice would set the open
+state, no list would be drawn, and the popup handler would swallow every key with nothing on
+screen** — a keyboard trap, worse than the gap it closed.
+
+**D18.7 · REAL KEY EVENTS ARE NOW SENDABLE, and this is NOT what D4 bans.** P4 had to
+report that no real keypress had ever been sent. `overlay_e2_key` appends to
+`s_InputQueue` — the overlay's own producer/consumer queue, the one
+`wlserver_dispatch_key()` writes to — so a key takes the *identical* path a physical press
+takes: `DrainInputQueue()` → `HandleKeyEvent()` → `ImGuiKeyForKeycode()` →
+`io.AddKeyEvent()`. **It cannot reach any window, client or seat outside this overlay,
+because nothing else reads that queue.** D4 bans injected input because `ydotool` drives the
+whole *seat* and anything focused receives it; that hazard is structurally absent here.
+There is no parallel input path to keep in step, which is the property that makes a binding
+verified this way verified *through its real mechanism*. Every keyboard claim in this block
+was checked by pressing the key.
+
+**D18.8 · Four defects that only a keypress could find.** Each had been invisible for
+phases, and each is the "renders but does nothing" class this branch keeps meeting.
+*(a)* **`KEY_SLASH` was absent from `ImGuiKeyForKeycode`**, so `Ctrl+/` produced no
+`ImGuiKey` at all — unreachable from a *real keyboard*, not merely from a test. Punctuation
+still typed fine through `AddInputCharactersUTF8()`, and that asymmetry is what hid it: `/`
+worked everywhere it was **typed** and nowhere it was **bound**. *(b)* **The dropdown list
+never rendered at all.** ImGui closes a popup whose parent window is not focused, and the
+slab carries `NoBringToFrontOnFocus` *by design*, so `OpenPopup`/`BeginPopup` opened and
+closed it every frame. It is now drawn by the shell in a sibling window — the same shape,
+and the same reason, the palette already documents. Nobody had ever seen this because
+opening a dropdown needed a click, which this project may not synthesise. *(c)* **Left/Right
+was a dead key on the sharpness slider**: its binding has 21 notches (raw 0..20) behind a
+declared `0..100` range, so the default step of `(hi-lo)/100 = 1` round-tripped straight
+back to the value it started from. Declared `.Step(5)`. A *drag* never showed it, because a
+drag crosses several notches at once; only the keyboard moves by exactly one. *(d)* **ImGui's
+own keyboard nav was running a second focus model over the same keys**, leaving a focus
+rectangle unrelated to the shell's region. E2 implements SPEC §8.2 in full, so it turns nav
+off for its own frames — the same call D16.3 made about `InputText`, for the same reason.
+
+**Still open, and NOT fixed here.** *(a)* `RowCtx::Affordance()` has no call sites: SPEC
+§2.4's depth affordance is specified and unimplemented, which is why `▸` was never needed.
+*(b)* The palette's footer legend overlaps its last result row at 2.0× — the panel is
+clamped to the slab but the legend is placed from a fixed offset. Pre-existing, cosmetic,
+untouched. *(c)* Only the sharpness slider was proven to have the quantised-binding problem;
+other sliders with converting bindings may share it and were not audited. *(d)* `Escape()`
+is untouched, per the brief — that is P5's.
 
 ### D17 · At 2.0×, the open drawer shrinks the sheet's lane rather than covering it
 
