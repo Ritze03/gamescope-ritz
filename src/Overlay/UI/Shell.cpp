@@ -64,7 +64,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace gamescope::ui::shell
@@ -390,6 +392,8 @@ namespace gamescope::ui::shell
 		void PaletteCmd( std::span<std::string_view> args );
 		void GlyphSweep( std::span<std::string_view> args );
 		void KeyCmd( std::span<std::string_view> args );
+		void PointerCmd( std::span<std::string_view> args );
+		void GetById( std::span<std::string_view> args );
 
 		// The palette's two helpers the console command reaches before the
 		// drawing section defines them.
@@ -423,6 +427,21 @@ namespace gamescope::ui::shell
 			"Through gamescopectl the id and value must be ONE quoted argument: "
 			"gamescopectl overlay_e2_set \"display.fps_limit 60\".",
 			SetById );
+
+		// D22. overlay_e2_set could WRITE a binding from a script but nothing
+		// could READ one, so "did that click actually move the state?" -- the
+		// only question a mouse walkthrough asks -- had no answer a script
+		// could check. Every previous verification worked around it by
+		// setting a value and looking at a screenshot, which confirms the
+		// PAINT and not the binding. This reads through Binding().Get(), the
+		// same value the row itself prints.
+		ConCommand cc_overlay_e2_get(
+			"overlay_e2_get",
+			"Print an E2 row or parameter's current value: overlay_e2_get <id>. Reads through the "
+			"same binding the row draws from, so it answers \"did that click move the state?\" "
+			"rather than \"did something repaint?\". With no id, prints every registered row and "
+			"its value.",
+			GetById );
 
 		ConCommand cc_overlay_e2_select(
 			"overlay_e2_select",
@@ -475,6 +494,24 @@ namespace gamescope::ui::shell
 			"window, client or seat outside this overlay. Through gamescopectl the chords must be "
 			"ONE quoted argument: gamescopectl overlay_e2_key \"tab down enter\".",
 			KeyCmd );
+
+		// D22. The pointer half of the same idea, and the reason this branch
+		// could ship a mouse UI nobody had ever used a mouse on: D18 built
+		// overlay_e2_key, every subsequent binding was verified with it, and
+		// the CONTROLS -- which are driven by a pointer, not by a key -- kept
+		// being "verified" by console commands that moved their bound state
+		// directly. That proves the binding, never the hit box. See PointerCmd.
+		ConCommand cc_overlay_e2_pointer(
+			"overlay_e2_pointer",
+			"Send a REAL pointer event to the overlay: overlay_e2_pointer <verb> [args]. "
+			"Verbs: move <x> <y> | down [left|right|middle] | up [...] | click [x y] [button] | "
+			"scroll <dx> <dy> | pos. Coordinates are PIXELS on the overlay surface, the same "
+			"ones a screenshot shows, with the origin top-left. Like overlay_e2_key it appends "
+			"to the overlay's own input queue, so the event takes the identical path a physical "
+			"mouse takes and cannot reach any window, client or seat outside this overlay. "
+			"Through gamescopectl the verb and its arguments must be ONE quoted argument: "
+			"gamescopectl overlay_e2_pointer \"click 640 400\".",
+			PointerCmd );
 
 		// =================================================================
 		//  Registration
@@ -847,6 +884,226 @@ namespace gamescope::ui::shell
 				if ( bShift ) SettingsOverlay_QueueKeyEvent( KEY_LEFTSHIFT, false );
 				if ( bCtrl )  SettingsOverlay_QueueKeyEvent( KEY_LEFTCTRL,  false );
 			}
+		}
+
+		// D22's read half. See cc_overlay_e2_get.
+		void GetById( std::span<std::string_view> args )
+		{
+			const auto PrintOne = [ & ]( const std::string &sId, Kind eKind )
+			{
+				const std::string sValue = PaletteValueText( sId );
+				console_log.infof( "%-40s %-10s %s", sId.c_str(), KindName( eKind ),
+					sValue.empty() ? "-" : sValue.c_str() );
+			};
+
+			if ( args.size() >= 2 )
+			{
+				const std::string sId( args[ 1 ] );
+				if ( const Entry *pE = Reg().FindEntry( sId ) )
+					PrintOne( sId, pE->GetKind() );
+				else if ( const Parameter *pP = Reg().FindParam( sId ) )
+					PrintOne( sId, pP->GetKind() );
+				else
+					console_log.errorf( "overlay_e2_get: no such id \"%s\"", sId.c_str() );
+				return;
+			}
+
+			// No id: the whole registry, rows and their parameters, in rail
+			// order -- the same walk cc_overlay_e2_glyphs does, for the same
+			// reason (these only ever coexist in the live registry).
+			for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+			{
+				const Area &area = Reg().AreaAt( a );
+				for ( size_t e = 0; e < area.EntryCount(); ++e )
+				{
+					const Entry &entry = area.EntryAt( e );
+					PrintOne( entry.Id(), entry.GetKind() );
+					for ( size_t p = 0; p < entry.ParamCount(); ++p )
+						PrintOne( entry.ParamAt( p ).Id(), entry.ParamAt( p ).GetKind() );
+				}
+			}
+		}
+
+		// =================================================================
+		//  D22: real pointer events, from a script
+		// =================================================================
+		// WHY THIS IS NOT THE BANNED THING, restated for the pointer because
+		// the pointer is the half that actually caused the ban. D4 forbids
+		// synthetic input because injected ydotool CLICKS twice escaped into
+		// the user's own windows -- ydotool drives the whole seat, so a click
+		// lands wherever the seat's focus happens to be, which is exactly the
+		// accident that happened. This cannot do that, and not as a matter of
+		// care: it appends to s_InputQueue, the overlay's own producer/
+		// consumer queue, which DrainInputQueue() reads on the steamcompmgr
+		// thread and feeds to the overlay's ImGui context and nowhere else.
+		// There is no seat, no wl_pointer, no other client and no other
+		// window on the far side of that queue -- an event put in here can
+		// only ever arrive at this overlay, because nothing else reads it.
+		// The ydotool hazard is absent structurally, not by convention.
+		//
+		// It is also the SAME path a physical mouse takes:
+		// wlserver_mousemotion()/wlserver_mousebutton()/wlserver_mousewheel()
+		// call SettingsOverlay_QueueMouseMotionAbsolute()/QueueMouseButton()/
+		// QueueMouseWheel(), and so does this, with the same arguments. So a
+		// hit box verified this way is verified through its real mechanism --
+		// which is the whole point, because the defect this branch keeps
+		// shipping is a control that DRAWS in one rect and HIT-TESTS in
+		// another, and no console command that pokes the bound value can see
+		// that. Only a click at a coordinate can.
+		//
+		// Coordinates are surface PIXELS, not the normalized 0..1 the queue
+		// carries, because the thing a person has in hand when writing a test
+		// is a screenshot. The conversion is done here, against the live
+		// surface size, so the caller never has to know the texture size and
+		// a test written at one resolution does not silently aim elsewhere at
+		// another.
+		uint32_t LinuxButtonFromName( const std::string &sName )
+		{
+			if ( sName.empty() || sName == "left"   || sName == "l" ) return BTN_LEFT;
+			if ( sName == "right"  || sName == "r" )                  return BTN_RIGHT;
+			if ( sName == "middle" || sName == "m" )                  return BTN_MIDDLE;
+			return 0;
+		}
+
+		// Pixels -> the normalized coordinate the queue carries. Returns
+		// false when the overlay has never been opened (no surface yet), so
+		// the caller can say that rather than aiming at a zero-sized surface.
+		bool QueuePointerMovePx( double flPxX, double flPxY )
+		{
+			uint32_t uWidth = 0, uHeight = 0;
+			if ( !SettingsOverlay_GetSurfaceSize( &uWidth, &uHeight ) || uWidth == 0 || uHeight == 0 )
+				return false;
+
+			SettingsOverlay_QueueMouseMotionAbsolute( flPxX / (double)uWidth, flPxY / (double)uHeight );
+			return true;
+		}
+
+		void PointerCmd( std::span<std::string_view> args )
+		{
+			if ( args.size() < 2 )
+			{
+				console_log.infof( "overlay_e2_pointer <verb> [args]" );
+				console_log.infof( "  move <x> <y>              move the cursor to a surface pixel" );
+				console_log.infof( "  down|up [left|right|mid]  press / release a button where it is" );
+				console_log.infof( "  click [x y] [button]      move (if given), press, release" );
+				console_log.infof( "  scroll <dx> <dy>          wheel, in wlserver_mousewheel units" );
+				console_log.infof( "  pos                       print the cursor and the surface size" );
+				return;
+			}
+
+			std::string sVerb( args[ 1 ] );
+			std::transform( sVerb.begin(), sVerb.end(), sVerb.begin(),
+				[]( unsigned char c ) { return (char)std::tolower( c ); } );
+
+			const auto Number = [ & ]( size_t n, double *pOut ) -> bool
+			{
+				if ( n >= args.size() )
+					return false;
+				// strtod, not stod: gamescope builds with exceptions off, so
+				// the throwing parse is not available here.
+				const std::string s( args[ n ] );
+				char *pszEnd = nullptr;
+				const double flValue = std::strtod( s.c_str(), &pszEnd );
+				if ( pszEnd == s.c_str() || !std::isfinite( flValue ) )
+					return false;
+				*pOut = flValue;
+				return true;
+			};
+
+			if ( sVerb == "pos" )
+			{
+				uint32_t uWidth = 0, uHeight = 0;
+				if ( !SettingsOverlay_GetSurfaceSize( &uWidth, &uHeight ) )
+				{
+					console_log.infof( "overlay_e2_pointer: no surface yet -- open the overlay first" );
+					return;
+				}
+				double flX = 0.0, flY = 0.0;
+				if ( SettingsOverlay_GetCursorPosition( &flX, &flY ) )
+					console_log.infof( "cursor %.1f,%.1f  surface %ux%u", flX, flY, uWidth, uHeight );
+				else
+					console_log.infof( "cursor <unset>  surface %ux%u", uWidth, uHeight );
+				return;
+			}
+
+			if ( sVerb == "move" )
+			{
+				double flX = 0.0, flY = 0.0;
+				if ( !Number( 2, &flX ) || !Number( 3, &flY ) )
+				{
+					console_log.errorf( "overlay_e2_pointer move <x> <y>" );
+					return;
+				}
+				if ( !QueuePointerMovePx( flX, flY ) )
+					console_log.errorf( "overlay_e2_pointer: no surface yet -- open the overlay first" );
+				return;
+			}
+
+			if ( sVerb == "scroll" )
+			{
+				double flX = 0.0, flY = 0.0;
+				if ( !Number( 2, &flX ) || !Number( 3, &flY ) )
+				{
+					console_log.errorf( "overlay_e2_pointer scroll <dx> <dy>" );
+					return;
+				}
+				SettingsOverlay_QueueMouseWheel( flX, flY );
+				return;
+			}
+
+			if ( sVerb == "down" || sVerb == "up" )
+			{
+				const uint32_t uButton = LinuxButtonFromName(
+					args.size() > 2 ? std::string( args[ 2 ] ) : std::string() );
+				if ( uButton == 0 )
+				{
+					console_log.errorf( "overlay_e2_pointer: unknown button" );
+					return;
+				}
+				SettingsOverlay_QueueMouseButton( uButton, sVerb == "down" );
+				return;
+			}
+
+			if ( sVerb == "click" )
+			{
+				// "click 640 400 right" and "click" and "click right" all
+				// parse: the coordinate pair is optional, and what follows it
+				// (or stands alone) is the button.
+				size_t nButtonArg = 2;
+				double flX = 0.0, flY = 0.0;
+				if ( Number( 2, &flX ) && Number( 3, &flY ) )
+				{
+					if ( !QueuePointerMovePx( flX, flY ) )
+					{
+						console_log.errorf( "overlay_e2_pointer: no surface yet -- open the overlay first" );
+						return;
+					}
+					nButtonArg = 4;
+				}
+
+				const uint32_t uButton = LinuxButtonFromName(
+					args.size() > nButtonArg ? std::string( args[ nButtonArg ] ) : std::string() );
+				if ( uButton == 0 )
+				{
+					console_log.errorf( "overlay_e2_pointer: unknown button" );
+					return;
+				}
+
+				// Press and release, in that order and in one batch -- which
+				// is what a real click is, and which ImGui's own input-event
+				// trickling is built to spread across two frames (see
+				// UpdateInputEvents(): a second transition on the same button
+				// stops the queue and defers to the next NewFrame()). The
+				// press therefore lands on one drawn frame and the release on
+				// the next, so a Button that fires on release fires exactly
+				// once. Doing it as two console commands instead would leave
+				// the split to IPC timing, which is not a guarantee.
+				SettingsOverlay_QueueMouseButton( uButton, true );
+				SettingsOverlay_QueueMouseButton( uButton, false );
+				return;
+			}
+
+			console_log.errorf( "overlay_e2_pointer: unknown verb \"%s\"", sVerb.c_str() );
 		}
 
 		// D18's live sweep. See cc_overlay_e2_glyphs for why this walks the

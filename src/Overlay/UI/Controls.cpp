@@ -13,11 +13,32 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#include "convar.h"
+
 #include <cstdio>
 #include <cstring>
 
 namespace gamescope::ui
 {
+	// D22. Draw the rect every atom actually REGISTERED with ImGui, on top of
+	// the atom it was registered for.
+	//
+	// This exists because "renders correctly, does nothing" is this kit's
+	// recurring defect (issues #25, #68, and the whole reason D22 happened),
+	// and every previous hunt for it read code. A hit box is a rectangle in
+	// screen space; the cheapest true statement about it is a picture. With
+	// this on, a control whose outline does not sit exactly on the control is
+	// the bug, visible in one screenshot -- and a control with NO outline was
+	// never registered at all, which is the other half of the same failure.
+	//
+	// Foreground draw list, so the outline is never clipped by the child
+	// window or covered by anything drawn later.
+	ConVar<bool> cv_overlay_e2_debug_hitboxes(
+		"overlay_e2_debug_hitboxes", false,
+		"Outline the rect each E2 control atom registered with ImGui for hit-testing, over the "
+		"atom itself. An outline that does not match the painted control, or a painted control "
+		"with no outline at all, is the drawn-vs-hit-tested divergence this kit keeps shipping." );
+
 	// =====================================================================
 	//  Text
 	// =====================================================================
@@ -339,11 +360,38 @@ namespace gamescope::ui
 
 			a.id = pWindow->GetID( pszId );
 			if ( !ImGui::ItemAdd( a.rc, a.id ) )
+			{
+				// D22: an atom REJECTED by ItemAdd (clipped out, or inside a
+				// window with SkipItems) is drawn-but-dead. Mark it in a
+				// different colour so the screenshot distinguishes "hit box
+				// in the wrong place" from "hit box refused".
+				if ( cv_overlay_e2_debug_hitboxes )
+					ImGui::GetForegroundDrawList()->AddRect( rc.Min, rc.Max, IM_COL32( 255, 40, 40, 255 ) );
 				return a;
+			}
 
 			a.bPressed = ImGui::ButtonBehavior( a.rc, a.id, &a.bHovered, &a.bHeld, nFlags );
 			a.bValid   = true;
 			ImGui::RenderNavCursor( a.rc, a.id );
+
+			if ( cv_overlay_e2_debug_hitboxes )
+			{
+				ImGui::GetForegroundDrawList()->AddRect( a.rc.Min, a.rc.Max,
+					a.bHovered ? IM_COL32( 80, 255, 80, 255 ) : IM_COL32( 60, 200, 255, 200 ) );
+
+				// Only the PRESS is logged, not hover or held: hover is
+				// already on screen as a green outline, and logging it every
+				// frame buried the one line that matters under thousands.
+				// A press is the event that answers "did the click convert",
+				// and it happens once.
+				if ( a.bPressed || a.bHeld )
+				{
+					const ImVec2 mouse = ImGui::GetIO().MousePos;
+					console_log.infof( "hitbox %s %s rc=%.0f,%.0f-%.0f,%.0f mouse=%.0f,%.0f",
+						a.bPressed ? "press" : "held", pszId,
+						a.rc.Min.x, a.rc.Min.y, a.rc.Max.x, a.rc.Max.y, mouse.x, mouse.y );
+				}
+			}
 			return a;
 		}
 

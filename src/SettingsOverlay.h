@@ -173,4 +173,24 @@ namespace gamescope
 
 	// Producer side. Same units wlserver_mousewheel()'s flX/flY already use.
 	void SettingsOverlay_QueueMouseWheel( double flX, double flY );
+
+	// ------------------------------------------------------------------
+	// D22: readback, so a POINTER can be driven from a script the way D18
+	// made a KEY drivable. Both of these exist only to let
+	// overlay_e2_pointer (Overlay/UI/Shell.cpp) address the overlay in the
+	// pixel coordinates a screenshot shows, and to let a test assert where
+	// the cursor actually ended up. Neither is on any input path.
+	// ------------------------------------------------------------------
+
+	// The size of the surface the overlay's ImGui context draws into --
+	// io.DisplaySize, in pixels. False (and both outputs untouched) before
+	// the overlay has ever been opened, since the texture is allocated
+	// lazily on first draw. Safe from any thread: the pair is published as
+	// one atomic snapshot by the render thread and never torn.
+	bool SettingsOverlay_GetSurfaceSize( uint32_t *puWidth, uint32_t *puHeight );
+
+	// Where the overlay's own cursor sits, in those same pixels, as of the
+	// last drain. Diagnostic only -- nothing reads it back into the input
+	// path. Safe from any thread for the same reason.
+	bool SettingsOverlay_GetCursorPosition( double *pflX, double *pflY );
 }

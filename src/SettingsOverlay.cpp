@@ -206,6 +206,11 @@ namespace gamescope
 	static OwningRc<CVulkanTexture> s_pOverlayTexture;
 	static uint32_t s_uTextureWidth = 0;
 	static uint32_t s_uTextureHeight = 0;
+	// D22. The same two numbers, packed into ONE atomic so a reader can
+	// never observe a half-updated pair (a width from after a resize with a
+	// height from before it would place an injected click at a coordinate
+	// that never existed). Written wherever s_uTextureWidth/Height are.
+	static std::atomic<uint64_t> s_atomPublishedSurfaceSize{ 0 };
 	// The freshly-(re)created texture has never been rendered into, so its
 	// layout is still VK_IMAGE_LAYOUT_UNDEFINED and needs an explicit initial
 	// transition. Every other frame it's already GENERAL from the previous
@@ -475,6 +480,8 @@ namespace gamescope
 		s_pOverlayTexture = std::move( pNewTexture );
 		s_uTextureWidth = uWidth;
 		s_uTextureHeight = uHeight;
+		s_atomPublishedSurfaceSize.store( ( uint64_t( uWidth ) << 32 ) | uint64_t( uHeight ),
+			std::memory_order_release );
 		s_bTextureNeedsInitialBarrier = true;
 		return true;
 	}
@@ -1234,6 +1241,39 @@ namespace gamescope
 		QueueEvent( { .kind = QueuedInputEvent::Kind::MouseWheel, .x = flX, .y = flY } );
 	}
 
+	// D22. A copy of the cursor, published for readback. The consumer-side
+	// s_flCursorX/Y below are plain doubles touched only on the steamcompmgr
+	// thread, and they stay that way -- making THOSE atomic would put an
+	// atomic read-modify-write on every relative-motion accumulate for the
+	// sake of a debug readout. This pair is written once per drain instead,
+	// and is the only thing another thread ever looks at.
+	static std::atomic<double> s_atomPublishedCursorX{ 0.0 };
+	static std::atomic<double> s_atomPublishedCursorY{ 0.0 };
+	static std::atomic<bool>   s_atomCursorPublished{ false };
+
+	// D22 readback. Both are pure reads of a published atomic -- they take no
+	// lock, touch no ImGui state and can be called from the console thread.
+	bool SettingsOverlay_GetSurfaceSize( uint32_t *puWidth, uint32_t *puHeight )
+	{
+		const uint64_t ulPacked = s_atomPublishedSurfaceSize.load( std::memory_order_acquire );
+		if ( ulPacked == 0 )
+			return false;
+
+		if ( puWidth )  *puWidth  = (uint32_t)( ulPacked >> 32 );
+		if ( puHeight ) *puHeight = (uint32_t)( ulPacked & 0xffffffffull );
+		return true;
+	}
+
+	bool SettingsOverlay_GetCursorPosition( double *pflX, double *pflY )
+	{
+		if ( !s_atomCursorPublished.load( std::memory_order_acquire ) )
+			return false;
+
+		if ( pflX ) *pflX = s_atomPublishedCursorX.load( std::memory_order_relaxed );
+		if ( pflY ) *pflY = s_atomPublishedCursorY.load( std::memory_order_relaxed );
+		return true;
+	}
+
 	// ---- Consumer side (steamcompmgr thread, inside DrainInputQueue()) ----
 
 	// Overlay-local cursor position, in overlay-texture pixels. Kept here
@@ -1624,6 +1664,18 @@ namespace gamescope
 		{
 			ClampCursorToTexture();
 			io.AddMousePosEvent( (float)s_flCursorX, (float)s_flCursorY );
+		}
+
+		// D22: publish the cursor for SettingsOverlay_GetCursorPosition().
+		// Unconditional rather than inside the bCursorMoved branch above --
+		// a reader asking "where is the cursor" after a drain that moved
+		// nothing still wants an answer, and the first drain initializes the
+		// cursor to the surface centre without ever setting bCursorMoved.
+		if ( s_bCursorInitialized )
+		{
+			s_atomPublishedCursorX.store( s_flCursorX, std::memory_order_relaxed );
+			s_atomPublishedCursorY.store( s_flCursorY, std::memory_order_relaxed );
+			s_atomCursorPublished.store( true, std::memory_order_release );
 		}
 
 		// Release-safety backstop (see the file-level M2 comment): the
