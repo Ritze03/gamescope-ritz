@@ -4,6 +4,31 @@ Date: 2026-08-21. Companion to `ui-design-guide.md` (descriptive level); this fi
 number level. Implementation should follow this file; on conflict with the design guide,
 this file wins (it was measured, not estimated).
 
+**2026-08-23 — issue #80, FPS module's 186px container floor removed.**
+§10's "container ... min-width 186px" is no longer honoured by `MeasureFpsModule()` in
+`src/Overlay/FpsDisplay.cpp` — deliberate departure, not drift, per an explicit user
+request: "Each module should have its own minimal width internally and extend to the
+widest module, that is turned on. So when only FPS is on (the raw number, nothing else),
+the box should be really small, so only this single value fits!" #77 had already found
+that hiding the FPS label (#73) and frametime (#71) reduces measured content, but the
+result stayed invisibly under 186px at default font size — this floor was the reason
+nothing visibly changed. Investigated what the 186px number protected before removing it
+(this issue's own instruction) rather than deleting it blindly: nothing real. Dear
+ImGui's own `ImDrawList::PathRect` already clamps corner rounding to half the box's
+smaller dimension before drawing, so `backdrop_rounding` (#29) cannot produce a broken
+rect at any width — worst case a tiny box just reads as a fully-rounded pill, not a
+rendering bug. The position grid/anchor (#27) sizes off the real measured
+widest-present-module width every frame and never assumed a minimum either. And CPU/GPU/
+Media's own measure functions (added by #28, capped from above but never floored, #77)
+never had this floor to begin with — FPS was the only module still enforcing the spec's
+literal number, so removing it makes FPS consistent with its siblings rather than
+introducing a new pattern. Net: **no floor at all**, not a smaller one — each module's own
+minimum is genuinely its own content width now. #72's shared-width contract (every
+enabled module drawn at the widest enabled module's width) and #77's 260px Media
+track-title cap are both unaffected — the cap sits well above where the floor used to be
+and never depended on it. Do not "fix" `MeasureFpsModule()` back to reintroduce a 186px
+(or any other numeric) floor — that would silently undo this issue's whole point.
+
 **2026-08-23 — issues #61/#62, slider geometry/spacing and dark-grey text/rail brightness.**
 §7's "Slider" entry below is now superseded by a dedicated, separately-measured page:
 `planning/slider-widget-spec.md`, measured from a real render of the shipped
