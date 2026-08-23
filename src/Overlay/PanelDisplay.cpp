@@ -828,6 +828,18 @@ namespace gamescope
 			       "not the Shaders area's Pre-sharpen -- that one is a separate ReShade pass, runs "
 			       "before upscaling, and works with any filter. Both are real and can be combined." )
 			.Range( 0.0f, 100.0f )
+			// D18: the binding has 21 real notches, not 101. The raw value is
+			// 0..20 and the percentage is round(raw x 100 / 20), so the UI
+			// scale moves in fives and a smaller step round-trips straight
+			// back to the value it started from.
+			//
+			// Undeclared, that made Left/Right a DEAD KEY on this row --
+			// AdjustValue's default step is (hi-lo)/100 = 1, Set(61) became
+			// raw 12, and Get() returned 60 again. A drag never showed it
+			// because a drag crosses several notches at once; only the
+			// keyboard moves by exactly one, which is why closing the
+			// keyboard gaps is what found it.
+			.Step( 5.0f )
 			.Unit( "%" )
 			.Default( UiPercentFromRawSharpness( GamescopeUpscaleFilter::FSR, 2 ) )
 			.Keywords( "sharpen sharpness rcas cas crisp clarity ringing" )

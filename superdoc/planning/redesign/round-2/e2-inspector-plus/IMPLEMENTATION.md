@@ -10,6 +10,103 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P4.1, the three deferred defects
+
+D17's 2.0× lane fix, the glyph decision, and P4's five keyboard gaps. Build clean;
+**68/68** meson tests — nine new cases: `overlay_ui` 47 → **54** (468 assertions),
+`overlay_shell` 19 → **21** (255 assertions).
+
+Decisions taken without the user: `../../AUTONOMOUS-DECISIONS.md` **D18**.
+
+### 1 — the drawer no longer covers the sheet's controls
+
+One clamp, at the **top** of `Lane::ForColumn()`, before every derivation:
+
+```
+ForColumn( flWidthBase, flOccludedRightBase = 0 )
+    flWidth = flWidthBase - flOccluded - kM      (when occluded)
+    ... Lw, ctl zone, affordance all follow from the REDUCED width
+```
+
+`Shell::DrawSheetBody()` passes `rcSheetBody.x1 - rcInspector.x0` (less one sheet pad)
+when the ladder's host is `Drawer`, and takes `rcCol`'s right edge from `lane.flWidth`
+so bands and content bodies retreat with the rows. **The regions are untouched** — the
+drawer still floats, still costs no relayout.
+
+*Why the whole width and not just the control zone:* holding `Lw` at its full-width
+value leaves a control zone of **zero** at 2.0× (Lw 348 vs 368 visible). D18.1.
+
+| At 2.0× | drawer closed | drawer open |
+|---|---|---|
+| column width, base | 756 | 368 |
+| `Lw` | 348 | 200 |
+| control zone | 368 | **128** |
+| control right edge, px | 1624 | **848** (drawer starts at 928) |
+
+Tests: three in `overlay_ui` pinning the arithmetic open and closed, two in
+`overlay_shell` that **derive** the occlusion from the real `Slab`/`Solve`/`Regions`
+— so the ladder's numbers moving underneath the fix fails too, which is the shape
+the original defect had.
+
+### 2 — the shell draws its icons
+
+`Fonts.cpp` bakes U+0020..U+00FF. Extending that range **cannot** fix `▸`/`⌕`: no
+bundled Geist face contains either codepoint (D18.2). Three sites are now stroked
+paths in `ui::glyph` (`Chevron`, `Magnifier`, authored on a unit square):
+
+| Was | Now | Why it was wrong |
+|---|---|---|
+| `"inspector ›"` (spine) | drawn chevron, pointing **down** | U+203A is outside the baked range — the one real box glyph. Down is what the mockup *shows*: its `›` is rotated by `writing-mode: vertical-rl`. |
+| `">"` (palette prompt) | drawn magnifier | P4's substitute for U+2315, which the font lacks anyway |
+| `"v"` (dropdown caret) | drawn chevron | a letter pretending to be a triangle, sized by a text measurement |
+
+**Sweep result:** `›` was the only non-Latin-1 character the shell could emit. `▸`,
+`⌕` and the arrows are *not in the C++ at all* — they are `index.html`'s, and
+`RowCtx::Affordance()` (the depth affordance `▸` belongs to) **has no call sites**.
+`…`/`→` appear only in comments. Kept swept by `fonts::FirstUnbakedCodepoint()` +
+`overlay_e2_glyphs`, which walks every registered title, help sentence, option label
+and unit. Live answer: clean.
+
+### 3 — the keyboard, and the ability to press it
+
+`overlay_e2_key "<chord>..."` sends **real key events** into the overlay's own
+`s_InputQueue` — the queue `wlserver_dispatch_key()` writes to — so they take the
+identical path a physical press takes and cannot leave the overlay. This is not D4's
+banned synthetic input; see D18.7 for the full argument.
+
+| Gap | How it closed |
+|---|---|
+| Inspector rows | one index: −1 strip, 0 the entry's row, 1..n params; focus is drawn |
+| CONFIGURE/DETAILS strip | index −1; Left/Right pick a cell, by direction (D16.6) |
+| Dropdown popups | Enter opens, Up/Down highlight, Enter commits, Esc dismisses — **only** for a Choice that really drew as one (D18.6) |
+| `Ctrl+/` and `?` | SPEC §6.3's full-sheet Configure+Details page, back crumb, Esc returns |
+| Text rows | Enter begins entry (`controls::Text` only ever entered from a click) |
+
+**Four defects only a keypress could find** — all four are the "renders but does
+nothing" class, all four had survived multiple phases:
+
+1. **`KEY_SLASH` was missing from `ImGuiKeyForKeycode`**, so `Ctrl+/` produced no
+   `ImGuiKey` — unreachable from a real keyboard too. Punctuation still *typed* via
+   `AddInputCharactersUTF8()`, which is exactly what hid it.
+2. **The dropdown list never rendered.** ImGui closes a popup whose parent is not
+   focused; the slab carries `NoBringToFrontOnFocus` by design. Now drawn by the
+   shell in a sibling window — the palette's own documented pattern.
+3. **Left/Right was a dead key on the sharpness slider**: 21 real notches behind a
+   declared `0..100`, so a step of 1 round-tripped to the same value. `.Step(5)`.
+4. **ImGui's keyboard nav was a second focus model** over the same keys. E2
+   implements §8.2 in full, so it disables nav for its frames.
+
+### Still open after this
+
+- `RowCtx::Affordance()` has **no call sites** — SPEC §2.4's depth affordance is
+  specified and unbuilt. That is why `▸` was never needed.
+- The palette's footer legend overlaps its last row at 2.0× (pre-existing, cosmetic).
+- Only sharpness was proven to have the quantised-binding problem; other converting
+  sliders were not audited.
+- `Escape()` untouched — P5's.
+
+---
+
 ## 2026-08-23 — P4, the command palette and the keyboard
 
 `Ctrl+K` over every Entry **and every Param**, the shared arrow-key adjuster behind
@@ -29,10 +126,12 @@ next frame) and `QueueGeneralSave()` → `PushLiveTheme()` →
 `palette::g_LiveTheme.flDisplayScale`, which is the single value `Shell::Draw()`
 pushes into `ui::SetScale()` each frame. Same commit, same fix, both symptoms.
 
-**A different 2.0× defect is now on the record and is NOT fixed:** at step 2 the
-Inspector becomes a drawer and paints over the sheet's entire control column. It
-matches SPEC §8.3's table, so it is a gap in the design rather than a slip in the
-code — D16.2 says why guessing at it here would have been worse than reporting it.
+**A different 2.0× defect is now on the record and is NOT fixed *in this phase*:** at
+step 2 the Inspector becomes a drawer and paints over the sheet's entire control
+column. It matches SPEC §8.3's table, so it is a gap in the design rather than a slip
+in the code — D16.2 says why guessing at it here would have been worse than reporting
+it. *(Decided by **D17**, fixed in **P4.1** above — the sheet's lane gives way while
+the drawer is open.)*
 
 ### What the palette is made of
 
@@ -80,7 +179,10 @@ with **no reader at all** (D16.5).
 - **Key bindings** — **not** exercised by real keypresses. `ydotool` is banned and
   no other injection route respects that ban, so the bindings are unit-tested and
   console-equivalent-tested only. Stated rather than glossed; see D16's
-  "still open".
+  "still open". *(Superseded in **P4.1**: `overlay_e2_key` sends real key events
+  into the overlay's own input queue without touching the seat — D18.7. Every
+  binding here has since been exercised by an actual keypress, which promptly found
+  four defects the console equivalents could not.)*
 
 ### Keyboard: what P4 added, and what is still unreachable
 

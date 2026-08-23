@@ -60,10 +60,17 @@
 
 #include "convar.h"
 
+// D18: overlay_e2_key pushes onto the overlay's OWN input queue, which is
+// what makes a real key event reachable from a script. See cc_overlay_e2_key.
+#include "SettingsOverlay.h"
+
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#include <linux/input-event-codes.h>
+
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <string>
 
@@ -118,6 +125,48 @@ namespace gamescope::ui::shell
 		// issues #25 and #68 were.
 		std::string   s_sOpenDropdown;
 
+		// D18: which Choice ids actually DREW as a dropdown, last frame.
+		//
+		// The keyboard needs this and cannot derive it. controls::Choice
+		// decides segmented-vs-dropdown by measuring its own cells against
+		// the lane it got (API.md §12.6), so the answer depends on the font,
+		// the scale and the drawer -- and the shell must not re-derive it,
+		// because a second copy of that decision is exactly the drawn-vs-
+		// hit-tested divergence Controls.h exists to prevent.
+		//
+		// Without it, Enter on a SEGMENTED Choice would set s_sOpenDropdown,
+		// the popup would never be drawn (the segmented branch draws no
+		// popup), and the popup key handler would then swallow every key
+		// with nothing on screen -- a keyboard trap, which is worse than the
+		// gap it was meant to close.
+		//
+		// Two vectors and a swap rather than one set: RunKeyboard() runs
+		// before any drawing, so it reads the COMPLETED record of the
+		// previous frame while the current frame refills the other.
+		std::vector<std::string> s_DropdownRows;      // last frame, complete
+		std::vector<std::string> s_DropdownRowsBuild; // this frame, filling
+
+		// Where the open dropdown's row sits, and what it holds. Recorded by
+		// the row painter, consumed by DrawDropdownList() after the slab
+		// window closes -- see that function for why the list cannot be drawn
+		// where the row is.
+		//
+		// The options pointer is borrowed for the rest of ONE frame: it is
+		// set during the draw and read a few calls later in the same frame,
+		// never stored across one. Registry entries are stable for a frame by
+		// construction (SyncDynamicAreas runs at the top, before anything
+		// reads a row), which is the same lifetime rule the rest of the shell
+		// already relies on.
+		Rect                       s_rcDropdownAnchor {};
+		const std::vector<Option> *s_pDropdownOptions = nullptr;
+		int                        s_nDropdownValue   = 0;
+
+		bool DrawsAsDropdown( const std::string &sId )
+		{
+			return std::find( s_DropdownRows.begin(), s_DropdownRows.end(), sId )
+			     != s_DropdownRows.end();
+		}
+
 		// P3b: the id of the destructive Action currently ARMED -- one press
 		// in, one press from happening (Entry::Confirm). One string for the
 		// same reason as the dropdown above: exactly one can be armed, and
@@ -143,6 +192,44 @@ namespace gamescope::ui::shell
 
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
+
+		// =================================================================
+		//  P5-adjacent: the three keyboard holes P4 reported (D18)
+		// =================================================================
+		// P4 shipped Tab to the Inspector and then had nothing to do there:
+		// the region took focus and every key fell through to the sheet
+		// underneath it. Same for the mode strip, which was pointer-only, and
+		// for a downgraded Choice's popup, which ImGui's own nav could not
+		// reach because the shell never enables keyboard nav.
+		//
+		// ONE index covers the whole Inspector, rather than a focus flag per
+		// thing in it:
+		//
+		//     -1  the CONFIGURE / DETAILS mode strip
+		//      0  the entry's own row, under VALUES
+		//    1..n its parameters, in declaration order
+		//
+		// The strip is index -1 and not a separate mode because SPEC §8.2
+		// already says what arrows do -- "move selection within the focused
+		// region", and "inside a control: adjust". The strip IS a segmented
+		// control, so Up onto it and Left/Right across it is the grammar the
+		// table already gives, with no new key to learn or document.
+		int s_nInspectorFocus = 0;
+
+		// The highlighted item in an open dropdown. -1 means "no keyboard
+		// highlight yet", so a popup opened by a click does not silently move
+		// its own selection on the first Enter.
+		int s_nPopupFocus = -1;
+
+		// SPEC §6.3's Reachability Law: "with the Inspector closed, `?` or
+		// `Ctrl+/` on a selected row opens Configure AND Details as one
+		// full-sheet page with a back crumb, replacing the sheet content for
+		// as long as you read it."
+		//
+		// It is a bool and not a stored id: the page always shows the CURRENT
+		// selection, so there is no second copy of "which row" to drift out
+		// of step with the sheet's own.
+		bool s_bExplainPage = false;
 
 		// =================================================================
 		//  P4: the command palette (SPEC §8.2, API.md §10)
@@ -232,6 +319,8 @@ namespace gamescope::ui::shell
 		void SelectById( std::span<std::string_view> args );
 		void SetById( std::span<std::string_view> args );
 		void PaletteCmd( std::span<std::string_view> args );
+		void GlyphSweep( std::span<std::string_view> args );
+		void KeyCmd( std::span<std::string_view> args );
 
 		// The palette's two helpers the console command reaches before the
 		// drawing section defines them.
@@ -293,6 +382,30 @@ namespace gamescope::ui::shell
 			"list | reach. Through gamescopectl the verb and its argument must be ONE quoted "
 			"argument: gamescopectl overlay_e2_palette \"open margin\".",
 			PaletteCmd );
+
+		// D18. The shell shipped "inspector ›" with a box in it, in the one
+		// region you only see AFTER hiding the Inspector -- a corner nobody
+		// visits, which is where a box glyph survives longest. Every string
+		// the shell draws is a declaration in one of a dozen area files, so
+		// no fixture-based test covers them; this walks the LIVE registry
+		// instead, which is the only place all of them exist at once.
+		ConCommand cc_overlay_e2_glyphs(
+			"overlay_e2_glyphs",
+			"Sweep every registered E2 string -- area titles, row and parameter names, help text, "
+			"option labels and units -- for characters outside the font atlas's baked range "
+			"(U+0020..U+00FF), which render as fallback boxes. Prints one line per offender and a "
+			"total; prints nothing but the total when the registry is clean.",
+			GlyphSweep );
+
+		ConCommand cc_overlay_e2_key(
+			"overlay_e2_key",
+			"Send a REAL key event to the overlay: overlay_e2_key <chord> [chord...]. "
+			"Chords are like \"ctrl+k\", \"shift+slash\", \"down\". It appends to the overlay's own "
+			"input queue -- the same one wlserver_dispatch_key() writes to -- so the key is "
+			"processed by the identical path a physical press takes, and it cannot reach any "
+			"window, client or seat outside this overlay. Through gamescopectl the chords must be "
+			"ONE quoted argument: gamescopectl overlay_e2_key \"tab down enter\".",
+			KeyCmd );
 
 		// =================================================================
 		//  Registration
@@ -456,6 +569,20 @@ namespace gamescope::ui::shell
 			s_bModeOverridden = false;   // SPEC §5.1: the mode choice is not remembered
 			if ( pEntry )
 				s_eMode = ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
+
+			// A new selection means new Inspector contents, so the Inspector's
+			// focus goes back to the top rather than pointing at a parameter
+			// index the new row may not even have. Done HERE and not at each
+			// caller: every route into a selection -- click, arrows, palette,
+			// console -- goes through this function, which is what stops the
+			// index outliving the thing it indexes.
+			s_nInspectorFocus = 0;
+
+			// The explain page shows the current selection, so moving the
+			// selection while it is open would silently swap the page out from
+			// under the reader. Closing it puts them back on the sheet they
+			// just moved in, which is where they were looking.
+			s_bExplainPage = false;
 		}
 
 		InspectorMode CurrentMode( const Entry *pEntry )
@@ -465,6 +592,223 @@ namespace gamescope::ui::shell
 			if ( s_bModeOverridden )
 				return s_eMode;
 			return ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
+		}
+
+		// =================================================================
+		//  D18: real key events, from a script
+		// =================================================================
+		// P4 had to report that NO REAL KEYPRESS WAS EVER SENT -- every
+		// binding it added was verified by unit test and by console
+		// equivalents that moved the same variables, never by a key. That is
+		// a large gap for a shell whose headline feature is being
+		// keyboard-driven, and it is the reason the three holes this commit
+		// closes went unnoticed: the console commands drove the STATE, so
+		// state-driving worked, and nobody had a way to press Tab.
+		//
+		// WHY THIS IS NOT THE BANNED THING. D4 forbids synthetic input
+		// because injected events twice escaped into the user's own windows
+		// -- ydotool and friends drive the whole seat, and anything focused
+		// receives them. This drives NOTHING outside gamescope: it appends to
+		// s_InputQueue, the overlay's own producer/consumer queue, which is
+		// read by DrainInputQueue() on the steamcompmgr thread and fed to the
+		// overlay's ImGui context and nowhere else. No compositor seat, no
+		// wl_keyboard, no other client, no other window -- the events cannot
+		// leave the overlay even in principle, because nothing else reads
+		// that queue.
+		//
+		// It is also the SAME path a physical key takes, which is the whole
+		// point: wlserver_dispatch_key() calls SettingsOverlay_QueueKeyEvent()
+		// and so does this, with the same arguments. There is no parallel
+		// input path to keep in step -- a key sent here is processed by
+		// HandleKeyEvent(), mapped by ImGuiKeyForKeycode(), and delivered
+		// through io.AddKeyEvent() exactly as the keyboard's would be, so a
+		// binding verified this way is verified through its real mechanism.
+		struct KeyName
+		{
+			const char *pszName;
+			uint32_t    uCode;
+			const char *pszText;   // the UTF-8 a real xkb lookup would yield, or null
+		};
+
+		// SPEC §8.2's table is the scope: the keys the shell actually binds,
+		// plus the letters the palette's query line needs. Not a general
+		// keyboard -- a general one would be a seat, which is the thing this
+		// is careful not to be.
+		constexpr KeyName kKeyNames[] = {
+			{ "up",        KEY_UP,        nullptr },
+			{ "down",      KEY_DOWN,      nullptr },
+			{ "left",      KEY_LEFT,      nullptr },
+			{ "right",     KEY_RIGHT,     nullptr },
+			{ "enter",     KEY_ENTER,     nullptr },
+			{ "space",     KEY_SPACE,     " "     },
+			{ "esc",       KEY_ESC,       nullptr },
+			{ "escape",    KEY_ESC,       nullptr },
+			{ "tab",       KEY_TAB,       nullptr },
+			{ "backspace", KEY_BACKSPACE, nullptr },
+			{ "slash",     KEY_SLASH,     "/"     },
+			{ "question",  KEY_SLASH,     "?"     },   // shift+slash on most layouts
+		};
+
+		bool LookupKey( const std::string &sName, uint32_t *puCode, const char **ppszText )
+		{
+			for ( const KeyName &k : kKeyNames )
+			{
+				if ( sName == k.pszName )
+				{
+					*puCode = k.uCode;
+					*ppszText = k.pszText;
+					return true;
+				}
+			}
+			// A single letter or digit, which is what the palette's query
+			// needs. KEY_A..KEY_Z are not contiguous in the Linux table, so
+			// this is a lookup rather than arithmetic.
+			if ( sName.size() == 1 )
+			{
+				static constexpr uint32_t kLetters[] = {
+					KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
+					KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R,
+					KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z };
+				static constexpr uint32_t kDigits[] = {
+					KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
+					KEY_5, KEY_6, KEY_7, KEY_8, KEY_9 };
+
+				const char c = sName[ 0 ];
+				if ( c >= 'a' && c <= 'z' ) { *puCode = kLetters[ c - 'a' ]; *ppszText = nullptr; return true; }
+				if ( c >= '0' && c <= '9' ) { *puCode = kDigits[ c - '0' ];  *ppszText = nullptr; return true; }
+			}
+			return false;
+		}
+
+		void KeyCmd( std::span<std::string_view> args )
+		{
+			if ( args.size() < 2 )
+			{
+				console_log.infof( "overlay_e2_key <chord> [chord...]  e.g. \"ctrl+k\", \"down down enter\"" );
+				console_log.infof( "  modifiers: ctrl shift alt   keys: a-z 0-9 up down left right" );
+				console_log.infof( "             enter space esc tab backspace slash question" );
+				return;
+			}
+
+			// gamescopectl collapses everything after the command name into
+			// one field, which wlserver re-splits -- the same convention
+			// overlay_e2_select and overlay_e2_palette already document. So
+			// every argument is treated as a chord and they run in order.
+			for ( size_t nArg = 1; nArg < args.size(); ++nArg )
+			{
+				std::string sChord( args[ nArg ] );
+				std::transform( sChord.begin(), sChord.end(), sChord.begin(),
+					[]( unsigned char c ) { return (char)std::tolower( c ); } );
+
+				bool bCtrl = false, bShift = false, bAlt = false;
+				std::string sKey;
+
+				size_t nPos = 0;
+				while ( nPos <= sChord.size() )
+				{
+					const size_t nPlus = sChord.find( '+', nPos );
+					const std::string sPart = sChord.substr( nPos,
+						nPlus == std::string::npos ? std::string::npos : nPlus - nPos );
+
+					if      ( sPart == "ctrl"  || sPart == "control" ) bCtrl  = true;
+					else if ( sPart == "shift" )                       bShift = true;
+					else if ( sPart == "alt" )                         bAlt   = true;
+					else if ( !sPart.empty() )                         sKey   = sPart;
+
+					if ( nPlus == std::string::npos )
+						break;
+					nPos = nPlus + 1;
+				}
+
+				uint32_t uCode = 0;
+				const char *pszText = nullptr;
+				if ( !LookupKey( sKey, &uCode, &pszText ) )
+				{
+					console_log.errorf( "overlay_e2_key: unknown key \"%s\"", sKey.c_str() );
+					return;
+				}
+
+				// Modifiers down, key down, key up, modifiers up -- the exact
+				// order and the exact events a real keyboard produces, which
+				// is what makes the chord's Ctrl actually held at the moment
+				// the key arrives.
+				if ( bCtrl )  SettingsOverlay_QueueKeyEvent( KEY_LEFTCTRL,  true );
+				if ( bShift ) SettingsOverlay_QueueKeyEvent( KEY_LEFTSHIFT, true );
+				if ( bAlt )   SettingsOverlay_QueueKeyEvent( KEY_LEFTALT,   true );
+
+				// Text accompanies a press only when no Ctrl/Alt is held --
+				// which is what xkb_state_key_get_utf8() yields on the real
+				// path, where a modified key produces a control character
+				// that wlserver_dispatch_key() already declines to forward.
+				std::string sText;
+				if ( pszText && !bCtrl && !bAlt )
+					sText = pszText;
+				else if ( !bCtrl && !bAlt && sKey.size() == 1 &&
+				          ( ( sKey[ 0 ] >= 'a' && sKey[ 0 ] <= 'z' ) ||
+				            ( sKey[ 0 ] >= '0' && sKey[ 0 ] <= '9' ) ) )
+					sText = bShift ? std::string( 1, (char)std::toupper( sKey[ 0 ] ) ) : sKey;
+
+				SettingsOverlay_QueueKeyEvent( uCode, true, sText );
+				SettingsOverlay_QueueKeyEvent( uCode, false );
+
+				if ( bAlt )   SettingsOverlay_QueueKeyEvent( KEY_LEFTALT,   false );
+				if ( bShift ) SettingsOverlay_QueueKeyEvent( KEY_LEFTSHIFT, false );
+				if ( bCtrl )  SettingsOverlay_QueueKeyEvent( KEY_LEFTCTRL,  false );
+			}
+		}
+
+		// D18's live sweep. See cc_overlay_e2_glyphs for why this walks the
+		// registry rather than being a unit test: the strings it checks are
+		// declared across a dozen area files and only ever coexist here.
+		void GlyphSweep( std::span<std::string_view> args )
+		{
+			(void)args;
+			int nBad = 0;
+
+			// One checker, called on every string, so a new text-bearing
+			// field cannot be half-covered: it is either passed to this or it
+			// is not swept at all, and "not swept at all" is visible here.
+			const auto Check = [ & ]( const char *pszWhere, const char *pszWhat,
+			                          const std::string &s ) {
+				const uint32_t cp = fonts::FirstUnbakedCodepoint( s.c_str() );
+				if ( cp == 0 )
+					return;
+				nBad++;
+				console_log.errorf( "  U+%04X in %s %s: \"%s\"",
+					cp, pszWhere, pszWhat, s.c_str() );
+			};
+
+			for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+			{
+				const Area &area = Reg().AreaAt( a );
+				Check( area.Id().c_str(), "title", area.Title() );
+
+				for ( size_t i = 0; i < area.EntryCount(); ++i )
+				{
+					const Entry &e = area.EntryAt( i );
+					Check( e.Id().c_str(), "title", e.Title() );
+					Check( e.Id().c_str(), "help",  e.HelpText() );
+					Check( e.Id().c_str(), "unit",  e.Unit() );
+					for ( const Option &o : e.Options() )
+						Check( e.Id().c_str(), "option", o.pszLabel ? o.pszLabel : "" );
+
+					for ( size_t p = 0; p < e.ParamCount(); ++p )
+					{
+						const Parameter &pa = e.ParamAt( p );
+						Check( pa.Id().c_str(), "param title", pa.Title() );
+						Check( pa.Id().c_str(), "param help",  pa.HelpText() );
+						Check( pa.Id().c_str(), "param unit",  pa.Unit() );
+						for ( const Option &o : pa.Options() )
+							Check( pa.Id().c_str(), "param option", o.pszLabel ? o.pszLabel : "" );
+					}
+				}
+			}
+
+			if ( nBad == 0 )
+				console_log.infof( "E2 glyphs: registry clean -- every string inside U+%04X..U+%04X",
+					fonts::kBakedFirst, fonts::kBakedLast );
+			else
+				console_log.errorf( "E2 glyphs: %d string(s) would draw a fallback box", nBad );
 		}
 
 		void SelectById( std::span<std::string_view> args )
@@ -858,10 +1202,21 @@ namespace gamescope::ui::shell
 		{
 			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Col( Role::LineRegion ) );
 
-			char szCrumb[ 128 ];
-			snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s",
-				pArea ? SectionName( pArea->GetSection() ) : "",
-				pArea ? pArea->Title().c_str() : "" );
+			char szCrumb[ 160 ];
+			// D18: SPEC §6.3 asks the explanation page for "a back crumb".
+			// It is the same crumb with one more segment, not a second
+			// header -- so the page reads as somewhere you navigated TO,
+			// and Esc's meaning ("go back one") is legible from the screen.
+			const Entry *pExplained = s_bExplainPage ? SelectedEntry() : nullptr;
+			if ( pExplained )
+				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s  /  %s   -   Esc back",
+					pArea ? SectionName( pArea->GetSection() ) : "",
+					pArea ? pArea->Title().c_str() : "",
+					pExplained->Title().c_str() );
+			else
+				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s",
+					pArea ? SectionName( pArea->GetSection() ) : "",
+					pArea ? pArea->Title().c_str() : "" );
 			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 			       TypeRole::Section, Col( Role::TextPrimary ), szCrumb );
 
@@ -890,7 +1245,7 @@ namespace gamescope::ui::shell
 			HLine( rc.x0, rc.x1, rc.y0, Col( Role::LineRegion ) );
 			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 			       TypeRole::Meta, Col( Role::TextMeta ),
-			       "^I  inspector      Tab  region      Esc  close" );
+			       "^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back" );
 		}
 
 		// =================================================================
@@ -1014,40 +1369,42 @@ namespace gamescope::ui::shell
 					}
 					if ( !res.bSegmented )
 					{
-						// The dropdown half. Opened here, drawn here, closed
-						// here -- so a downgraded Choice is a working control
-						// rather than a correct-looking one that does nothing.
+						// This row IS a dropdown this frame -- recorded so
+						// the keyboard can tell, next frame, whether Enter
+						// here should open a popup. See s_DropdownRows.
+						s_DropdownRowsBuild.push_back( sPopupKey );
+
 						if ( res.bWantsPopup )
 						{
 							s_sOpenDropdown = sPopupKey;
-							ImGui::OpenPopup( "##dd" );
+							s_nPopupFocus = -1;
 						}
-						const ImRect rcRow = row.Bounds();
-						ImGui::SetNextWindowPos( ImVec2( rcRow.Min.x, rcRow.Max.y ) );
-						if ( ImGui::BeginPopup( "##dd" ) )
+
+						// D18: the OPEN dropdown's list is not drawn here.
+						// This records where it belongs; DrawDropdownList()
+						// paints it after the slab window has closed.
+						//
+						// WHY IT MOVED. This used to be an ImGui popup
+						// (OpenPopup / BeginPopup) and the list NEVER
+						// APPEARED -- the caret lit up, the state was right,
+						// and nothing was on screen. ImGui closes a popup
+						// whose parent is not the focused window, and the
+						// slab carries ImGuiWindowFlags_NoBringToFrontOnFocus
+						// precisely so it can never come forward, so the
+						// popup was opened and closed again every frame.
+						// That is the SAME trap the palette hit and
+						// documented (see DrawPalette's call site) -- and it
+						// went unnoticed here because opening a dropdown
+						// needed a click, which this project is forbidden to
+						// synthesise, so no test and no screenshot had ever
+						// opened one.
+						if ( s_sOpenDropdown == sPopupKey )
 						{
-							bool bPicked = false;
-							for ( const Option &opt : decl.Options() )
-							{
-								if ( ImGui::Selectable( opt.pszLabel ? opt.pszLabel : "",
-									opt.nValue == n ) )
-								{
-									decl.Binding().Set( Value{ opt.nValue } );
-									bPicked = true;
-								}
-							}
-							ImGui::EndPopup();
-							if ( bPicked )
-							{
-								s_sOpenDropdown.clear();
-								return true;
-							}
-						}
-						else if ( bOpen )
-						{
-							// ImGui closed it (click-away, Esc). Track that,
-							// or the caret would stay lit forever.
-							s_sOpenDropdown.clear();
+							const ImRect rcRow = row.Bounds();
+							s_rcDropdownAnchor = { rcRow.Min.x, rcRow.Min.y,
+							                       rcRow.Max.x, rcRow.Max.y };
+							s_pDropdownOptions = &decl.Options();
+							s_nDropdownValue   = n;
 						}
 					}
 					return false;
@@ -1616,7 +1973,10 @@ namespace gamescope::ui::shell
 			ImGui::EndChild();
 		}
 
-		void DrawSheetBody( const Rect &rc, const Area *pArea )
+		// flOccludedPx: how much of `rc`'s right side the Inspector drawer
+		// floats over, 0 when it does not (D17). The sheet's REGION is
+		// deliberately unchanged -- only the lane inside it gives way.
+		void DrawSheetBody( const Rect &rc, const Area *pArea, float flOccludedPx = 0.0f )
 		{
 			if ( !pArea )
 				return;
@@ -1664,8 +2024,19 @@ namespace gamescope::ui::shell
 			{
 				const float flPad   = Px( tok::kSheetPad );
 				const float flColW  = rc.Width() - 2.0f * flPad;
-				const Lane  lane    = Lane::ForColumn( flColW / Scale() );
-				const Rect  rcCol   { rc.x0 + flPad, rc.y0, rc.x0 + flPad + flColW, rc.y1 };
+
+				// The drawer's overlap is measured against the region; the
+				// COLUMN already stops one pad short of it, and that pad is the
+				// first thing the drawer eats.
+				const float flOccludedCol = std::max( 0.0f, flOccludedPx - flPad );
+				const Lane  lane    = Lane::ForColumn( flColW / Scale(), flOccludedCol / Scale() );
+
+				// Everything in the column shares the lane's right edge, so the
+				// group bands and a content body retreat from the drawer with
+				// the rows rather than sliding underneath it. With no drawer
+				// lane.flWidth is flColW exactly, so this is a no-op.
+				const Rect  rcCol   { rc.x0 + flPad, rc.y0,
+				                      rc.x0 + flPad + Px( lane.flWidth ), rc.y1 };
 				float       y       = rc.y0 + Px( tok::kM );
 
 				// A band is emitted when the group index CHANGES, so a group
@@ -1758,6 +2129,14 @@ namespace gamescope::ui::shell
 				else
 					snprintf( szCell, sizeof( szCell ), "%s  %d",
 						eMode == InspectorMode::Configure ? "CONFIGURE" : "DETAILS", nCount );
+
+				// D18: the strip is keyboard-reachable now (Tab to the
+				// Inspector, Up onto index -1), so it needs to be able to
+				// SHOW that it has the focus. Without this the keys worked
+				// and nothing on screen said so, which is the same "renders
+				// but does nothing" in reverse and just as hard to trust.
+				if ( s_eFocusRegion == Region::Inspector && s_nInspectorFocus < 0 )
+					Fill( { rcCell.x0, rcCell.y0, rcCell.x1, rcCell.y1 }, Accent( 0.10f ) );
 
 				Label( rcCell, TypeRole::Section,
 				       bOn ? Col( Role::AccentSeg ) : ( bRo ? Col( Role::TextMeta ) : Col( Role::TextLabel ) ),
@@ -1864,7 +2243,13 @@ namespace gamescope::ui::shell
 			y += Px( shelltok::kSectionLine );
 
 			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
-			DrawEntryRow( entry, lane, rcIn.x0, y, false );
+			// D18: index 0 is the entry's own row. It reuses the row's
+			// existing SELECTED fill rather than inventing a focus treatment
+			// -- inside the Inspector "selected" and "focused" are the same
+			// thing, because the Inspector only ever shows one entry.
+			const bool bFocusOwnRow =
+				( s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 );
+			DrawEntryRow( entry, lane, rcIn.x0, y, bFocusOwnRow );
 			y += Px( tok::kRowH ) * (float)LinesFor( entry );
 
 			// index.html's `parameters  <n> of 6` header. The denominator is
@@ -1884,6 +2269,18 @@ namespace gamescope::ui::shell
 			{
 				const Parameter &param = entry.ParamAt( i );
 				const RowCtx row = RowCtx::ForRow( lane, rcIn.x0, y );
+
+				// D18: params are keyboard-focusable (index 1..n), and the
+				// fill is the same Accent 8% a selected sheet row uses -- one
+				// visual language for "the keys are pointed here", wherever
+				// here happens to be.
+				if ( s_eFocusRegion == Region::Inspector &&
+				     s_nInspectorFocus == (int)i + 1 )
+				{
+					const ImRect rcF = row.Bounds();
+					Fill( { rcF.Min.x, rcF.Min.y, rcF.Max.x, rcF.Max.y }, Accent( 0.08f ) );
+				}
+
 				HLine( row.Bounds().Min.x, row.Bounds().Max.x, row.Bounds().Max.y - Hairline(), Col( Role::Line ) );
 
 				// SPEC §3.13's inheritance: a param under a disabled parent is
@@ -2180,6 +2577,59 @@ namespace gamescope::ui::shell
 			ImGui::PopStyleColor();
 		}
 
+		// =================================================================
+		//  The full-sheet explanation page (SPEC §6.3, §8.2 -- D18)
+		// =================================================================
+		// "With the Inspector closed, `?` or `Ctrl+/` on a selected row opens
+		// Configure AND Details as one full-sheet page with a back crumb,
+		// replacing the sheet content for as long as you read it."
+		//
+		// This is the Reachability Law's third clause, and it was the one
+		// piece of it never built: params render inline (P3), the palette
+		// reaches every setting (P4), and explanation had no route at all
+		// without the Inspector.
+		//
+		// It calls the SAME two bodies the Inspector calls, in the same
+		// order, with a wider rect. That is the whole implementation, and it
+		// is deliberate: an explanation page that formatted its own version
+		// of Configure would be a second painter for the same declaration --
+		// SPEC §5.2 clause 0's exact prohibition, and the thing that makes
+		// "one code path" true here rather than merely claimed.
+		void DrawExplainPage( const Rect &rc, const Entry &entry )
+		{
+			ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
+			if ( ImGui::BeginChild( "##explain", ImVec2( rc.Width(), rc.Height() ),
+				ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
+			{
+				// Same scroll idiom as the Inspector body: lay out from the
+				// child's own cursor (ImGui has already subtracted the
+				// scroll offset) and hand the measured height back as a
+				// Dummy. Configure + Details together are taller than the
+				// Inspector's body ever is, so this page needs it more.
+				const ImVec2 vOrigin = ImGui::GetCursorScreenPos();
+				Rect rcBody = rc;
+				rcBody.y0 = vOrigin.y;
+				rcBody.y1 = vOrigin.y + rc.Height();
+
+				float flBottom = DrawConfigure( rcBody, entry );
+
+				// The seam between the two halves, so the page reads as two
+				// sections rather than one long run of rows.
+				flBottom += Px( tok::kXL );
+				HLine( rc.x0 + Px( tok::kInspectorPad ), rc.x1 - Px( tok::kInspectorPad ),
+				       flBottom, Col( Role::LineRegion ) );
+				flBottom += Px( tok::kM );
+
+				rcBody.y0 = flBottom;
+				flBottom = DrawDetails( rcBody, entry );
+
+				ImGui::SetCursorScreenPos( vOrigin );
+				ImGui::Dummy( ImVec2( 1.0f,
+					std::max( 0.0f, flBottom - vOrigin.y ) + Px( tok::kInspectorPad ) ) );
+			}
+			ImGui::EndChild();
+		}
+
 		// ---- the hidden Inspector's spine (SPEC §8.05, from E1) -----------
 		void DrawSpine( const Rect &rc )
 		{
@@ -2207,25 +2657,38 @@ namespace gamescope::ui::shell
 			// variant means a second baked atlas for eleven characters.
 			// Stacked letters keep both, and at 20 base units wide the
 			// column is one glyph wide either way.
-			static const char *const kSpineText = "inspector ›";
+			// D18: the marker after the word was "›" (U+203A), which is
+			// OUTSIDE Fonts.cpp's baked Latin-1 range and drew as a fallback
+			// box -- the one real box glyph the shell had. It is a chevron
+			// now, and a drawn one.
+			//
+			// It points DOWN, which is the faithful reading of the mockup
+			// rather than a departure from it: index.html sets the spine
+			// `writing-mode: vertical-rl`, so its `›` is rotated a quarter
+			// turn clockwise along with the letters and points down on
+			// screen. The letters here are stacked instead of rotated, so
+			// the mark is rotated to match what the mockup actually shows.
+			static const char *const kSpineText = "inspector";
 			const ImU32 col = bHovered ? Col( Role::AccentSeg ) : Col( Role::TextMeta );
 			ImGui::PushFont( FontFor( TypeRole::Meta ) );
 			const float flLineH = ImGui::GetFontSize() * 0.92f;
+			// Nine letters, one blank line, one chevron -- the same eleven
+			// slots the string used to occupy, so the spine's vertical
+			// centring is unchanged.
 			const float flTotal = flLineH * 11.0f;
 			float y = rc.y0 + ( rc.Height() - flTotal ) * 0.5f;
-			for ( const char *p = kSpineText; *p; )
+			for ( const char *p = kSpineText; *p; ++p )
 			{
-				// Step one UTF-8 code point at a time -- the trailing "›"
-				// is multi-byte and drawing half of it draws nothing.
-				const char *pNext = p + 1;
-				while ( ( *pNext & 0xC0 ) == 0x80 ) pNext++;
-				const ImVec2 size = ImGui::CalcTextSize( p, pNext );
+				const ImVec2 size = ImGui::CalcTextSize( p, p + 1 );
 				ImGui::GetWindowDrawList()->AddText(
-					ImVec2( rc.x0 + ( rc.Width() - size.x ) * 0.5f, y ), col, p, pNext );
+					ImVec2( rc.x0 + ( rc.Width() - size.x ) * 0.5f, y ), col, p, p + 1 );
 				y += flLineH;
-				p = pNext;
 			}
 			ImGui::PopFont();
+
+			y += flLineH;   // the blank slot the space used to hold
+			glyph::Chevron( ImVec2( rc.x0 + rc.Width() * 0.5f, y + flLineH * 0.5f ),
+			                Px( tok::kGlyphChevron ), glyph::Dir::Down, col );
 		}
 
 		// =================================================================
@@ -2477,6 +2940,147 @@ namespace gamescope::ui::shell
 		// The panel itself. index.html's `.pal`: 820 wide, anchored 14% down
 		// the slab, a 52-tall query line, a scrolling result list of 38-tall
 		// rows and a 36-tall legend.
+		// =================================================================
+		//  The open dropdown's list (D18)
+		// =================================================================
+		// Drawn from the shell's own draw list in a sibling window opened
+		// AFTER the slab's, for the two reasons the palette records at its
+		// own call site and one more that is specific to popups:
+		//
+		//   1. z-order. The rows live in a CHILD window (`##sheetrows`,
+		//      `##inspbody`), and a child's draw list is emitted after its
+		//      parent's regardless of fill order -- so a list painted into
+		//      the slab's list renders UNDERNEATH the very row it drops from.
+		//   2. focus. ImGui closes an open popup whose parent window is not
+		//      the focused one, and the slab carries NoBringToFrontOnFocus
+		//      specifically so it never comes forward. An ImGui popup here
+		//      was therefore opened and closed on the same frame, forever.
+		//
+		// So the list is ours: our rect, our hit test, our keyboard. The
+		// keyboard state it draws (s_nPopupFocus) is the same state
+		// RunKeyboard() moves -- there is no second copy and no parallel
+		// path, which is the property that lets the console drive it too.
+		void DrawDropdownList( const Rect &rcSlab )
+		{
+			if ( s_sOpenDropdown.empty() )
+				return;
+
+			// Self-heal: the row that owns this dropdown was not drawn this
+			// frame -- the user navigated to another area, or a dynamic area
+			// rebuilt underneath it. Leaving the state set would leave the
+			// keyboard captured by a list that is not on screen, which is the
+			// worst of the failure modes this whole commit is closing.
+			if ( s_pDropdownOptions == nullptr || s_pDropdownOptions->empty() )
+			{
+				s_sOpenDropdown.clear();
+				s_nPopupFocus = -1;
+				return;
+			}
+
+			const std::vector<Option> &opts = *s_pDropdownOptions;
+			const float flRowH = Px( 34.0f );
+			const float flPadY = Px( tok::kXS );
+
+			// Right-aligned under the control, because the control is
+			// right-aligned in its lane and a list that dropped from the
+			// row's LEFT edge would not line up with the thing it came from.
+			float flW = Px( 180.0f );
+			for ( const Option &o : opts )
+				flW = std::max( flW, MeasureText( TypeRole::Value,
+					o.pszLabel ? o.pszLabel : "" ).x + Px( tok::kXL ) * 2.0f );
+			flW = std::min( flW, s_rcDropdownAnchor.Width() );
+
+			const float flH = flRowH * (float)opts.size() + flPadY * 2.0f;
+			const float x1  = std::min( s_rcDropdownAnchor.x1, rcSlab.x1 - Px( tok::kS ) );
+			const float x0  = x1 - flW;
+
+			// Flip above the row when there is no room below it -- a list
+			// that runs off the bottom of the slab is the same "the control
+			// is there but you cannot reach it" failure the drawer had.
+			float y0 = s_rcDropdownAnchor.y1;
+			if ( y0 + flH > rcSlab.y1 - Px( tok::kS ) )
+				y0 = std::max( rcSlab.y0, s_rcDropdownAnchor.y0 - flH );
+
+			const Rect rc { x0, y0, x1, y0 + flH };
+
+			ImGui::SetNextWindowPos( ImVec2( rcSlab.x0, rcSlab.y0 ) );
+			ImGui::SetNextWindowSize( ImVec2( rcSlab.Width(), rcSlab.Height() ) );
+			ImGui::SetNextWindowFocus();
+			ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+
+			const ImGuiWindowFlags flags =
+				ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+				ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoBackground;
+
+			if ( ImGui::Begin( "##e2dropdown", nullptr, flags ) )
+			{
+				// Two coats, as the palette does: Role::Surface is the slab's
+				// own translucency, which is right for a region and wrong for
+				// a list that must be read against the rows behind it.
+				Fill( rc, Col( Role::Surface ) );
+				Fill( rc, Col( Role::Surface ) );
+				ImGui::GetWindowDrawList()->AddRect(
+					ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ),
+					Col( Role::AccentBase ), 0.0f, 0, Hairline() );
+
+				for ( size_t i = 0; i < opts.size(); ++i )
+				{
+					const Rect rcItem { rc.x0, rc.y0 + flPadY + flRowH * (float)i,
+					                    rc.x1, rc.y0 + flPadY + flRowH * (float)( i + 1 ) };
+
+					ImGui::SetCursorScreenPos( ImVec2( rcItem.x0, rcItem.y0 ) );
+					ImGui::PushID( (int)i );
+					const bool bClicked = ImGui::InvisibleButton( "##opt",
+						ImVec2( rcItem.Width(), rcItem.Height() ) );
+					const bool bHovered = ImGui::IsItemHovered();
+					ImGui::PopID();
+
+					// The keyboard's highlight wins once it exists; before
+					// that the CURRENT value is marked. Exactly one row is
+					// marked either way -- see RunKeyboard's popup rung.
+					const bool bMarked = s_nPopupFocus >= 0
+						? ( (int)i == s_nPopupFocus )
+						: ( opts[ i ].nValue == s_nDropdownValue );
+
+					if ( bMarked )
+						Fill( rcItem, Accent( 0.16f ) );
+					else if ( bHovered )
+						Fill( rcItem, palette::White( 0.06f ) );
+
+					Label( { rcItem.x0 + Px( tok::kM ), rcItem.y0, rcItem.x1 - Px( tok::kM ), rcItem.y1 },
+					       TypeRole::Value,
+					       bMarked ? Col( Role::AccentSeg ) : Col( Role::TextPrimary ),
+					       opts[ i ].pszLabel ? opts[ i ].pszLabel : "", TextAlign::Right );
+
+					if ( bClicked )
+					{
+						if ( const Entry *pE = Reg().FindEntry( s_sOpenDropdown ) )
+							pE->Binding().Set( Value{ opts[ i ].nValue } );
+						else if ( const Parameter *pP = Reg().FindParam( s_sOpenDropdown ) )
+							pP->Binding().Set( Value{ opts[ i ].nValue } );
+						s_sOpenDropdown.clear();
+						s_nPopupFocus = -1;
+					}
+				}
+
+				// A click anywhere else dismisses, which is what every
+				// dropdown everywhere does and what the ImGui popup used to
+				// give for free.
+				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) &&
+				     !rc.Contains( ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y ) &&
+				     !s_rcDropdownAnchor.Contains( ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y ) )
+				{
+					s_sOpenDropdown.clear();
+					s_nPopupFocus = -1;
+				}
+			}
+			ImGui::End();
+			ImGui::PopStyleVar( 2 );
+		}
+
 		void DrawPalette( const Rect &rcSlab, const std::vector<PaletteItem> &items )
 		{
 			const float flW    = std::min( Px( 820.0f ), ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
@@ -2519,13 +3123,15 @@ namespace gamescope::ui::shell
 			                0.0f, 0, Hairline() );
 
 			// ---- query line ------------------------------------------------
-			// The prompt is ">" and not the mockup's magnifier: Fonts.cpp
-			// bakes Basic Latin + Latin-1 only (this UI is English-only), and
-			// U+2315 would draw as a fallback box. Every glyph the palette
-			// uses is inside that range for the same reason.
+			// D18: the prompt is the mockup's magnifier again. P4 substituted
+			// ">" because U+2315 falls outside Fonts.cpp's baked Latin-1
+			// range -- correct at the time, but widening the range would not
+			// have helped: no bundled Geist face carries U+2315 at all. It is
+			// drawn instead, so it is immune to both.
 			const Rect rcQ = { rc.x0, rc.y0, rc.x1, rc.y0 + flQH };
-			Label( { rcQ.x0 + flPad, rcQ.y0, rcQ.x1, rcQ.y1 }, TypeRole::Value,
-			       Col( Role::AccentValue ), ">" );
+			glyph::Magnifier( ImVec2( rcQ.x0 + flPad + Px( tok::kGlyphSearch ) * 0.5f,
+			                          ( rcQ.y0 + rcQ.y1 ) * 0.5f ),
+			                  Px( tok::kGlyphSearch ), Col( Role::AccentValue ) );
 
 			const float flQTextX = rcQ.x0 + flPad + Px( 26.0f );
 			if ( s_sPaletteQuery.empty() )
@@ -2755,6 +3361,101 @@ namespace gamescope::ui::shell
 			if ( s_bPaletteOpen )
 				return;
 
+			// D18: an OPEN DROPDOWN owns the keyboard next, for the same
+			// reason the palette does -- it is a list on top of the shell,
+			// and an arrow key belongs to the thing in front.
+			//
+			// Why this is hand-driven rather than ImGui's popup nav: the
+			// overlay never sets ImGuiConfigFlags_NavEnableKeyboard, so
+			// BeginPopup() gets no nav focus and Selectable() never becomes
+			// keyboard-reachable. Turning nav on globally would hand every
+			// arrow key in the shell to ImGui's navigation and take the
+			// adjust grammar of SPEC §8.2 away from the rows -- the same
+			// trade D16.3 refused for InputText, refused again here.
+			if ( !s_sOpenDropdown.empty() )
+			{
+				const Entry     *pE = Reg().FindEntry( s_sOpenDropdown );
+				const Parameter *pP = pE ? nullptr : Reg().FindParam( s_sOpenDropdown );
+				const std::vector<Option> *pOpts =
+					pE ? &pE->Options() : pP ? &pP->Options() : nullptr;
+
+				if ( !pOpts || pOpts->empty() )
+				{
+					s_sOpenDropdown.clear();
+					s_nPopupFocus = -1;
+					return;
+				}
+
+				if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
+				{
+					s_sOpenDropdown.clear();
+					s_nPopupFocus = -1;
+					return;
+				}
+
+				const int nCount = (int)pOpts->size();
+				const int nStep  = ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ? +1
+				                 : ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ? -1 : 0;
+				if ( nStep != 0 )
+				{
+					// First arrow lands on the CURRENT value rather than
+					// jumping off it, so "open, press Down, press Enter"
+					// moves by exactly one -- which is what the same gesture
+					// does in the sheet.
+					if ( s_nPopupFocus < 0 )
+					{
+						const Value v = pE ? pE->Binding().Get() : pP->Binding().Get();
+						const int nNow = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
+						s_nPopupFocus = 0;
+						for ( int i = 0; i < nCount; ++i )
+							if ( ( *pOpts )[ i ].nValue == nNow )
+								s_nPopupFocus = i;
+					}
+					else
+					{
+						// Stops at both ends rather than wrapping -- D16.6's
+						// rule for a choice, applied to the same choice in
+						// its other host.
+						s_nPopupFocus = std::clamp( s_nPopupFocus + nStep, 0, nCount - 1 );
+					}
+					return;
+				}
+
+				if ( ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+				     ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) ||
+				     ImGui::IsKeyPressed( ImGuiKey_Space, false ) )
+				{
+					if ( s_nPopupFocus >= 0 && s_nPopupFocus < nCount )
+					{
+						const Value vNew{ ( *pOpts )[ s_nPopupFocus ].nValue };
+						if ( pE ) pE->Binding().Set( vNew );
+						else      pP->Binding().Set( vNew );
+					}
+					s_sOpenDropdown.clear();
+					s_nPopupFocus = -1;
+					return;
+				}
+				return;   // the popup swallows everything else
+			}
+
+			// D18: Ctrl+/ or ? -- "Configure + Details for the selected row
+			// (full-sheet page when the Inspector is hidden)", SPEC §8.2 and
+			// §6.3. The page is drawn whatever the host is; with a column or
+			// a drawer up it is the same two bodies in a wider place, which
+			// is strictly more readable rather than a different answer.
+			//
+			// Both spellings are accepted because "?" is Shift+Slash only on
+			// some layouts, and this shell reads keys through ImGui's
+			// physical key enum -- so the layout-independent binding is the
+			// Ctrl one and the "?" is the convenience.
+			if ( ImGui::IsKeyPressed( ImGuiKey_Slash, false ) &&
+			     ( io.KeyCtrl || io.KeyShift ) )
+			{
+				if ( SelectedEntry() )
+					s_bExplainPage = !s_bExplainPage;
+				return;
+			}
+
 			// Ctrl+I: "cycle Inspector host: column -> drawer -> hidden".
 			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_I, false ) )
 			{
@@ -2807,7 +3508,15 @@ namespace gamescope::ui::shell
 			// itself (which SettingsOverlay.cpp owns).
 			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
 			{
-				if ( Host() == InspectorHost::Drawer )
+				// D18: the explain page is the topmost rung below the
+				// palette -- it REPLACES the sheet, so Esc has to give the
+				// sheet back before it starts closing regions underneath it.
+				// Note this deliberately does not call Select(nullptr): the
+				// row you were reading about stays selected, which is the
+				// "back crumb" behaviour SPEC §6.3 asks for.
+				if ( s_bExplainPage )
+					s_bExplainPage = false;
+				else if ( Host() == InspectorHost::Drawer )
 					SetHost( InspectorHost::Hidden );
 				else if ( SelectedEntry() )
 					Select( nullptr );
@@ -2834,6 +3543,132 @@ namespace gamescope::ui::shell
 				return;
 			}
 
+			// D18: the Inspector, which Tab could reach and nothing could
+			// then drive. Everything below this block is the SHEET's
+			// keyboard; without the early return the Inspector's arrows fell
+			// through to it and moved the sheet selection instead -- which is
+			// what "focused but unreachable" looked like from the outside.
+			if ( s_eFocusRegion == Region::Inspector )
+			{
+				const Entry *pIn = SelectedEntry();
+				if ( !pIn )
+				{
+					// Overview: nothing to focus. Left crosses back, so the
+					// region is never a dead end you can only Tab out of.
+					if ( ImGui::IsKeyPressed( ImGuiKey_LeftArrow, true ) )
+						s_eFocusRegion = Region::Sheet;
+					return;
+				}
+
+				const InspectorMode eMode = CurrentMode( pIn );
+
+				// What is focusable right now. DETAILS holds readouts only,
+				// so the strip is the only stop in it -- the index is clamped
+				// rather than the keys being special-cased, so there is one
+				// rule instead of two.
+				const int nLast = ( eMode == InspectorMode::Configure && !pIn->ReadOnly() )
+					? (int)pIn->ParamCount() : -1;
+				s_nInspectorFocus = std::clamp( s_nInspectorFocus, -1, nLast );
+
+				if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) )
+					s_nInspectorFocus = std::clamp( s_nInspectorFocus + 1, -1, nLast );
+				if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow, true ) )
+					s_nInspectorFocus = std::clamp( s_nInspectorFocus - 1, -1, nLast );
+
+				const int nDirIn = ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) ? +1
+				                 : ImGui::IsKeyPressed( ImGuiKey_LeftArrow,  true ) ? -1 : 0;
+
+				// ---- the mode strip ------------------------------------
+				if ( s_nInspectorFocus < 0 )
+				{
+					if ( nDirIn != 0 )
+					{
+						// The strip is a two-cell segmented control, so
+						// Left/Right pick a cell -- and, like every other
+						// choice in the shell (D16.6), take their value from
+						// the DIRECTION rather than toggling, so holding a
+						// key settles instead of oscillating.
+						s_eMode = nDirIn > 0 ? InspectorMode::Details : InspectorMode::Configure;
+						s_bModeOverridden = true;
+					}
+					return;
+				}
+
+				// ---- a row: the entry itself (0) or a parameter (1..n) ---
+				const bool bOwnRow = ( s_nInspectorFocus == 0 );
+				const Parameter *pParam = bOwnRow ? nullptr
+					: &pIn->ParamAt( (size_t)( s_nInspectorFocus - 1 ) );
+
+				const std::string sReason = bOwnRow ? pIn->DisabledReason() : pParam->DisabledReason();
+				const bool bBlocked = !sReason.empty() || !pIn->DisabledReason().empty();
+
+				const bool bActivateIn = ImGui::IsKeyPressed( ImGuiKey_Space, false ) ||
+				                         ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+				                         ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false );
+				if ( bActivateIn && !bBlocked )
+				{
+					const Kind eKind = bOwnRow ? pIn->GetKind() : pParam->GetKind();
+					const AnyBind &bind = bOwnRow ? pIn->Binding() : pParam->Binding();
+
+					if ( eKind == Kind::Switch && bind.IsBound() )
+					{
+						const Value v = bind.Get();
+						if ( const bool *p = std::get_if<bool>( &v ) )
+							bind.Set( Value{ !*p } );
+					}
+					else if ( eKind == Kind::Choice )
+					{
+						// Opening the dropdown from the keyboard is what
+						// makes a downgraded Choice reachable here at all;
+						// the popup's own keys are handled at the top of
+						// this function. Only when it really drew as one --
+						// the Inspector's narrow lane downgrades far more
+						// often than the sheet's, but not always.
+						const std::string sId = bOwnRow ? pIn->Id() : pParam->Id();
+						if ( DrawsAsDropdown( sId ) )
+						{
+							s_sOpenDropdown = sId;
+							s_nPopupFocus = -1;
+						}
+					}
+					else if ( eKind == Kind::Text )
+					{
+						s_sEditingText = bOwnRow ? pIn->Id() : pParam->Id();
+					}
+					else if ( bOwnRow && eKind == Kind::Action )
+					{
+						if ( pIn->NeedsConfirm() && s_sArmedAction != pIn->Id() )
+						{
+							s_sArmedAction = pIn->Id();
+							s_flArmedAt = (float)ImGui::GetTime();
+						}
+						else
+						{
+							pIn->Invoke();
+							s_sArmedAction.clear();
+						}
+					}
+					return;
+				}
+
+				if ( nDirIn != 0 && !bBlocked )
+				{
+					// The SAME adjuster the sheet and the palette use, over
+					// the same Adjustable view -- D16.6's "one adjuster", now
+					// with a third host rather than a third implementation.
+					const bool bMoved = bOwnRow
+						? AdjustValue( Adjustable::Of( *pIn ), nDirIn, io.KeyShift )
+						: AdjustValue( Adjustable::Of( *pParam ), nDirIn, io.KeyShift );
+
+					// A kind with no ordered value (Text, Bank, Action) has
+					// nothing to adjust, so Left there is a region edge --
+					// "at a region edge: cross", SPEC §8.2.
+					if ( !bMoved && nDirIn < 0 )
+						s_eFocusRegion = Region::Sheet;
+				}
+				return;
+			}
+
 			if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ) StepRow( +1 );
 			if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ) StepRow( -1 );
 
@@ -2854,6 +3689,25 @@ namespace gamescope::ui::shell
 					const Value v = pSel->Binding().Get();
 					if ( const bool *p = std::get_if<bool>( &v ) )
 						pSel->Binding().Set( Value{ !*p } );
+				}
+				// D18: "Enter / Space -- activate / toggle / BEGIN ENTRY"
+				// (SPEC §8.2). The last third was missing: controls::Text
+				// owns the display/input transition but only ever entered it
+				// from a click, so a text row was pointer-only -- and a
+				// Choice that had downgraded to a dropdown could not be
+				// opened at all without one.
+				else if ( pSel->GetKind() == Kind::Text )
+				{
+					s_sEditingText = pSel->Id();
+				}
+				else if ( pSel->GetKind() == Kind::Choice && DrawsAsDropdown( pSel->Id() ) )
+				{
+					// Only when it ACTUALLY drew as a dropdown. A segmented
+					// Choice is already adjustable with Left/Right and draws
+					// no popup, so opening one would swallow the keyboard
+					// with nothing on screen. See s_DropdownRows.
+					s_sOpenDropdown = pSel->Id();
+					s_nPopupFocus = -1;
 				}
 				else if ( pSel->GetKind() == Kind::Action )
 				{
@@ -2908,6 +3762,36 @@ namespace gamescope::ui::shell
 		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )
 			return;
+
+		// D18: E2 implements SPEC §8.2's keyboard IN FULL -- regions, rows,
+		// adjustment, the palette, the Inspector, the mode strip. ImGui's own
+		// keyboard navigation is a SECOND model over the same keys, and the
+		// two visibly fight: Tab moved the shell's region and ImGui's nav
+		// cursor independently, leaving a focus rectangle around whichever
+		// child window ImGui had picked and the shell's own focus somewhere
+		// else. Arrows are worse -- nav would consume the very keys SPEC §8.2
+		// gives to "adjust the highlighted entry's value in place".
+		//
+		// This is the same call D16.3 made about InputText, for the same
+		// reason and with the same scope: the legacy overlay keeps its nav
+		// (cv_settings_overlay_keyboard_nav still governs it), and only the
+		// frames E2 draws turn it off.
+		ImGuiIO &ioMutable = ImGui::GetIO();
+		ioMutable.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+
+		// D18: hand the just-finished frame's dropdown record to the
+		// keyboard, and start a fresh one for the frame about to be drawn.
+		// Here, immediately before RunKeyboard(), because this is the one
+		// point where the previous frame's record is complete and the next
+		// one has not begun.
+		s_DropdownRows.swap( s_DropdownRowsBuild );
+		s_DropdownRowsBuild.clear();
+
+		// The open dropdown's borrowed options pointer lives for exactly one
+		// frame: cleared here, set by the row painter if that row is drawn,
+		// read by DrawDropdownList at the end. If the row is gone, the
+		// pointer stays null and DrawDropdownList closes the dropdown.
+		s_pDropdownOptions = nullptr;
 
 		RunKeyboard();
 
@@ -2993,7 +3877,26 @@ namespace gamescope::ui::shell
 			DrawRail( Off( regions.rcRail ), ladder.RailIsIcons() );
 
 			DrawSheetHead( Off( regions.rcSheetHead ), pArea );
-			DrawSheetBody( Off( regions.rcSheetBody ), pArea );
+
+			// D17. A drawer overlays the sheet instead of taking width from
+			// it, so at 2.0x it covered the sheet's entire control column. The
+			// regions stay exactly as the ladder computed them -- the drawer
+			// still floats, still costs no relayout -- and the sheet's LANE is
+			// what gives way. Both rects are slab-space here, so the
+			// difference needs no Off().
+			const float flDrawerOverlapPx =
+				ladderDrawn.eHost == InspectorHost::Drawer
+					? std::max( 0.0f, regions.rcSheetBody.x1 - regions.rcInspector.x0 )
+					: 0.0f;
+			// D18: the explain page REPLACES the sheet body for as long as it
+			// is open (SPEC §6.3), which is why it is a swap here rather than
+			// an overlay: "replacing the sheet content" is what the spec
+			// says, and an overlay would leave the rows underneath reachable
+			// by pointer while the keyboard was somewhere else.
+			if ( s_bExplainPage && SelectedEntry() )
+				DrawExplainPage( Off( regions.rcSheetBody ), *SelectedEntry() );
+			else
+				DrawSheetBody( Off( regions.rcSheetBody ), pArea, flDrawerOverlapPx );
 			DrawSheetFoot( Off( regions.rcSheetFoot ) );
 
 			// The rail/sheet boundary. Drawn from the sheet's own left
@@ -3018,6 +3921,16 @@ namespace gamescope::ui::shell
 
 		ImGui::PopStyleColor( 2 );
 		ImGui::PopStyleVar( 2 );
+
+		// D18: the open dropdown's list, above the slab and below the
+		// palette. Same sibling-window reason as the palette below, plus the
+		// popup-focus one -- see DrawDropdownList.
+		{
+			const ImVec2 vSlab( ( io.DisplaySize.x - slab.flWidthPx ) * 0.5f,
+			                    ( io.DisplaySize.y - slab.flHeightPx ) * 0.5f );
+			DrawDropdownList( { vSlab.x, vSlab.y,
+			                    vSlab.x + slab.flWidthPx, vSlab.y + slab.flHeightPx } );
+		}
 
 		// The palette gets its OWN top-level window, opened after the slab's
 		// has closed.

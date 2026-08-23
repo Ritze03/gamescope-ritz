@@ -60,6 +60,41 @@ namespace gamescope::ui
 	void   DrawText( const ImRect &rcClip, TypeRole eRole, ImU32 col, const char *pszText,
 	                 TextAlign eAlign = TextAlign::Left );
 
+	// ---- drawn glyphs (D18) -----------------------------------------------
+	// The shell's icons are STROKED PATHS, not characters. This is a decision
+	// with a hard constraint behind it, so it is recorded here rather than
+	// left to look like a preference.
+	//
+	// Fonts.cpp bakes Basic Latin + Latin-1 Supplement, and the shell wants
+	// three marks the mockup draws as `▸` (U+25B8), `⌕` (U+2315) and `›`
+	// (U+203A). Widening the baked range fixes exactly one of them: the
+	// bundled Geist faces -- all five, Sans and Mono -- HAVE no U+25B8 and no
+	// U+2315 in their cmap. A wider range would bake a fallback box just as
+	// faithfully as a narrow one does.
+	//
+	// So the choice was never "atlas vs draw" for these glyphs; it was "draw,
+	// or ship a different typeface". Drawing also costs nothing at bake time,
+	// which matters more here than usual: the atlas is rebuilt per effective
+	// scale, so every added range is paid again at every scale change.
+	//
+	// The knock-on benefit is that the two ASCII stand-ins the shell had been
+	// using -- the palette's `>` prompt and the dropdown's lowercase `v`
+	// caret -- become the marks they were standing in for. Both were letters
+	// pretending to be icons, and both scaled and hinted like letters.
+	namespace glyph
+	{
+		enum class Dir : unsigned char { Right, Left, Up, Down };
+
+		// A chevron centred on vCenterPx, flSizePx across its box. Stroked,
+		// never filled: at 0.5x a filled triangle collapses into a blob while
+		// a stroke stays two readable lines.
+		void Chevron( ImVec2 vCenterPx, float flSizePx, Dir eDir, ImU32 col );
+
+		// The palette's magnifier -- a circle and a handle, which is all the
+		// mark has ever been.
+		void Magnifier( ImVec2 vCenterPx, float flSizePx, ImU32 col );
+	}
+
 	namespace controls
 	{
 		// ---- SPEC §3.1 -- every binary in the product ---------------------

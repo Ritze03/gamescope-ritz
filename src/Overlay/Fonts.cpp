@@ -476,4 +476,46 @@ namespace gamescope::fonts
 
 		return it->second.flBuiltScale;
 	}
+
+	// ---- the baked range, as something callable (D18) --------------------
+	// Deliberately hand-rolled rather than routed through ImGui's own UTF-8
+	// decoder: this must be callable with no ImGui context at all -- from a
+	// unit test, and from the console thread, which is the one place
+	// Fonts.cpp already had to learn not to touch the atlas (see
+	// RequestRebuild).
+	uint32_t FirstUnbakedCodepoint( const char *pszUtf8 )
+	{
+		if ( pszUtf8 == nullptr )
+			return 0;
+
+		for ( const unsigned char *p = (const unsigned char *)pszUtf8; *p; )
+		{
+			uint32_t cp   = 0;
+			int      nLen = 0;
+
+			if ( *p < 0x80 )                   { cp = *p;          nLen = 1; }
+			else if ( ( *p & 0xE0 ) == 0xC0 )  { cp = *p & 0x1Fu;  nLen = 2; }
+			else if ( ( *p & 0xF0 ) == 0xE0 )  { cp = *p & 0x0Fu;  nLen = 3; }
+			else if ( ( *p & 0xF8 ) == 0xF0 )  { cp = *p & 0x07u;  nLen = 4; }
+			else
+				return 0xFFFDu;   // a stray continuation or 5-byte lead: malformed
+
+			for ( int i = 1; i < nLen; i++ )
+			{
+				if ( ( p[ i ] & 0xC0 ) != 0x80 )
+					return 0xFFFDu;   // truncated sequence -- reported, not skipped
+				cp = ( cp << 6 ) | ( uint32_t )( p[ i ] & 0x3F );
+			}
+
+			// A tab or newline is not a glyph and never reaches the atlas;
+			// everything else below kBakedFirst is a control character that
+			// would draw as a box just as surely as U+25B8 does.
+			const bool bWhitespace = ( cp == '\t' || cp == '\n' || cp == '\r' );
+			if ( !bWhitespace && ( cp < kBakedFirst || cp > kBakedLast ) )
+				return cp;
+
+			p += nLen;
+		}
+		return 0;
+	}
 }

@@ -91,6 +91,87 @@ namespace gamescope::ui
 	}
 
 	// =====================================================================
+	//  Drawn glyphs (D18) -- see Controls.h for why these are not characters
+	// =====================================================================
+	namespace glyph
+	{
+		namespace
+		{
+			// One stroke width for every glyph here, derived from the box so
+			// a mark drawn at 9 base and one drawn at 13 read as the same
+			// pen. Floored at one physical pixel: below that a stroke stops
+			// being antialiased and starts disappearing, which is exactly
+			// what the 0.5x ladder step would do to it.
+			float StrokePx( float flSizePx )
+			{
+				return std::max( 1.0f, flSizePx * 0.11f );
+			}
+
+			// The atoms' own Dl() is declared further down this file; these
+			// glyphs sit above them because DrawText() is what they belong
+			// next to, so they take the same draw list by the same route.
+			ImDrawList *Dl() { return ImGui::GetCurrentWindow()->DrawList; }
+		}
+
+		void Chevron( ImVec2 vCenterPx, float flSizePx, Dir eDir, ImU32 col )
+		{
+			// Authored once, on a unit square, pointing RIGHT -- then rotated
+			// into the other three. One shape and one rotation beats four
+			// hand-placed point triples that drift apart the first time the
+			// proportions are tuned.
+			//
+			// 0.26 half-width against 0.5 half-height is a ~62 degree
+			// included angle: the same wedge the mockup's `›` cuts, and open
+			// enough that the two strokes stay distinguishable at 0.5x.
+			const float w = flSizePx * 0.26f;
+			const float h = flSizePx * 0.50f;
+
+			ImVec2 pts[ 3 ] = { { -w, -h }, { +w, 0.0f }, { -w, +h } };
+
+			for ( ImVec2 &p : pts )
+			{
+				const ImVec2 v = p;
+				switch ( eDir )
+				{
+					case Dir::Right: p = v;                            break;
+					case Dir::Left:  p = ImVec2( -v.x, v.y );          break;
+					case Dir::Down:  p = ImVec2( -v.y, v.x );          break;
+					case Dir::Up:    p = ImVec2(  v.y, -v.x );         break;
+				}
+				p = ImVec2( vCenterPx.x + p.x, vCenterPx.y + p.y );
+			}
+
+			// Open polyline, not a closed triangle: a chevron is two strokes
+			// meeting at a point, and closing it would draw a third edge the
+			// mark has never had.
+			Dl()->AddPolyline( pts, 3, col, ImDrawFlags_None, StrokePx( flSizePx ) );
+		}
+
+		void Magnifier( ImVec2 vCenterPx, float flSizePx, ImU32 col )
+		{
+			const float flStroke = StrokePx( flSizePx );
+
+			// The lens sits up-left of centre so the handle has room inside
+			// the same box -- otherwise the glyph's optical centre drifts
+			// right of the rect it was asked to centre on.
+			const float flR = flSizePx * 0.32f;
+			const ImVec2 c( vCenterPx.x - flSizePx * 0.09f, vCenterPx.y - flSizePx * 0.09f );
+
+			// Segment count from the radius: a fixed count is chunky at 2.0x
+			// and wasteful at 0.5x. ImGui's own auto-tessellation does this
+			// when num_segments is 0.
+			Dl()->AddCircle( c, flR, col, 0, flStroke );
+
+			// The handle leaves the lens on the 45 degree diagonal and runs
+			// to the box corner, so it never crosses back inside the circle.
+			const float k = 0.70710678f;   // cos(45)
+			Dl()->AddLine( ImVec2( c.x + flR * k, c.y + flR * k ),
+			               ImVec2( vCenterPx.x + flSizePx * 0.46f, vCenterPx.y + flSizePx * 0.46f ),
+			               col, flStroke );
+		}
+	}
+
+	// =====================================================================
 	//  Shared atom plumbing
 	// =====================================================================
 	namespace
@@ -487,8 +568,14 @@ namespace gamescope::ui
 
 				const float flPad   = Px( tok::kSelfPadX );
 				const float flGap   = Px( tok::kS );
-				const ImVec2 caret  = MeasureText( TypeRole::Meta, "v" );
-				const ImRect rcCaret( a.rc.Max.x - flPad - caret.x, a.rc.Min.y, a.rc.Max.x - flPad, a.rc.Max.y );
+
+				// D18: the caret was a lowercase "v" -- a letter standing in
+				// for a triangle, hinted and weighted like a letter, and
+				// sized by whatever the Meta face happened to make it. It is
+				// a drawn chevron now, so its width is a token rather than a
+				// text measurement.
+				const float flCaret = Px( tok::kGlyphChevron );
+				const ImRect rcCaret( a.rc.Max.x - flPad - flCaret, a.rc.Min.y, a.rc.Max.x - flPad, a.rc.Max.y );
 				const ImRect rcValue( a.rc.Min.x + flPad, a.rc.Min.y, rcCaret.Min.x - flGap, a.rc.Max.y );
 
 				// The value ellipsizes from the left of the group so the
@@ -497,7 +584,8 @@ namespace gamescope::ui
 				DrawText( rcValue, TypeRole::Value,
 					bPopupOpen ? Col( Role::AccentSeg ) : Col( Role::TextPrimary ),
 					pszLabel, TextAlign::Right );
-				DrawText( rcCaret, TypeRole::Meta, Col( Role::TextMeta ), "v", TextAlign::Right );
+				glyph::Chevron( rcCaret.GetCenter(), flCaret, glyph::Dir::Down,
+					Col( Role::TextMeta ) );
 			}
 
 			ImGui::PopID();
