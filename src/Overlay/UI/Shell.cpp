@@ -1227,25 +1227,44 @@ namespace gamescope::ui::shell
 					Fill( rcItem, IM_COL32( 255, 255, 255, 13 ) );
 				}
 
-				// P2 draws the rail item's initial where P3 draws SPEC
-				// §8.0's icon set. Eleven stroked 24-unit glyphs are a
-				// self-contained piece of work with its own acceptance
-				// criteria (one silhouette at 12px, no new detail at 48px)
-				// and they belong with the area rewrites that name them,
-				// not wedged into the phase that builds the regions.
-				const char szInitial[ 2 ] = { area.Title().empty() ? '?' : area.Title()[ 0 ], '\0' };
+				// SPEC §8.0's icon set (D20.1). The rail drew the area
+				// title's INITIAL until now, which the pre-P5 shell test
+				// found unusable the moment the ladder collapses the rail:
+				// with the label gone, Mixer/Monitor are both `M`,
+				// Profiles/Per-game both `P` and Shaders/Shell both `S`, so
+				// three of eleven areas were unidentifiable at 1.5x and
+				// above -- in the one state where the mark carries the
+				// entire meaning of the item.
+				//
+				// The icon inherits the item's colour rather than owning
+				// one: "TextLabel at rest, AccentIcon when the item is
+				// active, so the icon is one of the accent's state jobs
+				// (§7.7) and not decoration".
 				const ImU32 colIcon = bActive ? Col( Role::AccentIcon ) : Col( Role::TextLabel );
 				const float flIcon  = Px( tok::kIconBox );
+				const Icon *pIcon   = IconFor( area.Id().c_str() );
+
+				// An area with no glyph falls back to its initial -- the old
+				// behaviour, for that one item. See Icons.h: a forgotten
+				// icon must not remove an area from the rail.
+				const char szInitial[ 2 ] = { area.Title().empty() ? '?' : area.Title()[ 0 ], '\0' };
+
+				const auto DrawMark = [ & ]( const Rect &rcBox ) {
+					if ( pIcon )
+						glyph::RailIcon( *pIcon,
+							ImVec2( ( rcBox.x0 + rcBox.x1 ) * 0.5f, ( rcBox.y0 + rcBox.y1 ) * 0.5f ),
+							flIcon, colIcon );
+					else
+						Label( rcBox, TypeRole::Title, colIcon, szInitial, TextAlign::Center );
+				};
 
 				if ( bIcons )
 				{
-					Label( { rcItem.x0, rcItem.y0, rcItem.x1, rcItem.y1 },
-					       TypeRole::Title, colIcon, szInitial, TextAlign::Center );
+					DrawMark( { rcItem.x0, rcItem.y0, rcItem.x1, rcItem.y1 } );
 				}
 				else
 				{
-					Label( { rcItem.x0 + flPadX, rcItem.y0, rcItem.x0 + flPadX + flIcon, rcItem.y1 },
-					       TypeRole::Title, colIcon, szInitial, TextAlign::Center );
+					DrawMark( { rcItem.x0 + flPadX, rcItem.y0, rcItem.x0 + flPadX + flIcon, rcItem.y1 } );
 					Label( { rcItem.x0 + flPadX + flIcon + Px( tok::kM ), rcItem.y0, rcItem.x1 - Px( tok::kM ), rcItem.y1 },
 					       TypeRole::Label, bActive ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 					       area.Title().c_str() );

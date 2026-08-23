@@ -16,7 +16,7 @@ endforeach
 # renderer, no compositor. That is why imgui_dep and font_headers are here:
 # ImRect's inline maths for the pure tests, and the real embedded Geist faces
 # so the atoms measure text exactly as the shipping binary does.
-foreach src : ['Overlay/UI/Tokens.cpp', 'Overlay/UI/Lane.cpp', 'Overlay/UI/Row.cpp', 'Overlay/UI/Band.cpp', 'Overlay/UI/Registry.cpp', 'Overlay/UI/CommandPalette.cpp', 'Overlay/UI/Layout.cpp', 'Overlay/UI/Colors.cpp', 'Overlay/UI/Controls.cpp', 'Overlay/Fonts.cpp', 'Overlay/Palette.cpp']
+foreach src : ['Overlay/UI/Tokens.cpp', 'Overlay/UI/Lane.cpp', 'Overlay/UI/Row.cpp', 'Overlay/UI/Band.cpp', 'Overlay/UI/Registry.cpp', 'Overlay/UI/CommandPalette.cpp', 'Overlay/UI/Layout.cpp', 'Overlay/UI/Colors.cpp', 'Overlay/UI/Icons.cpp', 'Overlay/UI/Controls.cpp', 'Overlay/Fonts.cpp', 'Overlay/Palette.cpp']
 	unittest_src += srcdir / src
 endforeach
 

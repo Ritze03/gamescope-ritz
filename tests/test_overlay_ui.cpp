@@ -22,6 +22,7 @@
 
 #include "Overlay/Fonts.h"
 #include "Overlay/UI/Band.h"
+#include "Overlay/UI/Icons.h"
 #include "Overlay/UI/Lane.h"
 #include "Overlay/UI/Registry.h"
 #include "Overlay/UI/Row.h"
@@ -1581,4 +1582,136 @@ TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_
 	REQUIRE( !pEntry->IsAtDefault() );
 
 	REQUIRE( rec.Count() == 0 );
+}
+
+// =========================================================================
+//  SPEC §8.0 -- the rail icon set
+// =========================================================================
+// These pin the PROPERTY the icons exist for, not their appearance.
+//
+// The rail drew the area title's initial until D20, and the pre-P5 shell test
+// found that unusable in the collapsed rail: three pairs shared a letter
+// (Mixer/Monitor, Profiles/Per-game, Shaders/Shell), so three of eleven areas
+// were unidentifiable at 1.5x and above -- the exact state in which the mark
+// carries the item's whole meaning.
+//
+// "No two are confusable" is finally a question about pixels, and it is
+// answered by the screenshots the change was verified with. What a unit test
+// CAN hold is the layer underneath that: every area has a glyph, no two
+// glyphs are the same drawing, and every glyph stays inside the 24-unit box
+// it is specified on. A set that fails any of those cannot be legible no
+// matter how it is drawn.
+TEST_CASE( "icons: every registered area has one, and no two are the same drawing", "[overlay_ui]" )
+{
+	// The eleven this build registers. Written out rather than walked off
+	// the live registry because the areas are declared in the panel files,
+	// which this test binary deliberately does not link -- so the list is
+	// the test's own statement of what the rail must be able to draw.
+	const char *pszAreas[] = {
+		"display.upscaling", "display.frame_limiter", "display.hdr",
+		"image.shaders", "audio.mixer", "system.monitor", "system.log",
+		"setup.profiles", "setup.pergame", "setup.appearance", "setup.shell",
+	};
+	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
+
+	REQUIRE( ui::IconCount() == nAreas );
+
+	for ( size_t i = 0; i < nAreas; ++i )
+	{
+		INFO( "area " << pszAreas[ i ] );
+		REQUIRE( ui::IconFor( pszAreas[ i ] ) != nullptr );
+	}
+
+	// An id with no glyph answers nullptr rather than a wrong glyph -- the
+	// rail's fallback depends on being able to tell the difference.
+	REQUIRE( ui::IconFor( "setup.nonexistent" ) == nullptr );
+	REQUIRE( ui::IconFor( nullptr ) == nullptr );
+
+	// THE ANTI-COLLISION ASSERTION. Two areas sharing a drawing is the
+	// letters bug again in another alphabet, so it is the one property
+	// worth failing the build over.
+	for ( size_t i = 0; i < ui::IconCount(); ++i )
+	{
+		for ( size_t j = i + 1; j < ui::IconCount(); ++j )
+		{
+			const ui::Icon &a = ui::IconSet()[ i ];
+			const ui::Icon &b = ui::IconSet()[ j ];
+			INFO( a.pszKey << " vs " << b.pszKey );
+
+			bool bIdentical = ( a.nShapes == b.nShapes );
+			for ( size_t s = 0; bIdentical && s < a.nShapes; ++s )
+			{
+				const ui::IconShape &x = a.shapes[ s ];
+				const ui::IconShape &y = b.shapes[ s ];
+				if ( x.eOp != y.eOp || x.nPoints != y.nPoints || x.flRadius != y.flRadius )
+					bIdentical = false;
+				for ( size_t p = 0; bIdentical && p < x.nPoints; ++p )
+					if ( x.pts[ p ].x != y.pts[ p ].x || x.pts[ p ].y != y.pts[ p ].y )
+						bIdentical = false;
+			}
+			REQUIRE( !bIdentical );
+		}
+	}
+}
+
+TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_ui]" )
+{
+	// A coordinate outside the box is not a style problem: the rail centres
+	// the 24-unit box on the item, so an outlier is drawn over the item's
+	// neighbour or clipped away by the rail's edge. Circles and teardrops
+	// are checked at their extents, not just their centres, because that is
+	// where they would escape.
+	for ( size_t i = 0; i < ui::IconCount(); ++i )
+	{
+		const ui::Icon &icon = ui::IconSet()[ i ];
+		INFO( "icon " << icon.pszKey );
+
+		REQUIRE( icon.nShapes >= 1 );
+		REQUIRE( icon.nShapes <= ui::kIconMaxShapes );
+
+		for ( size_t s = 0; s < icon.nShapes; ++s )
+		{
+			const ui::IconShape &sh = icon.shapes[ s ];
+			INFO( "shape " << s );
+
+			// An op that needs a radius must have one; an op that needs
+			// points must have enough of them to be a path.
+			switch ( sh.eOp )
+			{
+				case ui::IconOp::Circle:
+				case ui::IconOp::HalfDisc:
+					REQUIRE( sh.flRadius > 0.0f );
+					REQUIRE( sh.nPoints == 1 );
+					break;
+				case ui::IconOp::Teardrop:
+					REQUIRE( sh.flRadius > 0.0f );
+					REQUIRE( sh.nPoints == 2 );
+					break;
+				case ui::IconOp::FillRect:
+					REQUIRE( sh.nPoints == 2 );
+					break;
+				default:
+					REQUIRE( sh.nPoints >= 2 );
+					break;
+			}
+			REQUIRE( sh.nPoints <= ui::kIconMaxPts );
+
+			for ( size_t p = 0; p < sh.nPoints; ++p )
+			{
+				// The radius is added on both axes for the round ops, so
+				// a circle tangent to the box passes and one hanging out
+				// of it does not. A teardrop's apex (point 0) is a plain
+				// point -- only its centre carries the radius.
+				const float r = ( sh.eOp == ui::IconOp::Circle ||
+				                  sh.eOp == ui::IconOp::HalfDisc ||
+				                  sh.eOp == ui::IconOp::Teardrop ) ? sh.flRadius : 0.0f;
+				const float rr = ( sh.eOp == ui::IconOp::Teardrop && p == 0 ) ? 0.0f : r;
+
+				REQUIRE( sh.pts[ p ].x - rr >= 0.0f );
+				REQUIRE( sh.pts[ p ].y - rr >= 0.0f );
+				REQUIRE( sh.pts[ p ].x + rr <= ui::kIconGrid );
+				REQUIRE( sh.pts[ p ].y + rr <= ui::kIconGrid );
+			}
+		}
+	}
 }

@@ -42,6 +42,7 @@
 // A control cannot be laid out to a width its fit test never saw.
 #pragma once
 
+#include "Icons.h"
 #include "Registry.h"
 #include "Row.h"
 #include "Tokens.h"
@@ -98,6 +99,12 @@ namespace gamescope::ui
 		// is: U+2337 is not in any bundled face's cmap, so a baked range
 		// cannot produce it (AUTONOMOUS-DECISIONS D18.2).
 		void Lock( ImVec2 vCenterPx, float flSizePx, ImU32 col );
+
+		// SPEC §8.0's rail glyph, centred on vCenterPx with flBoxPx as the
+		// 24-unit grid's edge. The Icon comes from Icons.h; this function
+		// contains no coordinates and knows nothing about which glyph it is
+		// drawing (D20.1).
+		void RailIcon( const Icon &icon, ImVec2 vCenterPx, float flBoxPx, ImU32 col );
 	}
 
 	namespace controls
