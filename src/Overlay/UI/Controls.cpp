@@ -62,11 +62,24 @@ namespace gamescope::ui
 		const float flSize = TypeSizePx( eRole );
 		const ImVec2 size  = pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, pszText );
 
+		// Alignment only has meaning while the text FITS. Once it is wider
+		// than the rect it gets left-aligned regardless of what was asked
+		// for, so the clip takes the tail rather than the head.
+		//
+		// Right-aligning an overlong string puts its start off the left edge
+		// and clips there, which reads as garbage rather than as truncation:
+		// SPEC §2.3 caps a value at 60% of the label zone, so a long value in
+		// the narrow Inspector lane rendered `bottom-right · 64 / 32` as
+		// `.ght`. Losing the end of a string is legible; losing the
+		// beginning is not.
 		float flX = rcClip.Min.x;
-		if ( eAlign == TextAlign::Right )
-			flX = rcClip.Max.x - size.x;
-		else if ( eAlign == TextAlign::Center )
-			flX = rcClip.Min.x + ( rcClip.GetWidth() - size.x ) * 0.5f;
+		if ( size.x <= rcClip.GetWidth() )
+		{
+			if ( eAlign == TextAlign::Right )
+				flX = rcClip.Max.x - size.x;
+			else if ( eAlign == TextAlign::Center )
+				flX = rcClip.Min.x + ( rcClip.GetWidth() - size.x ) * 0.5f;
+		}
 
 		const ImVec2 pos( flX, rcClip.Min.y + ( rcClip.GetHeight() - size.y ) * 0.5f );
 
@@ -735,6 +748,249 @@ namespace gamescope::ui
 
 			ImGui::PopID();
 			return bChanged;
+		}
+
+		// =================================================================
+		//  Composite bodies -- SPEC §4.4
+		// =================================================================
+		bool Rail( const ImRect &rcRail, const char *pszId, float *pflValue,
+		           float flMin, float flMax, RailColorFn fnColorAt, void *pUser )
+		{
+			if ( rcRail.GetWidth() <= 0.0f || flMax <= flMin )
+				return false;
+
+			const Atom a = Begin( rcRail, pszId );
+
+			// The gradient is drawn as kStops quads, each interpolating
+			// between two REAL samples of fnColorAt rather than between two
+			// endpoint colours -- so the strip cannot disagree with what the
+			// value it sets actually produces (issue #37's own reasoning).
+			constexpr int kStops = 24;
+			const float flRound = Px( 2.0f );
+			for ( int i = 0; i < kStops; ++i )
+			{
+				const float t0 = (float)i / (float)kStops;
+				const float t1 = (float)( i + 1 ) / (float)kStops;
+				const ImU32 c0 = fnColorAt( t0, pUser );
+				const ImU32 c1 = fnColorAt( t1, pUser );
+				const float x0 = rcRail.Min.x + rcRail.GetWidth() * t0;
+				const float x1 = rcRail.Min.x + rcRail.GetWidth() * t1;
+				Dl()->AddRectFilledMultiColor( ImVec2( x0, rcRail.Min.y ), ImVec2( x1, rcRail.Max.y ),
+					c0, c1, c1, c0 );
+			}
+			Boundary( rcRail, Col( Role::LineControl ), flRound );
+
+			// The marker. Drawn from the SAME normalised t the hit test
+			// converts back from, so the thing you see is the thing you grab
+			// (Controls.h's drawn-vs-hit-tested rule).
+			const float flT = ImClamp( ( *pflValue - flMin ) / ( flMax - flMin ), 0.0f, 1.0f );
+			const float flX = rcRail.Min.x + rcRail.GetWidth() * flT;
+			const float flR = ImMax( Px( 4.0f ), rcRail.GetHeight() * 0.5f );
+			const ImVec2 c( flX, rcRail.GetCenter().y );
+			Dl()->AddCircleFilled( c, flR + Px( 1.0f ), palette::Black( 0.55f ) );
+			Dl()->AddCircleFilled( c, flR, fnColorAt( flT, pUser ) );
+			Dl()->AddCircle( c, flR, palette::White( a.bHovered || a.bHeld ? 0.95f : 0.75f ),
+				0, ImMax( 1.0f, Px( 1.5f ) ) );
+
+			if ( a && a.bHeld )
+			{
+				const float flNew = flMin + ( flMax - flMin ) *
+					ImClamp( ( ImGui::GetIO().MousePos.x - rcRail.Min.x ) / rcRail.GetWidth(), 0.0f, 1.0f );
+				if ( flNew != *pflValue )
+				{
+					*pflValue = flNew;
+					ImGui::MarkItemEdited( a.id );
+					return true;
+				}
+			}
+			return false;
+		}
+
+		namespace
+		{
+			// The accent family's own base L/C (Palette.h's kAccent token),
+			// so the hue rail shows the accent it is actually choosing.
+			constexpr float kAccentL = 0.74f;
+			constexpr float kAccentC = 0.12f;
+
+			ImU32 HueStop( float flT, void * )
+			{
+				return palette::OklchToImU32( kAccentL, kAccentC, flT * 360.0f );
+			}
+
+			struct LchUser { float flL, flC, flH; };
+
+			ImU32 LStop( float flT, void *pUser )
+			{
+				const LchUser *u = (const LchUser *)pUser;
+				return palette::OklchToImU32( flT, u->flC, u->flH );
+			}
+			ImU32 CStop( float flT, void *pUser )
+			{
+				const LchUser *u = (const LchUser *)pUser;
+				return palette::OklchToImU32( u->flL, flT * 0.37f, u->flH );
+			}
+			ImU32 HStop( float flT, void *pUser )
+			{
+				const LchUser *u = (const LchUser *)pUser;
+				return palette::OklchToImU32( u->flL, u->flC, flT * 360.0f );
+			}
+		}
+
+		bool HueBody( const ImRect &rcBody, const char *pszId, float *pflHue )
+		{
+			ImGui::PushID( pszId );
+			bool bChanged = false;
+
+			// Two stacked rows inside the band's own body rect: the rail on
+			// top, the eight preset swatches beneath it. Both are sized from
+			// rcBody alone -- see Controls.h on why a body never measures
+			// itself.
+			const float flGap     = Px( tok::kS );
+			const float flSwatchH = ImMin( Px( tok::kControlH ) * 0.5f,
+			                               ( rcBody.GetHeight() - flGap ) * 0.45f );
+			const float flRailH   = rcBody.GetHeight() - flGap - flSwatchH;
+
+			const ImRect rcRail( rcBody.Min.x, rcBody.Min.y,
+			                     rcBody.Max.x, rcBody.Min.y + flRailH );
+			bChanged |= Rail( rcRail, "hue", pflHue, 0.0f, 360.0f, HueStop );
+
+			// Eight 45-degree presets. They set the SAME value the rail does
+			// -- a swatch is a shortcut, never a second setting, which is
+			// what keeps this one row of the sheet rather than nine.
+			constexpr int kSwatches = 8;
+			const float flCellGap = Px( tok::kGapSeg );
+			const float flCellW   = ( rcBody.GetWidth() - flCellGap * (float)( kSwatches - 1 ) ) / (float)kSwatches;
+			const float flTop     = rcBody.Max.y - flSwatchH;
+
+			for ( int i = 0; i < kSwatches; ++i )
+			{
+				const float flHue = ( 360.0f * (float)i ) / (float)kSwatches;
+				const ImRect rcCell( rcBody.Min.x + (float)i * ( flCellW + flCellGap ), flTop,
+				                     rcBody.Min.x + (float)i * ( flCellW + flCellGap ) + flCellW,
+				                     rcBody.Max.y );
+
+				char szId[ 8 ];
+				snprintf( szId, sizeof( szId ), "s%d", i );
+				const Atom a = Begin( rcCell, szId );
+
+				// "Selected" is a proximity test, not equality: the rail can
+				// leave the hue anywhere between two stops, and a swatch bank
+				// that lights up only on an exact 45.000 would essentially
+				// never light up at all.
+				float flDelta = fabsf( *pflHue - flHue );
+				if ( flDelta > 180.0f )
+					flDelta = 360.0f - flDelta;
+				const bool bOn = flDelta < ( 360.0f / (float)kSwatches ) * 0.5f;
+
+				Dl()->AddRectFilled( rcCell.Min, rcCell.Max,
+					palette::OklchToImU32( kAccentL, kAccentC, flHue ), Px( 2.0f ) );
+				Boundary( rcCell, bOn ? palette::White( 0.95f ) : ( a.bHovered
+					? palette::White( 0.55f ) : Col( Role::LineControl ) ), Px( 2.0f ) );
+
+				if ( a && a.bPressed && *pflHue != flHue )
+				{
+					*pflHue = flHue;
+					ImGui::MarkItemEdited( a.id );
+					bChanged = true;
+				}
+			}
+
+			ImGui::PopID();
+			return bChanged;
+		}
+
+		bool ColorBody( const ImRect &rcBody, const char *pszId,
+		                float *pflL, float *pflC, float *pflH )
+		{
+			ImGui::PushID( pszId );
+			bool bChanged = false;
+
+			// A square swatch on the left showing the resolved colour, three
+			// stacked rails to its right. The swatch is the only part that
+			// answers "what did I actually pick", which is why it is drawn
+			// from the same OklchToImU32() the rails sample.
+			const float flGap     = Px( tok::kS );
+			const float flSwatchW = ImMin( rcBody.GetHeight(), rcBody.GetWidth() * 0.25f );
+			const ImRect rcSwatch( rcBody.Min.x, rcBody.Min.y,
+			                       rcBody.Min.x + flSwatchW, rcBody.Max.y );
+
+			Dl()->AddRectFilled( rcSwatch.Min, rcSwatch.Max,
+				palette::OklchToImU32( *pflL, *pflC, *pflH ), Px( 3.0f ) );
+			Boundary( rcSwatch, Col( Role::LineControl ), Px( 3.0f ) );
+
+			const float flX0     = rcSwatch.Max.x + flGap;
+			const float flRailGap = Px( 4.0f );
+			const float flRailH  = ( rcBody.GetHeight() - flRailGap * 2.0f ) / 3.0f;
+
+			LchUser u{ *pflL, *pflC, *pflH };
+			struct { float *pf; float flLo, flHi; RailColorFn fn; const char *pszId; } kRails[] = {
+				{ pflL, 0.0f, 1.0f,   LStop, "l" },
+				{ pflC, 0.0f, 0.37f,  CStop, "c" },
+				{ pflH, 0.0f, 360.0f, HStop, "h" },
+			};
+
+			for ( int i = 0; i < 3; ++i )
+			{
+				const ImRect rcRail( flX0, rcBody.Min.y + (float)i * ( flRailH + flRailGap ),
+				                     rcBody.Max.x, rcBody.Min.y + (float)i * ( flRailH + flRailGap ) + flRailH );
+				if ( Rail( rcRail, kRails[ i ].pszId, kRails[ i ].pf,
+					kRails[ i ].flLo, kRails[ i ].flHi, kRails[ i ].fn, &u ) )
+				{
+					// Re-seed the shared user data so the two rails BELOW
+					// this one gradient against the value just set, not the
+					// one it replaced. Without this the C and H strips would
+					// lag a frame behind the L they are supposed to show.
+					u = LchUser{ *pflL, *pflC, *pflH };
+					bChanged = true;
+				}
+			}
+
+			ImGui::PopID();
+			return bChanged;
+		}
+
+		void GraphBody( const ImRect &rcBody, const float *pflSamples, size_t nSamples,
+		                float flCeiling, float flOutlierMs, size_t nAxisSlots )
+		{
+			Dl()->AddRectFilled( rcBody.Min, rcBody.Max, Col( Role::SurfaceRaised ), Px( 2.0f ) );
+			Boundary( rcBody, Col( Role::LineControl ), Px( 2.0f ) );
+
+			if ( !pflSamples || nSamples == 0 || flCeiling <= 0.0f || rcBody.GetWidth() <= 0.0f )
+				return;
+
+			auto Bar = [ & ]( float flX, float flW, float flValue )
+			{
+				const float flH = ImClamp( flValue / flCeiling, 0.0f, 1.0f ) * rcBody.GetHeight();
+				const bool  bOut = flOutlierMs > 0.0f && flValue >= flOutlierMs;
+				Dl()->AddRectFilled( ImVec2( flX, rcBody.Max.y - flH ),
+				                     ImVec2( flX + ImMax( 1.0f, flW - Px( 0.5f ) ), rcBody.Max.y ),
+				                     bOut ? Col( Role::Warn ) : Accent( 0.85f ) );
+			};
+
+			if ( nAxisSlots > 0 )
+			{
+				// FIXED AXIS, filled from the left. The slot pitch is
+				// computed from the FULL axis, never from how many samples
+				// happen to have arrived -- that is the whole point (issue
+				// #40): a warm-up must visibly occupy the left of the axis
+				// and leave the rest blank, not stretch to fill it.
+				const float flPitch = rcBody.GetWidth() / (float)nAxisSlots;
+				const size_t nDraw  = ImMin( nSamples, nAxisSlots );
+				for ( size_t i = 0; i < nDraw; ++i )
+					Bar( rcBody.Min.x + (float)i * flPitch, flPitch, pflSamples[ i ] );
+				return;
+			}
+
+			// ROLLING sparkline: one bar per column of available width, taken
+			// from the TAIL of the buffer -- the newest samples -- so a narrow
+			// band shows "right now" rather than a stale prefix.
+			const float flBarW = ImMax( 1.0f, Px( 2.0f ) );
+			const int   nBars  = ImMin( (int)nSamples, ImMax( 1, (int)( rcBody.GetWidth() / flBarW ) ) );
+			const size_t nFirst = nSamples - (size_t)nBars;
+
+			for ( int i = 0; i < nBars; ++i )
+				Bar( rcBody.Max.x - (float)( nBars - i ) * flBarW, flBarW, pflSamples[ nFirst + (size_t)i ] );
 		}
 	}
 }

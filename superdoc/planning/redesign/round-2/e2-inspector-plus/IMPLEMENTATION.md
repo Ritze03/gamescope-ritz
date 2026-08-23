@@ -10,6 +10,184 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P3 part C, the composite band, Monitor and Log
+
+The last of the area ports, plus the two pieces of debt the earlier parts left.
+**`EscapeCount()` reaches 0** — no area is escaped, and `Escape()` itself now has
+no call site anywhere in `src/`. Build clean; **67/67** meson tests
+(`overlay_ui` 45 → 47, `overlay_atoms` 6 → 8).
+
+Decisions taken without the user: `../../AUTONOMOUS-DECISIONS.md` **D15**.
+
+### `Kind::Composite` — built, and what it is made of
+
+D14.10 recorded that the shell rendered no composite at all: the kind was in the
+taxonomy, `Band.cpp` had its geometry from P1, `controls::AnchorGrid()` existed,
+and `DrawEntryRow` dropped the whole kind through `default: break`. That is why
+P3b downgraded the anchor grid to a nine-option Choice and dropped the accent
+hue's gradient — a control that registers correctly and draws nothing is exactly
+issues #25 and #68.
+
+| Piece | Where | Notes |
+|---|---|---|
+| `DrawCompositeBand()` | `Shell.cpp` | Deliberately shaped like `DrawEntryRow` (D15.1). Same fill, hairline, label/value split, disabled handling. |
+| `LinesFor()` | `Shell.cpp` | The one answer to "how tall is this declaration". Both y-cursors (sheet, Configure) go through it, so they cannot disagree. |
+| `CompositeValue()` | `Shell.cpp` | Clause 2's resolved value. The anchor's margins are read from the **Params**, so there is no second copy to drift. |
+| `controls::Rail()` | `Controls.cpp` | A gradient track whose fill is **sampled** from a colour function, never interpolated between endpoints — issue #37's rule, so the strip cannot disagree with the accent it picks. |
+| `controls::HueBody()` | `Controls.cpp` | Rail + eight 45° preset swatches. Swatches set the *same* value the rail does; they are shortcuts, not a second setting. |
+| `controls::ColorBody()` | `Controls.cpp` | Swatch + L/C/H rails, sharing one `Rail()`. |
+| `controls::GraphBody()` | `Controls.cpp` | Read-only sparkline, with the **two** graph conventions made explicit (see below). |
+| `palette::ImU32ToOklch()` | `Palette.cpp` | The inverse of `OklchToImU32()`, so the Colour composite edits OKLCH while its binding stays a packed sRGB int. Round-trip test pins the two together. |
+
+Registry changes the band required:
+
+- **`BindingB()` / `DefaultValueB()`**, and `HasDefault`/`IsAtDefault`/
+  `ResetToDefault` now read **both** axes. An anchor is one setting whose value
+  is a pair; reading one binding made the sheet's D6 edge lie (D15.3).
+- **`Entry::Samples()`** — the Graph's value, in exactly `Meter`'s shape
+  (`std::function` returning a read, no setter anywhere), because a graph is
+  read-only by construction, not by convention.
+
+**Does the anchor grid earn its place now?** Yes, and the mockup's own framing is
+why: it is a three-line band that reads as an ordinary row until the eye reaches
+the control column, its value line says `bottom-right · 64 / 32` so the margins
+never need two steppers on the sheet, and those margins live in Configure as
+Params. The original critique's "weirdly placed, almost orphaned" is answered by
+the band participating in the same four column lines as every switch above it.
+
+**The 16:9 miniature (`e3-creative`) is a natural later addition, and the band is
+why.** Everything that would change is inside one `case` of
+`DrawCompositeBand`'s body switch: `Band.cpp` already right-binds a body rect and
+guarantees its height, and the two-axis binding already carries "which anchor",
+with the margins as Params that a drag would write. A miniature would be a new
+`CompositeKind` plus one body function — no change to the band rule, the row
+grammar, or any call site. Worth doing; out of scope here.
+
+### `GraphBody` has two axis conventions, and neither is a call site's choice
+
+`nAxisSlots == 0` rolls (newest right-aligned) — the frametime strip.
+`nAxisSlots > 0` is a **fixed axis filled from the left**, with the remainder
+left blank — issue #40's explicit requirement that a partially-filled 60-second
+window must never read as a complete one. Right-aligning a handful of samples
+across the full width is precisely what that issue forbade.
+
+### D6's other half — the accent left edge
+
+SPEC §1's row ink budget always gave the state-edge slot three values
+(`Accent` / `Accent@45%` / nothing); only the first was ever drawn.
+`StateEdgeColor()` is now the single place that decides which, for rows and for
+bands. Selection outranks "differs", because the two share the slot and a
+selected row has an open Inspector showing its reset link anyway. This closes
+D14.8's "still open" note: the sheet can now answer *what have I changed here*
+without opening every row in turn.
+
+### Monitor — before and after
+
+**Before** (`FpsDisplay_DrawSettingsPanel`, six tabs, issue #59). 25 controls:
+
+| Tab | Controls |
+|---|---|
+| General | Show System Monitor · 3×3 placement grid · vertical margin · horizontal margin · module spacing · font size · blend mode · text opacity · backdrop · backdrop opacity · backdrop rounding · backdrop padding |
+| FPS | FPS module · "FPS" label · frametime readout · frametime graph · percentile row · FPS colour |
+| CPU / GPU / Media | module toggle + colour override, each |
+| Statistics | 60s graphs: CPU load, GPU busy, GPU temp, GPU power, frame rate (+ warm-up readout) |
+
+**After** (`FpsDisplay_RegisterArea`, one sheet, six groups). Every one of the 25
+is present:
+
+| Group | Rows |
+|---|---|
+| Monitor | `monitor.enabled` |
+| Modules (`N / 7`) | `mod_fps` (+ Param `label` — #73) · `mod_frametime` · `mod_graph` · `mod_pct` · `mod_cpu` · `mod_gpu` · `mod_media` |
+| Placement | `monitor.anchor` **Composite(Anchor)** + Params `margin_v`, `margin_h` |
+| Appearance | `font_size` · `module_spacing` · `blend_mode` · `text_opacity` · `backdrop` (+ Params `opacity`, `rounding`, `padding`) |
+| Module colours | `color_fps` · `color_cpu` · `color_gpu` · `color_media`, each **Composite(Color)** + Param `custom` |
+| Diagnostics | `monitor.sampling` (Facts, 5 Live rows) · `monitor.frametime_graph` **Composite(Graph)** |
+| Statistics | `stats_collect` · `stats_window` (Facts) · 5 **Composite(Graph)** rows |
+
+Three deliberate re-homings, all in D15: #73's label became a Param so the band's
+count keeps meaning *modules*; #29's colours became their own group because a
+Composite cannot be a Param; #40's gating became a stated switch.
+
+**#72 (uniform module width), #77 (media-title cap) and #80 (shrink-to-content)
+are not settings and did not move.** They are HUD render behaviour in
+`MeasureFpsModule()`/`DrawModule()`, above the line this port touched.
+
+**Only the settings half moved.** The HUD keeps its own ImGui context, offscreen
+texture and submission path, untouched. The legacy six-tab panel is also kept
+**verbatim**, because `SettingsOverlay.cpp` still hosts it under `overlay_e2 0`
+and that shell must stay byte-identical; both halves read and write the one
+`s_Settings`, so neither can drift into a private copy of the config. Verified by
+capture: the HUD under `overlay_e2 1` and under `overlay_e2 0` differ by 0.05% of
+pixels in the HUD crop — the frame-rate digits.
+
+### Log — before and after
+
+**Before** (`PanelLog_DrawBody`, two tabs): Gamescope tab · Game tab (with a
+"not capturing" explanation) · clipper'd line view with `[scope]` prefixes and
+priority colouring · horizontal scroll · stick-to-bottom · **Copy to clipboard**
+· line count.
+
+**After** (`PanelLog_RegisterArea`, one area): everything above, plus filters that
+did not exist:
+
+| Group | Rows |
+|---|---|
+| Filter | `log.sources` **Bank** (gamescope, game) · `log.severity` **Bank** (error, warn, info, debug) · `log.filter` **Text** · `log.autoscroll` **Switch** |
+| Diagnostics | `log.buffer` (Facts, 3 Live rows) · `log.copy` **Action, disabled** |
+| body | `Area::Content()` — the captured text, clipper'd, scope-prefixed, severity-coloured, stick-to-bottom |
+
+The two tabs became the two members of `log.sources` (D7's rule: one setting
+whose value is a set). Filter state is **session-only and no config key was
+added** — a filter that survived a restart would hide lines for a reason nobody
+remembers setting.
+
+### `Area::Content()`
+
+The one genuinely new registry capability, and explicitly not `Escape()` renamed
+— see D15.7. It hands the shell **data** (a function returning `ContentLine`s),
+never a draw callback, so SPEC §5.2 clause 0 holds: a category file still cannot
+place a pixel. A content area still declares ordinary rows, drawn above the body,
+so "rows or content" is never the choice.
+
+### Two defects found by running it
+
+- **`Kind::Bank` and `Kind::Text` drew nothing.** Unhandled enumerators in
+  `DrawEntryRow`'s switch. Both atoms had existed since P1 with tests; the Log is
+  simply the first area to use either, so the taxonomy claimed eleven kinds while
+  the shell rendered nine. Wired into `DrawSharedControl` so a promoted Param
+  gets them on the same path (SPEC §5.3).
+- **`overlay_e2_set overlay.display_scale 2.0` aborted the compositor.**
+  `fonts::RebuildAll()` mutates font state and assumes the render thread inside a
+  live frame; a registration setter is reachable from the **console thread**, so
+  it cleared an atlas mid-draw and the next glyph needing a bake walked a freed
+  `Sources` vector. **A/B'd against the P3b merge, which survives it** — the
+  faulty call is P3b's; this work made it deterministic. Fixed with
+  `fonts::RequestRebuild()` / `PumpRequestedRebuild()`, performed on the render
+  thread beside the `ApplyPendingRebuild()` that already exists for the same
+  class of problem. Right-aligned text also now falls back to left alignment once
+  it no longer fits, because clipping the *head* of a value rendered
+  `bottom-right · 64 / 32` as `.ght`.
+
+### Known-open
+
+`overlay_e2_set overlay.display_scale` changes the stored value and re-bakes the
+atlas but does **not** re-scale the shell — the slab stays 1560 px where
+`Slab::For()` says 2.0× gives 1728. P3b's row, out of this part's scope. The
+band's 2.0× geometry is pinned by test instead (`band: the four clauses hold at
+every display scale`).
+
+### Can `Escape()` be deleted?
+
+**Yes, now** — `EscapeCount()` is 0 and there is no `.Escape(` call site left in
+`src/`. It was left in place deliberately: removing it means deleting
+`Escape()`, `EscapeBody()`, `IsEscaped()`, `EscapeCount()`, `Law::Escaped`, the
+shell's escape branch in `DrawSheetBody()` and three tests, which is an API
+removal rather than an area port. **P5 should do it as one atomic change**; it is
+trivially safe at any point from here, since nothing calls it.
+
+---
+
 ## 2026-08-23 — P3 part B, Audio and Config, plus the Inspector's scroll
 
 **Status: `audio.mixer` and the Config panel are real registrations.** `EscapeCount()`

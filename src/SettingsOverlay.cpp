@@ -943,6 +943,13 @@ namespace gamescope
 		// happens further down this very call stack), is the fix: see
 		// Fonts.cpp's RebuildAll() for why a same-frame rebuild corrupts
 		// whatever this frame already drew before reaching that call.
+		// A rebuild requested from OFF the render thread (a registration
+		// setter reached through overlay_e2_set runs on the console thread)
+		// is performed HERE, not where it was requested -- see Fonts.h's
+		// RequestRebuild() for why doing it there aborts the compositor.
+		// Pumped immediately before ApplyPendingRebuild() so the rebuild it
+		// schedules for this context lands on this same frame.
+		gamescope::fonts::PumpRequestedRebuild();
 		gamescope::fonts::ApplyPendingRebuild();
 
 		const uint64_t ulNowNanos = get_time_in_nanos();

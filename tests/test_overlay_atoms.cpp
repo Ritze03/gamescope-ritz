@@ -221,6 +221,16 @@ TEST_CASE( "atoms: every atom leaves the ImGui style and ID stacks balanced", "[
 	int nV = 0, nH = 2;
 	ui::controls::AnchorGrid( row.Place( 96.0f ), "ag", &nV, &nH );
 
+	// The composite bodies push their own ID scopes and, in ColorBody's
+	// case, nest three Rails inside one. A body that leaked a PushID would
+	// corrupt every id after it in the sheet, so they are swept here with
+	// every other atom rather than trusted.
+	float flHue = 218.0f, flL = 0.74f, flC = 0.12f, flH = 218.0f;
+	ui::controls::HueBody( row.Place( 200.0f ), "hb", &flHue );
+	ui::controls::ColorBody( row.Place( 200.0f ), "cb", &flL, &flC, &flH );
+	const float kSamples[] = { 6.9f, 7.1f, 7.0f, 16.4f, 7.2f };
+	ui::controls::GraphBody( row.Place( 200.0f ), kSamples, IM_ARRAYSIZE( kSamples ), 20.0f, 12.0f );
+
 	REQUIRE( g.StyleVarStack.Size == nStyleVars );
 	REQUIRE( g.ColorStack.Size == nColors );
 	REQUIRE( ImGui::GetCurrentWindow()->IDStack.Size == nIds );
@@ -393,4 +403,56 @@ TEST_CASE( "atoms: nothing crashes or inverts at the extremes of display_scale",
 			h.EndFrame();
 		}
 	}
+}
+
+// =========================================================================
+//  OKLCH round trip -- the Colour override composite's binding
+// =========================================================================
+TEST_CASE( "palette: sRGB survives a round trip through OKLCH", "[overlay_atoms]" )
+{
+	// SPEC §4.4's Colour override edits L, C and H, but the config format it
+	// is bound to is a packed sRGB integer -- so every edit converts out and
+	// back. If ImU32ToOklch() and OklchToImU32() ever stop being inverses, a
+	// colour would drift a little further every time the control was touched,
+	// which is the kind of bug that only surfaces weeks later as "my colour
+	// keeps changing on its own".
+	//
+	// The tolerance is 8-bit quantisation, not an approximation allowance:
+	// one step per channel is the finest the packed format can express.
+	const ImU32 kCases[] = {
+		IM_COL32( 0x36, 0xBD, 0xDD, 255 ),   // the accent family at hue 218
+		IM_COL32( 0x6E, 0xD2, 0x74, 255 ),   // SPEC §4.4's own worked example
+		IM_COL32( 0xFF, 0x00, 0x00, 255 ),
+		IM_COL32( 0x80, 0x80, 0x80, 255 ),
+		IM_COL32( 0x12, 0x34, 0x56, 255 ),
+	};
+
+	for ( ImU32 col : kCases )
+	{
+		float flL = 0.0f, flC = 0.0f, flH = 0.0f;
+		gamescope::palette::ImU32ToOklch( col, &flL, &flC, &flH );
+		const ImU32 back = gamescope::palette::OklchToImU32( flL, flC, flH );
+
+		INFO( "L " << flL << " C " << flC << " H " << flH );
+		for ( int nShift : { IM_COL32_R_SHIFT, IM_COL32_G_SHIFT, IM_COL32_B_SHIFT } )
+		{
+			const int a = (int)( ( col  >> nShift ) & 0xFF );
+			const int b = (int)( ( back >> nShift ) & 0xFF );
+			REQUIRE( ( a - b <= 1 && b - a <= 1 ) );
+		}
+	}
+}
+
+TEST_CASE( "palette: a neutral grey has no meaningful chroma", "[overlay_atoms]" )
+{
+	// Guards the inverse's hue branch: atan2 of two near-zero components is
+	// numerically unstable, and a grey that came back with a large chroma
+	// would make the Colour composite's C rail jump the moment someone
+	// picked a neutral.
+	float flL = 0.0f, flC = 0.0f, flH = 0.0f;
+	gamescope::palette::ImU32ToOklch( IM_COL32( 0x80, 0x80, 0x80, 255 ), &flL, &flC, &flH );
+
+	REQUIRE( flC < 0.01f );
+	REQUIRE( flL > 0.4f );
+	REQUIRE( flL < 0.7f );
 }

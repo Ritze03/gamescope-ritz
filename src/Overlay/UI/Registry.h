@@ -193,6 +193,23 @@ namespace gamescope::ui
 		const char *pszLabel = nullptr;
 	};
 
+	// What a Composite(Graph) draws: a window of samples, newest last, plus
+	// the scale to draw them against. Borrowed, never owned -- the provider
+	// hands out a pointer into its own ring buffer for the duration of one
+	// frame, exactly as the HUD's own graph already reads it.
+	struct SampleWindow
+	{
+		const float *pflSamples = nullptr;
+		size_t       nCount     = 0;
+		float        flCeiling  = 0.0f;   // value mapped to the band's full height
+		float        flOutlier  = 0.0f;   // at or above this draws in the warn colour; 0 marks none
+
+		// 0 rolls (newest right-aligned); >0 is a fixed axis of that many
+		// slots filled from the left, so a warm-up cannot read as a full
+		// window. See controls::GraphBody().
+		size_t       nAxisSlots = 0;
+	};
+
 	// A Details readout. Returned by .Live(); deliberately has no setter.
 	struct Fact
 	{
@@ -342,6 +359,16 @@ namespace gamescope::ui
 		// so Details cannot contain a control (SPEC §5.2 clause 4).
 		Entry &Live( const char *pszLeaf, std::function<Fact()> fn );
 
+		// ---- Composite(Graph)'s sample window ----------------------------
+		// Exactly Meter's shape -- std::function returning a READ, with no
+		// setter anywhere -- and for the same reason: a graph is read-only
+		// by construction (ReadOnly() already returns true for Graph), so
+		// there must be no route through which one could be given a
+		// binding. This is not a fifth generator; it is the graph's value,
+		// the way Meter() takes its scalar and Facts() its summary.
+		Entry &Samples( std::function<SampleWindow()> fn );
+		SampleWindow SampleData() const { return m_Samples ? m_Samples() : SampleWindow{}; }
+
 		const std::string &Id() const       { return m_sId; }
 		const std::string &Title() const    { return m_sTitle; }
 		const std::string &HelpText() const { return m_sHelp; }
@@ -351,6 +378,19 @@ namespace gamescope::ui
 		CompositeKind GetCompositeKind() const { return m_eComposite; }
 		const AnyBind &Binding() const      { return m_Bind; }
 		const Value &DefaultValue() const   { return m_Default; }
+
+		// ---- the second axis (composites only) ---------------------------
+		// Area::Composite() is the ONLY factory that takes two bindings, and
+		// Default( vA, vB ) the only setter that fills both. A composite
+		// whose value is genuinely two numbers -- the anchor's row and
+		// column -- would otherwise have to smuggle the pair through one
+		// binding as a packed int or a string, which is exactly how the two
+		// legacy Position Grid call sites drifted apart (SPEC §4.4).
+		//
+		// There is no third axis and no way to ask for one: a call site
+		// passes bindA and bindB by position and cannot name a bindC.
+		const AnyBind &BindingB() const     { return m_BindB; }
+		const Value &DefaultValueB() const  { return m_DefaultB; }
 		bool  HasRange() const              { return m_bHasRange; }
 		float Lo() const                    { return m_flLo; }
 		float Hi() const                    { return m_flHi; }
@@ -421,6 +461,7 @@ namespace gamescope::ui
 		std::function<double()>      m_Scalar;    // Meter
 		std::function<std::string()> m_Summary;   // Facts
 		std::function<void()>        m_Action;    // Action
+		std::function<SampleWindow()> m_Samples;  // Composite(Graph)
 		std::string m_sVerb;
 
 		std::vector<std::unique_ptr<Parameter>> m_Params;
@@ -429,6 +470,14 @@ namespace gamescope::ui
 		Area     *m_pArea = nullptr;
 		Registry *m_pRegistry = nullptr;
 		size_t    m_nGroup = 0;
+	};
+
+	// One line of an area's content body. See Area::Content().
+	struct ContentLine
+	{
+		int         nSeverity = 0;   // 0 info, 1 debug, 2 warn, 3 error
+		std::string sScope;          // subsystem tag, drawn as a dim prefix; may be empty
+		std::string sText;
 	};
 
 	// =====================================================================
@@ -510,6 +559,43 @@ namespace gamescope::ui
 		Area &Escape( std::function<void()> fn );
 		bool  IsEscaped() const { return (bool)m_Escape; }
 		const std::function<void()> &EscapeBody() const { return m_Escape; }
+
+		// ================================================================
+		//  CONTENT AREAS -- P3c
+		// ================================================================
+		// An area whose body is CONTENT rather than a list of settings.
+		// Log is the only one: a settings sheet made of log lines is not a
+		// settings sheet, and pretending each line is a row would put
+		// thousands of them through the Six Budget and the Prefix Law for
+		// no reason.
+		//
+		// THIS IS NOT Escape() UNDER A NEW NAME, and the difference is the
+		// whole point. Escape() hands a call site the sheet's child window
+		// and lets it run arbitrary ImGui with every law suspended --
+		// that is why it was always temporary. Content() hands the shell
+		// DATA and nothing else: a function returning lines. The call site
+		// still cannot place a pixel (SPEC §5.2 clause 0), cannot choose a
+		// font, a colour or a width, and cannot lay anything out. The
+		// shell draws the view, exactly as it draws every control.
+		//
+		// A content area STILL DECLARES ROWS, and they are still ordinary
+		// rows: Log's filter bank, its text filter and its buffer facts all
+		// go through the same grammar, the same Inspector and the same
+		// help. They are drawn above the content. So an area is never
+		// "rows or content" -- it is rows AND, optionally, a content body
+		// beneath them.
+		Area &Content( std::function<std::vector<ContentLine>()> fn );
+		bool  HasContent() const { return (bool)m_Content; }
+		std::vector<ContentLine> ContentLines() const
+		{
+			return m_Content ? m_Content() : std::vector<ContentLine>{};
+		}
+
+		// Whether the content view sticks to its newest line. Read by the
+		// shell; declared by the area so the behaviour is a property of the
+		// registration rather than shell state a category cannot see.
+		Area &FollowsTail( std::function<bool()> fn );
+		bool  FollowTail() const { return !m_FollowTail || m_FollowTail(); }
 
 		// ================================================================
 		//  DYNAMIC AREAS -- P3b
@@ -608,6 +694,8 @@ namespace gamescope::ui
 		std::function<std::string()> m_Badge;
 		std::function<bool()>        m_Available;
 		std::function<void()>        m_Escape;   // migration seam -- see Escape()
+		std::function<std::vector<ContentLine>()> m_Content;  // content areas -- see Content()
+		std::function<bool()>        m_FollowTail;
 		std::function<uint64_t()>    m_Generation;  // dynamic areas -- see Rebuilds()
 		std::function<void( Area & )> m_Build;
 		uint64_t                     m_ulGeneration = 0;

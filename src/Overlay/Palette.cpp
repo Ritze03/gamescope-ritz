@@ -58,6 +58,46 @@ namespace gamescope::palette
 			(int)( flAlpha * 255.0f + 0.5f ) );
 	}
 
+	// ---- sRGB -> OKLCH -----------------------------------------------------
+	// The inverse of OklchToImU32(), same matrices transposed back. Every
+	// constant below is the numeric inverse of the one directly above it, so
+	// the two functions cannot be updated independently without the round-trip
+	// test in tests/test_overlay_atoms.cpp failing.
+	void ImU32ToOklch( ImU32 col, float *pflL, float *pflC, float *pflHueDegrees )
+	{
+		auto DecodeChannel = []( int n ) -> float
+		{
+			const float c = (float)n / 255.0f;
+			return ( c <= 0.04045f ) ? c / 12.92f : powf( ( c + 0.055f ) / 1.055f, 2.4f );
+		};
+
+		const float r = DecodeChannel( (int)( ( col >> IM_COL32_R_SHIFT ) & 0xFF ) );
+		const float g = DecodeChannel( (int)( ( col >> IM_COL32_G_SHIFT ) & 0xFF ) );
+		const float b = DecodeChannel( (int)( ( col >> IM_COL32_B_SHIFT ) & 0xFF ) );
+
+		const float l = 0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b;
+		const float m = 0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b;
+		const float s = 0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b;
+
+		const float l_ = cbrtf( l );
+		const float m_ = cbrtf( m );
+		const float s_ = cbrtf( s );
+
+		const float flL = 0.2104542553f * l_ + 0.7936177850f * m_ - 0.0040720468f * s_;
+		const float flA = 1.9779984951f * l_ - 2.4285922050f * m_ + 0.4505937099f * s_;
+		const float flB = 0.0259040371f * l_ + 0.7827717662f * m_ - 0.8086757660f * s_;
+
+		if ( pflL ) *pflL = flL;
+		if ( pflC ) *pflC = sqrtf( flA * flA + flB * flB );
+		if ( pflHueDegrees )
+		{
+			float flHue = atan2f( flB, flA ) * ( 180.0f / 3.14159265358979323846f );
+			if ( flHue < 0.0f )
+				flHue += 360.0f;
+			*pflHueDegrees = flHue;
+		}
+	}
+
 	// ---- Accent family (defaults match hue 218 = today's #36BDDD family) --
 	ImU32 kAccent        = IM_COL32( 0x36, 0xBD, 0xDD, 255 );
 	ImU32 kAccentEdge    = IM_COL32( 0x4F, 0xD0, 0xF1, 255 );

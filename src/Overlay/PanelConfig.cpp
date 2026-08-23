@@ -1245,13 +1245,30 @@ namespace gamescope
 		{
 			a.Group( "Theme" );
 
-			a.Slider( "overlay.accent_hue", "Accent colour",
+			// SPEC §4.4's "Accent hue" composite: a 2-line band whose body is
+			// the hue rail plus its eight preset swatches, and whose value
+			// column reads a plain `218°`.
+			//
+			// This was issue #37's gradient control, which P3b had to
+			// downgrade to a plain Slider because Kind::Composite rendered
+			// nothing at the time -- the hue was still settable, but the
+			// strip that shows WHICH hue, sampled from the real
+			// OklchToImU32(), was gone. It is restored here, on the band, not
+			// as a second bespoke widget: Controls.cpp's Rail() samples the
+			// same accent math the legacy strip did, so the two cannot
+			// disagree about what a hue looks like.
+			a.Composite( "overlay.accent_hue", "Accent colour", ui::CompositeKind::Hue,
 				ui::AnyBind::Of<float>(
 					[]{ EnsureGeneralSettingsLoaded(); return s_GeneralSettings.overlay.accent_hue; },
 					[]( float flHue )
 					{
 						EnsureGeneralSettingsLoaded();
 						s_GeneralSettings.overlay.accent_hue = flHue;
+						// QueueGeneralSave() pushes the live theme before it
+						// enqueues the write, so every accent token is
+						// recomputed on the same frame the rail moves --
+						// which is what makes the band's own swatches, and
+						// the rest of the overlay, follow the drag.
 						QueueGeneralSave();
 					} ) )
 				.Help( "One hue drives the whole accent family -- sliders, toggles, the rail's active "
@@ -1273,8 +1290,17 @@ namespace gamescope
 						// The font atlas is re-baked at the new size. The
 						// legacy slider did this on release via
 						// IsItemDeactivatedAfterEdit; a registration has no
-						// such hook, so it happens on the write.
-						gamescope::fonts::RebuildAll( flScale );
+						// such hook, so it is REQUESTED on the write and
+						// performed by the render thread at the top of its
+						// next frame.
+						//
+						// Requested, not done here: this setter is reachable
+						// from the console thread through overlay_e2_set, and
+						// RebuildAll() there clears a font atlas out from
+						// under a live draw pass -- a hard abort as soon as
+						// anything on screen needs a glyph baked at the new
+						// size. See Fonts.h's RequestRebuild().
+						gamescope::fonts::RequestRebuild( flScale );
 					} ) )
 				.Help( "Multiplies every base unit in the overlay and re-bakes the font atlas, so "
 				       "text stays crisp. Widget geometry stays spec-exact, so very large values can "

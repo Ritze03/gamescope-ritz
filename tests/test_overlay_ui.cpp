@@ -452,6 +452,55 @@ TEST_CASE( "band: line 1 reads as a row and the body is on the control line", "[
 	REQUIRE( band.rcBody.Max.y <= band.rcBand.Max.y + 1e-3f );
 }
 
+TEST_CASE( "band: the four clauses hold at every display scale", "[overlay_ui]" )
+{
+	// The anchor grid is the control under the most scrutiny in this design
+	// (fix #3), and 2.0x is where a band would break first: the body is the
+	// only part of a row whose size is a token rather than a measurement, so
+	// a missing Px() would leave a 96x96 grid pinned at 96 physical pixels
+	// inside a band that had doubled around it. Checked at every rung of the
+	// responsive ladder rather than only at 1.0x, because at 1.0x a scale bug
+	// is invisible by definition.
+	for ( float flScale : { 0.5f, 1.0f, 1.25f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		INFO( "display_scale " << flScale );
+
+		const ui::Lane lane = ui::Lane::ForColumn( 804.0f );
+		const ui::RowCtx plainRow = ui::RowCtx::ForRow( lane, 0.0f, 0.0f );
+		const ui::BandLayout band = ui::LayOutBand( lane, 0.0f, 0.0f, ui::CompositeKind::Anchor );
+
+		// Clause 1: exactly n x 44, IN PIXELS, so the clipper's uniform step
+		// stays exact at this scale too.
+		REQUIRE_THAT( band.rcBand.GetHeight(),
+			WithinAbs( 3.0f * ui::Px( ui::tok::kRowH ), 1e-3f ) );
+
+		// Clause 2: line 1 is still an ordinary row -- same height, same
+		// control edge, same affordance column as a switch above it.
+		REQUIRE_THAT( band.line1.Bounds().GetHeight(),
+			WithinAbs( plainRow.Bounds().GetHeight(), 1e-4f ) );
+		REQUIRE_THAT( band.line1.PlaceFull().Max.x,
+			WithinAbs( plainRow.PlaceFull().Max.x, 1e-4f ) );
+
+		// Clause 3: right-bound to the same vertical as every other control,
+		// and the body scales with everything else rather than staying at its
+		// base size.
+		REQUIRE_THAT( band.rcBody.Max.x, WithinAbs( plainRow.PlaceFull().Max.x, 1e-4f ) );
+		REQUIRE_THAT( band.rcBody.GetWidth(),  WithinAbs( ui::Px( 96.0f ), 1e-3f ) );
+		REQUIRE_THAT( band.rcBody.GetHeight(), WithinAbs( ui::Px( 96.0f ), 1e-3f ) );
+
+		// The body stays inside its band at every scale -- the 96 base body
+		// against a 3 x 44 band has 36 base units of headroom, which is only
+		// headroom if both sides scale together.
+		REQUIRE( band.rcBody.Min.y >= band.rcBand.Min.y - 1e-3f );
+		REQUIRE( band.rcBody.Max.y <= band.rcBand.Max.y + 1e-3f );
+
+		// Clause 4 is structural: the body's left edge never reaches back
+		// into the label column, so lines 2..n stay air.
+		REQUIRE( band.rcBody.Min.x > band.line1.Bounds().Min.x );
+	}
+}
+
 TEST_CASE( "band: a full-bleed body still ends on the control line", "[overlay_ui]" )
 {
 	ScopedScale s( 1.0f );
@@ -1257,6 +1306,54 @@ TEST_CASE( "reset: a row restores itself and its parameters together", "[overlay
 	REQUIRE( flScale == 1.0f );
 	REQUIRE( flDock  == 1.0f );
 	REQUIRE( flNotif == 1.0f );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "reset: a composite's SECOND axis counts as part of the row", "[overlay_ui]" )
+{
+	// An anchor is one setting whose value is a PAIR. If "differs from
+	// default" and "reset" read only the first binding, an anchor sitting at
+	// the right column but the wrong row reports itself as unchanged -- and
+	// the half that did move can never be reset. That is the state edge (D6)
+	// lying about the sheet, so it is checked here rather than left to the
+	// renderer.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "system.monitor", "Monitor", ui::Section::System );
+
+	int nV = 0, nH = 2;
+	a.Composite( "monitor.anchor", "Placement", ui::CompositeKind::Anchor,
+			ui::Bind( &nV ), ui::Bind( &nH ) )
+		.Default( 0, 2 )
+		.Help( "Which screen corner the monitor is anchored to." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "monitor.anchor" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( pEntry->HasDefault() );
+	REQUIRE( pEntry->IsAtDefault() );
+
+	// Axis A alone moving is enough.
+	nV = 2;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( nV == 0 );
+	REQUIRE( nH == 2 );
+
+	// Axis B alone moving is equally enough -- this is the half that a
+	// single-binding implementation silently drops.
+	nH = 0;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( nV == 0 );
+	REQUIRE( nH == 2 );
+
+	// And both at once, in one action.
+	nV = 1; nH = 1;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( nV == 0 );
+	REQUIRE( nH == 2 );
 
 	REQUIRE( rec.Count() == 0 );
 }

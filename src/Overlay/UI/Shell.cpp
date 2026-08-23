@@ -38,6 +38,7 @@
 // escape hatch dies with the last one.
 #include "Shell.h"
 
+#include "Band.h"
 #include "Colors.h"
 #include "Controls.h"
 #include "Layout.h"
@@ -127,6 +128,13 @@ namespace gamescope::ui::shell
 		std::string   s_sArmedAction;
 		float         s_flArmedAt = 0.0f;
 		constexpr float kArmTimeout = 6.0f;   // seconds
+
+		// P3c: the id of the Text row currently being EDITED. controls::Text
+		// owns the display/input transition but needs one bit of caller
+		// state to hold it in; one string, for the same reason as the two
+		// above -- exactly one field can be open, and per-row state is the
+		// category this shell exists to not have.
+		std::string   s_sEditingText;
 
 		// The one animated quantity: SPEC §8.4's 160 ms region duration,
 		// used for the rail's collapse so the icon rail does not snap.
@@ -271,13 +279,11 @@ namespace gamescope::ui::shell
 			// PipeWire stream, discovered at runtime rather than declared
 			// here. See ui::Area::Rebuilds().
 			PanelAudio_RegisterArea( reg );
-			reg.Add( "system.monitor", "Monitor", Section::System )
-				// FpsDisplay.cpp does two jobs; this is the SETTINGS half
-				// only. The HUD over the game is drawn from its own,
-				// separate context and is not in P2's scope at all.
-				.Escape( []{ FpsDisplay_DrawSettingsPanel(); } );
-			reg.Add( "system.log", "Log", Section::System )
-				.Escape( []{ PanelLog_DrawBody(); } );
+			// P3 part C. FpsDisplay.cpp does two jobs; this declares the
+			// SETTINGS half only. The HUD over the game is drawn from its
+			// own separate context and was never in the redesign's scope.
+			FpsDisplay_RegisterArea( reg );
+			PanelLog_RegisterArea( reg );
 
 			// ---- SETUP ---------------------------------------------------
 			// P3 part B. The Config panel's three tabs became three areas,
@@ -887,15 +893,296 @@ namespace gamescope::ui::shell
 					}
 					return false;
 				}
+				case Kind::Bank:
+				{
+					// The mask travels as an int because Value has no
+					// unsigned alternative; the atom wants uint32_t. One
+					// conversion each way, in the one place that knows both.
+					uint32_t nMask = (uint32_t)( std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0 );
+					if ( controls::Bank( row, pszId, &nMask,
+						decl.Options().data(), decl.Options().size() ) )
+					{
+						decl.Binding().Set( Value{ (int)nMask } );
+						return true;
+					}
+					return false;
+				}
+				case Kind::Text:
+				{
+					std::string s = std::holds_alternative<std::string>( v )
+						? std::get<std::string>( v ) : std::string();
+					bool bEditing = ( s_sEditingText == sPopupKey );
+					if ( controls::Text( row, pszId, &s, &bEditing ) )
+					{
+						decl.Binding().Set( Value{ s } );
+						// Fall through to the state sync below rather than
+						// returning early: the atom can commit a value and
+						// close the field on the same frame.
+					}
+					if ( bEditing )
+						s_sEditingText = sPopupKey;
+					else if ( s_sEditingText == sPopupKey )
+						s_sEditingText.clear();
+					return false;
+				}
 				default:
 					return false;
 			}
+		}
+
+		// SPEC §1's state-edge slot: "2px, at x=0 -- Accent / Accent@45% /
+		// nothing". One slot, three values, and this function is the only
+		// place that decides which.
+		//
+		// THIS IS D6's OTHER HALF. D6 chose exactly ONE encoding of "differs
+		// from default" on the sheet -- this edge -- and deleted the other
+		// two: the accent-recoloured value (which competed with the accent's
+		// live/active job) and the reset dot (which DISPLACED the depth
+		// chevron, so a row that both differed and had depth stopped
+		// advertising its depth). The reset action moved to the Inspector,
+		// and was built in P3b; the edge was not, which left the decision
+		// half-implemented -- the sheet could not show which rows had
+		// anything to reset, so "what have I changed here" was unanswerable
+		// without opening every row in turn. The edge is the only one of the
+		// three encodings that SCANS VERTICALLY, which is the whole reason
+		// D6 kept it.
+		//
+		// Selection outranks differs because the two share the slot. A
+		// selected row that also differs reads as selected, and the
+		// Inspector it just opened is already showing the reset link.
+		ImU32 StateEdgeColor( const Entry &entry, bool bSelected )
+		{
+			if ( bSelected )
+				return Col( Role::AccentBase );
+			if ( entry.HasDefault() && !entry.IsAtDefault() )
+				return Accent( 0.45f );
+			return 0;
+		}
+
+		// =================================================================
+		//  Composites -- SPEC §4.2's band
+		// =================================================================
+		// How many 44-tall lines a declaration occupies. ONE for every row in
+		// the taxonomy; n for a Composite, and that n comes from Band.cpp's
+		// kSpecs table rather than from anything a call site said (SPEC §4.2
+		// clause 1: "n x 44, n in {2,3}. Nothing else.").
+		//
+		// Every place that advances a y cursor past a declaration goes
+		// through this, so the sheet and the Inspector cannot disagree about
+		// how tall a band is.
+		int LinesFor( const Entry &entry )
+		{
+			if ( entry.GetKind() != Kind::Composite )
+				return 1;
+			return ImClamp( Band( entry.GetCompositeKind() ).nLines,
+			                tok::kBandMinLines, tok::kBandMaxLines );
+		}
+
+		// The nine anchors, named. A lookup and not a format string, so the
+		// value column cannot be told a corner the grid cannot express.
+		const char *AnchorName( int nVert, int nHoriz )
+		{
+			static const char *const kNames[ 3 ][ 3 ] = {
+				{ "top-left",    "top",    "top-right"    },
+				{ "left",        "centre", "right"        },
+				{ "bottom-left", "bottom", "bottom-right" },
+			};
+			return kNames[ ImClamp( nVert, 0, 2 ) ][ ImClamp( nHoriz, 0, 2 ) ];
+		}
+
+		int AsInt( const Value &v )
+		{
+			if ( std::holds_alternative<int>( v ) )   return std::get<int>( v );
+			if ( std::holds_alternative<float>( v ) ) return (int)std::get<float>( v );
+			return 0;
+		}
+
+		float AsFloat( const Value &v )
+		{
+			if ( std::holds_alternative<float>( v ) ) return std::get<float>( v );
+			if ( std::holds_alternative<int>( v ) )   return (float)std::get<int>( v );
+			return 0.0f;
+		}
+
+		// SPEC §4.2 clause 2: line 1 carries the composite's RESOLVED VALUE
+		// in the value column -- "the value column already tells you they are
+		// 32 / 32 without showing two steppers, which is the whole calming
+		// move in miniature" (§4.3).
+		std::string CompositeValue( const Entry &entry )
+		{
+			switch ( entry.GetCompositeKind() )
+			{
+				case CompositeKind::Anchor:
+				{
+					std::string s = AnchorName( AsInt( entry.Binding().Get() ),
+					                            AsInt( entry.BindingB().Get() ) );
+					// The margins are Params (§4.3), so they are read from
+					// the params themselves -- there is no second copy of
+					// them for the value line to drift away from.
+					if ( entry.ParamCount() >= 2 )
+					{
+						s += "  ·  " + ValueToString( entry.ParamAt( 0 ).Binding().Get() )
+						   + " / "   + ValueToString( entry.ParamAt( 1 ).Binding().Get() );
+					}
+					return s;
+				}
+				case CompositeKind::Hue:
+				{
+					char sz[ 16 ];
+					snprintf( sz, sizeof( sz ), "%.0f°", AsFloat( entry.Binding().Get() ) );
+					return sz;
+				}
+				case CompositeKind::Color:
+				{
+					char sz[ 16 ];
+					snprintf( sz, sizeof( sz ), "#%06X", AsInt( entry.Binding().Get() ) & 0xFFFFFF );
+					return sz;
+				}
+				case CompositeKind::Graph:
+				case CompositeKind::Strip:
+					return entry.SummaryText();
+			}
+			return {};
+		}
+
+		// One composite band. Structurally the same function as DrawEntryRow
+		// -- same selection fill, same hairline, same label/value split, same
+		// affordance column -- differing only in that its bounds are n rows
+		// tall and its control is a body rather than an atom. That is clause
+		// 2 made literal: "scanning the sheet, a composite is
+		// indistinguishable from a row until your eye reaches the control
+		// column."
+		bool DrawCompositeBand( const Entry &entry, const Lane &laneBase, float flOriginPx,
+		                        float flTopPx, bool bSelected )
+		{
+			const BandLayout bl = LayOutBand( laneBase, flOriginPx, flTopPx, entry.GetCompositeKind() );
+			const ImRect rcBand = bl.rcBand;
+
+			ImGui::SetCursorScreenPos( rcBand.Min );
+			ImGui::PushID( entry.Id().c_str() );
+
+			// The band's own hit box covers line 1 ONLY. The body owns the
+			// rest, and a click there must reach the grid rather than being
+			// swallowed by a full-band selector drawn on top of it.
+			const ImRect rcHit( rcBand.Min.x, rcBand.Min.y, bl.rcBody.Min.x, bl.line1.Bounds().Max.y );
+			ImGui::SetCursorScreenPos( rcHit.Min );
+			const bool bClicked = ImGui::InvisibleButton( "##band", rcHit.GetSize() );
+			const bool bHovered = ImGui::IsItemHovered();
+
+			if ( bSelected )
+				Fill( { rcBand.Min.x, rcBand.Min.y, rcBand.Max.x, rcBand.Max.y }, Accent( 0.08f ) );
+			else if ( bHovered )
+				Fill( { rcBand.Min.x, rcBand.Min.y, rcBand.Max.x, rcBand.Max.y },
+				      IM_COL32( 255, 255, 255, 10 ) );
+
+			// Clause 1's consequence: the state edge spans the WHOLE band,
+			// not just its first line, or a selected composite would look
+			// like a selected row with n-1 unselected ones stacked under it.
+			if ( const ImU32 colEdge = StateEdgeColor( entry, bSelected ) )
+			{
+				const ImRect rcEdge = bl.line1.StateEdge();
+				Fill( { rcEdge.Min.x, rcBand.Min.y, rcEdge.Max.x, rcBand.Max.y }, colEdge );
+			}
+			HLine( rcBand.Min.x, rcBand.Max.x, rcBand.Max.y - Hairline(), Col( Role::Line ) );
+
+			const bool bDisabled = !entry.DisabledReason().empty();
+			const ScopedDim dim( bDisabled );
+
+			// Clause 2: the label and the resolved value land in the SHEET's
+			// own columns, through line 1's ordinary RowCtx.
+			const std::string sValue = CompositeValue( entry );
+			ImRect rcLabel, rcValue;
+			const float flValueW = !sValue.empty()
+				? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
+			bl.line1.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+
+			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
+			       TypeRole::Label,
+			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
+			       entry.Title().c_str() );
+			if ( flValueW > 0.0f )
+				Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
+				       TypeRole::Value, Col( Role::TextPrimary ), sValue.c_str(), TextAlign::Right );
+
+			// Clause 4 needs nothing here: the only rect this function draws
+			// into below line 1 is bl.rcBody, which Band.cpp right-bound. The
+			// label column of lines 2..n is air because nothing allocates it.
+			if ( bDisabled )
+				ImGui::BeginDisabled();
+
+			switch ( entry.GetCompositeKind() )
+			{
+				case CompositeKind::Anchor:
+				{
+					int nV = AsInt( entry.Binding().Get() );
+					int nH = AsInt( entry.BindingB().Get() );
+					if ( controls::AnchorGrid( bl.rcBody, "grid", &nV, &nH ) )
+					{
+						entry.Binding().Set( Value{ nV } );
+						entry.BindingB().Set( Value{ nH } );
+					}
+					break;
+				}
+				case CompositeKind::Hue:
+				{
+					float flHue = AsFloat( entry.Binding().Get() );
+					if ( controls::HueBody( bl.rcBody, "hue", &flHue ) )
+						entry.Binding().Set( Value{ flHue } );
+					break;
+				}
+				case CompositeKind::Color:
+				{
+					// The stored value is, and stays, a packed 0xRRGGBB int
+					// -- the control edits OKLCH and converts back on every
+					// edit, so no config format changed for this row to
+					// exist.
+					const int nPacked = AsInt( entry.Binding().Get() );
+					float flL = 0.0f, flC = 0.0f, flH = 0.0f;
+					palette::ImU32ToOklch( IM_COL32( ( nPacked >> 16 ) & 0xFF,
+					                                 ( nPacked >> 8 ) & 0xFF,
+					                                 nPacked & 0xFF, 255 ), &flL, &flC, &flH );
+					if ( controls::ColorBody( bl.rcBody, "col", &flL, &flC, &flH ) )
+					{
+						const ImU32 col = palette::OklchToImU32( flL, flC, flH );
+						entry.Binding().Set( Value{ (int)(
+							( (int)( ( col >> IM_COL32_R_SHIFT ) & 0xFF ) << 16 ) |
+							( (int)( ( col >> IM_COL32_G_SHIFT ) & 0xFF ) << 8 ) |
+							  (int)( ( col >> IM_COL32_B_SHIFT ) & 0xFF ) ) } );
+					}
+					break;
+				}
+				case CompositeKind::Graph:
+				{
+					const SampleWindow win = entry.SampleData();
+					controls::GraphBody( bl.rcBody, win.pflSamples, win.nCount,
+					                     win.flCeiling, win.flOutlier, win.nAxisSlots );
+					break;
+				}
+				case CompositeKind::Strip:
+					// No call site registers a Strip: the audio fader stayed
+					// a Slider row in P3b. Deliberately draws nothing rather
+					// than inventing a body no declaration asks for -- a
+					// control that renders and does nothing is #25 and #68.
+					break;
+			}
+
+			if ( bDisabled )
+				ImGui::EndDisabled();
+
+			ImGui::PopID();
+			return bClicked;
 		}
 
 		// One Inspector/sheet row of the Row grammar.
 		bool DrawEntryRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
 		                   bool bSelected )
 		{
+			// A composite is NOT a row (SPEC §4.2), and this is the one place
+			// that says so. Everything downstream -- selection, the keyboard,
+			// Configure -- goes on treating it as one declaration.
+			if ( entry.GetKind() == Kind::Composite )
+				return DrawCompositeBand( entry, laneBase, flOriginPx, flTopPx, bSelected );
+
 			const RowCtx row = RowCtx::ForRow( laneBase, flOriginPx, flTopPx );
 			const ImRect rcRow = row.Bounds();
 
@@ -905,14 +1192,14 @@ namespace gamescope::ui::shell
 			const bool bHovered = ImGui::IsItemHovered();
 
 			if ( bSelected )
-			{
 				Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, Accent( 0.08f ) );
-				const ImRect rcEdge = row.StateEdge();
-				Fill( { rcEdge.Min.x, rcEdge.Min.y, rcEdge.Max.x, rcEdge.Max.y }, Col( Role::AccentBase ) );
-			}
 			else if ( bHovered )
-			{
 				Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, IM_COL32( 255, 255, 255, 10 ) );
+
+			if ( const ImU32 colEdge = StateEdgeColor( entry, bSelected ) )
+			{
+				const ImRect rcEdge = row.StateEdge();
+				Fill( { rcEdge.Min.x, rcEdge.Min.y, rcEdge.Max.x, rcEdge.Max.y }, colEdge );
 			}
 			HLine( rcRow.Min.x, rcRow.Max.x, rcRow.Max.y - Hairline(), Col( Role::Line ) );
 
@@ -969,6 +1256,15 @@ namespace gamescope::ui::shell
 				case Kind::Slider:
 				case Kind::Stepper:
 				case Kind::Choice:
+				// Bank and Text reached this switch's `default: break` until
+				// P3c and therefore DREW NOTHING -- no area had used either
+				// kind before the Log, so two declared, law-abiding, fully
+				// bound controls rendered as an empty control column. That is
+				// #25 and #68 exactly, produced by an unhandled enumerator
+				// rather than by a missing implementation: both atoms have
+				// existed in Controls.cpp since P1.
+				case Kind::Bank:
+				case Kind::Text:
 					DrawSharedControl( entry, row, "ctl", entry.Id() );
 					break;
 				case Kind::Action:
@@ -1077,6 +1373,90 @@ namespace gamescope::ui::shell
 			return y + flH + Px( tok::kGroupSpaceBelow );
 		}
 
+		// ---- a content area's body (Area::Content) -----------------------
+		// The Log is the only one. Everything about how it LOOKS is decided
+		// here, in the shell, because the registration hands over data and
+		// nothing else -- no font, no colour, no width, no cursor. That is
+		// what makes this a content view rather than a second Escape().
+		//
+		// Severity is a small int on the line, mapped to a role here, so a
+		// category cannot introduce a colour the palette does not have.
+		ImU32 SeverityColor( int nSeverity )
+		{
+			switch ( nSeverity )
+			{
+				case 3:  return Col( Role::DangerText );
+				case 2:  return Col( Role::WarnText );
+				case 1:  return Col( Role::TextMeta );
+				default: return Col( Role::TextBody );
+			}
+		}
+
+		void DrawContentBody( const Area &area, const Rect &rcCol, float flTop, float flBottom )
+		{
+			const std::vector<ContentLine> vecLines = area.ContentLines();
+
+			const float flLineH = MeasureText( TypeRole::Meta, "Xg" ).y + Px( 3.0f );
+			const float flH     = ImMax( flLineH * 3.0f, flBottom - flTop - Px( tok::kM ) );
+
+			const Rect rcBody { rcCol.x0, flTop, rcCol.x1, flTop + flH };
+			Fill( rcBody, Col( Role::SurfaceRaised ) );
+
+			if ( vecLines.empty() )
+			{
+				// SPEC §3.13's empty state: one centred line, TextMeta.
+				Label( { rcBody.x0, rcBody.y0, rcBody.x1, rcBody.y0 + Px( 96.0f ) },
+				       TypeRole::Meta, Col( Role::TextMeta ),
+				       "nothing captured yet", TextAlign::Center );
+				return;
+			}
+
+			ImGui::SetCursorScreenPos( ImVec2( rcBody.x0, rcBody.y0 ) );
+			if ( ImGui::BeginChild( "##content", ImVec2( rcBody.Width(), rcBody.Height() ),
+				ImGuiChildFlags_None,
+				ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar ) )
+			{
+				// Every line is exactly one visual row, so a uniform-height
+				// clipper is exact at any buffer size -- only what is on
+				// screen ever becomes draw data.
+				const float flPadX = Px( tok::kS );
+				ImGuiListClipper clipper;
+				clipper.Begin( (int)vecLines.size(), flLineH );
+				while ( clipper.Step() )
+				{
+					for ( int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i )
+					{
+						const ContentLine &line = vecLines[ (size_t)i ];
+						const float y = ImGui::GetCursorScreenPos().y
+						              + (float)( i - clipper.DisplayStart ) * flLineH;
+
+						float x = rcBody.x0 + flPadX;
+						if ( !line.sScope.empty() )
+						{
+							const std::string sTag = "[" + line.sScope + "]";
+							const float flW = MeasureText( TypeRole::Meta, sTag.c_str() ).x;
+							Label( { x, y, x + flW, y + flLineH }, TypeRole::Meta,
+							       Col( Role::TextMeta ), sTag.c_str() );
+							x += flW + Px( tok::kXS );
+						}
+						Label( { x, y, rcBody.x1 - flPadX, y + flLineH }, TypeRole::Meta,
+						       SeverityColor( line.nSeverity ), line.sText.c_str() );
+					}
+				}
+				clipper.End();
+
+				// The standard log-window idiom, kept: stick to the bottom
+				// while the view is already at the bottom, stop the instant
+				// the reader scrolls up, resume when they scroll back down.
+				// The scroll position IS the state -- but the area can
+				// withdraw the behaviour outright, which is what Log's
+				// auto-scroll switch does.
+				if ( area.FollowTail() && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f )
+					ImGui::SetScrollHereY( 1.0f );
+			}
+			ImGui::EndChild();
+		}
+
 		void DrawSheetBody( const Rect &rc, const Area *pArea )
 		{
 			if ( !pArea )
@@ -1151,8 +1531,14 @@ namespace gamescope::ui::shell
 						Select( &entry );
 						s_eFocusRegion = Region::Sheet;
 					}
-					y += Px( tok::kRowH );
+					// n x 44 for a composite, 44 for everything else -- from
+					// Band.cpp, never from a call site (SPEC §4.2 clause 1).
+					y += Px( tok::kRowH ) * (float)LinesFor( entry );
 				}
+
+				// A content area's body, beneath its own rows (Area::Content).
+				if ( pArea->HasContent() )
+					DrawContentBody( *pArea, rcCol, y + Px( tok::kM ), rc.y1 );
 			}
 			ImGui::EndChild();
 		}
@@ -1320,7 +1706,7 @@ namespace gamescope::ui::shell
 
 			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
 			DrawEntryRow( entry, lane, rcIn.x0, y, false );
-			y += Px( tok::kRowH );
+			y += Px( tok::kRowH ) * (float)LinesFor( entry );
 
 			// index.html's `parameters  <n> of 6` header. The denominator is
 			// the Six Budget itself, so the header is also the place the

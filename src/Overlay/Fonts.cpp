@@ -106,6 +106,7 @@
 #include "GeistMono-Medium.h"
 #include "GeistMono-SemiBold.h"
 
+#include <atomic>
 #include <cstring>
 #include <unordered_map>
 
@@ -404,6 +405,24 @@ namespace gamescope::fonts
 		}
 
 		ImGui::SetCurrentContext( pPrevContext );
+	}
+
+	// See Fonts.h. A single float is enough state: rebuilds are idempotent
+	// and only the LATEST requested scale matters, so a second request
+	// arriving before the first is pumped correctly supersedes it.
+	static std::atomic<float> g_flRequestedScale{ 0.0f };
+
+	void RequestRebuild( float flScale )
+	{
+		if ( flScale > 0.0f )
+			g_flRequestedScale.store( flScale, std::memory_order_relaxed );
+	}
+
+	void PumpRequestedRebuild()
+	{
+		const float flScale = g_flRequestedScale.exchange( 0.0f, std::memory_order_relaxed );
+		if ( flScale > 0.0f )
+			RebuildAll( flScale );
 	}
 
 	void ApplyPendingRebuild()

@@ -50,6 +50,21 @@ namespace gamescope::palette
 	// visibly disagree with the real accent at some hues.
 	ImU32 OklchToImU32( float flL, float flC, float flHueDegrees, float flAlpha = 1.0f );
 
+	// The exact inverse of the above, ignoring alpha. Added for E2's Colour
+	// override composite (SPEC §4.4): that control edits L, C and H, but the
+	// config format it is bound to is, and stays, a packed sRGB integer --
+	// so the round trip has to happen somewhere, and it belongs next to the
+	// forward conversion rather than in a panel.
+	//
+	// NOT round-trip-exact in general, and deliberately not pretending to
+	// be: OklchToImU32() CLAMPS out-of-gamut channels (see its own comment),
+	// so any OKLCH triple outside sRGB maps to a colour whose inverse is a
+	// different triple. Inside the gamut it round-trips to within the 8-bit
+	// quantisation the packed format imposes anyway, which is what the
+	// control needs -- the stored integer, not the triple, is the value of
+	// record.
+	void ImU32ToOklch( ImU32 col, float *pflL, float *pflC, float *pflHueDegrees );
+
 	// Recomputes every kAccent* token above from LiveTheme::flAccentHue --
 	// call after changing that field. Idempotent; cheap enough (10 OKLCH
 	// conversions) to call on every hue-slider edit, same as every other
