@@ -1,0 +1,903 @@
+<title>Console Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ==========================================================================
+   Direction A — "CONSOLE"
+   One full-bleed pane. No floating windows. Rail (master) + Stage (detail),
+   depth by drilling in. Everything below derives from two variables:
+     --u   the spacing unit  (4px @ display_scale 1.0)
+     --fs  the type base     (15px @ display_scale 1.0)
+   Change those two and the whole console scales. That is the point.
+   ========================================================================== */
+
+:root{
+  /* --- scale ------------------------------------------------------------ */
+  --u: 4px;
+  --fs: 15px;
+
+  /* --- accent family (OKLCH, hue is the only user-tunable axis) ---------- */
+  --hue: 218;
+  --accent:        oklch(.74 .12 var(--hue));
+  --accent-edge:   oklch(.80 .12 var(--hue));
+  --accent-value:  oklch(.84 .10 var(--hue));
+  --accent-text:   oklch(.82 .10 var(--hue));
+  --accent-knob:   oklch(.86 .08 var(--hue));
+  --accent-seg:    oklch(.90 .07 var(--hue));
+  --accent-a08:    oklch(.74 .12 var(--hue) / .08);
+  --accent-a12:    oklch(.74 .12 var(--hue) / .12);
+  --accent-a18:    oklch(.74 .12 var(--hue) / .18);
+  --accent-a30:    oklch(.74 .12 var(--hue) / .30);
+  --accent-a55:    oklch(.74 .12 var(--hue) / .55);
+
+  /* --- semantic state --------------------------------------------------- */
+  --ok:     oklch(.78 .16 145);
+  --warn:   oklch(.72 .17 55);
+  --danger: oklch(.70 .17 25);
+
+  /* --- surfaces (elevation = white alpha over the blurred base) ---------- */
+  --surface:  rgba(8,9,11,.86);
+  --e1: rgba(255,255,255,.030);   /* rail, well, toolbar          */
+  --e2: rgba(255,255,255,.060);   /* focused row                  */
+  --e3: rgba(255,255,255,.100);   /* sheet                        */
+  --hair:        rgba(255,255,255,.085);
+  --hair-strong: rgba(255,255,255,.16);
+
+  /* --- text roles ------------------------------------------------------- */
+  --t-primary:  rgba(239,245,251,.93);
+  --t-label:    rgba(239,245,251,.68);
+  --t-meta:     rgba(239,245,251,.46);
+  --t-disabled: rgba(239,245,251,.30);
+
+  /* --- derived metrics (never hand-typed anywhere below) ---------------- */
+  --row-h:    calc(var(--u) * 11);   /* 44px  */
+  --pad-x:    calc(var(--u) * 6);    /* 24px  */
+  --rail-w:   calc(var(--u) * 62);   /* 248px */
+  --ctl-w:    calc(var(--u) * 56);   /* 224px */
+  --con-w:    calc(var(--u) * 297);  /* 1188  */
+  --con-h:    calc(var(--u) * 192);  /* 768   */
+  --radius:   calc(var(--u) * 1.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+/* Committed single-theme design: this is a game overlay, composited over a
+   running game at night. A light variant would be a flashbang. The ground is
+   painted explicitly so the page never borrows the host's. */
+body{
+  font-family:'Geist',system-ui,sans-serif;
+  background:#05070a;color:var(--t-primary);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important}
+}
+.mono{font-family:'Geist Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* ---------- the game behind the overlay ---------------------------------- */
+#game{position:fixed;inset:0;z-index:0;transition:opacity .3s}
+#game .art{position:absolute;inset:0}
+#game.g0 .art{background:
+  radial-gradient(120% 90% at 22% 18%, #2c5c7a 0%, #12222f 42%, #070b10 100%),
+  linear-gradient(140deg,#3d2a12 0%, transparent 55%);}
+#game.g1 .art{background:
+  radial-gradient(90% 70% at 70% 30%, #d9762a 0%, #6c2a12 35%, #170c08 100%),
+  repeating-linear-gradient(112deg, rgba(255,255,255,.05) 0 3px, transparent 3px 22px);}
+#game.g2 .art{background:
+  radial-gradient(120% 120% at 50% 110%, #e8eef5 0%, #9fb4c6 30%, #3f5568 65%, #16202b 100%);}
+/* compositor's own blur + darkening pass, approximated */
+#scrim{position:fixed;inset:0;z-index:1;backdrop-filter:blur(26px) saturate(1.08);
+  background:rgba(4,6,9,.62);}
+
+/* ---------- demo strip (NOT part of the design — it explains the mock) ----- */
+#demo{position:fixed;left:0;right:0;top:0;height:52px;z-index:60;
+  display:flex;gap:14px;align-items:center;flex-wrap:nowrap;overflow-x:auto;
+  padding:0 16px;background:#05070a;border-bottom:1px solid rgba(255,255,255,.10);
+  font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.02em;
+  color:rgba(255,255,255,.62)}
+#demo .who{display:flex;flex-direction:column;gap:1px;flex:none;padding-right:4px}
+#demo .who strong{font-family:'Geist',sans-serif;font-size:12.5px;font-weight:600;
+  color:rgba(255,255,255,.92);letter-spacing:0}
+#demo .who span{font-size:10px;color:rgba(255,255,255,.38)}
+#demo b{color:rgba(255,255,255,.40);font-weight:500;text-transform:uppercase;flex:none}
+#demo button{font:inherit;background:rgba(255,255,255,.06);color:rgba(255,255,255,.72);
+  border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:5px 9px;cursor:pointer;flex:none}
+#demo button:hover{background:rgba(255,255,255,.11)}
+#demo button.on{background:var(--accent-a30);border-color:var(--accent-a55);color:#fff}
+#demo input[type=range]{width:88px;accent-color:oklch(.74 .12 var(--hue));flex:none}
+#demo .sep{width:1px;height:22px;background:rgba(255,255,255,.12);flex:none}
+#demo .keys{margin-left:auto;display:flex;gap:12px;align-items:center;flex:none;
+  color:rgba(255,255,255,.42);padding-left:12px}
+#demo .keys kbd{font:inherit;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);
+  border-radius:3px;padding:2px 5px;color:rgba(255,255,255,.75)}
+
+/* ==========================================================================
+   THE CONSOLE
+   ========================================================================== */
+#wrap{position:fixed;inset:52px 0 0 0;z-index:10;display:grid;place-items:center;padding:12px}
+.console{
+  width:min(var(--con-w), 100%);
+  height:min(var(--con-h), 100%);
+  background:var(--surface);
+  backdrop-filter:blur(22px) saturate(1.1);
+  border:1px solid var(--hair);
+  border-radius:var(--radius);
+  display:grid;
+  grid-template-rows:auto 1fr auto;
+  overflow:hidden;
+  box-shadow:0 40px 120px -30px rgba(0,0,0,.9);
+  position:relative;
+}
+
+/* ---------- header rail --------------------------------------------------- */
+.hdr{
+  height:calc(var(--u)*14);
+  display:flex;align-items:center;gap:calc(var(--u)*3);
+  padding:0 var(--pad-x);
+  border-bottom:1px solid var(--hair);
+  background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.008));
+}
+.brand{width:calc(var(--u)*2.5);height:calc(var(--u)*2.5);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*3) var(--accent-a55);flex:none}
+.crumb{display:flex;align-items:center;gap:calc(var(--u)*2);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.78);font-weight:600;
+  text-transform:uppercase;color:var(--t-primary)}
+.crumb .sep{color:var(--t-disabled);font-weight:400}
+.crumb .up{color:var(--t-meta)}
+.pips{display:flex;gap:calc(var(--u)*.75);margin-left:calc(var(--u)*1)}
+.pips i{width:calc(var(--u)*1.5);height:calc(var(--u)*.75);background:rgba(255,255,255,.16);display:block}
+.pips i.on{background:var(--accent)}
+.hdr .spacer{flex:1}
+.badge{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);text-transform:uppercase;
+  padding:calc(var(--u)*.75) calc(var(--u)*1.5);background:var(--accent-a18);color:var(--accent-text)}
+.live{display:flex;gap:calc(var(--u)*3);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.72);color:var(--t-meta)}
+.live b{color:var(--accent-value);font-weight:500}
+
+/* ---------- body: rail + stage -------------------------------------------- */
+.body{display:grid;grid-template-columns:var(--rail-w) 1fr;min-height:0}
+.body.wide{grid-template-columns:calc(var(--u)*16) 1fr}
+
+.rail{
+  border-right:1px solid var(--hair);background:var(--e1);
+  padding:calc(var(--u)*3) 0;display:flex;flex-direction:column;min-height:0;
+  transition:none;
+}
+.rail .rgroup{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);
+  text-transform:uppercase;color:var(--t-disabled);
+  padding:calc(var(--u)*3) var(--pad-x) calc(var(--u)*1.5)}
+.body.wide .rail .rgroup{display:none}
+.ri{
+  position:relative;display:flex;align-items:center;gap:calc(var(--u)*3);
+  height:calc(var(--u)*12);padding:0 var(--pad-x);cursor:pointer;
+  color:var(--t-label);font-size:calc(var(--fs)*.95);
+}
+.ri .gl{width:calc(var(--u)*4.5);height:calc(var(--u)*4.5);flex:none;position:relative}
+.ri:hover{background:rgba(255,255,255,.04)}
+.ri.sel{background:var(--accent-a12);color:var(--t-primary)}
+.ri.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--u)*.75);background:var(--accent)}
+.ri.foc{background:var(--e2)}
+.ri.foc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--u)*.75);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*3) var(--accent-a55)}
+.ri .cnt{margin-left:auto;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);color:var(--t-disabled)}
+.body.wide .ri{justify-content:center;padding:0;gap:0}
+.body.wide .ri .lbl,.body.wide .ri .cnt{display:none}
+.rail .grow{flex:1}
+.rail .foot{padding:calc(var(--u)*2) var(--pad-x);border-top:1px solid var(--hair);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);color:var(--t-disabled)}
+.body.wide .rail .foot{display:none}
+
+/* glyphs — flat, 1.5px strokes, same family as data/icons */
+.gl svg{width:100%;height:100%;display:block;stroke:currentColor;fill:none;
+  stroke-width:1.5;stroke-linecap:square;opacity:.8}
+.ri.sel .gl svg,.ri.foc .gl svg{stroke:var(--accent-knob);opacity:1}
+
+/* ---------- stage --------------------------------------------------------- */
+.stage{display:flex;flex-direction:column;min-height:0;position:relative;overflow:hidden}
+.subtabs{display:flex;gap:calc(var(--u)*.75);padding:calc(var(--u)*3) var(--pad-x) 0}
+.subtabs button{
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.76);font-weight:500;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+  color:rgba(239,245,251,.5);padding:calc(var(--u)*1.75) calc(var(--u)*3.5);cursor:pointer;
+}
+.subtabs button.on{background:var(--accent-a30);border-color:var(--accent-a55);
+  color:var(--accent-seg);font-weight:600}
+.subtabs .rt{margin-left:auto;display:flex;align-items:center;gap:calc(var(--u)*2);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);color:var(--t-disabled)}
+
+.scroll{flex:1;min-height:0;overflow:auto;padding:0 var(--pad-x) calc(var(--u)*5)}
+.scroll::-webkit-scrollbar{width:calc(var(--u)*1.5)}
+.scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14)}
+.scroll::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- WELL (replaces "the other panel") ------------------------------ */
+.well{margin:calc(var(--u)*3) var(--pad-x) 0;background:var(--e1);
+  border:1px solid var(--hair);position:relative;overflow:hidden}
+.well .wh{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*2) calc(var(--u)*3);
+  border-bottom:1px solid var(--hair);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;color:var(--t-meta)}
+.well .wh .dot{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*2.5) var(--accent-a55)}
+.well .wh .r{margin-left:auto;color:var(--t-disabled);text-transform:none}
+
+/* live HUD preview: a cut-out of the game with the real HUD drawn at real scale */
+.preview{position:relative;height:calc(var(--u)*40);
+  background:
+    radial-gradient(120% 90% at 22% 18%, #2c5c7a 0%, #12222f 42%, #070b10 100%);
+  background-size:cover}
+.preview.g1{background:radial-gradient(90% 70% at 70% 30%, #d9762a 0%, #6c2a12 35%, #170c08 100%)}
+.preview.g2{background:radial-gradient(120% 120% at 50% 110%, #e8eef5 0%, #9fb4c6 30%, #3f5568 65%, #16202b 100%)}
+.pgrid{position:absolute;inset:calc(var(--u)*2);display:grid;
+  grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:calc(var(--u)*1)}
+.pcell{border:1px dashed rgba(255,255,255,.14);cursor:pointer;position:relative}
+.pcell:hover{background:rgba(255,255,255,.06)}
+.pcell.sel{border:1px solid var(--accent-a55);background:var(--accent-a12)}
+.hud{position:absolute;pointer-events:none;background:rgba(9,11,14,.6);
+  border:1px solid rgba(255,255,255,.12);padding:calc(var(--u)*2) calc(var(--u)*2.75);
+  font-family:'Geist Mono',monospace;line-height:1.15;min-width:calc(var(--u)*38)}
+.hud .r1{display:flex;align-items:baseline;gap:calc(var(--u)*1.5)}
+.hud .n{font-size:calc(var(--fs)*1.2);font-weight:600;color:#fff}
+.hud .u2{font-size:calc(var(--fs)*.66);color:rgba(255,255,255,.5)}
+.hud .ms{margin-left:auto;font-size:calc(var(--fs)*.8);font-weight:500;color:oklch(.86 .09 var(--hue))}
+.hud .graph{display:flex;align-items:flex-end;gap:1px;height:calc(var(--u)*4.5);margin:calc(var(--u)*1) 0}
+.hud .graph i{flex:1;background:var(--accent-a55);display:block}
+.hud .graph i.sp{background:oklch(.72 .17 55 / .85)}
+.hud .r3{font-size:calc(var(--fs)*.66);color:rgba(255,255,255,.55);display:flex;gap:calc(var(--u)*2.5)}
+
+/* audio meters in a well */
+.meters{padding:calc(var(--u)*3)}
+.mrow{display:flex;align-items:center;gap:calc(var(--u)*2);margin-bottom:calc(var(--u)*1)}
+.mrow span{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.66);color:var(--t-meta);width:calc(var(--u)*3)}
+.mrow .segs{display:flex;gap:2px;flex:1}
+.mrow .segs i{flex:1;height:calc(var(--u)*1.5);background:rgba(255,255,255,.09);display:block}
+.mrow .segs i.lit{background:oklch(.74 .12 var(--hue) / .85)}
+
+/* ---------- GROUP heading + ROW (the whole taxonomy) ---------------------- */
+.group{display:flex;align-items:center;gap:calc(var(--u)*2.5);
+  margin:calc(var(--u)*6) 0 calc(var(--u)*1);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);font-weight:500;
+  text-transform:uppercase;color:var(--t-meta)}
+.group::after{content:"";flex:1;height:1px;background:var(--hair)}
+.group:first-child{margin-top:calc(var(--u)*4)}
+
+.row{
+  position:relative;display:flex;align-items:center;gap:calc(var(--u)*3);
+  min-height:var(--row-h);padding:calc(var(--u)*1.5) calc(var(--u)*3);
+  margin-left:calc(var(--u)*-3);margin-right:calc(var(--u)*-3);
+  border-bottom:1px solid rgba(255,255,255,.045);
+  cursor:pointer;
+}
+.row:hover{background:rgba(255,255,255,.035)}
+.row.foc{background:var(--e2)}
+.row.foc::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent);box-shadow:0 0 calc(var(--u)*3) var(--accent-a55)}
+.row.dis{opacity:.38;cursor:default}
+.row .txt{min-width:0;flex:1}
+.row .lbl{font-size:var(--fs);color:var(--t-label);line-height:1.25}
+.row.foc .lbl{color:var(--t-primary)}
+.row .help{font-size:calc(var(--fs)*.8);color:var(--t-meta);margin-top:calc(var(--u)*.5);line-height:1.3}
+.row .ctl{width:var(--ctl-w);flex:none;display:flex;justify-content:flex-end;align-items:center;gap:calc(var(--u)*2)}
+.row.wide-ctl .ctl{width:calc(var(--u)*76)}
+
+/* control: switch */
+.sw{width:calc(var(--u)*11);height:calc(var(--u)*6);flex:none;position:relative;
+  background:rgba(255,255,255,.07);border:1px solid var(--hair-strong)}
+.sw i{position:absolute;top:calc(var(--u)*.75);left:calc(var(--u)*.75);
+  width:calc(var(--u)*4);height:calc(var(--u)*4);background:rgba(239,245,251,.55);display:block;
+  transition:left .12s ease-out}
+.sw.on{background:var(--accent-a30);border-color:var(--accent-a55)}
+.sw.on i{left:calc(var(--u)*5.75);background:var(--accent-knob)}
+
+/* control: segmented */
+.seg{display:flex;gap:calc(var(--u)*.75)}
+.seg b{font-family:'Geist Mono',monospace;font-weight:500;font-size:calc(var(--fs)*.76);
+  padding:calc(var(--u)*1.25) calc(var(--u)*2);background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.08);color:rgba(239,245,251,.5)}
+.seg b.on{background:var(--accent-a30);border-color:var(--accent-a55);color:var(--accent-seg);font-weight:600}
+
+/* control: picker (opens a sheet) */
+.pick{display:flex;align-items:center;gap:calc(var(--u)*2);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.9);color:var(--accent-value);
+  padding:calc(var(--u)*1.25) calc(var(--u)*2);background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08)}
+.pick s{text-decoration:none;color:var(--t-disabled)}
+
+/* control: slider (compact — lives inside the control column) */
+.sl{display:flex;align-items:center;gap:calc(var(--u)*2.5);width:100%}
+.sl .track{position:relative;flex:1;height:calc(var(--u)*1.5);background:rgba(255,255,255,.16)}
+.sl .fill{position:absolute;left:0;top:0;bottom:0;
+  background:linear-gradient(90deg, oklch(.74 .12 var(--hue) / .5), oklch(.78 .12 var(--hue)))}
+.sl .knob{position:absolute;top:calc(var(--u)*-1.75);width:calc(var(--u)*2.5);height:calc(var(--u)*5);
+  background:oklch(.90 .05 var(--hue));transform:translateX(-50%);
+  box-shadow:0 0 calc(var(--u)*3) var(--accent-a55)}
+.sl .v{font-family:'Geist Mono',monospace;font-weight:500;font-size:calc(var(--fs)*.9);
+  color:var(--accent-value);min-width:calc(var(--u)*17);text-align:right}
+.row.dis .sl .fill{background:rgba(255,255,255,.3)}
+.row.dis .sl .knob{background:rgba(255,255,255,.45);box-shadow:none}
+.row.dis .sl .v{color:var(--t-meta)}
+
+/* control: readout / value / drill / action / colour */
+.ro{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.86);color:var(--t-meta);
+  text-align:right}
+.ro.acc{color:var(--accent-value)}
+.dot{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 calc(var(--u)*2) oklch(.78 .16 145 / .5)}
+.dot.warn{background:var(--warn)}
+.dot.idle{background:rgba(239,245,251,.35)}
+.chev{color:var(--t-disabled);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.9)}
+.act{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.82);text-transform:uppercase;
+  color:var(--accent-text);border:1px solid var(--accent-a30);
+  padding:calc(var(--u)*1.25) calc(var(--u)*2.5);background:var(--accent-a08)}
+.act.danger{color:var(--danger);border-color:oklch(.70 .17 25 / .35);background:oklch(.70 .17 25 / .08)}
+.swatch{width:calc(var(--u)*7);height:calc(var(--u)*5);border:1px solid rgba(255,255,255,.2)}
+.chip{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;
+  padding:calc(var(--u)*.75) calc(var(--u)*1.5);background:var(--accent-a18);color:var(--accent-text)}
+.chip.n{background:rgba(255,255,255,.06);color:var(--t-meta)}
+.tin{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.88);color:var(--t-primary);
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);
+  padding:calc(var(--u)*1.25) calc(var(--u)*2);width:100%;text-align:right}
+
+/* ---------- LOG (Wide stage) ---------------------------------------------- */
+.logbar{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*3) var(--pad-x);
+  border-bottom:1px solid var(--hair);background:var(--e1)}
+.logbar .find{flex:1;display:flex;align-items:center;gap:calc(var(--u)*2);
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);
+  padding:calc(var(--u)*1.25) calc(var(--u)*2.5);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.84);color:var(--t-primary)}
+.logbar .find s{text-decoration:none;color:var(--t-disabled)}
+.logview{flex:1;min-height:0;overflow:auto;padding:calc(var(--u)*2) var(--pad-x) calc(var(--u)*4);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.82);line-height:1.55}
+.ln{display:flex;gap:calc(var(--u)*3);white-space:pre}
+.ln:hover{background:rgba(255,255,255,.035)}
+.ln .ts{color:var(--t-disabled)}
+.ln .sc{width:calc(var(--u)*32);flex:none;color:var(--accent-text)}
+.ln .sc.w{color:var(--warn)} .ln .sc.e{color:var(--danger)}
+.ln .ms{color:var(--t-label);white-space:pre-wrap}
+.ln.e .ms{color:oklch(.82 .09 25)}
+.ln mark{background:var(--accent-a30);color:#fff}
+
+/* ---------- SHEET (the one and only overlay mechanism) -------------------- */
+.sheetwrap{position:absolute;inset:0;display:none;z-index:20}
+.sheetwrap.on{display:block}
+.sheetwrap .scr{position:absolute;inset:0;background:rgba(3,4,6,.55)}
+.sheet{position:absolute;right:0;top:0;bottom:0;width:calc(var(--u)*92);
+  background:rgba(10,12,15,.97);border-left:1px solid var(--hair-strong);
+  box-shadow:-30px 0 80px -20px rgba(0,0,0,.8);
+  display:flex;flex-direction:column;
+  animation:slide .16s ease-out}
+@keyframes slide{from{transform:translateX(calc(var(--u)*8));opacity:.4}to{transform:none;opacity:1}}
+.sheet .sh{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*4) var(--pad-x);
+  border-bottom:1px solid var(--hair);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.78);font-weight:600;text-transform:uppercase}
+.sheet .sh s{margin-left:auto;text-decoration:none;color:var(--t-disabled);font-weight:400}
+.sheet .sb{flex:1;overflow:auto;padding:calc(var(--u)*2) var(--pad-x)}
+.opt{display:flex;align-items:center;gap:calc(var(--u)*3);min-height:var(--row-h);
+  padding:calc(var(--u)*1.5) calc(var(--u)*3);margin:0 calc(var(--u)*-3);position:relative;cursor:pointer}
+.opt:hover{background:rgba(255,255,255,.04)}
+.opt.sel{background:var(--accent-a12)}
+.opt.sel::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent)}
+.opt .on{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.95);color:var(--t-primary)}
+.opt.sel .on{color:var(--accent-value)}
+.opt .od{font-size:calc(var(--fs)*.8);color:var(--t-meta);margin-top:calc(var(--u)*.5)}
+.opt .mk{margin-left:auto;color:var(--accent);font-family:'Geist Mono',monospace}
+
+/* ---------- action bar (button legend) ------------------------------------ */
+.legend{
+  height:calc(var(--u)*13);display:flex;align-items:center;gap:calc(var(--u)*5);
+  padding:0 var(--pad-x);border-top:1px solid var(--hair);
+  background:linear-gradient(0deg, rgba(255,255,255,.04), rgba(255,255,255,.008));
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.74);color:var(--t-meta)}
+.legend .k{display:flex;align-items:center;gap:calc(var(--u)*1.5)}
+.legend .k b{display:grid;place-items:center;min-width:calc(var(--u)*5);height:calc(var(--u)*5);
+  padding:0 calc(var(--u)*1);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);
+  color:var(--t-label);font-weight:500;font-size:calc(var(--fs)*.68)}
+.legend .k.acc b{background:var(--accent-a30);border-color:var(--accent-a55);color:var(--accent-seg)}
+.legend .sp{flex:1}
+.legend .hint{color:var(--t-disabled)}
+</style>
+
+<div id="game" class="g0"><div class="art"></div></div>
+<div id="scrim"></div>
+
+<div id="demo">
+  <div class="who">
+    <strong>Direction A — Console</strong>
+    <span>interactive mockup · gamescope-ritz settings overlay · dark only, by design</span>
+  </div>
+  <div class="sep"></div>
+  <b title="Everything in the console derives from one spacing unit and one type size">UI scale</b>
+  <button data-scale=".5">0.5×</button>
+  <button data-scale="1" class="on">1.0×</button>
+  <button data-scale="1.5">1.5×</button>
+  <button data-scale="2">2.0×</button>
+  <div class="sep"></div>
+  <b title="Only the OKLCH hue is user-tunable; lightness and chroma stay fixed per token">accent hue</b>
+  <input id="hue" type="range" min="0" max="360" value="218" aria-label="Accent hue in degrees">
+  <span id="huev" class="mono" style="color:var(--accent-value);width:30px">218</span>
+  <div class="sep"></div>
+  <b>game behind</b><button id="bg">cycle</button>
+  <div class="sep"></div>
+  <button id="sheetbtn">open a sheet</button>
+  <div class="keys">
+    <span><kbd>click</kbd> the left rail — sections</span>
+    <span><kbd>Tab</kbd> section</span>
+    <span><kbd>←</kbd><kbd>→</kbd> sub-tab</span>
+    <span><kbd>Esc</kbd> close sheet</span>
+  </div>
+</div>
+
+<div id="wrap">
+  <div class="console">
+
+    <div class="hdr">
+      <div class="brand"></div>
+      <div class="crumb" id="crumb"></div>
+      <div class="pips" id="pips"></div>
+      <div class="spacer"></div>
+      <div class="badge" id="badge">app 1245620</div>
+      <div class="live">
+        <span>fps <b>142</b></span>
+        <span>frame <b>7.0</b> ms</span>
+        <span>out <b>1920×1080</b></span>
+        <span>hdr <b>on</b></span>
+      </div>
+    </div>
+
+    <div class="body" id="body">
+      <div class="rail" id="rail"></div>
+      <div class="stage" id="stage"></div>
+      <div class="sheetwrap" id="sheetwrap">
+        <div class="scr"></div>
+        <div class="sheet">
+          <div class="sh">Scaler <s>B / esc — back</s></div>
+          <div class="sb" id="sheetbody"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   The mock's own "kit" — deliberately shaped like the C++ helper API in
+   API.md, so the call sites below read like the real ones will.
+   Every row is produced by exactly one call. Nothing here takes a position,
+   a width, a font or a colour.
+   ========================================================================== */
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+let OUT = [];
+const K = {
+  group(t){ OUT.push(`<div class="group">${esc(t)}</div>`); },
+
+  _row(ctl, label, o={}){
+    const cls = ['row', o.focus?'foc':'', o.disabled?'dis':'', o.wide?'wide-ctl':''].join(' ');
+    const help = (o.disabled && o.why) ? o.why : o.help;
+    OUT.push(
+      `<div class="${cls}">
+         <div class="txt"><div class="lbl">${esc(label)}</div>${
+           help?`<div class="help">${esc(help)}</div>`:''}</div>
+         <div class="ctl">${ctl}</div>
+       </div>`);
+  },
+
+  switch(l, v, o){ K._row(`<div class="sw ${v?'on':''}"><i></i></div>`, l, o); },
+
+  slider(l, v, lo, hi, o={}){
+    const p = Math.max(0, Math.min(1, (v-lo)/(hi-lo)))*100;
+    K._row(
+      `<div class="sl">
+         <div class="track"><div class="fill" style="width:${p}%"></div>
+           <div class="knob" style="left:${p}%"></div></div>
+         <div class="v">${esc(o.fmt||v)}</div>
+       </div>`, l, o);
+  },
+
+  /* one call. The kit measures the options and picks segmented vs picker. */
+  choice(l, cur, opts, o={}){
+    const fits = opts.length <= 5 && opts.join('').length <= 26;
+    const ctl = fits
+      ? `<div class="seg">${opts.map(x=>`<b class="${x===cur?'on':''}">${esc(x)}</b>`).join('')}</div>`
+      : `<div class="pick">${esc(cur)} <s>›</s></div>`;
+    K._row(ctl, l, Object.assign({wide:fits&&opts.length>=5}, o));
+  },
+
+  drill(l, summary, o={}){
+    K._row(`<span class="ro">${esc(summary)}</span><span class="chev">›</span>`, l, o);
+  },
+  readout(l, v, o={}){
+    const d = o.status ? `<span class="dot ${o.status}"></span>` : '';
+    K._row(`${d}<span class="ro ${o.accent?'acc':''}">${esc(v)}</span>`, l, o);
+  },
+  action(l, verb, o={}){
+    K._row(`<span class="act ${o.danger?'danger':''}">${esc(verb)}</span>`, l, o);
+  },
+  color(l, css, o={}){
+    K._row(`<span class="ro">${esc(o.hex||'')}</span><span class="swatch" style="background:${css}"></span><span class="chev">›</span>`, l, o);
+  },
+  text(l, v, o={}){
+    K._row(`<span class="tin">${esc(v)}</span>`, l, Object.assign({wide:true}, o));
+  },
+  chips(l, items, o={}){
+    K._row(items.map(c=>`<span class="chip ${c[1]?'':'n'}">${esc(c[0])}</span>`).join(''), l, o);
+  }
+};
+
+/* ==========================================================================
+   SCREENS — real gamescope-ritz settings, real values.
+   ========================================================================== */
+const ICON = {
+  display:'<path d="M2 4h16v11H2z"/><path d="M7 18h6"/>',
+  shaders:'<path d="M3 16 10 3l7 13z"/><path d="M6.5 11h7"/>',
+  monitor:'<path d="M2 14l4-6 3 4 4-8 5 10"/><path d="M2 17h16"/>',
+  audio:'<path d="M4 8h3l4-4v12l-4-4H4z"/><path d="M14 7c1.6 1.6 1.6 4.4 0 6"/>',
+  config:'<path d="M3 4h14v12H3z"/><path d="M3 8h14"/><path d="M7 12h6"/>',
+  log:'<path d="M4 3h12v14H4z"/><path d="M7 7h6M7 10h6M7 13h4"/>'
+};
+
+const SECTIONS = [
+  {id:'gamescope', title:'Gamescope', icon:'display', count:'12',
+   subtabs:['Upscaling','Display','Frame Limiter','HDR']},
+  {id:'shaders',   title:'Shaders',   icon:'shaders', count:'9',
+   subtabs:['Vibrancy','Pre-Sharpen','Adaptive Brightness']},
+  {id:'monitor',   title:'System Monitor', icon:'monitor', count:'21',
+   subtabs:['General','FPS','CPU','GPU','Media','Statistics']},
+  {id:'audio',     title:'Audio',     icon:'audio',   count:'5', subtabs:['Output','Streams']},
+  {id:'config',    title:'Config',    icon:'config',  count:'18',
+   subtabs:['Per-Game','General','Notifications']},
+  {id:'log',       title:'Log',       icon:'log',     count:'',  subtabs:['Gamescope','Game'], stage:'wide'}
+];
+
+/* --- Gamescope › Upscaling ------------------------------------------------ */
+function scrGamescopeUpscaling(){
+  K.group('Scaling');
+  K.choice('Filter','fsr',['linear','nearest','fsr','nis','pixel'],{focus:true});
+  K.choice('Scaler','auto',['auto','integer','fit','fill','stretch'],
+           {help:'How the game image is placed inside the output.'});
+  K.slider('Sharpness', 40, 0, 100, {fmt:'40 % sharper', help:'FSR and NIS only — ignored by the other filters.'});
+  K.readout('Effective resolution','1280×960 → 1920×1080',{status:'ok'});
+
+  K.group('Pre-upscale');
+  K.drill('Pre-Sharpen','on · 0.50',{help:'Runs before the scaler — works with any Filter.'});
+  K.drill('Vibrancy','on · +0.42');
+
+  K.group('Presentation');
+  K.switch('VRR / Adaptive Sync', true, {help:'Needs a display and a game that both support it.'});
+  K.switch('Allow Tearing', false, {disabled:true, why:'Unavailable while VRR / Adaptive Sync is on.'});
+  K.switch('Force Grab Cursor', false);
+  K.action('Reset this screen','Reset');
+}
+
+/* --- Gamescope › HDR (the dense screen) ----------------------------------- */
+function scrGamescopeHdr(){
+  K.group('Output');
+  K.switch('HDR', true, {focus:true});
+  K.readout('Display capability','HDR10 · PQ · 1000 nits',{status:'ok'});
+  K.choice('Tonemap Operator','reinhard',['none','reinhard','aces','uncharted2','hable'],
+           {help:'Applied when the game outputs more range than the display can show.'});
+
+  K.group('Levels');
+  K.slider('SDR Gamut Wideness', .35, 0, 1, {fmt:'0.35'});
+  K.slider('SDR-on-HDR Brightness', 203, 50, 1000, {fmt:'203 nits'});
+  K.slider('HDR Input Gain', 1.0, 0, 4, {fmt:'1.00 ×'});
+  K.slider('SDR Input Gain', 1.0, 0, 4, {fmt:'1.00 ×'});
+  K.slider('Night dimming', 0, 0, 1, {fmt:'0.00', disabled:true, why:'Requires HDR output on a PQ-capable connector.'});
+
+  K.group("Focused app's HDR metadata · read-only");
+  K.readout('Colorspace','PQ / BT.2020');
+  K.readout('Max mastering luminance','1000 nits');
+  K.readout('Min mastering luminance','0.0050 nits');
+  K.readout('MaxCLL / MaxFALL','824 / 210 nits');
+  K.readout('Passthrough','active',{status:'ok', accent:true});
+
+  K.group('Danger zone');
+  K.action('Clear HDR overrides for this app','Clear',{danger:true,
+    help:'Deletes the HDR block from app 1245620.json. Global defaults apply again.'});
+}
+
+/* --- System Monitor › General (Split stage: well + rows) ------------------ */
+function scrMonitorGeneral(){
+  K.group('Module');
+  K.switch('Show System Monitor', true);
+  K.chips('Active modules',[['FPS',1],['CPU',1],['GPU',1],['MEDIA',0]]);
+
+  K.group('Placement');
+  K.slider('Vertical margin', 32, 0, 128, {fmt:'32 px'});
+  K.slider('Horizontal margin', 32, 0, 128, {fmt:'32 px'});
+  K.slider('Module spacing', 8, 0, 32, {fmt:'8 px'});
+
+  K.group('Type');
+  K.slider('Font size', 18, 10, 48, {fmt:'18 px', focus:true});
+  K.choice('Blend mode','alpha',['alpha','additive','inverted']);
+  K.slider('Text opacity', 1.0, 0, 1, {fmt:'1.00'});
+
+  K.group('Backdrop');
+  K.switch('Backdrop', true);
+  K.slider('Backdrop opacity', .5, 0, 1, {fmt:'0.50'});
+  K.slider('Backdrop rounding', 4, 0, 16, {fmt:'4 px'});
+  K.slider('Backdrop padding', 6, 0, 24, {fmt:'6 px'});
+
+  K.group('Rows');
+  K.switch('Frametime readout (ms)', true);
+  K.switch('Frametime graph', true);
+  K.switch('Percentile row (1% / 0.1% / avg)', true);
+  K.switch('FPS label', true);
+}
+
+function wellMonitor(){
+  const bars = [];
+  const h = [62,71,58,80,54,66,92,60,57,74,63,55,100,68,59,72,61,88,64,56,70,58,77,62,53,69,60,81,57,65];
+  h.forEach((v,i)=>bars.push(`<i class="${v>=92?'sp':''}" style="height:${v}%"></i>`));
+  return `
+  <div class="well">
+    <div class="wh"><span class="dot"></span>Live preview
+      <span class="r">the real HUD, real scale, over the real frame — pick a cell to anchor it</span></div>
+    <div class="preview" id="preview">
+      <div class="pgrid">
+        ${[0,1,2,3,4,5,6,7,8].map(i=>`<div class="pcell ${i===2?'sel':''}"></div>`).join('')}
+      </div>
+      <div class="hud" style="top:calc(var(--u)*5);right:calc(var(--u)*5)">
+        <div class="r1"><span class="n">142</span><span class="u2">FPS</span><span class="ms">7.04 ms</span></div>
+        <div class="graph">${bars.join('')}</div>
+        <div class="r3"><span>1% 118</span><span>0.1% 96</span><span>avg 139</span><span>61°</span></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* --- Config › General ----------------------------------------------------- */
+function scrConfigGeneral(){
+  K.group('Routing');
+  K.readout('Writing to','global.json',{status:'ok'});
+  K.switch('Override Global Config for this app', false,
+    {help:'When on, every edit lands in app 1245620.json instead.'});
+
+  K.group('Accent Color');
+  K.color('Accent hue','oklch(.74 .12 218)',{hex:'oklch .74 .12 218', focus:true,
+    help:'Lightness and chroma are fixed per token — only the hue moves.'});
+  K.readout('Derived family','10 tokens · #36BDDD → #BAE7F4',{accent:true});
+
+  K.group('UI Scale');
+  K.slider('Display (overall UI)', 1.0, .5, 2.0, {fmt:'1.00 ×',
+    help:'Re-bakes the font atlas when you let go.'});
+  K.slider('Dock / rail', 1.0, .85, 2.0, {fmt:'1.00 ×'});
+  K.slider('Notifications', 1.0, .6, 1.6, {fmt:'1.00 ×'});
+
+  K.group('Transparency');
+  K.slider('Console', 1.0, .3, 1, {fmt:'1.00'});
+  K.slider('Sheets & scrim', .90, .3, 1, {fmt:'0.90'});
+  K.slider('Notifications', .90, .3, 1, {fmt:'0.90'});
+
+  K.group('Background Effects');
+  K.slider('Blur', 1.0, 0, 1, {fmt:'1.00'});
+  K.slider('Darkening', .80, 0, 1, {fmt:'0.80'});
+
+  K.group('Profiles');
+  K.drill('Saved profiles','4 · “Handheld 40 Hz” active');
+  K.text('New profile name','Handheld 40 Hz');
+  K.action('Save as new profile','Save');
+  K.action('Delete saved config for this app','Delete',{danger:true});
+
+  K.group('Paths · read-only');
+  K.readout('Config directory','~/.config/gamescope-ritz');
+  K.readout('This app','1245620.json · 2.1 kB');
+}
+
+/* --- Audio ---------------------------------------------------------------- */
+function scrAudio(){
+  K.group('Output');
+  K.readout('Device','alsa_output.pci-0000_c1_00.6.analog-stereo',{status:'ok'});
+  K.slider('Volume', 74, 0, 150, {fmt:'74 %', focus:true});
+  K.switch('Mute', false);
+  K.group('Routing');
+  K.drill('Pick a stream manually','auto · matched by PID');
+  K.action('Clear manual override','Clear');
+}
+function wellAudio(){
+  const seg = n => Array.from({length:20},(_,i)=>`<i class="${i<n?'lit':''}"></i>`).join('');
+  return `<div class="well"><div class="wh"><span class="dot"></span>Peak
+    <span class="r">−6.2 dB · 48 kHz · 2 ch</span></div>
+    <div class="meters">
+      <div class="mrow"><span>L</span><div class="segs">${seg(14)}</div></div>
+      <div class="mrow"><span>R</span><div class="segs">${seg(13)}</div></div>
+    </div></div>`;
+}
+
+/* --- Log (Wide stage) ----------------------------------------------------- */
+const LOG = [
+ ['16:04:11.230','backend',  '', 'DRM backend: connector DP-1 selected, 2560x1440@165.00Hz'],
+ ['16:04:11.244','drm',      '', 'Found CRTC 89, plane 71 (primary), plane 74 (overlay)'],
+ ['16:04:11.251','vulkan',   '', 'Device: AMD Radeon RX 7900 XTX (RADV NAVI31), driver 25.1.3'],
+ ['16:04:11.262','vulkan',   '', 'Supported: DRM format modifiers, HDR metadata, timeline semaphores'],
+ ['16:04:11.480','wlserver', '', 'Listening on wayland-1'],
+ ['16:04:11.481','xwm',      '', 'Xwayland :1 ready, 1 ctx'],
+ ['16:04:12.033','steamcompmgr','', 'focus: window 0x2400003 "vkcube" appid 1245620'],
+ ['16:04:12.034','config',   '', 'Loaded app 1245620.json (2.1 kB) over global.json'],
+ ['16:04:12.036','overlay',  '', 'display_scale 1.00 — atlas baked at 1.00, 6 roles x 2 families'],
+ ['16:04:12.101','reshade',  '', 'Compiled gamescope-ritz.fx in 84 ms (3 techniques)'],
+ ['16:04:12.102','reshade',  '', 'vibrancy_enabled = 1, vibrancy_strength = 0.420'],
+ ['16:04:13.774','drm',      'w','Atomic commit took 19.4 ms (expected < 8.3 ms), frame 512'],
+ ['16:04:13.905','steamcompmgr','', 'HDR: app declared PQ/BT.2020, MaxCLL 824 nits'],
+ ['16:04:14.220','pipewire', '', 'Matched sink-input 61 -> pid 40118 ("vkcube")'],
+ ['16:04:15.008','backend',  '', 'VRR window 48-165 Hz, present mode: immediate'],
+ ['16:04:16.441','vulkan',   'w','Swapchain out of date, rebuilding (1920x1080)'],
+ ['16:04:17.980','lsfg',     'e','DISABLE_LSFG=1 in environment — frame generation not loaded'],
+ ['16:04:18.114','overlay',  '', 'Console opened (CTRL+SHIFT+O), game input paused'],
+ ['16:04:18.115','overlay',  '', 'Screen gamescope.upscaling — 12 rows indexed for search'],
+ ['16:04:21.560','config',   '', 'Queued write: upscaling.sharpness 2 -> 8 (app 1245620.json)'],
+ ['16:04:21.661','config',   '', 'Flushed 1 pending write in 3.2 ms'],
+ ['16:04:22.900','steamcompmgr','', 'Repaint: 1 base + 1 overlay layer, blur radius 24'],
+ ['16:04:24.310','drm',      'w','Atomic commit took 12.7 ms (expected < 8.3 ms), frame 1204'],
+ ['16:04:26.002','metrics',  '', 'CPU 34% · 61°C · GPU 88% · 71°C · VRAM 6.2/24.0 GB'],
+ ['16:04:27.550','pipewire', '', 'Volume 0.74 (74%) applied to sink-input 61']
+];
+function stageLog(){
+  const hi = s => esc(s).replace(/(commit)/g,'<mark>$1</mark>');
+  return `
+  <div class="logbar">
+    <div class="seg">
+      <b class="on">gamescope</b><b>game</b>
+    </div>
+    <div class="find"><s>/</s> commit <s style="margin-left:auto">3 matches · enter to step</s></div>
+    <div class="seg"><b class="on">all</b><b>warn</b><b>error</b></div>
+    <span class="chip">FOLLOW</span>
+    <span class="act">Copy</span>
+  </div>
+  <div class="logview">
+    ${LOG.map(l=>`<div class="ln ${l[2]==='e'?'e':''}"><span class="ts">${l[0]}</span><span class="sc ${l[2]}">[${l[1]}]</span><span class="ms">${hi(l[3])}</span></div>`).join('')}
+    <div class="ln"><span class="ts">16:04:28.101</span><span class="sc">[overlay]</span><span class="ms">_</span></div>
+  </div>`;
+}
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+const STATE = {sec:'gamescope', tab:0, focusRail:false};
+
+const SCREENS = {
+  'gamescope:0': {draw:scrGamescopeUpscaling},
+  'gamescope:3': {draw:scrGamescopeHdr},
+  'monitor:0':   {draw:scrMonitorGeneral, well:wellMonitor},
+  'audio:0':     {draw:scrAudio, well:wellAudio},
+  'config:1':    {draw:scrConfigGeneral}
+};
+
+function sec(){ return SECTIONS.find(s=>s.id===STATE.sec); }
+
+function renderRail(){
+  const el = document.getElementById('rail');
+  let h = '<div class="rgroup">Console</div>';
+  SECTIONS.forEach(s=>{
+    const sel = s.id===STATE.sec;
+    h += `<div class="ri ${sel&&!STATE.focusRail?'sel':''} ${sel&&STATE.focusRail?'foc':''}" data-sec="${s.id}">
+            <span class="gl"><svg viewBox="0 0 20 20">${ICON[s.icon]}</svg></span>
+            <span class="lbl">${s.title}</span>
+            ${s.count?`<span class="cnt">${s.count}</span>`:''}
+          </div>`;
+  });
+  h += `<div class="grow"></div><div class="foot">gamescope-ritz · 3.16.14</div>`;
+  el.innerHTML = h;
+  el.querySelectorAll('.ri').forEach(n=>n.onclick=()=>{STATE.sec=n.dataset.sec;STATE.tab=0;STATE.focusRail=false;render();});
+}
+
+function renderStage(){
+  const s = sec();
+  const stage = document.getElementById('stage');
+  document.getElementById('body').classList.toggle('wide', s.stage==='wide');
+
+  if (s.id==='log'){ stage.innerHTML = stageLog(); renderLegend(); return; }
+
+  const key = s.id+':'+STATE.tab;
+  const scr = SCREENS[key];
+  let h = `<div class="subtabs">${s.subtabs.map((t,i)=>
+      `<button class="${i===STATE.tab?'on':''}" data-tab="${i}">${t}</button>`).join('')}
+      <div class="rt">LB / RB · section &nbsp; LT / RT · tab</div></div>`;
+
+  if (scr && scr.well) h += scr.well();
+
+  OUT = [];
+  if (scr) scr.draw();
+  else {
+    K.group(s.subtabs[STATE.tab]);
+    K.readout('Not drawn in this mock','see Upscaling · HDR · General · Log');
+  }
+  h += `<div class="scroll">${OUT.join('')}</div>`;
+  stage.innerHTML = h;
+  stage.querySelectorAll('.subtabs button').forEach(b=>b.onclick=()=>{STATE.tab=+b.dataset.tab;render();});
+  stage.querySelectorAll('.pcell').forEach((c,i)=>c.onclick=()=>{
+    stage.querySelectorAll('.pcell').forEach(x=>x.classList.remove('sel'));
+    c.classList.add('sel');
+    const hud = stage.querySelector('.hud');
+    const r = Math.floor(i/3), col = i%3, m = 'calc(var(--u)*5)';
+    hud.style.top = r===0?m:(r===1?'50%':'auto');
+    hud.style.bottom = r===2?m:'auto';
+    hud.style.left = col===0?m:(col===1?'50%':'auto');
+    hud.style.right = col===2?m:'auto';
+    hud.style.transform = `translate(${col===1?'-50%':'0'}, ${r===1?'-50%':'0'})`;
+  });
+  renderLegend();
+}
+
+function renderCrumb(){
+  const s = sec();
+  const parts = [`<span class="up">Console</span>`,`<span class="sep">›</span>`,
+                 `<span class="up">${s.title}</span>`];
+  if (!s.stage) { parts.push(`<span class="sep">›</span>`, `<span>${s.subtabs[STATE.tab]}</span>`); }
+  else parts.push(`<span class="sep">›</span>`,`<span>${s.subtabs[0]}</span>`);
+  document.getElementById('crumb').innerHTML = parts.join('');
+  document.getElementById('pips').innerHTML =
+    `<i class="on"></i><i class="on"></i><i></i>`;
+  document.getElementById('badge').textContent =
+    (STATE.sec==='config' && STATE.tab===1) ? 'global' : 'app 1245620';
+}
+
+function renderLegend(){
+  const s = sec();
+  const rows = s.id==='log'
+    ? [['A','Follow',1],['X','Copy'],['Y','Clear'],['/','Find'],['B','Back']]
+    : [['A','Adjust',1],['B','Back'],['Y','Reset to default'],['X','Save profile'],['/','Find a setting']];
+  document.getElementById('legend').innerHTML =
+    rows.map(r=>`<span class="k ${r[2]?'acc':''}"><b>${r[0]}</b>${r[1]}</span>`).join('') +
+    `<span class="sp"></span><span class="hint">CTRL+SHIFT+O closes · game input paused</span>`;
+}
+
+function render(){ renderRail(); renderStage(); renderCrumb(); }
+render();
+
+/* ---- sheet -------------------------------------------------------------- */
+const SHEET_OPTS = [
+  ['auto','Integer scale when it fits exactly, otherwise fit.'],
+  ['integer','Whole-number multiples only. Pillarboxes the rest.'],
+  ['fit','Largest size that keeps the aspect ratio.'],
+  ['fill','Fills the output; crops the long edge.'],
+  ['stretch','Ignores aspect ratio. Fills exactly.']
+];
+document.getElementById('sheetbody').innerHTML = SHEET_OPTS.map(o=>
+  `<div class="opt ${o[0]==='auto'?'sel':''}">
+     <div><div class="on">${o[0]}</div><div class="od">${o[1]}</div></div>
+     ${o[0]==='auto'?'<span class="mk">●</span>':''}
+   </div>`).join('');
+const sw = document.getElementById('sheetwrap');
+document.getElementById('sheetbtn').onclick = e => {
+  sw.classList.toggle('on'); e.target.classList.toggle('on', sw.classList.contains('on'));
+};
+sw.querySelector('.scr').onclick = () => {
+  sw.classList.remove('on'); document.getElementById('sheetbtn').classList.remove('on');
+};
+
+/* ---- demo controls ------------------------------------------------------ */
+document.querySelectorAll('#demo [data-scale]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#demo [data-scale]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  const k = parseFloat(b.dataset.scale);
+  document.documentElement.style.setProperty('--u', (4*k)+'px');
+  document.documentElement.style.setProperty('--fs',(15*k)+'px');
+});
+const hue = document.getElementById('hue');
+hue.oninput = () => {
+  document.documentElement.style.setProperty('--hue', hue.value);
+  document.getElementById('huev').textContent = hue.value;
+};
+let g = 0;
+document.getElementById('bg').onclick = () => {
+  g = (g+1)%3;
+  document.getElementById('game').className = 'g'+g;
+  const p = document.querySelector('.preview'); if (p) p.className = 'preview g'+g;
+};
+
+/* ---- keyboard: the real nav model, demonstrated ------------------------- */
+document.addEventListener('keydown', e=>{
+  const i = SECTIONS.findIndex(s=>s.id===STATE.sec);
+  if (e.key==='Tab'){ e.preventDefault();
+    STATE.sec = SECTIONS[(i + (e.shiftKey?-1:1) + SECTIONS.length)%SECTIONS.length].id;
+    STATE.tab = 0; render(); }
+  if (e.key==='ArrowRight'){ const s=sec(); STATE.tab=Math.min(s.subtabs.length-1,STATE.tab+1); render(); }
+  if (e.key==='ArrowLeft'){ STATE.tab=Math.max(0,STATE.tab-1); render(); }
+  if (e.key==='Escape'){ sw.classList.remove('on'); }
+});
+</script>

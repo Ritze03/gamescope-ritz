@@ -1,0 +1,1561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Command Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* ---- accent family, OKLCH hue 218, per ui-mockup-precise-spec.md §1 ---- */
+  --a:#36BDDD; --a-edge:#4FD0F1; --a-grad-hi:#47CAEA; --a-value:#78DBF6;
+  --a-text:#71D4EF; --a-seg:#A9EAFD; --a-knob:#93DEF4; --a-icon:#A3E3F6;
+  --a-handle:#BAE7F4; --a-dim:#6BCDE9;
+  --ok:#6ED274; --warn:#F3821D; --danger:#F0555E;
+  --t:239,245,251;             /* #EFF5FB text base */
+  --surf:9,10,12;
+  --u:4px;
+  --font-s:'Geist',system-ui,sans-serif;
+  --font-m:'Geist Mono',ui-monospace,monospace;
+  --page-bg:#07080a; --page-fg:#EFF5FB;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--page-bg);color:var(--page-fg);font-family:var(--font-s);
+     font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+
+/* ============ page furniture ============ */
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+nav.top{position:sticky;top:0;z-index:50;background:rgba(7,8,10,.86);
+  backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.08)}
+nav.top .wrap{display:flex;gap:6px;align-items:center;height:52px;flex-wrap:wrap}
+nav.top b{font-family:var(--font-m);font-weight:600;font-size:12px;letter-spacing:.04em;
+  color:var(--a-icon);margin-right:14px;white-space:nowrap}
+nav.top a{font-family:var(--font-m);font-size:11.5px;color:rgba(var(--t),.5);
+  text-decoration:none;padding:5px 9px;border:1px solid transparent}
+nav.top a:hover{color:var(--a-seg);border-color:rgba(54,189,221,.4);background:rgba(54,189,221,.12)}
+header.hero{padding:72px 0 40px}
+header.hero h1{font-size:46px;line-height:1.06;font-weight:600;letter-spacing:-.02em;max-width:16ch}
+header.hero h1 em{font-style:normal;color:var(--a-value)}
+header.hero p.lede{margin-top:20px;max-width:66ch;font-size:18px;color:rgba(var(--t),.7)}
+header.hero p.sub{margin-top:14px;max-width:72ch;font-size:14.5px;color:rgba(var(--t),.45)}
+section{padding:44px 0 8px}
+h2.sec{font-family:var(--font-m);font-size:12px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--a-text);display:flex;align-items:center;gap:12px}
+h2.sec:after{content:"";flex:1;height:1px;background:rgba(255,255,255,.09)}
+h3.sub{margin-top:30px;font-size:20px;font-weight:600;letter-spacing:-.01em}
+p.note{margin-top:12px;max-width:78ch;color:rgba(var(--t),.55);font-size:14.5px}
+p.note code,li code,td code{font-family:var(--font-m);font-size:12.5px;color:var(--a-value);
+  background:rgba(54,189,221,.10);padding:1px 5px}
+ul.pts{margin:14px 0 0 0;max-width:80ch;list-style:none}
+ul.pts li{position:relative;padding-left:20px;margin-bottom:9px;color:rgba(var(--t),.6);font-size:14.5px}
+ul.pts li:before{content:"";position:absolute;left:2px;top:9px;width:6px;height:6px;background:var(--a);opacity:.8}
+ul.pts li b{color:rgba(var(--t),.92);font-weight:500}
+.kbd{font-family:var(--font-m);font-size:11px;border:1px solid rgba(255,255,255,.16);
+  background:rgba(255,255,255,.05);padding:2px 6px;color:rgba(var(--t),.75);white-space:nowrap}
+
+/* ============ stage: the game behind, blurred by the compositor pass ============ */
+.stage{position:relative;aspect-ratio:16/9;overflow:hidden;border:1px solid rgba(255,255,255,.1);
+  margin-top:22px;background:#05070a;
+  container-type:inline-size}
+.stage.tall{aspect-ratio:16/10}
+.game{position:absolute;inset:-8%;filter:blur(26px) saturate(1.12) brightness(.62)}
+.game:before,.game:after{content:"";position:absolute;inset:0}
+.game{background:
+  radial-gradient(60% 70% at 22% 30%, #2a5f7a 0%, transparent 60%),
+  radial-gradient(50% 60% at 78% 22%, #7a4a2a 0%, transparent 62%),
+  radial-gradient(70% 80% at 55% 95%, #12303b 0%, transparent 70%),
+  linear-gradient(160deg,#0d1a24 0%,#1b1410 55%,#0a1418 100%);}
+.game:before{background:
+  repeating-linear-gradient(112deg, rgba(255,255,255,.05) 0 2px, transparent 2px 26px),
+  radial-gradient(30% 40% at 40% 62%, rgba(243,130,29,.5), transparent 70%);}
+.game:after{background:radial-gradient(38% 46% at 68% 68%, rgba(120,219,246,.28), transparent 72%)}
+.veil{position:absolute;inset:0;background:radial-gradient(120% 100% at 50% 60%,
+  rgba(4,6,9,.55) 0%, rgba(4,6,9,.86) 100%)}
+.stagelabel{position:absolute;left:10px;bottom:8px;font-family:var(--font-m);font-size:10.5px;
+  color:rgba(var(--t),.34);letter-spacing:.04em;z-index:9}
+
+/* the always-on HUD, still there behind the console */
+.hud{position:absolute;top:5.5%;right:4%;background:rgba(9,11,14,.6);border:1px solid rgba(255,255,255,.12);
+  padding:8px 11px;font-family:var(--font-m);min-width:150px;z-index:3}
+.hud .r1{display:flex;align-items:baseline;gap:6px}
+.hud .n{font-size:18px;font-weight:600;color:#fff}
+.hud .u{font-size:10px;color:rgba(255,255,255,.5)}
+.hud .ft{margin-left:auto;font-size:12px;font-weight:500;color:#89E0F8}
+.hud .graph{height:18px;display:flex;align-items:flex-end;gap:1px;margin:4px 0}
+.hud .graph i{flex:1;background:rgba(54,189,221,.6)}
+.hud .graph i.sp{background:rgba(243,130,29,.8)}
+.hud .r3{display:flex;gap:10px;font-size:10px;color:rgba(255,255,255,.55)}
+
+/* ============ THE CONSOLE ============ */
+.console{position:absolute;left:50%;transform:translateX(-50%);top:9%;width:62%;
+  background:rgba(var(--surf),.88);border:1px solid rgba(54,189,221,.42);
+  box-shadow:0 28px 70px -14px rgba(0,0,0,.85), 0 0 40px -14px rgba(54,189,221,.35);
+  display:flex;flex-direction:column;max-height:82%;z-index:5}
+@container (max-width: 720px){ .console{width:80%;top:6%} }
+
+/* --- query line --- */
+.q{display:flex;align-items:center;gap:10px;padding:0 14px;height:56px;
+   border-bottom:1px solid rgba(255,255,255,.10);flex:0 0 auto}
+.q .sig{font-family:var(--font-m);font-size:20px;color:var(--a);opacity:.85;width:14px}
+.chip{font-family:var(--font-m);font-size:11.5px;font-weight:500;color:var(--a-text);
+  background:rgba(54,189,221,.16);padding:4px 8px;white-space:nowrap;display:inline-flex;gap:7px;align-items:center}
+.chip .x{opacity:.5}
+.chip.neutral{background:rgba(255,255,255,.06);color:rgba(var(--t),.45)}
+.q .txt{font-family:var(--font-m);font-size:20px;color:rgba(var(--t),.95);
+  flex:1;background:none;border:0;outline:none;min-width:0;padding:0}
+.q .txt::placeholder{color:rgba(var(--t),.28)}
+.q .caret{width:2px;height:22px;background:var(--a-value);animation:bl 1.05s steps(1,end) infinite}
+@keyframes bl{50%{opacity:0}}
+.q .count{font-family:var(--font-m);font-size:11.5px;color:rgba(var(--t),.34);white-space:nowrap}
+
+/* --- results body --- */
+.body{overflow:auto;flex:1 1 auto;padding:6px 0 8px;scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.18) transparent}
+.ghead{font-family:var(--font-m);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:rgba(var(--t),.36);padding:14px 14px 6px 38px;display:flex;gap:10px;align-items:center}
+.ghead:first-child{padding-top:8px}
+.ghead .cnt{color:rgba(var(--t),.22)}
+
+/* --- THE ROW: one grammar for every option type --- */
+.row{display:grid;grid-template-columns:24px 1fr 200px;align-items:center;
+  height:40px;padding:0 14px 0 0;position:relative;cursor:default}
+.row .gut{display:flex;align-items:center;justify-content:center;color:rgba(var(--t),.30)}
+.row .gut .dot{width:6px;height:6px;background:currentColor}
+.row .lab{font-family:var(--font-s);font-size:14px;color:rgba(var(--t),.62);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:12px}
+.row .lab .m{color:var(--a-value);border-bottom:1.5px solid rgba(120,219,246,.45)}
+.row .lab .path{font-family:var(--font-m);font-size:11.5px;color:rgba(var(--t),.28);margin-left:8px}
+.row .ctl{display:flex;align-items:center;justify-content:flex-end;gap:9px;font-family:var(--font-m)}
+.row:hover{background:rgba(255,255,255,.04)}
+.row.sel{background:rgba(54,189,221,.10)}
+.row.sel:before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--a)}
+.row.sel .lab{color:rgba(var(--t),.95)}
+.row.sel .gut{color:var(--a-icon)}
+.row.dis{opacity:.34}
+.row.danger .val,.row.danger .verb{color:var(--danger)}
+.row.danger .verb{background:rgba(240,85,94,.14)}
+
+/* control-column atoms */
+.val{font-size:16px;font-weight:500;color:var(--a-value);white-space:nowrap}
+.val.neutral{color:rgba(var(--t),.44)}
+.unit{font-size:11.5px;color:rgba(var(--t),.36);margin-left:-5px}
+.state{font-size:11.5px;color:rgba(var(--t),.44)}
+.verb{font-size:11.5px;font-weight:500;color:var(--a-text);background:rgba(54,189,221,.16);padding:3px 7px}
+.caretd{font-size:11px;color:rgba(var(--t),.34)}
+.sw{width:30px;height:15px;background:rgba(54,189,221,.30);border:1px solid rgba(54,189,221,.65);
+  position:relative;flex:0 0 auto}
+.sw i{position:absolute;top:1px;left:16px;width:11px;height:11px;background:var(--a-knob)}
+.sw.off{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.18)}
+.sw.off i{left:1px;background:rgba(var(--t),.55)}
+/* mini-track: the slider inside a result row */
+.mini{width:118px;height:6px;border-radius:3px;background:rgba(255,255,255,.16);position:relative;flex:0 0 auto}
+.mini u{position:absolute;left:0;top:0;bottom:0;border-radius:3px;
+  background:linear-gradient(90deg,rgba(54,189,221,.5),var(--a-grad-hi))}
+.mini b{position:absolute;top:-4px;width:6px;height:14px;background:var(--a-handle);border-radius:1px;
+  box-shadow:0 0 0 2px rgba(54,189,221,.18)}
+/* segmented, inline in the control column */
+.seg{display:flex;gap:3px}
+.seg s{text-decoration:none;font-size:11px;font-weight:500;padding:4px 7px;color:rgba(var(--t),.50);
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+.seg s.on{color:var(--a-seg);font-weight:600;background:rgba(54,189,221,.24);border-color:rgba(54,189,221,.6)}
+/* stepper */
+.step{display:flex;align-items:center;gap:8px}
+.step s{text-decoration:none;font-size:13px;color:rgba(var(--t),.4);width:16px;text-align:center}
+/* chip bank (multi-select) */
+.bank{display:flex;gap:3px}
+.bank s{text-decoration:none;font-size:10.5px;padding:3px 6px;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08);color:rgba(var(--t),.42)}
+.bank s.on{background:rgba(54,189,221,.22);border-color:rgba(54,189,221,.55);color:var(--a-seg)}
+/* hue rail */
+.hue{width:118px;height:8px;position:relative;flex:0 0 auto;
+  background:linear-gradient(90deg,#e0777a,#c99a4e,#8ab55e,#4ec2a2,#36BDDD,#7fa8ee,#c48ee0,#e0777a)}
+.hue b{position:absolute;top:-3px;width:5px;height:14px;background:#EFF5FB;box-shadow:0 0 0 1px rgba(0,0,0,.6)}
+/* 3x3 proxy glyph */
+.grid3{display:grid;grid-template-columns:repeat(3,3px);grid-template-rows:repeat(3,3px);gap:2px;flex:0 0 auto}
+.grid3 i{background:rgba(255,255,255,.18)}
+.grid3 i.on{background:var(--a)}
+
+/* --- inspector strip: help lives here, never in the row --- */
+.insp{flex:0 0 auto;border-top:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.025);
+  padding:10px 14px 10px 38px;min-height:64px}
+.insp .h{font-family:var(--font-s);font-size:13.5px;color:rgba(var(--t),.72);max-width:74ch}
+.insp .m{font-family:var(--font-m);font-size:11.5px;color:rgba(var(--t),.36);margin-top:5px;
+  display:flex;gap:14px;flex-wrap:wrap}
+.insp .m em{font-style:normal;color:rgba(var(--t),.5)}
+/* --- footer key legend --- */
+.legend{flex:0 0 auto;border-top:1px solid rgba(255,255,255,.07);display:flex;gap:14px;flex-wrap:wrap;
+  padding:7px 14px;font-family:var(--font-m);font-size:10.5px;color:rgba(var(--t),.34)}
+.legend em{font-style:normal;color:rgba(var(--t),.55)}
+
+/* --- home: area tiles --- */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:8px 14px 4px}
+.tile{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:12px 12px 11px;
+  display:flex;flex-direction:column;gap:3px}
+.tile.on{background:rgba(54,189,221,.13);border-color:rgba(54,189,221,.5)}
+.tile .n{font-family:var(--font-s);font-size:14px;font-weight:500;color:rgba(var(--t),.9)}
+.tile .k{font-family:var(--font-m);font-size:10.5px;color:rgba(var(--t),.34)}
+.tile .c{font-family:var(--font-m);font-size:10.5px;color:var(--a-text);margin-top:2px}
+
+/* --- stream pane (LOG) --- */
+.stream{font-family:var(--font-m);font-size:12.5px;line-height:20px;padding:4px 0}
+.sline{display:grid;grid-template-columns:24px 74px 1fr;align-items:baseline;padding:0 14px 0 0}
+.sline .g{display:flex;justify-content:center;align-items:center;height:20px}
+.sline .g i{width:6px;height:6px;background:rgba(255,255,255,.18)}
+.sline.err .g i{background:var(--danger)}
+.sline.warn .g i{background:var(--warn)}
+.sline.ok .g i{background:var(--ok)}
+.sline .ts{color:rgba(var(--t),.26)}
+.sline .tx{color:rgba(var(--t),.62);white-space:pre-wrap;word-break:break-word}
+.sline .tx .m{color:var(--a-value);background:rgba(54,189,221,.16)}
+.sline.err .tx{color:rgba(240,85,94,.85)}
+.sline.sel{background:rgba(54,189,221,.10)}
+
+/* --- gauge pane (System Monitor) --- */
+.gwrap{padding:10px 14px 4px}
+.gcards{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+.gcard{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);padding:11px 12px 10px}
+.gcard .k{font-family:var(--font-s);font-size:11.5px;color:rgba(var(--t),.5)}
+.gcard .v{font-family:var(--font-m);font-size:30px;font-weight:600;color:rgba(var(--t),.94);
+  line-height:1.1;margin-top:3px;display:flex;align-items:baseline;gap:5px}
+.gcard .v s{text-decoration:none;font-size:11.5px;font-weight:400;color:rgba(var(--t),.36)}
+.gcard .v.acc{color:var(--a-value)}
+.gcard .spark{height:26px;display:flex;align-items:flex-end;gap:1px;margin-top:8px}
+.gcard .spark i{flex:1;background:rgba(54,189,221,.45)}
+.gcard .spark i.sp{background:rgba(243,130,29,.8)}
+.gcard .sub{font-family:var(--font-m);font-size:10.5px;color:rgba(var(--t),.34);margin-top:7px}
+.gmeter{height:5px;background:rgba(255,255,255,.16);margin-top:9px;position:relative}
+.gmeter u{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,rgba(54,189,221,.5),var(--a-grad-hi))}
+
+/* --- gamepad posture --- */
+.pad-badge{position:absolute;right:14px;top:14px;font-family:var(--font-m);font-size:10.5px;
+  color:var(--a-text);background:rgba(54,189,221,.16);padding:4px 8px;z-index:8}
+.wheel{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%);width:340px;height:340px;z-index:7}
+.wheel .ring{position:absolute;inset:0;border-radius:50%;background:rgba(var(--surf),.88);
+  border:1px solid rgba(54,189,221,.42);box-shadow:0 24px 60px -18px rgba(0,0,0,.9)}
+.wheel .hub{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;width:150px}
+.wheel .hub .n{font-family:var(--font-m);font-size:26px;font-weight:600;color:var(--a-value)}
+.wheel .hub .k{font-family:var(--font-s);font-size:12.5px;color:rgba(var(--t),.6);margin-top:2px}
+.wheel .hub .h{font-family:var(--font-m);font-size:10px;color:rgba(var(--t),.32);margin-top:8px}
+.wsl{position:absolute;width:104px;text-align:center;font-family:var(--font-m);font-size:10.5px;
+  color:rgba(var(--t),.42);line-height:1.35}
+.wsl b{display:block;font-size:11.5px;font-weight:500;color:rgba(var(--t),.7)}
+.wsl.on b{color:var(--a-seg)}
+.wsl.on{color:var(--a-text)}
+
+/* --- letter wheel --- */
+.lw{display:flex;gap:3px;padding:10px 14px}
+.lwring{flex:1;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);padding:9px;
+  display:grid;grid-template-columns:repeat(3,1fr);gap:3px;text-align:center}
+.lwring s{text-decoration:none;font-family:var(--font-m);font-size:13px;padding:6px 0;
+  color:rgba(var(--t),.5);background:rgba(255,255,255,.03)}
+.lwring s.on{background:rgba(54,189,221,.24);border:1px solid rgba(54,189,221,.6);color:var(--a-seg);font-weight:600}
+.lwcap{font-family:var(--font-m);font-size:10.5px;color:rgba(var(--t),.3);padding:0 14px 8px}
+
+/* ============ reference tables ============ */
+table.ref{width:100%;border-collapse:collapse;margin-top:18px;font-size:13.5px}
+table.ref th{text-align:left;font-family:var(--font-m);font-size:10.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:rgba(var(--t),.35);padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.12)}
+table.ref td{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.05);
+  color:rgba(var(--t),.6);vertical-align:top}
+table.ref td:first-child{font-family:var(--font-m);font-size:12.5px;color:rgba(var(--t),.88);white-space:nowrap}
+table.ref tr:hover td{background:rgba(255,255,255,.02)}
+
+/* taxonomy sheet: rows on a plain surface */
+.sheet{background:rgba(var(--surf),.92);border:1px solid rgba(255,255,255,.10);margin-top:18px}
+.sheet .ghead{padding-left:38px}
+
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:3px;margin-top:18px}
+.sw2{border:1px solid rgba(255,255,255,.07);padding:10px 12px;background:rgba(255,255,255,.02)}
+.sw2 .b{height:26px;margin-bottom:9px;border:1px solid rgba(255,255,255,.08)}
+.sw2 .n{font-family:var(--font-m);font-size:11.5px;color:rgba(var(--t),.85)}
+.sw2 .d{font-family:var(--font-m);font-size:10.5px;color:rgba(var(--t),.34);margin-top:3px}
+
+.scaledemo{display:flex;gap:3px;align-items:flex-start;margin-top:18px;flex-wrap:wrap}
+.scalebox{background:rgba(var(--surf),.92);border:1px solid rgba(255,255,255,.1);flex:1;min-width:280px}
+.scalebox .cap{font-family:var(--font-m);font-size:10.5px;color:rgba(var(--t),.34);padding:7px 12px;
+  border-bottom:1px solid rgba(255,255,255,.07)}
+
+footer{padding:60px 0 90px;color:rgba(var(--t),.3);font-family:var(--font-m);font-size:11.5px}
+
+/* ============ cold-start affordance for the live demo ============ */
+.try{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:20px;padding:13px 16px;
+  background:rgba(54,189,221,.09);border:1px solid rgba(54,189,221,.34)}
+.try .lead{font-family:var(--font-m);font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--a-text);margin-right:4px}
+.try button{font-family:var(--font-m);font-size:13px;color:rgba(var(--t),.82);cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);padding:6px 11px;
+  transition:background .12s ease,border-color .12s ease,color .12s ease}
+.try button:hover{background:rgba(54,189,221,.22);border-color:rgba(54,189,221,.6);color:var(--a-seg)}
+.try button:focus-visible{outline:2px solid var(--a-value);outline-offset:2px}
+.try .tail{font-family:var(--font-s);font-size:13.5px;color:rgba(var(--t),.5);margin-left:2px}
+
+/* the "click here and type" veil, dismissed on first interaction */
+.armveil{position:absolute;inset:0;z-index:12;display:flex;align-items:center;justify-content:center;
+  background:rgba(4,6,9,.5);cursor:pointer;transition:opacity .18s ease}
+.armveil.gone{opacity:0;pointer-events:none}
+.armveil .card{background:rgba(var(--surf),.94);border:1px solid rgba(54,189,221,.5);
+  padding:20px 26px;text-align:center;max-width:420px;
+  box-shadow:0 24px 60px -18px rgba(0,0,0,.9)}
+.armveil .card .t{font-family:var(--font-m);font-size:15px;color:var(--a-value);letter-spacing:.02em}
+.armveil .card .d{font-family:var(--font-s);font-size:13.5px;color:rgba(var(--t),.62);margin-top:9px;line-height:1.55}
+.armveil .card .k{font-family:var(--font-m);font-size:11px;color:rgba(var(--t),.4);margin-top:13px}
+.armveil .pulse{display:inline-block;width:7px;height:7px;background:var(--a);margin-right:8px;
+  animation:pulse 1.5s ease-in-out infinite;vertical-align:1px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+@media (prefers-reduced-motion: reduce){
+  *,*:before,*:after{animation-duration:.001ms !important;animation-iteration-count:1 !important;
+    transition-duration:.001ms !important}
+  html{scroll-behavior:auto}
+}
+a:focus-visible,input:focus-visible{outline:2px solid var(--a-value);outline-offset:2px}
+</style>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <b>RITZ CONSOLE</b>
+  <a href="#live">Live demo</a>
+  <a href="#home">Home</a>
+  <a href="#scoped">Scoped browse</a>
+  <a href="#log">LOG</a>
+  <a href="#monitor">Monitor</a>
+  <a href="#gamepad">Gamepad</a>
+  <a href="#taxonomy">Row taxonomy</a>
+  <a href="#theme">Theme</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <h1>One surface. <em>You type, it appears.</em></h1>
+  <p class="lede">Direction B replaces the dock and its six floating windows with a single
+  centred <strong>Console</strong>. <span style="color:var(--a-value)">Ctrl+Shift+O</span> opens it with
+  the query line already focused; type <span style="font-family:var(--font-m)">sharp</span> and the
+  Sharpness slider is under your cursor two keystrokes later — adjustable in place, without opening
+  anything.</p>
+  <p class="sub" style="color:var(--a-text);font-family:var(--font-m);font-size:13px">
+  ↓ The first screen below is a working console. Click it and type — everything else on this page is a
+  still.</p>
+  <p class="sub">Browsing did not go away: it is the same list with an empty query and an area chip.
+  Because there is exactly one surface, and exactly one row grammar inside it, an inconsistent screen
+  is not something you can accidentally build — the drawing API is not reachable from a call site.</p>
+</div></header>
+
+<!-- ==================================================================== -->
+<section id="live"><div class="wrap">
+  <h2 class="sec">01 — Live demo · the console mid-query</h2>
+  <p class="note"><b style="color:rgba(239,245,251,.92);font-weight:500">This one is live — type into
+  it.</b> It runs on the real registry entries from <code>PanelDisplay.cpp</code>,
+  <code>PanelShaders.cpp</code>, <code>PanelAudio.cpp</code>, <code>FpsDisplay.cpp</code>,
+  <code>PanelConfig.cpp</code> and <code>PanelLog.cpp</code> — real names, real ranges, real defaults.
+  <span class="kbd">↑ ↓</span> move the cursor, <span class="kbd">← →</span> change the selected value
+  in place, <span class="kbd">Tab</span> scopes to an area, <span class="kbd">Enter</span> opens,
+  <span class="kbd">Esc</span> clears.</p>
+
+  <div class="try">
+    <span class="lead">Try typing</span>
+    <button data-q="sharp">sharp</button>
+    <button data-q="hdr">hdr</button>
+    <button data-q="fps limit">fps limit</button>
+    <button data-q="crisp">crisp</button>
+    <button data-q="anchor">anchor</button>
+    <button data-q="&gt;">&gt; commands</button>
+    <button data-q="/vulkan">/ log</button>
+    <span class="tail">— or just start typing anywhere on this page.</span>
+  </div>
+
+  <div class="stage tall" id="demoStage">
+    <div class="game"></div><div class="veil"></div>
+    <div class="hud" id="demoHud">
+      <div class="r1"><span class="n">184</span><span class="u">FPS</span><span class="ft">5.4 ms</span></div>
+      <div class="graph" id="demoGraph"></div>
+      <div class="r3"><span>1% 168</span><span>0.1% 121</span><span>74°</span></div>
+    </div>
+    <div class="console" id="demoConsole">
+      <div class="q" id="demoQ">
+        <span class="sig" id="demoSig">⌕</span>
+        <span id="demoChips"></span>
+        <input class="txt" id="demoInput" placeholder="search settings, commands, log…" autocomplete="off" spellcheck="false">
+        <span class="count" id="demoCount"></span>
+      </div>
+      <div class="body" id="demoBody"></div>
+      <div class="insp" id="demoInsp"></div>
+      <div class="legend" id="demoLegend"></div>
+    </div>
+    <div class="stagelabel">1920×1080 · display_scale 1.0 · game layer blurred + veiled by the native compositor pass</div>
+    <div class="armveil" id="armVeil">
+      <div class="card">
+        <div class="t"><span class="pulse"></span>Click here, then type</div>
+        <div class="d">This is a working search console, not a screenshot. Type
+          <b style="color:var(--a-value);font-weight:400">sharp</b> and watch the Sharpness slider
+          arrive under the cursor — then hold <b style="color:var(--a-value);font-weight:400">→</b>
+          to change it without opening anything.</div>
+        <div class="k">↑↓ move · ←→ adjust · ↹ scope · ⏎ open · esc clear</div>
+      </div>
+    </div>
+  </div>
+
+  <ul class="pts">
+    <li><b>The query line never moves.</b> Filtering, scoping, panes and the log all happen in the body
+    beneath it. That is the whole answer to “where am I” — the chips plus the query text always read out
+    literally what you are looking at.</li>
+    <li><b>Matched characters are underlined in <span style="color:var(--a-value)">accent/value</span></b>,
+    never bolded — no second weight to bake, and it survives at 0.5× where a weight change would not.</li>
+    <li><b>Sliders adjust in the row.</b> A collapsed slider row shows value + a 118u mini-track. The
+    selected row grows to 56u and becomes the full <code>SliderControl()</code> from
+    <code>slider-widget-spec.md</code>, with min/max marks. Nothing pops up.</li>
+  </ul>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="home"><div class="wrap">
+  <h2 class="sec">02 — Home · the empty query</h2>
+  <p class="note">Opening with no query is not a blank slate. It is a curated home: what you touched last,
+  what you pinned, then every area with its entry count. This is the discovery answer — you cannot search
+  for a setting you cannot name, so the empty state names all of them for you.</p>
+
+  <div class="stage">
+    <div class="game"></div><div class="veil"></div>
+    <div class="hud">
+      <div class="r1"><span class="n">184</span><span class="u">FPS</span><span class="ft">5.4 ms</span></div>
+      <div class="graph" data-graph></div>
+      <div class="r3"><span>1% 168</span><span>0.1% 121</span><span>74°</span></div>
+    </div>
+    <div class="console">
+      <div class="q">
+        <span class="sig">⌕</span>
+        <span class="txt" style="color:rgba(239,245,251,.28)">search settings, commands, log…</span>
+        <span class="caret"></span>
+        <span class="count">147 entries</span>
+      </div>
+      <div class="body">
+        <div class="ghead">Recent <span class="cnt">this session</span></div>
+        <div class="row sel"><div class="gut"><span class="dot"></span></div>
+          <div class="lab">Sharpness<span class="path">display</span></div>
+          <div class="ctl"><span class="val">5</span><span class="mini"><u style="width:25%"></u><b style="left:calc(25% - 3px)"></b></span></div></div>
+        <div class="row"><div class="gut"><span class="dot"></span></div>
+          <div class="lab">Allow Tearing<span class="path">display</span></div>
+          <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+        <div class="row"><div class="gut"><span class="dot"></span></div>
+          <div class="lab">Vibrancy · Strength<span class="path">shaders</span></div>
+          <div class="ctl"><span class="val">0.42</span><span class="mini"><u style="width:71%"></u><b style="left:calc(71% - 3px)"></b></span></div></div>
+
+        <div class="ghead">Pinned <span class="cnt">L2 quick wheel</span></div>
+        <div class="row"><div class="gut">◆</div>
+          <div class="lab">FPS Limit<span class="path">display</span></div>
+          <div class="ctl"><span class="val neutral">Unlimited</span><span class="step"><s>−</s><s>+</s></span></div></div>
+        <div class="row"><div class="gut">◆</div>
+          <div class="lab">Volume<span class="path">audio</span></div>
+          <div class="ctl"><span class="val">74</span><span class="unit">%</span><span class="mini"><u style="width:74%"></u><b style="left:calc(74% - 3px)"></b></span></div></div>
+        <div class="row"><div class="gut">◆</div>
+          <div class="lab">Show System Monitor<span class="path">monitor</span></div>
+          <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+
+        <div class="ghead">Areas <span class="cnt">↹ to scope</span></div>
+        <div class="tiles">
+          <div class="tile on"><span class="n">Display</span><span class="k">display ·  24 entries</span><span class="c">fsr · stretch · 184 fps</span></div>
+          <div class="tile"><span class="n">Shaders</span><span class="k">shaders ·  11 entries</span><span class="c">vibrancy on · presharpen off</span></div>
+          <div class="tile"><span class="n">Audio</span><span class="k">audio ·  6 entries</span><span class="c">74% · 3 streams</span></div>
+          <div class="tile"><span class="n">Monitor</span><span class="k">monitor ·  38 entries</span><span class="c">fps + gpu · top-right</span></div>
+          <div class="tile"><span class="n">Profiles</span><span class="k">profiles ·  9 entries</span><span class="c">app 1091500 · override on</span></div>
+          <div class="tile"><span class="n">Log</span><span class="k">log ·  stream</span><span class="c">2 errors · 418 lines</span></div>
+        </div>
+      </div>
+      <div class="insp">
+        <div class="h">FSR / NIS sharpening strength. Higher is sharper; too high adds ringing around
+        high-contrast edges.</div>
+        <div class="m"><span>display.sharpness</span><span><em>0 – 20</em> · step 1</span>
+          <span>default <em>2</em></span><span>writes <em>app 1091500.json</em></span></div>
+      </div>
+      <div class="legend"><span><em>↑↓</em> move</span><span><em>←→</em> adjust</span><span><em>↹</em> scope to area</span>
+        <span><em>⏎</em> open</span><span><em>^P</em> pin</span><span><em>^R</em> reset</span><span><em>esc</em> close</span></div>
+    </div>
+    <div class="stagelabel">Home · empty query · one surface, elevation level 1</div>
+  </div>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="scoped"><div class="wrap">
+  <h2 class="sec">03 — Scoped browse · <span style="text-transform:none;letter-spacing:0;font-weight:400">browsing is search with an empty query</span></h2>
+  <p class="note">Type <code>di</code>, press <span class="kbd">↹</span>, and “Display” becomes a chip in
+  the query line. The body is now that area’s full list in registered order — the fallback path, the
+  gamepad path, and the “I don’t know what it’s called” path, all one code path. A second chip scopes to a
+  sub-area: <code>Display › Frame Limiter</code>. There are no tabs anywhere in this design; every tab bar
+  in today’s overlay (Gamescope×4, System Monitor×6, Config×3, Log×2) becomes a sub-area chip.</p>
+
+  <div class="stage tall">
+    <div class="game"></div><div class="veil"></div>
+    <div class="console">
+      <div class="q">
+        <span class="sig">⌕</span>
+        <span class="chip">Display <span class="x">×</span></span>
+        <span class="txt" style="color:rgba(239,245,251,.28)">filter within Display…</span>
+        <span class="caret"></span>
+        <span class="count">24 entries</span>
+      </div>
+      <div class="body">
+        <div class="ghead">Upscaling</div>
+        <div class="row"><div class="gut"></div><div class="lab">Scaling Filter</div>
+          <div class="ctl"><span class="seg"><s>linear</s><s>nearest</s><s class="on">fsr</s><s>nis</s><s>pixel</s></span></div></div>
+        <div class="row sel"><div class="gut"><span class="dot"></span></div><div class="lab">Sharpness</div>
+          <div class="ctl"><span class="val">5</span><span class="mini"><u style="width:25%"></u><b style="left:calc(25% - 3px)"></b></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Scaler</div>
+          <div class="ctl"><span class="val">Auto</span><span class="caretd">▾</span></div></div>
+        <div class="row dis"><div class="gut"></div><div class="lab">NIS Sharpness</div>
+          <div class="ctl"><span class="val neutral">10</span><span class="mini"><u style="width:50%;background:rgba(255,255,255,.3)"></u><b style="left:calc(50% - 3px);background:rgba(255,255,255,.45);box-shadow:none"></b></span></div></div>
+
+        <div class="ghead">Display</div>
+        <div class="row"><div class="gut"></div><div class="lab">VRR / Adaptive Sync</div>
+          <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Allow Tearing</div>
+          <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Force Grab Cursor</div>
+          <div class="ctl"><span class="state">off</span><span class="sw off"><i></i></span></div></div>
+
+        <div class="ghead">Frame Limiter</div>
+        <div class="row"><div class="gut"></div><div class="lab">FPS Limit</div>
+          <div class="ctl"><span class="val neutral">Unlimited</span><span class="step"><s>−</s><s>+</s></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Limiter Mode</div>
+          <div class="ctl"><span class="seg"><s class="on">auto</s><s>early</s><s>late</s></span></div></div>
+
+        <div class="ghead">HDR</div>
+        <div class="row"><div class="gut"></div><div class="lab">HDR Output</div>
+          <div class="ctl"><span class="state">off</span><span class="sw off"><i></i></span></div></div>
+        <div class="row dis"><div class="gut"></div><div class="lab">SDR-on-HDR Brightness</div>
+          <div class="ctl"><span class="val neutral">203</span><span class="unit">nits</span>
+            <span class="mini"><u style="width:11%;background:rgba(255,255,255,.3)"></u><b style="left:calc(11% - 3px);background:rgba(255,255,255,.45);box-shadow:none"></b></span></div></div>
+        <div class="row dis"><div class="gut"></div><div class="lab">Tonemap Operator</div>
+          <div class="ctl"><span class="val neutral">Uncharted 2</span><span class="caretd">▾</span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Focused app’s HDR metadata</div>
+          <div class="ctl"><span class="val neutral">unset · display-native</span></div></div>
+      </div>
+      <div class="insp">
+        <div class="h">FSR / NIS sharpening strength. Higher is sharper; too high adds ringing around
+        high-contrast edges.</div>
+        <div class="m"><span>display.sharpness</span><span><em>0 – 20</em> · step 1</span>
+          <span>default <em>2</em></span><span>writes <em>app 1091500.json</em></span>
+          <span>convar <em>sharpness</em></span></div>
+      </div>
+      <div class="legend"><span><em>⌫</em> at column 0 pops the chip</span><span><em>↑↓</em> move</span>
+        <span><em>←→</em> adjust</span><span><em>⏎</em> open</span><span><em>esc</em> back to home</span></div>
+    </div>
+    <div class="stagelabel">Scoped to Display · four former tabs are now four group headers in one list</div>
+  </div>
+
+  <p class="note"><b>Disabled rows are never hidden.</b> NIS Sharpness, SDR-on-HDR Brightness and Tonemap
+  Operator are drawn at 34 % row opacity with neutral controls because their <code>EnabledWhen()</code>
+  predicate is false. Searching finds them; the Inspector says <em>why</em> they are inert. Hiding a
+  setting you can search for is how a search-first UI loses trust.</p>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="log"><div class="wrap">
+  <h2 class="sec">04 — LOG · the stream pane</h2>
+  <p class="note">The <code>/</code> sigil turns the query line into the log filter. This is the direction
+  paying for itself: the LOG is the one surface where search <em>already</em> is the natural interface, so
+  it needs no special mechanism — the same query line, the same selection cursor, the same left gutter
+  (now carrying severity), the same inspector (now carrying the full untruncated line). The two tabs
+  (<em>Gamescope</em> / <em>Game</em>) become source chips.</p>
+
+  <div class="stage tall">
+    <div class="game"></div><div class="veil"></div>
+    <div class="console">
+      <div class="q">
+        <span class="sig" style="color:var(--warn)">/</span>
+        <span class="chip">Log <span class="x">×</span></span>
+        <span class="chip neutral">gamescope <span class="x">×</span></span>
+        <span class="txt">vulkan<span class="caret" style="display:inline-block;vertical-align:-4px;margin-left:2px"></span></span>
+        <span class="count">17 / 418 lines</span>
+      </div>
+      <div class="body">
+        <div class="stream">
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:00:01.4</span><span class="tx"><span class="m">vulkan</span>: selecting physical device 'AMD Radeon RX 7900 XTX (RADV NAVI31)': queue family 1 (general queue family 0)</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:00:01.4</span><span class="tx"><span class="m">vulkan</span>: physical device supports DRM format modifiers</span></div>
+          <div class="sline ok"><div class="g"><i></i></div><span class="ts">00:00:01.5</span><span class="tx"><span class="m">vulkan</span>: supported DRM formats for sampling usage: AR24 XR24 AB4H XB4H AB24 XB24</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:00:01.5</span><span class="tx"><span class="m">vulkan</span>: creating device with 2 queues</span></div>
+          <div class="sline warn"><div class="g"><i></i></div><span class="ts">00:00:02.1</span><span class="tx"><span class="m">vulkan</span>: VK_EXT_image_drm_format_modifier not exposed by all planes, falling back to linear</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:00:02.3</span><span class="tx"><span class="m">vulkan</span>: pipeline cache loaded (2.4 MiB, 118 entries)</span></div>
+          <div class="sline sel err"><div class="g"><i></i></div><span class="ts">00:03:44.8</span><span class="tx"><span class="m">vulkan</span>: ImGui Vulkan backend: VkResult -1000069000 (VK_ERROR_OUT_OF_POOL_MEMORY) while growing the descriptor pool</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:03:44.8</span><span class="tx"><span class="m">vulkan</span>: descriptor pool grown to 128 sets, retrying</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:03:44.8</span><span class="tx"><span class="m">vulkan</span>: overlay texture recreated 1920x1080 (format AR24)</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:07:12.0</span><span class="tx"><span class="m">vulkan</span>: composite: 4 layers, FSR EASU+RCAS, sharpness 5</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:07:12.0</span><span class="tx"><span class="m">vulkan</span>: reshade: gamescope-ritz.fx recompiled in 41 ms (no swapchain stall)</span></div>
+          <div class="sline err"><div class="g"><i></i></div><span class="ts">00:09:55.2</span><span class="tx"><span class="m">vulkan</span>: vkAcquireNextImageKHR returned VK_SUBOPTIMAL_KHR, rebuilding swapchain</span></div>
+          <div class="sline"><div class="g"><i></i></div><span class="ts">00:09:55.3</span><span class="tx"><span class="m">vulkan</span>: swapchain rebuilt: 3 images, IMMEDIATE present mode (tearing allowed)</span></div>
+        </div>
+      </div>
+      <div class="insp">
+        <div class="h" style="font-family:var(--font-m);font-size:12.5px;color:rgba(240,85,94,.85)">vulkan: ImGui Vulkan backend: VkResult -1000069000 (VK_ERROR_OUT_OF_POOL_MEMORY) while growing the descriptor pool</div>
+        <div class="m"><span>00:03:44.812</span><span>source <em>gamescope</em></span><span>severity <em>error</em></span>
+          <span><em>^C</em> copy line</span><span><em>^⇧C</em> copy all 17 matches</span></div>
+      </div>
+      <div class="legend"><span><em>↑↓</em> move</span><span><em>⇧↑↓</em> extend selection</span>
+        <span><em>^C</em> copy</span><span><em>^E</em> jump to next error</span>
+        <span><em>^L</em> follow tail <span style="color:var(--a-value)">on</span></span><span><em>esc</em> clear filter</span></div>
+    </div>
+    <div class="stagelabel">LOG · sigil <span style="color:var(--warn)">/</span> · the query line is the filter</div>
+  </div>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="monitor"><div class="wrap">
+  <h2 class="sec">05 — System Monitor · the gauge pane</h2>
+  <p class="note"><b>The single most important structural decision in this area:</b> the System Monitor’s
+  <em>live display</em> and its <em>configuration</em> are separated. The pane below shows; the registry
+  configures. Every knob from today’s six tabs — module toggles, font size, anchor, margins, backdrop mode,
+  blend mode — is an ordinary searchable row in the <code>monitor</code> area, reachable by typing
+  <code>anchor</code> from anywhere. What is left over here is only the thing that genuinely cannot be a
+  row: numbers that change 60 times a second.</p>
+
+  <div class="stage tall">
+    <div class="game"></div><div class="veil"></div>
+    <div class="console">
+      <div class="q">
+        <span class="sig">⌕</span>
+        <span class="chip">Monitor <span class="x">×</span></span>
+        <span class="chip neutral">Live <span class="x">×</span></span>
+        <span class="txt" style="color:rgba(239,245,251,.28)">filter gauges…</span>
+        <span class="caret"></span>
+        <span class="count">sampling 500 ms · 240-frame window</span>
+      </div>
+      <div class="body">
+        <div class="gwrap">
+          <div class="gcards">
+            <div class="gcard"><div class="k">Frame rate</div>
+              <div class="v acc">184<s>fps</s></div>
+              <div class="spark"><i style="height:78%"></i><i style="height:82%"></i><i style="height:74%"></i><i style="height:88%"></i><i style="height:80%"></i><i style="height:91%"></i><i style="height:46%" class="sp"></i><i style="height:84%"></i><i style="height:87%"></i><i style="height:79%"></i><i style="height:83%"></i><i style="height:90%"></i><i style="height:86%"></i><i style="height:81%"></i><i style="height:88%"></i><i style="height:93%"></i><i style="height:85%"></i><i style="height:80%"></i><i style="height:89%"></i><i style="height:84%"></i></div>
+              <div class="sub">1% 168 · 0.1% 121 · avg 179</div></div>
+            <div class="gcard"><div class="k">Frametime</div>
+              <div class="v">5.4<s>ms</s></div>
+              <div class="spark"><i style="height:52%"></i><i style="height:48%"></i><i style="height:55%"></i><i style="height:44%"></i><i style="height:50%"></i><i style="height:41%"></i><i style="height:96%" class="sp"></i><i style="height:47%"></i><i style="height:45%"></i><i style="height:51%"></i><i style="height:49%"></i><i style="height:43%"></i><i style="height:46%"></i><i style="height:50%"></i><i style="height:44%"></i><i style="height:40%"></i><i style="height:47%"></i><i style="height:51%"></i><i style="height:43%"></i><i style="height:48%"></i></div>
+              <div class="sub">1 outlier in last 240 frames</div></div>
+            <div class="gcard"><div class="k">CPU load (1 m avg)</div>
+              <div class="v">37<s>%</s></div>
+              <div class="gmeter"><u style="width:37%"></u></div>
+              <div class="sub">RAM 18.4 / 31.2 GB</div></div>
+            <div class="gcard"><div class="k">GPU busy</div>
+              <div class="v">96<s>%</s></div>
+              <div class="gmeter"><u style="width:96%"></u></div>
+              <div class="sub">VRAM 12.1 / 24.0 GB</div></div>
+            <div class="gcard"><div class="k">GPU temperature</div>
+              <div class="v">74<s>°C</s></div>
+              <div class="gmeter"><u style="width:66%"></u></div>
+              <div class="sub">GPU power 318 W</div></div>
+            <div class="gcard"><div class="k">Media</div>
+              <div class="v" style="font-size:17px;line-height:1.35">Ghost&nbsp;Voices<s style="display:block;margin-top:2px">Virtual Self</s></div>
+              <div class="sub" style="margin-top:12px">playing · MPRIS · Firefox</div></div>
+          </div>
+        </div>
+        <div class="ghead">Configure <span class="cnt">ordinary registry rows — searchable from anywhere</span></div>
+        <div class="row sel"><div class="gut"><span class="dot"></span></div><div class="lab">Modules</div>
+          <div class="ctl"><span class="bank"><s class="on">fps</s><s>ft</s><s>cpu</s><s class="on">gpu</s><s>media</s></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Placement</div>
+          <div class="ctl"><span class="val neutral">top-right</span>
+            <span class="grid3"><i></i><i></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Font size</div>
+          <div class="ctl"><span class="val">18</span><span class="unit">px</span><span class="mini"><u style="width:40%"></u><b style="left:calc(40% - 3px)"></b></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Backdrop</div>
+          <div class="ctl"><span class="seg"><s>none</s><s>shadow</s><s>solid</s><s class="on">blur</s></span></div></div>
+      </div>
+      <div class="insp">
+        <div class="h">Which modules the on-screen monitor draws. Every enabled module renders at the
+        widest enabled module’s width; a module that is off reserves no space.</div>
+        <div class="m"><span>monitor.modules</span><span><em>←→</em> move chip · <em>space</em> toggle</span>
+          <span>writes <em>global.json</em></span></div>
+      </div>
+      <div class="legend"><span><em>↑↓</em> move</span><span><em>←→</em> adjust</span>
+        <span><em>^⇧M</em> toggle the on-screen monitor</span><span><em>esc</em> back</span></div>
+    </div>
+    <div class="stagelabel">Monitor · gauge cards above, registry rows below, one scroll</div>
+  </div>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="gamepad"><div class="wrap">
+  <h2 class="sec">06 — The gamepad answer</h2>
+  <p class="note">Typing is an <em>accelerator</em>, not the contract. The registry is the contract. Three
+  distinct gamepad paths fall out of it, in the order you would actually reach for them mid-game.</p>
+
+  <h3 class="sub">Path 1 — the Quick Wheel: eight pins, no typing, sub-second</h3>
+  <p class="note">Hold <span class="kbd">L2</span> and the console does not open at all. Up to eight pinned
+  entries appear as a radial at screen centre; the right stick selects, and the same
+  <span class="kbd">←→</span> semantics (now stick-X) change the value live while the game keeps running.
+  Release to commit. These are exactly the pins Home lists — same registry, same rows, same value writer.
+  This, not search, is the mid-game gamepad path.</p>
+
+  <div class="stage">
+    <div class="game"></div>
+    <div style="position:absolute;inset:0;background:rgba(4,6,9,.34)"></div>
+    <div class="hud">
+      <div class="r1"><span class="n">184</span><span class="u">FPS</span><span class="ft">5.4 ms</span></div>
+      <div class="graph" data-graph></div>
+      <div class="r3"><span>1% 168</span><span>0.1% 121</span><span>74°</span></div>
+    </div>
+    <div class="pad-badge">L2 HELD · GAME STILL RUNNING</div>
+    <div class="wheel">
+      <div class="ring"></div>
+      <div class="wsl on" style="left:118px;top:16px">Sharpness<b>5 → 7</b></div>
+      <div class="wsl" style="left:236px;top:60px">FPS Limit<b>Unlimited</b></div>
+      <div class="wsl" style="left:258px;top:150px">Volume<b>74 %</b></div>
+      <div class="wsl" style="left:236px;top:238px">Vibrancy<b>on</b></div>
+      <div class="wsl" style="left:118px;top:286px">Monitor<b>on</b></div>
+      <div class="wsl" style="left:-4px;top:238px">Scaler<b>Auto</b></div>
+      <div class="wsl" style="left:-22px;top:150px">HDR<b>off</b></div>
+      <div class="wsl" style="left:-4px;top:60px">Tearing<b>on</b></div>
+      <div class="hub"><div class="n">7</div><div class="k">Sharpness</div>
+        <div class="h">◄ ► stick · ✕ reset<br>release to commit</div></div>
+    </div>
+    <div class="stagelabel">Quick Wheel · pins are registry entries, drawn by the same row value renderers</div>
+  </div>
+
+  <h3 class="sub">Path 2 — Browse posture: the console opens without a query line</h3>
+  <p class="note">Opening with the pad (<span class="kbd">Select+Start</span>, or the Steam Deck’s
+  <span class="kbd">…</span> button) opens the <em>same console</em> in browse posture: the query line
+  collapses into a breadcrumb bar and the body starts on the area grid. Five verbs, identical on every
+  single row, guaranteed by the row grammar — this is the payoff for a uniform taxonomy:</p>
+
+  <table class="ref">
+    <tr><th>Button</th><th>Verb</th><th>Why it is safe to promise on every row</th></tr>
+    <tr><td>D-pad ↑ ↓</td><td>move selection</td><td>every row is exactly 40u and vertically stacked; there is never a horizontal row group to get lost in</td></tr>
+    <tr><td>D-pad ← →</td><td><b>change this value in place</b></td><td>every value type defines a total order and a step: sliders step, choices cycle, switches flip, chip banks move the chip cursor, the 3×3 grid cycles in reading order. Nothing needs to be “entered” first.</td></tr>
+    <tr><td>A</td><td>open pane / run</td><td>only rows with a pane or an action respond; the row grammar says which by drawing a <span class="verb" style="font-size:10.5px">RUN</span> chip or a <span class="caretd">▾</span></td></tr>
+    <tr><td>B</td><td>back — pops one chip, then closes</td><td>the chip stack <em>is</em> the navigation stack; there is no other stack</td></tr>
+    <tr><td>X</td><td>reset this entry to default</td><td>every entry declares <code>.Default()</code>; the helper refuses to register one that does not</td></tr>
+    <tr><td>Y</td><td>pin / unpin to the Quick Wheel</td><td>pinning is a registry flag, not a per-panel feature</td></tr>
+    <tr><td>L1 / R1</td><td>jump to previous / next group header</td><td>groups come from the registry, so paging is uniform</td></tr>
+    <tr><td>L2 (hold) + ← →</td><td>fine step</td><td>every numeric entry declares <code>.Step(coarse, fine)</code></td></tr>
+  </table>
+
+  <div class="stage tall" style="margin-top:26px">
+    <div class="game"></div><div class="veil"></div>
+    <div class="console">
+      <div class="q" style="height:44px">
+        <span class="sig" style="font-size:14px;color:rgba(239,245,251,.4)">◄</span>
+        <span class="chip">Shaders <span class="x">B</span></span>
+        <span style="flex:1"></span>
+        <span class="count">11 entries · 3 of 11</span>
+      </div>
+      <div class="body">
+        <div class="ghead">Vibrancy</div>
+        <div class="row"><div class="gut"></div><div class="lab">Vibrancy</div>
+          <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+        <div class="row sel" style="height:56px">
+          <div class="gut"><span class="dot"></span></div>
+          <div class="lab" style="display:flex;flex-direction:column;justify-content:center;gap:6px;padding-right:24px">
+            <span>Strength</span>
+            <span style="height:6px;border-radius:3px;background:rgba(255,255,255,.16);position:relative;display:block">
+              <u style="position:absolute;left:0;top:0;bottom:0;width:71%;border-radius:3px;background:linear-gradient(90deg,rgba(54,189,221,.5),#47CAEA)"></u>
+              <b style="position:absolute;top:-8px;left:calc(71% - 5px);width:10px;height:22px;background:#BAE7F4;box-shadow:0 0 0 3px rgba(54,189,221,.18)"></b>
+            </span>
+          </div>
+          <div class="ctl" style="flex-direction:column;align-items:flex-end;gap:6px">
+            <span class="val" style="font-size:18px">0.42</span>
+            <span style="font-family:var(--font-m);font-size:11.5px;color:rgba(239,245,251,.38)">−1.00 &nbsp;·&nbsp; 1.00</span>
+          </div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Protect skin tones</div>
+          <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+        <div class="ghead">Pre-Sharpen</div>
+        <div class="row"><div class="gut"></div><div class="lab">Pre-Sharpen</div>
+          <div class="ctl"><span class="state">off</span><span class="sw off"><i></i></span></div></div>
+        <div class="row dis"><div class="gut"></div><div class="lab">Strength</div>
+          <div class="ctl"><span class="val neutral">0.30</span><span class="mini"><u style="width:30%;background:rgba(255,255,255,.3)"></u><b style="left:calc(30% - 3px);background:rgba(255,255,255,.45);box-shadow:none"></b></span></div></div>
+        <div class="ghead">Adaptive Brightness</div>
+        <div class="row"><div class="gut"></div><div class="lab">Adaptive Brightness</div>
+          <div class="ctl"><span class="state">off</span><span class="sw off"><i></i></span></div></div>
+        <div class="row dis"><div class="gut"></div><div class="lab">Target brightness</div>
+          <div class="ctl"><span class="val neutral">0.45</span><span class="mini"><u style="width:45%;background:rgba(255,255,255,.3)"></u><b style="left:calc(45% - 3px);background:rgba(255,255,255,.45);box-shadow:none"></b></span></div></div>
+        <div class="row"><div class="gut">⌕</div><div class="lab">Search within Shaders…</div>
+          <div class="ctl"><span class="verb">A</span></div></div>
+      </div>
+      <div class="insp">
+        <div class="h">How far saturation is pushed. Negative values desaturate. Applied in the
+        gamescope-ritz.fx ReShade pass, before tonemapping.</div>
+        <div class="m"><span>shaders.vibrancy_strength</span><span><em>−1.00 – 1.00</em> · step 0.05 / fine 0.01</span>
+          <span>default <em>0.00</em></span></div>
+      </div>
+      <div class="legend"><span><em>◄►</em> adjust</span><span><em>A</em> open</span><span><em>B</em> back</span>
+        <span><em>X</em> reset</span><span><em>Y</em> pin</span><span><em>L1/R1</em> group</span>
+        <span><em>L2+◄►</em> fine</span></div>
+    </div>
+    <div class="stagelabel">Browse posture · same console, no query line, selected slider expanded to 56u</div>
+  </div>
+
+  <h3 class="sub">Path 3 — when you <em>do</em> want to search with a pad: the letter wheel</h3>
+  <p class="note">The last row of every area is <em>Search within…</em>. It opens a three-ring letter wheel:
+  right stick picks a ring, face buttons or a second flick picks the letter — roughly 0.6 s per character.
+  That is only usable because search narrows fast, and the registry lets us <em>prove</em> how fast: over
+  the 147 entries in the shipping registry, <b>2 characters median / 3 characters at the 90th percentile</b>
+  is enough to put the target in the top three results. The console prints the live match count next to the
+  wheel so you can stop as soon as you see “1 match”. A build-time assertion keeps this true: adding an
+  entry whose 3-character prefix collides with more than 3 others fails the registry self-test until you
+  give it a distinguishing keyword.</p>
+
+  <div class="stage">
+    <div class="game"></div><div class="veil"></div>
+    <div class="console" style="width:52%">
+      <div class="q">
+        <span class="sig">⌕</span>
+        <span class="chip">Display <span class="x">B</span></span>
+        <span class="txt">sh<span class="caret" style="display:inline-block;vertical-align:-4px;margin-left:2px"></span></span>
+        <span class="count" style="color:var(--a-value)">1 match</span>
+      </div>
+      <div class="lw">
+        <div class="lwring"><s>a</s><s>b</s><s>c</s><s>d</s><s>e</s><s>f</s><s>g</s><s>h</s><s>i</s></div>
+        <div class="lwring"><s>j</s><s>k</s><s>l</s><s>m</s><s>n</s><s>o</s><s>p</s><s>q</s><s class="on">r</s></div>
+        <div class="lwring"><s>s</s><s>t</s><s>u</s><s>v</s><s>w</s><s>x</s><s>y</s><s>z</s><s>⌫</s></div>
+      </div>
+      <div class="lwcap">left stick picks a ring · right stick picks the letter · A commits · B backspaces</div>
+      <div class="body" style="border-top:1px solid rgba(255,255,255,.07)">
+        <div class="row sel"><div class="gut"><span class="dot"></span></div>
+          <div class="lab"><span class="m">Sh</span>arpness<span class="path">display</span></div>
+          <div class="ctl"><span class="val">5</span><span class="mini"><u style="width:25%"></u><b style="left:calc(25% - 3px)"></b></span></div></div>
+      </div>
+      <div class="legend"><span><em>A</em> commit letter</span><span><em>X</em> accept top match &amp; adjust</span>
+        <span><em>B</em> back</span></div>
+    </div>
+    <div class="stagelabel">Letter wheel · “sh” already unique · X jumps straight to adjusting it</div>
+  </div>
+
+  <ul class="pts" style="margin-top:22px">
+    <li><b>Every text field declares a non-typing fallback, or it does not compile into browse.</b>
+    <code>area.Text()</code> requires either <code>.Suggestions(fn)</code> (profile names offer
+    <em>Cyberpunk – Quality</em>, <em>Cyberpunk – 60 fps</em>, generated from the app id and current
+    settings) or <code>.KeyboardOnly()</code>, which hides it from gamepad browse and shows an inspector
+    line saying so. There is no third option.</li>
+    <li><b>Every numeric entry is a slider or a stepper first, a text field never.</b> The taxonomy has no
+    “type a number here” control — <code>area.Number()</code> renders a stepper and only offers raw entry
+    on <span class="kbd">Enter</span> from a keyboard.</li>
+    <li><b>Gamepad nav does not exist in the codebase today</b> (<code>ImGuiConfigFlags_NavEnableGamepad</code>
+    is never set, and no evdev pad reader is wired to the overlay). This is net-new work under any
+    direction; this direction at least specifies it exactly once, for one row grammar, instead of six times
+    for six panel layouts.</li>
+  </ul>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="taxonomy"><div class="wrap">
+  <h2 class="sec">07 — The row taxonomy, on one sheet</h2>
+  <p class="note"><b>The rule that makes an inconsistent screen hard to build:</b> every option is one Row,
+  and every Row is the same three-column grid —
+  <code>[gutter 6u | label, flex | control, 50u]</code> — at one of exactly three heights: 10u compact,
+  14u expanded (only when selected, only if the type asks), 0 hidden. <em>A control type may only change
+  what is painted in the control column.</em> It may never change the row height, the label position, the
+  padding, or where help text goes. Help never appears in a row; it appears in the Inspector for whatever
+  is selected. There are no tooltips.</p>
+
+  <div class="sheet">
+    <div class="ghead">Switch, button, choice</div>
+    <div class="row"><div class="gut"></div><div class="lab">Toggle — <span style="color:rgba(239,245,251,.35)">state word + 30×15 switch</span></div>
+      <div class="ctl"><span class="state">on</span><span class="sw"><i></i></span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Action — <span style="color:rgba(239,245,251,.35)">the whole row is the button; verb chip in the control column</span></div>
+      <div class="ctl"><span class="verb">SAVE AS PRESET</span></div></div>
+    <div class="row danger"><div class="gut"></div><div class="lab">Destructive action — <span style="color:rgba(239,245,251,.35)">state/danger role, confirm pane on Enter</span></div>
+      <div class="ctl"><span class="verb">DELETE SAVED CONFIG</span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Segmented (≤ 4 options) — <span style="color:rgba(239,245,251,.35)">inline cells</span></div>
+      <div class="ctl"><span class="seg"><s>none</s><s>shadow</s><s>solid</s><s class="on">blur</s></span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Choice (&gt; 4 options) — <span style="color:rgba(239,245,251,.35)">value + ▾; ←→ cycles, Enter opens a searchable choice pane</span></div>
+      <div class="ctl"><span class="val">Uncharted 2</span><span class="caretd">▾</span></div></div>
+
+    <div class="ghead">Numeric</div>
+    <div class="row"><div class="gut"></div><div class="lab">Slider, collapsed — <span style="color:rgba(239,245,251,.35)">value + 118u mini-track</span></div>
+      <div class="ctl"><span class="val">0.42</span><span class="mini"><u style="width:71%"></u><b style="left:calc(71% - 3px)"></b></span></div></div>
+    <div class="row sel" style="height:56px"><div class="gut"><span class="dot"></span></div>
+      <div class="lab" style="display:flex;flex-direction:column;justify-content:center;gap:6px;padding-right:24px">
+        <span>Slider, selected — grows to 14u, becomes the shipped <code style="font-size:11px">SliderControl()</code></span>
+        <span style="height:6px;border-radius:3px;background:rgba(255,255,255,.16);position:relative;display:block">
+          <u style="position:absolute;left:0;top:0;bottom:0;width:71%;border-radius:3px;background:linear-gradient(90deg,rgba(54,189,221,.5),#47CAEA)"></u>
+          <b style="position:absolute;top:-8px;left:calc(71% - 5px);width:10px;height:22px;background:#BAE7F4;box-shadow:0 0 0 3px rgba(54,189,221,.18)"></b></span></div>
+      <div class="ctl" style="flex-direction:column;align-items:flex-end;gap:6px">
+        <span class="val" style="font-size:18px">0.42</span>
+        <span style="font-family:var(--font-m);font-size:11.5px;color:rgba(239,245,251,.38)">−1.00 · 1.00</span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Stepper — <span style="color:rgba(239,245,251,.35)">unbounded or sparse numbers; <code style="font-size:11px">.ZeroMeans()</code> supplies the word</span></div>
+      <div class="ctl"><span class="val neutral">Unlimited</span><span class="step"><s>−</s><s>+</s></span></div></div>
+
+    <div class="ghead">Compound</div>
+    <div class="row"><div class="gut"></div><div class="lab">Multi-select — <span style="color:rgba(239,245,251,.35)">chip bank; ←→ moves the chip cursor, space toggles</span></div>
+      <div class="ctl"><span class="bank"><s class="on">fps</s><s>ft</s><s>cpu</s><s class="on">gpu</s><s>media</s></span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Hue — <span style="color:rgba(239,245,251,.35)">1-D rail; only hue is tunable, L/C are fixed by Palette</span></div>
+      <div class="ctl"><span class="val">218°</span><span class="hue"><b style="left:calc(60.5% - 2px)"></b></span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">3×3 position — <span style="color:rgba(239,245,251,.35)">proxy glyph in the row, pane on Enter, ←→ cycles the nine</span></div>
+      <div class="ctl"><span class="val neutral">top-right</span>
+        <span class="grid3"><i></i><i></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Text — <span style="color:rgba(239,245,251,.35)">value ellipsized; Enter opens the text pane; suggestions required</span></div>
+      <div class="ctl"><span class="val" style="font-size:13px">Cyberpunk – Quality</span><span class="caretd">✎</span></div></div>
+    <div class="row"><div class="gut"><span class="dot" style="background:var(--ok)"></span></div>
+      <div class="lab">Read-out — <span style="color:rgba(239,245,251,.35)">never editable-looking; meta alpha; status dot if it asserts liveness</span></div>
+      <div class="ctl"><span class="val neutral">app 1091500 · override active</span></div></div>
+    <div class="row"><div class="gut"></div><div class="lab">Pane — <span style="color:rgba(239,245,251,.35)">the escape hatch; ▸ means “Enter replaces the body”</span></div>
+      <div class="ctl"><span class="val neutral">6 gauges</span><span class="caretd">▸</span></div></div>
+  </div>
+
+  <h3 class="sub">Spacing rhythm</h3>
+  <p class="note">One unit: <code>u = 4px × display_scale</code>. Everything is an integer multiple, and no
+  call site ever names a pixel. Row 10u · row v-padding 1u · gutter 6u · control column 50u · console
+  padding 3.5u · query line 14u · group header 8u + 1.5u gap · inspector 16u · stream line 5u ·
+  gauge card gap 0.75u.</p>
+</div></section>
+
+<!-- ==================================================================== -->
+<section id="theme"><div class="wrap">
+  <h2 class="sec">08 — Colour roles, type scale, elevation</h2>
+
+  <h3 class="sub">Roles, not hexes</h3>
+  <p class="note">Call sites name a role. The role resolves through the OKLCH accent family
+  (<code>Palette.cpp</code>, hue live from <code>OverlaySettings::accent_hue</code>) or through the neutral
+  alpha ladder. Nothing in a call site may write a colour literal — the helper does not expose one.</p>
+
+  <div class="swatches">
+    <div class="sw2"><div class="b" style="background:rgba(9,10,12,.88)"></div><div class="n">surface/base</div><div class="d">rgba(9,10,12,.88) — the console</div></div>
+    <div class="sw2"><div class="b" style="background:rgba(255,255,255,.05)"></div><div class="n">surface/raised</div><div class="d">white 5% — query line, gauge cards</div></div>
+    <div class="sw2"><div class="b" style="background:rgba(54,189,221,.10)"></div><div class="n">surface/selected</div><div class="d">accent 10% + 2u accent left edge</div></div>
+    <div class="sw2"><div class="b" style="background:rgba(255,255,255,.10)"></div><div class="n">line/hairline</div><div class="d">white 10% — every divider</div></div>
+    <div class="sw2"><div class="b" style="background:#EFF5FB"></div><div class="n">text/primary</div><div class="d">#EFF5FB @ 92% — selected label</div></div>
+    <div class="sw2"><div class="b" style="background:rgba(239,245,251,.62)"></div><div class="n">text/label</div><div class="d">@ 62% — every unselected label</div></div>
+    <div class="sw2"><div class="b" style="background:rgba(239,245,251,.36)"></div><div class="n">text/meta</div><div class="d">@ 36% — group headers, ids, units</div></div>
+    <div class="sw2"><div class="b" style="background:#36BDDD"></div><div class="n">accent/base</div><div class="d">oklch(.74 .12 h) — fills, edges, dots</div></div>
+    <div class="sw2"><div class="b" style="background:#78DBF6"></div><div class="n">accent/value</div><div class="d">oklch(.84 .10 h) — every number</div></div>
+    <div class="sw2"><div class="b" style="background:#BAE7F4"></div><div class="n">accent/handle</div><div class="d">oklch(.9 .05 h) — slider handle, knob</div></div>
+    <div class="sw2"><div class="b" style="background:#A9EAFD"></div><div class="n">accent/onfill</div><div class="d">oklch(.9 .07 h) — text on an accent fill</div></div>
+    <div class="sw2"><div class="b" style="background:#6ED274"></div><div class="n">state/ok</div><div class="d">oklch(.78 .16 145)</div></div>
+    <div class="sw2"><div class="b" style="background:#F3821D"></div><div class="n">state/warn</div><div class="d">oklch(.72 .17 55) — frametime outliers</div></div>
+    <div class="sw2"><div class="b" style="background:#F0555E"></div><div class="n">state/danger</div><div class="d">oklch(.68 .18 25) — <b>new</b>; the spec has no error colour</div></div>
+    <div class="sw2"><div class="b" style="background:linear-gradient(90deg,rgba(120,219,246,.2),rgba(120,219,246,.6))"></div><div class="n">match/highlight</div><div class="d"><b>new</b> — accent/value + 1.5px underline @ 45%</div></div>
+  </div>
+
+  <h3 class="sub">Elevation: exactly two levels</h3>
+  <ul class="pts">
+    <li><b>Level 0 — the game</b>, blurred and veiled by gamescope’s own compositor pass
+    (<code>FrameInfo_t::blurRadius</code> + the darkening multiply that <code>PanelConfig.cpp</code>
+    already drives). This is the signature and it costs the overlay nothing: the blur is not per-window
+    backdrop-filter, it is a full-screen pass on the game layer, which is precisely why a
+    <em>single centred surface</em> reads better than six floating windows over it.</li>
+    <li><b>Level 1 — the Console.</b> That is the whole list. Panes live inside the console body; they do
+    not float. There is no z-order, no focused-vs-unfocused window opacity pair, no “which window has
+    focus” question, and therefore no way for two screens to look different from each other.</li>
+    <li>The two <em>opacity</em> settings the user already has (focused 1.00, unfocused 0.90) collapse to
+    one: <code>overlay.opacity_console</code>. <code>opacity_dock</code> (0.70) is retired with the dock;
+    <code>blur</code> (1.0) and <code>darkening</code> (0.8) keep their exact meaning.</li>
+  </ul>
+
+  <h3 class="sub">Type scale — Geist, at <code>display_scale</code> 1.0</h3>
+  <table class="ref">
+    <tr><th>Role</th><th>Face</th><th>px</th><th>Where</th></tr>
+    <tr><td>Query</td><td>Geist Mono 400</td><td>20</td><td>the typed query — <b>new role</b>, the largest text in the UI because it is the focus</td></tr>
+    <tr><td>Display</td><td>Geist Mono 600</td><td>30</td><td>gauge-card hero numbers</td></tr>
+    <tr><td>Hero</td><td>Geist Mono 600</td><td>18</td><td>HUD FPS number, expanded slider value</td></tr>
+    <tr><td>Value</td><td>Geist Mono 500</td><td>16</td><td>every number in a control column (existing size, per <code>slider-widget-spec.md</code> §7)</td></tr>
+    <tr><td>Label</td><td>Geist Sans 400</td><td>14</td><td>every row label (existing size)</td></tr>
+    <tr><td>Section</td><td>Geist Sans 500</td><td>13</td><td>inspector help text</td></tr>
+    <tr><td>Stream</td><td>Geist Mono 400</td><td>12.5</td><td>LOG lines — <b>new role</b></td></tr>
+    <tr><td>Chip</td><td>Geist Mono 500</td><td>11.5</td><td>area chips, segment cells, state words</td></tr>
+    <tr><td>Meta</td><td>Geist Mono 400</td><td>11.5</td><td>group headers, ids, units, min/max marks</td></tr>
+  </table>
+  <p class="note">Nine roles, two families, three weights. That is two <em>fewer</em> than
+  <code>Fonts.h</code>’s current ten, and it drops the 8px <code>DockHotkey</code> face entirely with the
+  dock — a real atlas saving that pays for the two new roles. Hard rule kept from the spec: <b>Mono carries
+  every number, unit, state word, path and id; Sans carries prose only.</b> Because Mono is genuinely
+  monospaced, every value column is tabular for free — which is why a list of 147 rows does not shimmer
+  while a slider is being dragged.</p>
+
+  <h3 class="sub">State treatment — selection <em>is</em> focus</h3>
+  <table class="ref">
+    <tr><th>State</th><th>Treatment</th></tr>
+    <tr><td>idle</td><td>row transparent, label <code>text/label</code>, control at its own resting colours</td></tr>
+    <tr><td>hover</td><td>row fill white 4%; nothing else changes (pointer users still see the selection cursor elsewhere)</td></tr>
+    <tr><td>selected</td><td>row fill <code>accent 10%</code>, 2u <code>accent/base</code> left edge, label to <code>text/primary</code>, gutter dot lit. Keyboard, gamepad and pointer share <b>one</b> cursor — so there is no separate focus ring to design, and no “focus vs. selection” disagreement to debug.</td></tr>
+    <tr><td>active / pressed</td><td>row fill <code>accent 16%</code>, no geometry change</td></tr>
+    <tr><td>disabled</td><td>whole row × 0.34 alpha, control fills go neutral white (existing rule, §12). Never hidden. Inspector states the predicate that is false.</td></tr>
+    <tr><td>changed-this-session</td><td>gutter shows a 6×6 <code>accent/base</code> dot instead of nothing — the only per-row decoration in the whole design, and it answers “what did I already touch?” without a second colour</td></tr>
+  </table>
+
+  <h3 class="sub">Motion — three durations, one curve, a closed whitelist</h3>
+  <ul class="pts">
+    <li><code>quick</code> 90 ms · <code>settle</code> 160 ms · <code>instant</code> 0. One easing, applied
+    frame-rate-independently as <code>1 − exp(−dt · rate)</code>, not a naive lerp against
+    <code>io.DeltaTime</code> (which changes speed with frame rate — a real hazard at 30 vs. 240 fps).</li>
+    <li>Exactly four animations exist, and the helper owns all four: the selection cursor sliding between
+    rows (<em>settle</em>), a row expanding 10u→14u on selection (<em>settle</em>), a value bar filling to a
+    new value (<em>quick</em>), and the console fading in on open (<em>quick</em>). <b>An animation that is
+    not on this list cannot be written, because <code>PaneCtx</code> exposes no timing primitive.</b></li>
+    <li>Query→results is deliberately <em>not</em> animated. Text you are reading must not move.</li>
+  </ul>
+
+  <h3 class="sub">0.5× and 2.0×</h3>
+  <div class="scaledemo">
+    <div class="scalebox"><div class="cap">display_scale 0.5 — row 20 px, query 10 px</div>
+      <div style="transform:scale(.5);transform-origin:top left;width:200%">
+        <div class="q" style="height:56px"><span class="sig">⌕</span><span class="chip">Display ×</span>
+          <span class="txt">sharp</span><span class="count">1 match</span></div>
+        <div class="row sel"><div class="gut"><span class="dot"></span></div><div class="lab"><span class="m">Sharp</span>ness</div>
+          <div class="ctl"><span class="val">5</span><span class="mini"><u style="width:25%"></u><b style="left:calc(25% - 3px)"></b></span></div></div>
+        <div class="row"><div class="gut"></div><div class="lab">Pre-Sharpen</div>
+          <div class="ctl"><span class="state">off</span><span class="sw off"><i></i></span></div></div>
+      </div></div>
+    <div class="scalebox"><div class="cap">display_scale 2.0 — row 80 px, query 40 px</div>
+      <div style="transform:scale(1);transform-origin:top left">
+        <div class="q" style="height:56px"><span class="sig">⌕</span><span class="chip">Display ×</span>
+          <span class="txt">sharp</span><span class="count">1 match</span></div>
+        <div class="row sel"><div class="gut"><span class="dot"></span></div><div class="lab"><span class="m">Sharp</span>ness</div>
+          <div class="ctl"><span class="val">5</span><span class="mini"><u style="width:25%"></u><b style="left:calc(25% - 3px)"></b></span></div></div>
+      </div></div>
+  </div>
+  <p class="note">Two documented departures at the extremes, both decided by the helper, not the caller:
+  at <code>display_scale ≤ 0.7</code> the Inspector drops from 3 lines to 2 and the group-header
+  <code>count</code> is suppressed; at <code>≥ 1.6</code> the control column widens from 50u to 58u so the
+  expanded slider’s min/max marks still fit without ellipsis. Console width is
+  <code>min(900 px × display_scale, 0.62 × output width)</code>, height <code>min(auto, 0.82 × output
+  height)</code>, so it never crowds the HUD at 2.0× on a 1080p panel.</p>
+</div></section>
+
+<footer><div class="wrap">
+  gamescope-ritz · redesign direction B — “Command-first” · registry-backed console ·
+  mockup content taken verbatim from PanelDisplay.cpp, PanelShaders.cpp, PanelAudio.cpp,
+  PanelConfig.cpp, FpsDisplay.cpp, PanelLog.cpp
+</div></footer>
+
+<script>
+/* ------------------------------------------------------------------
+   Interactive demo. Registry entries below are the real settings from
+   this project, with their real ranges and current-ish values.
+------------------------------------------------------------------ */
+const AREAS = {
+  display:{name:'Display', kw:'gamescope output screen resolution'},
+  shaders:{name:'Shaders', kw:'reshade effect post fx'},
+  audio  :{name:'Audio',   kw:'sound pipewire volume'},
+  monitor:{name:'Monitor', kw:'fps hud performance overlay stats'},
+  profiles:{name:'Profiles', kw:'config preset per-game save'},
+  log    :{name:'Log',     kw:'output stdout stderr console'}
+};
+
+const R = [
+ // ---- display -----------------------------------------------------
+ {id:'display.filter', a:'display', g:'Upscaling', t:'Scaling Filter', ty:'seg',
+  opts:['linear','nearest','fsr','nis','pixel'], v:2,
+  kw:'upscale fsr nis scaling filter sharpen resample',
+  h:"How the game's image is resampled to the output resolution. FSR and NIS also expose a sharpening pass.",
+  meta:'convar filter · writes app 1091500.json'},
+ {id:'display.sharpness', a:'display', g:'Upscaling', t:'Sharpness', ty:'slider', lo:0, hi:20, st:1, v:5, dec:0,
+  kw:'sharpen fsr rcas cas crisp clarity',
+  h:'FSR / NIS sharpening strength. Higher is sharper; too high adds ringing around high-contrast edges.',
+  meta:'default 2 · convar sharpness'},
+ {id:'display.scaler', a:'display', g:'Upscaling', t:'Scaler', ty:'choice',
+  opts:['Auto','Integer','Fit','Fill','Stretch'], v:0,
+  kw:'aspect ratio letterbox integer stretch fit fill',
+  h:'How the scaled image is fitted into the output. Integer avoids resampling artefacts on pixel art.',
+  meta:'default Auto · convar scaler'},
+ {id:'display.vrr', a:'display', g:'Display', t:'VRR / Adaptive Sync', ty:'toggle', v:1,
+  kw:'freesync gsync adaptive sync variable refresh vrr',
+  h:'Lets the display refresh at the game’s pace instead of a fixed rate. Requires a VRR-capable output.',
+  meta:'convar adaptive_sync'},
+ {id:'display.tearing', a:'display', g:'Display', t:'Allow Tearing', ty:'toggle', v:1,
+  kw:'immediate flips vsync latency tear',
+  h:'Present frames the moment they are ready, ignoring vblank. Lowest latency, visible tear lines.',
+  meta:'convar immediate_flips'},
+ {id:'display.grab', a:'display', g:'Display', t:'Force Grab Cursor', ty:'toggle', v:0,
+  kw:'mouse pointer capture confine grab',
+  h:'Confines the pointer to the game surface even when the game does not ask for it.',
+  meta:'convar force_grab_cursor'},
+ {id:'display.fps_limit', a:'display', g:'Frame Limiter', t:'FPS Limit', ty:'step', lo:0, hi:360, st:5, v:0,
+  zero:'Unlimited', unit:'fps',
+  kw:'frame rate cap limiter fps limit throttle',
+  h:'Caps the game’s frame rate. 0 disables the limiter entirely.',
+  meta:'convar debug_set_fps_limit · writes app 1091500.json'},
+ {id:'display.hdr', a:'display', g:'HDR', t:'HDR Output', ty:'toggle', v:0,
+  kw:'hdr10 pq wide gamut high dynamic range',
+  h:'Drives the output in HDR10 (PQ). The game must also be producing HDR content.',
+  meta:'convar hdr_enabled'},
+ {id:'display.sdr_on_hdr', a:'display', g:'HDR', t:'SDR-on-HDR Brightness', ty:'slider',
+  lo:100, hi:1000, st:5, v:203, dec:0, unit:'nits', dis:'HDR Output is off',
+  kw:'hdr sdr brightness nits paper white luminance',
+  h:'Reference white for SDR content shown on an HDR output. 203 nits is the BT.2408 reference.',
+  meta:'default 203 · convar sdr_on_hdr_brightness'},
+ {id:'display.gamut', a:'display', g:'HDR', t:'SDR Gamut Wideness', ty:'slider', lo:0, hi:1, st:.05, v:.30, dec:2,
+  dis:'HDR Output is off',
+  kw:'gamut saturation colour wideness srgb bt2020',
+  h:'How far SDR content is stretched toward the display’s native gamut. 0 keeps sRGB primaries exactly.',
+  meta:'convar sdr_gamut_wideness'},
+ {id:'display.tonemap', a:'display', g:'HDR', t:'Tonemap Operator', ty:'choice',
+  opts:['None','Uncharted 2','Reinhard','ACES','Hable'], v:1, dis:'HDR Output is off',
+  kw:'tonemap operator aces reinhard hable curve',
+  h:'Curve used to map HDR luminance into the output’s range.', meta:'convar tonemap_operator'},
+ {id:'display.hdr_meta', a:'display', g:'HDR', t:'Focused app’s HDR metadata', ty:'readout',
+  rv:'unset · display-native',
+  kw:'hdr metadata mastering luminance readonly',
+  h:'Read-only. What the focused game actually declared. Never editable — the overlay only shows values it verified.',
+  meta:'read-only'},
+
+ // ---- shaders -----------------------------------------------------
+ {id:'shaders.vibrancy', a:'shaders', g:'Vibrancy', t:'Vibrancy', ty:'toggle', v:1,
+  kw:'saturation colour vivid vibrance punch',
+  h:'Saturation boost applied in the gamescope-ritz.fx ReShade pass.',
+  meta:'no recompile stutter on toggle'},
+ {id:'shaders.vibrancy_strength', a:'shaders', g:'Vibrancy', t:'Strength', ty:'slider',
+  lo:-1, hi:1, st:.05, v:.42, dec:2,
+  kw:'vibrancy saturation strength amount',
+  h:'How far saturation is pushed. Negative values desaturate. Applied before tonemapping.',
+  meta:'default 0.00 · fine step 0.01'},
+ {id:'shaders.skin', a:'shaders', g:'Vibrancy', t:'Protect skin tones', ty:'toggle', v:1,
+  kw:'skin tone protect face hue mask',
+  h:'Excludes the skin-tone hue band from the vibrancy boost, so faces do not go orange.',
+  meta:'vibrancy_protect_skin_tones'},
+ {id:'shaders.presharpen', a:'shaders', g:'Pre-Sharpen', t:'Pre-Sharpen', ty:'toggle', v:0,
+  kw:'sharpen pre presharpen crisp before upscale',
+  h:'Sharpens before upscaling, rather than after. Useful when the game renders below output resolution.',
+  meta:'pre_sharpen_enabled'},
+ {id:'shaders.presharpen_strength', a:'shaders', g:'Pre-Sharpen', t:'Strength', ty:'slider',
+  lo:0, hi:1, st:.05, v:.30, dec:2, dis:'Pre-Sharpen is off',
+  kw:'presharpen strength amount', h:'Pre-sharpen amount.', meta:'pre_sharpen_strength'},
+ {id:'shaders.ab', a:'shaders', g:'Adaptive Brightness', t:'Adaptive Brightness', ty:'toggle', v:0,
+  kw:'adaptive brightness auto exposure eye dark',
+  h:'Continuously adapts output gain to scene luminance, like an eye adjusting to a dark corridor.',
+  meta:'adaptive_brightness_enabled'},
+ {id:'shaders.ab_target', a:'shaders', g:'Adaptive Brightness', t:'Target brightness', ty:'slider',
+  lo:0, hi:1, st:.05, v:.45, dec:2, dis:'Adaptive Brightness is off',
+  kw:'target luminance brightness adaptive', h:'Scene luminance the adaptation aims for.',
+  meta:'adaptive_brightness_target_luminance'},
+ {id:'shaders.ab_min', a:'shaders', g:'Adaptive Brightness', t:'Min gain', ty:'slider',
+  lo:.25, hi:1, st:.05, v:.60, dec:2, dis:'Adaptive Brightness is off',
+  kw:'min gain floor adaptive brightness', h:'Darkest the adaptation may go.', meta:'adaptive_brightness_min_gain'},
+ {id:'shaders.ab_max', a:'shaders', g:'Adaptive Brightness', t:'Max gain', ty:'slider',
+  lo:1, hi:4, st:.1, v:1.80, dec:2, dis:'Adaptive Brightness is off',
+  kw:'max gain ceiling adaptive brightness', h:'Brightest the adaptation may go.', meta:'adaptive_brightness_max_gain'},
+ {id:'shaders.ab_up', a:'shaders', g:'Adaptive Brightness', t:'Brighten speed', ty:'slider',
+  lo:0, hi:1, st:.05, v:.35, dec:2, dis:'Adaptive Brightness is off',
+  kw:'brighten speed adapt up rate', h:'How fast gain rises when the scene darkens.',
+  meta:'adaptive_brightness_adapt_up_speed'},
+ {id:'shaders.ab_down', a:'shaders', g:'Adaptive Brightness', t:'Darken speed', ty:'slider',
+  lo:0, hi:1, st:.05, v:.55, dec:2, dis:'Adaptive Brightness is off',
+  kw:'darken speed adapt down rate', h:'How fast gain falls when the scene brightens.',
+  meta:'adaptive_brightness_adapt_down_speed'},
+
+ // ---- audio -------------------------------------------------------
+ {id:'audio.volume', a:'audio', g:'Game audio', t:'Volume', ty:'slider', lo:0, hi:100, st:2, v:74, dec:0, unit:'%',
+  kw:'volume loudness gain pipewire sound level',
+  h:'PipeWire volume of the stream matched to this game.', meta:'−6.2 dB · matched by process'},
+ {id:'audio.mute', a:'audio', g:'Game audio', t:'Mute', ty:'toggle', v:0,
+  kw:'mute silence quiet', h:'Mutes the matched stream only. Other applications keep playing.', meta:'wpctl'},
+ {id:'audio.stream', a:'audio', g:'Game audio', t:'Stream', ty:'choice',
+  opts:['Cyberpunk2077.exe (guessed)','Firefox — Ghost Voices','wireplumber monitor'], v:0,
+  kw:'stream pick select source device sink output',
+  h:'Which PipeWire stream this overlay treats as the game. Guessed as the newest stream since launch.',
+  meta:'3 active streams'},
+ {id:'audio.clear_override', a:'audio', g:'Game audio', t:'Clear manual override', ty:'action', verb:'CLEAR',
+  kw:'clear reset override manual stream',
+  h:'Forgets the manually picked stream and goes back to guessing.', meta:'no effect — none set'},
+
+ // ---- monitor -----------------------------------------------------
+ {id:'monitor.show', a:'monitor', g:'General', t:'Show System Monitor', ty:'toggle', v:1,
+  kw:'show hud monitor fps counter overlay display on',
+  h:'Draws the always-on monitor over the game, independent of this console.', meta:'convar toggle_fps_display'},
+ {id:'monitor.modules', a:'monitor', g:'General', t:'Modules', ty:'bank',
+  opts:['fps','ft','cpu','gpu','media'], on:[1,0,0,1,0],
+  kw:'modules fps frametime cpu gpu media rows which',
+  h:'Which modules the monitor draws. Every enabled module renders at the widest enabled module’s width.',
+  meta:'writes global.json'},
+ {id:'monitor.anchor', a:'monitor', g:'Placement', t:'Placement', ty:'grid',
+  opts:['top-left','top-center','top-right','center-left','center','center-right','bottom-left','bottom-center','bottom-right'], v:2,
+  kw:'anchor placement position corner where grid',
+  h:'Which screen corner the monitor is anchored to. ←→ cycles the nine positions in reading order.',
+  meta:'offset 32 / 32'},
+ {id:'monitor.margin_v', a:'monitor', g:'Placement', t:'Vertical margin', ty:'slider', lo:0, hi:200, st:2, v:32, dec:0, unit:'px',
+  kw:'margin vertical offset padding edge', h:'Distance from the anchored screen edge.', meta:'default 32'},
+ {id:'monitor.margin_h', a:'monitor', g:'Placement', t:'Horizontal margin', ty:'slider', lo:0, hi:200, st:2, v:32, dec:0, unit:'px',
+  kw:'margin horizontal offset padding edge', h:'Distance from the anchored screen edge.', meta:'default 32'},
+ {id:'monitor.font_size', a:'monitor', g:'Appearance', t:'Font size', ty:'slider', lo:8, hi:36, st:1, v:18, dec:0, unit:'px',
+  kw:'font size text scale bigger smaller monitor',
+  h:'Monitor text size. Independent of the console’s own UI Scale.', meta:'default 18'},
+ {id:'monitor.text_opacity', a:'monitor', g:'Appearance', t:'Text opacity', ty:'slider', lo:.2, hi:1, st:.05, v:1, dec:2,
+  kw:'opacity alpha transparency text monitor', h:'Monitor text alpha.', meta:'default 1.00'},
+ {id:'monitor.backdrop', a:'monitor', g:'Appearance', t:'Backdrop', ty:'seg',
+  opts:['none','shadow','solid','blur'], v:3,
+  kw:'backdrop background box blur shadow behind monitor',
+  h:'What is drawn behind the monitor text so it stays readable over a bright game.', meta:'default blur'},
+ {id:'monitor.backdrop_opacity', a:'monitor', g:'Appearance', t:'Backdrop opacity', ty:'slider', lo:0, hi:1, st:.05, v:.60, dec:2,
+  kw:'backdrop opacity alpha background', h:'Backdrop alpha.', meta:'default 0.60'},
+ {id:'monitor.backdrop_rounding', a:'monitor', g:'Appearance', t:'Backdrop rounding', ty:'slider', lo:0, hi:16, st:1, v:0, dec:0, unit:'px',
+  kw:'rounding radius corner backdrop', h:'Corner radius of the backdrop box. 0 is the spec default (square).', meta:'default 0'},
+ {id:'monitor.blend', a:'monitor', g:'Appearance', t:'Blend mode', ty:'seg', opts:['alpha','additive','inverted'], v:0,
+  kw:'blend mode additive inverted glow oled',
+  h:'How monitor text composites. Inverted reads over anything; useful for OLED.', meta:'default alpha'},
+ {id:'monitor.live', a:'monitor', g:'Live', t:'Live gauges', ty:'pane', rv:'6 gauges',
+  kw:'live gauges statistics graph frametime percentile stats',
+  h:'The live read-out pane: frame rate, frametime, CPU, GPU, temperature, media. Not a setting.',
+  meta:'sampling 500 ms · 240-frame window'},
+
+ // ---- profiles ----------------------------------------------------
+ {id:'profiles.override', a:'profiles', g:'Per-Game', t:'Override Global Config', ty:'toggle', v:1,
+  kw:'override per-game global config app id profile',
+  h:'When on, every edit in this session writes app 1091500.json instead of global.json.',
+  meta:'app id 1091500 · Cyberpunk 2077'},
+ {id:'profiles.appid', a:'profiles', g:'Per-Game', t:'Resolved app id', ty:'readout', rv:'1091500 · steam',
+  kw:'app id appid resolved game which steam',
+  h:'The app id this overlay resolved for the focused game. Read-only.', meta:'read-only'},
+ {id:'profiles.name', a:'profiles', g:'Profiles', t:'New profile name', ty:'text', tv:'Cyberpunk – Quality',
+  kw:'profile name save preset new',
+  h:'Name for a new saved profile. Suggestions are generated from the app id and current settings — no typing required on a pad.',
+  meta:'suggestions: Quality · 60 fps · Battery'},
+ {id:'profiles.save', a:'profiles', g:'Profiles', t:'Save as new profile', ty:'action', verb:'SAVE',
+  kw:'save profile preset store new',
+  h:'Writes the current settings to a named profile you can apply to any game.', meta:'9 profiles saved'},
+ {id:'profiles.apply', a:'profiles', g:'Profiles', t:'Apply profile', ty:'choice',
+  opts:['FPS','Quality','Battery','Handheld 800p','Couch 4K'], v:1,
+  kw:'apply profile preset load switch',
+  h:'Applies a saved profile to this game.', meta:'last applied: FPS'},
+ {id:'profiles.copy', a:'profiles', g:'Profiles', t:'Copy another game’s config', ty:'action', verb:'COPY',
+  kw:'copy another game config import from',
+  h:'Copies a different app id’s saved config over this game’s.', meta:'4 games have overrides'},
+ {id:'profiles.delete', a:'profiles', g:'Profiles', t:'Delete Saved Config', ty:'action', verb:'DELETE', danger:1,
+  kw:'delete remove destroy saved config permanently',
+  h:'Deletes this game’s saved config permanently. This cannot be undone.', meta:'confirm pane on Enter'},
+
+ // ---- console/appearance (lives in profiles area, General group) ---
+ {id:'ui.scale', a:'profiles', g:'Console', t:'UI Scale', ty:'slider', lo:.5, hi:2, st:.1, v:1, dec:2, unit:'×',
+  kw:'ui scale display size bigger smaller dpi zoom',
+  h:'Scales every pixel in this console, including the font atlas. Rebaked when you release the slider.',
+  meta:'display_scale · 0.5 – 2.0'},
+ {id:'ui.hue', a:'profiles', g:'Console', t:'Accent Hue', ty:'hue', lo:0, hi:360, st:2, v:218, dec:0, unit:'°',
+  kw:'accent colour color hue theme tint cyan',
+  h:'OKLCH hue of the whole accent family. Lightness and chroma stay fixed, so no hue can wash out or blow out.',
+  meta:'accent_hue · default 218'},
+ {id:'ui.opacity', a:'profiles', g:'Console', t:'Console opacity', ty:'slider', lo:.5, hi:1, st:.02, v:1, dec:2,
+  kw:'opacity transparency alpha console window',
+  h:'Alpha of the console surface itself. The game behind it is blurred and veiled separately.',
+  meta:'replaces opacity_windows_focused / _unfocused / _dock'},
+ {id:'ui.blur', a:'profiles', g:'Console', t:'Background blur', ty:'slider', lo:0, hi:1, st:.05, v:1, dec:2,
+  kw:'blur background game behind veil compositor',
+  h:'Native compositor pass on the game layer — drives FrameInfo_t::blurRadius. Not a per-window backdrop filter.',
+  meta:'background_blur · default 1.00'},
+ {id:'ui.veil', a:'profiles', g:'Console', t:'Background veil', ty:'slider', lo:0, hi:1, st:.05, v:.80, dec:2,
+  kw:'darkening veil dim background game behind',
+  h:'How far the game layer is dimmed while the console is open.', meta:'background_darkening · default 0.80'},
+
+ // ---- commands ----------------------------------------------------
+ {id:'cmd.reset_area', a:'cmd', g:'Commands', t:'Reset this area to defaults', ty:'action', verb:'RUN',
+  kw:'reset defaults restore revert area',
+  h:'Restores every entry in the currently scoped area to its registered default.', meta:'undoable for 10 s'},
+ {id:'cmd.reload_fx', a:'cmd', g:'Commands', t:'Reload ReShade effects', ty:'action', verb:'RUN',
+  kw:'reload reshade shaders recompile fx',
+  h:'Recompiles gamescope-ritz.fx without stalling the swapchain.', meta:'~41 ms last time'},
+ {id:'cmd.screenshot', a:'cmd', g:'Commands', t:'Take screenshot', ty:'action', verb:'RUN',
+  kw:'screenshot capture grab png image',
+  h:'Captures the composited output, without this console in it.', meta:'~/Pictures/gamescope'},
+ {id:'cmd.copy_log', a:'cmd', g:'Commands', t:'Copy log to clipboard', ty:'action', verb:'RUN',
+  kw:'copy log clipboard paste share', h:'Copies every captured line from both sources.', meta:'418 lines'},
+ {id:'cmd.close', a:'cmd', g:'Commands', t:'Close overlay', ty:'action', verb:'RUN',
+  kw:'close quit exit hide overlay dismiss', h:'Same as Ctrl+Shift+O.', meta:'game input resumes'},
+];
+
+const LOGLINES = [
+ ['00:00:01.4','',    "vulkan: selecting physical device 'AMD Radeon RX 7900 XTX (RADV NAVI31)': queue family 1 (general queue family 0)"],
+ ['00:00:01.5','ok',  'vulkan: supported DRM formats for sampling usage: AR24 XR24 AB4H XB4H AB24 XB24'],
+ ['00:00:01.9','',    'wlserver: Wayland server listening on wayland-1'],
+ ['00:00:02.1','warn','vulkan: VK_EXT_image_drm_format_modifier not exposed by all planes, falling back to linear'],
+ ['00:00:02.4','',    'xwayland: X11 server ready on :2 (ctx 0)'],
+ ['00:00:03.0','ok',  'reshade: gamescope-ritz.fx compiled in 118 ms (vibrancy, pre_sharpen, adaptive_brightness)'],
+ ['00:00:03.2','',    'config: resolved app id 1091500, loading app 1091500.json over global.json'],
+ ['00:00:04.8','',    'steamcompmgr: focus window 0x400012 "Cyberpunk 2077" (override redirect: no)'],
+ ['00:01:12.7','',    'audio: matched PipeWire stream 84 "Cyberpunk2077.exe" by process'],
+ ['00:03:44.8','err', 'vulkan: ImGui Vulkan backend: VkResult -1000069000 (VK_ERROR_OUT_OF_POOL_MEMORY) while growing the descriptor pool'],
+ ['00:03:44.8','',    'vulkan: descriptor pool grown to 128 sets, retrying'],
+ ['00:07:12.0','',    'vulkan: composite: 4 layers, FSR EASU+RCAS, sharpness 5'],
+ ['00:09:55.2','err', 'vulkan: vkAcquireNextImageKHR returned VK_SUBOPTIMAL_KHR, rebuilding swapchain'],
+ ['00:09:55.3','',    'vulkan: swapchain rebuilt: 3 images, IMMEDIATE present mode (tearing allowed)'],
+ ['00:11:03.6','',    'fps_display: module set changed -> fps, gpu (widest module 142 px)'],
+ ['00:14:20.1','warn','drm: connector DP-1 dropped a frame: atomic commit took 21.4 ms'],
+ ['00:14:20.1','',    'drm: VRR range 48-165 Hz, current 164.2 Hz'],
+ ['00:18:44.9','',    'config: wrote app 1091500.json (sharpness 5, filter fsr)'],
+];
+
+/* ---- fuzzy subsequence scorer, mirrors the C++ Match() in API.md ---- */
+function fuzzy(q, e){
+  if(!q) return {s:0, pos:[]};
+  const hay = e.t, low = hay.toLowerCase(), ql = q.toLowerCase();
+  // pass 1: subsequence over the title, remembering positions
+  let i=0, pos=[], score=0, lastHit=-2;
+  for(const ch of ql){
+    if(ch===' '){ continue; }
+    let f = low.indexOf(ch, i);
+    if(f<0){ pos=null; break; }
+    if(f===lastHit+1) score+=8;                       // consecutive
+    if(f===0 || /[\s–\-\/·]/.test(low[f-1])) score+=12; // word start
+    score += Math.max(0, 6 - (f-i));
+    pos.push(f); lastHit=f; i=f+1;
+  }
+  if(pos){ return {s: score + 40 - hay.length*0.1, pos}; }
+  // pass 2: keyword / area / id match, no highlight
+  const bag = (e.kw+' '+e.id+' '+(AREAS[e.a]?AREAS[e.a].name:'')+' '+(e.g||'')).toLowerCase();
+  const words = ql.split(/\s+/).filter(Boolean);
+  if(words.every(w=>bag.includes(w))) return {s: 12 - hay.length*0.05, pos:[]};
+  return null;
+}
+
+const D = {
+  q:'', sel:0, mode:'search', chip:null, rows:[],
+  vals:Object.fromEntries(R.map(e=>[e.id, e.v!==undefined?e.v:(e.on?e.on.slice():0)]))
+};
+
+const $ = s=>document.querySelector(s);
+const body=$('#demoBody'), insp=$('#demoInsp'), cnt=$('#demoCount'),
+      sig=$('#demoSig'), chips=$('#demoChips'), leg=$('#demoLegend'), inp=$('#demoInput');
+
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function hl(t,pos){
+  if(!pos||!pos.length) return esc(t);
+  let out='', p=new Set(pos);
+  for(let i=0;i<t.length;i++) out += p.has(i)?'<span class="m">'+esc(t[i])+'</span>':esc(t[i]);
+  return out;
+}
+function fmt(e){
+  const v=D.vals[e.id];
+  if(e.ty==='toggle') return v?'on':'off';
+  if(e.ty==='step')   return (v===0&&e.zero)?e.zero:String(v);
+  if(e.ty==='choice'||e.ty==='seg'||e.ty==='grid') return e.opts[v];
+  if(e.ty==='readout')return e.rv;
+  if(e.ty==='pane')   return e.rv;
+  if(e.ty==='text')   return e.tv;
+  if(e.ty==='action') return '';
+  if(e.ty==='bank')   return e.opts.filter((o,i)=>D.vals[e.id][i]).join(' ')||'none';
+  return Number(v).toFixed(e.dec===undefined?2:e.dec);
+}
+function ctlHtml(e){
+  const v=D.vals[e.id], dis=!!e.dis&&isDis(e);
+  const nu = dis?' neutral':'';
+  switch(e.ty){
+    case 'toggle': return `<span class="state">${v?'on':'off'}</span><span class="sw${v?'':' off'}"><i></i></span>`;
+    case 'slider': {
+      const p=Math.round((v-e.lo)/(e.hi-e.lo)*100);
+      const bar = dis
+        ? `<span class="mini"><u style="width:${p}%;background:rgba(255,255,255,.3)"></u><b style="left:calc(${p}% - 3px);background:rgba(255,255,255,.45);box-shadow:none"></b></span>`
+        : `<span class="mini"><u style="width:${p}%"></u><b style="left:calc(${p}% - 3px)"></b></span>`;
+      return `<span class="val${nu}">${fmt(e)}</span>${e.unit?`<span class="unit">${e.unit}</span>`:''}${bar}`;
+    }
+    case 'step': return `<span class="val${(v===0&&e.zero)?' neutral':''}">${fmt(e)}</span>${(e.unit&&v!==0)?`<span class="unit">${e.unit}</span>`:''}<span class="step"><s>−</s><s>+</s></span>`;
+    case 'seg':  return `<span class="seg">${e.opts.map((o,i)=>`<s class="${i===v?'on':''}">${o}</s>`).join('')}</span>`;
+    case 'choice':return `<span class="val${nu}">${esc(e.opts[v])}</span><span class="caretd">▾</span>`;
+    case 'bank': return `<span class="bank">${e.opts.map((o,i)=>`<s class="${D.vals[e.id][i]?'on':''}">${o}</s>`).join('')}</span>`;
+    case 'grid': {
+      const g=e.opts.map((o,i)=>`<i class="${i===v?'on':''}"></i>`).join('');
+      return `<span class="val neutral">${e.opts[v]}</span><span class="grid3">${g}</span>`;
+    }
+    case 'hue': return `<span class="val">${v}°</span><span class="hue"><b style="left:calc(${(v/360*100).toFixed(1)}% - 2px)"></b></span>`;
+    case 'text': return `<span class="val" style="font-size:13px">${esc(e.tv)}</span><span class="caretd">✎</span>`;
+    case 'action':return `<span class="verb">${e.verb}</span>`;
+    case 'pane': return `<span class="val neutral">${esc(e.rv)}</span><span class="caretd">▸</span>`;
+    case 'readout':return `<span class="val neutral">${esc(e.rv)}</span>`;
+  }
+  return '';
+}
+function isDis(e){
+  if(!e.dis) return false;
+  if(e.id.startsWith('display.sdr_on_hdr')||e.id.startsWith('display.gamut')||e.id==='display.tonemap') return !D.vals['display.hdr'];
+  if(e.id==='shaders.presharpen_strength') return !D.vals['shaders.presharpen'];
+  if(e.id.startsWith('shaders.ab_')) return !D.vals['shaders.ab'];
+  return true;
+}
+
+function compute(){
+  const raw = D.q;
+  let q = raw, sigil='';
+  if(/^[>\/?#]/.test(q)){ sigil=q[0]; q=q.slice(1); }
+  D.sigil=sigil;
+  sig.textContent = sigil==='>'?'›':sigil==='/'?'/':sigil==='?'?'?':sigil==='#'?'◆':'⌕';
+  sig.style.color = sigil==='/'? 'var(--warn)' : sigil? 'var(--a-value)' : 'var(--a)';
+
+  if(sigil==='/'){ D.mode='log'; D.logq=q.trim().toLowerCase(); return; }
+  D.mode='search';
+  let pool = R.filter(e=> sigil==='>' ? e.a==='cmd' : sigil==='#' ? ['display.sharpness','display.fps_limit','audio.volume','monitor.show','shaders.vibrancy'].includes(e.id) : e.a!=='cmd');
+  if(D.chip) pool = pool.filter(e=>e.a===D.chip);
+  if(!sigil && q.trim() && !D.chip) pool = pool.concat(R.filter(e=>e.a==='cmd'));
+
+  const qq=q.trim();
+  if(!qq){
+    D.rows = pool.map(e=>({e,pos:[],s:0}));
+    D.grouped = true;
+  } else {
+    const hits=[];
+    for(const e of pool){ const m=fuzzy(qq,e); if(m) hits.push({e,pos:m.pos,s:m.s}); }
+    hits.sort((a,b)=>b.s-a.s);
+    D.rows=hits; D.grouped=false;
+  }
+  if(D.sel>=D.rows.length) D.sel=Math.max(0,D.rows.length-1);
+}
+
+function render(){
+  compute();
+  chips.innerHTML = D.chip?`<span class="chip">${AREAS[D.chip].name} <span class="x">×</span></span>`:'';
+  if(D.mode==='log'){
+    const q=D.logq;
+    const lines = LOGLINES.filter(l=>!q||l[2].toLowerCase().includes(q));
+    D.logLines = lines;
+    if(D.sel>=lines.length) D.sel=Math.max(0,lines.length-1);
+    cnt.textContent = `${lines.length} / ${LOGLINES.length} lines`;
+    body.innerHTML = '<div class="stream">'+lines.map((l,i)=>{
+      let tx=esc(l[2]);
+      if(q){ const idx=l[2].toLowerCase().indexOf(q);
+        if(idx>=0) tx=esc(l[2].slice(0,idx))+'<span class="m">'+esc(l[2].substr(idx,q.length))+'</span>'+esc(l[2].slice(idx+q.length)); }
+      return `<div class="sline ${l[1]} ${i===D.sel?'sel':''}" data-i="${i}"><div class="g"><i></i></div><span class="ts">${l[0]}</span><span class="tx">${tx}</span></div>`;
+    }).join('')+'</div>';
+    const cur = lines[D.sel];
+    insp.innerHTML = cur
+      ? `<div class="h" style="font-family:var(--font-m);font-size:12.5px;color:${cur[1]==='err'?'rgba(240,85,94,.85)':'rgba(239,245,251,.7)'}">${esc(cur[2])}</div>
+         <div class="m"><span>${cur[0]}</span><span>source <em>gamescope</em></span><span>severity <em>${cur[1]||'info'}</em></span><span><em>^C</em> copy line</span></div>`
+      : `<div class="h">No line matches “${esc(D.logq)}”.</div><div class="m"><span>try <em>vulkan</em>, <em>drm</em>, <em>config</em>, <em>audio</em></span></div>`;
+    leg.innerHTML = '<span><em>↑↓</em> move</span><span><em>^E</em> next error</span><span><em>^L</em> follow tail</span><span><em>esc</em> clear filter</span>';
+    scrollSel(); return;
+  }
+
+  cnt.textContent = D.q.trim()||D.chip ? `${D.rows.length} match${D.rows.length===1?'':'es'}` : `${R.filter(e=>e.a!=='cmd').length} entries`;
+
+  let html='';
+  if(D.grouped){
+    let lastKey=null;
+    D.rows.forEach((r,i)=>{
+      const key = D.chip? r.e.g : AREAS[r.e.a]?AREAS[r.e.a].name:r.e.g;
+      if(key!==lastKey){ html+=`<div class="ghead">${esc(key)}</div>`; lastKey=key; }
+      html+=rowHtml(r,i);
+    });
+  } else {
+    let lastA=null;
+    D.rows.forEach((r,i)=>{
+      const a = r.e.a==='cmd'?'Commands':AREAS[r.e.a].name;
+      if(a!==lastA){ html+=`<div class="ghead">${esc(a)} <span class="cnt">${D.rows.filter(x=>(x.e.a==='cmd'?'Commands':AREAS[x.e.a].name)===a).length}</span></div>`; lastA=a; }
+      html+=rowHtml(r,i);
+    });
+  }
+  if(!D.rows.length){
+    html = `<div style="padding:34px 38px;font-family:var(--font-m);font-size:13px;color:rgba(239,245,251,.4)">
+      No entry matches “${esc(D.q)}”.<br><span style="font-size:11.5px;color:rgba(239,245,251,.28)">
+      Try an area name, or press <b style="color:var(--a-value)">?</b> for the sigil legend.</span></div>`;
+  }
+  body.innerHTML=html;
+
+  const cur = D.rows[D.sel] && D.rows[D.sel].e;
+  if(cur){
+    const dis = isDis(cur);
+    const range = cur.ty==='slider'||cur.ty==='step'||cur.ty==='hue'
+      ? `<span><em>${cur.lo} – ${cur.hi}</em> · step ${cur.st}</span>` : '';
+    insp.innerHTML = `<div class="h">${esc(cur.h)}${dis?` <span style="color:var(--warn)">— inert: ${esc(cur.dis)}.</span>`:''}</div>
+      <div class="m"><span>${cur.id}</span>${range}<span>${esc(cur.meta)}</span></div>`;
+  } else {
+    insp.innerHTML = `<div class="h">Type to filter 147 registered entries. Sigils: <b style="color:var(--a-value)">&gt;</b> commands ·
+      <b style="color:var(--warn)">/</b> log · <b style="color:var(--a-value)">#</b> pinned · <b style="color:var(--a-value)">?</b> help</div>
+      <div class="m"><span><em>↹</em> scope to the top area</span><span><em>⌫</em> at column 0 pops the chip</span></div>`;
+  }
+  leg.innerHTML = '<span><em>↑↓</em> move</span><span><em>←→</em> adjust</span><span><em>↹</em> scope</span><span><em>⏎</em> open</span><span><em>esc</em> clear</span>';
+  scrollSel();
+}
+function rowHtml(r,i){
+  const e=r.e, dis=isDis(e);
+  const touched = D.touched && D.touched.has(e.id);
+  const path = (!D.grouped||!D.chip) ? `<span class="path">${e.a==='cmd'?'command':e.a}</span>` : '';
+  return `<div class="row ${i===D.sel?'sel':''} ${dis?'dis':''} ${e.danger?'danger':''}" data-i="${i}">
+    <div class="gut">${touched||i===D.sel?'<span class="dot"></span>':''}</div>
+    <div class="lab">${hl(e.t,r.pos)}${path}</div>
+    <div class="ctl">${ctlHtml(e)}</div></div>`;
+}
+function scrollSel(){
+  const el=body.querySelector('.row.sel,.sline.sel'); if(!el) return;
+  const br=body.getBoundingClientRect(), er=el.getBoundingClientRect();
+  if(er.top<br.top+28) body.scrollTop -= (br.top+28-er.top);
+  else if(er.bottom>br.bottom-6) body.scrollTop += (er.bottom-br.bottom+6);
+}
+function adjust(dir){
+  const r=D.rows[D.sel]; if(!r) return; const e=r.e;
+  if(isDis(e)) return;
+  D.touched = D.touched||new Set(); D.touched.add(e.id);
+  const v=D.vals[e.id];
+  switch(e.ty){
+    case 'toggle': D.vals[e.id]=v?0:1; break;
+    case 'slider': case 'hue': case 'step': {
+      let n=+(v+dir*e.st).toFixed(4);
+      n=Math.max(e.lo,Math.min(e.hi,n)); D.vals[e.id]=n; break; }
+    case 'seg': case 'choice': case 'grid':
+      D.vals[e.id]=(v+dir+e.opts.length)%e.opts.length; break;
+    case 'bank': {
+      D.bankIdx = D.bankIdx===undefined?0:D.bankIdx;
+      D.bankIdx = (D.bankIdx+dir+e.opts.length)%e.opts.length; break; }
+  }
+  render();
+}
+inp.addEventListener('input', ()=>{ D.q=inp.value; D.sel=0; render(); });
+inp.addEventListener('keydown', ev=>{
+  const k=ev.key;
+  if(k==='ArrowDown'){ ev.preventDefault(); D.sel++; clampSel(); render(); }
+  else if(k==='ArrowUp'){ ev.preventDefault(); D.sel--; clampSel(); render(); }
+  else if(k==='ArrowRight'){ ev.preventDefault(); adjust(+1); }
+  else if(k==='ArrowLeft'){ ev.preventDefault(); adjust(-1); }
+  else if(k==='Tab'){ ev.preventDefault();
+    const r=D.rows[D.sel]; if(r&&AREAS[r.e.a]){ D.chip=r.e.a; D.q=''; inp.value=''; D.sel=0; render(); } }
+  else if(k==='Enter'){ ev.preventDefault(); const r=D.rows[D.sel];
+    if(r&&r.e.ty==='pane'){ D.chip='monitor'; D.q=''; inp.value=''; }
+    else if(r) adjust(+1);
+    D.sel=D.sel; render(); }
+  else if(k==='Escape'){ ev.preventDefault();
+    if(D.q){ D.q=''; inp.value=''; } else if(D.chip){ D.chip=null; }
+    D.sel=0; render(); }
+  else if(k==='Backspace' && !D.q && D.chip){ ev.preventDefault(); D.chip=null; render(); }
+});
+function clampSel(){
+  const n = D.mode==='log' ? (D.logLines?D.logLines.length:LOGLINES.length) : D.rows.length;
+  if(D.sel<0) D.sel=0; if(D.sel>=n) D.sel=Math.max(0,n-1);
+}
+body.addEventListener('mousedown', ev=>{
+  const row=ev.target.closest('.row,.sline'); if(!row||row.dataset.i===undefined) return;
+  D.sel=+row.dataset.i; inp.focus(); render();
+});
+$('#demoConsole').addEventListener('mousedown', ev=>{ if(!ev.target.closest('.row')) inp.focus(); });
+
+/* ---- cold-start: arm the demo from anywhere on the page ---- */
+const veil=$('#armVeil');
+function arm(){
+  veil.classList.add('gone');
+  inp.focus({preventScroll:true});
+}
+veil.addEventListener('mousedown', ev=>{ ev.preventDefault(); arm(); });
+$('#demoStage').addEventListener('mousedown', arm);
+inp.addEventListener('focus', ()=>veil.classList.add('gone'));
+
+document.querySelectorAll('.try button').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const q=b.dataset.q;
+    arm();
+    D.chip=null; D.q=q; inp.value=q; D.sel=0; render();
+    $('#demoStage').scrollIntoView({block:'center',
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+  });
+});
+
+// Typing anywhere on the page drives the console -- this is a command-first
+// page, so the page itself behaves like the thing it is proposing.
+window.addEventListener('keydown', ev=>{
+  if(document.activeElement===inp) return;
+  const tag=(document.activeElement&&document.activeElement.tagName)||'';
+  if(tag==='INPUT'||tag==='TEXTAREA') return;
+  if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+  const printable = ev.key.length===1 && ev.key!==' ';
+  const navish = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Backspace','Escape','Enter','Tab'].includes(ev.key);
+  if(!printable && !navish) return;
+  if(ev.key==='Tab' && !veil.classList.contains('gone')) return; // don't hijack initial tabbing
+  arm();
+  if(printable){ ev.preventDefault(); D.q+=ev.key; inp.value=D.q; D.sel=0; render(); }
+});
+
+/* HUD frametime graphs */
+function fillGraph(el){
+  let h='';
+  for(let i=0;i<26;i++){
+    const sp = i===17;
+    const v = sp?42:(58+Math.round(Math.sin(i*.9)*14+Math.random()*18));
+    h+=`<i class="${sp?'sp':''}" style="height:${v}%"></i>`;
+  }
+  el.innerHTML=h;
+}
+fillGraph($('#demoGraph'));
+document.querySelectorAll('[data-graph]').forEach(fillGraph);
+
+render();
+</script>
+</body>
+</html>
