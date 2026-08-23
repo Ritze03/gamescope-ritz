@@ -792,6 +792,133 @@ namespace gamescope::ui
 	}
 
 	// =====================================================================
+	//  Adjustable (see Registry.h)
+	// =====================================================================
+	Adjustable Adjustable::Of( const Entry &e )
+	{
+		return Adjustable{ e.GetKind(), &e.Binding(), e.HasRange(),
+		                   e.Lo(), e.Hi(), e.StepSize(), &e.Options() };
+	}
+
+	Adjustable Adjustable::Of( const Parameter &p )
+	{
+		return Adjustable{ p.GetKind(), &p.Binding(), p.HasRange(),
+		                   p.Lo(), p.Hi(), p.StepSize(), &p.Options() };
+	}
+
+	bool AdjustValue( const Adjustable &adj, int nDir, bool bFine )
+	{
+		if ( nDir == 0 || adj.pBind == nullptr || !adj.pBind->IsBound() )
+			return false;
+		if ( IsReadOnly( adj.eKind ) )
+			return false;
+
+		const Value vNow = adj.pBind->Get();
+
+		switch ( adj.eKind )
+		{
+			// A switch is ordered even though it is binary: right is on, left
+			// is off. Toggling on either arrow would make the key's meaning
+			// depend on the current value, which is the one thing an
+			// adjust-in-place list must not do -- holding Right down a list
+			// of switches should end with them all on, not oscillating.
+			case Kind::Switch:
+			{
+				if ( const bool *p = std::get_if<bool>( &vNow ) )
+				{
+					const bool bNew = nDir > 0;
+					if ( bNew == *p )
+						return false;
+					adj.pBind->Set( Value{ bNew } );
+					return true;
+				}
+				return false;
+			}
+
+			// A choice steps through its own option list, in declaration
+			// order, and STOPS at both ends rather than wrapping. Wrapping
+			// would mean a held arrow key never settles, and it would make
+			// "press Right until it is what I want" unreliable.
+			case Kind::Choice:
+			{
+				if ( adj.pOptions == nullptr || adj.pOptions->empty() )
+					return false;
+				const int *p = std::get_if<int>( &vNow );
+				if ( p == nullptr )
+					return false;
+
+				int nAt = -1;
+				for ( size_t i = 0; i < adj.pOptions->size(); i++ )
+				{
+					if ( ( *adj.pOptions )[ i ].nValue == *p )
+					{
+						nAt = (int)i;
+						break;
+					}
+				}
+				// A value not in the list (a config holding something the
+				// build no longer offers) steps to the first option rather
+				// than refusing -- otherwise that row is unfixable from the
+				// keyboard, which is exactly the unreachable state the
+				// Reachability Law forbids.
+				const int nNext = nAt < 0 ? 0
+					: std::clamp( nAt + nDir, 0, (int)adj.pOptions->size() - 1 );
+				if ( nNext == nAt )
+					return false;
+				adj.pBind->Set( Value{ ( *adj.pOptions )[ (size_t)nNext ].nValue } );
+				return true;
+			}
+
+			case Kind::Slider:
+			case Kind::Stepper:
+			case Kind::Composite:
+			{
+				if ( const int *p = std::get_if<int>( &vNow ) )
+				{
+					// An int step is never fractional, so Shift cannot mean
+					// x0.1 here; it stays one unit rather than rounding to
+					// zero and looking like a dead key.
+					const int nStep = adj.flStep > 0.0f ? std::max( 1, (int)adj.flStep ) : 1;
+					int nNew = *p + nDir * nStep;
+					if ( adj.bHasRange )
+						nNew = std::clamp( nNew, (int)adj.flLo, (int)adj.flHi );
+					if ( nNew == *p )
+						return false;
+					adj.pBind->Set( Value{ nNew } );
+					return true;
+				}
+				if ( const float *p = std::get_if<float>( &vNow ) )
+				{
+					// No declared step means 100 notches across the range --
+					// the same resolution a drag gives, so the keyboard and
+					// the pointer land on the same set of values.
+					float flStep = adj.flStep;
+					if ( flStep <= 0.0f )
+						flStep = adj.bHasRange ? ( adj.flHi - adj.flLo ) / 100.0f : 1.0f;
+					if ( bFine )
+						flStep *= 0.1f;
+
+					float flNew = *p + (float)nDir * flStep;
+					if ( adj.bHasRange )
+						flNew = std::clamp( flNew, adj.flLo, adj.flHi );
+					if ( flNew == *p )
+						return false;
+					adj.pBind->Set( Value{ flNew } );
+					return true;
+				}
+				return false;
+			}
+
+			// Text, Bank and Action have no ordering an arrow key could
+			// follow: a Bank's value is a SET (SPEC §3.12), text is not
+			// ordered, and an action has no value at all. Refusing here is
+			// what lets a caller pass any selection without a kind check.
+			default:
+				return false;
+		}
+	}
+
+	// =====================================================================
 	//  Sinks
 	// =====================================================================
 	namespace
