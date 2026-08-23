@@ -59,8 +59,16 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   two disagree on).
 - [Overlay redesign proposals](planning/redesign/) — three preserved design directions (A
   console, B command palette, E inspector rail) with interactive mockups, specs, proposed
-  helper APIs and feasibility. **Nothing implemented**; kept so a regression can be rolled
-  back against stated design intent.
+  helper APIs and feasibility. Kept so a regression can be rolled back against stated
+  design intent.
+- [E2 "Inspector Rail, deepened"](planning/redesign/round-2/e2-inspector-plus/) — the
+  direction being implemented. `SPEC.md` and `API.md` are the contract, `index.html` the
+  tiebreaker mockup, and [`IMPLEMENTATION.md`](planning/redesign/round-2/e2-inspector-plus/IMPLEMENTATION.md)
+  the phase-by-phase log of what exists in C++ (`src/Overlay/UI/`) and where it departed
+  from the spec.
+- [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
+  call made while the user was away, with its alternative and its reasoning, so
+  disagreeing is cheap.
 
 ## claude-instructions/ — mandatory rules for agents
 
