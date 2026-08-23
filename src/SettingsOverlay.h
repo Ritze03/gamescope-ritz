@@ -124,6 +124,13 @@ namespace gamescope
 	// Called from wlserver's Ctrl+Shift+O hotkey check (main thread).
 	void SettingsOverlay_ToggleVisible();
 
+	// D22. Show/hide without toggling. The palette shortcut needs "make sure
+	// it is open" -- the palette is drawn inside the overlay, so opening it
+	// while the overlay is hidden would open a surface nobody can see, and
+	// toggling would CLOSE the overlay when it already happened to be open.
+	// Safe to call from any thread, same as the toggle.
+	void SettingsOverlay_SetVisible( bool bVisible );
+
 	// Thread-safe (atomic) read of whether the overlay currently wants to
 	// own all keyboard/mouse input. wlserver's input handlers check this
 	// before forwarding an event to the focused game surface; when true they
@@ -139,6 +146,13 @@ namespace gamescope
 	// Thread-safe the same way SettingsOverlay_IsCapturingInput() is (reads
 	// only atomics/ConVars, no locking).
 	bool SettingsOverlay_IsCapturingKeyboard();
+
+	// D22. Whether the shell's OWN Tab/arrow navigation (SPEC §8.2) is on --
+	// settings_overlay_keyboard_nav. The overlay is a mouse UI and this is the
+	// accessibility route to the same controls, so it defaults on; commands
+	// (Esc, the palette, the Inspector shortcuts) ignore it and always work.
+	// Not related to ImGui's own nav, which is off unconditionally.
+	bool SettingsOverlay_IsShellKeyboardNavEnabled();
 
 	// Producer side (main thread). uLinuxKeycode is a raw evdev keycode
 	// (KEY_* from linux/input-event-codes.h, NOT an xkb keycode -- no +8),
@@ -173,4 +187,24 @@ namespace gamescope
 
 	// Producer side. Same units wlserver_mousewheel()'s flX/flY already use.
 	void SettingsOverlay_QueueMouseWheel( double flX, double flY );
+
+	// ------------------------------------------------------------------
+	// D22: readback, so a POINTER can be driven from a script the way D18
+	// made a KEY drivable. Both of these exist only to let
+	// overlay_e2_pointer (Overlay/UI/Shell.cpp) address the overlay in the
+	// pixel coordinates a screenshot shows, and to let a test assert where
+	// the cursor actually ended up. Neither is on any input path.
+	// ------------------------------------------------------------------
+
+	// The size of the surface the overlay's ImGui context draws into --
+	// io.DisplaySize, in pixels. False (and both outputs untouched) before
+	// the overlay has ever been opened, since the texture is allocated
+	// lazily on first draw. Safe from any thread: the pair is published as
+	// one atomic snapshot by the render thread and never torn.
+	bool SettingsOverlay_GetSurfaceSize( uint32_t *puWidth, uint32_t *puHeight );
+
+	// Where the overlay's own cursor sits, in those same pixels, as of the
+	// last drain. Diagnostic only -- nothing reads it back into the input
+	// path. Safe from any thread for the same reason.
+	bool SettingsOverlay_GetCursorPosition( double *pflX, double *pflY );
 }

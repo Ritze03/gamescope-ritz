@@ -64,7 +64,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace gamescope::ui::shell
@@ -325,6 +327,11 @@ namespace gamescope::ui::shell
 			ImGui::GetIO().InputQueueCharacters.resize( 0 );
 		}
 
+		// D22. Set from wlserver's hotkey path (another thread), consumed by
+		// Draw() on the thread that owns the shell's state. See
+		// shell::RequestPalette() in Shell.h for why it is a request.
+		std::atomic<bool> s_bPaletteRequested{ false };
+
 		// =================================================================
 		//  The console surface
 		// =================================================================
@@ -390,6 +397,8 @@ namespace gamescope::ui::shell
 		void PaletteCmd( std::span<std::string_view> args );
 		void GlyphSweep( std::span<std::string_view> args );
 		void KeyCmd( std::span<std::string_view> args );
+		void PointerCmd( std::span<std::string_view> args );
+		void GetById( std::span<std::string_view> args );
 
 		// The palette's two helpers the console command reaches before the
 		// drawing section defines them.
@@ -423,6 +432,21 @@ namespace gamescope::ui::shell
 			"Through gamescopectl the id and value must be ONE quoted argument: "
 			"gamescopectl overlay_e2_set \"display.fps_limit 60\".",
 			SetById );
+
+		// D22. overlay_e2_set could WRITE a binding from a script but nothing
+		// could READ one, so "did that click actually move the state?" -- the
+		// only question a mouse walkthrough asks -- had no answer a script
+		// could check. Every previous verification worked around it by
+		// setting a value and looking at a screenshot, which confirms the
+		// PAINT and not the binding. This reads through Binding().Get(), the
+		// same value the row itself prints.
+		ConCommand cc_overlay_e2_get(
+			"overlay_e2_get",
+			"Print an E2 row or parameter's current value: overlay_e2_get <id>. Reads through the "
+			"same binding the row draws from, so it answers \"did that click move the state?\" "
+			"rather than \"did something repaint?\". With no id, prints every registered row and "
+			"its value.",
+			GetById );
 
 		ConCommand cc_overlay_e2_select(
 			"overlay_e2_select",
@@ -475,6 +499,24 @@ namespace gamescope::ui::shell
 			"window, client or seat outside this overlay. Through gamescopectl the chords must be "
 			"ONE quoted argument: gamescopectl overlay_e2_key \"tab down enter\".",
 			KeyCmd );
+
+		// D22. The pointer half of the same idea, and the reason this branch
+		// could ship a mouse UI nobody had ever used a mouse on: D18 built
+		// overlay_e2_key, every subsequent binding was verified with it, and
+		// the CONTROLS -- which are driven by a pointer, not by a key -- kept
+		// being "verified" by console commands that moved their bound state
+		// directly. That proves the binding, never the hit box. See PointerCmd.
+		ConCommand cc_overlay_e2_pointer(
+			"overlay_e2_pointer",
+			"Send a REAL pointer event to the overlay: overlay_e2_pointer <verb> [args]. "
+			"Verbs: move <x> <y> | down [left|right|middle] | up [...] | click [x y] [button] | "
+			"scroll <dx> <dy> | pos. Coordinates are PIXELS on the overlay surface, the same "
+			"ones a screenshot shows, with the origin top-left. Like overlay_e2_key it appends "
+			"to the overlay's own input queue, so the event takes the identical path a physical "
+			"mouse takes and cannot reach any window, client or seat outside this overlay. "
+			"Through gamescopectl the verb and its arguments must be ONE quoted argument: "
+			"gamescopectl overlay_e2_pointer \"click 640 400\".",
+			PointerCmd );
 
 		// =================================================================
 		//  Registration
@@ -847,6 +889,226 @@ namespace gamescope::ui::shell
 				if ( bShift ) SettingsOverlay_QueueKeyEvent( KEY_LEFTSHIFT, false );
 				if ( bCtrl )  SettingsOverlay_QueueKeyEvent( KEY_LEFTCTRL,  false );
 			}
+		}
+
+		// D22's read half. See cc_overlay_e2_get.
+		void GetById( std::span<std::string_view> args )
+		{
+			const auto PrintOne = [ & ]( const std::string &sId, Kind eKind )
+			{
+				const std::string sValue = PaletteValueText( sId );
+				console_log.infof( "%-40s %-10s %s", sId.c_str(), KindName( eKind ),
+					sValue.empty() ? "-" : sValue.c_str() );
+			};
+
+			if ( args.size() >= 2 )
+			{
+				const std::string sId( args[ 1 ] );
+				if ( const Entry *pE = Reg().FindEntry( sId ) )
+					PrintOne( sId, pE->GetKind() );
+				else if ( const Parameter *pP = Reg().FindParam( sId ) )
+					PrintOne( sId, pP->GetKind() );
+				else
+					console_log.errorf( "overlay_e2_get: no such id \"%s\"", sId.c_str() );
+				return;
+			}
+
+			// No id: the whole registry, rows and their parameters, in rail
+			// order -- the same walk cc_overlay_e2_glyphs does, for the same
+			// reason (these only ever coexist in the live registry).
+			for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+			{
+				const Area &area = Reg().AreaAt( a );
+				for ( size_t e = 0; e < area.EntryCount(); ++e )
+				{
+					const Entry &entry = area.EntryAt( e );
+					PrintOne( entry.Id(), entry.GetKind() );
+					for ( size_t p = 0; p < entry.ParamCount(); ++p )
+						PrintOne( entry.ParamAt( p ).Id(), entry.ParamAt( p ).GetKind() );
+				}
+			}
+		}
+
+		// =================================================================
+		//  D22: real pointer events, from a script
+		// =================================================================
+		// WHY THIS IS NOT THE BANNED THING, restated for the pointer because
+		// the pointer is the half that actually caused the ban. D4 forbids
+		// synthetic input because injected ydotool CLICKS twice escaped into
+		// the user's own windows -- ydotool drives the whole seat, so a click
+		// lands wherever the seat's focus happens to be, which is exactly the
+		// accident that happened. This cannot do that, and not as a matter of
+		// care: it appends to s_InputQueue, the overlay's own producer/
+		// consumer queue, which DrainInputQueue() reads on the steamcompmgr
+		// thread and feeds to the overlay's ImGui context and nowhere else.
+		// There is no seat, no wl_pointer, no other client and no other
+		// window on the far side of that queue -- an event put in here can
+		// only ever arrive at this overlay, because nothing else reads it.
+		// The ydotool hazard is absent structurally, not by convention.
+		//
+		// It is also the SAME path a physical mouse takes:
+		// wlserver_mousemotion()/wlserver_mousebutton()/wlserver_mousewheel()
+		// call SettingsOverlay_QueueMouseMotionAbsolute()/QueueMouseButton()/
+		// QueueMouseWheel(), and so does this, with the same arguments. So a
+		// hit box verified this way is verified through its real mechanism --
+		// which is the whole point, because the defect this branch keeps
+		// shipping is a control that DRAWS in one rect and HIT-TESTS in
+		// another, and no console command that pokes the bound value can see
+		// that. Only a click at a coordinate can.
+		//
+		// Coordinates are surface PIXELS, not the normalized 0..1 the queue
+		// carries, because the thing a person has in hand when writing a test
+		// is a screenshot. The conversion is done here, against the live
+		// surface size, so the caller never has to know the texture size and
+		// a test written at one resolution does not silently aim elsewhere at
+		// another.
+		uint32_t LinuxButtonFromName( const std::string &sName )
+		{
+			if ( sName.empty() || sName == "left"   || sName == "l" ) return BTN_LEFT;
+			if ( sName == "right"  || sName == "r" )                  return BTN_RIGHT;
+			if ( sName == "middle" || sName == "m" )                  return BTN_MIDDLE;
+			return 0;
+		}
+
+		// Pixels -> the normalized coordinate the queue carries. Returns
+		// false when the overlay has never been opened (no surface yet), so
+		// the caller can say that rather than aiming at a zero-sized surface.
+		bool QueuePointerMovePx( double flPxX, double flPxY )
+		{
+			uint32_t uWidth = 0, uHeight = 0;
+			if ( !SettingsOverlay_GetSurfaceSize( &uWidth, &uHeight ) || uWidth == 0 || uHeight == 0 )
+				return false;
+
+			SettingsOverlay_QueueMouseMotionAbsolute( flPxX / (double)uWidth, flPxY / (double)uHeight );
+			return true;
+		}
+
+		void PointerCmd( std::span<std::string_view> args )
+		{
+			if ( args.size() < 2 )
+			{
+				console_log.infof( "overlay_e2_pointer <verb> [args]" );
+				console_log.infof( "  move <x> <y>              move the cursor to a surface pixel" );
+				console_log.infof( "  down|up [left|right|mid]  press / release a button where it is" );
+				console_log.infof( "  click [x y] [button]      move (if given), press, release" );
+				console_log.infof( "  scroll <dx> <dy>          wheel, in wlserver_mousewheel units" );
+				console_log.infof( "  pos                       print the cursor and the surface size" );
+				return;
+			}
+
+			std::string sVerb( args[ 1 ] );
+			std::transform( sVerb.begin(), sVerb.end(), sVerb.begin(),
+				[]( unsigned char c ) { return (char)std::tolower( c ); } );
+
+			const auto Number = [ & ]( size_t n, double *pOut ) -> bool
+			{
+				if ( n >= args.size() )
+					return false;
+				// strtod, not stod: gamescope builds with exceptions off, so
+				// the throwing parse is not available here.
+				const std::string s( args[ n ] );
+				char *pszEnd = nullptr;
+				const double flValue = std::strtod( s.c_str(), &pszEnd );
+				if ( pszEnd == s.c_str() || !std::isfinite( flValue ) )
+					return false;
+				*pOut = flValue;
+				return true;
+			};
+
+			if ( sVerb == "pos" )
+			{
+				uint32_t uWidth = 0, uHeight = 0;
+				if ( !SettingsOverlay_GetSurfaceSize( &uWidth, &uHeight ) )
+				{
+					console_log.infof( "overlay_e2_pointer: no surface yet -- open the overlay first" );
+					return;
+				}
+				double flX = 0.0, flY = 0.0;
+				if ( SettingsOverlay_GetCursorPosition( &flX, &flY ) )
+					console_log.infof( "cursor %.1f,%.1f  surface %ux%u", flX, flY, uWidth, uHeight );
+				else
+					console_log.infof( "cursor <unset>  surface %ux%u", uWidth, uHeight );
+				return;
+			}
+
+			if ( sVerb == "move" )
+			{
+				double flX = 0.0, flY = 0.0;
+				if ( !Number( 2, &flX ) || !Number( 3, &flY ) )
+				{
+					console_log.errorf( "overlay_e2_pointer move <x> <y>" );
+					return;
+				}
+				if ( !QueuePointerMovePx( flX, flY ) )
+					console_log.errorf( "overlay_e2_pointer: no surface yet -- open the overlay first" );
+				return;
+			}
+
+			if ( sVerb == "scroll" )
+			{
+				double flX = 0.0, flY = 0.0;
+				if ( !Number( 2, &flX ) || !Number( 3, &flY ) )
+				{
+					console_log.errorf( "overlay_e2_pointer scroll <dx> <dy>" );
+					return;
+				}
+				SettingsOverlay_QueueMouseWheel( flX, flY );
+				return;
+			}
+
+			if ( sVerb == "down" || sVerb == "up" )
+			{
+				const uint32_t uButton = LinuxButtonFromName(
+					args.size() > 2 ? std::string( args[ 2 ] ) : std::string() );
+				if ( uButton == 0 )
+				{
+					console_log.errorf( "overlay_e2_pointer: unknown button" );
+					return;
+				}
+				SettingsOverlay_QueueMouseButton( uButton, sVerb == "down" );
+				return;
+			}
+
+			if ( sVerb == "click" )
+			{
+				// "click 640 400 right" and "click" and "click right" all
+				// parse: the coordinate pair is optional, and what follows it
+				// (or stands alone) is the button.
+				size_t nButtonArg = 2;
+				double flX = 0.0, flY = 0.0;
+				if ( Number( 2, &flX ) && Number( 3, &flY ) )
+				{
+					if ( !QueuePointerMovePx( flX, flY ) )
+					{
+						console_log.errorf( "overlay_e2_pointer: no surface yet -- open the overlay first" );
+						return;
+					}
+					nButtonArg = 4;
+				}
+
+				const uint32_t uButton = LinuxButtonFromName(
+					args.size() > nButtonArg ? std::string( args[ nButtonArg ] ) : std::string() );
+				if ( uButton == 0 )
+				{
+					console_log.errorf( "overlay_e2_pointer: unknown button" );
+					return;
+				}
+
+				// Press and release, in that order and in one batch -- which
+				// is what a real click is, and which ImGui's own input-event
+				// trickling is built to spread across two frames (see
+				// UpdateInputEvents(): a second transition on the same button
+				// stops the queue and defers to the next NewFrame()). The
+				// press therefore lands on one drawn frame and the release on
+				// the next, so a Button that fires on release fires exactly
+				// once. Doing it as two console commands instead would leave
+				// the split to IPC timing, which is not a guarantee.
+				SettingsOverlay_QueueMouseButton( uButton, true );
+				SettingsOverlay_QueueMouseButton( uButton, false );
+				return;
+			}
+
+			console_log.errorf( "overlay_e2_pointer: unknown verb \"%s\"", sVerb.c_str() );
 		}
 
 		// D18's live sweep. See cc_overlay_e2_glyphs for why this walks the
@@ -1913,7 +2175,17 @@ namespace gamescope::ui::shell
 				// ONLY in inline mode, where it is a real control; everywhere
 				// else it stays what §2.4 describes, a mark that advertises
 				// depth. Submitted after the row's own button so it wins the
-				// overlap -- ImGui resolves a hover to the last item added.
+				// overlap.
+				//
+				// D22 correction: this used to claim "ImGui resolves a hover
+				// to the last item added", and that is simply not true --
+				// ItemHoverable() rejects a later item while an earlier one
+				// still holds g.HoveredId. Submitting later is NECESSARY but
+				// not SUFFICIENT; the earlier item must also have been marked
+				// SetNextItemAllowOverlap(), which DrawEntryRow now does. That
+				// wrong belief is why every overlapped control in this kit was
+				// unreachable by mouse, so it is corrected here rather than
+				// quietly deleted.
 				if ( bInline )
 				{
 					ImGui::SetCursorScreenPos( rc.Min );
@@ -1955,6 +2227,10 @@ namespace gamescope::ui::shell
 			// swallowed by a full-band selector drawn on top of it.
 			const ImRect rcHit( rcBand.Min.x, rcBand.Min.y, bl.rcBody.Min.x, bl.line1.Bounds().Max.y );
 			ImGui::SetCursorScreenPos( rcHit.Min );
+			// D22, same reason as the row's own selector -- see DrawEntryRow.
+			// Line 1 of a composite carries its value readout and, for some
+			// composites, an affordance drawn after this button.
+			ImGui::SetNextItemAllowOverlap();
 			const bool bClicked = ImGui::InvisibleButton( "##band", rcHit.GetSize() );
 			const bool bHovered = ImGui::IsItemHovered();
 
@@ -2083,6 +2359,28 @@ namespace gamescope::ui::shell
 
 			ImGui::SetCursorScreenPos( rcRow.Min );
 			ImGui::PushID( entry.Id().c_str() );
+			// D22: THE ROW'S SELECTOR MUST ALLOW OVERLAP, or it eats every
+			// control in the row.
+			//
+			// This full-width button is submitted FIRST and spans the whole
+			// row, including the lane the switch/slider/segmented atom is
+			// drawn into afterwards. ImGui does not resolve an overlap to
+			// "the last item added" -- ItemHoverable() rejects a later item
+			// outright while g.HoveredId is already held by an earlier one
+			// (imgui.cpp: `if (g.HoveredId != 0 && g.HoveredId != id &&
+			// !g.HoveredIdAllowOverlap) return false;`), and rejects it again
+			// on g.ActiveId while a button is held. So without this call the
+			// row's own button won the hit test for the ENTIRE row and no
+			// atom inside it could ever be hovered, pressed or dragged: the
+			// controls painted perfectly and were inert to the mouse, which
+			// is exactly what shipped.
+			//
+			// SetNextItemAllowOverlap() sets HoveredIdAllowOverlap/
+			// ActiveIdAllowOverlap for this item, which lets the atoms
+			// submitted after it take the hit test where they cover the row,
+			// while the row still takes it everywhere they do not -- so
+			// clicking the label still selects the row.
+			ImGui::SetNextItemAllowOverlap();
 			const bool bClicked = ImGui::InvisibleButton( "##row", rcRow.GetSize() );
 			const bool bHovered = ImGui::IsItemHovered();
 
@@ -2265,6 +2563,10 @@ namespace gamescope::ui::shell
 				ImGui::PushID( entry.Id().c_str() );
 				ImGui::PushID( (int)i + 2000 );
 
+				// D22, same reason as the row's own selector -- see
+				// DrawEntryRow. An expanded parameter row carries a real
+				// control in its lane just as its entry row does.
+				ImGui::SetNextItemAllowOverlap();
 				const bool bClicked = ImGui::InvisibleButton( "##inlinerow", rcRow.GetSize() );
 				const bool bHovered = ImGui::IsItemHovered();
 
@@ -4088,7 +4390,18 @@ namespace gamescope::ui::shell
 			// Tab / Shift+Tab: cycle region Rail -> Sheet -> Inspector.
 			// Only when no item is active, so Tab inside a text field still
 			// belongs to the text field.
-			if ( !io.KeyCtrl && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed( ImGuiKey_Tab, false ) )
+			//
+			// D22: Tab and the arrow keys are NAVIGATION -- moving a selection
+			// around -- and they are the part settings_overlay_keyboard_nav
+			// governs. COMMANDS (Esc, the palette, the Inspector host, reset,
+			// the explain page) stay unconditional, because a command has no
+			// mouse equivalent to fall back to and Esc in particular must
+			// never become unreachable. The sheet, rail and inspector are a
+			// mouse UI; this is the accessibility route to the same controls,
+			// kept on by default and now switchable rather than silently
+			// fighting ImGui's own nav for the same keys.
+			if ( SettingsOverlay_IsShellKeyboardNavEnabled() &&
+			     !io.KeyCtrl && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed( ImGuiKey_Tab, false ) )
 			{
 				const int n = (int)s_eFocusRegion + ( io.KeyShift ? 2 : 1 );
 				s_eFocusRegion = (Region)( n % 3 );
@@ -4134,6 +4447,14 @@ namespace gamescope::ui::shell
 			}
 
 			// ---- movement and adjustment ---------------------------------
+			// D22: the other half of what settings_overlay_keyboard_nav
+			// governs (Tab is gated above) -- everything below moves or
+			// adjusts a selection, which is the navigation model the mouse
+			// now leads. Esc and the commands are already handled above, so
+			// turning navigation off never traps anyone in the overlay.
+			if ( !SettingsOverlay_IsShellKeyboardNavEnabled() )
+				return;
+
 			// A text field being edited owns every key below it; without this
 			// guard typing "5" into a profile name would also step whatever
 			// row happened to be selected.
@@ -4508,6 +4829,11 @@ namespace gamescope::ui::shell
 	// =====================================================================
 	//  Public surface
 	// =====================================================================
+	void RequestPalette()
+	{
+		s_bPaletteRequested.store( true, std::memory_order_release );
+	}
+
 	void Draw()
 	{
 		// Issue #79's fix for this path -- see Palette.h. Without it the
@@ -4526,6 +4852,13 @@ namespace gamescope::ui::shell
 		// context -- the console thread's, above all. See FormatLadder().
 		s_flSurfaceW.store( io.DisplaySize.x, std::memory_order_relaxed );
 		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
+
+		// D22: consume a palette request from wlserver's hotkey path. Done
+		// here, before anything draws, so the palette opens on the SAME frame
+		// the request is seen rather than a frame later -- the shortcut has
+		// to feel like the key opened it.
+		if ( s_bPaletteRequested.exchange( false, std::memory_order_acq_rel ) )
+			OpenPalette();
 
 		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )

@@ -287,6 +287,122 @@ TEST_CASE( "atoms: a switch toggles from a click inside its lane rect", "[overla
 	REQUIRE( bValue );   // unchanged
 }
 
+// D22. The defect that shipped, as a test.
+//
+// Every sheet row draws a full-width InvisibleButton FIRST -- the row
+// selector, so clicking a row's label selects it -- and then draws the row's
+// control INTO THE SAME RECT. That is the arrangement the whole sheet is
+// built on, and it was silently broken: ImGui's ItemHoverable() rejects a
+// later item while an earlier one still holds g.HoveredId (and again on
+// g.ActiveId while a button is held), so the row's own selector won the hit
+// test for the entire row and no control inside it could be hovered or
+// clicked. Every switch, slider, segmented cell, stepper, chip and colour
+// rail in the product rendered perfectly and did nothing.
+//
+// The fix is one call -- SetNextItemAllowOverlap() before the row selector --
+// and the reason it needs a test is that nothing about the drawing changes
+// when it is missing. A screenshot cannot see this; only a click can.
+//
+// The two halves are both load-bearing, so both are asserted: the control
+// must win where it covers the row, and the row must still win everywhere
+// the control does not.
+TEST_CASE( "atoms: a control inside a full-width row selector still takes the click", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+
+	const float flTop = 200.0f;
+	const ui::RowCtx probe = MakeRow( flTop );
+	const ImRect rcRow    = probe.Bounds();
+	const ImRect rcSwitch = probe.Place( ui::tok::kSwitchW );
+
+	bool bValue = false;
+	int  nRowClicks = 0;
+
+	// One frame of the real arrangement: row selector first, control second.
+	const auto Frame = [ & ]()
+	{
+		h.BeginFrame();
+		ImGui::SetCursorScreenPos( rcRow.Min );
+		ImGui::PushID( "row" );
+		ImGui::SetNextItemAllowOverlap();
+		if ( ImGui::InvisibleButton( "##row", rcRow.GetSize() ) )
+			nRowClicks++;
+		ImGui::PopID();
+		ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+		h.EndFrame();
+	};
+
+	// ---- a click ON the switch drives the switch, not the row ----
+	h.MoveMouse( rcSwitch.GetCenter() );
+	Frame();
+	h.MouseButton( true );
+	Frame();
+	h.MouseButton( false );
+	Frame();
+
+	REQUIRE( bValue );          // the control got it...
+	REQUIRE( nRowClicks == 0 ); // ...and the row did not
+
+	// ---- a click on the row's LABEL zone still selects the row ----
+	h.MoveMouse( ImVec2( rcRow.Min.x + 8.0f, rcRow.GetCenter().y ) );
+	Frame();
+	h.MouseButton( true );
+	Frame();
+	h.MouseButton( false );
+	Frame();
+
+	REQUIRE( nRowClicks == 1 ); // the row got it...
+	REQUIRE( bValue );          // ...and the switch is untouched
+}
+
+// D22. The OTHER half of the same bug, pinned as an executable rule.
+//
+// DrainInputQueue() (SettingsOverlay.cpp) used to call AddMouseButtonEvent()
+// before flushing the pending cursor position, so a click that arrived in the
+// same drain as its own motion reached ImGui as [button, position] rather
+// than [position, button]. ImGui's input trickling stops at a MousePos that
+// follows a button change in the same frame, so the press was applied at the
+// STALE pointer position and the move was deferred a frame -- the widget
+// under the cursor never saw the press, and whatever sat under the old
+// position took ActiveId and then released outside itself.
+//
+// This is a property of ImGui, not of our code, which is exactly why it is
+// worth a test: the drain's ordering is only correct BECAUSE this rule holds,
+// and nothing else in the tree says so. If a future ImGui changes it, this
+// fails and points at the drain.
+TEST_CASE( "atoms: a queued click applies at the position queued BEFORE it", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+
+	const float flTop = 200.0f;
+	const ImRect rcSwitch = MakeRow( flTop ).Place( ui::tok::kSwitchW );
+
+	// Park the pointer far away, so a press applied at the STALE position
+	// cannot possibly land on the switch.
+	h.MoveMouse( ImVec2( 10.0f, 10.0f ) );
+	h.BeginFrame();
+	bool bValue = false;
+	ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+	h.EndFrame();
+
+	// The correct order: move, THEN press -- both queued before one frame,
+	// exactly as the drain now emits them.
+	h.MoveMouse( rcSwitch.GetCenter() );
+	h.MouseButton( true );
+	h.BeginFrame();
+	ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+	h.EndFrame();
+
+	h.MouseButton( false );
+	h.BeginFrame();
+	ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+	h.EndFrame();
+
+	REQUIRE( bValue );
+}
+
 TEST_CASE( "atoms: Choice downgrades to a dropdown when segmented will not fit", "[overlay_atoms]" )
 {
 	// SPEC §3.2: "The helper measures and auto-downgrades to a dropdown if any
