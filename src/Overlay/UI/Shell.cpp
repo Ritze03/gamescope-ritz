@@ -194,6 +194,13 @@ namespace gamescope::ui::shell
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
 
+		// How far the rail is scrolled, in physical px. Non-zero only when
+		// the item column is taller than the rail -- which it is from 2.0x
+		// (and at 1.75x on a short slab). DrawRail() clamps it every frame,
+		// so a scale change that makes the rail fit again resets it to 0
+		// without needing to be told.
+		float s_flRailScroll = 0.0f;
+
 		// The last surface size Draw() saw, in physical pixels.
 		//
 		// WHY THIS EXISTS AND NOT ImGui::GetIO(). Every getter a registration
@@ -1233,40 +1240,102 @@ namespace gamescope::ui::shell
 
 			const float flItemH = Px( 40.0f );        // index.html's .ri
 			const float flPadX  = Px( 16.0f );
-			float       y       = rc.y0 + Px( tok::kS );
+			const float flSecH  = Px( 26.0f );
 
-			Section eLastSection = Section::Setup;
-			bool    bFirst       = true;
+			// ---- the rail's vertical walk, defined ONCE ------------------
+			//
+			// WHY A WALK AND NOT A DRAW LOOP. The rail's height is fixed by
+			// the slab; its content is not. At 2.0x eleven items plus three
+			// section breaks are TALLER than the rail, and until this the
+			// surplus was drawn past rc.y1 and simply lost: Appearance and
+			// Shell fell off the bottom, unreachable by pointer. (The
+			// palette still found them, which is why P4 did not notice.)
+			// Scrolling needs the content height BEFORE the first item is
+			// drawn, so the walk below is the single definition of where an
+			// item sits and how tall the whole column is; the measure pass
+			// and the draw pass call it with different visitors rather than
+			// keeping two copies of the same arithmetic in step by hand.
+			const float flSecAdvance = bIcons ? Px( 20.0f ) : ( flSecH + Px( tok::kXS ) );
 
-			for ( size_t i = 0; i < Reg().AreaCount(); ++i )
+			const auto Walk = [ & ]( auto &&fnSection, auto &&fnItem ) -> float
 			{
-				const Area &area = Reg().AreaAt( i );
-				if ( !area.Available() )
-					continue;
+				float   y            = rc.y0 + Px( tok::kS );
+				Section eLastSection = Section::Setup;
+				bool    bFirst       = true;
 
-				if ( bFirst || area.GetSection() != eLastSection )
+				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
 				{
-					eLastSection = area.GetSection();
-					bFirst = false;
+					const Area &area = Reg().AreaAt( i );
+					if ( !area.Available() )
+						continue;
+
+					if ( bFirst || area.GetSection() != eLastSection )
+					{
+						eLastSection = area.GetSection();
+						bFirst = false;
+						fnSection( area.GetSection(), y );
+						y += flSecAdvance;
+					}
+
+					fnItem( i, area, y );
+					y += flItemH;
+				}
+				return y;
+			};
+
+			const auto NoSection = []( Section, float ) {};
+			const auto NoItem    = []( size_t, const Area &, float ) {};
+
+			// Measure, then decide the scroll offset. Content height carries
+			// the same top pad at the bottom so the last item does not sit
+			// flush against the edge when the rail is scrolled fully down.
+			const float flContentH  = ( Walk( NoSection, NoItem ) - rc.y0 ) + Px( tok::kS );
+			const float flMaxScroll = std::max( 0.0f, flContentH - rc.Height() );
+
+			// Keep the ACTIVE item on screen. StepArea() moves the selection
+			// with Up/Down in the rail region, so following the selection is
+			// what makes every area keyboard-reachable again; the wheel is
+			// the pointer's equivalent and is the only reason a hover test
+			// appears here.
+			if ( flMaxScroll > 0.0f
+			  && ImGui::IsMouseHoveringRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), false ) )
+				s_flRailScroll -= ImGui::GetIO().MouseWheel * flItemH;
+
+			float flActiveTop = -1.0f;
+			Walk( NoSection, [ & ]( size_t, const Area &area, float y ) {
+				if ( &area == SelectedArea() )
+					flActiveTop = y - rc.y0;      // RailScroll() works rail-relative
+			} );
+
+			s_flRailScroll = RailScroll( s_flRailScroll, flContentH, rc.Height(),
+			                             flActiveTop, flItemH, Px( tok::kS ) );
+
+			// Clip so an off-screen item is neither painted over the sheet
+			// nor clickable -- ImGui culls an InvisibleButton outside the
+			// window clip rect, which is exactly the wanted hit-test.
+			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
+
+			Walk(
+				[ & ]( Section eSection, float yRaw )
+				{
+					const float y = yRaw - s_flRailScroll;
 					if ( bIcons )
 					{
 						// The icon rail keeps the section BREAK but drops
 						// the word: a divider rule, not a heading. SPEC
 						// §8.0's collapse is about width, and a heading is
 						// the one thing that cannot survive it.
-						y += Px( 10.0f );
-						HLine( rc.x0 + Px( tok::kM ), rc.x1 - Px( tok::kM ), y, Col( Role::Line ) );
-						y += Px( 10.0f );
+						HLine( rc.x0 + Px( tok::kM ), rc.x1 - Px( tok::kM ), y + Px( 10.0f ), Col( Role::Line ) );
 					}
 					else
 					{
-						const float flSecH = Px( 26.0f );
 						Label( { rc.x0 + flPadX, y + Px( tok::kM ), rc.x1, y + flSecH },
-						       TypeRole::Section, Col( Role::TextMeta ), SectionName( area.GetSection() ) );
-						y += flSecH + Px( tok::kXS );
+						       TypeRole::Section, Col( Role::TextMeta ), SectionName( eSection ) );
 					}
-				}
-
+				},
+				[ & ]( size_t i, const Area &area, float yRaw )
+			{
+				const float y = yRaw - s_flRailScroll;
 				const Rect rcItem { rc.x0, y, rc.x1, y + flItemH };
 				const bool bActive = ( &area == SelectedArea() );
 
@@ -1337,8 +1406,22 @@ namespace gamescope::ui::shell
 					       TypeRole::Label, bActive ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 					       area.Title().c_str() );
 				}
+			} );
 
-				y += flItemH;
+			ImGui::PopClipRect();
+
+			// A scrollable rail says so: a thumb proportional to the visible
+			// fraction, on the rail's own divider line. Without it the only
+			// cue that Shell exists below the fold is pressing Down.
+			if ( flMaxScroll > 0.0f )
+			{
+				const float flTrackX = rc.x1 - Px( 3.0f );
+				const float flFrac   = rc.Height() / flContentH;
+				const float flThumbH = std::max( Px( 24.0f ), rc.Height() * flFrac );
+				const float flThumbY = rc.y0 + ( rc.Height() - flThumbH )
+				                     * ( s_flRailScroll / flMaxScroll );
+				Fill( { flTrackX, flThumbY, flTrackX + Px( 2.0f ), flThumbY + flThumbH },
+				      Accent( 0.45f ) );
 			}
 		}
 

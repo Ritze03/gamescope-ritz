@@ -508,6 +508,72 @@ TEST_CASE( "a parameterless entry still fits its body at every scale", "[overlay
 }
 
 // =========================================================================
+//  The rail's scroll range (P5)
+// =========================================================================
+// Exactly the P3a failure above, one region to the left, and found the same
+// way: at 2.0x the rail's eleven items and three section breaks are taller
+// than the rail, and DrawRail() drew them from an absolute y with no clip.
+// The surplus was painted past the bottom edge and lost -- Appearance and
+// Shell were unreachable by pointer, while the command palette still found
+// them, which is why P4's keyboard sweep did not notice.
+//
+// RailScroll() is the offset that fixes it, and these cases are the ones
+// where a scroll offset is normally got wrong.
+TEST_CASE( "a rail whose content fits is never scrolled", "[overlay_shell]" )
+{
+	// The most important case: below 2.0x nothing should move at all. A
+	// scroll that only LOOKS right when it is needed is a regression waiting
+	// for a scale change.
+	const float flFits = ui::RailScroll( 0.0f, 400.0f, 900.0f, 360.0f, 40.0f, 8.0f );
+	REQUIRE_THAT( flFits, WithinAbs( 0.0f, 0.001f ) );
+
+	// And a stale offset left over from a taller scale is discarded, not
+	// preserved -- so stepping the ladder back down self-corrects.
+	REQUIRE_THAT( ui::RailScroll( 220.0f, 400.0f, 900.0f, 0.0f, 40.0f, 8.0f ),
+	              WithinAbs( 0.0f, 0.001f ) );
+}
+
+TEST_CASE( "the rail scrolls exactly far enough to show the active item", "[overlay_shell]" )
+{
+	const float flContent = 1200.0f, flView = 800.0f, flItem = 40.0f, flPad = 8.0f;
+
+	// An item already fully visible must not move the rail. Anything else
+	// makes the rail twitch on every step of the selection.
+	REQUIRE_THAT( ui::RailScroll( 0.0f, flContent, flView, 300.0f, flItem, flPad ),
+	              WithinAbs( 0.0f, 0.001f ) );
+
+	// An item below the fold comes to rest against the bottom edge, one pad
+	// clear -- the SMALLEST scroll that reveals it, not a recentring.
+	const float flDown = ui::RailScroll( 0.0f, flContent, flView, 1000.0f, flItem, flPad );
+	REQUIRE_THAT( flDown, WithinAbs( ( 1000.0f + flItem + flPad ) - flView, 0.001f ) );
+
+	// ...and it really is visible afterwards, which is the property the
+	// arithmetic exists to produce rather than a restatement of it.
+	REQUIRE( 1000.0f - flDown >= 0.0f );
+	REQUIRE( 1000.0f + flItem - flDown <= flView );
+
+	// An item above the fold comes to rest against the top edge.
+	REQUIRE_THAT( ui::RailScroll( 500.0f, flContent, flView, 100.0f, flItem, flPad ),
+	              WithinAbs( 100.0f - flPad, 0.001f ) );
+}
+
+TEST_CASE( "the rail's scroll is clamped to its content", "[overlay_shell]" )
+{
+	const float flContent = 1200.0f, flView = 800.0f;
+	const float flMax = flContent - flView;
+
+	// Never past the end (the wheel can ask for it), and never negative.
+	REQUIRE_THAT( ui::RailScroll( 5000.0f, flContent, flView, -1.0f, 40.0f, 8.0f ),
+	              WithinAbs( flMax, 0.001f ) );
+	REQUIRE_THAT( ui::RailScroll( -5000.0f, flContent, flView, -1.0f, 40.0f, 8.0f ),
+	              WithinAbs( 0.0f, 0.001f ) );
+
+	// The last item -- the one that was actually lost -- is reachable: at
+	// full scroll the bottom of the content sits exactly on the view's edge.
+	REQUIRE_THAT( flMax + flView, WithinAbs( flContent, 0.001f ) );
+}
+
+// =========================================================================
 //  The drawer over the sheet's controls (D17)
 // =========================================================================
 // The companion to the lane tests in test_overlay_ui.cpp. Those pin the

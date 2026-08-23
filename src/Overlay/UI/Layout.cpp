@@ -297,4 +297,34 @@ namespace gamescope::ui
 
 		return flH;
 	}
+
+	float RailScroll( float flCurrent, float flContentH, float flViewH,
+	                  float flActiveTop, float flItemH, float flPad )
+	{
+		const float flMax = std::max( 0.0f, flContentH - flViewH );
+
+		float flScroll = flCurrent;
+
+		// Only chase the active item when there is somewhere to scroll TO.
+		// When the content fits, flMax is 0 and the clamp below returns 0
+		// regardless -- so a rail that fits can never be left scrolled,
+		// which is what makes a scale change back down self-correcting.
+		if ( flMax > 0.0f && flActiveTop >= 0.0f )
+		{
+			// Above the fold: pull up by exactly the shortfall, so the item
+			// lands against the top pad rather than being centred. Moving
+			// the least possible keeps the rail visually stable while the
+			// selection walks.
+			const float flAbove = ( flActiveTop - flPad ) - flScroll;
+			if ( flAbove < 0.0f )
+				flScroll += flAbove;
+
+			// Below the fold: same, against the bottom edge.
+			const float flBelow = ( flActiveTop + flItemH + flPad ) - ( flScroll + flViewH );
+			if ( flBelow > 0.0f )
+				flScroll += flBelow;
+		}
+
+		return std::clamp( flScroll, 0.0f, flMax );
+	}
 }
