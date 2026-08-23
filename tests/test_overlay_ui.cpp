@@ -1121,3 +1121,189 @@ TEST_CASE( "dynamic: an empty stream set is a valid build, not a violation", "[o
 	REQUIRE( a.EntryCount() == 0 );
 	REQUIRE( rec.Count() == 0 );
 }
+
+// =========================================================================
+//  Destructive actions (P3b)
+// =========================================================================
+// The user's rule, after an agent wiped one of their configs: "There can be
+// a button for it, but never delete configs automatically." Confirm() is
+// that rule expressed in the declaration, so an action that destroys
+// something is armed by construction rather than by a call site remembering
+// to open a modal.
+TEST_CASE( "confirm: a destructive action declares its own second press", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.pergame", "Per-game", ui::Section::Setup );
+
+	int nInvocations = 0;
+	a.Action( "config.delete", "Delete saved config", "delete...",
+		[ &nInvocations ]{ ++nInvocations; } )
+		.Confirm( "delete permanently?" )
+		.Help( "Permanently deletes this game's saved config." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "config.delete" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( pEntry->NeedsConfirm() );
+	REQUIRE( pEntry->ConfirmPrompt() == "delete permanently?" );
+
+	// The declaration alone invokes nothing -- registering a destructive
+	// action must never perform it.
+	REQUIRE( nInvocations == 0 );
+
+	// And the binding is still reachable exactly once when it IS invoked,
+	// so arming cannot double-fire.
+	pEntry->Invoke();
+	REQUIRE( nInvocations == 1 );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "confirm: an ordinary action does not ask", "[overlay_ui]" )
+{
+	// The complement, and the thing that keeps the prompt meaningful: if
+	// every action asked, the second press would become reflex.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
+
+	a.Action( "profiles.apply", "Apply profile", "apply", []{} )
+		.Help( "Copies the selected profile's values in." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "profiles.apply" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( !pEntry->NeedsConfirm() );
+	REQUIRE( pEntry->ConfirmPrompt().empty() );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "badge: an area declares which config layer it writes to", "[overlay_ui]" )
+{
+	// Issue #43's question -- "where does what I change here get written?"
+	// The awkward case is the one that made a per-area badge necessary:
+	// Appearance writes global.json even when a per-game override is
+	// active, which no amount of session state can express.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	bool bOverrideActive = false;
+	ui::Area &pergame = reg.Add( "setup.pergame", "Per-game", ui::Section::Setup );
+	pergame.Badge( [ &bOverrideActive ]{
+		return bOverrideActive ? std::string( "app 1174180" ) : std::string( "global" );
+	} );
+
+	ui::Area &appearance = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+	appearance.Badge( []{ return std::string( "global only" ); } );
+
+	REQUIRE( pergame.BadgeText() == "global" );
+	bOverrideActive = true;
+	REQUIRE( pergame.BadgeText() == "app 1174180" );
+
+	// Unchanged by the override -- the whole point.
+	REQUIRE( appearance.BadgeText() == "global only" );
+
+	// An area that never declared one has none, rather than an empty box.
+	ui::Area &shell = reg.Add( "setup.shell", "Shell", ui::Section::Setup );
+	REQUIRE( shell.BadgeText().empty() );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+// =========================================================================
+//  Reset (P3b)
+// =========================================================================
+// D6 decided reset moves into the Inspector, but no phase had implemented
+// it -- so the E2 shell could not reset anything, and migrating the Config
+// panel would have silently dropped its four per-group reset links (#43).
+// Reset covers the row AND its parameters, which is what makes it the
+// successor to a GROUP link: the old "UI Scale" group is exactly the
+// `UI scale` row plus its dock and notification params.
+TEST_CASE( "reset: a row restores itself and its parameters together", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+
+	float flScale = 1.0f, flDock = 1.0f, flNotif = 1.0f;
+	a.Slider( "overlay.display_scale", "UI scale", ui::Bind( &flScale ) )
+		.Help( "Multiplies every base unit in the overlay." )
+		.Range( 0.5f, 2.0f )
+		.Default( 1.0f )
+		.Param( "dock", "Dock scale", ui::Bind( &flDock ) )
+			.Help( "Size of the dock." ).Range( 0.85f, 2.0f ).Default( 1.0f )
+		.Param( "notifications", "Notification scale", ui::Bind( &flNotif ) )
+			.Help( "Size of toasts." ).Range( 0.6f, 1.6f ).Default( 1.0f );
+
+	const ui::Entry *pEntry = reg.FindEntry( "overlay.display_scale" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( pEntry->HasDefault() );
+	REQUIRE( pEntry->IsAtDefault() );
+
+	// A PARAMETER differing is enough to arm the row's reset -- otherwise a
+	// group link would not restore what the old one did.
+	flDock = 1.4f;
+	REQUIRE( !pEntry->IsAtDefault() );
+
+	pEntry->ResetToDefault();
+	REQUIRE( flDock == 1.0f );
+	REQUIRE( pEntry->IsAtDefault() );
+
+	// And the row's own value, together with its params, in one action.
+	flScale = 1.75f;
+	flDock  = 1.4f;
+	flNotif = 1.1f;
+	REQUIRE( !pEntry->IsAtDefault() );
+	pEntry->ResetToDefault();
+	REQUIRE( flScale == 1.0f );
+	REQUIRE( flDock  == 1.0f );
+	REQUIRE( flNotif == 1.0f );
+
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "reset: a row with no declared default offers nothing to reset to", "[overlay_ui]" )
+{
+	// The alternative -- treating "no default" as zero -- would let a reset
+	// link destroy a value it was never told how to restore.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
+
+	std::string sName = "Handheld 40 fps";
+	a.Text( "profiles.name", "Name", ui::Bind( &sName ) )
+		.Help( "Name for a new profile." );
+
+	const ui::Entry *pEntry = reg.FindEntry( "profiles.name" );
+	REQUIRE( pEntry != nullptr );
+	REQUIRE( !pEntry->HasDefault() );
+
+	// Resetting is a no-op rather than a clear.
+	pEntry->ResetToDefault();
+	REQUIRE( sName == "Handheld 40 fps" );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_ui]" )
+{
+	// A value that has been through JSON and back is the same SETTING to a
+	// user. Exact float equality here would leave the reset link lit
+	// forever on a config that was merely saved and reloaded.
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+
+	float flBlur = 1.0f;
+	a.Slider( "overlay.background_blur", "Backdrop blur", ui::Bind( &flBlur ) )
+		.Help( "How much the game behind the overlay is blurred." )
+		.Range( 0.0f, 1.0f )
+		.Default( 0.9f );
+
+	const ui::Entry *pEntry = reg.FindEntry( "overlay.background_blur" );
+	flBlur = 0.89999998f;                 // what 0.9 comes back as
+	REQUIRE( pEntry->IsAtDefault() );
+
+	flBlur = 0.8f;                        // a real difference still registers
+	REQUIRE( !pEntry->IsAtDefault() );
+
+	REQUIRE( rec.Count() == 0 );
+}

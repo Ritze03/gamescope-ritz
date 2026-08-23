@@ -14,6 +14,18 @@
 
 namespace gamescope
 {
+	namespace ui { class Registry; }
+
+	// P3 part B: the E2 registration, replacing the Escape() hatch below.
+	//
+	// The panel's three tabs become THREE AREAS -- setup.profiles,
+	// setup.pergame and setup.appearance -- following D13.1: the rail is
+	// the product's only navigation, and index.html lists exactly these
+	// three as rail items. Profiles and Per-game are DYNAMIC (the profile
+	// list and the set of other games with overrides both change while the
+	// overlay is open); Appearance is not.
+	void PanelConfig_RegisterAreas( ui::Registry &reg );
+
 	// Draws the Config panel's ImGui window. Must be called from the same
 	// place/thread SettingsOverlay draws its own window (steamcompmgr
 	// thread, between ImGui::NewFrame() and ImGui::Render()) -- same

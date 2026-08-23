@@ -22,6 +22,8 @@
 class CVulkanCmdBuffer;
 struct FrameInfo_t;
 
+namespace gamescope::ui { class Area; }
+
 namespace gamescope::Notifications
 {
 	enum class Kind
@@ -96,4 +98,21 @@ namespace gamescope::Notifications
 	// ConfigSchema.h's OverlaySettings comment -- mute through the same
 	// session-routed write every other per-game-eligible panel uses).
 	void DrawSettingsPanel();
+
+	// P3 part B: the same three settings as E2 registrations, added into an
+	// area the caller owns (Appearance hosts them). Declared here, and
+	// implemented in Notifications.cpp, because the state they bind to --
+	// s_GlobalOverlay, s_Settings, PersistPlacement(), PersistMuted() -- is
+	// file-static there and must stay that way; a second file reaching it
+	// would be a second writer of notification_placement.
+	//
+	// The nine placements are ONE Choice rather than the 3x3 grid
+	// DrawSettingsPanel() draws. Not a preference: ui::Kind::Composite is
+	// declared in the taxonomy but the shell does not render one yet, so an
+	// Anchor here would be a control that registers correctly and draws
+	// nothing -- precisely issues #25 and #68. One nine-option Choice is
+	// still ONE setting with ONE value, which is what issue #27 was
+	// actually about when it replaced two independent segmented controls
+	// with the grid. The grid returns when Composite lands.
+	void RegisterRows( ui::Area &area );
 }

@@ -21,6 +21,7 @@
 #include "Fonts.h"
 #include "Palette.h"
 #include "Widgets.h"
+#include "UI/Registry.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -783,5 +784,73 @@ namespace gamescope::Notifications
 		if ( ImGui::Button( "Send test notification" ) )
 			Show( "This is a test notification.", Kind::Info );
 		ImGui::EndDisabled();
+	}
+
+	// =====================================================================
+	//  P3 part B -- the E2 registrations
+	// =====================================================================
+	// The same three settings DrawSettingsPanel() draws, declared instead.
+	// They live here rather than in the area file for the reason stated in
+	// Notifications.h: everything they bind to is file-static in this
+	// translation unit, and a second writer of notification_placement is
+	// exactly the bug this arrangement prevents.
+	namespace
+	{
+		// The nine anchors, flattened. Index is v * 3 + h, which is the same
+		// ordering kPlacements is declared in, so the option value IS the
+		// grid cell -- no lookup table to keep in sync.
+		const ui::Option kPlacementOptions[ 9 ] = {
+			{ 0, "top left"    }, { 1, "top centre"    }, { 2, "top right"    },
+			{ 3, "centre left" }, { 4, "centre"        }, { 5, "centre right" },
+			{ 6, "bottom left" }, { 7, "bottom centre" }, { 8, "bottom right" },
+		};
+	}
+
+	void RegisterRows( ui::Area &area )
+	{
+		area.Group( "Notifications" );
+
+		area.Choice( "overlay.notification_placement", "Toast placement",
+			ui::AnyBind::Of<int>(
+				[]() -> int
+				{
+					EnsureConfigLoaded();
+					int nVert = 0, nHoriz = 2;
+					ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
+					return nVert * 3 + nHoriz;
+				},
+				[]( int nCell )
+				{
+					nCell = std::clamp( nCell, 0, 8 );
+					s_GlobalOverlay.notification_placement = ComposePlacement( nCell / 3, nCell % 3 );
+					PersistPlacement();
+				} ),
+			kPlacementOptions, 9 )
+			.Help( "Which corner or edge toast notifications appear at. Always global -- shared by "
+			       "every game, even one with its own config override, because a toast's position "
+			       "is a property of the screen rather than of the game." )
+			.Default( 2 )                                  // "top-right", the schema default
+			.Keywords( "notification toast placement position corner anchor" );
+
+		area.Switch( "notifications.muted", "Mute notifications",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.notifications.muted; },
+				[]( bool bMuted )
+				{
+					s_Settings.notifications.muted = bMuted;
+					PersistMuted();
+				} ) )
+			.Help( "Silences every toast. Unlike placement above, this follows the usual per-game "
+			       "routing: with Override Global Config on it is saved for this game only." )
+			.Default( false )
+			.Keywords( "notification toast mute silence quiet" );
+
+		area.Action( "notifications.test", "Test notification", "send",
+			[]{ Show( "This is a test notification.", Kind::Info ); } )
+			.Help( "Shows one toast right now, so placement can be judged where it actually "
+			       "appears rather than from a diagram." )
+			.DisabledUnless( []{ EnsureConfigLoaded(); return !s_Settings.notifications.muted; },
+			                 "notifications are muted" )
+			.Keywords( "notification toast test preview try" );
 	}
 }

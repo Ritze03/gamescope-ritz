@@ -268,6 +268,11 @@ namespace gamescope::ui
 		// real bug in the first version.
 		std::string DisabledReason() const;
 
+		// ---- reset (P3b) -------------------------------------------------
+		bool HasDefault() const;
+		bool IsAtDefault() const;
+		void ResetToDefault() const;
+
 	private:
 		friend class Entry;
 
@@ -302,6 +307,27 @@ namespace gamescope::ui
 		Entry &DisabledUnless( std::function<bool()> pred, const char *pszReason );
 
 		Entry &Validate( std::function<std::string( const std::string & )> fn );
+
+		// ---- destructive actions (P3b) -----------------------------------
+		// Arms an Action so that ONE press cannot perform it: the first press
+		// swaps the verb for `pszPrompt` and reddens the chip, and only a
+		// second, deliberate press invokes. Disarms on a timeout, on
+		// selecting something else, or on the Inspector closing.
+		//
+		// WHY THIS IS A REGISTRY FEATURE RATHER THAN A MODAL THE CALLER
+		// OPENS. This user has been explicit, after an agent wiped a config:
+		// "There can be a button for it, but never delete configs
+		// automatically." A confirmation that a call site has to remember to
+		// build is a confirmation the next call site forgets -- and the
+		// registry has no way to host a modal anyway, because a category
+		// file cannot place a pixel (SPEC §5.2 clause 0). Declaring the
+		// prompt makes the two-press flow a property of the DECLARATION, so
+		// an action that destroys something is armed by construction.
+		//
+		// Only meaningful on Kind::Action; it is the verb chip that arms.
+		Entry &Confirm( const char *pszPrompt );
+		const std::string &ConfirmPrompt() const { return m_sConfirm; }
+		bool  NeedsConfirm() const { return !m_sConfirm.empty(); }
 
 		// ---- generator 3: Configure rows ---------------------------------
 		// Takes a LEAF, never an id. The full id is synthesised from the
@@ -352,6 +378,27 @@ namespace gamescope::ui
 		// The disabled predicate's reason, or "" when enabled.
 		std::string DisabledReason() const;
 
+		// ---- reset (P3b) -------------------------------------------------
+		// D6 decided that "differs from default" is shown by the accent left
+		// edge and that the RESET ACTION moves into the Inspector -- but no
+		// phase had implemented either half, so until now the E2 shell had
+		// no way to reset anything at all. The legacy Config panel's four
+		// per-group reset links (issue #43) would have been silently lost by
+		// migrating that panel, which is exactly the kind of quiet feature
+		// loss this project has suffered before.
+		//
+		// Reset is per-ROW and includes the row's PARAMETERS, because that
+		// is what makes it the successor to a group link rather than a
+		// weaker thing: the legacy "UI Scale" group is, in E2, the `UI scale`
+		// row with dock and notification scale as its parameters, so one
+		// reset there restores exactly what the old link did.
+		//
+		// A row that never declared a Default has nothing to reset TO, and
+		// says so by having no affordance rather than by resetting to zero.
+		bool HasDefault() const;
+		bool IsAtDefault() const;
+		void ResetToDefault() const;
+
 	private:
 		friend class Area;
 		friend class Registry;
@@ -361,6 +408,7 @@ namespace gamescope::ui
 		                     const Option *pOptions, size_t nOptions );
 
 		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason;
+		std::string m_sConfirm;   // Confirm() -- a destructive Action's second-press prompt
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;
@@ -394,6 +442,21 @@ namespace gamescope::ui
 		Area &Keywords( const char *pszKeywords );
 		Area &Summary( std::function<std::string()> fn );
 		Area &AvailableWhen( std::function<bool()> fn );
+
+		// ---- the layer badge (P3b) ---------------------------------------
+		// A short tag drawn right-aligned in the sheet header. It exists for
+		// issue #43's question, which a settings UI must never leave
+		// ambiguous: WHERE DOES WHAT I CHANGE HERE GET WRITTEN? For the
+		// config areas that is "global", "app <id>" or "global only", and
+		// the answer differs per area -- Appearance always writes
+		// global.json even when a per-game override is active, which is a
+		// routing rule the session state alone cannot express.
+		//
+		// It is an AREA property, not a row one, because it describes the
+		// file a whole sheet routes to. A row-level badge would repeat the
+		// same word down the sheet and still not be visible from Overview.
+		Area &Badge( std::function<std::string()> fn );
+		std::string BadgeText() const { return m_Badge ? m_Badge() : std::string(); }
 
 		void Group( const char *pszName );
 		void GroupCount( const char *pszName );
@@ -542,6 +605,7 @@ namespace gamescope::ui
 		std::string m_sId, m_sTitle, m_sKeywords;
 		Section     m_eSection = Section::Display;
 		std::function<std::string()> m_Summary;
+		std::function<std::string()> m_Badge;
 		std::function<bool()>        m_Available;
 		std::function<void()>        m_Escape;   // migration seam -- see Escape()
 		std::function<uint64_t()>    m_Generation;  // dynamic areas -- see Rebuilds()

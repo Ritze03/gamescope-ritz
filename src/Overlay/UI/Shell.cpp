@@ -116,6 +116,18 @@ namespace gamescope::ui::shell
 		// issues #25 and #68 were.
 		std::string   s_sOpenDropdown;
 
+		// P3b: the id of the destructive Action currently ARMED -- one press
+		// in, one press from happening (Entry::Confirm). One string for the
+		// same reason as the dropdown above: exactly one can be armed, and
+		// per-row state is the category this shell exists to not have.
+		//
+		// It DISARMS on a timeout, which is the property that matters: an
+		// action left armed by someone who walked away must not be one click
+		// from destroying a file when they come back.
+		std::string   s_sArmedAction;
+		float         s_flArmedAt = 0.0f;
+		constexpr float kArmTimeout = 6.0f;   // seconds
+
 		// The one animated quantity: SPEC §8.4's 160 ms region duration,
 		// used for the rail's collapse so the icon rail does not snap.
 		float s_flRailAnim = shelltok::kRailFull;
@@ -268,8 +280,11 @@ namespace gamescope::ui::shell
 				.Escape( []{ PanelLog_DrawBody(); } );
 
 			// ---- SETUP ---------------------------------------------------
-			reg.Add( "setup.config", "Config", Section::Setup )
-				.Escape( []{ PanelConfig_DrawBody(); } );
+			// P3 part B. The Config panel's three tabs became three areas,
+			// on D13.1's reasoning -- setup.profiles, setup.pergame,
+			// setup.appearance. The rail is now the eleven items SPEC §8.1
+			// names.
+			PanelConfig_RegisterAreas( reg );
 
 			Area &shell = reg.Add( "setup.shell", "Shell", Section::Setup );
 			shell.Summary( []{ return std::string( "How the settings surface itself is laid out." ); } );
@@ -693,6 +708,16 @@ namespace gamescope::ui::shell
 				Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 				       TypeRole::Meta, Col( Role::WarnText ), "legacy body", TextAlign::Right );
 			}
+			else if ( pArea )
+			{
+				// The layer badge (Area::Badge) -- issue #43's "where does
+				// this get written?", answered in the one place that is on
+				// screen no matter which row is selected.
+				const std::string sBadge = pArea->BadgeText();
+				if ( !sBadge.empty() )
+					Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
+					       TypeRole::Meta, Col( Role::TextMeta ), sBadge.c_str(), TextAlign::Right );
+			}
 		}
 
 		void DrawSheetFoot( const Rect &rc )
@@ -947,9 +972,33 @@ namespace gamescope::ui::shell
 					DrawSharedControl( entry, row, "ctl", entry.Id() );
 					break;
 				case Kind::Action:
-					if ( controls::Verb( row, "verb", entry.Verb().c_str() ) )
-						entry.Invoke();
+				{
+					// A destructive action is ARMED by its first press and
+					// performed only by its second (Entry::Confirm). The
+					// armed row is remembered by id, so exactly one action
+					// can be armed at a time and walking away disarms it.
+					const bool bArmed = entry.NeedsConfirm() && s_sArmedAction == entry.Id();
+					if ( controls::Verb( row, "verb",
+						bArmed ? entry.ConfirmPrompt().c_str() : entry.Verb().c_str(),
+						entry.NeedsConfirm() ? controls::Intent::Danger : controls::Intent::Accent ) )
+					{
+						if ( !entry.NeedsConfirm() )
+						{
+							entry.Invoke();
+						}
+						else if ( bArmed )
+						{
+							entry.Invoke();
+							s_sArmedAction.clear();
+						}
+						else
+						{
+							s_sArmedAction = entry.Id();
+							s_flArmedAt = (float)ImGui::GetTime();
+						}
+					}
 					break;
+				}
 				case Kind::Meter:
 					controls::Meter( row, (float)entry.Scalar(), entry.Lo(), entry.Hi() );
 					break;
@@ -1239,6 +1288,34 @@ namespace gamescope::ui::shell
 			y += Px( tok::kS );
 			Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 			       Col( Role::TextMeta ), "VALUES" );
+
+			// The reset link, right-aligned on the VALUES header -- D6's
+			// "reset moves into the Inspector", and the successor to the
+			// legacy Config panel's per-group links (issue #43). It resets
+			// the row AND its parameters together, which is what makes it a
+			// GROUP reset and not merely a row one: the old "UI Scale" group
+			// is exactly the `UI scale` row plus its two params.
+			//
+			// It appears only when there is something to undo, so the
+			// Inspector does not carry a permanently-dead affordance.
+			if ( entry.HasDefault() && !entry.IsAtDefault() )
+			{
+				const char *pszReset = "reset";
+				const float flResetW = MeasureText( TypeRole::Meta, pszReset ).x + Px( tok::kS ) * 2.0f;
+				const Rect rcReset { rcIn.x1 - flResetW, y - Px( tok::kXS ),
+				                     rcIn.x1, y + Px( 18.0f ) };
+				ImGui::SetCursorScreenPos( ImVec2( rcReset.x0, rcReset.y0 ) );
+				ImGui::PushID( "##resetrow" );
+				const bool bReset = ImGui::InvisibleButton( "r",
+					ImVec2( rcReset.Width(), rcReset.Height() ) );
+				const bool bHover = ImGui::IsItemHovered();
+				ImGui::PopID();
+				Label( rcReset, TypeRole::Meta,
+				       bHover ? Col( Role::AccentBase ) : Col( Role::TextMeta ),
+				       pszReset, TextAlign::Center );
+				if ( bReset )
+					entry.ResetToDefault();
+			}
 			y += Px( shelltok::kSectionLine );
 
 			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
@@ -1696,6 +1773,15 @@ namespace gamescope::ui::shell
 		// once, first, is what guarantees nothing does. Selection is by id
 		// string and survives (Registry.h's Rebuilds()).
 		Reg().SyncDynamicAreas();
+
+		// An armed destructive action disarms itself. Left armed, it would
+		// be one press from deleting a file for as long as the overlay
+		// stayed open -- which is exactly the "never delete a config
+		// automatically" rule, one step removed.
+		if ( !s_sArmedAction.empty() &&
+		     ( (float)ImGui::GetTime() - s_flArmedAt > kArmTimeout ||
+		       !Reg().FindEntry( s_sArmedAction ) ) )
+			s_sArmedAction.clear();
 
 		const Area *pArea = SelectedArea();
 		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );

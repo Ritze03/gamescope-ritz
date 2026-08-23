@@ -1,6 +1,7 @@
 #include "Registry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -219,6 +220,80 @@ namespace gamescope::ui
 	Entry &Entry::Keywords( const char *psz )        { m_sKeywords = psz ? psz : ""; return *this; }
 	Entry &Entry::Validate( std::function<std::string( const std::string & )> fn ) { m_Validate = std::move( fn ); return *this; }
 
+	// ---- reset (P3b) ----------------------------------------------------
+	namespace
+	{
+		// Two Values are "the same setting value" if they agree. Floats get a
+		// tolerance because a default declared as 0.9f and a value that has
+		// been through a JSON round-trip are the same setting to a user, and
+		// a reset chip that never switches off would be worse than none.
+		bool ValueEquals( const Value &a, const Value &b )
+		{
+			if ( const float *pA = std::get_if<float>( &a ) )
+			{
+				if ( const float *pB = std::get_if<float>( &b ) )
+					return std::fabs( *pA - *pB ) < 1e-4f;
+			}
+			return a == b;
+		}
+	}
+
+	bool Parameter::HasDefault() const
+	{
+		return !std::holds_alternative<std::monostate>( m_Default );
+	}
+
+	bool Parameter::IsAtDefault() const
+	{
+		if ( !HasDefault() || !m_Bind.IsBound() )
+			return true;
+		return ValueEquals( m_Bind.Get(), m_Default );
+	}
+
+	void Parameter::ResetToDefault() const
+	{
+		if ( HasDefault() && m_Bind.IsBound() )
+			m_Bind.Set( m_Default );
+	}
+
+	bool Entry::HasDefault() const
+	{
+		if ( !std::holds_alternative<std::monostate>( m_Default ) )
+			return true;
+		for ( const auto &pParam : m_Params )
+			if ( pParam->HasDefault() )
+				return true;
+		return false;
+	}
+
+	bool Entry::IsAtDefault() const
+	{
+		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
+			if ( !ValueEquals( m_Bind.Get(), m_Default ) )
+				return false;
+
+		// The row's parameters count as part of the row -- that is what
+		// makes one reset the successor to a whole group link.
+		for ( const auto &pParam : m_Params )
+			if ( !pParam->IsAtDefault() )
+				return false;
+		return true;
+	}
+
+	void Entry::ResetToDefault() const
+	{
+		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
+			m_Bind.Set( m_Default );
+		for ( const auto &pParam : m_Params )
+			pParam->ResetToDefault();
+	}
+
+	Entry &Entry::Confirm( const char *pszPrompt )
+	{
+		m_sConfirm = pszPrompt ? pszPrompt : "";
+		return *this;
+	}
+
 	Entry &Entry::Help( const char *pszHelp )
 	{
 		if ( !pszHelp || !*pszHelp )
@@ -347,6 +422,7 @@ namespace gamescope::ui
 	Area &Area::Keywords( const char *psz )                 { m_sKeywords = psz ? psz : ""; return *this; }
 	Area &Area::Summary( std::function<std::string()> fn )  { m_Summary = std::move( fn ); return *this; }
 	Area &Area::AvailableWhen( std::function<bool()> fn )    { m_Available = std::move( fn ); return *this; }
+	Area &Area::Badge( std::function<std::string()> fn )     { m_Badge = std::move( fn ); return *this; }
 
 	// MIGRATION SEAM -- see Registry.h's Escape() comment. P3 deletes this.
 	//
