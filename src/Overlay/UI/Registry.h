@@ -798,6 +798,12 @@ namespace gamescope::ui
 		float                       flLo = 0.0f, flHi = 0.0f, flStep = 0.0f;
 		const std::vector<Option>  *pOptions = nullptr;
 
+		// Which composite, when eKind is Composite. Carried because not
+		// every composite has an ordering an arrow key can follow: an
+		// Anchor's axes and a Hue's degrees do, a packed 0xRRGGBB colour
+		// does not. Anchor for a Parameter, which is never a composite.
+		CompositeKind               eComposite = CompositeKind::Anchor;
+
 		static Adjustable Of( const Entry &e );
 		static Adjustable Of( const Parameter &p );
 	};

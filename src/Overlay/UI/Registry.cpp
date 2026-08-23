@@ -797,7 +797,8 @@ namespace gamescope::ui
 	Adjustable Adjustable::Of( const Entry &e )
 	{
 		return Adjustable{ e.GetKind(), &e.Binding(), e.HasRange(),
-		                   e.Lo(), e.Hi(), e.StepSize(), &e.Options() };
+		                   e.Lo(), e.Hi(), e.StepSize(), &e.Options(),
+		                   e.GetCompositeKind() };
 	}
 
 	Adjustable Adjustable::Of( const Parameter &p )
@@ -869,9 +870,24 @@ namespace gamescope::ui
 				return true;
 			}
 
+			// A Color composite's value is a PACKED 0xRRGGBB int, so the
+			// generic int step below moved it by one -- i.e. it nudged the
+			// blue channel's least significant bit. Harmless, imperceptible
+			// and meaningless: a colour is not an ordered scalar, and there
+			// is no direction "right" could sensibly mean. Refused here for
+			// the same reason a Bank is (SPEC 3.12), and like the Bank it
+			// keeps its own route -- the Inspector's OKLCH body, which is
+			// the control the row actually offers.
+			//
+			// Anchor and Hue are NOT refused: an anchor's axes and a hue's
+			// degrees are both genuinely ordered.
+			case Kind::Composite:
+				if ( adj.eComposite == CompositeKind::Color )
+					return false;
+				[[fallthrough]];
+
 			case Kind::Slider:
 			case Kind::Stepper:
-			case Kind::Composite:
 			{
 				if ( const int *p = std::get_if<int>( &vNow ) )
 				{

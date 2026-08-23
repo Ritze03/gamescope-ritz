@@ -291,6 +291,51 @@ TEST_CASE( "palette: a choice steps its options and stops at both ends", "[overl
 	REQUIRE( f.nScaler == 3 );
 }
 
+TEST_CASE( "palette: an arrow refuses a Color composite but still steps a Hue", "[overlay_palette]" )
+{
+	// A Color composite's value is a PACKED 0xRRGGBB int, so the generic
+	// integer step moved it by one -- nudging the blue channel's least
+	// significant bit. It "worked" in the sense that the binding changed,
+	// which is why the sweep that wrote two values and read them back
+	// scored it as adjustable; it is nonetheless meaningless, because a
+	// colour has no direction "right" could mean.
+	//
+	// The row keeps its real route: the Inspector's OKLCH body.
+	int nPacked = 0x7BD3F0;
+	int nHue    = 200;
+
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+
+	a.Composite( "overlay.accent_color", "Accent colour", ui::CompositeKind::Color,
+	             ui::Bind( &nPacked ) )
+		.Help( "The accent colour, edited as OKLCH." );
+
+	a.Composite( "overlay.accent_hue", "Accent hue", ui::CompositeKind::Hue,
+	             ui::Bind( &nHue ) )
+		.Range( 0.0f, 360.0f ).Step( 1.0f )
+		.Help( "The accent hue in degrees." );
+
+	const ui::Entry *pColor = reg.FindEntry( "overlay.accent_color" );
+	const ui::Entry *pHue   = reg.FindEntry( "overlay.accent_hue" );
+	REQUIRE( pColor != nullptr );
+	REQUIRE( pHue != nullptr );
+
+	// Refused, and -- the half that actually matters -- the binding is not
+	// written. A refusal that still moved the value would be worse than the
+	// bug it replaces.
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pColor ), +1, false ) );
+	REQUIRE( nPacked == 0x7BD3F0 );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pColor ), -1, false ) );
+	REQUIRE( nPacked == 0x7BD3F0 );
+
+	// The refusal is specific to Color. An Anchor's axes and a Hue's degrees
+	// are genuinely ordered, so blanket-refusing every composite would break
+	// two working controls to fix one broken one.
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pHue ), +1, false ) );
+	REQUIRE( nHue == 201 );
+}
+
 TEST_CASE( "palette: a stepper honours an integer step", "[overlay_palette]" )
 {
 	Fixture f;
