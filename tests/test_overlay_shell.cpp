@@ -23,9 +23,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "Overlay/UI/Lane.h"
 #include "Overlay/UI/Layout.h"
 #include "Overlay/UI/Registry.h"
 #include "Overlay/UI/Tokens.h"
+
+#include <algorithm>
 
 using namespace gamescope;
 using Catch::Matchers::WithinAbs;
@@ -502,4 +505,88 @@ TEST_CASE( "a parameterless entry still fits its body at every scale", "[overlay
 		INFO( "scale " << flScale );
 		REQUIRE( ui::ConfigureRowsHeight( 0, flScale ) < regions.rcInspectorBody.Height() );
 	}
+}
+
+// =========================================================================
+//  The drawer over the sheet's controls (D17)
+// =========================================================================
+// The companion to the lane tests in test_overlay_ui.cpp. Those pin the
+// arithmetic against numbers typed into the test; this one DERIVES the
+// occlusion from the same Slab/Solve/Regions the shell uses, so it fails if
+// the ladder's numbers move underneath the fix, not only if the lane's own
+// formula changes. That is the shape the original defect had: the lane was
+// right about the width it was given, and the width was wrong.
+TEST_CASE( "at 2.0x the drawer no longer covers the sheet's control column", "[overlay_shell]" )
+{
+	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 2.0f );
+	const ui::LadderResult ladder = ui::Solve( slab, ui::InspectorHost::Column, 9 );
+	const ui::Regions regions = ui::Regions::For( slab, ladder );
+
+	// Precondition: 2.0x is the step that produces a drawer at all. If the
+	// ladder ever stops demoting here this test measures nothing, and it
+	// should say so loudly rather than pass vacuously.
+	REQUIRE( ladder.eHost == ui::InspectorHost::Drawer );
+	REQUIRE( ladder.nStep == 2 );
+	REQUIRE_THAT( ladder.flSheetBase, WithinAbs( 804.0f, 1e-4f ) );
+
+	// What Shell.cpp's DrawSheetBody computes, in the same order.
+	const float flScale = 2.0f;
+	const float flPad   = ui::tok::kSheetPad * flScale;
+	const float flColW  = regions.rcSheetBody.Width() - 2.0f * flPad;
+	const float flOccPx = regions.rcSheetBody.x1 - regions.rcInspector.x0;
+
+	REQUIRE( flOccPx > 0.0f );   // the drawer really does overlap the sheet
+
+	const ui::Lane lane = ui::Lane::ForColumn(
+		flColW / flScale, std::max( 0.0f, flOccPx - flPad ) / flScale );
+
+	const float flColX0    = regions.rcSheetBody.x0 + flPad;
+	const float flDrawerX0 = regions.rcInspector.x0;
+
+	// THE ASSERTION THE SCREENSHOT WAS MAKING BY EYE: the right edge of every
+	// rect the lane can hand out sits left of the drawer. Before D17 the
+	// control zone ended some 700 px INSIDE it.
+	const float flCtlMaxPx = flColX0 + lane.flCtlMax * flScale;
+	const float flAffMaxPx = flColX0 + lane.flWidth  * flScale;
+	INFO( "control right " << flCtlMaxPx << " vs drawer left " << flDrawerX0 );
+
+	REQUIRE( flCtlMaxPx <= flDrawerX0 );
+	REQUIRE( flAffMaxPx <= flDrawerX0 );
+
+	// And there is still a control zone to reach: a fix that satisfied the
+	// assertion above by collapsing the column would be worse than the defect.
+	REQUIRE( lane.CtlWidth() > ui::tok::kSwitchW );
+}
+
+TEST_CASE( "closing the drawer gives the sheet's lane its full column back", "[overlay_shell]" )
+{
+	// D17's other half: opening and closing the drawer costs no relayout
+	// ELSEWHERE. The regions are computed without reference to the lane, so
+	// they are untouched, and the lane returns to exactly the column when the
+	// occlusion goes away.
+	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 2.0f );
+	const ui::LadderResult drawer = ui::Solve( slab, ui::InspectorHost::Column, 9 );
+	const ui::Regions rDrawer = ui::Regions::For( slab, drawer );
+
+	const ui::LadderResult hidden = ui::Solve( slab, ui::InspectorHost::Hidden, 9 );
+	const ui::Regions rHidden = ui::Regions::For( slab, hidden );
+
+	const float flScale = 2.0f;
+	const float flPad   = ui::tok::kSheetPad * flScale;
+
+	// With the drawer up the sheet REGION is untouched by the fix: still
+	// wider than the hidden case, which pays the spine. That is what "the
+	// drawer still overlays the sheet's background" means concretely.
+	REQUIRE( rDrawer.rcSheet.Width() > rHidden.rcSheet.Width() );
+
+	// Same region, no occlusion -> the lane is the whole column again.
+	const float flColW = rDrawer.rcSheetBody.Width() - 2.0f * flPad;
+	REQUIRE_THAT( ui::Lane::ForColumn( flColW / flScale, 0.0f ).flWidth,
+	              WithinAbs( flColW / flScale, 1e-4f ) );
+
+	// The occluded lane is strictly narrower, and that is the only difference.
+	const float flOccPx = rDrawer.rcSheetBody.x1 - rDrawer.rcInspector.x0;
+	const ui::Lane open = ui::Lane::ForColumn(
+		flColW / flScale, std::max( 0.0f, flOccPx - flPad ) / flScale );
+	REQUIRE( open.flWidth < flColW / flScale );
 }

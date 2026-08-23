@@ -56,7 +56,37 @@ namespace gamescope::ui
 		// "470-wide" control zone at the 1.0x sheet width of 928 base
 		// (928 - 40 - clamp(427,200,420) = 468). The `W -` prefix is a
 		// transcription slip in both documents; the bounds are the label zone's.
-		static Lane ForColumn( float flWidthBase );
+		//
+		// ---- flOccludedRightBase (D17) --------------------------------------
+		// How much of this column's RIGHT side is covered by a surface that
+		// floats over it -- in practice the Inspector when the ladder has
+		// demoted it to a drawer (SPEC §8.3 step 2). Pass 0 -- the default --
+		// when nothing overlays the column, which is every case but that one.
+		//
+		// WHY THE LANE AND NOT THE REGION. At 2.0x the slab is 1728 px, the
+		// sheet 804 base and the drawer 400, so the drawer's left edge falls
+		// at base 380 of a 756-wide sheet column while the control zone runs
+		// [360, 728]: every switch, segmented control and slider on the sheet
+		// is painted underneath it. Making the sheet REGION narrower would fix
+		// it by turning the drawer into a column, which is what ladder step 1
+		// already is (D17 rejects that). So the region is left alone -- the
+		// drawer still overlays the sheet's background, and opening or closing
+		// it still relayouts nothing -- and the one thing that moves is the
+		// lane's right edge, which is the single place control geometry is
+		// decided and the only thing that has to move for a control to be
+		// reachable.
+		//
+		// Every derived quantity follows from the reduced width, Lw included.
+		// Holding Lw at its full-width value and pulling in only the control
+		// zone was tried and does not work: at 2.0x Lw is 348 and the visible
+		// width 368, which leaves the control zone 20 units -- i.e. zero after
+		// the affordance. The label column has to give way too.
+		//
+		// COST, per D17: the control zone at 2.0x with the drawer open is 128
+		// base rather than 368, so a segmented control with long labels
+		// downgrades to a dropdown sooner. That is SPEC §3.3's existing,
+		// specified downgrade, not a new failure mode.
+		static Lane ForColumn( float flWidthBase, float flOccludedRightBase = 0.0f );
 
 		// The lane in physical pixels, for a column whose left edge sits at
 		// flOriginPx. Derived from *this* by one multiplication by Scale() --

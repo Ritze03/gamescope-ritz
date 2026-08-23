@@ -1616,7 +1616,10 @@ namespace gamescope::ui::shell
 			ImGui::EndChild();
 		}
 
-		void DrawSheetBody( const Rect &rc, const Area *pArea )
+		// flOccludedPx: how much of `rc`'s right side the Inspector drawer
+		// floats over, 0 when it does not (D17). The sheet's REGION is
+		// deliberately unchanged -- only the lane inside it gives way.
+		void DrawSheetBody( const Rect &rc, const Area *pArea, float flOccludedPx = 0.0f )
 		{
 			if ( !pArea )
 				return;
@@ -1664,8 +1667,19 @@ namespace gamescope::ui::shell
 			{
 				const float flPad   = Px( tok::kSheetPad );
 				const float flColW  = rc.Width() - 2.0f * flPad;
-				const Lane  lane    = Lane::ForColumn( flColW / Scale() );
-				const Rect  rcCol   { rc.x0 + flPad, rc.y0, rc.x0 + flPad + flColW, rc.y1 };
+
+				// The drawer's overlap is measured against the region; the
+				// COLUMN already stops one pad short of it, and that pad is the
+				// first thing the drawer eats.
+				const float flOccludedCol = std::max( 0.0f, flOccludedPx - flPad );
+				const Lane  lane    = Lane::ForColumn( flColW / Scale(), flOccludedCol / Scale() );
+
+				// Everything in the column shares the lane's right edge, so the
+				// group bands and a content body retreat from the drawer with
+				// the rows rather than sliding underneath it. With no drawer
+				// lane.flWidth is flColW exactly, so this is a no-op.
+				const Rect  rcCol   { rc.x0 + flPad, rc.y0,
+				                      rc.x0 + flPad + Px( lane.flWidth ), rc.y1 };
 				float       y       = rc.y0 + Px( tok::kM );
 
 				// A band is emitted when the group index CHANGES, so a group
@@ -2993,7 +3007,18 @@ namespace gamescope::ui::shell
 			DrawRail( Off( regions.rcRail ), ladder.RailIsIcons() );
 
 			DrawSheetHead( Off( regions.rcSheetHead ), pArea );
-			DrawSheetBody( Off( regions.rcSheetBody ), pArea );
+
+			// D17. A drawer overlays the sheet instead of taking width from
+			// it, so at 2.0x it covered the sheet's entire control column. The
+			// regions stay exactly as the ladder computed them -- the drawer
+			// still floats, still costs no relayout -- and the sheet's LANE is
+			// what gives way. Both rects are slab-space here, so the
+			// difference needs no Off().
+			const float flDrawerOverlapPx =
+				ladderDrawn.eHost == InspectorHost::Drawer
+					? std::max( 0.0f, regions.rcSheetBody.x1 - regions.rcInspector.x0 )
+					: 0.0f;
+			DrawSheetBody( Off( regions.rcSheetBody ), pArea, flDrawerOverlapPx );
 			DrawSheetFoot( Off( regions.rcSheetFoot ) );
 
 			// The rail/sheet boundary. Drawn from the sheet's own left

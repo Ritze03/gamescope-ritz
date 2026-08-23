@@ -259,6 +259,107 @@ TEST_CASE( "lane: a degenerate column produces no inverted rect", "[overlay_ui]"
 	}
 }
 
+// =========================================================================
+//  The lane under an open drawer (D17)
+// =========================================================================
+// At 2.0x the ladder demotes the Inspector to a drawer, which OVERLAYS the
+// sheet rather than taking width from it -- so the sheet stayed 804 base and
+// the drawer painted over its entire control column. Every switch, segmented
+// control and slider was behind it.
+//
+// The repair is one clamp at the top of ForColumn(), which is exactly the kind
+// of arithmetic that rots silently: it is invisible at 1.0x, where no drawer
+// exists, so nothing else in the suite would ever exercise it.
+TEST_CASE( "lane: an open drawer pulls the lane's right edge in", "[overlay_ui]" )
+{
+	// The real 2.0x numbers. Slab 1728 px wide, rail 60 base, sheet 804 base;
+	// the sheet's COLUMN is the sheet less two 24-base pads = 756. The drawer
+	// is 400 base wide against the slab's right edge, so it covers the column
+	// from base 380 onward -- 376 of the column's 756, once the column's own
+	// right pad (which the drawer eats first) is taken off.
+	constexpr float kCol      = 756.0f;
+	constexpr float kOccluded = 376.0f;
+
+	const ui::Lane open   = ui::Lane::ForColumn( kCol, kOccluded );
+	const ui::Lane closed = ui::Lane::ForColumn( kCol );
+
+	// Closed: the lane is the column, untouched. Passing no occlusion must be
+	// bit-identical to the pre-D17 behaviour or every other test here is
+	// asserting a different function than the shell calls.
+	REQUIRE_THAT( closed.flWidth, WithinAbs( kCol, 1e-4f ) );
+
+	// Open: the right edge is the drawer's left edge less one gutter.
+	REQUIRE_THAT( open.flWidth, WithinAbs( kCol - kOccluded - ui::tok::kM, 1e-4f ) );
+	REQUIRE_THAT( open.flWidth, WithinAbs( 368.0f, 1e-4f ) );
+
+	// ...and THIS is the defect, stated as arithmetic: every rect the lane
+	// hands out now ends left of where the drawer begins. Before D17 the
+	// control zone ran to 728 with the drawer starting at 380.
+	REQUIRE( open.flCtlMax <= kCol - kOccluded );
+	REQUIRE( open.flAffMin <= kCol - kOccluded );
+	REQUIRE( closed.flCtlMax > kCol - kOccluded );   // the bug, pinned as the old behaviour
+
+	// The control zone survives at a usable width rather than collapsing.
+	// 128 base still seats a switch (40), a stepper (44) and a slider.
+	REQUIRE_THAT( open.CtlWidth(), WithinAbs( 128.0f, 1e-4f ) );
+	REQUIRE( open.CtlWidth() > ui::tok::kSwitchW );
+	REQUIRE( open.CtlWidth() > ui::tok::kStepperW );
+
+	// The label column gives way too, and it has to: Lw at the full 756 is
+	// 348, which alone exceeds the 368 the drawer leaves. Holding Lw and
+	// pulling in only the control zone yields a control zone of zero.
+	REQUIRE( open.flLw < closed.flLw );
+	REQUIRE( open.LabelWidth() > 0.0f );
+
+	// The columns still close on the REDUCED width -- the lane is internally
+	// consistent under occlusion, not merely smaller.
+	const float flSum = ui::tok::kRowPadLeft + open.LabelWidth() + ui::tok::kM
+	                  + open.CtlWidth() + ui::tok::kAffordanceW;
+	REQUIRE_THAT( flSum, WithinAbs( open.flWidth, 1e-4f ) );
+}
+
+TEST_CASE( "lane: occlusion is one code path, not a special case", "[overlay_ui]" )
+{
+	// An occluded lane must be *the same function* of its reduced width as an
+	// ordinary lane is of its full one. If these ever diverge, the drawer case
+	// has grown a second set of rules that the 1.0x path cannot catch.
+	for ( float flOcc : { 40.0f, 200.0f, 376.0f, 500.0f } )
+	{
+		const ui::Lane occluded = ui::Lane::ForColumn( 756.0f, flOcc );
+		const ui::Lane plain    = ui::Lane::ForColumn( 756.0f - flOcc - ui::tok::kM );
+		INFO( "occlusion " << flOcc );
+
+		REQUIRE_THAT( occluded.flWidth,    WithinAbs( plain.flWidth,    1e-4f ) );
+		REQUIRE_THAT( occluded.flLw,       WithinAbs( plain.flLw,       1e-4f ) );
+		REQUIRE_THAT( occluded.flCtlMin,   WithinAbs( plain.flCtlMin,   1e-4f ) );
+		REQUIRE_THAT( occluded.flCtlMax,   WithinAbs( plain.flCtlMax,   1e-4f ) );
+		REQUIRE_THAT( occluded.flAffMin,   WithinAbs( plain.flAffMin,   1e-4f ) );
+	}
+
+	// Zero and negative occlusion are the untouched column, not a 12-unit
+	// shave -- the gutter belongs to the drawer, so with no drawer there is
+	// no gutter.
+	REQUIRE_THAT( ui::Lane::ForColumn( 756.0f,  0.0f ).flWidth, WithinAbs( 756.0f, 1e-4f ) );
+	REQUIRE_THAT( ui::Lane::ForColumn( 756.0f, -9.0f ).flWidth, WithinAbs( 756.0f, 1e-4f ) );
+}
+
+TEST_CASE( "lane: an absurd occlusion degrades like an absurd width", "[overlay_ui]" )
+{
+	// The degenerate guard already in ForColumn() must cover the occluded
+	// path too: a drawer wider than the column it floats over is a shell bug,
+	// and it must produce a zero-width control zone rather than an inverted
+	// rect that makes every Place() below it garbage.
+	for ( float flOcc : { 700.0f, 756.0f, 2000.0f } )
+	{
+		const ui::Lane lane = ui::Lane::ForColumn( 756.0f, flOcc );
+		INFO( "occlusion " << flOcc );
+		REQUIRE( lane.flWidth >= 0.0f );
+		REQUIRE( lane.CtlWidth() >= 0.0f );
+		REQUIRE( lane.LabelWidth() >= 0.0f );
+		REQUIRE( lane.flCtlMin <= lane.flCtlMax );
+	}
+}
+
 TEST_CASE( "lane: the pixel lane is the base lane, scaled once", "[overlay_ui]" )
 {
 	// The kit does its arithmetic in base units and converts at the edge. The
