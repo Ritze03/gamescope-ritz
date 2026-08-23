@@ -19,6 +19,8 @@ struct FrameInfo_t;
 
 namespace gamescope
 {
+	namespace ui { class Registry; }
+
 	// Called once per paint_all(), on the steamcompmgr thread. Reads
 	// gamescope-ritz's fps_display config (loaded lazily on first call) and,
 	// when enabled, draws the readout (game frame rate, short rolling
@@ -39,13 +41,24 @@ namespace gamescope
 	// the compute submission is on the queue. No-op when nothing is pending.
 	void FpsDisplay_CommitReads();
 
-	// Draws this feature's own settings controls (enabled toggle, row
-	// toggles for the frametime graph and percentile row, font size,
-	// backdrop group, blend mode, text opacity) using whichever ImGui
-	// context is *currently active* at the call site -- meant to be invoked
-	// from inside the settings overlay's own panel draw, so its widgets
-	// render as part of that panel. Edits are persisted to gamescope-ritz's
-	// config (debounced onto the background write thread ConfigManager
-	// already provides).
+	// LEGACY (`overlay_e2 0`) -- the six-tab settings panel, hosted by
+	// SettingsOverlay.cpp's own dock window. Draws with whichever ImGui
+	// context is current at the call site. Kept verbatim while both shells
+	// coexist; retired with the flag, not before.
 	void FpsDisplay_DrawSettingsPanel();
+
+	// Declares this feature's settings as the E2 `system.monitor` area:
+	// the master switch, the seven module toggles, the placement anchor and
+	// its margins, the appearance controls, the per-module colour overrides
+	// and the 60-second statistics history.
+	//
+	// This REPLACES FpsDisplay_DrawSettingsPanel(), the six-tab panel issue
+	// #59 built. It is a declaration, not a draw call: it places no pixel,
+	// runs at startup rather than per frame, and takes no ImGui context --
+	// which is what let the last Escape() hatch for this area go.
+	//
+	// Only the SETTINGS half of FpsDisplay.cpp moved. The HUD drawn over the
+	// game keeps its own ImGui context, its own offscreen texture and its
+	// own submission path, all untouched by the redesign.
+	void FpsDisplay_RegisterArea( ui::Registry &reg );
 }

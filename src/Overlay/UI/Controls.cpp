@@ -938,7 +938,7 @@ namespace gamescope::ui
 		}
 
 		void GraphBody( const ImRect &rcBody, const float *pflSamples, size_t nSamples,
-		                float flCeiling, float flOutlierMs )
+		                float flCeiling, float flOutlierMs, size_t nAxisSlots )
 		{
 			Dl()->AddRectFilled( rcBody.Min, rcBody.Max, Col( Role::SurfaceRaised ), Px( 2.0f ) );
 			Boundary( rcBody, Col( Role::LineControl ), Px( 2.0f ) );
@@ -946,24 +946,38 @@ namespace gamescope::ui
 			if ( !pflSamples || nSamples == 0 || flCeiling <= 0.0f || rcBody.GetWidth() <= 0.0f )
 				return;
 
-			// One bar per column of available width, taken from the TAIL of
-			// the buffer -- the newest samples -- so a narrow band shows
-			// "right now" rather than a stale prefix.
+			auto Bar = [ & ]( float flX, float flW, float flValue )
+			{
+				const float flH = ImClamp( flValue / flCeiling, 0.0f, 1.0f ) * rcBody.GetHeight();
+				const bool  bOut = flOutlierMs > 0.0f && flValue >= flOutlierMs;
+				Dl()->AddRectFilled( ImVec2( flX, rcBody.Max.y - flH ),
+				                     ImVec2( flX + ImMax( 1.0f, flW - Px( 0.5f ) ), rcBody.Max.y ),
+				                     bOut ? Col( Role::Warn ) : Accent( 0.85f ) );
+			};
+
+			if ( nAxisSlots > 0 )
+			{
+				// FIXED AXIS, filled from the left. The slot pitch is
+				// computed from the FULL axis, never from how many samples
+				// happen to have arrived -- that is the whole point (issue
+				// #40): a warm-up must visibly occupy the left of the axis
+				// and leave the rest blank, not stretch to fill it.
+				const float flPitch = rcBody.GetWidth() / (float)nAxisSlots;
+				const size_t nDraw  = ImMin( nSamples, nAxisSlots );
+				for ( size_t i = 0; i < nDraw; ++i )
+					Bar( rcBody.Min.x + (float)i * flPitch, flPitch, pflSamples[ i ] );
+				return;
+			}
+
+			// ROLLING sparkline: one bar per column of available width, taken
+			// from the TAIL of the buffer -- the newest samples -- so a narrow
+			// band shows "right now" rather than a stale prefix.
 			const float flBarW = ImMax( 1.0f, Px( 2.0f ) );
 			const int   nBars  = ImMin( (int)nSamples, ImMax( 1, (int)( rcBody.GetWidth() / flBarW ) ) );
 			const size_t nFirst = nSamples - (size_t)nBars;
 
 			for ( int i = 0; i < nBars; ++i )
-			{
-				const float flMs = pflSamples[ nFirst + (size_t)i ];
-				const float flH  = ImClamp( flMs / flCeiling, 0.0f, 1.0f ) * rcBody.GetHeight();
-				const float x    = rcBody.Max.x - (float)( nBars - i ) * flBarW;
-				const bool  bOut = flOutlierMs > 0.0f && flMs >= flOutlierMs;
-
-				Dl()->AddRectFilled( ImVec2( x, rcBody.Max.y - flH ),
-				                     ImVec2( x + flBarW - Px( 0.5f ), rcBody.Max.y ),
-				                     bOut ? Col( Role::Warn ) : Accent( 0.85f ) );
-			}
+				Bar( rcBody.Max.x - (float)( nBars - i ) * flBarW, flBarW, pflSamples[ nFirst + (size_t)i ] );
 		}
 	}
 }

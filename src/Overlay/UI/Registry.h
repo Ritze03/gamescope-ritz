@@ -203,6 +203,11 @@ namespace gamescope::ui
 		size_t       nCount     = 0;
 		float        flCeiling  = 0.0f;   // value mapped to the band's full height
 		float        flOutlier  = 0.0f;   // at or above this draws in the warn colour; 0 marks none
+
+		// 0 rolls (newest right-aligned); >0 is a fixed axis of that many
+		// slots filled from the left, so a warm-up cannot read as a full
+		// window. See controls::GraphBody().
+		size_t       nAxisSlots = 0;
 	};
 
 	// A Details readout. Returned by .Live(); deliberately has no setter.

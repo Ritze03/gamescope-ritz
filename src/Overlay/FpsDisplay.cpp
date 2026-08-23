@@ -39,8 +39,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -55,6 +58,7 @@
 #include "Widgets.h"
 #include "Palette.h"
 #include "Metrics/SystemStats.h"
+#include "UI/Registry.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -1795,6 +1799,20 @@ namespace gamescope
 	}
 
 	// -------------------------------------------------------------------
+	// LEGACY settings panel (`overlay_e2 0`).
+	//
+	// Kept verbatim. The legacy overlay is required to stay byte-identical
+	// while the E2 shell is behind a flag, and SettingsOverlay.cpp's own
+	// dock still hosts this window -- so the six-tab panel below is not
+	// dead code, it is the other half of a two-shell period. It goes when
+	// the flag does, not before.
+	//
+	// The E2 declaration of the SAME settings follows it, in
+	// FpsDisplay_RegisterArea(). Both read and write the one `s_Settings`
+	// above, so neither can drift into a private copy of the config.
+	// -------------------------------------------------------------------
+
+	// -------------------------------------------------------------------
 	// Statistics tab (issue #40): 60-second graphs built on
 	// Metrics::GetHistorySnapshot(), gated on tab *selection* alone (see
 	// FpsDisplay_AddLayer()'s SetHistoryCollectionEnabled() call and
@@ -2465,5 +2483,719 @@ namespace gamescope
 
 		if ( bChanged )
 			PersistSettings();
+	}
+
+	// -------------------------------------------------------------------
+	// The Monitor AREA (E2, P3 part C) -- the settings half of this file.
+	//
+	// THIS FILE STILL DOES TWO JOBS, AND ONLY ONE OF THEM MOVED. Everything
+	// above this line draws the HUD over the game: its own ImGui context,
+	// its own offscreen texture, its own submission (see this file's header
+	// comment). None of it is part of the redesign and none of it changed.
+	// What follows replaces FpsDisplay_DrawSettingsPanel() -- the six-tab
+	// panel issue #59 built -- with a registry declaration, which retires
+	// the last two Escape() hatches together with PanelLog's.
+	//
+	// WHERE THE SIX TABS WENT. General/FPS/CPU/GPU/Media/Statistics were a
+	// tab bar inside one rail item. D13.1 already ruled on that shape for
+	// the Gamescope panel: the rail IS the product's navigation, so a tab
+	// bar redrawn inside it buys nothing. Here the six collapse into GROUPS
+	// of one sheet rather than into rail items, because unlike Display's
+	// four tabs these are not independent subjects -- they are one HUD's
+	// modules, placement, appearance and diagnostics, and the module count
+	// on the group band ("4 / 7") only means anything with all seven on one
+	// sheet.
+	// -------------------------------------------------------------------
+
+	namespace
+	{
+		// ---- the statistics snapshot, cached per frame ------------------
+		// Metrics::GetHistorySnapshot() copies the whole collected buffer.
+		// The legacy Statistics tab called it once per draw; the E2 sheet
+		// has five graph bands that each need it, so it is taken once per
+		// frame and shared rather than copied five times.
+		Metrics::HistorySnapshot s_StatsSnap;
+		int  s_nStatsSnapFrame = -1;
+
+		// One EMA ceiling per graphed metric, chasing that metric's own
+		// recent worst sample the slow way UpdateGraphCeiling() does
+		// (issue #40's own acceptance criterion: "same EMA-smoothed-ceiling
+		// style ... not a raw-max-jitter scale"). 0.0f means "never
+		// initialized" -- the first real value is taken as-is rather than
+		// eased up from zero over several seconds.
+		//
+		// These are the E2 shell's own, separate from the legacy panel's
+		// identically-named ones above. The two shells are never both
+		// drawing, and a shared ceiling would mean one shell's scale
+		// following the other's -- an easing artefact with no owner.
+		float s_flE2CpuCeiling = 0.0f;
+		float s_flE2GpuBusyCeiling = 100.0f;   // fixed 0-100 scale; never chased
+		float s_flE2GpuTempCeiling = 0.0f;
+		float s_flE2GpuPowerCeiling = 0.0f;
+		float s_flE2FpsCeiling = 0.0f;
+
+		// Detects a collection restart (turning collection back on starts
+		// SystemStats' buffer over from empty) by the sample count going
+		// backwards, since the buffer can only grow while collection stays
+		// live. Every ceiling resets on that edge, so a previous session's
+		// scale never biases the first bars of a fresh warm-up. Starts at
+		// -1 so the very first comparison is a no-op rather than a spurious
+		// reset.
+		int s_nE2LastSeenSampleCount = -1;
+
+		const Metrics::HistorySnapshot &StatsSnapshot()
+		{
+			const int nFrame = ImGui::GetFrameCount();
+			if ( nFrame == s_nStatsSnapFrame )
+				return s_StatsSnap;
+
+			s_StatsSnap = Metrics::GetHistorySnapshot();
+			s_nStatsSnapFrame = nFrame;
+
+			const int nSamples = (int)s_StatsSnap.vecSamples.size();
+			if ( nSamples < s_nE2LastSeenSampleCount )
+			{
+				s_flE2CpuCeiling = 0.0f;
+				s_flE2GpuTempCeiling = 0.0f;
+				s_flE2GpuPowerCeiling = 0.0f;
+				s_flE2FpsCeiling = 0.0f;
+			}
+			s_nE2LastSeenSampleCount = nSamples;
+			return s_StatsSnap;
+		}
+
+		using StatExtractFn = float ( * )( const Metrics::HistorySample & );
+
+		// Builds one metric's SampleWindow out of the shared snapshot.
+		// nAxisSlots is kStatsHistoryCapacity for every statistics graph:
+		// issue #40 requires a partially-filled 60s window to occupy the
+		// left of a full-width axis and leave the rest blank, never to be
+		// stretched across it.
+		ui::SampleWindow StatWindow( std::vector<float> &vecOut, StatExtractFn fnExtract,
+		                             float &flCeiling, float flCeilingFloor, bool bEmaCeiling )
+		{
+			const Metrics::HistorySnapshot &snap = StatsSnapshot();
+
+			vecOut.clear();
+			vecOut.reserve( snap.vecSamples.size() );
+			for ( const Metrics::HistorySample &s : snap.vecSamples )
+				vecOut.push_back( fnExtract( s ) );
+
+			if ( bEmaCeiling )
+			{
+				float flMax = flCeilingFloor;
+				for ( float f : vecOut )
+					flMax = std::max( flMax, f );
+				ChaseCeiling( flCeiling, std::max( flMax * 1.15f, flCeilingFloor ) );
+			}
+			else
+			{
+				flCeiling = flCeilingFloor;
+			}
+
+			ui::SampleWindow win;
+			win.pflSamples = vecOut.empty() ? nullptr : vecOut.data();
+			win.nCount     = vecOut.size();
+			win.flCeiling  = std::max( flCeiling, 0.001f );
+			win.nAxisSlots = (size_t)Metrics::kStatsHistoryCapacity;
+			return win;
+		}
+
+		// ---- issue #29's per-module colour override ---------------------
+		// The stored format is unchanged: std::optional<int>, packed
+		// 0xRRGGBB, nullopt meaning "track the Palette.h accent token".
+		//
+		// WHY THE BAND IS NEVER DISABLED WHEN THE OVERRIDE IS OFF. The
+		// obvious shape is a `custom` switch that greys the colour band
+		// while it is off -- but `custom` is a PARAM of that band, and
+		// SPEC §3.13's inheritance would then grey the very param that
+		// causes the greying, which is the bug that section calls out by
+		// name. So the band always shows the colour in effect, and EDITING
+		// it turns the override on. Turning it back off is what `custom`
+		// is for, and it stays reachable.
+		//
+		// The band deliberately declares NO default of its own, only
+		// `custom`'s. A default packed colour would have to be captured at
+		// registration time, and the token it comes from moves with the
+		// accent hue -- so the "differs from default" edge (D6) would light
+		// up on every row the moment someone rotated the hue, which is not
+		// what it means. With only `custom` carrying a default, the edge
+		// lights exactly when a custom colour is set, and reset clears it.
+		int PackedOrDefault( const std::optional<int> &oColor, ImU32 defaultColor )
+		{
+			return oColor.has_value() ? *oColor
+			                          : PackColorRgb( gamescope::palette::ToVec4( defaultColor ) );
+		}
+
+		void RegisterModuleColor( ui::Area &a, const char *pszId, const char *pszTitle,
+		                          std::optional<int> config::FpsDisplaySettings::*pField,
+		                          ImU32 ( *fnDefault )(), const char *pszHelp )
+		{
+			a.Composite( pszId, pszTitle, ui::CompositeKind::Color,
+				ui::AnyBind::Of<int>(
+					[ pField, fnDefault ]
+					{
+						EnsureConfigLoaded();
+						return PackedOrDefault( s_Settings.fps_display.*pField, fnDefault() );
+					},
+					[ pField ]( int nPacked )
+					{
+						EnsureConfigLoaded();
+						s_Settings.fps_display.*pField = nPacked & 0xFFFFFF;
+						PersistSettings();
+					} ) )
+				.Help( pszHelp )
+				// Issue #29: the override is ignored while Inverted is
+				// active -- that mode's whole point is a guaranteed-legible
+				// pair no fixed hue can improve on. Same "the mode owns the
+				// treatment" precedent additive sets for the backdrop.
+				.DisabledUnless(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.blend_mode != "inverted"; },
+					"the inverted blend mode supplies its own guaranteed-legible colours" )
+				.Keywords( "colour color module override tint" )
+				.Param( "custom", "Custom colour",
+					ui::AnyBind::Of<bool>(
+						[ pField ]
+						{
+							EnsureConfigLoaded();
+							return s_Settings.fps_display.*pField != std::nullopt;
+						},
+						[ pField, fnDefault ]( bool bCustom )
+						{
+							EnsureConfigLoaded();
+							s_Settings.fps_display.*pField = bCustom
+								? std::optional<int>( PackColorRgb(
+									gamescope::palette::ToVec4( fnDefault() ) ) )
+								: std::nullopt;
+							PersistSettings();
+						} ) )
+					.Default( false )
+					.Help( "Off tracks the overlay's own accent colour, so this module follows the "
+					       "accent hue. On pins it to the colour above." );
+		}
+	}
+
+	// The area. One declaration, no ImGui in it -- which is what lets
+	// EscapeCount() reach zero.
+	void FpsDisplay_RegisterArea( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "system.monitor", "Monitor", ui::Section::System );
+
+		a.Keywords( "monitor hud fps cpu gpu media overlay performance statistics" );
+		a.Summary( []
+		{
+			EnsureConfigLoaded();
+			const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+			if ( !cfg.enabled )
+				return std::string( "off" );
+
+			const int nOn = (int)cfg.fps_enabled + (int)cfg.frametime_enabled
+			              + (int)cfg.graph_enabled + (int)cfg.percentiles_enabled
+			              + (int)cfg.cpu_enabled + (int)cfg.gpu_enabled + (int)cfg.media_enabled;
+			char sz[ 64 ];
+			std::snprintf( sz, sizeof( sz ), "%s  ·  %d module%s",
+				cfg.placement.c_str(), nOn, nOn == 1 ? "" : "s" );
+			return std::string( sz );
+		} );
+
+		// The reason every gated row shares. The master switch is
+		// deliberately NOT gated by itself -- SPEC §3.13's exception: a
+		// control that is the cause of a greying stays reachable.
+		auto MonitorOn = []{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; };
+		constexpr const char *kOffReason = "the system monitor is off";
+
+		// =================================================================
+		//  Monitor
+		// =================================================================
+		a.Group( "Monitor" );
+
+		// Issue #70's name: it gates the whole HUD (CPU/GPU/Media/FPS), not
+		// just an FPS readout.
+		a.Switch( "monitor.enabled", "Show system monitor",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.enabled = b; PersistSettings(); } ) )
+			.Help( "Draws the performance HUD over the game, independently of this settings "
+			       "overlay -- it stays on screen after you close these settings." )
+			.Default( config::FpsDisplaySettings{}.enabled )
+			.Keywords( "hud monitor overlay show fps display enable" );
+
+		// =================================================================
+		//  Modules -- the seven the band's count refers to
+		// =================================================================
+		a.GroupCount( "Modules" );
+
+		auto Module = [ & ]( const char *pszId, const char *pszTitle,
+		                     bool config::FpsDisplaySettings::*pField,
+		                     bool bDefault, const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
+		{
+			return a.Switch( pszId, pszTitle,
+				ui::AnyBind::Of<bool>(
+					[ pField ]{ EnsureConfigLoaded(); return s_Settings.fps_display.*pField; },
+					[ pField ]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.*pField = b; PersistSettings(); } ) )
+				.Help( pszHelp )
+				.Default( bDefault )
+				.Keywords( pszKeywords )
+				.DisabledUnless( MonitorOn, kOffReason );
+		};
+
+		// Issue #73's "FPS" unit label is a PARAM of the frame-rate module
+		// rather than an eighth row: it is not a module, and a row on the
+		// band would make the "N / 7" count mean something other than
+		// modules.
+		Module( "monitor.mod_fps", "Frame rate", &config::FpsDisplaySettings::fps_enabled,
+			config::FpsDisplaySettings{}.fps_enabled,
+			"The large frames-per-second readout and its unit.",
+			"fps frame rate module row counter" )
+			.Param( "label", "\"FPS\" label",
+				ui::AnyBind::Of<bool>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.fps_label_enabled; },
+					[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.fps_label_enabled = b; PersistSettings(); } ) )
+				.Default( config::FpsDisplaySettings{}.fps_label_enabled )
+				.Help( "Off leaves just the number, without the \" FPS\" unit after it." );
+
+		Module( "monitor.mod_frametime", "Frametime readout",
+			&config::FpsDisplaySettings::frametime_enabled,
+			config::FpsDisplaySettings{}.frametime_enabled,
+			"Per-frame time in milliseconds, next to the frame rate.",
+			"frametime ms readout module row" );
+
+		Module( "monitor.mod_graph", "Frametime graph",
+			&config::FpsDisplaySettings::graph_enabled,
+			config::FpsDisplaySettings{}.graph_enabled,
+			"A strip of recent frame times drawn under the readout, with stutters marked.",
+			"graph frametime spark history module" );
+
+		Module( "monitor.mod_pct", "Percentile row",
+			&config::FpsDisplaySettings::percentiles_enabled,
+			config::FpsDisplaySettings{}.percentiles_enabled,
+			"Low percentiles (1% and 0.1%) and the running average, on one line.",
+			"percentile lows average module" );
+
+		Module( "monitor.mod_cpu", "CPU load", &config::FpsDisplaySettings::cpu_enabled,
+			config::FpsDisplaySettings{}.cpu_enabled,
+			"CPU utilisation and RAM use.", "cpu load ram module processor" );
+
+		Module( "monitor.mod_gpu", "GPU load", &config::FpsDisplaySettings::gpu_enabled,
+			config::FpsDisplaySettings{}.gpu_enabled,
+			"GPU busy percentage, VRAM use, temperature and power.",
+			"gpu load vram temperature power module" );
+
+		Module( "monitor.mod_media", "Now playing", &config::FpsDisplaySettings::media_enabled,
+			config::FpsDisplaySettings{}.media_enabled,
+			"Title and artist of whatever MPRIS player is active.",
+			"media now playing mpris module music" );
+
+		// =================================================================
+		//  Placement -- SPEC §4.3's worked example
+		// =================================================================
+		a.Group( "Placement" );
+
+		// The stored format stays the "top-right"/"center-left" string
+		// kPlacements has always written. The two axes are a VIEW of that
+		// string, not a new representation of it -- which is why each
+		// setter re-parses the current value before composing, rather than
+		// keeping a second copy of the other axis that could drift.
+		a.Composite( "monitor.anchor", "Placement", ui::CompositeKind::Anchor,
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					int nV = 0, nH = 2;
+					ParsePlacement( s_Settings.fps_display.placement, nV, nH );
+					return nV;
+				},
+				[]( int nV )
+				{
+					EnsureConfigLoaded();
+					int nOldV = 0, nH = 2;
+					ParsePlacement( s_Settings.fps_display.placement, nOldV, nH );
+					s_Settings.fps_display.placement = ComposePlacement( nV, nH );
+					PersistSettings();
+				} ),
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					int nV = 0, nH = 2;
+					ParsePlacement( s_Settings.fps_display.placement, nV, nH );
+					return nH;
+				},
+				[]( int nH )
+				{
+					EnsureConfigLoaded();
+					int nV = 0, nOldH = 2;
+					ParsePlacement( s_Settings.fps_display.placement, nV, nOldH );
+					s_Settings.fps_display.placement = ComposePlacement( nV, nH );
+					PersistSettings();
+				} ) )
+			.Help( "Which screen corner the monitor is anchored to. The margins nudge it away "
+			       "from that corner." )
+			.Default( 0, 2 )
+			.Keywords( "anchor placement position corner where margin offset" )
+			.DisabledUnless( MonitorOn, kOffReason )
+			.Param( "margin_v", "Vertical margin",
+				ui::AnyBind::Of<int>(
+					[]{ EnsureConfigLoaded(); return (int)s_Settings.fps_display.margin_vertical; },
+					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_vertical = (float)n; PersistSettings(); } ) )
+				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
+				.Default( (int)config::FpsDisplaySettings{}.margin_vertical )
+				.Help( "Distance from the anchored horizontal edge." )
+			.Param( "margin_h", "Horizontal margin",
+				ui::AnyBind::Of<int>(
+					[]{ EnsureConfigLoaded(); return (int)s_Settings.fps_display.margin_horizontal; },
+					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_horizontal = (float)n; PersistSettings(); } ) )
+				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
+				.Default( (int)config::FpsDisplaySettings{}.margin_horizontal )
+				.Help( "Distance from the anchored vertical edge." );
+
+		// =================================================================
+		//  Appearance
+		// =================================================================
+		a.Group( "Appearance" );
+
+		auto FloatRow = [ & ]( const char *pszId, const char *pszTitle,
+		                       float config::FpsDisplaySettings::*pField,
+		                       float flLo, float flHi, const char *pszUnit,
+		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
+		{
+			return a.Slider( pszId, pszTitle,
+				ui::AnyBind::Of<float>(
+					[ pField ]{ EnsureConfigLoaded(); return s_Settings.fps_display.*pField; },
+					[ pField ]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.*pField = f; PersistSettings(); } ) )
+				.Help( pszHelp )
+				.Range( flLo, flHi )
+				.Unit( pszUnit )
+				.Default( config::FpsDisplaySettings{}.*pField )
+				.Keywords( pszKeywords )
+				.DisabledUnless( MonitorOn, kOffReason );
+		};
+
+		FloatRow( "monitor.font_size", "Font size", &config::FpsDisplaySettings::font_size,
+			10.0f, 48.0f, "px", "Type size for every module in the monitor.",
+			"font size text scale monitor hud" );
+
+		// Issue #29's own styling option -- see ConfigSchema.h's
+		// module_spacing comment for the two alternatives it rejected.
+		FloatRow( "monitor.module_spacing", "Module spacing",
+			&config::FpsDisplaySettings::module_spacing, 0.0f, 32.0f, "px",
+			"Gap between the stacked module blocks.", "spacing gap module layout" );
+
+		static constexpr ui::Option kBlendModes[] = {
+			{ 0, "alpha" }, { 1, "additive" }, { 2, "inverted" },
+		};
+		a.Choice( "monitor.blend_mode", "Blend mode",
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					const std::string &s = s_Settings.fps_display.blend_mode;
+					return s == "additive" ? 1 : ( s == "inverted" ? 2 : 0 );
+				},
+				[]( int n )
+				{
+					EnsureConfigLoaded();
+					s_Settings.fps_display.blend_mode =
+						n == 1 ? "additive" : ( n == 2 ? "inverted" : "alpha" );
+					PersistSettings();
+				} ),
+			kBlendModes, IM_ARRAYSIZE( kBlendModes ) )
+			.Help( "How the monitor's text is composited. Inverted draws a guaranteed-legible "
+			       "outline/fill pair that stays readable over any scene, and supplies its own "
+			       "colours." )
+			.Default( 0 )
+			.Keywords( "blend mode alpha additive inverted legibility" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		FloatRow( "monitor.text_opacity", "Text opacity",
+			&config::FpsDisplaySettings::text_opacity, 0.0f, 1.0f, "",
+			"Opacity of every module's text.", "opacity alpha text transparency" );
+
+		// Additive pairs oddly with a filled backdrop (the backdrop itself
+		// would glow) and inverted is already legible without one, so both
+		// modes withdraw the backdrop entirely -- DrawReadout() enforces the
+		// same rule on the render side (ModuleBackdropAllowed()) regardless
+		// of what is stored here.
+		a.Switch( "monitor.backdrop", "Backdrop",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_enabled = b; PersistSettings(); } ) )
+			.Help( "A filled box behind each module so it stays readable over bright scenes." )
+			.Default( config::FpsDisplaySettings{}.backdrop_enabled )
+			.Keywords( "backdrop background box legibility" )
+			.DisabledUnless(
+				[]
+				{
+					EnsureConfigLoaded();
+					return s_Settings.fps_display.enabled && ModuleBackdropAllowed( s_Settings.fps_display );
+				},
+				"the additive and inverted blend modes draw no backdrop" )
+			.Param( "opacity", "Backdrop opacity",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
+					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
+				.Range( 0.0f, 1.0f ).Default( config::FpsDisplaySettings{}.backdrop_opacity )
+				.Help( "How opaque the box behind each module is." )
+			.Param( "rounding", "Backdrop rounding",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_rounding; },
+					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_rounding = f; PersistSettings(); } ) )
+				.Range( 0.0f, 16.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_rounding )
+				.Help( "Corner radius of the box." )
+			.Param( "padding", "Backdrop padding",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_padding; },
+					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_padding = f; PersistSettings(); } ) )
+				.Range( 0.0f, 24.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_padding )
+				.Help( "Space between the box's edge and the text inside it." );
+
+		// =================================================================
+		//  Module colours -- issue #29
+		// =================================================================
+		// Their own group rather than a param of each module row, because a
+		// Composite cannot be a Param (a Param is one of the ROW kinds, and
+		// a colour override is a band). Grouping them also keeps the seven
+		// module switches reading as one uniform list, which is what the
+		// "N / 7" count on that band depends on.
+		a.Group( "Module colours" );
+
+		RegisterModuleColor( a, "monitor.color_fps", "Frame rate colour",
+			&config::FpsDisplaySettings::color_fps,
+			[]{ return gamescope::palette::kAccentValue; },
+			"Colour of the frame-rate module's text." );
+		RegisterModuleColor( a, "monitor.color_cpu", "CPU colour",
+			&config::FpsDisplaySettings::color_cpu,
+			[]{ return gamescope::palette::kAccentIcon; },
+			"Colour of the CPU module's text." );
+		RegisterModuleColor( a, "monitor.color_gpu", "GPU colour",
+			&config::FpsDisplaySettings::color_gpu,
+			[]{ return gamescope::palette::kAccentKnob; },
+			"Colour of the GPU module's text." );
+		RegisterModuleColor( a, "monitor.color_media", "Now playing colour",
+			&config::FpsDisplaySettings::color_media,
+			[]{ return gamescope::palette::kAccentHandle; },
+			"Colour of the now-playing module's text." );
+
+		// =================================================================
+		//  Diagnostics
+		// =================================================================
+		a.Group( "Diagnostics" );
+
+		a.Facts( "monitor.sampling", "Sampling",
+			[]
+			{
+				char sz[ 64 ];
+				std::snprintf( sz, sizeof( sz ), "500 ms  ·  %d-frame window", kHistoryCapacity );
+				return std::string( sz );
+			} )
+			.Help( "How often the monitor recomputes its percentiles, and over how many frames." )
+			.Keywords( "sampling window percentile interval diagnostics" )
+			.Live( "interval", []{ return ui::Fact{ "interval", "500 ms" }; } )
+			.Live( "window", []
+			{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%d frames", kHistoryCapacity );
+				return ui::Fact{ "frame window", sz };
+			} )
+			.Live( "avg", []
+			{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%.1f fps", s_flAverageFps );
+				return ui::Fact{ "average", sz };
+			} )
+			.Live( "low1", []
+			{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%.0f fps", s_flOnePercentLowFps );
+				return ui::Fact{ "1% low", sz };
+			} )
+			.Live( "low01", []
+			{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%.0f fps", s_flPointOnePercentLowFps );
+				return ui::Fact{ "0.1% low", sz };
+			} );
+
+		// SPEC §4.4's frametime Graph composite, over this file's own 240-
+		// sample ring. Read-only by construction: Entry::ReadOnly() returns
+		// true for CompositeKind::Graph, and Samples() has no setter.
+		a.Composite( "monitor.frametime_graph", "Frametime", ui::CompositeKind::Graph, {} )
+			.Help( "Live frametime strip over the sampling window. Frames well above the "
+			       "current average are drawn in the warn colour." )
+			.Keywords( "frametime graph strip stutter diagnostics" )
+			.Samples( []
+			{
+				// The ring is written newest-at-head and wraps, so it is
+				// linearised oldest-first here before the band sees it.
+				static std::vector<float> s_vec;
+				s_vec.clear();
+				s_vec.reserve( (size_t)s_nHistoryCount );
+				for ( int i = 0; i < s_nHistoryCount; ++i )
+				{
+					const int nIdx = ( s_nHistoryHead - s_nHistoryCount + i + kHistoryCapacity * 2 ) % kHistoryCapacity;
+					s_vec.push_back( s_flFrametimeHistoryMs[ nIdx ] );
+				}
+
+				ui::SampleWindow win;
+				win.pflSamples = s_vec.empty() ? nullptr : s_vec.data();
+				win.nCount     = s_vec.size();
+				win.flCeiling  = std::max( s_flGraphCeilingMs, 0.001f );
+				// The HUD's own graph marks a frame amber at 1.5x the
+				// smoothed frametime; the same threshold is used here so
+				// the two graphs agree about what counts as a stutter.
+				win.flOutlier  = s_flSmoothedFrametimeMs * 1.5f;
+				return win;
+			} )
+			.Live( "smoothed", []
+			{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%.2f ms", s_flSmoothedFrametimeMs );
+				return ui::Fact{ "smoothed", sz };
+			} )
+			.Live( "samples", []
+			{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%d / %d", s_nHistoryCount, kHistoryCapacity );
+				return ui::Fact{ "samples held", sz };
+			} );
+
+		// =================================================================
+		//  Statistics -- issue #40's 60-second history
+		// =================================================================
+		a.Group( "Statistics" );
+
+		// #40 TIED COLLECTION TO TAB SELECTION. There is no tab bar any
+		// more, so the gating is stated outright as the switch it always
+		// effectively was -- which is also more honest, since the old
+		// version made a background cost a side effect of navigation.
+		//
+		// The config key and BOTH of its string values are unchanged
+		// (overlay.system_monitor_tab, "statistics"/"modules"), so an
+		// existing config keeps loading and a restart still resumes
+		// collecting exactly as before. As before, it is written the
+		// instant it changes rather than batched with unrelated edits,
+		// because it is what gates the background collection in
+		// FpsDisplay_AddLayer() -- routing it through the normal debounced
+		// path silently dropped every change during manual testing.
+		a.Switch( "monitor.stats_collect", "Collect 60-second history",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.overlay.system_monitor_tab == "statistics"; },
+				[]( bool b )
+				{
+					EnsureConfigLoaded();
+					const char *pszValue = b ? "statistics" : "modules";
+					if ( s_Settings.overlay.system_monitor_tab == pszValue )
+						return;
+					s_Settings.overlay.system_monitor_tab = pszValue;
+					config::EnqueueSystemMonitorTabWrite( pszValue );
+				} ) )
+			.Help( "Samples CPU, GPU and frame rate twice a second into a rolling 60-second "
+			       "window for the graphs below. Off costs nothing; the window starts over "
+			       "when you turn it back on." )
+			.Default( false )
+			.Keywords( "statistics history collect 60 second graph sampling" );
+
+		a.Facts( "monitor.stats_window", "Window",
+			[]
+			{
+				EnsureConfigLoaded();
+				if ( s_Settings.overlay.system_monitor_tab != "statistics" )
+					return std::string( "not collecting" );
+
+				const int nSamples = (int)StatsSnapshot().vecSamples.size();
+				if ( nSamples >= Metrics::kStatsHistoryCapacity )
+					return std::string( "last 60 seconds" );
+
+				// A warm-up is never allowed to read as a complete window --
+				// issue #40's own explicit requirement. Elapsed time is
+				// exact (sample count x the poll thread's fixed cadence),
+				// not a wall-clock guess.
+				char sz[ 48 ];
+				std::snprintf( sz, sizeof( sz ), "collecting  ·  %.0fs of 60s",
+					(float)nSamples * ( Metrics::kStatsHistorySampleIntervalMs / 1000.0f ) );
+				return std::string( sz );
+			} )
+			.Help( "How much of the 60-second window has been collected so far." )
+			.Keywords( "warm up collecting window statistics" );
+
+		auto Collecting = []
+		{
+			EnsureConfigLoaded();
+			return s_Settings.overlay.system_monitor_tab == "statistics";
+		};
+
+		// Two independent reasons a stats graph can be empty, and they say
+		// different things: collection is off, or this machine has no such
+		// sensor. Reporting the wrong one would send someone hunting a
+		// driver problem that is really a switch.
+		auto StatGraph = [ & ]( const char *pszId, const char *pszTitle, const char *pszHelp,
+		                        const char *pszKeywords, std::function<ui::SampleWindow()> fnWindow,
+		                        std::function<bool()> fnAvailable, const char *pszUnavailable )
+		{
+			a.Composite( pszId, pszTitle, ui::CompositeKind::Graph, {} )
+				.Help( pszHelp )
+				.Keywords( pszKeywords )
+				.Samples( std::move( fnWindow ) )
+				.DisabledUnless( std::move( fnAvailable ), pszUnavailable );
+		};
+
+		StatGraph( "monitor.stats_cpu", "CPU load",
+			"One-minute CPU load average, sampled twice a second over the last 60 seconds.",
+			"cpu load statistics graph history",
+			[]
+			{
+				static std::vector<float> s_vec;
+				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flCpuLoad1; },
+					s_flE2CpuCeiling, 1.0f, true );
+			},
+			Collecting, "60-second history collection is off" );
+
+		StatGraph( "monitor.stats_gpu_busy", "GPU busy",
+			"GPU utilisation percentage over the last 60 seconds.",
+			"gpu busy utilisation statistics graph history",
+			[]
+			{
+				static std::vector<float> s_vec;
+				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return (float)s.nGpuBusyPercent; },
+					s_flE2GpuBusyCeiling, 100.0f, false );
+			},
+			[ Collecting ]{ return Collecting() && StatsSnapshot().bGpuFound; },
+			"no amdgpu device was found on this system, or collection is off" );
+
+		StatGraph( "monitor.stats_gpu_temp", "GPU temperature",
+			"GPU temperature in degrees Celsius over the last 60 seconds.",
+			"gpu temperature thermal statistics graph history",
+			[]
+			{
+				static std::vector<float> s_vec;
+				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flGpuTempC; },
+					s_flE2GpuTempCeiling, 40.0f, true );
+			},
+			[ Collecting ]{ return Collecting() && StatsSnapshot().bHwmonFound; },
+			"no amdgpu hwmon node was found on this system, or collection is off" );
+
+		StatGraph( "monitor.stats_gpu_power", "GPU power",
+			"GPU power draw in watts over the last 60 seconds.",
+			"gpu power watts statistics graph history",
+			[]
+			{
+				static std::vector<float> s_vec;
+				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flGpuPowerWatts; },
+					s_flE2GpuPowerCeiling, 10.0f, true );
+			},
+			[ Collecting ]{ return Collecting() && StatsSnapshot().bHwmonFound; },
+			"no amdgpu hwmon node was found on this system, or collection is off" );
+
+		StatGraph( "monitor.stats_fps", "Frame rate",
+			"Frame rate over the last 60 seconds, sampled independently of the 240-frame "
+			"window the HUD's own percentiles use.",
+			"fps frame rate statistics graph history",
+			[]
+			{
+				static std::vector<float> s_vec;
+				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flFps; },
+					s_flE2FpsCeiling, 30.0f, true );
+			},
+			Collecting, "60-second history collection is off" );
 	}
 }

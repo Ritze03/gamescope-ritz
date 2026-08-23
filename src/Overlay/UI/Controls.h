@@ -164,7 +164,20 @@ namespace gamescope::ui
 		// so it takes no binding and returns nothing. Samples are newest-last.
 		// `flOutlierMs` marks the threshold above which a bar is drawn in the
 		// warn colour; pass 0 to mark none.
+		//
+		// `nAxisSlots` selects between the TWO graph conventions this product
+		// legitimately has, rather than letting a call site improvise either:
+		//
+		//   0  -- a rolling sparkline. Bars are taken from the TAIL and drawn
+		//         right-aligned, so a narrow band shows "right now". This is
+		//         the frametime graph's convention.
+		//   >0 -- a FIXED axis of that many slots, filled from the LEFT, with
+		//         the unfilled remainder left blank. This is issue #40's
+		//         explicit requirement for the 60-second statistics graphs:
+		//         "a partially-filled window must never read as a complete
+		//         one", which is exactly what right-aligning a handful of
+		//         samples across the full width would do.
 		void GraphBody( const ImRect &rcBody, const float *pflSamples, size_t nSamples,
-		                float flCeiling, float flOutlierMs );
+		                float flCeiling, float flOutlierMs, size_t nAxisSlots = 0 );
 	}
 }

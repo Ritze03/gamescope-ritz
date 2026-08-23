@@ -272,11 +272,10 @@ namespace gamescope::ui::shell
 			// PipeWire stream, discovered at runtime rather than declared
 			// here. See ui::Area::Rebuilds().
 			PanelAudio_RegisterArea( reg );
-			reg.Add( "system.monitor", "Monitor", Section::System )
-				// FpsDisplay.cpp does two jobs; this is the SETTINGS half
-				// only. The HUD over the game is drawn from its own,
-				// separate context and is not in P2's scope at all.
-				.Escape( []{ FpsDisplay_DrawSettingsPanel(); } );
+			// P3 part C. FpsDisplay.cpp does two jobs; this declares the
+			// SETTINGS half only. The HUD over the game is drawn from its
+			// own separate context and was never in the redesign's scope.
+			FpsDisplay_RegisterArea( reg );
 			reg.Add( "system.log", "Log", Section::System )
 				.Escape( []{ PanelLog_DrawBody(); } );
 
@@ -1118,7 +1117,7 @@ namespace gamescope::ui::shell
 				{
 					const SampleWindow win = entry.SampleData();
 					controls::GraphBody( bl.rcBody, win.pflSamples, win.nCount,
-					                     win.flCeiling, win.flOutlier );
+					                     win.flCeiling, win.flOutlier, win.nAxisSlots );
 					break;
 				}
 				case CompositeKind::Strip:
