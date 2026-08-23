@@ -163,6 +163,7 @@ src = [
   'Overlay/UI/Row.cpp',
   'Overlay/UI/Band.cpp',
   'Overlay/UI/Registry.cpp',
+  'Overlay/UI/CommandPalette.cpp',
   'Overlay/UI/Controls.cpp',
   'Overlay/UI/Layout.cpp',
   'Overlay/UI/Shell.cpp',

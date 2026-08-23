@@ -10,6 +10,103 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — P4, the command palette and the keyboard
+
+`Ctrl+K` over every Entry **and every Param**, the shared arrow-key adjuster behind
+it, and the rest of SPEC §8.2's key table. Build clean; **68/68** meson tests — the
+67 P3c left, plus a new `overlay_palette` suite (19 cases, 68 assertions).
+
+Decisions taken without the user: `../../AUTONOMOUS-DECISIONS.md` **D16**.
+
+### The two briefed defects were already fixed
+
+P4 was briefed to fix a `display_scale 2.0` console abort and a companion
+"the shell does not re-scale". **Both were already closed by P3c's `5582437`**, and
+both were re-verified by triggering them rather than by reading the diff — see
+D16.1. The route is `overlay_e2_set` → the registered setter →
+`fonts::RequestRebuild()` (an atomic, pumped by the render thread at the top of its
+next frame) and `QueueGeneralSave()` → `PushLiveTheme()` →
+`palette::g_LiveTheme.flDisplayScale`, which is the single value `Shell::Draw()`
+pushes into `ui::SetScale()` each frame. Same commit, same fix, both symptoms.
+
+**A different 2.0× defect is now on the record and is NOT fixed:** at step 2 the
+Inspector becomes a drawer and paints over the sheet's entire control column. It
+matches SPEC §8.3's table, so it is a gap in the design rather than a slip in the
+code — D16.2 says why guessing at it here would have been worse than reporting it.
+
+### What the palette is made of
+
+| Piece | Where | Notes |
+|---|---|---|
+| `Score()` | `CommandPalette.cpp` | Five bands, `index.html`'s `score()` as the tiebreaker. Pure: three strings in, an int out. |
+| `Build()` | `CommandPalette.cpp` | Walks the registry, emits one item per Entry and one per Param, **stable**-sorts by score. |
+| `WorstCharsToReach()` | `CommandPalette.cpp` | Direction B's discoverability gate as a function. Live registry today: **2**. |
+| `AppendUtf8` / `PopUtf8` / `PopWord` | `CommandPalette.cpp` | The hand-rolled query field's accumulator (D16.3). Backspace deletes a **character**, not a byte. |
+| `Adjustable` / `AdjustValue()` | `Registry.cpp` | The **one** stepper, shared by the palette and the Sheet (D16.6). |
+| `DrawPalette()` | `Shell.cpp` | The panel. Query line, count chip, ≤60 results in a 9-row window, legend. |
+| `RunPaletteKeyboard()` | `Shell.cpp` | `↑↓` move, `←→` adjust in place, `Enter` jump & select, `Esc` dismiss. |
+| `PaletteJump()` | `Shell.cpp` | Selects the parent row, forces **Configure** for a Param, and promotes a hidden Inspector to a drawer so the landing is visible. |
+| `overlay_e2_palette` | `Shell.cpp` | The console surface. Same state the keys drive; `list` prints the ranking (D16.8). |
+
+**No call site was touched.** All 102 live results come from what P3a–P3c already
+registered. The only registry change is two getters — `Entry::KeywordText()` and
+`Parameter::KeywordText()` — because `.Keywords()` had shipped since P1 as a setter
+with **no reader at all** (D16.5).
+
+### Three defects found by running it, and what each taught
+
+1. **The palette drew UNDERNEATH the sheet.** `DrawSheetBody` and the Inspector
+   body are ImGui **child** windows, and a child's draw list is emitted after its
+   parent's regardless of fill order — so "draw it last inside the slab" put it
+   behind the very rows it covers. Fixed by giving the palette its own top-level
+   window opened after the slab's `End()`.
+2. **...and then still drew underneath**, because that new window inherited
+   `ImGuiWindowFlags_NoBringToFrontOnFocus` from the slab, which pins a window to
+   the back and made `SetNextWindowFocus()` a no-op. The palette is now the one
+   window in the shell that does not carry that flag.
+3. **Three glyphs rendered as fallback boxes.** `Fonts.cpp` bakes
+   `GetGlyphRangesDefault()` — Basic Latin + Latin-1 only, because this UI is
+   English-only. The mockup's `▸` (U+25B8), `⌕` (U+2315) and the legend's arrows
+   are all outside it. The separator is now `»` (U+00BB, in range), the prompt is
+   `>`, and the legend spells its keys out. **Rule for anyone porting more of
+   `index.html`: the mockup is authored in a browser with the whole of Unicode
+   available and the overlay is not.**
+
+### What is verified, and what is not
+
+- **Ranking and adjustment** — `tests/test_overlay_palette.cpp`, no window needed,
+  plus `overlay_e2_palette list` against the live registry.
+- **Drawing** — screenshots at browse, mid-query and post-adjust.
+- **Key bindings** — **not** exercised by real keypresses. `ydotool` is banned and
+  no other injection route respects that ban, so the bindings are unit-tested and
+  console-equivalent-tested only. Stated rather than glossed; see D16's
+  "still open".
+
+### Keyboard: what P4 added, and what is still unreachable
+
+`RunKeyboard()` handled three keys before this (`Ctrl+I`, `Tab`, `Esc`). It now
+covers `Ctrl+K`, `Ctrl+D` (reset row **and** its params), `Ctrl+←/→` (rail item
+without leaving the sheet), `↑↓` (row, and rail items when the rail has focus),
+`←→` (adjust the focused control, through `AdjustValue()`), `Space`/`Enter`
+(toggle a switch, fire an Action — **still arming** a destructive one, so the
+keyboard is not a route around `Confirm()`), and `Esc` (drawer → selection).
+
+**Still not reachable by keyboard**, and each is a real gap:
+
+- **The Inspector's own rows.** `Tab` moves focus to `Region::Inspector`, but
+  nothing consumes arrows there — a Param can be *jumped to* by the palette and
+  *adjusted* from it, but not walked with `↑↓` once the Inspector has focus.
+- **The mode strip.** `CONFIGURE` / `DETAILS` cannot be switched from the keyboard;
+  the mode is whatever `ModeFor()` picked, or what `PaletteJump()` forced.
+- **A dropdown popup.** A downgraded `Choice` opens on click only; `←→` steps the
+  underlying value without opening it, which works but means the popup itself is
+  pointer-only.
+- **`Ctrl+/` and `?`** — SPEC §8.2's "Configure + Details as one full-sheet page"
+  is unimplemented, along with the inline expansion (§6.3) it belongs to.
+- **Text entry on a `Kind::Text` row.** Editing still begins with a click.
+
+---
+
 ## 2026-08-23 — P3 part C, the composite band, Monitor and Log
 
 The last of the area ports, plus the two pieces of debt the earlier parts left.

@@ -1,0 +1,338 @@
+// Unit tests for the command palette's pure half -- matching, ranking,
+// the query field's text accumulator, and the shared arrow-key adjuster.
+//
+// WHY THIS FILE HAS NO WINDOW IN IT. The palette's two interesting halves are
+// a scorer and a sort, and neither needs a frame. Keeping them in
+// CommandPalette.cpp behind a signature that takes strings and a Registry is
+// what lets every ranking rule below be asserted without a compositor, a font
+// atlas or an ImGui context. The drawing half lives in Shell.cpp with every
+// other pixel and is verified by screenshot instead.
+//
+// Source of truth for the behaviour asserted here:
+//   superdoc/planning/redesign/round-2/e2-inspector-plus/SPEC.md  (§5.2, §8.2, §2.6)
+//   superdoc/planning/redesign/round-2/e2-inspector-plus/API.md   (§10)
+//   superdoc/planning/redesign/round-2/e2-inspector-plus/index.html  (the tiebreaker: score())
+#include <catch2/catch_test_macros.hpp>
+
+#include "Overlay/UI/CommandPalette.h"
+#include "Overlay/UI/Registry.h"
+
+#include <algorithm>
+#include <string>
+
+using namespace gamescope;
+
+namespace
+{
+	// A small registry shaped like the real one: two areas, a row with
+	// params, a read-only row, and a choice -- enough for every ranking band
+	// and every adjust path to be exercised.
+	struct Fixture
+	{
+		ui::Registry reg;
+
+		bool  bTearing  = false;
+		float flSharp   = 5.0f;
+		bool  bDenoise  = false;
+		int   nScaler   = 0;
+		int   nFpsLimit = 60;
+
+		static constexpr ui::Option kScalers[] = {
+			{ 0, "auto" }, { 1, "integer" }, { 2, "fit" }, { 3, "stretch" },
+		};
+
+		Fixture()
+		{
+			ui::Area &disp = reg.Add( "display.upscaling", "Upscaling", ui::Section::Display );
+
+			disp.Slider( "display.sharpness", "Sharpness", ui::Bind( &flSharp ) )
+				.Range( 0.0f, 20.0f ).Step( 1.0f ).Help( "Strength of the sharpening pass." )
+				.Keywords( "rcas crisp detail" )
+				.Param( "rcas_denoise", "RCAS denoise", ui::Bind( &bDenoise ) )
+					.Help( "Suppresses grain introduced by sharpening." )
+					.Keywords( "grain noise" );
+
+			disp.Choice( "display.scaler", "Scaler", ui::Bind( &nScaler ), kScalers, 4 )
+				.Help( "How the image is fitted to the output." )
+				.Keywords( "aspect fit integer" );
+
+			disp.Facts( "display.path", "Effective path",
+				[] { return std::string( "FSR - STRETCH" ); } )
+				.Help( "What the scaling pipeline currently resolves to." );
+
+			ui::Area &sys = reg.Add( "system.monitor", "Monitor", ui::Section::System );
+			sys.Switch( "monitor.tearing", "Allow tearing", ui::Bind( &bTearing ) )
+				.Help( "Lets a frame scan out before the next vblank." )
+				.Keywords( "vsync immediate flip" );
+			sys.Stepper( "monitor.fps_limit", "FPS limit", ui::Bind( &nFpsLimit ) )
+				.Range( 0, 1000 ).Step( 5 ).Help( "Caps presentation rate." );
+		}
+
+		// Index of `sId` in a query's results, or -1.
+		int IndexOf( std::string_view sQuery, const char *pszId )
+		{
+			const std::vector<ui::PaletteItem> hits = ui::Build( reg, sQuery );
+			for ( size_t i = 0; i < hits.size(); i++ )
+			{
+				if ( hits[ i ].sId == pszId )
+					return (int)i;
+			}
+			return -1;
+		}
+	};
+
+	constexpr ui::Option Fixture::kScalers[];
+}
+
+// =========================================================================
+//  Browsing is search with an empty query
+// =========================================================================
+TEST_CASE( "palette: an empty query lists every entry AND every param", "[overlay_palette]" )
+{
+	// SPEC §5.2's searchability guarantee, and the design's "browsing is
+	// search with an empty query where that holds -- one code path, not two".
+	// If this ever needs a second branch, the property has been lost.
+	Fixture f;
+	const std::vector<ui::PaletteItem> all = ui::Build( f.reg, "" );
+
+	// 5 entries + 1 param.
+	REQUIRE( all.size() == 6 );
+	REQUIRE( f.IndexOf( "", "display.sharpness" ) >= 0 );
+	REQUIRE( f.IndexOf( "", "display.sharpness.rcas_denoise" ) >= 0 );
+	REQUIRE( f.IndexOf( "", "monitor.fps_limit" ) >= 0 );
+}
+
+TEST_CASE( "palette: an empty query keeps registration order", "[overlay_palette]" )
+{
+	// The stable sort is load-bearing: with every item at the same score, the
+	// order the rail and the sheets already show is the order the palette
+	// shows. An unstable sort would make the browse list a different product
+	// from the sheet for no reason.
+	Fixture f;
+	const std::vector<ui::PaletteItem> all = ui::Build( f.reg, "" );
+	REQUIRE( all[ 0 ].sId == "display.sharpness" );
+	REQUIRE( all[ 1 ].sId == "display.sharpness.rcas_denoise" );
+	REQUIRE( all[ 2 ].sId == "display.scaler" );
+	REQUIRE( all[ 3 ].sId == "display.path" );
+	REQUIRE( all[ 4 ].sId == "monitor.tearing" );
+	REQUIRE( all[ 5 ].sId == "monitor.fps_limit" );
+}
+
+// =========================================================================
+//  Ranking
+// =========================================================================
+TEST_CASE( "palette: the five score bands rank in the documented order", "[overlay_palette]" )
+{
+	// index.html's score() is the tiebreaker for these, and this asserts the
+	// bands rather than the numbers so a re-tune has to state its intent.
+	REQUIRE( ui::Score( "sharpness", "display.sharpness", "sharpness display.sharpness rcas", "sharp" )
+	         == ui::kScoreExact );
+	REQUIRE( ui::Score( "rcas denoise", "display.sharpness.rcas_denoise", "rcas denoise grain", "denoise" )
+	         == ui::kScoreTitle );
+	REQUIRE( ui::Score( "scaler", "display.scaler", "scaler display.scaler aspect", "display" )
+	         == ui::kScoreId );
+	REQUIRE( ui::Score( "allow tearing", "monitor.tearing", "allow tearing monitor.tearing vsync", "vsync" )
+	         == ui::kScoreKeyword );
+	REQUIRE( ui::Score( "sharpness", "display.sharpness", "sharpness display.sharpness rcas", "shrp" )
+	         == ui::kScoreFuzzy );
+	REQUIRE( ui::Score( "sharpness", "display.sharpness", "sharpness display.sharpness rcas", "zzq" )
+	         == ui::kScoreNoMatch );
+}
+
+TEST_CASE( "palette: a title prefix outranks a keyword hit", "[overlay_palette]" )
+{
+	Fixture f;
+	// "scaler" is Scaler's title and also sits in Sharpness's neighbourhood
+	// only through the blob; the title-prefix hit must come first.
+	REQUIRE( f.IndexOf( "scaler", "display.scaler" ) == 0 );
+}
+
+TEST_CASE( "palette: a param is found by its own name", "[overlay_palette]" )
+{
+	// SPEC §5.2: "Ctrl+K -> 'denoise' finds display.sharpness.rcas_denoise".
+	// This is the anti-junk-drawer law's credibility test -- if a param is
+	// not findable, depth really is the same as hidden.
+	Fixture f;
+	REQUIRE( f.IndexOf( "denoise", "display.sharpness.rcas_denoise" ) == 0 );
+}
+
+TEST_CASE( "palette: a param is found through its PARENT's name", "[overlay_palette]" )
+{
+	// A user who remembers where a setting lives rather than what it is
+	// called still reaches it.
+	Fixture f;
+	REQUIRE( f.IndexOf( "sharpness", "display.sharpness.rcas_denoise" ) >= 0 );
+}
+
+TEST_CASE( "palette: a param row is labelled with its parent and flagged", "[overlay_palette]" )
+{
+	Fixture f;
+	const std::vector<ui::PaletteItem> hits = ui::Build( f.reg, "denoise" );
+	REQUIRE( hits.size() >= 1 );
+	REQUIRE( hits[ 0 ].bParam );
+	REQUIRE( hits[ 0 ].sLabel.find( "Sharpness" ) != std::string::npos );
+	REQUIRE( hits[ 0 ].sLabel.find( "RCAS denoise" ) != std::string::npos );
+}
+
+TEST_CASE( "palette: the path column is the CONFIG KEY, never the area id", "[overlay_palette]" )
+{
+	// D5 / SPEC §2.6. `system.monitor` holds `monitor.*` keys, so showing the
+	// area id here would print a prefix that does not exist on disk. The key
+	// is what a reviewer checks against global.json.
+	Fixture f;
+	const std::vector<ui::PaletteItem> hits = ui::Build( f.reg, "tearing" );
+	REQUIRE( hits.size() >= 1 );
+	REQUIRE( hits[ 0 ].sPath == "monitor.tearing" );
+	REQUIRE( hits[ 0 ].sPath.rfind( "system.", 0 ) != 0 );
+}
+
+TEST_CASE( "palette: matching is case-insensitive", "[overlay_palette]" )
+{
+	Fixture f;
+	REQUIRE( f.IndexOf( "SHARP", "display.sharpness" ) == 0 );
+	REQUIRE( f.IndexOf( "ShArP", "display.sharpness" ) == 0 );
+}
+
+// =========================================================================
+//  The query field's accumulator (see Shell.cpp's PaletteConsumeInput)
+// =========================================================================
+TEST_CASE( "palette: the query accumulator round-trips UTF-8", "[overlay_palette]" )
+{
+	// The field is hand-rolled on io.InputQueueCharacters rather than
+	// ImGui::InputText -- see CommandPalette.h for why -- so the encoder and
+	// the backspace are OURS and have to be tested.
+	std::string s;
+	ui::AppendUtf8( s, 'a' );
+	ui::AppendUtf8( s, 0x00E4 );   // a-umlaut, 2 bytes
+	ui::AppendUtf8( s, 0x20AC );   // euro sign, 3 bytes
+	REQUIRE( s == "a\xC3\xA4\xE2\x82\xAC" );
+}
+
+TEST_CASE( "palette: backspace deletes one CHARACTER, not one byte", "[overlay_palette]" )
+{
+	// A byte-wise backspace leaves a partial sequence that renders as a
+	// replacement glyph and matches nothing -- an invisible dead end.
+	std::string s = "a\xC3\xA4\xE2\x82\xAC";
+	ui::PopUtf8( s );
+	REQUIRE( s == "a\xC3\xA4" );
+	ui::PopUtf8( s );
+	REQUIRE( s == "a" );
+	ui::PopUtf8( s );
+	REQUIRE( s.empty() );
+	ui::PopUtf8( s );          // must not underflow
+	REQUIRE( s.empty() );
+}
+
+TEST_CASE( "palette: Ctrl+W deletes the trailing word", "[overlay_palette]" )
+{
+	std::string s = "display shar";
+	ui::PopWord( s );
+	REQUIRE( s == "display " );
+	ui::PopWord( s );
+	REQUIRE( s.empty() );
+}
+
+// =========================================================================
+//  Adjust in place (SPEC §8.2's arrow keys, shared with the Sheet)
+// =========================================================================
+TEST_CASE( "palette: arrows step a slider by its declared step and clamp", "[overlay_palette]" )
+{
+	Fixture f;
+	const ui::Entry *pE = f.reg.FindEntry( "display.sharpness" );
+	REQUIRE( pE != nullptr );
+
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+	REQUIRE( f.flSharp == 6.0f );
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), -1, false ) );
+	REQUIRE( f.flSharp == 5.0f );
+
+	// Shift is SPEC §3.4's x0.1 fine step.
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, true ) );
+	REQUIRE( f.flSharp > 5.0f );
+	REQUIRE( f.flSharp < 5.5f );
+
+	// Clamps at the declared range, and reports "nothing changed" there so a
+	// held key does not repaint forever.
+	f.flSharp = 20.0f;
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+	REQUIRE( f.flSharp == 20.0f );
+}
+
+TEST_CASE( "palette: a switch takes its value from the DIRECTION, not a toggle", "[overlay_palette]" )
+{
+	// Holding Right down a list of switches must end with them all on. A
+	// toggle would oscillate, which makes the key's meaning depend on the
+	// value it is about to change.
+	Fixture f;
+	const ui::Entry *pE = f.reg.FindEntry( "monitor.tearing" );
+	REQUIRE( pE != nullptr );
+
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+	REQUIRE( f.bTearing );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );  // already on
+	REQUIRE( f.bTearing );
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), -1, false ) );
+	REQUIRE_FALSE( f.bTearing );
+}
+
+TEST_CASE( "palette: a choice steps its options and stops at both ends", "[overlay_palette]" )
+{
+	Fixture f;
+	const ui::Entry *pE = f.reg.FindEntry( "display.scaler" );
+	REQUIRE( pE != nullptr );
+
+	REQUIRE( f.nScaler == 0 );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), -1, false ) );  // already first
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+	REQUIRE( f.nScaler == 1 );
+
+	f.nScaler = 3;
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );  // already last
+	REQUIRE( f.nScaler == 3 );
+}
+
+TEST_CASE( "palette: a stepper honours an integer step", "[overlay_palette]" )
+{
+	Fixture f;
+	const ui::Entry *pE = f.reg.FindEntry( "monitor.fps_limit" );
+	REQUIRE( pE != nullptr );
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+	REQUIRE( f.nFpsLimit == 65 );
+}
+
+TEST_CASE( "palette: a read-only kind refuses to be adjusted", "[overlay_palette]" )
+{
+	// SPEC §5.2 clause 4's read-only-by-type, reaching the keyboard: an
+	// arrow key on a Facts row must not invent a write path around it.
+	Fixture f;
+	const ui::Entry *pE = f.reg.FindEntry( "display.path" );
+	REQUIRE( pE != nullptr );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+}
+
+TEST_CASE( "palette: a param adjusts through the same one function", "[overlay_palette]" )
+{
+	// The palette's whole in-place promise rests on a Param being no
+	// different from a row here.
+	Fixture f;
+	const ui::Parameter *pP = f.reg.FindParam( "display.sharpness.rcas_denoise" );
+	REQUIRE( pP != nullptr );
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pP ), +1, false ) );
+	REQUIRE( f.bDenoise );
+}
+
+// =========================================================================
+//  Discoverability
+// =========================================================================
+TEST_CASE( "palette: every setting is reachable in <= 3 characters", "[overlay_palette]" )
+{
+	// Direction B enforced this as a BUILD gate. It ships here as a test
+	// instead -- see AUTONOMOUS-DECISIONS.md D16 for the reasoning: the same
+	// property, without a registration abort that would take the compositor
+	// down over a search-ranking regression.
+	Fixture f;
+	std::string sWorst;
+	const int nWorst = ui::WorstCharsToReach( f.reg, 8, &sWorst );
+	INFO( "worst id: " << sWorst << " needed " << nWorst << " chars" );
+	REQUIRE( nWorst <= 3 );
+}

@@ -40,6 +40,7 @@
 
 #include "Band.h"
 #include "Colors.h"
+#include "CommandPalette.h"
 #include "Controls.h"
 #include "Layout.h"
 #include "Lane.h"
@@ -144,6 +145,46 @@ namespace gamescope::ui::shell
 		Region s_eFocusRegion = Region::Sheet;
 
 		// =================================================================
+		//  P4: the command palette (SPEC §8.2, API.md §10)
+		// =================================================================
+		// Three pieces of state and no more, for the same reason the shell
+		// has one selected row: the palette is a VIEW of the registry, not a
+		// second place settings live. It holds a query, a highlight and an
+		// open bit; everything it draws is recomputed from the registry each
+		// frame by ui::Build().
+		//
+		// The results are NOT cached across frames on purpose. A cached
+		// vector would have to be invalidated whenever a dynamic area
+		// rebuilt (Area::Rebuilds() frees every Entry), and the alternative
+		// -- rebuilding ~130 items against a short query -- is a few
+		// microseconds of string search. Correctness for free beats a cache
+		// with an invalidation rule nobody will remember to update.
+		bool        s_bPaletteOpen = false;
+		std::string s_sPaletteQuery;
+		int         s_nPaletteSel  = 0;
+
+		// The caret's blink phase. Reset on every keystroke so the caret is
+		// solid while you type -- a caret that blinks through your own typing
+		// reads as dropped input.
+		float s_flPaletteCaretAt = 0.0f;
+
+		void OpenPalette()
+		{
+			s_bPaletteOpen = true;
+			s_sPaletteQuery.clear();
+			s_nPaletteSel = 0;
+			s_flPaletteCaretAt = (float)ImGui::GetTime();
+
+			// Drop whatever text this frame already queued. The palette's own
+			// handler runs LATER IN THE SAME FRAME as the Ctrl+K that opened
+			// it, so a backend that puts 'k' in the character queue alongside
+			// the chord -- which is backend-dependent, and this context's
+			// input comes from wlserver rather than a stock ImGui backend --
+			// would open the palette with "k" already typed into it.
+			ImGui::GetIO().InputQueueCharacters.resize( 0 );
+		}
+
+		// =================================================================
 		//  The console surface
 		// =================================================================
 		// Two commands that reach the same three pieces of state Ctrl+I and
@@ -190,6 +231,12 @@ namespace gamescope::ui::shell
 
 		void SelectById( std::span<std::string_view> args );
 		void SetById( std::span<std::string_view> args );
+		void PaletteCmd( std::span<std::string_view> args );
+
+		// The palette's two helpers the console command reaches before the
+		// drawing section defines them.
+		void        PaletteJump( const std::string &sId );
+		std::string PaletteValueText( const std::string &sId );
 
 		// P3. The same argument that produced overlay_e2_select above, applied
 		// to the other half of the problem: a registration's SELECTION was
@@ -227,6 +274,25 @@ namespace gamescope::ui::shell
 			"everything after the command name into a single field, which wlserver then re-splits: "
 			"gamescopectl overlay_e2_select \"setup.shell shell.layout\".",
 			SelectById );
+
+		// P4. The palette is KEYBOARD-ONLY by design, and this project
+		// permanently forbids synthetic input of any kind (D4, after injected
+		// events twice landed in the user's own windows). Without a console
+		// surface the palette would therefore be the one feature in the
+		// product that cannot be verified at all except by a human at a
+		// keyboard -- and "it renders but does nothing" is exactly the defect
+		// class (#25, #68) this branch keeps finding.
+		//
+		// It drives the SAME state the keys drive -- there is no parallel
+		// path -- and `list` prints the ranked results, so the RANKING is
+		// checkable from a script even though the drawing is not.
+		ConCommand cc_overlay_e2_palette(
+			"overlay_e2_palette",
+			"Drive the E2 command palette: overlay_e2_palette <verb> [arg]. "
+			"Verbs: open [query] | query <text> | sel <n> | adjust <-1|1> | enter | close | "
+			"list | reach. Through gamescopectl the verb and its argument must be ONE quoted "
+			"argument: gamescopectl overlay_e2_palette \"open margin\".",
+			PaletteCmd );
 
 		// =================================================================
 		//  Registration
@@ -502,6 +568,99 @@ namespace gamescope::ui::shell
 			// actually holds afterwards is the answer, and a setter that
 			// clamped (SetFpsLimit does) should be seen to have clamped.
 			console_log.infof( "%s = %s", sId.c_str(), ValueToString( bind.Get() ).c_str() );
+		}
+
+		// See cc_overlay_e2_palette. Every verb below moves the SAME three
+		// variables the keyboard moves; none of them is a second code path.
+		void PaletteCmd( std::span<std::string_view> args )
+		{
+			const std::string sVerb = args.size() >= 2 ? std::string( args[ 1 ] ) : "list";
+			const std::string sArg  = args.size() >= 3 ? std::string( args[ 2 ] ) : "";
+
+			if ( sVerb == "close" )
+			{
+				s_bPaletteOpen = false;
+				console_log.infof( "palette closed" );
+				return;
+			}
+
+			if ( sVerb == "reach" )
+			{
+				// Direction B's discoverability gate, reported over the LIVE
+				// registry rather than a fixture. See AUTONOMOUS-DECISIONS
+				// D16 for why this reports instead of aborting the build.
+				std::string sWorst;
+				const int nWorst = WorstCharsToReach( Reg(), 8, &sWorst );
+				console_log.infof( "worst chars-to-reach (top 8): %d  (%s)",
+					nWorst, sWorst.empty() ? "-" : sWorst.c_str() );
+				return;
+			}
+
+			if ( sVerb == "open" )
+			{
+				s_bPaletteOpen = true;
+				s_sPaletteQuery = sArg;
+				s_nPaletteSel = 0;
+			}
+			else if ( sVerb == "query" )
+			{
+				s_bPaletteOpen = true;
+				s_sPaletteQuery = sArg;
+				s_nPaletteSel = 0;
+			}
+			else if ( sVerb == "sel" )
+			{
+				s_nPaletteSel = (int)strtol( sArg.c_str(), nullptr, 10 );
+			}
+			else if ( sVerb == "adjust" || sVerb == "enter" )
+			{
+				const std::vector<PaletteItem> items = Build( Reg(), s_sPaletteQuery );
+				if ( items.empty() )
+				{
+					console_log.errorf( "palette: nothing matches '%s'", s_sPaletteQuery.c_str() );
+					return;
+				}
+				const int nSel = std::clamp( s_nPaletteSel, 0, (int)items.size() - 1 );
+				const std::string sId = items[ (size_t)nSel ].sId;
+
+				if ( sVerb == "enter" )
+				{
+					PaletteJump( sId );
+					console_log.infof( "palette: jumped to %s", sId.c_str() );
+					return;
+				}
+
+				const int nDir = sArg.empty() ? 1 : (int)strtol( sArg.c_str(), nullptr, 10 );
+				bool bOk = false;
+				if ( const Entry *pE = Reg().FindEntry( sId ) )
+					bOk = AdjustValue( Adjustable::Of( *pE ), nDir < 0 ? -1 : 1, false );
+				else if ( const Parameter *pP = Reg().FindParam( sId ) )
+					bOk = AdjustValue( Adjustable::Of( *pP ), nDir < 0 ? -1 : 1, false );
+
+				// Read back, same contract as overlay_e2_set: what the
+				// binding holds afterwards is the answer.
+				console_log.infof( "palette: %s %s -> %s", sId.c_str(),
+					bOk ? "adjusted" : "unchanged", PaletteValueText( sId ).c_str() );
+				return;
+			}
+			else if ( sVerb != "list" )
+			{
+				console_log.errorf( "palette: unknown verb '%s'", sVerb.c_str() );
+				return;
+			}
+
+			const std::vector<PaletteItem> items = Build( Reg(), s_sPaletteQuery );
+			console_log.infof( "palette: query '%s' -> %zu results (sel %d)",
+				s_sPaletteQuery.c_str(), items.size(), s_nPaletteSel );
+			for ( size_t i = 0; i < items.size() && i < 12; i++ )
+			{
+				const PaletteItem &it = items[ i ];
+				console_log.infof( "  %s%2zu  %-38s %-30s %s%s",
+					(int)i == s_nPaletteSel ? "> " : "  ", i,
+					it.sPath.c_str(), it.sLabel.c_str(),
+					PaletteValueText( it.sId ).c_str(),
+					it.bParam ? "  [param]" : "" );
+			}
 		}
 
 		// =================================================================
@@ -2089,11 +2248,512 @@ namespace gamescope::ui::shell
 		}
 
 		// =================================================================
+		//  The command palette (SPEC §8.2, API.md §10)
+		// =================================================================
+		// Which area owns an entry. The palette jumps by id, and the shell's
+		// selection is (area, entry) -- so this is the one lookup that turns
+		// a flat search result back into a place in the rail. By identity,
+		// never by id prefix: SPEC §2.6 states outright that an area id is
+		// not a promise about the keys inside it.
+		const Area *AreaOwning( const Entry *pEntry )
+		{
+			if ( !pEntry )
+				return nullptr;
+			for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+			{
+				const Area &area = Reg().AreaAt( a );
+				for ( size_t i = 0; i < area.EntryCount(); ++i )
+					if ( &area.EntryAt( i ) == pEntry )
+						return &area;
+			}
+			return nullptr;
+		}
+
+		// "Enter -- jump & select." Selecting the parent row, opening the
+		// Inspector in Configure and landing on the param is what makes
+		// SPEC §5.2's "one keystroke from anywhere" true for a Param as well
+		// as a row.
+		void PaletteJump( const std::string &sId )
+		{
+			const Entry     *pEntry = Reg().FindEntry( sId );
+			const Parameter *pParam = pEntry ? nullptr : Reg().FindParam( sId );
+
+			if ( pParam )
+				pEntry = pParam->Owner();
+			if ( !pEntry )
+				return;
+
+			const Area *pArea = AreaOwning( pEntry );
+			if ( !pArea )
+				return;
+
+			s_sSelectedArea = pArea->Id();
+			Select( pEntry );
+
+			// A param lives in Configure by definition (SPEC §5.1: "arriving
+			// from the palette on a parameter -- opens Configure"), even when
+			// the parent row's own kind would have opened Details.
+			if ( pParam )
+			{
+				s_eMode = InspectorMode::Configure;
+				s_bModeOverridden = true;
+			}
+
+			// The Reachability Law (SPEC §6.3): with the Inspector hidden the
+			// param has no column to be focused in, so the host is promoted
+			// to one. Jumping to a setting and landing somewhere it is not
+			// visible would be the one failure this whole index exists to
+			// prevent.
+			if ( pParam && Host() == InspectorHost::Hidden )
+				SetHost( InspectorHost::Drawer );
+
+			s_bPaletteOpen = false;
+			s_eFocusRegion = Region::Sheet;
+		}
+
+		// The query field, hand-rolled on io.InputQueueCharacters.
+		//
+		// WHY NOT ImGui::InputText -- direction B's FEASIBILITY.md §2 worked
+		// this out and E2 reaches the same answer, so the reasoning is
+		// recorded here rather than re-derived by the next reader:
+		//
+		//   * IT OWNS LEFT/RIGHT. InputTextEx() calls SetKeyOwner() on
+		//     ImGuiKey_LeftArrow/RightArrow while active and offers no
+		//     callback to decline them. SPEC §8.2 gives those two keys to
+		//     "adjust the highlighted entry's value IN PLACE" -- the
+		//     palette's headline behaviour -- so the field cannot have them.
+		//   * ITS ESC IS THE WRONG VERB. Esc on an active InputText reverts
+		//     the buffer to what it held on focus; SPEC's Esc ladder wants
+		//     the palette DISMISSED.
+		//   * IT BUYS NO IME HERE. InputText positions a candidate window
+		//     through io.SetPlatformImeDataFn, and this ImGui context has no
+		//     platform backend at all (custom Wayland input, ImGui_ImplVulkan
+		//     for rendering), so that pointer is null either way.
+		//
+		// What we lose against InputText: no selection, no caret placement,
+		// no clipboard paste, no dead-key composition. All four are
+		// acceptable for a search box that is at most a couple of words, and
+		// three of the four are already absent everywhere else in this
+		// overlay.
+		//
+		// io.InputQueueCharacters is filled by wlserver from the compositor's
+		// own xkb state, so what arrives here is already layout-correct UTF-8
+		// -- a German keyboard's 'z' arrives as 'z'.
+		void PaletteConsumeInput()
+		{
+			ImGuiIO &io = ImGui::GetIO();
+
+			bool bTyped = false;
+			for ( int i = 0; i < io.InputQueueCharacters.Size; i++ )
+			{
+				const ImWchar c = io.InputQueueCharacters[ i ];
+				// Printable only. Control characters arrive here too and
+				// would otherwise become invisible query bytes that match
+				// nothing -- a search box that silently stops working.
+				if ( c >= 0x20 && c != 0x7F )
+				{
+					AppendUtf8( s_sPaletteQuery, (unsigned int)c );
+					bTyped = true;
+				}
+			}
+			// We are the SOLE consumer while the palette is open, so the
+			// queue is cleared here rather than left for a widget below to
+			// pick up the same characters a second time.
+			io.InputQueueCharacters.resize( 0 );
+
+			if ( ImGui::IsKeyPressed( ImGuiKey_Backspace, true ) )
+			{
+				if ( io.KeyCtrl )
+					PopWord( s_sPaletteQuery );
+				else
+					PopUtf8( s_sPaletteQuery );
+				bTyped = true;
+			}
+
+			if ( bTyped )
+			{
+				// Any edit re-ranks the list, so the old highlight index
+				// points at a different setting. Returning to the top is the
+				// only answer that cannot silently adjust the wrong row when
+				// the next key is an arrow.
+				s_nPaletteSel = 0;
+				s_flPaletteCaretAt = (float)ImGui::GetTime();
+			}
+		}
+
+		// SPEC §8.2's palette keys. Returns true when the palette consumed
+		// the frame's keyboard, so the shell's own navigation stays quiet
+		// underneath it.
+		bool RunPaletteKeyboard( const std::vector<PaletteItem> &items )
+		{
+			if ( !s_bPaletteOpen )
+				return false;
+
+			ImGuiIO &io = ImGui::GetIO();
+
+			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
+			{
+				s_bPaletteOpen = false;
+				return true;
+			}
+
+			const int nCount = (int)items.size();
+			if ( nCount > 0 )
+			{
+				if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) )
+					s_nPaletteSel = std::min( s_nPaletteSel + 1, nCount - 1 );
+				if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow, true ) )
+					s_nPaletteSel = std::max( s_nPaletteSel - 1, 0 );
+
+				s_nPaletteSel = std::clamp( s_nPaletteSel, 0, nCount - 1 );
+				const PaletteItem &sel = items[ (size_t)s_nPaletteSel ];
+
+				// ADJUST IN PLACE. The palette is not only a jump list --
+				// this is the half that makes a known setting changeable
+				// without leaving the search results at all.
+				const int nDir = ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) ? +1
+				               : ImGui::IsKeyPressed( ImGuiKey_LeftArrow, true )  ? -1 : 0;
+				if ( nDir != 0 )
+				{
+					// The SAME adjuster the Sheet's arrow keys use, so a
+					// value cannot step differently in the two hosts.
+					if ( const Entry *pE = Reg().FindEntry( sel.sId ) )
+						AdjustValue( Adjustable::Of( *pE ), nDir, io.KeyShift );
+					else if ( const Parameter *pP = Reg().FindParam( sel.sId ) )
+						AdjustValue( Adjustable::Of( *pP ), nDir, io.KeyShift );
+				}
+
+				if ( ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+				     ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) )
+				{
+					PaletteJump( sel.sId );
+					return true;
+				}
+			}
+
+			PaletteConsumeInput();
+			return true;
+		}
+
+		// The palette's own value readout. A control that self-displays
+		// (Choice, Text, Bank) still needs a string here, because the palette
+		// has no room to draw the control itself -- so this resolves a
+		// Choice to its option LABEL rather than printing the raw int, which
+		// would be the one place in the product a user sees a magic number.
+		std::string PaletteValueText( const std::string &sId )
+		{
+			const Entry     *pE = Reg().FindEntry( sId );
+			const Parameter *pP = pE ? nullptr : Reg().FindParam( sId );
+			if ( !pE && !pP )
+				return {};
+
+			const Kind eKind = pE ? pE->GetKind() : pP->GetKind();
+			if ( eKind == Kind::Action )
+				return {};
+			if ( eKind == Kind::Facts )
+				return pE ? pE->SummaryText() : std::string();
+
+			const AnyBind &bind = pE ? pE->Binding() : pP->Binding();
+			if ( !bind.IsBound() )
+				return {};
+
+			const Value v = bind.Get();
+			if ( eKind == Kind::Choice )
+			{
+				const std::vector<Option> &opts = pE ? pE->Options() : pP->Options();
+				if ( const int *p = std::get_if<int>( &v ) )
+					for ( const Option &o : opts )
+						if ( o.nValue == *p && o.pszLabel )
+							return o.pszLabel;
+			}
+
+			std::string s = ValueToString( v );
+			const std::string &sUnit = pE ? pE->Unit() : pP->Unit();
+			if ( !s.empty() && !sUnit.empty() )
+				s += " " + sUnit;
+			return s;
+		}
+
+		// The panel itself. index.html's `.pal`: 820 wide, anchored 14% down
+		// the slab, a 52-tall query line, a scrolling result list of 38-tall
+		// rows and a 36-tall legend.
+		void DrawPalette( const Rect &rcSlab, const std::vector<PaletteItem> &items )
+		{
+			const float flW    = std::min( Px( 820.0f ), ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
+			const float flQH   = Px( 52.0f );
+			const float flRowH = Px( 38.0f );
+			const float flFootH= Px( 36.0f );
+			const float flPad  = Px( 16.0f );
+
+			// The list is capped at 60 rows, exactly as the mockup caps it.
+			// Beyond that the answer is a better query, not more scrolling --
+			// and it bounds the per-frame draw cost regardless of registry
+			// size.
+			const int nShown  = std::min( (int)items.size(), 60 );
+			const int nVisible= std::min( nShown, 9 );
+			const float flListH = nShown > 0 ? flRowH * (float)nVisible : Px( 60.0f );
+
+			const float flH = flQH + flListH + flFootH;
+			const float x0  = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
+			const float y0  = rcSlab.y0 + ( rcSlab.y1 - rcSlab.y0 ) * 0.14f;
+			const Rect  rc  = { x0, y0, x0 + flW, std::min( y0 + flH, rcSlab.y1 - Px( tok::kM ) ) };
+
+			ImDrawList *pDraw = ImGui::GetWindowDrawList();
+
+			// A scrim, so the palette reads as ABOVE the shell rather than as
+			// another region of it. It is also what makes the 2px accent
+			// edges behind it stop competing for attention.
+			pDraw->AddRectFilled( ImVec2( rcSlab.x0, rcSlab.y0 ), ImVec2( rcSlab.x1, rcSlab.y1 ),
+			                      IM_COL32( 0, 0, 0, 150 ) );
+
+			// The panel is filled TWICE, deliberately. Role::Surface is
+			// rgba(9,10,12,.88) -- the slab's own translucency, which is
+			// correct for a region that wants the game behind it but wrong
+			// for a modal list: at 88% the sheet's controls read straight
+			// through the result rows and the two sets of text compete. Two
+			// coats reach ~98.6% without inventing a colour token that exists
+			// nowhere in SPEC §7.1.
+			Fill( rc, Col( Role::Surface ) );
+			Fill( rc, Col( Role::Surface ) );
+			pDraw->AddRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), Accent( 0.42f ),
+			                0.0f, 0, Hairline() );
+
+			// ---- query line ------------------------------------------------
+			// The prompt is ">" and not the mockup's magnifier: Fonts.cpp
+			// bakes Basic Latin + Latin-1 only (this UI is English-only), and
+			// U+2315 would draw as a fallback box. Every glyph the palette
+			// uses is inside that range for the same reason.
+			const Rect rcQ = { rc.x0, rc.y0, rc.x1, rc.y0 + flQH };
+			Label( { rcQ.x0 + flPad, rcQ.y0, rcQ.x1, rcQ.y1 }, TypeRole::Value,
+			       Col( Role::AccentValue ), ">" );
+
+			const float flQTextX = rcQ.x0 + flPad + Px( 26.0f );
+			if ( s_sPaletteQuery.empty() )
+			{
+				Label( { flQTextX, rcQ.y0, rcQ.x1 - flPad, rcQ.y1 }, TypeRole::Value,
+				       Col( Role::TextMeta ), "search every setting and parameter" );
+			}
+			else
+			{
+				Label( { flQTextX, rcQ.y0, rcQ.x1 - flPad, rcQ.y1 }, TypeRole::Value,
+				       Col( Role::TextPrimary ), s_sPaletteQuery.c_str() );
+			}
+
+			// The caret. Solid for 500 ms after the last keystroke, then a
+			// 1 Hz blink -- so it never blinks while you are typing.
+			{
+				const float flAge = (float)ImGui::GetTime() - s_flPaletteCaretAt;
+				if ( flAge < 0.5f || std::fmod( flAge, 1.0f ) < 0.5f )
+				{
+					ImGui::PushFont( FontFor( TypeRole::Value ) );
+					const float flTextW = s_sPaletteQuery.empty() ? 0.0f
+						: MeasureText( TypeRole::Value, s_sPaletteQuery.c_str() ).x;
+					ImGui::PopFont();
+					const float flCx = flQTextX + flTextW + Px( 2.0f );
+					const float flCh = Px( 20.0f );
+					pDraw->AddRectFilled(
+						ImVec2( flCx, ( rcQ.y0 + rcQ.y1 - flCh ) * 0.5f ),
+						ImVec2( flCx + std::max( 1.0f, Px( 1.5f ) ), ( rcQ.y0 + rcQ.y1 + flCh ) * 0.5f ),
+						Accent( 1.0f ) );
+				}
+			}
+
+			// The count chip: what this index actually covers. It is the
+			// Overview card's "0 unreachable" argument in the one place a
+			// user is asking "is it in here?".
+			{
+				size_t nAreas = 0, nEntries = 0, nParams = 0;
+				for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+				{
+					const Area &area = Reg().AreaAt( a );
+					if ( !area.Available() )
+						continue;
+					nAreas++;
+					nEntries += area.EntryCount();
+					for ( size_t i = 0; i < area.EntryCount(); ++i )
+						nParams += area.EntryAt( i ).ParamCount();
+				}
+				char sz[ 96 ];
+				snprintf( sz, sizeof( sz ), "%zu areas · %zu settings · %zu params",
+					nAreas, nEntries, nParams );
+				Label( { rcQ.x0, rcQ.y0, rcQ.x1 - flPad, rcQ.y1 }, TypeRole::Meta,
+				       Col( Role::TextMeta ), sz, TextAlign::Right );
+			}
+			HLine( rc.x0, rc.x1, rcQ.y1, Col( Role::Line ) );
+
+			// ---- results ---------------------------------------------------
+			const Rect rcList = { rc.x0, rcQ.y1, rc.x1, rcQ.y1 + flListH };
+
+			if ( nShown == 0 )
+			{
+				Label( { rcList.x0 + flPad, rcList.y0, rcList.x1 - flPad, rcList.y1 },
+				       TypeRole::Meta, Col( Role::TextMeta ),
+				       "nothing matches. Every setting and every parameter is in this index." );
+			}
+			else
+			{
+				// Scroll the window of visible rows so the highlight is
+				// always inside it -- the list has no scrollbar and no
+				// pointer contract, so this is the only thing keeping the
+				// selection on screen.
+				int nFirst = 0;
+				if ( s_nPaletteSel >= nVisible )
+					nFirst = s_nPaletteSel - nVisible + 1;
+				nFirst = std::clamp( nFirst, 0, std::max( 0, nShown - nVisible ) );
+
+				for ( int i = 0; i < nVisible; i++ )
+				{
+					const int nIdx = nFirst + i;
+					if ( nIdx >= nShown )
+						break;
+					const PaletteItem &it = items[ (size_t)nIdx ];
+
+					const Rect rcRow = { rcList.x0, rcList.y0 + flRowH * (float)i,
+					                     rcList.x1, rcList.y0 + flRowH * (float)( i + 1 ) };
+					const bool bOn = ( nIdx == s_nPaletteSel );
+					if ( bOn )
+					{
+						Fill( rcRow, Accent( 0.14f ) );
+						Fill( { rcRow.x0, rcRow.y0, rcRow.x0 + Px( 2.0f ), rcRow.y1 },
+						      Col( Role::AccentBase ) );
+					}
+
+					// D5: the path column is the CONFIG KEY. See SPEC §2.6 --
+					// it is what a reviewer checks against the on-disk JSON,
+					// and an area id would print a prefix that does not exist
+					// there for four of eleven areas.
+					//
+					// 260 rather than the mockup's 210: a real Param key
+					// (`image.shaders.adaptive_brightness.down_speed`) is
+					// longer than any key the mockup's demo registry holds,
+					// and a truncated key is worth less than no key -- the
+					// whole point of showing it is that it can be checked
+					// against the file.
+					const float flPathW = Px( 260.0f );
+					Label( { rcRow.x0 + flPad, rcRow.y0, rcRow.x0 + flPad + flPathW, rcRow.y1 },
+					       TypeRole::Meta, Col( Role::TextMeta ), it.sPath.c_str() );
+
+					const float flValW  = Px( 120.0f );
+					const float flChipW = it.bParam ? Px( 52.0f ) : 0.0f;
+					// The chip sits between the label and the value with a
+					// gap on both sides, so a wide value cannot collide with
+					// it the way a shared edge would let it.
+					const float flChipR = rcRow.x1 - flPad - flValW - Px( tok::kS );
+					Label( { rcRow.x0 + flPad + flPathW + Px( tok::kM ), rcRow.y0,
+					         flChipR - flChipW - Px( tok::kS ), rcRow.y1 },
+					       TypeRole::Label,
+					       bOn ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
+					       it.sLabel.c_str() );
+
+					// The `param` chip is load-bearing for the
+					// anti-junk-drawer argument (API.md §10): it is the
+					// visible proof that a setting in the Inspector is
+					// indexed exactly like a Sheet row.
+					if ( it.bParam )
+					{
+						const Rect rcChip = { flChipR - flChipW, rcRow.y0 + Px( 9.0f ),
+						                      flChipR, rcRow.y1 - Px( 9.0f ) };
+						pDraw->AddRectFilled( ImVec2( rcChip.x0, rcChip.y0 ), ImVec2( rcChip.x1, rcChip.y1 ),
+						                      Accent( 0.16f ) );
+						Label( rcChip, TypeRole::Meta, Col( Role::AccentText ), "param", TextAlign::Center );
+					}
+
+					const std::string sVal = PaletteValueText( it.sId );
+					if ( !sVal.empty() )
+					{
+						Label( { rcRow.x1 - flPad - flValW, rcRow.y0, rcRow.x1 - flPad, rcRow.y1 },
+						       TypeRole::Value, Col( Role::AccentValue ), sVal.c_str(), TextAlign::Right );
+					}
+				}
+			}
+
+			// ---- legend ----------------------------------------------------
+			const Rect rcFoot = { rc.x0, rc.y1 - flFootH, rc.x1, rc.y1 };
+			HLine( rc.x0, rc.x1, rcFoot.y0, Col( Role::Line ) );
+			Label( { rcFoot.x0 + flPad, rcFoot.y0, rcFoot.x1 - flPad, rcFoot.y1 },
+			       TypeRole::Meta, Col( Role::TextMeta ),
+			       "up/down move    left/right adjust in place    "
+			       "Enter jump & select    Esc dismiss" );
+		}
+
+		// =================================================================
 		//  Keyboard (SPEC §8.2)
 		// =================================================================
+		// The rail's visible items, in drawn order. The rail skips
+		// unavailable areas, so Ctrl+Left/Right must walk the same filtered
+		// list the eye sees -- stepping the registry's raw index would skip
+		// over a hidden area and look like a dropped keypress.
+		std::vector<const Area *> VisibleAreas()
+		{
+			std::vector<const Area *> out;
+			for ( size_t i = 0; i < Reg().AreaCount(); ++i )
+				if ( Reg().AreaAt( i ).Available() )
+					out.push_back( &Reg().AreaAt( i ) );
+			return out;
+		}
+
+		void StepArea( int nDir )
+		{
+			const std::vector<const Area *> areas = VisibleAreas();
+			if ( areas.empty() )
+				return;
+			int nAt = 0;
+			for ( size_t i = 0; i < areas.size(); i++ )
+				if ( areas[ i ]->Id() == s_sSelectedArea )
+					nAt = (int)i;
+			const int nNext = std::clamp( nAt + nDir, 0, (int)areas.size() - 1 );
+			if ( nNext == nAt )
+				return;
+			s_sSelectedArea = areas[ (size_t)nNext ]->Id();
+			// The selection cannot survive an area change (SelectedEntry()
+			// checks by identity against the current area), so clear it
+			// rather than leave a stale id behind.
+			Select( nullptr );
+		}
+
+		// Move the selection within the current sheet. A composite and a
+		// Facts row are both selectable -- selecting a Facts row is the only
+		// way to reach Details -- so nothing is skipped here.
+		void StepRow( int nDir )
+		{
+			const Area *pArea = SelectedArea();
+			if ( !pArea || pArea->EntryCount() == 0 )
+				return;
+
+			const Entry *pSel = SelectedEntry();
+			int nAt = -1;
+			for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+				if ( &pArea->EntryAt( i ) == pSel )
+					nAt = (int)i;
+
+			// From no selection, Down lands on the first row and Up on the
+			// last -- so a fresh sheet is enterable from either key.
+			const int nNext = nAt < 0
+				? ( nDir > 0 ? 0 : (int)pArea->EntryCount() - 1 )
+				: std::clamp( nAt + nDir, 0, (int)pArea->EntryCount() - 1 );
+			Select( &pArea->EntryAt( (size_t)nNext ) );
+		}
+
 		void RunKeyboard()
 		{
 			const ImGuiIO &io = ImGui::GetIO();
+
+			// Ctrl+K: the command palette. Checked FIRST and before the
+			// palette's own handler, so it also works while the palette is
+			// already open (re-opening clears the query, which is what every
+			// palette in every editor does).
+			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_K, false ) )
+			{
+				OpenPalette();
+				return;
+			}
+
+			// While the palette is open it owns the keyboard entirely --
+			// including plain character keys, which are query text rather
+			// than shell shortcuts. Handled by the caller, which already has
+			// the built item list; nothing below may run underneath it.
+			if ( s_bPaletteOpen )
+				return;
 
 			// Ctrl+I: "cycle Inspector host: column -> drawer -> hidden".
 			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_I, false ) )
@@ -2102,6 +2762,33 @@ namespace gamescope::ui::shell
 					Host() == InspectorHost::Column ? InspectorHost::Drawer :
 					Host() == InspectorHost::Drawer ? InspectorHost::Hidden :
 					                                  InspectorHost::Column );
+				return;
+			}
+
+			// Ctrl+Left/Right: "previous / next rail item without leaving the
+			// Sheet" (SPEC §8.2). Tested before the bare arrows below, which
+			// would otherwise eat the same press as an adjust.
+			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_LeftArrow, true ) )
+			{
+				StepArea( -1 );
+				return;
+			}
+			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) )
+			{
+				StepArea( +1 );
+				return;
+			}
+
+			// Ctrl+D: "reset selected row AND its parameters to default".
+			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_D, false ) )
+			{
+				if ( const Entry *pE = SelectedEntry() )
+				{
+					pE->ResetToDefault();
+					for ( size_t i = 0; i < pE->ParamCount(); ++i )
+						pE->ParamAt( i ).ResetToDefault();
+				}
+				return;
 			}
 
 			// Tab / Shift+Tab: cycle region Rail -> Sheet -> Inspector.
@@ -2111,18 +2798,89 @@ namespace gamescope::ui::shell
 			{
 				const int n = (int)s_eFocusRegion + ( io.KeyShift ? 2 : 1 );
 				s_eFocusRegion = (Region)( n % 3 );
+				return;
 			}
 
-			// Esc: palette -> drawer -> inline expansion -> overlay. P2 has
-			// no palette and no inline expansion, so the ladder it can
-			// actually walk is: a floating drawer closes first, and only
-			// then does Esc reach the overlay itself (which
-			// SettingsOverlay.cpp owns).
-			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) &&
-			     Host() == InspectorHost::Drawer )
+			// Esc: palette -> drawer -> inline expansion -> overlay. The
+			// palette rung is handled by RunPaletteKeyboard() before this
+			// runs; what is left here is the drawer, and then the overlay
+			// itself (which SettingsOverlay.cpp owns).
+			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
 			{
-				SetHost( InspectorHost::Hidden );
+				if ( Host() == InspectorHost::Drawer )
+					SetHost( InspectorHost::Hidden );
+				else if ( SelectedEntry() )
+					Select( nullptr );
+				return;
 			}
+
+			// ---- movement and adjustment ---------------------------------
+			// A text field being edited owns every key below it; without this
+			// guard typing "5" into a profile name would also step whatever
+			// row happened to be selected.
+			if ( ImGui::IsAnyItemActive() || !s_sEditingText.empty() )
+				return;
+
+			if ( s_eFocusRegion == Region::Rail )
+			{
+				// In the rail, up/down IS the rail -- SPEC §8.2's "move
+				// selection within the focused region".
+				if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ) StepArea( +1 );
+				if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ) StepArea( -1 );
+				// Right crosses into the sheet, which is the region edge
+				// rule ("At a region edge: cross").
+				if ( ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) )
+					s_eFocusRegion = Region::Sheet;
+				return;
+			}
+
+			if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ) StepRow( +1 );
+			if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ) StepRow( -1 );
+
+			const Entry *pSel = SelectedEntry();
+			if ( !pSel )
+				return;
+
+			// Space toggles a switch without leaving the row (SPEC §8.2), and
+			// fires an Action. Enter does the same, so a user who never
+			// learned which is which is not punished.
+			const bool bActivate = ImGui::IsKeyPressed( ImGuiKey_Space, false ) ||
+			                       ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+			                       ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false );
+			if ( bActivate && pSel->DisabledReason().empty() )
+			{
+				if ( pSel->GetKind() == Kind::Switch && pSel->Binding().IsBound() )
+				{
+					const Value v = pSel->Binding().Get();
+					if ( const bool *p = std::get_if<bool>( &v ) )
+						pSel->Binding().Set( Value{ !*p } );
+				}
+				else if ( pSel->GetKind() == Kind::Action )
+				{
+					// A destructive action still ARMS first -- the keyboard
+					// must not be a route around Entry::Confirm()'s two-stage
+					// arm, or the confirmation would be pointer-only.
+					if ( pSel->NeedsConfirm() && s_sArmedAction != pSel->Id() )
+					{
+						s_sArmedAction = pSel->Id();
+						s_flArmedAt = (float)ImGui::GetTime();
+					}
+					else
+					{
+						pSel->Invoke();
+						s_sArmedAction.clear();
+					}
+				}
+				return;
+			}
+
+			// Left/Right adjust the focused control, through the SAME
+			// function the palette uses -- so a slider cannot step by one
+			// amount here and another there.
+			const int nDir = ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) ? +1
+			               : ImGui::IsKeyPressed( ImGuiKey_LeftArrow,  true ) ? -1 : 0;
+			if ( nDir != 0 && pSel->DisabledReason().empty() )
+				AdjustValue( Adjustable::Of( *pSel ), nDir, io.KeyShift );
 		}
 	}
 
@@ -2152,6 +2910,17 @@ namespace gamescope::ui::shell
 			return;
 
 		RunKeyboard();
+
+		// The palette's own keys, and its results, are computed here rather
+		// than inside RunKeyboard() because both the key handler and the
+		// painter need the SAME ranked list -- building it twice would let
+		// the row Enter jumps to differ from the row that was highlighted.
+		std::vector<PaletteItem> paletteItems;
+		if ( s_bPaletteOpen )
+		{
+			paletteItems = Build( Reg(), s_sPaletteQuery );
+			RunPaletteKeyboard( paletteItems );
+		}
 
 		// Dynamic areas resynchronise HERE, at the top of the frame, before
 		// anything reads a row out of one. A rebuild frees every Entry the
@@ -2249,5 +3018,55 @@ namespace gamescope::ui::shell
 
 		ImGui::PopStyleColor( 2 );
 		ImGui::PopStyleVar( 2 );
+
+		// The palette gets its OWN top-level window, opened after the slab's
+		// has closed.
+		//
+		// WHY NOT SIMPLY DRAW IT LAST INSIDE THE SLAB. The sheet's rows and
+		// the Inspector's body are ImGui CHILD windows (`##sheetrows`,
+		// `##inspbody`), and a child's draw list is emitted after its
+		// parent's regardless of the order the two were filled in. Drawing
+		// the palette into the slab's own list therefore put it UNDERNEATH
+		// the very rows it is meant to cover -- the segmented controls and
+		// switches painted straight through it. A sibling window ordered
+		// after the slab is above both the parent and its children, which is
+		// the only arrangement that holds no matter what the sheet does with
+		// child windows later.
+		//
+		// The palette is the one surface in the shell allowed to cover
+		// another: it is transient, keyboard-only, and dismisses on Esc.
+		// SPEC §8.4's "regions never move" is about regions, not about a
+		// modal index.
+		if ( s_bPaletteOpen )
+		{
+			ImGui::SetNextWindowPos( ImVec2( ( io.DisplaySize.x - slab.flWidthPx ) * 0.5f,
+			                                 ( io.DisplaySize.y - slab.flHeightPx ) * 0.5f ) );
+			ImGui::SetNextWindowSize( ImVec2( slab.flWidthPx, slab.flHeightPx ) );
+			ImGui::SetNextWindowFocus();
+			ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+
+			// Deliberately NOT `flags | NoBackground`: the slab carries
+			// ImGuiWindowFlags_NoBringToFrontOnFocus, which pins a window to
+			// the BACK of the draw order and made SetNextWindowFocus() above
+			// a no-op -- the palette rendered behind the sheet it is supposed
+			// to cover. The palette is the one window here that must come
+			// forward, so it is the one window that does not carry that flag.
+			const ImGuiWindowFlags palFlags =
+				ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+				ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoBackground;
+			if ( ImGui::Begin( "##e2palette", nullptr, palFlags ) )
+			{
+				const ImVec2 origin = ImGui::GetWindowPos();
+				const Rect rcBody = {
+					regions.rcBody.x0 + origin.x, regions.rcBody.y0 + origin.y,
+					regions.rcBody.x1 + origin.x, regions.rcBody.y1 + origin.y };
+				DrawPalette( rcBody, paletteItems );
+			}
+			ImGui::End();
+			ImGui::PopStyleVar( 2 );
+		}
 	}
 }

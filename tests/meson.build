@@ -16,13 +16,13 @@ endforeach
 # renderer, no compositor. That is why imgui_dep and font_headers are here:
 # ImRect's inline maths for the pure tests, and the real embedded Geist faces
 # so the atoms measure text exactly as the shipping binary does.
-foreach src : ['Overlay/UI/Tokens.cpp', 'Overlay/UI/Lane.cpp', 'Overlay/UI/Row.cpp', 'Overlay/UI/Band.cpp', 'Overlay/UI/Registry.cpp', 'Overlay/UI/Layout.cpp', 'Overlay/UI/Colors.cpp', 'Overlay/UI/Controls.cpp', 'Overlay/Fonts.cpp', 'Overlay/Palette.cpp']
+foreach src : ['Overlay/UI/Tokens.cpp', 'Overlay/UI/Lane.cpp', 'Overlay/UI/Row.cpp', 'Overlay/UI/Band.cpp', 'Overlay/UI/Registry.cpp', 'Overlay/UI/CommandPalette.cpp', 'Overlay/UI/Layout.cpp', 'Overlay/UI/Colors.cpp', 'Overlay/UI/Controls.cpp', 'Overlay/Fonts.cpp', 'Overlay/Palette.cpp']
 	unittest_src += srcdir / src
 endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp'],
+	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep],
 	cpp_args: gamescope_cpp_args,
@@ -35,3 +35,4 @@ test('settings_overlay_input', gamescope_tests, args: ['[settings_overlay_input]
 test('overlay_ui', gamescope_tests, args: ['[overlay_ui]'])
 test('overlay_atoms', gamescope_tests, args: ['[overlay_atoms]'])
 test('overlay_shell', gamescope_tests, args: ['[overlay_shell]'])
+test('overlay_palette', gamescope_tests, args: ['[overlay_palette]'])

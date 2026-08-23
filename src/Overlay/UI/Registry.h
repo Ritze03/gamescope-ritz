@@ -257,6 +257,10 @@ namespace gamescope::ui
 		const std::string &Id() const    { return m_sId; }
 		const std::string &Title() const { return m_sTitle; }
 		const std::string &HelpText() const { return m_sHelp; }
+		// The blob `.Keywords()` recorded. Read by the command palette, which
+		// is the reason the setter has existed since P1 -- until now nothing
+		// consumed it, so a keyword list was a declaration with no reader.
+		const std::string &KeywordText() const { return m_sKeywords; }
 		Kind  GetKind() const            { return m_eKind; }
 		const AnyBind &Binding() const   { return m_Bind; }
 		const Value &DefaultValue() const { return m_Default; }
@@ -372,6 +376,8 @@ namespace gamescope::ui
 		const std::string &Id() const       { return m_sId; }
 		const std::string &Title() const    { return m_sTitle; }
 		const std::string &HelpText() const { return m_sHelp; }
+		// See Parameter::KeywordText().
+		const std::string &KeywordText() const { return m_sKeywords; }
 		const std::string &Unit() const     { return m_sUnit; }
 		const std::string &ZeroWord() const { return m_sZeroMeans; }
 		Kind  GetKind() const               { return m_eKind; }
@@ -764,4 +770,44 @@ namespace gamescope::ui
 		std::vector<std::unique_ptr<Area>> m_Areas;
 		std::vector<std::string>           m_ClaimedIds;
 	};
+
+	// =====================================================================
+	//  Adjustable -- "step this declaration's value by one"
+	// =====================================================================
+	// SPEC §8.2 gives the same meaning to the arrow keys in three places: on
+	// a focused Sheet row, on an Inspector row, and on the highlighted
+	// palette result ("adjust the highlighted entry's value IN PLACE,
+	// without leaving the list").
+	//
+	// WHY THIS IS ONE FUNCTION AND NOT THREE. Those three hosts having their
+	// own stepping code is precisely how the two legacy Position Grid call
+	// sites drifted apart (D15.1's argument, applied to behaviour rather than
+	// geometry). A slider that steps by 1 in the Sheet and by its full range
+	// in the palette is the same class of defect as a control that renders
+	// and does nothing (#25, #68), and it would not be visible in either host
+	// alone.
+	//
+	// It is a VIEW over an Entry or a Parameter -- both expose the same six
+	// accessors this needs -- so neither type has to grow a method and the
+	// function stays free of the registry's ownership rules.
+	struct Adjustable
+	{
+		Kind                        eKind    = Kind::Switch;
+		const AnyBind              *pBind    = nullptr;
+		bool                        bHasRange = false;
+		float                       flLo = 0.0f, flHi = 0.0f, flStep = 0.0f;
+		const std::vector<Option>  *pOptions = nullptr;
+
+		static Adjustable Of( const Entry &e );
+		static Adjustable Of( const Parameter &p );
+	};
+
+	// Steps the bound value by `nDir` (-1 / +1). `bFine` is SPEC §3.4's
+	// Shift modifier: x0.1 of the normal step on a continuous range.
+	//
+	// Returns false and writes nothing when the declaration cannot be
+	// stepped -- a read-only kind, an unbound binding, or a kind whose value
+	// is not ordered (Text, Bank, Action, Facts, Meter). A caller therefore
+	// never has to know the taxonomy to decide whether an arrow key applies.
+	bool AdjustValue( const Adjustable &adj, int nDir, bool bFine );
 }
