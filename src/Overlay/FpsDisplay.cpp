@@ -899,15 +899,35 @@ namespace gamescope
 			L.flPercentileRowWidth = L.percentileSizes[0].x + kItemGap + L.percentileSizes[1].x + kItemGap + L.percentileSizes[2].x;
 		}
 
-		// Spec §10: "container ... min-width 186px" -- convert to a content-
-		// width floor using whatever padding is actually configured (rather
-		// than assuming the spec's own fixed 8px/11px split, which this
-		// readout already collapses to one symmetric backdrop_padding value)
-		// so the HUD still reads as "at least this wide" regardless of the
-		// padding slider.
-		constexpr float kMinContainerWidth = 186.0f;
-		const float flContentWidthFloor = kMinContainerWidth - cfg.backdrop_padding * 2.0f;
-		L.flContentWidth = std::max( { L.textSize.x, L.flPercentileRowWidth, flContentWidthFloor } );
+		// Issue #80: spec §10's "container ... min-width 186px" is dropped as
+		// a floor here -- deliberately, not an oversight. Investigated before
+		// removing it (this issue's own instruction), not deleted blindly:
+		//   - Backdrop rounding (DrawModuleBackdrop -> AddRectFilled ->
+		//     ImDrawList::PathRect) is self-clamping in Dear ImGui itself:
+		//     PathRect caps `rounding` to (min box dimension)/2 before
+		//     drawing, so a tiny box can never produce a broken/overlapping-
+		//     corner rect -- worst case it degrades to a fully-rounded pill/
+		//     circle, a normal look for a small badge, not a rendering bug.
+		//     No floor is needed to protect backdrop rounding (#29).
+		//   - The position grid/anchor (DrawReadout below) sizes itself off
+		//     `flStackWidth`, the real measured widest-present-module width,
+		//     recomputed every frame -- nothing there hardcodes or assumes a
+		//     minimum (#27).
+		//   - CPU/GPU/Media's own MeasureXModule() functions already report
+		//     pure content width with no floor at all (Media's is capped
+		//     from ABOVE at 260px, #77, but never floored from below) -- FPS
+		//     was the only module still enforcing this spec number, so
+		//     dropping it here makes FPS consistent with the other three,
+		//     not a new pattern.
+		// So the floor protected nothing real -- it was a literal read of
+		// the spec's own number with no functional backing. Each module's
+		// own minimum is now genuinely its own content width, so FPS-only
+		// with the label hidden (#73) and frametime off (#71) shrinks to fit
+		// just the raw number, per this issue's own ask. #72's shared-width
+		// contract still applies afterward, unchanged: every enabled module
+		// draws at flStackWidth, the widest enabled module's content width.
+		// See ui-mockup-precise-spec.md's dated note on this departure.
+		L.flContentWidth = std::max( L.textSize.x, L.flPercentileRowWidth );
 
 		L.flContentHeight = L.textSize.y;
 		if ( L.bShowGraph )
@@ -1236,9 +1256,11 @@ namespace gamescope
 	// kMediaTrackMaxWidth is a straight pixel ceiling (one of this issue's
 	// own suggested options), sized in the same ballpark as a typical GPU/
 	// CPU row's own width at this file's default font sizes (~200-230px
-	// unscaled: "GPU 63%  VRAM 12.1/24.0GB" and friends) -- comfortably
-	// above MeasureFpsModule()'s 186px kMinContainerWidth floor so a normal
-	// "Artist  -  Title" line still draws in full, but close enough to a
+	// unscaled: "GPU 63%  VRAM 12.1/24.0GB" and friends) -- issue #80 later
+	// removed MeasureFpsModule()'s separate 186px floor (this cap sits well
+	// above where that floor used to be and is unaffected by its removal)
+	// so a normal "Artist  -  Title" line still draws in full, but close
+	// enough to a
 	// sibling module's own width that one outlier title can no longer drag
 	// the whole stack 2-3x wider than everything else in it. A multiple-of-
 	// next-widest-module cap was considered and rejected: it would make
