@@ -4,6 +4,15 @@ Honest assessment. Manual layout, `ImDrawList`, `io.DeltaTime` animation, no doc
 branch, no gamepad path. Where E2 is weak, it says so — including where it is weaker
 than E.
 
+> **2026-08-23 — read `SPEC.md` § Amendments first.** This assessment was written against
+> the three-mode Inspector (`EXPLAIN / CONFIGURE / DIAGNOSE`) and against E2's own control
+> geometry. Both have changed: the Inspector has **two** modes, and the controls are
+> direction B's uplifted ~25% onto one control height. Nothing in the ImGui assessment
+> below is invalidated by either change — a mode strip is a strip whether it has two cells
+> or three, and the widget geometry is `ImDrawList` primitives at any size — but the mode
+> names and the pixel constants quoted below are the old ones. `SPEC.md` and `API.md` are
+> authoritative; `INCONSISTENCIES.md` records what moved and why.
+
 ---
 
 ## 1. The three regions, and why E2 needs *less* from ImGui than E did

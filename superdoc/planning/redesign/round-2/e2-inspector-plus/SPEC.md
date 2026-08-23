@@ -8,6 +8,42 @@ Companion files: `API.md` (the helper layer), `FEASIBILITY.md` (ImGui assessment
 
 ---
 
+## Amendments
+
+### 2026-08-23 — user critique, second pass
+
+Applied to this document and to `index.html` together. Sections below have been rewritten
+in place; this block is the summary of *what changed and why*.
+
+1. **The Inspector has two modes, not three.** `EXPLAIN / CONFIGURE / DIAGNOSE` became
+   **`CONFIGURE / DETAILS`**. Configure is *what this setting does*, in one short
+   paragraph, followed by every value you can set — the row's own control first, then its
+   parameters. Details is everything technical the shell can derive. The structural rule
+   is unchanged and is the whole point: **the Inspector still has no authoring API.** Two
+   generators instead of three; not two panels anyone writes into. See §5.
+2. **The thread is deleted.** E's signature line from the active rail item into the sheet
+   header is gone; the rail's own selected state and the breadcrumb already answer "where
+   am I", and nothing else depended on it.
+3. **The rail carries drawn icons.** Single monospace glyphs at 14px became an inline SVG
+   set on one 24-unit grid, 1.7 stroke, miter joins, fill used only where a fill carries
+   meaning. Legible from 0.5× to 2.0×; no icon font, no external asset.
+4. **The hidden Inspector adopts E1's visual** — a 20-base named vertical spine on the
+   right edge reading `inspector ›`, which restores the region on click (also `Ctrl+I`).
+   The sheet lane is reduced by 20 so nothing is ever covered.
+5. **The accent is one token.** Every accent-derived colour in the mockup is
+   `rgba(var(--accRGB), α)`; the only accent literals left are the eight token
+   declarations, which the hue slider overwrites. One hue change repaints everything.
+6. **The controls are direction B's**, reproduced from B's own stylesheet and reconciled
+   with E2's lane rule. See §3, and §3.0 for the one control-height system they imply.
+7. **A control-height system, because the switch was too small.** `--H = 28` base units is
+   *the* control height and every control's hit box honours it. B's geometry is uplifted
+   ~25%, the same uplift shipping issue #23 applied to the handoff baseline at this user's
+   request. The switch is now **40 × 20 with a 16 knob**. See §3.0.
+8. **`INCONSISTENCIES.md`** records the full audit — 30 fixes and 5 open questions. The
+   items that changed rules stated *here* are C1–C8 in that file.
+
+---
+
 ## 0. The thesis in one paragraph
 
 E's Inspector is the part of the design the user singled out — *"it cleans up the main
@@ -19,7 +55,7 @@ that instruction literally and to its limit.** Everything that explains, derives
 qualifies, tunes or measures leaves the Sheet. What remains in the Sheet is the
 irreducible minimum: *what this setting is called, what it is set to, and how to change
 it.* The Sheet becomes a single-height, single-alignment table you can read in
-peripheral vision. The Inspector becomes the whole rest of the product — with three
+peripheral vision. The Inspector becomes the whole rest of the product — with two
 modes, and with a **structural law** that makes it incapable of turning into a junk
 drawer.
 
@@ -45,11 +81,11 @@ five things, and there is no sixth:
 
 | Left the Sheet | Was | Now |
 |---|---|---|
-| `.Hint()` — the one-line hint under a label | promoted rows to `RowTall` 76 | **deleted from the API.** Inspector ▸ Explain. |
-| `.Note()` — two lines of prose per group | `TextMeta`, full column width | **deleted from the Sheet API.** Inspector ▸ Explain (it belongs to a row, not a group). |
-| Readout runs | 5–9 non-interactive rows (HDR metadata, GPU sensors, `sampling 500 ms · 240-frame window`) | **one `Facts` row** — label + a summary in the value column + a chevron. Inspector ▸ Diagnose. |
+| `.Hint()` — the one-line hint under a label | promoted rows to `RowTall` 76 | **deleted from the API.** Inspector ▸ Configure. |
+| `.Note()` — two lines of prose per group | `TextMeta`, full column width | **deleted from the Sheet API.** Inspector ▸ Configure (it belongs to a row, not a group). |
+| Readout runs | 5–9 non-interactive rows (HDR metadata, GPU sensors, `sampling 500 ms · 240-frame window`) | **one `Facts` row** — label + a summary in the value column + a chevron. Inspector ▸ Details. |
 | Expert parameter groups | `ui::Depth::Expert`, collapsed group inside the Inspector | **`.Param()`** — a first-class child of its parent row. Inspector ▸ Configure. |
-| Units, ranges, defaults, destination files | printed as chips and meta text next to controls | derived from the binding, shown in Inspector ▸ Explain's fact grid. Never printed in the Sheet. |
+| Units, ranges, defaults, destination files | printed as chips and meta text next to controls | derived from the binding, shown in Inspector ▸ Details' binding grid. Never printed in the Sheet. |
 
 **The consequence is that there is exactly one Sheet row height: 44.** `RowTall` is
 gone. (Composites are not rows; see §4.) That is not aesthetic tidiness — it is what
@@ -147,13 +183,23 @@ from the control kind, never the caller:
 
 | Control kind | Value column |
 |---|---|
-| Slider, Meter, Sparkline, Composite | **yes** — right-bound at `Lw` |
-| Switch, Segmented, Dropdown, Stepper, Text | **no** — the control *is* the readout |
-| Facts | **no** — the summary is a *string*, not a value; it sits right-bound in the **control zone**, in `TextMeta`, because opening Diagnose is what that row's control zone does |
+| Switch, Slider, Stepper, Meter, Sparkline, Composite | **yes** — right-bound at `Lw` |
+| Segmented, Dropdown, Text | **no** — these display their own value inside the control and must never duplicate it |
+| Facts | **no** — the summary is a *string*, not a value; it sits right-bound in the **control zone**, in `TextMeta`, because opening Details is what that row's control zone does |
 
-Value type is always Mono 500 15 `AccentValue` when the row differs from default, Mono
-500 15 `TextPrimary` when it is at default. Unit follows in Mono 400 11.5 `TextMeta`,
-outside the number's run.
+> **Amended 2026-08-23.** The first version of this table put Switch and Stepper in the
+> "no" column on the grounds that *the control is the readout*. Both were wrong. A
+> stepper drawn to direction B's design is two glyphs, `−` and `+`, and carries no number
+> at all; and a switch that shows nothing leaves the design's own thesis — *what it is
+> called, **what it is set to**, and how to change it* — unmet on the most common row in
+> the product. A switch now reads `on` / `off` in the value column, which is also what
+> B's `.state` atom does.
+
+Value type is Mono 500 **16** `AccentValue` when the row differs from default, Mono 500 16
+`TextPrimary` when it is at default (B's `.val` size, and B's colour split re-based onto
+tokens that clear 4.5:1 — B's own `neutral` at 44% measures 4.09:1). Unit follows in Mono
+400 11.5 `TextMeta`, outside the number's run. The value column ellipsizes at 60% of the
+label+value zone, so a 40-character option name cannot squeeze the label to nothing.
 
 ### 2.4 The affordance column — one glyph, fixed priority
 
@@ -183,9 +229,57 @@ is what keeps the column a column instead of a pile.
 
 ## 3. The control taxonomy
 
-Ten kinds. E had eighteen; the difference is Checkbox (deleted), Hint-bearing rows
+Eleven kinds. E had eighteen; the difference is Checkbox (deleted), Hint-bearing rows
 (deleted), Note (moved), readout lists (collapsed into `Facts`), progress (folded into
 Meter) and chips (no longer a control — they are painted by the shell, not requested).
+The eleventh is `Bank` (§3.12), adopted from direction B.
+
+**Every control below is direction B's**, measured from B's own stylesheet, uplifted
+~25% per §3.0, and reconciled with E2's lane rule. Where B and E2 genuinely conflict,
+E2's layout law wins and the conflict is named in the control's entry.
+
+### 3.0 One control height — the system every control honours
+
+> **Fix — "switches are really small, for example."**
+
+The first version of this design had five control heights: 26 for segmented / dropdown /
+stepper / text, 30 × 15 for the switch, 22 for the slider hit box, 5 for the meter and 30
+for the anchor grid's cells. Nothing agreed with anything, and the switch — the most
+common control in the product — was the smallest thing on screen.
+
+```
+  --H   = 28   THE control height.  Every control's HIT BOX is exactly --H tall.
+  --swW = 40   switch track width   (B's 30 x 1.25 = 37.5, snapped to the 4u grid)
+  --swH = 20   switch track height  (B's 15 x 1.25 = 18.75 -> 20, keeps B's 2:1)
+  --swK = 16   switch knob          (B's 11 x 1.25 = 13.75 -> 16 = swH - 4)
+  --swT = 20   knob travel          (swW - swK - 4)
+  --trk =  8   slider / hue / meter track  (B's 6 x 1.25 = 7.5 -> 8)
+  --hndW=  8   slider handle width  (B's 6 x 1.25)
+  --hndH= 20   slider handle height (B's 14 x 1.25 = 17.5 -> 20)
+  --row = 44   THE sheet row height.  There is exactly one, everywhere, including
+               the Inspector (see the C1 amendment in INCONSISTENCIES.md).
+```
+
+**The rule, stated so it can be checked mechanically:** *every control occupies an
+`--H`-tall hit box. A control with a box border fills it; a control whose graphic is
+deliberately shorter — switch, slider, meter — is centred in it.* A lint pass can assert
+this by measuring rendered hit boxes; it needs no judgement.
+
+**Why 25%, and why not 1:1 with B.** Shipping issue #23 raised every font and control
+constant in `src/Overlay/` 20–25% above the pixel-measured handoff baseline, at this
+user's explicit request to make fonts and controls "a little bigger", by raising the
+origin constants rather than layering a multiplier. `ui-mockup-precise-spec.md` records
+that departure and instructs: *"if this file is ever regenerated from a fresh mockup
+measurement, re-apply the same ~20-25% uplift."* B's control table **is** that handoff
+baseline (B's switch is exactly the handoff's 30 × 15 / 11). So the uplift is re-applied
+here rather than shipping a mockup the code would immediately contradict.
+
+**Why the switch is 20 tall and not 28.** A 28-tall switch at B's 2:1 aspect is 56 wide,
+which dominates a 44-tall row. The switch reads at the same optical weight as its
+neighbours at 40 × 20 in a 28 hit box — 71% of the control height, the same proportion a
+slider's 8 track holds. What matters for consistency is that the *hit box* agrees, and it
+does; at 0.5× the switch is still a 20 × 14 physical target, and at 2.0× it is 80 × 40 and
+does not look clumsy.
 
 ### 3.1 Switch — **every** binary in the product
 
@@ -207,83 +301,171 @@ rows whose band header carries the count:
  Percentile row (1% / 0.1% / avg)                                    ●━━
 ```
 
-Geometry: 30 × 15 track, 11 × 11 knob, right-bound so the knob's right edge is at
-`W − 28`. Contrast-corrected off-state (§7.2): track `#FFFFFF @ 10%`, border
-`#FFFFFF @ 42%`, knob `#EFF5FB @ 68%`. On: track `Accent @ 30%`, border `Accent @ 75%`,
-knob `AccentKnob`.
+Geometry (§3.0): **40 × 20 track, 16 × 16 knob, 20 travel**, in a 28-tall hit box,
+right-bound so the track's right edge is at `W − 28`. Colours are B's verbatim except the
+off-state border: on — track `Accent @ 30%`, border `Accent @ 65%`, knob `AccentKnob`;
+off — track `#FFFFFF @ 7%`, border `#FFFFFF @ 42%`, knob `#EFF5FB @ 55%`.
+
+> **Deviation from B.** B's off border is `#FFFFFF @ 18%`, which measures **1.69:1**
+> against the worst-case background — the boundary of an interactive control, below the
+> 3:1 floor. It is raised to `--lineCtl` (42%, 4.09:1). Every other value is B's.
+
+The value column reads `on` / `off` (§2.3), which is B's `.state` atom relocated.
 
 ### 3.2 Segmented — mutually exclusive, ≤ 5 options, ≤ 8 chars each, static set
 
-Equal cells, 4 gap, 26 tall, lowercase Mono. **The helper measures and auto-downgrades
-to a dropdown** if any of the three conditions fails; a caller passing six options gets
-a dropdown and cannot ship a cramped row. A segmented control sets a value and never
-navigates — `BeginTabBar` does not exist in the API.
+B's segmented, verbatim: **content-sized cells** (not equal-width), 3 gap, `--H` tall,
+9 horizontal padding, lowercase Mono 500 11.5. Inactive: fill `#FFFFFF @ 4%`, border
+`#FFFFFF @ 42%`, text `#EFF5FB @ 50%`. Active: fill `Accent @ 24%`, border `Accent @ 60%`,
+text Mono **600** `AccentSeg`. The group is right-bound; its cells are not stretched to
+fill the lane, because B does not stretch them and a stretched cell set reads as a tab bar.
+
+> **Deviation from B.** B's inactive border is `#FFFFFF @ 8%` = **1.21:1**. Raised to
+> `--lineCtl`. Everything else — sizes, weights, the 50% inactive text (4.96:1) — is B's.
+
+**The helper measures and auto-downgrades to a dropdown** if any of the three conditions
+fails *or if the measured group does not fit the lane*; a caller passing six options gets
+a dropdown and cannot ship a cramped row. **One helper for both hosts**: a choice that
+renders segmented in the Sheet renders segmented in the Inspector when it fits there too.
+(The first version forced a dropdown in the Inspector with a hardcoded flag, so the same
+setting looked like two different controls in two regions — A4 in `INCONSISTENCIES.md`.)
+A segmented control sets a value and never navigates — `BeginTabBar` does not exist.
 
 ### 3.3 Dropdown — mutually exclusive, many or dynamic
 
-26 tall box, `PlaceFull()`, value Mono left, chevron right. Popup anchored under the
-box, rows 26, max height 280 then clipper.
+B's dropdown is **not a box**: the resolved value in Mono 500 16 followed by a `▾`
+chevron in Mono 400 11 `TextMeta`, 8 gap, right-bound, with a `--lineCtl` hairline
+appearing on hover and focus. `--H` tall hit box. The value ellipsizes from the left of
+the group so the chevron's right edge stays on the lane. Popup anchored under the trigger,
+right-aligned to it, rows `--row`, max height 280 then a clipper, current option marked
+with a dot. `Esc` and any outside click close it.
+
+Because the control shows its own value, the value column stays empty for this kind
+(§2.3) — which is B's grammar and removes the "lone caret stranded at the lane edge"
+that a boxless dropdown otherwise produces when the value is placed elsewhere.
 
 ### 3.4 Slider — bounded continuous
 
-`slider-widget-spec.md` geometry preserved to the pixel, with **one deviation**: the
-unfilled rail moves from `kRailAlpha 16%` to **34%**, because 16% measures 1.7:1 against
-the sheet and the rail is the part of the control that tells you where the range ends
-(§7.3). Marks stay at 38%. Track `PlaceFull()`; the value lives in the value column at
-`Lw`; a 1px `#FFFFFF @ 52%` default tick sits on the rail. `Shift` = ×0.1, wheel = one
-step, `Ctrl`-click = inline numeric entry.
+B's paint at §3.0's sizes: track **8 tall, 4 radius**, fill a left-to-right gradient
+`Accent @ 50% → AccentGradHi`, handle **8 × 20, 1 radius, `AccentHandle`**, with B's
+`0 0 0 2px Accent @ 18%` halo. Hit box `--H`.
+
+> **Deviation from B — the one E2's layout law forces.** B's `.mini` is a fixed **118px**
+> track, because B's control column is a fixed 200u slot. E2 binds every control to its own
+> lane, so the track is `PlaceFull()`. B's rendering is kept; B's width is not. This is the
+> one place the two directions genuinely conflict, and E2's lane rule wins.
+
+> **Second deviation.** B's unfilled track is `#FFFFFF @ 16%` = **1.57:1**. It moves to
+> `--trackOff` (34%, 3.07:1), which is the same deviation `slider-widget-spec.md` already
+> carried for `kRailAlpha`; the rail is the part of the control that tells you where the
+> range ends.
+
+The value lives in the value column at `Lw`; a 1px `#FFFFFF @ 52%` default tick sits on
+the track. `←→` = one step, `Shift+←→` = ×0.1, wheel = one step, click positions.
 
 ### 3.5 Stepper — exact or unbounded
 
-96 wide, `Place(96)`, `−`/`+` 20px zones, value Mono 500 15 centred, unit suffix.
-`ZeroMeans("Unlimited")` renders the word. `Step()` accelerates after 400 ms.
+B's stepper is **borderless**: `−` and `+` glyphs in Mono 400 15 `#EFF5FB @ 40%`
+(3.58:1 — a UI glyph, not body text), 18 wide each, 8 gap, `--H` hit boxes, right-bound.
+It carries **no number**; the number is in the value column (§2.3), which is exactly how
+B draws it (`<span class="val">Unlimited</span><span class="step">− +</span>`).
+`ZeroMeans("Unlimited")` renders the word. `←→` steps; `Step()` accelerates after 400 ms.
+
+This replaces the first version's 96-wide bordered box, which was E2's own invention and
+did not match any control in either direction.
 
 ### 3.6 Text — free text
 
-`PlaceFull()`, 26 tall, caret `Accent`, 1px `Accent` bottom edge when focused,
-placeholder `TextMeta` (not `TextFaint` — that role no longer exists, §7.1). Validation
-message sits **in the Inspector's Explain body**, not under the box; the box border
-turns `Danger` and the affordance column shows nothing (a validation error is not a
-state you reset).
+B's text field is the current value in Mono 500 16 followed by a `✎` glyph, `--H` hit
+box, hairline on hover — the same grammar as the dropdown. Clicking swaps in a real input:
+caret `Accent`, 1px `Accent` bottom edge, `--raised` fill, `Enter` commits, `Esc` reverts,
+an outside click commits. Placeholder in `TextMeta` (not `TextFaint` — that role no longer
+exists, §7.1). Because the field shows its own value, the value column stays empty (§2.3).
+
+Validation runs **as you type** and its message sits **in the Inspector's Configure body**,
+not under the box; the box border turns `Danger` and the affordance column shows nothing
+(a validation error is not a state you reset). Dependent controls re-evaluate on every
+keystroke, so a *save* action gated on a valid name enables and disables live.
 
 ### 3.7 Facts — the readout-run collapse
 
 ```cpp
-s.Facts( "Signal", &HdrSignalSummary, &DrawHdrSignalDiagnose );
+s.Facts( "Signal", &HdrSignalSummary, &DrawHdrSignalLive );
 ```
 
 One 44 row. Label left. A one-line summary (`PQ · 1000 nits · BT.2020`) sits
 right-bound in the control zone in `TextMeta`. Affordance: chevron. **No state edge and
 no reset dot** — the absence is the structural expression of *"never show a value the
-overlay didn't verify"*. Selecting it puts the Inspector in **Diagnose**, where the seven
+overlay didn't verify"*. Selecting it puts the Inspector in **Details**, where the seven
 underlying readouts live.
+
+A Facts row whose source is not present renders `—` and says so in Details, rather than
+inventing a value or hiding the row. `Output ▸ Second connector` is that state, drawn.
+
+(Facts rows *do* hover and select — an earlier draft of §3.8 claimed "no hover", which was
+never true and could not be: selecting the row is the only way to reach Details.)
 
 This single rule is responsible for most of §1.1's line-count drop.
 
 ### 3.8 Meter — a live scalar
 
-5px segmented bar (20 segments, 1.5 gaps), `PlaceFull()`, value in the value column.
-Same no-hover / no-edge rule as `Facts`. Indeterminate progress is a Meter with a
-sweeping lit segment and a `TextMeta` caption; there are no spinners.
+`--trk` segmented bar (20 segments, 1.5 gaps) in an `--H` hit box, `PlaceFull()`, value
+in the value column. Read-only: no state edge, no reset dot. Indeterminate progress is a
+Meter with a sweeping lit segment and a `TextMeta` caption; there are no spinners.
+
+`display.budget_meter` is the drawn instance — the first version declared this kind and
+registered nothing that used it.
 
 ### 3.9 Action row — buttons
 
-26 tall, hairline border, Mono lowercase, right-bound, **at most two per row**. Three
-intents: `neutral`, `accent` (≤ 1 per group), `danger`. `Danger()` returns a type whose
-only method is `Confirm()`, so a destructive button without a confirmation does not
-compile.
+B's **verb chip**: `--H` tall, 9 horizontal padding, Mono 500 11.5, no border, fill
+`Accent @ 16%`, text `AccentText`. Right-bound, **at most two per row**. Three intents:
+`accent` (≤ 1 per group), `danger` (fill `Danger @ 14%`, text `DangerText`), and `neutral`
+— which is the one place a border is added, because a neutral verb's text is dimmer than
+an accent one and the fill alone would not identify it.
+
+`Danger()` returns a type whose only method is `Confirm()`, so a destructive button
+without a confirmation does not compile. On screen that is a **two-stage arm**: the first
+click turns the chip into `confirm — delete` on a stronger danger fill, the second fires,
+and `Esc` disarms. The first version declared this rule and drew no confirmation anywhere.
+
+An action row whose action is unavailable is disabled with a mandatory reason like any
+other row — *"no profiles are saved"*, *"type a name first"*.
 
 ### 3.10 Composite — a control taller than one row
 
 Its own section, because it is fix #3. See §4.
 
-### 3.11 Disabled, empty, error
+### 3.12 Bank — a multi-select whose value is a set
+
+> Adopted from direction B (`.bank`). Cells 3 gap, `--H` tall, 8 padding, Mono 500 11,
+> inactive fill `#FFFFFF @ 5%` / border `--lineCtl` / text `TextMeta`, active fill
+> `Accent @ 22%` / border `Accent @ 55%` / text `AccentSeg`. B's inactive border (8%) and
+> text (42%) are raised to clear the floors; everything else is B's.
+
+**The rule that keeps this from reintroducing the checkbox**, stated so a reviewer can
+apply it without judgement:
+
+> A **Bank** is *one setting whose value is a set*. **N independent binaries are N switch
+> rows.** If the members can be enabled and disabled for unrelated reasons, they are not a
+> set — they are N settings, and they get N rows.
+
+`log.sources` and `log.severity` are the drawn instances: one decision each ("which
+subsystems am I looking at"), stored as one config key, resettable in one action. The
+Monitor's seven modules are *not* a bank, because each is independently meaningful — they
+stay seven switch rows with a `4 / 7` count and `all` / `none` on the group band.
+
+### 3.13 Disabled, empty, error
 
 - **Disabled** — row × **0.55** (not E's 0.34, which measures 2.6:1 and is unreadable
   over a bright frame; 0.55 measures 3.27:1, §7.2) **plus a mandatory reason string**
-  shown in Explain. `.DisabledUnless(bool, const char*)` has no overload without a reason.
+  shown in Configure. `.DisabledUnless(bool, const char*)` has no overload without a
+  reason. There is exactly **one** disabled mechanism: a predicate returning a reason or
+  nothing. A parameter inherits its parent's reason, *except* when it is the cause of it —
+  otherwise turning Mute on would disable the Mute switch, which was a real bug in the
+  first version.
 - **Empty** — a 96-tall centred band, `TextMeta`, one line, optionally one accent button.
-- **Error** — `Danger` border on the control, message in Explain.
+- **Error** — `Danger` border on the control, message in Configure.
 
 ---
 
@@ -344,7 +526,7 @@ steppers, which is the whole calming move in miniature.
 | Anchor / Placement | 3 | 96×96 grid | `top-right · 32 / 32` | `margin_v`, `margin_h` |
 | Accent hue | 2 | hue rail + 8 swatches | `oklch(.74 .12 218)` | `l`, `c` (expert) |
 | Audio strip | 2 | fader + L/R meter | `−7.5 dB · −12/−14` | `routing`, `match_rule` |
-| Frametime graph | 3 | 240-sample sparkline | `7.04 ms · 3 outliers` | — (Diagnose only) |
+| Frametime graph | 3 | 240-sample sparkline | `7.04 ms · 3 outliers` | — (Details only) |
 | Colour override | 2 | L/C/H rails + swatch | `#6ED274` | `hex` |
 
 Five composites, one band rule, no call site choosing geometry. Today's two Position
@@ -352,26 +534,36 @@ Grid call sites (notification placement, monitor placement) that drifted apart c
 
 ---
 
-## 5. The Inspector — three modes and the law that governs them
+## 5. The Inspector — two modes and the law that governs them
 
 ### 5.1 Modes
 
-The Inspector's header is a three-cell segmented strip. **The cells are not tabs the
-designer fills; they are a readout of what depth this selection actually has.** A cell
-with no content is drawn dimmed and is not selectable — so the strip is continuous,
-visible proof of how much is (and is not) hiding behind the row.
+> **Amended 2026-08-23.** Three modes became two. `EXPLAIN` was never a mode in the sense
+> the other two were: it was prose plus a metadata grid, and users reading it were doing
+> one of two different things — *understanding what this is*, or *looking up how it is
+> bound*. The split now matches those two intents, and the help prose lands where it is
+> most useful: immediately above the values it explains.
 
-| Mode | Shown for | Content, all derived |
-|---|---|---|
-| **EXPLAIN** | every row — always non-empty, `.Help()` is required at registration | help prose (≤ 3 sentences, 240-char lint cap); the derived fact grid `now / default / range / unit / key / writes / applies`; `related` jump links; the keyboard line for this control kind; a reset action |
-| **CONFIGURE** | rows that own `.Param()` | the parent's ≤ 6 child parameters, drawn with the same Row grammar, same right-bound rule |
-| **DIAGNOSE** | rows that declare `.Live()` — `Facts`, `Meter`, and any entry that opts in | read-only readouts, meters, sparklines, transient live content (a shader's preview, a stream's L/R meter), and **the last 5 captured log lines whose text contains this entry's key** |
-| **OVERVIEW** | nothing selected — replaces the strip entirely | §5.5 |
+The Inspector's header is a **two-cell** strip. **The cells are not tabs the designer
+fills; they are a readout of what depth this selection actually has** — each carries the
+count of what it holds, so the strip stays continuous, visible proof of how much is (and
+is not) hiding behind the row.
 
-Mode selection is automatic and stateless: arriving via the chevron opens Configure;
-selecting a `Facts` or `Meter` row opens Diagnose; everything else opens Explain. The
-user can switch modes; the choice is not remembered, because *the Inspector holds no
-state* (§5.2 clause 0).
+| Mode | Content, all derived from the registration |
+|---|---|
+| **CONFIGURE** | the short **description of what this setting or feature does** (`.Help()`, required, ≤ 3 sentences, 240-char lint cap); the disabled reason or validation error if there is one; then **the values you can set** — the row's own control drawn as an Inspector row, followed by its ≤ 6 parameters in the same Row grammar at the same `--row` height; a reset action; a copy-key action. For a read-only row (`Facts`, `Meter`, `Graph`) the values block is replaced by one sentence saying so and pointing at Details — the cell is marked `ro` and its counter reads `ro`. |
+| **DETAILS** | the derived binding grid `now / default / range / options / kind / key / writes / applies / parent`; `related` jump links; the keyboard line for this control kind; the read-only `.Live()` block; at most one animated element (sparkline, L/R meter); and **the captured log lines whose text contains this entry's key**. |
+| **OVERVIEW** | nothing selected — replaces the strip entirely; §5.5 |
+
+Mode selection is automatic and stateless: selecting a `Facts`, `Meter` or `Graph` row
+opens **Details**; everything else — including arriving from the palette on a parameter —
+opens **Configure**. The user can switch modes; the choice is not remembered, because *the
+Inspector holds no state* (§5.2 clause 0).
+
+**Why two generators and not two panels.** The change is a re-sort of what already
+existed, not a new surface. `.Help()` still feeds prose, binding metadata is still typed by
+nobody, `.Param()` still feeds rows, `.Live()` still feeds readouts. There are four
+generators and two modes; a category file still cannot type a character that lands here.
 
 ### 5.2 The Attachment Law — the structural anti-junk-drawer rule
 
@@ -389,9 +581,9 @@ assert rather than by discipline:
 > Same selection ⇒ same Inspector, always, everywhere. It holds no state of its own.
 >
 > **1. Four generators, and no fifth.**
-> `.Help(text)` → Explain prose. Binding metadata (default, range, unit, key,
-> destination) → Explain's fact grid, typed by nobody. `.Param(...)` → Configure rows.
-> `.Live(fn)` → Diagnose readouts. Adding a fifth generator is a change to
+> `.Help(text)` → Configure's description. Binding metadata (default, range, unit, key,
+> destination) → Details' binding grid, typed by nobody. `.Param(...)` → Configure rows.
+> `.Live(fn)` → Details readouts. Adding a fifth generator is a change to
 > `Registry.h`, visible in a diff, landing in this table.
 >
 > **2. The Prefix Law.** A `Param`'s stable id **must** be `<parent id>.<leaf>`.
@@ -407,8 +599,8 @@ assert rather than by discipline:
 > drawer pressure is thereby converted into a structural decision that shows up in the
 > rail, not into an invisible accumulation.
 >
-> **4. Diagnose is read-only by type.** `.Live()` accepts `std::function<Value()>` and
-> nothing else. It has no `Bind` overload. A control cannot be *constructed* in Diagnose,
+> **4. Details is read-only by type.** `.Live()` accepts `std::function<Value()>` and
+> nothing else. It has no `Bind` overload. A control cannot be *constructed* in Details,
 > so "I'll just put this one setting in the diagnostics panel" is not a shortcut a
 > reviewer has to catch — it is a compile error.
 
@@ -419,28 +611,38 @@ rather than merely strict:
   `Ctrl+K → "denoise"` finds `display.sharpness.rcas_denoise` and jumps to it — selecting
   the parent row, opening Configure, focusing the param. A setting in the Inspector is
   therefore *one keystroke* from anywhere, which is a stronger reachability guarantee
-  than the Sheet gives most rows.
+  than the Sheet gives most rows. The palette also shows each entry's **live value** and
+  **adjusts it in place** with `←→`, so a known setting can be changed without leaving the
+  list at all.
 - **The Overview card advertises the count.** Every category card ends with
   `sheet 9 rows · inspector 14 params · 0 unreachable`. If the Inspector ever *did*
   become a junk drawer, the number would say so on the screen you land on.
 
 ### 5.3 What Configure looks like
 
-Inspector rows are 40 tall, single column, label left-bound at x=16, control right-bound
-at `IW − 16`. Same grammar, same right-bound law, different width. A parameter therefore
-looks and behaves identically in the Inspector, in the inline fallback (§6) and in the
-Sheet if it is ever promoted — moving one costs one word.
+Inspector rows are **`--row` (44) tall**, single column, label left-bound at `x = --ipad`,
+control right-bound at `IW − --ipad`. Same grammar, same right-bound law, same height,
+different width. A parameter therefore looks and behaves identically in the Inspector, in
+the inline fallback (§6) and in the Sheet if it is ever promoted — moving one costs one
+word.
 
-### 5.4 What Diagnose can hold — the transient content question
+> **Amended 2026-08-23.** This section previously specified **40**, and then claimed in
+> the next sentence that a parameter "looks and behaves identically" in all three hosts.
+> Both could not be true. 44 wins, because it is the Sheet's height and the Sheet is the
+> host a promoted parameter ends up in. A control wider than the Inspector lane (slider,
+> dropdown, text, bank, hue, fader) gets a two-line variant: label + value on top, control
+> full-lane below — still one height rule, one extra line of it.
 
-Diagnose is the one mode allowed to hold content that changes every frame: a shader's
+### 5.4 What Details can hold — the transient content question
+
+Details is the one mode allowed to hold content that changes every frame: a shader's
 live preview thumbnail, a stream's L/R peak meter, the frametime sparkline, GPU sensors.
 It is safe to be permissive here **precisely because clause 4 makes it read-only** — a
 region that cannot contain a control cannot contain a hidden setting, so its only failure
 mode is being uninteresting.
 
 Two rules keep it cheap: the `.Live()` lambda runs **only for the selected entry** (E's
-insight, kept), and Diagnose paints at most one animated element per selection.
+insight, kept), and Details paints at most one animated element per selection.
 
 ### 5.5 Overview — what the Inspector does with nothing selected
 
@@ -505,7 +707,7 @@ legitimately persist `ui.inspector = hidden`.** Nothing may become unreachable t
 > of the chevron.
 >
 > Explanation follows the same law: with the Inspector closed, `?` or `Ctrl+/` on a
-> selected row opens Explain **as a full-sheet page with a back crumb**, replacing the
+> selected row opens Configure **and** Details **as one full-sheet page with a back crumb**, replacing the
 > sheet content for as long as you read it.
 
 Three things make this a mechanism rather than a promise:
@@ -611,6 +813,41 @@ need **3:1**.
 **Worst case in the design: 3.07:1** (slider rail, UI floor 3:1).
 **Worst case for any text: 5.28:1** (`TextMeta`, floor 4.5:1).
 
+**Added 2026-08-23 — direction B's control atoms, measured against the same background.**
+The background is a pure-white game frame under `darkening 0.80` and the slab's
+`rgba(9,10,12,.88)`, i.e. `rgb(14, 15, 17)`, exactly as §7.2 defines it. Accent-derived
+values are swept over all 360° of hue and the **worst** hue is reported, because the hue is
+user-controlled.
+
+| Element | Value | Ratio | Floor |
+|---|---|---|---|
+| Value column, at default | `TextPrimary` | **14.79:1** | 4.5 |
+| Segmented, inactive text (B's 50%) | `#EFF5FB @ 50%` | **4.96:1** | 4.5 |
+| Every control boundary | `--lineCtl` `#FFFFFF @ 42%` | **4.09:1** | 3.0 |
+| Switch knob, off (B's 55%) | `#EFF5FB @ 55%` | **5.78:1** | 3.0 |
+| Switch knob, on | `AccentKnob` | **12.79:1** worst hue | 3.0 |
+| Switch border, on (B's 65%) | `Accent @ 65%` | **3.91:1** worst hue 353° | 3.0 |
+| Segmented border, on (B's 60%) | `Accent @ 60%` | **3.50:1** worst hue 353° | 3.0 |
+| Bank border, on (B's 55%) | `Accent @ 55%` | **3.12:1** worst hue 353° | 3.0 |
+| Slider / hue / meter unfilled track | `--trackOff` `#FFFFFF @ 34%` | **3.07:1** | 3.0 |
+| Stepper `−` / `+` glyph (B's 40%) | `#EFF5FB @ 40%` | **3.58:1** | 3.0 (UI glyph) |
+| Verb chip text on its own 16% fill | `AccentText` | **8.20:1** worst hue 350° | 4.5 |
+| Segmented active text on its own 24% fill | `AccentSeg` | **13.46:1** worst hue 22° | 4.5 |
+| Slider handle | `AccentHandle` | **13.90:1** worst hue 344° | 3.0 |
+| Rail icon, active | `AccentIcon` | **12.72:1** worst hue 21° | 3.0 |
+
+**Worst case anywhere in the design after the change: 3.07:1** for a control boundary and
+**4.96:1** for text. Both clear their floors at every hue.
+
+**Three of B's own values were rejected and are recorded here so nobody re-introduces
+them:** `#FFFFFF @ 8%` segmented border = **1.21:1**; `#FFFFFF @ 16%` slider track =
+**1.57:1**; `#FFFFFF @ 18%` switch-off border = **1.69:1**. B's `.val.neutral`
+(`#EFF5FB @ 44%` = **4.09:1**) is also rejected for a 16px value.
+
+The slab's own 1px `Accent @ 42%` outer border measures 2.30:1 at its worst hue; it is
+**decorative** — the slab is identified by its fill, backdrop blur and shadow, not by that
+hairline — and is excluded from the floor deliberately, not by omission.
+
 ### 7.4 What E fails, and what changed because of it
 
 | E value | Measured | E2 value | Measured |
@@ -665,8 +902,8 @@ cannot put a number in Sans.
 ### 7.7 Accent budget
 
 Accent is spent on **state and nothing else**: active rail item, selected row, changed
-value, active segment, on-switch, slider fill, focus ring, the hairline thread from rail
-to breadcrumb. Never a header, never a border that is not communicating state. A category
+value, active segment, on-switch, slider fill, focus ring, the selected rail item's edge
+and its icon. Never a header, never a border that is not communicating state. A category
 where nothing has been changed is almost monochrome — and that is the correct look for
 "everything is at default".
 
@@ -674,13 +911,43 @@ where nothing has been changed is almost monochrome — and that is the correct 
 
 ## 8. Navigation, scale and motion
 
+### 8.0 The rail icon set
+
+Eleven icons, **inline SVG**, one **24-unit grid**, stroke **1.7**, `miter` joins, `butt`
+caps, `currentColor`. Fill is used only where a fill carries meaning — HDR's half-filled
+disc, the Monitor's bar chart. The icon inherits the rail item's colour: `TextLabel` at
+rest, `AccentIcon` when the item is active, so the icon is one of the accent's state jobs
+(§7.7) and not decoration.
+
+They are a *set*: every glyph is built from the same 24-unit rectangle, the same stroke
+weight and the same corner treatment, so the rail reads as one family rather than eleven
+found symbols. At `display_scale 0.5×` the 24-unit box is 12 physical px with a 0.85px
+stroke and every glyph is still one recognisable silhouette; at 2.0× it is 48px and no
+glyph gains detail it does not have — which is the test a monospace glyph set fails, since
+a glyph's weight is chosen by the typeface, not by the design.
+
+No icon font and no external asset: the artifact CSP blocks both, and so does a compositor
+that has to draw its own UI without a font cache.
+
+### 8.05 The collapsed Inspector
+
+Adopted from **E1**. When the Inspector is hidden — by `Ctrl+I`, by the `✕` in the mode
+strip, or by the ladder at step 3 — the region collapses to a **20-base vertical spine**
+on the slab's right edge: `#FFFFFF @ 4%` fill, a region hairline on its left, and the word
+`inspector ›` set in `writing-mode: vertical-rl` at `TextMeta`. Hovering tints it
+`Accent @ 16%` and lifts the text to `AccentSeg`; clicking restores the region.
+
+Two reasons it beats a bare edge or an icon: it **names itself**, so the region is
+discoverable by someone who never learned `Ctrl+I`; and it **holds its own width**, so the
+sheet lane shrinks by 20 rather than the sheet being overlapped by an invisible hit strip.
+
 ### 8.1 The shell
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ ● GAMESCOPE-RITZ                     app 1174180  games/1174180.json  ⌕ ▤ ✕  │ 40
 ├───────────┬──────────────────────────────────────┬───────────────────────────┤
-│           │ DISPLAY / Upscaling   differs 3  ⌕   │ EXPLAIN CONFIGURE DIAGNOSE│ 56
+│           │ DISPLAY / Upscaling   differs 3  ⌕   │  CONFIGURE 4    DETAILS 9 │ 56
 │ RAIL 232  │                                      │  ───────                  │
 │           │            SHEET (flex)              │      INSPECTOR 400        │
 │ sections  │   44-tall rows · 4 columns · one      │  derived from selection   │
@@ -694,8 +961,12 @@ Slab `min(surfaceW × 0.90, max(1560 × scale, 1180)) × min(surfaceH × 0.86, 9
 Not draggable, not resizable, no per-panel positions — E's argument stands unchanged, and
 it deletes the bug class that produced 39% of `src/Overlay/`'s fix commits.
 
-Rail: eleven items in five sections, icons and labels, two levels, no tab bar anywhere in
-the product. Active item carries a 2px `Accent` left edge that survives the icon collapse.
+Rail: eleven items in five sections, drawn icons (§8.0) and labels, two levels, no tab bar
+anywhere in the product. Active item carries a 2px `Accent` left edge that survives the
+icon collapse. **The counter on a rail item means exactly one thing — the number of
+settings in that area that differ from default.** The single alternate form is a captured
+severity count, drawn in `Danger` with a `!`. (The first version used that one slot for
+five different quantities; see A1 in `INCONSISTENCIES.md`.)
 
 ### 8.2 Keyboard — mouse and keyboard only (gamepad dropped)
 
@@ -711,9 +982,11 @@ scopes, and it lets `Tab` mean region and arrows mean movement without compromis
 | `Enter` / `Space` | activate / toggle / begin entry |
 | `Ctrl+←/→` | previous / next rail item without leaving the Sheet |
 | `Ctrl+K` | **command palette** — every entry *and every Param*, fuzzy over label, key, keywords |
-| `Ctrl+D` | reset selected row to default |
+| `Ctrl+D` | reset selected row **and its parameters** to default |
+| `← →` in the palette | adjust the highlighted entry's value **in place**, without leaving the list |
+| `Space` on a switch | toggle without leaving the row |
 | `Ctrl+I` | cycle Inspector host: **column → drawer → hidden** |
-| `Ctrl+/` or `?` | Explain the selected row (full-sheet page when the Inspector is hidden) |
+| `Ctrl+/` or `?` | Configure + Details for the selected row (full-sheet page when the Inspector is hidden) |
 | `Esc` | palette → drawer → inline expansion → overlay |
 
 **Selection and editing are the same click.** Clicking a slider both selects the row and
@@ -788,7 +1061,7 @@ when opening or closing. The single licensed reflow is user-initiated inline exp
 | Controls aligned left / right / centre per call site | One right-bound allocator; left alignment is unrepresentable |
 | Anchor grid + steppers crammed on one tall row | `Composite` band, `n × 44`; offsets are Params |
 | E's `RowTall` 76, two-line mode, inspector 64 | **One row height: 44** |
-| E's `.Hint()`, `.Note()`, readout runs, expert groups | Explain / Configure / Diagnose |
+| E's `.Hint()`, `.Note()`, readout runs, expert groups | Configure / Details |
 | E's `ui::Panel` inspector authoring API, B's `PaneCtx` | **Deleted.** Four generators, Prefix Law, Six Budget |
 | E's Inspector Contract (a promise) | The **Reachability Law** (a rendering fallback, headlessly testable) |
 | `TextMeta` 44%, `TextFaint` 30%, disabled × 0.34 | 52%, role deleted, × 0.55 — nothing below 3.07:1 |

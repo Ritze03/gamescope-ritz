@@ -20,7 +20,7 @@ Shell.h/.cpp        the slab, the three regions, ComputeLayout(), the ladder, th
 Row.h/.cpp          RowCtx — the ONLY right-bound allocator; the four columns
 Controls.cpp        one painter per taxonomy kind, each takes an ImRect
 Composite.cpp       the n×44 band rule (§4)
-Inspector.cpp       renders Explain / Configure / Diagnose / Overview from a selection
+Inspector.cpp       renders Configure / Details / Overview from a selection
 Match.h/.cpp        fuzzy scorer for Ctrl+K (adopted from Direction B)
 Lint.cpp            ui_lint, ui_snapshot, ui_lint --host=inline
 Areas/              one file per category — declarations only, no geometry, no ImGui
@@ -32,6 +32,31 @@ collapse machinery is deleted. **`widgets::Checkbox` is deleted outright** — i
 callers (#60) and E2 has one binary affordance.
 
 ---
+
+
+---
+
+## Amendments
+
+### 2026-08-23 — two Inspector modes, direction B's controls, one control height
+
+1. **`EXPLAIN / CONFIGURE / DIAGNOSE` → `CONFIGURE / DETAILS`.** The four generators are
+   unchanged; only where their output lands moved (§4.1). No category file changes,
+   because no category file ever named a mode — which is the cheapest possible proof that
+   clause 0 of the Attachment Law is doing its job.
+2. **The mode strip carries counts instead of dimming** (§4.4), and Configure draws the
+   selected row's own control before its parameters, using the same `Row::Draw` the Sheet
+   uses. `Kind::IsReadOnly()` is the one dimmed state that survives.
+3. **`ui::Widgets` control geometry is direction B's, uplifted ~25%** and pinned to one
+   control height, `kControlH = 28` (`SPEC.md` §3.0). `Place()` is unchanged; the atoms
+   it places are new. See §6 for the alignment mechanics, which did not move.
+4. **`Checkbox` is gone from every header**, not just unused. `Bank` is added (§3.12 in
+   `SPEC.md`) for a setting whose value is a set.
+5. **One disabled mechanism.** `.DisabledUnless( pred, reason )` collapses the previous
+   two spellings; a `Param` inherits its parent's reason unless it is the cause of it.
+6. **`.Validate( fn )`** on text kinds, evaluated per keystroke; the message renders in
+   Configure and dependent entries re-evaluate live.
+7. **`Danger().Confirm()` is a two-stage arm** at the widget layer, not a modal.
 
 ## 1. Who decides what
 
@@ -138,7 +163,7 @@ its default; a contribution to the header's `differs N` chip.
 "latency", "flip", and `display.allow_tearing`. Selecting it jumps to Display ▸ Output
 with the row selected.
 
-**The Inspector's Explain page** — the help prose in `TextBody`, plus a fact grid that
+**The Inspector's Configure body** — the help prose in `TextBody`, plus a fact grid that
 nobody typed:
 
 ```
@@ -179,11 +204,11 @@ always on because there is no reason for it not to be.
 
 `.DisabledUnless()` **has no overload without a reason string** — that is the entire
 enforcement mechanism for the most common inconsistency in the current code, a control
-that greys out and does not say why. The reason renders in Explain, and the row draws at
+that greys out and does not say why. The reason renders in Configure, and the row draws at
 × 0.55 (3.27:1, `SPEC.md` §7.3) instead of E's × 0.34 (2.6:1).
 
 **There is no `.Hint()`.** It was deleted from the API. A one-line hint is help; help
-goes to Explain. This is the single largest calming change and it is enforced by the
+goes to Configure. This is the single largest calming change and it is enforced by the
 absence of the method, not by a style note.
 
 ---
@@ -205,7 +230,7 @@ area.Slider( "display.sharpness", "Sharpness", cv_sharpness )
         .Default( 0 )
         .Help( "Which NIS scaling kernel the sharpen pass pairs with." )
 
-    // ---- depth: Inspector ▸ DIAGNOSE (read-only by type) -------------------
+    // ---- depth: Inspector ▸ DETAILS (read-only by type) --------------------
     .Live( "effective", []{ return ui::Fact{ "effective RCAS",
                             std::format( "{:.2f}", RcasEffectiveStrength() ) }; } )
     .Live( "pass_cost", []{ return ui::Fact{ "pass cost",
@@ -214,15 +239,26 @@ area.Slider( "display.sharpness", "Sharpness", cv_sharpness )
 
 ### 4.1 The four generators, and the asserts behind them
 
+> **Amended 2026-08-23.** The Inspector now has **two modes**, `CONFIGURE` and `DETAILS`
+> (`SPEC.md` §5.1). The generators are unchanged in number and in kind — only where their
+> output lands changed. That is the point of the amendment: re-sorting content between
+> modes cost nothing at this layer, because a category file never named a mode.
+
 | Generator | Feeds | Enforcement |
 |---|---|---|
-| `.Help( sz )` | Explain prose | **required**; aborts at registration if missing; `ui_lint` caps at 240 chars / 3 sentences |
-| the `Bind` | Explain's fact grid | not typeable — derived from the schema |
-| `.Param( leaf, title, bind )` | Configure rows | **Prefix Law**, **Six Budget**, **One Level** — below |
-| `.Live( leaf, fn )` | Diagnose readouts | `fn` returns `ui::Fact`/`ui::Series`; **there is no `Bind` overload**, so a control cannot be constructed |
+| `.Help( sz )` | **Configure** — the short description of what this does, above the values | **required**; aborts at registration if missing; `ui_lint` caps at 240 chars / 3 sentences |
+| the `Bind` | **Details** — the binding grid | not typeable — derived from the schema |
+| `.Param( leaf, title, bind )` | **Configure** rows, under the row's own control | **Prefix Law**, **Six Budget**, **One Level** — below |
+| `.Live( leaf, fn )` | **Details** readouts | `fn` returns `ui::Fact`/`ui::Series`; **there is no `Bind` overload**, so a control cannot be constructed |
 
 There is no fifth. Adding one is an edit to `Registry.h`, visible in a diff, landing in
 this table and in `SPEC.md` §5.2.
+
+**Configure also draws the row's own control**, which is not a generator — it is the same
+`Row::Draw` the Sheet calls, on the same entry, at the same `--row` height. That is why a
+parameter and its parent look identical in the Inspector: they are painted by one
+function. For a read-only kind (`Facts`, `Meter`, `Graph`) there is no control to draw and
+Configure says so in one sentence.
 
 ### 4.2 The Prefix Law, mechanically
 
@@ -266,17 +302,32 @@ void ui::Inspector::Draw( const Entry *pSel, ImRect rc )
 {
     if ( !pSel ) { DrawOverview( CurrentArea(), rc ); return; }
 
-    const bool bCfg = pSel->ParamCount() > 0;
-    const bool bDia = pSel->LiveCount()  > 0;
-    Mode eMode = DrawModeStrip( rc, /*explain*/ true, bCfg, bDia );  // dim = empty
+    const bool bWritable = !Kind::IsReadOnly( pSel->Kind() );
+    const int  nCfg = ( bWritable ? 1 : 0 ) + pSel->ParamCount();
+    const int  nDet = pSel->LiveCount() + DetailFactCount( pSel );
+
+    // two cells, each carrying the count of what it holds
+    Mode eMode = DrawModeStrip( rc, nCfg, nDet, bWritable );
 
     switch ( eMode )
     {
-        case Mode::Explain:   DrawHelp( pSel ); DrawFactGrid( pSel ); DrawRelated( pSel );
-                              DrawKeyLine( pSel->Kind() ); DrawResetAction( pSel ); break;
-        case Mode::Configure: for ( const Param &p : pSel->Params() ) Row::Draw( p, rc ); break;
-        case Mode::Diagnose:  for ( const Live  &l : pSel->Lives()  ) DrawFact( l() );
-                              DrawKeyLogTail( pSel->Id(), 5 );        break;
+        case Mode::Configure:
+            DrawHelp( pSel );                                  // .Help()
+            DrawDisabledReason( pSel );                        // mandatory when disabled
+            DrawValidationError( pSel );                       // text kinds only
+            if ( bWritable ) Row::Draw( *pSel, rc );           // the row's OWN control
+            else             DrawReadOnlyNote( pSel );
+            for ( const Param &p : pSel->Params() ) Row::Draw( p, rc );
+            DrawResetAction( pSel );
+            break;
+
+        case Mode::Details:
+            DrawBindingGrid( pSel );                           // derived, typed by nobody
+            DrawRelated( pSel );
+            DrawKeyLine( pSel->Kind() );
+            for ( const Live &l : pSel->Lives() ) DrawFact( l() );
+            DrawKeyLogTail( pSel->Id(), 5 );
+            break;
     }
 }
 ```
@@ -285,13 +336,18 @@ Every branch reads the registration. **The Inspector is a pure function of the
 selection**, holds no state, and cannot receive content that did not pass one of the four
 generators.
 
-### 4.4 The dimmed mode strip is a feature
+### 4.4 The mode strip is a depth readout, not a tab bar
 
-`DrawModeStrip` draws all three cells always, dimming the empty ones. A user looking at a
-row can see at a glance that it has, for example, help but no parameters and no
-diagnostics — so the strip is continuous, visible evidence of how much is *not* hiding.
-There is no way to have Configure content and a dimmed CONFIGURE cell, because the cell's
-enabled-ness is `ParamCount() > 0`.
+With three modes, an empty cell was dimmed. With two modes both cells are always
+non-empty — `.Help()` is required, and the binding grid is always derivable — so the
+readout moves from *dimming* to a **count on each cell**: `CONFIGURE 4 · DETAILS 9`. A
+user looking at a row still sees at a glance how much is (and is not) hiding behind it,
+and the number is more informative than the on/off it replaced.
+
+The one dimmed state that survives is `ro`: a read-only kind has nothing to configure, so
+its CONFIGURE cell reads `ro` and its body is one sentence pointing at Details. That state
+is `Kind::IsReadOnly()`, not a flag anyone sets, so there is no way to have Configure
+content and an `ro` cell.
 
 ---
 
@@ -370,22 +426,48 @@ There is no `Left()`, no `Centre()`, no `SetCursorPosX`, no `SameLine`. A painte
 a rect and draws inside it:
 
 ```cpp
-void Controls::Switch ( const RowCtx &r, Bind<bool> b ) { widgets::Toggle ( r.Place( 30 ), b ); }
-void Controls::Stepper( const RowCtx &r, ... )          { widgets::Stepper( r.Place( 96 ), ... ); }
-void Controls::Slider ( const RowCtx &r, ... )          { widgets::Slider ( r.PlaceFull(), ... );
-                                                          Text::Value( r.Value(), ... ); }
+// Every Place() below is --H tall.  kControlH is the ONE control height (SPEC 3.0);
+// a control whose graphic is deliberately shorter is centred in the rect it is given.
+constexpr float kControlH = 28.f;
+constexpr float kSwitchW  = 40.f, kSwitchH = 20.f, kSwitchKnob = 16.f;
+
+void Controls::Switch ( const RowCtx &r, Bind<bool> b )
+{
+    widgets::Toggle( r.Place( kSwitchW ), b );        // 40 x 20 graphic, 28-tall hit box
+    Text::Value( r.Value(), b ? "on" : "off" );       // SPEC 2.3 — a switch cannot self-display
+}
+void Controls::Stepper( const RowCtx &r, ... )
+{
+    widgets::Stepper( r.Place( 44 ), ... );           // B's borderless "- +", 18 + 8 + 18
+    Text::Value( r.Value(), ... );                    // the number lives in the value column
+}
+void Controls::Slider ( const RowCtx &r, ... )
+{
+    widgets::Slider( r.PlaceFull(), ... );            // B's paint, E2's lane (SPEC 3.4)
+    Text::Value( r.Value(), ... );
+}
 void Controls::Choice ( const RowCtx &r, const Options &o )
 {
-    // the helper measures and auto-downgrades; the caller has no say
-    const bool bSeg = o.size() <= 5 && o.MaxLen() <= 8
-                   && r.PlaceFull().GetWidth() >= o.size() * 58.f * Layout().scale;
-    bSeg ? widgets::Segmented( r.Place( o.size() * 92 ), o )
-         : widgets::Dropdown ( r.Place( 280 ),          o );
+    // the helper measures and auto-downgrades; the caller has no say.
+    // ONE predicate, used for every host — sheet, inspector and inline fallback alike.
+    const bool bSeg = widgets::SegmentedFits( o, r.PlaceFull().GetWidth() );
+    bSeg ? widgets::Segmented( r.Place( widgets::SegmentedWidth( o ) ), o )
+         : widgets::Dropdown ( r.PlaceFull(), o );    // value + caret; self-displaying
+}
+void Controls::Bank( const RowCtx &r, BindSet b, const Options &o )
+{
+    widgets::ChipBank( r.Place( widgets::BankWidth( o ) ), b, o );
 }
 ```
 
-The per-kind widths (30 / 96 / `n×92` / 280 / 320 / full) live only here, in
-`SPEC.md` §2.2's table, and nowhere else.
+The per-kind widths live only here and in `SPEC.md` §3, and nowhere else.
+
+> **Amended 2026-08-23.** `Place( 30 )` / `Place( 96 )` / `Place( n × 92 )` /
+> `Place( 280 )` are gone. The switch grew to B's geometry uplifted 25%; the stepper lost
+> its box (B draws two glyphs, not a spinbox); segmented cells are content-sized, so their
+> width is measured rather than assumed; and dropdown and text are self-displaying, so they
+> take the full lane and leave the value column empty. `Place()` itself did not change —
+> which is the whole argument for having it.
 
 Left alignment is not discouraged; it is unrepresentable. Full-bleed controls satisfy the
 rule for free because `PlaceFull()`'s right edge is the same `m_ctl.Max.x`.
@@ -512,7 +594,7 @@ template <typename T>        Binding<T> Bind( T (*get)(), void (*set)( T ) );
 
 `Cfg` is the seam where "which file does this write" — computed ad hoc by `PanelConfig`
 today (`SessionAppId()` / `IsSessionOverrideActive()`) — is computed once. `Bind` degrades
-honestly: no schema means no default, so Explain shows `session only` and the reset
+honestly: no schema means no default, so Details shows `session only` and the reset
 affordance is suppressed rather than lying.
 
 ---
@@ -585,7 +667,7 @@ void gamescope::ui::RegisterFrameLimiterArea( Registry &reg )
 
 ...plus one line in `Areas/Areas.cpp`. That is the whole task: **a rail item, a sheet,
 palette entries for every setting and every param, breadcrumb, per-category reset,
-provenance, Explain / Configure / Diagnose content, keyboard reachability, the inline
+provenance, Configure / Details content, keyboard reachability, the inline
 fallback, and the responsive ladder — from ~30 lines with no geometry in them.**
 
 ---
@@ -617,7 +699,7 @@ ui_lint: 5 findings
   monitor.font_size                    Bind() with no default — reset suppressed
   setup.appearance/Background veil     Help() is 340 chars — cap is 240
   monitor.modules                      6 params, at the budget — next one must promote
-  image.shaders/AdaptiveBrightness     Live() count 4 — Diagnose paints 2 animated elements, cap 1
+  image.shaders/AdaptiveBrightness     Live() count 4 — Details paints 2 animated elements, cap 1
 ui_lint: run `ui_lint --host=inline` to verify the Reachability Law.
 ```
 

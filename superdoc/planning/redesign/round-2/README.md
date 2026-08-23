@@ -13,7 +13,7 @@ carry forward. The other five are kept for reference and for ideas worth stealin
 | A2 | [`a2-depth/`](a2-depth/) | The Ledge — depth gets a permanent home in the bar freed by dropping gamepad, for zero new pixels. |
 | A3 | [`a3-creative/`](a3-creative/) | Bloom — rows are bare at rest; the focused row blooms into a full-size instrument. |
 | E1 | [`e1-refined/`](e1-refined/) | The Rail Rule. Diagnosed *why* alignment looked random: the label column pinned control *left* edges. |
-| **E2** | [**`e2-inspector-plus/`**](e2-inspector-plus/) | **Chosen.** Everything explanatory leaves the sheet: 76 text lines → 31, zero settings removed. The Inspector has no authoring API. |
+| **E2** | [**`e2-inspector-plus/`**](e2-inspector-plus/) | **Chosen.** Everything explanatory leaves the sheet: 76 text lines → 31, zero settings removed. The Inspector has no authoring API and two modes (`CONFIGURE` / `DETAILS`). Controls are direction B's on one control height. See its [`INCONSISTENCIES.md`](e2-inspector-plus/INCONSISTENCIES.md) for the design audit the real implementation is checked against. |
 | E3 | [`e3-creative/`](e3-creative/) | The Bench — the Inspector becomes a live instrument; the anchor grid becomes a draggable miniature of the real output. |
 
 ## Findings worth keeping regardless of direction

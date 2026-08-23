@@ -8,30 +8,78 @@
 
    Everything inside .slab is authored in BASE UNITS (= CSS px at scale 1.0).
    display_scale is applied as a transform on the slab, which is exactly how
-   the real shell works: px = base x scale.
-   Contrast values are the measured ones from SPEC.md section 7.3.
+   the real shell works: px = base × scale.
+
+   THREE RULES THIS FILE ENFORCES ON ITSELF
+   1. No accent literal.  Every accent-derived colour is rgba(var(--accRGB),a)
+      so one hue change repaints the entire page.  Sweep: the string "54,189"
+      must not appear below this comment.
+   2. No loose geometry.  Control height, switch size, track thickness, row
+      height, lane width, gaps and the affordance column are TOKENS.  A number
+      that means the same thing twice is one token.
+   3. Right-bound is a law.  Controls live in .ctlz, which is
+      justify-content:flex-end and has no modifier.  There is no left-binding
+      class in this stylesheet (except the E-grammar demo, which exists to
+      show what E2 removed).
    ═══════════════════════════════════════════════════════════════════════════ */
 :root{
+  /* ── the accent family — one OKLCH hue drives all of it; JS rewrites these ── */
+  --accRGB:54,189,221;
   --acc:#36BDDD; --acc-hi:#47CAEA; --acc-val:#78DBF6; --acc-txt:#71D4EF;
-  --acc-seg:#A9EAFD; --acc-knob:#93DEF4;
-  --ok:#6ED274; --warn:#F3821D; --warn-t:#F7A85C; --dgr:#EF6B5A; --dgr-t:#F2A99E;
-  /* text roles — all >= 4.5:1 over the worst-case composited background */
+  --acc-seg:#A9EAFD; --acc-knob:#93DEF4; --acc-icon:#A3E3F6; --acc-handle:#BAE7F4;
+
+  /* ── fixed status hues — deliberately NOT in the family, so they can never
+        collide with the accent at any hue (SPEC §7.5) ── */
+  --okRGB:110,210,116; --warnRGB:243,130,29; --dgrRGB:239,107,90;
+  --ok:rgb(var(--okRGB)); --warn:rgb(var(--warnRGB)); --dgr:rgb(var(--dgrRGB));
+  --warn-t:#F7A85C; --dgr-t:#F2A99E;
+
+  /* ── text roles — measured over the worst-case composited background ── */
   --t92:rgba(239,245,251,.92);  /* TextPrimary 14.79:1 */
   --t72:rgba(239,245,251,.72);  /* TextBody     9.25:1 */
   --t68:rgba(239,245,251,.68);  /* TextLabel    8.34:1 */
   --t52:rgba(239,245,251,.52);  /* TextMeta     5.28:1 */
+  --t50:rgba(239,245,251,.50);  /* segmented inactive — B's value, 4.96:1 */
+  --t44:rgba(239,245,251,.44);  /* E-grammar demo ONLY — 4.09:1, a failure */
+
+  /* ── lines ── */
   --line:rgba(255,255,255,.10);      /* row separator (decorative) */
   --lineRegion:rgba(255,255,255,.22);/* region boundary (decorative) */
-  --lineCtl:rgba(255,255,255,.42);   /* EVERY interactive boundary — 4.09:1 */
+  --lineCtl:rgba(255,255,255,.42);   /* EVERY interactive boundary — 4.08:1 */
+  --trackOff:rgba(255,255,255,.34);  /* unfilled track — 3.08:1 */
   --raised:rgba(255,255,255,.06);
   --surface:rgba(9,10,12,.88);
+
+  /* ── GEOMETRY, one token per meaning ────────────────────────────────────
+        Control sizes are direction B's, uplifted ~25% exactly as shipping
+        issue #23 uplifted the handoff baseline at this user's request, then
+        snapped to the 4-unit grid.  Every control's HIT BOX is --H tall. ── */
+  --H:28px;        /* THE control height. Segmented / dropdown / stepper /
+                      text / verb fill it; switch / slider / meter are --H
+                      hit boxes containing a shorter graphic, centred.      */
+  --swW:40px;      /* switch track  (B 30 × 1.25 → 37.5 → 40, 2:1)          */
+  --swH:20px;      /* switch track height                                    */
+  --swK:16px;      /* switch knob   (B 11 × 1.25 → 13.75 → 16 = swH − 4)     */
+  --swT:20px;      /* knob travel   (swW − swK − 4)                          */
+  --trk:8px;       /* slider / hue / meter track thickness (B 6 × 1.25 → 8)  */
+  --hndW:8px;      /* slider handle (B 6 × 1.25 → 8)                         */
+  --hndH:20px;     /* slider handle height (B 14 × 1.25 → 17.5 → 20)         */
+  --row:44px;      /* THE sheet row height. There is exactly one.            */
+  --aff:28px;      /* affordance column                                      */
+  --labz:46%;      /* label+value zone — the value's right edge lands here   */
+  --gapA:9px;      /* gap between control atoms (B's .ctl gap)               */
+  --gapS:3px;      /* gap inside a segmented / bank (B's)                    */
+  --pad:24px;      /* sheet horizontal padding                               */
+  --ipad:16px;     /* inspector horizontal padding                           */
+  --icon:24px;     /* rail icon box                                          */
+
   --sans:"Geist","Inter",system-ui,sans-serif;
   --mono:"Geist Mono","SFMono-Regular",ui-monospace,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:#08090b;color:var(--t68);font-family:var(--sans);-webkit-font-smoothing:antialiased}
 body{padding:0 0 56px}
-button{font-family:inherit;border-radius:0}
+button,input{font-family:inherit;border-radius:0}
 
 /* ─── page chrome ─────────────────────────────────────────────────────── */
 .pagehead{padding:20px 24px 10px;max-width:1500px}
@@ -51,14 +99,14 @@ button{font-family:inherit;border-radius:0}
 .tg{font:500 11px var(--mono);color:var(--t68);background:rgba(255,255,255,.05);
   border:1px solid var(--lineCtl);padding:6px 11px;cursor:pointer}
 .tg:hover{background:rgba(255,255,255,.11);color:var(--t92)}
-.tg.on{background:rgba(54,189,221,.24);border-color:var(--acc);color:var(--acc-seg)}
+.tg.on{background:rgba(var(--accRGB),.24);border-color:var(--acc);color:var(--acc-seg)}
 .tours{display:flex;flex-wrap:wrap;gap:5px;padding:12px 24px 4px;align-items:center}
 .tours .lb{font:500 10.5px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--t52);padding-right:6px}
 .tours button{font:400 11.5px var(--mono);color:var(--t68);background:rgba(255,255,255,.04);
   border:1px solid var(--line);padding:6px 10px;cursor:pointer}
 .tours button:hover{background:rgba(255,255,255,.10);color:var(--t92);border-color:var(--lineCtl)}
-.tours button.on{background:rgba(54,189,221,.20);border-color:var(--acc);color:var(--acc-seg)}
-.caption{margin:12px 24px 0;padding:11px 14px;background:rgba(54,189,221,.07);
+.tours button.on{background:rgba(var(--accRGB),.20);border-color:var(--acc);color:var(--acc-seg)}
+.caption{margin:12px 24px 0;padding:11px 14px;background:rgba(var(--accRGB),.07);
   border-left:2px solid var(--acc);font:400 13px var(--sans);color:var(--t72);line-height:1.6;max-width:1180px}
 .caption b{color:var(--t92);font-weight:500}
 .caption code{font:400 12px var(--mono);color:var(--acc-txt)}
@@ -87,41 +135,42 @@ button{font-family:inherit;border-radius:0}
 /* worst case for the contrast table: a pure-white game frame under darkening 0.80 */
 .stage.nogame .veil{background:rgba(0,0,0,.80)}
 
-/* the always-on FPS HUD */
+/* the always-on FPS HUD — the Monitor, drawn by the same shell */
 .hud{position:absolute;top:32px;right:32px;padding:8px 11px;z-index:5;
   background:rgba(9,11,14,.60);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.14)}
+.hud.hide{display:none}
 .hud .r1{display:flex;align-items:baseline;gap:6px}
 .hud .n{font:600 18px var(--mono);color:#fff;line-height:1.2}
 .hud .u{font:400 10px var(--mono);color:rgba(255,255,255,.62)}
-.hud .ms{font:500 12px var(--mono);color:#89E0F8;margin-left:auto;padding-left:18px}
+.hud .ms{font:500 12px var(--mono);color:var(--acc-val);margin-left:auto;padding-left:18px}
 .hud .graph{display:flex;align-items:flex-end;gap:1px;height:18px;margin:4px 0}
-.hud .graph b{width:2px;background:rgba(54,189,221,.72)}
-.hud .graph b.sp{background:rgba(243,130,29,.9)}
 .hud .r3{display:flex;gap:10px;font:400 10px var(--mono);color:rgba(255,255,255,.62)}
+/* one token for "the accent used as a data bar" — was three different alphas */
+.bar-a{background:rgba(var(--accRGB),.72)}
+.bar-w{background:rgba(var(--warnRGB),.9)}
 
 /* ═══ THE SLAB ═════════════════════════════════════════════════════════ */
 .slabwrap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
 .slab{transform-origin:center center;background:var(--surface);
-  backdrop-filter:blur(22px) saturate(1.1);border:1px solid rgba(54,189,221,.42);
-  box-shadow:0 28px 70px -14px rgba(0,0,0,.82),0 0 0 4px rgba(54,189,221,.06),0 0 44px -18px rgba(54,189,221,.5);
+  backdrop-filter:blur(22px) saturate(1.1);border:1px solid rgba(var(--accRGB),.42);
+  box-shadow:0 28px 70px -14px rgba(0,0,0,.82),0 0 0 4px rgba(var(--accRGB),.06),
+             0 0 44px -18px rgba(var(--accRGB),.5);
   display:flex;flex-direction:column;overflow:hidden;position:relative}
 
 .slabbar{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:10px;padding:0 12px;
   border-bottom:1px solid var(--lineRegion);
-  background:linear-gradient(180deg,rgba(54,189,221,.15),rgba(255,255,255,.02))}
-.dot{width:6px;height:6px;background:var(--acc);box-shadow:0 0 8px rgba(54,189,221,.8);flex:0 0 6px}
-.dot.ok{background:var(--ok);box-shadow:0 0 8px rgba(110,210,116,.6)}
+  background:linear-gradient(180deg,rgba(var(--accRGB),.15),rgba(255,255,255,.02))}
+.dot{width:6px;height:6px;background:var(--acc);box-shadow:0 0 8px rgba(var(--accRGB),.8);flex:0 0 6px}
+.dot.ok{background:var(--ok);box-shadow:0 0 8px rgba(var(--okRGB),.6)}
 .dot.warn{background:var(--warn);box-shadow:none}
 .dot.dgr{background:var(--dgr);box-shadow:none}
 .slabbar .ttl{font:600 11px var(--mono);letter-spacing:.10em;color:var(--t92)}
 .slabbar .right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.glyph{width:20px;height:20px;display:grid;place-items:center;color:var(--t52);
+.glyph{width:22px;height:22px;display:grid;place-items:center;color:var(--t52);
   font:400 12px var(--mono);cursor:pointer;border:1px solid transparent}
 .glyph:hover{color:var(--t92);border-color:var(--lineCtl)}
 .glyph.on{color:var(--acc-seg);border-color:var(--acc)}
 .body{flex:1;display:flex;min-height:0;position:relative}
-/* the thread: one line from the active rail item into the sheet header — E's signature */
-.thread{position:absolute;z-index:3;pointer-events:none;background:var(--acc);opacity:.55}
 
 /* ─── REGION 1 · rail ─────────────────────────────────────────────────── */
 .rail{border-right:1px solid var(--lineRegion);background:rgba(0,0,0,.22);
@@ -129,160 +178,236 @@ button{font-family:inherit;border-radius:0}
 .rail .sec{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;
   color:var(--t52);padding:12px 16px 4px}
 .ri{position:relative;height:40px;display:flex;align-items:center;gap:12px;padding:0 12px 0 16px;cursor:pointer}
-.ri .ic{width:20px;flex:0 0 20px;text-align:center;font:400 14px var(--mono);color:var(--t52)}
+.ri .ic{width:var(--icon);height:var(--icon);flex:0 0 var(--icon);color:var(--t68);
+  display:grid;place-items:center}
+.ri .ic svg{width:var(--icon);height:var(--icon);display:block;
+  fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:butt;stroke-linejoin:miter}
 .ri .nm{font:400 14px var(--sans);color:var(--t68);white-space:nowrap}
-.ri .ct{margin-left:auto;font:400 11.5px var(--mono);color:var(--t52)}
-.ri .ct.alert{color:var(--dgr-t)}
+.ri .ct{margin-left:auto;font:400 11.5px var(--mono);color:var(--acc-txt);
+  background:rgba(var(--accRGB),.16);padding:1px 5px}
+.ri .ct.alert{color:var(--dgr-t);background:rgba(var(--dgrRGB),.18)}
 .ri:hover{background:rgba(255,255,255,.05)}
-.ri.on{background:rgba(54,189,221,.10)}
+.ri.on{background:rgba(var(--accRGB),.10)}
 .ri.on::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
-.ri.on .nm{color:var(--t92)} .ri.on .ic{color:var(--acc-knob)}
+.ri.on .nm{color:var(--t92)} .ri.on .ic{color:var(--acc-icon)}
 .rail.icons .sec{height:1px;padding:0;margin:10px 12px;background:rgba(255,255,255,.10);
   overflow:hidden;text-indent:-999px}
 .rail.icons .ri{justify-content:center;padding:0}
 .rail.icons .nm{display:none}
-.rail.icons .ct{position:absolute;right:4px;top:4px;margin:0;font:400 9px var(--mono);opacity:.8}
+.rail.icons .ct{position:absolute;right:3px;top:3px;margin:0;font:400 9px var(--mono);padding:0 3px}
 
 /* ─── REGION 2 · sheet ────────────────────────────────────────────────── */
 .sheet{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
-.sheethead{height:56px;flex:0 0 56px;display:flex;align-items:center;gap:10px;padding:0 24px;
+.sheethead{height:56px;flex:0 0 56px;display:flex;align-items:center;gap:10px;padding:0 var(--pad);
   border-bottom:1px solid var(--lineRegion)}
 .crumb{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t52)}
 .crumb b{color:var(--t92);font-weight:600} .crumb .sl{color:var(--t52);padding:0 6px}
 .sheethead .right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.sheetbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 24px 12px;scrollbar-width:thin}
-.sheetbody.raw{padding:0}
-.cols{display:flex;gap:24px;align-items:flex-start}
+.sheetbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 var(--pad) 12px;scrollbar-width:thin}
+.cols{display:flex;gap:var(--pad);align-items:flex-start}
 .cols>.col{flex:1;min-width:0}
-.sheetfoot{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:14px;padding:0 24px;
+.sheetfoot{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:14px;padding:0 var(--pad);
   border-top:1px solid var(--lineRegion)}
 .sheetfoot .hint{margin-left:auto;font:400 11.5px var(--mono);color:var(--t52);display:flex;gap:14px}
 .kbd{font:400 11px var(--mono);color:var(--t68);border:1px solid var(--lineCtl);padding:0 4px;
   background:rgba(255,255,255,.04)}
-.txtact{font:400 11.5px var(--mono);color:var(--acc-txt);cursor:pointer;border-bottom:1px solid transparent}
+/* ONE text-action style for the whole product (was .txtact + .ilink + .back) */
+.txtact{font:400 11.5px var(--mono);color:var(--acc-txt);cursor:pointer;
+  border-bottom:1px solid transparent;display:inline-block}
 .txtact:hover{border-bottom-color:var(--acc-txt)}
+.txtact.blk{display:block;padding:3px 0;font-size:12.5px}
+.txtact.dis{color:var(--t52);cursor:default;pointer-events:none}
 
 /* ─── the Row grammar — four columns, two right-bound ─────────────────── */
 .grp{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t52);
   padding:16px 0 8px;display:flex;align-items:center;gap:10px}
-.grp .cnt{font:400 11px var(--mono);color:var(--acc-txt);
-  background:rgba(54,189,221,.16);padding:2px 5px}
 .grp .acts{margin-left:auto;display:flex;gap:10px}
-.row{position:relative;display:flex;align-items:center;height:44px;border-bottom:1px solid var(--line);
-  padding-left:12px;cursor:pointer}
-.row .labz{flex:0 0 calc(46% - 12px);display:flex;align-items:baseline;gap:10px;padding-right:12px;min-width:0}
+.row{position:relative;display:flex;align-items:center;height:var(--row);
+  border-bottom:1px solid var(--line);padding-left:12px;cursor:pointer}
+.row .labz{flex:0 0 calc(var(--labz) - 12px);display:flex;align-items:baseline;gap:10px;
+  padding-right:12px;min-width:0}
 .row .labz .lab{font:400 14px var(--sans);color:var(--t68);white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;flex:1;min-width:0}
-.row .labz .val{flex:0 0 auto;font:500 15px var(--mono);color:var(--t92);white-space:nowrap}
+/* B's value typography, in E2's value column */
+.row .labz .val{flex:0 1 auto;font:500 16px var(--mono);color:var(--t92);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:60%}
 .row .labz .val.diff{color:var(--acc-val)}
-.row .labz .val u{font:400 11.5px var(--mono);color:var(--t52);text-decoration:none;padding-left:3px}
-.row .ctlz{flex:1;min-width:0;display:flex;justify-content:flex-end;align-items:center}
-.row .aff{flex:0 0 28px;display:flex;justify-content:flex-end;align-items:center;
+.row .labz .val u{font:400 11.5px var(--mono);color:var(--t52);text-decoration:none;
+  padding-left:3px;margin-left:-2px}
+.row .ctlz{flex:1;min-width:0;display:flex;justify-content:flex-end;align-items:center;
+  gap:var(--gapA);height:var(--H)}
+.row .aff{flex:0 0 var(--aff);display:flex;justify-content:flex-end;align-items:center;
   font:400 12px var(--mono);color:var(--t52)}
 .row:hover{background:rgba(255,255,255,.035)}
-.row.sel{background:rgba(54,189,221,.08)}
+.row.sel{background:rgba(var(--accRGB),.08)}
 .row.sel .labz .lab{color:var(--t92)}
-.row.sel:hover{background:rgba(54,189,221,.11)}
-.row.ro,.row.ro:hover{cursor:pointer}
-.row.ro .labz .lab{color:var(--t68)}
-.row.dis{opacity:.55;cursor:default}
+.row.sel:hover{background:rgba(var(--accRGB),.11)}
+.row.dis{opacity:.55}
+.row.dis .ctlz{pointer-events:none}
 .edge{position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent}
 .edge.diff{background:var(--acc)}
-.edge.sel{background:rgba(54,189,221,.45)}
+.edge.sel{background:rgba(var(--accRGB),.45)}
 .reset{width:7px;height:7px;border-radius:50%;background:var(--acc);cursor:pointer}
 .chev{color:var(--t52);font-size:13px}
-.lock{color:var(--t52)}
+/* a Facts summary is a STRING, not a value — it lives in the control zone */
+.fsum{font:400 12px var(--mono);color:var(--t52);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* inline (Inspector hidden) depth */
 .row .disc{flex:0 0 12px;margin-left:-12px;padding-right:2px;color:var(--acc-txt);font:400 10px var(--mono)}
 .prow{padding-left:36px;background:rgba(255,255,255,.022)}
-.prow .labz{flex:0 0 calc(46% - 36px)}
-.prow::after{content:"";position:absolute;left:20px;top:0;bottom:0;width:1px;background:rgba(54,189,221,.35)}
-/* E-grammar only */
+.prow .labz{flex:0 0 calc(var(--labz) - 36px)}
+.prow::after{content:"";position:absolute;left:20px;top:0;bottom:0;width:1px;
+  background:rgba(var(--accRGB),.35)}
+.note{font:400 11.5px var(--mono);color:var(--t44);padding:10px 0 2px;line-height:1.55;max-width:620px}
+
+/* ─── E-GRAMMAR DEMO ONLY — everything below exists to show what E2 removed ── */
 .row.tall{height:76px;align-items:flex-start;padding-top:11px}
 .row.tall .labz{flex-direction:column;align-items:flex-start;gap:3px;padding-top:1px}
-.row.tall .labz .hint{font:400 11.5px var(--mono);color:rgba(239,245,251,.44);white-space:normal;line-height:1.4}
+.row.tall .labz .hint{font:400 11.5px var(--mono);color:var(--t44);white-space:normal;line-height:1.4}
 .row.eleft .ctlz{justify-content:flex-start}
 .row.ecenter .ctlz{justify-content:center}
-.note{font:400 11.5px var(--mono);color:rgba(239,245,251,.44);padding:10px 0 2px;line-height:1.55;max-width:620px}
+.slab.egram .sw{width:30px;height:15px;flex-basis:30px}   /* E's undersized switch */
+.slab.egram .sw i{width:11px;height:11px}
+.slab.egram .sw.on i{left:16px}
+.slab.egram .seg s,.slab.egram .dd,.slab.egram .stp,.slab.egram .tin,.slab.egram .verb{height:22px}
+.slab.egram .row .ctlz{height:22px}
 
-/* ─── controls (all right-bound by the flex rule above) ───────────────── */
-.sw{width:30px;height:15px;flex:0 0 30px;background:rgba(255,255,255,.10);
-  border:1px solid var(--lineCtl);position:relative;cursor:pointer}
-.sw i{position:absolute;top:1px;left:1px;width:11px;height:11px;background:var(--t68);transition:left .09s}
-.sw.on{background:rgba(54,189,221,.30);border-color:rgba(54,189,221,.75)}
-.sw.on i{left:16px;background:var(--acc-knob)}
-.cb{width:12px;height:12px;flex:0 0 12px;border:1px solid rgba(255,255,255,.18);
-  background:rgba(255,255,255,.04);display:grid;place-items:center;cursor:pointer}
-.cb.on{border-color:rgba(54,189,221,.70);background:rgba(54,189,221,.20)}
-.cb.on::after{content:"";width:5px;height:5px;background:var(--acc-knob)}
-.seg{display:flex;gap:4px;width:100%}
-.seg b{flex:1;text-align:center;padding:6px 4px;font:500 11.5px var(--mono);color:var(--t68);
-  background:rgba(255,255,255,.06);border:1px solid var(--lineCtl);cursor:pointer;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.seg b:hover{background:rgba(255,255,255,.12)}
-.seg b.on{background:rgba(54,189,221,.24);border-color:var(--acc);color:var(--acc-seg);font-weight:600}
-.dd{width:100%;height:26px;display:flex;align-items:center;padding:0 8px;background:var(--raised);
-  border:1px solid var(--lineCtl);font:400 11.5px var(--mono);color:var(--t68);cursor:pointer}
-.dd .cv{margin-left:auto;color:var(--t52)}
-.dd:hover{background:rgba(255,255,255,.11)}
-.sld{width:100%;height:22px;position:relative;display:flex;align-items:center;cursor:pointer}
-.sld .rail0{position:absolute;left:0;right:0;height:6px;background:rgba(255,255,255,.34)}
-.sld .fill{position:absolute;left:0;height:6px;background:linear-gradient(90deg,rgba(54,189,221,.5),var(--acc-hi))}
-.sld .tick{position:absolute;width:1px;height:6px;background:rgba(255,255,255,.52)}
-.sld .hnd{position:absolute;width:10px;height:22px;background:#BAE7F4;margin-left:-5px;
-  box-shadow:0 0 8px rgba(54,189,221,.55)}
-.sld .mk{position:absolute;top:14px;font:400 11.5px var(--mono);color:rgba(255,255,255,.38)}
-.stp{display:flex;width:96px;height:26px;border:1px solid var(--lineCtl);background:var(--raised)}
-.stp b{width:22px;display:grid;place-items:center;font:400 13px var(--mono);color:var(--t68);cursor:pointer}
-.stp b:hover{background:rgba(255,255,255,.14);color:var(--t92)}
-.stp span{flex:1;display:grid;place-items:center;font:500 14px var(--mono);color:var(--t92);
-  border-left:1px solid var(--line);border-right:1px solid var(--line)}
-.tin{width:100%;height:26px;background:var(--raised);border:1px solid var(--lineCtl);padding:0 8px;
-  font:400 11.5px var(--mono);color:var(--t68);display:flex;align-items:center}
-.tin.ph{color:var(--t52)}
-.mtr{display:flex;gap:1.5px;width:100%;height:5px}
-.mtr i{flex:1;background:rgba(255,255,255,.14)} .mtr i.lit{background:rgba(54,189,221,.85)}
-.btn{height:26px;padding:0 11px;display:inline-flex;align-items:center;font:400 11.5px var(--mono);
-  color:var(--t68);background:rgba(255,255,255,.05);border:1px solid var(--lineCtl);cursor:pointer;
-  margin-left:6px}
-.btn:hover{background:rgba(255,255,255,.12);color:var(--t92)}
-.btn.acc{background:rgba(54,189,221,.16);border-color:rgba(54,189,221,.6);color:var(--acc-seg)}
-.btn.dgr{background:rgba(239,107,90,.14);border-color:rgba(239,107,90,.55);color:var(--dgr-t)}
+/* ─── CONTROLS — direction B's atoms, uplifted ~25%, right-bound ───────── */
+/* switch — B geometry × 1.25, snapped to the 4u grid.  B's off border (18%)
+   measures 1.69:1 and is replaced by --lineCtl (4.08:1); everything else is B. */
+.sw{width:var(--swW);height:var(--swH);flex:0 0 var(--swW);
+  background:rgba(255,255,255,.07);border:1px solid var(--lineCtl);position:relative;cursor:pointer}
+.sw i{position:absolute;top:1px;left:1px;width:var(--swK);height:var(--swK);
+  background:rgba(239,245,251,.55);transition:left .09s,background .09s}
+.sw.on{background:rgba(var(--accRGB),.30);border-color:rgba(var(--accRGB),.65)}
+.sw.on i{left:calc(1px + var(--swT));background:var(--acc-knob)}
+.sw:focus-visible,.seg s:focus-visible,.dd:focus-visible,.stp b:focus-visible,.tin:focus-visible,
+.verb:focus-visible,.sld:focus-visible,.bank s:focus-visible,.pgrid i:focus-visible{
+  outline:2px solid var(--acc-val);outline-offset:2px}
+/* segmented — B exactly: content-sized cells, gap 3, on = accent 24/60 + AccentSeg 600.
+   Only the inactive border is lifted 8% → 42% for the 3:1 floor. */
+.seg{display:flex;gap:var(--gapS);min-width:0}
+.seg s{text-decoration:none;height:var(--H);display:flex;align-items:center;padding:0 9px;
+  font:500 11.5px var(--mono);color:var(--t50);background:rgba(255,255,255,.04);
+  border:1px solid var(--lineCtl);cursor:pointer;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.seg s:hover{background:rgba(255,255,255,.11);color:var(--t72)}
+.seg s.on{color:var(--acc-seg);font-weight:600;background:rgba(var(--accRGB),.24);
+  border-color:rgba(var(--accRGB),.60)}
+/* dropdown — B has no box: the value sits in the value column and the lane
+   carries the caret alone.  The popup is shell furniture, not a control atom. */
+.dd{height:var(--H);display:flex;align-items:center;gap:8px;padding:0 6px;cursor:pointer;
+  border:1px solid transparent;min-width:0;max-width:100%}
+.dd:hover{border-color:var(--lineCtl);background:rgba(255,255,255,.06)}
+.dd .tv{font:500 16px var(--mono);color:var(--t92);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;min-width:0}
+.dd .tv.diff{color:var(--acc-val)}
+.dd .cv{font:400 11px var(--mono);color:var(--t52);flex:0 0 auto}
+.dd.open{border-color:var(--acc);background:rgba(var(--accRGB),.14);color:var(--acc-seg)}
+.ddpop{position:absolute;z-index:50;min-width:180px;max-width:420px;
+  background:rgba(16,18,21,.985);border:1px solid var(--lineCtl);
+  box-shadow:0 18px 44px -10px rgba(0,0,0,.85);max-height:280px;overflow:auto;scrollbar-width:thin}
+.ddpop s{text-decoration:none;display:flex;align-items:center;gap:8px;height:var(--row);
+  padding:0 12px;font:400 12.5px var(--mono);color:var(--t68);cursor:pointer;white-space:nowrap}
+.ddpop s:hover{background:rgba(255,255,255,.06);color:var(--t92)}
+.ddpop s.on{background:rgba(var(--accRGB),.16);color:var(--acc-seg)}
+.ddpop s .tick{width:8px;flex:0 0 8px;color:var(--acc)}
+/* slider — B's paint (rounded track, gradient fill, haloed handle), E2's lane:
+   PlaceFull, plus E2's 1px default tick.  B's 16% track is 1.57:1 → --trackOff. */
+.sld{flex:1;min-width:60px;height:var(--H);position:relative;display:flex;align-items:center;cursor:pointer}
+.sld .rail0{position:absolute;left:0;right:0;height:var(--trk);border-radius:calc(var(--trk)/2);
+  background:var(--trackOff)}
+.sld .fill{position:absolute;left:0;height:var(--trk);border-radius:calc(var(--trk)/2);
+  background:linear-gradient(90deg,rgba(var(--accRGB),.5),var(--acc-hi))}
+.sld .tick{position:absolute;width:1px;height:var(--trk);background:rgba(255,255,255,.52)}
+.sld .hnd{position:absolute;width:var(--hndW);height:var(--hndH);background:var(--acc-handle);
+  margin-left:calc(var(--hndW) / -2);border-radius:1px;box-shadow:0 0 0 2px rgba(var(--accRGB),.18)}
+.sld.ro .fill{background:var(--t52)} .sld.ro .hnd{background:var(--t68);box-shadow:none}
+/* stepper — B exactly: borderless − / + glyphs; the number is in the value column */
+.stp{display:flex;align-items:center;gap:8px;height:var(--H)}
+.stp b{width:18px;height:var(--H);display:grid;place-items:center;font:400 15px var(--mono);
+  color:rgba(239,245,251,.40);cursor:pointer;font-weight:400}
+.stp b:hover{color:var(--acc-seg)}
+/* text — B's value + ✎; editing swaps in a real input */
+.tin{height:var(--H);display:flex;align-items:center;gap:8px;padding:0 6px;cursor:text;
+  border:1px solid transparent;min-width:0;max-width:100%}
+.tin:hover{border-color:var(--lineCtl);background:rgba(255,255,255,.06)}
+.tin .tv{font:500 16px var(--mono);color:var(--t92);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;min-width:0}
+.tin .tv.ph{color:var(--t52)}
+.tin .cv{font:400 11px var(--mono);color:var(--t52);flex:0 0 auto}
+.tin input{width:100%;min-width:120px;height:calc(var(--H) - 2px);background:var(--raised);
+  border:0;border-bottom:1px solid var(--acc);outline:0;padding:0 6px;
+  font:400 12.5px var(--mono);color:var(--t92);caret-color:var(--acc)}
+.tin.err{border-color:var(--dgr)}
+.tin.err input{border-bottom-color:var(--dgr)}
+/* chip bank — B's multi-select.  ONE setting whose value is a set; N independent
+   binaries are still N switch rows.  Inactive border 8% → 42%, text 42% → 52%. */
+.bank{display:flex;gap:var(--gapS);flex-wrap:nowrap;min-width:0}
+.bank s{text-decoration:none;height:var(--H);display:flex;align-items:center;padding:0 8px;
+  font:500 11px var(--mono);background:rgba(255,255,255,.05);border:1px solid var(--lineCtl);
+  color:var(--t52);cursor:pointer;white-space:nowrap}
+.bank s:hover{background:rgba(255,255,255,.11);color:var(--t72)}
+.bank s.on{background:rgba(var(--accRGB),.22);border-color:rgba(var(--accRGB),.55);color:var(--acc-seg)}
+/* meter — read-only scalar, --H hit box, --trk graphic */
+.mtr{flex:1;min-width:60px;height:var(--H);display:flex;align-items:center;gap:1.5px}
+.mtr i{flex:1;height:var(--trk);background:rgba(255,255,255,.14)}
+.mtr i.lit{background:rgba(var(--accRGB),.85)}
+/* verb — B's action chip.  Identified by its text (8.70:1); the neutral variant,
+   whose text is dimmer, carries the --lineCtl hairline instead. */
+.verb{height:var(--H);display:inline-flex;align-items:center;padding:0 9px;
+  font:500 11.5px var(--mono);color:var(--acc-txt);background:rgba(var(--accRGB),.16);
+  border:1px solid transparent;cursor:pointer;white-space:nowrap}
+.verb:hover{background:rgba(var(--accRGB),.26);color:var(--acc-seg)}
+.verb.n{color:var(--t72);background:rgba(255,255,255,.05);border-color:var(--lineCtl)}
+.verb.n:hover{background:rgba(255,255,255,.12);color:var(--t92)}
+.verb.d{color:var(--dgr-t);background:rgba(var(--dgrRGB),.14)}
+.verb.d:hover{background:rgba(var(--dgrRGB),.26)}
+.verb.arm{color:var(--dgr-t);background:rgba(var(--dgrRGB),.30);border-color:var(--dgr)}
+.verb.dis{opacity:.45;pointer-events:none}
+/* chips — painted by the shell, never requested by a call site */
 .chip{font:400 10.5px var(--mono);padding:2px 5px;white-space:nowrap}
-.chip.a{background:rgba(54,189,221,.16);color:var(--acc-txt)}
+.chip.a{background:rgba(var(--accRGB),.16);color:var(--acc-txt)}
 .chip.n{background:rgba(255,255,255,.07);color:var(--t52)}
-.chip.w{background:rgba(243,130,29,.18);color:var(--warn-t)}
-.chip.d{background:rgba(239,107,90,.16);color:var(--dgr-t)}
+.chip.w{background:rgba(var(--warnRGB),.18);color:var(--warn-t)}
+.chip.d{background:rgba(var(--dgrRGB),.16);color:var(--dgr-t)}
 
-/* ─── composite bands (n x 44) ────────────────────────────────────────── */
+/* ─── composite bands (n × --row) ─────────────────────────────────────── */
 .band{position:relative;border-bottom:1px solid var(--line);padding-left:12px;cursor:pointer}
 .band:hover{background:rgba(255,255,255,.035)}
-.band.sel{background:rgba(54,189,221,.08)}
-.band .line1{height:44px;display:flex;align-items:center}
-.band .line1 .labz{flex:0 0 calc(46% - 12px);display:flex;align-items:baseline;gap:10px;padding-right:12px}
-.band .line1 .labz .lab{font:400 14px var(--sans);color:var(--t68);flex:1}
+.band.sel{background:rgba(var(--accRGB),.08)}
+.band.dis{opacity:.55}
+.band.dis .bodyz{pointer-events:none}
+.band .line1{height:var(--row);display:flex;align-items:center}
+.band .line1 .labz{flex:0 0 calc(var(--labz) - 12px);display:flex;align-items:baseline;gap:10px;
+  padding-right:12px;min-width:0}
+.band .line1 .labz .lab{font:400 14px var(--sans);color:var(--t68);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .band.sel .line1 .labz .lab{color:var(--t92)}
-.band .line1 .labz .val{font:500 14px var(--mono);color:var(--t92);white-space:nowrap}
+.band .line1 .labz .val{font:500 16px var(--mono);color:var(--t92);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:60%}
 .band .line1 .labz .val.diff{color:var(--acc-val)}
-.band .bodyz{position:absolute;right:28px;top:0;bottom:0;display:flex;align-items:center;justify-content:flex-end}
-.band .aff{position:absolute;right:0;top:0;height:44px;width:28px;display:flex;align-items:center;
-  justify-content:flex-end;font:400 12px var(--mono);color:var(--t52)}
-.pgrid{display:grid;grid-template-columns:repeat(3,30px);grid-template-rows:repeat(3,30px);gap:3px}
-.pgrid i{background:rgba(255,255,255,.06);border:1px solid var(--lineCtl);cursor:pointer}
+.band .bodyz{position:absolute;right:var(--aff);top:0;bottom:0;display:flex;align-items:center;
+  justify-content:flex-end;gap:var(--gapA)}
+.band .aff{position:absolute;right:0;top:0;height:var(--row);width:var(--aff);display:flex;
+  align-items:center;justify-content:flex-end;font:400 12px var(--mono);color:var(--t52)}
+/* the anchor grid — cells on the --H module so it agrees with every other control */
+.pgrid{display:grid;grid-template-columns:repeat(3,var(--H));grid-template-rows:repeat(3,var(--H));
+  gap:var(--gapS)}
+.pgrid i{background:rgba(255,255,255,.05);border:1px solid var(--lineCtl);cursor:pointer}
 .pgrid i:hover{background:rgba(255,255,255,.14)}
-.pgrid i.on{background:rgba(54,189,221,.30);border-color:rgba(54,189,221,.75)}
-.huerail{width:100%;height:20px;cursor:pointer;position:relative;border:1px solid var(--lineCtl)}
-.huerail .hh{position:absolute;top:-3px;bottom:-3px;width:3px;background:#fff;margin-left:-1.5px;
-  box-shadow:0 0 6px rgba(0,0,0,.8)}
-.sws{display:flex;gap:5px;margin-top:6px}
-.sws i{width:18px;height:18px;cursor:pointer;border:1px solid rgba(255,255,255,.22)}
-.sws i.on{border-color:#fff}
-.spark{display:flex;align-items:flex-end;gap:1px;height:56px;width:100%}
-.spark b{flex:1;background:rgba(54,189,221,.55);min-width:1px}
-.spark b.sp{background:rgba(243,130,29,.9)}
-.fader{display:flex;align-items:center;gap:10px;width:100%}
-.fader .fs{flex:1;position:relative;height:22px;display:flex;align-items:center}
-.fader .lr{display:flex;flex-direction:column;gap:2px;width:70px}
+.pgrid i.on{background:rgba(var(--accRGB),.30);border-color:rgba(var(--accRGB),.65)}
+.huerail{flex:1;min-width:60px;height:var(--trk);cursor:pointer;position:relative}
+.huehit{flex:1;min-width:60px;height:var(--H);display:flex;align-items:center;cursor:pointer}
+.huerail .hh{position:absolute;top:-6px;bottom:-6px;width:5px;background:#EFF5FB;
+  margin-left:-2.5px;box-shadow:0 0 0 1px rgba(0,0,0,.6)}
+.sws{display:flex;gap:var(--gapS);margin-top:6px}
+.sws i{width:var(--H);height:18px;cursor:pointer;border:1px solid var(--lineCtl)}
+.sws i.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.spark{display:flex;align-items:flex-end;gap:1px;height:56px;flex:1;min-width:60px}
+.spark b{flex:1;background:rgba(var(--accRGB),.55);min-width:1px}
+.spark b.sp{background:rgba(var(--warnRGB),.9)}
+.fader{display:flex;align-items:center;gap:10px;flex:1;min-width:120px}
+.fader .lr{display:flex;flex-direction:column;gap:2px;width:70px;flex:0 0 70px}
 .fader .lr i{height:4px;background:rgba(255,255,255,.14);position:relative}
 .fader .lr i b{position:absolute;left:0;top:0;bottom:0;background:var(--ok)}
 
@@ -290,42 +415,57 @@ button{font-family:inherit;border-radius:0}
 .insp{flex:0 0 auto;border-left:1px solid var(--lineRegion);background:rgba(255,255,255,.03);
   display:flex;flex-direction:column;min-height:0}
 .insp.drawer{position:absolute;right:0;top:0;bottom:0;z-index:20;background:rgba(12,14,17,.985);
-  box-shadow:-14px 0 34px -10px rgba(0,0,0,.8);backdrop-filter:blur(16px)}
+  box-shadow:-14px 0 34px -10px rgba(0,0,0,.8);backdrop-filter:blur(16px);
+  border-left:1px solid rgba(var(--accRGB),.40)}
+/* E1's collapsed-inspector visual, adopted verbatim: a 20-base vertical spine
+   on the right edge that names itself and restores the region on click. */
+.reopen{position:absolute;right:0;top:0;bottom:0;width:20px;z-index:19;
+  background:rgba(255,255,255,.04);border-left:1px solid var(--lineRegion);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  font:400 12px var(--mono);color:var(--t52);writing-mode:vertical-rl;letter-spacing:.06em}
+.reopen:hover{background:rgba(var(--accRGB),.16);color:var(--acc-seg);border-left-color:var(--acc)}
 .modestrip{height:56px;flex:0 0 56px;display:flex;align-items:center;gap:0;padding:0 14px;
   border-bottom:1px solid var(--lineRegion)}
 .modestrip b{flex:1;text-align:center;padding:6px 0;font:500 10.5px var(--mono);letter-spacing:.09em;
-  color:var(--t68);border-bottom:2px solid transparent;cursor:pointer}
+  color:var(--t68);border-bottom:2px solid transparent;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:6px}
 .modestrip b.on{color:var(--acc-seg);border-bottom-color:var(--acc)}
-.modestrip b.off{color:rgba(239,245,251,.24);cursor:not-allowed}
-.modestrip .ix{margin-left:8px}
-.inspbody{flex:1;min-height:0;overflow-y:auto;padding:16px 16px 20px;scrollbar-width:thin}
+.modestrip b.ro{color:var(--t52)}
+.modestrip b .ct{font:400 9.5px var(--mono);padding:1px 4px;background:rgba(255,255,255,.07);
+  color:var(--t52)}
+.modestrip b.on .ct{background:rgba(var(--accRGB),.20);color:var(--acc-txt)}
+.modestrip .ix{margin-left:8px;flex:0 0 22px}
+.inspbody{flex:1;min-height:0;overflow-y:auto;padding:16px var(--ipad) 20px;scrollbar-width:thin}
 .itl{font:600 11px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t92);
-  display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
 .iprose{font:400 14px var(--sans);color:var(--t72);line-height:1.58;margin-bottom:14px}
+.iprose.warn{color:var(--warn-t)} .iprose.dgr{color:var(--dgr-t)}
+.iprose.mono{font:400 12px var(--mono);line-height:1.6}
 .ifacts{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin-bottom:14px}
 .ifacts dt{font:500 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--t52);
   padding-top:2px;white-space:nowrap}
 .ifacts dd{font:400 12px var(--mono);color:var(--t92);word-break:break-word}
 .ifacts dd.acc{color:var(--acc-val)}
 .ihd{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t52);
-  padding:14px 0 6px;border-top:1px solid var(--line);margin-top:6px}
+  padding:14px 0 6px;border-top:1px solid var(--line);margin-top:6px;display:flex;gap:8px;align-items:center}
 .ihd:first-child{border-top:0;margin-top:0;padding-top:0}
-.irow{height:40px;display:flex;align-items:center;border-bottom:1px solid var(--line);gap:10px;
-  position:relative;cursor:pointer}
+/* THE inspector row is the SHEET row at inspector width — same height, same law */
+.irow{position:relative;height:var(--row);display:flex;align-items:center;
+  border-bottom:1px solid var(--line);gap:10px;cursor:pointer}
 .irow:hover{background:rgba(255,255,255,.04)}
+.irow.sel{background:rgba(var(--accRGB),.08)}
+.irow.dis{opacity:.55} .irow.dis .cz{pointer-events:none}
 .irow .lab{flex:1;min-width:0;font:400 13.5px var(--sans);color:var(--t68);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.irow .val{font:500 13px var(--mono);color:var(--t92);white-space:nowrap}
+.irow .val{font:500 14px var(--mono);color:var(--t92);white-space:nowrap}
 .irow .val.diff{color:var(--acc-val)}
-.irow .cz{flex:0 0 auto;display:flex;justify-content:flex-end;align-items:center;min-width:0}
-.irow.wide{height:62px;flex-direction:column;align-items:stretch;gap:2px;padding-top:8px}
+.irow .cz{flex:0 0 auto;display:flex;justify-content:flex-end;align-items:center;
+  gap:var(--gapA);height:var(--H);min-width:0}
+.irow.wide{height:calc(var(--row) + 24px);flex-direction:column;align-items:stretch;gap:2px;padding-top:8px}
 .irow.wide .top{display:flex;align-items:baseline;gap:8px}
 .irow.wide .cz{width:100%}
-.ilink{font:400 12.5px var(--mono);color:var(--acc-txt);cursor:pointer;display:block;padding:3px 0}
-.ilink:hover{text-decoration:underline}
+.irow .rst{position:absolute;right:0;top:50%;margin-top:-3.5px}
 .ikey{font:400 11.5px var(--mono);color:var(--t52);line-height:1.7}
-.ikey b{color:var(--t68);font-weight:400;border:1px solid var(--lineCtl);padding:0 4px;
-  background:rgba(255,255,255,.04)}
 .iact{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
 .ilog{font:400 11px var(--mono);line-height:1.45;color:var(--t52);border-left:2px solid var(--line);
   padding:2px 0 2px 8px;margin-bottom:3px}
@@ -334,28 +474,39 @@ button{font-family:inherit;border-radius:0}
 .ibudget{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);
   font:400 11.5px var(--mono);color:var(--t52);line-height:1.65}
 .ibudget b{color:var(--ok);font-weight:400}
+.ibudget .acc{color:var(--acc-txt)}
 
 /* ─── LOG raw sheet ───────────────────────────────────────────────────── */
-.filterbar{height:44px;display:flex;align-items:center;gap:10px;padding:0 24px;
-  border-bottom:1px solid var(--lineRegion);flex:0 0 44px}
+.filterbar .f{display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0}
+.filterbar .fr{margin-left:auto;display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.filterbar .f .tin{min-width:150px;flex:1}
+.filterbar .f>.fl{font:500 10.5px var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:var(--t52);white-space:nowrap}
+.filterbar .f.sel>.fl{color:var(--acc-txt)}
+.filterbar{height:56px;display:flex;align-items:center;gap:10px;padding:0 var(--pad);
+  border-bottom:1px solid var(--lineRegion);flex:0 0 56px}
 .logbody{flex:1;min-height:0;overflow:auto;padding:6px 0;scrollbar-width:thin}
-.ll{display:flex;font:400 11.5px var(--mono);line-height:1.72;cursor:pointer;padding-right:12px}
+.ll{display:flex;font:400 11.5px var(--mono);line-height:20px;cursor:pointer;padding-right:12px}
 .ll:hover{background:rgba(255,255,255,.04)}
-.ll.sel{background:rgba(54,189,221,.10)}
+.ll.sel{background:rgba(var(--accRGB),.10)}
 .ll .ln{flex:0 0 60px;text-align:right;padding-right:10px;color:var(--t52)}
 .ll .sv{flex:0 0 2px;background:transparent;margin-right:8px}
 .ll.e .sv{background:var(--dgr)} .ll.w .sv{background:var(--warn)}
 .ll .tx{white-space:pre;color:var(--t68)}
 .ll.e .tx{color:var(--dgr-t)} .ll.w .tx{color:var(--warn-t)}
 .ll .tm{color:var(--t52)}
+.ll .hl{background:rgba(var(--accRGB),.24);color:var(--acc-seg)}
 
-/* ─── full-sheet Explain page (inline host) ───────────────────────────── */
-.explainpage{padding:22px 24px}
-.explainpage .back{font:400 11.5px var(--mono);color:var(--acc-txt);cursor:pointer;margin-bottom:14px;display:inline-block}
-.explainpage h3{font:600 13px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t92);margin-bottom:10px}
+/* ─── full-sheet Details page (inline host) ───────────────────────────── */
+.inlinepage{padding:22px var(--pad)}
+.inlinepage h3{font:600 13px var(--mono);letter-spacing:.10em;text-transform:uppercase;
+  color:var(--t92);margin:18px 0 10px}
+.inlinepage h3:first-of-type{margin-top:0}
 
-/* ─── empty / notes ───────────────────────────────────────────────────── */
-.empty{height:96px;display:grid;place-items:center;font:400 11.5px var(--mono);color:var(--t52)}
+/* ─── empty / single-item states — every list can be emptied ───────────── */
+.empty{height:96px;display:grid;place-items:center;align-content:center;gap:10px;
+  font:400 11.5px var(--mono);color:var(--t52);text-align:center;
+  border-bottom:1px solid var(--line)}
 
 /* ─── command palette ─────────────────────────────────────────────────── */
 .palwrap{position:absolute;inset:0;z-index:60;background:rgba(4,5,7,.5);display:none}
@@ -364,17 +515,20 @@ button{font-family:inherit;border-radius:0}
   background:rgba(16,18,21,.985);border:1px solid var(--lineRegion);
   box-shadow:0 22px 60px -10px rgba(0,0,0,.85);backdrop-filter:blur(18px)}
 .pal .q{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line)}
-.pal .q input{flex:1;background:transparent;border:0;outline:0;font:400 16px var(--mono);color:var(--t92)}
+.pal .q input{flex:1;background:transparent;border:0;outline:0;font:400 16px var(--mono);
+  color:var(--t92);caret-color:var(--acc)}
 .pal .res{max-height:340px;overflow:auto;scrollbar-width:thin}
 .pal .r{display:flex;align-items:center;gap:10px;height:38px;padding:0 16px;cursor:pointer;
   border-left:2px solid transparent}
 .pal .r:hover{background:rgba(255,255,255,.05)}
-.pal .r.on{background:rgba(54,189,221,.14);border-left-color:var(--acc)}
+.pal .r.on{background:rgba(var(--accRGB),.14);border-left-color:var(--acc)}
 .pal .r .p{font:400 11px var(--mono);color:var(--t52);flex:0 0 210px;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis}
 .pal .r .n{font:400 13.5px var(--sans);color:var(--t92);flex:1;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis}
-.pal .r .v{font:500 12px var(--mono);color:var(--acc-val)}
+.pal .r .n .hl{color:var(--acc-val);border-bottom:1.5px solid rgba(var(--accRGB),.45)}
+.pal .r .v{font:500 13px var(--mono);color:var(--acc-val);white-space:nowrap;
+  max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .pal .foot{height:36px;display:flex;align-items:center;gap:18px;padding:0 16px;
   border-top:1px solid var(--line);font:400 11px var(--mono);color:var(--t52)}
 .pal .empty2{padding:22px 16px;font:400 12px var(--mono);color:var(--t52)}
@@ -387,12 +541,18 @@ button{font-family:inherit;border-radius:0}
     <i>explains, derives, qualifies, tunes or measures</i> has left the Sheet. What remains is the
     irreducible minimum: <b>what a setting is called, what it is set to, and how to change it</b> — one
     row height, one label line, one right-bound control line, top to bottom.
-    The Inspector gains three modes (<code>EXPLAIN · CONFIGURE · DIAGNOSE</code>) and a structural law
-    that makes it incapable of becoming a junk drawer: <b>it has no authoring API at all</b>. Nothing is
-    written into it; it is rendered by the shell from the selected row's registration.
+    The Inspector has <b>two</b> modes — <code>CONFIGURE</code> (what this does, and the values you can
+    set) and <code>DETAILS</code> (everything technical) — and a structural law that makes it incapable
+    of becoming a junk drawer: <b>it has no authoring API at all</b>. Nothing is written into it; it is
+    rendered by the shell from the selected row's registration.
     <br>
-    Everything below is live. Click a rail item, click a row, drag a slider, flip a switch, drag the
-    <b>display_scale</b> and <b>accent hue</b> sliders, and press <code>Ctrl+K</code>.
+    The controls are <b>direction B's</b>, uplifted ~25% the way shipping issue #23 uplifted the handoff
+    baseline, and snapped to one control height — <code>--H = 28</code> base units, which every control's
+    hit box honours.
+    <br>
+    Everything below is live. Click a rail item, click a row, drag a slider, flip a switch, type in a
+    text field, filter the log, drag the <b>display_scale</b> and <b>accent hue</b> sliders, and press
+    <code>Ctrl+K</code>.
   </p>
 </div>
 
@@ -412,14 +572,15 @@ button{font-family:inherit;border-radius:0}
 
 <div class="tours">
   <span class="lb">tour</span>
-  <button data-t="0" class="on">1 · default & Overview</button>
+  <button data-t="0" class="on">1 · default &amp; Overview</button>
   <button data-t="1">2 · calm vs. E's density</button>
-  <button data-t="2">3 · the three modes</button>
+  <button data-t="2">3 · Configure / Details</button>
   <button data-t="3">4 · Anchor composite fix</button>
   <button data-t="4">5 · 2.0× · inspector as drawer</button>
   <button data-t="5">6 · inspector HIDDEN — the contract</button>
   <button data-t="6">7 · the LOG</button>
   <button data-t="7">8 · palette finds params</button>
+  <button data-t="8">9 · states nobody draws</button>
 </div>
 
 <div class="caption" id="cap"></div>
@@ -432,7 +593,7 @@ button{font-family:inherit;border-radius:0}
       <div class="g-bar"><i></i></div><div class="g-bar g-bar2"><i></i></div></div>
   </div>
   <div class="veil"></div>
-  <div class="hud">
+  <div class="hud" id="hud">
     <div class="r1"><span class="n">142</span><span class="u">FPS</span><span class="ms">7.04 ms</span></div>
     <div class="graph" id="ftg"></div>
     <div class="r3"><span>1% 118</span><span>0.1% 96</span><span>avg 139</span><span>61°</span></div>
@@ -440,7 +601,7 @@ button{font-family:inherit;border-radius:0}
 
   <div class="slabwrap"><div class="slab" id="slab">
     <div class="slabbar">
-      <span class="dot"></span><span class="ttl">GAMESCOPE-RITZ</span>
+      <span class="dot" id="hdot"></span><span class="ttl">GAMESCOPE-RITZ</span>
       <span class="chip n">app 1174180</span>
       <span class="chip n" id="destchip">games/1174180.json</span>
       <span class="right">
@@ -449,9 +610,9 @@ button{font-family:inherit;border-radius:0}
         <span class="glyph">✕</span>
       </span>
     </div>
-    <div class="body">
+    <div class="body" id="slabbody">
       <div class="rail" id="rail"></div>
-      <div class="sheet">
+      <div class="sheet" id="sheet">
         <div class="sheethead" id="shead"></div>
         <div id="sbodywrap" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
         <div class="sheetfoot" id="sfoot"></div>
@@ -466,7 +627,8 @@ button{font-family:inherit;border-radius:0}
       <span class="chip n" id="palcount"></span></div>
     <div class="res" id="palres"></div>
     <div class="foot"><span><span class="kbd">↑↓</span> move</span>
-      <span><span class="kbd">↵</span> jump & select</span>
+      <span><span class="kbd">←→</span> adjust in place</span>
+      <span><span class="kbd">↵</span> jump &amp; select</span>
       <span><span class="kbd">esc</span> dismiss</span>
       <span style="margin-left:auto;color:var(--acc-txt)">params are searchable — depth is never hidden</span></div>
   </div></div>
@@ -475,6 +637,8 @@ button{font-family:inherit;border-radius:0}
 <script>
 /* ══════════════════════════════════════════════════════════════════════════
    1. OKLCH → sRGB, so the hue slider produces the real accent family.
+      Eight tokens, L and C fixed per role, only H moves.  --accRGB carries the
+      base triple so every alpha in the stylesheet derives from the same hue.
    ════════════════════════════════════════════════════════════════════════ */
 const l2s=c=>{c=c<=0.0031308?12.92*c:1.055*Math.pow(c,1/2.4)-0.055;return Math.max(0,Math.min(255,Math.round(c*255)))};
 function oklch(L,C,h){
@@ -487,27 +651,52 @@ function oklch(L,C,h){
           l2s(-.0041960863*l_-.7034186147*m_+1.7076147010*s_)];
 }
 const hex=r=>'#'+r.map(x=>x.toString(16).padStart(2,'0')).join('').toUpperCase();
-/* the five accent tokens: L and C fixed, only H moves — SPEC section 7.5 */
 const ACCENT=[['--acc',.741,.120],['--acc-hi',.790,.110],['--acc-val',.841,.100],
-              ['--acc-txt',.820,.100],['--acc-seg',.900,.070],['--acc-knob',.859,.080]];
-function applyHue(h){
-  const R=document.documentElement.style;
-  ACCENT.forEach(([n,L,C])=>R.setProperty(n,hex(oklch(L,C,h))));
-  const base=oklch(.741,.120,h);
-  R.setProperty('--accRGB',base.join(','));
+              ['--acc-txt',.820,.100],['--acc-seg',.900,.070],['--acc-knob',.859,.080],
+              ['--acc-icon',.880,.075],['--acc-handle',.900,.050]];
+function applyHue(h,cbias){
+  const R=document.documentElement.style, cb=cbias||0;
+  ACCENT.forEach(([n,L,C])=>R.setProperty(n,hex(oklch(L,Math.max(0,C+cb),h))));
+  R.setProperty('--accRGB',oklch(.741,Math.max(0,.120+cb),h).join(','));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   2. THE REGISTRY.  One declaration per setting. It yields the row, the
+   2. THE ICON SET — inline SVG, one 24-unit grid, 1.7 stroke, miter joins,
+      fill used only where a fill carries meaning (HDR's half, the bar chart).
+      No icon font, no external file: the CSP would block both anyway.
+   ════════════════════════════════════════════════════════════════════════ */
+const SVG=b=>`<svg viewBox="0 0 24 24" aria-hidden="true">${b}</svg>`;
+const ICONS={
+ upscaling: SVG('<path d="M3.5 9.5v-6h6"/><path d="M20.5 14.5v6h-6"/><rect x="8.5" y="8.5" width="7" height="7"/>'),
+ output:    SVG('<rect x="2.5" y="4.5" width="19" height="12"/><path d="M8 20.5h8"/><path d="M12 16.5v4"/>'),
+ limiter:   SVG('<circle cx="12" cy="12" r="8.5"/><path d="M12 6.5V12l4 2.5"/>'),
+ hdr:       SVG('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/>'),
+ shaders:   SVG('<path d="M12 3.2 20.3 7.6 12 12 3.7 7.6z"/><path d="M3.7 12.4 12 16.8l8.3-4.4"/><path d="M3.7 16.6 12 21l8.3-4.4"/>'),
+ mixer:     SVG('<path d="M7 3.5v4.5"/><path d="M7 14.5v6"/><path d="M17 3.5v8.5"/><path d="M17 18.5v2"/><rect x="4" y="8" width="6" height="6.5"/><rect x="14" y="12" width="6" height="6.5"/>'),
+ monitor:   SVG('<path d="M3 20.5h18"/><rect x="4.5" y="12" width="4" height="6" fill="currentColor" stroke="none"/><rect x="10" y="6.5" width="4" height="11.5" fill="currentColor" stroke="none"/><rect x="15.5" y="15" width="4" height="3" fill="currentColor" stroke="none"/>'),
+ log:       SVG('<path d="M3.5 5.5h17"/><path d="M3.5 10.5h17"/><path d="M3.5 15.5h11"/><path d="M3.5 20.5h7"/>'),
+ profiles:  SVG('<rect x="3.5" y="7.5" width="13" height="13"/><path d="M7.5 7.5v-4h13v13h-4"/>'),
+ pergame:   SVG('<path d="M13.5 3.5H6.5v17h11V7.5z"/><path d="M13.5 3.5 17.5 7.5h-4z" fill="currentColor" stroke="none"/><path d="M9.5 14.5h5"/>'),
+ appearance:SVG('<path d="M12 3.4c0 0 6 6.6 6 10.3a6 6 0 0 1-12 0c0-3.7 6-10.3 6-10.3z"/>')
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   3. THE REGISTRY.  One declaration per setting.  It yields the row, the
       palette entry AND the inspector content — nothing else is authored.
-        params : Inspector ▸ CONFIGURE.  ids are <parent>.<leaf> by construction.
-        lives  : Inspector ▸ DIAGNOSE.   read-only by type — no bind, ever.
-        help   : Inspector ▸ EXPLAIN.    required.
-        hint/note : E-GRAMMAR ONLY, to show what E2 removed from the sheet.
+        h      : required.  Inspector ▸ CONFIGURE — the short "what this does".
+        p      : Inspector ▸ CONFIGURE — the values, ≤ 6, ids <parent>.<leaf>.
+        lv     : Inspector ▸ DETAILS.  Read-only by type — no bind, ever.
+        hint / note : E-GRAMMAR DEMO ONLY, to show what E2 removed.
+      CONVENTIONS THIS REGISTRY HOLDS TO (see INCONSISTENCIES.md):
+        · every label, group name and param label is Sentence case;
+        · every read-only Facts / Meter / Graph row sits in a final group
+          named "Diagnostics" — never mixed in with settings;
+        · every facts id is <area>.<topic>_facts;
+        · units are declared with `u`, never baked into the value string.
    ════════════════════════════════════════════════════════════════════════ */
 const F='games/1174180.json', G='global.json';
 const AREAS=[
-{id:'display.upscaling',sec:'DISPLAY',ic:'▣',title:'Upscaling',
+{id:'display.upscaling',sec:'DISPLAY',ic:'upscaling',title:'Upscaling',
  desc:'How the game\'s image is resampled to the output resolution.',
  sum:()=>`${v('display.filter')} · sharpness ${v('display.sharpness')}`,
  live:[['effective path','3840×2160 ← FSR EASU ← 2560×1440 ← game'],['composite passes','2 (preemptive upscale)']],
@@ -515,16 +704,18 @@ const AREAS=[
   {n:'Scaling filter',e:[
    {id:'display.filter',t:'Filter',k:'ch',o:['linear','nearest','fsr','nis','pixel'],d:'linear',val:'fsr',
     w:F,ap:'live',kw:'upscale scaling resample fsr nis sharp',
-    h:'How the game\'s image is resampled to the output resolution. fsr and nis add a sharpening pass; pixel is nearest with integer-safe edges.',
+    h:'Resamples the game\'s image up to the output resolution. fsr and nis add a sharpening pass afterwards; pixel is nearest with integer-safe edges.',
     hint:'fsr / nis / pixel also sharpen'},
    {id:'display.sharpness',t:'Sharpness',k:'sl',min:0,max:20,st:1,d:2,val:5,w:F,ap:'live',
     kw:'sharpen fsr rcas cas crisp clarity ringing',
     h:'Strength of the FSR RCAS / NIS sharpening pass. Higher is crisper; too high adds ringing around high-contrast edges.',
     hint:'higher = sharper',
+    dep:e=>['fsr','nis'].includes(v('display.filter'))?null:'the '+v('display.filter')+' filter has no sharpening pass',
     p:[{l:'rcas_denoise',t:'RCAS denoise',k:'sw',d:true,val:true,
         h:'Suppresses the grain RCAS can amplify in dark, noisy areas.'},
        {l:'nis_variant',t:'NIS variant',k:'ch',o:['quality','balanced','perf'],d:'quality',val:'quality',
-        h:'Which NIS scaling kernel the sharpen pass pairs with.'},
+        h:'Which NIS scaling kernel the sharpen pass pairs with.',
+        dep:()=>v('display.filter')==='nis'?null:'the NIS filter is not selected'},
        {l:'edge_bias',t:'Edge bias',k:'sl',min:0,max:1,st:.05,d:.5,val:.5,
         h:'Weights sharpening toward detected edges instead of applying it flat.'}],
     lv:[['effective RCAS','0.25 (5 / 20)'],['pass cost','0.41 ms']]},
@@ -533,19 +724,19 @@ const AREAS=[
     h:'What to do when the game\'s aspect ratio does not match the output. integer only scales by whole numbers.',
     hint:'integer avoids resampling blur'}]},
   {n:'Presentation',e:[
-   {id:'display.allow_tearing',t:'Allow Tearing',k:'sw',d:false,val:true,w:F,ap:'next frame',
+   {id:'display.allow_tearing',t:'Allow tearing',k:'sw',d:false,val:true,w:F,ap:'next frame',
     kw:'immediate flip vsync latency tear',
     h:'Lets the game present without waiting for the display\'s refresh. Lowest latency; can show a horizontal seam on fast camera pans.',
     hint:'lower latency, visible seam',rel:['display.adaptive_sync']},
-   {id:'display.force_grab_cursor',t:'Force Grab Cursor',k:'sw',d:false,val:false,w:F,ap:'live',
+   {id:'display.force_grab_cursor',t:'Force grab cursor',k:'sw',d:false,val:false,w:F,ap:'live',
     kw:'mouse pointer capture confine grab',
     h:'Confines the pointer to the game surface even when the game does not ask for it.'},
-   {id:'display.mura_comp',t:'Mura Compensation',k:'sw',d:false,val:false,w:G,ap:'live',
+   {id:'display.mura_comp',t:'Mura compensation',k:'sw',d:false,val:false,w:G,ap:'live',
     kw:'mura panel uniformity correction oled',
-    dis:'no mura correction map is installed for this panel',
+    dep:()=>'no mura correction map is installed for this panel',
     h:'Applies a per-panel uniformity correction map. Requires a calibration file for the connected display.'}]},
-  {n:'Composite path',e:[
-   {id:'display.path_facts',t:'Effective path',k:'facts',
+  {n:'Diagnostics',e:[
+   {id:'display.upscaling_facts',t:'Effective path',k:'facts',
     sm:()=>'2 passes · 0.52 ms',
     h:'What the compositor is actually doing with the current settings, resolved after every override.',
     lv:[['output','3840×2160 @ 138 Hz · DP-1'],['game surface','2560×1440'],['pass 1','FSR EASU upscale — 2.11 ms'],
@@ -553,76 +744,90 @@ const AREAS=[
         ['swapchain','ABGR2101010 · 3 images']]}]}],
  note:'Pixel: sharp only when the scale factor is a whole number.'},
 
-{id:'display.output',sec:'DISPLAY',ic:'▤',title:'Output',
+{id:'display.output',sec:'DISPLAY',ic:'output',title:'Output',
  desc:'Resolution, refresh and colour range on the active connector.',
  sum:()=>'DP-1 · 3840×2160 @ 138 Hz',
  groups:[{n:'Mode',e:[
   {id:'display.resolution',t:'Resolution',k:'ch',o:['1920×1080','2560×1440','3840×2160'],d:'3840×2160',val:'3840×2160',
-   w:G,ap:'needs mode set',kw:'resolution mode size',h:'Output mode requested on the active connector.'},
-  {id:'display.refresh',t:'Refresh rate',k:'st',min:48,max:138,st:1,d:138,val:138,u:'Hz',w:G,ap:'needs mode set',
-   kw:'refresh hz rate mode',h:'Refresh rate requested on the active connector.'},
+   w:G,ap:'on mode set',kw:'resolution mode size',h:'Output mode requested on the active connector.'},
+  {id:'display.refresh',t:'Refresh rate',k:'st',min:48,max:138,st:1,d:138,val:138,u:'Hz',w:G,ap:'on mode set',
+   kw:'refresh hz rate mode',h:'Refresh rate requested on the active connector. Clamped to the range the display reports.'},
   {id:'display.colour_range',t:'Colour range',k:'ch',o:['auto','full','limited'],d:'auto',val:'auto',w:G,ap:'live',
-   kw:'range full limited rgb ycbcr',h:'Whether the output signal uses the full 0-255 range or the limited 16-235 video range.'}]},
-  {n:'Connector',e:[
-  {id:'display.conn_facts',t:'Connector',k:'facts',sm:()=>'DP-1 · vrr capable · 48–138 Hz',
+   kw:'range full limited rgb ycbcr',h:'Whether the output signal uses the full 0–255 range or the limited 16–235 video range.'},
+  {id:'display.rotation',t:'Rotation',k:'ch',o:['0°','90°','180°','270°'],d:'0°',val:'0°',w:G,ap:'on mode set',
+   kw:'rotate rotation orientation portrait panel',
+   h:'Rotates the composited output before scanout, for panels mounted at an angle.'}]},
+  {n:'Diagnostics',e:[
+  {id:'display.output_facts',t:'Connector',k:'facts',sm:()=>'DP-1 · vrr capable · 48–138 Hz',
    h:'Read-only capabilities reported by the connected display over DDC/EDID.',
    lv:[['connector','DP-1'],['make / model','ASUS PG42UQ'],['vrr_capable','1'],['refresh range','48 – 138 Hz'],
-       ['max luminance','1000 nits'],['colorimetry','BT.2020 · PQ'],['EDID revision','1.4']]}]}]},
+       ['max luminance','1000 nits'],['colorimetry','BT.2020 · PQ'],['EDID revision','1.4']]},
+  {id:'display.edid_facts',t:'Second connector',k:'facts',sm:()=>null,
+   h:'The same read-only capability block for the second connector. Nothing is connected, so the overlay shows no value rather than inventing one.',
+   lv:[]}]}]},
 
-{id:'display.frame_limiter',sec:'DISPLAY',ic:'◷',title:'Frame Limiter',
+{id:'display.frame_limiter',sec:'DISPLAY',ic:'limiter',title:'Frame limiter',
  desc:'Caps and paces presentation; drives VRR when the backend supports it.',
  sum:()=>v('display.fps_limit')===0?'uncapped':v('display.fps_limit')+' fps cap',
  groups:[{n:'Frame limiter',e:[
-  {id:'display.fps_limit',t:'FPS Limit',k:'st',min:0,max:360,st:5,d:0,val:0,u:'fps',zero:'Unlimited',
+  {id:'display.fps_limit',t:'FPS limit',k:'st',min:0,max:360,st:5,d:0,val:0,u:'fps',zero:'Unlimited',
    w:F,ap:'live',kw:'frame rate cap limiter throttle',
    h:'Caps presentation rate. 0 removes the cap. Applied live via the debug_set_fps_limit convar.',
    hint:'0 = unlimited',
    p:[{l:'pacing',t:'Pacing',k:'ch',o:['sleep','spin','hybrid'],d:'sleep',val:'sleep',
-       h:'How the limiter spaces frames when the cap is active. spin is lower-jitter and burns a core.'}]},
-  {id:'display.adaptive_sync',t:'VRR / Adaptive Sync',k:'sw',d:false,val:true,w:F,ap:'live',
+       h:'How the limiter spaces frames when the cap is active. spin is lower-jitter and burns a core.',
+       dep:()=>v('display.fps_limit')===0?'the limiter is uncapped':null}]},
+  {id:'display.adaptive_sync',t:'Adaptive sync (VRR)',k:'sw',d:false,val:true,w:F,ap:'live',
    kw:'vrr freesync gsync adaptive tearing refresh',
    h:'Lets the display\'s refresh follow the game\'s frame rate instead of the other way around.',
    hint:'display follows the game',rel:['display.allow_tearing'],
-   lv:[['refresh range','48 – 138 Hz'],['currently following','96 – 138 Hz'],['engaged','yes']]},
+   lv:[['refresh range','48 – 138 Hz'],['currently following','96 – 138 Hz'],['engaged','yes']]}]},
+  {n:'Diagnostics',e:[
+  {id:'display.budget_meter',t:'Frame budget used',k:'meter',val:.51,u:'%',
+   h:'Share of the current frame budget the compositor spent. Read-only: a meter has no bind overload.',
+   lv:[['budget','7.25 ms @ 138 Hz'],['composite','7.04 ms'],['headroom','0.21 ms'],['worst in 240','9.90 ms']]},
   {id:'display.limiter_facts',t:'Limiter state',k:'facts',sm:()=>'idle · 7.04 ms budget',
    h:'What the limiter is currently doing, sampled over the last 240 frames.',
    lv:[['state','idle (no cap)'],['frame budget','7.04 ms'],['sleep per frame','0.00 ms'],
        ['missed deadlines','0 in 240'],['pacing mode','sleep']]}]}]},
 
-{id:'display.hdr',sec:'DISPLAY',ic:'◐',title:'HDR',
+{id:'display.hdr',sec:'DISPLAY',ic:'hdr',title:'HDR',
  desc:'HDR output, tone mapping and SDR-content handling.',
  sum:()=>v('display.hdr_enabled')?'on · PQ 1000 nits':'off',
  groups:[{n:'Output',e:[
-  {id:'display.hdr_enabled',t:'HDR Output',k:'sw',d:false,val:true,w:F,ap:'needs restart',
+  {id:'display.hdr_enabled',t:'HDR output',k:'sw',d:false,val:true,w:F,ap:'on restart',
    kw:'hdr pq bt2020 wide gamut high dynamic range',
    h:'Requests an HDR10 signal on the connector and switches the composite pipeline to PQ.',
    hint:'HDR10 · PQ · BT.2020'},
-  {id:'display.sdr_gamut',t:'SDR Gamut Wideness',k:'sl',min:0,max:1,st:.05,d:0,val:.35,w:F,ap:'live',
+  {id:'display.sdr_gamut',t:'SDR gamut wideness',k:'sl',min:0,max:1,st:.05,d:0,val:.35,w:F,ap:'live',
    kw:'gamut wideness sdr saturation bt709 bt2020',
    h:'How far SDR content is stretched toward the display\'s wide gamut. 0 keeps BT.709 exactly.',
    hint:'0 keeps BT.709 exact',
-   dep:'display.hdr_enabled',depmsg:'HDR output is off'},
+   dep:()=>v('display.hdr_enabled')?null:'HDR output is off'}]},
+  {n:'Tone mapping',e:[
   {id:'display.tonemap',t:'Tonemap operator',k:'ch',o:['none','reinhard','bt2390','hable'],d:'bt2390',val:'bt2390',
    w:F,ap:'live',kw:'tonemap operator reinhard hable bt2390 rolloff',
    h:'Curve used to map content brighter than the display\'s peak into range.',
-   dep:'display.hdr_enabled',depmsg:'HDR output is off',
+   dep:()=>v('display.hdr_enabled')?null:'HDR output is off',
    p:[{l:'peak_nits',t:'Target peak',k:'st',min:100,max:4000,st:50,d:1000,val:1000,u:'nits',
        h:'Peak luminance the operator maps toward. Should match the panel\'s measured peak.'},
       {l:'knee',t:'Rolloff knee',k:'sl',min:0,max:1,st:.05,d:.6,val:.6,
-       h:'Where the curve begins to compress. Lower preserves highlight detail at the cost of mid contrast.'},
+       h:'Where the curve begins to compress. Lower preserves highlight detail at the cost of mid contrast.',
+       dep:()=>v('display.tonemap')==='none'?'no operator is selected':null},
       {l:'itm',t:'Inverse tonemap SDR',k:'sw',d:false,val:false,
-       h:'Expands SDR content into the HDR container. Usually looks wrong on real content.'}]},
+       h:'Expands SDR content into the HDR container. Usually looks wrong on real content.'}]}]},
+  {n:'Diagnostics',e:[
   {id:'display.hdr_facts',t:'Signal',k:'facts',sm:()=>'PQ · 1000 nits · BT.2020',
    h:'HDR metadata the focused app is actually sending, read from its surface. Never inferred.',
    lv:[['transfer function','PQ (SMPTE ST 2084)'],['colorimetry','BT.2020'],['max content light','1000 nits'],
        ['max frame-average','400 nits'],['mastering min','0.005 nits'],['source','app-provided (surface metadata)'],
        ['fallback in use','no']]}]}]},
 
-{id:'image.shaders',sec:'IMAGE',ic:'◈',title:'Shaders',badge:'3',
+{id:'image.shaders',sec:'IMAGE',ic:'shaders',title:'Shaders',
  desc:'ReShade-compatible post-process effects, compiled once at startup.',
- sum:()=>'1 of 3 effects on',
- groups:[{n:'Effects',cnt:'1 / 3',e:[
-  {id:'image.shaders.adaptive_brightness',t:'Adaptive Brightness',k:'sw',d:false,val:true,w:F,ap:'live',
+ sum:()=>onCount('image.shaders')+' of 3 effects on',
+ groups:[{n:'Effects',all:true,cnt:()=>onCount('image.shaders')+' / 3',e:[
+  {id:'image.shaders.adaptive_brightness',t:'Adaptive brightness',k:'sw',d:false,val:true,w:F,ap:'live',
    kw:'adaptive brightness eye adaptation exposure auto',
    h:'Raises exposure in dark scenes and lowers it in bright ones, following the frame\'s average luminance.',
    hint:'strength 0.78 · target 0.42',
@@ -630,8 +835,8 @@ const AREAS=[
       {l:'target',t:'Target brightness',k:'sl',min:0,max:1,st:.01,d:.5,val:.42,h:'Average luminance the adaptation aims for.'},
       {l:'min_gain',t:'Min gain',k:'sl',min:0,max:2,st:.01,d:.8,val:.8,h:'Lower clamp on the exposure multiplier.'},
       {l:'max_gain',t:'Max gain',k:'sl',min:0,max:4,st:.01,d:1.6,val:1.24,h:'Upper clamp on the exposure multiplier.'},
-      {l:'up_speed',t:'Brighten speed',k:'sl',min:0,max:5,st:.1,d:1.5,val:1.5,h:'How fast adaptation moves toward a brighter target.'},
-      {l:'down_speed',t:'Darken speed',k:'sl',min:0,max:5,st:.1,d:2.5,val:2.5,h:'How fast adaptation moves toward a darker target.'}],
+      {l:'up_speed',t:'Brighten speed',k:'sl',min:0,max:5,st:.1,d:1.5,val:1.5,u:'s',h:'How fast adaptation moves toward a brighter target.'},
+      {l:'down_speed',t:'Darken speed',k:'sl',min:0,max:5,st:.1,d:2.5,val:2.5,u:'s',h:'How fast adaptation moves toward a darker target.'}],
    lv:[['current gain','1.11×'],['frame average','0.37'],['histogram','live'],['shader','gamescope-ritz.fx']]},
   {id:'image.shaders.vibrancy',t:'Vibrancy',k:'sw',d:false,val:false,w:F,ap:'live',
    kw:'vibrancy saturation colour vividness',
@@ -639,16 +844,21 @@ const AREAS=[
    hint:'off',
    p:[{l:'strength',t:'Strength',k:'sl',min:-1,max:1,st:.01,d:0,val:0,h:'Overall weight of the effect.'},
       {l:'protect_skin',t:'Protect skin tones',k:'sw',d:true,val:true,h:'Excludes the skin-tone hue band from the boost.'}]},
-  {id:'image.shaders.presharpen',t:'Pre-Sharpen',k:'sw',d:false,val:false,w:F,ap:'live',
+  {id:'image.shaders.presharpen',t:'Pre-sharpen',k:'sw',d:false,val:false,w:F,ap:'live',
    kw:'presharpen sharpen pre upscale clarity',
    h:'Sharpens before upscaling rather than after. Cheaper than RCAS but coarser.',
    hint:'off',
-   p:[{l:'strength',t:'Strength',k:'sl',min:-1,max:1,st:.01,d:0,val:.35,h:'Overall weight of the effect.'}]}]}],
+   p:[{l:'strength',t:'Strength',k:'sl',min:-1,max:1,st:.01,d:0,val:.35,h:'Overall weight of the effect.'}]}]},
+  {n:'Diagnostics',e:[
+  {id:'image.shaders_facts',t:'Compilation',k:'facts',sm:()=>'3 techniques · 0 warnings',
+   h:'What the ReShade front-end did with the effect file at startup.',
+   lv:[['effect file','gamescope-ritz.fx'],['compile time','41 ms'],['techniques','3'],['warnings','0'],
+       ['errors','0'],['pass cost','0.41 ms of 7.04 ms']]}]}],
  note:'Effects are SDR-only for now — disable HDR to use them.'},
 
-{id:'audio.mixer',sec:'AUDIO',ic:'♪',title:'Mixer',badge:'2',
+{id:'audio.mixer',sec:'AUDIO',ic:'mixer',title:'Mixer',
  desc:'Per-application volume through PipeWire / WirePlumber.',
- sum:()=>'eldenring.exe · −7.5 dB',
+ sum:()=>'eldenring.exe · '+fmt(E['audio.volume']),
  groups:[{n:'Game stream',e:[
   {id:'audio.stream',t:'Stream',k:'ch',o:['244 — eldenring.exe (wine) [pid 40217]','334 — Floorp (floorp) [pid 3922017]'],
    d:'244 — eldenring.exe (wine) [pid 40217]',val:'244 — eldenring.exe (wine) [pid 40217]',w:F,ap:'live',
@@ -658,115 +868,168 @@ const AREAS=[
        h:'How the stream is re-found after a restart. manual pins this exact node id.'}],
    lv:[['node id','244'],['media class','Stream/Output/Audio'],['match reason','manually selected — override active'],
        ['sample rate','48000 Hz'],['channels','2 (FL FR)']]},
-  {id:'audio.volume',t:'Volume',k:'strip',d:-6,val:-7.5,w:F,ap:'live',kw:'volume gain level fader db loudness',
+  {id:'audio.volume',t:'Volume',k:'strip',d:-6,val:-7.5,u:'dB',w:F,ap:'live',kw:'volume gain level fader db loudness',
    h:'Output gain applied to the selected stream, in decibels.',
-   p:[{l:'mute',t:'Mute',k:'sw',d:false,val:false,h:'Silences the stream without changing the gain.'},
+   dep:()=>E['audio.volume'].p[0].val?'the stream is muted':null,
+   p:[{l:'mute',t:'Mute',k:'sw',d:false,val:false,ni:1,h:'Silences the stream without changing the gain.'},
       {l:'follow_focus',t:'Follow focus',k:'sw',d:true,val:true,h:'Re-points the mixer at whatever app takes focus.'}],
    lv:[['peak L','−12.4 dBFS'],['peak R','−14.1 dBFS'],['clipping','none in 60 s']]}]},
   {n:'Routing',e:[
   {id:'audio.sink',t:'Output device',k:'ch',o:['auto','HDMI / DP-1','USB Headset'],d:'auto',val:'auto',w:G,ap:'live',
-   kw:'sink output device headset hdmi routing',h:'Where the selected stream is routed.'},
-  {id:'audio.facts',t:'Server',k:'facts',sm:()=>'PipeWire 1.2.7 · wpctl present',
+   kw:'sink output device headset hdmi routing',h:'Where the selected stream is routed.'}]},
+  {n:'Diagnostics',e:[
+  {id:'audio.server_facts',t:'Server',k:'facts',sm:()=>'PipeWire 1.2.7 · wpctl present',
    h:'PipeWire server state the mixer depends on.',
    lv:[['server','PipeWire 1.2.7'],['session manager','WirePlumber 0.5.6'],['wpctl','/usr/bin/wpctl'],
        ['quantum','1024 / 48000 (21.3 ms)'],['nodes visible','11']]}]}]},
 
-{id:'system.monitor',sec:'SYSTEM',ic:'▥',title:'Monitor',badge:'4',
+{id:'system.monitor',sec:'SYSTEM',ic:'monitor',title:'Monitor',
  desc:'The always-on performance HUD drawn over the game.',
- sum:()=>'top-right · 4 modules',
+ sum:()=>fmt(E['monitor.anchor'])+' · '+onCount('system.monitor')+' modules',
  groups:[
  {n:'Monitor',e:[
-  {id:'monitor.enabled',t:'Show System Monitor',k:'sw',d:false,val:true,w:G,ap:'live',
+  {id:'monitor.enabled',t:'Show system monitor',k:'sw',d:false,val:true,w:G,ap:'live',
    kw:'hud monitor overlay show fps display',
    h:'Draws the performance HUD over the game, independently of this settings overlay.',
    hint:'drawn even when settings are closed'}]},
- {n:'Modules',cnt:'4 / 7',all:true,e:[
+ {n:'Modules',all:true,cnt:()=>onCount('system.monitor')+' / 7',e:[
   {id:'monitor.mod_fps',t:'Frame rate',k:'sw',d:true,val:true,w:G,ap:'live',kw:'fps frame rate module row',
    h:'The large frames-per-second readout and its unit.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off',
    lv:[['current','142 fps'],['1% low','118 fps'],['0.1% low','96 fps'],['60 s average','139.4 fps']]},
-  {id:'monitor.mod_frametime',t:'Frametime readout (ms)',k:'sw',d:true,val:true,w:G,ap:'live',
-   kw:'frametime ms readout module row',h:'Per-frame time in milliseconds, next to the frame rate.'},
+  {id:'monitor.mod_frametime',t:'Frametime readout',k:'sw',d:true,val:true,w:G,ap:'live',
+   kw:'frametime ms readout module row',h:'Per-frame time in milliseconds, next to the frame rate.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off'},
   {id:'monitor.mod_graph',t:'Frametime graph',k:'sw',d:false,val:true,w:G,ap:'live',
    kw:'graph frametime spark history module',h:'A 240-sample strip of recent frame times, with outliers marked.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off',
    p:[{l:'samples',t:'Window',k:'st',min:60,max:600,st:60,d:240,val:240,u:'frames',
        h:'How many frames the strip covers.'},
       {l:'outlier_sd',t:'Outlier threshold',k:'sl',min:1,max:5,st:.1,d:2.5,val:2.5,u:'σ',
        h:'How far from the mean a frame must be before it is drawn in the warn colour.'}]},
-  {id:'monitor.mod_pct',t:'Percentile row (1% / 0.1% / avg)',k:'sw',d:false,val:true,w:G,ap:'live',
-   kw:'percentile lows 1% 0.1% average module',h:'Low percentiles and the running average, on one line.'},
+  {id:'monitor.mod_pct',t:'Percentile row',k:'sw',d:false,val:true,w:G,ap:'live',
+   kw:'percentile lows 1% 0.1% average module',h:'Low percentiles and the running average, on one line.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off'},
   {id:'monitor.mod_cpu',t:'CPU load',k:'sw',d:false,val:false,w:G,ap:'live',kw:'cpu load module row processor',
-   h:'CPU utilisation and RAM use.'},
+   h:'CPU utilisation and RAM use.',dep:()=>v('monitor.enabled')?null:'the system monitor is off'},
   {id:'monitor.mod_gpu',t:'GPU load',k:'sw',d:false,val:false,w:G,ap:'live',kw:'gpu load vram module row',
-   h:'GPU busy percentage, VRAM use, temperature and power.'},
+   h:'GPU busy percentage, VRAM use, temperature and power.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off'},
   {id:'monitor.mod_media',t:'Now playing',k:'sw',d:false,val:false,w:G,ap:'live',kw:'media now playing mpris module',
-   h:'Title and artist of whatever MPRIS player is active.'}]},
+   h:'Title and artist of whatever MPRIS player is active.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off'}]},
  {n:'Placement',e:[
   {id:'monitor.anchor',t:'Placement',k:'anchor',d:[0,2],val:[0,2],w:G,ap:'live',
    kw:'anchor placement position corner where margin offset',
    h:'Which screen corner the monitor is anchored to. The offsets nudge it away from that corner.',
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off',
    p:[{l:'margin_v',t:'Vertical margin',k:'st',min:0,max:400,st:4,d:32,val:32,u:'px',
        h:'Distance from the anchored horizontal edge.'},
       {l:'margin_h',t:'Horizontal margin',k:'st',min:0,max:400,st:4,d:32,val:32,u:'px',
        h:'Distance from the anchored vertical edge.'}]},
   {id:'monitor.font_size',t:'Font size',k:'sl',min:8,max:32,st:1,d:14,val:18,w:G,ap:'live',u:'px',
    kw:'font size text scale monitor hud',h:'Type size for every module in the monitor.',
-   hint:'applies to every module'},
+   hint:'applies to every module',dep:()=>v('monitor.enabled')?null:'the system monitor is off'},
   {id:'monitor.backdrop',t:'Backdrop',k:'ch',o:['none','shadow','solid','blur'],d:'shadow',val:'blur',w:G,ap:'live',
    kw:'backdrop background shadow blur solid legibility',
    h:'What is drawn behind the monitor so it stays readable over bright scenes.',
-   p:[{l:'opacity',t:'Opacity',k:'sl',min:0,max:1,st:.05,d:.6,val:.6,h:'Backdrop alpha.'},
-      {l:'radius',t:'Blur radius',k:'st',min:2,max:40,st:2,d:12,val:12,u:'px',h:'Blur kernel radius, when the backdrop is blur.'}]}]},
+   dep:()=>v('monitor.enabled')?null:'the system monitor is off',
+   p:[{l:'opacity',t:'Opacity',k:'sl',min:0,max:1,st:.05,d:.6,val:.6,h:'Backdrop alpha.',
+       dep:()=>v('monitor.backdrop')==='none'?'no backdrop is drawn':null},
+      {l:'radius',t:'Blur radius',k:'st',min:2,max:40,st:2,d:12,val:12,u:'px',h:'Blur kernel radius.',
+       dep:()=>v('monitor.backdrop')==='blur'?null:'the backdrop is not a blur'}]}]},
  {n:'Diagnostics',e:[
-  {id:'monitor.sampling',t:'Sampling',k:'facts',sm:()=>'500 ms · 240-frame window',
+  {id:'monitor.sampling_facts',t:'Sampling',k:'facts',sm:()=>'500 ms · 240-frame window',
    h:'How often the monitor recomputes its numbers, and over how many frames.',
    lv:[['interval','500 ms'],['frame window','240'],['1% low','118 fps'],['0.1% low','96 fps'],
        ['average','139.4 fps'],['outliers','3 in the last 240'],['module widths','fps 186 · cpu 214 · gpu 268 → shared 268']]},
-  {id:'monitor.graph_live',t:'Frametime',k:'graph',sm:()=>'7.04 ms · 3 outliers',
+  {id:'monitor.frametime_graph',t:'Frametime',k:'graph',sm:()=>'7.04 ms · 3 outliers',
    h:'Live frametime strip over the sampling window. Outliers are drawn in the warn colour.',
    lv:[['last frame','7.04 ms'],['mean','7.18 ms'],['σ','0.62 ms'],['outliers','3']]}]}],
  note:'Every enabled module renders at the widest enabled module\'s width.'},
 
-{id:'system.log',sec:'SYSTEM',ic:'▭',title:'Log',badge:'2!',raw:'log',
+{id:'system.log',sec:'SYSTEM',ic:'log',title:'Log',raw:'log',
  desc:'Captured stdout and stderr from gamescope and the game.',
- sum:()=>'36 lines · 2 errors · 3 warnings',groups:[]},
+ sum:()=>logShown().length+' of '+LOG.length+' lines shown',
+ groups:[{n:'Filter',e:[
+  {id:'log.sources',t:'Sources',k:'bank',o:['gamescope','vulkan','wayland','game'],
+   d:['gamescope','vulkan','wayland','game'],val:['gamescope','vulkan','wayland','game'],
+   w:G,ap:'live',kw:'log source subsystem filter gamescope vulkan wayland game',
+   h:'Which subsystems the captured buffer shows. One setting whose value is a set — not four switches, because it is one decision.'},
+  {id:'log.severity',t:'Severity',k:'bank',o:['error','warn','info'],d:['error','warn','info'],
+   val:['error','warn','info'],w:G,ap:'live',kw:'severity error warning info level filter',
+   h:'Minimum severities kept in view. Hidden lines are still captured.'},
+  {id:'log.filter',t:'Text filter',k:'tx',d:'',val:'',ph:'substring…',w:G,ap:'live',
+   kw:'filter search substring grep text log',
+   h:'Keeps only lines containing this text. Matches are highlighted in place.'},
+  {id:'log.autoscroll',t:'Auto-scroll',k:'sw',d:true,val:true,w:G,ap:'live',
+   kw:'autoscroll follow tail log',h:'Keeps the newest line in view as the buffer grows.'}]},
+  {n:'Diagnostics',e:[
+  {id:'log.buffer_facts',t:'Buffer',k:'facts',sm:()=>LOG.length+' lines · 2 errors',
+   h:'What the capture ring currently holds.',
+   lv:[['capacity','4096 lines'],['held','36 lines'],['errors','2'],['warnings','3'],['info','31'],
+       ['oldest','00:41:02.118'],['newest','00:41:39.554']]}]}]},
 
-{id:'setup.profiles',sec:'SETUP',ic:'⌸',title:'Profiles',
+{id:'setup.profiles',sec:'SETUP',ic:'profiles',title:'Profiles',
  desc:'Named snapshots of every setting, applied in one action.',
- sum:()=>'3 saved · none applied',
- groups:[{n:'Saved profiles',e:[
-  {id:'profiles.list',t:'Profile',k:'ch',o:['Handheld 40 fps','Quality 4K','Battery'],d:'Handheld 40 fps',
+ sum:()=>PROFILES.length+' saved',
+ groups:[{n:'Saved profiles',emptyIf:()=>!PROFILES.length,
+  emptyMsg:'no profiles saved yet',emptyAct:'profiles.name',emptyActL:'name one below →',e:[
+  {id:'profiles.list',t:'Profile',k:'ch',o:()=>PROFILES.map(p=>p.name),d:'Handheld 40 fps',
    val:'Quality 4K',w:G,ap:'on apply',kw:'profile preset saved snapshot',
    h:'Which saved profile the apply and delete actions target.',
-   lv:[['contains','19 keys'],['created','2026-08-11 22:14'],['differs from current','7 keys']]},
-  {id:'profiles.name',t:'New profile name',k:'tx',d:'',val:'',ph:'e.g. Handheld 40 fps',w:G,ap:'on save',
-   kw:'profile name preset save new',h:'Name for a new saved profile. Letters, digits, space, hyphen and underscore only.'},
-  {id:'profiles.actions',t:'Manage',k:'act',
-   h:'Apply, rename or delete the selected profile. Deletion is permanent and asks first.'}]}]},
+   dep:()=>PROFILES.length?null:'no profiles are saved',
+   lv:()=>{const p=PROFILES.find(x=>x.name===v('profiles.list'));
+     return p?[['contains',Object.keys(p.keys).length+' keys'],['created',p.made],
+               ['differs from current',Object.keys(p.keys).filter(k=>E[k]&&E[k].val!==p.keys[k]).length+' keys']]:[];}},
+  {id:'profiles.actions',t:'Selected profile',k:'act',
+   dep:()=>PROFILES.length?null:'no profiles are saved',
+   acts:[{l:'apply',i:'a',do:'profApply'},{l:'delete…',i:'d',confirm:true,do:'profDelete'}],
+   h:'Apply the selected profile to every routed key, or delete it. Deletion is permanent and asks first.'}]},
+  {n:'New profile',e:[
+  {id:'profiles.name',t:'Name',k:'tx',d:'',val:'',ph:'e.g. Handheld 40 fps',w:G,ap:'on save',
+   kw:'profile name preset save new',
+   valid:s=>!s?null:(/^[A-Za-z0-9 _-]+$/.test(s)?(PROFILES.some(p=>p.name===s)?'a profile with that name already exists':null)
+                                                :'letters, digits, space, hyphen and underscore only'),
+   h:'Name for a new saved profile. Letters, digits, space, hyphen and underscore only.'},
+  {id:'profiles.save',t:'Save current settings',k:'act',
+   dep:()=>{const s=v('profiles.name');
+     if(!s) return 'type a name first';
+     return E['profiles.name'].valid(s)||null;},
+   acts:[{l:'save as profile',i:'a',do:'profSave'}],
+   h:'Writes every key that currently differs from default into a new named snapshot.'}]}]},
 
-{id:'setup.pergame',sec:'SETUP',ic:'◇',title:'Per-Game',
+{id:'setup.pergame',sec:'SETUP',ic:'pergame',title:'Per-game',
  desc:'Whether this game gets its own config file, and where settings are written.',
- sum:()=>'override on · games/1174180.json',
+ sum:()=>v('config.override')?'override on · '+F:'global only',
  groups:[{n:'Routing',e:[
-  {id:'config.override',t:'Override Global Config',k:'sw',d:false,val:true,w:G,ap:'live',
+  {id:'config.override',t:'Override global config',k:'sw',d:false,val:true,w:G,ap:'live',
    kw:'override per game routing config file app id',
    h:'When on, every routed setting writes to this game\'s own file instead of the global one.',
    hint:'writes go to games/1174180.json',
    lv:[['resolved app id','1174180'],['file','games/1174180.json'],['size','1.2 kB'],['keys','14'],
        ['last write','00:41:28.902']]},
   {id:'config.actions',t:'Saved config',k:'act',
-   h:'Copy another game\'s config over this one, or delete this game\'s saved config permanently.'}]}]},
+   acts:[{l:'copy from game…',i:'n',do:'noop'},{l:'delete config…',i:'d',confirm:true,do:'noop'}],
+   h:'Copy another game\'s config over this one, or delete this game\'s saved config permanently.'}]},
+  {n:'Diagnostics',e:[
+  {id:'config.routing_facts',t:'Resolution order',k:'facts',sm:()=>'2 layers',
+   h:'Where a value comes from when several files could supply it.',
+   lv:[['1 · per-game',F+' (active)'],['2 · global',G],['3 · built-in default','compiled in'],
+       ['app id source','SteamAppId=1174180'],['last resolved','00:41:03.001']]}]}]},
 
-{id:'setup.appearance',sec:'SETUP',ic:'⚙',title:'Appearance',
+{id:'setup.appearance',sec:'SETUP',ic:'appearance',title:'Appearance',
  desc:'How the overlay itself looks: accent, scale and the backdrop over the game.',
  sum:()=>'hue '+HUE+'° · scale '+SCALE.toFixed(2)+'×',
  groups:[{n:'Theme',e:[
-  {id:'overlay.accent_hue',t:'Accent Colour',k:'hue',d:218,val:218,w:G,ap:'live',
+  {id:'overlay.accent_hue',t:'Accent colour',k:'hue',d:218,val:218,u:'°',w:G,ap:'live',
    kw:'accent colour hue theme tint oklch',
    h:'One OKLCH hue drives the whole accent family. Lightness and chroma are fixed per token, so no hue can wash out or blow out.',
    p:[{l:'chroma',t:'Chroma bias',k:'sl',min:-.04,max:.04,st:.005,d:0,val:0,
        h:'Nudges the family\'s chroma. Large values will clip in sRGB on some hues.'}],
-   lv:[['token L / C','fixed per role'],['worst ratio over 360°','7.90:1 (AccentBase)'],['danger hue','fixed — excluded from the family']]},
-  {id:'overlay.display_scale',t:'UI Scale',k:'sl',min:.5,max:2,st:.25,d:1,val:1,w:G,ap:'live',u:'×',
+   lv:[['token L / C','fixed per role'],['worst ratio over 360°','7.90:1 (AccentBase on surface)'],
+       ['danger hue','fixed — excluded from the family']]},
+  {id:'overlay.display_scale',t:'UI scale',k:'sl',min:.5,max:2,st:.25,d:1,val:1,w:G,ap:'live',u:'×',
    kw:'scale ui size dpi zoom display_scale',
    h:'Multiplies every base unit in the overlay. The responsive ladder decides what collapses as it rises.',
    hint:'the ladder collapses the rail at 1.5×'}]},
@@ -778,7 +1041,14 @@ const AREAS=[
    h:'How far the game behind the slab is dimmed. This value is what the contrast table is measured against.',
    hint:'the contrast floor depends on this'},
   {id:'overlay.unfocused',t:'Unfocused opacity',k:'sl',min:.5,max:1,st:.05,d:.9,val:.9,w:G,ap:'live',
-   kw:'opacity unfocused fade transparency',h:'Slab opacity while another surface holds input focus.'}]}]}
+   kw:'opacity unfocused fade transparency',h:'Slab opacity while another surface holds input focus.'}]},
+  {n:'Diagnostics',e:[
+  {id:'overlay.surface_facts',t:'Surface',k:'facts',sm:()=>'1560×928 @ '+SCALE.toFixed(2)+'×',
+   h:'What the shell allocated for this overlay at the current scale.',
+   lv:()=>{const L=ladder();return [['base size',Math.round(L.Wb)+' × '+Math.round(L.Hb)],
+     ['physical',Math.round(L.physW)+' × '+Math.round(L.physH)],['display_scale',SCALE.toFixed(2)+'×'],
+     ['ladder step',String(L.step)],['inspector host',L.host],['sheet lane',Math.round(L.sheet)+' base'],
+     ['columns',String(L.cols)]];}}]}]}
 ];
 
 /* ── flatten the registry: entries + params, exactly as the palette sees it ── */
@@ -787,22 +1057,63 @@ AREAS.forEach(a=>(a.groups||[]).forEach(g=>g.e.forEach(e=>{
   e._area=a; e._grp=g; E[e.id]=e; ORDER.push(e);
   (e.p||[]).forEach(p=>{ p.id=e.id+'.'+p.l; p._parent=e; p._area=a; PARAMS[p.id]=p; });
 })));
+/* THE PREFIX LAW, asserted here the way Registry.h asserts it at registration */
+Object.keys(PARAMS).forEach(id=>{ const p=PARAMS[id];
+  console.assert(id===p._parent.id+'.'+p.l,'prefix law: '+id);
+  console.assert(!p.p,'one-level rule: '+id+' owns params'); });
+ORDER.forEach(e=>console.assert(!e.p||e.p.length<=6,'six budget: '+e.id));
+ORDER.forEach(e=>console.assert(!!e.h,'.Help() is required: '+e.id));
+
 const v=id=>E[id]?E[id].val:undefined;
+const findEntry=id=>E[id]||PARAMS[id];
+const optsOf=e=>typeof e.o==='function'?e.o():(e.o||[]);
+const lvOf=e=>!e.lv?[]:(typeof e.lv==='function'?e.lv():e.lv);
+const cntOf=g=>typeof g.cnt==='function'?g.cnt():g.cnt;
+const onCount=aid=>{const a=AREAS.find(x=>x.id===aid);
+  return (a.groups||[]).filter(g=>g.all).reduce((n,g)=>n+g.e.filter(e=>e.k==='sw'&&e.val).length,0);};
+/* ONE disabled mechanism.  `dep` returns a reason string, or null when enabled.
+   A param inherits its parent's reason first — there is no second code path. */
+function off(e){
+  if(!e) return null;
+  if(e._parent&&!e.ni){ const up=off(e._parent); if(up) return up; }
+  return e.dep?(e.dep(e)||null):null;
+}
+const errOf=e=>e.valid?e.valid(e.val):null;
 const diffs=e=>{
-  if(e.k==='anchor') return e.val[0]!==e.d[0]||e.val[1]!==e.d[1];
+  if(e.k==='anchor'||e.k==='bank') return JSON.stringify(e.val)!==JSON.stringify(e.d);
   if(e.d===undefined) return false;
   return e.val!==e.d;
 };
-const areaDiff=a=>(a.groups||[]).reduce((n,g)=>n+g.e.filter(e=>diffs(e)||(e.p||[]).some(p=>p.val!==p.d)).length,0);
+const deepDiff=e=>diffs(e)||(e.p||[]).some(p=>p.val!==p.d);
+const areaDiff=a=>(a.groups||[]).reduce((n,g)=>n+g.e.filter(deepDiff).length,0);
 const paramCount=a=>(a.groups||[]).reduce((n,g)=>n+g.e.reduce((m,e)=>m+(e.p?e.p.length:0),0),0);
 const rowCount =a=>(a.groups||[]).reduce((n,g)=>n+g.e.length,0);
+function resetEntry(e){
+  if(e.k==='anchor'||e.k==='bank') e.val=e.d.slice(); else if(e.d!==undefined) e.val=e.d;
+  (e.p||[]).forEach(p=>{ p.val=(Array.isArray(p.d)?p.d.slice():p.d); });
+}
+
+/* ── profiles are real state: apply / save / delete all mutate the registry ── */
+let PROFILES=[
+ {name:'Handheld 40 fps',made:'2026-08-09 19:02',
+  keys:{'display.fps_limit':40,'display.filter':'fsr','display.sharpness':8,'monitor.font_size':14,
+        'display.hdr_enabled':false,'overlay.display_scale':1.25}},
+ {name:'Quality 4K',made:'2026-08-11 22:14',
+  keys:{'display.fps_limit':0,'display.filter':'fsr','display.sharpness':5,'display.scaler':'integer',
+        'display.hdr_enabled':true,'display.adaptive_sync':true,'monitor.font_size':18}},
+ {name:'Battery',made:'2026-08-12 08:31',
+  keys:{'display.fps_limit':30,'display.filter':'linear','display.sharpness':0,'display.hdr_enabled':false,
+        'monitor.mod_gpu':true}}
+];
 
 /* ══════════════════════════════════════════════════════════════════════════
-   3. STATE + the responsive ladder (SPEC section 8.3)
+   4. STATE + the responsive ladder
    ════════════════════════════════════════════════════════════════════════ */
-let SCALE=1, HUE=218, AREA='display.upscaling', SEL=null, MODE='explain',
-    HOST='auto', GRAM='e2', EXPANDED={}, EXPLAINPAGE=false, PALON=false, PALSEL=0, PALQ='';
+let SCALE=1, HUE=218, AREA='display.upscaling', SEL=null, MODE='configure',
+    HOST='auto', GRAM='e2', EXPANDED={}, INLINEPAGE=false, PALON=false, PALSEL=0, PALQ='',
+    DDOPEN=null, EDIT=null, ARMED=null, LOGSEL=1604, TOAST='';
 const SURF={w:1920,h:1080};
+const REOPEN_W=20;
 
 function ladder(){
   const s=SCALE;
@@ -815,36 +1126,39 @@ function ladder(){
   if(rail+insp+SHEETMIN>=Wb) host='drawer';
   if(HOST==='hidden') host='hidden';
   if(HOST==='column'&&host==='drawer') host='drawer';  /* the ladder wins over preference */
-  const sheet=Wb-rail-(host==='column'?insp:0);
-  /* columns: what the WIDTH allows, capped by what the CONTENT needs.
-     A 7-row category never spreads into two columns just because it fits. */
+  const sheet=Wb-rail-(host==='column'?insp:host==='hidden'?REOPEN_W:0);
   const byWidth=sheet>=1680?3:sheet>=840?2:1;
   const a=AREAS.find(x=>x.id===AREA);
   const byContent=Math.max(1,Math.ceil(rowCount(a)/12));
   const cols=Math.min(byWidth,byContent);
   const step=HOST==='hidden'?3:host==='drawer'?2:rail===60?1:(byWidth===3?-1:0);
   return {Wb,Hb,rail,insp,host,sheet,cols,byWidth,step,physW,physH,
-          colW:(sheet-48-(cols-1)*24)/cols};
+          colW:(sheet-2*24-(cols-1)*24)/cols};
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   4. RENDER
+   5. RENDER
    ════════════════════════════════════════════════════════════════════════ */
-const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const area=()=>AREAS.find(a=>a.id===AREA);
 const fmt=(e,val)=>{
   const x=val===undefined?e.val:val;
+  if(x===undefined||x===null) return '—';
   if(e.k==='sw') return x?'on':'off';
-  if(e.k==='anchor') return ['top','middle','bottom'][x[0]]+'-'+['left','centre','right'][x[1]]
-     +' · '+(e.p?e.p[0].val+'/'+e.p[1].val:'');
-  if(e.k==='hue') return 'oklch(.74 .12 '+x+')';
-  if(e.k==='strip') return x.toFixed(1)+' dB';
+  if(e.k==='bank') return x.length?(x.length===optsOf(e).length?'all':x.join(' · ')):'none';
+  if(e.k==='anchor') return ['top','middle','bottom'][x[0]]+'-'+['left','centre','right'][x[1]];
+  if(e.k==='hue') return String(x);
+  if(e.k==='meter') return Math.round(x*100);
+  if(e.k==='strip') return x.toFixed(1);
+  if(e.k==='tx') return x===''?(e.ph||'unset'):x;
+  if(e.k==='act') return (e.acts||[]).map(a=>a.l).join(' · ')||'—';
+  if(e.k==='ch'&&x==='') return '—';
   if(e.k==='st'&&e.zero&&x===0) return e.zero;
   if(typeof x==='number') return e.st&&e.st<1?x.toFixed(2):String(x);
   return String(x);
 };
-const isDis=e=>e.dis||(e.dep&&!E[e.dep].val);
-const disMsg=e=>e.dis||e.depmsg;
+/* a value the overlay did not verify is drawn as "—", never invented */
+const factSum=e=>{const s=e.sm?e.sm():null; return s==null?'—':s;};
 
 /* ── rail ── */
 function renderRail(){
@@ -853,73 +1167,107 @@ function renderRail(){
   let h='',sec='';
   AREAS.forEach(a=>{
     if(a.sec!==sec){sec=a.sec;h+=`<div class="sec">${sec}</div>`}
-    const d=areaDiff(a);
+    /* THE RAIL COUNTER MEANS EXACTLY ONE THING: settings that differ from
+       default.  The one alert form is a severity count, drawn in danger. */
+    const d=areaDiff(a), al=a.raw==='log'?LOG.filter(l=>l[1]==='e').length:0;
+    const ct=al?`<span class="ct alert" title="${al} errors captured">${al}!</span>`
+              :d?`<span class="ct" title="${d} settings differ from default">${d}</span>`:'';
     h+=`<div class="ri${a.id===AREA?' on':''}" data-a="${a.id}" title="${esc(a.title)}">
-        <span class="ic">${a.ic}</span><span class="nm">${esc(a.title)}</span>
-        ${a.badge?`<span class="ct${a.badge.includes('!')?' alert':''}">${a.badge}</span>`
-                 :d?`<span class="ct">${d}</span>`:''}</div>`;
+        <span class="ic">${ICONS[a.ic]}</span><span class="nm">${esc(a.title)}</span>${ct}</div>`;
   });
   r.innerHTML=h;
 }
 
-/* ── controls (every one right-bound by the .ctlz flex rule) ── */
-function ctlHTML(e,inInsp){
-  const dis=isDis(e);
+/* ── the segmented-vs-dropdown decision.  THE HELPER MEASURES AND DOWNGRADES;
+      a call site never picks, and cannot.  Same function for both hosts, so a
+      choice cannot look like two different controls in two regions. ── */
+function segFits(e,lane){
+  const o=optsOf(e);
+  if(o.length<1||o.length>5) return false;
+  if(o.some(x=>String(x).length>8)) return false;
+  const w=o.reduce((n,x)=>n+18+String(x).length*7.1,0)+(o.length-1)*3;
+  return w<=lane;
+}
+
+/* ── controls.  Every one is right-bound by the .ctlz / .cz flex rule. ── */
+function ctlHTML(e,lane){
+  const dis=off(e), id=e.id;
   switch(e.k){
-   case 'sw': return `<span class="sw${e.val?' on':''}" data-act="sw" data-id="${e.id}"><i></i></span>`;
+   case 'sw': return `<span class="sw${e.val?' on':''}" tabindex="0" role="switch" aria-checked="${!!e.val}"
+       data-act="sw" data-id="${id}"><i></i></span>`;
    case 'ch':{
-     /* THE HELPER MEASURES AND AUTO-DOWNGRADES. A caller never picks.
-        segmented needs <=5 options, <=8 chars each, AND room to draw them. */
-     const L=ladder(), zone=inInsp?ladder().insp-32:L.colW*0.54-28;
-     const seg=e.o.length<=5&&e.o.every(o=>o.length<=8)&&!inInsp&&zone>=e.o.length*58;
-     /* Place(w): right edge fixed, width capped. There is no left-anchored allocator. */
-     return seg
-      ? `<span class="seg" style="max-width:${e.o.length*92}px">${e.o.map(o=>`<b class="${o===e.val?'on':''}" data-act="ch" data-id="${e.id}" data-v="${esc(o)}">${esc(o)}</b>`).join('')}</span>`
-      : `<span class="dd" data-act="dd" data-id="${e.id}" style="max-width:280px">${esc(e.val)}<span class="cv">▾</span></span>`;}
+     const o=optsOf(e);
+     if(!o.length) return `<span class="dd" style="pointer-events:none">no options</span>`;
+     return segFits(e,lane)
+      ? `<span class="seg">${o.map(x=>`<s tabindex="0" class="${x===e.val?'on':''}" data-act="ch" data-id="${id}" data-v="${esc(x)}">${esc(x)}</s>`).join('')}</span>`
+      : `<span class="dd${DDOPEN===id?' open':''}" tabindex="0" data-act="dd" data-id="${id}"
+           title="${esc(e.val)}"><span class="tv${diffs(e)?' diff':''}">${esc(fmt(e))}</span><span class="cv">▾</span></span>`;}
    case 'sl':{
      const p=(e.val-e.min)/(e.max-e.min)*100, dp=(e.d-e.min)/(e.max-e.min)*100;
-     return `<span class="sld" data-act="sl" data-id="${e.id}">
+     return `<span class="sld" tabindex="0" role="slider" aria-valuenow="${e.val}"
+       data-act="sl" data-id="${id}">
        <i class="rail0"></i><i class="fill" style="width:${p}%"></i>
        <i class="tick" style="left:${dp}%"></i><i class="hnd" style="left:${p}%"></i></span>`;}
-   case 'st': return `<span class="stp"><b data-act="st-" data-id="${e.id}">−</b>
-       <span>${esc(fmt(e))}</span><b data-act="st+" data-id="${e.id}">+</b></span>`;
-   case 'tx': return `<span class="tin${e.val?'':' ph'}" style="max-width:320px">${esc(e.val||e.ph||'')}</span>`;
-   case 'act': return e.id==='profiles.actions'
-       ? `<span class="btn acc">apply</span><span class="btn">rename</span><span class="btn dgr">delete…</span>`
-       : `<span class="btn">copy from game…</span><span class="btn dgr">delete config…</span>`;
+   case 'st': return `<span class="stp"><b tabindex="0" data-act="st-" data-id="${id}">−</b>
+       <b tabindex="0" data-act="st+" data-id="${id}">+</b></span>`;
+   case 'tx':{
+     const err=errOf(e);
+     if(EDIT&&EDIT.id===id) return `<span class="tin${err?' err':''}" style="flex:1;max-width:320px">
+        <input id="txin" value="${esc(EDIT.buf)}" spellcheck="false" autocomplete="off"></span>`;
+     return `<span class="tin${err?' err':''}" tabindex="0" data-act="tx" data-id="${id}">
+        <span class="tv${e.val?'':' ph'}">${esc(fmt(e))}</span><span class="cv">✎</span></span>`;}
+   case 'bank': return `<span class="bank">${optsOf(e).map(x=>
+       `<s tabindex="0" class="${e.val.includes(x)?'on':''}" data-act="bank" data-id="${id}" data-v="${esc(x)}">${esc(x)}</s>`).join('')}</span>`;
+   case 'act': return (e.acts||[]).map(a=>{
+       const armed=ARMED===id+'/'+a.l;
+       return `<span tabindex="0" class="verb ${a.i==='d'?'d':a.i==='n'?'n':''}${armed?' arm':''}${dis?' dis':''}"
+         data-act="verb" data-id="${id}" data-do="${a.do}" data-l="${esc(a.l)}"
+         data-confirm="${a.confirm?1:0}">${armed?'confirm — '+esc(a.l.replace('…','')):esc(a.l)}</span>`;}).join('');
    case 'meter':{const n=20,lit=Math.round(e.val*n);
      return `<span class="mtr">${Array.from({length:n},(_,i)=>`<i class="${i<lit?'lit':''}"></i>`).join('')}</span>`;}
+   case 'anchor': return `<span class="pgrid">${[0,1,2].flatMap(r=>[0,1,2].map(c=>
+       `<i tabindex="0" class="${e.val[0]===r&&e.val[1]===c?'on':''}" data-act="anchor" data-id="${id}" data-r="${r}" data-c="${c}"></i>`)).join('')}</span>`;
+   case 'hue':{
+     const stops=Array.from({length:25},(_,i)=>hex(oklch(.741,.120,i*15))).join(',');
+     return `<span style="flex:1;min-width:80px">
+       <span class="huehit" data-act="hue" data-id="${id}" tabindex="0">
+         <span class="huerail" style="display:block;background:linear-gradient(90deg,${stops})">
+           <i class="hh" style="left:${e.val/360*100}%"></i></span></span>
+       <span class="sws">${[218,150,86,40,12,330,278,248].map(x=>`<i class="${x===e.val?'on':''}" data-act="hueset" data-id="${id}" data-v="${x}" style="background:${hex(oklch(.741,.120,x))}" title="${x}°"></i>`).join('')}</span></span>`;}
+   case 'strip':{
+     const q=(e.val+60)/60*100;
+     return `<span class="sld${e.p[0].val?' ro':''}" data-act="fader" data-id="${id}" tabindex="0" style="flex:1">
+       <i class="rail0"></i><i class="fill" style="width:${q}%"></i>
+       <i class="tick" style="left:${(e.d+60)/60*100}%"></i><i class="hnd" style="left:${q}%"></i></span>`;}
   }
   return '';
 }
 
-/* ── one Sheet row: 44 tall, four columns, two right-bound ── */
-function rowHTML(e,opts){
-  opts=opts||{};
-  const dis=isDis(e), sel=SEL===e.id, dif=diffs(e), eg=GRAM==='e';
-  const hasDepth=(e.p&&e.p.length)||(e.lv&&e.lv.length);
-  const showVal=['sl','meter','facts','graph','anchor','hue','strip'].includes(e.k);
+/* ── one Sheet row: --row tall, four columns, two right-bound ── */
+function rowHTML(e,inspLane){
+  const dis=off(e), sel=SEL===e.id, dif=deepDiff(e), eg=GRAM==='e';
+  const hasDepth=(e.p&&e.p.length)||lvOf(e).length;
   const L=ladder(), inline=L.host==='hidden'&&e.p&&e.p.length;
+  const lane=L.colW*0.54-28-12;
 
   if(e.k==='facts'){
-    /* E GRAMMAR: a readout RUN — one non-interactive row per fact, in the sheet.
-       E2 GRAMMAR: one row + a chevron; the run lives in Inspector ▸ DIAGNOSE. */
-    if(eg){
-      LINES+=1+e.lv.length;
+    if(eg){ /* E GRAMMAR: a readout RUN — one non-interactive row per fact */
+      const lv=lvOf(e); LINES+=1+lv.length;
       return `<div class="grp" style="padding-top:10px">${esc(e.t)}</div>`+
-        e.lv.map(([k,val])=>`<div class="row ro" style="height:28px">
+        (lv.length?lv.map(([k,val])=>`<div class="row" style="height:28px;cursor:default">
           <span class="labz"><span class="lab" style="font-size:13px">${esc(k)}</span></span>
-          <span class="ctlz"><span style="font:400 11.5px var(--mono);color:rgba(239,245,251,.44)">${esc(val)}</span></span>
-          <span class="aff"></span></div>`).join('');
+          <span class="ctlz"><span style="font:400 11.5px var(--mono);color:var(--t44)">${esc(val)}</span></span>
+          <span class="aff"></span></div>`).join('')
+         :`<div class="empty">nothing to report</div>`);
     }
     LINES+=1;
-    /* a Facts summary is a string, not a value: it sits RIGHT-BOUND in the control
-       zone (the row's "control" is the act of opening DIAGNOSE), never in the
-       value column, which is reserved for numbers a control cannot show itself. */
-    return `<div class="row ro${sel?' sel':''}" data-row="${e.id}">
+    /* A Facts summary is a string, not a value: it sits RIGHT-BOUND in the
+       control zone.  No state edge, no reset dot — the structural expression
+       of "never show a value the overlay didn't verify". */
+    return `<div class="row${sel?' sel':''}" data-row="${e.id}">
       <i class="edge${sel?' sel':''}"></i>
       <span class="labz"><span class="lab">${esc(e.t)}</span></span>
-      <span class="ctlz"><span style="font:400 12px var(--mono);color:var(--t52);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.sm())}</span></span>
+      <span class="ctlz"><span class="fsum">${esc(factSum(e))}</span></span>
       <span class="aff"><span class="chev">›</span></span></div>`;
   }
   if(e.k==='anchor') return bandHTML(e,3);
@@ -934,96 +1282,108 @@ function rowHTML(e,opts){
   if(dif) aff=`<span class="reset" data-act="reset" data-id="${e.id}" title="reset to default"></span>`;
   else if(hasDepth&&!eg) aff=`<span class="chev">${inline?(EXPANDED[e.id]?'▾':'▸'):'›'}</span>`;
 
+  /* B's rule: the value is shown for every control except a segmented one,
+     which already shows it.  E2's rule: it lands in the value column. */
+  /* THE VALUE-COLUMN RULE: the value column carries the resolved value for
+     every control that CANNOT show its own — switch, slider, stepper, meter,
+     facts, composite.  Segmented, dropdown and text field already show theirs
+     and never duplicate it.  (B's rule; E2 supplies the column.) */
+  const showVal=!['ch','tx','act'].includes(e.k);
+  const err=errOf(e);
+
   LINES+=1+(eTall?1:0);
-  let h=`<div class="row${eTall?' tall':''}${eAlign}${sel?' sel':''}${dis?' dis':''}" data-row="${e.id}">
+  let h=`<div class="row${eTall?' tall':''}${eAlign}${sel?' sel':''}${dis?' dis':''}"
+      data-row="${e.id}"${dis?` title="${esc(dis)}"`:''}>
     <i class="edge${dif?' diff':sel?' sel':''}"></i>
     ${inline?`<span class="disc" data-act="expand" data-id="${e.id}">${EXPANDED[e.id]?'▾':'▸'}</span>`:''}
-    <span class="labz"><span class="lab">${esc(e.t)}</span>
+    <span class="labz"><span class="lab" title="${esc(e.t)}">${esc(e.t)}</span>
       ${eTall?`<span class="hint">${esc(e.hint)}</span>`:''}
-      ${showVal&&!eTall?`<span class="val${dif?' diff':''}">${esc(fmt(e))}${e.u?`<u>${e.u}</u>`:''}</span>`:''}</span>
-    <span class="ctlz">${ctlHTML(e)}</span>
+      ${showVal&&!eTall?`<span class="val${dif?' diff':''}${err?' err':''}" title="${esc(fmt(e))}">${esc(fmt(e))}${e.u?`<u>${esc(e.u)}</u>`:''}</span>`:''}</span>
+    <span class="ctlz">${ctlHTML(e,lane)}</span>
     <span class="aff">${aff}</span></div>`;
 
-  if(inline&&EXPANDED[e.id])
-    h+=(LINES+=e.p.length,e.p).map(p=>`<div class="row prow" data-row="${p.id}">
-        <span class="labz"><span class="lab">${esc(p.t)}</span>
-          ${['sl'].includes(p.k)?`<span class="val${p.val!==p.d?' diff':''}">${esc(fmt(p))}${p.u?`<u>${p.u}</u>`:''}</span>`:''}</span>
-        <span class="ctlz">${ctlHTML(p)}</span><span class="aff"></span></div>`).join('');
+  if(inline&&EXPANDED[e.id]) h+=paramRows(e);
   return h;
 }
+function paramRows(e){
+  LINES+=e.p.length;
+  return e.p.map(p=>{
+    const pd=off(p), pdif=p.val!==p.d, lane=ladder().colW*0.54-52;
+    return `<div class="row prow${SEL===p.id?' sel':''}${pd?' dis':''}" data-row="${p.id}">
+      <span class="labz"><span class="lab">${esc(p.t)}</span>
+        ${!['ch','tx','act'].includes(p.k)?`<span class="val${pdif?' diff':''}">${esc(fmt(p))}${p.u?`<u>${esc(p.u)}</u>`:''}</span>`:''}</span>
+      <span class="ctlz">${ctlHTML(p,lane)}</span>
+      <span class="aff">${pdif?`<span class="reset" data-act="reset" data-id="${p.id}"></span>`:''}</span></div>`;
+  }).join('');
+}
 
-/* ── composite band: n × 44, line 1 reads as a row, body right-bound ── */
+/* ── composite band: n × --row, line 1 reads as a row, body right-bound ── */
 function bandHTML(e,n){
-  const sel=SEL===e.id, dif=diffs(e);
+  const sel=SEL===e.id, dif=deepDiff(e), dis=off(e);
   LINES+=1;
-  /* E GRAMMAR: the composite's params were crammed onto the same tall row —
-     the "orphaned" case. E2: the band owns the control line; params are depth. */
   let body='';
   if(e.k==='anchor'){
     const grid=`<span class="pgrid">${[0,1,2].flatMap(r=>[0,1,2].map(c=>
-      `<i class="${e.val[0]===r&&e.val[1]===c?'on':''}" data-act="anchor" data-id="${e.id}" data-r="${r}" data-c="${c}"></i>`)).join('')}</span>`;
+      `<i tabindex="0" class="${e.val[0]===r&&e.val[1]===c?'on':''}" data-act="anchor" data-id="${e.id}" data-r="${r}" data-c="${c}"></i>`)).join('')}</span>`;
     if(GRAM==='e'){
       /* E: the orphan — grid and two unrelated steppers crammed on one tall row */
       LINES+=2;
       body=`<span style="display:flex;align-items:center;gap:12px">
         <span style="display:flex;flex-direction:column;gap:4px">
           ${e.p.map(p=>`<span style="display:flex;align-items:center;gap:6px">
-            <span style="font:400 11.5px var(--mono);color:rgba(239,245,251,.44);width:52px">${esc(p.t.split(' ')[0])}</span>
-            ${ctlHTML(p)}</span>`).join('')}</span>${grid}</span>`;
+            <span style="font:400 11.5px var(--mono);color:var(--t44);width:52px">${esc(p.t.split(' ')[0])}</span>
+            <span style="font:500 13px var(--mono);color:var(--t92);width:34px;text-align:right">${esc(fmt(p))}</span>
+            ${ctlHTML(p,120)}</span>`).join('')}</span>${grid}</span>`;
     } else body=grid;
   } else if(e.k==='hue'){
-    const stops=Array.from({length:24},(_,i)=>hex(oklch(.741,.120,i*15))).join(',');
+    const stops=Array.from({length:25},(_,i)=>hex(oklch(.741,.120,i*15))).join(',');
     const presets=[218,150,86,40,12,330,278,248];
-    body=`<span style="width:100%">
-      <span class="huerail" data-act="hue" data-id="${e.id}" style="display:block;background:linear-gradient(90deg,${stops})">
-        <i class="hh" style="left:${e.val/360*100}%"></i></span>
-      <span class="sws">${presets.map(p=>`<i class="${p===e.val?'on':''}" data-act="hueset" data-id="${e.id}" data-v="${p}" style="background:${hex(oklch(.741,.120,p))}"></i>`).join('')}</span></span>`;
+    body=`<span style="flex:1;min-width:120px">
+      <span class="huehit" data-act="hue" data-id="${e.id}" tabindex="0">
+        <span class="huerail" style="display:block;background:linear-gradient(90deg,${stops})">
+          <i class="hh" style="left:${e.val/360*100}%"></i></span></span>
+      <span class="sws">${presets.map(p=>`<i class="${p===e.val?'on':''}" data-act="hueset" data-id="${e.id}" data-v="${p}" style="background:${hex(oklch(.741,.120,p))}" title="${p}°"></i>`).join('')}</span></span>`;
   } else if(e.k==='strip'){
-    const p=(e.val+60)/60*100;
-    body=`<span class="fader"><span class="fs" data-act="fader" data-id="${e.id}">
-        <i class="rail0" style="position:absolute;left:0;right:0;height:6px;background:rgba(255,255,255,.34)"></i>
-        <i class="fill" style="position:absolute;left:0;height:6px;width:${p}%;background:var(--acc-hi)"></i>
-        <i class="hnd" style="position:absolute;left:${p}%;width:10px;height:22px;background:#BAE7F4;margin-left:-5px"></i></span>
-      <span class="lr"><i><b style="width:72%"></b></i><i><b style="width:66%"></b></i></span></span>`;
+    const p=(e.val+60)/60*100, muted=!!e.p[0].val;
+    body=`<span class="fader"><span class="sld${muted?' ro':''}" data-act="fader" data-id="${e.id}" tabindex="0">
+        <i class="rail0"></i><i class="fill" style="width:${p}%"></i>
+        <i class="tick" style="left:${(e.d+60)/60*100}%"></i><i class="hnd" style="left:${p}%"></i></span>
+      <span class="lr"><i><b style="width:${muted?0:72}%"></b></i><i><b style="width:${muted?0:66}%"></b></i></span></span>`;
   } else if(e.k==='graph'){
     body=`<span class="spark">${SPARK.map((x,i)=>`<b class="${[11,34,52].includes(i)?'sp':''}" style="height:${x}%"></b>`).join('')}</span>`;
   }
   const wide=e.k!=='anchor';
   const inline=ladder().host==='hidden'&&e.p&&e.p.length;
-  let h=`<div class="band${sel?' sel':''}" style="height:${n*44}px" data-row="${e.id}">
+  const val=e.k==='graph'?factSum(e):fmt(e);
+  let h=`<div class="band${sel?' sel':''}${dis?' dis':''}" style="height:calc(var(--row) * ${n})"
+      data-row="${e.id}"${dis?` title="${esc(dis)}"`:''}>
     <i class="edge${dif?' diff':sel?' sel':''}"></i>
     <div class="line1">
       ${inline?`<span class="disc" data-act="expand" data-id="${e.id}" style="position:absolute;left:2px">${EXPANDED[e.id]?'▾':'▸'}</span>`:''}
       <span class="labz"><span class="lab">${esc(e.t)}</span>
-      <span class="val${dif?' diff':''}">${esc(e.k==='graph'||e.k==='facts'?e.sm():fmt(e))}</span></span></div>
-    <div class="bodyz" style="${wide?'left:calc(46% + 12px);':''}">${body}</div>
-    <div class="aff">${diffs(e)?`<span class="reset" data-act="reset" data-id="${e.id}"></span>`
+      <span class="val${dif?' diff':''}">${esc(val)}${e.u?`<u>${esc(e.u)}</u>`:''}</span></span></div>
+    <div class="bodyz" style="${wide?'left:calc(var(--labz) + 12px);':''}">${body}</div>
+    <div class="aff">${dif?`<span class="reset" data-act="reset" data-id="${e.id}"></span>`
       :inline?`<span class="chev">${EXPANDED[e.id]?'▾':'▸'}</span>`
-      :(e.p||e.lv)?'<span class="chev">›</span>':''}</div></div>`;
+      :(e.p||lvOf(e).length)?'<span class="chev">›</span>':''}</div></div>`;
   /* THE REACHABILITY LAW: a composite's params render inline, in the Sheet's own
      Row grammar, whenever the Inspector is unavailable. Same painter, same rule. */
-  if(inline&&EXPANDED[e.id]){
-    LINES+=e.p.length;
-    h+=e.p.map(p=>`<div class="row prow" data-row="${p.id}">
-      <span class="labz"><span class="lab">${esc(p.t)}</span>
-        ${['sl'].includes(p.k)?`<span class="val${p.val!==p.d?' diff':''}">${esc(fmt(p))}${p.u?`<u>${p.u}</u>`:''}</span>`:''}</span>
-      <span class="ctlz">${ctlHTML(p)}</span><span class="aff"></span></div>`).join('');
-  }
+  if(inline&&EXPANDED[e.id]) h+=paramRows(e);
   return h;
 }
 
 /* ── sheet ── */
 let LINES=0;   /* every text line the SHEET draws — the density metric, live */
 function renderSheet(){
-  const a=area(), L=ladder();
-  const d=areaDiff(a);
+  const a=area(), L=ladder(), d=areaDiff(a);
   const wrap=document.getElementById('sbodywrap');
   LINES=0;
 
-  const head=(rows,heights)=>document.getElementById('shead').innerHTML=
+  const head=heights=>document.getElementById('shead').innerHTML=
     `<span class="crumb">${a.sec}<span class="sl">/</span><b>${esc(a.title)}</b></span>
      ${d?`<span class="chip a">differs ${d}</span>`:`<span class="chip n">all default</span>`}
      ${L.host==='hidden'?`<span class="chip w">inspector hidden</span>`:''}
+     ${TOAST?`<span class="chip a">${esc(TOAST)}</span>`:''}
      <span class="right">
        <span class="chip ${GRAM==='e'?'w':'a'}">${LINES} text lines</span>
        <span class="chip n">${heights} row height${heights>1?'s':''}</span>
@@ -1031,34 +1391,40 @@ function renderSheet(){
        <span class="chip n">ladder ${L.step}</span>
        <span class="chip n">sheet ${Math.round(L.sheet)}b</span></span>`;
 
-  if(EXPLAINPAGE){ wrap.innerHTML=`<div class="sheetbody"><div class="explainpage">
-      <span class="back" data-act="unexplain">← back to ${esc(a.title)}</span>
-      ${explainHTML(SEL?(E[SEL]||PARAMS[SEL]):null,true)}</div></div>`; head(0,1); return; }
+  if(INLINEPAGE){ const e=SEL?findEntry(SEL):null;
+    wrap.innerHTML=`<div class="sheetbody"><div class="inlinepage">
+      <span class="txtact" data-act="unpage">← back to ${esc(a.title)}</span>
+      <h3>Configure</h3>${configureHTML(e,760)}
+      <h3>Details</h3>${detailsHTML(e)}</div></div>`; head(1); return; }
 
-  if(a.raw==='log'){ wrap.innerHTML=logHTML(); LINES=LOG.length; head(0,1); return; }
+  if(a.raw==='log'){ wrap.innerHTML=logHTML(); LINES=logShown().length; head(1); return; }
 
   const secs=[];
   (a.groups||[]).forEach(g=>{
+    const cnt=cntOf(g);
     let h=`<div class="grp">${esc(g.n)}
-      ${g.cnt?`<span class="cnt">${g.cnt}</span>`:''}
-      ${g.all?`<span class="acts"><span class="txtact">all</span><span class="txtact">none</span></span>`:''}</div>`;
+      ${cnt?`<span class="chip a">${esc(cnt)}</span>`:''}
+      ${g.all?`<span class="acts"><span class="txtact" data-act="allnone" data-g="${esc(g.n)}" data-v="1">all</span>
+               <span class="txtact" data-act="allnone" data-g="${esc(g.n)}" data-v="0">none</span></span>`:''}</div>`;
     const before=LINES;
-    h+=g.e.map(e=>rowHTML(e)).join('');
+    const isEmpty=g.emptyIf?g.emptyIf():!g.e.length;
+    h+=isEmpty?`<div class="empty"><span>${esc(g.emptyMsg||'this list is empty')}</span>
+        ${g.emptyAct?`<span class="txtact" data-act="jump" data-id="${g.emptyAct}">${esc(g.emptyActL)}</span>`:''}</div>`
+      :g.e.map(e=>rowHTML(e)).join('');
+    if(isEmpty) LINES+=1;
     secs.push({h,w:LINES-before});
   });
   if(GRAM==='e'&&a.note){ LINES+=2; secs.push({h:`<div class="note">${esc(a.note)}</div>`,w:2}); }
 
   let inner;
   if(L.cols===1) inner=secs.map(s=>s.h).join('');
-  else{
-    /* greedy balance by row weight, not by group count */
+  else{ /* greedy balance by row weight, not by group count */
     const cs=Array.from({length:L.cols},()=>({h:'',w:0}));
     secs.forEach(s=>{ const c=cs.reduce((m,x)=>x.w<m.w?x:m); c.h+=s.h; c.w+=s.w; });
     inner=`<div class="cols">${cs.map(c=>`<div class="col">${c.h}</div>`).join('')}</div>`;
   }
   wrap.innerHTML=`<div class="sheetbody">${inner}</div>`;
-  /* row heights actually used: E2 = 1 (44) + bands; E = 44 / 76 / 28 */
-  head(0,GRAM==='e'?3:1);
+  head(GRAM==='e'?3:1);
 }
 
 /* ── footer ── */
@@ -1070,220 +1436,327 @@ function renderFoot(){
       <span><span class="kbd">^K</span> search</span>
       <span><span class="kbd">^I</span> inspector: ${L.host}</span>
       <span><span class="kbd">^D</span> reset row</span>
-      <span><span class="kbd">?</span> explain</span>
-      <span><span class="kbd">tab</span> region</span></span>`;
-  document.getElementById('destchip').textContent=
-    E['config.override'].val?'games/1174180.json':'global.json';
+      <span><span class="kbd">?</span> details</span>
+      <span><span class="kbd">↑↓</span> row · <span class="kbd">←→</span> value</span></span>`;
+  document.getElementById('destchip').textContent=v('config.override')?F:G;
+  document.getElementById('hud').classList.toggle('hide',!v('monitor.enabled'));
+  /* the title-bar dot is the ONE place session health is expressed — it was
+     three declared states with only one ever drawn */
+  const nE=LOG.filter(l=>l[1]==='e').length, nW=LOG.filter(l=>l[1]==='w').length;
+  document.getElementById('hdot').className='dot '+(nE?'dgr':nW?'warn':'ok');
+  document.getElementById('hdot').title=nE?nE+' errors captured':nW?nW+' warnings captured':'no issues';
 }
 
-/* ── inspector: EXPLAIN ── */
-function explainHTML(e,page){
+/* ══════════════════════════════════════════════════════════════════════════
+   6. THE INSPECTOR — two generators, no authoring API.
+      CONFIGURE = what this does, and the values you can set.
+      DETAILS   = everything technical the shell can derive.
+      Neither is a panel anyone writes into: both are pure functions of the
+      selected entry's registration.
+   ════════════════════════════════════════════════════════════════════════ */
+const KINDNAME={sw:'switch',ch:'choice',sl:'slider',st:'stepper',tx:'text',bank:'multi-select',
+  facts:'facts',anchor:'composite · anchor',hue:'composite · hue',strip:'composite · fader',
+  graph:'composite · graph',act:'actions',meter:'meter'};
+const KEYLINE={sw:'space toggles · ^D resets',
+  sl:'←→ steps · shift+←→ fine · wheel scrolls · click positions',
+  ch:'←→ cycles · enter opens the list · esc closes it',
+  st:'←→ steps · click ± · ^D resets',
+  tx:'enter commits · esc reverts',
+  bank:'←→ moves · space toggles a chip',
+  anchor:'arrows move the anchor · ^D resets',
+  hue:'←→ rotates the hue · shift+←→ fine',
+  act:'enter runs · a destructive action arms first, then confirms'};
+
+/* an inspector row IS a sheet row at inspector width — same height, same law */
+function irowHTML(x,lane,isPrimary){
+  const dis=off(x), dif=x._parent?x.val!==x.d:deepDiff(x);
+  const asSeg=x.k==='ch'&&segFits(x,lane);
+  const wide=['sl','tx','bank','hue','strip','anchor'].includes(x.k)||(x.k==='ch'&&!asSeg&&optsOf(x).length>0);
+  const showVal=!['ch','tx','act'].includes(x.k);
+  const val=showVal?`<span class="val${dif?' diff':''}">${esc(fmt(x))}${x.u?' '+esc(x.u):''}</span>`:'';
+  const rst=dif?`<span class="reset rst" data-act="reset" data-id="${x.id}" title="reset"></span>`:'';
+  return `<div class="irow${wide?' wide':''}${SEL===x.id?' sel':''}${dis?' dis':''}"
+      data-row="${x.id}"${dis?` title="${esc(dis)}"`:''}>
+    ${wide?`<div class="top"><span class="lab">${esc(x.t)}</span>
+          <span style="margin-left:auto;display:flex;align-items:center;gap:10px">${val}${rst}</span></div>
+        <span class="cz">${ctlHTML(x,lane)}</span>`
+      :`<span class="lab">${esc(x.t)}</span>${val}<span class="cz">${ctlHTML(x,lane)}</span>${rst}`}</div>`;
+}
+
+function configureHTML(e,lane){
   if(!e) return '';
-  const isP=!!e._parent, dif=isP?e.val!==e.d:diffs(e);
-  const kindName={sw:'switch',ch:'choice',sl:'slider',st:'stepper',tx:'text',
-                  facts:'facts',anchor:'composite · anchor',hue:'composite · hue',
-                  strip:'composite · fader',graph:'composite · graph',act:'actions',meter:'meter'}[e.k]||e.k;
-  const kb={sw:'space toggles · ^D resets',sl:'←→ steps · shift+←→ fine · ^click types a number',
-            ch:'←→ cycles · enter opens the list',st:'←→ steps · hold accelerates · enter types',
-            tx:'enter commits · esc reverts'}[e.k]||'↑↓ moves · enter activates';
-  const w=isP?e._parent.w:e.w, ap=isP?e._parent.ap:e.ap;
-  let h=`<div class="itl">${esc(e.t)}<span class="chip n">${kindName}</span>
-     ${isP?`<span class="chip a">param</span>`:''}${dif?`<span class="chip a">differs</span>`:''}</div>
+  lane=lane||(ladder().insp-2*16-40);
+  const isP=!!e._parent, dis=off(e), err=errOf(e), dif=isP?e.val!==e.d:deepDiff(e);
+  let h=`<div class="itl">${esc(e.t)}<span class="chip n">${KINDNAME[e.k]||e.k}</span>
+     ${isP?`<span class="chip a">param</span>`:''}${dif?`<span class="chip a">differs</span>`:''}
+     ${dis?`<span class="chip w">disabled</span>`:''}${err?`<span class="chip d">invalid</span>`:''}</div>
    <div class="iprose">${esc(e.h)}</div>`;
-  if(isDis(e)) h+=`<div class="iprose" style="color:var(--warn-t)">Disabled — ${esc(disMsg(e))}.</div>`;
-  h+=`<dl class="ifacts">
-    <dt>now</dt><dd class="${dif?'acc':''}">${esc(fmt(e))}${e.u?' '+e.u:''}</dd>
-    ${e.d!==undefined?`<dt>default</dt><dd>${esc(fmt(e,e.d))}${e.u?' '+e.u:''}</dd>`:''}
-    ${e.min!==undefined?`<dt>range</dt><dd>${e.min} – ${e.max}${e.st?' · step '+e.st:''}</dd>`:''}
-    ${e.o?`<dt>options</dt><dd>${e.o.map(esc).join(' · ')}</dd>`:''}
-    <dt>key</dt><dd>${esc(e.id)}</dd>
-    ${w?`<dt>writes</dt><dd>${esc(w)}</dd>`:''}
-    ${ap?`<dt>applies</dt><dd>${esc(ap)}</dd>`:''}
-    ${isP?`<dt>parent</dt><dd><span class="ilink" data-act="jump" data-id="${e._parent.id}">${esc(e._parent.t)} →</span></dd>`:''}
-  </dl>`;
-  if(e.rel&&e.rel.length) h+=`<div class="ihd">related</div>`+
-    e.rel.map(r=>`<span class="ilink" data-act="jump" data-id="${r}">${esc(E[r].t)} →</span>`).join('');
-  if(e.hint) h+=`<div class="ihd">at a glance</div><div class="ikey">${esc(e.hint)}</div>`;
-  h+=`<div class="ihd">keyboard</div><div class="ikey">${kb}</div>`;
-  h+=`<div class="iact">${dif?`<span class="btn acc" data-act="reset" data-id="${e.id}">reset to default</span>`:''}
-      <span class="btn" data-act="copykey">copy key</span></div>`;
-  if(page) h+=`<div class="ibudget">Explain reached as a full-sheet page because the Inspector is hidden.
-     <b>Nothing was lost — only simultaneity.</b></div>`;
+  if(dis) h+=`<div class="iprose warn">Disabled — ${esc(dis)}.</div>`;
+  if(err) h+=`<div class="iprose dgr">${esc(err)}.</div>`;
+
+  const own=!['facts','graph','meter'].includes(e.k);
+  if(own){ h+=`<div class="ihd">value</div>`+irowHTML(e,lane,true); }
+  else h+=`<div class="ihd">value</div><div class="ikey">This row is a readout — there is nothing to
+     configure. <span class="acc">.Live()</span> has no bind overload, so a control cannot be
+     constructed here even by mistake. Everything it knows is under <b>Details</b>.</div>`;
+
+  if(e.p&&e.p.length){
+    h+=`<div class="ihd">parameters<span class="chip n">${e.p.length} of 6</span></div>`+
+       e.p.map(p=>irowHTML(p,lane)).join('')+
+       `<div class="ibudget">Every id above is <b>${esc(e.id)}.&lt;leaf&gt;</b> — the Prefix Law.
+         One level deep, six maximum. Searchable in <span class="acc">^K</span>; rendered inline in
+         the Sheet when the Inspector is hidden.</div>`;
+  }
+  h+=`<div class="iact">
+     ${dif?`<span class="verb" data-act="reset" data-id="${e.id}">reset to default</span>`:''}
+     <span class="verb n" data-act="copykey" data-id="${e.id}">copy key</span>
+     ${!isP?`<span class="verb n" data-act="details">details ▸</span>`:''}</div>`;
   return h;
 }
-/* ── inspector: CONFIGURE ── */
-function configureHTML(e){
-  if(!e||!e.p) return '';
-  return `<div class="ihd">parameters — ${e.p.length} of 6 allowed</div>`+
-   e.p.map(p=>{
-     const dif=p.val!==p.d, wide=['sl','ch','tx'].includes(p.k);
-     return `<div class="irow${wide?' wide':''}" data-row="${p.id}">
-       ${wide?`<div class="top"><span class="lab">${esc(p.t)}</span>
-            <span class="val${dif?' diff':''}" style="margin-left:auto">${esc(fmt(p))}${p.u?' '+p.u:''}</span></div>
-          <span class="cz">${ctlHTML(p,true)}</span>`
-         :`<span class="lab">${esc(p.t)}</span><span class="cz">${ctlHTML(p,true)}</span>`}</div>`;
-   }).join('')+
-   `<div class="ibudget">Every id above is <b>${esc(e.id)}.&lt;leaf&gt;</b> — the Prefix Law.
-     One level deep, six maximum. Searchable in <span style="color:var(--acc-txt)">^K</span>;
-     rendered inline in the Sheet when the Inspector is hidden.</div>`;
-}
-/* ── inspector: DIAGNOSE (read-only by type) ── */
-function diagnoseHTML(e){
-  if(!e||!e.lv) return '';
-  let h=`<div class="ihd">live · read-only</div><dl class="ifacts">`+
-    e.lv.map(([k,val])=>`<dt>${esc(k)}</dt><dd>${esc(val)}</dd>`).join('')+`</dl>`;
-  if(e.k==='graph'||e.id==='image.shaders.adaptive_brightness'||e.id==='monitor.mod_fps')
+
+function detailsHTML(e){
+  if(!e) return '';
+  const isP=!!e._parent, dif=isP?e.val!==e.d:deepDiff(e);
+  const w=isP?e._parent.w:e.w, ap=isP?e._parent.ap:e.ap, lv=lvOf(e);
+  const own=!['facts','graph','meter','act'].includes(e.k);
+  let h=`<div class="ihd">binding</div><dl class="ifacts">
+    ${own?`<dt>now</dt><dd class="${dif?'acc':''}">${esc(fmt(e))}${e.u?' '+esc(e.u):''}</dd>`:''}
+    ${e.d!==undefined?`<dt>default</dt><dd>${esc(fmt(e,e.d))}${e.u?' '+esc(e.u):''}</dd>`:''}
+    ${e.min!==undefined?`<dt>range</dt><dd>${e.min} – ${e.max}${e.st?' · step '+e.st:''}${e.u?' '+esc(e.u):''}</dd>`:''}
+    ${e.o?`<dt>options</dt><dd>${optsOf(e).map(esc).join(' · ')||'—'}</dd>`:''}
+    <dt>kind</dt><dd>${KINDNAME[e.k]||e.k}</dd>
+    <dt>key</dt><dd>${esc(e.id)}</dd>
+    ${w?`<dt>writes</dt><dd>${esc(w)}</dd>`:`<dt>writes</dt><dd>nothing — read-only</dd>`}
+    ${ap?`<dt>applies</dt><dd>${esc(ap)}</dd>`:''}
+    ${isP?`<dt>parent</dt><dd><span class="txtact" data-act="jump" data-id="${e._parent.id}">${esc(e._parent.t)} →</span></dd>`:''}
+  </dl>`;
+  if(e.rel&&e.rel.length) h+=`<div class="ihd">related</div>`+
+    e.rel.map(r=>`<span class="txtact blk" data-act="jump" data-id="${r}">${esc(E[r].t)} →</span>`).join('');
+  h+=`<div class="ihd">keyboard</div><div class="ikey">${KEYLINE[e.k]||'↑↓ moves · enter activates'}</div>`;
+
+  if(lv.length) h+=`<div class="ihd">live<span class="chip n">read-only</span></div><dl class="ifacts">`+
+    lv.map(([k,val])=>`<dt>${esc(k)}</dt><dd>${esc(val)}</dd>`).join('')+`</dl>`;
+  else if(['facts','graph','meter'].includes(e.k))
+    h+=`<div class="ihd">live<span class="chip n">read-only</span></div>
+        <div class="empty" style="border:0">nothing connected — the overlay shows no value rather than inventing one</div>`;
+
+  if(e.k==='graph'||e.k==='meter'||e.id==='image.shaders.adaptive_brightness'||e.id==='monitor.mod_fps')
     h+=`<div class="ihd">last 240 frames</div>
         <div class="spark" style="height:52px">${SPARK.map((x,i)=>
           `<b class="${[11,34,52].includes(i)?'sp':''}" style="height:${x}%"></b>`).join('')}</div>`;
   if(e.id==='audio.volume')
-    h+=`<div class="ihd">peak</div><div class="fader"><span class="lr" style="width:100%">
+    h+=`<div class="ihd">peak</div><div class="fader"><span class="lr" style="width:100%;flex:1">
         <i><b style="width:72%"></b></i><i><b style="width:66%"></b></i></span></div>`;
-  const tail=LOG.filter(l=>l[3].includes(e.id.split('.').pop())||l[3].includes(e.t.toLowerCase().split(' ')[0])).slice(-4);
+
+  const leaf=e.id.split('.').pop();
+  const tail=LOG.filter(l=>l[3].includes(leaf)||l[3].includes(e.id)).slice(-4);
   h+=`<div class="ihd">log lines mentioning this key</div>`;
   h+= tail.length? tail.map(l=>`<div class="ilog ${l[1]}">${l[2]} ${esc(l[3].slice(0,140))}</div>`).join('')
      : `<div class="ikey">nothing in the captured buffer.</div>`;
-  h+=`<div class="ibudget">Diagnose accepts <b>no binding</b> — a control cannot be constructed here.
+  h+=`<div class="ibudget">Details accepts <b>no binding</b> — a control cannot be constructed here.
       That is why it is safe to let it hold transient content.</div>`;
   return h;
 }
-/* ── inspector: OVERVIEW (no selection) ── */
+
+/* ── OVERVIEW — what the Inspector does with nothing selected ── */
 function overviewHTML(){
   const a=area(), difEntries=[];
-  (a.groups||[]).forEach(g=>g.e.forEach(e=>{if(diffs(e))difEntries.push(e)}));
+  (a.groups||[]).forEach(g=>g.e.forEach(e=>{if(deepDiff(e))difEntries.push(e)}));
   const n=rowCount(a), np=paramCount(a);
   return `<div class="itl">${a.sec} / ${esc(a.title)}</div>
     <div class="iprose">${esc(a.desc)}</div>
     <div class="ihd">${difEntries.length} of ${n} settings differ from default</div>
     ${difEntries.length?difEntries.map(e=>
-      `<span class="ilink" data-act="jump" data-id="${e.id}">${esc(e.t)} — ${esc(fmt(e))}
+      `<span class="txtact blk" data-act="jump" data-id="${e.id}">${esc(e.t)} — ${esc(fmt(e))}
         <span style="color:var(--t52)">(default ${esc(fmt(e,e.d))})</span></span>`).join('')
      :`<div class="ikey">nothing changed — this category is at stock.</div>`}
     <div class="ihd">writes to</div>
-    <dl class="ifacts"><dt>file</dt><dd>${E['config.override'].val?'games/1174180.json':'global.json'}</dd>
-      <dt>reason</dt><dd>${E['config.override'].val?'Override Global Config is on for this game.':'No per-game override for app 1174180.'}</dd></dl>
+    <dl class="ifacts"><dt>file</dt><dd>${v('config.override')?F:G}</dd>
+      <dt>reason</dt><dd>${v('config.override')?'Override global config is on for this game.':'No per-game override for app 1174180.'}</dd></dl>
     ${a.live?`<div class="ihd">live</div><dl class="ifacts">${
       a.live.map(([k,val])=>`<dt>${esc(k)}</dt><dd>${esc(val)}</dd>`).join('')}</dl>`:''}
     ${a.note?`<div class="ihd">note</div><div class="ikey">${esc(a.note)}</div>`:''}
-    <div class="iact"><span class="btn acc" data-act="resetcat">reset category</span>
-      <span class="btn">copy from another game</span><span class="btn">save as preset</span></div>
+    <div class="iact"><span class="verb" data-act="resetcat">reset category</span>
+      <span class="verb n" data-act="noop">copy from another game</span></div>
     <div class="ibudget">sheet <b>${n} rows</b> · inspector <b>${np} params</b> · <b>0 unreachable</b>
       <br>Every param is reachable with the Inspector closed, and findable with ^K.</div>`;
 }
 
 function renderInspector(){
   const L=ladder(), i=document.getElementById('insp');
-  if(L.host==='hidden'){ i.style.display='none'; return; }
+  document.querySelectorAll('.reopen').forEach(x=>x.remove());
+  if(L.host==='hidden'){
+    i.style.display='none';
+    /* E1's collapsed visual: a named vertical spine that restores the region */
+    const r=document.createElement('div'); r.className='reopen'; r.dataset.act='hostshow';
+    r.title='show the inspector · Ctrl+I'; r.textContent='inspector ›';
+    document.getElementById('slabbody').appendChild(r);
+    return;
+  }
   i.style.display='flex';
   i.className='insp'+(L.host==='drawer'?' drawer':'');
   i.style.flexBasis=L.insp+'px'; i.style.width=L.insp+'px';
 
-  const e=SEL?(E[SEL]||PARAMS[SEL]):null;
+  if(area().raw==='log'&&!SEL){ i.innerHTML=logInspector(); return; }
+  const e=SEL?findEntry(SEL):null;
   if(!e){ i.innerHTML=`<div class="modestrip"><b class="on">OVERVIEW</b>
       <span class="glyph ix" data-act="hosthide" title="hide inspector · ^I">✕</span></div>
       <div class="inspbody">${overviewHTML()}</div>`; return; }
 
-  const hasCfg=!!(e.p&&e.p.length), hasDia=!!(e.lv&&e.lv.length);
-  let m=MODE;
-  if(m==='configure'&&!hasCfg) m='explain';
-  if(m==='diagnose'&&!hasDia) m='explain';
-  const body=m==='configure'?configureHTML(e):m==='diagnose'?diagnoseHTML(e):explainHTML(e);
+  const own=!['facts','graph','meter'].includes(e.k);
+  const nCfg=(own?1:0)+(e.p?e.p.length:0);
+  const nDet=lvOf(e).length+(e.o?optsOf(e).length?1:0:0)+4;
+  const m=MODE==='details'?'details':'configure';
   i.innerHTML=`<div class="modestrip">
-      <b class="${m==='explain'?'on':''}"  data-act="mode" data-m="explain">EXPLAIN</b>
-      <b class="${hasCfg?(m==='configure'?'on':''):'off'}" ${hasCfg?'data-act="mode" data-m="configure"':''}>CONFIGURE</b>
-      <b class="${hasDia?(m==='diagnose'?'on':''):'off'}"  ${hasDia?'data-act="mode" data-m="diagnose"':''}>DIAGNOSE</b>
+      <b class="${m==='configure'?'on':''}${own?'':' ro'}" data-act="mode" data-m="configure">CONFIGURE
+        <span class="ct">${own?nCfg:'ro'}</span></b>
+      <b class="${m==='details'?'on':''}" data-act="mode" data-m="details">DETAILS
+        <span class="ct">${nDet}</span></b>
       <span class="glyph ix" data-act="hosthide" title="hide inspector · ^I">✕</span></div>
-    <div class="inspbody">${body}</div>`;
+    <div class="inspbody">${m==='configure'?configureHTML(e):detailsHTML(e)}</div>`;
 }
 
-/* ── the LOG raw sheet ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   7. THE LOG — a Raw sheet whose filter bar is rendered from the registry
+   ════════════════════════════════════════════════════════════════════════ */
 const LOG=[
-[1583,'i','00:41:02.118','steamcompmgr: [focus] window 0x00c00007 "ELDEN RING" is now the focused app'],
-[1584,'i','00:41:02.118','steamcompmgr: [focus] override 0x01400012 (steam overlay) kept above focus'],
-[1585,'i','00:41:02.204','wlserver: xwayland ctx 0 — client 41217 bound wl_surface@84'],
-[1586,'i','00:41:03.001','gamescope: applying config games/1174180.json (override active)'],
-[1587,'i','00:41:03.002','gamescope: display.filter=fsr display.sharpness=5 display.scaler=integer'],
-[1588,'w','00:41:03.554','vulkan: swapchain out of date, recreating for connector DP-1 (3840x2160@138)'],
-[1589,'i','00:41:03.612','vulkan: selecting physical device \'AMD Radeon RX 7900 XTX (RADV NAVI31)\''],
-[1590,'i','00:41:03.612','vulkan: supported DRM formats: ARGB8888 XRGB8888 ABGR2101010 XBGR2101010 NV12'],
-[1591,'i','00:41:04.190','reshade: compiled gamescope-ritz.fx in 41 ms — 3 techniques, 0 warnings'],
-[1592,'i','00:41:04.191','reshade: technique adaptive_brightness enabled (strength 0.78, target 0.42)'],
-[1593,'i','00:41:05.770','pipewire: node 244 appeared — eldenring.exe (wine) [pid 40217] Stream/Output/Audio'],
-[1594,'i','00:41:05.771','audio: matched game stream by process id — 244'],
-[1595,'i','00:41:06.330','drm: connector DP-1 vrr_capable=1, display.adaptive_sync enabled (48-138 Hz)'],
-[1596,'i','00:41:07.008','overlay: settings surface 1560x928 @ display_scale 1.00, atlas rebuilt (6 roles)'],
-[1597,'i','00:41:09.442','monitor.sampling: 500 ms · 240-frame window'],
-[1598,'w','00:41:11.019','wlserver: DRM lease released by client 41217 before commit — ignoring'],
-[1599,'i','00:41:12.606','steamcompmgr: [focus] keyboard focus re-applied to preserved subwindow 0x00c0000b'],
-[1600,'i','00:41:14.221','gamescope: display.fps_limit 0 (unlimited)'],
-[1601,'i','00:41:16.884','steamcompmgr: focus changed — 0x00c00007 keeps input focus'],
-[1602,'i','00:41:17.550','vulkan: composite pass 2 (preemptive upscale, display.filter != linear)'],
-[1603,'i','00:41:18.203','vulkan: queue submit 184213 — 2 layers, 1 overlay, 1 cursor'],
-[1604,'e','00:41:18.204','vulkan: vkQueueSubmit failed with VK_ERROR_DEVICE_LOST while submitting the composite command buffer for connector DP-1 (frame 184213)'],
-[1605,'e','00:41:18.204','vulkan: device lost — attempting to recreate the compositor device'],
-[1606,'w','00:41:18.900','vulkan: recreated device, 4 textures re-imported, 1 dropped'],
-[1607,'i','00:41:19.640','gamescope: composite resumed after 1.44 s'],
-[1608,'i','00:41:21.117','monitor.mod_fps: 1% 118 · 0.1% 96 · avg 139.4 over the last 60 s'],
-[1609,'i','00:41:23.802','pipewire: node 334 appeared — Floorp (floorp) [pid 3922017]'],
-[1610,'i','00:41:24.010','audio.stream: keeping manually selected stream 244 (override active for app 1174180)'],
-[1611,'i','00:41:26.552','overlay: notification "Applied profile \'Quality 4K\'" (bottom-right, 4.0 s)'],
-[1612,'i','00:41:28.881','config: enqueued routed write → games/1174180.json (2 keys)'],
-[1613,'i','00:41:28.902','config: flushed games/1174180.json (1.2 kB)'],
-[1614,'i','00:41:31.400','steamcompmgr: [focus] cursor grab released — display.force_grab_cursor=0'],
-[1615,'i','00:41:33.771','monitor.font_size 18 — module widths fps 186, cpu 214, gpu 268 → shared 268'],
-[1616,'i','00:41:35.006','gamescope: display.adaptive_sync engaged — refresh following 96-138 Hz'],
-[1617,'i','00:41:37.220','reshade: adaptive_brightness.max_gain 1.60 → 1.24 (live)'],
-[1618,'i','00:41:39.554','vulkan: composite 7.04 ms (upscale 2.11, effects 0.41, overlay 0.18)']];
-let LOGSEL=1604;
+[1583,'i','00:41:02.118','steamcompmgr: [focus] window 0x00c00007 "ELDEN RING" is now the focused app','gamescope'],
+[1584,'i','00:41:02.118','steamcompmgr: [focus] override 0x01400012 (steam overlay) kept above focus','gamescope'],
+[1585,'i','00:41:02.204','wlserver: xwayland ctx 0 — client 41217 bound wl_surface@84','wayland'],
+[1586,'i','00:41:03.001','gamescope: applying config games/1174180.json (override active)','gamescope'],
+[1587,'i','00:41:03.002','gamescope: display.filter=fsr display.sharpness=5 display.scaler=integer','gamescope'],
+[1588,'w','00:41:03.554','vulkan: swapchain out of date, recreating for connector DP-1 (3840x2160@138)','vulkan'],
+[1589,'i','00:41:03.612','vulkan: selecting physical device \'AMD Radeon RX 7900 XTX (RADV NAVI31)\'','vulkan'],
+[1590,'i','00:41:03.612','vulkan: supported DRM formats: ARGB8888 XRGB8888 ABGR2101010 XBGR2101010 NV12','vulkan'],
+[1591,'i','00:41:04.190','reshade: compiled gamescope-ritz.fx in 41 ms — 3 techniques, 0 warnings','gamescope'],
+[1592,'i','00:41:04.191','reshade: technique adaptive_brightness enabled (strength 0.78, target 0.42)','gamescope'],
+[1593,'i','00:41:05.770','pipewire: node 244 appeared — eldenring.exe (wine) [pid 40217] Stream/Output/Audio','game'],
+[1594,'i','00:41:05.771','audio: matched game stream by process id — 244','gamescope'],
+[1595,'i','00:41:06.330','drm: connector DP-1 vrr_capable=1, display.adaptive_sync enabled (48-138 Hz)','gamescope'],
+[1596,'i','00:41:07.008','overlay: settings surface 1560x928 @ display_scale 1.00, atlas rebuilt (6 roles)','gamescope'],
+[1597,'i','00:41:09.442','monitor.sampling_facts: 500 ms · 240-frame window','gamescope'],
+[1598,'w','00:41:11.019','wlserver: DRM lease released by client 41217 before commit — ignoring','wayland'],
+[1599,'i','00:41:12.606','steamcompmgr: [focus] keyboard focus re-applied to preserved subwindow 0x00c0000b','gamescope'],
+[1600,'i','00:41:14.221','gamescope: display.fps_limit 0 (unlimited)','gamescope'],
+[1601,'i','00:41:16.884','steamcompmgr: focus changed — 0x00c00007 keeps input focus','gamescope'],
+[1602,'i','00:41:17.550','vulkan: composite pass 2 (preemptive upscale, display.filter != linear)','vulkan'],
+[1603,'i','00:41:18.203','vulkan: queue submit 184213 — 2 layers, 1 overlay, 1 cursor','vulkan'],
+[1604,'e','00:41:18.204','vulkan: vkQueueSubmit failed with VK_ERROR_DEVICE_LOST while submitting the composite command buffer for connector DP-1 (frame 184213)','vulkan'],
+[1605,'e','00:41:18.204','vulkan: device lost — attempting to recreate the compositor device','vulkan'],
+[1606,'w','00:41:18.900','vulkan: recreated device, 4 textures re-imported, 1 dropped','vulkan'],
+[1607,'i','00:41:19.640','gamescope: composite resumed after 1.44 s','gamescope'],
+[1608,'i','00:41:21.117','monitor.mod_fps: 1% 118 · 0.1% 96 · avg 139.4 over the last 60 s','gamescope'],
+[1609,'i','00:41:23.802','pipewire: node 334 appeared — Floorp (floorp) [pid 3922017]','game'],
+[1610,'i','00:41:24.010','audio.stream: keeping manually selected stream 244 (override active for app 1174180)','gamescope'],
+[1611,'i','00:41:26.552','overlay: notification "Applied profile \'Quality 4K\'" (bottom-right, 4.0 s)','gamescope'],
+[1612,'i','00:41:28.881','config: enqueued routed write → games/1174180.json (2 keys)','gamescope'],
+[1613,'i','00:41:28.902','config: flushed games/1174180.json (1.2 kB)','gamescope'],
+[1614,'i','00:41:31.400','steamcompmgr: [focus] cursor grab released — display.force_grab_cursor=0','gamescope'],
+[1615,'i','00:41:33.771','monitor.font_size 18 — module widths fps 186, cpu 214, gpu 268 → shared 268','gamescope'],
+[1616,'i','00:41:35.006','gamescope: display.adaptive_sync engaged — refresh following 96-138 Hz','gamescope'],
+[1617,'i','00:41:37.220','reshade: adaptive_brightness.max_gain 1.60 → 1.24 (live)','gamescope'],
+[1618,'i','00:41:39.554','vulkan: composite 7.04 ms (upscale 2.11, effects 0.41, overlay 0.18)','vulkan']];
+const SEVNAME={e:'error',w:'warn',i:'info'};
+function logShown(){
+  const src=v('log.sources')||[], sev=v('log.severity')||[], q=(v('log.filter')||'').toLowerCase();
+  return LOG.filter(l=>src.includes(l[4])&&sev.includes(SEVNAME[l[1]])&&(!q||l[3].toLowerCase().includes(q)));
+}
+function hilite(tx,q){
+  if(!q) return esc(tx);
+  const i=tx.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0) return esc(tx);
+  return esc(tx.slice(0,i))+'<span class="hl">'+esc(tx.slice(i,i+q.length))+'</span>'+esc(tx.slice(i+q.length));
+}
 function logHTML(){
-  return `<div class="filterbar">
-     <span class="seg" style="width:190px"><b class="on">gamescope</b><b>game</b></span>
-     <span class="tin" style="width:220px">filter…</span>
-     <span class="chip d">err 2</span><span class="chip w">warn 3</span><span class="chip n">info 31</span>
-     <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
-       <span style="font:400 11.5px var(--mono);color:var(--t52)">auto-scroll</span>
-       <span class="sw on"><i></i></span><span class="btn">copy</span></span></div>
-   <div class="logbody">${LOG.map(([n,s,t,x])=>
+  const rows=logShown(), q=v('log.filter')||'';
+  /* the bar is rendered FROM THE REGISTRY — same painter, different host.
+     The chips label themselves, so the bar carries no field labels (B's rule). */
+  const bar=['log.sources','log.severity','log.filter'].map(id=>
+    `<span class="f${SEL===id?' sel':''}" data-row="${id}">${ctlHTML(E[id],260)}</span>`).join('');
+  return `<div class="filterbar">${bar}
+     <span class="fr">
+       <span class="chip d">err ${LOG.filter(l=>l[1]==='e').length}</span>
+       <span class="chip w">warn ${LOG.filter(l=>l[1]==='w').length}</span>
+       <span class="chip n">${rows.length} / ${LOG.length}</span>
+       <span class="f${SEL==='log.autoscroll'?' sel':''}" data-row="log.autoscroll">
+         <span class="fl">tail</span>${ctlHTML(E['log.autoscroll'],60)}</span>
+       <span class="verb n" data-act="noop">copy</span></span></div>
+   <div class="logbody" id="logbody">${rows.length?rows.map(([n,s,t,x])=>
      `<div class="ll ${s==='e'?'e':s==='w'?'w':''}${n===LOGSEL?' sel':''}" data-log="${n}">
        <span class="ln">${n}</span><span class="sv"></span>
-       <span class="tx"><span class="tm">${t}</span>  ${esc(x)}</span></div>`).join('')}</div>`;
+       <span class="tx"><span class="tm">${t}</span>  ${hilite(x,q)}</span></div>`).join('')
+     :`<div class="empty">no line matches the current filter
+        <span class="txtact" data-act="logreset">clear the filter</span></div>`}</div>`;
 }
 function logInspector(){
-  const l=LOG.find(x=>x[0]===LOGSEL); if(!l) return '';
-  const sev={e:'error',w:'warning',i:'info'}[l[1]];
-  return `<div class="itl">line ${l[0]}<span class="chip ${l[1]==='e'?'d':l[1]==='w'?'w':'n'}">${sev}</span></div>
-    <div class="iprose" style="font-family:var(--mono);font-size:12px;line-height:1.6">${esc(l[3])}</div>
-    <dl class="ifacts"><dt>time</dt><dd>${l[2]}</dd><dt>severity</dt><dd>${sev}</dd>
-      <dt>source</dt><dd>gamescope</dd><dt>subsystem</dt><dd>${esc(l[3].split(':')[0])}</dd></dl>
+  const l=LOG.find(x=>x[0]===LOGSEL);
+  const body=!l?`<div class="ikey">no line selected.</div>`:
+   `<div class="itl">line ${l[0]}<span class="chip ${l[1]==='e'?'d':l[1]==='w'?'w':'n'}">${SEVNAME[l[1]]}</span>
+      <span class="chip n">${esc(l[4])}</span></div>
+    <div class="iprose mono">${esc(l[3])}</div>
+    <dl class="ifacts"><dt>time</dt><dd>${l[2]}</dd><dt>severity</dt><dd>${SEVNAME[l[1]]}</dd>
+      <dt>source</dt><dd>${esc(l[4])}</dd><dt>subsystem</dt><dd>${esc(l[3].split(':')[0])}</dd></dl>
     ${l[1]==='e'?`<div class="ihd">known pattern</div><div class="iprose">VK_ERROR_DEVICE_LOST during composite
       submission. gamescope recreates the device and re-imports textures; a 1–2 s freeze is expected and
       the session survives. Repeated occurrences point at a driver or power-management fault.</div>`:''}
-    <div class="iact"><span class="btn">copy line</span><span class="btn">filter to this subsystem</span></div>`;
+    <div class="iact"><span class="verb n" data-act="noop">copy line</span>
+      <span class="verb n" data-act="logonly" data-v="${esc(l[4])}">filter to ${esc(l[4])}</span></div>`;
+  return `<div class="modestrip">
+      <b class="on">LINE</b><b data-act="jump" data-id="log.sources">FILTER<span class="ct">4</span></b>
+      <span class="glyph ix" data-act="hosthide" title="hide inspector · ^I">✕</span></div>
+    <div class="inspbody">${body}</div>`;
 }
 
 /* ── frametime data ── */
 const SPARK=Array.from({length:60},(_,i)=>[11,34,52].includes(i)?100
   :33+Math.round(30*Math.abs(Math.sin(i*.7))+14*Math.abs(Math.sin(i*.23))));
 document.getElementById('ftg').innerHTML=SPARK.map((x,i)=>
-  `<b class="${[11,34,52].includes(i)?'sp':''}" style="height:${x}%"></b>`).join('');
+  `<b class="${[11,34,52].includes(i)?'bar-w':'bar-a'}" style="height:${x}%;width:2px"></b>`).join('');
 
 /* ══════════════════════════════════════════════════════════════════════════
-   5. THE COMMAND PALETTE — entries AND params, from the same registry
+   8. ONE MUTATOR.  Every control, every keystroke and the palette all change
+      values through these two functions — which is why the row, the value
+      column, the inspector, the differs count, the palette's live value and
+      every dependent enable/disable can never disagree.
+   ════════════════════════════════════════════════════════════════════════ */
+function setVal(id,val){
+  const e=findEntry(id); if(!e) return;
+  e.val=val;
+  if(id==='overlay.display_scale'){ SCALE=e.val; }
+  if(id==='overlay.accent_hue'||id==='overlay.accent_hue.chroma'){
+    HUE=v('overlay.accent_hue'); applyHue(HUE,E['overlay.accent_hue'].p[0].val); }
+  syncBar();
+}
+function adjust(e,dir,fine){
+  if(!e||off(e)) return false;
+  switch(e.k){
+   case 'sw': setVal(e.id,dir>0); return true;
+   case 'ch':{const o=optsOf(e); if(!o.length) return false;
+     setVal(e.id,o[(o.indexOf(e.val)+dir+o.length)%o.length]); return true;}
+   case 'sl':{const st=fine?e.st/10:e.st;
+     setVal(e.id,+Math.max(e.min,Math.min(e.max,e.val+dir*st)).toFixed(4)); return true;}
+   case 'st': setVal(e.id,Math.max(e.min,Math.min(e.max,+(e.val+dir*e.st).toFixed(4)))); return true;
+   case 'hue': setVal(e.id,(e.val+dir*(fine?1:6)+360)%360); return true;
+   case 'strip': setVal(e.id,+Math.max(-60,Math.min(0,e.val+dir*(fine?.1:1))).toFixed(1)); return true;
+   case 'anchor':{const a=e.val.slice(); a[1]=Math.max(0,Math.min(2,a[1]+dir)); setVal(e.id,a); return true;}
+  }
+  return false;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   9. THE COMMAND PALETTE — entries AND params, from the same registry
    ════════════════════════════════════════════════════════════════════════ */
 function palItems(){
   const out=[];
   ORDER.forEach(e=>{
-    if(e.k==='act') return;
     out.push({id:e.id,t:e.t,area:e._area,path:e._area.sec+' / '+e._area.title,
-      hay:(e.t+' '+e.id+' '+(e.kw||'')).toLowerCase(),val:fmt(e),param:false,diff:diffs(e)});
+      hay:(e.t+' '+e.id+' '+(e.kw||'')).toLowerCase(),param:false});
     (e.p||[]).forEach(p=>out.push({id:p.id,t:e.t+' ▸ '+p.t,area:e._area,
       path:e._area.sec+' / '+e._area.title,
-      hay:(p.t+' '+p.id+' '+e.t).toLowerCase(),val:fmt(p),param:true,diff:p.val!==p.d}));
+      hay:(p.t+' '+p.id+' '+e.t+' '+(e.kw||'')).toLowerCase(),param:true}));
   });
   return out;
 }
-/* Direction B's scorer, minus the highlight positions: exact title hit beats an
-   id hit beats a keyword hit beats a subsequence. Ties keep registration order. */
 function score(x,q){
   if(!q) return 0;
   const t=x.t.toLowerCase(), id=x.id.toLowerCase();
@@ -1292,64 +1765,75 @@ function score(x,q){
   if(id.includes(q))        return 2;
   if(x.hay.includes(q))     return 3;
   let i=0; for(const c of q){ i=x.hay.indexOf(c,i); if(i<0) return -1; i++; }
-  return 6;                                     // subsequence only — last
+  return 6;
 }
 function renderPal(){
   const q=PALQ.trim().toLowerCase();
-  const items=palItems().map(x=>(x._s=score(x,q),x)).filter(x=>x._s>=0)
-    .sort((a,b)=>a._s-b._s);
+  const items=palItems().map(x=>(x._s=score(x,q),x)).filter(x=>x._s>=0).sort((a,b)=>a._s-b._s);
   PALSEL=Math.max(0,Math.min(PALSEL,items.length-1));
   document.getElementById('palcount').textContent=
     `${AREAS.length} areas · ${ORDER.length} settings · ${Object.keys(PARAMS).length} params`;
   document.getElementById('palres').innerHTML=items.length
-    ? items.slice(0,60).map((x,i)=>`<div class="r${i===PALSEL?' on':''}" data-pal="${x.id}" data-i="${i}">
-        <span class="p">${esc(x.path)}</span><span class="n">${esc(x.t)}</span>
+    ? items.slice(0,60).map((x,i)=>{const e=findEntry(x.id), d=e._parent?e.val!==e.d:deepDiff(e);
+        return `<div class="r${i===PALSEL?' on':''}" data-pal="${x.id}" data-i="${i}">
+        <span class="p">${esc(x.path)}</span><span class="n">${hilite(x.t,q)}</span>
         ${x.param?'<span class="chip a">param</span>':''}
-        ${x.diff?'<span class="chip a">differs</span>':''}
-        <span class="v">${esc(x.val)}</span></div>`).join('')
-    : `<div class="empty2">nothing matches “${esc(PALQ)}”.</div>`;
+        ${off(e)?'<span class="chip w">disabled</span>':''}
+        ${d?'<span class="chip a">differs</span>':''}
+        <span class="v">${esc(fmt(e))}${e.u?' '+esc(e.u):''}</span></div>`;}).join('')
+    : `<div class="empty2">nothing matches “${esc(PALQ)}”. Every setting and every parameter is in
+        this index — if it is not here, it does not exist.</div>`;
   window._palItems=items;
+  const on=document.querySelector('.pal .r.on'); if(on) on.scrollIntoView({block:'nearest'});
 }
 function palJump(id){
   const p=PARAMS[id];
   if(p){ AREA=p._area.id; SEL=p._parent.id; MODE='configure';
          if(ladder().host==='hidden') EXPANDED[p._parent.id]=true; }
   else { const e=E[id]; if(!e) return; AREA=e._area.id; SEL=id;
-         MODE=(e.k==='facts'||e.k==='graph')?'diagnose':'explain'; }
-  PALON=false; EXPLAINPAGE=false; render();
+         MODE=['facts','graph','meter'].includes(e.k)?'details':'configure'; }
+  PALON=false; INLINEPAGE=false; render();
+  const el=document.querySelector(`[data-row="${id}"]`)||document.querySelector(`[data-row="${p?p._parent.id:id}"]`);
+  const sb=document.querySelector('.sheetbody');
+  if(el&&sb) sb.scrollTop=Math.max(0,el.offsetTop-90);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   6. RENDER + FIT
+   10. RENDER + FIT
    ════════════════════════════════════════════════════════════════════════ */
 function render(){
-  const L=ladder();
-  const slab=document.getElementById('slab');
+  const L=ladder(), slab=document.getElementById('slab');
   slab.style.width=L.Wb+'px'; slab.style.height=L.Hb+'px'; slab.style.transform='scale('+SCALE+')';
-  renderRail(); renderSheet(); renderFoot(); renderInspector(); drawThread();
-  if(area().raw==='log'&&L.host!=='hidden'&&!EXPLAINPAGE){
-    const i=document.getElementById('insp');
-    i.innerHTML=`<div class="modestrip"><b class="on">EXPLAIN</b><b class="off">CONFIGURE</b>
-        <b class="off">DIAGNOSE</b><span class="glyph ix" data-act="hosthide">✕</span></div>
-      <div class="inspbody">${logInspector()}</div>`;
-  }
+  slab.classList.toggle('egram',GRAM==='e');
+  renderRail(); renderSheet(); renderFoot(); renderInspector(); renderDD();
   document.getElementById('palwrap').classList.toggle('on',PALON);
   if(PALON) renderPal();
   document.getElementById('host').textContent=L.host+(HOST==='hidden'?' (forced)':'');
   document.getElementById('ghost').classList.toggle('on',L.host!=='column');
   document.getElementById('gpal').classList.toggle('on',PALON);
+  const ti=document.getElementById('txin');
+  if(ti){ ti.focus(); ti.setSelectionRange(EDIT.buf.length,EDIT.buf.length); }
+  const lb=document.getElementById('logbody');
+  if(lb&&v('log.autoscroll')) lb.scrollTop=lb.scrollHeight;
 }
-/* one AddLine in the real thing: the active rail item, threaded into the breadcrumb */
-function drawThread(){
-  const body=document.querySelector('.body'), on=document.querySelector('.ri.on');
-  body.querySelectorAll('.thread').forEach(x=>x.remove());
-  if(!on) return;
-  const L=ladder(), y=on.offsetTop+20, hx=L.rail, hy=28;
-  const mk=(s)=>{const d=document.createElement('i');d.className='thread';
-    Object.assign(d.style,s);body.appendChild(d);};
-  mk({left:hx+'px',top:y+'px',width:'20px',height:'1px'});
-  mk({left:(hx+20)+'px',top:Math.min(y,hy)+'px',width:'1px',height:Math.abs(y-hy)+'px'});
-  mk({left:(hx+20)+'px',top:hy+'px',width:'12px',height:'1px'});
+/* the dropdown popup is shell furniture, anchored to the trigger in base units */
+function renderDD(){
+  document.querySelectorAll('.ddpop').forEach(x=>x.remove());
+  if(!DDOPEN) return;
+  const e=findEntry(DDOPEN); if(!e) return;
+  const trig=document.querySelector(`[data-act="dd"][data-id="${DDOPEN}"]`);
+  const slab=document.getElementById('slab'); if(!trig) return;
+  const tr=trig.getBoundingClientRect(), sr=slab.getBoundingClientRect();
+  const pop=document.createElement('div'); pop.className='ddpop';
+  pop.innerHTML=optsOf(e).map(o=>`<s class="${o===e.val?'on':''}" data-act="ddpick" data-id="${DDOPEN}"
+      data-v="${esc(o)}"><span class="tick">${o===e.val?'●':''}</span>${esc(o)}</s>`).join('')
+    ||`<div class="empty2">no options</div>`;
+  slab.appendChild(pop);
+  const right=(sr.right-tr.right)/SCALE, top=(tr.bottom-sr.top)/SCALE;
+  const maxH=(sr.bottom-tr.bottom)/SCALE-12;
+  pop.style.right=Math.max(0,right)+'px';
+  pop.style.top=top+'px';
+  pop.style.maxHeight=Math.max(120,Math.min(280,maxH))+'px';
 }
 function fit(){
   const vp=document.getElementById('vp'), st=document.getElementById('stage');
@@ -1359,79 +1843,137 @@ function fit(){
 addEventListener('resize',fit);
 
 /* ══════════════════════════════════════════════════════════════════════════
-   7. INTERACTION
+   11. INTERACTION
    ════════════════════════════════════════════════════════════════════════ */
 const stage=document.getElementById('stage');
-function findEntry(id){ return E[id]||PARAMS[id]; }
 function setSel(id){
   const e=findEntry(id); if(!e) return;
   SEL=id;
-  MODE=(e.k==='facts'||e.k==='graph'||(!e.p&&e.lv))?'diagnose':'explain';
+  MODE=['facts','graph','meter'].includes(e.k)?'details':'configure';
 }
+function commitEdit(keep){
+  if(!EDIT) return;
+  if(keep) setVal(EDIT.id,EDIT.buf);
+  EDIT=null;
+}
+const ACT={
+  profApply(){ const p=PROFILES.find(x=>x.name===v('profiles.list')); if(!p) return;
+    Object.keys(p.keys).forEach(k=>{ if(E[k]) setVal(k,p.keys[k]); });
+    TOAST='applied '+p.name; },
+  profDelete(){ const n=v('profiles.list');
+    PROFILES=PROFILES.filter(x=>x.name!==n);
+    E['profiles.list'].val=PROFILES.length?PROFILES[0].name:'';
+    TOAST='deleted '+n; },
+  profSave(){ const n=v('profiles.name'); if(!n) return;
+    const keys={}; ORDER.forEach(e=>{ if(e.w&&deepDiff(e)&&!Array.isArray(e.val)) keys[e.id]=e.val; });
+    PROFILES.push({name:n,made:'2026-08-23 '+new Date().toTimeString().slice(0,5),keys});
+    E['profiles.list'].val=n; setVal('profiles.name','');
+    TOAST='saved '+n+' ('+Object.keys(keys).length+' keys)'; },
+  noop(){ TOAST='(mockup — no side effect)'; }
+};
+stage.addEventListener('mousedown',ev=>{
+  /* clicking anywhere outside an open popup or an open editor closes it */
+  if(DDOPEN&&!ev.target.closest('.ddpop')&&!ev.target.closest('[data-act="dd"]')){ DDOPEN=null; render(); }
+  if(EDIT&&!ev.target.closest('.tin')){ commitEdit(true); render(); }
+},true);
 stage.addEventListener('click',ev=>{
   const t=ev.target;
   const act=t.closest('[data-act]'), row=t.closest('[data-row]'),
         ri=t.closest('[data-a]'), pal=t.closest('[data-pal]'), lg=t.closest('[data-log]');
-
+  TOAST='';
   if(pal){ palJump(pal.dataset.pal); return; }
-  if(ri){ AREA=ri.dataset.a; SEL=null; EXPLAINPAGE=false; render(); return; }
-  if(lg){ LOGSEL=+lg.dataset.log; render(); return; }
+  if(ri){ AREA=ri.dataset.a; SEL=null; INLINEPAGE=false; ARMED=null; render(); return; }
+  if(lg){ LOGSEL=+lg.dataset.log; SEL=null; render(); return; }
 
   if(act){
     const a=act.dataset.act, id=act.dataset.id, e=findEntry(id);
     ev.stopPropagation();
+    if(a!=='verb') ARMED=null;
     switch(a){
-      case 'sw':    e.val=!e.val; break;
-      case 'ch':    e.val=act.dataset.v; break;
-      case 'dd':    e.val=e.o[(e.o.indexOf(e.val)+1)%e.o.length]; break;
-      case 'st-':   e.val=Math.max(e.min,+(e.val-e.st).toFixed(4)); break;
-      case 'st+':   e.val=Math.min(e.max,+(e.val+e.st).toFixed(4)); break;
-      case 'reset': if(e.k==='anchor') e.val=e.d.slice(); else e.val=e.d; break;
-      case 'anchor':e.val=[+act.dataset.r,+act.dataset.c]; break;
-      case 'hueset':e.val=+act.dataset.v; HUE=e.val; applyHue(HUE);
-                    document.getElementById('hu').value=HUE;
-                    document.getElementById('huv').textContent=HUE+'°'; break;
+      case 'sw':    setVal(id,!e.val); break;
+      case 'ch':    setVal(id,act.dataset.v); break;
+      case 'dd':    DDOPEN=DDOPEN===id?null:id; break;
+      case 'ddpick':setVal(id,act.dataset.v); DDOPEN=null; break;
+      case 'st-':   adjust(e,-1); break;
+      case 'st+':   adjust(e,+1); break;
+      case 'bank':{ const s=e.val.slice(), x=act.dataset.v, i=s.indexOf(x);
+                    if(i<0) s.push(x); else s.splice(i,1);
+                    setVal(id,optsOf(e).filter(o=>s.includes(o))); break; }
+      case 'tx':    EDIT={id,buf:e.val}; break;
+      case 'reset': resetEntry(e); if(id.startsWith('overlay.')) setVal(id,e.val); break;
+      case 'anchor':setVal(id,[+act.dataset.r,+act.dataset.c]); break;
+      case 'hueset':setVal(id,+act.dataset.v); break;
       case 'expand':EXPANDED[id]=!EXPANDED[id]; break;
       case 'mode':  MODE=act.dataset.m; render(); return;
-      case 'jump':  setSel(id); if(E[id]) AREA=E[id]._area.id; EXPLAINPAGE=false; break;
-      case 'resetcat': (area().groups||[]).forEach(g=>g.e.forEach(x=>{
-                       if(x.k==='anchor') x.val=x.d.slice(); else if(x.d!==undefined) x.val=x.d;
-                       (x.p||[]).forEach(p=>p.val=p.d); })); break;
+      case 'details': MODE='details'; render(); return;
+      case 'jump':  setSel(id); if(E[id]) AREA=E[id]._area.id; INLINEPAGE=false; break;
+      case 'allnone':{ const g=(area().groups||[]).find(x=>x.n===act.dataset.g);
+                    if(g) g.e.forEach(x=>{ if(x.k==='sw'&&!off(x)) x.val=act.dataset.v==='1'; }); break; }
+      case 'resetcat': (area().groups||[]).forEach(g=>g.e.forEach(resetEntry)); break;
       case 'hosthide': HOST='hidden'; break;
-      case 'unexplain':EXPLAINPAGE=false; break;
+      case 'hostshow': HOST='auto'; break;
+      case 'unpage': INLINEPAGE=false; break;
+      case 'copykey': TOAST='copied '+id; break;
+      case 'logreset': resetEntry(E['log.sources']); resetEntry(E['log.severity']); setVal('log.filter',''); break;
+      case 'logonly': setVal('log.sources',[act.dataset.v]); break;
+      case 'noop': ACT.noop(); break;
+      case 'verb':{
+        const key=id+'/'+act.dataset.l;
+        if(act.dataset.confirm==='1'&&ARMED!==key){ ARMED=key; render(); return; }
+        ARMED=null; (ACT[act.dataset.do]||ACT.noop)(); break; }
     }
-    if(id&&findEntry(id)&&a!=='jump'&&a!=='resetcat'&&a!=='hosthide'&&a!=='unexplain'&&a!=='expand')
-      { if(!PARAMS[id]) setSel(id); }
-    if(id==='overlay.display_scale'){ SCALE=E[id].val; syncBar(); }
-    if(id==='overlay.accent_hue'){ HUE=E[id].val; applyHue(HUE); syncBar(); }
+    if(id&&findEntry(id)&&!['jump','resetcat','hosthide','hostshow','unpage','expand','allnone','logreset','logonly','copykey'].includes(a))
+      { if(!PARAMS[id]) setSel(id); else SEL=PARAMS[id]._parent.id; }
     render(); return;
   }
-  if(row){ setSel(row.dataset.row); EXPLAINPAGE=false; render(); }
+  if(row){ setSel(row.dataset.row); INLINEPAGE=false; render(); }
 });
+
+/* text editing — a real input, committed on enter, reverted on escape */
+document.addEventListener('input',ev=>{
+  if(ev.target.id==='txin'&&EDIT){ EDIT.buf=ev.target.value;
+    const e=findEntry(EDIT.id); const old=e.val; e.val=EDIT.buf;
+    /* live validation + live dependents (the save button re-enables as you type) */
+    renderInspector(); renderFoot();
+    const box=document.querySelector(`[data-row="${EDIT.id}"] .tin`);
+    if(box) box.classList.toggle('err',!!errOf(e));
+    e.val=old; }
+});
+document.addEventListener('keydown',ev=>{
+  if(ev.target.id!=='txin') return;
+  if(ev.key==='Enter'){ ev.preventDefault(); commitEdit(true); render(); }
+  if(ev.key==='Escape'){ ev.preventDefault(); EDIT=null; render(); }
+  ev.stopPropagation();
+},true);
 
 /* slider / fader / hue dragging */
 let drag=null;
 stage.addEventListener('mousedown',ev=>{
   const s=ev.target.closest('[data-act="sl"],[data-act="fader"],[data-act="hue"]');
   if(!s) return;
+  const e=findEntry(s.dataset.id); if(off(e)) return;
   drag={el:s,kind:s.dataset.act,id:s.dataset.id};
-  if(!PARAMS[drag.id]) setSel(drag.id);
+  if(!PARAMS[drag.id]) setSel(drag.id); else SEL=PARAMS[drag.id]._parent.id;
   dragMove(ev); ev.preventDefault();
 });
 addEventListener('mousemove',e=>{ if(drag) dragMove(e); });
 addEventListener('mouseup',()=>{ drag=null; });
 function dragMove(ev){
   const r=drag.el.getBoundingClientRect();
+  if(!r.width){ drag=null; return; }
   const f=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
   const e=findEntry(drag.id);
-  if(drag.kind==='hue'){ e.val=Math.round(f*359); HUE=e.val; applyHue(HUE); syncBar(); }
-  else if(drag.kind==='fader'){ e.val=+(f*60-60).toFixed(1); }
-  else{ const raw=e.min+f*(e.max-e.min);
-        e.val=+(Math.round(raw/e.st)*e.st).toFixed(4); }
-  if(drag.id==='overlay.display_scale'){ SCALE=e.val; syncBar(); }
-  if(drag.id==='overlay.accent_hue'){ HUE=e.val; applyHue(HUE); syncBar(); }
+  if(drag.kind==='hue')        setVal(e.id,Math.round(f*359));
+  else if(drag.kind==='fader') setVal(e.id,+(f*60-60).toFixed(1));
+  else setVal(e.id,+(Math.round((e.min+f*(e.max-e.min))/e.st)*e.st).toFixed(4));
   render();
 }
+/* wheel over a slider = one step (B's behaviour, kept) */
+stage.addEventListener('wheel',ev=>{
+  const s=ev.target.closest('[data-act="sl"],[data-act="hue"],[data-act="fader"]');
+  if(!s) return; ev.preventDefault();
+  adjust(findEntry(s.dataset.id),ev.deltaY<0?1:-1,ev.shiftKey); render();
+},{passive:false});
 
 /* page control bar */
 function syncBar(){
@@ -1442,11 +1984,12 @@ function syncBar(){
   E['overlay.display_scale'].val=SCALE; E['overlay.accent_hue'].val=HUE;
 }
 document.getElementById('sc').addEventListener('input',e=>{ SCALE=+e.target.value; syncBar(); render(); });
-document.getElementById('hu').addEventListener('input',e=>{ HUE=+e.target.value; applyHue(HUE); syncBar(); render(); });
+document.getElementById('hu').addEventListener('input',e=>{
+  HUE=+e.target.value; applyHue(HUE,E['overlay.accent_hue'].p[0].val); syncBar(); render(); });
 document.getElementById('bg').addEventListener('click',e=>{
-  const off=document.getElementById('stage').classList.toggle('nogame');
-  e.target.classList.toggle('on',!off);
-  e.target.textContent=off?'white frame · worst case':'game behind';
+  const offg=document.getElementById('stage').classList.toggle('nogame');
+  e.target.classList.toggle('on',!offg);
+  e.target.textContent=offg?'white frame · worst case':'game behind';
 });
 document.getElementById('gram').addEventListener('click',e=>{
   GRAM=GRAM==='e2'?'e':'e2';
@@ -1461,84 +2004,137 @@ function cycleHost(){
 }
 document.getElementById('host').addEventListener('click',cycleHost);
 document.getElementById('palbtn').addEventListener('click',()=>{ PALON=!PALON; PALQ=''; PALSEL=0;
-  render(); if(PALON) document.getElementById('palq').focus(); });
+  render(); if(PALON){const q=document.getElementById('palq'); q.value=''; q.focus();} });
 
-/* palette input */
+/* ── keyboard.  Mouse and keyboard only — gamepad is out of scope entirely ── */
 const pq=document.getElementById('palq');
 pq.addEventListener('input',()=>{ PALQ=pq.value; PALSEL=0; renderPal(); });
+function visibleRows(){ return [...document.querySelectorAll('[data-row]')]
+  .map(x=>x.dataset.row).filter((x,i,a)=>a.indexOf(x)===i&&findEntry(x)); }
 addEventListener('keydown',ev=>{
-  if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='k'){
-    ev.preventDefault(); PALON=true; PALQ=''; pq.value=''; PALSEL=0; render(); pq.focus(); return; }
-  if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='i'){ ev.preventDefault(); cycleHost(); return; }
-  if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='d'&&SEL){
-    ev.preventDefault(); const e=findEntry(SEL);
-    if(e){ if(e.k==='anchor') e.val=e.d.slice(); else if(e.d!==undefined) e.val=e.d; } render(); return; }
-  if(ev.key==='?'&&!PALON&&SEL){ EXPLAINPAGE=!EXPLAINPAGE; render(); return; }
-  if(!PALON) return;
-  if(ev.key==='Escape'){ PALON=false; render(); }
-  if(ev.key==='ArrowDown'){ ev.preventDefault(); PALSEL++; renderPal(); }
-  if(ev.key==='ArrowUp'){ ev.preventDefault(); PALSEL--; renderPal(); }
-  if(ev.key==='Enter'){ const it=window._palItems[PALSEL]; if(it) palJump(it.id); }
+  if(ev.target.id==='txin') return;
+  const K=ev.key.toLowerCase(), mod=ev.ctrlKey||ev.metaKey;
+  if(mod&&K==='k'){ ev.preventDefault(); PALON=true; PALQ=''; pq.value=''; PALSEL=0; render(); pq.focus(); return; }
+  if(mod&&K==='i'){ ev.preventDefault(); cycleHost(); return; }
+  if(mod&&K==='d'&&SEL){ ev.preventDefault(); resetEntry(findEntry(SEL));
+    if(SEL.startsWith('overlay.')) setVal(SEL,findEntry(SEL).val); render(); return; }
+
+  if(PALON){
+    const items=window._palItems||[];
+    if(ev.key==='Escape'){ PALON=false; render(); return; }
+    if(ev.key==='ArrowDown'){ ev.preventDefault(); PALSEL++; renderPal(); return; }
+    if(ev.key==='ArrowUp'){ ev.preventDefault(); PALSEL--; renderPal(); return; }
+    if(ev.key==='ArrowRight'||ev.key==='ArrowLeft'){
+      const it=items[PALSEL]; if(!it) return; ev.preventDefault();
+      /* ADJUST IN PLACE — the palette is not only a jump list */
+      if(adjust(findEntry(it.id),ev.key==='ArrowRight'?1:-1,ev.shiftKey)) renderPal(); return; }
+    if(ev.key==='Enter'){ const it=items[PALSEL]; if(it) palJump(it.id); return; }
+    return;
+  }
+  if(ev.key==='Escape'){
+    if(DDOPEN){ DDOPEN=null; render(); return; }
+    if(ARMED){ ARMED=null; render(); return; }
+    if(INLINEPAGE){ INLINEPAGE=false; render(); return; }
+    if(SEL){ SEL=null; render(); } return; }
+  if(ev.key==='?'&&SEL){ ev.preventDefault(); INLINEPAGE=!INLINEPAGE; render(); return; }
+
+  const rows=visibleRows(), i=rows.indexOf(SEL);
+  if(ev.key==='ArrowDown'||ev.key==='ArrowUp'){
+    ev.preventDefault();
+    const n=ev.key==='ArrowDown'?1:-1;
+    setSel(rows[Math.max(0,Math.min(rows.length-1,(i<0?(n>0?-1:rows.length):i)+n))]);
+    render();
+    const el=document.querySelector(`[data-row="${SEL}"]`), sb=document.querySelector('.sheetbody');
+    if(el&&sb&&el.closest('.sheetbody')) el.scrollIntoView({block:'nearest'});
+    return; }
+  if(!SEL) return;
+  const e=findEntry(SEL);
+  if(ev.key===' '&&e.k==='sw'){ ev.preventDefault(); if(!off(e)) setVal(e.id,!e.val); render(); return; }
+  if(ev.key==='Enter'){ ev.preventDefault();
+    if(e.k==='ch'&&!segFits(e,ladder().colW*.54-40)) DDOPEN=DDOPEN===e.id?null:e.id;
+    else if(e.k==='tx') EDIT={id:e.id,buf:e.val};
+    render(); return; }
+  if(ev.key==='ArrowRight'||ev.key==='ArrowLeft'){
+    ev.preventDefault(); adjust(e,ev.key==='ArrowRight'?1:-1,ev.shiftKey); render(); }
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
-   8. THE GUIDED TOUR
+   12. THE GUIDED TOUR
    ════════════════════════════════════════════════════════════════════════ */
 const CAPS=[
  `<b>1 · Default, nothing selected.</b> The Inspector shows the <b>Overview card</b>, never a placeholder:
   what differs, where it writes and why, the live composite path, and a budget line ending
   <code>0 unreachable</code> — the anti-junk-drawer count, on screen. Every row in the Sheet is 44 base tall;
   every control's right edge is on one vertical line, every value's right edge on a second.
-  Every control is capped and <b>right-bound</b>: a 30-wide switch, a 5-cell segmented and a full-bleed
-  slider all end on the same line. Go to <b>System ▸ Monitor</b> (two columns) and watch <b>Backdrop</b>'s four cells
+  Every control also shares <b>one height</b>, <code>--H = 28</code>: a 40×20 switch, a segmented control,
+  a stepper and a full-bleed slider all sit in a 28-tall hit box and all end on the same line.
+  Go to <b>System ▸ Monitor</b> (two columns) and watch <b>Backdrop</b>'s four cells
   <b>auto-downgrade to a dropdown</b> because the narrower column cannot draw them — the caller never
   picked, and cannot. <b>Click any row.</b>`,
  `<b>2 · E's original density, for comparison.</b> Watch the <b>text lines</b> chip in the sheet header.
   The same registry in E's grammar: hint lines under labels promoting rows to 76, readout <i>runs</i> in the
   sheet, a group note, switches left-aligned and steppers centred, meta text at 44% — which measures
-  <b>4.09:1, a WCAG failure</b>. Look at <b>Placement</b>: that is the orphan, two offset steppers crammed
-  beside the 3×3 grid. Now flip <b>grammar</b> to <b>E2 · calm</b> and watch the count fall by more than
-  half — <b>without one setting becoming unreachable</b>.`,
- `<b>3 · The three Inspector modes.</b> Selected: <b>Sharpness</b> — it has help, three parameters and two
-  live facts, so all three cells are lit. Now click <b>Force Grab Cursor</b>: CONFIGURE and DIAGNOSE go
-  <i>dim</i>. The strip is not a set of tabs to fill; it is a readout of how much depth a row actually
-  has — <b>continuous visible proof of what is not hiding</b>.`,
+  <b>4.09:1, a WCAG failure</b> — and E's <b>undersized 30×15 switch</b>, which is the one control that
+  did not fill its row's control height. Look at <b>Placement</b>: that is the orphan, two offset steppers
+  crammed beside the 3×3 grid. Now flip <b>grammar</b> back to <b>E2 · calm</b> and watch the count fall by
+  more than half — <b>without one setting becoming unreachable</b>.`,
+ `<b>3 · Two Inspector modes.</b> <b>CONFIGURE</b> is what the setting <i>does</i>, in one short paragraph,
+  and then every value you can set — the row's own control first, its parameters below, in the same Row
+  grammar at the same 44 height. <b>DETAILS</b> is everything technical the shell can derive: binding,
+  default, range, options, key, destination file, apply timing, the keyboard line, the read-only live
+  block, and the captured log lines that mention this key. Neither is a panel anyone writes into:
+  <b>the Inspector has no authoring API at all</b>. The counter on each cell is a readout of how much
+  depth this row actually has — click <b>Force grab cursor</b> and watch it drop.`,
  `<b>4 · The composite fix.</b> <b>Placement</b> is a <b>Composite band</b>: exactly 3 × 44 base, line 1
-  reads as an ordinary row (label + resolved value <code>top-right · 32 / 32</code>), and the 3×3 grid is
-  right-bound to the same control line as every switch in the sheet. The two offset steppers that used to
-  float beside it are now <b>Params</b> — <code>monitor.anchor.margin_v / .margin_h</code> — in CONFIGURE.
+  reads as an ordinary row (label + resolved value <code>top-right</code>), and the 3×3 grid is
+  right-bound to the same control line as every switch in the sheet — its cells are on the same
+  <code>--H</code> module as every other control. The two offset steppers that used to float beside it are
+  now <b>Params</b> — <code>monitor.anchor.margin_v / .margin_h</code> — in CONFIGURE.
   The orphan is gone because one of the two shapes became depth.`,
  `<b>5 · 2.0× — the ladder, step 2.</b> Icon rail, and the Inspector becomes a <b>drawer</b> overlaying the
-  sheet. The sheet still gets <b>804 base units</b> — more than it gets at 1.25× (750) — because collapsing
-  the rail and floating the inspector returns more than the scale-up costs. Nothing wraps; there is still
-  exactly one row layout mode.`,
+  sheet. The sheet still gets more base units than it gets at 1.25×, because collapsing the rail and
+  floating the inspector returns more than the scale-up costs. Nothing wraps; there is still
+  exactly one row layout mode, and the controls are the same 28 units they are at 0.5×.`,
  `<b>6 · Inspector HIDDEN — where the contract bites.</b> E's contract said the Inspector adds depth,
   never access. E2 moved parameters into it, so that wording had to be <b>amended</b>, not waved through.
   The <b>Reachability Law</b>: params render <b>inline in the Sheet</b>, same grammar, same right-bound
-  rule — click a <code>▸</code>. Help is reached with <code>?</code> as a full-sheet page. Nothing is lost
-  but <b>simultaneity</b>, and <code>ui_lint --host=inline</code> proves it in a command.`,
+  rule — click a <code>▸</code>. Details is reached with <code>?</code> as a full-sheet page. The region
+  itself collapses to E1's <b>named vertical spine</b> on the right edge — click <code>inspector ›</code>
+  to bring it back. Nothing is lost but <b>simultaneity</b>.`,
  `<b>7 · The LOG.</b> A Raw sheet: no label column, no groups, 20-base lines, a severity edge per line and
-  line numbers at <b>TextMeta 52% (5.28:1)</b> — E drew them at 30%, which measures 2.52:1. Click a line;
-  the Inspector wraps it, names the subsystem and, for a known pattern, explains it.`,
+  line numbers at <b>TextMeta 52% (5.28:1)</b> — E drew them at 30%, which measures 2.52:1. The filter bar
+  is <b>rendered from the registry</b>, so <code>log.sources</code> and <code>log.severity</code> are real
+  settings you can find in <code>^K</code>. Type in the text filter and watch matches highlight; empty the
+  source bank and meet the <b>empty state</b>. Click a line and the Inspector wraps it.`,
  `<b>8 · The palette finds params.</b> <code>Ctrl+K</code> and type <b>margin</b>, or <b>denoise</b>, or
-  <b>gain</b>. Params carry a <span style="color:var(--acc-txt)">param</span> chip and jump to the parent
-  row with CONFIGURE open and the param focused. <b>Depth is one keystroke from anywhere — which is why
-  depth is not the same as hidden.</b>`
+  <b>gain</b>. Params carry a <span style="color:var(--acc-txt)">param</span> chip, show their live value,
+  and <b>adjust in place with ←→</b> without leaving the list. <code>↵</code> jumps to the parent row with
+  CONFIGURE open. <b>Depth is one keystroke from anywhere — which is why depth is not the same as
+  hidden.</b>`,
+ `<b>9 · The states nobody draws.</b> <b>Profiles</b> is real state: apply one and every routed key moves;
+  delete one and the button <b>arms before it fires</b>; delete all three and the list, the dropdown and
+  the actions all reach their <b>empty state</b> together. Type <code>bad/name</code> into the name field
+  and the box turns <b>Danger</b> with the reason in the Inspector, never under the box. Turn
+  <b>Show system monitor</b> off and eleven rows — including a <i>composite</i> — go disabled with a
+  mandatory reason. <b>Output ▸ Second connector</b> has nothing connected, so it shows <code>—</code>
+  rather than inventing a value.`
 ];
 function setCap(h){ document.getElementById('cap').innerHTML=h; }
 const TOURS=[
- ()=>{SCALE=1;HUE=218;HOST='auto';GRAM='e2';AREA='display.upscaling';SEL=null;EXPLAINPAGE=false;PALON=false;setCap(CAPS[0]);},
- ()=>{SCALE=1;HOST='auto';GRAM='e';AREA='system.monitor';SEL=null;EXPLAINPAGE=false;PALON=false;setCap(CAPS[1]);},
- ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='display.upscaling';SEL='display.sharpness';MODE='configure';EXPLAINPAGE=false;PALON=false;setCap(CAPS[2]);},
- ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='system.monitor';SEL='monitor.anchor';MODE='configure';EXPLAINPAGE=false;PALON=false;setCap(CAPS[3]);return 'monitor.anchor';},
- ()=>{SCALE=2;HOST='auto';GRAM='e2';AREA='display.upscaling';SEL='display.sharpness';MODE='explain';EXPLAINPAGE=false;PALON=false;setCap(CAPS[4]);},
- ()=>{SCALE=2;HOST='hidden';GRAM='e2';AREA='system.monitor';SEL='monitor.anchor';EXPANDED['monitor.anchor']=true;EXPANDED['monitor.backdrop']=true;EXPLAINPAGE=false;PALON=false;setCap(CAPS[5]);return 'monitor.anchor';},
- ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='system.log';SEL=null;EXPLAINPAGE=false;PALON=false;setCap(CAPS[6]);},
- ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='setup.appearance';SEL=null;EXPLAINPAGE=false;PALON=true;PALQ='margin';setCap(CAPS[7]);}
+ ()=>{SCALE=1;HUE=218;HOST='auto';GRAM='e2';AREA='display.upscaling';SEL=null;setCap(CAPS[0]);},
+ ()=>{SCALE=1;HOST='auto';GRAM='e';AREA='system.monitor';SEL=null;setCap(CAPS[1]);},
+ ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='display.upscaling';SEL='display.sharpness';MODE='configure';setCap(CAPS[2]);return 'display.sharpness';},
+ ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='system.monitor';SEL='monitor.anchor';MODE='configure';setCap(CAPS[3]);return 'monitor.anchor';},
+ ()=>{SCALE=2;HOST='auto';GRAM='e2';AREA='display.upscaling';SEL='display.sharpness';MODE='details';setCap(CAPS[4]);},
+ ()=>{SCALE=2;HOST='hidden';GRAM='e2';AREA='system.monitor';SEL='monitor.anchor';EXPANDED['monitor.anchor']=true;EXPANDED['monitor.backdrop']=true;setCap(CAPS[5]);return 'monitor.anchor';},
+ ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='system.log';SEL=null;setCap(CAPS[6]);},
+ ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='setup.appearance';SEL=null;PALON=true;PALQ='margin';setCap(CAPS[7]);},
+ ()=>{SCALE=1;HOST='auto';GRAM='e2';AREA='setup.profiles';SEL='profiles.name';MODE='configure';setCap(CAPS[8]);}
 ];
 document.querySelector('.tours').addEventListener('click',ev=>{
   const b=ev.target.closest('button[data-t]'); if(!b) return;
   document.querySelectorAll('.tours button').forEach(x=>x.classList.toggle('on',x===b));
+  INLINEPAGE=false; PALON=false; PALQ=''; DDOPEN=null; EDIT=null; ARMED=null; TOAST='';
   const scrollTo=TOURS[+b.dataset.t]();
   document.getElementById('gram').classList.toggle('on',GRAM==='e2');
   document.getElementById('gram').textContent=GRAM==='e2'?'E2 · calm':'E · original density';
@@ -1550,5 +2146,5 @@ document.querySelector('.tours').addEventListener('click',ev=>{
 });
 
 /* ── boot ── */
-applyHue(HUE); syncBar(); setCap(CAPS[0]); render(); fit();
+applyHue(HUE,0); syncBar(); setCap(CAPS[0]); render(); fit();
 </script>
