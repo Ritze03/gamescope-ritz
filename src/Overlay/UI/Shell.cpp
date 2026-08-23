@@ -95,7 +95,10 @@ namespace gamescope::ui::shell
 		Registry     *s_pRegistry       = nullptr;
 		std::string   s_sSelectedArea;
 		std::string   s_sSelectedEntry;   // empty => Overview (SPEC §5.5)
-		InspectorHost s_ePreferredHost   = InspectorHost::Column;
+		// The Inspector host preference lives in cv_overlay_e2_host below --
+		// ONE storage, so the console, Ctrl+I, the spine, the close glyph and
+		// the setup.shell row cannot disagree about which host is current.
+		// Host() / SetHost() are the only accessors.
 		bool          s_bModeOverridden  = false;
 		InspectorMode s_eMode            = InspectorMode::Configure;
 
@@ -105,6 +108,44 @@ namespace gamescope::ui::shell
 
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
+
+		// =================================================================
+		//  The console surface
+		// =================================================================
+		// Two commands that reach the same three pieces of state Ctrl+I and
+		// a click reach, and nothing else. They exist because the shell's
+		// state is otherwise only addressable by pointer, which makes it
+		// unverifiable from a script and undiagnosable from a bug report --
+		// "which host were you in?" has no answer today.
+		//
+		// This is the project's own idiom rather than a new one: ConVar and
+		// ConCommand are gamescope's runtime tunable and debug-command
+		// system, and every other subsystem exposes its state through them.
+		// Deliberately NOT persisted and NOT a config field: they set live
+		// state, exactly as clicking would.
+		ConVar<int> cv_overlay_e2_host(
+			"overlay_e2_host", 0,
+			"E2 inspector host: 0 column, 1 drawer, 2 hidden. Same three Ctrl+I cycles." );
+
+		InspectorHost Host()
+		{
+			return (InspectorHost)std::clamp( cv_overlay_e2_host.Get(), 0, 2 );
+		}
+		void SetHost( InspectorHost eHost )
+		{
+			cv_overlay_e2_host.SetValue( (int)eHost );
+		}
+
+		void SelectById( std::span<std::string_view> args );
+
+		ConCommand cc_overlay_e2_select(
+			"overlay_e2_select",
+			"Select an E2 rail area, and optionally a row inside it: overlay_e2_select <area-id> [row-id]. "
+			"With no arguments, lists the registered area and row ids. "
+			"Through gamescopectl the two ids must be ONE quoted argument -- gamescopectl collapses "
+			"everything after the command name into a single field, which wlserver then re-splits: "
+			"gamescopectl overlay_e2_select \"setup.shell shell.layout\".",
+			SelectById );
 
 		// =================================================================
 		//  Registration
@@ -169,8 +210,8 @@ namespace gamescope::ui::shell
 
 			shell.Choice( "shell.inspector_host", "Inspector",
 				AnyBind::Of<int>(
-					[]{ return (int)s_ePreferredHost; },
-					[]( int n ) { s_ePreferredHost = (InspectorHost)std::clamp( n, 0, 2 ); } ),
+					[]{ return (int)Host(); },
+					[]( int n ) { SetHost( (InspectorHost)std::clamp( n, 0, 2 ) ); } ),
 				kHostOptions, 3 )
 				.Help( "Where the Inspector lives. A column sits beside the sheet; a drawer "
 				       "floats over its right edge; hidden leaves only the spine. Ctrl+I cycles "
@@ -273,6 +314,46 @@ namespace gamescope::ui::shell
 			return ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
 		}
 
+		void SelectById( std::span<std::string_view> args )
+		{
+			if ( args.size() < 2 )
+			{
+				console_log.infof( "E2 areas:" );
+				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
+				{
+					const Area &a = Reg().AreaAt( i );
+					console_log.infof( "  %-20s %-12s %s", a.Id().c_str(), a.Title().c_str(),
+						a.IsEscaped() ? "(legacy body)" : "" );
+					for ( size_t j = 0; j < a.EntryCount(); ++j )
+						console_log.infof( "      %s", a.EntryAt( j ).Id().c_str() );
+				}
+				return;
+			}
+
+			const std::string sArea( args[ 1 ] );
+			if ( !Reg().FindArea( sArea ) )
+			{
+				console_log.errorf( "no such E2 area: %s", sArea.c_str() );
+				return;
+			}
+			s_sSelectedArea = sArea;
+			s_sSelectedEntry.clear();
+			s_bModeOverridden = false;
+
+			if ( args.size() >= 3 )
+			{
+				const std::string sRow( args[ 2 ] );
+				const Entry *pEntry = Reg().FindEntry( sRow );
+				if ( !pEntry )
+				{
+					console_log.errorf( "no such E2 row: %s", sRow.c_str() );
+					return;
+				}
+				s_sSelectedEntry = sRow;
+				s_eMode = ModeFor( pEntry->GetKind(), pEntry->GetCompositeKind() );
+			}
+		}
+
 		// =================================================================
 		//  Small drawing helpers
 		// =================================================================
@@ -330,7 +411,7 @@ namespace gamescope::ui::shell
 			const ImGuiIO &io = ImGui::GetIO();
 			const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 			const Area *pArea = SelectedArea();
-			const LadderResult L = Solve( slab, s_ePreferredHost, pArea ? (int)pArea->EntryCount() : 0 );
+			const LadderResult L = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );
 
 			char sz[ 160 ];
 			snprintf( sz, sizeof( sz ), "rail %.0f · %s %.0f · sheet %.0f · %d col · step %d",
@@ -356,12 +437,19 @@ namespace gamescope::ui::shell
 			return "";
 		}
 
-		void DrawRail( const Rect &rc, const LadderResult &ladder )
+		// `bIcons` is the LADDER's answer, never a threshold re-derived from
+		// the width this function was handed. The width is animated (SPEC
+		// §8.4's 160 ms region duration) and Approach() is an exponential,
+		// so it never lands exactly on 60 -- asking `width <= 60` here left
+		// the rail permanently one pixel too wide to count as collapsed,
+		// which drew the full labels into a 60-wide strip and clipped them
+		// to nothing. A presentation value must not make a semantic
+		// decision; that is the general rule this signature encodes.
+		void DrawRail( const Rect &rc, bool bIcons )
 		{
 			Fill( rc, Col( Role::SurfaceRail ) );
 			VLine( rc.x1 - Hairline(), rc.y0, rc.y1, Col( Role::LineRegion ) );
 
-			const bool  bIcons  = ladder.RailIsIcons();
 			const float flItemH = Px( 40.0f );        // index.html's .ri
 			const float flPadX  = Px( 16.0f );
 			float       y       = rc.y0 + Px( tok::kS );
@@ -557,8 +645,23 @@ namespace gamescope::ui::shell
 					if ( controls::Verb( row, "verb", entry.Verb().c_str() ) )
 						entry.Invoke();
 					break;
+				case Kind::Facts:
+				{
+					// SPEC §2.3: a Facts row's summary is "a string in the
+					// CONTROL zone, not a value" -- which is why
+					// UsesValueColumn( Facts ) is false and the value
+					// column above stayed empty. It is still right-bound,
+					// through the same allocator every control uses.
+					if ( !sValue.empty() )
+					{
+						const ImRect rc = row.PlacePx( MeasureText( TypeRole::Value, sValue.c_str() ).x );
+						Label( { rc.Min.x, rc.Min.y, rc.Max.x, rc.Max.y },
+						       TypeRole::Value, Col( Role::TextMeta ), sValue.c_str(), TextAlign::Right );
+					}
+					break;
+				}
 				default:
-					break;   // Facts and the rest carry no control
+					break;   // the rest carry no control
 			}
 
 			ImGui::PopID();
@@ -591,8 +694,14 @@ namespace gamescope::ui::shell
 				ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding,
 					ImVec2( Px( tok::kSheetPad ), Px( tok::kM ) ) );
 				ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
+				// Both scrollbars, deliberately. The legacy panels were
+				// authored for a ~440-wide resizable window and some of
+				// them lay out wider than the sheet column gives them; a
+				// control the user cannot reach is a worse outcome than a
+				// scrollbar in a region that will not have one after P3.
 				if ( ImGui::BeginChild( "##escape", ImVec2( rc.Width(), rc.Height() ),
-					ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
+					ImGuiChildFlags_None,
+					ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar ) )
 				{
 					pArea->EscapeBody()();
 				}
@@ -694,7 +803,7 @@ namespace gamescope::ui::shell
 			const Rect rcClose { rc.x1 - Px( 14.0f ) - Px( 22.0f ), rc.y0, rc.x1 - Px( 14.0f ), rc.y1 };
 			ImGui::SetCursorScreenPos( ImVec2( rcClose.x0, rcClose.y0 + ( rcClose.Height() - Px( 22.0f ) ) * 0.5f ) );
 			if ( ImGui::InvisibleButton( "##inspclose", ImVec2( Px( 22.0f ), Px( 22.0f ) ) ) )
-				s_ePreferredHost = InspectorHost::Hidden;
+				SetHost( InspectorHost::Hidden );
 			Label( rcClose, TypeRole::Meta,
 			       ImGui::IsItemHovered() ? Col( Role::TextPrimary ) : Col( Role::TextMeta ),
 			       "x", TextAlign::Center );
@@ -806,9 +915,13 @@ namespace gamescope::ui::shell
 					return;
 				Label( { rcIn.x0, y, rcIn.x0 + flKeyW, y + Px( 16.0f ) },
 				       TypeRole::Section, Col( Role::TextMeta ), pszKey );
-				Label( { rcIn.x0 + flKeyW, y, rcIn.x1, y + Px( 16.0f ) },
-				       TypeRole::Meta, Col( Role::TextPrimary ), sVal.c_str() );
-				y += Px( 20.0f );
+				// Wrapped, not clipped: a binding grid whose whole job is
+				// to answer "what is this bound to" cannot afford to
+				// truncate the answer, and `now` for a Facts row is a
+				// whole sentence.
+				const float yAfter = DrawWrapped( { rcIn.x0 + flKeyW, y, rcIn.x1, rcIn.y1 },
+				                                  TypeRole::Meta, Col( Role::TextPrimary ), sVal.c_str(), y );
+				y = std::max( y + Px( 20.0f ), yAfter + Px( tok::kXS ) );
 			};
 
 			Grid( "NOW", entry.GetKind() == Kind::Facts
@@ -916,28 +1029,61 @@ namespace gamescope::ui::shell
 		void DrawInspector( const Regions &regions, const LadderResult &ladder )
 		{
 			const Entry *pEntry = SelectedEntry();
+			const bool bDrawer = ladder.eHost == InspectorHost::Drawer;
 
-			Fill( regions.rcInspector, ladder.eHost == InspectorHost::Drawer
+			// ---------------------------------------------------------
+			// WHY THE WHOLE REGION IS ONE CHILD WINDOW.
+			// ---------------------------------------------------------
+			// The drawer must paint OVER the sheet, and ImGui's stock
+			// z-order is not negotiable: every child window renders after
+			// its parent's own draw commands, in the order the children
+			// were begun. So an inspector background painted onto the
+			// slab's draw list -- however late in the frame -- still loses
+			// to the sheet's child, and the sheet's rows show straight
+			// through the drawer. (They did; that is what this shape
+			// fixes.)
+			//
+			// Putting the entire region in a child begun AFTER the sheet's
+			// puts it above by the same rule, with no draw-list surgery
+			// and no channel splitting. The outer child does not scroll --
+			// it exists to own the z-order and the clip rect; the mode
+			// strip is fixed inside it and only the body scrolls, in a
+			// nested child.
+			ImGui::SetCursorScreenPos( ImVec2( regions.rcInspector.x0, regions.rcInspector.y0 ) );
+			ImGui::PushStyleColor( ImGuiCol_ChildBg, bDrawer
 				? IM_COL32( 12, 14, 17, 251 )       // index.html's .insp.drawer
 				: Col( Role::SurfaceInspector ) );
-			VLine( regions.rcInspector.x0, regions.rcInspector.y0, regions.rcInspector.y1,
-			       ladder.eHost == InspectorHost::Drawer ? Col( Role::AccentBase ) : Col( Role::LineRegion ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 0.0f );
 
-			DrawModeStrip( regions.rcModeStrip, pEntry );
-
-			ImGui::SetCursorScreenPos( ImVec2( regions.rcInspectorBody.x0, regions.rcInspectorBody.y0 ) );
-			if ( ImGui::BeginChild( "##inspbody",
-				ImVec2( regions.rcInspectorBody.Width(), regions.rcInspectorBody.Height() ),
-				ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
+			const bool bOpen = ImGui::BeginChild( "##insp",
+				ImVec2( regions.rcInspector.Width(), regions.rcInspector.Height() ),
+				ImGuiChildFlags_None,
+				ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
+				ImGuiWindowFlags_NoScrollWithMouse );
+			if ( bOpen )
 			{
-				if ( !pEntry )
-					DrawOverview( regions.rcInspectorBody, SelectedArea() );
-				else if ( CurrentMode( pEntry ) == InspectorMode::Configure )
-					DrawConfigure( regions.rcInspectorBody, *pEntry );
-				else
-					DrawDetails( regions.rcInspectorBody, *pEntry );
+				VLine( regions.rcInspector.x0, regions.rcInspector.y0, regions.rcInspector.y1,
+				       bDrawer ? Col( Role::AccentBase ) : Col( Role::LineRegion ) );
+
+				DrawModeStrip( regions.rcModeStrip, pEntry );
+
+				ImGui::SetCursorScreenPos( ImVec2( regions.rcInspectorBody.x0, regions.rcInspectorBody.y0 ) );
+				if ( ImGui::BeginChild( "##inspbody",
+					ImVec2( regions.rcInspectorBody.Width(), regions.rcInspectorBody.Height() ),
+					ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
+				{
+					if ( !pEntry )
+						DrawOverview( regions.rcInspectorBody, SelectedArea() );
+					else if ( CurrentMode( pEntry ) == InspectorMode::Configure )
+						DrawConfigure( regions.rcInspectorBody, *pEntry );
+					else
+						DrawDetails( regions.rcInspectorBody, *pEntry );
+				}
+				ImGui::EndChild();
 			}
 			ImGui::EndChild();
+			ImGui::PopStyleVar();
+			ImGui::PopStyleColor();
 		}
 
 		// ---- the hidden Inspector's spine (SPEC §8.05, from E1) -----------
@@ -947,7 +1093,7 @@ namespace gamescope::ui::shell
 			const bool bClicked = ImGui::InvisibleButton( "##spine", ImVec2( rc.Width(), rc.Height() ) );
 			const bool bHovered = ImGui::IsItemHovered();
 			if ( bClicked )
-				s_ePreferredHost = InspectorHost::Column;
+				SetHost( InspectorHost::Column );
 
 			Fill( rc, bHovered ? Accent( 0.16f ) : IM_COL32( 255, 255, 255, 10 ) );
 			VLine( rc.x0, rc.y0, rc.y1, bHovered ? Col( Role::AccentBase ) : Col( Role::LineRegion ) );
@@ -1017,10 +1163,10 @@ namespace gamescope::ui::shell
 			// Ctrl+I: "cycle Inspector host: column -> drawer -> hidden".
 			if ( io.KeyCtrl && ImGui::IsKeyPressed( ImGuiKey_I, false ) )
 			{
-				s_ePreferredHost =
-					s_ePreferredHost == InspectorHost::Column ? InspectorHost::Drawer :
-					s_ePreferredHost == InspectorHost::Drawer ? InspectorHost::Hidden :
-					                                            InspectorHost::Column;
+				SetHost(
+					Host() == InspectorHost::Column ? InspectorHost::Drawer :
+					Host() == InspectorHost::Drawer ? InspectorHost::Hidden :
+					                                  InspectorHost::Column );
 			}
 
 			// Tab / Shift+Tab: cycle region Rail -> Sheet -> Inspector.
@@ -1038,9 +1184,9 @@ namespace gamescope::ui::shell
 			// then does Esc reach the overlay itself (which
 			// SettingsOverlay.cpp owns).
 			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) &&
-			     s_ePreferredHost == InspectorHost::Drawer )
+			     Host() == InspectorHost::Drawer )
 			{
-				s_ePreferredHost = InspectorHost::Hidden;
+				SetHost( InspectorHost::Hidden );
 			}
 		}
 	}
@@ -1073,13 +1219,19 @@ namespace gamescope::ui::shell
 		RunKeyboard();
 
 		const Area *pArea = SelectedArea();
-		LadderResult ladder = Solve( slab, s_ePreferredHost, pArea ? (int)pArea->EntryCount() : 0 );
+		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );
 
 		// SPEC §8.4's 160 ms region duration, applied to the ONE region
 		// dimension that changes without the surface changing. Note the
 		// other prohibition it respects: "regions never move" -- the rail
 		// changes width, nothing slides.
 		s_flRailAnim = Approach( s_flRailAnim, ladder.flRailBase, tok::kDurRegion, io.DeltaTime );
+		// Snap once the remainder is under a physical pixel. An exponential
+		// approach never arrives, and a rail that is forever 0.3 base units
+		// off its target keeps re-uploading the same vertex buffer and keeps
+		// the region boundary on a fractional pixel.
+		if ( std::abs( s_flRailAnim - ladder.flRailBase ) < 1.0f / std::max( Scale(), 0.01f ) )
+			s_flRailAnim = ladder.flRailBase;
 		const LadderResult ladderDrawn = [ & ] {
 			LadderResult L = ladder;
 			L.flRailBase = s_flRailAnim;
@@ -1118,7 +1270,7 @@ namespace gamescope::ui::shell
 			};
 
 			DrawSlabBar( Off( regions.rcSlabBar ) );
-			DrawRail( Off( regions.rcRail ), ladderDrawn );
+			DrawRail( Off( regions.rcRail ), ladder.RailIsIcons() );
 
 			DrawSheetHead( Off( regions.rcSheetHead ), pArea );
 			DrawSheetBody( Off( regions.rcSheetBody ), pArea );
