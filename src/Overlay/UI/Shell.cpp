@@ -1518,9 +1518,45 @@ namespace gamescope::ui::shell
 		void DrawSheetFoot( const Rect &rc )
 		{
 			HLine( rc.x0, rc.x1, rc.y0, Col( Role::LineRegion ) );
-			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ),
-			       "^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back" );
+
+			const Rect  rcText  = { rc.x0 + Px( tok::kSheetPad ), rc.y0,
+			                        rc.x1 - Px( tok::kSheetPad ), rc.y1 };
+			const float flAvail = rcText.x1 - rcText.x0;
+
+			// The legend is the only place the shell advertises its own
+			// shortcuts, and at 2.0x the full form does not fit the sheet --
+			// so DrawText's left-align fallback clipped the TAIL, which is
+			// where `Esc back` is. That is the worst possible thing to lose:
+			// a user who cannot read the rest of the line is precisely the
+			// user who needs to know how to get out of it.
+			//
+			// So the line drops hints from the LEFT instead, cheapest first,
+			// and `Esc back` is the last thing standing. Chosen by
+			// measurement rather than by scale, because the sheet's width
+			// depends on the Inspector's host and the drawer as well as on
+			// the ladder step.
+			static const char *const kForms[] = {
+				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back",
+				"^K search    ^I inspector    ^/ explain    Tab region    Esc back",
+				"^K search    ^I inspector    Tab region    Esc back",
+				"^K search    Tab region    Esc back",
+				"^K search    Esc back",
+				"Esc back",
+			};
+
+			// Falls back to the shortest form, which is also the one that
+			// fits every width this shell can produce.
+			const char *pszLegend = kForms[ IM_ARRAYSIZE( kForms ) - 1 ];
+			for ( const char *pszForm : kForms )
+			{
+				if ( MeasureText( TypeRole::Meta, pszForm ).x <= flAvail )
+				{
+					pszLegend = pszForm;
+					break;
+				}
+			}
+
+			Label( rcText, TypeRole::Meta, Col( Role::TextMeta ), pszLegend );
 		}
 
 		// =================================================================
@@ -3656,14 +3692,36 @@ namespace gamescope::ui::shell
 			// Beyond that the answer is a better query, not more scrolling --
 			// and it bounds the per-frame draw cost regardless of registry
 			// size.
-			const int nShown  = std::min( (int)items.size(), 60 );
-			const int nVisible= std::min( nShown, 9 );
-			const float flListH = nShown > 0 ? flRowH * (float)nVisible : Px( 60.0f );
+			const int nShown = std::min( (int)items.size(), 60 );
+
+			const float x0 = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
+			const float y0 = rcSlab.y0 + ( rcSlab.y1 - rcSlab.y0 ) * 0.14f;
+
+			// HOW MANY ROWS ACTUALLY FIT, decided BEFORE the panel is sized.
+			//
+			// This used to take nine rows unconditionally and then clamp the
+			// finished panel to the slab. The clamp moved rc.y1, and the
+			// footer is drawn from rc.y1 -- so at 2.0x, where nine rows plus
+			// the query line no longer fit, the footer slid up over the last
+			// result row. The rows themselves were still laid out against
+			// the unclamped flListH, so the two disagreed by exactly the
+			// amount the clamp had removed.
+			//
+			// Deciding the row count from the space available makes the
+			// panel's height a CONSEQUENCE of what it contains rather than
+			// something trimmed afterwards, so there is nothing left to
+			// clamp and the footer cannot be reached by the list.
+			const float flAvailH = ( rcSlab.y1 - Px( tok::kM ) ) - y0;
+			const int   nFits    = (int)std::floor( ( flAvailH - flQH - flFootH ) / flRowH );
+			// At least one row: a palette showing none of its results is
+			// worse than one that overlaps its legend.
+			const int   nVisible = std::clamp( std::min( nShown, 9 ), 1, std::max( 1, nFits ) );
+
+			const float flListH = nShown > 0 ? flRowH * (float)nVisible
+			                                 : std::min( Px( 60.0f ), std::max( 0.0f, flAvailH - flQH - flFootH ) );
 
 			const float flH = flQH + flListH + flFootH;
-			const float x0  = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
-			const float y0  = rcSlab.y0 + ( rcSlab.y1 - rcSlab.y0 ) * 0.14f;
-			const Rect  rc  = { x0, y0, x0 + flW, std::min( y0 + flH, rcSlab.y1 - Px( tok::kM ) ) };
+			const Rect  rc  = { x0, y0, x0 + flW, y0 + flH };
 
 			ImDrawList *pDraw = ImGui::GetWindowDrawList();
 
