@@ -41,6 +41,7 @@
 #include "PanelDisplay.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +77,13 @@
 // existing precedent rather than adding new header plumbing.
 extern gamescope::ConVar<bool> cv_adaptive_sync;
 extern gamescope::ConVar<bool> cv_hdr_enabled;
+
+// The per-frame application commit clock (src/commit.cpp), for
+// display.budget_meter. Not declared in any header -- src/Metrics/
+// SystemStats.cpp declares its own extern for exactly this variable for
+// exactly this reason, so this follows that precedent rather than adding
+// header plumbing for one read.
+extern std::atomic<uint64_t> g_ulLastAppFrametimeNs;
 
 // Set true/false only inside the Steam-focus override branch in
 // steamcompmgr.cpp's per-frame body; not extern'd in a header there either
@@ -920,6 +928,32 @@ namespace gamescope
 			} );
 	}
 
+	// ---- the frame budget, and what was spent against it -----------------
+	// The frametime is read straight off the commit clock rather than
+	// through FpsDisplay, because that file's smoothed copy only advances
+	// while the HUD is drawing -- a budget meter reading 0 whenever the HUD
+	// is switched off would be exactly the "renders but does nothing"
+	// defect this row exists to answer.
+	//
+	// Shared by display.budget_meter's scalar and its four Live facts, so
+	// the bar and the numbers under it can never disagree.
+	static float FrameBudgetMs()
+	{
+		const int nCap = Cfg().gamescope.fps_limit;
+		if ( nCap > 0 )
+			return 1000.0f / (float)nCap;
+		// g_nOutputRefresh is mHz, so ms = 1e6 / mHz.
+		if ( g_nOutputRefresh > 0 )
+			return 1000000.0f / (float)g_nOutputRefresh;
+		return 1000.0f / 60.0f;
+	}
+
+	static float LastFrametimeMs()
+	{
+		const uint64_t ul = g_ulLastAppFrametimeNs.load( std::memory_order_relaxed );
+		return ul ? (float)ul / 1e6f : 0.0f;
+	}
+
 	static void RegisterFrameLimiter( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "display.frame_limiter", "Frame limiter", ui::Section::Display );
@@ -975,6 +1009,70 @@ namespace gamescope
 			.Keywords( "vrr freesync gsync adaptive sync refresh" );
 
 		a.Group( "Diagnostics" );
+
+		// SPEC §3.8's drawn instance. The kind was declared in the first
+		// version, `controls::Meter()` was implemented, `UsesValueColumn`
+		// and `IsReadOnly` both handled it -- and nothing registered one, so
+		// the rendering had never run in the product. That is the same smell
+		// as `nColumns` computing a number nothing drew (D20.2), with the
+		// arrow reversed, and P5 resolves it the same way D20 did: by
+		// building the thing the spec names, not by deleting the kind the
+		// spec specifies.
+		//
+		// WHY A PERCENTAGE AND NOT MILLISECONDS. A Meter's range is fixed at
+		// registration, and the frame budget is not: it is the cap when
+		// there is one and the output's refresh interval otherwise, so a
+		// millisecond range would be wrong the moment either changed. As a
+		// share of budget the range is 0..100 by construction, and it means
+		// the same thing at 60 Hz capped and 240 Hz uncapped -- which is
+		// what makes the bar comparable to itself across sessions.
+		//
+		// Saturating at 100 % is deliberate. Over budget is over budget; how
+		// far over is what the exact numbers below and the HUD's frametime
+		// graph are for, and letting the bar overrun its own track would
+		// break SPEC §2.2's right bound.
+		a.Meter( "display.budget_meter", "Frame budget",
+			[]() -> double {
+				const float flBudget = FrameBudgetMs();
+				if ( flBudget <= 0.0f )
+					return 0.0;
+				return std::clamp( LastFrametimeMs() / flBudget * 100.0f, 0.0f, 100.0f );
+			}, 0.0, 100.0 )
+			.Help( "How much of the time available for one frame the game actually spent. The "
+			       "budget is the FPS cap when one is set, and the display's refresh interval "
+			       "otherwise. At 100 % the frame took its whole budget and the next one is "
+			       "already late -- so sustained 100 % is what a stutter looks like before you "
+			       "can see it. Read-only." )
+			.Unit( " %" )
+			.Keywords( "frame budget meter frametime headroom pacing stutter missed deadline" )
+			.DisabledUnless(
+				[]{ return LastFrametimeMs() > 0.0f; },
+				"no application frame has been presented yet" )
+			.Live( "frame time", []{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%.2f ms", LastFrametimeMs() );
+				return ui::Fact{ "frame time", sz };
+			} )
+			.Live( "budget", []{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%.2f ms", FrameBudgetMs() );
+				return ui::Fact{ "budget", sz };
+			} )
+			// Names which of the two sources the budget came from, for the
+			// same reason limiter_facts names its apply path: "the number is
+			// wrong" is nearly always "it is measuring the other one".
+			.Live( "budget from", []{
+				return ui::Fact{ "budget from",
+					Cfg().gamescope.fps_limit > 0 ? "the FPS cap"
+					: ( g_nOutputRefresh > 0 ? "the output refresh" : "60 Hz fallback" ) };
+			} )
+			.Live( "headroom", []{
+				const float flBudget = FrameBudgetMs(), flFrame = LastFrametimeMs();
+				char sz[ 48 ];
+				std::snprintf( sz, sizeof( sz ), "%.2f ms %s", std::fabs( flBudget - flFrame ),
+					flFrame > flBudget ? "over" : "spare" );
+				return ui::Fact{ "headroom", sz };
+			} );
 
 		a.Facts( "display.limiter_facts", "Limiter state", []{
 			const int n = Cfg().gamescope.fps_limit;
