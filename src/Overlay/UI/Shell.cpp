@@ -2170,7 +2170,17 @@ namespace gamescope::ui::shell
 				// ONLY in inline mode, where it is a real control; everywhere
 				// else it stays what §2.4 describes, a mark that advertises
 				// depth. Submitted after the row's own button so it wins the
-				// overlap -- ImGui resolves a hover to the last item added.
+				// overlap.
+				//
+				// D22 correction: this used to claim "ImGui resolves a hover
+				// to the last item added", and that is simply not true --
+				// ItemHoverable() rejects a later item while an earlier one
+				// still holds g.HoveredId. Submitting later is NECESSARY but
+				// not SUFFICIENT; the earlier item must also have been marked
+				// SetNextItemAllowOverlap(), which DrawEntryRow now does. That
+				// wrong belief is why every overlapped control in this kit was
+				// unreachable by mouse, so it is corrected here rather than
+				// quietly deleted.
 				if ( bInline )
 				{
 					ImGui::SetCursorScreenPos( rc.Min );
@@ -2212,6 +2222,10 @@ namespace gamescope::ui::shell
 			// swallowed by a full-band selector drawn on top of it.
 			const ImRect rcHit( rcBand.Min.x, rcBand.Min.y, bl.rcBody.Min.x, bl.line1.Bounds().Max.y );
 			ImGui::SetCursorScreenPos( rcHit.Min );
+			// D22, same reason as the row's own selector -- see DrawEntryRow.
+			// Line 1 of a composite carries its value readout and, for some
+			// composites, an affordance drawn after this button.
+			ImGui::SetNextItemAllowOverlap();
 			const bool bClicked = ImGui::InvisibleButton( "##band", rcHit.GetSize() );
 			const bool bHovered = ImGui::IsItemHovered();
 
@@ -2340,6 +2354,28 @@ namespace gamescope::ui::shell
 
 			ImGui::SetCursorScreenPos( rcRow.Min );
 			ImGui::PushID( entry.Id().c_str() );
+			// D22: THE ROW'S SELECTOR MUST ALLOW OVERLAP, or it eats every
+			// control in the row.
+			//
+			// This full-width button is submitted FIRST and spans the whole
+			// row, including the lane the switch/slider/segmented atom is
+			// drawn into afterwards. ImGui does not resolve an overlap to
+			// "the last item added" -- ItemHoverable() rejects a later item
+			// outright while g.HoveredId is already held by an earlier one
+			// (imgui.cpp: `if (g.HoveredId != 0 && g.HoveredId != id &&
+			// !g.HoveredIdAllowOverlap) return false;`), and rejects it again
+			// on g.ActiveId while a button is held. So without this call the
+			// row's own button won the hit test for the ENTIRE row and no
+			// atom inside it could ever be hovered, pressed or dragged: the
+			// controls painted perfectly and were inert to the mouse, which
+			// is exactly what shipped.
+			//
+			// SetNextItemAllowOverlap() sets HoveredIdAllowOverlap/
+			// ActiveIdAllowOverlap for this item, which lets the atoms
+			// submitted after it take the hit test where they cover the row,
+			// while the row still takes it everywhere they do not -- so
+			// clicking the label still selects the row.
+			ImGui::SetNextItemAllowOverlap();
 			const bool bClicked = ImGui::InvisibleButton( "##row", rcRow.GetSize() );
 			const bool bHovered = ImGui::IsItemHovered();
 
@@ -2522,6 +2558,10 @@ namespace gamescope::ui::shell
 				ImGui::PushID( entry.Id().c_str() );
 				ImGui::PushID( (int)i + 2000 );
 
+				// D22, same reason as the row's own selector -- see
+				// DrawEntryRow. An expanded parameter row carries a real
+				// control in its lane just as its entry row does.
+				ImGui::SetNextItemAllowOverlap();
 				const bool bClicked = ImGui::InvisibleButton( "##inlinerow", rcRow.GetSize() );
 				const bool bHovered = ImGui::IsItemHovered();
 
@@ -4345,7 +4385,18 @@ namespace gamescope::ui::shell
 			// Tab / Shift+Tab: cycle region Rail -> Sheet -> Inspector.
 			// Only when no item is active, so Tab inside a text field still
 			// belongs to the text field.
-			if ( !io.KeyCtrl && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed( ImGuiKey_Tab, false ) )
+			//
+			// D22: Tab and the arrow keys are NAVIGATION -- moving a selection
+			// around -- and they are the part settings_overlay_keyboard_nav
+			// governs. COMMANDS (Esc, the palette, the Inspector host, reset,
+			// the explain page) stay unconditional, because a command has no
+			// mouse equivalent to fall back to and Esc in particular must
+			// never become unreachable. The sheet, rail and inspector are a
+			// mouse UI; this is the accessibility route to the same controls,
+			// kept on by default and now switchable rather than silently
+			// fighting ImGui's own nav for the same keys.
+			if ( SettingsOverlay_IsShellKeyboardNavEnabled() &&
+			     !io.KeyCtrl && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed( ImGuiKey_Tab, false ) )
 			{
 				const int n = (int)s_eFocusRegion + ( io.KeyShift ? 2 : 1 );
 				s_eFocusRegion = (Region)( n % 3 );
@@ -4391,6 +4442,14 @@ namespace gamescope::ui::shell
 			}
 
 			// ---- movement and adjustment ---------------------------------
+			// D22: the other half of what settings_overlay_keyboard_nav
+			// governs (Tab is gated above) -- everything below moves or
+			// adjusts a selection, which is the navigation model the mouse
+			// now leads. Esc and the commands are already handled above, so
+			// turning navigation off never traps anyone in the overlay.
+			if ( !SettingsOverlay_IsShellKeyboardNavEnabled() )
+				return;
+
 			// A text field being edited owns every key below it; without this
 			// guard typing "5" into a profile name would also step whatever
 			// row happened to be selected.

@@ -122,13 +122,23 @@ namespace gamescope
 		"false: keyboard input passes through to the game even while the overlay is open (mouse capture is unaffected). "
 		"Ctrl+Shift+O always still works to close the overlay either way." );
 
+	// D22: this now governs the SHELL's own Tab/arrow navigation, not ImGui's.
+	// See SettingsOverlay_AddLayer() for why ImGui's nav is off unconditionally
+	// and what it was breaking while it was on.
 	static ConVar<bool> cv_settings_overlay_keyboard_nav(
 		"settings_overlay_keyboard_nav", true,
-		"Whether Tab/arrow-key ImGui keyboard navigation of the overlay's own widgets is enabled while it holds keyboard capture." );
+		"Whether the settings overlay's Tab/arrow keyboard navigation is enabled. The overlay is a "
+		"mouse-driven surface; this is the accessibility route to the same controls, and turning it "
+		"off leaves the commands (Esc, the palette, the Inspector shortcuts) working." );
 
 	void SettingsOverlay_ToggleVisible()
 	{
 		cv_settings_overlay_visible.SetValue( !cv_settings_overlay_visible.Get() );
+	}
+
+	void SettingsOverlay_SetVisible( bool bVisible )
+	{
+		cv_settings_overlay_visible.SetValue( bVisible );
 	}
 
 	bool SettingsOverlay_IsCapturingInput()
@@ -139,6 +149,11 @@ namespace gamescope
 	bool SettingsOverlay_IsCapturingKeyboard()
 	{
 		return SettingsOverlay_IsCapturingInput() && cv_settings_overlay_capture_keyboard.Get();
+	}
+
+	bool SettingsOverlay_IsShellKeyboardNavEnabled()
+	{
+		return cv_settings_overlay_keyboard_nav.Get();
 	}
 
 	// Fade in/out on toggle (decision: replaces the dropped backdrop-blur
@@ -939,16 +954,32 @@ namespace gamescope
 		io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
 		io.DeltaTime = flDeltaTime;
 
-		// Keyboard-control toggle (see ConfigSchema.h's OverlaySettings
-		// comment): purely an ImGui-side flag, re-applied every frame this
-		// context draws so a runtime console/gamescopectl change takes
-		// effect immediately -- never touches wlserver.cpp's own capture
-		// routing (SettingsOverlay_IsCapturingKeyboard()), so this can never
-		// regress M2's release-safety guarantees.
-		if ( cv_settings_overlay_keyboard_nav.Get() )
-			io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-		else
-			io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+		// D22: ImGui's OWN keyboard navigation is off, unconditionally, and
+		// this is where that is decided.
+		//
+		// It used to be turned ON here every frame from
+		// cv_settings_overlay_keyboard_nav (default true), while Shell.cpp
+		// turned it back OFF from inside Draw(). That is not a disagreement
+		// the two can win alternately -- the flag is read by NewFrame(), and
+		// this assignment runs immediately BEFORE NewFrame() while the
+		// shell's runs after it. So nav was enabled on every single frame and
+		// the shell's careful disable (see its comment, which explains
+		// exactly why nav must not run) never took effect once.
+		//
+		// The result was the second focus model the shell was written to not
+		// have: ImGui's nav cursor consuming Tab and the arrow keys that SPEC
+		// §8.2 gives to the rows, and -- because nav sets NavDisableMouseHover
+		// the moment a nav key is used -- suppressing mouse hover as well.
+		// A keyboard model competing with the mouse for the same widgets is
+		// precisely what this branch was asked to remove.
+		//
+		// The flag it was reading was written for the LEGACY floating-panel
+		// overlay, which P5 deleted; E2 implements SPEC §8.2's keyboard
+		// itself. The setting is not gone -- it now governs the shell's own
+		// navigation keys, which is what a user asking for "keyboard
+		// navigation of the overlay" actually wants (see Shell.cpp's
+		// RunKeyboard) -- but it can no longer switch on a second model.
+		io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
@@ -1624,18 +1655,42 @@ namespace gamescope
 					const int nButton = ImGuiMouseButtonForLinuxButton( ev.uCode );
 					if ( nButton >= 0 )
 					{
+						// D22: THE POSITION MUST BE QUEUED BEFORE THE BUTTON.
+						//
+						// This flush used to sit inside the !bLastEventInBatch
+						// branch BELOW, i.e. after AddMouseButtonEvent, so
+						// whenever motion and a press arrived in the same drain
+						// -- which is every click that moves the pointer first,
+						// and every injected click -- ImGui's event queue read
+						// [button, position] instead of [position, button].
+						//
+						// That order is not merely untidy, it loses the click.
+						// ImGui's trickling (UpdateInputEvents) stops at a
+						// MousePos that follows a button change in the same
+						// frame, so the press was applied AT THE OLD POINTER
+						// POSITION and the move was deferred to the next frame.
+						// The widget under the new position never saw a press;
+						// whatever sat under the old one took ActiveId and then
+						// released outside itself, which is a cancelled click.
+						// The control lit up under the cursor (hover is
+						// computed from the new position a frame later) and did
+						// nothing -- "renders correctly, does nothing" again,
+						// this time in the input queue rather than in a rect.
+						//
+						// Flushing here, before the button, makes a queued click
+						// mean what it says: move there, then press.
+						if ( bCursorMoved )
+						{
+							ClampCursorToTexture();
+							io.AddMousePosEvent( (float)s_flCursorX, (float)s_flCursorY );
+							bCursorMoved = false;
+						}
+
 						io.AddMouseButtonEvent( nButton, ev.bPressed );
 
 						const bool bLastEventInBatch = ( i + 1 == events.size() );
 						if ( !bLastEventInBatch )
 						{
-							if ( bCursorMoved )
-							{
-								ClampCursorToTexture();
-								io.AddMousePosEvent( (float)s_flCursorX, (float)s_flCursorY );
-								bCursorMoved = false;
-							}
-
 							float flMicroDeltaTime = s_ulLastFrameTimeNanos == 0
 								? ( 1.0f / 60.0f )
 								: float( ev.ulTimestampNanos - s_ulLastFrameTimeNanos ) / 1e9f;
@@ -1644,6 +1699,43 @@ namespace gamescope
 
 							io.DeltaTime = flMicroDeltaTime;
 							ImGui::NewFrame();
+							// D22: the micro frame MUST submit the UI, not just
+							// open and close a frame.
+							//
+							// It used to be a bare NewFrame()/EndFrame() pair,
+							// and that silently ATE the press. A NewFrame()
+							// applies the queued transition to ImGuiIO, but a
+							// frame in which no widget is submitted has no
+							// widget to notice it: HoveredId stays 0, nothing
+							// takes ActiveId, and by the next real frame the
+							// button reads as held-but-not-newly-clicked, which
+							// no ButtonBehavior() acts on. So every batch that
+							// carried a press AND anything after it -- a press
+							// plus its own release, which is what a click that
+							// arrives inside one frame period is -- lost the
+							// click entirely, while still looking like input
+							// was being delivered.
+							//
+							// Submitting the same UI here makes the micro frame
+							// a real frame in every respect except that it is
+							// never rendered to the texture (EndFrame, not
+							// Render), so the press lands on a widget exactly
+							// as it would have one frame later. It costs one
+							// extra UI build, and only on the rare drain that
+							// batches more than one button event.
+							//
+							// Guarded on DisplaySize because the drain runs
+							// before this frame's size is set (see
+							// SettingsOverlay_AddLayer): on the very first
+							// drain there is no size yet, and a UI laid out
+							// against a zero-sized display would be nonsense.
+							// s_flCurrentAlpha is already up to date here --
+							// UpdateFadeAlpha() runs before this function.
+							if ( s_flCurrentAlpha > 0.0f &&
+							     io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f )
+							{
+								gamescope::ui::shell::Draw();
+							}
 							ImGui::EndFrame();
 						}
 					}
