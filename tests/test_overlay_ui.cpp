@@ -1308,18 +1308,18 @@ TEST_CASE( "dynamic: a row built after SelfTest is still held to the laws", "[ov
 	REQUIRE( rec.Caught( ui::Law::HelpRequired ) );
 }
 
-TEST_CASE( "dynamic: an area is escaped or dynamic, never both", "[overlay_ui]" )
+TEST_CASE( "dynamic: a rebuild needs both a generation and a builder", "[overlay_ui]" )
 {
-	// Same argument as Law::Escaped: an escaped area has no entries by
-	// construction, and a dynamic one exists precisely to have them. The
-	// half-and-half area is the shape that would make the migration seam
-	// permanent.
+	// The escaped-or-dynamic half of this case went with Area::Escape() in
+	// P5. What remains is the guard that is still reachable: a dynamic area
+	// declared with only half of what a rebuild needs must not come out
+	// dynamic, because SyncIfStale() would then have a generation to
+	// compare and nothing to run.
 	{
 		ui::Registry reg;
 		ui::LawRecorder rec;
 		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
-		a.Escape( []{} );
-		a.Rebuilds( FakeGeneration, BuildFakeArea );
+		a.Rebuilds( FakeGeneration, nullptr );
 		REQUIRE( rec.Caught( ui::Law::Dynamic ) );
 		REQUIRE( !a.IsDynamic() );
 	}
@@ -1327,7 +1327,7 @@ TEST_CASE( "dynamic: an area is escaped or dynamic, never both", "[overlay_ui]" 
 		ui::Registry reg;
 		ui::LawRecorder rec;
 		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
-		a.Rebuilds( FakeGeneration, nullptr );
+		a.Rebuilds( nullptr, BuildFakeArea );
 		REQUIRE( rec.Caught( ui::Law::Dynamic ) );
 		REQUIRE( !a.IsDynamic() );
 	}

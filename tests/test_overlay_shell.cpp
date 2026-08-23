@@ -378,65 +378,25 @@ TEST_CASE( "the mode strip counts what the registration actually holds", "[overl
 }
 
 // =========================================================================
-//  The migration seam's one law
+//  Area lookup
 // =========================================================================
-TEST_CASE( "an area is legacy or E2, never both", "[overlay_shell]" )
-{
-	// Area::Escape() is P2's temporary hatch for hosting a legacy panel
-	// body in the sheet. The state that would let it survive P3 forever is
-	// the HALF-migrated area -- a few real rows plus an escaped tail, which
-	// mostly works and therefore never gets finished. So the mixture is a
-	// violation in both directions.
-	SECTION( "escaping a populated area fires" )
-	{
-		bool b = false;
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		ui::Area &area = reg.Add( "a", "A", ui::Section::Display );
-		area.Switch( "a.s", "S", ui::Bind( &b ) ).Help( "h" ).Default( false );
-		area.Escape( []{} );
-		REQUIRE( rec.Caught( ui::Law::Escaped ) );
-		REQUIRE( !area.IsEscaped() );
-	}
-	SECTION( "populating an escaped area fires" )
-	{
-		bool b = false;
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		ui::Area &area = reg.Add( "a", "A", ui::Section::Display );
-		area.Escape( []{} );
-		area.Switch( "a.s", "S", ui::Bind( &b ) ).Help( "h" ).Default( false );
-		REQUIRE( rec.Caught( ui::Law::Escaped ) );
-		REQUIRE( area.EntryCount() == 0 );
-	}
-	SECTION( "an empty escape function fires" )
-	{
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		reg.Add( "a", "A", ui::Section::Display ).Escape( nullptr );
-		REQUIRE( rec.Caught( ui::Law::Escaped ) );
-	}
-	SECTION( "EscapeCount is what a lint would report as migration debt" )
-	{
-		ui::Registry reg;
-		ui::LawRecorder rec;
-		reg.Add( "a", "A", ui::Section::Display ).Escape( []{} );
-		reg.Add( "b", "B", ui::Section::System ).Escape( []{} );
-		reg.Add( "c", "C", ui::Section::Setup );
-		REQUIRE( reg.EscapeCount() == 2 );
-		REQUIRE( reg.SelfTest() == 0 );   // an escaped area needs no Help()
-	}
-}
-
-TEST_CASE( "an escaped area is found by id like any other", "[overlay_shell]" )
+// What survives the migration seam's deletion. P5 removed Area::Escape()
+// and Law::Escaped along with the four cases that covered them -- the hatch
+// had zero call sites from P3c onward, so those cases were testing a
+// feature the product no longer contained. This case is the part of that
+// block that was never about escaping: an area is findable by id, and an
+// unknown id answers null rather than a sink.
+TEST_CASE( "an area is found by id, and an unknown id is not", "[overlay_shell]" )
 {
 	ui::Registry reg;
 	ui::LawRecorder rec;
-	reg.Add( "display.gamescope", "Gamescope", ui::Section::Display ).Escape( []{} );
+	reg.Add( "display.gamescope", "Gamescope", ui::Section::Display );
+
 	const ui::Area *pArea = reg.FindArea( "display.gamescope" );
 	REQUIRE( pArea != nullptr );
-	REQUIRE( pArea->IsEscaped() );
+	REQUIRE( pArea->Id() == "display.gamescope" );
 	REQUIRE( pArea->EntryCount() == 0 );
+
 	REQUIRE( reg.FindArea( "nope" ) == nullptr );
 }
 

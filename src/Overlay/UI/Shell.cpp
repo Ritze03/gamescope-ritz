@@ -29,13 +29,6 @@
 // (column / drawer / hidden, Ctrl+I). It is a single enum, it is not a
 // geometry, and the ladder may override it downward -- see Layout.cpp.
 //
-// ---------------------------------------------------------------------------
-// WHAT P2 DOES NOT DO
-// ---------------------------------------------------------------------------
-// The five legacy panels still draw their own bodies, verbatim, through
-// ui::Area::Escape(). They are not migrated; the sheet is only proving it can
-// hold them. P3 rewrites them area by area against the Row grammar, and the
-// escape hatch dies with the last one.
 #include "Shell.h"
 
 #include "Band.h"
@@ -932,8 +925,7 @@ namespace gamescope::ui::shell
 				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
 				{
 					const Area &a = Reg().AreaAt( i );
-					console_log.infof( "  %-20s %-12s %s", a.Id().c_str(), a.Title().c_str(),
-						a.IsEscaped() ? "(legacy body)" : "" );
+					console_log.infof( "  %-20s %s", a.Id().c_str(), a.Title().c_str() );
 					for ( size_t j = 0; j < a.EntryCount(); ++j )
 						console_log.infof( "      %s", a.EntryAt( j ).Id().c_str() );
 				}
@@ -1186,7 +1178,7 @@ namespace gamescope::ui::shell
 		// straight back.
 		bool AreaIsUnsplittable( const Area *pArea )
 		{
-			return pArea && ( pArea->IsEscaped() || pArea->HasContent() );
+			return pArea && pArea->HasContent();
 		}
 
 		std::string FormatLadder()
@@ -1450,15 +1442,7 @@ namespace gamescope::ui::shell
 			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 			       TypeRole::Section, Col( Role::TextPrimary ), szCrumb );
 
-			if ( pArea && pArea->IsEscaped() )
-			{
-				// The migration seam is visible in the UI, not only in the
-				// source. An un-migrated category should look un-migrated:
-				// that is the pressure that gets P3 finished.
-				Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
-				       TypeRole::Meta, Col( Role::WarnText ), "legacy body", TextAlign::Right );
-			}
-			else if ( pArea )
+			if ( pArea )
 			{
 				// SPEC §8.1's header, and §1.1's D9 amendment naming exactly
 				// what may live here: "the breadcrumb, the `differs N` chip,
@@ -2398,7 +2382,7 @@ namespace gamescope::ui::shell
 		// The Log is the only one. Everything about how it LOOKS is decided
 		// here, in the shell, because the registration hands over data and
 		// nothing else -- no font, no colour, no width, no cursor. That is
-		// what makes this a content view rather than a second Escape().
+		// what makes this a content view rather than an escape hatch.
 		//
 		// Severity is a small int on the line, mapped to a role here, so a
 		// category cannot introduce a colour the palette does not have.
@@ -2486,43 +2470,6 @@ namespace gamescope::ui::shell
 		{
 			if ( !pArea )
 				return;
-
-			if ( pArea->IsEscaped() )
-			{
-				// ---------------------------------------------------------
-				// THE MIGRATION SEAM, at its one call site.
-				// ---------------------------------------------------------
-				// API.md §13: "Escape() pushes the old ImGuiStyle, runs the
-				// old code inside the sheet's child, pops." Concretely, the
-				// legacy panels assume ImGui's own cursor-driven layout --
-				// SameLine, item spacing, indent, a window content region
-				// that starts at a padded origin. The kit assumes none of
-				// that and pushes zero padding for its own rows. So the
-				// hatch restores the padding the legacy code expects,
-				// scoped to the child, and puts it back afterwards.
-				//
-				// It looks wrong on purpose. There is no styling here that
-				// tries to make a legacy body blend into an E2 sheet: a
-				// half-convincing blend is how a migration stops being
-				// urgent.
-				ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding,
-					ImVec2( Px( tok::kSheetPad ), Px( tok::kM ) ) );
-				ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
-				// Both scrollbars, deliberately. The legacy panels were
-				// authored for a ~440-wide resizable window and some of
-				// them lay out wider than the sheet column gives them; a
-				// control the user cannot reach is a worse outcome than a
-				// scrollbar in a region that will not have one after P3.
-				if ( ImGui::BeginChild( "##escape", ImVec2( rc.Width(), rc.Height() ),
-					ImGuiChildFlags_None,
-					ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar ) )
-				{
-					pArea->EscapeBody()();
-				}
-				ImGui::EndChild();
-				ImGui::PopStyleVar();
-				return;
-			}
 
 			ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
 			if ( ImGui::BeginChild( "##sheetrows", ImVec2( rc.Width(), rc.Height() ),
@@ -3012,23 +2959,6 @@ namespace gamescope::ui::shell
 			{
 				y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextBody ), sSummary.c_str(), y );
 				y += Px( tok::kM );
-			}
-
-			if ( pArea->IsEscaped() )
-			{
-				// Overview is honest about what this category currently is.
-				// SPEC §5.5 calls the Overview "the most useful screen in
-				// the product" precisely because it answers "what state am
-				// I in" before you have clicked anything -- and for a
-				// legacy body the true answer is that the shell cannot see
-				// inside it yet.
-				y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::WarnText ),
-					"This category still draws its original panel body, hosted verbatim in the sheet. "
-					"It has no registered rows yet, so the Inspector has nothing to derive and no "
-					"selection is possible here.", y );
-				y += Px( tok::kM );
-				return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ),
-					"sheet: legacy escape  ·  inspector 0 params  ·  migration pending", y );
 			}
 
 			// SPEC §5.5's budget line: "sheet 9 rows · inspector 14 params

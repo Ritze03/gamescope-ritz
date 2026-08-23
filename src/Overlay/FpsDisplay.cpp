@@ -2493,8 +2493,8 @@ namespace gamescope
 	// its own offscreen texture, its own submission (see this file's header
 	// comment). None of it is part of the redesign and none of it changed.
 	// What follows replaces FpsDisplay_DrawSettingsPanel() -- the six-tab
-	// panel issue #59 built -- with a registry declaration, which retires
-	// the last two Escape() hatches together with PanelLog's.
+	// panel issue #59 built -- with a registry declaration, which retired
+	// the last two escape hatches together with PanelLog's.
 	//
 	// WHERE THE SIX TABS WENT. General/FPS/CPU/GPU/Media/Statistics were a
 	// tab bar inside one rail item. D13.1 already ruled on that shape for
@@ -2675,8 +2675,8 @@ namespace gamescope
 		}
 	}
 
-	// The area. One declaration, no ImGui in it -- which is what lets
-	// EscapeCount() reach zero.
+	// The area. One declaration, no ImGui in it -- which is what let the
+	// last escape hatch go (P5 deleted Area::Escape() itself).
 	void FpsDisplay_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "system.monitor", "Monitor", ui::Section::System );

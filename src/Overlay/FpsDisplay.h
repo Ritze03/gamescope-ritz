@@ -55,7 +55,7 @@ namespace gamescope
 	// This REPLACES FpsDisplay_DrawSettingsPanel(), the six-tab panel issue
 	// #59 built. It is a declaration, not a draw call: it places no pixel,
 	// runs at startup rather than per frame, and takes no ImGui context --
-	// which is what let the last Escape() hatch for this area go.
+	// which is what let the last escape hatch for this area go.
 	//
 	// Only the SETTINGS half of FpsDisplay.cpp moved. The HUD drawn over the
 	// game keeps its own ImGui context, its own offscreen texture and its
