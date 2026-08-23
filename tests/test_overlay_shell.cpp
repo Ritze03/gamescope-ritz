@@ -590,3 +590,121 @@ TEST_CASE( "closing the drawer gives the sheet's lane its full column back", "[o
 		flColW / flScale, std::max( 0.0f, flOccPx - flPad ) / flScale );
 	REQUIRE( open.flWidth < flColW / flScale );
 }
+
+// =========================================================================
+//  SPEC §8.3's multi-column sheet (D20.2)
+// =========================================================================
+// `nColumns` was computed, printed by `shell.layout`, and read by nothing --
+// the seventh instance of this codebase's dominant defect class. These pin
+// the geometry that now consumes it.
+TEST_CASE( "sheet columns: width follows index.html's own formula", "[overlay_shell]" )
+{
+	// colW = ( sheet - 2 x pad - (cols - 1) x gutter ) / cols, with pad and
+	// gutter both the sheet's 24-unit pad. Checked at every column count so
+	// a change to one cannot silently be a change to the others.
+	const float flScale = 1.0f;
+	const float flBodyW = 928.0f;
+	const float flPad   = ui::tok::kSheetPad * flScale;
+
+	for ( int n = 1; n <= ui::kMaxSheetColumns; ++n )
+	{
+		INFO( n << " columns" );
+		const ui::SheetColumnSet cs =
+			ui::LayOutSheetColumns( flBodyW, 0.0f, n, flScale );
+
+		REQUIRE( cs.nColumns == n );
+
+		const float flExpect =
+			( flBodyW - 2.0f * flPad - (float)( n - 1 ) * flPad ) / (float)n;
+
+		for ( int c = 0; c < n; ++c )
+		{
+			INFO( "column " << c );
+			REQUIRE_THAT( cs.cols[ c ].rc.Width(), WithinAbs( flExpect, 1e-3f ) );
+
+			// Each column carries its OWN lane, sized to itself -- SPEC
+			// §2.2's two hard lines exist once per column.
+			REQUIRE_THAT( cs.cols[ c ].lane.flWidth,
+			              WithinAbs( flExpect / flScale, 1e-3f ) );
+		}
+
+		// The columns tile the body: first starts at the pad, last ends one
+		// pad short of the right edge, and no two overlap.
+		REQUIRE_THAT( cs.cols[ 0 ].rc.x0, WithinAbs( flPad, 1e-3f ) );
+		REQUIRE_THAT( cs.cols[ n - 1 ].rc.x1, WithinAbs( flBodyW - flPad, 1e-3f ) );
+		for ( int c = 1; c < n; ++c )
+			REQUIRE( cs.cols[ c ].rc.x0 >= cs.cols[ c - 1 ].rc.x1 );
+	}
+}
+
+TEST_CASE( "sheet columns: D17's drawer occlusion is per column", "[overlay_shell]" )
+{
+	// THE INTERACTION THE PHASE HAD TO GET RIGHT. The drawer floats over the
+	// sheet's right edge, so with several columns it covers the rightmost
+	// one and may not touch the leftmost at all. A sheet-wide subtraction
+	// would narrow every column by the same amount and waste the left of the
+	// sheet; ignoring it would put the rightmost column's controls back
+	// underneath the drawer, which is the D17 bug.
+	const float flScale = 1.0f;
+	const float flBodyW = 928.0f;
+	const float flOcc   = 200.0f;
+
+	const ui::SheetColumnSet cs = ui::LayOutSheetColumns( flBodyW, flOcc, 2, flScale );
+
+	// The left column is entirely clear of the drawer, so its lane is its
+	// full width -- untouched.
+	REQUIRE( cs.cols[ 0 ].rc.x1 <= flBodyW - flOcc );
+	REQUIRE_THAT( cs.cols[ 0 ].lane.flWidth,
+	              WithinAbs( cs.cols[ 0 ].rc.Width() / flScale, 1e-3f ) );
+
+	// The right column is overlapped, so its lane is strictly narrower than
+	// its rect -- nothing it places can land under the drawer.
+	REQUIRE( cs.cols[ 1 ].rc.x1 > flBodyW - flOcc );
+	REQUIRE( cs.cols[ 1 ].lane.flWidth < cs.cols[ 1 ].rc.Width() / flScale );
+}
+
+TEST_CASE( "sheet columns: one column reduces to D17's original subtraction", "[overlay_shell]" )
+{
+	// The generalisation must not have changed the case that already worked.
+	// With one column the per-column rule is arithmetically the single
+	// subtraction the shipping code did before D20 -- so the two are one
+	// rule, not two that agree by coincidence.
+	const float flScale = 2.0f;
+	const float flBodyW = 1100.0f;
+	const float flOcc   = 400.0f;
+	const float flPad   = ui::tok::kSheetPad * flScale;
+
+	const ui::SheetColumnSet cs = ui::LayOutSheetColumns( flBodyW, flOcc, 1, flScale );
+
+	const float flColW = flBodyW - 2.0f * flPad;
+	const ui::Lane before = ui::Lane::ForColumn(
+		flColW / flScale, std::max( 0.0f, flOcc - flPad ) / flScale );
+
+	REQUIRE_THAT( cs.cols[ 0 ].lane.flWidth, WithinAbs( before.flWidth, 1e-3f ) );
+	REQUIRE_THAT( cs.cols[ 0 ].lane.flCtlMax, WithinAbs( before.flCtlMax, 1e-3f ) );
+}
+
+TEST_CASE( "sheet columns: an unsplittable area is always one column", "[overlay_shell]" )
+{
+	// A content body or an escaped legacy panel cannot be cut in half, and
+	// Solve() is where that is decided -- so `shell.layout`'s printed count
+	// and the drawn count are the same number. Answering it at the drawing
+	// site instead would recreate the exact defect this change removes.
+	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 0.5f );
+
+	// 25 rows at 0.5x is the three-column case ...
+	const ui::LadderResult wide =
+		ui::Solve( slab, ui::InspectorHost::Column, 25, false );
+	REQUIRE( wide.nColumns == 3 );
+
+	// ... and the same area, marked unsplittable, is one.
+	const ui::LadderResult flat =
+		ui::Solve( slab, ui::InspectorHost::Column, 25, true );
+	REQUIRE( flat.nColumns == 1 );
+
+	// The rest of the ladder is untouched -- the flag caps columns and
+	// nothing else, so it cannot quietly change a region.
+	REQUIRE( flat.flRailBase == wide.flRailBase );
+	REQUIRE( flat.flSheetBase == wide.flSheetBase );
+	REQUIRE( flat.nStep == wide.nStep );
+}

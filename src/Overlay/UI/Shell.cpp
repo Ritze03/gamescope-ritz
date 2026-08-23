@@ -1115,6 +1115,17 @@ namespace gamescope::ui::shell
 			ImGui::PopFont();
 		}
 
+		// D20.2. Which areas cannot be split into columns -- asked in exactly
+		// one place so `shell.layout`'s printed column count and the sheet's
+		// drawn one are the same number by construction. A printed value that
+		// disagrees with the screen is the defect this whole change removes;
+		// re-deriving the predicate at the second call site would put it
+		// straight back.
+		bool AreaIsUnsplittable( const Area *pArea )
+		{
+			return pArea && ( pArea->IsEscaped() || pArea->HasContent() );
+		}
+
 		std::string FormatLadder()
 		{
 			const float flW = s_flSurfaceW.load( std::memory_order_relaxed );
@@ -1124,7 +1135,8 @@ namespace gamescope::ui::shell
 
 			const Slab slab = Slab::For( flW, flH, Scale() );
 			const Area *pArea = SelectedArea();
-			const LadderResult L = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );
+			const LadderResult L = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0,
+			                              AreaIsUnsplittable( pArea ) );
 
 			char sz[ 160 ];
 			snprintf( sz, sizeof( sz ), "rail %.0f · %s %.0f · sheet %.0f · %d col · step %d",
@@ -2145,7 +2157,8 @@ namespace gamescope::ui::shell
 		// flOccludedPx: how much of `rc`'s right side the Inspector drawer
 		// floats over, 0 when it does not (D17). The sheet's REGION is
 		// deliberately unchanged -- only the lane inside it gives way.
-		void DrawSheetBody( const Rect &rc, const Area *pArea, float flOccludedPx = 0.0f )
+		void DrawSheetBody( const Rect &rc, const Area *pArea, float flOccludedPx = 0.0f,
+		                    int nColumns = 1 )
 		{
 			if ( !pArea )
 				return;
@@ -2191,53 +2204,115 @@ namespace gamescope::ui::shell
 			if ( ImGui::BeginChild( "##sheetrows", ImVec2( rc.Width(), rc.Height() ),
 				ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
 			{
-				const float flPad   = Px( tok::kSheetPad );
-				const float flColW  = rc.Width() - 2.0f * flPad;
+				// D20.2. Column geometry -- widths, origins and the per-column
+				// lane the drawer may have narrowed -- comes from Layout.cpp
+				// and nowhere else. This function decides WHICH ROWS go in a
+				// column; it does not decide where a column is.
+				const SheetColumnSet cols =
+					LayOutSheetColumns( rc.Width(), flOccludedPx, nColumns, Scale() );
 
-				// The drawer's overlap is measured against the region; the
-				// COLUMN already stops one pad short of it, and that pad is the
-				// first thing the drawer eats.
-				const float flOccludedCol = std::max( 0.0f, flOccludedPx - flPad );
-				const Lane  lane    = Lane::ForColumn( flColW / Scale(), flOccludedCol / Scale() );
-
-				// Everything in the column shares the lane's right edge, so the
-				// group bands and a content body retreat from the drawer with
-				// the rows rather than sliding underneath it. With no drawer
-				// lane.flWidth is flColW exactly, so this is a no-op.
-				const Rect  rcCol   { rc.x0 + flPad, rc.y0,
-				                      rc.x0 + flPad + Px( lane.flWidth ), rc.y1 };
-				float       y       = rc.y0 + Px( tok::kM );
-
-				// A band is emitted when the group index CHANGES, so a group
-				// declared with no entries under it draws nothing at all --
-				// an empty heading is the one thing a band must never be.
-				size_t nLastGroup = (size_t)-1;
+				// ---- pack the groups into the columns --------------------
+				// THE UNIT OF PACKING IS A GROUP, NEVER A ROW. index.html's
+				// own sheet does this ("greedy balance by row weight, not by
+				// group count") and it is the right rule for a reason the
+				// mockup does not have to state: a group split across a
+				// column boundary either orphans its rows under no heading or
+				// forces the band to be repeated at the top of the next
+				// column. The first is unreadable and the second makes one
+				// declared group look like two. Keeping a group whole costs
+				// some balance and buys the row grammar intact.
+				//
+				// Weight is LINES, not rows -- a composite is n x 44 (SPEC
+				// §4.2), so counting it as one would let a column holding
+				// three composites overflow while looking short.
+				struct Block { size_t nFirst = 0, nCount = 0; size_t nGroup = 0; int nLines = 0; };
+				std::vector<Block> blocks;
 
 				for ( size_t i = 0; i < pArea->EntryCount(); ++i )
 				{
-					const Entry &entry = pArea->EntryAt( i );
-
 					const size_t nGroup = pArea->GroupOf( i );
-					if ( nGroup != nLastGroup && nGroup < pArea->Groups().size() )
-					{
-						y = DrawGroupBand( *pArea, nGroup, rcCol, y );
-						nLastGroup = nGroup;
-					}
+					// A band is emitted when the group index CHANGES, so a
+					// group declared with no entries under it draws nothing
+					// at all -- an empty heading is the one thing a band
+					// must never be. Same rule, now expressed as "a block
+					// starts where the group changes".
+					if ( blocks.empty() || nGroup != blocks.back().nGroup )
+						blocks.push_back( Block{ i, 0, nGroup, 0 } );
 
-					const bool bSel = ( SelectedEntry() == &entry );
-					if ( DrawEntryRow( entry, lane, rc.x0 + flPad, y, bSel ) )
+					blocks.back().nCount++;
+					blocks.back().nLines += LinesFor( pArea->EntryAt( i ) );
+				}
+
+				// Greedy: each group goes to the column that is shortest so
+				// far. index.html's algorithm, kept identical so the mockup
+				// stays the tiebreaker it is declared to be.
+				std::vector<int> colOf( blocks.size(), 0 );
+				float flWeight[ kMaxSheetColumns ] = {};
+				for ( size_t b = 0; b < blocks.size(); ++b )
+				{
+					int nBest = 0;
+					for ( int c = 1; c < cols.nColumns; ++c )
+						if ( flWeight[ c ] < flWeight[ nBest ] )
+							nBest = c;
+
+					colOf[ b ] = nBest;
+					// The band's own height counts too, or a column of many
+					// small groups packs short against one of few big ones.
+					flWeight[ nBest ] += (float)blocks[ b ].nLines + 1.0f;
+				}
+
+				// ---- draw ------------------------------------------------
+				float yOf[ kMaxSheetColumns ];
+				for ( int c = 0; c < cols.nColumns; ++c )
+					yOf[ c ] = rc.y0 + Px( tok::kM );
+
+				for ( size_t b = 0; b < blocks.size(); ++b )
+				{
+					const Block &blk = blocks[ b ];
+					const int    c   = colOf[ b ];
+
+					// Each column has its OWN lane, and right-binding holds
+					// within it: every rect a row places comes from this
+					// column's lane and this column's origin, so SPEC §2.2's
+					// two hard vertical lines exist once per column rather
+					// than once per sheet.
+					const Lane &lane      = cols.cols[ c ].lane;
+					const float flOriginX = rc.x0 + cols.cols[ c ].rc.x0;
+					const Rect  rcCol { flOriginX, rc.y0,
+					                    flOriginX + Px( lane.flWidth ), rc.y1 };
+
+					if ( blk.nGroup < pArea->Groups().size() )
+						yOf[ c ] = DrawGroupBand( *pArea, blk.nGroup, rcCol, yOf[ c ] );
+
+					for ( size_t k = 0; k < blk.nCount; ++k )
 					{
-						Select( &entry );
-						s_eFocusRegion = Region::Sheet;
+						const Entry &entry = pArea->EntryAt( blk.nFirst + k );
+						const bool   bSel  = ( SelectedEntry() == &entry );
+
+						if ( DrawEntryRow( entry, lane, flOriginX, yOf[ c ], bSel ) )
+						{
+							Select( &entry );
+							s_eFocusRegion = Region::Sheet;
+						}
+						// n x 44 for a composite, 44 for everything else --
+						// from Band.cpp, never from a call site (SPEC §4.2
+						// clause 1).
+						yOf[ c ] += Px( tok::kRowH ) * (float)LinesFor( entry );
 					}
-					// n x 44 for a composite, 44 for everything else -- from
-					// Band.cpp, never from a call site (SPEC §4.2 clause 1).
-					y += Px( tok::kRowH ) * (float)LinesFor( entry );
 				}
 
 				// A content area's body, beneath its own rows (Area::Content).
+				// Only ever one column here: Solve() forces nColumns to 1 for
+				// an area with a content body, because one scrolling body
+				// cannot be cut in half.
 				if ( pArea->HasContent() )
-					DrawContentBody( *pArea, rcCol, y + Px( tok::kM ), rc.y1 );
+				{
+					const Lane &lane      = cols.cols[ 0 ].lane;
+					const float flOriginX = rc.x0 + cols.cols[ 0 ].rc.x0;
+					const Rect  rcCol { flOriginX, rc.y0,
+					                    flOriginX + Px( lane.flWidth ), rc.y1 };
+					DrawContentBody( *pArea, rcCol, yOf[ 0 ] + Px( tok::kM ), rc.y1 );
+				}
 			}
 			ImGui::EndChild();
 		}
@@ -4077,7 +4152,8 @@ namespace gamescope::ui::shell
 			s_sArmedAction.clear();
 
 		const Area *pArea = SelectedArea();
-		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0 );
+		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0,
+		                             AreaIsUnsplittable( pArea ) );
 
 		// SPEC §8.4's 160 ms region duration, applied to the ONE region
 		// dimension that changes without the surface changing. Note the
@@ -4151,7 +4227,8 @@ namespace gamescope::ui::shell
 			if ( s_bExplainPage && SelectedEntry() )
 				DrawExplainPage( Off( regions.rcSheetBody ), *SelectedEntry() );
 			else
-				DrawSheetBody( Off( regions.rcSheetBody ), pArea, flDrawerOverlapPx );
+				DrawSheetBody( Off( regions.rcSheetBody ), pArea, flDrawerOverlapPx,
+				               ladderDrawn.nColumns );
 			DrawSheetFoot( Off( regions.rcSheetFoot ) );
 
 			// The rail/sheet boundary. Drawn from the sheet's own left
