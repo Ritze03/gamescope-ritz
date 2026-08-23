@@ -60,6 +60,9 @@
 #include "main.hpp"
 #include "steamcompmgr.hpp"
 #include "SettingsOverlay.h"
+// D22: the Left Ctrl + Right Ctrl palette shortcut lives in this file's
+// hotkey table, so it needs the shell's one-line request API.
+#include "Overlay/UI/Shell.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -357,6 +360,160 @@ static bool wlserver_check_settings_overlay_toggle( xkb_keysym_t normalizedKeysy
 
 	return false;
 }
+
+// ---------------------------------------------------------------------------
+// D22: Right Ctrl opens the overlay; Left Ctrl + Right Ctrl opens the palette.
+// ---------------------------------------------------------------------------
+// WHY A TAP AND NOT A PRESS. Right Ctrl is a modifier, and a modifier that
+// fires on its own PRESS cannot be used as a modifier any more -- Right
+// Ctrl + C would open the overlay every time. So the overlay fires on
+// RELEASE, and only if nothing else was pressed while it was held: the
+// "tap" gesture, which is the only way to give a modifier its own binding
+// without taking away its day job.
+//
+// WHY NOTHING HERE IS CONSUMED. Every branch below returns false, so the key
+// still travels its normal path, and that is deliberate rather than an
+// oversight. These are MODIFIERS: swallowing Right Ctrl's release while its
+// press was already delivered would leave the game (or the overlay) holding a
+// Ctrl that is physically up -- a stuck modifier, which is worse than any
+// binding is worth. Acting on a key and forwarding it are independent, and
+// for a modifier the answer is always "act, and forward".
+//
+// LEFT AND RIGHT ARE GENUINELY DISTINCT HERE. NormalizeKeysymForHotkey()
+// upper-cases and applies k_mapKeysymRemapping, and neither operation merges
+// Control_L with Control_R (the table only folds Meta->Super, ISO_Left_Tab->
+// Tab and friends). So setPressedKeySyms really does tell the two apart, and
+// this binding is not quietly "either Ctrl". Verified against real key
+// events, not just the table -- see D22 in AUTONOMOUS-DECISIONS.md.
+static bool s_bRightCtrlIsTap = false;
+
+static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
+{
+	const bool bLeftCtrlHeld  = setPressedKeySyms.contains( XKB_KEY_Control_L );
+	const bool bRightCtrlHeld = setPressedKeySyms.contains( XKB_KEY_Control_R );
+
+	if ( press )
+	{
+		// Both Ctrls down: the palette. Fires on whichever of the two went
+		// down SECOND, so the gesture works in either order.
+		if ( ( normalizedKeysym == XKB_KEY_Control_R && bLeftCtrlHeld ) ||
+		     ( normalizedKeysym == XKB_KEY_Control_L && bRightCtrlHeld ) )
+		{
+			// The palette is drawn INSIDE the overlay, so it needs the
+			// overlay open -- and SetVisible rather than Toggle, because
+			// toggling would close the overlay in the very common case where
+			// the shortcut is used while it is already open.
+			gamescope::SettingsOverlay_SetVisible( true );
+			gamescope::ui::shell::RequestPalette();
+
+			// The palette consumed this gesture, so releasing Right Ctrl
+			// afterwards must NOT also toggle the overlay underneath it.
+			s_bRightCtrlIsTap = false;
+			return false;
+		}
+
+		if ( normalizedKeysym == XKB_KEY_Control_R )
+		{
+			// Arm the tap. Only a release with nothing pressed in between
+			// will fire it.
+			s_bRightCtrlIsTap = true;
+			return false;
+		}
+
+		// Any other key while Right Ctrl is held means it was being used as
+		// a modifier, not tapped. Left Ctrl is excluded because the combo
+		// above already decided what a second Ctrl means.
+		if ( normalizedKeysym != XKB_KEY_Control_L )
+			s_bRightCtrlIsTap = false;
+
+		return false;
+	}
+
+	if ( normalizedKeysym == XKB_KEY_Control_R && s_bRightCtrlIsTap )
+	{
+		s_bRightCtrlIsTap = false;
+		gamescope::SettingsOverlay_ToggleVisible();
+	}
+
+	return false;
+}
+
+// D22. A key event on THIS compositor's own keyboard, from a script.
+//
+// overlay_e2_key (Overlay/UI/Shell.cpp) deliberately stops short of here: it
+// appends to the overlay's own input queue, which is what makes it incapable
+// of reaching anything but the overlay. That is the right guarantee for
+// testing the shell's own key handling, and it is exactly the wrong tool for
+// testing a HOTKEY, because a hotkey is decided in
+// wlserver_process_hotkeys() -- upstream of that queue. A binding "verified"
+// with overlay_e2_key is not verified at all; it has never been through the
+// code that would actually match it. That is how KEY_SLASH came to be
+// missing from ImGuiKeyForKeycode while every test passed.
+//
+// So this exists, and its containment argument is one level out from
+// overlay_e2_key's rather than absent. It calls wlserver_key(), the same
+// entry point the SDL, nested-Wayland, OpenVR and InputEmulation backends
+// call, against wlserver.wlr.virtual_keyboard_device -- THIS gamescope
+// instance's own virtual keyboard, on its own seat. The furthest it can
+// travel is this instance's focused surface (the nested game) or this
+// instance's overlay. It has no route to the host compositor's seat, so it
+// cannot land in the user's browser: that is a property of which seat the
+// event is created on, not of care taken at the call site. It is the
+// difference between this and ydotool, which drives the host seat and is
+// still banned (AUTONOMOUS-DECISIONS.md D4).
+//
+// Codes are raw evdev KEY_* numbers, the same convention wlserver_key()
+// takes. Numeric rather than named on purpose: the point of this command is
+// to test what a REAL keycode does, so it must not go through a name table
+// that could itself be the thing that is wrong.
+static gamescope::ConCommand cc_wlserver_debug_key(
+	"wlserver_debug_key",
+	"Send a key event on gamescope's OWN virtual keyboard: wlserver_debug_key <evdev-code> <0|1> "
+	"[<code> <0|1> ...]. 1 is press, 0 is release. Goes through wlserver_process_hotkeys(), so it "
+	"is the only way to exercise a HOTKEY (Right Ctrl, Left Ctrl + Right Ctrl, Ctrl+Shift+O) from a "
+	"script -- overlay_e2_key cannot, by design. Confined to this compositor's own seat: it can "
+	"reach this instance's game or overlay and nothing on the host. Through gamescopectl the "
+	"arguments must be ONE quoted argument: gamescopectl wlserver_debug_key \"97 1 97 0\".",
+	[]( std::span<std::string_view> args )
+	{
+		if ( args.size() < 3 || ( args.size() - 1 ) % 2 != 0 )
+		{
+			console_log.errorf( "usage: wlserver_debug_key <evdev-code> <0|1> [<code> <0|1> ...]" );
+			return;
+		}
+
+		// One lock for the whole sequence: a chord's modifier and its key
+		// must not be able to interleave with real input from the seat.
+		//
+		// Conditional, because this command has two callers with opposite
+		// lock states. gamescopectl arrives as a Wayland request
+		// (gamescope_private_execute, below), which wlserver already
+		// dispatches WITH the lock held -- taking it again there deadlocks
+		// the compositor outright, which is exactly what an unconditional
+		// wlserver_lock() here did on the first try. The script console can
+		// reach a ConCommand without it.
+		const bool bNeedLock = !wlserver_is_lock_held();
+		if ( bNeedLock )
+			wlserver_lock();
+		for ( size_t i = 1; i + 1 < args.size(); i += 2 )
+		{
+			const std::string sCode( args[ i ] );
+			const std::string sPress( args[ i + 1 ] );
+
+			char *pszEnd = nullptr;
+			const unsigned long ulCode = std::strtoul( sCode.c_str(), &pszEnd, 10 );
+			if ( pszEnd == sCode.c_str() || ulCode > 0xffff )
+			{
+				console_log.errorf( "wlserver_debug_key: bad keycode \"%s\"", sCode.c_str() );
+				break;
+			}
+
+			static uint32_t s_uDebugKeySequence = 0;
+			wlserver_key( (uint32_t)ulCode, sPress != "0", ++s_uDebugKeySequence );
+		}
+		if ( bNeedLock )
+			wlserver_unlock();
+	} );
 
 // Which side (the focused game's wl_seat, or the settings overlay) actually
 // received a given key/mouse-button's PRESS, keyed by raw linux keycode/
@@ -2676,6 +2833,13 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	// it always wins the combo regardless of what else might be registered.
 	if ( wlserver_check_settings_overlay_toggle( normalizedKeysym, press, setPressedKeySyms ) )
 		return true;
+
+	// D22: Right Ctrl / Left Ctrl + Right Ctrl. Never returns true (see the
+	// function's own comment on why a modifier is acted on but not consumed),
+	// so the call is a statement rather than a condition -- writing it as an
+	// `if` would suggest it can swallow a key, which is exactly the thing it
+	// must never do.
+	wlserver_check_ctrl_shortcuts( normalizedKeysym, press, setPressedKeySyms );
 
 	if ( log_binding.Enabled( LOG_DEBUG ) )
 	{

@@ -41,4 +41,22 @@ namespace gamescope::ui::shell
 	// Draws the slab, the rail, the sheet and the inspector; runs the
 	// keyboard map (SPEC §8.2); and hosts whatever the selected area is.
 	void Draw();
+
+	// D22: ask for the command palette to be open on the next frame.
+	//
+	// The second function on this header, and the file comment above still
+	// means what it says -- this is not an authoring API and reaches into
+	// nothing. It exists because the palette's binding moved OUT of the
+	// shell's own keyboard map and into wlserver's hotkey table (Left Ctrl +
+	// Right Ctrl), and wlserver runs on a different thread from the one that
+	// owns every piece of shell state.
+	//
+	// So it is a REQUEST, not a setter: it stores one atomic flag that
+	// Draw() consumes at the top of the next frame, on the thread that owns
+	// the state. Writing s_bPaletteOpen directly from wlserver would be a
+	// plain data race against the frame that is drawing the palette.
+	//
+	// Safe to call from any thread, and idempotent -- asking twice before a
+	// frame runs opens the palette once.
+	void RequestPalette();
 }

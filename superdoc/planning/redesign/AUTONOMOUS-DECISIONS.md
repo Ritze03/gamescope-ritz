@@ -10,6 +10,97 @@ cheap.
 
 ---
 
+## 2026-08-24 (D22 — the mouse)
+
+### D22 · Pointer injection is built, and the UI is a mouse UI again
+
+The user reported: *"Most of the UI elements aren't controllable with my mouse at all"*, and
+*"there shouldn't be keyboard controls for the normal UI. That's what the Launcher-style
+controls are for."*
+
+**Root cause, and why nobody caught it.** D4 banned synthetic input after injected `ydotool`
+clicks twice landed in the user's own windows. The consequence nobody stated: **the entire E2
+shell was built and verified without a mouse.** D18 built `overlay_e2_key` and every subsequent
+binding was proved with it; the *controls* — which a pointer drives, not a key — kept being
+"verified" by console commands that wrote their bound value directly. That proves the binding
+and never the hit box. Three independent defects hid behind that gap, and all three were found
+in the first hour of actually clicking things:
+
+1. **The row selector ate every control in its row.** Each sheet row draws a full-width
+   `InvisibleButton` first (so clicking a label selects the row) and then draws the control into
+   the same rect. A comment in `DrawEntryRow` asserted that "ImGui resolves a hover to the last
+   item added" — that is **false**. `ItemHoverable()` rejects a later item while an earlier one
+   holds `g.HoveredId`, and again on `g.ActiveId` while a button is held. So the selector won the
+   hit test for the whole row and *no* switch, slider, segmented cell, stepper, chip or colour
+   rail could be hovered or clicked. One missing `SetNextItemAllowOverlap()`, product-wide.
+2. **The double-click fix swallowed presses.** `DrainInputQueue()`'s micro-`NewFrame()`/
+   `EndFrame()` pump submitted **no UI**, so any button transition it consumed was invisible to
+   every widget. Any press sharing a drain with another event was lost outright.
+3. **The position was queued after the button.** The drain called `AddMouseButtonEvent()` before
+   flushing the pending cursor position, so ImGui's trickling applied the press at the **stale**
+   pointer position and deferred the move a frame. The control under the cursor lit up and did
+   nothing.
+
+**Chosen:** build `overlay_e2_pointer` first (motion, button, scroll, and a `pos` readback), fix
+all three, and add `overlay_e2_get` so a script can ask "did that click move the state?" — which
+nothing could do before.
+
+**Why `overlay_e2_pointer` is not the banned thing.** It appends to `s_InputQueue`, the overlay's
+own producer/consumer queue, exactly as `overlay_e2_key` does. There is no seat, no `wl_pointer`
+and no other client on the far side of it, so an event put in can only ever arrive at this
+overlay. The `ydotool` hazard is absent *structurally*, not by care.
+
+**`wlserver_debug_key` is a second, wider tool, deliberately.** A HOTKEY is decided in
+`wlserver_process_hotkeys()`, upstream of the overlay's queue, so `overlay_e2_key` cannot test
+one — a binding "verified" with it has never been through the code that would match it. That is
+how `KEY_SLASH` stayed missing from `ImGuiKeyForKeycode` while every test passed. This command
+calls `wlserver_key()` on **this instance's own virtual keyboard**, so its reach is this
+compositor's game or overlay and nothing on the host. It is still not `ydotool`, which drives the
+host seat and stays banned.
+
+### D22.1 · ImGui's keyboard navigation is off unconditionally
+
+`SettingsOverlay_AddLayer()` enabled `ImGuiConfigFlags_NavEnableKeyboard` every frame from
+`settings_overlay_keyboard_nav` (default **true**) while `Shell.cpp` disabled it from inside
+`Draw()`. The flag is read by `NewFrame()`, and the enable ran immediately *before* it while the
+disable ran *after* — so nav was on for every frame ever drawn and the shell's disable never took
+effect once. That is the competing focus model: ImGui's nav cursor consuming the Tab and arrow
+keys SPEC §8.2 gives to the rows, and suppressing mouse hover via `NavDisableMouseHover`.
+
+**Chosen:** ImGui nav off, always. The setting is **not** deleted — it now governs the *shell's
+own* Tab/arrow navigation, which is what a user asking for "keyboard navigation of the overlay"
+actually means.
+
+**What was removed vs kept.** Removed: ImGui's parallel nav model, entirely. Gated behind the
+setting (default on): the shell's Tab region cycling and its arrow movement/adjustment. Kept
+unconditional: **Esc**, the palette, `Ctrl+I`, `Ctrl+/`, `Ctrl+D`, `Ctrl+←/→`. Those are
+*commands*, not a way of getting around — they have no mouse equivalent to fall back to, and Esc
+in particular must never become unreachable. Nothing was stripped wholesale: keyboard access to
+every control remains, it simply stopped competing with the pointer.
+
+`overlay.keyboard_navigation_enabled` in the config schema was already read and never consumed;
+it is untouched, so existing configs keep loading exactly as before.
+
+### D22.2 · Right Ctrl opens the overlay; Left Ctrl + Right Ctrl opens the palette
+
+Both fire on a **tap** (release with nothing pressed in between) rather than on press, because a
+modifier that fires on its own press stops being usable as a modifier — Right Ctrl + C would
+open the overlay every time. Neither branch **consumes** the key: these are modifiers, and
+swallowing a release whose press was already delivered leaves a stuck Ctrl in the game, which is
+worse than any binding is worth.
+
+Left and Right Ctrl are genuinely distinct on the way in — `NormalizeKeysymForHotkey()`
+upper-cases and applies `k_mapKeysymRemapping`, and neither merges `Control_L` with `Control_R`.
+Verified with **real key events** through `wlserver_process_hotkeys()`, not against the mapping
+table: Right Ctrl tap opens, taps again to close, `RCtrl+C` correctly does **not** toggle,
+`LCtrl+RCtrl` opens the palette, and **Ctrl+Shift+O still works** — it is kept, and the startup
+toast now advertises the new primary binding instead.
+
+*Cheap to reverse:* the bindings are one function in `wlserver.cpp`; the three input fixes are
+each a few lines and are pinned by tests.
+
+---
+
 ## 2026-08-23 (P5 — the deletion, and the flag)
 
 ### D21 · The `overlay_e2` ConVar is REMOVED, not kept as a no-op

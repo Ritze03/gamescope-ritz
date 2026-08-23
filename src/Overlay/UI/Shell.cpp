@@ -327,6 +327,11 @@ namespace gamescope::ui::shell
 			ImGui::GetIO().InputQueueCharacters.resize( 0 );
 		}
 
+		// D22. Set from wlserver's hotkey path (another thread), consumed by
+		// Draw() on the thread that owns the shell's state. See
+		// shell::RequestPalette() in Shell.h for why it is a request.
+		std::atomic<bool> s_bPaletteRequested{ false };
+
 		// =================================================================
 		//  The console surface
 		// =================================================================
@@ -4824,6 +4829,11 @@ namespace gamescope::ui::shell
 	// =====================================================================
 	//  Public surface
 	// =====================================================================
+	void RequestPalette()
+	{
+		s_bPaletteRequested.store( true, std::memory_order_release );
+	}
+
 	void Draw()
 	{
 		// Issue #79's fix for this path -- see Palette.h. Without it the
@@ -4842,6 +4852,13 @@ namespace gamescope::ui::shell
 		// context -- the console thread's, above all. See FormatLadder().
 		s_flSurfaceW.store( io.DisplaySize.x, std::memory_order_relaxed );
 		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
+
+		// D22: consume a palette request from wlserver's hotkey path. Done
+		// here, before anything draws, so the palette opens on the SAME frame
+		// the request is seen rather than a frame later -- the shortcut has
+		// to feel like the key opened it.
+		if ( s_bPaletteRequested.exchange( false, std::memory_order_acq_rel ) )
+			OpenPalette();
 
 		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )

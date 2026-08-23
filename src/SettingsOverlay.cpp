@@ -88,7 +88,7 @@ namespace gamescope
 
 	static ConVar<bool> cv_settings_overlay_visible(
 		"settings_overlay_visible", false,
-		"Show/hide the settings overlay. Ctrl+Shift+O toggles it too.",
+		"Show/hide the settings overlay. A Right Ctrl tap toggles it too, and Ctrl+Shift+O still does.",
 		[]( ConVar<bool> &cv )
 		{
 			g_bSettingsOverlayCapturing.store( cv.Get(), std::memory_order_release );
@@ -636,8 +636,12 @@ namespace gamescope
 		const float flPadX = 22.0f;
 		const float flPadTop = 16.0f;
 		const char *pszTitle = "GAMESCOPE-RITZ ACTIVE";
+		// D22: the announcement advertises the PRIMARY binding, and that is
+		// now a Right Ctrl tap. Ctrl+Shift+O still works and is deliberately
+		// not mentioned -- a startup toast that lists every way in teaches
+		// none of them.
 		const char *pszHint = "opens the settings overlay";
-		const char *pszHotkey = "CTRL + SHIFT + O";
+		const char *pszHotkey = "RIGHT CTRL";
 
 		ImFont *pTitleFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		ImFont *pHintFont = gamescope::fonts::Get( gamescope::fonts::Style::Meta );
