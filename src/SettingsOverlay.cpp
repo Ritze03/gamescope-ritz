@@ -1350,6 +1350,20 @@ namespace gamescope
 			case KEY_KPENTER:    return ImGuiKey_KeypadEnter;
 			case KEY_ESC:        return ImGuiKey_Escape;
 
+			// D18: the only punctuation this table carries, and it is here
+			// because a binding needs it. SPEC §8.2 gives `Ctrl+/` (and `?`,
+			// which is Shift+Slash on most layouts) to the explanation page.
+			// Without this line that key produced no ImGuiKey at all, so the
+			// binding could not be written -- not merely unbound, but
+			// unreachable from a real keyboard as well as from a test.
+			//
+			// Text still arrives independently via AddInputCharactersUTF8()
+			// below, which is why every other punctuation key types fine
+			// while being invisible to IsKeyPressed(). That asymmetry is what
+			// hid this: "/" worked everywhere it was TYPED and nowhere it was
+			// BOUND.
+			case KEY_SLASH:      return ImGuiKey_Slash;
+
 			case KEY_0: return ImGuiKey_0;
 			case KEY_1: return ImGuiKey_1;
 			case KEY_2: return ImGuiKey_2;
