@@ -190,6 +190,117 @@ namespace gamescope::ui
 			Dl()->PathArcTo( ImVec2( vCenterPx.x, yTop ), flR, IM_PI, IM_PI * 2.0f );
 			Dl()->PathStroke( col, ImDrawFlags_None, flStroke );
 		}
+
+		// ---- SPEC §8.0's rail icon set ------------------------------------
+		// The eleven glyphs' GEOMETRY lives in Icons.h, which links no ImGui
+		// on purpose (see that file). This is the only place it becomes
+		// pixels, and it holds no coordinates of its own -- so a glyph can be
+		// re-drawn, re-proportioned or replaced without touching a draw call,
+		// and the draw calls can change without touching a glyph.
+		void RailIcon( const Icon &icon, ImVec2 vCenterPx, float flBoxPx, ImU32 col )
+		{
+			// SPEC §8.0: "stroke 1.7" on the 24-unit grid, so the pen scales
+			// with the box and the set reads as one family at every step of
+			// the ladder. Floored at one physical pixel for the same reason
+			// StrokePx() above is: below that a stroke stops being
+			// antialiased and starts disappearing, which is precisely what
+			// 0.5x would do to it.
+			const float k = flBoxPx / kIconGrid;
+			const float flStroke = std::max( 1.0f, kIconStroke * k );
+
+			// Grid -> screen. The 24-unit box is centred on vCenterPx, so
+			// unit (12,12) lands exactly on the centre the caller asked for.
+			const auto P = [ & ]( IconPt p ) {
+				return ImVec2( vCenterPx.x + ( p.x - kIconGrid * 0.5f ) * k,
+				               vCenterPx.y + ( p.y - kIconGrid * 0.5f ) * k );
+			};
+
+			for ( size_t i = 0; i < icon.nShapes; ++i )
+			{
+				const IconShape &s = icon.shapes[ i ];
+
+				ImVec2 pts[ kIconMaxPts ];
+				for ( size_t j = 0; j < s.nPoints && j < kIconMaxPts; ++j )
+					pts[ j ] = P( s.pts[ j ] );
+
+				switch ( s.eOp )
+				{
+					case IconOp::Polyline:
+						Dl()->AddPolyline( pts, (int)s.nPoints, col, ImDrawFlags_None, flStroke );
+						break;
+
+					case IconOp::Loop:
+						Dl()->AddPolyline( pts, (int)s.nPoints, col, ImDrawFlags_Closed, flStroke );
+						break;
+
+					case IconOp::Circle:
+						// Segment count 0 = ImGui's own auto-tessellation
+						// from the radius, which is what keeps the circle
+						// round at 48 px without being wasteful at 12.
+						Dl()->AddCircle( pts[ 0 ], s.flRadius * k, col, 0, flStroke );
+						break;
+
+					case IconOp::FillRect:
+						Dl()->AddRectFilled( pts[ 0 ], pts[ 1 ], col );
+						break;
+
+					case IconOp::FillPoly:
+						Dl()->AddConvexPolyFilled( pts, (int)s.nPoints, col );
+						break;
+
+					case IconOp::HalfDisc:
+					{
+						// HDR's half-filled disc. Drawn as a filled arc from
+						// -90 to +90 degrees -- the RIGHT half -- so it sits
+						// inside the stroked circle the glyph also carries
+						// rather than replacing it.
+						const float r = s.flRadius * k;
+						Dl()->PathArcTo( pts[ 0 ], r, -IM_PI * 0.5f, IM_PI * 0.5f );
+						Dl()->PathFillConvex( col );
+						break;
+					}
+
+					case IconOp::Teardrop:
+					{
+						// A droplet: the two tangent lines from the apex to
+						// the circle, plus the arc between their feet.
+						//
+						// Constructed rather than transcribed because the
+						// tangent points are where the straight and the
+						// curved parts must meet EXACTLY -- a hand-placed
+						// pair leaves a visible kink at 48 px and a visible
+						// gap at 12. With `a = acos(r/d)` the joint is exact
+						// at every size, which is the whole reason this op
+						// exists instead of a polyline approximation.
+						const ImVec2 vApex = pts[ 0 ];
+						const ImVec2 vC    = pts[ 1 ];
+						const float  r     = s.flRadius * k;
+
+						const float dx = vApex.x - vC.x, dy = vApex.y - vC.y;
+						const float d  = std::sqrt( dx * dx + dy * dy );
+						if ( d <= r )
+						{
+							// Degenerate: the apex is inside the circle, so
+							// there is no tangent and the honest drawing is
+							// the circle itself.
+							Dl()->AddCircle( vC, r, col, 0, flStroke );
+							break;
+						}
+
+						const float th = std::atan2( dy, dx );
+						const float a  = std::acos( r / d );
+
+						Dl()->PathLineTo( vApex );
+						// From one tangent foot, the long way round the
+						// circle, to the other -- then closed back to the
+						// apex by PathStroke's Closed flag.
+						Dl()->PathArcTo( vC, r, th + a, th - a + IM_PI * 2.0f );
+						Dl()->PathStroke( col, ImDrawFlags_Closed, flStroke );
+						break;
+					}
+				}
+			}
+		}
 	}
 
 	// =====================================================================

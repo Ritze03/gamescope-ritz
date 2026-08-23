@@ -24,6 +24,7 @@
 // where SPEC.md is silent and only the mockup decides, there is a comment.
 #pragma once
 
+#include "Lane.h"       // the per-column lane LayOutSheetColumns() returns
 #include "Registry.h"   // ui::Kind, for ModeFor(). Registry.h is imgui-free.
 
 namespace gamescope::ui
@@ -129,7 +130,59 @@ namespace gamescope::ui
 	//
 	// nRowsInArea feeds the content cap; pass 0 for an area with no rows (a
 	// P2 escaped panel), which yields one column.
-	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea );
+	//
+	// `bUnsplittable` forces one column regardless of width or row count.
+	// Two kinds of area need it and both would otherwise be drawn wrong
+	// rather than merely tightly: an ESCAPED legacy panel (it lays itself
+	// out with ImGui's own cursor and has never heard of a column), and an
+	// area with a CONTENT body (Area::Content() -- the Log's line list),
+	// which is one scrolling body under the rows and has no meaningful way
+	// to be cut in half. Answering it HERE rather than at the drawing site
+	// is the point: `shell.layout` prints Solve()'s number, so a number
+	// decided anywhere else would be a printed column count that disagrees
+	// with the screen -- which is the exact defect D20.2 exists to remove.
+	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea,
+	                    bool bUnsplittable = false );
+
+	// SPEC §8.3's three-column ceiling.
+	inline constexpr int kMaxSheetColumns = 3;
+
+	// One sheet column: where it is, and the lane its rows are bound to.
+	struct SheetColumn
+	{
+		Rect rc;     // physical px, x relative to the sheet body's own x0
+		Lane lane;   // base units, already reduced by any occlusion
+	};
+
+	struct SheetColumnSet
+	{
+		int         nColumns = 1;
+		SheetColumn cols[ kMaxSheetColumns ];
+	};
+
+	// THE ONE PLACE A SHEET COLUMN'S GEOMETRY IS DECIDED (D20.2).
+	//
+	// Column width follows index.html's own formula, which is the tiebreaker
+	// the design brief names:
+	//
+	//     colW = ( sheet - 2 x pad - (cols - 1) x gutter ) / cols
+	//
+	// with pad and gutter both the sheet's 24-unit pad.
+	//
+	// WHY THE OCCLUSION IS PER COLUMN AND NOT A SHEET-WIDE SUBTRACTION.
+	// D17 pulls the lane's right edge in when the Inspector is a drawer
+	// floating over the sheet. With one column that was a single
+	// subtraction; with three it is a question each column answers
+	// separately, because the drawer covers the RIGHTMOST column entirely
+	// and may not touch the leftmost at all. So the occlusion is computed
+	// from each column's own right edge against the drawer's left edge --
+	// which reduces to exactly D17's single subtraction when nColumns is 1,
+	// and is why the two rules are one rule rather than two that can drift.
+	//
+	// flOccludedRightPx is how much of the BODY's right edge the drawer
+	// covers; 0 in every case but that one.
+	SheetColumnSet LayOutSheetColumns( float flBodyWPx, float flOccludedRightPx,
+	                                   int nColumns, float flScale );
 
 	// The four region rects, in physical pixels relative to the slab's own
 	// top-left (0,0). Derived from one Slab and one LadderResult, so no two

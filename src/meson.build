@@ -164,6 +164,7 @@ src = [
   'Overlay/UI/Band.cpp',
   'Overlay/UI/Registry.cpp',
   'Overlay/UI/CommandPalette.cpp',
+  'Overlay/UI/Icons.cpp',
   'Overlay/UI/Controls.cpp',
   'Overlay/UI/Layout.cpp',
   'Overlay/UI/Shell.cpp',

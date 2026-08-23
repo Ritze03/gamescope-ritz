@@ -44,7 +44,8 @@ namespace gamescope::ui
 	// =====================================================================
 	//  The ladder (SPEC §8.3)
 	// =====================================================================
-	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea )
+	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea,
+	                    bool bUnsplittable )
 	{
 		LadderResult out;
 		const float Wb = slab.flWidthBase;
@@ -95,12 +96,68 @@ namespace gamescope::ui
 			(int)std::ceil( (double)std::max( 0, nRowsInArea ) / (double)shelltok::kRowsPerColumn ) );
 		out.nColumns = std::min( out.nWidthColumns, nByContent );
 
+		// An escaped legacy panel or a content body cannot be split -- see
+		// Layout.h. Applied last so it overrides both caps rather than
+		// racing them.
+		if ( bUnsplittable )
+			out.nColumns = 1;
+
 		// SPEC §8.3's "Step" column. Reported rather than used, so a test --
 		// and the Shell's own diagnostics area -- can assert the table.
 		out.nStep = out.eHost == InspectorHost::Hidden ? 3
 		          : out.eHost == InspectorHost::Drawer ? 2
 		          : out.RailIsIcons()                  ? 1
 		          : out.nWidthColumns == 3             ? -1 : 0;
+		return out;
+	}
+
+	// =====================================================================
+	//  The sheet's columns (SPEC §8.3) -- D20.2
+	// =====================================================================
+	SheetColumnSet LayOutSheetColumns( float flBodyWPx, float flOccludedRightPx,
+	                                   int nColumns, float flScale )
+	{
+		SheetColumnSet out;
+		const float s = flScale <= 0.0f ? 1.0f : flScale;
+
+		out.nColumns = std::clamp( nColumns, 1, kMaxSheetColumns );
+
+		// index.html's own pad and gutter: both the sheet's 24-unit pad.
+		const float flPad    = tok::kSheetPad * s;
+		const float flGutter = tok::kSheetPad * s;
+
+		const float flInner = flBodyWPx - 2.0f * flPad
+		                    - (float)( out.nColumns - 1 ) * flGutter;
+		float flColW = flInner / (float)out.nColumns;
+
+		// A column narrower than its own furniture is a shell bug, not a
+		// caller's -- the same degradation rule Lane::ForColumn applies, for
+		// the same reason: a negative width would make every Place() below
+		// produce an inverted rect.
+		flColW = std::max( flColW, 0.0f );
+
+		// Where the drawer's left edge falls, in the body's own coordinates.
+		const float flOccluded  = std::max( flOccludedRightPx, 0.0f );
+		const float flDrawerAtX = flBodyWPx - flOccluded;
+
+		for ( int i = 0; i < out.nColumns; ++i )
+		{
+			SheetColumn &c = out.cols[ i ];
+
+			c.rc.x0 = flPad + (float)i * ( flColW + flGutter );
+			c.rc.x1 = c.rc.x0 + flColW;
+			// y is the caller's -- a column spans the body's full height and
+			// this function has no opinion about where that starts.
+			c.rc.y0 = 0.0f;
+			c.rc.y1 = 0.0f;
+
+			// How much of THIS column the drawer covers. Zero for every
+			// column entirely left of the drawer's edge; the whole overlap
+			// for the rightmost. See Layout.h for why this is per column.
+			const float flColOccl = std::max( 0.0f, c.rc.x1 - flDrawerAtX );
+
+			c.lane = Lane::ForColumn( flColW / s, flColOccl / s );
+		}
 		return out;
 	}
 
