@@ -624,6 +624,20 @@ adding the registration. One band rule either way, no call site choosing geometr
 Today's two Position Grid call sites (notification placement, monitor placement) that
 drifted apart cannot.
 
+> **Built 2026-08-23 (P3 part C).** The band is implemented and **four of the five are
+> registered in the product**: Anchor (`monitor.anchor`), Accent hue
+> (`overlay.accent_hue`), Frametime graph (`monitor.frametime_graph` plus the five
+> `monitor.stats_*` history graphs), and **Colour override** — issue #29's four
+> per-module colours (`monitor.color_fps` / `_cpu` / `_gpu` / `_media`), which is the
+> registration the paragraph above asks for. Its binding stays the existing packed
+> `0xRRGGBB` integer; the control edits OKLCH and converts back, so no config format
+> changed for it to exist.
+>
+> **Audio strip is still not registered** — P3b left the mixer's fader as a Slider row,
+> and nothing declares `CompositeKind::Strip`. The band's body switch therefore draws
+> nothing for it, deliberately, rather than inventing a body no declaration asks for.
+> Same rule as above: do not describe the strip as built without also registering it.
+
 > **Amended 2026-08-23 (post-audit).** The Accent hue and Audio strip Line-1 values above
 > were corrected to match what the mockup actually renders. The previous text showed
 > `oklch(.74 .12 218)` and `−7.5 dB · −12/−14` — the first was the pre-B7-fix debug

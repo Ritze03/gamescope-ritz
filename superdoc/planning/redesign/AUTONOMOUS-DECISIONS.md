@@ -12,6 +12,113 @@ cheap.
 
 ## 2026-08-23
 
+### D15 · Ten calls taken while building `Kind::Composite` and migrating Monitor and Log, P3 part C
+
+P3 part C replaces the last two `Escape()` hatches (`system.monitor`, `system.log`) and
+builds the composite band D14.10 deferred. **`EscapeCount()` 2 → 0: no area is escaped.**
+Build clean, **67/67 tests** (`overlay_ui` 45 → 47, `overlay_atoms` 6 → 8). Full write-up:
+`round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D15.1 · `Kind::Composite` is drawn by a function that is DELIBERATELY a near-copy of
+DrawEntryRow, not by a special case inside it.** `DrawCompositeBand()` repeats the selection
+fill, the hairline, the label/value split and the disabled handling rather than sharing them
+through a flag. That looks like duplication and is the point: SPEC §4.2 clause 2 says "line 1
+reads as a row", and the cheapest way to guarantee that forever is for line 1 to be built by
+code that is *shaped* like a row, from an ordinary `RowCtx` handed out by `Band.cpp`.
+**Rejected:** threading `nLines` through `DrawEntryRow` — every allocator inside it would then
+need to know whether it was in a band, which is exactly how the two legacy Position Grid call
+sites drifted apart. `LinesFor()` is the single answer to "how tall is this declaration", so
+the sheet and the Inspector cannot disagree.
+
+**D15.2 · The band's hit box covers LINE 1 ONLY, not the whole band.** The obvious version
+puts one `InvisibleButton` over the full `n × 44` and selects the row from anywhere in it —
+and swallows every click meant for the 3×3 grid, which lives inside those same bounds. So the
+selector covers the region left of the body, and the body owns the rest. **The visible cost:**
+clicking the air on lines 2..n does nothing rather than selecting the row. That is the correct
+trade — a grid you cannot click is a control that renders and does nothing (#25, #68), and a
+strip of dead air is not.
+
+**D15.3 · A composite reads and resets BOTH its axes, and that is a registry change, not a
+renderer one.** An anchor is one setting whose value is a pair. `HasDefault`/`IsAtDefault`/
+`ResetToDefault` previously read `m_Bind` alone, so an anchor at the right column but the wrong
+row reported itself unchanged and the half that had moved could never be reset. Since D6's
+accent edge is driven off `IsAtDefault()`, a single-axis implementation would have made the
+sheet *lie*. Fixed in `Registry.cpp` with a test, rather than worked around in the band.
+
+**D15.4 · The Colour override composite is now REGISTERED, which SPEC §4.4 explicitly required
+before claiming it exists.** SPEC lists five composites and notes Colour override is
+"documented here but not registered in the mockup… do not re-add 'five composites' language
+without also adding the registration." Issue #29's four per-module colours are that
+registration. **The config format is untouched** (`std::optional<int>`, packed `0xRRGGBB`,
+`nullopt` meaning "track the accent token"); the control edits OKLCH and converts back on every
+edit, which is why `palette::ImU32ToOklch()` was added next to its forward twin with a
+round-trip test pinning the two together. **Rejected:** a hex `Text` param, which preserves the
+capability with zero new machinery but replaces a colour picker with typing.
+
+**D15.5 · The colour band is never disabled when its override is off — because `custom` is its
+own Param.** The natural shape greys the band while the override is off. SPEC §3.13's
+inheritance would then grey the very param that causes the greying, which that section names as
+a real bug from the first version. So the band always shows the colour in effect and *editing*
+it turns the override on; `custom` turns it back off and is always reachable. The band also
+declares **no default of its own**: a default packed colour would have to be captured at
+registration, and the token it comes from moves with the accent hue, so D6's edge would light
+on every colour row the moment someone rotated the hue.
+
+**D15.6 · Issue #40's collection gating is now a SWITCH, not a side effect of navigation.**
+#40 tied 60-second history collection to tab selection; there is no tab bar any more. Stating
+it outright is also more honest — the old shape made a background cost invisible. **The config
+key and both string values are unchanged** (`overlay.system_monitor_tab`, `"statistics"` /
+`"modules"`), it is still written the instant it changes rather than batched (that field gates
+`FpsDisplay_AddLayer()`, and routing it through the debounced path silently dropped every
+change during #59's own manual testing), and a restart still resumes collecting.
+
+**D15.7 · `Area::Content()` is a new capability, and it is NOT `Escape()` renamed.** The Log is
+the one area whose body is content rather than settings. `Escape()` handed a call site the
+sheet's child window and let it run arbitrary ImGui with every law suspended — which is why it
+was always temporary. `Content()` hands the shell **data**: a function returning lines. The
+call site still cannot place a pixel, pick a font, a colour or a width, or lay anything out
+(SPEC §5.2 clause 0 holds). A content area still declares ordinary rows — Log's filters go
+through the same grammar, Inspector and help — so an area is never "rows or content", it is
+rows **and**, optionally, content beneath them.
+
+**D15.8 · The Log's filter rows are a vertical group, not the mockup's horizontal filter bar.**
+`index.html` renders `log.sources`/`log.severity`/`log.filter` as a bar above the body, from
+the registry, "same painter, different host". **Chose** ordinary rows in a `Filter` group
+instead. **Why:** a horizontal control bar is a second layout system inside the sheet, and the
+Row grammar's whole guarantee is that there is one — SPEC §5.3 forbids exactly this for the
+Inspector, and the argument does not weaken for the sheet. Nothing is lost functionally; every
+filter keeps its label, help, Inspector and reset. Reversible if the bar is wanted later, but
+it should be a deliberate second host, not a drive-by.
+
+**D15.9 · Issue #81's Copy button ships DISABLED, with the reason stated on the row.** It never
+reached the system clipboard: no clipboard handler is wired for the overlay's ImGui context, so
+with `io.SetClipboardTextFn` unset ImGui falls back to an internal buffer nothing outside the
+process can read. **Wiring it is a feature, not a fix** — gamescope *is* the compositor, so a
+real implementation offers a `wl_data_source` selection on its own seat, and must decide what
+"the system clipboard" means when running nested and the host session owns one too. Disabled
+with a mandatory reason beats a button that lies; "it silently did nothing" is strictly worse
+than "it told you it cannot".
+
+**D15.10 · Two defects were found by running the thing, and both are recorded honestly.**
+*(a)* `Kind::Bank` and `Kind::Text` **drew nothing at all** — `DrawEntryRow`'s switch let both
+fall to `default: break`. Both atoms have existed since P1 with tests; no area had used either
+kind until the Log, so the taxonomy claimed eleven kinds while the shell rendered nine. That is
+#25/#68 produced by an unhandled enumerator. *(b)* `overlay_e2_set overlay.display_scale 2.0`
+**aborted the compositor** on an ImGui font assertion. `fonts::RebuildAll()` mutates font state
+and assumes it is called from the render thread inside a live frame; a registration setter is
+reachable from the **console thread**, so it cleared an atlas mid-draw. **Checked rather than
+assumed:** the same command was run against the P3b merge, which survives it — so the faulty
+call is P3b's and this work merely made it deterministic (a band's value string needs a glyph
+baked at the new size on the very next frame). Fixed by deferring the rebuild to the render
+thread.
+
+**Still open, and NOT fixed here.** `overlay_e2_set overlay.display_scale` updates the stored
+value and re-bakes the atlas, but the shell's rendered geometry does not change — the slab
+stays 1560 px wide where `Slab::For()` says 2.0× should give 1728. It is P3b's row and outside
+this part's scope, and one out-of-scope crash on that same row was already fixed here. The
+band's geometry at 2.0× is instead pinned by test (`band: the four clauses hold at every
+display scale`), which is the property the screenshot was meant to establish.
+
 ### D14 · Eleven calls taken while migrating Audio and Config, P3 part B
 
 P3 part B replaces the `Escape()` hatches on `audio.mixer` and `setup.config`, and fixes the
