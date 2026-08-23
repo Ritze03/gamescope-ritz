@@ -12,6 +12,107 @@ cheap.
 
 ## 2026-08-23
 
+### D16 · Eight calls taken while building the command palette and the keyboard, P4
+
+P4 adds the `Ctrl+K` command palette over every Entry **and every Param**, the shared
+arrow-key adjuster behind it, and the rest of the shell's keyboard. Build clean, **68/68
+tests** (a new `overlay_palette` suite, 19 cases / 68 assertions). Full write-up:
+`round-2/e2-inspector-plus/IMPLEMENTATION.md`.
+
+**D16.1 · The two defects P4 was briefed to fix were ALREADY FIXED, and this is recorded
+rather than quietly skipped.** The brief named the `display_scale 2.0` console abort as the
+most serious open defect. It is not open: P3c's `5582437` ("never rebuild the font atlas
+from the console thread") fixed it, exactly as D15.10(b) records, by adding
+`fonts::RequestRebuild()` / `PumpRequestedRebuild()` and routing the registered setter
+through them. **Verified by triggering it**, not by reading the diff: with the overlay open
+and `overlay_e2` on, `overlay_e2_set overlay.display_scale 2.0` leaves the compositor alive
+and rescales the shell — the slab goes 1560 → 1728 px and the rail collapses to icons,
+which is the ladder's own step 1. The companion "the shell does not re-scale" item that
+D15 left open is therefore **also** closed, and by the same commit: the setter reaches
+`QueueGeneralSave()` → `PushLiveTheme()` → `palette::g_LiveTheme.flDisplayScale`, which is
+the one value `Shell::Draw()` pushes into `ui::SetScale()` every frame. **They were the
+same fix**, which is what the brief asked to be told either way. Screenshots at both scales
+are in the P4 report.
+
+**D16.2 · A NEW defect at 2.0× is reported, not fixed, because fixing it is a design
+decision.** At `display_scale 2.0` the ladder correctly reaches step 2 (icon rail,
+Inspector as a **drawer**), and the drawer then paints over the sheet's whole control
+column — every segmented control, switch and slider on screen is hidden behind it. That is
+what SPEC §8.3's own table asks for ("inspector overlays", sheet keeps its full 804 base),
+so it is not a coding slip; it is the design not saying what an always-visible drawer does
+to the lane it floats over. **Rejected:** guessing — either shrinking the sheet under a
+drawer (which makes the drawer a column by another name and contradicts §8.3's arithmetic)
+or auto-hiding the drawer to its spine (which changes what `Ctrl+I`'s three states mean).
+Both are real design changes and belong to whoever owns the ladder, not to a drive-by in
+the palette's commit.
+
+**D16.3 · The query line is hand-rolled on `io.InputQueueCharacters`, and `InputText` is
+not used.** Direction B's `FEASIBILITY.md` §2 reached this first and E2 confirms it against
+its own key table. Three reasons, in order of weight: (a) `InputTextEx()` calls
+`SetKeyOwner()` on Left/Right while active with no callback to decline them, and SPEC §8.2
+gives those two keys to *adjust the highlighted entry's value in place* — the palette's
+headline behaviour, which would be unimplementable; (b) Esc on an active `InputText`
+**reverts the buffer**, where SPEC's Esc ladder wants the palette dismissed; (c) it buys no
+IME, because this ImGui context has no platform backend at all, so
+`io.SetPlatformImeDataFn` is null either way. **The cost, stated:** no selection, no caret
+placement, no paste, no dead-key composition. All four are absent everywhere else in this
+overlay already, and `wlserver` fills `InputQueueCharacters` from the compositor's own xkb
+state, so what arrives is layout-correct UTF-8 without `InputText` doing anything for it.
+
+**D16.4 · Browsing IS search with an empty query — enforced by the scorer, not by
+convention.** `Score()` returns `kScoreExact` for an empty query, so every item matches at
+equal rank and the **stable** sort leaves registration order intact. There is deliberately
+no "list everything" branch to drift away from the search branch. This is the one place the
+design's "one code path, not two" is a mechanical property rather than a promise, and it is
+pinned by two tests (`an empty query lists every entry AND every param`, `an empty query
+keeps registration order`).
+
+**D16.5 · The palette needed NO new declaration at any call site — which is the result the
+brief asked to have checked.** Every one of the 102 live results comes from what P3a–P3c
+already registered. Two getters were added to `Registry.h` (`Entry::KeywordText()`,
+`Parameter::KeywordText()`) and that is the whole registry-side change: the `.Keywords()`
+**setter** has existed since P1 with no reader at all, so until now a keyword list was a
+declaration nothing consumed. No area file was touched. **The one design smell found is the
+inverse of the one being looked for:** `.Keywords()` had shipped unread for three phases,
+which is how a declaration silently stops being true.
+
+**D16.6 · One adjuster, `AdjustValue()`, shared by the palette and the Sheet — not two.**
+The palette's `←→` and a focused row's `←→` are the same function over an `Adjustable` view
+of either an `Entry` or a `Parameter`. D15.1's argument about geometry applies unchanged to
+behaviour: a slider that steps by one amount in the Sheet and another in the palette is
+#25/#68 in a form neither host reveals alone. Two rules inside it are choices worth naming.
+**A switch takes its value from the DIRECTION** (Right = on, Left = off) rather than
+toggling — holding Right down a list of switches must settle, not oscillate. **A choice
+stops at both ends** rather than wrapping, so "press Right until it is what I want" is
+reliable.
+
+**D16.7 · The ≤3-character discoverability gate is ADOPTED, as a test and a console
+command, not as a build gate.** Direction B failed the *build* when any setting could not be
+reached in ≤3 characters. Same property, cheaper and safer here: `WorstCharsToReach()` is a
+pure function, asserted in `overlay_palette` against a fixture, and reported over the **live**
+registry by `overlay_e2_palette reach`. **Live registry answer today: 2.** **Rejected:**
+B's registration abort — a law violation already aborts the compositor (D11.6), and
+extending that to *search ranking* means a tuning change to the scorer can take the
+compositor down at boot. Discoverability is a quality metric, not a structural law, and the
+guillotine should stay pointed at the four laws that are.
+
+**D16.8 · `overlay_e2_palette` exists because the palette is keyboard-only and synthetic
+input is permanently forbidden.** D4 bans injected input, so a keyboard-only surface would
+be the one feature in the product verifiable *only* by a human at a keyboard — and "renders
+but does nothing" is the exact defect class this branch keeps finding. The command drives
+the same three variables the keys drive (there is no parallel path), and its `list` verb
+prints the ranked results, so the **ranking** is checkable from a script even though the
+drawing is not. It is the same argument that produced `overlay_e2_select` and
+`overlay_e2_set`, applied to the third piece of shell state.
+
+**Still open, and NOT fixed here.** *(a)* D16.2's 2.0× drawer occlusion, above. *(b)* Real
+key events were never sent: `ydotool` is banned and no other injection route exists that
+respects that ban, so every keyboard path in this commit is verified by unit test and by
+the console equivalents, **not** by a physical keypress. That gap is stated plainly rather
+than papered over — the palette's *drawing* is screenshot-verified, its *ranking* and its
+*adjustment* are test- and console-verified, and its *key bindings* are read-only-reviewed.
+`Escape()` is untouched, per the brief.
+
 ### D15 · Ten calls taken while building `Kind::Composite` and migrating Monitor and Log, P3 part C
 
 P3 part C replaces the last two `Escape()` hatches (`system.monitor`, `system.log`) and
