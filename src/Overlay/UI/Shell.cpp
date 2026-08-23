@@ -263,6 +263,37 @@ namespace gamescope::ui::shell
 		bool s_bExplainPage = false;
 
 		// =================================================================
+		//  SPEC §6.3's inline param expansion (D20.3)
+		// =================================================================
+		// "A row that owns Params renders those Params inline in the Sheet,
+		// beneath itself, in the Sheet's own Row grammar, whenever the
+		// Inspector is unavailable -- collapsed by default, expanded with
+		// `->` / click / `Space`, and marked with a `>` disclosure in place
+		// of the chevron."
+		//
+		// This is the Reachability Law's specified MECHANISM, and until now
+		// it did not exist while a comment in this file claimed it did. The
+		// guarantee held anyway -- Ctrl+/ and Ctrl+K both reach every param
+		// -- but "the sheet alone is a complete UI" was being kept by two
+		// routes the spec describes as supplements, not as the mechanism.
+		//
+		// ONE EXPANSION AT A TIME, deliberately. SPEC §6.4 concedes that
+		// inline expansion "reflows the sheet", which §8.3 otherwise forbids,
+		// and accepts it only because the expansion is user-initiated. A
+		// single open row bounds that reflow to one place: with several open
+		// at once, expanding a row near the bottom of a column can move rows
+		// you are not looking at, in a column you are not in. Esc's ladder
+		// also names "inline expansion" in the singular.
+		std::string s_sExpandedEntry;
+
+		// Where the keyboard is inside an expanded row: -1 is the row itself,
+		// 0..n-1 its params. The Inspector's own s_nInspectorFocus is NOT
+		// reused, even though it indexes the same params -- the two hosts can
+		// both be alive in one session (Ctrl+I moves between them) and a
+		// shared index would carry a focus from one into the other.
+		int s_nInlineFocus = -1;
+
+		// =================================================================
 		//  P4: the command palette (SPEC §8.2, API.md §10)
 		// =================================================================
 		// Three pieces of state and no more, for the same reason the shell
@@ -327,6 +358,21 @@ namespace gamescope::ui::shell
 		void SetHost( InspectorHost eHost )
 		{
 			cv_overlay_e2_host.SetValue( (int)eHost );
+		}
+
+		// D20.3. SPEC §6.3 renders params inline "whenever the Inspector is
+		// unavailable", which is exactly the Hidden host: with a column or a
+		// drawer the params are already on screen in the Inspector, and
+		// drawing them twice would be two painters for one declaration.
+		//
+		// Asked of Host() -- the user's own preference -- rather than of the
+		// solved ladder, because the ladder never produces Hidden on its own
+		// (SPEC §8.3's step 3 is "reachable by choice and persisted, not only
+		// by width"), so the two are the same answer wherever it matters and
+		// this one is available without a Slab in hand.
+		bool InlineMode()
+		{
+			return Host() == InspectorHost::Hidden;
 		}
 
 		// P3b. The Inspector body scrolls now (see DrawInspector), and a
@@ -614,6 +660,16 @@ namespace gamescope::ui::shell
 			// index outliving the thing it indexes.
 			s_nInspectorFocus = 0;
 			s_nBankChip       = 0;
+
+			// D20.3: an inline expansion belongs to the row that owns it.
+			// Selecting a different row collapses it and takes the inline
+			// focus back to the row, for the same reason the Inspector's
+			// index resets -- an index must not outlive the thing it indexes,
+			// and a sheet that silently kept a foreign row expanded would
+			// reflow around a row the user is no longer on.
+			if ( s_sExpandedEntry != s_sSelectedEntry )
+				s_sExpandedEntry.clear();
+			s_nInlineFocus = -1;
 
 			// SPEC §3.9's two-stage arm only means anything while the armed
 			// chip is the thing under the user's hands. Moving the selection
@@ -1602,11 +1658,19 @@ namespace gamescope::ui::shell
 		// Selection outranks differs because the two share the slot. A
 		// selected row that also differs reads as selected, and the
 		// Inspector it just opened is already showing the reset link.
-		ImU32 StateEdgeColor( const Entry &entry, bool bSelected )
+		//
+		// TEMPLATED over the declaration type (D20.3) so a Parameter drawn
+		// inline in the Sheet gets the same edge from the same rule. D6's
+		// amendment requires precisely that -- "the same rule now applies
+		// uniformly to Params rendered inline in the Sheet (§6.3): they
+		// gained the accent edge they never had" -- and a second copy of two
+		// lines is exactly how two encodings of one state come back.
+		template <typename TDecl>
+		ImU32 StateEdgeColor( const TDecl &decl, bool bSelected )
 		{
 			if ( bSelected )
 				return Col( Role::AccentBase );
-			if ( entry.HasDefault() && !entry.IsAtDefault() )
+			if ( decl.HasDefault() && !decl.IsAtDefault() )
 				return Accent( 0.45f );
 			return 0;
 		}
@@ -1725,7 +1789,42 @@ namespace gamescope::ui::shell
 
 			if ( entry.ParamCount() > 0 || entry.GetKind() == Kind::Facts )
 			{
-				glyph::Chevron( vC, flSize, glyph::Dir::Right, Col( Role::TextMeta ) );
+				// D20.3. SPEC §6.3 marks an inline-expandable row "with a `>`
+				// disclosure in place of the chevron". Both marks are the same
+				// drawn chevron (D18), so the disclosure is expressed by its
+				// DIRECTION: right while collapsed, down while open -- which
+				// is the one convention a disclosure triangle has ever had,
+				// and it means the mark answers "is this row open?" rather
+				// than only "does this row have depth?".
+				const bool bInline = InlineMode() && entry.ParamCount() > 0;
+				const bool bOpen   = bInline && s_sExpandedEntry == entry.Id();
+
+				// SPEC §6.3's "click" route. The chevron gets its own hit box
+				// ONLY in inline mode, where it is a real control; everywhere
+				// else it stays what §2.4 describes, a mark that advertises
+				// depth. Submitted after the row's own button so it wins the
+				// overlap -- ImGui resolves a hover to the last item added.
+				if ( bInline )
+				{
+					ImGui::SetCursorScreenPos( rc.Min );
+					if ( ImGui::InvisibleButton( "##disc", rc.GetSize() ) )
+					{
+						if ( bOpen )
+						{
+							s_sExpandedEntry.clear();
+							s_nInlineFocus = -1;
+						}
+						else
+						{
+							Select( &entry );
+							s_sExpandedEntry = entry.Id();
+							s_eFocusRegion   = Region::Sheet;
+						}
+					}
+				}
+
+				glyph::Chevron( vC, flSize, bOpen ? glyph::Dir::Down : glyph::Dir::Right,
+				                Col( Role::TextMeta ) );
 				return;
 			}
 			if ( entry.ReadOnly() )
@@ -2021,6 +2120,112 @@ namespace gamescope::ui::shell
 			return bClicked;
 		}
 
+		// =================================================================
+		//  SPEC §6.3's inline param expansion (D20.3)
+		// =================================================================
+		// The Reachability Law's mechanism: "a row that owns Params renders
+		// those Params inline in the Sheet, beneath itself, IN THE SHEET'S
+		// OWN ROW GRAMMAR, whenever the Inspector is unavailable".
+		//
+		// THE PHRASE THAT MATTERS IS "the Sheet's own Row grammar", and it is
+		// why this function is thirty lines rather than three hundred. It
+		// allocates a RowCtx from the SAME lane the rows above it came from,
+		// and hands it to the SAME DrawSharedControl the sheet row and the
+		// Inspector both call. SPEC §6.3 clause 1 asks for exactly one
+		// property -- "One code path. Params render with the Row grammar in
+		// either host; the shell picks the host from the ladder, the painter
+		// does not know which it is in" -- and a second painter here would
+		// have made that sentence false in the act of implementing it.
+		//
+		// Returns the new y cursor, so a collapsed row costs the caller
+		// nothing and an expanded one is just taller.
+		float DrawInlineParams( const Entry &entry, const Lane &lane, float flOriginPx, float y )
+		{
+			if ( !InlineMode() || entry.ParamCount() == 0 || s_sExpandedEntry != entry.Id() )
+				return y;
+
+			// A disabled parent disables its params -- SPEC §3.13's
+			// inheritance, the same OR of two predicates DrawConfigure uses.
+			// Read once here rather than per param, because it is the
+			// parent's answer and cannot differ between them.
+			const std::string sParentReason = entry.DisabledReason();
+
+			for ( size_t i = 0; i < entry.ParamCount(); ++i )
+			{
+				const Parameter &param = entry.ParamAt( i );
+				const RowCtx     row   = RowCtx::ForRow( lane, flOriginPx, y );
+				const ImRect     rcRow = row.Bounds();
+
+				ImGui::SetCursorScreenPos( rcRow.Min );
+				ImGui::PushID( entry.Id().c_str() );
+				ImGui::PushID( (int)i + 2000 );
+
+				const bool bClicked = ImGui::InvisibleButton( "##inlinerow", rcRow.GetSize() );
+				const bool bHovered = ImGui::IsItemHovered();
+
+				// The keyboard's own place inside the expansion. Same Accent
+				// 8% a selected sheet row uses -- D18's "one visual language
+				// for 'the keys are pointed here', wherever here happens to
+				// be" -- so a focused param reads identically in all three
+				// hosts.
+				const bool bFocused = ( s_eFocusRegion == Region::Sheet &&
+				                        SelectedEntry() == &entry &&
+				                        s_nInlineFocus == (int)i );
+				if ( bFocused )
+					Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, Accent( 0.08f ) );
+				else if ( bHovered )
+					Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y },
+					      IM_COL32( 255, 255, 255, 10 ) );
+
+				if ( bClicked )
+				{
+					s_nInlineFocus = (int)i;
+					s_eFocusRegion = Region::Sheet;
+				}
+
+				// D6's amendment, applied to a param in the Sheet: "they
+				// gained the accent edge they never had, and lost the reset
+				// dot they did have, so a Param-in-Sheet reads exactly like a
+				// top-level row."
+				if ( const ImU32 colEdge = StateEdgeColor( param, false ) )
+				{
+					const ImRect rcEdge = row.StateEdge();
+					Fill( { rcEdge.Min.x, rcEdge.Min.y, rcEdge.Max.x, rcEdge.Max.y }, colEdge );
+				}
+				HLine( rcRow.Min.x, rcRow.Max.x, rcRow.Max.y - Hairline(), Col( Role::Line ) );
+
+				const std::string sReason = param.DisabledReason();
+				const bool bDisabled = !sReason.empty() || !sParentReason.empty();
+				const ScopedDim dim( bDisabled );
+
+				ImRect rcLabel, rcValue;
+				const std::string sValue = FormatDeclValue( param );
+				const float flValueW = param.UsesValue() && !sValue.empty()
+					? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
+				row.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+
+				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
+				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
+				if ( flValueW > 0.0f )
+					Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
+					       TypeRole::Value, Col( Role::TextPrimary ),
+					       sValue.c_str(), TextAlign::Right );
+
+				if ( bDisabled )
+					ImGui::BeginDisabled();
+				DrawSharedControl( param, row, "ictl", param.Id(),
+					bFocused ? s_nBankChip : -1 );
+				if ( bDisabled )
+					ImGui::EndDisabled();
+
+				ImGui::PopID();
+				ImGui::PopID();
+
+				y += Px( tok::kRowH );
+			}
+			return y;
+		}
+
 		// SPEC §2.5's group band: "Mono 500 10.5 UPPER TextMeta, 16 above /
 		// 8 below, no box, no fill, no border. Right slot carries at most one
 		// thing: a `4 / 7` count for a switch set, or all/none, or nothing."
@@ -2298,6 +2503,10 @@ namespace gamescope::ui::shell
 						// from Band.cpp, never from a call site (SPEC §4.2
 						// clause 1).
 						yOf[ c ] += Px( tok::kRowH ) * (float)LinesFor( entry );
+
+						// SPEC §6.3's inline expansion, beneath the row that
+						// owns the params -- see DrawInlineParams.
+						yOf[ c ] = DrawInlineParams( entry, lane, flOriginX, yOf[ c ] );
 					}
 				}
 
@@ -2841,10 +3050,17 @@ namespace gamescope::ui::shell
 		// Configure AND Details as one full-sheet page with a back crumb,
 		// replacing the sheet content for as long as you read it."
 		//
-		// This is the Reachability Law's third clause, and it was the one
-		// piece of it never built: params render inline (P3), the palette
-		// reaches every setting (P4), and explanation had no route at all
-		// without the Inspector.
+		// This is the Reachability Law's third clause. All three are now
+		// built: params render inline in the Sheet (D20.3, DrawInlineParams
+		// above), the palette reaches every setting (P4), and this page is
+		// how explanation is reached without the Inspector.
+		//
+		// THIS COMMENT USED TO SAY "params render inline (P3)" WHILE NO SUCH
+		// CODE EXISTED. That is worth recording rather than quietly fixing:
+		// the pre-P5 shell test found it, and a comment asserting a mechanism
+		// that was never written is how the next reader concludes a law is
+		// covered when it is not. The claim is true now because
+		// DrawInlineParams exists -- not because the sentence was edited.
 		//
 		// It calls the SAME two bodies the Inspector calls, in the same
 		// order, with a wider rect. That is the whole implementation, and it
@@ -3823,6 +4039,17 @@ namespace gamescope::ui::shell
 					s_bExplainPage = false;
 				else if ( Host() == InspectorHost::Drawer )
 					SetHost( InspectorHost::Hidden );
+				// D20.3: SPEC §8.2's ladder is "palette -> drawer -> inline
+				// expansion -> overlay", and this is the rung that had
+				// nothing behind it until the expansion existed. It sits
+				// after the drawer to match that order, though the two are
+				// mutually exclusive in practice -- an expansion only exists
+				// in the Hidden host, where the drawer rung cannot fire.
+				else if ( !s_sExpandedEntry.empty() )
+				{
+					s_sExpandedEntry.clear();
+					s_nInlineFocus = -1;
+				}
 				else if ( SelectedEntry() )
 					Select( nullptr );
 				return;
@@ -3983,12 +4210,101 @@ namespace gamescope::ui::shell
 				return;
 			}
 
-			if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ) StepRow( +1 );
-			if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ) StepRow( -1 );
+			// D20.3. Up/Down walk THROUGH an open inline expansion rather
+			// than over it. SPEC §8.2 says the arrows "move selection within
+			// the focused region", and once the params are drawn in the Sheet
+			// they are in that region -- stepping straight past them would
+			// make the expansion a display that the keyboard cannot enter,
+			// which is the same defect as the pointer-only chip bank (§3.4)
+			// in a project that cannot synthesise a pointer to compensate.
+			{
+				const Entry *pRow = SelectedEntry();
+				const bool bExpanded = InlineMode() && pRow &&
+				                       pRow->ParamCount() > 0 &&
+				                       s_sExpandedEntry == pRow->Id();
+				const int nLastParam = bExpanded ? (int)pRow->ParamCount() - 1 : -1;
+
+				if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) )
+				{
+					if ( bExpanded && s_nInlineFocus < nLastParam )
+						s_nInlineFocus++;
+					else
+						StepRow( +1 );   // Select() collapses and resets the index
+				}
+				if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow, true ) )
+				{
+					if ( bExpanded && s_nInlineFocus >= 0 )
+						s_nInlineFocus--;
+					else
+						StepRow( -1 );
+				}
+			}
 
 			const Entry *pSel = SelectedEntry();
 			if ( !pSel )
 				return;
+
+			// ---- the keyboard is inside an expansion ---------------------
+			// A focused param owns every key below, exactly as the Inspector's
+			// focused param does -- and through the SAME adjuster and the same
+			// bank helper, so a param cannot behave one way in the Inspector
+			// and another in the Sheet. That is SPEC §6.3 clause 1 ("one code
+			// path") holding for input as well as for drawing.
+			if ( InlineMode() && s_sExpandedEntry == pSel->Id() &&
+			     s_nInlineFocus >= 0 && s_nInlineFocus < (int)pSel->ParamCount() )
+			{
+				const Parameter &param = pSel->ParamAt( (size_t)s_nInlineFocus );
+
+				// SPEC §3.13's inheritance, same OR of two predicates the
+				// Inspector uses: a param under a disabled parent is disabled
+				// EXCEPT when it is itself the cause.
+				const bool bBlocked = !param.DisabledReason().empty() ||
+				                      !pSel->DisabledReason().empty();
+
+				const bool bActParam = ImGui::IsKeyPressed( ImGuiKey_Space, false ) ||
+				                       ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+				                       ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false );
+				if ( bActParam && !bBlocked )
+				{
+					if ( param.GetKind() == Kind::Bank )
+					{
+						RunBankKeyboard( param, true, 0 );
+					}
+					else if ( param.GetKind() == Kind::Switch && param.Binding().IsBound() )
+					{
+						const Value v = param.Binding().Get();
+						if ( const bool *p = std::get_if<bool>( &v ) )
+							param.Binding().Set( Value{ !*p } );
+					}
+					else if ( param.GetKind() == Kind::Text )
+					{
+						s_sEditingText = param.Id();
+					}
+					else if ( param.GetKind() == Kind::Choice && DrawsAsDropdown( param.Id() ) )
+					{
+						s_sOpenDropdown = param.Id();
+						s_nPopupFocus = -1;
+					}
+					return;
+				}
+
+				const int nDirP = ImGui::IsKeyPressed( ImGuiKey_RightArrow, true ) ? +1
+				                : ImGui::IsKeyPressed( ImGuiKey_LeftArrow,  true ) ? -1 : 0;
+				if ( nDirP != 0 && !bBlocked )
+				{
+					const bool bMoved = param.GetKind() == Kind::Bank
+						? RunBankKeyboard( param, false, nDirP )
+						: AdjustValue( Adjustable::Of( param ), nDirP, io.KeyShift );
+
+					// A kind with nothing to adjust makes Left a way back out
+					// of the expansion -- the same "at a region edge: cross"
+					// rule the Inspector applies, with the expansion as the
+					// thing being left.
+					if ( !bMoved && nDirP < 0 )
+						s_nInlineFocus = -1;
+				}
+				return;
+			}
 
 			// Space toggles a switch without leaving the row (SPEC §8.2), and
 			// fires an Action. Enter does the same, so a user who never
@@ -4043,6 +4359,24 @@ namespace gamescope::ui::shell
 						s_sArmedAction.clear();
 					}
 				}
+				// D20.3: SPEC §6.3 lists `Space` as the third way to expand,
+				// alongside `->` and a click. It is LAST in this chain on
+				// purpose -- it only fires when the row's own control had
+				// nothing to do with the press, so Space still toggles a
+				// switch and still fires an action, and expansion gets the
+				// rows where Space would otherwise have done nothing at all.
+				else if ( InlineMode() && pSel->ParamCount() > 0 )
+				{
+					if ( s_sExpandedEntry == pSel->Id() )
+					{
+						s_sExpandedEntry.clear();
+						s_nInlineFocus = -1;
+					}
+					else
+					{
+						s_sExpandedEntry = pSel->Id();
+					}
+				}
 				return;
 			}
 
@@ -4053,10 +4387,42 @@ namespace gamescope::ui::shell
 			               : ImGui::IsKeyPressed( ImGuiKey_LeftArrow,  true ) ? -1 : 0;
 			if ( nDir != 0 && pSel->DisabledReason().empty() )
 			{
-				if ( pSel->GetKind() == Kind::Bank )
-					RunBankKeyboard( *pSel, false, nDir );
-				else
-					AdjustValue( Adjustable::Of( *pSel ), nDir, io.KeyShift );
+				const bool bMoved = pSel->GetKind() == Kind::Bank
+					? RunBankKeyboard( *pSel, false, nDir )
+					: AdjustValue( Adjustable::Of( *pSel ), nDir, io.KeyShift );
+
+				// D20.3, and A SPEC AMBIGUITY RESOLVED. SPEC §8.2 gives
+				// Left/Right three jobs at once -- "inside a control:
+				// adjust. At a region edge: cross. On a row with depth:
+				// expand / collapse (inline mode)" -- without saying which
+				// wins on a row that is both, and most rows that own params
+				// also own an adjustable control.
+				//
+				// ADJUSTING WINS; expansion takes what is left over. The
+				// alternative -- expansion first -- would silently stop the
+				// arrow keys from changing a slider the moment somebody gave
+				// that slider a parameter, i.e. a registration change would
+				// alter an unrelated row's keyboard. This way the precedence
+				// is a property of the row's own kind, and it reuses the
+				// "didn't move" signal the region-edge rule already runs on.
+				//
+				// A row whose control cannot be adjusted (Facts, Text, Bank
+				// at an end, Action) therefore expands on the first Right,
+				// which is the common case for a row that owns params.
+				// Everything else still reaches its params through the
+				// chevron, Ctrl+/ and Ctrl+K.
+				if ( !bMoved && InlineMode() && pSel->ParamCount() > 0 )
+				{
+					if ( nDir > 0 )
+					{
+						s_sExpandedEntry = pSel->Id();
+					}
+					else if ( s_sExpandedEntry == pSel->Id() )
+					{
+						s_sExpandedEntry.clear();
+						s_nInlineFocus = -1;
+					}
+				}
 			}
 		}
 	}

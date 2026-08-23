@@ -10,7 +10,109 @@ cheap.
 
 ---
 
-## 2026-08-23 (last, the pre-P5 test pass)
+## 2026-08-23 (last, closing the three pre-P5 gaps)
+
+### D20 · Three calls taken closing the gaps the pre-P5 test pass left open
+
+The three items are the rail icon set (§7.1 of the test report — *and the user's own
+critique point, verbatim: "Use bigger and better looking icons for the left sidebar"*),
+the multi-column sheet (§6, the seventh "renders but does nothing"), and the
+Reachability Law's unbuilt mechanism (§7.3). Build clean, **68/68** meson tests plus
+**six** new cases — two in `overlay_ui` (the icon set) and four in `overlay_shell`
+(the column geometry).
+
+**D20.1 · The eleven rail icons are DRAWN from a data table, not baked, and the
+geometry is imgui-free.** SPEC §8.0 specifies eleven inline-SVG glyphs on a 24-unit
+grid; the rail drew the area title's first character, and at ladder step ≥ 1 — where
+the label disappears and the mark carries the item's entire meaning — `Mixer`/`Monitor`
+were both `M`, `Profiles`/`Per-game` both `P`, `Shaders`/`Shell` both `S`.
+
+*Chose:* a new `Icons.h`/`Icons.cpp` holding the eleven paths as a `constexpr` table on
+the 24-unit grid, and one `glyph::RailIcon()` in `Controls.cpp` that turns a shape into
+`ImDrawList` calls and **contains no coordinates of its own**. Drawing rather than
+baking is the established pattern here (D18's chevron, magnifier and lock) and the
+argument is stronger for these: a bar chart and a droplet have no code point a wider
+font range could reach, SPEC §8.0 forbids an icon font in the same breath as the
+external asset, and the atlas is rebuilt per effective scale so every baked range is
+paid again at every scale change.
+
+*Why the data is imgui-free:* the same reason `Lane.h` and `Layout.h` are — the
+geometry is the part worth testing, and a test should not need a graphics context to
+ask whether all eleven exist, stay inside their box, and differ from one another. The
+anti-collision test fails the build naming the colliding pair; mutation-checked both
+ways.
+
+*Rejected — adding an `Icon()` declaration to `Area`.* It is the tidier model, but it
+would edit six panel files that are P5's deletion targets, for no behavioural gain. The
+lookup is keyed by area id in one file instead, and a **missing icon falls back to the
+initial** rather than to a blank rail — so a forgotten glyph degrades to the old
+behaviour for one item.
+
+*One glyph has no mockup original.* `index.html`'s eleventh area is `display.output`,
+which this build does not register; this build's eleventh is `setup.shell`, which the
+mockup never drew. Drawn as the shell itself — a framed window with a rail down its
+left edge — which is what the area configures and what keeps it clear of Shaders' stack.
+
+**D20.2 · The multi-column sheet is BUILT, and the unit of packing is a GROUP.**
+D19.9 left `nColumns` computed, printed and consumed by nothing. It is now consumed.
+
+*Chose:* one `LayOutSheetColumns()` in `Layout.cpp` that is **the only place a sheet
+column's geometry is decided**, using index.html's own formula
+(`colW = (sheet − 2·pad − (cols−1)·gutter) / cols`), and a greedy balance that assigns
+each **whole group** to the currently-shortest column — the mockup's own algorithm
+("greedy balance by row weight, not by group count"), kept identical because the mockup
+is the declared tiebreaker.
+
+*Why a group and never a row:* a group split across a column boundary either orphans
+its rows under no heading or forces the band to be repeated at the top of the next
+column. The first is unreadable; the second makes one declared group look like two.
+Keeping a group whole costs some balance and buys the row grammar intact.
+
+*The D17 interaction, which is the part that had to be right:* the drawer floats over
+the sheet's right edge, so occlusion is computed from **each column's own right edge**
+against the drawer's left edge. That reduces to exactly D17's single subtraction when
+`nColumns` is 1 — pinned by a test — so the two are one rule rather than two that can
+drift.
+
+*Also chosen: `Solve()` gained a `bUnsplittable` flag* for an escaped legacy panel (it
+lays itself out with ImGui's own cursor) and an area with a content body (one scrolling
+list cannot be cut in half). Decided in `Solve()` rather than at the drawing site
+**because `shell.layout` prints `Solve()`'s number** — answering it anywhere else would
+put back the very defect this removes. Verified live: `system.log` reports `1 col` and
+`system.monitor` `3 col` at the same 0.5×, and both match the screen.
+
+**D20.3 · The Reachability Law's mechanism is BUILT rather than the spec being
+rewritten to match the code.** SPEC §6.3 says a row that owns Params renders them
+inline in the Sheet whenever the Inspector is unavailable. It was never built, and a
+comment above `DrawExplainPage()` claimed it was — which is how the next reader
+concludes a law is covered when it is not.
+
+*Chose:* build it. The spec commits to inline expansion in four places (§6.3's
+three-clause argument, §8.2's key table twice, §6.4's "honest cost", §2.4's amendment
+about Params-in-Sheet), and §6.3 clause 1 asks for exactly one property — "one code
+path" — which `DrawInlineParams()` satisfies by allocating a `RowCtx` from the same
+lane and calling the same `DrawSharedControl()` the sheet row and the Inspector both
+call. Rewriting the spec would have meant weakening a law to match an omission.
+
+*A spec ambiguity resolved, and recorded because it is a real choice:* §8.2 gives
+Left/Right three jobs at once — adjust, cross a region edge, expand/collapse — without
+saying which wins on a row that is both, and most rows owning params also own an
+adjustable control. **Adjusting wins; expansion takes the leftover**, reusing the
+"didn't move" signal the region-edge rule already runs on. The alternative would let a
+registration change (giving a slider a parameter) silently stop the arrow keys from
+changing that slider.
+
+*One expansion at a time.* §6.4 concedes the reflow §8.3 otherwise forbids, and accepts
+it only because it is user-initiated; a single open row bounds that reflow to one place.
+Esc's ladder also names "inline expansion" in the singular, and that rung now has
+something behind it.
+
+*The comment was not merely edited.* It now says what is true and records that it used
+to lie, so the correction is auditable rather than invisible.
+
+---
+
+## 2026-08-23 (the pre-P5 test pass)
 
 ### D19 · Nine calls taken while testing the E2 shell exhaustively before P5 deletes the old UI
 
@@ -95,6 +197,9 @@ rather than a test-pass fix, and guessing at it here would have repeated exactly
 mistake D16.2 declined to make. Left for P5 with the evidence attached. The readout
 was deliberately **not** patched to print `1`: an honest number that disagrees with
 the screen is what made this findable.
+>
+> **Superseded by D20.2 (2026-08-23, same day).** It was built. The readout and the
+> screen now agree at every scale, and the honest number is what made that checkable.
 
 ---
 

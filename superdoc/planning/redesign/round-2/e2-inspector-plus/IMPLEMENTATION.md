@@ -10,6 +10,110 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-23 — closing the three gaps the pre-P5 test pass left open
+
+Also not a phase: the three items `SHELL-TEST-REPORT.md` found and recommended
+be closed **before** P5 deletes the legacy UI. Decisions:
+`../../AUTONOMOUS-DECISIONS.md` **D20**. Build clean; **68/68** meson tests plus
+**six** new cases — `overlay_ui` 56 cases / 977 assertions, `overlay_shell`
+25 cases / 290 assertions.
+
+### 1. The rail icon set — SPEC §8.0, and the user's own critique point
+
+The rail drew the area title's **first character**. At ladder step ≥ 1 the label
+disappears and the mark carries the item's entire meaning, and three pairs
+collided there: `Mixer`/`Monitor` (`M`), `Profiles`/`Per-game` (`P`),
+`Shaders`/`Shell` (`S`).
+
+**New files:** `src/Overlay/UI/Icons.h` and `Icons.cpp`. Eleven glyphs as a
+`constexpr` table on SPEC §8.0's 24-unit grid, transcribed from `index.html`'s
+own `ICONS` object. `glyph::RailIcon()` in `Controls.cpp` turns a shape into
+`ImDrawList` calls and **contains no coordinate of its own** — so a glyph can be
+re-proportioned without touching a draw call and vice versa.
+
+| Decision | Why |
+|---|---|
+| **Drawn, not baked** | A bar chart and a droplet have no code point a wider font range could reach; SPEC §8.0 forbids an icon font outright; the atlas is rebuilt per effective scale, so every baked range is paid again at every scale change. Same argument D18 recorded for the chevron and the lock, only stronger. |
+| **Geometry is imgui-free** | Same reason `Lane.h` and `Layout.h` are: a test should not need a graphics context to ask whether all eleven exist, stay in their box, and differ. |
+| **Keyed by area id in one file, not an `Area::Icon()` declaration** | The declaration is tidier but would edit six panel files that are P5's deletion targets, for no behavioural gain. A missing icon falls back to the initial, so a forgotten glyph degrades to the old behaviour for one item rather than blanking the rail. |
+| **Fill only where it means something** | SPEC §8.0's own rule. Three fills in the set: HDR's half-disc, Monitor's bars, Per-game's corner fold. Mixer's fader caps are deliberately **outlined** — that one difference is what keeps it clear of Monitor's solid bars at 12 px. |
+| **`IconOp::Teardrop` is constructed, not transcribed** | Appearance's droplet is the one shape needing a real curve. Its tangent feet are computed (`α = acos(r/d)`), so the straight and curved parts meet exactly at every size; a hand-placed pair leaves a kink at 48 px and a gap at 12. |
+
+`setup.shell` is the one glyph with **no mockup original** — `index.html`'s
+eleventh area is `display.output`, which this build does not register. Drawn as
+the shell itself: a framed window with a rail down its left edge.
+
+**Tests (2, `overlay_ui`):** every registered area has a glyph; no two glyphs are
+the same drawing (the failure message names the colliding pair); every
+coordinate stays inside the 24-unit box, circles and teardrops checked at their
+extents. Both mutation-checked.
+
+### 2. The multi-column sheet — the seventh "renders but does nothing"
+
+`nColumns` was computed by `Solve()`, printed by `shell.layout`, and read by
+nothing. `DrawSheetBody()` now lays out that many columns.
+
+- **`LayOutSheetColumns()` (`Layout.cpp`) is the only place a column's geometry
+  is decided**, using index.html's own formula
+  `colW = (sheet − 2·pad − (cols−1)·gutter) / cols`, pad and gutter both 24.
+- **The unit of packing is a GROUP, never a row** — the mockup's own greedy
+  balance by line weight. A group split across a column boundary either orphans
+  rows under no heading or forces the band to repeat, making one declared group
+  look like two. Keeping a group whole costs some balance and keeps the row
+  grammar intact.
+- **Each column gets its own lane**, so SPEC §2.2's two hard vertical lines exist
+  once *per column* and right-binding holds within each.
+- **D17's drawer occlusion became a per-column question**, computed from each
+  column's own right edge against the drawer's left edge. It reduces to exactly
+  the old single subtraction at one column — pinned by a test — so the two are
+  one rule rather than two that can drift.
+- **`Solve()` gained `bUnsplittable`** for escaped legacy panels (they lay
+  themselves out with ImGui's own cursor) and content bodies (one scrolling list
+  cannot be halved). Decided in `Solve()` because `shell.layout` prints
+  `Solve()`'s number — answering it at the drawing site would recreate the exact
+  defect being removed.
+
+**Verified live:** 3 columns at 0.5×, 2 at 0.75× and 1.0×, 1 at 1.25×, matching
+SPEC §8.3's table; 1 column at 2.0× with the drawer, lane clear of it;
+`system.log` reports `1 col` where `system.monitor` reports `3 col` at the same
+0.5×. **Tests (4, `overlay_shell`).**
+
+### 3. The Reachability Law's mechanism — built, not spec'd away
+
+SPEC §6.3 says a row owning Params renders them inline in the Sheet whenever the
+Inspector is unavailable. It was never built, **and the comment above
+`DrawExplainPage()` claimed it was.**
+
+Built rather than removed from the spec: §6.3's three-clause argument, §8.2's key
+table (twice), §6.4's "honest cost" and §2.4's amendment all depend on it, and
+clause 1 asks for one property — "one code path" — which `DrawInlineParams()`
+satisfies literally by allocating a `RowCtx` from the same lane and calling the
+same `DrawSharedControl()` the sheet row and the Inspector call.
+
+| Piece | Behaviour |
+|---|---|
+| Host | `InlineMode()` — the Hidden host only; with a column or drawer the params are already on screen, and drawing them twice would be two painters for one declaration. |
+| Disclosure | The §2.4 chevron points **right** collapsed, **down** open. Its own hit box exists only in inline mode, where it is a real control. |
+| Expand | `→` (after the row's own adjuster declines), `Space` (last in the activate chain, so a switch still toggles), or a click on the chevron. |
+| Navigate | `↓`/`↑` walk **into** the expansion before moving to the next row; `←/→` adjust the focused param through the same `AdjustValue`/`RunBankKeyboard` the Inspector uses. |
+| Collapse | `←` on the row, `Esc` (the ladder rung that had nothing behind it), or selecting another row. |
+| Scope | **One expansion at a time** — §6.4 concedes the reflow §8.3 forbids only because it is user-initiated, and one open row bounds it. |
+
+**A spec ambiguity resolved:** §8.2 gives `←/→` three jobs without saying which
+wins on a row that is both adjustable and deep. **Adjusting wins**, reusing the
+"didn't move" signal the region-edge rule already runs on — otherwise giving a
+slider a parameter would silently disable that slider's arrow keys.
+
+**Verified live** on `image.shaders.adaptive_brightness` (the Six Budget's live
+maximum, 6 params): expanded from the sheet, focus walked into the params,
+`Target brightness` adjusted 0.5 → 0.508 with the Inspector hidden, collapsed by
+`Esc` with the row still selected.
+
+The comment now says what is true **and records that it used to lie**, so the
+correction is auditable.
+
+---
+
 ## 2026-08-23 — the pre-P5 shell test, and the eight defects it fixed
 
 Not a phase: an exhaustive test pass over everything P1–P4.1 built, before P5

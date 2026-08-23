@@ -25,7 +25,8 @@ temporary `XDG_CONFIG_HOME`.
 | Defects and spec gaps found | **20** |
 | **Fixed** | **8** — §3, one commit (`885242e`) |
 | **Left, with reasons** | **12** — §6 (one), §7 (ten), §8 (one) |
-| A seventh "renders but does nothing"? | **Yes — the multi-column sheet.** §6 |
+| **Closed since, by D20** | **3** — the rail icons (§7.1), the multi-column sheet (§6), and the Reachability Law's mechanism (§7.3). **9 remain open** for P5. |
+| A seventh "renders but does nothing"? | **Yes — the multi-column sheet.** §6 — **now built, D20.2** |
 | Config safety | **PASS** — §4 |
 | Legacy mode (`overlay_e2 0`) | **PASS** — §5 |
 | HUD parity | **PASS** — §5 |
@@ -287,6 +288,17 @@ only the live numbers differ.
 
 ## 6. The seventh "renders but does nothing" — **yes, and it is the biggest one**
 
+> **CLOSED 2026-08-23 by D20.2 — built, not deleted.** `DrawSheetBody()` now lays out
+> `nColumns` columns, each with its own lane, packing **whole groups** by the mockup's
+> own greedy balance. `LayOutSheetColumns()` in `Layout.cpp` is the single place a
+> column's geometry is decided, and D17's drawer occlusion became a per-column question
+> that reduces to the old single subtraction at one column (pinned by a test).
+> `Solve()` also gained `bUnsplittable` for escaped panels and content bodies, so the
+> printed count and the drawn count are one number by construction. Verified live:
+> 3 columns at 0.5×, 2 at 0.75×/1.0×, 1 at 1.25×, and `system.log` correctly reports
+> `1 col` where `system.monitor` reports `3 col` at the same scale. Four new
+> `overlay_shell` cases. **The section below is kept as the record of how it was found.**
+
 **The multi-column sheet is computed, displayed, and drives nothing.**
 
 `Solve()` computes `nColumns` with SPEC §8.3's content cap
@@ -317,7 +329,17 @@ honest number disagreeing with the screen is what made this findable.
 
 ## 7. Found and left, with reasons
 
-### 7.1 The rail draws letters, not SPEC §8.0's drawn icon set — **left**
+### 7.1 The rail draws letters, not SPEC §8.0's drawn icon set — ~~left~~ **CLOSED**
+
+> **CLOSED 2026-08-23 by D20.1.** The eleven glyphs are drawn from a `constexpr` table
+> in `Icons.h` (imgui-free, so the geometry is unit-testable) through one
+> `glyph::RailIcon()` that holds no coordinates. Screenshot-verified at 0.5× / 1.0× /
+> 1.5× / 1.75× / 2.0×, expanded and collapsed: the three colliding pairs are now
+> **two faders vs three solid bars**, **two offset cards vs one folded page**, and
+> **a three-layer stack vs a framed window**. Two new `overlay_ui` cases pin that every
+> area has a glyph, that no two are the same drawing, and that none escapes the
+> 24-unit box; both mutation-checked. This was also the user's own critique point.
+
 
 The rail shows the area title's first character. SPEC §8.0 specifies eleven inline-SVG
 glyphs on one 24-unit grid, and the P2 comment in `DrawRail()` says P3 would draw them;
@@ -344,15 +366,20 @@ either way it is a registry decision, not a shell fix.
   the blue channel's least significant bit. Harmless and imperceptible, but meaningless;
   a colour is not an ordered scalar. `AdjustValue()` should probably refuse
   `CompositeKind::Colour` the way it refuses a Bank, now that the Bank has its own route.
-- **SPEC §6.3's inline param expansion does not exist.** There is no `▸` disclosure and
-  no expansion in `DrawSheetBody()` — its row loop draws entries and nothing else. The
-  comment above `DrawExplainPage()` in `Shell.cpp` claims *"params render inline (P3)"*;
-  that claim is **wrong** and should be corrected when the feature lands or the spec
-  sentence changes. The Reachability Law's *guarantee* still holds — with the
-  Inspector hidden, `Ctrl+/` opens the full-sheet Configure+Details page (verified) and
-  the palette reaches every param (verified) — but its specified *mechanism* is unbuilt,
-  so the sheet alone never shows a param. Left: it is a feature, and the spec sentence
-  that describes it is one of two things P5 must reconcile.
+- ~~**SPEC §6.3's inline param expansion does not exist.**~~ **CLOSED 2026-08-23 by
+  D20.3 — built, and the comment corrected.** `DrawInlineParams()` renders a row's
+  params beneath it in the Sheet's own Row grammar whenever the Inspector is hidden,
+  through the *same* `DrawSharedControl()` the sheet row and the Inspector call — which
+  is SPEC §6.3 clause 1's "one code path" holding literally rather than by assertion.
+  The `›` becomes a `⌄` when open; `→`/`Space`/a click on the chevron expand, `↓` walks
+  into the params, `←/→` adjust the focused one, and `Esc`'s "inline expansion" rung
+  now has something behind it. Screenshot-verified end to end on
+  `image.shaders.adaptive_brightness` (the Six Budget's live maximum): six params drawn
+  inline, focus moved into them, `Target brightness` adjusted 0.5 → 0.508 with the
+  Inspector hidden, then collapsed by `Esc` with the row still selected.
+  The comment above `DrawExplainPage()` said *"params render inline (P3)"* while no such
+  code existed; it now says what is true **and records that it used to lie**, so the
+  correction is auditable rather than invisible.
 - **The Overview card is a stub.** SPEC §5.5 asks for the differing-settings list,
   `WRITES TO`, `EFFECTIVE PATH` and three actions; the shell draws the crumb, the area
   summary and the `sheet N rows · inspector N params · 0 unreachable` line.
@@ -385,7 +412,7 @@ either way it is a registry decision, not a shell fix.
 | **The Six Budget** (§5.2.3) | Enforced at registration with an abort; the message exists in `Registry.cpp` and `PARAMETERS n of 6` is drawn. The live maximum is 6 (`image.shaders.adaptive_brightness`), at the cap with zero headroom. |
 | **The Prefix Law** (§5.2.2) | Enforced at registration, and re-checked per area on a dynamic rebuild. All 26 live param ids are `<parent>.<leaf>`. |
 | **Required help** (§5.2.1) | Enforced; `SelfTest()` runs after `RegisterAll()` and again per rebuilt dynamic area. |
-| **The Reachability Law** (§6.3) | The **guarantee** holds — every setting and every param is editable with the Inspector hidden, via `Ctrl+/`'s full-sheet page and via `Ctrl+K`. The **mechanism** the spec names (inline expansion) does not exist — §7.3. |
+| **The Reachability Law** (§6.3) | Holds, **and its specified mechanism now exists** — D20.3 built the inline expansion, so the sheet alone shows and edits a param with the Inspector hidden. `Ctrl+/`'s full-sheet page and `Ctrl+K` remain the other two routes. |
 | **The Inspector has no authoring API** (§5.2.0) | Holds. Nothing in the Inspector section takes a callback, a lambda or a string a panel typed. |
 | **`differs` has one encoding** (D6) | Holds — the 2 px accent edge, plus the header chip this pass added. |
 | **The affordance column holds at most one glyph** (§2.4) | Now true rather than vacuously true — §3.5. |
