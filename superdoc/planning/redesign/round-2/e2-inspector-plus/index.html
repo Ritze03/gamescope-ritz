@@ -228,10 +228,11 @@ button,input{font-family:inherit;border-radius:0}
   padding-right:12px;min-width:0}
 .row .labz .lab{font:400 14px var(--sans);color:var(--t68);white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;flex:1;min-width:0}
-/* B's value typography, in E2's value column */
+/* B's value typography, in E2's value column. D6: the value column no longer
+   recolours on diff — the accent edge (below) is the Sheet's one "differs"
+   encoding; the accent stays reserved for the Inspector's own value line. */
 .row .labz .val{flex:0 1 auto;font:500 16px var(--mono);color:var(--t92);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:60%}
-.row .labz .val.diff{color:var(--acc-val)}
 .row .labz .val u{font:400 11.5px var(--mono);color:var(--t52);text-decoration:none;
   padding-left:3px;margin-left:-2px}
 .row .ctlz{flex:1;min-width:0;display:flex;justify-content:flex-end;align-items:center;
@@ -247,6 +248,8 @@ button,input{font-family:inherit;border-radius:0}
 .edge{position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent}
 .edge.diff{background:var(--acc)}
 .edge.sel{background:rgba(var(--accRGB),.45)}
+/* .reset is Inspector-only now (D6) — used by .irow .rst, never by a Sheet
+   row's .aff. The Sheet's affordance column carries depth (.chev) or nothing. */
 .reset{width:7px;height:7px;border-radius:50%;background:var(--acc);cursor:pointer}
 .chev{color:var(--t52);font-size:13px}
 /* a Facts summary is a STRING, not a value — it lives in the control zone */
@@ -385,7 +388,6 @@ button,input{font-family:inherit;border-radius:0}
 .band.sel .line1 .labz .lab{color:var(--t92)}
 .band .line1 .labz .val{font:500 16px var(--mono);color:var(--t92);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:60%}
-.band .line1 .labz .val.diff{color:var(--acc-val)}
 .band .bodyz{position:absolute;right:var(--aff);top:0;bottom:0;display:flex;align-items:center;
   justify-content:flex-end;gap:var(--gapA)}
 .band .aff{position:absolute;right:0;top:0;height:var(--row);width:var(--aff);display:flex;
@@ -464,7 +466,12 @@ button,input{font-family:inherit;border-radius:0}
 .irow.wide{height:calc(var(--row) + 24px);flex-direction:column;align-items:stretch;gap:2px;padding-top:8px}
 .irow.wide .top{display:flex;align-items:baseline;gap:8px}
 .irow.wide .cz{width:100%}
-.irow .rst{position:absolute;right:0;top:50%;margin-top:-3.5px}
+/* only the single-line row needs absolute right-pinning; a wide row's rst
+   already sits in its own flex wrapper on the .top line (right after val) —
+   absolute-positioning it there placed it against the WHOLE .irow.wide box
+   instead, landing it under the control on line 2 and making it unclickable
+   (found while verifying D6 moved reset into the Inspector reachably) */
+.irow:not(.wide) .rst{position:absolute;right:0;top:50%;margin-top:-3.5px}
 .ikey{font:400 11.5px var(--mono);color:var(--t52);line-height:1.7}
 .iact{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
 .ilog{font:400 11px var(--mono);line-height:1.45;color:var(--t52);border-left:2px solid var(--line);
@@ -823,7 +830,7 @@ const AREAS=[
        ['max frame-average','400 nits'],['mastering min','0.005 nits'],['source','app-provided (surface metadata)'],
        ['fallback in use','no']]}]}]},
 
-{id:'image.shaders',sec:'IMAGE',ic:'shaders',title:'Shaders',
+{id:'image.shaders',sec:'DISPLAY',ic:'shaders',title:'Shaders',
  desc:'ReShade-compatible post-process effects, compiled once at startup.',
  sum:()=>onCount('image.shaders')+' of 3 effects on',
  groups:[{n:'Effects',all:true,cnt:()=>onCount('image.shaders')+' / 3',e:[
@@ -856,7 +863,7 @@ const AREAS=[
        ['errors','0'],['pass cost','0.41 ms of 7.04 ms']]}]}],
  note:'Effects are SDR-only for now — disable HDR to use them.'},
 
-{id:'audio.mixer',sec:'AUDIO',ic:'mixer',title:'Mixer',
+{id:'audio.mixer',sec:'SYSTEM',ic:'mixer',title:'Mixer',
  desc:'Per-application volume through PipeWire / WirePlumber.',
  sum:()=>'eldenring.exe · '+fmt(E['audio.volume']),
  groups:[{n:'Game stream',e:[
@@ -1283,9 +1290,12 @@ function rowHTML(e,inspLane){
   /* E-grammar re-creates what E2 removed: hint lines, left/centred controls, 76-tall rows */
   const eTall=eg&&e.hint;
   const eAlign=eg?(e.k==='sw'?' eleft':e.k==='st'?' ecenter':''):'';
+  /* D6: reset moved out of the Sheet's affordance column and into the Inspector
+     (Configure — both the row's own value line and the ^D shortcut). The
+     column's only remaining job is depth, so a row that differs never loses
+     its chevron to a reset dot. */
   let aff='';
-  if(dif) aff=`<span class="reset" data-act="reset" data-id="${e.id}" title="reset to default"></span>`;
-  else if(hasDepth&&!eg) aff=`<span class="chev">${inline?(EXPANDED[e.id]?'▾':'▸'):'›'}</span>`;
+  if(hasDepth&&!eg) aff=`<span class="chev">${inline?(EXPANDED[e.id]?'▾':'▸'):'›'}</span>`;
 
   /* B's rule: the value is shown for every control except a segmented one,
      which already shows it.  E2's rule: it lands in the value column. */
@@ -1303,7 +1313,7 @@ function rowHTML(e,inspLane){
     ${inline?`<span class="disc" data-act="expand" data-id="${e.id}">${EXPANDED[e.id]?'▾':'▸'}</span>`:''}
     <span class="labz"><span class="lab" title="${esc(e.t)}">${esc(e.t)}</span>
       ${eTall?`<span class="hint">${esc(e.hint)}</span>`:''}
-      ${showVal&&!eTall?`<span class="val${dif?' diff':''}${err?' err':''}" title="${esc(fmt(e))}">${esc(fmt(e))}${e.u?`<u>${esc(e.u)}</u>`:''}</span>`:''}</span>
+      ${showVal&&!eTall?`<span class="val${err?' err':''}" title="${esc(fmt(e))}">${esc(fmt(e))}${e.u?`<u>${esc(e.u)}</u>`:''}</span>`:''}</span>
     <span class="ctlz">${ctlHTML(e,lane)}</span>
     <span class="aff">${aff}</span></div>`;
 
@@ -1311,14 +1321,19 @@ function rowHTML(e,inspLane){
   return h;
 }
 function paramRows(e){
+  /* D6: same rule as a top-level row — the accent edge is the only "differs"
+     encoding, and the affordance column is not a reset dot. A Param never
+     owns Params (the One-Level Rule), so its aff slot is always empty; reset
+     lives in the Inspector (Configure row + ^D), reachable here too. */
   LINES+=e.p.length;
   return e.p.map(p=>{
     const pd=off(p), pdif=p.val!==p.d, lane=ladder().colW*0.54-52;
     return `<div class="row prow${SEL===p.id?' sel':''}${pd?' dis':''}" data-row="${p.id}">
+      <i class="edge${pdif?' diff':''}"></i>
       <span class="labz"><span class="lab">${esc(p.t)}</span>
-        ${!['ch','tx','act'].includes(p.k)?`<span class="val${pdif?' diff':''}">${esc(fmt(p))}${p.u?`<u>${esc(p.u)}</u>`:''}</span>`:''}</span>
+        ${!['ch','tx','act'].includes(p.k)?`<span class="val">${esc(fmt(p))}${p.u?`<u>${esc(p.u)}</u>`:''}</span>`:''}</span>
       <span class="ctlz">${ctlHTML(p,lane)}</span>
-      <span class="aff">${pdif?`<span class="reset" data-act="reset" data-id="${p.id}"></span>`:''}</span></div>`;
+      <span class="aff"></span></div>`;
   }).join('');
 }
 
@@ -1366,10 +1381,9 @@ function bandHTML(e,n){
     <div class="line1">
       ${inline?`<span class="disc" data-act="expand" data-id="${e.id}" style="position:absolute;left:2px">${EXPANDED[e.id]?'▾':'▸'}</span>`:''}
       <span class="labz"><span class="lab">${esc(e.t)}</span>
-      <span class="val${dif?' diff':''}">${esc(val)}${e.u?`<u>${esc(e.u)}</u>`:''}</span></span></div>
+      <span class="val">${esc(val)}${e.u?`<u>${esc(e.u)}</u>`:''}</span></span></div>
     <div class="bodyz" style="${wide?'left:calc(var(--labz) + 12px);':''}">${body}</div>
-    <div class="aff">${dif?`<span class="reset" data-act="reset" data-id="${e.id}"></span>`
-      :inline?`<span class="chev">${EXPANDED[e.id]?'▾':'▸'}</span>`
+    <div class="aff">${inline?`<span class="chev">${EXPANDED[e.id]?'▾':'▸'}</span>`
       :(e.p||lvOf(e).length)?'<span class="chev">›</span>':''}</div></div>`;
   /* THE REACHABILITY LAW: a composite's params render inline, in the Sheet's own
      Row grammar, whenever the Inspector is unavailable. Same painter, same rule. */
@@ -1762,12 +1776,14 @@ function adjust(e,dir,fine){
    9. THE COMMAND PALETTE — entries AND params, from the same registry
    ════════════════════════════════════════════════════════════════════════ */
 function palItems(){
+  /* D5: the path column shows the CONFIG KEY, not the area id — area ids are
+     UI grouping only and carry no promise about key prefixes (SPEC.md §2.6). */
   const out=[];
   ORDER.forEach(e=>{
-    out.push({id:e.id,t:e.t,area:e._area,path:e._area.sec+' / '+e._area.title,
+    out.push({id:e.id,t:e.t,area:e._area,path:e.id,
       hay:(e.t+' '+e.id+' '+(e.kw||'')).toLowerCase(),param:false});
     (e.p||[]).forEach(p=>out.push({id:p.id,t:e.t+' ▸ '+p.t,area:e._area,
-      path:e._area.sec+' / '+e._area.title,
+      path:p.id,
       hay:(p.t+' '+p.id+' '+e.t+' '+(e.kw||'')).toLowerCase(),param:true}));
   });
   return out;

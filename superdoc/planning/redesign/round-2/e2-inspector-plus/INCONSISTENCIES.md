@@ -86,6 +86,14 @@ list, a value or a control can reach checked for whether it was ever drawn.
 
 ### F. Left for the user — two defensible readings, so not decided silently
 
+> **Decided 2026-08-23.** All five below (D5–D9) were decided while the user slept — full
+> reasoning, rejected alternatives, and costs stated plainly in
+> `../../AUTONOMOUS-DECISIONS.md`. Applied to `index.html` and to this direction's
+> `SPEC.md` (see its 2026-08-23 amendments, item 9–13 in the Amendments log, and §2.6,
+> §2.3–2.4, §3.12, §8.1, §1.1 respectively). Left here, unedited below, as the historical
+> record of what was open and why; the decisions still need the user's confirmation on
+> waking, per the terms `AUTONOMOUS-DECISIONS.md` records.
+
 1. **Area id vs. config-key prefix.** Four of eleven areas have a rail id that does not match
    their settings' key prefix: `system.monitor` holds `monitor.*`, `setup.pergame` holds
    `config.*`, `setup.appearance` holds `overlay.*`, `setup.profiles` holds `profiles.*`.

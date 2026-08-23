@@ -42,6 +42,21 @@ in place; this block is the summary of *what changed and why*.
 8. **`INCONSISTENCIES.md`** records the full audit — 30 fixes and 5 open questions. The
    items that changed rules stated *here* are C1–C8 in that file.
 
+Later the same day, the five questions item 8 left open (`INCONSISTENCIES.md` §F) were
+decided in `AUTONOMOUS-DECISIONS.md` (D5–D9) and applied to this document and to
+`index.html`:
+
+9. **D5 — area ids stay; they're UI grouping only.** No config key renamed. The palette's
+   path column now shows the config key instead of the area id/title. See §2.6.
+10. **D6 — one "differs" encoding on the sheet; reset moves to the Inspector.** Dropped the
+    value-column accent recolour; kept the 2px edge; the affordance column now leads with
+    the depth chevron instead of a reset dot that displaced it. See §2.3, §2.4.
+11. **D7 — the chip bank stays**, unchanged, as the taxonomy's eleventh kind. See §3.12.
+12. **D8 — `IMAGE` folds into `DISPLAY`, `AUDIO` folds into `SYSTEM`.** Five rail sections
+    become three. See §8.1.
+13. **D9 — the sheet header's dev chips are stated, explicitly, as mockup instrumentation
+    that must not ship.** See §1.1.
+
 ---
 
 ## 0. The thesis in one paragraph
@@ -98,6 +113,19 @@ sheet to the bottom.
 The mockup ships an **E-grammar / E2-grammar** toggle and counts the sheet's text lines
 live in the header chip, so this is measured rather than asserted. Same registry, same
 settings, both renderings:
+
+> **Stated 2026-08-23 (D9, decided in `AUTONOMOUS-DECISIONS.md`; raised as an open
+> question in `INCONSISTENCIES.md` §F.5).** The sheet header's `text lines`, `row
+> heights`, `col`, `ladder` and `sheet 804b` chips, and the E-grammar/E2-grammar toggle
+> itself, are **mockup instrumentation, not product chrome.** They exist to make this
+> table's numbers measured rather than asserted, and they stay in `index.html` for
+> exactly that reason. **They must not be implemented in the shipping overlay.** A later
+> reader porting this mockup to ImGui must not treat it as pixel-exact here: the sheet
+> header in the real product carries the breadcrumb, the `differs N` chip, and the
+> `inspector hidden` chip — never a live line-count, a row-height count, a column count,
+> a ladder-step number, or a raw pixel-budget readout. Treat this paragraph as the
+> checklist item: the implementation PR that ports the sheet header is not done until it
+> has confirmed none of these five chips crossed over.
 
 | Category | Settings | E grammar | E2 grammar | Params moved to Configure |
 |---|---|---|---|---|
@@ -195,25 +223,57 @@ from the control kind, never the caller:
 > the product. A switch now reads `on` / `off` in the value column, which is also what
 > B's `.state` atom does.
 
-Value type is Mono 500 **16** `AccentValue` when the row differs from default, Mono 500 16
-`TextPrimary` when it is at default (B's `.val` size, and B's colour split re-based onto
-tokens that clear 4.5:1 — B's own `neutral` at 44% measures 4.09:1). Unit follows in Mono
-400 11.5 `TextMeta`, outside the number's run. The value column ellipsizes at 60% of the
-label+value zone, so a 40-character option name cannot squeeze the label to nothing.
+Value type is Mono 500 **16** `TextPrimary`, on the Sheet, **always** — B's `.val` size,
+re-based onto a token that clears 4.5:1 (B's own `neutral` at 44% measures 4.09:1). Unit
+follows in Mono 400 11.5 `TextMeta`, outside the number's run. The value column ellipsizes
+at 60% of the label+value zone, so a 40-character option name cannot squeeze the label to
+nothing.
+
+> **Amended 2026-08-23 (D6).** This cell previously read `AccentValue` when the row
+> differs from default. That accent recolour is **deleted** — see §2.4's amendment for
+> why. The Inspector's own value line (§5.3) still recolours on diff; only the Sheet's
+> value column stopped.
 
 ### 2.4 The affordance column — one glyph, fixed priority
 
-28 base units, and it holds **exactly one** glyph, chosen by this order (first match
+28 base units, and it holds **at most one** glyph, chosen by this order (first match
 wins, never two):
 
-1. `⟡` reset dot — `Accent`, shown when the row differs from default. Click = reset.
-2. `›` depth chevron — `TextMeta`, shown when the row owns Params or Facts.
-3. `⌷` lock — `TextMeta`, shown when the row is read-only.
-4. nothing.
+1. `›` depth chevron — `TextMeta`, shown when the row owns Params or Facts.
+2. `⌷` lock — `TextMeta`, shown when the row is read-only.
+3. nothing.
 
-A row that both differs *and* has depth shows the reset dot; the chevron's information
-is redundant because the row is selected the moment you click it anyway. Fixed priority
-is what keeps the column a column instead of a pile.
+> **Amended 2026-08-23 (D6 — the most consequential of the five open questions in
+> `INCONSISTENCIES.md` §F, decided in `AUTONOMOUS-DECISIONS.md`).** This column
+> previously led with a `⟡` reset dot for a differing row, ahead of the chevron. That was
+> a real bug, not a style choice: a row that both **differed** *and* **owned depth** — the
+> exact combination the affordance column exists to advertise — showed the dot and lost
+> the chevron, so its Params became invisible from the Sheet. Three encodings of "differs
+> from default" coexisted (edge, value colour, reset dot); this drops the design to
+> **one** — the 2px accent left edge (§2.1), unchanged — and **reset moves into the
+> Inspector**: the selected row's own Configure line carries a reset dot next to its
+> value, and the Configure body's action row carries a `reset to default` verb: both
+> already existed there (§5.3) and needed no new code, only removal from the Sheet.
+> `Ctrl+D` still resets the selected row (and its Params) with the Inspector closed, so
+> the Reachability Law is untouched — resetting was never exclusive to a dot in the Sheet.
+> The one real cost: reset now takes selecting the row first, one extra click for a rare,
+> destructive-ish action, paid to keep depth always visible. Reset is deliberately
+> **Configure-only, not Details** — Details is read-only by type (§5.2 clause 4, a pure
+> derived readout with no authoring surface of any kind, including a reset action), so
+> putting a mutating verb there would be the one inconsistency the mode split forbids.
+> The same rule now applies uniformly to Params rendered inline in the Sheet (§6.3): they
+> gained the accent edge they never had, and lost the reset dot they did have, so a
+> Param-in-Sheet reads exactly like a top-level row.
+>
+> **Found while verifying this decision, and fixed:** the Inspector's own reset dot
+> (`.irow .rst`) was unclickable on a **wide** row (slider, text, bank, hue, strip,
+> anchor) — a stale `position:absolute` rule aimed it at the whole two-line row instead of
+> the value line it sits on, landing it under the control. Invisible before D6, because
+> the Sheet's own dot was always a working fallback; load-bearing now that it is the only
+> route. Fixed by scoping the absolute rule to single-line rows (`.irow:not(.wide) .rst`);
+> a wide row's dot now sits in normal flow next to its value, as designed. See
+> `TEST-REPORT.md`'s 2026-08-23 re-verification for how this was found and confirmed
+> fixed.
 
 ### 2.5 Groups and rhythm
 
@@ -224,6 +284,26 @@ is what keeps the column a column instead of a pile.
   see §7.4.)
 - **Spacing scale** — `XS 4 · S 8 · M 12 · L 16 · XL 24 · XXL 32`, chosen by the helper,
   never typed by a caller.
+
+### 2.6 Area ids vs. config keys — a stated non-promise
+
+> **Added 2026-08-23 (D5, decided in `AUTONOMOUS-DECISIONS.md`; the question was raised
+> in `INCONSISTENCIES.md` §F.1).** A rail area's id (`system.monitor`, `setup.pergame`,
+> `setup.appearance`, `setup.profiles`, …) is a **UI grouping label**, chosen for where a
+> category sits on the rail. It carries **no promise** that the settings inside share that
+> prefix as their config key. Four of eleven areas don't: `system.monitor` holds
+> `monitor.*` keys, `setup.pergame` holds `config.*`, `setup.appearance` holds
+> `overlay.*`, `setup.profiles` holds `profiles.*`. This is deliberate, not drift — the
+> config keys are on disk in the user's `global.json` and `games/*.json`, and renaming
+> them to match the rail would be a migration for a cosmetic mismatch. **The Prefix Law
+> (§5.2 clause 2) applies to Params, not to areas** — a Param's id must be
+> `<parent id>.<leaf>`, and that rule is unaffected and unrelaxed.
+>
+> The one place the mismatch was visible — the command palette's path column, which
+> showed `AREA-SECTION / Area Title` — now shows the **config key** instead (`e.id` for a
+> setting, `p.id` for a Param; see §5.2's searchability guarantee). The key is what a
+> reviewer checks against the on-disk JSON, so it is the more useful thing to show there
+> regardless of the area-id question.
 
 ---
 
@@ -437,6 +517,12 @@ other row — *"no profiles are saved"*, *"type a name first"*.
 Its own section, because it is fix #3. See §4.
 
 ### 3.12 Bank — a multi-select whose value is a set
+
+> **Decided 2026-08-23 (D7, decided in `AUTONOMOUS-DECISIONS.md`; raised as an open
+> question in `INCONSISTENCIES.md` §F.3).** The chip bank is **kept**, unchanged, as the
+> taxonomy's eleventh kind. The governing rule below is exactly what stops it becoming a
+> checkbox by another name — that rule, not the bank's existence, is the thing a reviewer
+> must hold the line on.
 
 > Adopted from direction B (`.bank`). Cells 3 gap, `--H` tall, 8 padding, Mono 500 11,
 > inactive fill `#FFFFFF @ 5%` / border `--lineCtl` / text `TextMeta`, active fill
@@ -974,12 +1060,27 @@ Slab `min(surfaceW × 0.90, max(1560 × scale, 1180)) × min(surfaceH × 0.86, 9
 Not draggable, not resizable, no per-panel positions — E's argument stands unchanged, and
 it deletes the bug class that produced 39% of `src/Overlay/`'s fix commits.
 
-Rail: eleven items in five sections, drawn icons (§8.0) and labels, two levels, no tab bar
-anywhere in the product. Active item carries a 2px `Accent` left edge that survives the
-icon collapse. **The counter on a rail item means exactly one thing — the number of
-settings in that area that differ from default.** The single alternate form is a captured
-severity count, drawn in `Danger` with a `!`. (The first version used that one slot for
-five different quantities; see A1 in `INCONSISTENCIES.md`.)
+Rail: eleven items in **three** sections — `DISPLAY`, `SYSTEM`, `SETUP` — drawn icons
+(§8.0) and labels, two levels, no tab bar anywhere in the product. Active item carries a
+2px `Accent` left edge that survives the icon collapse. **The counter on a rail item means
+exactly one thing — the number of settings in that area that differ from default.** The
+single alternate form is a captured severity count, drawn in `Danger` with a `!`. (The
+first version used that one slot for five different quantities; see A1 in
+`INCONSISTENCIES.md`.)
+
+> **Amended 2026-08-23 (D8, decided in `AUTONOMOUS-DECISIONS.md`; raised as an open
+> question in `INCONSISTENCIES.md` §F.4).** Five sections became three: `IMAGE` (one
+> area, `Shaders`) folds into `DISPLAY`; `AUDIO` (one area, `Mixer`) folds into `SYSTEM`.
+> A section header that groups exactly one item buys nothing at 1.0× and costs a line at
+> 0.5×, where vertical space is tightest — a header is only earning its keep once it is
+> disambiguating between two or more items. If a second `IMAGE`- or `AUDIO`-shaped area
+> ever appears, its section comes back with it; the fold is a consequence of the current
+> registry's shape, not a rule against those categories existing. Area **ids** and titles
+> are unchanged (`image.shaders` still reads "Shaders" wherever it's named) — only the
+> rail's `sec` grouping moved, so nothing about §2.6's key-prefix statement is affected.
+> Section order stays deliberate: `Shaders` sits at the end of `DISPLAY` (after `HDR`,
+> where its image-processing kin already are), and `Mixer` leads `SYSTEM` (ahead of
+> `Monitor` and `Log`, its original relative position).
 
 ### 8.2 Keyboard — mouse and keyboard only (gamepad dropped)
 

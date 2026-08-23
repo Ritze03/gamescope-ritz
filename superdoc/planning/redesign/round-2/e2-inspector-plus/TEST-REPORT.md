@@ -161,3 +161,99 @@ the design rule it implements.)
 
 Fixes are in `index.html`; the two doc corrections are in `SPEC.md`; the full findings
 ledger, in the same style as the first audit, is a new §H in `INCONSISTENCIES.md`.
+
+---
+
+## 2026-08-23 — re-verification after applying D5–D9
+
+Applied the five decisions left open in `INCONSISTENCIES.md` §F / decided in
+`AUTONOMOUS-DECISIONS.md`, then re-ran the checks this report established plus new checks
+specific to each decision. Method: Playwright MCP against a local HTTP server on
+`index.html` (`file://` is still blocked by the sandbox — confirmed again this session);
+real clicks for the load-bearing interactions, JS-state sweeps over `render()` for
+combinatorial coverage, exactly as the first pass did.
+
+### Regression re-checks (everything this report established, still holds)
+
+| Check | Result |
+|---|---|
+| Full `render()` sweep, 7 scales × 3 hosts × 11 areas | 231/231, zero throws |
+| Reachability (`HOST='hidden'`, every row+param expanded inline) | 60/60 rows, 26/26 params got a `[data-row]` rect |
+| Right-bound alignment, `.val`/`.ctlz`/`.bodyz` right edges, 4 scales × 11 areas | zero outliers |
+| Accent literal grep (`54,189`, the 8 fixed hex tokens) | only inside the `:root` token block — no survivors |
+| Console (fresh navigation → full sweep) | 0 errors, 0 warnings |
+
+### D5 — palette path column shows the config key
+
+Opened the palette (`Ctrl+K`), read `.p`/`.n` off the top rows and off a param match
+(`"denoise"` → `display.sharpness.rcas_denoise`): every path cell is now the entry's or
+param's own `id` (`display.filter`, `display.sharpness.rcas_denoise`, …), never the old
+`SECTION / Title`. `Ctrl+D` reset and `←/→` in-place adjust from the palette still work
+(unchanged code path).
+
+### D6 — one encoding on the sheet; reset in the Inspector
+
+- **Swept the whole registry for rows that both differ and own depth** (differing +
+  `.p.length` or `lvOf().length`): 10 found across `display.sharpness`,
+  `display.adaptive_sync`, `image.shaders.adaptive_brightness`,
+  `image.shaders.presharpen`, `audio.stream`, `audio.volume`, `monitor.mod_graph`,
+  `monitor.backdrop`, and 2 more. **Confirmed by real click** (`display.sharpness`, a row;
+  `audio.volume`, a composite band) that both show the depth chevron (`›`) and the diff
+  edge in the Sheet, never a reset dot — the exact bug D6 exists to fix.
+- **Confirmed zero `.reset` elements anywhere in `#sbodywrap`** across 11 areas × 3 scales
+  × 2 hosts (66 renders). The Sheet's affordance column now only ever holds a chevron or
+  nothing.
+- **Reset reachability from the Inspector**, real clicks: the selected row's own Configure
+  line (`.irow .rst`) resets a top-level differing row (slider `display.sharpness`
+  5→2, switch `image.shaders.adaptive_brightness` true→false) and a Param
+  (`image.shaders.adaptive_brightness.strength` 0.78→0). `Ctrl+D` also still resets a
+  Param selected inline with the Inspector hidden (`image.shaders.vibrancy.strength`
+  0.6→0) — the Reachability Law survives the affordance-column change, as it must, since
+  it never depended on a Sheet-side dot.
+- **Defect found and fixed during this verification**: `.irow .rst`'s
+  `position:absolute;right:0;top:50%` was written for the single-line row, but a **wide**
+  row (slider, text, bank, hue, strip, anchor — any control needing its own line) reuses
+  the same rule, which positions the dot against the whole `.irow.wide` box instead of the
+  `.top` line it visually sits on. It landed under the control on line 2 and was
+  genuinely unclickable — a real Playwright click timed out with "`.sld` intercepts
+  pointer events," and `elementFromPoint` on the dot's own center returned the slider, not
+  the dot. This was pre-existing (untouched by D6's own edits) and invisible before D6
+  because the Sheet's reset dot was always a working fallback; D6 makes the Inspector's
+  own dot load-bearing, so it had to actually work. **Fixed**: scoped the absolute rule to
+  `.irow:not(.wide) .rst`; a wide row's dot now sits in normal flow inside its existing
+  flex wrapper next to the value, which is exactly where it was designed to be. Verified
+  with a programmatic sweep (`elementFromPoint` on every rendered `.rst`'s center, across
+  every area) — 23/23 unoccluded — and with two real clicks (wide: slider; non-wide:
+  switch), both correctly reset the value.
+
+### D7 — chip bank kept
+
+No behavioural change; confirmed `log.sources`/`log.severity` still render as banks and
+the Monitor's seven modules still render as seven switch rows with a `4 / 7` count — the
+rule that distinguishes them is unchanged in `index.html` and now stated explicitly in
+`SPEC.md` §3.12.
+
+### D8 — folded rail
+
+At both 0.5× and 2.0×: 3 section headers (`DISPLAY`, `SYSTEM`, `SETUP`), 11 rail items,
+rail class toggles to `icons` at 2.0× as before. Item order:
+`Upscaling, Output, Frame limiter, HDR, Shaders | Mixer, Monitor, Log | Profiles,
+Per-game, Appearance` — `Shaders` trails `DISPLAY` (after its image-processing kin,
+`HDR`), `Mixer` leads `SYSTEM` (its original relative position). No change to area ids,
+titles, or icons — only the rail's `sec` grouping.
+
+### D9 — dev chips confirmed present, unchanged, and now documented as mockup-only
+
+`shead`'s text still reads `… text lines · … row height(s) · … col · ladder … · sheet
+…b` — the five dev chips are untouched in `index.html` (D9 says keep them in the mockup);
+`SPEC.md` §1.1 now states explicitly they must not ship.
+
+### Net changes this pass
+
+`index.html`: rail `sec` for `image.shaders`→`DISPLAY` and `audio.mixer`→`SYSTEM` (D8);
+`palItems()` path field → `e.id`/`p.id` (D5); `rowHTML`/`paramRows`/`bandHTML` affordance
+column and value-column diff colour removed, `paramRows` gained the accent edge it never
+had (D6); one CSS selector fix for `.irow .rst` in wide mode (found during this
+verification, not part of the original five, but required for D6's "reset must remain
+easy to find" to actually hold). Zero throws, zero console errors, zero regressions in
+anything this report's first pass established.
