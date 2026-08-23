@@ -1224,6 +1224,68 @@ namespace gamescope
 		return s.substr( 0, nMaxLen ) + "...";
 	}
 
+	// Issue #77: #72 makes every module's backdrop draw at the width of the
+	// widest, and with a real MPRIS session running the Media module's own
+	// track-title line is routinely the widest content in the stack (unlike
+	// FPS/CPU/GPU, whose content is short, digit-denominated fields) --
+	// pinning every OTHER module to Media's width, not the other way
+	// around. #72's shared-width contract itself is kept exactly as spec'd
+	// (see this issue's own investigation comment on GitHub); the fix lives
+	// entirely here, in what Media itself reports as its content width.
+	//
+	// kMediaTrackMaxWidth is a straight pixel ceiling (one of this issue's
+	// own suggested options), sized in the same ballpark as a typical GPU/
+	// CPU row's own width at this file's default font sizes (~200-230px
+	// unscaled: "GPU 63%  VRAM 12.1/24.0GB" and friends) -- comfortably
+	// above MeasureFpsModule()'s 186px kMinContainerWidth floor so a normal
+	// "Artist  -  Title" line still draws in full, but close enough to a
+	// sibling module's own width that one outlier title can no longer drag
+	// the whole stack 2-3x wider than everything else in it. A multiple-of-
+	// next-widest-module cap was considered and rejected: it would make
+	// Media's own width depend on measuring every OTHER module first,
+	// coupling this module's layout to sibling ordering for no real benefit
+	// over a constant tuned to the same ballpark. Scaled by
+	// gamescope::palette::DisplayScale() like every other pixel constant in
+	// this file (Widgets.cpp's #46 segmented-label shrink-to-fit follows
+	// the same rule) so it stays proportionate at 2.0x UI Scale instead of
+	// going relatively tighter as the font grows.
+	static constexpr float kMediaTrackMaxWidth = 260.0f;
+
+	// Issue #77: pixel-width-driven ellipsis truncation for a string that
+	// would otherwise report too wide -- same "measure, and only touch it
+	// if it doesn't fit" shape as Widgets.cpp's #46 segmented-label shrink-
+	// to-fit, but an ellipsis rather than a shrunk font: a shrunk-but-whole
+	// label reads as merely "smaller," while a genuinely cut string needs a
+	// visible "more was here" marker, which only an ellipsis gives. Must be
+	// called with the target font already pushed -- ImGui::CalcTextSize()
+	// samples the currently bound font, same requirement CalcTextSize()
+	// itself has at every other call site in this file. Binary-searches the
+	// byte cut point (cheap either way at this string length, and reads
+	// directly as "longest prefix that still fits" rather than a decrement
+	// loop). Byte-based, not UTF-8-aware -- same accepted tradeoff
+	// TruncateForDisplay() above documents; a clipped multibyte glyph right
+	// at the ellipsis is a cosmetic edge case, not a correctness one.
+	static std::string TruncateToPixelWidth( const std::string &s, float flMaxWidth )
+	{
+		if ( ImGui::CalcTextSize( s.c_str() ).x <= flMaxWidth )
+			return s;
+
+		static constexpr const char *kEllipsis = "\xE2\x80\xA6"; // U+2026 "..."
+		const float flEllipsisWidth = ImGui::CalcTextSize( kEllipsis ).x;
+
+		size_t nLo = 0, nHi = s.size();
+		while ( nLo < nHi )
+		{
+			const size_t nMid = nLo + ( nHi - nLo + 1 ) / 2;
+			const float flWidth = ImGui::CalcTextSize( s.substr( 0, nMid ).c_str() ).x + flEllipsisWidth;
+			if ( flWidth <= flMaxWidth )
+				nLo = nMid;
+			else
+				nHi = nMid - 1;
+		}
+		return s.substr( 0, nLo ) + kEllipsis;
+	}
+
 	struct MediaModuleLayout
 	{
 		bool bDrawBackdrop = false;
@@ -1270,13 +1332,22 @@ namespace gamescope
 
 		const std::string sTitle = TruncateForDisplay( media.sTitle.empty() ? "(unknown title)" : media.sTitle, 40 );
 		const std::string sTrack = media.sArtist.empty() ? sTitle : ( sTitle + "  -  " + TruncateForDisplay( media.sArtist, 24 ) );
-		snprintf( L.szTrackLine, sizeof( L.szTrackLine ), "%s", sTrack.c_str() );
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 		L.statusSize = ImGui::CalcTextSize( L.szStatusLine );
 		ImGui::PopFont();
 
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
+		// Issue #77: clamp to kMediaTrackMaxWidth (see its own comment)
+		// applied to the already-joined "Title  -  Artist" line, so a long
+		// ARTIST is what gets sacrificed first when the two together don't
+		// fit -- the title is the more identifying half and sits at the
+		// front, so a tail cut ("Some Very Long Song Name (Remaste...")
+		// loses less useful information than a head cut would (this
+		// issue's own brief gives this exact example).
+		const float flMaxTrackWidth = kMediaTrackMaxWidth * gamescope::palette::DisplayScale();
+		const std::string sClamped = TruncateToPixelWidth( sTrack, flMaxTrackWidth );
+		snprintf( L.szTrackLine, sizeof( L.szTrackLine ), "%s", sClamped.c_str() );
 		L.trackSize = ImGui::CalcTextSize( L.szTrackLine );
 		ImGui::PopFont();
 
