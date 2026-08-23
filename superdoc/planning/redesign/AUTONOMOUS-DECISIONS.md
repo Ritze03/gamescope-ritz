@@ -736,3 +736,41 @@ test window died and once because gamescope launched on the wrong monitor. Absen
 safeguard — the second incident happened while they were away from the keyboard. Verification
 uses config presets, ConVars, `grim` screenshots and keyboard only.
 
+
+---
+
+## 2026-08-23 (later)
+
+### D17 · At 2.0×, the open drawer shrinks the sheet's lane rather than covering it
+
+**The defect (found in P4, recorded as D16.2):** at 2.0× the ladder reaches step 2, where the
+inspector is a *drawer* — an overlay pinned to the right. With the sheet 804 wide and the drawer
+400, the drawer paints over the sheet's **entire control column**. Every segmented control,
+switch and slider is hidden behind it. This matches `SPEC.md` §8.3's own table, so it is a design
+gap rather than an implementation slip, and the previous agent correctly declined to pick a repair
+that changes what the ladder means.
+
+**Chose:** while the drawer is open, the sheet's **lane right edge** becomes the drawer's left
+edge minus a gutter. Controls stay reachable; the drawer still overlays the sheet's *background*
+and still opens and closes without relayout elsewhere.
+
+**Rejected — auto-hiding the drawer when the pointer enters the sheet.** It makes the inspector
+flicker during ordinary use, and it silently overrides `Ctrl+I`, so the user's explicit choice
+stops meaning anything.
+
+**Rejected — collapsing step 2 into step 1** (a real column that reflows the sheet). That is
+already what step 1 *is*; the ladder would then have two identical steps, and the reason step 2
+exists is to buy the sheet more width at high scale.
+
+**Rejected — narrowing the drawer at 2.0×.** The drawer holds the same content at every scale, so
+narrowing it at exactly the scale where text is largest is the wrong direction.
+
+**Why the lane is the right lever:** it is already the single place control geometry is decided
+(P1's Lane unit, `Place()`), it is imgui-free and therefore directly testable, and no call site
+can observe the difference — which is precisely the property that made the lane law worth having.
+
+**Cost, stated plainly:** at 2.0× with the drawer open, the control column is narrower, so a
+segmented control with long labels may downgrade to a dropdown sooner. That is the existing,
+specified downgrade behaviour rather than a new failure mode.
+
+*Cheap to reverse:* one clamp in the lane computation, pinned by tests.
