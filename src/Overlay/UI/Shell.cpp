@@ -225,8 +225,12 @@ namespace gamescope::ui::shell
 		void RegisterAll( Registry &reg )
 		{
 			// ---- DISPLAY -------------------------------------------------
-			reg.Add( "display.gamescope", "Gamescope", Section::Display )
-				.Escape( []{ PanelDisplay_DrawBody(); } );
+			// P3 part A: the four Gamescope tabs became three AREAS, not one
+			// area with four group bands. SPEC §8.1's rail is the product's
+			// only navigation and lists exactly these as rail items, so a tab
+			// bar becomes rail items -- a four-group sheet would be the same
+			// tab bar redrawn as headings. AUTONOMOUS-DECISIONS.md D13.1.
+			PanelDisplay_RegisterAreas( reg );
 			reg.Add( "image.shaders", "Shaders", Section::Display )
 				.Escape( []{ PanelShaders_DrawBody(); } );
 

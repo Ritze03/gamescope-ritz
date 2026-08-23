@@ -16,6 +16,8 @@
 // SetFpsLimit() comment).
 #pragma once
 
+#include "UI/Registry.h"
+
 namespace gamescope
 {
 	// Draws the Display panel's ImGui window. Must be called from the same
@@ -28,14 +30,17 @@ namespace gamescope
 	// safety argument in full.
 	void PanelDisplay_Draw();
 
-	// E2 MIGRATION SEAM (P2). The same body, with no window around it, for
-	// the E2 shell to host inside its sheet through ui::Area::Escape() --
-	// see Overlay/UI/Registry.h's Escape() comment for why that hatch
-	// exists and what deletes it. Draws into whatever ImGui window is
-	// current; the caller owns the Begin/End and the style. Same thread
-	// contract as PanelDisplay_Draw() above, unchanged.
+	// E2 (P3). This panel's settings, DECLARED rather than drawn: three
+	// areas -- Upscaling, Frame limiter, HDR -- covering exactly what the
+	// four legacy tabs above cover, with the same config keys, the same
+	// ranges and the same Set*() functions behind every binding.
 	//
-	// TEMPORARY: P3 rewrites this panel against the ui:: kit and both this
-	// declaration and its call site go away with it.
-	void PanelDisplay_DrawBody();
+	// Called once at startup from Overlay/UI/Shell.cpp's RegisterAll().
+	// Registration is data and touches no ImGui, so it has no thread
+	// contract of its own; the BINDINGS it installs are invoked during the
+	// shell's draw and inherit PanelDisplay_Draw()'s contract above.
+	//
+	// P2's PanelDisplay_DrawBody() -- the ui::Area::Escape() hatch that
+	// hosted the legacy body verbatim in the E2 sheet -- is gone with this.
+	void PanelDisplay_RegisterAreas( ui::Registry &reg );
 }
