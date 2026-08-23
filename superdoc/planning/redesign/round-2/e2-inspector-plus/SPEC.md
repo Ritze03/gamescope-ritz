@@ -524,13 +524,26 @@ steppers, which is the whole calming move in miniature.
 | Composite | n | Body (right-bound) | Line-1 value | Params |
 |---|---|---|---|---|
 | Anchor / Placement | 3 | 96×96 grid | `top-right · 32 / 32` | `margin_v`, `margin_h` |
-| Accent hue | 2 | hue rail + 8 swatches | `oklch(.74 .12 218)` | `l`, `c` (expert) |
-| Audio strip | 2 | fader + L/R meter | `−7.5 dB · −12/−14` | `routing`, `match_rule` |
+| Accent hue | 2 | hue rail + 8 swatches | `218°` | `l`, `c` (expert) |
+| Audio strip | 2 | fader + L/R meter | `-7.5dB` | `routing`, `match_rule` |
 | Frametime graph | 3 | 240-sample sparkline | `7.04 ms · 3 outliers` | — (Details only) |
 | Colour override | 2 | L/C/H rails + swatch | `#6ED274` | `hex` |
 
-Five composites, one band rule, no call site choosing geometry. Today's two Position
-Grid call sites (notification placement, monitor placement) that drifted apart cannot.
+Four composites are drawn in `index.html` (Anchor, Accent hue, Audio strip, Frametime
+graph); **Colour override is documented here but not registered in the mockup** — there
+is no per-game colour-override setting in the demo registry for it to attach to. It is
+kept in this table as the fifth instance the band rule already covers, not as a claim
+about what the mockup renders; do not re-add "five composites" language without also
+adding the registration. One band rule either way, no call site choosing geometry.
+Today's two Position Grid call sites (notification placement, monitor placement) that
+drifted apart cannot.
+
+> **Amended 2026-08-23 (post-audit).** The Accent hue and Audio strip Line-1 values above
+> were corrected to match what the mockup actually renders. The previous text showed
+> `oklch(.74 .12 218)` and `−7.5 dB · −12/−14` — the first was the pre-B7-fix debug
+> string `INCONSISTENCIES.md` §B7 already replaced with a plain `218°`; the second baked
+> the L/R meter's own readout into the value column, which §2.3 reserves for the control's
+> resolved value alone. Both were doc drift, not mockup bugs — the code was already right.
 
 ---
 

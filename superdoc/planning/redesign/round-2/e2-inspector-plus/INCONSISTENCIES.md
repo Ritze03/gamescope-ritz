@@ -131,3 +131,21 @@ Recorded here because they are design decisions, not slips:
   full size in the composite band. Removed rather than shipped as dead CSS.
 - **B's `.state` text ("on"/"off" beside the switch)** moves into E2's value column, which is
   where every other value that a control cannot show itself already lives.
+
+### H. Fixed — found by exhaustive interaction testing (same day, second pass)
+
+The first audit read the file; this pass drove it — every control clicked, typed into,
+dragged and keyed, in both Inspector hosts and across the full scale ladder. Full report:
+`TEST-REPORT.md`.
+
+| # | Found | Fixed as |
+|---|---|---|
+| H1 | **The anchor composite's line-1 value dropped the margins.** `SPEC.md` §4.3/§4.4 both give the worked example as `top-right · 32 / 32`; the mockup rendered only `top-right` — `fmt()` never consulted the row's own Params. | A `resolvedStr()` helper (Sheet band **and** the Inspector's own-control row now share it) appends `· <margin_v> / <margin_h>` for the anchor kind, matching the spec example exactly. |
+| H2 | **Two `<input id="txin">` elements could exist at once**, and did — whenever a text-kind row was selected with the Inspector open in `column` host, Configure draws the row's own control a second time. Invalid HTML, and `document.getElementById('txin')` in `render()`'s auto-focus tail always resolved the *first* one (the Sheet's), regardless of which copy the user actually clicked. Confirmed by real keystrokes: clicking the Inspector's copy and typing accepted the first character, then silently lost focus to the Sheet's copy on every subsequent one — text entry from the Inspector was effectively unusable. | `id="txin"` → `class="txinput"` everywhere (markup + the three listeners that gated on it). `render()`'s focus tail no longer steals focus from whichever copy already has it. The `input` listener now detects editing that originated inside `#insp`, follows it after `renderInspector()` rebuilds that copy, and restores the caret. A new guard on the Sheet's generic row-click handler (`if (t.closest('.txinput')) return;`) stops a caret-placement click on the input itself from being read as a row-select click and forcing a disruptive full re-render. |
+| H3 | **The log's text filter did not filter live**, contradicting the guided tour's own claim ("Type in the text filter and watch matches highlight"). Typing only reached the Inspector + footer (the deliberate lightweight `input` path); `#logbody` and the `N / total` match chip are painted by `renderSheet()`→`logHTML()`, which that path never calls. | `logHTML()` split into `logbodyHTML()` (log lines) and the filter-bar shell. The `input` listener now refreshes `#logbody` and the match chip inline, computed *before* the live edit buffer is reverted to the committed value (ordering bug caught in the same fix — the first attempt read the just-reverted value and appeared to do nothing). |
+| H4 | **`log.buffer_facts` (the Diagnostics "Buffer" Facts row) never received a `[data-row]` rect under any Inspector host** — a genuine Reachability Law violation (`SPEC.md` §6.3). The Log area's Sheet rendering short-circuits to a raw filter-bar + log-body layout and never runs the normal group/row loop that every other area's Diagnostics group goes through, so this entry — though fully registered with `.h`, `.sm` and `.lv` — was orphaned from the Sheet, the inline fallback and the hidden-Inspector spine alike; only a palette search could reach it, and even that landed on a Sheet with nothing visibly selected. | The filter bar's existing `N / total` match-count chip is now also the row's affordance: wrapped in `data-row="log.buffer_facts"`, selectable like any other `.f` filter-bar item. Clicking it opens Details (Facts rows auto-select Details), exactly as every other Diagnostics Facts row does. Re-ran the `ui_lint --host=inline` equivalent sweep after the fix: 60/60 entries and 26/26 params now receive a rect. |
+
+None of the four contradict a stated rule — each is the mockup falling short of a rule
+`SPEC.md` or this file's own §D1/§C already commits to. H1 and the two stale examples in
+`SPEC.md` §4.4 (`oklch(.74 .12 218)`, the meter-embedded audio strip value) were corrected
+in `SPEC.md` directly rather than left as a mockup/doc mismatch.

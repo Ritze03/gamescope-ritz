@@ -1159,6 +1159,11 @@ const fmt=(e,val)=>{
 };
 /* a value the overlay did not verify is drawn as "—", never invented */
 const factSum=e=>{const s=e.sm?e.sm():null; return s==null?'—':s;};
+/* the RESOLVED value — what a composite's line 1 and its own Inspector row both
+   show.  SPEC.md §4.3: "top-right · 32 / 32", not just "top-right" — the margins
+   are what let the offset steppers become Params without the value column going
+   silent on them.  One function so the Sheet band and the Inspector can't drift. */
+const resolvedStr=e=>e.k==='anchor'&&e.p?`${fmt(e)} · ${e.p[0].val} / ${e.p[1].val}`:fmt(e);
 
 /* ── rail ── */
 function renderRail(){
@@ -1213,7 +1218,7 @@ function ctlHTML(e,lane){
    case 'tx':{
      const err=errOf(e);
      if(EDIT&&EDIT.id===id) return `<span class="tin${err?' err':''}" style="flex:1;max-width:320px">
-        <input id="txin" value="${esc(EDIT.buf)}" spellcheck="false" autocomplete="off"></span>`;
+        <input class="txinput" value="${esc(EDIT.buf)}" spellcheck="false" autocomplete="off"></span>`;
      return `<span class="tin${err?' err':''}" tabindex="0" data-act="tx" data-id="${id}">
         <span class="tv${e.val?'':' ph'}">${esc(fmt(e))}</span><span class="cv">✎</span></span>`;}
    case 'bank': return `<span class="bank">${optsOf(e).map(x=>
@@ -1354,7 +1359,7 @@ function bandHTML(e,n){
   }
   const wide=e.k!=='anchor';
   const inline=ladder().host==='hidden'&&e.p&&e.p.length;
-  const val=e.k==='graph'?factSum(e):fmt(e);
+  const val=e.k==='graph'?factSum(e):resolvedStr(e);
   let h=`<div class="band${sel?' sel':''}${dis?' dis':''}" style="height:calc(var(--row) * ${n})"
       data-row="${e.id}"${dis?` title="${esc(dis)}"`:''}>
     <i class="edge${dif?' diff':sel?' sel':''}"></i>
@@ -1473,7 +1478,7 @@ function irowHTML(x,lane,isPrimary){
   const asSeg=x.k==='ch'&&segFits(x,lane);
   const wide=['sl','tx','bank','hue','strip','anchor'].includes(x.k)||(x.k==='ch'&&!asSeg&&optsOf(x).length>0);
   const showVal=!['ch','tx','act'].includes(x.k);
-  const val=showVal?`<span class="val${dif?' diff':''}">${esc(fmt(x))}${x.u?' '+esc(x.u):''}</span>`:'';
+  const val=showVal?`<span class="val${dif?' diff':''}">${esc(resolvedStr(x))}${x.u?' '+esc(x.u):''}</span>`:'';
   const rst=dif?`<span class="reset rst" data-act="reset" data-id="${x.id}" title="reset"></span>`:'';
   return `<div class="irow${wide?' wide':''}${SEL===x.id?' sel':''}${dis?' dis':''}"
       data-row="${x.id}"${dis?` title="${esc(dis)}"`:''}>
@@ -1667,8 +1672,21 @@ function hilite(tx,q){
   if(i<0) return esc(tx);
   return esc(tx.slice(0,i))+'<span class="hl">'+esc(tx.slice(i,i+q.length))+'</span>'+esc(tx.slice(i+q.length));
 }
-function logHTML(){
+/* split so the text filter can live-update the log lines AND the match count
+   on every keystroke without touching (and defocusing) the filter's own input
+   — the same duplicate-input hazard the profile name field has, avoided here
+   by never re-rendering the box the user is actively typing in. */
+function logbodyHTML(){
   const rows=logShown(), q=v('log.filter')||'';
+  return rows.length?rows.map(([n,s,t,x])=>
+     `<div class="ll ${s==='e'?'e':s==='w'?'w':''}${n===LOGSEL?' sel':''}" data-log="${n}">
+       <span class="ln">${n}</span><span class="sv"></span>
+       <span class="tx"><span class="tm">${t}</span>  ${hilite(x,q)}</span></div>`).join('')
+     :`<div class="empty">no line matches the current filter
+        <span class="txtact" data-act="logreset">clear the filter</span></div>`;
+}
+function logHTML(){
+  const rows=logShown();
   /* the bar is rendered FROM THE REGISTRY — same painter, different host.
      The chips label themselves, so the bar carries no field labels (B's rule). */
   const bar=['log.sources','log.severity','log.filter'].map(id=>
@@ -1677,16 +1695,13 @@ function logHTML(){
      <span class="fr">
        <span class="chip d">err ${LOG.filter(l=>l[1]==='e').length}</span>
        <span class="chip w">warn ${LOG.filter(l=>l[1]==='w').length}</span>
-       <span class="chip n">${rows.length} / ${LOG.length}</span>
+       <span class="f${SEL==='log.buffer_facts'?' sel':''}" data-row="log.buffer_facts"
+         title="${esc(E['log.buffer_facts'].t)} — click for the capture ring's Diagnostics">
+         <span class="chip n" id="logmatch">${rows.length} / ${LOG.length}</span></span>
        <span class="f${SEL==='log.autoscroll'?' sel':''}" data-row="log.autoscroll">
          <span class="fl">tail</span>${ctlHTML(E['log.autoscroll'],60)}</span>
        <span class="verb n" data-act="noop">copy</span></span></div>
-   <div class="logbody" id="logbody">${rows.length?rows.map(([n,s,t,x])=>
-     `<div class="ll ${s==='e'?'e':s==='w'?'w':''}${n===LOGSEL?' sel':''}" data-log="${n}">
-       <span class="ln">${n}</span><span class="sv"></span>
-       <span class="tx"><span class="tm">${t}</span>  ${hilite(x,q)}</span></div>`).join('')
-     :`<div class="empty">no line matches the current filter
-        <span class="txtact" data-act="logreset">clear the filter</span></div>`}</div>`;
+   <div class="logbody" id="logbody">${logbodyHTML()}</div>`;
 }
 function logInspector(){
   const l=LOG.find(x=>x[0]===LOGSEL);
@@ -1811,8 +1826,15 @@ function render(){
   document.getElementById('host').textContent=L.host+(HOST==='hidden'?' (forced)':'');
   document.getElementById('ghost').classList.toggle('on',L.host!=='column');
   document.getElementById('gpal').classList.toggle('on',PALON);
-  const ti=document.getElementById('txin');
-  if(ti){ ti.focus(); ti.setSelectionRange(EDIT.buf.length,EDIT.buf.length); }
+  /* the Sheet and the Inspector can both render the SAME editable text control
+     at once (Configure draws the row's own control too) — a caller could
+     otherwise end up with two <input id="txin">, which is invalid HTML and
+     means whichever one the user actually clicked gets its focus silently
+     stolen by document.getElementById's first-match.  .txinput is a class,
+     not an id, for exactly this reason: focus only what nothing already owns. */
+  const tis=[...document.querySelectorAll('.txinput')];
+  if(tis.length&&!tis.includes(document.activeElement))
+    { tis[0].focus(); tis[0].setSelectionRange(EDIT.buf.length,EDIT.buf.length); }
   const lb=document.getElementById('logbody');
   if(lb&&v('log.autoscroll')) lb.scrollTop=lb.scrollHeight;
 }
@@ -1878,6 +1900,12 @@ stage.addEventListener('mousedown',ev=>{
 },true);
 stage.addEventListener('click',ev=>{
   const t=ev.target;
+  /* clicking to place the caret inside an ACTIVE text edit is not a row-select
+     click — it carries no [data-act] (the editing markup has none), so it would
+     otherwise fall through to the row-click branch below and force a full
+     render() on every caret move, which is exactly what re-steals focus to
+     whichever <input class="txinput"> happens to be first in DOM order. */
+  if(t.closest('.txinput')) return;
   const act=t.closest('[data-act]'), row=t.closest('[data-row]'),
         ri=t.closest('[data-a]'), pal=t.closest('[data-pal]'), lg=t.closest('[data-log]');
   TOAST='';
@@ -1931,16 +1959,30 @@ stage.addEventListener('click',ev=>{
 
 /* text editing — a real input, committed on enter, reverted on escape */
 document.addEventListener('input',ev=>{
-  if(ev.target.id==='txin'&&EDIT){ EDIT.buf=ev.target.value;
+  if(ev.target.classList.contains('txinput')&&EDIT){ EDIT.buf=ev.target.value;
     const e=findEntry(EDIT.id); const old=e.val; e.val=EDIT.buf;
+    const inInsp=!!ev.target.closest('#insp'), caret=ev.target.selectionStart;
     /* live validation + live dependents (the save button re-enables as you type) */
     renderInspector(); renderFoot();
     const box=document.querySelector(`[data-row="${EDIT.id}"] .tin`);
     if(box) box.classList.toggle('err',!!errOf(e));
-    e.val=old; }
+    /* the log's text filter: matches and highlights live, as the tour promises —
+       #logbody and the match-count chip refresh without touching the filter box.
+       Must run BEFORE e.val is reverted below — logbodyHTML() reads it live. */
+    if(EDIT.id==='log.filter'){
+      const lb=document.getElementById('logbody'); if(lb) lb.innerHTML=logbodyHTML();
+      const mc=document.getElementById('logmatch'); if(mc) mc.textContent=logShown().length+' / '+LOG.length;
+    }
+    e.val=old;
+    /* renderInspector() just rebuilt the Inspector's OWN copy of this input —
+       if that is where the user was typing, its node (and its focus) was just
+       destroyed.  Follow the caret there so editing from the Inspector does
+       not silently hop to the Sheet's copy after the first keystroke. */
+    if(inInsp){ const ni=document.querySelector('#insp .txinput');
+      if(ni){ ni.focus(); ni.setSelectionRange(caret,caret); } } }
 });
 document.addEventListener('keydown',ev=>{
-  if(ev.target.id!=='txin') return;
+  if(!ev.target.classList.contains('txinput')) return;
   if(ev.key==='Enter'){ ev.preventDefault(); commitEdit(true); render(); }
   if(ev.key==='Escape'){ ev.preventDefault(); EDIT=null; render(); }
   ev.stopPropagation();
@@ -2012,7 +2054,7 @@ pq.addEventListener('input',()=>{ PALQ=pq.value; PALSEL=0; renderPal(); });
 function visibleRows(){ return [...document.querySelectorAll('[data-row]')]
   .map(x=>x.dataset.row).filter((x,i,a)=>a.indexOf(x)===i&&findEntry(x)); }
 addEventListener('keydown',ev=>{
-  if(ev.target.id==='txin') return;
+  if(ev.target.classList.contains('txinput')) return;
   const K=ev.key.toLowerCase(), mod=ev.ctrlKey||ev.metaKey;
   if(mod&&K==='k'){ ev.preventDefault(); PALON=true; PALQ=''; pq.value=''; PALSEL=0; render(); pq.focus(); return; }
   if(mod&&K==='i'){ ev.preventDefault(); cycleHost(); return; }
