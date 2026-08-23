@@ -893,6 +893,35 @@ namespace gamescope::ui::shell
 			}
 		}
 
+		// SPEC §1's state-edge slot: "2px, at x=0 -- Accent / Accent@45% /
+		// nothing". One slot, three values, and this function is the only
+		// place that decides which.
+		//
+		// THIS IS D6's OTHER HALF. D6 chose exactly ONE encoding of "differs
+		// from default" on the sheet -- this edge -- and deleted the other
+		// two: the accent-recoloured value (which competed with the accent's
+		// live/active job) and the reset dot (which DISPLACED the depth
+		// chevron, so a row that both differed and had depth stopped
+		// advertising its depth). The reset action moved to the Inspector,
+		// and was built in P3b; the edge was not, which left the decision
+		// half-implemented -- the sheet could not show which rows had
+		// anything to reset, so "what have I changed here" was unanswerable
+		// without opening every row in turn. The edge is the only one of the
+		// three encodings that SCANS VERTICALLY, which is the whole reason
+		// D6 kept it.
+		//
+		// Selection outranks differs because the two share the slot. A
+		// selected row that also differs reads as selected, and the
+		// Inspector it just opened is already showing the reset link.
+		ImU32 StateEdgeColor( const Entry &entry, bool bSelected )
+		{
+			if ( bSelected )
+				return Col( Role::AccentBase );
+			if ( entry.HasDefault() && !entry.IsAtDefault() )
+				return Accent( 0.45f );
+			return 0;
+		}
+
 		// =================================================================
 		//  Composites -- SPEC §4.2's band
 		// =================================================================
@@ -1012,10 +1041,10 @@ namespace gamescope::ui::shell
 			// Clause 1's consequence: the state edge spans the WHOLE band,
 			// not just its first line, or a selected composite would look
 			// like a selected row with n-1 unselected ones stacked under it.
-			if ( bSelected )
+			if ( const ImU32 colEdge = StateEdgeColor( entry, bSelected ) )
 			{
 				const ImRect rcEdge = bl.line1.StateEdge();
-				Fill( { rcEdge.Min.x, rcBand.Min.y, rcEdge.Max.x, rcBand.Max.y }, Col( Role::AccentBase ) );
+				Fill( { rcEdge.Min.x, rcBand.Min.y, rcEdge.Max.x, rcBand.Max.y }, colEdge );
 			}
 			HLine( rcBand.Min.x, rcBand.Max.x, rcBand.Max.y - Hairline(), Col( Role::Line ) );
 
@@ -1126,14 +1155,14 @@ namespace gamescope::ui::shell
 			const bool bHovered = ImGui::IsItemHovered();
 
 			if ( bSelected )
-			{
 				Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, Accent( 0.08f ) );
-				const ImRect rcEdge = row.StateEdge();
-				Fill( { rcEdge.Min.x, rcEdge.Min.y, rcEdge.Max.x, rcEdge.Max.y }, Col( Role::AccentBase ) );
-			}
 			else if ( bHovered )
-			{
 				Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, IM_COL32( 255, 255, 255, 10 ) );
+
+			if ( const ImU32 colEdge = StateEdgeColor( entry, bSelected ) )
+			{
+				const ImRect rcEdge = row.StateEdge();
+				Fill( { rcEdge.Min.x, rcEdge.Min.y, rcEdge.Max.x, rcEdge.Max.y }, colEdge );
 			}
 			HLine( rcRow.Min.x, rcRow.Max.x, rcRow.Max.y - Hairline(), Col( Role::Line ) );
 
