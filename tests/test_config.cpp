@@ -206,6 +206,41 @@ TEST_CASE( "overlay.display_scale round-trips through SaveGlobal/LoadGlobal at e
     }
 }
 
+// Issue #70: fps_display.fps_enabled (the FPS module's own toggle,
+// independent of the master `enabled`) round-trips through
+// SaveGlobal/LoadGlobal, same pattern as #52's display_scale test above.
+TEST_CASE( "fps_display.fps_enabled round-trips", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.fps_enabled = bValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.fps_enabled == bValue );
+    }
+}
+
+// An old config on disk, saved before #70 added this key, must still load
+// cleanly -- a missing key resolves to the compiled-in default (true,
+// matching cpu_enabled/gpu_enabled/media_enabled's own default-on
+// precedent), not a crash or a forced false.
+TEST_CASE( "a config predating #70 loads fps_enabled at its compiled-in default", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true, "cpu_enabled": true}})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.enabled == true );
+    REQUIRE( loaded.fps_display.fps_enabled == true );
+}
+
 TEST_CASE( "no per-game file is ever created until override is enabled", "[config]" )
 {
     TempConfigHome home;

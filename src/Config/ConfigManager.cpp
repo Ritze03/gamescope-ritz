@@ -155,6 +155,7 @@ namespace gamescope::config
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
                 s.fps_display.graph_enabled = JGetBool( *pFps, "graph_enabled", s.fps_display.graph_enabled );
                 s.fps_display.percentiles_enabled = JGetBool( *pFps, "percentiles_enabled", s.fps_display.percentiles_enabled );
+                s.fps_display.fps_enabled = JGetBool( *pFps, "fps_enabled", s.fps_display.fps_enabled );
                 // Issue #27: placement/margins, same field-shape as OverlaySettings::notification_placement.
                 s.fps_display.placement = JGetString( *pFps, "placement", s.fps_display.placement );
                 s.fps_display.margin_vertical = JGetFloat( *pFps, "margin_vertical", s.fps_display.margin_vertical );
@@ -324,6 +325,7 @@ namespace gamescope::config
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
             jFps[ "graph_enabled" ] = s.fps_display.graph_enabled;
             jFps[ "percentiles_enabled" ] = s.fps_display.percentiles_enabled;
+            jFps[ "fps_enabled" ] = s.fps_display.fps_enabled;
             jFps[ "placement" ] = s.fps_display.placement;
             jFps[ "margin_vertical" ] = s.fps_display.margin_vertical;
             jFps[ "margin_horizontal" ] = s.fps_display.margin_horizontal;

@@ -74,6 +74,18 @@ namespace gamescope::config
         bool graph_enabled = true;
         bool percentiles_enabled = true;
 
+        // Issue #70: `enabled` above used to double as both "HUD as a
+        // whole" and "FPS module specifically" -- the FPS module was the
+        // only one of the four (kModuleOrder's Fps/Cpu/Gpu/Media) with no
+        // toggle of its own, precisely because the master was standing in
+        // for it. This is that toggle, same shape/default as
+        // cpu_enabled/gpu_enabled/media_enabled below. `enabled` now means
+        // only "gate the whole panel" (renamed to "Show System Monitor" in
+        // the settings panel); this field means "show the FPS module
+        // within it," checked in MeasureModule()'s ModuleKind::Fps case the
+        // same way the other three modules already check their own field.
+        bool fps_enabled = true;
+
         // Issue #27 (System Monitor part 1/3): one of the 9 anchor strings
         // Notifications.cpp's kPlacements/OverlaySettings::notification_placement
         // already use ("top-left" .. "bottom-right", issue #26's model) --

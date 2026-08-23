@@ -725,9 +725,11 @@ namespace gamescope
 	// Measure<X>Module()/Draw<X>Module() shape MeasureFpsModule()/
 	// DrawFpsModuleContent() established. A module still reports zero size
 	// from its measure function when its own per-module `enabled` toggle
-	// (config::FpsDisplaySettings::cpu_enabled/gpu_enabled/media_enabled)
-	// is off -- this framework's contract for "not present" is unchanged:
-	// it draws nothing and reserves no stack space or gap.
+	// (config::FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/
+	// media_enabled -- issue #70 gave FPS the same per-module toggle the
+	// other three already had) is off -- this framework's contract for
+	// "not present" is unchanged: it draws nothing and reserves no stack
+	// space or gap.
 	//
 	// Order is FIXED and EDGE-RELATIVE, not a fixed top-to-bottom screen
 	// order: kModuleOrder's first entry (FPS) always ends up the module
@@ -1306,6 +1308,10 @@ namespace gamescope
 		{
 		case ModuleKind::Fps:
 		{
+			// Issue #70: FPS now has its own enable toggle, same "(0,0) ==
+			// not present" contract Cpu/Gpu/Media already use below.
+			if ( !cfg.fps_enabled )
+				return ImVec2( 0.0f, 0.0f );
 			outFpsLayout = MeasureFpsModule( nFps );
 			return ImVec2( outFpsLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outFpsLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
 		}
@@ -2011,13 +2017,15 @@ namespace gamescope
 	// a per-module tab would either duplicate the same control four times or
 	// arbitrarily pick one module to own them, both worse than a fifth
 	// "General" tab holding exactly the settings that are actually general.
-	// The master "Show FPS counter" toggle also lives in General: despite
-	// its name (a pre-#27 holdover from when this readout only ever showed
-	// FPS -- left as-is here since renaming it further is a separate,
-	// cosmetic change this reorg doesn't need to make) it gates the *entire*
-	// panel below it, CPU/GPU/Media included (see FpsDisplay_AddLayer()'s
-	// own `if ( !s_Settings.fps_display.enabled ) return;`), so General is
-	// the only tab it can honestly sit in.
+	// The master "Show System Monitor" toggle also lives in General: it
+	// gates the *entire* panel below it, CPU/GPU/Media (and, since #70,
+	// FPS's own fps_enabled) included (see FpsDisplay_AddLayer()'s own
+	// `if ( !s_Settings.fps_display.enabled ) return;`), so General is the
+	// only tab it can honestly sit in. Issue #70 renamed this from "Show
+	// FPS counter" -- a pre-#27 holdover from when this readout only ever
+	// showed FPS -- now that FPS has its own per-module toggle like every
+	// other module, the master's name no longer needs to double as FPS's
+	// own enable, and can just say what it actually gates.
 	//
 	// Each per-module tab keeps exactly that module's own two concerns: its
 	// content toggles (FPS's graph/percentile rows; CPU/GPU/Media's own
@@ -2035,7 +2043,12 @@ namespace gamescope
 		// checkbox visual carried no semantic weight the switch doesn't also
 		// carry. Swept to widgets::Toggle for consistency with every other
 		// on/off control in this panel.
-		bChanged |= widgets::Toggle( "Show FPS counter", &cfg.enabled );
+		//
+		// Issue #70: renamed from "Show FPS counter" to "Show System
+		// Monitor" -- it gates the whole panel (CPU/GPU/Media/FPS), not
+		// just an FPS readout, and now that FPS has its own fps_enabled
+		// toggle (DrawFpsTab below) the old name's double duty is gone.
+		bChanged |= widgets::Toggle( "Show System Monitor", &cfg.enabled );
 
 		ImGui::BeginDisabled( !cfg.enabled );
 
@@ -2105,17 +2118,23 @@ namespace gamescope
 		ImGui::EndDisabled(); // !cfg.enabled
 	}
 
-	// FPS module's own tab: Row 2/Row 3 toggles (frametime graph, percentile
-	// row -- both content that belongs to the FPS module specifically, see
-	// MeasureFpsModule()) plus its issue #29 colour override. There is no
-	// separate "FPS module enabled" switch to put here -- unlike CPU/GPU/
-	// Media, the FPS module has always shared the General tab's master
-	// "Show FPS counter" toggle as its own enable (kModuleOrder's first,
-	// always-present entry) rather than getting an independent one, and this
-	// reorg doesn't add one that didn't exist before.
+	// FPS module's own tab: its issue #70 enable switch, Row 2/Row 3
+	// toggles (frametime graph, percentile row -- both content that
+	// belongs to the FPS module specifically, see MeasureFpsModule()) plus
+	// its issue #29 colour override. Before #70, FPS had no switch of its
+	// own here -- unlike CPU/GPU/Media it shared the General tab's master
+	// toggle as its own enable (kModuleOrder's first, always-present
+	// entry). Now it gets the same independent switch every other module
+	// already has; the master keeps gating the whole panel (renamed "Show
+	// System Monitor" in DrawGeneralTab), same relationship it already has
+	// to CPU/GPU/Media.
 	static void DrawFpsTab( config::FpsDisplaySettings &cfg, bool &bChanged )
 	{
 		ImGui::BeginDisabled( !cfg.enabled );
+
+		// Issue #70: FPS module's own enable, same shape/placement as
+		// CPU/GPU/Media's own toggle at the top of their tabs below.
+		bChanged |= widgets::Toggle( "FPS module", &cfg.fps_enabled );
 
 		// Spec §11's "ROWS checkbox list" -- Row 2 (frametime graph) / Row 3
 		// (percentile stats), independently toggleable, sharing every other
