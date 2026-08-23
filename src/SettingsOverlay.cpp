@@ -1428,6 +1428,72 @@ namespace gamescope
 		s_flCursorY = std::clamp( s_flCursorY, 0.0, double( s_uTextureHeight > 0 ? s_uTextureHeight - 1 : 0 ) );
 	}
 
+	// ---- Motion-event sanity checks (#65, #75, #76) -----------------------
+	//
+	// DrainInputQueue() used to accept every raw motion coordinate/delta from
+	// wlserver with no check at all. Under rapid successive pointer events, a
+	// spurious motion event reliably shows up carrying an out-of-range
+	// coordinate -- confirmed live for two independent paths:
+	//   - CWaylandInputThread::Wayland_Pointer_Motion() (WaylandBackend.cpp):
+	//     normalized X == exactly -1.0, i.e. one full output-width off.
+	//   - CWaylandInputThread::Wayland_RelativePointer_RelativeMotion():
+	//     dx == dy == -8388608 (raw wl_fixed_t), i.e. exactly -32768.0 px
+	//     after wl_fixed_to_double() -- suspiciously exactly INT16_MIN
+	//     (-2^15) run through wl_fixed_from_int(), though nothing in this
+	//     repo's own source constructs that literal (grepped for
+	//     "8388608"/"INT16_MIN"/"32768": no hit outside FSR shader math) --
+	//     so this value is not manufactured by gamescope-ritz's own code; it
+	//     arrives already-formed over the wire (from the host compositor's
+	//     relative-pointer implementation, or the kernel/libinput chain
+	//     feeding it -- e.g. an uninitialised or sentinel int16 value from
+	//     whatever synthesised the input) and gets passed straight through
+	//     unchecked. Left unexplained upstream of this file; see #65's
+	//     comment thread for the full investigation and its caveat about
+	//     ydotool-driven repro not being confirmed to match a physical mouse.
+	//
+	// When one of these lands mid-press during a title-bar drag, ImGui's
+	// focus-follows-active-item logic reassigns NavWindow to whatever panel
+	// sits at the (clamped) garbage coordinate -- clamping the *final*
+	// cursor position (ClampCursorToTexture(), above) does NOT fix this: a
+	// clamped position is still a legitimate-looking, valid-in-bounds
+	// coordinate that ImGui treats as real motion to a real place, just the
+	// wrong one. The fix has to reject the bad sample before it ever
+	// perturbs s_flCursorX/Y, not clean up the value afterwards.
+
+	// Real absolute coordinates from Wayland_Pointer_Motion() are always
+	// normalized to the surface's own [0, 1] space. A small epsilon
+	// tolerates real motion landing exactly on an edge pixel plus float
+	// rounding; anything further out (X == -1.0 being the concrete garbage
+	// value seen live) is not a real position.
+	static bool IsSaneNormalizedCoord( double v )
+	{
+		return std::isfinite( v ) && v > -0.05 && v < 1.05;
+	}
+
+	// No single relative-motion event a real mouse produces between two
+	// Wayland events comes remotely close to this bound -- it exists purely
+	// to reject the -32768px sentinel (and anything of similar magnitude)
+	// without touching legitimate fast-flick deltas.
+	static constexpr double k_flMaxSaneMotionDeltaPx = 10000.0;
+	static bool IsSaneMotionDelta( double dx, double dy )
+	{
+		return std::isfinite( dx ) && std::isfinite( dy ) &&
+			std::fabs( dx ) < k_flMaxSaneMotionDeltaPx &&
+			std::fabs( dy ) < k_flMaxSaneMotionDeltaPx;
+	}
+
+	// Rate-limited so a host that spams the bad sample can't flood the log.
+	static void LogRejectedMotion( const char *pszKind, double x, double y )
+	{
+		static uint64_t s_ulLastLogNanos = 0;
+		const uint64_t ulNow = get_time_in_nanos();
+		if ( ulNow - s_ulLastLogNanos > 1'000'000'000ull )
+		{
+			s_OverlayLog.warnf( "rejected out-of-range %s pointer event (%.3f, %.3f) -- see issue #65", pszKind, x, y );
+			s_ulLastLogNanos = ulNow;
+		}
+	}
+
 	static void DrainInputQueue()
 	{
 		// Note: still proceeds to the capturing-edge check below even when
@@ -1507,15 +1573,29 @@ namespace gamescope
 					break;
 
 				case QueuedInputEvent::Kind::MouseMotionDelta:
-					s_flCursorX += ev.x;
-					s_flCursorY += ev.y;
-					bCursorMoved = true;
+					if ( IsSaneMotionDelta( ev.x, ev.y ) )
+					{
+						s_flCursorX += ev.x;
+						s_flCursorY += ev.y;
+						bCursorMoved = true;
+					}
+					else
+					{
+						LogRejectedMotion( "relative", ev.x, ev.y );
+					}
 					break;
 
 				case QueuedInputEvent::Kind::MouseMotionAbsolute:
-					s_flCursorX = ev.x * s_uTextureWidth;
-					s_flCursorY = ev.y * s_uTextureHeight;
-					bCursorMoved = true;
+					if ( IsSaneNormalizedCoord( ev.x ) && IsSaneNormalizedCoord( ev.y ) )
+					{
+						s_flCursorX = ev.x * s_uTextureWidth;
+						s_flCursorY = ev.y * s_uTextureHeight;
+						bCursorMoved = true;
+					}
+					else
+					{
+						LogRejectedMotion( "absolute", ev.x, ev.y );
+					}
 					break;
 
 				case QueuedInputEvent::Kind::MouseButton:
