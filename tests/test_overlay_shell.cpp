@@ -436,3 +436,70 @@ TEST_CASE( "an escaped area is found by id like any other", "[overlay_shell]" )
 	REQUIRE( pArea->EntryCount() == 0 );
 	REQUIRE( reg.FindArea( "nope" ) == nullptr );
 }
+
+// =========================================================================
+//  The Inspector's scroll range (P3b)
+// =========================================================================
+// P3a shipped an Inspector whose CONFIGURE body could not scroll, and the
+// symptom was invisible to every test that existed: the body drew with an
+// absolute y onto the draw list, so content taller than the region simply
+// stopped at the region's edge. Nothing failed, no assertion fired, the
+// last row was just missing.
+//
+// These tests make that condition arithmetic. ConfigureRowsHeight() is the
+// body's fixed-height part; Regions::rcInspectorBody is the space it has.
+// Comparing the two is the check the screenshot was doing by eye.
+TEST_CASE( "an entry at the six-param budget overflows the drawer at 2.0x", "[overlay_shell]" )
+{
+	// D13.4's case, and the one that found the bug: adaptive brightness
+	// sits on exactly six params, the Six Budget's ceiling.
+	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 2.0f );
+	const ui::LadderResult ladder = ui::Solve( slab, ui::InspectorHost::Column, 9 );
+	const ui::Regions regions = ui::Regions::For( slab, ladder );
+
+	const float flRows = ui::ConfigureRowsHeight( 6, 2.0f );
+	INFO( "rows " << flRows << " vs body " << regions.rcInspectorBody.Height() );
+
+	// The rows ALONE -- before the title, the help paragraph and the pad,
+	// none of which this lower bound counts -- already exceed the body.
+	// So the body must scroll; there is no layout that fits it.
+	REQUIRE( flRows > regions.rcInspectorBody.Height() );
+}
+
+TEST_CASE( "the configure body's height is linear in its parameter count", "[overlay_shell]" )
+{
+	// One row per param at the one control height, so the difference
+	// between n and n+1 params is exactly one row -- the property that
+	// makes the budget's cost predictable rather than emergent.
+	for ( float flScale : { 1.0f, 1.25f, 2.0f } )
+	{
+		const float flRowPx = ui::tok::kRowH * flScale;
+		for ( int n = 1; n < 6; ++n )
+		{
+			REQUIRE_THAT( ui::ConfigureRowsHeight( n + 1, flScale )
+			              - ui::ConfigureRowsHeight( n, flScale ),
+			              WithinAbs( flRowPx, 0.01f ) );
+		}
+
+		// A parameterless entry pays for no PARAMETERS band at all.
+		REQUIRE( ui::ConfigureRowsHeight( 0, flScale )
+		         < ui::ConfigureRowsHeight( 1, flScale ) - flRowPx );
+	}
+}
+
+TEST_CASE( "a parameterless entry still fits its body at every scale", "[overlay_shell]" )
+{
+	// The complement of the overflow test: scrolling must be the exception
+	// the deep rows need, not something every selection triggers.
+	for ( float flScale : { 0.5f, 1.0f, 1.25f, 2.0f } )
+	{
+		const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, flScale );
+		const ui::LadderResult ladder = ui::Solve( slab, ui::InspectorHost::Column, 6 );
+		const ui::Regions regions = ui::Regions::For( slab, ladder );
+		if ( ladder.eHost == ui::InspectorHost::Hidden )
+			continue;
+
+		INFO( "scale " << flScale );
+		REQUIRE( ui::ConfigureRowsHeight( 0, flScale ) < regions.rcInspectorBody.Height() );
+	}
+}

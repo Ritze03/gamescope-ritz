@@ -150,6 +150,24 @@ namespace gamescope::ui::shell
 			cv_overlay_e2_host.SetValue( (int)eHost );
 		}
 
+		// P3b. The Inspector body scrolls now (see DrawInspector), and a
+		// scroll is a POINTER gesture -- precisely the input this project is
+		// permanently forbidden to synthesise (D4). So the same argument that
+		// produced overlay_e2_select and overlay_e2_set applies a third time:
+		// without a console route, "does the Inspector actually scroll, and
+		// does the sixth parameter become reachable?" can be answered only by
+		// a human with a wheel, and the defect this fixes was one that no test
+		// and no screenshot of the DEFAULT state could see.
+		//
+		// It is a REQUEST, not the scroll's storage. The value is pushed into
+		// ImGui only on the frame it changes, so the wheel stays authoritative
+		// the rest of the time and the two cannot fight each other.
+		ConVar<float> cv_overlay_e2_scroll(
+			"overlay_e2_scroll", 0.0f,
+			"Scroll the E2 Inspector body to this pixel offset; a negative value scrolls to the "
+			"bottom. Exists so the Inspector's scrolling is verifiable without pointer input." );
+		float s_flScrollApplied = 0.0f;
+
 		void SelectById( std::span<std::string_view> args );
 		void SetById( std::span<std::string_view> args );
 
@@ -1175,7 +1193,12 @@ namespace gamescope::ui::shell
 		}
 
 		// ---- CONFIGURE (SPEC §5.1, §5.3) ---------------------------------
-		void DrawConfigure( const Rect &rc, const Entry &entry )
+		// Returns the y of the content's bottom edge. Every Inspector body
+		// returns it, and DrawInspector turns the total into the child's
+		// scroll range -- see the note there. The layout below is otherwise
+		// untouched: still one absolute `y` walking down, still the same row
+		// grammar and the same lane.
+		float DrawConfigure( const Rect &rc, const Entry &entry )
 		{
 			const float flPad = Px( tok::kInspectorPad );
 			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
@@ -1183,7 +1206,7 @@ namespace gamescope::ui::shell
 
 			Label( { rcIn.x0, y, rcIn.x1, y + Px( 18.0f ) }, TypeRole::Title,
 			       Col( Role::TextPrimary ), entry.Title().c_str() );
-			y += Px( 24.0f );
+			y += Px( shelltok::kTitleLine );
 
 			// Generator 1: .Help(). Required by law, so this is never empty.
 			y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextBody ), entry.HelpText().c_str(), y );
@@ -1202,9 +1225,8 @@ namespace gamescope::ui::shell
 				// SPEC §5.1: "For a read-only row the values block is
 				// replaced by one sentence saying so and pointing at
 				// Details."
-				DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
+				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
 					"This row is a readout -- there is nothing here to set. Its live values are in DETAILS.", y );
-				return;
 			}
 
 			// The values block: the row's own control as an Inspector row,
@@ -1215,7 +1237,7 @@ namespace gamescope::ui::shell
 			y += Px( tok::kS );
 			Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 			       Col( Role::TextMeta ), "VALUES" );
-			y += Px( 20.0f );
+			y += Px( shelltok::kSectionLine );
 
 			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
 			DrawEntryRow( entry, lane, rcIn.x0, y, false );
@@ -1231,7 +1253,7 @@ namespace gamescope::ui::shell
 				snprintf( szHead, sizeof( szHead ), "PARAMETERS   %d of 6", (int)entry.ParamCount() );
 				Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 				       Col( Role::TextMeta ), szHead );
-				y += Px( 20.0f );
+				y += Px( shelltok::kSectionLine );
 			}
 
 			for ( size_t i = 0; i < entry.ParamCount(); ++i )
@@ -1283,10 +1305,11 @@ namespace gamescope::ui::shell
 					                 sParamReason.c_str(), y ) + Px( tok::kXS );
 				}
 			}
+			return y;
 		}
 
 		// ---- DETAILS (SPEC §5.1, §5.4) -----------------------------------
-		void DrawDetails( const Rect &rc, const Entry &entry )
+		float DrawDetails( const Rect &rc, const Entry &entry )
 		{
 			const float flPad = Px( tok::kInspectorPad );
 			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
@@ -1346,7 +1369,7 @@ namespace gamescope::ui::shell
 				y += Px( tok::kM );
 				Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
 				       Col( Role::TextMeta ), "LIVE" );
-				y += Px( 20.0f );
+				y += Px( shelltok::kSectionLine );
 
 				for ( size_t i = 0; i < entry.LiveCount(); ++i )
 				{
@@ -1358,17 +1381,18 @@ namespace gamescope::ui::shell
 					y += Px( tok::kXS );
 				}
 			}
+			return y;
 		}
 
 		// ---- OVERVIEW (SPEC §5.5) ----------------------------------------
-		void DrawOverview( const Rect &rc, const Area *pArea )
+		float DrawOverview( const Rect &rc, const Area *pArea )
 		{
 			const float flPad = Px( tok::kInspectorPad );
 			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
 			float y = rcIn.y0;
 
 			if ( !pArea )
-				return;
+				return y;
 
 			char szTitle[ 128 ];
 			snprintf( szTitle, sizeof( szTitle ), "%s / %s",
@@ -1397,9 +1421,8 @@ namespace gamescope::ui::shell
 					"It has no registered rows yet, so the Inspector has nothing to derive and no "
 					"selection is possible here.", y );
 				y += Px( tok::kM );
-				DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ),
+				return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ),
 					"sheet: legacy escape  ·  inspector 0 params  ·  migration pending", y );
-				return;
 			}
 
 			// SPEC §5.5's budget line: "sheet 9 rows · inspector 14 params
@@ -1414,7 +1437,7 @@ namespace gamescope::ui::shell
 			char szBudget[ 128 ];
 			snprintf( szBudget, sizeof( szBudget ), "sheet %d rows · inspector %d params · 0 unreachable",
 				(int)pArea->EntryCount(), nParams );
-			DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), szBudget, y );
+			return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), szBudget, y );
 		}
 
 		void DrawInspector( const Regions &regions, const LadderResult &ladder )
@@ -1463,12 +1486,68 @@ namespace gamescope::ui::shell
 					ImVec2( regions.rcInspectorBody.Width(), regions.rcInspectorBody.Height() ),
 					ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
 				{
+					// -------------------------------------------------
+					// WHY THIS IS NOT A SECOND LAYOUT PATH.
+					// -------------------------------------------------
+					// The bodies lay out with an absolute `y` painted
+					// onto the draw list, which is what keeps the row
+					// grammar and the lane identical to the sheet's. The
+					// bug was never that grammar -- it was that `y`
+					// started at the REGION's y0, a fixed screen
+					// coordinate, and that nothing ever told ImGui how
+					// tall the result was. So content taller than the
+					// drawer simply ran off the bottom: no scroll range
+					// existed, and even if it had, a fixed origin would
+					// not have moved.
+					//
+					// Both halves are fixed here, in four lines, without
+					// touching a single body:
+					//
+					//   * the origin is the CHILD's own cursor, from
+					//     which ImGui has already subtracted the scroll
+					//     offset. Laying out from a y that moves is what
+					//     makes the existing absolute arithmetic scroll
+					//     correctly -- every row, control and hairline
+					//     pans together because they all derive from it.
+					//   * the returned bottom edge becomes a Dummy, which
+					//     is the content size ImGui measures its scroll
+					//     range from.
+					//
+					// The alternative -- rewriting the bodies onto
+					// ImGui's cursor with Dummy/SameLine spacing -- would
+					// have meant one layout model in the sheet and
+					// another in the Inspector, which is precisely the
+					// second path SPEC §5.3 exists to prevent (a promoted
+					// parameter has to land in the sheet unchanged).
+					// The console's scroll request, applied only on the frame
+				// it changes -- see cv_overlay_e2_scroll.
+				const float flScrollReq = cv_overlay_e2_scroll.Get();
+				if ( flScrollReq != s_flScrollApplied )
+				{
+					s_flScrollApplied = flScrollReq;
+					ImGui::SetScrollY( flScrollReq < 0.0f
+						? ImGui::GetScrollMaxY() : flScrollReq );
+				}
+
+				const ImVec2 vOrigin = ImGui::GetCursorScreenPos();
+					Rect rcBody = regions.rcInspectorBody;
+					rcBody.y0 = vOrigin.y;
+					rcBody.y1 = vOrigin.y + regions.rcInspectorBody.Height();
+
+					float flBottom = vOrigin.y;
 					if ( !pEntry )
-						DrawOverview( regions.rcInspectorBody, SelectedArea() );
+						flBottom = DrawOverview( rcBody, SelectedArea() );
 					else if ( CurrentMode( pEntry ) == InspectorMode::Configure )
-						DrawConfigure( regions.rcInspectorBody, *pEntry );
+						flBottom = DrawConfigure( rcBody, *pEntry );
 					else
-						DrawDetails( regions.rcInspectorBody, *pEntry );
+						flBottom = DrawDetails( rcBody, *pEntry );
+
+					// The trailing pad is the same one the top has, so a
+					// fully-scrolled body does not end flush against the
+					// frame.
+					ImGui::SetCursorScreenPos( vOrigin );
+					ImGui::Dummy( ImVec2( 1.0f,
+						std::max( 0.0f, flBottom - vOrigin.y ) + Px( tok::kInspectorPad ) ) );
 				}
 				ImGui::EndChild();
 			}
