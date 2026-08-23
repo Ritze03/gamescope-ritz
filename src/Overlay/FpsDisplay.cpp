@@ -1435,13 +1435,48 @@ namespace gamescope
 		const float flClampedY = std::clamp( flStartY, 0.0f, std::max( 0.0f, io_display.y - flStackHeight ) );
 
 		// Pass 2: draw each present module at its stacked position.
+		//
+		// Issue #72: every module's box is drawn at flStackWidth (the
+		// widest present module this frame), not its own sizes[i].x, so
+		// backdrops line up into one aligned block instead of each module
+		// keeping its natural, ragged width. Content itself (text, graph,
+		// percentile row) stays exactly where Draw*ModuleContent() already
+		// puts it -- left-aligned off `origin + backdrop_padding`, same as
+		// before -- only the backdrop rectangle widens to the right.
+		//
+		// Width strategy: recomputed every frame (flStackWidth above, from
+		// this frame's real measured content), not cached at startup or
+		// grow-only. A once-at-startup width would visibly jump the first
+		// time a module changes shape (a module toggled on/off mid-session,
+		// GPU going from "unavailable" to found, a media title's length
+		// changing on track change) -- exactly the "hold stable, then jump
+		// later" failure this issue calls out. Recomputing instead sounds
+		// like it risks the opposite failure (twitching every frame as
+		// values change), but it doesn't in practice: every numeric field
+		// in every module (FPS, CPU load/RAM, GPU busy/VRAM/temp/power) is
+		// already formatted through fixed printf field widths (this file's
+		// long-standing "digits do not jitter" convention -- see
+		// MeasureFpsModule()'s szNum comment), so a value changing --
+		// 9 fps to 144 fps, CPU load crossing 100% -- does not itself
+		// change any module's measured width frame to frame. flStackWidth
+		// only actually changes on genuine content-shape events (a module's
+		// enabled toggle, GPU/CPU/media availability flipping, a media
+		// track's title/artist length changing on song change) -- rare,
+		// discrete events where a re-layout is exactly what should happen,
+		// not continuous per-frame noise. So "recompute every frame" and
+		// "only move on a real change" are the same behavior here, given
+		// the fixed-width-field discipline already in place; a separate
+		// once-per-N-frames cadence or a one-way grow-only latch would only
+		// add complexity (and, for grow-only, a width that never shrinks
+		// back down after a long media title scrolls by) without buying
+		// any additional stability.
 		float flCursorY = flClampedY;
 		for ( int i = 0; i < kModuleCount; ++i )
 		{
 			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
 			if ( !bPresent )
 				continue;
-			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), sizes[i], fpsLayout, cpuLayout, gpuLayout, mediaLayout );
+			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), ImVec2( flStackWidth, sizes[i].y ), fpsLayout, cpuLayout, gpuLayout, mediaLayout );
 			flCursorY += sizes[i].y + cfg.module_spacing;
 		}
 	}
