@@ -372,10 +372,26 @@ namespace gamescope
 	// THE TABS BECAME AREAS, NOT GROUPS. SPEC §8.1's rail is the product's
 	// only navigation, and it lists Upscaling, Frame limiter and HDR as
 	// separate rail items -- so does index.html, the tested reference. The
-	// old "Display" tab had no equivalent: its three settings are
-	// presentation (tearing, cursor grab) and refresh (VRR), so they join
-	// the areas that already own those concerns rather than becoming a
+	// old "Display" tab had no equivalent: its three settings were originally
+	// split as presentation (tearing, cursor grab) and refresh (VRR), joining
+	// the areas that already owned those concerns rather than becoming a
 	// fourth area with no theme. See AUTONOMOUS-DECISIONS.md D13.1.
+	//
+	// D13.1 CORRECTED, DIRECTLY BY THE USER (2026-08-24), NOT BY AGENT
+	// JUDGEMENT. That placement is what put VRR next to the frame limiter
+	// and tearing/cursor-grab inside Upscaling -- three settings a user
+	// flips mid-game, scattered across two areas neither named for that
+	// purpose. The user: "VRR shouldnt be placed in 'Frame Limiter'. It
+	// should be in something like 'General', for quick toggling, together
+	// with 'Allow tearing' and 'Force grab cursor'. Both of these make no
+	// sense being in 'Upscaling'." All three now live in a new
+	// display.general area, registered first so it sits above Upscaling in
+	// the rail. Neither SPEC §8.1 nor index.html names a General area --
+	// both predate this feedback, so the user's direct instruction overrides
+	// them here; see AUTONOMOUS-DECISIONS.md's correction note for the full
+	// reasoning. Not one config key or binding changed: RegisterGeneral()
+	// below calls the exact same Set*()/QueueSave() code these three rows
+	// called in their previous areas.
 	//
 	// Every getter goes through Cfg() rather than touching s_CachedSettings.
 	// Under the legacy path EnsureConfigLoaded() ran once per Draw(); under
@@ -410,10 +426,82 @@ namespace gamescope
 		    || g_wantedUpscaleFilter == GamescopeUpscaleFilter::NIS;
 	}
 
+	// D13.1 CORRECTED (2026-08-24): the user, directly -- "VRR shouldnt be
+	// placed in 'Frame Limiter'. It should be in something like 'General',
+	// for quick toggling, together with 'Allow tearing' and 'Force grab
+	// cursor'." Registered FIRST in PanelDisplay_RegisterAreas() so it is
+	// first in DISPLAY's rail order, above Upscaling -- the "front door" the
+	// user asked for these three to have. See AUTONOMOUS-DECISIONS.md's
+	// D13.1 correction note for why this disagrees with SPEC §8.1 and
+	// index.html (neither names a General area; both predate this feedback).
+	//
+	// Every binding below is moved, not re-derived: same Set*()/QueueSave()
+	// calls this file already used for these three settings, so the bug
+	// classes issues #25 and #68 came from (a control that renders and does
+	// nothing) cannot reappear here.
+	static void RegisterGeneral( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
+		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing cursor grab" );
+		a.Summary( []{
+			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
+			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
+			s += g_bForceRelativeMouse ? " · cursor grabbed" : " · cursor free";
+			return s;
+		} );
+
+		a.Group( "Quick toggles" );
+
+		a.Switch( "display.adaptive_sync", "Adaptive sync (VRR)",
+			ui::AnyBind::Of<bool>(
+				[]{ return cv_adaptive_sync.Get(); },
+				[]( bool b ) {
+					cv_adaptive_sync = b;
+					Cfg().gamescope.vrr_enabled = b;
+					QueueSave();
+				} ) )
+			.Help( "Lets the display's refresh follow the game's frame rate instead of the other way "
+			       "around. Requires a VRR-capable display and connector." )
+			.Default( false )
+			.Keywords( "vrr freesync gsync adaptive sync refresh" );
+
+		a.Switch( "display.allow_tearing", "Allow tearing",
+			ui::AnyBind::Of<bool>(
+				[]{ return cv_tearing_enabled.Get(); },
+				[]( bool b ) {
+					cv_tearing_enabled = b;
+					Cfg().gamescope.tearing_enabled = b;
+					QueueSave();
+				} ) )
+			.Help( "Lets the game present without waiting for the display's refresh. Lowest latency; "
+			       "can show a horizontal seam on fast camera pans." )
+			.Default( false )
+			.Keywords( "immediate flip vsync latency tear seam" );
+
+		// Issue #68. Routed through steamcompmgr_set_force_relative_mouse()
+		// and NOT by writing g_bForceRelativeMouse, which has no live effect
+		// -- the flag's two real consumers only read it once at backend
+		// startup. This is the fix that made the legacy toggle actually do
+		// something; binding the global here would silently undo it. Moving
+		// areas does not touch this call, so the fix survives the move.
+		a.Switch( "display.force_grab_cursor", "Force grab cursor",
+			ui::AnyBind::Of<bool>(
+				[]{ return g_bForceRelativeMouse; },
+				[]( bool b ) {
+					steamcompmgr_set_force_relative_mouse( b );
+					Cfg().gamescope.force_grab_cursor = b;
+					QueueSave();
+				} ) )
+			.Help( "Always use relative mouse mode instead of flipping on cursor visibility. "
+			       "Applies immediately." )
+			.Default( false )
+			.Keywords( "mouse pointer capture confine grab relative" );
+	}
+
 	static void RegisterUpscaling( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "display.upscaling", "Upscaling", ui::Section::Display );
-		a.Keywords( "upscale scaling resample filter fsr nis sharpen scaler aspect tearing cursor" );
+		a.Keywords( "upscale scaling resample filter fsr nis sharpen scaler aspect" );
 		a.Summary( []{
 			std::string s = FilterToString( g_wantedUpscaleFilter );
 			s += " · ";
@@ -479,38 +567,10 @@ namespace gamescope
 			.Default( (int)GamescopeUpscaleScaler::AUTO )
 			.Keywords( "aspect fit fill stretch integer letterbox" );
 
-		a.Group( "Presentation" );
-
-		a.Switch( "display.allow_tearing", "Allow tearing",
-			ui::AnyBind::Of<bool>(
-				[]{ return cv_tearing_enabled.Get(); },
-				[]( bool b ) {
-					cv_tearing_enabled = b;
-					Cfg().gamescope.tearing_enabled = b;
-					QueueSave();
-				} ) )
-			.Help( "Lets the game present without waiting for the display's refresh. Lowest latency; "
-			       "can show a horizontal seam on fast camera pans." )
-			.Default( false )
-			.Keywords( "immediate flip vsync latency tear seam" );
-
-		// Issue #68. Routed through steamcompmgr_set_force_relative_mouse()
-		// and NOT by writing g_bForceRelativeMouse, which has no live effect
-		// -- the flag's two real consumers only read it once at backend
-		// startup. This is the fix that made the legacy toggle actually do
-		// something; binding the global here would silently undo it.
-		a.Switch( "display.force_grab_cursor", "Force grab cursor",
-			ui::AnyBind::Of<bool>(
-				[]{ return g_bForceRelativeMouse; },
-				[]( bool b ) {
-					steamcompmgr_set_force_relative_mouse( b );
-					Cfg().gamescope.force_grab_cursor = b;
-					QueueSave();
-				} ) )
-			.Help( "Always use relative mouse mode instead of flipping on cursor visibility. "
-			       "Applies immediately." )
-			.Default( false )
-			.Keywords( "mouse pointer capture confine grab relative" );
+		// Allow tearing and Force grab cursor lived here as a "Presentation"
+		// group until the user corrected D13.1 (2026-08-24): both moved to
+		// display.general, "for quick toggling" -- see RegisterGeneral()
+		// below and AUTONOMOUS-DECISIONS.md's D13.1 correction note.
 
 		a.Group( "Diagnostics" );
 
@@ -571,7 +631,7 @@ namespace gamescope
 	static void RegisterFrameLimiter( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "display.frame_limiter", "Frame limiter", ui::Section::Display );
-		a.Keywords( "fps frame rate cap limiter throttle vrr adaptive sync freesync gsync" );
+		a.Keywords( "fps frame rate cap limiter throttle" );
 		a.Summary( []{
 			const int n = Cfg().gamescope.fps_limit;
 			return n == 0 ? std::string( "uncapped" ) : std::to_string( n ) + " fps cap";
@@ -609,18 +669,12 @@ namespace gamescope
 			.Default( 0 )
 			.Keywords( "fps frame rate cap limit limiter throttle unlimited" );
 
-		a.Switch( "display.adaptive_sync", "Adaptive sync (VRR)",
-			ui::AnyBind::Of<bool>(
-				[]{ return cv_adaptive_sync.Get(); },
-				[]( bool b ) {
-					cv_adaptive_sync = b;
-					Cfg().gamescope.vrr_enabled = b;
-					QueueSave();
-				} ) )
-			.Help( "Lets the display's refresh follow the game's frame rate instead of the other way "
-			       "around. Requires a VRR-capable display and connector." )
-			.Default( false )
-			.Keywords( "vrr freesync gsync adaptive sync refresh" );
+		// Adaptive sync (VRR) lived here until the user corrected D13.1
+		// (2026-08-24): "VRR shouldnt be placed in 'Frame Limiter'." It moved
+		// to display.general -- see RegisterGeneral() below and
+		// AUTONOMOUS-DECISIONS.md's D13.1 correction note. The Diagnostics
+		// facts below are unaffected: they read the limiter's own pacing
+		// state, never cv_adaptive_sync.
 
 		a.Group( "Diagnostics" );
 
@@ -892,6 +946,9 @@ namespace gamescope
 
 	void PanelDisplay_RegisterAreas( ui::Registry &reg )
 	{
+		// General registers first so it sits above Upscaling in the rail --
+		// see RegisterGeneral()'s own comment for why.
+		RegisterGeneral( reg );
 		RegisterUpscaling( reg );
 		RegisterFrameLimiter( reg );
 		RegisterHdr( reg );

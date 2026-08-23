@@ -10,6 +10,68 @@ cheap.
 
 ---
 
+## 2026-08-24 — CORRECTION TO D13.1, FROM THE USER DIRECTLY (not an autonomous decision)
+
+This block is not one more thing decided in the user's absence — it is the user, awake,
+correcting one that was. Logged here because it amends D13.1 below and the correction's
+reasoning belongs next to the decision it corrects.
+
+### D13.1, corrected · VRR, Allow tearing and Force grab cursor move to a new `General` area
+
+**The user, verbatim:** *"VRR shouldnt be placed in 'Frame Limiter'. It should be in
+something like 'General', for quick toggling, together with 'Allow tearing' and 'Force
+grab cursor'. Both of these make no sense being in 'Upscaling'. 'General' should be above
+'Upscaling'."*
+
+**What D13.1 got wrong.** D13.1 reasoned the old Display tab's three settings split
+cleanly into "presentation" (tearing, cursor grab → Upscaling) and "refresh" (VRR → Frame
+limiter), so each joined the area that already owned that *concern*. That is a taxonomy
+by mechanism. The user's correction is a taxonomy by *use*: these three are not defined
+by what they technically affect, they are defined by being the settings flipped mid-game
+without hunting — and grouping by mechanism scattered exactly that set across two areas,
+neither named for the thing that actually matters about them.
+
+**Chosen.** A fourth DISPLAY area, `display.general` ("General"), registered first so it
+is first in the rail — above Upscaling, per the user's explicit ordering instruction. It
+holds exactly the three the user named, in a single `Quick toggles` group, and nothing
+else was added to it without being asked (see "Left thin", below). Implemented in
+`PanelDisplay.cpp`'s new `RegisterGeneral()`, called before `RegisterUpscaling()` in
+`PanelDisplay_RegisterAreas()`.
+
+**What did NOT change.** Every binding is *moved*, not re-derived: the exact same
+`Set*()`/`QueueSave()` calls these three rows used in their previous areas are reused
+verbatim. In particular Force grab cursor still routes through
+`steamcompmgr_set_force_relative_mouse()` (issue #68's fix) — moving areas does not touch
+that call. No config key changed: `gamescope.vrr_enabled`, `gamescope.tearing_enabled`
+and `gamescope.force_grab_cursor` are unchanged in the schema and on disk; only which
+*area* declares the `Entry` changed, and an area is a rail/UI concept, not a config path.
+Verified live (`overlay_e2_set`, `gamescopectl`): `adaptive_sync` and `tearing_enabled`
+convars round-trip through the moved bindings, and `display.force_grab_cursor`'s
+post-write readback (which reads the same `g_bForceRelativeMouse` the compositor's
+per-frame cursor logic reads) changes too — none of the three renders-but-does-nothing.
+
+**Disagrees with SPEC and the mockup, and the user wins.** Neither SPEC §8.1 nor
+`index.html` names a `General` area — both predate this feedback, so there was nothing to
+reconcile beyond noting it. `index.html` still shows VRR under `display.frame_limiter`
+and tearing/cursor-grab under `display.upscaling`'s "Presentation" group; that mockup
+state is now stale for these three rows, and this note is the record of why the shipped
+UI deliberately no longer matches it.
+
+**Left thinner, but not empty.** Frame limiter's own `Frame limiter` group band now holds
+exactly one row (`FPS limit`) — the same shape D8 flagged as a smell for a whole *area*,
+now visible at *group* level. Not fixed here: the user asked for three specific settings
+to move, not a review of Frame limiter's remaining shape, and moving FPS limit anywhere
+else was never asked for. Flagging it rather than acting on it. Upscaling is unaffected in
+this way — it kept four real rows across two groups (`Scaling filter`, `Diagnostics`)
+after losing `Presentation`.
+
+**Icons.** `display.general` needed its own rail glyph (SPEC §8.0's "every area has one" —
+enforced by a test) since it postdates the eleven-icon set `index.html` was transcribed
+from. Added in `Icons.cpp`: two toggle switches, one off one on — the twelfth glyph, kept
+distinguishable from `audio.mixer`'s vertical fader tracks and everything else in the set.
+
+---
+
 ## 2026-08-23 (P5 — the deletion, and the flag)
 
 ### D21 · The `overlay_e2` ConVar is REMOVED, not kept as a no-op
@@ -618,6 +680,11 @@ has no successor on purpose: its three settings are two presentation ones (teari
 and one refresh one (VRR), so they joined the areas that already own those concerns rather than
 forming a fourth area with no theme. *Cost, stated plainly:* the rail grew from 7 items to 9, and
 `overlay_e2_select display.gamescope` no longer resolves.
+
+> **Corrected 2026-08-24, by the user directly** — see the dated block at the top of this
+> file. The "joined the areas that already own those concerns" placement above is exactly
+> what the user objected to; VRR, Allow tearing and Force grab cursor now live in a new
+> `display.general` area instead.
 
 **D13.2 · `display.output` from the mockup was NOT created.** The mockup's fourth Display area
 holds resolution, refresh rate, colour range and rotation. **Why not:** gamescope-ritz has no

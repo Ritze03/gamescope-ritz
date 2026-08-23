@@ -1603,12 +1603,14 @@ TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_
 // matter how it is drawn.
 TEST_CASE( "icons: every registered area has one, and no two are the same drawing", "[overlay_ui]" )
 {
-	// The eleven this build registers. Written out rather than walked off
+	// The twelve this build registers. Written out rather than walked off
 	// the live registry because the areas are declared in the panel files,
 	// which this test binary deliberately does not link -- so the list is
 	// the test's own statement of what the rail must be able to draw.
+	// display.general is the twelfth, added by the user's direct correction
+	// to D13.1 (2026-08-24) -- see PanelDisplay.cpp's RegisterGeneral().
 	const char *pszAreas[] = {
-		"display.upscaling", "display.frame_limiter", "display.hdr",
+		"display.general", "display.upscaling", "display.frame_limiter", "display.hdr",
 		"image.shaders", "audio.mixer", "system.monitor", "system.log",
 		"setup.profiles", "setup.pergame", "setup.appearance", "setup.shell",
 	};
