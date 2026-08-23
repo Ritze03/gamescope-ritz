@@ -1,0 +1,396 @@
+// A headless harness for the E2 control atoms.
+//
+// ImGui is perfectly happy to run without a renderer: create a context, give
+// it a display size and a delta time, run NewFrame/Begin/.../End/Render, and
+// every layout, hit-test and behaviour path executes with nothing on screen.
+// That is enough to exercise the atoms for real -- ItemAdd(), ButtonBehavior()
+// and SliderBehavior() all run -- so the geometry contract can be checked
+// against what ImGui actually registered rather than against what the kit
+// believes it asked for.
+//
+// WHAT THIS FILE IS FOR, specifically. The bug class shipping issue #23 found
+// is "the thing you see is not the thing you can hit". Controls.cpp removes it
+// structurally (one ImRect per atom, and the slider's handle is drawn from the
+// rect SliderBehavior itself returned). These tests check the observable half
+// of that from outside: for every atom, the rect ImGui registered for
+// hit-testing is exactly the rect the row's allocator handed out, at every
+// display_scale -- which is the property that was silently false before.
+//
+// NOTE ON "INPUT". Mouse positions and clicks below go into ImGuiIO's own
+// event queue inside this process. Nothing is injected into the desktop, no
+// window is created, and no compositor is involved.
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include "imgui.h"
+#include "imgui_internal.h"
+
+#include "Overlay/Fonts.h"
+#include "Overlay/Palette.h"
+#include "Overlay/UI/Controls.h"
+#include "Overlay/UI/Lane.h"
+#include "Overlay/UI/Row.h"
+#include "Overlay/UI/Tokens.h"
+
+#include <string>
+
+// palette::g_LiveTheme is defined in Chrome.cpp -- the legacy overlay's 1600
+// lines of dock/window/drag machinery. Linking that in so Palette.cpp can read
+// one float would drag the entire old UI into a test binary, which is exactly
+// the coupling this harness exists in spite of. Defining the storage here is
+// what makes a headless atom test possible at all.
+//
+// The kit itself never reads it: ui::SetScale() is the kit's one scale input
+// (see Tokens.h's note on why). This only satisfies Palette.cpp's own accent
+// recomputation, which the colour roles sit on.
+namespace gamescope::palette { LiveTheme g_LiveTheme; }
+
+using namespace gamescope;
+using Catch::Matchers::WithinAbs;
+
+namespace
+{
+	// One ImGui context for the whole file, torn down at exit. Creating and
+	// destroying a context per test would rebuild the font atlas each time for
+	// no benefit.
+	class Headless
+	{
+	public:
+		static Headless &Get()
+		{
+			static Headless s_Instance;
+			return s_Instance;
+		}
+
+		void BeginFrame()
+		{
+			ImGuiIO &io = ImGui::GetIO();
+			io.DisplaySize = ImVec2( 1920.0f, 1080.0f );
+			io.DeltaTime   = 1.0f / 60.0f;
+
+			ImGui::NewFrame();
+			ImGui::SetNextWindowPos( ImVec2( 0.0f, 0.0f ) );
+			ImGui::SetNextWindowSize( io.DisplaySize );
+			ImGui::Begin( "harness", nullptr,
+				ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar |
+				ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground );
+		}
+
+		void EndFrame()
+		{
+			ImGui::End();
+			ImGui::Render();
+		}
+
+		void MoveMouse( const ImVec2 &pos )  { ImGui::GetIO().AddMousePosEvent( pos.x, pos.y ); }
+		void MouseButton( bool bDown )       { ImGui::GetIO().AddMouseButtonEvent( 0, bDown ); }
+
+	private:
+		Headless()
+		{
+			IMGUI_CHECKVERSION();
+			m_pCtx = ImGui::CreateContext();
+			ImGuiIO &io = ImGui::GetIO();
+			io.IniFilename = nullptr;
+			io.LogFilename = nullptr;
+			io.DisplaySize = ImVec2( 1920.0f, 1080.0f );
+			io.DeltaTime   = 1.0f / 60.0f;
+
+			// The null-backend contract in ImGui 1.92's dynamic font system:
+			// claiming RendererHasTextures tells ImGui to queue texture
+			// updates for a backend to consume instead of demanding a legacy
+			// pre-built atlas. Nothing consumes them here, which is exactly
+			// what "headless" means -- glyphs are still rasterised and
+			// measured, they are simply never uploaded anywhere.
+			io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+
+			// The overlay's real font set, loaded from the same embedded Geist
+			// faces the shipping binary uses, so text measurement in the atoms
+			// is the measurement the product does.
+			fonts::Load( 1.0f );
+			palette::UpdateAccentFamily();
+
+			// One warm-up frame: ImGui needs a completed frame before window
+			// geometry and hover state settle.
+			BeginFrame();
+			EndFrame();
+		}
+
+		~Headless()
+		{
+			ImGui::DestroyContext( m_pCtx );
+		}
+
+		ImGuiContext *m_pCtx = nullptr;
+	};
+
+	struct ScopedScale
+	{
+		explicit ScopedScale( float fl ) { ui::SetScale( fl ); }
+		~ScopedScale() { ui::SetScale( 1.0f ); }
+	};
+
+	// A standard row to place atoms in: one 804-base column, top-left, which
+	// is SPEC §8.3's worked width.
+	ui::RowCtx MakeRow( float flTopPx = 200.0f )
+	{
+		return ui::RowCtx::ForRow( ui::Lane::ForColumn( 804.0f ), 40.0f, flTopPx );
+	}
+
+	// The rect ImGui registered for the item that was just submitted.
+	ImRect LastItemRect()
+	{
+		return ImRect( ImGui::GetItemRectMin(), ImGui::GetItemRectMax() );
+	}
+
+	void RequireSameRect( const ImRect &a, const ImRect &b )
+	{
+		REQUIRE_THAT( a.Min.x, WithinAbs( b.Min.x, 1e-3f ) );
+		REQUIRE_THAT( a.Min.y, WithinAbs( b.Min.y, 1e-3f ) );
+		REQUIRE_THAT( a.Max.x, WithinAbs( b.Max.x, 1e-3f ) );
+		REQUIRE_THAT( a.Max.y, WithinAbs( b.Max.y, 1e-3f ) );
+	}
+}
+
+TEST_CASE( "atoms: the registered hit box is the rect the row allocated", "[overlay_atoms]" )
+{
+	// This is the observable form of Controls.h's rule 1 -- "the rect handed
+	// to ItemAdd() is the same C++ object handed to the painter". If an atom
+	// ever recomputed its own geometry, the two would drift and this would
+	// catch it, at every scale, which is where #23's instance actually hid.
+	for ( float flScale : { 0.5f, 1.0f, 1.25f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		Headless &h = Headless::Get();
+		INFO( "display_scale " << flScale );
+
+		h.BeginFrame();
+		const ui::RowCtx row = MakeRow();
+
+		bool bValue = false;
+		ui::controls::Switch( row, "sw", &bValue );
+		RequireSameRect( LastItemRect(), row.Place( ui::tok::kSwitchW ) );
+
+		float flSlider = 0.5f;
+		ui::controls::Slider( row, "sl", &flSlider, 0.0f, 1.0f );
+		RequireSameRect( LastItemRect(), row.PlaceFull() );
+
+		h.EndFrame();
+	}
+}
+
+TEST_CASE( "atoms: every atom leaves the ImGui style and ID stacks balanced", "[overlay_atoms]" )
+{
+	// The slider pushes GrabMinSize around SliderBehavior() and the measured
+	// atoms push an ID scope. A leak there would silently reshape whatever
+	// the shell drew next -- the failure mode that is hardest to attribute
+	// back to its cause, so it gets its own assertion rather than a comment.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.BeginFrame();
+
+	ImGuiContext &g = *ImGui::GetCurrentContext();
+	const int nStyleVars = g.StyleVarStack.Size;
+	const int nColors    = g.ColorStack.Size;
+	const int nIds       = ImGui::GetCurrentWindow()->IDStack.Size;
+	const int nItemFlags = g.ItemFlagsStack.Size;
+
+	const ui::RowCtx row = MakeRow();
+
+	bool bB = false;
+	float flF = 0.5f;
+	int nI = 3;
+	uint32_t nMask = 0b101;
+	std::string sText = "profile";
+	bool bEditing = false;
+
+	static constexpr ui::Option kOpts[] = {
+		{ 0, "auto" }, { 1, "fit" }, { 2, "fill" }, { 3, "integer" },
+	};
+
+	ui::controls::Switch( row, "sw", &bB );
+	ui::controls::Slider( row, "sl", &flF, 0.0f, 1.0f, 0.25f, true );
+	ui::controls::SliderInt( row, "sli", &nI, 0, 20, 2, true );
+	ui::controls::Stepper( row, "st", &nI, 0, 1000, 5 );
+	ui::controls::Choice( row, "ch", &nI, kOpts, IM_ARRAYSIZE( kOpts ) );
+	ui::controls::Text( row, "tx", &sText, &bEditing, "type a name" );
+	ui::controls::Bank( row, "bk", &nMask, kOpts, IM_ARRAYSIZE( kOpts ) );
+	ui::controls::Meter( row, 0.4f, 0.0f, 1.0f );
+	ui::controls::Verb( row, "vb", "reset to default" );
+	int nV = 0, nH = 2;
+	ui::controls::AnchorGrid( row.Place( 96.0f ), "ag", &nV, &nH );
+
+	REQUIRE( g.StyleVarStack.Size == nStyleVars );
+	REQUIRE( g.ColorStack.Size == nColors );
+	REQUIRE( ImGui::GetCurrentWindow()->IDStack.Size == nIds );
+	REQUIRE( g.ItemFlagsStack.Size == nItemFlags );
+
+	h.EndFrame();
+}
+
+TEST_CASE( "atoms: a switch toggles from a click inside its lane rect", "[overlay_atoms]" )
+{
+	// Drives the atom through ImGui's own event queue: the click lands on the
+	// rect the allocator produced, which is the end-to-end version of the
+	// "drawn == hit-tested" property.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+
+	bool bValue = false;
+	const float flTop = 200.0f;
+
+	// Frame 1: establish the item and hover it.
+	{
+		const ui::RowCtx probe = MakeRow( flTop );
+		const ImRect rc = probe.Place( ui::tok::kSwitchW );
+		h.MoveMouse( rc.GetCenter() );
+	}
+	h.BeginFrame();
+	ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+	h.EndFrame();
+
+	// Frame 2: press.
+	h.MouseButton( true );
+	h.BeginFrame();
+	ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+	h.EndFrame();
+
+	// Frame 3: release -- ButtonBehavior's default is press-on-click-release.
+	h.MouseButton( false );
+	h.BeginFrame();
+	ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+	h.EndFrame();
+
+	REQUIRE( bValue );
+
+	// And a click to the LEFT of the lane -- where a left-aligned control
+	// would have been -- does nothing, because nothing is allocated there.
+	{
+		const ui::RowCtx probe = MakeRow( flTop );
+		const ImRect rc = probe.Place( ui::tok::kSwitchW );
+		h.MoveMouse( ImVec2( rc.Min.x - 120.0f, rc.GetCenter().y ) );
+	}
+	for ( bool bDown : { true, false } )
+	{
+		h.MouseButton( bDown );
+		h.BeginFrame();
+		ui::controls::Switch( MakeRow( flTop ), "sw", &bValue );
+		h.EndFrame();
+	}
+	REQUIRE( bValue );   // unchanged
+}
+
+TEST_CASE( "atoms: Choice downgrades to a dropdown when segmented will not fit", "[overlay_atoms]" )
+{
+	// SPEC §3.2: "The helper measures and auto-downgrades to a dropdown if any
+	// of the three conditions fails or if the measured group does not fit the
+	// lane; a caller passing six options gets a dropdown and cannot ship a
+	// cramped row." One predicate, decided by the helper, never by a caller.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.BeginFrame();
+
+	int nValue = 0;
+
+	SECTION( "a short static set of four stays segmented" )
+	{
+		static constexpr ui::Option kFew[] = { { 0, "auto" }, { 1, "fit" }, { 2, "fill" }, { 3, "integer" } };
+		const auto res = ui::controls::Choice( MakeRow(), "few", &nValue, kFew, IM_ARRAYSIZE( kFew ) );
+		REQUIRE( res.bSegmented );
+	}
+
+	SECTION( "six options is over the cap, so it is a dropdown" )
+	{
+		static constexpr ui::Option kMany[] = {
+			{ 0, "a" }, { 1, "b" }, { 2, "c" }, { 3, "d" }, { 4, "e" }, { 5, "f" },
+		};
+		const auto res = ui::controls::Choice( MakeRow(), "many", &nValue, kMany, IM_ARRAYSIZE( kMany ) );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+
+	SECTION( "a label over eight characters is over the cap too" )
+	{
+		static constexpr ui::Option kLong[] = { { 0, "auto" }, { 1, "nearest-neighbour" } };
+		const auto res = ui::controls::Choice( MakeRow(), "long", &nValue, kLong, IM_ARRAYSIZE( kLong ) );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+
+	SECTION( "a lane too narrow for the measured group downgrades as well" )
+	{
+		// The same registration, in a column narrow enough that the measured
+		// cells no longer fit -- "the helper measures the column it actually
+		// got" (SPEC §8.3).
+		static constexpr ui::Option kFew[] = { { 0, "auto" }, { 1, "fit" }, { 2, "fill" }, { 3, "integer" } };
+		const ui::RowCtx narrow = ui::RowCtx::ForRow( ui::Lane::ForColumn( 420.0f ), 40.0f, 300.0f );
+		ScopedScale big( 2.0f );
+		const auto res = ui::controls::Choice( narrow, "narrow", &nValue, kFew, IM_ARRAYSIZE( kFew ) );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+
+	h.EndFrame();
+}
+
+TEST_CASE( "atoms: a segmented group's cells are right-bound and never overlap", "[overlay_atoms]" )
+{
+	// The measured atoms are the ones where a fit test and a layout could
+	// disagree. MeasureCells() is the single function both read, and this is
+	// the observable consequence: the last cell ends exactly on the lane, and
+	// the cells tile without overlapping.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.BeginFrame();
+
+	static constexpr ui::Option kOpts[] = { { 0, "auto" }, { 1, "fit" }, { 2, "fill" }, { 3, "integer" } };
+	const ui::RowCtx row = MakeRow();
+
+	int nValue = 0;
+	const auto res = ui::controls::Choice( row, "seg", &nValue, kOpts, IM_ARRAYSIZE( kOpts ) );
+	REQUIRE( res.bSegmented );
+
+	// The last cell submitted is the rightmost, and its right edge is the
+	// lane's control line -- the same line every other control ends on.
+	REQUIRE_THAT( LastItemRect().Max.x, WithinAbs( row.PlaceFull().Max.x, 1e-3f ) );
+	REQUIRE_THAT( LastItemRect().GetHeight(), WithinAbs( ui::Px( ui::tok::kControlH ), 1e-3f ) );
+
+	h.EndFrame();
+}
+
+TEST_CASE( "atoms: nothing crashes or inverts at the extremes of display_scale", "[overlay_atoms]" )
+{
+	// The ladder reaches 0.5x and 2.0x, and a narrow three-column sheet at
+	// 0.5x hands an atom a column at its floor. Every atom must survive both
+	// without producing an inverted rect.
+	static constexpr ui::Option kOpts[] = { { 0, "auto" }, { 1, "fit" } };
+
+	for ( float flScale : { 0.5f, 2.0f } )
+	{
+		for ( float flColumn : { 420.0f, 560.0f, 1728.0f } )
+		{
+			ScopedScale s( flScale );
+			Headless &h = Headless::Get();
+			INFO( "scale " << flScale << " column " << flColumn );
+
+			h.BeginFrame();
+			const ui::RowCtx row = ui::RowCtx::ForRow( ui::Lane::ForColumn( flColumn ), 40.0f, 300.0f );
+
+			bool bB = false; float flF = 0.5f; int nI = 3; uint32_t nMask = 1;
+			std::string sText = "x"; bool bEditing = false;
+
+			ui::controls::Switch( row, "sw", &bB );
+			REQUIRE( LastItemRect().Min.x <= LastItemRect().Max.x );
+
+			ui::controls::Slider( row, "sl", &flF, 0.0f, 1.0f );
+			REQUIRE( LastItemRect().Min.x <= LastItemRect().Max.x );
+
+			ui::controls::Stepper( row, "st", &nI, 0, 100, 1 );
+			ui::controls::Choice( row, "ch", &nI, kOpts, IM_ARRAYSIZE( kOpts ) );
+			ui::controls::Text( row, "tx", &sText, &bEditing );
+			ui::controls::Bank( row, "bk", &nMask, kOpts, IM_ARRAYSIZE( kOpts ) );
+			ui::controls::Meter( row, 0.4f, 0.0f, 1.0f );
+			ui::controls::Verb( row, "vb", "reset" );
+
+			h.EndFrame();
+		}
+	}
+}
