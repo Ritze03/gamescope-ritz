@@ -1624,4 +1624,24 @@ namespace gamescope::chrome
 			ImGui::PopFont();
 		}
 	}
+
+	// ----------------------------------------------------------------------
+	// Issue #79 / E2 P2. EnsureLiveThemeLoaded() above is the one-shot that
+	// pulls display_scale, the accent hue and the opacities out of
+	// global.json into palette::g_LiveTheme -- and it has only ever been
+	// reachable from BeginPanelWindow() and DrawDock(), i.e. only once the
+	// legacy dock had drawn a frame. That is the trap behind #79: a
+	// config-only launch renders at display_scale 1.0 no matter what the
+	// config says, until something opens a panel.
+	//
+	// The E2 shell (Overlay/UI/Shell.cpp) draws neither the dock nor a panel
+	// window, so with `overlay_e2 1` that lazy path is never taken at all and
+	// the trap would be permanent rather than merely first-frame. This
+	// forwarder is the whole fix: the shell calls it once per frame, the
+	// s_bLiveThemeLoaded guard makes every call after the first free, and
+	// the legacy path is untouched.
+	void EnsureThemeLoaded()
+	{
+		EnsureLiveThemeLoaded();
+	}
 }
