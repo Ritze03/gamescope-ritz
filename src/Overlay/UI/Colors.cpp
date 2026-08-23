@@ -14,11 +14,40 @@ namespace gamescope::ui
 		constexpr ImU32 kWarnText  = IM_COL32( 0xF7, 0xA8, 0x5C, 255 );
 		constexpr ImU32 kDanger    = IM_COL32( 0xEF, 0x6B, 0x5A, 255 );
 		constexpr ImU32 kDangerText= IM_COL32( 0xF2, 0xA9, 0x9E, 255 );
+
+		// The active ScopedDim factor. 1.0 means "not dimmed"; a disabled row
+		// sets 0.55 for its own duration. File-static because the kit draws
+		// one row at a time on one thread -- the same single-thread contract
+		// every other piece of overlay state relies on.
+		float s_flDim = 1.0f;
 	}
+
+	ScopedDim::ScopedDim( bool bDim, float flFactor )
+		: m_flPrev( s_flDim )
+	{
+		// Multiplies rather than assigns, so a dimmed param inside a dimmed
+		// parent does not accidentally brighten back up.
+		if ( bDim )
+			s_flDim *= flFactor;
+	}
+
+	ScopedDim::~ScopedDim() { s_flDim = m_flPrev; }
 
 	ImU32 Col( Role eRole )
 	{
 		namespace pal = gamescope::palette;
+
+		if ( s_flDim < 1.0f )
+		{
+			// Recurse ONCE with the dim lifted, then scale the result -- so
+			// there is still exactly one table below and no dimmed copy of it
+			// to keep in step.
+			const float flSaved = s_flDim;
+			s_flDim = 1.0f;
+			const ImU32 col = Col( eRole );
+			s_flDim = flSaved;
+			return Dim( col, flSaved );
+		}
 
 		switch ( eRole )
 		{
@@ -60,7 +89,10 @@ namespace gamescope::ui
 		return IM_COL32_WHITE;
 	}
 
-	ImU32 Accent( float flAlpha ) { return gamescope::palette::Accent( flAlpha ); }
+	ImU32 Accent( float flAlpha )
+	{
+		return Dim( gamescope::palette::Accent( flAlpha ), s_flDim );
+	}
 
 	ImU32 Dim( ImU32 col, float flFactor )
 	{

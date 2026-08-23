@@ -76,4 +76,31 @@ namespace gamescope::ui
 	// SPEC §3.13: a disabled row draws at 0.55, not E's 0.34 -- 3.27:1 rather
 	// than an unreadable 2.6:1. Applied to a colour, not pushed as a style.
 	ImU32 Dim( ImU32 col, float flFactor = 0.55f );
+
+	// SPEC §3.13 again, and the reason it is HERE rather than at each call
+	// site: "row x 0.55" means the WHOLE row -- its label, its value AND its
+	// control. The control atoms paint straight onto the draw list with token
+	// colours (Controls.cpp), so ImGui's own BeginDisabled() alpha never
+	// reaches them; dimming them one atom at a time would mean every atom
+	// growing a `bool bDisabled` parameter, and the first atom that forgot it
+	// would be a control that greys everywhere except where it matters.
+	//
+	// Instead the factor lives under Col()/Accent() -- the two functions every
+	// pixel in the kit already goes through -- so an atom cannot opt out and a
+	// new atom is dimmed correctly before it is written. This is the same
+	// "one edit here rather than a hunt through every panel's alpha literals"
+	// property the header comment above claims for Role itself.
+	//
+	// Scoped, so it cannot leak into the next row.
+	class ScopedDim
+	{
+	public:
+		explicit ScopedDim( bool bDim, float flFactor = 0.55f );
+		~ScopedDim();
+		ScopedDim( const ScopedDim & ) = delete;
+		ScopedDim &operator=( const ScopedDim & ) = delete;
+
+	private:
+		float m_flPrev;
+	};
 }

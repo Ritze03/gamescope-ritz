@@ -23,8 +23,10 @@ namespace gamescope
 	// with no lock of its own.
 	void PanelConfig_Draw();
 
-	// E2 MIGRATION SEAM (P2), temporary -- see PanelDisplay.h's
-	// PanelDisplay_DrawBody() for the full note. The same body with no
-	// window around it, for ui::Area::Escape() to host in the E2 sheet.
+	// E2 MIGRATION SEAM (P2), temporary -- see Overlay/UI/Registry.h's
+	// Escape() comment for why the hatch exists and what deletes it. The
+	// same body with no window around it, for ui::Area::Escape() to host in
+	// the E2 sheet. (P3 part A migrated Display and Shaders off this seam;
+	// this area is a later part of P3 and still uses it.)
 	void PanelConfig_DrawBody();
 }

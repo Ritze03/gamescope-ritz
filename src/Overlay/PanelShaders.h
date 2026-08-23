@@ -11,6 +11,8 @@
 // them into one control.
 #pragma once
 
+#include "UI/Registry.h"
+
 namespace gamescope
 {
 	// Draws the Shaders panel's ImGui window. Must be called from the same
@@ -23,8 +25,13 @@ namespace gamescope
 	// points already take internally).
 	void PanelShaders_Draw();
 
-	// E2 MIGRATION SEAM (P2), temporary -- see PanelDisplay.h's
-	// PanelDisplay_DrawBody() for the full note. The same body with no
-	// window around it, for ui::Area::Escape() to host in the E2 sheet.
-	void PanelShaders_DrawBody();
+	// E2 (P3). This panel's three effects, DECLARED rather than drawn: one
+	// `image.shaders` area whose three switch rows each own their effect's
+	// parameters. Same config keys, same ranges, and every write still goes
+	// through the runtime-uniform path -- see PanelShaders.cpp's "E2 (P3)"
+	// section. Called once at startup from Overlay/UI/Shell.cpp.
+	//
+	// P2's PanelShaders_DrawBody() -- the ui::Area::Escape() hatch -- is
+	// gone with this.
+	void PanelShaders_RegisterArea( ui::Registry &reg );
 }

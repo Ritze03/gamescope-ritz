@@ -728,6 +728,451 @@ namespace gamescope
 		DrawHdrAppMetadataReadout();
 	}
 
+	// =====================================================================
+	//  E2 (P3) -- the same settings, declared instead of drawn
+	// =====================================================================
+	// Everything below REPLACES the four tabs above for the E2 shell only.
+	// The legacy path (PanelDisplay_Draw() and the DrawXxxTab() functions it
+	// calls) is deliberately left untouched and still runs under
+	// `overlay_e2 0` -- AUTONOMOUS-DECISIONS.md D10: the two UIs coexist
+	// behind the ConVar and the default only flips at the end of the phase.
+	//
+	// WHAT IS AND IS NOT DIFFERENT HERE. Not one config key, not one value
+	// range, and not one setter changed. Every binding below routes to the
+	// SAME Set*() function the legacy tab calls, which is the whole reason
+	// they are functions: issues #25 (frame limiter) and #68 (force grab
+	// cursor) were both controls that rendered correctly while doing
+	// nothing, and both were fixed by moving the write to the entry point
+	// the compositor actually reads. Re-deriving a write here would be
+	// re-introducing exactly those two bugs, so nothing here writes a global
+	// directly that a Set*() already owns.
+	//
+	// THE TABS BECAME AREAS, NOT GROUPS. SPEC §8.1's rail is the product's
+	// only navigation, and it lists Upscaling, Frame limiter and HDR as
+	// separate rail items -- so does index.html, the tested reference. The
+	// old "Display" tab had no equivalent: its three settings are
+	// presentation (tearing, cursor grab) and refresh (VRR), so they join
+	// the areas that already own those concerns rather than becoming a
+	// fourth area with no theme. See AUTONOMOUS-DECISIONS.md D13.1.
+	//
+	// Every getter goes through Cfg() rather than touching s_CachedSettings.
+	// Under the legacy path EnsureConfigLoaded() ran once per Draw(); under
+	// E2 there is no per-frame call into this file at all, so the refresh
+	// has to hang off the first thing that runs each frame -- which is a
+	// getter. The check is two integer compares when nothing changed.
+	static config::Settings &Cfg()
+	{
+		EnsureConfigLoaded();
+		return s_CachedSettings;
+	}
+
+	static const ui::Option kFilterOptions[] = {
+		{ (int)GamescopeUpscaleFilter::LINEAR,  "linear"  },
+		{ (int)GamescopeUpscaleFilter::NEAREST, "nearest" },
+		{ (int)GamescopeUpscaleFilter::FSR,     "fsr"     },
+		{ (int)GamescopeUpscaleFilter::NIS,     "nis"     },
+		{ (int)GamescopeUpscaleFilter::PIXEL,   "pixel"   },
+	};
+
+	static const ui::Option kScalerOptions[] = {
+		{ (int)GamescopeUpscaleScaler::AUTO,    "auto"    },
+		{ (int)GamescopeUpscaleScaler::INTEGER, "integer" },
+		{ (int)GamescopeUpscaleScaler::FIT,     "fit"     },
+		{ (int)GamescopeUpscaleScaler::FILL,    "fill"    },
+		{ (int)GamescopeUpscaleScaler::STRETCH, "stretch" },
+	};
+
+	static bool SharpnessApplies()
+	{
+		return g_wantedUpscaleFilter == GamescopeUpscaleFilter::FSR
+		    || g_wantedUpscaleFilter == GamescopeUpscaleFilter::NIS;
+	}
+
+	static void RegisterUpscaling( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "display.upscaling", "Upscaling", ui::Section::Display );
+		a.Keywords( "upscale scaling resample filter fsr nis sharpen scaler aspect tearing cursor" );
+		a.Summary( []{
+			std::string s = FilterToString( g_wantedUpscaleFilter );
+			s += " · ";
+			s += ScalerToString( g_wantedUpscaleScaler );
+			if ( g_bSteamIsActiveWindow )
+				s += "  (Steam is focused -- both are temporarily forced to Fit/Linear)";
+			return s;
+		} );
+
+		a.Group( "Scaling filter" );
+
+		a.Choice( "display.filter", "Filter",
+			ui::AnyBind::Of<int>(
+				[]{ return (int)g_wantedUpscaleFilter; },
+				[]( int n ) { SetFilter( (GamescopeUpscaleFilter)n ); } ),
+			kFilterOptions, std::size( kFilterOptions ) )
+			.Help( "Resamples the game's image up to the output resolution. FSR and NIS add a "
+			       "sharpening pass afterwards; Pixel is nearest-neighbour and is only sharp when "
+			       "the scale factor is a whole number." )
+			.Default( (int)GamescopeUpscaleFilter::LINEAR )
+			.Keywords( "upscale scaling resample fsr nis pixel linear nearest" );
+
+		// The UI percent, not the raw 0..20 -- DECISIONS.md #11. The percent
+		// is always "higher = sharper"; the raw value it maps to flips
+		// direction between FSR and NIS underneath, which is why this binds
+		// through the same two remap functions the legacy slider uses rather
+		// than exposing g_upscaleFilterSharpness directly.
+		a.Slider( "display.sharpness", "Sharpness",
+			ui::AnyBind::Of<int>(
+				[]{ return UiPercentFromRawSharpness( g_wantedUpscaleFilter, g_upscaleFilterSharpness ); },
+				[]( int n ) { SetSharpnessUiPercent( g_wantedUpscaleFilter, n ); } ) )
+			.Help( "Strength of gamescope's own post-upscale sharpening pass (FSR RCAS or NIS). "
+			       "Higher is crisper; too high adds ringing around high-contrast edges. This is "
+			       "not the Shaders area's Pre-sharpen -- that one is a separate ReShade pass, runs "
+			       "before upscaling, and works with any filter. Both are real and can be combined." )
+			.Range( 0.0f, 100.0f )
+			.Unit( "%" )
+			.Default( UiPercentFromRawSharpness( GamescopeUpscaleFilter::FSR, 2 ) )
+			.Keywords( "sharpen sharpness rcas cas crisp clarity ringing" )
+			.DisabledUnless( SharpnessApplies,
+				"only FSR and NIS sharpen -- the Linear, Nearest and Pixel filters have no "
+				"sharpening pass, so this has no effect while one of them is selected" );
+
+		a.Choice( "display.scaler", "Scaler",
+			ui::AnyBind::Of<int>(
+				[]{ return (int)g_wantedUpscaleScaler; },
+				[]( int n ) { SetScaler( (GamescopeUpscaleScaler)n ); } ),
+			kScalerOptions, std::size( kScalerOptions ) )
+			.Help( "What to do when the game's aspect ratio does not match the output. Integer only "
+			       "scales by whole numbers, which avoids resampling blur at the cost of black bars." )
+			.Default( (int)GamescopeUpscaleScaler::AUTO )
+			.Keywords( "aspect fit fill stretch integer letterbox" );
+
+		a.Group( "Presentation" );
+
+		a.Switch( "display.allow_tearing", "Allow tearing",
+			ui::AnyBind::Of<bool>(
+				[]{ return cv_tearing_enabled.Get(); },
+				[]( bool b ) {
+					cv_tearing_enabled = b;
+					Cfg().gamescope.tearing_enabled = b;
+					QueueSave();
+				} ) )
+			.Help( "Lets the game present without waiting for the display's refresh. Lowest latency; "
+			       "can show a horizontal seam on fast camera pans." )
+			.Default( false )
+			.Keywords( "immediate flip vsync latency tear seam" );
+
+		// Issue #68. Routed through steamcompmgr_set_force_relative_mouse()
+		// and NOT by writing g_bForceRelativeMouse, which has no live effect
+		// -- the flag's two real consumers only read it once at backend
+		// startup. This is the fix that made the legacy toggle actually do
+		// something; binding the global here would silently undo it.
+		a.Switch( "display.force_grab_cursor", "Force grab cursor",
+			ui::AnyBind::Of<bool>(
+				[]{ return g_bForceRelativeMouse; },
+				[]( bool b ) {
+					steamcompmgr_set_force_relative_mouse( b );
+					Cfg().gamescope.force_grab_cursor = b;
+					QueueSave();
+				} ) )
+			.Help( "Always use relative mouse mode instead of flipping on cursor visibility. "
+			       "Applies immediately." )
+			.Default( false )
+			.Keywords( "mouse pointer capture confine grab relative" );
+
+		a.Group( "Diagnostics" );
+
+		a.Facts( "display.upscaling_facts", "Effective path", []{
+			if ( g_bSteamIsActiveWindow )
+				return std::string( "overridden while Steam is focused" );
+			return std::string( FilterToString( g_upscaleFilter ) ) + " · " + ScalerToString( g_upscaleScaler );
+		} )
+			.Help( "What the compositor is actually doing right now, resolved after every override. "
+			       "Read-only: this is the live state, not the setting." )
+			.Keywords( "effective live override steam actual" )
+			.Live( "wanted filter", []{ return ui::Fact{ "wanted filter", FilterToString( g_wantedUpscaleFilter ) }; } )
+			.Live( "live filter",   []{ return ui::Fact{ "live filter",   FilterToString( g_upscaleFilter ) }; } )
+			.Live( "wanted scaler", []{ return ui::Fact{ "wanted scaler", ScalerToString( g_wantedUpscaleScaler ) }; } )
+			.Live( "live scaler",   []{ return ui::Fact{ "live scaler",   ScalerToString( g_upscaleScaler ) }; } )
+			.Live( "raw sharpness", []{
+				char sz[ 48 ];
+				std::snprintf( sz, sizeof( sz ), "%d of 20 (%s)", g_upscaleFilterSharpness,
+					SharpnessApplies() ? "in use" : "not applied by this filter" );
+				return ui::Fact{ "raw sharpness", sz };
+			} )
+			// The old Upscaling tab's orange banner, kept as a fact rather
+			// than dropped. It is a statement about live state, and live
+			// state is what Details is for.
+			.Live( "steam override", []{
+				return ui::Fact{ "steam override", g_bSteamIsActiveWindow
+					? "active -- filter and scaler are forced to Fit/Linear while the Steam window is focused"
+					: "inactive" };
+			} );
+	}
+
+	static void RegisterFrameLimiter( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "display.frame_limiter", "Frame limiter", ui::Section::Display );
+		a.Keywords( "fps frame rate cap limiter throttle vrr adaptive sync freesync gsync" );
+		a.Summary( []{
+			const int n = Cfg().gamescope.fps_limit;
+			return n == 0 ? std::string( "uncapped" ) : std::to_string( n ) + " fps cap";
+		} );
+
+		a.Group( "Frame limiter" );
+
+		// ISSUE #67, AND WHY THIS IS A STEPPER AND NOT A SLIDER.
+		//
+		// The valid set is 0 (unlimited) OR [10, 480] -- it is NOT the
+		// continuum 0..480. 1-9 fps is a trap: at that rate this overlay
+		// itself repaints a few times a second, so a user who lands there can
+		// no longer practically drive the UI to undo it.
+		//
+		// The legacy tab expressed the gap with two controls, an "Unlimited"
+		// toggle plus a 10..480 slider, because widgets::SliderInt has no
+		// notion of a hole in its range. A stepper has no hole either -- but
+		// it does not need one: with a step of 10 anchored at 0, the reachable
+		// set IS {0, 10, 20, ... 480}. The gap is a consequence of the step,
+		// not a special case anyone has to maintain, and one setting is now
+		// one row instead of two. SetFpsLimit() still clamps every write, so
+		// the floor holds for the ConCommand and gamescope_control paths too.
+		a.Stepper( "display.fps_limit", "FPS limit",
+			ui::AnyBind::Of<int>(
+				[]{ return Cfg().gamescope.fps_limit; },
+				[]( int n ) { SetFpsLimit( n ); } ) )
+			.Help( "Caps presentation rate. Stepping down from 10 reaches 0, which removes the cap "
+			       "entirely; there is deliberately nothing between the two, because below 10 fps "
+			       "this overlay becomes too slow to drive -- including too slow to undo it. "
+			       "Applies immediately." )
+			.Range( 0.0f, (float)kMaxFpsLimit )
+			.Step( (float)kMinFpsLimit )
+			.Unit( "fps" )
+			.ZeroMeans( "Unlimited" )
+			.Default( 0 )
+			.Keywords( "fps frame rate cap limit limiter throttle unlimited" );
+
+		a.Switch( "display.adaptive_sync", "Adaptive sync (VRR)",
+			ui::AnyBind::Of<bool>(
+				[]{ return cv_adaptive_sync.Get(); },
+				[]( bool b ) {
+					cv_adaptive_sync = b;
+					Cfg().gamescope.vrr_enabled = b;
+					QueueSave();
+				} ) )
+			.Help( "Lets the display's refresh follow the game's frame rate instead of the other way "
+			       "around. Requires a VRR-capable display and connector." )
+			.Default( false )
+			.Keywords( "vrr freesync gsync adaptive sync refresh" );
+
+		a.Group( "Diagnostics" );
+
+		a.Facts( "display.limiter_facts", "Limiter state", []{
+			const int n = Cfg().gamescope.fps_limit;
+			return n == 0 ? std::string( "idle -- no cap" ) : std::to_string( n ) + " fps requested";
+		} )
+			.Help( "What the limiter has been asked for, and how that request reaches the "
+			       "compositor. Read-only." )
+			.Keywords( "limiter state cap refresh cycle override" )
+			.Live( "requested", []{
+				const int n = Cfg().gamescope.fps_limit;
+				return ui::Fact{ "requested", n == 0 ? "unlimited" : ( std::to_string( n ) + " fps" ) };
+			} )
+			.Live( "valid set", []{
+				char sz[ 64 ];
+				std::snprintf( sz, sizeof( sz ), "0, or %d - %d fps", kMinFpsLimit, kMaxFpsLimit );
+				return ui::Fact{ "valid set", sz };
+			} )
+			// Names the mechanism, because "the control writes but the value
+			// does not stick" was issue #25 and the answer to it is which of
+			// the two paths is load-bearing.
+			.Live( "applied via", []{
+				return ui::Fact{ "applied via",
+					"steamcompmgr_set_app_refresh_cycle_override() -- the GAMESCOPE_FPS_LIMIT "
+					"X11 property is written alongside it for external readers only" };
+			} )
+			.Live( "screen type", []{
+				return ui::Fact{ "screen type",
+					GetBackend()->GetScreenType() == GAMESCOPE_SCREEN_TYPE_INTERNAL ? "internal" : "external" };
+			} );
+	}
+
+	static void RegisterHdr( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "display.hdr", "HDR", ui::Section::Display );
+		a.Keywords( "hdr pq bt2020 wide gamut tonemap sdr brightness nits gain" );
+		a.Summary( []{
+			return cv_hdr_enabled.Get() ? std::string( "on" ) : std::string( "off" );
+		} );
+
+		// The HDR-enable switch lives in the same grouping as the settings it
+		// gates -- issue #66. Taxonomically it is a Display-ish setting, but
+		// separating a switch from what it governs costs a user more (a
+		// control they have to remember lives elsewhere) than the tidier
+		// categorisation gains.
+		a.Group( "Output" );
+
+		a.Switch( "display.hdr_enabled", "HDR output",
+			ui::AnyBind::Of<bool>(
+				[]{ return cv_hdr_enabled.Get(); },
+				[]( bool b ) {
+					cv_hdr_enabled = b;
+					Cfg().gamescope.hdr_enabled = b;
+					QueueSave();
+				} ) )
+			.Help( "Requests an HDR10 signal on the connector and switches the composite pipeline "
+			       "to PQ. Everything else in this area is meaningless while this is off." )
+			.Default( false )
+			.Keywords( "hdr pq bt2020 wide gamut high dynamic range" );
+
+		// One predicate, declared once and reused, so the four gated rows
+		// cannot drift apart about what gates them.
+		const auto HdrOn = []{ return cv_hdr_enabled.Get(); };
+		static constexpr const char *kHdrOff = "HDR output is off -- this does nothing until it is on";
+
+		// sdrGamutWideness defaults to -1 ("unset / display-native"); only the
+		// DISPLAYED value is clamped into 0..1, so the -1 is not silently
+		// written back over before the user has touched the control.
+		a.Slider( "display.sdr_gamut_wideness", "SDR gamut wideness",
+			ui::AnyBind::Of<float>(
+				[]{ return std::clamp( g_ColorMgmt.pending.sdrGamutWideness, 0.0f, 1.0f ); },
+				[]( float f ) {
+					set_color_sdr_gamut_wideness( f );
+					Cfg().gamescope.sdr_gamut_wideness = f;
+					QueueSave();
+				} ) )
+			.Help( "How far SDR content is stretched toward the display's wide gamut. 0 keeps "
+			       "BT.709 exactly. Applies immediately." )
+			.Range( 0.0f, 1.0f )
+			.Default( 0.0f )
+			.Keywords( "gamut wideness sdr saturation bt709 bt2020" )
+			.DisabledUnless( HdrOn, kHdrOff );
+
+		a.Slider( "display.sdr_on_hdr_brightness", "SDR-on-HDR brightness",
+			ui::AnyBind::Of<float>(
+				[]{ return g_ColorMgmt.pending.flSDROnHDRBrightness; },
+				[]( float f ) {
+					set_sdr_on_hdr_brightness( f );
+					Cfg().gamescope.sdr_on_hdr_brightness_nits = f;
+					QueueSave();
+				} ) )
+			.Help( "How bright SDR content looks composited alongside HDR. Applies immediately." )
+			.Range( 50.0f, 1000.0f )
+			.Unit( "nits" )
+			.Default( 203.0f )
+			.Keywords( "sdr brightness nits paper white luminance" )
+			.DisabledUnless( HdrOn, kHdrOff );
+
+		a.Group( "Input gain" );
+
+		a.Slider( "display.hdr_input_gain", "HDR input gain",
+			ui::AnyBind::Of<float>(
+				[]{ return g_ColorMgmt.pending.flHDRInputGain; },
+				[]( float f ) {
+					set_hdr_input_gain( f );
+					Cfg().gamescope.hdr_input_gain = f;
+					QueueSave();
+				} ) )
+			.Help( "Multiplier applied to HDR content before tone mapping. Applies immediately." )
+			.Range( 0.0f, 4.0f )
+			.Unit( "x" )
+			.Default( 1.0f )
+			.Keywords( "hdr input gain multiplier exposure" )
+			.DisabledUnless( HdrOn, kHdrOff );
+
+		a.Slider( "display.sdr_input_gain", "SDR input gain",
+			ui::AnyBind::Of<float>(
+				[]{ return g_ColorMgmt.pending.flSDRInputGain; },
+				[]( float f ) {
+					set_sdr_input_gain( f );
+					Cfg().gamescope.sdr_input_gain = f;
+					QueueSave();
+				} ) )
+			.Help( "Multiplier applied to SDR content before it is composited into the HDR "
+			       "container. Applies immediately." )
+			.Range( 0.0f, 4.0f )
+			.Unit( "x" )
+			.Default( 1.0f )
+			.Keywords( "sdr input gain multiplier exposure" )
+			.DisabledUnless( HdrOn, kHdrOff );
+
+		a.Group( "Diagnostics" );
+
+		// The old HDR tab's read-only appHDRMetadata strip, unchanged in
+		// substance: this is what the focused app REPORTED, never a setting.
+		// A Facts row cannot be given a control at all (Registry.h -- .Live()
+		// has no Bind overload), which is a stronger guarantee than the
+		// legacy "never editable here" comment was.
+		a.Facts( "display.hdr_facts", "Signal", []{
+			if ( !g_ColorMgmt.current.appHDRMetadata )
+				return std::string( "no HDR metadata reported" );
+			const hdr_metadata_infoframe &info =
+				g_ColorMgmt.current.appHDRMetadata->View<hdr_output_metadata>().hdmi_metadata_type1;
+			char sz[ 64 ];
+			std::snprintf( sz, sizeof( sz ), "MaxCLL %u · MaxFALL %u nits",
+				(unsigned)info.max_cll, (unsigned)info.max_fall );
+			return std::string( sz );
+		} )
+			.Help( "HDR metadata the focused app is actually sending, read from its surface. Never "
+			       "inferred, and never editable -- this is what the app reported." )
+			.Keywords( "metadata maxcll maxfall mastering primaries white point tonemap" )
+			.Live( "source", []{
+				return ui::Fact{ "source", g_ColorMgmt.current.appHDRMetadata
+					? "app-provided (surface metadata)"
+					: "none -- no HDR-capable app is currently focused" };
+			} )
+			.Live( "content light", []{
+				if ( !g_ColorMgmt.current.appHDRMetadata )
+					return ui::Fact{ "content light", "-" };
+				const hdr_metadata_infoframe &info =
+					g_ColorMgmt.current.appHDRMetadata->View<hdr_output_metadata>().hdmi_metadata_type1;
+				char sz[ 64 ];
+				std::snprintf( sz, sizeof( sz ), "MaxCLL %u nits · MaxFALL %u nits",
+					(unsigned)info.max_cll, (unsigned)info.max_fall );
+				return ui::Fact{ "content light", sz };
+			} )
+			.Live( "mastering", []{
+				if ( !g_ColorMgmt.current.appHDRMetadata )
+					return ui::Fact{ "mastering", "-" };
+				const hdr_metadata_infoframe &info =
+					g_ColorMgmt.current.appHDRMetadata->View<hdr_output_metadata>().hdmi_metadata_type1;
+				char sz[ 80 ];
+				std::snprintf( sz, sizeof( sz ), "%u / %.4f nits (max/min)",
+					(unsigned)info.max_display_mastering_luminance,
+					info.min_display_mastering_luminance * 0.0001f );
+				return ui::Fact{ "mastering", sz };
+			} )
+			.Live( "primaries", []{
+				if ( !g_ColorMgmt.current.appHDRMetadata )
+					return ui::Fact{ "primaries", "-" };
+				const hdr_metadata_infoframe &info =
+					g_ColorMgmt.current.appHDRMetadata->View<hdr_output_metadata>().hdmi_metadata_type1;
+				// CTA-861.G coordinates are unsigned 16-bit in units of 0.00002.
+				const auto Chroma = []( uint16_t uRaw ) { return uRaw * 0.00002f; };
+				char sz[ 160 ];
+				std::snprintf( sz, sizeof( sz ),
+					"R(%.4f,%.4f) G(%.4f,%.4f) B(%.4f,%.4f) white(%.4f,%.4f)",
+					Chroma( info.display_primaries[0].x ), Chroma( info.display_primaries[0].y ),
+					Chroma( info.display_primaries[1].x ), Chroma( info.display_primaries[1].y ),
+					Chroma( info.display_primaries[2].x ), Chroma( info.display_primaries[2].y ),
+					Chroma( info.white_point.x ), Chroma( info.white_point.y ) );
+				return ui::Fact{ "primaries", sz };
+			} )
+			// The legacy HDR tab carried a visible "Tonemap Operator:
+			// deferred" note. It is not a setting and must not become a row,
+			// but dropping it silently would lose the one thing it recorded
+			// -- WHY there is no control. So it survives as a fact.
+			.Live( "tonemap operator", []{
+				return ui::Fact{ "tonemap operator",
+					"not exposed -- hdrTonemapOperator has no live setter and no X11 property, "
+					"unlike the four sliders above. Exposing it needs new plumbing, not just a control." };
+			} );
+	}
+
+	void PanelDisplay_RegisterAreas( ui::Registry &reg )
+	{
+		RegisterUpscaling( reg );
+		RegisterFrameLimiter( reg );
+		RegisterHdr( reg );
+	}
+
 	// The panel's body, with no window around it. Split out for E2's sheet
 	// (Overlay/UI/Shell.cpp hosts it through ui::Area::Escape()); the
 	// contents below are byte-for-byte what used to sit inline in
@@ -783,11 +1228,5 @@ namespace gamescope
 		DrawBodyContent();
 
 		chrome::EndPanelWindow();
-	}
-
-	void PanelDisplay_DrawBody()
-	{
-		EnsureConfigLoaded();
-		DrawBodyContent();
 	}
 }

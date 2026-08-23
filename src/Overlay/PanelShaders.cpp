@@ -324,8 +324,236 @@ namespace gamescope
 			ImGui::EndDisabled();
 	}
 
-	// The panel's body, with no window around it -- see PanelShaders.h's
-	// PanelShaders_DrawBody(). Verbatim from PanelShaders_Draw().
+	// =====================================================================
+	//  E2 (P3) -- the same three effects, declared instead of drawn
+	// =====================================================================
+	// Replaces the three groups above for the E2 shell only; the legacy
+	// path (PanelShaders_Draw()) is untouched and still runs under
+	// `overlay_e2 0` -- AUTONOMOUS-DECISIONS.md D10.
+	//
+	// SHAPE: three switch rows, one per effect, each owning its own
+	// parameters. This is the taxonomy's intended shape for exactly this
+	// data and it is what index.html declares -- an effect is one decision
+	// ("is this on") with tuning behind it, so the sheet stays three rows
+	// deep no matter how many knobs an effect grows.
+	//
+	// THE SIX BUDGET, AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY ON IT.
+	// Vibrancy has 2 params, Pre-sharpen 1, Adaptive brightness 6 -- the
+	// maximum a row may own before Registry.cpp aborts registration and
+	// tells the author to promote it to a category. It fits, but with zero
+	// headroom, and that is worth saying out loud: the NEXT parameter added
+	// to this effect does not "just" overflow a limit, it is the signal
+	// that Adaptive brightness has become a category rather than a setting.
+	// Nothing here routes around the budget, and nothing should.
+	//
+	// EVERY WRITE STILL GOES THROUGH SetRuntimeUniform*(). A plain global
+	// write compiles and looks right in the UI while doing nothing on
+	// screen (see this file's header comment); the uniform path is the only
+	// one that reaches the shader. Bindings below therefore call the same
+	// two helpers the legacy controls call, and the enable bindings still
+	// call EnsureEffectLoaded() first.
+	static config::Settings &Cfg()
+	{
+		EnsureConfigLoaded();
+		return s_CachedSettings;
+	}
+
+	// One reason string for all three effects, so the SDR gate cannot drift
+	// between them. It replaces the legacy orange banner: SPEC §3.13 makes a
+	// reason mandatory on every disabled control, which puts the explanation
+	// on the control that is actually greyed instead of at the top of a panel.
+	static bool EffectsUsable() { return IsBaseLayerSdr(); }
+	static constexpr const char *kSdrOnly =
+		"effects are SDR-only for now -- the focused app is presenting HDR or scRGB content, "
+		"whose values these passes would clip. A deliberate v1 limitation, not a bug";
+
+	// The enable half of an effect row, shared by all three: load the
+	// combined .fx on first use, push the uniform, persist. Written once
+	// because three copies of it is three chances to forget the load.
+	static void SetEffectEnabled( bool *pbField, const char *pszUniform, bool bOn )
+	{
+		*pbField = bOn;
+		if ( bOn )
+			EnsureEffectLoaded();
+		SetRuntimeUniformBool( pszUniform, bOn );
+		QueueSave();
+	}
+
+	static void SetEffectFloat( float *pflField, const char *pszUniform, float flValue )
+	{
+		*pflField = flValue;
+		SetRuntimeUniformFloat( pszUniform, flValue );
+		QueueSave();
+	}
+
+	void PanelShaders_RegisterArea( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
+		a.Keywords( "shader reshade effect vibrancy saturation sharpen adaptive brightness exposure" );
+		a.Summary( []{
+			const auto &r = Cfg().reshade;
+			const int n = ( r.vibrancy.enabled ? 1 : 0 )
+			            + ( r.pre_sharpen.enabled ? 1 : 0 )
+			            + ( r.adaptive_brightness.enabled ? 1 : 0 );
+			return std::to_string( n ) + " of 3 effects on";
+		} );
+
+		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
+		// for a switch set, and the shell computes it from the band's own
+		// switch rows. Three independent binaries are three rows -- they are
+		// NOT a Bank, because they can be turned on for unrelated reasons
+		// (SPEC §3.12's governing rule).
+		a.GroupCount( "Effects" );
+
+		a.Switch( "image.shaders.vibrancy", "Vibrancy",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.vibrancy.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, "vibrancy_enabled", b ); } ) )
+			.Help( "Raises saturation of muted colours while leaving already-saturated ones alone." )
+			.Default( false )
+			.Keywords( "vibrancy saturation colour vividness" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.vibrancy.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, "vibrancy_strength", f ); } ) )
+				.Help( "Overall weight of the effect. Negative values desaturate instead." )
+				.Range( -1.0f, 1.0f )
+				.Default( 0.0f )
+			.Param( "protect_skin", "Protect skin tones",
+				ui::AnyBind::Of<bool>(
+					[]{ return Cfg().reshade.vibrancy.protect_skin_tones; },
+					[]( bool b ) {
+						Cfg().reshade.vibrancy.protect_skin_tones = b;
+						SetRuntimeUniformBool( "vibrancy_protect_skin_tones", b );
+						QueueSave();
+					} ) )
+				.Help( "Excludes the skin-tone hue band from the boost, so faces do not go orange." )
+				.Default( true );
+
+		a.Switch( "image.shaders.presharpen", "Pre-sharpen",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.pre_sharpen.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.pre_sharpen.enabled, "pre_sharpen_enabled", b ); } ) )
+			.Help( "Sharpens before upscaling, at source resolution. Works with any Filter -- "
+			       "unlike the Upscaling area's Sharpness, which is gamescope's own post-upscale "
+			       "pass and does nothing under Linear, Nearest or Pixel. The two are separate "
+			       "effects and can be combined." )
+			.Default( false )
+			.Keywords( "presharpen sharpen pre upscale clarity reshade" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					// ConfigSchema.h makes this an optional<float> with a 0.5
+					// default; EnsureConfigLoaded() already guarantees it is
+					// engaged, and this guards anyway rather than dereferencing
+					// an empty optional if that ever drifts.
+					[]{
+						auto &s = Cfg().reshade.pre_sharpen;
+						if ( !s.strength.has_value() ) s.strength = 0.5f;
+						return *s.strength;
+					},
+					[]( float f ) {
+						auto &s = Cfg().reshade.pre_sharpen;
+						s.strength = f;
+						SetRuntimeUniformFloat( "pre_sharpen_strength", f );
+						QueueSave();
+					} ) )
+				.Help( "Overall weight of the sharpening pass." )
+				.Range( 0.0f, 2.0f )
+				.Default( 0.5f );
+
+		// SIX PARAMS -- the budget exactly. See this section's header.
+		a.Switch( "image.shaders.adaptive_brightness", "Adaptive brightness",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
+				[]( bool b ) {
+					SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled,
+					                  "adaptive_brightness_enabled", b );
+				} ) )
+			.Help( "Experimental. Raises exposure in dark scenes and lowers it in bright ones, "
+			       "following the frame's average luminance. Unlike the other two effects this one "
+			       "carries state between frames, which is why it stays flagged experimental." )
+			.Default( false )
+			.Keywords( "adaptive brightness eye adaptation exposure auto experimental" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength,
+						"adaptive_brightness_strength", f ); } ) )
+				.Help( "Overall weight of the effect." )
+				.Range( 0.0f, 1.0f )
+				.Default( 1.0f )
+			.Param( "target", "Target brightness",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance,
+						"adaptive_brightness_target_luminance", f ); } ) )
+				.Help( "Average luminance the adaptation aims for." )
+				.Range( 0.1f, 0.9f )
+				.Default( 0.5f )
+			.Param( "up_speed", "Brighten speed",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed,
+						"adaptive_brightness_adapt_up_speed", f ); } ) )
+				.Help( "How fast adaptation moves toward a brighter target." )
+				.Range( 0.1f, 5.0f )
+				.Unit( "s" )
+				.Default( 1.5f )
+			.Param( "down_speed", "Darken speed",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed,
+						"adaptive_brightness_adapt_down_speed", f ); } ) )
+				.Help( "How fast adaptation moves toward a darker target." )
+				.Range( 0.1f, 5.0f )
+				.Unit( "s" )
+				.Default( 2.5f )
+			.Param( "min_gain", "Min gain",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain,
+						"adaptive_brightness_min_gain", f ); } ) )
+				.Help( "Lower clamp on the exposure multiplier." )
+				.Range( 0.5f, 1.0f )
+				.Default( 0.8f )
+			.Param( "max_gain", "Max gain",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain,
+						"adaptive_brightness_max_gain", f ); } ) )
+				.Help( "Upper clamp on the exposure multiplier." )
+				.Range( 1.0f, 2.0f )
+				.Default( 1.6f );
+
+		a.Group( "Diagnostics" );
+
+		a.Facts( "image.shaders_facts", "Pipeline", []{
+			return std::string( IsBaseLayerSdr() ? "SDR base layer -- effects available"
+			                                     : "HDR base layer -- effects unavailable" );
+		} )
+			.Help( "What the ReShade front-end and the base layer are actually doing. Read-only." )
+			.Keywords( "reshade compile effect fx colourspace sdr hdr loaded" )
+			.Live( "effect file", []{ return ui::Fact{ "effect file", k_pszEffectPath }; } )
+			.Live( "compiled", []{
+				return ui::Fact{ "compiled", s_bEffectLoaded
+					? "yes -- loaded once and kept for the session"
+					: "not yet -- the effect is compiled the first time any effect is turned on" };
+			} )
+			.Live( "base layer", []{
+				return ui::Fact{ "base layer", IsBaseLayerSdr()
+					? "SDR (linear or sRGB)"
+					: "HDR (scRGB or PQ) -- the SDR-only gate is active" };
+			} );
+	}
+
+	// The panel's body, with no window around it. Still the LEGACY path's
+	// body -- PanelShaders_Draw() below is its only caller now that the E2
+	// sheet declares this area instead of hosting it (see the "E2 (P3)"
+	// section above). Kept split out because the split costs nothing and the
+	// legacy path must stay byte-for-byte what it was under `overlay_e2 0`.
 	static void DrawBodyContent()
 	{
 		// SDR-only gate (DECISIONS.md #15): a deliberate v1 limitation, not
@@ -370,11 +598,5 @@ namespace gamescope
 		DrawBodyContent();
 
 		chrome::EndPanelWindow();
-	}
-
-	void PanelShaders_DrawBody()
-	{
-		EnsureConfigLoaded();
-		DrawBodyContent();
 	}
 }
