@@ -324,18 +324,10 @@ namespace gamescope
 			ImGui::EndDisabled();
 	}
 
-	void PanelShaders_Draw()
+	// The panel's body, with no window around it -- see PanelShaders.h's
+	// PanelShaders_DrawBody(). Verbatim from PanelShaders_Draw().
+	static void DrawBodyContent()
 	{
-		EnsureConfigLoaded();
-
-		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
-		// see Overlay/Chrome.h -- default size bumped taller for M9's
-		// Adaptive Brightness group (six extra rows); the window is user-
-		// resizable regardless, same as every other panel.
-		if ( !chrome::BeginPanelWindow( "SHADERS", chrome::PanelId::Shaders,
-			ImVec2( 520.0f, 64.0f ), ImVec2( 430.0f, 540.0f ) ) )
-			return;
-
 		// SDR-only gate (DECISIONS.md #15): a deliberate v1 limitation, not
 		// an oversight -- naive vibrancy/sharpen math assumes clamped 0..1
 		// SDR RGB and produces silently wrong results (over-saturating/
@@ -361,7 +353,28 @@ namespace gamescope
 
 		if ( !bSdr )
 			ImGui::EndDisabled();
+	}
+
+	void PanelShaders_Draw()
+	{
+		EnsureConfigLoaded();
+
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// see Overlay/Chrome.h -- default size bumped taller for M9's
+		// Adaptive Brightness group (six extra rows); the window is user-
+		// resizable regardless, same as every other panel.
+		if ( !chrome::BeginPanelWindow( "SHADERS", chrome::PanelId::Shaders,
+			ImVec2( 520.0f, 64.0f ), ImVec2( 430.0f, 540.0f ) ) )
+			return;
+
+		DrawBodyContent();
 
 		chrome::EndPanelWindow();
+	}
+
+	void PanelShaders_DrawBody()
+	{
+		EnsureConfigLoaded();
+		DrawBodyContent();
 	}
 }

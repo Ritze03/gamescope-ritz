@@ -27,4 +27,15 @@ namespace gamescope
 	// preference. See PanelDisplay.cpp's file-level comment for the thread-
 	// safety argument in full.
 	void PanelDisplay_Draw();
+
+	// E2 MIGRATION SEAM (P2). The same body, with no window around it, for
+	// the E2 shell to host inside its sheet through ui::Area::Escape() --
+	// see Overlay/UI/Registry.h's Escape() comment for why that hatch
+	// exists and what deletes it. Draws into whatever ImGui window is
+	// current; the caller owns the Begin/End and the style. Same thread
+	// contract as PanelDisplay_Draw() above, unchanged.
+	//
+	// TEMPORARY: P3 rewrites this panel against the ui:: kit and both this
+	// declaration and its call site go away with it.
+	void PanelDisplay_DrawBody();
 }

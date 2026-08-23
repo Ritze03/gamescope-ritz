@@ -856,30 +856,13 @@ namespace gamescope
 		}
 	}
 
-	void PanelConfig_Draw()
+	// The panel's body, with no window around it -- see PanelConfig.h's
+	// PanelConfig_DrawBody(). Verbatim from PanelConfig_Draw(), including
+	// the s_bLastTabWasGlobalOnly write the title-bar badge reads a frame
+	// later (the E2 sheet has no per-panel title bar, so there the write is
+	// simply inert rather than wrong).
+	static void DrawBodyContent()
 	{
-		EnsureInitialized();
-
-		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
-		// see Overlay/Chrome.h -- position/size unchanged from M7.
-		//
-		// Issue #43 recommendation #1: this panel is the one place the
-		// title-bar badge can't be computed from session-routing state
-		// alone (Chrome.h's own comment on pszBadgeOverride) -- General/
-		// Notifications always write global.json regardless of the
-		// per-game override (EnsureGeneralSettingsLoaded()'s comment
-		// below), a routing rule distinct from the Per-Game tab's. But
-		// BeginPanelWindow() -- and therefore the title bar -- draws
-		// *before* the tab bar below picks this frame's active tab, so the
-		// override can only ever reflect *last* frame's tab. Same one-
-		// frame lag Chrome.cpp already accepts for its own per-panel focus
-		// state; harmless here since the badge only needs to catch up
-		// within a frame of a tab switch, not synchronously.
-		const char *pszBadgeOverride = s_bLastTabWasGlobalOnly ? "global only" : nullptr;
-		if ( !chrome::BeginPanelWindow( "CONFIG / PROFILES", chrome::PanelId::Config,
-			ImVec2( 520.0f, 380.0f ), ImVec2( 430.0f, 320.0f ), pszBadgeOverride ) )
-			return;
-
 		bool bGlobalOnlyTabActiveThisFrame = false;
 		if ( ImGui::BeginTabBar( "ConfigTabs" ) )
 		{
@@ -908,7 +891,40 @@ namespace gamescope
 			ImGui::EndTabBar();
 		}
 		s_bLastTabWasGlobalOnly = bGlobalOnlyTabActiveThisFrame;
+	}
+
+	void PanelConfig_Draw()
+	{
+		EnsureInitialized();
+
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// see Overlay/Chrome.h -- position/size unchanged from M7.
+		//
+		// Issue #43 recommendation #1: this panel is the one place the
+		// title-bar badge can't be computed from session-routing state
+		// alone (Chrome.h's own comment on pszBadgeOverride) -- General/
+		// Notifications always write global.json regardless of the
+		// per-game override (EnsureGeneralSettingsLoaded()'s comment
+		// below), a routing rule distinct from the Per-Game tab's. But
+		// BeginPanelWindow() -- and therefore the title bar -- draws
+		// *before* the tab bar below picks this frame's active tab, so the
+		// override can only ever reflect *last* frame's tab. Same one-
+		// frame lag Chrome.cpp already accepts for its own per-panel focus
+		// state; harmless here since the badge only needs to catch up
+		// within a frame of a tab switch, not synchronously.
+		const char *pszBadgeOverride = s_bLastTabWasGlobalOnly ? "global only" : nullptr;
+		if ( !chrome::BeginPanelWindow( "CONFIG / PROFILES", chrome::PanelId::Config,
+			ImVec2( 520.0f, 380.0f ), ImVec2( 430.0f, 320.0f ), pszBadgeOverride ) )
+			return;
+
+		DrawBodyContent();
 
 		chrome::EndPanelWindow();
+	}
+
+	void PanelConfig_DrawBody()
+	{
+		EnsureInitialized();
+		DrawBodyContent();
 	}
 }

@@ -286,17 +286,13 @@ namespace gamescope
 		}
 	}
 
-	void PanelAudio_Draw()
+	// The panel's body, with no window around it -- see PanelAudio.h's
+	// PanelAudio_DrawBody(). Verbatim from PanelAudio_Draw(), except that the
+	// wpctl-missing early-out now just returns instead of also closing the
+	// window: the window is the caller's business either way.
+	static void DrawBodyContent()
 	{
-		EnsureConfigLoaded();
-
 		const Audio::VolumeState state = Audio::GetState();
-
-		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
-		// see Overlay/Chrome.h -- position/size unchanged from M5.
-		if ( !chrome::BeginPanelWindow( "AUDIO", chrome::PanelId::Audio,
-			ImVec2( 520.0f, 340.0f ), ImVec2( 380.0f, 180.0f ) ) )
-			return;
 
 		if ( !state.bWpctlAvailable )
 		{
@@ -306,7 +302,6 @@ namespace gamescope
 			ImGui::TextColored( ImVec4( 0.95f, 0.35f, 0.35f, 1.0f ),
 				"audio: wpctl not found" );
 			ImGui::TextDisabled( "Install WirePlumber's CLI (wpctl) to control per-app volume." );
-			chrome::EndPanelWindow();
 			return;
 		}
 
@@ -425,7 +420,26 @@ namespace gamescope
 
 		ImGui::Separator();
 		DrawManualPicker( state );
+	}
+
+	void PanelAudio_Draw()
+	{
+		EnsureConfigLoaded();
+
+		// M8 part 3 (issue #15): hosted through chrome::BeginPanelWindow(),
+		// see Overlay/Chrome.h -- position/size unchanged from M5.
+		if ( !chrome::BeginPanelWindow( "AUDIO", chrome::PanelId::Audio,
+			ImVec2( 520.0f, 340.0f ), ImVec2( 380.0f, 180.0f ) ) )
+			return;
+
+		DrawBodyContent();
 
 		chrome::EndPanelWindow();
+	}
+
+	void PanelAudio_DrawBody()
+	{
+		EnsureConfigLoaded();
+		DrawBodyContent();
 	}
 }
