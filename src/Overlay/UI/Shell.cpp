@@ -276,8 +276,7 @@ namespace gamescope::ui::shell
 			// SETTINGS half only. The HUD over the game is drawn from its
 			// own separate context and was never in the redesign's scope.
 			FpsDisplay_RegisterArea( reg );
-			reg.Add( "system.log", "Log", Section::System )
-				.Escape( []{ PanelLog_DrawBody(); } );
+			PanelLog_RegisterArea( reg );
 
 			// ---- SETUP ---------------------------------------------------
 			// P3 part B. The Config panel's three tabs became three areas,
@@ -1326,6 +1325,90 @@ namespace gamescope::ui::shell
 			return y + flH + Px( tok::kGroupSpaceBelow );
 		}
 
+		// ---- a content area's body (Area::Content) -----------------------
+		// The Log is the only one. Everything about how it LOOKS is decided
+		// here, in the shell, because the registration hands over data and
+		// nothing else -- no font, no colour, no width, no cursor. That is
+		// what makes this a content view rather than a second Escape().
+		//
+		// Severity is a small int on the line, mapped to a role here, so a
+		// category cannot introduce a colour the palette does not have.
+		ImU32 SeverityColor( int nSeverity )
+		{
+			switch ( nSeverity )
+			{
+				case 3:  return Col( Role::DangerText );
+				case 2:  return Col( Role::WarnText );
+				case 1:  return Col( Role::TextMeta );
+				default: return Col( Role::TextBody );
+			}
+		}
+
+		void DrawContentBody( const Area &area, const Rect &rcCol, float flTop, float flBottom )
+		{
+			const std::vector<ContentLine> vecLines = area.ContentLines();
+
+			const float flLineH = MeasureText( TypeRole::Meta, "Xg" ).y + Px( 3.0f );
+			const float flH     = ImMax( flLineH * 3.0f, flBottom - flTop - Px( tok::kM ) );
+
+			const Rect rcBody { rcCol.x0, flTop, rcCol.x1, flTop + flH };
+			Fill( rcBody, Col( Role::SurfaceRaised ) );
+
+			if ( vecLines.empty() )
+			{
+				// SPEC §3.13's empty state: one centred line, TextMeta.
+				Label( { rcBody.x0, rcBody.y0, rcBody.x1, rcBody.y0 + Px( 96.0f ) },
+				       TypeRole::Meta, Col( Role::TextMeta ),
+				       "nothing captured yet", TextAlign::Center );
+				return;
+			}
+
+			ImGui::SetCursorScreenPos( ImVec2( rcBody.x0, rcBody.y0 ) );
+			if ( ImGui::BeginChild( "##content", ImVec2( rcBody.Width(), rcBody.Height() ),
+				ImGuiChildFlags_None,
+				ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar ) )
+			{
+				// Every line is exactly one visual row, so a uniform-height
+				// clipper is exact at any buffer size -- only what is on
+				// screen ever becomes draw data.
+				const float flPadX = Px( tok::kS );
+				ImGuiListClipper clipper;
+				clipper.Begin( (int)vecLines.size(), flLineH );
+				while ( clipper.Step() )
+				{
+					for ( int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i )
+					{
+						const ContentLine &line = vecLines[ (size_t)i ];
+						const float y = ImGui::GetCursorScreenPos().y
+						              + (float)( i - clipper.DisplayStart ) * flLineH;
+
+						float x = rcBody.x0 + flPadX;
+						if ( !line.sScope.empty() )
+						{
+							const std::string sTag = "[" + line.sScope + "]";
+							const float flW = MeasureText( TypeRole::Meta, sTag.c_str() ).x;
+							Label( { x, y, x + flW, y + flLineH }, TypeRole::Meta,
+							       Col( Role::TextMeta ), sTag.c_str() );
+							x += flW + Px( tok::kXS );
+						}
+						Label( { x, y, rcBody.x1 - flPadX, y + flLineH }, TypeRole::Meta,
+						       SeverityColor( line.nSeverity ), line.sText.c_str() );
+					}
+				}
+				clipper.End();
+
+				// The standard log-window idiom, kept: stick to the bottom
+				// while the view is already at the bottom, stop the instant
+				// the reader scrolls up, resume when they scroll back down.
+				// The scroll position IS the state -- but the area can
+				// withdraw the behaviour outright, which is what Log's
+				// auto-scroll switch does.
+				if ( area.FollowTail() && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f )
+					ImGui::SetScrollHereY( 1.0f );
+			}
+			ImGui::EndChild();
+		}
+
 		void DrawSheetBody( const Rect &rc, const Area *pArea )
 		{
 			if ( !pArea )
@@ -1404,6 +1487,10 @@ namespace gamescope::ui::shell
 					// Band.cpp, never from a call site (SPEC §4.2 clause 1).
 					y += Px( tok::kRowH ) * (float)LinesFor( entry );
 				}
+
+				// A content area's body, beneath its own rows (Area::Content).
+				if ( pArea->HasContent() )
+					DrawContentBody( *pArea, rcCol, y + Px( tok::kM ), rc.y1 );
 			}
 			ImGui::EndChild();
 		}

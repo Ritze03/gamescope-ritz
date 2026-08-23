@@ -452,6 +452,23 @@ namespace gamescope::ui
 	// anything. So the mixture is a registration violation in BOTH
 	// directions: escaping a populated area, and populating an escaped one
 	// (Emit() re-checks below).
+	Area &Area::Content( std::function<std::vector<ContentLine>()> fn )
+	{
+		// Deliberately NOT subject to Law::Escaped's "no entries" rule --
+		// that rule exists because a half-migrated escaped area would make
+		// the migration permanent. A content area is the opposite: its rows
+		// are the filter that makes its content usable, so entries plus a
+		// content body is the CORRECT shape, not a half-finished one.
+		m_Content = std::move( fn );
+		return *this;
+	}
+
+	Area &Area::FollowsTail( std::function<bool()> fn )
+	{
+		m_FollowTail = std::move( fn );
+		return *this;
+	}
+
 	Area &Area::Escape( std::function<void()> fn )
 	{
 		if ( !fn )

@@ -472,6 +472,14 @@ namespace gamescope::ui
 		size_t    m_nGroup = 0;
 	};
 
+	// One line of an area's content body. See Area::Content().
+	struct ContentLine
+	{
+		int         nSeverity = 0;   // 0 info, 1 debug, 2 warn, 3 error
+		std::string sScope;          // subsystem tag, drawn as a dim prefix; may be empty
+		std::string sText;
+	};
+
 	// =====================================================================
 	//  Area -- one rail item / one sheet
 	// =====================================================================
@@ -551,6 +559,43 @@ namespace gamescope::ui
 		Area &Escape( std::function<void()> fn );
 		bool  IsEscaped() const { return (bool)m_Escape; }
 		const std::function<void()> &EscapeBody() const { return m_Escape; }
+
+		// ================================================================
+		//  CONTENT AREAS -- P3c
+		// ================================================================
+		// An area whose body is CONTENT rather than a list of settings.
+		// Log is the only one: a settings sheet made of log lines is not a
+		// settings sheet, and pretending each line is a row would put
+		// thousands of them through the Six Budget and the Prefix Law for
+		// no reason.
+		//
+		// THIS IS NOT Escape() UNDER A NEW NAME, and the difference is the
+		// whole point. Escape() hands a call site the sheet's child window
+		// and lets it run arbitrary ImGui with every law suspended --
+		// that is why it was always temporary. Content() hands the shell
+		// DATA and nothing else: a function returning lines. The call site
+		// still cannot place a pixel (SPEC §5.2 clause 0), cannot choose a
+		// font, a colour or a width, and cannot lay anything out. The
+		// shell draws the view, exactly as it draws every control.
+		//
+		// A content area STILL DECLARES ROWS, and they are still ordinary
+		// rows: Log's filter bank, its text filter and its buffer facts all
+		// go through the same grammar, the same Inspector and the same
+		// help. They are drawn above the content. So an area is never
+		// "rows or content" -- it is rows AND, optionally, a content body
+		// beneath them.
+		Area &Content( std::function<std::vector<ContentLine>()> fn );
+		bool  HasContent() const { return (bool)m_Content; }
+		std::vector<ContentLine> ContentLines() const
+		{
+			return m_Content ? m_Content() : std::vector<ContentLine>{};
+		}
+
+		// Whether the content view sticks to its newest line. Read by the
+		// shell; declared by the area so the behaviour is a property of the
+		// registration rather than shell state a category cannot see.
+		Area &FollowsTail( std::function<bool()> fn );
+		bool  FollowTail() const { return !m_FollowTail || m_FollowTail(); }
 
 		// ================================================================
 		//  DYNAMIC AREAS -- P3b
@@ -649,6 +694,8 @@ namespace gamescope::ui
 		std::function<std::string()> m_Badge;
 		std::function<bool()>        m_Available;
 		std::function<void()>        m_Escape;   // migration seam -- see Escape()
+		std::function<std::vector<ContentLine>()> m_Content;  // content areas -- see Content()
+		std::function<bool()>        m_FollowTail;
 		std::function<uint64_t()>    m_Generation;  // dynamic areas -- see Rebuilds()
 		std::function<void( Area & )> m_Build;
 		uint64_t                     m_ulGeneration = 0;
