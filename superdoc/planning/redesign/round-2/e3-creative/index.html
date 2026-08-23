@@ -1,0 +1,1744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ══════════════════════════════════════════════════════════════════════════
+   Direction E3 — "The Bench"
+   gamescope-ritz settings overlay. Reinvention of Direction E (Inspector Rail).
+
+   The kept idea: a persistent place where depth lives, so the main surface
+   stays clean.
+   What changed: the depth-place is a live INSTRUMENT (the Scope), the rail and
+   sheet merged into one accordion column (the Spine), and the centre of the
+   screen is left uncovered so the game itself is the largest preview surface.
+
+   All slab dimensions are authored in BASE UNITS = CSS px at display_scale 1.0.
+   px = base x display_scale, exactly as the C++ helper would compute it.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root{
+  /* ---- accent family: oklch(L C h) per token, hue live (Palette.h) -------- */
+  --hue:218;
+  --acc:        oklch(.74 .12 var(--hue));   /* kAccent      */
+  --acc-edge:   oklch(.80 .12 var(--hue));   /* kAccentEdge  */
+  --acc-hi:     oklch(.78 .12 var(--hue));   /* kAccentGradHi*/
+  --acc-val:    oklch(.84 .10 var(--hue));   /* kAccentValue */
+  --acc-txt:    oklch(.82 .10 var(--hue));   /* kAccentText  */
+  --acc-seg:    oklch(.90 .07 var(--hue));   /* kAccentSegText */
+  --acc-knob:   oklch(.86 .08 var(--hue));   /* kAccentKnob  */
+  --acc-handle: oklch(.90 .05 var(--hue));   /* kAccentHandle*/
+
+  /* ---- state (hue-fixed: a green "delete" is a bug, not a theme) --------- */
+  --ok:#6ED274; --warn:#FFA94D; --dgr:#FF8E7E;
+
+  /* ---- text: THREE roles only. No fourth. -------------------------------- */
+  --t-pri:rgba(239,245,251,.96);   /* 14.25:1 worst case */
+  --t-bod:rgba(239,245,251,.78);   /*  9.77:1 */
+  --t-met:rgba(239,245,251,.60);   /*  6.31:1 -- the floor for anything meaningful */
+
+  /* ---- lines: one thickness, three alphas -------------------------------- */
+  --hair:rgba(255,255,255,.10);    /* decorative row separator */
+  --rule:rgba(255,255,255,.14);    /* group rule */
+  --edge:rgba(255,255,255,.20);    /* slab border */
+  --ctl :rgba(255,255,255,.42);    /* IDENTIFYING control boundary -- 4.04:1 */
+  --ctlh:rgba(255,255,255,.55);    /* hover -- 5.94:1 */
+
+  /* ---- surfaces ---------------------------------------------------------- */
+  --slab:rgba(12,14,17,.94);
+  --sunk:rgba(255,255,255,.045);
+  --lift:rgba(255,255,255,.075);
+
+  --sans:"Geist","Inter",system-ui,-apple-system,sans-serif;
+  --mono:"Geist Mono","SFMono-Regular",ui-monospace,monospace;
+
+  /* ---- layout constants, in base units ----------------------------------- */
+  --spine:552px;  --scope:432px;  --lane:190px;  --pad:22px;
+  --ds:1;         /* display_scale */
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:#06070a;color:var(--t-bod);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+body{padding-bottom:56px;overflow-x:hidden;background:#06070a}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input[type=range]{-webkit-appearance:none;appearance:none;background:none}
+
+/* ═══ page chrome (outside the mockup) ═════════════════════════════════════ */
+.pg{padding:20px 26px 8px;display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+.pg h1{font:600 14px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--t-pri)}
+.pg .s{font:400 12px var(--mono);color:var(--t-met)}
+.deck{display:flex;flex-wrap:wrap;gap:10px 18px;padding:6px 26px 16px;align-items:center}
+.dk{display:flex;align-items:center;gap:8px;font:500 11px var(--mono);color:var(--t-met);
+    letter-spacing:.06em;text-transform:uppercase}
+.dk input[type=range]{width:120px;height:16px;cursor:pointer}
+.dk input[type=range]::-webkit-slider-runnable-track{height:3px;background:rgba(255,255,255,.28)}
+.dk input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:16px;
+    background:var(--acc-handle);margin-top:-6.5px;cursor:pointer}
+.dk input[type=range]::-moz-range-track{height:3px;background:rgba(255,255,255,.28)}
+.dk input[type=range]::-moz-range-thumb{width:9px;height:16px;border:0;border-radius:0;background:var(--acc-handle)}
+.dk b{font:500 11px var(--mono);color:var(--acc-val);min-width:44px;text-transform:none}
+.dk .segd{display:flex;border:1px solid var(--ctl)}
+.dk .segd button{padding:4px 9px;font:500 10.5px var(--mono);color:var(--t-met);letter-spacing:.05em}
+.dk .segd button+button{border-left:1px solid var(--ctl)}
+.dk .segd button.on{background:color-mix(in srgb,var(--acc) 30%,transparent);color:var(--acc-seg)}
+.hintline{padding:0 26px 14px;font:400 11.5px var(--mono);color:var(--t-met);line-height:1.7}
+.hintline kbd{font:500 11px var(--mono);color:var(--acc-txt);border:1px solid var(--ctl);
+  padding:1px 5px;margin:0 1px}
+
+/* ═══ the 1920x1080 surface ════════════════════════════════════════════════ */
+.vp{margin:0 26px;border:1px solid var(--rule);overflow:hidden;position:relative}
+.stage{position:relative;width:1920px;height:1080px;transform-origin:top left;overflow:hidden;
+  user-select:none;-webkit-user-select:none}
+
+/* --- the game ------------------------------------------------------------- */
+.game{position:absolute;inset:0;transition:opacity .2s}
+.sc-dusk{background:
+  radial-gradient(120% 90% at 66% 24%,rgba(255,198,124,.40) 0%,rgba(255,142,62,.12) 34%,rgba(0,0,0,0) 62%),
+  linear-gradient(180deg,#1a2742 0%,#2d3352 26%,#5d4662 46%,#8d5249 60%,#3b2a2f 74%,#13100f 100%)}
+.sc-snow{background:
+  radial-gradient(100% 80% at 50% 10%,#eef6ff 0%,#cfe2f5 40%,#9fc0dd 70%,#7ea3c4 100%)}
+.sc-cave{background:
+  radial-gradient(70% 60% at 40% 60%,rgba(90,180,160,.30) 0%,rgba(10,20,22,0) 60%),
+  linear-gradient(180deg,#080c0e 0%,#0d1416 50%,#050708 100%)}
+.g-l{position:absolute;left:0;right:0;bottom:0}
+.g1{height:40%;background:#241d2c;clip-path:polygon(0 62%,9% 40%,17% 55%,26% 26%,35% 47%,45% 18%,56% 44%,66% 30%,76% 52%,86% 34%,95% 50%,100% 40%,100% 100%,0 100%)}
+.g2{height:27%;background:#171420;clip-path:polygon(0 70%,7% 48%,15% 66%,24% 44%,33% 62%,44% 38%,53% 60%,63% 42%,73% 64%,84% 46%,93% 62%,100% 50%,100% 100%,0 100%)}
+.g3{height:15%;background:#0c0a11}
+.sc-snow .g1{background:#b9cfe2}.sc-snow .g2{background:#9db8cf}.sc-snow .g3{background:#8aa6bd}
+.sc-cave .g1{background:#0d1618}.sc-cave .g2{background:#091012}.sc-cave .g3{background:#050809}
+.g-hud{position:absolute;left:60px;bottom:60px;font:500 13px var(--mono);
+  color:rgba(255,255,255,.80);text-shadow:0 2px 7px rgba(0,0,0,.9)}
+.g-bar{width:320px;height:8px;background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.28);margin-top:7px}
+.g-bar i{display:block;height:100%;background:linear-gradient(90deg,#c8403a,#e0645a)}
+.sc-snow .g-hud{color:rgba(20,28,38,.86);text-shadow:0 1px 3px rgba(255,255,255,.6)}
+
+/* the veil: strong under the slabs, weak across the middle. The centre of the
+   screen is deliberately the least-obscured part of the surface. */
+.veil{position:absolute;inset:0;pointer-events:none;background:
+  linear-gradient(90deg,rgba(4,6,9,.82) 0px,rgba(4,6,9,.66) 560px,rgba(4,6,9,.16) 780px,
+                  rgba(4,6,9,.16) 1140px,rgba(4,6,9,.66) 1360px,rgba(4,6,9,.82) 100%)}
+
+/* --- the always-on FPS HUD (driven live by the Stage control) ------------- */
+.hud{position:absolute;padding:9px 12px;z-index:3;font-family:var(--mono);
+  background:rgba(9,11,14,.62);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.16);
+  min-width:186px}
+.hud.bd-none{background:none;backdrop-filter:none;border-color:transparent}
+.hud.bd-shadow{background:none;backdrop-filter:none;border-color:transparent;text-shadow:0 2px 6px #000}
+.hud.bd-solid{background:rgba(9,11,14,.92);backdrop-filter:none}
+.hud .r1{display:flex;align-items:baseline;gap:6px}
+.hud .n{font:600 20px var(--mono);color:#fff;line-height:1.15}
+.hud .u{font:400 10px var(--mono);color:rgba(255,255,255,.55)}
+.hud .ms{font:500 12px var(--mono);color:var(--acc-val);margin-left:auto;padding-left:16px}
+.hud .gr{display:flex;align-items:flex-end;gap:1.5px;height:22px;margin-top:6px}
+.hud .gr i{display:block;width:3px;background:var(--acc);opacity:.85}
+.hud .gr i.o{background:var(--warn)}
+.hud .pc{font:400 10.5px var(--mono);color:rgba(255,255,255,.62);margin-top:5px}
+.hud .md{font:400 11px var(--mono);color:rgba(255,255,255,.72);margin-top:5px;
+  border-top:1px solid rgba(255,255,255,.12);padding-top:5px}
+
+/* ═══ the two slabs ════════════════════════════════════════════════════════ */
+.slab{position:absolute;z-index:5;background:var(--slab);border:1px solid var(--edge);
+  backdrop-filter:blur(26px);display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 24px 70px rgba(0,0,0,.62);transition:opacity .16s ease-out}
+.stage.peek .slab{opacity:.10}
+.stage.peek .veil{opacity:.15}
+
+#spine{width:var(--spine);transform-origin:top left}
+#scope{width:var(--scope);transform-origin:top left}
+/* ladder step 1: the Scope docks flush to the Spine and they read as one slab */
+.stage.docked #scope{border-left:1px solid var(--rule);box-shadow:none}
+.stage.docked #spine{border-right:0}
+/* ladder step 2: the Scope becomes a peek panel over the Spine's right */
+.stage.overlaid #scope{box-shadow:-22px 0 64px rgba(0,0,0,.72)}
+.stage.noscope #scope{display:none}
+
+/* --- the Ledger: the outer edge of the Spine ------------------------------ */
+.ledger{position:absolute;left:0;top:0;bottom:0;width:6px;z-index:4;
+  background:linear-gradient(180deg,transparent,rgba(255,255,255,.05) 8%,rgba(255,255,255,.05) 94%,transparent);
+  border-right:1px solid var(--hair)}
+.ledger i{position:absolute;left:0;width:6px;height:4px;background:var(--acc);cursor:pointer}
+.ledger i:hover{width:12px;background:var(--acc-edge)}
+.ledger i.sel{width:12px;height:5px;background:var(--acc-seg)}
+.stage.noledger .ledger{display:none}
+
+/* --- Spine header --------------------------------------------------------- */
+.shead{padding:14px var(--pad) 12px calc(var(--pad) + 6px);border-bottom:1px solid var(--rule);flex:0 0 auto}
+.shead .l1{display:flex;align-items:baseline;gap:10px}
+.shead .ttl{font:600 11px var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--t-pri)}
+.shead .dot{width:6px;height:6px;background:var(--ok);border-radius:50%;align-self:center}
+.shead .x{margin-left:auto;font:400 14px var(--mono);color:var(--t-met);padding:0 3px}
+.shead .x:hover{color:var(--t-pri)}
+.shead .l2{display:flex;align-items:center;gap:7px;margin-top:9px;flex-wrap:wrap}
+.chip{font:500 10px var(--mono);letter-spacing:.05em;padding:3px 6px;white-space:nowrap}
+.chip.n{background:rgba(255,255,255,.09);color:var(--t-met)}
+.chip.a{background:color-mix(in srgb,var(--acc) 20%,transparent);color:var(--acc-txt)}
+.chip.w{background:rgba(255,169,77,.20);color:var(--warn)}
+.chip.d{background:rgba(255,142,126,.20);color:var(--dgr)}
+.qbar{display:flex;align-items:center;gap:9px;margin-top:11px;padding:7px 10px;
+  background:var(--sunk);border:1px solid var(--ctl);cursor:pointer}
+.qbar:hover{border-color:var(--ctlh)}
+.qbar .g{font:400 12px var(--mono);color:var(--t-met)}
+.qbar .p{font:400 12.5px var(--sans);color:var(--t-met);flex:1}
+.qbar .k{font:500 10.5px var(--mono);color:var(--t-met);border:1px solid var(--ctl);padding:1px 5px}
+
+/* --- the accordion -------------------------------------------------------- */
+.body{flex:1;overflow-y:auto;overflow-x:hidden;padding-left:6px;scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.22) transparent}
+.body::-webkit-scrollbar{width:8px}
+.body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.22)}
+.sec{font:500 10px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--t-met);
+  padding:16px var(--pad) 5px}
+
+.cat{display:flex;align-items:center;gap:11px;height:42px;padding:0 var(--pad);width:100%;
+  border-top:1px solid var(--hair);text-align:left;position:relative}
+.cat:hover{background:rgba(255,255,255,.05)}
+.cat .ic{width:18px;height:18px;flex:0 0 18px;color:var(--t-met)}
+.cat .nm{font:400 14px var(--sans);color:var(--t-bod);flex:1}
+.cat .mt{font:400 11px var(--mono);color:var(--t-met)}
+.cat .cv{font:400 11px var(--mono);color:var(--t-met);transition:transform .16s}
+.cat.open{background:rgba(255,255,255,.055)}
+.cat.open .nm{font-weight:500;color:var(--t-pri)}
+.cat.open .ic{color:var(--acc)}
+.cat.open .cv{transform:rotate(90deg);color:var(--acc)}
+.cat.open::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
+.grp{display:flex;align-items:center;gap:10px;padding:15px var(--pad) 6px}
+.grp .h{font:500 10px var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--t-met)}
+.grp .ln{flex:1;height:1px;background:var(--rule)}
+.grp .act{font:500 10.5px var(--mono);color:var(--acc-txt);letter-spacing:.04em}
+.grp .act:hover{color:var(--acc-seg)}
+
+/* ═══ THE ROW AND THE LANE ═════════════════════════════════════════════════
+   The Lane Law: every row reserves a fixed lane flush to the container's right
+   inner edge. Every control's RIGHT edge is the lane's right edge. Nothing is
+   ever drawn outside the lane. There is no alignment parameter anywhere.       */
+.row{display:flex;align-items:center;gap:16px;min-height:42px;padding:0 var(--pad);
+  width:100%;text-align:left;position:relative;border-top:1px solid var(--hair)}
+.row:hover{background:rgba(255,255,255,.045)}
+.row.tall{min-height:70px;align-items:center}
+.row.sel{background:color-mix(in srgb,var(--acc) 11%,transparent)}
+.row.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
+.row.sel .lb{color:var(--t-pri);font-weight:500}
+.row.diff::after{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:var(--acc-edge)}
+.row.sel.diff::after{width:2px;background:var(--acc-seg)}
+.lz{flex:1;min-width:0;padding:9px 0}
+.lb{font:400 13.5px var(--sans);color:var(--t-bod);display:block}
+.hn{font:400 11px var(--mono);color:var(--t-met);margin-top:3px;display:block;line-height:1.4}
+.why{font:400 11px var(--mono);color:var(--warn);margin-top:3px;display:block;line-height:1.4}
+.lane{flex:0 0 var(--lane);width:var(--lane);display:flex;justify-content:flex-end;
+  align-items:center;padding:8px 0}
+.lane-col{flex-direction:column;align-items:flex-end;gap:5px}
+
+/* ── control: the Track. One shape for selector / stepper / text / dropdown ── */
+.trk{width:100%;height:26px;display:flex;align-items:stretch;border:1px solid var(--ctl);
+  background:var(--sunk);overflow:hidden}
+.trk:hover{border-color:var(--ctlh)}
+.trk .cell{flex:1;display:flex;align-items:center;justify-content:center;min-width:0;
+  font:500 11px var(--mono);color:var(--t-met);letter-spacing:.02em;padding:0 2px}
+.trk .cell+.cell{border-left:1px solid rgba(255,255,255,.22)}
+.trk .cell.on{background:color-mix(in srgb,var(--acc) 30%,transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--acc) 90%,transparent);
+  color:var(--acc-seg);font-weight:600}
+.trk .cell:hover:not(.on){background:rgba(255,255,255,.09);color:var(--t-bod)}
+/* compressed selector: >5 options. Same divided track -- the slivers still say
+   how many options exist and where you are among them. */
+.trk.cmp .cell{flex:0 0 6px;padding:0;min-width:6px}
+.trk.cmp .cell span{display:none}
+.trk.cmp .cell.on{flex:1 1 auto;padding:0 7px;min-width:0}
+.trk.cmp .cell.on span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trk .arw{flex:0 0 20px;display:flex;align-items:center;justify-content:center;
+  font:500 12px var(--mono);color:var(--t-met);border-left:1px solid rgba(255,255,255,.22)}
+.trk .arw:first-child{border-left:0;border-right:1px solid rgba(255,255,255,.22)}
+.trk .arw:hover{background:rgba(255,255,255,.11);color:var(--t-pri)}
+.trk .num{flex:1;display:flex;align-items:baseline;justify-content:center;gap:4px}
+.trk .num b{font:500 14px var(--mono);color:var(--acc-val)}
+.trk .num s{font:400 10.5px var(--mono);color:var(--t-met);text-decoration:none}
+.trk .txt{flex:1;display:flex;align-items:center;padding:0 8px;font:400 11.5px var(--mono);
+  color:var(--t-bod);overflow:hidden;white-space:nowrap}
+
+/* ── control: the Switch. The ONLY boolean control in the product. ────────── */
+.sw{width:34px;height:17px;flex:0 0 34px;position:relative;cursor:pointer}
+.sw i{position:absolute;inset:0;border:1px solid var(--ctl);background:rgba(255,255,255,.10);
+  transition:background .09s,border-color .09s}
+.sw b{position:absolute;top:2px;left:2px;width:11px;height:11px;background:rgba(239,245,251,.72);
+  transition:transform .09s,background .09s}
+.sw.on i{background:color-mix(in srgb,var(--acc) 42%,transparent);
+  border-color:color-mix(in srgb,var(--acc) 85%,transparent)}
+.sw.on b{transform:translateX(17px);background:var(--acc-knob)}
+.sw:hover i{border-color:var(--ctlh)}
+
+/* ── control: the Slider. Measured geometry from slider-widget-spec.md ────── */
+.sl{width:100%;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.sl .vr{display:flex;align-items:baseline;gap:4px}
+.sl .vr b{font:500 15px var(--mono);color:var(--acc-val)}
+.sl .vr s{font:400 10.5px var(--mono);color:var(--t-met);text-decoration:none}
+.sl .tk{width:100%;height:16px;position:relative;cursor:ew-resize;display:flex;align-items:center}
+.sl .rail{position:absolute;left:0;right:0;height:6px;background:rgba(255,255,255,.28)}
+.sl .fill{position:absolute;height:6px;left:0;background:linear-gradient(90deg,
+  color-mix(in srgb,var(--acc) 60%,transparent),var(--acc-hi))}
+/* the Trail: default -> current, so "how far have I moved this" is visible */
+.sl .trail{position:absolute;height:6px;background:color-mix(in srgb,var(--acc-seg) 30%,transparent);
+  border-top:1px solid color-mix(in srgb,var(--acc-seg) 55%,transparent)}
+.sl .dft{position:absolute;width:1px;height:12px;background:rgba(255,255,255,.55)}
+.sl .hd{position:absolute;width:10px;height:22px;background:var(--acc-handle);
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 45%,transparent)}
+.sl .mk{display:flex;justify-content:space-between;width:100%;font:400 10px var(--mono);
+  color:var(--t-met);margin-top:-1px}
+
+/* ── control: a composite. Occupies the lane and grows DOWNWARD. ─────────── */
+.cmpst{width:100%}
+
+/* the mini Stage in the Spine's lane */
+.mstage{width:100%;aspect-ratio:16/9;position:relative;background:rgba(0,0,0,.42);
+  border:1px solid var(--ctl);overflow:hidden}
+.mstage .blk{position:absolute;background:color-mix(in srgb,var(--acc) 55%,transparent);
+  border:1px solid var(--acc-seg)}
+.mstage .gl{position:absolute;background:rgba(255,255,255,.16)}
+
+/* the big Stage in the Scope */
+.bstage{width:100%;aspect-ratio:16/9;position:relative;overflow:hidden;
+  border:1px solid var(--ctl);cursor:grab;touch-action:none}
+.bstage.drag{cursor:grabbing;border-color:var(--acc)}
+.bstage .thumb{position:absolute;inset:0;opacity:.55}
+.bstage .grid{position:absolute;inset:0;pointer-events:none}
+.bstage .grid i{position:absolute;background:rgba(255,255,255,.42)}
+.bstage .tgt{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;
+  border:1px solid rgba(239,245,251,.50);pointer-events:auto;cursor:pointer;z-index:3}
+.bstage .tgt:hover{border-color:var(--acc-seg);background:color-mix(in srgb,var(--acc) 45%,transparent)}
+.bstage .tgt.on{border-color:var(--acc-seg);background:var(--acc-seg)}
+.bstage .tgt.near{border-color:var(--acc-edge);background:color-mix(in srgb,var(--acc) 60%,transparent)}
+.bstage .blk{position:absolute;background:color-mix(in srgb,var(--acc) 40%,transparent);
+  border:1px solid var(--acc-seg);z-index:2;display:flex;flex-direction:column;
+  padding:3px 4px;gap:2px;pointer-events:none}
+.bstage .blk u{display:block;height:3px;background:var(--acc-seg);opacity:.9;text-decoration:none}
+.bstage .blk u.s{width:60%}.bstage .blk u.t{width:80%}
+.bstage .rlr{position:absolute;z-index:3;pointer-events:none;
+  border-color:var(--acc-edge);border-style:dashed}
+.bstage .rlr span{position:absolute;font:500 10px var(--mono);color:var(--acc-seg);
+  background:rgba(6,8,11,.85);padding:0 3px;white-space:nowrap}
+
+/* the hue rail */
+.hrail{width:100%;height:22px;border:1px solid var(--ctl);position:relative;cursor:ew-resize}
+.hrail .hd{position:absolute;top:-3px;width:3px;height:28px;background:#fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.7)}
+.swrow{display:flex;gap:4px;width:100%;margin-top:6px}
+.swrow button{flex:1;height:16px;border:1px solid rgba(255,255,255,.28)}
+.swrow button.on{border-color:#fff;border-width:2px}
+
+/* meters / readouts: outputs, so no hover, no state edge */
+.mtr{width:100%;display:flex;gap:1.5px;height:6px;align-items:stretch}
+.mtr i{flex:1;background:rgba(255,255,255,.12)}
+.mtr i.on{background:color-mix(in srgb,var(--acc) 85%,transparent)}
+.mtr i.hot{background:var(--warn)}
+.ro{font:500 12px var(--mono);color:var(--t-met);text-align:right;width:100%}
+.ro .dot{display:inline-block;width:6px;height:6px;background:var(--ok);border-radius:50%;
+  margin-right:6px;vertical-align:middle}
+
+/* buttons */
+.btns{display:flex;gap:6px;width:100%;justify-content:flex-end}
+.bt{height:26px;padding:0 11px;font:500 11px var(--mono);letter-spacing:.03em;
+  border:1px solid var(--ctl);color:var(--t-bod);background:var(--sunk)}
+.bt:hover{border-color:var(--ctlh);background:rgba(255,255,255,.10)}
+.bt.a{border-color:color-mix(in srgb,var(--acc) 80%,transparent);color:var(--acc-seg);
+  background:color-mix(in srgb,var(--acc) 18%,transparent)}
+.bt.d{border-color:rgba(255,142,126,.75);color:var(--dgr);background:rgba(255,142,126,.14)}
+
+/* log */
+.logbar{display:flex;gap:8px;align-items:center;padding:9px var(--pad);border-bottom:1px solid var(--rule);
+  position:sticky;top:0;background:rgba(12,14,17,.96);z-index:2}
+.logln{display:flex;gap:10px;padding:2px var(--pad);font:400 11.5px var(--mono);line-height:1.55;
+  cursor:pointer;border-left:2px solid transparent}
+.logln:hover{background:rgba(255,255,255,.05)}
+.logln.sel{background:color-mix(in srgb,var(--acc) 12%,transparent);border-left-color:var(--acc)}
+.logln.e{border-left-color:var(--dgr)}.logln.w{border-left-color:var(--warn)}
+.logln .no{color:var(--t-met);width:34px;flex:0 0 34px;text-align:right}
+.logln .tx{color:var(--t-bod);white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.logln.e .tx{color:var(--dgr)}.logln.w .tx{color:var(--warn)}
+
+/* ═══ THE SCOPE ════════════════════════════════════════════════════════════ */
+#scope .hd{display:flex;align-items:center;gap:9px;padding:13px var(--pad) 11px;
+  border-bottom:1px solid var(--rule);flex:0 0 auto}
+#scope .hd .k{font:500 10px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--t-met)}
+#scope .hd .x{margin-left:auto;font:400 13px var(--mono);color:var(--t-met);padding:0 3px}
+#scope .hd .x:hover{color:var(--t-pri)}
+#scope .sb{flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.22) transparent}
+#scope .sb::-webkit-scrollbar{width:8px}
+#scope .sb::-webkit-scrollbar-thumb{background:rgba(255,255,255,.22)}
+
+/* the probe: the top of the Scope is always a live instrument */
+.probe{padding:var(--pad);border-bottom:1px solid var(--rule);position:relative}
+.probe .plab{display:flex;align-items:center;gap:7px;margin-bottom:10px}
+.probe .plab .t{font:500 10px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--t-met)}
+.probe .plab .live{font:500 9.5px var(--mono);letter-spacing:.1em;color:var(--ok);
+  display:flex;align-items:center;gap:5px}
+.probe .plab .live::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--ok)}
+.probe .cap{font:400 11px var(--mono);color:var(--t-met);margin-top:9px;line-height:1.5}
+
+/* wipe probe: a real frame region, before | after */
+.wipe{width:100%;aspect-ratio:16/9;position:relative;overflow:hidden;border:1px solid var(--ctl);
+  cursor:ew-resize;touch-action:none}
+.wipe .lyr{position:absolute;inset:0;background-size:cover;background-position:center}
+.wipe .hdl{position:absolute;top:0;bottom:0;width:1px;background:var(--acc-seg);z-index:3}
+.wipe .hdl::after{content:"";position:absolute;left:-5px;top:50%;margin-top:-14px;width:11px;height:28px;
+  background:var(--acc-seg)}
+.wipe .tag{position:absolute;bottom:5px;font:500 10px var(--mono);letter-spacing:.08em;
+  color:#fff;background:rgba(0,0,0,.72);padding:2px 5px;z-index:4}
+.wipe .tag.l{left:5px}.wipe .tag.r{right:5px}
+
+/* trace probe */
+.trace{width:100%;height:104px;border:1px solid var(--ctl);background:rgba(0,0,0,.30);position:relative;
+  overflow:hidden}
+.trace canvas{display:block;width:100%;height:100%}
+.trace .cl{position:absolute;left:0;right:0;height:1px;background:var(--warn)}
+.trace .cl span{position:absolute;right:3px;top:-13px;font:500 10px var(--mono);color:var(--warn);
+  background:rgba(6,8,11,.85);padding:0 3px}
+
+/* curve probe */
+.curve{width:100%;height:150px;border:1px solid var(--ctl);background:rgba(0,0,0,.30)}
+
+/* delta probe: the universal fallback, generated from the binding alone */
+.delta{width:100%;border:1px solid var(--ctl);background:rgba(0,0,0,.25);padding:14px 14px 12px}
+.delta .big{font:600 30px var(--mono);color:var(--acc-val);line-height:1}
+.delta .big s{font:400 13px var(--mono);color:var(--t-met);text-decoration:none;margin-left:5px}
+.delta .nl{position:relative;height:24px;margin-top:14px}
+.delta .nl .r{position:absolute;left:0;right:0;top:11px;height:2px;background:rgba(255,255,255,.28)}
+.delta .nl .d{position:absolute;top:5px;width:1px;height:14px;background:rgba(255,255,255,.55)}
+.delta .nl .c{position:absolute;top:3px;width:3px;height:18px;background:var(--acc-handle)}
+.delta .nl .sp{position:absolute;top:11px;height:2px;background:color-mix(in srgb,var(--acc-seg) 45%,transparent)}
+.delta .lg{display:flex;justify-content:space-between;font:400 10px var(--mono);color:var(--t-met);margin-top:2px}
+
+/* scope body sections */
+.sblk{padding:15px var(--pad);border-bottom:1px solid var(--hair)}
+.sblk h3{font:500 10px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--t-met);
+  margin-bottom:9px}
+.sblk .ttl{font:500 17px var(--sans);color:var(--t-pri);line-height:1.3}
+.sblk .help{font:400 13px var(--sans);color:var(--t-bod);line-height:1.62;margin-top:8px}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font:400 11.5px var(--mono);
+  align-items:baseline}
+.facts dt{color:var(--t-met);white-space:nowrap}
+.facts dd{color:var(--t-bod);text-align:right;word-break:break-word}
+.facts dd.a{color:var(--acc-val)}
+.jump{display:flex;flex-wrap:wrap;gap:5px}
+.jump button{font:400 11px var(--mono);color:var(--acc-txt);border-bottom:1px solid
+  color-mix(in srgb,var(--acc) 45%,transparent);padding-bottom:1px}
+.jump button:hover{color:var(--acc-seg)}
+#scope .row{padding:0 var(--pad)}
+#scope .lane{flex:0 0 172px;width:172px}
+
+/* ═══ command palette ══════════════════════════════════════════════════════ */
+.pal{position:absolute;left:50%;top:150px;transform:translateX(-50%);width:720px;z-index:20;
+  background:rgba(12,14,17,.97);border:1px solid var(--edge);backdrop-filter:blur(26px);
+  box-shadow:0 30px 90px rgba(0,0,0,.75);display:none;flex-direction:column;max-height:620px}
+.stage.pal-on .pal{display:flex}
+.pal .q{display:flex;align-items:center;gap:11px;padding:14px 18px;border-bottom:1px solid var(--rule)}
+.pal .q .g{font:400 15px var(--mono);color:var(--acc)}
+.pal .q input{flex:1;background:none;border:0;outline:0;font:400 16px var(--sans);color:var(--t-pri)}
+.pal .q input::placeholder{color:var(--t-met)}
+.pal .q .c{font:400 11px var(--mono);color:var(--t-met)}
+.pal .rs{overflow-y:auto}
+.pal .pr{display:flex;align-items:center;gap:12px;padding:9px 18px;cursor:pointer;width:100%;text-align:left}
+.pal .pr:hover{background:rgba(255,255,255,.06)}
+.pal .pr.on{background:color-mix(in srgb,var(--acc) 16%,transparent);
+  box-shadow:inset 2px 0 0 var(--acc)}
+.pal .pr .pt{font:400 14px var(--sans);color:var(--t-bod);flex:0 0 auto}
+.pal .pr.on .pt{color:var(--t-pri)}
+.pal .pr .pt mark{background:none;color:var(--acc-seg);font-weight:600}
+.pal .pr .pc{font:400 11px var(--mono);color:var(--t-met);flex:1}
+.pal .pr .pv{font:500 11.5px var(--mono);color:var(--acc-val)}
+.pal .lg{padding:9px 18px;border-top:1px solid var(--rule);font:400 10.5px var(--mono);color:var(--t-met);
+  display:flex;gap:16px}
+
+/* footer of the spine */
+.foot{flex:0 0 auto;border-top:1px solid var(--rule);padding:9px var(--pad) 9px calc(var(--pad) + 6px);display:flex;
+  gap:14px;align-items:center;font:400 10.5px var(--mono);color:var(--t-met)}
+.foot b{color:var(--acc-txt);font-weight:500}
+
+/* notes under the mockup */
+.notes{padding:22px 26px 0;max-width:1180px}
+.notes h2{font:600 12px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--t-pri);
+  margin:22px 0 9px}
+.notes p{font:400 13.5px var(--sans);color:var(--t-bod);line-height:1.7;margin-bottom:9px}
+.notes li{font:400 13.5px var(--sans);color:var(--t-bod);line-height:1.7;margin:0 0 6px 18px}
+.notes code{font:400 12px var(--mono);color:var(--acc-txt)}
+.notes table{border-collapse:collapse;margin:8px 0 14px;font:400 12px var(--mono)}
+.notes td,.notes th{border:1px solid var(--rule);padding:5px 10px;text-align:left;color:var(--t-bod)}
+.notes th{color:var(--t-met);font-weight:500;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+</style>
+</head>
+<body>
+
+<div class="pg">
+  <h1>The Bench</h1>
+  <span class="s">Direction E3 — a reinvention of the Inspector Rail · gamescope-ritz settings overlay · 1920×1080</span>
+</div>
+
+<div class="deck">
+  <label class="dk">display_scale <input id="uds" type="range" min="0.5" max="2" step="0.05" value="1"><b id="udsv">1.00×</b></label>
+  <label class="dk">accent hue <input id="uhue" type="range" min="0" max="360" step="1" value="218"><b id="uhuev">218°</b></label>
+  <span class="dk">game
+    <span class="segd" id="uscene">
+      <button data-v="sc-dusk" class="on">dusk</button><button data-v="sc-snow">snow</button><button data-v="sc-cave">cave</button><button data-v="off">off</button>
+    </span>
+  </span>
+  <span class="dk">scope
+    <span class="segd" id="uscope">
+      <button data-v="auto" class="on">auto</button><button data-v="docked">docked</button><button data-v="overlaid">peek</button><button data-v="noscope">hidden</button>
+    </span>
+  </span>
+  <span class="dk">ledger
+    <span class="segd" id="uledger"><button data-v="on" class="on">on</button><button data-v="off">off</button></span>
+  </span>
+  <button class="bt" id="upeek">hold to peek</button>
+  <button class="bt" id="ureset">reset all values</button>
+  <span class="chip a" id="stepchip" style="margin-left:auto">ladder 0</span>
+</div>
+
+<div class="hintline">
+  <kbd>click a row</kbd> drives the Scope live ·
+  <kbd>Ctrl</kbd>+<kbd>K</kbd> command palette ·
+  <kbd>Alt</kbd> (hold) peek through both slabs ·
+  <kbd>↑</kbd><kbd>↓</kbd> move selection · <kbd>←</kbd><kbd>→</kbd> adjust the selected value ·
+  <kbd>Ctrl</kbd>+<kbd>D</kbd> reset row ·
+  <b>try SYSTEM ▸ Monitor ▸ Placement</b> — drag the block on the Scope's Stage and watch the real HUD move.
+</div>
+
+<div class="vp" id="vp">
+  <div class="stage" id="stg">
+    <div class="game sc-dusk" id="game">
+      <i class="g-l g1"></i><i class="g-l g2"></i><i class="g-l g3"></i>
+      <div class="g-hud">MELINA<div class="g-bar"><i style="width:64%"></i></div>
+        <div class="g-bar" style="width:220px"><i style="width:41%;background:linear-gradient(90deg,#3a7cc8,#5aa0e0)"></i></div></div>
+    </div>
+    <div class="veil" id="veil"></div>
+    <div class="hud" id="hud"></div>
+
+    <div class="slab" id="spine">
+      <div class="ledger" id="ledger"></div>
+      <div class="shead">
+        <div class="l1"><span class="dot"></span><span class="ttl">gamescope-ritz</span>
+          <button class="x" title="close overlay">✕</button></div>
+        <div class="l2">
+          <span class="chip n">ELDEN RING</span><span class="chip n">app 1245620</span>
+          <span class="chip a" id="cfgchip">games/1245620.json</span>
+          <span class="chip a" id="diffchip">3 changed</span>
+        </div>
+        <div class="qbar" id="qbar"><span class="g">⌕</span><span class="p">Search every setting…</span><span class="k">Ctrl K</span></div>
+      </div>
+      <div class="body" id="spinebody"></div>
+      <div class="foot"><span>TAB <b>scope</b></span><span>^D <b>reset row</b></span><span>ALT <b>peek</b></span>
+        <span style="margin-left:auto">^I <b>scope</b></span></div>
+    </div>
+
+    <div class="slab" id="scope">
+      <div class="hd"><span class="k">Scope</span><span class="chip n" id="scopekind">—</span>
+        <button class="x" id="scopex" title="hide the Scope (Ctrl+I)">✕</button></div>
+      <div class="sb" id="scopebody"></div>
+    </div>
+
+    <div class="pal" id="pal">
+      <div class="q"><span class="g">⌕</span><input id="palq" placeholder="Search every setting by name, key or keyword…" autocomplete="off"><span class="c" id="palc"></span></div>
+      <div class="rs" id="palrs"></div>
+      <div class="lg"><span>↑↓ move</span><span>↵ go</span><span>esc close</span><span style="margin-left:auto">one registration → row · palette entry · Scope page</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="notes" id="notes"></div>
+
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE REGISTRY.  One declaration per setting.  It yields, with no further
+   work: the Spine row, the command-palette entry, the Scope page, the reset
+   affordance, the Ledger tick and the "changed" count.  Mirrors API.md.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const ICONS = {
+  display:'<path d="M2 4h14v9H2z"/><path d="M6 16h6"/><path d="M9 13v3"/>',
+  fps:'<path d="M2 13l4-6 3 4 3-7 4 9"/>',
+  hdr:'<circle cx="9" cy="9" r="5"/><path d="M9 1v3M9 14v3M1 9h3M14 9h3M4 4l2 2M12 12l2 2M14 4l-2 2M6 12l-2 2"/>',
+  shader:'<path d="M9 2l7 4v6l-7 4-7-4V6z"/><path d="M9 9l7-3M9 9v7M9 9L2 6"/>',
+  audio:'<path d="M3 7h3l4-3v10l-4-3H3z"/><path d="M13 6c1.2 1.2 1.2 4.8 0 6"/>',
+  monitor:'<path d="M2 3h14v12H2z"/><path d="M4 11l3-4 2 3 2-5 3 6"/>',
+  log:'<path d="M4 2h10v14H4z"/><path d="M6 6h6M6 9h6M6 12h4"/>',
+  paint:'<path d="M3 15c0-3 2-4 4-4 3 0 3-2 3-4s2-4 4-4 3 2 3 4c0 5-5 8-9 8-3 0-5-1-5 0z"/>',
+  profile:'<path d="M2 4h14v10H2z"/><path d="M2 7h14"/><path d="M5 10h5"/>',
+  game:'<path d="M6 4h6l3 5-3 5H6L3 9z"/><path d="M9 6v6M6.5 9h5"/>'
+};
+const OPT = (a)=>a.map(s=>({v:s,l:s}));
+
+const REG = [
+{sec:'DISPLAY',id:'display.upscaling',title:'Upscaling',icon:'display',items:[
+  {g:'Scaling filter'},
+  {id:'display.filter',label:'Filter',kind:'select',def:2,opts:OPT(['linear','nearest','fsr','nis','pixel']),
+   keys:'upscale scaling resample fsr nis crisp',
+   help:'How the game’s image is resampled to the output resolution. FSR and NIS add a sharpening pass; pixel is a nearest-neighbour integer path for pixel art.',
+   probe:{t:'wipe',a:'blur(1.1px) saturate(.95)',b:'contrast(1.14) saturate(1.05)',la:'linear',lb:'fsr',
+          cap:'A 240×135 region of the live frame, resampled both ways. Drag the divider.'}},
+  {id:'display.sharpness',label:'Sharpness',kind:'slider',def:2,min:0,max:20,step:1,hint:'higher = sharper',
+   keys:'sharpen rcas cas clarity ringing',
+   help:'Strength of FSR’s RCAS / NIS’s sharpening pass. Too high adds ringing around high-contrast edges.',
+   why:()=>[2,3,4].includes(V['display.filter'])?null:'the scaling filter is not fsr, nis or pixel',
+   related:['display.filter'],
+   probe:{t:'wipe',a:'none',b:'contrast(1.35) saturate(1.06)',la:'0',lb:'live',
+          cap:'Left half is sharpness 0. The right half tracks the slider as you drag it.'}},
+  {id:'display.scaler',label:'Scaler',kind:'select',def:0,opts:OPT(['auto','fit','fill','stretch','integer']),
+   keys:'aspect letterbox stretch fit fill integer',
+   help:'How the scaled image is fitted into the output. Auto picks fit unless the game asked for something else.'},
+  {g:'Presentation'},
+  {id:'display.allow_tearing',label:'Allow Tearing',kind:'switch',def:false,
+   keys:'immediate flips vsync latency tear',
+   help:'Presents frames the moment they are ready instead of waiting for vblank. Lowest latency; a horizontal seam can appear mid-screen.'},
+  {id:'display.force_grab_cursor',label:'Force Grab Cursor',kind:'switch',def:false,
+   keys:'mouse pointer capture relative grab',
+   help:'Keeps the pointer confined to the game even when it did not ask for a relative-motion grab.'}
+]},
+
+{sec:'DISPLAY',id:'display.frame_limiter',title:'Frame Limiter',icon:'fps',items:[
+  {g:'Frame limiter'},
+  {id:'display.fps_limit',label:'FPS Limit',kind:'number',def:0,min:0,max:360,step:5,unit:'fps',zero:'Unlimited',
+   keys:'frame rate cap limiter throttle battery',
+   help:'Caps presentation rate. 0 removes the cap entirely. Applied live through the debug_set_fps_limit convar.',
+   probe:{t:'trace',cap:'Live frametime, last 240 frames. The orange line is the cap you are setting.'}},
+  {id:'display.adaptive_sync',label:'VRR / Adaptive Sync',kind:'switch',def:false,
+   keys:'vrr freesync gsync adaptive refresh',
+   help:'Lets the display’s refresh rate follow the game’s frame rate instead of the other way round.',
+   why:()=>V['display.fps_limit']===0?null:'a fixed FPS limit is set — VRR has nothing to follow',
+   related:['display.fps_limit'],
+   probe:{t:'trace',vrr:true,cap:'Refresh rate following presentation. Flat = fixed refresh.'}},
+  {id:'display.refresh_range',label:'Refresh range',kind:'readout',
+   get:()=>'48 – 144 Hz',live:()=>true,keys:'refresh hz range vrr window',
+   help:'The VRR window the connected display reports. Frame rates below the floor get low-framerate compensation.'}
+]},
+
+{sec:'DISPLAY',id:'display.hdr',title:'HDR',icon:'hdr',items:[
+  {g:'Output'},
+  {id:'display.hdr',label:'HDR',kind:'switch',def:false,keys:'hdr pq st2084 wide gamut hdr10',
+   help:'Drives the display in HDR10 (PQ / Rec.2020). SDR content is mapped into it using the two settings below.'},
+  {id:'display.sdr_gamut_wideness',label:'SDR Gamut Wideness',kind:'slider',def:0,min:0,max:1,step:.01,dec:2,
+   keys:'gamut saturation rec709 rec2020 wide',
+   why:()=>V['display.hdr']?null:'HDR is off — this does nothing until it is on',
+   help:'How far SDR content is stretched towards the display’s full gamut. 0 keeps Rec.709 exactly; 1 fills the panel.',
+   probe:{t:'wipe',a:'none',b:'saturate(1.5)',la:'rec.709',lb:'wide',cap:'The same frame at both ends of the range.'}},
+  {id:'display.sdr_on_hdr_nits',label:'SDR-on-HDR Brightness',kind:'slider',def:400,min:50,max:1000,step:10,unit:'nits',
+   keys:'nits brightness paper white sdr luminance',
+   why:()=>V['display.hdr']?null:'HDR is off — this does nothing until it is on',
+   help:'The luminance SDR white is mapped to when the output is HDR. 203 nits is the reference; most people prefer more.',
+   probe:{t:'curve',cap:'The PQ transfer curve. The marker is where SDR white lands.'}},
+  {id:'display.hdr_input_gain',label:'HDR Input Gain',kind:'slider',def:1,min:0,max:4,step:.05,dec:2,unit:'×',
+   keys:'gain exposure hdr multiplier',
+   why:()=>V['display.hdr']?null:'HDR is off — this does nothing until it is on',
+   help:'A linear multiplier applied to HDR content before tonemapping. Use it when a game grades far too dark or too hot.'},
+  {id:'display.sdr_input_gain',label:'SDR Input Gain',kind:'slider',def:1,min:0,max:4,step:.05,dec:2,unit:'×',
+   keys:'gain exposure sdr multiplier',
+   why:()=>V['display.hdr']?null:'HDR is off — this does nothing until it is on',
+   help:'The same multiplier for SDR content on an HDR output.'},
+  {g:'Focused app'},
+  {id:'display.hdr_meta',label:'App HDR metadata',kind:'readout',
+   get:()=>V['display.hdr']?'ST2084 · 1000 / 0.005 nits':'not signalling',live:()=>!!V['display.hdr'],
+   keys:'metadata mastering luminance st2084 maxcll',
+   help:'What the focused application declares about its mastering display. Read-only — the overlay never invents this.'}
+]},
+
+{sec:'IMAGE',id:'image.shaders',title:'Shaders',icon:'shader',badge:()=>[V['fx.vibrancy'],V['fx.presharpen'],V['fx.adaptive']].filter(Boolean).length+' on',items:[
+  {g:'ReShade effects'},
+  {id:'fx.vibrancy',label:'Vibrancy',kind:'switch',def:false,hint:'gamescope-ritz.fx',
+   keys:'saturation vibrance colour color pop',
+   help:'Raises saturation of muted colours while leaving already-saturated ones alone.',
+   probe:{t:'wipe',a:'none',b:'saturate(1.45)',la:'off',lb:'on',cap:'Live frame, effect bypassed on the left.'},
+   expert:[{g:'Parameters'},
+     {id:'fx.vibrancy.strength',label:'Strength',kind:'slider',def:0.35,min:-1,max:1,step:.01,dec:2},
+     {id:'fx.vibrancy.skin',label:'Protect skin tones',kind:'switch',def:true}]},
+  {id:'fx.presharpen',label:'Pre-Sharpen',kind:'switch',def:false,hint:'runs before upscaling',
+   keys:'sharpen presharpen detail edges',
+   help:'A light sharpening pass applied before the scaler, so the upscaler has crisper input to work from.',
+   probe:{t:'wipe',a:'none',b:'contrast(1.25)',la:'off',lb:'on',cap:'Live frame, effect bypassed on the left.'},
+   expert:[{g:'Parameters'},
+     {id:'fx.presharpen.strength',label:'Strength',kind:'slider',def:0.5,min:-1,max:1,step:.01,dec:2}]},
+  {id:'fx.adaptive',label:'Adaptive Brightness',kind:'switch',def:false,hint:'6 tuning values in the Scope',
+   keys:'adaptive brightness eye exposure auto gain',
+   help:'Continuously re-exposes the frame towards a target average brightness, the way an eye adapts walking out of a cave.',
+   probe:{t:'trace',adapt:true,cap:'Measured scene luminance (white) against the applied gain (accent).'},
+   expert:[{g:'Adaptation'},
+     {id:'fx.adaptive.target',label:'Target brightness',kind:'slider',def:0.42,min:0,max:1,step:.01,dec:2},
+     {id:'fx.adaptive.mingain',label:'Min gain',kind:'slider',def:0.8,min:0,max:2,step:.05,dec:2,unit:'×'},
+     {id:'fx.adaptive.maxgain',label:'Max gain',kind:'slider',def:1.6,min:0,max:4,step:.05,dec:2,unit:'×'},
+     {id:'fx.adaptive.up',label:'Brighten speed',kind:'slider',def:1.2,min:0,max:5,step:.1,dec:1},
+     {id:'fx.adaptive.down',label:'Darken speed',kind:'slider',def:2.4,min:0,max:5,step:.1,dec:1},
+     {id:'fx.adaptive.skin',label:'Protect skin tones',kind:'switch',def:false}]},
+  {note:'Effects are SDR-only for now — disable HDR to use them.'}
+]},
+
+{sec:'AUDIO',id:'audio.mixer',title:'Mixer',icon:'audio',badge:()=>'2 live',items:[
+  {g:'Game audio'},
+  {id:'audio.stream',label:'Stream',kind:'select',def:3,
+   opts:[{v:'auto',l:'auto'},{v:'334',l:'334 · eldenring.exe'},{v:'287',l:'287 · Floorp'},
+         {v:'301',l:'301 · wine64-preloader'},{v:'318',l:'318 · Spotify'},{v:'340',l:'340 · Discord'},
+         {v:'351',l:'351 · mpv'},{v:'362',l:'362 · OBS monitor'},{v:'377',l:'377 · Firefox'}],
+   keys:'stream pipewire sink source app which output',
+   help:'Which PipeWire stream the volume control drives. Auto follows the focused game; a manual pick sticks until you clear it.',
+   probe:{t:'meter',cap:'Live peak, both channels, from the selected stream.'}},
+  {id:'audio.volume',label:'Volume',kind:'slider',def:100,min:0,max:150,step:1,unit:'%',
+   keys:'volume loud gain level',
+   help:'PipeWire node volume for the selected stream. Above 100% is software gain and can clip.',
+   probe:{t:'meter',cap:'Live peak, both channels. Red segments are above −3 dBFS.'}},
+  {id:'audio.mute',label:'Mute',kind:'switch',def:false,keys:'mute silence off',
+   help:'Mutes the selected stream only — not the whole system.'},
+  {id:'audio.pw',label:'PipeWire volume',kind:'readout',get:()=>(V['audio.mute']?'muted':(V['audio.volume']/100).toFixed(2)+' lin'),
+   live:()=>!V['audio.mute'],keys:'pipewire wpctl node volume linear',
+   help:'What wpctl reports for the node right now, so you can tell the overlay and the system apart.'},
+  {id:'audio.clear',label:'Manual override',kind:'actions',
+   acts:[{l:'clear override',k:'n'}],keys:'clear override reset stream manual',
+   help:'Drops the manual stream pick and returns to following the focused game.'}
+]},
+
+{sec:'SYSTEM',id:'system.monitor',title:'Monitor',icon:'monitor',badge:()=>{
+   const n=['mod.fps','mod.cpu','mod.gpu','mod.media'].filter(k=>V[k]).length; return n+' modules';},items:[
+  {g:'Visibility'},
+  {id:'monitor.show',label:'Show System Monitor',kind:'switch',def:true,keys:'show hide monitor hud overlay',
+   help:'The always-on readout drawn over the game. Independent of this settings surface.'},
+  {g:'Placement',act:'centre'},
+  {id:'monitor.anchor',label:'Placement',kind:'stage',def:'top-right  32 / 32',keys:'anchor placement position corner margin offset where',
+   help:'Which screen edge the monitor is pinned to, and how far in from it. Drag the block on the Scope’s Stage, or click one of the nine anchors.',
+   probe:{t:'stage',cap:'This is the real output at 1:12. Drag the block; margins follow the distance to the anchor.'}},
+  {g:'Modules',act:'all · none'},
+  {id:'mod.fps',label:'FPS module',kind:'switch',def:true,hint:'frame rate, frametime, percentiles',keys:'fps frame rate module',
+   help:'Frame rate, frametime and the percentile row. Always drawn first in the fixed module order.'},
+  {id:'mod.cpu',label:'CPU module',kind:'switch',def:false,hint:'load, RAM',keys:'cpu load ram memory module',
+   help:'One-minute average CPU load and resident memory.'},
+  {id:'mod.gpu',label:'GPU module',kind:'switch',def:true,hint:'usage, VRAM, temp, power',keys:'gpu vram temperature power amdgpu module',
+   help:'Read from amdgpu’s hwmon node. Shows nothing on a system without one rather than guessing.'},
+  {id:'mod.media',label:'Media module',kind:'switch',def:false,hint:'now playing',keys:'media music now playing mpris',
+   help:'Current MPRIS track. Reserves no space at all when nothing is playing.'},
+  {g:'FPS module rows',act:'all · none'},
+  {id:'row.rate',label:'Frame rate',kind:'switch',def:true,keys:'frame rate fps row'},
+  {id:'row.ms',label:'Frametime readout (ms)',kind:'switch',def:true,keys:'frametime ms readout row'},
+  {id:'row.graph',label:'Frametime graph',kind:'switch',def:true,keys:'frametime graph history row'},
+  {id:'row.pct',label:'Percentile row (1% / 0.1% / avg)',kind:'switch',def:false,keys:'percentile low 1% 0.1% average row'},
+  {g:'Style'},
+  {id:'monitor.font',label:'Font size',kind:'slider',def:14,min:9,max:28,step:1,unit:'px',keys:'font size text scale',
+   help:'Type size of the whole monitor stack. Every module scales together so the column stays one width.'},
+  {id:'monitor.spacing',label:'Module spacing',kind:'number',def:6,min:0,max:32,step:1,unit:'px',keys:'spacing gap padding modules'},
+  {id:'monitor.opacity',label:'Text opacity',kind:'slider',def:.85,min:.2,max:1,step:.01,dec:2,keys:'opacity alpha text transparency'},
+  {id:'monitor.backdrop',label:'Backdrop',kind:'select',def:3,opts:OPT(['none','shadow','solid','blur']),
+   keys:'backdrop background plate shadow blur legibility',
+   help:'What sits behind the monitor text. Shadow is cheapest; blur reads over anything but costs a pass.'},
+  {id:'monitor.bd_opacity',label:'Backdrop opacity',kind:'slider',def:.62,min:0,max:1,step:.01,dec:2,
+   why:()=>V['monitor.backdrop']>=2?null:'the backdrop is set to none or shadow',keys:'backdrop opacity alpha'},
+  {id:'monitor.bd_pad',label:'Backdrop padding',kind:'number',def:9,min:0,max:32,step:1,unit:'px',
+   why:()=>V['monitor.backdrop']>=2?null:'the backdrop is set to none or shadow',keys:'padding inset backdrop'},
+  {id:'monitor.blend',label:'Blend mode',kind:'select',def:0,opts:OPT(['alpha','additive','inverted']),
+   keys:'blend additive inverted glow mode',
+   help:'How the monitor is composited. Inverted flips whatever is underneath, which stays legible on any background.'}
+]},
+
+{sec:'SYSTEM',id:'system.log',title:'Log',icon:'log',badge:()=>'12 · 2 err',items:[{kind:'log'}]},
+
+{sec:'SETUP',id:'setup.appearance',title:'Appearance',icon:'paint',items:[
+  {g:'Theme'},
+  {id:'ui.accent_hue',label:'Accent hue',kind:'hue',def:218,min:0,max:360,step:1,unit:'°',
+   keys:'accent colour color hue theme tint',
+   help:'One OKLCH hue drives the whole accent family. Lightness and chroma stay fixed per token, so no hue can wash out or blow out.',
+   probe:{t:'hue',cap:'Every accent token, recomputed at the hue you are choosing.'}},
+  {id:'ui.scale',label:'UI Scale',kind:'slider',def:1,min:.5,max:2,step:.05,dec:2,unit:'×',
+   keys:'scale size dpi zoom display_scale',
+   help:'Multiplies every base unit in the overlay. The font atlas is re-baked when this changes.'},
+  {g:'Over the game'},
+  {id:'ui.unfocused',label:'Unfocused opacity',kind:'slider',def:.90,min:.3,max:1,step:.01,dec:2,keys:'opacity unfocused fade transparency'},
+  {id:'ui.blur',label:'Backdrop blur',kind:'slider',def:1,min:0,max:1,step:.01,dec:2,keys:'blur backdrop frosted'},
+  {id:'ui.darken',label:'Backdrop darkening',kind:'slider',def:.80,min:0,max:1,step:.01,dec:2,keys:'darken veil dim contrast',
+   help:'How far the game behind the slabs is pulled down. This is the setting the whole contrast budget rests on — the helper refuses values that would put body text below 4.5:1.'},
+  {id:'ui.gutter',label:'Keep centre clear',kind:'switch',def:true,hint:'the game stays visible between the slabs',
+   keys:'gutter centre clear game visible preview',
+   help:'Pins the Spine and the Scope to opposite screen edges and leaves the middle of the frame uncovered, so the game itself is the preview surface. Turning it off docks the two slabs into one panel.'}
+]},
+
+{sec:'SETUP',id:'setup.profiles',title:'Profiles',icon:'profile',badge:()=>'2 saved',items:[
+  {g:'Saved profiles'},
+  {id:'prof.pick',label:'Profile',kind:'select',def:0,opts:[{v:'a',l:'Handheld 40 fps'},{v:'b',l:'Docked quality'}],
+   keys:'profile preset saved load apply',
+   help:'A named snapshot of every setting. Applying one writes the whole set at once.'},
+  {id:'prof.name',label:'New profile name',kind:'text',def:'',ph:'e.g. Handheld 40 fps',
+   keys:'name new profile create save',
+   help:'Letters, digits, space, hyphen and underscore only.'},
+  {id:'prof.acts',label:'Profile actions',kind:'actions',
+   acts:[{l:'save',k:'a'},{l:'rename',k:'n'},{l:'delete…',k:'d'}],keys:'save rename delete profile'}
+]},
+
+{sec:'SETUP',id:'setup.pergame',title:'Per-Game',icon:'game',items:[
+  {g:'This game'},
+  {id:'cfg.override',label:'Override Global Config',kind:'switch',def:true,
+   keys:'override per game config routing file',
+   help:'When on, everything you change here is written to games/1245620.json instead of global.json. The Scope always names the destination file for the row you have selected.'},
+  {id:'cfg.appid',label:'Resolved app id',kind:'readout',get:()=>'1245620 · ELDEN RING',live:()=>true,
+   keys:'appid steam game id resolved'},
+  {id:'cfg.acts',label:'Config actions',kind:'actions',
+   acts:[{l:'copy from another game',k:'n'},{l:'delete saved config…',k:'d'}],
+   keys:'copy delete config saved destroy'}
+]}
+];
+
+/* ═══ value store ══════════════════════════════════════════════════════════ */
+const V={}, DEF={}, IDX={};
+function walk(cb){ REG.forEach(c=>c.items.forEach(it=>{ if(it.id) cb(c,it);
+  (it.expert||[]).forEach(e=>{ if(e.id) cb(c,e,it); }); })); }
+walk((c,it,parent)=>{ if(it.kind==='readout'||it.kind==='actions'||it.kind==='log') { IDX[it.id]=[c,it,parent]; return; }
+  DEF[it.id]=it.def; V[it.id]=it.def; IDX[it.id]=[c,it,parent]; });
+V['monitor.anchor_v']=0; V['monitor.anchor_h']=2; V['monitor.margin_v']=32; V['monitor.margin_h']=32;
+DEF['monitor.anchor_v']=0; DEF['monitor.anchor_h']=2; DEF['monitor.margin_v']=32; DEF['monitor.margin_h']=32;
+IDX['monitor.anchor']=IDX['monitor.anchor']||[REG[5],REG[5].items.find(i=>i.id==='monitor.anchor'),null];
+/* three settings pre-changed, so the mockup opens with something to show */
+V['display.sharpness']=7; V['display.filter']=2; V['mod.cpu']=true;
+V['display.fps_limit']=90; V['monitor.margin_h']=48; V['monitor.font']=16;
+
+function isDiff(id){
+  if(id==='monitor.anchor') return V['monitor.anchor_v']!==DEF['monitor.anchor_v']||V['monitor.anchor_h']!==DEF['monitor.anchor_h']
+    ||V['monitor.margin_v']!==DEF['monitor.margin_v']||V['monitor.margin_h']!==DEF['monitor.margin_h'];
+  return (id in DEF) && V[id]!==DEF[id];
+}
+function allDiff(){ const o=[]; walk((c,it,par)=>{ if(!par&&isDiff(it.id)) o.push(it.id); }); return o; }
+
+/* ═══ formatting ═══════════════════════════════════════════════════════════ */
+function fmt(it,v){
+  const explicit=(arguments.length>1);
+  if(v===undefined) v=V[it.id];
+  switch(it.kind){
+    case 'switch': return v?'on':'off';
+    case 'select': return it.opts[v].l;
+    case 'text': return v?v:'—';
+    case 'number': return (it.zero&&v===0)?it.zero:v+(it.unit?' '+it.unit:'');
+    case 'hue': return v+'°';
+    case 'stage': if(explicit&&typeof v==='string') return v;
+                  return ANCH[V['monitor.anchor_v']*3+V['monitor.anchor_h']]+'  '+V['monitor.margin_v']+' / '+V['monitor.margin_h'];
+    case 'readout': return it.get();
+    case 'slider': return (it.dec?v.toFixed(it.dec):Math.round(v))+(it.unit?' '+it.unit:'');
+    default: return '';
+  }
+}
+const ANCH=['top-left','top-center','top-right','center-left','center','center-right',
+            'bottom-left','bottom-center','bottom-right'];
+
+/* ═══ state ════════════════════════════════════════════════════════════════ */
+const S={ open:'display.upscaling', sel:'display.sharpness', scale:1, hue:218,
+          scene:'sc-dusk', scopeMode:'auto', ledger:true, peek:false, pal:false, palSel:0,
+          wipe:.5, logSel:4 };
+const $=(s,r)=>(r||document).querySelector(s), $$=(s,r)=>[...(r||document).querySelectorAll(s)];
+const el=(t,c,h)=>{const e=document.createElement(t); if(c)e.className=c; if(h!==undefined)e.innerHTML=h; return e;};
+const stg=$('#stg');
+
+/* A drag that survives the DOM being rebuilt under it. Immediate-mode UIs have
+   the same problem in reverse (the widget is re-created every frame), which is
+   why ImGui keeps the active-id and the grab offset in its own context rather
+   than on the widget. Same trick here: capture the rect once, listen on the
+   document, and let the row be thrown away and rebuilt while the drag runs. */
+function beginDrag(rect,onMove,ev){
+  const mv=e=>onMove(e,rect);
+  const up=()=>{ document.removeEventListener('pointermove',mv);
+                 document.removeEventListener('pointerup',up);
+                 document.removeEventListener('pointercancel',up); DRAG=null; };
+  document.addEventListener('pointermove',mv);
+  document.addEventListener('pointerup',up);
+  document.addEventListener('pointercancel',up);
+  DRAG=up; mv(ev);
+}
+let DRAG=null;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONTROLS.  Every one of these returns a node that fills the LANE and whose
+   right edge IS the lane's right edge.  No control takes an alignment or a
+   width.  This is the Lane Law, expressed as the only geometry available.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function ctlSwitch(it,dis){
+  const e=el('div','sw'+(V[it.id]?' on':''),'<i></i><b></b>');
+  if(!dis) e.onclick=ev=>{ ev.stopPropagation(); select(it.id); V[it.id]=!V[it.id]; render(); };
+  return e;
+}
+/* The Selector is ONE control with two densities. The helper measures the
+   labels against the lane and picks; a call site never chooses, and never gets
+   a cramped segmented row. The compressed form is not a dropdown: the slivers
+   still say how many options exist and where you are among them, which a box
+   with a caret never tells you. */
+function selectorFits(it,laneW){
+  const per=(laneW-2)/it.opts.length;
+  return it.opts.every(o=>o.l.length*6.4+12 <= per);
+}
+function ctlSelect(it,dis,laneW){
+  const cmp=!selectorFits(it,laneW||190);
+  const e=el('div','trk'+(cmp?' cmp':''));
+  if(cmp){ const prev=el('button','arw','‹'); e.appendChild(prev);
+    if(!dis) prev.onclick=ev=>{ev.stopPropagation();select(it.id);
+      V[it.id]=(V[it.id]+it.opts.length-1)%it.opts.length;render();}; }
+  it.opts.forEach((o,i)=>{
+    const c=el('button','cell'+(V[it.id]===i?' on':''),'<span>'+o.l+'</span>');
+    c.title=o.l;
+    if(!dis) c.onclick=ev=>{ev.stopPropagation(); select(it.id); V[it.id]=i; render();};
+    e.appendChild(c);
+  });
+  if(cmp){ const next=el('button','arw','›'); e.appendChild(next);
+    if(!dis) next.onclick=ev=>{ev.stopPropagation();select(it.id);
+      V[it.id]=(V[it.id]+1)%it.opts.length;render();}; }
+  return e;
+}
+function ctlNumber(it,dis){
+  const e=el('div','trk');
+  const m=el('button','arw','−'), p=el('button','arw','+');
+  const n=el('div','num'); const shown=(it.zero&&V[it.id]===0)?it.zero:V[it.id];
+  n.innerHTML='<b>'+shown+'</b>'+((it.zero&&V[it.id]===0)||!it.unit?'':'<s>'+it.unit+'</s>');
+  e.appendChild(m); e.appendChild(n); e.appendChild(p);
+  if(!dis){
+    m.onclick=ev=>{ev.stopPropagation();select(it.id);V[it.id]=Math.max(it.min,V[it.id]-it.step);render();};
+    p.onclick=ev=>{ev.stopPropagation();select(it.id);V[it.id]=Math.min(it.max,V[it.id]+it.step);render();};
+  }
+  return e;
+}
+function ctlText(it,dis){
+  const e=el('div','trk');
+  const t=el('div','txt'); const v=V[it.id];
+  t.textContent=v||it.ph||''; if(!v) t.style.color='var(--t-met)';
+  e.appendChild(t); return e;
+}
+function ctlSlider(it,dis){
+  const wrap=el('div','sl');
+  const vr=el('div','vr','<b>'+(it.dec?V[it.id].toFixed(it.dec):Math.round(V[it.id]))+'</b>'+(it.unit?'<s>'+it.unit+'</s>':''));
+  const tk=el('div','tk');
+  const pct=v=>(v-it.min)/(it.max-it.min);
+  const cur=pct(V[it.id]), dft=pct(it.def);
+  tk.innerHTML='<i class="rail"></i>'
+    +'<i class="fill" style="width:'+(cur*100)+'%"></i>'
+    +(Math.abs(cur-dft)>.001?'<i class="trail" style="left:'+(Math.min(cur,dft)*100)+'%;width:'+(Math.abs(cur-dft)*100)+'%"></i>':'')
+    +'<i class="dft" style="left:calc('+(dft*100)+'% - 0.5px)"></i>'
+    +'<i class="hd" style="left:calc('+(cur*100)+'% - 5px)"></i>';
+  const mk=el('div','mk','<span>'+(it.dec?it.min.toFixed(it.dec):it.min)+'</span><span>'+(it.dec?it.max.toFixed(it.dec):it.max)+'</span>');
+  wrap.appendChild(vr); wrap.appendChild(tk); wrap.appendChild(mk);
+  if(!dis){
+    const onMove=(ev,r)=>{
+      let f=(ev.clientX-r.left)/r.width; f=Math.max(0,Math.min(1,f));
+      let v=it.min+f*(it.max-it.min);
+      v=Math.round(v/it.step)*it.step; v=Math.max(it.min,Math.min(it.max,v));
+      V[it.id]=it.dec?parseFloat(v.toFixed(it.dec)):v; render();
+    };
+    tk.addEventListener('pointerdown',ev=>{ ev.stopPropagation(); ev.preventDefault();
+      selSoft(it.id); beginDrag(tk.getBoundingClientRect(),onMove,ev); });
+  }
+  return wrap;
+}
+function ctlReadout(it){
+  const e=el('div','ro'); const live=it.live&&it.live();
+  e.innerHTML=(live?'<span class="dot"></span>':'')+it.get(); return e;
+}
+function ctlActions(it){
+  const e=el('div','btns');
+  it.acts.forEach(a=>{ const b=el('button','bt'+(a.k==='a'?' a':a.k==='d'?' d':''),a.l);
+    b.onclick=ev=>{ev.stopPropagation();select(it.id);}; e.appendChild(b); });
+  return e;
+}
+/* --- the mini Stage: a composite living inside the lane, growing downward -- */
+function ctlStage(it){
+  const e=el('div','mstage');
+  e.innerHTML='<i class="gl" style="left:33.3%;top:0;bottom:0;width:1px"></i>'
+             +'<i class="gl" style="left:66.6%;top:0;bottom:0;width:1px"></i>'
+             +'<i class="gl" style="top:33.3%;left:0;right:0;height:1px"></i>'
+             +'<i class="gl" style="top:66.6%;left:0;right:0;height:1px"></i>';
+  const b=el('div','blk'); const g=hudGeom(1);
+  b.style.left=(g.x/1920*100)+'%'; b.style.top=(g.y/1080*100)+'%';
+  b.style.width=(g.w/1920*100)+'%'; b.style.height=(g.h/1080*100)+'%';
+  e.appendChild(b); return e;
+}
+function ctlHue(it){
+  const w=el('div','cmpst');
+  const rail=el('div','hrail');
+  let g='linear-gradient(90deg';
+  for(let h=0;h<=360;h+=20) g+=','+'oklch(.74 .12 '+h+')';
+  rail.style.background=g+')';
+  rail.appendChild(el('i','hd')).style.left='calc('+(V[it.id]/360*100)+'% - 1.5px)';
+  const onMove=(ev,r)=>{ let f=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
+    V[it.id]=Math.round(f*360); S.hue=V[it.id]; syncDeck(); render(); };
+  rail.addEventListener('pointerdown',ev=>{ ev.stopPropagation(); ev.preventDefault();
+    selSoft(it.id); beginDrag(rail.getBoundingClientRect(),onMove,ev); });
+  w.appendChild(rail);
+  const sw=el('div','swrow');
+  [200,218,262,300,340,20,60,140].forEach(h=>{
+    const b=el('button',V[it.id]===h?'on':'');
+    b.style.background='oklch(.74 .12 '+h+')';
+    b.onclick=ev=>{ev.stopPropagation();select(it.id);V[it.id]=h;S.hue=h;render();};
+    sw.appendChild(b);
+  });
+  w.appendChild(sw); return w;
+}
+
+/* ═══ the row ══════════════════════════════════════════════════════════════ */
+function rowEl(it,inScope){
+  const why=it.why?it.why():null, dis=!!why;
+  const r=el('div','row'+(isDiff(it.id)?' diff':'')+(S.sel===it.id&&!inScope?' sel':'')
+    +(['slider','stage','hue'].includes(it.kind)?' tall':''));
+  r.dataset.id=it.id;
+  const lz=el('div','lz');
+  lz.appendChild(el('span','lb',it.label));
+  if(why) lz.appendChild(el('span','why','⚠  '+why));
+  else if(it.hint) lz.appendChild(el('span','hn',it.hint));
+  r.appendChild(lz);
+  const lane=el('div','lane'+(['stage','hue'].includes(it.kind)?' lane-col':''));
+  let c;
+  switch(it.kind){
+    case 'switch': c=ctlSwitch(it,dis); break;
+    case 'select': c=ctlSelect(it,dis,inScope?172:190); break;
+    case 'number': c=ctlNumber(it,dis); break;
+    case 'slider': c=ctlSlider(it,dis); break;
+    case 'text':   c=ctlText(it,dis); break;
+    case 'readout':c=ctlReadout(it); break;
+    case 'actions':c=ctlActions(it); break;
+    case 'stage':  c=ctlStage(it); break;
+    case 'hue':    c=ctlHue(it); break;
+  }
+  if(dis){ c.style.opacity='.5'; c.style.pointerEvents='none'; }
+  lane.appendChild(c); r.appendChild(lane);
+  r.onclick=()=>select(it.id);
+  return r;
+}
+
+/* ═══ the HUD geometry: the Stage control drives the real thing ════════════ */
+function hudGeom(){
+  const fs=V['monitor.font'], sp=V['monitor.spacing'];
+  const rows=['row.rate','row.ms','row.graph','row.pct'].filter(k=>V[k]).length;
+  let h=0;
+  if(V['mod.fps']) h+= (V['row.rate']?fs*1.4:0)+(V['row.graph']?26:0)+(V['row.pct']?fs*1.1:0)+6;
+  if(V['mod.cpu']) h+=fs*1.3+sp;
+  if(V['mod.gpu']) h+=fs*1.3+sp;
+  if(V['mod.media']) h+=fs*1.3+sp+8;
+  h=Math.max(h+18,44);
+  const w=Math.max(186,fs*13);
+  const mv=V['monitor.margin_v'], mh=V['monitor.margin_h'];
+  const av=V['monitor.anchor_v'], ah=V['monitor.anchor_h'];
+  const x = ah===0?mh : ah===1?(1920-w)/2 : 1920-mh-w;
+  const y = av===0?mv : av===1?(1080-h)/2 : 1080-mv-h;
+  return {x,y,w,h};
+}
+function renderHUD(){
+  const hud=$('#hud'), g=hudGeom();
+  if(!V['monitor.show']){ hud.style.display='none'; return; }
+  hud.style.display='block';
+  hud.style.left=g.x+'px'; hud.style.top=g.y+'px'; hud.style.width=g.w+'px';
+  hud.className='hud bd-'+['none','shadow','solid','blur'][V['monitor.backdrop']];
+  hud.style.opacity=V['monitor.opacity'];
+  hud.style.padding=V['monitor.bd_pad']+'px';
+  const fs=V['monitor.font'];
+  let html='';
+  if(V['mod.fps']){
+    if(V['row.rate']||V['row.ms']) html+='<div class="r1">'
+      +(V['row.rate']?'<span class="n" style="font-size:'+(fs*1.45)+'px">'+FPS.v.toFixed(0)+'</span><span class="u">FPS</span>':'')
+      +(V['row.ms']?'<span class="ms" style="font-size:'+(fs*.86)+'px">'+FPS.ms.toFixed(1)+' ms</span>':'')+'</div>';
+    if(V['row.graph']){ html+='<div class="gr">'+FPS.hist.slice(-46).map(m=>
+      '<i class="'+(m>18?'o':'')+'" style="height:'+Math.max(2,Math.min(22,m*1.5))+'px"></i>').join('')+'</div>'; }
+    if(V['row.pct']) html+='<div class="pc" style="font-size:'+(fs*.75)+'px">1% '+FPS.p1.toFixed(0)+'   0.1% '+FPS.p01.toFixed(0)+'   avg '+FPS.avg.toFixed(0)+'</div>';
+  }
+  if(V['mod.cpu']) html+='<div class="md" style="font-size:'+(fs*.79)+'px">CPU 34%   RAM 11.2/32.0GB</div>';
+  if(V['mod.gpu']) html+='<div class="md" style="font-size:'+(fs*.79)+'px">GPU 63%   VRAM 12.1/24.0GB   71°C</div>';
+  if(V['mod.media']) html+='<div class="md" style="font-size:'+(fs*.79)+'px">MEDIA  Adrift — Vessels</div>';
+  hud.innerHTML=html;
+}
+
+/* ═══ live telemetry for the probes ════════════════════════════════════════ */
+const FPS={v:143,ms:7.0,avg:141,p1:98,p01:74,hist:[]};
+for(let i=0;i<240;i++) FPS.hist.push(7+Math.random()*2);
+let ADAPT={lum:.38,gain:1.0,hist:[]};
+let AUD={l:.55,r:.48};
+setInterval(()=>{
+  const cap=V['display.fps_limit'];
+  let target = cap>0 ? cap : 141+Math.sin(Date.now()/1400)*11;
+  const jitter = Math.random()<0.05 ? 8+Math.random()*10 : 0;
+  FPS.v = target + (Math.random()-.5)*3;
+  FPS.ms = 1000/Math.max(1,FPS.v) + jitter;
+  FPS.hist.push(FPS.ms); if(FPS.hist.length>240) FPS.hist.shift();
+  const s=[...FPS.hist].sort((a,b)=>b-a);
+  FPS.p1=1000/s[Math.floor(s.length*.01)]; FPS.p01=1000/s[0];
+  FPS.avg=1000/(FPS.hist.reduce((a,b)=>a+b,0)/FPS.hist.length);
+  ADAPT.lum=.38+Math.sin(Date.now()/2600)*.16;
+  const want=V['fx.adaptive.target']/Math.max(.05,ADAPT.lum);
+  ADAPT.gain += (Math.max(V['fx.adaptive.mingain'],Math.min(V['fx.adaptive.maxgain'],want))-ADAPT.gain)*.12;
+  ADAPT.hist.push([ADAPT.lum,ADAPT.gain]); if(ADAPT.hist.length>160) ADAPT.hist.shift();
+  AUD.l=Math.max(.05,Math.min(1,AUD.l+(Math.random()-.48)*.35));
+  AUD.r=Math.max(.05,Math.min(1,AUD.r+(Math.random()-.48)*.35));
+  renderHUD(); if(!S.pal) refreshLive();
+},90);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE SCOPE.  Always shows the selection.  Its top is always a live probe;
+   when a setting has no natural instrument, the binding alone generates the
+   Delta probe, so no selection ever produces an empty Scope.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function sceneCss(){ return {'sc-dusk':'linear-gradient(150deg,#5d4662,#8d5249 45%,#2c2225)',
+  'sc-snow':'linear-gradient(150deg,#eef6ff,#9fc0dd 60%,#7ea3c4)',
+  'sc-cave':'linear-gradient(150deg,#12201f,#0a1113 60%,#050708)',
+  'off':'linear-gradient(150deg,#22262e,#12151a)'}[S.scene]; }
+
+const DETAIL='repeating-linear-gradient(114deg,rgba(255,255,255,.20) 0 1px,rgba(0,0,0,.14) 1px 3px),'
+  +'repeating-linear-gradient(24deg,rgba(255,255,255,.13) 0 1px,rgba(0,0,0,.10) 1px 5px),'
+  +'radial-gradient(circle at 30% 62%,rgba(0,0,0,.42) 0 8%,transparent 9%),'
+  +'radial-gradient(circle at 68% 34%,rgba(255,255,255,.30) 0 5%,transparent 6%),';
+function probeWipe(p,it){
+  const w=el('div','wipe');
+  const a=el('div','lyr'), b=el('div','lyr');
+  a.style.background=DETAIL+sceneCss(); a.style.filter=p.a;
+  b.style.background=DETAIL+sceneCss();
+  let fb=p.b;
+  if(it.id==='display.sharpness') fb='contrast('+(1+V[it.id]*.035).toFixed(3)+') saturate('+(1+V[it.id]*.004).toFixed(3)+')';
+  if(it.id==='display.sdr_gamut_wideness') fb='saturate('+(1+V[it.id]*.6).toFixed(2)+')';
+  if(it.id==='fx.vibrancy.strength'||it.id==='fx.vibrancy') fb='saturate('+(1+V['fx.vibrancy.strength']*.9).toFixed(2)+')';
+  b.style.filter=fb;
+  b.style.clipPath='inset(0 0 0 '+(S.wipe*100)+'%)';
+  w.appendChild(a); w.appendChild(b);
+  const h=el('i','hdl'); h.style.left=(S.wipe*100)+'%'; w.appendChild(h);
+  w.appendChild(el('span','tag l',p.la)); w.appendChild(el('span','tag r',p.lb));
+  const drag=ev=>{ const r=w.getBoundingClientRect();
+    S.wipe=Math.max(.02,Math.min(.98,(ev.clientX-r.left)/r.width));
+    b.style.clipPath='inset(0 0 0 '+(S.wipe*100)+'%)'; h.style.left=(S.wipe*100)+'%'; };
+  w.addEventListener('pointerdown',ev=>{w.setPointerCapture(ev.pointerId);w.__d=true;drag(ev);});
+  w.addEventListener('pointermove',ev=>{if(w.__d)drag(ev);});
+  w.addEventListener('pointerup',()=>w.__d=false);
+  return w;
+}
+function probeTrace(p,it){
+  const box=el('div','trace'); const cv=el('canvas'); box.appendChild(cv);
+  box.dataset.kind=p.adapt?'adapt':(p.vrr?'vrr':'ms');
+  if(!p.adapt&&!p.vrr&&V['display.fps_limit']>0){
+    const capMs=1000/V['display.fps_limit'];
+    const y=100-Math.min(96,capMs/28*100);
+    const l=el('i','cl','<span>'+V['display.fps_limit']+' fps · '+capMs.toFixed(1)+' ms</span>');
+    l.style.top=y+'%'; box.appendChild(l);
+  }
+  return box;
+}
+function drawTrace(box){
+  const cv=$('canvas',box); if(!cv) return;
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(cv.width!==w*2){cv.width=w*2;cv.height=h*2;}
+  const g=cv.getContext('2d'); g.setTransform(2,0,0,2,0,0); g.clearRect(0,0,w,h);
+  const acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim();
+  if(box.dataset.kind==='adapt'){
+    g.strokeStyle='rgba(239,245,251,.72)'; g.lineWidth=1.2; g.beginPath();
+    ADAPT.hist.forEach((d,i)=>{const x=i/159*w,y=h-d[0]*h*.9; i?g.lineTo(x,y):g.moveTo(x,y);}); g.stroke();
+    g.strokeStyle=acc; g.lineWidth=1.6; g.beginPath();
+    ADAPT.hist.forEach((d,i)=>{const x=i/159*w,y=h-(d[1]/4)*h*.9; i?g.lineTo(x,y):g.moveTo(x,y);}); g.stroke();
+    return;
+  }
+  if(box.dataset.kind==='vrr'){
+    g.strokeStyle=acc; g.lineWidth=1.6; g.beginPath();
+    FPS.hist.slice(-160).forEach((m,i)=>{const hz=V['display.adaptive_sync']?Math.min(144,1000/m):144;
+      const x=i/159*w,y=h-(hz-40)/110*h; i?g.lineTo(x,y):g.moveTo(x,y);}); g.stroke();
+    return;
+  }
+  const cap=V['display.fps_limit']>0?1000/V['display.fps_limit']:null;
+  g.lineWidth=1; g.strokeStyle='rgba(255,255,255,.14)';
+  [8,16,24].forEach(ms=>{const y=h-ms/28*h;g.beginPath();g.moveTo(0,y);g.lineTo(w,y);g.stroke();});
+  FPS.hist.slice(-160).forEach((m,i)=>{
+    const x=i/160*w, bh=Math.min(h,m/28*h);
+    g.fillStyle = (cap&&m>cap*1.4)||m>18 ? '#FFA94D' : acc;
+    g.globalAlpha=.9; g.fillRect(x,h-bh,Math.max(1,w/160-.6),bh);
+  });
+  g.globalAlpha=1;
+}
+function probeCurve(){
+  const box=el('div','curve');
+  const nits=V['display.sdr_on_hdr_nits'];
+  const pq=n=>{const y=Math.pow(n/10000,0.1593017578125);
+    return Math.pow((0.8359375+18.8515625*y)/(1+18.6875*y),78.84375);};
+  let d=''; for(let i=0;i<=100;i++){ const n=Math.pow(10,i/100*4); const x=i/100*100, y=100-pq(n)*100;
+    d+=(i?'L':'M')+x.toFixed(2)+' '+y.toFixed(2); }
+  const mx=Math.log10(Math.max(1,nits))/4*100, my=100-pq(nits)*100;
+  box.innerHTML='<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%">'
+   +'<path d="'+d+'" fill="none" stroke="var(--acc)" stroke-width="1.1" vector-effect="non-scaling-stroke"/>'
+   +'<line x1="'+mx+'" y1="100" x2="'+mx+'" y2="'+my+'" stroke="var(--acc-seg)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>'
+   +'<line x1="0" y1="'+my+'" x2="'+mx+'" y2="'+my+'" stroke="var(--acc-seg)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>'
+   +'<circle cx="'+mx+'" cy="'+my+'" r="2.4" fill="var(--acc-seg)" vector-effect="non-scaling-stroke"/>'
+   +'</svg>';
+  return box;
+}
+function probeMeter(){
+  const w=el('div','cmpst');
+  [['L',AUD.l],['R',AUD.r]].forEach(([lab,v])=>{
+    const row=el('div'); row.style.cssText='display:flex;align-items:center;gap:10px;margin-bottom:8px';
+    row.appendChild(el('span','',lab)).style.cssText='font:500 11px var(--mono);color:var(--t-met);width:12px';
+    const m=el('div','mtr'); const vv=V['audio.mute']?0:v*V['audio.volume']/100;
+    for(let i=0;i<28;i++) m.appendChild(el('i',i/28<vv?(i>23?'hot':'on'):''));
+    row.appendChild(m);
+    const n=el('span'); n.style.cssText='font:500 11px var(--mono);color:var(--acc-val);width:46px;text-align:right';
+    n.textContent=(vv<=0?'-∞':(20*Math.log10(vv)).toFixed(1))+' dB';
+    row.appendChild(n); w.appendChild(row);
+  });
+  return w;
+}
+function probeHue(){
+  const w=el('div','cmpst');
+  const h=V['ui.accent_hue'];
+  const toks=[['kAccent','.74 .12'],['kAccentEdge','.8 .12'],['kAccentValue','.84 .10'],
+              ['kAccentSegText','.9 .07'],['kAccentKnob','.86 .08'],['kAccentHandle','.9 .05']];
+  const g=el('div'); g.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:6px';
+  toks.forEach(([n,lc])=>{
+    const c=el('div'); c.style.cssText='border:1px solid var(--ctl);padding:7px 8px';
+    c.innerHTML='<div style="height:16px;background:oklch('+lc+' '+h+');margin-bottom:6px"></div>'
+      +'<div style="font:400 9.5px var(--mono);color:var(--t-met)">'+n+'</div>';
+    g.appendChild(c);
+  });
+  w.appendChild(g);
+  const r=el('div'); r.style.cssText='font:400 11px var(--mono);color:var(--t-met);margin-top:10px';
+  r.textContent='oklch(.74 .12 '+h+')  ·  hue is the only user-tunable axis';
+  w.appendChild(r); return w;
+}
+/* --- the universal fallback probe, generated from the binding alone -------- */
+function probeDelta(it){
+  const w=el('div','delta');
+  const v=fmt(it), d=(it.id in DEF)?fmt(it,DEF[it.id]):null;
+  w.innerHTML='<div class="big">'+v.replace(/ (\S+)$/,'<s>$1</s>')+'</div>';
+  if(it.min!==undefined){
+    const p=x=>(x-it.min)/(it.max-it.min);
+    const c=p(V[it.id]), df=p(it.def);
+    const nl=el('div','nl');
+    nl.innerHTML='<i class="r"></i>'
+      +'<i class="sp" style="left:'+(Math.min(c,df)*100)+'%;width:'+(Math.abs(c-df)*100)+'%"></i>'
+      +'<i class="d" style="left:'+(df*100)+'%"></i><i class="c" style="left:calc('+(c*100)+'% - 1.5px)"></i>';
+    w.appendChild(nl);
+    w.appendChild(el('div','lg','<span>'+it.min+'</span><span>default '+fmt(it,it.def)+'</span><span>'+it.max+'</span>'));
+  } else if(d!==null){
+    w.appendChild(el('div','lg','<span>default '+d+'</span><span>'+(isDiff(it.id)?'changed':'at default')+'</span>'));
+  }
+  return w;
+}
+/* --- THE STAGE: the anchor control, full size, draggable ------------------- */
+function probeStage(){
+  const box=el('div','bstage');
+  const th=el('div','thumb'); th.style.background=sceneCss(); box.appendChild(th);
+  const grid=el('div','grid');
+  grid.innerHTML='<i style="left:33.33%;top:0;bottom:0;width:1px"></i><i style="left:66.66%;top:0;bottom:0;width:1px"></i>'
+                +'<i style="top:33.33%;left:0;right:0;height:1px"></i><i style="top:66.66%;left:0;right:0;height:1px"></i>';
+  box.appendChild(grid);
+  /* the nine anchors, as real click targets */
+  for(let v=0;v<3;v++) for(let h=0;h<3;h++){
+    const t=el('button','tgt'+((V['monitor.anchor_v']===v&&V['monitor.anchor_h']===h)?' on':''));
+    t.style.left=[8,50,92][h]+'%'; t.style.top=[10,50,90][v]+'%';
+    t.title=ANCH[v*3+h];
+    t.onclick=ev=>{ ev.stopPropagation(); V['monitor.anchor_v']=v; V['monitor.anchor_h']=h; render(); };
+    box.appendChild(t);
+  }
+  const g=hudGeom();
+  const blk=el('div','blk','<u class="t"></u><u class="s"></u><u></u><u class="s"></u>');
+  blk.style.left=(g.x/1920*100)+'%'; blk.style.top=(g.y/1080*100)+'%';
+  blk.style.width=(g.w/1920*100)+'%'; blk.style.height=(g.h/1080*100)+'%';
+  box.appendChild(blk);
+  /* margin rulers, drawn from the block to its anchored edges */
+  const av=V['monitor.anchor_v'], ah=V['monitor.anchor_h'];
+  if(ah!==1){
+    const r=el('div','rlr'); r.style.cssText='top:'+((g.y+g.h/2)/1080*100)+'%;height:0;border-top-width:1px;'
+      +(ah===0?'left:0;width:'+(g.x/1920*100)+'%':'right:0;width:'+((1920-g.x-g.w)/1920*100)+'%');
+    r.innerHTML='<span style="top:4px;'+(ah===0?'left:3px':'right:3px')+'">'+V['monitor.margin_h']+' px</span>';
+    box.appendChild(r);
+  }
+  if(av!==1){
+    const r=el('div','rlr'); r.style.cssText='left:'+((g.x+g.w/2)/1920*100)+'%;width:0;border-left-width:1px;'
+      +(av===0?'top:0;height:'+(g.y/1080*100)+'%':'bottom:0;height:'+((1080-g.y-g.h)/1080*100)+'%');
+    r.innerHTML='<span style="left:5px;'+(av===0?'top:3px':'bottom:3px')+'">'+V['monitor.margin_v']+' px</span>';
+    box.appendChild(r);
+  }
+  /* drag the block: nearest anchor wins, distance to it becomes the margins */
+  const move=(ev,r)=>{
+    const fx=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
+    const fy=Math.max(0,Math.min(1,(ev.clientY-r.top)/r.height));
+    const gg=hudGeom();
+    const ah2 = fx<0.34?0 : fx<0.66?1 : 2;
+    const av2 = fy<0.34?0 : fy<0.66?1 : 2;
+    V['monitor.anchor_h']=ah2; V['monitor.anchor_v']=av2;
+    const cx=fx*1920, cy=fy*1080;
+    if(ah2===0) V['monitor.margin_h']=Math.round(Math.max(0,Math.min(128,cx-gg.w/2)));
+    if(ah2===2) V['monitor.margin_h']=Math.round(Math.max(0,Math.min(128,1920-cx-gg.w/2)));
+    if(av2===0) V['monitor.margin_v']=Math.round(Math.max(0,Math.min(128,cy-gg.h/2)));
+    if(av2===2) V['monitor.margin_v']=Math.round(Math.max(0,Math.min(128,1080-cy-gg.h/2)));
+    render();
+  };
+  box.addEventListener('pointerdown',ev=>{ if(ev.target.classList.contains('tgt')) return;
+    ev.preventDefault(); beginDrag(box.getBoundingClientRect(),move,ev); });
+  return box;
+}
+
+function buildProbe(it){
+  const wrap=el('div','probe');
+  const p=it.probe;
+  const kind = p? p.t : 'delta';
+  const liveKinds=['trace','meter','stage','wipe'];
+  wrap.appendChild(el('div','plab','<span class="t">'+
+    ({wipe:'Frame preview',trace:'Live trace',curve:'Transfer curve',meter:'Live signal',
+      stage:'Output · 1:12',hue:'Accent family',delta:'Value'}[kind])+'</span>'
+    +(liveKinds.includes(kind)?'<span class="live">LIVE</span>':'')));
+  let node;
+  if(kind==='wipe') node=probeWipe(p,it);
+  else if(kind==='trace') node=probeTrace(p,it);
+  else if(kind==='curve') node=probeCurve();
+  else if(kind==='meter') node=probeMeter();
+  else if(kind==='stage') node=probeStage();
+  else if(kind==='hue') node=probeHue();
+  else node=probeDelta(it);
+  wrap.appendChild(node);
+  if(p&&p.cap) wrap.appendChild(el('div','cap',p.cap));
+  else wrap.appendChild(el('div','cap','No instrument declared for this setting, so the Scope generates one from the binding: current value against its default, on the declared range.'));
+  return wrap;
+}
+
+function buildScope(){
+  const b=$('#scopebody'); b.innerHTML='';
+  if(typeof S.sel==='string' && S.sel.startsWith('__log')){ buildLogScope(b); return; }
+  const rec=IDX[S.sel];
+  if(!rec){ buildSessionCard(b); return; }
+  const [cat,it,parent]=rec;
+  $('#scopekind').textContent=cat.sec+' / '+cat.title;
+  b.appendChild(buildProbe(it));
+
+  const t=el('div','sblk');
+  t.appendChild(el('div','ttl',it.label));
+  if(it.help) t.appendChild(el('div','help',it.help));
+  b.appendChild(t);
+
+  /* provenance and defaults, read from the binding -- never typed by a caller */
+  const f=el('div','sblk'); f.appendChild(el('h3','','Binding'));
+  const dl=el('dl','facts');
+  const add=(k,v,a)=>{ dl.appendChild(el('dt','',k)); dl.appendChild(el('dd',a?'a':'',v)); };
+  add('key',it.id);
+  if(it.id in DEF) add('current',fmt(it),true);
+  if(it.id in DEF) add('default',fmt(it,DEF[it.id]));
+  if(it.min!==undefined) add('range',it.min+' – '+it.max+(it.unit?' '+it.unit:''));
+  if(it.kind==='select') add('options',it.opts.length+'');
+  add('writes',V['cfg.override']?'games/1245620.json':'global.json');
+  add('reason',V['cfg.override']?'Override Global Config is on for this game':'no per-game override active');
+  f.appendChild(dl);
+  if(isDiff(it.id)){
+    const r=el('div'); r.style.marginTop='11px';
+    const btn=el('button','bt','reset to default  ^D');
+    btn.onclick=()=>{ resetRow(it.id); };
+    r.appendChild(btn); f.appendChild(r);
+  }
+  b.appendChild(f);
+
+  if(it.expert&&it.expert.length){
+    const e=el('div','sblk'); e.style.padding='0';
+    let cur=null;
+    it.expert.forEach(x=>{
+      if(x.g){ const g=el('div','grp','<span class="h">'+x.g+'</span><span class="ln"></span>'); e.appendChild(g); return; }
+      e.appendChild(rowEl(x,true));
+    });
+    b.appendChild(e);
+  }
+
+  if(it.related&&it.related.length){
+    const r=el('div','sblk'); r.appendChild(el('h3','','Related'));
+    const j=el('div','jump');
+    it.related.forEach(id=>{ const rr=IDX[id]; if(!rr) return;
+      const btn=el('button','',rr[1].label); btn.onclick=()=>go(id); j.appendChild(btn); });
+    r.appendChild(j); b.appendChild(r);
+  }
+
+  const cc=el('div','sblk'); cc.appendChild(el('h3','','This category'));
+  const nrows=cat.items.filter(i=>i.id).length;
+  const nd=cat.items.filter(i=>i.id&&isDiff(i.id)).length;
+  const dl2=el('dl','facts');
+  [['section',cat.sec.toLowerCase()],['settings',nrows+''],['changed here',nd+''],
+   ['destination',V['cfg.override']?'games/1245620.json':'global.json']]
+    .forEach(([kk,vv])=>{dl2.appendChild(el('dt','',kk));dl2.appendChild(el('dd',kk==='changed here'&&nd?'a':'',vv));});
+  cc.appendChild(dl2);
+  const cb=el('div','btns'); cb.style.marginTop='11px'; cb.style.justifyContent='flex-start';
+  const rb=el('button','bt','reset category');
+  rb.onclick=()=>{ cat.items.forEach(i=>{ if(i.id) resetRow(i.id); }); };
+  cb.appendChild(rb); cb.appendChild(el('button','bt','save as preset'));
+  cc.appendChild(cb); b.appendChild(cc);
+
+  const k=el('div','sblk'); k.appendChild(el('h3','','Search terms'));
+  k.appendChild(el('div','','<span style="font:400 11px var(--mono);color:var(--t-met);line-height:1.7">'
+    +(it.keys||'').split(' ').filter(Boolean).join(' · ')+'</span>'));
+  b.appendChild(k);
+}
+function buildLogScope(b){
+  $('#scopekind').textContent='SYSTEM / Log';
+  const n=S.logSel, ln=LOGLINES.find(l=>l[0]===n)||LOGLINES[0];
+  const p=el('div','probe');
+  p.appendChild(el('div','plab','<span class="t">Selected line</span>'));
+  const box=el('div','delta');
+  box.innerHTML='<div style="font:400 12.5px var(--mono);color:var(--t-pri);line-height:1.6;'
+    +'white-space:pre-wrap;word-break:break-word">'+ln[2].replace(/</g,'&lt;')+'</div>';
+  p.appendChild(box);
+  p.appendChild(el('div','cap','The stream never wraps, so line numbers stay meaningful. The Scope wraps the one line you selected.'));
+  b.appendChild(p);
+  const t=el('div','sblk');
+  t.appendChild(el('div','ttl','Line '+n));
+  const sev={e:'error',w:'warning',i:'info'}[ln[1]];
+  t.appendChild(el('div','help', sev==='error'
+    ? 'An error printed by gamescope itself. Errors are indexed as you scroll, so the Ledger equivalent for the log — the tick column on the scrollbar — shows where the problems are in a 40 000-line buffer without scrolling.'
+    : 'A line captured from gamescope\'s own stdout/stderr this session.'));
+  b.appendChild(t);
+  const f=el('div','sblk'); f.appendChild(el('h3','','Line'));
+  const dl=el('dl','facts');
+  [['severity',sev],['source','gamescope'],['timestamp','00:0'+(n%6)+':'+(11+n)+'.402'],
+   ['matches','—']].forEach(([k,v])=>{dl.appendChild(el('dt','',k));dl.appendChild(el('dd','',v));});
+  f.appendChild(dl);
+  const r=el('div'); r.style.marginTop='11px'; r.appendChild(el('button','bt','copy line'));
+  f.appendChild(r); b.appendChild(f);
+}
+function buildSessionCard(b){
+  $('#scopekind').textContent='session';
+  const p=el('div','probe');
+  p.appendChild(el('div','plab','<span class="t">Live trace</span><span class="live">LIVE</span>'));
+  const box=el('div','trace'); box.appendChild(el('canvas')); box.dataset.kind='ms';
+  p.appendChild(box); p.appendChild(el('div','cap','Frametime, last 240 frames.'));
+  b.appendChild(p);
+  const t=el('div','sblk'); t.appendChild(el('div','ttl','ELDEN RING'));
+  t.appendChild(el('div','help','Nothing is selected, so the Scope shows the session instead of a placeholder. Every setting you have moved away from stock is listed here and on the Ledger down the Spine’s outer edge.'));
+  b.appendChild(t);
+  const d=allDiff();
+  const f=el('div','sblk'); f.appendChild(el('h3','',d.length+' settings differ from default'));
+  const j=el('div','jump');
+  d.forEach(id=>{ const rr=IDX[id]; if(!rr)return; const btn=el('button','',rr[1].label);
+    btn.onclick=()=>go(id); j.appendChild(btn); });
+  f.appendChild(j); b.appendChild(f);
+}
+
+/* ═══ the Spine ════════════════════════════════════════════════════════════ */
+function buildSpine(){
+  const b=$('#spinebody'); const sc=b.scrollTop; b.innerHTML='';
+  let sec=null;
+  REG.forEach(cat=>{
+    if(cat.sec!==sec){ sec=cat.sec; b.appendChild(el('div','sec',sec)); }
+    const open=S.open===cat.id;
+    const c=el('button','cat'+(open?' open':''));
+    c.innerHTML='<svg class="ic" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.3">'
+      +ICONS[cat.icon]+'</svg><span class="nm">'+cat.title+'</span>'
+      +(cat.badge?'<span class="mt">'+cat.badge()+'</span>':'')
+      +'<span class="cv">›</span>';
+    c.onclick=()=>{ S.open = open?null:cat.id;
+      if(!open){ const first=cat.items.find(i=>i.id); if(first) S.sel=first.id; }
+      render(); };
+    b.appendChild(c);
+    if(!open) return;
+    if(cat.id==='system.log'){ b.appendChild(buildLog()); return; }
+    cat.items.forEach(it=>{
+      if(it.g){ const g=el('div','grp','<span class="h">'+it.g+'</span><span class="ln"></span>'
+        +(it.act?'<span class="act">'+it.act+'</span>':'')); b.appendChild(g); return; }
+      if(it.note){ const n=el('div'); n.style.cssText='padding:9px 22px 14px;font:400 11px var(--mono);color:var(--t-met);line-height:1.55';
+        n.textContent=it.note; b.appendChild(n); return; }
+      b.appendChild(rowEl(it,false));
+    });
+    b.appendChild(el('div','')).style.height='10px';
+  });
+  b.scrollTop=sc;
+}
+const LOGLINES=[
+ [1,'i','[gamescope] Starting Xwayland on :1'],
+ [2,'i','[gamescope] xwm: got the first window'],
+ [3,'i','[gamescope] wsi: VkLayer_FROG_gamescope_wsi attached (pid 3921884)'],
+ [4,'w','[gamescope] drm: no HDR metadata on connector DP-1'],
+ [5,'i','[gamescope] composite: FSR1 EASU+RCAS path selected'],
+ [6,'e','[gamescope] pipewire: wpctl not found - per-app volume unavailable'],
+ [7,'i','[gamescope] reshade: compiled gamescope-ritz.fx in 214 ms'],
+ [8,'i','[gamescope] steamcompmgr: focus -> 0x1400007 "ELDEN RING"'],
+ [9,'w','[gamescope] frame 41182 took 21.4 ms (> 2 refresh periods)'],
+ [10,'i','[gamescope] config: loaded games/1245620.json (7 keys)'],
+ [11,'e','[gamescope] amdgpu: hwmon node missing, GPU temp unavailable'],
+ [12,'i','[gamescope] overlay: display_scale -> 1.00']];
+function buildLog(){
+  const w=el('div');
+  const bar=el('div','logbar');
+  const seg=el('div','trk'); seg.style.width='140px';
+  ['gamescope','game'].forEach((s,i)=>{ const c=el('button','cell'+(i===0?' on':''),'<span>'+s+'</span>'); seg.appendChild(c); });
+  bar.appendChild(seg);
+  const f=el('div','trk'); f.style.flex='1'; f.appendChild(el('div','txt','filter…')).style.color='var(--t-met)';
+  bar.appendChild(f);
+  bar.appendChild(el('span','chip d','2 err')); bar.appendChild(el('span','chip w','2 warn'));
+  w.appendChild(bar);
+  LOGLINES.forEach(([n,s,t])=>{
+    const l=el('div','logln '+(s==='e'?'e':s==='w'?'w':'')+(S.logSel===n?' sel':''));
+    l.innerHTML='<span class="no">'+n+'</span><span class="tx">'+t.replace(/</g,'&lt;')+'</span>';
+    l.onclick=()=>{ S.logSel=n; S.sel='__log'+n; render(); };
+    w.appendChild(l);
+  });
+  return w;
+}
+
+/* ═══ ledger ═══════════════════════════════════════════════════════════════ */
+function buildLedger(){
+  const L=$('#ledger'); L.innerHTML='';
+  const rows=[]; REG.forEach(c=>c.items.forEach(i=>{ if(i.id) rows.push([c,i]); }));
+  const n=rows.length;
+  rows.forEach(([c,i],k)=>{
+    if(!isDiff(i.id)) return;
+    const t=el('i'+'',S.sel===i.id?'sel':'');
+    t.style.top=(6+(k/n)*88)+'%';
+    t.title=c.title+' › '+i.label+'  —  '+fmt(i)+'  (default '+fmt(i,DEF[i.id])+')';
+    t.onclick=()=>go(i.id);
+    L.appendChild(t);
+  });
+}
+
+/* ═══ selection + navigation ═══════════════════════════════════════════════ */
+/* Selecting an expert parameter keeps its owner selected: expert rows belong to
+   the row they expand, so the Scope must not replace itself under your cursor. */
+function selSoft(id){ const r=IDX[id]; if(r&&r[2]) return; S.sel=id; }
+function select(id){ selSoft(id); render(); }
+function go(id){ const rec=IDX[id]; if(!rec) return; S.open=rec[0].id; S.sel=id; S.pal=false; render();
+  const n=$('#spinebody [data-id="'+id+'"]'); if(n) n.scrollIntoView({block:'center'}); }
+function resetRow(id){
+  if(id==='monitor.anchor'){ ['monitor.anchor_v','monitor.anchor_h','monitor.margin_v','monitor.margin_h']
+    .forEach(k=>V[k]=DEF[k]); }
+  else if(id in DEF) V[id]=DEF[id];
+  render();
+}
+function flatRows(){
+  const cat=REG.find(c=>c.id===S.open); if(!cat) return [];
+  return cat.items.filter(i=>i.id);
+}
+function nudge(dir){
+  const rec=IDX[S.sel]; if(!rec) return; const it=rec[1];
+  if(it.kind==='switch'){ V[it.id]=dir>0; }
+  else if(it.kind==='select'){ V[it.id]=Math.max(0,Math.min(it.opts.length-1,V[it.id]+dir)); }
+  else if(it.kind==='slider'||it.kind==='number'||it.kind==='hue'){
+    let v=V[it.id]+dir*it.step; v=Math.max(it.min,Math.min(it.max,v));
+    V[it.id]=it.dec?parseFloat(v.toFixed(it.dec)):v; if(it.kind==='hue') S.hue=V[it.id]; }
+  else if(it.kind==='stage'){ V['monitor.anchor_h']=Math.max(0,Math.min(2,V['monitor.anchor_h']+dir)); }
+  render();
+}
+document.addEventListener('keydown',e=>{
+  if(e.key==='Alt'&&!S.peek){ S.peek=true; stg.classList.add('peek'); }
+  if(S.pal){
+    const res=palResults($('#palq').value);
+    if(e.key==='Escape'){ S.pal=false; stg.classList.remove('pal-on'); e.preventDefault(); return; }
+    if(e.key==='ArrowDown'){ S.palSel=Math.min(res.length-1,S.palSel+1); renderPal(); e.preventDefault(); return; }
+    if(e.key==='ArrowUp'){ S.palSel=Math.max(0,S.palSel-1); renderPal(); e.preventDefault(); return; }
+    if(e.key==='Enter'){ if(res[S.palSel]) go(res[S.palSel].it.id); e.preventDefault(); return; }
+    return;
+  }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){ S.pal=true; S.palSel=0; stg.classList.add('pal-on');
+    $('#palq').value=''; renderPal(); setTimeout(()=>$('#palq').focus(),0); e.preventDefault(); return; }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='d'){ resetRow(S.sel); e.preventDefault(); return; }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='i'){
+    S.scopeMode = S.scopeMode==='noscope'?'auto':'noscope'; syncDeck(); render(); e.preventDefault(); return; }
+  const rows=flatRows(); const i=rows.findIndex(r=>r.id===S.sel);
+  if(e.key==='ArrowDown'){ if(i>=0&&i<rows.length-1) select(rows[i+1].id); e.preventDefault(); }
+  else if(e.key==='ArrowUp'){ if(i>0) select(rows[i-1].id); e.preventDefault(); }
+  else if(e.key==='ArrowRight'){ nudge(1); e.preventDefault(); }
+  else if(e.key==='ArrowLeft'){ nudge(-1); e.preventDefault(); }
+});
+document.addEventListener('keyup',e=>{ if(e.key==='Alt'){ S.peek=false; stg.classList.remove('peek'); }});
+window.addEventListener('blur',()=>{ S.peek=false; stg.classList.remove('peek'); });
+
+/* ═══ command palette (B's registry, adopted as a feature) ═════════════════ */
+function fuzzy(q,s){
+  q=q.toLowerCase(); s=s.toLowerCase();
+  let i=0,score=0,run=0;
+  for(let j=0;j<s.length&&i<q.length;j++){
+    if(s[j]===q[i]){ i++; run++; score+=run*2 + (j===0?6:0); }
+    else run=0;
+  }
+  return i===q.length?score:-1;
+}
+function palResults(q){
+  const out=[];
+  REG.forEach(c=>c.items.forEach(it=>{
+    if(!it.id||it.kind==='readout') return;
+    const hay=it.label+' '+it.id+' '+(it.keys||'')+' '+c.title;
+    const sc=q?fuzzy(q,hay):0;
+    if(sc<0) return;
+    out.push({c,it,sc:sc+(fuzzy(q,it.label)>=0?40:0)});
+  }));
+  out.sort((a,b)=>b.sc-a.sc);
+  return q?out.slice(0,40):out.slice(0,40);
+}
+function renderPal(){
+  const q=$('#palq').value, res=palResults(q);
+  S.palSel=Math.min(S.palSel,Math.max(0,res.length-1));
+  $('#palc').textContent=res.length+' of '+Object.keys(DEF).length;
+  const r=$('#palrs'); r.innerHTML='';
+  res.forEach((x,i)=>{
+    const b=el('button','pr'+(i===S.palSel?' on':''));
+    b.innerHTML='<span class="pt">'+hl(x.it.label,q)+'</span>'
+      +'<span class="pc">'+x.c.sec.toLowerCase()+' / '+x.c.title.toLowerCase()+'  ·  '+x.it.id+'</span>'
+      +'<span class="pv">'+(x.it.kind==='actions'?'→':fmt(x.it))+'</span>';
+    b.onclick=()=>go(x.it.id);
+    b.onmouseenter=()=>{ S.palSel=i; $$('.pr').forEach((n,k)=>n.classList.toggle('on',k===i)); };
+    r.appendChild(b);
+  });
+}
+function hl(s,q){
+  if(!q) return s;
+  let out='',i=0; const lq=q.toLowerCase();
+  for(const ch of s){ if(i<lq.length&&ch.toLowerCase()===lq[i]){ out+='<mark>'+ch+'</mark>'; i++; } else out+=ch; }
+  return out;
+}
+$('#palq').addEventListener('input',()=>{ S.palSel=0; renderPal(); });
+$('#qbar').onclick=()=>{ S.pal=true; S.palSel=0; stg.classList.add('pal-on'); $('#palq').value=''; renderPal();
+  setTimeout(()=>$('#palq').focus(),0); };
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE RESPONSIVE LADDER.  One pure function of (surface, display_scale).
+   Ordered so the cheapest loss happens first, and every step is a discrete,
+   screenshot-testable state -- there is no continuous splitter anywhere.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function ladder(){
+  stg.classList.remove('docked','overlaid','noscope');
+  const ds=S.scale, SP=552*ds, SC=432*ds, M=56*ds;
+  const spine=$('#spine'), scope=$('#scope');
+  let step;
+  if(S.scopeMode==='noscope'){ step='noscope'; }
+  else if(S.scopeMode!=='auto'){ step=S.scopeMode==='docked'?'docked':'overlaid'; }
+  else if(!V['ui.gutter']) step='docked';
+  else if(1920 - (SP+SC+2*M) >= 240*ds) step='open';       /* 0: game between   */
+  else if(SP+SC+2*M <= 1920-40)          step='docked';    /* 1: one slab       */
+  else                                   step='overlaid';  /* 2: Scope overlays */
+
+  spine.style.left=M+'px'; spine.style.top=(76*ds)+'px';
+  spine.style.height=((1080-152*ds)/ds)+'px';
+  scope.style.top=(76*ds)+'px'; scope.style.height=((1080-152*ds)/ds)+'px';
+
+  if(step==='noscope'){ stg.classList.add('noscope'); }
+  else if(step==='open'){ scope.style.left='auto'; scope.style.right=M+'px'; }
+  else if(step==='docked'){ stg.classList.add('docked');
+    scope.style.right='auto'; scope.style.left=(M+SP)+'px'; }
+  else { stg.classList.add('overlaid');
+    scope.style.right='auto'; scope.style.left=(M+SP-SC)+'px'; }
+
+  /* the veil is strong under the slabs and weak across the uncovered middle */
+  const a=V['ui.darken'], l1=M+SP, r1=(step==='open')?1920-M-SC:l1+SC;
+  $('#veil').style.background='linear-gradient(90deg,'
+    +'rgba(4,6,9,'+(a*.94)+') 0px,rgba(4,6,9,'+(a*.80)+') '+l1+'px,'
+    +'rgba(4,6,9,'+(a*.20)+') '+(l1+90)+'px,rgba(4,6,9,'+(a*.20)+') '+(r1-90)+'px,'
+    +'rgba(4,6,9,'+(a*.80)+') '+r1+'px,rgba(4,6,9,'+(a*.94)+') 1920px)';
+  $('#stepchip').textContent='ladder '+({open:'0 · open',docked:'1 · docked',
+    overlaid:'2 · overlay',noscope:'scope hidden'}[step]);
+}
+
+/* ═══ render ═══════════════════════════════════════════════════════════════ */
+function refreshLive(){
+  $$('.trace').forEach(drawTrace);
+  const m=$('#scopebody .mtr'); if(m&&IDX[S.sel]&&IDX[S.sel][1].probe&&IDX[S.sel][1].probe.t==='meter'){
+    const b=$('#scopebody .probe'); const rec=IDX[S.sel];
+    const old=b.children[1]; const nu=probeMeter(); b.replaceChild(nu,old);
+  }
+}
+let rendering=false;
+function render(){
+  if(rendering) return; rendering=true;
+  document.documentElement.style.setProperty('--hue',V['ui.accent_hue']);
+  S.scale=V['ui.scale'];
+  stg.style.setProperty('--ds',S.scale);
+  $('#spine').style.transform='scale('+S.scale+')';
+  $('#scope').style.transform='scale('+S.scale+')';
+  ladder();
+  $('#game').className='game '+(S.scene==='off'?'':S.scene);
+  $('#game').style.opacity=S.scene==='off'?0:1;
+  stg.classList.toggle('noledger',!S.ledger);
+  $('#cfgchip').textContent=V['cfg.override']?'games/1245620.json':'global.json';
+  const d=allDiff(); $('#diffchip').textContent=d.length+' changed';
+  buildSpine(); buildScope(); buildLedger(); renderHUD();
+  $$('.trace').forEach(drawTrace);
+  rendering=false;
+}
+
+/* ═══ deck wiring ══════════════════════════════════════════════════════════ */
+function syncDeck(){
+  $$('#uscope button').forEach(b=>b.classList.toggle('on',b.dataset.v===S.scopeMode));
+  $$('#uscene button').forEach(b=>b.classList.toggle('on',b.dataset.v===S.scene));
+  $$('#uledger button').forEach(b=>b.classList.toggle('on',(b.dataset.v==='on')===S.ledger));
+  $('#uds').value=V['ui.scale']; $('#udsv').textContent=V['ui.scale'].toFixed(2)+'×';
+  $('#uhue').value=V['ui.accent_hue']; $('#uhuev').textContent=V['ui.accent_hue']+'°';
+}
+$('#uds').oninput=e=>{ V['ui.scale']=parseFloat(e.target.value); syncDeck(); render(); };
+$('#uhue').oninput=e=>{ V['ui.accent_hue']=parseInt(e.target.value); S.hue=V['ui.accent_hue']; syncDeck(); render(); };
+$('#uscene').onclick=e=>{ if(!e.target.dataset.v) return; S.scene=e.target.dataset.v; syncDeck(); render(); };
+$('#uscope').onclick=e=>{ if(!e.target.dataset.v) return; S.scopeMode=e.target.dataset.v; syncDeck(); render(); };
+$('#uledger').onclick=e=>{ if(!e.target.dataset.v) return; S.ledger=e.target.dataset.v==='on'; syncDeck(); render(); };
+$('#upeek').onpointerdown=()=>{ stg.classList.add('peek'); };
+$('#upeek').onpointerup=()=>{ stg.classList.remove('peek'); };
+$('#upeek').onpointerleave=()=>{ stg.classList.remove('peek'); };
+$('#ureset').onclick=()=>{ Object.keys(DEF).forEach(k=>V[k]=DEF[k]); syncDeck(); render(); };
+$('#scopex').onclick=()=>{ S.scopeMode=S.scopeMode==='noscope'?'auto':'noscope'; syncDeck(); render(); };
+
+/* fit the 1920x1080 surface to the page */
+function fit(){
+  const vp=$('#vp'), f=Math.min(1,(vp.clientWidth)/1920);
+  stg.style.transform='scale('+f+')';
+  vp.style.height=(1080*f)+'px';
+}
+window.addEventListener('resize',fit);
+
+/* ═══ notes under the mockup ═══════════════════════════════════════════════ */
+$('#notes').innerHTML=`
+<h2>What is kept, and what is reinvented</h2>
+<p><b>Kept:</b> a persistent place where depth lives, so the main surface stays clean. Selection always
+drives it, it is never a hover target, and it is never empty — with nothing selected it shows the session.</p>
+<p><b>Reinvented:</b> that place is now an <i>instrument</i>, not a paragraph. The Scope's top third is always
+a live probe of the thing you selected — a before/after wipe of the real frame, a frametime trace with your
+cap drawn on it, the PQ curve with SDR white marked, an audio meter, the OKLCH accent family, or the
+draggable output Stage. Where a setting has no natural instrument, the binding alone generates the Delta
+probe, so no selection ever yields an empty Scope.</p>
+<p><b>Also reinvented:</b> the rail and the sheet were merged into one accordion column (the Spine), which
+deletes a whole focus scope and stops small categories from looking lost in a big sheet. And the two slabs
+are pinned to opposite screen edges so <i>the centre of the frame is never covered</i> — the game itself is
+the largest preview surface in the design. Hold <code>Alt</code> to drop both slabs to 10% and see it whole.</p>
+
+<h2>The Lane Law</h2>
+<p>Every row reserves a lane of exactly <code>168</code> base units flush to its container's right inner edge.
+Every control's <i>right edge is the lane's right edge</i>. Switches sit flush right; tracks, sliders and
+steppers fill the lane; composites fill the lane and grow downward. There is no alignment argument
+anywhere in the API, and the row builder hands the control painter the lane rect rather than letting it ask
+for available space — so a call site cannot be left-bound, centred, or "basically random".</p>
+
+<h2>Measured contrast (sRGB, WCAG 2.1)</h2>
+<p>Two backgrounds: <b>nominal</b> is the slab over a typical darkened frame (<code>#101216</code>);
+<b>worst case</b> is the slab over a blown-out white frame at the shipped blur/darkening defaults
+(<code>#1A1D22</code>). Every number below is measured, not asserted.</p>
+<table>
+<tr><th>role</th><th>alpha</th><th>nominal</th><th>worst case</th><th>needs</th></tr>
+<tr><td>TextPrimary</td><td>.96</td><td>15.74</td><td><b>14.25</b></td><td>4.5</td></tr>
+<tr><td>TextBody</td><td>.78</td><td>10.57</td><td><b>9.77</b></td><td>4.5</td></tr>
+<tr><td>TextMeta (the floor)</td><td>.60</td><td>6.63</td><td><b>6.31</b></td><td>4.5</td></tr>
+<tr><td>Accent value #78DBF6</td><td>1.0</td><td>11.84</td><td><b>10.67</b></td><td>4.5</td></tr>
+<tr><td>Warn #FFA94D</td><td>1.0</td><td>9.85</td><td><b>8.88</b></td><td>4.5</td></tr>
+<tr><td>Danger #FF8E7E</td><td>1.0</td><td>8.41</td><td><b>7.58</b></td><td>4.5</td></tr>
+<tr><td>Control boundary (idle)</td><td>.42</td><td>4.10</td><td><b>4.04</b></td><td>3.0</td></tr>
+<tr><td>Switch-on border</td><td>.85 acc</td><td>6.38</td><td><b>5.86</b></td><td>3.0</td></tr>
+<tr><td>Slider handle</td><td>1.0</td><td>14.13</td><td><b>12.73</b></td><td>3.0</td></tr>
+<tr><td>Focus ring</td><td>1.0</td><td>10.38</td><td><b>9.35</b></td><td>3.0</td></tr>
+</table>
+<p>Worst case anywhere in the design: <b>4.04:1</b> for a control boundary (needs 3.0) and <b>6.31:1</b> for
+the dimmest text that carries meaning (needs 4.5). There is deliberately no fourth text role — the previous
+30% "faint" tier measured 3.79:1 and was cut rather than argued for. Disabled rows are <i>not</i> dimmed:
+dimming is what breaks contrast. A disabled row keeps full-strength text and states its reason in
+<code>Warn</code>.</p>
+
+<h2>Try these</h2>
+<ul>
+<li><b>SYSTEM ▸ Monitor ▸ Placement</b> — drag the block on the Scope's Stage. Nine anchors, live margin
+rulers, and the real HUD over the game moves with it.</li>
+<li><b>DISPLAY ▸ Upscaling ▸ Sharpness</b> — drag the slider and the wipe's right half tracks it.</li>
+<li><b>DISPLAY ▸ Frame Limiter ▸ FPS Limit</b> — step the cap and watch the trace flatten onto the line.</li>
+<li><b>AUDIO ▸ Mixer ▸ Stream</b> — nine options, so the selector compresses instead of becoming a dropdown.
+You can still see how many options exist and where you are among them.</li>
+<li><b>Ctrl+K</b> — the same registrations, searched.</li>
+<li><b>display_scale 1.75×</b> — watch the ladder dock the Scope to the Spine, then overlay it.</li>
+</ul>
+`;
+
+/* deep links: #sel=display.sharpness&ds=1.75&open=system.monitor */
+function fromHash(){
+  const h=new URLSearchParams(location.hash.slice(1));
+  if(h.get('ds')) V['ui.scale']=parseFloat(h.get('ds'));
+  if(h.get('hue')) V['ui.accent_hue']=parseInt(h.get('hue'));
+  if(h.get('scene')) S.scene=h.get('scene');
+  if(h.get('scope')) S.scopeMode=h.get('scope');
+  if(h.get('open')) S.open=h.get('open');
+  if(h.get('sel')){ S.sel=h.get('sel'); const r=IDX[S.sel]; if(r) S.open=r[0].id; }
+  if(h.get('pal')!==null&&h.get('pal')!==undefined&&h.has('pal')){
+    S.pal=true; stg.classList.add('pal-on'); setTimeout(()=>{ $('#palq').value=h.get('pal'); renderPal(); },0); }
+}
+/* boot */
+fromHash(); syncDeck(); render(); fit();
+window.addEventListener('hashchange',()=>{ fromHash(); syncDeck(); render(); });
+</script>
+</body>
+</html>

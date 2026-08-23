@@ -1,0 +1,1437 @@
+<title>Refined Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ==========================================================================
+   Direction A — CONSOLE, refined (A1: disciplined refinement)
+   Fixes, in order of the user's critique:
+     1. the sub-tab bar is DELETED. Screens live in the rail's second zone.
+     2. one control column, three fill classes -> same kind == same size, always.
+     3. every text/UI role measured (WCAG); see the CONTRAST panel in the demo bar.
+     4. rail icons sit at a fixed x/y in BOTH rail states — nothing moves.
+     5. the bottom bar is a DETAIL bar: help lives there, not in a tooltip.
+   Everything still derives from two numbers: --u (spacing) and --fs (type).
+   ========================================================================== */
+
+:root{
+  --u: 4px;
+  --fs: 15px;
+
+  /* accent family — OKLCH, hue is the ONLY user-tunable axis (L/C fixed per token) */
+  --hue: 218;
+  --accent:       oklch(.74 .12 var(--hue));
+  --accent-edge:  oklch(.80 .12 var(--hue));
+  --accent-value: oklch(.84 .10 var(--hue));
+  --accent-text:  oklch(.82 .10 var(--hue));
+  --accent-knob:  oklch(.86 .08 var(--hue));
+  --accent-seg:   oklch(.90 .07 var(--hue));
+  --accent-a10:   oklch(.74 .12 var(--hue) / .10);
+  --accent-a14:   oklch(.74 .12 var(--hue) / .14);
+  --accent-a22:   oklch(.74 .12 var(--hue) / .22);
+  --accent-a55:   oklch(.74 .12 var(--hue) / .55);
+  --accent-a62:   oklch(.74 .12 var(--hue) / .62);
+  --accent-glow:  oklch(.74 .12 var(--hue) / .45);
+
+  --ok:     oklch(.78 .16 145);
+  --warn:   oklch(.72 .17 55);
+  --danger: oklch(.70 .17 25);
+
+  /* surfaces — elevation is white alpha over the blurred base, never a hue */
+  --surface: rgba(8,9,11,.86);
+  --e1: rgba(255,255,255,.035);  /* rail, well, bands   */
+  --e2: rgba(255,255,255,.060);  /* focused row         */
+  --e-box: rgba(255,255,255,.060);/* control boxes      */
+  --sheet-bg: rgba(10,12,15,.97);
+
+  /* lines — decorative separators (see SPEC §3.3), state never rides on these */
+  --line-row: rgba(255,255,255,.07);
+  --hair:     rgba(255,255,255,.10);
+  --line-strong: rgba(255,255,255,.16);
+  --rail-track: rgba(255,255,255,.22);   /* slider groove, raised from .16 */
+
+  /* text roles — MEASURED. worst case over any game: see SPEC §3.4 */
+  --t-primary:  rgba(239,245,251,.96);   /* >= 13.2:1 */
+  --t-label:    rgba(239,245,251,.82);   /* >=  9.9:1 */
+  --t-meta:     rgba(239,245,251,.62);   /* >=  6.3:1 */
+  --t-faint:    rgba(239,245,251,.44);   /* >=  3.9:1 — glyphs only, never prose */
+
+  /* metrics */
+  --row-h:   calc(var(--u) * 11);   /* 44 */
+  --pad-x:   calc(var(--u) * 6);    /* 24 */
+  --icon:    calc(var(--u) * 5);    /* 20 */
+  --rail-w:  calc(var(--u) * 62);   /* 248 */
+  --rail-cw: calc(var(--u) * 17);   /* 68 = pad + icon + pad  <- point 4 */
+  --ctl-w:   calc(var(--u) * 96);   /* 384 — the control column          */
+  --ctl-half:calc(var(--u) * 48);   /* 192 — the half class              */
+  --val-w:   calc(var(--u) * 20);   /* 80  — the slider's value slot     */
+  --con-w:   calc(var(--u) * 297);
+  --con-h:   calc(var(--u) * 194);
+  --radius:  calc(var(--u) * 1.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+/* Committed single-theme design: an overlay composited over a running game,
+   usually at night. A light variant would be a flashbang. */
+body{font-family:'Geist',system-ui,sans-serif;background:#05070a;color:var(--t-primary);
+  overflow:hidden;-webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;min-height:100%}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{
+  animation-duration:.001ms !important;transition-duration:.001ms !important}}
+.mono{font-family:'Geist Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* ---------- the game behind ---------------------------------------------- */
+#game{position:fixed;inset:0;z-index:0}
+#game .art{position:absolute;inset:0}
+#game.g0 .art{background:radial-gradient(120% 90% at 22% 18%,#2c5c7a 0%,#12222f 42%,#070b10 100%),
+  linear-gradient(140deg,#3d2a12 0%,transparent 55%)}
+#game.g1 .art{background:radial-gradient(90% 70% at 70% 30%,#d9762a 0%,#6c2a12 35%,#170c08 100%),
+  repeating-linear-gradient(112deg,rgba(255,255,255,.05) 0 3px,transparent 3px 22px)}
+#game.g2 .art{background:radial-gradient(120% 120% at 50% 110%,#ffffff 0%,#e6eef6 26%,#9fb4c6 55%,#3f5568 100%)}
+#game.g3 .art{background:#000}
+#scrim{position:fixed;inset:0;z-index:1;backdrop-filter:blur(26px) saturate(1.08);
+  background:rgba(4,6,9,.62)}   /* compositor blur 1.0 + darkening 0.8, modelled */
+
+/* ---------- demo strip (NOT the design — it drives the mock) -------------- */
+#demo{position:relative;z-index:60;flex:none;display:flex;flex-direction:column;
+  background:#05070a;border-bottom:1px solid rgba(255,255,255,.10);
+  font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:rgba(255,255,255,.66)}
+#demo .dtop{display:flex;gap:13px;align-items:center;flex-wrap:nowrap;overflow-x:auto;
+  padding:0 16px;height:54px;flex:none}
+#demo .dhint{display:flex;gap:0 18px;flex-wrap:wrap;align-items:baseline;padding:0 16px 9px;
+  font-size:10.5px;line-height:1.5;color:rgba(255,255,255,.5)}
+#demo .dhint i{font-style:normal;color:oklch(.84 .10 var(--hue));font-weight:600}
+#demo .dhint em{font-style:normal;color:rgba(255,255,255,.8)}
+#demo .dhint kbd{font:inherit;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);
+  border-radius:3px;padding:1px 4px;color:rgba(255,255,255,.82)}
+#demo button.proof{border-color:oklch(.74 .12 var(--hue) / .55);color:oklch(.86 .08 var(--hue))}
+#demo button.proof.on{color:#06090c}
+#demo .who{display:flex;flex-direction:column;gap:1px;flex:none;padding-right:2px}
+#demo .who strong{font-family:'Geist',sans-serif;font-size:12.5px;font-weight:600;
+  color:rgba(255,255,255,.94)}
+#demo .who span{font-size:10px;color:rgba(255,255,255,.44)}
+#demo b{color:rgba(255,255,255,.46);font-weight:500;text-transform:uppercase;flex:none}
+#demo button{font:inherit;background:rgba(255,255,255,.06);color:rgba(255,255,255,.78);
+  border:1px solid rgba(255,255,255,.14);border-radius:4px;padding:5px 9px;cursor:pointer;flex:none}
+#demo button:hover{background:rgba(255,255,255,.12)}
+#demo button.on{background:var(--accent-a55);border-color:var(--accent);color:#06090c;font-weight:600}
+#demo input[type=range]{width:80px;accent-color:oklch(.74 .12 var(--hue));flex:none}
+#demo .sep{width:1px;height:22px;background:rgba(255,255,255,.13);flex:none}
+
+/* ==========================================================================
+   THE CONSOLE
+   ========================================================================== */
+#wrap{position:relative;z-index:10;flex:1;min-height:0;display:grid;place-items:center;padding:10px}
+.console{width:min(var(--con-w),100%);height:min(var(--con-h),100%);background:var(--surface);
+  backdrop-filter:blur(22px) saturate(1.1);border:1px solid var(--hair);border-radius:var(--radius);
+  display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;position:relative;
+  box-shadow:0 40px 120px -30px rgba(0,0,0,.9)}
+
+/* ---------- header -------------------------------------------------------- */
+.hdr{height:calc(var(--u)*14);display:flex;align-items:center;gap:calc(var(--u)*3);
+  padding:0 var(--pad-x);border-bottom:1px solid var(--hair);
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.008))}
+.brand{width:calc(var(--u)*2.5);height:calc(var(--u)*2.5);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*3) var(--accent-glow);flex:none}
+.crumb{display:flex;align-items:center;gap:calc(var(--u)*2);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.78);font-weight:600;text-transform:uppercase;color:var(--t-primary)}
+.crumb .sep{color:var(--t-faint);font-weight:400}
+.crumb .up{color:var(--t-meta)}
+.pips{display:flex;gap:calc(var(--u)*.75);margin-left:calc(var(--u)*1)}
+.pips i{width:calc(var(--u)*1.5);height:calc(var(--u)*.75);background:rgba(255,255,255,.22);display:block}
+.pips i.on{background:var(--accent)}
+.hdr .spacer{flex:1}
+.badge{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);text-transform:uppercase;
+  padding:calc(var(--u)*.75) calc(var(--u)*1.5);background:var(--accent-a22);color:var(--accent-text)}
+.live{display:flex;gap:calc(var(--u)*3);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.72);color:var(--t-meta)}
+.live b{color:var(--accent-value);font-weight:500}
+
+/* ---------- body ---------------------------------------------------------- */
+.body{display:grid;grid-template-columns:var(--rail-w) 1fr;min-height:0;position:relative}
+.body.wide{grid-template-columns:var(--rail-cw) 1fr}
+.body,.rail{transition:grid-template-columns .18s ease,width .18s ease}
+
+/* ---- RAIL: two zones. Zone 1 (sections) NEVER changes height or position. -- */
+.rail{border-right:1px solid var(--hair);background:var(--e1);display:flex;flex-direction:column;
+  min-height:0;overflow:hidden}
+/* every zone label keeps its box in BOTH states; only its text fades.
+   That is why nothing below it can shift.  (point 4) */
+.rlabel{height:calc(var(--u)*8);display:flex;align-items:flex-end;padding:0 var(--pad-x) calc(var(--u)*1.5);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);letter-spacing:.06em;
+  text-transform:uppercase;color:var(--t-meta);white-space:nowrap;
+  transition:opacity .12s ease}
+.body.wide .rlabel{opacity:0}
+.ri{position:relative;display:flex;align-items:center;height:calc(var(--u)*12);
+  padding:0 var(--pad-x);cursor:pointer;color:var(--t-label);font-size:calc(var(--fs)*.95)}
+.ri .gl{width:var(--icon);height:var(--icon);flex:none}          /* fixed box, fixed x */
+.ri .lbl{margin-left:calc(var(--u)*3);white-space:nowrap;transition:opacity .12s ease}
+.ri .cnt{margin-left:auto;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);
+  color:var(--t-faint);transition:opacity .12s ease}
+.body.wide .ri .lbl,.body.wide .ri .cnt{opacity:0}
+.ri:hover{background:rgba(255,255,255,.045)}
+.ri.sel{background:var(--accent-a14);color:var(--t-primary)}
+.ri.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--u)*.75);
+  background:var(--accent);box-shadow:0 0 calc(var(--u)*3) var(--accent-glow)}
+.gl svg{width:100%;height:100%;display:block;stroke:currentColor;fill:none;stroke-width:1.5;
+  stroke-linecap:square;opacity:.85}
+.ri.sel .gl svg{stroke:var(--accent-knob);opacity:1}
+
+.rdiv{height:1px;background:var(--hair);margin:calc(var(--u)*3) 0 0}
+/* Zone 2 — the screens of the selected section. This replaces the sub-tab bar. */
+.rscreens{display:flex;flex-direction:column;overflow:auto;min-height:0;
+  transition:opacity .12s ease}
+.body.wide .rscreens{opacity:0;pointer-events:none}
+.rs{position:relative;display:flex;align-items:center;height:calc(var(--u)*9);
+  padding-left:calc(var(--pad-x) + var(--icon) + var(--u)*3);padding-right:var(--pad-x);
+  cursor:pointer;color:var(--t-meta);font-size:calc(var(--fs)*.9);white-space:nowrap}
+.rs:hover{background:rgba(255,255,255,.045)}
+.rs.on{color:var(--t-primary);background:var(--e2)}
+.rs.on::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent);box-shadow:0 0 calc(var(--u)*3) var(--accent-glow)}
+.rs .n{margin-left:auto;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);color:var(--t-faint)}
+.rail .grow{flex:1;min-height:calc(var(--u)*2)}
+.rail .foot{padding:calc(var(--u)*2) var(--pad-x);border-top:1px solid var(--hair);white-space:nowrap;
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);color:var(--t-meta);
+  transition:opacity .12s ease}
+.body.wide .rail .foot{opacity:0}
+
+/* icon-shift proof: two guides pinned to the icon's fixed x, drawn in BOTH states */
+#wrap.proof .rail::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--rail-cw);
+  pointer-events:none;z-index:5;
+  border-left:0;
+  background:
+    linear-gradient(90deg,transparent 0 calc(var(--pad-x) - 1px),var(--danger) calc(var(--pad-x) - 1px) var(--pad-x),transparent var(--pad-x)),
+    linear-gradient(90deg,transparent 0 calc(var(--pad-x) + var(--icon)),var(--danger) calc(var(--pad-x) + var(--icon)) calc(var(--pad-x) + var(--icon) + 1px),transparent calc(var(--pad-x) + var(--icon) + 1px));}
+
+/* ---------- stage --------------------------------------------------------- */
+.stage{display:flex;flex-direction:column;min-height:0;position:relative;overflow:hidden}
+.scroll{flex:1;min-height:0;overflow:auto;padding:0 var(--pad-x) calc(var(--u)*5)}
+.scroll::-webkit-scrollbar{width:calc(var(--u)*1.5)}
+.scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18)}
+.scroll::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- WELL ---------------------------------------------------------- */
+.well{margin:calc(var(--u)*4) var(--pad-x) 0;background:var(--e1);border:1px solid var(--hair);
+  position:relative;overflow:hidden}
+.well .wh{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*2) calc(var(--u)*3);
+  border-bottom:1px solid var(--hair);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.68);text-transform:uppercase;color:var(--t-meta)}
+.well .wh .dot{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*2.5) var(--accent-glow);flex:none}
+.well .wh .r{margin-left:auto;color:var(--t-meta);text-transform:none}
+.preview{position:relative;height:calc(var(--u)*40);background-size:cover}
+.preview.p0{background:radial-gradient(120% 90% at 22% 18%,#2c5c7a 0%,#12222f 42%,#070b10 100%)}
+.preview.p1{background:radial-gradient(90% 70% at 70% 30%,#d9762a 0%,#6c2a12 35%,#170c08 100%)}
+.preview.p2{background:radial-gradient(120% 120% at 50% 110%,#ffffff 0%,#e6eef6 26%,#9fb4c6 55%,#3f5568 100%)}
+.preview.p3{background:#000}
+.pgrid{position:absolute;inset:calc(var(--u)*2);display:grid;grid-template-columns:repeat(3,1fr);
+  grid-template-rows:repeat(3,1fr);gap:calc(var(--u)*1)}
+.pcell{border:1px dashed rgba(255,255,255,.22);cursor:pointer}
+.pcell:hover{background:rgba(255,255,255,.09)}
+.pcell.sel{border:1px solid var(--accent);background:var(--accent-a22)}
+.hud{position:absolute;pointer-events:none;background:rgba(9,11,14,.60);
+  border:1px solid rgba(255,255,255,.16);padding:calc(var(--u)*2) calc(var(--u)*2.75);
+  font-family:'Geist Mono',monospace;line-height:1.15;min-width:calc(var(--u)*38)}
+.hud .r1{display:flex;align-items:baseline;gap:calc(var(--u)*1.5)}
+.hud .n{font-size:calc(var(--fs)*1.2);font-weight:600;color:#fff}
+.hud .u2{font-size:calc(var(--fs)*.66);color:rgba(255,255,255,.72)}
+.hud .ms{margin-left:auto;font-size:calc(var(--fs)*.8);font-weight:500;color:oklch(.88 .08 var(--hue))}
+.hud .graph{display:flex;align-items:flex-end;gap:1px;height:calc(var(--u)*4.5);margin:calc(var(--u)*1) 0}
+.hud .graph i{flex:1;background:oklch(.74 .12 var(--hue) / .75);display:block}
+.hud .graph i.sp{background:oklch(.72 .17 55 / .9)}
+.hud .r3{font-size:calc(var(--fs)*.66);color:rgba(255,255,255,.78);display:flex;gap:calc(var(--u)*2.5)}
+.meters{padding:calc(var(--u)*3)}
+.mrow{display:flex;align-items:center;gap:calc(var(--u)*2);margin-bottom:calc(var(--u)*1)}
+.mrow span{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);color:var(--t-meta);width:calc(var(--u)*3)}
+.mrow .segs{display:flex;gap:2px;flex:1}
+.mrow .segs i{flex:1;height:calc(var(--u)*1.5);background:rgba(255,255,255,.14);display:block}
+.mrow .segs i.lit{background:oklch(.74 .12 var(--hue) / .9)}
+
+/* ---------- GROUP + ROW --------------------------------------------------- */
+.group{display:flex;align-items:center;gap:calc(var(--u)*2.5);margin:calc(var(--u)*6) 0 calc(var(--u)*1);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);font-weight:500;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--t-meta)}
+.group::after{content:"";flex:1;height:1px;background:var(--hair)}
+.group:first-child{margin-top:calc(var(--u)*4)}
+
+.row{position:relative;display:flex;align-items:center;gap:calc(var(--u)*12);
+  min-height:var(--row-h);padding:calc(var(--u)*1.5) calc(var(--u)*3);
+  margin:0 calc(var(--u)*-3);border-bottom:1px solid var(--line-row);cursor:pointer}
+.row:hover{background:rgba(255,255,255,.035)}
+.row.foc{background:var(--e2)}
+.row.foc::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent);box-shadow:0 0 calc(var(--u)*3) var(--accent-glow)}
+.row.landed{animation:land 1.1s ease-out}
+@keyframes land{0%,40%{background:var(--accent-a22)}100%{background:var(--e2)}}
+.row .txt{min-width:0;flex:1}
+.row .lbl{font-size:var(--fs);color:var(--t-label);line-height:1.25}
+.row.foc .lbl{color:var(--t-primary)}
+.row .sub{font-size:calc(var(--fs)*.8);color:var(--t-meta);margin-top:calc(var(--u)*.5);line-height:1.3}
+/* THE CONTROL COLUMN — one width, three fill classes. (point 2) */
+.row .ctl{width:var(--ctl-w);flex:none;display:flex;justify-content:flex-end;align-items:center;
+  gap:calc(var(--u)*3)}
+.row.dis{cursor:default}
+.row.dis .lbl{color:var(--t-meta)}          /* dimmed by COLOUR, never into illegibility */
+
+/* fill class FILL — spans the whole column */
+.f-fill{width:100%;display:flex;align-items:center;gap:calc(var(--u)*3)}
+/* fill class HALF — always exactly half the column, right-aligned */
+.f-half{width:var(--ctl-half);display:flex;align-items:center;justify-content:flex-end;
+  gap:calc(var(--u)*2)}
+/* fill class MARK — intrinsic, flush right */
+
+/* column guides (mock only) */
+#wrap.guides .row .ctl{box-shadow:inset 1px 0 0 var(--warn)}
+#wrap.guides .f-half{box-shadow:inset 1px 0 0 var(--ok)}
+
+/* --- switch (MARK) ------------------------------------------------------- */
+.sw{width:calc(var(--u)*11);height:calc(var(--u)*6);flex:none;position:relative;
+  background:rgba(255,255,255,.08);border:1px solid var(--line-strong)}
+.sw i{position:absolute;top:calc(var(--u)*.75);left:calc(var(--u)*.75);width:calc(var(--u)*4);
+  height:calc(var(--u)*4);background:rgba(255,255,255,.72);display:block;transition:left .12s ease-out}
+.sw.on{background:var(--accent-a62);border-color:var(--accent)}
+.sw.on i{left:calc(var(--u)*5.75);background:var(--accent-knob)}
+.row.dis .sw{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.12)}
+.row.dis .sw i{background:rgba(255,255,255,.45)}
+
+/* --- segmented (FILL) ---------------------------------------------------- */
+.seg{display:flex;gap:calc(var(--u)*.75);width:100%}
+.seg b{flex:1;text-align:center;font-family:'Geist Mono',monospace;font-weight:500;
+  font-size:calc(var(--fs)*.76);padding:calc(var(--u)*1.5) 0;background:rgba(255,255,255,.05);
+  border:1px solid var(--hair);color:var(--t-label);white-space:nowrap}
+.seg b.on{background:var(--accent-a55);border-color:var(--accent);color:var(--accent-seg);font-weight:600}
+
+/* --- slider (FILL) — 292px of track at 1.0x, up from ~140 ---------------- */
+.sl{display:flex;align-items:center;gap:calc(var(--u)*3);width:100%}
+.sl .track{position:relative;flex:1;height:calc(var(--u)*1.5);background:var(--rail-track)}
+.sl .fill{position:absolute;left:0;top:0;bottom:0;
+  background:linear-gradient(90deg,oklch(.74 .12 var(--hue) / .6),oklch(.80 .12 var(--hue)))}
+.sl .knob{position:absolute;top:calc(var(--u)*-1.75);width:calc(var(--u)*2.5);height:calc(var(--u)*5);
+  background:var(--accent-knob);transform:translateX(-50%);box-shadow:0 0 calc(var(--u)*3) var(--accent-glow)}
+.sl .v{font-family:'Geist Mono',monospace;font-weight:500;font-size:calc(var(--fs)*.9);
+  color:var(--accent-value);width:var(--val-w);flex:none;text-align:right}
+.row.dis .sl .fill{background:rgba(255,255,255,.34)}
+.row.dis .sl .knob{background:rgba(255,255,255,.55);box-shadow:none}
+.row.dis .sl .v{color:var(--t-meta)}
+
+/* --- boxes (HALF): picker, stepper, colour, multi, action ---------------- */
+.box{flex:1;min-width:0;display:flex;align-items:center;gap:calc(var(--u)*2);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.88);color:var(--accent-value);
+  padding:calc(var(--u)*1.5) calc(var(--u)*2);background:var(--e-box);border:1px solid var(--hair);
+  justify-content:flex-end;white-space:nowrap;overflow:hidden}
+.box .cap{margin-right:auto;color:var(--t-meta);font-size:calc(var(--fs)*.76);text-transform:uppercase}
+.chev{color:var(--t-faint);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.9);flex:none}
+.act{flex:1;text-align:center;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.8);
+  letter-spacing:.06em;text-transform:uppercase;color:var(--accent-text);border:1px solid var(--accent-a55);
+  padding:calc(var(--u)*1.5) 0;background:var(--accent-a10)}
+.act.danger{color:oklch(.82 .09 25);border-color:oklch(.70 .17 25 / .55);background:oklch(.70 .17 25 / .10)}
+.swatch{width:calc(var(--u)*7);height:calc(var(--u)*5);border:1px solid rgba(255,255,255,.3);flex:none}
+.tin{flex:1;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.88);color:var(--t-primary);
+  background:var(--e-box);border:1px solid var(--hair);padding:calc(var(--u)*1.5) calc(var(--u)*2);
+  text-align:left}
+
+/* --- readout / drill (MARK) ---------------------------------------------- */
+.ro{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.86);color:var(--t-meta);text-align:right}
+.ro.acc{color:var(--accent-value)}
+.dot{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 calc(var(--u)*2) oklch(.78 .16 145 / .5)}
+.dot.warn{background:var(--warn)}
+.dot.idle{background:rgba(239,245,251,.44)}
+/* chips (FILL) */
+.chips{display:flex;gap:calc(var(--u)*1.5);width:100%;justify-content:flex-end}
+.chip{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);letter-spacing:.05em;
+  text-transform:uppercase;padding:calc(var(--u)*1) calc(var(--u)*2);background:var(--accent-a55);
+  color:var(--accent-seg);border:1px solid var(--accent)}
+.chip.n{background:rgba(255,255,255,.05);color:var(--t-meta);border-color:var(--hair)}
+
+/* ---------- LOG (Wide) ---------------------------------------------------- */
+.logbar{display:flex;align-items:center;gap:calc(var(--u)*3);padding:calc(var(--u)*3) var(--pad-x);
+  border-bottom:1px solid var(--hair);background:var(--e1)}
+.logbar .segw{width:calc(var(--u)*44);flex:none}
+.logbar .segw.s2{width:calc(var(--u)*36)}
+.logbar .find{flex:1;display:flex;align-items:center;gap:calc(var(--u)*2);background:var(--e-box);
+  border:1px solid var(--hair);padding:calc(var(--u)*1.5) calc(var(--u)*2.5);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.84);color:var(--t-primary)}
+.logbar .find s{text-decoration:none;color:var(--t-meta)}
+.logview{flex:1;min-height:0;overflow:auto;padding:calc(var(--u)*2) var(--pad-x) calc(var(--u)*4);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.82);line-height:1.55}
+.ln{display:flex;gap:calc(var(--u)*3);white-space:pre}
+.ln:hover{background:rgba(255,255,255,.04)}
+.ln .ts{color:var(--t-meta)}
+.ln .sc{width:calc(var(--u)*32);flex:none;color:var(--accent-text)}
+.ln .sc.w{color:var(--warn)} .ln .sc.e{color:oklch(.82 .09 25)}
+.ln .ms{color:var(--t-label);white-space:pre-wrap}
+.ln.e .ms{color:oklch(.82 .09 25)}
+.ln mark{background:var(--accent-a55);color:#06090c}
+
+/* ---------- DETAIL BAR (replaces the gamepad legend) — point 5 ------------ */
+.detail{min-height:calc(var(--u)*15);display:flex;align-items:center;gap:calc(var(--u)*5);
+  padding:calc(var(--u)*2) var(--pad-x);border-top:1px solid var(--hair);
+  background:linear-gradient(0deg,rgba(255,255,255,.045),rgba(255,255,255,.008))}
+.detail .d1{font-size:calc(var(--fs)*.9);color:var(--t-label);line-height:1.35}
+.detail .d1 b{color:var(--t-primary);font-weight:600}
+.detail .d2{margin-top:calc(var(--u)*.75);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.72);color:var(--t-meta);display:flex;gap:calc(var(--u)*2);flex-wrap:wrap}
+.detail .d2 s{text-decoration:none;color:var(--t-faint)}
+.detail .dk{margin-left:auto;flex:none;display:flex;gap:calc(var(--u)*3);align-items:center;
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);color:var(--t-meta)}
+.detail .dk kbd{font:inherit;background:rgba(255,255,255,.09);border:1px solid var(--line-strong);
+  padding:calc(var(--u)*.5) calc(var(--u)*1.25);color:var(--t-label)}
+
+/* ---------- SHEET --------------------------------------------------------- */
+.sheetwrap{position:absolute;inset:0;display:none;z-index:20}
+.sheetwrap.on{display:block}
+.sheetwrap .scr{position:absolute;inset:0;background:rgba(3,4,6,.55)}
+.sheet{position:absolute;right:0;top:0;bottom:0;width:calc(var(--u)*92);background:var(--sheet-bg);
+  border-left:1px solid var(--line-strong);box-shadow:-30px 0 80px -20px rgba(0,0,0,.8);
+  display:flex;flex-direction:column;animation:slide .16s ease-out}
+@keyframes slide{from{transform:translateX(calc(var(--u)*8));opacity:.4}to{transform:none;opacity:1}}
+.sheet .sh{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*4) var(--pad-x);
+  border-bottom:1px solid var(--hair);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.78);
+  font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.sheet .sh s{margin-left:auto;text-decoration:none;color:var(--t-meta);font-weight:400}
+.sheet .sb{flex:1;overflow:auto;padding:calc(var(--u)*2) var(--pad-x)}
+.opt{display:flex;align-items:center;gap:calc(var(--u)*3);min-height:var(--row-h);
+  padding:calc(var(--u)*1.5) calc(var(--u)*3);margin:0 calc(var(--u)*-3);position:relative;cursor:pointer}
+.opt:hover{background:rgba(255,255,255,.05)}
+.opt.sel{background:var(--e2)}
+.opt.sel::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent)}
+.opt .on{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.95);color:var(--t-label)}
+.opt.sel .on{color:var(--accent-value)}
+.opt .od{font-size:calc(var(--fs)*.8);color:var(--t-meta);margin-top:calc(var(--u)*.5)}
+.opt .mk{margin-left:auto;color:var(--accent);font-family:'Geist Mono',monospace}
+
+/* ---------- COMMAND PALETTE (B's registry, adopted as a feature) ---------- */
+.palwrap{position:absolute;inset:0;display:none;z-index:30}
+.palwrap.on{display:block}
+.palwrap .scr{position:absolute;inset:0;background:rgba(3,4,6,.55)}
+.pal{position:absolute;left:50%;top:calc(var(--u)*14);transform:translateX(-50%);
+  width:min(calc(var(--u)*180),92%);max-height:calc(100% - var(--u)*24);background:var(--sheet-bg);
+  border:1px solid var(--line-strong);box-shadow:0 40px 100px -20px rgba(0,0,0,.85);
+  display:flex;flex-direction:column;animation:pop .14s ease-out}
+@keyframes pop{from{transform:translate(-50%,calc(var(--u)*-2));opacity:0}to{transform:translateX(-50%);opacity:1}}
+.pal .pq{display:flex;align-items:center;gap:calc(var(--u)*3);padding:calc(var(--u)*3.5) var(--pad-x);
+  border-bottom:1px solid var(--hair)}
+.pal .pq .pfx{font-family:'Geist Mono',monospace;color:var(--accent);font-size:calc(var(--fs)*1.05)}
+.pal .pq input{flex:1;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*1.05);
+  background:transparent;border:0;outline:none;color:var(--t-primary)}
+.pal .pq input::placeholder{color:var(--t-meta)}
+.pal .pq .cnt{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);color:var(--t-meta)}
+.pal .pb{flex:1;overflow:auto;padding:calc(var(--u)*1.5) 0}
+.pr{display:flex;align-items:center;gap:calc(var(--u)*4);padding:calc(var(--u)*1.5) var(--pad-x);
+  min-height:calc(var(--u)*12);cursor:pointer;position:relative}
+.pr:hover{background:rgba(255,255,255,.045)}
+.pr.on{background:var(--e2)}
+.pr.on::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent);box-shadow:0 0 calc(var(--u)*3) var(--accent-glow)}
+.pr .pt{flex:1;min-width:0}
+.pr .ptl{font-size:calc(var(--fs)*.98);color:var(--t-label)}
+.pr.on .ptl{color:var(--t-primary)}
+.pr .ptl mark{background:transparent;color:var(--accent-value);font-weight:600}
+.pr .pth{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);color:var(--t-meta);
+  margin-top:calc(var(--u)*.5);letter-spacing:.04em;text-transform:uppercase}
+.pr .pc{width:var(--ctl-half);flex:none;display:flex;justify-content:flex-end;align-items:center;
+  gap:calc(var(--u)*2)}
+.pal .pf{display:flex;align-items:center;gap:calc(var(--u)*4);padding:calc(var(--u)*2) var(--pad-x);
+  border-top:1px solid var(--hair);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);
+  color:var(--t-meta)}
+.pal .pf kbd{font:inherit;background:rgba(255,255,255,.09);border:1px solid var(--line-strong);
+  padding:calc(var(--u)*.5) calc(var(--u)*1.25);color:var(--t-label)}
+
+/* ---------- CONTRAST panel (mock instrument, not part of the design) ------ */
+#cpanel{position:fixed;right:12px;top:130px;bottom:12px;width:min(430px,46vw);z-index:70;display:none;
+  background:#080a0d;border:1px solid rgba(255,255,255,.16);border-radius:6px;overflow:auto;
+  padding:14px 16px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;
+  color:rgba(255,255,255,.85)}
+#cpanel.on{display:block}
+#cpanel h3{font-family:'Geist',sans-serif;font-size:13px;margin:0 0 2px}
+#cpanel p{font-size:10.5px;color:rgba(255,255,255,.6);margin:0 0 10px;line-height:1.45}
+#cpanel table{width:100%;border-collapse:collapse}
+#cpanel th{text-align:left;font-weight:500;color:rgba(255,255,255,.45);font-size:10px;
+  text-transform:uppercase;padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.14)}
+#cpanel td{padding:4px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+#cpanel td.n{text-align:right;font-variant-numeric:tabular-nums}
+#cpanel .pass{color:#6ED274}
+#cpanel .fail{color:#EF6B5A;font-weight:600}
+#cpanel .sec{padding-top:12px;color:rgba(255,255,255,.5);font-size:10px;text-transform:uppercase}
+</style>
+
+<div id="game" class="g0"><div class="art"></div></div>
+<div id="scrim"></div>
+
+<div id="demo">
+ <div class="dtop">
+  <div class="who">
+    <strong>A1 — Console, refined</strong>
+    <span>rail-only nav · one control column · measured contrast · registry + palette ·
+      try Control kit (taxonomy proof) and Log (contracted rail)</span>
+  </div>
+  <div class="sep"></div>
+  <b>ui scale</b>
+  <button data-scale=".5">0.5×</button><button data-scale=".75">0.75×</button>
+  <button data-scale="1" class="on">1.0×</button><button data-scale="1.5">1.5×</button>
+  <button data-scale="2">2.0×</button>
+  <div class="sep"></div>
+  <b>hue</b><input id="hue" type="range" min="0" max="360" value="218" aria-label="Accent hue">
+  <span id="huev" class="mono" style="color:var(--accent-value);width:26px">218</span>
+  <div class="sep"></div>
+  <b>game</b><button id="bg">cycle</button>
+  <div class="sep"></div>
+  <b>proofs</b>
+  <button id="cbtn" class="proof">1 · contrast report</button>
+  <button id="pbtn" class="proof">2 · icon-shift proof</button>
+  <button id="gbtn" class="proof">3 · column guides</button>
+  <div class="sep"></div>
+  <button id="palbtn">palette (Ctrl+K)</button>
+ </div>
+ <div class="dhint">
+  <span><i>1</i> <em>contrast report</em> — live WCAG ratios for every role; drag <em>hue</em> or
+    cycle <em>game</em> and every number recomputes.</span>
+  <span><i>2</i> <em>icon-shift proof</em> — pins two guides to the rail icons; now click
+    <em>Log</em> in the rail: the rail contracts, the icons stay put.</span>
+  <span><i>3</i> <em>column guides</em> — marks the one control column and its half line; open
+    <em>Control kit</em> in the rail to see all 15 controls against them.</span>
+  <span>In the console: <em>click a row</em> to focus it (the bottom bar explains it),
+    <kbd>↑</kbd><kbd>↓</kbd> move, <kbd>←</kbd><kbd>→</kbd> adjust in place,
+    <kbd>Y</kbd> reset, <kbd>Tab</kbd> section, <kbd>Ctrl</kbd>+<kbd>K</kbd> palette,
+    <kbd>Esc</kbd> close.</span>
+ </div>
+</div>
+
+<div id="wrap">
+  <div class="console">
+
+    <div class="hdr">
+      <div class="brand"></div>
+      <div class="crumb" id="crumb"></div>
+      <div class="pips" id="pips"></div>
+      <div class="spacer"></div>
+      <div class="badge" id="badge">app 1245620</div>
+      <div class="live">
+        <span>fps <b>142</b></span><span>frame <b>7.0</b> ms</span>
+        <span>out <b>1920×1080</b></span><span>hdr <b>on</b></span>
+      </div>
+    </div>
+
+    <div class="body" id="body">
+      <div class="rail" id="rail"></div>
+      <div class="stage" id="stage"></div>
+
+      <div class="sheetwrap" id="sheetwrap">
+        <div class="scr"></div>
+        <div class="sheet">
+          <div class="sh" id="sheettitle">Scaler <s>esc — back</s></div>
+          <div class="sb" id="sheetbody"></div>
+        </div>
+      </div>
+
+      <div class="palwrap" id="palwrap">
+        <div class="scr"></div>
+        <div class="pal">
+          <div class="pq"><span class="pfx">›</span>
+            <input id="palq" placeholder="jump to or adjust any setting…" autocomplete="off" spellcheck="false">
+            <span class="cnt" id="palcnt"></span></div>
+          <div class="pb" id="palbody"></div>
+          <div class="pf">
+            <span><kbd>↑↓</kbd> select</span><span><kbd>←→</kbd> adjust here</span>
+            <span><kbd>⏎</kbd> go to it in the rail</span><span><kbd>esc</kbd> close</span>
+            <span style="margin-left:auto" id="palreg"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail" id="detail"></div>
+  </div>
+</div>
+
+<div id="cpanel">
+  <h3>Measured contrast — live</h3>
+  <p>Computed with the WCAG 2.x relative-luminance formula from the same layer model the SPEC
+     uses: game → compositor veil rgb(4,6,9)@62% (blur 1.0 + darkening 0.8) → surface
+     rgba(8,9,11,.86) → elevation. Changing the <b>hue</b> or the <b>game</b> above
+     recomputes every row. Targets: 4.5:1 text, 3:1 UI/large.</p>
+  <div id="ctable"></div>
+</div>
+
+<script>
+/* ==========================================================================
+   0. Colour maths — the same model as SPEC.md's table, so the mock and the
+      document cannot disagree.
+   ========================================================================== */
+const clamp01 = x => Math.max(0, Math.min(1, x));
+function oklch(L, C, H){
+  const h = H * Math.PI / 180, a = C * Math.cos(h), b = C * Math.sin(h);
+  const l_ = L + .3963377774*a + .2158037573*b,
+        m_ = L - .1055613458*a - .0638541728*b,
+        s_ = L - .0894841775*a - 1.2914855480*b;
+  const l = l_**3, m = m_**3, s = s_**3;
+  const r =  4.0767416621*l - 3.3077115913*m + 0.2309699292*s,
+        g = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s,
+        bl= -0.0041960863*l - 0.7034186147*m + 1.7076147010*s;
+  const enc = u => { u = clamp01(u); return (u <= .0031308 ? 12.92*u : 1.055*Math.pow(u,1/2.4)-.055) * 255; };
+  return [enc(r), enc(g), enc(bl)];
+}
+const over = (fg, a, bg) => [0,1,2].map(i => a*fg[i] + (1-a)*bg[i]);
+function lum(c){
+  const f = v => { v /= 255; return v <= .04045 ? v/12.92 : Math.pow((v+.055)/1.055, 2.4); };
+  return .2126*f(c[0]) + .7152*f(c[1]) + .0722*f(c[2]);
+}
+function ratio(a, b){ let x = lum(a), y = lum(b); if (x < y) [x,y] = [y,x];
+  return (x + .05) / (y + .05); }
+
+const VEIL = [4,6,9], VEIL_A = .62, SURF = [8,9,11], SURF_A = .86, TEXT = [239,245,251];
+const GAMES = [ ['night scene', [12,26,38]], ['blown-out fire', [217,118,42]],
+                ['white snow field', [255,255,255]], ['pure black', [0,0,0]] ];
+const consoleBg = game => over(SURF, SURF_A, over(VEIL, VEIL_A, game));
+const elev = (bg, a) => over([255,255,255], a, bg);
+
+/* ==========================================================================
+   1. THE REGISTRY  (adopted from Direction B, as a feature — not as the GUI)
+      One declaration per setting. It feeds: the rail's screens, the row list,
+      the detail bar, reset-to-default, and the command palette.
+      Nothing here says how anything LOOKS. No size, no colour, no font.
+   ========================================================================== */
+const SECTIONS = [
+  {id:'gamescope', title:'Gamescope',      icon:'display'},
+  {id:'shaders',   title:'Shaders',        icon:'shaders'},
+  {id:'monitor',   title:'System Monitor', icon:'monitor'},
+  {id:'audio',     title:'Audio',          icon:'audio'},
+  {id:'config',    title:'Config',         icon:'config'},
+  {id:'log',       title:'Log',            icon:'log',  wide:true},
+  {id:'kit',       title:'Control kit',    icon:'kit',  mock:true}
+];
+const SCREENS = [
+  {id:'gamescope.upscaling', sec:'gamescope', title:'Upscaling'},
+  {id:'gamescope.display',   sec:'gamescope', title:'Display'},
+  {id:'gamescope.limiter',   sec:'gamescope', title:'Frame Limiter'},
+  {id:'gamescope.hdr',       sec:'gamescope', title:'HDR'},
+  {id:'shaders.vibrancy',    sec:'shaders',   title:'Vibrancy'},
+  {id:'shaders.presharpen',  sec:'shaders',   title:'Pre-Sharpen'},
+  {id:'shaders.adaptive',    sec:'shaders',   title:'Adaptive Brightness'},
+  {id:'monitor.general',     sec:'monitor',   title:'General',  well:'hud'},
+  {id:'monitor.fps',         sec:'monitor',   title:'FPS',      well:'hud'},
+  {id:'monitor.cpu',         sec:'monitor',   title:'CPU'},
+  {id:'monitor.gpu',         sec:'monitor',   title:'GPU'},
+  {id:'monitor.media',       sec:'monitor',   title:'Media'},
+  {id:'monitor.stats',       sec:'monitor',   title:'Statistics'},
+  {id:'audio.output',        sec:'audio',     title:'Output',   well:'meters'},
+  {id:'audio.streams',       sec:'audio',     title:'Streams'},
+  {id:'config.pergame',      sec:'config',    title:'Per-Game'},
+  {id:'config.general',      sec:'config',    title:'General'},
+  {id:'config.notify',       sec:'config',    title:'Notifications'},
+  {id:'log.gamescope',       sec:'log',       title:'Gamescope', wide:true},
+  {id:'log.game',            sec:'log',       title:'Game',      wide:true},
+  {id:'kit.taxonomy',        sec:'kit',       title:'Taxonomy'}
+];
+
+/* kind -> fill class. This table is the whole of "point 2": a caller cannot
+   choose it, so two controls of one kind can never differ in size.        */
+const CLASS = {
+  slider:'fill', segmented:'fill', chips:'fill', text:'fill',
+  picker:'half', stepper:'half', colour:'half', multi:'half', action:'half',
+  toggle:'mark', readout:'mark', drill:'mark'
+};
+
+const R = [];  /* the registry */
+/* The kit resolves Choice -> Segmented or Picker ONCE, at registration, from the
+   registered option strings: <=5 options AND longest label <=8 chars fits as cells.
+   Never measured at draw time — a font-atlas rebuild frame must not be able to flip it. */
+function resolveKind(e){
+  if (e.kind !== 'picker' && e.kind !== 'segmented') return e.kind;
+  const n = e.opts.length, longest = Math.max(...e.opts.map(o => o.length));
+  return (n <= 5 && longest <= 8) ? 'segmented' : 'picker';
+}
+function reg(e){ e.kind = resolveKind(e);
+  R.push(Object.assign({writes:'app', group:'', keywords:''}, e)); return e; }
+
+/* ---- Gamescope › Upscaling --------------------------------------------- */
+reg({id:'upscale.filter', s:'gamescope.upscaling', g:'Scaling', kind:'segmented',
+  label:'Filter', v:2, opts:['linear','nearest','fsr','nis','pixel'], def:0,
+  help:'How the game image is resampled to the output resolution. FSR and NIS add their own sharpening pass.',
+  kw:'upscale scaling resample fsr nis linear pixel'});
+reg({id:'upscale.scaler', s:'gamescope.upscaling', g:'Scaling', kind:'picker',
+  label:'Scaler', v:0, opts:['auto','integer','fit','fill','stretch'], def:0,
+  help:'How the scaled image is placed inside the output rectangle.',
+  kw:'aspect ratio fit fill stretch integer pillarbox'});
+reg({id:'upscale.sharpness', s:'gamescope.upscaling', g:'Scaling', kind:'slider',
+  label:'Sharpness', v:8, min:0, max:20, def:2, unit:'',
+  fmt:v=>v.toFixed(0), help:'FSR / NIS sharpening strength. Higher is sharper; too high rings around high-contrast edges.',
+  kw:'sharpen rcas cas crisp clarity'});
+reg({id:'upscale.effective', s:'gamescope.upscaling', g:'Scaling', kind:'readout',
+  label:'Effective resolution', v:'1280×960 → 1920×1080', status:'ok', writes:'—',
+  help:'The game’s render size and the output size this frame, after the scaler.', kw:'resolution size output'});
+reg({id:'presharpen.drill', s:'gamescope.upscaling', g:'Pre-upscale', kind:'drill',
+  label:'Pre-Sharpen', v:'on · 0.50', to:'shaders.presharpen', writes:'app',
+  help:'A sharpening pass that runs before the scaler, so it works with any Filter.', kw:'presharpen before scaler'});
+reg({id:'vibrancy.drill', s:'gamescope.upscaling', g:'Pre-upscale', kind:'drill',
+  label:'Vibrancy', v:'on · +0.42', to:'shaders.vibrancy',
+  help:'Saturation shaping in the Reshade pipeline, with optional skin-tone protection.', kw:'saturation colour vivid'});
+reg({id:'present.vrr', s:'gamescope.upscaling', g:'Presentation', kind:'toggle',
+  label:'VRR / Adaptive Sync', v:true, def:false,
+  help:'Lets the display refresh at the game’s pace. Needs a display and a game that both support it.',
+  kw:'vrr freesync gsync adaptive sync variable refresh'});
+reg({id:'present.tearing', s:'gamescope.upscaling', g:'Presentation', kind:'toggle',
+  label:'Allow Tearing', v:false, def:false, dis:()=>get('present.vrr'),
+  why:'Unavailable while VRR / Adaptive Sync is on.',
+  help:'Presents frames the moment they are ready, ignoring vblank. Lowest latency, visible tear lines.',
+  kw:'tearing immediate flips vsync latency'});
+reg({id:'present.grab', s:'gamescope.upscaling', g:'Presentation', kind:'toggle',
+  label:'Force Grab Cursor', v:false, def:false,
+  help:'Keeps the pointer confined to the game window even when it does not ask for it.', kw:'cursor mouse grab confine'});
+reg({id:'upscale.reset', s:'gamescope.upscaling', g:'Presentation', kind:'action',
+  label:'Reset this screen', v:'Reset', writes:'app',
+  help:'Restores every setting on this screen to its registered default.', kw:'reset default restore'});
+
+/* ---- Gamescope › HDR ---------------------------------------------------- */
+reg({id:'hdr.enabled', s:'gamescope.hdr', g:'Output', kind:'toggle', label:'HDR', v:true, def:false,
+  help:'Drives the connector in HDR10 and hands the game a PQ colourspace.', kw:'hdr10 pq bt2020 wide gamut'});
+reg({id:'hdr.cap', s:'gamescope.hdr', g:'Output', kind:'readout', label:'Display capability',
+  v:'HDR10 · PQ · 1000 nits', status:'ok', writes:'—',
+  help:'What the connected display reports through its EDID / DisplayID blocks.', kw:'edid capability nits'});
+reg({id:'hdr.tonemap', s:'gamescope.hdr', g:'Output', kind:'picker', label:'Tonemap Operator',
+  v:1, opts:['none','reinhard','aces','uncharted2','hable'], def:1,
+  help:'Applied when the game outputs more range than the display can show.', kw:'tonemap operator aces reinhard'});
+reg({id:'hdr.gamut', s:'gamescope.hdr', g:'Levels', kind:'slider', label:'SDR Gamut Wideness',
+  v:.35, min:0, max:1, def:0, fmt:v=>v.toFixed(2),
+  help:'Stretches SDR content toward the wider gamut. 0 keeps sRGB primaries exactly.', kw:'gamut wideness srgb saturation'});
+reg({id:'hdr.sdrnits', s:'gamescope.hdr', g:'Levels', kind:'slider', label:'SDR-on-HDR Brightness',
+  v:203, min:50, max:1000, def:203, unit:'nits', fmt:v=>v.toFixed(0),
+  help:'Where SDR white lands on an HDR display. 203 nits is the BT.2408 reference.', kw:'nits brightness sdr white paper'});
+reg({id:'hdr.ingain', s:'gamescope.hdr', g:'Levels', kind:'slider', label:'HDR Input Gain',
+  v:1, min:0, max:4, def:1, unit:'×', fmt:v=>v.toFixed(2),
+  help:'Multiplies the HDR signal before tonemapping. Above 1.0 clips highlights sooner.', kw:'gain exposure hdr input'});
+reg({id:'hdr.sdrgain', s:'gamescope.hdr', g:'Levels', kind:'slider', label:'SDR Input Gain',
+  v:1, min:0, max:4, def:1, unit:'×', fmt:v=>v.toFixed(2),
+  help:'Multiplies SDR content before it is mapped into the HDR signal.', kw:'gain exposure sdr input'});
+reg({id:'hdr.dim', s:'gamescope.hdr', g:'Levels', kind:'slider', label:'Night dimming',
+  v:0, min:0, max:1, def:0, fmt:v=>v.toFixed(2), dis:()=>!get('hdr.enabled'),
+  why:'Requires HDR output on a PQ-capable connector.',
+  help:'Scales peak luminance down for dark-room viewing without touching the tone curve.', kw:'night dim dark room luminance'});
+reg({id:'hdr.cs', s:'gamescope.hdr', g:'Focused app’s HDR metadata · read-only', kind:'readout',
+  label:'Colorspace', v:'PQ / BT.2020', writes:'—', help:'The colourspace the focused app attached to its surface.', kw:'colorspace pq bt2020'});
+reg({id:'hdr.maxml', s:'gamescope.hdr', g:'Focused app’s HDR metadata · read-only', kind:'readout',
+  label:'Max mastering luminance', v:'1000 nits', writes:'—', help:'From the app’s HDR static metadata block.', kw:'mastering luminance'});
+reg({id:'hdr.cll', s:'gamescope.hdr', g:'Focused app’s HDR metadata · read-only', kind:'readout',
+  label:'MaxCLL / MaxFALL', v:'824 / 210 nits', writes:'—', help:'Peak and frame-average light level the app declares.', kw:'maxcll maxfall'});
+reg({id:'hdr.pass', s:'gamescope.hdr', g:'Focused app’s HDR metadata · read-only', kind:'readout',
+  label:'Passthrough', v:'active', status:'ok', accent:true, writes:'—',
+  help:'The app’s HDR metadata is being forwarded to the display unchanged.', kw:'passthrough forward metadata'});
+reg({id:'hdr.clear', s:'gamescope.hdr', g:'Danger zone', kind:'action', label:'Clear HDR overrides for this app',
+  v:'Clear', danger:true, help:'Deletes the HDR block from 1245620.json. Global defaults apply again. Cannot be undone.',
+  kw:'clear delete reset hdr override'});
+
+/* ---- System Monitor › General ------------------------------------------ */
+reg({id:'mon.show', s:'monitor.general', g:'Module', kind:'toggle', label:'Show System Monitor',
+  v:true, def:true, help:'Draws the performance HUD over the game.', kw:'hud fps overlay show monitor'});
+reg({id:'mon.modules', s:'monitor.general', g:'Module', kind:'chips', label:'Active modules',
+  v:[1,1,1,0], opts:['fps','cpu','gpu','media'],
+  help:'Which modules the HUD draws. Every enabled module renders at the widest enabled module’s width.',
+  kw:'modules fps cpu gpu media rows'});
+reg({id:'mon.anchor', s:'monitor.general', g:'Placement', kind:'readout', label:'Anchor',
+  v:'top · right', writes:'app', help:'Pick a cell in the live preview above — the HUD moves there as you click.',
+  kw:'anchor corner placement position'});
+reg({id:'mon.mv', s:'monitor.general', g:'Placement', kind:'slider', label:'Vertical margin',
+  v:32, min:0, max:128, def:32, unit:'px', fmt:v=>v.toFixed(0),
+  help:'Distance from the anchored screen edge, vertically.', kw:'margin vertical offset edge'});
+reg({id:'mon.mh', s:'monitor.general', g:'Placement', kind:'slider', label:'Horizontal margin',
+  v:32, min:0, max:128, def:32, unit:'px', fmt:v=>v.toFixed(0),
+  help:'Distance from the anchored screen edge, horizontally.', kw:'margin horizontal offset edge'});
+reg({id:'mon.gap', s:'monitor.general', g:'Placement', kind:'slider', label:'Module spacing',
+  v:8, min:0, max:32, def:8, unit:'px', fmt:v=>v.toFixed(0),
+  help:'Vertical gap between two enabled modules.', kw:'spacing gap between modules'});
+reg({id:'mon.font', s:'monitor.general', g:'Type', kind:'slider', label:'Font size',
+  v:18, min:10, max:48, def:18, unit:'px', fmt:v=>v.toFixed(0),
+  help:'HUD type size in output pixels. Re-bakes the HUD atlas when you let go.', kw:'font size type text'});
+reg({id:'mon.blend', s:'monitor.general', g:'Type', kind:'segmented', label:'Blend mode',
+  v:0, opts:['alpha','additive','inverted'], def:0,
+  help:'How HUD pixels combine with the game. Inverted stays readable on any background.', kw:'blend additive inverted alpha'});
+reg({id:'mon.opacity', s:'monitor.general', g:'Type', kind:'slider', label:'Text opacity',
+  v:1, min:0, max:1, def:1, fmt:v=>v.toFixed(2), help:'Alpha of the HUD text itself.', kw:'opacity alpha transparency text'});
+reg({id:'mon.bd', s:'monitor.general', g:'Backdrop', kind:'toggle', label:'Backdrop', v:true, def:true,
+  help:'Draws a dark plate behind the HUD so it survives a bright frame.', kw:'backdrop plate background box'});
+reg({id:'mon.bdo', s:'monitor.general', g:'Backdrop', kind:'slider', label:'Backdrop opacity',
+  v:.6, min:0, max:1, def:.6, fmt:v=>v.toFixed(2),
+  help:'Default raised 0.50 → 0.60: at 0.50 the HUD measured 3.7:1 white-on-plate over a white game, which fails. 0.60 measures 5.2:1 — the thinnest margin left in the product.',
+  kw:'backdrop opacity alpha contrast readable'});
+reg({id:'mon.bdr', s:'monitor.general', g:'Backdrop', kind:'slider', label:'Backdrop rounding',
+  v:4, min:0, max:16, def:4, unit:'px', fmt:v=>v.toFixed(0), help:'Corner radius of the backdrop plate.', kw:'rounding radius corner'});
+reg({id:'mon.bdp', s:'monitor.general', g:'Backdrop', kind:'slider', label:'Backdrop padding',
+  v:6, min:0, max:24, def:6, unit:'px', fmt:v=>v.toFixed(0), help:'Inset between the HUD text and the plate edge.', kw:'padding inset'});
+reg({id:'mon.ft', s:'monitor.general', g:'Rows', kind:'toggle', label:'Frametime readout (ms)', v:true, def:true,
+  help:'Adds the millisecond frametime next to the FPS number.', kw:'frametime ms milliseconds'});
+reg({id:'mon.graph', s:'monitor.general', g:'Rows', kind:'toggle', label:'Frametime graph', v:true, def:true,
+  help:'A 240-frame bar graph; outliers are drawn in the warn colour.', kw:'graph histogram frametime spikes'});
+reg({id:'mon.pct', s:'monitor.general', g:'Rows', kind:'toggle', label:'Percentile row (1% / 0.1% / avg)', v:true, def:true,
+  help:'Low-percentile frame rates over the last 60 seconds — the numbers that describe stutter.', kw:'percentile 1% low average'});
+
+/* ---- Audio › Output ----------------------------------------------------- */
+reg({id:'audio.device', s:'audio.output', g:'Output', kind:'readout', label:'Device',
+  v:'alsa_output.pci-0000_c1_00.6.analog-stereo', status:'ok', writes:'—',
+  help:'The PipeWire sink gamescope is routing the focused app into.', kw:'device sink output pipewire'});
+reg({id:'audio.volume', s:'audio.output', g:'Output', kind:'slider', label:'Volume',
+  v:74, min:0, max:150, def:100, unit:'%', fmt:v=>v.toFixed(0),
+  help:'Per-app volume applied to the matched sink-input. Above 100% is digital gain and can clip.',
+  kw:'volume loudness gain level'});
+reg({id:'audio.mute', s:'audio.output', g:'Output', kind:'toggle', label:'Mute', v:false, def:false,
+  help:'Mutes the focused app only, not the system.', kw:'mute silence'});
+reg({id:'audio.stream', s:'audio.output', g:'Routing', kind:'drill', label:'Pick a stream manually',
+  v:'auto · matched by PID', to:'audio.streams',
+  help:'Overrides gamescope’s PID matching when a game spawns more than one audio client.', kw:'stream routing pid manual'});
+reg({id:'audio.clear', s:'audio.output', g:'Routing', kind:'action', label:'Clear manual override', v:'Clear',
+  help:'Returns to automatic PID-based stream matching.', kw:'clear override auto'});
+
+/* ---- Config › General --------------------------------------------------- */
+reg({id:'cfg.writes', s:'config.general', g:'Routing', kind:'readout', label:'Writing to',
+  v:'global.json', status:'ok', writes:'global',
+  help:'Where edits made on this screen are saved.', kw:'routing config file where saved'});
+reg({id:'cfg.override', s:'config.general', g:'Routing', kind:'toggle', label:'Override global config for this app',
+  v:false, def:false, writes:'global',
+  help:'When on, every edit lands in 1245620.json instead of global.json.', kw:'override per game app config'});
+reg({id:'cfg.hue', s:'config.general', g:'Accent colour', kind:'colour', label:'Accent hue',
+  v:218, min:0, max:360, def:218, unit:'°', writes:'global',
+  help:'Only the hue moves. Lightness and chroma are fixed per token, so no hue can wash out or blow out.',
+  kw:'accent colour hue theme oklch'});
+reg({id:'cfg.family', s:'config.general', g:'Accent colour', kind:'readout', label:'Derived family',
+  v:'6 tokens · worst 6.4:1', accent:true, writes:'—',
+  help:'Every accent token, measured against the console surface at the current hue. The lowest of the six is shown.',
+  kw:'palette family tokens contrast'});
+reg({id:'cfg.scale', s:'config.general', g:'UI scale', kind:'slider', label:'Display (overall UI)',
+  v:1, min:.5, max:2, def:1, unit:'×', fmt:v=>v.toFixed(2), writes:'global',
+  help:'Scales every dimension in the console. Re-bakes the font atlas when you let go.', kw:'scale size ui display zoom'});
+reg({id:'cfg.railscale', s:'config.general', g:'UI scale', kind:'slider', label:'Rail',
+  v:1, min:.85, max:2, def:1, unit:'×', fmt:v=>v.toFixed(2), writes:'global',
+  help:'Rail width and rail item height only. Was dock_scale before the dock was removed.', kw:'rail dock scale width'});
+reg({id:'cfg.notifyscale', s:'config.general', g:'UI scale', kind:'slider', label:'Notifications',
+  v:1, min:.6, max:1.6, def:1, unit:'×', fmt:v=>v.toFixed(2), writes:'global',
+  help:'Toast size. Toasts live outside the console and keep their own scale.', kw:'notification toast scale'});
+reg({id:'cfg.opconsole', s:'config.general', g:'Transparency', kind:'slider', label:'Console',
+  v:1, min:.3, max:1, def:1, fmt:v=>v.toFixed(2), writes:'global',
+  help:'Below 0.85 the helper raises text/label and text/meta on a ramp, so readability never depends on this slider.',
+  kw:'opacity transparency console alpha'});
+reg({id:'cfg.opsheet', s:'config.general', g:'Transparency', kind:'slider', label:'Sheets & scrim',
+  v:.9, min:.3, max:1, def:.9, fmt:v=>v.toFixed(2), writes:'global',
+  help:'Was opacity_windows_unfocused. Sheets are the only "behind" surface left.', kw:'sheet scrim opacity'});
+reg({id:'cfg.blur', s:'config.general', g:'Background effects', kind:'slider', label:'Blur',
+  v:1, min:0, max:1, def:1, fmt:v=>v.toFixed(2), writes:'global',
+  help:'The compositor’s blur pass on the game layer behind the console. The signature look.', kw:'blur background compositor'});
+reg({id:'cfg.dark', s:'config.general', g:'Background effects', kind:'slider', label:'Darkening',
+  v:.8, min:0, max:1, def:.8, fmt:v=>v.toFixed(2), writes:'global',
+  help:'Darkens the game behind the console. Every contrast figure in the spec assumes this at 0.80.',
+  kw:'darkening dim background contrast'});
+reg({id:'cfg.profiles', s:'config.general', g:'Profiles', kind:'drill', label:'Saved profiles',
+  v:'4 · “Handheld 40 Hz” active', to:'config.pergame', writes:'global',
+  help:'Named snapshots of every registered setting. Applying one writes them all at once.', kw:'profile preset saved snapshot'});
+reg({id:'cfg.newprofile', s:'config.general', g:'Profiles', kind:'text', label:'New profile name',
+  v:'Handheld 40 Hz', writes:'global', help:'Name for a new profile captured from the current values.', kw:'profile name new save'});
+reg({id:'cfg.save', s:'config.general', g:'Profiles', kind:'action', label:'Save as new profile', v:'Save',
+  writes:'global', help:'Captures every registered setting into a named profile.', kw:'save profile capture'});
+reg({id:'cfg.delete', s:'config.general', g:'Profiles', kind:'action', label:'Delete saved config for this app',
+  v:'Delete', danger:true, help:'Deletes 1245620.json permanently. This cannot be undone.', kw:'delete remove config app'});
+reg({id:'cfg.dir', s:'config.general', g:'Paths · read-only', kind:'readout', label:'Config directory',
+  v:'~/.config/gamescope-ritz', writes:'—', help:'Root of every config file gamescope-ritz reads and writes.', kw:'path directory config folder'});
+
+/* ---- Shaders › Vibrancy -------------------------------------------------- */
+reg({id:'vib.enabled', s:'shaders.vibrancy', g:'Vibrancy', kind:'toggle', label:'Vibrancy', v:true, def:false,
+  help:'Enables the vibrancy technique in the Reshade pipeline.', kw:'vibrancy saturation enable'});
+reg({id:'vib.strength', s:'shaders.vibrancy', g:'Vibrancy', kind:'slider', label:'Strength',
+  v:.42, min:-1, max:1, def:0, fmt:v=>(v>0?'+':'')+v.toFixed(2), dis:()=>!get('vib.enabled'),
+  why:'Turn Vibrancy on first.', help:'Negative desaturates, positive saturates. Applied before the scaler.',
+  kw:'strength saturation amount vibrancy'});
+reg({id:'vib.skin', s:'shaders.vibrancy', g:'Vibrancy', kind:'toggle', label:'Protect skin tones',
+  v:true, def:true, dis:()=>!get('vib.enabled'), why:'Turn Vibrancy on first.',
+  help:'Masks hues near skin so faces do not go orange as strength rises.', kw:'skin tone protect mask faces'});
+reg({id:'vib.reload', s:'shaders.vibrancy', g:'Vibrancy', kind:'action', label:'Recompile effect', v:'Reload',
+  help:'Recompiles gamescope-ritz.fx and reapplies every runtime uniform.', kw:'recompile reload shader effect fx'});
+
+/* ---- the taxonomy proof screen (mock only) ------------------------------ */
+reg({id:'kit.toggle', s:'kit.taxonomy', g:'Class MARK — intrinsic, flush to the column’s right edge', kind:'toggle',
+  label:'1 · Toggle', v:true, def:false, help:'44×24 track, 16×16 knob. Always this size, on every screen, forever.', kw:'toggle switch'});
+reg({id:'kit.readout', s:'kit.taxonomy', g:'Class MARK — intrinsic, flush to the column’s right edge', kind:'readout',
+  label:'2 · Readout', v:'read-only value', status:'ok', writes:'—',
+  help:'Mono at text/meta, right-aligned to the column edge. Never looks pressable.', kw:'readout value'});
+reg({id:'kit.drill', s:'kit.taxonomy', g:'Class MARK — intrinsic, flush to the column’s right edge', kind:'drill',
+  label:'3 · Drill', v:'summary is mandatory', to:'kit.taxonomy',
+  help:'A drill row must say what is inside it. The chevron column is what makes every drill align.', kw:'drill sub screen'});
+reg({id:'kit.slider1', s:'kit.taxonomy', g:'Class FILL — spans the whole 96u column', kind:'slider',
+  label:'4 · Slider', v:.5, min:0, max:1, def:.5, fmt:v=>v.toFixed(2),
+  help:'Track = column − value slot − gap = 292px at 1.0×, up from ~140px. Every slider, every screen.', kw:'slider'});
+reg({id:'kit.slider2', s:'kit.taxonomy', g:'Class FILL — spans the whole 96u column', kind:'slider',
+  label:'5 · Slider, wildly different range and unit', v:900, min:50, max:1000, def:203, unit:'nits',
+  fmt:v=>v.toFixed(0), help:'Same pixel width as the slider above it. The value slot is fixed at 20u — 7 monospace digits.', kw:'slider'});
+reg({id:'kit.seg', s:'kit.taxonomy', g:'Class FILL — spans the whole 96u column', kind:'segmented',
+  label:'6 · Segmented', v:1, opts:['off','low','high'], def:0,
+  help:'Cells share the column equally, so a 3-cell and a 5-cell control are the same total width.', kw:'segmented'});
+reg({id:'kit.seg2', s:'kit.taxonomy', g:'Class FILL — spans the whole 96u column', kind:'segmented',
+  label:'7 · Segmented, five cells', v:2, opts:['linear','nearest','fsr','nis','pixel'], def:0,
+  help:'Above five cells the kit switches the kind to Picker automatically. The caller does not get a vote.', kw:'segmented'});
+reg({id:'kit.chips', s:'kit.taxonomy', g:'Class FILL — spans the whole 96u column', kind:'chips',
+  label:'8 · Chips', v:[1,0,1,1], opts:['fps','cpu','gpu','media'],
+  help:'A read-mostly summary of a multi-toggle set. Enter opens the sheet.', kw:'chips multi'});
+reg({id:'kit.text', s:'kit.taxonomy', g:'Class FILL — spans the whole 96u column', kind:'text',
+  label:'9 · Text', v:'Handheld 40 Hz', help:'Edits in place. There is no popup and no second layout.', kw:'text input'});
+reg({id:'kit.picker', s:'kit.taxonomy', g:'Class HALF — always exactly 48u, right-aligned', kind:'picker',
+  label:'10 · Picker', v:1, opts:['none','reinhard','aces','uncharted2','hable'], def:0,
+  help:'Opens the sheet. The box is 48u whether the value is "none" or "uncharted2".', kw:'picker choice dropdown'});
+reg({id:'kit.stepper', s:'kit.taxonomy', g:'Class HALF — always exactly 48u, right-aligned', kind:'stepper',
+  label:'11 · Stepper', v:60, min:0, max:360, def:0, unit:'fps',
+  help:'A number you type or step. 0 shows as "unlimited" because the registry declared ZeroMeans.', kw:'stepper number fps limit'});
+reg({id:'kit.colour', s:'kit.taxonomy', g:'Class HALF — always exactly 48u, right-aligned', kind:'colour',
+  label:'12 · Colour', v:218, min:0, max:360, def:218, unit:'°',
+  help:'Hue only. The swatch sits inside the same 48u box as every other half-class control.', kw:'colour hue swatch'});
+reg({id:'kit.multi', s:'kit.taxonomy', g:'Class HALF — always exactly 48u, right-aligned', kind:'multi',
+  label:'13 · Multi-select', v:'3 of 6', help:'Summary plus chevron; the sheet holds the checkbox rows.', kw:'multi select'});
+reg({id:'kit.action', s:'kit.taxonomy', g:'Class HALF — always exactly 48u, right-aligned', kind:'action',
+  label:'14 · Action', v:'Run', help:'A verb in an accent outline. Same width as every other action button.', kw:'action button verb'});
+reg({id:'kit.danger', s:'kit.taxonomy', g:'Class HALF — always exactly 48u, right-aligned', kind:'action',
+  label:'15 · Action, destructive', v:'Delete', danger:true,
+  help:'state/danger is hue-fixed: it stays red even when the accent hue is red. Needs a second press within 2s.', kw:'danger destructive delete'});
+reg({id:'kit.dis', s:'kit.taxonomy', g:'States', kind:'toggle', label:'Disabled row', v:false, dis:()=>true,
+  why:'Disabled rows keep their luminance and lose their accent — they are still readable at 6.9:1.',
+  help:'A disabled row explains itself. bDisabled without a reason is a debug-build assert.', kw:'disabled state greyed'});
+reg({id:'kit.warn', s:'kit.taxonomy', g:'States', kind:'readout', label:'Warn status', v:'19.4 ms commit', status:'warn',
+  writes:'—', help:'state/warn measures 7.0:1 against the surface and is hue-fixed like danger.', kw:'warn status'});
+
+/* ==========================================================================
+   2. State + tiny helpers
+   ========================================================================== */
+const byId = {}; R.forEach(e => byId[e.id] = e);
+const get = id => byId[id].v;
+const isDis = e => !!(e.dis && e.dis());
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S = { sec:'gamescope', screen:'gamescope.upscaling', focus:null, palSel:0, land:null,
+            game:0, anchor:2 };
+
+const ICON = {
+  display:'<path d="M2 4h16v11H2z"/><path d="M7 18h6"/>',
+  shaders:'<path d="M3 16 10 3l7 13z"/><path d="M6.5 11h7"/>',
+  monitor:'<path d="M2 14l4-6 3 4 4-8 5 10"/><path d="M2 17h16"/>',
+  audio:'<path d="M4 8h3l4-4v12l-4-4H4z"/><path d="M14 7c1.6 1.6 1.6 4.4 0 6"/>',
+  config:'<path d="M3 4h14v12H3z"/><path d="M3 8h14"/><path d="M7 12h6"/>',
+  log:'<path d="M4 3h12v14H4z"/><path d="M7 7h6M7 10h6M7 13h4"/>',
+  kit:'<path d="M3 5h6v4H3z"/><path d="M11 5h6v4h-6z"/><path d="M3 12h14v3H3z"/>'
+};
+const screensOf = sec => SCREENS.filter(s => s.sec === sec);
+const rowsOf = scr => R.filter(e => e.s === scr);
+const screenById = id => SCREENS.find(s => s.id === id);
+const fmtVal = e => e.fmt ? e.fmt(e.v) : e.v;
+
+/* ==========================================================================
+   3. The kit — one function per control kind, each rendering into the ONE
+      control column. No call site can pass a width, a colour or a font.
+   ========================================================================== */
+function ctlHtml(e){
+  const k = e.kind, cls = CLASS[k], dis = isDis(e);
+  if (k === 'toggle')
+    return `<div class="sw ${e.v?'on':''}"><i></i></div>`;
+  if (k === 'readout')
+    return `${e.status?`<span class="dot ${e.status}"></span>`:''}<span class="ro ${e.accent?'acc':''}">${esc(e.v)}</span>`;
+  if (k === 'drill')
+    return `<span class="ro">${esc(e.v)}</span><span class="chev">›</span>`;
+  if (k === 'slider'){
+    const p = clamp01((e.v - e.min) / (e.max - e.min)) * 100;
+    return `<div class="f-fill sl"><div class="track"><div class="fill" style="width:${p}%"></div>
+      <div class="knob" style="left:${p}%"></div></div>
+      <div class="v">${esc(fmtVal(e))}${e.unit?' '+esc(e.unit):''}</div></div>`;
+  }
+  if (k === 'segmented')
+    return `<div class="f-fill"><div class="seg">${e.opts.map((o,i)=>
+      `<b class="${i===e.v?'on':''}">${esc(o)}</b>`).join('')}</div></div>`;
+  if (k === 'chips')
+    return `<div class="f-fill"><div class="chips">${e.opts.map((o,i)=>
+      `<span class="chip ${e.v[i]?'':'n'}">${esc(o)}</span>`).join('')}</div></div>`;
+  if (k === 'text')
+    return `<div class="f-fill"><span class="tin">${esc(e.v)}</span></div>`;
+  if (k === 'picker')
+    return `<div class="f-half"><span class="box">${esc(e.opts[e.v])}<span class="chev">›</span></span></div>`;
+  if (k === 'stepper')
+    return `<div class="f-half"><span class="box">${e.v===0?'unlimited':esc(e.v)+' '+esc(e.unit||'')}</span></div>`;
+  if (k === 'colour')
+    return `<div class="f-half"><span class="box"><span class="swatch" style="background:oklch(.74 .12 ${e.v})"></span>${e.v}°<span class="chev">›</span></span></div>`;
+  if (k === 'multi')
+    return `<div class="f-half"><span class="box">${esc(e.v)}<span class="chev">›</span></span></div>`;
+  if (k === 'action')
+    return `<div class="f-half"><span class="act ${e.danger?'danger':''}">${esc(e.v)}</span></div>`;
+  return '';
+}
+function rowHtml(e){
+  const dis = isDis(e);
+  const sub = dis ? e.why : '';
+  return `<div class="row ${S.focus===e.id?'foc':''} ${dis?'dis':''} ${S.land===e.id?'landed':''}" data-id="${e.id}">
+    <div class="txt"><div class="lbl">${esc(e.label)}</div>${sub?`<div class="sub">${esc(sub)}</div>`:''}</div>
+    <div class="ctl">${ctlHtml(e)}</div></div>`;
+}
+
+/* ==========================================================================
+   4. Wells
+   ========================================================================== */
+function wellHud(){
+  const h=[62,71,58,80,54,66,92,60,57,74,63,55,100,68,59,72,61,88,64,56,70,58,77,62,53,69,60,81,57,65];
+  const bars = h.map(v=>`<i class="${v>=92?'sp':''}" style="height:${v}%"></i>`).join('');
+  const r = Math.floor(S.anchor/3), c = S.anchor%3, m = 'calc(var(--u)*5)';
+  const pos = `top:${r===0?m:(r===1?'50%':'auto')};bottom:${r===2?m:'auto'};` +
+              `left:${c===0?m:(c===1?'50%':'auto')};right:${c===2?m:'auto'};` +
+              `transform:translate(${c===1?'-50%':'0'},${r===1?'-50%':'0'});`;
+  return `<div class="well"><div class="wh"><span class="dot"></span>Live preview
+      <span class="r">approximate scale · click a cell to anchor the HUD</span></div>
+    <div class="preview p${S.game}" id="preview">
+      <div class="pgrid">${[0,1,2,3,4,5,6,7,8].map(i=>
+        `<div class="pcell ${i===S.anchor?'sel':''}" data-cell="${i}"></div>`).join('')}</div>
+      <div class="hud" style="${pos}
+           background:rgba(9,11,14,${get('mon.bd')?get('mon.bdo'):0});
+           border-radius:${get('mon.bdr')}px;padding:${get('mon.bdp')+2}px ${get('mon.bdp')+4}px;
+           font-size:${Math.round(get('mon.font')*.62)}px">
+        <div class="r1"><span class="n">142</span><span class="u2">FPS</span><span class="ms">7.04 ms</span></div>
+        ${get('mon.graph')?`<div class="graph">${bars}</div>`:''}
+        ${get('mon.pct')?`<div class="r3"><span>1% 118</span><span>0.1% 96</span><span>avg 139</span><span>61°</span></div>`:''}
+      </div></div></div>`;
+}
+function wellMeters(){
+  const seg = n => Array.from({length:20},(_,i)=>`<i class="${i<n?'lit':''}"></i>`).join('');
+  return `<div class="well"><div class="wh"><span class="dot"></span>Peak
+    <span class="r">−6.2 dB · 48 kHz · 2 ch</span></div><div class="meters">
+    <div class="mrow"><span>L</span><div class="segs">${seg(14)}</div></div>
+    <div class="mrow"><span>R</span><div class="segs">${seg(13)}</div></div></div></div>`;
+}
+
+/* ==========================================================================
+   5. LOG — the Wide stage. The screen switcher lives in the toolbar here,
+      because the rail is contracted to icons. Same segmented control, no
+      new mechanism.
+   ========================================================================== */
+const LOG = [
+ ['16:04:11.230','backend','','DRM backend: connector DP-1 selected, 2560x1440@165.00Hz'],
+ ['16:04:11.244','drm','','Found CRTC 89, plane 71 (primary), plane 74 (overlay)'],
+ ['16:04:11.251','vulkan','','Device: AMD Radeon RX 7900 XTX (RADV NAVI31), driver 25.1.3'],
+ ['16:04:11.262','vulkan','','Supported: DRM format modifiers, HDR metadata, timeline semaphores'],
+ ['16:04:11.480','wlserver','','Listening on wayland-1'],
+ ['16:04:11.481','xwm','','Xwayland :1 ready, 1 ctx'],
+ ['16:04:12.033','steamcompmgr','','focus: window 0x2400003 "vkcube" appid 1245620'],
+ ['16:04:12.034','config','','Loaded app 1245620.json (2.1 kB) over global.json'],
+ ['16:04:12.036','overlay','','display_scale 1.00 — atlas baked at 1.00, 6 roles x 2 families'],
+ ['16:04:12.101','reshade','','Compiled gamescope-ritz.fx in 84 ms (3 techniques)'],
+ ['16:04:12.102','reshade','','vibrancy_enabled = 1, vibrancy_strength = 0.420'],
+ ['16:04:13.774','drm','w','Atomic commit took 19.4 ms (expected < 8.3 ms), frame 512'],
+ ['16:04:13.905','steamcompmgr','','HDR: app declared PQ/BT.2020, MaxCLL 824 nits'],
+ ['16:04:14.220','pipewire','','Matched sink-input 61 -> pid 40118 ("vkcube")'],
+ ['16:04:15.008','backend','','VRR window 48-165 Hz, present mode: immediate'],
+ ['16:04:16.441','vulkan','w','Swapchain out of date, rebuilding (1920x1080)'],
+ ['16:04:17.980','lsfg','e','DISABLE_LSFG=1 in environment — frame generation not loaded'],
+ ['16:04:18.114','overlay','','Console opened (CTRL+SHIFT+O), game input paused'],
+ ['16:04:18.115','overlay','','Registry: 21 screens, 63 entries indexed at startup'],
+ ['16:04:21.560','config','','Queued write: upscale.sharpness 2 -> 8 (app 1245620.json)'],
+ ['16:04:21.661','config','','Flushed 1 pending write in 3.2 ms'],
+ ['16:04:22.900','steamcompmgr','','Repaint: 1 base + 1 overlay layer, blur radius 24'],
+ ['16:04:24.310','drm','w','Atomic commit took 12.7 ms (expected < 8.3 ms), frame 1204'],
+ ['16:04:26.002','metrics','','CPU 34% · 61°C · GPU 88% · 71°C · VRAM 6.2/24.0 GB'],
+ ['16:04:27.550','pipewire','','Volume 0.74 (74%) applied to sink-input 61']
+];
+function stageLog(){
+  const hi = s => esc(s).replace(/(commit)/g,'<mark>$1</mark>');
+  const cur = S.screen === 'log.game' ? 1 : 0;
+  return `<div class="logbar">
+    <div class="segw"><div class="seg" id="logsrc">
+      <b class="${cur===0?'on':''}" data-scr="log.gamescope">gamescope</b>
+      <b class="${cur===1?'on':''}" data-scr="log.game">game</b></div></div>
+    <div class="find"><s>find</s> commit <s style="margin-left:auto">3 matches · ⏎ to step</s></div>
+    <div class="segw s2"><div class="seg"><b class="on">all</b><b>warn</b><b>error</b></div></div>
+    <span class="chip">follow</span><span class="act" style="flex:none;padding:calc(var(--u)*1.5) calc(var(--u)*3)">Copy</span>
+  </div>
+  <div class="logview">${LOG.map(l=>
+    `<div class="ln ${l[2]==='e'?'e':''}"><span class="ts">${l[0]}</span>
+     <span class="sc ${l[2]}">[${l[1]}]</span><span class="ms">${hi(l[3])}</span></div>`).join('')}
+  </div>`;
+}
+
+/* ==========================================================================
+   6. Render
+   ========================================================================== */
+function render(){ renderRail(); renderStage(); renderHeader(); renderDetail(); }
+
+function renderRail(){
+  const el = document.getElementById('rail');
+  let h = `<div class="rlabel">Console</div>`;
+  SECTIONS.forEach(s => {
+    const n = rowsOf(screensOf(s.id)[0]?.id || '').length;
+    const cnt = s.id === 'log' ? '' : String(R.filter(e => e.s.startsWith(s.id + '.')).length || '');
+    h += `<div class="ri ${s.id===S.sec?'sel':''}" data-sec="${s.id}">
+        <span class="gl"><svg viewBox="0 0 20 20">${ICON[s.icon]}</svg></span>
+        <span class="lbl">${s.title}</span>${cnt?`<span class="cnt">${cnt}</span>`:''}</div>`;
+  });
+  const sec = SECTIONS.find(s => s.id === S.sec);
+  h += `<div class="rdiv"></div><div class="rlabel">${esc(sec.title)}</div><div class="rscreens">`;
+  screensOf(S.sec).forEach(sc => {
+    const n = rowsOf(sc.id).length;
+    h += `<div class="rs ${sc.id===S.screen?'on':''}" data-scr="${sc.id}">${esc(sc.title)}
+          ${n?`<span class="n">${n}</span>`:''}</div>`;
+  });
+  h += `</div><div class="grow"></div><div class="foot">gamescope-ritz · 3.16.14</div>`;
+  el.innerHTML = h;
+  el.querySelectorAll('.ri').forEach(n => n.onclick = () => {
+    S.sec = n.dataset.sec; S.screen = screensOf(S.sec)[0].id; S.focus = null; render(); });
+  el.querySelectorAll('.rs').forEach(n => n.onclick = () => {
+    S.screen = n.dataset.scr; S.focus = null; render(); });
+}
+
+function renderStage(){
+  const stage = document.getElementById('stage');
+  const scr = screenById(S.screen);
+  document.getElementById('body').classList.toggle('wide', !!scr.wide);
+
+  if (scr.wide){ stage.innerHTML = stageLog();
+    stage.querySelectorAll('#logsrc b').forEach(b => b.onclick = () => { S.screen = b.dataset.scr; render(); });
+    return; }
+
+  const rows = rowsOf(S.screen);
+  let h = '';
+  if (scr.well === 'hud') h += wellHud();
+  if (scr.well === 'meters') h += wellMeters();
+  let body = '', g = null;
+  if (!rows.length) body = `<div class="group">${esc(scr.title)}</div>
+    <div class="row"><div class="txt"><div class="lbl">Not drawn in this mockup</div>
+    <div class="sub">Drawn screens: Upscaling · HDR · Vibrancy · System Monitor General · Audio Output · Config General · Log · Control kit.</div></div>
+    <div class="ctl"><span class="ro">—</span></div></div>`;
+  rows.forEach(e => { if (e.g !== g){ g = e.g; body += `<div class="group">${esc(g)}</div>`; }
+    body += rowHtml(e); });
+  h += `<div class="scroll">${body}</div>`;
+  stage.innerHTML = h;
+
+  stage.querySelectorAll('.row[data-id]').forEach(n => {
+    n.onclick = ev => { const e = byId[n.dataset.id];
+      S.focus = e.id;
+      if (!isDis(e)){
+        if (e.kind === 'toggle') e.v = !e.v;
+        else if (e.kind === 'picker' || e.kind === 'multi') { openSheet(e); }
+        else if (e.kind === 'segmented') e.v = (e.v + 1) % e.opts.length;
+        else if (e.kind === 'slider'){
+          const t = n.querySelector('.track');
+          if (t){ const r = t.getBoundingClientRect();
+            setVal(e, e.min + clamp01((ev.clientX - r.left) / r.width) * (e.max - e.min)); }
+        }
+      }
+      render(); };
+    n.onmouseenter = () => { previewDetail(byId[n.dataset.id]); };
+    n.onmouseleave = () => { renderDetail(); };
+  });
+  stage.querySelectorAll('.pcell').forEach(c => c.onclick = () => {
+    S.anchor = +c.dataset.cell;
+    byId['mon.anchor'].v = ['top','middle','bottom'][Math.floor(S.anchor/3)] + ' · ' +
+                           ['left','centre','right'][S.anchor%3];
+    S.focus = 'mon.anchor'; render();
+  });
+  if (S.land){ const n = stage.querySelector(`.row[data-id="${S.land}"]`);
+    if (n) n.scrollIntoView({block:'center'});
+    setTimeout(()=>{ S.land = null; }, 1200); }
+}
+
+function renderHeader(){
+  const sec = SECTIONS.find(s => s.id === S.sec), scr = screenById(S.screen);
+  document.getElementById('crumb').innerHTML =
+    `<span class="up">Console</span><span class="sep">›</span>` +
+    `<span class="up">${esc(sec.title)}</span><span class="sep">›</span><span>${esc(scr.title)}</span>`;
+  document.getElementById('pips').innerHTML = `<i class="on"></i><i class="${S.focus?'on':''}"></i><i></i>`;
+  const e = S.focus ? byId[S.focus] : null;
+  const w = e ? e.writes : (S.sec === 'config' ? 'global' : 'app');
+  document.getElementById('badge').textContent =
+    w === 'global' ? 'global' : w === '—' ? 'read-only' : 'app 1245620';
+}
+
+/* ---- THE DETAIL BAR — where explanation lives instead of a tooltip ------- */
+function detailFor(e){
+  if (!e) return `<div><div class="d1">Pick a row to see what it does.</div>
+    <div class="d2"><s>every setting registers a one-line explanation — it is required at registration, so this bar is never empty</s></div></div>`;
+  const bits = [];
+  if (e.kind === 'slider') bits.push(`range ${e.fmt?e.fmt(e.min):e.min}–${e.fmt?e.fmt(e.max):e.max}${e.unit?' '+e.unit:''}`);
+  if (e.def !== undefined) bits.push(`default ${e.fmt?e.fmt(e.def):(typeof e.def==='boolean'?(e.def?'on':'off'):(e.opts?e.opts[e.def]:e.def))}`);
+  if (e.opts && e.kind !== 'chips' && e.kind !== 'segmented') bits.push(`${e.opts.length} options`);
+  bits.push(e.writes === 'global' ? 'writes global.json' : e.writes === '—' ? 'read-only' : 'writes 1245620.json');
+  if (isDis(e)) bits.push('unavailable');
+  return `<div><div class="d1"><b>${esc(e.label)}</b> — ${esc(e.help)}</div>
+    <div class="d2">${bits.map(b=>`<span>${esc(b)}</span>`).join('<s>·</s>')}</div></div>`;
+}
+const KEYS = `<div class="dk"><span><kbd>↑↓</kbd> row</span><span><kbd>←→</kbd> adjust</span>
+  <span><kbd>⏎</kbd> open</span><span><kbd>Y</kbd> reset</span><span><kbd>Ctrl</kbd><kbd>K</kbd> palette</span></div>`;
+function renderDetail(){ document.getElementById('detail').innerHTML =
+  detailFor(S.focus ? byId[S.focus] : null) + KEYS; }
+function previewDetail(e){ document.getElementById('detail').innerHTML = detailFor(e) + KEYS; }
+
+/* ==========================================================================
+   7. Value editing (shared by rows and by the palette)
+   ========================================================================== */
+function setVal(e, v){
+  if (e.kind === 'slider' || e.kind === 'colour' || e.kind === 'stepper'){
+    const step = (e.max - e.min) <= 2 ? .01 : (e.max - e.min) <= 40 ? 1 : 5;
+    v = Math.round(v / step) * step;
+    e.v = Math.max(e.min, Math.min(e.max, +v.toFixed(4)));
+    if (e.id === 'cfg.hue' || e.id === 'kit.colour'){
+      document.documentElement.style.setProperty('--hue', e.v);
+      document.getElementById('hue').value = e.v;
+      document.getElementById('huev').textContent = e.v; paintContrast(); }
+    if (e.id === 'cfg.scale') applyScale(e.v);
+  }
+}
+function nudge(e, dir){
+  if (isDis(e)) return;
+  if (e.kind === 'toggle'){ e.v = !e.v; return; }
+  if (e.kind === 'segmented' || e.kind === 'picker'){
+    e.v = (e.v + dir + e.opts.length) % e.opts.length; return; }
+  if (e.kind === 'slider' || e.kind === 'colour' || e.kind === 'stepper'){
+    const span = e.max - e.min, step = span <= 2 ? span/40 : span <= 40 ? 1 : span/40;
+    setVal(e, e.v + dir * step); return; }
+}
+
+/* ==========================================================================
+   8. Sheet
+   ========================================================================== */
+const SHEET_DESC = {
+  'auto':'Integer scale when it fits exactly, otherwise fit.',
+  'integer':'Whole-number multiples only. Pillarboxes the rest.',
+  'fit':'Largest size that keeps the aspect ratio.',
+  'fill':'Fills the output; crops the long edge.',
+  'stretch':'Ignores aspect ratio. Fills exactly.',
+  'none':'No tonemapping. Clips anything the display cannot show.',
+  'reinhard':'Gentle roll-off. The safe default.',
+  'aces':'Filmic curve; darkens midtones slightly.',
+  'uncharted2':'Filmic curve with a stronger shoulder.',
+  'hable':'Uncharted 2 with the shoulder tuned for games.'
+};
+let sheetEntry = null;
+function openSheet(e){
+  sheetEntry = e;
+  document.getElementById('sheettitle').innerHTML = esc(e.label) + ' <s>esc — back</s>';
+  document.getElementById('sheetbody').innerHTML = (e.opts || ['fps','cpu','gpu','media','net','battery']).map((o,i) =>
+    `<div class="opt ${i===e.v?'sel':''}" data-i="${i}">
+       <div><div class="on">${esc(o)}</div><div class="od">${esc(SHEET_DESC[o] || 'Registered option — the description comes from the registry, not from this screen.')}</div></div>
+       ${i===e.v?'<span class="mk">●</span>':''}</div>`).join('');
+  document.getElementById('sheetbody').querySelectorAll('.opt').forEach(n => n.onclick = () => {
+    if (sheetEntry.opts) sheetEntry.v = +n.dataset.i; closeSheet(); render(); });
+  document.getElementById('sheetwrap').classList.add('on');
+}
+function closeSheet(){ document.getElementById('sheetwrap').classList.remove('on'); }
+document.querySelector('#sheetwrap .scr').onclick = closeSheet;
+
+/* ==========================================================================
+   9. COMMAND PALETTE — B's registry, adopted as a feature.
+      It never replaces the rail: picking a result NAVIGATES the rail and
+      lands focus on the row, so you end up somewhere browsable.
+   ========================================================================== */
+function palMatches(q){
+  q = q.trim().toLowerCase();
+  const scored = R.filter(e => e.s !== 'kit.taxonomy').map(e => {
+    const hay = (e.label + ' ' + (e.kw||'') + ' ' + e.s).toLowerCase();
+    if (!q) return {e, score: 0};
+    if (e.label.toLowerCase().startsWith(q)) return {e, score: 3};
+    if (e.label.toLowerCase().includes(q)) return {e, score: 2};
+    if (hay.includes(q)) return {e, score: 1};
+    return null;
+  }).filter(Boolean);
+  scored.sort((a,b) => b.score - a.score);
+  return scored.map(x => x.e).slice(0, 40);
+}
+let palList = [];
+function renderPal(){
+  const q = document.getElementById('palq').value;
+  palList = palMatches(q);
+  if (S.palSel >= palList.length) S.palSel = Math.max(0, palList.length - 1);
+  const hl = t => { if (!q.trim()) return esc(t);
+    const i = t.toLowerCase().indexOf(q.trim().toLowerCase());
+    return i < 0 ? esc(t) : esc(t.slice(0,i)) + '<mark>' + esc(t.slice(i, i+q.trim().length)) + '</mark>' + esc(t.slice(i+q.trim().length)); };
+  document.getElementById('palbody').innerHTML = palList.map((e,i) => {
+    const scr = screenById(e.s), sec = SECTIONS.find(s => s.id === scr.sec);
+    return `<div class="pr ${i===S.palSel?'on':''}" data-i="${i}">
+      <div class="pt"><div class="ptl">${hl(e.label)}</div>
+        <div class="pth">${esc(sec.title)} › ${esc(scr.title)}</div></div>
+      <div class="pc">${ctlHtml(e)}</div></div>`; }).join('') ||
+    `<div class="pr"><div class="pt"><div class="ptl">No setting matches that.</div>
+      <div class="pth">the palette searches labels and registered keywords</div></div></div>`;
+  document.getElementById('palcnt').textContent = palList.length + ' / ' + R.filter(e=>e.s!=='kit.taxonomy').length;
+  document.getElementById('palreg').textContent = 'one registry · ' + R.length + ' entries';
+  document.getElementById('palbody').querySelectorAll('.pr[data-i]').forEach(n => {
+    n.onclick = () => { S.palSel = +n.dataset.i; palGo(); };
+  });
+  const on = document.querySelector('.pr.on'); if (on) on.scrollIntoView({block:'nearest'});
+}
+function palGo(){
+  const e = palList[S.palSel]; if (!e) return;
+  const scr = screenById(e.s);
+  S.sec = scr.sec; S.screen = scr.id; S.focus = e.id; S.land = e.id;
+  closePal(); render();
+}
+function openPal(){ document.getElementById('palwrap').classList.add('on');
+  document.getElementById('palq').value = ''; S.palSel = 0; renderPal();
+  document.getElementById('palq').focus(); document.getElementById('palbtn').classList.add('on'); }
+function closePal(){ document.getElementById('palwrap').classList.remove('on');
+  document.getElementById('palbtn').classList.remove('on'); }
+document.getElementById('palq').oninput = () => { S.palSel = 0; renderPal(); };
+document.querySelector('#palwrap .scr').onclick = closePal;
+document.getElementById('palbtn').onclick = () =>
+  document.getElementById('palwrap').classList.contains('on') ? closePal() : openPal();
+
+/* ==========================================================================
+   10. Keyboard — the real nav model
+   ========================================================================== */
+function focusList(){ return rowsOf(S.screen); }
+document.addEventListener('keydown', ev => {
+  const palOpen = document.getElementById('palwrap').classList.contains('on');
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k'){ ev.preventDefault();
+    palOpen ? closePal() : openPal(); return; }
+  if (palOpen){
+    if (ev.key === 'Escape'){ closePal(); return; }
+    if (ev.key === 'ArrowDown'){ ev.preventDefault(); S.palSel = Math.min(palList.length-1, S.palSel+1); renderPal(); return; }
+    if (ev.key === 'ArrowUp'){ ev.preventDefault(); S.palSel = Math.max(0, S.palSel-1); renderPal(); return; }
+    if (ev.key === 'Enter'){ ev.preventDefault(); palGo(); return; }
+    if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight'){ ev.preventDefault();
+      const e = palList[S.palSel]; if (e){ nudge(e, ev.key === 'ArrowRight' ? 1 : -1); renderPal(); } return; }
+    return;
+  }
+  if (ev.key === 'Escape'){ closeSheet(); return; }
+  const list = focusList();
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp'){
+    ev.preventDefault();
+    let i = list.findIndex(e => e.id === S.focus);
+    i = ev.key === 'ArrowDown' ? Math.min(list.length-1, i+1) : Math.max(0, i-1);
+    if (list[i]) S.focus = list[i].id; render(); return;
+  }
+  if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight'){
+    if (!S.focus) return; ev.preventDefault();
+    nudge(byId[S.focus], ev.key === 'ArrowRight' ? 1 : -1); render(); return;
+  }
+  if (ev.key === 'Enter' && S.focus){ ev.preventDefault();
+    const e = byId[S.focus];
+    if (e.kind === 'picker' || e.kind === 'multi') openSheet(e);
+    else if (e.kind === 'drill' && e.to){ const sc = screenById(e.to); S.sec = sc.sec; S.screen = sc.id; S.focus = null; render(); }
+    return; }
+  if (ev.key.toLowerCase() === 'y' && S.focus){
+    const e = byId[S.focus]; if (e.def !== undefined){ e.v = e.def; if (e.id==='cfg.hue') setVal(e, e.def); render(); } return; }
+  if (ev.key === 'Tab'){ ev.preventDefault();
+    const i = SECTIONS.findIndex(s => s.id === S.sec);
+    S.sec = SECTIONS[(i + (ev.shiftKey ? -1 : 1) + SECTIONS.length) % SECTIONS.length].id;
+    S.screen = screensOf(S.sec)[0].id; S.focus = null; render(); return; }
+  if (ev.key === 'PageDown' || ev.key === 'PageUp'){ ev.preventDefault();
+    const ss = screensOf(S.sec), i = ss.findIndex(s => s.id === S.screen);
+    S.screen = ss[(i + (ev.key === 'PageDown' ? 1 : -1) + ss.length) % ss.length].id;
+    S.focus = null; render(); return; }
+});
+
+/* ==========================================================================
+   11. Demo strip + the contrast instrument
+   ========================================================================== */
+function applyScale(k){
+  document.documentElement.style.setProperty('--u', (4*k) + 'px');
+  document.documentElement.style.setProperty('--fs', (15*k) + 'px');
+}
+document.querySelectorAll('#demo [data-scale]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#demo [data-scale]').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); const k = parseFloat(b.dataset.scale);
+  applyScale(k); byId['cfg.scale'].v = k; render();
+});
+const hueEl = document.getElementById('hue');
+hueEl.oninput = () => { document.documentElement.style.setProperty('--hue', hueEl.value);
+  document.getElementById('huev').textContent = hueEl.value;
+  byId['cfg.hue'].v = +hueEl.value; paintContrast();
+  if (screenById(S.screen) && !screenById(S.screen).wide) render(); };
+document.getElementById('bg').onclick = () => {
+  S.game = (S.game + 1) % 4;
+  document.getElementById('game').className = 'g' + S.game;
+  document.getElementById('bg').textContent = GAMES[S.game][0];
+  paintContrast(); render();
+};
+document.getElementById('gbtn').onclick = e => {
+  document.getElementById('wrap').classList.toggle('guides');
+  e.target.classList.toggle('on'); };
+document.getElementById('pbtn').onclick = e => {
+  document.getElementById('wrap').classList.toggle('proof');
+  e.target.classList.toggle('on'); };
+document.getElementById('cbtn').onclick = e => {
+  document.getElementById('cpanel').classList.toggle('on');
+  e.target.classList.toggle('on'); paintContrast(); };
+
+function placeCPanel(){
+  document.getElementById('cpanel').style.top =
+    (document.getElementById('demo').offsetHeight + 12) + 'px';
+}
+addEventListener('resize', placeCPanel);
+function paintContrast(){
+  const panel = document.getElementById('cpanel');
+  placeCPanel();
+  if (!panel.classList.contains('on')) return;
+  const H = +hueEl.value;
+  const rows = [];
+  const bgs = GAMES.map(g => consoleBg(g[1]));
+  /* every "over the surface" figure is the worst of base, focused row (+6%) and rail (+3.5%) */
+  const surfSet = bg => [bg, elev(bg,.06), elev(bg,.035)];
+  const worstOver = (fg, mk) => mk
+    ? Math.min(...bgs.map(bg => ratio(fg(bg), mk(bg))))
+    : Math.min(...bgs.flatMap(bg => surfSet(bg).map(s => ratio(fg(s), s))));
+  const T = a => bg => over(TEXT, a, bg);
+
+  const add = (sec, name, fn, target, note) => rows.push({sec, name, v: fn(), target, note});
+  const line = sec => rows.push({sec, head:true});
+
+  line('text roles — over surface, focused row (+6%) and rail (+3.5%)');
+  const surfaces = [bg => bg, bg => elev(bg,.06), bg => elev(bg,.035)];
+  const textWorst = a => Math.min(...bgs.flatMap(bg => surfaces.map(f => ratio(over(TEXT,a,f(bg)), f(bg)))));
+  add('t','text/primary  96%', () => textWorst(.96), 4.5, 'row labels in focus, values, headings');
+  add('t','text/label    82%', () => textWorst(.82), 4.5, 'every row label — the main reading role');
+  add('t','text/meta     62%', () => textWorst(.62), 4.5, 'help, group headings, read-only values');
+  add('t','text/faint    44%', () => textWorst(.44), 3.0, 'glyphs only (› ·), never prose');
+  add('t','WAS: label 68%', () => textWorst(.68), 4.5, 'the shipped value');
+  add('t','WAS: meta 46%', () => textWorst(.46), 4.5, 'the shipped value — this is the complaint');
+  add('t','WAS: disabled row (0.38 × 68%)', () => textWorst(.68*.38), 4.5, 'the shipped disabled treatment');
+
+  line('accent family at hue ' + H + '° (drag the hue slider)');
+  const A = (L,C) => oklch(L,C,H);
+  add('a','accent (focus tick, fill)', () => worstOver(() => A(.74,.12)), 3.0, 'state indicator');
+  add('a','accent-value (every number)', () => worstOver(() => A(.84,.10)), 4.5, '');
+  add('a','accent-text', () => worstOver(() => A(.82,.10)), 4.5, '');
+  add('a','accent-knob (slider handle)', () => worstOver(() => A(.86,.08)), 3.0, '');
+  add('a','accent-seg on accent@55 fill', () =>
+    Math.min(...bgs.map(bg => ratio(A(.90,.07), over(A(.74,.12), .55, bg)))), 4.5, 'active segment / chip label');
+  add('a','accent-knob on accent@62 fill', () =>
+    Math.min(...bgs.map(bg => ratio(A(.86,.08), over(A(.74,.12), .62, bg)))), 3.0, 'switch knob when on');
+
+  line('state-carrying UI parts (WCAG 1.4.11 — need 3:1)');
+  add('u','switch ON fill accent@62%', () => worstOver(bg => over(A(.74,.12), .62, bg)), 3.0, 'raised from 30% — was 1.7:1');
+  add('u','active segment/chip border (accent)', () => worstOver(() => A(.74,.12)), 3.0, 'the state indicator; the fill only reinforces it');
+  add('u','switch ON knob vs surface', () => worstOver(() => A(.86,.08)), 3.0, '');
+  add('u','switch OFF knob white@72%', () => Math.min(...bgs.map(bg => ratio(over([255,255,255],.72,elev(bg,.08)), bg))), 3.0, 'raised from 55%');
+  add('u','focus tick vs focused row fill', () => Math.min(...bgs.map(bg => ratio(A(.74,.12), elev(bg,.06)))), 3.0, 'the actual focus indicator');
+  add('u','slider fill vs groove white@22%', () => Math.min(...bgs.map(bg => ratio(A(.74,.12), elev(bg,.22)))), 3.0, 'the value indicator');
+  add('u','slider groove vs surface', () => Math.min(...bgs.map(bg => ratio(elev(bg,.22), bg))), 0, 'container, not state — exempt, documented');
+  add('u','row divider white@7%', () => Math.min(...bgs.map(bg => ratio(elev(bg,.07), bg))), 0, 'decoration — exempt, documented');
+
+  line('hue-fixed state roles');
+  add('s','state/ok', () => worstOver(() => oklch(.78,.16,145)), 3.0, '');
+  add('s','state/warn', () => worstOver(() => oklch(.72,.17,55)), 4.5, '');
+  add('s','state/danger text oklch(.82 .09 25)', () => worstOver(() => oklch(.82,.09,25)), 4.5, 'stays red at any accent hue');
+
+  line('other surfaces');
+  const shb = GAMES.map(g => over([10,12,15],.97, over(VEIL,VEIL_A,g[1])));
+  add('o','palette / sheet · text/label', () => Math.min(...shb.map(bg => ratio(over(TEXT,.82,bg), bg))), 4.5, '');
+  add('o','palette / sheet · text/meta', () => Math.min(...shb.map(bg => ratio(over(TEXT,.62,bg), bg))), 4.5, '');
+  add('o','rail behind the palette scrim', () => Math.min(...bgs.map(bg => {
+    const b = over([3,4,6],.55, elev(bg,.035)); return ratio(over([3,4,6],.55, over(TEXT,.82, elev(bg,.035))), b); })), 3.0,
+    'dimmed, not erased — the rail stays visible');
+  add('o','HUD preview, backdrop @' + get('mon.bdo').toFixed(2), () =>
+    Math.min(...GAMES.map(g => ratio([255,255,255], over([9,11,14], get('mon.bdo'), g[1])))), 4.5,
+    'the HUD sits on the RAW game — no console surface under it');
+
+  let h = '<table><tr><th>role</th><th style="text-align:right">worst</th><th style="text-align:right">target</th><th></th></tr>';
+  rows.forEach(r => {
+    if (r.head){ h += `<tr><td class="sec" colspan="4">${r.sec}</td></tr>`; return; }
+    const pass = r.target === 0 ? null : r.v >= r.target;
+    h += `<tr><td>${r.name}</td><td class="n ${pass===null?'':pass?'pass':'fail'}">${r.v.toFixed(2)}:1</td>` +
+         `<td class="n">${r.target === 0 ? 'n/a' : r.target.toFixed(1)}</td>` +
+         `<td style="color:rgba(255,255,255,.5);font-size:10px">${r.note||''}</td></tr>`;
+  });
+  h += '</table>';
+  document.getElementById('ctable').innerHTML = h;
+}
+
+document.getElementById('bg').textContent = GAMES[0][0];
+placeCPanel();
+render();
+</script>

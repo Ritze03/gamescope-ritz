@@ -1,0 +1,1720 @@
+<!-- Direction E1 — Inspector Rail, refined. Self-contained interactive mockup. -->
+<title>Refined Inspector</title>
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap");
+/* ══════════════════════════════════════════════════════════════════════════
+   Direction E1 — "Inspector Rail", disciplined refinement.
+   Everything inside .slab is authored in BASE UNITS (= CSS px at scale 1.0);
+   the slab is then transform-scaled by display_scale, exactly as the real
+   shell would multiply base units by palette::DisplayScale().
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  /* accent family — written live from OKLCH by setAccent(hue) */
+  --acc:#36BDDD; --acc-hi:#47CAEA; --acc-val:#78DBF6; --acc-txt:#71D4EF;
+  --acc-seg:#A9EAFD; --acc-knob:#93DEF4; --acc-handle:#BAE7F4;
+  --acc-08:rgba(54,189,221,.08); --acc-10:rgba(54,189,221,.10);
+  --acc-16:rgba(54,189,221,.16); --acc-24:rgba(54,189,221,.24);
+  --acc-30:rgba(54,189,221,.30); --acc-40:rgba(54,189,221,.40);
+  --acc-65:rgba(54,189,221,.65); --acc-80:rgba(54,189,221,.80);
+  --ok:#6ED274; --warn:#F3821D; --dgr:#EF6B5A;
+
+  /* text roles — alphas are contrast-derived, see SPEC.md §5 */
+  --t92:rgba(239,245,251,.92);   /* TextPrimary  14.8:1 */
+  --t62:rgba(239,245,251,.62);   /* TextLabel     7.0:1 */
+  --t48:rgba(239,245,251,.48);   /* TextMeta      4.6:1  (was 44% = 4.03:1, failed) */
+  --t30:rgba(239,245,251,.30);   /* Ornament — non-informational glyphs ONLY */
+
+  /* structure */
+  --line:rgba(255,255,255,.06);      /* row hairline   — separator, exempt */
+  --line2:rgba(255,255,255,.10);     /* group rule     — separator, exempt */
+  --line3:rgba(255,255,255,.16);     /* region edge    — separator, exempt */
+  --ctlline:rgba(255,255,255,.34);   /* CONTROL boundary — 3.08:1, must pass */
+  --raised:rgba(255,255,255,.05);
+  --surface:rgba(9,10,12,.88);
+  --sans:"Geist","Inter",system-ui,sans-serif;
+  --mono:"Geist Mono","SFMono-Regular",ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+/* explicit ground: this design is dark-only and must not composite over a light host */
+html{background:#08090b}
+body{background:#08090b;color:var(--t62);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;padding:0 0 48px}
+
+/* ─── page chrome (not part of the design — the mockup's own controls) ── */
+.pagehead{padding:18px 24px 10px;display:flex;flex-wrap:wrap;gap:14px;align-items:baseline}
+.pagehead h1{font:600 15px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--t92)}
+.pagehead .sub{font:400 12px var(--mono);color:var(--t48)}
+.lede{padding:0 24px 12px;max-width:1180px;font:400 14px var(--sans);color:var(--t62);line-height:1.6}
+.lede b{color:var(--t92);font-weight:500}
+.lede code{font:400 12.5px var(--mono);color:var(--acc-txt)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 24px 12px}
+.bar .grp{display:flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--line2);
+  background:rgba(255,255,255,.03)}
+.bar b{font:500 10px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t48)}
+.bar button{font:500 11.5px var(--mono);color:var(--t62);background:rgba(255,255,255,.05);
+  border:1px solid var(--ctlline);padding:5px 10px;cursor:pointer}
+.bar button:hover{background:rgba(255,255,255,.11);color:var(--t92)}
+.bar button.on{background:var(--acc-24);border-color:var(--acc-65);color:var(--acc-seg);font-weight:600}
+.bar input[type=range]{width:150px;accent-color:var(--acc)}
+.bar .val{font:500 12px var(--mono);color:var(--acc-val);min-width:34px}
+.bar .hint{font:400 11.5px var(--mono);color:var(--t48)}
+.bar kbd{font:400 11px var(--mono);border:1px solid var(--ctlline);padding:1px 4px;
+  background:rgba(255,255,255,.05);color:var(--t62)}
+
+/* the two buttons that prove the two loudest critiques were fixed */
+.proofbar{display:flex;flex-wrap:wrap;gap:12px;margin:0 24px 14px;padding:12px;
+  border:1px solid var(--acc-40);background:linear-gradient(180deg,var(--acc-08),rgba(255,255,255,.015))}
+.proof{flex:1 1 340px;display:flex;gap:12px;align-items:flex-start;padding:10px 12px;
+  border:1px solid var(--ctlline);background:rgba(255,255,255,.035);cursor:pointer;text-align:left}
+.proof:hover{background:rgba(255,255,255,.08);border-color:var(--acc-65)}
+.proof.on{background:var(--acc-16);border-color:var(--acc-65)}
+.proof .tog{flex:0 0 auto;width:44px;height:22px;background:rgba(255,255,255,.07);
+  border:1px solid var(--ctlline);position:relative;margin-top:2px}
+.proof .tog::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;
+  background:rgba(239,245,251,.72);transition:left .09s}
+.proof.on .tog{background:var(--acc-30);border-color:var(--acc-65)}
+.proof.on .tog::after{left:24px;background:var(--acc-knob)}
+.proof .tx b{display:block;font:500 13.5px var(--sans);color:var(--t92)}
+.proof.on .tx b{color:var(--acc-seg)}
+.proof .tx span{display:block;font:400 12px var(--sans);color:var(--t62);line-height:1.5;margin-top:3px}
+.proof .tx kbd{font:400 11px var(--mono);border:1px solid var(--ctlline);padding:0 4px;
+  background:rgba(255,255,255,.06);color:var(--t62)}
+.proofbar .lead{flex:0 0 100%;font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--acc-txt)}
+.tourbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 24px 12px}
+.tourbar button{font:500 12px var(--mono);color:var(--t62);background:rgba(255,255,255,.05);
+  border:1px solid var(--ctlline);padding:7px 12px;cursor:pointer}
+.tourbar button:hover{background:rgba(255,255,255,.11);color:var(--t92)}
+.tourbar button.on{background:var(--acc-24);border-color:var(--acc-65);color:var(--acc-seg);font-weight:600}
+.tourbar b{font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--t48);
+  padding-right:2px}
+
+.viewport{position:relative;margin:0 24px}
+.stage{position:relative;width:1920px;height:1080px;transform-origin:top left;overflow:hidden;
+  border:1px solid var(--line3)}
+
+/* ─── game behind the overlay ─────────────────────────────────────────── */
+.game{position:absolute;inset:0}
+.game.g0{background:
+   radial-gradient(120% 90% at 66% 26%, rgba(255,196,120,.34) 0%, rgba(255,140,60,.10) 34%, rgba(0,0,0,0) 62%),
+   linear-gradient(180deg,#1b2740 0%,#2c3350 26%,#5b4560 46%,#8a5148 60%,#3a2a2e 74%,#14100f 100%)}
+.game.g1{background:linear-gradient(180deg,#cfe4f5 0%,#eef6ff 38%,#ffffff 62%,#e6eef6 100%)}
+.game.g2{background:#ffffff}
+.game.g3{background:#000000}
+.g-sun{position:absolute;left:62%;top:22%;width:190px;height:190px;border-radius:50%;
+  background:radial-gradient(circle,rgba(255,226,170,.95),rgba(255,170,80,.35) 45%,rgba(255,140,60,0) 70%)}
+.g-ridge{position:absolute;left:0;right:0;bottom:0;height:62%}
+.g-r1{position:absolute;bottom:0;left:0;right:0;height:44%;background:#241d2c;
+  clip-path:polygon(0 62%,9% 40%,17% 55%,26% 26%,35% 47%,45% 18%,56% 44%,66% 30%,76% 52%,86% 34%,95% 50%,100% 40%,100% 100%,0 100%)}
+.g-r2{position:absolute;bottom:0;left:0;right:0;height:30%;background:#171420;
+  clip-path:polygon(0 70%,7% 48%,15% 66%,24% 44%,33% 62%,44% 38%,53% 60%,63% 42%,73% 64%,84% 46%,93% 62%,100% 50%,100% 100%,0 100%)}
+.g-r3{position:absolute;bottom:0;left:0;right:0;height:17%;background:#0d0b12}
+.game.g1 .g-ridge,.game.g2 .g-ridge,.game.g3 .g-ridge,
+.game.g1 .g-sun,.game.g2 .g-sun,.game.g3 .g-sun{display:none}
+.g-hud{position:absolute;left:56px;bottom:56px;font:500 13px var(--mono);color:rgba(255,255,255,.72);
+  text-shadow:0 2px 6px rgba(0,0,0,.9)}
+.game.g1 .g-hud,.game.g2 .g-hud{color:rgba(0,0,0,.6);text-shadow:none}
+.g-bar{width:300px;height:7px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.25);margin-top:7px}
+.g-bar i{display:block;height:100%;width:64%;background:linear-gradient(90deg,#c8403a,#e0645a)}
+.g-bar2 i{width:41%;background:linear-gradient(90deg,#3a7cc8,#5aa0e0)}
+/* the veil = "background darkening 0.8", the value SPEC §5 measures against */
+.veil{position:absolute;inset:0;background:rgba(4,6,9,.80)}
+
+/* ─── always-on FPS HUD ───────────────────────────────────────────────── */
+.hud{position:absolute;top:32px;right:32px;padding:8px 11px;z-index:5;
+  background:rgba(9,11,14,.60);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.20)}
+.hud .r1{display:flex;align-items:baseline;gap:6px}
+.hud .n{font:600 18px var(--mono);color:#fff;line-height:1.2}
+.hud .u{font:400 10px var(--mono);color:rgba(255,255,255,.62)}
+.hud .ms{font:500 12px var(--mono);color:var(--acc-val);margin-left:auto;padding-left:18px}
+.hud .graph{display:flex;align-items:flex-end;gap:1px;height:18px;margin:4px 0}
+.hud .graph b{width:2px;background:var(--acc-65)}
+.hud .graph b.sp{background:rgba(243,130,29,.85)}
+.hud .r3{display:flex;gap:10px;font:400 10px var(--mono);color:rgba(255,255,255,.62)}
+
+/* ══════════════ THE SLAB ══════════════════════════════════════════════ */
+.slab{position:absolute;left:50%;top:50%;transform-origin:center center;
+  background:var(--surface);backdrop-filter:blur(22px) saturate(1.1);
+  border:1px solid var(--acc-40);
+  box-shadow:0 28px 70px -14px rgba(0,0,0,.8),0 0 0 4px rgba(54,189,221,.06),
+             0 0 44px -18px var(--acc-65);
+  display:flex;flex-direction:column;overflow:hidden}
+.slabbar{height:40px;flex:0 0 40px;display:flex;align-items:center;gap:10px;padding:0 12px;
+  border-bottom:1px solid var(--line2);
+  background:linear-gradient(180deg,var(--acc-16),rgba(255,255,255,.02))}
+.dot{width:6px;height:6px;background:var(--acc);box-shadow:0 0 8px var(--acc-80);flex:0 0 6px}
+.dot.idle{background:rgba(239,245,251,.40);box-shadow:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 8px rgba(110,210,116,.7)}
+.dot.warn{background:var(--warn);box-shadow:none}
+.dot.dgr{background:var(--dgr);box-shadow:none}
+.slabbar .ttl{font:600 11px var(--mono);letter-spacing:.10em;color:var(--t92)}
+.slabbar .meta{font:400 11.5px var(--mono);color:var(--t48)}
+.slabbar .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.glyph{width:20px;height:20px;display:grid;place-items:center;color:var(--t48);
+  font:400 13px var(--mono);cursor:pointer;border:1px solid transparent}
+.glyph:hover{color:var(--t92);border-color:var(--ctlline)}
+.glyph.on{color:var(--acc-seg);border-color:var(--acc-65);background:var(--acc-16)}
+
+.body{flex:1;display:flex;min-height:0;position:relative}
+
+/* ─── REGION 1 · rail ─────────────────────────────────────────────────── */
+.rail{flex:0 0 240px;width:240px;border-right:1px solid var(--line3);
+  background:rgba(0,0,0,.22);padding:8px 0;overflow:hidden;position:relative}
+.rail .sec{height:26px;display:flex;align-items:flex-end;padding:0 16px 4px;
+  font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t48)}
+.ri{position:relative;height:40px;display:flex;align-items:center;gap:12px;padding:0 12px 0 16px;cursor:pointer}
+.ri .ic{width:20px;height:20px;flex:0 0 20px;display:grid;place-items:center;
+  font:400 14px var(--mono);color:var(--t62)}
+.ri .nm{font:400 14px var(--sans);color:var(--t62);white-space:nowrap}
+.ri .ct{margin-left:auto;font:400 11.5px var(--mono);color:var(--t48)}
+.ri:hover{background:rgba(255,255,255,.06)}
+.ri.on{background:var(--acc-10)}
+.ri.on::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
+.ri.on .nm{color:var(--t92)}
+.ri.on .ic{color:var(--acc-knob)}
+.ri .ct.alert{color:var(--dgr)}
+.rail.icons{flex:0 0 64px;width:64px}
+.rail.icons .sec{height:1px;padding:0;margin:10px 12px;background:rgba(255,255,255,.10);overflow:hidden;text-indent:-999px}
+.rail.icons .ri{justify-content:center;padding:0}
+.rail.icons .nm,.rail.icons .ct{display:none}
+/* the accent thread — rail item ➜ breadcrumb, the design's signature */
+.thread{position:absolute;background:var(--acc);pointer-events:none;z-index:4}
+
+/* ─── REGION 2 · sheet ────────────────────────────────────────────────── */
+.sheet{flex:1;min-width:0;display:flex;flex-direction:column}
+.sheethead{height:56px;flex:0 0 56px;display:flex;align-items:center;gap:10px;padding:0 24px;
+  border-bottom:1px solid var(--line2)}
+.crumb{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t48)}
+.crumb b{color:var(--t92);font-weight:600}
+.crumb .sl{color:var(--t30);padding:0 6px}
+.sheethead .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.sheetbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 24px 12px}
+.sheetbody.pad0{padding:0;overflow:hidden}
+.sheetbody::-webkit-scrollbar{width:8px}
+.sheetbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18)}
+.cols{display:flex;gap:24px;align-items:flex-start}
+.content{position:relative;max-width:720px;flex:1;min-width:0}
+.sheetfoot{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:8px;padding:0 24px;
+  border-top:1px solid var(--line2)}
+.sheetfoot .hint{margin-left:auto;font:400 11.5px var(--mono);color:var(--t48)}
+.kbd{font:400 11.5px var(--mono);color:var(--t62);border:1px solid var(--ctlline);
+  padding:1px 4px;background:rgba(255,255,255,.05)}
+
+/* ─── THE ROW GRAMMAR ─────────────────────────────────────────────────── */
+.gh{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t48);
+  height:34px;display:flex;align-items:flex-end;padding-bottom:8px;margin-top:12px;gap:8px}
+.gh .act{margin-left:auto;font:400 11.5px var(--mono);color:var(--acc-txt);cursor:pointer;
+  text-transform:none;letter-spacing:0}
+.gh .act:hover{color:var(--acc-seg)}
+
+.row{position:relative;display:flex;align-items:center;min-height:44px;
+  border-bottom:1px solid var(--line);padding-left:12px;cursor:pointer}
+.row .lab{flex:1 1 auto;min-width:0;padding-right:16px;font:400 14px var(--sans);color:var(--t62)}
+.row .lab em{display:block;font:400 11.5px var(--mono);font-style:normal;color:var(--t48);margin-top:3px}
+.row .lab .chip{margin-left:8px;vertical-align:1px}
+/* THE CONTROL ZONE — fixed width, right edge always on the rail. */
+.row .ctl{flex:0 0 var(--ctlw);display:flex;justify-content:flex-end;align-items:center;gap:8px;
+  position:relative}
+.row.ro{min-height:32px}
+.row .aff{flex:0 0 36px;display:flex;justify-content:flex-end;align-items:center;
+  font:400 12px var(--mono);color:var(--t48);padding-right:12px}
+.row.sel{background:var(--acc-08)}
+.row.sel .lab{color:var(--t92);font-weight:500}
+.row:hover{background:rgba(255,255,255,.04)}
+.row.sel:hover{background:var(--acc-10)}
+.row.tall{min-height:76px;align-items:flex-start;padding-top:11px;padding-bottom:11px}
+.row.tall .ctl{flex-direction:column;align-items:stretch;gap:0}
+.row.block{min-height:112px;align-items:flex-start;padding-top:11px;padding-bottom:11px}
+.row.block .ctl{align-items:flex-start}
+.edge{position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent}
+.edge.diff{background:var(--acc-80)}
+.edge.sel{background:var(--acc-40)}
+.reset{width:8px;height:8px;border-radius:50%;background:var(--acc);cursor:pointer}
+.chev{color:var(--t48)}
+.lock{color:var(--t30)}
+.note{font:400 11.5px var(--mono);color:var(--t48);padding:12px 0 0;line-height:1.55}
+
+/* composite: ONE bounded object, one state edge, one closing hairline */
+.comp{position:relative;border-bottom:1px solid var(--line);margin:0}
+.comp>.row{border-bottom:0}
+.comp>.row.head .lab{color:var(--t62)}
+.comp.sel>.row.head{background:var(--acc-08)}
+.comp.sel>.row.head .lab{color:var(--t92);font-weight:500}
+.comp .part .lab{padding-left:12px;font:400 13px var(--sans);color:var(--t48)}
+.comp .part{border-bottom:0}
+.comp .headval{font:500 14px var(--mono);color:var(--acc-val)}
+.comp>.edge{z-index:2}
+
+/* ─── controls (all right-bound; Fit = intrinsic, Fill = whole zone) ──── */
+.sw{width:30px;height:15px;flex:0 0 30px;background:rgba(255,255,255,.07);
+  border:1px solid var(--ctlline);position:relative;cursor:pointer}
+.sw i{position:absolute;top:1px;left:1px;width:11px;height:11px;
+  background:rgba(239,245,251,.72);transition:left .09s}
+.sw.on{background:var(--acc-30);border-color:var(--acc-65)}
+.sw.on i{left:16px;background:var(--acc-knob)}
+
+.seg{display:flex;gap:4px;width:100%}
+.seg b{flex:1;text-align:center;padding:6px 4px;font:500 11.5px var(--mono);color:var(--t48);
+  background:rgba(255,255,255,.04);border:1px solid var(--ctlline);cursor:pointer}
+.seg b:hover{background:rgba(255,255,255,.10);color:var(--t62)}
+.seg b.on{background:var(--acc-24);border-color:var(--acc-65);color:var(--acc-seg);font-weight:600}
+
+.sel2{width:100%;height:28px;display:flex;align-items:center;padding:0 8px;background:var(--raised);
+  border:1px solid var(--ctlline);font:400 11.5px var(--mono);color:var(--t62);cursor:pointer;
+  white-space:nowrap;overflow:hidden}
+.sel2 .cv{margin-left:auto;color:var(--t48);padding-left:8px}
+.sel2.open{border-color:var(--acc-65)}
+.menu{position:absolute;z-index:12;background:rgba(14,16,19,.99);border:1px solid var(--ctlline);
+  box-shadow:0 12px 34px -10px rgba(0,0,0,.9);padding:2px 0;right:0;top:34px;min-width:100%}
+.menu div{height:26px;display:flex;align-items:center;padding:0 10px;font:400 11.5px var(--mono);
+  color:var(--t62);white-space:nowrap;cursor:pointer}
+.menu div.on{background:var(--acc-24);color:var(--acc-seg);box-shadow:inset 2px 0 0 var(--acc)}
+.menu div:hover{background:var(--acc-16)}
+
+.sldwrap{width:100%}
+.sval{display:block;text-align:right;font:500 16px var(--mono);color:var(--acc-val);line-height:1;margin-bottom:9px}
+.sval s{text-decoration:none;font:400 11.5px var(--mono);color:var(--t48);margin-left:4px}
+.track{position:relative;height:6px;border-radius:3px;background:rgba(255,255,255,.20);cursor:pointer}
+/* fill starts at full accent (4.75:1 vs the rail) — a 65% start measured 2.31:1 */
+.track .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;
+  background:linear-gradient(90deg,var(--acc),var(--acc-hi))}
+.track .tick{position:absolute;top:-2px;width:1px;height:10px;background:rgba(255,255,255,.60)}
+.track .handle{position:absolute;top:-8px;width:10px;height:22px;margin-left:-5px;border-radius:1px;
+  background:var(--acc-handle);box-shadow:0 0 0 2px var(--acc-30),0 0 0 4px rgba(54,189,221,.18)}
+.marks{display:flex;font:400 11.5px var(--mono);color:var(--t48);margin-top:8px}
+.marks span:last-child{margin-left:auto}
+.marks .mid{margin:0 auto}
+
+.step{display:flex;align-items:center;height:28px;border:1px solid var(--ctlline);
+  background:var(--raised);width:136px;flex:0 0 136px}
+.step b{width:26px;text-align:center;font:400 13px var(--mono);color:var(--t62);cursor:pointer;
+  border-right:1px solid var(--ctlline)}
+.step b:hover{background:rgba(255,255,255,.10);color:var(--t92)}
+.step b:last-child{border-right:0;border-left:1px solid var(--ctlline)}
+.step span{flex:1;text-align:center;font:500 14px var(--mono);color:var(--acc-val);white-space:nowrap}
+.step span s{text-decoration:none;font:400 11px var(--mono);color:var(--t48);margin-left:3px}
+
+.inp{width:100%;height:28px;display:flex;align-items:center;background:var(--raised);
+  border:1px solid var(--ctlline)}
+.inp input{all:unset;flex:1;padding:0 8px;font:400 11.5px var(--mono);color:var(--t62)}
+.inp input::placeholder{color:var(--t48)}
+.inp:focus-within{border-color:var(--acc-65)}
+.err{font:400 11.5px var(--mono);color:#F2A99E;margin-top:5px;text-align:right}
+
+.btn{height:28px;display:inline-flex;align-items:center;padding:0 10px;font:400 11.5px var(--mono);
+  background:rgba(255,255,255,.05);border:1px solid var(--ctlline);color:var(--t62);cursor:pointer;
+  white-space:nowrap}
+.btn:hover{background:rgba(255,255,255,.11);color:var(--t92)}
+.btn.acc{background:var(--acc-16);border-color:var(--acc-65);color:var(--acc-seg)}
+.btn.dgr{background:rgba(239,107,90,.14);border-color:rgba(239,107,90,.55);color:#F2A99E}
+
+.chip{font:400 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:3px 5px;
+  background:var(--acc-16);color:var(--acc-txt);white-space:nowrap}
+.chip.n{background:rgba(255,255,255,.09);color:var(--t62)}
+.chip.w{background:rgba(243,130,29,.18);color:#F3A45E}
+.chip.d{background:rgba(239,107,90,.18);color:#F2A99E}
+.chip.g{background:rgba(110,210,116,.18);color:#8FDD93}
+.chip.f{cursor:pointer;border:1px solid transparent}
+.chip.f.off{background:rgba(255,255,255,.05);color:var(--t48)}
+
+.meter{position:relative;height:5px;flex:1;overflow:hidden;
+  background:repeating-linear-gradient(90deg,rgba(255,255,255,.14) 0 6.5px,transparent 6.5px 8px)}
+.meter i{position:absolute;left:0;top:0;bottom:0;
+  background:repeating-linear-gradient(90deg,var(--acc) 0 6.5px,transparent 6.5px 8px)}
+.mrow{display:flex;align-items:center;gap:8px;height:13px;width:100%}
+.mrow .ch{font:400 11px var(--mono);color:var(--t48);width:9px;flex:0 0 9px}
+
+.pgrid{display:grid;grid-template-columns:repeat(3,30px);grid-template-rows:repeat(3,30px);gap:3px;
+  flex:0 0 96px}
+.pgrid i{background:rgba(255,255,255,.05);border:1px solid var(--ctlline);cursor:pointer}
+.pgrid i:hover{background:rgba(255,255,255,.12)}
+.pgrid i.on{background:var(--acc-30);border-color:var(--acc-65)}
+
+.hue{height:20px;border:1px solid var(--ctlline);position:relative;width:100%;cursor:pointer}
+.hue .handle{position:absolute;top:-3px;width:10px;height:26px;margin-left:-5px;
+  background:var(--acc-handle);box-shadow:0 0 0 2px rgba(0,0,0,.5)}
+.swatches{display:flex;gap:5px;flex:0 0 auto}
+.swatches i{width:18px;height:18px;border:1px solid var(--ctlline);cursor:pointer}
+.swatches i.on{box-shadow:0 0 0 2px var(--acc)}
+
+.prog{height:3px;background:rgba(255,255,255,.14);position:relative;width:100%}
+.prog i{position:absolute;left:0;top:0;bottom:0;background:var(--acc)}
+
+.li{position:relative;height:44px;display:flex;align-items:center;gap:10px;padding:0 0 0 12px;
+  border-bottom:1px solid var(--line);cursor:pointer}
+.li:hover{background:rgba(255,255,255,.04)}
+.li.sel{background:var(--acc-08)}
+.li.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
+.li .nm{font:400 14px var(--sans);color:var(--t62);white-space:nowrap}
+.li.sel .nm{color:var(--t92);font-weight:500}
+.li .mt{margin-left:auto;font:400 11.5px var(--mono);color:var(--t48);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;padding-left:12px}
+/* a list row obeys the same rail: switch right edge at row-right − 36 */
+.li .rail-end{display:flex;align-items:center;gap:0;flex:0 0 auto}
+.li .cv{color:var(--t48);font:400 12px var(--mono);width:36px;flex:0 0 36px;text-align:right;
+  padding-right:12px}
+.drag{color:var(--t48);font:400 11px var(--mono);letter-spacing:-1px;cursor:grab}
+
+.empty{height:120px;display:grid;place-items:center;gap:10px;align-content:center;
+  font:400 11.5px var(--mono);color:var(--t48);text-align:center}
+/* Disabled: the CONTROL dims (WCAG exempts inactive components); the mandatory
+   reason string does NOT — it is drawn at full strength outside the dimmed row. */
+.row.dis .lab,.row.dis .ctl{opacity:.34}
+.row.dis .ctl{pointer-events:none}
+.row:has(+ .why){border-bottom:0}
+.why{font:400 11.5px var(--mono);color:#F3A45E;padding:0 12px 11px 12px;
+  border-bottom:1px solid var(--line);line-height:1.45}
+
+/* ─── REGION 3 · inspector ────────────────────────────────────────────── */
+.insp{flex:0 0 384px;width:384px;border-left:1px solid var(--line3);
+  background:rgba(255,255,255,.03);display:flex;flex-direction:column;min-height:0}
+.insphead{height:48px;flex:0 0 48px;display:flex;align-items:center;gap:8px;padding:0 20px;
+  border-bottom:1px solid var(--line2)}
+.insphead .t{font:500 10.5px var(--mono);letter-spacing:.10em;text-transform:uppercase;color:var(--t48)}
+.insphead .n{font:500 14px var(--sans);color:var(--t92);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.inspbody{flex:1;min-height:0;overflow-y:auto;padding:0 20px 18px}
+.inspbody::-webkit-scrollbar{width:8px}
+.inspbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18)}
+.i2{padding:12px 0;border-bottom:1px solid var(--line)}
+.i2:last-child{border-bottom:0}
+.i2 .k{font:400 14px var(--sans);color:var(--t62);display:flex;align-items:baseline;gap:8px}
+.i2 .k .d{margin-left:auto;font:400 11.5px var(--mono);color:var(--t48)}
+.i2 .v{margin-top:9px;display:flex;flex-direction:column;align-items:flex-end}
+.i2 .v>*{width:100%}
+.i2 .v.fit>*{width:auto}
+.help{font:400 14px var(--sans);color:var(--t62);line-height:1.55}
+.prov{display:flex;align-items:center;gap:8px;font:400 11.5px var(--mono);color:var(--t48)}
+.jump{font:400 12px var(--mono);color:var(--acc-txt);display:flex;align-items:center;gap:8px;
+  height:26px;cursor:pointer;width:100%}
+.jump:hover{color:var(--acc-seg)}
+.jump .a{margin-left:auto;color:var(--t48)}
+.big{font:600 30px var(--mono);color:var(--t92);line-height:1;text-align:right;width:100%}
+.idline{font:400 11px var(--mono);color:var(--t48);word-break:break-all}
+.insp.drawer{position:absolute;right:0;top:0;bottom:0;z-index:8;background:rgba(13,15,18,.985);
+  backdrop-filter:blur(22px);box-shadow:-18px 0 44px -14px rgba(0,0,0,.9);
+  border-left:1px solid var(--acc-40)}
+.reopen{position:absolute;right:0;top:0;bottom:0;width:20px;z-index:7;background:rgba(255,255,255,.04);
+  border-left:1px solid var(--line3);display:flex;align-items:center;justify-content:center;cursor:pointer;
+  font:400 12px var(--mono);color:var(--t48);writing-mode:vertical-rl}
+.reopen:hover{background:var(--acc-16);color:var(--acc-seg)}
+
+/* ─── LOG (Raw sheet) ─────────────────────────────────────────────────── */
+.filterbar{height:44px;display:flex;align-items:center;gap:10px;padding:0 16px;
+  border-bottom:1px solid var(--line2);background:rgba(255,255,255,.025)}
+.filterbar .inp{width:200px;flex:0 0 200px}
+.logwrap{position:relative;height:calc(100% - 44px);overflow-y:auto}
+.logwrap::-webkit-scrollbar{width:10px}
+.logwrap::-webkit-scrollbar-thumb{background:rgba(255,255,255,.20)}
+.logline{display:flex;align-items:center;height:20px;font:400 11.5px var(--mono);
+  padding-right:22px;white-space:pre;position:relative;cursor:pointer}
+.logline .ln{width:52px;flex:0 0 52px;text-align:right;padding-right:10px;color:var(--t48)}
+.logline .sv{width:2px;flex:0 0 2px;height:20px;background:transparent;margin-right:10px}
+.logline.e .sv{background:var(--dgr)} .logline.w .sv{background:var(--warn)}
+.logline .tx{color:var(--t62);overflow:hidden;text-overflow:ellipsis}
+.logline.e .tx{color:#F2B0A6} .logline.w .tx{color:#EEC194}
+.logline:hover{background:rgba(255,255,255,.04)}
+.logline.sel{background:var(--acc-10)}
+.logline.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
+.logline .tm{color:var(--t48)}
+
+/* ─── command palette ─────────────────────────────────────────────────── */
+.palette{position:absolute;left:50%;top:16%;transform:translateX(-50%);width:760px;z-index:30;
+  background:rgba(12,14,17,.985);backdrop-filter:blur(22px);border:1px solid var(--ctlline);
+  box-shadow:0 34px 80px -18px rgba(0,0,0,.92)}
+.palette .q{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;
+  border-bottom:1px solid var(--line2)}
+.palette .q input{all:unset;flex:1;font:400 16px var(--mono);color:var(--t92)}
+.palette .q input::placeholder{color:var(--t48)}
+.palette .res{max-height:352px;overflow-y:auto}
+.palette .r{height:44px;display:flex;align-items:center;gap:12px;padding:0 16px;cursor:pointer}
+.palette .r.on{background:var(--acc-16);box-shadow:inset 2px 0 0 var(--acc)}
+.palette .r:hover{background:rgba(255,255,255,.05)}
+.palette .r .p{font:400 11.5px var(--mono);color:var(--t48);width:190px;flex:0 0 190px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.palette .r .n{font:400 14px var(--sans);color:var(--t62)}
+.palette .r .n mark{background:none;color:var(--acc-seg);font-weight:600}
+.palette .r.on .n{color:var(--t92)}
+.palette .r .v{margin-left:auto;font:500 14px var(--mono);color:var(--acc-val);white-space:nowrap}
+.palette .foot{height:36px;display:flex;align-items:center;gap:14px;padding:0 16px;
+  border-top:1px solid var(--line2);font:400 11.5px var(--mono);color:var(--t48)}
+
+/* ─── mockup-only overlays ────────────────────────────────────────────── */
+.slab.rulers .content::after{content:"";position:absolute;top:0;bottom:0;right:36px;width:1px;
+  background:repeating-linear-gradient(180deg,var(--acc) 0 5px,transparent 5px 10px);z-index:6;
+  pointer-events:none}
+.slab.rulers .content::before{content:"";position:absolute;top:0;bottom:0;left:12px;width:1px;
+  background:repeating-linear-gradient(180deg,rgba(255,255,255,.4) 0 5px,transparent 5px 10px);z-index:6;
+  pointer-events:none}
+.slab.rulers .inspbody{position:relative}
+.moved{outline:1px dashed rgba(243,130,29,.55);outline-offset:-1px}
+.movedtag{font:400 9.5px var(--mono);color:#F3A45E;text-transform:uppercase;letter-spacing:.08em;
+  margin-left:8px}
+.cap{position:absolute;left:24px;bottom:20px;z-index:40;font:400 12px var(--mono);
+  color:rgba(255,255,255,.78);background:rgba(0,0,0,.72);border:1px solid rgba(255,255,255,.22);
+  padding:8px 12px;max-width:900px;line-height:1.55}
+.cap b{color:var(--acc-val)}
+</style>
+
+<div class="pagehead">
+  <h1>Direction E1 · Inspector Rail — refined</h1>
+  <span class="sub">gamescope-ritz settings overlay · surface 1920×1080 · everything below is live</span>
+</div>
+
+<div class="lede">
+  The three regions are unchanged — <b>Rail</b>, <b>Sheet</b>, <b>Inspector</b> — because the inspector rail
+  is the reason this direction survived. Everything is live: click the rail, click a row, drag any control.
+</div>
+
+<div class="tourbar" id="tour">
+  <b>start here — the tour</b>
+  <button data-tour="default" class="on">1 · default</button>
+  <button data-tour="calm">2 · calmed sheet</button>
+  <button data-tour="anchor">3 · Anchor composite</button>
+  <button data-tour="mixer">4 · Audio mixer</button>
+  <button data-tour="log">5 · LOG</button>
+  <button data-tour="x2">6 · 2.0× collapsed</button>
+  <button data-tour="pal">7 · palette open</button>
+</div>
+
+<div class="proofbar">
+  <span class="lead">▾ the two switches that show the fixes — turn them on</span>
+  <button class="proof" id="rul">
+    <span class="tog"></span>
+    <span class="tx"><b>Show the alignment rail</b>
+      <span>Draws the vertical line every control's <em>right</em> edge lands on — switch, segmented,
+        stepper, slider, 3×3 grid, buttons, all of them. Nothing is left-, centre- or randomly bound
+        any more. Keyboard: <kbd>R</kbd></span></span>
+  </button>
+  <button class="proof" id="mov">
+    <span class="tog"></span>
+    <span class="tx"><b>Show what moved into the Inspector</b>
+      <span>Puts the 32 read-only rows and 8 expert settings back into the sheet, dashed and tagged, so you
+        can see exactly what the calmed screens no longer carry. Turn it off again for the calm version.
+        Keyboard: <kbd>M</kbd></span></span>
+  </button>
+</div>
+
+<div class="bar">
+  <div class="grp"><b>display_scale</b>
+    <button data-scale="0.5">0.5×</button><button data-scale="0.75">0.75×</button>
+    <button data-scale="1" class="on">1.0×</button><button data-scale="1.25">1.25×</button>
+    <button data-scale="1.5">1.5×</button><button data-scale="2">2.0×</button>
+  </div>
+  <div class="grp"><b>accent hue</b>
+    <input id="hue" type="range" min="0" max="360" value="218" aria-label="Accent hue">
+    <span class="val" id="huev">218°</span>
+  </div>
+  <div class="grp"><b>game behind</b><button id="bg">cycle</button><span class="val" id="bgv">dusk</span></div>
+  <div class="grp"><button id="palbtn">command palette</button></div>
+  <span class="hint"><kbd>click</kbd> the rail, a row, any control · <kbd>Ctrl+K</kbd> palette ·
+    <kbd>I</kbd> inspector · <kbd>Esc</kbd> back</span>
+</div>
+
+<div class="viewport" id="vp"><div class="stage" id="stage">
+  <div class="game g0" id="game">
+    <div class="g-sun"></div>
+    <div class="g-ridge"><i class="g-r1"></i><i class="g-r2"></i><i class="g-r3"></i></div>
+    <div class="g-hud"><div>ROUNDTABLE HOLD</div>
+      <div class="g-bar"><i></i></div><div class="g-bar g-bar2"><i></i></div></div>
+  </div>
+  <div class="veil"></div>
+  <div class="hud">
+    <div class="r1"><span class="n">142</span><span class="u">FPS</span><span class="ms">7.04 ms</span></div>
+    <div class="graph" id="ftgraph"></div>
+    <div class="r3"><span>1% 118</span><span>0.1% 96</span><span>avg 139</span><span>61°</span></div>
+  </div>
+  <div id="slabmount"></div>
+  <div id="palmount"></div>
+  <div class="cap" id="cap"></div>
+</div></div>
+
+<script>
+"use strict";
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 1 — the kit. Deliberately shaped like the C++ helper in API.md:
+   a REGISTRY of declarations built once, and an immediate-mode renderer that
+   rebuilds the whole slab from it on every state change (which is exactly
+   what the ImGui version does per frame).
+   No call site below names a pixel, a colour, a font or an alignment.
+   ══════════════════════════════════════════════════════════════════════════ */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ── OKLCH → sRGB, the same maths as palette::OklchToImU32 ─────────────── */
+function oklch(L,C,h){
+  const a=C*Math.cos(h*Math.PI/180), b=C*Math.sin(h*Math.PI/180);
+  const l_=L+0.3963377774*a+0.2158037573*b, m_=L-0.1055613458*a-0.0638541728*b,
+        s_=L-0.0894841775*a-1.2914855480*b;
+  const l=l_*l_*l_, m=m_*m_*m_, s=s_*s_*s_;
+  const lin=[ 4.0767416621*l-3.3077115913*m+0.2309699292*s,
+             -1.2684380046*l+2.6097574011*m-0.3413193965*s,
+             -0.0041960863*l-0.7034186147*m+1.7076147010*s];
+  const g=v=>{v=v<=0.0031308?12.92*v:1.055*Math.pow(Math.max(v,0),1/2.4)-0.055;
+              return Math.max(0,Math.min(255,Math.round(v*255)));};
+  return '#'+lin.map(v=>g(v).toString(16).padStart(2,'0')).join('');
+}
+/* the accent family: one hue, fixed L and C per token (UpdateAccentFamily) */
+const FAMILY = {'--acc':[.74,.12],'--acc-hi':[.78,.12],'--acc-val':[.85,.11],
+  '--acc-txt':[.83,.11],'--acc-seg':[.90,.075],'--acc-knob':[.88,.09],'--acc-handle':[.90,.05]};
+function setAccent(h){
+  const r=document.documentElement.style;
+  for (const k in FAMILY) r.setProperty(k, oklch(FAMILY[k][0],FAMILY[k][1],h));
+  const base=oklch(.74,.12,h), n=parseInt(base.slice(1),16);
+  const R=(n>>16)&255,G=(n>>8)&255,B=n&255;
+  [8,10,16,24,30,40,65,80].forEach(a=>
+    r.setProperty('--acc-'+String(a).padStart(2,'0'), `rgba(${R},${G},${B},${a/100})`));
+  r.setProperty('--acc-08',`rgba(${R},${G},${B},.08)`);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 2 — THE REGISTRY.  One declaration per setting. It yields the sheet
+   row, the palette entry and the inspector content; nothing is typed twice.
+   kind:  switch | slider | number | choice | text | action | readout
+          composite (parts[]) | list (items[]) | raw
+   depth: 'sheet' (default) | 'expert'  → expert lives in the Inspector and is
+          reached from the sheet by its group's chevron, never lost.
+   ══════════════════════════════════════════════════════════════════════════ */
+const V = {}, D = {};                       /* live values, declared defaults */
+function decl(e){ if ('def' in e){ D[e.id]=e.def; V[e.id]=('val' in e)?e.val:e.def; } return e; }
+function walk(e,f){ f(e); (e.parts||[]).forEach(p=>walk(p,f));
+  (e.items||[]).forEach(i=>(i.params||[]).forEach(p=>walk(p,f))); }
+
+const AREAS = [
+/* ─────────────────────────── DISPLAY ─────────────────────────────────── */
+{ id:'display.upscaling', sec:'DISPLAY', title:'Upscaling', icon:'◱',
+  desc:'How gamescope resamples the game surface onto the output, and how the result is presented. Everything here applies live.',
+  writes:'global.json', why:'Override Global Config is off for app 1174180, so edits land in the global file and apply to every game.',
+  entries:[
+   {group:'Scaling', id:'display.filter', kind:'choice', title:'Filter',
+    opts:['linear','nearest','fsr','nis','pixel'], def:'fsr',
+    keywords:'upscale scaling resample fsr nis sharp pixel',
+    help:'How the game image is resampled onto the output. Pixel is sharp only when the scale factor is a whole number.',
+    related:[['display.sharpness','Sharpness'],['image.shaders','Shaders — Pre-Sharpen']]},
+   {id:'display.sharpness', kind:'slider', title:'Sharpness', hint:'higher = sharper',
+    min:0, max:20, step:1, def:3, val:5, keywords:'sharpen rcas cas crisp clarity',
+    help:'Strength of the FSR RCAS / NIS sharpening pass. 0 disables sharpening entirely.',
+    enabledWhen:()=>['fsr','nis','pixel'].includes(V['display.filter']),
+    why:'only fsr, nis and pixel sharpen'},
+   {id:'display.scaler', kind:'choice', title:'Scaler',
+    opts:['auto','fit','fill','stretch','integer'], def:'auto',
+    keywords:'aspect letterbox fit fill stretch integer',
+    help:'How the scaled image is placed inside the output rectangle.'},
+   {group:'Presentation', id:'display.allow_tearing', kind:'switch', title:'Allow Tearing',
+    hint:'lower latency · can show a horizontal seam', def:false, val:true,
+    keywords:'immediate flip vsync latency tear',
+    help:'Presents frames the moment they are ready instead of waiting for vblank.'},
+   {id:'display.force_grab_cursor', kind:'switch', title:'Force Grab Cursor', def:false,
+    keywords:'mouse pointer confine capture grab',
+    help:'Keeps the pointer confined to the game surface even when the game does not ask for it.'},
+   /* ── inspector-only: readouts. Sheet has no Readout() at all. ── */
+   {kind:'readout', id:'ro.out', title:'Output', value:()=>'3840 × 2160 @ 138 Hz · DP-1', live:true},
+   {kind:'readout', id:'ro.surf', title:'Game surface', value:()=>'2560 × 1440', live:true},
+   {kind:'readout', id:'ro.path', title:'Composite path',
+    value:()=>({fsr:'FSR1 · EASU + RCAS',nis:'NIS · scale + sharpen',pixel:'nearest + RCAS',
+      linear:'blit (no upscale pass)',nearest:'nearest blit'})[V['display.filter']], live:true},
+   {kind:'readout', id:'ro.pre', title:'Preemptive upscale',
+    value:()=>V['display.filter']==='linear'?'no (filter = linear)':'yes (filter ≠ linear)', live:true},
+   {depth:'expert', id:'display.upscale_before_overlay', kind:'switch',
+    title:'Upscale before overlay', def:true, keywords:'order overlay composite pass',
+    help:'Runs the upscale pass before the overlay is composited, so the HUD is never resampled.'},
+  ]},
+
+{ id:'display.output', sec:'DISPLAY', title:'Output', icon:'▤',
+  desc:'The mode gamescope drives the connector at, and how the game surface is presented to it.',
+  writes:'global.json', why:'Mode settings are always global — they belong to the display, not the game.',
+  entries:[
+   {group:'Mode', id:'display.resolution', kind:'choice', title:'Resolution',
+    opts:['1280 × 720','1920 × 1080','2560 × 1440','3840 × 2160'], def:'3840 × 2160',
+    keywords:'mode resolution size output width height',
+    help:'The mode gamescope sets on the connector. The game keeps rendering at its own resolution.'},
+   {id:'display.refresh', kind:'choice', title:'Refresh rate',
+    opts:['48 Hz','60 Hz','120 Hz','138 Hz'], def:'138 Hz', keywords:'hz mode refresh rate',
+    help:'The refresh rate of the mode above.'},
+   {id:'display.adaptive_sync', kind:'switch', title:'VRR / Adaptive Sync', def:true,
+    keywords:'vrr freesync gsync adaptive variable refresh',
+    help:'Lets the display refresh follow the game frame rate inside the connector VRR range.'},
+   {group:'Presentation', id:'display.force_composite', kind:'switch', title:'Force composite',
+    hint:'disables direct scanout', def:false, keywords:'scanout plane composite direct',
+    help:'Always composites through Vulkan instead of scanning the game surface out directly.'},
+   {kind:'readout', id:'ro.conn', title:'Connector', value:()=>'DP-1 · connected', live:true},
+   {kind:'readout', id:'ro.edid', title:'Display', value:()=>'LG Ultragear 27GP950-B'},
+   {kind:'readout', id:'ro.modes', title:'Modes offered', value:()=>'12 (48 – 160 Hz)'},
+   {kind:'readout', id:'ro.depth', title:'Bit depth', value:()=>'10 bpc · Rec.2020 capable'},
+   {depth:'expert', id:'display.colour_range', kind:'choice', title:'Colour range',
+    opts:['auto','full','limited'], def:'auto', keywords:'rgb range full limited levels',
+    help:'Overrides the RGB quantisation range advertised to the display.'},
+  ]},
+
+{ id:'display.frame_limiter', sec:'DISPLAY', title:'Frame Limiter', icon:'◷',
+  badge:()=>V['display.fps_limit']?String(V['display.fps_limit']):'—',
+  desc:'Caps how often gamescope presents. The cap is applied live through the debug_set_fps_limit convar.',
+  writes:'global.json', why:'Override Global Config is off for app 1174180.',
+  entries:[
+   {group:'Limiter', id:'display.fps_limit', kind:'number', title:'FPS Limit', unit:'fps',
+    min:0, max:1000, step:5, def:0, val:60, zero:'Unlimited',
+    keywords:'frame rate cap limiter throttle fps',
+    help:'Caps the game frame rate. 0 removes the cap entirely.'},
+   {id:'display.fps_limit_unfocused', kind:'number', title:'Limit while unfocused', unit:'fps',
+    min:0, max:1000, step:5, def:0, val:30, zero:'Unlimited',
+    keywords:'background unfocused idle cap power battery',
+    help:'A second, lower cap used while the game does not have focus.'},
+   {group:'Pacing', id:'display.low_latency', kind:'switch', title:'Low-latency pacing',
+    hint:'holds the frame until the last safe moment', def:false, val:true,
+    keywords:'latency pacing lag input delay',
+    help:'Delays the submit so the presented frame is as fresh as possible. Costs a little smoothness.'},
+   {kind:'readout', id:'ro.vrrrange', title:'VRR range', value:()=>'48 – 138 Hz', live:true},
+   {kind:'readout', id:'ro.pacing', title:'Current pacing',
+    value:()=>V['display.fps_limit']? V['display.fps_limit']+' fps cap · VRR following'
+                                    :'uncapped · VRR following 96 – 138 Hz', live:true},
+   {depth:'expert', id:'display.pacing_headroom', kind:'slider', title:'Pacing headroom',
+    unit:'ms', min:0, max:5, step:0.1, def:1.0, keywords:'headroom safety margin pacing',
+    help:'How much slack the pacer leaves before the deadline. Lower is fresher and riskier.'},
+  ]},
+
+{ id:'display.hdr', sec:'DISPLAY', title:'HDR', icon:'◐',
+  badge:()=>V['display.hdr_enabled']?'on':'off',
+  desc:'High dynamic range output and how SDR content is mapped into it.',
+  writes:'global.json', why:'HDR is a property of the connector, so it is always written globally.',
+  entries:[
+   {group:'Output', id:'display.hdr_enabled', kind:'switch', title:'HDR Output', def:false,
+    keywords:'hdr hdr10 pq st2084 wide gamut',
+    help:'Drives the connector in HDR10. The display reports 1000 nits peak.'},
+   {id:'display.sdr_brightness', kind:'slider', title:'SDR content brightness', unit:'nits',
+    min:100, max:1000, step:10, def:400, keywords:'sdr brightness nits paper white luminance',
+    help:'The luminance SDR white is mapped to when HDR output is on.',
+    enabledWhen:()=>V['display.hdr_enabled'], why:'HDR is off — this does nothing until it is on'},
+   {id:'display.sdr_gamut', kind:'slider', title:'SDR gamut wideness', min:0, max:1, step:0.01, def:0.5,
+    keywords:'gamut saturation wide rec2020 colour',
+    help:'How far SDR colours are stretched toward the display native gamut.',
+    enabledWhen:()=>V['display.hdr_enabled'], why:'HDR is off — this does nothing until it is on'},
+   {kind:'readout', id:'ro.peak', title:'Display peak', value:()=>'1000 nits · ST2084 PQ'},
+   {kind:'readout', id:'ro.appmeta', title:'Focused app', value:()=>'ELDEN RING · SDR surface', live:true},
+   {kind:'readout', id:'ro.itm', title:'Inverse tonemap', value:()=>'active (SDR → HDR)', live:true},
+   {depth:'expert', id:'display.tonemap', kind:'choice', title:'Tonemap operator',
+    opts:['none','reinhard','aces','bt2446a'], def:'aces', keywords:'tonemap aces reinhard curve',
+    help:'The curve used when HDR content has to be mapped down for an SDR display.'},
+   {depth:'expert', id:'display.force_pq', kind:'switch', title:'Force HDR10 PQ', def:false,
+    keywords:'pq force st2084 metadata',
+    help:'Sends HDR10 metadata even when the display does not advertise it.'},
+  ]},
+
+/* ─────────────────────────── IMAGE ───────────────────────────────────── */
+{ id:'image.shaders', sec:'IMAGE', title:'Shaders', icon:'◈', badge:()=>'1/3',
+  desc:'ReShade-compatible post-process effects, compiled once at startup from gamescope-ritz.fx.',
+  writes:'games/1174180.json', why:'Override Global Config is on for app 1174180, so shader edits are per-game.',
+  entries:[
+   {group:'Effects', kind:'list', id:'image.effects', title:'Effects',
+    headAction:['all off',()=>{['fx.vib','fx.sharp','fx.ab'].forEach(k=>V[k]=false);}],
+    items:[
+     {id:'fx.vib', title:'Vibrancy', on:'fx.vib',
+      meta:()=>'strength '+V['fx.vib.strength'].toFixed(2)+(V['fx.vib.skin']?' · skin protected':''),
+      params:[
+       {id:'fx.vib.strength', kind:'slider', title:'Strength', min:-1, max:1, step:0.01, def:0.00, val:0.42,
+        keywords:'vibrancy saturation colour strength',
+        help:'Pushes saturation without clipping already-saturated pixels.'},
+       {id:'fx.vib.skin', kind:'switch', title:'Protect skin tones', def:true,
+        keywords:'skin tones protect faces',
+        help:'Excludes the skin-tone hue band from the saturation push.'}]},
+     {id:'fx.sharp', title:'Pre-Sharpen', on:'fx.sharp',
+      meta:()=>'strength '+V['fx.sharp.strength'].toFixed(2),
+      params:[
+       {id:'fx.sharp.strength', kind:'slider', title:'Strength', min:0, max:1, step:0.01, def:0.30, val:0.35,
+        keywords:'sharpen pre presharpen strength',
+        help:'Runs before the scaler, so it works with any Filter — including linear.'}]},
+     {id:'fx.ab', title:'Adaptive Brightness', on:'fx.ab',
+      meta:()=>'gain '+V['fx.ab.maxgain'].toFixed(2)+' · target '+V['fx.ab.target'].toFixed(2),
+      params:[
+       {id:'fx.ab.strength', kind:'slider', title:'Strength', min:0, max:1, step:0.01, def:0.60, val:0.78,
+        keywords:'adaptive brightness strength',
+        help:'How strongly the measured scene brightness moves the output gain.'},
+       {id:'fx.ab.target', kind:'slider', title:'Target brightness', min:0, max:1, step:0.01, def:0.50, val:0.42,
+        keywords:'target luminance brightness adaptive',
+        help:'The average scene luminance the effect steers toward. Measured now: 0.31.'},
+       {depth:'expert', id:'fx.ab.mingain', kind:'slider', title:'Min gain', min:0, max:2, step:0.01, def:0.80,
+        keywords:'min gain floor adaptive', help:'Lower clamp on the applied gain.'},
+       {depth:'expert', id:'fx.ab.maxgain', kind:'slider', title:'Max gain', min:0, max:4, step:0.01, def:1.60, val:1.24,
+        keywords:'max gain ceiling adaptive', help:'Upper clamp on the applied gain.'},
+       {depth:'expert', id:'fx.ab.up', kind:'slider', title:'Brighten speed', unit:'/s', min:0, max:5, step:0.1, def:1.5,
+        keywords:'speed adapt up brighten', help:'How fast gain rises when the scene darkens.'},
+       {depth:'expert', id:'fx.ab.down', kind:'slider', title:'Darken speed', unit:'/s', min:0, max:5, step:0.1, def:0.6,
+        keywords:'speed adapt down darken', help:'How fast gain falls when the scene brightens.'}]},
+    ]},
+   {group:'Chain', kind:'composite', comp:'switchlist', id:'image.chain', title:'Chain order',
+    summary:()=>'3 effects · drag to reorder',
+    keywords:'order chain sequence reorder pipeline',
+    help:'The order effects are applied in. Reordering changes the result — sharpen before vibrancy is not the same as after.',
+    parts:[
+     {id:'image.chain.ab', kind:'switch', title:'1 · Adaptive Brightness', def:true, drag:true},
+     {id:'image.chain.vib', kind:'switch', title:'2 · Vibrancy', def:false, drag:true},
+     {id:'image.chain.sharp', kind:'switch', title:'3 · Pre-Sharpen', def:false, drag:true}]},
+   {kind:'readout', id:'ro.fx', title:'Effect file', value:()=>'gamescope-ritz.fx'},
+   {kind:'readout', id:'ro.fxc', title:'Compiled', value:()=>'at startup · 41 ms · 0 warnings'},
+   {kind:'readout', id:'ro.fxh', title:'Hooks', value:()=>'gamescope composite'},
+   {kind:'readout', id:'ro.fxcs', title:'Colour space', value:()=>'sRGB · SDR only'},
+   {kind:'readout', id:'ro.fxgpu', title:'GPU time this pass', value:()=>'0.41 ms of 3.0 ms budget', live:true},
+   {kind:'note', text:'Effects are SDR-only for now — turn HDR off to use them.'},
+  ]},
+
+/* ─────────────────────────── AUDIO ───────────────────────────────────── */
+{ id:'audio.mixer', sec:'AUDIO', title:'Mixer', icon:'♪', badge:()=>'4', wide:true,
+  desc:'Per-application volume through PipeWire. gamescope guesses the game stream and remembers a manual choice per game.',
+  writes:'global.json', why:'Stream volumes are session state; the manual stream override is remembered per game.',
+  entries:[
+   {group:'Game audio', kind:'composite', comp:'fader', id:'audio.game',
+    title:'244 — eldenring.exe', sub:'wine · pid 40217 · matched by process',
+    chip:'matched', summary:()=>V['audio.game.vol']+'%',
+    keywords:'game volume elden ring fader stream mute',
+    help:'Volume of the stream gamescope matched to the launched game, applied live through wpctl.',
+    node:[['id','244'],['media.class','Stream/Output/Audio'],['rate','48000 Hz'],
+          ['channels','2 (FL, FR)'],['latency','1024/48000 · 21.3 ms'],
+          ['sink','alsa_output.pci-0000_0c_00.1.hdmi-stereo']],
+    parts:[
+     {id:'audio.game.vol', kind:'slider', title:'Volume', unit:'%', min:0, max:100, step:1, def:100, val:78},
+     {id:'audio.game.meter', kind:'meter', title:'Output level', ch:['L','R'], lv:[.64,.58]},
+     {id:'audio.game.act', kind:'actions', title:'', buttons:[['mute','audio.game.mute'],['solo','audio.game.solo']]}]},
+   {group:'Other active streams', gcount:'3', kind:'composite', comp:'fader', id:'audio.s334',
+    title:'334 — Floorp', sub:'floorp · pid 3922017', summary:()=>V['audio.s334.vol']+'%',
+    keywords:'floorp browser volume stream',
+    help:'A stream gamescope did not launch. It is listed so you can duck it without leaving the game.',
+    node:[['id','334'],['media.class','Stream/Output/Audio'],['rate','48000 Hz'],['channels','2 (FL, FR)']],
+    parts:[
+     {id:'audio.s334.vol', kind:'slider', title:'Volume', unit:'%', min:0, max:100, step:1, def:100, val:55},
+     {id:'audio.s334.meter', kind:'meter', title:'Output level', ch:['M'], lv:[.22]}]},
+   {kind:'composite', comp:'fader', id:'audio.s129', title:'129 — Music Player Daemon',
+    sub:'mpd · pid 1044', summary:()=>V['audio.s129.vol']+'%', keywords:'mpd music volume stream',
+    help:'A stream gamescope did not launch.',
+    node:[['id','129'],['media.class','Stream/Output/Audio'],['rate','44100 Hz'],['channels','2 (FL, FR)']],
+    parts:[
+     {id:'audio.s129.vol', kind:'slider', title:'Volume', unit:'%', min:0, max:100, step:1, def:100, val:40},
+     {id:'audio.s129.meter', kind:'meter', title:'Output level', ch:['M'], lv:[.0]}]},
+   {kind:'composite', comp:'fader', id:'audio.s77', title:'77 — Discord', sub:'Discord · pid 2301',
+    summary:()=>V['audio.s77.vol']+'%', keywords:'discord voice chat volume stream',
+    help:'A stream gamescope did not launch.',
+    node:[['id','77'],['media.class','Stream/Output/Audio'],['rate','48000 Hz'],['channels','2 (FL, FR)']],
+    parts:[
+     {id:'audio.s77.vol', kind:'slider', title:'Volume', unit:'%', min:0, max:100, step:1, def:100},
+     {id:'audio.s77.meter', kind:'meter', title:'Output level', ch:['M'], lv:[.09]}]},
+   {group:'Detection', id:'audio.manual', kind:'choice', title:'Game stream',
+    opts:['244 — eldenring.exe (wine) [pid 40217]','334 — Floorp (floorp) [pid 3922017]',
+          '129 — Music Player Daemon [pid 1044]','77 — Discord [pid 2301]'],
+    def:'244 — eldenring.exe (wine) [pid 40217]',
+    keywords:'stream pick manual override which game audio',
+    help:'Overrides the guess. A manual choice is remembered for this game and survives a relaunch.'},
+   {kind:'readout', id:'ro.wp', title:'Backend', value:()=>'wpctl 0.5.6 · PipeWire 1.2.7', live:true},
+   {kind:'readout', id:'ro.sink', title:'Default sink', value:()=>'HDMI stereo (0000:0c:00.1)'},
+   {kind:'readout', id:'ro.match', title:'Match reason',
+    value:()=>'process id — stream pid equals the launched pid', live:true},
+  ]},
+
+/* ─────────────────────────── SYSTEM ──────────────────────────────────── */
+{ id:'system.monitor', sec:'SYSTEM', title:'Monitor', icon:'▦', badge:()=>'3/4', wide:true,
+  desc:'The always-on performance HUD. Six tab bars became one list of modules plus the inspector.',
+  writes:'global.json', why:'The monitor is part of the overlay, not of any one game.',
+  entries:[
+   {group:'Modules', kind:'list', id:'monitor.modules', title:'Modules',
+    items:[
+     {id:'mod.fps', title:'FPS', on:'mod.fps', meta:()=>'142 · 7.04 ms · graph',
+      params:[
+       {kind:'composite', comp:'switchlist', id:'mod.fps.rows', title:'Rows',
+        summary:()=>'3 of 4', help:'Which lines the FPS module draws, top to bottom.',
+        keywords:'rows fps frametime graph percentile which lines',
+        parts:[
+         {id:'mod.fps.r1', kind:'switch', title:'Frame rate', def:true, drag:true},
+         {id:'mod.fps.r2', kind:'switch', title:'Frametime readout (ms)', def:true, drag:true},
+         {id:'mod.fps.r3', kind:'switch', title:'Frametime graph', def:true, drag:true},
+         {id:'mod.fps.r4', kind:'switch', title:'Percentile row (1% / 0.1% / avg)', def:false, drag:true}]},
+       {id:'mod.fps.window', kind:'number', title:'Graph window', unit:'frames', min:60, max:600, step:60, def:240,
+        keywords:'graph window frames history samples',
+        help:'How many frames the frametime graph and the percentile row are computed over.'},
+       {kind:'composite', comp:'hue', id:'mod.fps.colour', title:'Colour', summary:()=>'accent',
+        keywords:'colour color module accent hue custom',
+        help:'Module text colour. Following the accent means it changes when you change the theme hue.',
+        parts:[{id:'mod.fps.hue', kind:'hue', title:'Hue', def:218},
+               {id:'mod.fps.preset', kind:'swatches', title:'Presets', def:0}]}]},
+     {id:'mod.cpu', title:'CPU', on:'mod.cpu', meta:()=>'load 24% · RAM 18.2 / 32 GB',
+      params:[
+       {kind:'composite', comp:'switchlist', id:'mod.cpu.rows', title:'Rows', summary:()=>'2 of 3',
+        keywords:'cpu rows load ram temperature', help:'Which lines the CPU module draws.',
+        parts:[{id:'mod.cpu.r1', kind:'switch', title:'Load (1 min average)', def:true, drag:true},
+               {id:'mod.cpu.r2', kind:'switch', title:'RAM used / total', def:true, drag:true},
+               {id:'mod.cpu.r3', kind:'switch', title:'Package temperature', def:false, drag:true}]}]},
+     {id:'mod.gpu', title:'GPU', on:'mod.gpu', meta:()=>'63% · 12.1 / 24.0 GB · 61° · 214 W',
+      params:[
+       {kind:'composite', comp:'switchlist', id:'mod.gpu.rows', title:'Rows', summary:()=>'4 of 4',
+        keywords:'gpu rows busy vram temperature power', help:'Which lines the GPU module draws.',
+        parts:[{id:'mod.gpu.r1', kind:'switch', title:'Busy %', def:true, drag:true},
+               {id:'mod.gpu.r2', kind:'switch', title:'VRAM used / total', def:true, drag:true},
+               {id:'mod.gpu.r3', kind:'switch', title:'Temperature', def:true, drag:true},
+               {id:'mod.gpu.r4', kind:'switch', title:'Board power', def:true, drag:true}]}]},
+     {id:'mod.media', title:'Media', on:'mod.media', meta:()=>'no media playing', dim:true,
+      params:[
+       {id:'mod.media.scroll', kind:'switch', title:'Scroll long titles', def:true,
+        keywords:'media scroll marquee title', help:'Scrolls a title that is wider than the module.'}]},
+    ]},
+   {group:'Appearance', id:'monitor.show', kind:'switch', title:'Show System Monitor', def:false, val:true,
+    keywords:'show hide monitor hud visible',
+    help:'Draws the monitor over the game. Ctrl+Shift+M toggles it without opening the overlay.'},
+   {id:'monitor.font_size', kind:'slider', title:'Font size', unit:'px', min:10, max:30, step:1, def:14, val:18,
+    keywords:'font size text scale monitor',
+    help:'Type size of every monitor module. The atlas is re-baked when this changes.'},
+   {id:'monitor.backdrop', kind:'choice', title:'Backdrop', opts:['none','shadow','solid','blur'], def:'shadow', val:'blur',
+    keywords:'backdrop background shadow blur solid behind',
+    help:'What is drawn behind the monitor so it stays readable over a bright scene.'},
+   {id:'monitor.backdrop_opacity', kind:'slider', title:'Backdrop opacity', min:0, max:1, step:0.01, def:0.60,
+    keywords:'backdrop opacity alpha transparency',
+    help:'How opaque the backdrop is.',
+    enabledWhen:()=>V['monitor.backdrop']!=='none', why:'Backdrop is set to none'},
+   {group:'Placement', kind:'composite', comp:'anchor', id:'monitor.placement', title:'Anchor',
+    summary:()=>ANCHOR[V['monitor.anchor']]+' · '+V['monitor.margin_v']+' / '+V['monitor.margin_h'],
+    keywords:'anchor placement position corner margin offset where',
+    help:'Which screen corner the monitor is pinned to, and how far in from that corner it sits.',
+    parts:[
+     {id:'monitor.anchor', kind:'position', title:'Corner', def:2},
+     {id:'monitor.margin_v', kind:'number', title:'Vertical margin', unit:'px', min:0, max:400, step:4, def:32},
+     {id:'monitor.margin_h', kind:'number', title:'Horizontal margin', unit:'px', min:0, max:400, step:4, def:32}]},
+   {kind:'readout', id:'ro.avg', title:'Average', value:()=>'139.4 fps', live:true},
+   {kind:'readout', id:'ro.1', title:'1% low', value:()=>'118 fps', live:true},
+   {kind:'readout', id:'ro.01', title:'0.1% low', value:()=>'96 fps', live:true},
+   {kind:'readout', id:'ro.outl', title:'Frametime outliers', value:()=>'7 (> 2× median)', live:true},
+   {kind:'readout', id:'ro.win', title:'Sampling window', value:()=>'42 s of 60 s · every 500 ms', live:true},
+   {kind:'readout', id:'ro.width', title:'Module width', value:()=>'shared 268 px (widest = GPU)', live:true},
+   {depth:'expert', id:'monitor.blend', kind:'choice', title:'Blend mode',
+    opts:['alpha','additive','inverted'], def:'alpha', keywords:'blend additive inverted mode',
+    help:'How monitor pixels are combined with the game. Inverted stays readable on any background.'},
+   {depth:'expert', id:'monitor.text_opacity', kind:'slider', title:'Text opacity', min:0, max:1, step:0.01, def:1.00,
+    keywords:'text opacity alpha fade', help:'Opacity of the monitor text itself.'},
+   {depth:'expert', id:'monitor.spacing', kind:'number', title:'Module spacing', unit:'px', min:0, max:40, step:2, def:8,
+    keywords:'spacing gap between modules', help:'Vertical gap between stacked modules.'},
+  ]},
+
+{ id:'system.log', sec:'SYSTEM', title:'Log', icon:'≡', badge:()=>'2!', alert:true, raw:true,
+  desc:'Everything gamescope and the game printed this session. Filters are view state — they are never written to a config file.',
+  writes:'—', why:'The log is not a setting. Nothing on this screen is persisted.',
+  entries:[
+   {id:'log.source', kind:'choice', title:'Source', opts:['gamescope','game'], def:'gamescope',
+    keywords:'log source stdout stderr game gamescope', help:'Which stream is shown.'},
+   {id:'log.follow', kind:'switch', title:'Auto-scroll', def:true,
+    keywords:'follow tail autoscroll bottom', help:'Keeps the newest line in view as output arrives.'},
+  ]},
+
+/* ─────────────────────────── SETUP ───────────────────────────────────── */
+{ id:'setup.profiles', sec:'SETUP', title:'Profiles', icon:'▣', badge:()=>'5',
+  desc:'Named snapshots of every setting. Applying one writes to whichever file the current routing points at.',
+  writes:'profiles/', why:'Profiles live in their own folder and are never per-game.',
+  entries:[
+   {group:'Saved profiles', kind:'list', id:'setup.plist', title:'Profiles', noswitch:true,
+    items:[
+     {id:'p.hand', title:'Handheld 40 fps', meta:()=>'12 settings · 3 days ago',
+      params:[{kind:'note', text:'fps_limit 40 · filter fsr · sharpness 6 · monitor off'}]},
+     {id:'p.qual', title:'Quality', meta:()=>'9 settings · 3 days ago',
+      params:[{kind:'note', text:'fps_limit 0 · filter fsr · sharpness 3 · hdr on'}]},
+     {id:'p.oled', title:'OLED night', meta:()=>'14 settings · yesterday',
+      params:[{kind:'note', text:'sdr brightness 220 nits · vibrancy 0.30 · adaptive brightness on'}]},
+     {id:'p.bench', title:'Benchmark', meta:()=>'7 settings · yesterday',
+      params:[{kind:'note', text:'fps_limit 0 · vrr off · monitor on · all modules'}]},
+     {id:'p.stream', title:'Streaming', meta:()=>'11 settings · 2 h ago',
+      params:[{kind:'note', text:'fps_limit 60 · force composite on · tearing off'}]},
+    ]},
+   {group:'New profile', id:'setup.profile_name', kind:'text', title:'Name',
+    def:'', placeholder:'e.g. Handheld 40 fps', keywords:'profile name new save preset',
+    help:'Letters, digits, space, hyphen and underscore only.'},
+   {kind:'actions', id:'setup.pactions', title:'', buttons:[['save current','acc'],['rename',''],['delete permanently','dgr']]},
+  ]},
+
+{ id:'setup.pergame', sec:'SETUP', title:'Per-Game', icon:'⌾',
+  desc:'Whether this game keeps its own copy of the settings, and where edits are written.',
+  writes:'games/1174180.json', why:'This screen is where routing itself is decided.',
+  entries:[
+   {group:'Routing', id:'setup.override', kind:'switch', title:'Override Global Config', def:false,
+    keywords:'override per game routing config file separate',
+    help:'Gives this game its own config file. Edits made anywhere in the overlay then land there instead of in global.json.'},
+   {id:'setup.autoapply', kind:'switch', title:'Apply on launch', def:true,
+    keywords:'auto apply launch startup profile',
+    help:'Applies this game saved config as soon as the game is detected.'},
+   {kind:'actions', id:'setup.gactions', title:'',
+    buttons:[['copy from another game',''],['delete saved config','dgr']]},
+   {kind:'readout', id:'ro.appid', title:'Resolved app id', value:()=>'1174180 · ELDEN RING', live:true},
+   {kind:'readout', id:'ro.file', title:'Config file',
+    value:()=>V['setup.override']?'games/1174180.json (1.2 kB)':'global.json (4.8 kB)', live:true},
+   {kind:'readout', id:'ro.keys', title:'Keys in this file', value:()=>'2 routed · 31 global', live:true},
+  ]},
+
+{ id:'setup.appearance', sec:'SETUP', title:'Appearance', icon:'⚙',
+  desc:'How the overlay itself looks over the game. These are the only settings that change this window.',
+  writes:'global.json', why:'The overlay appearance is never per-game.',
+  entries:[
+   {group:'Theme', kind:'composite', comp:'hue', id:'setup.accent', title:'Accent colour',
+    summary:()=>V['setup.hue']+'°', keywords:'accent colour color hue theme oklch',
+    help:'One OKLCH hue drives every accent token. Lightness and chroma stay fixed, so no hue can wash out or blow out.',
+    parts:[{id:'setup.hue', kind:'hue', title:'Hue', def:218},
+           {id:'setup.swatch', kind:'swatches', title:'Presets', def:0}]},
+   {id:'setup.ui_scale', kind:'slider', title:'UI scale', unit:'×', min:0.5, max:2, step:0.05, def:1.0,
+    keywords:'scale size display_scale dpi zoom ui',
+    help:'Multiplies every base unit in the overlay. The font atlas is re-baked when it changes.'},
+   {group:'Over the game', id:'setup.blur', kind:'slider', title:'Backdrop blur', min:0, max:1, step:0.01, def:1.0,
+    keywords:'blur backdrop background frost',
+    help:'How strongly the game behind the slab is blurred.'},
+   {id:'setup.darken', kind:'slider', title:'Background darkening', min:0, max:1, step:0.01, def:0.80,
+    keywords:'darken dim background veil contrast',
+    help:'How far the game behind the slab is darkened. This value is what the contrast floor is measured against.'},
+   {id:'setup.unfocused', kind:'slider', title:'Unfocused opacity', min:0.5, max:1, step:0.01, def:0.90,
+    keywords:'unfocused opacity alpha inactive',
+    help:'Opacity of the slab while the overlay does not have input focus.'},
+   {group:'Notifications', kind:'composite', comp:'anchor', id:'setup.notify_place', title:'Anchor',
+    summary:()=>ANCHOR[V['setup.notify_anchor']]+' · '+V['setup.notify_v']+' / '+V['setup.notify_h'],
+    keywords:'notification placement anchor corner position toast',
+    help:'Where notifications appear. Same control, same rules as the monitor anchor — one implementation, two call sites.',
+    parts:[
+     {id:'setup.notify_anchor', kind:'position', title:'Corner', def:8},
+     {id:'setup.notify_v', kind:'number', title:'Vertical margin', unit:'px', min:0, max:400, step:4, def:24},
+     {id:'setup.notify_h', kind:'number', title:'Horizontal margin', unit:'px', min:0, max:400, step:4, def:24}]},
+   {id:'setup.notify_secs', kind:'number', title:'Duration', unit:'s', min:1, max:20, step:1, def:4,
+    keywords:'notification duration seconds timeout',
+    help:'How long a notification stays on screen.'},
+   {kind:'readout', id:'ro.atlas', title:'Font atlas', value:()=>'7 roles baked at 1.00× · 412 kB', live:true},
+   {kind:'readout', id:'ro.prims', title:'Draw primitives', value:()=>'914 last frame', live:true},
+  ]},
+];
+
+const ANCHOR = ['top-left','top-centre','top-right','left','centre','right',
+                'bottom-left','bottom-centre','bottom-right'];
+const SWATCH_HUES = [218, 152, 88, 28, 350, 300, 262, 190];
+
+/* declare every value the registry mentions */
+AREAS.forEach(a => a.entries.forEach(e => walk(e, decl)));
+/* list-item on/off flags */
+AREAS.forEach(a => a.entries.forEach(e => (e.items||[]).forEach(it => {
+  if (it.on){ D[it.on] = it.id==='mod.media' || it.id==='fx.vib' || it.id==='fx.sharp' ? false : true;
+              V[it.on] = it.id==='fx.ab' || it.id.startsWith('mod.') && it.id!=='mod.media'; } })));
+V['mod.fps']=V['mod.cpu']=V['mod.gpu']=true; V['mod.media']=false;
+D['mod.fps']=D['mod.cpu']=true; D['mod.gpu']=false; D['mod.media']=false;
+V['fx.ab']=true; V['fx.vib']=false; V['fx.sharp']=false;
+D['fx.ab']=false; D['fx.vib']=false; D['fx.sharp']=false;
+V['audio.game.mute']=false; V['audio.game.solo']=false;
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 3 — state and layout (the responsive ladder, one pure function)
+   ══════════════════════════════════════════════════════════════════════════ */
+const S = { scale:1, hue:218, bg:0, area:'display.upscaling', sel:null, selPer:{},
+            inspector:true, palette:false, palQ:'', palSel:0, rulers:false, moved:false,
+            menu:null, logSel:1604, logFilter:{e:true,w:true,i:true}, cap:'' };
+
+function layout(scale){
+  const SW=1920, SH=1080;
+  const physW = Math.min(SW*0.90, Math.max(1560*scale, Math.min(SW*0.90,1180)));
+  const physH = Math.min(SH*0.86, 940*scale);
+  const baseW = physW/scale, baseH = physH/scale;
+  const RAIL=240, ICON=64, INSP=384, SHEETMIN=560;
+  let rail=RAIL, drawer=false;
+  if (rail + SHEETMIN + INSP > baseW) rail = ICON;
+  if (rail + SHEETMIN + INSP > baseW) drawer = true;
+  const sheet = baseW - rail - (drawer?0:INSP);
+  const cols = sheet >= 1520 ? 2 : 1;
+  return {physW,physH,baseW,baseH,rail,drawer,inspW:INSP,sheet,cols,scale};
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 4 — the renderer. Rebuilt whole on every change, ImGui-style.
+   THE ONE ALIGNMENT RULE, enforced in exactly one place:
+     a control is handed a box whose RIGHT edge is the sheet rail
+     (row right − 36 base). It chooses a width; it never chooses an x.
+   ══════════════════════════════════════════════════════════════════════════ */
+function ctlWidth(contentW){ return Math.round(Math.max(180, Math.min(320, contentW*0.50))); }
+
+const area = id => AREAS.find(a=>a.id===id);
+const flat = a => { const o=[]; a.entries.forEach(e=>o.push(e)); return o; };
+function differsOf(a){
+  const out=[];
+  a.entries.forEach(e=>walk(e,x=>{ if (x.id in D && V[x.id]!==D[x.id] && x.kind!=='readout')
+    out.push([x.id, x.title||e.title, fmt(x,D[x.id]), fmt(x,V[x.id])]); }));
+  (a.entries||[]).forEach(e=>(e.items||[]).forEach(it=>{ if (it.on && V[it.on]!==D[it.on])
+    out.push([it.on, it.title, D[it.on]?'on':'off', V[it.on]?'on':'off']); }));
+  return out;
+}
+function fmt(e,v){
+  if (typeof v==='boolean') return v?'on':'off';
+  if (e.kind==='position') return ANCHOR[v];
+  if (e.kind==='number' && e.zero && v===0) return e.zero;
+  if (e.kind==='hue') return v+'°';
+  if (typeof v==='number') return (e.step && e.step<1) ? v.toFixed(2) : String(v);
+  return String(v)||'—';
+}
+const enabled = e => !e.enabledWhen || e.enabledWhen();
+
+/* ── control painters. Each returns HTML that fills or fits the box. ───── */
+function paintSwitch(e,id){
+  return `<div class="sw ${V[id]?'on':''}" data-act="toggle" data-id="${id}"><i></i></div>`;
+}
+function paintChoice(e,id,fill){
+  const segOK = e.opts.length<=5 && e.opts.every(o=>o.length<=8);
+  if (segOK) return `<div class="seg">`+e.opts.map(o=>
+      `<b class="${V[id]===o?'on':''}" data-act="set" data-id="${id}" data-v="${esc(o)}">${esc(o)}</b>`).join('')+`</div>`;
+  const open = S.menu===id;
+  return `<div class="sel2 ${open?'open':''}" data-act="menu" data-id="${id}">${esc(V[id])}<span class="cv">${open?'▴':'▾'}</span></div>`
+    + (open ? `<div class="menu">`+e.opts.map(o=>
+        `<div class="${V[id]===o?'on':''}" data-act="set" data-id="${id}" data-v="${esc(o)}">${esc(o)}</div>`).join('')+`</div>` : '');
+}
+function paintSlider(e,id){
+  const v=V[id], p=(v-e.min)/(e.max-e.min)*100, dp=(D[id]-e.min)/(e.max-e.min)*100;
+  const num = e.step<1 ? v.toFixed(2) : String(v);
+  const mid = D[id]!==v ? `<span class="mid">default ${e.step<1?D[id].toFixed(2):D[id]}</span>` : '';
+  return `<div class="sldwrap">
+    <span class="sval">${num}${e.unit?`<s>${esc(e.unit)}</s>`:''}</span>
+    <div class="track" data-act="drag" data-id="${id}">
+      <div class="fill" style="width:${p}%"></div>
+      <div class="tick" style="left:${dp}%"></div>
+      <div class="handle" style="left:${p}%"></div></div>
+    <div class="marks"><span>${e.step<1?e.min.toFixed(2):e.min}</span>${mid}<span>${e.step<1?e.max.toFixed(2):e.max}</span></div>
+  </div>`;
+}
+function paintNumber(e,id){
+  const v=V[id], txt=(e.zero&&v===0)?e.zero:String(v);
+  return `<div class="step"><b data-act="stepd" data-id="${id}">−</b>
+    <span>${esc(txt)}${e.unit&&!(e.zero&&v===0)?`<s>${esc(e.unit)}</s>`:''}</span>
+    <b data-act="stepu" data-id="${id}">+</b></div>`;
+}
+function paintText(e,id){
+  const bad = V[id] && !/^[A-Za-z0-9 _-]*$/.test(V[id]);
+  return `<div class="inp ${bad?'bad':''}"><input value="${esc(V[id])}" placeholder="${esc(e.placeholder||'')}"
+    data-act="text" data-id="${id}"></div>`+(bad?`<div class="err">letters, digits, space, - and _ only</div>`:'');
+}
+function paintPosition(e,id){
+  let h='<div class="pgrid">';
+  for (let i=0;i<9;i++) h+=`<i class="${V[id]===i?'on':''}" data-act="set" data-id="${id}" data-v="${i}" data-num="1"></i>`;
+  return h+'</div>';
+}
+function paintHue(e,id){
+  const stops=[]; for(let i=0;i<=360;i+=30) stops.push(oklch(.74,.12,i));
+  return `<div class="hue" data-act="hue" data-id="${id}" style="background:linear-gradient(90deg,${stops.join(',')})">
+    <div class="handle" style="left:${V[id]/360*100}%"></div></div>`;
+}
+function paintSwatches(e,id){
+  return '<div class="swatches">'+SWATCH_HUES.map((h,i)=>
+    `<i class="${V[id]===i?'on':''}" style="background:${oklch(.74,.12,h)}" data-act="swatch"
+      data-id="${id}" data-v="${i}" data-h="${h}"></i>`).join('')+'</div>';
+}
+function paintMeter(e){
+  return '<div style="width:100%;display:flex;flex-direction:column;gap:4px">'+
+    e.ch.map((c,i)=>`<div class="mrow"><span class="ch">${c}</span>
+      <div class="meter"><i style="width:${Math.round(e.lv[i]*100)}%"></i></div></div>`).join('')+'</div>';
+}
+function paintActions(e){
+  return e.buttons.map(b=>{
+    if (b[1]==='acc') return `<span class="btn acc">${esc(b[0])}</span>`;
+    if (b[1]==='dgr') return `<span class="btn dgr">${esc(b[0])}</span>`;
+    if (b[1] && b[1].indexOf('.')>0)
+      return `<span class="btn ${V[b[1]]?'acc':''}" data-act="toggle" data-id="${b[1]}">${esc(b[0])}</span>`;
+    return `<span class="btn">${esc(b[0])}</span>`;
+  }).join('');
+}
+/* fit vs fill is decided HERE, from the kind. A call site has no say. */
+const FILL = {slider:1, choice:1, text:1, meter:1, hue:1};
+function paint(e){
+  const id=e.id;
+  switch(e.kind){
+    case 'switch':   return paintSwitch(e,id);
+    case 'choice':   return paintChoice(e,id);
+    case 'slider':   return paintSlider(e,id);
+    case 'number':   return paintNumber(e,id);
+    case 'text':     return paintText(e,id);
+    case 'position': return paintPosition(e,id);
+    case 'hue':      return paintHue(e,id);
+    case 'swatches': return paintSwatches(e,id);
+    case 'meter':    return paintMeter(e);
+    case 'actions':  return paintActions(e);
+    default: return '';
+  }
+}
+const heightClass = e => e.kind==='slider' ? 'tall' : e.kind==='position' ? 'block'
+  : e.kind==='hue' ? 'tall' : e.kind==='meter' ? 'tall' : '';
+
+/* ── one row ───────────────────────────────────────────────────────────── */
+function row(e, opt){
+  opt = opt||{};
+  const id=e.id, has=(id in D), diff = has && V[id]!==D[id];
+  const selected = S.sel && S.sel.id===id;
+  const ok = enabled(e);
+  const cls=['row', heightClass(e), selected?'sel':'', opt.part?'part':'', ok?'':'dis', opt.moved?'moved':''].join(' ');
+  const aff = diff ? `<span class="reset" data-act="reset" data-id="${id}" title="reset to default"></span>`
+            : (e.help||e.depthOwner) ? `<span class="chev">›</span>` : '';
+  const lab = `${esc(opt.title||e.title)}${opt.chip?`<span class="chip n">${esc(opt.chip)}</span>`:''}${
+      opt.moved?'<span class="movedtag">→ inspector</span>':''}${e.hint?`<em>${esc(e.hint)}</em>`:''}`;
+  const drag = e.drag ? `<span class="drag">⋮⋮</span>` : '';
+  return `<div class="${cls}" data-act="sel" data-id="${id}">
+    <span class="edge ${diff?'diff':selected?'sel':''}"></span>
+    <div class="lab">${lab}</div>
+    <div class="ctl">${paint(e)}</div>
+    <div class="aff">${drag||aff}</div>
+  </div>` + (!ok && e.why ? `<div class="why">${esc(e.why)}</div>` : '');
+}
+
+/* ── COMPOSITE: one head row + parts, ONE bounded object ───────────────── */
+function composite(e, opt){
+  opt=opt||{};
+  const selected = S.sel && S.sel.id===e.id;
+  const anyDiff = (e.parts||[]).some(p=>p.id in D && V[p.id]!==D[p.id]);
+  const head = `<div class="row head" data-act="sel" data-id="${e.id}">
+      <div class="lab">${esc(e.title)}${e.chip?`<span class="chip">${esc(e.chip)}</span>`:''}${
+        e.sub?`<em>${esc(e.sub)}</em>`:''}</div>
+      <div class="ctl">${e.comp==='switchlist'
+        ? `<span class="btn" data-act="all" data-id="${e.id}">all</span><span class="btn" data-act="none" data-id="${e.id}">none</span>`
+        : `<span class="headval">${esc(e.summary?e.summary():'')}</span>`}</div>
+      <div class="aff">${anyDiff
+        ? `<span class="reset" data-act="resetcomp" data-id="${e.id}"></span>` : '<span class="chev">›</span>'}</div>
+    </div>`;
+  const parts = (e.parts||[]).map(p=>row(p,{part:true})).join('');
+  return `<div class="comp ${selected?'sel':''}" data-comp="${e.id}">
+    <span class="edge ${anyDiff?'diff':selected?'sel':''}"></span>${head}${parts}</div>`;
+}
+
+/* ── list (effects, modules, streams, profiles) ────────────────────────── */
+function list(e){
+  const items = e.items.map(it=>{
+    const sel = S.sel && S.sel.kind==='item' && S.sel.id===it.id;
+    return `<div class="li ${sel?'sel':''}" data-act="item" data-id="${it.id}">
+      <span class="dot ${it.on ? (V[it.on]?'':'idle') : (sel?'':'idle')}"></span>
+      <span class="nm">${esc(it.title)}</span>
+      <span class="mt">${esc(it.meta?it.meta():'')}</span>
+      <span class="rail-end">${it.on?paintSwitch(e,it.on):''}<span class="cv">›</span></span></div>`;
+  }).join('');
+  return items;
+}
+
+/* ── the sheet ─────────────────────────────────────────────────────────── */
+function sheetHTML(a, L){
+  if (a.raw) return logHTML();
+  const contentW = Math.min(720, L.sheet-48);
+  const cw = ctlWidth(contentW);
+  const visible = a.entries.filter(e=>{
+    if (e.kind==='readout') return S.moved;
+    if (e.depth==='expert') return S.moved;
+    return true;
+  });
+  let groups=[], cur=null;
+  visible.forEach(e=>{ if (e.group || !cur){ cur={name:e.group||'', gcount:e.gcount, act:e.headAction, rows:[]}; groups.push(cur);} cur.rows.push(e); });
+
+  const renderGroup = g => {
+    let h = g.name ? `<div class="gh">${esc(g.name)}${g.gcount?`<span class="chip n">${esc(g.gcount)}</span>`:''}${
+        g.act?`<span class="act" data-act="gact">${esc(g.act[0])}</span>`:''}</div>` : '';
+    g.rows.forEach(e=>{
+      const movedFlag = S.moved && (e.kind==='readout' || e.depth==='expert');
+      if (e.kind==='readout')
+        h += `<div class="row ro moved" data-act="sel" data-id="${e.id}"><span class="edge"></span>
+              <div class="lab">${esc(e.title)}<span class="movedtag">→ inspector</span></div>
+              <div class="ctl"><span style="font:400 11.5px var(--mono);color:var(--t48)">${esc(e.value())}</span></div>
+              <div class="aff"><span class="lock">🔒</span></div></div>`;
+      else if (e.kind==='note') h += `<div class="note">${esc(e.text)}</div>`;
+      else if (e.kind==='list') h += list(e);
+      else if (e.kind==='composite') h += composite(e);
+      else if (e.kind==='actions')
+        h += `<div class="row" data-act="none"><span class="edge"></span><div class="lab"></div>
+              <div class="ctl" style="gap:8px">${paintActions(e)}</div><div class="aff"></div></div>`;
+      else h += row(e,{moved:movedFlag});
+    });
+    return h;
+  };
+
+  let inner;
+  if (L.cols===2){
+    const half = Math.ceil(groups.length/2);
+    inner = `<div class="cols"><div class="content" style="--ctlw:${cw}px">${groups.slice(0,half).map(renderGroup).join('')}</div>`
+          + `<div class="content" style="--ctlw:${cw}px">${groups.slice(half).map(renderGroup).join('')}</div></div>`;
+  } else {
+    inner = `<div class="content" style="--ctlw:${cw}px">${groups.map(renderGroup).join('')}</div>`;
+  }
+  return `<div class="sheetbody" id="sb">${inner}</div>`;
+}
+
+/* ── LOG: a Raw sheet — no rows, no label column ───────────────────────── */
+const LOG = [
+ [1583,'i','00:41:02.118','steamcompmgr: [focus] window 0x00c00007 "ELDEN RING" is now the focused app'],
+ [1584,'i','00:41:02.118','steamcompmgr: [focus] override 0x01400012 (steam overlay) kept above focus'],
+ [1585,'i','00:41:02.204','wlserver: xwayland ctx 0 — client 41217 bound wl_surface@84'],
+ [1586,'i','00:41:03.001','gamescope: applying config games/1174180.json (override active)'],
+ [1587,'i','00:41:03.002','gamescope: filter=fsr sharpness=5 scaler=auto fps_limit=60'],
+ [1588,'w','00:41:03.554','vulkan: swapchain out of date, recreating for connector DP-1 (3840x2160@138)'],
+ [1589,'i','00:41:03.612','vulkan: selecting physical device \'AMD Radeon RX 7900 XTX (RADV NAVI31)\''],
+ [1590,'i','00:41:03.612','vulkan: supported DRM formats: ARGB8888 XRGB8888 ABGR2101010 NV12'],
+ [1591,'i','00:41:04.190','reshade: compiled gamescope-ritz.fx in 41 ms — 3 techniques, 0 warnings'],
+ [1592,'i','00:41:04.191','reshade: technique AdaptiveBrightness enabled (strength 0.78, target 0.42)'],
+ [1593,'i','00:41:05.770','pipewire: node 244 appeared — eldenring.exe (wine) [pid 40217]'],
+ [1594,'i','00:41:05.771','audio: matched game stream by process id — 244'],
+ [1595,'i','00:41:06.330','drm: connector DP-1 vrr_capable=1, adaptive_sync enabled (48-138 Hz)'],
+ [1596,'i','00:41:07.008','overlay: settings surface 1560x928 @ display_scale 1.00, atlas rebuilt (7 roles)'],
+ [1597,'i','00:41:09.442','fps_display: sampling 500 ms · 240-frame window'],
+ [1598,'w','00:41:11.019','wlserver: DRM lease released by client 41217 before commit — ignoring'],
+ [1599,'i','00:41:12.606','steamcompmgr: [focus] keyboard focus re-applied to preserved subwindow'],
+ [1600,'i','00:41:14.221','gamescope: debug_set_fps_limit 60'],
+ [1601,'i','00:41:16.884','steamcompmgr: focus changed — 0x00c00007 keeps input focus'],
+ [1602,'i','00:41:17.550','vulkan: composite pass 2 (preemptive upscale, filter != linear)'],
+ [1603,'i','00:41:18.203','vulkan: queue submit 184213 — 2 layers, 1 overlay, 1 cursor'],
+ [1604,'e','00:41:18.204','vulkan: vkQueueSubmit failed with VK_ERROR_DEVICE_LOST while submitting the composite command buffer for connector DP-1 (frame 184213)'],
+ [1605,'e','00:41:18.204','vulkan: device lost — attempting to recreate the compositor device'],
+ [1606,'w','00:41:18.900','vulkan: recreated device, 4 textures re-imported, 1 dropped'],
+ [1607,'i','00:41:19.640','gamescope: composite resumed after 1.44 s'],
+ [1608,'i','00:41:21.117','fps_display: 1% 118 · 0.1% 96 · avg 139.4 over the last 60 s'],
+ [1609,'i','00:41:23.802','pipewire: node 334 appeared — Floorp (floorp) [pid 3922017]'],
+ [1610,'i','00:41:24.010','audio: keeping manually selected stream 244 (override active)'],
+ [1611,'i','00:41:26.552','overlay: notification "Applied profile \'Quality\'" (bottom-right, 4.0 s)'],
+ [1612,'i','00:41:28.881','config: enqueued routed write → games/1174180.json (2 keys)'],
+ [1613,'i','00:41:28.902','config: flushed games/1174180.json (1.2 kB)'],
+ [1614,'i','00:41:31.400','steamcompmgr: [focus] cursor grab released — force_grab_cursor=0'],
+ [1615,'i','00:41:33.771','fps_display: module widths — fps 186, cpu 214, gpu 268 → shared 268'],
+ [1616,'i','00:41:35.006','gamescope: adaptive_sync engaged — refresh following 96-138 Hz'],
+ [1617,'i','00:41:37.220','reshade: parameter adaptive_brightness_max_gain 1.60 → 1.24 (live)'],
+ [1618,'i','00:41:39.554','vulkan: composite 7.04 ms (upscale 2.11, effects 0.41, overlay 0.18)']
+];
+const logCount = s => LOG.filter(l=>l[1]===s).length;
+function logHTML(){
+  const f=S.logFilter;
+  const rows = LOG.filter(l=>f[l[1]]).map(([n,s,t,x])=>
+    `<div class="logline ${s==='e'?'e':s==='w'?'w':''} ${n===S.logSel?'sel':''}" data-act="logline" data-id="${n}">
+      <span class="ln">${n}</span><span class="sv"></span>
+      <span class="tx"><span class="tm">${t}</span>  ${esc(x)}</span></div>`).join('');
+  const chip=(k,label,cls)=>`<span class="chip f ${cls} ${f[k]?'':'off'}" data-act="logf" data-id="${k}">${label}</span>`;
+  return `<div class="sheetbody pad0">
+    <div class="filterbar">
+      <div class="seg" style="width:180px;flex:0 0 180px">
+        <b class="${V['log.source']==='gamescope'?'on':''}" data-act="set" data-id="log.source" data-v="gamescope">gamescope</b>
+        <b class="${V['log.source']==='game'?'on':''}" data-act="set" data-id="log.source" data-v="game">game</b></div>
+      <div class="inp"><input placeholder="filter lines…"></div>
+      ${chip('e','err '+logCount('e'),'d')}${chip('w','warn '+logCount('w'),'w')}${chip('i','info','n')}
+      <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span style="font:400 11.5px var(--mono);color:var(--t48)">auto-scroll</span>
+        ${paintSwitch({},'log.follow')}
+        <span class="btn">copy</span></span>
+    </div>
+    <div class="logwrap">${rows}</div></div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 5 — the Inspector. Same registry, same row grammar, two-line form.
+   ══════════════════════════════════════════════════════════════════════════ */
+function ipanel(e, opts){
+  opts=opts||{};
+  if (e.kind==='note') return `<div class="i2"><div class="note" style="padding:0">${esc(e.text)}</div></div>`;
+  if (e.kind==='composite'){
+    const diff=(e.parts||[]).some(p=>p.id in D && V[p.id]!==D[p.id]);
+    return `<div class="i2"><div class="k">${esc(e.title)}<span class="d">${esc(e.summary?e.summary():'')}</span></div>`
+      + (e.parts||[]).map(p=>`<div class="v ${FILL[p.kind]?'':'fit'}" style="margin-top:10px">
+           <div style="width:100%;display:flex;align-items:baseline;margin-bottom:6px">
+             <span style="font:400 12px var(--mono);color:var(--t48)">${esc(p.title)}</span>
+             <span style="margin-left:auto;font:400 11px var(--mono);color:var(--t48)">${
+               p.id in D && V[p.id]!==D[p.id] ? 'default '+fmt(p,D[p.id]) : ''}</span></div>
+           ${paint(p)}</div>`).join('')
+      + (e.help?`<div class="note" style="padding-top:12px">${esc(e.help)}</div>`:'') + `</div>`;
+  }
+  const has = e.id in D;
+  return `<div class="i2">
+    <div class="k">${esc(e.title)}${has?`<span class="d">default ${esc(fmt(e,D[e.id]))}</span>`:''}</div>
+    <div class="v ${FILL[e.kind]?'':'fit'}">${paint(e)}</div>
+    ${e.help?`<div class="note">${esc(e.help)}</div>`:''}
+  </div>`;
+}
+
+function inspectorHTML(a, L){
+  let title, kicker, body='';
+  const selEntry = S.sel && S.sel.kind==='entry' ? findEntry(S.sel.id) : null;
+  const selItem  = S.sel && S.sel.kind==='item'  ? findItem(S.sel.id)  : null;
+  const selLog   = a.raw ? LOG.find(l=>l[0]===S.logSel) : null;
+
+  if (a.raw && selLog){
+    title = 'line '+selLog[0]; kicker='Log line';
+    body = `<div class="i2"><div class="help" style="font-family:var(--mono);font-size:12.5px;line-height:1.6">${esc(selLog[3])}</div></div>
+      <div class="i2"><div class="k">Timestamp<span class="d">${selLog[2]}</span></div></div>
+      <div class="i2"><div class="k">Severity<span class="d">${selLog[1]==='e'?'error':selLog[1]==='w'?'warning':'info'}</span></div></div>
+      <div class="i2"><div class="k">Source<span class="d">gamescope stderr</span></div></div>
+      <div class="i2"><div class="k">What it means</div><div class="v"><div class="help">
+        The Vulkan device was lost mid-submit. gamescope recreates the compositor device and re-imports
+        textures; a 1–2 s freeze and one dropped frame are expected. Repeated device loss usually means a
+        driver reset — check <span style="font-family:var(--mono);color:var(--acc-txt)">dmesg</span>.</div></div></div>
+      <div class="i2"><div class="k">Actions</div><div class="v fit" style="flex-direction:row;gap:8px">
+        <span class="btn">copy line</span><span class="btn">copy 20 around</span></div></div>`;
+  }
+  else if (selItem){
+    const {item, owner} = selItem;
+    title = item.title; kicker = owner.title.replace(/s$/,'');
+    body = (item.params||[]).map(p=>ipanel(p)).join('');
+    body += `<div class="i2"><div class="prov"><span class="dot"></span>writes ${esc(a.writes)}</div></div>`;
+  }
+  else if (selEntry){
+    const e = selEntry;
+    title = e.title; kicker = e.depth==='expert' ? 'Expert setting' : 'Setting';
+    body = ipanel(e);
+    if (e.node) body += `<div class="i2"><div class="k">PipeWire node</div><div class="v">`+
+      e.node.map(([k,v])=>`<div style="display:flex;height:22px;align-items:center;width:100%">
+        <span style="font:400 12px var(--sans);color:var(--t62)">${esc(k)}</span>
+        <span style="margin-left:auto;font:400 11.5px var(--mono);color:var(--t48)">${esc(v)}</span></div>`).join('')+
+      `</div></div>`;
+    if (e.min!==undefined) body += `<div class="i2"><div class="k">Range<span class="d">${
+      e.step<1?e.min.toFixed(2):e.min} – ${e.step<1?e.max.toFixed(2):e.max}${e.unit?' '+e.unit:''}</span></div></div>`;
+    if (!enabled(e)) body += `<div class="i2"><div class="k">Unavailable</div><div class="v">
+      <div class="note" style="padding:0;color:#F3A45E">${esc(e.why)}</div></div></div>`;
+    body += `<div class="i2"><div class="k">Writes to</div><div class="v">
+      <div class="prov" style="width:100%"><span class="dot"></span>
+      <span style="color:var(--acc-txt)">${esc(a.writes)}</span></div>
+      <div class="note" style="padding-top:8px">${esc(a.why)}</div></div></div>`;
+    if (e.related) body += `<div class="i2"><div class="k">Related</div><div class="v">`+
+      e.related.map(([id,t])=>`<div class="jump" data-act="jump" data-id="${id}">${esc(t)}<span class="a">›</span></div>`).join('')+
+      `</div></div>`;
+    body += `<div class="i2"><div class="k">Registry</div><div class="v">
+      <div class="idline">${esc(e.id)}</div>
+      <div class="idline" style="margin-top:6px">keywords: ${esc(e.keywords||'—')}</div></div></div>`;
+  }
+  else {
+    /* ── the Category Card — the inspector is never empty ── */
+    title = a.title; kicker='Category';
+    const diffs = differsOf(a);
+    const readouts = a.entries.filter(e=>e.kind==='readout');
+    const experts = [];
+    a.entries.forEach(e=>{ if (e.depth==='expert') experts.push(e); });
+    body = `<div class="i2"><div class="help">${esc(a.desc)}</div></div>`;
+    body += `<div class="i2"><div class="k">${diffs.length} of ${countSettings(a)} settings differ from default</div>`+
+      (diffs.length?`<div class="v">`+diffs.slice(0,6).map(d=>
+        `<div class="jump" data-act="jump" data-id="${d[0]}">${esc(d[1])}<span class="a">${esc(d[2])} → ${esc(d[3])}</span></div>`).join('')+`</div>`
+      :`<div class="note">Everything in this category is at its shipped default.</div>`)+`</div>`;
+    if (readouts.length) body += `<div class="i2"><div class="k">Live<span class="d">read-only</span></div><div class="v">`+
+      readouts.map(r=>`<div style="display:flex;height:24px;align-items:center;width:100%">
+        ${r.live?'<span class="dot ok" style="margin-right:8px"></span>':'<span style="width:14px"></span>'}
+        <span style="font:400 13px var(--sans);color:var(--t62)">${esc(r.title)}</span>
+        <span style="margin-left:auto;font:400 11.5px var(--mono);color:var(--t48);text-align:right">${esc(r.value())}</span>
+      </div>`).join('')+`</div></div>`;
+    body += `<div class="i2"><div class="k">Writes to</div><div class="v">
+      <div class="prov" style="width:100%"><span class="dot"></span>
+      <span style="color:var(--acc-txt)">${esc(a.writes)}</span></div>
+      <div class="note" style="padding-top:8px">${esc(a.why)}</div></div></div>`;
+    if (experts.length) body += `<div class="i2"><div class="k">Expert<span class="d">${experts.length}</span></div>`+
+      experts.map(e=>ipanel(e)).join('')+`</div>`;
+    body += `<div class="i2"><div class="k">Actions</div><div class="v fit" style="flex-direction:row;gap:8px;flex-wrap:wrap">
+      <span class="btn" data-act="resetcat">reset category</span>
+      <span class="btn">save as preset</span><span class="btn acc">apply profile…</span></div></div>`;
+  }
+  const drawer = L.drawer;
+  return `<div class="insp ${drawer?'drawer':''}" style="width:${L.inspW}px;flex:0 0 ${L.inspW}px">
+    <div class="insphead"><span class="t">${esc(kicker)}</span><span class="n">${esc(title)}</span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <span class="glyph" data-act="inspoff" title="close the inspector (Ctrl+I)">✕</span></span></div>
+    <div class="inspbody" id="ib">${body}</div></div>`;
+}
+function countSettings(a){ let n=0; a.entries.forEach(e=>walk(e,x=>{ if (x.id in D && x.kind!=='readout') n++; }));
+  a.entries.forEach(e=>(e.items||[]).forEach(it=>{ if (it.on) n++; })); return n; }
+function findEntry(id){ let f=null; AREAS.forEach(a=>a.entries.forEach(e=>walk(e,x=>{ if (x.id===id) f=x; }))); return f; }
+function findItem(id){ let f=null; AREAS.forEach(a=>a.entries.forEach(e=>(e.items||[]).forEach(it=>{
+  if (it.id===id) f={item:it, owner:e, area:a}; }))); return f; }
+function areaOf(id){ let f=null; AREAS.forEach(a=>a.entries.forEach(e=>walk(e,x=>{ if (x.id===id) f=a; })));
+  if (!f) AREAS.forEach(a=>a.entries.forEach(e=>(e.items||[]).forEach(it=>{ if (it.id===id||it.on===id) f=a; })));
+  return f; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 6 — the shell
+   ══════════════════════════════════════════════════════════════════════════ */
+function railHTML(L){
+  let h='', sec=null, y=8, activeY=0;
+  AREAS.forEach(a=>{
+    if (a.sec!==sec){ sec=a.sec; h+=`<div class="sec">${esc(sec)}</div>`; y+=26; }
+    const on = a.id===S.area;
+    if (on) activeY = y+20;
+    h+=`<div class="ri ${on?'on':''}" data-act="area" data-id="${a.id}" title="${esc(a.title)}">
+      <span class="ic">${a.icon}</span><span class="nm">${esc(a.title)}</span>
+      ${a.badge?`<span class="ct ${a.alert?'alert':''}">${esc(a.badge())}</span>`:''}</div>`;
+    y+=40;
+  });
+  return {html:`<div class="rail ${L.rail===64?'icons':''}" style="flex:0 0 ${L.rail}px;width:${L.rail}px">${h}</div>`,
+          activeY};
+}
+
+function render(){
+  const L = layout(S.scale), a = area(S.area);
+  const rail = railHTML(L);
+  const diffs = differsOf(a);
+  const insp = S.inspector ? inspectorHTML(a,L) : '';
+  const reopen = (!S.inspector) ? `<div class="reopen" data-act="inspon">inspector ›</div>` : '';
+  /* the accent thread: rail item ➜ breadcrumb, three 1px lines */
+  const thread = `<div class="thread" style="left:${L.rail}px;top:${rail.activeY}px;width:14px;height:1px"></div>
+    <div class="thread" style="left:${L.rail+14}px;top:${Math.min(rail.activeY,28)}px;height:${Math.abs(rail.activeY-28)}px;width:1px"></div>
+    <div class="thread" style="left:${L.rail+14}px;top:28px;width:10px;height:1px"></div>`;
+
+  const html = `<div class="slab ${S.rulers?'rulers':''}"
+      style="width:${L.baseW}px;height:${L.baseH}px;transform:translate(-50%,-50%) scale(${L.scale})">
+    <div class="slabbar">
+      <span class="dot"></span><span class="ttl">GAMESCOPE-RITZ</span><span class="meta">settings</span>
+      <span class="right">
+        <span class="chip n">app 1174180</span>
+        <span class="chip ${V['setup.override']?'':'n'}">${V['setup.override']?'games/1174180.json':'global.json'}</span>
+        <span class="glyph ${S.inspector?'on':''}" data-act="insptoggle" title="inspector (Ctrl+I)">▥</span>
+        <span class="glyph" title="close (Esc)">✕</span></span>
+    </div>
+    <div class="body">
+      ${rail.html}${thread}
+      <div class="sheet">
+        <div class="sheethead">
+          <span class="crumb">${esc(a.sec)}<span class="sl">/</span><b>${esc(a.title.toUpperCase())}</b></span>
+          <span class="right">
+            ${diffs.length?`<span class="chip">differs ${diffs.length}</span>`:''}
+            <span class="chip n">writes ${esc(a.writes)}</span>
+            <span class="glyph" data-act="palopen" title="Ctrl+K">⌕</span></span>
+        </div>
+        ${sheetHTML(a,L)}
+        <div class="sheetfoot">
+          <span class="btn" data-act="resetcat">reset category</span>
+          <span class="hint"><span class="kbd">CTRL+K</span> search ·
+            <span class="kbd">TAB</span> region · <span class="kbd">CTRL+D</span> reset row ·
+            <span class="kbd">ESC</span> close</span>
+        </div>
+      </div>
+      ${insp}${reopen}
+    </div>
+  </div>`;
+
+  const sb = document.getElementById('sb'), ib = document.getElementById('ib');
+  const st1 = sb?sb.scrollTop:0, st2 = ib?ib.scrollTop:0;
+  document.getElementById('slabmount').innerHTML = html;
+  const sb2 = document.getElementById('sb'), ib2 = document.getElementById('ib');
+  if (sb2) sb2.scrollTop = st1; if (ib2) ib2.scrollTop = st2;
+  renderPalette();
+  renderCap(L);
+}
+
+/* ── caption ───────────────────────────────────────────────────────────── */
+function renderCap(L){
+  const a=area(S.area);
+  let t;
+  if (S.palette) t = `<b>Command palette (Ctrl+K)</b> — fuzzy search over the whole registry: ${paletteRows().total} entries, including expert settings and composite parts. The row, this entry and the inspector page all come from one registration.`;
+  else if (S.moved) t = `<b>“show what moved” is on.</b> Every dashed row is something the refinement took OUT of the sheet: read-only readouts and <em>Depth::Expert</em> settings. Turn it off to see the calmed sheet — that is the fix for critique (3).`;
+  else if (S.rulers) t = `<b>The alignment rail.</b> The accent dashes are the control rail at <em>row right − 36</em>. Every control's right edge lands on it — switch, segmented, stepper, slider, 3×3 grid, buttons. The white dashes are the label origin. That is the fix for critique (2).`;
+  else if (a.raw) t = `<b>LOG — a Raw sheet.</b> No label column, no row grammar; 20-unit lines with a severity edge. The severity chips are the one licensed non-switch binary in the design: they filter a view, they are never persisted, and they exist only here.`;
+  else if (S.sel && S.sel.id==='monitor.placement') t = `<b>Anchor — the composite fix.</b> One head row carrying the label and the summary, then three part rows that are ordinary rows with indented sub-labels. One state edge down the whole group, one closing hairline, every control on the same right rail. Nothing floats.`;
+  else if (S.area==='audio.mixer') t = `<b>Audio mixer.</b> Each stream is a composite: head (name + level), then volume, meters and actions as parts. The sheet holds the fader; the inspector holds the PipeWire node and the match reason.`;
+  else if (L.drawer) t = `<b>2.0× — ladder step 2.</b> Rail collapsed to icons, inspector floating as a drawer. The sheet now has ${Math.round(L.sheet)} base units — more than it gets at 1.25×. Close the drawer (✕) and the sheet is still a complete UI: that is the Inspector Contract.`;
+  else if (L.rail===64) t = `<b>1.5× — ladder step 1.</b> The rail is icons only; the 2px accent left edge is what still answers “where am I”, which is why it is an edge and not a text weight.`;
+  else if (L.cols===2) t = `<b>0.5× — two columns.</b> The only scale where a settings sheet is allowed more than one column (≥1520 base units of sheet). The content column is still capped at 720 so the label-to-control distance never grows.`;
+  else if (!S.sel) t = `<b>Nothing selected → the Category Card.</b> The inspector is never empty: what differs, the live read-only facts that used to clutter the sheet, where edits are written and why, the expert settings, and the category actions.`;
+  else t = `<b>A row is selected.</b> The inspector shows that setting's control, default, range, help, destination file, related settings and its registry id + search keywords — all fields of the one registration.`;
+  document.getElementById('cap').innerHTML = t;
+}
+
+/* ── palette ───────────────────────────────────────────────────────────── */
+function paletteRows(){
+  const all=[];
+  AREAS.forEach(a=>a.entries.forEach(e=>{
+    walk(e,x=>{ if (x.kind && x.kind!=='readout' && x.kind!=='note' && x.kind!=='actions'
+                 && x.kind!=='meter' && x.title) all.push({a, e:x}); });
+    (e.items||[]).forEach(it=>{ if (it.on) all.push({a, e:{id:it.on, title:it.title,
+      kind:'switch', keywords:e.title+' '+it.title}, item:it}); });
+  }));
+  const q = S.palQ.trim().toLowerCase();
+  if (!q) return {rows:all.slice(0,80), total:all.length};
+  const score=(s)=>{ s=s.toLowerCase(); let i=0,sc=0,pos=[];
+    for (const ch of q){ const k=s.indexOf(ch,i); if (k<0) return null; sc += (k===i?3:1); pos.push(k); i=k+1; }
+    return {sc, pos}; };
+  const out=[];
+  all.forEach(r=>{
+    const t=score(r.e.title); const hay=(r.e.id+' '+(r.e.keywords||'')+' '+r.a.title);
+    const h=score(hay);
+    if (t) out.push({...r, sc:t.sc+40, pos:t.pos});
+    else if (h) out.push({...r, sc:h.sc, pos:null});
+  });
+  out.sort((x,y)=>y.sc-x.sc);
+  return {rows:out.slice(0,40), total:all.length};
+}
+function hl(title,pos){
+  if (!pos) return esc(title);
+  let out='', p=0;
+  for (let i=0;i<title.length;i++){
+    if (pos[p]===i){ out+='<mark>'+esc(title[i])+'</mark>'; p++; } else out+=esc(title[i]);
+  }
+  return out;
+}
+function renderPalette(){
+  const m=document.getElementById('palmount');
+  if (!S.palette){ m.innerHTML=''; return; }
+  const {rows,total} = paletteRows();
+  if (S.palSel>=rows.length) S.palSel=0;
+  m.innerHTML = `<div class="palette">
+    <div class="q"><span style="color:var(--acc-txt);font:400 15px var(--mono)">⌕</span>
+      <input id="palq" placeholder="search ${total} settings by name, key or keyword…" value="${esc(S.palQ)}"></div>
+    <div class="res">${rows.length?rows.map((r,i)=>`
+      <div class="r ${i===S.palSel?'on':''}" data-act="palgo" data-i="${i}">
+        <span class="p">${esc(r.a.sec.toLowerCase())} / ${esc(r.a.title)}</span>
+        <span class="n">${hl(r.e.title, r.pos)}</span>
+        <span class="v">${esc(r.e.id in D ? fmt(r.e, V[r.e.id]) : '')}</span></div>`).join('')
+      :`<div class="empty">No setting matches “${esc(S.palQ)}”.</div>`}</div>
+    <div class="foot"><span><span class="kbd">↑↓</span> move</span><span><span class="kbd">↵</span> jump &amp; select</span>
+      <span><span class="kbd">esc</span> close</span>
+      <span style="margin-left:auto">one registration → row · palette entry · inspector page</span></div></div>`;
+  const q=document.getElementById('palq');
+  q.focus(); q.setSelectionRange(q.value.length,q.value.length);
+  q.addEventListener('input', ()=>{ S.palQ=q.value; S.palSel=0; renderPalette(); });
+}
+function palGo(i){
+  const {rows}=paletteRows(); const r=rows[i]; if (!r) return;
+  S.palette=false; S.area=r.a.id;
+  S.sel = r.item ? {kind:'item', id:r.item.id} : {kind:'entry', id:r.e.id};
+  S.inspector=true; render();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 7 — input
+   ══════════════════════════════════════════════════════════════════════════ */
+let dragging=null;
+function valFromX(e,el,clientX){
+  const r=el.getBoundingClientRect();
+  let t=(clientX-r.left)/r.width; t=Math.max(0,Math.min(1,t));
+  let v=e.min+t*(e.max-e.min);
+  v=Math.round(v/e.step)*e.step;
+  return e.step<1 ? Math.round(v*100)/100 : Math.round(v);
+}
+document.getElementById('stage').addEventListener('pointerdown', ev=>{
+  const t = ev.target.closest('[data-act]');
+  if (!t){ if (S.menu){ S.menu=null; render(); } return; }
+  const act=t.dataset.act, id=t.dataset.id;
+  const stop=()=>{ ev.preventDefault(); ev.stopPropagation(); };
+
+  if (act==='drag'){ stop(); const e=findEntry(id); dragging={e,el:t,id};
+    V[id]=valFromX(e,t,ev.clientX); applySideEffect(id); S.sel={kind:'entry',id}; render(); return; }
+  if (act==='hue'){ stop(); const r=t.getBoundingClientRect();
+    let h=Math.round(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width))*360);
+    V[id]=h; dragging={hue:true,el:t,id};
+    if (id==='setup.hue'){ S.hue=h; setAccent(h); syncHueUI(); } render(); return; }
+  if (act==='toggle'){ stop(); V[id]=!V[id]; render(); return; }
+  if (act==='set'){ stop(); V[id]= t.dataset.num ? +t.dataset.v : t.dataset.v; S.menu=null; render(); return; }
+  if (act==='menu'){ stop(); S.menu = S.menu===id?null:id; S.sel={kind:'entry',id}; render(); return; }
+  if (act==='stepu'||act==='stepd'){ stop(); const e=findEntry(id);
+    const d=(act==='stepu'?1:-1)*e.step;
+    V[id]=Math.max(e.min,Math.min(e.max, Math.round((V[id]+d)/e.step)*e.step));
+    S.sel={kind:'entry',id}; render(); return; }
+  if (act==='swatch'){ stop(); V[id]=+t.dataset.v; const owner=id.replace('.swatch','.hue').replace('.preset','.hue');
+    if (owner in V){ V[owner]=+t.dataset.h; if (owner==='setup.hue'){ S.hue=+t.dataset.h; setAccent(S.hue); syncHueUI(); } }
+    render(); return; }
+  if (act==='reset'){ stop(); V[id]=D[id]; if (id==='setup.hue'){S.hue=D[id];setAccent(S.hue);syncHueUI();} render(); return; }
+  if (act==='resetcomp'){ stop(); const e=findEntry(id); (e.parts||[]).forEach(p=>{ if (p.id in D) V[p.id]=D[p.id]; });
+    render(); return; }
+  if (act==='resetcat'){ stop(); const a=area(S.area);
+    a.entries.forEach(e=>walk(e,x=>{ if (x.id in D) V[x.id]=D[x.id]; }));
+    a.entries.forEach(e=>(e.items||[]).forEach(it=>{ if (it.on) V[it.on]=D[it.on]; }));
+    render(); return; }
+  if (act==='all'||act==='none'){ stop(); const e=findEntry(id);
+    (e.parts||[]).forEach(p=>{ if (typeof V[p.id]==='boolean') V[p.id]= act==='all'; }); render(); return; }
+  if (act==='area'){ stop(); S.selPer[S.area]=S.sel; S.area=id; S.sel=S.selPer[id]||null; S.menu=null; render(); return; }
+  if (act==='item'){ stop(); S.sel={kind:'item', id}; S.inspector=true; render(); return; }
+  if (act==='sel'){ S.sel={kind:'entry', id}; S.inspector=true; render(); return; }
+  if (act==='logline'){ stop(); S.logSel=+id; S.inspector=true; render(); return; }
+  if (act==='logf'){ stop(); S.logFilter[id]=!S.logFilter[id]; render(); return; }
+  if (act==='jump'){ stop(); const a=areaOf(id); if (a){ S.area=a.id; }
+    S.sel={kind:'entry', id}; S.inspector=true; render(); return; }
+  if (act==='inspoff'){ stop(); S.inspector=false; render(); return; }
+  if (act==='inspon'||act==='insptoggle'){ stop(); S.inspector=!S.inspector||act==='inspon'; render(); return; }
+  if (act==='palopen'){ stop(); S.palette=true; render(); return; }
+  if (act==='palgo'){ stop(); palGo(+t.dataset.i); return; }
+  if (act==='text'){ return; }
+});
+addEventListener('pointermove', ev=>{
+  if (!dragging) return;
+  if (dragging.hue){ const r=dragging.el.getBoundingClientRect();
+    const h=Math.round(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width))*360);
+    if (h!==V[dragging.id]){ V[dragging.id]=h;
+      if (dragging.id==='setup.hue'){ S.hue=h; setAccent(h); syncHueUI(); } render(); } return; }
+  const v=valFromX(dragging.e,dragging.el,ev.clientX);
+  if (v!==V[dragging.id]){ V[dragging.id]=v; applySideEffect(dragging.id); render(); }
+});
+/* the UI-scale row really drives display_scale — the slab rescales live */
+function applySideEffect(id){
+  if (id==='setup.ui_scale'){ S.scale=V[id];
+    document.querySelectorAll('[data-scale]').forEach(x=>x.classList.toggle('on',+x.dataset.scale===S.scale)); }
+}
+addEventListener('pointerup', ()=>{ dragging=null; });
+document.getElementById('stage').addEventListener('input', ev=>{
+  const t=ev.target.closest('[data-act="text"]'); if (!t) return;
+  V[t.dataset.id]=t.value;
+});
+
+addEventListener('keydown', ev=>{
+  const inPal = S.palette;
+  if (ev.key==='Escape'){ if (S.palette){S.palette=false;} else if (S.sel){S.sel=null;}
+    else if (S.inspector){S.inspector=false;} render(); return; }
+  if ((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='k'){ ev.preventDefault(); S.palette=!S.palette; S.palQ=''; S.palSel=0; render(); return; }
+  if (inPal){
+    if (ev.key==='ArrowDown'){ ev.preventDefault(); S.palSel++; renderPalette(); }
+    if (ev.key==='ArrowUp'){ ev.preventDefault(); S.palSel=Math.max(0,S.palSel-1); renderPalette(); }
+    if (ev.key==='Enter'){ ev.preventDefault(); palGo(S.palSel); }
+    return;
+  }
+  if (ev.target.tagName==='INPUT') return;
+  if ((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='i'){ ev.preventDefault(); S.inspector=!S.inspector; render(); return; }
+  if ((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='d'){ ev.preventDefault();
+    if (S.sel && S.sel.id in D){ V[S.sel.id]=D[S.sel.id]; render(); } return; }
+  const k=ev.key.toLowerCase();
+  if (k==='r'){ S.rulers=!S.rulers; document.getElementById('rul').classList.toggle('on',S.rulers); render(); }
+  if (k==='i'){ S.inspector=!S.inspector; render(); }
+  if (k==='m'){ S.moved=!S.moved; document.getElementById('mov').classList.toggle('on',S.moved); render(); }
+  if (ev.key==='ArrowDown'||ev.key==='ArrowUp'){
+    const rows=[...document.querySelectorAll('#sb [data-act="sel"],#sb [data-act="item"]')];
+    if (!rows.length) return; ev.preventDefault();
+    let i=rows.findIndex(r=>r.dataset.id===(S.sel&&S.sel.id));
+    i = i<0 ? 0 : Math.max(0, Math.min(rows.length-1, i + (ev.key==='ArrowDown'?1:-1)));
+    const el=rows[i]; S.sel={kind: el.dataset.act==='item'?'item':'entry', id:el.dataset.id};
+    S.inspector=true; render();
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PART 8 — mockup chrome
+   ══════════════════════════════════════════════════════════════════════════ */
+function fit(){
+  const vp=document.getElementById('vp'), st=document.getElementById('stage');
+  const z=Math.min(1, vp.clientWidth/1920);
+  st.style.transform='scale('+z+')';
+  vp.style.height=(1080*z)+'px';
+}
+addEventListener('resize', fit);
+function syncHueUI(){ document.getElementById('hue').value=S.hue;
+  document.getElementById('huev').textContent=S.hue+'°'; }
+
+document.querySelectorAll('[data-scale]').forEach(b=>b.addEventListener('click',()=>{
+  S.scale=+b.dataset.scale;
+  document.querySelectorAll('[data-scale]').forEach(x=>x.classList.toggle('on',x===b));
+  V['setup.ui_scale']=S.scale; render();
+}));
+document.getElementById('hue').addEventListener('input',e=>{
+  S.hue=+e.target.value; V['setup.hue']=S.hue; setAccent(S.hue);
+  document.getElementById('huev').textContent=S.hue+'°'; render();
+});
+const BGS=['dusk','snow (bright)','pure white (worst case)','pure black'];
+document.getElementById('bg').addEventListener('click',()=>{
+  S.bg=(S.bg+1)%4;
+  document.getElementById('game').className='game g'+S.bg;
+  document.getElementById('bgv').textContent=BGS[S.bg];
+});
+const rulBtn=document.getElementById('rul'), movBtn=document.getElementById('mov');
+rulBtn.addEventListener('click',()=>{ S.rulers=!S.rulers; rulBtn.classList.toggle('on',S.rulers); render(); });
+movBtn.addEventListener('click',()=>{ S.moved=!S.moved; movBtn.classList.toggle('on',S.moved); render(); });
+document.getElementById('palbtn').addEventListener('click',()=>{
+  S.palette=!S.palette; S.palQ=''; S.palSel=0; render(); });
+
+const TOURS={
+  default:()=>{ S.scale=1; S.area='display.upscaling'; S.sel=null; S.moved=false; S.palette=false; S.inspector=true; },
+  calm:   ()=>{ S.scale=1; S.area='image.shaders'; S.sel={kind:'item',id:'fx.ab'}; S.moved=false; S.palette=false; S.inspector=true; },
+  anchor: ()=>{ S.scale=1; S.area='system.monitor'; S.sel={kind:'entry',id:'monitor.placement'}; S.moved=false; S.palette=false; S.inspector=true; },
+  mixer:  ()=>{ S.scale=1; S.area='audio.mixer'; S.sel={kind:'entry',id:'audio.game'}; S.moved=false; S.palette=false; S.inspector=true; },
+  log:    ()=>{ S.scale=1; S.area='system.log'; S.sel=null; S.moved=false; S.palette=false; S.inspector=true; },
+  x2:     ()=>{ S.scale=2; S.area='system.monitor'; S.sel={kind:'entry',id:'monitor.placement'}; S.moved=false; S.palette=false; S.inspector=true; },
+  pal:    ()=>{ S.scale=1; S.palette=true; S.palQ='sharp'; S.palSel=0; }
+};
+document.getElementById('tour').addEventListener('click',e=>{
+  const b=e.target.closest('[data-tour]'); if (!b) return;
+  document.querySelectorAll('[data-tour]').forEach(x=>x.classList.toggle('on',x===b));
+  TOURS[b.dataset.tour]();
+  document.querySelectorAll('[data-scale]').forEach(x=>x.classList.toggle('on',+x.dataset.scale===S.scale));
+  document.getElementById('mov').classList.toggle('on',S.moved);
+  render();
+});
+
+/* frametime graph in the always-on HUD */
+(function(){ let h='';
+  for (let i=0;i<60;i++){ const sp=(i===11||i===34||i===52);
+    const v=sp?100:33+Math.round(30*Math.abs(Math.sin(i*0.7))+14*Math.abs(Math.sin(i*0.23)));
+    h+='<b class="'+(sp?'sp':'')+'" style="height:'+v+'%"></b>'; }
+  document.getElementById('ftgraph').innerHTML=h; })();
+
+setAccent(218); fit(); render();
+</script>

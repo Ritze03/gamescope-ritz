@@ -1,0 +1,1489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Console Ledge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ==========================================================================
+   Direction A2 — "CONSOLE + LEDGE"
+   A's one-pane calm, kept. The depth that used to need a tooltip now lives in
+   the Ledge: the bottom band that USED to be a static key legend.
+   Net new surface: zero. Everything derives from --u and --fs.
+   ========================================================================== */
+:root{
+  --u: 4px;
+  --fs: 15px;
+
+  --hue: 218;
+  --accent:        oklch(.74 .12 var(--hue));
+  --accent-edge:   oklch(.80 .12 var(--hue));
+  --accent-value:  oklch(.84 .10 var(--hue));
+  --accent-text:   oklch(.82 .10 var(--hue));
+  --accent-knob:   oklch(.86 .08 var(--hue));
+  --accent-seg:    oklch(.90 .07 var(--hue));
+  --accent-a08:    oklch(.74 .12 var(--hue) / .08);
+  --accent-a12:    oklch(.74 .12 var(--hue) / .12);
+  --accent-a18:    oklch(.74 .12 var(--hue) / .18);
+  --accent-a30:    oklch(.74 .12 var(--hue) / .30);
+  --accent-a55:    oklch(.74 .12 var(--hue) / .55);
+
+  --ok:     oklch(.78 .16 145);
+  --warn:   oklch(.74 .17 60);
+  --danger: oklch(.70 .17 25);
+  --danger-text: oklch(.78 .14 25);
+
+  /* surfaces — elevation is white alpha over the blurred base, never a hue */
+  --surface:  rgba(8,9,11,.86);
+  --e1: rgba(255,255,255,.030);   /* rail, well, ledge resting            */
+  --e2: rgba(255,255,255,.060);   /* focused row                          */
+  --e3: rgba(255,255,255,.050);   /* ledge raised                         */
+  --hair:        rgba(255,255,255,.085);
+  --hair-strong: rgba(255,255,255,.36);   /* MEASURED: 3.34:1, UI boundary */
+  --divider:     rgba(255,255,255,.10);
+
+  /* text roles — every value below is a measured WCAG decision, see SPEC §3.2 */
+  --t-primary:  rgba(239,245,251,.93);   /* 14.35:1 */
+  --t-label:    rgba(239,245,251,.72);   /*  8.93:1 */
+  --t-meta:     rgba(239,245,251,.56);   /*  5.85:1 */
+  --t-faint:    rgba(239,245,251,.38);   /*  3.37:1 — non-body only */
+
+  --row-h:    calc(var(--u) * 11);
+  --pad-x:    calc(var(--u) * 6);
+  --icon-w:   calc(var(--u) * 4.5);
+  --rail-w:   calc(var(--u) * 62);
+  /* rail_collapsed = 2 x (pad-x + icon/2) -> the icon centre never moves */
+  --rail-w-c: calc(var(--u) * 16.5);
+  --ctl-w:    calc(var(--u) * 88);
+  --con-w:    calc(var(--u) * 297);
+  --con-h:    calc(var(--u) * 196);
+  --ledge-h:  calc(var(--u) * 13);
+  --ledge-h-up: min(calc(var(--u) * 52), 34vh);
+  --radius:   calc(var(--u) * 1.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+/* Committed single-theme design: a game overlay composited over a running game,
+   usually at night. A light variant would be a flashbang. Ground painted
+   explicitly so the page never borrows the host theme. */
+body{font-family:'Geist',system-ui,sans-serif;background:#05070a;color:var(--t-primary);
+  overflow:hidden;-webkit-font-smoothing:antialiased}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{transition-duration:.001ms !important;animation-duration:.001ms !important}}
+.mono{font-family:'Geist Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* ---------- the game behind ---------------------------------------------- */
+#game{position:fixed;inset:0;z-index:0}
+#game .art{position:absolute;inset:0}
+#game.g0 .art{background:radial-gradient(120% 90% at 22% 18%,#2c5c7a 0%,#12222f 42%,#070b10 100%),linear-gradient(140deg,#3d2a12 0%,transparent 55%)}
+#game.g1 .art{background:radial-gradient(90% 70% at 70% 30%,#f0a23a 0%,#8c3a14 35%,#170c08 100%),repeating-linear-gradient(112deg,rgba(255,255,255,.06) 0 3px,transparent 3px 22px)}
+#game.g2 .art{background:radial-gradient(130% 130% at 50% 105%,#ffffff 0%,#d7e3ee 26%,#8fa6b8 58%,#22303e 100%)}
+#scrim{position:fixed;inset:0;z-index:1;backdrop-filter:blur(26px) saturate(1.08);background:rgba(4,6,9,.62)}
+
+/* ---------- demo strip (NOT part of the design) --------------------------- */
+#demo{position:fixed;left:0;right:0;top:0;height:54px;z-index:60;display:flex;gap:13px;
+  align-items:center;flex-wrap:nowrap;overflow-x:auto;padding:0 16px;background:#05070a;
+  border-bottom:1px solid rgba(255,255,255,.10);font-family:'Geist Mono',ui-monospace,monospace;
+  font-size:11px;color:rgba(255,255,255,.62)}
+#demo .who{display:flex;flex-direction:column;gap:1px;flex:none;padding-right:4px}
+#demo .who strong{font-family:'Geist',sans-serif;font-size:12.5px;font-weight:600;color:rgba(255,255,255,.92)}
+#demo .who span{font-size:10px;color:rgba(255,255,255,.40)}
+#demo b{color:rgba(255,255,255,.42);font-weight:500;text-transform:uppercase;flex:none}
+#demo button{font:inherit;background:rgba(255,255,255,.06);color:rgba(255,255,255,.74);
+  border:1px solid rgba(255,255,255,.14);border-radius:4px;padding:5px 9px;cursor:pointer;flex:none}
+#demo button:hover{background:rgba(255,255,255,.12)}
+#demo button.on{background:var(--accent-a30);border-color:var(--accent-a55);color:#fff}
+#demo input[type=range]{width:84px;accent-color:oklch(.74 .12 var(--hue));flex:none}
+#demo .sep{width:1px;height:22px;background:rgba(255,255,255,.12);flex:none}
+#demo .keys{margin-left:auto;display:flex;gap:11px;align-items:center;flex:none;
+  color:rgba(255,255,255,.46);padding-left:12px}
+#demo kbd{font:inherit;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.16);
+  border-radius:3px;padding:2px 5px;color:rgba(255,255,255,.80)}
+
+/* ---------- first-run coach mark (NOT part of the design) ----------------- */
+#coach{position:fixed;z-index:55;left:50%;transform:translateX(-50%);bottom:0;
+  margin-bottom:14px;display:flex;align-items:center;gap:10px;padding:9px 14px;
+  background:#05070a;border:1px solid var(--accent-a55);border-radius:6px;
+  box-shadow:0 10px 40px -8px rgba(0,0,0,.9);
+  font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;
+  color:rgba(255,255,255,.80);max-width:min(760px,92vw)}
+#coach.gone{display:none}
+#coach b{color:var(--accent-text);font-weight:500}
+#coach kbd{font:inherit;background:var(--accent-a30);border:1px solid var(--accent-a55);
+  border-radius:3px;padding:2px 6px;color:#fff}
+#coach .x{margin-left:6px;cursor:pointer;color:rgba(255,255,255,.45);flex:none}
+#coach .x:hover{color:#fff}
+#coach::after{content:"";position:absolute;left:50%;bottom:-7px;margin-left:-6px;
+  width:12px;height:12px;background:#05070a;border-right:1px solid var(--accent-a55);
+  border-bottom:1px solid var(--accent-a55);transform:rotate(45deg)}
+
+/* ==========================================================================
+   THE CONSOLE
+   ========================================================================== */
+#wrap{position:fixed;inset:54px 0 0 0;z-index:10;display:grid;place-items:center;padding:12px}
+.console{width:min(var(--con-w),100%);height:min(var(--con-h),100%);
+  background:var(--surface);backdrop-filter:blur(22px) saturate(1.1);
+  border:1px solid var(--hair);border-radius:var(--radius);
+  display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;
+  box-shadow:0 40px 120px -30px rgba(0,0,0,.9);position:relative}
+
+/* ---------- header -------------------------------------------------------- */
+.hdr{height:calc(var(--u)*14);display:flex;align-items:center;gap:calc(var(--u)*3);
+  padding:0 var(--pad-x);border-bottom:1px solid var(--hair);
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.008))}
+.brand{width:calc(var(--u)*2.5);height:calc(var(--u)*2.5);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*3) var(--accent-a55);flex:none}
+.crumb{display:flex;align-items:center;gap:calc(var(--u)*2);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.78);font-weight:600;text-transform:uppercase;color:var(--t-primary);white-space:nowrap}
+.crumb .sep{color:var(--t-faint);font-weight:400}
+.crumb .up{color:var(--t-meta)}
+.hdr .spacer{flex:1}
+.badge{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);text-transform:uppercase;
+  padding:calc(var(--u)*.75) calc(var(--u)*1.5);background:var(--accent-a18);color:var(--accent-text);white-space:nowrap}
+.live{display:flex;gap:calc(var(--u)*3);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.72);color:var(--t-meta);white-space:nowrap}
+.live b{color:var(--accent-value);font-weight:500}
+
+/* ---------- body: rail + stage -------------------------------------------- */
+.body{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);min-height:0;position:relative}
+.body.wide{grid-template-columns:var(--rail-w-c) minmax(0,1fr)}
+.body{transition:grid-template-columns .18s cubic-bezier(.2,.7,.3,1)}
+
+.rail{border-right:1px solid var(--hair);background:var(--e1);padding:calc(var(--u)*3) 0;
+  display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.rail .rgroup{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;
+  color:var(--t-faint);padding:calc(var(--u)*3) var(--pad-x) calc(var(--u)*1.5);
+  white-space:nowrap;transition:opacity .12s}
+.ri{position:relative;display:flex;align-items:center;height:calc(var(--u)*12);
+  padding:0 var(--pad-x);cursor:pointer;color:var(--t-label);font-size:calc(var(--fs)*.95);white-space:nowrap}
+/* The icon box is the FIRST child and its left offset is --pad-x in BOTH states.
+   Collapsed rail width is derived as 2*(pad-x + icon/2), so the icon centre is
+   identical before and after the collapse: it fades neighbours, never moves. */
+.ri .gl{width:var(--icon-w);height:var(--icon-w);flex:none;position:relative}
+.ri .lbl{margin-left:calc(var(--u)*3);transition:opacity .12s}
+.ri .cnt{margin-left:auto;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);
+  color:var(--t-meta);transition:opacity .12s}
+.ri:hover{background:rgba(255,255,255,.04)}
+.ri.sel{background:var(--accent-a12);color:var(--t-primary)}
+.ri.sel::before,.ri.foc::before{content:"";position:absolute;left:0;top:0;bottom:0;
+  width:calc(var(--u)*.75);background:var(--accent)}
+.ri.foc{background:var(--e2)}
+.ri.foc::before{box-shadow:0 0 calc(var(--u)*3) var(--accent-a55)}
+.body.wide .ri .lbl,.body.wide .ri .cnt,.body.wide .rail .rgroup,.body.wide .rail .foot{opacity:0;pointer-events:none}
+.rail .grow{flex:1}
+.rail .foot{padding:calc(var(--u)*2) var(--pad-x);border-top:1px solid var(--hair);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);color:var(--t-meta);
+  white-space:nowrap;transition:opacity .12s}
+.gl svg{width:100%;height:100%;display:block;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:square;opacity:.85}
+.ri.sel .gl svg,.ri.foc .gl svg{stroke:var(--accent-knob);opacity:1}
+
+/* ---------- stage --------------------------------------------------------- */
+.stage{display:flex;flex-direction:column;min-height:0;position:relative;overflow:hidden}
+
+/* sub-tabs: a text run with a sliding accent underline. No boxes, no pills.
+   (critique 1 — the tab bar was four buttons competing with the row controls) */
+.subtabs{display:flex;align-items:flex-end;gap:calc(var(--u)*5);padding:calc(var(--u)*3.5) var(--pad-x) 0;
+  border-bottom:1px solid var(--hair);position:relative}
+.subtabs button{font:inherit;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.76);
+  font-weight:500;letter-spacing:.04em;text-transform:uppercase;background:none;border:0;
+  color:var(--t-meta);padding:0 0 calc(var(--u)*2.5);cursor:pointer;position:relative;white-space:nowrap}
+.subtabs button:hover{color:var(--t-label)}
+.subtabs button.on{color:var(--t-primary);font-weight:600}
+.subtabs button.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;
+  height:calc(var(--u)*.5);background:var(--accent);box-shadow:0 0 calc(var(--u)*2.5) var(--accent-a55)}
+.subtabs .rt{margin-left:auto;padding-bottom:calc(var(--u)*2.5);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.7);color:var(--t-faint);white-space:nowrap}
+
+.scroll{flex:1;min-height:0;overflow:auto;padding:0 var(--pad-x) calc(var(--u)*5)}
+.scroll::-webkit-scrollbar{width:calc(var(--u)*1.5)}
+.scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18)}
+.scroll::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- WELL ---------------------------------------------------------- */
+.well{margin:calc(var(--u)*3) var(--pad-x) 0;background:var(--e1);border:1px solid var(--hair);
+  position:relative;overflow:hidden}
+.well .wh{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*2) calc(var(--u)*3);
+  border-bottom:1px solid var(--hair);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.68);text-transform:uppercase;color:var(--t-meta)}
+.well .wh .dot{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);background:var(--accent);
+  box-shadow:0 0 calc(var(--u)*2.5) var(--accent-a55);flex:none}
+.well .wh .r{margin-left:auto;color:var(--t-faint);text-transform:none}
+.preview{position:relative;height:calc(var(--u)*36);background:radial-gradient(120% 90% at 22% 18%,#2c5c7a 0%,#12222f 42%,#070b10 100%)}
+.preview.g1{background:radial-gradient(90% 70% at 70% 30%,#f0a23a 0%,#8c3a14 35%,#170c08 100%)}
+.preview.g2{background:radial-gradient(130% 130% at 50% 105%,#ffffff 0%,#d7e3ee 26%,#8fa6b8 58%,#22303e 100%)}
+.pgrid{position:absolute;inset:calc(var(--u)*2);display:grid;grid-template-columns:repeat(3,1fr);
+  grid-template-rows:repeat(3,1fr);gap:calc(var(--u)*1)}
+.pcell{border:1px dashed rgba(255,255,255,.18);cursor:pointer}
+.pcell:hover{background:rgba(255,255,255,.08)}
+.pcell.sel{border:1px solid var(--accent-a55);background:var(--accent-a12)}
+.hud{position:absolute;pointer-events:none;background:rgba(9,11,14,.62);border:1px solid rgba(255,255,255,.14);
+  padding:calc(var(--u)*2) calc(var(--u)*2.75);font-family:'Geist Mono',monospace;line-height:1.15;min-width:calc(var(--u)*38)}
+.hud .r1{display:flex;align-items:baseline;gap:calc(var(--u)*1.5)}
+.hud .n{font-size:calc(var(--fs)*1.2);font-weight:600;color:#fff}
+.hud .u2{font-size:calc(var(--fs)*.66);color:rgba(255,255,255,.6)}
+.hud .ms{margin-left:auto;font-size:calc(var(--fs)*.8);font-weight:500;color:oklch(.86 .09 var(--hue))}
+.hud .graph{display:flex;align-items:flex-end;gap:1px;height:calc(var(--u)*4.5);margin:calc(var(--u)*1) 0}
+.hud .graph i{flex:1;background:var(--accent-a55);display:block}
+.hud .graph i.sp{background:oklch(.74 .17 60 / .9)}
+.hud .r3{font-size:calc(var(--fs)*.66);color:rgba(255,255,255,.62);display:flex;gap:calc(var(--u)*2.5)}
+.meters{padding:calc(var(--u)*3)}
+.mrow{display:flex;align-items:center;gap:calc(var(--u)*2);margin-bottom:calc(var(--u)*1)}
+.mrow span{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.66);color:var(--t-meta);width:calc(var(--u)*3)}
+.mrow .segs{display:flex;gap:2px;flex:1}
+.mrow .segs i{flex:1;height:calc(var(--u)*1.5);background:rgba(255,255,255,.10);display:block}
+.mrow .segs i.lit{background:oklch(.74 .12 var(--hue) / .9)}
+
+/* ---------- GROUP + ROW --------------------------------------------------- */
+.group{display:flex;align-items:center;gap:calc(var(--u)*2.5);margin:calc(var(--u)*6) 0 calc(var(--u)*1);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);font-weight:500;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--t-meta)}
+.group::after{content:"";flex:1;height:1px;background:var(--hair)}
+.group:first-child{margin-top:calc(var(--u)*4)}
+
+.row{position:relative;display:flex;align-items:center;gap:calc(var(--u)*4);min-height:var(--row-h);
+  padding:calc(var(--u)*1.5) calc(var(--u)*3);margin:0 calc(var(--u)*-3);
+  border-bottom:1px solid var(--divider);cursor:pointer}
+.row:hover{background:rgba(255,255,255,.035)}
+.row.foc{background:var(--e2)}
+.row.foc::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent);box-shadow:0 0 calc(var(--u)*3) var(--accent-a55)}
+/* the parent tick: focus has moved down into the Ledge, this row still owns it */
+.row.parent::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent-a55)}
+/* Disabled rows do NOT dim their text — you must be able to read WHY.
+   Only the control desaturates. MEASURED: label stays at 5.85:1. */
+.row.dis{cursor:default}
+.row.dis .lbl{color:var(--t-meta)}
+.row .txt{min-width:0;flex:1;display:flex;align-items:baseline;gap:calc(var(--u)*2)}
+.row .lbl{font-size:var(--fs);color:var(--t-label);line-height:1.25;flex:none}
+.row.foc .lbl{color:var(--t-primary)}
+.row .why{font-size:calc(var(--fs)*.8);color:var(--t-meta);line-height:1.3;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the delta pip — "this differs from default", the only thing the row gains */
+.row .delta{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);background:var(--accent);
+  border-radius:50%;flex:none;align-self:center;box-shadow:0 0 calc(var(--u)*2) var(--accent-a55)}
+.row .ctl{width:var(--ctl-w);flex:none;display:flex;justify-content:flex-end;align-items:center;gap:calc(var(--u)*2)}
+
+/* controls ---------------------------------------------------------------- */
+.sw{width:calc(var(--u)*11);height:calc(var(--u)*6);flex:none;position:relative;
+  background:rgba(255,255,255,.10);border:1px solid var(--hair-strong)}
+.sw i{position:absolute;top:calc(var(--u)*.75);left:calc(var(--u)*.75);width:calc(var(--u)*4);
+  height:calc(var(--u)*4);background:rgba(255,255,255,.62);display:block;transition:left .1s ease-out}
+.sw.on{background:var(--accent-a30);border-color:var(--accent-a55)}
+.sw.on i{left:calc(var(--u)*5.75);background:var(--accent-knob)}
+.row.dis .sw{opacity:.55}
+
+/* segmented: fills the whole control column, cells share it equally.
+   A 3-option and a 5-option segmented are the same total width. (critique 2) */
+.seg{display:flex;gap:calc(var(--u)*.75);flex:1;min-width:0}
+.seg b{flex:1;min-width:0;text-align:center;font-family:'Geist Mono',monospace;font-weight:500;
+  font-size:calc(var(--fs)*.76);padding:calc(var(--u)*1.5) calc(var(--u)*1);
+  background:rgba(255,255,255,.06);border:1px solid var(--hair-strong);
+  color:rgba(239,245,251,.62);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg b.on{background:var(--accent-a30);border-color:var(--accent-a55);color:var(--accent-seg);font-weight:600}
+.pick{flex:1;display:flex;align-items:center;gap:calc(var(--u)*2);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.9);color:var(--accent-value);padding:calc(var(--u)*1.5) calc(var(--u)*2);
+  background:rgba(255,255,255,.06);border:1px solid var(--hair-strong)}
+.pick s{margin-left:auto;text-decoration:none;color:var(--t-meta)}
+
+/* slider: fills the column; fixed 17u value slot so every value right-aligns */
+.sl{display:flex;align-items:center;gap:calc(var(--u)*3);flex:1;min-width:0}
+.sl .track{position:relative;flex:1;height:calc(var(--u)*1.5);background:rgba(255,255,255,.16);min-width:0}
+.sl .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,oklch(.74 .12 var(--hue) / .55),oklch(.80 .12 var(--hue)))}
+.sl .def{position:absolute;top:calc(var(--u)*-1);bottom:calc(var(--u)*-1);width:1px;background:rgba(255,255,255,.45)}
+.sl .knob{position:absolute;top:calc(var(--u)*-1.75);width:calc(var(--u)*2.5);height:calc(var(--u)*5);
+  background:oklch(.90 .05 var(--hue));transform:translateX(-50%);box-shadow:0 0 calc(var(--u)*3) var(--accent-a55)}
+.sl .v{font-family:'Geist Mono',monospace;font-weight:500;font-size:calc(var(--fs)*.9);
+  color:var(--accent-value);min-width:calc(var(--u)*17);text-align:right;flex:none}
+.row.dis .sl .fill{background:rgba(255,255,255,.28)}
+.row.dis .sl .knob{background:rgba(255,255,255,.45);box-shadow:none}
+.row.dis .sl .v{color:var(--t-meta)}
+
+.ro{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.86);color:var(--t-meta);text-align:right}
+.ro.acc{color:var(--accent-value)}
+.dot{width:calc(var(--u)*1.5);height:calc(var(--u)*1.5);flex:none}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.idle{background:rgba(239,245,251,.45)}
+.chev{color:var(--t-meta);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.9)}
+.act{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.82);text-transform:uppercase;
+  color:var(--accent-text);border:1px solid var(--accent-a30);padding:calc(var(--u)*1.5) calc(var(--u)*3);
+  background:var(--accent-a08);white-space:nowrap}
+.act.danger{color:var(--danger-text);border-color:oklch(.70 .17 25 / .45);background:oklch(.70 .17 25 / .10)}
+.swatch{width:calc(var(--u)*7);height:calc(var(--u)*5);border:1px solid var(--hair-strong)}
+.chip{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;
+  padding:calc(var(--u)*.75) calc(var(--u)*1.5);background:var(--accent-a18);color:var(--accent-text);white-space:nowrap}
+.chip.n{background:rgba(255,255,255,.08);color:var(--t-meta)}
+.tin{flex:1;font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.88);color:var(--t-primary);
+  background:rgba(255,255,255,.06);border:1px solid var(--hair-strong);
+  padding:calc(var(--u)*1.5) calc(var(--u)*2);text-align:right}
+
+/* ---------- LOG ----------------------------------------------------------- */
+.logbar{display:flex;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*3) var(--pad-x);
+  border-bottom:1px solid var(--hair);background:var(--e1)}
+.logbar .seg{flex:none;width:calc(var(--u)*40)}
+.logbar .seg.lv{width:calc(var(--u)*30)}
+.logbar .find{flex:1;min-width:0;display:flex;align-items:center;gap:calc(var(--u)*2);
+  background:rgba(255,255,255,.06);border:1px solid var(--hair-strong);
+  padding:calc(var(--u)*1.5) calc(var(--u)*2.5);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.84);color:var(--t-primary)}
+.logbar .find s{text-decoration:none;color:var(--t-meta)}
+.logview{flex:1;min-height:0;overflow:auto;padding:calc(var(--u)*2) var(--pad-x) calc(var(--u)*4);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.82);line-height:1.55}
+.ln{display:flex;gap:calc(var(--u)*3);white-space:pre;cursor:pointer;position:relative;
+  padding-left:calc(var(--u)*2);margin-left:calc(var(--u)*-2)}
+.ln:hover{background:rgba(255,255,255,.035)}
+.ln.foc{background:var(--e2)}
+.ln.foc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--u)*.75);background:var(--accent)}
+.ln .ts{color:var(--t-faint)}
+.ln .sc{width:calc(var(--u)*32);flex:none;color:var(--accent-text)}
+.ln .sc.w{color:var(--warn)} .ln .sc.e{color:var(--danger-text)}
+.ln .ms{color:var(--t-label);white-space:pre-wrap}
+.ln.e .ms{color:var(--danger-text)}
+.ln mark{background:var(--accent-a30);color:#fff}
+
+/* ==========================================================================
+   THE LEDGE — the depth mechanism. Occupies the band the key legend used to.
+   ========================================================================== */
+.ledge{border-top:1px solid var(--hair);background:var(--e1);
+  height:var(--ledge-h);display:flex;flex-direction:column;overflow:hidden;
+  transition:height .18s cubic-bezier(.2,.7,.3,1)}
+.ledge.up{height:var(--ledge-h-up);background:var(--e3)}
+
+/* resting line — always exactly one line, always about the focused thing */
+.lrest{height:var(--ledge-h);flex:none;display:flex;align-items:center;gap:calc(var(--u)*3);
+  padding:0 var(--pad-x);cursor:pointer}
+.lrest:hover{background:rgba(255,255,255,.03)}
+.lrest .caret{width:calc(var(--u)*3);flex:none;color:var(--accent-text);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.8);transition:transform .18s;text-align:center}
+.ledge.up .lrest .caret{transform:rotate(180deg)}
+.lrest .say{flex:1;min-width:0;font-size:calc(var(--fs)*.87);color:var(--t-meta);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
+.lrest .say b{color:var(--t-label);font-weight:400}
+.lrest .facts{display:flex;align-items:center;gap:calc(var(--u)*2);flex:none;
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.72);color:var(--t-meta);white-space:nowrap}
+.lrest .facts .d{color:var(--accent-value)}
+.lrest .facts span + span::before{content:"·";color:var(--t-faint);margin-right:calc(var(--u)*2)}
+.lrest .kk{display:flex;align-items:center;gap:calc(var(--u)*2.5);flex:none;padding-left:calc(var(--u)*3);
+  border-left:1px solid var(--hair);margin-left:calc(var(--u)*1)}
+.lrest .kk span{display:flex;align-items:center;gap:calc(var(--u)*1);font-family:'Geist Mono',monospace;
+  font-size:calc(var(--fs)*.68);color:var(--t-meta);white-space:nowrap}
+.lrest .kk i{display:grid;place-items:center;min-width:calc(var(--u)*5);height:calc(var(--u)*4.5);
+  padding:0 calc(var(--u)*1);background:rgba(255,255,255,.10);border:1px solid var(--hair-strong);
+  color:var(--t-label);font-style:normal;font-size:calc(var(--fs)*.66)}
+/* the depth affordance is the one key hint that is not chrome: it is the whole
+   mechanism, so it carries accent and it pulses until it has been used once. */
+.lrest .kk span.hot{color:var(--accent-text)}
+.lrest .kk span.hot i{background:var(--accent-a30);border-color:var(--accent-a55);color:var(--accent-seg)}
+.lrest .kk span.hot.new i{animation:beat 1.9s ease-in-out infinite}
+@keyframes beat{0%,100%{box-shadow:0 0 0 0 oklch(.74 .12 var(--hue) / .55)}
+                50%{box-shadow:0 0 0 calc(var(--u)*1.5) oklch(.74 .12 var(--hue) / 0)}}
+
+/* raised body — one column, the same row grammar, nothing new to learn */
+.lbody{flex:1;min-height:0;overflow:auto;padding:0 var(--pad-x) calc(var(--u)*4);
+  border-top:1px solid var(--hair)}
+.lbody::-webkit-scrollbar{width:calc(var(--u)*1.5)}
+.lbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18)}
+.lhead{display:flex;align-items:center;gap:calc(var(--u)*2.5);padding:calc(var(--u)*3.5) 0 calc(var(--u)*2)}
+.lhead h3{font-size:calc(var(--fs)*1.02);font-weight:500;color:var(--t-primary)}
+.lhead .kind{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;
+  color:var(--t-meta);border:1px solid var(--hair-strong);padding:calc(var(--u)*.5) calc(var(--u)*1.5)}
+.lhead .sp{flex:1}
+.ltext{font-size:calc(var(--fs)*.92);line-height:1.5;color:var(--t-meta);max-width:calc(var(--u)*175)}
+.ltext em{font-style:normal;color:var(--t-label)}
+.lfacts{display:flex;flex-wrap:wrap;gap:calc(var(--u)*1.5) calc(var(--u)*4);margin-top:calc(var(--u)*3);
+  font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.78);color:var(--t-meta)}
+.lfacts b{color:var(--t-faint);font-weight:400;text-transform:uppercase;font-size:calc(var(--fs)*.68);
+  margin-right:calc(var(--u)*1.5)}
+.lfacts u{text-decoration:none;color:var(--accent-value)}
+.lrel{display:flex;align-items:center;flex-wrap:wrap;gap:calc(var(--u)*1.5);margin-top:calc(var(--u)*3)}
+.lrel .lb{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;
+  color:var(--t-faint);margin-right:calc(var(--u)*1)}
+.lrel a{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.76);color:var(--accent-text);
+  background:var(--accent-a08);border:1px solid var(--accent-a30);padding:calc(var(--u)*1) calc(var(--u)*2);
+  cursor:pointer;text-decoration:none}
+.lrel a:hover{background:var(--accent-a18)}
+.lexp{margin-top:calc(var(--u)*4)}
+.lexp .group{margin-top:calc(var(--u)*2)}
+/* expert rows are the SAME rows — one grammar, drawn in a different band */
+.lbody .row .ctl{width:calc(var(--u)*72)}
+.lbody .row.foc::before{background:var(--accent-edge)}
+.lnone{padding:calc(var(--u)*4) 0;font-size:calc(var(--fs)*.9);color:var(--t-faint)}
+
+/* section card — what the Ledge shows when the RAIL has focus. Never empty. */
+.lcard .cd{display:flex;flex-wrap:wrap;gap:calc(var(--u)*2);margin-top:calc(var(--u)*3)}
+.lcard .cd a{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.76);color:var(--accent-text);
+  background:var(--accent-a08);border:1px solid var(--accent-a30);padding:calc(var(--u)*1) calc(var(--u)*2);cursor:pointer}
+
+/* ---------- PALETTE (B, as a feature) ------------------------------------- */
+.palwrap{position:absolute;inset:0;z-index:30;display:none}
+.palwrap.on{display:block}
+.palwrap .scr{position:absolute;inset:0;background:rgba(3,4,6,.60)}
+.pal{position:absolute;left:50%;top:calc(var(--u)*14);transform:translateX(-50%);
+  width:min(calc(var(--u)*200),92%);max-height:calc(100% - var(--u)*24);
+  background:rgba(10,12,15,.98);border:1px solid var(--hair-strong);
+  box-shadow:0 30px 90px -20px rgba(0,0,0,.85);display:flex;flex-direction:column;
+  animation:pop .14s ease-out}
+@keyframes pop{from{transform:translateX(-50%) translateY(calc(var(--u)*-2));opacity:.3}to{transform:translateX(-50%);opacity:1}}
+.pal .q{display:flex;align-items:center;gap:calc(var(--u)*3);padding:calc(var(--u)*4) var(--pad-x);
+  border-bottom:1px solid var(--hair);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*1.05);
+  color:var(--t-primary)}
+.pal .q s{text-decoration:none;color:var(--accent)}
+.pal .q .cur{width:1px;height:calc(var(--fs)*1.2);background:var(--accent);animation:bl 1s steps(2) infinite}
+@keyframes bl{50%{opacity:0}}
+.pal .q .n{margin-left:auto;font-size:calc(var(--fs)*.72);color:var(--t-meta)}
+.pal .res{flex:1;min-height:0;overflow:auto;padding:calc(var(--u)*2) var(--pad-x)}
+.pres{display:flex;align-items:center;gap:calc(var(--u)*3);padding:calc(var(--u)*2) calc(var(--u)*3);
+  margin:0 calc(var(--u)*-3);position:relative;cursor:pointer}
+.pres:hover{background:rgba(255,255,255,.04)}
+.pres.sel{background:var(--e2)}
+.pres.sel::before{content:"";position:absolute;left:0;top:calc(var(--u)*1);bottom:calc(var(--u)*1);
+  width:calc(var(--u)*.75);background:var(--accent)}
+.pres .tx{flex:1;min-width:0}
+.pres .pt{font-size:calc(var(--fs)*.95);color:var(--t-label);line-height:1.25}
+.pres.sel .pt{color:var(--t-primary)}
+.pres .pt mark{background:var(--accent-a30);color:#fff}
+/* the registry's one-line help IS the palette subtitle — same string, same source */
+.pres .ph{font-size:calc(var(--fs)*.78);color:var(--t-meta);margin-top:calc(var(--u)*.5);line-height:1.3;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pres .pw{font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.68);text-transform:uppercase;
+  color:var(--t-faint);white-space:nowrap;flex:none}
+.pres .pc{width:calc(var(--u)*54);flex:none;display:flex;justify-content:flex-end;align-items:center;gap:calc(var(--u)*2)}
+.pal .foot{padding:calc(var(--u)*2.5) var(--pad-x);border-top:1px solid var(--hair);
+  display:flex;gap:calc(var(--u)*4);font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.7);color:var(--t-meta)}
+.pal .foot i{font-style:normal;color:var(--t-label);background:rgba(255,255,255,.10);
+  border:1px solid var(--hair-strong);padding:0 calc(var(--u)*1);margin-right:calc(var(--u)*1)}
+</style>
+</head>
+<body>
+
+<div id="game" class="g0"><div class="art"></div></div>
+<div id="scrim"></div>
+
+<div id="demo">
+  <div class="who">
+    <strong>A2 — Console + Ledge</strong>
+    <span>the depth that needed a tooltip now lives in the band the legend used to occupy</span>
+  </div>
+  <div class="sep"></div>
+  <b title="Everything derives from one spacing unit and one type size">UI scale</b>
+  <button data-scale=".5">0.5×</button>
+  <button data-scale="1" class="on">1.0×</button>
+  <button data-scale="1.5">1.5×</button>
+  <button data-scale="2">2.0×</button>
+  <div class="sep"></div>
+  <b title="Only the OKLCH hue moves; L and C are fixed per token">accent hue</b>
+  <input id="hue" type="range" min="0" max="360" value="218" aria-label="Accent hue in degrees">
+  <span id="huev" class="mono" style="color:var(--accent-value);width:28px">218</span>
+  <div class="sep"></div>
+  <b>game behind</b><button id="bg">cycle</button>
+  <div class="sep"></div>
+  <button id="ledgebtn">▲ raise the Ledge</button>
+  <button id="palbtn">palette (Ctrl+K)</button>
+  <div class="keys">
+    <span><kbd>↑</kbd><kbd>↓</kbd> row</span>
+    <span><kbd>←</kbd><kbd>→</kbd> adjust</span>
+    <span><kbd>?</kbd> depth</span>
+    <span><kbd>Ctrl</kbd>+<kbd>↓</kbd> into Ledge</span>
+    <span><kbd>Tab</kbd> section</span>
+    <span><kbd>PgUp/PgDn</kbd> tab</span>
+  </div>
+</div>
+
+<div id="coach">
+  <span>↓ <b>The Ledge</b> — the band at the bottom of the console always explains whatever has focus.
+  Press <kbd>?</kbd> (or click it) to open it into full depth: help, defaults, where it saves, and that
+  setting's expert knobs.</span>
+  <span class="x" id="coachx" title="dismiss">✕</span>
+</div>
+
+<div id="wrap">
+  <div class="console">
+    <div class="hdr">
+      <div class="brand"></div>
+      <div class="crumb" id="crumb"></div>
+      <div class="spacer"></div>
+      <div class="badge" id="badge">app 1245620</div>
+      <div class="live">
+        <span>fps <b>142</b></span><span>frame <b>7.0</b> ms</span>
+        <span>out <b>1920×1080</b></span><span>hdr <b>on</b></span>
+      </div>
+    </div>
+
+    <div class="body" id="body">
+      <div class="rail" id="rail"></div>
+      <div class="stage" id="stage"></div>
+      <div class="palwrap" id="palwrap">
+        <div class="scr"></div>
+        <div class="pal">
+          <div class="q"><s>&gt;</s><span id="palq"></span><span class="cur"></span><span class="n" id="paln"></span></div>
+          <div class="res" id="palres"></div>
+          <div class="foot">
+            <span><i>↑</i><i>↓</i>browse</span><span><i>↵</i>jump to it</span>
+            <span><i>←</i><i>→</i>adjust without leaving</span><span><i>esc</i>close</span>
+            <span style="margin-left:auto;color:var(--t-faint)">the Ledge below explains whatever is highlighted</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ledge" id="ledge"></div>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   1. THE REGISTRY  (adopted from Direction B, API.md §3)
+   Every setting is declared ONCE. The same declaration feeds: the row, the
+   Ledge's resting line, the Ledge's raised detail, the palette, reset-to-
+   default, and the differs-from-default pip. Nothing below takes a pixel.
+   ========================================================================== */
+const REG = {};
+const clone = v => Array.isArray(v) ? v.slice() : v;
+const E = e => { REG[e.id] = e; e.value = clone(e.def); return e; };
+
+/* ---- Gamescope / Upscaling ---------------------------------------------- */
+E({id:'gamescope.filter', screen:'gamescope:0', group:'Scaling', kind:'choice',
+   title:'Filter', def:2, opts:['linear','nearest','fsr','nis','pixel'],
+   help:'How the game image is resampled to the output resolution.',
+   detail:'gamescope renders the game at its own resolution and then resamples it to the output. '+
+          '<em>linear</em> is the cheapest and softest. <em>fsr</em> (AMD FidelityFX Super Resolution 1) and '+
+          '<em>nis</em> (NVIDIA Image Scaling) are edge-aware two-pass upscalers and are the only two filters '+
+          'that respond to Sharpness. <em>nearest</em> and <em>pixel</em> are for pixel art: they never blend '+
+          'neighbouring texels, so they stay crisp but shimmer when the scale factor is not an integer.',
+   keys:'upscale scaling resample fsr nis rcas easu pixel art',
+   writes:'app 1245620.json', related:['gamescope.sharpness','gamescope.scaler']}),
+E({id:'gamescope.scaler', screen:'gamescope:0', group:'Scaling', kind:'choice',
+   title:'Scaler', def:0, opts:['auto','integer','fit','fill','stretch'],
+   help:'Where the resampled image is placed inside the output rectangle.',
+   detail:'<em>auto</em> picks integer scaling when the game resolution divides the output exactly, and '+
+          'fit otherwise. <em>fit</em> keeps the aspect ratio and letterboxes. <em>fill</em> keeps the aspect '+
+          'ratio and crops the long edge. <em>stretch</em> ignores the aspect ratio entirely.',
+   keys:'aspect ratio letterbox pillarbox crop stretch fit fill integer',
+   writes:'app 1245620.json', related:['gamescope.filter']}),
+E({id:'gamescope.sharpness', screen:'gamescope:0', group:'Scaling', kind:'slider',
+   title:'Sharpness', def:2, min:0, max:20, step:1, unit:'',
+   fmt:v=>v===0?'off':(v+' / 20'),
+   help:'Strength of the FSR/NIS sharpening pass. Higher is crisper; too high rings.',
+   detail:'Drives RCAS, the second FSR pass (and the NIS equivalent). It runs <em>after</em> the upscale, '+
+          'so it sharpens output pixels, not source pixels. Above about 12 you start to see bright halos on '+
+          'high-contrast edges — text, HUDs and foliage show it first. If you want sharpening that works with '+
+          'every filter, use Pre-Sharpen on the Shaders screen instead: that one runs before the scaler.',
+   keys:'sharpen crisp clarity rcas cas ringing halo',
+   writes:'app 1245620.json', related:['gamescope.filter','gamescope.presharpen'],
+   enabled:()=>[2,3].includes(REG['gamescope.filter'].value),
+   why:'The Filter is not FSR or NIS.'}),
+E({id:'gamescope.effres', screen:'gamescope:0', group:'Scaling', kind:'readout',
+   title:'Effective resolution', get:()=>'1280×960 → 1920×1080', status:'ok', def:null,
+   help:'What the game actually renders at, and what reaches the display.',
+   detail:'Read straight off the current composite pass. The left number is the game surface as the client '+
+          'sized it; the right number is the connector mode. If they differ, the Filter above is doing work.',
+   keys:'resolution render output native mode', writes:'read-only'}),
+
+E({id:'gamescope.presharpen', screen:'gamescope:0', group:'Pre-upscale', kind:'drill',
+   title:'Pre-Sharpen', def:null, get:()=>'on · 0.50',
+   help:'A sharpening pass before the scaler — works with any Filter.',
+   detail:'Lives on the Shaders screen. Because it runs before the upscale it sharpens source pixels, which '+
+          'reads as detail rather than as edge ringing, and it is not tied to FSR or NIS.',
+   keys:'presharpen pre sharpen shader before scaler', writes:'app 1245620.json',
+   related:['gamescope.sharpness']}),
+E({id:'gamescope.vibrancy', screen:'gamescope:0', group:'Pre-upscale', kind:'drill',
+   title:'Vibrancy', def:null, get:()=>'on · +0.42',
+   help:'Saturation boost applied in the shader chain.',
+   detail:'A per-channel saturation curve, applied pre-upscale so the scaler sees the boosted image. '+
+          'Skin-tone protection is a sub-setting.', keys:'saturation colour color vivid vibrance',
+   writes:'app 1245620.json'}),
+
+E({id:'gamescope.vrr', screen:'gamescope:0', group:'Presentation', kind:'switch', title:'VRR / Adaptive Sync',
+   def:true, help:'Lets the display refresh at the game\'s frame rate instead of a fixed one.',
+   detail:'Needs a display, a connector and a game that all support it. When on, gamescope drives the '+
+          'connector inside its VRR window (48–165 Hz on this display) and the compositor stops pacing to a '+
+          'fixed vblank. Tearing is mutually exclusive with it: VRR already removes the reason to tear.',
+   keys:'vrr freesync gsync adaptive sync refresh variable', writes:'app 1245620.json',
+   related:['gamescope.tearing','gamescope.fpslimit']}),
+E({id:'gamescope.tearing', screen:'gamescope:0', group:'Presentation', kind:'switch', title:'Allow Tearing',
+   def:false, help:'Present frames the instant they are ready, ignoring vblank.',
+   detail:'Lowest possible latency, at the cost of a visible tear line wherever the scanout catches the '+
+          'flip. Only worth it on a fixed-refresh display when you are well above the refresh rate.',
+   keys:'tearing immediate flip vsync latency', writes:'app 1245620.json',
+   enabled:()=>!REG['gamescope.vrr'].value, why:'Unavailable while VRR / Adaptive Sync is on.',
+   related:['gamescope.vrr']}),
+E({id:'gamescope.grabcursor', screen:'gamescope:0', group:'Presentation', kind:'switch',
+   title:'Force Grab Cursor', def:false,
+   help:'Confines the pointer to the game surface even when the game does not ask.',
+   detail:'Some older titles never call the pointer-lock protocol, so the cursor escapes to another monitor '+
+          'mid-turn. This forces the lock at the compositor level. Harmless if the game already grabs.',
+   keys:'cursor mouse pointer grab lock confine', writes:'app 1245620.json'}),
+E({id:'gamescope.resetscreen', screen:'gamescope:0', group:'Presentation', kind:'action',
+   title:'Reset this screen', verb:'Reset', def:null,
+   help:'Returns every setting on this screen to its shipped default.',
+   detail:'Affects only the rows on Gamescope › Upscaling, and only in the file this screen writes to.',
+   keys:'reset default revert restore', writes:'app 1245620.json'}),
+
+/* ---- Gamescope / HDR — the screen where depth genuinely matters ---------- */
+E({id:'hdr.enabled', screen:'gamescope:3', group:'Output', kind:'switch', title:'HDR', def:true,
+   help:'Drives the connector in HDR10 and passes the game\'s metadata through.',
+   detail:'When on, gamescope sets the connector to PQ / BT.2020 and forwards the game\'s HDR static '+
+          'metadata to the display. SDR content is mapped up into that container using the two gain values '+
+          'below, which is why an SDR desktop looks different with HDR on than with it off.',
+   keys:'hdr hdr10 pq bt2020 wide gamut high dynamic range', writes:'app 1245620.json',
+   related:['hdr.tonemap','hdr.sdrbright']}),
+E({id:'hdr.cap', screen:'gamescope:3', group:'Output', kind:'readout', title:'Display capability',
+   def:null, get:()=>'HDR10 · PQ · 1000 nits', status:'ok',
+   help:'What this connector reported in its EDID.',
+   detail:'Read from the display\'s static metadata block. If a display reports a peak it cannot actually '+
+          'reach — most do — the tonemap operator below is what saves you.',
+   keys:'edid display capability nits peak', writes:'read-only'}),
+E({id:'hdr.tonemap', screen:'gamescope:3', group:'Output', kind:'choice', title:'Tonemap Operator',
+   def:1, opts:['none','reinhard','aces','uncharted2','hable'],
+   help:'How out-of-range highlights are folded back into what the display can show.',
+   detail:'Applied when the game asks for more luminance than the connector can produce. <em>none</em> hard-'+
+          'clips: cheapest, and everything above peak becomes one flat white. <em>reinhard</em> is a smooth '+
+          'compression that never clips but desaturates highlights. <em>aces</em> is the filmic curve most '+
+          'engines already target, so it usually matches the game\'s intent. <em>uncharted2</em> and '+
+          '<em>hable</em> are the same family with more toe/shoulder control — the three constants below are '+
+          'theirs, and they only do anything when one of those two is selected.',
+   keys:'tonemap tone map curve aces reinhard hable filmic clip highlight roll off',
+   writes:'app 1245620.json', related:['hdr.enabled','hdr.gain'],
+   expert:['hdr.tm.shoulder','hdr.tm.toe','hdr.tm.white']}),
+E({id:'hdr.tm.shoulder', kind:'slider', title:'Shoulder strength', def:0.22, min:0, max:1, step:0.01,
+   fmt:v=>v.toFixed(2), help:'How early the highlight roll-off begins.',
+   detail:'Higher values start compressing sooner, protecting peak detail at the cost of mid-tone contrast.',
+   keys:'shoulder highlight rolloff', writes:'app 1245620.json'}),
+E({id:'hdr.tm.toe', kind:'slider', title:'Toe strength', def:0.30, min:0, max:1, step:0.01,
+   fmt:v=>v.toFixed(2), help:'How hard shadows are crushed toward black.',
+   detail:'Higher values deepen shadows. Below 0.10 dark scenes look washed out on most panels.',
+   keys:'toe shadow black crush lift', writes:'app 1245620.json'}),
+E({id:'hdr.tm.white', kind:'slider', title:'Linear white point', def:11.2, min:1, max:30, step:0.1,
+   fmt:v=>v.toFixed(1), help:'The scene luminance that maps to display peak.',
+   detail:'The Hable family\'s normalisation constant. 11.2 is the value from the original presentation and '+
+          'is a sane default for almost everything.', keys:'white point linear normalise hable',
+   writes:'app 1245620.json'}),
+E({id:'hdr.wideness', screen:'gamescope:3', group:'Levels', kind:'slider', title:'SDR Gamut Wideness',
+   def:0, min:0, max:1, step:0.01, fmt:v=>v.toFixed(2),
+   help:'How far SDR colour is stretched toward the wide HDR gamut.',
+   detail:'0 keeps SDR content in Rec.709 where it was authored — accurate, but next to HDR content it can '+
+          'look flat. 1 stretches it all the way to BT.2020, which is vivid and wrong. Most people settle '+
+          'between 0.30 and 0.50.', keys:'gamut wideness saturation sdr rec709 bt2020',
+   writes:'app 1245620.json', enabled:()=>REG['hdr.enabled'].value, why:'HDR output is off.'}),
+E({id:'hdr.sdrbright', screen:'gamescope:3', group:'Levels', kind:'slider', title:'SDR-on-HDR Brightness',
+   def:203, min:50, max:1000, step:1, unit:'nits', fmt:v=>v+' nits',
+   help:'The luminance SDR white is mapped to inside the HDR container.',
+   detail:'203 nits is the BT.2408 reference for graphics white and is what most SDR content assumes. '+
+          'Raising it makes the desktop and SDR games brighter but eats headroom that HDR highlights would '+
+          'otherwise use. This is the single setting most responsible for "HDR looks washed out".',
+   keys:'sdr brightness nits paper white graphics white 203 reference',
+   writes:'app 1245620.json', enabled:()=>REG['hdr.enabled'].value, why:'HDR output is off.',
+   related:['hdr.gain']}),
+E({id:'hdr.gain', screen:'gamescope:3', group:'Levels', kind:'slider', title:'HDR Input Gain',
+   def:1, min:0, max:4, step:0.01, fmt:v=>v.toFixed(2)+' ×',
+   help:'Multiplies the game\'s HDR signal before tonemapping.',
+   detail:'A blunt correction for games that ship a mastering level nothing else agrees with. Applied in '+
+          'linear light, before the tonemap operator, so raising it pushes more of the image into the '+
+          'roll-off rather than simply making it brighter.', keys:'gain multiplier exposure hdr input',
+   writes:'app 1245620.json', enabled:()=>REG['hdr.enabled'].value, why:'HDR output is off.'}),
+E({id:'hdr.sdrgain', screen:'gamescope:3', group:'Levels', kind:'slider', title:'SDR Input Gain',
+   def:1, min:0, max:4, step:0.01, fmt:v=>v.toFixed(2)+' ×',
+   help:'Multiplies SDR content before it is mapped into the HDR container.',
+   detail:'Separate from SDR-on-HDR Brightness: that one sets where white lands, this one scales the whole '+
+          'signal including the black floor.', keys:'sdr gain multiplier', writes:'app 1245620.json',
+   enabled:()=>REG['hdr.enabled'].value, why:'HDR output is off.'}),
+E({id:'hdr.nightdim', screen:'gamescope:3', group:'Levels', kind:'slider', title:'Night dimming',
+   def:0, min:0, max:1, step:0.01, fmt:v=>v.toFixed(2),
+   help:'Scales output luminance without touching the tonemap curve.',
+   detail:'Applied as a CTM on the connector, after everything else, so it dims without changing colour '+
+          'relationships or re-triggering the roll-off.', keys:'night dim brightness dark room',
+   writes:'app 1245620.json', enabled:()=>false, why:'Requires a PQ-capable connector; DP-1 is SDR-only.'}),
+E({id:'hdr.meta.cs', screen:'gamescope:3', group:'Focused app\'s HDR metadata · read-only', kind:'readout',
+   title:'Colorspace', def:null, get:()=>'PQ / BT.2020',
+   help:'The transfer function and primaries the game declared.',
+   detail:'Taken from the client\'s colour-management surface state. gamescope does not second-guess it.',
+   keys:'colorspace primaries transfer pq', writes:'read-only'}),
+E({id:'hdr.meta.max', screen:'gamescope:3', group:'Focused app\'s HDR metadata · read-only', kind:'readout',
+   title:'Max mastering luminance', def:null, get:()=>'1000 nits',
+   help:'The peak the game was graded against.',
+   detail:'If this is far above the display capability above, the tonemap operator is doing most of the work '+
+          'you are seeing.', keys:'mastering luminance max peak nits', writes:'read-only'}),
+E({id:'hdr.meta.cll', screen:'gamescope:3', group:'Focused app\'s HDR metadata · read-only', kind:'readout',
+   title:'MaxCLL / MaxFALL', def:null, get:()=>'824 / 210 nits',
+   help:'Brightest single pixel, and brightest frame average, in the content.',
+   detail:'Static metadata sent once per surface. Some engines send a fixed placeholder rather than a '+
+          'measured value; when MaxCLL is exactly 1000 or 4000, suspect that.',
+   keys:'maxcll maxfall content light level', writes:'read-only'}),
+E({id:'hdr.meta.pass', screen:'gamescope:3', group:'Focused app\'s HDR metadata · read-only', kind:'readout',
+   title:'Passthrough', def:null, get:()=>'active', status:'ok', accent:true,
+   help:'Metadata is reaching the display unmodified.',
+   detail:'When passthrough is active gamescope forwards the client\'s metadata block verbatim. It drops to '+
+          'inactive if any tonemapping or gain is applied, because the numbers would then be a lie.',
+   keys:'passthrough metadata forward', writes:'read-only'}),
+E({id:'hdr.clear', screen:'gamescope:3', group:'Danger zone', kind:'action', title:'Clear HDR overrides for this app',
+   verb:'Clear', danger:true, def:null,
+   help:'Deletes the HDR block from this game\'s config; global defaults apply again.',
+   detail:'Removes only the hdr section of app 1245620.json. Other per-game settings are untouched. There is '+
+          'no undo — the file is rewritten immediately.', keys:'clear delete override reset hdr',
+   writes:'app 1245620.json'}),
+
+/* ---- Shaders / Adaptive Brightness — the other depth case ---------------- */
+E({id:'shaders.ab.enabled', screen:'shaders:2', group:'Adaptive Brightness', kind:'switch',
+   title:'Adaptive Brightness', def:true,
+   help:'Tracks scene luminance and moves output brightness to follow it.',
+   detail:'A histogram of the previous frame drives an exposure target, which is then approached over time '+
+          'rather than snapped to. The six tuning values live in the Ledge, not on this screen, because you '+
+          'set them once and then never touch them again.',
+   keys:'adaptive brightness auto exposure eye histogram', writes:'app 1245620.json',
+   expert:['ab.speedup','ab.speeddown','ab.target','ab.floor','ab.ceil','ab.deadzone']}),
+E({id:'ab.speedup', kind:'slider', title:'Adapt-up speed', def:1.6, min:0.1, max:8, step:0.1,
+   fmt:v=>v.toFixed(1)+' /s', help:'How fast exposure falls when a scene gets brighter.',
+   detail:'Exponential approach rate. Human light adaptation is asymmetric — bright-adaptation is fast — so '+
+          'this should stay well above the down speed.', keys:'adapt up speed bright fast', writes:'app 1245620.json'}),
+E({id:'ab.speeddown', kind:'slider', title:'Adapt-down speed', def:0.4, min:0.1, max:8, step:0.1,
+   fmt:v=>v.toFixed(1)+' /s', help:'How fast exposure rises when a scene gets darker.',
+   detail:'Deliberately slower than adapt-up. Set them equal and walking through a doorway pumps.',
+   keys:'adapt down speed dark slow', writes:'app 1245620.json'}),
+E({id:'ab.target', kind:'slider', title:'Target grey', def:0.18, min:0.02, max:0.6, step:0.01,
+   fmt:v=>v.toFixed(2), help:'The average scene luminance the loop aims for.',
+   detail:'0.18 is photographic middle grey. Lower values leave night scenes dark on purpose.',
+   keys:'target grey middle exposure key', writes:'app 1245620.json'}),
+E({id:'ab.floor', kind:'slider', title:'Minimum exposure', def:0.35, min:0.05, max:2, step:0.01,
+   fmt:v=>v.toFixed(2)+' ×', help:'Hard lower clamp on the exposure multiplier.',
+   detail:'Stops the loop from crushing an intentionally dark scene into nothing.',
+   keys:'minimum floor clamp exposure', writes:'app 1245620.json'}),
+E({id:'ab.ceil', kind:'slider', title:'Maximum exposure', def:2.4, min:1, max:8, step:0.1,
+   fmt:v=>v.toFixed(1)+' ×', help:'Hard upper clamp on the exposure multiplier.',
+   detail:'Stops a loading screen or a flashbang from blowing the whole frame out.',
+   keys:'maximum ceiling clamp exposure', writes:'app 1245620.json'}),
+E({id:'ab.deadzone', kind:'slider', title:'Dead zone', def:0.08, min:0, max:0.4, step:0.01,
+   fmt:v=>v.toFixed(2), help:'Luminance change ignored before the loop reacts.',
+   detail:'Without a dead zone, a muzzle flash or a passing headlight makes the whole frame breathe.',
+   keys:'dead zone hysteresis threshold ignore', writes:'app 1245620.json'}),
+E({id:'shaders.ab.strength', screen:'shaders:2', group:'Adaptive Brightness', kind:'slider',
+   title:'Strength', def:0.75, min:0, max:1, step:0.01, fmt:v=>v.toFixed(2),
+   help:'How much of the computed exposure change is actually applied.',
+   detail:'A dry/wet mix over the whole effect. 1.00 applies the loop\'s full output; 0.50 halves every '+
+          'correction, which is a good place to start if the effect feels like it is fighting you.',
+   keys:'strength amount mix intensity', writes:'app 1245620.json',
+   enabled:()=>REG['shaders.ab.enabled'].value, why:'Adaptive Brightness is off.'}),
+E({id:'shaders.ab.sdronly', screen:'shaders:2', group:'Adaptive Brightness', kind:'switch',
+   title:'SDR only', def:true, help:'Skip the effect when the output is HDR.',
+   detail:'HDR already carries its own absolute luminance; adapting on top of it double-corrects and is '+
+          'usually the reason HDR looks unstable with shaders on.', keys:'sdr only skip hdr',
+   writes:'app 1245620.json'}),
+
+/* ---- System Monitor / General ------------------------------------------- */
+E({id:'mon.show', screen:'monitor:0', group:'Module', kind:'switch', title:'Show System Monitor', def:true,
+   help:'Draws the performance HUD over the game.',
+   detail:'The HUD is a separate ImGui context drawn straight into the composite pass, so it costs one extra '+
+          'draw list and no round trip.', keys:'show hud monitor fps overlay', writes:'global.json'}),
+E({id:'mon.modules', screen:'monitor:0', group:'Module', kind:'chips', title:'Active modules',
+   def:[1,1,1,0], opts:['FPS','CPU','GPU','MEDIA'],
+   help:'Which blocks the HUD draws, top to bottom.',
+   detail:'Every enabled module renders at the width of the widest one, so toggling MEDIA on can visibly '+
+          'widen the whole HUD.', keys:'modules fps cpu gpu media rows blocks', writes:'global.json'}),
+E({id:'mon.vmargin', screen:'monitor:0', group:'Placement', kind:'slider', title:'Vertical margin',
+   def:32, min:0, max:128, step:1, fmt:v=>v+' px', help:'Distance from the anchored screen edge.',
+   detail:'Measured in output pixels, not scaled pixels, so the HUD stays clear of a TV\'s overscan at any UI scale.',
+   keys:'margin vertical offset edge padding', writes:'global.json'}),
+E({id:'mon.hmargin', screen:'monitor:0', group:'Placement', kind:'slider', title:'Horizontal margin',
+   def:32, min:0, max:128, step:1, fmt:v=>v+' px', help:'Distance from the anchored screen edge.',
+   detail:'Measured in output pixels, not scaled pixels.', keys:'margin horizontal offset edge',
+   writes:'global.json'}),
+E({id:'mon.fontsize', screen:'monitor:0', group:'Type', kind:'slider', title:'Font size',
+   def:18, min:10, max:48, step:1, fmt:v=>v+' px',
+   help:'HUD type size, in output pixels.',
+   detail:'Changing this re-bakes the HUD\'s own font atlas, which is why the preview above snaps rather '+
+          'than animating. The atlas rebuild is deferred to the frame after you let go.',
+   keys:'font size type text scale hud', writes:'global.json'}),
+E({id:'mon.blend', screen:'monitor:0', group:'Type', kind:'choice', title:'Blend mode', def:0,
+   opts:['alpha','additive','inverted'], help:'How HUD pixels combine with the game behind them.',
+   detail:'<em>alpha</em> is normal compositing. <em>additive</em> never darkens, so it stays readable on '+
+          'dark scenes and disappears on bright ones. <em>inverted</em> subtracts, which is legible on '+
+          'anything but looks strange in screenshots.', keys:'blend additive inverted alpha mode',
+   writes:'global.json'}),
+E({id:'mon.backdrop', screen:'monitor:0', group:'Backdrop', kind:'switch', title:'Backdrop', def:true,
+   help:'Draws a dark plate behind the HUD text.',
+   detail:'Without it, HUD text over a bright scene falls below readable contrast — the same problem this '+
+          'console solves with its own blurred base.', keys:'backdrop plate background shadow',
+   writes:'global.json'}),
+E({id:'mon.backopacity', screen:'monitor:0', group:'Backdrop', kind:'slider', title:'Backdrop opacity',
+   def:0.5, min:0, max:1, step:0.01, fmt:v=>v.toFixed(2), help:'Plate alpha.',
+   detail:'0.50 over a blurred game reaches roughly 6:1 for the HUD\'s primary text — comfortably readable '+
+          'without hiding the scene.', keys:'backdrop opacity alpha transparency', writes:'global.json',
+   enabled:()=>REG['mon.backdrop'].value, why:'Backdrop is off.'}),
+E({id:'mon.frametime', screen:'monitor:0', group:'Rows', kind:'switch', title:'Frametime readout (ms)',
+   def:true, help:'Adds a millisecond figure next to the frame rate.',
+   detail:'Frametime is the honest number: 60→50 fps and 30→27 fps are the same 3 ms of extra work, but the '+
+          'fps figure makes the first look worse.', keys:'frametime ms milliseconds readout',
+   writes:'global.json'}),
+E({id:'mon.graph', screen:'monitor:0', group:'Rows', kind:'switch', title:'Frametime graph', def:true,
+   help:'A rolling 240-frame bar graph under the readout.',
+   detail:'Bars past the outlier threshold are drawn in the warn role, so a stutter is visible without '+
+          'reading any number.', keys:'graph frametime chart bars history', writes:'global.json'}),
+E({id:'mon.percentile', screen:'monitor:0', group:'Rows', kind:'switch',
+   title:'Percentile row (1% / 0.1% / avg)', def:true, help:'Low-percentile frame rates over the window.',
+   detail:'The 1% low is the frame rate of the worst 1% of frames. It correlates with perceived smoothness '+
+          'far better than the average does.', keys:'percentile 1% 0.1% low average lows',
+   writes:'global.json'}),
+
+/* ---- Audio -------------------------------------------------------------- */
+E({id:'audio.device', screen:'audio:0', group:'Output', kind:'readout', title:'Device', def:null,
+   get:()=>'alsa_output.pci-0000_c1_00.6.analog-stereo', status:'ok',
+   help:'The PipeWire sink the game is currently routed to.',
+   detail:'Resolved by matching the game\'s PID against PipeWire\'s node list, then following the default '+
+          'sink. Changing the system default while a game runs re-resolves it within one second.',
+   keys:'device sink output pipewire audio', writes:'read-only'}),
+E({id:'audio.volume', screen:'audio:0', group:'Output', kind:'slider', title:'Volume', def:100,
+   min:0, max:150, step:1, fmt:v=>v+' %', help:'Per-application volume for this game\'s streams.',
+   detail:'Applied to the sink-input, not the sink, so it does not affect anything else on the system. '+
+          'Above 100% is digital gain and can clip.', keys:'volume loudness gain level',
+   writes:'app 1245620.json', related:['audio.mute']}),
+E({id:'audio.mute', screen:'audio:0', group:'Output', kind:'switch', title:'Mute', def:false,
+   help:'Silences this game\'s streams without changing the volume value.',
+   detail:'A separate flag on the sink-input, so unmuting restores the exact level.', keys:'mute silence',
+   writes:'app 1245620.json'}),
+E({id:'audio.pick', screen:'audio:0', group:'Routing', kind:'drill', title:'Pick a stream manually',
+   def:null, get:()=>'auto · matched by PID',
+   help:'Override which PipeWire stream this game\'s controls act on.',
+   detail:'Needed when a game spawns a launcher that owns the audio, so the PID match lands on the wrong node.',
+   keys:'stream routing manual override pipewire pid', writes:'app 1245620.json'}),
+
+/* ---- Config ------------------------------------------------------------- */
+E({id:'cfg.writing', screen:'config:1', group:'Routing', kind:'readout', title:'Writing to', def:null,
+   get:()=>REG['cfg.override'].value ? 'games/1245620.json' : 'global.json', status:'ok',
+   help:'Where every edit in this console currently lands.',
+   detail:'Read-only, because it is a consequence rather than a choice — the switch below decides it.',
+   keys:'writing routing config file where saved', writes:'read-only', related:['cfg.override']}),
+E({id:'cfg.override', screen:'config:1', group:'Routing', kind:'switch',
+   title:'Override Global Config for this app', def:true,
+   help:'Route this game\'s edits to its own file instead of the global one.',
+   detail:'When on, a games/1245620.json is created on the next write and shadows global.json setting by '+
+          'setting. Turning it back off does not delete the file — it stops being read.',
+   keys:'override per game config global routing app', writes:'global.json',
+   related:['cfg.writing']}),
+E({id:'cfg.hue', screen:'config:1', group:'Appearance', kind:'color', title:'Accent hue', def:218,
+   min:0, max:360, step:1, fmt:v=>v+'°',
+   help:'The one colour axis in the whole overlay.',
+   detail:'Every accent token is OKLCH with a fixed lightness and chroma; only the hue moves. That is why no '+
+          'hue can wash a token out or blow it up, and why the measured contrast table holds for all 360 of '+
+          'them. The danger role deliberately does not follow — a green "delete permanently" is a bug.',
+   keys:'accent hue colour color theme oklch', writes:'global.json'}),
+E({id:'cfg.scale', screen:'config:1', group:'Appearance', kind:'slider', title:'UI scale', def:1,
+   min:0.5, max:2, step:0.05, fmt:v=>v.toFixed(2)+' ×',
+   help:'Scales the entire console; re-bakes the font atlas on release.',
+   detail:'Every dimension in the console is a multiple of one 4px unit and one 15px type base, so this is '+
+          'the only size control there is or needs to be.', keys:'ui scale size display zoom',
+   writes:'global.json'}),
+E({id:'cfg.ledge', screen:'config:1', group:'Appearance', kind:'switch', title:'Keep the Ledge raised',
+   def:false, help:'Leave the detail band open as you move between settings.',
+   detail:'Off, the Ledge shows one line and raises only when you ask (?). On, it stays open and behaves '+
+          'like a permanent inspector docked to the bottom of the console. The setting exists because both '+
+          'answers are legitimate: one keeps the console calm, the other keeps the explanation in view.',
+   keys:'ledge detail inspector help panel keep open persistent', writes:'global.json'}),
+E({id:'cfg.blur', screen:'config:1', group:'Background effects', kind:'slider', title:'Blur', def:1,
+   min:0, max:1, step:0.01, fmt:v=>v.toFixed(2),
+   help:'Blur applied to the game behind the console.',
+   detail:'A compositor pass, not a console effect. It is what makes 1px hairlines survive over an arbitrary '+
+          'frame: blur removes the high-frequency detail that would otherwise fight them.',
+   keys:'blur background compositor', writes:'global.json'}),
+E({id:'cfg.dark', screen:'config:1', group:'Background effects', kind:'slider', title:'Darkening', def:0.8,
+   min:0, max:1, step:0.01, fmt:v=>v.toFixed(2), help:'Dimming applied to the game behind the console.',
+   detail:'Together with the console\'s own 86% base this is what puts every text role above its WCAG floor '+
+          'even with a white snow field behind. Drop it below about 0.55 and meta text stops clearing 4.5:1.',
+   keys:'darkening dim background contrast', writes:'global.json'}),
+E({id:'cfg.delete', screen:'config:1', group:'Danger zone', kind:'action',
+   title:'Delete saved config for this app', verb:'Delete', danger:true, def:null,
+   help:'Removes games/1245620.json permanently.',
+   detail:'Every per-game setting reverts to the global value on the next frame. Cannot be undone.',
+   keys:'delete remove config saved permanent', writes:'app 1245620.json'});
+
+/* screens that are declared but not populated in this mock */
+const STUB = {
+ 'gamescope:1':'Display', 'gamescope:2':'Frame Limiter',
+ 'shaders:0':'Vibrancy', 'shaders:1':'Pre-Sharpen',
+ 'monitor:1':'FPS', 'monitor:2':'Statistics',
+ 'config:0':'Per-Game'
+};
+
+/* ==========================================================================
+   2. Sections
+   ========================================================================== */
+const ICON = {
+  display:'<path d="M2 4h16v11H2z"/><path d="M7 18h6"/>',
+  shaders:'<path d="M3 16 10 3l7 13z"/><path d="M6.5 11h7"/>',
+  monitor:'<path d="M2 14l4-6 3 4 4-8 5 10"/><path d="M2 17h16"/>',
+  audio:'<path d="M4 8h3l4-4v12l-4-4H4z"/><path d="M14 7c1.6 1.6 1.6 4.4 0 6"/>',
+  config:'<path d="M3 4h14v12H3z"/><path d="M3 8h14"/><path d="M7 12h6"/>',
+  log:'<path d="M4 3h12v14H4z"/><path d="M7 7h6M7 10h6M7 13h4"/>'
+};
+const SECTIONS = [
+ {id:'gamescope', title:'Gamescope', icon:'display', subtabs:['Upscaling','Display','Frame Limiter','HDR'],
+  blurb:'How the game image reaches the display: resampling, presentation timing and HDR.'},
+ {id:'shaders', title:'Shaders', icon:'shaders', subtabs:['Vibrancy','Pre-Sharpen','Adaptive Brightness'],
+  blurb:'The ReShade-compatible post-process chain, applied before the scaler.'},
+ {id:'monitor', title:'System Monitor', icon:'monitor', subtabs:['General','FPS','Statistics'],
+  blurb:'The performance HUD drawn over the game, and the counters behind it.'},
+ {id:'audio', title:'Audio', icon:'audio', subtabs:['Output'],
+  blurb:'Per-application volume and PipeWire stream routing for the focused game.'},
+ {id:'config', title:'Config', icon:'config', subtabs:['Per-Game','General'],
+  blurb:'Where settings are written, and how this console itself looks.'},
+ {id:'log', title:'Log', icon:'log', subtabs:['Gamescope','Game'], stage:'wide',
+  blurb:'Captured stdout/stderr from gamescope and from the game.'}
+];
+
+/* ==========================================================================
+   3. State
+   ========================================================================== */
+const S = {sec:'gamescope', tab:0, focus:null, railFocus:false,
+           ledgeUp:false, inLedge:false, ledgeFocus:null,
+           pal:false, palQ:'', palSel:0, logSel:11, anchor:2, everRaised:false};
+function raiseLedge(b){
+  S.ledgeUp = b; if (!b) S.inLedge = false;
+  if (b){ S.everRaised = true; const c=document.getElementById('coach'); if(c) c.classList.add('gone'); }
+}
+
+const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const scr = () => S.sec+':'+S.tab;
+const sect = () => SECTIONS.find(x=>x.id===S.sec);
+const rowsOf = k => Object.values(REG).filter(e=>e.screen===k);
+const isOn = e => !e.enabled || e.enabled();
+const differs = e => e.def!==null && e.def!==undefined && JSON.stringify(e.value)!==JSON.stringify(e.def);
+
+/* ==========================================================================
+   4. The row kit — every control goes through one function.
+   Rule (critique 2): controls that CAN stretch fill the whole control column;
+   controls that cannot are right-aligned to its right edge. Nothing is sized
+   by its content, so a 3-cell and a 5-cell segmented are the same width.
+   ========================================================================== */
+function ctlHTML(e){
+  const off = !isOn(e);
+  switch(e.kind){
+    case 'switch':
+      return `<div class="sw ${e.value?'on':''}" data-act="toggle"><i></i></div>`;
+    case 'choice':{
+      const fits = e.opts.length<=5 && e.opts.every(o=>o.length<=10);
+      return fits
+        ? `<div class="seg">${e.opts.map((o,i)=>`<b class="${i===e.value?'on':''}" data-act="seg" data-i="${i}">${esc(o)}</b>`).join('')}</div>`
+        : `<div class="pick" data-act="cycle">${esc(e.opts[e.value])}<s>›</s></div>`;
+    }
+    case 'slider':{
+      const p = (e.value-e.min)/(e.max-e.min)*100;
+      const dp = (e.def-e.min)/(e.max-e.min)*100;
+      return `<div class="sl"><div class="track" data-act="track">
+          <div class="fill" style="width:${p}%"></div>
+          <div class="def" style="left:${dp}%" title="default"></div>
+          <div class="knob" style="left:${p}%"></div></div>
+        <div class="v">${esc(e.fmt?e.fmt(e.value):e.value)}</div></div>`;
+    }
+    case 'color':
+      return `<span class="ro">oklch .74 .12 ${e.value}</span>
+        <span class="swatch" style="background:oklch(.74 .12 ${e.value})"></span><span class="chev">›</span>`;
+    case 'chips':
+      return e.opts.map((o,i)=>`<span class="chip ${e.value[i]?'':'n'}" data-act="chip" data-i="${i}">${esc(o)}</span>`).join('');
+    case 'readout':{
+      const d = e.status?`<span class="dot ${e.status}"></span>`:'';
+      return d+`<span class="ro ${e.accent?'acc':''}">${esc(e.get())}</span>`;
+    }
+    case 'drill':
+      return `<span class="ro">${esc(e.get())}</span><span class="chev">›</span>`;
+    case 'action':
+      return `<span class="act ${e.danger?'danger':''}">${esc(e.verb)}</span>`;
+    default: return '';
+  }
+}
+function rowHTML(e, focused, parent){
+  const off = !isOn(e);
+  const cls = ['row', focused?'foc':'', parent?'parent':'', off?'dis':''].join(' ');
+  return `<div class="${cls}" data-id="${e.id}">
+      <div class="txt"><span class="lbl">${esc(e.title)}</span>${
+        off?`<span class="why">${esc(e.why||'')}</span>`:''}</div>
+      ${differs(e)?'<span class="delta" title="differs from default"></span>':''}
+      <div class="ctl">${ctlHTML(e)}</div></div>`;
+}
+
+/* adjust — the ←/→ semantics, one place */
+function adjust(e, dir){
+  if (!isOn(e)) return;
+  if (e.kind==='switch'){ e.value = !e.value; return; }
+  if (e.kind==='choice'){ e.value = (e.value+dir+e.opts.length)%e.opts.length; return; }
+  if (e.kind==='slider'||e.kind==='color'){
+    const st = e.step||1;
+    e.value = Math.min(e.max, Math.max(e.min, +(e.value+dir*st).toFixed(6)));
+    if (e.id==='cfg.hue'){ document.documentElement.style.setProperty('--hue', e.value);
+      document.getElementById('hue').value = e.value; document.getElementById('huev').textContent = e.value; }
+    if (e.id==='cfg.scale') setScale(e.value);
+    return;
+  }
+  if (e.kind==='chips'){ e.value[0] = e.value[0]?0:1; return; }
+}
+
+/* ==========================================================================
+   5. Rail
+   ========================================================================== */
+function renderRail(){
+  const el = document.getElementById('rail');
+  let h = '<div class="rgroup">Console</div>';
+  SECTIONS.forEach(s=>{
+    const sel = s.id===S.sec, n = SECTIONS.indexOf(s);
+    const cnt = Object.values(REG).filter(e=>e.screen&&e.screen.startsWith(s.id+':')).length;
+    const dif = Object.values(REG).filter(e=>e.screen&&e.screen.startsWith(s.id+':')&&differs(e)).length;
+    h += `<div class="ri ${sel&&!S.railFocus?'sel':''} ${sel&&S.railFocus?'foc':''}" data-sec="${s.id}">
+        <span class="gl"><svg viewBox="0 0 20 20">${ICON[s.icon]}</svg></span>
+        <span class="lbl">${s.title}</span>
+        <span class="cnt">${dif?`<span style="color:var(--accent-value)">${dif}</span>/`:''}${cnt||''}</span></div>`;
+  });
+  h += `<div class="grow"></div><div class="foot">gamescope-ritz · 3.16.14</div>`;
+  el.innerHTML = h;
+  el.querySelectorAll('.ri').forEach(n=>n.onclick=()=>{
+    S.sec=n.dataset.sec; S.tab=0; S.railFocus=true; S.inLedge=false; S.focus=null; render();
+  });
+}
+
+/* ==========================================================================
+   6. Stage
+   ========================================================================== */
+function wellMonitor(){
+  const h=[62,71,58,80,54,66,92,60,57,74,63,55,100,68,59,72,61,88,64,56,70,58,77,62,53,69,60,81,57,65];
+  const fs = REG['mon.fontsize'].value;
+  return `<div class="well"><div class="wh"><span class="dot"></span>Live preview
+      <span class="r">approximate scale · pick a cell to anchor</span></div>
+    <div class="preview g${G}" id="preview"><div class="pgrid">
+      ${[0,1,2,3,4,5,6,7,8].map(i=>`<div class="pcell ${i===S.anchor?'sel':''}" data-cell="${i}"></div>`).join('')}
+    </div>
+    <div class="hud" id="hudbox" style="font-size:${fs/18*100}%;${anchorCss(S.anchor)}">
+      <div class="r1"><span class="n">142</span><span class="u2">FPS</span><span class="ms">7.04 ms</span></div>
+      ${REG['mon.graph'].value?`<div class="graph">${h.map(v=>`<i class="${v>=92?'sp':''}" style="height:${v}%"></i>`).join('')}</div>`:''}
+      ${REG['mon.percentile'].value?`<div class="r3"><span>1% 118</span><span>0.1% 96</span><span>avg 139</span></div>`:''}
+    </div></div></div>`;
+}
+function anchorCss(i){
+  const r=Math.floor(i/3), c=i%3, m='calc(var(--u)*5)';
+  let s='';
+  s += r===0?`top:${m};bottom:auto;`:(r===1?`top:50%;bottom:auto;`:`bottom:${m};top:auto;`);
+  s += c===0?`left:${m};right:auto;`:(c===1?`left:50%;right:auto;`:`right:${m};left:auto;`);
+  s += `transform:translate(${c===1?'-50%':'0'},${r===1?'-50%':'0'});`;
+  return s;
+}
+function wellAudio(){
+  const v=REG['audio.volume'].value, n=Math.round(v/150*20);
+  const seg=k=>Array.from({length:20},(_,i)=>`<i class="${i<k?'lit':''}"></i>`).join('');
+  return `<div class="well"><div class="wh"><span class="dot"></span>Peak
+    <span class="r">−6.2 dB · 48 kHz · 2 ch</span></div>
+    <div class="meters"><div class="mrow"><span>L</span><div class="segs">${seg(n)}</div></div>
+    <div class="mrow"><span>R</span><div class="segs">${seg(Math.max(0,n-1))}</div></div></div></div>`;
+}
+
+const LOG = [
+ ['16:04:11.230','backend','','DRM backend: connector DP-1 selected, 2560x1440@165.00Hz'],
+ ['16:04:11.244','drm','','Found CRTC 89, plane 71 (primary), plane 74 (overlay)'],
+ ['16:04:11.251','vulkan','','Device: AMD Radeon RX 7900 XTX (RADV NAVI31), driver 25.1.3'],
+ ['16:04:11.262','vulkan','','Supported: DRM format modifiers, HDR metadata, timeline semaphores'],
+ ['16:04:11.480','wlserver','','Listening on wayland-1'],
+ ['16:04:11.481','xwm','','Xwayland :1 ready, 1 ctx'],
+ ['16:04:12.033','steamcompmgr','','focus: window 0x2400003 "vkcube" appid 1245620'],
+ ['16:04:12.034','config','','Loaded app 1245620.json (2.1 kB) over global.json'],
+ ['16:04:12.036','overlay','','display_scale 1.00 — atlas baked at 1.00, 6 roles x 2 families'],
+ ['16:04:12.101','reshade','','Compiled gamescope-ritz.fx in 84 ms (3 techniques)'],
+ ['16:04:12.102','reshade','','vibrancy_enabled = 1, vibrancy_strength = 0.420'],
+ ['16:04:13.774','drm','w','Atomic commit took 19.4 ms (expected < 8.3 ms), frame 512'],
+ ['16:04:13.905','steamcompmgr','','HDR: app declared PQ/BT.2020, MaxCLL 824 nits'],
+ ['16:04:14.220','pipewire','','Matched sink-input 61 -> pid 40118 ("vkcube")'],
+ ['16:04:15.008','backend','','VRR window 48-165 Hz, present mode: immediate'],
+ ['16:04:16.441','vulkan','w','Swapchain out of date, rebuilding (1920x1080)'],
+ ['16:04:17.980','lsfg','e','DISABLE_LSFG=1 in environment — frame generation not loaded'],
+ ['16:04:18.114','overlay','','Console opened (CTRL+SHIFT+O), game input paused'],
+ ['16:04:21.560','config','','Queued write: gamescope.sharpness 2 -> 8 (app 1245620.json)'],
+ ['16:04:22.900','steamcompmgr','','Repaint: 1 base + 1 overlay layer, blur radius 24'],
+ ['16:04:24.310','drm','w','Atomic commit took 12.7 ms (expected < 8.3 ms), frame 1204'],
+ ['16:04:26.002','metrics','','CPU 34% · 61°C · GPU 88% · 71°C · VRAM 6.2/24.0 GB']
+];
+/* the Ledge decodes a selected log line — depth for a screen that has no rows */
+const DECODE = {
+ 'drm':['Atomic commit overran the frame budget',
+   'The kernel took longer to accept the atomic commit than one refresh interval allows, so this frame was '+
+   'presented late. A handful of these at startup is normal — mode-setting and the first allocations are '+
+   'expensive. A steady stream of them during play means the display pipeline, not the game, is the bottleneck: '+
+   'check for a second overlay plane being rejected and falling back to composition.'],
+ 'lsfg':['Frame generation was disabled by the environment',
+   'DISABLE_LSFG=1 was set in gamescope\'s environment, so the Lossless Scaling frame-generation layer was '+
+   'never loaded. This is a deliberate opt-out, not a failure — nothing is broken, and the Frame Limiter '+
+   'screen will show frame generation as unavailable.'],
+ 'vulkan':['Swapchain recreated','The output size changed under the client, so the driver invalidated the '+
+   'swapchain and gamescope rebuilt it. Expected whenever resolution, HDR state or the scaler changes.']
+};
+
+function renderStage(){
+  const s = sect(), stage = document.getElementById('stage');
+  document.getElementById('body').classList.toggle('wide', s.stage==='wide');
+
+  if (s.id==='log'){ stage.innerHTML = stageLog(); wireLog(); return; }
+
+  let h = `<div class="subtabs">${s.subtabs.map((t,i)=>
+      `<button class="${i===S.tab?'on':''}" data-tab="${i}">${esc(t)}</button>`).join('')}
+      <div class="rt">PgUp / PgDn</div></div>`;
+
+  if (scr()==='monitor:0') h += wellMonitor();
+  if (scr()==='audio:0')   h += wellAudio();
+
+  const rows = rowsOf(scr());
+  let body = '';
+  if (rows.length){
+    let g = null;
+    rows.forEach(e=>{
+      if (e.group!==g){ g=e.group; body += `<div class="group">${esc(g)}</div>`; }
+      body += rowHTML(e, !S.railFocus && !S.inLedge && S.focus===e.id, !S.railFocus && S.inLedge && S.focus===e.id);
+    });
+  } else {
+    body = `<div class="group">${esc(STUB[scr()]||'Screen')}</div>
+      <div class="row dis"><div class="txt"><span class="lbl">Not populated in this mock</span>
+      <span class="why">Try Gamescope › Upscaling and HDR, Shaders › Adaptive Brightness, System Monitor, Audio, Config › General, Log.</span></div>
+      <div class="ctl"></div></div>`;
+  }
+  h += `<div class="scroll">${body}</div>`;
+  stage.innerHTML = h;
+
+  stage.querySelectorAll('.subtabs button').forEach(b=>b.onclick=()=>{
+    S.tab=+b.dataset.tab; S.railFocus=false; S.inLedge=false; S.focus=firstRow(); render(); });
+  stage.querySelectorAll('.pcell').forEach(c=>c.onclick=()=>{ S.anchor=+c.dataset.cell; render(); });
+  wireRows(stage);
+}
+function stageLog(){
+  const q='commit';
+  const hi = s => esc(s).replace(new RegExp('('+q+')','g'),'<mark>$1</mark>');
+  return `<div class="logbar">
+    <div class="seg"><b class="on">gamescope</b><b>game</b></div>
+    <div class="find"><s>/</s>&nbsp;${q}<s style="margin-left:auto">3 matches</s></div>
+    <div class="seg lv"><b class="on">all</b><b>warn</b><b>error</b></div>
+    <span class="act">Copy</span></div>
+  <div class="logview" id="logview">${LOG.map((l,i)=>
+    `<div class="ln ${l[2]==='e'?'e':''} ${i===S.logSel&&!S.railFocus?'foc':''}" data-line="${i}">
+       <span class="ts">${l[0]}</span><span class="sc ${l[2]}">[${l[1]}]</span>
+       <span class="ms">${hi(l[3])}</span></div>`).join('')}</div>`;
+}
+function wireLog(){
+  document.querySelectorAll('#logview .ln').forEach(n=>n.onclick=()=>{
+    S.logSel=+n.dataset.line; S.railFocus=false; render(); });
+}
+function wireRows(root){
+  root.querySelectorAll('.row[data-id]').forEach(n=>{
+    const e = REG[n.dataset.id];
+    n.onclick = ev => {
+      const inLedge = !!n.closest('.lbody');
+      if (inLedge){ S.inLedge=true; S.ledgeFocus=e.id; } else { S.inLedge=false; S.focus=e.id; S.railFocus=false; }
+      const t = ev.target.closest('[data-act]');
+      if (t && isOn(e)){
+        const a=t.dataset.act;
+        if (a==='toggle') e.value=!e.value;
+        else if (a==='seg') e.value=+t.dataset.i;
+        else if (a==='cycle') e.value=(e.value+1)%e.opts.length;
+        else if (a==='chip') e.value[+t.dataset.i]=e.value[+t.dataset.i]?0:1;
+        else if (a==='track'){
+          const r=t.getBoundingClientRect();
+          const f=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width));
+          const st=e.step||1;
+          e.value=+(Math.round((e.min+f*(e.max-e.min))/st)*st).toFixed(6);
+          if(e.id==='cfg.hue'){document.documentElement.style.setProperty('--hue',e.value);
+            document.getElementById('hue').value=e.value;document.getElementById('huev').textContent=e.value;}
+          if(e.id==='cfg.scale') setScale(e.value);
+        }
+      }
+      render();
+    };
+  });
+}
+function firstRow(){ const r=rowsOf(scr()); return r.length?r[0].id:null; }
+
+/* ==========================================================================
+   7. THE LEDGE
+   ========================================================================== */
+function current(){
+  /* While the palette is open the Ledge describes the highlighted RESULT, so
+     you can read a setting's depth without leaving the search. One depth
+     region, one rule: it always describes whatever currently has focus. */
+  if (S.pal){ const m = palMatches(); return m[S.palSel] || null; }
+  if (S.railFocus) return null;
+  if (S.sec==='log') return null;
+  return REG[S.focus] || null;
+}
+function renderLedge(){
+  const L = document.getElementById('ledge');
+  /* "Keep the Ledge raised" (Config › General) turns the resting band into a
+     permanent detail region. Both answers are legitimate; the default is calm. */
+  if (REG['cfg.ledge'].value && !S.ledgeUp) raiseLedge(true);
+  L.classList.toggle('up', S.ledgeUp);
+
+  let say, facts='', body='';
+  const keys = S.ledgeUp
+    ? [['?','less',1],['ctrl ↓','into the Ledge'],['^K','find']]
+    : [['?','explain this',1],['^K','find'],['^⇧O','close']];
+
+  if (S.railFocus && !S.pal){                         /* --- section card --- */
+    const s = sect();
+    const all = Object.values(REG).filter(e=>e.screen&&e.screen.startsWith(s.id+':'));
+    const dif = all.filter(differs);
+    say = `<b>${esc(s.title)}</b> — ${esc(s.blurb)}`;
+    facts = `<span>${all.length} settings</span>${dif.length?`<span class="d">${dif.length} differ</span>`:''}`;
+    body = `<div class="lcard"><div class="lhead"><h3>${esc(s.title)}</h3>
+        <span class="kind">section</span><span class="sp"></span>
+        <span class="mono" style="font-size:calc(var(--fs)*.72);color:var(--t-meta)">writes ${
+          REG['cfg.override'].value?'games/1245620.json':'global.json'}</span></div>
+      <div class="ltext">${esc(s.blurb)}</div>
+      <div class="lfacts"><span><b>screens</b>${s.subtabs.map(esc).join(' · ')}</span>
+        <span><b>settings</b>${all.length}</span>
+        <span><b>differ from default</b><u>${dif.length}</u></span></div>
+      ${dif.length?`<div class="lrel"><span class="lb">changed</span>${
+        dif.map(e=>`<a data-go="${e.id}">${esc(e.title)}</a>`).join('')}</div>`:
+        `<div class="lrel"><span class="lb">changed</span><span style="color:var(--t-faint);font-size:calc(var(--fs)*.8)">nothing on this section differs from the shipped defaults</span></div>`}
+      </div>`;
+  }
+  else if (S.sec==='log' && !S.pal){                  /* --- log line decode --- */
+    const l = LOG[S.logSel], d = DECODE[l[1]];
+    say = d ? `<b>${esc(d[0])}</b>` : `<b>[${esc(l[1])}]</b> — ${esc(l[3])}`;
+    facts = `<span>${esc(l[0])}</span><span>${l[2]==='e'?'error':(l[2]==='w'?'warn':'info')}</span>`;
+    body = `<div class="lhead"><h3>${esc(d?d[0]:l[1])}</h3><span class="kind">log line</span>
+        <span class="sp"></span><span class="mono" style="font-size:calc(var(--fs)*.72);color:var(--t-meta)">${esc(l[0])} · [${esc(l[1])}]</span></div>
+      <div class="ltext" style="font-family:'Geist Mono',monospace;font-size:calc(var(--fs)*.82);color:var(--t-label)">${esc(l[3])}</div>
+      <div class="ltext" style="margin-top:calc(var(--u)*3)">${d?d[1]:'No decode registered for this scope. The raw line is above.'}</div>
+      <div class="lrel"><span class="lb">actions</span><a>copy line</a><a>filter to [${esc(l[1])}]</a></div>`;
+  }
+  else {                                              /* --- a setting --- */
+    const e = current();
+    if (!e){ say=`<b>Nothing focused.</b> Click a row, or press ↓.`; body=`<div class="lnone">Move to a setting to see what it does.</div>`; }
+    else {
+      const off = !isOn(e);
+      say = off ? `<b>Unavailable.</b> ${esc(e.why)}` : `<b>${esc(e.title)}</b> — ${esc(e.help)}`;
+      const val = e.kind==='readout'||e.kind==='drill' ? esc(e.get())
+                : e.kind==='slider'||e.kind==='color' ? esc(e.fmt?e.fmt(e.value):e.value)
+                : e.kind==='choice' ? esc(e.opts[e.value])
+                : e.kind==='switch' ? (e.value?'on':'off') : '—';
+      facts = (e.def===null||e.def===undefined) ? `<span>${esc(e.writes)}</span>`
+        : `<span class="${differs(e)?'d':''}">${val}</span><span>def ${esc(fmtDef(e))}</span><span>${esc(e.writes)}</span>`;
+      body = detailHTML(e);
+    }
+  }
+
+  L.innerHTML = `
+    <div class="lrest" id="lrest">
+      <span class="caret">▲</span>
+      <span class="say">${say}</span>
+      <span class="facts">${facts}</span>
+      <span class="kk">${keys.map(k=>
+        `<span class="${k[2]?'hot':''} ${k[2]&&!S.everRaised?'new':''}"><i>${esc(k[0])}</i>${esc(k[1])}</span>`).join('')}</span>
+    </div>
+    ${S.ledgeUp?`<div class="lbody">${body}</div>`:''}`;
+
+  document.getElementById('lrest').onclick = ()=>{ raiseLedge(!S.ledgeUp); render(); };
+  L.querySelectorAll('[data-go]').forEach(a=>a.onclick=()=>{ goTo(a.dataset.go); });
+  L.querySelectorAll('[data-reset]').forEach(b=>b.onclick=ev=>{
+    ev.stopPropagation(); const e=current(); if(!e) return;
+    e.value = clone(e.def);
+    if (e.id==='cfg.hue'){ document.documentElement.style.setProperty('--hue',e.value);
+      document.getElementById('hue').value=e.value; document.getElementById('huev').textContent=e.value; }
+    if (e.id==='cfg.scale') setScale(e.value);
+    render();
+  });
+  wireRows(L);
+}
+function fmtDef(e){
+  if (e.kind==='switch') return e.def?'on':'off';
+  if (e.kind==='choice') return e.opts[e.def];
+  if (e.kind==='chips')  return e.def.map((v,i)=>v?e.opts[i]:null).filter(Boolean).join(' ');
+  return e.fmt?e.fmt(e.def):String(e.def);
+}
+function detailHTML(e){
+  const off = !isOn(e);
+  let h = `<div class="lhead"><h3>${esc(e.title)}</h3><span class="kind">${esc(e.kind)}</span>
+      <span class="sp"></span>${
+      e.def!==null&&e.def!==undefined&&differs(e)
+        ? `<span class="act" style="cursor:pointer" data-reset="1">RESET TO ${esc(fmtDef(e)).toUpperCase()}</span>`
+        : ''}</div>`;
+  if (off) h += `<div class="ltext" style="color:var(--warn)">Unavailable — ${esc(e.why)}</div>`;
+  h += `<div class="ltext">${e.detail}</div>`;
+
+  const f = [];
+  if (e.def!==null&&e.def!==undefined) f.push(['default', esc(fmtDef(e))]);
+  if (e.min!==undefined) f.push(['range', `${e.min} – ${e.max}`]);
+  if (e.step) f.push(['step', String(e.step)]);
+  if (e.opts&&e.kind==='choice') f.push(['options', e.opts.join(' · ')]);
+  f.push(['writes', esc(e.writes)]);
+  f.push(['id', `<u>${esc(e.id)}</u>`]);
+  h += `<div class="lfacts">${f.map(x=>`<span><b>${x[0]}</b>${x[1]}</span>`).join('')}</div>`;
+
+  const rel = (e.related||[]).filter(id=>REG[id]);
+  if (rel.length)
+    h += `<div class="lrel"><span class="lb">related</span>${
+      rel.map(id=>`<a data-go="${id}">${esc(REG[id].title)}</a>`).join('')}</div>`;
+
+  if (e.expert&&e.expert.length){
+    h += `<div class="lexp"><div class="group">Expert · ${esc(e.title)}</div>`;
+    e.expert.forEach(id=>{ h += rowHTML(REG[id], S.inLedge && S.ledgeFocus===id, false); });
+    h += `<div style="margin-top:calc(var(--u)*2);font-size:calc(var(--fs)*.78);color:var(--t-faint)">`+
+         `These live here, not on the screen above — declared <span class="mono">.Expert()</span> at the call site.</div></div>`;
+  }
+  return h;
+}
+
+/* ==========================================================================
+   8. Palette (Direction B, adopted as a feature)
+   ========================================================================== */
+function palMatches(){
+  const q = S.palQ.trim().toLowerCase();
+  const all = Object.values(REG).filter(e=>e.title);
+  if (!q) return all.slice(0,40);
+  return all.map(e=>{
+    const t = e.title.toLowerCase();
+    const hay = (e.title+' '+(e.keys||'')+' '+e.id+' '+e.help).toLowerCase();
+    if (!q.split(/\s+/).every(w=>hay.includes(w))) return null;
+    return {e, s: t.startsWith(q)?0 : t.includes(q)?1 : e.id.includes(q)?2 : 3};
+  }).filter(Boolean).sort((a,b)=>a.s-b.s).slice(0,40).map(x=>x.e);
+}
+function homeOf(e){
+  let id = e.screen ? e : Object.values(REG).find(p=>p.expert&&p.expert.includes(e.id));
+  if (!id) return {sec:null, label:'—'};
+  const [s,t] = id.screen.split(':');
+  const sc = SECTIONS.find(x=>x.id===s);
+  return {sec:s, tab:+t, host:id.id!==e.id?id.id:null, label: sc.title+' › '+sc.subtabs[+t]};
+}
+function renderPal(){
+  const w = document.getElementById('palwrap');
+  w.classList.toggle('on', S.pal);
+  if (!S.pal) return;
+  const m = palMatches();
+  S.palSel = Math.min(S.palSel, Math.max(0,m.length-1));
+  document.getElementById('palq').textContent = S.palQ;
+  document.getElementById('paln').textContent = m.length+' of '+Object.values(REG).filter(e=>e.title).length;
+  const q = S.palQ.trim();
+  document.getElementById('palres').innerHTML = m.map((e,i)=>{
+    const h = homeOf(e);
+    const title = q ? esc(e.title).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>') : esc(e.title);
+    return `<div class="pres ${i===S.palSel?'sel':''}" data-i="${i}" data-id="${e.id}">
+      <div class="tx"><div class="pt">${title}${h.host?` <span style="color:var(--t-faint);font-size:calc(var(--fs)*.72)">· expert of ${esc(REG[h.host].title)}</span>`:''}</div>
+        <div class="ph">${esc(e.help)}</div></div>
+      <div class="pw">${esc(h.label)}</div>
+      <div class="pc">${['switch','slider','choice'].includes(e.kind)?ctlHTML(e):''}</div></div>`;
+  }).join('') || `<div class="lnone">Nothing matches “${esc(S.palQ)}”.</div>`;
+  document.querySelectorAll('#palres .pres').forEach(n=>{
+    n.onclick = ev=>{
+      S.palSel=+n.dataset.i;
+      const e = REG[n.dataset.id], t = ev.target.closest('[data-act]');
+      if (t && isOn(e)){                       /* adjust in place, stay in the palette */
+        const a=t.dataset.act;
+        if (a==='toggle') e.value=!e.value;
+        else if (a==='seg') e.value=+t.dataset.i;
+        else if (a==='cycle') e.value=(e.value+1)%e.opts.length;
+        else if (a==='track'){ const r=t.getBoundingClientRect();
+          const f=Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width)), st=e.step||1;
+          e.value=+(Math.round((e.min+f*(e.max-e.min))/st)*st).toFixed(6); }
+        renderPal(); renderLedge(); return;
+      }
+      goTo(n.dataset.id);
+    };
+  });
+}
+function goTo(id){
+  const e = REG[id], h = homeOf(e);
+  if (!h.sec) return;
+  S.pal=false; S.sec=h.sec; S.tab=h.tab; S.railFocus=false;
+  if (h.host){ S.focus=h.host; S.inLedge=true; S.ledgeFocus=id; raiseLedge(true); }
+  else { S.focus=id; S.inLedge=false; }
+  render();
+}
+
+/* ==========================================================================
+   9. Shell
+   ========================================================================== */
+function renderCrumb(){
+  const s=sect();
+  const parts=[`<span class="up">Console</span>`,`<span class="sep">›</span>`,`<span class="up">${esc(s.title)}</span>`,
+               `<span class="sep">›</span>`,`<span>${esc(s.subtabs[S.tab])}</span>`];
+  if (S.inLedge) parts.push(`<span class="sep">›</span>`,`<span class="up">Ledge</span>`);
+  document.getElementById('crumb').innerHTML = parts.join('');
+  document.getElementById('badge').textContent =
+    REG['cfg.override'].value ? 'app 1245620' : 'global';
+}
+let G = 0;
+function render(){ renderRail(); renderStage(); renderCrumb(); renderLedge(); renderPal(); }
+function setScale(k){
+  document.documentElement.style.setProperty('--u',(4*k)+'px');
+  document.documentElement.style.setProperty('--fs',(15*k)+'px');
+}
+S.focus = firstRow();
+render();
+
+/* ---- keyboard ------------------------------------------------------------ */
+document.addEventListener('keydown', ev=>{
+  const k = ev.key;
+  if (S.pal){
+    if (k==='Escape'){ S.pal=false; render(); ev.preventDefault(); return; }
+    const m = palMatches();
+    if (k==='ArrowDown'){ S.palSel=Math.min(m.length-1,S.palSel+1); renderPal(); renderLedge(); ev.preventDefault(); return; }
+    if (k==='ArrowUp'){ S.palSel=Math.max(0,S.palSel-1); renderPal(); renderLedge(); ev.preventDefault(); return; }
+    if (k==='Enter'){ if(m[S.palSel]) goTo(m[S.palSel].id); ev.preventDefault(); return; }
+    if (k==='ArrowLeft'||k==='ArrowRight'){ if(m[S.palSel]) adjust(m[S.palSel], k==='ArrowRight'?1:-1); renderPal(); renderLedge(); ev.preventDefault(); return; }
+    if (k==='Backspace'){ S.palQ=S.palQ.slice(0,-1); S.palSel=0; renderPal(); renderLedge(); ev.preventDefault(); return; }
+    if (k.length===1 && !ev.ctrlKey && !ev.metaKey){ S.palQ+=k; S.palSel=0; renderPal(); renderLedge(); ev.preventDefault(); return; }
+    return;
+  }
+  if ((ev.ctrlKey||ev.metaKey) && (k==='k'||k==='K')){ S.pal=true; S.palQ=''; S.palSel=0; render(); ev.preventDefault(); return; }
+  if (k==='?' ){ raiseLedge(!S.ledgeUp); render(); ev.preventDefault(); return; }
+  if (k==='Escape'){ if(S.inLedge){S.inLedge=false;} else if(S.ledgeUp){S.ledgeUp=false;} render(); ev.preventDefault(); return; }
+  if (k==='Tab'){ const i=SECTIONS.findIndex(x=>x.id===S.sec);
+    S.sec=SECTIONS[(i+(ev.shiftKey?-1:1)+SECTIONS.length)%SECTIONS.length].id;
+    S.tab=0; S.railFocus=false; S.inLedge=false; S.focus=firstRow(); render(); ev.preventDefault(); return; }
+  if (k==='PageDown'||k==='PageUp'){ const s=sect();
+    S.tab=Math.min(s.subtabs.length-1,Math.max(0,S.tab+(k==='PageDown'?1:-1)));
+    S.focus=firstRow(); S.inLedge=false; render(); ev.preventDefault(); return; }
+
+  if (S.sec==='log'){
+    if (k==='ArrowDown'){ S.logSel=Math.min(LOG.length-1,S.logSel+1); S.railFocus=false; render(); ev.preventDefault(); }
+    if (k==='ArrowUp'){ S.logSel=Math.max(0,S.logSel-1); S.railFocus=false; render(); ev.preventDefault(); }
+    return;
+  }
+
+  /* Ctrl+↓ steps focus down INTO the Ledge; Esc brings it back. Not a nav
+     level — the breadcrumb gains a segment but the screen does not change. */
+  if (ev.ctrlKey && k==='ArrowDown'){
+    const e=current();
+    if (e&&e.expert&&e.expert.length){ raiseLedge(true); S.inLedge=true; S.ledgeFocus=e.expert[0]; render(); }
+    ev.preventDefault(); return;
+  }
+  const rows = rowsOf(scr());
+  if (S.inLedge){
+    const host=REG[S.focus], ex=host?host.expert||[]:[];
+    const i=ex.indexOf(S.ledgeFocus);
+    if (k==='ArrowDown'){ S.ledgeFocus=ex[Math.min(ex.length-1,i+1)]; render(); ev.preventDefault(); return; }
+    if (k==='ArrowUp'){ if(i<=0){S.inLedge=false;} else S.ledgeFocus=ex[i-1]; render(); ev.preventDefault(); return; }
+    if (k==='ArrowLeft'||k==='ArrowRight'){ adjust(REG[S.ledgeFocus], k==='ArrowRight'?1:-1); render(); ev.preventDefault(); return; }
+    return;
+  }
+  if (k==='ArrowDown'||k==='ArrowUp'){
+    S.railFocus=false;
+    const i=rows.findIndex(e=>e.id===S.focus);
+    const n=Math.min(rows.length-1,Math.max(0,i+(k==='ArrowDown'?1:-1)));
+    if (rows[n]) S.focus=rows[n].id;
+    render(); ev.preventDefault(); return;
+  }
+  if (k==='ArrowLeft'||k==='ArrowRight'){
+    const e=current(); if (e){ adjust(e,k==='ArrowRight'?1:-1); render(); }
+    ev.preventDefault(); return;
+  }
+});
+
+/* ---- demo controls ------------------------------------------------------- */
+document.querySelectorAll('#demo [data-scale]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#demo [data-scale]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); const k=parseFloat(b.dataset.scale);
+  REG['cfg.scale'].value=k; setScale(k); render();
+});
+const hueEl=document.getElementById('hue');
+hueEl.oninput=()=>{ REG['cfg.hue'].value=+hueEl.value;
+  document.documentElement.style.setProperty('--hue',hueEl.value);
+  document.getElementById('huev').textContent=hueEl.value; renderRail(); renderLedge(); };
+document.getElementById('bg').onclick=()=>{ G=(G+1)%3;
+  document.getElementById('game').className='g'+G; render(); };
+document.getElementById('ledgebtn').onclick=e=>{ raiseLedge(!S.ledgeUp);
+  e.target.classList.toggle('on',S.ledgeUp); render(); };
+document.getElementById('coachx').onclick=()=>document.getElementById('coach').classList.add('gone');
+document.getElementById('palbtn').onclick=()=>{ S.pal=true; S.palQ=''; S.palSel=0; render(); };
+document.getElementById('palwrap').querySelector('.scr').onclick=()=>{ S.pal=false; render(); };
+</script>
+</body>
+</html>
