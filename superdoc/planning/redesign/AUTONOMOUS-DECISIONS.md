@@ -12,6 +12,45 @@ cheap.
 
 ## 2026-08-23
 
+### D10 · The implementation is phased, coexists with the old UI behind a ConVar, and only flips at the end
+
+**Baseline before starting:** master at `c108ee4`, build clean, **64/64 tests**, 7,713 lines in the
+files the rework touches (`Chrome.cpp` 1627, `Widgets.cpp` 942, `FpsDisplay.cpp` 2469, the five
+`Panel*.cpp` 2675).
+
+**Chose** five phases, each independently buildable and testable, with the new UI behind a ConVar
+so both exist side by side until the last phase:
+
+| | Phase | Ships |
+|---|---|---|
+| **P1** | Kit foundation | tokens, registry, row grammar, control atoms — new files, nothing wired up |
+| **P2** | Shell | rail / sheet / inspector regions, behind `overlay.e2`, initially hosting existing panels verbatim |
+| **P3** | Areas | one area per commit: Display, Shaders, Audio, Config, Monitor, Log |
+| **P4** | Palette | registry-driven search, `Ctrl+K` |
+| **P5** | Removal | delete dock, floating windows and dead widget paths; flip the default |
+
+**Rejected:** a single big-bang replacement, and porting panels before the kit exists.
+
+**Why the ConVar matters more than it looks.** It means every phase is shippable and reversible,
+the two UIs can be compared directly on the same build, and a phase that turns out wrong costs one
+revert rather than a rewrite. It also lets the user see progress mid-flight rather than only at the
+end. E2's own migration plan reached the same conclusion independently — its PR 1 hosts existing
+panels inside the new shell.
+
+**Why one area per commit in P3.** These panels have already lost features to a careless merge
+once (#29's colour controls nearly vanished when #40 restructured the same file). One area per
+commit keeps each diff reviewable and each regression bisectable.
+
+**Two constraints that hold throughout**, both from rules this user has stated repeatedly:
+- **64/64 tests stay green at every commit.** Config round-tripping is already covered by tests
+  (`tests/test_config.cpp`); the rework must not weaken that.
+- **Existing configs keep loading, and nothing is silently rewritten.** If the registry changes how
+  a setting is addressed, the on-disk key does not change with it.
+
+**The FpsDisplay caveat:** it is 2,469 lines and does two jobs — the HUD drawn over the game, and
+the System Monitor settings panel. **Only the settings half moves.** The HUD is not part of this
+redesign and must come out of P3 behaving exactly as it does today.
+
 ### D5–D9 · The five open questions from `INCONSISTENCIES.md` §F
 
 The mockup agent deliberately left five design calls rather than choosing silently. All five are
