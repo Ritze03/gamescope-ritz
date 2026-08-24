@@ -157,6 +157,26 @@ too, where it previously sat at a fixed 14% down. Same widget, same solver; D25 
 described that rectangle as "the rectangle the panel is centred inside", so this makes the
 code match what was written.
 
+**Measured on the real launcher**, over four different result counts per scale (empty
+query → the full 9, two filtering queries, and one matching nothing), on a 1920×1080
+surface. The panel's top border was read out of the screenshots; only the *vertical*
+result is claimed:
+
+| `display_scale` | query line's y, over 4 result counts | solver says | panel heights seen |
+|---|---|---|---|
+| 0.5× | **432**, unchanged | 432.5 | 214 → 73 |
+| 1.0× | **325**, unchanged | 325.0 | 429 → 147 |
+| 2.0× | **109**, unchanged | 110.0 | 859 → 295 |
+
+The query line does not move; the panel's height is the only thing that does, and it
+changes downward. On this surface nine rows still fit at 2.0× (860 ≤ 1032 usable), so the
+non-fitting branches are covered by unit tests instead — a 600px-high surface (drops to
+four rows, still centred) and a 250px-high one (`bFits` false, top-anchored).
+
+Six tests in `[overlay_ui]` pin the property. They assert the **negative** — the top edge
+is equal across match counts — rather than that it equals some constant: a test checking
+`y == 325` would pass just as happily on a version that recentres on every keystroke.
+
 *Cheap to reverse:* one function, and the caller that reads `panel.flTop`.
 
 ---
