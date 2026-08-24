@@ -883,6 +883,40 @@ namespace gamescope::ui
 		}
 	}
 
+	// D25. The same taxonomy AdjustValue()'s switch encodes, asked as a
+	// question instead of performed. Kept immediately below it, and pinned to
+	// it by test, because two copies of a taxonomy in different files is
+	// exactly how the Position Grid's two call sites drifted (D15.1).
+	bool CanAdjust( const Adjustable &adj )
+	{
+		if ( adj.pBind == nullptr || !adj.pBind->IsBound() )
+			return false;
+		if ( IsReadOnly( adj.eKind ) )
+			return false;
+
+		switch ( adj.eKind )
+		{
+			case Kind::Switch:
+			case Kind::Slider:
+			case Kind::Stepper:
+				return true;
+
+			// An empty option list has nothing to step through, and the
+			// arrow would be a dead key rather than a refused one.
+			case Kind::Choice:
+				return adj.pOptions != nullptr && !adj.pOptions->empty();
+
+			// A packed colour is not an ordered scalar -- see the Composite
+			// case above for why. Anchor, Hue, Strip and Graph are.
+			case Kind::Composite:
+				return adj.eComposite != CompositeKind::Color;
+
+			// Text, Bank, Action: no ordering an arrow could follow.
+			default:
+				return false;
+		}
+	}
+
 	// =====================================================================
 	//  Sinks
 	// =====================================================================

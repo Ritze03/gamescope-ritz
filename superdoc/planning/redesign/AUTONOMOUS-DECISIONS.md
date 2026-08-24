@@ -190,6 +190,136 @@ toast now advertises the new primary binding instead.
 *Cheap to reverse:* the bindings are one function in `wlserver.cpp`; the three input fixes are
 each a few lines and are pinned by tests.
 
+## 2026-08-24 (D25 — the launcher stands on its own)
+
+### D25 · Left Ctrl + Right Ctrl opens the launcher ALONE; Enter is what opens the shell
+
+The user asked: *"Can we make it, so the LCtrl+RCtrl keybind only opens the Launcher Style UI
+and not the clickable one?"*
+
+D22.2 shipped the binding as `SetVisible(true)` **then** `RequestPalette()`, so the rail, the
+sheet and the inspector came up underneath the palette every time. The user asked for one
+setting and got the whole settings surface — which is exactly what keeping direction B as a
+*feature* rather than as the entire GUI was meant to avoid (*"I definitely want B, but rather
+as a feature, than the entire GUI"*). B's premise is that mid-game you want **one** setting,
+not a tour; opening the tour to reach the one defeats it.
+
+**Chosen.** Two destinations, not two routes to one:
+
+| binding | result |
+| --- | --- |
+| **Right Ctrl** (tap) | the full clickable overlay — unchanged |
+| **Left Ctrl + Right Ctrl**, shell closed | the **launcher**: the palette alone over the game |
+| **Left Ctrl + Right Ctrl**, shell already open | the palette over the shell — unchanged |
+
+The third row is deliberate and was called out in the brief: over an already-open shell nothing
+is being dragged in that the user did not already have on screen, so today's behaviour is right
+there.
+
+**How it is drawn.** `shell::Draw()` takes an **early return** into a launcher-only branch that
+opens one full-surface `##e2launcher` window and calls `DrawPalette()` into it. It no longer
+pulls in: the slab, the rail, the sheet (head/body/foot), the inspector, the drawer, the spine,
+the mode strip, the dropdown list, the explain page, `RunKeyboard()`, and the ladder/region
+solve. A return rather than `if (!launcher)` guards threaded through 200 lines of region
+drawing — a guard is the thing a future region gets added without, and then quietly reappears
+behind the launcher. This makes "the keybind does not pull the shell in" a property of the
+control flow instead of an invariant somebody has to keep re-checking.
+
+Two presentational differences follow from there being nothing behind it: **no scrim** (a scrim
+with no shell under it is a hard-edged dark rectangle on the game, and dimming the game is the
+opposite of what a launcher is for), and it is centred on the **surface** rather than inside a
+slab that is not being drawn.
+
+#### The question the brief refused to let us dodge: results that cannot be adjusted in place
+
+Most results *can* be stepped from the list. Some cannot — a packed colour, a text field, a
+bank, an action, a read-only Facts or Meter row. Their controls do not fit a 38 px result row
+and the launcher does not grow one.
+
+**Chosen: Enter on such a row opens the full overlay at that row.** This is the teamlead's
+read and it is the right one. Reasons, in order of weight:
+
+1. **Enter already meant exactly this.** "Jump & select" is SPEC §8.2's Enter. The launcher
+   does not invent a second Enter, so there is no "sometimes Enter does X, sometimes Y".
+2. **The complaint was about the KEYBIND, not about the shell existing.** A keybind dragging
+   the shell in unasked is what the user objected to. An Enter the user pressed, on a row they
+   chose, is a different act.
+3. **Reachability.** SPEC §6.3 is the whole reason this index exists — every setting stays
+   reachable from one search.
+
+**Rejected — the launcher handles everything inline, expanding a row.** Purer, and genuinely
+more work, but the honest problem is that an OKLCH picker or a text field *wants* space; an
+expanding row is a small shell with extra steps.
+
+**Rejected — non-adjustable results shown but not actionable.** A dead result is a puzzle, and
+a legend promising "left/right adjust in place" over a row that cannot be adjusted is an
+instruction that does nothing — the same defect class as a control that renders and does
+nothing (#25, #68).
+
+**And it is stated on the row, not left to be discovered.** A new predicate `ui::CanAdjust()`
+(next to `AdjustValue()`, pinned to it by test) drives three things at once: the highlighted
+row shows **`‹ ›` chevrons** when it can be stepped and **`open`** when it cannot, and the
+legend switches between *"left/right adjust in place · Enter jump & select"* and *"Enter open
+in the full overlay"*.
+
+`CanAdjust()` asks the **taxonomy** question — kind, read-only-ness, binding present — and
+deliberately reads nothing out of the binding. Deciding adjustability by *trying* the step
+would mislabel every row sitting on an end stop (a maxed slider, a switch already on, a choice
+on its last option), which is a large share of what a user is actually looking at.
+
+#### Escape, and who owns closing the overlay
+
+**Escape from the standalone launcher returns to the game.** It does not uncover a shell,
+because opening one is the behaviour being removed. `RunPaletteKeyboard()` only clears the open
+bit; the launcher branch is what calls `SettingsOverlay_SetVisible(false)`. Verified end to
+end, and the proof is accidental and total: in the acceptance run a *second* Escape sent
+straight after made **vkcube quit**, which it only does when the key reaches the game.
+
+A click on the game around the panel dismisses it too, the way clicking off any launcher does
+— and *only* in launcher mode, because with a shell behind it that click belongs to the shell.
+
+#### Input capture in launcher-only mode — checked, and deliberately NOT reduced
+
+The brief asked whether a launcher-only mode should capture less. It captures the **same**
+keyboard and pointer as the shell, and that is a decision rather than an omission: the launcher
+is a search field, so it needs the keyboard, and it must be clickable, so it needs the pointer.
+There is no third thing to give back. What actually changes for the game is that it stays
+**fully visible and undimmed** around a panel covering roughly a third of the screen, and one
+key returns it — which is the part of "the game carries on" that was available to give.
+
+One consequence worth stating: while the launcher is up, a **Right Ctrl tap closes it** rather
+than promoting it to the full overlay, because Right Ctrl toggles the overlay and the overlay
+is showing something. Two presses to get from the launcher to the shell. Predictable, and Enter
+already gives the one-press route to a specific row.
+
+`cv_settings_overlay_visible`'s callback now calls `shell::NotifyOverlayHidden()` on any
+transition to false, so anything that hides the layer — the Right Ctrl tap, Ctrl+Shift+O,
+`gamescopectl` — drops the launcher state with it. Without it, the next open would be a
+launcher nobody asked for.
+
+#### Also in this change
+
+* **The palette is now clickable** — click a row to highlight it, click a chevron to step it,
+  click `open` to jump. It stays keyboard-*driven*, which is correct and which the user said
+  outright; "keyboard-driven" had been quietly doing the work of "has no pointer contract at
+  all", and the mouse works now (D24). Every key the legend advertises has a pointer equivalent
+  and nothing else does. ImGui's `NavEnableKeyboard` is **not** reintroduced — the launcher
+  branch turns it off exactly as `Draw()` does (D22.1).
+* A click on a row is **not** "activate". A click that teleported you into the full overlay
+  would make the mouse the one input that cannot use the launcher's headline feature.
+* **Bug found by the acceptance run:** ImGui's `MousePos` is `(-FLT_MAX, -FLT_MAX)` until the
+  first motion event, and that is "outside the panel" by any rect test — so the **first** click
+  of a session dismissed the launcher wherever it was aimed. The dismissal is now guarded on
+  the pointer actually being somewhere on the surface.
+* The startup toast advertises **both** bindings on two aligned lines, the launcher's dimmer.
+  Ctrl+Shift+O stays unmentioned for D22's reason: it is a third route to the *first*
+  destination.
+
+**Config keys and formats: unchanged.** No new ConVar, no new config key.
+
+*Cheap to reverse:* one early-return block in `Draw()`, one branch in `wlserver.cpp`, and
+`CanAdjust()`. Deleting the branch restores D22.2's behaviour exactly.
+
 ---
 
 ## 2026-08-23 (P5 — the deletion, and the flag)

@@ -399,12 +399,42 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 		if ( ( normalizedKeysym == XKB_KEY_Control_R && bLeftCtrlHeld ) ||
 		     ( normalizedKeysym == XKB_KEY_Control_L && bRightCtrlHeld ) )
 		{
-			// The palette is drawn INSIDE the overlay, so it needs the
-			// overlay open -- and SetVisible rather than Toggle, because
-			// toggling would close the overlay in the very common case where
-			// the shortcut is used while it is already open.
+			// D25: THIS BINDING NO LONGER OPENS THE SHELL.
+			//
+			// It used to call SetVisible(true) and then ask for the palette,
+			// which meant the rail, the sheet and the inspector came up
+			// underneath it every time -- the user asked for one setting and
+			// got the whole settings surface, which is precisely what the
+			// launcher was kept as a feature to avoid.
+			//
+			// The two situations are genuinely different and get different
+			// answers:
+			//
+			//   * shell already open -- the palette over the shell, exactly
+			//     as before. Nothing is being dragged in that the user did
+			//     not already have on screen.
+			//   * otherwise -- the LAUNCHER: the palette alone, over the
+			//     game, and Esc goes straight back to the game.
+			//
+			// LauncherOnlyActive() is what tells the two apart, because
+			// settings_overlay_visible is true in both cases -- the launcher
+			// needs the overlay's layer and its input capture just as much as
+			// the shell does. Without it, pressing the binding a second time
+			// while the launcher was up would read as "the shell is open" and
+			// summon the shell.
+			const bool bShellOpen = gamescope::SettingsOverlay_IsCapturingInput() &&
+			                        !gamescope::ui::shell::LauncherOnlyActive();
+
+			// Either way the overlay's layer has to be drawing and capturing:
+			// the launcher is a search field, so it needs the keyboard, and
+			// it is clickable, so it needs the pointer. SetVisible rather
+			// than Toggle, because toggling would close the overlay in the
+			// very common case where the shortcut is used while it is open.
 			gamescope::SettingsOverlay_SetVisible( true );
-			gamescope::ui::shell::RequestPalette();
+			if ( bShellOpen )
+				gamescope::ui::shell::RequestPalette();
+			else
+				gamescope::ui::shell::RequestLauncher();
 
 			// The palette consumed this gesture, so releasing Right Ctrl
 			// afterwards must NOT also toggle the overlay underneath it.

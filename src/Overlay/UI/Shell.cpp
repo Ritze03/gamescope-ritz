@@ -332,6 +332,29 @@ namespace gamescope::ui::shell
 		// shell::RequestPalette() in Shell.h for why it is a request.
 		std::atomic<bool> s_bPaletteRequested{ false };
 
+		// D25: the LAUNCHER -- the same palette, drawn alone over the game.
+		//
+		// One bit, deliberately, and it is a MODE OF THE PALETTE rather than a
+		// second surface: the launcher IS the palette, and giving it its own
+		// query string, its own highlight and its own draw path would be the
+		// two-code-paths mistake CommandPalette.h's header comment already
+		// refuses for browse-versus-search. Everything below reads
+		// s_bPaletteOpen; this only changes what is drawn BEHIND it and what
+		// Esc gives back.
+		bool s_bLauncherOnly = false;
+
+		// The published mirror of the above, for wlserver -- which decides on
+		// its own thread whether Left+Right Ctrl means "launcher" or "palette
+		// over the shell" and cannot read s_bLauncherOnly without racing the
+		// frame that is drawing it.
+		std::atomic<bool> s_bLauncherOnlyPublished{ false };
+
+		std::atomic<bool> s_bLauncherRequested{ false };
+
+		// The overlay was hidden from outside the shell. See
+		// shell::NotifyOverlayHidden().
+		std::atomic<bool> s_bOverlayHiddenNotice{ false };
+
 		// =================================================================
 		//  The console surface
 		// =================================================================
@@ -3598,6 +3621,23 @@ namespace gamescope::ui::shell
 
 			s_bPaletteOpen = false;
 			s_eFocusRegion = Region::Sheet;
+
+			// D25: Enter is what promotes the LAUNCHER to the full shell.
+			//
+			// This is the answer to "what happens when a result cannot be
+			// adjusted in place". A composite, a text field, a bank -- their
+			// controls do not fit a 38px result row, and the launcher does not
+			// grow one. Enter takes you to the row in the full overlay, which
+			// is exactly what Enter already meant here ("jump & select"), so
+			// the launcher does not invent a second Enter.
+			//
+			// It costs the launcher's purity, and that is the right trade: the
+			// user's complaint was that the KEYBIND dragged the shell in
+			// unasked. An Enter the user pressed on a row they chose is not
+			// that. The alternative -- showing a result you cannot act on --
+			// turns a dead row into a puzzle, and the Reachability Law (SPEC
+			// §6.3) is the whole reason this index exists.
+			s_bLauncherOnly = false;
 		}
 
 		// The query field, hand-rolled on io.InputQueueCharacters.
@@ -3919,7 +3959,30 @@ namespace gamescope::ui::shell
 			ImGui::PopStyleVar( 2 );
 		}
 
-		void DrawPalette( const Rect &rcSlab, const std::vector<PaletteItem> &items )
+		// D25: can the highlighted result be stepped from the list itself, or
+		// does it need the full overlay? One lookup, used by the legend, by
+		// the row's own affordance and by the mouse, so the three cannot
+		// disagree about a row.
+		bool PaletteItemAdjustable( const std::string &sId )
+		{
+			if ( const Entry *pE = Reg().FindEntry( sId ) )
+				return CanAdjust( Adjustable::Of( *pE ) );
+			if ( const Parameter *pP = Reg().FindParam( sId ) )
+				return CanAdjust( Adjustable::Of( *pP ) );
+			return false;
+		}
+
+		// D25: `rcFrame` is the rectangle the panel is centred inside, and
+		// `bLauncher` says whether there is a shell behind it.
+		//
+		// The launcher passes the WHOLE SURFACE and suppresses the scrim. Both
+		// follow from there being nothing behind it to dim or to be measured
+		// against: a scrim with no shell under it is a hard-edged dark
+		// rectangle floating on the game, and centring inside a slab that is
+		// not drawn would put the launcher off-centre on screen for no visible
+		// reason.
+		void DrawPalette( const Rect &rcSlab, const std::vector<PaletteItem> &items,
+		                  bool bLauncher )
 		{
 			const float flW    = std::min( Px( 820.0f ), ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
 			const float flQH   = Px( 52.0f );
@@ -3967,8 +4030,15 @@ namespace gamescope::ui::shell
 			// A scrim, so the palette reads as ABOVE the shell rather than as
 			// another region of it. It is also what makes the 2px accent
 			// edges behind it stop competing for attention.
-			pDraw->AddRectFilled( ImVec2( rcSlab.x0, rcSlab.y0 ), ImVec2( rcSlab.x1, rcSlab.y1 ),
-			                      IM_COL32( 0, 0, 0, 150 ) );
+			//
+			// D25: not in launcher mode. There is no shell to separate it
+			// from, and dimming the game is the opposite of what a launcher is
+			// for -- you are looking at the game while you change the setting.
+			if ( !bLauncher )
+			{
+				pDraw->AddRectFilled( ImVec2( rcSlab.x0, rcSlab.y0 ), ImVec2( rcSlab.x1, rcSlab.y1 ),
+				                      IM_COL32( 0, 0, 0, 150 ) );
+			}
 
 			// The panel is filled TWICE, deliberately. Role::Surface is
 			// rgba(9,10,12,.88) -- the slab's own translucency, which is
@@ -4050,6 +4120,28 @@ namespace gamescope::ui::shell
 			// ---- results ---------------------------------------------------
 			const Rect rcList = { rc.x0, rcQ.y1, rc.x1, rcQ.y1 + flListH };
 
+			// D25: THE PALETTE IS NOW CLICKABLE.
+			//
+			// It stays keyboard-DRIVEN -- it is a launcher, and the user said
+			// so outright -- but "keyboard-driven" was being used to mean "has
+			// no pointer contract at all", and the mouse works now. So every
+			// key the legend advertises has a pointer equivalent here and
+			// nothing else does: click a row to highlight it, click a chevron
+			// to step it, click `open` to go to it in the full overlay.
+			//
+			// Hit-tested against our own rects rather than through
+			// InvisibleButton, for the same reason DrawDropdownList is: the
+			// chevrons sit INSIDE the row's own rect, and two overlapping
+			// ImGui items need overlap flags and a submission order to
+			// disambiguate, where two rect tests need neither. The pointer
+			// state is read once, here, and applied after the loop so no
+			// action mutates the list it is being chosen from.
+			const ImVec2 vMouse  = ImGui::GetIO().MousePos;
+			const bool   bClick  = ImGui::IsMouseClicked( ImGuiMouseButton_Left );
+			int  nClickRow  = -1;   // row the pointer picked
+			int  nClickStep = 0;    // -1 / +1 from a chevron
+			bool bClickOpen = false;
+
 			if ( nShown == 0 )
 			{
 				Label( { rcList.x0 + flPad, rcList.y0, rcList.x1 - flPad, rcList.y1 },
@@ -4076,12 +4168,20 @@ namespace gamescope::ui::shell
 
 					const Rect rcRow = { rcList.x0, rcList.y0 + flRowH * (float)i,
 					                     rcList.x1, rcList.y0 + flRowH * (float)( i + 1 ) };
-					const bool bOn = ( nIdx == s_nPaletteSel );
+					const bool bOn    = ( nIdx == s_nPaletteSel );
+					const bool bHover = rcRow.Contains( vMouse.x, vMouse.y );
 					if ( bOn )
 					{
 						Fill( rcRow, Accent( 0.14f ) );
 						Fill( { rcRow.x0, rcRow.y0, rcRow.x0 + Px( 2.0f ), rcRow.y1 },
 						      Col( Role::AccentBase ) );
+					}
+					else if ( bHover )
+					{
+						// The same 6% wash the dropdown's hover uses, so
+						// "the pointer is on this" reads identically
+						// everywhere in the shell.
+						Fill( rcRow, palette::White( 0.06f ) );
 					}
 
 					// D5: the path column is the CONFIG KEY. See SPEC §2.6 --
@@ -4101,10 +4201,19 @@ namespace gamescope::ui::shell
 
 					const float flValW  = Px( 120.0f );
 					const float flChipW = it.bParam ? Px( 52.0f ) : 0.0f;
+
+					// D25: the action zone -- the pointer's half of the
+					// legend. Its width is reserved on EVERY row, not only
+					// the one that draws it, so the label column does not
+					// reflow as the highlight moves down the list.
+					const float flActW = Px( 62.0f );
+					const float flActR = rcRow.x1 - flPad - flValW - Px( tok::kS );
+					const Rect  rcAct  = { flActR - flActW, rcRow.y0, flActR, rcRow.y1 };
+
 					// The chip sits between the label and the value with a
 					// gap on both sides, so a wide value cannot collide with
 					// it the way a shared edge would let it.
-					const float flChipR = rcRow.x1 - flPad - flValW - Px( tok::kS );
+					const float flChipR = rcAct.x0 - Px( tok::kS );
 					Label( { rcRow.x0 + flPad + flPathW + Px( tok::kM ), rcRow.y0,
 					         flChipR - flChipW - Px( tok::kS ), rcRow.y1 },
 					       TypeRole::Label,
@@ -4130,16 +4239,129 @@ namespace gamescope::ui::shell
 						Label( { rcRow.x1 - flPad - flValW, rcRow.y0, rcRow.x1 - flPad, rcRow.y1 },
 						       TypeRole::Value, Col( Role::AccentValue ), sVal.c_str(), TextAlign::Right );
 					}
+
+					// D25: the action zone, drawn for the row the pointer or
+					// the keyboard is on. Two chevrons when the row can be
+					// stepped from here, an `open` when it cannot -- which is
+					// the whole answer to "what does a result you can't
+					// adjust in place do", made visible on the row itself
+					// rather than left for the user to discover by pressing
+					// an arrow and watching nothing happen.
+					if ( bOn || bHover )
+					{
+						const bool  bAdj = PaletteItemAdjustable( it.sId );
+						const ImU32 colA = bOn ? Col( Role::AccentValue ) : Col( Role::TextMeta );
+
+						if ( bAdj )
+						{
+							const float flHalf = rcAct.Width() * 0.5f;
+							const Rect  rcDec { rcAct.x0, rcAct.y0, rcAct.x0 + flHalf, rcAct.y1 };
+							const Rect  rcInc { rcAct.x0 + flHalf, rcAct.y0, rcAct.x1, rcAct.y1 };
+							const float flCy = ( rcAct.y0 + rcAct.y1 ) * 0.5f;
+
+							const bool bHovDec = rcDec.Contains( vMouse.x, vMouse.y );
+							const bool bHovInc = rcInc.Contains( vMouse.x, vMouse.y );
+							if ( bHovDec ) Fill( rcDec, palette::White( 0.08f ) );
+							if ( bHovInc ) Fill( rcInc, palette::White( 0.08f ) );
+
+							glyph::Chevron( ImVec2( ( rcDec.x0 + rcDec.x1 ) * 0.5f, flCy ),
+							                Px( 14.0f ), glyph::Dir::Left, colA );
+							glyph::Chevron( ImVec2( ( rcInc.x0 + rcInc.x1 ) * 0.5f, flCy ),
+							                Px( 14.0f ), glyph::Dir::Right, colA );
+
+							if ( bClick && bHovDec ) { nClickRow = nIdx; nClickStep = -1; }
+							if ( bClick && bHovInc ) { nClickRow = nIdx; nClickStep = +1; }
+						}
+						else
+						{
+							if ( rcAct.Contains( vMouse.x, vMouse.y ) )
+								Fill( rcAct, palette::White( 0.08f ) );
+							Label( rcAct, TypeRole::Meta, colA, "open", TextAlign::Center );
+							if ( bClick && rcAct.Contains( vMouse.x, vMouse.y ) )
+							{
+								nClickRow  = nIdx;
+								bClickOpen = true;
+							}
+						}
+					}
+
+					// A click anywhere else on the row just moves the
+					// highlight. Deliberately NOT "click to activate": the
+					// launcher's headline behaviour is adjusting in place,
+					// and a click that teleported you into the full overlay
+					// would make the mouse the one input that cannot use it.
+					if ( bClick && bHover && nClickRow != nIdx )
+						nClickRow = nIdx;
 				}
 			}
 
+			// D25: the pointer's actions, applied after the list has been
+			// drawn -- PaletteJump() rebuilds the shell's selection and would
+			// otherwise run while the loop was still walking `items`.
+			if ( nClickRow >= 0 )
+			{
+				s_nPaletteSel = std::clamp( nClickRow, 0, nShown - 1 );
+				const std::string sId = items[ (size_t)s_nPaletteSel ].sId;
+
+				if ( nClickStep != 0 )
+				{
+					// The SAME adjuster the arrow keys and the sheet use.
+					if ( const Entry *pE = Reg().FindEntry( sId ) )
+						AdjustValue( Adjustable::Of( *pE ), nClickStep, ImGui::GetIO().KeyShift );
+					else if ( const Parameter *pP = Reg().FindParam( sId ) )
+						AdjustValue( Adjustable::Of( *pP ), nClickStep, ImGui::GetIO().KeyShift );
+				}
+				else if ( bClickOpen )
+				{
+					PaletteJump( sId );
+				}
+			}
+			// D25: in launcher mode a click on the game AROUND the panel is a
+			// dismissal, the way clicking off any launcher is. Not done when
+			// there is a shell behind it -- there the click belongs to the
+			// shell's own surface, and swallowing it would be a second,
+			// invisible meaning for a click on a row.
+			//
+			// GUARDED ON THE POINTER ACTUALLY BEING SOMEWHERE. ImGui's MousePos
+			// is (-FLT_MAX, -FLT_MAX) until the first motion event, and that
+			// position is "outside the panel" by any rect test -- so without
+			// this the FIRST click of a session dismissed the launcher no
+			// matter where it was aimed. Caught in the acceptance run: a click
+			// injected straight after opening, with no motion before it, closed
+			// the launcher instead of hitting the row under the cursor.
+			else if ( bLauncher && bClick &&
+			          vMouse.x >= rcSlab.x0 && vMouse.x <= rcSlab.x1 &&
+			          vMouse.y >= rcSlab.y0 && vMouse.y <= rcSlab.y1 &&
+			          !rc.Contains( vMouse.x, vMouse.y ) )
+			{
+				s_bPaletteOpen = false;
+			}
+
 			// ---- legend ----------------------------------------------------
+			// D25: the legend describes THE HIGHLIGHTED ROW, not the palette
+			// in the abstract. A fixed legend promising "left/right adjust in
+			// place" over a row that cannot be adjusted is worse than no
+			// legend: it is an instruction that does nothing, which is the
+			// same defect class as a control that renders and does nothing.
+			//
+			// Esc's wording changes too, because in launcher mode Esc gives
+			// the GAME back rather than uncovering a shell.
 			const Rect rcFoot = { rc.x0, rc.y1 - flFootH, rc.x1, rc.y1 };
 			HLine( rc.x0, rc.x1, rcFoot.y0, Col( Role::Line ) );
+
+			const bool bSelAdjustable =
+				nShown > 0 && s_nPaletteSel >= 0 && s_nPaletteSel < nShown &&
+				PaletteItemAdjustable( items[ (size_t)s_nPaletteSel ].sId );
+
+			std::string sLegend = "up/down move    ";
+			if ( bSelAdjustable )
+				sLegend += "left/right adjust in place    Enter jump & select    ";
+			else if ( nShown > 0 )
+				sLegend += "Enter open in the full overlay    ";
+			sLegend += bLauncher ? "Esc back to the game" : "Esc dismiss";
+
 			Label( { rcFoot.x0 + flPad, rcFoot.y0, rcFoot.x1 - flPad, rcFoot.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ),
-			       "up/down move    left/right adjust in place    "
-			       "Enter jump & select    Esc dismiss" );
+			       TypeRole::Meta, Col( Role::TextMeta ), sLegend.c_str() );
 		}
 
 		// =================================================================
@@ -4834,6 +5056,27 @@ namespace gamescope::ui::shell
 		s_bPaletteRequested.store( true, std::memory_order_release );
 	}
 
+	void RequestLauncher()
+	{
+		s_bLauncherRequested.store( true, std::memory_order_release );
+	}
+
+	bool LauncherOnlyActive()
+	{
+		return s_bLauncherOnlyPublished.load( std::memory_order_acquire );
+	}
+
+	void NotifyOverlayHidden()
+	{
+		s_bOverlayHiddenNotice.store( true, std::memory_order_release );
+		// Published immediately as well as through the frame-consumed notice.
+		// wlserver reads this to decide what Left+Right Ctrl means, and the
+		// overlay can be hidden and re-opened between two frames -- leaving
+		// the mirror true until the next Draw() would make the reopen a
+		// launcher the user never asked for.
+		s_bLauncherOnlyPublished.store( false, std::memory_order_release );
+	}
+
 	void Draw()
 	{
 		// Issue #79's fix for this path -- see Palette.h. Without it the
@@ -4853,16 +5096,117 @@ namespace gamescope::ui::shell
 		s_flSurfaceW.store( io.DisplaySize.x, std::memory_order_relaxed );
 		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
 
+		// D25: the overlay was hidden from outside the shell (a Right Ctrl
+		// tap, Ctrl+Shift+O, gamescopectl). Consumed FIRST, before either
+		// request below, so a hide and a re-open landing between two frames
+		// resolves in the order they actually happened.
+		if ( s_bOverlayHiddenNotice.exchange( false, std::memory_order_acq_rel ) )
+		{
+			s_bLauncherOnly = false;
+			s_bPaletteOpen  = false;
+		}
+
 		// D22: consume a palette request from wlserver's hotkey path. Done
 		// here, before anything draws, so the palette opens on the SAME frame
 		// the request is seen rather than a frame later -- the shortcut has
 		// to feel like the key opened it.
+		//
+		// D25: two requests now, and the launcher's is consumed second so
+		// that if both somehow arrive in one frame the launcher wins -- it is
+		// the more specific ask, and it is the one with a keybind on it.
 		if ( s_bPaletteRequested.exchange( false, std::memory_order_acq_rel ) )
+		{
 			OpenPalette();
+			s_bLauncherOnly = false;
+		}
+		if ( s_bLauncherRequested.exchange( false, std::memory_order_acq_rel ) )
+		{
+			OpenPalette();
+			s_bLauncherOnly = true;
+		}
+		s_bLauncherOnlyPublished.store( s_bLauncherOnly, std::memory_order_release );
 
 		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )
 			return;
+
+		// =================================================================
+		//  D25: the launcher -- the palette ALONE, over the game
+		// =================================================================
+		// The whole of what the standalone launcher draws is below, and the
+		// entire rest of Draw() is skipped: no slab, no rail, no sheet, no
+		// inspector, no drawer, no dropdown, no spine.
+		//
+		// This is an EARLY RETURN rather than a set of `if ( !s_bLauncherOnly )`
+		// guards threaded through the shell's 200 lines of region drawing.
+		// The guards would be the version where a future region gets added
+		// without one and quietly reappears behind the launcher; a return
+		// cannot be forgotten, and it makes "the keybind does not pull the
+		// shell in" a property of the control flow rather than of an
+		// invariant somebody has to keep re-checking.
+		//
+		// What is deliberately kept from the full path: the theme load and
+		// the scale push above (the launcher is the same product), ImGui's
+		// nav disable (D18 -- nav would eat the arrow keys that adjust in
+		// place, and its NavDisableMouseHover would suppress the pointer this
+		// commit just gave the list), and SyncDynamicAreas() (the launcher
+		// searches the same live registry, so a dynamic area must resync
+		// before anything reads an Entry out of it).
+		if ( s_bLauncherOnly )
+		{
+			ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+			Reg().SyncDynamicAreas();
+
+			std::vector<PaletteItem> launcherItems = Build( Reg(), s_sPaletteQuery );
+			RunPaletteKeyboard( launcherItems );
+
+			// Esc (or a click off the panel) while the launcher is up gives
+			// the GAME back -- it does not uncover a shell, because there is
+			// no shell to uncover and opening one would be the exact
+			// behaviour this change exists to remove. RunPaletteKeyboard()
+			// only clears the open bit; closing the overlay is ours.
+			//
+			// PaletteJump() takes the other exit: it clears s_bLauncherOnly
+			// itself, so by the time we get here the shell is what should be
+			// drawn and this branch is not taken. That frame draws nothing --
+			// the launcher is gone and the shell has not started -- and the
+			// next one is the full overlay at the chosen row.
+			if ( !s_bPaletteOpen )
+			{
+				if ( s_bLauncherOnly )
+				{
+					s_bLauncherOnly = false;
+					s_bLauncherOnlyPublished.store( false, std::memory_order_release );
+					SettingsOverlay_SetVisible( false );
+				}
+				return;
+			}
+
+			// One top-level window over the whole surface. The launcher has
+			// no slab to sit inside, so the surface IS its frame -- which is
+			// also what centres it on screen rather than inside a rectangle
+			// that is not being drawn.
+			ImGui::SetNextWindowPos( ImVec2( 0.0f, 0.0f ) );
+			ImGui::SetNextWindowSize( io.DisplaySize );
+			ImGui::SetNextWindowFocus();
+			ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+
+			const ImGuiWindowFlags launchFlags =
+				ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+				ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoBackground;
+
+			if ( ImGui::Begin( "##e2launcher", nullptr, launchFlags ) )
+			{
+				DrawPalette( { 0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y },
+				             launcherItems, /* bLauncher = */ true );
+			}
+			ImGui::End();
+			ImGui::PopStyleVar( 2 );
+			return;
+		}
 
 		// D18: E2 implements SPEC §8.2's keyboard IN FULL -- regions, rows,
 		// adjustment, the palette, the Inspector, the mode strip. ImGui's own
@@ -5080,7 +5424,7 @@ namespace gamescope::ui::shell
 				const Rect rcBody = {
 					regions.rcBody.x0 + origin.x, regions.rcBody.y0 + origin.y,
 					regions.rcBody.x1 + origin.x, regions.rcBody.y1 + origin.y };
-				DrawPalette( rcBody, paletteItems );
+				DrawPalette( rcBody, paletteItems, /* bLauncher = */ false );
 			}
 			ImGui::End();
 			ImGui::PopStyleVar( 2 );

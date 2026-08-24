@@ -29,3 +29,6 @@ amend the entry here.
 - **gamescope_control** — the primary custom Wayland protocol interface external tools (Steam, `gamescopectl`) use to query and drive gamescope.
 - **WSI layer (FROG)** — `VkLayer_FROG_gamescope_wsi`, the Vulkan layer games load so their swapchain is redirected into gamescope's compositing pipeline.
 - **mangoapp** — gamescope's integration point for the MangoHud-style performance overlay (`src/mangoapp.cpp`).
+- **Command palette** — the searchable, ranked index over every registered Entry and Parameter (`src/Overlay/UI/CommandPalette.{h,cpp}`, drawn from `Shell.cpp`). Search with an empty query is browsing; there is no second "list everything" path.
+- **Launcher** — the command palette drawn **alone over the game**, with no shell behind it (`Left Ctrl + Right Ctrl` while the overlay is closed). The user's *"Launcher Style UI"*. Distinct from the palette drawn *over an open shell*, which is the same widget with a scrim and a different Esc. Direction B's contribution, kept as a feature rather than as the whole GUI — see AUTONOMOUS-DECISIONS D25.
+- **Shell** — the E2 settings overlay proper: slab, rail, sheet and inspector (`src/Overlay/UI/Shell.cpp`). "The full/clickable overlay" in the user's wording. The launcher is deliberately *not* part of it.
