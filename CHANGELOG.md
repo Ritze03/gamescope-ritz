@@ -44,6 +44,14 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **Sharpness is one setting again, and changing the filter resets it to 0%.** There was only
+  ever one stored sharpness — one global, one `gamescope.sharpness` key — but FSR and NIS map
+  that raw 0–20 value in *opposite* visual directions, so the percentage the UI showed jumped
+  every time the filter changed and each filter looked like it remembered its own value.
+  Carrying the percentage across the switch instead was rejected: 80% of RCAS and 80% of NIS are
+  not the same amount of sharpening, so it would silently apply a strength nobody chose for that
+  pass. Nothing on disk changed, and re-selecting the filter you are already on does not clear a
+  sharpness you just set.
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

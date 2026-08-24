@@ -38,6 +38,12 @@
 // two filters share a single raw-value meaning -- upstream
 // (ValveSoftware/gamescope#515) looked at unifying it and closed it as not
 // planned; the UI-side auto-correction below is the permanent fix.
+//
+// One sharpness, not two (2026-08-24): the storage was always single -- one
+// global, one `gamescope.sharpness` key. The flip above is what made it read
+// as two per-filter values, because the displayed percent jumped whenever the
+// filter changed. SetFilter() now resets the percent to 0 on an actual filter
+// change, which is the user's own wording for "combine them". See SetFilter().
 #include "PanelDisplay.h"
 
 #include <algorithm>
@@ -254,10 +260,44 @@ namespace gamescope
 		return (int)std::lround( nRaw * 100.0 / 20.0 );
 	}
 
+	static void SetSharpnessUiPercent( GamescopeUpscaleFilter eFilter, int nUiPercent )
+	{
+		const int nRaw = RawSharpnessFromUiPercent( eFilter, nUiPercent );
+		g_upscaleFilterSharpness = nRaw;
+		s_CachedSettings.gamescope.sharpness = nRaw;
+		QueueSave();
+	}
+
+	// Changing the filter RESETS sharpness to 0% (the user, 2026-08-24: "The
+	// FSR/NIS sharpness are individual values right now. Combine them, so it
+	// is just the sharpness (when switching between filters, it resets to
+	// 0%)").
+	//
+	// There has only ever been ONE stored sharpness -- one global
+	// (g_upscaleFilterSharpness), one config key (gamescope.sharpness). What
+	// made it *look* like two per-filter values is the direction flip
+	// documented at the top of this file: the same raw 16 reads as 80% under
+	// FSR and 20% under NIS, so the number visibly jumped every time the
+	// filter changed and each filter appeared to remember its own setting.
+	//
+	// Rejected: making the percent survive the switch (re-encode the old
+	// percent into the new filter's raw value). That keeps the two filters
+	// coupled through a number whose *meaning* differs -- 80% of RCAS and 80%
+	// of NIS are not the same amount of sharpening, and carrying one over
+	// silently applies a value the user never chose for that pass. Resetting
+	// is the one behaviour that is unambiguous at both ends, and it is what
+	// was asked for.
+	//
+	// Only on an actual change: re-selecting the current filter (a click on
+	// the already-active segment, a config push that resolves to the same
+	// value) must not wipe a sharpness the user just set.
 	static void SetFilter( GamescopeUpscaleFilter eFilter )
 	{
+		const bool bFilterChanged = ( eFilter != g_wantedUpscaleFilter );
 		g_wantedUpscaleFilter = eFilter;
 		s_CachedSettings.gamescope.filter = FilterToString( eFilter );
+		if ( bFilterChanged )
+			SetSharpnessUiPercent( eFilter, 0 ); // QueueSave()s on its own
 		QueueSave();
 	}
 
@@ -265,14 +305,6 @@ namespace gamescope
 	{
 		g_wantedUpscaleScaler = eScaler;
 		s_CachedSettings.gamescope.scaler = ScalerToString( eScaler );
-		QueueSave();
-	}
-
-	static void SetSharpnessUiPercent( GamescopeUpscaleFilter eFilter, int nUiPercent )
-	{
-		const int nRaw = RawSharpnessFromUiPercent( eFilter, nUiPercent );
-		g_upscaleFilterSharpness = nRaw;
-		s_CachedSettings.gamescope.sharpness = nRaw;
 		QueueSave();
 	}
 
@@ -534,7 +566,8 @@ namespace gamescope
 				[]{ return UiPercentFromRawSharpness( g_wantedUpscaleFilter, g_upscaleFilterSharpness ); },
 				[]( int n ) { SetSharpnessUiPercent( g_wantedUpscaleFilter, n ); } ) )
 			.Help( "Strength of gamescope's own post-upscale sharpening pass (FSR RCAS or NIS). "
-			       "Higher is crisper; too high adds ringing around high-contrast edges. This is "
+			       "Higher is crisper; too high adds ringing around high-contrast edges. One "
+			       "setting covers both filters, and changing the filter resets it to 0%. This is "
 			       "not the Shaders area's Pre-sharpen -- that one is a separate ReShade pass, runs "
 			       "before upscaling, and works with any filter. Both are real and can be combined." )
 			.Range( 0.0f, 100.0f )
