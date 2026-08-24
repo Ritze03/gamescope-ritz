@@ -3037,7 +3037,21 @@ namespace gamescope::ui::shell
 								Label( { x, y, ImMin( x + flW, rcBody.x1 - flPadX ),
 								         y + flLineH },
 								       eRole, Col( Role::TextPrimary ), line.sLead.c_str() );
-								x += flW + MeasureText( eRole, " " ).x;
+								// The gap between lead-in and sentence is drawn,
+								// not stored -- but a bullet whose lead-in is
+								// followed straight by punctuation
+								// (`- **A bold clause**, then the rest`) must
+								// NOT get one, or it renders as "clause ,
+								// then". The colon form already had its colon
+								// eaten by the parser and does need the gap.
+								const char chNext = line.sText.empty() ? '\0' : line.sText.front();
+								const bool bTightPunct =
+									chNext == ',' || chNext == '.' || chNext == ';' ||
+									chNext == '!' || chNext == '?' || chNext == ')';
+
+								x += flW;
+								if ( !bTightPunct )
+									x += MeasureText( eRole, " " ).x;
 							}
 						}
 
