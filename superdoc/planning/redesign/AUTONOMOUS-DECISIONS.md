@@ -10,6 +10,177 @@ cheap.
 
 ---
 
+## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
+
+Two reports from the user, both about the standalone launcher (D25). They are finished
+here on top of `e18da30`, a **partial, never-compiled** WIP commit the lead preserved
+after the previous agent was killed mid-task. Auditing that draft before building on it
+was part of the job, so what it got wrong is recorded first.
+
+### D31.0 · What the WIP had wrong, as opposed to merely unfinished
+
+Three things, and the first two matter because the draft's own comments asserted the
+opposite — a comment that lies is worse than no comment, because the next reader stops
+checking.
+
+**Wrong — the flash was still there, and the code said it wasn't.** The draft's new
+opening-edge block declares *"Nothing on the closing path writes it"* about
+`s_bLauncherOnly`. The launcher's own Esc handler, forty lines below, still did exactly
+that: `s_bLauncherOnly = false;` immediately before `SettingsOverlay_SetVisible( false )`.
+So the defect was untouched and the design note describing the fix was already false.
+Corrected in D31.1.
+
+**Wrong — `LauncherOnlyActive()` was not derived.** The same block claims it *"reports
+the mode only while the layer is actually capturing"*. It returned a stored mirror,
+unconditionally. Harmless in the draft only because the mode was still being cleared on
+the close; the moment D31.1 stops clearing it, an underived reader is a real bug —
+`wlserver` would read "the launcher is up" after the launcher had closed and refuse to
+open the shell. Implemented in D31.1.
+
+**Wrong — the decision number.** The draft labelled itself `D27` throughout. D27 is the
+four control/binding fixes, already recorded above; the highest number in this file is
+D30. Every `D27` marker introduced by the draft is renumbered to `D31`.
+
+**Merely unfinished, and finished here:** `SolvePalettePanel()` had no test; the frame
+trace (`TraceFrame`) was declared and never called from anywhere, which the compiler
+reported as `-Wunused-function`.
+
+**Kept from the draft, because it was right:** moving the transient reset off the close
+and onto the opening edge, and solving the panel's position with a pure function instead
+of a cached `y0`. Both are load-bearing below and the draft's reasoning for them stands.
+
+### D31.1 · The launcher's mode is written on the OPENING edge only, and read derived
+
+**The report.** *"When i open the Launcher Style settings (both CTRLs), and close it with
+Escape, the GUI shows up for a split second."*
+
+**The cause, exactly — and it is not one frame.** Hiding the overlay does not stop it
+drawing. `SettingsOverlay.cpp` fades the layer over `k_uOverlayFadeMs` (200 ms) and gates
+drawing on `s_flCurrentAlpha > 0.0f`, so roughly twelve more frames call `shell::Draw()`
+after the hide. Esc cleared `s_bLauncherOnly` and *then* asked for the hide, so every one
+of those frames failed `Draw()`'s launcher early-return and fell through to the full
+shell — which then faded out in front of the game. The user saw the whole fade, not a
+dropped frame.
+
+**Why the fix is structural rather than an ordering.** Two bits decided what was on
+screen — *is the layer up* and *is it the launcher* — written by different code at
+different moments. Any window in which they disagree is a window in which the wrong
+surface draws. Swapping the two lines shrinks that window to zero *today* and says
+nothing about the third caller. So instead:
+
+1. **`s_bLauncherOnly` is assigned on an opening edge and nowhere else on the way out.**
+   The closing paths write nothing that `Draw()` branches on. The mode simply survives
+   the close, untouched, for the whole fade — so the launcher keeps being the thing that
+   is drawn while the launcher is what is fading.
+2. **`LauncherOnlyActive()` derives from the layer**: `IsCapturingInput() && mode`. That
+   is what makes surviving the close *unobservable*, and therefore safe. Without it,
+   keeping the mode set would trade a visual bug for a behavioural one.
+
+Together the flash has nowhere to come from: closing cannot change what is drawn, because
+closing writes none of the inputs to that choice.
+
+**The one legitimate mid-life write is `PaletteJump()`** — Enter on a non-adjustable
+result, promoting the launcher to the full shell while the layer stays up. That is an
+*opening* of the shell that the user asked for, not a close, and D25's guarantee depends
+on it.
+
+**`CloseShell()` became idempotent** (it hides only while still capturing) because the
+fading frames re-enter the launcher branch and would otherwise re-issue `SetVisible(false)`
+— and its ConVar callback — once per frame for the length of the fade.
+
+**Rejected — keeping the launcher panel painted during the fade** so it fades out like the
+shell does. It would need `s_bPaletteOpen` held open past the Esc that closed it, which
+puts a second meaning on the bit the keyboard handler owns. The launcher leaving instantly
+against a fading transparent layer is the cheaper, and honest, behaviour.
+
+**Rejected — hiding without a fade for the launcher only.** Two different close animations
+for one layer, decided by a mode the layer does not know about.
+
+**How it was proven, and the new instrument that made it provable.** A one-frame-class
+wrong-surface defect cannot be shown with a screenshot: sampling the right frame is luck
+and sampling the wrong one is not evidence. `overlay_e2_trace <on|off|clear|dump>` records
+**one character per frame** for whichever branch of `Draw()` ran — `L` launcher, `S` full
+shell, `.` the layer still fading with neither painting — so "the shell never drew" becomes
+a string a script can assert on. Off by default and free while off.
+
+The same binary, the same script, the only difference being the Esc handler:
+
+| | trace across the close |
+|---|---|
+| before | `.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS` |
+| after | `L.........................................................` |
+
+Forty frames of the full shell, which is the reported *"GUI shows up for a split second"*,
+against none. **Other exits checked, all free of `S`:** Right Ctrl while the launcher is up
+(D25 — closes rather than promoting), `gamescopectl settings_overlay_visible 0`, and a
+Right Ctrl tap *after* a launcher session, which draws all `S` — proving the surviving mode
+does not leak into the next open. The palette-over-shell case, which is a **different
+state**, stays all `S` across its Esc: the palette closes and the shell remains, unchanged.
+
+### D31.2 · The panel's top edge is a function of geometry, and the match count is not an input
+
+**The report.** *"make sure, that it is vertically centered, in its initial state (do not
+dynamically move it according to the current height, just the starting position, with the
+max amount of elements being displayed should be centered ONCE. So it doesnt start moving
+the search bar, all of the sudden"*.
+
+**Chosen: a pure function, `SolvePalettePanel()` in `Layout.cpp`, not a cached `y0`.** A
+cache needs an invalidation rule — *recompute on `display_scale` and surface size, never
+on the result count* — and that rule is a separate thing to get wrong later. Here the rule
+**is the signature**: the inputs are the frame, the scale-derived row metrics and the row
+**cap**. The number of matches is not a parameter, so no amount of typing can move the
+answer, and it can be recomputed every frame without drifting. **That is where the line is
+drawn**, and it is drawn in the type system rather than in a comment.
+
+**"Maximum elements" is `shelltok::kPaletteRowCap` (9), the result-list cap** — not the
+current match count. It moved into `Layout.h` beside the solver, with the panel's other
+metrics, because the query line's position now *depends* on it: a bare `9` inside a clamp
+in `Shell.cpp` is a number the next person changes without noticing they moved the search
+bar. The tests assert against those same constants rather than retyping 52/38/36, so a
+test cannot keep passing while describing a panel that no longer exists.
+
+**The 2.0× rule, stated once:** the maximum is the **fitting** maximum. Where the cap's
+worth of rows does not fit, `nMaxRows` drops to what does and the panel is centred at
+*that* height — still solved once, still fixed, simply shorter. Where not even one row
+fits, the panel is **anchored at the top margin** instead of centred: centring something
+taller than its frame pushes the query line off the *top* edge and loses the thing you
+type into, whereas top-anchoring loses the footer legend off the bottom. Cheaper loss.
+
+**A pre-existing bug fell out of this.** The panel used to take nine rows unconditionally
+and clamp the finished rect to the slab; the clamp moved `rc.y1`, the footer draws from
+`rc.y1`, so at 2.0× the legend slid up over the last result row while the rows stayed laid
+out against the unclamped height. Deciding the row count *before* sizing leaves nothing to
+clamp. This is the defect recorded as open in D18's note *(b)*.
+
+**Cost, stated plainly:** the palette drawn *over the shell* is centred in the slab now
+too, where it previously sat at a fixed 14% down. Same widget, same solver; D25 already
+described that rectangle as "the rectangle the panel is centred inside", so this makes the
+code match what was written.
+
+**Measured on the real launcher**, over four different result counts per scale (empty
+query → the full 9, two filtering queries, and one matching nothing), on a 1920×1080
+surface. The panel's top border was read out of the screenshots; only the *vertical*
+result is claimed:
+
+| `display_scale` | query line's y, over 4 result counts | solver says | panel heights seen |
+|---|---|---|---|
+| 0.5× | **432**, unchanged | 432.5 | 214 → 73 |
+| 1.0× | **325**, unchanged | 325.0 | 429 → 147 |
+| 2.0× | **109**, unchanged | 110.0 | 859 → 295 |
+
+The query line does not move; the panel's height is the only thing that does, and it
+changes downward. On this surface nine rows still fit at 2.0× (860 ≤ 1032 usable), so the
+non-fitting branches are covered by unit tests instead — a 600px-high surface (drops to
+four rows, still centred) and a 250px-high one (`bFits` false, top-anchored).
+
+Six tests in `[overlay_ui]` pin the property. They assert the **negative** — the top edge
+is equal across match counts — rather than that it equals some constant: a test checking
+`y == 325` would pass just as happily on a version that recentres on every keystroke.
+
+*Cheap to reverse:* one function, and the caller that reads `panel.flTop`.
+
+---
+
 ## 2026-08-24 — D30 · The type ladder rises a second time, and `Meta` moves most
 
 The user, one round after D23: *"Make the Log and Changelog font 1-2px bigger. In fact, we

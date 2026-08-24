@@ -69,6 +69,7 @@
 #include <cstdio>
 #include <ctime>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 
 namespace gamescope::ui::shell
@@ -360,6 +361,12 @@ namespace gamescope::ui::shell
 		// refuses for browse-versus-search. Everything below reads
 		// s_bPaletteOpen; this only changes what is drawn BEHIND it and what
 		// Esc gives back.
+		//
+		// D31: IT IS WRITTEN ON AN OPENING EDGE AND NOWHERE ELSE ON THE WAY
+		// OUT. See Draw()'s opening-edge block for the whole argument; the
+		// short version is that hiding the layer does not stop it drawing for
+		// another ~200ms of fade, so anything cleared at hide time is a mode
+		// change the user WATCHES.
 		bool s_bLauncherOnly = false;
 
 		// The published mirror of the above, for wlserver -- which decides on
@@ -370,9 +377,90 @@ namespace gamescope::ui::shell
 
 		std::atomic<bool> s_bLauncherRequested{ false };
 
-		// The overlay was hidden from outside the shell. See
-		// shell::NotifyOverlayHidden().
+		// The overlay's layer went down at some point. See
+		// shell::NotifyOverlayHidden(). It exists ONLY to catch a hide and a
+		// re-open that both land between two frames, which the visible flag
+		// alone cannot show -- Draw() would see `true` on both sides and miss
+		// the edge entirely.
 		std::atomic<bool> s_bOverlayHiddenNotice{ false };
+
+		// D31: the layer is down, or has been down since the last frame.
+		// Latches on the way down; the opening edge is the only thing that
+		// clears it. Starts true so the process's first frame is an opening
+		// edge like any other.
+		bool s_bLayerDown = true;
+
+		// D31: which surface actually drew, per frame, as a rolling string --
+		// 'L' launcher, 'S' shell, '.' the layer is still drawing (fading) but
+		// neither surface painted.
+		//
+		// WHY THIS EXISTS. The defect it was written for is invisible to a
+		// screenshot: catching a transient wrong-surface frame is luck, and
+		// missing it is not evidence of absence. "Which branch drew on each of
+		// the frames across the close?" is the question that actually decides
+		// whether the shell can appear, and until this there was no way to ask
+		// it from a script. Same argument that produced overlay_e2_key (D18)
+		// and overlay_e2_get (D22), applied to the draw path rather than to
+		// input or to state.
+		//
+		// Off by default and allocation-free while off: this is on the render
+		// path, so it must cost nothing when nobody is looking.
+		constexpr size_t k_nDrawTraceMax = 4096;
+		std::mutex        s_mutDrawTrace;
+		std::string       s_sDrawTrace;
+		std::atomic<bool> s_bDrawTraceOn{ false };
+
+		void TraceFrame( char c )
+		{
+			if ( !s_bDrawTraceOn.load( std::memory_order_relaxed ) )
+				return;
+
+			std::scoped_lock lock( s_mutDrawTrace );
+			if ( s_sDrawTrace.size() < k_nDrawTraceMax )
+				s_sDrawTrace.push_back( c );
+		}
+
+		// D31. The trace is read from a script, so it needs a console verb.
+		// `dump` prints the string and leaves it, so a run can be sampled
+		// more than once.
+		void DrawTraceCmd( std::span<std::string_view> args )
+		{
+			// args[0] is the COMMAND NAME, as everywhere else in this file --
+			// the verb is args[1]. Getting that wrong makes every call print
+			// the usage line, which is how this was caught.
+			const std::string_view svVerb = args.size() >= 2 ? args[ 1 ] : std::string_view( "dump" );
+
+			if ( svVerb == "on" || svVerb == "off" )
+			{
+				const bool bOn = svVerb == "on";
+				{
+					std::scoped_lock lock( s_mutDrawTrace );
+					s_sDrawTrace.clear();
+				}
+				s_bDrawTraceOn.store( bOn, std::memory_order_relaxed );
+				console_log.infof( "overlay_e2_trace: %s", bOn ? "on (cleared)" : "off" );
+				return;
+			}
+
+			if ( svVerb == "clear" )
+			{
+				std::scoped_lock lock( s_mutDrawTrace );
+				s_sDrawTrace.clear();
+				console_log.infof( "overlay_e2_trace: cleared" );
+				return;
+			}
+
+			if ( svVerb == "dump" )
+			{
+				std::scoped_lock lock( s_mutDrawTrace );
+				console_log.infof( "overlay_e2_trace: %zu frames: %s",
+				                   s_sDrawTrace.size(),
+				                   s_sDrawTrace.empty() ? "(empty)" : s_sDrawTrace.c_str() );
+				return;
+			}
+
+			console_log.errorf( "overlay_e2_trace <on|off|clear|dump>" );
+		}
 
 		// =================================================================
 		//  The console surface
@@ -559,6 +647,22 @@ namespace gamescope::ui::shell
 			"Through gamescopectl the verb and its arguments must be ONE quoted argument: "
 			"gamescopectl overlay_e2_pointer \"click 640 400\".",
 			PointerCmd );
+
+		// D31. The launcher-close flash was a WRONG-SURFACE defect, and the
+		// two instruments this shell already had could not see it: a
+		// screenshot samples one frame out of the ~12 the 200ms fade runs,
+		// and overlay_e2_get reads bound state rather than what painted. This
+		// records which branch of Draw() ran, per frame, so "the shell never
+		// drew across the close" is a string a script can assert on instead
+		// of an eye-witness claim.
+		ConCommand cc_overlay_e2_trace(
+			"overlay_e2_trace",
+			"Record which E2 surface drew on each frame: overlay_e2_trace <on|off|clear|dump>. "
+			"One character per frame -- 'L' the standalone launcher, 'S' the full shell, '.' the "
+			"layer still drawing (fading) with neither surface painted. Off by default and free "
+			"while off. Through gamescopectl the verb is one argument: "
+			"gamescopectl overlay_e2_trace on.",
+			DrawTraceCmd );
 
 		// =================================================================
 		//  Registration
@@ -766,24 +870,26 @@ namespace gamescope::ui::shell
 		}
 
 		// =================================================================
-		//  D26: closing the overlay from inside the shell
+		//  D26/D31: the transient set, and WHEN it is dropped
 		// =================================================================
-		// Esc's last rung, and the only place the shell closes itself. It is
-		// a function rather than a bare SettingsOverlay_SetVisible( false )
-		// because closing has to LEAVE THE SHELL CLEAN: the next open must
-		// not come back sitting on an explain page nobody asked for, with a
-		// dropdown half-open or a delete still armed.
+		// The transient set is the things that only make sense in the session
+		// that created them: an armed delete, a half-open dropdown, a field
+		// mid-edit, an explain page, an inline expansion, an open palette.
+		// What is NOT in it -- and survives every open and close -- is the
+		// arrangement the user chose: the selected area, the selected row and
+		// the Inspector host.
 		//
-		// What is cleared is exactly the transient set -- the things that
-		// only make sense in the session that created them. What SURVIVES is
-		// the arrangement the user chose and would be annoyed to lose: the
-		// selected area, the selected row, and the Inspector host. Reopening
-		// puts them back where they were.
+		// D31: THIS RUNS ON THE OPENING EDGE, NOT ON THE CLOSE. D26 cleared
+		// it inside CloseShell(), one line before hiding the layer, and that
+		// is a mode change the user watches: hiding does not stop the overlay
+		// drawing, it starts a ~200ms fade during which every frame still
+		// draws. So an explain page cleared at hide time is an explain page
+		// that visibly vanishes and leaves the sheet fading out behind it.
 		//
-		// The palette is closed too. It is a transient layer by the same
-		// definition, and a palette that reappeared over the shell on the
-		// next open would be a search someone abandoned a session ago.
-		void CloseShell()
+		// Moving it to the open satisfies exactly the same requirement -- the
+		// next open is not sitting on a page nobody asked for -- while making
+		// the close a pure fade of what was already on screen.
+		void ResetTransient()
 		{
 			s_sArmedAction.clear();
 			s_sOpenDropdown.clear();
@@ -793,8 +899,25 @@ namespace gamescope::ui::shell
 			s_sExpandedEntry.clear();
 			s_nInlineFocus    = -1;
 			s_bPaletteOpen    = false;
+		}
 
-			SettingsOverlay_SetVisible( false );
+		// Esc's last rung, and the only place either surface closes itself --
+		// the launcher included.
+		//
+		// D31: it does ONE thing, and that is the point. Closing must not
+		// touch a single bit that Draw() branches on, because the ~12 frames
+		// that follow it are still drawing. Anything cleared here is a mode
+		// change the user WATCHES; that is what the launcher flash was.
+		//
+		// IDEMPOTENT, deliberately. Those same fading frames re-enter the
+		// launcher branch and reach this again, and SetValue() runs the
+		// ConVar's callback whether or not the value changed -- which would
+		// re-fire NotifyOverlayHidden() once per frame for the whole fade.
+		// Gating on "still capturing" makes the second and later calls free.
+		void CloseShell()
+		{
+			if ( SettingsOverlay_IsCapturingInput() )
+				SettingsOverlay_SetVisible( false );
 		}
 
 		InspectorMode CurrentMode( const Entry *pEntry )
@@ -4592,10 +4715,15 @@ namespace gamescope::ui::shell
 		void DrawPalette( const Rect &rcSlab, const std::vector<PaletteItem> &items,
 		                  bool bLauncher )
 		{
-			const float flW    = std::min( Px( 820.0f ), ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
-			const float flQH   = Px( 52.0f );
-			const float flRowH = Px( 38.0f );
-			const float flFootH= Px( 36.0f );
+			// D31: the panel's metrics are `shelltok::kPalette*` rather than
+			// literals, because SolvePalettePanel() solves the fixed vertical
+			// position from exactly these and the test asserts against the
+			// same constants. See Layout.h.
+			const float flW    = std::min( Px( shelltok::kPaletteW ),
+			                               ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
+			const float flQH   = Px( shelltok::kPaletteQueryH );
+			const float flRowH = Px( shelltok::kPaletteRowH );
+			const float flFootH= Px( shelltok::kPaletteFootH );
 			const float flPad  = Px( 16.0f );
 
 			// The list is capped at 60 rows, exactly as the mockup caps it.
@@ -4605,27 +4733,38 @@ namespace gamescope::ui::shell
 			const int nShown = std::min( (int)items.size(), 60 );
 
 			const float x0 = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
-			const float y0 = rcSlab.y0 + ( rcSlab.y1 - rcSlab.y0 ) * 0.14f;
 
-			// HOW MANY ROWS ACTUALLY FIT, decided BEFORE the panel is sized.
+			// D31: THE PANEL IS CENTRED ONCE, AT ITS MAXIMUM ROW COUNT.
 			//
-			// This used to take nine rows unconditionally and then clamp the
-			// finished panel to the slab. The clamp moved rc.y1, and the
-			// footer is drawn from rc.y1 -- so at 2.0x, where nine rows plus
-			// the query line no longer fit, the footer slid up over the last
-			// result row. The rows themselves were still laid out against
-			// the unclamped flListH, so the two disagreed by exactly the
-			// amount the clamp had removed.
+			// The report: *"do not dynamically move it according to the
+			// current height ... So it doesnt start moving the search bar"*.
+			// The old y0 was a fixed 14% down the frame, which did not move
+			// but also was not centred; centring it on the CURRENT height is
+			// the obvious next step and is exactly the defect the user got
+			// in ahead of. So the position comes from SolvePalettePanel(),
+			// whose inputs are the frame and the scale-derived row metrics
+			// and deliberately NOT the match count -- see Layout.h. Nothing
+			// a user can type is an input to this, so nothing they type can
+			// move the query line.
 			//
-			// Deciding the row count from the space available makes the
-			// panel's height a CONSEQUENCE of what it contains rather than
-			// something trimmed afterwards, so there is nothing left to
-			// clamp and the footer cannot be reached by the list.
-			const float flAvailH = ( rcSlab.y1 - Px( tok::kM ) ) - y0;
-			const int   nFits    = (int)std::floor( ( flAvailH - flQH - flFootH ) / flRowH );
+			// HOW MANY ROWS ACTUALLY FIT is decided in there too, and for the
+			// reason it always was: the panel used to take nine rows
+			// unconditionally and then clamp the finished rect to the slab.
+			// The clamp moved rc.y1 and the footer draws from rc.y1, so at
+			// 2.0x the footer slid up over the last result row while the
+			// rows stayed laid out against the unclamped height.
+			const float flMargin = Px( tok::kM );
+			const ui::PalettePanel panel = ui::SolvePalettePanel(
+				rcSlab.y0, rcSlab.y1 - rcSlab.y0,
+				flQH, flRowH, flFootH, flMargin, shelltok::kPaletteRowCap );
+
+			const float y0 = panel.flTop;
+
 			// At least one row: a palette showing none of its results is
 			// worse than one that overlaps its legend.
-			const int   nVisible = std::clamp( std::min( nShown, 9 ), 1, std::max( 1, nFits ) );
+			const float flAvailH = ( rcSlab.y1 - flMargin ) - y0;
+			const int   nVisible = std::clamp( std::min( nShown, panel.nMaxRows ),
+			                                   1, panel.nMaxRows );
 
 			const float flListH = nShown > 0 ? flRowH * (float)nVisible
 			                                 : std::min( Px( 60.0f ), std::max( 0.0f, flAvailH - flQH - flFootH ) );
@@ -5693,20 +5832,39 @@ namespace gamescope::ui::shell
 		s_bLauncherRequested.store( true, std::memory_order_release );
 	}
 
+	// D31: DERIVED, and that is what lets the mode survive a close.
+	//
+	// The flash fix stops every closing path from clearing s_bLauncherOnly,
+	// so after the launcher closes the mode is still "launcher" -- correctly,
+	// because that is what the fading frames must keep drawing. But wlserver
+	// asks this question to decide what Left+Right Ctrl means, and "a
+	// launcher is up" must be FALSE the moment the layer goes down, or the
+	// next press would read as "the launcher is already up" and decline to
+	// open anything.
+	//
+	// Answering it as `layer up AND mode is launcher` makes those two facts
+	// one fact. The stale mode is then unobservable rather than merely
+	// unlikely to be observed, which is the same move the draw path makes and
+	// the reason neither needs a clear-on-close to stay correct.
 	bool LauncherOnlyActive()
 	{
-		return s_bLauncherOnlyPublished.load( std::memory_order_acquire );
+		return SettingsOverlay_IsCapturingInput() &&
+		       s_bLauncherOnlyPublished.load( std::memory_order_acquire );
 	}
 
 	void NotifyOverlayHidden()
 	{
+		// D31: the notice, and ONLY the notice. This used to also clear the
+		// published mirror, to stop a stale `true` from being read after a
+		// hide -- a job LauncherOnlyActive()'s derivation now does for every
+		// reader at once, including the ones that forget. Writing the mode
+		// from here would be exactly the closing-path write the flash fix
+		// exists to remove.
+		//
+		// The notice itself stays because it catches what the layer flag
+		// cannot: a hide and a re-open that both land between two frames,
+		// where Draw() would see `capturing` on both sides and miss the edge.
 		s_bOverlayHiddenNotice.store( true, std::memory_order_release );
-		// Published immediately as well as through the frame-consumed notice.
-		// wlserver reads this to decide what Left+Right Ctrl means, and the
-		// overlay can be hidden and re-opened between two frames -- leaving
-		// the mirror true until the next Draw() would make the reopen a
-		// launcher the user never asked for.
-		s_bLauncherOnlyPublished.store( false, std::memory_order_release );
 	}
 
 	void Draw()
@@ -5728,14 +5886,59 @@ namespace gamescope::ui::shell
 		s_flSurfaceW.store( io.DisplaySize.x, std::memory_order_relaxed );
 		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
 
-		// D25: the overlay was hidden from outside the shell (a Right Ctrl
-		// tap, Ctrl+Shift+O, gamescopectl). Consumed FIRST, before either
-		// request below, so a hide and a re-open landing between two frames
-		// resolves in the order they actually happened.
-		if ( s_bOverlayHiddenNotice.exchange( false, std::memory_order_acq_rel ) )
+		// =================================================================
+		//  D31: THE OPENING EDGE -- the only place the mode is decided
+		// =================================================================
+		// THE DEFECT THIS REPLACES. *"When i open the Launcher Style settings
+		// (both CTRLs), and close it with Escape, the GUI shows up for a
+		// split second."*
+		//
+		// Hiding the overlay does NOT stop it drawing. SettingsOverlay.cpp
+		// fades the layer out over k_uOverlayFadeMs (200ms) and gates drawing
+		// on `s_flCurrentAlpha > 0.0f`, so ~12 more frames run Draw() after
+		// the hide. The launcher's Esc handler cleared s_bLauncherOnly and
+		// THEN asked for the hide -- so every one of those 12 frames fell
+		// past the launcher branch into the full shell and fading it out in
+		// front of the game. Not a frame of flash: the whole fade.
+		//
+		// WHY THE FIX IS STRUCTURAL AND NOT AN ORDERING. Two bits decided
+		// what was on screen -- "is the layer up" and "is it the launcher" --
+		// and they were written by different code at different moments. Any
+		// window in which they disagree is a window in which the wrong
+		// surface draws, and reordering two lines only shrinks the window
+		// until the next site forgets. So:
+		//
+		//   1. The mode is assigned ONLY on an opening edge (and by
+		//      PaletteJump, which is a promotion the user asked for while the
+		//      layer stays up). Nothing on the closing path writes it.
+		//   2. LauncherOnlyActive() is DERIVED -- it reports the mode only
+		//      while the layer is actually capturing -- so the mode surviving
+		//      a close is not observable, and does not need clearing.
+		//
+		// Together: what is drawn cannot change as a consequence of closing,
+		// because closing writes nothing that Draw() branches on. The flash
+		// is not unlikely, it has nowhere to come from.
+		//
+		// The edge is `capturing now, and down at any point since the last
+		// frame`. The notice covers the case the flag alone cannot: a hide
+		// and a re-open that both land between two frames.
+		const bool bCapturing = SettingsOverlay_IsCapturingInput();
+		if ( s_bOverlayHiddenNotice.exchange( false, std::memory_order_acq_rel ) || !bCapturing )
+			s_bLayerDown = true;
+
+		if ( bCapturing && s_bLayerDown )
 		{
+			s_bLayerDown = false;
+
+			// A fresh open is the SHELL unless a launcher request arrives
+			// with it -- consumed just below, so this is the default and the
+			// request is the exception. A Right Ctrl tap sends no request at
+			// all, which is exactly how it opens the shell.
 			s_bLauncherOnly = false;
-			s_bPaletteOpen  = false;
+
+			// D26's "the next open is not sitting on a page nobody asked
+			// for", moved off the close. See ResetTransient().
+			ResetTransient();
 		}
 
 		// D22: consume a palette request from wlserver's hotkey path. Done
@@ -5792,25 +5995,39 @@ namespace gamescope::ui::shell
 			std::vector<PaletteItem> launcherItems = Build( Reg(), s_sPaletteQuery );
 			RunPaletteKeyboard( launcherItems );
 
-			// Esc (or a click off the panel) while the launcher is up gives
-			// the GAME back -- it does not uncover a shell, because there is
-			// no shell to uncover and opening one would be the exact
-			// behaviour this change exists to remove. RunPaletteKeyboard()
-			// only clears the open bit; closing the overlay is ours.
+			// The palette is shut but we are in the launcher branch. Exactly
+			// two things put us here, and the surviving mode is what tells
+			// them apart:
 			//
-			// PaletteJump() takes the other exit: it clears s_bLauncherOnly
-			// itself, so by the time we get here the shell is what should be
-			// drawn and this branch is not taken. That frame draws nothing --
-			// the launcher is gone and the shell has not started -- and the
-			// next one is the full overlay at the chosen row.
+			//   * Esc, or a click off the panel. The launcher gives the GAME
+			//     back -- it does not uncover a shell, because there is no
+			//     shell to uncover and opening one is the behaviour D25
+			//     exists to remove. RunPaletteKeyboard() only clears the open
+			//     bit; closing the layer is ours.
+			//   * PaletteJump(), which cleared s_bLauncherOnly itself to
+			//     promote the launcher to the full shell at the chosen row
+			//     (D25's Enter). The layer stays up. This frame paints
+			//     nothing -- the launcher is gone, the shell has not started
+			//     -- and the next frame is the full overlay.
+			//
+			// D31: THE ESC PATH NO LONGER WRITES THE MODE. It used to clear
+			// s_bLauncherOnly here and then hide, which is what produced the
+			// flash: hiding starts a ~200ms fade during which Draw() runs
+			// another ~12 times, and every one of those frames now failed the
+			// launcher test above and fell through to the full shell. The
+			// user saw the entire fade of a surface they never opened.
+			//
+			// Leaving the mode alone is what makes that impossible rather
+			// than unlikely -- those frames keep taking this branch, keep
+			// painting nothing, and the shell has no path to the screen.
+			// Nothing observes the stale mode either, because
+			// LauncherOnlyActive() derives from the layer.
 			if ( !s_bPaletteOpen )
 			{
 				if ( s_bLauncherOnly )
-				{
-					s_bLauncherOnly = false;
-					s_bLauncherOnlyPublished.store( false, std::memory_order_release );
-					SettingsOverlay_SetVisible( false );
-				}
+					CloseShell();
+
+				TraceFrame( '.' );
 				return;
 			}
 
@@ -5837,8 +6054,15 @@ namespace gamescope::ui::shell
 			}
 			ImGui::End();
 			ImGui::PopStyleVar( 2 );
+
+			TraceFrame( 'L' );
 			return;
 		}
+
+		// D31: past the launcher's early return, so every frame that reaches
+		// here is a frame the FULL SHELL draws. The launcher-close trace must
+		// never contain one of these -- see cc_overlay_e2_trace.
+		TraceFrame( 'S' );
 
 		// D18: E2 implements SPEC §8.2's keyboard IN FULL -- regions, rows,
 		// adjustment, the palette, the Inspector, the mode strip. ImGui's own
