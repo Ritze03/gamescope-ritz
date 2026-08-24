@@ -10,7 +10,92 @@ Companion files: `API.md` (the helper layer), `FEASIBILITY.md` (ImGui assessment
 
 ## Amendments
 
+### 2026-08-24 — second type raise: `Meta` is the Log/Changelog body, and it moves most
+
+Direct user feedback, one round after the raise recorded below: *"Make the Log and
+Changelog font 1-2px bigger. In fact, we should increase all of the smaller font sizes by
+1-2px."* Same discipline, same place — `src/Overlay/UI/Tokens.cpp` only; §7.6 below stays
+the original measured spec.
+
+**Why one raise wasn't enough.** The first pass deliberately froze `Meta` on the theory
+that a quiet auxiliary tier (units, marks, chips) must not out-rank the labels it
+annotates. That is true of `Meta`'s auxiliary job — but `Meta` is *also the entire body
+text of both surfaces the user just named*. `Shell.cpp`'s `DrawContentBody()` draws every
+Log and Changelog line — number, timestamp, scope tag **and the message itself** — in
+`TypeRole::Meta`. So the one role the first pass held still was precisely the role the
+complaint was about. There is no separate mono body role and no hardcoded size at either
+call site; P1's "no magic numbers at call sites" guarantee holds, and the fix is entirely
+a token change.
+
+| Role | Was | Now | Delta | Gap to role above |
+|---|---|---|---|---|
+| `Meta` | 11.5 | **13.0** | +1.5 | — (the floor) |
+| `Section` | 12.0 | **13.5** | +1.5 | `Meta`→`Section` 0.5 |
+| `Title` | 13.0 | **14.5** | +1.5 | `Section`→`Title` 1.0 |
+| `Label` | 15.0 | **16.0** | +1.0 | `Title`→`Label` 1.5 |
+| `Body` | 15.0 | **16.0** | +1.0 | tied to `Label` |
+| `Value` | 16.0 | **16.5** | +0.5 | `Label`→`Value` 0.5 |
+
+**Why tapered rather than a flat +1.5.** The request is for the *small* sizes, and a flat
+raise is "just adjust the scale" in another guise (the move issue #23 rejected) — it
+inflates the whole slab to fix the bottom of it. Tapering keeps the top of the ladder
+nearly still, which is what keeps `kRowH` (44) and `kControlH` (28) valid at 2.0x without
+a second geometry change, while the floor moves the full 1.5. `Value` moves at all only
+because `Label` passing it would invert the ladder; +0.5 is the least that keeps `Value`
+on top.
+
+Ascending order preserved, no collisions: `Meta` 13.0 < `Section` 13.5 < `Title` 14.5 <
+`Label`/`Body` 16.0 < `Value` 16.5. Every adjacent gap is ≥ 0.5 base units — the floor the
+first pass set. Both 0.5 gaps sit across a register boundary, so neither carries the
+distinction on size alone: `Meta`→`Section` is lowercase → UPPERCASE with 0.10em tracking,
+and `Label`→`Value` is Sans → Mono.
+
+Consequences checked:
+
+- **Row geometry untouched.** `kRowH` (44) and `kControlH` (28) still clear every size with
+  headroom; `shelltok::kSectionLine` (20) and `kTitleLine` (24) still clear `Section` 13.5
+  and `Title` 14.5. Nothing had to grow. The Log's own line height was already derived
+  (`MeasureText(Meta,"Xg").y + 3`), so it followed the token with no edit.
+- **0.5x / 1.0x / 2.0x** — before/after pairs on the Log, the Changelog and the System
+  Monitor. At 0.5x the Log's line-number and timestamp columns still fit (both are measured
+  from their widest possible value, so they cannot clip). At 2.0x nothing overflows its
+  lane or its row.
+- **Contrast** — no colour token changed, and all six sizes remain under the WCAG
+  large-text threshold (18.66px normal / 14px bold) at 1.0x, so the 4.5:1 small-text floor
+  still applies to all of them rather than the relaxed 3:1; raising a size only widens the
+  margin. The two tightest cases on record are unchanged and still clear it: `TextMeta`
+  (52%, **5.28:1**) — which is what the Log body is drawn in, so the surface that got
+  bigger is the one whose margin matters most — and `TextSegInactive` (50%, **4.96:1**).
+- **Crispness at 2.0x** — unaffected. The atlas bakes a fresh `ImFontBaked` per exact pixel
+  size (#38) and its rebuild stays deferred past the requesting frame (#51); neither path
+  was touched.
+
+**Shipped with it: ellipsis at the shell's clip point** (conformance-audit divergence 10).
+`Controls.cpp`'s `DrawText()` was the single place every label, value and log line is
+clipped, and it clipped hard — the Log Inspector's Buffer facts row read `51 lines · 2 er:`
+in the narrow lane, mid-word truncation the user has objected to before (#46). Raising the
+ladder makes more strings overflow more often, so the marker had to land in the same
+change. It now truncates to the last glyph that fits and appends `...` (three ASCII
+periods, not U+2026 — `Fonts.cpp` bakes Basic Latin + Latin-1 only and the bundled Geist
+faces carry no ellipsis glyph, the same constraint behind D18's drawn chevron). Buffer now
+reads `31 lines · ...`.
+
+One trap worth recording: several rects in the kit are sized *from* the same measurement
+they later clip (`RowCtx::SplitLabelZone()` builds the value rect as `Lw - measured .. Lw`,
+and `a - (a - b)` is not exactly `b` in float at screen-sized coordinates). A strict
+overflow test therefore fired on a ~6e-5 px difference and turned the Monitor's `18 px`
+into `1...`. `DrawText()` now requires **one physical pixel** of overflow before it
+truncates; below that, clipping is invisible and a marker would be a lie.
+
+See `src/Overlay/UI/Tokens.cpp`'s `Type()` and `Controls.cpp`'s `DrawText()` for the
+rationale inline at the value, and `AUTONOMOUS-DECISIONS.md` (D27) for the decision record.
+
 ### 2026-08-24 — shipped type scale departs from §7.6 at the small end
+
+> **Superseded by the block above (same day, second round of feedback).** Every size in
+> this entry's table has since moved again. Kept for the reasoning, not the numbers — in
+> particular, the "`Meta` unchanged" call recorded here is the one the next pass had to
+> reverse, and the block above explains why.
 
 Direct user feedback: *"All of the descriptive fonts (control elements names/labels) and
 category labels are really small (including titles and such). So we probably need to

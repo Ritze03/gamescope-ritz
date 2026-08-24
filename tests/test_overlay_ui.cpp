@@ -20,6 +20,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <iterator>
+
 #include "Overlay/Fonts.h"
 #include "Overlay/UI/Band.h"
 #include "Overlay/UI/Icons.h"
@@ -153,6 +155,66 @@ TEST_CASE( "tokens: the six type roles pick their own family and size", "[overla
 	{
 		ScopedScale s2( 2.0f );
 		REQUIRE_THAT( TypeSizePx( TypeRole::Value ), WithinAbs( flValue1x * 2.0f, 1e-3f ) );
+	}
+}
+
+TEST_CASE( "tokens: the type ladder is strictly ordered at every scale", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+
+	// D23 and D27 both raised the small end of §7.6's table by hand, and D27
+	// raised Meta -- the role D23 deliberately froze -- by the most of any.
+	// Two hand-edits to six related constants is exactly where a third one
+	// silently inverts or collides two roles, so the ORDER and the minimum
+	// STEP are pinned here rather than the literals.
+	//
+	// Pinning literals was considered and rejected: it would fail on every
+	// future deliberate raise, training the next agent to edit the test
+	// instead of reading it. The invariant that actually matters is that a
+	// reader can tell the tiers apart.
+	//
+	// Ascending, quietest first. Body is omitted from the chain because it is
+	// tied to Label, not stacked above it -- asserted separately below.
+	const TypeRole kAscending[] = {
+		TypeRole::Meta, TypeRole::Section, TypeRole::Title,
+		TypeRole::Label, TypeRole::Value,
+	};
+
+	// Label and Body have shared one size since the original table: row
+	// labels and Inspector prose are meant to read as the same register.
+	REQUIRE_THAT( Type( TypeRole::Label ).flSizeBase,
+	              WithinAbs( Type( TypeRole::Body ).flSizeBase, 1e-4f ) );
+
+	// The minimum step D23 set and D27 kept. Below this two tiers stop being
+	// separable by size at all.
+	constexpr float kMinStepBase = 0.5f;
+
+	for ( size_t i = 1; i < std::size( kAscending ); ++i )
+	{
+		const float flLower = Type( kAscending[ i - 1 ] ).flSizeBase;
+		const float flUpper = Type( kAscending[ i ] ).flSizeBase;
+		INFO( "ladder step " << i );
+		REQUIRE( flUpper >= flLower + kMinStepBase );
+	}
+
+	// Meta is the floor and Value the ceiling -- the Log/Changelog body is
+	// drawn in Meta, so if anything ever slips under it the densest surface
+	// in the shell is the one that gets illegible first.
+	for ( int i = 0; i < (int)TypeRole::Count; ++i )
+	{
+		INFO( "role " << i );
+		REQUIRE( Type( (TypeRole)i ).flSizeBase >= Type( TypeRole::Meta ).flSizeBase );
+		REQUIRE( Type( (TypeRole)i ).flSizeBase <= Type( TypeRole::Value ).flSizeBase );
+	}
+
+	// The order survives the scale ladder's ends, where the multiply and the
+	// float rounding could in principle collapse a 0.5-unit step.
+	for ( float flScale : { 0.5f, 1.0f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		INFO( "scale " << flScale );
+		for ( size_t i = 1; i < std::size( kAscending ); ++i )
+			REQUIRE( TypeSizePx( kAscending[ i ] ) > TypeSizePx( kAscending[ i - 1 ] ) );
 	}
 }
 

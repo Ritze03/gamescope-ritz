@@ -44,6 +44,27 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **The Log and Changelog text is bigger, and so is every other small size in the overlay.**
+  The type scale was already raised once today, but that pass deliberately left the `Meta`
+  role alone on the grounds that a quiet annotation tier shouldn't out-rank the labels it
+  annotates. That reasoning missed one thing: `Meta` is also the *entire body text of the
+  Log and the Changelog* — the line numbers, timestamps, scope tags and the messages
+  themselves are all drawn in it. So the one role held still was the one behind the two
+  screens that still read as too small. `Meta` now moves the most of any role
+  (11.5 → 13), with the rest of the ladder raised behind it to keep the tiers apart:
+  `Section` 12 → 13.5, `Title` 13 → 14.5, `Label`/`Body` 15 → 16, `Value` 16 → 16.5. The
+  raise is *tapered* — biggest at the bottom, smallest at the top — because the request was
+  about the small sizes; inflating everything equally would have grown the whole slab to fix
+  the bottom of it, and would have eaten the row-height headroom that lets all of this fit
+  at 2.0× UI scale with no other geometry change. Verified at 0.5×, 1.0× and 2.0× on the
+  three densest screens.
+- **Text that doesn't fit now ends in `...` instead of stopping mid-word.** The overlay
+  clipped overlong labels and values hard at the column edge, so the Log inspector's buffer
+  summary read `51 lines · 2 er:` in the narrow lane — a truncation you cannot tell apart
+  from a value that genuinely ends there. Bigger text makes more strings overflow, so this
+  ships alongside the size raise rather than after it: it now truncates at the last
+  character that fits and marks it. (Three periods rather than a real `…` character — the
+  bundled fonts don't contain that glyph.)
 - **The sheet could not scroll at all — the scrollbar moved and the content stayed put.**
   Every body in this shell paints at an absolute `y` (that is what keeps the row grammar
   identical between sheet and Inspector), but ImGui scrolls a child by moving its *cursor*,
