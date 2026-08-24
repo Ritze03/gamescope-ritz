@@ -327,4 +327,27 @@ namespace gamescope::ui
 
 		return std::clamp( flScroll, 0.0f, flMax );
 	}
+
+	// =====================================================================
+	//  Laying out inside a scrolling child (P5b) -- see Layout.h
+	// =====================================================================
+	ScrollView ScrollView::Begin( const Rect &rcRegion, float flCursorY )
+	{
+		ScrollView view;
+		view.flOriginY = flCursorY;
+
+		// HEIGHT IS PRESERVED, ORIGIN IS REPLACED. The region's height is
+		// what the body measures itself against (a content area sizes to
+		// fill it, the Inspector's help paragraph wraps into it), and that
+		// must not shrink as the view scrolls -- so the bottom edge is
+		// carried down with the top rather than left where it was.
+		view.rcBody = Rect{ rcRegion.x0, flCursorY,
+		                    rcRegion.x1, flCursorY + rcRegion.Height() };
+		return view;
+	}
+
+	float ScrollView::ContentHeight( float flBottomY, float flPad ) const
+	{
+		return std::max( 0.0f, flBottomY - flOriginY ) + flPad;
+	}
 }

@@ -44,6 +44,18 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **The sheet could not scroll at all — the scrollbar moved and the content stayed put.**
+  Every body in this shell paints at an absolute `y` (that is what keeps the row grammar
+  identical between sheet and Inspector), but ImGui scrolls a child by moving its *cursor*,
+  not by translating the draw list. `DrawSheetBody` laid out from the region's fixed screen
+  coordinate and told ImGui nothing about how tall the result was, so it was nailed to the
+  screen; the rows' own hit-boxes pushed a scroll *range* into existence, which is why a
+  thumb slid along a scrollbar that drove nothing. The Inspector had the same bug and had it
+  fixed inline in P3b — the sheet, the largest scrolling region in the product, was simply
+  never one of the places those four lines were written. The arithmetic is now one named,
+  imgui-free `ScrollView` in `Layout.cpp` that all three scrolling bodies call, and it is
+  unit-tested: a fix that has to be remembered per region is a fix that is missing from the
+  next region.
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

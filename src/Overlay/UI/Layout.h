@@ -272,4 +272,54 @@ namespace gamescope::ui
 	// clamped, never moved.
 	float RailScroll( float flCurrent, float flContentH, float flViewH,
 	                  float flActiveTop, float flItemH, float flPad );
+
+	// ---- laying out INSIDE a scrolling child (P5b) -----------------------
+	// THE ONE MECHANISM BY WHICH ANY BODY IN THIS SHELL SCROLLS. Read this
+	// before writing a new body; getting it wrong is silent.
+	//
+	// Every body here -- the sheet's rows, the Inspector's, the explain
+	// page's, a content area's -- lays out by painting at an absolute `y`
+	// rather than by walking ImGui's cursor. That is deliberate and is what
+	// keeps the row grammar and the lane identical everywhere (SPEC §5.3: a
+	// promoted parameter has to land in the sheet unchanged). But an
+	// absolute y has a trap in it, and the shell fell into it twice:
+	//
+	//   * If the y starts at the REGION's y0 -- a fixed screen coordinate --
+	//     then nothing moves when the child scrolls. ImGui applies scroll by
+	//     moving the child's CURSOR, not by translating the draw list, so a
+	//     body that ignores the cursor is nailed to the screen. The
+	//     scrollbar still slides, because the invisible buttons the rows
+	//     submit push the content extent out; only the pixels stay put. That
+	//     is exactly the "scrollbar moves, content doesn't" report.
+	//   * If nothing ever tells ImGui how tall the result was, there is no
+	//     scroll range at all and the surplus is simply drawn past the
+	//     bottom edge and lost.
+	//
+	// Both halves are one rule: START at the child's own cursor, and HAND
+	// BACK the height you used. This struct is that rule as arithmetic --
+	// `Begin()` before drawing, `ContentHeight()` after.
+	//
+	// WHY IT LIVES HERE AND NOT AS FOUR LINES AT EACH CALL SITE. It was four
+	// lines at each call site: P3b wrote them into the Inspector body and
+	// the explain page, and the sheet -- the biggest scrolling region in the
+	// shell -- never got them. A fix that has to be remembered per region is
+	// a fix that is missing from the next region. As a named function it is
+	// also imgui-free, so the translation and the clamp are a table a unit
+	// test walks with no window open.
+	struct ScrollView
+	{
+		float flOriginY = 0.0f;   // the child's cursor y THIS frame: region y0 - scroll
+		Rect  rcBody;             // the region rect, rebased onto flOriginY
+
+		// `rcRegion` is where the region sits on screen; `flCursorY` is what
+		// ImGui::GetCursorScreenPos().y returns just inside the child. The
+		// body's height is preserved exactly -- only its origin moves.
+		static ScrollView Begin( const Rect &rcRegion, float flCursorY );
+
+		// What to hand ImGui as the child's content extent, given the y the
+		// body's last row ended at. Never negative -- an empty body must not
+		// ask for a negative scroll range -- and always includes the trailing
+		// pad, so a fully-scrolled body does not end flush against the frame.
+		float ContentHeight( float flBottomY, float flPad ) const;
+	};
 }

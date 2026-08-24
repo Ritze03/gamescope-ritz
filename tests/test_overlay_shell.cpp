@@ -734,3 +734,73 @@ TEST_CASE( "sheet columns: an unsplittable area is always one column", "[overlay
 	REQUIRE( flat.flSheetBase == wide.flSheetBase );
 	REQUIRE( flat.nStep == wide.nStep );
 }
+
+// =========================================================================
+//  ScrollView -- the one mechanism every scrolling body uses (D26)
+// =========================================================================
+// THE BUG THESE PIN. The shell reported "the scrollbar moves, but the
+// content doesn't". The cause was that a body laid out from the REGION's
+// y0 -- a fixed screen coordinate -- inside a child ImGui scrolls by moving
+// the CURSOR. The pixels were nailed to the screen while the thumb slid.
+//
+// The arithmetic that fixes it is two lines and no ImGui, which is exactly
+// why it is a function and exactly why it is tested here: the failure mode
+// is a body that draws perfectly and does not move, and no assertion
+// anywhere else in this suite would notice.
+TEST_CASE( "a scroll view rebases the body onto the child's cursor", "[overlay_shell]" )
+{
+	const ui::Rect rcRegion { 100.0f, 200.0f, 700.0f, 800.0f };
+
+	// Unscrolled: the cursor sits at the region's own top, so the body IS
+	// the region. This is the case that always worked and always hid the
+	// bug -- everything looks right until the first wheel click.
+	const ui::ScrollView top = ui::ScrollView::Begin( rcRegion, 200.0f );
+	REQUIRE_THAT( top.rcBody.y0, WithinAbs( 200.0f, 0.001f ) );
+	REQUIRE_THAT( top.rcBody.y1, WithinAbs( 800.0f, 0.001f ) );
+
+	// Scrolled down 150px: ImGui has already moved the cursor UP by the
+	// offset, and the body must follow it. A body that ignored this is the
+	// defect -- it would still report y0 == 200.
+	const ui::ScrollView mid = ui::ScrollView::Begin( rcRegion, 50.0f );
+	REQUIRE_THAT( mid.rcBody.y0, WithinAbs( 50.0f, 0.001f ) );
+	REQUIRE_THAT( mid.flOriginY, WithinAbs( 50.0f, 0.001f ) );
+
+	// HEIGHT IS PRESERVED. A content body sizes itself to fill what is left
+	// of the region, so a body that shrank as it scrolled would change its
+	// own layout on every wheel click.
+	REQUIRE_THAT( mid.rcBody.Height(), WithinAbs( rcRegion.Height(), 0.001f ) );
+
+	// x is untouched: vertical scroll must not move a lane.
+	REQUIRE_THAT( mid.rcBody.x0, WithinAbs( rcRegion.x0, 0.001f ) );
+	REQUIRE_THAT( mid.rcBody.x1, WithinAbs( rcRegion.x1, 0.001f ) );
+}
+
+TEST_CASE( "a scroll view's content height is what ImGui needs", "[overlay_shell]" )
+{
+	const ui::Rect rcRegion { 0.0f, 0.0f, 600.0f, 400.0f };
+
+	// Content taller than the view: the extent is what was DRAWN plus the
+	// trailing pad, measured from the origin -- not from the region's y0,
+	// which is where the pre-fix code measured from and why the range was
+	// wrong the moment anything was scrolled.
+	const ui::ScrollView top = ui::ScrollView::Begin( rcRegion, 0.0f );
+	REQUIRE_THAT( top.ContentHeight( 900.0f, 12.0f ), WithinAbs( 912.0f, 0.001f ) );
+
+	// The SAME body, now scrolled 300px: the origin moved up with the
+	// cursor and the bottom moved with it, so the extent is unchanged. A
+	// range that shrank as you scrolled would fight the thumb every frame.
+	const ui::ScrollView mid = ui::ScrollView::Begin( rcRegion, -300.0f );
+	REQUIRE_THAT( mid.ContentHeight( 600.0f, 12.0f ), WithinAbs( 912.0f, 0.001f ) );
+
+	// An empty body must not ask for a NEGATIVE range. `flBottom` comes back
+	// as the origin itself when nothing was drawn, and a body that returned
+	// something above its origin (a heading measured and then discarded)
+	// would otherwise hand ImGui a negative height.
+	REQUIRE_THAT( top.ContentHeight( 0.0f, 12.0f ),   WithinAbs( 12.0f, 0.001f ) );
+	REQUIRE_THAT( top.ContentHeight( -50.0f, 12.0f ), WithinAbs( 12.0f, 0.001f ) );
+
+	// Pad zero is the content-area case: the body already fills the region
+	// and must not grow a few pixels of scroll range that exist only to be
+	// scrolled past.
+	REQUIRE_THAT( top.ContentHeight( 400.0f, 0.0f ), WithinAbs( 400.0f, 0.001f ) );
+}

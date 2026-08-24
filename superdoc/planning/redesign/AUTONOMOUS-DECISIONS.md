@@ -10,6 +10,61 @@ cheap.
 
 ---
 
+## 2026-08-24 (D26 — three defects the user reported by looking at it)
+
+All three came from the user watching the shell run, and two of them are the same lesson:
+a mechanism that has to be **remembered** at each site is a mechanism that is missing from
+the next site.
+
+### D26.1 · Scrolling was ONE fault, in the one region P3b's fix never reached
+
+**The report.** *"Scrolling doesnt work at all right now. The scrollbar moves, but the
+content doesnt."*
+
+**The cause, exactly.** Every body in this shell lays out by painting at an absolute `y`
+rather than by walking ImGui's cursor — deliberately, because that is what keeps the row
+grammar and the lane identical between the sheet and the Inspector (SPEC §5.3: a promoted
+parameter has to land in the sheet unchanged). But **ImGui scrolls a child by moving its
+cursor, not by translating the draw list.** A body that never reads the cursor is nailed to
+the screen at whatever scroll offset you like.
+
+`DrawSheetBody` laid its columns out from `rc.y0` — the sheet body region's fixed screen
+coordinate — and emitted no content extent. The scrollbar was nonetheless real: the rows'
+own `InvisibleButton`s pushed `CursorMaxPos` past the child's height, so a range existed and
+the thumb slid along it, driving nothing. That is precisely "the scrollbar moves, the
+content doesn't", and it is the whole of the report.
+
+**One fault, not several.** The rail scrolls by its own hand-rolled offset (`RailScroll`,
+subtracted from every drawn `y`) and was correct. The Inspector body and the explain page
+were fixed in P3b. The Log's content body draws through an `ImGuiListClipper`, which sets
+the cursor itself, and was correct. The sheet was the only region left — and it is the
+biggest one in the product.
+
+**The fix is a named function, and that is the actual decision.** P3b fixed the identical
+bug by writing four lines inline, twice. The sheet needed the same four lines and did not
+get them, which is exactly how the largest scrolling region in the shell shipped unable to
+scroll. So the arithmetic is now `ui::ScrollView` in `Layout.cpp` — `Begin()` rebases the
+region rect onto the child's own cursor, `ContentHeight()` returns the extent to hand back
+as a `Dummy` — and all three call sites go through it.
+
+*The alternative considered and rejected:* rewriting the bodies onto ImGui's cursor with
+`Dummy`/`SameLine` spacing. That is the "proper" ImGui way and it would have meant one
+layout model in the sheet and another in the Inspector — the second painter SPEC §5.2
+clause 0 exists to prevent.
+
+`ScrollView` is imgui-free (P1's rule for `Layout.cpp`, paying off exactly as intended), so
+two new `[overlay_shell]` cases pin it with no window open: that the body's origin follows
+the cursor while its **height is preserved**, and that the extent is measured from the
+origin, never negative, and takes a pad of zero for a content body that already fills the
+region. Failure mode without them: a body that draws perfectly and does not move, which no
+other assertion in the suite would notice.
+
+**Verified**, at 1.0× and 2.0×, on `system.monitor` (27 rows, overflows at both): content
+moves down and back up under a real wheel event through `overlay_e2_pointer`. Note for the
+next agent: `SettingsOverlay` inverts the wheel sign, so `scroll 0 3` is **down**.
+
+---
+
 ## 2026-08-24 — CORRECTION TO D13.1, FROM THE USER DIRECTLY (not an autonomous decision)
 
 This block is not one more thing decided in the user's absence — it is the user, awake,
