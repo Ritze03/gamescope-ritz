@@ -148,8 +148,8 @@ namespace gamescope
 			s_GeneralSettings = config::LoadGlobal();
 		}
 
-		// Pushes the fields this worker's own Chrome.cpp/Widgets.cpp read
-		// live (dock/display scale, window-focused/unfocused/dock opacity)
+		// Pushes the fields Widgets.cpp reads live (display scale, and the
+		// window/dock opacities that outlived their surfaces)
 		// into gamescope::palette::g_LiveTheme, notification_scale/
 		// opacity_notifications into gamescope::Notifications::g_LiveTheme
 		// (Notifications.cpp's own consumer, wired the same way -- see that
@@ -163,7 +163,6 @@ namespace gamescope
 		{
 			auto &live = gamescope::palette::g_LiveTheme;
 			const auto &o = s_GeneralSettings.overlay;
-			live.flDockScale = o.dock_scale;
 			live.flDisplayScale = o.display_scale;
 			live.flWindowAlphaFocused = o.opacity_windows_focused;
 			live.flWindowAlphaUnfocused = o.opacity_windows_unfocused;
@@ -852,11 +851,6 @@ namespace gamescope
 				.Default( config::OverlaySettings{}.display_scale )
 				.Unit( "x" )
 				.Keywords( "scale ui size dpi zoom display_scale font atlas" )
-				.Param( "dock", "Dock scale", BindOverlayFloat( &config::OverlaySettings::dock_scale ) )
-					.Help( "Size of the legacy dock, independently of the overall UI scale." )
-					.Range( 0.85f, 2.0f )
-					.Step( 0.05f )   // 24 positions; 0.85 is itself on the grid
-					.Default( config::OverlaySettings{}.dock_scale )
 				.Param( "notifications", "Notification scale",
 					BindOverlayFloat( &config::OverlaySettings::notification_scale ) )
 					.Help( "Size of toast notifications, independently of the overall UI scale." )

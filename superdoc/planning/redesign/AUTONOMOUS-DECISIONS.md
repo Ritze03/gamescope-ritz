@@ -63,6 +63,51 @@ changes the card's shape to accommodate a drawing bug.
 toast-accent-edge-{0.5,1.0,2.0}.png` — before/after, zoomed to the top-left corner, from a
 real `gamescopectl notify_test` toast at each scale.
 
+### D32.2 · `dock_scale` is removed outright, and the other orphans are reported, not removed
+
+**Why removed rather than left dormant.** P5 deleted the dock, the floating windows and
+all their chrome. `overlay.dock_scale` therefore sized nothing, but it was still a live
+sub-parameter under **UI scale** — a slider the user could drag with no effect anywhere on
+screen. That is worse than a missing setting.
+
+**What an old config does now.** It loads, unchanged and unremarked. `ConfigManager.cpp`'s
+parse looks every key up **by name**; it never iterates-and-validates, so a key nothing
+asks for is simply never consulted — no warning, no fallback, no effect on its neighbours.
+This is the same graceful path `opacity_background`'s removal already took.
+
+**But the key is dropped on the next write, and that is a real loss.** `SettingsToJson()`
+emits the struct's fields, so it cannot round-trip a key the struct no longer has: the
+first time anything saves `global.json`, the old `dock_scale` line disappears. Acceptable
+for a removed feature — **stated** rather than left to be discovered, in `ConfigSchema.h`,
+in the serializer, and in a test (`tests/test_config.cpp`, "a config carrying the removed
+dock_scale key loads cleanly, and drops it on the next write") that asserts both halves
+against the bytes on disk. The pre-existing E2 config test keeps `dock_scale` in its
+fixture on purpose and still asserts the file is byte-identical after a load, so "reading
+an old config rewrites nothing" stays pinned too.
+
+**Other orphans found, and deliberately NOT removed.** Grepping the schema for settings
+whose subject P5 deleted turns up four more, all still registered or still plumbed, none
+with a consumer left:
+
+| Key | Was consumed by | State now |
+| --- | --- | --- |
+| `opacity_dock` | `Chrome.cpp`'s dock container | still a **visible slider** ("Transparency → Dock"), reaches only `palette::g_LiveTheme.flDockAlpha`, which nothing reads |
+| `opacity_windows_focused` | `Chrome.cpp`'s `BeginPanelWindow()` | still a **visible slider**, same dead end (`flWindowAlphaFocused`) |
+| `opacity_windows_unfocused` | same | still a **visible slider**, same dead end |
+| `panel_geometry` | `Chrome.cpp`'s panel-geometry autosave | no writer and no reader left; `EnqueueGeometryWrite()` has no call sites |
+
+`overlay.fade_ms` is a fifth, weaker case: only a comment in `SettingsOverlay.cpp` mentions
+it, and it has no UI row, so it costs the user nothing.
+
+**Chose to report, not remove.** The brief asked for `dock_scale` specifically and for
+anything further to be named before being touched. The three opacity sliders are a
+user-visible removal each (and arguably want re-pointing at the E2 surfaces instead of
+deleting), so they are a decision for the user, not a tidy-up to fold into this commit.
+
+**Historical planning docs still mention `dock_scale`** (`slider-widget-spec.md`,
+`ui-mockup-precise-spec.md`, `round-2/a-console/SPEC.md`). Left as written: they are dated
+records of what was designed then, not claims about what the code does now.
+
 ## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
 
 Two reports from the user, both about the standalone launcher (D25). They are finished

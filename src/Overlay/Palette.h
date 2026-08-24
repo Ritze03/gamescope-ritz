@@ -155,7 +155,8 @@ namespace gamescope::palette
 	// every other reader only ever reads. Defined in Palette.cpp.
 	struct LiveTheme
 	{
-		float flDockScale          = 1.0f;  // OverlaySettings::dock_scale
+		// flDockScale was removed 2026-08-24 with OverlaySettings::dock_scale
+		// itself -- P5 deleted the dock, so nothing read it any more.
 		float flDisplayScale       = 1.0f;  // OverlaySettings::display_scale -- see ConfigSchema.h's ceiling note
 		float flWindowAlphaFocused   = 1.0f; // OverlaySettings::opacity_windows_focused
 		float flWindowAlphaUnfocused = 0.9f; // OverlaySettings::opacity_windows_unfocused
@@ -174,10 +175,8 @@ namespace gamescope::palette
 	// Issue #23 half two: the effective control-geometry scale factor --
 	// OverlaySettings::display_scale (0.5..2.0, ConfigSchema.h), read fresh
 	// every call rather than cached, same live-tunable contract as every
-	// other g_LiveTheme field. Widgets.cpp/Chrome.cpp multiply their own
-	// baseline pixel constants by this, mirroring the exact pattern
-	// Chrome.cpp's DrawDock()/DrawDockButton() already use for flDockScale
-	// (kButtonSize = 54.0f * flDockScale, etc.) -- display_scale used to
+	// other g_LiveTheme field. Widgets.cpp multiplies its own baseline pixel
+	// constants by this -- display_scale used to
 	// drive ImGuiIO::FontGlobalScale (and the font atlas rebuild, #38) only;
 	// this closes the gap #24 found, where every hand-drawn widget/chrome
 	// pixel constant ignored it outright while text scaled around them.

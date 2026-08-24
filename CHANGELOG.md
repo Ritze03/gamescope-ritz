@@ -62,6 +62,9 @@ The newest version below is the one this build reports.
   on the way out.
 
 ### Removed
+- **Dock scale**: the dock it sized no longer exists, so the setting did
+  nothing. Existing configs still load; the unused key is dropped the next
+  time settings are saved.
 - **The `settings` label in the title bar**, which restated the window's own
   purpose. The rule under the bar now follows your accent colour.
 

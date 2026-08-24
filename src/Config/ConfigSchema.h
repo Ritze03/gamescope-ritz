@@ -265,16 +265,29 @@ namespace gamescope::config
         // never change any of these. Every field here takes effect live (no
         // restart) - see Overlay/Chrome.cpp's EnsureLiveThemeLoaded() and
         // Overlay/PanelConfig.cpp's General tab for the read/write side, and
-        // each field's own comment for who *consumes* it (some are drawn by
-        // Chrome.cpp/Widgets.cpp directly; dock_scale is the odd one out -
+        // each field's own comment for who *consumes* it:
         // notification_scale/opacity_notifications are read live by
         // Notifications.cpp (gamescope::Notifications::g_LiveTheme, pushed
-        // by PanelConfig.cpp's PushLiveTheme() alongside the Chrome fields);
-        // background_blur/background_darkening are read live by
-        // SettingsOverlay.cpp (gamescope::g_BackgroundLiveTheme, pushed the
-        // same way) -- see SettingsOverlay.h's comment).
-        float dock_scale = 1.0f;                 // 0.85..2.0 - Chrome.cpp's DrawDock() button/gap/padding scale. Spec §1 note: keep the 54px dock button >=44px physical, hence the 0.85 floor (54*0.85 ~= 46px). Ceiling widened to match display_scale (#24); dock geometry already scales with this field (Chrome.cpp's kButtonSize = 54.0f * flDockScale), so the ceiling was never atlas-bound the way display_scale's was.
-        float display_scale = 1.0f;              // 0.5..2.0 - overall UI scale (#24). Drives ImGuiIO::FontGlobalScale AND, on slider release, gamescope::fonts::RebuildAll() re-bakes the font atlas at the new effective size across all three ImGui contexts (#38), so text stays crisp across the whole range rather than resampling a fixed-size bake. Widget/window geometry in Widgets.cpp/Chrome.cpp now multiplies by this field too (#23), mirroring dock_scale's existing pattern, so controls and hit-tests scale together with the text across the whole 0.5..2.0 range instead of the text alone growing against fixed-pixel geometry.
+        // by PanelConfig.cpp's PushLiveTheme()); background_blur/
+        // background_darkening are read live by SettingsOverlay.cpp
+        // (gamescope::g_BackgroundLiveTheme, pushed the same way) -- see
+        // SettingsOverlay.h's comment.
+        //
+        // dock_scale was removed 2026-08-24. It scaled Chrome.cpp's
+        // DrawDock() geometry, and P5 deleted the dock, the floating
+        // windows and all their chrome -- so the field controlled nothing
+        // at all, and a slider for it was a control the user could move
+        // with no effect anywhere on screen. Removed rather than left
+        // dormant for exactly that reason. An old config carrying the key
+        // parses fine: this file's read side (ConfigManager.cpp) only ever
+        // looks keys up by name, never iterates-and-validates, so a
+        // leftover key is simply never read -- the same graceful path
+        // opacity_background's own removal note below describes. It is,
+        // however, DROPPED the next time the file is written: the
+        // serializer emits the struct's fields, so it cannot round-trip a
+        // key the struct no longer has. That is accepted for a removed
+        // feature, and stated here so it does not surprise anyone.
+        float display_scale = 1.0f;              // 0.5..2.0 - overall UI scale (#24). Drives ImGuiIO::FontGlobalScale AND, on slider release, gamescope::fonts::RebuildAll() re-bakes the font atlas at the new effective size across all three ImGui contexts (#38), so text stays crisp across the whole range rather than resampling a fixed-size bake. Widget geometry in Widgets.cpp multiplies by this field too (#23), so controls and hit-tests scale together with the text across the whole 0.5..2.0 range instead of the text alone growing against fixed-pixel geometry.
         float notification_scale = 1.0f;         // 0.6..1.6 - Notifications.cpp's DrawToasts() GetUiScale(): scales toast card size/font/padding/slide distance.
         // opacity_background ("Background veil", an ImGui-drawn flat dim tint
         // behind the whole overlay) was removed 2026-08-22: with
