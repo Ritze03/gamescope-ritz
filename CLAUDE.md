@@ -10,6 +10,15 @@ upstream work, not this fork's divergence. This fork's actual own work is additi
 top: the settings-overlay/FPS-HUD system (see `superdoc/planning/
 overlay-presentation-architecture.md`).
 
+## Keep `CHANGELOG.md` current
+
+`CHANGELOG.md` (repo root) needs a new entry, in the **same commit**, whenever a change is
+user-visible: a fix, a new feature, or a behaviour change. It does not need one for a typo fix,
+a refactor with no visible effect, or a docs-only edit. Write what changed for the user **and
+why** — not the commit subject; the *why* is the part that doesn't survive anywhere else. Follow
+the dated-block format in the always-loaded
+`@superdoc/claude-instructions/documentation-version-policy.md` rather than inventing your own.
+
 <!-- superdoc:start v2 -->
 ## Docs: read before you touch, update after you change
 

@@ -3,6 +3,10 @@
 A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 [architecture/overview.md](architecture/overview.md) as the start-here page.
 
+- [`CHANGELOG.md`](../CHANGELOG.md) (repo root) — dated, why-focused record of this fork's own
+  changes: what shipped on `master`, and separately what's on the unmerged
+  `feature/overlay-e2` branch.
+
 ## architecture/ — how the code fits together
 
 - [Overview](architecture/overview.md) — module map, data flow, "where to look for X". **Start here.**
