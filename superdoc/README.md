@@ -88,7 +88,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 ## claude-instructions/ — mandatory rules for agents
 
 - [Working with the Docs](claude-instructions/documentation.md) — read before you touch, update after you change.
-- [Documentation version policy](claude-instructions/documentation-version-policy.md) — date-based dated-block convention.
+- [Documentation version policy](claude-instructions/documentation-version-policy.md) — one semver bump per dated block, sized to that day's user-facing magnitude.
 - [Changelog maintenance](claude-instructions/changelog.md) — the strict `CHANGELOG.md` format, its four categories, and why that file is the project's version marker.
 
 ## meta/
