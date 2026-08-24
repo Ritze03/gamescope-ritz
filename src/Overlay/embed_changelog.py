@@ -28,8 +28,38 @@
 #
 # The cost is ~20 kB of rodata and one build rule. That is the right trade
 # for a small, immutable, per-build document.
+#
+# IT ALSO EXTRACTS THE PROJECT'S VERSION.
+# gamescope-ritz has no other version marker: it carries no tags and
+# meson.build's project() declares none. Rather than ADD a second place to
+# write the number -- which is a thing to keep in sync, and therefore a thing
+# that eventually disagrees -- the number is DERIVED here from the top
+# block's `## [x.y.z] - YYYY-MM-DD` heading, in the same pass that reads the
+# file for embedding. A semver in the binary that disagrees with the one in
+# the changelog is worse than neither, because both look authoritative; this
+# makes the disagreement unrepresentable rather than merely discouraged.
 import os
+import re
 import sys
+
+# The top block's heading. Deliberately strict -- three all-numeric parts in
+# brackets, an en dash or a hyphen, then the date -- because this is the one
+# place the version is read from, and a loose pattern would silently accept a
+# malformed heading and ship a wrong number.
+VERSION_RE = re.compile(
+    r"^##\s+\[(\d+\.\d+\.\d+)\]\s*[–-]\s*\d{4}-\d{2}-\d{2}\s*$" )
+
+
+def extract_version( text ):
+    """The first `## [x.y.z] - date` heading, or None if there is none."""
+    for line in text.splitlines():
+        if line.startswith( "## " ):
+            m = VERSION_RE.match( line.strip() )
+            # The FIRST `## ` heading decides: it is the newest block by the
+            # newest-on-top rule, so a later well-formed heading must not be
+            # able to stand in for a malformed newest one.
+            return m.group( 1 ) if m else None
+    return None
 
 # What gets embedded when CHANGELOG.md is absent. A source tarball exported
 # without it, or a downstream re-packaging, should still BUILD -- and should
@@ -42,8 +72,8 @@ MISSING_TEXT = (
     "CHANGELOG.md was not present in the source tree this binary was built\n"
     "from, so no changelog could be embedded.\n"
     "\n"
-    "The version information above is still accurate -- it comes from the\n"
-    "build, not from this file.\n"
+    "The base commit and build date above still come from git and are\n"
+    "accurate; only the version number and these notes are missing.\n"
 )
 
 
@@ -63,6 +93,31 @@ def main():
         data = MISSING_TEXT.encode( "utf-8" )
         present = False
 
+    if present:
+        version = extract_version( data.decode( "utf-8", "replace" ) )
+        if version is None:
+            # LOUD, not a fallback. Everything else in this file degrades
+            # gracefully because a missing changelog is a legitimate state
+            # for a re-packaged tarball. A changelog that IS there but whose
+            # newest heading cannot be read is different: it means the file
+            # was edited into a shape the format does not allow, and the only
+            # honest version to report would be a guess. Fail the build and
+            # let whoever broke the heading fix it.
+            sys.stderr.write(
+                "embed_changelog.py: {}: could not read a version from the "
+                "first '## ' heading.\n"
+                "  Expected:  ## [x.y.z] - YYYY-MM-DD\n"
+                "  The newest block's version is this project's version "
+                "marker; see\n"
+                "  superdoc/claude-instructions/changelog.md.\n"
+                .format( in_path ) )
+            return 1
+    else:
+        # No file, so no version to derive. The UI has g_Changelog_Present to
+        # tell this apart from a real version and says so rather than
+        # printing a number nothing backs.
+        version = "unknown"
+
     with open( out_path, "w" ) as f:
         f.write( "// Auto-generated from {} by embed_changelog.py -- do not edit.\n"
                  .format( os.path.basename( in_path ) ) )
@@ -77,6 +132,11 @@ def main():
         # changelog says nothing", without string-matching the placeholder.
         f.write( "static const bool g_Changelog_Present = {};\n"
                  .format( "true" if present else "false" ) )
+        # The project's version, derived from the top block above -- see the
+        # header comment for why it is derived here rather than declared in
+        # meson.build or a VERSION file.
+        f.write( "static const char g_Changelog_Version[] = \"{}\";\n"
+                 .format( version ) )
 
     return 0
 

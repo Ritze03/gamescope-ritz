@@ -91,12 +91,34 @@ namespace gamescope
 		}
 
 		// This fork's patch version: a date the reader can compare.
-		std::string RitzVersionLine()
+		std::string RitzDateLine()
 		{
 			std::string s = k_szRitzPatchDate;
 			if ( k_bRitzDirty )
 				s += "+";   // built from a dirty tree; the date is approximate
 			return s;
+		}
+
+		// This fork's own semantic version, derived at build time from
+		// CHANGELOG.md's newest block by Overlay/embed_changelog.py.
+		//
+		// WHY THE CHANGELOG IS THE VERSION MARKER. The policy in
+		// superdoc/claude-instructions/documentation-version-policy.md wants
+		// a version marker kept in sync with the newest changelog block, and
+		// this project has nowhere to put one: it carries no tags and
+		// project() declares no version. Adding a VERSION file or a
+		// project(version:) would create a SECOND place to write the number
+		// -- and two authoritative-looking numbers that can disagree are
+		// worse than one, because the reader cannot tell which lies. Deriving
+		// it from the block the policy already governs makes them the same
+		// number by construction, so the build enforces what would otherwise
+		// be an agent's job to remember.
+		std::string RitzVersionLine()
+		{
+			// "unknown" only when no CHANGELOG.md was embedded at all; the
+			// build fails rather than guess when one is present but its
+			// newest heading cannot be read.
+			return std::string( g_Changelog_Version );
 		}
 	}
 
@@ -106,11 +128,16 @@ namespace gamescope
 
 		a.Keywords( "changelog version history release notes build commit "
 		            "gamescope ritz upstream base patch what changed" );
+		// All three identity facts, because none substitutes for another: the
+		// version says what this fork calls itself, the base commit says what
+		// it is a fork OF, and the date says which build of it you are
+		// running. Two of the three cannot answer "is my bug already fixed".
 		a.Summary( []
 		{
-			char sz[ 96 ];
-			std::snprintf( sz, sizeof( sz ), "gamescope-ritz %s  ·  %s",
-				RitzVersionLine().c_str(), BaseVersionLine().c_str() );
+			char sz[ 128 ];
+			std::snprintf( sz, sizeof( sz ), "%s  ·  %s  ·  %s",
+				RitzVersionLine().c_str(), BaseVersionLine().c_str(),
+				RitzDateLine().c_str() );
 			return std::string( sz );
 		} );
 
@@ -143,14 +170,22 @@ namespace gamescope
 			} );
 
 		a.Facts( "changelog.ritz", "gamescope-ritz", []{ return RitzVersionLine(); } )
-			.Help( "This fork's patch version, as the date of the newest commit in the build "
-			       "(YYYY-MM-DD). It is the COMMIT date, not the build date, so two builds of "
-			       "the same source always report the same version. A trailing + means the "
-			       "tree had uncommitted changes when it was configured." )
-			.Keywords( "ritz fork version patch date build commit" )
-			.Live( "patch date", []
+			.Help( "This fork's own version. It is DERIVED at build time from the newest "
+			       "block in CHANGELOG.md below, not declared anywhere else -- so the number "
+			       "shown here and the newest entry you can read cannot disagree. The build "
+			       "date underneath tells two builds of the same version apart." )
+			.Keywords( "ritz fork version semver patch date build commit changelog" )
+			.Live( "version", []
 			{
-				return ui::Fact{ "patch date", k_szRitzPatchDate };
+				return ui::Fact{ "version", g_Changelog_Present
+					? g_Changelog_Version
+					: "unknown -- no changelog embedded" };
+			} )
+			.Live( "built from", []
+			{
+				// HEAD's COMMIT date, not the wall clock: two builds of the
+				// same source agree, which a build timestamp would not.
+				return ui::Fact{ "built from", RitzDateLine() };
 			} )
 			.Live( "commit", []
 			{
