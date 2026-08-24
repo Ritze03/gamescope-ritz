@@ -497,12 +497,40 @@ namespace gamescope::ui
 		size_t    m_nGroup = 0;
 	};
 
+	// The STRUCTURAL class of a content line. Data, not styling: exactly like
+	// ContentLine::nSeverity, the area states a class and the shell alone
+	// decides the type role, colour and indent it draws with. The Log emits
+	// only Plain; the Changelog emits the rest (see Overlay/ChangelogParse.h).
+	//
+	// Anything a parser cannot classify MUST come back as Plain rather than be
+	// dropped -- a malformed document should read as unstyled text, never as
+	// missing text.
+	enum class ContentKind : uint8_t
+	{
+		Plain = 0,   // ordinary text; the Log's every line
+		Heading,     // `#` / `##` -- a document or date heading
+		Subheading,  // `###` -- a category within a heading
+		Bullet,      // `- ...` -- one entry
+		BulletCont,  // an indented continuation of the bullet above it
+	};
+
 	// One line of an area's content body. See Area::Content().
 	struct ContentLine
 	{
 		int         nSeverity = 0;   // 0 info, 1 debug, 2 warn, 3 error
 		std::string sScope;          // subsystem tag, drawn as a dim prefix; may be empty
 		std::string sText;
+
+		// ---- structure (P7) -----------------------------------------------
+		ContentKind eKind = ContentKind::Plain;
+
+		// A bullet's lead-in -- the `**Foo**` of `- **Foo**: rest` -- with its
+		// asterisks already removed. Empty for every other kind, and for a
+		// bullet that has none. Kept SEPARATE from sText rather than merged
+		// with a marker, for two reasons: the shell can give it its own role
+		// without re-parsing, and no literal `**` can reach the screen by way
+		// of a formatting decision made in the wrong place.
+		std::string sLead;
 
 		// ---- identity and time (P6) ---------------------------------------
 		// Both default to 0, which means "this content has no such thing" --

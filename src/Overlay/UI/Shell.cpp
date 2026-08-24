@@ -2809,11 +2809,55 @@ namespace gamescope::ui::shell
 			return std::string( sz );
 		}
 
+		// ---- structured content (the Changelog) --------------------------
+		// A content line may carry a ContentKind, which the area states as
+		// DATA and the shell maps to a role here -- the same split
+		// SeverityColor already makes. Four mappings, no new tokens: a
+		// category cannot introduce a size or a colour the scale does not
+		// have, which is what keeps this a content view rather than a second
+		// styling language living in a document.
+		TypeRole ContentRole( ContentKind eKind )
+		{
+			switch ( eKind )
+			{
+				case ContentKind::Heading:
+				case ContentKind::Subheading:
+					return TypeRole::Section;
+				default:
+					return TypeRole::Meta;
+			}
+		}
+
+		// How far a kind is inset from the body's text edge, in base units.
+		// The indent IS the structure on screen: categories sit inside their
+		// date, bullets inside their category, and a wrapped bullet's tail
+		// lines up under its first word rather than under its dash.
+		float ContentIndent( ContentKind eKind )
+		{
+			switch ( eKind )
+			{
+				case ContentKind::Subheading: return tok::kS;
+				case ContentKind::Bullet:     return tok::kM;
+				case ContentKind::BulletCont: return tok::kM + tok::kM;
+				default:                      return 0.0f;
+			}
+		}
+
 		void DrawContentBody( const Area &area, const Rect &rcCol, float flTop, float flBottom )
 		{
 			const std::vector<ContentLine> vecLines = area.ContentLines();
 
-			const float flLineH = MeasureText( TypeRole::Meta, "Xg" ).y + Px( 3.0f );
+			// Structured content mixes Meta with the taller Section role, so
+			// the row height is measured from the tallest role actually
+			// present. It stays UNIFORM either way: the clipper's exactness
+			// depends on every row being the same height, and a per-line
+			// height would cost a running offset table to scroll at all.
+			bool bStructured = false;
+			for ( const ContentLine &l : vecLines )
+				bStructured |= ( l.eKind != ContentKind::Plain );
+
+			const float flLineH = MeasureText(
+				bStructured ? TypeRole::Section : TypeRole::Meta, "Xg" ).y + Px( 3.0f );
 			const float flH     = ImMax( flLineH * 3.0f, flBottom - flTop - Px( tok::kM ) );
 
 			const Rect rcBody { rcCol.x0, flTop, rcCol.x1, flTop + flH };
@@ -2951,8 +2995,69 @@ namespace gamescope::ui::shell
 							       Col( Role::TextMeta ), sTag.c_str() );
 							x += flW + Px( tok::kXS );
 						}
-						Label( { x, y, rcBody.x1 - flPadX, y + flLineH }, TypeRole::Meta,
-						       SeverityColor( line.nSeverity ), line.sText.c_str() );
+
+						// ---- the text, by structural kind ------------------
+						// A heading gets an accent band because it is the only
+						// thing in this body a reader SCANS for -- the block a
+						// date opens is what they came to find. Everything
+						// else separates on role, indent and text colour
+						// alone: there is no bold face at Meta's weight, so
+						// emphasis is carried by brightness (a bullet's
+						// lead-in at TextPrimary against its sentence at
+						// TextMeta) rather than by a weight that would have to
+						// be invented.
+						const ContentKind eKind = line.eKind;
+						const TypeRole eRole = ContentRole( eKind );
+						x += Px( ContentIndent( eKind ) );
+
+						if ( eKind == ContentKind::Heading )
+							Fill( { rcBody.x0, y, rcBody.x1, y + flLineH }, Accent( 0.10f ) );
+
+						ImU32 colText;
+						switch ( eKind )
+						{
+							case ContentKind::Heading:    colText = Col( Role::AccentText ); break;
+							case ContentKind::Subheading: colText = Col( Role::TextLabel ); break;
+							default: colText = SeverityColor( line.nSeverity ); break;
+						}
+
+						if ( eKind == ContentKind::Bullet )
+						{
+							// The dash is drawn, not stored: the parser hands
+							// over the entry, and what marks an entry on screen
+							// is the shell's call.
+							const float flDashW = MeasureText( eRole, "- " ).x;
+							Label( { x, y, x + flDashW, y + flLineH }, eRole,
+							       Col( Role::TextMeta ), "-" );
+							x += flDashW;
+
+							if ( !line.sLead.empty() )
+							{
+								const float flW = MeasureText( eRole, line.sLead.c_str() ).x;
+								Label( { x, y, ImMin( x + flW, rcBody.x1 - flPadX ),
+								         y + flLineH },
+								       eRole, Col( Role::TextPrimary ), line.sLead.c_str() );
+								// The gap between lead-in and sentence is drawn,
+								// not stored -- but a bullet whose lead-in is
+								// followed straight by punctuation
+								// (`- **A bold clause**, then the rest`) must
+								// NOT get one, or it renders as "clause ,
+								// then". The colon form already had its colon
+								// eaten by the parser and does need the gap.
+								const char chNext = line.sText.empty() ? '\0' : line.sText.front();
+								const bool bTightPunct =
+									chNext == ',' || chNext == '.' || chNext == ';' ||
+									chNext == '!' || chNext == '?' || chNext == ')';
+
+								x += flW;
+								if ( !bTightPunct )
+									x += MeasureText( eRole, " " ).x;
+							}
+						}
+
+						if ( !line.sText.empty() )
+							Label( { x, y, rcBody.x1 - flPadX, y + flLineH }, eRole,
+							       colText, line.sText.c_str() );
 					}
 				}
 				clipper.End();

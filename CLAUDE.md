@@ -10,15 +10,6 @@ upstream work, not this fork's divergence. This fork's actual own work is additi
 top: the settings-overlay/FPS-HUD system (see `superdoc/planning/
 overlay-presentation-architecture.md`).
 
-## Keep `CHANGELOG.md` current
-
-`CHANGELOG.md` (repo root) needs a new entry, in the **same commit**, whenever a change is
-user-visible: a fix, a new feature, or a behaviour change. It does not need one for a typo fix,
-a refactor with no visible effect, or a docs-only edit. Write what changed for the user **and
-why** — not the commit subject; the *why* is the part that doesn't survive anywhere else. Follow
-the dated-block format in the always-loaded
-`@superdoc/claude-instructions/documentation-version-policy.md` rather than inventing your own.
-
 <!-- superdoc:start v2 -->
 ## Docs: read before you touch, update after you change
 
@@ -44,6 +35,11 @@ optional, on-demand read.
   before you touch, update after you change, record design rationale (the *why*).
 - **Version policy** — @superdoc/claude-instructions/documentation-version-policy.md — how
   this project bumps doc/version markers.
+- **Changelog maintenance** — @superdoc/claude-instructions/changelog.md — `CHANGELOG.md`
+  (repo root) gets a one-line entry, in the **same commit**, for every user-visible change.
+  Strict format, four categories, one version bump per dated block. The overlay parses
+  this file, and the build reads the top block's version as the project's own — so
+  `CHANGELOG.md` **is** the version marker; there is no other.
 
 Path base: `CLAUDE.md` uses repo-root-relative paths (`@superdoc/...`, `` `superdoc/...` ``);
 links *inside* docs are docs-relative. Precedence: `CLAUDE.md` is authoritative for
