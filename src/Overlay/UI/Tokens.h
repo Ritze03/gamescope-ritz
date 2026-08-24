@@ -150,16 +150,24 @@ namespace gamescope::ui
 	// ---- Type roles (SPEC §7.6) ------------------------------------------
 	// Six roles, down from E's seven and today's ten. The helper picks the
 	// family per role so "a caller cannot put a number in Sans".
+	//
+	// The sizes below are the LIVE ones (post-D23/D27), not the spec's
+	// originals -- see the long note over kTable in Tokens.cpp for both
+	// raises and why each role moved by the amount it did. Tokens.cpp is the
+	// single source; these comments are a reading aid and must be corrected
+	// alongside it if the table moves again.
 	enum class Family : unsigned char { Sans, Mono };
 
 	enum class TypeRole : unsigned char
 	{
-		Title,    // Mono 600 11 UPPER -- slab title, region titles
-		Section,  // Mono 500 10.5 UPPER -- group bands, rail sections, mode strip
-		Label,    // Sans 400 14 -- row labels, list primaries
-		Body,     // Sans 400 14 -- Inspector prose only
-		Value,    // Mono 500 15 -- every numeric or state readout
-		Meta,     // Mono 400 11.5 -- units, marks, line numbers, chips
+		Title,    // Mono 600 14.5 UPPER -- slab title, region titles
+		Section,  // Mono 500 13.5 UPPER -- group bands, rail sections, mode strip
+		Label,    // Sans 400 16 -- row labels, list primaries
+		Body,     // Sans 400 16 -- Inspector prose only
+		Value,    // Mono 500 16.5 -- every numeric or state readout
+		Meta,     // Mono 400 13 -- units, marks, line numbers, chips, AND the
+		          // whole Log / Changelog content body (Shell.cpp's
+		          // DrawContentBody draws every line in this role)
 		Count,
 	};
 

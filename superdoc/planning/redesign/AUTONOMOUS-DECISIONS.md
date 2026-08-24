@@ -10,6 +10,111 @@ cheap.
 
 ---
 
+## 2026-08-24 — D30 · The type ladder rises a second time, and `Meta` moves most
+
+The user, one round after D23: *"Make the Log and Changelog font 1-2px bigger. In fact, we
+should increase all of the smaller font sizes by 1-2px."* Directional again, not a table,
+so the six numbers were judgment again — and this time the numbers had to explain why the
+first pass didn't land.
+
+### D30.1 · `Meta` gets the biggest raise — reversing D23's one deliberate freeze
+
+**What D23 decided:** hold `Meta` at 11.5 because a quiet auxiliary tier (units, marks,
+chips) must not out-rank the labels it annotates, making it the deliberate numeric floor.
+
+**Why that was wrong in one specific way:** `Meta` is not only auxiliary. `Shell.cpp`'s
+`DrawContentBody()` draws **every Log and Changelog line** in `TypeRole::Meta` — the line
+number, the timestamp, the scope tag *and the message text itself*. So the single role D23
+froze was exactly the role behind the two surfaces this round names. D23's reasoning about
+`Meta`-as-annotation was sound; it just wasn't the whole of what `Meta` does.
+
+Checked before assuming: there is **no separate mono body role** and **no hardcoded size**
+at either call site. P1's "no magic numbers at call sites" guarantee holds — both surfaces
+read the token, so this is entirely a `Tokens.cpp` change.
+
+**Decided, needs confirmation:**
+
+| Role | Was | Now | Delta | Gap above |
+|---|---|---|---|---|
+| `Meta` | 11.5 | **13.0** | +1.5 | — (floor) |
+| `Section` | 12.0 | **13.5** | +1.5 | 0.5 |
+| `Title` | 13.0 | **14.5** | +1.5 | 1.0 |
+| `Label` | 15.0 | **16.0** | +1.0 | 1.5 |
+| `Body` | 15.0 | **16.0** | +1.0 | tied to `Label` |
+| `Value` | 16.0 | **16.5** | +0.5 | 0.5 |
+
+### D30.2 · Tapered, not flat — and why that is not "adjusting the scale"
+
+**Chose:** a bigger raise at the bottom of the ladder than at the top.
+
+**Rejected — a flat +1.5 on all six.** It preserves every gap exactly, which is tempting,
+but it is the *"do not just adjust the scale"* move of issue #23 wearing different clothes:
+it inflates the entire slab in order to fix the bottom of it, when the request was
+explicitly about the *smaller* sizes. It also spends all of `kRowH`/`kControlH`'s remaining
+headroom at 2.0× for no benefit to the complaint.
+
+**Rejected — raising only `Meta` and leaving the rest.** `Meta` at 13.0 would then equal
+`Title` and out-rank `Section`, which is precisely the inversion D23 was right to avoid.
+Fixing the floor forces the tiers above it up too; that is what "keep the ladder coherent"
+means here.
+
+`Value` moves at all only because `Label` passing it would invert the ladder. +0.5 is the
+least that keeps `Value` on top, and keeping the ceiling nearly still is what let the row
+tokens stay untouched.
+
+Order preserved, nothing collides: `Meta` 13.0 < `Section` 13.5 < `Title` 14.5 <
+`Label`/`Body` 16.0 < `Value` 16.5. Every gap ≥ 0.5 base units (D23's floor). Both 0.5 gaps
+sit across a register boundary, so neither carries its distinction on size alone:
+`Meta`→`Section` is lowercase → UPPERCASE + 0.10em tracking, `Label`→`Value` is Sans → Mono.
+
+**Geometry:** nothing had to grow. `kRowH` (44) and `kControlH` (28) still clear every size
+with headroom, and `shelltok::kSectionLine` (20) / `kTitleLine` (24) still clear `Section`
+13.5 / `Title` 14.5. The Log's line height was already *derived*
+(`MeasureText(Meta,"Xg").y + 3`), so it followed the token with no edit — which is the
+payoff for Tokens.h rule 2 ("a derived value is derived, not restated").
+
+### D30.3 · The test pins the ladder's ORDER, not its literals
+
+**Chose:** a new `overlay_ui` case asserting strict ascending order, a ≥ 0.5-unit minimum
+step, `Label == Body`, and that the order survives 0.5× / 1.0× / 2.0×.
+
+**Rejected — pinning the six literals.** Two hand-raises in one day says there will be a
+third, and a literal test fails on every deliberate raise, which trains the next agent to
+edit the test instead of reading it. The invariant that actually matters is that a reader
+can tell the tiers apart — so that is what is pinned.
+
+### D30.4 · Ellipsis at the clip point, shipped with the raise rather than after it
+
+**The defect:** conformance-audit divergence 10. `Controls.cpp`'s `DrawText()` is the one
+place every label, value and log line is clipped, and it clipped **hard** — the Log
+Inspector's Buffer facts row read `51 lines · 2 er:`, mid-word truncation indistinguishable
+from a value that genuinely ends there. The user has objected to exactly this before (#46).
+
+**Chose:** fix it in this change. Raising the ladder makes more strings overflow more
+often, so shipping the raise without the marker would knowingly worsen a defect the user
+has already complained about once. `DrawText()` now truncates to the last glyph that fits
+and appends `...`. Buffer reads `31 lines · ...`.
+
+**`...` and not U+2026:** `Fonts.cpp` bakes Basic Latin + Latin-1 only, and the bundled
+Geist faces carry no ellipsis glyph at all — the same constraint that made D18 *draw* the
+chevron and magnifier instead of typing them.
+
+**Rejected — ellipsizing per call site.** There are a dozen `Label()` calls and one
+`DrawText()`; the whole point of the single clip point is that it is single.
+
+**The trap this uncovered, worth recording:** several rects are sized *from* the same
+measurement they later clip — `RowCtx::SplitLabelZone()` builds the value rect as
+`Lw - measured .. Lw`, and `a - (a - b)` is not exactly `b` in float at screen-sized
+coordinates. A strict `size.x > width` test therefore fired on a ~6e-5 px difference and
+turned the Monitor's `18 px` into `1...`, because the marker costs three characters.
+`DrawText()` now requires **one physical pixel** of overflow before truncating. Below that,
+hard clipping is invisible and an ellipsis would be a lie. Caught in the before/after
+screenshot pair, not by a test — the acceptance test the user asked for did its job.
+
+*Cheap to reverse:* six constants in one table, plus one branch in `DrawText()`.
+
+---
+
 ## 2026-08-24 — D28 · The Log becomes its own content, and a Changelog area
 
 Both halves were asked for by the user directly; what follows are the calls taken *inside* those

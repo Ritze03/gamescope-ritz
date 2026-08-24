@@ -85,7 +85,7 @@ namespace gamescope::ui
 
 		// Alignment only has meaning while the text FITS. Once it is wider
 		// than the rect it gets left-aligned regardless of what was asked
-		// for, so the clip takes the tail rather than the head.
+		// for, so the truncation takes the tail rather than the head.
 		//
 		// Right-aligning an overlong string puts its start off the left edge
 		// and clips there, which reads as garbage rather than as truncation:
@@ -104,11 +104,76 @@ namespace gamescope::ui
 
 		const ImVec2 pos( flX, rcClip.Min.y + ( rcClip.GetHeight() - size.y ) * 0.5f );
 
-		// Text that does not fit is clipped to the rect the allocator gave it,
-		// never allowed to overrun into the next column -- which is what makes
-		// the four column lines unbroken from the top of a sheet to the bottom.
+		// Text that does not fit is never allowed to overrun into the next
+		// column -- that is what makes the four column lines unbroken from
+		// the top of a sheet to the bottom. The draw is still hard-clipped to
+		// the rect as a backstop, but the string is TRUNCATED WITH AN ELLIPSIS
+		// first, so overflow reads as "there is more" instead of stopping
+		// mid-word.
+		//
+		// D27, from the conformance audit's divergence 10. Hard clipping alone
+		// rendered the Log Inspector's Buffer facts row as `51 lines · 2 er:`
+		// in the narrow lane -- a truncation the user has objected to before
+		// (#46) because it is indistinguishable from a value that genuinely
+		// ends there. Raising the type ladder makes more strings overflow more
+		// often, so the marker had to land in the same change rather than
+		// after it.
+		//
+		// "..." and not U+2026: Fonts.cpp bakes Basic Latin + Latin-1 only,
+		// and the bundled Geist faces do not carry the ellipsis glyph -- the
+		// same constraint that made the kit DRAW its chevron and magnifier
+		// (D18) rather than type them. Three periods are in every face.
 		const ImVec4 clip( rcClip.Min.x, rcClip.Min.y, rcClip.Max.x, rcClip.Max.y );
-		ImGui::GetCurrentWindow()->DrawList->AddText( pFont, flSize, pos, col, pszText, nullptr, 0.0f, &clip );
+		ImDrawList *pDrawList = ImGui::GetCurrentWindow()->DrawList;
+
+		// ONE PHYSICAL PIXEL OF SLACK before a string counts as overflowing.
+		// Several rects in the kit are sized FROM this very measurement --
+		// RowCtx::SplitLabelZone() builds the value rect as `Lw - measured ..
+		// Lw`, and `a - (a - b)` is not exactly `b` in float at screen-sized
+		// coordinates -- so a rect cut to fit its text exactly can come back
+		// a few ten-thousandths of a pixel too narrow. Hard clipping never
+		// noticed; an ellipsis does, and the first build of this turned the
+		// Monitor's `18 px` into `1...` because a 6e-5 px overflow cost it
+		// three characters to the marker. Below one pixel, clipping is
+		// invisible and a marker would be a lie.
+		//
+		// The alignment test above stays strict on purpose: it must only
+		// right- or centre-align text that genuinely fits, or a string
+		// overflowing by half a pixel would be pushed off the left edge.
+		if ( size.x - rcClip.GetWidth() > 1.0f )
+		{
+			static const char * const kEllipsis = "...";
+			const float flEllipsisW = pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, kEllipsis ).x;
+			const float flHeadW     = rcClip.GetWidth() - flEllipsisW;
+
+			// Too narrow to hold even the marker plus one glyph: fall back to
+			// the plain hard clip. An ellipsis alone tells the reader nothing
+			// the empty space did not, and a marker wider than its own lane
+			// would be the very overrun this guards against.
+			if ( flHeadW > 0.0f )
+			{
+				// max_width (the 2nd argument), NOT wrap_width (the 3rd):
+				// wrapping would break at a WORD boundary and return a
+				// multi-line box, which is not what a one-line lane wants.
+				// max_width stops at the last glyph that fits, hands back the
+				// cut point in out_remaining, and returns that head's exact
+				// width -- so the marker is positioned by measurement rather
+				// than by a second CalcTextSize.
+				const char *pszCut = nullptr;
+				const ImVec2 head = pFont->CalcTextSizeA( flSize, flHeadW, 0.0f,
+					pszText, nullptr, &pszCut );
+
+				if ( pszCut && pszCut > pszText )
+				{
+					pDrawList->AddText( pFont, flSize, pos, col, pszText, pszCut, 0.0f, &clip );
+					const ImVec2 posEllipsis( pos.x + head.x, pos.y );
+					pDrawList->AddText( pFont, flSize, posEllipsis, col, kEllipsis, nullptr, 0.0f, &clip );
+					return;
+				}
+			}
+		}
+
+		pDrawList->AddText( pFont, flSize, pos, col, pszText, nullptr, 0.0f, &clip );
 	}
 
 	// =====================================================================
