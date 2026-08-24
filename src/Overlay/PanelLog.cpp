@@ -144,17 +144,28 @@ namespace gamescope
 			{
 				if ( !PassesFilters( line, 0 ) )
 					continue;
-				vec.push_back( ui::ContentLine{ ContentSeverity( line.ePriority ),
-					line.sScope.empty() ? std::string( "gamescope" ) : line.sScope, line.sText,
-					line.ulSeq, line.ulRealtimeMs } );
+				// Designated, not positional: ContentLine gained structural
+				// fields (eKind, sLead) BETWEEN sText and ulSeq for the
+				// Changelog, which silently rebound a positional ulSeq onto
+				// eKind. Naming the fields makes this init immune to the
+				// next field added in the middle of the struct.
+				vec.push_back( ui::ContentLine{
+					.nSeverity    = ContentSeverity( line.ePriority ),
+					.sScope       = line.sScope.empty() ? std::string( "gamescope" ) : line.sScope,
+					.sText        = line.sText,
+					.ulSeq        = line.ulSeq,
+					.ulTimeMs     = line.ulRealtimeMs } );
 			}
 			for ( const LogCapture::Line &line : s_GameTab.vecLines )
 			{
 				if ( !PassesFilters( line, 1 ) )
 					continue;
-				vec.push_back( ui::ContentLine{ ContentSeverity( line.ePriority ),
-					std::string( "game" ), line.sText,
-					line.ulSeq, line.ulRealtimeMs } );
+				vec.push_back( ui::ContentLine{
+					.nSeverity    = ContentSeverity( line.ePriority ),
+					.sScope       = std::string( "game" ),
+					.sText        = line.sText,
+					.ulSeq        = line.ulSeq,
+					.ulTimeMs     = line.ulRealtimeMs } );
 			}
 
 			std::sort( vec.begin(), vec.end(),
