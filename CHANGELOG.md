@@ -2,14 +2,19 @@
 
 All notable user-facing changes, newest first. Categories: **Added** (new
 features), **Fixed** (bug and behaviour fixes), **Removed** (things taken
-out), **Info** (notes worth knowing). Each date is also that build's
-gamescope-ritz patch version.
+out), **Info** (notes worth knowing). The newest version below is the one
+this build reports.
 
-## 2026-08-24
+## [0.3.1] – 2026-08-24
 
 ### Added
-- **Changelog area**: a new rail area showing this file, the base gamescope
-  commit, and the gamescope-ritz patch date.
+- **Changelog area**: a new rail area showing this file with its headings,
+  categories and entries laid out, alongside the three things that identify
+  a build — the gamescope-ritz version, the upstream gamescope commit it is
+  built on, and the date it was built from.
+- **A version number**: gamescope-ritz now reports a semantic version, taken
+  from the newest entry below, so the number in the overlay and the number
+  in this file cannot disagree.
 - **Your system cursor in the overlay**: nested mode now uses your desktop's
   own cursor. The built-in arrow stays as the fallback for embedded, VR and
   pointer-grabbed modes, so there is still never zero cursor.
@@ -55,7 +60,7 @@ gamescope-ritz patch version.
 - **The overlay rebuild lives on `feature/overlay-e2`** until it merges;
   entries from 2026-08-23 on describe that branch where the two differ.
 
-## 2026-08-23
+## [0.3.0] – 2026-08-23
 
 ### Added
 - **A rebuilt settings overlay**: one fixed slab (rail, sheet, inspector)
@@ -97,7 +102,7 @@ gamescope-ritz patch version.
 - **HDR has its own tab**, and the frame limiter is 0 or 10-480 rather than
   a plain 0-480 continuum.
 
-## 2026-08-22
+## [0.2.0] – 2026-08-22
 
 ### Added
 - **The settings overlay**: Display, Shaders, Audio, Config and System
@@ -143,7 +148,7 @@ gamescope-ritz patch version.
 - **Build tooling**: one `build-gamescope-ritz.sh` entry point and an
   interactive installer/updater.
 
-## 2026-08-21
+## [0.1.0] – 2026-08-21
 
 ### Info
 - **The fork starts here**, with the planning commit that added `superdoc/`,
