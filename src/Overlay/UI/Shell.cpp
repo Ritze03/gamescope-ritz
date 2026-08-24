@@ -362,7 +362,7 @@ namespace gamescope::ui::shell
 		// s_bPaletteOpen; this only changes what is drawn BEHIND it and what
 		// Esc gives back.
 		//
-		// D27: IT IS WRITTEN ON AN OPENING EDGE AND NOWHERE ELSE ON THE WAY
+		// D31: IT IS WRITTEN ON AN OPENING EDGE AND NOWHERE ELSE ON THE WAY
 		// OUT. See Draw()'s opening-edge block for the whole argument; the
 		// short version is that hiding the layer does not stop it drawing for
 		// another ~200ms of fade, so anything cleared at hide time is a mode
@@ -384,33 +384,82 @@ namespace gamescope::ui::shell
 		// the edge entirely.
 		std::atomic<bool> s_bOverlayHiddenNotice{ false };
 
-		// D27: the layer is down, or has been down since the last frame.
+		// D31: the layer is down, or has been down since the last frame.
 		// Latches on the way down; the opening edge is the only thing that
 		// clears it. Starts true so the process's first frame is an opening
 		// edge like any other.
 		bool s_bLayerDown = true;
 
-		// D27: which surface actually drew, per frame, as a rolling string --
-		// 'L' launcher, 'S' shell, '.' the layer is up but neither drew.
+		// D31: which surface actually drew, per frame, as a rolling string --
+		// 'L' launcher, 'S' shell, '.' the layer is still drawing (fading) but
+		// neither surface painted.
 		//
-		// WHY THIS EXISTS. The defect it was written for is ONE FRAME wide at
-		// its narrowest, so a screenshot is the wrong instrument: catching it
-		// is luck, and missing it is not evidence. "Which branch drew on each
-		// of the frames across the close?" is the question that actually
-		// decides whether the shell can appear, and until this there was no
-		// way to ask it from a script. Same argument that produced
-		// overlay_e2_key (D18) and overlay_e2_get (D22), applied to the draw
-		// path rather than to input or to state.
-		constexpr size_t k_nDrawTraceMax = 600;
-		std::mutex  s_mutDrawTrace;
-		std::string s_sDrawTrace;
-		bool        s_bDrawTraceOn = false;
+		// WHY THIS EXISTS. The defect it was written for is invisible to a
+		// screenshot: catching a transient wrong-surface frame is luck, and
+		// missing it is not evidence of absence. "Which branch drew on each of
+		// the frames across the close?" is the question that actually decides
+		// whether the shell can appear, and until this there was no way to ask
+		// it from a script. Same argument that produced overlay_e2_key (D18)
+		// and overlay_e2_get (D22), applied to the draw path rather than to
+		// input or to state.
+		//
+		// Off by default and allocation-free while off: this is on the render
+		// path, so it must cost nothing when nobody is looking.
+		constexpr size_t k_nDrawTraceMax = 4096;
+		std::mutex        s_mutDrawTrace;
+		std::string       s_sDrawTrace;
+		std::atomic<bool> s_bDrawTraceOn{ false };
 
 		void TraceFrame( char c )
 		{
+			if ( !s_bDrawTraceOn.load( std::memory_order_relaxed ) )
+				return;
+
 			std::scoped_lock lock( s_mutDrawTrace );
-			if ( s_bDrawTraceOn && s_sDrawTrace.size() < k_nDrawTraceMax )
+			if ( s_sDrawTrace.size() < k_nDrawTraceMax )
 				s_sDrawTrace.push_back( c );
+		}
+
+		// D31. The trace is read from a script, so it needs a console verb.
+		// `dump` prints the string and leaves it, so a run can be sampled
+		// more than once.
+		void DrawTraceCmd( std::span<std::string_view> args )
+		{
+			// args[0] is the COMMAND NAME, as everywhere else in this file --
+			// the verb is args[1]. Getting that wrong makes every call print
+			// the usage line, which is how this was caught.
+			const std::string_view svVerb = args.size() >= 2 ? args[ 1 ] : std::string_view( "dump" );
+
+			if ( svVerb == "on" || svVerb == "off" )
+			{
+				const bool bOn = svVerb == "on";
+				{
+					std::scoped_lock lock( s_mutDrawTrace );
+					s_sDrawTrace.clear();
+				}
+				s_bDrawTraceOn.store( bOn, std::memory_order_relaxed );
+				console_log.infof( "overlay_e2_trace: %s", bOn ? "on (cleared)" : "off" );
+				return;
+			}
+
+			if ( svVerb == "clear" )
+			{
+				std::scoped_lock lock( s_mutDrawTrace );
+				s_sDrawTrace.clear();
+				console_log.infof( "overlay_e2_trace: cleared" );
+				return;
+			}
+
+			if ( svVerb == "dump" )
+			{
+				std::scoped_lock lock( s_mutDrawTrace );
+				console_log.infof( "overlay_e2_trace: %zu frames: %s",
+				                   s_sDrawTrace.size(),
+				                   s_sDrawTrace.empty() ? "(empty)" : s_sDrawTrace.c_str() );
+				return;
+			}
+
+			console_log.errorf( "overlay_e2_trace <on|off|clear|dump>" );
 		}
 
 		// =================================================================
@@ -598,6 +647,22 @@ namespace gamescope::ui::shell
 			"Through gamescopectl the verb and its arguments must be ONE quoted argument: "
 			"gamescopectl overlay_e2_pointer \"click 640 400\".",
 			PointerCmd );
+
+		// D31. The launcher-close flash was a WRONG-SURFACE defect, and the
+		// two instruments this shell already had could not see it: a
+		// screenshot samples one frame out of the ~12 the 200ms fade runs,
+		// and overlay_e2_get reads bound state rather than what painted. This
+		// records which branch of Draw() ran, per frame, so "the shell never
+		// drew across the close" is a string a script can assert on instead
+		// of an eye-witness claim.
+		ConCommand cc_overlay_e2_trace(
+			"overlay_e2_trace",
+			"Record which E2 surface drew on each frame: overlay_e2_trace <on|off|clear|dump>. "
+			"One character per frame -- 'L' the standalone launcher, 'S' the full shell, '.' the "
+			"layer still drawing (fading) with neither surface painted. Off by default and free "
+			"while off. Through gamescopectl the verb is one argument: "
+			"gamescopectl overlay_e2_trace on.",
+			DrawTraceCmd );
 
 		// =================================================================
 		//  Registration
@@ -805,7 +870,7 @@ namespace gamescope::ui::shell
 		}
 
 		// =================================================================
-		//  D26/D27: the transient set, and WHEN it is dropped
+		//  D26/D31: the transient set, and WHEN it is dropped
 		// =================================================================
 		// The transient set is the things that only make sense in the session
 		// that created them: an armed delete, a half-open dropdown, a field
@@ -814,7 +879,7 @@ namespace gamescope::ui::shell
 		// arrangement the user chose: the selected area, the selected row and
 		// the Inspector host.
 		//
-		// D27: THIS RUNS ON THE OPENING EDGE, NOT ON THE CLOSE. D26 cleared
+		// D31: THIS RUNS ON THE OPENING EDGE, NOT ON THE CLOSE. D26 cleared
 		// it inside CloseShell(), one line before hiding the layer, and that
 		// is a mode change the user watches: hiding does not stop the overlay
 		// drawing, it starts a ~200ms fade during which every frame still
@@ -836,14 +901,23 @@ namespace gamescope::ui::shell
 			s_bPaletteOpen    = false;
 		}
 
-		// Esc's last rung, and the only place the shell closes itself.
+		// Esc's last rung, and the only place either surface closes itself --
+		// the launcher included.
 		//
-		// D27: it now does ONE thing, and that is the point. Closing must not
-		// touch a single bit that Draw() branches on, because the frames that
-		// follow it are still drawing.
+		// D31: it does ONE thing, and that is the point. Closing must not
+		// touch a single bit that Draw() branches on, because the ~12 frames
+		// that follow it are still drawing. Anything cleared here is a mode
+		// change the user WATCHES; that is what the launcher flash was.
+		//
+		// IDEMPOTENT, deliberately. Those same fading frames re-enter the
+		// launcher branch and reach this again, and SetValue() runs the
+		// ConVar's callback whether or not the value changed -- which would
+		// re-fire NotifyOverlayHidden() once per frame for the whole fade.
+		// Gating on "still capturing" makes the second and later calls free.
 		void CloseShell()
 		{
-			SettingsOverlay_SetVisible( false );
+			if ( SettingsOverlay_IsCapturingInput() )
+				SettingsOverlay_SetVisible( false );
 		}
 
 		InspectorMode CurrentMode( const Entry *pEntry )
@@ -5758,20 +5832,39 @@ namespace gamescope::ui::shell
 		s_bLauncherRequested.store( true, std::memory_order_release );
 	}
 
+	// D31: DERIVED, and that is what lets the mode survive a close.
+	//
+	// The flash fix stops every closing path from clearing s_bLauncherOnly,
+	// so after the launcher closes the mode is still "launcher" -- correctly,
+	// because that is what the fading frames must keep drawing. But wlserver
+	// asks this question to decide what Left+Right Ctrl means, and "a
+	// launcher is up" must be FALSE the moment the layer goes down, or the
+	// next press would read as "the launcher is already up" and decline to
+	// open anything.
+	//
+	// Answering it as `layer up AND mode is launcher` makes those two facts
+	// one fact. The stale mode is then unobservable rather than merely
+	// unlikely to be observed, which is the same move the draw path makes and
+	// the reason neither needs a clear-on-close to stay correct.
 	bool LauncherOnlyActive()
 	{
-		return s_bLauncherOnlyPublished.load( std::memory_order_acquire );
+		return SettingsOverlay_IsCapturingInput() &&
+		       s_bLauncherOnlyPublished.load( std::memory_order_acquire );
 	}
 
 	void NotifyOverlayHidden()
 	{
+		// D31: the notice, and ONLY the notice. This used to also clear the
+		// published mirror, to stop a stale `true` from being read after a
+		// hide -- a job LauncherOnlyActive()'s derivation now does for every
+		// reader at once, including the ones that forget. Writing the mode
+		// from here would be exactly the closing-path write the flash fix
+		// exists to remove.
+		//
+		// The notice itself stays because it catches what the layer flag
+		// cannot: a hide and a re-open that both land between two frames,
+		// where Draw() would see `capturing` on both sides and miss the edge.
 		s_bOverlayHiddenNotice.store( true, std::memory_order_release );
-		// Published immediately as well as through the frame-consumed notice.
-		// wlserver reads this to decide what Left+Right Ctrl means, and the
-		// overlay can be hidden and re-opened between two frames -- leaving
-		// the mirror true until the next Draw() would make the reopen a
-		// launcher the user never asked for.
-		s_bLauncherOnlyPublished.store( false, std::memory_order_release );
 	}
 
 	void Draw()
@@ -5794,7 +5887,7 @@ namespace gamescope::ui::shell
 		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
 
 		// =================================================================
-		//  D27: THE OPENING EDGE -- the only place the mode is decided
+		//  D31: THE OPENING EDGE -- the only place the mode is decided
 		// =================================================================
 		// THE DEFECT THIS REPLACES. *"When i open the Launcher Style settings
 		// (both CTRLs), and close it with Escape, the GUI shows up for a
@@ -5902,25 +5995,39 @@ namespace gamescope::ui::shell
 			std::vector<PaletteItem> launcherItems = Build( Reg(), s_sPaletteQuery );
 			RunPaletteKeyboard( launcherItems );
 
-			// Esc (or a click off the panel) while the launcher is up gives
-			// the GAME back -- it does not uncover a shell, because there is
-			// no shell to uncover and opening one would be the exact
-			// behaviour this change exists to remove. RunPaletteKeyboard()
-			// only clears the open bit; closing the overlay is ours.
+			// The palette is shut but we are in the launcher branch. Exactly
+			// two things put us here, and the surviving mode is what tells
+			// them apart:
 			//
-			// PaletteJump() takes the other exit: it clears s_bLauncherOnly
-			// itself, so by the time we get here the shell is what should be
-			// drawn and this branch is not taken. That frame draws nothing --
-			// the launcher is gone and the shell has not started -- and the
-			// next one is the full overlay at the chosen row.
+			//   * Esc, or a click off the panel. The launcher gives the GAME
+			//     back -- it does not uncover a shell, because there is no
+			//     shell to uncover and opening one is the behaviour D25
+			//     exists to remove. RunPaletteKeyboard() only clears the open
+			//     bit; closing the layer is ours.
+			//   * PaletteJump(), which cleared s_bLauncherOnly itself to
+			//     promote the launcher to the full shell at the chosen row
+			//     (D25's Enter). The layer stays up. This frame paints
+			//     nothing -- the launcher is gone, the shell has not started
+			//     -- and the next frame is the full overlay.
+			//
+			// D31: THE ESC PATH NO LONGER WRITES THE MODE. It used to clear
+			// s_bLauncherOnly here and then hide, which is what produced the
+			// flash: hiding starts a ~200ms fade during which Draw() runs
+			// another ~12 times, and every one of those frames now failed the
+			// launcher test above and fell through to the full shell. The
+			// user saw the entire fade of a surface they never opened.
+			//
+			// Leaving the mode alone is what makes that impossible rather
+			// than unlikely -- those frames keep taking this branch, keep
+			// painting nothing, and the shell has no path to the screen.
+			// Nothing observes the stale mode either, because
+			// LauncherOnlyActive() derives from the layer.
 			if ( !s_bPaletteOpen )
 			{
 				if ( s_bLauncherOnly )
-				{
-					s_bLauncherOnly = false;
-					s_bLauncherOnlyPublished.store( false, std::memory_order_release );
-					SettingsOverlay_SetVisible( false );
-				}
+					CloseShell();
+
+				TraceFrame( '.' );
 				return;
 			}
 
@@ -5947,8 +6054,15 @@ namespace gamescope::ui::shell
 			}
 			ImGui::End();
 			ImGui::PopStyleVar( 2 );
+
+			TraceFrame( 'L' );
 			return;
 		}
+
+		// D31: past the launcher's early return, so every frame that reaches
+		// here is a frame the FULL SHELL draws. The launcher-close trace must
+		// never contain one of these -- see cc_overlay_e2_trace.
+		TraceFrame( 'S' );
 
 		// D18: E2 implements SPEC §8.2's keyboard IN FULL -- regions, rows,
 		// adjustment, the palette, the Inspector, the mode strip. ImGui's own

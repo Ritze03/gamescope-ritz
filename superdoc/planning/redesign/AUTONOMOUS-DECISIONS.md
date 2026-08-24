@@ -12,9 +12,110 @@ cheap.
 
 ## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
 
-Reports from the user about the standalone launcher (D25), finished on top of `e18da30`
-— a **partial, never-compiled** WIP commit the lead preserved after the previous agent
-was killed mid-task.
+Two reports from the user, both about the standalone launcher (D25). They are finished
+here on top of `e18da30`, a **partial, never-compiled** WIP commit the lead preserved
+after the previous agent was killed mid-task. Auditing that draft before building on it
+was part of the job, so what it got wrong is recorded first.
+
+### D31.0 · What the WIP had wrong, as opposed to merely unfinished
+
+Three things, and the first two matter because the draft's own comments asserted the
+opposite — a comment that lies is worse than no comment, because the next reader stops
+checking.
+
+**Wrong — the flash was still there, and the code said it wasn't.** The draft's new
+opening-edge block declares *"Nothing on the closing path writes it"* about
+`s_bLauncherOnly`. The launcher's own Esc handler, forty lines below, still did exactly
+that: `s_bLauncherOnly = false;` immediately before `SettingsOverlay_SetVisible( false )`.
+So the defect was untouched and the design note describing the fix was already false.
+Corrected in D31.1.
+
+**Wrong — `LauncherOnlyActive()` was not derived.** The same block claims it *"reports
+the mode only while the layer is actually capturing"*. It returned a stored mirror,
+unconditionally. Harmless in the draft only because the mode was still being cleared on
+the close; the moment D31.1 stops clearing it, an underived reader is a real bug —
+`wlserver` would read "the launcher is up" after the launcher had closed and refuse to
+open the shell. Implemented in D31.1.
+
+**Wrong — the decision number.** The draft labelled itself `D27` throughout. D27 is the
+four control/binding fixes, already recorded above; the highest number in this file is
+D30. Every `D27` marker introduced by the draft is renumbered to `D31`.
+
+**Merely unfinished, and finished here:** `SolvePalettePanel()` had no test; the frame
+trace (`TraceFrame`) was declared and never called from anywhere, which the compiler
+reported as `-Wunused-function`.
+
+**Kept from the draft, because it was right:** moving the transient reset off the close
+and onto the opening edge, and solving the panel's position with a pure function instead
+of a cached `y0`. Both are load-bearing below and the draft's reasoning for them stands.
+
+### D31.1 · The launcher's mode is written on the OPENING edge only, and read derived
+
+**The report.** *"When i open the Launcher Style settings (both CTRLs), and close it with
+Escape, the GUI shows up for a split second."*
+
+**The cause, exactly — and it is not one frame.** Hiding the overlay does not stop it
+drawing. `SettingsOverlay.cpp` fades the layer over `k_uOverlayFadeMs` (200 ms) and gates
+drawing on `s_flCurrentAlpha > 0.0f`, so roughly twelve more frames call `shell::Draw()`
+after the hide. Esc cleared `s_bLauncherOnly` and *then* asked for the hide, so every one
+of those frames failed `Draw()`'s launcher early-return and fell through to the full
+shell — which then faded out in front of the game. The user saw the whole fade, not a
+dropped frame.
+
+**Why the fix is structural rather than an ordering.** Two bits decided what was on
+screen — *is the layer up* and *is it the launcher* — written by different code at
+different moments. Any window in which they disagree is a window in which the wrong
+surface draws. Swapping the two lines shrinks that window to zero *today* and says
+nothing about the third caller. So instead:
+
+1. **`s_bLauncherOnly` is assigned on an opening edge and nowhere else on the way out.**
+   The closing paths write nothing that `Draw()` branches on. The mode simply survives
+   the close, untouched, for the whole fade — so the launcher keeps being the thing that
+   is drawn while the launcher is what is fading.
+2. **`LauncherOnlyActive()` derives from the layer**: `IsCapturingInput() && mode`. That
+   is what makes surviving the close *unobservable*, and therefore safe. Without it,
+   keeping the mode set would trade a visual bug for a behavioural one.
+
+Together the flash has nowhere to come from: closing cannot change what is drawn, because
+closing writes none of the inputs to that choice.
+
+**The one legitimate mid-life write is `PaletteJump()`** — Enter on a non-adjustable
+result, promoting the launcher to the full shell while the layer stays up. That is an
+*opening* of the shell that the user asked for, not a close, and D25's guarantee depends
+on it.
+
+**`CloseShell()` became idempotent** (it hides only while still capturing) because the
+fading frames re-enter the launcher branch and would otherwise re-issue `SetVisible(false)`
+— and its ConVar callback — once per frame for the length of the fade.
+
+**Rejected — keeping the launcher panel painted during the fade** so it fades out like the
+shell does. It would need `s_bPaletteOpen` held open past the Esc that closed it, which
+puts a second meaning on the bit the keyboard handler owns. The launcher leaving instantly
+against a fading transparent layer is the cheaper, and honest, behaviour.
+
+**Rejected — hiding without a fade for the launcher only.** Two different close animations
+for one layer, decided by a mode the layer does not know about.
+
+**How it was proven, and the new instrument that made it provable.** A one-frame-class
+wrong-surface defect cannot be shown with a screenshot: sampling the right frame is luck
+and sampling the wrong one is not evidence. `overlay_e2_trace <on|off|clear|dump>` records
+**one character per frame** for whichever branch of `Draw()` ran — `L` launcher, `S` full
+shell, `.` the layer still fading with neither painting — so "the shell never drew" becomes
+a string a script can assert on. Off by default and free while off.
+
+The same binary, the same script, the only difference being the Esc handler:
+
+| | trace across the close |
+|---|---|
+| before | `.SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS` |
+| after | `L.........................................................` |
+
+Forty frames of the full shell, which is the reported *"GUI shows up for a split second"*,
+against none. **Other exits checked, all free of `S`:** Right Ctrl while the launcher is up
+(D25 — closes rather than promoting), `gamescopectl settings_overlay_visible 0`, and a
+Right Ctrl tap *after* a launcher session, which draws all `S` — proving the surviving mode
+does not leak into the next open. The palette-over-shell case, which is a **different
+state**, stays all `S` across its Esc: the palette closes and the shell remains, unchanged.
 
 ### D31.2 · The panel's top edge is a function of geometry, and the match count is not an input
 

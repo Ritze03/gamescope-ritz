@@ -50,6 +50,9 @@ this build reports.
 - **The launcher's search bar stays put** while you type. It is centred once,
   for a full list, and results now grow and shrink below it instead of
   sliding it up and down the screen.
+- **Closing the launcher no longer flashes the full settings UI**: pressing
+  Escape returns straight to the game instead of showing the whole overlay
+  on the way out.
 
 ### Removed
 - **The `settings` label in the title bar**, which restated the window's own

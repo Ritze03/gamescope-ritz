@@ -10,6 +10,53 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-24 — two launcher defects: the close flash, and centring the panel once
+
+Decisions and full rationale: `../../AUTONOMOUS-DECISIONS.md` **D31**.
+
+### The launcher mode is written on the opening edge only
+
+Hiding the overlay does not stop it drawing — `SettingsOverlay.cpp` fades the layer over
+`k_uOverlayFadeMs` (200 ms) and gates on `s_flCurrentAlpha > 0.0f`, so `shell::Draw()`
+runs for the whole fade. Esc used to clear `s_bLauncherOnly` *and then* hide, so every
+fading frame missed `Draw()`'s launcher early-return and drew the **full shell** instead.
+
+Now `s_bLauncherOnly` is assigned only where the overlay *opens*: the opening edge in
+`Draw()`, the two request-consumption sites, and `PaletteJump()` (D25's Enter promotion,
+where the layer deliberately stays up). No closing path writes it. The mode therefore
+survives a close — correctly, since the fading frames must keep drawing the launcher —
+and `LauncherOnlyActive()` is **derived** (`IsCapturingInput() && mode`) so the surviving
+value is not observable to `wlserver`. `CloseShell()` is idempotent, because the fading
+frames re-enter the launcher branch and reach it again.
+
+### `overlay_e2_trace` — which surface drew, per frame
+
+`overlay_e2_trace <on|off|clear|dump>`. One character per frame: `L` launcher, `S` full
+shell, `.` layer still drawing with neither painting. Off by default, allocation-free
+while off. It exists because a wrong-surface defect of this class is invisible to a
+screenshot — sampling the right frame is luck — and `overlay_e2_get` reads bound state
+rather than what painted. The before/after evidence is in D31.1.
+
+### `SolvePalettePanel()` — the panel's fixed vertical position
+
+`Layout.{h,cpp}`, imgui-free and therefore unit-tested. Inputs: the frame, the
+scale-derived row metrics, and `shelltok::kPaletteRowCap`. **The match count is not a
+parameter**, which is what makes "the query line cannot move as you type" a property of
+the signature rather than of a cache-invalidation rule. The panel is centred at the
+cap's height, and the list grows and shrinks downward inside that fixed frame.
+
+`shelltok::kPaletteW / kPaletteQueryH / kPaletteRowH / kPaletteFootH / kPaletteRowCap`
+moved out of `DrawPalette()` so the solver and its tests read the same constants the
+panel draws from.
+
+At 2.0× the maximum is the **fitting** maximum: too short for the cap, and `nMaxRows`
+drops to what fits and the panel is centred at that height; too short for even one row,
+and it is top-anchored at the margin so the query line stays on screen. Deciding the row
+count *before* sizing also closes D18's open note *(b)* — the footer no longer overlaps
+the last result row at 2.0×, because there is no post-hoc clamp of `rc.y1` left.
+
+---
+
 ## 2026-08-24 — the Log becomes content, and a Changelog area
 
 **Why:** the conformance audit's only *substitution* finding (divergence 2) — the Log
