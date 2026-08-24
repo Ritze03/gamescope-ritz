@@ -44,6 +44,35 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **The sheet could not scroll at all — the scrollbar moved and the content stayed put.**
+  Every body in this shell paints at an absolute `y` (that is what keeps the row grammar
+  identical between sheet and Inspector), but ImGui scrolls a child by moving its *cursor*,
+  not by translating the draw list. `DrawSheetBody` laid out from the region's fixed screen
+  coordinate and told ImGui nothing about how tall the result was, so it was nailed to the
+  screen; the rows' own hit-boxes pushed a scroll *range* into existence, which is why a
+  thumb slid along a scrollbar that drove nothing. The Inspector had the same bug and had it
+  fixed inline in P3b — the sheet, the largest scrolling region in the product, was simply
+  never one of the places those four lines were written. The arithmetic is now one named,
+  imgui-free `ScrollView` in `Layout.cpp` that all three scrolling bodies call, and it is
+  unit-tested: a fix that has to be remembered per region is a fix that is missing from the
+  next region.
+- **Escape now closes the overlay.** It used to unwind one level per press (palette →
+  drawer → inline expansion → overlay), so getting back to the game from a fresh open took
+  three presses and each one silently rearranged the shell instead of leaving. Escape now
+  dismisses only something genuinely *in front* of the shell — the command palette, an open
+  dropdown, a text field mid-edit, or an armed destructive action — and closes the overlay
+  from everywhere else. An armed action is disarmed unconditionally and first, so it can
+  never survive an Escape and fire on a later press. The footer legend reads `Esc close`,
+  and the explain page's back crumb now names `^/`, the key that actually returns. This
+  matches the launcher, which already gave the game straight back on Escape.
+- **Removed the stray `settings` label from the title bar, and its bottom rule is blue.**
+  The label was a bare right-aligned string with no id, no hit box and nothing keyed off it
+  — it restated the window's purpose inside the window's own title bar. The rule under the
+  bar was grey where the slab's own frame is accent-coloured, so it read as a stray seam
+  crossing a blue border; it now uses the accent *token* at the frame's own alpha, so it
+  follows the user's configured accent hue rather than being a blue that stays blue after
+  the accent changes.
+
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

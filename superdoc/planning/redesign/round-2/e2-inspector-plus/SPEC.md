@@ -1172,7 +1172,22 @@ scopes, and it lets `Tab` mean region and arrows mean movement without compromis
 | `Space` on a switch | toggle without leaving the row |
 | `Ctrl+I` | cycle Inspector host: **column → drawer → hidden** |
 | `Ctrl+/` or `?` | Configure + Details for the selected row (full-sheet page when the Inspector is hidden) |
-| `Esc` | palette → drawer → inline expansion → overlay |
+| `Esc` | dismiss the transient layer in front, else **close the overlay** — see the amendment below |
+
+**Amendment, 2026-08-24 (AUTONOMOUS-DECISIONS D26) — `Esc` closes the UI.**
+This row used to read *"palette → drawer → inline expansion → overlay"*, and the user's
+report retired it: *"pressing escape should close the UI."* The ladder made `Esc` a general
+undo of the last navigation — three presses to get back to the game from a fresh open, each
+one silently rearranging the shell instead of leaving.
+
+`Esc` now dismisses only a **transient layer** — the command palette, an open dropdown, a
+text field mid-edit, or an armed destructive action — and closes the overlay from everywhere
+else. The drawer, the explain page, the inline expansion and the selection are the shell's
+own arrangement, not layers on top of it; they persist, they have their own controls
+(`Ctrl+I`, the back crumb), and `Esc` from any of them closes the UI. An armed action is
+disarmed **unconditionally**, before any other rung, so it can never survive an `Esc` and
+fire on a later press. This matches the launcher (D25), which already gave the game straight
+back on `Esc`.
 
 **Selection and editing are the same click.** Clicking a slider both selects the row and
 starts the drag; there is no select-then-edit tax.

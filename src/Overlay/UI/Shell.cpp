@@ -276,8 +276,9 @@ namespace gamescope::ui::shell
 		// and accepts it only because the expansion is user-initiated. A
 		// single open row bounds that reflow to one place: with several open
 		// at once, expanding a row near the bottom of a column can move rows
-		// you are not looking at, in a column you are not in. Esc's ladder
-		// also names "inline expansion" in the singular.
+		// you are not looking at, in a column you are not in. (SPEC §8.2's
+		// old Esc ladder named "inline expansion" in the singular for the
+		// same reason; D26 retired the ladder, not the argument.)
 		std::string s_sExpandedEntry;
 
 		// Where the keyboard is inside an expanded row: -1 is the row itself,
@@ -740,6 +741,38 @@ namespace gamescope::ui::shell
 			// under the reader. Closing it puts them back on the sheet they
 			// just moved in, which is where they were looking.
 			s_bExplainPage = false;
+		}
+
+		// =================================================================
+		//  D26: closing the overlay from inside the shell
+		// =================================================================
+		// Esc's last rung, and the only place the shell closes itself. It is
+		// a function rather than a bare SettingsOverlay_SetVisible( false )
+		// because closing has to LEAVE THE SHELL CLEAN: the next open must
+		// not come back sitting on an explain page nobody asked for, with a
+		// dropdown half-open or a delete still armed.
+		//
+		// What is cleared is exactly the transient set -- the things that
+		// only make sense in the session that created them. What SURVIVES is
+		// the arrangement the user chose and would be annoyed to lose: the
+		// selected area, the selected row, and the Inspector host. Reopening
+		// puts them back where they were.
+		//
+		// The palette is closed too. It is a transient layer by the same
+		// definition, and a palette that reappeared over the shell on the
+		// next open would be a search someone abandoned a session ago.
+		void CloseShell()
+		{
+			s_sArmedAction.clear();
+			s_sOpenDropdown.clear();
+			s_nPopupFocus     = -1;
+			s_sEditingText.clear();
+			s_bExplainPage    = false;
+			s_sExpandedEntry.clear();
+			s_nInlineFocus    = -1;
+			s_bPaletteOpen    = false;
+
+			SettingsOverlay_SetVisible( false );
 		}
 
 		InspectorMode CurrentMode( const Entry *pEntry )
@@ -1698,11 +1731,18 @@ namespace gamescope::ui::shell
 			char szCrumb[ 160 ];
 			// D18: SPEC §6.3 asks the explanation page for "a back crumb".
 			// It is the same crumb with one more segment, not a second
-			// header -- so the page reads as somewhere you navigated TO,
-			// and Esc's meaning ("go back one") is legible from the screen.
+			// header -- so the page reads as somewhere you navigated TO, and
+			// the way back is legible from the screen.
+			//
+			// D26: the crumb used to advertise `Esc back`, and Esc now closes
+			// the overlay instead of unwinding a level. The key that opened
+			// the page is a TOGGLE, so it is also the key that leaves it --
+			// which is what the crumb names now. A crumb that still said
+			// "Esc" would be a label promising the one thing Esc no longer
+			// does, on the screen where that is most expensive.
 			const Entry *pExplained = s_bExplainPage ? SelectedEntry() : nullptr;
 			if ( pExplained )
-				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s  /  %s   -   Esc back",
+				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s  /  %s   -   ^/ back",
 					pArea ? SectionName( pArea->GetSection() ) : "",
 					pArea ? pArea->Title().c_str() : "",
 					pExplained->Title().c_str() );
@@ -1781,22 +1821,22 @@ namespace gamescope::ui::shell
 			// The legend is the only place the shell advertises its own
 			// shortcuts, and at 2.0x the full form does not fit the sheet --
 			// so DrawText's left-align fallback clipped the TAIL, which is
-			// where `Esc back` is. That is the worst possible thing to lose:
+			// where `Esc close` is. That is the worst possible thing to lose:
 			// a user who cannot read the rest of the line is precisely the
 			// user who needs to know how to get out of it.
 			//
 			// So the line drops hints from the LEFT instead, cheapest first,
-			// and `Esc back` is the last thing standing. Chosen by
+			// and `Esc close` is the last thing standing. Chosen by
 			// measurement rather than by scale, because the sheet's width
 			// depends on the Inspector's host and the drawer as well as on
 			// the ladder step.
 			static const char *const kForms[] = {
-				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back",
-				"^K search    ^I inspector    ^/ explain    Tab region    Esc back",
-				"^K search    ^I inspector    Tab region    Esc back",
-				"^K search    Tab region    Esc back",
-				"^K search    Esc back",
-				"Esc back",
+				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  close",
+				"^K search    ^I inspector    ^/ explain    Tab region    Esc close",
+				"^K search    ^I inspector    Tab region    Esc close",
+				"^K search    Tab region    Esc close",
+				"^K search    Esc close",
+				"Esc close",
 			};
 
 			// Falls back to the shortest form, which is also the one that
@@ -2792,16 +2832,46 @@ namespace gamescope::ui::shell
 		// flOccludedPx: how much of `rc`'s right side the Inspector drawer
 		// floats over, 0 when it does not (D17). The sheet's REGION is
 		// deliberately unchanged -- only the lane inside it gives way.
-		void DrawSheetBody( const Rect &rc, const Area *pArea, float flOccludedPx = 0.0f,
+		void DrawSheetBody( const Rect &rcRegion, const Area *pArea, float flOccludedPx = 0.0f,
 		                    int nColumns = 1 )
 		{
 			if ( !pArea )
 				return;
 
-			ImGui::SetCursorScreenPos( ImVec2( rc.x0, rc.y0 ) );
-			if ( ImGui::BeginChild( "##sheetrows", ImVec2( rc.Width(), rc.Height() ),
+			ImGui::SetCursorScreenPos( ImVec2( rcRegion.x0, rcRegion.y0 ) );
+			if ( ImGui::BeginChild( "##sheetrows", ImVec2( rcRegion.Width(), rcRegion.Height() ),
 				ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
 			{
+				// D26: THE SHEET SCROLLS BY THE SAME ONE MECHANISM THE
+				// INSPECTOR DOES -- see ScrollView in Layout.h.
+				//
+				// This region is where "the scrollbar moves but the content
+				// doesn't" came from, and it is worth being precise about
+				// why, because the shape of the bug is invisible: every row
+				// below was laid out from `rc.y0`, the sheet body's fixed
+				// SCREEN coordinate. ImGui scrolls a child by moving its
+				// cursor, not by translating the draw list, so a body that
+				// never reads the cursor is pinned to the screen no matter
+				// what the scroll offset is. The scrollbar was real -- the
+				// rows' own InvisibleButtons pushed the content extent past
+				// the child's height, so a range existed and the thumb slid
+				// along it -- and it drove nothing at all.
+				//
+				// P3b fixed exactly this in the Inspector body and the
+				// explain page, and did it inline in both. The sheet, the
+				// largest scrolling region in the shell, was simply not one
+				// of the places that got the four lines. That is the reason
+				// the arithmetic is a named function now rather than a third
+				// copy: the next body gets it by calling it.
+				//
+				// `rc` from here down is the SCROLLED body -- same width,
+				// same height, origin moved by the scroll -- so every
+				// existing absolute-y calculation below pans as one piece
+				// with no other edit.
+				const ScrollView view =
+					ScrollView::Begin( rcRegion, ImGui::GetCursorScreenPos().y );
+				const Rect rc = view.rcBody;
+
 				// D20.2. Column geometry -- widths, origins and the per-column
 				// lane the drawer may have narrowed -- comes from Layout.cpp
 				// and nowhere else. This function decides WHICH ROWS go in a
@@ -2907,14 +2977,41 @@ namespace gamescope::ui::shell
 				// Only ever one column here: Solve() forces nColumns to 1 for
 				// an area with a content body, because one scrolling body
 				// cannot be cut in half.
+				bool bFillsRegion = false;
 				if ( pArea->HasContent() )
 				{
+					bFillsRegion = true;
 					const Lane &lane      = cols.cols[ 0 ].lane;
 					const float flOriginX = rc.x0 + cols.cols[ 0 ].rc.x0;
 					const Rect  rcCol { flOriginX, rc.y0,
 					                    flOriginX + Px( lane.flWidth ), rc.y1 };
 					DrawContentBody( *pArea, rcCol, yOf[ 0 ] + Px( tok::kM ), rc.y1 );
+
+					// A content body SIZES ITSELF to what is left of the
+					// region and scrolls internally, in its own nested
+					// child. So the sheet's extent is the region, not the
+					// rows above it -- and it takes no trailing pad, or the
+					// sheet would grow a few pixels of scroll range that
+					// exist purely to be scrolled past.
+					yOf[ 0 ] = std::max( yOf[ 0 ], rc.y1 );
 				}
+
+				// ---- hand ImGui the extent ------------------------------
+				// The other half of the mechanism. Without this the child
+				// has no scroll range and everything past the bottom edge
+				// is drawn and clipped away; the rows' own InvisibleButtons
+				// give a range only by accident, and one measured from
+				// where the buttons happened to land rather than from the
+				// TALLEST column -- which for a two-column sheet is not
+				// generally the last one drawn. A Dummy at the origin
+				// states it exactly, once, however many columns there are.
+				float flBottom = view.flOriginY;
+				for ( int c = 0; c < cols.nColumns; ++c )
+					flBottom = std::max( flBottom, yOf[ c ] );
+
+				ImGui::SetCursorScreenPos( ImVec2( rc.x0, view.flOriginY ) );
+				ImGui::Dummy( ImVec2( 1.0f, view.ContentHeight(
+					flBottom, bFillsRegion ? 0.0f : Px( tok::kM ) ) ) );
 			}
 			ImGui::EndChild();
 		}
@@ -3358,23 +3455,12 @@ namespace gamescope::ui::shell
 					// bug was never that grammar -- it was that `y`
 					// started at the REGION's y0, a fixed screen
 					// coordinate, and that nothing ever told ImGui how
-					// tall the result was. So content taller than the
-					// drawer simply ran off the bottom: no scroll range
-					// existed, and even if it had, a fixed origin would
-					// not have moved.
+					// tall the result was.
 					//
-					// Both halves are fixed here, in four lines, without
-					// touching a single body:
-					//
-					//   * the origin is the CHILD's own cursor, from
-					//     which ImGui has already subtracted the scroll
-					//     offset. Laying out from a y that moves is what
-					//     makes the existing absolute arithmetic scroll
-					//     correctly -- every row, control and hairline
-					//     pans together because they all derive from it.
-					//   * the returned bottom edge becomes a Dummy, which
-					//     is the content size ImGui measures its scroll
-					//     range from.
+					// Both halves are ScrollView's job now (Layout.h);
+					// this call site used to spell them out inline, and
+					// the sheet -- which needed the same four lines --
+					// never got them. See D26.
 					//
 					// The alternative -- rewriting the bodies onto
 					// ImGui's cursor with Dummy/SameLine spacing -- would
@@ -3382,22 +3468,22 @@ namespace gamescope::ui::shell
 					// another in the Inspector, which is precisely the
 					// second path SPEC §5.3 exists to prevent (a promoted
 					// parameter has to land in the sheet unchanged).
+
 					// The console's scroll request, applied only on the frame
-				// it changes -- see cv_overlay_e2_scroll.
-				const float flScrollReq = cv_overlay_e2_scroll.Get();
-				if ( flScrollReq != s_flScrollApplied )
-				{
-					s_flScrollApplied = flScrollReq;
-					ImGui::SetScrollY( flScrollReq < 0.0f
-						? ImGui::GetScrollMaxY() : flScrollReq );
-				}
+					// it changes -- see cv_overlay_e2_scroll.
+					const float flScrollReq = cv_overlay_e2_scroll.Get();
+					if ( flScrollReq != s_flScrollApplied )
+					{
+						s_flScrollApplied = flScrollReq;
+						ImGui::SetScrollY( flScrollReq < 0.0f
+							? ImGui::GetScrollMaxY() : flScrollReq );
+					}
 
-				const ImVec2 vOrigin = ImGui::GetCursorScreenPos();
-					Rect rcBody = regions.rcInspectorBody;
-					rcBody.y0 = vOrigin.y;
-					rcBody.y1 = vOrigin.y + regions.rcInspectorBody.Height();
+					const ScrollView view = ScrollView::Begin(
+						regions.rcInspectorBody, ImGui::GetCursorScreenPos().y );
+					const Rect rcBody = view.rcBody;
 
-					float flBottom = vOrigin.y;
+					float flBottom = view.flOriginY;
 					if ( !pEntry )
 						flBottom = DrawOverview( rcBody, SelectedArea() );
 					else if ( CurrentMode( pEntry ) == InspectorMode::Configure )
@@ -3408,9 +3494,9 @@ namespace gamescope::ui::shell
 					// The trailing pad is the same one the top has, so a
 					// fully-scrolled body does not end flush against the
 					// frame.
-					ImGui::SetCursorScreenPos( vOrigin );
+					ImGui::SetCursorScreenPos( ImVec2( rcBody.x0, view.flOriginY ) );
 					ImGui::Dummy( ImVec2( 1.0f,
-						std::max( 0.0f, flBottom - vOrigin.y ) + Px( tok::kInspectorPad ) ) );
+						view.ContentHeight( flBottom, Px( tok::kInspectorPad ) ) ) );
 				}
 				ImGui::EndChild();
 			}
@@ -3450,15 +3536,13 @@ namespace gamescope::ui::shell
 			if ( ImGui::BeginChild( "##explain", ImVec2( rc.Width(), rc.Height() ),
 				ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
 			{
-				// Same scroll idiom as the Inspector body: lay out from the
-				// child's own cursor (ImGui has already subtracted the
-				// scroll offset) and hand the measured height back as a
-				// Dummy. Configure + Details together are taller than the
-				// Inspector's body ever is, so this page needs it more.
-				const ImVec2 vOrigin = ImGui::GetCursorScreenPos();
-				Rect rcBody = rc;
-				rcBody.y0 = vOrigin.y;
-				rcBody.y1 = vOrigin.y + rc.Height();
+				// The same one scroll mechanism the sheet and the Inspector
+				// body use -- ScrollView in Layout.h. Configure + Details
+				// together are taller than the Inspector's body ever is, so
+				// this page needs it more than either.
+				const ScrollView view =
+					ScrollView::Begin( rc, ImGui::GetCursorScreenPos().y );
+				Rect rcBody = view.rcBody;
 
 				float flBottom = DrawConfigure( rcBody, entry );
 
@@ -3472,9 +3556,9 @@ namespace gamescope::ui::shell
 				rcBody.y0 = flBottom;
 				flBottom = DrawDetails( rcBody, entry );
 
-				ImGui::SetCursorScreenPos( vOrigin );
+				ImGui::SetCursorScreenPos( ImVec2( rc.x0, view.flOriginY ) );
 				ImGui::Dummy( ImVec2( 1.0f,
-					std::max( 0.0f, flBottom - vOrigin.y ) + Px( tok::kInspectorPad ) ) );
+					view.ContentHeight( flBottom, Px( tok::kInspectorPad ) ) ) );
 			}
 			ImGui::EndChild();
 		}
@@ -3546,7 +3630,28 @@ namespace gamescope::ui::shell
 		void DrawSlabBar( const Rect &rc )
 		{
 			Fill( rc, Accent( 0.10f ) );
-			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Col( Role::LineRegion ) );
+
+			// D26: THE BAR'S BOTTOM RULE IS THE ACCENT, AND IT IS THE TOKEN.
+			//
+			// The slab's own frame is Accent( 0.42f ) (the Begin() border
+			// below), so a LineRegion rule here read as a stray grey seam
+			// crossing a blue frame -- which is what was reported. Matching
+			// the frame's own alpha makes the bar's underline a continuation
+			// of the border rather than a second, different boundary.
+			//
+			// Accent() is the C++ equivalent of the mockup's
+			// `rgba(var(--accRGB), a)`: it resolves against the user's
+			// configured accent hue every call. A literal here would be a
+			// blue that stayed blue after the accent changed -- the exact
+			// defect reported against the mockup, and the reason this is
+			// routed through the token rather than through an IM_COL32.
+			//
+			// This DIVERGES FROM index.html, deliberately: the mockup's
+			// .slabbar uses `border-bottom: 1px solid var(--lineRegion)`.
+			// The mockup is the tiebreaker where the design is silent; it is
+			// not the tiebreaker against the user looking at the result and
+			// saying the line is the wrong colour.
+			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Accent( 0.42f ) );
 
 			const float flDot = Px( 6.0f );
 			Fill( { rc.x0 + Px( tok::kM ), rc.y0 + ( rc.Height() - flDot ) * 0.5f,
@@ -3555,8 +3660,15 @@ namespace gamescope::ui::shell
 
 			Label( { rc.x0 + Px( tok::kM ) + flDot + Px( tok::kS ), rc.y0, rc.x1, rc.y1 },
 			       TypeRole::Title, Col( Role::TextPrimary ), "GAMESCOPE-RITZ" );
-			Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kM ), rc.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ), "settings", TextAlign::Right );
+
+			// D26: the right-aligned "settings" was REMOVED. It was a bare
+			// Label -- no id, no hit box, no state read and nothing keyed off
+			// it -- so it labelled nothing and was not a signpost to anything;
+			// it restated the window's own purpose in the window's own title
+			// bar. SPEC §8.1 puts `app <id>` and the config-file chip on the
+			// left of this bar and the ⌕ ▤ ✕ glyphs on the right; that is queued
+			// separately, and this deliberately leaves the right end EMPTY for
+			// it rather than parking a placeholder in the slot.
 		}
 
 		// =================================================================
@@ -4630,41 +4742,65 @@ namespace gamescope::ui::shell
 				return;
 			}
 
-			// Esc: palette -> drawer -> inline expansion -> overlay. The
-			// palette rung is handled by RunPaletteKeyboard() before this
-			// runs; what is left here is the drawer, and then the overlay
-			// itself (which SettingsOverlay.cpp owns).
+			// =============================================================
+			//  Esc (D26): dismiss what is ON TOP, or CLOSE THE OVERLAY
+			// =============================================================
+			// THE RULE, in one line: Esc closes the UI unless something
+			// transient is up in front of it, in which case Esc takes that
+			// away and the UI stays.
+			//
+			// WHAT CHANGED AND WHY. SPEC §8.2's ladder was "palette ->
+			// drawer -> inline expansion -> overlay", and it made Esc a
+			// general UNDO of the last navigation: from a fresh open with a
+			// row selected it took three presses to get back to the game,
+			// and each one silently rearranged the shell instead. The user's
+			// report is the whole argument -- "pressing escape should close
+			// the UI" -- and it is the behaviour every other surface here
+			// already has: the launcher (D25) gives the game straight back
+			// on Esc, and the two really-on-top layers below already
+			// consumed Esc and stopped.
+			//
+			// WHAT COUNTS AS "ON TOP", and it is a short list on purpose:
+			//
+			//   * the command palette      -- RunPaletteKeyboard(), above
+			//   * an open dropdown popup   -- the block above
+			//   * a text field being edited
+			//   * an ARMED destructive action
+			//
+			// All four are things a user put in front of the shell seconds
+			// ago and can point at. What is deliberately NOT on the list:
+			// the drawer, the explain page, the inline expansion and the
+			// selection. Those are the shell's own arrangement -- they
+			// persist, they have their own controls (Ctrl+I, the back
+			// crumb), and unwinding them one Esc at a time is exactly the
+			// behaviour being removed. Esc from any of them closes the UI.
 			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
 			{
-				// SPEC §3.9: "the second fires, and Esc disarms." Esc's
-				// region ladder below can leave the selection somewhere that
-				// still holds the armed row, so the disarm is unconditional
-				// and happens first -- Esc is the user saying "no".
+				// SPEC §3.9: "the second fires, and Esc disarms." This is
+				// UNCONDITIONAL and happens before any branch below, because
+				// an armed delete surviving an Esc is a bug that has already
+				// been found here once: the arm outlived the press and could
+				// fire on a later Enter. Esc is the user saying "no", so
+				// after this line nothing is armed no matter which rung runs.
+				const bool bWasArmed = !s_sArmedAction.empty();
 				s_sArmedAction.clear();
+				if ( bWasArmed )
+					return;
 
-				// D18: the explain page is the topmost rung below the
-				// palette -- it REPLACES the sheet, so Esc has to give the
-				// sheet back before it starts closing regions underneath it.
-				// Note this deliberately does not call Select(nullptr): the
-				// row you were reading about stays selected, which is the
-				// "back crumb" behaviour SPEC §6.3 asks for.
-				if ( s_bExplainPage )
-					s_bExplainPage = false;
-				else if ( Host() == InspectorHost::Drawer )
-					SetHost( InspectorHost::Hidden );
-				// D20.3: SPEC §8.2's ladder is "palette -> drawer -> inline
-				// expansion -> overlay", and this is the rung that had
-				// nothing behind it until the expansion existed. It sits
-				// after the drawer to match that order, though the two are
-				// mutually exclusive in practice -- an expansion only exists
-				// in the Hidden host, where the drawer rung cannot fire.
-				else if ( !s_sExpandedEntry.empty() )
+				// A field mid-edit owns Esc: it means "cancel this rename",
+				// never "throw the whole overlay away". ImGui deactivates and
+				// reverts the InputText itself; the shell's one bit of
+				// caller state has to be dropped with it or the row would
+				// stay stuck in its editing form.
+				if ( !s_sEditingText.empty() || ImGui::IsAnyItemActive() )
 				{
-					s_sExpandedEntry.clear();
-					s_nInlineFocus = -1;
+					s_sEditingText.clear();
+					ImGui::ClearActiveID();
+					return;
 				}
-				else if ( SelectedEntry() )
-					Select( nullptr );
+
+				// Nothing is in front. Close.
+				CloseShell();
 				return;
 			}
 

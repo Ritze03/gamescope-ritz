@@ -10,6 +10,131 @@ cheap.
 
 ---
 
+## 2026-08-24 (D26 — three defects the user reported by looking at it)
+
+All three came from the user watching the shell run, and two of them are the same lesson:
+a mechanism that has to be **remembered** at each site is a mechanism that is missing from
+the next site.
+
+### D26.1 · Scrolling was ONE fault, in the one region P3b's fix never reached
+
+**The report.** *"Scrolling doesnt work at all right now. The scrollbar moves, but the
+content doesnt."*
+
+**The cause, exactly.** Every body in this shell lays out by painting at an absolute `y`
+rather than by walking ImGui's cursor — deliberately, because that is what keeps the row
+grammar and the lane identical between the sheet and the Inspector (SPEC §5.3: a promoted
+parameter has to land in the sheet unchanged). But **ImGui scrolls a child by moving its
+cursor, not by translating the draw list.** A body that never reads the cursor is nailed to
+the screen at whatever scroll offset you like.
+
+`DrawSheetBody` laid its columns out from `rc.y0` — the sheet body region's fixed screen
+coordinate — and emitted no content extent. The scrollbar was nonetheless real: the rows'
+own `InvisibleButton`s pushed `CursorMaxPos` past the child's height, so a range existed and
+the thumb slid along it, driving nothing. That is precisely "the scrollbar moves, the
+content doesn't", and it is the whole of the report.
+
+**One fault, not several.** The rail scrolls by its own hand-rolled offset (`RailScroll`,
+subtracted from every drawn `y`) and was correct. The Inspector body and the explain page
+were fixed in P3b. The Log's content body draws through an `ImGuiListClipper`, which sets
+the cursor itself, and was correct. The sheet was the only region left — and it is the
+biggest one in the product.
+
+**The fix is a named function, and that is the actual decision.** P3b fixed the identical
+bug by writing four lines inline, twice. The sheet needed the same four lines and did not
+get them, which is exactly how the largest scrolling region in the shell shipped unable to
+scroll. So the arithmetic is now `ui::ScrollView` in `Layout.cpp` — `Begin()` rebases the
+region rect onto the child's own cursor, `ContentHeight()` returns the extent to hand back
+as a `Dummy` — and all three call sites go through it.
+
+*The alternative considered and rejected:* rewriting the bodies onto ImGui's cursor with
+`Dummy`/`SameLine` spacing. That is the "proper" ImGui way and it would have meant one
+layout model in the sheet and another in the Inspector — the second painter SPEC §5.2
+clause 0 exists to prevent.
+
+`ScrollView` is imgui-free (P1's rule for `Layout.cpp`, paying off exactly as intended), so
+two new `[overlay_shell]` cases pin it with no window open: that the body's origin follows
+the cursor while its **height is preserved**, and that the extent is measured from the
+origin, never negative, and takes a pad of zero for a content body that already fills the
+region. Failure mode without them: a body that draws perfectly and does not move, which no
+other assertion in the suite would notice.
+
+**Verified**, at 1.0× and 2.0×, on `system.monitor` (27 rows, overflows at both): content
+moves down and back up under a real wheel event through `overlay_e2_pointer`. Note for the
+next agent: `SettingsOverlay` inverts the wheel sign, so `scroll 0 3` is **down**.
+
+### D26.2 · Esc closes the UI; only a TRANSIENT LAYER gets to eat it first
+
+**The report.** *"Pressing escape should close the UI."*
+
+SPEC §8.2's ladder was *palette → drawer → inline expansion → overlay*, which made Esc a
+general undo of the last navigation: three presses to reach the game from a fresh open, each
+one silently rearranging the shell instead of leaving. The spec table is amended in place
+and points here.
+
+**What was chosen.** Esc dismisses a transient layer if one is up, otherwise closes. The
+list of "transient" is short on purpose:
+
+| state | Esc does |
+|---|---|
+| command palette open (over the shell) | close the palette, shell stays |
+| dropdown popup open | close the popup |
+| text field mid-edit | cancel the edit (never throw the overlay away over a rename) |
+| destructive action ARMED | disarm, overlay stays |
+| explain page / drawer / inline expansion / a selected row | **close the overlay** |
+| nothing at all | **close the overlay** |
+| launcher (D25) | unchanged — gives the game straight back |
+
+**Why the drawer and the explain page are NOT rungs.** They are the shell's own arrangement,
+not layers a user put in front of it seconds ago. They persist, they have their own controls
+(`Ctrl+I`; `Ctrl+/` is a toggle), and unwinding them one Esc at a time is the behaviour being
+removed. The two chrome labels that advertised the old meaning moved with it: the sheet
+footer legend now reads `Esc close`, and the explain page's back crumb names `^/ back` — the
+key that actually returns. A crumb still promising "Esc back" would be a label for the one
+thing Esc no longer does, on the screen where that costs most.
+
+**The armed action is disarmed UNCONDITIONALLY and FIRST**, before any branch, because an
+arm surviving an Esc has already been found here once — it outlived the press and could fire
+on a later Enter. After that line nothing is armed, whichever rung runs.
+
+Closing also clears the transient set (armed action, dropdown, edit, explain page, inline
+expansion, palette) so the next open is not sitting on a page nobody asked for. The selected
+area, the selected row and the Inspector host **survive** — that is the arrangement the user
+chose.
+
+**Verified** on a real seeded `games/<id>.json`: arming `config.delete`, pressing Esc, then
+pressing Enter again left the file on disk and left the overlay open; Esc with nothing on
+top returned the game; Esc over an open palette dismissed the palette and left the shell up.
+
+### D26.3 · The title bar's "settings" was inert and is gone; its rule is the accent TOKEN
+
+**The report.** *"In the top title bar, there is a weird 'settings' String. Remove it, it
+does nothing... Also, at the bottom of that bar, the line is gray, instead of the blue we use
+all around."*
+
+**It was genuinely inert.** A bare right-aligned `Label` — no id, no hit box, no state read,
+nothing keyed off it. It labelled nothing and signposted nothing; it restated the window's
+purpose inside the window's own title bar. Removed. The right end is deliberately left
+**empty** rather than given a replacement placeholder: SPEC §8.1 puts `app <id>`, the
+config-file chip and the `⌕ ▤ ✕` glyphs in this bar, that work is queued separately, and a
+parked placeholder in the slot would make it harder, not easier.
+
+**The rule now uses `Accent( 0.42f )` — the same token and alpha as the slab's own frame**,
+so the bar's underline reads as a continuation of the border instead of a stray grey seam
+crossing a blue frame. `Accent()` is the C++ equivalent of the mockup's
+`rgba(var(--accRGB), a)` and resolves against the user's configured hue on every call; a
+literal here would be a blue that stayed blue after the accent changed, which is the exact
+defect the user reported against the mockup. Verified by driving `overlay.accent_hue`
+through 200 / 20 / 120 and sampling the rule pixel: `(22,97,102)` → `(117,71,72)` →
+`(81,92,49)`. It follows.
+
+**This diverges from `index.html` on purpose.** The mockup's `.slabbar` uses
+`border-bottom: 1px solid var(--lineRegion)`. The mockup is the tiebreaker where the design
+is silent; it is not the tiebreaker against the user looking at the result and saying the
+line is the wrong colour.
+
+---
+
 ## 2026-08-24 — CORRECTION TO D13.1, FROM THE USER DIRECTLY (not an autonomous decision)
 
 This block is not one more thing decided in the user's absence — it is the user, awake,
