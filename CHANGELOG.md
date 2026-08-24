@@ -1,451 +1,152 @@
 # Changelog
 
-Everything in this file is this fork's own work. `gamescope-ritz`'s base commit is exactly
-upstream `ValveSoftware/gamescope` HEAD (`fcc1341`) — upstream's own history is not
-reconstructed here; see [`superdoc/README.md`](superdoc/README.md) for the architecture that
-history produced. The fork's own history begins **2026-08-21**, with the planning commit that
-laid down `superdoc/` and the settings-overlay project plan.
+All notable user-facing changes, newest first. Categories: **Added** (new
+features), **Fixed** (bug and behaviour fixes), **Removed** (things taken
+out), **Info** (notes worth knowing). Each date is also that build's
+gamescope-ritz patch version.
 
-Dated blocks follow [`superdoc/claude-instructions/documentation-version-policy.md`](superdoc/claude-instructions/documentation-version-policy.md):
-`YYYY-MM-DD`, newest on top, one block per calendar day, no version numbers. That policy
-governs a single date-ordered sequence; it does not say what to do when a whole feature
-branch's work is not on `master` yet. Rather than invent a versioning convention to paper over
-that, this file uses **two sections**, each internally newest-date-first: `master` (what
-shipped) and `feature/overlay-e2` (an unmerged branch off `master`, whose own dates overlap and
-extend past `master`'s). Read this as a documented reading of the policy for a two-thread
-history, not a departure from it.
+## 2026-08-24
 
-Issue numbers (`#N`) refer to this repository's GitHub issue tracker.
+### Added
+- **Changelog area**: a new rail area showing this file, the base gamescope
+  commit, and the gamescope-ritz patch date.
+- **Your system cursor in the overlay**: nested mode now uses your desktop's
+  own cursor. The built-in arrow stays as the fallback for embedded, VR and
+  pointer-grabbed modes, so there is still never zero cursor.
+- **Log line numbers and timestamps**: selecting a line describes it in the
+  Inspector, and gamescope and game output are interleaved in true arrival
+  order rather than one stream after the other.
+- **Log filters moved into the Inspector**: sources, severity, text filter,
+  auto-scroll and capture diagnostics live there now, so the sheet is the
+  log body at full height.
 
----
+### Fixed
+- **Text is bigger throughout the overlay**, most of all the Log and
+  Changelog body.
+- **Overlong text ends in `...`** instead of stopping mid-word.
+- **The sheet scrolls**: the scrollbar used to move while the content stayed
+  put.
+- **Escape closes the overlay** instead of unwinding one level per press.
+- **FSR sharpness ran backwards**: 0% selected maximum sharpening and 100%
+  the minimum. Nothing on disk changed, but the stock setting now reads 90%
+  rather than 10%.
+- **Sliders land on round numbers**, each with a step suited to its own
+  range, and at most about 100 positions per drag.
+- **UI scale applies when you let go**, not mid-drag, so the track no longer
+  slides out from under the pointer.
+- **Sharpness is one setting again**, and resets to 0% when you change the
+  upscaling filter.
+- **Notification placement uses the 3x3 anchor grid** the System Monitor
+  uses, instead of a nine-item dropdown.
+- **The rebuilt UI is clickable**: switches, sliders, segmented controls,
+  steppers, chips and every Inspector row were dead to the mouse.
+- **The overlay opens on Right Ctrl** (tap) and the command palette on
+  Left+Right Ctrl.
 
-## feature/overlay-e2 — unmerged, not on master
+### Removed
+- **The `settings` label in the title bar**, which restated the window's own
+  purpose. The rule under the bar now follows your accent colour.
 
-This branch replaces the settings overlay's entire UI layer: the floating-panel-and-dock
-architecture built out below becomes a single fixed slab (rail + sheet + inspector) driven by a
-**registry** — every setting is declared once, in one place, and the shell draws, hit-tests and
-persists it from that declaration. The stated goal is to make the "control renders but is wired
-to nothing" class of bug (see `#25`, `#68` below, and more of the same on this branch)
-structurally harder to write, by removing the second place a control's geometry could be
-described.
+### Info
+- **New General area**: VRR, Allow Tearing and Force Grab Cursor moved above
+  Upscaling. Config keys and entry ids are unchanged.
+- **New console commands** `overlay_e2_pointer` and `overlay_e2_get` drive
+  and read the overlay from a script without reaching any game window.
+- **The overlay rebuild lives on `feature/overlay-e2`** until it merges;
+  entries from 2026-08-23 on describe that branch where the two differ.
 
-**Status as of the tip (`bb5d39b`, 2026-08-24): unmerged, and known-incomplete.** The legacy
-floating-panel UI was deleted outright in P5 (2026-08-23) — there is no flag to fall back to —
-so this branch is the only place the settings overlay exists once you're on it. A dedicated
-[conformance audit](superdoc/planning/redesign/round-2/e2-inspector-plus/CONFORMANCE-AUDIT.md)
-measured the built shell against the approved mockup pixel-for-pixel and counted **24
-divergences, 14 of them unexplained by any recorded decision** — concentrated in the Inspector
-(specified content and actions never written), the shell chrome (title bar, footer, breadcrumb
-still placeholder), and a handful of invented control kinds on the Monitor/Appearance sheet that
-break the uniform row height. The pre-deletion
-[shell test report](superdoc/planning/redesign/round-2/e2-inspector-plus/SHELL-TEST-REPORT.md)
-separately found and fixed 20 defects before P5 shipped. None of this is exposed to a user who
-hasn't checked out this branch, since master is unaffected.
+## 2026-08-23
 
-### 2026-08-24
+### Added
+- **A rebuilt settings overlay**: one fixed slab (rail, sheet, inspector)
+  replaces the floating panels and dock. Every setting is declared once and
+  drawn, hit-tested and saved from that one declaration.
+- **Command palette** (`Ctrl+K`): search all 102 settings and parameters
+  from anywhere in the overlay.
+- **System Monitor sizing**: each module shrinks to its own content, all
+  modules render at the width of the widest enabled one, and a long media
+  track title is truncated instead of stretching the whole stack.
+- **System Monitor toggles**: separate switches for the monitor itself, for
+  FPS, for the FPS label, and for the numeric frametime readout.
 
-- **The Log and Changelog text is bigger, and so is every other small size in the overlay.**
-  The type scale was already raised once today, but that pass deliberately left the `Meta`
-  role alone on the grounds that a quiet annotation tier shouldn't out-rank the labels it
-  annotates. That reasoning missed one thing: `Meta` is also the *entire body text of the
-  Log and the Changelog* — the line numbers, timestamps, scope tags and the messages
-  themselves are all drawn in it. So the one role held still was the one behind the two
-  screens that still read as too small. `Meta` now moves the most of any role
-  (11.5 → 13), with the rest of the ladder raised behind it to keep the tiers apart:
-  `Section` 12 → 13.5, `Title` 13 → 14.5, `Label`/`Body` 15 → 16, `Value` 16 → 16.5. The
-  raise is *tapered* — biggest at the bottom, smallest at the top — because the request was
-  about the small sizes; inflating everything equally would have grown the whole slab to fix
-  the bottom of it, and would have eaten the row-height headroom that lets all of this fit
-  at 2.0× UI scale with no other geometry change. Verified at 0.5×, 1.0× and 2.0× on the
-  three densest screens.
-- **Text that doesn't fit now ends in `...` instead of stopping mid-word.** The overlay
-  clipped overlong labels and values hard at the column edge, so the Log inspector's buffer
-  summary read `51 lines · 2 er:` in the narrow lane — a truncation you cannot tell apart
-  from a value that genuinely ends there. Bigger text makes more strings overflow, so this
-  ships alongside the size raise rather than after it: it now truncates at the last
-  character that fits and marks it. (Three periods rather than a real `…` character — the
-  bundled fonts don't contain that glyph.)
-- **The sheet could not scroll at all — the scrollbar moved and the content stayed put.**
-  Every body in this shell paints at an absolute `y` (that is what keeps the row grammar
-  identical between sheet and Inspector), but ImGui scrolls a child by moving its *cursor*,
-  not by translating the draw list. `DrawSheetBody` laid out from the region's fixed screen
-  coordinate and told ImGui nothing about how tall the result was, so it was nailed to the
-  screen; the rows' own hit-boxes pushed a scroll *range* into existence, which is why a
-  thumb slid along a scrollbar that drove nothing. The Inspector had the same bug and had it
-  fixed inline in P3b — the sheet, the largest scrolling region in the product, was simply
-  never one of the places those four lines were written. The arithmetic is now one named,
-  imgui-free `ScrollView` in `Layout.cpp` that all three scrolling bodies call, and it is
-  unit-tested: a fix that has to be remembered per region is a fix that is missing from the
-  next region.
-- **Escape now closes the overlay.** It used to unwind one level per press (palette →
-  drawer → inline expansion → overlay), so getting back to the game from a fresh open took
-  three presses and each one silently rearranged the shell instead of leaving. Escape now
-  dismisses only something genuinely *in front* of the shell — the command palette, an open
-  dropdown, a text field mid-edit, or an armed destructive action — and closes the overlay
-  from everywhere else. An armed action is disarmed unconditionally and first, so it can
-  never survive an Escape and fire on a later press. The footer legend reads `Esc close`,
-  and the explain page's back crumb now names `^/`, the key that actually returns. This
-  matches the launcher, which already gave the game straight back on Escape.
-- **Removed the stray `settings` label from the title bar, and its bottom rule is blue.**
-  The label was a bare right-aligned string with no id, no hit box and nothing keyed off it
-  — it restated the window's purpose inside the window's own title bar. The rule under the
-  bar was grey where the slab's own frame is accent-coloured, so it read as a stray seam
-  crossing a blue border; it now uses the accent *token* at the frame's own alpha, so it
-  follows the user's configured accent hue rather than being a blue that stays blue after
-  the accent changes.
+### Fixed
+- **Force Grab Cursor did nothing**: the toggle rendered correctly but never
+  reached the backend until a restart.
+- **A stray pointer event could steal focus**: an out-of-range coordinate
+  mid-drag made a press on one panel's title bar move a different panel.
+- **Panels shrank while being dragged** toward the right or bottom edge.
+- **Panel resizing** is restricted to the bottom-right grip, with a hard
+  250x250 floor and equal dock margins above and below.
+- **Audio stream names** resolve the way `pactl` does, instead of showing
+  raw identifiers like `bluez_input.98_0D_AF...`.
+- **`Ctrl+/` was unreachable** from a real keyboard, and dropdowns never
+  opened at all.
+- **Disabled controls** painted at full brightness.
 
-- **New `Changelog` area** in the rail, showing this file plus the two version numbers a user
-  actually needs: the **base gamescope** (upstream commit `fcc1341`) and the **gamescope-ritz
-  patch version** as a `YYYY-MM-DD` date. Neither is typed into the source — gamescope's own
-  version string cannot answer "which upstream is this built on", because this fork carries no
-  tags and `project()` declares no version, so `git describe` degrades to a bare hash of the
-  *fork's* tip. The base commit is stated once in `src/meson.build` and then **verified** to
-  still be an ancestor of HEAD; if someone rebases the fork onto a newer upstream, the area says
-  `unknown — recorded base is not in this history` instead of confidently printing a commit that
-  is no longer the base. The date is **HEAD's commit date**, not the build date, so two builds of
-  the same source agree on their version rather than drifting apart every rebuild.
-- `CHANGELOG.md` is **compiled into the binary** rather than read from disk at runtime, so the
-  changelog on screen can never be a different vintage than the binary showing it, needs no
-  install-path lookup, and costs no file I/O on the render thread. If the file is absent from the
-  source tree the build still succeeds and the area says so plainly. It is rendered as plain text,
-  verbatim — the overlay has no Markdown renderer, and a half-parsed document reads worse than an
-  honest unparsed one.
-- **The Log screen is now the log.** Sources, severity, text filter, auto-scroll and the capture
-  diagnostics used to occupy six full-height rows — roughly 360px of sheet — before the first line
-  of text, which is what you opened the screen to read. They now live in the **Inspector**, behind
-  a `FILTER` cell paired with a `LINE` cell, where they remain ordinary rows with the same help,
-  reset and search behaviour; the sheet is the log body, full height. *Why:* those controls
-  configure the *view* of the log, not the log, and the Inspector is the region that exists for
-  exactly that.
-- **Log lines now carry a line number and a timestamp, and selecting one describes it** in the
-  Inspector. Both are recorded when the line is captured rather than derived when it is drawn —
-  neither could be reconstructed afterwards, because the buffer evicts old lines and no timestamp
-  was ever recorded. A line captured before timestamps existed shows a **blank** time column
-  rather than a midnight that never happened. As a direct consequence the gamescope and game
-  streams are now interleaved in **true arrival order**; previously the view showed every
-  gamescope line and then every game line, so a game line and the gamescope line that caused it
-  could sit thousands of rows apart.
-- **The overlay now uses your system cursor**, wherever there is one to use. Previously the
-  overlay always drew its own plain arrow and *hid* the real one (`#69`); now that preference is
-  inverted, so in nested mode you get your desktop's actual cursor — your theme, your size,
-  drawn by your compositor — instead of a stand-in for it. **Why the reversal:** `#69` was
-  fixing a genuine doubled cursor, and it was right that simply deleting the overlay's own
-  cursor would leave *no* cursor on a Steam Deck. But where both cursors exist, the system one
-  is plainly the better of the two to keep. The overlay's own cursor is therefore kept exactly
-  as the fallback for the modes with no host cursor — embedded (DRM/KMS), OpenVR, and any
-  nested game holding a pointer grab — so the "exactly one cursor, never zero" guarantee `#69`
-  established is unchanged. Testing caught one way to break it: keying "is the pointer grabbed"
-  on the compositor's pointer-lock *confirmation* left zero cursors under
-  `--force-grab-cursor`, because that confirmation may never arrive; it now keys on the lock
-  being requested or confirmed. Cursor size is unaffected by `overlay.display_scale` — as it
-  was before — since the pointer follows your desktop's cursor size rather than the overlay's
-  UI scale. (`superdoc/planning/redesign/AUTONOMOUS-DECISIONS.md` D29.)
-- **Notification placement is now the same 3×3 anchor grid the System Monitor uses.** It was a
-  nine-option Choice, which never fit a row and so was always drawn as a dropdown — two rows
-  asking the identical question ("which of nine screen anchors?") that looked nothing alike. It
-  now declares the existing `Kind::Composite` / `CompositeKind::Anchor`, so it is the *same*
-  control, not a second copy of one: no new kind, no new atom, no second grid to drift. It gets
-  no margins, unlike the Monitor's, because there is no notification-margin config key and
-  inventing one would be a schema change. The stored `notification_placement` string and its
-  format are untouched.
-- **The FSR sharpness slider ran backwards, and now does not.** `Sharpness 0%` under FSR was
-  selecting raw 0 — *maximum* sharpening — and 100% was selecting the minimum. The UI carried a
-  per-filter direction flip on the belief, recorded in `DECISIONS.md` #11, that FSR and NIS remap
-  the raw 0–20 value in opposite directions. They do not: raw 0 is maximum and raw 20 is minimum
-  for both, which is what gamescope's own `--help` says ("upscaler sharpness from 0 (max) to 20
-  (min)") and what both shader feeds compute. Re-measured on a real build — five composited
-  screenshots per setting, because a single frame of an animated scene compares two scenes rather
-  than two settings — and edge energy tracks the raw value alone, identically under both filters.
-  There is one mapping now instead of a branch. **Visible consequence:** an unchanged config
-  reads differently — the stock raw 2 now shows as 90%, not 10%, because raw 2 really is
-  near-maximum sharpening. Nothing on disk changed; only the number shown for it.
-- **Every slider now lands on round numbers, with at most ~100 positions.** Dragging used to
-  produce whatever float the pointer's x happened to be worth, so "set it to exactly 0.8" was a
-  matter of luck. Each of the 27 sliders got a step chosen from its own range and meaning —
-  0.05 for a 0–1 amount, 1px for a pixel size, 10 nits for brightness, 5% for volume — rather
-  than one blanket rule. The quantisation lives in the *binding*, not the widget, so the round
-  number is what reaches the config file, not just what the label prints. Only a **drag** is
-  quantised: the arrow keys already move by exactly the step, Shift still subdivides it, the
-  reset chip still restores an off-grid default (SDR-on-HDR brightness defaults to 203 nits on a
-  10-nit grid), and `overlay_e2_set` can still set the number it was told.
-- **UI scale now applies when you let go of the slider, not while you drag it.** It was the one
-  setting whose value decides the geometry of the control editing it, so applying it live slid
-  the track out from under the pointer — the user: *"it is almost impossible, to adjust"*. The
-  number in the row still follows the pointer; the reflow, the save and the font-atlas re-bake
-  all happen once, on release. The mid-drag *preview* was dropped rather than corrected: it was
-  also `#54`'s entire bug surface (`FontGlobalScale` multiplies on top of the *baked* atlas
-  scale, not 1.0, so a naive preview drifts), and not previewing removes that class instead of
-  compensating for it again. The atlas is still only ever rebuilt at the top of a frame, never
-  inside one (`#51`).
-- **Sharpness is one setting again, and changing the filter resets it to 0%.** There was only
-  ever one stored sharpness — one global, one `gamescope.sharpness` key — but FSR and NIS map
-  that raw 0–20 value in *opposite* visual directions, so the percentage the UI showed jumped
-  every time the filter changed and each filter looked like it remembered its own value.
-  Carrying the percentage across the switch instead was rejected: 80% of RCAS and 80% of NIS are
-  not the same amount of sharpening, so it would silently apply a strength nobody chose for that
-  pass. Nothing on disk changed, and re-selecting the filter you are already on does not clear a
-  sharpness you just set.
-- **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
-  full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
-  ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later
-  item while an earlier one still holds `HoveredId`/`ActiveId`. So the row selector won every
-  hit test, and every control inside a row — switches, sliders, segmented controls, steppers,
-  chip banks, the composite band, the anchor grid, the hue rail, every Inspector row — was dead
-  to the mouse. Two more bugs compounded it: a "micro-pump" frame submitted no UI so any press
-  it consumed was invisible to every widget, and pointer position was queued *after* the click,
-  so ImGui applied the press at the stale position. Separately, ImGui's own keyboard navigation
-  had been running uninterrupted since P1 because a per-frame enable in `AddLayer()` ran before
-  the disable the shell issued after — so nav's own mouse-hover suppression had been fighting
-  the pointer the whole time. Fixed together; the shell's own navigation model now runs alone.
-- Added `overlay_e2_pointer` and `overlay_e2_get` console commands completing a **safe**
-  synthetic-input story for this shell: both append to the overlay's own input queue, which
-  nothing outside the overlay reads, so driving or reading back the UI from a script cannot
-  reach a game window. (`ydotool`/real pointer injection remains off-limits per project policy.)
-- The overlay now opens on **Right Ctrl** (tap, on release) and the command palette on
-  **Left+Right Ctrl**, replacing the earlier hotkey — verified through wlserver's real hotkey
-  path rather than the overlay's own queue, "which provably cannot test a hotkey", per the merge
-  commit; that gap is exactly how a prior `KEY_SLASH` binding bug (2026-08-23) went undetected.
-- Raised the type scale's small end at the user's request (Title 11→13, Section 10.5→12, Label
-  14→15) — the same kind of ask as `#23` on master, where the origin sizes move rather than a
-  multiplier being applied, so the departure from the mockup's own scale is recorded in `SPEC.md`.
-- Moved VRR, Allow Tearing and Force Grab Cursor into a new **General** area above Upscaling, at
-  the user's direct instruction, correcting where an earlier decision (D13.1) had filed them.
-  Only the UI grouping changed — config keys and entry ids are untouched, and Force Grab Cursor
-  was re-verified live rather than assumed, having once before been a control that rendered
-  correctly while doing nothing (`#68`).
+### Removed
+- **The floating-panel UI and its dock**: five windows, all drag, resize,
+  z-order and tiling, and nine custom widgets. There is no flag to fall back
+  to.
+- **The `overlay_e2` flag** that gated the rebuild while it was built.
 
-### 2026-08-23
+### Info
+- **System Monitor settings are six tabs** (General plus one per module)
+  instead of one long scroll.
+- **Checkboxes are switches** everywhere; no site in this UI has a genuine
+  multi-select list.
+- **HDR has its own tab**, and the frame limiter is 0 or 10-480 rather than
+  a plain 0-480 continuum.
 
-- **P5: the legacy floating-panel UI is deleted and this shell becomes the settings overlay.**
-  5,191 lines removed against 140 added in the deletion commit (5,520 against 703 across the
-  whole P1–P5 phase) — the dock, five floating windows, all drag/resize/z-order/tiling, six
-  panel bodies, two settings panels, and nine of the ten old custom widgets, all found dead by
-  `-Wunused-function` once their call sites were cut. The `overlay_e2` ConVar that gated the
-  branch is removed rather than kept as a no-op switch, on the reasoning that a flag with one
-  reachable value isn't a flag. Before deleting, a handful of bugs were fixed so nothing lost its
-  fallback: the rail didn't scroll (so areas were unreachable at 2.0×), a colour param's blue
-  channel could be nudged by an unrelated arrow-key binding, and a Meter control printed blank in
-  the command palette — the "value renders wrong or not at all" bug recurring for a third time,
-  now behind one shared accessor. The FPS HUD itself was proved untouched: it gained ten lines
-  across the whole phase, all of them comments.
-- Built the rail's real icon set (11 icons on a constexpr 24-unit grid, unit-testable geometry)
-  and the sheet's multi-column layout that `Solve()` had been computing since P2 but nothing
-  drew — **the seventh instance in this codebase's own history of a value that rendered
-  correctly and did nothing** (after `#25`'s frame limiter and `#68`'s force-grab-cursor on
-  master, and more below). Also built inline parameter expansion, which a stale comment had
-  claimed already existed.
-- Fixing the 2.0× layout where an open Inspector drawer overlapped the entire sheet control
-  column (making every control in it unreachable) surfaced three more defects only a real
-  keypress could find: `KEY_SLASH` was missing from the keycode table, so `Ctrl+/` was
-  unreachable from an actual keyboard though `/` still typed fine; a dropdown list never
-  rendered at all because ImGui closes a popup whose parent window isn't focused, and the slab
-  is deliberately `NoBringToFrontOnFocus`; and Left/Right were dead keys on the sharpness slider,
-  because its 21-notch real range hid behind a declared step size tuned for a 0–100 scale.
-  `overlay_e2_key` was added so real keypresses — not synthetic focus injection — could be
-  driven from a script, which is how these were caught.
-- Shipped the **command palette** (`Ctrl+K`), searching all 102 live registered settings/params
-  with no new declaration needed at any call site — confirming the registry design's own goal.
-- Ported the Monitor and Log areas and built the "composite" control kind (an N×44-tall band,
-  e.g. the placement anchor grid) that earlier phases had avoided shipping by downgrading it to
-  a plain 9-option list. Found and fixed: the Log's row kinds ("Bank" and "Text") drew nothing at
-  all — an unhandled-enumerator bug, the same shape as `#25`/`#68` — and setting `display_scale`
-  from the console aborted the compositor by rebuilding the font atlas from the console thread
-  rather than the render thread (this recurred; see 2026-08-22 below).
-- Ported Audio (the one area with a dynamic, not fixed, set of rows — streams come and go, so
-  rows are keyed by PipeWire node id rather than slot position) and Config, and fixed the
-  Inspector's scroll, which had never worked: its content laid out from a fixed screen
-  coordinate instead of the child window's own scrolled cursor.
-- Ported Display and Shaders into the registry, one-to-one against every existing config key,
-  and found two more instances of the same "renders, does nothing" shape: `BeginDisabled` was
-  never reaching the custom draw-list atoms, so disabled controls painted at full brightness
-  regardless; and a downgraded dropdown-turned-Choice had no dropdown to open at all — the third
-  occurrence of that exact bug after `#25` and `#68`.
-- **P1–P2: the UI kit foundation and the shell itself, built behind the `overlay_e2` flag**, off
-  by default so `master`'s dock stayed byte-for-byte unchanged while this was built alongside it.
-  The foundation makes the drawn-vs-hit-tested divergence that caused `#23`, `#42`, `#47` and
-  `#49` on master structurally impossible: one `ImRect` per control atom, so the rectangle handed
-  to ImGui's hit-testing is the same rectangle the painter draws, with no second copy to drift.
+## 2026-08-22
 
----
+### Added
+- **The settings overlay**: Display, Shaders, Audio, Config and System
+  Monitor panels, composited by gamescope itself.
+- **Layered configuration**: global and per-game settings with atomic
+  writes, plus a per-game override UI.
+- **Audio volume control**: per-stream PipeWire volume, matching sandboxed
+  and Proton games by process tree.
+- **System Monitor**: FPS, CPU, GPU and media modules on a 3x3 placement
+  grid, with a 60-second statistics tab. A module says "GPU unavailable"
+  rather than inventing a number.
+- **Vibrancy and Pre-Sharpen**: a combined ReShade effect, toggled live.
+- **Accent colour picker**: one hue drives all ten accent tokens.
+- **Background blur and darkening**, both on the compositor's own colour
+  path so they work together.
+- **UI scale**: a real 0.5x-2.0x range, with the font atlas rebuilt at the
+  effective scale for crisp text at any zoom.
+- **Real keyboard-layout text input** via xkbcommon, replacing a hardcoded
+  US-QWERTY table.
 
-## master
+### Fixed
+- **Fullscreen VRR flicker**: both overlay textures were written and sampled
+  on different Vulkan queue families with no ownership transfer. This
+  reproduces on upstream gamescope; it is not a fork regression.
+- **The frame limiter did nothing**: it displayed a value that was silently
+  zeroed again every frame.
+- **ReShade recompiled its pipeline every frame** under FSR and NIS: 3,216
+  recompiles in 12 seconds, now 2.
+- **UI scale was applied twice**, squaring itself once a non-default scale
+  had been saved.
+- **Per-game config is no longer deleted** when you toggle the override off;
+  deletion sits behind a confirmed button.
+- **The General tab reverted to stale defaults** whenever another panel
+  saved.
+- **Double-click timing** depended on the framerate.
+- **`Ctrl+Shift+O` toggled the overlay twice** per press.
+- **Orphaned `.tmp` config files** are swept on load, once the writing
+  process is confirmed dead.
 
-The settings overlay as shipped: an ImGui-based panel system (Display, Shaders, Audio, Config,
-System Monitor/FPS HUD, notifications) composited as a `FrameInfo_t` layer, plus roughly 30
-issues found and fixed against the initial build. This is the UI `feature/overlay-e2` above
-replaces; nothing below is affected by that branch until it merges.
+### Info
+- **Data directories are namespaced** to `share/gamescope-ritz`, so this
+  fork cannot overwrite a co-installed packaged gamescope.
+- **Build tooling**: one `build-gamescope-ritz.sh` entry point and an
+  interactive installer/updater.
 
-### 2026-08-23
+## 2026-08-21
 
-- **System Monitor** (formerly "FPS HUD") reached its final shape for this thread: every
-  module's minimum width now shrinks to its own measured content instead of a flat 186px floor
-  that "turned out to protect nothing, which was checked rather than assumed" (`#80`); a media
-  track title is truncated with a real ellipsis so one long song name can no longer stretch the
-  whole module stack two or three times wider than its siblings (`#77`); the master toggle was
-  renamed "Show System Monitor" and FPS got its own switch, since the master toggle had been
-  doing double duty (`#70`); a toggle was added for the numeric frametime readout, independent of
-  its graph (`#71`); every module now renders at the width of the widest enabled one (`#72`); and
-  FPS gained a switch to hide its own label (`#73`).
-- **Fixed a genuine input-safety bug**: `DrainInputQueue` accepted every raw pointer-motion
-  coordinate from wlserver unchecked. A spurious event carrying a coordinate a full output-width
-  off — normalised X of exactly `-1.0`, or a `-8388608` relative delta — landing mid-drag made
-  ImGui reassign focus to whichever panel happened to sit at that position; captured live once,
-  pressing one panel's title bar moved a different panel instead. Both absolute and delta events
-  are now validated *before* they can perturb the cursor, since clamping the final position
-  after the fact still hands ImGui a legitimate-looking coordinate for a real, wrong place
-  (`#65`, `#75`, `#76`). The originating bad value itself was never explained — the fix stands on
-  its own regardless.
-- Fixed panel windows shrinking while being dragged toward the right or bottom edge of the
-  screen: the existing resize-clamp from `#58` ran on every frame, not only during an actual
-  resize-grip drag, so a title-bar move chased its own advancing position every frame (`#74`).
-- Converted the remaining checkbox call sites to switches, for visual consistency — no site in
-  this UI has a genuine multi-select list, so the checkbox visual carried no meaning it needed
-  (`#60`).
-- Split System Monitor's settings into six tabs (General plus one per module) instead of one long
-  scroll the user called "clunky, unordered and bloated" (`#59`), and routed all eight of its
-  sliders through the shared slider helper that the rest of the UI already used, since these were
-  the outlier the user pointed at (`#61`). Wrote `slider-widget-spec.md`, measuring the shared
-  slider's geometry from a real render by pixel-sampling a screenshot, and brightened the slider
-  rail/mark greys for readability (`#62`).
-- Stopped the nested-mode host cursor from drawing a second, ghost cursor alongside ImGui's own
-  while the overlay has input — suppressed the host's cursor instead of the overlay's, since in
-  embedded and grabbed-nested modes ImGui's is the *only* cursor that exists (`#69`).
-- Moved the HDR toggle onto its own HDR tab; widened the frame limiter to 0 or a 10–480 range
-  with a real gap rather than a plain 0–480 continuum, since below 10fps the overlay itself is
-  too slow to drive; and **fixed Force Grab Cursor, which had shipped rendering correctly and
-  doing nothing** — `g_bForceRelativeMouse` was read every frame but only ever acted on at
-  backend startup, so a live toggle in the UI reached nothing until
-  `steamcompmgr_set_force_relative_mouse` was added to push the mode immediately (`#66`, `#67`,
-  `#68`).
-- A second round of window-geometry fixes: equal dock margin above and below (`#64`); growth now
-  stops at the screen/dock edge instead of overshooting and letting the on-screen clamp yank the
-  whole window back, which had made the opposite edge appear to move (`#58`); resizing restricted
-  to the bottom-right grip only (`#56`); and a hard 250×250 pixel floor rather than a
-  scale-multiplied one, since a scaled floor would shrink to 125px at 0.5× — too small for a
-  title bar and its own label (`#57`).
-- The Audio panel now resolves stream names the way `ncpamixer`/`pactl` do —
-  `application.name`, then `media.name`, then the raw `wpctl` label — instead of showing raw
-  technical identifiers like a Bluetooth input's `bluez_input.98_0D_AF...` (`#63`).
-
-### 2026-08-22
-
-This is the day the initial build's milestones (M0–M9) landed, and also the day most of the
-first wave of post-build fixes went in — the fork's most active single day.
-
-**Milestone build-out (`#1`–`#16`, `#20`, `#21`):** vendored ImGui and `nlohmann::json`; a
-layered global/per-game config system with atomic writes (M0, `#3`); the ImGui render shell
-composited as a `FrameInfo_t` layer (M1, `#4`); keyboard and pointer input capture into the
-overlay with careful press/release routing so a key held across an open/close toggle still
-releases to whichever side received the press (M2, `#5`–`#7`); a live Display/Shaders options
-panel (M3); an always-on FPS display reading the game's own per-frame timing rather than the
-racy shared `mangoapp` struct (M4, `#9`); a PipeWire volume-control backend and its panel,
-matching sandboxed/Proton games by process tree plus a name fallback (M5, `#8`, `#10`); a
-combined Vibrancy+Pre-Sharpen ReShade effect, toggled by uniform rather than shader swap to
-avoid a synchronous recompile (M6, `#11`); full config persistence and per-game override UI (M7,
-`#12`); IBM Plex Sans/Mono typography (M8 part 1, `#13`); custom ImDrawList widget rendering for
-switches and checkboxes, built on ImGui's own `ButtonBehavior` so keyboard nav and
-`BeginDisabled` behave identically to stock widgets (M8 part 2, `#14`); window/dock chrome (M8
-part 3, `#15`); and an 11-icon SVG set (`#16`). Also fixed along the way: orphaned `.tmp` config
-files left behind by a killed process are now swept on load, but only once the writing process
-is confirmed dead (`#21`), and ReShade was recompiling its pipeline **every frame** under
-FSR/NIS because the preemptive-upscale path ran it a second time with a mismatched cache key —
-measured at 3,216 recompiles in 12 seconds before the fix, 2 after (`#20`, filed "Critical").
-
-**GAMESCOPE panel and the frame-limiter bug (`#25`):** renamed the DISPLAY panel to GAMESCOPE
-and split it into Upscaling/Display/Frame-Limiter/HDR tabs. The frame limiter moved and
-displayed a value but never changed the actual framerate — because `paint_all()` calls
-`update_app_target_refresh_cycle()` **every single frame**, which unconditionally zeroes
-`g_nSteamCompMgrTargetFPS` and restores it only from a different global the panel wasn't
-writing. So the panel's write reached the right X11 property, took effect for one frame, and was
-silently stomped back to zero on the next. Fixed by routing through the same entry point the
-Steam client itself uses. Verified live at two values against a 120Hz output's integer vblank
-divisors, not just "the number changed."
-
-**System Monitor build-out (`#27`, `#28`, `#29`, `#40`):** renamed from "FPS HUD", given a 3×3
-placement grid and a module framework (`#27`); CPU, GPU and media-playback modules added,
-degrading honestly ("GPU unavailable (no amdgpu)") rather than fabricating numbers, verified
-against real load changes from `stress-ng` and extra `vkcube` instances (`#28`); styling options,
-an Inverted (black-outline/white-fill) blend mode chosen for architectural reasons — the HUD
-renders into its own transparent-cleared offscreen texture, so a literal destination-invert isn't
-available on this compositing path — and per-module colour overrides (`#29`); and a 60-second
-Statistics tab with rolling graphs (`#40`). `#29` and `#40` both restructured the same settings
-panel from different starting points and collided on merge; the resolution is recorded because it
-nearly dropped `#29`'s colour controls a second time, the same failure mode a previous merge had
-already caused once.
-
-**The UI-scale saga (`#23`, `#24`, `#38`, `#46`–`#49`, `#51`, `#52`, `#54`):** widening the UI
-Scale slider from 0.8–1.4× to a real 0.5–2.0× range (`#24`) exposed that `display_scale` only
-ever drove `FontGlobalScale` — text grew, but every hand-drawn pixel constant in the UI did not,
-so segmented-control labels truncated mid-word ("linear" → "inea") at 2.0× (`#46`), panel windows
-didn't resize with their own contents (`#47`), and default panel tiling didn't scale either
-(`#49`). The underlying fix raised the baseline font/control sizes 20–25% and made control
-geometry itself scale-aware (`#23`), rebuilt the ImGui font atlas at the effective scale instead
-of resampling a fixed-size bake for crisp glyphs at any zoom (`#38`), and then found that
-`FontGlobalScale` was being applied **on top of** the atlas's own already-scaled bake — a
-scale-squared bug only visible once a non-default scale had been committed once (`#48`, and its
-drag-preview counterpart `#54`). `#52`, reported as `display_scale` corrupting on save, did not
-reproduce; the config read/write path round-trips exactly, and the likely cause was traced to an
-unrelated screenshot tool producing non-uniformly-scaled PNGs used for the original measurement.
-Deferring the font-atlas rebuild to the start of the next frame (`#51`) fixed a genuine
-mid-frame-invalidation bug: rebuilding synchronously deletes glyph state that the same frame's
-already-recorded draw commands still reference.
-
-**Window/panel chrome (`#26`, `#31`–`#34`, `#42`, `#44`):** a real 34px title bar with drag,
-shading and an unmistakable two-layer focus glow replacing a near-invisible hairline; resizable
-panels opening at 1.5× their old size; panels clamped fully on-screen against a shrinking host
-window; movement restricted to the title bar (right-click shades, middle-click closes, replacing
-double-click); the dock hint text raised from barely-legible to 85% text opacity; and
-notification placement replaced two separate segmented controls with one 3×3 grid, later reused
-by `#27`'s own placement grid rather than building a second one (`#26`).
-
-**Config safety and UX:** `#43`'s "stop deleting per-game config on override toggle-off" — the
-toggle used to be a bare filesystem delete with no confirmation; it now flips a flag so the file
-survives, with actual deletion moved behind an explicit, confirmed red button — was itself an
-amendment to an earlier full-snapshot design decision, decided directly by the user. Also
-shipped `#43`'s three approved config-UI recommendations: a title-bar layer badge showing
-global/app-id/global-only, per-group reset links on the General tab, and a
-`last_applied_profile` provenance readout.
-
-**Also this day:** a hue-only accent colour picker deriving all ten accent tokens from one live
-hue, validated by reproducing the spec's reference hex values before porting (`#37`); background
-blur and darkening wired live, with darkening moved onto the compositor's own colour-transform
-matrix path so it keeps working under blur (blur bypasses the code path darkening previously used
-alone); a General-tab settings bug where any other panel's write could silently revert the
-General tab back to stale defaults, from a routed-write path forwarding a caller's stale cached
-copy; framerate-independent double-click timing, traced to queued input events carrying no
-timestamp at all rather than to the click-detection logic itself, which was already correct; real
-keyboard-layout text input via `xkbcommon` replacing a hardcoded US-QWERTY table; and a
-double-toggling `Ctrl+Shift+O` hotkey caused by `wlr_keyboard_group`'s own event-forwarding
-re-entering the hotkey handler under a second keyboard identity. Separately, the actual root
-cause of a fullscreen VRR flicker under investigation for many rounds was finally found: both
-overlay textures were written on the graphics queue family and sampled on the compute family
-while created `VK_SHARING_MODE_EXCLUSIVE` with no ownership transfer between them — Vulkan leaves
-the contents formally undefined in that case, and RADV genuinely reports separate queue families
-on the hardware this was tested on. Fixed with a concurrent-sharing mode rather than the
-double-buffering attempted (and reverted) earlier in the investigation, which only widened the
-race window without closing it. Tooling also landed: a single `build-gamescope-ritz.sh` entry
-point, an interactive installer/updater, and namespacing all data directories to
-`share/gamescope-ritz` so this fork can never overwrite a co-installed packaged `gamescope`'s data
-— a real hazard the old path had, caught before it shipped.
-
-### 2026-08-21
-
-The fork's history begins here: the planning commit that added `superdoc/`, the project plan,
-the initial ~18-issue backlog, and the SVG icon set used throughout the UI above.
-
-Most of that day's work is the milestone build-out summarized under 2026-08-22 above (the
-merges themselves land with 2026-08-21 timestamps in several cases and 2026-08-22 in others,
-reflecting when a milestone's branch was started versus merged — this file follows the merge
-commit's own recorded date). Distinct from the build-out, this day carried a long **flicker
-investigation**: a user-reported fullscreen VRR artifact was chased across many rounds and
-several disproven hypotheses before the actual root cause (the queue-family sharing bug, fixed
-and described under 2026-08-22) was found. Along the way: a rewritten test harness that could
-actually see the bug class involved (native resolution, real `--fullscreen`, all backends, GPU
-fault log-scanning) after the old one's 640×480 SDL-only default had passed clean on the exact
-commit that failed at 1920×1080; confirmation that the flicker reproduces on pure upstream
-`gamescope` at this fork's own base commit, ruling it out as this fork's regression; and,
-separately, confirmation that the project's own test tooling had been defaulting to the SDL
-backend, which has an unrelated, genuine upstream flicker bug of its own that real users never
-hit because `gamescope` auto-selects the Wayland backend when nested under a Wayland session.
-Several now-superseded planning documents from the dead ends in this investigation are kept
-rather than deleted, since "the reasoning is kept, since the dead ends are instructive."
+### Info
+- **The fork starts here**, with the planning commit that added `superdoc/`,
+  the project plan and the initial backlog.
+- **The base is upstream `ValveSoftware/gamescope` `fcc1341`.** Upstream's
+  own history is not reproduced in this file.
