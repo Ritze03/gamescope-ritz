@@ -1,9 +1,13 @@
 # Changelog
 
-All notable user-facing changes, newest first. Categories: **Added** (new
-features), **Fixed** (bug and behaviour fixes), **Removed** (things taken
-out), **Info** (notes worth knowing). The newest version below is the one
-this build reports.
+All notable user-facing changes, newest first. Categories: 
+
+**Added** (new features), 
+**Fixed** (bug and behaviour fixes), 
+**Removed** (things taken out), 
+**Info** (notes worth knowing). 
+
+The newest version below is the one this build reports.
 
 ## [0.3.1] – 2026-08-24
 
