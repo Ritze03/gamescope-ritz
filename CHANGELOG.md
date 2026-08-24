@@ -44,6 +44,17 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **The FSR sharpness slider ran backwards, and now does not.** `Sharpness 0%` under FSR was
+  selecting raw 0 — *maximum* sharpening — and 100% was selecting the minimum. The UI carried a
+  per-filter direction flip on the belief, recorded in `DECISIONS.md` #11, that FSR and NIS remap
+  the raw 0–20 value in opposite directions. They do not: raw 0 is maximum and raw 20 is minimum
+  for both, which is what gamescope's own `--help` says ("upscaler sharpness from 0 (max) to 20
+  (min)") and what both shader feeds compute. Re-measured on a real build — five composited
+  screenshots per setting, because a single frame of an animated scene compares two scenes rather
+  than two settings — and edge energy tracks the raw value alone, identically under both filters.
+  There is one mapping now instead of a branch. **Visible consequence:** an unchanged config
+  reads differently — the stock raw 2 now shows as 90%, not 10%, because raw 2 really is
+  near-maximum sharpening. Nothing on disk changed; only the number shown for it.
 - **Every slider now lands on round numbers, with at most ~100 positions.** Dragging used to
   produce whatever float the pointer's x happened to be worth, so "set it to exactly 0.8" was a
   matter of luck. Each of the 27 sliders got a step chosen from its own range and meaning —

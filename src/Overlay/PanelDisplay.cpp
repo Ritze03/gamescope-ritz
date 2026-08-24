@@ -29,21 +29,23 @@
 // (which the Frame Limiter tab already does, for the reason explained on
 // SetFpsLimit() below).
 //
-// Sharpness direction (DECISIONS.md #11, SPEC.md Feature 4): FSR and NIS
-// remap the same raw 0..20 g_upscaleFilterSharpness value in opposite visual
-// directions. This was verified empirically here, not just by reading the
-// shader math (the RCAS constant-setup comment reads ambiguously in
-// isolation) -- see RawSharpnessFromUiPercent()'s comment for the actual
-// screenshot-verified directions. Do not "fix" the inversion by making the
-// two filters share a single raw-value meaning -- upstream
-// (ValveSoftware/gamescope#515) looked at unifying it and closed it as not
-// planned; the UI-side auto-correction below is the permanent fix.
+// Sharpness direction (2026-08-24 -- CORRECTS DECISIONS.md #11 and
+// AUTONOMOUS-DECISIONS D13, which both recorded FSR and NIS as remapping the
+// raw 0..20 g_upscaleFilterSharpness value in OPPOSITE visual directions).
+// They do not. Raw 0 is maximum sharpening and raw 20 is minimum, for BOTH
+// filters -- which is also what upstream's own `--help` says ("upscaler
+// sharpness from 0 (max) to 20 (min)") and what rendervulkan.cpp's two shader
+// feeds compute. Re-measured on a real build with five composited screenshots
+// per setting; see RawSharpnessFromUiPercent()'s comment for the numbers and
+// for why the old note's "verified empirically" claim was wrong. There is one
+// mapping now, not a per-filter branch.
 //
 // One sharpness, not two (2026-08-24): the storage was always single -- one
-// global, one `gamescope.sharpness` key. The flip above is what made it read
-// as two per-filter values, because the displayed percent jumped whenever the
-// filter changed. SetFilter() now resets the percent to 0 on an actual filter
-// change, which is the user's own wording for "combine them". See SetFilter().
+// global, one `gamescope.sharpness` key. The now-removed direction flip is
+// what made it read as two per-filter values, because the displayed percent
+// jumped whenever the filter changed. SetFilter() also resets the percent to 0
+// on an actual filter change, which is the user's own wording for "combine
+// them". See SetFilter().
 #include "PanelDisplay.h"
 
 #include <algorithm>
@@ -228,41 +230,64 @@ namespace gamescope
 		// reload the way e.g. a Steam-focus override clobbers filter/scaler.
 	}
 
-	// One slider, always "higher = sharper" regardless of which filter is
-	// active (DECISIONS.md #11) -- the raw<->UI-percent mapping direction
-	// itself flips between filters underneath.
+	// One slider, always "higher = sharper" -- and, since 2026-08-24, ONE
+	// mapping, because the raw value does NOT change direction between the two
+	// filters. This corrects DECISIONS.md #11 / AUTONOMOUS-DECISIONS D13, both
+	// of which recorded FSR as running the other way.
 	//
-	// Empirically verified (screenshot comparison of vkcube upscaled at
-	// -w 640 -h 480 -W 1920 -H 1080, raw 0 vs raw 20, both filters):
-	//   - FSR:  raw 0 visibly softer, raw 20 visibly sharper (more grain/
-	//     edge contrast in the logo texture)   => higher raw = sharper.
-	//   - NIS:  raw 0 shows a visible bright edge halo around the logo (a
-	//     classic over-sharpen ringing artifact), raw 20 is smooth/clean
-	//     => higher raw = LESS sharp.
-	// This matches SPEC.md/DECISIONS.md's claimed direction, but was checked
-	// against the actual rendered output rather than trusted from the shader
-	// math alone -- ffx_fsr1.h's own FsrRcasCon() doc comment ("0.0 :=
-	// maximum, N>0 = stops of reduction") reads as if it should invert, and
-	// static reading here would have gotten this backwards.
-	static int RawSharpnessFromUiPercent( GamescopeUpscaleFilter eFilter, int nUiPercent )
+	// THE RAW SCALE IS "0 = MAXIMUM SHARPENING, 20 = MINIMUM", FOR BOTH.
+	// Three independent sources agree, and they agree with each other:
+	//
+	//   1. `--help` in main.cpp, upstream's own wording:
+	//        "--sharpness, --fsr-sharpness   upscaler sharpness from 0 (max) to 20 (min)"
+	//   2. The shader feeds, in rendervulkan.cpp's composite path:
+	//        RCAS: FsrRcasCon( ..., g_upscaleFilterSharpness / 10.0f ), and
+	//              ffx_fsr1.h computes 2^-x from it -- the parameter is STOPS
+	//              OF REDUCTION, so raw 0 is unattenuated and raw 20 is 2 stops
+	//              down.
+	//        NIS:  nisSharpness = (20 - g_upscaleFilterSharpness) / 20.0f -- a
+	//              0..1 strength, so raw 0 is 1.0 and raw 20 is 0.0.
+	//      Different arithmetic, same direction.
+	//   3. Measured, on this build: five `full_composition` screenshots per
+	//      setting (the animated vkcube scene makes a single frame per setting
+	//      a comparison of two different scenes, not two settings), mean
+	//      Sobel/FIND_EDGES energy over the whole 1920x1080 frame:
+	//
+	//        raw:            0        10       20
+	//        FSR   median  1.647    1.136    1.083     (ranges do not overlap)
+	//        NIS   median  1.387    1.415    1.094
+	//
+	//      Edge energy tracks the RAW value and nothing else: it is the same
+	//      curve under both filters, and it FALLS as raw rises. There is no
+	//      inversion between the filters to encode.
+	//
+	// WHY THE OLD NOTE WAS WRONG, AND WHY IT MATTERED. The previous comment
+	// here claimed FSR was screenshot-verified as "higher raw = sharper" and
+	// warned that the shader math "reads as if it should invert". It does not
+	// read that way -- it says what it means -- and the measurement above says
+	// the same thing. The consequence was not cosmetic: with the FSR branch
+	// inverted, `Sharpness 0%` under FSR selected raw 0, i.e. MAXIMUM
+	// sharpening, which is precisely backwards from what the number promises
+	// and from what "resets to 0% when the filter changes" is supposed to mean.
+	//
+	// The eFilter parameter is gone rather than kept-and-ignored: an argument
+	// that no longer affects the result is an invitation to re-introduce a
+	// branch here.
+	static int RawSharpnessFromUiPercent( int nUiPercent )
 	{
 		nUiPercent = std::clamp( nUiPercent, 0, 100 );
-		if ( eFilter == GamescopeUpscaleFilter::NIS )
-			return (int)std::lround( (100 - nUiPercent) * 20.0 / 100.0 );
-		return (int)std::lround( nUiPercent * 20.0 / 100.0 ); // FSR (and the no-op filters)
+		return (int)std::lround( (100 - nUiPercent) * 20.0 / 100.0 );
 	}
 
-	static int UiPercentFromRawSharpness( GamescopeUpscaleFilter eFilter, int nRaw )
+	static int UiPercentFromRawSharpness( int nRaw )
 	{
 		nRaw = std::clamp( nRaw, 0, 20 );
-		if ( eFilter == GamescopeUpscaleFilter::NIS )
-			return (int)std::lround( (20 - nRaw) * 100.0 / 20.0 );
-		return (int)std::lround( nRaw * 100.0 / 20.0 );
+		return (int)std::lround( (20 - nRaw) * 100.0 / 20.0 );
 	}
 
-	static void SetSharpnessUiPercent( GamescopeUpscaleFilter eFilter, int nUiPercent )
+	static void SetSharpnessUiPercent( int nUiPercent )
 	{
-		const int nRaw = RawSharpnessFromUiPercent( eFilter, nUiPercent );
+		const int nRaw = RawSharpnessFromUiPercent( nUiPercent );
 		g_upscaleFilterSharpness = nRaw;
 		s_CachedSettings.gamescope.sharpness = nRaw;
 		QueueSave();
@@ -297,7 +322,7 @@ namespace gamescope
 		g_wantedUpscaleFilter = eFilter;
 		s_CachedSettings.gamescope.filter = FilterToString( eFilter );
 		if ( bFilterChanged )
-			SetSharpnessUiPercent( eFilter, 0 ); // QueueSave()s on its own
+			SetSharpnessUiPercent( 0 ); // QueueSave()s on its own
 		QueueSave();
 	}
 
@@ -563,8 +588,8 @@ namespace gamescope
 		// than exposing g_upscaleFilterSharpness directly.
 		a.Slider( "display.sharpness", "Sharpness",
 			ui::AnyBind::Of<int>(
-				[]{ return UiPercentFromRawSharpness( g_wantedUpscaleFilter, g_upscaleFilterSharpness ); },
-				[]( int n ) { SetSharpnessUiPercent( g_wantedUpscaleFilter, n ); } ) )
+				[]{ return UiPercentFromRawSharpness( g_upscaleFilterSharpness ); },
+				[]( int n ) { SetSharpnessUiPercent( n ); } ) )
 			.Help( "Strength of gamescope's own post-upscale sharpening pass (FSR RCAS or NIS). "
 			       "Higher is crisper; too high adds ringing around high-contrast edges. One "
 			       "setting covers both filters, and changing the filter resets it to 0%. This is "
@@ -584,7 +609,10 @@ namespace gamescope
 			// keyboard gaps is what found it.
 			.Step( 5.0f )
 			.Unit( "%" )
-			.Default( UiPercentFromRawSharpness( GamescopeUpscaleFilter::FSR, 2 ) )
+			// The schema default is raw 2, which on the corrected scale is 90%:
+			// gamescope's own compiled-in default really is near-maximum
+			// sharpening (main.cpp: g_upscaleFilterSharpness = 2, "0 (max)").
+			.Default( UiPercentFromRawSharpness( 2 ) )
 			.Keywords( "sharpen sharpness rcas cas crisp clarity ringing" )
 			.DisabledUnless( SharpnessApplies,
 				"only FSR and NIS sharpen -- the Linear, Nearest and Pixel filters have no "
