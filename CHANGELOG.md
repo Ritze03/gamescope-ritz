@@ -30,6 +30,9 @@ The newest version below is the one this build reports.
   log body at full height.
 
 ### Fixed
+- **A notification's coloured edge sits inside the card**: it used to stand
+  beside the card's rounded corners with a doubled seam, most visibly at
+  larger notification sizes.
 - **Text is bigger throughout the overlay**, most of all the Log and
   Changelog body.
 - **Overlong text ends in `...`** instead of stopping mid-word.

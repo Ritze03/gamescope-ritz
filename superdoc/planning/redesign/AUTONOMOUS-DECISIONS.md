@@ -10,6 +10,59 @@ cheap.
 
 ---
 
+## 2026-08-24 — D32 · Three settings reports: the toast accent edge, `dock_scale`, notification scale
+
+Three user reports, taken together because all three are about settings surfaces the E2
+rework left alone. Each landed as its own commit.
+
+### D32.1 · The toast accent edge is drawn as the card, clipped to a strip
+
+**The report.** *"The left edge is doubled"* and *"The colored part is next to it, instead
+of on top of it."* Screenshots showed a blue bar standing beside the toast's dark rounded
+card, with a seam in it.
+
+**The root cause is one fault, not two.** `Notifications.cpp`'s `DrawToasts()` drew the
+accent as its own narrow rect — `AddRectFilled(rectMin, rectMin.x + flAccentBarW, …,
+flRounding, ImDrawFlags_RoundCornersLeft)` — a rect only `3 * scale` wide asking for an
+`8 * scale` corner radius. `ImDrawList::PathRect()` **clamps** a radius to the rect's own
+size, so the strip silently got roughly `flAccentBarW - 1` instead. The strip therefore
+carried a *different, much tighter* corner curve than the card it was meant to sit inside.
+Both reported symptoms fall out of that single mismatch:
+
+- **"next to it, not on top of it"** — above and below the card's radius-8 arc, the card's
+  fill has already curved away, but the strip has not, so its top and bottom few pixels
+  stand on bare game background. It reads as a bar flanking the card.
+- **"doubled"** — within those same few pixels there are now *three* edges within three
+  pixels: the strip's tight curve, the card's wide curve, and the card's 1px border arc
+  running between them. That is the seam.
+
+It gets worse with scale (obvious at 2.0×, nearly invisible at 0.5×) because every radius
+grows with `flScale` while the strip's clamp is pinned to its own 3px width. That scale
+dependence is why it survived review: at 1.0× it is a two-pixel artefact.
+
+**Chose:** fill the **whole card rect** in the accent colour, with the **card's own
+rounding**, inside a clip rect exposing only the leftmost `flAccentBarW` pixels. The
+accent's outer silhouette is then the card's silhouette *by construction* — there is no
+second radius that can disagree with the first, at any scale — and the clip is intersected
+with the current one, so it cannot paint outside the card either.
+
+**Rejected — insetting the strip by the card's radius** (start it below the top arc, end it
+above the bottom one). It stops the protrusion but leaves the edge visibly short of the
+card's corners, and it needs the radius written down in a second place, which is the class
+of duplication that produced this bug.
+
+**Rejected — giving the strip the card's radius and widening it to `>= 2 * rounding`.** A
+16px-wide accent at 1.0× is a different design, not a fix.
+
+**Rejected — dropping the card's rounding on the left side** so a square strip fits. That
+changes the card's shape to accommodate a drawing bug.
+
+*Cheap to reverse:* one clip push/pop around one `AddRectFilled`.
+
+**Evidence:** `superdoc/planning/redesign/round-2/e2-inspector-plus/audit-shots/
+toast-accent-edge-{0.5,1.0,2.0}.png` — before/after, zoomed to the top-left corner, from a
+real `gamescopectl notify_test` toast at each scale.
+
 ## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
 
 Two reports from the user, both about the standalone launcher (D25). They are finished

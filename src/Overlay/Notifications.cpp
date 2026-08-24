@@ -556,15 +556,43 @@ namespace gamescope::Notifications
 			pDrawList->AddRectFilled( rectMin, rectMax, uBg, flRounding );
 			pDrawList->AddRect( rectMin, rectMax, gamescope::palette::White( 0.10f * flAlpha ), flRounding );
 
-			// Kind-colored accent bar on the left edge -- the same "this
-			// one is live" left-edge accent language Palette.h's own
+			// Kind-colored accent edge on the left of the card -- the same
+			// "this one is live" left-edge accent language Palette.h's own
 			// comment describes for the rest of the overlay (dock top
 			// edge, active-group left edge), applied per-toast here.
-			pDrawList->AddRectFilled(
-				rectMin,
+			//
+			// DRAWN AS THE CARD, CLIPPED TO A STRIP -- not as its own
+			// narrow rect. The obvious version (AddRectFilled over
+			// rectMin..rectMin+flAccentBarW with ImDrawFlags_RoundCornersLeft)
+			// is what shipped, and it produced the user's 2026-08-24 report:
+			// "The left edge is doubled" / "The colored part is next to it,
+			// instead of on top of it." Both symptoms are one geometric
+			// fault. ImDrawList::PathRect() clamps a corner radius to the
+			// rect's own size, so a 3*scale-wide strip asking for an
+			// 8*scale radius silently gets ~flAccentBarW-1 instead. The
+			// strip therefore carried a *different*, much tighter corner
+			// curve than the card it was supposed to sit inside: above and
+			// below the card's radius-8 arc the strip stood on bare
+			// background (it read as a bar beside the card), and within
+			// those few pixels the strip's own tight curve, the card's wide
+			// curve and the 1px border arc between them read as a doubled
+			// edge with a seam. It got worse with scale, because every
+			// radius grows but the strip's clamp does not.
+			//
+			// Filling the WHOLE card rect in the accent colour, with the
+			// card's own rounding, inside a clip rect that exposes only the
+			// leftmost flAccentBarW pixels, makes the accent's outer
+			// silhouette the card's silhouette *by construction* -- there is
+			// no second radius that can disagree with the first, at any
+			// scale. The clip is intersected with the current one, so this
+			// cannot paint outside the card either.
+			pDrawList->PushClipRect(
+				ImVec2( rectMin.x, rectMin.y ),
 				ImVec2( rectMin.x + flAccentBarW, rectMax.y ),
-				KindColorAlpha( card.pToast->kind, flAlpha ),
-				flRounding, ImDrawFlags_RoundCornersLeft );
+				/* intersect_with_current_clip_rect = */ true );
+			pDrawList->AddRectFilled( rectMin, rectMax,
+				KindColorAlpha( card.pToast->kind, flAlpha ), flRounding );
+			pDrawList->PopClipRect();
 
 			const ImVec2 textPos( rectMin.x + flAccentBarW + flPadding, rectMin.y + flPadding );
 			const ImU32 uTextColor = gamescope::palette::Text( 0.92f * flAlpha );
