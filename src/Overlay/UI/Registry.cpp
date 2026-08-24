@@ -117,6 +117,14 @@ namespace gamescope::ui
 	Value AnyBind::Get() const { return m_Get ? m_Get() : Value{}; }
 	void  AnyBind::Set( const Value &v ) const { if ( m_Set ) m_Set( v ); }
 
+	// ---- the pointer-drag flag (see Registry.h) --------------------------
+	namespace
+	{
+		bool s_bPointerDragActive = false;
+	}
+	void SetPointerDragActive( bool bActive ) { s_bPointerDragActive = bActive; }
+	bool IsPointerDragActive()                { return s_bPointerDragActive; }
+
 	// =====================================================================
 	//  Parameter
 	// =====================================================================

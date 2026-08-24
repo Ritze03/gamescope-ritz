@@ -44,6 +44,15 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **UI scale now applies when you let go of the slider, not while you drag it.** It was the one
+  setting whose value decides the geometry of the control editing it, so applying it live slid
+  the track out from under the pointer — the user: *"it is almost impossible, to adjust"*. The
+  number in the row still follows the pointer; the reflow, the save and the font-atlas re-bake
+  all happen once, on release. The mid-drag *preview* was dropped rather than corrected: it was
+  also `#54`'s entire bug surface (`FontGlobalScale` multiplies on top of the *baked* atlas
+  scale, not 1.0, so a naive preview drifts), and not previewing removes that class instead of
+  compensating for it again. The atlas is still only ever rebuilt at the top of a frame, never
+  inside one (`#51`).
 - **Sharpness is one setting again, and changing the filter resets it to 0%.** There was only
   ever one stored sharpness — one global, one `gamescope.sharpness` key — but FSR and NIS map
   that raw 0–20 value in *opposite* visual directions, so the percentage the UI showed jumped

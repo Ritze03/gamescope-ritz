@@ -104,6 +104,20 @@ namespace gamescope::ui
 	// row (API.md §9).
 	enum class Applies : uint8_t { Live, NextFrame, NeedsRestart };
 
+	// ---- is a pointer dragging a control right now? -----------------------
+	// Published once a frame by the control atoms (Controls.cpp's shared
+	// prologue) and read here. It lives in this ImGui-free file on purpose:
+	// D19.1's rule is that a registration must never have to ask ImGui a
+	// question, because a registration's getters and setters are also reached
+	// from the console thread, where there is no context at all. A plain bool
+	// is answerable from anywhere, and answers "no" off the render thread,
+	// which is the correct answer there.
+	//
+	// Consumed by `overlay.display_scale`, whose apply waits for the drag to
+	// end rather than reflowing the sheet under the pointer.
+	void SetPointerDragActive( bool bActive );
+	bool IsPointerDragActive();
+
 	// A type-erased binding. `Cfg()` (schema-backed, knows its destination
 	// file) arrives in P2 with the config seam; `Bind()` covers the transient
 	// and getter/setter cases the atoms need today.
