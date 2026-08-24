@@ -1009,6 +1009,104 @@ TEST_CASE( "registry: a binding round-trips its value", "[overlay_ui]" )
 	REQUIRE( ui::ValueToString( ui::Value( false ) ) == "off" );
 }
 
+// D27, item 3. The user: "Add sensible step sizes for all sliders, so they have
+// up to 100 individual positions. It should allow, to set even values more
+// easily."
+//
+// A declared Step() quantises the value a POINTER DRAG produces, so a drag
+// lands on round numbers and a round number is what reaches the config file.
+// Everything else writes verbatim -- and that is the part most worth pinning,
+// because it is what keeps an off-grid default reachable (the reset chip),
+// keeps SPEC §3.4's Shift = fine adjust alive, and keeps `overlay_e2_set` able
+// to set the number it was given.
+TEST_CASE( "registry: a Step quantises the drag and nothing else", "[overlay_ui]" )
+{
+	struct ScopedDrag
+	{
+		explicit ScopedDrag( bool b ) { ui::SetPointerDragActive( b ); }
+		~ScopedDrag() { ui::SetPointerDragActive( false ); }
+	};
+
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "test.step", "Step", ui::Section::Setup );
+
+	float flNits = 203.0f;
+	a.Slider( "test.step.nits", "Brightness", ui::Bind( &flNits ) )
+		.Help( "x" )
+		.Range( 50.0f, 1000.0f )
+		.Step( 10.0f )
+		.Default( 203.0f );
+
+	int nPercent = 0;
+	a.Slider( "test.step.pct", "Percent", ui::Bind( &nPercent ) )
+		.Help( "x" )
+		.Range( 0.0f, 100.0f )
+		.Step( 5.0f );
+
+	const ui::Entry *pNits = reg.FindEntry( "test.step.nits" );
+	const ui::Entry *pPct  = reg.FindEntry( "test.step.pct" );
+	REQUIRE( pNits != nullptr );
+	REQUIRE( pPct != nullptr );
+
+	// Off the drag path the value is written exactly as given -- including a
+	// default that is deliberately not on the grid.
+	pNits->Binding().Set( ui::Value( 203.0f ) );
+	REQUIRE_THAT( flNits, WithinAbs( 203.0f, 1e-4f ) );
+	pNits->Binding().Set( ui::Value( 517.0f ) );
+	REQUIRE_THAT( flNits, WithinAbs( 517.0f, 1e-4f ) );
+	pPct->Binding().Set( ui::Value( 61 ) );
+	REQUIRE( nPercent == 61 );
+
+	// During a drag, every write lands on the grid.
+	{
+		ScopedDrag drag( true );
+		pNits->Binding().Set( ui::Value( 517.0f ) );
+		REQUIRE_THAT( flNits, WithinAbs( 520.0f, 1e-4f ) );
+		pNits->Binding().Set( ui::Value( 203.0f ) );
+		REQUIRE_THAT( flNits, WithinAbs( 200.0f, 1e-4f ) );
+
+		// Both ends of the declared range are themselves on the grid, so no
+		// clamp is needed and neither end can be pushed outside it.
+		pNits->Binding().Set( ui::Value( 50.0f ) );
+		REQUIRE_THAT( flNits, WithinAbs( 50.0f, 1e-4f ) );
+		pNits->Binding().Set( ui::Value( 1000.0f ) );
+		REQUIRE_THAT( flNits, WithinAbs( 1000.0f, 1e-4f ) );
+
+		pPct->Binding().Set( ui::Value( 61 ) );
+		REQUIRE( nPercent == 60 );
+		pPct->Binding().Set( ui::Value( 63 ) );
+		REQUIRE( nPercent == 65 );
+	}
+
+	// And the flag really is what decided it, not some latch.
+	pPct->Binding().Set( ui::Value( 61 ) );
+	REQUIRE( nPercent == 61 );
+}
+
+// The other half: a Stepper's Step() is its arithmetic, not a grid to snap to.
+// D13.3 records that an fps_limit of 144 loaded from an old config must keep
+// working; snapping a Stepper would move a value nobody dragged.
+TEST_CASE( "registry: a Stepper's Step does not quantise its binding", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "test.stepper", "Stepper", ui::Section::Setup );
+
+	int nFps = 144;
+	a.Stepper( "test.stepper.fps", "FPS limit", ui::Bind( &nFps ) )
+		.Help( "x" )
+		.Range( 0.0f, 480.0f )
+		.Step( 10.0f )
+		.ZeroMeans( "Unlimited" );
+
+	const ui::Entry *pE = reg.FindEntry( "test.stepper.fps" );
+	REQUIRE( pE != nullptr );
+
+	ui::SetPointerDragActive( true );
+	pE->Binding().Set( ui::Value( 144 ) );
+	ui::SetPointerDragActive( false );
+	REQUIRE( nFps == 144 );
+}
+
 // ===========================================================================
 //  P3 part A -- the read side a POPULATED registry needs
 // ===========================================================================

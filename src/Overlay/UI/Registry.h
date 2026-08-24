@@ -113,8 +113,8 @@ namespace gamescope::ui
 	// is answerable from anywhere, and answers "no" off the render thread,
 	// which is the correct answer there.
 	//
-	// Consumed by `overlay.display_scale`, whose apply waits for the drag to
-	// end rather than reflowing the sheet under the pointer.
+	// Two things consume it: `overlay.display_scale`, whose apply waits for
+	// the drag to end, and Step()'s quantisation below.
 	void SetPointerDragActive( bool bActive );
 	bool IsPointerDragActive();
 
@@ -129,6 +129,12 @@ namespace gamescope::ui
 		bool  IsBound() const { return (bool)m_Get; }
 		Value Get() const;
 		void  Set( const Value &v ) const;
+
+		// Wraps this binding's setter so that a write made DURING A POINTER
+		// DRAG is rounded to the nearest multiple of `flStep`. Applied by
+		// Entry::Step()/Parameter::Step() on slider kinds; see Registry.cpp
+		// for why only the drag is quantised.
+		AnyBind &SnapDragsTo( float flStep );
 
 		template <typename T>
 		static AnyBind Of( T *p )

@@ -852,6 +852,7 @@ namespace gamescope
 			.Help( "How far SDR content is stretched toward the display's wide gamut. 0 keeps "
 			       "BT.709 exactly. Applies immediately." )
 			.Range( 0.0f, 1.0f )
+			.Step( 0.05f )       // 21 positions across a 0..1 normalised amount
 			.Default( 0.0f )
 			.Keywords( "gamut wideness sdr saturation bt709 bt2020" )
 			.DisabledUnless( HdrOn, kHdrOff );
@@ -866,6 +867,11 @@ namespace gamescope
 				} ) )
 			.Help( "How bright SDR content looks composited alongside HDR. Applies immediately." )
 			.Range( 50.0f, 1000.0f )
+			// 96 positions. The 203-nit default is deliberately NOT on this
+			// grid and does not need to be: only a DRAG is quantised, so the
+			// reset chip, the arrow keys and `overlay_e2_set` all still reach
+			// SDR reference white exactly (Registry.cpp's SnapDragsTo()).
+			.Step( 10.0f )
 			.Unit( "nits" )
 			.Default( 203.0f )
 			.Keywords( "sdr brightness nits paper white luminance" )
@@ -883,6 +889,7 @@ namespace gamescope
 				} ) )
 			.Help( "Multiplier applied to HDR content before tone mapping. Applies immediately." )
 			.Range( 0.0f, 4.0f )
+			.Step( 0.05f )       // 81 positions; 1.00x, the default, is on the grid
 			.Unit( "x" )
 			.Default( 1.0f )
 			.Keywords( "hdr input gain multiplier exposure" )
@@ -899,6 +906,7 @@ namespace gamescope
 			.Help( "Multiplier applied to SDR content before it is composited into the HDR "
 			       "container. Applies immediately." )
 			.Range( 0.0f, 4.0f )
+			.Step( 0.05f )       // 81 positions, as HDR input gain above
 			.Unit( "x" )
 			.Default( 1.0f )
 			.Keywords( "sdr input gain multiplier exposure" )

@@ -2184,9 +2184,13 @@ namespace gamescope
 		// =================================================================
 		a.Group( "Appearance" );
 
+		// flStep is required, not defaulted: every one of these is a
+		// continuous float, so "no step" is never the right answer here and a
+		// default would let the next row be added without the question being
+		// asked (D27).
 		auto FloatRow = [ & ]( const char *pszId, const char *pszTitle,
 		                       float config::FpsDisplaySettings::*pField,
-		                       float flLo, float flHi, const char *pszUnit,
+		                       float flLo, float flHi, float flStep, const char *pszUnit,
 		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
 		{
 			return a.Slider( pszId, pszTitle,
@@ -2195,6 +2199,7 @@ namespace gamescope
 					[ pField ]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.*pField = f; PersistSettings(); } ) )
 				.Help( pszHelp )
 				.Range( flLo, flHi )
+				.Step( flStep )
 				.Unit( pszUnit )
 				.Default( config::FpsDisplaySettings{}.*pField )
 				.Keywords( pszKeywords )
@@ -2202,13 +2207,13 @@ namespace gamescope
 		};
 
 		FloatRow( "monitor.font_size", "Font size", &config::FpsDisplaySettings::font_size,
-			10.0f, 48.0f, "px", "Type size for every module in the monitor.",
-			"font size text scale monitor hud" );
+			10.0f, 48.0f, 1.0f, "px", "Type size for every module in the monitor.",
+			"font size text scale monitor hud" );   // 39 positions, whole px
 
 		// Issue #29's own styling option -- see ConfigSchema.h's
 		// module_spacing comment for the two alternatives it rejected.
 		FloatRow( "monitor.module_spacing", "Module spacing",
-			&config::FpsDisplaySettings::module_spacing, 0.0f, 32.0f, "px",
+			&config::FpsDisplaySettings::module_spacing, 0.0f, 32.0f, 1.0f, "px",   // 33 positions
 			"Gap between the stacked module blocks.", "spacing gap module layout" );
 
 		static constexpr ui::Option kBlendModes[] = {
@@ -2238,7 +2243,7 @@ namespace gamescope
 			.DisabledUnless( MonitorOn, kOffReason );
 
 		FloatRow( "monitor.text_opacity", "Text opacity",
-			&config::FpsDisplaySettings::text_opacity, 0.0f, 1.0f, "",
+			&config::FpsDisplaySettings::text_opacity, 0.0f, 1.0f, 0.05f, "",   // 21 positions
 			"Opacity of every module's text.", "opacity alpha text transparency" );
 
 		// Additive pairs oddly with a filled backdrop (the backdrop itself
@@ -2264,19 +2269,19 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
 					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
-				.Range( 0.0f, 1.0f ).Default( config::FpsDisplaySettings{}.backdrop_opacity )
+				.Range( 0.0f, 1.0f ).Step( 0.05f ).Default( config::FpsDisplaySettings{}.backdrop_opacity )   // 21 positions
 				.Help( "How opaque the box behind each module is." )
 			.Param( "rounding", "Backdrop rounding",
 				ui::AnyBind::Of<float>(
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_rounding; },
 					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_rounding = f; PersistSettings(); } ) )
-				.Range( 0.0f, 16.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_rounding )
+				.Range( 0.0f, 16.0f ).Step( 1.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_rounding )   // 17 positions
 				.Help( "Corner radius of the box." )
 			.Param( "padding", "Backdrop padding",
 				ui::AnyBind::Of<float>(
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_padding; },
 					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_padding = f; PersistSettings(); } ) )
-				.Range( 0.0f, 24.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_padding )
+				.Range( 0.0f, 24.0f ).Step( 1.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_padding )   // 25 positions
 				.Help( "Space between the box's edge and the text inside it." );
 
 		// =================================================================

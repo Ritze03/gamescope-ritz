@@ -44,6 +44,15 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **Every slider now lands on round numbers, with at most ~100 positions.** Dragging used to
+  produce whatever float the pointer's x happened to be worth, so "set it to exactly 0.8" was a
+  matter of luck. Each of the 27 sliders got a step chosen from its own range and meaning —
+  0.05 for a 0–1 amount, 1px for a pixel size, 10 nits for brightness, 5% for volume — rather
+  than one blanket rule. The quantisation lives in the *binding*, not the widget, so the round
+  number is what reaches the config file, not just what the label prints. Only a **drag** is
+  quantised: the arrow keys already move by exactly the step, Shift still subdivides it, the
+  reset chip still restores an off-grid default (SDR-on-HDR brightness defaults to 203 nits on a
+  10-nit grid), and `overlay_e2_set` can still set the number it was told.
 - **UI scale now applies when you let go of the slider, not while you drag it.** It was the one
   setting whose value decides the geometry of the control editing it, so applying it live slid
   the track out from under the pointer — the user: *"it is almost impossible, to adjust"*. The

@@ -290,6 +290,7 @@ namespace gamescope
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, "vibrancy_strength", f ); } ) )
 				.Help( "Overall weight of the effect. Negative values desaturate instead." )
 				.Range( -1.0f, 1.0f )
+				.Step( 0.05f )   // 41 positions; 0.00, the default, is the centre notch
 				.Default( 0.0f )
 			.Param( "protect_skin", "Protect skin tones",
 				ui::AnyBind::Of<bool>(
@@ -332,6 +333,7 @@ namespace gamescope
 					} ) )
 				.Help( "Overall weight of the sharpening pass." )
 				.Range( 0.0f, 2.0f )
+				.Step( 0.05f )   // 41 positions
 				.Default( 0.5f );
 
 		// SIX PARAMS -- the budget exactly. See this section's header.
@@ -355,6 +357,7 @@ namespace gamescope
 						"adaptive_brightness_strength", f ); } ) )
 				.Help( "Overall weight of the effect." )
 				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions
 				.Default( 1.0f )
 			.Param( "target", "Target brightness",
 				ui::AnyBind::Of<float>(
@@ -363,6 +366,7 @@ namespace gamescope
 						"adaptive_brightness_target_luminance", f ); } ) )
 				.Help( "Average luminance the adaptation aims for." )
 				.Range( 0.1f, 0.9f )
+				.Step( 0.05f )   // 17 positions; both ends sit on the grid
 				.Default( 0.5f )
 			.Param( "up_speed", "Brighten speed",
 				ui::AnyBind::Of<float>(
@@ -371,6 +375,7 @@ namespace gamescope
 						"adaptive_brightness_adapt_up_speed", f ); } ) )
 				.Help( "How fast adaptation moves toward a brighter target." )
 				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )    // 50 positions, one per tenth of a second
 				.Unit( "s" )
 				.Default( 1.5f )
 			.Param( "down_speed", "Darken speed",
@@ -380,6 +385,7 @@ namespace gamescope
 						"adaptive_brightness_adapt_down_speed", f ); } ) )
 				.Help( "How fast adaptation moves toward a darker target." )
 				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )    // 50 positions, as Brighten speed above
 				.Unit( "s" )
 				.Default( 2.5f )
 			.Param( "min_gain", "Min gain",
@@ -389,6 +395,7 @@ namespace gamescope
 						"adaptive_brightness_min_gain", f ); } ) )
 				.Help( "Lower clamp on the exposure multiplier." )
 				.Range( 0.5f, 1.0f )
+				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
 				.Default( 0.8f )
 			.Param( "max_gain", "Max gain",
 				ui::AnyBind::Of<float>(
@@ -397,6 +404,7 @@ namespace gamescope
 						"adaptive_brightness_max_gain", f ); } ) )
 				.Help( "Upper clamp on the exposure multiplier." )
 				.Range( 1.0f, 2.0f )
+				.Step( 0.05f )   // 21 positions
 				.Default( 1.6f );
 
 		a.Group( "Diagnostics" );

@@ -125,11 +125,79 @@ namespace gamescope::ui
 	void SetPointerDragActive( bool bActive ) { s_bPointerDragActive = bActive; }
 	bool IsPointerDragActive()                { return s_bPointerDragActive; }
 
+	// ---- Step()'s quantisation -------------------------------------------
+	// The user, 2026-08-24: "Add sensible step sizes for all sliders, so they
+	// have up to 100 individual positions. It should allow, to set even values
+	// more easily."
+	//
+	// WHY THE BINDING AND NOT THE WIDGET. controls::Slider() computes its
+	// value straight from the pointer's x, and knows nothing about a
+	// registration. Quantising here instead puts the grid on the one path
+	// every route to the value already shares -- the drag, the arrow keys and
+	// `overlay_e2_set` all land in Binding().Set() -- so a round number is
+	// what reaches the config file, not merely what the label prints. It also
+	// needs no second copy of the step anywhere.
+	//
+	// WHY ONLY DURING A DRAG. A drag is the only route that can produce an
+	// off-grid value at all: AdjustValue() already moves by exactly the
+	// declared step, the reset chip writes the declared default verbatim, and
+	// a console write is someone naming a number on purpose. Snapping those
+	// too would cost three real things and buy nothing:
+	//
+	//   * the DEFAULT would become unreachable wherever it is not on the grid
+	//     -- `display.sdr_on_hdr_brightness` defaults to 203 nits (SDR
+	//     reference white) on a 10-nit grid, and a reset chip that cannot
+	//     restore its own default is worse than a coarse drag;
+	//   * SPEC §3.4's Shift = fine adjust (x0.1 of the step) would become a
+	//     dead key on every stepped slider, which is the exact defect D24
+	//     found on `display.sharpness` and fixed;
+	//   * `overlay_e2_set <id> <n>` would stop being able to set the value it
+	//     was told to, and it is the tool the tests use to prove a binding
+	//     drives the compositor.
+	//
+	// Anchored at zero, not at Lo(): every step chosen in the registrations
+	// divides both ends of its range, so a zero-anchored grid contains Lo and
+	// Hi and no clamp is needed here (SliderBehavior already clamps the input
+	// to the range). That also makes this independent of declaration order --
+	// Step() does not care whether Range() has been called yet.
+	AnyBind &AnyBind::SnapDragsTo( float flStep )
+	{
+		if ( flStep <= 0.0f || !m_Set )
+			return *this;
+
+		auto set = m_Set;
+		m_Set = [ set, flStep ]( const Value &v )
+		{
+			if ( !IsPointerDragActive() )
+			{
+				set( v );
+				return;
+			}
+			if ( const float *p = std::get_if<float>( &v ) )
+				set( Value{ (float)( std::round( *p / flStep ) * flStep ) } );
+			else if ( const int *p = std::get_if<int>( &v ) )
+				set( Value{ (int)std::lround( std::round( (double)*p / flStep ) * flStep ) } );
+			else
+				set( v );
+		};
+		return *this;
+	}
+
 	// =====================================================================
 	//  Parameter
 	// =====================================================================
 	Parameter &Parameter::Default( Value v )        { m_Default = std::move( v ); return *this; }
-	Parameter &Parameter::Step( float s )           { m_flStep = s; return *this; }
+	// Gated on Slider because a Stepper's arithmetic is already the step, and
+	// a Stepper anchored somewhere off its own grid is a documented, wanted
+	// state (D13.3: an existing fps_limit of 144 loads, displays and works).
+	// Snapping there would move a value nobody dragged.
+	Parameter &Parameter::Step( float s )
+	{
+		m_flStep = s;
+		if ( m_eKind == Kind::Slider )
+			m_Bind.SnapDragsTo( s );
+		return *this;
+	}
 
 	// A param never names its own control (AddParam()'s comment): options
 	// present means Choice, a range means Slider, neither means Switch. So
@@ -221,7 +289,13 @@ namespace gamescope::ui
 	Entry &Entry::Default( Value v )                 { m_Default = std::move( v ); return *this; }
 	Entry &Entry::Default( Value a, Value b )        { m_Default = std::move( a ); m_DefaultB = std::move( b ); return *this; }
 	Entry &Entry::Range( float lo, float hi )        { m_flLo = lo; m_flHi = hi; m_bHasRange = true; return *this; }
-	Entry &Entry::Step( float s )                    { m_flStep = s; return *this; }
+	Entry &Entry::Step( float s )
+	{
+		m_flStep = s;
+		if ( m_eKind == Kind::Slider )    // see Parameter::Step()'s note
+			m_Bind.SnapDragsTo( s );
+		return *this;
+	}
 	Entry &Entry::Unit( const char *psz )            { m_sUnit = psz ? psz : ""; return *this; }
 	Entry &Entry::ZeroMeans( const char *psz )       { m_sZeroMeans = psz ? psz : ""; return *this; }
 	Entry &Entry::Keywords( const char *psz )        { m_sKeywords = psz ? psz : ""; return *this; }
