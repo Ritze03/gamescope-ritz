@@ -273,6 +273,56 @@ namespace gamescope::ui
 	float RailScroll( float flCurrent, float flContentH, float flViewH,
 	                  float flActiveTop, float flItemH, float flPad );
 
+	// ---- where the palette / launcher panel sits (D27) -------------------
+	// THE PANEL'S TOP EDGE IS A FUNCTION OF THE GEOMETRY AND OF NOTHING
+	// ELSE. That sentence is the whole fix, and the parameter list below is
+	// how it is enforced.
+	//
+	// The user's report: *"make sure that it is vertically centered, in its
+	// initial state ... do not dynamically move it according to the current
+	// height ... So it doesnt start moving the search bar, all of the
+	// sudden"*. A panel centred on its CURRENT height slides up and down
+	// under the reader as results filter, and the query line -- the one
+	// thing they are looking at while typing -- moves with it.
+	//
+	// So the panel is centred at its MAXIMUM row count, and that position is
+	// kept whatever the list actually holds. The list then grows and shrinks
+	// DOWNWARD inside a frame whose top edge never moves.
+	//
+	// WHY A PURE FUNCTION AND NOT A CACHED y0. A cache would need an
+	// invalidation rule ("recompute on display_scale, on surface size, but
+	// not on the match count"), and that rule is a thing to get wrong later.
+	// Here the rule is the SIGNATURE: the inputs are the frame, the row
+	// metrics (which are scale-derived) and the CAP. The number of matches
+	// is not an input, so no amount of typing can move the answer. Recompute
+	// it every frame; it cannot drift.
+	//
+	// `nRowCap` is the list's own row cap -- the most rows the panel will
+	// ever show -- not the current match count.
+	struct PalettePanel
+	{
+		float flTop    = 0.0f;  // the panel's top edge == the query line's y
+		int   nMaxRows = 1;     // rows this fixed frame has room for
+		float flMaxH   = 0.0f;  // the panel's height at nMaxRows
+		bool  bFits    = true;  // false: not even ONE row fits -- see below
+	};
+
+	// The 2.0x rule, stated once here so nobody has to infer it:
+	//
+	//   * The maximum is the FITTING maximum. Where the cap's worth of rows
+	//     does not fit -- 2.0x on a short surface -- nMaxRows drops to what
+	//     does, and the panel is centred at THAT height. It is still centred
+	//     once and still never moves; it is simply a shorter panel.
+	//   * Where not even one row fits, `bFits` is false and the panel is
+	//     anchored at the top margin instead of centred. Centring a panel
+	//     taller than its frame pushes the query line off the TOP edge --
+	//     losing the thing you type into. Top-anchored, the query line and
+	//     the first result stay on screen and the footer legend is what
+	//     falls off the bottom, which is the cheaper loss.
+	PalettePanel SolvePalettePanel( float flFrameY0, float flFrameH,
+	                                float flQueryH, float flRowH, float flFootH,
+	                                float flMarginPx, int nRowCap );
+
 	// ---- laying out INSIDE a scrolling child (P5b) -----------------------
 	// THE ONE MECHANISM BY WHICH ANY BODY IN THIS SHELL SCROLLS. Read this
 	// before writing a new body; getting it wrong is silent.

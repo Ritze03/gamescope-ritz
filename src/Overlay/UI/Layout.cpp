@@ -329,6 +329,41 @@ namespace gamescope::ui
 	}
 
 	// =====================================================================
+	//  Where the palette / launcher panel sits (D27) -- see Layout.h
+	// =====================================================================
+	PalettePanel SolvePalettePanel( float flFrameY0, float flFrameH,
+	                                float flQueryH, float flRowH, float flFootH,
+	                                float flMarginPx, int nRowCap )
+	{
+		PalettePanel out;
+
+		// The query line and the footer legend are always there; only the
+		// list between them is negotiable.
+		const float flChrome = flQueryH + flFootH;
+		const float flUsable = flFrameH - 2.0f * flMarginPx;
+
+		const int nRoom = flRowH > 0.0f
+			? (int)std::floor( ( flUsable - flChrome ) / flRowH )
+			: 0;
+
+		out.bFits    = nRoom >= 1;
+		out.nMaxRows = std::clamp( nRoom, 1, std::max( 1, nRowCap ) );
+		out.flMaxH   = flChrome + flRowH * (float)out.nMaxRows;
+
+		// Centred on the MAXIMUM height -- never on the current one. This is
+		// the line the report is about.
+		out.flTop = flFrameY0 + ( flFrameH - out.flMaxH ) * 0.5f;
+
+		// ...and never above the top margin. Only reachable when the panel
+		// at one row is taller than its frame, where centring would take the
+		// query line off the top edge. See Layout.h for why that loss is the
+		// wrong one to accept.
+		out.flTop = std::max( out.flTop, flFrameY0 + flMarginPx );
+
+		return out;
+	}
+
+	// =====================================================================
 	//  Laying out inside a scrolling child (P5b) -- see Layout.h
 	// =====================================================================
 	ScrollView ScrollView::Begin( const Rect &rcRegion, float flCursorY )
