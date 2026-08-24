@@ -662,23 +662,23 @@ TEST_CASE( "a General-tab overlay edit is not clobbered by a later routed write 
     // mutates just the overlay field on its own cache and writes the whole
     // struct.
     Settings generalTabCache = LoadGlobal();
-    generalTabCache.overlay.dock_scale = 1.3f;
+    generalTabCache.overlay.display_scale = 1.3f;
     EnqueueGlobalWrite( generalTabCache );
     FlushPendingWrites();
-    REQUIRE( LoadGlobal().overlay.dock_scale == 1.3f );
+    REQUIRE( LoadGlobal().overlay.display_scale == 1.3f );
 
     // User now edits a Display-tab slider. PanelDisplay never reloaded its
     // cache (only PanelConfig-driven profile-apply/override-toggle bump
     // ConfigGeneration - a General-tab edit deliberately never does), so its
     // own `overlay` sub-object is still whatever was loaded at panel-open
-    // time (dock_scale == 1.0, the default) - before the General-tab edit.
+    // time (display_scale == 1.0, the default) - before the General-tab edit.
     displayPanelCache.gamescope.filter = "FSR";
     EnqueueRoutedWrite( displayPanelCache );
     FlushPendingWrites();
 
-    // The General tab's dock_scale must survive an unrelated Display-tab
+    // The General tab's display_scale must survive an unrelated Display-tab
     // edit.
-    REQUIRE( LoadGlobal().overlay.dock_scale == 1.3f );
+    REQUIRE( LoadGlobal().overlay.display_scale == 1.3f );
 }
 
 TEST_CASE( "ListProfiles and ListGameIds report what's actually on disk, sorted", "[config]" )
@@ -1040,12 +1040,12 @@ TEST_CASE( "EnqueueGeometryWrite saves one panel's geometry without clobbering a
     // QueueGeneralSave(), which always starts from a fresh LoadGlobal())
     // must not lose the just-saved geometry either.
     Settings generalEdit = LoadGlobal();
-    generalEdit.overlay.dock_scale = 1.2f;
+    generalEdit.overlay.display_scale = 1.2f;
     EnqueueGlobalWrite( generalEdit );
     FlushPendingWrites();
 
     Settings final_ = LoadGlobal();
-    REQUIRE( final_.overlay.dock_scale == 1.2f );
+    REQUIRE( final_.overlay.display_scale == 1.2f );
     REQUIRE( final_.overlay.panel_geometry.at( "audio" ).w == 440.0f );
 }
 
@@ -1100,7 +1100,11 @@ TEST_CASE( "a config written before the E2 rework loads with every value intact"
 
     REQUIRE( g.overlay.accent_hue == 291.0f );
     REQUIRE( g.overlay.display_scale == 1.75f );
-    REQUIRE( g.overlay.dock_scale == 1.4f );
+    // dock_scale is deliberately NOT asserted: it was removed 2026-08-24
+    // with the dock. The key is still in the fixture above on purpose --
+    // this test's byte-for-byte assertion at the end is now also the
+    // "an old config carrying a removed key still loads, and reading it
+    // changes nothing on disk" test.
     REQUIRE( g.overlay.notification_scale == 1.1f );
     REQUIRE( g.overlay.opacity_windows_focused == 0.77f );
     REQUIRE( g.overlay.opacity_windows_unfocused == 0.55f );
@@ -1128,6 +1132,71 @@ TEST_CASE( "a config written before the E2 rework loads with every value intact"
     const std::string sOnDisk( ( std::istreambuf_iterator<char>( in ) ),
                                  std::istreambuf_iterator<char>() );
     REQUIRE( sOnDisk == sGlobal );
+}
+
+// dock_scale was removed 2026-08-24 with the dock itself (P5 deleted the
+// dock, the floating windows and all their chrome, so the field controlled
+// nothing). Existing configs carry the key. This pins both halves of what
+// that means, because only one of them is "nothing happens":
+//   - READING one is completely uneventful. The parse looks keys up by
+//     name, so an unknown key is never consulted, never warned about, and
+//     never causes a fallback to defaults for its neighbours.
+//   - WRITING drops it. The serializer emits the struct's fields, and the
+//     struct no longer has this one. That is accepted for a removed
+//     feature -- but it is a real, one-way loss, so it is asserted here
+//     rather than left as folklore.
+TEST_CASE( "a config carrying the removed dock_scale key loads cleanly, and drops it on the next write", "[config]" )
+{
+    TempConfigHome home;
+
+    const std::string sGlobal = R"({
+  "version": 1,
+  "overlay": {
+    "dock_scale": 1.4,
+    "display_scale": 1.75,
+    "notification_scale": 1.1
+  },
+  "audio": { "manual_node_binary": "floorp" }
+})";
+
+    const std::filesystem::path pathGlobal = home.dir / "gamescope-ritz" / "global.json";
+    std::filesystem::create_directories( pathGlobal.parent_path() );
+    {
+        std::ofstream f( pathGlobal );
+        f << sGlobal;
+    }
+    const auto tWritten = std::filesystem::last_write_time( pathGlobal );
+
+    Settings g = LoadGlobal();
+
+    // The removed key did not disturb the keys around it.
+    REQUIRE( g.overlay.display_scale == 1.75f );
+    REQUIRE( g.overlay.notification_scale == 1.1f );
+    REQUIRE( g.audio.manual_node_binary == "floorp" );
+
+    // Reading did not rewrite the file - the key is still on disk, untouched.
+    REQUIRE( std::filesystem::last_write_time( pathGlobal ) == tWritten );
+    {
+        std::ifstream in( pathGlobal );
+        const std::string sStillOnDisk( ( std::istreambuf_iterator<char>( in ) ),
+                                          std::istreambuf_iterator<char>() );
+        REQUIRE( sStillOnDisk.find( "dock_scale" ) != std::string::npos );
+    }
+
+    // The next write drops it, and keeps everything the struct still has.
+    EnqueueGlobalWrite( g );
+    FlushPendingWrites();
+
+    std::ifstream in( pathGlobal );
+    const std::string sAfter( ( std::istreambuf_iterator<char>( in ) ),
+                                std::istreambuf_iterator<char>() );
+    REQUIRE( sAfter.find( "dock_scale" ) == std::string::npos );
+    REQUIRE( sAfter.find( "display_scale" ) != std::string::npos );
+
+    Settings reloaded = LoadGlobal();
+    REQUIRE( reloaded.overlay.display_scale == 1.75f );
+    REQUIRE( reloaded.overlay.notification_scale == 1.1f );
+    REQUIRE( reloaded.audio.manual_node_binary == "floorp" );
 }
 
 TEST_CASE( "nothing deletes a per-game config except the explicit delete", "[config]" )

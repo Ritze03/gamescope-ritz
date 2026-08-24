@@ -211,7 +211,6 @@ namespace gamescope::palette
 		// Appearance area is the only thing that changes these again after
 		// this, and it writes straight into g_LiveTheme on every edit.
 		const config::Settings s = config::LoadGlobal();
-		g_LiveTheme.flDockScale            = s.overlay.dock_scale;
 		g_LiveTheme.flDisplayScale         = s.overlay.display_scale;
 		g_LiveTheme.flWindowAlphaFocused   = s.overlay.opacity_windows_focused;
 		g_LiveTheme.flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;

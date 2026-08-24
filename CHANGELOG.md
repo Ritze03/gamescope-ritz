@@ -30,6 +30,9 @@ The newest version below is the one this build reports.
   log body at full height.
 
 ### Fixed
+- **A notification's coloured edge sits inside the card**: it used to stand
+  beside the card's rounded corners with a doubled seam, most visibly at
+  larger notification sizes.
 - **Text is bigger throughout the overlay**, most of all the Log and
   Changelog body.
 - **Overlong text ends in `...`** instead of stopping mid-word.
@@ -59,10 +62,15 @@ The newest version below is the one this build reports.
   on the way out.
 
 ### Removed
+- **Dock scale**: the dock it sized no longer exists, so the setting did
+  nothing. Existing configs still load; the unused key is dropped the next
+  time settings are saved.
 - **The `settings` label in the title bar**, which restated the window's own
   purpose. The rule under the bar now follows your accent colour.
 
 ### Info
+- **Notification scale moved** out of UI scale and into the Notifications
+  group, beside toast placement and mute. Its saved value is unchanged.
 - **New General area**: VRR, Allow Tearing and Force Grab Cursor moved above
   Upscaling. Config keys and entry ids are unchanged.
 - **New console commands** `overlay_e2_pointer` and `overlay_e2_get` drive

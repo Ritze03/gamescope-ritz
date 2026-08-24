@@ -215,7 +215,9 @@ namespace gamescope::config
                 s.overlay.notification_placement = JGetString( *pOverlay, "notification_placement", s.overlay.notification_placement );
 
                 // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
-                s.overlay.dock_scale = JGetFloat( *pOverlay, "dock_scale", s.overlay.dock_scale );
+                // dock_scale removed 2026-08-24 with the dock itself (see
+                // ConfigSchema.h) - deliberately not read here any more, the
+                // same way opacity_background's removal is handled below.
                 s.overlay.display_scale = JGetFloat( *pOverlay, "display_scale", s.overlay.display_scale );
                 s.overlay.notification_scale = JGetFloat( *pOverlay, "notification_scale", s.overlay.notification_scale );
                 // opacity_background removed (see ConfigSchema.h) - deliberately
@@ -403,7 +405,10 @@ namespace gamescope::config
                 jOverlay[ "notification_placement" ] = s.overlay.notification_placement;
 
                 // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
-                jOverlay[ "dock_scale" ] = s.overlay.dock_scale;
+                // No dock_scale: removed with the dock. This serializer emits
+                // the struct's fields, so an old file's leftover dock_scale is
+                // dropped the first time anything writes global.json - stated
+                // in ConfigSchema.h, and accepted for a removed feature.
                 jOverlay[ "display_scale" ] = s.overlay.display_scale;
                 jOverlay[ "notification_scale" ] = s.overlay.notification_scale;
                 jOverlay[ "opacity_windows_focused" ] = s.overlay.opacity_windows_focused;
@@ -1080,7 +1085,7 @@ namespace gamescope::config
     // (the freshest known `overlay`, in-memory) rather than taking a whole
     // OverlaySettings from the caller - Chrome.cpp otherwise has no reason
     // to keep its own up-to-date copy of every General-tab scalar
-    // (dock_scale, opacity_*, ...) just to avoid reverting them the moment
+    // (display_scale, opacity_*, ...) just to avoid reverting them the moment
     // it wants to save one panel's position, and a stale copy of those
     // would hit EnqueueOverlayWrite() the same way a stale full Settings
     // would hit EnqueueGlobalWrite() - see that function's own comment.

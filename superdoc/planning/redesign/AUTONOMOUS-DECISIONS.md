@@ -10,6 +10,137 @@ cheap.
 
 ---
 
+## 2026-08-24 — D32 · Three settings reports: the toast accent edge, `dock_scale`, notification scale
+
+Three user reports, taken together because all three are about settings surfaces the E2
+rework left alone. Each landed as its own commit.
+
+### D32.1 · The toast accent edge is drawn as the card, clipped to a strip
+
+**The report.** *"The left edge is doubled"* and *"The colored part is next to it, instead
+of on top of it."* Screenshots showed a blue bar standing beside the toast's dark rounded
+card, with a seam in it.
+
+**The root cause is one fault, not two.** `Notifications.cpp`'s `DrawToasts()` drew the
+accent as its own narrow rect — `AddRectFilled(rectMin, rectMin.x + flAccentBarW, …,
+flRounding, ImDrawFlags_RoundCornersLeft)` — a rect only `3 * scale` wide asking for an
+`8 * scale` corner radius. `ImDrawList::PathRect()` **clamps** a radius to the rect's own
+size, so the strip silently got roughly `flAccentBarW - 1` instead. The strip therefore
+carried a *different, much tighter* corner curve than the card it was meant to sit inside.
+Both reported symptoms fall out of that single mismatch:
+
+- **"next to it, not on top of it"** — above and below the card's radius-8 arc, the card's
+  fill has already curved away, but the strip has not, so its top and bottom few pixels
+  stand on bare game background. It reads as a bar flanking the card.
+- **"doubled"** — within those same few pixels there are now *three* edges within three
+  pixels: the strip's tight curve, the card's wide curve, and the card's 1px border arc
+  running between them. That is the seam.
+
+It gets worse with scale (obvious at 2.0×, nearly invisible at 0.5×) because every radius
+grows with `flScale` while the strip's clamp is pinned to its own 3px width. That scale
+dependence is why it survived review: at 1.0× it is a two-pixel artefact.
+
+**Chose:** fill the **whole card rect** in the accent colour, with the **card's own
+rounding**, inside a clip rect exposing only the leftmost `flAccentBarW` pixels. The
+accent's outer silhouette is then the card's silhouette *by construction* — there is no
+second radius that can disagree with the first, at any scale — and the clip is intersected
+with the current one, so it cannot paint outside the card either.
+
+**Rejected — insetting the strip by the card's radius** (start it below the top arc, end it
+above the bottom one). It stops the protrusion but leaves the edge visibly short of the
+card's corners, and it needs the radius written down in a second place, which is the class
+of duplication that produced this bug.
+
+**Rejected — giving the strip the card's radius and widening it to `>= 2 * rounding`.** A
+16px-wide accent at 1.0× is a different design, not a fix.
+
+**Rejected — dropping the card's rounding on the left side** so a square strip fits. That
+changes the card's shape to accommodate a drawing bug.
+
+*Cheap to reverse:* one clip push/pop around one `AddRectFilled`.
+
+**Evidence:** `superdoc/planning/redesign/round-2/e2-inspector-plus/audit-shots/
+toast-accent-edge-{0.5,1.0,2.0}.png` — before/after, zoomed to the top-left corner, from a
+real `gamescopectl notify_test` toast at each scale.
+
+### D32.2 · `dock_scale` is removed outright, and the other orphans are reported, not removed
+
+**Why removed rather than left dormant.** P5 deleted the dock, the floating windows and
+all their chrome. `overlay.dock_scale` therefore sized nothing, but it was still a live
+sub-parameter under **UI scale** — a slider the user could drag with no effect anywhere on
+screen. That is worse than a missing setting.
+
+**What an old config does now.** It loads, unchanged and unremarked. `ConfigManager.cpp`'s
+parse looks every key up **by name**; it never iterates-and-validates, so a key nothing
+asks for is simply never consulted — no warning, no fallback, no effect on its neighbours.
+This is the same graceful path `opacity_background`'s removal already took.
+
+**But the key is dropped on the next write, and that is a real loss.** `SettingsToJson()`
+emits the struct's fields, so it cannot round-trip a key the struct no longer has: the
+first time anything saves `global.json`, the old `dock_scale` line disappears. Acceptable
+for a removed feature — **stated** rather than left to be discovered, in `ConfigSchema.h`,
+in the serializer, and in a test (`tests/test_config.cpp`, "a config carrying the removed
+dock_scale key loads cleanly, and drops it on the next write") that asserts both halves
+against the bytes on disk. The pre-existing E2 config test keeps `dock_scale` in its
+fixture on purpose and still asserts the file is byte-identical after a load, so "reading
+an old config rewrites nothing" stays pinned too.
+
+**Other orphans found, and deliberately NOT removed.** Grepping the schema for settings
+whose subject P5 deleted turns up four more, all still registered or still plumbed, none
+with a consumer left:
+
+| Key | Was consumed by | State now |
+| --- | --- | --- |
+| `opacity_dock` | `Chrome.cpp`'s dock container | still a **visible slider** ("Transparency → Dock"), reaches only `palette::g_LiveTheme.flDockAlpha`, which nothing reads |
+| `opacity_windows_focused` | `Chrome.cpp`'s `BeginPanelWindow()` | still a **visible slider**, same dead end (`flWindowAlphaFocused`) |
+| `opacity_windows_unfocused` | same | still a **visible slider**, same dead end |
+| `panel_geometry` | `Chrome.cpp`'s panel-geometry autosave | no writer and no reader left; `EnqueueGeometryWrite()` has no call sites |
+
+`overlay.fade_ms` is a fifth, weaker case: only a comment in `SettingsOverlay.cpp` mentions
+it, and it has no UI row, so it costs the user nothing.
+
+**Chose to report, not remove.** The brief asked for `dock_scale` specifically and for
+anything further to be named before being touched. The three opacity sliders are a
+user-visible removal each (and arguably want re-pointing at the E2 surfaces instead of
+deleting), so they are a decision for the user, not a tidy-up to fold into this commit.
+
+**Historical planning docs still mention `dock_scale`** (`slider-widget-spec.md`,
+`ui-mockup-precise-spec.md`, `round-2/a-console/SPEC.md`). Left as written: they are dated
+records of what was designed then, not claims about what the code does now.
+
+### D32.3 · Notification scale becomes a row in the Notifications group — grouping only
+
+**The report.** *"`overlay.notifications` scale currently sits with the other scale
+settings. Move it to the notification group, next to the settings it belongs with. UI
+grouping only — the config key does not change."*
+
+It was a `.Param("notifications", …)` hanging off the **UI scale** slider — a sub-parameter
+of a control it has no relationship with. It sizes the toasts; UI scale sizes the overlay.
+
+**Chose:** a top-level `Slider` row, `overlay.notification_scale`, registered **first** in
+the Notifications group, ahead of Toast placement / Mute / Test notification. Range, step,
+default, help text and the on-disk key are all carried over verbatim.
+
+**The one structural decision:** *who opens the group.* `Area::Group()` pushes a band
+marker; it does not look one up, so calling it twice with the same name draws two
+identically-titled headers. `Notifications::RegisterRows()` used to open "Notifications"
+itself. It no longer does — **PanelConfig.cpp opens the group**, registers the scale row,
+then calls `RegisterRows()` to add the rest.
+
+**Rejected — binding the row inside `Notifications.cpp`** (the file that owns the group's
+other rows). It would have made a *second* writer of `global.json`'s `overlay` object,
+writing a freshly-loaded `Settings` against PanelConfig's long-lived `s_GeneralSettings`
+cache — the stale-cache clobber `EnsureGeneralSettingsLoaded()` already warns about, and
+the reason `notification_placement` is the only field allowed that pattern. Keeping the
+binding where every other Appearance row's binding lives also keeps the live push
+(`QueueGeneralSave()` → `Notifications::g_LiveTheme.flScale`) on one path.
+
+**Rejected — appending the row after `RegisterRows()`** so the group stays owned by one
+file. It puts a slider below the "Test notification" action, which should be last.
+
+**Evidence:** `audit-shots/appearance-notifications-group.png` — one NOTIFICATIONS header,
+scale first, and no Dock scale left under UI scale.
+
 ## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
 
 Two reports from the user, both about the standalone launcher (D25). They are finished

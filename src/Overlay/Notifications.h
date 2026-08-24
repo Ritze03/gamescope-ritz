@@ -103,5 +103,12 @@ namespace gamescope::Notifications
 	// still ONE setting with ONE value, which is what issue #27 was
 	// actually about when it replaced two independent segmented controls
 	// with the grid. The grid returns when Composite lands.
+	//
+	// THE CALLER OPENS THE GROUP. Since 2026-08-24 the "Notifications" group
+	// is opened by PanelConfig.cpp, which puts overlay.notification_scale in
+	// it first (that field is bound and persisted like every other Appearance
+	// row, so binding it here would make a second writer of global.json's
+	// overlay object). This function adds its rows into whatever group is
+	// already open and must not push one of its own.
 	void RegisterRows( ui::Area &area );
 }
