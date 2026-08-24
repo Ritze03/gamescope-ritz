@@ -108,6 +108,39 @@ deleting), so they are a decision for the user, not a tidy-up to fold into this 
 `ui-mockup-precise-spec.md`, `round-2/a-console/SPEC.md`). Left as written: they are dated
 records of what was designed then, not claims about what the code does now.
 
+### D32.3 · Notification scale becomes a row in the Notifications group — grouping only
+
+**The report.** *"`overlay.notifications` scale currently sits with the other scale
+settings. Move it to the notification group, next to the settings it belongs with. UI
+grouping only — the config key does not change."*
+
+It was a `.Param("notifications", …)` hanging off the **UI scale** slider — a sub-parameter
+of a control it has no relationship with. It sizes the toasts; UI scale sizes the overlay.
+
+**Chose:** a top-level `Slider` row, `overlay.notification_scale`, registered **first** in
+the Notifications group, ahead of Toast placement / Mute / Test notification. Range, step,
+default, help text and the on-disk key are all carried over verbatim.
+
+**The one structural decision:** *who opens the group.* `Area::Group()` pushes a band
+marker; it does not look one up, so calling it twice with the same name draws two
+identically-titled headers. `Notifications::RegisterRows()` used to open "Notifications"
+itself. It no longer does — **PanelConfig.cpp opens the group**, registers the scale row,
+then calls `RegisterRows()` to add the rest.
+
+**Rejected — binding the row inside `Notifications.cpp`** (the file that owns the group's
+other rows). It would have made a *second* writer of `global.json`'s `overlay` object,
+writing a freshly-loaded `Settings` against PanelConfig's long-lived `s_GeneralSettings`
+cache — the stale-cache clobber `EnsureGeneralSettingsLoaded()` already warns about, and
+the reason `notification_placement` is the only field allowed that pattern. Keeping the
+binding where every other Appearance row's binding lives also keeps the live push
+(`QueueGeneralSave()` → `Notifications::g_LiveTheme.flScale`) on one path.
+
+**Rejected — appending the row after `RegisterRows()`** so the group stays owned by one
+file. It puts a slider below the "Test notification" action, which should be last.
+
+**Evidence:** `audit-shots/appearance-notifications-group.png` — one NOTIFICATIONS header,
+scale first, and no Dock scale left under UI scale.
+
 ## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
 
 Two reports from the user, both about the standalone launcher (D25). They are finished

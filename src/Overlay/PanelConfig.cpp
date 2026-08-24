@@ -850,13 +850,13 @@ namespace gamescope
 				.Step( 0.05f )       // 31 positions: 0.50x, 0.55x, ... 2.00x
 				.Default( config::OverlaySettings{}.display_scale )
 				.Unit( "x" )
-				.Keywords( "scale ui size dpi zoom display_scale font atlas" )
-				.Param( "notifications", "Notification scale",
-					BindOverlayFloat( &config::OverlaySettings::notification_scale ) )
-					.Help( "Size of toast notifications, independently of the overall UI scale." )
-					.Range( 0.6f, 1.6f )
-					.Step( 0.05f )   // 21 positions
-					.Default( config::OverlaySettings{}.notification_scale );
+				.Keywords( "scale ui size dpi zoom display_scale font atlas" );
+			// Notification scale used to hang off this row as a Param. It is
+			// now a row of its own in the Notifications group below (the
+			// user, 2026-08-24) -- it sizes the toasts, not the overlay, so
+			// it belongs with the other toast settings rather than under a
+			// slider it does not affect. The CONFIG KEY IS UNCHANGED
+			// (overlay.notification_scale); this is a grouping change only.
 
 			a.Group( "Backdrop" );
 
@@ -912,7 +912,33 @@ namespace gamescope
 				.Default( config::OverlaySettings{}.opacity_notifications )
 				.Keywords( "opacity transparency notification toast alpha" );
 
-			// The Config panel's third tab. Registered from Notifications.cpp
+			// The Notifications group. THIS FILE OPENS IT, and
+			// Notifications::RegisterRows() below adds the rest of its rows
+			// without opening a second one -- Area::Group() is a band marker,
+			// not a lookup, so calling it twice with the same name would draw
+			// two identically-titled headers.
+			//
+			// Split this way because the two halves genuinely have different
+			// owners: notification_scale is one more global-json overlay
+			// field, bound and persisted exactly like every other row in this
+			// area (BindOverlayFloat + QueueGeneralSave, which is also what
+			// pushes it live into Notifications::g_LiveTheme). Re-binding it
+			// inside Notifications.cpp would have made a SECOND writer of
+			// global.json's overlay object, against this panel's own cached
+			// s_GeneralSettings -- the stale-cache clobber this file's
+			// EnsureGeneralSettingsLoaded() comment already warns about.
+			a.Group( "Notifications" );
+
+			a.Slider( "overlay.notification_scale", "Notification scale",
+				BindOverlayFloat( &config::OverlaySettings::notification_scale ) )
+				.Help( "Size of toast notifications, independently of the overall UI scale." )
+				.Range( 0.6f, 1.6f )
+				.Step( 0.05f )       // 21 positions
+				.Default( config::OverlaySettings{}.notification_scale )
+				.Unit( "x" )
+				.Keywords( "notification toast scale size" );
+
+			// The rest of the group. Registered from Notifications.cpp
 			// because everything it binds to is file-static there -- see
 			// Notifications.h's RegisterRows() comment.
 			gamescope::Notifications::RegisterRows( a );

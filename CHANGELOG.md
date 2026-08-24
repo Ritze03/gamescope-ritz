@@ -69,6 +69,8 @@ The newest version below is the one this build reports.
   purpose. The rule under the bar now follows your accent colour.
 
 ### Info
+- **Notification scale moved** out of UI scale and into the Notifications
+  group, beside toast placement and mute. Its saved value is unchanged.
 - **New General area**: VRR, Allow Tearing and Force Grab Cursor moved above
   Upscaling. Config keys and entry ids are unchanged.
 - **New console commands** `overlay_e2_pointer` and `overlay_e2_get` drive

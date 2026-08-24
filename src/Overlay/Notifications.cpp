@@ -779,7 +779,12 @@ namespace gamescope::Notifications
 	// exactly the bug this arrangement prevents.
 	void RegisterRows( ui::Area &area )
 	{
-		area.Group( "Notifications" );
+		// NO area.Group() HERE. PanelConfig.cpp's BuildAppearanceArea()
+		// opens the "Notifications" group and registers
+		// overlay.notification_scale into it immediately before calling this
+		// (2026-08-24) -- Area::Group() pushes a band rather than looking one
+		// up, so opening it again here would draw a second, identically
+		// titled header with these rows under it.
 
 		// The user, 2026-08-24: "Notification position selection should look
 		// the same as the system monitors placement". It is the same question
