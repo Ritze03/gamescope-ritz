@@ -37,7 +37,9 @@ optional, on-demand read.
   this project bumps doc/version markers.
 - **Changelog maintenance** — @superdoc/claude-instructions/changelog.md — `CHANGELOG.md`
   (repo root) gets a one-line entry, in the **same commit**, for every user-visible change.
-  Strict format, four categories, no version numbers: the overlay parses this file.
+  Strict format, four categories, one version bump per dated block. The overlay parses
+  this file, and the build reads the top block's version as the project's own — so
+  `CHANGELOG.md` **is** the version marker; there is no other.
 
 Path base: `CLAUDE.md` uses repo-root-relative paths (`@superdoc/...`, `` `superdoc/...` ``);
 links *inside* docs are docs-relative. Precedence: `CLAUDE.md` is authoritative for
