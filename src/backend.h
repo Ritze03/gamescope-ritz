@@ -8,6 +8,7 @@
 #include "rc.h"
 #include "drm_include.h"
 #include "Utils/Algorithm.h"
+#include "CursorPolicy.h"
 
 #include <cassert>
 #include <span>
@@ -269,23 +270,49 @@ namespace gamescope
         virtual void SetRelativeMouseMode( bool bRelative ) = 0;
         virtual void SetVisible( bool bVisible ) = 0;
 
-        // Issue #69 (doubled cursor): while the settings overlay is
-        // capturing input, it draws its own software cursor (ImGui,
-        // see SettingsOverlay.cpp) on top of whatever this backend
-        // draws for the host/game pointer. The embedded (DRM) path
-        // handles its equivalent case by gating the composited cursor
-        // plane on SettingsOverlay_IsCapturingInput() directly in
-        // steamcompmgr.cpp (see commit 252cbfd) -- there's no
-        // INestedHints involved there, since DRM doesn't implement
-        // this interface. Nested backends that show a real host-level
-        // cursor (SDL: SDL_ShowCursor(); Wayland: wl_pointer_set_cursor())
-        // need the mirror of that: hide their own cursor for exactly as
-        // long as the overlay has input, so exactly one cursor is ever
-        // visible. Default no-op -- backends with no separate host
-        // cursor (OpenVR, which relies solely on the same composited
-        // plane as DRM and leaves SetCursorImage() a no-op) have
-        // nothing to suppress.
-        virtual void SetCursorSuppressed( bool bSuppressed ) {}
+        // Issue #69, second pass (D29 -- supersedes the SetCursorSuppressed()
+        // primitive this replaces). Exactly one cursor must be visible while
+        // the settings overlay is capturing input, and never zero. Two cursor
+        // sources can satisfy that: ImGui's own software cursor, drawn into
+        // the overlay texture (SettingsOverlay.cpp), and a real host-level
+        // cursor drawn by the host compositor in nested mode (SDL:
+        // SDL_SetCursor(); Wayland: wl_pointer_set_cursor()).
+        //
+        // The first pass picked ImGui's and hid the host's. That's backwards
+        // for the case a user actually looks at: where a host cursor exists it
+        // is the *system* cursor -- correctly themed, sized and composited by
+        // the host, and the one the user recognises -- while ImGui's is a
+        // plain untextured arrow. So the rule is inverted here: prefer the
+        // host's system cursor, and keep ImGui's only as the fallback for the
+        // modes where no host cursor exists at all (embedded/DRM, OpenVR, and
+        // nested-while-pointer-locked, i.e. a grabbed game).
+        //
+        // Command and query are deliberately one call rather than two. The
+        // "exactly one cursor" invariant is then decided by a single answer
+        // from the backend that knows its own pointer state, instead of by
+        // two calls that could disagree on a frame where that state changed
+        // in between.
+        //
+        // bOverlayActive: the settings overlay owns the pointer right now
+        //     (SettingsOverlay_IsCapturingInput()). While true, a nested
+        //     backend should present its host *default/system* cursor rather
+        //     than whatever cursor image the game last pushed through
+        //     SetCursorImage() -- a game's cursor may be a crosshair, or
+        //     fully blank, neither of which is usable overlay chrome.
+        // returns: true iff, as a result, a host cursor really is visible and
+        //     tracking the pointer. The caller (paint_all()) hands this
+        //     straight to SettingsOverlay_SetHostCursorVisible(), which turns
+        //     ImGui's software cursor off for exactly as long as it's true.
+        //     Returning false must therefore be the safe answer: it costs a
+        //     redundant-looking ImGui cursor, never a missing one.
+        //
+        // Called every frame from paint_all(), so the state is level-triggered
+        // and self-corrects if the overlay closes abruptly or a frame is
+        // missed. Implementations must be cheap and idempotent on an
+        // unchanged value. Default: no host cursor exists, ImGui draws (the
+        // correct answer for OpenVR, which relies on the same composited plane
+        // as DRM and leaves SetCursorImage() a no-op).
+        virtual bool PresentOverlayCursor( bool bOverlayActive ) { return false; }
 
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) = 0;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) = 0;

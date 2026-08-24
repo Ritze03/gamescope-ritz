@@ -44,6 +44,21 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **The overlay now uses your system cursor**, wherever there is one to use. Previously the
+  overlay always drew its own plain arrow and *hid* the real one (`#69`); now that preference is
+  inverted, so in nested mode you get your desktop's actual cursor — your theme, your size,
+  drawn by your compositor — instead of a stand-in for it. **Why the reversal:** `#69` was
+  fixing a genuine doubled cursor, and it was right that simply deleting the overlay's own
+  cursor would leave *no* cursor on a Steam Deck. But where both cursors exist, the system one
+  is plainly the better of the two to keep. The overlay's own cursor is therefore kept exactly
+  as the fallback for the modes with no host cursor — embedded (DRM/KMS), OpenVR, and any
+  nested game holding a pointer grab — so the "exactly one cursor, never zero" guarantee `#69`
+  established is unchanged. Testing caught one way to break it: keying "is the pointer grabbed"
+  on the compositor's pointer-lock *confirmation* left zero cursors under
+  `--force-grab-cursor`, because that confirmation may never arrive; it now keys on the lock
+  being requested or confirmed. Cursor size is unaffected by `overlay.display_scale` — as it
+  was before — since the pointer follows your desktop's cursor size rather than the overlay's
+  UI scale. (`superdoc/planning/redesign/AUTONOMOUS-DECISIONS.md` D29.)
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

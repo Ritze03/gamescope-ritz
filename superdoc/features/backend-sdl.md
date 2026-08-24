@@ -18,6 +18,16 @@ one most useful for desktop development/testing of gamescope itself.
   (title, cursor shape, clipboard contents) down to the host window manager, which
   `IBackendConnector` alone doesn't model — `GetNestedHints()` is the hook
   (`src/backend.h:211`).
+- **Settings-overlay cursor** — `INestedHints::PresentOverlayCursor( bool ) -> bool`, driven
+  every frame from `paint_all()`. While the overlay owns the pointer, SDL shows
+  `SDL_GetDefaultCursor()` (the *system* cursor) rather than the game's cursor image, and
+  returns whether that cursor is actually on screen; the overlay turns ImGui's own software
+  cursor off for exactly as long as the answer is true. *Why the system cursor and not the
+  game's image:* a game's cursor can be a crosshair or fully blank, neither of which is usable
+  overlay chrome. *Why the return value matters:* under a pointer grab
+  (`SDL_SetRelativeMouseMode`) the OS cursor is hidden, so the answer is false and ImGui's
+  cursor stays — that fallback is what keeps **exactly one cursor visible, never zero**
+  (`#69`, revised by D29). The shared rule lives in `src/CursorPolicy.h`.
 - SDL runs on its own dedicated thread: `m_SDLThread` is started in the
   `CSDLBackend` constructor (`src/Backends/SDLBackend.cpp:398`) and joined on
   destruction by pushing an `SDL_QUIT` event (`src/Backends/SDLBackend.cpp:402`).

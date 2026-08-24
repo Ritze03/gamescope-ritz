@@ -22,7 +22,7 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp'],
+	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep],
 	cpp_args: gamescope_cpp_args,
@@ -36,3 +36,4 @@ test('overlay_ui', gamescope_tests, args: ['[overlay_ui]'])
 test('overlay_atoms', gamescope_tests, args: ['[overlay_atoms]'])
 test('overlay_shell', gamescope_tests, args: ['[overlay_shell]'])
 test('overlay_palette', gamescope_tests, args: ['[overlay_palette]'])
+test('cursor_policy', gamescope_tests, args: ['[cursor_policy]'])

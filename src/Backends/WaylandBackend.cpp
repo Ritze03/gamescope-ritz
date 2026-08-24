@@ -462,7 +462,7 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info ) override;
         virtual void SetRelativeMouseMode( bool bRelative ) override;
         virtual void SetVisible( bool bVisible ) override;
-        virtual void SetCursorSuppressed( bool bSuppressed ) override;
+        virtual bool PresentOverlayCursor( bool bOverlayActive ) override;
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
@@ -700,7 +700,8 @@ namespace gamescope
 
         void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info );
         void SetRelativeMouseMode( wl_surface *pSurface, bool bRelative );
-        void SetCursorSuppressed( bool bSuppressed );
+        bool PresentOverlayCursor( bool bOverlayActive );
+        bool HasUsableHostCursor() const;
         void UpdateCursor();
 
         friend CWaylandConnector;
@@ -844,6 +845,17 @@ namespace gamescope
         wl_touch *m_pTouch = nullptr;
         zwp_locked_pointer_v1 *m_pLockedPointer = nullptr;
 		bool m_bPointerLocked = false;
+		// D29: what we ASKED for, as opposed to m_bPointerLocked, which is
+		// what the host has confirmed via zwp_locked_pointer_v1::locked.
+		// The two are not the same and the gap is load-bearing: the lock
+		// request is made at connector init, but the host only confirms it
+		// once our surface is focused and the pointer is inside it, so
+		// m_bPointerLocked can still be false for an arbitrarily long window
+		// after gamescope has decided the game holds the pointer. Verified
+		// live -- with --force-grab-cursor, m_bPointerLocked never came true
+		// in a whole overlay session, and keying the cursor rule on it alone
+		// left ZERO cursors on screen. See HasUsableHostCursor().
+		bool m_bRelativeMouseRequested = false;
         wl_surface *m_pLockedSurface = nullptr;
         zwp_relative_pointer_v1 *m_pRelativePointer = nullptr;
 
@@ -856,14 +868,14 @@ namespace gamescope
         uint32_t m_uKeyboardEnterSerial = 0;
         bool m_bKeyboardEntered = false;
 
-        // Issue #69: mirrors the DRM path's per-frame gate on
-        // SettingsOverlay_IsCapturingInput() (see backend.h's
-        // INestedHints::SetCursorSuppressed comment). Plain bool, not
-        // atomic -- consistent with the rest of this cursor/pointer state
-        // (m_bPointerLocked etc.), which is likewise written only from
-        // whatever thread calls the INestedHints setters and read back by
-        // UpdateCursor() with no additional synchronization.
-        bool m_bCursorSuppressed = false;
+        // Issue #69 / D29: the settings overlay owns the pointer, so present
+        // the host's own system cursor instead of the game's cursor image
+        // (see backend.h's INestedHints::PresentOverlayCursor comment). Plain
+        // bool, not atomic -- consistent with the rest of this cursor/pointer
+        // state (m_bPointerLocked etc.), which is likewise written only from
+        // whatever thread calls the INestedHints entry points and read back
+        // by UpdateCursor() with no additional synchronization.
+        bool m_bOverlayCursorActive = false;
         std::shared_ptr<INestedHints::CursorInfo> m_pCursorInfo;
         wl_surface *m_pCursorSurface = nullptr;
         std::shared_ptr<INestedHints::CursorInfo> m_pDefaultCursorInfo;
@@ -1294,9 +1306,9 @@ namespace gamescope
         m_bVisible = bVisible;
         force_repaint();
     }
-    void CWaylandConnector::SetCursorSuppressed( bool bSuppressed )
+    bool CWaylandConnector::PresentOverlayCursor( bool bOverlayActive )
     {
-        m_pBackend->SetCursorSuppressed( bSuppressed );
+        return m_pBackend->PresentOverlayCursor( bOverlayActive );
     }
     void CWaylandConnector::SetTitle( std::shared_ptr<std::string> pAppTitle )
     {
@@ -2479,6 +2491,11 @@ namespace gamescope
     }
     void CWaylandBackend::SetRelativeMouseMode( wl_surface *pSurface, bool bRelative )
     {
+        // Recorded before the early-out below, deliberately: with no pointer
+        // yet there is nothing to lock, but the *intent* still stands and is
+        // what the cursor rule needs (see m_bRelativeMouseRequested).
+        m_bRelativeMouseRequested = bRelative;
+
         if ( !m_pPointer )
             return;
 
@@ -2514,13 +2531,37 @@ namespace gamescope
         }
     }
 
-    void CWaylandBackend::SetCursorSuppressed( bool bSuppressed )
+    // Can this backend put a real host cursor on screen right now, one that
+    // follows the actual pointer? Two things can stop it: the pointer being
+    // locked (a grabbed game -- the host pointer is pinned, so a host cursor
+    // would sit frozen at the lock point rather than tracking anything), and
+    // having no host cursor image to show in the first place. The latter is
+    // real: m_pDefaultCursorSurface comes from GetX11HostCursor(), which
+    // returns nullptr when gamescope was started with no X11/XWayland display
+    // to snapshot the system cursor from.
+    bool CWaylandBackend::HasUsableHostCursor() const
     {
-        if ( m_bCursorSuppressed == bSuppressed )
-            return;
+        return NestedHostCursorUsable(
+            /* bHavePointer     = */ m_pPointer != nullptr,
+            // Requested OR confirmed. Either alone is unsafe: the request can
+            // precede the host's confirmation by an unbounded time (and, as
+            // seen live, may never be confirmed at all), while the
+            // confirmation can outlive a request we've already withdrawn.
+            // "Any sign the pointer is grabbed" is the answer that keeps
+            // ImGui's cursor on, which is the failure-safe direction.
+            /* bPointerLocked   = */ m_bPointerLocked || m_bRelativeMouseRequested,
+            /* bHaveCursorImage = */ m_pDefaultCursorSurface != nullptr );
+    }
 
-        m_bCursorSuppressed = bSuppressed;
-        UpdateCursor();
+    bool CWaylandBackend::PresentOverlayCursor( bool bOverlayActive )
+    {
+        if ( m_bOverlayCursorActive != bOverlayActive )
+        {
+            m_bOverlayCursorActive = bOverlayActive;
+            UpdateCursor();
+        }
+
+        return bOverlayActive && HasUsableHostCursor();
     }
 
     void CWaylandBackend::UpdateCursor()
@@ -2530,23 +2571,44 @@ namespace gamescope
         if ( !m_pPointer )
             return;
 
+        // Issue #69 / D29: while the settings overlay owns the pointer, show
+        // the host's system cursor -- unconditionally, ahead of every rule
+        // below. In particular ahead of the m_bKeyboardEntered test, which
+        // normally sends us to the game's cursor image: gamescope holds
+        // keyboard focus in exactly the situation the overlay is used in, and
+        // a game's cursor image is the wrong chrome for the overlay anyway
+        // (it can be a crosshair, or blank). Note this branch is reachable
+        // only when the pointer isn't locked, which keeps it in agreement
+        // with HasUsableHostCursor() -- the two must never disagree, or
+        // SettingsOverlay would drop ImGui's cursor while nothing replaced
+        // it. See backend.h's PresentOverlayCursor comment.
+        if ( m_bOverlayCursorActive )
+        {
+            if ( HasUsableHostCursor() )
+                wl_pointer_set_cursor( m_pPointer, m_uPointerEnterSerial, m_pDefaultCursorSurface, m_pDefaultCursorInfo->uXHotspot, m_pDefaultCursorInfo->uYHotspot );
+            else
+                // No system cursor available to show (pointer locked, or no
+                // X11 display to have snapshotted one from). ImGui is drawing
+                // its own, because PresentOverlayCursor() returned false --
+                // so hide ours rather than leave the game's cursor image
+                // doubled underneath it, which is #69's original bug.
+                wl_pointer_set_cursor( m_pPointer, m_uPointerEnterSerial, nullptr, 0, 0 );
+
+            return;
+        }
+
 		if ( cv_wayland_mouse_warp_without_keyboard_focus )
 			bUseHostCursor = m_bPointerLocked && !m_bKeyboardEntered && m_pDefaultCursorSurface;
 		else
 			bUseHostCursor = !m_bKeyboardEntered && m_pDefaultCursorSurface;
 
-        // Issue #69: while the settings overlay has input, it draws its own
-        // software cursor -- never show this backend's host cursor
-        // alongside it, in either of the branches below (see
-        // SetCursorSuppressed()'s declaration in backend.h for the full
-        // rationale, and steamcompmgr.cpp's paint_all() for the call site).
-        if ( bUseHostCursor && !m_bCursorSuppressed )
+        if ( bUseHostCursor )
         {
             wl_pointer_set_cursor( m_pPointer, m_uPointerEnterSerial, m_pDefaultCursorSurface, m_pDefaultCursorInfo->uXHotspot, m_pDefaultCursorInfo->uYHotspot );
         }
         else
         {
-			bool bHideCursor = m_bPointerLocked || !m_pCursorSurface || m_bCursorSuppressed;
+			bool bHideCursor = m_bPointerLocked || !m_pCursorSurface;
 
             if ( bHideCursor )
                 wl_pointer_set_cursor( m_pPointer, m_uPointerEnterSerial, nullptr, 0, 0 );

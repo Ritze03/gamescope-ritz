@@ -2930,22 +2930,36 @@ paint_all( global_focus_t *pFocus, bool async )
 			&frameInfo);
 	}
 
-	// Same fix as above, mirrored for nested backends' own host-level
-	// cursor (SDL_ShowCursor() / wl_pointer_set_cursor(), see
-	// INestedHints::SetCursorSuppressed()'s comment in backend.h) rather
-	// than the composited plane. Independent of ShouldDrawCursor() /
-	// cv_paint_cursor_plane above -- those gate the composited plane
-	// only, whereas a nested backend's host cursor is a separate,
-	// OS-level cursor source that exists whether or not that plane is
-	// even in play (e.g. under --force-grab-cursor, ShouldDrawCursor()
-	// is unconditionally true so the plane always paints, but this SDL/
-	// Wayland cursor still needs its own independent suppression).
-	// Called every frame rather than only on the capture-state edge, so
-	// it's self-correcting if the overlay closes abruptly or a frame is
-	// otherwise missed -- the backend-side setters no-op when the value
-	// hasn't changed, so this doesn't spam their event queues.
+	// Third cursor source, alongside the composited plane above and ImGui's
+	// own: a nested backend's real host-level cursor (SDL_SetCursor() /
+	// wl_pointer_set_cursor()). Independent of ShouldDrawCursor() /
+	// cv_paint_cursor_plane above -- those gate the composited plane only,
+	// whereas the host cursor is a separate, OS-level source that exists
+	// whether or not that plane is in play (e.g. under --force-grab-cursor,
+	// ShouldDrawCursor() is unconditionally true so the plane always paints,
+	// but the host cursor is governed entirely separately).
+	//
+	// D29 (supersedes #69's first pass): where a host cursor exists, it is
+	// the one to show -- it's the system cursor the user already recognises,
+	// themed and scaled by the host. So rather than suppressing it in favour
+	// of ImGui's, we ask the backend to present it and let it tell us whether
+	// it managed to; ImGui's software cursor then stands down for exactly as
+	// long as the answer is yes, and remains the fallback everywhere the
+	// answer is no (embedded/DRM and OpenVR, which have no host cursor and no
+	// INestedHints host-cursor path at all, and nested-while-pointer-locked,
+	// where the host cursor is pinned and hidden by the grab).
+	//
+	// Called every frame rather than only on the capture-state edge, so it's
+	// self-correcting if the overlay closes abruptly or a frame is otherwise
+	// missed -- the backend side no-ops when the value hasn't changed, so
+	// this doesn't spam their event queues. The false default on the
+	// SettingsOverlay side means the safe outcome (ImGui draws) also survives
+	// the connector being null.
+	bool bHostCursorVisible = false;
 	if ( pConnector && pConnector->GetNestedHints() )
-		pConnector->GetNestedHints()->SetCursorSuppressed( gamescope::SettingsOverlay_IsCapturingInput() );
+		bHostCursorVisible = pConnector->GetNestedHints()->PresentOverlayCursor( gamescope::SettingsOverlay_IsCapturingInput() );
+
+	gamescope::SettingsOverlay_SetHostCursorVisible( bHostCursorVisible );
 
 	if ( !bValidContents || GetBackend()->IsPaused() )
 	{
