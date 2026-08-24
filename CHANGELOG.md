@@ -44,6 +44,14 @@ hasn't checked out this branch, since master is unaffected.
 
 ### 2026-08-24
 
+- **Notification placement is now the same 3×3 anchor grid the System Monitor uses.** It was a
+  nine-option Choice, which never fit a row and so was always drawn as a dropdown — two rows
+  asking the identical question ("which of nine screen anchors?") that looked nothing alike. It
+  now declares the existing `Kind::Composite` / `CompositeKind::Anchor`, so it is the *same*
+  control, not a second copy of one: no new kind, no new atom, no second grid to drift. It gets
+  no margins, unlike the Monitor's, because there is no notification-margin config key and
+  inventing one would be a schema change. The stored `notification_placement` string and its
+  format are untouched.
 - **The FSR sharpness slider ran backwards, and now does not.** `Sharpness 0%` under FSR was
   selecting raw 0 — *maximum* sharpening — and 100% was selecting the minimum. The UI carried a
   per-filter direction flip on the belief, recorded in `DECISIONS.md` #11, that FSR and NIS remap
