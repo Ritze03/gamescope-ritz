@@ -10,6 +10,64 @@ cheap.
 
 ---
 
+## 2026-08-24 — D28 · A Changelog area
+
+The area was asked for by the user directly; what follows are the calls taken *inside* that
+instruction, where the instruction did not say how. (D28.1–D28.3, covering the Log rework
+requested in the same message, land with that change.)
+
+<!-- D28.1 · A content area's rows can be hosted by the Inspector -- lands with the Log rework -->
+<!-- D28.2 · ContentLine carries identity and time -- lands with the Log rework -->
+<!-- D28.3 · Issue #81's Copy button stays disabled -- lands with the Log rework -->
+
+### D28.4 · `CHANGELOG.md` is embedded at build time, not read from disk
+
+**Chosen:** a `custom_target` runs `Overlay/embed_changelog.py`, which emits the file's bytes as a
+C array (the same generated-header shape already used for fonts and shaders).
+
+**Why, over reading an installed copy at runtime:** (1) an embedded copy **cannot disagree with
+the binary** — the screen's entire job is to say what *this* build contains, and a file read at
+runtime can be a different vintage than the process reading it; (2) no install-path search, and so
+no "not found" state on a screen whose purpose is to answer a question; (3) no file I/O on the
+render thread, which is the same reason `LogCapture` hands the UI a snapshot. Cost is ~24 kB of
+rodata and one build rule.
+
+**When it is missing:** the script does **not** fail the build. It embeds a short placeholder
+saying the changelog was not present in the source tree, and sets `g_Changelog_Present = false` so
+the UI can distinguish "this build has no changelog" from "the changelog says nothing". The path is
+passed as an *argument* rather than a meson `files()` input precisely so that this path is
+reachable — `files()` would hard-fail configure instead.
+
+**Rendering it:** plain text, **verbatim**, one source line per `ContentLine`. The overlay has no
+Markdown renderer and adding one for a single document would be the most expensive possible answer.
+`CHANGELOG.md` is already written to be read as plain text — that is what Markdown is for. Markers
+are *not* stripped: a half-parsed document ("some markers removed, others not") reads worse than an
+honest unparsed one, and stripping them is a formatting decision that belongs to the shell anyway.
+
+### D28.5 · Where the two version numbers come from
+
+**Neither is typed into the source.** `k_szGamescopeVersion` cannot answer "which upstream is this
+built on": the fork carries no tags and the top-level `project()` declares no version, so
+`git describe --always --tags` degrades to a bare short hash describing the *fork's* tip.
+
+- **Base gamescope version** — the upstream commit `fcc1341`. This is a *recorded fact with no
+  in-tree derivation*: there are no tags to describe it, and `origin` points at the fork itself
+  rather than at ValveSoftware/gamescope, so no remote can be consulted. It is therefore stated
+  **once**, in `src/meson.build`, and then **verified** against git rather than trusted.
+- **gamescope-ritz version** — `YYYY-MM-DD` from **HEAD's commit date**, not the wall clock. A build
+  date would change every time anyone rebuilt an unchanged tree, so two builds of the same source
+  would disagree and the number would answer "when did you compile" instead of "what are you
+  running". A trailing `+` marks a dirty tree.
+
+**When the recorded base goes stale** — i.e. someone rebases the fork onto a newer upstream and
+`fcc1341` stops being an ancestor of HEAD — the build **detects it**
+(`git merge-base --is-ancestor`) and the UI says `unknown — recorded base is not in this history`,
+with a `verified: NO — fork was rebased; base is stale` fact beside it. Printing the recorded
+commit anyway would make the screen lie, and a version string that silently goes stale is worse
+than one that admits it.
+
+---
+
 ## 2026-08-24 (D26 — three defects the user reported by looking at it)
 
 All three came from the user watching the shell run, and two of them are the same lesson:

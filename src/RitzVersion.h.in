@@ -1,0 +1,54 @@
+#pragma once
+
+// gamescope-ritz's own version identity, resolved at BUILD time by
+// src/meson.build -- the same configure_file() shape GamescopeVersion.h.in
+// already uses for gamescope's own version string.
+//
+// WHY THIS EXISTS SEPARATELY FROM GamescopeVersion.h.
+// gamescope's k_szGamescopeVersion is `git describe --always --tags
+// --dirty=+` plus the compiler. In THIS repository that degrades to a bare
+// short hash, because the fork carries no tags of its own and the top-level
+// project() declares no version. So it cannot answer "which upstream
+// gamescope is this built on" -- it only ever describes the fork's own tip.
+// The two numbers below answer the two questions a user actually has, and
+// both are derived rather than typed:
+//
+//   * BASE COMMIT -- the upstream ValveSoftware/gamescope commit this fork
+//     is built on. Recorded in CLAUDE.md and CHANGELOG.md as fcc1341, and
+//     VERIFIED at build time to still be an ancestor of HEAD, then re-read
+//     out of git so the string is a commit that demonstrably exists in this
+//     history rather than one somebody typed once.
+//   * PATCH DATE -- HEAD's own COMMIT date, not the wall clock. Two builds
+//     of the same tree therefore agree, and the date describes the source
+//     that was built rather than the moment the build was started.
+//
+// See src/meson.build for the derivation, and Overlay/PanelChangelog.cpp
+// for how both are presented.
+
+namespace gamescope
+{
+    // The upstream gamescope commit this fork is based on, short form --
+    // paste into `git show` to read it. "unknown" when the recorded base is
+    // no longer an ancestor of HEAD; see k_bRitzBaseVerified.
+    static constexpr const char k_szRitzBaseCommit[] = "@RITZ_BASE_COMMIT@";
+
+    // One line naming the base gamescope, ready to display.
+    static constexpr const char k_szRitzBaseVersion[] = "@RITZ_BASE_VERSION@";
+
+    // false when the recorded base commit is NOT an ancestor of HEAD -- i.e.
+    // the fork was rebased onto a different upstream and the recorded base
+    // went stale. The UI must say so rather than print a base version that
+    // is no longer true: a version string that silently goes stale is worse
+    // than one that admits it.
+    static constexpr bool k_bRitzBaseVerified = @RITZ_BASE_VERIFIED@;
+
+    // This build's patch version: HEAD's commit date, YYYY-MM-DD.
+    static constexpr const char k_szRitzPatchDate[] = "@RITZ_PATCH_DATE@";
+
+    // HEAD's own short commit, so a user can identify the exact fork build.
+    static constexpr const char k_szRitzCommit[] = "@RITZ_COMMIT@";
+
+    // True when the working tree had uncommitted changes at configure time,
+    // which makes the patch date an approximation of what is running.
+    static constexpr bool k_bRitzDirty = @RITZ_DIRTY@;
+}

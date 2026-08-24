@@ -73,6 +73,22 @@ hasn't checked out this branch, since master is unaffected.
   follows the user's configured accent hue rather than being a blue that stays blue after
   the accent changes.
 
+- **New `Changelog` area** in the rail, showing this file plus the two version numbers a user
+  actually needs: the **base gamescope** (upstream commit `fcc1341`) and the **gamescope-ritz
+  patch version** as a `YYYY-MM-DD` date. Neither is typed into the source — gamescope's own
+  version string cannot answer "which upstream is this built on", because this fork carries no
+  tags and `project()` declares no version, so `git describe` degrades to a bare hash of the
+  *fork's* tip. The base commit is stated once in `src/meson.build` and then **verified** to
+  still be an ancestor of HEAD; if someone rebases the fork onto a newer upstream, the area says
+  `unknown — recorded base is not in this history` instead of confidently printing a commit that
+  is no longer the base. The date is **HEAD's commit date**, not the build date, so two builds of
+  the same source agree on their version rather than drifting apart every rebuild.
+- `CHANGELOG.md` is **compiled into the binary** rather than read from disk at runtime, so the
+  changelog on screen can never be a different vintage than the binary showing it, needs no
+  install-path lookup, and costs no file I/O on the render thread. If the file is absent from the
+  source tree the build still succeeds and the area says so plainly. It is rendered as plain text,
+  verbatim — the overlay has no Markdown renderer, and a half-parsed document reads worse than an
+  honest unparsed one.
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

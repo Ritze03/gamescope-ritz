@@ -154,6 +154,7 @@ src = [
   'Overlay/PanelConfig.cpp',
   'Overlay/LogCapture.cpp',
   'Overlay/PanelLog.cpp',
+  'Overlay/PanelChangelog.cpp',
   # E2 overlay kit (superdoc/planning/redesign/round-2/e2-inspector-plus).
   # Phase 1: foundation only -- nothing here is called by the running UI yet.
   'Overlay/UI/Tokens.cpp',
@@ -238,9 +239,113 @@ gamescope_version = configure_file(
   configuration : gamescope_version_conf
 )
 
+# ---------------------------------------------------------------------------
+#  gamescope-ritz's own version identity  (see src/RitzVersion.h.in)
+# ---------------------------------------------------------------------------
+# version_tag above CANNOT answer "which upstream gamescope is this built on":
+# this fork carries no tags of its own and project() declares no version, so
+# `git describe --always --tags` degrades to a bare short hash describing the
+# FORK's tip. The two facts below are derived here instead.
+ritz_src_root = meson.project_source_root()
+
+# THE FORK POINT IS A RECORDED FACT WITH NO IN-TREE DERIVATION. There are no
+# tags to describe it, and `origin` points at the fork itself rather than at
+# ValveSoftware/gamescope, so no remote can be consulted for it either. It is
+# therefore stated once, HERE, and then VERIFIED against git rather than
+# trusted -- which is what makes the version string a claim instead of a hope.
+# Recorded identically in CLAUDE.md and CHANGELOG.md.
+ritz_base_recorded = 'fcc1341'
+
+ritz_base_commit   = 'unknown'
+ritz_base_verified = 'false'
+
+# If the recorded base is no longer an ancestor of HEAD, the fork was rebased
+# onto a different upstream and the recorded base has gone STALE. Printing it
+# anyway would make the screen lie, so the check gates the value: everything
+# downstream falls back to "unknown", and the UI says so out loud.
+ritz_ancestor = run_command(
+  ['git', '-C', ritz_src_root, 'merge-base', '--is-ancestor', ritz_base_recorded, 'HEAD'],
+  check : false,
+)
+
+if ritz_ancestor.returncode() == 0
+  ritz_base_rev = run_command(
+    ['git', '-C', ritz_src_root, 'rev-parse', '--short', ritz_base_recorded],
+    check : false,
+  )
+  if ritz_base_rev.returncode() == 0
+    ritz_base_commit   = ritz_base_rev.stdout().strip()
+    ritz_base_verified = 'true'
+  endif
+endif
+
+if ritz_base_verified == 'true'
+  ritz_base_version = 'upstream ' + ritz_base_commit
+else
+  ritz_base_version = 'unknown -- recorded base is not in this history'
+endif
+
+# THE PATCH DATE IS HEAD'S COMMIT DATE, NOT THE WALL CLOCK. A build date would
+# change every time anyone rebuilt an unchanged tree, so two builds of the same
+# source would report different versions and the number would answer "when did
+# you compile" instead of "what are you running".
+ritz_date_cmd = run_command(
+  ['git', '-C', ritz_src_root, 'log', '-1', '--format=%cd', '--date=short'],
+  check : false,
+)
+ritz_patch_date = ritz_date_cmd.returncode() == 0 ? ritz_date_cmd.stdout().strip() : 'unknown'
+
+ritz_commit_cmd = run_command(
+  ['git', '-C', ritz_src_root, 'rev-parse', '--short', 'HEAD'],
+  check : false,
+)
+ritz_commit = ritz_commit_cmd.returncode() == 0 ? ritz_commit_cmd.stdout().strip() : 'unknown'
+
+# A dirty tree makes the commit date an approximation of what is running, so
+# it is surfaced rather than hidden.
+ritz_status_cmd = run_command(
+  ['git', '-C', ritz_src_root, 'status', '--porcelain'],
+  check : false,
+)
+ritz_dirty = (ritz_status_cmd.returncode() == 0 and ritz_status_cmd.stdout().strip() != '') ? 'true' : 'false'
+
+ritz_version_conf = configuration_data()
+ritz_version_conf.set('RITZ_BASE_COMMIT',   ritz_base_commit)
+ritz_version_conf.set('RITZ_BASE_VERSION',  ritz_base_version)
+ritz_version_conf.set('RITZ_BASE_VERIFIED', ritz_base_verified)
+ritz_version_conf.set('RITZ_PATCH_DATE',    ritz_patch_date)
+ritz_version_conf.set('RITZ_COMMIT',        ritz_commit)
+ritz_version_conf.set('RITZ_DIRTY',         ritz_dirty)
+
+ritz_version = configure_file(
+  input : 'RitzVersion.h.in',
+  output : 'RitzVersion.h',
+  configuration : ritz_version_conf
+)
+
+# CHANGELOG.md, embedded as a byte array -- the same generated-header shape
+# used for fonts and shaders. See Overlay/embed_changelog.py for why this is
+# embedded at build time rather than read from disk at runtime.
+#
+# The path is passed as an ARGUMENT rather than an input so that a source tree
+# without CHANGELOG.md still configures and builds (the script emits a short
+# "not embedded" placeholder); files() would hard-fail configure instead, which
+# would make that graceful path unreachable. Dependency tracking is preserved
+# via depend_files when the file is actually there.
+fs = import('fs')
+changelog_path = ritz_src_root / 'CHANGELOG.md'
+changelog_deps = fs.exists(changelog_path) ? files('../CHANGELOG.md') : []
+
+changelog_header = custom_target(
+  'Changelog.h',
+  output       : 'Changelog.h',
+  command      : [find_program('Overlay/embed_changelog.py'), changelog_path, '@OUTPUT@'],
+  depend_files : changelog_deps,
+)
+
   executable(
     'gamescope',
-    src, reshade_src, gamescope_version,
+    src, reshade_src, gamescope_version, ritz_version, changelog_header,
     include_directories : [reshade_include, sol2_include],
     dependencies: [
       dep_wayland, dep_x11, dep_xdamage, dep_xcomposite, dep_xrender, dep_xext, dep_xfixes,
