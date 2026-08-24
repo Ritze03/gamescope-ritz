@@ -63,6 +63,49 @@ other assertion in the suite would notice.
 moves down and back up under a real wheel event through `overlay_e2_pointer`. Note for the
 next agent: `SettingsOverlay` inverts the wheel sign, so `scroll 0 3` is **down**.
 
+### D26.2 · Esc closes the UI; only a TRANSIENT LAYER gets to eat it first
+
+**The report.** *"Pressing escape should close the UI."*
+
+SPEC §8.2's ladder was *palette → drawer → inline expansion → overlay*, which made Esc a
+general undo of the last navigation: three presses to reach the game from a fresh open, each
+one silently rearranging the shell instead of leaving. The spec table is amended in place
+and points here.
+
+**What was chosen.** Esc dismisses a transient layer if one is up, otherwise closes. The
+list of "transient" is short on purpose:
+
+| state | Esc does |
+|---|---|
+| command palette open (over the shell) | close the palette, shell stays |
+| dropdown popup open | close the popup |
+| text field mid-edit | cancel the edit (never throw the overlay away over a rename) |
+| destructive action ARMED | disarm, overlay stays |
+| explain page / drawer / inline expansion / a selected row | **close the overlay** |
+| nothing at all | **close the overlay** |
+| launcher (D25) | unchanged — gives the game straight back |
+
+**Why the drawer and the explain page are NOT rungs.** They are the shell's own arrangement,
+not layers a user put in front of it seconds ago. They persist, they have their own controls
+(`Ctrl+I`; `Ctrl+/` is a toggle), and unwinding them one Esc at a time is the behaviour being
+removed. The two chrome labels that advertised the old meaning moved with it: the sheet
+footer legend now reads `Esc close`, and the explain page's back crumb names `^/ back` — the
+key that actually returns. A crumb still promising "Esc back" would be a label for the one
+thing Esc no longer does, on the screen where that costs most.
+
+**The armed action is disarmed UNCONDITIONALLY and FIRST**, before any branch, because an
+arm surviving an Esc has already been found here once — it outlived the press and could fire
+on a later Enter. After that line nothing is armed, whichever rung runs.
+
+Closing also clears the transient set (armed action, dropdown, edit, explain page, inline
+expansion, palette) so the next open is not sitting on a page nobody asked for. The selected
+area, the selected row and the Inspector host **survive** — that is the arrangement the user
+chose.
+
+**Verified** on a real seeded `games/<id>.json`: arming `config.delete`, pressing Esc, then
+pressing Enter again left the file on disk and left the overlay open; Esc with nothing on
+top returned the game; Esc over an open palette dismissed the palette and left the shell up.
+
 ---
 
 ## 2026-08-24 — CORRECTION TO D13.1, FROM THE USER DIRECTLY (not an autonomous decision)

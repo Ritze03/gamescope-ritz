@@ -56,6 +56,15 @@ hasn't checked out this branch, since master is unaffected.
   imgui-free `ScrollView` in `Layout.cpp` that all three scrolling bodies call, and it is
   unit-tested: a fix that has to be remembered per region is a fix that is missing from the
   next region.
+- **Escape now closes the overlay.** It used to unwind one level per press (palette →
+  drawer → inline expansion → overlay), so getting back to the game from a fresh open took
+  three presses and each one silently rearranged the shell instead of leaving. Escape now
+  dismisses only something genuinely *in front* of the shell — the command palette, an open
+  dropdown, a text field mid-edit, or an armed destructive action — and closes the overlay
+  from everywhere else. An armed action is disarmed unconditionally and first, so it can
+  never survive an Escape and fire on a later press. The footer legend reads `Esc close`,
+  and the explain page's back crumb now names `^/`, the key that actually returns. This
+  matches the launcher, which already gave the game straight back on Escape.
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

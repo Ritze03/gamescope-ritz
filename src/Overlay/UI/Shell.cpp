@@ -276,8 +276,9 @@ namespace gamescope::ui::shell
 		// and accepts it only because the expansion is user-initiated. A
 		// single open row bounds that reflow to one place: with several open
 		// at once, expanding a row near the bottom of a column can move rows
-		// you are not looking at, in a column you are not in. Esc's ladder
-		// also names "inline expansion" in the singular.
+		// you are not looking at, in a column you are not in. (SPEC §8.2's
+		// old Esc ladder named "inline expansion" in the singular for the
+		// same reason; D26 retired the ladder, not the argument.)
 		std::string s_sExpandedEntry;
 
 		// Where the keyboard is inside an expanded row: -1 is the row itself,
@@ -740,6 +741,38 @@ namespace gamescope::ui::shell
 			// under the reader. Closing it puts them back on the sheet they
 			// just moved in, which is where they were looking.
 			s_bExplainPage = false;
+		}
+
+		// =================================================================
+		//  D26: closing the overlay from inside the shell
+		// =================================================================
+		// Esc's last rung, and the only place the shell closes itself. It is
+		// a function rather than a bare SettingsOverlay_SetVisible( false )
+		// because closing has to LEAVE THE SHELL CLEAN: the next open must
+		// not come back sitting on an explain page nobody asked for, with a
+		// dropdown half-open or a delete still armed.
+		//
+		// What is cleared is exactly the transient set -- the things that
+		// only make sense in the session that created them. What SURVIVES is
+		// the arrangement the user chose and would be annoyed to lose: the
+		// selected area, the selected row, and the Inspector host. Reopening
+		// puts them back where they were.
+		//
+		// The palette is closed too. It is a transient layer by the same
+		// definition, and a palette that reappeared over the shell on the
+		// next open would be a search someone abandoned a session ago.
+		void CloseShell()
+		{
+			s_sArmedAction.clear();
+			s_sOpenDropdown.clear();
+			s_nPopupFocus     = -1;
+			s_sEditingText.clear();
+			s_bExplainPage    = false;
+			s_sExpandedEntry.clear();
+			s_nInlineFocus    = -1;
+			s_bPaletteOpen    = false;
+
+			SettingsOverlay_SetVisible( false );
 		}
 
 		InspectorMode CurrentMode( const Entry *pEntry )
@@ -1698,11 +1731,18 @@ namespace gamescope::ui::shell
 			char szCrumb[ 160 ];
 			// D18: SPEC §6.3 asks the explanation page for "a back crumb".
 			// It is the same crumb with one more segment, not a second
-			// header -- so the page reads as somewhere you navigated TO,
-			// and Esc's meaning ("go back one") is legible from the screen.
+			// header -- so the page reads as somewhere you navigated TO, and
+			// the way back is legible from the screen.
+			//
+			// D26: the crumb used to advertise `Esc back`, and Esc now closes
+			// the overlay instead of unwinding a level. The key that opened
+			// the page is a TOGGLE, so it is also the key that leaves it --
+			// which is what the crumb names now. A crumb that still said
+			// "Esc" would be a label promising the one thing Esc no longer
+			// does, on the screen where that is most expensive.
 			const Entry *pExplained = s_bExplainPage ? SelectedEntry() : nullptr;
 			if ( pExplained )
-				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s  /  %s   -   Esc back",
+				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s  /  %s   -   ^/ back",
 					pArea ? SectionName( pArea->GetSection() ) : "",
 					pArea ? pArea->Title().c_str() : "",
 					pExplained->Title().c_str() );
@@ -1781,22 +1821,22 @@ namespace gamescope::ui::shell
 			// The legend is the only place the shell advertises its own
 			// shortcuts, and at 2.0x the full form does not fit the sheet --
 			// so DrawText's left-align fallback clipped the TAIL, which is
-			// where `Esc back` is. That is the worst possible thing to lose:
+			// where `Esc close` is. That is the worst possible thing to lose:
 			// a user who cannot read the rest of the line is precisely the
 			// user who needs to know how to get out of it.
 			//
 			// So the line drops hints from the LEFT instead, cheapest first,
-			// and `Esc back` is the last thing standing. Chosen by
+			// and `Esc close` is the last thing standing. Chosen by
 			// measurement rather than by scale, because the sheet's width
 			// depends on the Inspector's host and the drawer as well as on
 			// the ladder step.
 			static const char *const kForms[] = {
-				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  back",
-				"^K search    ^I inspector    ^/ explain    Tab region    Esc back",
-				"^K search    ^I inspector    Tab region    Esc back",
-				"^K search    Tab region    Esc back",
-				"^K search    Esc back",
-				"Esc back",
+				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  close",
+				"^K search    ^I inspector    ^/ explain    Tab region    Esc close",
+				"^K search    ^I inspector    Tab region    Esc close",
+				"^K search    Tab region    Esc close",
+				"^K search    Esc close",
+				"Esc close",
 			};
 
 			// Falls back to the shortest form, which is also the one that
@@ -4674,41 +4714,65 @@ namespace gamescope::ui::shell
 				return;
 			}
 
-			// Esc: palette -> drawer -> inline expansion -> overlay. The
-			// palette rung is handled by RunPaletteKeyboard() before this
-			// runs; what is left here is the drawer, and then the overlay
-			// itself (which SettingsOverlay.cpp owns).
+			// =============================================================
+			//  Esc (D26): dismiss what is ON TOP, or CLOSE THE OVERLAY
+			// =============================================================
+			// THE RULE, in one line: Esc closes the UI unless something
+			// transient is up in front of it, in which case Esc takes that
+			// away and the UI stays.
+			//
+			// WHAT CHANGED AND WHY. SPEC §8.2's ladder was "palette ->
+			// drawer -> inline expansion -> overlay", and it made Esc a
+			// general UNDO of the last navigation: from a fresh open with a
+			// row selected it took three presses to get back to the game,
+			// and each one silently rearranged the shell instead. The user's
+			// report is the whole argument -- "pressing escape should close
+			// the UI" -- and it is the behaviour every other surface here
+			// already has: the launcher (D25) gives the game straight back
+			// on Esc, and the two really-on-top layers below already
+			// consumed Esc and stopped.
+			//
+			// WHAT COUNTS AS "ON TOP", and it is a short list on purpose:
+			//
+			//   * the command palette      -- RunPaletteKeyboard(), above
+			//   * an open dropdown popup   -- the block above
+			//   * a text field being edited
+			//   * an ARMED destructive action
+			//
+			// All four are things a user put in front of the shell seconds
+			// ago and can point at. What is deliberately NOT on the list:
+			// the drawer, the explain page, the inline expansion and the
+			// selection. Those are the shell's own arrangement -- they
+			// persist, they have their own controls (Ctrl+I, the back
+			// crumb), and unwinding them one Esc at a time is exactly the
+			// behaviour being removed. Esc from any of them closes the UI.
 			if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
 			{
-				// SPEC §3.9: "the second fires, and Esc disarms." Esc's
-				// region ladder below can leave the selection somewhere that
-				// still holds the armed row, so the disarm is unconditional
-				// and happens first -- Esc is the user saying "no".
+				// SPEC §3.9: "the second fires, and Esc disarms." This is
+				// UNCONDITIONAL and happens before any branch below, because
+				// an armed delete surviving an Esc is a bug that has already
+				// been found here once: the arm outlived the press and could
+				// fire on a later Enter. Esc is the user saying "no", so
+				// after this line nothing is armed no matter which rung runs.
+				const bool bWasArmed = !s_sArmedAction.empty();
 				s_sArmedAction.clear();
+				if ( bWasArmed )
+					return;
 
-				// D18: the explain page is the topmost rung below the
-				// palette -- it REPLACES the sheet, so Esc has to give the
-				// sheet back before it starts closing regions underneath it.
-				// Note this deliberately does not call Select(nullptr): the
-				// row you were reading about stays selected, which is the
-				// "back crumb" behaviour SPEC §6.3 asks for.
-				if ( s_bExplainPage )
-					s_bExplainPage = false;
-				else if ( Host() == InspectorHost::Drawer )
-					SetHost( InspectorHost::Hidden );
-				// D20.3: SPEC §8.2's ladder is "palette -> drawer -> inline
-				// expansion -> overlay", and this is the rung that had
-				// nothing behind it until the expansion existed. It sits
-				// after the drawer to match that order, though the two are
-				// mutually exclusive in practice -- an expansion only exists
-				// in the Hidden host, where the drawer rung cannot fire.
-				else if ( !s_sExpandedEntry.empty() )
+				// A field mid-edit owns Esc: it means "cancel this rename",
+				// never "throw the whole overlay away". ImGui deactivates and
+				// reverts the InputText itself; the shell's one bit of
+				// caller state has to be dropped with it or the row would
+				// stay stuck in its editing form.
+				if ( !s_sEditingText.empty() || ImGui::IsAnyItemActive() )
 				{
-					s_sExpandedEntry.clear();
-					s_nInlineFocus = -1;
+					s_sEditingText.clear();
+					ImGui::ClearActiveID();
+					return;
 				}
-				else if ( SelectedEntry() )
-					Select( nullptr );
+
+				// Nothing is in front. Close.
+				CloseShell();
 				return;
 			}
 
