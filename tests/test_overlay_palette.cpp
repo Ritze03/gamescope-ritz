@@ -367,6 +367,137 @@ TEST_CASE( "palette: a param adjusts through the same one function", "[overlay_p
 }
 
 // =========================================================================
+//  D25 -- "can this be adjusted in place, or does it need the full overlay?"
+// =========================================================================
+// The launcher asks this of every result it draws: an adjustable row gets
+// chevrons and the "left/right adjust in place" legend, a non-adjustable one
+// gets `open` and "Enter open in the full overlay". Getting it wrong is a
+// visible lie on the row, so the predicate is pinned here rather than left to
+// agree with AdjustValue() by inspection.
+TEST_CASE( "launcher: CanAdjust follows the KIND, not the current value", "[overlay_palette]" )
+{
+	Fixture f;
+
+	// Ordered kinds: yes, regardless of where the value happens to sit.
+	const ui::Entry *pSlider  = f.reg.FindEntry( "display.sharpness" );
+	const ui::Entry *pChoice  = f.reg.FindEntry( "display.scaler" );
+	const ui::Entry *pSwitch  = f.reg.FindEntry( "monitor.tearing" );
+	const ui::Entry *pStepper = f.reg.FindEntry( "monitor.fps_limit" );
+	// Read-only by type: no.
+	const ui::Entry *pFacts   = f.reg.FindEntry( "display.path" );
+	REQUIRE( pSlider  != nullptr );
+	REQUIRE( pChoice  != nullptr );
+	REQUIRE( pSwitch  != nullptr );
+	REQUIRE( pStepper != nullptr );
+	REQUIRE( pFacts   != nullptr );
+
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pSlider  ) ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pChoice  ) ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pSwitch  ) ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pStepper ) ) );
+	REQUIRE_FALSE( ui::CanAdjust( ui::Adjustable::Of( *pFacts ) ) );
+
+	// A Param is adjustable on exactly the same terms as a row -- the
+	// launcher must not offer chevrons on one and `open` on the other.
+	const ui::Parameter *pParam = f.reg.FindParam( "display.sharpness.rcas_denoise" );
+	REQUIRE( pParam != nullptr );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pParam ) ) );
+
+	// THE POINT OF THE PREDICATE. A value sitting on an end stop makes
+	// AdjustValue() return false in that direction, and the row is still
+	// adjustable -- the other arrow moves it. A launcher that decided
+	// adjustability by trying the step would mislabel exactly the rows a
+	// user is most likely to be looking at: a maxed slider, a switch already
+	// on, a choice on its last option.
+	f.flSharp = 20.0f;   // the slider's ceiling
+	f.bTearing = true;   // the switch is already what Right would set it to
+	f.nScaler = 3;       // the last option
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pSlider ), +1, false ) );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pSwitch ), +1, false ) );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pChoice ), +1, false ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pSlider ) ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pSwitch ) ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pChoice ) ) );
+	// ...and the other direction still moves them, which is what makes
+	// "adjustable" the right word for all three.
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pSlider ), -1, false ) );
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pSwitch ), -1, false ) );
+	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pChoice ), -1, false ) );
+}
+
+TEST_CASE( "launcher: CanAdjust never contradicts AdjustValue", "[overlay_palette]" )
+{
+	// The one direction that MUST hold: a row CanAdjust() refuses can never
+	// be moved by either arrow. (The converse is not a law -- see the end-stop
+	// case above.) Asserted over every kind rather than the four in the
+	// fixture, so a kind added later without a CanAdjust() case is caught
+	// here instead of shipping a dead chevron.
+	int   nPacked = 0x7BD3F0;
+	int   nHue    = 200;
+	int   nAnchor = 0;
+	std::string sName = "profile";
+	int   nBank   = 0b0101;
+	bool  bRan    = false;
+
+	static constexpr ui::Option kSources[] = { { 1, "wm" }, { 2, "drm" } };
+
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+	a.Composite( "overlay.accent_color", "Accent colour", ui::CompositeKind::Color,
+	             ui::Bind( &nPacked ) ).Help( "h" );
+	a.Composite( "overlay.accent_hue", "Accent hue", ui::CompositeKind::Hue,
+	             ui::Bind( &nHue ) ).Range( 0.0f, 360.0f ).Step( 1.0f ).Help( "h" );
+	a.Composite( "overlay.hud_anchor", "HUD anchor", ui::CompositeKind::Anchor,
+	             ui::Bind( &nAnchor ) ).Range( 0.0f, 8.0f ).Step( 1.0f ).Help( "h" );
+	a.Text( "profile.name", "Profile name", ui::Bind( &sName ) ).Help( "h" );
+	a.Bank( "log.sources", "Log sources", ui::Bind( &nBank ), kSources, 2 ).Help( "h" );
+	a.Action( "config.reset", "Reset", "reset", [ & ] { bRan = true; } ).Help( "h" );
+	a.Meter( "system.fps", "FPS", [] { return 42.0; }, 0.0, 240.0 ).Help( "h" );
+
+	const char *kIds[] = {
+		"overlay.accent_color", "overlay.accent_hue", "overlay.hud_anchor",
+		"profile.name", "log.sources", "config.reset", "system.fps",
+	};
+
+	for ( const char *pszId : kIds )
+	{
+		const ui::Entry *pE = reg.FindEntry( pszId );
+		INFO( "id: " << pszId );
+		REQUIRE( pE != nullptr );
+		if ( ui::CanAdjust( ui::Adjustable::Of( *pE ) ) )
+			continue;
+		REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+		REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), -1, false ) );
+	}
+
+	// The Action must not have fired as a side effect of being probed.
+	REQUIRE_FALSE( bRan );
+
+	// The two composites that ARE ordered stay so -- blanket-refusing every
+	// composite to make the Color case work would break two controls to fix
+	// one, which is the mistake the Color case's own test already guards.
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *reg.FindEntry( "overlay.accent_hue" ) ) ) );
+	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *reg.FindEntry( "overlay.hud_anchor" ) ) ) );
+	REQUIRE_FALSE( ui::CanAdjust( ui::Adjustable::Of( *reg.FindEntry( "overlay.accent_color" ) ) ) );
+}
+
+TEST_CASE( "launcher: an unbound declaration is not adjustable", "[overlay_palette]" )
+{
+	// The launcher draws chevrons from this answer, and a chevron on a row
+	// with nothing behind it is a control that renders and does nothing --
+	// the defect class this redesign spent itself removing.
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "display.upscaling", "Upscaling", ui::Section::Display );
+	a.Slider( "display.orphan", "Orphan", ui::AnyBind{} ).Range( 0.0f, 1.0f ).Help( "h" );
+
+	const ui::Entry *pE = reg.FindEntry( "display.orphan" );
+	REQUIRE( pE != nullptr );
+	REQUIRE_FALSE( pE->Binding().IsBound() );
+	REQUIRE_FALSE( ui::CanAdjust( ui::Adjustable::Of( *pE ) ) );
+	REQUIRE_FALSE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+}
+
+// =========================================================================
 //  Discoverability
 // =========================================================================
 TEST_CASE( "palette: every setting is reachable in <= 3 characters", "[overlay_palette]" )

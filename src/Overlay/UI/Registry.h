@@ -783,4 +783,24 @@ namespace gamescope::ui
 	// is not ordered (Text, Bank, Action, Facts, Meter). A caller therefore
 	// never has to know the taxonomy to decide whether an arrow key applies.
 	bool AdjustValue( const Adjustable &adj, int nDir, bool bFine );
+
+	// D25: whether an arrow key means ANYTHING on this declaration -- i.e.
+	// whether the launcher can offer it in place, or has to send the user to
+	// the full overlay for it.
+	//
+	// WHY THIS IS NOT "CALL AdjustValue AND SEE". AdjustValue() answers a
+	// different question: "did this particular press change the value". It
+	// returns false for a Choice already on its last option and for a slider
+	// already at its ceiling, and both of those rows ARE adjustable -- the
+	// other arrow moves them. A launcher that decided adjustability by trying
+	// the step would mislabel every row sitting at an end stop, which is the
+	// half of the registry a user is most likely to be looking at (a maxed
+	// sharpness, a switch already on).
+	//
+	// So this is the TAXONOMY question only: kind, read-only-ness, and
+	// whether the binding exists. It deliberately reads nothing out of the
+	// binding, so it is stable frame to frame and does not flicker a row's
+	// hint as its value moves. test_overlay_palette.cpp pins it against
+	// AdjustValue() in both directions so the two cannot drift.
+	bool CanAdjust( const Adjustable &adj );
 }

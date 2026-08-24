@@ -59,4 +59,42 @@ namespace gamescope::ui::shell
 	// Safe to call from any thread, and idempotent -- asking twice before a
 	// frame runs opens the palette once.
 	void RequestPalette();
+
+	// D25: open the palette AS A LAUNCHER -- alone, over the game, with no
+	// slab, no rail, no sheet and no inspector behind it.
+	//
+	// WHY THIS IS A SECOND REQUEST AND NOT A PARAMETER ON THE FIRST. The two
+	// callers want genuinely different things, and the difference is not a
+	// flag on one behaviour: RequestPalette() is "put the palette on top of
+	// the shell the user is already looking at", and this is "show only the
+	// launcher, and give the game straight back on Esc". They differ in what
+	// Esc means, in what is drawn, and in who owns closing the overlay after.
+	//
+	// Why the launcher exists at all: direction B's premise, which the user
+	// kept as a FEATURE rather than as the whole UI -- mid-game you usually
+	// want ONE setting, not a tour of the settings surface. Opening the
+	// entire shell to reach one row defeats that, which is exactly what the
+	// Left+Right Ctrl binding used to do.
+	//
+	// Same threading contract as RequestPalette(): a request consumed on the
+	// next frame by the thread that owns the state.
+	void RequestLauncher();
+
+	// D25: whether the shell is currently showing the launcher ALONE.
+	//
+	// wlserver needs this to tell "the overlay is open" from "the launcher is
+	// up", because settings_overlay_visible is true in both cases and the
+	// Left+Right Ctrl binding has to behave differently in each -- over the
+	// shell it lays the palette on top, over the game it opens the launcher.
+	// Atomic, readable from any thread.
+	bool LauncherOnlyActive();
+
+	// D25: the overlay was hidden by something OUTSIDE the shell -- the Right
+	// Ctrl tap, Ctrl+Shift+O, gamescopectl. Drops any launcher state, so the
+	// next open is not a launcher nobody asked for.
+	//
+	// Called from cv_settings_overlay_visible's own callback, so it can
+	// arrive on any thread; like the two requests above it stores an atomic
+	// that Draw() consumes.
+	void NotifyOverlayHidden();
 }

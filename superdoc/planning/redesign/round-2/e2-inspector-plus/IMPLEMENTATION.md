@@ -10,6 +10,67 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-24 — the standalone launcher
+
+**Why:** `Left Ctrl + Right Ctrl` opened the palette *inside* the shell, so the rail,
+sheet and inspector came with it. The user asked for the launcher on its own.
+Full reasoning, alternatives and the design call: `../../AUTONOMOUS-DECISIONS.md`
+**D25**.
+
+**The three destinations now:**
+
+| binding | shell state | result |
+| --- | --- | --- |
+| Right Ctrl (tap) | any | the full clickable overlay |
+| L Ctrl + R Ctrl | closed | the **launcher** — the palette alone, over the game |
+| L Ctrl + R Ctrl | open | the palette over the shell (unchanged) |
+
+**How the launcher is drawn.** `shell::Draw()` early-returns into a launcher branch
+before the ladder solve and before the slab's `Begin()`. It opens one full-surface
+`##e2launcher` window and calls `DrawPalette( <whole surface>, items, bLauncher=true )`.
+Nothing else in `Draw()` runs — no slab, rail, sheet, inspector, drawer, spine, mode
+strip, dropdown, explain page or `RunKeyboard()`. Kept from the full path on purpose:
+`EnsureThemeLoaded()`, `SetScale()`, the `NavEnableKeyboard` disable (D22.1 — nav would
+eat the arrows that adjust in place *and* suppress mouse hover), and
+`SyncDynamicAreas()`.
+
+`DrawPalette()`'s `bLauncher` argument suppresses the scrim (nothing behind to dim) and
+switches the legend's Esc wording. The frame it centres inside is the surface, not the
+slab.
+
+**State.** `s_bLauncherOnly` (frame state, owned by the draw thread) plus three atomics:
+`s_bLauncherRequested`, `s_bOverlayHiddenNotice`, and `s_bLauncherOnlyPublished` — the
+last one exists because `wlserver` must tell "the shell is open" from "the launcher is
+up" and `settings_overlay_visible` is true in both.
+
+**New public surface** (`Shell.h`): `RequestLauncher()`, `LauncherOnlyActive()`,
+`NotifyOverlayHidden()`. The last is called from `cv_settings_overlay_visible`'s own
+callback on every transition to false, so *anything* that hides the layer drops the
+launcher state — not only the two hotkeys.
+
+**Exits.** Esc (or a click on the game around the panel) closes the overlay and returns
+to the game; the launcher branch owns the `SettingsOverlay_SetVisible(false)` call.
+Enter runs `PaletteJump()`, which clears `s_bLauncherOnly` itself — so Enter is the
+promotion to the full shell, and that frame draws nothing while the next draws the
+overlay at the chosen row.
+
+**New in `Registry`:** `ui::CanAdjust( const Adjustable& )` — the taxonomy question
+`AdjustValue()` performs, asked instead of performed. It drives the row's `‹ ›`-versus-
+`open` affordance and the legend. It reads nothing out of the binding, so a row on an
+end stop is still reported adjustable. Pinned to `AdjustValue()` in both directions by
+`tests/test_overlay_palette.cpp` (three new cases).
+
+**The palette is clickable now.** Row click highlights, chevron click steps through the
+same `AdjustValue()` the arrows use, `open` click jumps. Hit-tested against the
+palette's own rects rather than `InvisibleButton`s, because the chevrons sit inside the
+row's rect and two rect tests need no overlap flags or submission order. Actions are
+collected during the row loop and applied after it, so nothing mutates the list it is
+being chosen from.
+
+**Also:** the startup toast advertises both bindings on two aligned lines.
+
+---
+
 ## 2026-08-23 — P5: the deletion, and the flip
 
 The last phase. Decisions: `../../AUTONOMOUS-DECISIONS.md` **D21**. Build clean,
