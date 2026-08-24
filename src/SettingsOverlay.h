@@ -137,6 +137,19 @@ namespace gamescope
 	// route the event into the queue below instead of forwarding it.
 	bool SettingsOverlay_IsCapturingInput();
 
+	// Issue #69 / D29. Tells the overlay whether a real host/system cursor is
+	// currently on screen and tracking the pointer, so it can stop drawing its
+	// own software one and let the system cursor be the cursor. Published each
+	// frame by paint_all() (steamcompmgr.cpp) from the value
+	// INestedHints::PresentOverlayCursor() returns -- see that declaration in
+	// backend.h for which modes have a host cursor and which don't.
+	//
+	// Defaults to false, which is the safe direction: false means ImGui draws,
+	// so a caller that never runs (headless, unit tests) or a backend with no
+	// host cursor at all (DRM/embedded, OpenVR) still gets a visible cursor.
+	// Safe to call from any thread (single atomic store).
+	void SettingsOverlay_SetHostCursorVisible( bool bVisible );
+
 	// Keyboard-control toggle (see ConfigSchema.h's OverlaySettings
 	// comment): true only when the overlay is open/capturing AND the
 	// "capture all keyboard input" setting is on. wlserver_dispatch_key()

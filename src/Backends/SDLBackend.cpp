@@ -51,7 +51,6 @@ namespace gamescope
 		GAMESCOPE_SDL_EVENT_VISIBLE,
 		GAMESCOPE_SDL_EVENT_GRAB,
 		GAMESCOPE_SDL_EVENT_CURSOR,
-		GAMESCOPE_SDL_EVENT_CURSOR_SUPPRESS,
 
 		GAMESCOPE_SDL_EVENT_COUNT,
 	};
@@ -115,7 +114,7 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info ) override;
         virtual void SetRelativeMouseMode( bool bRelative ) override;
         virtual void SetVisible( bool bVisible ) override;
-        virtual void SetCursorSuppressed( bool bSuppressed ) override;
+        virtual bool PresentOverlayCursor( bool bOverlayActive ) override;
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
@@ -181,7 +180,7 @@ namespace gamescope
         void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info );
         void SetRelativeMouseMode( bool bRelative );
         void SetVisible( bool bVisible );
-        void SetCursorSuppressed( bool bSuppressed );
+        bool PresentOverlayCursor( bool bOverlayActive );
         void SetTitle( std::shared_ptr<std::string> szTitle );
         void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels );
         void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection );
@@ -203,7 +202,7 @@ namespace gamescope
 
 		std::atomic<bool> m_bApplicationGrabbed = { false };
 		std::atomic<bool> m_bApplicationVisible = { false };
-		std::atomic<bool> m_bCursorSuppressed = { false };
+		std::atomic<bool> m_bOverlayCursorActive = { false };
 		std::atomic<std::shared_ptr<INestedHints::CursorInfo>> m_pApplicationCursor;
 		std::atomic<std::shared_ptr<std::string>> m_pApplicationTitle;
 		std::atomic<std::shared_ptr<std::vector<uint32_t>>> m_pApplicationIcon;
@@ -376,9 +375,9 @@ namespace gamescope
 	{
 		m_pBackend->SetVisible( bVisible );
 	}
-	void CSDLConnector::SetCursorSuppressed( bool bSuppressed )
+	bool CSDLConnector::PresentOverlayCursor( bool bOverlayActive )
 	{
-		m_pBackend->SetCursorSuppressed( bSuppressed );
+		return m_pBackend->PresentOverlayCursor( bOverlayActive );
 	}
 	void CSDLConnector::SetTitle( std::shared_ptr<std::string> szTitle )
 	{
@@ -552,18 +551,30 @@ namespace gamescope
 		m_bApplicationVisible = bVisible;
 		PushUserEvent( GAMESCOPE_SDL_EVENT_VISIBLE );
 	}
-	void CSDLBackend::SetCursorSuppressed( bool bSuppressed )
+	bool CSDLBackend::PresentOverlayCursor( bool bOverlayActive )
 	{
 		// Idempotency guard: unlike the other INestedHints setters (which are
 		// only ever called on a real state change), this one is driven every
-		// frame from paint_all()'s cursor-suppression check (see
-		// steamcompmgr.cpp) to stay symmetric with the DRM plane's
-		// per-frame gate -- so skip the SDL round-trip unless the value
-		// actually flipped, or the event queue would get spammed at frame
-		// rate for no visible effect.
-		if ( m_bCursorSuppressed.exchange( bSuppressed ) == bSuppressed )
-			return;
-		PushUserEvent( GAMESCOPE_SDL_EVENT_CURSOR_SUPPRESS );
+		// frame from paint_all() (see steamcompmgr.cpp) to stay symmetric
+		// with the DRM plane's per-frame gate -- so skip the SDL round-trip
+		// unless the value actually flipped, or the event queue would get
+		// spammed at frame rate for no visible effect.
+		if ( m_bOverlayCursorActive.exchange( bOverlayActive ) != bOverlayActive )
+			PushUserEvent( GAMESCOPE_SDL_EVENT_CURSOR );
+
+		// A host cursor is on screen unless the game holds a pointer grab:
+		// SDL_SetRelativeMouseMode() hides the OS cursor and pins the
+		// pointer, so there'd be nothing for the user to aim with. In that
+		// case we report false and ImGui keeps drawing its own.
+		//
+		// The other two terms are unconditionally true for SDL, unlike the
+		// Wayland backend: SDL always has a pointer while it has a window,
+		// and SDL_GetDefaultCursor() always yields a system cursor image, so
+		// there is no "no image to show" case to guard against here.
+		return bOverlayActive && NestedHostCursorUsable(
+			/* bHavePointer     = */ true,
+			/* bPointerLocked   = */ m_bApplicationGrabbed,
+			/* bHaveCursorImage = */ true );
 	}
 	void CSDLBackend::SetTitle( std::shared_ptr<std::string> szTitle )
 	{
@@ -985,14 +996,24 @@ namespace gamescope
 							m_pCursor = SDL_CreateColorCursor( m_pCursorSurface, pCursorInfo->uXHotspot, pCursorInfo->uYHotspot );
 						}
 
-						SDL_SetCursor( m_pCursor );
-					}
-					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_CURSOR_SUPPRESS ) )
-					{
-						// Hides/shows the OS cursor without touching m_pCursor's
-						// image, so whatever SetCursorImage() last set reappears
-						// unchanged (no staleness) the instant suppression lifts.
-						SDL_ShowCursor( m_bCursorSuppressed ? SDL_DISABLE : SDL_ENABLE );
+						// Issue #69 / D29: while the settings overlay owns the
+						// pointer, show the host's *system* cursor instead of
+						// the game's cursor image -- that image can be a
+						// crosshair or fully blank, neither of which is
+						// usable overlay chrome, and the system arrow is the
+						// one the user recognises. m_pCursor is left built and
+						// untouched, so the game's cursor comes back exactly
+						// as it was (no staleness) the moment the overlay
+						// closes and this event fires again.
+						//
+						// SDL_SetCursor(nullptr) does NOT restore the default
+						// -- in SDL2 it means "redraw the current cursor" --
+						// so the no-app-cursor case has to name the default
+						// explicitly to get back to where it started.
+						if ( m_bOverlayCursorActive )
+							SDL_SetCursor( SDL_GetDefaultCursor() );
+						else
+							SDL_SetCursor( m_pCursor ? m_pCursor : SDL_GetDefaultCursor() );
 					}
 				}
 				break;

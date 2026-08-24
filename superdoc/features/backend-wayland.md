@@ -67,6 +67,20 @@ initialize.
   (`src/Backends/WaylandBackend.cpp:2285`, same reasoning as SDL: cursor goes through
   `INestedHints`, not a real cursor plane) and `SupportsTearing()` is `false`
   (`:2292`) — there's no CRTC to schedule a tearing flip against.
+- **Settings-overlay cursor** — `INestedHints::PresentOverlayCursor( bool ) -> bool`, driven
+  every frame from `paint_all()`, folded into `UpdateCursor()`. While the overlay owns the
+  pointer this shows `m_pDefaultCursorSurface` — the host's *system* cursor, snapshotted from
+  X11 at startup by `GetX11HostCursor()` — ahead of every other rule, including the
+  `m_bKeyboardEntered` test that normally selects the game's cursor image. It returns whether
+  that cursor is really on screen, and the overlay turns ImGui's own software cursor off for
+  exactly as long as the answer is true, so **exactly one cursor is visible, never zero**
+  (`#69`, revised by D29). Two cases legitimately answer false and keep ImGui's cursor: a
+  grabbed pointer, and no snapshot to show (gamescope started with no X11 display).
+  *Why "grabbed" means requested-**or**-confirmed* (`m_bRelativeMouseRequested ||
+  m_bPointerLocked`) rather than the `zwp_locked_pointer_v1::locked` confirmation alone: the
+  confirmation can lag the request indefinitely and, observed live under
+  `--force-grab-cursor`, may never arrive at all — keying on it alone produced *zero* cursors.
+  The shared rule lives in `src/CursorPolicy.h`.
 
 ## Using it
 

@@ -40,6 +40,7 @@
 // across both families, or add the release/acquire barrier pair.
 
 #include "SettingsOverlay.h"
+#include "CursorPolicy.h"
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/PanelShaders.h"
@@ -154,6 +155,16 @@ namespace gamescope
 	bool SettingsOverlay_IsCapturingInput()
 	{
 		return g_bSettingsOverlayCapturing.load( std::memory_order_acquire );
+	}
+
+	// Issue #69 / D29. See the declaration in SettingsOverlay.h. Relaxed is
+	// enough: this guards nothing but its own value, orders nothing else, and
+	// a frame's lag in either direction is invisible.
+	static std::atomic<bool> s_bHostCursorVisible = { false };
+
+	void SettingsOverlay_SetHostCursorVisible( bool bVisible )
+	{
+		s_bHostCursorVisible.store( bVisible, std::memory_order_relaxed );
 	}
 
 	bool SettingsOverlay_IsCapturingKeyboard()
@@ -391,6 +402,12 @@ namespace gamescope
 		// caller in wlserver.cpp) -- ask ImGui to draw its own software
 		// cursor into the offscreen texture instead so the pointer is
 		// visible at all while the overlay owns it.
+		//
+		// D29: no longer the final word -- this is now the *default*, and the
+		// per-frame assignment in the frame builder below turns it off for as
+		// long as a real system cursor is on screen instead. Starting from
+		// true keeps a cursor visible on the frames before anyone has
+		// published a host-cursor state.
 		io.MouseDrawCursor = true;
 		// M8 part 2 (issue #14): applies the "glass instrument" ImGuiStyle
 		// palette/metrics from ui-design-guide.md's Component styling
@@ -992,6 +1009,19 @@ namespace gamescope
 		ImGuiIO &io = ImGui::GetIO();
 		io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
 		io.DeltaTime = flDeltaTime;
+
+		// Issue #69 / D29: draw our own software cursor only when no real
+		// system cursor is doing the job. Where the host draws one (nested,
+		// pointer not grabbed) it is strictly the better cursor -- themed,
+		// DPI-scaled and composited by the host at its own refresh rate,
+		// rather than a plain arrow baked into our texture a frame late. Where
+		// it doesn't (embedded/DRM, OpenVR, or a game holding a pointer lock)
+		// ours is the only cursor there is, so it stays. Assigned every frame,
+		// before NewFrame() reads it, so the two swap cleanly if the mode
+		// changes mid-session (a game grabbing the pointer while the overlay
+		// is open, say).
+		io.MouseDrawCursor = OverlayShouldDrawSoftwareCursor(
+			s_bHostCursorVisible.load( std::memory_order_relaxed ) );
 
 		// D22: ImGui's OWN keyboard navigation is off, unconditionally, and
 		// this is where that is decided.

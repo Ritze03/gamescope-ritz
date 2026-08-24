@@ -566,6 +566,84 @@ launcher nobody asked for.
 *Cheap to reverse:* one early-return block in `Draw()`, one branch in `wlserver.cpp`, and
 `CanAdjust()`. Deleting the branch restores D22.2's behaviour exactly.
 
+## 2026-08-24 (D29 — the system cursor, reversing half of #69)
+
+### D29 · Where a host cursor exists, show it and stop drawing ImGui's — **supersedes part of #69**
+
+The user asked: *"Use the system cursor for ImGui."*
+
+**This deliberately reverses the direction issue #69 settled**, so the reversal is worth stating
+precisely, because #69 was not wrong — it was answering a different question.
+
+#69 found the overlay drawing *two* cursors in nested non-grabbed mode, and fixed it by
+**suppressing the host cursor** (`INestedHints::SetCursorSuppressed`, implemented for SDL and
+Wayland). It explicitly refused the naive fix — deleting ImGui's cursor — because in the other
+two modes ImGui's is the *only* cursor, so deleting it would leave a Steam Deck with none. That
+reasoning is still completely correct and **nothing here contradicts it**.
+
+What #69 got backwards is only *which* of the two survives where both exist. The host cursor is
+the **system** cursor: themed, sized and composited by the host, at the host's own refresh rate,
+and the one the user already recognises. ImGui's is a plain white arrow baked into our texture a
+frame late. Given a free choice between them, the system one wins — and the user asked for
+exactly that.
+
+**Chosen:** invert the preference, keep the guarantee. `SetCursorSuppressed(bool)` is replaced by
+`INestedHints::PresentOverlayCursor(bool) -> bool`: paint_all() tells the backend the overlay owns
+the pointer, and the backend answers whether a real host cursor is consequently on screen. That
+answer drives `ImGuiIO::MouseDrawCursor` via `SettingsOverlay_SetHostCursorVisible()`. Where the
+answer is yes, ImGui stands down. Where it is no, ImGui is exactly the fallback #69 protected.
+
+**The rule for "a host cursor exists"** is `NestedHostCursorUsable()` in the new `src/CursorPolicy.h`:
+a pointer device exists, **and** it is not grabbed, **and** there is a system cursor image to show.
+All three matter and each has a real failure behind it. Under Wayland the third is genuinely
+absent when gamescope started with no X11 display to snapshot the host cursor from
+(`GetX11HostCursor()` returns null).
+
+**Command and query are one call, on purpose.** Two separate calls could disagree on a frame
+where pointer-lock state changed between them, and the *shape* of that disagreement is the
+zero-cursor bug. One answer per frame from the component that owns the state cannot desync.
+
+**Rejected — feeding the system cursor image into gamescope's own composited cursor plane** so
+one path serves every mode. It only sounds unifying: in embedded mode there *is* no host to take
+a system cursor from — gamescope is the system — so the plane would fall back to the game's cursor
+image, which is what `252cbfd` suppressed as a stale ghost in the first place. It would also mean
+rewriting `CursorTexture::paint()`'s positioning inside shared steamcompmgr machinery, where a
+mistake breaks pointer handling for games. Far more risk than the mode-dependent rule, for a
+worse result.
+
+**A real bug was found by testing rather than by reasoning, and it is the reason to trust the
+rest.** Keying "is the pointer grabbed" on Wayland's `m_bPointerLocked` — the host's
+`zwp_locked_pointer_v1::locked` confirmation — looked obviously right and was wrong: with
+`--force-grab-cursor` the confirmation never arrived for a whole overlay session, so the code
+believed the pointer was free, showed the host cursor that the grab had already hidden, and stood
+ImGui down. **Zero cursors — precisely the failure #69 exists to prevent.** Fixed by keying on
+requested-**or**-confirmed (`m_bRelativeMouseRequested || m_bPointerLocked`): any sign of a grab
+keeps ImGui's cursor, because being wrong in that direction costs a redundant cursor and being
+wrong in the other costs all of them.
+
+**Verified live** (nested Wayland, this machine), against a positive control built with
+`MouseDrawCursor` forced on so the measurement itself is proven able to see an ImGui cursor:
+non-grabbed → 0 pointer-following pixels (ImGui off, host cursor serving); `--force-grab-cursor`
+→ 77, matching the control exactly (ImGui back). **Not verified live: embedded (DRM/KMS) and
+OpenVR** — neither exists on this machine. Both take the default `PresentOverlayCursor()`, which
+returns false and therefore keeps ImGui's cursor, i.e. their behaviour is *unchanged* from before
+this commit. That is the same limitation #69's own merge note recorded, and it is stated again
+rather than quietly inherited.
+
+**`display_scale` (0.5×–2.0×): the cursor does not scale, and did not before either.** Measured at
+0.5×/1.0×/2.0×: ImGui's cursor is 77 px at every one — `ImGuiStyle::MouseCursorScale` stays 1.0
+and no gamescope code touches it or calls `ScaleAllSizes()`. So this is not a regression. It is
+also, I think, **correct**: `display_scale` scales the overlay's own UI, but a pointer is a
+system-level affordance the user has already sized once in their desktop settings. Every other
+application on their desktop uses that size; having the pointer resize because one app's UI scaled
+would be the surprising behaviour. If the user disagrees, the fix is `MouseCursorScale`, one line.
+
+**Config keys and formats: unchanged.** No new ConVar, no new config key.
+
+*Cheap to reverse:* `OverlayShouldDrawSoftwareCursor()` in `src/CursorPolicy.h` is the single
+place the preference is expressed. Returning `true` unconditionally restores #69's behaviour
+exactly, without touching either backend.
+
 ---
 
 ## 2026-08-23 (P5 — the deletion, and the flag)
