@@ -7,6 +7,7 @@
 #include "Palette.h"
 #include "UI/Registry.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -123,6 +124,15 @@ namespace gamescope
 		// One merged, filtered view of both buffers. Rebuilt per call; the
 		// per-tab snapshots underneath it are still generation-gated, so an
 		// idle log copies nothing.
+		//
+		// THE TWO RINGS ARE MERGED IN ARRIVAL ORDER, not one after the other.
+		// Appending every gamescope line and then every game line -- which is
+		// what this did before there was anything to order by -- puts the two
+		// streams in separate blocks, so a game line and the gamescope line
+		// that caused it can sit thousands of rows apart. LogCapture::Line's
+		// ulSeq is a single global counter shared by both rings, so sorting on
+		// it restores the true interleaving exactly, with no tie-breaking
+		// needed (two lines can share a millisecond; they cannot share a seq).
 		std::vector<ui::ContentLine> BuildLines()
 		{
 			RefreshBothTabs();
@@ -135,19 +145,39 @@ namespace gamescope
 				if ( !PassesFilters( line, 0 ) )
 					continue;
 				vec.push_back( ui::ContentLine{ ContentSeverity( line.ePriority ),
-					line.sScope.empty() ? std::string( "gamescope" ) : line.sScope, line.sText } );
+					line.sScope.empty() ? std::string( "gamescope" ) : line.sScope, line.sText,
+					line.ulSeq, line.ulRealtimeMs } );
 			}
 			for ( const LogCapture::Line &line : s_GameTab.vecLines )
 			{
 				if ( !PassesFilters( line, 1 ) )
 					continue;
 				vec.push_back( ui::ContentLine{ ContentSeverity( line.ePriority ),
-					std::string( "game" ), line.sText } );
+					std::string( "game" ), line.sText,
+					line.ulSeq, line.ulRealtimeMs } );
 			}
+
+			std::sort( vec.begin(), vec.end(),
+				[]( const ui::ContentLine &a, const ui::ContentLine &b )
+				{ return a.ulSeq < b.ulSeq; } );
 			return vec;
 		}
 
-		size_t CountShown() { return BuildLines().size(); }
+		// Counts WITHOUT building the view. CountShown() feeds the area
+		// summary and a Live fact, both of which run every frame the Log is on
+		// screen -- building (and now sorting) the whole line vector just to
+		// take its size copied every visible string for a number.
+		size_t CountShown()
+		{
+			RefreshBothTabs();
+
+			size_t n = 0;
+			for ( const LogCapture::Line &line : s_GamescopeTab.vecLines )
+				n += PassesFilters( line, 0 );
+			for ( const LogCapture::Line &line : s_GameTab.vecLines )
+				n += PassesFilters( line, 1 );
+			return n;
+		}
 	}
 
 	void PanelLog_RegisterArea( ui::Registry &reg )
@@ -281,5 +311,16 @@ namespace gamescope
 		// ---- the captured text itself ------------------------------------
 		a.Content( []{ return BuildLines(); } );
 		a.FollowsTail( []{ return s_bAutoScroll; } );
+
+		// THE SHEET IS THE LOG. Everything declared above configures the VIEW
+		// -- which sources, which severities, which substring, whether to
+		// follow the tail, and what the capture rings hold -- and none of it
+		// is the thing you opened this screen to read. Stacked above the body
+		// as ordinary sheet rows they took ~360px before the first line of
+		// text (the six-row toolbar the conformance audit flagged as the Log
+		// having become "a different design"). In the Inspector they keep
+		// every property of a row -- grammar, help, reset, palette entry --
+		// and give the whole sheet back to the content.
+		a.RowsInInspector();
 	}
 }

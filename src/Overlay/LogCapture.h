@@ -48,6 +48,24 @@ namespace gamescope::LogCapture
 		LogPriority ePriority = LOG_INFO;
 		std::string sScope;   // LogScope prefix ("console", "reaper", ...); empty for game-tab lines
 		std::string sText;
+
+		// ---- Captured at Push() time, not at display time -----------------
+		// Both of these MUST be recorded when the line arrives: neither can be
+		// reconstructed afterwards, because the ring drops old lines and the
+		// two rings are merged out of order by the panel.
+		//
+		// ulSeq is a GLOBAL monotonic sequence shared by both rings, so it is
+		// unique across the merged view and gives every line a stable number
+		// that does not shift when a filter hides its neighbours or when the
+		// ring evicts an older line. (A per-ring index would do neither.)
+		uint64_t ulSeq = 0;
+
+		// Milliseconds since the Unix epoch (CLOCK_REALTIME), formatted to a
+		// time-of-day column by the panel. Stored as a scalar rather than a
+		// preformatted string to keep the logging path -- which is hot, and
+		// runs under the ring's mutex -- down to one vDSO clock read instead
+		// of a strftime + allocation per line.
+		uint64_t ulRealtimeMs = 0;
 	};
 
 	// A cheap-to-copy snapshot of one ring buffer. ulGeneration bumps every

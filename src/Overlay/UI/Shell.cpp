@@ -46,6 +46,7 @@
 #include "Overlay/PanelAudio.h"
 #include "Overlay/PanelConfig.h"
 #include "Overlay/PanelDisplay.h"
+#include "Overlay/PanelChangelog.h"
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/FpsDisplay.h"
@@ -66,6 +67,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <cstdlib>
 #include <string>
 
@@ -98,6 +100,22 @@ namespace gamescope::ui::shell
 		// Host() / SetHost() are the only accessors.
 		bool          s_bModeOverridden  = false;
 		InspectorMode s_eMode            = InspectorMode::Configure;
+
+		// P6. The selected CONTENT line, by ContentLine::ulSeq, and 0 for
+		// "none". One number, alongside the one selected area and the one
+		// selected row -- it is the same kind of state as s_sSelectedEntry
+		// and is kept here for the same reason: so there is exactly one place
+		// a selection can live.
+		//
+		// It is a SEQ and not an index deliberately. The Log's buffer evicts
+		// old lines and its filters hide others, so the line at index 12
+		// changes identity between frames; selecting a line only to have the
+		// Inspector describe a different one is the bug this avoids.
+		uint64_t      s_ulSelectedLine   = 0;
+
+		// Which of the two content hosts the Inspector is showing. Only ever
+		// consulted for an area whose rows live in the Inspector.
+		bool          s_bContentFilterHost = false;
 
 		// P3: the id of the row whose Choice has downgraded to a dropdown AND
 		// is currently open. One string, because exactly one dropdown can be
@@ -598,6 +616,10 @@ namespace gamescope::ui::shell
 			// own separate context and was never in the redesign's scope.
 			FpsDisplay_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
+			// P6. The second content area: version identity + the embedded
+			// CHANGELOG.md. Sits next to Log because both answer a question
+			// ABOUT the running system rather than configuring it.
+			PanelChangelog_RegisterArea( reg );
 
 			// ---- SETUP ---------------------------------------------------
 			// P3 part B. The Config panel's three tabs became three areas,
@@ -2764,6 +2786,29 @@ namespace gamescope::ui::shell
 			}
 		}
 
+		// A line's time-of-day column. EMPTY when the line carries no
+		// timestamp, which is the whole reason ulTimeMs has 0 as a sentinel:
+		// the rings only started stamping lines when the field was added, so
+		// anything captured before that -- or arriving from a path that does
+		// not stamp -- has no time to show. Rendering 0 through a clock would
+		// print "01:00:00.000", a confident, precise and entirely invented
+		// timestamp. Blank is the honest answer, and it keeps the column
+		// aligned so the text still starts in the same place.
+		std::string ContentTimeText( uint64_t ulTimeMs )
+		{
+			if ( ulTimeMs == 0 )
+				return std::string();
+
+			const std::time_t t = (std::time_t)( ulTimeMs / 1000 );
+			std::tm tm {};
+			localtime_r( &t, &tm );
+
+			char sz[ 16 ];
+			std::snprintf( sz, sizeof( sz ), "%02d:%02d:%02d.%03d",
+				tm.tm_hour, tm.tm_min, tm.tm_sec, (int)( ulTimeMs % 1000 ) );
+			return std::string( sz );
+		}
+
 		void DrawContentBody( const Area &area, const Rect &rcCol, float flTop, float flBottom )
 		{
 			const std::vector<ContentLine> vecLines = area.ContentLines();
@@ -2783,6 +2828,28 @@ namespace gamescope::ui::shell
 				return;
 			}
 
+			// ---- fixed columns ----------------------------------------------
+			// Measured once from the WIDEST value each column can hold, not
+			// per line, so the gutter and the text edge are two straight
+			// vertical lines down the whole body rather than a ragged edge
+			// that shifts as line numbers gain a digit or a stamp goes blank.
+			// This is the same right-binding rule the row lane follows.
+			bool bAnyNumbered = false, bAnyTimed = false;
+			uint64_t ulMaxSeq = 0;
+			for ( const ContentLine &l : vecLines )
+			{
+				bAnyNumbered |= ( l.ulSeq != 0 );
+				bAnyTimed    |= ( l.ulTimeMs != 0 );
+				ulMaxSeq      = ImMax( ulMaxSeq, l.ulSeq );
+			}
+
+			char szWidest[ 24 ];
+			std::snprintf( szWidest, sizeof( szWidest ), "%llu", (unsigned long long)ulMaxSeq );
+			const float flNumW  = bAnyNumbered
+				? MeasureText( TypeRole::Meta, szWidest ).x + Px( tok::kM ) : 0.0f;
+			const float flTimeW = bAnyTimed
+				? MeasureText( TypeRole::Meta, "00:00:00.000" ).x + Px( tok::kM ) : 0.0f;
+
 			ImGui::SetCursorScreenPos( ImVec2( rcBody.x0, rcBody.y0 ) );
 			if ( ImGui::BeginChild( "##content", ImVec2( rcBody.Width(), rcBody.Height() ),
 				ImGuiChildFlags_None,
@@ -2796,13 +2863,86 @@ namespace gamescope::ui::shell
 				clipper.Begin( (int)vecLines.size(), flLineH );
 				while ( clipper.Step() )
 				{
+					// The row origin is captured ONCE per step. It cannot be
+					// read inside the loop: the per-line InvisibleButton that
+					// makes a line selectable advances ImGui's cursor, so
+					// re-reading it each iteration compounds the advance and
+					// every line drifts further down than the last.
+					const float flBaseY = ImGui::GetCursorScreenPos().y;
+
 					for ( int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i )
 					{
 						const ContentLine &line = vecLines[ (size_t)i ];
-						const float y = ImGui::GetCursorScreenPos().y
+						const float y = flBaseY
 						              + (float)( i - clipper.DisplayStart ) * flLineH;
 
+						// ---- selection -----------------------------------
+						// Only numbered content is selectable: a line with no
+						// seq has no identity to remember, so offering to
+						// select it would be offering a selection that cannot
+						// survive the next frame. That is what makes the
+						// Changelog's prose inert here without a second code
+						// path -- it simply carries no seq.
+						const bool bSelectable = ( line.ulSeq != 0 );
+						const bool bSel = bSelectable && line.ulSeq == s_ulSelectedLine;
+						bool bHovered = false;
+
+						if ( bSelectable )
+						{
+							ImGui::SetCursorScreenPos( ImVec2( rcBody.x0, y ) );
+							ImGui::PushID( (int)( line.ulSeq & 0x7fffffffu ) );
+							ImGui::SetNextItemAllowOverlap();
+							if ( ImGui::InvisibleButton( "l",
+								ImVec2( ImMax( 1.0f, rcBody.Width() ), flLineH ) ) )
+							{
+								s_ulSelectedLine = line.ulSeq;
+								// A line and a row are alternative answers to
+								// "what is the Inspector describing", so
+								// taking one clears the other.
+								Select( nullptr );
+								s_bContentFilterHost = false;
+								s_eFocusRegion = Region::Sheet;
+							}
+							bHovered = ImGui::IsItemHovered();
+							ImGui::PopID();
+						}
+
+						// The SAME selected/hover treatment an ordinary row
+						// gets (see DrawEntryRow) -- a log line is a different
+						// kind of content, not a different design language.
+						if ( bSel )
+							Fill( { rcBody.x0, y, rcBody.x1, y + flLineH }, Accent( 0.08f ) );
+						else if ( bHovered )
+							Fill( { rcBody.x0, y, rcBody.x1, y + flLineH },
+							      IM_COL32( 255, 255, 255, 10 ) );
+
 						float x = rcBody.x0 + flPadX;
+
+						// Line number, right-aligned in its column so the
+						// digits line up as the numbers grow.
+						if ( flNumW > 0.0f )
+						{
+							if ( line.ulSeq != 0 )
+							{
+								char szNum[ 24 ];
+								std::snprintf( szNum, sizeof( szNum ), "%llu",
+									(unsigned long long)line.ulSeq );
+								Label( { x, y, x + flNumW - Px( tok::kS ), y + flLineH },
+								       TypeRole::Meta, Col( Role::TextMeta ), szNum,
+								       TextAlign::Right );
+							}
+							x += flNumW;
+						}
+
+						if ( flTimeW > 0.0f )
+						{
+							const std::string sTime = ContentTimeText( line.ulTimeMs );
+							if ( !sTime.empty() )
+								Label( { x, y, x + flTimeW - Px( tok::kS ), y + flLineH },
+								       TypeRole::Meta, Col( Role::TextMeta ), sTime.c_str() );
+							x += flTimeW;
+						}
+
 						if ( !line.sScope.empty() )
 						{
 							const std::string sTag = "[" + line.sScope + "]";
@@ -2896,7 +3036,15 @@ namespace gamescope::ui::shell
 				struct Block { size_t nFirst = 0, nCount = 0; size_t nGroup = 0; int nLines = 0; };
 				std::vector<Block> blocks;
 
-				for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+				// Area::RowsInInspector(): the rows are hosted by the
+				// Inspector, so the sheet packs NOTHING and the content body
+				// below gets the whole region. Skipping the packing loop --
+				// rather than packing and then not drawing -- is what makes
+				// the body start at the top instead of below an invisible
+				// 360px of reserved row space.
+				const bool bRowsElsewhere = pArea->AreRowsInInspector();
+
+				for ( size_t i = 0; !bRowsElsewhere && i < pArea->EntryCount(); ++i )
 				{
 					const size_t nGroup = pArea->GroupOf( i );
 					// A band is emitted when the group index CHANGES, so a
@@ -3400,6 +3548,237 @@ namespace gamescope::ui::shell
 			return DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), szBudget, y );
 		}
 
+		// =================================================================
+		//  The Inspector's two CONTENT hosts (P6)
+		// =================================================================
+		// An area whose rows live in the Inspector (Area::RowsInInspector)
+		// replaces CONFIGURE/DETAILS with LINE/FILTER:
+		//
+		//   LINE   -- what the selected content line is.
+		//   FILTER -- the rows that decide which lines are shown at all.
+		//
+		// Both still obey SPEC §5.2 clause 0: they take a `const Area &` and
+		// read it. Nothing a category registered can place a pixel here; the
+		// Log supplies lines and rows and the shell decides everything about
+		// how either is drawn.
+		void DrawContentModeStrip( const Rect &rc, const Area &area )
+		{
+			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Col( Role::LineRegion ) );
+
+			const float flCloseW = Px( 22.0f ) + Px( tok::kS );
+			const float flCellW  = ( rc.Width() - 2.0f * Px( 14.0f ) - flCloseW ) * 0.5f;
+
+			for ( int i = 0; i < 2; ++i )
+			{
+				const bool bFilter = ( i == 1 );
+				const bool bOn     = ( bFilter == s_bContentFilterHost );
+				const Rect rcCell { rc.x0 + Px( 14.0f ) + i * flCellW, rc.y0,
+				                    rc.x0 + Px( 14.0f ) + ( i + 1 ) * flCellW, rc.y1 };
+
+				ImGui::SetCursorScreenPos( ImVec2( rcCell.x0, rcCell.y0 ) );
+				ImGui::PushID( 200 + i );
+				if ( ImGui::InvisibleButton( "##cmode", ImVec2( rcCell.Width(), rcCell.Height() ) ) )
+					s_bContentFilterHost = bFilter;
+				ImGui::PopID();
+
+				// Same rule as the ordinary strip: the counter is a READOUT of
+				// what depth the selection actually has, computed here, never
+				// a number anyone typed.
+				char szCell[ 48 ];
+				if ( bFilter )
+					snprintf( szCell, sizeof( szCell ), "FILTER  %d", (int)area.EntryCount() );
+				else if ( s_ulSelectedLine )
+					snprintf( szCell, sizeof( szCell ), "LINE  %llu",
+						(unsigned long long)s_ulSelectedLine );
+				else
+					snprintf( szCell, sizeof( szCell ), "LINE" );
+
+				if ( s_eFocusRegion == Region::Inspector && s_nInspectorFocus < 0 )
+					Fill( { rcCell.x0, rcCell.y0, rcCell.x1, rcCell.y1 }, Accent( 0.10f ) );
+
+				Label( rcCell, TypeRole::Section,
+				       bOn ? Col( Role::AccentSeg ) : Col( Role::TextLabel ),
+				       szCell, TextAlign::Center );
+				if ( bOn )
+					Fill( { rcCell.x0, rcCell.y1 - Px( 2.0f ), rcCell.x1, rcCell.y1 },
+					      Col( Role::AccentBase ) );
+			}
+
+			const Rect rcClose { rc.x1 - Px( 14.0f ) - Px( 22.0f ), rc.y0, rc.x1 - Px( 14.0f ), rc.y1 };
+			ImGui::SetCursorScreenPos( ImVec2( rcClose.x0,
+				rcClose.y0 + ( rcClose.Height() - Px( 22.0f ) ) * 0.5f ) );
+			if ( ImGui::InvisibleButton( "##cinspclose", ImVec2( Px( 22.0f ), Px( 22.0f ) ) ) )
+				SetHost( InspectorHost::Hidden );
+			Label( rcClose, TypeRole::Meta,
+			       ImGui::IsItemHovered() ? Col( Role::TextPrimary ) : Col( Role::TextMeta ),
+			       "x", TextAlign::Center );
+		}
+
+		// ---- LINE: what the selected content line is ----------------------
+		float DrawContentLine( const Rect &rc, const Area &area )
+		{
+			const float flPad = Px( tok::kInspectorPad );
+			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
+			float y = rcIn.y0;
+
+			if ( !s_ulSelectedLine )
+			{
+				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
+					"No line selected. Click a line in the log to see what it is.", y );
+			}
+
+			const std::vector<ContentLine> vecLines = area.ContentLines();
+			const ContentLine *pLine = nullptr;
+			for ( const ContentLine &l : vecLines )
+				if ( l.ulSeq == s_ulSelectedLine )
+					pLine = &l;
+
+			if ( !pLine )
+			{
+				// The selection is real but currently filtered out or evicted.
+				// Saying which is far more useful than showing nothing -- the
+				// line number is still on screen in the strip.
+				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
+					"That line is no longer in view -- the current filter hides it, or the "
+					"capture buffer has since dropped it.", y );
+			}
+
+			char szTitle[ 48 ];
+			std::snprintf( szTitle, sizeof( szTitle ), "line %llu",
+				(unsigned long long)pLine->ulSeq );
+			Label( { rcIn.x0, y, rcIn.x1, y + Px( 18.0f ) }, TypeRole::Title,
+			       Col( Role::TextPrimary ), szTitle );
+			y += Px( shelltok::kTitleLine );
+
+			// The text itself, in the severity colour it has in the body, so
+			// the Inspector and the line agree at a glance.
+			y = DrawWrapped( rcIn, TypeRole::Body, SeverityColor( pLine->nSeverity ),
+			                 pLine->sText.c_str(), y );
+			y += Px( tok::kM );
+
+			HLine( rcIn.x0, rcIn.x1, y, Col( Role::Line ) );
+			y += Px( tok::kS );
+			Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
+			       Col( Role::TextMeta ), "FACTS" );
+			y += Px( shelltok::kSectionLine );
+
+			static const char *kSeverityName[] = { "info", "debug", "warn", "error" };
+			const std::string sTime = ContentTimeText( pLine->ulTimeMs );
+
+			const std::pair<const char *, std::string> facts[] = {
+				{ "time",     sTime.empty() ? std::string( "not recorded" ) : sTime },
+				{ "severity", kSeverityName[ std::clamp( pLine->nSeverity, 0, 3 ) ] },
+				{ "source",   pLine->sScope.empty() ? std::string( "--" ) : pLine->sScope },
+			};
+
+			for ( const auto &f : facts )
+			{
+				Label( { rcIn.x0, y, rcIn.x1, y + Px( 18.0f ) }, TypeRole::Meta,
+				       Col( Role::TextMeta ), f.first );
+				Label( { rcIn.x0, y, rcIn.x1, y + Px( 18.0f ) }, TypeRole::Meta,
+				       Col( Role::TextBody ), f.second.c_str(), TextAlign::Right );
+				y += Px( 22.0f );
+			}
+
+			return y;
+		}
+
+		// ---- FILTER: the rows that decide what the body shows -------------
+		float DrawContentFilter( const Rect &rc, const Area &area )
+		{
+			const float flPad = Px( tok::kInspectorPad );
+			const Rect  rcIn  { rc.x0 + flPad, rc.y0 + flPad, rc.x1 - flPad, rc.y1 };
+			float y = rcIn.y0;
+
+			const Lane lane = Lane::ForColumn( rcIn.Width() / Scale() );
+
+			// The rows are drawn with the SAME grammar as the sheet's -- same
+			// lane, same 44 height, same selected fill, same controls. That is
+			// the point of hosting rather than reimplementing: moving a row
+			// between regions must not change what it is.
+			size_t nLastGroup = (size_t)-1;
+			// Whether the selected row is one of THIS area's -- decided while
+			// walking the rows we are already walking, rather than by adding
+			// an Entry->Area accessor for one comparison.
+			bool bSelectedIsOurs = false;
+			for ( size_t i = 0; i < area.EntryCount(); ++i )
+			{
+				const size_t nGroup = area.GroupOf( i );
+				if ( nGroup != nLastGroup && nGroup < area.Groups().size() )
+				{
+					const Rect rcCol { rcIn.x0, y, rcIn.x0 + Px( lane.flWidth ), rc.y1 };
+					y = DrawGroupBand( area, nGroup, rcCol, y );
+					nLastGroup = nGroup;
+				}
+
+				const Entry &entry = area.EntryAt( i );
+				const bool bSel = ( SelectedEntry() == &entry );
+				bSelectedIsOurs |= bSel;
+
+				// No affordance column: SPEC §2.4's chevron advertises that
+				// there is depth BEHIND a row, and inside the Inspector you
+				// are already in that depth.
+				if ( DrawEntryRow( entry, lane, rcIn.x0, y, bSel, false ) )
+				{
+					Select( &entry );
+					s_eFocusRegion = Region::Inspector;
+				}
+				y += Px( tok::kRowH ) * (float)LinesFor( entry );
+			}
+
+			// The selected row's help and its reset, beneath the list. This is
+			// the substance of CONFIGURE without a third mode cell: help is
+			// required by law so it is never empty, and reset is the one
+			// action a filter row actually needs.
+			if ( const Entry *pSel = SelectedEntry() )
+			{
+				if ( bSelectedIsOurs )
+				{
+					y += Px( tok::kM );
+					HLine( rcIn.x0, rcIn.x1, y, Col( Role::Line ) );
+					y += Px( tok::kS );
+
+					Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
+					       Col( Role::TextMeta ), pSel->Title().c_str() );
+					y += Px( shelltok::kSectionLine );
+
+					y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextBody ),
+					                 pSel->HelpText().c_str(), y );
+
+					const std::string sReason = pSel->DisabledReason();
+					if ( !sReason.empty() )
+					{
+						y += Px( tok::kS );
+						y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::WarnText ),
+						                 sReason.c_str(), y );
+					}
+
+					if ( pSel->HasDefault() && !pSel->IsAtDefault() )
+					{
+						y += Px( tok::kS );
+						const char *pszReset = "reset";
+						const float flResetW =
+							MeasureText( TypeRole::Meta, pszReset ).x + Px( tok::kS ) * 2.0f;
+						const Rect rcReset { rcIn.x0, y, rcIn.x0 + flResetW, y + Px( 20.0f ) };
+						ImGui::SetCursorScreenPos( ImVec2( rcReset.x0, rcReset.y0 ) );
+						ImGui::PushID( "##cfgreset" );
+						const bool bReset = ImGui::InvisibleButton( "r",
+							ImVec2( rcReset.Width(), rcReset.Height() ) );
+						const bool bHover = ImGui::IsItemHovered();
+						ImGui::PopID();
+						Label( rcReset, TypeRole::Meta,
+						       bHover ? Col( Role::AccentBase ) : Col( Role::TextMeta ),
+						       pszReset, TextAlign::Center );
+						if ( bReset )
+							pSel->ResetToDefault();
+						y += Px( 22.0f );
+					}
+				}
+			}
+
+			return y;
+		}
+
 		void DrawInspector( const Regions &regions, const LadderResult &ladder )
 		{
 			const Entry *pEntry = SelectedEntry();
@@ -3439,7 +3818,15 @@ namespace gamescope::ui::shell
 				VLine( regions.rcInspector.x0, regions.rcInspector.y0, regions.rcInspector.y1,
 				       bDrawer ? Col( Role::AccentBase ) : Col( Role::LineRegion ) );
 
-				DrawModeStrip( regions.rcModeStrip, pEntry );
+				// P6. A content area whose rows live here shows LINE/FILTER
+				// instead of CONFIGURE/DETAILS -- see DrawContentModeStrip.
+				const Area *pContentArea = SelectedArea();
+				const bool  bContentHost = pContentArea && pContentArea->AreRowsInInspector();
+
+				if ( bContentHost )
+					DrawContentModeStrip( regions.rcModeStrip, *pContentArea );
+				else
+					DrawModeStrip( regions.rcModeStrip, pEntry );
 
 				ImGui::SetCursorScreenPos( ImVec2( regions.rcInspectorBody.x0, regions.rcInspectorBody.y0 ) );
 				if ( ImGui::BeginChild( "##inspbody",
@@ -3484,7 +3871,11 @@ namespace gamescope::ui::shell
 					const Rect rcBody = view.rcBody;
 
 					float flBottom = view.flOriginY;
-					if ( !pEntry )
+					if ( bContentHost )
+						flBottom = s_bContentFilterHost
+							? DrawContentFilter( rcBody, *pContentArea )
+							: DrawContentLine( rcBody, *pContentArea );
+					else if ( !pEntry )
 						flBottom = DrawOverview( rcBody, SelectedArea() );
 					else if ( CurrentMode( pEntry ) == InspectorMode::Configure )
 						flBottom = DrawConfigure( rcBody, *pEntry );

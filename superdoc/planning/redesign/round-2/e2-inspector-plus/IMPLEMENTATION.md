@@ -10,6 +10,114 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-24 — the Log becomes content, and a Changelog area
+
+**Why:** the conformance audit's only *substitution* finding (divergence 2) — the Log
+was "a different design, not a thinner one". Its filter toolbar had become six
+full-height sheet rows eating ~360px before any log text, and the body had lost line
+numbers, timestamps, severity colour and selection. The user's instruction went one
+step past the mockup: the filters do not go back into a toolbar, they go into the
+**Inspector**. Decisions: `../../AUTONOMOUS-DECISIONS.md` **D28**.
+
+### Rows can now be hosted by the Inspector
+
+`Area::RowsInInspector()` (`Registry.h`, additive) marks a content area whose rows are
+drawn by the **Inspector** rather than the sheet. `DrawSheetBody` skips the packing loop
+entirely for such an area — skipping the *packing*, not just the drawing, is what lets
+the content body start at the top instead of below 360px of reserved-but-invisible row
+space.
+
+The Inspector then swaps `CONFIGURE`/`DETAILS` for two content hosts:
+
+| cell | body | what it draws |
+| --- | --- | --- |
+| `LINE` | `DrawContentLine` | the selected line: text in its severity colour, then `time` / `severity` / `source` |
+| `FILTER` | `DrawContentFilter` | the area's rows, in the ordinary row grammar, plus the selected row's help and reset |
+
+`DrawContentFilter` reuses `DrawEntryRow` with the same lane, height, controls and
+selected fill as the sheet. Moving a row between regions must not change what it *is*,
+which is the whole reason this is hosting rather than a second implementation. Both
+bodies take a `const Area &` and read it — SPEC §5.2 clause 0 is intact, and this is
+**not** `Escape()` returning: the flag is a bool the shell reads, not a draw callback.
+
+### Per-line identity and time are captured, not derived
+
+Neither could be added at draw time. The ring **evicts** lines, so a positional index is
+not a stable identity; and `LogCapture::Line` had **no timestamp field at all**.
+
+- `LogCapture::Line` gains `ulSeq` and `ulRealtimeMs`, stamped in `Push()` *outside* the
+  ring's mutex. `ulSeq` comes from **one global atomic shared by both rings** — per-ring
+  counters would give two lines the same number in a merged view.
+- `ui::ContentLine` gains `ulSeq` and `ulTimeMs`, both `0` meaning "this content has no
+  such thing". That single sentinel is why the Changelog's prose is non-numbered and
+  non-selectable with no second code path.
+
+**A line with no timestamp draws a blank column, not a zero.** The rings only started
+stamping when the field was added; rendering `0` through a clock prints `01:00:00.000`,
+which is a precise, confident, invented time. The column keeps its width so following
+text stays aligned; the LINE host spells it out as `not recorded`.
+
+**Two things fell out of the sequence.** The merged view now sorts by `ulSeq`, so the two
+rings interleave in **true arrival order** — previously it appended all gamescope lines
+then all game lines, which could put a game line and the gamescope line that caused it
+thousands of rows apart. And `CountShown()` no longer builds the whole line vector just
+to take its size; it runs every frame via the area summary and a Live fact.
+
+### The Changelog area
+
+`system.changelog`, registered next to Log because both answer a question *about* the
+running system rather than configuring it. Three fact rows (`gamescope`,
+`gamescope-ritz`, `Changelog`) over the embedded `CHANGELOG.md` as a content body,
+`FollowsTail(false)` because a changelog is read from the top.
+
+**Where the text comes from:** embedded at build time by
+`Overlay/embed_changelog.py` into `Changelog.h` — the generated-header shape already used
+for fonts and shaders. An embedded copy cannot be a different vintage than the binary
+showing it, needs no install-path search, and costs no I/O on the render thread. A tree
+*without* `CHANGELOG.md` still builds: the generator emits a placeholder and sets
+`g_Changelog_Present = false`. That is why the path is a command **argument** rather than
+a meson `files()` input — `files()` would hard-fail configure and make the graceful path
+unreachable. Rendered verbatim as plain text; there is no Markdown renderer and a
+half-parsed document reads worse than an honest unparsed one.
+
+**Where the versions come from** (`src/meson.build` → `RitzVersion.h`): gamescope's own
+`k_szGamescopeVersion` cannot answer "which upstream is this built on" — no tags, no
+`project()` version, so `git describe` degrades to a bare hash of the *fork's* tip.
+
+- **base** — upstream `fcc1341`, a recorded fact with no in-tree derivation (nothing to
+  describe it, and `origin` is the fork, not ValveSoftware). Stated once and then
+  **verified** with `git merge-base --is-ancestor`. If the fork is ever rebased onto a
+  newer upstream the check fails and the UI reports `unknown — recorded base is not in
+  this history` with a `verified: NO` fact, rather than printing a commit that is no
+  longer the base.
+- **patch** — `YYYY-MM-DD` from **HEAD's commit date**, not the wall clock, so two builds
+  of one tree agree. A trailing `+` marks a dirty tree.
+
+### Verified
+
+Build clean; `meson test -C build` **68/68** (the icon-coverage test's hardcoded rail
+list gained `system.changelog`). Driven through `overlay_e2_select` / `overlay_e2_pointer`
+under `with-gamescope-lock.sh`, screenshotted with `grim -g` bounded to the run's own
+window by PID. No `ydotool`.
+
+### Known rough edge, recorded rather than hidden
+
+The Inspector lane is narrower than the sheet's, so the `Buffer` facts row truncates its
+value mid-word (`51 lines · 2 er:`). That is the audit's divergence **10** — hard clipping
+with no ellipsis — which is shell-wide and pre-existing; hosting rows in a narrower region
+makes it more visible without being its cause.
+
+### Not done, deliberately
+
+The mockup's Log inspector also carries a **KNOWN PATTERN** paragraph and a
+**`filter to <source>`** action. Neither was built. The first is a table of canned
+explanations matched against log text, which rots silently as upstream messages change and
+fails by confidently explaining the wrong thing — a feature with its own design, not a
+rendering detail. The second needs an Inspector action that *writes* a row's value, a
+capability the design does not have yet.
+
+---
+
 ## 2026-08-24 — the standalone launcher
 
 **Why:** `Left Ctrl + Right Ctrl` opened the palette *inside* the shell, so the rail,

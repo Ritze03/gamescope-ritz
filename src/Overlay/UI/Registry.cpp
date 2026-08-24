@@ -459,6 +459,12 @@ namespace gamescope::ui
 		return *this;
 	}
 
+	Area &Area::RowsInInspector()
+	{
+		m_bRowsInInspector = true;
+		return *this;
+	}
+
 	// ---- dynamic areas (P3b) --------------------------------------------
 	// See Registry.h's Rebuilds() comment for why this exists and what it
 	// costs.

@@ -133,6 +133,20 @@ namespace gamescope::ui
 			Line( { 3.5f, 15.5f }, { 14.5f, 15.5f } ),
 			Line( { 3.5f, 20.5f }, { 10.5f, 20.5f } ) } },
 
+		{ "system.changelog", 6, {
+			// Three DATED ENTRIES: a filled bullet with a rule beside it,
+			// three times. Deliberately read against its two neighbours --
+			// Log is four ragged rules with no bullets (a stream of text),
+			// Per-game is a page outline with a folded corner (a file). This
+			// is neither: it is a LIST of discrete entries, which is what a
+			// changelog is, and the bullets are what say so at 12 px.
+			Bar( 4.0f, 5.0f, 6.5f, 7.5f ),
+			Line( { 9.5f, 6.25f }, { 20.5f, 6.25f } ),
+			Bar( 4.0f, 10.75f, 6.5f, 13.25f ),
+			Line( { 9.5f, 12.0f }, { 20.5f, 12.0f } ),
+			Bar( 4.0f, 16.5f, 6.5f, 19.0f ),
+			Line( { 9.5f, 17.75f }, { 16.5f, 17.75f } ) } },
+
 		// ---- SETUP --------------------------------------------------------
 		{ "setup.profiles", 2, {
 			// Two offset cards -- the "one of several saved copies" mark.

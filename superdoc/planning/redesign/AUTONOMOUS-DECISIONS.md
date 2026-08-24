@@ -10,6 +10,127 @@ cheap.
 
 ---
 
+## 2026-08-24 — D28 · The Log becomes its own content, and a Changelog area
+
+Both halves were asked for by the user directly; what follows are the calls taken *inside* those
+two instructions, where the instruction did not say how.
+
+### D28.1 · A content area's rows can be hosted by the Inspector
+
+**The user:** *"The Log screen needs some rework, so it is more compact. I suggest showing the
+full log by default and having a 'Filter' switch, which contains settings like sources, severity,
+text filter, auto-scroll in the 'Shell'/Sidebar/Inspector. Then move the diagnostic into there
+too."*
+
+**Chosen:** a new **area-level** flag, `Area::RowsInInspector()` (`Registry.h`). A content area
+declaring it draws no rows in the sheet at all — the sheet is the content body, full height — and
+the Inspector hosts the rows instead, behind a **FILTER** cell paired with a **LINE** cell. They
+stay *ordinary rows*: same grammar, same lane, same required help, same reset, same palette
+entries. Only the region that draws them changes.
+
+**Why area-level and not per-row.** A per-row `.InInspector()` would let an area scatter half its
+controls into the Inspector and leave the rest in the sheet — a layout nobody would choose
+deliberately, and one that makes "where is that setting" unanswerable. Hosting is one decision
+about one screen's shape, so it is one flag on the screen.
+
+**Why this is not `Escape()` returning.** P5 deleted `Area::Escape()` because it handed a call
+site the sheet's own window and let it run arbitrary ImGui. This flag hands over *nothing*; it is a
+bool the shell reads. The Log still cannot place a pixel, and `DrawContentFilter` takes a
+`const Area &` and reads it, exactly like every other Inspector body.
+
+**Rejected — a `Kind::FilterBar` control that packs the four filters onto one line.** This is what
+`index.html` actually draws, and it was the obvious way to satisfy "more compact" without touching
+the Inspector. Rejected because the user explicitly named the Inspector as the destination, and
+because it would have invented a *sixth* row height to hold a bank, a text field and a switch on
+one 44-tall line — the exact class of invention the conformance audit counted against Monitor.
+
+### D28.2 · `ContentLine` carries identity and time; `LogCapture::Line` records them
+
+Line numbers, timestamps and per-line selection were all in the mockup and all absent from the
+build. None could be added at draw time: the ring **evicts** old lines, so a positional index is
+not stable, and `LogCapture::Line` had **no timestamp field at all** — a timestamp that was never
+recorded cannot be recovered later.
+
+**Chosen:** `LogCapture::Line` gains `ulSeq` (a single global atomic shared by *both* rings) and
+`ulRealtimeMs`, both stamped at `Push()` time, outside the ring's mutex. `ui::ContentLine` gains
+`ulSeq` and `ulTimeMs`, both defaulting to `0` meaning "this content has no such thing" — the
+Changelog's prose has neither.
+
+**Why one global sequence rather than one per ring:** the panel merges the two buffers into one
+view, so per-ring counters would give two different lines the same number.
+
+**Why a scalar timestamp rather than a preformatted string:** formatting is presentation, so it
+belongs to the shell — the same split `nSeverity` already has (a scale here, a colour only once
+the shell maps it). It also keeps `strftime` off the logging path.
+
+**What a line with no timestamp shows: nothing.** `0` is the "not recorded" sentinel, and the two
+rings only started stamping when the field was added, so lines captured before that — or arriving
+from any path that does not stamp — genuinely have no time. Rendering `0` through a clock would
+print `01:00:00.000`: a precise, confident and entirely invented timestamp, which is worse than an
+absent one. The column is left blank and keeps its width, so the text after it stays aligned. The
+Inspector's LINE host says `not recorded` in full, because there it has room to.
+
+**Side effect, deliberate:** with a global sequence the two rings are now merged in **true arrival
+order** instead of "all gamescope lines, then all game lines". The old order could put a game line
+and the gamescope line that caused it thousands of rows apart.
+
+### D28.3 · Issue #81's Copy button stays disabled
+
+Unchanged from its existing treatment, and re-affirmed rather than quietly fixed: no clipboard
+handler is wired for the overlay's ImGui context, so `SetClipboardText()` reaches an internal
+buffer only ImGui can read. A real fix means offering a `wl_data_source` selection on gamescope's
+own seat — a feature with its own design questions, not a line of code. The row therefore ships
+**disabled with a stated reason**. A button that looks right and silently does nothing is issues
+#25 and #68, which is what this redesign exists to stop.
+
+### D28.4 · `CHANGELOG.md` is embedded at build time, not read from disk
+
+**Chosen:** a `custom_target` runs `Overlay/embed_changelog.py`, which emits the file's bytes as a
+C array (the same generated-header shape already used for fonts and shaders).
+
+**Why, over reading an installed copy at runtime:** (1) an embedded copy **cannot disagree with
+the binary** — the screen's entire job is to say what *this* build contains, and a file read at
+runtime can be a different vintage than the process reading it; (2) no install-path search, and so
+no "not found" state on a screen whose purpose is to answer a question; (3) no file I/O on the
+render thread, which is the same reason `LogCapture` hands the UI a snapshot. Cost is ~24 kB of
+rodata and one build rule.
+
+**When it is missing:** the script does **not** fail the build. It embeds a short placeholder
+saying the changelog was not present in the source tree, and sets `g_Changelog_Present = false` so
+the UI can distinguish "this build has no changelog" from "the changelog says nothing". The path is
+passed as an *argument* rather than a meson `files()` input precisely so that this path is
+reachable — `files()` would hard-fail configure instead.
+
+**Rendering it:** plain text, **verbatim**, one source line per `ContentLine`. The overlay has no
+Markdown renderer and adding one for a single document would be the most expensive possible answer.
+`CHANGELOG.md` is already written to be read as plain text — that is what Markdown is for. Markers
+are *not* stripped: a half-parsed document ("some markers removed, others not") reads worse than an
+honest unparsed one, and stripping them is a formatting decision that belongs to the shell anyway.
+
+### D28.5 · Where the two version numbers come from
+
+**Neither is typed into the source.** `k_szGamescopeVersion` cannot answer "which upstream is this
+built on": the fork carries no tags and the top-level `project()` declares no version, so
+`git describe --always --tags` degrades to a bare short hash describing the *fork's* tip.
+
+- **Base gamescope version** — the upstream commit `fcc1341`. This is a *recorded fact with no
+  in-tree derivation*: there are no tags to describe it, and `origin` points at the fork itself
+  rather than at ValveSoftware/gamescope, so no remote can be consulted. It is therefore stated
+  **once**, in `src/meson.build`, and then **verified** against git rather than trusted.
+- **gamescope-ritz version** — `YYYY-MM-DD` from **HEAD's commit date**, not the wall clock. A build
+  date would change every time anyone rebuilt an unchanged tree, so two builds of the same source
+  would disagree and the number would answer "when did you compile" instead of "what are you
+  running". A trailing `+` marks a dirty tree.
+
+**When the recorded base goes stale** — i.e. someone rebases the fork onto a newer upstream and
+`fcc1341` stops being an ancestor of HEAD — the build **detects it**
+(`git merge-base --is-ancestor`) and the UI says `unknown — recorded base is not in this history`,
+with a `verified: NO — fork was rebased; base is stale` fact beside it. Printing the recorded
+commit anyway would make the screen lie, and a version string that silently goes stale is worse
+than one that admits it.
+
+---
+
 ## 2026-08-24 (D26 — three defects the user reported by looking at it)
 
 All three came from the user watching the shell run, and two of them are the same lesson:
