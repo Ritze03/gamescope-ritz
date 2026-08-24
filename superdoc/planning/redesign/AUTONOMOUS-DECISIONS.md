@@ -10,6 +10,160 @@ cheap.
 
 ---
 
+## 2026-08-24 (D27 — four control/binding fixes from user feedback)
+
+### D27 · Six calls taken implementing the user's four control requests
+
+The four requests, verbatim:
+
+1. *"The FSR/NIS sharpness are individual values right now. Combine them, so it is just the
+   sharpness (when switching between filters, it resets to 0%)."*
+2. *"The UI scale should update, when the slider is released. Otherwise, it is almost
+   impossible, to adjust."*
+3. *"Add sensible step sizes for all sliders, so they have up to 100 individual positions. It
+   should allow, to set even values more easily. If no steps are needed, dont include them."*
+4. *"Notification position selection should look the same as the system monitors placement"*
+
+Build clean, **68/68** meson tests plus four new cases (two in `overlay_atoms`, two in
+`overlay_ui`). Five commits, one per item plus one for D27.5 below.
+
+**D27.1 · There was never a second sharpness value, so nothing was merged — the reset is the
+whole change.** The premise of request 1 is that two values exist. They do not: one global
+(`g_upscaleFilterSharpness`), one config key (`gamescope.sharpness`), one registered row. What
+made it *read* as two per-filter values is that the displayed percentage jumped whenever the
+filter changed (see D27.5). `SetFilter()` now writes 0% on an **actual** filter change.
+**Rejected:** carrying the percentage across the switch by re-encoding it into the new filter's
+raw value. 80% of RCAS and 80% of NIS are not the same amount of sharpening, so carrying it over
+silently applies a strength the user never chose for that pass; resetting is unambiguous at both
+ends, and it is what was asked for. Guarded on an actual change so that re-selecting the
+already-active filter — a click on the lit segment, a config push that resolves to the same
+value — cannot wipe a sharpness just set. *Config:* only one key exists, so the "what does a
+config carrying both mean" question has no subject; nothing on disk changed.
+
+**D27.2 · The UI-scale drag has NO preview at all, and the deferral flushes from the shared atom
+prologue.** `overlay.display_scale` is the one setting whose value decides the geometry of the
+control editing it, so a live apply slides the track out from under the pointer. The stored value
+still moves every frame — the row's readout tracks the pointer — but the *apply* (live-theme
+push, disk write, atlas re-bake request) is handed to `controls::DeferToRelease()` and runs once,
+on the first frame nothing is held.
+
+**Rejected: keeping a corrected mid-drag preview.** The preview is #54's entire bug surface —
+`FontGlobalScale` multiplies on top of the *baked* atlas scale rather than 1.0, so a per-tick
+preview drifts and needs a `BuiltScale()` division to compensate. Not previewing deletes the
+class instead of compensating for it a second time; it is also what the user asked for, and a
+live readout already supplies the feedback a preview was there to give.
+
+**Rejected: deferring only the re-bake.** `palette::g_LiveTheme.flDisplayScale` is what every
+rect in the kit multiplies by, so leaving *that* live still moves the track mid-drag. The whole
+apply had to move, which is why `ApplyDisplayScale()` exists as one function.
+
+*Why the flush lives in the atoms' shared prologue and not in the slider:* a drag can end
+anywhere — the pointer leaves the row, the value stops changing so the slider stops calling
+`Set()`, the sheet scrolls, the overlay closes. Every atom on screen runs that prologue every
+frame, so the pending write cannot be stranded by *where* the release happened, and it still
+cannot run mid-drag because the condition is "nothing is held". *#51 is untouched:* the setter
+only **requests** the re-bake; `fonts::PumpRequestedRebuild()` performs it at the top of the next
+frame, so no atlas is swapped inside a frame and nothing rebuilds off-thread.
+
+*One subtlety worth recording, because it cost a test failure:* ImGui takes `ActiveId` **during**
+the frame a press lands, so a frame-start-only view of "is anything active" reads false on
+exactly the frame a click-and-drag begins — and the press, which jumps the value to the click
+point, would apply immediately. `NoteDragOnLastItem()` runs after each slider's behaviour, where
+the truth is, and may only ever *raise* the flag; clearing stays the prologue's job, once a frame.
+
+**D27.3 · The step quantises the DRAG only, and it lives in the binding, not the widget.**
+`controls::Slider()` computes its value straight from the pointer's x and knows nothing about a
+registration, so the grid could not go there without changing `Shell.cpp` (another agent's file
+this session). Putting it in `AnyBind::SnapDragsTo()`, applied by `Entry::Step()`/
+`Parameter::Step()`, is better than that anyway: it sits on the one path every route to the value
+already shares, so a round number is what reaches the config **file**, not merely what the label
+prints, and there is no second copy of the step.
+
+**Only the drag** is snapped. A drag is the only route that can produce an off-grid value at all
+— `AdjustValue()` already moves by exactly the declared step, the reset chip writes the declared
+default verbatim, and a console write is someone naming a number on purpose. Snapping those too
+would cost three real things and buy nothing: an off-grid **default** would become unreachable
+(`display.sdr_on_hdr_brightness` defaults to 203 nits on a 10-nit grid, and a reset chip that
+cannot restore its own default is worse than a coarse drag); SPEC §3.4's **Shift = fine adjust**
+would become a dead key on every stepped slider, which is precisely the defect D24 found on
+`display.sharpness`; and `overlay_e2_set` would stop being able to set the value it was told,
+which is the tool the tests use to prove a binding drives anything.
+
+Steppers are excluded (gated on `Kind::Slider`): a Stepper's step *is* its arithmetic, and D13.3
+records that an `fps_limit` of 144 from an old config must keep working.
+
+Steps are per-slider, from range and meaning — 0.05 for 0–1 amounts and scale multipliers, 0.1 s
+for the adaptation speeds, 1 px for pixel sizes, 10 nits for brightness, 5% for volume — and
+every range's declared bounds are multiples of its own step, so the zero-anchored grid contains
+both ends and no clamp is needed. **"If no steps are needed, don't include them" excluded
+nothing**, and that is a finding rather than an oversight: every remaining slider is either
+float-continuous or has more than 100 integer values (`audio.volume` is 151, the monitor margins
+129). Re-audited every declared range against what its binding can actually represent, per D24's
+21-notches-behind-a-0..100-range defect: sharpness was the only instance, already fixed, and the
+HDR setters' own internal floors all sit at or below their declared minima.
+
+**D27.4 · Notification placement REUSES the Monitor's composite; it does not copy it.** The row
+declares P3c's existing `Kind::Composite` / `CompositeKind::Anchor`, so `monitor.anchor` and
+`overlay.notification_placement` are two declarations of one control and cannot drift about what
+an anchor looks like. It gets **no margins**, unlike the Monitor's: `OverlaySettings` has no
+notification-margin key, and inventing one would be the config-schema change this work may not
+make. `CompositeValue()`'s margin line is already conditional on `ParamCount() >= 2`, so a
+Params-free grid renders correctly. The stored string and its format are unchanged.
+
+**D27.5 · THE FSR SHARPNESS MAPPING WAS INVERTED. Corrected — this contradicts DECISIONS.md #11
+and D13, and needs the user's eyes.** Found while proving, as the task required, that sharpness
+drives the compositor at both filters. It does — but under FSR it drove it backwards:
+`Sharpness 0%` selected raw 0, which is *maximum* sharpening.
+
+The UI carried a per-filter direction flip on the belief that FSR and NIS remap raw 0..20 in
+opposite visual directions, a claim the old code comment called "verified empirically" against
+screenshots. Three independent sources say otherwise, and agree with each other:
+
+* `main.cpp`'s own `--help`: *"--sharpness, --fsr-sharpness   upscaler sharpness from 0 (max) to
+  20 (min)"*.
+* `rendervulkan.cpp`: RCAS receives `g_upscaleFilterSharpness / 10.0f`, which `ffx_fsr1.h` turns
+  into `2^-x` — **stops of reduction**, so raw 0 is unattenuated. NIS receives
+  `(20 - raw) / 20.0f`, a 0..1 strength, so raw 0 is 1.0. Different arithmetic, same direction.
+* Measured on this build, five `full_composition` screenshots per setting (a single frame each
+  would compare two scenes of an animated client, not two settings), mean `FIND_EDGES` energy
+  over the whole 1920×1080 frame:
+
+  | raw | 0 | 10 | 20 |
+  |---|---|---|---|
+  | FSR median | 1.647 | 1.136 | 1.083 |
+  | NIS median | 1.387 | 1.415 | 1.094 |
+
+  Edge energy tracks the **raw** value and nothing else, identically under both filters. The FSR
+  groups do not overlap.
+
+After the correction, re-measured: FSR 0/50/100% → 1.091 / 1.147 / 1.547; NIS 0/50/100% → 1.137 /
+1.291 / 1.634. "Higher percent = sharper" now holds at both filters, on near-identical curves.
+
+**Why this was fixed rather than only reported**, despite contradicting a recorded decision: it
+is what D27.1 depends on. With the FSR branch inverted, *"resets to 0%"* means "jumps to maximum
+sharpening", which is the opposite of the request. It ships as its **own commit** so it can be
+reverted alone. *Visible consequence, stated plainly:* an unchanged config now reads differently
+— the stock raw 2 displays as 90%, not 10%, because raw 2 really is near-maximum sharpening.
+Nothing on disk changed; only the number shown for it.
+
+**D27.6 · Screenshots were taken with gamescope's own `screenshot` command, not `grim`.** The
+task asked for `grim -g` bounded to this instance's window via `hyprctl clients -j`. That was
+tried and **it captured the user's browser**: on this shared desktop `grim` reads the host
+compositor's output, so a correctly-computed window rectangle still returns whatever window is on
+top, and this instance's window is not focused (raising it would need `hyprctl dispatch`, which is
+forbidden). `gamescopectl screenshot <path> 3` captures **this compositor's own composition**, so
+it cannot contain anyone else's window — and type 3 (`full_composition`) is the only type that
+runs `vulkan_composite()`, hence the only one containing both the overlay and the upscale/sharpen
+pass being measured (DECISIONS.md records the same type-3 requirement for the ReShade work). The
+stray captures were deleted immediately.
+
+*Config safety, verified on disk rather than on screen:* a hand-written `global.json` with
+non-canonical formatting was loaded, the shell opened, five areas walked, three values read back,
+and the file re-hashed — `sha256` and `mtime` both **unchanged**, so an existing config loads and
+is not silently rewritten.
+
+---
+
 ## 2026-08-24 — CORRECTION TO D13.1, FROM THE USER DIRECTLY (not an autonomous decision)
 
 This block is not one more thing decided in the user's absence — it is the user, awake,
