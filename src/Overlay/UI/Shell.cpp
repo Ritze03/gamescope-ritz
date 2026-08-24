@@ -4629,15 +4629,6 @@ namespace gamescope::ui::shell
 			return false;
 		}
 
-		// D27: THE RESULT-LIST CAP -- the most rows the panel will ever show.
-		//
-		// It is the panel's "maximum element count", and it is what the
-		// vertical position is solved from (see SolvePalettePanel). Named
-		// rather than a `9` inside the clamp precisely because the position
-		// now depends on it: a bare literal in one expression is a thing the
-		// next person changes without noticing they moved the query line.
-		constexpr int k_nPaletteRowCap = 9;
-
 		// D25: `rcFrame` is the rectangle the panel is centred inside, and
 		// `bLauncher` says whether there is a shell behind it.
 		//
@@ -4650,10 +4641,15 @@ namespace gamescope::ui::shell
 		void DrawPalette( const Rect &rcSlab, const std::vector<PaletteItem> &items,
 		                  bool bLauncher )
 		{
-			const float flW    = std::min( Px( 820.0f ), ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
-			const float flQH   = Px( 52.0f );
-			const float flRowH = Px( 38.0f );
-			const float flFootH= Px( 36.0f );
+			// D31: the panel's metrics are `shelltok::kPalette*` rather than
+			// literals, because SolvePalettePanel() solves the fixed vertical
+			// position from exactly these and the test asserts against the
+			// same constants. See Layout.h.
+			const float flW    = std::min( Px( shelltok::kPaletteW ),
+			                               ( rcSlab.x1 - rcSlab.x0 ) - Px( 2.0f * tok::kXL ) );
+			const float flQH   = Px( shelltok::kPaletteQueryH );
+			const float flRowH = Px( shelltok::kPaletteRowH );
+			const float flFootH= Px( shelltok::kPaletteFootH );
 			const float flPad  = Px( 16.0f );
 
 			// The list is capped at 60 rows, exactly as the mockup caps it.
@@ -4664,7 +4660,7 @@ namespace gamescope::ui::shell
 
 			const float x0 = rcSlab.x0 + ( ( rcSlab.x1 - rcSlab.x0 ) - flW ) * 0.5f;
 
-			// D27: THE PANEL IS CENTRED ONCE, AT ITS MAXIMUM ROW COUNT.
+			// D31: THE PANEL IS CENTRED ONCE, AT ITS MAXIMUM ROW COUNT.
 			//
 			// The report: *"do not dynamically move it according to the
 			// current height ... So it doesnt start moving the search bar"*.
@@ -4686,7 +4682,7 @@ namespace gamescope::ui::shell
 			const float flMargin = Px( tok::kM );
 			const ui::PalettePanel panel = ui::SolvePalettePanel(
 				rcSlab.y0, rcSlab.y1 - rcSlab.y0,
-				flQH, flRowH, flFootH, flMargin, k_nPaletteRowCap );
+				flQH, flRowH, flFootH, flMargin, shelltok::kPaletteRowCap );
 
 			const float y0 = panel.flTop;
 

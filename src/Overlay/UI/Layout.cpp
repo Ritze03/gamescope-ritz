@@ -329,7 +329,7 @@ namespace gamescope::ui
 	}
 
 	// =====================================================================
-	//  Where the palette / launcher panel sits (D27) -- see Layout.h
+	//  Where the palette / launcher panel sits (D31) -- see Layout.h
 	// =====================================================================
 	PalettePanel SolvePalettePanel( float flFrameY0, float flFrameH,
 	                                float flQueryH, float flRowH, float flFootH,
@@ -342,9 +342,14 @@ namespace gamescope::ui
 		const float flChrome = flQueryH + flFootH;
 		const float flUsable = flFrameH - 2.0f * flMarginPx;
 
-		const int nRoom = flRowH > 0.0f
-			? (int)std::floor( ( flUsable - flChrome ) / flRowH )
-			: 0;
+		// The comparison is written `> 0` rather than `>= 0` on purpose: a
+		// NaN or infinite surface size (which ImGui has handed out during a
+		// swapchain resize) fails it and lands on 0, where casting the raw
+		// quotient to int would have been undefined.
+		const float flRoomF = flRowH > 0.0f
+			? std::floor( ( flUsable - flChrome ) / flRowH )
+			: 0.0f;
+		const int nRoom = flRoomF > 0.0f ? (int)std::min( flRoomF, 4096.0f ) : 0;
 
 		out.bFits    = nRoom >= 1;
 		out.nMaxRows = std::clamp( nRoom, 1, std::max( 1, nRowCap ) );

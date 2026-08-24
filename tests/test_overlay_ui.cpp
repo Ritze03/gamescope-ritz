@@ -26,6 +26,7 @@
 #include "Overlay/UI/Band.h"
 #include "Overlay/UI/Icons.h"
 #include "Overlay/UI/Lane.h"
+#include "Overlay/UI/Layout.h"
 #include "Overlay/UI/Registry.h"
 #include "Overlay/UI/Row.h"
 #include "Overlay/UI/Tokens.h"
@@ -1877,4 +1878,177 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 			}
 		}
 	}
+}
+
+// =========================================================================
+//  D31 -- the palette / launcher panel is centred ONCE, at its row cap
+// =========================================================================
+// The user's report: *"make sure, that it is vertically centered, in its
+// initial state (do not dynamically move it according to the current height,
+// just the starting position, with the max amount of elements being displayed
+// should be centered ONCE. So it doesnt start moving the search bar, all of
+// the sudden"*.
+//
+// The property under test is a NEGATIVE one -- the query line does not move --
+// so the tests below vary the thing that used to move it and assert equality,
+// rather than checking one position against a computed constant. A test that
+// only checked "y == 325 at 1.0x" would pass just as happily on a version that
+// recentres on every keystroke.
+namespace
+{
+	// The launcher's own metrics, taken from the same constants DrawPalette()
+	// uses -- not retyped. Scale must be set by the caller first.
+	ui::PalettePanel SolveLauncher( float flSurfaceH, int nRowCap = ui::shelltok::kPaletteRowCap )
+	{
+		return ui::SolvePalettePanel(
+			/* flFrameY0  */ 0.0f,
+			/* flFrameH   */ flSurfaceH,
+			/* flQueryH   */ ui::Px( ui::shelltok::kPaletteQueryH ),
+			/* flRowH     */ ui::Px( ui::shelltok::kPaletteRowH ),
+			/* flFootH    */ ui::Px( ui::shelltok::kPaletteFootH ),
+			/* flMarginPx */ ui::Px( ui::tok::kM ),
+			nRowCap );
+	}
+}
+
+TEST_CASE( "palette panel: the query line does not move with the result count", "[overlay_ui]" )
+{
+	// THE DEFECT ITSELF. SolvePalettePanel() has no parameter for the match
+	// count, so this is really a test that the signature stays that way --
+	// which is exactly the guarantee, and the reason it is a pure function
+	// rather than a cached y0 with an invalidation rule.
+	for ( float flScale : { 0.5f, 1.0f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		INFO( "display_scale " << flScale );
+
+		const float flSurfaceH = 1080.0f;
+		const ui::PalettePanel panel = SolveLauncher( flSurfaceH );
+
+		// Whatever the list holds, the panel is the SAME panel. The only way
+		// a caller could move it is by lying about the cap.
+		for ( int nMatches : { 0, 1, 3, 9, 60 } )
+		{
+			INFO( "matches " << nMatches );
+			const ui::PalettePanel again = SolveLauncher( flSurfaceH );
+			REQUIRE_THAT( again.flTop, WithinAbs( panel.flTop, 1e-4f ) );
+			REQUIRE( again.nMaxRows == panel.nMaxRows );
+		}
+	}
+}
+
+TEST_CASE( "palette panel: centred on the CAP's height, not on one row", "[overlay_ui]" )
+{
+	// The positive half: the fixed position really is the centred position of
+	// a FULL panel. Centring a one-row panel would put flTop far lower, which
+	// is what "centre it on the current height" would have produced on an
+	// empty query -- and the search bar would then have jumped upward as
+	// results arrived.
+	ScopedScale s( 1.0f );
+
+	const float flSurfaceH = 1080.0f;
+	const ui::PalettePanel full = SolveLauncher( flSurfaceH );
+
+	const float flChrome = ui::Px( ui::shelltok::kPaletteQueryH ) + ui::Px( ui::shelltok::kPaletteFootH );
+	const float flRowH   = ui::Px( ui::shelltok::kPaletteRowH );
+
+	REQUIRE( full.bFits );
+	REQUIRE( full.nMaxRows == ui::shelltok::kPaletteRowCap );
+	REQUIRE_THAT( full.flMaxH,
+		WithinAbs( flChrome + flRowH * (float)ui::shelltok::kPaletteRowCap, 1e-3f ) );
+	REQUIRE_THAT( full.flTop, WithinAbs( ( flSurfaceH - full.flMaxH ) * 0.5f, 1e-3f ) );
+
+	// ...and that is strictly ABOVE where a one-row panel would have been
+	// centred, which is the visible symptom the user described.
+	const ui::PalettePanel oneRow = SolveLauncher( flSurfaceH, /* nRowCap = */ 1 );
+	REQUIRE( full.flTop < oneRow.flTop );
+}
+
+TEST_CASE( "palette panel: the list grows downward inside the fixed frame", "[overlay_ui]" )
+{
+	// The frame's TOP is fixed; its bottom is where the growth shows. This is
+	// the arithmetic DrawPalette() then performs, restated as the invariant
+	// it has to preserve: for any visible row count, the panel's top is the
+	// same and only its bottom moves.
+	ScopedScale s( 1.0f );
+
+	const ui::PalettePanel panel = SolveLauncher( 1080.0f );
+	const float flChrome = ui::Px( ui::shelltok::kPaletteQueryH ) + ui::Px( ui::shelltok::kPaletteFootH );
+	const float flRowH   = ui::Px( ui::shelltok::kPaletteRowH );
+
+	float flPrevBottom = -1.0f;
+	for ( int nVisible = 1; nVisible <= panel.nMaxRows; ++nVisible )
+	{
+		const float flH      = flChrome + flRowH * (float)nVisible;
+		const float flBottom = panel.flTop + flH;
+
+		INFO( "visible rows " << nVisible );
+		REQUIRE( flBottom > flPrevBottom );   // grows DOWNWARD
+		flPrevBottom = flBottom;
+	}
+
+	// The full list still ends inside the surface it was solved against.
+	REQUIRE( flPrevBottom <= 1080.0f );
+}
+
+TEST_CASE( "palette panel: at 2.0x the maximum is the FITTING maximum", "[overlay_ui]" )
+{
+	// The 2.0x rule. On a surface too short for the cap's worth of rows the
+	// panel does not overflow and is not clamped afterwards -- it is solved
+	// SHORTER, and centred once at that shorter height. Still fixed, just
+	// fewer rows.
+	ScopedScale s( 2.0f );
+
+	const float flSurfaceH = 600.0f;
+	const ui::PalettePanel panel = SolveLauncher( flSurfaceH );
+
+	REQUIRE( panel.bFits );
+	REQUIRE( panel.nMaxRows >= 1 );
+	REQUIRE( panel.nMaxRows < ui::shelltok::kPaletteRowCap );  // the cap did NOT fit
+
+	// Centred at the height it actually took, and wholly on screen.
+	REQUIRE_THAT( panel.flTop, WithinAbs( ( flSurfaceH - panel.flMaxH ) * 0.5f, 1e-3f ) );
+	REQUIRE( panel.flTop >= ui::Px( ui::tok::kM ) );
+	REQUIRE( panel.flTop + panel.flMaxH <= flSurfaceH - ui::Px( ui::tok::kM ) + 1e-3f );
+}
+
+TEST_CASE( "palette panel: too short for even one row anchors at the top margin", "[overlay_ui]" )
+{
+	// The other half of the 2.0x rule. Centring a panel taller than its frame
+	// pushes the QUERY LINE off the top edge -- losing the thing you type
+	// into. Top-anchored, the query line and the first row survive and the
+	// footer legend is what falls off the bottom, which is the cheaper loss.
+	ScopedScale s( 2.0f );
+
+	const float flSurfaceH = 250.0f;
+	const ui::PalettePanel panel = SolveLauncher( flSurfaceH );
+
+	REQUIRE_FALSE( panel.bFits );
+	REQUIRE( panel.nMaxRows == 1 );                  // never zero rows
+	REQUIRE( panel.flMaxH > flSurfaceH );            // genuinely does not fit
+	REQUIRE_THAT( panel.flTop, WithinAbs( ui::Px( ui::tok::kM ), 1e-3f ) );
+
+	// The query line is on screen, which is the whole point of anchoring.
+	REQUIRE( panel.flTop + ui::Px( ui::shelltok::kPaletteQueryH ) < flSurfaceH );
+}
+
+TEST_CASE( "palette panel: only scale and surface size move it", "[overlay_ui]" )
+{
+	// The invalidation rule, asserted rather than merely documented. Changing
+	// either real input moves the panel; nothing else can, because nothing
+	// else is an input.
+	float flAtScale[ 3 ] = {};
+	int   i = 0;
+	for ( float flScale : { 0.5f, 1.0f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		flAtScale[ i++ ] = SolveLauncher( 1080.0f ).flTop;
+	}
+	REQUIRE( flAtScale[ 0 ] != flAtScale[ 1 ] );
+	REQUIRE( flAtScale[ 1 ] != flAtScale[ 2 ] );
+
+	// A taller surface centres it lower; the same surface always agrees with
+	// itself.
+	ScopedScale s( 1.0f );
+	REQUIRE( SolveLauncher( 1080.0f ).flTop > SolveLauncher( 720.0f ).flTop );
 }

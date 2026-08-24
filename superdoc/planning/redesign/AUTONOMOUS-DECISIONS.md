@@ -10,6 +10,56 @@ cheap.
 
 ---
 
+## 2026-08-24 — D31 · Two launcher defects, and the WIP commit they arrived on
+
+Reports from the user about the standalone launcher (D25), finished on top of `e18da30`
+— a **partial, never-compiled** WIP commit the lead preserved after the previous agent
+was killed mid-task.
+
+### D31.2 · The panel's top edge is a function of geometry, and the match count is not an input
+
+**The report.** *"make sure, that it is vertically centered, in its initial state (do not
+dynamically move it according to the current height, just the starting position, with the
+max amount of elements being displayed should be centered ONCE. So it doesnt start moving
+the search bar, all of the sudden"*.
+
+**Chosen: a pure function, `SolvePalettePanel()` in `Layout.cpp`, not a cached `y0`.** A
+cache needs an invalidation rule — *recompute on `display_scale` and surface size, never
+on the result count* — and that rule is a separate thing to get wrong later. Here the rule
+**is the signature**: the inputs are the frame, the scale-derived row metrics and the row
+**cap**. The number of matches is not a parameter, so no amount of typing can move the
+answer, and it can be recomputed every frame without drifting. **That is where the line is
+drawn**, and it is drawn in the type system rather than in a comment.
+
+**"Maximum elements" is `shelltok::kPaletteRowCap` (9), the result-list cap** — not the
+current match count. It moved into `Layout.h` beside the solver, with the panel's other
+metrics, because the query line's position now *depends* on it: a bare `9` inside a clamp
+in `Shell.cpp` is a number the next person changes without noticing they moved the search
+bar. The tests assert against those same constants rather than retyping 52/38/36, so a
+test cannot keep passing while describing a panel that no longer exists.
+
+**The 2.0× rule, stated once:** the maximum is the **fitting** maximum. Where the cap's
+worth of rows does not fit, `nMaxRows` drops to what does and the panel is centred at
+*that* height — still solved once, still fixed, simply shorter. Where not even one row
+fits, the panel is **anchored at the top margin** instead of centred: centring something
+taller than its frame pushes the query line off the *top* edge and loses the thing you
+type into, whereas top-anchoring loses the footer legend off the bottom. Cheaper loss.
+
+**A pre-existing bug fell out of this.** The panel used to take nine rows unconditionally
+and clamp the finished rect to the slab; the clamp moved `rc.y1`, the footer draws from
+`rc.y1`, so at 2.0× the legend slid up over the last result row while the rows stayed laid
+out against the unclamped height. Deciding the row count *before* sizing leaves nothing to
+clamp. This is the defect recorded as open in D18's note *(b)*.
+
+**Cost, stated plainly:** the palette drawn *over the shell* is centred in the slab now
+too, where it previously sat at a fixed 14% down. Same widget, same solver; D25 already
+described that rectangle as "the rectangle the panel is centred inside", so this makes the
+code match what was written.
+
+*Cheap to reverse:* one function, and the caller that reads `panel.flTop`.
+
+---
+
 ## 2026-08-24 — D30 · The type ladder rises a second time, and `Meta` moves most
 
 The user, one round after D23: *"Make the Log and Changelog font 1-2px bigger. In fact, we

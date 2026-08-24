@@ -69,6 +69,24 @@ namespace gamescope::ui
 		inline constexpr float kSurfFracW  =   0.90f;
 		inline constexpr float kSurfFracH  =   0.86f;
 
+		// ---- the command palette / launcher panel, base units ------------
+		// These are here rather than as literals inside DrawPalette()
+		// because SolvePalettePanel() solves the panel's FIXED vertical
+		// position from them. A test that re-typed 52/38/36 would keep
+		// passing while silently no longer describing the real panel, which
+		// for a "this must never move" property is the failure that matters.
+		inline constexpr float kPaletteW      = 820.0f;
+		inline constexpr float kPaletteQueryH =  52.0f;
+		inline constexpr float kPaletteRowH   =  38.0f;
+		inline constexpr float kPaletteFootH  =  36.0f;
+
+		// THE RESULT-LIST CAP: the most rows the panel will ever show, and
+		// therefore the "maximum element count" the position is solved from.
+		// It is NOT the current match count -- that is the whole point, and
+		// it is why this is a named constant rather than a `9` inside a
+		// clamp somewhere: the query line's y now depends on it.
+		inline constexpr int   kPaletteRowCap = 9;
+
 		// Chrome heights, base units, from index.html's CSS.
 		inline constexpr float kSlabBar    =  40.0f;   // .slabbar
 		inline constexpr float kSheetHead  =  56.0f;   // .sheethead
@@ -273,7 +291,7 @@ namespace gamescope::ui
 	float RailScroll( float flCurrent, float flContentH, float flViewH,
 	                  float flActiveTop, float flItemH, float flPad );
 
-	// ---- where the palette / launcher panel sits (D27) -------------------
+	// ---- where the palette / launcher panel sits (D31) -------------------
 	// THE PANEL'S TOP EDGE IS A FUNCTION OF THE GEOMETRY AND OF NOTHING
 	// ELSE. That sentence is the whole fix, and the parameter list below is
 	// how it is enforced.
@@ -298,7 +316,11 @@ namespace gamescope::ui
 	// it every frame; it cannot drift.
 	//
 	// `nRowCap` is the list's own row cap -- the most rows the panel will
-	// ever show -- not the current match count.
+	// ever show -- not the current match count. Callers pass
+	// `shelltok::kPaletteRowCap`; the other metrics are the scaled
+	// `shelltok::kPalette*` above, so every input is a base-unit constant or
+	// the surface, and the ONLY things that can move the answer are
+	// `display_scale` and the surface size.
 	struct PalettePanel
 	{
 		float flTop    = 0.0f;  // the panel's top edge == the query line's y
