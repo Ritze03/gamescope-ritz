@@ -106,6 +106,33 @@ chose.
 pressing Enter again left the file on disk and left the overlay open; Esc with nothing on
 top returned the game; Esc over an open palette dismissed the palette and left the shell up.
 
+### D26.3 · The title bar's "settings" was inert and is gone; its rule is the accent TOKEN
+
+**The report.** *"In the top title bar, there is a weird 'settings' String. Remove it, it
+does nothing... Also, at the bottom of that bar, the line is gray, instead of the blue we use
+all around."*
+
+**It was genuinely inert.** A bare right-aligned `Label` — no id, no hit box, no state read,
+nothing keyed off it. It labelled nothing and signposted nothing; it restated the window's
+purpose inside the window's own title bar. Removed. The right end is deliberately left
+**empty** rather than given a replacement placeholder: SPEC §8.1 puts `app <id>`, the
+config-file chip and the `⌕ ▤ ✕` glyphs in this bar, that work is queued separately, and a
+parked placeholder in the slot would make it harder, not easier.
+
+**The rule now uses `Accent( 0.42f )` — the same token and alpha as the slab's own frame**,
+so the bar's underline reads as a continuation of the border instead of a stray grey seam
+crossing a blue frame. `Accent()` is the C++ equivalent of the mockup's
+`rgba(var(--accRGB), a)` and resolves against the user's configured hue on every call; a
+literal here would be a blue that stayed blue after the accent changed, which is the exact
+defect the user reported against the mockup. Verified by driving `overlay.accent_hue`
+through 200 / 20 / 120 and sampling the rule pixel: `(22,97,102)` → `(117,71,72)` →
+`(81,92,49)`. It follows.
+
+**This diverges from `index.html` on purpose.** The mockup's `.slabbar` uses
+`border-bottom: 1px solid var(--lineRegion)`. The mockup is the tiebreaker where the design
+is silent; it is not the tiebreaker against the user looking at the result and saying the
+line is the wrong colour.
+
 ---
 
 ## 2026-08-24 — CORRECTION TO D13.1, FROM THE USER DIRECTLY (not an autonomous decision)

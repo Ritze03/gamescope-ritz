@@ -3630,7 +3630,28 @@ namespace gamescope::ui::shell
 		void DrawSlabBar( const Rect &rc )
 		{
 			Fill( rc, Accent( 0.10f ) );
-			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Col( Role::LineRegion ) );
+
+			// D26: THE BAR'S BOTTOM RULE IS THE ACCENT, AND IT IS THE TOKEN.
+			//
+			// The slab's own frame is Accent( 0.42f ) (the Begin() border
+			// below), so a LineRegion rule here read as a stray grey seam
+			// crossing a blue frame -- which is what was reported. Matching
+			// the frame's own alpha makes the bar's underline a continuation
+			// of the border rather than a second, different boundary.
+			//
+			// Accent() is the C++ equivalent of the mockup's
+			// `rgba(var(--accRGB), a)`: it resolves against the user's
+			// configured accent hue every call. A literal here would be a
+			// blue that stayed blue after the accent changed -- the exact
+			// defect reported against the mockup, and the reason this is
+			// routed through the token rather than through an IM_COL32.
+			//
+			// This DIVERGES FROM index.html, deliberately: the mockup's
+			// .slabbar uses `border-bottom: 1px solid var(--lineRegion)`.
+			// The mockup is the tiebreaker where the design is silent; it is
+			// not the tiebreaker against the user looking at the result and
+			// saying the line is the wrong colour.
+			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Accent( 0.42f ) );
 
 			const float flDot = Px( 6.0f );
 			Fill( { rc.x0 + Px( tok::kM ), rc.y0 + ( rc.Height() - flDot ) * 0.5f,
@@ -3639,8 +3660,15 @@ namespace gamescope::ui::shell
 
 			Label( { rc.x0 + Px( tok::kM ) + flDot + Px( tok::kS ), rc.y0, rc.x1, rc.y1 },
 			       TypeRole::Title, Col( Role::TextPrimary ), "GAMESCOPE-RITZ" );
-			Label( { rc.x0, rc.y0, rc.x1 - Px( tok::kM ), rc.y1 },
-			       TypeRole::Meta, Col( Role::TextMeta ), "settings", TextAlign::Right );
+
+			// D26: the right-aligned "settings" was REMOVED. It was a bare
+			// Label -- no id, no hit box, no state read and nothing keyed off
+			// it -- so it labelled nothing and was not a signpost to anything;
+			// it restated the window's own purpose in the window's own title
+			// bar. SPEC §8.1 puts `app <id>` and the config-file chip on the
+			// left of this bar and the ⌕ ▤ ✕ glyphs on the right; that is queued
+			// separately, and this deliberately leaves the right end EMPTY for
+			// it rather than parking a placeholder in the slot.
 		}
 
 		// =================================================================

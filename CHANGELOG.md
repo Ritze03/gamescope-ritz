@@ -65,6 +65,14 @@ hasn't checked out this branch, since master is unaffected.
   never survive an Escape and fire on a later press. The footer legend reads `Esc close`,
   and the explain page's back crumb now names `^/`, the key that actually returns. This
   matches the launcher, which already gave the game straight back on Escape.
+- **Removed the stray `settings` label from the title bar, and its bottom rule is blue.**
+  The label was a bare right-aligned string with no id, no hit box and nothing keyed off it
+  — it restated the window's purpose inside the window's own title bar. The rule under the
+  bar was grey where the slab's own frame is accent-coloured, so it read as a stray seam
+  crossing a blue border; it now uses the accent *token* at the frame's own alpha, so it
+  follows the user's configured accent hue rather than being a blue that stays blue after
+  the accent changes.
+
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later
