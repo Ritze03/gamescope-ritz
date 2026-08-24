@@ -3,9 +3,10 @@
 A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 [architecture/overview.md](architecture/overview.md) as the start-here page.
 
-- [`CHANGELOG.md`](../CHANGELOG.md) (repo root) — dated, why-focused record of this fork's own
-  changes: what shipped on `master`, and separately what's on the unmerged
-  `feature/overlay-e2` branch.
+- [`CHANGELOG.md`](../CHANGELOG.md) (repo root) — the user-facing list of this fork's own
+  changes, newest date first. Written to the strict shape in
+  [claude-instructions/changelog.md](claude-instructions/changelog.md), because the
+  settings overlay parses it.
 
 ## architecture/ — how the code fits together
 
@@ -87,6 +88,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 - [Working with the Docs](claude-instructions/documentation.md) — read before you touch, update after you change.
 - [Documentation version policy](claude-instructions/documentation-version-policy.md) — date-based dated-block convention.
+- [Changelog maintenance](claude-instructions/changelog.md) — the strict `CHANGELOG.md` format, its four categories, and why the date is the version.
 
 ## meta/
 
