@@ -10,15 +10,78 @@ cheap.
 
 ---
 
-## 2026-08-24 — D28 · A Changelog area
+## 2026-08-24 — D28 · The Log becomes its own content, and a Changelog area
 
-The area was asked for by the user directly; what follows are the calls taken *inside* that
-instruction, where the instruction did not say how. (D28.1–D28.3, covering the Log rework
-requested in the same message, land with that change.)
+Both halves were asked for by the user directly; what follows are the calls taken *inside* those
+two instructions, where the instruction did not say how.
 
-<!-- D28.1 · A content area's rows can be hosted by the Inspector -- lands with the Log rework -->
-<!-- D28.2 · ContentLine carries identity and time -- lands with the Log rework -->
-<!-- D28.3 · Issue #81's Copy button stays disabled -- lands with the Log rework -->
+### D28.1 · A content area's rows can be hosted by the Inspector
+
+**The user:** *"The Log screen needs some rework, so it is more compact. I suggest showing the
+full log by default and having a 'Filter' switch, which contains settings like sources, severity,
+text filter, auto-scroll in the 'Shell'/Sidebar/Inspector. Then move the diagnostic into there
+too."*
+
+**Chosen:** a new **area-level** flag, `Area::RowsInInspector()` (`Registry.h`). A content area
+declaring it draws no rows in the sheet at all — the sheet is the content body, full height — and
+the Inspector hosts the rows instead, behind a **FILTER** cell paired with a **LINE** cell. They
+stay *ordinary rows*: same grammar, same lane, same required help, same reset, same palette
+entries. Only the region that draws them changes.
+
+**Why area-level and not per-row.** A per-row `.InInspector()` would let an area scatter half its
+controls into the Inspector and leave the rest in the sheet — a layout nobody would choose
+deliberately, and one that makes "where is that setting" unanswerable. Hosting is one decision
+about one screen's shape, so it is one flag on the screen.
+
+**Why this is not `Escape()` returning.** P5 deleted `Area::Escape()` because it handed a call
+site the sheet's own window and let it run arbitrary ImGui. This flag hands over *nothing*; it is a
+bool the shell reads. The Log still cannot place a pixel, and `DrawContentFilter` takes a
+`const Area &` and reads it, exactly like every other Inspector body.
+
+**Rejected — a `Kind::FilterBar` control that packs the four filters onto one line.** This is what
+`index.html` actually draws, and it was the obvious way to satisfy "more compact" without touching
+the Inspector. Rejected because the user explicitly named the Inspector as the destination, and
+because it would have invented a *sixth* row height to hold a bank, a text field and a switch on
+one 44-tall line — the exact class of invention the conformance audit counted against Monitor.
+
+### D28.2 · `ContentLine` carries identity and time; `LogCapture::Line` records them
+
+Line numbers, timestamps and per-line selection were all in the mockup and all absent from the
+build. None could be added at draw time: the ring **evicts** old lines, so a positional index is
+not stable, and `LogCapture::Line` had **no timestamp field at all** — a timestamp that was never
+recorded cannot be recovered later.
+
+**Chosen:** `LogCapture::Line` gains `ulSeq` (a single global atomic shared by *both* rings) and
+`ulRealtimeMs`, both stamped at `Push()` time, outside the ring's mutex. `ui::ContentLine` gains
+`ulSeq` and `ulTimeMs`, both defaulting to `0` meaning "this content has no such thing" — the
+Changelog's prose has neither.
+
+**Why one global sequence rather than one per ring:** the panel merges the two buffers into one
+view, so per-ring counters would give two different lines the same number.
+
+**Why a scalar timestamp rather than a preformatted string:** formatting is presentation, so it
+belongs to the shell — the same split `nSeverity` already has (a scale here, a colour only once
+the shell maps it). It also keeps `strftime` off the logging path.
+
+**What a line with no timestamp shows: nothing.** `0` is the "not recorded" sentinel, and the two
+rings only started stamping when the field was added, so lines captured before that — or arriving
+from any path that does not stamp — genuinely have no time. Rendering `0` through a clock would
+print `01:00:00.000`: a precise, confident and entirely invented timestamp, which is worse than an
+absent one. The column is left blank and keeps its width, so the text after it stays aligned. The
+Inspector's LINE host says `not recorded` in full, because there it has room to.
+
+**Side effect, deliberate:** with a global sequence the two rings are now merged in **true arrival
+order** instead of "all gamescope lines, then all game lines". The old order could put a game line
+and the gamescope line that caused it thousands of rows apart.
+
+### D28.3 · Issue #81's Copy button stays disabled
+
+Unchanged from its existing treatment, and re-affirmed rather than quietly fixed: no clipboard
+handler is wired for the overlay's ImGui context, so `SetClipboardText()` reaches an internal
+buffer only ImGui can read. A real fix means offering a `wl_data_source` selection on gamescope's
+own seat — a feature with its own design questions, not a line of code. The row therefore ships
+**disabled with a stated reason**. A button that looks right and silently does nothing is issues
+#25 and #68, which is what this redesign exists to stop.
 
 ### D28.4 · `CHANGELOG.md` is embedded at build time, not read from disk
 

@@ -483,6 +483,29 @@ namespace gamescope::ui
 		int         nSeverity = 0;   // 0 info, 1 debug, 2 warn, 3 error
 		std::string sScope;          // subsystem tag, drawn as a dim prefix; may be empty
 		std::string sText;
+
+		// ---- identity and time (P6) ---------------------------------------
+		// Both default to 0, which means "this content has no such thing" --
+		// the Changelog's prose has neither, the Log has both. Every field
+		// here is DATA; the shell alone decides how any of it is drawn, which
+		// is the same split sScope already has (the area supplies the tag, the
+		// shell chooses the brackets, the colour and the column).
+
+		// A stable, unique number for this line, used BOTH as the line number
+		// the shell prints AND as the identity a selection is remembered by.
+		// It must not shift when a filter hides neighbouring lines or when a
+		// bounded buffer evicts older ones -- a positional index would do
+		// neither, and selecting line 12 only to have it become a different
+		// line on the next frame is the bug this field exists to prevent.
+		// 0 means the content is not numbered and not selectable.
+		uint64_t ulSeq = 0;
+
+		// Milliseconds since the Unix epoch, or 0 for "no timestamp".
+		// Deliberately a SCALAR rather than a preformatted string: formatting
+		// is a presentation decision, so it belongs to the shell (which also
+		// needs to know the rendered width to align the column), exactly as
+		// nSeverity is a scale here and a colour only once the shell maps it.
+		uint64_t ulTimeMs = 0;
 	};
 
 	// =====================================================================
@@ -576,6 +599,28 @@ namespace gamescope::ui
 		// registration rather than shell state a category cannot see.
 		Area &FollowsTail( std::function<bool()> fn );
 		bool  FollowTail() const { return !m_FollowTail || m_FollowTail(); }
+
+		// ---- where a content area's rows are hosted (P6) ------------------
+		// By default a content area draws its rows in the SHEET, above the
+		// body. RowsInInspector() moves them to the Inspector instead, so the
+		// sheet is the content and nothing else.
+		//
+		// WHY THIS IS A HOSTING FLAG AND NOT A SECOND KIND OF ROW. The Log's
+		// rows are the reason: sources, severity, text filter and auto-scroll
+		// do not describe the log, they describe THE VIEW OF IT. Stacked above
+		// the body they cost ~360px of the sheet -- the six-row toolbar the
+		// conformance audit flagged -- and push the thing you came to read off
+		// the screen. Moved into the Inspector they are still ordinary rows:
+		// same grammar, same help, same palette entries, same Ctrl+D reset.
+		// Only the region that draws them changes, which is precisely what the
+		// Inspector is for.
+		//
+		// It is an AREA property because it is one decision about one screen's
+		// shape. A per-row version would let an area scatter half its controls
+		// into the Inspector and leave the rest behind, which is not a layout
+		// anyone would choose on purpose.
+		Area &RowsInInspector();
+		bool  AreRowsInInspector() const { return m_bRowsInInspector; }
 
 		// ================================================================
 		//  DYNAMIC AREAS -- P3b
@@ -675,6 +720,7 @@ namespace gamescope::ui
 		std::function<bool()>        m_Available;
 		std::function<std::vector<ContentLine>()> m_Content;  // content areas -- see Content()
 		std::function<bool()>        m_FollowTail;
+		bool                         m_bRowsInInspector = false;  // see RowsInInspector()
 		std::function<uint64_t()>    m_Generation;  // dynamic areas -- see Rebuilds()
 		std::function<void( Area & )> m_Build;
 		uint64_t                     m_ulGeneration = 0;

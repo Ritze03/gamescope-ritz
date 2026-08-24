@@ -89,6 +89,21 @@ hasn't checked out this branch, since master is unaffected.
   source tree the build still succeeds and the area says so plainly. It is rendered as plain text,
   verbatim — the overlay has no Markdown renderer, and a half-parsed document reads worse than an
   honest unparsed one.
+- **The Log screen is now the log.** Sources, severity, text filter, auto-scroll and the capture
+  diagnostics used to occupy six full-height rows — roughly 360px of sheet — before the first line
+  of text, which is what you opened the screen to read. They now live in the **Inspector**, behind
+  a `FILTER` cell paired with a `LINE` cell, where they remain ordinary rows with the same help,
+  reset and search behaviour; the sheet is the log body, full height. *Why:* those controls
+  configure the *view* of the log, not the log, and the Inspector is the region that exists for
+  exactly that.
+- **Log lines now carry a line number and a timestamp, and selecting one describes it** in the
+  Inspector. Both are recorded when the line is captured rather than derived when it is drawn —
+  neither could be reconstructed afterwards, because the buffer evicts old lines and no timestamp
+  was ever recorded. A line captured before timestamps existed shows a **blank** time column
+  rather than a midnight that never happened. As a direct consequence the gamescope and game
+  streams are now interleaved in **true arrival order**; previously the view showed every
+  gamescope line and then every game line, so a game line and the gamescope line that caused it
+  could sit thousands of rows apart.
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

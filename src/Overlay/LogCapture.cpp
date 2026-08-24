@@ -1,6 +1,8 @@
 // See LogCapture.h. No ImGui here -- PanelLog.cpp owns the drawing.
 #include "LogCapture.h"
 
+#include <atomic>
+#include <ctime>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -28,13 +30,35 @@ namespace gamescope::LogCapture
 		// become unbounded memory).
 		constexpr size_t kMaxLines = 4000;
 
+		// ONE sequence for BOTH rings. The panel merges the gamescope and
+		// game buffers into a single view, so a per-ring counter would hand
+		// two different lines the same number. Shared and atomic, it is
+		// unique across the merged view and orders the two streams against
+		// each other even when their timestamps land in the same millisecond.
+		std::atomic<uint64_t> s_ulNextSeq { 1 };
+
+		uint64_t NowMs()
+		{
+			struct timespec ts {};
+			clock_gettime( CLOCK_REALTIME, &ts );
+			return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)( ts.tv_nsec / 1000000 );
+		}
+
 		class RingBuffer
 		{
 		public:
 			void Push( LogPriority ePriority, std::string_view svScope, std::string_view svText )
 			{
+				// Stamped BEFORE taking the lock: the clock read and the
+				// sequence bump do not need the ring's mutex, and keeping
+				// them outside it shortens the critical section on a path
+				// every log() call in the process goes through.
+				const uint64_t ulSeq = s_ulNextSeq.fetch_add( 1, std::memory_order_relaxed );
+				const uint64_t ulNow = NowMs();
+
 				std::lock_guard<std::mutex> lock( m_Mutex );
-				m_Lines.push_back( Line{ ePriority, std::string( svScope ), std::string( svText ) } );
+				m_Lines.push_back( Line{ ePriority, std::string( svScope ), std::string( svText ),
+					ulSeq, ulNow } );
 				if ( m_Lines.size() > kMaxLines )
 					m_Lines.pop_front();
 				m_ulGeneration++;
