@@ -31,6 +31,7 @@
 
 #include "Config/ConfigManager.h"
 #include "UI/Registry.h"
+#include "UI/Controls.h"   // controls::DeferToRelease() -- UI scale applies on release
 #include "Notifications.h"
 #include "Palette.h"
 #include "Fonts.h"
@@ -168,6 +169,16 @@ namespace gamescope
 			live.flWindowAlphaUnfocused = o.opacity_windows_unfocused;
 			live.flDockAlpha = o.opacity_dock;
 
+			// NOTE (2026-08-24, D27): this function no longer runs on every
+			// tick of a UI-scale drag. `overlay.display_scale`'s setter now
+			// defers its whole apply -- this push included -- to the frame
+			// after the drag ends (see that setter), so the paragraph below
+			// describes a one-frame bridge between the committed value and
+			// the atlas re-bake, not a per-tick preview. The division is
+			// still exactly right for that bridge, and is still needed for
+			// every non-drag write (arrow keys, the reset chip,
+			// `overlay_e2_set`, a config reload).
+			//
 			// Issue #54: FontGlobalScale folds on top of whatever this
 			// context's atlas is *currently* baked at (Fonts.cpp's Load()'s
 			// own comment on UpdateCurrentFontSize()), not on top of a fixed
@@ -235,6 +246,27 @@ namespace gamescope
 		{
 			PushLiveTheme();
 			config::EnqueueGlobalWrite( s_GeneralSettings );
+		}
+
+		// Everything a UI-scale change actually COSTS, in one place: the live
+		// theme push (which reflows every rect in the overlay), the disk
+		// write, and the font-atlas re-bake request.
+		//
+		// Split out of the setter so the drag can defer the WHOLE of it. An
+		// earlier, smaller fix -- deferring only the re-bake -- would not have
+		// helped: `palette::g_LiveTheme.flDisplayScale` is what every rect in
+		// the kit multiplies by, so leaving that live still slides the track
+		// out from under the pointer, which is the thing the user could not
+		// aim at.
+		//
+		// #51's rule is untouched: this only REQUESTS the re-bake.
+		// fonts::PumpRequestedRebuild() performs it at the top of the render
+		// thread's next frame, so no atlas is ever swapped mid-frame, and this
+		// call is safe from the console thread too.
+		void ApplyDisplayScale()
+		{
+			QueueGeneralSave();
+			gamescope::fonts::RequestRebuild( s_GeneralSettings.overlay.display_scale );
 		}
 
 		void EnsureInitialized()
@@ -774,38 +806,62 @@ namespace gamescope
 					{
 						EnsureGeneralSettingsLoaded();
 						s_GeneralSettings.overlay.display_scale = flScale;
-						QueueGeneralSave();
-						// The font atlas is re-baked at the new size. The
-						// legacy slider did this on release via
-						// IsItemDeactivatedAfterEdit; a registration has no
-						// such hook, so it is REQUESTED on the write and
-						// performed by the render thread at the top of its
-						// next frame.
+
+						// The STORED value always moves immediately, so the
+						// row's own readout tracks the pointer and the user
+						// can see what they are about to get. Only the APPLY
+						// waits.
 						//
-						// Requested, not done here: this setter is reachable
-						// from the console thread through overlay_e2_set, and
-						// RebuildAll() there clears a font atlas out from
-						// under a live draw pass -- a hard abort as soon as
-						// anything on screen needs a glyph baked at the new
-						// size. See Fonts.h's RequestRebuild().
-						gamescope::fonts::RequestRebuild( flScale );
+						// APPLY ON RELEASE (the user, 2026-08-24: "The UI
+						// scale should update, when the slider is released.
+						// Otherwise, it is almost impossible, to adjust.").
+						// This is the one setting in the product whose value
+						// decides the geometry of the control editing it, so
+						// a live apply moves the track out from under the
+						// pointer mid-drag.
+						//
+						// NO PREVIEW DURING THE DRAG, deliberately. A preview
+						// is exactly what the user was complaining about --
+						// and the preview path was also #54's whole bug
+						// surface: FontGlobalScale multiplies on top of the
+						// *baked* atlas scale rather than 1.0, so a naive
+						// per-tick preview drifts, and the BuiltScale()
+						// division that corrects it only has to be right
+						// because the preview exists. Not previewing removes
+						// the class instead of correcting it again.
+						//
+						// The value is read back from the settings struct
+						// inside ApplyDisplayScale() rather than captured
+						// here: a deferred callable that captured `flScale`
+						// would apply whichever tick happened to queue it,
+						// and the drag's LAST tick is the one that should
+						// land.
+						if ( ui::IsPointerDragActive() )
+						{
+							ui::controls::DeferToRelease( []{ ApplyDisplayScale(); } );
+							return;
+						}
+						ApplyDisplayScale();
 					} ) )
 				.Help( "Multiplies every base unit in the overlay and re-bakes the font atlas, so "
 				       "text stays crisp. Widget geometry stays spec-exact, so very large values can "
 				       "overflow fixed-size controls. The responsive ladder decides what collapses "
 				       "as this rises." )
 				.Range( 0.5f, 2.0f )
+				.Step( 0.05f )       // 31 positions: 0.50x, 0.55x, ... 2.00x
 				.Default( config::OverlaySettings{}.display_scale )
 				.Unit( "x" )
 				.Keywords( "scale ui size dpi zoom display_scale font atlas" )
 				.Param( "dock", "Dock scale", BindOverlayFloat( &config::OverlaySettings::dock_scale ) )
 					.Help( "Size of the legacy dock, independently of the overall UI scale." )
 					.Range( 0.85f, 2.0f )
+					.Step( 0.05f )   // 24 positions; 0.85 is itself on the grid
 					.Default( config::OverlaySettings{}.dock_scale )
 				.Param( "notifications", "Notification scale",
 					BindOverlayFloat( &config::OverlaySettings::notification_scale ) )
 					.Help( "Size of toast notifications, independently of the overall UI scale." )
 					.Range( 0.6f, 1.6f )
+					.Step( 0.05f )   // 21 positions
 					.Default( config::OverlaySettings{}.notification_scale );
 
 			a.Group( "Backdrop" );
@@ -815,6 +871,7 @@ namespace gamescope
 				.Help( "How much the game behind the overlay is blurred. A native compositor pass -- "
 				       "it drives FrameInfo_t's blur radius, not a shader effect." )
 				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )       // 21 positions across a 0..1 amount
 				.Default( config::OverlaySettings{}.background_blur )
 				.Keywords( "blur backdrop frost background compositor" );
 
@@ -823,6 +880,7 @@ namespace gamescope
 				.Help( "How far the game behind the overlay is dimmed. The overlay's contrast is "
 				       "measured against this, so lowering it lowers legibility." )
 				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )       // 21 positions
 				.Default( config::OverlaySettings{}.background_darkening )
 				.Keywords( "darken dim backdrop veil contrast background" );
 
@@ -832,6 +890,7 @@ namespace gamescope
 				BindOverlayFloat( &config::OverlaySettings::opacity_windows_focused ) )
 				.Help( "Opacity of an overlay window while it holds input focus." )
 				.Range( 0.3f, 1.0f )
+				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_windows_focused )
 				.Keywords( "opacity transparency window focused alpha" );
 
@@ -839,6 +898,7 @@ namespace gamescope
 				BindOverlayFloat( &config::OverlaySettings::opacity_windows_unfocused ) )
 				.Help( "Opacity of an overlay window while another surface holds input focus." )
 				.Range( 0.3f, 1.0f )
+				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_windows_unfocused )
 				.Keywords( "opacity transparency window unfocused alpha fade" );
 
@@ -846,6 +906,7 @@ namespace gamescope
 				BindOverlayFloat( &config::OverlaySettings::opacity_dock ) )
 				.Help( "Opacity of the legacy dock strip." )
 				.Range( 0.3f, 1.0f )
+				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_dock )
 				.Keywords( "opacity transparency dock alpha" );
 
@@ -853,6 +914,7 @@ namespace gamescope
 				BindOverlayFloat( &config::OverlaySettings::opacity_notifications ) )
 				.Help( "Opacity of toast notifications." )
 				.Range( 0.3f, 1.0f )
+				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_notifications )
 				.Keywords( "opacity transparency notification toast alpha" );
 

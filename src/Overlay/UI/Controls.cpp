@@ -349,8 +349,61 @@ namespace gamescope::ui
 		// absolutely from RowCtx, so advancing ImGui's cursor would be a
 		// second, competing layout system. ItemAdd() alone is what registers
 		// hit-testing and keyboard navigation.
+		// The one write that may be waiting for a drag to end. Frame-scoped
+		// and single-threaded: only ever touched from the atom prologue
+		// below, which runs on the render thread inside a live frame.
+		//
+		// The drag flag itself lives in Registry.cpp
+		// (ui::SetPointerDragActive) rather than here, because its readers are
+		// registrations, and a registration must be able to ask the question
+		// from the console thread where there is no ImGui context (D19.1).
+		std::function<void()> s_DeferredApply;
+
+		// The shared atom prologue. See Controls.h's DeferToRelease() comment
+		// for why the flush lives here rather than in the slider: every atom
+		// on screen runs this every frame, so a drag that ends anywhere still
+		// gets its deferred write applied on the very next frame -- and a
+		// deferred write can never run while something is being held.
+		//
+		// The state published here is the FRAME-START view: ImGui's ActiveId
+		// still belongs to whatever was held last frame. That is deliberately
+		// not the whole answer -- on the frame a press first lands, ActiveId
+		// is taken later, by the atom's own behaviour call, so this reads
+		// false while the pointer is very much down on a control. NoteDragOn()
+		// below is what closes that gap; it runs after the behaviour, which is
+		// where the truth is. Without it the first frame of a click-and-drag
+		// applies immediately and the deferral only starts on frame two.
+		void PublishDragStateAndFlush()
+		{
+			const bool bHeld = ImGui::IsAnyItemActive()
+			                && ImGui::IsMouseDown( ImGuiMouseButton_Left );
+			SetPointerDragActive( bHeld );
+			if ( bHeld || !s_DeferredApply )
+				return;
+
+			// Moved out before the call: the callable is free to queue
+			// another deferral (it will not, today) without this clearing it
+			// again afterwards.
+			std::function<void()> fn = std::move( s_DeferredApply );
+			s_DeferredApply = nullptr;
+			fn();
+		}
+
+		// Called by an atom immediately AFTER its behaviour ran, while the id
+		// it just registered is still the "last item". This is the only place
+		// that can see the press-frame drag, so it can only ever raise the
+		// flag, never clear it -- clearing is the prologue's job, once per
+		// frame, before any atom has run.
+		void NoteDragOnLastItem()
+		{
+			if ( ImGui::IsItemActive() && ImGui::IsMouseDown( ImGuiMouseButton_Left ) )
+				SetPointerDragActive( true );
+		}
+
 		Atom Begin( const ImRect &rc, const char *pszId, ImGuiButtonFlags nFlags = 0 )
 		{
+			PublishDragStateAndFlush();
+
 			Atom a;
 			a.rc = rc;
 
@@ -440,6 +493,8 @@ namespace gamescope::ui
 	// =====================================================================
 	namespace controls
 	{
+		void DeferToRelease( std::function<void()> fn ) { s_DeferredApply = std::move( fn ); }
+
 		bool Switch( const RowCtx &row, const char *pszId, bool *pbValue )
 		{
 			// The hit box is the full kControlH-tall rect (SPEC §3.0); the
@@ -575,6 +630,7 @@ namespace gamescope::ui
 			                                  &flMin, &flMax, "%.3f", &grab );
 			if ( bChanged )
 				ImGui::MarkItemEdited( a.id );
+			NoteDragOnLastItem();
 
 			const float flSpan = ( flMax - flMin );
 			const float flFrac = flSpan != 0.0f ? ( *pflValue - flMin ) / flSpan : 0.0f;
@@ -595,6 +651,7 @@ namespace gamescope::ui
 			                                  &nMin, &nMax, "%d", &grab );
 			if ( bChanged )
 				ImGui::MarkItemEdited( a.id );
+			NoteDragOnLastItem();
 
 			const float flSpan = (float)( nMax - nMin );
 			const float flFrac = flSpan != 0.0f ? (float)( *pnValue - nMin ) / flSpan : 0.0f;

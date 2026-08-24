@@ -119,6 +119,51 @@ hasn't checked out this branch, since master is unaffected.
   being requested or confirmed. Cursor size is unaffected by `overlay.display_scale` — as it
   was before — since the pointer follows your desktop's cursor size rather than the overlay's
   UI scale. (`superdoc/planning/redesign/AUTONOMOUS-DECISIONS.md` D29.)
+- **Notification placement is now the same 3×3 anchor grid the System Monitor uses.** It was a
+  nine-option Choice, which never fit a row and so was always drawn as a dropdown — two rows
+  asking the identical question ("which of nine screen anchors?") that looked nothing alike. It
+  now declares the existing `Kind::Composite` / `CompositeKind::Anchor`, so it is the *same*
+  control, not a second copy of one: no new kind, no new atom, no second grid to drift. It gets
+  no margins, unlike the Monitor's, because there is no notification-margin config key and
+  inventing one would be a schema change. The stored `notification_placement` string and its
+  format are untouched.
+- **The FSR sharpness slider ran backwards, and now does not.** `Sharpness 0%` under FSR was
+  selecting raw 0 — *maximum* sharpening — and 100% was selecting the minimum. The UI carried a
+  per-filter direction flip on the belief, recorded in `DECISIONS.md` #11, that FSR and NIS remap
+  the raw 0–20 value in opposite directions. They do not: raw 0 is maximum and raw 20 is minimum
+  for both, which is what gamescope's own `--help` says ("upscaler sharpness from 0 (max) to 20
+  (min)") and what both shader feeds compute. Re-measured on a real build — five composited
+  screenshots per setting, because a single frame of an animated scene compares two scenes rather
+  than two settings — and edge energy tracks the raw value alone, identically under both filters.
+  There is one mapping now instead of a branch. **Visible consequence:** an unchanged config
+  reads differently — the stock raw 2 now shows as 90%, not 10%, because raw 2 really is
+  near-maximum sharpening. Nothing on disk changed; only the number shown for it.
+- **Every slider now lands on round numbers, with at most ~100 positions.** Dragging used to
+  produce whatever float the pointer's x happened to be worth, so "set it to exactly 0.8" was a
+  matter of luck. Each of the 27 sliders got a step chosen from its own range and meaning —
+  0.05 for a 0–1 amount, 1px for a pixel size, 10 nits for brightness, 5% for volume — rather
+  than one blanket rule. The quantisation lives in the *binding*, not the widget, so the round
+  number is what reaches the config file, not just what the label prints. Only a **drag** is
+  quantised: the arrow keys already move by exactly the step, Shift still subdivides it, the
+  reset chip still restores an off-grid default (SDR-on-HDR brightness defaults to 203 nits on a
+  10-nit grid), and `overlay_e2_set` can still set the number it was told.
+- **UI scale now applies when you let go of the slider, not while you drag it.** It was the one
+  setting whose value decides the geometry of the control editing it, so applying it live slid
+  the track out from under the pointer — the user: *"it is almost impossible, to adjust"*. The
+  number in the row still follows the pointer; the reflow, the save and the font-atlas re-bake
+  all happen once, on release. The mid-drag *preview* was dropped rather than corrected: it was
+  also `#54`'s entire bug surface (`FontGlobalScale` multiplies on top of the *baked* atlas
+  scale, not 1.0, so a naive preview drifts), and not previewing removes that class instead of
+  compensating for it again. The atlas is still only ever rebuilt at the top of a frame, never
+  inside one (`#51`).
+- **Sharpness is one setting again, and changing the filter resets it to 0%.** There was only
+  ever one stored sharpness — one global, one `gamescope.sharpness` key — but FSR and NIS map
+  that raw 0–20 value in *opposite* visual directions, so the percentage the UI showed jumped
+  every time the filter changed and each filter looked like it remembered its own value.
+  Carrying the percentage across the switch instead was rejected: 80% of RCAS and 80% of NIS are
+  not the same amount of sharpening, so it would silently apply a strength nobody chose for that
+  pass. Nothing on disk changed, and re-selecting the filter you are already on does not clear a
+  sharpness you just set.
 - **The rebuilt UI was almost entirely unclickable, for one missing call.** `DrawEntryRow`'s
   full-width row selector had no `SetNextItemAllowOverlap()`. A comment in the code asserted
   ImGui resolves hover to the last item added; it does not — `ItemHoverable` rejects a later

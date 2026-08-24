@@ -47,6 +47,7 @@
 #include "Row.h"
 #include "Tokens.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,38 @@ namespace gamescope::ui
 
 	namespace controls
 	{
+		// ---- the pointer drag, and writes that must wait for it to end ----
+		// A control's binding is written on EVERY frame of a drag, and for
+		// almost everything that is the point: volume, opacity and the accent
+		// hue are all meant to follow the pointer.
+		//
+		// For a setting that RESIZES THE UI ITSELF it is a bug instead. The
+		// track is laid out from the very scale being dragged, so applying the
+		// value live slides the slider out from under the pointer -- the user,
+		// 2026-08-24: *"The UI scale should update, when the slider is
+		// released. Otherwise, it is almost impossible, to adjust."*
+		//
+		// So a binding may hand the reflowing half of its write to
+		// DeferToRelease() while ui::IsPointerDragActive() (Registry.h) is
+		// true. The pending callable runs exactly once, on the first frame no
+		// pointer drag is in flight.
+		//
+		// WHY THE FLUSH LIVES IN THE SHARED ATOM PROLOGUE and not in the
+		// slider: a drag can end anywhere -- the pointer leaves the row, the
+		// value stops changing so the slider stops calling Set(), the sheet
+		// scrolls. Every atom on screen runs that prologue every frame, so the
+		// flush cannot be stranded by where the release happened, and it still
+		// cannot run mid-drag because the condition is "nothing is held".
+		//
+		// Only one write can be pending at a time; a second DeferToRelease()
+		// replaces the first, which is what a drag wants -- the last value the
+		// drag produced is the one that should land.
+		//
+		// The drag FLAG deliberately lives in Registry.h, not here: its
+		// readers are registrations, and a registration is also reached from
+		// the console thread, where asking ImGui anything is an abort (D19.1).
+		void DeferToRelease( std::function<void()> fn );
+
 		// ---- SPEC §3.1 -- every binary in the product ---------------------
 		// 40 x 20 track, 16 knob, 20 travel, in a 28-tall hit box. There is no
 		// Checkbox in this API and there will not be one.

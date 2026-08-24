@@ -749,42 +749,74 @@ namespace gamescope::Notifications
 	// Notifications.h: everything they bind to is file-static in this
 	// translation unit, and a second writer of notification_placement is
 	// exactly the bug this arrangement prevents.
-	namespace
-	{
-		// The nine anchors, flattened. Index is v * 3 + h, which is the same
-		// ordering kPlacements is declared in, so the option value IS the
-		// grid cell -- no lookup table to keep in sync.
-		const ui::Option kPlacementOptions[ 9 ] = {
-			{ 0, "top left"    }, { 1, "top centre"    }, { 2, "top right"    },
-			{ 3, "centre left" }, { 4, "centre"        }, { 5, "centre right" },
-			{ 6, "bottom left" }, { 7, "bottom centre" }, { 8, "bottom right" },
-		};
-	}
-
 	void RegisterRows( ui::Area &area )
 	{
 		area.Group( "Notifications" );
 
-		area.Choice( "overlay.notification_placement", "Toast placement",
+		// The user, 2026-08-24: "Notification position selection should look
+		// the same as the system monitors placement". It is the same question
+		// -- which of nine screen anchors -- so it is now the same control:
+		// P3c's `Kind::Composite` / `CompositeKind::Anchor`, whose body the
+		// shell draws with controls::AnchorGrid(). This was a nine-option
+		// Choice, which the segmented helper had to downgrade to a dropdown
+		// (nine long labels never fit a lane), so the two rows that ask the
+		// identical question looked nothing alike.
+		//
+		// REUSED, NOT REIMPLEMENTED: no new kind, no new atom, and no second
+		// grid. FpsDisplay.cpp's `monitor.anchor` and this row are two
+		// declarations of the same kind, so they cannot drift apart about what
+		// a 3x3 anchor looks like or how it is driven.
+		//
+		// NO MARGINS, unlike the monitor's. The Monitor's grid carries
+		// `margin_v`/`margin_h` Params because FpsDisplaySettings has those
+		// two fields; OverlaySettings has no notification-margin key, and
+		// inventing one would be a config-schema change this task explicitly
+		// forbids. CompositeValue()'s margin line is already conditional on
+		// ParamCount() >= 2, so a grid with no Params renders correctly.
+		//
+		// Two bindings, one string. Each axis re-parses the stored
+		// "top-right"-style value before composing, exactly as
+		// FpsDisplay.cpp's pair does: the axes are a VIEW of the string, never
+		// a second representation of it, so there is no half of the value that
+		// can go stale. The on-disk key and its format are unchanged.
+		area.Composite( "overlay.notification_placement", "Toast placement",
+			ui::CompositeKind::Anchor,
 			ui::AnyBind::Of<int>(
 				[]() -> int
 				{
 					EnsureConfigLoaded();
 					int nVert = 0, nHoriz = 2;
 					ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
-					return nVert * 3 + nHoriz;
+					return nVert;
 				},
-				[]( int nCell )
+				[]( int nVert )
 				{
-					nCell = std::clamp( nCell, 0, 8 );
-					s_GlobalOverlay.notification_placement = ComposePlacement( nCell / 3, nCell % 3 );
+					EnsureConfigLoaded();
+					int nOldVert = 0, nHoriz = 2;
+					ParsePlacement( s_GlobalOverlay.notification_placement, nOldVert, nHoriz );
+					s_GlobalOverlay.notification_placement = ComposePlacement( nVert, nHoriz );
 					PersistPlacement();
 				} ),
-			kPlacementOptions, 9 )
+			ui::AnyBind::Of<int>(
+				[]() -> int
+				{
+					EnsureConfigLoaded();
+					int nVert = 0, nHoriz = 2;
+					ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
+					return nHoriz;
+				},
+				[]( int nHoriz )
+				{
+					EnsureConfigLoaded();
+					int nVert = 0, nOldHoriz = 2;
+					ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nOldHoriz );
+					s_GlobalOverlay.notification_placement = ComposePlacement( nVert, nHoriz );
+					PersistPlacement();
+				} ) )
 			.Help( "Which corner or edge toast notifications appear at. Always global -- shared by "
 			       "every game, even one with its own config override, because a toast's position "
 			       "is a property of the screen rather than of the game." )
-			.Default( 2 )                                  // "top-right", the schema default
+			.Default( 0, 2 )                               // "top-right", the schema default
 			.Keywords( "notification toast placement position corner anchor" );
 
 		area.Switch( "notifications.muted", "Mute notifications",

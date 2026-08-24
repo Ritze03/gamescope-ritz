@@ -622,3 +622,116 @@ TEST_CASE( "palette: a neutral grey has no meaningful chroma", "[overlay_atoms]"
 	REQUIRE( flL > 0.4f );
 	REQUIRE( flL < 0.7f );
 }
+
+// D27, item 2. The user: "The UI scale should update, when the slider is
+// released. Otherwise, it is almost impossible, to adjust."
+//
+// `overlay.display_scale` is the one setting whose value decides the geometry
+// of the control that edits it, so applying it live slides the track out from
+// under the pointer. Its binding hands the whole apply to
+// controls::DeferToRelease() while ui::IsPointerDragActive() is true.
+//
+// This pins the MECHANISM, not the setting: the apply must run exactly once,
+// and never on a frame where the pointer is still holding a control -- which
+// is the half a screenshot cannot show and a console command cannot reach.
+TEST_CASE( "atoms: a deferred write waits for the drag to end, and runs once",
+           "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+
+	const float flTop = 320.0f;
+	float flValue = 0.5f;
+	int nApplied = 0;
+
+	// Every frame of the drag re-queues the apply, exactly as a per-tick
+	// setter does. The count must still end at 1.
+	auto DrawSlider = [ & ]
+	{
+		h.BeginFrame();
+		const ui::RowCtx row = MakeRow( flTop );
+		if ( ui::controls::Slider( row, "scale", &flValue, 0.5f, 2.0f ) )
+		{
+			// What the real setter does: store now, defer the expensive half.
+			if ( ui::IsPointerDragActive() )
+				ui::controls::DeferToRelease( [ &nApplied ] { nApplied++; } );
+			else
+				nApplied++;
+		}
+		h.EndFrame();
+	};
+
+	const ImRect rcTrack = MakeRow( flTop ).PlaceFull();
+
+	// Frame 1: hover the middle of the track.
+	h.MoveMouse( rcTrack.GetCenter() );
+	DrawSlider();
+
+	// Frame 2: press. ImGui takes ActiveId DURING this frame, so the
+	// frame-start view of "is anything held" is still false here -- this is
+	// exactly the frame NoteDragOnLastItem() exists for, and a press that
+	// jumps the value to the click point must already be deferred.
+	h.MouseButton( true );
+	DrawSlider();
+	REQUIRE( nApplied == 0 );
+
+	// Frames 3-5: drag left, then right. The value moves every frame; the
+	// apply must not run on any of them.
+	for ( float flX : { 0.30f, 0.55f, 0.80f } )
+	{
+		h.MoveMouse( ImVec2( rcTrack.Min.x + rcTrack.GetWidth() * flX,
+		                     rcTrack.GetCenter().y ) );
+		DrawSlider();
+		REQUIRE( nApplied == 0 );
+		REQUIRE( ui::IsPointerDragActive() );
+	}
+
+	// The value itself DID move while the apply was held back -- that is what
+	// keeps the row's readout tracking the pointer.
+	REQUIRE( flValue > 0.5f );
+	REQUIRE( flValue < 2.0f );
+
+	// Release, then further frames: the flush lives in the shared atom
+	// prologue, so it lands on the first frame after nothing is held.
+	h.MouseButton( false );
+	DrawSlider();
+	DrawSlider();
+
+	REQUIRE( nApplied == 1 );
+	REQUIRE_FALSE( ui::IsPointerDragActive() );
+
+	// And it stays at one: a flushed deferral is cleared, not replayed.
+	DrawSlider();
+	DrawSlider();
+	REQUIRE( nApplied == 1 );
+
+	// Leave the shared harness idle: pointer parked off every allocated rect,
+	// button up, two settled frames. Catch2 may run these cases in any order.
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	DrawSlider();
+	DrawSlider();
+}
+
+// The other half of the same contract: OFF the drag path -- an arrow key, the
+// reset chip, `overlay_e2_set` from the console thread -- there is no drag, so
+// IsPointerDragActive() is false and the write applies immediately. A binding
+// deferred there would strand the value until someone happened to touch a
+// control, which is a worse failure than applying live.
+TEST_CASE( "atoms: with no drag in flight a write is not deferred", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+
+	// Park the pointer away from everything and settle two frames.
+	h.MouseButton( false );
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	for ( int i = 0; i < 2; i++ )
+	{
+		h.BeginFrame();
+		float flDummy = 0.5f;
+		ui::controls::Slider( MakeRow( 320.0f ), "scale", &flDummy, 0.5f, 2.0f );
+		h.EndFrame();
+	}
+
+	REQUIRE_FALSE( ui::IsPointerDragActive() );
+}

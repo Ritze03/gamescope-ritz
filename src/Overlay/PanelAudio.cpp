@@ -455,6 +455,11 @@ namespace gamescope
 						       "by WirePlumber, not headroom -- it can clip. When the game owns several "
 						       "streams this moves all of them together." )
 						.Range( 0.0f, 150.0f )
+						// The binding is an int percent, so the range is 151 discrete
+						// values -- over the 100-position budget on its own. 5% is
+						// the granularity a volume control is normally read at, and
+						// 100%, the default and the unity point, is on the grid.
+						.Step( 5.0f )    // 31 positions
 						.Default( 100 )
 						.Unit( "%" )
 						.Keywords( "volume gain level loudness game audio" )
@@ -493,6 +498,7 @@ namespace gamescope
 						       "node directly. Independent of every other row here: this cannot move "
 						       "another application's volume." )
 						.Range( 0.0f, 150.0f )
+						.Step( 5.0f )    // 31 positions, as Game volume above
 						.Default( 100 )
 						.Unit( "%" )
 						.Keywords( "volume stream application per-app mixer" )

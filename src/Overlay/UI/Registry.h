@@ -104,6 +104,20 @@ namespace gamescope::ui
 	// row (API.md §9).
 	enum class Applies : uint8_t { Live, NextFrame, NeedsRestart };
 
+	// ---- is a pointer dragging a control right now? -----------------------
+	// Published once a frame by the control atoms (Controls.cpp's shared
+	// prologue) and read here. It lives in this ImGui-free file on purpose:
+	// D19.1's rule is that a registration must never have to ask ImGui a
+	// question, because a registration's getters and setters are also reached
+	// from the console thread, where there is no context at all. A plain bool
+	// is answerable from anywhere, and answers "no" off the render thread,
+	// which is the correct answer there.
+	//
+	// Two things consume it: `overlay.display_scale`, whose apply waits for
+	// the drag to end, and Step()'s quantisation below.
+	void SetPointerDragActive( bool bActive );
+	bool IsPointerDragActive();
+
 	// A type-erased binding. `Cfg()` (schema-backed, knows its destination
 	// file) arrives in P2 with the config seam; `Bind()` covers the transient
 	// and getter/setter cases the atoms need today.
@@ -115,6 +129,12 @@ namespace gamescope::ui
 		bool  IsBound() const { return (bool)m_Get; }
 		Value Get() const;
 		void  Set( const Value &v ) const;
+
+		// Wraps this binding's setter so that a write made DURING A POINTER
+		// DRAG is rounded to the nearest multiple of `flStep`. Applied by
+		// Entry::Step()/Parameter::Step() on slider kinds; see Registry.cpp
+		// for why only the drag is quantised.
+		AnyBind &SnapDragsTo( float flStep );
 
 		template <typename T>
 		static AnyBind Of( T *p )
