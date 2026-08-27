@@ -1049,6 +1049,11 @@ void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType
 // works either way already (the per-frame path resumes and corrects the
 // mode within a frame), but pushing it explicitly here too keeps both
 // directions equally immediate rather than one edge lagging by a frame.
+// Forward declaration: defined much further down, alongside
+// g_bForceGrabCursorUseTheme and steamcompmgr_set_force_grab_cursor_theme(),
+// which is where the fallback-cursor plumbing this touches lives.
+static void ApplyDefaultCursorPolicy();
+
 void steamcompmgr_set_force_relative_mouse( bool bForce )
 {
 	g_bForceRelativeMouse = bForce;
@@ -1059,6 +1064,13 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 		if ( pPaintFocus->GetNestedHints() )
 			pPaintFocus->GetNestedHints()->SetRelativeMouseMode( bForce );
 	}
+
+	// Force Grab Cursor's "use system cursor theme" sub-option has no effect
+	// of its own while this flag is off (ApplyDefaultCursorPolicy() checks
+	// both) -- so toggling force-grab itself must also re-run it, or turning
+	// force-grab on/off wouldn't pick up the sub-option's current state until
+	// something else happened to touch it.
+	ApplyDefaultCursorPolicy();
 }
 
 gamescope::ConCommand cc_debug_set_force_relative_mouse( "debug_set_force_relative_mouse", "Set force-relative-mouse mode (debug)",
@@ -8237,6 +8249,113 @@ const char* g_customCursorPath = nullptr;
 int g_customCursorHotspotX = 0;
 int g_customCursorHotspotY = 0;
 
+// The fallback cursor for a freshly-created Xwayland ctx -- what's shown on
+// the root window before (and whenever) no client window has defined its own
+// cursor. A window that later calls XDefineCursor always wins over whatever
+// this sets on the root, per X11 cursor inheritance -- so this never
+// overrides a game's own cursor, only what's shown in its absence.
+//
+// bPreferThemeCursor selects between two sources for that fallback, both
+// pre-existing:
+//   false (today's behaviour): in nested mode, a live snapshot of the actual
+//     host desktop cursor (GetX11HostCursor(), re-fetched from the outer X11
+//     display each call); in embedded mode, where there is no host display to
+//     snapshot, the same left_ptr-via-Xcursor lookup as the true branch below.
+//   true: skip the host snapshot and go straight to setCursorImageByName(
+//     "left_ptr"), which resolves through libXcursor (XcursorShapeLoadCursor)
+//     against the process's XCURSOR_THEME/XCURSOR_SIZE -- i.e. the desktop's
+//     configured cursor theme, not X11's plain compiled-in arrow. libXcursor
+//     guarantees a valid cursor either way (it falls back to that same plain
+//     arrow internally if no theme is set or the theme has no left_ptr), so
+//     this can never leave the cursor blank or broken.
+//
+// This split only changes anything in nested mode: embedded mode already
+// takes the left_ptr-via-Xcursor path unconditionally (no host display to
+// prefer over it), so bPreferThemeCursor is a no-op there today.
+static void SetDefaultCursorImage( MouseCursor *cursor, bool bPreferThemeCursor )
+{
+	if (g_customCursorPath)
+	{
+		if (!load_mouse_cursor(cursor, g_customCursorPath, g_customCursorHotspotX, g_customCursorHotspotY))
+			xwm_log.errorf("Failed to load mouse cursor: %s", g_customCursorPath);
+		return;
+	}
+
+	if ( !bPreferThemeCursor )
+	{
+		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
+		{
+			cursor->setCursorImage(
+				reinterpret_cast<char *>( pHostCursor->pPixels.data() ),
+				pHostCursor->uWidth,
+				pHostCursor->uHeight,
+				pHostCursor->uXHotspot,
+				pHostCursor->uYHotspot );
+			return;
+		}
+	}
+
+	xwm_log.infof( bPreferThemeCursor
+		? "Using left_ptr from the desktop's Xcursor theme."
+		: "Embedded, no cursor set. Using left_ptr by default." );
+	if ( !cursor->setCursorImageByName( "left_ptr" ) )
+		xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
+}
+
+// Live state for the "use system cursor theme" sub-option (PanelDisplay.cpp,
+// nested under Force Grab Cursor). Only steamcompmgr_set_force_grab_cursor_theme()
+// and steamcompmgr_set_force_relative_mouse() below ever push a change out --
+// see those for why writing this directly would have no live effect (same
+// Issue #68 reasoning as g_bForceRelativeMouse itself).
+bool g_bForceGrabCursorUseTheme = true;
+
+// ApplyDefaultCursorPolicy() (below) does NOT touch any ctx's cursor
+// directly -- it only flips this flag. Every MouseCursor -- its X11 Cursor
+// resource, its Vulkan texture, its plain (non-atomic) m_dirty/m_imageEmpty
+// bookkeeping -- is otherwise only ever touched from the steamcompmgr
+// thread: once at ctx creation (init_xwayland_ctx(), itself always called
+// from that thread) and every frame after via getTexture()/paint(). Both of
+// this option's own trigger points can run on a DIFFERENT thread, though --
+// steamcompmgr_set_force_relative_mouse() is also cc_debug_set_force_relative_mouse's
+// body, which gamescope_private_execute() (wlserver.cpp) dispatches for
+// gamescopectl on the wlserver thread, not this one -- so calling into
+// MouseCursor's Xlib/Vulkan state right there would be a genuine cross-
+// thread data race on those plain fields, not merely a style concern.
+// ProcessPendingCursorFallbackPolicy(), called once per frame from the
+// steamcompmgr loop below, is where the actual work happens instead -- same
+// "flag it, the owning thread picks it up next frame" shape as SetFpsLimit's
+// own X11-property round-trip (PanelDisplay.cpp), for the same reason.
+static std::atomic<bool> g_bCursorFallbackPolicyDirty{ false };
+
+// Called from any thread: never touches a ctx, only requests a refresh.
+static void ApplyDefaultCursorPolicy()
+{
+	g_bCursorFallbackPolicyDirty.store( true, std::memory_order_release );
+}
+
+// Called once per frame from the steamcompmgr thread's own loop (see below).
+// Cheap no-op check when nothing changed since the last frame.
+static void ProcessPendingCursorFallbackPolicy()
+{
+	if ( !g_bCursorFallbackPolicyDirty.exchange( false, std::memory_order_acq_rel ) )
+		return;
+
+	const bool bPreferThemeCursor = g_bForceRelativeMouse && g_bForceGrabCursorUseTheme;
+
+	gamescope_xwayland_server_t *server = NULL;
+	for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
+	{
+		if ( server->ctx && server->ctx->cursor )
+			SetDefaultCursorImage( server->ctx->cursor.get(), bPreferThemeCursor );
+	}
+}
+
+void steamcompmgr_set_force_grab_cursor_theme( bool bUseTheme )
+{
+	g_bForceGrabCursorUseTheme = bUseTheme;
+	ApplyDefaultCursorPolicy();
+}
+
 xwayland_ctx_t g_ctx;
 
 static bool setup_error_handlers = false;
@@ -8540,29 +8659,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
 	XF86VidModeLockModeSwitch(ctx->dpy, ctx->scr, true);
 
 	ctx->cursor = std::make_unique<MouseCursor>(ctx);
-	if (g_customCursorPath)
-	{
-		if (!load_mouse_cursor(ctx->cursor.get(), g_customCursorPath, g_customCursorHotspotX, g_customCursorHotspotY))
-			xwm_log.errorf("Failed to load mouse cursor: %s", g_customCursorPath);
-	}
-	else
-	{
-		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
-		{
-			ctx->cursor->setCursorImage(
-				reinterpret_cast<char *>( pHostCursor->pPixels.data() ),
-				pHostCursor->uWidth,
-				pHostCursor->uHeight,
-				pHostCursor->uXHotspot,
-				pHostCursor->uYHotspot );
-		}
-		else
-		{
-			xwm_log.infof( "Embedded, no cursor set. Using left_ptr by default." );
-			if ( !ctx->cursor->setCursorImageByName( "left_ptr" ) )
-				xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
-		}
-	}
+	SetDefaultCursorImage( ctx->cursor.get(), g_bForceRelativeMouse && g_bForceGrabCursorUseTheme );
 
 	ctx->cursor->undirty();
 
@@ -9717,6 +9814,12 @@ steamcompmgr_main(int argc, char **argv)
 #endif
 
 		update_vrr_atoms(root_ctx, false, &flush_root);
+
+		// See ApplyDefaultCursorPolicy()'s comment: this is the deferred
+		// half of the "use system cursor theme" sub-option, and this is the
+		// one place on the steamcompmgr thread that's guaranteed to run
+		// every frame regardless of which ctx (if any) currently has focus.
+		ProcessPendingCursorFallbackPolicy();
 
 		if (GetCurrentFocus() && GetCurrentFocus()->cursor)
 		{

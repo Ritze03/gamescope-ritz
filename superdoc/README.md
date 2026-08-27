@@ -26,6 +26,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 ### Window management
 
 - [steamcompmgr focus](features/steamcompmgr-focus.md) — X11 window manager focus handling.
+- [Cursor pipeline](features/cursor-pipeline.md) — the three cursor sources, the
+  pointer-lock invariant, and the thread that owns `MouseCursor`.
 
 ### Rendering
 

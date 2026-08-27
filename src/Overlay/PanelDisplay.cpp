@@ -553,6 +553,30 @@ namespace gamescope
 			       "hidden. Turn this on if the mouse ever seems to escape the game window." )
 			.Default( false )
 			.Keywords( "mouse pointer capture confine grab relative" );
+
+		// Sub-option of display.force_grab_cursor, routed the same way for
+		// the same reason: steamcompmgr_set_force_grab_cursor_theme() is the
+		// only live-effect entry point, writing g_bForceGrabCursorUseTheme
+		// directly would silently do nothing. See that function's own
+		// comment (steamcompmgr.cpp) for what it actually changes -- only
+		// the fallback cursor shown when no window has set its own, never a
+		// game's real cursor -- and superdoc/features/ notes on the cursor
+		// pipeline for why a live system cursor isn't possible here at all.
+		a.Switch( "display.force_grab_cursor.system_theme", "Use system cursor theme",
+			ui::AnyBind::Of<bool>(
+				[]{ return g_bForceGrabCursorUseTheme; },
+				[]( bool b ) {
+					steamcompmgr_set_force_grab_cursor_theme( b );
+					Cfg().gamescope.force_grab_cursor_use_theme = b;
+					QueueSave();
+				} ) )
+			.Help( "While the mouse is grabbed, shows your desktop's own cursor style instead of a "
+			       "plain generic pointer. Only matters for games that don't draw their own cursor; "
+			       "if your system has no cursor theme set, you'll still get the plain pointer." )
+			.Default( true )
+			.Keywords( "cursor theme system pointer xcursor grab" )
+			.DisabledUnless( []{ return g_bForceRelativeMouse; },
+				"has no effect unless Force grab cursor, above, is turned on" );
 	}
 
 	static void RegisterUpscaling( ui::Registry &reg )

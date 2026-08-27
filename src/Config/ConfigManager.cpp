@@ -137,6 +137,7 @@ namespace gamescope::config
                 s.gamescope.tearing_enabled = JGetBool( *pGamescope, "tearing_enabled", s.gamescope.tearing_enabled );
                 s.gamescope.fps_limit = JGetInt( *pGamescope, "fps_limit", s.gamescope.fps_limit );
                 s.gamescope.force_grab_cursor = JGetBool( *pGamescope, "force_grab_cursor", s.gamescope.force_grab_cursor );
+                s.gamescope.force_grab_cursor_use_theme = JGetBool( *pGamescope, "force_grab_cursor_use_theme", s.gamescope.force_grab_cursor_use_theme );
                 s.gamescope.sdr_gamut_wideness = JGetFloat( *pGamescope, "sdr_gamut_wideness", s.gamescope.sdr_gamut_wideness );
                 s.gamescope.sdr_on_hdr_brightness_nits = JGetFloat( *pGamescope, "sdr_on_hdr_brightness_nits", s.gamescope.sdr_on_hdr_brightness_nits );
                 s.gamescope.hdr_input_gain = JGetFloat( *pGamescope, "hdr_input_gain", s.gamescope.hdr_input_gain );
@@ -313,6 +314,7 @@ namespace gamescope::config
             jGamescope[ "tearing_enabled" ] = s.gamescope.tearing_enabled;
             jGamescope[ "fps_limit" ] = s.gamescope.fps_limit;
             jGamescope[ "force_grab_cursor" ] = s.gamescope.force_grab_cursor;
+            jGamescope[ "force_grab_cursor_use_theme" ] = s.gamescope.force_grab_cursor_use_theme;
             jGamescope[ "sdr_gamut_wideness" ] = s.gamescope.sdr_gamut_wideness;
             jGamescope[ "sdr_on_hdr_brightness_nits" ] = s.gamescope.sdr_on_hdr_brightness_nits;
             jGamescope[ "hdr_input_gain" ] = s.gamescope.hdr_input_gain;

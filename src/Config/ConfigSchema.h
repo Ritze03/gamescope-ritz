@@ -37,6 +37,7 @@ namespace gamescope::config
         // mechanisms the fields above already use -- see PanelDisplay.cpp.
         int fps_limit = 0;                     // 0 = unlimited, matches g_nSteamCompMgrTargetFPS's own semantics; live via the GAMESCOPE_FPS_LIMIT X11 property
         bool force_grab_cursor = false;        // mirrors --force-grab-cursor's runtime effect on g_bForceRelativeMouse; genuinely live, not startup-only
+        bool force_grab_cursor_use_theme = true; // while grabbed, the fallback cursor (shown whenever no window has set its own) loads the desktop's Xcursor theme (XCURSOR_THEME/XCURSOR_SIZE) instead of X11's plain built-in arrow; falls back to today's plain arrow if no theme is set or it fails to load; no effect while force_grab_cursor is false
 
         // HDR tab -- gamescope_color_mgmt_t fields (rendervulkan.hpp) via
         // their existing set_*() functions. Meaningless while hdr_enabled is

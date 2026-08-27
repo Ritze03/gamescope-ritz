@@ -19,6 +19,11 @@ The newest version below is the one this build reports.
   subtly tinted surface matching the left sidebar, instead of a light wash.
 - **Wider notification scale range**: the notification size slider now spans 0.5x to
   2x, matching the UI scale slider's range.
+- **Force grab cursor now shows your desktop's cursor theme**: a new "Use system
+  cursor theme" option beneath it makes the pointer shown while grabbed match your
+  system's cursor theme instead of a plain arrow. On by default, so if you already
+  use Force grab cursor, your pointer will look different next time without you
+  changing anything; turn the new option off to keep the plain arrow.
 
 ### Fixed
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now
