@@ -25,10 +25,9 @@
 //
 // PROVENANCE. Every coordinate below is transcribed from index.html's `ICONS`
 // table -- the inline SVG the mockup draws, on the same `viewBox="0 0 24 24"`.
-// One glyph has no mockup original: the mockup's eleventh area is
-// `display.output`, which this build does not register, and this build's
-// eleventh area is `setup.shell`, which the mockup has no icon for. That one is
-// noted where it is declared.
+// One glyph has no mockup original: this build's twelfth area is
+// `display.general`, which predates neither SPEC nor index.html and so has
+// no source to transcribe from. That one is noted where it is declared.
 #pragma once
 
 #include <cstddef>

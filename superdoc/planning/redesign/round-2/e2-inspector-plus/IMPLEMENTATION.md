@@ -8,6 +8,153 @@ re-derive it.
 Phase plan: `../../AUTONOMOUS-DECISIONS.md` D10. Judgement calls taken during
 P1: the same file, D11.
 
+> **Later removed (2026-08-27):** `setup.shell`, `shell.layout`, `shell.inspector_host`
+> and its Facts summary `FormatLadder()`, described throughout the phase log below, were
+> the Shell settings tab. The tab is gone — the overlay is hidden with the close X
+> instead — the phase-by-phase entries are kept as the record of what was built and why
+> at the time. See `CHANGELOG.md`.
+
+---
+
+## 2026-08-27 — Issue #88: the launcher combo now closes what it opened
+
+**Why:** `Left Ctrl + Right Ctrl` could open the launcher but had no way to close it
+again short of Esc or a click on the game — the same combo, pressed a second time, did
+nothing. The fix makes the binding a toggle without making it ambiguous.
+
+**The state that makes it unambiguous.** `LauncherOnlyActive()` (derived, see D31 below)
+already tells "the launcher is up" apart from "the shell is open", because
+`settings_overlay_visible` is true in both. What was missing was a way to tell "the
+palette is on screen at all" apart from "nothing is". `PaletteActive()` answers that: true
+exactly when this combo (or `PaletteJump()`'s Enter promotion) put the palette up, as the
+launcher or over a shell — so a second press while it is still true is unambiguously "put
+it away", never "open something else".
+
+**The two closing cases mirror the two opening ones, in `wlserver.cpp`'s key handler:**
+
+| `PaletteActive()` | `LauncherOnlyActive()` | second press does |
+| --- | --- | --- |
+| true | true (it was the launcher) | `SettingsOverlay_SetVisible( false )` — the same hide path Right Ctrl's tap uses, since nothing else was on screen |
+| true | false (palette over a shell) | `Shell::RequestClosePalette()` — closes only the palette; the shell was opened separately and the combo has no business closing it |
+
+`RequestClosePalette()` sets `s_bPaletteCloseRequested`, consumed on `Draw()`'s request
+line the same frame: the launcher branch notices `!s_bPaletteOpen` and calls
+`CloseShell()` itself when there was no shell behind it; the non-launcher path just stops
+drawing the palette and leaves the shell untouched. No ordering question against
+`OpenPalette()` — `wlserver` decides open-vs-close itself from `PaletteActive()` before it
+sends anything, so exactly one of the three requests (`RequestPalette`, `RequestLauncher`,
+`RequestClosePalette`) is ever sent per press.
+
+## 2026-08-27 — Issue #93: the accent hue now reaches text and the main surface
+
+**Why:** the accent-hue slider only ever drove the ten accent tokens (buttons, active
+states, the gradient strip). The user's own call: "Ok/Warn/Danger keep their own hues, so
+they can never wash out or collide with a user's hue choice, but every other neutral —
+greys, borders and surfaces — should all take on the user's hue." Their spec was
+specifically to preserve each colour's existing saturation (chroma) and lightness and
+vary *only* the hue — not to invent a tint that wasn't there before.
+
+**Rejected first attempt.** The first implementation added a constant
+`kNeutralTintChroma = 0.012f` and routed 14 colour roles through `TintedNeutral()` with
+that one manufactured chroma, so pure greys (chroma 0) would visibly pick up the hue. The
+user rejected it: it made the UI look aggressively tinted, and it contradicted the
+spec — it invented chroma on colours that never had any, rather than rotating the hue of
+whatever chroma each colour actually carried.
+
+**The mechanism that replaced it.** `kNeutralTintChroma` is deleted. `TintedNeutral()`
+survives but now takes a chroma parameter driven by each colour base's own *measured*
+chroma — `kTextC` and `kSurfaceC`, derived via `ImU32ToOklch()` — instead of one invented
+constant. This splits the 14 roles into two groups:
+
+- **6 roles with zero original chroma** — `SurfaceInspector`, `SurfaceRaised`, `Line`,
+  `LineRegion`, `LineControl`, `TrackOff` (all `pal::White()`-based) — call `pal::White()`
+  directly again and are byte-identical to their pre-#93 values at every accent hue.
+  Rotating the hue of a chroma-0 colour is a mathematical no-op, so this is exact, not an
+  approximation — a true neutral staying neutral under a hue change is the intended
+  outcome here, not a gap for a future agent to "fix".
+- **8 roles with non-zero original chroma** — `Role::Surface` (C≈0.0047) and the 7
+  `pal::Text()`-based text roles (C≈0.0103) — keep exactly that chroma and now point at
+  the accent hue instead of their old hardcoded hues (264° and 248°). At the default
+  accent this shifts them by 1–3 8-bit steps, imperceptible but real.
+
+`SurfaceRail` (`pal::Black`-based) was already excluded and remains so. Net effect: the
+accent hue reaches the base text colour and the main panel surface, on top of the accent
+controls that already followed it; borders, separators, the slider track and raised
+surfaces stay neutral at every hue, by design.
+
+**Deliberately exempt:** the Ok/Warn/Danger status hues (`index.html`'s fixed status
+hues), which are not part of the accent family so they can never collide with it at any
+hue the user picks — green-means-good and red-means-bad have to survive any accent choice.
+
+## 2026-08-27 — Issue #87: the font atlas's bootstrap-vs-real rebuild distinction
+
+**Why:** fonts rendered with artifacts at exactly 1.0x UI scale — every other scale was
+fine. Root cause: `SettingsOverlay.cpp` bakes the atlas once, at a hardcoded 1.0x, before
+`ImGui_ImplVulkan_Init()` runs, because the persisted `display_scale` has not loaded from
+config yet at that point (`Load( 1.0f, /*bBootstrap=*/true )`). Once the config loads, the
+real scale is known and a second, real bake follows. `Load()`'s existing "already built at
+this exact scale" guard compares only `flBuiltScale` against the requested scale — so when
+the persisted scale happened to equal the 1.0 bootstrap default, the guard saw
+`flBuiltScale == 1.0f` already satisfied and **suppressed the first real post-init
+rebuild**, leaving the provisional bootstrap bake (built before the Vulkan-init upload
+path was even ready) as the atlas for the rest of the process.
+
+**The fix.** `FontSet::bBootstrapOnly` (`src/Overlay/Fonts.cpp`) tracks, per ImGui
+context, whether the *only* `Load()` that context has ever run was the bootstrap bake.
+The scale-equality guard is now `flBuiltScale == flScale && !( bBootstrapOnly &&
+!bBootstrap )` — a same-scale request no longer short-circuits while the only existing
+bake was still provisional. `bBootstrapOnly` is set on every bake to that call's own
+`bBootstrap` value, so it is cleared for good the moment the first real (non-bootstrap)
+`Load()` runs, and never re-suppresses a genuinely-redundant *later* rebuild (e.g. a
+runtime no-op scale change after the process is at rest).
+
+**Correction (same day):** this was a real, independent bug and the fix above is
+correct and stays in — but it was **not** the cause of the blurry/speckled text users
+were reporting at 1.0x. The user confirmed text was still blurry after this fix shipped.
+The actual cause, and the fix for it, is recorded below.
+
+## 2026-08-27 — sharp text at every UI scale: ImGui only bakes glyphs at integer sizes
+
+**Why:** ImGui 1.92 bakes glyphs at integer pixel sizes only. `ImFont::GetFontBaked()`
+rounds the requested size via `ImGui::GetRoundedFontSize()` (`imgui_internal.h`), and
+`ImFont::RenderText()` then draws quads at `size / baked->Size` (`imgui_draw.cpp`). A
+**fractional** requested size therefore gets the nearest integer bake **bilinearly
+resampled** — a vector font re-stretched as a bitmap, which reads as softened/speckled
+text. `ImGui::PushFont` is immune because it rounds `g.FontSize` itself, but this shell
+never calls it: it draws through the explicit-size `AddText`/`CalcTextSizeA` overloads,
+which pass the float straight through unrounded. See upstream
+[ImGui #6800](https://github.com/ocornut/imgui/issues/6800), "Blurry rendering … with
+non-integer font height".
+
+Why 1.0x specifically was the worst scale in the product: the type ladder is authored
+in half-pixels (`Tokens.cpp` — Title 14.5, Section 13.5, Value 16.5), so at 1.0x those
+three roles resolve to quad scales of 0.967 / 0.964 / 0.971 — 3–4% off from a true
+integer bake. At 1.25x–1.5x the error is 0.7–2.5%. At 2.0x every role doubles to a whole
+number and is exactly 1.00000, so 2.0x was already sharp. The defect is font-independent
+and reproduces on ImGui's own built-in font, not just this project's fonts.
+
+**The fix.** A `fonts::RasterSize()` helper (`src/Overlay/Fonts.h` /
+`src/Overlay/Fonts.cpp`) **delegates to `ImGui::GetRoundedFontSize`** rather than
+reimplementing the rounding, so it can never drift from ImGui's own bake lookup. Applied
+at the shell's single text funnel — `MeasureText`/`DrawText` in
+`src/Overlay/UI/Controls.cpp` — so measure and draw share the identical rounded value and
+ellipsis/alignment arithmetic stays consistent with what is actually drawn. Also applied
+in `src/Overlay/Notifications.cpp`, the other place that draws text outside that funnel.
+
+**Traps for a future agent — do not undo these:**
+- The rounding is applied to the **request** at the draw/measure call site, deliberately
+  **not** to the token table in `Tokens.cpp`. The table is authored in scale-1.0 base
+  units and must stay fractional to preserve the six-step type ladder; rounding the
+  tokens themselves would collapse that ladder.
+- The helper delegates to ImGui's own `GetRoundedFontSize()` on purpose instead of
+  reimplementing the rounding rule. Upstream's comment at that rounding site says *"We
+  may support it better later and remove this rounding"* — delegation means if ImGui
+  ever gains true fractional baking, this shell's text follows automatically with no
+  further change.
+- The earlier atlas-rebuild fix just above (`bBootstrap` / `FontSet::bBootstrapOnly`)
+  fixed a real but different bug. Do not revert it just because it turned out not to be
+  the cause of the blur — both fixes are needed.
+
 ---
 
 ## 2026-08-24 — two launcher defects: the close flash, and centring the panel once

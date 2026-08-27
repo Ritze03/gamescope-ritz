@@ -8,6 +8,11 @@ the six legacy panel bodies. It is written to be **checkable**, not reassuring: 
 claim below names the mechanism that produced it, and everything that was *not* tested is
 listed in §9 rather than left to be inferred.
 
+> **Later removed (2026-08-27):** `setup.shell` and `shell.layout`, exercised throughout
+> this report, were the Shell settings tab. The tab is gone — the overlay is hidden with
+> the close X instead — this report is kept as the historical record of the pre-P5 test
+> pass. See `CHANGELOG.md`.
+
 **Method, in one line:** the shell was driven live — 23 nested gamescope sessions, 85
 `grim` captures bounded to the session's own window — through `overlay_e2_key` (real key
 events on the overlay's own input queue, D18.7), `overlay_e2_select`, `overlay_e2_set`,

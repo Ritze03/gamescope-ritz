@@ -96,7 +96,60 @@ namespace gamescope::fonts
 	// (ImGui::Text()/TextDisabled()) without affecting explicit-size
 	// AddText() calls, which is exactly issue #48's scale^2 bug. See
 	// Fonts.cpp's Load() for the full rationale.
-	void Load( float flScale = 1.0f );
+	//
+	// Issue #87: bBootstrap marks the one call SettingsOverlay.cpp makes
+	// before ImGui_ImplVulkan_Init(), before the persisted display_scale is
+	// known (see this function's own file-header note in Fonts.cpp). That
+	// bake is real but provisional -- it must never let its own scale value
+	// satisfy the "already built at this scale" guard against the first
+	// real, post-config-load rebuild that follows (RebuildAll(), reached
+	// via Palette.cpp's EnsureThemeLoaded()). Without this, a persisted
+	// display_scale of exactly 1.0 -- the same value the bootstrap bake
+	// used -- made that guard false-positive and silently skip the real
+	// rebuild, the only scale for which this ever mattered (every other
+	// scale differs from the 1.0 bootstrap value and took the real path
+	// regardless). Callers other than SettingsOverlay.cpp's own bootstrap
+	// Load() should never pass true here.
+	void Load( float flScale = 1.0f, bool bBootstrap = false );
+
+	// ---------------------------------------------------------------------
+	// Issue #99 -- the pixel size ImGui will ACTUALLY rasterise at.
+	// ---------------------------------------------------------------------
+	// ImGui 1.92's font system bakes on demand, and it bakes at INTEGER
+	// pixel sizes only: ImFont::GetFontBaked() runs the requested size
+	// through GetRoundedFontSize() (imgui_internal.h -- literally
+	// IM_ROUND()) before it looks a bake up. ImFont::RenderText() then
+	// draws the glyph quads at `scale = size / baked->Size`, so a
+	// FRACTIONAL requested size does not get a fractional bake -- it gets
+	// the nearest integer bake, bilinearly RESAMPLED by that ratio. That is
+	// exactly the "vector font turned back into a stretched bitmap" look:
+	// soft edges plus dropped/doubled stems where the resample lands.
+	//
+	// The pushed-font path never hits this (imgui.cpp's SetCurrentFont()
+	// rounds g.FontSize itself, so scale is always 1.0). The overlay does
+	// not use that path: Controls.cpp draws every string with the explicit
+	// -size ImDrawList::AddText()/ImFont::CalcTextSizeA() overloads, which
+	// pass the caller's unrounded float straight through.
+	//
+	// That made display_scale 1.0 the WORST-looking scale in the product,
+	// which is why this read as a 1.0x-only bug. The type ladder is
+	// authored in half-pixels (Tokens.cpp: Title 14.5, Section 13.5,
+	// Value 16.5), so at 1.0x those three roles -- slab/region titles,
+	// group bands and rail sections, and every numeric/state readout --
+	// were resampled by 0.966/0.964/0.971. At 2.0x every role doubles to a
+	// whole number and resamples by exactly 1.0, i.e. is pixel-perfect;
+	// at 1.25x/1.5x the ratios land within ~1.5% of 1.0 and are far less
+	// visible. Measured, not reasoned: 1.0x is 3-4% off, ~2x worse than
+	// any other scale, and it is font-independent (it reproduces on
+	// ImGui's own built-in default font, as the user reported).
+	//
+	// So: run any size destined for an explicit-size AddText()/
+	// CalcTextSizeA() call through this first. Rounding the REQUEST is the
+	// fix rather than rounding the token table, because the token table is
+	// authored in scale-1.0 base units and has to stay fractional to keep
+	// its six-step ladder (D27); it is the physical-pixel size, after the
+	// display_scale multiply, that has to land on a bake.
+	float RasterSize( float flSizePx );
 
 	// Re-bakes every context that has ever called Load() (i.e. every
 	// context whose EnsureImguiInit() has actually run at least once this

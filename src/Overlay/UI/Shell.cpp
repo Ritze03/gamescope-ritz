@@ -96,8 +96,8 @@ namespace gamescope::ui::shell
 		std::string   s_sSelectedArea;
 		std::string   s_sSelectedEntry;   // empty => Overview (SPEC §5.5)
 		// The Inspector host preference lives in cv_overlay_e2_host below --
-		// ONE storage, so the console, Ctrl+I, the spine, the close glyph and
-		// the setup.shell row cannot disagree about which host is current.
+		// ONE storage, so the console, Ctrl+I, the spine and the close glyph
+		// cannot disagree about which host is current.
 		// Host() / SetHost() are the only accessors.
 		bool          s_bModeOverridden  = false;
 		InspectorMode s_eMode            = InspectorMode::Configure;
@@ -214,11 +214,10 @@ namespace gamescope::ui::shell
 		// render thread -- overlay_e2_set, overlay_e2_palette and the glyph
 		// sweep all call them -- and ImGui has no context there, so GetIO()
 		// asserts and takes the compositor down with it. That is exactly the
-		// class of bug D15 already fixed once for fonts::RebuildAll();
-		// shell.layout's own Facts summary is FormatLadder(), so
-		// `overlay_e2_palette query shell.` aborted gamescope. Two floats
-		// written once a frame by the one thread that has a context, read by
-		// anyone.
+		// class of bug D15 already fixed once for fonts::RebuildAll(); a
+		// Facts row's Live callback reading ImGui::GetIO() from the console
+		// thread aborted gamescope the same way. Two floats written once a
+		// frame by the one thread that has a context, read by anyone.
 		std::atomic<float> s_flSurfaceW = 0.0f;
 		std::atomic<float> s_flSurfaceH = 0.0f;
 
@@ -375,7 +374,18 @@ namespace gamescope::ui::shell
 		// frame that is drawing it.
 		std::atomic<bool> s_bLauncherOnlyPublished{ false };
 
+		// Issue #88: the published mirror of s_bPaletteOpen, for the same
+		// reason s_bLauncherOnlyPublished exists -- wlserver's hotkey thread
+		// needs to know whether the combo already has something open (to
+		// close it) without racing the frame that owns s_bPaletteOpen.
+		std::atomic<bool> s_bPaletteOpenPublished{ false };
+
 		std::atomic<bool> s_bLauncherRequested{ false };
+
+		// Issue #88: the combo's "close" request -- consumed alongside the
+		// two open requests above, on the same opening-request cadence but
+		// spelled out separately because it means the opposite thing.
+		std::atomic<bool> s_bPaletteCloseRequested{ false };
 
 		// The overlay's layer went down at some point. See
 		// shell::NotifyOverlayHidden(). It exists ONLY to catch a hide and a
@@ -584,7 +594,7 @@ namespace gamescope::ui::shell
 			"With no arguments, lists the registered area and row ids. "
 			"Through gamescopectl the two ids must be ONE quoted argument -- gamescopectl collapses "
 			"everything after the command name into a single field, which wlserver then re-splits: "
-			"gamescopectl overlay_e2_select \"setup.shell shell.layout\".",
+			"gamescopectl overlay_e2_select \"setup.profiles profiles.list\".",
 			SelectById );
 
 		// P4. The palette is KEYBOARD-ONLY by design, and this project
@@ -686,16 +696,6 @@ namespace gamescope::ui::shell
 		// that groups exactly one item costs a line and buys nothing. Area
 		// ids keep their original prefixes (`image.shaders` is still
 		// `image.shaders`); only the rail's grouping moved.
-		const Option kHostOptions[] = {
-			{ (int)InspectorHost::Column, "column" },
-			{ (int)InspectorHost::Drawer, "drawer" },
-			{ (int)InspectorHost::Hidden, "hidden" },
-		};
-
-		bool s_bSpineLabel = true;
-
-		std::string FormatLadder();
-
 		void RegisterAll( Registry &reg )
 		{
 			// ---- DISPLAY -------------------------------------------------
@@ -731,49 +731,6 @@ namespace gamescope::ui::shell
 			// setup.appearance. The rail is now the eleven items SPEC §8.1
 			// names.
 			PanelConfig_RegisterAreas( reg );
-
-			Area &shell = reg.Add( "setup.shell", "Shell", Section::Setup );
-			shell.Summary( []{ return std::string( "How the settings surface itself is laid out." ); } );
-
-			shell.Choice( "shell.inspector_host", "Inspector",
-				AnyBind::Of<int>(
-					[]{ return (int)Host(); },
-					[]( int n ) { SetHost( (InspectorHost)std::clamp( n, 0, 2 ) ); } ),
-				kHostOptions, 3 )
-				.Help( "Where the Inspector lives. A column sits beside the sheet; a drawer "
-				       "floats over its right edge; hidden leaves only the spine. Ctrl+I cycles "
-				       "the same three. A slab too narrow for a column is given a drawer "
-				       "regardless of this setting." )
-				.Default( (int)InspectorHost::Column )
-				.Keywords( "inspector drawer column hidden depth ctrl+i" )
-				.Param( "spine_label", "Name the spine",
-					AnyBind::Of<bool>( &s_bSpineLabel ) )
-					.Help( "Draw the word \"inspector\" down the collapsed spine. Off leaves a "
-					       "bare edge, which is quieter but no longer says what it opens." )
-					.Default( true );
-
-			shell.Facts( "shell.layout", "Layout", []{ return FormatLadder(); } )
-				.Help( "What the responsive ladder decided for the current surface and "
-				       "display scale. Read-only; every value here is derived." )
-				.Keywords( "ladder slab scale columns rail step layout" )
-				.Live( "slab", []{
-					char sz[ 96 ];
-					// s_flSurfaceW/H, not ImGui::GetIO() -- see the comment
-					// above FormatLadder(). A .Live() runs on the render
-					// thread today, but nothing in the registry's contract
-					// says it must, and the two readings must not disagree.
-					const Slab slab = Slab::For( s_flSurfaceW.load( std::memory_order_relaxed ),
-					                             s_flSurfaceH.load( std::memory_order_relaxed ), Scale() );
-					snprintf( sz, sizeof( sz ), "%.0f x %.0f px  (%.0f x %.0f base)",
-						slab.flWidthPx, slab.flHeightPx, slab.flWidthBase, slab.flHeightBase );
-					return Fact{ "slab", sz };
-				} )
-				.Live( "scale", []{
-					char sz[ 32 ];
-					snprintf( sz, sizeof( sz ), "%.2fx", Scale() );
-					return Fact{ "display scale", sz };
-				} )
-				.Live( "regions", []{ return Fact{ "regions", FormatLadder() }; } );
 		}
 
 		Registry &Reg()
@@ -1619,37 +1576,12 @@ namespace gamescope::ui::shell
 			ImGui::PopFont();
 		}
 
-		// D20.2. Which areas cannot be split into columns -- asked in exactly
-		// one place so `shell.layout`'s printed column count and the sheet's
-		// drawn one are the same number by construction. A printed value that
-		// disagrees with the screen is the defect this whole change removes;
-		// re-deriving the predicate at the second call site would put it
-		// straight back.
+		// D20.2. Which areas cannot be split into columns -- kept as its own
+		// predicate rather than inlined at the call site so a future second
+		// caller reuses it instead of re-deriving it and risking disagreement.
 		bool AreaIsUnsplittable( const Area *pArea )
 		{
 			return pArea && pArea->HasContent();
-		}
-
-		std::string FormatLadder()
-		{
-			const float flW = s_flSurfaceW.load( std::memory_order_relaxed );
-			const float flH = s_flSurfaceH.load( std::memory_order_relaxed );
-			if ( flW <= 0.0f || flH <= 0.0f )
-				return "not drawn yet";
-
-			const Slab slab = Slab::For( flW, flH, Scale() );
-			const Area *pArea = SelectedArea();
-			const LadderResult L = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0,
-			                              AreaIsUnsplittable( pArea ) );
-
-			char sz[ 160 ];
-			snprintf( sz, sizeof( sz ), "rail %.0f · %s %.0f · sheet %.0f · %d col · step %d",
-				L.flRailBase,
-				L.eHost == InspectorHost::Column ? "column" :
-				L.eHost == InspectorHost::Drawer ? "drawer" : "spine",
-				L.eHost == InspectorHost::Hidden ? shelltok::kSpine : L.flInspectorBase,
-				L.flSheetBase, L.nColumns, L.nStep );
-			return sz;
 		}
 
 		// =================================================================
@@ -1961,40 +1893,14 @@ namespace gamescope::ui::shell
 
 			const Rect  rcText  = { rc.x0 + Px( tok::kSheetPad ), rc.y0,
 			                        rc.x1 - Px( tok::kSheetPad ), rc.y1 };
-			const float flAvail = rcText.x1 - rcText.x0;
 
-			// The legend is the only place the shell advertises its own
-			// shortcuts, and at 2.0x the full form does not fit the sheet --
-			// so DrawText's left-align fallback clipped the TAIL, which is
-			// where `Esc close` is. That is the worst possible thing to lose:
-			// a user who cannot read the rest of the line is precisely the
-			// user who needs to know how to get out of it.
-			//
-			// So the line drops hints from the LEFT instead, cheapest first,
-			// and `Esc close` is the last thing standing. Chosen by
-			// measurement rather than by scale, because the sheet's width
-			// depends on the Inspector's host and the drawer as well as on
-			// the ladder step.
-			static const char *const kForms[] = {
-				"^K  search      ^I  inspector      ^/  explain      Tab  region      Esc  close",
-				"^K search    ^I inspector    ^/ explain    Tab region    Esc close",
-				"^K search    ^I inspector    Tab region    Esc close",
-				"^K search    Tab region    Esc close",
-				"^K search    Esc close",
-				"Esc close",
-			};
-
-			// Falls back to the shortest form, which is also the one that
-			// fits every width this shell can produce.
-			const char *pszLegend = kForms[ IM_ARRAYSIZE( kForms ) - 1 ];
-			for ( const char *pszForm : kForms )
-			{
-				if ( MeasureText( TypeRole::Meta, pszForm ).x <= flAvail )
-				{
-					pszLegend = pszForm;
-					break;
-				}
-			}
+			// Issue #97: this used to be the shell's navigation-key legend
+			// (^K search, ^I inspector, ^/ explain, Tab region, Esc close),
+			// responsive across five forms as the sheet narrowed. Those
+			// hints are gone now, leaving only the one chord that opens the
+			// Launcher -- one fixed form, so the width-driven fallback that
+			// picked among several forms goes with it.
+			static const char *const pszLegend = "L Ctrl + R Ctrl  launcher";
 
 			Label( rcText, TypeRole::Meta, Col( Role::TextMeta ), pszLegend );
 		}
@@ -2467,7 +2373,13 @@ namespace gamescope::ui::shell
 			ImRect rcLabel, rcValue;
 			const float flValueW = !sValue.empty()
 				? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-			bl.line1.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+			// bl.rcBody.Min.x is this band's REAL control edge -- flCtlMin
+			// for a full-bleed body (Hue/Strip/Graph/Color: unchanged from
+			// before) but well right of it for a fixed-width one (Anchor's
+			// 96-wide grid, right-bound like Switch/Stepper), which is
+			// exactly the case Row.h's two-argument SplitLabelZone() exists
+			// for -- see the fixed-width-atom comment above ValueAnchorPx().
+			bl.line1.SplitLabelZone( flValueW, bl.rcBody.Min.x, &rcLabel, &rcValue );
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 			       TypeRole::Label,
@@ -2552,6 +2464,29 @@ namespace gamescope::ui::shell
 			return bClicked;
 		}
 
+		// The value's anchor for Row.h's two-argument SplitLabelZone().
+		// Switch (a 40-wide track) and Stepper (a 44-wide group) are fixed,
+		// narrow atoms right-bound well inside the control zone -- Place()'s
+		// own right-anchoring law (Row.h) -- so anchoring the value at Lw, as
+		// the one-argument overload does, stranded it far to their left
+		// (screenshot-reported: switches and the FPS-limit spinner). Every
+		// other value-bearing kind (Slider, Meter) fills the WHOLE control
+		// zone, so its control's left edge is already flCtlMin -- exactly
+		// what PlaceFull().Min.x below always returns, by construction,
+		// regardless of kind. So this default is not a guess that happens to
+		// match; it is flCtlMin spelled out, i.e. the one-argument overload's
+		// own anchor -- which is why Slider and Meter rows are byte-for-byte
+		// unaffected by every row now routing through this helper.
+		float ValueAnchorPx( Kind eKind, const RowCtx &row )
+		{
+			switch ( eKind )
+			{
+				case Kind::Switch:  return row.Place( tok::kSwitchW ).Min.x;
+				case Kind::Stepper: return row.Place( tok::kStepperW ).Min.x;
+				default:            return row.PlaceFull().Min.x;
+			}
+		}
+
 		// One Inspector/sheet row of the Row grammar.
 		bool DrawEntryRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
 		                   bool bSelected, bool bAffordance = true )
@@ -2624,7 +2559,7 @@ namespace gamescope::ui::shell
 			ImRect rcLabel, rcValue;
 			const float flValueW = entry.UsesValue() && !sValue.empty()
 				? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-			row.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+			row.SplitLabelZone( flValueW, ValueAnchorPx( entry.GetKind(), row ), &rcLabel, &rcValue );
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 			       TypeRole::Label,
@@ -2817,7 +2752,7 @@ namespace gamescope::ui::shell
 				const std::string sValue = FormatDeclValue( param );
 				const float flValueW = param.UsesValue() && !sValue.empty()
 					? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-				row.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+				row.SplitLabelZone( flValueW, ValueAnchorPx( param.GetKind(), row ), &rcLabel, &rcValue );
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
@@ -3406,17 +3341,32 @@ namespace gamescope::ui::shell
 		void DrawModeStrip( const Rect &rc, const Entry *pEntry )
 		{
 			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Col( Role::LineRegion ) );
+
+			const float flCloseW = Px( 22.0f ) + Px( tok::kS );
+
+			// The mode strip's own close glyph -- SPEC §8.05 names it as
+			// one of the three ways the Inspector is hidden. Drawn (and
+			// hit-tested) before the `!pEntry` early return below (issue
+			// #95): Overview has no mode cells, but the strip -- and its
+			// close button -- are still on screen and must stay clickable.
+			const Rect rcClose { rc.x1 - Px( 14.0f ) - Px( 22.0f ), rc.y0, rc.x1 - Px( 14.0f ), rc.y1 };
+			ImGui::SetCursorScreenPos( ImVec2( rcClose.x0, rcClose.y0 + ( rcClose.Height() - Px( 22.0f ) ) * 0.5f ) );
+			if ( ImGui::InvisibleButton( "##inspclose", ImVec2( Px( 22.0f ), Px( 22.0f ) ) ) )
+				SetHost( InspectorHost::Hidden );
+			Label( rcClose, TypeRole::Meta,
+			       ImGui::IsItemHovered() ? Col( Role::TextPrimary ) : Col( Role::TextMeta ),
+			       "x", TextAlign::Center );
+
 			if ( !pEntry )
 			{
 				// SPEC §5.1: Overview "replaces the strip entirely".
-				Label( { rc.x0 + Px( 14.0f ), rc.y0, rc.x1 - Px( 14.0f ), rc.y1 },
+				Label( { rc.x0 + Px( 14.0f ), rc.y0, rc.x1 - Px( 14.0f ) - flCloseW, rc.y1 },
 				       TypeRole::Section, Col( Role::TextMeta ), "OVERVIEW" );
 				return;
 			}
 
 			const ModeCounts counts = CountsFor( *pEntry );
 			const InspectorMode eActive = CurrentMode( pEntry );
-			const float flCloseW = Px( 22.0f ) + Px( tok::kS );
 			const float flCellW  = ( rc.Width() - 2.0f * Px( 14.0f ) - flCloseW ) * 0.5f;
 
 			for ( int i = 0; i < 2; ++i )
@@ -3463,16 +3413,7 @@ namespace gamescope::ui::shell
 				if ( bOn )
 					Fill( { rcCell.x0, rcCell.y1 - Px( 2.0f ), rcCell.x1, rcCell.y1 }, Col( Role::AccentBase ) );
 			}
-
-			// The mode strip's own close glyph -- SPEC §8.05 names it as one
-			// of the three ways the Inspector is hidden.
-			const Rect rcClose { rc.x1 - Px( 14.0f ) - Px( 22.0f ), rc.y0, rc.x1 - Px( 14.0f ), rc.y1 };
-			ImGui::SetCursorScreenPos( ImVec2( rcClose.x0, rcClose.y0 + ( rcClose.Height() - Px( 22.0f ) ) * 0.5f ) );
-			if ( ImGui::InvisibleButton( "##inspclose", ImVec2( Px( 22.0f ), Px( 22.0f ) ) ) )
-				SetHost( InspectorHost::Hidden );
-			Label( rcClose, TypeRole::Meta,
-			       ImGui::IsItemHovered() ? Col( Role::TextPrimary ) : Col( Role::TextMeta ),
-			       "x", TextAlign::Center );
+			// Close glyph already drawn above, before the !pEntry return.
 		}
 
 		float DrawWrapped( const Rect &rc, TypeRole eRole, ImU32 col, const char *pszText, float y )
@@ -3620,7 +3561,7 @@ namespace gamescope::ui::shell
 				const std::string sValue = FormatDeclValue( param );
 				const float flValueW = param.UsesValue() && !sValue.empty()
 					? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-				row.SplitLabelZone( flValueW, &rcLabel, &rcValue );
+				row.SplitLabelZone( flValueW, ValueAnchorPx( param.GetKind(), row ), &rcLabel, &rcValue );
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
@@ -4193,9 +4134,6 @@ namespace gamescope::ui::shell
 
 			Fill( rc, bHovered ? Accent( 0.16f ) : IM_COL32( 255, 255, 255, 10 ) );
 			VLine( rc.x0, rc.y0, rc.y1, bHovered ? Col( Role::AccentBase ) : Col( Role::LineRegion ) );
-
-			if ( !s_bSpineLabel )
-				return;
 
 			// SPEC §8.05: the spine "names itself, so the region is
 			// discoverable by someone who never learned Ctrl+I". CSS gets
@@ -5852,6 +5790,22 @@ namespace gamescope::ui::shell
 		       s_bLauncherOnlyPublished.load( std::memory_order_acquire );
 	}
 
+	// Issue #88: same derivation as LauncherOnlyActive() and for the same
+	// reason -- gating on capturing means a stale `true` left over from
+	// before a hide (nothing on the closing path clears s_bPaletteOpen
+	// itself) is unobservable rather than merely unlikely, and the very next
+	// opening edge starts clean via ResetTransient() regardless.
+	bool PaletteActive()
+	{
+		return SettingsOverlay_IsCapturingInput() &&
+		       s_bPaletteOpenPublished.load( std::memory_order_acquire );
+	}
+
+	void RequestClosePalette()
+	{
+		s_bPaletteCloseRequested.store( true, std::memory_order_release );
+	}
+
 	void NotifyOverlayHidden()
 	{
 		// D31: the notice, and ONLY the notice. This used to also clear the
@@ -5882,7 +5836,7 @@ namespace gamescope::ui::shell
 		const ImGuiIO &io = ImGui::GetIO();
 
 		// Publish the surface size for every reader that has no ImGui
-		// context -- the console thread's, above all. See FormatLadder().
+		// context -- the console thread's, above all.
 		s_flSurfaceW.store( io.DisplaySize.x, std::memory_order_relaxed );
 		s_flSurfaceH.store( io.DisplaySize.y, std::memory_order_relaxed );
 
@@ -5959,7 +5913,21 @@ namespace gamescope::ui::shell
 			OpenPalette();
 			s_bLauncherOnly = true;
 		}
+		// Issue #88: the combo's close half. Mutually exclusive with the two
+		// opens above by construction -- wlserver only ever sends one of the
+		// three per press, deciding open-vs-close itself from PaletteActive()
+		// before it sends anything -- so there is no ordering question
+		// between this and OpenPalette() above. Setting s_bPaletteOpen here
+		// is exactly what Esc and click-off already do (see
+		// RunPaletteKeyboard()), so this reaches the shell through the same
+		// path a user-initiated close does: the launcher branch below still
+		// notices `!s_bPaletteOpen` and calls CloseShell() itself when there
+		// was no shell behind it, and the non-launcher path below simply
+		// stops drawing the palette, leaving the shell untouched.
+		if ( s_bPaletteCloseRequested.exchange( false, std::memory_order_acq_rel ) )
+			s_bPaletteOpen = false;
 		s_bLauncherOnlyPublished.store( s_bLauncherOnly, std::memory_order_release );
+		s_bPaletteOpenPublished.store( s_bPaletteOpen, std::memory_order_release );
 
 		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )
@@ -6203,10 +6171,11 @@ namespace gamescope::ui::shell
 				               ladderDrawn.nColumns );
 			DrawSheetFoot( Off( regions.rcSheetFoot ) );
 
-			// The rail/sheet boundary. Drawn from the sheet's own left
-			// edge, so the animated rail carries it along.
-			VLine( Off( regions.rcSheet ).x0, Off( regions.rcBody ).y0, Off( regions.rcBody ).y1,
-			       Col( Role::LineRegion ) );
+			// The rail/sheet boundary is DrawRail()'s own right-edge line
+			// (drawn from the same live, possibly-animated rc it was
+			// called with above) -- a second line here at rcSheet.x0, which
+			// Layout.cpp sets equal to rcRail.x1, painted directly against
+			// it and doubled the rule's apparent width (issue #96).
 
 			if ( ladderDrawn.eHost == InspectorHost::Hidden )
 			{

@@ -99,6 +99,7 @@
 #include "Fonts.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" // GetRoundedFontSize() -- see RasterSize() below
 
 #include "Geist-Regular.h"
 #include "Geist-Medium.h"
@@ -179,6 +180,21 @@ namespace gamescope::fonts
 			// a legitimate already-built scale.
 			float flBuiltScale = 0.0f;
 
+			// Issue #87: true only while the ONLY Load() this context has
+			// ever run was SettingsOverlay.cpp's pre-Vulkan-init bootstrap
+			// bake (Load(1.0f, /*bBootstrap=*/true)). Kept distinct from
+			// flBuiltScale so the "already built at this exact scale" guard
+			// below can't false-positive against that provisional bake: a
+			// persisted display_scale of exactly 1.0 -- the bootstrap
+			// bake's own value -- must still force one real rebuild once
+			// the config has loaded, the same as every other scale already
+			// did by simply differing from 1.0. Cleared by the first Load()
+			// that runs with bBootstrap == false, i.e. the first real
+			// rebuild; stays false for the rest of the process after that,
+			// so this never re-suppresses a genuinely-redundant later
+			// rebuild request (e.g. a runtime no-op scale change).
+			bool bBootstrapOnly = false;
+
 			// Issue #51: deferred-rebuild request for THIS context -- see
 			// RebuildAll()/ApplyPendingRebuild() below for why this exists
 			// and who is expected to consume it.
@@ -198,7 +214,22 @@ namespace gamescope::fonts
 		std::unordered_map<ImGuiContext *, FontSet> g_FontSets;
 	}
 
-	void Load( float flScale )
+	// Issue #99. Deliberately delegates to ImGui's own GetRoundedFontSize()
+	// rather than re-implementing IM_ROUND() here: this has to agree with
+	// what ImFont::GetFontBaked() does BIT FOR BIT, or the resample this
+	// exists to remove comes straight back as a 1-in-N-pixels ratio. If a
+	// future ImGui changes the policy (its own comment at the rounding site
+	// says "We may support it better later and remove this rounding"), this
+	// follows it for free and becomes a no-op instead of a wrong guess.
+	//
+	// The clamp mirrors SetCurrentFont()'s, so a degenerate scale can never
+	// ask for a 0px or absurd bake.
+	float RasterSize( float flSizePx )
+	{
+		return ImClamp( ImGui::GetRoundedFontSize( flSizePx ), 1.0f, IMGUI_FONT_SIZE_MAX );
+	}
+
+	void Load( float flScale, bool bBootstrap )
 	{
 		ImGuiContext *pContext = ImGui::GetCurrentContext();
 		if ( pContext == nullptr )
@@ -247,7 +278,14 @@ namespace gamescope::fonts
 		io.FontGlobalScale = 1.0f;
 
 		FontSet &set = g_FontSets[pContext];
-		if ( set.flBuiltScale == flScale )
+
+		// Issue #87: the scale-equality guard below must not fire against
+		// a still-provisional bootstrap bake -- see bBootstrapOnly's own
+		// comment on FontSet. bBootstrap itself is never blocked by the
+		// guard (SettingsOverlay.cpp's bootstrap call always runs first,
+		// while flBuiltScale is still its 0.0f "never built" sentinel, so
+		// this only ever widens which LATER call is allowed through).
+		if ( set.flBuiltScale == flScale && !( set.bBootstrapOnly && !bBootstrap ) )
 			return; // already built at this exact scale -- nothing to do (see RebuildAll())
 
 		// Issue #38: safe to call this more than once per context now --
@@ -328,12 +366,14 @@ namespace gamescope::fonts
 			for ( int i = 0; i < kStyleCount; i++ )
 				set.fonts[i] = pDefault;
 			set.flBuiltScale = flScale;
+			set.bBootstrapOnly = bBootstrap; // issue #87 -- see FontSet's own comment
 			return;
 		}
 
 		for ( int i = 0; i < kStyleCount; i++ )
 			set.fonts[i] = builtFonts[i];
 		set.flBuiltScale = flScale;
+		set.bBootstrapOnly = bBootstrap; // issue #87 -- see FontSet's own comment
 
 		// Style::Label (Geist Sans Regular, body text) becomes the atlas's
 		// default -- every pre-existing ImGui::Text/Checkbox/SliderFloat/

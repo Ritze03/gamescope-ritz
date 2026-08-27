@@ -486,7 +486,10 @@ namespace gamescope::Notifications
 		ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Label );
-		const float flFontSize = 13.0f * flScale;
+		// Issue #99: snapped to a whole pixel -- 14 * a fractional scale is
+		// otherwise served by the nearest integer bake and resampled. See
+		// Fonts.h's RasterSize().
+		const float flFontSize = fonts::RasterSize( 14.0f * flScale ); // match Style::Label's real size (Fonts.cpp kSpecs) — issue #83
 		const float flPadding = 12.0f * flScale;
 		const float flAccentBarW = 3.0f * flScale;
 		const float flCardWidth = kCardWidth * flScale;

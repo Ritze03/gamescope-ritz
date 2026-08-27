@@ -70,7 +70,16 @@ namespace gamescope::ui
 			return ImVec2( 0.0f, 0.0f );
 
 		ImFont *pFont = fonts::Get( FaceFor( eRole ) );
-		const float flSize = TypeSizePx( eRole );
+		// Issue #99: RasterSize(), never TypeSizePx() raw. The explicit
+		// -size AddText()/CalcTextSizeA() overloads below hand ImGui the
+		// float verbatim, and ImGui only ever BAKES at whole pixels -- a
+		// fractional request is served by the nearest integer bake,
+		// resampled. See Fonts.h's RasterSize() for the measurement and
+		// for why display_scale 1.0 was the worst-hit scale of all.
+		// Measuring and drawing MUST use the identical value, or the
+		// ellipsis/alignment arithmetic below is done against a width the
+		// draw does not produce.
+		const float flSize = fonts::RasterSize( TypeSizePx( eRole ) );
 		return pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, pszText, pszEnd );
 	}
 
@@ -80,7 +89,16 @@ namespace gamescope::ui
 			return;
 
 		ImFont *pFont = fonts::Get( FaceFor( eRole ) );
-		const float flSize = TypeSizePx( eRole );
+		// Issue #99: RasterSize(), never TypeSizePx() raw. The explicit
+		// -size AddText()/CalcTextSizeA() overloads below hand ImGui the
+		// float verbatim, and ImGui only ever BAKES at whole pixels -- a
+		// fractional request is served by the nearest integer bake,
+		// resampled. See Fonts.h's RasterSize() for the measurement and
+		// for why display_scale 1.0 was the worst-hit scale of all.
+		// Measuring and drawing MUST use the identical value, or the
+		// ellipsis/alignment arithmetic below is done against a width the
+		// draw does not produce.
+		const float flSize = fonts::RasterSize( TypeSizePx( eRole ) );
 		const ImVec2 size  = pFont->CalcTextSizeA( flSize, FLT_MAX, 0.0f, pszText );
 
 		// Alignment only has meaning while the text FITS. Once it is wider
@@ -598,7 +616,7 @@ namespace gamescope::ui
 			// The knob's travel is a token derived from the track and the knob
 			// (Tokens.h), never a second literal.
 			const float flKnob  = Px( tok::kSwitchKnob );
-			const float flInset = Px( tok::kSwitchInset ) * 0.5f;   // 1 unit: the border
+			const float flInset = Px( tok::kSwitchInset );   // issue #84: the full inset, not half
 			const float flX = track.Min.x + flInset + ( *pbValue ? Px( tok::kSwitchTrvl ) : 0.0f );
 			Dl()->AddRectFilled( ImVec2( flX, track.GetCenter().y - flKnob * 0.5f ),
 			                     ImVec2( flX + flKnob, track.GetCenter().y + flKnob * 0.5f ), colKnob );
@@ -627,9 +645,36 @@ namespace gamescope::ui
 			                 void *pValue, const void *pMin, const void *pMax,
 			                 const char *pszFormat, ImRect *pOutGrab )
 			{
+				// issue #86: SliderBehaviorT hardcodes `grab_padding = 2.0f`
+				// (imgui_widgets.cpp, its own comment: "FIXME: Should be part
+				// of style.") and insets the grab's travel by it at BOTH ends
+				//   [bb.Min + pad + gs/2 .. bb.Max - pad - gs/2]
+				// so the handle halts 2px short of each cap and the track juts
+				// out past it -- the "~2px sticking out on the outer edge" in
+				// the report. Measured off the user's 3x screenshot: handle
+				// 192..215 against a track starting at 186, and 1461..1484
+				// against a track ending at 1490. 6 image px == 2 real px at
+				// both ends.
+				//
+				// The padding is a raw literal, NOT scale-aware, so the
+				// cancellation is raw too -- Px() here would over-correct at
+				// every scale but 1.0. Growing the rect handed to
+				// SliderBehavior by exactly that padding makes its inset land
+				// back on the track: at 0 the grab's left edge sits on
+				// trackMin, at 1 its right edge on trackMax.
+				//
+				// Widening this rect rather than nudging the returned grab is
+				// deliberate: the same rect drives `clicked_t`, so the drag
+				// mapping moves with the drawn geometry instead of drifting
+				// 2px away from it.
+				constexpr float kImGuiGrabPadding = 2.0f;
+				ImRect rcBehaviour( rcTrackHit );
+				rcBehaviour.Min.x -= kImGuiGrabPadding;
+				rcBehaviour.Max.x += kImGuiGrabPadding;
+
 				ImGui::PushStyleVar( ImGuiStyleVar_GrabMinSize, Px( tok::kHandleW ) );
 				const bool bChanged = ImGui::SliderBehavior(
-					rcTrackHit, id, eType, pValue, pMin, pMax, pszFormat,
+					rcBehaviour, id, eType, pValue, pMin, pMax, pszFormat,
 					ImGuiSliderFlags_AlwaysClamp, pOutGrab );
 				ImGui::PopStyleVar();
 				return bChanged;
@@ -651,7 +696,19 @@ namespace gamescope::ui
 				// control that tells you where the range ends".
 				Dl()->AddRectFilled( trackMin, trackMax, Col( Role::TrackOff ), flRound );
 
-				const float flFillMax = rcHit.Min.x + rcHit.GetWidth() * ImClamp( flFraction, 0.0f, 1.0f );
+				// issue #86: the fill spans the whole track, not the grab's
+				// inset travel range. Deriving it from rcGrab.GetCenter() --
+				// an earlier "one source of truth" attempt -- is wrong at the
+				// ends: the grab centre can only reach half a handle in from
+				// each cap (grab_sz/2 == 4px at 1x, once SliderGrab has
+				// cancelled grab_padding), so 100% left a 4px unfilled sliver
+				// of TrackOff at the right cap and 0% painted a 4px stub of
+				// fill at the left one. Away from the
+				// ends the two maps differ by at most half a handle width and
+				// the 8px-wide opaque handle sits over the seam, so the linear
+				// map is exact at 0/1 and invisible in between.
+				const float flFillMax =
+					rcHit.Min.x + rcHit.GetWidth() * ImClamp( flFraction, 0.0f, 1.0f );
 				if ( flFillMax > trackMin.x )
 				{
 					// B's left-to-right gradient, accent@50% -> AccentGradHi.
@@ -676,8 +733,13 @@ namespace gamescope::ui
 				const ImVec2 hMin( rcGrab.Min.x, flCy - flHandleH * 0.5f );
 				const ImVec2 hMax( rcGrab.Max.x, flCy + flHandleH * 0.5f );
 				const float flHalo = Px( tok::kHandleHalo );
+				// B's "0 0 0 2px accent@18%" is a spread-only box-shadow, so
+				// its corners follow the handle's radius grown by the spread.
+				// Drawn square, a 24px-tall ring around an 8px-tall track reads
+				// as a hard box sitting on the slider rather than a halo.
 				Dl()->AddRectFilled( ImVec2( hMin.x - flHalo, hMin.y - flHalo ),
-				                     ImVec2( hMax.x + flHalo, hMax.y + flHalo ), Accent( 0.18f ) );
+				                     ImVec2( hMax.x + flHalo, hMax.y + flHalo ),
+				                     Accent( 0.18f ), Px( tok::kHandleRound ) + flHalo );
 				Dl()->AddRectFilled( hMin, hMax, Col( Role::AccentHandle ), Px( tok::kHandleRound ) );
 			}
 		}

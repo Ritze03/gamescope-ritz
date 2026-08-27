@@ -329,6 +329,36 @@ call `PlaceFull()` and therefore satisfy the rule for free.
 of the same width have their columns in the same place regardless of the longest label,
 which is the property E's spec asked for and E2 keeps.
 
+> **Amended 2026-08-27.** `Lw` is a **floor** for the value's right edge, not always its
+> exact position. Switch, Stepper and a Composite's own fixed-width body (the Anchor
+> grid) are narrow, right-bound atoms that end well inside the control zone, short of
+> `W − 28`. Anchoring their value at `Lw` — as every other value-bearing kind does,
+> because a full-bleed control's left edge *is* `Lw` — stranded the value in the row's
+> middle, far from the control it describes. The value's anchor is now
+> `max( controlLeft − gutter, Lw )`, where `controlLeft` is that row's own control rect
+> (from `RowCtx::Place`/`PlaceFull`). This still satisfies "content never moves it": the
+> anchor is a function of the **control kind's** fixed width (a constant in
+> `Controls.cpp`/`Tokens.h` for Switch, Stepper and the Anchor grid, per the table
+> above), never of the value text's length, so two sheets of the same width still put
+> every row's value in the same place regardless of the longest label or the longest
+> value string. What
+> changed is that "the same place" is no longer a single column for every row kind —
+> Switch/Stepper/Anchor-grid rows get their own, control-relative column, one gutter
+> left of their control, while Slider/Meter/Composite-with-a-full-bleed-body rows keep
+> `Lw` exactly as before (their `controlLeft` already equals `Lw`, so the `max()` is a
+> no-op for them).
+>
+> Why: Slider and Meter fill the whole control zone, so their control's left edge
+> coincides with `Lw` and the value looked correct at `Lw` by accident, not by a general
+> rule. Switch, Stepper and the Anchor grid are right-bound but fixed-width, so `Lw` and
+> their control's left edge are two different points — the gap between them is exactly
+> the dead space the value used to sit stranded in. Hue, Strip, Graph and Color
+> composites use a full-bleed body and were already correct under the old, single-`Lw`
+> rule. Vertical placement is unchanged: the value still sits on line 1, same as before.
+> See `CHANGELOG.md`'s `[0.3.5] – 2026-08-27` Fixed entry for the user-facing
+> description; the anchor itself is `ValueAnchorPx()` and `RowCtx::SplitLabelZone()`'s
+> two-argument overload in `src/Overlay/UI/Shell.cpp` and `src/Overlay/UI/Row.cpp`.
+
 **Every control's width is a constant in `Controls.cpp`, not a caller's choice.** Widths
 are base units and are clamped to the control zone; the *right* edge is invariant:
 

@@ -812,16 +812,16 @@ TEST_CASE( "law: a Param's id is synthesised from its parent -- the Prefix Law",
 	float flSharp = 0.0f;
 	bool  bDenoise = false;
 
-	ui::Entry &e = area.Slider( "display.sharpness", "Sharpness", ui::Bind( &flSharp ) )
+	ui::Entry &e = area.Slider( "display.filter.sharpness", "Sharpness", ui::Bind( &flSharp ) )
 		.Range( 0.0f, 20.0f ).Help( "Strength of the sharpening pass." );
 	e.Param( "rcas_denoise", "RCAS denoise", ui::Bind( &bDenoise ) ).Help( "Suppresses grain." );
 
 	REQUIRE( e.ParamCount() == 1 );
-	REQUIRE( e.ParamAt( 0 ).Id() == "display.sharpness.rcas_denoise" );
+	REQUIRE( e.ParamAt( 0 ).Id() == "display.filter.sharpness.rcas_denoise" );
 
 	// The registry can find it by that id -- which is what makes a param
 	// searchable in the palette exactly like a sheet row (SPEC §5.2).
-	REQUIRE( reg.FindParam( "display.sharpness.rcas_denoise" ) != nullptr );
+	REQUIRE( reg.FindParam( "display.filter.sharpness.rcas_denoise" ) != nullptr );
 	REQUIRE( reg.FindParam( "display.hdr_mode" ) == nullptr );
 
 	// A well-formed registry reports nothing.
@@ -1072,6 +1072,20 @@ TEST_CASE( "registry: a binding round-trips its value", "[overlay_ui]" )
 	REQUIRE( ui::ValueToString( ui::Value( false ) ) == "off" );
 }
 
+// Issue #85's gap: AnyBind::SnapDragsTo() only normalises -0.0f produced by
+// a pointer drag. A -0.0f arriving any other way -- a config file persisted
+// before that fix shipped, a hand-edited config, `overlay_e2_set` -- never
+// passes back through Set(), so ValueToString() itself must refuse to print
+// "-0" no matter how the value got there.
+TEST_CASE( "value: ValueToString never prints -0, regardless of how the value arrived", "[overlay_ui]" )
+{
+	REQUIRE( ui::ValueToString( ui::Value( -0.0f ) ) == "0" );
+	REQUIRE( ui::ValueToString( ui::Value( 0.0f ) )  == "0" );
+	// A genuinely negative value is untouched -- this is not a "hide all
+	// minus signs" hack.
+	REQUIRE( ui::ValueToString( ui::Value( -0.5f ) ) == "-0.5" );
+}
+
 // D27, item 3. The user: "Add sensible step sizes for all sliders, so they have
 // up to 100 individual positions. It should allow, to set even values more
 // easily."
@@ -1241,7 +1255,7 @@ TEST_CASE( "param: a param's disabled reason is its own, never its parent's", "[
 	bool  bMuted  = true;
 	float flVolume = -6.0f;
 
-	ui::Entry &e = area.Slider( "audio.volume", "Volume", ui::Bind( &flVolume ) )
+	ui::Entry &e = area.Slider( "audio.stream.volume", "Volume", ui::Bind( &flVolume ) )
 		.Help( "h" ).Range( -60.0f, 0.0f )
 		.DisabledUnless( [ & ]{ return !bMuted; }, "the stream is muted" );
 
@@ -1592,8 +1606,8 @@ TEST_CASE( "badge: an area declares which config layer it writes to", "[overlay_
 	REQUIRE( appearance.BadgeText() == "global only" );
 
 	// An area that never declared one has none, rather than an empty box.
-	ui::Area &shell = reg.Add( "setup.shell", "Shell", ui::Section::Setup );
-	REQUIRE( shell.BadgeText().empty() );
+	ui::Area &noBadge = reg.Add( "setup.example", "Example", ui::Section::Setup );
+	REQUIRE( noBadge.BadgeText().empty() );
 
 	REQUIRE( rec.Count() == 0 );
 }
@@ -1774,7 +1788,7 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 	const char *pszAreas[] = {
 		"display.general", "display.upscaling", "display.frame_limiter", "display.hdr",
 		"image.shaders", "audio.mixer", "system.monitor", "system.log", "system.changelog",
-		"setup.profiles", "setup.pergame", "setup.appearance", "setup.shell",
+		"setup.profiles", "setup.pergame", "setup.appearance",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 

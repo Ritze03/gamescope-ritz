@@ -2000,8 +2000,8 @@ namespace gamescope
 							PersistSettings();
 						} ) )
 					.Default( false )
-					.Help( "Off tracks the overlay's own accent colour, so this module follows the "
-					       "accent hue. On pins it to the colour above." );
+					.Help( "Off matches the overlay's own accent colour, so this module follows it "
+					       "automatically. On locks it to the colour above." );
 		}
 	}
 
@@ -2045,8 +2045,8 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.enabled = b; PersistSettings(); } ) )
-			.Help( "Draws the performance HUD over the game, independently of this settings "
-			       "overlay -- it stays on screen after you close these settings." )
+			.Help( "Shows a small readout of FPS and other performance stats over the game. It "
+			       "stays visible even after you close this settings menu." )
 			.Default( config::FpsDisplaySettings{}.enabled )
 			.Keywords( "hud monitor overlay show fps display enable" );
 
@@ -2075,45 +2075,48 @@ namespace gamescope
 		// modules.
 		Module( "monitor.mod_fps", "Frame rate", &config::FpsDisplaySettings::fps_enabled,
 			config::FpsDisplaySettings{}.fps_enabled,
-			"The large frames-per-second readout and its unit.",
+			"The big frames-per-second number.",
 			"fps frame rate module row counter" )
 			.Param( "label", "\"FPS\" label",
 				ui::AnyBind::Of<bool>(
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.fps_label_enabled; },
 					[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.fps_label_enabled = b; PersistSettings(); } ) )
 				.Default( config::FpsDisplaySettings{}.fps_label_enabled )
-				.Help( "Off leaves just the number, without the \" FPS\" unit after it." );
+				.Help( "Off shows just the number, without the \" FPS\" letters after it." );
 
 		Module( "monitor.mod_frametime", "Frametime readout",
 			&config::FpsDisplaySettings::frametime_enabled,
 			config::FpsDisplaySettings{}.frametime_enabled,
-			"Per-frame time in milliseconds, next to the frame rate.",
+			"Shows how long each frame took to draw, in milliseconds, next to the FPS number.",
 			"frametime ms readout module row" );
 
 		Module( "monitor.mod_graph", "Frametime graph",
 			&config::FpsDisplaySettings::graph_enabled,
 			config::FpsDisplaySettings{}.graph_enabled,
-			"A strip of recent frame times drawn under the readout, with stutters marked.",
+			"A small chart of recent frame times under the number, with stutters marked.",
 			"graph frametime spark history module" );
 
 		Module( "monitor.mod_pct", "Percentile row",
 			&config::FpsDisplaySettings::percentiles_enabled,
 			config::FpsDisplaySettings{}.percentiles_enabled,
-			"Low percentiles (1% and 0.1%) and the running average, on one line.",
+			"Shows your worst 1% and 0.1% of frames, plus your average frame rate, on one line. "
+			"Useful for spotting stutters an average FPS number would hide.",
 			"percentile lows average module" );
 
 		Module( "monitor.mod_cpu", "CPU load", &config::FpsDisplaySettings::cpu_enabled,
 			config::FpsDisplaySettings{}.cpu_enabled,
-			"CPU utilisation and RAM use.", "cpu load ram module processor" );
+			"How hard your processor is working, and how much memory is in use.",
+			"cpu load ram module processor" );
 
 		Module( "monitor.mod_gpu", "GPU load", &config::FpsDisplaySettings::gpu_enabled,
 			config::FpsDisplaySettings{}.gpu_enabled,
-			"GPU busy percentage, VRAM use, temperature and power.",
+			"How hard your graphics card is working, how much of its memory is in use, and its "
+			"temperature and power draw.",
 			"gpu load vram temperature power module" );
 
 		Module( "monitor.mod_media", "Now playing", &config::FpsDisplaySettings::media_enabled,
 			config::FpsDisplaySettings{}.media_enabled,
-			"Title and artist of whatever MPRIS player is active.",
+			"Shows the song title and artist from whatever music or media player is playing.",
 			"media now playing mpris module music" );
 
 		// =================================================================
@@ -2159,8 +2162,8 @@ namespace gamescope
 					s_Settings.fps_display.placement = ComposePlacement( nV, nH );
 					PersistSettings();
 				} ) )
-			.Help( "Which screen corner the monitor is anchored to. The margins nudge it away "
-			       "from that corner." )
+			.Help( "Which screen corner the monitor sticks to. The margins below move it a bit "
+			       "away from that corner." )
 			.Default( 0, 2 )
 			.Keywords( "anchor placement position corner where margin offset" )
 			.DisabledUnless( MonitorOn, kOffReason )
@@ -2170,14 +2173,14 @@ namespace gamescope
 					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_vertical = (float)n; PersistSettings(); } ) )
 				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
 				.Default( (int)config::FpsDisplaySettings{}.margin_vertical )
-				.Help( "Distance from the anchored horizontal edge." )
+				.Help( "How far the monitor sits from the top or bottom edge." )
 			.Param( "margin_h", "Horizontal margin",
 				ui::AnyBind::Of<int>(
 					[]{ EnsureConfigLoaded(); return (int)s_Settings.fps_display.margin_horizontal; },
 					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_horizontal = (float)n; PersistSettings(); } ) )
 				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
 				.Default( (int)config::FpsDisplaySettings{}.margin_horizontal )
-				.Help( "Distance from the anchored vertical edge." );
+				.Help( "How far the monitor sits from the left or right edge." );
 
 		// =================================================================
 		//  Appearance
@@ -2207,14 +2210,14 @@ namespace gamescope
 		};
 
 		FloatRow( "monitor.font_size", "Font size", &config::FpsDisplaySettings::font_size,
-			10.0f, 48.0f, 1.0f, "px", "Type size for every module in the monitor.",
+			10.0f, 48.0f, 1.0f, "px", "How big the text is in every module of the monitor.",
 			"font size text scale monitor hud" );   // 39 positions, whole px
 
 		// Issue #29's own styling option -- see ConfigSchema.h's
 		// module_spacing comment for the two alternatives it rejected.
 		FloatRow( "monitor.module_spacing", "Module spacing",
 			&config::FpsDisplaySettings::module_spacing, 0.0f, 32.0f, 1.0f, "px",   // 33 positions
-			"Gap between the stacked module blocks.", "spacing gap module layout" );
+			"Space between the FPS, CPU, GPU and Now Playing boxes.", "spacing gap module layout" );
 
 		static constexpr ui::Option kBlendModes[] = {
 			{ 0, "alpha" }, { 1, "additive" }, { 2, "inverted" },
@@ -2235,16 +2238,16 @@ namespace gamescope
 					PersistSettings();
 				} ),
 			kBlendModes, IM_ARRAYSIZE( kBlendModes ) )
-			.Help( "How the monitor's text is composited. Inverted draws a guaranteed-legible "
-			       "outline/fill pair that stays readable over any scene, and supplies its own "
-			       "colours." )
+			.Help( "How the monitor's text is drawn. Inverted always stays readable, no matter "
+			       "what's behind it, using its own black-and-white style instead of your colour "
+			       "choices." )
 			.Default( 0 )
 			.Keywords( "blend mode alpha additive inverted legibility" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
 		FloatRow( "monitor.text_opacity", "Text opacity",
 			&config::FpsDisplaySettings::text_opacity, 0.0f, 1.0f, 0.05f, "",   // 21 positions
-			"Opacity of every module's text.", "opacity alpha text transparency" );
+			"How see-through the monitor's text is.", "opacity alpha text transparency" );
 
 		// Additive pairs oddly with a filled backdrop (the backdrop itself
 		// would glow) and inverted is already legible without one, so both
@@ -2255,7 +2258,8 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_enabled; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_enabled = b; PersistSettings(); } ) )
-			.Help( "A filled box behind each module so it stays readable over bright scenes." )
+			.Help( "Draws a solid box behind each module so its text stays readable over bright "
+			       "parts of the game." )
 			.Default( config::FpsDisplaySettings{}.backdrop_enabled )
 			.Keywords( "backdrop background box legibility" )
 			.DisabledUnless(
@@ -2270,19 +2274,20 @@ namespace gamescope
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
 					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
 				.Range( 0.0f, 1.0f ).Step( 0.05f ).Default( config::FpsDisplaySettings{}.backdrop_opacity )   // 21 positions
-				.Help( "How opaque the box behind each module is." )
+				.Help( "How solid the box behind each module looks, from see-through to fully "
+				       "solid." )
 			.Param( "rounding", "Backdrop rounding",
 				ui::AnyBind::Of<float>(
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_rounding; },
 					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_rounding = f; PersistSettings(); } ) )
 				.Range( 0.0f, 16.0f ).Step( 1.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_rounding )   // 17 positions
-				.Help( "Corner radius of the box." )
+				.Help( "How rounded the box's corners are." )
 			.Param( "padding", "Backdrop padding",
 				ui::AnyBind::Of<float>(
 					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_padding; },
 					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_padding = f; PersistSettings(); } ) )
 				.Range( 0.0f, 24.0f ).Step( 1.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_padding )   // 25 positions
-				.Help( "Space between the box's edge and the text inside it." );
+				.Help( "Space between the box's edge and the text inside it, like a margin." );
 
 		// =================================================================
 		//  Module colours -- issue #29
@@ -2297,19 +2302,19 @@ namespace gamescope
 		RegisterModuleColor( a, "monitor.color_fps", "Frame rate colour",
 			&config::FpsDisplaySettings::color_fps,
 			[]{ return gamescope::palette::kAccentValue; },
-			"Colour of the frame-rate module's text." );
+			"Colour of the frame-rate number." );
 		RegisterModuleColor( a, "monitor.color_cpu", "CPU colour",
 			&config::FpsDisplaySettings::color_cpu,
 			[]{ return gamescope::palette::kAccentIcon; },
-			"Colour of the CPU module's text." );
+			"Colour of the CPU module's text and numbers." );
 		RegisterModuleColor( a, "monitor.color_gpu", "GPU colour",
 			&config::FpsDisplaySettings::color_gpu,
 			[]{ return gamescope::palette::kAccentKnob; },
-			"Colour of the GPU module's text." );
+			"Colour of the GPU module's text and numbers." );
 		RegisterModuleColor( a, "monitor.color_media", "Now playing colour",
 			&config::FpsDisplaySettings::color_media,
 			[]{ return gamescope::palette::kAccentHandle; },
-			"Colour of the now-playing module's text." );
+			"Colour of the Now Playing text." );
 
 		// =================================================================
 		//  Diagnostics
@@ -2323,7 +2328,8 @@ namespace gamescope
 				std::snprintf( sz, sizeof( sz ), "500 ms  ·  %d-frame window", kHistoryCapacity );
 				return std::string( sz );
 			} )
-			.Help( "How often the monitor recomputes its percentiles, and over how many frames." )
+			.Help( "How often the low-frame-rate numbers below update, and how many recent "
+			       "frames they're based on." )
 			.Keywords( "sampling window percentile interval diagnostics" )
 			.Live( "interval", []{ return ui::Fact{ "interval", "500 ms" }; } )
 			.Live( "window", []
@@ -2355,8 +2361,8 @@ namespace gamescope
 		// sample ring. Read-only by construction: Entry::ReadOnly() returns
 		// true for CompositeKind::Graph, and Samples() has no setter.
 		a.Composite( "monitor.frametime_graph", "Frametime", ui::CompositeKind::Graph, {} )
-			.Help( "Live frametime strip over the sampling window. Frames well above the "
-			       "current average are drawn in the warn colour." )
+			.Help( "A live chart of how long each recent frame took to draw. Frames much slower "
+			       "than the rest are highlighted." )
 			.Keywords( "frametime graph strip stutter diagnostics" )
 			.Samples( []
 			{
@@ -2424,9 +2430,8 @@ namespace gamescope
 					s_Settings.overlay.system_monitor_tab = pszValue;
 					config::EnqueueSystemMonitorTabWrite( pszValue );
 				} ) )
-			.Help( "Samples CPU, GPU and frame rate twice a second into a rolling 60-second "
-			       "window for the graphs below. Off costs nothing; the window starts over "
-			       "when you turn it back on." )
+			.Help( "Keeps a graph of your CPU, GPU and frame rate over the last 60 seconds. Off "
+			       "uses no extra resources; turning it back on starts a fresh 60 seconds." )
 			.Default( false )
 			.Keywords( "statistics history collect 60 second graph sampling" );
 
@@ -2450,7 +2455,7 @@ namespace gamescope
 					(float)nSamples * ( Metrics::kStatsHistorySampleIntervalMs / 1000.0f ) );
 				return std::string( sz );
 			} )
-			.Help( "How much of the 60-second window has been collected so far." )
+			.Help( "How much of the 60-second history has been collected so far." )
 			.Keywords( "warm up collecting window statistics" );
 
 		auto Collecting = []
@@ -2475,7 +2480,7 @@ namespace gamescope
 		};
 
 		StatGraph( "monitor.stats_cpu", "CPU load",
-			"One-minute CPU load average, sampled twice a second over the last 60 seconds.",
+			"How hard your processor has been working over the last minute.",
 			"cpu load statistics graph history",
 			[]
 			{
@@ -2486,7 +2491,7 @@ namespace gamescope
 			Collecting, "60-second history collection is off" );
 
 		StatGraph( "monitor.stats_gpu_busy", "GPU busy",
-			"GPU utilisation percentage over the last 60 seconds.",
+			"How hard your graphics card has been working over the last minute.",
 			"gpu busy utilisation statistics graph history",
 			[]
 			{
@@ -2498,7 +2503,7 @@ namespace gamescope
 			"no amdgpu device was found on this system, or collection is off" );
 
 		StatGraph( "monitor.stats_gpu_temp", "GPU temperature",
-			"GPU temperature in degrees Celsius over the last 60 seconds.",
+			"How hot your graphics card has been, in degrees Celsius, over the last minute.",
 			"gpu temperature thermal statistics graph history",
 			[]
 			{
@@ -2510,7 +2515,7 @@ namespace gamescope
 			"no amdgpu hwmon node was found on this system, or collection is off" );
 
 		StatGraph( "monitor.stats_gpu_power", "GPU power",
-			"GPU power draw in watts over the last 60 seconds.",
+			"How many watts your graphics card has been drawing over the last minute.",
 			"gpu power watts statistics graph history",
 			[]
 			{
@@ -2522,8 +2527,8 @@ namespace gamescope
 			"no amdgpu hwmon node was found on this system, or collection is off" );
 
 		StatGraph( "monitor.stats_fps", "Frame rate",
-			"Frame rate over the last 60 seconds, sampled independently of the 240-frame "
-			"window the HUD's own percentiles use.",
+			"Your frame rate over the last minute. This is a separate, longer history than the "
+			"live number and percentiles above.",
 			"fps frame rate statistics graph history",
 			[]
 			{

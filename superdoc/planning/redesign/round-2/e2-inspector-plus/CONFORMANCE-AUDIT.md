@@ -8,6 +8,11 @@ in practice **every divergence below contradicts both**.
 
 This is an audit. Nothing was fixed.
 
+> **Later removed (2026-08-27):** row 13 below flags `Shell` (`setup.shell`) as
+> unexplained rail drift. It has since been removed outright — the overlay is hidden with
+> the close X instead — which resolves that row, but this audit is kept as the historical
+> point-in-time comparison it was. See `CHANGELOG.md`.
+
 ---
 
 ## How this was produced

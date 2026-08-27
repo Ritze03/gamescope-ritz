@@ -105,8 +105,24 @@ namespace gamescope::ui
 			return std::to_string( *p );
 		if ( const float *p = std::get_if<float>( &v ) )
 		{
+			// Issue #85's drag-snap fix (AnyBind::SnapDragsTo()) only
+			// normalises -0.0f on the pointer-drag path -- it cannot reach a
+			// -0.0f that arrives any other way: a config file persisted from
+			// before that fix shipped, a hand-edited config, or the
+			// `overlay_e2_set` console command (Registry.cpp's own comment
+			// documents that command as deliberately unsnapped, "a console
+			// write is someone naming a number on purpose"). This is the one
+			// formatter every one of those paths funnels through -- Get()
+			// straight off a bound value is never routed back through
+			// Set() -- so normalising here, not just at the write, is what
+			// actually guarantees "-0" never reaches the screen. printf's
+			// "%g" formats -0.0 as the literal text "-0", which is the
+			// display-only case a write-side fix cannot touch.
+			double flVal = (double)*p;
+			if ( flVal == 0.0 )
+				flVal = 0.0;
 			char sz[ 32 ];
-			snprintf( sz, sizeof( sz ), "%.4g", (double)*p );
+			snprintf( sz, sizeof( sz ), "%.4g", flVal );
 			return sz;
 		}
 		if ( const std::string *p = std::get_if<std::string>( &v ) )
@@ -150,7 +166,7 @@ namespace gamescope::ui
 	//     restore its own default is worse than a coarse drag;
 	//   * SPEC §3.4's Shift = fine adjust (x0.1 of the step) would become a
 	//     dead key on every stepped slider, which is the exact defect D24
-	//     found on `display.sharpness` and fixed;
+	//     found on `display.filter.sharpness` and fixed;
 	//   * `overlay_e2_set <id> <n>` would stop being able to set the value it
 	//     was told to, and it is the tool the tests use to prove a binding
 	//     drives the compositor.
@@ -174,7 +190,15 @@ namespace gamescope::ui
 				return;
 			}
 			if ( const float *p = std::get_if<float>( &v ) )
-				set( Value{ (float)( std::round( *p / flStep ) * flStep ) } );
+			{
+				float flSnapped = (float)( std::round( *p / flStep ) * flStep );
+				// -0.0f == 0.0f is true, so this assignment normalises -0.0f to +0.0f
+				// without touching any nonzero value; prevents a "-0" display state
+				// distinct from "0" (issue #85).
+				if ( flSnapped == 0.0f )
+					flSnapped = 0.0f;
+				set( Value{ flSnapped } );
+			}
 			else if ( const int *p = std::get_if<int>( &v ) )
 				set( Value{ (int)std::lround( std::round( (double)*p / flStep ) * flStep ) } );
 			else

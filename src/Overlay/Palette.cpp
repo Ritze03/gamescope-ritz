@@ -230,8 +230,16 @@ namespace gamescope::palette
 		// real persisted value here too, the first time it is known, so a
 		// restart with a non-default scale does not wait for the user to
 		// touch the Appearance slider before text is baked crisp -- a
-		// one-time catch-up, not a per-frame cost. A no-op if display_scale
-		// is the compiled-in default.
+		// one-time catch-up, not a per-frame cost.
+		//
+		// Issue #87 correction: this call always performs a real rebuild
+		// here, even when display_scale is exactly the compiled-in default
+		// (1.0) -- it is NOT a no-op in that case, despite the eager
+		// bootstrap bake above having already built at that same value.
+		// SettingsOverlay.cpp's bootstrap Load() marks its own bake
+		// provisional for exactly this reason; see Fonts.cpp's
+		// FontSet::bBootstrapOnly for why a same-value bake must not be
+		// allowed to suppress this one.
 		gamescope::fonts::RebuildAll( s.overlay.display_scale );
 	}
 }

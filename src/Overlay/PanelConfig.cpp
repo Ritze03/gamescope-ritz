@@ -577,10 +577,9 @@ namespace gamescope
 						else
 							DisableOverride();
 					} ) )
-				.Help( "When on, every routed setting is written to this game's own file instead of "
-				       "the global one. Turning it on the first time snapshots whatever is currently "
-				       "effective. Turning it OFF keeps that file -- it is deactivated, never deleted "
-				       "-- so turning it back on restores those values rather than starting over." )
+				.Help( "Gives this game its own settings, separate from everything else. Turn it on to "
+				       "customise just this game; turning it off later keeps what you saved, so turning "
+				       "it back on brings those settings back." )
 				.Default( false )
 				.Keywords( "override per game routing config file app id snapshot" )
 				.DisabledUnless( []{ return s_oAppId.has_value(); },
@@ -595,9 +594,9 @@ namespace gamescope
 			{
 				a.Action( "config.copy", "Copy another game's config", "copy",
 					[]{ CopySelectedGameConfig(); } )
-					.Help( "Replaces this game's config with a copy of another game's, and turns "
-					       "Override Global Config on -- there is no other file a per-game copy could "
-					       "land in. A one-time copy: later edits to that game do not follow." )
+					.Help( "Copies another game's settings into this game and switches this game to its "
+					       "own settings. It's a one-time copy: later changes to that other game won't "
+					       "carry over." )
 					.Keywords( "copy clone import another game config" )
 					.DisabledUnless( []{ return s_oAppId.has_value(); },
 					                 "no game was identified for this session" )
@@ -606,8 +605,8 @@ namespace gamescope
 							[]{ return std::max( s_nSelectedCopyGame, 0 ); },
 							[]( int n ) { s_nSelectedCopyGame = n; } ),
 						s_vecGameOptions.data(), s_vecGameOptions.size() )
-						.Help( "Which game's saved config is copied. Only games that have their own "
-						       "override are listed." )
+						.Help( "Which game's settings to copy from. Only games that have their own "
+						       "settings show up here." )
 						.Default( 0 );
 			}
 
@@ -620,18 +619,16 @@ namespace gamescope
 				a.Action( "config.delete", "Delete saved config", "delete...",
 					[]{ DeleteSavedPerGameConfig(); } )
 					.Confirm( "delete permanently?" )
-					.Help( "Permanently deletes this game's saved config file and everything in it. "
-					       "This cannot be undone, and it is the only action anywhere that destroys a "
-					       "config -- nothing here ever deletes one on its own. Press once to arm, "
-					       "again to confirm." )
+					.Help( "Deletes this game's saved settings for good -- this can't be undone. Press "
+					       "once to arm the button, then again to confirm." )
 					.Keywords( "delete remove destroy per game config file" );
 			}
 
 			a.Group( "Diagnostics" );
 			a.Facts( "config.routing", "Resolution order",
 				[]{ return s_bOverrideActive ? std::string( "2 layers" ) : std::string( "global only" ); } )
-				.Help( "Where a value comes from when more than one file could supply it. Resolution "
-				       "is strictly two-level and never a merge of both." )
+				.Help( "Shows whether this game is using its own settings or the shared global "
+				       "ones." )
 				.Keywords( "routing resolution order layers provenance app id" )
 				.Live( "app_id", []{
 					return ui::Fact{ "resolved app id", s_oAppId ? *s_oAppId : "none -- no app id for this session" };
@@ -671,16 +668,15 @@ namespace gamescope
 						[]{ return std::max( s_nSelectedProfile, 0 ); },
 						[]( int n ) { s_nSelectedProfile = n; } ),
 					s_vecProfileOptions.data(), s_vecProfileOptions.size() )
-					.Help( "Which saved profile the apply action targets. A profile is a named "
-					       "snapshot of every setting, taken when it was saved." )
+					.Help( "Which saved profile to use. A profile is a saved bundle of settings you "
+					       "can load again any time." )
 					.Default( 0 )
 					.Keywords( "profile preset saved snapshot pick" );
 
 				a.Action( "profiles.apply", "Apply profile", "apply",
 					[]{ ApplySelectedProfile(); } )
-					.Help( "Copies the selected profile's values into whichever file is currently "
-					       "authoritative. A ONE-TIME copy: editing the profile afterwards does not "
-					       "retroactively change anything it was applied to." )
+					.Help( "Loads the selected profile's settings right now. It's a one-time copy: "
+					       "changing the profile later won't update settings you already applied." )
 					.Keywords( "apply profile preset load restore" );
 			}
 
@@ -693,9 +689,8 @@ namespace gamescope
 					{
 						std::snprintf( s_szNewProfileName, sizeof( s_szNewProfileName ), "%s", s.c_str() );
 					} ) )
-				.Help( "Name for a new profile. Letters, digits, space, hyphen and underscore only -- "
-				       "the name becomes a filename, so it is sanitised before it is ever used as a "
-				       "path." )
+				.Help( "Name for your new profile. Letters, digits, spaces, hyphens and underscores "
+				       "only." )
 				.Keywords( "profile name new save" )
 				.Validate( []( const std::string &s ) -> std::string
 				{
@@ -710,7 +705,7 @@ namespace gamescope
 
 			a.Action( "profiles.save", "Save current settings", "save as profile",
 				[]{ SaveCurrentAsNewProfile(); } )
-				.Help( "Writes whatever config is currently in effect into a new named profile." )
+				.Help( "Saves your current settings as a new profile you can load again later." )
 				.Keywords( "save profile new snapshot store" )
 				.DisabledUnless( []{ return s_szNewProfileName[ 0 ] != '\0'; },
 				                 "type a name first" );
@@ -718,7 +713,7 @@ namespace gamescope
 			a.Group( "Diagnostics" );
 			a.Facts( "profiles.facts", "Profiles",
 				[]{ return std::to_string( s_ProfileNames.size() ) + " saved"; } )
-				.Help( "What is saved and what was last applied. Read-only." )
+				.Help( "Shows how many profiles you've saved and which one you used last." )
 				.Keywords( "profile provenance last applied count diagnostics" )
 				.Live( "count", []{
 					return ui::Fact{ "saved profiles", s_ProfileNames.empty()
@@ -790,9 +785,8 @@ namespace gamescope
 						// the rest of the overlay, follow the drag.
 						QueueGeneralSave();
 					} ) )
-				.Help( "One hue drives the whole accent family -- sliders, toggles, the rail's active "
-				       "edge, notifications. Saturation and lightness are fixed per role, so no hue "
-				       "can wash out or blow out the design's contrast." )
+				.Help( "Changes the overlay's accent colour -- sliders, toggles and highlights all "
+				       "follow it. Pick any colour; it's always kept easy to read." )
 				.Range( 0.0f, 360.0f )
 				.Default( config::OverlaySettings{}.accent_hue )
 				.Unit( "deg" )
@@ -842,10 +836,8 @@ namespace gamescope
 						}
 						ApplyDisplayScale();
 					} ) )
-				.Help( "Multiplies every base unit in the overlay and re-bakes the font atlas, so "
-				       "text stays crisp. Widget geometry stays spec-exact, so very large values can "
-				       "overflow fixed-size controls. The responsive ladder decides what collapses "
-				       "as this rises." )
+				.Help( "Makes the whole overlay, including its text, bigger or smaller. Turn it up if "
+				       "things are hard to read, or down to fit more on screen." )
 				.Range( 0.5f, 2.0f )
 				.Step( 0.05f )       // 31 positions: 0.50x, 0.55x, ... 2.00x
 				.Default( config::OverlaySettings{}.display_scale )
@@ -862,8 +854,8 @@ namespace gamescope
 
 			a.Slider( "overlay.background_blur", "Backdrop blur",
 				BindOverlayFloat( &config::OverlaySettings::background_blur ) )
-				.Help( "How much the game behind the overlay is blurred. A native compositor pass -- "
-				       "it drives FrameInfo_t's blur radius, not a shader effect." )
+				.Help( "Blurs the game behind the overlay while it's open. Higher makes the game "
+				       "harder to see." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )       // 21 positions across a 0..1 amount
 				.Default( config::OverlaySettings{}.background_blur )
@@ -871,8 +863,8 @@ namespace gamescope
 
 			a.Slider( "overlay.background_darkening", "Backdrop darkening",
 				BindOverlayFloat( &config::OverlaySettings::background_darkening ) )
-				.Help( "How far the game behind the overlay is dimmed. The overlay's contrast is "
-				       "measured against this, so lowering it lowers legibility." )
+				.Help( "Dims the game behind the overlay while it's open. Turn it up to make the "
+				       "overlay's text easier to read." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )       // 21 positions
 				.Default( config::OverlaySettings{}.background_darkening )
@@ -882,7 +874,7 @@ namespace gamescope
 
 			a.Slider( "overlay.opacity_windows_focused", "Window (focused)",
 				BindOverlayFloat( &config::OverlaySettings::opacity_windows_focused ) )
-				.Help( "Opacity of an overlay window while it holds input focus." )
+				.Help( "How see-through an overlay window is while you're using it." )
 				.Range( 0.3f, 1.0f )
 				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_windows_focused )
@@ -890,7 +882,7 @@ namespace gamescope
 
 			a.Slider( "overlay.opacity_windows_unfocused", "Window (unfocused)",
 				BindOverlayFloat( &config::OverlaySettings::opacity_windows_unfocused ) )
-				.Help( "Opacity of an overlay window while another surface holds input focus." )
+				.Help( "How see-through an overlay window is when you're not actively using it." )
 				.Range( 0.3f, 1.0f )
 				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_windows_unfocused )
@@ -898,7 +890,7 @@ namespace gamescope
 
 			a.Slider( "overlay.opacity_dock", "Dock",
 				BindOverlayFloat( &config::OverlaySettings::opacity_dock ) )
-				.Help( "Opacity of the legacy dock strip." )
+				.Help( "How see-through the dock bar is." )
 				.Range( 0.3f, 1.0f )
 				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_dock )
@@ -906,7 +898,7 @@ namespace gamescope
 
 			a.Slider( "overlay.opacity_notifications", "Notifications",
 				BindOverlayFloat( &config::OverlaySettings::opacity_notifications ) )
-				.Help( "Opacity of toast notifications." )
+				.Help( "How see-through pop-up notifications are." )
 				.Range( 0.3f, 1.0f )
 				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
 				.Default( config::OverlaySettings{}.opacity_notifications )
@@ -931,8 +923,9 @@ namespace gamescope
 
 			a.Slider( "overlay.notification_scale", "Notification scale",
 				BindOverlayFloat( &config::OverlaySettings::notification_scale ) )
-				.Help( "Size of toast notifications, independently of the overall UI scale." )
-				.Range( 0.6f, 1.6f )
+				.Help( "Makes pop-up notifications bigger or smaller, without changing the size of "
+				       "the rest of the overlay." )
+				.Range( 0.5f, 2.0f )
 				.Step( 0.05f )       // 21 positions
 				.Default( config::OverlaySettings{}.notification_scale )
 				.Unit( "x" )
@@ -952,8 +945,7 @@ namespace gamescope
 						s_GeneralSettings.overlay.accent_hue, s_GeneralSettings.overlay.display_scale );
 					return std::string( sz );
 				} )
-				.Help( "Where these settings are stored, and what the font atlas is currently baked "
-				       "at. Read-only." )
+				.Help( "Shows how these appearance settings are currently saved." )
 				.Keywords( "appearance diagnostics global routing atlas scale" )
 				.Live( "routing", []{
 					return ui::Fact{ "written to",

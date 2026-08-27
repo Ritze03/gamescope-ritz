@@ -8,6 +8,12 @@ Everything below was decided in their absence and **needs their confirmation**. 
 top. Each entry records what was chosen, what the alternative was, and why — so disagreeing is
 cheap.
 
+> **Later removed (2026-08-27):** `setup.shell` (the D12.3 scaffold area) and its
+> `shell.layout` / `shell.inspector_host` rows were the Shell settings tab. The tab is gone —
+> the overlay is now hidden with the close X instead — but the decisions below are kept as the
+> record of what was chosen and why at the time; they are not rewritten to pretend the tab
+> never existed. See `CHANGELOG.md`.
+
 ---
 
 ## 2026-08-24 — D32 · Three settings reports: the toast accent edge, `dock_scale`, notification scale

@@ -288,7 +288,7 @@ namespace gamescope::config
         // key the struct no longer has. That is accepted for a removed
         // feature, and stated here so it does not surprise anyone.
         float display_scale = 1.0f;              // 0.5..2.0 - overall UI scale (#24). Drives ImGuiIO::FontGlobalScale AND, on slider release, gamescope::fonts::RebuildAll() re-bakes the font atlas at the new effective size across all three ImGui contexts (#38), so text stays crisp across the whole range rather than resampling a fixed-size bake. Widget geometry in Widgets.cpp multiplies by this field too (#23), so controls and hit-tests scale together with the text across the whole 0.5..2.0 range instead of the text alone growing against fixed-pixel geometry.
-        float notification_scale = 1.0f;         // 0.6..1.6 - Notifications.cpp's DrawToasts() GetUiScale(): scales toast card size/font/padding/slide distance.
+        float notification_scale = 1.0f;         // 0.5..2.0 - Notifications.cpp's DrawToasts() GetUiScale(): scales toast card size/font/padding/slide distance.
         // opacity_background ("Background veil", an ImGui-drawn flat dim tint
         // behind the whole overlay) was removed 2026-08-22: with
         // background_darkening below now a real, working native-compositor

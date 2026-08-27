@@ -45,14 +45,14 @@ namespace
 		{
 			ui::Area &disp = reg.Add( "display.upscaling", "Upscaling", ui::Section::Display );
 
-			disp.Slider( "display.sharpness", "Sharpness", ui::Bind( &flSharp ) )
+			disp.Slider( "display.filter.sharpness", "Sharpness", ui::Bind( &flSharp ) )
 				.Range( 0.0f, 20.0f ).Step( 1.0f ).Help( "Strength of the sharpening pass." )
 				.Keywords( "rcas crisp detail" )
 				.Param( "rcas_denoise", "RCAS denoise", ui::Bind( &bDenoise ) )
 					.Help( "Suppresses grain introduced by sharpening." )
 					.Keywords( "grain noise" );
 
-			disp.Choice( "display.scaler", "Scaler", ui::Bind( &nScaler ), kScalers, 4 )
+			disp.Choice( "display.filter.scaler", "Scaler", ui::Bind( &nScaler ), kScalers, 4 )
 				.Help( "How the image is fitted to the output." )
 				.Keywords( "aspect fit integer" );
 
@@ -95,11 +95,14 @@ TEST_CASE( "palette: an empty query lists every entry AND every param", "[overla
 	Fixture f;
 	const std::vector<ui::PaletteItem> all = ui::Build( f.reg, "" );
 
-	// 5 entries + 1 param.
-	REQUIRE( all.size() == 6 );
-	REQUIRE( f.IndexOf( "", "display.sharpness" ) >= 0 );
-	REQUIRE( f.IndexOf( "", "display.sharpness.rcas_denoise" ) >= 0 );
+	// 4 searchable entries + 1 param. "display.path" is a Facts row -- Issue
+	// #91 excludes read-only entries (and their params) from the palette
+	// entirely, since a launcher jump has nothing there to act on.
+	REQUIRE( all.size() == 5 );
+	REQUIRE( f.IndexOf( "", "display.filter.sharpness" ) >= 0 );
+	REQUIRE( f.IndexOf( "", "display.filter.sharpness.rcas_denoise" ) >= 0 );
 	REQUIRE( f.IndexOf( "", "monitor.fps_limit" ) >= 0 );
+	REQUIRE( f.IndexOf( "", "display.path" ) == -1 );
 }
 
 TEST_CASE( "palette: an empty query keeps registration order", "[overlay_palette]" )
@@ -108,14 +111,15 @@ TEST_CASE( "palette: an empty query keeps registration order", "[overlay_palette
 	// order the rail and the sheets already show is the order the palette
 	// shows. An unstable sort would make the browse list a different product
 	// from the sheet for no reason.
+	// display.path is a read-only Facts row, excluded from the palette
+	// entirely (Issue #91) -- so it does not occupy a slot in this order.
 	Fixture f;
 	const std::vector<ui::PaletteItem> all = ui::Build( f.reg, "" );
-	REQUIRE( all[ 0 ].sId == "display.sharpness" );
-	REQUIRE( all[ 1 ].sId == "display.sharpness.rcas_denoise" );
-	REQUIRE( all[ 2 ].sId == "display.scaler" );
-	REQUIRE( all[ 3 ].sId == "display.path" );
-	REQUIRE( all[ 4 ].sId == "monitor.tearing" );
-	REQUIRE( all[ 5 ].sId == "monitor.fps_limit" );
+	REQUIRE( all[ 0 ].sId == "display.filter.sharpness" );
+	REQUIRE( all[ 1 ].sId == "display.filter.sharpness.rcas_denoise" );
+	REQUIRE( all[ 2 ].sId == "display.filter.scaler" );
+	REQUIRE( all[ 3 ].sId == "monitor.tearing" );
+	REQUIRE( all[ 4 ].sId == "monitor.fps_limit" );
 }
 
 // =========================================================================
@@ -125,17 +129,17 @@ TEST_CASE( "palette: the five score bands rank in the documented order", "[overl
 {
 	// index.html's score() is the tiebreaker for these, and this asserts the
 	// bands rather than the numbers so a re-tune has to state its intent.
-	REQUIRE( ui::Score( "sharpness", "display.sharpness", "sharpness display.sharpness rcas", "sharp" )
+	REQUIRE( ui::Score( "sharpness", "display.filter.sharpness", "sharpness display.filter.sharpness rcas", "sharp" )
 	         == ui::kScoreExact );
-	REQUIRE( ui::Score( "rcas denoise", "display.sharpness.rcas_denoise", "rcas denoise grain", "denoise" )
+	REQUIRE( ui::Score( "rcas denoise", "display.filter.sharpness.rcas_denoise", "rcas denoise grain", "denoise" )
 	         == ui::kScoreTitle );
-	REQUIRE( ui::Score( "scaler", "display.scaler", "scaler display.scaler aspect", "display" )
+	REQUIRE( ui::Score( "scaler", "display.filter.scaler", "scaler display.filter.scaler aspect", "display" )
 	         == ui::kScoreId );
 	REQUIRE( ui::Score( "allow tearing", "monitor.tearing", "allow tearing monitor.tearing vsync", "vsync" )
 	         == ui::kScoreKeyword );
-	REQUIRE( ui::Score( "sharpness", "display.sharpness", "sharpness display.sharpness rcas", "shrp" )
+	REQUIRE( ui::Score( "sharpness", "display.filter.sharpness", "sharpness display.filter.sharpness rcas", "shrp" )
 	         == ui::kScoreFuzzy );
-	REQUIRE( ui::Score( "sharpness", "display.sharpness", "sharpness display.sharpness rcas", "zzq" )
+	REQUIRE( ui::Score( "sharpness", "display.filter.sharpness", "sharpness display.filter.sharpness rcas", "zzq" )
 	         == ui::kScoreNoMatch );
 }
 
@@ -144,16 +148,16 @@ TEST_CASE( "palette: a title prefix outranks a keyword hit", "[overlay_palette]"
 	Fixture f;
 	// "scaler" is Scaler's title and also sits in Sharpness's neighbourhood
 	// only through the blob; the title-prefix hit must come first.
-	REQUIRE( f.IndexOf( "scaler", "display.scaler" ) == 0 );
+	REQUIRE( f.IndexOf( "scaler", "display.filter.scaler" ) == 0 );
 }
 
 TEST_CASE( "palette: a param is found by its own name", "[overlay_palette]" )
 {
-	// SPEC §5.2: "Ctrl+K -> 'denoise' finds display.sharpness.rcas_denoise".
+	// SPEC §5.2: "Ctrl+K -> 'denoise' finds display.filter.sharpness.rcas_denoise".
 	// This is the anti-junk-drawer law's credibility test -- if a param is
 	// not findable, depth really is the same as hidden.
 	Fixture f;
-	REQUIRE( f.IndexOf( "denoise", "display.sharpness.rcas_denoise" ) == 0 );
+	REQUIRE( f.IndexOf( "denoise", "display.filter.sharpness.rcas_denoise" ) == 0 );
 }
 
 TEST_CASE( "palette: a param is found through its PARENT's name", "[overlay_palette]" )
@@ -161,7 +165,7 @@ TEST_CASE( "palette: a param is found through its PARENT's name", "[overlay_pale
 	// A user who remembers where a setting lives rather than what it is
 	// called still reaches it.
 	Fixture f;
-	REQUIRE( f.IndexOf( "sharpness", "display.sharpness.rcas_denoise" ) >= 0 );
+	REQUIRE( f.IndexOf( "sharpness", "display.filter.sharpness.rcas_denoise" ) >= 0 );
 }
 
 TEST_CASE( "palette: a param row is labelled with its parent and flagged", "[overlay_palette]" )
@@ -189,8 +193,8 @@ TEST_CASE( "palette: the path column is the CONFIG KEY, never the area id", "[ov
 TEST_CASE( "palette: matching is case-insensitive", "[overlay_palette]" )
 {
 	Fixture f;
-	REQUIRE( f.IndexOf( "SHARP", "display.sharpness" ) == 0 );
-	REQUIRE( f.IndexOf( "ShArP", "display.sharpness" ) == 0 );
+	REQUIRE( f.IndexOf( "SHARP", "display.filter.sharpness" ) == 0 );
+	REQUIRE( f.IndexOf( "ShArP", "display.filter.sharpness" ) == 0 );
 }
 
 // =========================================================================
@@ -238,7 +242,7 @@ TEST_CASE( "palette: Ctrl+W deletes the trailing word", "[overlay_palette]" )
 TEST_CASE( "palette: arrows step a slider by its declared step and clamp", "[overlay_palette]" )
 {
 	Fixture f;
-	const ui::Entry *pE = f.reg.FindEntry( "display.sharpness" );
+	const ui::Entry *pE = f.reg.FindEntry( "display.filter.sharpness" );
 	REQUIRE( pE != nullptr );
 
 	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
@@ -278,7 +282,7 @@ TEST_CASE( "palette: a switch takes its value from the DIRECTION, not a toggle",
 TEST_CASE( "palette: a choice steps its options and stops at both ends", "[overlay_palette]" )
 {
 	Fixture f;
-	const ui::Entry *pE = f.reg.FindEntry( "display.scaler" );
+	const ui::Entry *pE = f.reg.FindEntry( "display.filter.scaler" );
 	REQUIRE( pE != nullptr );
 
 	REQUIRE( f.nScaler == 0 );
@@ -360,7 +364,7 @@ TEST_CASE( "palette: a param adjusts through the same one function", "[overlay_p
 	// The palette's whole in-place promise rests on a Param being no
 	// different from a row here.
 	Fixture f;
-	const ui::Parameter *pP = f.reg.FindParam( "display.sharpness.rcas_denoise" );
+	const ui::Parameter *pP = f.reg.FindParam( "display.filter.sharpness.rcas_denoise" );
 	REQUIRE( pP != nullptr );
 	REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pP ), +1, false ) );
 	REQUIRE( f.bDenoise );
@@ -379,8 +383,8 @@ TEST_CASE( "launcher: CanAdjust follows the KIND, not the current value", "[over
 	Fixture f;
 
 	// Ordered kinds: yes, regardless of where the value happens to sit.
-	const ui::Entry *pSlider  = f.reg.FindEntry( "display.sharpness" );
-	const ui::Entry *pChoice  = f.reg.FindEntry( "display.scaler" );
+	const ui::Entry *pSlider  = f.reg.FindEntry( "display.filter.sharpness" );
+	const ui::Entry *pChoice  = f.reg.FindEntry( "display.filter.scaler" );
 	const ui::Entry *pSwitch  = f.reg.FindEntry( "monitor.tearing" );
 	const ui::Entry *pStepper = f.reg.FindEntry( "monitor.fps_limit" );
 	// Read-only by type: no.
@@ -399,7 +403,7 @@ TEST_CASE( "launcher: CanAdjust follows the KIND, not the current value", "[over
 
 	// A Param is adjustable on exactly the same terms as a row -- the
 	// launcher must not offer chevrons on one and `open` on the other.
-	const ui::Parameter *pParam = f.reg.FindParam( "display.sharpness.rcas_denoise" );
+	const ui::Parameter *pParam = f.reg.FindParam( "display.filter.sharpness.rcas_denoise" );
 	REQUIRE( pParam != nullptr );
 	REQUIRE( ui::CanAdjust( ui::Adjustable::Of( *pParam ) ) );
 

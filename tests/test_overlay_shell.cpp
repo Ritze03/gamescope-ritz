@@ -63,17 +63,27 @@ TEST_CASE( "the responsive ladder reproduces SPEC 8.3's worked table", "[overlay
 		int   nStep;
 	};
 
-	// Transcribed from SPEC §8.3. The "Inspector" column of the table reads
-	// "400" or "drawer 400" -- the WIDTH never changes, only the host, which
-	// is exactly the point (Layout.cpp keeps one rect for both).
+	// UPDATED for the "scale only the contents, not the window" fix: the
+	// slab's own px size (flSlabPx below) no longer depends on display_scale
+	// at all -- it is now min(surfW x 0.90, max(1560,1180)) x
+	// min(surfH x 0.86, 940), a fixed 1560 wide on this test's 1920-wide
+	// surface at EVERY scale. What still moves with scale is flSlabBase
+	// (== flSlabPx / scale): as scale grows, the same fixed px width holds
+	// fewer base units, so the ladder collapses the rail / floats the
+	// Inspector / drops sheet columns sooner -- the pre-existing "not enough
+	// room" mechanism, now triggered by scale instead of only by a small
+	// surface. Figures recomputed from Layout.cpp's Slab::For/Solve by hand;
+	// the "Inspector" column still reads "400" or "drawer 400" -- the WIDTH
+	// never changes, only the host, which is exactly the point (Layout.cpp
+	// keeps one rect for both).
 	const Row kTable[] = {
-		{ 0.50f, 1180.0f, 2360.0f, 232.0f, ui::InspectorHost::Column, 1728.0f, -1 },
-		{ 0.75f, 1180.0f, 1573.0f, 232.0f, ui::InspectorHost::Column,  941.0f,  0 },
+		{ 0.50f, 1560.0f, 3120.0f, 232.0f, ui::InspectorHost::Column, 2488.0f, -1 },
+		{ 0.75f, 1560.0f, 2080.0f, 232.0f, ui::InspectorHost::Column, 1448.0f,  0 },
 		{ 1.00f, 1560.0f, 1560.0f, 232.0f, ui::InspectorHost::Column,  928.0f,  0 },
-		{ 1.25f, 1728.0f, 1382.0f, 232.0f, ui::InspectorHost::Column,  750.0f,  0 },
-		{ 1.50f, 1728.0f, 1152.0f,  60.0f, ui::InspectorHost::Column,  692.0f,  1 },
-		{ 1.75f, 1728.0f,  988.0f,  60.0f, ui::InspectorHost::Drawer,  928.0f,  2 },
-		{ 2.00f, 1728.0f,  864.0f,  60.0f, ui::InspectorHost::Drawer,  804.0f,  2 },
+		{ 1.25f, 1560.0f, 1248.0f, 232.0f, ui::InspectorHost::Column,  616.0f,  0 },
+		{ 1.50f, 1560.0f, 1040.0f,  60.0f, ui::InspectorHost::Column,  580.0f,  1 },
+		{ 1.75f, 1560.0f,  891.4f,  60.0f, ui::InspectorHost::Drawer,  831.4f,  2 },
+		{ 2.00f, 1560.0f,  780.0f,  60.0f, ui::InspectorHost::Drawer,  720.0f,  2 },
 	};
 
 	for ( const Row &row : kTable )
@@ -302,13 +312,14 @@ TEST_CASE( "region rects scale with display_scale and nothing else", "[overlay_s
 // =========================================================================
 TEST_CASE( "mode selection is automatic and follows the kind", "[overlay_shell]" )
 {
-	// "Selecting a Facts, Meter or Graph row opens Details; everything else
-	// -- including arriving from the palette on a parameter -- opens
-	// Configure." Stateless: there is no argument here for "what the user
-	// last chose", by construction.
-	REQUIRE( ui::ModeFor( ui::Kind::Facts, ui::CompositeKind::Anchor ) == ui::InspectorMode::Details );
-	REQUIRE( ui::ModeFor( ui::Kind::Meter, ui::CompositeKind::Anchor ) == ui::InspectorMode::Details );
-	REQUIRE( ui::ModeFor( ui::Kind::Composite, ui::CompositeKind::Graph ) == ui::InspectorMode::Details );
+	// Issue #90: the Inspector must ALWAYS open on Configure. Selecting a
+	// Facts/Meter/Graph row no longer auto-switches to Details -- that mode
+	// is now reached only by the mode strip's own manual click. Stateless:
+	// there is no argument here for "what the user last chose", by
+	// construction.
+	REQUIRE( ui::ModeFor( ui::Kind::Facts, ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
+	REQUIRE( ui::ModeFor( ui::Kind::Meter, ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
+	REQUIRE( ui::ModeFor( ui::Kind::Composite, ui::CompositeKind::Graph ) == ui::InspectorMode::Configure );
 
 	REQUIRE( ui::ModeFor( ui::Kind::Switch,  ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
 	REQUIRE( ui::ModeFor( ui::Kind::Slider,  ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
@@ -318,9 +329,6 @@ TEST_CASE( "mode selection is automatic and follows the kind", "[overlay_shell]"
 	REQUIRE( ui::ModeFor( ui::Kind::Action,  ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
 	REQUIRE( ui::ModeFor( ui::Kind::Stepper, ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
 
-	// A non-Graph composite is writable, so it configures. The distinction
-	// matters: Registry.h's IsReadOnly() would answer differently, and using
-	// it here would silently send every Anchor to Details.
 	REQUIRE( ui::ModeFor( ui::Kind::Composite, ui::CompositeKind::Anchor ) == ui::InspectorMode::Configure );
 	REQUIRE( ui::ModeFor( ui::Kind::Composite, ui::CompositeKind::Hue ) == ui::InspectorMode::Configure );
 }
@@ -553,7 +561,11 @@ TEST_CASE( "at 2.0x the drawer no longer covers the sheet's control column", "[o
 	// should say so loudly rather than pass vacuously.
 	REQUIRE( ladder.eHost == ui::InspectorHost::Drawer );
 	REQUIRE( ladder.nStep == 2 );
-	REQUIRE_THAT( ladder.flSheetBase, WithinAbs( 804.0f, 1e-4f ) );
+	// 720, not the pre-fix 804: the slab's px width at 2.0x is now the same
+	// fixed 1560 as every other scale (see the table test above), so the
+	// base-unit width the ladder sees at 2.0x is 1560/2.0 = 780, not the old
+	// scale-coupled 1728/2.0 = 864.
+	REQUIRE_THAT( ladder.flSheetBase, WithinAbs( 720.0f, 1e-4f ) );
 
 	// What Shell.cpp's DrawSheetBody computes, in the same order.
 	const float flScale = 2.0f;
@@ -620,9 +632,9 @@ TEST_CASE( "closing the drawer gives the sheet's lane its full column back", "[o
 // =========================================================================
 //  SPEC §8.3's multi-column sheet (D20.2)
 // =========================================================================
-// `nColumns` was computed, printed by `shell.layout`, and read by nothing --
-// the seventh instance of this codebase's dominant defect class. These pin
-// the geometry that now consumes it.
+// `nColumns` was computed and read by nothing -- the seventh instance of
+// this codebase's dominant defect class. These pin the geometry that now
+// consumes it.
 TEST_CASE( "sheet columns: width follows index.html's own formula", "[overlay_shell]" )
 {
 	// colW = ( sheet - 2 x pad - (cols - 1) x gutter ) / cols, with pad and
@@ -713,9 +725,9 @@ TEST_CASE( "sheet columns: one column reduces to D17's original subtraction", "[
 TEST_CASE( "sheet columns: an unsplittable area is always one column", "[overlay_shell]" )
 {
 	// A content body or an escaped legacy panel cannot be cut in half, and
-	// Solve() is where that is decided -- so `shell.layout`'s printed count
-	// and the drawn count are the same number. Answering it at the drawing
-	// site instead would recreate the exact defect this change removes.
+	// Solve() is where that is decided -- so the computed column count and
+	// the drawn count are the same number. Answering it at the drawing site
+	// instead would recreate the exact defect this change removes.
 	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 0.5f );
 
 	// 25 rows at 0.5x is the three-column case ...

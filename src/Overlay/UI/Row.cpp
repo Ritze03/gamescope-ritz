@@ -45,21 +45,45 @@ namespace gamescope::ui
 
 	void RowCtx::SplitLabelZone( float flValueWidthPx, ImRect *pOutLabel, ImRect *pOutValue ) const
 	{
+		// The common case -- a control that fills the whole control zone --
+		// is exactly flControlLeftPx == flCtlMin, which the two-argument
+		// overload reduces back to Lw (see its own comment).
+		SplitLabelZone( flValueWidthPx, m_flCtlMin, pOutLabel, pOutValue );
+	}
+
+	void RowCtx::SplitLabelZone( float flValueWidthPx, float flControlLeftPx,
+	                             ImRect *pOutLabel, ImRect *pOutValue ) const
+	{
 		const float flZoneW = ImMax( m_flLw - m_flLabelMin, 0.0f );
-		const float flGap   = Px( tok::kGapLabel );
+		const float flGap    = Px( tok::kGapLabel );
+		const float flGutter = Px( tok::kM );
 
 		// SPEC §2.3: the value ellipsizes at 60% of the label+value zone.
+		// Sized off the ZONE (labelMin..Lw), not off however far right the
+		// anchor below ends up -- a narrow atom's dead space becomes room
+		// the value visually crosses to reach it, not extra room the 60% cap
+		// grows into, so a too-long value still clips exactly as before.
 		const float flValueW = ImClamp( flValueWidthPx, 0.0f, flZoneW * tok::kValueMaxFrac );
 
-		// The value is right-bound at Lw; the label gets everything left of it,
-		// minus one gap. Both come out of this one subdivision.
-		const float flValueMin = m_flLw - flValueW;
-		const float flLabelMax = ImMax( m_flLabelMin, flValueW > 0.0f ? flValueMin - flGap : m_flLw );
+		// The value is right-bound just before wherever THIS row's control
+		// actually starts, less the row's usual gutter -- Lw is only the
+		// floor. A control can never start left of flCtlMin == Lw + gutter,
+		// so this can never place the anchor left of Lw; it only ever moves
+		// the value right, toward its control, which is a no-op for a
+		// full-bleed control (flControlLeftPx == flCtlMin) and the fix for a
+		// narrow one right-bound deeper in the zone (Switch, Stepper, a
+		// Composite's own body).
+		const float flAnchor = ImMax( flControlLeftPx - flGutter, m_flLw );
+
+		// The label gets everything left of the value, minus one gap. Both
+		// come out of this one subdivision.
+		const float flValueMin = flAnchor - flValueW;
+		const float flLabelMax = ImMax( m_flLabelMin, flValueW > 0.0f ? flValueMin - flGap : flAnchor );
 
 		if ( pOutLabel )
 			*pOutLabel = ImRect( m_flLabelMin, m_rcBounds.Min.y, flLabelMax, m_rcBounds.Max.y );
 		if ( pOutValue )
-			*pOutValue = ImRect( flValueMin, m_rcBounds.Min.y, m_flLw, m_rcBounds.Max.y );
+			*pOutValue = ImRect( flValueMin, m_rcBounds.Min.y, flAnchor, m_rcBounds.Max.y );
 	}
 
 	ImRect RowCtx::Affordance() const

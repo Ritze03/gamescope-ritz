@@ -280,7 +280,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.vibrancy.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, "vibrancy_enabled", b ); } ) )
-			.Help( "Raises saturation of muted colours while leaving already-saturated ones alone." )
+			.Help( "Makes dull colours more vivid, while leaving already-vivid colours alone." )
 			.Default( false )
 			.Keywords( "vibrancy saturation colour vividness" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
@@ -288,7 +288,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.vibrancy.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, "vibrancy_strength", f ); } ) )
-				.Help( "Overall weight of the effect. Negative values desaturate instead." )
+				.Help( "How strong the effect is. Negative values make colours duller instead." )
 				.Range( -1.0f, 1.0f )
 				.Step( 0.05f )   // 41 positions; 0.00, the default, is the centre notch
 				.Default( 0.0f )
@@ -300,17 +300,15 @@ namespace gamescope
 						SetRuntimeUniformBool( "vibrancy_protect_skin_tones", b );
 						QueueSave();
 					} ) )
-				.Help( "Excludes the skin-tone hue band from the boost, so faces do not go orange." )
+				.Help( "Keeps the saturation boost off skin tones, so faces don't turn orange." )
 				.Default( true );
 
 		a.Switch( "image.shaders.presharpen", "Pre-sharpen",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.pre_sharpen.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.pre_sharpen.enabled, "pre_sharpen_enabled", b ); } ) )
-			.Help( "Sharpens before upscaling, at source resolution. Works with any Filter -- "
-			       "unlike the Upscaling area's Sharpness, which is gamescope's own post-upscale "
-			       "pass and does nothing under Linear, Nearest or Pixel. The two are separate "
-			       "effects and can be combined." )
+			.Help( "Sharpens the picture before it's resized, so it works with any Filter -- unlike "
+			       "the Upscaling area's Sharpness, which only works with FSR or NIS." )
 			.Default( false )
 			.Keywords( "presharpen sharpen pre upscale clarity reshade" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
@@ -331,7 +329,7 @@ namespace gamescope
 						SetRuntimeUniformFloat( "pre_sharpen_strength", f );
 						QueueSave();
 					} ) )
-				.Help( "Overall weight of the sharpening pass." )
+				.Help( "How strong the sharpening is." )
 				.Range( 0.0f, 2.0f )
 				.Step( 0.05f )   // 41 positions
 				.Default( 0.5f );
@@ -344,9 +342,8 @@ namespace gamescope
 					SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled,
 					                  "adaptive_brightness_enabled", b );
 				} ) )
-			.Help( "Experimental. Raises exposure in dark scenes and lowers it in bright ones, "
-			       "following the frame's average luminance. Unlike the other two effects this one "
-			       "carries state between frames, which is why it stays flagged experimental." )
+			.Help( "Experimental. Automatically brightens dark scenes and dims bright ones as you "
+			       "play, like your eyes adjusting." )
 			.Default( false )
 			.Keywords( "adaptive brightness eye adaptation exposure auto experimental" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
@@ -355,7 +352,7 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength,
 						"adaptive_brightness_strength", f ); } ) )
-				.Help( "Overall weight of the effect." )
+				.Help( "How strong the effect is." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
 				.Default( 1.0f )
@@ -364,7 +361,7 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance,
 						"adaptive_brightness_target_luminance", f ); } ) )
-				.Help( "Average luminance the adaptation aims for." )
+				.Help( "How bright the picture tries to settle at once it's adjusted." )
 				.Range( 0.1f, 0.9f )
 				.Step( 0.05f )   // 17 positions; both ends sit on the grid
 				.Default( 0.5f )
@@ -373,7 +370,7 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed,
 						"adaptive_brightness_adapt_up_speed", f ); } ) )
-				.Help( "How fast adaptation moves toward a brighter target." )
+				.Help( "How quickly the picture brightens when a scene gets darker." )
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, one per tenth of a second
 				.Unit( "s" )
@@ -383,7 +380,7 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed,
 						"adaptive_brightness_adapt_down_speed", f ); } ) )
-				.Help( "How fast adaptation moves toward a darker target." )
+				.Help( "How quickly the picture dims when a scene gets brighter." )
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, as Brighten speed above
 				.Unit( "s" )
@@ -393,7 +390,7 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain,
 						"adaptive_brightness_min_gain", f ); } ) )
-				.Help( "Lower clamp on the exposure multiplier." )
+				.Help( "How dark the adjustment is allowed to make the picture." )
 				.Range( 0.5f, 1.0f )
 				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
 				.Default( 0.8f )
@@ -402,7 +399,7 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain,
 						"adaptive_brightness_max_gain", f ); } ) )
-				.Help( "Upper clamp on the exposure multiplier." )
+				.Help( "How bright the adjustment is allowed to make the picture." )
 				.Range( 1.0f, 2.0f )
 				.Step( 0.05f )   // 21 positions
 				.Default( 1.6f );
@@ -413,7 +410,7 @@ namespace gamescope
 			return std::string( IsBaseLayerSdr() ? "SDR base layer -- effects available"
 			                                     : "HDR base layer -- effects unavailable" );
 		} )
-			.Help( "What the ReShade front-end and the base layer are actually doing. Read-only." )
+			.Help( "Shows whether these effects are currently active. Read-only." )
 			.Keywords( "reshade compile effect fx colourspace sdr hdr loaded" )
 			.Live( "effect file", []{ return ui::Fact{ "effect file", k_pszEffectPath }; } )
 			.Live( "compiled", []{

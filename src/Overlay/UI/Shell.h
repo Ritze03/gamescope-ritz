@@ -89,6 +89,23 @@ namespace gamescope::ui::shell
 	// Atomic, readable from any thread.
 	bool LauncherOnlyActive();
 
+	// Issue #88: whether the palette is currently open at all -- as the
+	// launcher, or laid over an already-open shell. wlserver reads this to
+	// turn Left+Right Ctrl into a genuine toggle: nothing open means the
+	// combo should open (as the launcher, or over the shell -- see
+	// LauncherOnlyActive() above), something open means it should close
+	// exactly what it opened. Atomic, readable from any thread, same
+	// threading contract as LauncherOnlyActive().
+	bool PaletteActive();
+
+	// Issue #88: close the palette WITHOUT touching whatever is behind it.
+	// This is the combo's "close" half when the palette was laid over a
+	// shell the user opened separately (LauncherOnlyActive() false) -- the
+	// launcher-only case closes by hiding the whole overlay instead, since
+	// there is nothing else on screen to preserve. A request consumed by
+	// Draw() on its own thread, same contract as RequestPalette().
+	void RequestClosePalette();
+
 	// D25: the overlay was hidden by something OUTSIDE the shell -- the Right
 	// Ctrl tap, Ctrl+Shift+O, gamescopectl. Drops any launcher state, so the
 	// next open is not a launcher nobody asked for.

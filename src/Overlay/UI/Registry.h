@@ -369,6 +369,16 @@ namespace gamescope::ui
 		const std::string &ConfirmPrompt() const { return m_sConfirm; }
 		bool  NeedsConfirm() const { return !m_sConfirm.empty(); }
 
+		// ---- launcher visibility (issue #91) ------------------------------
+		// Read-only entries are excluded from the palette structurally, via
+		// ReadOnly() -- see CommandPalette.cpp's Build(). This flag is for
+		// the rest: an entry that DOES have a setter but still makes no
+		// sense to jump to from the launcher (the rationale belongs at the
+		// call site). Default false, so no existing entry's palette
+		// visibility changes without an explicit call.
+		Entry &HideFromPalette() { m_bExcludeFromPalette = true; return *this; }
+		bool  ExcludedFromPalette() const { return m_bExcludeFromPalette; }
+
 		// ---- generator 3: Configure rows ---------------------------------
 		// Takes a LEAF, never an id. The full id is synthesised from the
 		// parent, which is what makes the Prefix Law unrepresentable to break
@@ -474,6 +484,7 @@ namespace gamescope::ui
 
 		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason;
 		std::string m_sConfirm;   // Confirm() -- a destructive Action's second-press prompt
+		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;

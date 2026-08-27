@@ -38,6 +38,26 @@ callers (#60) and E2 has one binary affordance.
 
 ## Amendments
 
+### 2026-08-27 — the launcher stops offering rows it cannot act on
+
+Read-only rows (`Kind::Meter`, `Kind::Facts`, the `Composite(Graph)` shape) used to
+appear in the command palette's search results despite `Enter` on one having nothing to
+do — a launcher exists to jump to and *change* a setting, not to display one. Two
+mechanisms cover this, and they are deliberately not the same one:
+
+- **`Entry::ReadOnly()`** (`Registry.h`) is the existing taxonomy answer, already used by
+  `DrawEntryRow`'s dimmed-control path. `CommandPalette.cpp`'s `Build()` excludes any
+  entry where `ReadOnly()` is true — structurally, by kind, not by hand-tagging each
+  registration. A future read-only kind is excluded for free; a future writable kind is
+  included for free.
+- **`Entry &HideFromPalette()` / `bool ExcludedFromPalette() const`** (`Registry.h`,
+  issue #91) is the escape hatch for an entry that is *not* read-only but still
+  shouldn't be a launcher destination for its own reason (`Build()` checks
+  `e.ReadOnly() || e.ExcludedFromPalette()`). Kept separate from `ReadOnly()` on purpose:
+  the two questions — "can this be acted on" and "should this be jumped to" — are
+  independent, and folding the second into the first would make `ReadOnly()` lie for
+  anything hidden for a reason other than being unwritable.
+
 ### 2026-08-23 — two Inspector modes, direction B's controls, one control height
 
 1. **`EXPLAIN / CONFIGURE / DIAGNOSE` → `CONFIGURE / DETAILS`.** The four generators are

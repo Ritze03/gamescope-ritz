@@ -517,8 +517,8 @@ namespace gamescope
 					Cfg().gamescope.vrr_enabled = b;
 					QueueSave();
 				} ) )
-			.Help( "Lets the display's refresh follow the game's frame rate instead of the other way "
-			       "around. Requires a VRR-capable display and connector." )
+			.Help( "Matches your screen's refresh rate to the game so motion looks smoother with "
+			       "less stutter. Needs a screen and cable that support VRR (FreeSync or G-Sync)." )
 			.Default( false )
 			.Keywords( "vrr freesync gsync adaptive sync refresh" );
 
@@ -530,8 +530,8 @@ namespace gamescope
 					Cfg().gamescope.tearing_enabled = b;
 					QueueSave();
 				} ) )
-			.Help( "Lets the game present without waiting for the display's refresh. Lowest latency; "
-			       "can show a horizontal seam on fast camera pans." )
+			.Help( "Shows new frames the instant they're ready instead of waiting for the screen. "
+			       "Feels more responsive, but fast camera movement can show a faint horizontal line." )
 			.Default( false )
 			.Keywords( "immediate flip vsync latency tear seam" );
 
@@ -549,8 +549,8 @@ namespace gamescope
 					Cfg().gamescope.force_grab_cursor = b;
 					QueueSave();
 				} ) )
-			.Help( "Always use relative mouse mode instead of flipping on cursor visibility. "
-			       "Applies immediately." )
+			.Help( "Keeps your mouse locked to the game at all times, not just when the cursor is "
+			       "hidden. Turn this on if the mouse ever seems to escape the game window." )
 			.Default( false )
 			.Keywords( "mouse pointer capture confine grab relative" );
 	}
@@ -575,9 +575,9 @@ namespace gamescope
 				[]{ return (int)g_wantedUpscaleFilter; },
 				[]( int n ) { SetFilter( (GamescopeUpscaleFilter)n ); } ),
 			kFilterOptions, std::size( kFilterOptions ) )
-			.Help( "Resamples the game's image up to the output resolution. FSR and NIS add a "
-			       "sharpening pass afterwards; Pixel is nearest-neighbour and is only sharp when "
-			       "the scale factor is a whole number." )
+			.Help( "Chooses how the game's picture is stretched to fill your screen. FSR and NIS "
+			       "also sharpen it afterward; Pixel stays blocky except at exact resolution "
+			       "multiples." )
 			.Default( (int)GamescopeUpscaleFilter::LINEAR )
 			.Keywords( "upscale scaling resample fsr nis pixel linear nearest" );
 
@@ -586,15 +586,13 @@ namespace gamescope
 		// direction between FSR and NIS underneath, which is why this binds
 		// through the same two remap functions the legacy slider uses rather
 		// than exposing g_upscaleFilterSharpness directly.
-		a.Slider( "display.sharpness", "Sharpness",
+		a.Slider( "display.filter.sharpness", "Sharpness",
 			ui::AnyBind::Of<int>(
 				[]{ return UiPercentFromRawSharpness( g_upscaleFilterSharpness ); },
 				[]( int n ) { SetSharpnessUiPercent( n ); } ) )
-			.Help( "Strength of gamescope's own post-upscale sharpening pass (FSR RCAS or NIS). "
-			       "Higher is crisper; too high adds ringing around high-contrast edges. One "
-			       "setting covers both filters, and changing the filter resets it to 0%. This is "
-			       "not the Shaders area's Pre-sharpen -- that one is a separate ReShade pass, runs "
-			       "before upscaling, and works with any filter. Both are real and can be combined." )
+			.Help( "How much extra sharpening FSR or NIS adds after resizing the picture. Higher "
+			       "looks crisper but too high adds haloing; this is separate from the Shaders "
+			       "area's Pre-sharpen, which works with any filter." )
 			.Range( 0.0f, 100.0f )
 			// D18: the binding has 21 real notches, not 101. The raw value is
 			// 0..20 and the percentage is round(raw x 100 / 20), so the UI
@@ -618,13 +616,13 @@ namespace gamescope
 				"only FSR and NIS sharpen -- the Linear, Nearest and Pixel filters have no "
 				"sharpening pass, so this has no effect while one of them is selected" );
 
-		a.Choice( "display.scaler", "Scaler",
+		a.Choice( "display.filter.scaler", "Scaler",
 			ui::AnyBind::Of<int>(
 				[]{ return (int)g_wantedUpscaleScaler; },
 				[]( int n ) { SetScaler( (GamescopeUpscaleScaler)n ); } ),
 			kScalerOptions, std::size( kScalerOptions ) )
-			.Help( "What to do when the game's aspect ratio does not match the output. Integer only "
-			       "scales by whole numbers, which avoids resampling blur at the cost of black bars." )
+			.Help( "Decides how the picture fits your screen when its shape doesn't match. Integer "
+			       "only resizes in whole-number steps, which stays sharp but can add black bars." )
 			.Default( (int)GamescopeUpscaleScaler::AUTO )
 			.Keywords( "aspect fit fill stretch integer letterbox" );
 
@@ -640,8 +638,8 @@ namespace gamescope
 				return std::string( "overridden while Steam is focused" );
 			return std::string( FilterToString( g_upscaleFilter ) ) + " · " + ScalerToString( g_upscaleScaler );
 		} )
-			.Help( "What the compositor is actually doing right now, resolved after every override. "
-			       "Read-only: this is the live state, not the setting." )
+			.Help( "Shows the filter and scaler actually in use right now, including any temporary "
+			       "override. Read-only, this just reports the current state." )
 			.Keywords( "effective live override steam actual" )
 			.Live( "wanted filter", []{ return ui::Fact{ "wanted filter", FilterToString( g_wantedUpscaleFilter ) }; } )
 			.Live( "live filter",   []{ return ui::Fact{ "live filter",   FilterToString( g_upscaleFilter ) }; } )
@@ -719,10 +717,8 @@ namespace gamescope
 			ui::AnyBind::Of<int>(
 				[]{ return Cfg().gamescope.fps_limit; },
 				[]( int n ) { SetFpsLimit( n ); } ) )
-			.Help( "Caps presentation rate. Stepping down from 10 reaches 0, which removes the cap "
-			       "entirely; there is deliberately nothing between the two, because below 10 fps "
-			       "this overlay becomes too slow to drive -- including too slow to undo it. "
-			       "Applies immediately." )
+			.Help( "Limits how many frames per second the game can show. Stepping down from 10 "
+			       "jumps straight to Unlimited -- the overlay itself gets too slow below that." )
 			.Range( 0.0f, (float)kMaxFpsLimit )
 			.Step( (float)kMinFpsLimit )
 			.Unit( "fps" )
@@ -767,11 +763,8 @@ namespace gamescope
 					return 0.0;
 				return std::clamp( LastFrametimeMs() / flBudget * 100.0f, 0.0f, 100.0f );
 			}, 0.0, 100.0 )
-			.Help( "How much of the time available for one frame the game actually spent. The "
-			       "budget is the FPS cap when one is set, and the display's refresh interval "
-			       "otherwise. At 100 % the frame took its whole budget and the next one is "
-			       "already late -- so sustained 100 % is what a stutter looks like before you "
-			       "can see it. Read-only." )
+			.Help( "Shows how much of its allotted time each frame is using. Read-only -- if it "
+			       "stays at 100%, frames are running late and you're about to see stutter." )
 			.Unit( " %" )
 			.Keywords( "frame budget meter frametime headroom pacing stutter missed deadline" )
 			.DisabledUnless(
@@ -807,8 +800,7 @@ namespace gamescope
 			const int n = Cfg().gamescope.fps_limit;
 			return n == 0 ? std::string( "idle -- no cap" ) : std::to_string( n ) + " fps requested";
 		} )
-			.Help( "What the limiter has been asked for, and how that request reaches the "
-			       "compositor. Read-only." )
+			.Help( "Shows the FPS limit you asked for and how it's being applied. Read-only." )
 			.Keywords( "limiter state cap refresh cycle override" )
 			.Live( "requested", []{
 				const int n = Cfg().gamescope.fps_limit;
@@ -856,8 +848,8 @@ namespace gamescope
 					Cfg().gamescope.hdr_enabled = b;
 					QueueSave();
 				} ) )
-			.Help( "Requests an HDR10 signal on the connector and switches the composite pipeline "
-			       "to PQ. Everything else in this area is meaningless while this is off." )
+			.Help( "Turns on HDR for richer colour and brighter highlights, on a screen that "
+			       "supports it. Every other setting in this area only matters while this is on." )
 			.Default( false )
 			.Keywords( "hdr pq bt2020 wide gamut high dynamic range" );
 
@@ -877,8 +869,8 @@ namespace gamescope
 					Cfg().gamescope.sdr_gamut_wideness = f;
 					QueueSave();
 				} ) )
-			.Help( "How far SDR content is stretched toward the display's wide gamut. 0 keeps "
-			       "BT.709 exactly. Applies immediately." )
+			.Help( "Makes colours in regular (non-HDR) content richer by stretching them toward "
+			       "your screen's wider colour range. 0 leaves colours exactly as the game intended." )
 			.Range( 0.0f, 1.0f )
 			.Step( 0.05f )       // 21 positions across a 0..1 normalised amount
 			.Default( 0.0f )
@@ -893,7 +885,8 @@ namespace gamescope
 					Cfg().gamescope.sdr_on_hdr_brightness_nits = f;
 					QueueSave();
 				} ) )
-			.Help( "How bright SDR content looks composited alongside HDR. Applies immediately." )
+			.Help( "Sets how bright regular (non-HDR) content looks when it's shown next to HDR "
+			       "content." )
 			.Range( 50.0f, 1000.0f )
 			// 96 positions. The 203-nit default is deliberately NOT on this
 			// grid and does not need to be: only a DRAG is quantised, so the
@@ -915,7 +908,7 @@ namespace gamescope
 					Cfg().gamescope.hdr_input_gain = f;
 					QueueSave();
 				} ) )
-			.Help( "Multiplier applied to HDR content before tone mapping. Applies immediately." )
+			.Help( "Turns HDR content brighter or dimmer before it's shown on screen." )
 			.Range( 0.0f, 4.0f )
 			.Step( 0.05f )       // 81 positions; 1.00x, the default, is on the grid
 			.Unit( "x" )
@@ -931,8 +924,8 @@ namespace gamescope
 					Cfg().gamescope.sdr_input_gain = f;
 					QueueSave();
 				} ) )
-			.Help( "Multiplier applied to SDR content before it is composited into the HDR "
-			       "container. Applies immediately." )
+			.Help( "Turns regular (non-HDR) content brighter or dimmer before it's blended in with "
+			       "the HDR picture." )
 			.Range( 0.0f, 4.0f )
 			.Step( 0.05f )       // 81 positions, as HDR input gain above
 			.Unit( "x" )
@@ -957,8 +950,8 @@ namespace gamescope
 				(unsigned)info.max_cll, (unsigned)info.max_fall );
 			return std::string( sz );
 		} )
-			.Help( "HDR metadata the focused app is actually sending, read from its surface. Never "
-			       "inferred, and never editable -- this is what the app reported." )
+			.Help( "Shows the HDR brightness info the game itself is sending. Read-only, this is "
+			       "exactly what the game reports, not a setting you can change." )
 			.Keywords( "metadata maxcll maxfall mastering primaries white point tonemap" )
 			.Live( "source", []{
 				return ui::Fact{ "source", g_ColorMgmt.current.appHDRMetadata

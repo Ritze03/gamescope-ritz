@@ -63,7 +63,35 @@ namespace gamescope::ui
 		// name cannot squeeze the label to nothing"); pass 0 for a kind that
 		// has no value column at all (SPEC §2.3's table -- the KIND decides,
 		// never the caller; see Registry.h's UsesValueColumn()).
+		//
+		// This is == SplitLabelZone( flValueWidthPx, m_flCtlMin, ... ) below --
+		// i.e. "assume the control fills the whole control zone", which is
+		// true for Slider/Meter/a full-bleed Composite body and is why they
+		// never showed the gap issue #<switch-spinner-anchor> names.
 		void SplitLabelZone( float flValueWidthPx, ImRect *pOutLabel, ImRect *pOutValue ) const;
+
+		// As above, but the value's right edge is anchored at
+		// `flControlLeftPx - the row's usual gutter` instead of always at Lw.
+		// Use this overload whenever the row's actual control is a fixed-size
+		// atom right-bound WELL INSIDE the control zone -- Switch's 40-wide
+		// track, Stepper's 44-wide group, a Composite's own (possibly
+		// narrower-than-full) body -- so the value ends up adjacent to
+		// whatever the row actually draws instead of stranded at the lane's
+		// content-independent Lw. Pass the control's own left edge (its
+		// Place()/PlaceFull() rect's Min.x, or a Composite band's rcBody.Min.x)
+		// -- never compute or guess it here.
+		//
+		// A control cannot start left of flCtlMin, so flControlLeftPx -
+		// gutter can never fall below m_flLw; the clamp inside just makes
+		// that a guarantee instead of a coincidence, so this can never move
+		// the value LEFT of where the single-argument overload would put it,
+		// only right, toward its control. For a full-bleed control (Slider,
+		// Meter, a full-bleed Composite) flControlLeftPx == flCtlMin and the
+		// two overloads agree exactly -- SPEC §8.3's worked numbers, and
+		// every Slider/Meter row on screen, are unaffected by this overload
+		// existing.
+		void SplitLabelZone( float flValueWidthPx, float flControlLeftPx,
+		                     ImRect *pOutLabel, ImRect *pOutValue ) const;
 
 		// The affordance column -- exactly one glyph, chosen by the fixed
 		// priority in SPEC §2.4. 28 base wide, full row height.

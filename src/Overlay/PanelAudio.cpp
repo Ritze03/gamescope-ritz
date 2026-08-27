@@ -421,11 +421,9 @@ namespace gamescope
 							QueueSave();
 						} ),
 					s_vecStreamOptions.data(), s_vecStreamOptions.size() )
-					.Help( "Which PipeWire stream counts as this game's audio. Automatic matches by "
-					       "process id, then by process name, then falls back to the newest stream "
-					       "since launch. Picking one by hand pins it for this game and is remembered "
-					       "across relaunches by application name, not by node id -- node ids are a "
-					       "fresh number every session." )
+					.Help( "Which audio stream is this game's. Automatic finds it on its own, or pick "
+					       "one by hand if the wrong app's audio gets controlled instead -- remembered "
+					       "for this game across relaunches." )
 					.Default( 0 )
 					.Keywords( "stream node pipewire application pick manual override wpctl" );
 
@@ -437,7 +435,7 @@ namespace gamescope
 				// express.
 				if ( s_AreaState.bDetected )
 				{
-					a.Slider( "audio.volume", "Game volume",
+					a.Slider( "audio.stream.volume", "Game volume",
 						ui::AnyBind::Of<int>(
 							[]{
 								return (int)std::lround(
@@ -451,9 +449,9 @@ namespace gamescope
 								s_PendingPrimary.flVolume   = flFrac;
 								s_PendingPrimary.tWhen      = std::chrono::steady_clock::now();
 							} ) )
-						.Help( "Volume of the matched game stream. Above 100% is a real boost applied "
-						       "by WirePlumber, not headroom -- it can clip. When the game owns several "
-						       "streams this moves all of them together." )
+						.Help( "The game's volume. Going above 100% is a real boost that can distort "
+						       "the sound, not just extra headroom, and moves every one of the game's "
+						       "sounds together." )
 						.Range( 0.0f, 150.0f )
 						// The binding is an int percent, so the range is 151 discrete
 						// values -- over the 100-position budget on its own. 5% is
@@ -473,7 +471,7 @@ namespace gamescope
 									s_PendingPrimary.bMuted   = bMuted;
 									s_PendingPrimary.tWhen    = std::chrono::steady_clock::now();
 								} ) )
-							.Help( "Silences the stream without changing its volume." )
+							.Help( "Mutes the sound without changing its volume." )
 							.Default( false );
 				}
 
@@ -494,16 +492,15 @@ namespace gamescope
 					const int nNodeId = c.nNodeId;
 
 					a.Slider( sId.c_str(), StreamName( c ).c_str(), BindNodeVolume( nNodeId ) )
-						.Help( "Volume of this application's audio stream, applied to its PipeWire "
-						       "node directly. Independent of every other row here: this cannot move "
-						       "another application's volume." )
+						.Help( "This app's own volume, separate from the others. Changing it never "
+						       "affects any other app's sound." )
 						.Range( 0.0f, 150.0f )
 						.Step( 5.0f )    // 31 positions, as Game volume above
 						.Default( 100 )
 						.Unit( "%" )
 						.Keywords( "volume stream application per-app mixer" )
 						.Param( "mute", "Mute", BindNodeMute( nNodeId ) )
-							.Help( "Silences this stream without changing its volume." )
+							.Help( "Mutes this app's sound without changing its volume." )
 							.Default( false );
 				}
 			}
@@ -520,9 +517,8 @@ namespace gamescope
 					       std::to_string( s_AreaState.nTotalAudioStreams ) + " stream" +
 					       ( s_AreaState.nTotalAudioStreams == 1 ? "" : "s" );
 				} )
-				.Help( "What the audio backend currently reports: whether wpctl is present, how the "
-				       "game's stream was matched, and how many streams exist. Read-only -- every "
-				       "value here is observed, not set." )
+				.Help( "Shows how the game's audio is being found and how many sounds are playing. "
+				       "Read-only, nothing here can be changed." )
 				.Keywords( "wpctl pipewire wireplumber detection status diagnostics" )
 				.Live( "wpctl", []{
 					return ui::Fact{ "wpctl", s_AreaState.bWpctlAvailable

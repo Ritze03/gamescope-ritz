@@ -15,17 +15,29 @@ namespace gamescope::ui
 		Slab slab;
 		slab.flScale = flScale <= 0.0f ? 1.0f : flScale;
 
-		//   min( surfaceW x 0.90, max( 1560 x scale, 1180 ) )
-		//   min( surfaceH x 0.86, 940 x scale )
+		//   min( surfaceW x 0.90, max( 1560, 1180 ) )
+		//   min( surfaceH x 0.86, 940 )
+		//
+		// Deliberately NOT x scale. The outer slab is the overlay's window --
+		// what the user asked for is "only the contents should scale, not
+		// the actual window size" -- so its own pixel footprint is a fixed
+		// design size (with the surface-fraction cap that already existed,
+		// for small surfaces), independent of display_scale entirely. Scale
+		// still governs every rect INSIDE the slab: flWidthBase/flHeightBase
+		// below divide this fixed px size by scale, so the ladder sees less
+		// "room" in base units as scale grows and collapses the rail to
+		// icons / floats the Inspector / drops sheet columns exactly as it
+		// already does for a small surface -- the SAME overflow mechanism,
+		// now also driven by scale instead of only by surface size.
 		//
 		// Note the asymmetry, which is SPEC.md's own and not a slip: width
 		// has a 1180 FLOOR inside the max() -- so a small surface still gets
 		// a slab wide enough for rail + inspector + a usable sheet -- while
 		// height has none, because a short slab merely scrolls.
 		slab.flWidthPx  = std::min( flSurfaceWPx * shelltok::kSurfFracW,
-		                            std::max( shelltok::kSlabBaseW * slab.flScale, shelltok::kSlabMinW ) );
+		                            std::max( shelltok::kSlabBaseW, shelltok::kSlabMinW ) );
 		slab.flHeightPx = std::min( flSurfaceHPx * shelltok::kSurfFracH,
-		                            shelltok::kSlabBaseH * slab.flScale );
+		                            shelltok::kSlabBaseH );
 
 		// Never wider or taller than the surface itself: the max(…,1180)
 		// above can exceed a genuinely tiny surface, and a slab hanging off
@@ -231,19 +243,16 @@ namespace gamescope::ui
 	// =====================================================================
 	InspectorMode ModeFor( Kind eKind, CompositeKind eComposite )
 	{
-		// "Selecting a Facts, Meter or Graph row opens Details; everything
-		// else -- including arriving from the palette on a parameter --
-		// opens Configure."
-		//
-		// Graph is the composite that has no control in it at all, so it
-		// belongs with the other two read-only kinds even though its Kind is
-		// Composite. Asking Registry.h's own IsReadOnly() would NOT be
-		// equivalent: that predicate is about whether a control can be
-		// constructed, and a Composite is writable in general.
-		if ( eKind == Kind::Facts || eKind == Kind::Meter )
-			return InspectorMode::Details;
-		if ( eKind == Kind::Composite && eComposite == CompositeKind::Graph )
-			return InspectorMode::Details;
+		// Issue #90: the Inspector must ALWAYS open on Configure. This used
+		// to switch a Facts/Meter/Graph row straight to Details; that
+		// automatic switch is removed -- Details is reached only by the
+		// mode strip's own manual click (Shell.cpp's DrawModeStrip, which
+		// sets s_bModeOverridden and is untouched by this). eKind and
+		// eComposite are kept in the signature, unused, so the two call
+		// sites -- selection change and the palette's jump -- stay
+		// unchanged and still go through this one function.
+		(void)eKind;
+		(void)eComposite;
 		return InspectorMode::Configure;
 	}
 

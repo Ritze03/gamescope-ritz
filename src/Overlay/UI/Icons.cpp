@@ -175,21 +175,6 @@ namespace gamescope::ui
 			// see Icons.cpp's Stroke() for the tangent construction.
 			IconShape{ IconOp::Teardrop, 2, 6.0f,
 				{ { 12.0f, 3.4f }, { 12.0f, 13.7f } } } } },
-
-		{ "setup.shell", 3, {
-			// THE ONE GLYPH WITH NO MOCKUP ORIGINAL. index.html's eleventh
-			// area is `display.output` (a screen on a stand), which this
-			// build does not register; this build's eleventh is
-			// `setup.shell`, which the mockup never drew.
-			//
-			// Drawn as the shell itself: a framed window with a rail down
-			// its left edge and a header across the rest. That is literally
-			// what the area configures, and it is the reading that keeps it
-			// away from Shaders' stack -- a frame with interior divisions
-			// against three floating layers.
-			Rect( 2.5f, 4.5f, 21.5f, 19.5f ),
-			Line( { 8.5f, 4.5f }, { 8.5f, 19.5f } ),
-			Line( { 8.5f, 9.5f }, { 21.5f, 9.5f } ) } },
 		};
 
 		constexpr size_t kIconN = sizeof( kIcons ) / sizeof( kIcons[ 0 ] );

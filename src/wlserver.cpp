@@ -422,8 +422,38 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 			// the shell does. Without it, pressing the binding a second time
 			// while the launcher was up would read as "the shell is open" and
 			// summon the shell.
+			const bool bLauncherOnly = gamescope::ui::shell::LauncherOnlyActive();
+
+			// Issue #88: THE COMBO NOW CLOSES what it opened, instead of
+			// only ever being able to open. PaletteActive() is true exactly
+			// when this combo (or PaletteJump promoting it) put the palette
+			// on screen -- as the launcher, or over the shell -- so a second
+			// press while that is still true is unambiguously "put it away
+			// again", not "open something else".
+			//
+			// The two closing situations get different answers, mirroring
+			// the two opening ones above:
+			//
+			//   * it was the LAUNCHER (nothing else was on screen) -- take
+			//     the whole overlay down, the same hide path Right Ctrl's
+			//     tap already uses.
+			//   * it was the palette OVER a shell the user opened
+			//     separately -- close only the palette. Hiding the overlay
+			//     here would also blank a shell the combo never opened and
+			//     has no business closing.
+			if ( gamescope::ui::shell::PaletteActive() )
+			{
+				if ( bLauncherOnly )
+					gamescope::SettingsOverlay_SetVisible( false );
+				else
+					gamescope::ui::shell::RequestClosePalette();
+
+				s_bRightCtrlIsTap = false;
+				return false;
+			}
+
 			const bool bShellOpen = gamescope::SettingsOverlay_IsCapturingInput() &&
-			                        !gamescope::ui::shell::LauncherOnlyActive();
+			                        !bLauncherOnly;
 
 			// Either way the overlay's layer has to be drawing and capturing:
 			// the launcher is a search field, so it needs the keyboard, and

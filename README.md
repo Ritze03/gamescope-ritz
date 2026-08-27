@@ -15,6 +15,58 @@ It runs on Mesa + AMD or Intel, and could be made to run on other Mesa/DRM drive
 
 If running RadeonSI clients with older cards (GFX8 and below), currently have to set `R600_DEBUG=nodcc`, or corruption will be observed until the stack picks up DRM modifiers support.
 
+## Quickstart (gamescope-ritz)
+
+This fork ships helper scripts that build and install `gamescope-ritz` as its
+own binary, side by side with any distro-packaged `gamescope` — they never
+touch `/usr/bin/gamescope`. Full option reference: `scripts/README.md`.
+
+Prerequisites: the build dependencies listed under [Building](#building)
+below (meson, ninja, a compiler, and the Debian package list), plus `sudo`
+if `/usr/bin` isn't writable by your user. You do **not** need to run
+`git submodule update` yourself — the build step detects missing submodules
+and initialises them automatically.
+
+From a clone of this repo:
+
+```sh
+scripts/install-gamescope-ritz.sh
+```
+
+If no release build exists yet, this **builds one first** automatically
+(`--buildtype=release -Doptimization=3 -Db_lto=true`, into `build-release/`),
+then asks whether to symlink or copy the resulting binary to
+`/usr/bin/gamescope-ritz`, and offers to install the `scripts/`, `looks/`
+and `reshade/` extras to `/usr/share/gamescope-ritz`. It asks for `sudo`
+only for the steps that write outside the repo. Run it non-interactively
+with:
+
+```sh
+scripts/install-gamescope-ritz.sh --link --yes   # or --copy --yes
+```
+
+Then run it:
+
+```sh
+gamescope-ritz -- <game>
+```
+
+To remove it later: `scripts/install-gamescope-ritz.sh --uninstall`.
+
+## Updating
+
+```sh
+scripts/update-gamescope-ritz.sh
+```
+
+This requires a prior install from the script above. It runs
+`git pull --ff-only` (refusing on uncommitted local changes or a diverged
+remote — it never stashes or resets anything), rebuilds the release binary,
+and refreshes the install: a symlink install is already live once the
+rebuild finishes, a copy install gets the fresh binary copied over it. Pass
+`--yes` to skip prompts, or `--allow-dirty` to skip only this script's own
+uncommitted-changes check (`git pull`'s own safety check still applies).
+
 ## Building
 
 Dependent first (**Debian/Debian-based**):

@@ -81,8 +81,8 @@ namespace gamescope::ui
 		if ( sHaystack.find( sQueryLower ) != std::string_view::npos ) return kScoreKeyword;
 
 		// Subsequence: every query character appears in order somewhere in
-		// the blob. This is what makes "dsp" find "display.sharpness" without
-		// a real fuzzy scorer's tuning burden.
+		// the blob. This is what makes "dsp" find "display.filter.sharpness"
+		// without a real fuzzy scorer's tuning burden.
 		size_t i = 0;
 		for ( char c : sQueryLower )
 		{
@@ -148,6 +148,15 @@ namespace gamescope::ui
 			{
 				const Entry &e = area.EntryAt( i );
 
+				// Issue #91: a read-only row (Meter/Facts/Graph -- see
+				// Entry::ReadOnly()) has nothing a launcher jump could act
+				// on, and HideFromPalette() covers the rest -- entries with
+				// a setter that still make no sense to jump to. Either way
+				// the entry AND its params are invisible to search, not
+				// merely deprioritised.
+				if ( e.ReadOnly() || e.ExcludedFromPalette() )
+					continue;
+
 				const Hay h = HayForEntry( e );
 				const int nScore = Score( h.sTitle, h.sId, h.sBlob, sQ );
 				if ( nScore != kScoreNoMatch )
@@ -205,6 +214,16 @@ namespace gamescope::ui
 			for ( size_t i = 0; i < area.EntryCount(); i++ )
 			{
 				const Entry &e = area.EntryAt( i );
+
+				// Issue #91: Build() itself skips read-only/excluded entries
+				// (and everything under them -- their params included) as
+				// unreachable by design, not by search-ranking accident. A
+				// target this function can never find would just report the
+				// entry's full title length as "worst", which is a false
+				// positive on discoverability, not a real one.
+				if ( e.ReadOnly() || e.ExcludedFromPalette() )
+					continue;
+
 				targets.push_back( { e.Id(), e.Title() } );
 				for ( size_t j = 0; j < e.ParamCount(); j++ )
 					targets.push_back( { e.ParamAt( j ).Id(), e.ParamAt( j ).Title() } );

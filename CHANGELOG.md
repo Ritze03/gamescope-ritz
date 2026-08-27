@@ -9,6 +9,67 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.3.5] – 2026-08-27
+
+### Added
+- **Accent hue now tints text and the main surface**: your chosen hue reaches
+  the base text colour and the panel surface, alongside the accent controls
+  that already followed it.
+- **Darker inspector panel**: the right-hand inspector now reads as a dark,
+  subtly tinted surface matching the left sidebar, instead of a light wash.
+- **Wider notification scale range**: the notification size slider now spans 0.5x to
+  2x, matching the UI scale slider's range.
+
+### Fixed
+- **UI scale no longer resizes the overlay window**: adjusting UI scale now
+  scales only the overlay's contents; the window itself stays a fixed
+  size.
+- **Notification text matches the rest of the overlay**: it used to render
+  smaller than every other label.
+- **Sliders no longer show `-0`** as a value distinct from `0`.
+- **The toggle-switch knob is centred**: it used to sit 1px left of centre,
+  and land differently on and off.
+- **The slider handle's glow follows its rounded shape** instead of drawing
+  as a hard square box over it.
+- **Slider handle reaches the ends**: the handle now sits flush with the
+  track's outer edges at minimum and maximum instead of stopping 2px short
+  of each.
+- **The font atlas rebuilds correctly after startup at the default 1.0x UI
+  scale**: it used to keep the provisional pre-init bake instead of
+  replacing it, matching every other scale.
+- **Sharper overlay text**: overlay text is no longer softened and speckled
+  at 1.0x UI scale — every text size now renders at its true pixel size
+  instead of a resampled one.
+- **Left Ctrl + Right Ctrl now closes the launcher again**, not only opens
+  it.
+- **The left sidebar's right border is 1px**, not a doubled 2px.
+- **The close X no longer disappears**: it shows even when no tab is
+  selected.
+- **Selecting a Facts, Meter or Graph row keeps the Inspector on
+  Configure** instead of switching it to Details.
+- **Row values sit next to their control again**: switch, stepper and
+  placement-grid rows used to strand the value in the middle of the row;
+  it now sits one gutter to the left of the control, like sliders already
+  did.
+
+### Removed
+- **The Shell settings tab and its Inspector/Layout options**: close the
+  overlay with the X instead.
+- **The startup toast's second line advertising the launcher bind.**
+- **The bottom navigation-key legend**, replaced by a single
+  `L Ctrl + R Ctrl — Launcher` hint.
+- **Read-only rows** (status readouts, meters, graphs) no longer appear in
+  launcher search.
+
+### Info
+- **The overlay's open/close fade is twice as fast.**
+- **Three setting IDs moved to match the settings tree**:
+  `display.sharpness` → `display.filter.sharpness`, `display.scaler` →
+  `display.filter.scaler`, `audio.volume` → `audio.stream.volume`. These
+  are not stored in your saved config, so nothing you saved breaks.
+- **Every option's explanation was rewritten in plain language**, across
+  Display, Shaders, Audio, Config and Monitor.
+
 ## [0.3.1] – 2026-08-24
 
 ### Added

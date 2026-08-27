@@ -182,7 +182,7 @@ namespace gamescope
 	// design decision, not an engineering one -- 200ms is picked here as a
 	// reasonable default, matching gamescope's own fade-out duration order of
 	// magnitude elsewhere (g_FadeOutDuration).
-	static constexpr unsigned int k_uOverlayFadeMs = 200;
+	static constexpr unsigned int k_uOverlayFadeMs = 100;
 
 	// EXPERIMENTAL (blurred-background branch): DECISIONS.md #5 dropped true
 	// backdrop blur because ImGui itself cannot sample-and-blur what's behind
@@ -422,7 +422,15 @@ namespace gamescope
 		// ImGui_ImplVulkan_Init() below -- the Vulkan backend uploads
 		// whatever io.Fonts holds at Init() time, so the atlas has to be
 		// finished first (see Overlay/Fonts.h).
-		gamescope::fonts::Load();
+		//
+		// Issue #87: bBootstrap = true marks this specific bake as the
+		// provisional pre-config-load one -- the persisted display_scale
+		// isn't known yet, so this always bakes at the compiled-in default
+		// (1.0x). See Fonts.h's Load() and Fonts.cpp's FontSet::bBootstrapOnly
+		// for why the later real rebuild (Palette.cpp's EnsureThemeLoaded()
+		// -> RebuildAll()) needs to know this bake doesn't count as final,
+		// even when the persisted scale turns out to also be 1.0.
+		gamescope::fonts::Load( 1.0f, /* bBootstrap = */ true );
 
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 		s_pReadDoneSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
@@ -668,17 +676,11 @@ namespace gamescope
 		// not mentioned -- a startup toast that lists every way in teaches
 		// none of them.
 		//
-		// D25: a SECOND line, and only a second. The two lines are two
-		// different destinations, not two routes to one -- Right Ctrl is the
-		// full overlay, both Ctrls is the launcher alone over the game -- and
-		// a binding whose whole selling point is that it does not open the
-		// settings surface is not discoverable from a toast that only names
-		// the settings surface. Ctrl+Shift+O stays unmentioned for exactly
-		// D22's reason: it is a third route to the FIRST destination.
+		// Issue #98: the launcher bind (L CTRL + R CTRL) used to get a
+		// second line here (D25). Dropped on request -- the opening toast
+		// names only the one hotkey now.
 		const char *pszHint = "opens the settings overlay";
 		const char *pszHotkey = "RIGHT CTRL";
-		const char *pszHint2 = "opens the launcher over the game";
-		const char *pszHotkey2 = "L CTRL + R CTRL";
 
 		ImFont *pTitleFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		ImFont *pHintFont = gamescope::fonts::Get( gamescope::fonts::Style::Meta );
@@ -688,17 +690,12 @@ namespace gamescope
 		const ImVec2 titleSize = pTitleFont->CalcTextSizeA( flTitleSize, FLT_MAX, 0.0f, pszTitle );
 		const ImVec2 hotkeySize = pHintFont->CalcTextSizeA( flHintSize, FLT_MAX, 0.0f, pszHotkey );
 		const ImVec2 hintSize = pHintFont->CalcTextSizeA( flHintSize, FLT_MAX, 0.0f, pszHint );
-		const ImVec2 hotkey2Size = pHintFont->CalcTextSizeA( flHintSize, FLT_MAX, 0.0f, pszHotkey2 );
 
-		// D25: the two hotkey glyphs share a column, so the two explainers
-		// line up under each other rather than starting at whatever width
-		// their own key string happened to be.
-		const float flHotkeyColW = std::max( hotkeySize.x, hotkey2Size.x );
+		const float flHotkeyColW = hotkeySize.x;
 
 		const float flUnderlineY = flPadTop + titleSize.y + 10.0f;
 		const float flHintY = flUnderlineY + 12.0f;
-		const float flHint2Y = flHintY + hintSize.y + 6.0f;
-		const float flCardHeight = flHint2Y + hintSize.y + 14.0f;
+		const float flCardHeight = flHintY + hintSize.y + 14.0f;
 
 		const float flOutputWidth = (float)s_uTextureWidth;
 		const float flCardX = ( flOutputWidth - flCardWidth ) * 0.5f;
@@ -746,14 +743,6 @@ namespace gamescope
 		pDrawList->AddText( pHintFont, flHintSize, hotkeyPos, palette::Accent( 0.9f * flAlpha ), pszHotkey );
 		const ImVec2 hintPos( hotkeyPos.x + flHotkeyColW + 8.0f, cardMin.y + flHintY );
 		pDrawList->AddText( pHintFont, flHintSize, hintPos, palette::Text( 0.55f * flAlpha ), pszHint );
-
-		// D25: the launcher's line, dimmer than the overlay's -- the overlay
-		// is still the primary binding and the toast should not read as two
-		// equal choices the user has to pick between on first launch.
-		const ImVec2 hotkey2Pos( cardMin.x + flPadX, cardMin.y + flHint2Y );
-		pDrawList->AddText( pHintFont, flHintSize, hotkey2Pos, palette::Accent( 0.65f * flAlpha ), pszHotkey2 );
-		const ImVec2 hint2Pos( hotkey2Pos.x + flHotkeyColW + 8.0f, cardMin.y + flHint2Y );
-		pDrawList->AddText( pHintFont, flHintSize, hint2Pos, palette::Text( 0.45f * flAlpha ), pszHint2 );
 	}
 
 	// Records the ImGui draw into s_pOverlayTexture on the general queue and

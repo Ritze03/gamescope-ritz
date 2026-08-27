@@ -156,9 +156,9 @@ namespace gamescope::ui
 	// area with a CONTENT body (Area::Content() -- the Log's line list),
 	// which is one scrolling body under the rows and has no meaningful way
 	// to be cut in half. Answering it HERE rather than at the drawing site
-	// is the point: `shell.layout` prints Solve()'s number, so a number
-	// decided anywhere else would be a printed column count that disagrees
-	// with the screen -- which is the exact defect D20.2 exists to remove.
+	// is the point: the computed column count and the drawn one must be the
+	// SAME number, so deciding it anywhere else risks the exact
+	// disagreement D20.2 exists to remove.
 	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea,
 	                    bool bUnsplittable = false );
 
