@@ -572,7 +572,8 @@ namespace gamescope
 				} ) )
 			.Help( "While the mouse is grabbed, shows your desktop's own cursor style instead of a "
 			       "plain generic pointer. Only matters for games that don't draw their own cursor; "
-			       "if your system has no cursor theme set, you'll still get the plain pointer." )
+			       "if your system has no cursor theme set, you'll still get the plain pointer. "
+			       "Doesn't affect this overlay's own pointer while it's open -- only the game's." )
 			.Default( true )
 			.Keywords( "cursor theme system pointer xcursor grab" )
 			.DisabledUnless( []{ return g_bForceRelativeMouse; },

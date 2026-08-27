@@ -107,3 +107,78 @@ assuming a same-thread reentrant call is safe just because another same-named
 function elsewhere in the file already establishes the pattern -- the overlay's own
 Switch setters are steamcompmgr-thread-safe *because* they're invoked from
 `paint_all()`, not because they're "a UI callback."
+
+## Why the sub-option's fallback doesn't apply to the overlay's own pointer
+
+Reported 2026-08-27: with "Use system cursor theme" on, the pointer still looks
+generic *while the settings overlay itself is open*; closing it shows the themed
+one. Confirmed (via `gamescopectl debug_set_force_relative_mouse 1` and log output)
+that `SetDefaultCursorImage()` still runs and logs "Using left_ptr from the desktop's
+Xcursor theme" regardless of whether the overlay is open -- the X11-side
+substitution is never skipped. **This is not a bug in the substitution; it's a
+different cursor source taking over while the overlay owns input**, and it was true
+before this option existed:
+
+- Source (1), the composited plane this option actually controls, is unconditionally
+  suppressed whenever `SettingsOverlay_IsCapturingInput()` is true (the "Redundant-
+  cursor fix" in `steamcompmgr.cpp`, guarding against issue #69's stale-ghost-cursor
+  bug -- see that comment for why it can't just be turned back on for this case).
+- With source (1) out of the picture, D29's invariant ("exactly one cursor, never
+  zero") falls to source (2) or (3). Source (3), a real host cursor, requires the
+  pointer to be *unlocked* (`NestedHostCursorUsable()`) -- impossible while grabbed,
+  same reasoning as the "why a live system cursor is impossible" section above. So
+  source (2), ImGui's own built-in software cursor, draws instead -- and ImGui's
+  cursor is a fixed set of vector-drawn shapes (`ImGuiMouseCursor_Arrow` etc.) with no
+  concept of an Xcursor theme at all.
+
+So while the overlay is open and the pointer is locked, **no code path here is even
+theoretically able to show a themed cursor** -- not this option's, not the host's.
+Making ImGui draw a themed bitmap instead of its built-in arrow is a real, separate
+feature (load the same Xcursor image as a texture, draw it manually instead of
+relying on `MouseDrawCursor`) with real rendering-correctness risk that couldn't be
+verified without a visible window -- out of scope for a fix landed sight-unseen.
+Fixed instead by making the option's own help text say so plainly.
+
+## Force-grab's doubled pointer speed (pre-existing, not introduced by this option)
+
+Reported alongside the above, same day: with the mouse grabbed and the overlay
+closed, in-game look/aim sensitivity is roughly doubled; with the overlay open
+(so the game isn't receiving input at all), it isn't. Confirmed via
+`git diff e236051 HEAD -- src/wlserver.cpp` (empty before this fix) that this
+predates the cursor-theme option entirely -- it is a pre-existing force-grab defect,
+not a regression from this feature, in code neither this option nor its crash fix
+ever touched.
+
+Root cause, in `wlserver_mousemotion()` (`src/wlserver.cpp`): every relative motion
+was delivered to the focused client **twice** -- once correctly as a relative-motion
+event (`wlserver_perform_rel_pointer_motion()`), then *unconditionally* again as a
+regular absolute-position `wlr_seat_pointer_notify_motion()`, gated only by
+`wlserver_apply_constraint()`. That gate only short-circuits for a client holding its
+own `wlr_pointer_constraint_v1` -- a protocol only *native Wayland* clients request.
+An Xwayland/X11 game (the overwhelming majority of what gamescope runs, and
+`--force-grab-cursor`'s actual use case) never holds one, so for it the absolute
+notify was always also sent. A client that only reads absolute position never
+noticed; several Wine/Proton raw-input paths read *both* and summed them, applying
+the same physical movement twice -- exactly a 2x factor. The overlay-open/closed
+asymmetry falls out for free: while the overlay captures input, `wlserver_mousemotion()`
+returns immediately after queueing to the overlay's own input queue, before either
+delivery -- the game gets neither the correct signal nor the doubled one, so there
+was nothing to compare on equal terms.
+
+**Fix:** withhold the second, absolute notify while `g_bForceRelativeMouse` is on --
+the client is expected to be reading the relative event only in that mode. The
+position bookkeeping (`wlserver.mouse_surface_cursorx/y`) that positions gamescope's
+own composited cursor still runs unconditionally either way; only the redundant
+protocol notification to the client is skipped.
+
+**Verification status, stated plainly:** confirmed the exact double-delivery
+mechanism by reading `wlserver_apply_constraint()`'s actual conditions (not
+guessed), confirmed the fix removes exactly that second call, and confirmed via a
+private headless-sway + nested-Wayland smoke test (many force-grab/overlay toggle
+cycles through `gamescopectl`, `meson test` 70/70) that input still flows and
+nothing crashes or hangs. **Not verified**: actual before/after pointer-speed
+measurement -- there is no debug ConCommand for synthesizing relative motion, and
+this task's constraints forbid launching a visible window or injecting real input,
+so the doubling itself was never observed or re-measured directly. Confidence is
+from the code mechanism matching the reported symptom exactly (asymmetry,
+exact-2x), not from a repro.

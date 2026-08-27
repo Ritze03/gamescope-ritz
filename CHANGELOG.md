@@ -23,9 +23,15 @@ The newest version below is the one this build reports.
   cursor theme" option beneath it makes the pointer shown while grabbed match your
   system's cursor theme instead of a plain arrow. On by default, so if you already
   use Force grab cursor, your pointer will look different next time without you
-  changing anything; turn the new option off to keep the plain arrow.
+  changing anything; turn the new option off to keep the plain arrow. Only affects
+  the game's own cursor -- this overlay's pointer looks the same either way while
+  it's open.
 
 ### Fixed
+- **Force grab cursor no longer doubles pointer speed in games**: while grabbed,
+  some games were receiving every mouse movement twice, making look/aim
+  sensitivity feel about twice as fast as it should. Pre-existing; not new in
+  this release.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now
   scales only the overlay's contents; the window itself stays a fixed
   size.
