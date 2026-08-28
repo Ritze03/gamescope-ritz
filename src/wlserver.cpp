@@ -3363,30 +3363,19 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 
 	wlserver_oncursorevent();
 
-	// Force-grab bug: this movement was already delivered above, as a
-	// relative-motion event (wlserver_perform_rel_pointer_motion(), a few
-	// lines up) -- unconditionally, regardless of whether any client holds
-	// a wlr_pointer_constraint_v1 of its own. wlserver_apply_constraint()
-	// only short-circuits (the early return above) for a NATIVE Wayland
-	// client that explicitly requested zwp_pointer_constraints_v1 on its own
-	// surface; an Xwayland/X11 game -- the overwhelming majority of what
-	// runs here, and the case --force-grab-cursor exists for -- never does,
-	// so for it this call was ALSO always reached, handing the seat's
-	// focused surface the exact same physical movement a second time as a
-	// regular (absolute-position) motion notify. A client that only tracks
-	// absolute position doesn't notice; one that (also) treats absolute
-	// motion as look/aim input on top of the relative event it already got
-	// -- several Wine/Proton raw-input paths do -- ends up applying the
-	// movement twice, i.e. exactly doubled sensitivity. g_bForceRelativeMouse
-	// means the focused client is expected to be reading relative motion
-	// only, so withhold this second, absolute notification while it's on;
-	// the position bookkeeping above still has to run unconditionally
-	// either way, since it's what positions gamescope's OWN composited
-	// cursor (MouseCursor::x()/y()), independent of what the client sees.
-	if ( !g_bForceRelativeMouse )
-	{
-		wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
-	}
+	// This absolute-position notify is what actually moves the pointer for the
+	// focused client, and it must stay unconditional -- see the "Why the absolute
+	// notify must stay unconditional" section of superdoc/features/cursor-pipeline.md.
+	// It was briefly withheld while g_bForceRelativeMouse was set, on the theory
+	// that force-grab meant the client was reading relative motion only. That is
+	// wrong: g_bForceRelativeMouse describes gamescope's relationship with the
+	// HOST compositor (grab the host cursor, feed us relative deltas -- see
+	// CWaylandBackend::SetRelativeMouseMode()), not the client's input mode. The
+	// only correct signal for "this client wants relative motion only" is a
+	// pointer constraint it requested itself, and wlserver_apply_constraint()
+	// above already suppresses this call for a LOCKED one. Withholding it here
+	// froze pointer input for every client the moment force-grab was on.
+	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
 	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 }
 

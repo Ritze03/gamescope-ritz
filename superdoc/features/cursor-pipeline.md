@@ -139,46 +139,71 @@ relying on `MouseDrawCursor`) with real rendering-correctness risk that couldn't
 verified without a visible window -- out of scope for a fix landed sight-unseen.
 Fixed instead by making the option's own help text say so plainly.
 
-## Force-grab's doubled pointer speed (pre-existing, not introduced by this option)
+## Why the absolute notify must stay unconditional
 
-Reported alongside the above, same day: with the mouse grabbed and the overlay
-closed, in-game look/aim sensitivity is roughly doubled; with the overlay open
-(so the game isn't receiving input at all), it isn't. Confirmed via
-`git diff e236051 HEAD -- src/wlserver.cpp` (empty before this fix) that this
-predates the cursor-theme option entirely -- it is a pre-existing force-grab defect,
-not a regression from this feature, in code neither this option nor its crash fix
-ever touched.
+`wlserver_mousemotion()` (`src/wlserver.cpp`) delivers every pointer movement to the
+focused client twice over, and **both deliveries are required**:
 
-Root cause, in `wlserver_mousemotion()` (`src/wlserver.cpp`): every relative motion
-was delivered to the focused client **twice** -- once correctly as a relative-motion
-event (`wlserver_perform_rel_pointer_motion()`), then *unconditionally* again as a
-regular absolute-position `wlr_seat_pointer_notify_motion()`, gated only by
-`wlserver_apply_constraint()`. That gate only short-circuits for a client holding its
-own `wlr_pointer_constraint_v1` -- a protocol only *native Wayland* clients request.
-An Xwayland/X11 game (the overwhelming majority of what gamescope runs, and
-`--force-grab-cursor`'s actual use case) never holds one, so for it the absolute
-notify was always also sent. A client that only reads absolute position never
-noticed; several Wine/Proton raw-input paths read *both* and summed them, applying
-the same physical movement twice -- exactly a 2x factor. The overlay-open/closed
-asymmetry falls out for free: while the overlay captures input, `wlserver_mousemotion()`
-returns immediately after queueing to the overlay's own input queue, before either
-delivery -- the game gets neither the correct signal nor the doubled one, so there
-was nothing to compare on equal terms.
+1. `wlserver_perform_rel_pointer_motion()` -- a `zwp_relative_pointer_v1` relative-motion
+   event, sent unconditionally at the top of the function.
+2. `wlr_seat_pointer_notify_motion()` -- the ordinary absolute-position `wl_pointer.motion`,
+   sent at the bottom.
 
-**Fix:** withhold the second, absolute notify while `g_bForceRelativeMouse` is on --
-the client is expected to be reading the relative event only in that mode. The
-position bookkeeping (`wlserver.mouse_surface_cursorx/y`) that positions gamescope's
-own composited cursor still runs unconditionally either way; only the redundant
-protocol notification to the client is skipped.
+That is not a bug; it is what every wlroots compositor does. The two are different
+protocols for different consumers, and a client picks one according to whether it holds a
+pointer constraint. **(2) is the only thing that moves the pointer for a client that has
+not requested a constraint of its own** -- which is every Xwayland client that isn't in a
+raw-input mode, so in practice most of what runs here.
 
-**Verification status, stated plainly:** confirmed the exact double-delivery
-mechanism by reading `wlserver_apply_constraint()`'s actual conditions (not
-guessed), confirmed the fix removes exactly that second call, and confirmed via a
-private headless-sway + nested-Wayland smoke test (many force-grab/overlay toggle
-cycles through `gamescopectl`, `meson test` 70/70) that input still flows and
-nothing crashes or hangs. **Not verified**: actual before/after pointer-speed
-measurement -- there is no debug ConCommand for synthesizing relative motion, and
-this task's constraints forbid launching a visible window or injecting real input,
-so the doubling itself was never observed or re-measured directly. Confidence is
-from the code mechanism matching the reported symptom exactly (asymmetry,
-exact-2x), not from a repro.
+The one legitimate reason to withhold (2) is a client that asked for relative-only input
+by locking the pointer, and `wlserver_apply_constraint()`'s early return above already
+covers exactly that case (`WLR_POINTER_CONSTRAINT_V1_LOCKED` -> return false -> the
+function returns before (2)). There is no second condition to add.
+
+### The 2026-08-27 regression (commit 4583d6f, reverted 2026-08-28)
+
+`4583d6f` withheld (2) whenever `g_bForceRelativeMouse` was set, on the theory that
+force-grab implies the client reads relative motion only. **That theory is wrong**, and
+this is the mistake to not repeat:
+
+- `g_bForceRelativeMouse` (`--force-grab-cursor`, and the overlay's Force Grab Cursor
+  switch) describes gamescope's relationship with the **host compositor**, not with the
+  game. Its only real effects are `CWaylandBackend::SetRelativeMouseMode()` /
+  `CSDLBackend` / `COpenVRBackend` asking the *host* to lock gamescope's own pointer and
+  feed gamescope relative deltas, plus making `ShouldDrawCursor()` unconditionally true.
+  It says nothing at all about how the focused client reads input.
+- The stated root cause did not even match the gate: (1) is sent unconditionally whether
+  or not force-grab is on, so if double-counting were real it would be equally real with
+  force-grab off.
+
+**Symptom it caused**, as reported: with force-grab on, clicking appeared to hang the
+compositor, after which "the image only updates when I click again". The mechanism is
+that the client's pointer stopped moving entirely -- motion accumulated only in
+gamescope's own `wlserver.mouse_surface_cursorx/y` (which drives the *composited* cursor,
+so gamescope looked alive) and the client saw nothing until a button event flushed the
+seat's pointer state, which is what made the picture appear to advance one step per click.
+
+**Observed, not inferred.** Reproduced and then A/B-verified in a private headless sway,
+with the numbers below. The technique is worth keeping: gamescope's own **libei socket**
+(`$XDG_RUNTIME_DIR/gamescope-0-ei`, present whenever it is built with `input_emulation`)
+routes `EIS_EVENT_POINTER_MOTION` straight into `wlserver_mousemotion()` and
+`EIS_EVENT_BUTTON_BUTTON` into `wlserver_mousebutton()` (`src/InputEmulation.cpp`). A
+~60-line libei sender is therefore a direct, headless, session-safe way to drive exactly
+these functions -- no host pointer lock, no visible window, no `ydotool`. The client
+pointer position was read back with `xdotool getmouselocation` on gamescope's own
+Xwayland display.
+
+| after ... (force-grab on) | 4583d6f | reverted |
+| --- | --- | --- |
+| 12 relative moves of (9,6) | `x:0 y:0` -- nothing delivered | `x:108 y:72` |
+| one click | `x:108 y:72` -- jumps only now | `x:108 y:72` -- unchanged, correct |
+| 12 more relative moves | `x:108 y:72` -- frozen again | `x:216 y:144` |
+
+With force-grab **off**, the reverted build behaves identically to the force-grab-on
+column, which is the invariant that matters: force-grab must not change what the client
+receives.
+
+**On the doubled-sensitivity report that motivated `4583d6f`:** it was never measured
+before or after (that commit says so itself), and the fix it shipped could not have been
+the right one for the reason above. If the report resurfaces, treat it as unexplained and
+start from a measurement, not from this gate.

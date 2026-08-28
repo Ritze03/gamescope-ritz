@@ -28,10 +28,9 @@ The newest version below is the one this build reports.
   it's open.
 
 ### Fixed
-- **Force grab cursor no longer doubles pointer speed in games**: while grabbed,
-  some games were receiving every mouse movement twice, making look/aim
-  sensitivity feel about twice as fast as it should. Pre-existing; not new in
-  this release.
+- **Force grab cursor no longer freezes mouse input**: with the cursor grabbed, games
+  stopped receiving mouse movement at all, so the picture appeared to hang and only
+  advanced each time you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now
   scales only the overlay's contents; the window itself stays a fixed
   size.
