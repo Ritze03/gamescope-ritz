@@ -19,16 +19,20 @@ The newest version below is the one this build reports.
   subtly tinted surface matching the left sidebar, instead of a light wash.
 - **Wider notification scale range**: the notification size slider now spans 0.5x to
   2x, matching the UI scale slider's range.
-- **New pointer while the mouse is grabbed**: a simple triangle outlined in your
-  accent colour with a black inlay, so it stays readable over both dark and bright
-  game content. It follows the accent-hue slider, and it looks the same whether or
-  not the settings overlay is open. There is no setting for it.
+- **New pointer in the settings overlay**: a simple triangle outlined in your accent
+  colour with a black inlay, so it stays readable over both dark and bright game
+  content. It follows the accent-hue slider. Outside the overlay your game's own
+  cursor is left alone.
 - **New Cursor tab**: a Setup area for designing the overlay's own pointer — size,
   outline thickness, and outline/inlay colour, with an option to lock the outline
   to a fixed colour instead of following the accent hue. The controls are in place
   and save normally, but don't change the pointer's on-screen look yet.
 
 ### Fixed
+- **Force grab cursor no longer doubles mouse speed**: while grabbed, each movement
+  was delivered to the game twice over -- once as relative motion and once as a
+  pointer position -- so games that read both moved about twice as fast as they
+  should.
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was
   not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now

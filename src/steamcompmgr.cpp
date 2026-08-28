@@ -96,7 +96,6 @@
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
-#include "Overlay/CursorArt.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
 #include "Overlay/LogCapture.h"
@@ -1050,11 +1049,6 @@ void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType
 // works either way already (the per-frame path resumes and corrects the
 // mode within a frame), but pushing it explicitly here too keeps both
 // directions equally immediate rather than one edge lagging by a frame.
-// Forward declaration: defined much further down, alongside
-// SetDefaultCursorImage(), which is where the fallback-cursor plumbing this
-// touches lives.
-static void ApplyDefaultCursorPolicy();
-
 void steamcompmgr_set_force_relative_mouse( bool bForce )
 {
 	g_bForceRelativeMouse = bForce;
@@ -1065,13 +1059,6 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 		if ( pPaintFocus->GetNestedHints() )
 			pPaintFocus->GetNestedHints()->SetRelativeMouseMode( bForce );
 	}
-
-	// Which fallback cursor the game's root window gets depends on this flag
-	// (ApplyDefaultCursorPolicy() -> SetDefaultCursorImage()'s
-	// bUseOwnCursor), so toggling force-grab has to re-run that choice --
-	// otherwise the cursor would keep whichever image the *previous* mode
-	// picked until something else happened to touch it.
-	ApplyDefaultCursorPolicy();
 }
 
 gamescope::ConCommand cc_debug_set_force_relative_mouse( "debug_set_force_relative_mouse", "Set force-relative-mouse mode (debug)",
@@ -8250,130 +8237,6 @@ const char* g_customCursorPath = nullptr;
 int g_customCursorHotspotX = 0;
 int g_customCursorHotspotY = 0;
 
-// The fallback cursor for a freshly-created Xwayland ctx -- what's shown on
-// the root window before (and whenever) no client window has defined its own
-// cursor. A window that later calls XDefineCursor always wins over whatever
-// this sets on the root, per X11 cursor inheritance -- so this never
-// overrides a game's own cursor, only what's shown in its absence.
-//
-// bUseOwnCursor picks between two sources, and is simply --force-grab-cursor's
-// own flag:
-//   false: a live snapshot of the actual host desktop cursor
-//     (GetX11HostCursor(), nested mode with an outer X11 display to snapshot
-//     from). When there is one it is the better image -- it is literally the
-//     pointer the user's desktop is drawing.
-//   true: gamescope's own pointer, rasterised from the same geometry the
-//     settings overlay draws with (Overlay/CursorArt.cpp). While the pointer
-//     is grabbed there IS no live host cursor to snapshot -- the host pins and
-//     hides it as part of what a pointer lock means (see CursorPolicy.h) -- so
-//     the snapshot above is unavailable exactly when force-grab is on, and
-//     this is what the user sees instead.
-//
-// Using our own art in both places is the point: it is what makes the pointer
-// look the same whether or not the settings overlay is open, which drawing two
-// different images never did. See superdoc/features/cursor-pipeline.md.
-static void SetDefaultCursorImage( MouseCursor *cursor, bool bUseOwnCursor )
-{
-	if (g_customCursorPath)
-	{
-		if (!load_mouse_cursor(cursor, g_customCursorPath, g_customCursorHotspotX, g_customCursorHotspotY))
-			xwm_log.errorf("Failed to load mouse cursor: %s", g_customCursorPath);
-		return;
-	}
-
-	if ( !bUseOwnCursor )
-	{
-		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
-		{
-			cursor->setCursorImage(
-				reinterpret_cast<char *>( pHostCursor->pPixels.data() ),
-				pHostCursor->uWidth,
-				pHostCursor->uHeight,
-				pHostCursor->uXHotspot,
-				pHostCursor->uYHotspot );
-			return;
-		}
-	}
-
-	std::vector<uint32_t> vecPixels;
-	int nWidth = 0, nHeight = 0, nHotX = 0, nHotY = 0;
-	if ( gamescope::overlay::CursorArt_Rasterise( vecPixels, &nWidth, &nHeight, &nHotX, &nHotY ) )
-	{
-		// setCursorImage() hands the buffer to XCreateImage, whose error path
-		// calls XDestroyImage and therefore free() on it -- so this has to be
-		// malloc'd memory, not a std::vector's.
-		const size_t uBytes = vecPixels.size() * sizeof( uint32_t );
-		if ( void *pBits = malloc( uBytes ) )
-		{
-			memcpy( pBits, vecPixels.data(), uBytes );
-			if ( cursor->setCursorImage( reinterpret_cast<char *>( pBits ), nWidth, nHeight, nHotX, nHotY ) )
-				return;
-			// setCursorImage() already freed pBits on its way out.
-		}
-	}
-
-	// Last resort. Only reachable if the rasteriser or the X11 upload failed;
-	// X11's own built-in arrow is not pretty but it is never blank, and a
-	// blank pointer is the one outcome with no way back for the user.
-	xwm_log.errorf( "Failed to build gamescope's own cursor; falling back to left_ptr" );
-	if ( !cursor->setCursorImageByName( "left_ptr" ) )
-		xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
-}
-
-// ApplyDefaultCursorPolicy() (below) does NOT touch any ctx's cursor
-// directly -- it only flips this flag. Every MouseCursor -- its X11 Cursor
-// resource, its Vulkan texture, its plain (non-atomic) m_dirty/m_imageEmpty
-// bookkeeping -- is otherwise only ever touched from the steamcompmgr
-// thread: once at ctx creation (init_xwayland_ctx(), itself always called
-// from that thread) and every frame after via getTexture()/paint(). The
-// trigger point can run on a DIFFERENT thread, though --
-// steamcompmgr_set_force_relative_mouse() is also cc_debug_set_force_relative_mouse's
-// body, which gamescope_private_execute() (wlserver.cpp) dispatches for
-// gamescopectl on the wlserver thread, not this one -- so calling into
-// MouseCursor's Xlib/Vulkan state right there would be a genuine cross-
-// thread data race on those plain fields, not merely a style concern.
-// ProcessPendingCursorFallbackPolicy(), called once per frame from the
-// steamcompmgr loop below, is where the actual work happens instead -- same
-// "flag it, the owning thread picks it up next frame" shape as SetFpsLimit's
-// own X11-property round-trip (PanelDisplay.cpp), for the same reason.
-static std::atomic<bool> g_bCursorFallbackPolicyDirty{ false };
-
-// Called from any thread: never touches a ctx, only requests a refresh.
-static void ApplyDefaultCursorPolicy()
-{
-	g_bCursorFallbackPolicyDirty.store( true, std::memory_order_release );
-}
-
-// Called once per frame from the steamcompmgr thread's own loop (see below).
-// Cheap no-op check when nothing changed since the last frame.
-static void ProcessPendingCursorFallbackPolicy()
-{
-	// The cursor we build below is outlined in the user's live accent colour,
-	// which they can change at any time from the overlay's own hue slider.
-	// That slider has no way to reach in here -- the colour lives in the
-	// overlay's draw state, the cursor lives in an X11 cursor resource -- so
-	// notice it from this side instead of coupling the two modules. Reading
-	// one aligned 32-bit global per frame is cheaper than the plumbing would
-	// be, and a frame of staleness on a colour change is not observable.
-	const uint32_t uAccentRgb = gamescope::overlay::CursorArt_AccentRgb();
-	static uint32_t s_uLastAccentRgb = ~0u;
-	const bool bAccentChanged = uAccentRgb != s_uLastAccentRgb;
-
-	if ( !g_bCursorFallbackPolicyDirty.exchange( false, std::memory_order_acq_rel ) &&
-	     !bAccentChanged )
-		return;
-
-	s_uLastAccentRgb = uAccentRgb;
-
-	const bool bUseOwnCursor = g_bForceRelativeMouse;
-
-	gamescope_xwayland_server_t *server = NULL;
-	for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
-	{
-		if ( server->ctx && server->ctx->cursor )
-			SetDefaultCursorImage( server->ctx->cursor.get(), bUseOwnCursor );
-	}
-}
 
 xwayland_ctx_t g_ctx;
 
@@ -8678,7 +8541,29 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
 	XF86VidModeLockModeSwitch(ctx->dpy, ctx->scr, true);
 
 	ctx->cursor = std::make_unique<MouseCursor>(ctx);
-	SetDefaultCursorImage( ctx->cursor.get(), g_bForceRelativeMouse );
+	if (g_customCursorPath)
+	{
+		if (!load_mouse_cursor(ctx->cursor.get(), g_customCursorPath, g_customCursorHotspotX, g_customCursorHotspotY))
+			xwm_log.errorf("Failed to load mouse cursor: %s", g_customCursorPath);
+	}
+	else
+	{
+		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
+		{
+			ctx->cursor->setCursorImage(
+				reinterpret_cast<char *>( pHostCursor->pPixels.data() ),
+				pHostCursor->uWidth,
+				pHostCursor->uHeight,
+				pHostCursor->uXHotspot,
+				pHostCursor->uYHotspot );
+		}
+		else
+		{
+			xwm_log.infof( "Embedded, no cursor set. Using left_ptr by default." );
+			if ( !ctx->cursor->setCursorImageByName( "left_ptr" ) )
+				xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
+		}
+	}
 
 	ctx->cursor->undirty();
 
@@ -9833,12 +9718,6 @@ steamcompmgr_main(int argc, char **argv)
 #endif
 
 		update_vrr_atoms(root_ctx, false, &flush_root);
-
-		// See ApplyDefaultCursorPolicy()'s comment: this is the deferred
-		// half of the fallback-cursor choice, and this is the one place on
-		// the steamcompmgr thread that's guaranteed to run every frame
-		// regardless of which ctx (if any) currently has focus.
-		ProcessPendingCursorFallbackPolicy();
 
 		if (GetCurrentFocus() && GetCurrentFocus()->cursor)
 		{

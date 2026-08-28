@@ -4,12 +4,12 @@ What gets drawn as "the mouse pointer," where that decision is made, and the two
 invariants that block the obvious-looking shortcuts (a live host cursor under a
 pointer lock; touching a cursor from the wrong thread).
 
-**There is no setting for any of this**, and the pointer is gamescope's own art
-rather than the desktop's -- a plain triangle, accent-coloured outline, black inlay,
-defined once in `src/Overlay/CursorArt.cpp`. A "Use system cursor theme" toggle
-(`display.force_grab_cursor.system_theme`) existed briefly on 2026-08-27 and was
-deleted on 2026-08-28; the Xcursor-theme lookup that replaced it was itself replaced
-on 2026-08-28 -- see "One pointer, two renderers" and "Two rejected attempts" below.
+**gamescope draws a pointer only for its own settings overlay.** That pointer is a
+plain triangle, accent-coloured outline, black inlay, defined in
+`src/Overlay/CursorArt.cpp`. **While the overlay is closed gamescope does not touch
+the cursor at all** -- the game keeps whatever it or the host set, exactly as
+upstream does. Getting to that took three attempts; see "Three attempts at the
+overlay pointer" below for what each cost.
 
 ## Three cursor sources, one rule: exactly one on screen
 
@@ -19,10 +19,10 @@ on 2026-08-28 -- see "One pointer, two renderers" and "Two rejected attempts" be
    gamescope's own Vulkan layer, drawn from whatever the current X11 cursor image is
    (`XFixesGetCursorImage()`, re-read every frame in `MouseCursor::getTexture()`).
 2. **The overlay's own cursor** -- drawn into the settings overlay's own texture
-   (`SettingsOverlay.cpp`) as vector geometry by `src/Overlay/CursorArt.cpp`.
-   ImGui's built-in software cursor (`ImGuiIO::MouseDrawCursor`) is never used;
-   it is set false at init *and* per frame so nothing can switch it back on and
-   put two pointers on screen.
+   (`SettingsOverlay.cpp`) as vector geometry by `src/Overlay/CursorArt.cpp`, and
+   drawn *only while the overlay is open*. ImGui's built-in software cursor
+   (`ImGuiIO::MouseDrawCursor`) is never used; it is set false at init *and* per
+   frame so nothing can switch it back on and put two pointers on screen.
 3. **A nested backend's real host-level cursor** -- `SDL_SetCursor()` /
    `wl_pointer_set_cursor()`, drawn by the *host* compositor, not gamescope.
 
@@ -33,32 +33,21 @@ more than which one wins: exactly one cursor is visible, and never zero.**
 ## Why "the default cursor while force-grab is on" isn't a substitution
 
 `force_grab_cursor` (`g_bForceRelativeMouse`) does **not** swap in a different cursor
-image. `ShouldDrawCursor()` (`steamcompmgr.cpp:2918`) just stops deferring to the
-nested backend's own host-cursor logic and unconditionally composites source (1)
-instead -- which already always shows whatever the *actual* current X11 cursor is:
-the game's own image when it has set one, or gamescope's own **fallback** root-window
-cursor when it hasn't. That fallback comes from `SetDefaultCursorImage()`
-(`steamcompmgr.cpp`, factored out of the old inline `init_xwayland_ctx()` code): a
-live snapshot of the real host cursor (`GetX11HostCursor()`, nested mode with an
-outer X11/XWayland display to snapshot from) or, if there's no host display to
-snapshot -- always true in embedded/DRM mode -- `setCursorImageByName("left_ptr")`,
-which resolves through libXcursor (`XcursorShapeLoadCursor`) against whatever
-`XCURSOR_THEME`/`XCURSOR_SIZE` the process's environment carries, falling back to
-X11's plain compiled-in arrow if no theme is set or found. **A window that later
-calls `XDefineCursor` always wins over this fallback** (ordinary X11 cursor
-inheritance), so none of this ever overrides a game's own cursor -- only what's shown
-in its absence.
+image. `ShouldDrawCursor()` just stops deferring to the nested backend's own
+host-cursor logic and unconditionally composites source (1) instead -- which shows
+whatever the *actual* current X11 cursor is: the game's own image when it has set
+one, or gamescope's fallback root-window cursor when it hasn't. That fallback is set
+once, at Xwayland-ctx creation, and is **upstream's code unmodified**: a live
+snapshot of the real host cursor (`GetX11HostCursor()`, nested mode with an outer
+X11 display to snapshot from), else `setCursorImageByName("left_ptr")` through
+libXcursor. **A window that later calls `XDefineCursor` always wins** (ordinary X11
+cursor inheritance), so none of this overrides a game's own cursor.
 
-Which of those two fallback sources is preferred is decided by
-`g_bForceRelativeMouse` alone (`SetDefaultCursorImage()`'s `bUseOwnCursor`):
-**while grabbed, always gamescope's own art**, because a live host cursor cannot
-exist under the lock at all (next section); while not grabbed, the host snapshot,
-which is the better image when it is actually available. **This only changes
-anything in nested mode** -- embedded mode already takes the left_ptr-via-Xcursor
-path unconditionally (there's no host display to prefer over it there). Graceful
-degradation is inherited from libXcursor itself: an unset or missing theme silently
-falls back to the plain arrow rather than a blank/broken cursor -- there's no path
-here that can fail loudly.
+This fork briefly replaced that fallback -- first with a forced Xcursor-theme lookup,
+then with its own rasterised triangle -- so that the pointer would look the same with
+the overlay open and closed. Both were removed on 2026-08-28 at the user's request:
+*don't override the game's cursor at all*. The agreement the earlier versions were
+chasing is not worth taking over something the game and the host own.
 
 ## Why "a live system cursor while grabbed" is impossible, not just nested-only
 
@@ -117,50 +106,25 @@ function elsewhere in the file already establishes the pattern -- the overlay's 
 Switch setters are steamcompmgr-thread-safe *because* they're invoked from
 `paint_all()`, not because they're "a UI callback."
 
-## One pointer, two renderers
+## The overlay pointer
 
-The pointer is a plain triangle -- vertical left edge, long hypotenuse back to the
-tip -- outlined in the live accent colour with a black inlay. The black-inside-colour
-combination is the point: it is what keeps the pointer readable over both dark and
-bright game content without a drop shadow.
+A plain triangle -- vertical left edge, long hypotenuse back to the tip -- outlined
+in the live accent colour with a black inlay. The black-inside-colour combination is
+the point: it keeps the pointer readable over both dark and bright game content
+without a drop shadow.
 
-Its geometry lives once, in `src/Overlay/CursorArt.cpp`, because it has to appear in
-two pipelines that share nothing:
+It is drawn as ImGui vector geometry into the foreground draw list, at
+`io.MousePos`, tip-on-hotspot (`CursorArt_Draw()`). Nothing is rasterised, no texture
+is uploaded, and the font atlas is not touched -- see the third attempt below for why
+that last point is deliberate.
 
-| where | how | entry point |
-| --- | --- | --- |
-| settings overlay | ImGui vector geometry into the foreground draw list | `CursorArt_Draw()` |
-| game side (X11) | rasterised to premultiplied ARGB32, uploaded as an X11 cursor | `CursorArt_Rasterise()` -> `MouseCursor::setCursorImage()` |
+`CursorArt_AccentRgb()` exposes the current outline colour for other overlay code.
 
-Both read the same three corner constants and the same stroke width, so they cannot
-drift apart -- and *drift is the bug this design exists to prevent*: what the user
-reported was the overlay and the game disagreeing about what the pointer looked like.
+## Three attempts at the overlay pointer
 
-The rasteriser is a signed-distance evaluation per pixel rather than a scanline fill,
-which buys the antialiased edge and the outline/inlay split from the same number: the
-silhouette is `d <= +halfWidth`, the inlay is `d <= -halfWidth`, and both boundaries
-fade across one pixel. `PictStandardARGB32` is premultiplied, so coverage is folded
-into the colour at write time.
-
-**The accent is live.** `ProcessPendingCursorFallbackPolicy()` re-reads
-`CursorArt_AccentRgb()` every frame and rebuilds the X11 cursor when it changes,
-rather than the overlay's hue slider calling into steamcompmgr. That direction was
-chosen deliberately: the reverse coupling needs `steamcompmgr.hpp` in `Palette.cpp`,
-which drags the generated Wayland protocol headers into the overlay's build and
-breaks the test targets' link. Polling one aligned 32-bit global per frame is
-cheaper than the plumbing, and one frame of staleness on a colour change is not
-observable.
-
-*Verified* by screenshot probe (see below): overlay open, tip exactly on the
-commanded pointer position, accent outline with black inlay; overlay closed, the
-same triangle from the X11 path; and after `overlay_e2_set overlay.accent_hue 25`
-the game-side cursor is warm-coloured with no cyan pixels left anywhere.
-
-## Two rejected attempts, and what they cost
-
-Both were on the same underlying question -- what should the pointer be while
-force-grab is on and the overlay is open -- and both are worth remembering because
-each failed for a *different* reason.
+All three were on the same underlying question -- what should the pointer be while
+force-grab is on and the overlay is open -- and each failed for a *different* reason,
+which is why all three are worth remembering.
 
 **Attempt 1: a "Use system cursor theme" toggle** (`display.force_grab_cursor.system_theme`,
 2026-08-27, deleted 2026-08-28). It did not fix anything; it made the broken case
@@ -185,8 +149,16 @@ atlas texture moved, with no upper bound on how often that could happen. A still
 frame cannot see a problem of that shape. **A probe that only ever samples one frame
 should not be read as evidence about anything that varies between frames.**
 
-What replaced it deliberately has no such coupling: vector geometry drawn into a draw
-list, and a bitmap built once per accent change. Nothing touches the font atlas.
+**Attempt 3: gamescope's own triangle, drawn in both places** (2026-08-28). Vector
+geometry for the overlay, and the same shape rasterised into an X11 cursor for the
+game side, so the two could not disagree. No atlas coupling this time. Rejected for a
+reason none of the measurements were ever going to catch: the user does not want the
+game's cursor touched at all, whatever it is replaced with. *Consistency between the
+two states was never the requirement -- not overriding the game was.*
+
+What stands now is attempt 3 minus the game side: vector geometry, overlay only,
+nothing rasterised, nothing uploaded, no atlas coupling, and the game's cursor left
+exactly as upstream leaves it.
 
 ## The freeze, and what is still not known
 
@@ -199,7 +171,11 @@ was receiving no pointer motion at all, and a button event flushed the seat's po
 state, so the pointer advanced one step per click. That fix is verified and still
 holds (see the section below). **It was evidently not the whole cause.**
 
-**Not reproduced.** Measured in a private headless sway across:
+**Still not reproduced**, as of 2026-08-28, now also after removing the game-side
+cursor override and the cross-thread policy machinery that served it (six more
+click+motion rounds with the overlay toggling: output kept updating every time).
+The user reports it now happens *less reliably*, which means a race. Measured in a
+private headless sway across:
 
 | configuration | composited output across a click |
 | --- | --- |
@@ -237,6 +213,77 @@ under a real host compositor with real input devices. The remaining candidates a
 Proton/Xwayland client's own reaction to the click (an `XGrabPointer` and the pointer
 constraint Xwayland then requests), and frame-callback starvation that only bites a
 client which actually blocks on presentation.
+
+## The doubled pointer speed, measured at last
+
+Reported three times across 2026-08-27/28 and never measured until now: with
+`--force-grab-cursor` on, in-game look/aim sensitivity is roughly doubled.
+
+**Mechanism.** `wlserver_mousemotion()` delivered every movement on **two channels at
+once**:
+
+1. `wlserver_perform_rel_pointer_motion()` -- a `zwp_relative_pointer_v1` event, sent
+   *unconditionally*;
+2. `wlr_seat_pointer_notify_motion()` -- the ordinary absolute `wl_pointer.motion`.
+
+Xwayland turns (1) into XI2 raw motion and (2) into the X sprite's position. A client
+reading only one is fine. Several Wine/Proton raw-input paths read **both** and sum
+them: exactly 2x.
+
+**Measured.** Private headless sway, `--force-grab-cursor`, overlay closed, 200px of
+injected relative motion, reading both channels separately (a small XI2 client
+counting `XI_RawMotion` valuators, plus `XQueryPointer` for the sprite):
+
+| build | sprite | raw events | raw valuator values |
+| --- | --- | --- | --- |
+| upstream `fcc1341` | +200px | 20 | `10 10 10 10 …` -- **deltas**, summing to 200 |
+| this fork, fixed | +200px | 20 | `10 20 30 40 …` -- **positions**, no relative channel |
+
+Upstream carries the full 200px on *both* channels, so a client reading both applies
+400px. After the fix the relative channel is gone and only the sprite carries the
+movement. The sprite still moves +200 either way, which is the check that `66d619d`
+is not regressed.
+
+Two controls make that reading solid rather than inferred:
+
+- Gating gamescope's relative motion off entirely
+  (`wayland_mouse_relmotion_without_keyboard_focus 0` with no keyboard focus) dropped
+  **both** sprite and raw to **0**. That proves `wlserver_mousemotion()` is the sole
+  input path once the host pointer is locked, so anything it emits is the whole story.
+- The raw *values* -- deltas versus accumulating positions -- distinguish the two
+  sources directly. Summed magnitudes alone cannot: Xwayland synthesises raw events
+  from absolute motion too, so `raw_dx` being non-zero proves nothing on its own. An
+  earlier round of this investigation was misled by exactly that.
+
+**Fix.** Send relative motion only to a client that has asked to be in relative mode
+by taking a pointer constraint of its own:
+
+```c
+if ( wlserver.GetCursorConstraint() )
+    wlserver_perform_rel_pointer_motion( dx, dy );
+```
+
+The two branches are now mutually exclusive by construction:
+`wlserver_apply_constraint()` already suppresses the absolute notify for a LOCKED
+constraint, so a client that wants relative-only gets exactly that, and a client that
+never asked keeps plain absolute motion.
+
+**Gated on the CLIENT's constraint, never on `g_bForceRelativeMouse`.** That
+distinction is the whole lesson of `4583d6f` (see the regression note below):
+force-grab describes gamescope's relationship with the *host*, and says nothing about
+how the game reads input.
+
+**Honest limit: this was NOT reproduced as a fork-vs-vanilla difference.** The user
+reports it does not happen on vanilla gamescope; measured here, upstream `fcc1341`
+doubles identically. The likely reason for the discrepancy -- *inferred, not
+measured* -- is that upstream's `--force-grab-cursor` may never actually take the
+host pointer lock: `CWaylandBackend::SetRelativeMouseMode()` early-returns when
+`m_pPointer` is still null at connector init, and the per-frame path that would call
+it again is gated off by `!g_bForceRelativeMouse`. This fork's issue-#68 fix
+(`steamcompmgr_set_force_relative_mouse()`) re-pushes the mode at runtime, when the
+pointer does exist -- so the fork makes the lock actually engage, which *exposes*
+upstream's latent double delivery rather than introducing it. Testing that directly
+needs a runtime toggle upstream does not have.
 
 ## Why the absolute notify must stay unconditional
 
