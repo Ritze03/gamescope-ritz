@@ -242,6 +242,62 @@ under every flip type.
 This also closes the second candidate below: the input queue can no longer grow
 unbounded, because every enqueue now schedules the frame that drains it.
 
+### 2026-08-28: the same fix, applied to the FPS HUD -- and why a per-frame
+### gate isn't enough for a slower-than-vblank cadence
+
+`FpsDisplay.cpp` (`src/Overlay/FpsDisplay.cpp`) has the exact same shape as the
+overlay did: it updates per frame from inside `paint_all()`'s own call to
+`FpsDisplay_AddLayer()`, but never asked for one, so it froze right along with the
+game the moment the client went idle -- same root cause, same "does not free-run"
+story above.
+
+The overlay's own fix doesn't transplant directly, though: the overlay only needs a
+frame on a handful of *discrete* events (a keypress, a visibility toggle, an
+in-flight fade), while the HUD's readout is continuously changing and has to keep
+refreshing on its own **sampling cadence** (~500ms, matching `SystemStats.cpp`'s own
+2Hz poll thread and `RecomputePercentilesIfDue()`'s recompute interval) without
+ever free-running the render loop.
+
+The first attempt hung a `force_repaint()` off `FpsDisplay_AddLayer()` itself, gated
+to at most once per 500ms (the same shape as `RecomputePercentilesIfDue()`'s own
+interval check). Measured headless, idle client, HUD on: it produced exactly **one**
+extra frame and then went silent forever -- not a bug in the gate, a structural
+dead end. `force_repaint()` only reaches the *next* vblank: steamcompmgr re-arms its
+vblank timer on every tick regardless of demand (`steamcompmgr.cpp`, ~16ms later at
+a 60Hz default), so the flag it sets is consumed almost immediately, not held for
+500ms. `FpsDisplay_AddLayer()` only ever runs from inside a paint that already
+happened, sees its own last request was under 500ms ago, correctly declines to
+re-arm yet (the no-busy-loop guarantee working as intended) -- and then nothing is
+left to wake the loop up again at the 500ms mark, because the only thing that ever
+calls this function is a paint. A once-per-interval gate evaluated purely from
+inside the paint path can *throttle* requests; it cannot *manufacture* one on a
+clock nothing is driving.
+
+The fix that actually sustains the cadence lives outside `paint_all()` entirely: a
+small dedicated thread (`EnsureRepaintTimerThread()`), sleeping in 500ms steps and
+calling `force_repaint()` only while the HUD is enabled -- the same shape
+`SystemStats.cpp`'s own background poll thread already uses for exactly the same
+cadence, just driving a repaint instead of a sysfs read. Started lazily, once, from
+`EnsureConfigLoaded()`, which runs unconditionally the moment anything touches this
+feature's config -- a paint, opening the settings panel, the toggle command -- so it
+comes up even in a session where the game client never renders a single frame.
+`s_bHudEnabledForTimer`, an `std::atomic<bool>`, mirrors the enabled flag for the
+thread to read without touching `s_Settings` itself (kept file-local, single-writer
+elsewhere in this file). The toggle sites also fire one immediate `force_repaint()`
+of their own on top of the timer thread, so flipping the HUD on/off shows up on the
+next frame rather than after up to 500ms of nothing.
+
+Measured, headless + an idle client, same instance, only the fix differing:
+
+| probe | before | after |
+| --- | --- | --- |
+| idle, HUD off, 4s | 0 frames | 0 frames (no regression) |
+| idle, HUD on, 4-6s | 0 frames | ~2/sec (matches the 500ms cadence) |
+| HUD on, real rendering client (`glxgears`), 2s | ~60/sec | ~60/sec (unchanged) |
+
+Idle CPU with the HUD on: ~1.2%, comparable to the overlay fix's own ~1.8% reading
+-- consistent with "a periodic wakeup", not a busy loop.
+
 ### The investigation, kept for its dead ends
 
 Reported 2026-08-27, still reported after `66d619d` and `6614d67`: with force-grab

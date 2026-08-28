@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -45,6 +46,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "rendervulkan.hpp"
@@ -81,6 +83,80 @@ namespace gamescope
 	static uint64_t s_ulLoadedGeneration = 0;
 	static config::Settings s_Settings;
 
+	// -------------------------------------------------------------------
+	// Keeping the HUD's own readout fresh while the game client is idle.
+	//
+	// Same root cause and same remedy as SettingsOverlay.cpp's RequestRepaint()
+	// (see that file's comment for the full "gamescope does not free-run"
+	// background): paint_all() only runs when something marks the frame
+	// dirty, and until this fix nothing in this file ever did, so
+	// FpsDisplay_AddLayer() -- and everything above that only updates from
+	// inside it -- stalled the instant the game client stopped producing
+	// frames of its own.
+	//
+	// The HUD is different from the settings overlay in the one way that
+	// matters here: it displays continuously-changing values, so it cannot
+	// just request a frame on a handful of discrete events. But it doesn't
+	// need to free-run either -- the CPU/GPU/media modules only refresh from
+	// SystemStats.cpp's background poll thread at its own 2Hz cadence
+	// (kPollIntervalMs), and RecomputePercentilesIfDue() below only
+	// recomputes every 500ms. Nothing this HUD draws changes any faster than
+	// that, so that's the cadence the repaint request hangs off.
+	//
+	// A FIRST ATTEMPT hung this off FpsDisplay_AddLayer itself -- call
+	// force_repaint() from in there, gated to at most once per 500ms, the
+	// same shape as RecomputePercentilesIfDue's own interval check. Measured
+	// (headless, idle client, HUD on): it produced exactly one extra frame
+	// and then went silent forever. The reason is structural, not a bug in
+	// the gate: force_repaint() only reaches the NEXT vblank -- steamcompmgr
+	// re-arms its vblank timer on every tick regardless of demand
+	// (steamcompmgr.cpp, ~16ms later at a 60Hz default), so the flag it sets
+	// is consumed almost immediately, not held for 500ms. FpsDisplay_AddLayer
+	// only runs from inside that one resulting paint, sees its own last
+	// request was <500ms ago, correctly does NOT re-arm yet (that's the
+	// no-busy-loop guarantee working as intended) -- and then nothing is
+	// left to wake the loop up again at the 500ms mark, because the only
+	// thing that ever calls this function is a paint that already happened.
+	// A once-per-500ms gate evaluated only from inside the paint path can
+	// throttle repaint REQUESTS; it cannot manufacture a request that fires
+	// on a clock nothing is driving.
+	//
+	// So the actual 500ms clock has to live outside paint_all() entirely:
+	// a small dedicated thread, sleeping in fixed steps and calling
+	// force_repaint() only while the HUD is enabled -- the same shape
+	// SystemStats.cpp's own background poll thread already uses for exactly
+	// the same cadence, just driving a repaint instead of a sysfs read.
+	// Started lazily, once, from EnsureConfigLoaded() (see that function),
+	// which runs unconditionally the first time ANYTHING touches this
+	// feature's config -- a paint, opening the settings panel, the toggle
+	// command -- so it comes up even if a game client has never rendered a
+	// single frame this session.
+	//
+	// s_bHudEnabledForTimer mirrors s_Settings.fps_display.enabled for this
+	// thread to read without touching s_Settings itself (which, like the
+	// rest of this file's config state, is only ever safely read/written
+	// from the render-thread call sites) -- kept in sync at every place
+	// fps_display.enabled is assigned (EnsureConfigLoaded's own reload,
+	// cc_toggle_fps_display, and the `monitor.enabled` registry switch).
+	static std::atomic<bool> s_bHudEnabledForTimer{ false };
+
+	static void EnsureRepaintTimerThread()
+	{
+		static std::atomic<bool> s_bStarted{ false };
+		if ( s_bStarted.exchange( true ) )
+			return;
+
+		std::thread( []
+		{
+			for ( ;; )
+			{
+				std::this_thread::sleep_for( std::chrono::milliseconds( 500 ) ); // matches SystemStats.cpp's kPollIntervalMs / RecomputePercentilesIfDue's cadence
+				if ( s_bHudEnabledForTimer.load( std::memory_order_relaxed ) )
+					force_repaint();
+			}
+		} ).detach();
+	}
+
 	// M7: reloads whenever PanelConfig.cpp bumps config::ConfigGeneration()
 	// (profile applied, override toggled, another game's config copied in),
 	// not just on this file's very first draw -- s_Settings.fps_display is
@@ -90,12 +166,18 @@ namespace gamescope
 	// of these fields to push).
 	static void EnsureConfigLoaded()
 	{
+		// See s_bHudEnabledForTimer's own comment: this is the one call site
+		// guaranteed to run the first time anything touches this feature,
+		// independent of whether a game client has ever painted a frame.
+		EnsureRepaintTimerThread();
+
 		const uint64_t ulGeneration = config::ConfigGeneration();
 		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
 		s_Settings = config::ResolveEffective( config::SessionAppId() );
 		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
+		s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled, std::memory_order_relaxed );
 	}
 
 	// M7: routes through config::IsSessionOverrideActive() instead of
@@ -117,6 +199,21 @@ namespace gamescope
 			EnsureConfigLoaded();
 			s_Settings.fps_display.enabled = !s_Settings.fps_display.enabled;
 			PersistSettings();
+			s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled, std::memory_order_relaxed );
+
+			// Same reasoning as SettingsOverlay.cpp's visibility ConVar
+			// callback: the master toggle itself is a state change without a
+			// game frame. The background repaint-timer thread (see
+			// EnsureRepaintTimerThread) would eventually pick up the new
+			// s_bHudEnabledForTimer value on its own within one 500ms tick,
+			// but this makes the very first frame -- on OR off -- show up
+			// immediately rather than after up to half a second of nothing.
+			// force_repaint(), not hasRepaint, for the same reason as
+			// everywhere else in this file: this runs outside paint_all()
+			// entirely (a console/gamescopectl command callback), so only
+			// g_bForceRepaint's top-of-loop consumption (and its nudge)
+			// reliably reaches a possibly-idle main loop.
+			force_repaint();
 		} );
 
 	// -------------------------------------------------------------------
@@ -1705,6 +1802,11 @@ namespace gamescope
 		if ( !s_Settings.fps_display.enabled )
 			return;
 
+		// Idle-client keepalive lives entirely in the background repaint-
+		// timer thread now (EnsureConfigLoaded -> EnsureRepaintTimerThread)
+		// -- see that thread's own comment for why a per-paint request here
+		// can't sustain a slower-than-vblank cadence by itself.
+
 		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
 			return;
 
@@ -2044,7 +2146,18 @@ namespace gamescope
 		a.Switch( "monitor.enabled", "Show system monitor",
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.enabled = b; PersistSettings(); } ) )
+				[]( bool b )
+				{
+					EnsureConfigLoaded();
+					s_Settings.fps_display.enabled = b;
+					PersistSettings();
+					s_bHudEnabledForTimer.store( b, std::memory_order_relaxed );
+					// See cc_toggle_fps_display's identical call for why: an
+					// immediate frame for the toggle itself, on top of the
+					// background repaint-timer thread that sustains the
+					// cadence afterward.
+					force_repaint();
+				} ) )
 			.Help( "Shows a small readout of FPS and other performance stats over the game. It "
 			       "stays visible even after you close this settings menu." )
 			.Default( config::FpsDisplaySettings{}.enabled )

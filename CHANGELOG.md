@@ -35,6 +35,10 @@ The newest version below is the one this build reports.
 - **The overlay no longer freezes when the game stops drawing**: it now asks for its
   own frames, so moving the mouse, pressing a key and the open/close fade all show
   up immediately instead of waiting for the game to render something.
+- **The FPS HUD keeps updating when the game goes idle**: it used to stall along
+  with the game since it never asked for its own frames either; it now refreshes on
+  its own roughly twice a second, so the readout doesn't freeze in a paused menu
+  or a stalled loading screen.
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was
   not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now
