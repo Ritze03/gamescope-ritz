@@ -237,12 +237,39 @@ Proton/Xwayland client's own reaction to the click (an `XGrabPointer` and the po
 constraint Xwayland then requests), and frame-callback starvation that only bites a
 client which actually blocks on presentation.
 
-## The doubled pointer speed, measured at last
+### 2026-08-28: the motion path is ruled out by diff
 
-Reported three times across 2026-08-27/28 and never measured until now: with
-`--force-grab-cursor` on, in-game look/aim sensitivity is roughly doubled.
+The freeze was reported again, this time on **plain mouse movement with no click** --
+which removes button handling, `XGrabPointer`-on-click and click-driven constraint
+changes from suspicion and points at the motion path itself.
 
-**Mechanism.** `wlserver_mousemotion()` delivered every movement on **two channels at
+That path was then audited function-by-function against `fcc1341` (see the next
+section for the method and the ancestry finding). The result: **the fork changes
+nothing in the game-side motion path.** `wlserver_mousemotion()`'s only fork-side
+additions are the overlay-capture early return -- an atomic load and, only while the
+overlay is actually capturing, a `std::mutex`-guarded queue push that calls nothing
+back into wlserver -- and, until it was reverted, the constraint gate. With the gate
+gone, everything from `wlserver_perform_rel_pointer_motion()` to
+`wlr_seat_pointer_notify_frame()` is upstream verbatim, and the callsite set that
+feeds it is identical to upstream's.
+
+**Why this matters for the search:** the freeze cannot be explained by fork-side
+motion code, because there is none left to blame. The remaining fork-side candidates
+that a mouse movement can reach are the per-frame `PresentOverlayCursor()` call
+`paint_all()` makes (which under the Wayland backend reaches `wl_pointer_set_cursor()`
+from the steamcompmgr thread, where upstream only touches host cursor state from the
+backend's own thread) and the overlay input queue's unbounded growth if capture is on
+while nothing drains it. Neither is reproduced; both are recorded here so the next
+attempt starts from candidates rather than from hypotheses about motion.
+
+## The doubled pointer speed -- upstream behaviour, not fixed here
+
+Reported four times across 2026-08-27/28: with `--force-grab-cursor` on, in-game
+look/aim sensitivity is roughly doubled. Still open. What follows is the mechanism,
+the one measurement that was taken, and the diff evidence that placed the behaviour
+in upstream rather than in this fork.
+
+**Mechanism.** `wlserver_mousemotion()` delivers every movement on **two channels at
 once**:
 
 1. `wlserver_perform_rel_pointer_motion()` -- a `zwp_relative_pointer_v1` event, sent
@@ -260,12 +287,12 @@ counting `XI_RawMotion` valuators, plus `XQueryPointer` for the sprite):
 | build | sprite | raw events | raw valuator values |
 | --- | --- | --- | --- |
 | upstream `fcc1341` | +200px | 20 | `10 10 10 10 …` -- **deltas**, summing to 200 |
-| this fork, fixed | +200px | 20 | `10 20 30 40 …` -- **positions**, no relative channel |
+| the fork, with the (now reverted) gate | +200px | 20 | `10 20 30 40 …` -- **positions**, no relative channel |
 
 Upstream carries the full 200px on *both* channels, so a client reading both applies
-400px. After the fix the relative channel is gone and only the sprite carries the
-movement. The sprite still moves +200 either way, which is the check that `66d619d`
-is not regressed.
+400px. With the gate in place the relative channel was gone and only the sprite
+carried the movement -- and the user still reported doubling, so this rig did not
+capture their case.
 
 Two controls make that reading solid rather than inferred:
 
@@ -278,35 +305,66 @@ Two controls make that reading solid rather than inferred:
   from absolute motion too, so `raw_dx` being non-zero proves nothing on its own. An
   earlier round of this investigation was misled by exactly that.
 
-**Fix.** Send relative motion only to a client that has asked to be in relative mode
-by taking a pointer constraint of its own:
+**The fix was reverted on 2026-08-28, and the motion path is upstream verbatim again.**
+
+The gate that was tried here --
 
 ```c
 if ( wlserver.GetCursorConstraint() )
     wlserver_perform_rel_pointer_motion( dx, dy );
 ```
 
-The two branches are now mutually exclusive by construction:
-`wlserver_apply_constraint()` already suppresses the absolute notify for a LOCKED
-constraint, so a client that wants relative-only gets exactly that, and a client that
-never asked keeps plain absolute motion.
+-- did not cure the report. The user still saw doubling after it shipped, so the rig
+above did not capture their case, and the gate was left standing as a private
+divergence on the exact code path that was failing. It is gone; the line is
+upstream's unconditional call again.
 
-**Gated on the CLIENT's constraint, never on `g_bForceRelativeMouse`.** That
-distinction is the whole lesson of `4583d6f` (see the regression note below):
-force-grab describes gamescope's relationship with the *host*, and says nothing about
-how the game reads input.
+### Why this is upstream behaviour, not fork divergence
 
-**Honest limit: this was NOT reproduced as a fork-vs-vanilla difference.** The user
-reports it does not happen on vanilla gamescope; measured here, upstream `fcc1341`
-doubles identically. The likely reason for the discrepancy -- *inferred, not
-measured* -- is that upstream's `--force-grab-cursor` may never actually take the
-host pointer lock: `CWaylandBackend::SetRelativeMouseMode()` early-returns when
-`m_pPointer` is still null at connector init, and the per-frame path that would call
-it again is gated off by `!g_bForceRelativeMouse`. This fork's issue-#68 fix
-(`steamcompmgr_set_force_relative_mouse()`) re-pushes the mode at runtime, when the
-pointer does exist -- so the fork makes the lock actually engage, which *exposes*
-upstream's latent double delivery rather than introducing it. Testing that directly
-needs a runtime toggle upstream does not have.
+Established by diff rather than by hypothesis, which is what four rounds of
+hypothesis-driven fixes had failed to do:
+
+- **`3.16.25` (`17baf4a`) is a direct ancestor of this fork's base `fcc1341`.**
+  `git merge-base` returns `17baf4a` itself; `fcc1341` is `3.16.25` + 40 commits, with
+  zero commits the other way. The installed `/usr/bin/gamescope` the user calls
+  "working vanilla" is the *older* of the two, not a divergent branch.
+- **The pointer-motion path is byte-identical across those 40 commits.**
+  `wlserver_mousemotion()`, `wlserver_apply_constraint()`,
+  `wlserver_perform_rel_pointer_motion()`, `wlserver_mousewarp()`,
+  `wlserver_touchmotion()` and `wlserver_handle_pointer_motion()` compare equal
+  function-body-for-function-body between `17baf4a` and `fcc1341`, and neither
+  `SDLBackend.cpp`, `WaylandBackend.cpp` nor `steamcompmgr.cpp` changed a single
+  pointer-motion, relative-motion, `SetRelativeMouseMode` or constraint line between
+  them. The 40 commits are focus/override/painting work plus keyboard hotkey
+  bookkeeping.
+- **The fork changes nothing else on that path.** Per-function comparison of the fork
+  against `fcc1341` leaves exactly six differing functions in `wlserver.cpp`
+  (`wlserver_mousemotion`, `wlserver_touchmotion`, `wlserver_mousebutton`,
+  `wlserver_mousewheel`, `wlserver_handle_pointer_button`,
+  `wlserver_handle_pointer_axis`) and every difference in them is the overlay's
+  capture/routing gate. `wlserver_apply_constraint()`,
+  `wlserver_perform_rel_pointer_motion()`, `wlserver_mousewarp()`,
+  `wlserver_clampcursor()`, `wlserver_mousefocus()` and
+  `wlserver_update_cursor_constraint()` are identical. The set of callsites that
+  deliver motion (`wlserver_mousemotion`/`wlserver_touchmotion`/`wlserver_mousewarp`)
+  is identical between fork and upstream -- the fork adds no second channel.
+  `LibInputHandler.cpp` and `InputEmulation.cpp` are untouched.
+
+So `3.16.25` doubles exactly as `fcc1341` was measured to, given the same conditions.
+The condition it needs is **force-grab actually engaging**, and that is the one thing
+the fork really does change: upstream reads `g_bForceRelativeMouse` only once, at
+backend startup, where `CWaylandBackend::SetRelativeMouseMode()` early-returns if
+`m_pPointer` is still null -- and the per-frame path that would call it again is gated
+off by `!g_bForceRelativeMouse`. This fork's issue-#68 fix
+(`steamcompmgr_set_force_relative_mouse()`, plus the `debug_set_force_relative_mouse`
+ConCommand) re-pushes the mode at runtime, when the pointer does exist.
+
+**Why:** that makes the fork's contribution *exposure*, not breakage. Vanilla has no
+runtime switch at all, so the user has never had force-grab genuinely engaged on
+`3.16.25` -- which is why it looks fine there and broken here, with identical motion
+code on both sides. A real fix therefore has to be upstream-shaped (upstream's own
+two-channel delivery is what doubles), and this fork will not carry a private
+divergence on this path again.
 
 ## Why the absolute notify must stay unconditional
 

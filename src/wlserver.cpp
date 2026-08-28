@@ -3345,33 +3345,16 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 		return;
 	}
 
-	// Relative motion goes ONLY to a client that has asked to be in relative
-	// mode by taking a pointer constraint of its own. Sending it unconditionally
-	// -- as this did -- delivers one physical movement on two channels at once:
-	// the relative event here, and the absolute wlr_seat_pointer_notify_motion()
-	// at the bottom of this function. A client that reads both (Xwayland turns
-	// the relative event into XI2 raw motion, and several Wine/Proton raw-input
-	// paths read raw motion *and* pointer position) applies the same movement
-	// twice -- exactly the doubled look/aim sensitivity reported under
-	// --force-grab-cursor.
-	//
-	// Measured, not reasoned: with the host pointer locked, 200px of injected
-	// motion arrived at the client as sprite_dx=149 AND raw_dx=200 together.
-	// Gating gamescope's relative motion off entirely dropped both to 0, which
-	// is what proves this function is the sole delivery path in that state.
-	//
-	// The two branches are mutually exclusive by construction now:
-	// wlserver_apply_constraint() below already suppresses the absolute notify
-	// for a LOCKED constraint, so a client that wants relative-only gets exactly
-	// that, and a client that never asked keeps getting plain absolute motion --
-	// which is what actually moves its pointer, and what 66d619d restored.
-	//
-	// NOTE this is deliberately about the CLIENT's constraint, not
-	// g_bForceRelativeMouse. Force-grab describes gamescope's relationship with
-	// the HOST compositor; it says nothing about how the game reads input. See
+	// Upstream verbatim: relative motion is delivered unconditionally, and
+	// wlserver_apply_constraint() below is what makes the relative and absolute
+	// channels mutually exclusive for a LOCKED constraint. A fork-side gate on
+	// wlserver.GetCursorConstraint() was tried here (63b6fed) to cure doubled
+	// pointer speed under --force-grab-cursor and did not; the same doubling was
+	// measured on unmodified upstream fcc1341, and the motion path is byte-
+	// identical from 3.16.25 through fcc1341, so it is upstream behaviour rather
+	// than fork divergence and is not fixed here. See
 	// superdoc/features/cursor-pipeline.md.
-	if ( wlserver.GetCursorConstraint() )
-		wlserver_perform_rel_pointer_motion( dx, dy );
+	wlserver_perform_rel_pointer_motion( dx, dy );
 
 	if ( !wlserver_apply_constraint( &dx, &dy ) )
 	{
@@ -3389,18 +3372,11 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 
 	wlserver_oncursorevent();
 
-	// This absolute-position notify is what actually moves the pointer for the
-	// focused client, and it must stay unconditional -- see the "Why the absolute
-	// notify must stay unconditional" section of superdoc/features/cursor-pipeline.md.
-	// It was briefly withheld while g_bForceRelativeMouse was set, on the theory
-	// that force-grab meant the client was reading relative motion only. That is
-	// wrong: g_bForceRelativeMouse describes gamescope's relationship with the
-	// HOST compositor (grab the host cursor, feed us relative deltas -- see
-	// CWaylandBackend::SetRelativeMouseMode()), not the client's input mode. The
-	// only correct signal for "this client wants relative motion only" is a
-	// pointer constraint it requested itself, and wlserver_apply_constraint()
-	// above already suppresses this call for a LOCKED one. Withholding it here
-	// froze pointer input for every client the moment force-grab was on.
+	// Upstream verbatim, and it must stay that way: this is what actually moves
+	// the pointer for the focused client. Withholding it while
+	// g_bForceRelativeMouse was set (4583d6f) froze pointer input outright --
+	// force-grab describes gamescope's relationship with the HOST compositor,
+	// not the client's input mode.
 	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
 	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 }

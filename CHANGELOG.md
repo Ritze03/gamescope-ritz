@@ -29,10 +29,6 @@ The newest version below is the one this build reports.
   the pointer's on-screen look immediately.
 
 ### Fixed
-- **Force grab cursor no longer doubles mouse speed**: while grabbed, each movement
-  was delivered to the game twice over -- once as relative motion and once as a
-  pointer position -- so games that read both moved about twice as fast as they
-  should.
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was
   not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now
@@ -76,6 +72,11 @@ The newest version below is the one this build reports.
   launcher search.
 
 ### Info
+- **Grabbed-cursor mouse speed is an upstream issue, not a fork change**: the
+  attempted fix for doubled mouse speed under Force Grab Cursor has been taken back
+  out, because the mouse code here is identical to stock gamescope's and the same
+  doubling happens there; grabbing the cursor is simply something stock gamescope
+  cannot switch on while it is running.
 - **The overlay's open/close fade is twice as fast.**
 - **Three setting IDs moved to match the settings tree**:
   `display.sharpness` → `display.filter.sharpness`, `display.scaler` →
