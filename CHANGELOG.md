@@ -23,6 +23,10 @@ The newest version below is the one this build reports.
   accent colour with a black inlay, so it stays readable over both dark and bright
   game content. It follows the accent-hue slider, and it looks the same whether or
   not the settings overlay is open. There is no setting for it.
+- **New Cursor tab**: a Setup area for designing the overlay's own pointer — size,
+  outline thickness, and outline/inlay colour, with an option to lock the outline
+  to a fixed colour instead of following the accent hue. The controls are in place
+  and save normally, but don't change the pointer's on-screen look yet.
 
 ### Fixed
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was

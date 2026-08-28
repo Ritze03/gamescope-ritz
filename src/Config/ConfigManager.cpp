@@ -284,6 +284,12 @@ namespace gamescope::config
                 // Issue #40: selected System Monitor sub-tab (ConfigSchema.h's
                 // OverlaySettings::system_monitor_tab comment).
                 s.overlay.system_monitor_tab = JGetString( *pOverlay, "system_monitor_tab", s.overlay.system_monitor_tab );
+
+                // Cursor tab (ConfigSchema.h's OverlaySettings comment block).
+                s.overlay.cursor_scale = JGetFloat( *pOverlay, "cursor_scale", s.overlay.cursor_scale );
+                s.overlay.cursor_outline_width = JGetFloat( *pOverlay, "cursor_outline_width", s.overlay.cursor_outline_width );
+                s.overlay.cursor_outline_color = JGetOptInt( *pOverlay, "cursor_outline_color" );
+                s.overlay.cursor_inlay_color = JGetInt( *pOverlay, "cursor_inlay_color", s.overlay.cursor_inlay_color );
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -442,6 +448,14 @@ namespace gamescope::config
                 // Issue #40: selected System Monitor sub-tab (see the parse
                 // side above and ConfigSchema.h's own comment).
                 jOverlay[ "system_monitor_tab" ] = s.overlay.system_monitor_tab;
+
+                // Cursor tab (see the parse side above and ConfigSchema.h's
+                // OverlaySettings comment block).
+                jOverlay[ "cursor_scale" ] = s.overlay.cursor_scale;
+                jOverlay[ "cursor_outline_width" ] = s.overlay.cursor_outline_width;
+                jOverlay[ "cursor_outline_color" ] = s.overlay.cursor_outline_color.has_value()
+                    ? nlohmann::json( *s.overlay.cursor_outline_color ) : nlohmann::json( nullptr );
+                jOverlay[ "cursor_inlay_color" ] = s.overlay.cursor_inlay_color;
 
                 j[ "overlay" ] = std::move( jOverlay );
             }

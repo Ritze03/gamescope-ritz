@@ -390,6 +390,31 @@ namespace gamescope::config
         // collecting from shortly after process start on the next launch,
         // not from whenever they next happen to click the tab.
         std::string system_monitor_tab = "modules"; // "modules" | "statistics"
+
+        // ---- Cursor tab -- Overlay/PanelCursor.{h,cpp} --------------------
+        // Controls for the pointer the overlay draws for itself while it is
+        // open (Overlay/CursorArt.cpp -- a triangle silhouette, outline over
+        // a solid inlay). Process-level UI preference, same "global.json
+        // only" rule as every other field in this struct: what the cursor
+        // looks like is about the player's own overlay, not any one game.
+        //
+        // Every default below reproduces CursorArt.cpp's own compiled-in
+        // look exactly, so nothing changes for anyone until they open this
+        // tab and touch a control.
+        //
+        // NOT YET WIRED (2026-08-28): these fields are declared and exposed
+        // in the Cursor tab, but CursorArt.cpp does not read them yet -- see
+        // PanelCursor.h's file comment for the accessor it exposes and the
+        // exact one-line change that will make CursorArt_Draw()/
+        // CursorArt_Rasterise() honour them.
+        float cursor_scale = 1.0f;          // 0.5..3.0 -- multiplies CursorArt.cpp's whole silhouette (its kTipX/kFootY/kWingX geometry), same meaning as CursorArt_Draw()'s flScale parameter today.
+        float cursor_outline_width = 2.0f;  // 1.0..6.0 px -- stroke width before the scale above is applied; matches CursorArt.cpp's kOutlineWidth constant.
+        // Unset (default) = the outline follows the live accent hue, exactly
+        // like today (CursorArt_AccentRgb()); set = a fixed 0xRRGGBB colour
+        // instead. Same nullable "follow app theme vs. explicit override"
+        // shape as FpsDisplaySettings::color_fps/cpu/gpu/media above.
+        std::optional<int> cursor_outline_color;
+        int cursor_inlay_color = 0x000000;  // 0xRRGGBB -- the solid fill inside the outline. Default matches CursorArt.cpp's hardcoded black inlay; always explicit, there is no "follow accent" mode for this one.
     };
 
     // Toast notification system (this fork's own addition, see

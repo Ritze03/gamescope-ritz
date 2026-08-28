@@ -46,6 +46,7 @@
 #include "Overlay/PanelAudio.h"
 #include "Overlay/PanelConfig.h"
 #include "Overlay/PanelDisplay.h"
+#include "Overlay/PanelCursor.h"
 #include "Overlay/PanelChangelog.h"
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
@@ -731,6 +732,12 @@ namespace gamescope::ui::shell
 			// setup.appearance. The rail is now the eleven items SPEC §8.1
 			// names.
 			PanelConfig_RegisterAreas( reg );
+			// The Cursor tab. Registered last, alongside Setup's other
+			// global-only preference area (setup.appearance) rather than
+			// inside PanelConfig_RegisterAreas() itself -- PanelConfig.cpp
+			// is a different, concurrently-edited file's scope; this is its
+			// own panel, PanelCursor.cpp, following the same pattern.
+			PanelCursor_RegisterArea( reg );
 		}
 
 		Registry &Reg()

@@ -148,6 +148,7 @@ src = [
   'Overlay/Palette.cpp',
   'Overlay/Widgets.cpp',
   'Overlay/PanelDisplay.cpp',
+  'Overlay/PanelCursor.cpp',
   'Overlay/FpsDisplay.cpp',
   'Overlay/Notifications.cpp',
   'Overlay/PanelShaders.cpp',
