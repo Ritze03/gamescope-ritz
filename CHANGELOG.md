@@ -29,6 +29,9 @@ The newest version below is the one this build reports.
   the pointer's on-screen look immediately.
 
 ### Fixed
+- **Doubled mouse sensitivity while the cursor is grabbed is gone**: games that read
+  raw mouse input were being sent every movement twice over, so look and aim were
+  about twice as fast as they should be.
 - **The overlay no longer freezes when the game stops drawing**: it now asks for its
   own frames, so moving the mouse, pressing a key and the open/close fade all show
   up immediately instead of waiting for the game to render something.

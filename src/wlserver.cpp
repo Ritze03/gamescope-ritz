@@ -3395,16 +3395,33 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 		return;
 	}
 
-	// Upstream verbatim: relative motion is delivered unconditionally, and
-	// wlserver_apply_constraint() below is what makes the relative and absolute
-	// channels mutually exclusive for a LOCKED constraint. A fork-side gate on
-	// wlserver.GetCursorConstraint() was tried here (63b6fed) to cure doubled
-	// pointer speed under --force-grab-cursor and did not; the same doubling was
-	// measured on unmodified upstream fcc1341, and the motion path is byte-
-	// identical from 3.16.25 through fcc1341, so it is upstream behaviour rather
-	// than fork divergence and is not fixed here. See
-	// superdoc/features/cursor-pipeline.md.
-	wlserver_perform_rel_pointer_motion( dx, dy );
+	// Exactly one channel carries each movement, which is the half of the
+	// relative/absolute exclusivity upstream leaves out.
+	//
+	// wlserver_apply_constraint() below already drops the absolute
+	// wl_pointer.motion for a LOCKED constraint, because a locked client reads
+	// relative motion instead. The mirror image was missing: relative motion was
+	// sent unconditionally, so an *unlocked* client got the same movement twice
+	// over -- once as zwp_relative_pointer_v1 (which Xwayland republishes as XI2
+	// raw motion) and once as wl_pointer.motion (which drives the X sprite). A
+	// client that reads both -- several Wine/Proton raw-input paths do -- then
+	// applies it twice: the doubled look/aim sensitivity reported under
+	// force-grab. Measured through wlserver_debug_mouse_motion: 20 injections of
+	// dx=10 produced 20 relative-motion events AND 20 wl_pointer.motion events,
+	// 400px of delivered movement for 200px of input.
+	//
+	// Force-grab is what exposes it: with force-grab off the nested backends feed
+	// absolute host motion into wlserver_touchmotion(), which never emits
+	// relative motion at all, so switching force-grab on used to *add* a second
+	// channel. It must not change what the client receives.
+	//
+	// So: LOCKED -> relative only, everything else -> absolute only.
+	// See superdoc/features/cursor-pipeline.md.
+	const struct wlr_pointer_constraint_v1 *pConstraint = wlserver.GetCursorConstraint();
+	const bool bPointerLocked = pConstraint && pConstraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED;
+
+	if ( bPointerLocked )
+		wlserver_perform_rel_pointer_motion( dx, dy );
 
 	if ( !wlserver_apply_constraint( &dx, &dy ) )
 	{

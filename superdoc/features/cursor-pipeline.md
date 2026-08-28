@@ -345,134 +345,154 @@ so it is not chased again**:
   same steamcompmgr thread (`steamcompmgr.cpp`, the cursor-image path), so touching host
   cursor state from there is upstream-normal, not fork divergence.
 
-## The doubled pointer speed -- upstream behaviour, not fixed here
+## The doubled pointer speed -- fixed 2026-08-28: one channel per movement
 
-Reported four times across 2026-08-27/28: with `--force-grab-cursor` on, in-game
-look/aim sensitivity is roughly doubled. Still open. What follows is the mechanism,
-the one measurement that was taken, and the diff evidence that placed the behaviour
-in upstream rather than in this fork.
+Reported repeatedly across 2026-08-27/28: with force-grab on, in-game look/aim
+sensitivity is roughly doubled. Four rounds of hypothesis-driven patching failed before
+the behaviour was pinned down by measuring what Xwayland actually asks for, rather than
+assuming it.
 
-**Mechanism.** `wlserver_mousemotion()` delivers every movement on **two channels at
-once**:
+**Mechanism.** `wlserver_mousemotion()` used to deliver every movement on **two channels
+at once**:
 
 1. `wlserver_perform_rel_pointer_motion()` -- a `zwp_relative_pointer_v1` event, sent
    *unconditionally*;
 2. `wlr_seat_pointer_notify_motion()` -- the ordinary absolute `wl_pointer.motion`.
 
-Xwayland turns (1) into XI2 raw motion and (2) into the X sprite's position. A client
-reading only one is fine. Several Wine/Proton raw-input paths read **both** and sum
-them: exactly 2x.
+Xwayland republishes (1) as XI2 raw motion and (2) as the X sprite's position. A client
+reading only one is fine. Several Wine/Proton raw-input paths read **both** and sum them:
+exactly 2x.
 
-**Measured.** Private headless sway, `--force-grab-cursor`, overlay closed, 200px of
-injected relative motion, reading both channels separately (a small XI2 client
-counting `XI_RawMotion` valuators, plus `XQueryPointer` for the sprite):
+### What Xwayland actually does -- measured, not assumed
 
-| build | sprite | raw events | raw valuator values |
-| --- | --- | --- | --- |
-| upstream `fcc1341` | +200px | 20 | `10 10 10 10 …` -- **deltas**, summing to 200 |
-| the fork, with the (now reverted) gate | +200px | 20 | `10 20 30 40 …` -- **positions**, no relative channel |
+Headless gamescope, `WAYLAND_DEBUG=1` on the whole tree, a purpose-built XI2 client
+inside its Xwayland selecting `XI_RawMotion` on the root and optionally taking an
+`XGrabPointer`. Motion injected with the `wlserver_debug_mouse_motion` ConCommand, which
+enters at `wlserver_mousemotion()` itself -- the real path, and the reason this round saw
+what earlier ones could not (`overlay_e2_pointer` bypasses `wlserver` entirely).
 
-Upstream carries the full 200px on *both* channels, so a client reading both applies
-400px. With the gate in place the relative channel was gone and only the sprite
-carried the movement -- and the user still reported doubling, so this rig did not
-capture their case.
+- **Xwayland binds `zwp_relative_pointer_manager_v1` and creates a
+  `zwp_relative_pointer_v1` at seat setup, unconditionally**, before any X client exists.
+  So an unconditional relative send always reaches it, always becomes XI2 raw motion, and
+  is never simply ignored.
+- **Xwayland requests `zwp_pointer_constraints_v1.lock_pointer` as soon as an X client
+  takes an active pointer grab** (`XGrabPointer` with a confine window -- what Wine does
+  for `ClipCursor`), and gamescope activates it (`zwp_locked_pointer_v1.locked` goes back
+  out). While locked, Xwayland drives the X sprite from the *relative* channel itself.
 
-Two controls make that reading solid rather than inferred:
+So the two channels are genuinely meant to be exclusive, and Xwayland already tells us
+which one it wants.
 
-- Gating gamescope's relative motion off entirely
-  (`wayland_mouse_relmotion_without_keyboard_focus 0` with no keyboard focus) dropped
-  **both** sprite and raw to **0**. That proves `wlserver_mousemotion()` is the sole
-  input path once the host pointer is locked, so anything it emits is the whole story.
-- The raw *values* -- deltas versus accumulating positions -- distinguish the two
-  sources directly. Summed magnitudes alone cannot: Xwayland synthesises raw events
-  from absolute motion too, so `raw_dx` being non-zero proves nothing on its own. An
-  earlier round of this investigation was misled by exactly that.
+### The asymmetry that was the bug
 
-**The fix was reverted on 2026-08-28, and the motion path is upstream verbatim again.**
+`wlserver_apply_constraint()` implements one half of the exclusivity: a LOCKED constraint
+returns false, and the absolute notify is skipped. **The mirror half was missing** --
+relative motion went out whether or not anyone had locked. So an unlocked client received
+the same movement on both channels.
 
-The gate that was tried here --
+`wlserver_mousemotion()` now sends relative motion **only while a LOCKED constraint is
+active**, which is the exact complement of that early return:
 
-```c
-if ( wlserver.GetCursorConstraint() )
-    wlserver_perform_rel_pointer_motion( dx, dy );
-```
+| client state | relative | absolute |
+| --- | --- | --- |
+| LOCKED constraint | yes | no (`wlserver_apply_constraint` returns false) |
+| CONFINED constraint | no | yes, clipped to the confine region |
+| no constraint | no | yes |
 
--- did not cure the report. The user still saw doubling after it shipped, so the rig
-above did not capture their case, and the gate was left standing as a private
-divergence on the exact code path that was failing. It is gone; the line is
-upstream's unconditional call again.
+Exactly one channel carries each movement, in every state.
 
-### Why this is upstream behaviour, not fork divergence
+**Why force-grab is what exposed it.** With force-grab *off*, the nested backends feed
+absolute host motion into `wlserver_touchmotion()`, which never emits relative motion at
+all. Switching force-grab on moves input to `wlserver_mousemotion()` and used to *add* a
+second channel on top of the absolute one the client was already getting. The invariant
+this restores is the one the 4583d6f post-mortem below already named: **force-grab must
+not change what the client receives.**
 
-Established by diff rather than by hypothesis, which is what four rounds of
-hypothesis-driven fixes had failed to do:
+### Measured, before and after
+
+Headless gamescope, 20 injections of `dx=10` (200px), counted off the wire in the
+`WAYLAND_DEBUG` log and read back with the XI2 probe plus `xdotool getmouselocation`.
+
+| client state | build | `wl_pointer.motion` | `relative_motion` | sprite | XI2 raw values | delivered |
+| --- | --- | --- | --- | --- | --- | --- |
+| no X grab (unlocked) | before | 20 | 20 | +200px | `10 10 10 …` deltas | 400px -- **2.0x** |
+| no X grab (unlocked) | after | 20 | 0 | +200px | `10 20 30 …` positions | 200px -- **1.0x** |
+| `XGrabPointer` (locked) | before | 0 | 20 | +200px | `10 10 10 …` deltas | 200px -- 1.0x |
+| `XGrabPointer` (locked) | after | 0 | 20 | +200px | `10 10 10 …` deltas | 200px -- 1.0x |
+
+The raw *values* -- deltas versus accumulating positions -- are what distinguish the two
+sources; summed magnitudes alone cannot, because Xwayland synthesises raw events from
+absolute motion too. An earlier round of this investigation was misled by exactly that.
+
+The locked column is unchanged, which is the safety check that matters: a grabbed game
+keeps precisely the input it had.
+
+### Known cost
+
+An X client that reads XI2 raw motion **without** taking a pointer grab no longer gets
+delta-valued raw events; it gets the absolute-derived raw stream and the sprite. That is
+the same thing it gets with force-grab off, so nothing regresses relative to the
+force-grab-off baseline -- but on the DRM/embedded path, where `wlserver_mousemotion()`
+is the *only* pointer path, it is a real narrowing. It is accepted because every client
+that actually wants relative-only input asks for it: Xwayland locks on grab (measured
+above), and native Wayland games lock directly.
+
+### Why this is an upstream bug, not fork divergence
+
+Established by diff rather than by hypothesis:
 
 - **`3.16.25` (`17baf4a`) is a direct ancestor of this fork's base `fcc1341`.**
   `git merge-base` returns `17baf4a` itself; `fcc1341` is `3.16.25` + 40 commits, with
   zero commits the other way. The installed `/usr/bin/gamescope` the user calls
   "working vanilla" is the *older* of the two, not a divergent branch.
-- **The pointer-motion path is byte-identical across those 40 commits.**
-  `wlserver_mousemotion()`, `wlserver_apply_constraint()`,
-  `wlserver_perform_rel_pointer_motion()`, `wlserver_mousewarp()`,
-  `wlserver_touchmotion()` and `wlserver_handle_pointer_motion()` compare equal
-  function-body-for-function-body between `17baf4a` and `fcc1341`, and neither
-  `SDLBackend.cpp`, `WaylandBackend.cpp` nor `steamcompmgr.cpp` changed a single
-  pointer-motion, relative-motion, `SetRelativeMouseMode` or constraint line between
-  them. The 40 commits are focus/override/painting work plus keyboard hotkey
-  bookkeeping.
-- **The fork changes nothing else on that path.** Per-function comparison of the fork
-  against `fcc1341` leaves exactly six differing functions in `wlserver.cpp`
-  (`wlserver_mousemotion`, `wlserver_touchmotion`, `wlserver_mousebutton`,
-  `wlserver_mousewheel`, `wlserver_handle_pointer_button`,
-  `wlserver_handle_pointer_axis`) and every difference in them is the overlay's
-  capture/routing gate. `wlserver_apply_constraint()`,
-  `wlserver_perform_rel_pointer_motion()`, `wlserver_mousewarp()`,
-  `wlserver_clampcursor()`, `wlserver_mousefocus()` and
-  `wlserver_update_cursor_constraint()` are identical. The set of callsites that
-  deliver motion (`wlserver_mousemotion`/`wlserver_touchmotion`/`wlserver_mousewarp`)
-  is identical between fork and upstream -- the fork adds no second channel.
-  `LibInputHandler.cpp` and `InputEmulation.cpp` are untouched.
+- **The pointer-motion path is byte-identical across those 40 commits**, and the fork
+  changes nothing on it beyond the overlay's capture/routing gate -- per-function
+  comparison against `fcc1341` leaves `wlserver_apply_constraint()`,
+  `wlserver_perform_rel_pointer_motion()`, `wlserver_mousewarp()` and
+  `wlserver_update_cursor_constraint()` identical, and the fork adds no second motion
+  channel.
 
-So `3.16.25` doubles exactly as `fcc1341` was measured to, given the same conditions.
-The condition it needs is **force-grab actually engaging**, and that is the one thing
-the fork really does change: upstream reads `g_bForceRelativeMouse` only once, at
-backend startup, where `CWaylandBackend::SetRelativeMouseMode()` early-returns if
-`m_pPointer` is still null -- and the per-frame path that would call it again is gated
-off by `!g_bForceRelativeMouse`. This fork's issue-#68 fix
-(`steamcompmgr_set_force_relative_mouse()`, plus the `debug_set_force_relative_mouse`
-ConCommand) re-pushes the mode at runtime, when the pointer does exist.
+What the fork really changes is that force-grab *engages*: upstream reads
+`g_bForceRelativeMouse` once at backend startup, where
+`CWaylandBackend::SetRelativeMouseMode()` early-returns if `m_pPointer` is still null,
+and the per-frame path that would call it again is gated off by `!g_bForceRelativeMouse`.
+This fork's issue-#68 fix (`steamcompmgr_set_force_relative_mouse()`, plus the
+`debug_set_force_relative_mouse` ConCommand) re-pushes the mode at runtime, when the
+pointer does exist.
 
-**Why:** that makes the fork's contribution *exposure*, not breakage. Vanilla has no
-runtime switch at all, so the user has never had force-grab genuinely engaged on
-`3.16.25` -- which is why it looks fine there and broken here, with identical motion
-code on both sides. A real fix therefore has to be upstream-shaped (upstream's own
-two-channel delivery is what doubles), and this fork will not carry a private
-divergence on this path again.
+**Why:** that makes the fork's contribution *exposure*, not breakage -- vanilla has no
+runtime switch, so force-grab has probably never genuinely engaged there. The fix is
+therefore shaped as something upstream would take: it completes upstream's own
+relative/absolute exclusivity rule in `wlserver_mousemotion()`, using upstream's own
+constraint state, with no fork-specific flag anywhere in the condition. In particular it
+does **not** key off `g_bForceRelativeMouse` -- see the 4583d6f post-mortem for why that
+flag can never appear in this decision.
 
-## Why the absolute notify must stay unconditional
+### The two failed attempts, kept so they are not repeated
 
-`wlserver_mousemotion()` (`src/wlserver.cpp`) delivers every pointer movement to the
-focused client twice over, and **both deliveries are required**:
+- **`4583d6f` (reverted)** withheld the *absolute* notify whenever `g_bForceRelativeMouse`
+  was set. Detail below; the short version is that the flag describes gamescope's
+  relationship with the host, not the client's input mode, so clients got no motion at
+  all.
+- **`63b6fed` (reverted)** gated relative motion on `wlserver.GetCursorConstraint()` being
+  non-null. Right instinct, but it was shipped without a measurement through
+  `wlserver_mousemotion()` and reverted as an unjustified divergence during the upstream
+  audit. The current fix is the same instinct with the evidence attached, and narrowed
+  from "any constraint" to "LOCKED" so that a CONFINED client does not end up on both
+  channels.
 
-1. `wlserver_perform_rel_pointer_motion()` -- a `zwp_relative_pointer_v1` relative-motion
-   event, sent unconditionally at the top of the function.
-2. `wlr_seat_pointer_notify_motion()` -- the ordinary absolute-position `wl_pointer.motion`,
-   sent at the bottom.
+## Why the absolute notify must stay unconditional for an unlocked client
 
-That is not a bug; it is what every wlroots compositor does. The two are different
-protocols for different consumers, and a client picks one according to whether it holds a
-pointer constraint. **(2) is the only thing that moves the pointer for a client that has
-not requested a constraint of its own** -- which is every Xwayland client that isn't in a
-raw-input mode, so in practice most of what runs here.
-
-The one legitimate reason to withhold (2) is a client that asked for relative-only input
-by locking the pointer, and `wlserver_apply_constraint()`'s early return above already
-covers exactly that case (`WLR_POINTER_CONSTRAINT_V1_LOCKED` -> return false -> the
-function returns before (2)). There is no second condition to add.
+`wlr_seat_pointer_notify_motion()` is **the only thing that moves the pointer for a client
+that has not locked the pointer** -- which is every Xwayland client that is not in a
+raw-input grab, so in practice most of what runs here. The one legitimate reason to
+withhold it is a client that asked for relative-only input by locking, and
+`wlserver_apply_constraint()`'s early return already covers exactly that case
+(`WLR_POINTER_CONSTRAINT_V1_LOCKED` -> return false). There is no second condition to add.
 
 ### The 2026-08-27 regression (commit 4583d6f, reverted 2026-08-28)
 
-`4583d6f` withheld (2) whenever `g_bForceRelativeMouse` was set, on the theory that
+`4583d6f` withheld the absolute notify whenever `g_bForceRelativeMouse` was set, on the theory that
 force-grab implies the client reads relative motion only. **That theory is wrong**, and
 this is the mistake to not repeat:
 
@@ -482,9 +502,10 @@ this is the mistake to not repeat:
   `CSDLBackend` / `COpenVRBackend` asking the *host* to lock gamescope's own pointer and
   feed gamescope relative deltas, plus making `ShouldDrawCursor()` unconditionally true.
   It says nothing at all about how the focused client reads input.
-- The stated root cause did not even match the gate: (1) is sent unconditionally whether
-  or not force-grab is on, so if double-counting were real it would be equally real with
-  force-grab off.
+- The stated root cause did not even match the gate: relative motion was sent whether or
+  not force-grab was on, so if double-counting were real it would have been equally real
+  with force-grab off. (It was -- for an unlocked client. The cure was to stop sending the
+  *relative* channel to a client that never locked, not to stop sending the absolute one.)
 
 **Symptom it caused**, as reported: with force-grab on, clicking appeared to hang the
 compositor, after which "the image only updates when I click again". The mechanism is
