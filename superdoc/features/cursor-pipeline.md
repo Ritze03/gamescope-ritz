@@ -183,11 +183,76 @@ What stands now is attempt 3 minus the game side: vector geometry, overlay only,
 nothing rasterised, nothing uploaded, no atlas coupling, and the game's cursor left
 exactly as upstream leaves it.
 
-## The freeze, and what is still not known
+## The freeze -- found 2026-08-28: the overlay never asked for a frame
+
+**Resolved.** The compositor was not wedged and no thread was blocked; gamescope
+simply had no reason to draw. `steamcompmgr`'s main loop paints only when a dirty
+flag is set (`bShouldPaint = vblank && ( hasRepaint || hasRepaintNonBasePlane ||
+bForceSyncFlip )`, `steamcompmgr.cpp`), and **nothing in the settings overlay ever
+set one**. Every frame the overlay appeared to draw was a frame the *game* had
+asked for. Under a game that renders continuously this is invisible; the moment the
+client stops producing frames -- an idle or paused game, a menu, a stalled Proton
+client -- the overlay stops updating entirely and only twitches when some unrelated
+event happens to dirty the frame.
+
+Input capture makes it strictly worse rather than causing it. Upstream's pointer
+path always ends at `wlserver_oncursorevent()`, which sets `hasRepaint`. The
+capture gates in `wlserver.cpp` return *before* that point -- they have to, the
+event belongs to the overlay and not to the seat -- so while the overlay owns input,
+the one repaint source that used to cover pointer movement is gone too. That is why
+the report arrived as "it freezes when I move the mouse" and, earlier, "the image
+only updates when I click": a click still reached the game (which then redrew), a
+movement swallowed by the overlay reached nothing at all.
+
+### The measurement
+
+Headless backend, one idle client, overlay open, `overlay_e2_trace` counting frames.
+Same instance, same command, only the fix differing:
+
+| probe | before | after |
+| --- | --- | --- |
+| overlay open, idle 2-5 s | 0 frames | 0 frames (no busy loop) |
+| opening the overlay (100 ms fade) | 1 frame | 7 frames -- the fade runs |
+| one real relative motion event through `wlserver_mousemotion()`, 5 runs | 0, 0, 0, 0, 0 | 3, 3, 3, 1, 1 |
+| one real key through `wlserver_debug_key` | 0 frames | 1 frame |
+| `debug_force_repaint` (control) | 1 frame | 1 frame |
+
+`wlserver_debug_mouse_motion <dx> <dy> [count]` was added for this (next to
+`wlserver_debug_key`, `wlserver.cpp`): it enters at `wlserver_mousemotion()`, the
+same function a real grabbed pointer does, on **this** compositor's seat, so the
+capture gate can be exercised without touching the host's pointer. `overlay_e2_pointer`
+cannot see this defect at all -- it bypasses `wlserver` by design.
+
+### The fix
+
+`SettingsOverlay.cpp` gains one private `RequestRepaint()` and calls it from the
+three places overlay state can change without a game frame: `QueueEvent()` (every
+captured key, button, wheel and motion), the `settings_overlay_visible` ConVar
+callback (opening and closing), and `UpdateFadeAlpha()` while a fade is in flight
+(which re-arms itself per frame and stops on its own when the fade lands).
+
+It calls `force_repaint()`, **not** `hasRepaint = true`. Both mark the frame dirty,
+but the main loop clears `hasRepaint` immediately *after* `paint_all()` returns, so
+a request raised from inside `paint_all()` -- which is where `UpdateFadeAlpha()`
+runs -- is swallowed on the same iteration. Measured: with `hasRepaint`, opening the
+overlay over an idle client drew exactly 1 frame instead of the fade. `g_bForceRepaint`
+is consumed at the *top* of the loop instead, survives the round trip, and works
+under every flip type.
+
+This also closes the second candidate below: the input queue can no longer grow
+unbounded, because every enqueue now schedules the frame that drains it.
+
+### The investigation, kept for its dead ends
 
 Reported 2026-08-27, still reported after `66d619d` and `6614d67`: with force-grab
 on, clicking appears to hang the compositor, and afterwards "the image only updates
 when I click again."
+
+Everything from here down is the record of four rounds that did **not** find it. It
+is kept because each round bought a real fact, and because the reason they all missed
+is worth remembering: every rig ran a client that kept rendering, which is exactly the
+condition under which this defect is invisible. The reproduction only appeared once
+the client was *idle*.
 
 `66d619d` fixed a real and measured defect with exactly that signature -- the client
 was receiving no pointer motion at all, and a button event flushed the seat's pointer
@@ -237,7 +302,12 @@ Proton/Xwayland client's own reaction to the click (an `XGrabPointer` and the po
 constraint Xwayland then requests), and frame-callback starvation that only bites a
 client which actually blocks on presentation.
 
-### 2026-08-28: the motion path is ruled out by diff
+*(Written before the cause was found. The second guess was the right shape and the
+wrong direction: it is not the client starving of frame callbacks, it is the
+compositor never being asked for a frame -- so a client that has stopped rendering
+takes the overlay down with it.)*
+
+#### 2026-08-28: the motion path is ruled out by diff
 
 The freeze was reported again, this time on **plain mouse movement with no click** --
 which removes button handling, `XGrabPointer`-on-click and click-driven constraint
@@ -253,14 +323,27 @@ gone, everything from `wlserver_perform_rel_pointer_motion()` to
 `wlr_seat_pointer_notify_frame()` is upstream verbatim, and the callsite set that
 feeds it is identical to upstream's.
 
-**Why this matters for the search:** the freeze cannot be explained by fork-side
-motion code, because there is none left to blame. The remaining fork-side candidates
-that a mouse movement can reach are the per-frame `PresentOverlayCursor()` call
-`paint_all()` makes (which under the Wayland backend reaches `wl_pointer_set_cursor()`
-from the steamcompmgr thread, where upstream only touches host cursor state from the
-backend's own thread) and the overlay input queue's unbounded growth if capture is on
-while nothing drains it. Neither is reproduced; both are recorded here so the next
-attempt starts from candidates rather than from hypotheses about motion.
+**Why this mattered for the search:** the freeze could not be explained by fork-side
+motion code, because there was none left to blame -- which is what finally pointed at
+the *absence* of a repaint request rather than the presence of a bad one.
+
+The leading candidate at the time -- `paint_all()`'s per-frame `PresentOverlayCursor()`
+supposedly reaching `wl_pointer_set_cursor()` from the steamcompmgr thread as a
+cross-thread libwayland violation -- **was wrong on both halves, and is recorded here
+so it is not chased again**:
+
+- It is not per-frame. `CWaylandBackend::PresentOverlayCursor()` (`WaylandBackend.cpp`)
+  only calls `UpdateCursor()` when `m_bOverlayCursorActive` actually *changes*; a
+  steady mouse movement issues no libwayland request at all.
+- It is not cross-thread. `CWaylandBackend::PollState()` -- which owns
+  `wl_display_prepare_read`/`read_events`/`dispatch_pending` on the **default** queue --
+  is called from the steamcompmgr thread (`steamcompmgr.cpp`'s main loop, and again at
+  the tail of `CWaylandConnector::Present()`). The steamcompmgr thread *is* the default
+  queue's owner. `CWaylandInputThread` runs on its own `wl_event_queue` with its own
+  proxy wrappers, which is libwayland's supported multi-queue pattern. Upstream already
+  calls `SetCursorImage()` -> `UpdateCursor()` -> `wl_pointer_set_cursor()` from the
+  same steamcompmgr thread (`steamcompmgr.cpp`, the cursor-image path), so touching host
+  cursor state from there is upstream-normal, not fork divergence.
 
 ## The doubled pointer speed -- upstream behaviour, not fixed here
 

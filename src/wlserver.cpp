@@ -575,6 +575,56 @@ static gamescope::ConCommand cc_wlserver_debug_key(
 			wlserver_unlock();
 	} );
 
+// The pointer half of wlserver_debug_key, and confined the same way: it
+// enters at wlserver_mousemotion(), the exact function libinput's relative
+// motion and the Wayland backend's locked-pointer motion both call, on THIS
+// compositor's seat. It cannot move the host's pointer, which is what makes
+// it the sanctioned alternative to ydotool for testing the grabbed-pointer
+// path (AUTONOMOUS-DECISIONS.md D4).
+//
+// Added while chasing issue #100 (the overlay froze on plain mouse movement):
+// nothing else could drive real motion through the capture gate in
+// wlserver_mousemotion() without touching the user's own pointer, and
+// overlay_e2_pointer deliberately bypasses wlserver entirely, so it could
+// not see the defect at all.
+static gamescope::ConCommand cc_wlserver_debug_mouse_motion(
+	"wlserver_debug_mouse_motion",
+	"Send relative pointer motion on gamescope's OWN seat: wlserver_debug_mouse_motion <dx> <dy> "
+	"[count]. Enters at wlserver_mousemotion(), the same function a real grabbed pointer does, so "
+	"it exercises the settings overlay's capture gate and the game's seat alike; it cannot reach "
+	"the host's pointer. Through gamescopectl the arguments must be ONE quoted argument: "
+	"gamescopectl wlserver_debug_mouse_motion \"5 0 20\".",
+	[]( std::span<std::string_view> args )
+	{
+		if ( args.size() < 3 )
+		{
+			console_log.errorf( "usage: wlserver_debug_mouse_motion <dx> <dy> [count]" );
+			return;
+		}
+
+		const std::optional<double> odX = gamescope::Parse<double>( args[ 1 ] );
+		const std::optional<double> odY = gamescope::Parse<double>( args[ 2 ] );
+		if ( !odX || !odY )
+		{
+			console_log.errorf( "wlserver_debug_mouse_motion: bad delta" );
+			return;
+		}
+
+		uint32_t uCount = 1;
+		if ( args.size() >= 4 )
+			uCount = std::clamp( gamescope::Parse<uint32_t>( args[ 3 ] ).value_or( 1u ), 1u, 10000u );
+
+		// Same conditional lock as wlserver_debug_key: gamescopectl already
+		// dispatches this with the lock held, the script console does not.
+		const bool bNeedLock = !wlserver_is_lock_held();
+		if ( bNeedLock )
+			wlserver_lock();
+		for ( uint32_t i = 0; i < uCount; i++ )
+			wlserver_mousemotion( *odX, *odY, get_time_in_milliseconds() );
+		if ( bNeedLock )
+			wlserver_unlock();
+	} );
+
 // Which side (the focused game's wl_seat, or the settings overlay) actually
 // received a given key/mouse-button's PRESS, keyed by raw linux keycode/
 // button code. Consulted on RELEASE so a press-and-release pair always goes

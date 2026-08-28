@@ -29,6 +29,9 @@ The newest version below is the one this build reports.
   the pointer's on-screen look immediately.
 
 ### Fixed
+- **The overlay no longer freezes when the game stops drawing**: it now asks for its
+  own frames, so moving the mouse, pressing a key and the open/close fade all show
+  up immediately instead of waiting for the game to render something.
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was
   not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now

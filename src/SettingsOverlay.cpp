@@ -77,6 +77,58 @@ namespace gamescope
 {
 	static LogScope s_OverlayLog( "settings_overlay" );
 
+	// ------------------------------------------------------------------
+	// Issue #100: the overlay has to ask for its own frames.
+	//
+	// gamescope does not free-run: steamcompmgr's main loop only calls
+	// paint_all() when something has marked the frame dirty
+	// (`bShouldPaint = vblank && ( hasRepaint || ... )`, steamcompmgr.cpp),
+	// and until this fix NOTHING in the overlay ever did. Every frame the
+	// overlay appeared to draw was really a frame the GAME had asked for --
+	// which is invisible while a game renders continuously, and a hard
+	// freeze the moment one doesn't: with an idle client the overlay opened
+	// to a blank screen and then sat there, unresponsive to keys, buttons,
+	// wheel and pointer motion alike, updating only when some unrelated
+	// event (a focus change, a screenshot) happened to dirty the frame.
+	//
+	// Measured, not inferred: headless + an idle client, overlay open, four
+	// seconds -- `overlay_e2_trace dump` reported 0 frames. A single
+	// `debug_force_repaint` produced exactly one. Real keys through
+	// wlserver_debug_key, and overlay_e2_key into the overlay's own queue,
+	// produced none: the shell's selection moved and the screen did not.
+	//
+	// Why capture makes it worse rather than causing it: upstream's pointer
+	// path always ends at wlserver_oncursorevent(), which sets hasRepaint.
+	// The capture gates in wlserver.cpp return BEFORE that point (they must
+	// -- the event is for us, not the seat), so while the overlay owns
+	// input, the one repaint source that used to cover pointer movement is
+	// gone too.
+	//
+	// The remedy is the flag the rest of the compositor already uses, set
+	// from the three places overlay state can change without a game frame:
+	// input arriving (QueueEvent), visibility toggling (the ConVar
+	// callback), and an in-flight fade (UpdateFadeAlpha, which re-arms
+	// itself each frame and stops on its own when the fade lands). Same
+	// idiom as wlserver_oncursorevent() and CScreenshotManager
+	// ::TakeScreenshot(); no new synchronization -- see RequestRepaint()
+	// below for which of the two dirty flags this uses and why.
+	static void RequestRepaint()
+	{
+		// force_repaint(), not `hasRepaint = true`, deliberately. Both mark
+		// the frame dirty, but hasRepaint is cleared by the main loop
+		// immediately AFTER paint_all() returns -- so a request raised from
+		// inside paint_all() (which is where UpdateFadeAlpha() runs) is
+		// swallowed on the same iteration and the animation stalls after one
+		// frame. Measured: with hasRepaint, opening the overlay over an idle
+		// client drew exactly 1 frame instead of the fade. g_bForceRepaint is
+		// consumed at the TOP of the loop instead, so it survives the round
+		// trip, and it works under every flip type (it pins the frame to
+		// FlipType::Normal, which is what the loop already wants whenever an
+		// overlay is up). It nudges the waiter too, so a request from another
+		// thread wakes the compositor rather than waiting for the next vblank.
+		force_repaint();
+	}
+
 	// M2: the single source of truth for "does the overlay currently own all
 	// input" is g_bSettingsOverlayCapturing (below), a std::atomic<bool> so
 	// wlserver's input handlers (main thread) can read it without racing the
@@ -104,6 +156,11 @@ namespace gamescope
 			// console get it for free, not only the two hotkeys.
 			if ( !cv.Get() )
 				gamescope::ui::shell::NotifyOverlayHidden();
+
+			// Issue #100: opening or closing is itself a reason to draw --
+			// otherwise the layer's first (and, mid-fade, every) frame waits
+			// on some unrelated event.
+			RequestRepaint();
 		},
 		/* bRunCallbackAtStartup = */ true );
 
@@ -559,6 +616,13 @@ namespace gamescope
 		const float flTarget = bVisible ? 1.0f : 0.0f;
 
 		s_flCurrentAlpha = s_flFadeAtAnchor + ( flTarget - s_flFadeAtAnchor ) * flT;
+
+		// Issue #100: a fade is an animation, so it has to keep asking for the
+		// next frame. Self-terminating -- flT saturates at 1.0f exactly once
+		// k_uOverlayFadeMs has elapsed, after which this stops re-arming and
+		// the compositor goes back to idle.
+		if ( flT < 1.0f )
+			RequestRepaint();
 	}
 
 	// ----------------------------------------------------------------------
@@ -1320,8 +1384,16 @@ namespace gamescope
 	static void QueueEvent( QueuedInputEvent ev )
 	{
 		ev.ulTimestampNanos = get_time_in_nanos();
-		std::lock_guard<std::mutex> lock( s_InputQueueLock );
-		s_InputQueue.push_back( std::move( ev ) );
+		{
+			std::lock_guard<std::mutex> lock( s_InputQueueLock );
+			s_InputQueue.push_back( std::move( ev ) );
+		}
+
+		// Issue #100. Outside the lock: nudge_steamcompmgr() wakes the very
+		// thread that takes it in DrainInputQueue(). Without this the event
+		// sits in the queue until something else asks for a frame -- which
+		// is the freeze, since the queue is only drained from paint_all().
+		RequestRepaint();
 	}
 
 	void SettingsOverlay_QueueKeyEvent( uint32_t uLinuxKeycode, bool bPressed, std::string sUtf8Text )
