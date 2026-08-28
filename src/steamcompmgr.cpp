@@ -96,6 +96,7 @@
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
+#include "Overlay/CursorArt.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
 #include "Overlay/LogCapture.h"
@@ -1067,7 +1068,7 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 
 	// Which fallback cursor the game's root window gets depends on this flag
 	// (ApplyDefaultCursorPolicy() -> SetDefaultCursorImage()'s
-	// bPreferThemeCursor), so toggling force-grab has to re-run that choice --
+	// bUseOwnCursor), so toggling force-grab has to re-run that choice --
 	// otherwise the cursor would keep whichever image the *previous* mode
 	// picked until something else happened to touch it.
 	ApplyDefaultCursorPolicy();
@@ -8255,29 +8256,23 @@ int g_customCursorHotspotY = 0;
 // this sets on the root, per X11 cursor inheritance -- so this never
 // overrides a game's own cursor, only what's shown in its absence.
 //
-// bPreferThemeCursor selects between two sources for that fallback. It is
-// simply --force-grab-cursor's own flag: while the pointer is grabbed there is
-// no live host cursor to snapshot (see CursorPolicy.h), so the theme's own
-// image is the only honest answer; while it isn't, the host's actual cursor
-// is the better one. This used to be a user-facing toggle as well; it was
-// removed once the overlay learned to draw the theme image too -- see
-// superdoc/features/cursor-pipeline.md. The two sources:
-//   false (today's behaviour): in nested mode, a live snapshot of the actual
-//     host desktop cursor (GetX11HostCursor(), re-fetched from the outer X11
-//     display each call); in embedded mode, where there is no host display to
-//     snapshot, the same left_ptr-via-Xcursor lookup as the true branch below.
-//   true: skip the host snapshot and go straight to setCursorImageByName(
-//     "left_ptr"), which resolves through libXcursor (XcursorShapeLoadCursor)
-//     against the process's XCURSOR_THEME/XCURSOR_SIZE -- i.e. the desktop's
-//     configured cursor theme, not X11's plain compiled-in arrow. libXcursor
-//     guarantees a valid cursor either way (it falls back to that same plain
-//     arrow internally if no theme is set or the theme has no left_ptr), so
-//     this can never leave the cursor blank or broken.
+// bUseOwnCursor picks between two sources, and is simply --force-grab-cursor's
+// own flag:
+//   false: a live snapshot of the actual host desktop cursor
+//     (GetX11HostCursor(), nested mode with an outer X11 display to snapshot
+//     from). When there is one it is the better image -- it is literally the
+//     pointer the user's desktop is drawing.
+//   true: gamescope's own pointer, rasterised from the same geometry the
+//     settings overlay draws with (Overlay/CursorArt.cpp). While the pointer
+//     is grabbed there IS no live host cursor to snapshot -- the host pins and
+//     hides it as part of what a pointer lock means (see CursorPolicy.h) -- so
+//     the snapshot above is unavailable exactly when force-grab is on, and
+//     this is what the user sees instead.
 //
-// This split only changes anything in nested mode: embedded mode already
-// takes the left_ptr-via-Xcursor path unconditionally (no host display to
-// prefer over it), so bPreferThemeCursor is a no-op there today.
-static void SetDefaultCursorImage( MouseCursor *cursor, bool bPreferThemeCursor )
+// Using our own art in both places is the point: it is what makes the pointer
+// look the same whether or not the settings overlay is open, which drawing two
+// different images never did. See superdoc/features/cursor-pipeline.md.
+static void SetDefaultCursorImage( MouseCursor *cursor, bool bUseOwnCursor )
 {
 	if (g_customCursorPath)
 	{
@@ -8286,7 +8281,7 @@ static void SetDefaultCursorImage( MouseCursor *cursor, bool bPreferThemeCursor 
 		return;
 	}
 
-	if ( !bPreferThemeCursor )
+	if ( !bUseOwnCursor )
 	{
 		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
 		{
@@ -8300,9 +8295,27 @@ static void SetDefaultCursorImage( MouseCursor *cursor, bool bPreferThemeCursor 
 		}
 	}
 
-	xwm_log.infof( bPreferThemeCursor
-		? "Using left_ptr from the desktop's Xcursor theme."
-		: "Embedded, no cursor set. Using left_ptr by default." );
+	std::vector<uint32_t> vecPixels;
+	int nWidth = 0, nHeight = 0, nHotX = 0, nHotY = 0;
+	if ( gamescope::overlay::CursorArt_Rasterise( vecPixels, &nWidth, &nHeight, &nHotX, &nHotY ) )
+	{
+		// setCursorImage() hands the buffer to XCreateImage, whose error path
+		// calls XDestroyImage and therefore free() on it -- so this has to be
+		// malloc'd memory, not a std::vector's.
+		const size_t uBytes = vecPixels.size() * sizeof( uint32_t );
+		if ( void *pBits = malloc( uBytes ) )
+		{
+			memcpy( pBits, vecPixels.data(), uBytes );
+			if ( cursor->setCursorImage( reinterpret_cast<char *>( pBits ), nWidth, nHeight, nHotX, nHotY ) )
+				return;
+			// setCursorImage() already freed pBits on its way out.
+		}
+	}
+
+	// Last resort. Only reachable if the rasteriser or the X11 upload failed;
+	// X11's own built-in arrow is not pretty but it is never blank, and a
+	// blank pointer is the one outcome with no way back for the user.
+	xwm_log.errorf( "Failed to build gamescope's own cursor; falling back to left_ptr" );
 	if ( !cursor->setCursorImageByName( "left_ptr" ) )
 		xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
 }
@@ -8335,16 +8348,30 @@ static void ApplyDefaultCursorPolicy()
 // Cheap no-op check when nothing changed since the last frame.
 static void ProcessPendingCursorFallbackPolicy()
 {
-	if ( !g_bCursorFallbackPolicyDirty.exchange( false, std::memory_order_acq_rel ) )
+	// The cursor we build below is outlined in the user's live accent colour,
+	// which they can change at any time from the overlay's own hue slider.
+	// That slider has no way to reach in here -- the colour lives in the
+	// overlay's draw state, the cursor lives in an X11 cursor resource -- so
+	// notice it from this side instead of coupling the two modules. Reading
+	// one aligned 32-bit global per frame is cheaper than the plumbing would
+	// be, and a frame of staleness on a colour change is not observable.
+	const uint32_t uAccentRgb = gamescope::overlay::CursorArt_AccentRgb();
+	static uint32_t s_uLastAccentRgb = ~0u;
+	const bool bAccentChanged = uAccentRgb != s_uLastAccentRgb;
+
+	if ( !g_bCursorFallbackPolicyDirty.exchange( false, std::memory_order_acq_rel ) &&
+	     !bAccentChanged )
 		return;
 
-	const bool bPreferThemeCursor = g_bForceRelativeMouse;
+	s_uLastAccentRgb = uAccentRgb;
+
+	const bool bUseOwnCursor = g_bForceRelativeMouse;
 
 	gamescope_xwayland_server_t *server = NULL;
 	for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
 	{
 		if ( server->ctx && server->ctx->cursor )
-			SetDefaultCursorImage( server->ctx->cursor.get(), bPreferThemeCursor );
+			SetDefaultCursorImage( server->ctx->cursor.get(), bUseOwnCursor );
 	}
 }
 

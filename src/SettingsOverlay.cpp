@@ -41,7 +41,7 @@
 
 #include "SettingsOverlay.h"
 #include "CursorPolicy.h"
-#include "Overlay/ThemeCursor.h"
+#include "Overlay/CursorArt.h"
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/PanelShaders.h"
@@ -400,16 +400,16 @@ namespace gamescope
 		io.IniFilename = nullptr; // no persisted window layout in M1
 		// M2: no wl_surface/hardware cursor plane is driven for the overlay
 		// (out of scope, see the ponytail note near SettingsOverlay_QueueMouseMotionAbsolute's
-		// caller in wlserver.cpp) -- ask ImGui to draw its own software
-		// cursor into the offscreen texture instead so the pointer is
-		// visible at all while the overlay owns it.
+		// caller in wlserver.cpp) -- the pointer is drawn into the offscreen
+		// texture instead so it is visible at all while the overlay owns it.
 		//
-		// D29: no longer the final word -- this is now the *default*, and the
-		// per-frame assignment in the frame builder below turns it off for as
-		// long as a real system cursor is on screen instead. Starting from
-		// true keeps a cursor visible on the frames before anyone has
-		// published a host-cursor state.
-		io.MouseDrawCursor = true;
+		// ImGui's OWN software cursor is never used: we draw our own pointer
+		// (Overlay/CursorArt.cpp) in the frame builder below, so this stays
+		// off and the per-frame decision there is only whether to draw a
+		// cursor at all. Set explicitly rather than left at ImGui's default
+		// so nothing can turn it on behind our back and put two pointers on
+		// screen.
+		io.MouseDrawCursor = false;
 		// M8 part 2 (issue #14): applies the "glass instrument" ImGuiStyle
 		// palette/metrics from ui-design-guide.md's Component styling
 		// section -- see Overlay/Widgets.h/.cpp for the full styling (this
@@ -1011,20 +1011,14 @@ namespace gamescope
 		// changes mid-session (a game grabbing the pointer while the overlay
 		// is open, say).
 		//
-		// Which of OUR two cursors draws it is settled here too, before the
-		// frame starts: the desktop's Xcursor-theme image when we can put one
-		// in the atlas, ImGui's built-in arrow when we can't. Deciding it out
-		// here rather than discovering it mid-frame is what keeps
-		// CursorPolicy.h's "exactly one cursor, never zero" invariant true --
-		// ThemeCursor_Prepare() also has to run before NewFrame() because it
-		// touches the font atlas, and it must run after the pending-rebuild
-		// pump above so it sees the atlas this frame will actually draw with.
-		const bool bWantOurOwnCursor = OverlayShouldDrawSoftwareCursor(
+		// We draw our own pointer (Overlay/CursorArt.cpp), never ImGui's
+		// built-in arrow, so this stays false and the decision below is only
+		// "do we draw a cursor at all". Same shape and hotspot the game side
+		// gets from SetDefaultCursorImage(), so opening the overlay doesn't
+		// change what the pointer looks like.
+		const bool bDrawOurCursor = OverlayShouldDrawSoftwareCursor(
 			s_bHostCursorVisible.load( std::memory_order_relaxed ) );
-		const bool bThemedCursor =
-			bWantOurOwnCursor && gamescope::overlay::ThemeCursor_Prepare();
-
-		io.MouseDrawCursor = bWantOurOwnCursor && !bThemedCursor;
+		io.MouseDrawCursor = false;
 
 		// D22: ImGui's OWN keyboard navigation is off, unconditionally, and
 		// this is where that is decided.
@@ -1077,11 +1071,15 @@ namespace gamescope
 		if ( flStartupAlpha > 0.0f )
 			DrawStartupAnnounce( flStartupAlpha, uStartupElapsedMs );
 
-		// Last thing in the frame, so it sits above everything drawn above --
-		// the same place ImGui's own software cursor would have gone. Only
-		// one of the two ever runs; see the ThemeCursor_Prepare() call above.
-		if ( bThemedCursor )
-			gamescope::overlay::ThemeCursor_Draw();
+		// Last thing in the frame, into the foreground draw list, so it sits
+		// above every panel -- exactly where ImGui's own software cursor used
+		// to go.
+		if ( bDrawOurCursor && ImGui::IsMousePosValid( &io.MousePos ) )
+		{
+			gamescope::overlay::CursorArt_Draw(
+				ImGui::GetForegroundDrawList(),
+				io.MousePos.x, io.MousePos.y, 1.0f );
+		}
 
 		ImGui::Render();
 

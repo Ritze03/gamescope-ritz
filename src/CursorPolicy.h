@@ -7,11 +7,11 @@
 //
 //   1. gamescope's own composited cursor plane (steamcompmgr.cpp,
 //      CursorTexture::paint) -- the game's cursor, drawn into our output.
-//   2. The overlay's own cursor, drawn into the overlay texture: the
-//      desktop's Xcursor-theme image (Overlay/ThemeCursor.cpp) when one can
-//      be loaded, otherwise ImGui's built-in arrow (ImGuiIO::MouseDrawCursor).
-//      Exactly one of those two draws -- SettingsOverlay.cpp decides which
-//      before the frame starts -- so for this policy they are one source.
+//   2. The overlay's own cursor, drawn into the overlay texture
+//      (SettingsOverlay.cpp) as vector geometry by Overlay/CursorArt.cpp --
+//      the same triangle the game side gets from SetDefaultCursorImage(), so
+//      opening the overlay never changes what the pointer looks like. ImGui's
+//      own software cursor (ImGuiIO::MouseDrawCursor) is never used.
 //   3. A nested backend's real host-level cursor, drawn by the host
 //      compositor (SDL_SetCursor(), wl_pointer_set_cursor()).
 //

@@ -4,9 +4,12 @@ What gets drawn as "the mouse pointer," where that decision is made, and the two
 invariants that block the obvious-looking shortcuts (a live host cursor under a
 pointer lock; touching a cursor from the wrong thread).
 
-**There is no setting for any of this.** A "Use system cursor theme" toggle
+**There is no setting for any of this**, and the pointer is gamescope's own art
+rather than the desktop's -- a plain triangle, accent-coloured outline, black inlay,
+defined once in `src/Overlay/CursorArt.cpp`. A "Use system cursor theme" toggle
 (`display.force_grab_cursor.system_theme`) existed briefly on 2026-08-27 and was
-deleted on 2026-08-28 -- see "The toggle that shouldn't have existed" below.
+deleted on 2026-08-28; the Xcursor-theme lookup that replaced it was itself replaced
+on 2026-08-28 -- see "One pointer, two renderers" and "Two rejected attempts" below.
 
 ## Three cursor sources, one rule: exactly one on screen
 
@@ -16,9 +19,10 @@ deleted on 2026-08-28 -- see "The toggle that shouldn't have existed" below.
    gamescope's own Vulkan layer, drawn from whatever the current X11 cursor image is
    (`XFixesGetCursorImage()`, re-read every frame in `MouseCursor::getTexture()`).
 2. **The overlay's own cursor** -- drawn into the settings overlay's own texture
-   (`SettingsOverlay.cpp`). Two possible images, decided before each frame starts:
-   the desktop's Xcursor-theme pointer (`src/Overlay/ThemeCursor.cpp`) when one can
-   be loaded, else ImGui's built-in vector arrow (`ImGuiIO::MouseDrawCursor`).
+   (`SettingsOverlay.cpp`) as vector geometry by `src/Overlay/CursorArt.cpp`.
+   ImGui's built-in software cursor (`ImGuiIO::MouseDrawCursor`) is never used;
+   it is set false at init *and* per frame so nothing can switch it back on and
+   put two pointers on screen.
 3. **A nested backend's real host-level cursor** -- `SDL_SetCursor()` /
    `wl_pointer_set_cursor()`, drawn by the *host* compositor, not gamescope.
 
@@ -46,8 +50,8 @@ inheritance), so none of this ever overrides a game's own cursor -- only what's 
 in its absence.
 
 Which of those two fallback sources is preferred is decided by
-`g_bForceRelativeMouse` alone (`SetDefaultCursorImage()`'s `bPreferThemeCursor`):
-**while grabbed, always the Xcursor-theme route**, because a live host cursor cannot
+`g_bForceRelativeMouse` alone (`SetDefaultCursorImage()`'s `bUseOwnCursor`):
+**while grabbed, always gamescope's own art**, because a live host cursor cannot
 exist under the lock at all (next section); while not grabbed, the host snapshot,
 which is the better image when it is actually available. **This only changes
 anything in nested mode** -- embedded mode already takes the left_ptr-via-Xcursor
@@ -68,9 +72,9 @@ it would not track anything even if we asked for it." Force-grab's actual mechan
 Wayland `zwp_pointer_constraints_v1_lock_pointer`). So a live, tracking system
 cursor is impossible for the entire time force-grab is on, in nested mode too -- the
 host OS/protocol itself hides and pins it as part of what "relative/locked mouse
-mode" means. This is why force-grab delivers a themed **fallback image**
-(`XcursorShapeLoadCursor`), not a live host pointer -- the latter genuinely cannot
-coexist with the lock, by design, not by omission.
+mode" means. This is why force-grab delivers a **fallback image** of our own, not a
+live host pointer -- the latter genuinely cannot coexist with the lock, by design,
+not by omission.
 
 ## Threading: MouseCursor is steamcompmgr-thread-owned -- don't touch it from the other one
 
@@ -113,92 +117,126 @@ function elsewhere in the file already establishes the pattern -- the overlay's 
 Switch setters are steamcompmgr-thread-safe *because* they're invoked from
 `paint_all()`, not because they're "a UI callback."
 
-## The overlay's own pointer: why it was wrong, and what draws it now
+## One pointer, two renderers
 
-Reported 2026-08-27, still open on 2026-08-28: the pointer looks generic *while the
-settings overlay is open*, and correct once it is closed.
+The pointer is a plain triangle -- vertical left edge, long hypotenuse back to the
+tip -- outlined in the live accent colour with a black inlay. The black-inside-colour
+combination is the point: it is what keeps the pointer readable over both dark and
+bright game content without a drop shadow.
 
-**Cause, verified rather than reasoned.** Both states were photographed by
-screenshotting gamescope's own composited output (`gamescopectl screenshot <path> 3`)
-in a private headless sway and reading the pixels at a commanded pointer position
-(`gamescopectl overlay_e2_pointer "move 400 300"`). This machine's theme
-(`Hack-C-scaled`) draws a green arrow, `#00de00`, which makes the two candidates
-trivially separable:
+Its geometry lives once, in `src/Overlay/CursorArt.cpp`, because it has to appear in
+two pipelines that share nothing:
 
-| force-grab on | pixels at the pointer | drawn by |
+| where | how | entry point |
 | --- | --- | --- |
-| overlay closed | `(0,222,0)` green arrow | composited plane, source (1) |
-| overlay open (before) | `(255,255,255)` fill, `(0,0,0)` border | ImGui's built-in arrow |
-| overlay open (after) | `(0,222,0)` green arrow | `ThemeCursor.cpp`, source (2) |
+| settings overlay | ImGui vector geometry into the foreground draw list | `CursorArt_Draw()` |
+| game side (X11) | rasterised to premultiplied ARGB32, uploaded as an X11 cursor | `CursorArt_Rasterise()` -> `MouseCursor::setCursorImage()` |
 
-So the second-hand claim was right, and here is why it happened -- it was true before
-the deleted toggle ever existed:
+Both read the same three corner constants and the same stroke width, so they cannot
+drift apart -- and *drift is the bug this design exists to prevent*: what the user
+reported was the overlay and the game disagreeing about what the pointer looked like.
 
-- Source (1), the composited plane, is unconditionally suppressed whenever
-  `SettingsOverlay_IsCapturingInput()` is true (the "Redundant-cursor fix" in
-  `steamcompmgr.cpp`, guarding issue #69's stale-ghost-cursor bug). It is positioned
-  from `wlserver.mouse_surface_cursorx/y`, which stops updating the moment the overlay
-  takes input, so painting it would leave a frozen ghost. **That suppression is still
-  in place and was not touched.**
-- Source (3), a real host cursor, requires the pointer to be *unlocked*
-  (`NestedHostCursorUsable()`) -- impossible while grabbed, per the section above.
-- What was left was source (2), and source (2) was only ever ImGui's built-in arrow:
-  a fixed set of vector shapes with no concept of an Xcursor theme.
+The rasteriser is a signed-distance evaluation per pixel rather than a scanline fill,
+which buys the antialiased edge and the outline/inlay split from the same number: the
+silhouette is `d <= +halfWidth`, the inlay is `d <= -halfWidth`, and both boundaries
+fade across one pixel. `PictStandardARGB32` is premultiplied, so coverage is folded
+into the colour at write time.
 
-**Fix:** teach source (2) the theme. `src/Overlay/ThemeCursor.cpp` loads the theme's
-`left_ptr` with `XcursorLibraryLoadImage()` -- which reads `XCURSOR_THEME`/
-`XCURSOR_SIZE` off disk and, unlike the display-bound `XcursorShapeLoadCursor()` the
-composited plane uses, **needs no X connection**, which is what makes it reachable
-from the overlay at all. The image is un-premultiplied (Xcursor ships premultiplied
-alpha; ImGui blends straight alpha) and packed into the overlay's existing font atlas
-as an ImGui 1.92 custom rect, so it rides the texture the overlay already uploads
-instead of introducing a second one. It is then drawn into the foreground draw list
-at `io.MousePos`, hotspot-corrected -- the same list and position ImGui's own cursor
-used.
+**The accent is live.** `ProcessPendingCursorFallbackPolicy()` re-reads
+`CursorArt_AccentRgb()` every frame and rebuilds the X11 cursor when it changes,
+rather than the overlay's hue slider calling into steamcompmgr. That direction was
+chosen deliberately: the reverse coupling needs `steamcompmgr.hpp` in `Palette.cpp`,
+which drags the generated Wayland protocol headers into the overlay's build and
+breaks the test targets' link. Polling one aligned 32-bit global per frame is
+cheaper than the plumbing, and one frame of staleness on a colour change is not
+observable.
 
-*Why the decision is made before `NewFrame()`:* `ThemeCursor_Prepare()` touches the
-font atlas, so it cannot run mid-frame (Fonts.cpp documents at length what a
-mid-frame atlas mutation does to a live draw pass), and `CursorPolicy.h`'s "exactly
-one cursor, never zero" invariant has to be *settled* before the frame rather than
-discovered halfway through it. `SettingsOverlay.cpp` therefore computes
-`bThemedCursor` up front and sets `io.MouseDrawCursor` to its complement, so exactly
-one of the two paths can ever run in a frame.
+*Verified* by screenshot probe (see below): overlay open, tip exactly on the
+commanded pointer position, accent outline with black inlay; overlay closed, the
+same triangle from the X11 path; and after `overlay_e2_set overlay.accent_hue 25`
+the game-side cursor is warm-coloured with no cyan pixels left anywhere.
 
-*Custom rects do not survive a font rebuild* (`Fonts.cpp`'s `Load()` calls
-`ClearFonts()`, which destroys the packer) and their UVs are invalidated by any atlas
-repack or resize. `ThemeCursor_Prepare()` therefore records the atlas, the
-`ImTextureData`, its dimensions and the rect id, re-registers and re-blits whenever
-any of them changes, and re-reads the UVs through `GetCustomRect()` every frame.
+## Two rejected attempts, and what they cost
 
-**Degradation, measured** (same screenshot probe; this now has no toggle to switch
-off, so the failure path is the only escape hatch):
+Both were on the same underlying question -- what should the pointer be while
+force-grab is on and the overlay is open -- and both are worth remembering because
+each failed for a *different* reason.
 
-| environment | result |
+**Attempt 1: a "Use system cursor theme" toggle** (`display.force_grab_cursor.system_theme`,
+2026-08-27, deleted 2026-08-28). It did not fix anything; it made the broken case
+optional. An option is a bad place to record a bug -- the toggle existed because the
+themed cursor did not work while the overlay was open, and shipping the switch meant
+nobody had to fix that.
+
+**Attempt 2: draw the desktop's Xcursor theme in the overlay too**
+(`Overlay/ThemeCursor.cpp`, 2026-08-28, deleted the same day). This one was correct
+on the diagnosis -- ImGui's built-in arrow really was what drew while the overlay
+was open, confirmed by pixel probe -- and it passed every check that was run on it:
+the theme image appeared, the hotspot landed right, all three degradation paths
+behaved. **The user's verdict on the real thing was "the mouse cursor is just
+entirely broken."**
+
+The lesson is about the *shape* of the verification, not its rigour. Every probe
+sampled a single screenshot at a commanded pointer position. That answers "is the
+right image at the right place in one frame" and says nothing about behaviour over
+time, over motion, or across a font-atlas rebuild -- and `ThemeCursor.cpp` packed its
+image into the overlay's live font atlas, re-registering a custom rect whenever the
+atlas texture moved, with no upper bound on how often that could happen. A still
+frame cannot see a problem of that shape. **A probe that only ever samples one frame
+should not be read as evidence about anything that varies between frames.**
+
+What replaced it deliberately has no such coupling: vector geometry drawn into a draw
+list, and a bitmap built once per accent change. Nothing touches the font atlas.
+
+## The freeze, and what is still not known
+
+Reported 2026-08-27, still reported after `66d619d` and `6614d67`: with force-grab
+on, clicking appears to hang the compositor, and afterwards "the image only updates
+when I click again."
+
+`66d619d` fixed a real and measured defect with exactly that signature -- the client
+was receiving no pointer motion at all, and a button event flushed the seat's pointer
+state, so the pointer advanced one step per click. That fix is verified and still
+holds (see the section below). **It was evidently not the whole cause.**
+
+**Not reproduced.** Measured in a private headless sway across:
+
+| configuration | composited output across a click |
 | --- | --- |
-| normal theme | theme arrow, no ImGui arrow |
-| `XCURSOR_THEME` set to a nonexistent name | theme arrow -- libXcursor's own inheritance still resolves one |
-| `XCURSOR_PATH` pointed at nothing (`XcursorLibraryLoadImage` returns NULL) | ImGui's plain arrow |
+| force-grab, overlay closed, `vkcube` (FIFO Vulkan client) | keeps updating |
+| force-grab, overlay open | keeps updating |
+| force-grab with a *real host pointer lock* granted by the host compositor | keeps updating |
+| 6 rounds of click + motion, overlay toggling in and out | keeps updating |
 
-Never blank, never two at once, in all three.
+Method, so the next attempt does not repeat the mistake above: screenshot
+gamescope's own composition (`gamescopectl screenshot <path> 3`) repeatedly on a
+timer against a client with a continuously moving image, and count *distinct* frame
+hashes. Identical hashes -- or screenshots that never get written, since the
+screenshot is serviced by the composite pass itself -- is the frozen signature.
+Checking pointer position instead, as the earlier probes did, is precisely the
+measurement that passes while the image is frozen.
 
-## The toggle that shouldn't have existed
+Two rig details that matter, both learned the hard way:
 
-`display.force_grab_cursor.system_theme` ("Use system cursor theme", default on) was
-added on 2026-08-27 and deleted on 2026-08-28, along with its config field
-(`force_grab_cursor_use_theme`), its load/save, its UI registration and
-`steamcompmgr_set_force_grab_cursor_theme()`. `SetDefaultCursorImage()`'s
-`bPreferThemeCursor` is now `g_bForceRelativeMouse` alone.
+- A headless sway with no input devices gives gamescope no `wl_pointer` at all, so
+  `SetRelativeMouseMode()` early-returns and **the host pointer lock never engages** --
+  the entire force-grab mechanism is inert and the rig proves nothing about it. A
+  persistent `wlr-virtual-pointer` client fixes this; confirm the lock by checking
+  that an *absolute* host move is ignored.
+- That sway also has no keyboard, so `Wayland_RelativePointer_RelativeMotion()` drops
+  every event for want of focus. `gamescopectl wayland_mouse_relmotion_without_keyboard_focus 1`
+  is the escape hatch.
 
-**Why:** it was never a preference. It existed because the themed cursor did not work
-while the overlay was open, and an option is a bad place to record a bug. The
-2026-08-27 write-up in this file argued the overlay case was "a real, separate
-feature ... with real rendering-correctness risk that couldn't be verified without a
-visible window -- out of scope for a fix landed sight-unseen", and shipped a help-text
-disclaimer instead. That reasoning was wrong on the verification point, which is the
-part worth remembering: the result **is** checkable without a visible window, by
-screenshotting gamescope's own composited output through `gamescopectl` and reading
-the pixels. A visual claim being hard to eyeball is not the same as it being
-unverifiable.
+**`gdb -p` does not work on this machine** (`kernel.yama.ptrace_scope = 1`: only
+descendants of the tracer may be attached). To get a backtrace out of a frozen
+gamescope here, either launch it under `gdb --args` so gdb is its ancestor, or read
+`/proc/<pid>/task/*/wchan` and `/proc/<pid>/task/*/status`, which need no ptrace.
+
+Untested, and the most likely place the difference lives: the user runs a real game
+under a real host compositor with real input devices. The remaining candidates are a
+Proton/Xwayland client's own reaction to the click (an `XGrabPointer` and the pointer
+constraint Xwayland then requests), and frame-callback starvation that only bites a
+client which actually blocks on presentation.
 
 ## Why the absolute notify must stay unconditional
 

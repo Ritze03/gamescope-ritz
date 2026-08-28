@@ -19,15 +19,14 @@ The newest version below is the one this build reports.
   subtly tinted surface matching the left sidebar, instead of a light wash.
 - **Wider notification scale range**: the notification size slider now spans 0.5x to
   2x, matching the UI scale slider's range.
-- **Force grab cursor now uses your desktop's cursor theme**: while the mouse is
-  grabbed, the pointer matches your system's cursor theme instead of a plain
-  arrow -- in the settings overlay as well as in the game. There is no setting for
-  it; if your system has no cursor theme, you get the plain arrow as before.
+- **New pointer while the mouse is grabbed**: a simple triangle outlined in your
+  accent colour with a black inlay, so it stays readable over both dark and bright
+  game content. It follows the accent-hue slider, and it looks the same whether or
+  not the settings overlay is open. There is no setting for it.
 
 ### Fixed
-- **Force grab cursor no longer freezes mouse input**: with the cursor grabbed, games
-  stopped receiving mouse movement at all, so the picture appeared to hang and only
-  advanced each time you clicked.
+- **Mouse movement reaches games again while the cursor is grabbed**: movement was
+  not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now
   scales only the overlay's contents; the window itself stays a fixed
   size.
