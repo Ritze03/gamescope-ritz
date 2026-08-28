@@ -19,13 +19,10 @@ The newest version below is the one this build reports.
   subtly tinted surface matching the left sidebar, instead of a light wash.
 - **Wider notification scale range**: the notification size slider now spans 0.5x to
   2x, matching the UI scale slider's range.
-- **Force grab cursor now shows your desktop's cursor theme**: a new "Use system
-  cursor theme" option beneath it makes the pointer shown while grabbed match your
-  system's cursor theme instead of a plain arrow. On by default, so if you already
-  use Force grab cursor, your pointer will look different next time without you
-  changing anything; turn the new option off to keep the plain arrow. Only affects
-  the game's own cursor -- this overlay's pointer looks the same either way while
-  it's open.
+- **Force grab cursor now uses your desktop's cursor theme**: while the mouse is
+  grabbed, the pointer matches your system's cursor theme instead of a plain
+  arrow -- in the settings overlay as well as in the game. There is no setting for
+  it; if your system has no cursor theme, you get the plain arrow as before.
 
 ### Fixed
 - **Force grab cursor no longer freezes mouse input**: with the cursor grabbed, games

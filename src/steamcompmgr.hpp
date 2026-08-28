@@ -178,11 +178,3 @@ extern void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScr
 // writing the global directly (as the pre-#68 PanelDisplay.cpp did) has no
 // effect once the process is already running.
 extern void steamcompmgr_set_force_relative_mouse( bool bForce );
-
-// Live entry point for the "use system cursor theme" sub-option under Force
-// Grab Cursor (PanelDisplay.cpp). Only affects the *fallback* cursor image --
-// what's shown while grabbed and no window has set its own cursor -- never a
-// window's own cursor, and has no visible effect at all while
-// g_bForceRelativeMouse is false. See steamcompmgr.cpp's SetDefaultCursorImage().
-extern void steamcompmgr_set_force_grab_cursor_theme( bool bUseTheme );
-extern bool g_bForceGrabCursorUseTheme;

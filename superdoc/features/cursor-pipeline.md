@@ -2,9 +2,11 @@
 
 What gets drawn as "the mouse pointer," where that decision is made, and the two
 invariants that block the obvious-looking shortcuts (a live host cursor under a
-pointer lock; touching a cursor from the wrong thread). Written while adding the
-"Use system cursor theme" sub-option under Force grab cursor
-(`display.force_grab_cursor.system_theme`, `src/Overlay/PanelDisplay.cpp`).
+pointer lock; touching a cursor from the wrong thread).
+
+**There is no setting for any of this.** A "Use system cursor theme" toggle
+(`display.force_grab_cursor.system_theme`) existed briefly on 2026-08-27 and was
+deleted on 2026-08-28 -- see "The toggle that shouldn't have existed" below.
 
 ## Three cursor sources, one rule: exactly one on screen
 
@@ -13,8 +15,10 @@ pointer lock; touching a cursor from the wrong thread). Written while adding the
 1. **The composited cursor plane** (`MouseCursor::paint()`, `src/steamcompmgr.cpp`) --
    gamescope's own Vulkan layer, drawn from whatever the current X11 cursor image is
    (`XFixesGetCursorImage()`, re-read every frame in `MouseCursor::getTexture()`).
-2. **ImGui's software cursor** -- the settings overlay's own pointer, drawn into its
-   own texture (`SettingsOverlay.cpp`).
+2. **The overlay's own cursor** -- drawn into the settings overlay's own texture
+   (`SettingsOverlay.cpp`). Two possible images, decided before each frame starts:
+   the desktop's Xcursor-theme pointer (`src/Overlay/ThemeCursor.cpp`) when one can
+   be loaded, else ImGui's built-in vector arrow (`ImGuiIO::MouseDrawCursor`).
 3. **A nested backend's real host-level cursor** -- `SDL_SetCursor()` /
    `wl_pointer_set_cursor()`, drawn by the *host* compositor, not gamescope.
 
@@ -41,15 +45,16 @@ calls `XDefineCursor` always wins over this fallback** (ordinary X11 cursor
 inheritance), so none of this ever overrides a game's own cursor -- only what's shown
 in its absence.
 
-The "Use system cursor theme" sub-option (`g_bForceGrabCursorUseTheme`, default
-**on**) chooses which of those two fallback sources to prefer *while grabbed*: off
-keeps today's nested-mode host-snapshot preference; on always takes the
-Xcursor-theme route, even in nested mode. **It only changes anything in nested
-mode** -- embedded mode already takes the left_ptr-via-Xcursor path unconditionally
-(there's no host display to prefer over it there), so the option is a no-op in
-embedded/DRM. Graceful degradation is inherited from libXcursor itself: an unset or
-missing theme silently falls back to the plain arrow rather than a blank/broken
-cursor -- there's no path here that can fail loudly.
+Which of those two fallback sources is preferred is decided by
+`g_bForceRelativeMouse` alone (`SetDefaultCursorImage()`'s `bPreferThemeCursor`):
+**while grabbed, always the Xcursor-theme route**, because a live host cursor cannot
+exist under the lock at all (next section); while not grabbed, the host snapshot,
+which is the better image when it is actually available. **This only changes
+anything in nested mode** -- embedded mode already takes the left_ptr-via-Xcursor
+path unconditionally (there's no host display to prefer over it there). Graceful
+degradation is inherited from libXcursor itself: an unset or missing theme silently
+falls back to the plain arrow rather than a blank/broken cursor -- there's no path
+here that can fail loudly.
 
 ## Why "a live system cursor while grabbed" is impossible, not just nested-only
 
@@ -63,7 +68,7 @@ it would not track anything even if we asked for it." Force-grab's actual mechan
 Wayland `zwp_pointer_constraints_v1_lock_pointer`). So a live, tracking system
 cursor is impossible for the entire time force-grab is on, in nested mode too -- the
 host OS/protocol itself hides and pins it as part of what "relative/locked mouse
-mode" means. This is why the sub-option delivers a themed **fallback image**
+mode" means. This is why force-grab delivers a themed **fallback image**
 (`XcursorShapeLoadCursor`), not a live host pointer -- the latter genuinely cannot
 coexist with the lock, by design, not by omission.
 
@@ -108,36 +113,92 @@ function elsewhere in the file already establishes the pattern -- the overlay's 
 Switch setters are steamcompmgr-thread-safe *because* they're invoked from
 `paint_all()`, not because they're "a UI callback."
 
-## Why the sub-option's fallback doesn't apply to the overlay's own pointer
+## The overlay's own pointer: why it was wrong, and what draws it now
 
-Reported 2026-08-27: with "Use system cursor theme" on, the pointer still looks
-generic *while the settings overlay itself is open*; closing it shows the themed
-one. Confirmed (via `gamescopectl debug_set_force_relative_mouse 1` and log output)
-that `SetDefaultCursorImage()` still runs and logs "Using left_ptr from the desktop's
-Xcursor theme" regardless of whether the overlay is open -- the X11-side
-substitution is never skipped. **This is not a bug in the substitution; it's a
-different cursor source taking over while the overlay owns input**, and it was true
-before this option existed:
+Reported 2026-08-27, still open on 2026-08-28: the pointer looks generic *while the
+settings overlay is open*, and correct once it is closed.
 
-- Source (1), the composited plane this option actually controls, is unconditionally
-  suppressed whenever `SettingsOverlay_IsCapturingInput()` is true (the "Redundant-
-  cursor fix" in `steamcompmgr.cpp`, guarding against issue #69's stale-ghost-cursor
-  bug -- see that comment for why it can't just be turned back on for this case).
-- With source (1) out of the picture, D29's invariant ("exactly one cursor, never
-  zero") falls to source (2) or (3). Source (3), a real host cursor, requires the
-  pointer to be *unlocked* (`NestedHostCursorUsable()`) -- impossible while grabbed,
-  same reasoning as the "why a live system cursor is impossible" section above. So
-  source (2), ImGui's own built-in software cursor, draws instead -- and ImGui's
-  cursor is a fixed set of vector-drawn shapes (`ImGuiMouseCursor_Arrow` etc.) with no
-  concept of an Xcursor theme at all.
+**Cause, verified rather than reasoned.** Both states were photographed by
+screenshotting gamescope's own composited output (`gamescopectl screenshot <path> 3`)
+in a private headless sway and reading the pixels at a commanded pointer position
+(`gamescopectl overlay_e2_pointer "move 400 300"`). This machine's theme
+(`Hack-C-scaled`) draws a green arrow, `#00de00`, which makes the two candidates
+trivially separable:
 
-So while the overlay is open and the pointer is locked, **no code path here is even
-theoretically able to show a themed cursor** -- not this option's, not the host's.
-Making ImGui draw a themed bitmap instead of its built-in arrow is a real, separate
-feature (load the same Xcursor image as a texture, draw it manually instead of
-relying on `MouseDrawCursor`) with real rendering-correctness risk that couldn't be
-verified without a visible window -- out of scope for a fix landed sight-unseen.
-Fixed instead by making the option's own help text say so plainly.
+| force-grab on | pixels at the pointer | drawn by |
+| --- | --- | --- |
+| overlay closed | `(0,222,0)` green arrow | composited plane, source (1) |
+| overlay open (before) | `(255,255,255)` fill, `(0,0,0)` border | ImGui's built-in arrow |
+| overlay open (after) | `(0,222,0)` green arrow | `ThemeCursor.cpp`, source (2) |
+
+So the second-hand claim was right, and here is why it happened -- it was true before
+the deleted toggle ever existed:
+
+- Source (1), the composited plane, is unconditionally suppressed whenever
+  `SettingsOverlay_IsCapturingInput()` is true (the "Redundant-cursor fix" in
+  `steamcompmgr.cpp`, guarding issue #69's stale-ghost-cursor bug). It is positioned
+  from `wlserver.mouse_surface_cursorx/y`, which stops updating the moment the overlay
+  takes input, so painting it would leave a frozen ghost. **That suppression is still
+  in place and was not touched.**
+- Source (3), a real host cursor, requires the pointer to be *unlocked*
+  (`NestedHostCursorUsable()`) -- impossible while grabbed, per the section above.
+- What was left was source (2), and source (2) was only ever ImGui's built-in arrow:
+  a fixed set of vector shapes with no concept of an Xcursor theme.
+
+**Fix:** teach source (2) the theme. `src/Overlay/ThemeCursor.cpp` loads the theme's
+`left_ptr` with `XcursorLibraryLoadImage()` -- which reads `XCURSOR_THEME`/
+`XCURSOR_SIZE` off disk and, unlike the display-bound `XcursorShapeLoadCursor()` the
+composited plane uses, **needs no X connection**, which is what makes it reachable
+from the overlay at all. The image is un-premultiplied (Xcursor ships premultiplied
+alpha; ImGui blends straight alpha) and packed into the overlay's existing font atlas
+as an ImGui 1.92 custom rect, so it rides the texture the overlay already uploads
+instead of introducing a second one. It is then drawn into the foreground draw list
+at `io.MousePos`, hotspot-corrected -- the same list and position ImGui's own cursor
+used.
+
+*Why the decision is made before `NewFrame()`:* `ThemeCursor_Prepare()` touches the
+font atlas, so it cannot run mid-frame (Fonts.cpp documents at length what a
+mid-frame atlas mutation does to a live draw pass), and `CursorPolicy.h`'s "exactly
+one cursor, never zero" invariant has to be *settled* before the frame rather than
+discovered halfway through it. `SettingsOverlay.cpp` therefore computes
+`bThemedCursor` up front and sets `io.MouseDrawCursor` to its complement, so exactly
+one of the two paths can ever run in a frame.
+
+*Custom rects do not survive a font rebuild* (`Fonts.cpp`'s `Load()` calls
+`ClearFonts()`, which destroys the packer) and their UVs are invalidated by any atlas
+repack or resize. `ThemeCursor_Prepare()` therefore records the atlas, the
+`ImTextureData`, its dimensions and the rect id, re-registers and re-blits whenever
+any of them changes, and re-reads the UVs through `GetCustomRect()` every frame.
+
+**Degradation, measured** (same screenshot probe; this now has no toggle to switch
+off, so the failure path is the only escape hatch):
+
+| environment | result |
+| --- | --- |
+| normal theme | theme arrow, no ImGui arrow |
+| `XCURSOR_THEME` set to a nonexistent name | theme arrow -- libXcursor's own inheritance still resolves one |
+| `XCURSOR_PATH` pointed at nothing (`XcursorLibraryLoadImage` returns NULL) | ImGui's plain arrow |
+
+Never blank, never two at once, in all three.
+
+## The toggle that shouldn't have existed
+
+`display.force_grab_cursor.system_theme` ("Use system cursor theme", default on) was
+added on 2026-08-27 and deleted on 2026-08-28, along with its config field
+(`force_grab_cursor_use_theme`), its load/save, its UI registration and
+`steamcompmgr_set_force_grab_cursor_theme()`. `SetDefaultCursorImage()`'s
+`bPreferThemeCursor` is now `g_bForceRelativeMouse` alone.
+
+**Why:** it was never a preference. It existed because the themed cursor did not work
+while the overlay was open, and an option is a bad place to record a bug. The
+2026-08-27 write-up in this file argued the overlay case was "a real, separate
+feature ... with real rendering-correctness risk that couldn't be verified without a
+visible window -- out of scope for a fix landed sight-unseen", and shipped a help-text
+disclaimer instead. That reasoning was wrong on the verification point, which is the
+part worth remembering: the result **is** checkable without a visible window, by
+screenshotting gamescope's own composited output through `gamescopectl` and reading
+the pixels. A visual claim being hard to eyeball is not the same as it being
+unverifiable.
 
 ## Why the absolute notify must stay unconditional
 

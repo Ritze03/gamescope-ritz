@@ -41,6 +41,7 @@
 
 #include "SettingsOverlay.h"
 #include "CursorPolicy.h"
+#include "Overlay/ThemeCursor.h"
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/PanelShaders.h"
@@ -1009,8 +1010,21 @@ namespace gamescope
 		// before NewFrame() reads it, so the two swap cleanly if the mode
 		// changes mid-session (a game grabbing the pointer while the overlay
 		// is open, say).
-		io.MouseDrawCursor = OverlayShouldDrawSoftwareCursor(
+		//
+		// Which of OUR two cursors draws it is settled here too, before the
+		// frame starts: the desktop's Xcursor-theme image when we can put one
+		// in the atlas, ImGui's built-in arrow when we can't. Deciding it out
+		// here rather than discovering it mid-frame is what keeps
+		// CursorPolicy.h's "exactly one cursor, never zero" invariant true --
+		// ThemeCursor_Prepare() also has to run before NewFrame() because it
+		// touches the font atlas, and it must run after the pending-rebuild
+		// pump above so it sees the atlas this frame will actually draw with.
+		const bool bWantOurOwnCursor = OverlayShouldDrawSoftwareCursor(
 			s_bHostCursorVisible.load( std::memory_order_relaxed ) );
+		const bool bThemedCursor =
+			bWantOurOwnCursor && gamescope::overlay::ThemeCursor_Prepare();
+
+		io.MouseDrawCursor = bWantOurOwnCursor && !bThemedCursor;
 
 		// D22: ImGui's OWN keyboard navigation is off, unconditionally, and
 		// this is where that is decided.
@@ -1062,6 +1076,13 @@ namespace gamescope
 		}
 		if ( flStartupAlpha > 0.0f )
 			DrawStartupAnnounce( flStartupAlpha, uStartupElapsedMs );
+
+		// Last thing in the frame, so it sits above everything drawn above --
+		// the same place ImGui's own software cursor would have gone. Only
+		// one of the two ever runs; see the ThemeCursor_Prepare() call above.
+		if ( bThemedCursor )
+			gamescope::overlay::ThemeCursor_Draw();
+
 		ImGui::Render();
 
 		if ( !RenderAndSubmit() )

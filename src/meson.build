@@ -144,6 +144,7 @@ src = [
   'reshade_effect_manager.cpp',
   'SettingsOverlay.cpp',
   'Overlay/Fonts.cpp',
+  'Overlay/ThemeCursor.cpp',
   'Overlay/Palette.cpp',
   'Overlay/Widgets.cpp',
   'Overlay/PanelDisplay.cpp',

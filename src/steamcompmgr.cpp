@@ -1050,8 +1050,8 @@ void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType
 // mode within a frame), but pushing it explicitly here too keeps both
 // directions equally immediate rather than one edge lagging by a frame.
 // Forward declaration: defined much further down, alongside
-// g_bForceGrabCursorUseTheme and steamcompmgr_set_force_grab_cursor_theme(),
-// which is where the fallback-cursor plumbing this touches lives.
+// SetDefaultCursorImage(), which is where the fallback-cursor plumbing this
+// touches lives.
 static void ApplyDefaultCursorPolicy();
 
 void steamcompmgr_set_force_relative_mouse( bool bForce )
@@ -1065,11 +1065,11 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 			pPaintFocus->GetNestedHints()->SetRelativeMouseMode( bForce );
 	}
 
-	// Force Grab Cursor's "use system cursor theme" sub-option has no effect
-	// of its own while this flag is off (ApplyDefaultCursorPolicy() checks
-	// both) -- so toggling force-grab itself must also re-run it, or turning
-	// force-grab on/off wouldn't pick up the sub-option's current state until
-	// something else happened to touch it.
+	// Which fallback cursor the game's root window gets depends on this flag
+	// (ApplyDefaultCursorPolicy() -> SetDefaultCursorImage()'s
+	// bPreferThemeCursor), so toggling force-grab has to re-run that choice --
+	// otherwise the cursor would keep whichever image the *previous* mode
+	// picked until something else happened to touch it.
 	ApplyDefaultCursorPolicy();
 }
 
@@ -8255,8 +8255,13 @@ int g_customCursorHotspotY = 0;
 // this sets on the root, per X11 cursor inheritance -- so this never
 // overrides a game's own cursor, only what's shown in its absence.
 //
-// bPreferThemeCursor selects between two sources for that fallback, both
-// pre-existing:
+// bPreferThemeCursor selects between two sources for that fallback. It is
+// simply --force-grab-cursor's own flag: while the pointer is grabbed there is
+// no live host cursor to snapshot (see CursorPolicy.h), so the theme's own
+// image is the only honest answer; while it isn't, the host's actual cursor
+// is the better one. This used to be a user-facing toggle as well; it was
+// removed once the overlay learned to draw the theme image too -- see
+// superdoc/features/cursor-pipeline.md. The two sources:
 //   false (today's behaviour): in nested mode, a live snapshot of the actual
 //     host desktop cursor (GetX11HostCursor(), re-fetched from the outer X11
 //     display each call); in embedded mode, where there is no host display to
@@ -8302,20 +8307,13 @@ static void SetDefaultCursorImage( MouseCursor *cursor, bool bPreferThemeCursor 
 		xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
 }
 
-// Live state for the "use system cursor theme" sub-option (PanelDisplay.cpp,
-// nested under Force Grab Cursor). Only steamcompmgr_set_force_grab_cursor_theme()
-// and steamcompmgr_set_force_relative_mouse() below ever push a change out --
-// see those for why writing this directly would have no live effect (same
-// Issue #68 reasoning as g_bForceRelativeMouse itself).
-bool g_bForceGrabCursorUseTheme = true;
-
 // ApplyDefaultCursorPolicy() (below) does NOT touch any ctx's cursor
 // directly -- it only flips this flag. Every MouseCursor -- its X11 Cursor
 // resource, its Vulkan texture, its plain (non-atomic) m_dirty/m_imageEmpty
 // bookkeeping -- is otherwise only ever touched from the steamcompmgr
 // thread: once at ctx creation (init_xwayland_ctx(), itself always called
-// from that thread) and every frame after via getTexture()/paint(). Both of
-// this option's own trigger points can run on a DIFFERENT thread, though --
+// from that thread) and every frame after via getTexture()/paint(). The
+// trigger point can run on a DIFFERENT thread, though --
 // steamcompmgr_set_force_relative_mouse() is also cc_debug_set_force_relative_mouse's
 // body, which gamescope_private_execute() (wlserver.cpp) dispatches for
 // gamescopectl on the wlserver thread, not this one -- so calling into
@@ -8340,7 +8338,7 @@ static void ProcessPendingCursorFallbackPolicy()
 	if ( !g_bCursorFallbackPolicyDirty.exchange( false, std::memory_order_acq_rel ) )
 		return;
 
-	const bool bPreferThemeCursor = g_bForceRelativeMouse && g_bForceGrabCursorUseTheme;
+	const bool bPreferThemeCursor = g_bForceRelativeMouse;
 
 	gamescope_xwayland_server_t *server = NULL;
 	for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
@@ -8348,12 +8346,6 @@ static void ProcessPendingCursorFallbackPolicy()
 		if ( server->ctx && server->ctx->cursor )
 			SetDefaultCursorImage( server->ctx->cursor.get(), bPreferThemeCursor );
 	}
-}
-
-void steamcompmgr_set_force_grab_cursor_theme( bool bUseTheme )
-{
-	g_bForceGrabCursorUseTheme = bUseTheme;
-	ApplyDefaultCursorPolicy();
 }
 
 xwayland_ctx_t g_ctx;
@@ -8659,7 +8651,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
 	XF86VidModeLockModeSwitch(ctx->dpy, ctx->scr, true);
 
 	ctx->cursor = std::make_unique<MouseCursor>(ctx);
-	SetDefaultCursorImage( ctx->cursor.get(), g_bForceRelativeMouse && g_bForceGrabCursorUseTheme );
+	SetDefaultCursorImage( ctx->cursor.get(), g_bForceRelativeMouse );
 
 	ctx->cursor->undirty();
 
@@ -9816,9 +9808,9 @@ steamcompmgr_main(int argc, char **argv)
 		update_vrr_atoms(root_ctx, false, &flush_root);
 
 		// See ApplyDefaultCursorPolicy()'s comment: this is the deferred
-		// half of the "use system cursor theme" sub-option, and this is the
-		// one place on the steamcompmgr thread that's guaranteed to run
-		// every frame regardless of which ctx (if any) currently has focus.
+		// half of the fallback-cursor choice, and this is the one place on
+		// the steamcompmgr thread that's guaranteed to run every frame
+		// regardless of which ctx (if any) currently has focus.
 		ProcessPendingCursorFallbackPolicy();
 
 		if (GetCurrentFocus() && GetCurrentFocus()->cursor)

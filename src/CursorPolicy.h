@@ -7,8 +7,11 @@
 //
 //   1. gamescope's own composited cursor plane (steamcompmgr.cpp,
 //      CursorTexture::paint) -- the game's cursor, drawn into our output.
-//   2. ImGui's software cursor, drawn into the overlay texture
-//      (ImGuiIO::MouseDrawCursor, SettingsOverlay.cpp).
+//   2. The overlay's own cursor, drawn into the overlay texture: the
+//      desktop's Xcursor-theme image (Overlay/ThemeCursor.cpp) when one can
+//      be loaded, otherwise ImGui's built-in arrow (ImGuiIO::MouseDrawCursor).
+//      Exactly one of those two draws -- SettingsOverlay.cpp decides which
+//      before the frame starts -- so for this policy they are one source.
 //   3. A nested backend's real host-level cursor, drawn by the host
 //      compositor (SDL_SetCursor(), wl_pointer_set_cursor()).
 //
@@ -20,7 +23,7 @@
 // The invariant, which matters more than which one wins: **exactly one cursor
 // is visible, and never zero**. Zero is the failure that is invisible on a
 // nested desktop and fatal on a Steam Deck, so every predicate here is written
-// so that the uncertain answer is the one that keeps ImGui's cursor.
+// so that the uncertain answer is the one that keeps the overlay's own cursor.
 //
 // Deliberately a standalone, dependency-free header: the policy is shared by
 // two backends and the overlay, and being free of backend.h's include weight
@@ -43,13 +46,13 @@ namespace gamescope
 	//                   snapshot from.
 	//
 	// All three must hold. If any is false there is no usable host cursor and
-	// ImGui's must stay on.
+	// the overlay's own must stay on.
 	inline constexpr bool NestedHostCursorUsable( bool bHavePointer, bool bPointerLocked, bool bHaveCursorImage )
 	{
 		return bHavePointer && !bPointerLocked && bHaveCursorImage;
 	}
 
-	// Should ImGui draw its own software cursor? The complement of "a real
+	// Should the overlay draw a cursor of its own? The complement of "a real
 	// system cursor is already doing the job", so that exactly one of the two
 	// is ever on screen.
 	//
