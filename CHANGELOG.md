@@ -27,6 +27,10 @@ The newest version below is the one this build reports.
   outline thickness, and outline/inlay colour, with an option to lock the outline
   to a fixed colour instead of following the accent hue. Every control now changes
   the pointer's on-screen look immediately.
+- **"Use everywhere" cursor option**: off by default, so nothing changes unless you
+  opt in. Turn it on and the overlay's pointer also becomes your game's default
+  cursor, overlay open or closed — a game that sets its own cursor still shows
+  that, this only replaces what's shown in its absence.
 
 ### Fixed
 - **Doubled mouse sensitivity while the cursor is grabbed is gone**: games that read

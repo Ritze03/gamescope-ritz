@@ -290,6 +290,7 @@ namespace gamescope::config
                 s.overlay.cursor_outline_width = JGetFloat( *pOverlay, "cursor_outline_width", s.overlay.cursor_outline_width );
                 s.overlay.cursor_outline_color = JGetOptInt( *pOverlay, "cursor_outline_color" );
                 s.overlay.cursor_inlay_color = JGetInt( *pOverlay, "cursor_inlay_color", s.overlay.cursor_inlay_color );
+                s.overlay.cursor_everywhere = JGetBool( *pOverlay, "cursor_everywhere", s.overlay.cursor_everywhere );
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -456,6 +457,7 @@ namespace gamescope::config
                 jOverlay[ "cursor_outline_color" ] = s.overlay.cursor_outline_color.has_value()
                     ? nlohmann::json( *s.overlay.cursor_outline_color ) : nlohmann::json( nullptr );
                 jOverlay[ "cursor_inlay_color" ] = s.overlay.cursor_inlay_color;
+                jOverlay[ "cursor_everywhere" ] = s.overlay.cursor_everywhere;
 
                 j[ "overlay" ] = std::move( jOverlay );
             }

@@ -34,6 +34,15 @@ namespace gamescope
 		bool     bOutlineFollowsAccent = true;
 		uint32_t uOutlineRgb = 0x000000;  // 0xRRGGBB -- already resolved: the custom colour, or the live accent when bOutlineFollowsAccent is true
 		uint32_t uInlayRgb = 0x000000;    // 0xRRGGBB
+
+		// "Use everywhere" -- off (default) leaves the game-side cursor
+		// exactly as upstream, on makes this pointer the game's fallback
+		// cursor too (steamcompmgr.cpp's SetDefaultCursorImage(), via
+		// Overlay/CursorArt.cpp's CursorArt_Rasterise()). Read every frame
+		// by steamcompmgr.cpp's ProcessPendingCursorFallbackPolicy(), on
+		// the steamcompmgr thread -- see that function's own comment for
+		// why touching MouseCursor from anywhere else is a data race.
+		bool bEverywhere = false;
 	};
 
 	// Backed by the same load-once, cache-in-a-static-and-refresh-on-write

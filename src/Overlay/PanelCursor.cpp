@@ -33,6 +33,7 @@
 
 #include "Config/ConfigManager.h"
 #include "CursorArt.h"
+#include "steamcompmgr.hpp"
 
 namespace gamescope
 {
@@ -58,6 +59,15 @@ namespace gamescope
 		void QueueSave()
 		{
 			config::EnqueueGlobalWrite( s_Settings );
+
+			// Every field this tab owns feeds the game-side fallback-cursor
+			// decision too (steamcompmgr.cpp's SetDefaultCursorImage(), gated
+			// by cursor_everywhere) -- the toggle itself, and the scale/
+			// outline/colour it draws with once it's on. Safe from any
+			// thread, including the console thread `overlay_e2_set` runs on:
+			// this only flips an atomic flag, never touches a MouseCursor
+			// directly. See steamcompmgr.hpp's own comment on this function.
+			steamcompmgr_notify_cursor_appearance_changed();
 		}
 
 		// Packs an ImU32-ish 0xAARRGGBB/accent value down to 0xRRGGBB, the
@@ -83,6 +93,7 @@ namespace gamescope
 			? (uint32_t)*o.cursor_outline_color
 			: gamescope::overlay::CursorArt_AccentRgb();
 		a.uInlayRgb = (uint32_t)o.cursor_inlay_color;
+		a.bEverywhere = o.cursor_everywhere;
 		return a;
 	}
 
@@ -176,5 +187,20 @@ namespace gamescope
 			.Help( "Colour of the solid fill inside the pointer's outline." )
 			.Default( config::OverlaySettings{}.cursor_inlay_color )
 			.Keywords( "inlay fill colour color inside" );
+
+		a.Group( "Reach" );
+
+		a.Switch( "cursor.everywhere", "Use everywhere",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.overlay.cursor_everywhere; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.overlay.cursor_everywhere = b; QueueSave(); } ) )
+			.Help( "Off (default): this pointer is only ever drawn by the settings overlay itself "
+			       "-- while it's closed you see whatever cursor the game or your desktop shows, "
+			       "untouched. On: it also becomes the game's default pointer, overlay open or "
+			       "closed, so the look you designed above follows you outside the overlay too. A "
+			       "game that sets its own cursor (an RTS's unit-select arrow, say) still shows "
+			       "that -- this only replaces what's shown in its absence." )
+			.Default( config::OverlaySettings{}.cursor_everywhere )
+			.Keywords( "everywhere game system default fallback override always" );
 	}
 }

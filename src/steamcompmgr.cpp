@@ -96,6 +96,8 @@
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
+#include "Overlay/CursorArt.h"
+#include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
 #include "Overlay/LogCapture.h"
@@ -8237,6 +8239,145 @@ const char* g_customCursorPath = nullptr;
 int g_customCursorHotspotX = 0;
 int g_customCursorHotspotY = 0;
 
+// The fallback cursor for an Xwayland ctx -- what's shown on the root window
+// before (and whenever) no client window has defined its own cursor. A
+// window that later calls XDefineCursor always wins over whatever this sets
+// on the root, per X11 cursor inheritance -- so this never overrides a
+// game's own cursor, only what's shown in its absence.
+//
+// bUseOwnCursor is the Cursor tab's "Use everywhere" toggle
+// (CursorAppearance::bEverywhere, PanelCursor.cpp):
+//   false (default, today's behaviour): in nested mode, a live snapshot of
+//     the actual host desktop cursor (GetX11HostCursor(), re-fetched from
+//     the outer X11 display each call); in embedded mode, or when there's no
+//     host display to snapshot, X11's own left_ptr via libXcursor. Exactly
+//     upstream's fallback -- gamescope never touches the game-side cursor
+//     while this option is off.
+//   true: gamescope's own pointer, rasterised from the same geometry (and
+//     the same Cursor-tab scale/outline/colour fields) the settings overlay
+//     draws with (Overlay/CursorArt.cpp), so the two look identical whether
+//     the overlay is open or closed, grabbed or not, nested or embedded.
+static void SetDefaultCursorImage( MouseCursor *cursor, bool bUseOwnCursor )
+{
+	if (g_customCursorPath)
+	{
+		if (!load_mouse_cursor(cursor, g_customCursorPath, g_customCursorHotspotX, g_customCursorHotspotY))
+			xwm_log.errorf("Failed to load mouse cursor: %s", g_customCursorPath);
+		return;
+	}
+
+	if ( !bUseOwnCursor )
+	{
+		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
+		{
+			cursor->setCursorImage(
+				reinterpret_cast<char *>( pHostCursor->pPixels.data() ),
+				pHostCursor->uWidth,
+				pHostCursor->uHeight,
+				pHostCursor->uXHotspot,
+				pHostCursor->uYHotspot );
+			return;
+		}
+
+		xwm_log.infof( "Embedded, no cursor set. Using left_ptr by default." );
+		if ( !cursor->setCursorImageByName( "left_ptr" ) )
+			xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
+		return;
+	}
+
+	std::vector<uint32_t> vecPixels;
+	int nWidth = 0, nHeight = 0, nHotX = 0, nHotY = 0;
+	if ( gamescope::overlay::CursorArt_Rasterise( vecPixels, &nWidth, &nHeight, &nHotX, &nHotY ) )
+	{
+		// setCursorImage() hands the buffer to XCreateImage, whose error path
+		// calls XDestroyImage and therefore free() on it -- so this has to be
+		// malloc'd memory, not a std::vector's.
+		const size_t uBytes = vecPixels.size() * sizeof( uint32_t );
+		if ( void *pBits = malloc( uBytes ) )
+		{
+			memcpy( pBits, vecPixels.data(), uBytes );
+			if ( cursor->setCursorImage( reinterpret_cast<char *>( pBits ), nWidth, nHeight, nHotX, nHotY ) )
+				return;
+			// setCursorImage() already freed pBits on its way out.
+		}
+	}
+
+	// Last resort. Only reachable if the rasteriser or the X11 upload failed;
+	// X11's own built-in arrow is not pretty but it is never blank, and a
+	// blank pointer is the one outcome with no way back for the user.
+	xwm_log.errorf( "Failed to build gamescope's own cursor; falling back to left_ptr" );
+	if ( !cursor->setCursorImageByName( "left_ptr" ) )
+		xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
+}
+
+// SetDefaultCursorImage() above is only ever called from the steamcompmgr
+// thread (init_xwayland_ctx(), always called from there, and
+// ProcessPendingCursorFallbackPolicy() below) -- it touches a MouseCursor's
+// X11 Cursor resource, and every other write to that state (its Vulkan
+// texture, its plain non-atomic m_dirty/m_imageEmpty bookkeeping) already
+// only ever happens on that thread. steamcompmgr_notify_cursor_appearance_changed()
+// (steamcompmgr.hpp) is the ONLY entry point this option's live-toggle path
+// reaches, and it can run on a different thread -- PanelCursor.cpp's Switch
+// and Composite setters run on the steamcompmgr thread when moved with the
+// mouse, but the exact same setters are also reachable through
+// `overlay_e2_set`, which runs on the CONSOLE thread. Calling
+// SetDefaultCursorImage() directly from there would be a genuine cross-
+// thread data race on MouseCursor's plain fields, not merely a style
+// concern -- see superdoc/features/cursor-pipeline.md's account of the
+// first draft of this feature, which made exactly that mistake with
+// g_bForceRelativeMouse. So the notify function only flips this flag; the
+// actual work happens once per frame from the steamcompmgr loop itself,
+// mirroring steamcompmgr_set_force_relative_mouse()'s own cross-thread
+// handoff (via ApplyDefaultCursorPolicy()/MakeFocusDirty()'s shape).
+static std::atomic<bool> g_bCursorFallbackPolicyDirty{ false };
+
+static void ApplyDefaultCursorPolicy()
+{
+	g_bCursorFallbackPolicyDirty.store( true, std::memory_order_release );
+}
+
+void steamcompmgr_notify_cursor_appearance_changed()
+{
+	ApplyDefaultCursorPolicy();
+}
+
+// Called once per frame from the steamcompmgr thread's own loop (see below).
+// Cheap no-op check when nothing changed since the last frame.
+static void ProcessPendingCursorFallbackPolicy()
+{
+	// The outline colour this option's rasterised cursor uses can be set to
+	// follow the live accent hue (PanelCursor.cpp's default), which changes
+	// from a slider in a completely different area (PanelConfig.cpp) that
+	// has no reason to know this option exists and so never calls the
+	// notify function above. Polling the resolved appearance once per frame
+	// -- cheap: GetCursorAppearance() is a load-once, cached accessor, see
+	// its own header comment -- catches that drift the same way the dirty
+	// flag catches an explicit setting change, so the two are ORed together
+	// below rather than one replacing the other.
+	const gamescope::CursorAppearance appearance = gamescope::GetCursorAppearance();
+	static gamescope::CursorAppearance s_LastAppearance{};
+	static bool s_bHaveLastAppearance = false;
+	const bool bAppearanceChanged = !s_bHaveLastAppearance ||
+		appearance.bEverywhere != s_LastAppearance.bEverywhere ||
+		appearance.flScale != s_LastAppearance.flScale ||
+		appearance.flOutlineWidth != s_LastAppearance.flOutlineWidth ||
+		appearance.uOutlineRgb != s_LastAppearance.uOutlineRgb ||
+		appearance.uInlayRgb != s_LastAppearance.uInlayRgb;
+
+	if ( !g_bCursorFallbackPolicyDirty.exchange( false, std::memory_order_acq_rel ) &&
+	     !bAppearanceChanged )
+		return;
+
+	s_LastAppearance = appearance;
+	s_bHaveLastAppearance = true;
+
+	gamescope_xwayland_server_t *server = NULL;
+	for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
+	{
+		if ( server->ctx && server->ctx->cursor )
+			SetDefaultCursorImage( server->ctx->cursor.get(), appearance.bEverywhere );
+	}
+}
 
 xwayland_ctx_t g_ctx;
 
@@ -8541,29 +8682,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
 	XF86VidModeLockModeSwitch(ctx->dpy, ctx->scr, true);
 
 	ctx->cursor = std::make_unique<MouseCursor>(ctx);
-	if (g_customCursorPath)
-	{
-		if (!load_mouse_cursor(ctx->cursor.get(), g_customCursorPath, g_customCursorHotspotX, g_customCursorHotspotY))
-			xwm_log.errorf("Failed to load mouse cursor: %s", g_customCursorPath);
-	}
-	else
-	{
-		if ( std::shared_ptr<gamescope::INestedHints::CursorInfo> pHostCursor = gamescope::GetX11HostCursor() )
-		{
-			ctx->cursor->setCursorImage(
-				reinterpret_cast<char *>( pHostCursor->pPixels.data() ),
-				pHostCursor->uWidth,
-				pHostCursor->uHeight,
-				pHostCursor->uXHotspot,
-				pHostCursor->uYHotspot );
-		}
-		else
-		{
-			xwm_log.infof( "Embedded, no cursor set. Using left_ptr by default." );
-			if ( !ctx->cursor->setCursorImageByName( "left_ptr" ) )
-				xwm_log.errorf( "Failed to load mouse cursor: left_ptr" );
-		}
-	}
+	SetDefaultCursorImage( ctx->cursor.get(), gamescope::GetCursorAppearance().bEverywhere );
 
 	ctx->cursor->undirty();
 
@@ -9718,6 +9837,12 @@ steamcompmgr_main(int argc, char **argv)
 #endif
 
 		update_vrr_atoms(root_ctx, false, &flush_root);
+
+		// See ApplyDefaultCursorPolicy()'s comment: this is the deferred
+		// half of the "Use everywhere" toggle, and this is the one place on
+		// the steamcompmgr thread that's guaranteed to run every frame
+		// regardless of which ctx (if any) currently has focus.
+		ProcessPendingCursorFallbackPolicy();
 
 		if (GetCurrentFocus() && GetCurrentFocus()->cursor)
 		{

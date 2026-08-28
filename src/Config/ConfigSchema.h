@@ -410,6 +410,17 @@ namespace gamescope::config
         // shape as FpsDisplaySettings::color_fps/cpu/gpu/media above.
         std::optional<int> cursor_outline_color;
         int cursor_inlay_color = 0x000000;  // 0xRRGGBB -- the solid fill inside the outline. Default matches CursorArt.cpp's hardcoded black inlay; always explicit, there is no "follow accent" mode for this one.
+
+        // Off (default): unchanged behaviour -- gamescope never touches the
+        // game-side cursor, exactly as upstream, and this pointer is only
+        // ever drawn by the settings overlay while it's open. On: this
+        // pointer (same geometry, same scale/outline/colour fields above)
+        // also becomes the game's fallback cursor (steamcompmgr.cpp's
+        // SetDefaultCursorImage()) -- what's shown on the root window
+        // whenever no client window has defined its own, in both nested and
+        // embedded mode, grabbed or not. Nobody's setup changes until they
+        // opt in. See superdoc/features/cursor-pipeline.md.
+        bool cursor_everywhere = false;
     };
 
     // Toast notification system (this fork's own addition, see

@@ -4,12 +4,15 @@ What gets drawn as "the mouse pointer," where that decision is made, and the two
 invariants that block the obvious-looking shortcuts (a live host cursor under a
 pointer lock; touching a cursor from the wrong thread).
 
-**gamescope draws a pointer only for its own settings overlay.** That pointer is a
-plain triangle, accent-coloured outline, black inlay, defined in
-`src/Overlay/CursorArt.cpp`. **While the overlay is closed gamescope does not touch
-the cursor at all** -- the game keeps whatever it or the host set, exactly as
-upstream does. Getting to that took three attempts; see "Three attempts at the
-overlay pointer" below for what each cost.
+**By default, gamescope draws a pointer only for its own settings overlay.** That
+pointer is a plain triangle, accent-coloured outline, black inlay, defined in
+`src/Overlay/CursorArt.cpp`. **While the overlay is closed and the Cursor tab's
+"Use everywhere" toggle is off (the default) gamescope does not touch the cursor at
+all** -- the game keeps whatever it or the host set, exactly as upstream does.
+Getting to that took three attempts; see "Three attempts at the overlay pointer"
+below for what each cost -- and see "Use everywhere: reinstating the game-side
+pointer as an opt-in" further down for why a fourth attempt, now opt-in only, was
+added on top of that history rather than replacing it.
 
 ## Three cursor sources, one rule: exactly one on screen
 
@@ -181,7 +184,71 @@ two states was never the requirement -- not overriding the game was.*
 
 What stands now is attempt 3 minus the game side: vector geometry, overlay only,
 nothing rasterised, nothing uploaded, no atlas coupling, and the game's cursor left
-exactly as upstream leaves it.
+exactly as upstream leaves it -- **by default.**
+
+## Use everywhere: reinstating the game-side pointer as an opt-in
+
+2026-08-28, after the above. The user's original ask ("don't override the game's
+cursor") was about the *default*, not a ban -- a later request asked for a toggle
+that opts back into attempt 3's game-side half, off by default so nobody's setup
+changes. `config::OverlaySettings::cursor_everywhere` (`ConfigSchema.h`), surfaced
+as the Cursor tab's "Use everywhere" switch (`PanelCursor.cpp`, area `setup.cursor`,
+group "Reach", entry id `cursor.everywhere`).
+
+**Recovered rather than rewritten.** `CursorArt_Rasterise()` -- the ARGB32
+premultiplied signed-distance rasteriser deleted in `63b6fed` -- is back in
+`Overlay/CursorArt.cpp`, reading `PanelCursor.h`'s `GetCursorAppearance()` exactly
+the way `CursorArt_Draw()` already did, so **both renderers share one definition of
+the shape, the scale, the outline width and the two colours** -- the corner
+constants (`kTipX`/`kFootY`/`kWingX`) are still defined exactly once. A live
+`cursor.scale`/outline-colour change reaches the rasterised bitmap immediately
+(verified: scale 1.0 -> 24x24 bitmap footprint, scale 2.0 -> 33x46, same ratio).
+
+**Scope: the fallback only, never a cursor the game itself sets.** `SetDefaultCursorImage()`
+(`steamcompmgr.cpp`) still only ever calls `XDefineCursor` on the Xwayland ctx's
+*root* window -- the same call the deleted code made, and the same one upstream's
+own fallback path made before that. Per ordinary X11 cursor inheritance, a window
+that calls `XDefineCursor` on itself always wins over whatever the root has, so a
+game with a meaningful custom cursor (an RTS's unit-select arrow) keeps it
+regardless of this toggle. Replacing a cursor the game explicitly sets would mean
+not reading `XFixesGetCursorImage()` in `MouseCursor::getTexture()` at all and
+substituting our own texture unconditionally on every repaint -- a change to the
+*live compositing path*, not to a fallback, and a materially larger and riskier
+surgery than reinstating deleted code. This toggle does the honest, narrower thing:
+"everywhere" means every *place* (nested or embedded, grabbed or not, overlay open
+or closed) rather than every possible cursor source. The tradeoff is stated here on
+purpose, not left for someone to discover by testing an RTS.
+
+**Threading.** Exactly the hazard `0d99251` already fixed once, reintroduced by
+the same shape of mistake if the toggle's setter called into `MouseCursor`
+directly: `PanelCursor.cpp`'s row setters are reachable from `overlay_e2_set`,
+which runs on the **console** thread, while `MouseCursor`'s X11 Cursor resource,
+Vulkan texture and non-atomic `m_dirty`/`m_imageEmpty` fields are steamcompmgr-
+thread-owned. `PanelCursor.cpp`'s `QueueSave()` -- called by every setter in the
+tab, not just this one -- now also calls `steamcompmgr_notify_cursor_appearance_changed()`
+(`steamcompmgr.hpp`), which only flips `g_bCursorFallbackPolicyDirty`, an
+`std::atomic<bool>`. `ProcessPendingCursorFallbackPolicy()`, called once per frame
+from the steamcompmgr loop (right beside the pre-existing per-frame cursor-
+suspension check), is the only place that ever calls `SetDefaultCursorImage()`
+live. It also polls the resolved `CursorAppearance` once per frame and compares it
+against the previous frame's, the same shape the original accent-tracking code
+used -- needed because the outline colour can be set to follow the live accent hue,
+which changes from `PanelConfig.cpp`'s hue slider, a setter this file has no reason
+to know about and that never calls the notify function.
+
+**Verified by direct X11 query, not by compositor screenshot.** `gamescopectl
+screenshot` did not capture ANY extra composited layer in this session's headless
+rig -- not the settings overlay, not the FPS HUD, not even the pre-existing,
+untouched cursor plane in the *off* state -- so it could not be used to tell the
+four cases apart here; that is a property of this sandbox's headless Vulkan path,
+reproduced with two features this change never touched, not evidence about this
+code. `XFixesGetCursorImage()` queried directly against the Xwayland ctx's own
+display (the exact call `MouseCursor::getTexture()` itself makes) is authoritative
+instead, and was used to confirm all four cases: off/closed is the plain 24x24
+`left_ptr` (green/black, no accent colour anywhere); on/closed is an 18x24 bitmap
+at hotspot (2,2) whose only two colours are the live accent (`0x36BDDD`) and black,
+matching `CursorArt.cpp`'s geometry exactly; toggling live between the two states
+takes effect within one frame in both directions.
 
 ## The freeze -- found 2026-08-28: the overlay never asked for a frame
 

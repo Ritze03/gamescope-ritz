@@ -178,3 +178,13 @@ extern void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScr
 // writing the global directly (as the pre-#68 PanelDisplay.cpp did) has no
 // effect once the process is already running.
 extern void steamcompmgr_set_force_relative_mouse( bool bForce );
+
+// Nudges the game-side fallback-cursor policy (steamcompmgr.cpp's
+// SetDefaultCursorImage(), gated by the Cursor tab's "Use everywhere"
+// toggle -- PanelCursor.h's CursorAppearance::bEverywhere) to reapply on
+// the steamcompmgr thread next frame. Safe to call from any thread: it only
+// flips an atomic flag, mirroring steamcompmgr_set_force_relative_mouse()'s
+// own cross-thread handoff above -- MouseCursor itself is only ever touched
+// from the steamcompmgr thread's own per-frame loop, never from here. See
+// steamcompmgr.cpp's ApplyDefaultCursorPolicy()/ProcessPendingCursorFallbackPolicy().
+extern void steamcompmgr_notify_cursor_appearance_changed();
