@@ -25,8 +25,8 @@ The newest version below is the one this build reports.
   cursor is left alone.
 - **New Cursor tab**: a Setup area for designing the overlay's own pointer — size,
   outline thickness, and outline/inlay colour, with an option to lock the outline
-  to a fixed colour instead of following the accent hue. The controls are in place
-  and save normally, but don't change the pointer's on-screen look yet.
+  to a fixed colour instead of following the accent hue. Every control now changes
+  the pointer's on-screen look immediately.
 
 ### Fixed
 - **Force grab cursor no longer doubles mouse speed**: while grabbed, each movement

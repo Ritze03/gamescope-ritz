@@ -400,13 +400,8 @@ namespace gamescope::config
         //
         // Every default below reproduces CursorArt.cpp's own compiled-in
         // look exactly, so nothing changes for anyone until they open this
-        // tab and touch a control.
-        //
-        // NOT YET WIRED (2026-08-28): these fields are declared and exposed
-        // in the Cursor tab, but CursorArt.cpp does not read them yet -- see
-        // PanelCursor.h's file comment for the accessor it exposes and the
-        // exact one-line change that will make CursorArt_Draw()/
-        // CursorArt_Rasterise() honour them.
+        // tab and touch a control. Read every draw by CursorArt_Draw() via
+        // PanelCursor.h's GetCursorAppearance() accessor.
         float cursor_scale = 1.0f;          // 0.5..3.0 -- multiplies CursorArt.cpp's whole silhouette (its kTipX/kFootY/kWingX geometry), same meaning as CursorArt_Draw()'s flScale parameter today.
         float cursor_outline_width = 2.0f;  // 1.0..6.0 px -- stroke width before the scale above is applied; matches CursorArt.cpp's kOutlineWidth constant.
         // Unset (default) = the outline follows the live accent hue, exactly

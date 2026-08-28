@@ -19,39 +19,20 @@ namespace gamescope
 	void PanelCursor_RegisterArea( ui::Registry &reg );
 
 	// ---- the wiring seam --------------------------------------------------
-	// A read-only accessor for the settings this tab edits, meant for
-	// Overlay/CursorArt.cpp's drawing code to call. NOT YET CALLED FROM
-	// THERE as of this writing (2026-08-28) -- CursorArt.cpp is owned by a
-	// different, concurrently-running change (the cursor's game-side
-	// rasterisation is being removed there), so wiring this accessor in is
-	// a deliberate follow-up rather than something this file does itself.
-	//
-	// The one-line change that follow-up needs, once CursorArt.cpp is
-	// free to take it:
-	//
-	//   - CursorArt_Draw()'s `flScale` parameter should be multiplied by
-	//     gamescope::CursorAppearance().flScale (or the caller should pass
-	//     that value in directly, same effect);
-	//   - kOutlineWidth should be replaced with
-	//     gamescope::CursorAppearance().flOutlineWidth;
-	//   - CursorArt_AccentRgb()'s result (used for both the live draw's
-	//     outline colour and CursorArt_Rasterise()'s outline/inlay split)
-	//     should fall back to gamescope::CursorAppearance().uOutlineRgb
-	//     when CursorAppearance().bOutlineFollowsAccent is false;
-	//   - the inlay fill (currently the literal IM_COL32(0,0,0,255) in
-	//     CursorArt_Draw() and the hardcoded black lerp target in
-	//     CursorArt_Rasterise()) should read
-	//     gamescope::CursorAppearance().uInlayRgb instead.
-	//
-	// Until that lands, every control on this tab is fully functional and
-	// persists to config, but has NO effect on what the pointer looks like
-	// on screen -- see PanelCursor.cpp's file comment.
+	// A read-only accessor for the settings this tab edits. Overlay/
+	// CursorArt.cpp's CursorArt_Draw() calls this once per draw and uses
+	// flScale/flOutlineWidth/uOutlineRgb/uInlayRgb directly (clamping
+	// flScale and flOutlineWidth defensively at the point of use, since a
+	// hand-edited global.json bypasses this tab's own slider ranges).
+	// uOutlineRgb is already resolved here -- it is the custom colour when
+	// bOutlineFollowsAccent is false, and the live accent otherwise -- so
+	// CursorArt.cpp does not need to re-check bOutlineFollowsAccent itself.
 	struct CursorAppearance
 	{
 		float    flScale = 1.0f;
 		float    flOutlineWidth = 2.0f;
 		bool     bOutlineFollowsAccent = true;
-		uint32_t uOutlineRgb = 0x000000;  // 0xRRGGBB, only meaningful when bOutlineFollowsAccent is false
+		uint32_t uOutlineRgb = 0x000000;  // 0xRRGGBB -- already resolved: the custom colour, or the live accent when bOutlineFollowsAccent is true
 		uint32_t uInlayRgb = 0x000000;    // 0xRRGGBB
 	};
 

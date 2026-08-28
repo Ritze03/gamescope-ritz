@@ -1,6 +1,9 @@
 #include "CursorArt.h"
 
+#include <algorithm>
+
 #include "Palette.h"
+#include "PanelCursor.h"
 
 #include "imgui.h"
 
@@ -19,11 +22,12 @@ namespace gamescope::overlay
 		constexpr float kFootX = 0.0f, kFootY = 20.0f; // bottom of the left edge
 		constexpr float kWingX = 13.5f, kWingY = 14.2f; // the right corner
 
-		// Total stroke width. Thin enough to read as a line rather than a
-		// slab, thick enough to survive being drawn over bright game content.
-		constexpr float kOutlineWidth = 2.0f;
-		constexpr float kOutlineHalf = kOutlineWidth * 0.5f;
-
+		// Packs a 0xRRGGBB value (as stored by PanelCursor.h's
+		// CursorAppearance) into an opaque ImU32 in ImGui's own byte order.
+		ImU32 PackOpaque( uint32_t uRgb )
+		{
+			return IM_COL32( ( uRgb >> 16 ) & 0xffu, ( uRgb >> 8 ) & 0xffu, uRgb & 0xffu, 255 );
+		}
 	}
 
 	uint32_t CursorArt_AccentRgb()
@@ -44,6 +48,20 @@ namespace gamescope::overlay
 		if ( !( flScale > 0.0f ) )
 			flScale = 1.0f;
 
+		// gamescope::GetCursorAppearance() is the Cursor tab's cached,
+		// already-resolved config: uOutlineRgb is the outline colour to draw
+		// this frame whether or not it is following the accent (PanelCursor.
+		// cpp's GetCursorAppearance() does that resolution itself). Clamp
+		// defensively here even though the tab's own sliders already
+		// constrain their range (ConfigSchema.h's cursor_scale/
+		// cursor_outline_width comments) -- this value also reaches us from
+		// a hand-edited global.json, which the UI never gets a chance to
+		// clamp.
+		const gamescope::CursorAppearance appearance = gamescope::GetCursorAppearance();
+		const float flUserScale = std::clamp( appearance.flScale, 0.5f, 3.0f );
+		const float flOutlineWidth = std::clamp( appearance.flOutlineWidth, 1.0f, 6.0f );
+		flScale *= flUserScale;
+
 		const ImVec2 vecPoints[ 3 ] =
 		{
 			ImVec2( flTipX  + kTipX  * flScale, flTipY + kTipY  * flScale ),
@@ -53,8 +71,8 @@ namespace gamescope::overlay
 
 		// Inlay first, outline over it: the stroke straddles the path, so
 		// filling underneath leaves no seam where the two meet.
-		pDrawList->AddConvexPolyFilled( vecPoints, 3, IM_COL32( 0, 0, 0, 255 ) );
-		pDrawList->AddPolyline( vecPoints, 3, palette::kAccent,
-		                        ImDrawFlags_Closed, kOutlineWidth * flScale );
+		pDrawList->AddConvexPolyFilled( vecPoints, 3, PackOpaque( appearance.uInlayRgb ) );
+		pDrawList->AddPolyline( vecPoints, 3, PackOpaque( appearance.uOutlineRgb ),
+		                        ImDrawFlags_Closed, flOutlineWidth * flScale );
 	}
 }

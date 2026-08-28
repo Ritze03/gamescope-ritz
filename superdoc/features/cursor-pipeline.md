@@ -118,7 +118,30 @@ It is drawn as ImGui vector geometry into the foreground draw list, at
 is uploaded, and the font atlas is not touched -- see the third attempt below for why
 that last point is deliberate.
 
-`CursorArt_AccentRgb()` exposes the current outline colour for other overlay code.
+`CursorArt_AccentRgb()` exposes the current live accent colour (`palette::kAccent`,
+unconditionally -- it does not know about the Cursor tab's override) for other
+overlay code.
+
+### The Cursor tab -- `Overlay/PanelCursor.{h,cpp}`
+
+A Setup-section tab lets the player resize the pointer, change its outline
+thickness, and pick its outline/inlay colours (outline colour can instead lock
+to the live accent, which is the default). Fields live in
+`config::OverlaySettings` (`cursor_scale`, `cursor_outline_width`,
+`cursor_outline_color` -- `std::optional<int>`, unset = follow accent --
+`cursor_inlay_color`), global.json-only like every other field in that struct.
+
+`PanelCursor.h`'s `gamescope::GetCursorAppearance()` is the read side: a
+cached, load-once accessor (same shape as `PanelCursor.cpp`'s own row
+bindings) that resolves `cursor_outline_color` against the live accent
+itself, so callers get one already-final `uOutlineRgb` regardless of whether
+the tab's "custom" toggle is on. `CursorArt_Draw()` calls it once per draw
+and: multiplies its own `flScale` parameter by `.flScale`, uses
+`.flOutlineWidth` in place of a fixed constant, and fills/strokes with
+`.uInlayRgb`/`.uOutlineRgb` instead of the old hardcoded black and
+`palette::kAccent`. `.flScale` and `.flOutlineWidth` are clamped at that call
+site (0.5-3.0, 1.0-6.0) rather than trusted from config, since a hand-edited
+global.json bypasses the tab's own slider ranges.
 
 ## Three attempts at the overlay pointer
 

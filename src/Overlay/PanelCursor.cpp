@@ -1,9 +1,8 @@
-// The "Cursor" tab -- see PanelCursor.h for what this is and, most
-// importantly, what it is NOT yet: every row below is fully functional and
-// persists to global.json, but CursorArt.cpp does not read any of it yet,
-// so moving these controls has no visible effect on the pointer today. See
-// PanelCursor.h's GetCursorAppearance() comment for the exact wiring this
-// is waiting on.
+// The "Cursor" tab -- see PanelCursor.h for what this is. Every row below
+// persists to global.json and is read every draw by Overlay/CursorArt.cpp's
+// CursorArt_Draw() via GetCursorAppearance(), so moving a control here
+// changes the overlay's pointer immediately -- see PanelCursor.h's
+// GetCursorAppearance() comment for the wiring.
 //
 // Modelled directly on PanelDisplay.cpp's General area (a small, global-
 // only settings group with no live gamescope state behind it) and on
