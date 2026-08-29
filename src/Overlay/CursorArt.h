@@ -30,6 +30,23 @@ struct ImDrawList;
 
 namespace gamescope::overlay
 {
+	// ---- the shape, in pixels, tip at the origin --------------------------
+	//
+	// A classic pointer silhouette reduced to its three corners: vertical left
+	// edge, long hypotenuse back up to the tip. Not an equilateral triangle --
+	// that reads as an icon, not a pointer. The ~0.68 width:height ratio is
+	// what makes it read as an arrow at a glance.
+	//
+	// Public (not CursorArt.cpp-local) so a third consumer can build the same
+	// triangle without a fourth copy of these numbers: UI/Icons.cpp's Cursor
+	// tab rail icon reads them directly, at its own fixed scale, alongside
+	// CursorArt_Draw() (the overlay's own pointer) and CursorArt_Rasterise()
+	// (the game-side fallback) below -- see this file's SCOPE comment for why
+	// a single definition of this triangle is load-bearing.
+	inline constexpr float kTipX = 0.0f,  kTipY = 0.0f;    // hotspot
+	inline constexpr float kFootX = 0.0f, kFootY = 20.0f;  // bottom of the left edge
+	inline constexpr float kWingX = 13.5f, kWingY = 14.2f; // the right corner
+
 	// Draws with the tip -- the hotspot -- landing exactly on (flTipX, flTipY).
 	void CursorArt_Draw( ImDrawList *pDrawList, float flTipX, float flTipY, float flScale );
 

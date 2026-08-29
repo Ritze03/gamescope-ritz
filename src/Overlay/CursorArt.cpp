@@ -13,15 +13,9 @@ namespace gamescope::overlay
 {
 	namespace
 	{
-		// ---- the shape, in pixels, tip at the origin --------------------
-		//
-		// A classic pointer silhouette reduced to its three corners: vertical
-		// left edge, long hypotenuse back up to the tip. Not an equilateral
-		// triangle -- that reads as an icon, not a pointer. The ~0.68
-		// width:height ratio is what makes it read as an arrow at a glance.
-		constexpr float kTipX = 0.0f,  kTipY = 0.0f;   // hotspot
-		constexpr float kFootX = 0.0f, kFootY = 20.0f; // bottom of the left edge
-		constexpr float kWingX = 13.5f, kWingY = 14.2f; // the right corner
+		// kTipX/kFootY/kWingX and friends: moved to CursorArt.h so
+		// UI/Icons.cpp can reuse the exact same triangle for the Cursor tab's
+		// rail icon -- see that header's comment on them.
 
 		// Packs a 0xRRGGBB value (as stored by PanelCursor.h's
 		// CursorAppearance) into an opaque ImU32 in ImGui's own byte order.

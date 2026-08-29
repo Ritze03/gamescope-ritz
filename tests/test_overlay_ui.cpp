@@ -1784,11 +1784,15 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 	// the test's own statement of what the rail must be able to draw.
 	// display.general is the twelfth, added by the user's direct correction
 	// to D13.1 (2026-08-24) -- see PanelDisplay.cpp's RegisterGeneral().
-	// system.changelog is the thirteenth (D28) -- see PanelChangelog.cpp.
+	// system.changelog was added by D28 -- see PanelChangelog.cpp.
+	// setup.cursor is the newest, and the thirteenth by plain count
+	// (2026-08-29) -- see PanelCursor.cpp and Icons.cpp's own entry for it
+	// (the rail icon reuses CursorArt.h's triangle constants rather than a
+	// hand-transcribed glyph).
 	const char *pszAreas[] = {
 		"display.general", "display.upscaling", "display.frame_limiter", "display.hdr",
 		"image.shaders", "audio.mixer", "system.monitor", "system.log", "system.changelog",
-		"setup.profiles", "setup.pergame", "setup.appearance",
+		"setup.profiles", "setup.pergame", "setup.appearance", "setup.cursor",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 

@@ -2957,9 +2957,18 @@ paint_all( global_focus_t *pFocus, bool async )
 	// this doesn't spam their event queues. The false default on the
 	// SettingsOverlay side means the safe outcome (ImGui draws) also survives
 	// the connector being null.
+	// Issue: "Use everywhere" (CursorAppearance::bEverywhere) wants
+	// gamescope's own art even where a real host cursor is usable, so it has
+	// to reach this decision too -- not just SettingsOverlay's local
+	// bDrawOurCursor gate -- or the host would keep presenting its system
+	// cursor on top of ours (two cursors) whenever force-grab is off. See
+	// CursorPolicy.h's NestedHostCursorUsable() and this option's own
+	// GetCursorAppearance() comment.
 	bool bHostCursorVisible = false;
 	if ( pConnector && pConnector->GetNestedHints() )
-		bHostCursorVisible = pConnector->GetNestedHints()->PresentOverlayCursor( gamescope::SettingsOverlay_IsCapturingInput() );
+		bHostCursorVisible = pConnector->GetNestedHints()->PresentOverlayCursor(
+			gamescope::SettingsOverlay_IsCapturingInput(),
+			gamescope::GetCursorAppearance().bEverywhere );
 
 	gamescope::SettingsOverlay_SetHostCursorVisible( bHostCursorVisible );
 

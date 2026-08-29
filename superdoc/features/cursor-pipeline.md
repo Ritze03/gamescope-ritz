@@ -146,6 +146,23 @@ and: multiplies its own `flScale` parameter by `.flScale`, uses
 site (0.5-3.0, 1.0-6.0) rather than trusted from config, since a hand-edited
 global.json bypasses the tab's own slider ranges.
 
+`cursor_scale`'s default is `0.8` (`ConfigSchema.h`), not `1.0` -- moved 2026-08-29
+at the user's request. The range is unchanged (0.5-3.0); anyone who had already set
+their own value keeps it, since a saved `global.json` always overrides the struct's
+default on load. The Cursor tab's own slider default (`PanelCursor.cpp`'s
+`.Default(...)`) reads `config::OverlaySettings{}.cursor_scale` directly rather than
+repeating the literal, so there was exactly one place to change.
+
+The tab's rail icon (`UI/Icons.cpp`, area id `setup.cursor`) reuses
+`CursorArt.h`'s `kTipX`/`kFootX`/`kFootY`/`kWingX`/`kWingY` constants -- moved from
+`CursorArt.cpp`'s file-local anonymous namespace to the header for exactly this --
+at a **fixed** icon-local scale/offset, deliberately not `GetCursorAppearance().flScale`:
+an icon that resized with a live setting would be the wrong kind of "live". Drawn as
+a plain stroked outline (`IconOp::Loop`), not the two-tone accent-outline/black-inlay
+look `CursorArt_Draw()` uses, so it follows the icon set's own single-colour
+selected/dimmed convention instead of standing out as the one glyph hardcoded to the
+accent.
+
 ## Three attempts at the overlay pointer
 
 All three were on the same underlying question -- what should the pointer be while
@@ -249,6 +266,64 @@ instead, and was used to confirm all four cases: off/closed is the plain 24x24
 at hotspot (2,2) whose only two colours are the live accent (`0x36BDDD`) and black,
 matching `CursorArt.cpp`'s geometry exactly; toggling live between the two states
 takes effect within one frame in both directions.
+
+## "Use everywhere" didn't reach the *overlay-open* host cursor -- fixed 2026-08-29
+
+The verification above only ever exercised the two *closed* states (source (1),
+the composited plane / `SetDefaultCursorImage()`). It missed a second place a host
+cursor can come from while the overlay is open: source (3), a nested backend's own
+`wl_pointer_set_cursor()` / `SDL_SetCursor()`. Reported by the user: with force-grab
+**off** and the overlay **open**, "Use everywhere" had no effect -- the host's plain
+system cursor kept showing instead of the custom one.
+
+**Why.** `CursorPolicy.h`'s `NestedHostCursorUsable()` -- the one predicate both
+nested backends and `SettingsOverlay.cpp` share, precisely so they can't disagree --
+took no opinion on this toggle at all. With force-grab off the pointer isn't locked,
+so a host cursor was always "usable" by the original three-term test, and
+`OverlayShouldDrawSoftwareCursor()` correctly deferred to it, exactly as D29 says it
+should when a *real* host cursor exists. "Use everywhere" changed what the *game*
+falls back to (`SetDefaultCursorImage()`) but never told this predicate the host
+cursor should stop counting as usable in the first place.
+
+**Fix.** `NestedHostCursorUsable()` now takes the toggle as a fourth term:
+`!bCursorEverywhere && bHavePointer && !bPointerLocked && bHaveCursorImage`. Both
+call sites already fed from the same accessor path (`GetCursorAppearance().bEverywhere`),
+so this is one predicate change, not two independent ones. The full truth table
+(`tests/test_cursor_policy.cpp`, 16-way exhaustive over all four booleans) still
+holds the #69 invariant -- exactly one cursor, never zero, never two -- in every
+combination.
+
+**Not just the predicate's return value -- the backends had to stop actually
+painting the host cursor too**, or the overlay's own `CursorArt_Draw()` pointer and
+the host's system one would both land on screen at once:
+
+- **Wayland** (`CWaylandBackend`): `PresentOverlayCursor()` now also re-runs
+  `UpdateCursor()` when `bCursorEverywhere` changes (not just when
+  `bOverlayActive` does, since the toggle can flip live while the overlay stays
+  open) -- and `UpdateCursor()`'s existing "no usable host cursor" branch
+  (`wl_pointer_set_cursor(..., nullptr, 0, 0)`, hide) already does the right
+  thing once `HasUsableHostCursor()` says false for this reason too.
+- **SDL** (`CSDLBackend`): this one needed a real behaviour change, not just a
+  predicate change. Its `GAMESCOPE_SDL_EVENT_CURSOR` handler always called
+  `SDL_SetCursor(SDL_GetDefaultCursor())` whenever the overlay was active,
+  independent of whether a host cursor was "usable" -- correct before this fix,
+  because the only existing "not usable" case (a locked pointer) already hides
+  the OS cursor by an unrelated mechanism (`SDL_SetRelativeMouseMode`), so the
+  image being *set* never mattered. "Use everywhere" broke that coincidence: an
+  unlocked pointer with the toggle on is "not usable" but nothing was hiding the
+  cursor. Fixed by mirroring the usability result into a second atomic
+  (`m_bOverlayHostCursorUsable`, set from `PresentOverlayCursor()` the same way
+  `m_bOverlayCursorActive` already is) and having the event handler call
+  `SDL_ShowCursor(SDL_DISABLE)` instead of setting the default cursor when it's
+  false.
+
+**Verification.** The policy itself is covered exhaustively by the unit test above.
+Runtime wiring was smoke-tested headless (`overlay_e2_set`, `debug_set_force_relative_mouse`,
+`settings_overlay_visible` cycled through every combination, no crash) -- headless has
+no `GetNestedHints()` at all (`CBaseBackendConnector`'s default returns `nullptr`), so
+it cannot show source (3) either way and can't pixel-verify *this specific* gap; that
+would need a real nested Wayland/SDL host, which per this project's hard safety rules
+is out of scope for an unattended run on the user's own machine.
 
 ## The freeze -- found 2026-08-28: the overlay never asked for a frame
 

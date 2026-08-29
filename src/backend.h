@@ -299,6 +299,14 @@ namespace gamescope
         //     than whatever cursor image the game last pushed through
         //     SetCursorImage() -- a game's cursor may be a crosshair, or
         //     fully blank, neither of which is usable overlay chrome.
+        // bCursorEverywhere: the Cursor tab's "Use everywhere" toggle
+        //     (PanelCursor.h's CursorAppearance::bEverywhere). When on, the
+        //     user wants gamescope's own art in place of the host's system
+        //     cursor even where a usable one exists, so implementations must
+        //     treat the host cursor as unusable and actively hide it (not
+        //     merely report it as such) -- see CursorPolicy.h's
+        //     NestedHostCursorUsable(), which now takes this as a fourth
+        //     term for exactly this reason.
         // returns: true iff, as a result, a host cursor really is visible and
         //     tracking the pointer. The caller (paint_all()) hands this
         //     straight to SettingsOverlay_SetHostCursorVisible(), which turns
@@ -312,7 +320,7 @@ namespace gamescope
         // unchanged value. Default: no host cursor exists, ImGui draws (the
         // correct answer for OpenVR, which relies on the same composited plane
         // as DRM and leaves SetCursorImage() a no-op).
-        virtual bool PresentOverlayCursor( bool bOverlayActive ) { return false; }
+        virtual bool PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere ) { return false; }
 
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) = 0;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) = 0;

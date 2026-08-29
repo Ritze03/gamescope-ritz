@@ -3,6 +3,14 @@
 #include <cmath>
 #include <cstring>
 
+// setup.cursor's glyph reuses the pointer's own three corner constants (see
+// the entry below) rather than a fourth hand-transcribed copy of the
+// triangle -- this is the only reason this otherwise ImGui-free, panel-free
+// data file includes anything from outside UI/. CursorArt.h itself pulls in
+// no ImGui (only CursorArt.cpp does), so this stays as light an include as
+// every other one here.
+#include "../CursorArt.h"
+
 namespace gamescope::ui
 {
 	namespace
@@ -37,12 +45,15 @@ namespace gamescope::ui
 		// =================================================================
 		//  THE SET (SPEC §8.0)
 		// =================================================================
-		// Twelve glyphs, one 24-unit grid, one stroke weight. Eleven are
+		// Thirteen glyphs, one 24-unit grid, one stroke weight. Eleven are
 		// transcribed from index.html's ICONS table (SPEC §8.0's own count);
 		// display.general is the twelfth, added when the user's direct
 		// correction to D13.1 (2026-08-24) gave DISPLAY a new rail item that
 		// predates neither SPEC nor index.html, so it has no source to
 		// transcribe from -- see PanelDisplay.cpp's RegisterGeneral().
+		// setup.cursor is the thirteenth (2026-08-29), and sourced neither
+		// way: it is the actual pointer shape, reused from CursorArt.h's own
+		// corner constants -- see that entry below.
 		//
 		// THE ACCEPTANCE CRITERION THIS TABLE IS WRITTEN AGAINST is not
 		// "does it look like the thing" -- it is "is it ONE SILHOUETTE at 12
@@ -62,6 +73,18 @@ namespace gamescope::ui
 		//
 		// At 12 px those six read as: two blocks, three bars, two squares,
 		// one square, a stack, a frame. None of them is another one.
+
+		// setup.cursor's fixed icon-local transform: maps CursorArt.h's
+		// triangle (0..kWingX by 0..kFootY, tip at the origin) onto this
+		// set's usual ~3.5-unit margin on a 24-unit box, matching the
+		// visual weight of e.g. the clock/HDR circles' 17-unit diameter.
+		// Deliberately NOT gamescope::GetCursorAppearance().flScale -- see
+		// this file's own header comment on why the rail glyph must not
+		// track the live cursor.scale setting.
+		constexpr float kCursorIconScale = 17.0f / gamescope::overlay::kFootY;
+		constexpr float kCursorIconOffsetX = ( kIconGrid - gamescope::overlay::kWingX * kCursorIconScale ) * 0.5f;
+		constexpr float kCursorIconOffsetY = ( kIconGrid - gamescope::overlay::kFootY * kCursorIconScale ) * 0.5f;
+
 		constexpr Icon kIcons[] = {
 		// ---- DISPLAY ------------------------------------------------------
 		{ "display.general", 4, {
@@ -175,6 +198,25 @@ namespace gamescope::ui
 			// see Icons.cpp's Stroke() for the tangent construction.
 			IconShape{ IconOp::Teardrop, 2, 6.0f,
 				{ { 12.0f, 3.4f }, { 12.0f, 13.7f } } } } },
+
+		{ "setup.cursor", 1, {
+			// The pointer itself, as a plain stroked outline -- no fill, no
+			// accent colour, no black inlay: the icon set's own single-colour
+			// convention (Controls.h picks the stroke colour based on
+			// selected/dimmed state) rather than CursorArt_Draw()'s two-tone
+			// look, so this behaves like every neighbouring glyph instead of
+			// standing out as the one hardcoded to the live accent.
+			// kTipX/kFootX/kWingX etc. are CursorArt.h's own corner
+			// constants, reused verbatim -- see this file's header comment
+			// and CursorArt.h's own -- at the fixed kCursorIconScale/Offset
+			// transform above, never gamescope::GetCursorAppearance().flScale.
+			IconShape{ IconOp::Loop, 3, 0.0f, {
+				{ kCursorIconOffsetX + gamescope::overlay::kTipX  * kCursorIconScale,
+				  kCursorIconOffsetY + gamescope::overlay::kTipY  * kCursorIconScale },
+				{ kCursorIconOffsetX + gamescope::overlay::kFootX * kCursorIconScale,
+				  kCursorIconOffsetY + gamescope::overlay::kFootY * kCursorIconScale },
+				{ kCursorIconOffsetX + gamescope::overlay::kWingX * kCursorIconScale,
+				  kCursorIconOffsetY + gamescope::overlay::kWingY * kCursorIconScale } } } } },
 		};
 
 		constexpr size_t kIconN = sizeof( kIcons ) / sizeof( kIcons[ 0 ] );

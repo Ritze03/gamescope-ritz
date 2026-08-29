@@ -31,8 +31,13 @@ The newest version below is the one this build reports.
   opt in. Turn it on and the overlay's pointer also becomes your game's default
   cursor, overlay open or closed — a game that sets its own cursor still shows
   that, this only replaces what's shown in its absence.
+- **The Cursor tab has its own rail icon**: a small drawing of the pointer itself,
+  instead of falling back to a plain "C".
 
 ### Fixed
+- **"Use everywhere" now shows the custom cursor with Force Grab Cursor off and
+  the overlay open**: it previously fell back to the default pointer in that one
+  combination while working correctly everywhere else.
 - **Doubled mouse sensitivity while the cursor is grabbed is gone**: games that read
   raw mouse input were being sent every movement twice over, so look and aim were
   about twice as fast as they should be.
@@ -98,6 +103,8 @@ The newest version below is the one this build reports.
   are not stored in your saved config, so nothing you saved breaks.
 - **Every option's explanation was rewritten in plain language**, across
   Display, Shaders, Audio, Config and Monitor.
+- **The default cursor size is now 0.8x**, down from 1.0x. If you've already set
+  your own size it is unaffected.
 
 ## [0.3.1] – 2026-08-24
 

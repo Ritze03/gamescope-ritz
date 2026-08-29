@@ -34,22 +34,31 @@ namespace gamescope
 	// Can a nested backend put a real host cursor on screen right now -- one
 	// that actually tracks the pointer the user is moving?
 	//
-	// bHavePointer:     the backend has a host pointer device at all.
-	// bPointerLocked:   a pointer constraint is active (a grabbed game). The
-	//                   host cursor is then pinned and hidden by the host, so
-	//                   it would not track anything even if we asked for it.
-	//                   This is the grabbed-nested case #69 identified.
-	// bHaveCursorImage: we have a system cursor image to show. Under the
-	//                   Wayland backend this is a snapshot taken from the host
-	//                   at startup (GetX11HostCursor()), and it is genuinely
-	//                   absent when there was no X11/XWayland display to
-	//                   snapshot from.
+	// bHavePointer:      the backend has a host pointer device at all.
+	// bPointerLocked:    a pointer constraint is active (a grabbed game). The
+	//                    host cursor is then pinned and hidden by the host, so
+	//                    it would not track anything even if we asked for it.
+	//                    This is the grabbed-nested case #69 identified.
+	// bHaveCursorImage:  we have a system cursor image to show. Under the
+	//                    Wayland backend this is a snapshot taken from the host
+	//                    at startup (GetX11HostCursor()), and it is genuinely
+	//                    absent when there was no X11/XWayland display to
+	//                    snapshot from.
+	// bCursorEverywhere: the Cursor tab's "Use everywhere" toggle
+	//                    (PanelCursor.h's CursorAppearance::bEverywhere). When
+	//                    on, the user has explicitly asked for gamescope's own
+	//                    art in place of any system cursor, so the host
+	//                    cursor is never "usable" regardless of the first
+	//                    three terms -- otherwise the overlay would draw its
+	//                    own pointer *and* the host would keep presenting its
+	//                    real one on top of it (two cursors, the #69 failure
+	//                    mode this header exists to prevent).
 	//
-	// All three must hold. If any is false there is no usable host cursor and
+	// All four must hold. If any is false there is no usable host cursor and
 	// the overlay's own must stay on.
-	inline constexpr bool NestedHostCursorUsable( bool bHavePointer, bool bPointerLocked, bool bHaveCursorImage )
+	inline constexpr bool NestedHostCursorUsable( bool bHavePointer, bool bPointerLocked, bool bHaveCursorImage, bool bCursorEverywhere )
 	{
-		return bHavePointer && !bPointerLocked && bHaveCursorImage;
+		return !bCursorEverywhere && bHavePointer && !bPointerLocked && bHaveCursorImage;
 	}
 
 	// Should the overlay draw a cursor of its own? The complement of "a real

@@ -28,6 +28,12 @@
 // One glyph has no mockup original: this build's twelfth area is
 // `display.general`, which predates neither SPEC nor index.html and so has
 // no source to transcribe from. That one is noted where it is declared.
+//
+// A second, differently-sourced exception: `setup.cursor`'s glyph is not
+// transcribed OR freehand -- it reuses Overlay/CursorArt.h's own
+// kTipX/kFootY/kWingX triangle constants directly, at a fixed icon-local
+// scale, so the rail icon and the actual pointer can never draw two
+// different triangles. See that entry's own comment in Icons.cpp.
 #pragma once
 
 #include <cstddef>

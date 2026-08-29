@@ -114,7 +114,7 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info ) override;
         virtual void SetRelativeMouseMode( bool bRelative ) override;
         virtual void SetVisible( bool bVisible ) override;
-        virtual bool PresentOverlayCursor( bool bOverlayActive ) override;
+        virtual bool PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere ) override;
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
@@ -180,7 +180,7 @@ namespace gamescope
         void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info );
         void SetRelativeMouseMode( bool bRelative );
         void SetVisible( bool bVisible );
-        bool PresentOverlayCursor( bool bOverlayActive );
+        bool PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere );
         void SetTitle( std::shared_ptr<std::string> szTitle );
         void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels );
         void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection );
@@ -203,6 +203,15 @@ namespace gamescope
 		std::atomic<bool> m_bApplicationGrabbed = { false };
 		std::atomic<bool> m_bApplicationVisible = { false };
 		std::atomic<bool> m_bOverlayCursorActive = { false };
+		// The Cursor tab's "Use everywhere" toggle, and whether the host
+		// cursor is actually usable this frame (mirrors PresentOverlayCursor()'s
+		// NestedHostCursorUsable() result) -- both mirrored here so the
+		// GAMESCOPE_SDL_EVENT_CURSOR handler (run on the SDL thread, off of
+		// PresentOverlayCursor()'s caller) can decide whether to show the
+		// host's default cursor or hide it outright, instead of always
+		// showing it whenever the overlay is active the way it did before
+		// "Use everywhere" needed a way to say no to that.
+		std::atomic<bool> m_bOverlayHostCursorUsable = { false };
 		std::atomic<std::shared_ptr<INestedHints::CursorInfo>> m_pApplicationCursor;
 		std::atomic<std::shared_ptr<std::string>> m_pApplicationTitle;
 		std::atomic<std::shared_ptr<std::vector<uint32_t>>> m_pApplicationIcon;
@@ -375,9 +384,9 @@ namespace gamescope
 	{
 		m_pBackend->SetVisible( bVisible );
 	}
-	bool CSDLConnector::PresentOverlayCursor( bool bOverlayActive )
+	bool CSDLConnector::PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere )
 	{
-		return m_pBackend->PresentOverlayCursor( bOverlayActive );
+		return m_pBackend->PresentOverlayCursor( bOverlayActive, bCursorEverywhere );
 	}
 	void CSDLConnector::SetTitle( std::shared_ptr<std::string> szTitle )
 	{
@@ -551,30 +560,38 @@ namespace gamescope
 		m_bApplicationVisible = bVisible;
 		PushUserEvent( GAMESCOPE_SDL_EVENT_VISIBLE );
 	}
-	bool CSDLBackend::PresentOverlayCursor( bool bOverlayActive )
+	bool CSDLBackend::PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere )
 	{
+		// A host cursor is on screen unless the game holds a pointer grab
+		// (SDL_SetRelativeMouseMode() hides the OS cursor and pins the
+		// pointer) or the user has asked for gamescope's own art everywhere.
+		// In either case we report false and ImGui keeps drawing its own.
+		//
+		// The bHavePointer/bHaveCursorImage terms are unconditionally true
+		// for SDL, unlike the Wayland backend: SDL always has a pointer
+		// while it has a window, and SDL_GetDefaultCursor() always yields a
+		// system cursor image, so there is no "no image to show" case to
+		// guard against here.
+		const bool bUsable = bOverlayActive && NestedHostCursorUsable(
+			/* bHavePointer      = */ true,
+			/* bPointerLocked    = */ m_bApplicationGrabbed,
+			/* bHaveCursorImage  = */ true,
+			/* bCursorEverywhere = */ bCursorEverywhere );
+
 		// Idempotency guard: unlike the other INestedHints setters (which are
 		// only ever called on a real state change), this one is driven every
 		// frame from paint_all() (see steamcompmgr.cpp) to stay symmetric
 		// with the DRM plane's per-frame gate -- so skip the SDL round-trip
-		// unless the value actually flipped, or the event queue would get
-		// spammed at frame rate for no visible effect.
-		if ( m_bOverlayCursorActive.exchange( bOverlayActive ) != bOverlayActive )
+		// unless something the event handler cares about actually changed,
+		// or the event queue would get spammed at frame rate for no visible
+		// effect. Both exchanges always run (no short-circuiting) so both
+		// atomics land their new value regardless of which one changed.
+		const bool bActiveChanged = m_bOverlayCursorActive.exchange( bOverlayActive ) != bOverlayActive;
+		const bool bUsableChanged = m_bOverlayHostCursorUsable.exchange( bUsable ) != bUsable;
+		if ( bActiveChanged || bUsableChanged )
 			PushUserEvent( GAMESCOPE_SDL_EVENT_CURSOR );
 
-		// A host cursor is on screen unless the game holds a pointer grab:
-		// SDL_SetRelativeMouseMode() hides the OS cursor and pins the
-		// pointer, so there'd be nothing for the user to aim with. In that
-		// case we report false and ImGui keeps drawing its own.
-		//
-		// The other two terms are unconditionally true for SDL, unlike the
-		// Wayland backend: SDL always has a pointer while it has a window,
-		// and SDL_GetDefaultCursor() always yields a system cursor image, so
-		// there is no "no image to show" case to guard against here.
-		return bOverlayActive && NestedHostCursorUsable(
-			/* bHavePointer     = */ true,
-			/* bPointerLocked   = */ m_bApplicationGrabbed,
-			/* bHaveCursorImage = */ true );
+		return bUsable;
 	}
 	void CSDLBackend::SetTitle( std::shared_ptr<std::string> szTitle )
 	{
@@ -1010,10 +1027,35 @@ namespace gamescope
 						// -- in SDL2 it means "redraw the current cursor" --
 						// so the no-app-cursor case has to name the default
 						// explicitly to get back to where it started.
+						//
+						// "Use everywhere": m_bOverlayHostCursorUsable is
+						// false while it's on (PresentOverlayCursor() folds
+						// it into NestedHostCursorUsable()), so this falls
+						// into SDL_ShowCursor(SDL_DISABLE) instead of showing
+						// the system arrow -- otherwise the overlay's own
+						// CursorArt_Draw() pointer and SDL's OS-level one
+						// would both be on screen at once. A locked game
+						// (m_bApplicationGrabbed) also lands here, same as
+						// before -- SDL_SetRelativeMouseMode() already hides
+						// the OS cursor in that case, so this is a no-op for
+						// that path, not a behaviour change.
 						if ( m_bOverlayCursorActive )
-							SDL_SetCursor( SDL_GetDefaultCursor() );
+						{
+							if ( m_bOverlayHostCursorUsable )
+							{
+								SDL_ShowCursor( SDL_ENABLE );
+								SDL_SetCursor( SDL_GetDefaultCursor() );
+							}
+							else
+							{
+								SDL_ShowCursor( SDL_DISABLE );
+							}
+						}
 						else
+						{
+							SDL_ShowCursor( SDL_ENABLE );
 							SDL_SetCursor( m_pCursor ? m_pCursor : SDL_GetDefaultCursor() );
+						}
 					}
 				}
 				break;

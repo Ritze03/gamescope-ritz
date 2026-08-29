@@ -462,7 +462,7 @@ namespace gamescope
         virtual void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info ) override;
         virtual void SetRelativeMouseMode( bool bRelative ) override;
         virtual void SetVisible( bool bVisible ) override;
-        virtual bool PresentOverlayCursor( bool bOverlayActive ) override;
+        virtual bool PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere ) override;
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
@@ -700,7 +700,7 @@ namespace gamescope
 
         void SetCursorImage( std::shared_ptr<INestedHints::CursorInfo> info );
         void SetRelativeMouseMode( wl_surface *pSurface, bool bRelative );
-        bool PresentOverlayCursor( bool bOverlayActive );
+        bool PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere );
         bool HasUsableHostCursor() const;
         void UpdateCursor();
 
@@ -876,6 +876,14 @@ namespace gamescope
         // whatever thread calls the INestedHints entry points and read back
         // by UpdateCursor() with no additional synchronization.
         bool m_bOverlayCursorActive = false;
+        // The Cursor tab's "Use everywhere" toggle, mirrored from
+        // PresentOverlayCursor()'s argument so HasUsableHostCursor() and
+        // UpdateCursor() (called from several other sites, not only
+        // PresentOverlayCursor -- SetRelativeMouseMode(), SetCursorImage(),
+        // CWaylandConnector::Init()) can all see the current value without
+        // threading a parameter through every one of those call sites. Same
+        // write/read discipline as m_bOverlayCursorActive above.
+        bool m_bCursorEverywhere = false;
         std::shared_ptr<INestedHints::CursorInfo> m_pCursorInfo;
         wl_surface *m_pCursorSurface = nullptr;
         std::shared_ptr<INestedHints::CursorInfo> m_pDefaultCursorInfo;
@@ -1306,9 +1314,9 @@ namespace gamescope
         m_bVisible = bVisible;
         force_repaint();
     }
-    bool CWaylandConnector::PresentOverlayCursor( bool bOverlayActive )
+    bool CWaylandConnector::PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere )
     {
-        return m_pBackend->PresentOverlayCursor( bOverlayActive );
+        return m_pBackend->PresentOverlayCursor( bOverlayActive, bCursorEverywhere );
     }
     void CWaylandConnector::SetTitle( std::shared_ptr<std::string> pAppTitle )
     {
@@ -2550,14 +2558,20 @@ namespace gamescope
             // "Any sign the pointer is grabbed" is the answer that keeps
             // ImGui's cursor on, which is the failure-safe direction.
             /* bPointerLocked   = */ m_bPointerLocked || m_bRelativeMouseRequested,
-            /* bHaveCursorImage = */ m_pDefaultCursorSurface != nullptr );
+            /* bHaveCursorImage = */ m_pDefaultCursorSurface != nullptr,
+            /* bCursorEverywhere = */ m_bCursorEverywhere );
     }
 
-    bool CWaylandBackend::PresentOverlayCursor( bool bOverlayActive )
+    bool CWaylandBackend::PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere )
     {
-        if ( m_bOverlayCursorActive != bOverlayActive )
+        // Both terms, not just bOverlayActive: "Use everywhere" can be
+        // toggled live while the overlay stays open, and UpdateCursor() has
+        // to re-run to actually hide the host cursor it was already showing
+        // -- an unchanged m_bOverlayCursorActive would otherwise skip that.
+        if ( m_bOverlayCursorActive != bOverlayActive || m_bCursorEverywhere != bCursorEverywhere )
         {
             m_bOverlayCursorActive = bOverlayActive;
+            m_bCursorEverywhere = bCursorEverywhere;
             UpdateCursor();
         }
 
