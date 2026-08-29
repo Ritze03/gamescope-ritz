@@ -52,6 +52,94 @@
 //                              path itself draws identically to the
 //                              baseline when told to.
 //
+// ROWS 8-11 -- added to chase the ONE remaining untested difference: every
+// row above draws directly, via ImGui::GetForegroundDrawList()->AddText().
+// The real shell never does that -- every string in the UI goes through
+// Controls.cpp's ui::DrawText()/MeasureText(). Nobody had compared the two
+// paths side by side until now. Reading DrawText() top to bottom
+// (Controls.cpp) turned up THREE differences from this file's own baseline,
+// not one, so there are three rows plus the requested fractional-coordinate
+// row:
+//
+//   8  Window draw list    -- PER-DRAW. DrawText() draws onto
+//                              `ImGui::GetCurrentWindow()->DrawList`, a
+//                              WINDOW draw list -- never
+//                              GetForegroundDrawList(), which is what every
+//                              row above (and the real launcher's clean
+//                              middle row) uses. This is a draw-list CHOICE
+//                              difference the task brief specifically asked
+//                              to be isolated if found. Same baseline
+//                              font/bake/position/text as row 0, the ONLY
+//                              change is which draw list receives the
+//                              AddText() call. Needed standing up a
+//                              throwaway, fully-transparent, input-less
+//                              ImGui window for this whole block to draw
+//                              into in the first place -- see Draw()'s
+//                              "rows 8-11's shared setup" comment for why
+//                              that turned out to be load-bearing, not
+//                              optional plumbing.
+//   9  ui::DrawText()       -- PER-DRAW, CRITICAL ROW. The shell's real
+//      (realistic rect)        funnel, called exactly as a real label-only
+//                              row calls it: same TypeRole::Label face/size
+//                              resolution, same window draw list, and a
+//                              REAL label rect from
+//                              Lane::ForColumn/RowCtx::ForRow/
+//                              SplitLabelZone(0, ...) (Row.cpp/Lane.cpp) --
+//                              not an invented rect. That rect is realistic
+//                              UI width, not sized for this row's
+//                              deliberately long repeated test string, so
+//                              DrawText's OWN ellipsis truncation (a FOURTH
+//                              bypassed step: the lab's direct AddText()
+//                              never truncates anything) will very likely
+//                              cut it short. That is correct, expected
+//                              behaviour, not a bug in this row -- row 10
+//                              removes it as a variable.
+//   10 ui::DrawText()       -- PER-DRAW control for row 9: the identical
+//      (widened rect)          call, same rect, widened hugely on X so no
+//                              glyph is anywhere near the clip edge and the
+//                              full sample string survives intact. If 9 and
+//                              10 render identically apart from truncation
+//                              length, the clip argument itself is
+//                              exonerated and whatever 9 shows is really
+//                              coming from DrawText's other machinery
+//                              (draw list, alignment/centring math, or
+//                              per-glyph AddText with a non-null
+//                              cpu_fine_clip_rect -- already checked
+//                              generically by a previous worker, but never
+//                              on THIS exact call shape before now).
+//   11 Direct AddText,      -- PER-DRAW, the task brief's requested row:
+//      shell's real             same baseline font/bake as row 0, drawn via
+//      coordinate               the FOREGROUND draw list exactly like row
+//                              0, but positioned at the real fractional
+//                              pixel coordinate the SAME Lane/RowCtx/
+//                              SplitLabelZone call above resolves for a
+//                              label's DRAWN position (DrawText's own
+//                              vertical-centring formula, reproduced here
+//                              rather than re-derived, so this row's
+//                              position and row 9's are provably the same
+//                              number). Evaluated at a deliberately
+//                              non-default display_scale (1.15, inside
+//                              ConfigSchema.h's 0.5..2.0 clamp) rather than
+//                              whatever ui::Scale() happens to be live right
+//                              now -- at exactly 1.0 every token
+//                              multiplication below stays a whole number and
+//                              this row would land on an integer by
+//                              accident, defeating its own point. The actual
+//                              resolved (x, y) is printed in the row's own
+//                              caption so it is provably not invented.
+//
+// Rows 9-11 all run inside one throwaway ImGui::Begin()/End() bracket this
+// file did not need before -- ImGui::GetCurrentWindow() (what
+// ui::DrawText()/ui::MeasureText() call internally) derefs a null
+// g.CurrentWindow if nothing is currently open, and FontLab::Draw() is
+// called from SettingsOverlay.cpp with no window open (after the shell's
+// own Begin()/End() pairs have already closed for the frame -- see
+// FontLab.h's comment on when Draw() runs). That requirement is itself
+// evidence for the "draw-list choice" hypothesis: the real shell always has
+// a window open when it calls DrawText() (it is called from inside
+// Shell.cpp's own row-drawing code), so this is a faithful reconstruction
+// of that precondition, not a workaround for a lab-only problem.
+//
 // Every row after the caption repeats the sample string three times, so a
 // systematic artifact reads as a repeating pattern rather than a one-off.
 //
@@ -89,8 +177,18 @@
 #include "Palette.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" // ImRect -- same header UI/Row.h itself pulls this from
 
 #include "Geist-Regular.h" // same embedded bytes Fonts.cpp bakes Style::Label from -- see src/meson.build's font_embed_gen / Overlay/fonts/embed_font.py
+
+// The shell's real text funnel this file is comparing itself against
+// (ui::DrawText()/ui::MeasureText()), and the row-geometry primitives
+// (ui::Lane, ui::RowCtx) rows 9-11 use to resolve a REAL label rect/
+// coordinate rather than an invented one. `ui::` below resolves via
+// ordinary enclosing-namespace lookup -- this file lives in
+// gamescope::fontlab, Controls.h's contents live in gamescope::ui, same
+// pattern PanelConfig.cpp already uses.
+#include "UI/Controls.h"
 
 #include "convar.h"
 
@@ -137,7 +235,12 @@ namespace gamescope::fontlab
 			{ "rasterizer density 2.0 (bake-time)", 0, 0, 2.0f },
 		};
 
-		enum class RowKind { Baseline, Variant, PixelSnapX, SubpixelX, Nearest, Linear };
+		enum class RowKind
+		{
+			Baseline, Variant, PixelSnapX, SubpixelX, Nearest, Linear,
+			// Rows 8-11 -- see this file's top comment for what each isolates.
+			WindowDrawListDirect, ThroughDrawTextRealistic, ThroughDrawTextWidened, DirectAtShellCoord
+		};
 
 		struct Row
 		{
@@ -155,6 +258,10 @@ namespace gamescope::fontlab
 			{ RowKind::SubpixelX,  -1, "5  sub-pixel X, baseline +0.5px (per-draw, same baseline bake)" },
 			{ RowKind::Nearest,    -1, "6  forced NEAREST sampler (per-draw, same baseline bake/UVs)" },
 			{ RowKind::Linear,     -1, "7  forced LINEAR sampler -- control row (per-draw, same baseline bake/UVs)" },
+			{ RowKind::WindowDrawListDirect,   -1, "8  window draw list, direct AddText (isolates draw-list choice, same baseline bake/pos)" },
+			{ RowKind::ThroughDrawTextRealistic, -1, "9  ui::DrawText(), REAL label rect -- CRITICAL, expect truncation, see file header" },
+			{ RowKind::ThroughDrawTextWidened, -1, "10 ui::DrawText(), same rect widened -- rules out clipping/truncation as the cause" },
+			{ RowKind::DirectAtShellCoord,     -1, "11 " }, // suffix (the resolved coordinate) appended at draw time -- see Draw()
 		};
 
 		bool s_bBaked = false;
@@ -287,11 +394,68 @@ namespace gamescope::fontlab
 		                "Every row is the baseline plus exactly one change; see console log for "
 		                "resolved bake info." );
 
+		// ---- rows 8-11's shared setup ---------------------------------
+		// ui::DrawText()/ui::MeasureText() (Controls.cpp) draw onto
+		// ImGui::GetCurrentWindow()->DrawList, which derefs a null
+		// g.CurrentWindow if nothing is open -- and nothing is open here
+		// (FontLab::Draw() runs after the shell's own windows have already
+		// closed for the frame; see this file's top comment). Stand up one
+		// throwaway, fully-transparent, input-less window spanning the
+		// whole display so rows 8-11 have the same "a window is open"
+		// precondition the real shell always has when it calls DrawText()
+		// from inside its own row-drawing code.
+		ImGui::SetNextWindowPos( ImVec2( 0.0f, 0.0f ) );
+		ImGui::SetNextWindowSize( io.DisplaySize );
+		ImGui::SetNextWindowBgAlpha( 0.0f );
+		const bool  bWindowOpen = ImGui::Begin( "##fontlab_window_ctx", nullptr,
+			ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs |
+			ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus |
+			ImGuiWindowFlags_NoNav );
+		ImDrawList *pWindowDraw = bWindowOpen ? ImGui::GetWindowDrawList() : nullptr; // == ImGui::GetCurrentWindow()->DrawList -- exactly what DrawText() uses, NOT GetForegroundDrawList()
+
+		// Rows 9-11's shared geometry source: the shell's own
+		// Lane::ForColumn (Lane.cpp), evaluated at a deliberately
+		// non-default display_scale rather than whatever ui::Scale()
+		// happens to be live right now -- at exactly 1.0 every token
+		// multiplication below stays a whole number and row 11 would land
+		// on an integer by accident, defeating its own point. 1.15 sits
+		// inside ConfigSchema.h's 0.5..2.0 clamp, so it is a value a real
+		// user's display_scale setting can genuinely be. Restored right
+		// after the loop below -- see the comment there for why that is
+		// safe.
+		const float    flSavedUiScale = ui::Scale();
+		ui::SetScale( 1.15f );
+		const ui::Lane simLane = ui::Lane::ForColumn( 480.0f / ui::Scale() ); // 480px, a representative single sheet column
+
 		for ( const Row &row : kRows )
 		{
 			const ImVec2 cellMin( flMarginX, flY );
 			const ImVec2 cellMax( io.DisplaySize.x - flMarginX, flY + flRowH - 6.0f );
 			pDraw->AddRectFilled( cellMin, cellMax, colCellBg, 4.0f );
+
+			// The REAL label rect a shell row starting at THIS row's own
+			// on-screen position would resolve to, via
+			// RowCtx::ForRow()/SplitLabelZone(0, ...) (Row.cpp) -- 0 passed
+			// per Row.h's own documented use for "a kind with no value
+			// column". Anchored to cellMin.y (not a separately-invented Y)
+			// purely so rows 9-11's drawn text stays inside their own cell
+			// on screen; the rect itself is the same call a real row makes.
+			const ui::RowCtx simRow = ui::RowCtx::ForRow( simLane, flMarginX, cellMin.y );
+			ImRect rcRealLabel, rcRealValueUnused;
+			simRow.SplitLabelZone( 0.0f, &rcRealLabel, &rcRealValueUnused );
+			ImRect rcRealLabelWide = rcRealLabel;
+			rcRealLabelWide.Max.x  = rcRealLabel.Min.x + 2000.0f; // comfortably larger than the sample string -- no glyph anywhere near the clip edge
+
+			// DrawText()'s own vertical-centring formula (Controls.cpp),
+			// reproduced here rather than re-derived, so row 11's position
+			// is PROVABLY the same number row 9 draws its rect's text at.
+			const ImVec2 realTextSize = ui::MeasureText( ui::TypeRole::Label, kSample );
+			const ImVec2 realDirectPos( rcRealLabel.Min.x,
+			                            rcRealLabel.Min.y + ( rcRealLabel.GetHeight() - realTextSize.y ) * 0.5f );
+
+			char szCoordCaption[ 96 ];
+			std::snprintf( szCoordCaption, sizeof( szCoordCaption ),
+			               "(%.3f, %.3f) via Lane/RowCtx @ scale 1.15", realDirectPos.x, realDirectPos.y );
 
 			const float flCaptionX = std::floor( cellMin.x + 12.0f );
 			const float flCaptionY = std::floor( cellMin.y + 8.0f );
@@ -308,6 +472,16 @@ namespace gamescope::fontlab
 				                ImVec2( flCaptionX + prefixSize.x, flCaptionY ), colCaption,
 				                s_variants[ row.nVariantIdx ].pszCaption );
 			}
+			else if ( row.eKind == RowKind::DirectAtShellCoord )
+			{
+				// Same append mechanism as the Variant branch above, just a
+				// different source string: the coordinate this row is
+				// actually about to draw at, computed above, not invented.
+				const ImVec2 prefixSize = pMetaFont->CalcTextSizeA( flCaptionSize, FLT_MAX, 0.0f, row.pszCaption );
+				pDraw->AddText( pMetaFont, flCaptionSize,
+				                ImVec2( flCaptionX + prefixSize.x, flCaptionY ), colCaption,
+				                szCoordCaption );
+			}
 
 			// Deliberately non-integer: a realistic pen position, the way
 			// ImGui layout arithmetic actually lands most of the time (see
@@ -315,6 +489,24 @@ namespace gamescope::fontlab
 			const float flBaselineX = cellMin.x + 12.37f;
 			const float flSampleY   = std::floor( cellMin.y + 30.0f );
 			const ImVec2 samplePos( flBaselineX, flSampleY );
+
+			// Rows 8-10 draw onto the lab's own throwaway window (see
+			// above); degrade to a plain caption rather than dereference a
+			// null draw list if it somehow did not open this frame. Row 11
+			// draws onto the foreground list like every other row here --
+			// it only borrows this window's Lane/RowCtx MATH, not its draw
+			// list -- so it does not need this guard.
+			const bool bRowNeedsWindow =
+				row.eKind == RowKind::WindowDrawListDirect       ||
+				row.eKind == RowKind::ThroughDrawTextRealistic   ||
+				row.eKind == RowKind::ThroughDrawTextWidened;
+			if ( bRowNeedsWindow && pWindowDraw == nullptr )
+			{
+				pDraw->AddText( pMetaFont, flCaptionSize, samplePos, colHeader,
+				                "(lab's own ImGui window did not open this frame -- skipped)" );
+				flY += flRowH;
+				continue;
+			}
 
 			switch ( row.eKind )
 			{
@@ -369,9 +561,51 @@ namespace gamescope::fontlab
 					pDraw->AddText( pLabelFont, flBaselineSizePx, samplePos, colSample, kSample );
 					break;
 				}
+
+				case RowKind::WindowDrawListDirect:
+					// Same baseline font/bake/position/text as row 0 -- the
+					// ONLY change is which draw list receives the AddText()
+					// call. Isolates the draw-list choice itself.
+					pWindowDraw->AddText( pLabelFont, flBaselineSizePx, samplePos, colSample, kSample );
+					break;
+
+				case RowKind::ThroughDrawTextRealistic:
+					// The shell's real funnel, verbatim: same TypeRole,
+					// same window draw list, a REAL label rect. This
+					// string is realistically too long for that rect, so
+					// DrawText's own ellipsis logic (Controls.cpp) will
+					// likely truncate it -- expected, not a bug in this row.
+					ui::DrawText( rcRealLabel, ui::TypeRole::Label, colSample, kSample );
+					break;
+
+				case RowKind::ThroughDrawTextWidened:
+					// Identical call, same rect widened so nothing
+					// truncates -- rules out clipping/truncation as the
+					// difference between this row and row 9.
+					ui::DrawText( rcRealLabelWide, ui::TypeRole::Label, colSample, kSample );
+					break;
+
+				case RowKind::DirectAtShellCoord:
+					// Row 0's exact draw call, only the position changes:
+					// the real fractional coordinate computed above, via
+					// the same Lane/RowCtx call rows 9-10 draw their rect
+					// at (see szCoordCaption for the printed number).
+					pDraw->AddText( pLabelFont, flBaselineSizePx, realDirectPos, colSample, kSample );
+					break;
 			}
 
 			flY += flRowH;
 		}
+
+		ImGui::End(); // matches ImGui::Begin() above -- must run whether or not it returned true
+
+		// Restore -- this override must never leak into any OTHER frame's
+		// real rendering. Safe even without this: the shell overwrites
+		// ui::Scale() from its own live display_scale at the very top of
+		// every Draw() it runs (Shell.cpp:5965), and FontLab::Draw() always
+		// runs AFTER the shell's for this same frame (SettingsOverlay.cpp),
+		// so nothing downstream of here this frame reads the overridden
+		// value either. Restored anyway rather than relying on that.
+		ui::SetScale( flSavedUiScale );
 	}
 }
