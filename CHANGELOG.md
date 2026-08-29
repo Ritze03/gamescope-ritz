@@ -48,6 +48,13 @@ The newest version below is the one this build reports.
   with the game since it never asked for its own frames either; it now refreshes on
   its own roughly twice a second, so the readout doesn't freeze in a paused menu
   or a stalled loading screen.
+- **A dropdown no longer opens under the wrong control**: in the narrow layout, a
+  multiselect that had downgraded to a dropdown (e.g. Upscaling's Filter) could open
+  its option list under the Inspector's copy of the same row instead of the one you
+  clicked, showing whichever row's options happened to draw last. The Sheet and the
+  Inspector now each own their own open/closed state for the same row.
+- **Clicking an open dropdown's own control now closes it**: it previously reopened
+  the same list instead of toggling it shut.
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was
   not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now

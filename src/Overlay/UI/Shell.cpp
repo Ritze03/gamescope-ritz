@@ -201,6 +201,18 @@ namespace gamescope::ui::shell
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
 
+		// Which region OPENED the dropdown named by s_sOpenDropdown. The
+		// Sheet's row and the Inspector's copy of the very same selected
+		// Entry (its "VALUES" control, DrawConfigure) render with the
+		// IDENTICAL Id() every frame that Entry is selected -- that is the
+		// normal, correct state, not an edge case. Comparing the id alone
+		// let whichever region happened to draw LAST in the frame steal the
+		// other's open popup: right id, wrong screen rect, wrong options
+		// once a second entry's dropdown was involved. The id plus the
+		// owning region is what makes the two copies independently
+		// openable/closable. See DrawSharedControl's Choice case.
+		Region s_eOpenDropdownRegion = Region::Sheet;
+
 		// How far the rail is scrolled, in physical px. Non-zero only when
 		// the item column is taller than the rail -- which it is from 2.0x
 		// (and at 1.75x on a short slab). DrawRail() clamps it every frame,
@@ -1965,7 +1977,7 @@ namespace gamescope::ui::shell
 		// (Controls.h). A caller cannot declare an int slider and bind a float.
 		template <typename TDecl>
 		bool DrawSharedControl( const TDecl &decl, const RowCtx &row, const char *pszId,
-		                        const std::string &sPopupKey, int nBankChip = -1 )
+		                        const std::string &sPopupKey, Region eRegion, int nBankChip = -1 )
 		{
 			if ( !decl.Binding().IsBound() )
 				return false;
@@ -2022,7 +2034,13 @@ namespace gamescope::ui::shell
 				case Kind::Choice:
 				{
 					int n = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
-					const bool bOpen = ( s_sOpenDropdown == sPopupKey );
+					// Region-qualified: see s_eOpenDropdownRegion. Without the
+					// region half, the Sheet's copy of a selected Choice and
+					// the Inspector's copy of the SAME entry -- drawn every
+					// frame that entry is selected -- would both read as
+					// "open" off the one shared id.
+					const bool bOpen = ( s_sOpenDropdown == sPopupKey &&
+					                     s_eOpenDropdownRegion == eRegion );
 					const controls::ChoiceResult res = controls::Choice(
 						row, pszId, &n, decl.Options().data(), decl.Options().size(), bOpen );
 
@@ -2040,8 +2058,25 @@ namespace gamescope::ui::shell
 
 						if ( res.bWantsPopup )
 						{
-							s_sOpenDropdown = sPopupKey;
-							s_nPopupFocus = -1;
+							// Toggle: the control that opens the list is also
+							// how you close it. Deciding this from `bOpen`
+							// (already region-qualified, already the state
+							// from BEFORE this click) means the button's own
+							// click is handled exactly once, here -- so it
+							// cannot close-then-immediately-reopen against
+							// DrawDropdownList's separate outside-click check
+							// later this same frame.
+							if ( bOpen )
+							{
+								s_sOpenDropdown.clear();
+								s_nPopupFocus = -1;
+							}
+							else
+							{
+								s_sOpenDropdown = sPopupKey;
+								s_eOpenDropdownRegion = eRegion;
+								s_nPopupFocus = -1;
+							}
 						}
 
 						// D18: the OPEN dropdown's list is not drawn here.
@@ -2062,7 +2097,7 @@ namespace gamescope::ui::shell
 						// needed a click, which this project is forbidden to
 						// synthesise, so no test and no screenshot had ever
 						// opened one.
-						if ( s_sOpenDropdown == sPopupKey )
+						if ( s_sOpenDropdown == sPopupKey && s_eOpenDropdownRegion == eRegion )
 						{
 							const ImRect rcRow = row.Bounds();
 							s_rcDropdownAnchor = { rcRow.Min.x, rcRow.Min.y,
@@ -2608,6 +2643,7 @@ namespace gamescope::ui::shell
 					// the one region the arrow keys are actually driving,
 					// rather than on both copies of a selected row's bank.
 					DrawSharedControl( entry, row, "ctl", entry.Id(),
+						bAffordance ? Region::Sheet : Region::Inspector,
 						( bAffordance
 							? ( s_eFocusRegion == Region::Sheet && bSelected )
 							: ( s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 ) )
@@ -2770,7 +2806,7 @@ namespace gamescope::ui::shell
 
 				if ( bDisabled )
 					ImGui::BeginDisabled();
-				DrawSharedControl( param, row, "ictl", param.Id(),
+				DrawSharedControl( param, row, "ictl", param.Id(), Region::Sheet,
 					bFocused ? s_nBankChip : -1 );
 				if ( bDisabled )
 					ImGui::EndDisabled();
@@ -3583,7 +3619,7 @@ namespace gamescope::ui::shell
 				// The SAME painter the sheet row uses -- SPEC §5.3's "a
 				// promoted parameter ends up in the Sheet" only holds if the
 				// two are literally one code path.
-				DrawSharedControl( param, row, "pctl", param.Id(),
+				DrawSharedControl( param, row, "pctl", param.Id(), Region::Inspector,
 					( s_eFocusRegion == Region::Inspector &&
 					  s_nInspectorFocus == (int)i + 1 ) ? s_nBankChip : -1 );
 				if ( bParamDisabled )
@@ -5502,6 +5538,7 @@ namespace gamescope::ui::shell
 						if ( DrawsAsDropdown( sId ) )
 						{
 							s_sOpenDropdown = sId;
+							s_eOpenDropdownRegion = Region::Inspector;
 							s_nPopupFocus = -1;
 						}
 					}
@@ -5620,6 +5657,7 @@ namespace gamescope::ui::shell
 					else if ( param.GetKind() == Kind::Choice && DrawsAsDropdown( param.Id() ) )
 					{
 						s_sOpenDropdown = param.Id();
+						s_eOpenDropdownRegion = Region::Sheet;
 						s_nPopupFocus = -1;
 					}
 					return;
@@ -5678,6 +5716,7 @@ namespace gamescope::ui::shell
 					// no popup, so opening one would swallow the keyboard
 					// with nothing on screen. See s_DropdownRows.
 					s_sOpenDropdown = pSel->Id();
+					s_eOpenDropdownRegion = Region::Sheet;
 					s_nPopupFocus = -1;
 				}
 				else if ( pSel->GetKind() == Kind::Action )
