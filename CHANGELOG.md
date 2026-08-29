@@ -55,6 +55,13 @@ The newest version below is the one this build reports.
   Inspector now each own their own open/closed state for the same row.
 - **Clicking an open dropdown's own control now closes it**: it previously reopened
   the same list instead of toggling it shut.
+- **An open dropdown list now always closes on the next click**: clicking its own
+  row, another row, empty space in the sheet, the inspector, the rail or the title
+  bar all close it now; previously only some of those did, and the row that opened
+  it was immune to every route.
+- **Closing the Launcher with Left Ctrl + Right Ctrl keeps your search text**: reopen
+  it the same way and what you typed is still there. Closing with Right Ctrl alone
+  or Escape still clears it, as before.
 - **Mouse movement reaches games again while the cursor is grabbed**: movement was
   not being delivered at all, so aiming and looking only updated when you clicked.
 - **UI scale no longer resizes the overlay window**: adjusting UI scale now

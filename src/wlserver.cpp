@@ -444,7 +444,15 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 			if ( gamescope::ui::shell::PaletteActive() )
 			{
 				if ( bLauncherOnly )
+				{
+					// Item 2: this combo is the one route the user asked to
+					// keep the query on -- Right Ctrl's tap and Escape close
+					// the launcher too, but through different paths below
+					// and inside the shell's own keyboard, and neither of
+					// those asks for this.
+					gamescope::ui::shell::RequestLauncherClosePreservingQuery();
 					gamescope::SettingsOverlay_SetVisible( false );
+				}
 				else
 					gamescope::ui::shell::RequestClosePalette();
 

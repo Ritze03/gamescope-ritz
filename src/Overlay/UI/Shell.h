@@ -114,4 +114,23 @@ namespace gamescope::ui::shell
 	// arrive on any thread; like the two requests above it stores an atomic
 	// that Draw() consumes.
 	void NotifyOverlayHidden();
+
+	// Item 2 (2026-08-29): the user's own wording -- "Closing the Launcher
+	// with CtrlL and CtrlR should not empty the search field. Closing it
+	// with RCtrl only or Escape should empty the search, like it does now."
+	//
+	// Called from wlserver's hotkey thread, ONE line before it hides the
+	// overlay to close a launcher the combo itself opened
+	// (wlserver_check_ctrl_shortcuts' `bLauncherOnly` branch) -- the only
+	// one of the three close routes this applies to. Right Ctrl's tap
+	// (SettingsOverlay_ToggleVisible) and Escape (RunPaletteKeyboard, on the
+	// Draw() thread) call neither this nor anything like it, so they keep
+	// today's clear-on-next-open behaviour by simply not asking.
+	//
+	// Stores one atomic bit, not the query text itself: the text lives in
+	// s_sPaletteQuery, which only the Draw() thread ever touches, and this
+	// function runs on wlserver's. OpenPalette() consumes the bit the next
+	// time it actually runs, on the thread that owns the string -- so the
+	// two threads never race on anything but a bool.
+	void RequestLauncherClosePreservingQuery();
 }

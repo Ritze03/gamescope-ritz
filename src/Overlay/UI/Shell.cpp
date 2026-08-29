@@ -343,10 +343,27 @@ namespace gamescope::ui::shell
 		// reads as dropped input.
 		float s_flPaletteCaretAt = 0.0f;
 
+		// Item 2: set by RequestLauncherClosePreservingQuery(), on wlserver's
+		// hotkey thread, the moment the Ctrl+Ctrl combo closes an open
+		// launcher. Consumed here, in OpenPalette(), on the thread that owns
+		// s_sPaletteQuery -- see that function's declaration in Shell.h for
+		// why the text itself never crosses threads, only this one bit.
+		std::atomic<bool> s_bPreserveQueryOnNextOpen{ false };
+
 		void OpenPalette()
 		{
 			s_bPaletteOpen = true;
-			s_sPaletteQuery.clear();
+
+			// Default: start clean, same as always. The one exception is the
+			// bit above -- a query the user was still typing when Ctrl+Ctrl
+			// closed the launcher survives to this reopen. Either way the
+			// highlight resets to the first match rather than trying to
+			// preserve a row index: the registry (dynamic areas) or the
+			// query itself can differ between the close and this open, and a
+			// stale index into a possibly-different result list is worse
+			// than just re-landing on row 0.
+			if ( !s_bPreserveQueryOnNextOpen.exchange( false, std::memory_order_acq_rel ) )
+				s_sPaletteQuery.clear();
 			s_nPaletteSel = 0;
 			s_flPaletteCaretAt = (float)ImGui::GetTime();
 
@@ -2056,27 +2073,23 @@ namespace gamescope::ui::shell
 						// here should open a popup. See s_DropdownRows.
 						s_DropdownRowsBuild.push_back( sPopupKey );
 
-						if ( res.bWantsPopup )
+						if ( res.bWantsPopup && !bOpen )
 						{
-							// Toggle: the control that opens the list is also
-							// how you close it. Deciding this from `bOpen`
-							// (already region-qualified, already the state
-							// from BEFORE this click) means the button's own
-							// click is handled exactly once, here -- so it
-							// cannot close-then-immediately-reopen against
-							// DrawDropdownList's separate outside-click check
-							// later this same frame.
-							if ( bOpen )
-							{
-								s_sOpenDropdown.clear();
-								s_nPopupFocus = -1;
-							}
-							else
-							{
-								s_sOpenDropdown = sPopupKey;
-								s_eOpenDropdownRegion = eRegion;
-								s_nPopupFocus = -1;
-							}
+							// Opening only. Closing an ALREADY-open list is
+							// DismissOpenDropdownOnOutsideClick()'s job now,
+							// decided and swallowed before any row (this one
+							// included) is drawn -- so a press on this same
+							// control while its own list is open never
+							// reaches here as a press at all: the control's
+							// rect does not overlap its own list's, the
+							// dismiss check ran first this frame, and it
+							// already ate that click. See that function for
+							// the ordering bug this replaces (the row line
+							// and the collapsed control used to be immune to
+							// closing, from either route).
+							s_sOpenDropdown = sPopupKey;
+							s_eOpenDropdownRegion = eRegion;
+							s_nPopupFocus = -1;
 						}
 
 						// D18: the OPEN dropdown's list is not drawn here.
@@ -4550,22 +4563,17 @@ namespace gamescope::ui::shell
 		// keyboard state it draws (s_nPopupFocus) is the same state
 		// RunKeyboard() moves -- there is no second copy and no parallel
 		// path, which is the property that lets the console drive it too.
-		void DrawDropdownList( const Rect &rcSlab )
+		//
+		// The rect is its OWN function, shared with
+		// DismissOpenDropdownOnOutsideClick() below, so the thing that
+		// decides "was this click inside the list" and the thing that PAINTS
+		// the list can never disagree about where it is. Empty when nothing
+		// is open, or the row that owns it did not draw this frame.
+		Rect ComputeOpenDropdownRect( const Rect &rcSlab )
 		{
-			if ( s_sOpenDropdown.empty() )
-				return;
-
-			// Self-heal: the row that owns this dropdown was not drawn this
-			// frame -- the user navigated to another area, or a dynamic area
-			// rebuilt underneath it. Leaving the state set would leave the
-			// keyboard captured by a list that is not on screen, which is the
-			// worst of the failure modes this whole commit is closing.
-			if ( s_pDropdownOptions == nullptr || s_pDropdownOptions->empty() )
-			{
-				s_sOpenDropdown.clear();
-				s_nPopupFocus = -1;
-				return;
-			}
+			if ( s_sOpenDropdown.empty() ||
+			     s_pDropdownOptions == nullptr || s_pDropdownOptions->empty() )
+				return Rect{};
 
 			const std::vector<Option> &opts = *s_pDropdownOptions;
 			const float flRowH = Px( 34.0f );
@@ -4591,7 +4599,82 @@ namespace gamescope::ui::shell
 			if ( y0 + flH > rcSlab.y1 - Px( tok::kS ) )
 				y0 = std::max( rcSlab.y0, s_rcDropdownAnchor.y0 - flH );
 
-			const Rect rc { x0, y0, x1, y0 + flH };
+			return Rect{ x0, y0, x1, y0 + flH };
+		}
+
+		// Item 1 (2026-08-29): "The opened list should ALWAYS close, when
+		// anything else than a list element itself is clicked" -- verbatim.
+		// Called from Draw(), BEFORE a single row/rail/inspector/title-bar
+		// widget is drawn this frame, so it sees the press before any
+		// widget's own ButtonBehavior can claim it.
+		//
+		// THE ORDERING BUG THIS REPLACES. Closing used to happen at the END
+		// of the frame, inside DrawDropdownList(), which runs after the slab
+		// -- and every row's own controls::Choice() -- has already been
+		// drawn and has already reacted to this SAME click. A control's own
+		// ButtonBehavior fires on mouse-RELEASE, not press, so the dropdown
+		// row's own toggle (the previous fix) and this end-of-frame
+		// outside-click test were racing two DIFFERENT edges of the SAME
+		// click. The outside-click test also excluded the whole anchor rect
+		// (the row's own bounds, not just the list) so the toggle could have
+		// first say on it -- which is what made the row line, and the
+		// collapsed control itself, immune to closing by EITHER route: the
+		// toggle only fired for a press-then-release both landing on the
+		// control's own hit rect, and the outside-click test was told not to
+		// look at that rect at all.
+		//
+		// Fix: decide on the PRESS, before anything else runs, and swallow
+		// it -- zero the press edge in ImGui's own IO -- so nothing drawn
+		// later this frame can treat this same physical mouse-down as the
+		// start of its own click. That is a deliberate behaviour change: a
+		// press on some OTHER control while a list is open now only closes
+		// the list, it never also activates that control (including the
+		// control that owns the list itself) -- the user clicks again,
+		// which is what a native dropdown does.
+		void DismissOpenDropdownOnOutsideClick( const Rect &rcSlab )
+		{
+			if ( s_sOpenDropdown.empty() )
+				return;
+			if ( !ImGui::IsMouseClicked( ImGuiMouseButton_Left ) )
+				return;
+
+			const Rect  rcList  = ComputeOpenDropdownRect( rcSlab );
+			const ImVec2 vMouse = ImGui::GetIO().MousePos;
+			if ( !rcList.Empty() && rcList.Contains( vMouse.x, vMouse.y ) )
+				return; // inside the list itself -- its own item click handles this
+
+			s_sOpenDropdown.clear();
+			s_nPopupFocus = -1;
+
+			// Swallow. Without this, a control under the cursor still sees
+			// MouseClicked this same frame and can arm itself (ButtonBehavior
+			// SetActiveID on the click edge) -- on the control that OWNS this
+			// very list, that is the close-then-immediately-reopen this whole
+			// function exists to stop.
+			ImGui::GetIO().MouseClicked[ ImGuiMouseButton_Left ] = false;
+		}
+
+		void DrawDropdownList( const Rect &rcSlab )
+		{
+			if ( s_sOpenDropdown.empty() )
+				return;
+
+			// Self-heal: the row that owns this dropdown was not drawn this
+			// frame -- the user navigated to another area, or a dynamic area
+			// rebuilt underneath it. Leaving the state set would leave the
+			// keyboard captured by a list that is not on screen, which is the
+			// worst of the failure modes this whole commit is closing.
+			if ( s_pDropdownOptions == nullptr || s_pDropdownOptions->empty() )
+			{
+				s_sOpenDropdown.clear();
+				s_nPopupFocus = -1;
+				return;
+			}
+
+			const std::vector<Option> &opts = *s_pDropdownOptions;
+			const Rect  rc      = ComputeOpenDropdownRect( rcSlab );
+			const float flRowH  = Px( 34.0f );
+			const float flPadY  = Px( tok::kXS );
 
 			ImGui::SetNextWindowPos( ImVec2( rcSlab.x0, rcSlab.y0 ) );
 			ImGui::SetNextWindowSize( ImVec2( rcSlab.Width(), rcSlab.Height() ) );
@@ -4656,16 +4739,13 @@ namespace gamescope::ui::shell
 					}
 				}
 
-				// A click anywhere else dismisses, which is what every
-				// dropdown everywhere does and what the ImGui popup used to
-				// give for free.
-				if ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) &&
-				     !rc.Contains( ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y ) &&
-				     !s_rcDropdownAnchor.Contains( ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y ) )
-				{
-					s_sOpenDropdown.clear();
-					s_nPopupFocus = -1;
-				}
+				// Dismissal on a click outside the list is handled earlier
+				// in the frame -- see DismissOpenDropdownOnOutsideClick(),
+				// called from Draw() before any row is drawn. By the time
+				// this function runs, the list either stayed open because
+				// that click landed inside it (an item click, just above),
+				// or it is already closed and this function returned at the
+				// top.
 			}
 			ImGui::End();
 			ImGui::PopStyleVar( 2 );
@@ -5852,6 +5932,11 @@ namespace gamescope::ui::shell
 		s_bPaletteCloseRequested.store( true, std::memory_order_release );
 	}
 
+	void RequestLauncherClosePreservingQuery()
+	{
+		s_bPreserveQueryOnNextOpen.store( true, std::memory_order_release );
+	}
+
 	void NotifyOverlayHidden()
 	{
 		// D31: the notice, and ONLY the notice. This used to also clear the
@@ -5979,6 +6064,16 @@ namespace gamescope::ui::shell
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )
 			return;
 
+		// Slab-space rect, computed once here and reused by both
+		// DismissOpenDropdownOnOutsideClick() (before anything draws) and
+		// DrawDropdownList() (after the slab closes) -- the two calls this
+		// frame that need to agree on where the slab is.
+		const Rect rcSlab {
+			( io.DisplaySize.x - slab.flWidthPx ) * 0.5f,
+			( io.DisplaySize.y - slab.flHeightPx ) * 0.5f,
+			( io.DisplaySize.x - slab.flWidthPx ) * 0.5f + slab.flWidthPx,
+			( io.DisplaySize.y - slab.flHeightPx ) * 0.5f + slab.flHeightPx };
+
 		// =================================================================
 		//  D25: the launcher -- the palette ALONE, over the game
 		// =================================================================
@@ -6093,6 +6188,14 @@ namespace gamescope::ui::shell
 		// frames E2 draws turn it off.
 		ImGuiIO &ioMutable = ImGui::GetIO();
 		ioMutable.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+
+		// Item 1: decide dropdown dismissal BEFORE a single row, the rail or
+		// the title bar is drawn -- see DismissOpenDropdownOnOutsideClick()
+		// for why the ordering is the fix. Uses last frame's anchor/options
+		// (s_pDropdownOptions is reset to nullptr for THIS frame a few lines
+		// down), which is correct: those are exactly what is on screen right
+		// now, when this frame's input is read.
+		DismissOpenDropdownOnOutsideClick( rcSlab );
 
 		// D18: hand the just-finished frame's dropdown record to the
 		// keyboard, and start a fresh one for the frame about to be drawn.
@@ -6243,13 +6346,9 @@ namespace gamescope::ui::shell
 
 		// D18: the open dropdown's list, above the slab and below the
 		// palette. Same sibling-window reason as the palette below, plus the
-		// popup-focus one -- see DrawDropdownList.
-		{
-			const ImVec2 vSlab( ( io.DisplaySize.x - slab.flWidthPx ) * 0.5f,
-			                    ( io.DisplaySize.y - slab.flHeightPx ) * 0.5f );
-			DrawDropdownList( { vSlab.x, vSlab.y,
-			                    vSlab.x + slab.flWidthPx, vSlab.y + slab.flHeightPx } );
-		}
+		// popup-focus one -- see DrawDropdownList. Same rcSlab
+		// DismissOpenDropdownOnOutsideClick() used earlier this frame.
+		DrawDropdownList( rcSlab );
 
 		// The palette gets its OWN top-level window, opened after the slab's
 		// has closed.
