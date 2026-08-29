@@ -1086,6 +1086,24 @@ TEST_CASE( "value: ValueToString never prints -0, regardless of how the value ar
 	REQUIRE( ui::ValueToString( ui::Value( -0.5f ) ) == "-0.5" );
 }
 
+// Issue #101: quantisation residue arriving here as a magnitude like
+// 1.565e-07 -- rather than exactly 0.0 -- must never render as scientific
+// notation. This is defence in depth for whatever path did NOT go through
+// AdjustValue()'s SnapFloatToStep() fix: a pre-fix config, a hand-edited
+// one, `overlay_e2_set`. Values well clear of the floor are untouched, so
+// this is not a blanket "small numbers become zero" rule.
+TEST_CASE( "value: ValueToString never renders scientific notation", "[overlay_ui]" )
+{
+	REQUIRE( ui::ValueToString( ui::Value( 1.565e-7f ) )  == "0" );
+	REQUIRE( ui::ValueToString( ui::Value( -1.565e-7f ) ) == "0" );
+	REQUIRE( ui::ValueToString( ui::Value( 5e-5f ) )      == "0" );
+
+	// A value clear of the floor keeps its previous, exact formatting --
+	// this fix must not touch any value a real registration can produce.
+	REQUIRE( ui::ValueToString( ui::Value( 0.05f ) )  == "0.05" );
+	REQUIRE( ui::ValueToString( ui::Value( 203.0f ) ) == "203" );
+}
+
 // D27, item 3. The user: "Add sensible step sizes for all sliders, so they have
 // up to 100 individual positions. It should allow, to set even values more
 // easily."

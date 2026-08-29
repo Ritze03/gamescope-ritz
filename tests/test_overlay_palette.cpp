@@ -262,6 +262,47 @@ TEST_CASE( "palette: arrows step a slider by its declared step and clamp", "[ove
 	REQUIRE( f.flSharp == 20.0f );
 }
 
+// Issue #101. Reported on `image.shaders.vibrancy.strength` (range -1..1,
+// step 0.05, default 0): stepping the launcher's in-place adjuster down and
+// back up left "-1.565e-07" on screen instead of "0" -- ordinary binary
+// floating-point error accumulating over repeated +/- 0.05f, because
+// AdjustValue() only ever added the step to the current value. Shaped like
+// that real registration on purpose, not the Fixture's integer-step slider,
+// since an exact step never drifts and would not have caught this.
+TEST_CASE( "palette: stepping a float param down and back up returns exactly to its start", "[overlay_palette]" )
+{
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "test.vibrancy", "Vibrancy", ui::Section::Display );
+
+	float flStrength = 0.0f;
+	a.Slider( "test.vibrancy.strength", "Strength", ui::Bind( &flStrength ) )
+		.Help( "x" )
+		.Range( -1.0f, 1.0f )
+		.Step( 0.05f )
+		.Default( 0.0f );
+
+	const ui::Entry *pE = reg.FindEntry( "test.vibrancy.strength" );
+	REQUIRE( pE != nullptr );
+
+	for ( int i = 0; i < 20; i++ )
+		REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), -1, false ) );
+	for ( int i = 0; i < 20; i++ )
+		REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, false ) );
+
+	// Bit-exact, not "close to zero": the whole point is that the residue is
+	// gone, not merely small, and this is also what ValueToString() needs to
+	// print a plain "0" rather than scientific notation.
+	REQUIRE( flStrength == 0.0f );
+
+	// A held Shift (SPEC 3.4's x0.1 fine step) drifts on its own finer grid
+	// exactly the same way, and must also land back on the start.
+	for ( int i = 0; i < 15; i++ )
+		REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), +1, true ) );
+	for ( int i = 0; i < 15; i++ )
+		REQUIRE( ui::AdjustValue( ui::Adjustable::Of( *pE ), -1, true ) );
+	REQUIRE( flStrength == 0.0f );
+}
+
 TEST_CASE( "palette: a switch takes its value from the DIRECTION, not a toggle", "[overlay_palette]" )
 {
 	// Holding Right down a list of switches must end with them all on. A

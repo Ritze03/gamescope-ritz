@@ -119,7 +119,34 @@ namespace gamescope::ui
 			// "%g" formats -0.0 as the literal text "-0", which is the
 			// display-only case a write-side fix cannot touch.
 			double flVal = (double)*p;
-			if ( flVal == 0.0 )
+			// Issue #101: quantisation noise that reaches this function from
+			// ANY path -- AdjustValue()'s arrow keys before SnapFloatToStep()
+			// existed, a pre-fix config, a hand-edited one, `overlay_e2_set`
+			// -- can be a magnitude like 1.565e-07 rather than exactly 0.0,
+			// and "%.4g" renders anything smaller than 1e-4 in scientific
+			// notation ("1.565e-07"), never as a plain decimal.
+			//
+			// 1e-4 is not a new number invented for this: it is the exact
+			// tolerance ValueEquals() (below) already uses to call two floats
+			// "the same setting" for the reset chip, so "close enough to zero
+			// to print as zero" and "close enough to the default to count as
+			// at it" are the same one comparison instead of two that could
+			// disagree. It is also, not coincidentally, precisely where
+			// "%.4g" itself switches to scientific notation for a small
+			// value -- so collapsing anything smaller reads as "never
+			// scientific notation" and "residue displays as zero" solved by
+			// the same line.
+			//
+			// This cannot damage a legitimately small-valued parameter: every
+			// Step() and Range() this codebase declares for a float today is
+			// >= 0.05 (see PanelShaders.cpp, PanelDisplay.cpp, PanelConfig.cpp,
+			// FpsDisplay.cpp), five hundred times this floor, so a real
+			// registered value never sits anywhere near it -- only drift
+			// does. A future parameter that genuinely needed values this
+			// small would need this floor lowered (or the fuller, step-aware
+			// rule below) rather than living with it silently; nothing here
+			// claims that day cannot come.
+			if ( std::fabs( flVal ) < 1e-4 )
 				flVal = 0.0;
 			char sz[ 32 ];
 			snprintf( sz, sizeof( sz ), "%.4g", flVal );
@@ -176,6 +203,29 @@ namespace gamescope::ui
 	// Hi and no clamp is needed here (SliderBehavior already clamps the input
 	// to the range). That also makes this independent of declaration order --
 	// Step() does not care whether Range() has been called yet.
+	// Shared by SnapDragsTo() (below) and AdjustValue()'s keyboard/palette
+	// arrow-key path. Both routes step a float by repeated +/- flStep, which
+	// accumulates ordinary binary floating-point error (0.05f has no exact
+	// binary representation) into a residue that never lands back on exactly
+	// zero -- issue #101, "-1.565e-07" instead of "0". Rounding to the nearest
+	// multiple of the step, on a grid anchored at zero, collapses that
+	// residue every time rather than letting it compound: one function, one
+	// definition of "on the grid", used by every path that can produce an
+	// off-grid float (SPEC's own precedent against two snapping rules that
+	// can disagree -- see AnyBind::SnapDragsTo()'s header comment).
+	float SnapFloatToStep( float flVal, float flStep )
+	{
+		if ( flStep <= 0.0f )
+			return flVal;
+		float flSnapped = (float)( std::round( (double)flVal / (double)flStep ) * (double)flStep );
+		// -0.0f == 0.0f is true, so this assignment normalises -0.0f to +0.0f
+		// without touching any nonzero value; prevents a "-0" display state
+		// distinct from "0" (issue #85).
+		if ( flSnapped == 0.0f )
+			flSnapped = 0.0f;
+		return flSnapped;
+	}
+
 	AnyBind &AnyBind::SnapDragsTo( float flStep )
 	{
 		if ( flStep <= 0.0f || !m_Set )
@@ -190,15 +240,7 @@ namespace gamescope::ui
 				return;
 			}
 			if ( const float *p = std::get_if<float>( &v ) )
-			{
-				float flSnapped = (float)( std::round( *p / flStep ) * flStep );
-				// -0.0f == 0.0f is true, so this assignment normalises -0.0f to +0.0f
-				// without touching any nonzero value; prevents a "-0" display state
-				// distinct from "0" (issue #85).
-				if ( flSnapped == 0.0f )
-					flSnapped = 0.0f;
-				set( Value{ flSnapped } );
-			}
+				set( Value{ SnapFloatToStep( *p, flStep ) } );
 			else if ( const int *p = std::get_if<int>( &v ) )
 				set( Value{ (int)std::lround( std::round( (double)*p / flStep ) * flStep ) } );
 			else
@@ -976,6 +1018,13 @@ namespace gamescope::ui
 						flStep *= 0.1f;
 
 					float flNew = *p + (float)nDir * flStep;
+					// Quantise to the grid this step actually moved on
+					// (flStep, already halved for a fine adjust) before
+					// clamping -- see SnapFloatToStep()'s comment. A held
+					// arrow key adds the same binary-inexact flStep dozens of
+					// times; without this, stepping down N times and back up
+					// N never returns to exactly the value it started from.
+					flNew = SnapFloatToStep( flNew, flStep );
 					if ( adj.bHasRange )
 						flNew = std::clamp( flNew, adj.flLo, adj.flHi );
 					if ( flNew == *p )

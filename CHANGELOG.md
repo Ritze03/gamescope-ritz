@@ -56,6 +56,12 @@ The newest version below is the one this build reports.
 - **Notification text matches the rest of the overlay**: it used to render
   smaller than every other label.
 - **Sliders no longer show `-0`** as a value distinct from `0`.
+- **Stepping a float setting down and back up returns it exactly to where it
+  started**: repeated arrow-key adjustment (in the launcher and the sheet
+  alike) used to leave a tiny leftover instead of landing back on the exact
+  original value.
+- **A near-zero value never displays in scientific notation** (e.g.
+  `-1.565e-07`): it now reads as a plain `0`.
 - **The toggle-switch knob is centred**: it used to sit 1px left of centre,
   and land differently on and off.
 - **The slider handle's glow follows its rounded shape** instead of drawing
