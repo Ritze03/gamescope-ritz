@@ -68,6 +68,76 @@ Focus is the only event that carries new information.
 
 ---
 
+## 2026-08-29 — the "font artifact" was Issue #102 the whole time; the font lab is deleted
+
+**What was reported.** Two symptoms, filed as if unrelated: (a) all shell and launcher
+text rendering **doubled**, every glyph carrying a faint ghost offset by about a pixel,
+and (b) a lone **Right Ctrl no longer opening the Click-UI** (`Left Ctrl + Right Ctrl`
+kept opening the launcher fine). Symptom (a) was chased for five rounds as a text-
+rendering defect — a temporary `FontLab` diagnostic (`src/Overlay/FontLab.{h,cpp}`,
+`overlay_e2_fontlab`) was built to isolate it by rendering the same string through a
+grid of atlas/sampler/draw-path variants side by side.
+
+**They had one cause, and it is Issue #102 above, not a font bug at all.** A stale
+`Control_L` in `wlserver.mapPressedHotkeyKeys` makes every lone Right Ctrl match the
+launcher combo *and* disarms the shell's tap flag (Issue #102's mechanism, verbatim).
+So Right Ctrl was silently opening the **launcher** instead of the **shell** — and the
+launcher and the shell both draw their command palette at very nearly the same screen
+position. With both windows drawing the same strings a pixel or two apart, **every
+string on screen was painted twice**, which reads exactly like a glyph-rendering
+artifact: a soft double-stroke that looks like bleed, oversampling, or a bad bake.
+Fixing Issue #102 (`wlserver_clear_pressed_hotkeys()`) made both symptoms disappear
+together — confirmed by the user for both.
+
+**Why it fooled the investigation for so long:** the doubling was small (about a
+pixel), present on every glyph rather than one, and stable frame to frame — all
+properties a font/atlas bug would also have, and none of them pointed at "two whole
+UI surfaces are drawing at once" until the hotkey ledger bug was found by chasing the
+*other* symptom. Nothing about the font path itself was ever wrong here.
+
+**What was correctly ruled out, in order, and should not be re-litigated by a future
+agent seeing similar ghosting:** the backdrop blur; glyph atlas padding
+(`TexGlyphPadding`); oversampling; `RasterizerDensity`; the atlas sampler (linear vs.
+nearest); `ui::DrawText`/`MeasureText` itself (the shell's real text funnel, not just
+raw `AddText`); the window draw list vs. `GetForegroundDrawList()`; clip rects and
+ellipsis truncation; sub-pixel/fractional draw-position rounding; and a literal second
+`AddText` call per label (measured: exactly one per label per frame, both before and
+after). Also measured and ruled out: the overlay's `Draw()`, `ImGui::NewFrame()`,
+`ImGui::Render()` and the input drain each ran **exactly once per presented frame** —
+there was never a doubled *frame*, only two draws of two different windows inside one
+frame. All of this elimination work stays useful precedent even though it wasn't the
+answer.
+
+**Why:** doubled text meant two draws of the whole UI, not a text-rendering defect.
+When a symptom looks like a rendering artifact — a ghost, a bleed, a soft double-
+stroke — check first whether the thing is simply being drawn twice by two different
+code paths before reaching for atlas/sampler/rasterizer explanations. The rendering
+path is the last place to look, not the first, once more than one glyph is affected
+identically.
+
+**Operational fact worth its own paragraph: `gamescopectl screenshot` does not
+capture the overlay layer on this project's headless test rig.** Proven directly
+during this investigation, not inferred: the overlay's render texture was cleared to
+opaque red before compositing, forcing the composite to show that layer alone if it
+were captured at all, and `gamescopectl screenshot` still saved a plain, unmodified
+game frame with no red anywhere in it. This matches the weaker version of the same
+finding already on record in `../../../../features/cursor-pipeline.md` ("Verified by
+direct X11 query, not by compositor screenshot"). Every headless reproduction attempt
+for this bug failed for exactly this reason — there was no way to *see* the doubled
+text in a screenshot, only in a live session. A future agent chasing an overlay
+rendering bug should confirm this the fast way (ask the user to look, or query the
+relevant X11/Wayland state directly) rather than spending a round on
+`gamescopectl screenshot` first.
+
+**Cleanup.** `FontLab.{h,cpp}` and its two call sites in `SettingsOverlay.cpp`
+(`gamescope::fontlab::Enabled()`/`Draw()`) and its `overlay_e2_fontlab` ConVar are
+deleted now that the cause is known — it was always meant to be temporary. Nothing it
+merely *exercised* was touched: `fonts::RasterSize()` (Issue #99 above, "sharp text at
+every UI scale") is a real, separate fix for a real, separate bug and stays exactly as
+it was.
+
+---
+
 ## 2026-08-27 — Issue #88: the launcher combo now closes what it opened
 
 **Why:** `Left Ctrl + Right Ctrl` could open the launcher but had no way to close it

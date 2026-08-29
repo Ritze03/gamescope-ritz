@@ -42,7 +42,6 @@
 #include "SettingsOverlay.h"
 #include "CursorPolicy.h"
 #include "Overlay/CursorArt.h"
-#include "Overlay/FontLab.h" // FontLab TEMP -- see FontLab.h's top comment; delete this include when that file goes
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/PanelShaders.h"
@@ -1021,10 +1020,7 @@ namespace gamescope
 		const float flStartupAlpha = bStartupAnnounceActive ? StartupAnnounceAlpha( uStartupElapsedMs ) : 0.0f;
 
 		const bool bDrawPanels = s_flCurrentAlpha > 0.0f;
-		// FontLab TEMP: keep this frame alive even with the shell fully
-		// closed -- the lab must draw on demand regardless of shell state.
-		// Delete this disjunct along with FontLab.{h,cpp} once it's gone.
-		if ( !bDrawPanels && flStartupAlpha <= 0.0f && !gamescope::fontlab::Enabled() )
+		if ( !bDrawPanels && flStartupAlpha <= 0.0f )
 			return;
 
 		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
@@ -1148,11 +1144,6 @@ namespace gamescope
 				ImGui::GetForegroundDrawList(),
 				io.MousePos.x, io.MousePos.y, 1.0f );
 		}
-
-		// FontLab TEMP -- see FontLab.h's top comment. Last thing in the
-		// frame so it draws over everything, same reasoning as the cursor
-		// art just above. Delete this call along with FontLab.{h,cpp}.
-		gamescope::fontlab::Draw();
 
 		ImGui::Render();
 

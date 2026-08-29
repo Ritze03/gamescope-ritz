@@ -259,7 +259,14 @@ rig -- not the settings overlay, not the FPS HUD, not even the pre-existing,
 untouched cursor plane in the *off* state -- so it could not be used to tell the
 four cases apart here; that is a property of this sandbox's headless Vulkan path,
 reproduced with two features this change never touched, not evidence about this
-code. `XFixesGetCursorImage()` queried directly against the Xwayland ctx's own
+code. Confirmed a second time, independently, chasing an unrelated font-doubling
+report: with the overlay's render texture cleared to opaque red before compositing --
+forcing the composite to show that layer alone if it were captured at all,
+`gamescopectl screenshot` still saved a plain, unmodified game frame with no red in
+it. See `../planning/redesign/round-2/e2-inspector-plus/IMPLEMENTATION.md`'s
+2026-08-29 "font artifact" entry -- treat "screenshot the overlay to check a
+rendering bug" as a dead end on this rig, and query state directly instead.
+`XFixesGetCursorImage()` queried directly against the Xwayland ctx's own
 display (the exact call `MouseCursor::getTexture()` itself makes) is authoritative
 instead, and was used to confirm all four cases: off/closed is the plain 24x24
 `left_ptr` (green/black, no accent colour anywhere); on/closed is an 18x24 bitmap

@@ -144,7 +144,6 @@ src = [
   'reshade_effect_manager.cpp',
   'SettingsOverlay.cpp',
   'Overlay/Fonts.cpp',
-  'Overlay/FontLab.cpp', # TEMPORARY diagnostic -- see FontLab.h's top comment; remove this line with the file
   'Overlay/CursorArt.cpp',
   'Overlay/Palette.cpp',
   'Overlay/Widgets.cpp',
