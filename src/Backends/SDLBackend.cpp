@@ -904,6 +904,14 @@ namespace gamescope
 						case SDL_WINDOWEVENT_FOCUS_LOST:
 							g_nNestedRefresh = g_nNestedUnfocusedRefresh;
 							g_bWindowFocused = false;
+							// Issue #102: SDL delivers no release for a key
+							// that was down when the window lost focus, so
+							// every modifier held at this moment would stay in
+							// the hotkey ledger for good. See
+							// wlserver_clear_pressed_hotkeys().
+							wlserver_lock();
+							wlserver_clear_pressed_hotkeys();
+							wlserver_unlock();
 							break;
 						case SDL_WINDOWEVENT_FOCUS_GAINED:
 							g_nNestedRefresh = g_nOldNestedRefresh;

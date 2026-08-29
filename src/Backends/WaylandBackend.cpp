@@ -3373,6 +3373,18 @@ namespace gamescope
         m_bKeyboardEntered = true;
         m_uScancodesHeld.clear();
 
+        // Issue #102: the host is about to tell us exactly which keys are
+        // down, so anything gamescope still *believes* is down is stale by
+        // definition. Normally there is nothing to drop -- Keyboard_Leave
+        // below released everything it knew about -- but a leave we never got
+        // (the toplevel being destroyed and recreated, say) would otherwise
+        // strand those presses in the hotkey ledger forever. See
+        // wlserver_clear_pressed_hotkeys() for what one stranded modifier does
+        // to the Right Ctrl binding.
+        wlserver_lock();
+        wlserver_clear_pressed_hotkeys();
+        wlserver_unlock();
+
         const uint32_t *pBegin = (uint32_t *)pKeys->data;
         const uint32_t *pEnd = pBegin + ( pKeys->size / sizeof(uint32_t) );
         std::span<const uint32_t> keys{ pBegin, pEnd };
@@ -3403,6 +3415,15 @@ namespace gamescope
             HandleKey( uKey, false );
 
         m_uScancodesHeld.clear();
+
+        // Issue #102: the releases above already emptied the hotkey ledger for
+        // everything this thread knew was held. This covers what it did not --
+        // a press that reached wlserver by some other route (the DRM/libinput
+        // keyboard group, wlserver_debug_key) and whose release will now go to
+        // the host instead of to us.
+        wlserver_lock();
+        wlserver_clear_pressed_hotkeys();
+        wlserver_unlock();
     }
     void CWaylandInputThread::Wayland_Keyboard_Key( wl_keyboard *pKeyboard, uint32_t uSerial, uint32_t uTime, uint32_t uKey, uint32_t uState )
     {

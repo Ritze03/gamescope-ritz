@@ -506,6 +506,50 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 	return false;
 }
 
+// Issue #102: drop the whole held-key record, and any half-finished gesture
+// built on it.
+//
+// wlserver.mapPressedHotkeyKeys is a *press ledger*: an entry goes in on a
+// press and only ever comes out on that key's own release. That is exactly
+// right while every press has a release, and it wedges permanently the first
+// time one does not -- which is routine in a NESTED session, because the host
+// compositor is free to take keyboard focus away mid-chord and deliver the
+// release to somebody else. gamescope then believes a key is held that the
+// user let go of minutes ago, for the rest of the process's life.
+//
+// A leaked MODIFIER does not merely add a phantom key: it silently rewrites
+// every binding that reads the held-key set. A stale Control_L turns each
+// later lone Right Ctrl tap into the Left+Right Ctrl launcher combo (see
+// wlserver_check_ctrl_shortcuts above: the combo is tested first, and taking
+// it also disarms the tap), so Right Ctrl stops opening the shell and starts
+// toggling the launcher instead -- while the real Left+Right Ctrl combo goes
+// on working, because it was already the branch being taken. Reproduced
+// exactly that way: with one unreleased Left Ctrl in the ledger, three lone
+// Right Ctrl taps drew 'L' (launcher) on every frame and never 'S' (shell).
+//
+// So the ledger needs a resync point, and keyboard focus is the only honest
+// one: at the moment focus arrives the host tells us precisely which keys are
+// down, and at the moment it leaves nothing we still hold can be trusted.
+// Clearing here costs nothing in the normal case (a leave that delivered its
+// releases has already emptied this) and repairs the leaked case completely.
+//
+// It clears ONLY the hotkey ledger -- not the seat's key state, and not the
+// keyboard's own pressed-keycode array. Releases owed to the game are the
+// backend's business (CWaylandInputThread::Wayland_Keyboard_Leave synthesizes
+// them); this is the bookkeeping that decides what a hotkey means.
+void wlserver_clear_pressed_hotkeys()
+{
+	assert( wlserver_is_lock_held() );
+
+	wlserver.mapPressedHotkeyKeys.clear();
+
+	// The two gestures that carry state across events are mid-flight by
+	// definition if focus moved while they were armed, and neither can be
+	// completed now: the release that would finish them went somewhere else.
+	s_bRightCtrlIsTap = false;
+	s_bOverlayHotkeyOwnsO = false;
+}
+
 // D22. A key event on THIS compositor's own keyboard, from a script.
 //
 // overlay_e2_key (Overlay/UI/Shell.cpp) deliberately stops short of here: it

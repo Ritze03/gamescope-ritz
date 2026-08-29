@@ -16,6 +16,58 @@ P1: the same file, D11.
 
 ---
 
+## 2026-08-29 — Issue #102: a lost modifier release stopped Right Ctrl opening the shell
+
+**Symptom, as reported twice:** a lone Right Ctrl tap stopped opening the shell, while
+`Left Ctrl + Right Ctrl` went on opening the launcher exactly as before. It could not be
+reproduced by driving the real hotkey path headlessly, because nothing in that harness
+ever moves keyboard focus — and focus is the whole mechanism.
+
+**Cause.** `wlserver.mapPressedHotkeyKeys` is a press ledger: an entry goes in on a press
+and only ever comes out on that key's own release. In a nested session the host
+compositor can take keyboard focus away mid-chord and deliver the release to somebody
+else, and the ledger then believes a key is held that the user let go of minutes ago —
+for the rest of the process's life.
+
+A leaked *modifier* does not merely add a phantom key; it silently rewrites every binding
+that reads the held-key set. `wlserver_check_ctrl_shortcuts()` tests the launcher combo
+**first**, so with a stale `Control_L` in the ledger every later lone Right Ctrl press
+matches `Control_R && bLeftCtrlHeld` — the combo — and taking that branch also sets
+`s_bRightCtrlIsTap = false`, so the release can no longer fire the shell toggle either.
+Right Ctrl therefore stops opening the shell and starts toggling the launcher, while the
+real combo keeps working because it was already the branch being taken. That is the
+reported symptom, exactly.
+
+**Reproduced** with `wlserver_debug_key "29 1"` (Left Ctrl pressed, never released), then
+three lone Right Ctrl taps: `overlay_e2_trace` recorded `LLLL…` (launcher) on every
+frame and never a single `S` (shell). Without the stale press the same taps trace `SSSS…`.
+
+**Fix.** `wlserver_clear_pressed_hotkeys()` (`wlserver.cpp`) drops the ledger and the two
+gestures carried across events (`s_bRightCtrlIsTap`, `s_bOverlayHotkeyOwnsO`), and the
+nested backends call it at the only honest resync points — the moments a release can go
+to the host instead of to us:
+
+| call site | why |
+| --- | --- |
+| `CWaylandInputThread::Wayland_Keyboard_Enter` | the host is about to state exactly which keys are down, so anything still recorded is stale by definition — this is what repairs a `leave` we never got, e.g. the toplevel being destroyed and recreated |
+| `CWaylandInputThread::Wayland_Keyboard_Leave` | covers what its own synthesized releases do not: a press that reached wlserver by another route |
+| `SDLBackend`'s `SDL_WINDOWEVENT_FOCUS_LOST` | SDL delivers **no** release for a key that was down when the window lost focus, so every modifier held at that instant leaked |
+
+It clears only the hotkey bookkeeping — never the seat's key state and never the
+keyboard's own pressed-keycode array. Releases owed to the *game* stay the backend's
+business (`Wayland_Keyboard_Leave` already synthesizes them); this decides only what a
+hotkey means.
+
+**Why not "prune the ledger against `keyboard->keycodes`" instead:** measured, and it
+repairs nothing. `wlserver_key()` maintains that array in lockstep with the ledger, so
+the two never disagree — a lost release leaves *both* stale, and the prune is a no-op.
+Focus is the only event that carries new information.
+
+**Verified:** lone Right Ctrl → `SSSS…`; `Left Ctrl + Right Ctrl` → `LLLL…`;
+`Ctrl+Shift+O` → `SSSS…`. `meson test` 70/70.
+
+---
+
 ## 2026-08-27 — Issue #88: the launcher combo now closes what it opened
 
 **Why:** `Left Ctrl + Right Ctrl` could open the launcher but had no way to close it

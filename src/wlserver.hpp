@@ -248,6 +248,13 @@ bool wlserver_is_lock_held(void);
 void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain = true );
 void wlserver_key( uint32_t key, bool press, uint32_t time );
 
+// Forget every key this compositor currently believes is physically held for
+// the purposes of HOTKEY matching (wlserver.mapPressedHotkeyKeys). Call it
+// from a nested backend whenever keyboard focus is (re)acquired or lost, i.e.
+// at the moments a key's release can go to the host instead of to us. See the
+// definition for what a leaked modifier actually breaks.
+void wlserver_clear_pressed_hotkeys();
+
 void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x = 0, int y = 0 );
 void wlserver_clear_dropdowns();
 void wlserver_notify_dropdown( struct wlr_surface *wlrsurface, int nX, int nY );

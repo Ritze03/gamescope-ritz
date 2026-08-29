@@ -35,6 +35,9 @@ The newest version below is the one this build reports.
   instead of falling back to a plain "C".
 
 ### Fixed
+- **Right Ctrl opens the settings overlay again after switching windows**: a
+  modifier still held when gamescope lost keyboard focus stayed stuck, which
+  turned every later lone Right Ctrl tap into the launcher shortcut instead.
 - **"Use everywhere" now shows the custom cursor with Force Grab Cursor off and
   the overlay open**: it previously fell back to the default pointer in that one
   combination while working correctly everywhere else.
