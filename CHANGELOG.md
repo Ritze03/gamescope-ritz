@@ -35,10 +35,10 @@ The newest version below is the one this build reports.
   instead of falling back to a plain "C".
 
 ### Fixed
-- **Right Ctrl opens the overlay again, without doubled text**: a modifier still held
-  when gamescope lost keyboard focus stayed stuck, so every later lone Right Ctrl tap
-  silently opened the launcher instead of the settings overlay — and with both drawing
-  at once, every bit of on-screen text appeared doubled.
+- **Right Ctrl opens the overlay again, without doubled text**: a modifier that got
+  stuck as "held" — after switching windows, or by any other route — made every later
+  lone Right Ctrl tap silently open the launcher instead of the settings overlay, and
+  with both drawing at once every bit of on-screen text appeared doubled.
 - **"Use everywhere" now shows the custom cursor with Force Grab Cursor off and
   the overlay open**: it previously fell back to the default pointer in that one
   combination while working correctly everywhere else.

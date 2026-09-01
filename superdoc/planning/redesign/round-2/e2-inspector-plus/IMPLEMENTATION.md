@@ -16,6 +16,73 @@ P1: the same file, D11.
 
 ---
 
+## 2026-09-01 — Issue #102 part 2: the ledger is now reconciled, not just resynced
+
+The focus-boundary clear below fixed *a* route and the symptom came back, so the
+enumerate-the-routes approach was abandoned for one that makes the class unrepresentable.
+
+**What was measured first, to stop guessing.** `log_binding debug` prints the ledger on
+every key event, which makes this directly observable rather than inferred:
+
+| sequence | ledger | result |
+| --- | --- | --- |
+| launcher combo `LCtrl↓ RCtrl↓ RCtrl↑ LCtrl↑` | `[Control_L]` → `[Control_R + Control_L]` → `[Control_L]` → `[]` | drains clean — **the combo does not strand `Control_L`** |
+| lone RCtrl straight after that combo | `[]` → `[Control_R]` → `[]` | traces `S` (shell) — correct |
+| `clear_pressed_hotkeys()` calls in 7 s of a normal nested session | — | 2, both at startup — the new clear is not over-firing |
+
+So the capture gate was not eating the release (the ledger is maintained at the top of
+`wlserver_process_hotkeys()`, before every gate) and the combo was not the leak.
+
+**The actual defect, stated as a class.** `wlserver_process_hotkeys()` decided what a
+keystroke meant from *edge-accumulated* state consulted as though it were *level* state,
+and it did so **downstream of two `return false`s that could skip the decision entirely**.
+Any lost or misattributed edge corrupts that state permanently and silently, and there is
+no bound on how many ways an edge can go missing.
+
+**Two changes, both structural.**
+
+1. **`wlserver_reconcile_pressed_hotkeys()`** — before the ledger is read, every entry for
+   the keyboard being processed is checked against that keyboard's own `keycodes[]`, and
+   dropped if the keyboard does not report it down. `wlr_keyboard::keycodes` is level
+   state: wlroots maintains it for a real keyboard group, `wlserver_key()` maintains it by
+   hand for the virtual device, a nested Wayland `enter` replays the host's whole held-key
+   list into it, and it is what `wlr_seat_keyboard_notify_enter()` hands to clients — so
+   if it were ever wrong the *game* would see the same stuck modifier, making the bug loud
+   instead of silent. Only the current keyboard's entries are examined: the map is keyed
+   by a raw `wlr_keyboard *` and another keyboard's pointer must not be dereferenced just
+   because it appears as a key.
+2. **D22 runs first, unconditionally.** The two early returns are rules about the
+   *external binding table* ("a release that did not drop the sym must not end a
+   binding"), not about this fork's two Ctrl bindings — and a tap is *defined* by its own
+   key's release, so skipping that release is exactly how the shell became unreachable.
+   They are now recorded as flags and enforced after `wlserver_check_ctrl_shortcuts()`.
+   It consumes nothing, so nothing can be correctly ordered ahead of it.
+
+**Verified on the real hotkey path** (`wlserver_debug_key` + `overlay_e2_trace`), with a
+stranded modifier manufactured by filling `keycodes[]` to its 32-key cap so a 33rd press
+lands in the ledger and nowhere else — the exact shape of a lost release:
+
+| state | lone Right Ctrl | correct? |
+| --- | --- | --- |
+| clean | `S` shell | yes |
+| `Control_L` **genuinely** held (in `keycodes[]`) | `L` launcher | yes — not over-pruned |
+| `Control_L` **stranded** (ledger only) | `S` shell | yes — the lie is pruned |
+| Right Ctrl itself stranded | `S` shell | yes — the exempt keycode is never pruned |
+
+Plus no regressions: `LCtrl+RCtrl` → `L`, `Ctrl+Shift+O` → `S`, `RCtrl+A` → nothing (still
+correctly not a tap). `meson test` 70/70.
+
+**Why not the alternatives.** Moving the ledger bookkeeping ahead of the capture gate: it
+already is, and the measurement above shows the gate was never the leak. Testing the tap
+*before* the combo: it treats the consequence, not the cause, would break a genuinely-held
+Left Ctrl (row 2 above), and does nothing for the other failure shape, where a stranded
+`Control_R` kills the tap at the duplicate-sym guard before D22 is reached at all. The
+focus-boundary clear is **kept** and is complementary: reconciliation cannot see a release
+that was lost, because the ledger and `keycodes[]` go stale together — only the source
+re-asserting its state at a focus boundary carries that information.
+
+---
+
 ## 2026-08-29 — Issue #102: a lost modifier release stopped Right Ctrl opening the shell
 
 **Symptom, as reported twice:** a lone Right Ctrl tap stopped opening the shell, while

@@ -537,6 +537,62 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 // keyboard's own pressed-keycode array. Releases owed to the game are the
 // backend's business (CWaylandInputThread::Wayland_Keyboard_Leave synthesizes
 // them); this is the bookkeeping that decides what a hotkey means.
+// Issue #102, part 2: force the ledger to agree with the keyboard's own idea
+// of what is physically down, and drop whatever it cannot justify.
+//
+// The clear below is a resync at a FOCUS boundary -- it repairs the ledger at
+// the one moment the outside world hands us new information. This is the other
+// half: it repairs the ledger at every moment the ledger is USED, from
+// information gamescope already has.
+//
+// wlr_keyboard::keycodes is level state, not an edge accumulation. wlroots
+// maintains it for a real keyboard group; wlserver_key() maintains it by hand
+// for the virtual device (immediately above its call to us); a nested Wayland
+// enter replays the host's whole held-key list into it; and it is what
+// wlr_seat_keyboard_notify_enter() hands to clients. So it is both a better
+// source than the ledger and a LOUD one -- if it were ever wrong, every client
+// would see the same stuck modifier, instead of only the hotkey layer silently
+// resolving keystrokes to the wrong binding.
+//
+// Reconciling here is what makes "the ledger claims a modifier that nothing
+// else believes in" unrepresentable, rather than something to be hunted one
+// leak at a time.
+//
+// Only this keyboard's own entries are examined: the map is keyed by a raw
+// wlr_keyboard *, and another keyboard's pointer must never be dereferenced
+// here just because it appears as a key. Each keyboard repairs itself on its
+// next event, which is the only moment its entries can matter anyway.
+//
+// uExemptKeycode is the keycode of the event being processed right now, and it
+// is never pruned: wlserver_key() removes a release from keyboard->keycodes
+// BEFORE calling us, so pruning it here would delete the very entry the
+// release needs, and on a press it protects the entry just inserted.
+static void wlserver_reconcile_pressed_hotkeys( wlr_keyboard *keyboard, xkb_keycode_t uExemptKeycode )
+{
+	if ( keyboard == nullptr )
+		return;
+
+	for ( auto it = wlserver.mapPressedHotkeyKeys.begin(); it != wlserver.mapPressedHotkeyKeys.end(); )
+	{
+		const auto &[ pKeyboard, uKeycode ] = it->first;
+
+		if ( pKeyboard != keyboard || uKeycode == uExemptKeycode )
+		{
+			++it;
+			continue;
+		}
+
+		bool bStillDown = false;
+		for ( size_t i = 0; i < keyboard->num_keycodes && !bStillDown; i++ )
+			bStillDown = ( xkb_keycode_t( keyboard->keycodes[ i ] ) + 8 == uKeycode );
+
+		if ( bStillDown )
+			++it;
+		else
+			it = wlserver.mapPressedHotkeyKeys.erase( it );
+	}
+}
+
 void wlserver_clear_pressed_hotkeys()
 {
 	assert( wlserver_is_lock_held() );
@@ -2963,6 +3019,16 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	xkb_keycode_t keycode = key + 8;
 	xkb_keysym_t normalizedKeysym = XKB_KEY_NoSymbol;
 
+	// Issue #102: these two conditions used to `return false` on the spot,
+	// which took the D22 check below out with them. They are rules about the
+	// EXTERNAL BINDING TABLE ("a release that did not actually drop the sym
+	// must not end a registered binding"), not about this fork's own two Ctrl
+	// bindings -- and a tap is defined by its own key's release, so skipping
+	// that release is precisely how the shell became unreachable. They are now
+	// recorded here and enforced further down, after D22 has been consulted.
+	bool bReleaseWithoutRecordedPress = false;
+	bool bSymStillHeldElsewhere = false;
+
 	// Remember the sym at press time so a release erases exactly what the press inserted.
 	if ( press )
 	{
@@ -2974,34 +3040,62 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	{
 		auto it = wlserver.mapPressedHotkeyKeys.find( { keyboard, keycode } );
 
-		// A release we never saw the press for cannot end a binding.
 		if ( it == wlserver.mapPressedHotkeyKeys.end() )
-			return false;
+		{
+			// A release we never saw the press for cannot end a *binding* --
+			// but D22 still has to see it, so resolve the sym the same way a
+			// press would rather than giving up here.
+			bReleaseWithoutRecordedPress = true;
+			normalizedKeysym = NormalizeKeysymForHotkey(
+				xkb_state_key_get_one_sym( keyboard->xkb_state, keycode ) );
+		}
+		else
+		{
+			normalizedKeysym = it->second;
+			wlserver.mapPressedHotkeyKeys.erase( it );
+		}
+	}
 
-		normalizedKeysym = it->second;
-		wlserver.mapPressedHotkeyKeys.erase( it );
+	// Issue #102: everything below reads the ledger as if it described reality,
+	// so make it describe reality first. See the function's own comment.
+	wlserver_reconcile_pressed_hotkeys( keyboard, keycode );
 
+	if ( !press && !bReleaseWithoutRecordedPress )
+	{
 		// Two keycodes can resolve to the same sym, so only a release that actually drops the sym can end a binding.
 		for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
+		{
 			if ( uKeySym == normalizedKeysym )
-				return false;
+			{
+				bSymStillHeldElsewhere = true;
+				break;
+			}
+		}
 	}
 
 	std::unordered_set<xkb_keysym_t> setPressedKeySyms;
 	for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
 		setPressedKeySyms.emplace( uKeySym );
 
-	// M2: Ctrl+Shift+O, checked before the external-binding search below so
-	// it always wins the combo regardless of what else might be registered.
-	if ( wlserver_check_settings_overlay_toggle( normalizedKeysym, press, setPressedKeySyms ) )
-		return true;
-
 	// D22: Right Ctrl / Left Ctrl + Right Ctrl. Never returns true (see the
 	// function's own comment on why a modifier is acted on but not consumed),
 	// so the call is a statement rather than a condition -- writing it as an
 	// `if` would suggest it can swallow a key, which is exactly the thing it
 	// must never do.
+	//
+	// Issue #102: FIRST, and unconditionally. It consumes nothing, so nothing
+	// below can be ordered ahead of it for correctness -- and being last is
+	// what let the two guards above decide, silently, that the shell's own
+	// binding would not be offered this keystroke at all.
 	wlserver_check_ctrl_shortcuts( normalizedKeysym, press, setPressedKeySyms );
+
+	if ( bReleaseWithoutRecordedPress || bSymStillHeldElsewhere )
+		return false;
+
+	// M2: Ctrl+Shift+O, checked before the external-binding search below so
+	// it always wins the combo regardless of what else might be registered.
+	if ( wlserver_check_settings_overlay_toggle( normalizedKeysym, press, setPressedKeySyms ) )
+		return true;
 
 	if ( log_binding.Enabled( LOG_DEBUG ) )
 	{
