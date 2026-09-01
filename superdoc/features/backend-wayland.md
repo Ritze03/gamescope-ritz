@@ -115,4 +115,9 @@ initialize.
 - [wayland-protocols.md](wayland-protocols.md) — the broader catalogue of Wayland
   protocol extensions gamescope speaks, both as a server (wlserver) and, here, as a
   client.
+- [../planning/wayland-vrr-buffer-lifetime.md](../planning/wayland-vrr-buffer-lifetime.md)
+  — host buffer lifetime on this backend: why `CWaylandFb` acquires a reference only on a
+  real attach transition and never re-attaches a buffer the surface already holds, and the
+  `--force-grab-cursor` reference leak that rule was written to stop. Read it before
+  touching `CWaylandPlane::Present()`.
 - [../meta/TERMINOLOGY.md](../meta/TERMINOLOGY.md) — "nested mode" vs "embedded mode".

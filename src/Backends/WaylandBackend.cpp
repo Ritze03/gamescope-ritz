@@ -133,6 +133,10 @@ namespace gamescope
     struct WaylandPlaneState
     {
         wl_buffer *pBuffer;
+        // The Fb that owns pBuffer, so CWaylandPlane::Present() can take and
+        // hold a reference for exactly as long as THIS surface has the buffer
+        // attached. See the comment there.
+        CWaylandFb *pFb = nullptr;
         int32_t nDestX;
         int32_t nDestY;
         double flSrcX;
@@ -307,6 +311,10 @@ namespace gamescope
 
         std::mutex m_PlaneStateLock;
         std::optional<WaylandPlaneState> m_oCurrentPlaneState;
+        // The buffer wl_surface_attach() last put on m_pSurface, maintained at
+        // the attach call sites themselves rather than inferred from
+        // m_oCurrentPlaneState. See Present()'s comment.
+        wl_buffer *m_pAttachedBuffer = nullptr;
     };
     const wl_surface_listener CWaylandPlane::s_SurfaceListener =
     {
@@ -980,14 +988,17 @@ namespace gamescope
 
     void CWaylandFb::OnCompositorAcquire()
     {
-        // The host compositor sends exactly one wl_buffer.release per attach+commit,
-        // and gamescope can have one buffer attached to several plane surfaces at the
-        // same time (and re-attaches whatever is current to every plane on every
-        // frame -- CWaylandConnector::Present() always follows each plane's Present()
-        // with a Commit()). So acquisitions nest, and this has to count them rather
-        // than latch a bool: a bool would swallow the second IncRef, and then the
-        // *first* release would drop our reference while the host is still scanning
-        // the buffer out for the second attach.
+        // One buffer can be attached to several plane surfaces at once, and the host
+        // sends one wl_buffer.release per surface that took it. So acquisitions nest
+        // and this has to count them rather than latch a bool: a bool would swallow
+        // the second IncRef, and then the *first* release would drop our reference
+        // while the host is still scanning the buffer out for the second attach.
+        //
+        // The count is per SURFACE-ATTACHMENT, not per wl_surface.commit. Only
+        // CWaylandPlane::Present() may call this, and only when it is about to
+        // actually attach the buffer to that plane's surface -- see the comment
+        // there for why acquiring on every commit leaked a reference per
+        // redundant frame, and for the --force-grab-cursor freeze it produced.
         m_uCompositorAcquisitions++;
         IncRef();
     }
@@ -1164,13 +1175,12 @@ namespace gamescope
                 uint32_t uCurrentPlane = 0;
                 if ( bNeedsBacking )
                 {
-                    m_pBackend->GetBlackFb()->OnCompositorAcquire();
-
                     CWaylandPlane *pPlane = &m_Planes[uCurrentPlane++];
                     pPlane->Present(
                         WaylandPlaneState
                         {
                             .pBuffer     = m_pBackend->GetBlackFb()->GetHostBuffer(),
+                            .pFb         = m_pBackend->GetBlackFb(),
                             .flSrcWidth  = 1.0,
                             .flSrcHeight = 1.0,
                             .nDstWidth   = int32_t( g_nOutputWidth ),
@@ -1516,10 +1526,52 @@ namespace gamescope
 
     void CWaylandPlane::Present( std::optional<WaylandPlaneState> oState )
     {
+        wl_buffer *pPreviousBuffer = m_pAttachedBuffer;
         {
             std::unique_lock lock( m_PlaneStateLock );
             m_oCurrentPlaneState = oState;
         }
+
+        // Take the host-side reference HERE, on the attach transition, rather
+        // than at every call site that hands us a layer -- and pair it with
+        // only attaching when the buffer actually changes (further down).
+        //
+        // The host does NOT send one wl_buffer.release per wl_surface.commit.
+        // Re-attaching the buffer a surface already holds is something it can
+        // account for without handing anything back, so the extra attach yields
+        // no extra release. Measured against sway with --force-grab-cursor on:
+        // 184 buffer-attaches/s produced only 122 releases/s. Acquiring once per
+        // attach therefore leaked the 62/s difference, and because
+        // CBaseBackendFb::DecRef() only unlocks the client buffer and drops the
+        // explicit-sync release point once the count reaches zero, a leaked
+        // reference means the game NEVER gets that buffer back.
+        //
+        // That is not a corner case. --force-grab-cursor makes ShouldDrawCursor()
+        // unconditionally true, which makes wlserver_oncursorevent() set
+        // hasRepaint on every pointer motion event -- so gamescope repaints on
+        // mouse movement even when the game has produced no new frame, and every
+        // one of those repaints re-presents the same game buffer and the same
+        // cursor buffer. Measured: with force-grab on, outstanding acquisitions
+        // climbed ~61/s (one per frame, per plane) without bound and never came
+        // back; with it off, over the same run with the game deliberately frozen
+        // and motion continuing, they held exactly flat. Once every image in the
+        // game's swapchain has been pinned this way the game blocks forever in
+        // vkAcquireNextImageKHR -- the reported "freezes after some time".
+        //
+        // Emitting no redundant attach makes attaches, acquires and releases
+        // correspond one-to-one: measured 4573 attaches, 4573 acquires, 4571
+        // releases, two outstanding and held flat over a 60s force-grab run,
+        // with zero "released us but we were not acquired" warnings (the
+        // over-release the counter was introduced to catch).
+        //
+        // It keeps what that counter was introduced for (1cdb9b1): one buffer
+        // genuinely attached to SEVERAL plane surfaces at once still acquires
+        // once per surface, because each plane tracks its own attached buffer
+        // and each of those surfaces sends its own release. It also stops the
+        // acquire happening at all when ClipPlane() has clipped the plane away
+        // to nothing, which attaches no buffer and so is never released either.
+        if ( oState && oState->pFb && oState->pBuffer != pPreviousBuffer )
+            oState->pFb->OnCompositorAcquire();
 
         if ( oState )
         {
@@ -1664,14 +1716,27 @@ namespace gamescope
             }
             // The x/y here does nothing? Why? What is it for...
             // Use the subsurface set_position thing instead.
-            wl_surface_attach( m_pSurface, oState->pBuffer, 0, 0 );
+            // Only attach when the buffer this surface holds actually changes.
+            // Re-attaching the buffer already attached buys nothing and is what
+            // desynchronised the acquire accounting -- see Present()'s comment
+            // above. Damage plus commit is enough to have the host re-read the
+            // buffer it already holds.
+            if ( oState->pBuffer != m_pAttachedBuffer )
+            {
+                m_pAttachedBuffer = oState->pBuffer;
+                wl_surface_attach( m_pSurface, oState->pBuffer, 0, 0 );
+            }
             wl_surface_damage( m_pSurface, 0, 0, INT32_MAX, INT32_MAX );
             wl_surface_set_opaque_region( m_pSurface, oState->bOpaque ? m_pBackend->GetFullRegion() : nullptr );
             wl_surface_set_buffer_scale( m_pSurface, 1 );
         }
         else
         {
-            wl_surface_attach( m_pSurface, nullptr, 0, 0 );
+            if ( m_pAttachedBuffer )
+            {
+                m_pAttachedBuffer = nullptr;
+                wl_surface_attach( m_pSurface, nullptr, 0, 0 );
+            }
             wl_surface_damage( m_pSurface, 0, 0, INT32_MAX, INT32_MAX );
         }
     }
@@ -1728,12 +1793,11 @@ namespace gamescope
 
         if ( pBuffer )
         {
-            pWaylandFb->OnCompositorAcquire();
-
             Present(
                 ClipPlane( WaylandPlaneState
                 {
                     .pBuffer     = pBuffer,
+                    .pFb         = pWaylandFb,
                     .nDestX      = int32_t( -pLayer->offset.x ),
                     .nDestY      = int32_t( -pLayer->offset.y ),
                     .flSrcX      = 0.0,

@@ -126,12 +126,90 @@ On the direct-scanout path (`SetBuffer`/`SetReleasePoint` set from `steamcompmgr
 that would `wlr_buffer_unlock` the game's buffer, or signal its explicit-sync release
 point, while the host was still scanning it out.
 
-*Why a strict count cannot leak:* the one failure mode would be a host that coalesces
-releases, which would make references climb forever. Measured against Hyprland it does
-not — with the bool version the shadow count stayed bounded at ≤3 across 11,400
+*Why a strict count cannot leak:* **superseded — this prediction was wrong. See
+"Correction (2026-09-01)" below.** The claim as originally written: the one failure mode
+would be a host that coalesces releases, which would make references climb forever.
+Measured against Hyprland it does not — with the bool version the shadow count stayed bounded at ≤3 across 11,400
 double-acquires, and after the fix a 50s run held file descriptors constant at 103 with
 flat RSS and **0** "not acquired" warnings (down from 212-523 on stock).
 
 Upstream-reportable as a standalone correctness fix. There is no matching upstream issue.
 It should be reported as what it is — a latent buffer-lifetime bug on the direct-scanout
 path — and explicitly **not** as a fix for the VRR flicker, which it does not fix.
+
+
+## Correction (2026-09-01): the strict count DOES leak, and it froze the game
+
+The section above named the exact failure mode — "a host that coalesces releases, which
+would make references climb forever" — and then dismissed it. It leaks. Found while
+chasing a user report: *"when using force grab cursor and moving my mouse around (UI
+closed), the application freezes after some time."*
+
+**The false premise.** "The host sends exactly one `wl_buffer.release` per attach+commit"
+is not true. A host sends a release when a *surface* stops holding a buffer. Re-attaching
+the buffer a surface already holds is something it can account for without handing
+anything back, so the redundant attach yields no release. Measured against sway with
+force-grab on: **184 buffer-attaches/s produced only 122 releases/s.** Acquiring once per
+attach leaked the 62/s difference.
+
+*Why the original measurement missed it:* it was taken with force-grab **off**, which is
+the one regime where the redundant re-attach never happens. `--force-grab-cursor` makes
+`ShouldDrawCursor()` unconditionally true, which makes `wlserver_oncursorevent()` set
+`hasRepaint` on **every pointer motion event** — so gamescope repaints on mouse movement
+even when the game has produced no new frame, and every one of those repaints re-presents
+the same game buffer and the same cursor buffer. With force-grab off, mouse motion
+produces no repaint at all and there is nothing redundant to re-attach. The original run
+could not have seen this.
+
+**Measured (nested Wayland backend, isolated headless sway host, overlay closed).**
+`outstanding = acquires - releases`:
+
+| condition | outstanding |
+|---|---|
+| force-grab OFF, 60s, game frozen, motion continuing | flat, zero growth |
+| force-grab ON + motion, t+15s | 903 |
+| force-grab ON + motion, t+30s | 1837 |
+| force-grab ON + motion, t+45s | 2776 |
+| force-grab ON + motion, t+60s | 3710 |
+| force-grab ON + motion, t+75s | 4649 |
+
+Linear at ~62/s and unbounded. A per-Fb dump showed every buffer at 0-1 and **one** at
+9419 (the cursor plane, re-presented every frame). With the game `SIGSTOP`ped a second Fb
+— the game's own buffer — began climbing at +61/s. Headless backend over 6.07M motion
+events was completely flat (RSS 109996->110000 kB, FDs 70, 17 threads), which is what
+localised this to the Wayland backend rather than wlserver, steamcompmgr or the overlay.
+
+**Why a leaked reference freezes the game.** `CBaseBackendFb::DecRef()` only calls
+`wlr_buffer_unlock()` and drops the explicit-sync release point once the count reaches
+zero. A leaked reference therefore means the game never gets that buffer back; once every
+image in its swapchain has been pinned this way it blocks in `vkAcquireNextImageKHR`.
+
+**The fix** (`src/Backends/WaylandBackend.cpp`): acquire only on a real attach transition
+— moved into `CWaylandPlane::Present()`, with the owning Fb carried on
+`WaylandPlaneState` — *paired with* not emitting the redundant `wl_surface_attach` at
+all. Both halves are needed; see the trap below. Verified: 4573 attaches, 4573 acquires,
+4571 releases, outstanding held flat at 2 over a 60s force-grab run and across 25s with
+the game frozen, with **0** "not acquired" warnings. This keeps what the count was
+introduced for: one buffer genuinely attached to several plane surfaces at once still
+acquires once per surface, because each plane tracks its own attached buffer.
+
+### Trap for whoever touches this next
+
+**`outstanding` alone is not a sufficient check — watch unmatched releases too.** The
+first two fix attempts pinned `outstanding` at 2 and looked correct, while quietly
+producing **61/s unmatched releases** (`OnCompositorRelease()` hitting its
+`!m_uCompositorAcquisitions` guard). That is *under*-holding: it would have reintroduced
+exactly the premature-release bug `1cdb9b1` was written to fix, where the game's buffer is
+handed back while the host is still scanning it out. Only pairing the gated acquire with
+the skipped redundant attach balances all three counters at once. Instrument acquires,
+releases, attaches and guard-hits together, or the check is meaningless.
+
+### What is NOT established
+
+- **The wedge itself was never captured.** The reference leak is measured directly and
+  reproducibly with a clean control. The `vkAcquireNextImageKHR` block is *inference*
+  from it — no run was held long enough to observe the game actually stop, and there is
+  no thread dump. Do not repeat it as an observed fact.
+- **Measured against sway, not Hyprland.** The isolated host used throughout this
+  correction is a headless sway. The user runs Hyprland, whose release behaviour was not
+  re-measured after the fix. A confirmation run there is still outstanding.

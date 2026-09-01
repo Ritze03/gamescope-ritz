@@ -35,6 +35,10 @@ The newest version below is the one this build reports.
   instead of falling back to a plain "C".
 
 ### Fixed
+- **Freeze after moving the mouse with Force Grab Cursor on**: with the cursor
+  grabbed, sustained mouse movement steadily pinned the game's display buffers until
+  the game stopped responding; they are now handed back correctly however long you
+  play.
 - **Right Ctrl opens the overlay again, without doubled text**: a modifier that got
   stuck as "held" — after switching windows, or by any other route — made every later
   lone Right Ctrl tap silently open the launcher instead of the settings overlay, and
