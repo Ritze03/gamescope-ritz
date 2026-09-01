@@ -14,6 +14,13 @@ P1: the same file, D11.
 > instead — the phase-by-phase entries are kept as the record of what was built and why
 > at the time. See `CHANGELOG.md`.
 
+> **Rebound (2026-09-01):** every "Right Ctrl" / "RCtrl" / "Control_R" and "Left Ctrl +
+> Right Ctrl" / "LCtrl+RCtrl" below describes the binding as it stood when that entry was
+> written and is kept verbatim as the historical record. The live binding is now Right
+> Shift for the shell and Left Ctrl + Right Shift for the launcher — same mechanism
+> (`wlserver_check_shell_shortcuts()` in `src/wlserver.cpp`), different keysyms. See
+> `CHANGELOG.md`.
+
 ---
 
 ## 2026-09-01 — Issue #102 part 2: the ledger is now reconciled, not just resynced

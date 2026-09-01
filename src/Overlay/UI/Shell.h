@@ -48,7 +48,7 @@ namespace gamescope::ui::shell
 	// means what it says -- this is not an authoring API and reaches into
 	// nothing. It exists because the palette's binding moved OUT of the
 	// shell's own keyboard map and into wlserver's hotkey table (Left Ctrl +
-	// Right Ctrl), and wlserver runs on a different thread from the one that
+	// Right Shift), and wlserver runs on a different thread from the one that
 	// owns every piece of shell state.
 	//
 	// So it is a REQUEST, not a setter: it stores one atomic flag that
@@ -74,7 +74,7 @@ namespace gamescope::ui::shell
 	// kept as a FEATURE rather than as the whole UI -- mid-game you usually
 	// want ONE setting, not a tour of the settings surface. Opening the
 	// entire shell to reach one row defeats that, which is exactly what the
-	// Left+Right Ctrl binding used to do.
+	// Left Ctrl + Right Shift binding used to do.
 	//
 	// Same threading contract as RequestPalette(): a request consumed on the
 	// next frame by the thread that owns the state.
@@ -84,14 +84,14 @@ namespace gamescope::ui::shell
 	//
 	// wlserver needs this to tell "the overlay is open" from "the launcher is
 	// up", because settings_overlay_visible is true in both cases and the
-	// Left+Right Ctrl binding has to behave differently in each -- over the
+	// Left Ctrl + Right Shift binding has to behave differently in each -- over the
 	// shell it lays the palette on top, over the game it opens the launcher.
 	// Atomic, readable from any thread.
 	bool LauncherOnlyActive();
 
 	// Issue #88: whether the palette is currently open at all -- as the
 	// launcher, or laid over an already-open shell. wlserver reads this to
-	// turn Left+Right Ctrl into a genuine toggle: nothing open means the
+	// turn Left Ctrl + Right Shift into a genuine toggle: nothing open means the
 	// combo should open (as the launcher, or over the shell -- see
 	// LauncherOnlyActive() above), something open means it should close
 	// exactly what it opened. Atomic, readable from any thread, same
@@ -107,7 +107,7 @@ namespace gamescope::ui::shell
 	void RequestClosePalette();
 
 	// D25: the overlay was hidden by something OUTSIDE the shell -- the Right
-	// Ctrl tap, Ctrl+Shift+O, gamescopectl. Drops any launcher state, so the
+	// Shift tap, Ctrl+Shift+O, gamescopectl. Drops any launcher state, so the
 	// next open is not a launcher nobody asked for.
 	//
 	// Called from cv_settings_overlay_visible's own callback, so it can
@@ -121,8 +121,8 @@ namespace gamescope::ui::shell
 	//
 	// Called from wlserver's hotkey thread, ONE line before it hides the
 	// overlay to close a launcher the combo itself opened
-	// (wlserver_check_ctrl_shortcuts' `bLauncherOnly` branch) -- the only
-	// one of the three close routes this applies to. Right Ctrl's tap
+	// (wlserver_check_shell_shortcuts' `bLauncherOnly` branch) -- the only
+	// one of the three close routes this applies to. Right Shift's tap
 	// (SettingsOverlay_ToggleVisible) and Escape (RunPaletteKeyboard, on the
 	// Draw() thread) call neither this nor anything like it, so they keep
 	// today's clear-on-next-open behaviour by simply not asking.

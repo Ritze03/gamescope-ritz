@@ -142,15 +142,15 @@ namespace gamescope
 
 	static ConVar<bool> cv_settings_overlay_visible(
 		"settings_overlay_visible", false,
-		"Show/hide the settings overlay. A Right Ctrl tap toggles it too, and Ctrl+Shift+O still does. "
-		"Left Ctrl + Right Ctrl opens the launcher, which uses this same layer.",
+		"Show/hide the settings overlay. A Right Shift tap toggles it too, and Ctrl+Shift+O still does. "
+		"Left Ctrl + Right Shift opens the launcher, which uses this same layer.",
 		[]( ConVar<bool> &cv )
 		{
 			g_bSettingsOverlayCapturing.store( cv.Get(), std::memory_order_release );
 
 			// D25: the launcher lives on this layer too, so anything that
 			// hides the layer has to drop the launcher with it -- otherwise
-			// the next Right Ctrl tap reopens the overlay into a launcher
+			// the next Right Shift tap reopens the overlay into a launcher
 			// nobody asked for, because the shell's own flag is still set.
 			// Done here rather than at each caller so gamescopectl and the
 			// console get it for free, not only the two hotkeys.
@@ -737,15 +737,18 @@ namespace gamescope
 		const float flPadTop = 16.0f;
 		const char *pszTitle = "GAMESCOPE-RITZ ACTIVE";
 		// D22: the announcement advertises the PRIMARY binding, and that is
-		// now a Right Ctrl tap. Ctrl+Shift+O still works and is deliberately
+		// now a Right Shift tap. Ctrl+Shift+O still works and is deliberately
 		// not mentioned -- a startup toast that lists every way in teaches
 		// none of them.
 		//
-		// Issue #98: the launcher bind (L CTRL + R CTRL) used to get a
-		// second line here (D25). Dropped on request -- the opening toast
-		// names only the one hotkey now.
+		// Issue #98: the launcher bind (L CTRL + R CTRL, now L CTRL + R SHIFT)
+		// used to get a second line here (D25). Dropped on request -- the
+		// opening toast names only the one hotkey now.
+		//
+		// 2026-09-01: rebound from Right Ctrl to Right Shift (see D22's own
+		// comment in wlserver.cpp for why); this line updated to match.
 		const char *pszHint = "opens the settings overlay";
-		const char *pszHotkey = "RIGHT CTRL";
+		const char *pszHotkey = "RIGHT SHIFT";
 
 		ImFont *pTitleFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		ImFont *pHintFont = gamescope::fonts::Get( gamescope::fonts::Style::Meta );

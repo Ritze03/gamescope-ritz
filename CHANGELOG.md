@@ -115,6 +115,10 @@ The newest version below is the one this build reports.
   launcher search.
 
 ### Info
+- **The overlay's hotkeys moved off Ctrl**: the settings overlay now opens with
+  **Right Shift** (tap) instead of Right Ctrl, and the launcher with
+  **Left Ctrl + Right Shift** instead of Left Ctrl + Right Ctrl. Right Ctrl no
+  longer does anything on its own.
 - **Grabbed-cursor mouse speed is an upstream issue, not a fork change**: the
   attempted fix for doubled mouse speed under Force Grab Cursor has been taken back
   out, because the mouse code here is identical to stock gamescope's and the same

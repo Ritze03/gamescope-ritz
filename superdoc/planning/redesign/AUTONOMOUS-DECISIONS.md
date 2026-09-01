@@ -984,6 +984,13 @@ it is untouched, so existing configs keep loading exactly as before.
 
 ### D22.2 · Right Ctrl opens the overlay; Left Ctrl + Right Ctrl opens the palette
 
+> **2026-09-01 update:** rebound to Right Shift / Left Ctrl + Right Shift — Ctrl and Shift see
+> constant press/release traffic in games that bind crouch/walk to them, and Right Shift is
+> quiet by comparison. The mechanism described below (tap-on-release, chord-on-press, both
+> unconsumed) is unchanged; only the two keysyms moved. See `CHANGELOG.md` and
+> `wlserver_check_shell_shortcuts()` in `src/wlserver.cpp`. This section's wording below is left
+> as originally written, describing the binding as it was chosen.
+
 Both fire on a **tap** (release with nothing pressed in between) rather than on press, because a
 modifier that fires on its own press stops being usable as a modifier — Right Ctrl + C would
 open the overlay every time. Neither branch **consumes** the key: these are modifiers, and
@@ -1003,6 +1010,9 @@ each a few lines and are pinned by tests.
 ## 2026-08-24 (D25 — the launcher stands on its own)
 
 ### D25 · Left Ctrl + Right Ctrl opens the launcher ALONE; Enter is what opens the shell
+
+> **2026-09-01 update:** see D22.2's note above — the combo is now Left Ctrl + Right Shift.
+> The table below is left as originally written.
 
 The user asked: *"Can we make it, so the LCtrl+RCtrl keybind only opens the Launcher Style UI
 and not the clickable one?"*

@@ -60,7 +60,7 @@
 #include "main.hpp"
 #include "steamcompmgr.hpp"
 #include "SettingsOverlay.h"
-// D22: the Left Ctrl + Right Ctrl palette shortcut lives in this file's
+// D22: the Left Ctrl + Right Shift palette shortcut lives in this file's
 // hotkey table, so it needs the shell's one-line request API.
 #include "Overlay/UI/Shell.h"
 #include "color_helpers.h"
@@ -362,42 +362,50 @@ static bool wlserver_check_settings_overlay_toggle( xkb_keysym_t normalizedKeysy
 }
 
 // ---------------------------------------------------------------------------
-// D22: Right Ctrl opens the overlay; Left Ctrl + Right Ctrl opens the palette.
+// D22: Right Shift opens the overlay; Left Ctrl + Right Shift opens the palette.
 // ---------------------------------------------------------------------------
-// WHY A TAP AND NOT A PRESS. Right Ctrl is a modifier, and a modifier that
+// 2026-09-01: rebound from Right Ctrl / Left Ctrl + Right Ctrl to Right Shift /
+// Left Ctrl + Right Shift. The mechanism below (tap-on-release for the lone
+// binding, chord-on-press for the combo, both reconciled against the ledger)
+// is unchanged -- only the two keysyms moved, off of Ctrl and Shift, which see
+// constant press/release traffic in games that bind crouch/walk to them, and
+// onto Right Shift, which almost nothing else binds.
+//
+// WHY A TAP AND NOT A PRESS. Right Shift is a modifier, and a modifier that
 // fires on its own PRESS cannot be used as a modifier any more -- Right
-// Ctrl + C would open the overlay every time. So the overlay fires on
+// Shift + C would open the overlay every time. So the overlay fires on
 // RELEASE, and only if nothing else was pressed while it was held: the
 // "tap" gesture, which is the only way to give a modifier its own binding
 // without taking away its day job.
 //
 // WHY NOTHING HERE IS CONSUMED. Every branch below returns false, so the key
 // still travels its normal path, and that is deliberate rather than an
-// oversight. These are MODIFIERS: swallowing Right Ctrl's release while its
+// oversight. These are MODIFIERS: swallowing Right Shift's release while its
 // press was already delivered would leave the game (or the overlay) holding a
-// Ctrl that is physically up -- a stuck modifier, which is worse than any
+// Shift that is physically up -- a stuck modifier, which is worse than any
 // binding is worth. Acting on a key and forwarding it are independent, and
 // for a modifier the answer is always "act, and forward".
 //
 // LEFT AND RIGHT ARE GENUINELY DISTINCT HERE. NormalizeKeysymForHotkey()
 // upper-cases and applies k_mapKeysymRemapping, and neither operation merges
-// Control_L with Control_R (the table only folds Meta->Super, ISO_Left_Tab->
-// Tab and friends). So setPressedKeySyms really does tell the two apart, and
-// this binding is not quietly "either Ctrl". Verified against real key
-// events, not just the table -- see D22 in AUTONOMOUS-DECISIONS.md.
-static bool s_bRightCtrlIsTap = false;
+// Shift_L with Shift_R, or Control_L with Control_R (the table only folds
+// Meta->Super, ISO_Left_Tab->Tab and friends). So setPressedKeySyms really
+// does tell the two apart, and this binding is not quietly "either Shift".
+// Verified against real key events, not just the table -- see D22 in
+// AUTONOMOUS-DECISIONS.md.
+static bool s_bRightShiftIsTap = false;
 
-static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
+static bool wlserver_check_shell_shortcuts( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
 {
-	const bool bLeftCtrlHeld  = setPressedKeySyms.contains( XKB_KEY_Control_L );
-	const bool bRightCtrlHeld = setPressedKeySyms.contains( XKB_KEY_Control_R );
+	const bool bLeftCtrlHeld   = setPressedKeySyms.contains( XKB_KEY_Control_L );
+	const bool bRightShiftHeld = setPressedKeySyms.contains( XKB_KEY_Shift_R );
 
 	if ( press )
 	{
-		// Both Ctrls down: the palette. Fires on whichever of the two went
-		// down SECOND, so the gesture works in either order.
-		if ( ( normalizedKeysym == XKB_KEY_Control_R && bLeftCtrlHeld ) ||
-		     ( normalizedKeysym == XKB_KEY_Control_L && bRightCtrlHeld ) )
+		// Left Ctrl + Right Shift down: the palette. Fires on whichever of
+		// the two went down SECOND, so the gesture works in either order.
+		if ( ( normalizedKeysym == XKB_KEY_Shift_R && bLeftCtrlHeld ) ||
+		     ( normalizedKeysym == XKB_KEY_Control_L && bRightShiftHeld ) )
 		{
 			// D25: THIS BINDING NO LONGER OPENS THE SHELL.
 			//
@@ -435,7 +443,7 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 			// the two opening ones above:
 			//
 			//   * it was the LAUNCHER (nothing else was on screen) -- take
-			//     the whole overlay down, the same hide path Right Ctrl's
+			//     the whole overlay down, the same hide path Right Shift's
 			//     tap already uses.
 			//   * it was the palette OVER a shell the user opened
 			//     separately -- close only the palette. Hiding the overlay
@@ -446,7 +454,7 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 				if ( bLauncherOnly )
 				{
 					// Item 2: this combo is the one route the user asked to
-					// keep the query on -- Right Ctrl's tap and Escape close
+					// keep the query on -- Right Shift's tap and Escape close
 					// the launcher too, but through different paths below
 					// and inside the shell's own keyboard, and neither of
 					// those asks for this.
@@ -456,7 +464,7 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 				else
 					gamescope::ui::shell::RequestClosePalette();
 
-				s_bRightCtrlIsTap = false;
+				s_bRightShiftIsTap = false;
 				return false;
 			}
 
@@ -474,32 +482,32 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 			else
 				gamescope::ui::shell::RequestLauncher();
 
-			// The palette consumed this gesture, so releasing Right Ctrl
+			// The palette consumed this gesture, so releasing Right Shift
 			// afterwards must NOT also toggle the overlay underneath it.
-			s_bRightCtrlIsTap = false;
+			s_bRightShiftIsTap = false;
 			return false;
 		}
 
-		if ( normalizedKeysym == XKB_KEY_Control_R )
+		if ( normalizedKeysym == XKB_KEY_Shift_R )
 		{
 			// Arm the tap. Only a release with nothing pressed in between
 			// will fire it.
-			s_bRightCtrlIsTap = true;
+			s_bRightShiftIsTap = true;
 			return false;
 		}
 
-		// Any other key while Right Ctrl is held means it was being used as
+		// Any other key while Right Shift is held means it was being used as
 		// a modifier, not tapped. Left Ctrl is excluded because the combo
 		// above already decided what a second Ctrl means.
 		if ( normalizedKeysym != XKB_KEY_Control_L )
-			s_bRightCtrlIsTap = false;
+			s_bRightShiftIsTap = false;
 
 		return false;
 	}
 
-	if ( normalizedKeysym == XKB_KEY_Control_R && s_bRightCtrlIsTap )
+	if ( normalizedKeysym == XKB_KEY_Shift_R && s_bRightShiftIsTap )
 	{
-		s_bRightCtrlIsTap = false;
+		s_bRightShiftIsTap = false;
 		gamescope::SettingsOverlay_ToggleVisible();
 	}
 
@@ -519,13 +527,13 @@ static bool wlserver_check_ctrl_shortcuts( xkb_keysym_t normalizedKeysym, bool p
 //
 // A leaked MODIFIER does not merely add a phantom key: it silently rewrites
 // every binding that reads the held-key set. A stale Control_L turns each
-// later lone Right Ctrl tap into the Left+Right Ctrl launcher combo (see
-// wlserver_check_ctrl_shortcuts above: the combo is tested first, and taking
-// it also disarms the tap), so Right Ctrl stops opening the shell and starts
-// toggling the launcher instead -- while the real Left+Right Ctrl combo goes
+// later lone Right Shift tap into the Left Ctrl + Right Shift launcher combo (see
+// wlserver_check_shell_shortcuts above: the combo is tested first, and taking
+// it also disarms the tap), so Right Shift stops opening the shell and starts
+// toggling the launcher instead -- while the real Left Ctrl + Right Shift combo goes
 // on working, because it was already the branch being taken. Reproduced
 // exactly that way: with one unreleased Left Ctrl in the ledger, three lone
-// Right Ctrl taps drew 'L' (launcher) on every frame and never 'S' (shell).
+// Right Shift taps drew 'L' (launcher) on every frame and never 'S' (shell).
 //
 // So the ledger needs a resync point, and keyboard focus is the only honest
 // one: at the moment focus arrives the host tells us precisely which keys are
@@ -602,7 +610,7 @@ void wlserver_clear_pressed_hotkeys()
 	// The two gestures that carry state across events are mid-flight by
 	// definition if focus moved while they were armed, and neither can be
 	// completed now: the release that would finish them went somewhere else.
-	s_bRightCtrlIsTap = false;
+	s_bRightShiftIsTap = false;
 	s_bOverlayHotkeyOwnsO = false;
 }
 
@@ -638,7 +646,7 @@ static gamescope::ConCommand cc_wlserver_debug_key(
 	"wlserver_debug_key",
 	"Send a key event on gamescope's OWN virtual keyboard: wlserver_debug_key <evdev-code> <0|1> "
 	"[<code> <0|1> ...]. 1 is press, 0 is release. Goes through wlserver_process_hotkeys(), so it "
-	"is the only way to exercise a HOTKEY (Right Ctrl, Left Ctrl + Right Ctrl, Ctrl+Shift+O) from a "
+	"is the only way to exercise a HOTKEY (Right Shift, Left Ctrl + Right Shift, Ctrl+Shift+O) from a "
 	"script -- overlay_e2_key cannot, by design. Confined to this compositor's own seat: it can "
 	"reach this instance's game or overlay and nothing on the host. Through gamescopectl the "
 	"arguments must be ONE quoted argument: gamescopectl wlserver_debug_key \"97 1 97 0\".",
@@ -3077,7 +3085,7 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
 		setPressedKeySyms.emplace( uKeySym );
 
-	// D22: Right Ctrl / Left Ctrl + Right Ctrl. Never returns true (see the
+	// D22: Right Shift / Left Ctrl + Right Shift. Never returns true (see the
 	// function's own comment on why a modifier is acted on but not consumed),
 	// so the call is a statement rather than a condition -- writing it as an
 	// `if` would suggest it can swallow a key, which is exactly the thing it
@@ -3087,7 +3095,7 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	// below can be ordered ahead of it for correctness -- and being last is
 	// what let the two guards above decide, silently, that the shell's own
 	// binding would not be offered this keystroke at all.
-	wlserver_check_ctrl_shortcuts( normalizedKeysym, press, setPressedKeySyms );
+	wlserver_check_shell_shortcuts( normalizedKeysym, press, setPressedKeySyms );
 
 	if ( bReleaseWithoutRecordedPress || bSymStillHeldElsewhere )
 		return false;

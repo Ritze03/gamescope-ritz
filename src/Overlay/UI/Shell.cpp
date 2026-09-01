@@ -399,7 +399,7 @@ namespace gamescope::ui::shell
 		bool s_bLauncherOnly = false;
 
 		// The published mirror of the above, for wlserver -- which decides on
-		// its own thread whether Left+Right Ctrl means "launcher" or "palette
+		// its own thread whether Left Ctrl + Right Shift means "launcher" or "palette
 		// over the shell" and cannot read s_bLauncherOnly without racing the
 		// frame that is drawing it.
 		std::atomic<bool> s_bLauncherOnlyPublished{ false };
@@ -1936,7 +1936,7 @@ namespace gamescope::ui::shell
 			// hints are gone now, leaving only the one chord that opens the
 			// Launcher -- one fixed form, so the width-driven fallback that
 			// picked among several forms goes with it.
-			static const char *const pszLegend = "L Ctrl + R Ctrl  launcher";
+			static const char *const pszLegend = "L Ctrl + R Shift  launcher";
 
 			Label( rcText, TypeRole::Meta, Col( Role::TextMeta ), pszLegend );
 		}
@@ -5901,7 +5901,7 @@ namespace gamescope::ui::shell
 	// The flash fix stops every closing path from clearing s_bLauncherOnly,
 	// so after the launcher closes the mode is still "launcher" -- correctly,
 	// because that is what the fading frames must keep drawing. But wlserver
-	// asks this question to decide what Left+Right Ctrl means, and "a
+	// asks this question to decide what Left Ctrl + Right Shift means, and "a
 	// launcher is up" must be FALSE the moment the layer goes down, or the
 	// next press would read as "the launcher is already up" and decline to
 	// open anything.
@@ -6017,7 +6017,7 @@ namespace gamescope::ui::shell
 
 			// A fresh open is the SHELL unless a launcher request arrives
 			// with it -- consumed just below, so this is the default and the
-			// request is the exception. A Right Ctrl tap sends no request at
+			// request is the exception. A Right Shift tap sends no request at
 			// all, which is exactly how it opens the shell.
 			s_bLauncherOnly = false;
 
