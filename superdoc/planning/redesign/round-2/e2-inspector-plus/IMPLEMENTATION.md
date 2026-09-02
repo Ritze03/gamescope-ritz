@@ -23,6 +23,106 @@ P1: the same file, D11.
 
 ---
 
+## 2026-09-02 — the press-vs-release tension, closed: both overlay hotkeys now fire on Right Shift's release
+
+**This binding has now broken four times.** What follows is the *shape* of the problem,
+because the shape is what kept coming back; the patch is small and secondary.
+
+**The crack.** Two gestures shared one physical key and resolved at two different
+moments. The lone binding (Shell) has always fired on Right Shift's **release** — it has
+to, because a modifier that fires on its own press stops being usable as a modifier. The
+combo (Launcher) fired on the **press** of whichever of its two keys went down second.
+Every failure of this binding has been one of the two ways that can go wrong:
+
+1. **the chord fires on press, and the same key's release then also fires the tap** — one
+   gesture, two UIs, both drawing, every string on screen painted twice. This is the
+   doubled-text symptom of 2026-08-29 below, and the reason `s_bRightShiftIsTap = false`
+   was sprinkled at each of the chord's exits. That is a guard someone has to *remember*
+   at every new exit, which is a defect waiting for the next edit; and
+2. **the chord fires on press and thereby eats a longer gesture that is still being
+   typed.** `Ctrl+Shift+O` — the overlay's own documented binding, advertised in the
+   ConCommand help — *begins with* `Left Ctrl + Right Shift`. With the right-hand Shift
+   the launcher opened the instant Shift went down, and the `O` then arrived at an
+   overlay that was already up and toggled it straight back off: the binding did nothing
+   at all. **No amount of care at the chord's exits could have fixed this** — at the
+   moment of the press, the keystroke that distinguishes the two gestures has not been
+   typed yet.
+
+**The resolution: decide on the release, when the whole gesture is known.** Right Shift's
+press now only **arms**, recording *which* gesture the keys currently down say this is
+(`RightShiftGesture::Shell` / `::Launcher` / `::Disarmed`, `src/wlserver.cpp`). Right
+Shift's release fires exactly that one and clears the arming. Left Ctrl arriving while
+Right Shift is already down **upgrades** Shell→Launcher instead of firing, which is what
+keeps the combo working in either key order. Any other key pressed while Right Shift is
+held disarms.
+
+Consequences, each of which is now structural rather than a rule to keep:
+
+- **exactly one gesture can fire per press/release of Right Shift.** "The chord already
+  fired, so do not also fire the tap" is no longer a rule that can be forgotten: the
+  chord does not fire at a moment when the tap could still be pending.
+- **a longer binding starting with the same two keys survives**, because the disarm
+  happens on the third key's press and nothing has fired yet.
+- **arming stays unconditional on Right Shift's press** — the exact property Issue #102
+  part 2 (below) was fixed to obtain, and the reason that fix must not simply be reverted.
+  A modifier the ledger wrongly believes is held can still change *which* gesture is
+  armed (that is what the binding means), but it cannot make the press arm **nothing**,
+  which is the failure mode that made the Shell unreachable over several sessions.
+  Keeping the ledger honest about that modifier is `wlserver_reconcile_pressed_hotkeys()`,
+  a separate mechanism, untouched here.
+
+**Verified on the real hotkey path** (`wlserver_debug_key` + `overlay_e2_trace`, headless,
+`vkcube` as the client — the shell does not draw at all without a real client, so an
+overlay trace taken against `-- sleep` is empty and proves nothing):
+
+| gesture | trace | correct? |
+| --- | --- | --- |
+| lone Right Shift | `SSS…` | yes — Shell |
+| `LCtrl + RShift` (press) | *(empty)* | yes — nothing fires on the press any more |
+| `LCtrl + RShift` (release) | `LLL…` | yes — Launcher, and **no `S` on Shift's release** |
+| `LCtrl + RShift` again while up | *(empty)* | yes — closes it |
+| combo typed Shift-first | `LLL…` | yes — either order still works |
+| combo with Ctrl released first | `LLL…` | yes |
+| `Ctrl + LShift + O` | `SSS…` | yes — Shell |
+| `Ctrl + RShift + O` | `SSS…` | **the regression, fixed** (was: nothing at all) |
+| lone Right Ctrl | *(empty)* | yes — not a binding |
+| `RShift + A` | *(empty)* | yes — still usable as a modifier |
+
+Plus the whole stranded-modifier table from Issue #102 part 2 below, re-run against the
+new structure with the same manufactured-stranding technique (fill `keycodes[]` to its
+32-key cap so the next press lands in the ledger and nowhere else):
+
+| state | lone Right Shift | correct? |
+| --- | --- | --- |
+| clean | `S` shell | yes |
+| `Control_L` **genuinely** held | `L` launcher | yes — not over-pruned |
+| `Control_L` **stranded** (ledger only) | `S` shell | yes — the lie is pruned |
+| Right Shift itself stranded | `S` shell | yes — the exempt keycode is never pruned |
+
+`ninja` clean, `meson test` 70/70.
+
+**On the doubled text reported alongside these two regressions: it is not this.**
+Measured, not reasoned: with a state probe reading the overlay's own visibility,
+launcher-mode and palette-open flags after each gesture, `LCtrl + RShift` produced the
+launcher **only** — the shell did not also open on Shift's release — on the build
+*before* this change as well as after. `overlay_e2_trace` over these gestures is a pure
+run of `S` or a pure run of `L`, never a mix, at exactly one character per presented
+frame; a same-frame double-entry detector on `Draw()` (comparing `ImGui::GetFrameCount()`
+against the previous call) counted **zero** duplicate calls across every gesture above,
+idle and under injected pointer/key input; and `DrawPalette()` has exactly two call
+sites, one on each side of the launcher branch's early `return`, so at most one palette
+is submitted per frame. Two UI surfaces drawing at once is therefore ruled out for this
+build by construction and by measurement, and the doubling has a different cause that
+was **not** found here. The buffer/frame-mixing theory was separately ruled out by
+another worker (skipped attaches frozen while attaches climbed; `skipChild=0` throughout).
+
+**Why:** two gestures on one key must resolve at the same moment, or the earlier one
+will keep eating the later one. If a modifier's lone binding has to wait for the release
+— and it does — then every chord built on that modifier has to wait for it too. That is
+the whole lesson, and it is cheaper than the four bugs it would have prevented.
+
+---
+
 ## 2026-09-01 — Issue #102 part 2: the ledger is now reconciled, not just resynced
 
 The focus-boundary clear below fixed *a* route and the symptom came back, so the

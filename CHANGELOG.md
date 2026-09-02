@@ -35,6 +35,12 @@ The newest version below is the one this build reports.
   instead of falling back to a plain "C".
 
 ### Fixed
+- **Ctrl+Shift+O opens the settings overlay again**: with the right-hand Shift it
+  did nothing at all, because Left Ctrl + Right Shift already opened the launcher
+  the moment Shift went down and the O then closed it again.
+- **Left Ctrl + Right Shift no longer risks opening the overlay too**: both
+  overlay hotkeys now act when Right Shift comes back up, so one press of the
+  combo can only ever produce one surface.
 - **Freeze after moving the mouse with Force Grab Cursor on**: with the cursor
   grabbed, sustained mouse movement steadily pinned the game's display buffers until
   the game stopped responding; they are now handed back correctly however long you
