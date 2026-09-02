@@ -6,7 +6,13 @@
 instead of remembering the meson invocation or rediscovering this repo's
 submodule/test quirks. `install-gamescope-ritz.sh` and
 `update-gamescope-ritz.sh` (below) call the same shared build helpers in
-`gamescope-ritz-common.sh`, so all three stay in sync.
+`gamescope-ritz-common.sh`, so all three stay in sync. That shared helper
+(`gcr_build`) also runs the actual `ninja` invocation under `nice -n 10` (plus
+`ionice -c3`, idle I/O class, since LTO linking is I/O-heavy too) — niced
+once there rather than at each call site, so it covers every build path
+(including `remote-test.sh`'s local build) without needing to be repeated.
+Niceness is inherited by every compiler/linker process ninja spawns, so a
+build never contends with the user's games or desktop.
 
 ```sh
 scripts/build-gamescope-ritz.sh              # release -> build-release/ (default)

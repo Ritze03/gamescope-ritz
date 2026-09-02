@@ -186,12 +186,23 @@ gcr_build() {
 	local ninja_args=(-C "$build_dir")
 	[ -n "${GCR_NINJA_JOBS:-}" ] && ninja_args+=(-j "$GCR_NINJA_JOBS")
 	local ninja_target="${GCR_NINJA_TARGET-src/gamescope}"
+	# Run ninja (and therefore every compiler/linker process it spawns —
+	# niceness is inherited by children, verified empirically 2026-09-02) at
+	# nice +10, so a build never contends with the user's games or desktop.
+	# `ionice -c3` (idle) rides along too: an LTO link is I/O-heavy as well
+	# as CPU-heavy, and -c3 needs no privilege for a normal user (checked,
+	# not assumed) on this machine's CFQ/BFQ-less-but-still-honouring
+	# scheduler. Niced here, once, so every caller (build-gamescope-ritz.sh,
+	# install/update, remote-test.sh) gets it for free without repeating it
+	# at each call site.
+	local nice_cmd=(nice -n 10)
+	command -v ionice >/dev/null 2>&1 && nice_cmd=(ionice -c3 "${nice_cmd[@]}")
 	if [ -n "$ninja_target" ]; then
-		gcr_info "building (ninja ${ninja_args[*]} $ninja_target)..."
-		ninja "${ninja_args[@]}" "$ninja_target"
+		gcr_info "building (${nice_cmd[*]} ninja ${ninja_args[*]} $ninja_target)..."
+		"${nice_cmd[@]}" ninja "${ninja_args[@]}" "$ninja_target"
 	else
-		gcr_info "building (ninja ${ninja_args[*]})..."
-		ninja "${ninja_args[@]}"
+		gcr_info "building (${nice_cmd[*]} ninja ${ninja_args[*]})..."
+		"${nice_cmd[@]}" ninja "${ninja_args[@]}"
 	fi
 }
 

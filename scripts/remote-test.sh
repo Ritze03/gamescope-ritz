@@ -35,9 +35,11 @@
 #
 # USAGE
 #   scripts/remote-test.sh sync [--extras] [--no-build]
-#       Build locally (nice -n 19, release), then rsync the binary (and,
-#       with --extras, scripts/looks/reshade) to the remote test dir.
-#       --no-build skips the local build and ships whatever's already there.
+#       Build locally (release; niced +10 / ionice idle by the shared build
+#       helper — see gcr_build in gamescope-ritz-common.sh), then rsync the
+#       binary (and, with --extras, scripts/looks/reshade) to the remote test
+#       dir. --no-build skips the local build and ships whatever's already
+#       there.
 #
 #   scripts/remote-test.sh run [--wait] -- <command...>
 #       Run <command> on the remote host with the compositor's env exported and
@@ -123,8 +125,8 @@ cmd_sync() {
 	done
 
 	if [ "$do_build" = "1" ]; then
-		gcr_info "building locally (nice -n 19, release)..."
-		nice -n 19 "$SCRIPT_DIR/build-gamescope-ritz.sh" --release
+		gcr_info "building locally (release; niced +10 by the shared build helper)..."
+		"$SCRIPT_DIR/build-gamescope-ritz.sh" --release
 	fi
 	[ -x "$LOCAL_BIN" ] || { gcr_err "no binary at $LOCAL_BIN — run without --no-build, or build first."; exit 1; }
 
