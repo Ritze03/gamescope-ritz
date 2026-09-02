@@ -74,13 +74,73 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
   "what runs where" boundary explicit in the filenames rather than branching on hostname
   inside one script.
 
+### Remote test laptop (`scripts/remote-test.sh`)
+
+A second real-hardware rig, distinct from the SteamOS device tooling above: a personal
+CachyOS laptop (Intel Kaby Lake-U / HD Graphics 620, `mo@192.0.2.167`, hostname
+`mo-laptop`), reachable over SSH with key auth, running a live Hyprland session on
+seat0/tty1. *Why it exists:* every overlay bug this project has hit took multiple failed
+rounds because agents could only test headlessly on the maintainer's own working
+machine — no visible overlay, no real force-grab as a launch flag, no soak testing, and
+twice a test window landed on the maintainer's own display by accident. This laptop is a
+real, dedicated Wayland session nobody else is using, reachable non-interactively.
+
+*Why build-here-ship-there, not build-on-the-laptop:* the laptop's CPU is a low-power
+U-series part; a full LTO release build there would take a long time and make the
+machine unusable while it ran. The desktop already compiles at GCC's default `-march`
+(generic x86-64 baseline — nothing in `meson.build` or `scripts/build-gamescope-ritz.sh`
+sets `-march=native` or anything else; `/etc/makepkg.conf`'s `-march=native` only affects
+`makepkg`, not a plain `meson`/`ninja` invocation), so the binary this produces already
+runs on any x86_64 CPU including the laptop's — verified via `readelf -n` reporting `x86
+ISA used: x86-64-baseline`. So the desktop builds once (fast, on real hardware the
+maintainer games on anyway) and `scripts/remote-test.sh sync` ships the compiled binary
+over rather than repeating the build on weaker hardware.
+
+- `scripts/remote-test.sh sync [--extras] [--no-build]` — builds locally
+  (`nice -n 19`, release) and rsyncs `build-release/src/gamescope` to
+  `~/gamescope-ritz-remote/gamescope-ritz` on the laptop, then runs `--version` there to
+  confirm the transferred binary actually starts (catches both an ISA mismatch and
+  missing shared libraries immediately, rather than mid-investigation later). `--extras`
+  also syncs `scripts/`/`looks/`/`reshade/` for Lua-config or ReShade-effect testing;
+  omitted by default since gamescope fails safe (not a crash) when those directories
+  don't exist and most smoke tests don't need them. `gamescopectl` is not synced — it's
+  a separate binary owned by the `gamescope-git` pacman package, already present on the
+  laptop the same way it is on the desktop.
+- `scripts/remote-test.sh run [--wait] -- <command...>` — runs a command on the laptop
+  with `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`/`HYPRLAND_INSTANCE_SIGNATURE` exported (read
+  live from the running Hyprland process's own `/proc/<pid>/environ` on every call, since
+  every `ssh host 'cmd'` is a fresh non-interactive shell that inherits none of the
+  target session's environment) and the remote bin dir on `PATH`. Without `--wait` the
+  command is launched via `setsid nohup ... & disown` so it survives the SSH session
+  ending — the second SSH fact this script exists to hide: a long-running remote process
+  dies with its SSH session unless explicitly detached.
+- `scripts/remote-test.sh screenshot <remote-path> [local-path]` — runs `gamescopectl
+  screenshot "<remote-path> 4"` (type `4` = `screen_buffer`; the default type truncates
+  `zpos >= 2` and the overlay sits at `zpos 6`, and gamescopectl silently collapses
+  trailing args if the path and type aren't one quoted argument — a quirk that has
+  independently cost six prior investigations, so the script always does this for you)
+  and `scp`s the result back.
+- `scripts/remote-test.sh env` — prints the resolved `export` lines for a caller who
+  wants to `ssh` in by hand instead.
+
+**Known gap (2026-09-02):** the laptop is missing `wlroots0.20` (`libwlroots-0.20.so`),
+so a synced binary currently fails its `--version` self-check with "shared libraries:
+libwlroots-0.20.so: cannot open shared object file". Fix on the laptop: `sudo pacman -S
+wlroots0.20` (present in the standard `extra` repo, not just the desktop's
+`cachyos-extra-v3`). The Vulkan stack, by contrast, is already fine unverified-but-fine:
+`vulkaninfo` itself isn't installed, but both `/usr/share/vulkan/icd.d/intel_icd.json`
+(the modern `anv` driver, `libvulkan_intel.so`) and `intel_hasvk_icd.json` are present
+with their driver libraries in place, and `vulkan-intel`/`vulkan-icd-loader` are
+installed — nothing to install there.
+
 ## Using it
 
 Configure with `meson setup build -D<option>=<value>` for any flag above, then
 `ninja -C build`. To iterate against a real SteamOS device, run
 `tools/build_and_install_on_steamos_device_remote.sh <device_ip> [password]` from a dev
 machine; to fall back to the stock system build, run
-`tools/reset_to_system_gamescope_remote.sh`.
+`tools/reset_to_system_gamescope_remote.sh`. To iterate against the remote test laptop
+instead, run `scripts/remote-test.sh sync` then `scripts/remote-test.sh run -- ...`.
 
 ## Related links
 

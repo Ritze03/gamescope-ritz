@@ -40,6 +40,21 @@ Options: `--release` (default), `--debug`, `--test`, `--clean`, `--jobs N`,
   options) is wiped and reconfigured automatically; `--clean` forces this
   up front.
 
+## Testing on the remote laptop rig
+
+`remote-test.sh` builds locally, ships the binary to a dedicated CachyOS test laptop
+over SSH, and runs it there against a real compositor — so overlay work can be verified
+visually instead of only headlessly. See its own header comment for full usage
+(`sync`, `run`, `screenshot`, `env` subcommands) and
+`superdoc/features/build-and-tooling.md` for why it's built-here-ship-there rather than
+building on the laptop.
+
+```sh
+scripts/remote-test.sh sync                      # build here, rsync the binary over
+scripts/remote-test.sh run -- gamescope-ritz -w 1920 -h 1080 --backend wayland -- vkgears
+scripts/remote-test.sh screenshot ~/shot.png
+```
+
 ## Installing and updating gamescope-ritz
 
 `install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the
