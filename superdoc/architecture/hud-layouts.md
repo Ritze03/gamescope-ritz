@@ -363,9 +363,9 @@ governs the Shell's own *widget* sizing (`Overlay/UI/Tokens.h`'s `Scale()`/`Px()
 a mapping between two independent ImGui contexts' pixel spaces; the two happen to be
 unrelated numbers that could be confused for the same job.
 
-**Dragging.** Mouse-down inside an *enabled* module's box (hit-tested topmost-first,
-i.e. `kModuleOrder`'s reverse — Media before Gpu before Cpu before Fps, matching that
-z-order's own "later entries draw on top" rule) grabs it; while held, the box's top-left
+**Dragging.** Mouse-down inside an *enabled* module's drawn box (hit-tested
+**smallest-box-first**, see "The editor's visual model" below — a plain topmost-first
+test made a small box stacked under a large one permanently unreachable) grabs it; while held, the box's top-left
 follows the pointer (via a fixed grab offset recorded at mouse-down, not accumulated
 frame-to-frame deltas). Every frame, the module's `x`/`y` are **recomputed from the new
 top-left**, never nudged incrementally: `x`/`y` describe where the module's `origin`
@@ -452,3 +452,85 @@ somewhere durable to land). Same synchronous `SaveLayout()` + `ReloadLayoutCache
 choice as the editor's `Save()`, for the same reason (a discrete click, immediate
 feedback wanted, `EnqueueLayoutWrite()` alone would leave the very next repaint showing
 the old value).
+
+## The editor's visual model
+
+The editor was functionally correct before it was usable: at 1280×800 the whole thing
+was a ~150×25px smudge in the top-left corner. Four rules fix that, and each of them is
+a deliberate divergence from "draw the module where the module is", so each carries its
+reasoning here.
+
+**A minimum box size, anchored at the module's own top-left.** Every module's drawn box
+is its natural Shell-space rect grown to a floor of **140 × 52 base px**
+(`kMinBoxWBase`/`kMinBoxHBase`, `Px()`-scaled by `display_scale` exactly like the
+Shell's own chrome), growing **right and down only**. `Why:` a module's true extent is
+about 95×40 physical px at the default 18px HUD font — too small to read a label in and
+too small to aim at — and all of them default to the same `(0, 0)` top-left, so at true
+extent they stack into one illegible clump. The box is the *editing affordance*, not a
+mirror of the module's pixel extent. Anchoring the growth at the natural top-left is
+what keeps the affordance honest: **the drawn box's top-left is the module's top-left at
+every size**, so what you grab and where the module lands are the same point, and a
+drag's grab offset is recorded against the natural top-left rather than the drawn one.
+
+Everything that has to be true of the *module* rather than of the affordance is computed
+from the **natural** rect: the snap targets (a module aligns to another module's real
+edges, not to its padding), the on-screen clamp, and the `x`/`y` write-back. `Why:` if
+the clamp used the padded box, a small module could never be pushed flush against the
+screen's right or bottom edge — which is precisely where the default `top-right`-style
+placements want to live. A padded box is therefore allowed to overhang the screen edge
+while the module it stands for sits exactly on it. When the box is bigger than the
+module, the module's true extent is also drawn inside it as a faint accent hairline
+sharing the same top-left, so the relationship is visible on screen and not only in this
+paragraph.
+
+**A cascade for coincident modules — drawing and hit-testing only.** Modules whose
+natural top-left agree within 6 base px are stepped down-right by 18 base px each, in
+`kModuleOrder` order (`AssignCascade()`). Combined with a **smallest-box-first** hit
+test (ties going to the later index, preserving the "later draws on top" rule), that
+makes every module in a default `(0,0)` pile both visible as a separate box and
+individually grabbable. `Why:` overlap is the *default* state of a fresh config, not an
+edge case, and a topmost-first test over identical rects hands every click to one
+module forever. **The cascade offset is never added to the natural rect**, so it cannot
+reach `HudLayoutModule::x`/`y` and nothing about it is ever persisted — it is a
+rendering and hit-testing affordance, and a saved layout is byte-identical whether or
+not the stack was ever fanned out. The module currently being dragged is excluded from
+the cascade entirely (offset 0, and it does not count towards anyone else's index):
+since the grab offset is recorded against the natural top-left, a cascade that changed
+as the module left the stack would make the box jump under the pointer mid-drag; excluded
+from the start, the only shift is one instant at mouse-down, which reads as picking the
+box up off the pile.
+
+**Boxes that read as boxes, in the kit's own tokens.** Each box is a flat black backing
+(alpha 120, 150 while dragging) under an accent tint (12% idle / 20% hovered / 30%
+dragging), outlined at 1.5 base px idle and 2.5 base px hovered-or-dragging in
+`Role::LineControl` / `Accent(0.85)` / `Accent(1.0)` respectively, with its name drawn
+in **`TypeRole::Label`** — the Shell's own body type — via `ui::DrawText()`. `Why:` an
+outline-only idle box vanishes against a bright game frame (that is what made the editor
+read as a smudge), and the label belongs to the *editor's* type ladder, not the HUD's:
+it names a target in the editor's UI and must stay readable however small `hud.font_size`
+is. No new colours are introduced; everything comes from `UI/Colors.h`'s roles and
+`Accent()`. The `Save`/`Cancel` chrome is pushed to the same `TypeRole::Label` size (it
+was drawing in the atlas's default 11.5px bake, ~10 physical px), with its `FramePadding`
+and `ItemSpacing` pushed as style vars around **both** `ComputeChromeRect()`'s measure
+and the buttons' draw, so the hit-tested bar and the painted bar stay one rect.
+
+**An always-drawn placement surface.** A margin frame at 24 base px inset plus a
+screen-centre cross, both in `Role::Line` (the kit's faintest decorative rule) at
+`Hairline()` width, drawn every frame rather than only mid-drag. `Why:` the editor has
+to state its coordinate space before anything is grabbed — where the centre is, and how
+close to the edge a module can sensibly sit. It is background reference, deliberately
+the faintest thing on screen; the accent snap guides remain the only *bright* lines, so
+"a snap is happening" stays unambiguous.
+
+**Edit-mode backdrop: the Shell's blur is suppressed.** `SettingsOverlay.cpp` requests
+the compositor's `blurLayer0` pass whenever the overlay is open (see
+`k_nMaxOverlayBlurRadius`'s note there). While `hudedit::IsActive()` it requests **no
+blur at all** and caps `background_darkening` at `k_flHudEditMaxDarkening` (0.15); the
+editor's own scrim is a light `alpha 38` wash. `Why:` this editor exists to place a HUD
+*over the game*, so the game is the reference the user is aiming against — a full-screen
+Gaussian blur turns it into exactly the uniform grey field that made the editor unusable.
+The normal Shell's blur/darkening behaviour is untouched: the branch is one `bHudEditing`
+flag inside the frame-info builder, not a change to the blur path itself. `hudedit`'s
+`s_bActive` is a `std::atomic<bool>` for this reason — it is now read from the composite
+thread (here, and by `FpsDisplay_AddLayer()`'s edit-mode zpos) while the overlay thread
+writes it.

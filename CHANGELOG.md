@@ -29,6 +29,23 @@ The newest version below is the one this build reports.
 - **HUD placement editor: the live numbers no longer print through Save/Cancel**: while
   the editor is open, the running FPS/CPU/GPU readout now stays behind its own chrome
   instead of drawing over the buttons.
+- **HUD placement editor: modules are now visible, readable targets**: each module is
+  drawn as a proper outlined box with its name at the overlay's own text size and a
+  minimum size big enough to see and aim at, instead of a few unreadable pixels in the
+  top-left corner.
+- **HUD placement editor: overlapping modules can each be picked up**: modules sitting
+  in the same spot are now fanned out slightly and the smaller one wins a click, so a
+  module hidden under a bigger one is no longer unreachable; the fan-out is only how
+  they are drawn and never changes the placement that gets saved.
+- **HUD placement editor: the game stays visible while you place things**: the
+  background blur is switched off and the dimming is kept light for the duration of an
+  edit, so you can see what you are placing the HUD over.
+- **HUD placement editor: Save and Cancel are readable**: the editor's buttons and hint
+  text now use the overlay's normal text size and scale with the overlay's display
+  scale, instead of rendering at roughly ten pixels.
+- **HUD placement editor: the screen's centre and margins are shown**: a faint centre
+  cross and edge-margin frame are now always drawn, so it is clear where a module is
+  being placed even before a snap guide appears.
 
 ## [0.3.5] – 2026-08-27
 

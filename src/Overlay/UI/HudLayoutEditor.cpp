@@ -4,8 +4,10 @@
 #include "HudLayoutEditor.h"
 
 #include "Colors.h"
+#include "Controls.h"
 #include "Tokens.h"
 
+#include "Overlay/Fonts.h"
 #include "Overlay/FpsDisplay.h"
 #include "Config/ConfigManager.h"
 #include "steamcompmgr.hpp"
@@ -13,6 +15,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <optional>
 #include <string>
@@ -27,7 +30,14 @@ namespace gamescope::ui::hudedit
 		// fresh every time, so nothing here needs to survive IsActive()
 		// going false.
 		// -----------------------------------------------------------------
-		bool s_bActive = false;
+		// Atomic because it is read from the COMPOSITE thread as well as the
+		// Shell's own: FpsDisplay_AddLayer()'s edit-mode zpos and
+		// SettingsOverlay.cpp's edit-mode blur suppression both branch on
+		// IsActive() while Begin()/Save()/Cancel() write it from the overlay
+		// side. A torn read is impossible for a bool, but the data race was
+		// real UB; relaxed ordering is enough since nothing else is published
+		// through it.
+		std::atomic<bool> s_bActive{ false };
 		std::string s_sLayoutName;      // "" until Save() names one, same meaning as FpsDisplaySettings::layout_name
 		config::HudLayout s_Working;    // the copy being edited -- what Draw() reads/writes
 		config::HudLayout s_Snapshot;   // Begin()'s own copy, restored by Cancel()
@@ -41,6 +51,47 @@ namespace gamescope::ui::hudedit
 		float s_flGuideX = 0.0f, s_flGuideY = 0.0f;
 
 		constexpr const char *kModuleNames[4] = { "FPS", "CPU", "GPU", "MEDIA" };
+
+		// -----------------------------------------------------------------
+		// The editing affordance's own geometry (base units, Px()-scaled --
+		// see Tokens.h -- so the editor's chrome tracks display_scale exactly
+		// like the Shell's does).
+		//
+		// `Why:` a module's TRUE extent is tiny -- roughly 95x40 physical px
+		// at the default 18px HUD font -- which is neither readable nor
+		// aimable as a drag target, and all four modules default to the same
+		// (0,0) top-left, so at true extent they stack into one illegible
+		// clump. The drawn box is therefore the AFFORDANCE, not a mirror of
+		// the module's pixel extent: it is the module's natural rect grown to
+		// a floor of kMinBoxW x kMinBoxH, ANCHORED AT THE NATURAL TOP-LEFT
+		// and growing right/down only. That anchor is what keeps "what you
+		// drag" and "where the module lands" the same point -- the drawn
+		// box's top-left IS the module's top-left, at every size. Everything
+		// that has to be true of the real module rather than of the
+		// affordance -- snap targets, the on-screen clamp, and the x/y
+		// write-back -- is computed from the NATURAL rect, so a padded box is
+		// free to overhang the screen edge while the module it stands for
+		// still reaches that edge exactly.
+		// -----------------------------------------------------------------
+		constexpr float kMinBoxWBase       = 140.0f;
+		constexpr float kMinBoxHBase       =  52.0f;
+		constexpr float kBoxRoundBase      =   4.0f;
+		constexpr float kBoxStrokeBase     =   1.5f;  // idle outline
+		constexpr float kBoxStrokeHotBase  =   2.5f;  // hovered / dragging outline
+
+		// Coincident-stack cascade. Modules whose natural top-left agree
+		// within kCoincidentEpsBase are drawn stepped down-right by
+		// kCascadeStepBase each, in kModuleOrder order, so a stack reads as
+		// several boxes and every one of them has an exposed corner to grab.
+		// DRAWING AND HIT-TESTING ONLY -- the offset is never added to the
+		// natural rect and therefore never reaches HudLayoutModule::x/y.
+		constexpr float kCascadeStepBase    = 18.0f;
+		constexpr float kCoincidentEpsBase  =  6.0f;
+
+		// The always-drawn placement reference: a margin frame and a centre
+		// cross, so the editor reads as a coordinate space even before
+		// anything is dragged.
+		constexpr float kGuideMarginBase = 24.0f;
 
 		// Snap tolerance, Shell-space physical pixels (task brief: "within
 		// 8 physical pixels").
@@ -94,7 +145,56 @@ namespace gamescope::ui::hudedit
 		// sizing, not a mapping between two independent ImGui contexts'
 		// pixel spaces).
 		// -----------------------------------------------------------------
-		struct ShellRect { float x0, y0, x1, y1; bool bEnabled; };
+		// `n*` is the module's TRUE rect (Shell space) -- the only thing
+		// snapping, clamping and the x/y write-back ever look at. `d*` is the
+		// drawn/hit-tested affordance: the natural rect floored to the
+		// minimum box size and shifted by this frame's cascade offset. See
+		// kMinBoxWBase's note above for why the two are separate.
+		struct ModuleBox
+		{
+			bool  bEnabled;
+			float nx0, ny0, nx1, ny1;
+			float dx0, dy0, dx1, dy1;
+			float flCascade;
+		};
+
+		void RefreshDrawBox( ModuleBox &b )
+		{
+			b.dx0 = b.nx0 + b.flCascade;
+			b.dy0 = b.ny0 + b.flCascade;
+			b.dx1 = b.dx0 + std::max( b.nx1 - b.nx0, Px( kMinBoxWBase ) );
+			b.dy1 = b.dy0 + std::max( b.ny1 - b.ny0, Px( kMinBoxHBase ) );
+		}
+
+		// The cascade for a coincident stack. The module currently being
+		// dragged is deliberately excluded (offset 0, and it does not count
+		// towards anyone else's): a drag records its grab offset against the
+		// NATURAL top-left, so a cascade that changed as the module left the
+		// stack would make the box jump under the pointer mid-drag. Excluded
+		// from the start, the only shift is one instant at mouse-down, which
+		// reads as picking the box up off the pile.
+		void AssignCascade( ModuleBox ( &boxes )[4], int nDragging )
+		{
+			const float flEps  = Px( kCoincidentEpsBase );
+			const float flStep = Px( kCascadeStepBase );
+			for ( int i = 0; i < 4; ++i )
+			{
+				int nStack = 0;
+				if ( boxes[i].bEnabled && i != nDragging )
+				{
+					for ( int j = 0; j < i; ++j )
+					{
+						if ( !boxes[j].bEnabled || j == nDragging )
+							continue;
+						if ( std::fabs( boxes[j].nx0 - boxes[i].nx0 ) <= flEps &&
+						     std::fabs( boxes[j].ny0 - boxes[i].ny0 ) <= flEps )
+							++nStack;
+					}
+				}
+				boxes[i].flCascade = flStep * (float)nStack;
+				RefreshDrawBox( boxes[i] );
+			}
+		}
 
 		// -----------------------------------------------------------------
 		// Chrome bar geometry (Save / Cancel / the "Esc to cancel" hint).
@@ -119,11 +219,21 @@ namespace gamescope::ui::hudedit
 
 		constexpr float kChromeBarPadXBase   = 16.0f; // base units, see Tokens.h's Px()
 		constexpr float kChromeBarPadYBase   = 10.0f;
+		// The buttons' own frame padding / gap, pushed as style vars around
+		// BOTH the measure below and the draw, so the computed rect and the
+		// painted bar cannot disagree (same rule ComputeChromeRect already
+		// followed for the default style).
+		constexpr float kChromeBtnPadXBase   = 14.0f;
+		constexpr float kChromeBtnPadYBase   =  7.0f;
+		constexpr float kChromeItemGapBase   = 12.0f;
 		constexpr float kChromeMarginBotBase = 24.0f; // gap from the screen's bottom edge
 		constexpr float kChromeRounding      = 6.0f;  // physical px, same convention as this file's own 2.0f module-box rounding
 
 		ChromeRect ComputeChromeRect( const ImVec2 &shellSize )
 		{
+			// Measured under the same font and the same FramePadding/
+			// ItemSpacing the buttons are drawn with -- Draw() pushes both
+			// before calling this and pops them after the bar is painted.
 			const ImGuiStyle &style = ImGui::GetStyle();
 			const float flSaveW   = ImGui::CalcTextSize( "Save" ).x   + style.FramePadding.x * 2.0f;
 			const float flCancelW = ImGui::CalcTextSize( "Cancel" ).x + style.FramePadding.x * 2.0f;
@@ -269,14 +379,16 @@ namespace gamescope::ui::hudedit
 		const float flScaleX = shellSize.x / flHudW;
 		const float flScaleY = shellSize.y / flHudH;
 
-		ShellRect rects[4];
+		ModuleBox boxes[4];
 		for ( int i = 0; i < 4; ++i )
 		{
-			rects[i].bEnabled = hudRects[i].bEnabled;
-			rects[i].x0 = hudRects[i].x * flScaleX;
-			rects[i].y0 = hudRects[i].y * flScaleY;
-			rects[i].x1 = ( hudRects[i].x + hudRects[i].w ) * flScaleX;
-			rects[i].y1 = ( hudRects[i].y + hudRects[i].h ) * flScaleY;
+			boxes[i].bEnabled = hudRects[i].bEnabled;
+			boxes[i].nx0 = hudRects[i].x * flScaleX;
+			boxes[i].ny0 = hudRects[i].y * flScaleY;
+			boxes[i].nx1 = ( hudRects[i].x + hudRects[i].w ) * flScaleX;
+			boxes[i].ny1 = ( hudRects[i].y + hudRects[i].h ) * flScaleY;
+			boxes[i].flCascade = 0.0f;
+			RefreshDrawBox( boxes[i] );
 		}
 
 		// =================================================================
@@ -289,6 +401,23 @@ namespace gamescope::ui::hudedit
 
 		if ( s_nDragging >= 0 && !bMouseDown )
 			s_nDragging = -1;
+
+		AssignCascade( boxes, s_nDragging );
+
+		// Chrome type and metrics, pushed for the WHOLE frame: the measure
+		// (ComputeChromeRect, immediately below, which the grab gate needs
+		// before any widget exists) and the draw (the buttons themselves,
+		// far below) must see the identical font and style, or the hit-
+		// tested bar and the painted bar are two different rects. Popped
+		// once, after ImGui::End().
+		//
+		// `Why:` the buttons used to draw in the atlas's default font at its
+		// own baked 11.5px, which is ~10 physical px of chrome on a 1280x800
+		// screen. The Shell's Label type role is the size the rest of the
+		// overlay's body text uses, and it scales with display_scale.
+		ImGui::PushFont( fonts::Get( fonts::Style::Label ), fonts::RasterSize( TypeSizePx( TypeRole::Label ) ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_FramePadding, ImVec2( Px( kChromeBtnPadXBase ), Px( kChromeBtnPadYBase ) ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing,  ImVec2( Px( kChromeItemGapBase ), Px( kChromeBtnPadYBase ) ) );
 
 		// The chrome bar (drawn below) claims its own compact rect, wherever
 		// bottom-centre puts it -- keep grabs out of THAT rect specifically
@@ -303,17 +432,40 @@ namespace gamescope::ui::hudedit
 
 		if ( s_nDragging < 0 && ImGui::IsMouseClicked( ImGuiMouseButton_Left ) && !PointInRect( chrome, mousePos ) )
 		{
-			for ( int i = 3; i >= 0; --i ) // topmost (kModuleOrder's Media) first
+			// SMALLEST box containing the point wins, not topmost. `Why:`
+			// with every module defaulting to (0,0) the boxes overlap
+			// heavily, and a plain topmost-first test makes a small box
+			// stacked under a large one permanently unreachable -- the large
+			// one swallows every click inside it. Smallest-first is the
+			// standard fix (it is what makes nested hit targets selectable);
+			// the cascade above then guarantees each box in a coincident
+			// stack has an exposed corner too. Equal areas tie to the later
+			// index, preserving kModuleOrder's own "later draws on top".
+			int   nPick = -1;
+			float flPickArea = 0.0f;
+			for ( int i = 0; i < 4; ++i )
 			{
-				if ( !rects[i].bEnabled )
+				if ( !boxes[i].bEnabled )
 					continue;
-				if ( mousePos.x >= rects[i].x0 && mousePos.x <= rects[i].x1 &&
-				     mousePos.y >= rects[i].y0 && mousePos.y <= rects[i].y1 )
+				if ( mousePos.x < boxes[i].dx0 || mousePos.x > boxes[i].dx1 ||
+				     mousePos.y < boxes[i].dy0 || mousePos.y > boxes[i].dy1 )
+					continue;
+				const float flArea = ( boxes[i].dx1 - boxes[i].dx0 ) * ( boxes[i].dy1 - boxes[i].dy0 );
+				if ( nPick < 0 || flArea <= flPickArea )
 				{
-					s_nDragging = i;
-					s_GrabOffsetShell = ImVec2( mousePos.x - rects[i].x0, mousePos.y - rects[i].y0 );
-					break;
+					nPick = i;
+					flPickArea = flArea;
 				}
+			}
+			if ( nPick >= 0 )
+			{
+				s_nDragging = nPick;
+				// Against the NATURAL top-left, not the drawn one: the
+				// natural rect is what the drag arithmetic below moves, and
+				// the dragged module's cascade is dropped to 0 on the very
+				// next line.
+				s_GrabOffsetShell = ImVec2( mousePos.x - boxes[nPick].nx0, mousePos.y - boxes[nPick].ny0 );
+				AssignCascade( boxes, s_nDragging );
 			}
 		}
 
@@ -322,8 +474,12 @@ namespace gamescope::ui::hudedit
 		if ( s_nDragging >= 0 )
 		{
 			const int idx = s_nDragging;
-			const float flBoxW = rects[idx].x1 - rects[idx].x0;
-			const float flBoxH = rects[idx].y1 - rects[idx].y0;
+			// The module's REAL size, never the padded affordance: it is what
+			// the snap references and the on-screen clamp have to be true of,
+			// so a small module can still be pushed flush against the screen
+			// edge even though its box overhangs it.
+			const float flBoxW = boxes[idx].nx1 - boxes[idx].nx0;
+			const float flBoxH = boxes[idx].ny1 - boxes[idx].ny0;
 			const float flDesiredMinX = mousePos.x - s_GrabOffsetShell.x;
 			const float flDesiredMinY = mousePos.y - s_GrabOffsetShell.y;
 
@@ -339,14 +495,14 @@ namespace gamescope::ui::hudedit
 			};
 			for ( int j = 0; j < 4; ++j )
 			{
-				if ( j == idx || !rects[j].bEnabled )
+				if ( j == idx || !boxes[j].bEnabled )
 					continue;
-				xTargets.push_back( { rects[j].x0, false, -1 } );
-				xTargets.push_back( { ( rects[j].x0 + rects[j].x1 ) * 0.5f, false, -1 } );
-				xTargets.push_back( { rects[j].x1, false, -1 } );
-				yTargets.push_back( { rects[j].y0, false, -1 } );
-				yTargets.push_back( { ( rects[j].y0 + rects[j].y1 ) * 0.5f, false, -1 } );
-				yTargets.push_back( { rects[j].y1, false, -1 } );
+				xTargets.push_back( { boxes[j].nx0, false, -1 } );
+				xTargets.push_back( { ( boxes[j].nx0 + boxes[j].nx1 ) * 0.5f, false, -1 } );
+				xTargets.push_back( { boxes[j].nx1, false, -1 } );
+				yTargets.push_back( { boxes[j].ny0, false, -1 } );
+				yTargets.push_back( { ( boxes[j].ny0 + boxes[j].ny1 ) * 0.5f, false, -1 } );
+				yTargets.push_back( { boxes[j].ny1, false, -1 } );
 			}
 
 			const SnapOutcome snapX = SnapAxis( flDesiredMinX, flBoxW, xTargets, kSnapTolerancePx );
@@ -385,13 +541,14 @@ namespace gamescope::ui::hudedit
 			m.y = std::clamp( pointHud.y / flHudH, 0.0f, 1.0f );
 			m.origin = kPlacements[ nVert ][ nHoriz ];
 
-			// This frame's own drawing (below) uses `rects[idx]` -- update
+			// This frame's own drawing (below) uses `boxes[idx]` -- update
 			// it to the post-snap/post-clamp position so the box does not
 			// lag one frame behind the input that moved it.
-			rects[idx].x0 = flFinalMinX;
-			rects[idx].y0 = flFinalMinY;
-			rects[idx].x1 = flFinalMinX + flBoxW;
-			rects[idx].y1 = flFinalMinY + flBoxH;
+			boxes[idx].nx0 = flFinalMinX;
+			boxes[idx].ny0 = flFinalMinY;
+			boxes[idx].nx1 = flFinalMinX + flBoxW;
+			boxes[idx].ny1 = flFinalMinY + flBoxH;
+			RefreshDrawBox( boxes[idx] );
 		}
 
 		// =================================================================
@@ -416,44 +573,95 @@ namespace gamescope::ui::hudedit
 		{
 			ImDrawList *pDraw = ImGui::GetWindowDrawList();
 
-			// A LIGHT scrim -- the game and the live HUD both have to stay
-			// readable underneath, unlike the palette's own near-opaque
-			// scrim (Shell.cpp's DrawPalette), which has a settings sheet
-			// to separate itself from rather than content the user is
-			// actively trying to place things over.
-			pDraw->AddRectFilled( ImVec2( 0.0f, 0.0f ), shellSize, IM_COL32( 0, 0, 0, 70 ) );
+			// A VERY light scrim. The game underneath is the thing the user
+			// is placing a HUD over, so it has to stay readable -- unlike the
+			// palette's own near-opaque scrim (Shell.cpp's DrawPalette),
+			// which has a settings sheet to separate itself from rather than
+			// content the user is actively aiming at. The Shell's
+			// background_blur pass is suppressed outright for the same reason
+			// (SettingsOverlay.cpp, `hudedit::IsActive()`).
+			pDraw->AddRectFilled( ImVec2( 0.0f, 0.0f ), shellSize, IM_COL32( 0, 0, 0, 38 ) );
 
-			// Guide lines -- drawn UNDER the boxes so a box's own outline
-			// stays the crisper line where the two cross.
+			// ---- the placement surface itself --------------------------
+			// A margin frame and a centre cross, drawn ALWAYS rather than
+			// only mid-drag, so the editor states its coordinate space up
+			// front: this is where the screen's centre is, and this is how
+			// close to the edge a module can sensibly sit. Role::Line (white
+			// 10%) is the kit's own decorative-rule colour -- deliberately
+			// the faintest thing on screen; it is background reference, not
+			// chrome.
+			{
+				const float flMargin = Px( kGuideMarginBase );
+				const ImU32  refCol  = Col( Role::Line );
+				const float  flRef   = Hairline();
+				if ( shellSize.x > flMargin * 2.0f && shellSize.y > flMargin * 2.0f )
+					pDraw->AddRect( ImVec2( flMargin, flMargin ),
+					                ImVec2( shellSize.x - flMargin, shellSize.y - flMargin ),
+					                refCol, 0.0f, 0, flRef );
+				const float flCx = shellSize.x * 0.5f;
+				const float flCy = shellSize.y * 0.5f;
+				pDraw->AddLine( ImVec2( flCx, 0.0f ), ImVec2( flCx, shellSize.y ), refCol, flRef );
+				pDraw->AddLine( ImVec2( 0.0f, flCy ), ImVec2( shellSize.x, flCy ), refCol, flRef );
+			}
+
+			// Snap guide lines -- drawn UNDER the boxes so a box's own
+			// outline stays the crisper line where the two cross.
 			if ( s_bSnapXActive )
-				pDraw->AddLine( ImVec2( s_flGuideX, 0.0f ), ImVec2( s_flGuideX, shellSize.y ), Accent( 0.6f ), Hairline() );
+				pDraw->AddLine( ImVec2( s_flGuideX, 0.0f ), ImVec2( s_flGuideX, shellSize.y ), Accent( 0.7f ), Hairline() );
 			if ( s_bSnapYActive )
-				pDraw->AddLine( ImVec2( 0.0f, s_flGuideY ), ImVec2( shellSize.x, s_flGuideY ), Accent( 0.6f ), Hairline() );
+				pDraw->AddLine( ImVec2( 0.0f, s_flGuideY ), ImVec2( shellSize.x, s_flGuideY ), Accent( 0.7f ), Hairline() );
+
+			const float flRound = Px( kBoxRoundBase );
 
 			for ( int i = 0; i < 4; ++i )
 			{
-				if ( !rects[i].bEnabled )
+				if ( !boxes[i].bEnabled )
 					continue;
 
-				const ImVec2 rmin( rects[i].x0, rects[i].y0 );
-				const ImVec2 rmax( rects[i].x1, rects[i].y1 );
+				const ImVec2 rmin( boxes[i].dx0, boxes[i].dy0 );
+				const ImVec2 rmax( boxes[i].dx1, boxes[i].dy1 );
 				const bool bDragging = s_nDragging == i;
 				const bool bHovered  = !bDragging && s_nDragging < 0 &&
 					mousePos.x >= rmin.x && mousePos.x <= rmax.x &&
 					mousePos.y >= rmin.y && mousePos.y <= rmax.y;
 
-				const ImU32 fillCol = bDragging ? Accent( 0.16f ) : bHovered ? Accent( 0.08f ) : IM_COL32( 0, 0, 0, 0 );
-				if ( fillCol & IM_COL32_A_MASK )
-					pDraw->AddRectFilled( rmin, rmax, fillCol, 2.0f );
+				// Three states, and every one of them is a filled, outlined
+				// box: an idle box that drew as outline-only was invisible
+				// against a bright game frame, which is what made the whole
+				// editor read as a smudge. The flat black backing under the
+				// accent tint is what guarantees the label's contrast
+				// whatever is behind it.
+				pDraw->AddRectFilled( rmin, rmax, IM_COL32( 0, 0, 0, bDragging ? 150 : 120 ), flRound );
+				pDraw->AddRectFilled( rmin, rmax,
+					Accent( bDragging ? 0.30f : bHovered ? 0.20f : 0.12f ), flRound );
 
-				const ImU32 lineCol = bDragging ? Accent( 1.0f ) : bHovered ? Accent( 0.8f ) : Col( Role::LineControl );
-				pDraw->AddRect( rmin, rmax, lineCol, 2.0f, 0, bDragging ? 2.0f * Hairline() : Hairline() );
+				const ImU32 lineCol = bDragging ? Accent( 1.0f )
+				                    : bHovered  ? Accent( 0.85f )
+				                                : Col( Role::LineControl );
+				pDraw->AddRect( rmin, rmax, lineCol, flRound, 0,
+					std::max( Hairline(), Px( bDragging || bHovered ? kBoxStrokeHotBase : kBoxStrokeBase ) ) );
 
-				const ImVec2 textSize = ImGui::CalcTextSize( kModuleNames[i] );
-				const ImVec2 textPos(
-					( rmin.x + rmax.x ) * 0.5f - textSize.x * 0.5f,
-					( rmin.y + rmax.y ) * 0.5f - textSize.y * 0.5f );
-				pDraw->AddText( textPos, Col( Role::TextPrimary ), kModuleNames[i] );
+				// The module's TRUE extent, faintly, whenever the affordance
+				// is bigger than it -- so "the box is a handle, the module is
+				// this" is visible rather than a rule in a doc. Shares the
+				// box's top-left, which is the whole point of anchoring the
+				// minimum size there.
+				const float flNatW = boxes[i].nx1 - boxes[i].nx0;
+				const float flNatH = boxes[i].ny1 - boxes[i].ny0;
+				if ( flNatW > 1.0f && flNatH > 1.0f &&
+				     ( rmax.x - rmin.x - flNatW > 1.0f || rmax.y - rmin.y - flNatH > 1.0f ) )
+				{
+					pDraw->AddRect( rmin, ImVec2( rmin.x + flNatW, rmin.y + flNatH ),
+					                Accent( 0.35f ), 0.0f, 0, Hairline() );
+				}
+
+				// The Shell's own body type, not the HUD's font size: this
+				// label names a target in the EDITOR's UI, so it belongs to
+				// the editor's type ladder (Tokens.h's TypeRole) and has to
+				// stay readable no matter how small hud.font_size is.
+				const float flPad = Px( tok::kS );
+				ui::DrawText( ImRect( ImVec2( rmin.x + flPad, rmin.y ), ImVec2( rmax.x - flPad, rmax.y ) ),
+				              TypeRole::Label, Col( Role::TextPrimary ), kModuleNames[i], TextAlign::Center );
 			}
 
 			// ---- chrome bar: bottom-centre, sized to its own buttons ----
@@ -478,6 +686,9 @@ namespace gamescope::ui::hudedit
 		}
 		ImGui::End();
 
-		ImGui::PopStyleVar( 2 );
+		// Two window style vars above, plus the two chrome ones pushed
+		// before the grab gate.
+		ImGui::PopStyleVar( 4 );
+		ImGui::PopFont();
 	}
 }
