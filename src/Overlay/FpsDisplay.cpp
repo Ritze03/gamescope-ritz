@@ -1914,8 +1914,23 @@ namespace gamescope
 		if ( !layer )
 			return; // out of layer slots this frame
 
+		// The HUD layer normally sits ABOVE the Shell (g_zposFpsDisplay >
+		// g_zposSettingsOverlay, steamcompmgr.hpp) so the live readout stays
+		// visible whether or not the settings panel is open -- deliberate,
+		// see that file's own comment. But the layout editor (Overlay/UI/
+		// HudLayoutEditor.cpp) draws its Save/Cancel chrome INSIDE the
+		// Shell's own context, and a HUD that keeps compositing on top of
+		// everything bleeds its running numbers through that chrome. So,
+		// for edit mode only, drop one below the Shell instead -- still
+		// drawn (seeing the real readout move while dragging is the whole
+		// point of the editor), just no longer painting over the editor's
+		// own controls. A local constant, not a new steamcompmgr.hpp entry
+		// (that file's zpos constants are left untouched, per the task
+		// brief) -- it only has to sit below g_zposSettingsOverlay.
+		constexpr uint32_t kZposHudEditing = g_zposSettingsOverlay - 1;
+
 		layer->tex = s_pOverlayTexture;
-		layer->zpos = g_zposFpsDisplay;
+		layer->zpos = ui::hudedit::IsActive() ? kZposHudEditing : g_zposFpsDisplay;
 		layer->offset = { 0.0f, 0.0f };
 		layer->scale = { 1.0f, 1.0f };
 		layer->opacity = 1.0f; // no fade -- this HUD is either on or off, per its own `enabled` setting

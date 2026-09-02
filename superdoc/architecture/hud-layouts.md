@@ -410,6 +410,37 @@ mid-drag, so there is nothing to roll back on disk. `Draw()` calls `force_repain
 unconditionally on every frame it runs, since the HUD's own 500ms repaint-timer thread
 (`EnsureRepaintTimerThread()`) is far too slow to carry a live drag.
 
+**The chrome bar's own geometry and hit test.** The bar sits **bottom-centre**, sized
+to its own content (`ComputeChromeRect()`: `ImGui::CalcTextSize()` on "Save"/"Cancel"/
+"Esc to cancel" plus the live style's `FramePadding`/`ItemSpacing`, then a fixed pad and
+bottom margin) rather than as a full-width strip. `Why:` every module's *default*
+placement is `x=0, y=0, origin="top-left"` (`ConfigSchema.h`), and at the default font
+size a module's box is barely 40px tall — a top strip reserved for chrome sat directly
+on top of that default position and made a fresh config's modules ungrabbable outright
+(the only way a tester got a drag to start was raising `hud.font_size` to 60, growing
+the box past the strip). Bottom-centre is the region a top-left-anchored module is
+least likely to ever occupy. The grab-gate that used to be `mousePos.y > <strip
+height>` is now a real point-in-rect test against that same computed rect
+(`PointInRect()`) — a click anywhere outside it, including the top strip, can start a
+module drag; a click inside it never does, so `Save`/`Cancel` stay clickable even when
+a module happens to be parked underneath the bar. `ComputeChromeRect()` runs before
+`ImGui::Begin()` on every frame (pure style/font metrics, no widget submission needed)
+so the hit test and the painted bar are always the same rect.
+
+**Edit-mode zpos: the HUD drops below the Shell while editing.** The HUD layer
+normally composites *above* the Shell (`g_zposFpsDisplay` > `g_zposSettingsOverlay`,
+`steamcompmgr.hpp`) so the live readout stays visible whether or not the settings panel
+is open. The editor draws its chrome inside the *Shell's* own context (see "Why it
+lives in the Shell's ImGui context" above), so that ordering used to mean the running
+FPS/CPU/GPU numbers printed straight through the Save/Cancel bar. `FpsDisplay_AddLayer()`
+now assigns `layer->zpos` conditionally: `g_zposSettingsOverlay - 1` (a local constant,
+not a new `steamcompmgr.hpp` entry) while `hudedit::IsActive()`, `g_zposFpsDisplay`
+otherwise. `Why:` the HUD still has to keep rendering during an edit — seeing the real
+readout move as a module is dragged is the entire point of the editor — it just must
+stop painting over the editor's own controls; dropping it one slot below the Shell for
+the duration of the edit does exactly that without touching the closed-overlay ordering
+or any constant in `steamcompmgr.hpp`.
+
 **The "Modules" rewire.** The same change rewired the settings panel's seven
 `hud.mod_*` toggle rows (and the Fps module's `label` param) off the now-render-inert
 `FpsDisplaySettings` fields (previous section) and onto the resolved *active* layout —

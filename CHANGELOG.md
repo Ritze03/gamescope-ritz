@@ -22,6 +22,13 @@ The newest version below is the one this build reports.
   graph, Percentile row, CPU load, GPU load, Now playing, and the FPS module's "FPS"
   label switch now actually turn that part of the HUD on or off, instead of silently
   doing nothing.
+- **HUD placement editor: modules in the top-left are grabbable again**: every module
+  starts out placed there, and the editor's own Save/Cancel bar used to sit right on
+  top of them, blocking the drag before it could start. The bar now sits bottom-centre
+  and out of the way.
+- **HUD placement editor: the live numbers no longer print through Save/Cancel**: while
+  the editor is open, the running FPS/CPU/GPU readout now stays behind its own chrome
+  instead of drawing over the buttons.
 
 ## [0.3.5] – 2026-08-27
 

@@ -97,6 +97,59 @@ namespace gamescope::ui::hudedit
 		struct ShellRect { float x0, y0, x1, y1; bool bEnabled; };
 
 		// -----------------------------------------------------------------
+		// Chrome bar geometry (Save / Cancel / the "Esc to cancel" hint).
+		//
+		// Bottom-centre, sized to its own content rather than a full-width
+		// strip. `Why:` every module's DEFAULT placement is x=0,y=0,
+		// origin="top-left" (ConfigSchema.h), and at the default font size
+		// a module's box is barely 40px tall -- entirely inside a top
+		// strip reserved for chrome, which made every module ungrabbable
+		// on a fresh config. Bottom-centre is the region a top-left-
+		// anchored module is least likely to ever occupy.
+		//
+		// Computed from ImGui's own style/font metrics (CalcTextSize +
+		// FramePadding/ItemSpacing) rather than drawn first and measured --
+		// the input-decide pass below needs this rect BEFORE any widget is
+		// submitted, same "decide input before a pixel is painted"
+		// ordering as the module grab-gate itself. Buttons are then placed
+		// at the identical position with default (unsized) ImGui::Button()
+		// calls, so the drawn bar and this computed rect never disagree.
+		// -----------------------------------------------------------------
+		struct ChromeRect { float x0, y0, x1, y1; };
+
+		constexpr float kChromeBarPadXBase   = 16.0f; // base units, see Tokens.h's Px()
+		constexpr float kChromeBarPadYBase   = 10.0f;
+		constexpr float kChromeMarginBotBase = 24.0f; // gap from the screen's bottom edge
+		constexpr float kChromeRounding      = 6.0f;  // physical px, same convention as this file's own 2.0f module-box rounding
+
+		ChromeRect ComputeChromeRect( const ImVec2 &shellSize )
+		{
+			const ImGuiStyle &style = ImGui::GetStyle();
+			const float flSaveW   = ImGui::CalcTextSize( "Save" ).x   + style.FramePadding.x * 2.0f;
+			const float flCancelW = ImGui::CalcTextSize( "Cancel" ).x + style.FramePadding.x * 2.0f;
+			const ImVec2 escSize  = ImGui::CalcTextSize( "Esc to cancel" );
+			const float flBtnH    = ImGui::GetFrameHeight();
+
+			const float flContentW = flSaveW + style.ItemSpacing.x + flCancelW + style.ItemSpacing.x + escSize.x;
+			const float flContentH = std::max( flBtnH, escSize.y );
+
+			const float flBarW = flContentW + Px( kChromeBarPadXBase ) * 2.0f;
+			const float flBarH = flContentH + Px( kChromeBarPadYBase ) * 2.0f;
+
+			ChromeRect r;
+			r.x0 = ( shellSize.x - flBarW ) * 0.5f;
+			r.x1 = r.x0 + flBarW;
+			r.y1 = shellSize.y - Px( kChromeMarginBotBase );
+			r.y0 = r.y1 - flBarH;
+			return r;
+		}
+
+		bool PointInRect( const ChromeRect &r, const ImVec2 &p )
+		{
+			return p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
+		}
+
+		// -----------------------------------------------------------------
 		// Snapping.
 		// -----------------------------------------------------------------
 		struct AxisTarget
@@ -237,12 +290,18 @@ namespace gamescope::ui::hudedit
 		if ( s_nDragging >= 0 && !bMouseDown )
 			s_nDragging = -1;
 
-		// The chrome bar (drawn below) claims the top strip -- keep grabs
-		// out of it without depending on ImGui hover-state ordering against
-		// widgets this same frame hasn't submitted yet.
-		const float flChromeH = Px( 56.0f );
+		// The chrome bar (drawn below) claims its own compact rect, wherever
+		// bottom-centre puts it -- keep grabs out of THAT rect specifically
+		// (not a reserved screen strip) without depending on ImGui
+		// hover-state ordering against widgets this same frame hasn't
+		// submitted yet. A click anywhere else, including the top strip
+		// where every module defaults to, is free to start a drag; a
+		// module parked underneath the bar is grabbable outside the bar's
+		// own rect, and the bar always wins inside it so Save/Cancel stay
+		// clickable.
+		const ChromeRect chrome = ComputeChromeRect( shellSize );
 
-		if ( s_nDragging < 0 && ImGui::IsMouseClicked( ImGuiMouseButton_Left ) && mousePos.y > flChromeH )
+		if ( s_nDragging < 0 && ImGui::IsMouseClicked( ImGuiMouseButton_Left ) && !PointInRect( chrome, mousePos ) )
 		{
 			for ( int i = 3; i >= 0; --i ) // topmost (kModuleOrder's Media) first
 			{
@@ -397,11 +456,16 @@ namespace gamescope::ui::hudedit
 				pDraw->AddText( textPos, Col( Role::TextPrimary ), kModuleNames[i] );
 			}
 
-			// ---- chrome bar --------------------------------------------
-			pDraw->AddRectFilled( ImVec2( 0.0f, 0.0f ), ImVec2( shellSize.x, flChromeH ), Col( Role::Surface ) );
-			pDraw->AddLine( ImVec2( 0.0f, flChromeH ), ImVec2( shellSize.x, flChromeH ), Col( Role::LineRegion ), Hairline() );
+			// ---- chrome bar: bottom-centre, sized to its own buttons ----
+			// (see ComputeChromeRect's own comment for the why).
+			const ImVec2 chromeMin( chrome.x0, chrome.y0 );
+			const ImVec2 chromeMax( chrome.x1, chrome.y1 );
+			pDraw->AddRectFilled( chromeMin, chromeMax, Col( Role::Surface ), kChromeRounding );
+			pDraw->AddRect( chromeMin, chromeMax, Col( Role::LineRegion ), kChromeRounding, 0, Hairline() );
 
-			ImGui::SetCursorScreenPos( ImVec2( Px( 16.0f ), flChromeH * 0.5f - ImGui::GetFrameHeight() * 0.5f ) );
+			ImGui::SetCursorScreenPos( ImVec2(
+				chrome.x0 + Px( kChromeBarPadXBase ),
+				chrome.y0 + Px( kChromeBarPadYBase ) ) );
 			ImGui::BeginGroup();
 			if ( ImGui::Button( "Save" ) )
 				Save();
