@@ -659,3 +659,100 @@ Verified `ninja -C build` and `meson test -C build` (63/63) after the change;
 M2's release-safety backstop (`io.ClearInputKeys()`/`ClearInputMouse()` on a
 capturing-to-not-capturing edge) is untouched -- it still runs once, after
 the whole batch, unaffected by the added micro-pumps.
+
+## 2026-09-02: overlay text "doubling", root-caused and fixed
+
+Reported as: every glyph in the overlay carries a ghost of itself offset by
+about a pixel. It survived six investigations. The cause was **not** in the
+compositor at all.
+
+### Cause
+
+`Overlay/Fonts.cpp`'s `ImFontConfig` never set `PixelSnapH`, which ImGui
+defaults to **false**. `ImFont::RenderText()` already snaps the text *origin*
+to whole pixels ("Align to be pixel perfect"), so the first glyph of a string
+is always grid-aligned -- but the per-glyph *advance* is only rounded when the
+font asks for it (`imgui_draw.cpp`, `ImFontAtlasBakedAddFontGlyph`: `if
+(src->PixelSnapH) advance_x = IM_ROUND(advance_x);`). With it false, advances
+stay fractional, x accumulates a sub-pixel error per character, and every
+glyph after the first is placed off the pixel grid. The atlas is sampled
+bilinearly, so an off-grid glyph is resampled and a 1px stem lands half in one
+column and half in the next -- read as a bright stroke with a mid-grey ghost
+beside it, worsening along a string.
+
+Fix: `cfg.PixelSnapH = true` in `Load()`. Measuring and drawing stay
+consistent because `CalcTextSizeA()` reads the same baked advances the draw
+uses, so `DrawText()`'s ellipsis/alignment arithmetic is unaffected.
+
+Measured on the label `Adaptive sync (VRR)` (nested-sway Wayland backend, 1:1,
+1920x1080), counting ink pixels in the text band: ghost-to-stroke ratio
+1.26 -> 1.04. Individual stems that were split ~50/50 across two columns
+(`95 87`, `97 98`) became single crisp columns (`168 17`, `133 63`).
+
+### What this was NOT -- do not re-derive these
+
+Measured, not assumed, on the Wayland backend at 1:1 with `vkgears`:
+
+- **The composite is pixel-exact.** The settings-overlay layer reaches
+  `FrameInfo_t` exactly ONCE, at `scale 1.0,1.0` and `offset 0.0,0.0`
+  (`zpos=6`). `BlitPushData_t` feeds the shader `offsetPixelCenter()`
+  (`offset + 0.5/scale`), so `cs_composite_blit.comp`'s `uv = vec2(coord)`
+  lands on exact texel centres. `isScreenSize()` is true for this layer, so
+  it binds a NEAREST sampler anyway.
+- **The Wayland presentation is pixel-exact.** A `grim` capture of the host
+  output is byte-identical to the composited buffer at every probed edge. No
+  fractional viewport scale, no second surface, no doubled present.
+- **The UI's own 1px rules were always crisp** -- single columns end to end
+  (`0 0 0 0 0 0 27 5 5 5`, divider `29x7, 66, 34x8`, top border one row). That
+  is the tell that separated this from a compositing bug: ImGui draws rects
+  from the atlas's white pixel, where filtering cannot matter, so only glyphs
+  sample real texels and only glyphs showed it. It is also why the scaler
+  filter, RCAS sharpness and the backdrop blur made no difference.
+- **Not the host window being non-1:1.** Shrinking gamescope's host window to
+  1900x1060 keeps borders crisp -- it re-renders at the window size rather
+  than letting the host rescale a 1920x1080 buffer.
+
+### How to capture the overlay -- this is what blocked six rounds
+
+`gamescopectl screenshot <path>` **cannot** show the overlay, and this is not
+a compositor limitation. Two things stack:
+
+1. The default screenshot type is `base_plane_only` (value **1**), which
+   truncates every layer with `zpos >= g_zposExternalOverlay` (2). The
+   settings overlay is `g_zposSettingsOverlay` = **6**, so it is always cut.
+2. `gamescopectl` collapses everything after the command name into ONE
+   argument, so `gamescopectl screenshot /tmp/a.png 4` arrives as a single
+   path field and the type silently stays at the default.
+
+Both together mean the obvious invocation can never work. The working form
+quotes path and type as one argument, and uses type **4** (`screen_buffer`,
+"the buffer displayed on-screen - 1:1", which truncates nothing and reuses the
+same `vulkan_composite()` call the present path uses):
+
+```
+gamescopectl screenshot "/tmp/shot.png 4"
+```
+
+This is the general rule for every multi-argument console command, and the
+per-command help text says so -- it is easy to miss for `screenshot`, whose
+help does not repeat the warning.
+
+### Safe harness for reproducing this class of bug
+
+Never point `grim` at a real output. Run gamescope's **Wayland backend**
+inside your own headless sway instead, which exercises the identical backend
+path with nothing on the user's screen:
+
+```
+WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 XDG_RUNTIME_DIR=/tmp/gsr-ovl \
+  sway -c <cfg with: output HEADLESS-1 resolution 1920x1080, borders/gaps 0>
+# then, against that display:
+WAYLAND_DISPLAY=wayland-1 gamescope --backend wayland ... -- vkgears
+WAYLAND_DISPLAY=wayland-1 grim -o HEADLESS-1 out.png
+```
+
+`grim` there can only ever see the headless output: the private
+`XDG_RUNTIME_DIR` contains only that sway and its gamescope, so the user's
+compositor is not reachable from it. Note the runtime dir must be a SHORT
+path -- a unix socket path is capped at 108 bytes, and the usual scratchpad
+directory overflows it.

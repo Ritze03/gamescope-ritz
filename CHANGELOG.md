@@ -35,6 +35,10 @@ The newest version below is the one this build reports.
   instead of falling back to a plain "C".
 
 ### Fixed
+- **Overlay text is no longer doubled**: every letter after the first in a label
+  used to carry a faint ghost of itself about a pixel to the side, because glyph
+  spacing was not aligned to whole pixels; text across the whole overlay is now
+  crisp.
 - **Ctrl+Shift+O opens the settings overlay again**: with the right-hand Shift it
   did nothing at all, because Left Ctrl + Right Shift already opened the launcher
   the moment Shift went down and the O then closed it again.

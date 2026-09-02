@@ -324,6 +324,44 @@ namespace gamescope::fonts
 
 		ImFontConfig cfg;
 		cfg.FontDataOwnedByAtlas = false; // the byte arrays are static const, compiled-in data -- never ask ImGui to free() them
+		// Issue: overlay text rendered doubled -- every glyph carrying a
+		// ghost of itself about a pixel to the side. The cause is here, not
+		// anywhere in the compositor.
+		//
+		// ImFont::RenderText() already snaps the text ORIGIN to whole pixels
+		// (imgui_draw.cpp, "Align to be pixel perfect"), so the first glyph
+		// of every string lands exactly on the pixel grid. The per-glyph
+		// ADVANCE is a different matter: ImGui only rounds it when the
+		// source font asks, and ImFontConfig::PixelSnapH defaults to FALSE
+		// (imgui_draw.cpp's ImFontAtlasBakedAddFontGlyph: `if
+		// (src->PixelSnapH) advance_x = IM_ROUND(advance_x);`). Left false,
+		// advances stay fractional, so x accumulates a fraction of a pixel
+		// per character and every glyph AFTER the first is placed off the
+		// grid. The atlas is sampled bilinearly, so an off-grid glyph is
+		// resampled: a 1px stem lands half in one column and half in the
+		// next, which is read as a bright stroke with a mid-grey ghost
+		// beside it -- and it worsens along a string, exactly as reported.
+		//
+		// Why it survived so many rounds of investigation: nothing about it
+		// is in the composite. Measured (nested-sway Wayland backend, 1:1,
+		// 1920x1080), the settings-overlay layer reaches the composite ONCE
+		// at scale 1.0/offset 0.0, BlitPushData_t feeds the shader
+		// offsetPixelCenter() so sampling hits exact texel centres, and the
+		// UI's own 1px rules come out as single columns end to end -- both
+		// in the composited buffer and in what the host actually presents.
+		// Rects were always crisp because ImGui draws them from the atlas's
+		// white pixel, where filtering cannot matter; only glyphs sample
+		// real texels, so only glyphs showed it. That is also why the
+		// scaler filter, RCAS sharpness and the backdrop blur made no
+		// difference to it.
+		//
+		// Snapping the advance is the fix for the cause rather than for the
+		// look: it puts glyph quads back on the pixel grid the atlas was
+		// rasterised for, which is what PixelSnapH exists to do. Measuring
+		// and drawing stay consistent because CalcTextSizeA() reads the same
+		// baked advances the draw uses (see Controls.cpp's DrawText()), so
+		// the ellipsis/alignment arithmetic is unaffected.
+		cfg.PixelSnapH = true;
 		const ImWchar *pGlyphRanges = io.Fonts->GetGlyphRangesDefault(); // Basic Latin + Latin-1 Supplement -- this UI is English-only, no reason to bake the rest of Unicode
 
 		bool bOk = true;
