@@ -68,6 +68,69 @@ namespace gamescope::overlay
 		}
 	}
 
+	namespace
+	{
+		// The tip corner's outward bisector direction and sin(interior
+		// angle/2) -- everything both CursorArt_TipMiterOffset() and
+		// CursorArt_TipRoundOffset() need, computed once from the shared
+		// geometry constants so the two formulas can't disagree about the
+		// corner itself, only (correctly) about how far each renderer's own
+		// join reaches along it. Scale-invariant: kFootX/Y and kWingX/Y
+		// scale uniformly, so the angle between them doesn't change with it.
+		bool TipBisector( float *pflDirX, float *pflDirY, float *pflSinHalfTheta )
+		{
+			const float flToFootX = kFootX - kTipX, flToFootY = kFootY - kTipY;
+			const float flToWingX = kWingX - kTipX, flToWingY = kWingY - kTipY;
+			const float flFootLen = std::sqrt( flToFootX * flToFootX + flToFootY * flToFootY );
+			const float flWingLen = std::sqrt( flToWingX * flToWingX + flToWingY * flToWingY );
+			if ( flFootLen <= 0.0001f || flWingLen <= 0.0001f )
+				return false;
+
+			const float flU1x = flToFootX / flFootLen, flU1y = flToFootY / flFootLen;
+			const float flU2x = flToWingX / flWingLen, flU2y = flToWingY / flWingLen;
+
+			// Interior angle at the tip between the two edges.
+			const float flCosTheta = std::clamp( flU1x * flU2x + flU1y * flU2y, -1.0f, 1.0f );
+			const float flSinHalfTheta = std::sin( std::acos( flCosTheta ) * 0.5f );
+
+			// Outward direction: the negated, normalised sum of the two edge
+			// unit vectors -- points away from the shape's interior, straight
+			// out through the sharp tip.
+			float flBisX = -( flU1x + flU2x );
+			float flBisY = -( flU1y + flU2y );
+			const float flBisLen = std::sqrt( flBisX * flBisX + flBisY * flBisY );
+			if ( flBisLen <= 0.0001f || flSinHalfTheta <= 0.0001f )
+				return false;
+
+			*pflDirX = flBisX / flBisLen;
+			*pflDirY = flBisY / flBisLen;
+			*pflSinHalfTheta = flSinHalfTheta;
+			return true;
+		}
+	}
+
+	void CursorArt_TipMiterOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY )
+	{
+		float flDirX = 0.0f, flDirY = 0.0f, flSinHalfTheta = 1.0f;
+		float flMagnitude = 0.0f;
+		if ( TipBisector( &flDirX, &flDirY, &flSinHalfTheta ) )
+			flMagnitude = ( flOutlineWidth * 0.5f ) / flSinHalfTheta;
+
+		if ( pflOffsetX ) *pflOffsetX = flDirX * flMagnitude;
+		if ( pflOffsetY ) *pflOffsetY = flDirY * flMagnitude;
+	}
+
+	void CursorArt_TipRoundOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY )
+	{
+		float flDirX = 0.0f, flDirY = 0.0f, flSinHalfTheta = 1.0f;
+		float flMagnitude = 0.0f;
+		if ( TipBisector( &flDirX, &flDirY, &flSinHalfTheta ) )
+			flMagnitude = flOutlineWidth * 0.5f;
+
+		if ( pflOffsetX ) *pflOffsetX = flDirX * flMagnitude;
+		if ( pflOffsetY ) *pflOffsetY = flDirY * flMagnitude;
+	}
+
 	uint32_t CursorArt_AccentRgb()
 	{
 		// kAccent is ImU32, i.e. IM_COL32's little-endian R,G,B,A byte order.
@@ -100,11 +163,22 @@ namespace gamescope::overlay
 		const float flOutlineWidth = std::clamp( appearance.flOutlineWidth, 1.0f, 6.0f );
 		flScale *= flUserScale;
 
+		// The path's tip vertex is not the visible tip -- AddPolyline() below
+		// miters this corner, so the drawn point sits out past the path
+		// vertex by the miter offset. (flTipX, flTipY) is the true hotspot,
+		// i.e. where the *visible* tip must land, so the path is drawn
+		// shifted back by that same offset (see CursorArt_TipMiterOffset()'s
+		// comment in the header).
+		float flOffsetX, flOffsetY;
+		CursorArt_TipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
+		const float flOriginX = flTipX - flOffsetX;
+		const float flOriginY = flTipY - flOffsetY;
+
 		const ImVec2 vecPoints[ 3 ] =
 		{
-			ImVec2( flTipX  + kTipX  * flScale, flTipY + kTipY  * flScale ),
-			ImVec2( flTipX  + kFootX * flScale, flTipY + kFootY * flScale ),
-			ImVec2( flTipX  + kWingX * flScale, flTipY + kWingY * flScale ),
+			ImVec2( flOriginX + kTipX  * flScale, flOriginY + kTipY  * flScale ),
+			ImVec2( flOriginX + kFootX * flScale, flOriginY + kFootY * flScale ),
+			ImVec2( flOriginX + kWingX * flScale, flOriginY + kWingY * flScale ),
 		};
 
 		// Inlay first, outline over it: the stroke straddles the path, so
@@ -190,9 +264,20 @@ namespace gamescope::overlay
 
 		if ( pnWidth )  *pnWidth  = nWidth;
 		if ( pnHeight ) *pnHeight = nHeight;
-		// The tip is the hotspot, and it sits flPad in from the bitmap corner.
-		if ( pnHotX ) *pnHotX = (int)std::lround( kTipX * flScale + flPad );
-		if ( pnHotY ) *pnHotY = (int)std::lround( kTipY * flScale + flPad );
+		// The hotspot is the VISIBLE tip -- the outer corner of the centred
+		// stroke -- not the path vertex the geometry constants place at
+		// (kTipX, kTipY). This fill is a signed-distance dilation, which
+		// ROUNDS the corner rather than mitering it (see the header comment
+		// on CursorArt_TipRoundOffset()), so it reaches only flOutlineWidth/2
+		// out along the bisector -- NOT CursorArt_Draw()'s larger miter
+		// offset, which would overshoot past this shape's actual opaque
+		// pixels. Added rather than subtracted here since ax/ay above is the
+		// path vertex and the offset points outward from it towards the
+		// drawn point.
+		float flOffsetX, flOffsetY;
+		CursorArt_TipRoundOffset( flOutlineWidth, &flOffsetX, &flOffsetY );
+		if ( pnHotX ) *pnHotX = (int)std::lround( kTipX * flScale + flPad + flOffsetX );
+		if ( pnHotY ) *pnHotY = (int)std::lround( kTipY * flScale + flPad + flOffsetY );
 		return true;
 	}
 }

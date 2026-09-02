@@ -743,3 +743,74 @@ receives.
 before or after (that commit says so itself), and the fix it shipped could not have been
 the right one for the reason above. If the report resurfaces, treat it as unexplained and
 start from a measurement, not from this gate.
+
+## The hotspot was the path vertex, not the visible tip -- fixed 2026-09-02
+
+The user's report: clicks register slightly inside the drawn arrow's visible point,
+not exactly on it. Cause: `kTipX`/`kTipY` (`CursorArt.h`) name a vertex of the
+*path* the triangle is built from, and both renderers report that vertex as the
+hotspot -- but the outline is a **centred** stroke, drawn half in and half out of
+that path, so the *visible* point of the arrow sits outside the path vertex by
+roughly half the outline width. The old `hotspot (2,2)` figure quoted above (in
+"Use everywhere" 's own verification, at that era's default scale/width) was exactly
+this bug's signature: it was measuring the path vertex, not where the ink actually
+ends.
+
+**Why "half the outline width" is not the right offset, and what is.** At a sharp
+corner, a centred stroke's outer boundary is a miter, not a straight offset: it is
+pushed out along the corner's bisector by `(outlineWidth/2) / sin(theta/2)`, where
+`theta` is the interior angle at the tip -- a real factor (~1.35x for this
+triangle's ~43.5 deg tip), not a rounding error, and one that does not cancel out
+across the outline-width (1.0-6.0) or cursor-scale (0.5-3.0) ranges the Cursor tab
+exposes. A fixed fudge constant would have been wrong the moment either slider
+moved.
+
+**The two renderers don't draw the same join, so they can't share one offset
+number -- only one offset *computation*.** `CursorArt_Draw()` strokes with ImGui's
+`AddPolyline()`, which genuinely miters (verified against `imgui_draw.cpp`'s own
+`IM_FIXNORMAL2F` join math -- the two formulas agree to the last decimal for this
+triangle, this is not an approximation). `CursorArt_Rasterise()` is a signed-
+distance fill (`SignedDistanceToTriangle()`), which always **rounds** a corner: for
+a point beyond the tip vertex's edge-normal cone, the nearest boundary point is
+unambiguously the vertex itself, so the level set at `flOutlineHalf` is a circular
+arc of radius `outlineWidth/2` centred on the vertex -- reaching only
+`outlineWidth/2` out, never the larger miter distance (confirmed by construction:
+`SegDistSq()`'s per-edge `t` clamps to an endpoint for any point on the outward
+bisector, so the "nearest edge" is always the vertex there). Neither renderer's
+actual drawing changed for this fix -- same fill, same stroke, same colours, same
+antialiasing -- only the reported hotspot moved to match what each one already
+draws.
+
+`CursorArt.cpp`'s `TipBisector()` computes the corner's outward direction and
+`sin(theta/2)` once, from the same `kTipX`/`kFootX`/`kWingX` constants both
+renderers already share, so the two magnitude formulas below can't disagree about
+the corner itself:
+- `CursorArt_TipMiterOffset()` -- `(outlineWidth/2) / sin(theta/2)` along that
+  direction, for `CursorArt_Draw()`.
+- `CursorArt_TipRoundOffset()` -- `outlineWidth/2` along the same direction, for
+  `CursorArt_Rasterise()`.
+
+`CursorArt_Draw()` shifts the whole triangle's draw origin backward by its offset
+(so the *visible* tip, not the path vertex, lands on `io.MousePos`);
+`CursorArt_Rasterise()` adds its (smaller) offset to the path vertex's position
+within the padded bitmap to get `pnHotX`/`pnHotY`. The rendered shape is otherwise
+byte-for-byte what it always was -- confirmed by aligning a before/after screenshot
+pair on their respective measured tips and diffing: same silhouette, same pixel
+count within AA-fringe noise, only the origin moved.
+
+**Verified headless** (`--backend headless`, isolated `XDG_RUNTIME_DIR`/
+`XDG_CONFIG_HOME`, a `glxgears` client to keep frames pumping -- an idle overlay
+with no client never repaints, confirmed by waiting 18s for nothing), positioning
+the overlay's own pointer with `overlay_e2_pointer move <x> <y>` and measuring the
+outermost accent-coloured pixel in a `gamescopectl screenshot "<path> 4"`
+(`screen_buffer`) capture, against the commanded coordinate:
+
+| outline width | cursor scale | tip-vs-pointer offset before | after |
+| --- | --- | --- | --- |
+| 2.0 (default) | 1.0 (default) | ~2.2px | 0px |
+| 1.0 (min) | 0.5 (min) | (predicted ~0.7px, not separately measured) | 0px |
+| 6.0 (max) | 3.0 (max) | ~23.8px (predicted 24.3px) | 0px |
+
+The default-case "before" and the max-case "before" both land within a pixel of
+the analytic miter prediction, cross-checking the formula against the actual
+renderer rather than just against itself.

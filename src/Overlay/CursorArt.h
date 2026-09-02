@@ -43,11 +43,41 @@ namespace gamescope::overlay
 	// CursorArt_Draw() (the overlay's own pointer) and CursorArt_Rasterise()
 	// (the game-side fallback) below -- see this file's SCOPE comment for why
 	// a single definition of this triangle is load-bearing.
-	inline constexpr float kTipX = 0.0f,  kTipY = 0.0f;    // hotspot
+	inline constexpr float kTipX = 0.0f,  kTipY = 0.0f;    // path vertex -- NOT the hotspot, see CursorArt_TipOffset()
 	inline constexpr float kFootX = 0.0f, kFootY = 20.0f;  // bottom of the left edge
 	inline constexpr float kWingX = 13.5f, kWingY = 14.2f; // the right corner
 
-	// Draws with the tip -- the hotspot -- landing exactly on (flTipX, flTipY).
+	// The outline is a CENTRED stroke: it extends flOutlineWidth/2 outward
+	// from the (kTipX, kTipY)/kFoot/kWing path, so the visible tip of the
+	// drawn arrow sits outside that path vertex, not on it -- the hotspot
+	// needs to move out to meet it. How far depends on the JOIN each
+	// renderer actually draws at the tip corner, and the two renderers
+	// genuinely draw different joins (this is pre-existing, not something
+	// this offset changes):
+	//
+	//   * CursorArt_Draw() strokes with ImGui's AddPolyline(), which miters
+	//     sharp corners: the outer boundary is pushed out along the interior
+	//     angle's bisector by (flOutlineWidth/2)/sin(theta/2), theta being
+	//     the interior angle at the tip (verified against imgui_draw.cpp's
+	//     own IM_FIXNORMAL2F join math -- this is exact, not an
+	//     approximation).
+	//   * CursorArt_Rasterise() is a signed-distance fill, which always
+	//     rounds a corner: for any point beyond the tip vertex's edge-normal
+	//     cone, the nearest boundary point is the vertex itself, so the
+	//     outer edge there is a circular arc of radius flOutlineWidth/2
+	//     centred on the vertex -- reaching only flOutlineWidth/2 out, not
+	//     the larger miter distance above.
+	//
+	// Neither renderer's actual drawing changes here -- these compute where
+	// each one's EXISTING pixels really end, from the shared geometry
+	// constants above, sharing the corner's bisector direction and half-
+	// angle so the two formulas can't drift apart even though their
+	// magnitudes differ. See superdoc/features/cursor-pipeline.md.
+	void CursorArt_TipMiterOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY );
+	void CursorArt_TipRoundOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY );
+
+	// Draws with the visible tip -- the true hotspot -- landing exactly on
+	// (flTipX, flTipY).
 	void CursorArt_Draw( ImDrawList *pDrawList, float flTipX, float flTipY, float flScale );
 
 	// Rasterised path, for X11's game-side fallback cursor. Fills vecArgb

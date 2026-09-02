@@ -122,6 +122,10 @@ The newest version below is the one this build reports.
   is always 85% of the available width and height, instead of being capped at
   a fixed pixel size that read as too small on high-resolution displays and
   too large on low-resolution ones.
+- **The pointer now clicks exactly at its drawn tip**: clicks used to land
+  slightly inside the visible point, inset by roughly half the outline
+  width, because the click point was set at the shape's underlying corner
+  rather than the outline's actual outer edge.
 
 ### Removed
 - **The Shell settings tab and its Inspector/Layout options**: close the
