@@ -8,8 +8,10 @@
 //
 // The three quantities that live here and nowhere else:
 //
-//   1. THE SLAB      -- min(surfW x 0.90, max(1560 x scale, 1180))
-//                       x min(surfH x 0.86, 940 x scale)          (SPEC §8.1)
+//   1. THE SLAB      -- surfW x 0.85 x surfH x 0.85, no absolute pixel cap
+//                       (SPEC §8.1; superseded the old min(surfW x 0.90,
+//                       max(1560 x scale, 1180)) x min(surfH x 0.86, 940 x
+//                       scale) formula 2026-09-02)
 //   2. THE LADDER    -- rail 232 -> 60, inspector column -> drawer -> hidden,
 //                       from ONE comparison applied twice          (SPEC §8.3)
 //   3. THE REGIONS   -- rail / sheet / inspector / spine rects derived from
@@ -63,11 +65,11 @@ namespace gamescope::ui
 		inline constexpr float kSheetMin   = 560.0f;
 		inline constexpr float kSpine      =  20.0f;   // SPEC §8.05's "20-base vertical spine"
 
-		inline constexpr float kSlabBaseW  = 1560.0f;  // the 1.0x slab
-		inline constexpr float kSlabMinW   = 1180.0f;  // the floor the max() sets
-		inline constexpr float kSlabBaseH  =  940.0f;
-		inline constexpr float kSurfFracW  =   0.90f;
-		inline constexpr float kSurfFracH  =   0.86f;
+		// 2026-09-02: the slab is a flat 85% of the surface on both axes, no
+		// absolute pixel cap. See Layout.cpp's Slab::For() for the rationale
+		// (the caps were making the UI feel too small on high-res outputs)
+		// and SPEC.md §8.3 for the superseded formula this replaces.
+		inline constexpr float kSurfFrac   =   0.85f;
 
 		// ---- the command palette / launcher panel, base units ------------
 		// These are here rather than as literals inside DrawPalette()

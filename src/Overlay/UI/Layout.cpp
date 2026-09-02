@@ -15,33 +15,35 @@ namespace gamescope::ui
 		Slab slab;
 		slab.flScale = flScale <= 0.0f ? 1.0f : flScale;
 
-		//   min( surfaceW x 0.90, max( 1560, 1180 ) )
-		//   min( surfaceH x 0.86, 940 )
+		//   surfaceW x 0.85
+		//   surfaceH x 0.85
+		//
+		// 2026-09-02: flat 85% of the surface on both axes, no absolute pixel
+		// cap. The former min(surfW x 0.90, max(1560, 1180)) x min(surfH x
+		// 0.86, 940) formula pinned the slab to a fixed design size once the
+		// surface was large enough to hit the cap, which is exactly what made
+		// the UI feel too small on high-resolution outputs -- a 4K surface
+		// got the same 1560x940 slab as a 1080p one. Scaling by a flat
+		// fraction of the surface instead makes the window proportional at
+		// every resolution.
 		//
 		// Deliberately NOT x scale. The outer slab is the overlay's window --
 		// what the user asked for is "only the contents should scale, not
-		// the actual window size" -- so its own pixel footprint is a fixed
-		// design size (with the surface-fraction cap that already existed,
-		// for small surfaces), independent of display_scale entirely. Scale
-		// still governs every rect INSIDE the slab: flWidthBase/flHeightBase
-		// below divide this fixed px size by scale, so the ladder sees less
-		// "room" in base units as scale grows and collapses the rail to
-		// icons / floats the Inspector / drops sheet columns exactly as it
-		// already does for a small surface -- the SAME overflow mechanism,
-		// now also driven by scale instead of only by surface size.
-		//
-		// Note the asymmetry, which is SPEC.md's own and not a slip: width
-		// has a 1180 FLOOR inside the max() -- so a small surface still gets
-		// a slab wide enough for rail + inspector + a usable sheet -- while
-		// height has none, because a short slab merely scrolls.
-		slab.flWidthPx  = std::min( flSurfaceWPx * shelltok::kSurfFracW,
-		                            std::max( shelltok::kSlabBaseW, shelltok::kSlabMinW ) );
-		slab.flHeightPx = std::min( flSurfaceHPx * shelltok::kSurfFracH,
-		                            shelltok::kSlabBaseH );
+		// the actual window size" -- so its own pixel footprint is derived
+		// from the surface alone, independent of display_scale entirely.
+		// Scale still governs every rect INSIDE the slab: flWidthBase/
+		// flHeightBase below divide this px size by scale, so the ladder
+		// sees less "room" in base units as scale grows and collapses the
+		// rail to icons / floats the Inspector / drops sheet columns exactly
+		// as it already does for a small surface -- the SAME overflow
+		// mechanism, now also driven by scale instead of only by surface
+		// size.
+		slab.flWidthPx  = flSurfaceWPx * shelltok::kSurfFrac;
+		slab.flHeightPx = flSurfaceHPx * shelltok::kSurfFrac;
 
-		// Never wider or taller than the surface itself: the max(…,1180)
-		// above can exceed a genuinely tiny surface, and a slab hanging off
-		// the screen edge is worse than a cramped one.
+		// Never wider or taller than the surface itself. 0.85 never exceeds
+		// it on its own, but this stays as the same defensive floor/ceiling
+		// pass that always guarded the slab against a degenerate surface.
 		slab.flWidthPx  = std::min( slab.flWidthPx,  flSurfaceWPx );
 		slab.flHeightPx = std::min( slab.flHeightPx, flSurfaceHPx );
 

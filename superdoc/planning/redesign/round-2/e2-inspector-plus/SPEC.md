@@ -1246,6 +1246,17 @@ Slab `min(surfaceW × 0.90, max(1560 × scale, 1180)) × min(surfaceH × 0.86, 9
 Not draggable, not resizable, no per-panel positions — E's argument stands unchanged, and
 it deletes the bug class that produced 39% of `src/Overlay/`'s fix commits.
 
+> **Amended 2026-09-02 — the slab is a flat 85% of the surface, no absolute pixel cap.**
+> The formula above (and its 1180/1560/940 constants below in §8.3's table) is superseded.
+> The `min(…, 1560)`-shaped cap pinned the slab to the same fixed design size on any surface
+> once the surface was large enough to hit it — a 4K output got the identical slab a 1080p
+> one did, which read as "the UI is too small" at high resolution. The current formula is
+> `Slab = surfaceW × 0.85 × surfaceH × 0.85`, with no upper pixel bound at all (only the
+> pre-existing "never bigger than the surface itself" clamp remains). The independence from
+> `scale` described above is unaffected — this only changes how the *surface* maps to the
+> slab's px size, not whether `scale` does. See `Layout.cpp`'s `Slab::For()` and
+> `tests/test_overlay_shell.cpp`'s worked table for current figures.
+
 Rail: eleven items in **three** sections — `DISPLAY`, `SYSTEM`, `SETUP` — drawn icons
 (§8.0) and labels, two levels, no tab bar anywhere in the product. Active item carries a
 2px `Accent` left edge that survives the icon collapse. **The counter on a rail item means
@@ -1313,6 +1324,16 @@ Base budget: rail 232 (icons 60), inspector 400 (wide 544), sheet minimum 560,
 column minimum 420. Slab width on 1920 = `min(surfaceW × 0.90, max(1560 × scale, 1180))`.
 The ladder is one comparison applied twice: `rail + inspector + sheetMin ≥ slabBase`
 collapses the rail; if it still holds with the icon rail, the inspector becomes a drawer.
+
+> **Amended 2026-09-02 — slab width formula superseded, see §8.1's amendment above.**
+> "Slab width on 1920" is now `surfaceW × 0.85` (1632, not 1560), with no cap for any
+> surface. The worked table immediately below therefore describes the *pre-2026-09-02*
+> pixel-capped slab and is kept as history, not as the current numbers — it still proves
+> the table's own headline claim (2.0× beats 1.25× on sheet space) because that property
+> comes from the ladder's comparison, not from the specific slab width. For the current
+> 1920×1080-surface table (1632 px wide, 0.5×–2.0×), see `tests/test_overlay_shell.cpp`'s
+> "the responsive ladder reproduces SPEC 8.3's worked table" test, which is recomputed for
+> the new formula and is the source of truth going forward.
 
 | Scale | Slab px | Slab base | Rail | Inspector | Sheet base | Step | Result |
 |---|---|---|---|---|---|---|---|

@@ -63,27 +63,31 @@ TEST_CASE( "the responsive ladder reproduces SPEC 8.3's worked table", "[overlay
 		int   nStep;
 	};
 
-	// UPDATED for the "scale only the contents, not the window" fix: the
-	// slab's own px size (flSlabPx below) no longer depends on display_scale
-	// at all -- it is now min(surfW x 0.90, max(1560,1180)) x
-	// min(surfH x 0.86, 940), a fixed 1560 wide on this test's 1920-wide
-	// surface at EVERY scale. What still moves with scale is flSlabBase
-	// (== flSlabPx / scale): as scale grows, the same fixed px width holds
-	// fewer base units, so the ladder collapses the rail / floats the
-	// Inspector / drops sheet columns sooner -- the pre-existing "not enough
-	// room" mechanism, now triggered by scale instead of only by a small
-	// surface. Figures recomputed from Layout.cpp's Slab::For/Solve by hand;
-	// the "Inspector" column still reads "400" or "drawer 400" -- the WIDTH
-	// never changes, only the host, which is exactly the point (Layout.cpp
-	// keeps one rect for both).
+	// UPDATED 2026-09-02 for the "always 85% of the surface, no absolute
+	// pixel cap" change: the slab's own px size (flSlabPx below) still does
+	// not depend on display_scale (that fix from before is untouched), but
+	// it is now a flat surfW x 0.85 with no cap -- 1632 wide on this test's
+	// 1920-wide surface at EVERY scale, replacing the old capped 1560. What
+	// still moves with scale is flSlabBase (== flSlabPx / scale): as scale
+	// grows, the same fixed px width holds fewer base units, so the ladder
+	// collapses the rail / floats the Inspector / drops sheet columns sooner
+	// -- the pre-existing "not enough room" mechanism, now triggered by
+	// scale instead of only by a small surface. Figures recomputed from
+	// Layout.cpp's Slab::For/Solve by hand for the new 1632 width; worked
+	// example for 1.50x: Wb = 1632/1.50 = 1088; first Cramped() check is
+	// 232+400+560=1192 >= 1088 (true) so rail -> 60; second Cramped() check
+	// is 60+400+560=1020 >= 1088 (FALSE, 1020 < 1088) so the Inspector stays
+	// a Column; flSheetBase = 1088 - 60 - 400 = 628. The "Inspector" column
+	// still reads "400" or "drawer 400" -- the WIDTH never changes, only the
+	// host, which is exactly the point (Layout.cpp keeps one rect for both).
 	const Row kTable[] = {
-		{ 0.50f, 1560.0f, 3120.0f, 232.0f, ui::InspectorHost::Column, 2488.0f, -1 },
-		{ 0.75f, 1560.0f, 2080.0f, 232.0f, ui::InspectorHost::Column, 1448.0f,  0 },
-		{ 1.00f, 1560.0f, 1560.0f, 232.0f, ui::InspectorHost::Column,  928.0f,  0 },
-		{ 1.25f, 1560.0f, 1248.0f, 232.0f, ui::InspectorHost::Column,  616.0f,  0 },
-		{ 1.50f, 1560.0f, 1040.0f,  60.0f, ui::InspectorHost::Column,  580.0f,  1 },
-		{ 1.75f, 1560.0f,  891.4f,  60.0f, ui::InspectorHost::Drawer,  831.4f,  2 },
-		{ 2.00f, 1560.0f,  780.0f,  60.0f, ui::InspectorHost::Drawer,  720.0f,  2 },
+		{ 0.50f, 1632.0f, 3264.00f, 232.0f, ui::InspectorHost::Column, 2632.00f, -1 },
+		{ 0.75f, 1632.0f, 2176.00f, 232.0f, ui::InspectorHost::Column, 1544.00f,  0 },
+		{ 1.00f, 1632.0f, 1632.00f, 232.0f, ui::InspectorHost::Column, 1000.00f,  0 },
+		{ 1.25f, 1632.0f, 1305.60f, 232.0f, ui::InspectorHost::Column,  673.60f,  0 },
+		{ 1.50f, 1632.0f, 1088.00f,  60.0f, ui::InspectorHost::Column,  628.00f,  1 },
+		{ 1.75f, 1632.0f,  932.57f,  60.0f, ui::InspectorHost::Drawer,  872.57f,  2 },
+		{ 2.00f, 1632.0f,  816.00f,  60.0f, ui::InspectorHost::Drawer,  756.00f,  2 },
 	};
 
 	for ( const Row &row : kTable )
@@ -196,9 +200,10 @@ TEST_CASE( "columns are capped by content, not only by width", "[overlay_shell]"
 // =========================================================================
 TEST_CASE( "the slab never exceeds the surface it sits on", "[overlay_shell]" )
 {
-	// The 1180 floor inside SPEC §8.1's max() can exceed a genuinely small
-	// surface. A slab hanging off the screen edge is worse than a cramped
-	// one, and it cannot be dragged back -- there is no dragging.
+	// A flat 0.85 fraction never itself exceeds the surface, but this guard
+	// stays as the defensive floor/ceiling clamp Slab::For() always applies
+	// -- a slab hanging off the screen edge would be worse than a cramped
+	// one, and it cannot be dragged back, there is no dragging.
 	const ui::Slab slab = ui::Slab::For( 800.0f, 600.0f, 1.0f );
 	REQUIRE( slab.flWidthPx  <= 800.0f );
 	REQUIRE( slab.flHeightPx <= 600.0f );
@@ -561,11 +566,12 @@ TEST_CASE( "at 2.0x the drawer no longer covers the sheet's control column", "[o
 	// should say so loudly rather than pass vacuously.
 	REQUIRE( ladder.eHost == ui::InspectorHost::Drawer );
 	REQUIRE( ladder.nStep == 2 );
-	// 720, not the pre-fix 804: the slab's px width at 2.0x is now the same
-	// fixed 1560 as every other scale (see the table test above), so the
-	// base-unit width the ladder sees at 2.0x is 1560/2.0 = 780, not the old
-	// scale-coupled 1728/2.0 = 864.
-	REQUIRE_THAT( ladder.flSheetBase, WithinAbs( 720.0f, 1e-4f ) );
+	// 756, not the old capped-slab 720: the slab's px width at 2.0x is the
+	// same flat surfW x 0.85 as every other scale (see the table test
+	// above), so the base-unit width the ladder sees at 2.0x is
+	// 1632/2.0 = 816, not the old capped 1560/2.0 = 780; the ladder still
+	// demotes to a Drawer with rail=60, so flSheetBase = 816 - 60 = 756.
+	REQUIRE_THAT( ladder.flSheetBase, WithinAbs( 756.0f, 1e-4f ) );
 
 	// What Shell.cpp's DrawSheetBody computes, in the same order.
 	const float flScale = 2.0f;

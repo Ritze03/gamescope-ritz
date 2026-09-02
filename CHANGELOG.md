@@ -108,6 +108,10 @@ The newest version below is the one this build reports.
   placement-grid rows used to strand the value in the middle of the row;
   it now sits one gutter to the left of the control, like sliders already
   did.
+- **The settings overlay now scales cleanly with your resolution**: its window
+  is always 85% of the available width and height, instead of being capped at
+  a fixed pixel size that read as too small on high-resolution displays and
+  too large on low-resolution ones.
 
 ### Removed
 - **The Shell settings tab and its Inspector/Layout options**: close the
