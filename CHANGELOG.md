@@ -9,6 +9,20 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.4.0] – 2026-09-03
+
+### Added
+- **HUD placement editor**: HUD settings now has an "Edit placement" button that opens
+  a drag editor right over your game. Move the FPS, CPU, GPU, and Now Playing modules
+  wherever you want them; each one snaps to the screen's edges and centre, and to the
+  other modules, within a few pixels. Save keeps the new placement, Esc cancels.
+
+### Fixed
+- **The HUD's module toggles work again**: Frame rate, Frametime readout, Frametime
+  graph, Percentile row, CPU load, GPU load, Now playing, and the FPS module's "FPS"
+  label switch now actually turn that part of the HUD on or off, instead of silently
+  doing nothing.
+
 ## [0.3.5] – 2026-08-27
 
 ### Added

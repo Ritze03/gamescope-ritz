@@ -1,13 +1,13 @@
 # HUD layouts (manual per-module placement)
 
-**Status: Phase 1 — rendering is live, no editor UI yet.** This page documents the data
-model and store (`src/Config/ConfigSchema.h` / `src/Config/ConfigManager.{h,cpp}`,
-built in Phase 0) and, from Phase 1, the render-side change that makes
-`src/Overlay/FpsDisplay.cpp` actually draw from a resolved `HudLayout` instead of the
-old single anchored stack. There is still no UI to create or edit a layout by hand in
-the settings panel — that is Phase 3's drag-and-drop editor; today a layout only comes
-from hand-editing `layouts/<name>.json` or a future tool that calls `SaveLayout()`/
-`EnqueueLayoutWrite()` directly.
+**Status: Phase 3 — the drag editor is live.** This page documents the data model and
+store (`src/Config/ConfigSchema.h` / `src/Config/ConfigManager.{h,cpp}`, built in
+Phase 0), the render-side change that makes `src/Overlay/FpsDisplay.cpp` actually draw
+from a resolved `HudLayout` instead of the old single anchored stack (Phase 1), and the
+visual editor that lets a user place a layout by dragging instead of hand-editing
+`layouts/<name>.json` (Phase 3, `src/Overlay/UI/HudLayoutEditor.{h,cpp}` — see
+"Phase 3: the drag editor" below). Phase 2 (wiring `HudLayoutModule::scale`) has not
+landed; every module still renders at its natural content size.
 
 ## Why this replaces the old anchored-stack layout
 
@@ -266,13 +266,14 @@ those JSON keys (same "an old file's leftover key is just never looked up" prece
 
 `FpsDisplaySettings::fps_enabled`/`cpu_enabled`/`gpu_enabled`/`media_enabled`/
 `graph_enabled`/`percentiles_enabled`/`frametime_enabled`/`fps_label_enabled` are
-**not** removed, even though the render path stopped reading them this phase (previous
-section) — Phase 1's explicit removal list was the four position/spacing fields above,
-not these eight. They stay in the schema, are still persisted, and their settings-panel
-"Modules" rows are still there and still editable — they just no longer affect what the
-HUD draws on screen, since that is now exclusively the resolved layout's own property.
-Folding "which modules a layout shows" into a real editing UI is left to Phase 3's
-layout editor rather than reworking this settings group twice.
+**not** removed, even though the render path stopped reading them in Phase 1 (previous
+section) and the settings-panel "Modules" rows stopped reading/writing them in Phase 3
+(next-but-one section) — `ConfigManager.cpp` still serializes every one of them as part
+of the ordinary `Settings`/`FpsDisplaySettings` round-trip, and `tests/test_config.cpp`
+has dedicated round-trip coverage asserting exactly that (`"fps_display.fps_enabled
+round-trips"` and its siblings) — so removing the fields would break real, still-passing
+tests over real, still-persisted JSON keys, not just an internal convention. They are
+dead weight for the HUD specifically, not for the config format generally.
 
 ## The rename: `system.monitor` → `system.hud`
 
@@ -287,30 +288,136 @@ overlay is *Shell*/*Click-UI*, per `superdoc/meta/TERMINOLOGY.md`, which now has
 (`ConfigManager.cpp`), untouched by this rename, so no config migration is needed —
 existing users' saved settings load exactly as before under the new UI labels.
 
-## No default layouts, no editor yet
+## No default layouts
 
-No default layouts ship, and no settings-panel UI exists yet to create one —
-`HudLayout` is reachable today via `ConfigManager`'s API, `tests/test_config.cpp`'s
-direct coverage of it, and hand-edited `layouts/<name>.json` files. Per the user's
-locked decision (Phase 0), there is also no migration: an existing user's HUD position
-goes blank on upgrading into Phase 1 (`layout_name` was never set, so it resolves to an
-empty `HudLayout{}`) and they re-place it once Phase 3's editor exists — see
-`CHANGELOG.md`'s `[0.3.5]` entry for the user-facing warning.
+No default layouts ship — `HudLayout` is reachable via `ConfigManager`'s API,
+`tests/test_config.cpp`'s direct coverage of it, hand-edited `layouts/<name>.json`
+files, and now the Phase 3 editor below. Per the user's locked decision (Phase 0),
+there was also no migration: an existing user's HUD position went blank on upgrading
+into Phase 1 (`layout_name` was never set, so it resolved to an empty `HudLayout{}`)
+and had to be re-placed once this editor existed — see `CHANGELOG.md`'s `[0.3.5]` entry
+for the user-facing warning issued at the time.
 
-## The seam for Phase 3's editor
+## Phase 3: the drag editor
 
-Phase 3 is expected to add a drag-and-drop layout editor living in its own file, in the
-same `system.hud` area `FpsDisplay_RegisterArea()` already registers (`ui::Registry
-&reg`, `FpsDisplay.h`) — not a new area. The call site is the same function: where the
-old "Placement" settings-panel group used to sit (`FpsDisplay.cpp`, between the
-"Modules" group and "Appearance"), a comment now marks exactly where that editor's own
-registration call belongs, adding to the `ui::Area &a` `FpsDisplay_RegisterArea()`
-already built rather than replacing it. The data it should read/write is
-`config::HudLayout` via `ConfigManager.h`'s `LoadLayout`/`SaveLayout`/
-`EnqueueLayoutWrite`/`ListLayouts`/`ResolveLayoutCached` — the same API Phase 0 built
-and this phase's render path already consumes through `ResolveLayoutCached()`. The
-render-side building blocks an editor's live-preview would reuse directly are
-`ResolveModuleOrigin()` (placement math) and `ModulePlacement()` (kind → the layout's
-matching `HudLayoutModule`), both `static` in `FpsDisplay.cpp` today — an editor
-drawing its own preview would need equivalents exported or reused in place, not
-reinvented.
+`src/Overlay/UI/HudLayoutEditor.{h,cpp}` — a small, self-contained public surface
+(`IsActive()` / `Begin()` / `Draw()` / `HandleEscape()`) that lives in its own
+`gamescope::ui::hudedit` namespace, called from three places: `FpsDisplay.cpp`'s
+`FpsDisplay_RegisterArea()` (`Begin()`, wired to the `hud.edit_layout` "Edit placement"
+Action, in the same `system.hud` area, where the old "Placement" settings-panel group
+used to sit — not a new area), and `Shell.cpp`'s `Draw()`/`RunKeyboard()` (`Draw()` and
+`HandleEscape()` respectively — see "Why it lives in the Shell's context" below for the
+reasoning behind that split).
+
+**Why it lives in the Shell's ImGui context, not the HUD's.** `FpsDisplay.cpp`'s own
+file-header comment explains why the HUD keeps a fully separate ImGui context, offscreen
+texture and submission path from the settings overlay's: lifetime independence (the HUD
+must keep rendering every frame regardless of whether the settings panel is even open),
+plus isolation from concurrent work on the settings panel. One consequence of that
+separation matters here: **the HUD's context receives no pointer input at all** — only
+`SettingsOverlay.cpp`'s `DrainInputQueue()` feeds `io.AddMousePosEvent`/
+`AddMouseButtonEvent` into the Shell's own context, so `ImGui::IsMouseDown()`/
+`GetMousePos()`/etc. only work from inside `Shell::Draw()`'s own call chain. An editor
+that needs to drag things has to run there, full stop — hence `HudLayoutEditor.cpp`
+draws from the Shell's context and reads the HUD's own geometry through a small,
+explicit export (`FpsDisplay_GetModuleRects()`, below) rather than reaching into the
+HUD's context at all.
+
+**`Shell::Draw()`'s early return.** Follows `s_bLauncherOnly`'s own precedent (see that
+branch's comment in `Shell.cpp`) exactly: while `hudedit::IsActive()`, `Draw()` calls
+only `hudedit::Draw()` and returns — no slab, rail, sheet, inspector, drawer, dropdown or
+spine. An early return rather than threading an `if` through 200 lines of region drawing,
+for the identical reason the launcher's own comment gives: a guard can be forgotten by a
+future region; a `return` cannot. One difference from the launcher: this early return
+sits *after* `RunKeyboard()` runs (the launcher's sits *before* it), because
+`hudedit::HandleEscape()` is a rung in `RunKeyboard()`'s own D26 Esc-precedence chain
+(checked right after the armed-destructive-action rung, before the mid-edit-text-field
+rung) rather than handled inline in the early-return branch itself — Esc has to reach
+`RunKeyboard()` for the editor to be able to cancel itself.
+
+**`FpsDisplay_GetModuleRects()`** (`FpsDisplay.h`/`.cpp`) is the render-side export the
+editor's live preview reuses rather than reinventing: it factors `DrawReadout()`'s own
+measure-then-resolve pipeline (`MeasureModule()` → `ModulePlacement()` →
+`ResolveModuleOrigin()`, all still `static`/file-local) into a callable that takes a
+`config::HudLayout` **by value from the caller** — deliberately the editor's own
+not-yet-saved working copy, not `config::ResolveLayoutCached(cfg.layout_name)` read
+internally — so a drag's effect on the layout is visible in the SAME frame's preview,
+before anything is saved. It returns each module's box (`HudModuleRect{x,y,w,h,
+bEnabled}`) in **HUD display-pixel space** (the HUD's own `io.DisplaySize`, i.e. its
+offscreen texture's resolution, reported via the out-params `pflDisplayW`/`pflDisplayH`)
+— safe to call from a *different* ImGui context (the Shell's) because it measures text
+against whatever context is current on entry (close enough for a drag preview; it does
+not chase pixel-perfect parity with the live HUD's own render) and reads only already-
+cached plain numeric state for everything else (last-known smoothed FPS/frametime/
+percentiles, and the HUD's own last-known texture size — falling back to the
+compositor's current output size, and finally to a hardcoded 1920×1080, if the HUD has
+never drawn a frame yet, so the result is never a division-by-zero waiting to happen).
+
+**Two display spaces, one simple ratio.** The Shell's own `io.DisplaySize` and the HUD's
+(from `FpsDisplay_GetModuleRects()`) are not assumed to match — `HudLayoutEditor.cpp`
+converts every module rect from HUD space into Shell space by a plain per-axis ratio
+(`shellSize / hudSize`, applied to both position and size) each frame, and converts a
+drag's resulting position back the same way before writing `HudLayoutModule::x`/`y`.
+Deliberately **not** `overlay.display_scale` anywhere in this conversion — that scale
+governs the Shell's own *widget* sizing (`Overlay/UI/Tokens.h`'s `Scale()`/`Px()`), not
+a mapping between two independent ImGui contexts' pixel spaces; the two happen to be
+unrelated numbers that could be confused for the same job.
+
+**Dragging.** Mouse-down inside an *enabled* module's box (hit-tested topmost-first,
+i.e. `kModuleOrder`'s reverse — Media before Gpu before Cpu before Fps, matching that
+z-order's own "later entries draw on top" rule) grabs it; while held, the box's top-left
+follows the pointer (via a fixed grab offset recorded at mouse-down, not accumulated
+frame-to-frame deltas). Every frame, the module's `x`/`y` are **recomputed from the new
+top-left**, never nudged incrementally: `x`/`y` describe where the module's `origin`
+corner sits, not the box itself, and — see snapping below — the origin can change
+mid-drag, so top-left is the only value that stays meaningful across that change.
+
+**Snapping.** While dragging, each axis independently snaps within 8 physical
+(Shell-space) pixels: the box's own three reference points on that axis (min/centre/max)
+are tested against the screen's own three anchors (left/centre/right, or top/middle/
+bottom) and every *other enabled* module's own three edges/centre on that axis; the
+globally closest in-tolerance pair wins, and a thin accent guide line is drawn along
+that snapped coordinate for as long as the snap holds. **Only a snap to a *screen*
+anchor rewrites `HudLayoutModule::origin`** (e.g. snapping to the screen's right edge
+sets the horizontal half of `origin` to `"right"`; the horizontal centre sets it to
+`"center"`) — a snap to another module's edge aligns the box visually without rewriting
+`origin`, because it says nothing about where on the *screen* this module belongs.
+`Why:` `origin`/`x`/`y` together are what makes a placement resolution-independent
+(`ResolveModuleOrigin()`'s own comment) — a module dragged flush against the *screen's*
+right edge should stay flush against it at a different resolution too, which only holds
+if `origin` says `"...-right"` and `x` is close to `1.0`; if snapping only nudged `x`/`y`
+without also updating `origin`, a module pinned to the right edge at 1920×1080 would
+drift away from that edge at 3840×2160, silently reintroducing the exact
+resolution-dependence this whole rework exists to remove. A module-to-module snap has no
+equivalent resolution-independence claim to make (two modules "next to each other" is
+just as true, or just as false, at any resolution, regardless of `origin`), so it is
+left alone.
+
+**Chrome and lifecycle.** A one-line bar (`Save` / `Cancel` / an "Esc to cancel" hint)
+drawn as ordinary ImGui buttons inside the editor's own full-surface, no-title-bar,
+no-background window — the same window shape `Shell.cpp`'s own launcher branch (D25)
+already uses for "one surface covering the whole display, no slab underneath it."
+`Begin()` resolves the layout the active session's HUD currently shows
+(`FpsDisplay_ActiveLayoutName()` + `ResolveLayoutCached()`) into a working copy plus a
+snapshot; `Save()` writes the working copy via `SaveLayout()` + `ReloadLayoutCache()`
+(synchronous, not `EnqueueLayoutWrite()` — a discrete click, not a per-frame drag, so
+there is no render-thread-stall concern, and the synchronous pair means the very next
+frame's HUD immediately reflects the edit rather than waiting on the cache's own
+"refreshed automatically at the next `Settings` load" boundary), naming and selecting
+`"custom"` first if no layout was named yet (`FpsDisplay_SetActiveLayoutName()`); `Cancel()`
+/ `HandleEscape()` simply discard the working copy — nothing was ever persisted
+mid-drag, so there is nothing to roll back on disk. `Draw()` calls `force_repaint()`
+unconditionally on every frame it runs, since the HUD's own 500ms repaint-timer thread
+(`EnsureRepaintTimerThread()`) is far too slow to carry a live drag.
+
+**The "Modules" rewire.** The same change rewired the settings panel's seven
+`hud.mod_*` toggle rows (and the Fps module's `label` param) off the now-render-inert
+`FpsDisplaySettings` fields (previous section) and onto the resolved *active* layout —
+`FpsDisplay.cpp`'s `MutateActiveLayout()` is the one place that reads
+`ResolveLayoutCached(cfg.layout_name)`, applies an edit, and saves it back (creating and
+selecting `"custom"` first under the identical empty-name rule the editor's own `Save()`
+follows, for the identical reason: a toggle flipped before any layout exists needs
+somewhere durable to land). Same synchronous `SaveLayout()` + `ReloadLayoutCache()`
+choice as the editor's `Save()`, for the same reason (a discrete click, immediate
+feedback wanted, `EnqueueLayoutWrite()` alone would leave the very next repaint showing
+the old value).

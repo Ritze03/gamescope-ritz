@@ -171,6 +171,7 @@ src = [
   'Overlay/UI/Controls.cpp',
   'Overlay/UI/Layout.cpp',
   'Overlay/UI/Shell.cpp',
+  'Overlay/UI/HudLayoutEditor.cpp',
   'backend.cpp',
   'x11cursor.cpp',
   'InputEmulation.cpp',

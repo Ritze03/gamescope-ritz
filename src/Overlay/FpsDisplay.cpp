@@ -60,6 +60,7 @@
 #include "Palette.h"
 #include "Metrics/SystemStats.h"
 #include "UI/Registry.h"
+#include "UI/HudLayoutEditor.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -186,6 +187,23 @@ namespace gamescope
 	static void PersistSettings()
 	{
 		config::EnqueueRoutedWrite( s_Settings );
+	}
+
+	// HUD layouts Phase 3: FpsDisplay.h's exported read/write seam onto
+	// FpsDisplaySettings::layout_name for Overlay/UI/HudLayoutEditor.cpp --
+	// see that header's own comment for why the editor goes through these
+	// rather than keeping a second cached copy of the name itself.
+	const std::string &FpsDisplay_ActiveLayoutName()
+	{
+		EnsureConfigLoaded();
+		return s_Settings.fps_display.layout_name;
+	}
+
+	void FpsDisplay_SetActiveLayoutName( const std::string &sName )
+	{
+		EnsureConfigLoaded();
+		s_Settings.fps_display.layout_name = sName;
+		PersistSettings();
 	}
 
 	// Console/gamescopectl affordance for testing without input capture
@@ -1612,6 +1630,72 @@ namespace gamescope
 		}
 	}
 
+	// HUD layouts Phase 3 (superdoc/architecture/hud-layouts.md's "seam for
+	// Phase 3's editor"): FpsDisplay.h's exported counterpart to
+	// DrawReadout()'s own measure+resolve pipeline, for
+	// Overlay/UI/HudLayoutEditor.cpp's live drag preview. Deliberately takes
+	// `layout` as a parameter (the editor's own not-yet-saved working copy)
+	// rather than resolving cfg.layout_name itself -- see FpsDisplay.h's own
+	// comment on this function for the full contract, including why it is
+	// safe to call from the Shell's ImGui context rather than this file's
+	// own s_pImguiContext.
+	void FpsDisplay_GetModuleRects( const config::HudLayout &layout, HudModuleRect (&out)[4],
+	                                float *pflDisplayW, float *pflDisplayH )
+	{
+		EnsureConfigLoaded();
+
+		// "Last known" display size: the HUD's own offscreen texture at
+		// whatever size it was last (re)created at (EnsureTexture(), driven
+		// by g_nOutputWidth/g_nOutputHeight every frame it draws) -- 0x0
+		// only before the HUD has ever rendered a single frame this
+		// process, in which case g_nOutputWidth/g_nOutputHeight (the
+		// compositor's current output size, already valid by the time
+		// anything can open the settings overlay) is the next-best "last
+		// known" answer, and a hardcoded 1920x1080 is the final fallback so
+		// this never hands back a size a caller could divide by zero with.
+		const float flDisplayW = s_uTextureWidth  != 0 ? (float)s_uTextureWidth
+		                        : g_nOutputWidth   != 0 ? (float)g_nOutputWidth  : 1920.0f;
+		const float flDisplayH = s_uTextureHeight != 0 ? (float)s_uTextureHeight
+		                        : g_nOutputHeight  != 0 ? (float)g_nOutputHeight : 1080.0f;
+		if ( pflDisplayW ) *pflDisplayW = flDisplayW;
+		if ( pflDisplayH ) *pflDisplayH = flDisplayH;
+
+		const ImVec2 ioDisplay( flDisplayW, flDisplayH );
+
+		// Last known FPS: derived from s_flSmoothedFrametimeMs the same way
+		// UpdateAndGetSmoothedFps() does, without that function's own side
+		// effect of consuming a fresh g_ulLastAppFrametimeNs sample -- this
+		// call has no frame of its own to attribute a new sample to. Its
+		// static initialiser (1000/60) is already this function's "the HUD
+		// has never drawn a frame" fallback, so no separate branch is needed
+		// here.
+		const int nFps = (int)std::lround( 1000.0f / std::max( s_flSmoothedFrametimeMs, 0.01f ) );
+
+		FpsModuleLayout fpsLayout;
+		CpuModuleLayout cpuLayout;
+		GpuModuleLayout gpuLayout;
+		MediaModuleLayout mediaLayout;
+
+		for ( int i = 0; i < kModuleCount; ++i )
+		{
+			const ModuleKind kind = kModuleOrder[i];
+			const ImVec2 size = MeasureModule( kind, nFps, layout, fpsLayout, cpuLayout, gpuLayout, mediaLayout );
+			HudModuleRect &rect = out[i];
+			rect.bEnabled = size.x > 0.0f || size.y > 0.0f;
+			if ( !rect.bEnabled )
+			{
+				rect.x = rect.y = rect.w = rect.h = 0.0f;
+				continue;
+			}
+			const config::HudLayoutModule &placement = ModulePlacement( kind, layout );
+			const ImVec2 origin = ResolveModuleOrigin( placement, size, ioDisplay );
+			rect.x = origin.x;
+			rect.y = origin.y;
+			rect.w = size.x;
+			rect.h = size.y;
+		}
+	}
+
 	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) replaced
 	// this function's old two-pass "measure the widest module, anchor one
 	// shared stack to a 3x3 cell + margins, walk a cursor down it" shape
@@ -2078,6 +2162,49 @@ namespace gamescope
 		}
 	}
 
+	// HUD layouts Phase 3: reads the layout the active session's HUD
+	// currently shows (config::ResolveLayoutCached(cfg.layout_name)),
+	// applies `mutator` to a mutable copy, and saves it back -- creating
+	// and selecting "custom" first if no layout is named yet, so a toggle
+	// flipped before any layout exists has somewhere durable to land rather
+	// than vanishing the moment the overlay closes. Every "Modules" row
+	// below (and, separately, Overlay/UI/HudLayoutEditor.cpp's own Save())
+	// follows this exact rule for the identical reason -- see that file for
+	// its own copy of the same "empty name -> custom" logic; it lives
+	// there rather than being shared from here because it operates on its
+	// own already-resolved working-copy snapshot, not a fresh
+	// ResolveLayoutCached() read per edit the way a single Switch flip
+	// needs.
+	//
+	// SaveLayout() + ReloadLayoutCache() (both synchronous/blocking file
+	// I/O), not EnqueueLayoutWrite(), deliberately: a Switch flip is a
+	// discrete, infrequent user click (not a per-frame drag), and
+	// EnqueueLayoutWrite() alone would leave config::ResolveLayoutCached()'s
+	// in-memory cache stale until some unrelated later event refreshed it
+	// (ConfigManager.h's own comment on that function) -- the toggle would
+	// silently not show up in the HUD on the very next repaint, which is
+	// exactly the "control that does nothing" defect class this codebase
+	// works hard to avoid (SPEC §3.13 lineage). force_repaint() at the end
+	// is the same immediate-feedback nudge every other switch in this file
+	// already gives its own edit (see hud.enabled's callback).
+	static void MutateActiveLayout( const std::function<void( config::HudLayout & )> &mutator )
+	{
+		EnsureConfigLoaded();
+		config::HudLayout layout = config::ResolveLayoutCached( s_Settings.fps_display.layout_name );
+		mutator( layout );
+
+		if ( s_Settings.fps_display.layout_name.empty() )
+		{
+			const std::optional<std::string> oName = config::SanitizeLayoutName( "custom" );
+			s_Settings.fps_display.layout_name = oName.value_or( "custom" );
+			PersistSettings();
+		}
+
+		config::SaveLayout( s_Settings.fps_display.layout_name, layout );
+		config::ReloadLayoutCache();
+		force_repaint();
+	}
+
 	// The area. One declaration, no ImGui in it -- which is what let the
 	// last escape hatch go (P5 deleted Area::Escape() itself).
 	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) renamed
@@ -2150,28 +2277,72 @@ namespace gamescope
 		// =================================================================
 		//  Modules -- the seven the band's count refers to
 		// =================================================================
-		// Note (HUD layouts Phase 1): these seven rows no longer gate what
-		// DrawReadout() actually draws -- module presence, and the Fps
-		// module's own frametime/graph/percentiles/label sub-rows, are now
-		// exclusively a resolved config::HudLayout's property (see that
-		// function). Left in place and still persisted regardless: Phase
-		// 1's explicit removal list is placement/margins/module_spacing
-		// only, not this group, and folding "which modules a layout shows"
-		// into a real editing UI belongs with Phase 3's layout editor,
-		// which is expected to own that decision rather than this group
-		// being redesigned twice.
+		// HUD layouts Phase 3: rewired off FpsDisplaySettings and onto the
+		// resolved ACTIVE layout (config::ResolveLayoutCached(cfg.layout_name)) --
+		// Phase 1 already pointed DrawReadout() at config::HudLayout
+		// exclusively and deliberately left this group reading/writing the
+		// now-render-inert FpsDisplaySettings fields (that phase's own
+		// comment: "folding ... belongs with Phase 3's layout editor"). This
+		// is that landing. Only WHERE each row's value lives changed --
+		// id/title/help/keywords and the seven-row shape are unchanged, so
+		// the palette/Inspector experience is identical to before.
+		//
+		// FpsDisplaySettings::fps_enabled/frametime_enabled/graph_enabled/
+		// percentiles_enabled/cpu_enabled/gpu_enabled/media_enabled/
+		// fps_label_enabled are UNTOUCHED by this rewire (ConfigSchema.h) --
+		// nothing below reads or writes them any more, but see that
+		// struct's own comment for why they stay in the schema rather than
+		// being deleted this same change.
 		a.GroupCount( "Modules" );
 
-		auto Module = [ & ]( const char *pszId, const char *pszTitle,
-		                     bool config::FpsDisplaySettings::*pField,
-		                     bool bDefault, const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
+		// Cpu/Gpu/Media share one shape: a plain HudLayoutModule owned
+		// directly by HudLayout, toggled via its own `enabled`. Selected by
+		// a pointer to the HudLayout MEMBER (cpu/gpu/media), not to
+		// HudLayoutModule::enabled itself -- HudLayout has three of those
+		// and a single bool-member pointer can't tell them apart.
+		auto ModuleRow = [ & ]( const char *pszId, const char *pszTitle,
+		                       config::HudLayoutModule config::HudLayout::*pModule,
+		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
 		{
 			return a.Switch( pszId, pszTitle,
 				ui::AnyBind::Of<bool>(
-					[ pField ]{ EnsureConfigLoaded(); return s_Settings.fps_display.*pField; },
-					[ pField ]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.*pField = b; PersistSettings(); } ) )
+					[ pModule ]{
+						EnsureConfigLoaded();
+						return ( config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).*pModule ).enabled;
+					},
+					[ pModule ]( bool b )
+					{
+						MutateActiveLayout( [ pModule, b ]( config::HudLayout &layout )
+							{ ( layout.*pModule ).enabled = b; } );
+					} ) )
 				.Help( pszHelp )
-				.Default( bDefault )
+				.Default( config::HudLayoutModule{}.enabled )
+				.Keywords( pszKeywords )
+				.DisabledUnless( MonitorOn, kOffReason );
+		};
+
+		// Fps's own sub-row toggles (frametime/graph/percentiles/label) are
+		// plain bool members of HudLayoutFpsModule, one level down from its
+		// own `placement` -- see ConfigSchema.h's HudLayoutFpsModule
+		// comment for why they aren't independently placeable and so carry
+		// no HudLayoutModule of their own.
+		auto FpsSubRow = [ & ]( const char *pszId, const char *pszTitle,
+		                       bool config::HudLayoutFpsModule::*pField,
+		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
+		{
+			return a.Switch( pszId, pszTitle,
+				ui::AnyBind::Of<bool>(
+					[ pField ]{
+						EnsureConfigLoaded();
+						return config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).fps.*pField;
+					},
+					[ pField ]( bool b )
+					{
+						MutateActiveLayout( [ pField, b ]( config::HudLayout &layout )
+							{ layout.fps.*pField = b; } );
+					} ) )
+				.Help( pszHelp )
+				.Default( config::HudLayoutFpsModule{}.*pField )
 				.Keywords( pszKeywords )
 				.DisabledUnless( MonitorOn, kOffReason );
 		};
@@ -2179,70 +2350,84 @@ namespace gamescope
 		// Issue #73's "FPS" unit label is a PARAM of the frame-rate module
 		// rather than an eighth row: it is not a module, and a row on the
 		// band would make the "N / 7" count mean something other than
-		// modules.
-		Module( "hud.mod_fps", "Frame rate", &config::FpsDisplaySettings::fps_enabled,
-			config::FpsDisplaySettings{}.fps_enabled,
-			"The big frames-per-second number.",
-			"fps frame rate module row counter" )
+		// modules. Fps's own presence lives at layout.fps.placement.enabled
+		// (HudLayoutFpsModule::placement), not a plain HudLayoutModule
+		// member of HudLayout -- so it gets its own a.Switch() rather than
+		// going through ModuleRow().
+		a.Switch( "hud.mod_fps", "Frame rate",
+			ui::AnyBind::Of<bool>(
+				[]{
+					EnsureConfigLoaded();
+					return config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).fps.placement.enabled;
+				},
+				[]( bool b )
+				{
+					MutateActiveLayout( [ b ]( config::HudLayout &layout ) { layout.fps.placement.enabled = b; } );
+				} ) )
+			.Help( "The big frames-per-second number." )
+			.Default( config::HudLayoutModule{}.enabled )
+			.Keywords( "fps frame rate module row counter" )
+			.DisabledUnless( MonitorOn, kOffReason )
 			.Param( "label", "\"FPS\" label",
 				ui::AnyBind::Of<bool>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.fps_label_enabled; },
-					[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.fps_label_enabled = b; PersistSettings(); } ) )
-				.Default( config::FpsDisplaySettings{}.fps_label_enabled )
+					[]{
+						EnsureConfigLoaded();
+						return config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).fps.fps_label_enabled;
+					},
+					[]( bool b )
+					{
+						MutateActiveLayout( [ b ]( config::HudLayout &layout ) { layout.fps.fps_label_enabled = b; } );
+					} ) )
+				.Default( config::HudLayoutFpsModule{}.fps_label_enabled )
 				.Help( "Off shows just the number, without the \" FPS\" letters after it." );
 
-		Module( "hud.mod_frametime", "Frametime readout",
-			&config::FpsDisplaySettings::frametime_enabled,
-			config::FpsDisplaySettings{}.frametime_enabled,
+		FpsSubRow( "hud.mod_frametime", "Frametime readout", &config::HudLayoutFpsModule::frametime_enabled,
 			"Shows how long each frame took to draw, in milliseconds, next to the FPS number.",
 			"frametime ms readout module row" );
 
-		Module( "hud.mod_graph", "Frametime graph",
-			&config::FpsDisplaySettings::graph_enabled,
-			config::FpsDisplaySettings{}.graph_enabled,
+		FpsSubRow( "hud.mod_graph", "Frametime graph", &config::HudLayoutFpsModule::graph_enabled,
 			"A small chart of recent frame times under the number, with stutters marked.",
 			"graph frametime spark history module" );
 
-		Module( "hud.mod_pct", "Percentile row",
-			&config::FpsDisplaySettings::percentiles_enabled,
-			config::FpsDisplaySettings{}.percentiles_enabled,
+		FpsSubRow( "hud.mod_pct", "Percentile row", &config::HudLayoutFpsModule::percentiles_enabled,
 			"Shows your worst 1% and 0.1% of frames, plus your average frame rate, on one line. "
 			"Useful for spotting stutters an average FPS number would hide.",
 			"percentile lows average module" );
 
-		Module( "hud.mod_cpu", "CPU load", &config::FpsDisplaySettings::cpu_enabled,
-			config::FpsDisplaySettings{}.cpu_enabled,
+		ModuleRow( "hud.mod_cpu", "CPU load", &config::HudLayout::cpu,
 			"How hard your processor is working, and how much memory is in use.",
 			"cpu load ram module processor" );
 
-		Module( "hud.mod_gpu", "GPU load", &config::FpsDisplaySettings::gpu_enabled,
-			config::FpsDisplaySettings{}.gpu_enabled,
+		ModuleRow( "hud.mod_gpu", "GPU load", &config::HudLayout::gpu,
 			"How hard your graphics card is working, how much of its memory is in use, and its "
 			"temperature and power draw.",
 			"gpu load vram temperature power module" );
 
-		Module( "hud.mod_media", "Now playing", &config::FpsDisplaySettings::media_enabled,
-			config::FpsDisplaySettings{}.media_enabled,
+		ModuleRow( "hud.mod_media", "Now playing", &config::HudLayout::media,
 			"Shows the song title and artist from whatever music or media player is playing.",
 			"media now playing mpris module music" );
 
 		// =================================================================
-		//  Placement -- REMOVED (HUD layouts Phase 1)
+		//  Placement -- the HUD layouts Phase 3 drag editor
 		// =================================================================
-		// The single shared anchor + independent vertical/horizontal margin
-		// rows this used to be ("hud.anchor" and its margin_v/margin_h
-		// params, SPEC §4.3's worked example) no longer mean anything under
-		// manual per-module placement: FpsDisplaySettings::placement/
-		// margin_vertical/margin_horizontal are gone (ConfigSchema.h), and
-		// DrawReadout() now positions each module from its own resolved
-		// config::HudLayout entry instead. This is the seam Phase 3's
-		// drag-and-drop layout editor hooks into -- see FpsDisplay.h's
-		// FpsDisplay_RegisterArea() comment and DrawReadout()/
-		// ResolveModuleOrigin() for the exact shape an editor UI would
-		// read/write (config::HudLayout via LoadLayout/SaveLayout/
-		// EnqueueLayoutWrite, ConfigManager.h) -- it is expected to land as
-		// its own file, adding to this same `a` Area rather than replacing
-		// it, in place of this comment.
+		// This REPLACES Phase 1's comment marking where the old shared
+		// anchor + margin rows used to sit ("hud.anchor" and its
+		// margin_v/margin_h params, SPEC §4.3's worked example) -- those
+		// stayed meaningless under manual per-module placement
+		// (FpsDisplaySettings::placement/margin_vertical/margin_horizontal
+		// are gone, ConfigSchema.h) and DrawReadout() has positioned every
+		// module from its own resolved config::HudLayout entry since Phase
+		// 1. This is that phase's own "seam Phase 3 hooks into," landing:
+		// one Action that opens Overlay/UI/HudLayoutEditor.cpp's full-screen
+		// drag editor over the live HUD, reading/writing config::HudLayout
+		// via the same LoadLayout/SaveLayout/EnqueueLayoutWrite API Phase 0
+		// built and this file's own MutateActiveLayout() (just above) also
+		// uses.
+		a.Action( "hud.edit_layout", "Edit placement", "edit", []{ ui::hudedit::Begin(); } )
+			.Help( "Opens a drag editor over the game: move each HUD module to where you want it, "
+			       "then Save to keep the new placement or Esc to cancel." )
+			.Keywords( "hud layout editor placement drag move position edit arrange" )
+			.DisabledUnless( MonitorOn, kOffReason );
 
 		// =================================================================
 		//  Appearance
