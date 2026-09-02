@@ -1239,3 +1239,263 @@ TEST_CASE( "nothing deletes a per-game config except the explicit delete", "[con
     REQUIRE( DeletePerGameOverride( "1174180" ) );
     REQUIRE( !std::filesystem::exists( pathGame ) );
 }
+
+// =========================================================================
+//  Phase 0 -- HUD layouts (layouts/<name>.json, ConfigSchema.h's HudLayout)
+// =========================================================================
+// Pure data-and-persistence code, per the milestone's own framing -- the
+// cheapest thing in this project to test properly and the most expensive to
+// get wrong later. Covers: round-trip save/load, a missing/never-existing
+// layout name, name sanitisation (mirrors SanitizeProfileName exactly), and
+// an empty/unset layout being a completely valid "renders nothing" state.
+
+TEST_CASE( "SanitizeLayoutName mirrors SanitizeProfileName's exact rules", "[config]" )
+{
+    REQUIRE( SanitizeLayoutName( "Simple" ) == "Simple" );
+    REQUIRE( SanitizeLayoutName( "My Layout-1" ) == "My Layout-1" );
+    REQUIRE( SanitizeLayoutName( "../../etc/passwd" ) == "etcpasswd" );
+    REQUIRE( SanitizeLayoutName( "/etc/passwd" ) == "etcpasswd" );
+    REQUIRE( SanitizeLayoutName( ".." ) == std::nullopt );
+    REQUIRE( SanitizeLayoutName( "." ) == std::nullopt );
+    REQUIRE( SanitizeLayoutName( "" ) == std::nullopt );
+    REQUIRE( SanitizeLayoutName( "   " ) == std::nullopt );
+    REQUIRE( SanitizeLayoutName( "  Trimmed  " ) == "Trimmed" );
+
+    // Independent namespace from profile names -- a name valid (or already
+    // taken) as a profile carries no meaning for layouts, and vice versa;
+    // this is really just confirming the two functions don't secretly share
+    // mutable state despite sharing their rule text.
+    REQUIRE( SanitizeProfileName( "Simple" ) == SanitizeLayoutName( "Simple" ) );
+}
+
+TEST_CASE( "SaveLayout / LoadLayout round-trip every field", "[config]" )
+{
+    TempConfigHome home;
+
+    HudLayout layout{};
+    layout.fps.placement.enabled = true;
+    layout.fps.placement.x = 0.98f;
+    layout.fps.placement.y = 0.02f;
+    layout.fps.placement.origin = "top-right";
+    layout.fps.placement.scale = 1.25f;
+    layout.fps.frametime_enabled = true;
+    layout.fps.graph_enabled = false;
+    layout.fps.percentiles_enabled = true;
+    layout.fps.fps_label_enabled = false;
+
+    layout.cpu.enabled = true;
+    layout.cpu.x = 0.02f;
+    layout.cpu.y = 0.5f;
+    layout.cpu.origin = "center-left";
+    layout.cpu.scale = 0.75f;
+
+    layout.gpu.enabled = false; // deliberately off, must round-trip as off too
+    layout.media.enabled = true;
+    layout.media.x = 0.5f;
+    layout.media.y = 0.98f;
+    layout.media.origin = "bottom-center";
+    layout.media.scale = 2.0f;
+
+    REQUIRE( SaveLayout( "Advanced", layout ) );
+    REQUIRE( std::filesystem::exists( LayoutPath( "Advanced" ) ) );
+
+    std::optional<HudLayout> oLoaded = LoadLayout( "Advanced" );
+    REQUIRE( oLoaded.has_value() );
+
+    REQUIRE( oLoaded->fps.placement.enabled == true );
+    REQUIRE( oLoaded->fps.placement.x == 0.98f );
+    REQUIRE( oLoaded->fps.placement.y == 0.02f );
+    REQUIRE( oLoaded->fps.placement.origin == "top-right" );
+    REQUIRE( oLoaded->fps.placement.scale == 1.25f );
+    REQUIRE( oLoaded->fps.frametime_enabled == true );
+    REQUIRE( oLoaded->fps.graph_enabled == false );
+    REQUIRE( oLoaded->fps.percentiles_enabled == true );
+    REQUIRE( oLoaded->fps.fps_label_enabled == false );
+
+    REQUIRE( oLoaded->cpu.enabled == true );
+    REQUIRE( oLoaded->cpu.x == 0.02f );
+    REQUIRE( oLoaded->cpu.y == 0.5f );
+    REQUIRE( oLoaded->cpu.origin == "center-left" );
+    REQUIRE( oLoaded->cpu.scale == 0.75f );
+
+    REQUIRE( oLoaded->gpu.enabled == false );
+
+    REQUIRE( oLoaded->media.enabled == true );
+    REQUIRE( oLoaded->media.x == 0.5f );
+    REQUIRE( oLoaded->media.y == 0.98f );
+    REQUIRE( oLoaded->media.origin == "bottom-center" );
+    REQUIRE( oLoaded->media.scale == 2.0f );
+}
+
+TEST_CASE( "LoadLayout on a name that was never saved returns nullopt, not a default layout", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE_FALSE( LoadLayout( "NeverSaved" ).has_value() );
+}
+
+TEST_CASE( "a default-constructed HudLayout has every module disabled -- the valid empty/renders-nothing state", "[config]" )
+{
+    HudLayout layout{};
+    REQUIRE_FALSE( layout.fps.placement.enabled );
+    REQUIRE_FALSE( layout.cpu.enabled );
+    REQUIRE_FALSE( layout.gpu.enabled );
+    REQUIRE_FALSE( layout.media.enabled );
+
+    TempConfigHome home;
+    REQUIRE( SaveLayout( "Empty", layout ) );
+    std::optional<HudLayout> oLoaded = LoadLayout( "Empty" );
+    REQUIRE( oLoaded.has_value() );
+    REQUIRE_FALSE( oLoaded->fps.placement.enabled );
+    REQUIRE_FALSE( oLoaded->cpu.enabled );
+    REQUIRE_FALSE( oLoaded->gpu.enabled );
+    REQUIRE_FALSE( oLoaded->media.enabled );
+}
+
+TEST_CASE( "ListLayouts reports what's actually on disk, sorted, and starts empty", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( ListLayouts().empty() ); // no layouts/ directory yet at all
+
+    REQUIRE( SaveLayout( "Zeta", HudLayout{} ) );
+    REQUIRE( SaveLayout( "Alpha", HudLayout{} ) );
+
+    REQUIRE( ListLayouts() == std::vector<std::string>{ "Alpha", "Zeta" } );
+}
+
+TEST_CASE( "DeleteLayout removes only the intended file, and a missing file is still success", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SaveLayout( "Simple", HudLayout{} ) );
+    REQUIRE( SaveLayout( "Advanced", HudLayout{} ) );
+
+    REQUIRE( DeleteLayout( "Simple" ) );
+    REQUIRE_FALSE( std::filesystem::exists( LayoutPath( "Simple" ) ) );
+    REQUIRE( std::filesystem::exists( LayoutPath( "Advanced" ) ) );
+
+    REQUIRE( DeleteLayout( "Simple" ) ); // already gone -- still success
+}
+
+TEST_CASE( "DeleteLayout refuses a path-escaping name", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SaveLayout( "Simple", HudLayout{} ) );
+    REQUIRE( SaveProfile( "MyProfile", Settings{} ) );
+
+    REQUIRE_FALSE( DeleteLayout( "../profiles/MyProfile" ) );
+    REQUIRE_FALSE( DeleteLayout( "." ) );
+    REQUIRE_FALSE( DeleteLayout( ".." ) );
+    REQUIRE_FALSE( DeleteLayout( "" ) );
+
+    REQUIRE( std::filesystem::exists( LayoutPath( "Simple" ) ) );
+    REQUIRE( std::filesystem::exists( ProfilePath( "MyProfile" ) ) );
+}
+
+TEST_CASE( "fps_display.layout_name round-trips as a plain string reference through SaveGlobal/LoadGlobal", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.fps_display.layout_name = "Advanced";
+    REQUIRE( SaveGlobal( s ) );
+
+    REQUIRE( LoadGlobal().fps_display.layout_name == "Advanced" );
+
+    // Layered globally/per-profile/per-game exactly like every other
+    // fps_display field -- reuses the same full-struct-copy ApplyProfile()
+    // already does (DECISIONS.md #20), so this needs no dedicated
+    // ApplyProfile plumbing of its own.
+    Settings profile{};
+    profile.fps_display.layout_name = "Simple";
+    REQUIRE( SaveProfile( "FPS", profile ) );
+
+    Settings target{};
+    target.fps_display.layout_name = "Advanced";
+    REQUIRE( ApplyProfile( target, "FPS" ) );
+    REQUIRE( target.fps_display.layout_name == "Simple" );
+}
+
+TEST_CASE( "ResolveLayoutCached resolves a saved layout by name without a fresh LoadLayout call", "[config]" )
+{
+    TempConfigHome home;
+
+    HudLayout layout{};
+    layout.cpu.enabled = true;
+    layout.cpu.x = 0.1f;
+    layout.cpu.origin = "top-left";
+    REQUIRE( SaveLayout( "Advanced", layout ) );
+
+    // LoadGlobal()/ResolveEffective() are the "a Settings got (re)loaded"
+    // boundary this cache refreshes on (see ConfigManager.h's own comment)
+    // -- exercise that instead of calling ReloadLayoutCache() directly, so
+    // this test also proves the wiring, not just the cache lookup itself.
+    LoadGlobal();
+
+    const std::string sName = "Advanced";
+    const HudLayout &resolved = ResolveLayoutCached( sName );
+    REQUIRE( resolved.cpu.enabled == true );
+    REQUIRE( resolved.cpu.x == 0.1f );
+    REQUIRE( resolved.cpu.origin == "top-left" );
+}
+
+TEST_CASE( "ResolveLayoutCached degrades to an empty layout for a name that doesn't exist, without crashing", "[config]" )
+{
+    TempConfigHome home;
+
+    const std::string sMissingName = "DoesNotExist";
+    const HudLayout &missing = ResolveLayoutCached( sMissingName );
+    REQUIRE_FALSE( missing.fps.placement.enabled );
+    REQUIRE_FALSE( missing.cpu.enabled );
+    REQUIRE_FALSE( missing.gpu.enabled );
+    REQUIRE_FALSE( missing.media.enabled );
+
+    // Same for an empty name (the "no layout referenced" default) --
+    // ConfigSchema.h's FpsDisplaySettings::layout_name default.
+    const std::string sEmptyName;
+    const HudLayout &empty = ResolveLayoutCached( sEmptyName );
+    REQUIRE_FALSE( empty.fps.placement.enabled );
+}
+
+TEST_CASE( "ResolveLayoutCached degrades to empty for a deleted layout, not stale resurrected data", "[config]" )
+{
+    TempConfigHome home;
+
+    HudLayout layout{};
+    layout.gpu.enabled = true;
+    layout.gpu.origin = "bottom-right";
+    REQUIRE( SaveLayout( "Temp", layout ) );
+
+    LoadGlobal(); // refreshes the cache
+    REQUIRE( ResolveLayoutCached( "Temp" ).gpu.enabled == true );
+
+    REQUIRE( DeleteLayout( "Temp" ) );
+    LoadGlobal(); // refreshes the cache again, post-delete
+
+    const std::string sTempName = "Temp";
+    const HudLayout &afterDelete = ResolveLayoutCached( sTempName );
+    REQUIRE_FALSE( afterDelete.gpu.enabled );
+}
+
+TEST_CASE( "a layout schema_version newer than this build refuses to guess, same as global.json", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( LayoutsDir() );
+    std::ofstream( LayoutPath( "FromTheFuture" ) )
+        << R"({"schema_version": 999, "modules": {"cpu": {"enabled": true}}})";
+
+    REQUIRE_FALSE( LoadLayout( "FromTheFuture" ).has_value() );
+}
+
+TEST_CASE( "malformed layout JSON is treated as not found, never a crash", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( LayoutsDir() );
+    std::ofstream( LayoutPath( "Broken" ) ) << "{ not valid json !!";
+
+    REQUIRE_FALSE( LoadLayout( "Broken" ).has_value() );
+}

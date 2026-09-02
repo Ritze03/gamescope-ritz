@@ -24,6 +24,16 @@ namespace gamescope::config
     // migration scaffolding.
     inline constexpr int kCurrentSchemaVersion = 1;
 
+    // Separate version marker for layouts/<name>.json (HudLayout below) --
+    // deliberately its own constant, not kCurrentSchemaVersion above. A
+    // layout is a different on-disk shape from global/profiles/games (all
+    // of which are a `Settings`), written and read by its own Load/Save
+    // pair (ConfigManager's LoadLayout/SaveLayout) -- so a breaking change
+    // to one shape has no reason to force a version bump (and a
+    // newer-than-this-build refusal, see ParseConfigFile's schema_version
+    // check) on files of the other shape.
+    inline constexpr int kCurrentLayoutSchemaVersion = 1;
+
     struct GamescopeSettings
     {
         std::string filter = "LINEAR";   // LINEAR | NEAREST | FSR | NIS | PIXEL
@@ -165,6 +175,156 @@ namespace gamescope::config
         std::optional<int> color_cpu;
         std::optional<int> color_gpu;
         std::optional<int> color_media;
+
+        // Phase 0 of the manual-placement HUD-layout rework (see
+        // superdoc/architecture/hud-layouts.md) -- names a
+        // layouts/<name>.json (HudLayout below, ConfigManager's
+        // LoadLayout/SaveLayout/ResolveLayoutCached) whose content this
+        // layer's HUD should render. Empty (the default -- ship no default
+        // layouts, per the design doc) means "no layout referenced," which
+        // resolves to a completely empty HudLayout{} and therefore renders
+        // nothing -- the same deliberate, valid state a name that no
+        // longer exists on disk also resolves to (ResolveLayoutCached's
+        // own comment): a deleted/renamed/mistyped layout_name degrades to
+        // "nothing drawn," never a crash and never stale/resurrected data.
+        //
+        // A REFERENCE, not a copy: layered globally/per-profile/per-game
+        // exactly like every other field in this struct (the existing
+        // layering machinery is reused as-is for the field itself), but
+        // deliberately NOT routed through ApplyProfile()'s one-time-copy
+        // semantics (DECISIONS.md #20) the way `enabled`/font_size/etc.
+        // just above are. ApplyProfile() copies this string like any other
+        // fps_display field (so applying a profile does change WHICH
+        // layout a game points at, once), but the layout's own CONTENT
+        // (module positions, toggles) is never baked into Settings at all
+        // -- it is resolved from the name at use time, so an edit made to
+        // a layout later reaches every profile/game that still names it,
+        // in contrast to every other profile field, which freezes at
+        // apply-time. See superdoc/architecture/hud-layouts.md for the
+        // full reference-vs-copy contrast.
+        //
+        // Per-module content toggles (which of Fps/Cpu/Gpu/Media show, and
+        // the Fps module's frametime/graph/percentiles/label sub-rows)
+        // moved to HudLayout below by design -- "Simple" and "Advanced"
+        // differ in both what's on and where it sits, so both live in the
+        // one entity. The toggles just above this comment
+        // (cpu_enabled/gpu_enabled/media_enabled/fps_enabled/
+        // graph_enabled/percentiles_enabled/frametime_enabled/
+        // fps_label_enabled) are left untouched for this phase -- they are
+        // still what FpsDisplay.cpp actually reads to render today (Phase
+        // 0 is schema-and-persistence only, no rendering-path change); a
+        // later phase switches FpsDisplay.cpp to read a resolved
+        // HudLayout instead and retires these copies.
+        std::string layout_name;
+    };
+
+    // ---- HUD layouts (Phase 0 of the manual-placement rework) ----------------
+    // See superdoc/architecture/hud-layouts.md for the full design and the
+    // reference-vs-copy rationale (FpsDisplaySettings::layout_name's own
+    // comment above has the short version). Stored as its own
+    // layouts/<name>.json, parallel to profiles/<name>.json and
+    // games/<AppId>.json but NEVER routed through ApplyProfile()'s
+    // one-time-copy path -- a layout is referenced by name and resolved at
+    // use time (ConfigManager's LoadLayout/ResolveLayoutCached), so editing
+    // it updates every profile/game that names it, which is the opposite of
+    // what ApplyProfile()'s deliberate copy semantics (DECISIONS.md #20)
+    // give a profile.
+    //
+    // Ships with no default layouts by design (the user's explicit call,
+    // recorded in superdoc/architecture/hud-layouts.md) -- a
+    // default-constructed HudLayout{} has every module's `enabled` false,
+    // so it is already a completely valid "renders nothing" state with no
+    // special-casing required anywhere that resolves one.
+
+    // One module's manual placement within a layout. Shared shape for all
+    // four modules (Fps/Cpu/Gpu/Media, FpsDisplay.cpp's ModuleKind) --
+    // Fps additionally carries its own sub-row toggles, see
+    // HudLayoutFpsModule below.
+    struct HudLayoutModule
+    {
+        // Whether this layout shows the module at all -- replaces
+        // FpsDisplaySettings::cpu_enabled/gpu_enabled/media_enabled/
+        // fps_enabled for any layer whose fps_display.layout_name resolves
+        // to this layout (see that field's comment). Default false, same
+        // "an unset/empty layout renders nothing" reasoning as the whole
+        // HudLayout -- there is no sense in which an unplaced module
+        // (x/y/origin all at their arbitrary defaults below) should
+        // default to visible.
+        bool enabled = false;
+
+        // Normalised position of `origin` below on the display -- (0, 0)
+        // is the screen's own top-left corner, (1, 1) its bottom-right,
+        // resolution-independent by construction (the whole point of this
+        // rework over the old fixed-anchor+pixel-margin scheme). Not
+        // bounds-clamped at parse time (see ConfigManager.cpp's
+        // HudLayoutModuleFromJson) -- a value outside 0..1 places the
+        // module off-screen rather than being silently corrected, exactly
+        // as an out-of-range value elsewhere in this file is handled (e.g.
+        // sdr_gamut_wideness's -1 sentinel); a future editor UI is what
+        // should keep the user from typing one, not the parser.
+        float x = 0.0f; // 0.0..1.0
+        float y = 0.0f; // 0.0..1.0
+
+        // Which of the module's own nine points sits at (x, y) above, so
+        // an edge/corner placement doesn't clip off-screen (e.g. anchoring
+        // to the bottom-right corner of the display needs the MODULE'S
+        // bottom-right corner at (1, 1), not its top-left, to stay fully
+        // visible). One of the same 9 strings FpsDisplaySettings::
+        // placement / OverlaySettings::notification_placement already use
+        // (Overlay/Notifications.cpp's kPlacements 3x3 table, Overlay/UI/
+        // Controls.cpp's AnchorGrid widget) -- reused verbatim rather than
+        // a new enum/int pair so a later layout editor can drive this
+        // field with the exact same AnchorGrid control and string
+        // conversion those already have, and so "one of 9 anchor points"
+        // keeps exactly one representation across the whole codebase.
+        std::string origin = "top-left"; // one of kPlacements' 9 strings
+
+        // Per-module, per-layout size multiplier -- independent of
+        // overlay.display_scale (a global, process-level UI-wide scale)
+        // and of font_size (a global, all-modules-equally value): this is
+        // what lets "Simple" size its one module differently from
+        // "Advanced"'s four. Bounds are 0.25..4.0: floored above zero so a
+        // module can never shrink to an unreadable/zero-size sliver (and
+        // never divide-by-zero anywhere this later multiplies a size), and
+        // capped at 4x so a single mistyped/hand-edited value can't render
+        // something absurdly larger than the display -- 4x still comfortably
+        // covers a deliberate single-module accessibility-sized HUD, which
+        // is the only realistic reason to go that high.
+        float scale = 1.0f; // 0.25..4.0
+    };
+
+    // The Fps module's placement, plus its own sub-row toggles. Frametime/
+    // graph/percentiles/the unit label are sub-rows drawn INSIDE the Fps
+    // module (FpsDisplay.cpp's MeasureFpsModule()), not independently
+    // placeable -- so they carry no x/y/origin/scale of their own, just an
+    // on/off, same as the toggles they replace (FpsDisplaySettings::
+    // frametime_enabled/graph_enabled/percentiles_enabled/
+    // fps_label_enabled -- see that struct's layout_name comment for why
+    // those originals stay put, untouched, for this phase).
+    struct HudLayoutFpsModule
+    {
+        HudLayoutModule placement;
+
+        bool frametime_enabled = false;
+        bool graph_enabled = false;
+        bool percentiles_enabled = false;
+        bool fps_label_enabled = false;
+    };
+
+    // A named, standalone layout -- see this section's header comment.
+    // Explicit named fields (fps/cpu/gpu/media), not a map, mirroring this
+    // file's own convention for a small, fixed, compile-time-known set
+    // (e.g. GamescopeSettings' fields) rather than the open-ended-key-set
+    // shape a std::map earns elsewhere in this file (e.g.
+    // OverlaySettings::panel_geometry, keyed by a set of panel ids that
+    // really can grow/rename over time) -- FpsDisplay.cpp's ModuleKind
+    // enum is exactly four values and has been since it was introduced.
+    struct HudLayout
+    {
+        HudLayoutFpsModule fps;
+        HudLayoutModule cpu;
+        HudLayoutModule gpu;
+        HudLayoutModule media;
     };
 
     struct ReshadeVibrancySettings

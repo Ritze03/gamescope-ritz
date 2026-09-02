@@ -757,6 +757,45 @@ resolution explicitly (`"notification placement is global-only..."`,
 
 ---
 
+## HUD Layouts
+
+### 26. A layout is referenced by name, resolved at use time — never copied through `ApplyProfile()`
+**Status:** DECIDED
+
+**Why:** The manual-placement HUD-layout rework (replacing the old auto-anchored
+module stack) needs "editing a layout updates it everywhere it's used" — named layouts
+like "Simple"/"Advanced" are shared, standalone entities a profile or game merely
+*points at*. That is the exact opposite of decision 20's `ApplyProfile()` semantics (a
+deliberate one-time copy, so editing a profile afterward never retroactively changes
+anything that already applied it). Routing layout content through the profile-copy
+path would have silently frozen a layout's placement at apply-time, defeating the
+whole point of a shared, editable layout.
+
+**Consequences:** `FpsDisplaySettings::layout_name` (a plain string) is layered
+globally/per-profile/per-game exactly like every other `fps_display` field, and
+`ApplyProfile()` copies that *name* like any other field (a one-time "point this
+profile-applier at layout X" choice, consistent with decision 20). But the layout's
+own *content* — module positions, per-module/per-row toggles — is never baked into a
+`Settings` object at all, at any layer, at any point; it is stored only in its own
+`layouts/<name>.json` (parallel to, not inside, `profiles/`/`games/`) and resolved
+from the name at use time via `ConfigManager::ResolveLayoutCached()`. A layout that
+no longer exists (deleted, renamed, mistyped) degrades to a completely valid empty
+`HudLayout{}` — "render nothing" — rather than an error or stale data, and the store
+ships with **no default layouts at all**: an unset `layout_name` is exactly that same
+valid empty state. Content toggles that used to live on `FpsDisplaySettings`
+(`cpu_enabled`/`gpu_enabled`/`media_enabled`/`fps_enabled`/`graph_enabled`/
+`percentiles_enabled`/`frametime_enabled`/`fps_label_enabled`) conceptually move to
+the layout (`HudLayoutModule::enabled`, `HudLayoutFpsModule`'s sub-row toggles) — the
+originals stay on `FpsDisplaySettings` for Phase 0 only, since `FpsDisplay.cpp` still
+reads them and retiring them is a later, separate phase's job.
+
+**Source:** Task brief (Phase 0 of the HUD-layout rework);
+`superdoc/architecture/hud-layouts.md` (full design); `src/Config/ConfigSchema.h`
+(`HudLayout`/`HudLayoutModule`/`HudLayoutFpsModule`/`FpsDisplaySettings::layout_name`);
+`src/Config/ConfigManager.{h,cpp}`; `tests/test_config.cpp`.
+
+---
+
 ## Still open
 
 One genuine open item remains: the ReShade manager's single-effect-at-a-time

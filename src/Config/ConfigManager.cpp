@@ -172,6 +172,10 @@ namespace gamescope::config
                 s.fps_display.color_cpu = JGetOptInt( *pFps, "color_cpu" );
                 s.fps_display.color_gpu = JGetOptInt( *pFps, "color_gpu" );
                 s.fps_display.color_media = JGetOptInt( *pFps, "color_media" );
+                // Phase 0 HUD-layout rework: which layouts/<name>.json this
+                // layer's HUD renders, a plain string reference (see
+                // ConfigSchema.h's FpsDisplaySettings::layout_name comment).
+                s.fps_display.layout_name = JGetString( *pFps, "layout_name", s.fps_display.layout_name );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -354,6 +358,7 @@ namespace gamescope::config
                 ? nlohmann::json( *s.fps_display.color_gpu ) : nlohmann::json( nullptr );
             jFps[ "color_media" ] = s.fps_display.color_media.has_value()
                 ? nlohmann::json( *s.fps_display.color_media ) : nlohmann::json( nullptr );
+            jFps[ "layout_name" ] = s.fps_display.layout_name;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
@@ -462,6 +467,96 @@ namespace gamescope::config
                 j[ "overlay" ] = std::move( jOverlay );
             }
 
+            return j;
+        }
+
+        // ---- HudLayout <-> json ---------------------------------------------
+        // Phase 0 of the manual-placement HUD-layout rework (ConfigSchema.h's
+        // HudLayout comment). Same type-checked-field-access discipline as
+        // SettingsFromJson/SettingsToJson above, deliberately kept as its
+        // own pair of functions rather than folded into those - a layout
+        // file is a different on-disk shape entirely (layouts/<name>.json,
+        // never a `Settings`), and keeping the two conversions textually
+        // separate is what lets HudLayout's own schema_version
+        // (kCurrentLayoutSchemaVersion) evolve independently of Settings'.
+
+        HudLayoutModule HudLayoutModuleFromJson( const nlohmann::json &j )
+        {
+            HudLayoutModule m{};
+            m.enabled = JGetBool( j, "enabled", m.enabled );
+            m.x = JGetFloat( j, "x", m.x );
+            m.y = JGetFloat( j, "y", m.y );
+            m.origin = JGetString( j, "origin", m.origin );
+            m.scale = JGetFloat( j, "scale", m.scale );
+            return m;
+        }
+
+        nlohmann::json HudLayoutModuleToJson( const HudLayoutModule &m )
+        {
+            nlohmann::json j = nlohmann::json::object();
+            j[ "enabled" ] = m.enabled;
+            j[ "x" ] = m.x;
+            j[ "y" ] = m.y;
+            j[ "origin" ] = m.origin;
+            j[ "scale" ] = m.scale;
+            return j;
+        }
+
+        HudLayoutFpsModule HudLayoutFpsModuleFromJson( const nlohmann::json &j )
+        {
+            HudLayoutFpsModule m{};
+            m.placement = HudLayoutModuleFromJson( j );
+            m.frametime_enabled = JGetBool( j, "frametime_enabled", m.frametime_enabled );
+            m.graph_enabled = JGetBool( j, "graph_enabled", m.graph_enabled );
+            m.percentiles_enabled = JGetBool( j, "percentiles_enabled", m.percentiles_enabled );
+            m.fps_label_enabled = JGetBool( j, "fps_label_enabled", m.fps_label_enabled );
+            return m;
+        }
+
+        nlohmann::json HudLayoutFpsModuleToJson( const HudLayoutFpsModule &m )
+        {
+            // Flattened onto one object (placement's own fields alongside
+            // the sub-row toggles) rather than a nested "placement" object -
+            // every field here is equally "the fps module's own settings"
+            // from the on-disk shape's point of view; the placement/toggle
+            // split is a C++-side grouping only (HudLayoutFpsModule's own
+            // comment in ConfigSchema.h).
+            nlohmann::json j = HudLayoutModuleToJson( m.placement );
+            j[ "frametime_enabled" ] = m.frametime_enabled;
+            j[ "graph_enabled" ] = m.graph_enabled;
+            j[ "percentiles_enabled" ] = m.percentiles_enabled;
+            j[ "fps_label_enabled" ] = m.fps_label_enabled;
+            return j;
+        }
+
+        HudLayout HudLayoutFromJson( const nlohmann::json &j )
+        {
+            HudLayout layout{};
+            if ( const nlohmann::json *pModules = JGetObject( j, "modules" ) )
+            {
+                if ( const nlohmann::json *pFps = JGetObject( *pModules, "fps" ) )
+                    layout.fps = HudLayoutFpsModuleFromJson( *pFps );
+                if ( const nlohmann::json *pCpu = JGetObject( *pModules, "cpu" ) )
+                    layout.cpu = HudLayoutModuleFromJson( *pCpu );
+                if ( const nlohmann::json *pGpu = JGetObject( *pModules, "gpu" ) )
+                    layout.gpu = HudLayoutModuleFromJson( *pGpu );
+                if ( const nlohmann::json *pMedia = JGetObject( *pModules, "media" ) )
+                    layout.media = HudLayoutModuleFromJson( *pMedia );
+            }
+            return layout;
+        }
+
+        nlohmann::json HudLayoutToJson( const HudLayout &layout )
+        {
+            nlohmann::json jModules = nlohmann::json::object();
+            jModules[ "fps" ] = HudLayoutFpsModuleToJson( layout.fps );
+            jModules[ "cpu" ] = HudLayoutModuleToJson( layout.cpu );
+            jModules[ "gpu" ] = HudLayoutModuleToJson( layout.gpu );
+            jModules[ "media" ] = HudLayoutModuleToJson( layout.media );
+
+            nlohmann::json j = nlohmann::json::object();
+            j[ "schema_version" ] = kCurrentLayoutSchemaVersion;
+            j[ "modules" ] = std::move( jModules );
             return j;
         }
 
@@ -714,32 +809,60 @@ namespace gamescope::config
         return GamesDir() + "/" + std::string{ svAppId } + ".json";
     }
 
+    std::string LayoutsDir()
+    {
+        return ConfigRoot() + "/layouts";
+    }
+
+    std::string LayoutPath( std::string_view svSanitizedName )
+    {
+        return LayoutsDir() + "/" + std::string{ svSanitizedName } + ".json";
+    }
+
+    namespace
+    {
+        // Shared implementation for SanitizeProfileName/SanitizeLayoutName
+        // below - identical rule, kept as one body (rather than two copies
+        // that could quietly drift apart) precisely because the two public
+        // functions are deliberately independent names/namespaces, not
+        // aliases of each other (see each one's own header comment).
+        std::optional<std::string> SanitizeNameForPathComponent( std::string_view svName )
+        {
+            std::string sOut;
+            sOut.reserve( svName.size() );
+            for ( char c : svName )
+            {
+                bool bAllowed = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) ||
+                    ( c >= '0' && c <= '9' ) || c == ' ' || c == '_' || c == '-';
+                if ( bAllowed )
+                    sOut.push_back( c );
+            }
+
+            size_t nStart = sOut.find_first_not_of( ' ' );
+            if ( nStart == std::string::npos )
+                return std::nullopt;
+            size_t nEnd = sOut.find_last_not_of( ' ' );
+            sOut = sOut.substr( nStart, nEnd - nStart + 1 );
+
+            if ( sOut.empty() || sOut == "." || sOut == ".." )
+                return std::nullopt;
+
+            constexpr size_t kMaxLength = 100;
+            if ( sOut.size() > kMaxLength )
+                sOut.resize( kMaxLength );
+
+            return sOut;
+        }
+    }
+
     std::optional<std::string> SanitizeProfileName( std::string_view svName )
     {
-        std::string sOut;
-        sOut.reserve( svName.size() );
-        for ( char c : svName )
-        {
-            bool bAllowed = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) ||
-                ( c >= '0' && c <= '9' ) || c == ' ' || c == '_' || c == '-';
-            if ( bAllowed )
-                sOut.push_back( c );
-        }
+        return SanitizeNameForPathComponent( svName );
+    }
 
-        size_t nStart = sOut.find_first_not_of( ' ' );
-        if ( nStart == std::string::npos )
-            return std::nullopt;
-        size_t nEnd = sOut.find_last_not_of( ' ' );
-        sOut = sOut.substr( nStart, nEnd - nStart + 1 );
-
-        if ( sOut.empty() || sOut == "." || sOut == ".." )
-            return std::nullopt;
-
-        constexpr size_t kMaxLength = 100;
-        if ( sOut.size() > kMaxLength )
-            sOut.resize( kMaxLength );
-
-        return sOut;
+    std::optional<std::string> SanitizeLayoutName( std::string_view svName )
+    {
+        return SanitizeNameForPathComponent( svName );
     }
 
     // ---- loading ---------------------------------------------------------------
@@ -748,6 +871,16 @@ namespace gamescope::config
     {
         std::string sPath = GlobalConfigPath();
         SweepStaleTempFiles( sPath );
+
+        // Phase 0 HUD-layout rework: this is one of the "a Settings got
+        // (re)loaded" boundaries ResolveLayoutCached's own header comment
+        // promises refreshes the layout cache - covers startup and every
+        // direct LoadGlobal() caller, not just the ResolveEffective() path
+        // below (whose per-game-override branch never reaches this
+        // function at all, hence that function making its own equivalent
+        // call too).
+        ReloadLayoutCache();
+
         std::optional<std::string> oText = ReadWholeFile( sPath );
         if ( !oText )
             return Settings{};
@@ -774,6 +907,34 @@ namespace gamescope::config
         return SettingsFromJson( *oJson );
     }
 
+    std::optional<HudLayout> LoadLayout( std::string_view svSanitizedName )
+    {
+        std::string sPath = LayoutPath( svSanitizedName );
+        SweepStaleTempFiles( sPath );
+        std::optional<std::string> oText = ReadWholeFile( sPath );
+        if ( !oText )
+            return std::nullopt;
+
+        nlohmann::json j = nlohmann::json::parse( *oText, /*callback*/ nullptr, /*allow_exceptions*/ false );
+        if ( j.is_discarded() || !j.is_object() )
+        {
+            s_ConfigLog.errorf( "%s: malformed JSON, treating layout as not found", sPath.c_str() );
+            return std::nullopt;
+        }
+
+        int nVersion = 0;
+        if ( auto it = j.find( "schema_version" ); it != j.end() && it->is_number_integer() )
+            nVersion = it->get<int>();
+        if ( nVersion > kCurrentLayoutSchemaVersion )
+        {
+            s_ConfigLog.errorf( "%s: layout schema_version %d is newer than this build understands (%d) - refusing to guess, treating as not found",
+                sPath.c_str(), nVersion, kCurrentLayoutSchemaVersion );
+            return std::nullopt;
+        }
+
+        return HudLayoutFromJson( j );
+    }
+
     std::optional<Settings> LoadPerGameOverride( std::string_view svAppId )
     {
         std::string sPath = GamePath( svAppId );
@@ -797,7 +958,16 @@ namespace gamescope::config
         if ( oAppId )
         {
             if ( std::optional<Settings> oGame = LoadPerGameOverride( *oAppId ) )
+            {
+                // The per-game-override branch returns without ever
+                // calling LoadGlobal() below, so it needs LoadGlobal()'s
+                // own ReloadLayoutCache() call duplicated here - this is
+                // still one of the "a Settings got (re)loaded" boundaries
+                // ResolveLayoutCached promises a refresh at, regardless of
+                // which layer won.
+                ReloadLayoutCache();
                 return *oGame;
+            }
         }
         return LoadGlobal();
     }
@@ -814,6 +984,36 @@ namespace gamescope::config
         nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
         j[ "name" ] = std::string{ svSanitizedName };
         return WriteFileAtomic( ProfilePath( svSanitizedName ), DumpJson( j ) );
+    }
+
+    bool SaveLayout( std::string_view svSanitizedName, const HudLayout &layout )
+    {
+        nlohmann::json j = HudLayoutToJson( layout );
+        j[ "name" ] = std::string{ svSanitizedName };
+        return WriteFileAtomic( LayoutPath( svSanitizedName ), DumpJson( j ) );
+    }
+
+    bool DeleteLayout( std::string_view svSanitizedName )
+    {
+        // Same bare-name guard as DeletePerGameOverride - no path
+        // separator, not "." / "..".
+        if ( svSanitizedName.empty() || svSanitizedName.find( '/' ) != std::string_view::npos ||
+            svSanitizedName == "." || svSanitizedName == ".." )
+        {
+            s_ConfigLog.errorf( "DeleteLayout: refusing suspicious layout name '%.*s'",
+                (int)svSanitizedName.size(), svSanitizedName.data() );
+            return false;
+        }
+
+        std::filesystem::path path( LayoutPath( svSanitizedName ) );
+        // Containment check, same defense-in-depth as DeletePerGameOverride's
+        // own comment: this must resolve to a direct child of LayoutsDir().
+        if ( path.parent_path() != std::filesystem::path( LayoutsDir() ) )
+            return false;
+
+        std::error_code ec;
+        std::filesystem::remove( path, ec );
+        return !ec || ec == std::errc::no_such_file_or_directory;
     }
 
     bool SnapshotPerGameOverride( std::string_view svAppId, const Settings &snapshot )
@@ -1138,6 +1338,13 @@ namespace gamescope::config
         ConfigWriter::Instance().Enqueue( ProfilePath( sSanitizedName ), DumpJson( j ) );
     }
 
+    void EnqueueLayoutWrite( std::string sSanitizedName, HudLayout layout )
+    {
+        nlohmann::json j = HudLayoutToJson( layout );
+        j[ "name" ] = sSanitizedName;
+        ConfigWriter::Instance().Enqueue( LayoutPath( sSanitizedName ), DumpJson( j ) );
+    }
+
     void FlushPendingWrites()
     {
         ConfigWriter::Instance().Flush();
@@ -1178,6 +1385,57 @@ namespace gamescope::config
     std::vector<std::string> ListGameIds()
     {
         return ListJsonStems( GamesDir() );
+    }
+
+    std::vector<std::string> ListLayouts()
+    {
+        return ListJsonStems( LayoutsDir() );
+    }
+
+    // ---- HUD layout cache -------------------------------------------------
+
+    namespace
+    {
+        bool s_bLayoutCacheLoaded = false;
+        std::map<std::string, HudLayout> s_LayoutCache;
+        // Returned by ResolveLayoutCached() for "not found" - a
+        // default-constructed HudLayout{} has every module's `enabled`
+        // false, which is already exactly "renders nothing" (this section's
+        // header comment in ConfigSchema.h), so no separate sentinel type
+        // is needed.
+        const HudLayout s_EmptyLayout{};
+    }
+
+    void ReloadLayoutCache()
+    {
+        std::map<std::string, HudLayout> fresh;
+        for ( const std::string &sName : ListLayouts() )
+        {
+            if ( std::optional<HudLayout> oLayout = LoadLayout( sName ) )
+                fresh.emplace( sName, std::move( *oLayout ) );
+            // A layout file that fails to load (malformed / too-new
+            // schema_version, already logged by LoadLayout) is simply
+            // absent from the cache - any profile/game still naming it
+            // resolves through ResolveLayoutCached's own "not found" path
+            // below, same as a deleted or never-existing name.
+        }
+        s_LayoutCache = std::move( fresh );
+        s_bLayoutCacheLoaded = true;
+    }
+
+    const HudLayout &ResolveLayoutCached( const std::string &sLayoutName )
+    {
+        if ( !s_bLayoutCacheLoaded )
+            ReloadLayoutCache();
+
+        if ( sLayoutName.empty() )
+            return s_EmptyLayout;
+
+        auto it = s_LayoutCache.find( sLayoutName );
+        if ( it == s_LayoutCache.end() )
+            return s_EmptyLayout;
+
+        return it->second;
     }
 
     // ---- session routing -------------------------------------------------------
@@ -1278,6 +1536,12 @@ namespace gamescope::config
         // Issue #35: CurrentFullSettings()'s cache (above) is the same
         // process-wide hazard, for the same reason.
         s_bLastKnownSettingsLoaded = false;
+        // Phase 0 HUD-layout rework: ResolveLayoutCached's cache is the
+        // same process-wide hazard, for the same reason - a stale entry
+        // read against a prior test's (already-deleted) TempConfigHome
+        // must not leak into the next one.
+        s_bLayoutCacheLoaded = false;
+        s_LayoutCache.clear();
     }
 
     std::string DebugDumpEffective( const std::optional<std::string> &oAppId )
