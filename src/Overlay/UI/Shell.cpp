@@ -2391,10 +2391,19 @@ namespace gamescope::ui::shell
 			ImGui::SetCursorScreenPos( rcBand.Min );
 			ImGui::PushID( entry.Id().c_str() );
 
-			// The band's own hit box covers line 1 ONLY. The body owns the
-			// rest, and a click there must reach the grid rather than being
-			// swallowed by a full-band selector drawn on top of it.
-			const ImRect rcHit( rcBand.Min.x, rcBand.Min.y, bl.rcBody.Min.x, bl.line1.Bounds().Max.y );
+			// The band's hit box covers the WHOLE band -- every line, not just
+			// line 1 -- exactly like DrawEntryRow's own "##row" button covers
+			// the whole row rather than stopping short of the control lane.
+			// Restricting it to line 1 (as this used to) or to the columns
+			// left of the body left every line below 1, outside the body,
+			// dead: it looked clickable and was not (the "Toast placement" /
+			// "Accent colour" report). SetNextItemAllowOverlap() below is
+			// what keeps this safe -- see D22, same reason as the row's own
+			// selector: the body's own atoms (grid cells, the hue rail,
+			// swatches, ...) are submitted AFTER this button, so ImGui
+			// resolves their hover/click in their favour wherever they
+			// overlap it, and this button only wins the band's empty air.
+			const ImRect rcHit = rcBand;
 			ImGui::SetCursorScreenPos( rcHit.Min );
 			// D22, same reason as the row's own selector -- see DrawEntryRow.
 			// Line 1 of a composite carries its value readout and, for some

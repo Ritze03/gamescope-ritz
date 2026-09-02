@@ -126,6 +126,11 @@ The newest version below is the one this build reports.
   slightly inside the visible point, inset by roughly half the outline
   width, because the click point was set at the shape's underlying corner
   rather than the outline's actual outer edge.
+- **Multi-line rows (Toast placement, Accent colour, and every other
+  placement/colour/graph row) are now clickable across their whole
+  height**: only the top line used to accept a click, leaving most of the
+  row's visible area dead; the row's own grid cells and swatches still get
+  first claim on a click, same as before.
 
 ### Removed
 - **The Shell settings tab and its Inspector/Layout options**: close the

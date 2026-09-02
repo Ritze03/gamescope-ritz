@@ -1616,6 +1616,20 @@ clicking the air on lines 2..n does nothing rather than selecting the row. That 
 trade — a grid you cannot click is a control that renders and does nothing (#25, #68), and a
 strip of dead air is not.
 
+> **Superseded 2026-09-02.** The user reported the "visible cost" as a real bug: "I have to
+> click within the bounds of a normal line... this makes it awkward" — general across every
+> multi-line row kind (Anchor, Hue, Color), not just the anchor grid this decision named.
+> D15.2's premise ("the obvious version... swallows every click meant for the grid") turned
+> out to be false: `DrawEntryRow`'s own `##row` selector already covers the FULL row,
+> including the control lane, and does not swallow the control's clicks, because of
+> `SetNextItemAllowOverlap()` (D22, discovered after D15.2 was written) — the button submitted
+> first still loses the hit test to whatever is submitted after it at the same position.
+> `DrawCompositeBand()`'s hit rect (`Shell.cpp`) now covers the whole band the same way
+> (`rcHit = rcBand`), and the body's own atoms (grid cells, hue rail, swatches — all submitted
+> after the band selector) keep first claim exactly as the row's atoms already did. The
+> dead-air trade this decision accepted was never necessary once D22 existed; D15.2 just never
+> revisited it.
+
 **D15.3 · A composite reads and resets BOTH its axes, and that is a registry change, not a
 renderer one.** An anchor is one setting whose value is a pair. `HasDefault`/`IsAtDefault`/
 `ResetToDefault` previously read `m_Bind` alone, so an anchor at the right column but the wrong
