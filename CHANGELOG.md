@@ -140,6 +140,8 @@ The newest version below is the one this build reports.
   `L Ctrl + R Ctrl — Launcher` hint.
 - **Read-only rows** (status readouts, meters, graphs) no longer appear in
   launcher search.
+- **The HUD's old shared placement, margin, and module-spacing settings**:
+  replaced by independent per-module positioning (see the Info note below).
 
 ### Info
 - **The overlay's hotkeys moved off Ctrl**: the settings overlay now opens with
@@ -160,6 +162,13 @@ The newest version below is the one this build reports.
   Display, Shaders, Audio, Config and Monitor.
 - **The default cursor size is now 0.8x**, down from 1.0x. If you've already set
   your own size it is unaffected.
+- **The performance HUD goes blank until you set up a new layout**: its
+  modules (Frame Rate, CPU, GPU, Now Playing) now position independently
+  instead of stacking together at one shared corner, so any placement you
+  had is gone; there's no in-app way to set a new one yet, but a layout
+  editor for it is coming.
+- **The HUD's settings tab is renamed "HUD"**, from "Monitor," to avoid
+  confusion with this project's own "Overlay" naming elsewhere.
 
 ## [0.3.1] – 2026-08-24
 

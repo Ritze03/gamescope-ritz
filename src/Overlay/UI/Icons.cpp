@@ -140,7 +140,7 @@ namespace gamescope::ui
 			Rect( 4.0f, 8.0f, 10.0f, 14.5f ),
 			Rect( 14.0f, 12.0f, 20.0f, 18.5f ) } },
 
-		{ "system.monitor", 4, {
+		{ "system.hud", 4, {
 			// A bar chart standing on a baseline -- SPEC §8.0's second
 			// licensed fill. Solid bars, because the silhouette IS the
 			// identity here: three filled blocks of different heights.

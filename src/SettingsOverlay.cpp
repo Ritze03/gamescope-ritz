@@ -1132,7 +1132,7 @@ namespace gamescope
 			// The FPS HUD over the game is drawn by FpsDisplay.cpp's own
 			// context and is NOT here at all -- this never touched it.
 			// Only the HUD's settings half moved, hosted as the
-			// `system.monitor` area.
+			// `system.hud` area.
 			gamescope::ui::shell::Draw();
 		}
 		if ( flStartupAlpha > 0.0f )

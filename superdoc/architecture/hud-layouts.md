@@ -1,10 +1,13 @@
 # HUD layouts (manual per-module placement)
 
-**Status: Phase 0 only — schema and persistence, no rendering, no UI.** This page
-documents the data model and store `src/Config/ConfigSchema.h` /
-`src/Config/ConfigManager.{h,cpp}` now have; later phases wire `src/Overlay/FpsDisplay.cpp`
-and an editor UI onto it. Everything below already builds, is unit-tested
-(`tests/test_config.cpp`, `[config]` tag), and changes nothing anyone sees on screen yet.
+**Status: Phase 1 — rendering is live, no editor UI yet.** This page documents the data
+model and store (`src/Config/ConfigSchema.h` / `src/Config/ConfigManager.{h,cpp}`,
+built in Phase 0) and, from Phase 1, the render-side change that makes
+`src/Overlay/FpsDisplay.cpp` actually draw from a resolved `HudLayout` instead of the
+old single anchored stack. There is still no UI to create or edit a layout by hand in
+the settings panel — that is Phase 3's drag-and-drop editor; today a layout only comes
+from hand-editing `layouts/<name>.json` or a future tool that calls `SaveLayout()`/
+`EnqueueLayoutWrite()` directly.
 
 ## Why this replaces the old anchored-stack layout
 
@@ -194,20 +197,120 @@ ResolveLayoutCached(name) -> const HudLayout&        // in-memory, safe at ~60fp
 ReloadLayoutCache()                                  // called automatically by LoadGlobal()/ResolveEffective()
 ```
 
-## What Phase 0 deliberately does not touch
+## Phase 1: the render change
 
-`src/Overlay/FpsDisplay.cpp` is unchanged. It still reads
-`FpsDisplaySettings::cpu_enabled`/`gpu_enabled`/`media_enabled`/`fps_enabled`/
-`graph_enabled`/`percentiles_enabled`/`frametime_enabled`/`fps_label_enabled`/
-`placement`/`margin_vertical`/`margin_horizontal` exactly as before — none of that
-rendering behaviour has changed yet. Those fields stay on `FpsDisplaySettings` for now
-even though their *conceptual* home is now a layout's per-module `enabled` and the Fps
-module's own sub-row toggles (the "content toggles belong to the layout" decision) —
-removing them this phase would have broken `FpsDisplay.cpp`, which is out of this
-phase's scope and owned by a later, parallel phase. A later phase switches
-`FpsDisplay.cpp` to read a `ResolveLayoutCached()` result instead and retires these
-copies from `FpsDisplaySettings`.
+`FpsDisplay.cpp`'s `DrawReadout()` used to run two passes: measure all four modules
+into one shared-width vertical stack, then anchor that single stack to a 3x3 cell
+(`FpsDisplaySettings::placement`) with pixel margins and walk a cursor down it. Phase 1
+replaces pass 2 (and simplifies pass 1, which no longer needs a shared stack width or
+an edge-relative draw order) — pass 1 still measures each module before it has a
+position to draw at (`Measure*Module()`, unchanged internally except for where the Fps
+module's sub-row toggles come from, below), but each module now resolves its own box
+position independently:
 
-No default layouts ship, and no UI exists yet to create one — `HudLayout` is reachable
-today only via `ConfigManager`'s API and `tests/test_config.cpp`'s direct coverage of
-it.
+- `DrawReadout()` calls `config::ResolveLayoutCached( cfg.layout_name )` fresh on every
+  call — a cheap in-memory map lookup (see that function's own comment), safe at this
+  render path's cadence, so a layout change is visible on the very next repaint rather
+  than added latency on top of whatever cadence already governs when that repaint
+  happens (the HUD's existing 500ms `EnsureRepaintTimerThread`, untouched by this
+  phase).
+- `MeasureModule()` (`FpsDisplay.cpp`) now gates each module's presence on the resolved
+  layout's own `enabled` (`HudLayoutModule::enabled` for Cpu/Gpu/Media,
+  `HudLayout::fps.placement.enabled` for Fps) instead of
+  `FpsDisplaySettings::cpu_enabled`/`gpu_enabled`/`media_enabled`/`fps_enabled`. Those
+  `FpsDisplaySettings` fields still exist (see below) but are no longer read by the
+  render path.
+- `MeasureFpsModule()` gained a second parameter, `const config::HudLayoutFpsModule
+  &fpsPlacement`, and reads `fpsPlacement.frametime_enabled`/`graph_enabled`/
+  `percentiles_enabled`/`fps_label_enabled` instead of the same-named
+  `FpsDisplaySettings` fields — the one place Phase 0's "content toggles belong to the
+  layout" decision reaches into a `Measure*Module()` function, since those four are the
+  Fps module's own sub-rows, not top-level module presence.
+- `ResolveModuleOrigin( const HudLayoutModule &placement, ImVec2 boxSize, ImVec2
+  ioDisplay )` (new, `FpsDisplay.cpp`) is the actual position math: it turns
+  `placement.origin` (one of `kPlacements`' nine strings) into a fraction pair via the
+  existing `ParsePlacement()` (index 0/1/2 on each axis is exactly 0.0/0.5/1.0 of the
+  box's own size), computes the normalised point `(x, y) * ioDisplay`, and pulls the
+  box's top-left back by `boxSize * fraction` so the *named* corner/edge/center of the
+  box — not always its top-left — lands on that point. A `"bottom-right"` module at
+  `(0.95, 0.95)` therefore keeps its bottom-right corner near that point instead of
+  clipping off past it.
+- **Clamping**: the result is clamped to `[0, ioDisplay - boxSize]` on each axis, same
+  shape as the old single-stack anchor's own clamp. A legitimate, in-bounds
+  `(x, y, origin)` triple already computes into exactly that range, so this never moves
+  a correctly-authored placement — it only pulls back a coordinate outside `0..1` or a
+  module bigger than the screen, which stays fully visible per the task's own
+  "does not clip" requirement. It is not collision avoidance: two modules whose boxes
+  overlap are drawn exactly where each says to, in `kModuleOrder`'s fixed z-order
+  (Fps, Cpu, Gpu, Media) — overlap is the user's problem by design, unchanged from the
+  brief.
+- **`scale` (`HudLayoutModule::scale`) is not wired at all this phase**, not even
+  partially. The Fps module's Hero number is the only content that already takes an
+  explicit size parameter (`cfg.font_size` into `CalcTextSizeA`); Cpu/Gpu/Media's
+  `Measure`/`Draw` functions draw every string via `ImGui::PushFont()` at `Fonts.h`'s
+  fixed baked-atlas sizes, with no size parameter to scale at all. Scaling just the box
+  geometry (or just the Fps number) without scaling everything a module draws would
+  produce a backdrop mismatched against its own content — a worse, half-wired result
+  than deferring wholesale. Fully wiring `scale` needs threading an explicit size
+  through Cpu/Gpu/Media's content functions, left for Phase 2.
+
+## Settings removed this phase
+
+`FpsDisplaySettings::placement`/`margin_vertical`/`margin_horizontal` (the old shared
+anchor + margins) and `module_spacing` (the old shared-stack gap) are gone from
+`ConfigSchema.h` — manual per-module placement gives none of the four any remaining
+meaning, and their settings-panel rows (the old "Placement" group, and the "Module
+spacing" slider) are gone with them. `ConfigManager.cpp` no longer reads or writes
+those JSON keys (same "an old file's leftover key is just never looked up" precedent
+`dock_scale`/`opacity_background` already established).
+
+`FpsDisplaySettings::fps_enabled`/`cpu_enabled`/`gpu_enabled`/`media_enabled`/
+`graph_enabled`/`percentiles_enabled`/`frametime_enabled`/`fps_label_enabled` are
+**not** removed, even though the render path stopped reading them this phase (previous
+section) — Phase 1's explicit removal list was the four position/spacing fields above,
+not these eight. They stay in the schema, are still persisted, and their settings-panel
+"Modules" rows are still there and still editable — they just no longer affect what the
+HUD draws on screen, since that is now exclusively the resolved layout's own property.
+Folding "which modules a layout shows" into a real editing UI is left to Phase 3's
+layout editor rather than reworking this settings group twice.
+
+## The rename: `system.monitor` → `system.hud`
+
+Same commit: the settings-panel area id/label (`FpsDisplay.cpp`'s
+`FpsDisplay_RegisterArea()`) moved from `"system.monitor"`/`"Monitor"` to
+`"system.hud"`/`"HUD"`, and every `monitor.*` entry id under it to `hud.*`
+(`hud.enabled`, `hud.mod_fps`, `hud.font_size`, `hud.blend_mode`, `hud.color_fps`,
+`hud.sampling`, `hud.stats_*`, …). `Overlay/UI/Icons.cpp`'s area-to-glyph map key moved
+with it. "Monitor" collided with this project's own "Overlay" naming (the E2 settings
+overlay is *Shell*/*Click-UI*, per `superdoc/meta/TERMINOLOGY.md`, which now has a
+**HUD** entry). The on-disk JSON key is the separate `"fps_display"`
+(`ConfigManager.cpp`), untouched by this rename, so no config migration is needed —
+existing users' saved settings load exactly as before under the new UI labels.
+
+## No default layouts, no editor yet
+
+No default layouts ship, and no settings-panel UI exists yet to create one —
+`HudLayout` is reachable today via `ConfigManager`'s API, `tests/test_config.cpp`'s
+direct coverage of it, and hand-edited `layouts/<name>.json` files. Per the user's
+locked decision (Phase 0), there is also no migration: an existing user's HUD position
+goes blank on upgrading into Phase 1 (`layout_name` was never set, so it resolves to an
+empty `HudLayout{}`) and they re-place it once Phase 3's editor exists — see
+`CHANGELOG.md`'s `[0.3.5]` entry for the user-facing warning.
+
+## The seam for Phase 3's editor
+
+Phase 3 is expected to add a drag-and-drop layout editor living in its own file, in the
+same `system.hud` area `FpsDisplay_RegisterArea()` already registers (`ui::Registry
+&reg`, `FpsDisplay.h`) — not a new area. The call site is the same function: where the
+old "Placement" settings-panel group used to sit (`FpsDisplay.cpp`, between the
+"Modules" group and "Appearance"), a comment now marks exactly where that editor's own
+registration call belongs, adding to the `ui::Area &a` `FpsDisplay_RegisterArea()`
+already built rather than replacing it. The data it should read/write is
+`config::HudLayout` via `ConfigManager.h`'s `LoadLayout`/`SaveLayout`/
+`EnqueueLayoutWrite`/`ListLayouts`/`ResolveLayoutCached` — the same API Phase 0 built
+and this phase's render path already consumes through `ResolveLayoutCached()`. The
+render-side building blocks an editor's live-preview would reuse directly are
+`ResolveModuleOrigin()` (placement math) and `ModulePlacement()` (kind → the layout's
+matching `HudLayoutModule`), both `static` in `FpsDisplay.cpp` today — an editor
+drawing its own preview would need equivalents exported or reused in place, not
+reinvented.

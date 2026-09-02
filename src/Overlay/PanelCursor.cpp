@@ -19,7 +19,7 @@
 // to PanelConfig.cpp's own translation unit, not exported.
 //
 // The outline colour's "follow accent / custom" shape is copied from
-// FpsDisplay.cpp's RegisterModuleColor() (system.monitor's per-module
+// FpsDisplay.cpp's RegisterModuleColor() (system.hud's per-module
 // colour overrides): a Composite(Color) bound to a packed 0xRRGGBB int that
 // reads/writes CursorAppearance's current colour, with a `custom` Param
 // that flips config::OverlaySettings::cursor_outline_color between

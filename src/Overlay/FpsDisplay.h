@@ -41,7 +41,7 @@ namespace gamescope
 	// the compute submission is on the queue. No-op when nothing is pending.
 	void FpsDisplay_CommitReads();
 
-	// Declares this feature's settings as the E2 `system.monitor` area:
+	// Declares this feature's settings as the E2 `system.hud` area:
 	// the master switch, the seven module toggles, the placement anchor and
 	// its margins, the appearance controls, the per-module colour overrides
 	// and the 60-second statistics history.

@@ -137,7 +137,7 @@ namespace gamescope
 	// rest of this file's config state, is only ever safely read/written
 	// from the render-thread call sites) -- kept in sync at every place
 	// fps_display.enabled is assigned (EnsureConfigLoaded's own reload,
-	// cc_toggle_fps_display, and the `monitor.enabled` registry switch).
+	// cc_toggle_fps_display, and the `hud.enabled` registry switch).
 	static std::atomic<bool> s_bHudEnabledForTimer{ false };
 
 	static void EnsureRepaintTimerThread()
@@ -768,15 +768,19 @@ namespace gamescope
 
 	// -------------------------------------------------------------------
 	// Placement: 9 anchor positions (issue #26/#27's shared 3x3 grid
-	// model), stored on disk as one of the strings below
-	// (ConfigSchema.h's FpsDisplaySettings::placement). This is this
-	// file's own copy of the same kPlacements/ParsePlacement shape
-	// Notifications.cpp uses for notification_placement -- kept as a
-	// separate copy rather than a shared header since Notifications.cpp's
-	// own version is a file-local static, not exported, and the two
-	// features' placement fields are independently persisted (this one is
-	// a normal per-layer field; notification_placement is deliberately
-	// global-only -- see that field's own ConfigSchema.h comment).
+	// model). This is this file's own copy of the same kPlacements/
+	// ParsePlacement shape Notifications.cpp uses for notification_placement
+	// -- kept as a separate copy rather than a shared header since
+	// Notifications.cpp's own version is a file-local static, not exported.
+	//
+	// HUD layouts Phase 1: FpsDisplaySettings::placement (the single shared
+	// anchor string this originally served) is gone -- ParsePlacement()'s
+	// remaining job is reading each HudLayoutModule::origin string
+	// (ConfigSchema.h), via ResolveModuleOrigin() in the module framework
+	// below, so a module's own anchor point resolves the same way the old
+	// single readout anchor used to. ComposePlacement() (only ever needed
+	// by the old anchor UI's setter) is gone with that UI; nothing here
+	// writes a placement string any more, only reads one.
 	// -------------------------------------------------------------------
 
 	namespace
@@ -807,67 +811,40 @@ namespace gamescope
 			nVert = 0;
 			nHoriz = 2;
 		}
-
-		std::string ComposePlacement( int nVert, int nHoriz )
-		{
-			return kPlacements[std::clamp( nVert, 0, 2 )][std::clamp( nHoriz, 0, 2 )];
-		}
 	}
 
 	// -------------------------------------------------------------------
-	// Module framework (issue #27): the readout is a fixed sequence of
-	// content modules -- FPS, CPU, GPU, Media, in that order (task brief,
-	// verbatim) -- each its own backdrop-boxed block, stacked from the
-	// selected anchor's edge inward. Issue #28 filled in the CPU/GPU/Media
-	// content (search this file for "CPU/GPU/Media modules (issue #28)");
-	// every module now reports real content from Metrics/SystemStats.h's
+	// Module framework: the readout is a fixed set of content modules --
+	// FPS, CPU, GPU, Media -- each its own backdrop-boxed block. Every
+	// module reports real content from Metrics/SystemStats.h's
 	// background-polled snapshot, following the same
 	// Measure<X>Module()/Draw<X>Module() shape MeasureFpsModule()/
 	// DrawFpsModuleContent() established. A module still reports zero size
-	// from its measure function when its own per-module `enabled` toggle
-	// (config::FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/
-	// media_enabled -- issue #70 gave FPS the same per-module toggle the
-	// other three already had) is off -- this framework's contract for
-	// "not present" is unchanged: it draws nothing and reserves no stack
-	// space or gap.
+	// from its measure function when its own per-module `enabled` is off
+	// -- this framework's contract for "not present" is unchanged: it
+	// draws nothing.
 	//
-	// Order is FIXED and EDGE-RELATIVE, not a fixed top-to-bottom screen
-	// order: kModuleOrder's first entry (FPS) always ends up the module
-	// nearest whichever edge the anchor selects, with later entries
-	// (CPU, GPU, Media) stacking further from that edge, inward. This is
-	// the literal reading of the task brief's own "coming from the
-	// selected edge" phrasing, and it resolves the one placement question
-	// the issue explicitly left for the implementer: for a BOTTOM-edge
-	// anchor, FPS sits closest to the bottom edge and the stack grows
-	// UPWARD from it (CPU above FPS, then GPU, then Media) -- i.e. the
-	// on-screen top-to-bottom reading is Media/GPU/CPU/FPS, the mirror
-	// image of a top-edge anchor's FPS/CPU/GPU/Media. The alternative
-	// (keep FPS visually topmost regardless of anchor) was rejected
-	// because it would make "first in the fixed order" mean a different
-	// module depending on which edge is picked, which is not what "fixed
-	// order coming from the selected edge" describes -- an edge-relative
-	// order is the only reading where the rule is the same rule at every
-	// anchor. Center-row anchors (center-left/center/center-right) use
-	// the task brief's own explicit default for centred views -- "top
-	// first" -- so they take the same (unmirrored) order as a top-edge
-	// anchor.
+	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) replaced
+	// the old single anchor-and-margins stack this comment used to
+	// describe: each module now carries its OWN position (a resolved
+	// config::HudLayout's per-module x/y/origin, DrawReadout() below), so
+	// there is no shared anchor, no shared stack width, no inter-module
+	// gap, and no edge-relative draw order to reason about any more --
+	// modules are placed independently and may overlap (the user's
+	// problem by design, no collision avoidance). kModuleOrder below is
+	// now nothing more than a fixed z-order for that overlap case (later
+	// entries draw on top of earlier ones), not a layout algorithm.
 	// -------------------------------------------------------------------
 
 	enum class ModuleKind { Fps, Cpu, Gpu, Media, Count };
 	static constexpr int kModuleCount = (int)ModuleKind::Count;
 
-	// Fixed stacking order, edge-relative -- see the block comment above.
+	// Fixed draw/z-order only -- see the block comment above. Independent
+	// per-module placement means this no longer implies any positional
+	// relationship between modules.
 	static constexpr ModuleKind kModuleOrder[kModuleCount] = {
 		ModuleKind::Fps, ModuleKind::Cpu, ModuleKind::Gpu, ModuleKind::Media,
 	};
-
-	// Vertical gap between stacked module boxes -- distinct from kRowGap
-	// (the gap between a module's own internal rows). Issue #29: was a
-	// fixed constant here; now config::FpsDisplaySettings::module_spacing,
-	// a real user-facing slider (this issue's own "at least one new
-	// styling option" acceptance criterion) -- see DrawReadout(), which
-	// reads cfg.module_spacing directly at both of this constant's old use
-	// sites.
 
 	// FPS module's measured layout: every string/size the draw half needs,
 	// computed once by MeasureFpsModule() and consumed by
@@ -909,7 +886,14 @@ namespace gamescope
 	// tabular-figures font existed; now that one does, the workaround is
 	// gone. Issue #27: any future module (#28's CPU/GPU/Media) showing a
 	// number must follow this same fixed-width-field convention.
-	static FpsModuleLayout MeasureFpsModule( int nFps )
+	// `fpsPlacement` is the resolved layout's own Fps entry (config::
+	// ResolveLayoutCached()'s HudLayout::fps) -- HUD layouts Phase 1 moved
+	// the frametime/graph/percentiles/label sub-row toggles this used to
+	// read off `cfg` (FpsDisplaySettings::frametime_enabled/graph_enabled/
+	// percentiles_enabled/fps_label_enabled) onto HudLayoutFpsModule; those
+	// FpsDisplaySettings fields still exist (kept for this phase, see
+	// ConfigSchema.h's layout_name comment) but are no longer read here.
+	static FpsModuleLayout MeasureFpsModule( int nFps, const config::HudLayoutFpsModule &fpsPlacement )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
@@ -951,18 +935,20 @@ namespace gamescope
 		// in a single color/size; split so the unit and the ms readout can
 		// each carry their own spec'd size/color (gap list item 6).
 		// Issue #73: the unit label is independently hideable
-		// (fps_label_enabled) so the module can show just the number --
-		// zero-sized when off, same "not present reserves no space"
-		// contract MeasureModule() uses for a whole disabled module.
+		// (fps_label_enabled, now the layout's copy) so the module can show
+		// just the number -- zero-sized when off, same "not present
+		// reserves no space" contract MeasureModule() uses for a whole
+		// disabled module.
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.unitSize = cfg.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
+		L.unitSize = fpsPlacement.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
 		ImGui::PopFont();
 
 		// Issue #71: the numeric frametime readout, independently of
 		// graph_enabled's Row 2 graph -- off either because the user
-		// disabled it (frametime_enabled) or because additive mode already
-		// drops it (L.bAdditive, pre-existing rule, unchanged).
-		L.bShowMs = cfg.frametime_enabled && !L.bAdditive;
+		// disabled it (frametime_enabled, now the layout's copy) or because
+		// additive mode already drops it (L.bAdditive, pre-existing rule,
+		// unchanged).
+		L.bShowMs = fpsPlacement.frametime_enabled && !L.bAdditive;
 		snprintf( L.szMs, sizeof( L.szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
 		L.msSize = L.bShowMs ? ImGui::CalcTextSize( L.szMs ) : ImVec2( 0.0f, 0.0f );
@@ -973,9 +959,10 @@ namespace gamescope
 		// Row 2 (graph) / Row 3 (percentiles): both independently toggleable
 		// (spec §11's "ROWS checkbox list"), reusing Row 1's font_size/
 		// backdrop/blend_mode/text_opacity rather than a second set of
-		// per-row settings.
-		L.bShowGraph = cfg.graph_enabled;
-		L.bShowPercentiles = cfg.percentiles_enabled;
+		// per-row settings. Toggles are the layout's copies now, same as
+		// the unit label/frametime readout just above.
+		L.bShowGraph = fpsPlacement.graph_enabled;
+		L.bShowPercentiles = fpsPlacement.percentiles_enabled;
 
 		if ( L.bShowPercentiles )
 		{
@@ -1009,10 +996,12 @@ namespace gamescope
 		//     corner rect -- worst case it degrades to a fully-rounded pill/
 		//     circle, a normal look for a small badge, not a rendering bug.
 		//     No floor is needed to protect backdrop rounding (#29).
-		//   - The position grid/anchor (DrawReadout below) sizes itself off
-		//     `flStackWidth`, the real measured widest-present-module width,
-		//     recomputed every frame -- nothing there hardcodes or assumes a
-		//     minimum (#27).
+		//   - The position math (DrawReadout below) sizes each module's box
+		//     off its own real measured content, recomputed every frame --
+		//     nothing there hardcodes or assumes a minimum (#27; HUD layouts
+		//     Phase 1 replaced the shared-stack-width version of this note
+		//     with independent per-module boxes, same "no assumed minimum"
+		//     conclusion either way).
 		//   - CPU/GPU/Media's own MeasureXModule() functions already report
 		//     pure content width with no floor at all (Media's is capped
 		//     from ABOVE at 260px, #77, but never floored from below) -- FPS
@@ -1501,43 +1490,62 @@ namespace gamescope
 		ImGui::PopFont();
 	}
 
-	// Measures one module in stacking order, returning its full box size
-	// (content + 2*backdrop_padding on each axis, matching what each
-	// Draw*ModuleContent() above expects as boxSize) -- (0,0) means "not
-	// present," this framework's contract for a module with no content
-	// (still used by any module whose own `enabled` toggle is off -- see
-	// DrawReadout()'s per-module gating below).
-	static ImVec2 MeasureModule( ModuleKind kind, int nFps, FpsModuleLayout &outFpsLayout, CpuModuleLayout &outCpuLayout, GpuModuleLayout &outGpuLayout, MediaModuleLayout &outMediaLayout )
+	// Returns the resolved layout's own placement entry for `kind` -- the
+	// seam MeasureModule()/DrawReadout() use to stay agnostic of which
+	// concrete HudLayout field belongs to which ModuleKind. Cpu/Gpu/Media
+	// each own a plain HudLayoutModule; Fps's is nested one level down
+	// (HudLayoutFpsModule::placement) since that struct also carries the
+	// sub-row toggles MeasureFpsModule() now reads (see that function).
+	static const config::HudLayoutModule &ModulePlacement( ModuleKind kind, const config::HudLayout &layout )
+	{
+		switch ( kind )
+		{
+		case ModuleKind::Fps:   return layout.fps.placement;
+		case ModuleKind::Cpu:   return layout.cpu;
+		case ModuleKind::Gpu:   return layout.gpu;
+		case ModuleKind::Media: default: return layout.media;
+		}
+	}
+
+	// Measures one module, returning its full box size (content +
+	// 2*backdrop_padding on each axis, matching what each Draw*ModuleContent()
+	// above expects as boxSize) -- (0,0) means "not present," this
+	// framework's contract for a module with no content.
+	//
+	// HUD layouts Phase 1: presence is gated on the resolved layout's own
+	// per-module `enabled` (config::HudLayout, via `layout`) rather than
+	// FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/media_enabled
+	// -- those fields still exist (see ConfigSchema.h's layout_name
+	// comment) but this is the one call site that stopped reading them.
+	static ImVec2 MeasureModule( ModuleKind kind, int nFps, const config::HudLayout &layout, FpsModuleLayout &outFpsLayout, CpuModuleLayout &outCpuLayout, GpuModuleLayout &outGpuLayout, MediaModuleLayout &outMediaLayout )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		switch ( kind )
 		{
 		case ModuleKind::Fps:
 		{
-			// Issue #70: FPS now has its own enable toggle, same "(0,0) ==
-			// not present" contract Cpu/Gpu/Media already use below.
-			if ( !cfg.fps_enabled )
+			if ( !layout.fps.placement.enabled )
 				return ImVec2( 0.0f, 0.0f );
-			outFpsLayout = MeasureFpsModule( nFps );
+			outFpsLayout = MeasureFpsModule( nFps, layout.fps );
 			return ImVec2( outFpsLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outFpsLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
 		}
 		case ModuleKind::Cpu:
 		{
-			if ( !cfg.cpu_enabled )
+			if ( !layout.cpu.enabled )
 				return ImVec2( 0.0f, 0.0f );
 			outCpuLayout = MeasureCpuModule();
 			return ImVec2( outCpuLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outCpuLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
 		}
 		case ModuleKind::Gpu:
 		{
-			if ( !cfg.gpu_enabled )
+			if ( !layout.gpu.enabled )
 				return ImVec2( 0.0f, 0.0f );
 			outGpuLayout = MeasureGpuModule();
 			return ImVec2( outGpuLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outGpuLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
 		}
 		case ModuleKind::Media:
 		{
-			if ( !cfg.media_enabled )
+			if ( !layout.media.enabled )
 				return ImVec2( 0.0f, 0.0f );
 			outMediaLayout = MeasureMediaModule();
 			return ImVec2( outMediaLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outMediaLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
@@ -1545,6 +1553,42 @@ namespace gamescope
 		default:
 			return ImVec2( 0.0f, 0.0f );
 		}
+	}
+
+	// Resolves one module's (x, y, origin, boxSize) into the top-left pixel
+	// position Draw*ModuleContent()'s `origin` parameter expects -- the
+	// heart of HUD layouts Phase 1's render change. `origin` names which of
+	// the module's own nine points sits at the normalised (x, y) coordinate,
+	// reusing kPlacements/ParsePlacement's existing 3x3 grid: index 0/1/2 on
+	// each axis is exactly fraction 0.0/0.5/1.0 of the box's own size, so
+	// e.g. "bottom-right" at (1, 1) pulls the box fully up-and-left of that
+	// point, landing its actual bottom-right corner on it rather than
+	// clipping off-screen.
+	//
+	// Clamped fully on-screen the same shape the old single-stack anchor
+	// used (std::clamp against [0, ioDisplay - boxSize]) -- a legitimate,
+	// in-bounds (x, y, origin) already computes into that exact range, so
+	// this never moves a correctly-authored placement; it only pulls back
+	// an out-of-0..1 coordinate or a module bigger than the screen, which
+	// is the one thing "overlap is the user's problem, no collision
+	// avoidance" (this phase's own scope) does NOT extend to -- staying
+	// fully visible is kept, per the task's own "does not clip" ask.
+	// `placement.scale` is deliberately NOT read here (HUD layouts Phase 2,
+	// not this one) -- see DrawReadout()'s own comment on why applying it
+	// only where it's cheap would mean scaling the backdrop box without
+	// scaling the content inside it (Cpu/Gpu/Media's Measure/Draw functions
+	// draw text at Fonts.h's fixed baked-atlas sizes, not an explicit size
+	// parameter the way the Fps module's Hero number alone does), which is
+	// a worse, half-wired result than deferring wholesale.
+	static ImVec2 ResolveModuleOrigin( const config::HudLayoutModule &placement, ImVec2 boxSize, ImVec2 ioDisplay )
+	{
+		int nVert = 0, nHoriz = 0;
+		ParsePlacement( placement.origin, nVert, nHoriz );
+		const ImVec2 point( placement.x * ioDisplay.x, placement.y * ioDisplay.y );
+		ImVec2 topLeft( point.x - boxSize.x * ( nHoriz * 0.5f ), point.y - boxSize.y * ( nVert * 0.5f ) );
+		topLeft.x = std::clamp( topLeft.x, 0.0f, std::max( 0.0f, ioDisplay.x - boxSize.x ) );
+		topLeft.y = std::clamp( topLeft.y, 0.0f, std::max( 0.0f, ioDisplay.y - boxSize.y ) );
+		return topLeft;
 	}
 
 	static void DrawModule( ModuleKind kind, ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &fpsLayout, const CpuModuleLayout &cpuLayout, const GpuModuleLayout &gpuLayout, const MediaModuleLayout &mediaLayout )
@@ -1568,128 +1612,55 @@ namespace gamescope
 		}
 	}
 
+	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) replaced
+	// this function's old two-pass "measure the widest module, anchor one
+	// shared stack to a 3x3 cell + margins, walk a cursor down it" shape
+	// with independent per-module placement: `config::ResolveLayoutCached`
+	// is looked up fresh every call (a cheap in-memory map lookup, safe at
+	// this render path's cadence -- see that function's own header comment)
+	// so a layout change is visible on the very next repaint, never staler
+	// than the up-to-500ms bound EnsureRepaintTimerThread already puts on
+	// how often that next repaint happens at all. Each module still gets
+	// measured (pass 1, Measure*Module()) before it has a position to draw
+	// at, same split as before; pass 2 now resolves that position from the
+	// module's own layout entry (ResolveModuleOrigin()) instead of a shared
+	// anchor/cursor. With no layout referenced (layout_name empty, or a
+	// name that doesn't resolve), every module's `enabled` is false and
+	// this function draws nothing -- config::HudLayout{}'s own documented
+	// default, no special-casing needed here.
 	static void DrawReadout()
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		const config::HudLayout &layout = config::ResolveLayoutCached( cfg.layout_name );
 
 		const int nFps = (int)std::lround( UpdateAndGetSmoothedFps() );
 		RecomputePercentilesIfDue( get_time_in_nanos() );
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
+		const ImVec2 io_display = ImGui::GetIO().DisplaySize; // actual output resolution, see FpsDisplay_AddLayer()
 
-		int nVert = 0, nHoriz = 2;
-		ParsePlacement( cfg.placement, nVert, nHoriz );
-
-		// Edge-relative stacking order -- see kModuleOrder's block comment
-		// for the bottom-edge mirroring rationale. nVert: 0=top, 1=center,
-		// 2=bottom (ParsePlacement's convention, matching kPlacements'
-		// row order above).
-		ModuleKind order[kModuleCount];
-		if ( nVert == 2 ) // bottom edge: mirrored so FPS ends up nearest it
-		{
-			for ( int i = 0; i < kModuleCount; ++i )
-				order[i] = kModuleOrder[kModuleCount - 1 - i];
-		}
-		else // top edge, or centre row defaulting to the top-first reading
-		{
-			for ( int i = 0; i < kModuleCount; ++i )
-				order[i] = kModuleOrder[i];
-		}
-
-		// Pass 1: measure every module in stacking order. Every module now
-		// has real content (issue #28) -- a module still reports zero size
-		// (this framework's own "not present" contract) when its own
-		// `enabled` toggle is off, exactly like a module with no content
-		// would have before this issue.
+		// Pass 1: measure every module the layout enables. kModuleOrder is
+		// now just a fixed draw/z-order (see its own comment) -- there is
+		// no shared width/stack to build any more, each module reports its
+		// own natural content-sized box.
 		FpsModuleLayout fpsLayout;
 		CpuModuleLayout cpuLayout;
 		GpuModuleLayout gpuLayout;
 		MediaModuleLayout mediaLayout;
 		ImVec2 sizes[kModuleCount];
-		float flStackWidth = 0.0f;
-		float flStackHeight = 0.0f;
-		int nPresent = 0;
 		for ( int i = 0; i < kModuleCount; ++i )
-		{
-			sizes[i] = MeasureModule( order[i], nFps, fpsLayout, cpuLayout, gpuLayout, mediaLayout );
-			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
-			if ( !bPresent )
-				continue;
-			flStackWidth = std::max( flStackWidth, sizes[i].x );
-			if ( nPresent > 0 )
-				flStackHeight += cfg.module_spacing;
-			flStackHeight += sizes[i].y;
-			++nPresent;
-		}
+			sizes[i] = MeasureModule( kModuleOrder[i], nFps, layout, fpsLayout, cpuLayout, gpuLayout, mediaLayout );
 
-		if ( nPresent == 0 )
-			return; // nothing to draw (shouldn't happen while fps_display.enabled, but safe)
-
-		// Anchor the whole stack (all modules share one column, width =
-		// widest present module) against the selected 3x3 cell, offset by
-		// the independent vertical/horizontal margins -- replaces the old
-		// hardcoded top-right kAnchorOffset=32 constant. This context's
-		// io.DisplaySize is the actual output resolution (see
-		// FpsDisplay_AddLayer()).
-		const ImVec2 io_display = ImGui::GetIO().DisplaySize;
-
-		const float flX = ( nHoriz == 0 ) ? cfg.margin_horizontal
-			: ( nHoriz == 1 ) ? ( io_display.x - flStackWidth ) * 0.5f
-			: ( io_display.x - cfg.margin_horizontal - flStackWidth );
-		const float flStartY = ( nVert == 0 ) ? cfg.margin_vertical
-			: ( nVert == 1 ) ? ( io_display.y - flStackHeight ) * 0.5f
-			: ( io_display.y - cfg.margin_vertical - flStackHeight );
-
-		// Clamp so a large margin (or, once #28 lands, several stacked
-		// modules) can never push the stack off-screen -- issue #27's own
-		// verification ask ("does not clip off-screen at any anchor").
-		const float flClampedX = std::clamp( flX, 0.0f, std::max( 0.0f, io_display.x - flStackWidth ) );
-		const float flClampedY = std::clamp( flStartY, 0.0f, std::max( 0.0f, io_display.y - flStackHeight ) );
-
-		// Pass 2: draw each present module at its stacked position.
-		//
-		// Issue #72: every module's box is drawn at flStackWidth (the
-		// widest present module this frame), not its own sizes[i].x, so
-		// backdrops line up into one aligned block instead of each module
-		// keeping its natural, ragged width. Content itself (text, graph,
-		// percentile row) stays exactly where Draw*ModuleContent() already
-		// puts it -- left-aligned off `origin + backdrop_padding`, same as
-		// before -- only the backdrop rectangle widens to the right.
-		//
-		// Width strategy: recomputed every frame (flStackWidth above, from
-		// this frame's real measured content), not cached at startup or
-		// grow-only. A once-at-startup width would visibly jump the first
-		// time a module changes shape (a module toggled on/off mid-session,
-		// GPU going from "unavailable" to found, a media title's length
-		// changing on track change) -- exactly the "hold stable, then jump
-		// later" failure this issue calls out. Recomputing instead sounds
-		// like it risks the opposite failure (twitching every frame as
-		// values change), but it doesn't in practice: every numeric field
-		// in every module (FPS, CPU load/RAM, GPU busy/VRAM/temp/power) is
-		// already formatted through fixed printf field widths (this file's
-		// long-standing "digits do not jitter" convention -- see
-		// MeasureFpsModule()'s szNum comment), so a value changing --
-		// 9 fps to 144 fps, CPU load crossing 100% -- does not itself
-		// change any module's measured width frame to frame. flStackWidth
-		// only actually changes on genuine content-shape events (a module's
-		// enabled toggle, GPU/CPU/media availability flipping, a media
-		// track's title/artist length changing on song change) -- rare,
-		// discrete events where a re-layout is exactly what should happen,
-		// not continuous per-frame noise. So "recompute every frame" and
-		// "only move on a real change" are the same behavior here, given
-		// the fixed-width-field discipline already in place; a separate
-		// once-per-N-frames cadence or a one-way grow-only latch would only
-		// add complexity (and, for grow-only, a width that never shrinks
-		// back down after a long media title scrolls by) without buying
-		// any additional stability.
-		float flCursorY = flClampedY;
+		// Pass 2: place and draw each present module independently, at the
+		// position/origin its own layout entry specifies.
 		for ( int i = 0; i < kModuleCount; ++i )
 		{
 			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
 			if ( !bPresent )
 				continue;
-			DrawModule( order[i], pDrawList, ImVec2( flClampedX, flCursorY ), ImVec2( flStackWidth, sizes[i].y ), fpsLayout, cpuLayout, gpuLayout, mediaLayout );
-			flCursorY += sizes[i].y + cfg.module_spacing;
+			const config::HudLayoutModule &placement = ModulePlacement( kModuleOrder[i], layout );
+			const ImVec2 origin = ResolveModuleOrigin( placement, sizes[i], io_display );
+			DrawModule( kModuleOrder[i], pDrawList, origin, sizes[i], fpsLayout, cpuLayout, gpuLayout, mediaLayout );
 		}
 	}
 
@@ -2109,11 +2080,19 @@ namespace gamescope
 
 	// The area. One declaration, no ImGui in it -- which is what let the
 	// last escape hatch go (P5 deleted Area::Escape() itself).
+	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) renamed
+	// this area from "system.monitor"/"Monitor" to "system.hud"/"HUD" --
+	// "Monitor" read as ambiguous against this project's own "Overlay"
+	// (collides with Shell/Click-UI, superdoc/meta/TERMINOLOGY.md) and
+	// "System Monitor" naming; every `monitor.*` entry id below moved to
+	// `hud.*` in the same change. The on-disk JSON key stays the separate
+	// `fps_display` (ConfigManager.cpp), so this is a pure UI-facing
+	// rename -- no config migration needed.
 	void FpsDisplay_RegisterArea( ui::Registry &reg )
 	{
-		ui::Area &a = reg.Add( "system.monitor", "Monitor", ui::Section::System );
+		ui::Area &a = reg.Add( "system.hud", "HUD", ui::Section::System );
 
-		a.Keywords( "monitor hud fps cpu gpu media overlay performance statistics" );
+		a.Keywords( "hud monitor fps cpu gpu media overlay performance statistics" );
 		a.Summary( []
 		{
 			EnsureConfigLoaded();
@@ -2121,12 +2100,17 @@ namespace gamescope
 			if ( !cfg.enabled )
 				return std::string( "off" );
 
-			const int nOn = (int)cfg.fps_enabled + (int)cfg.frametime_enabled
-			              + (int)cfg.graph_enabled + (int)cfg.percentiles_enabled
-			              + (int)cfg.cpu_enabled + (int)cfg.gpu_enabled + (int)cfg.media_enabled;
+			// HUD layouts Phase 1: module presence is now the resolved
+			// layout's own property, not these settings' fps_enabled/
+			// cpu_enabled/gpu_enabled/media_enabled (see DrawReadout()) --
+			// the summary counts what the layout actually shows.
+			const config::HudLayout &layout = config::ResolveLayoutCached( cfg.layout_name );
+			const int nOn = (int)layout.fps.placement.enabled + (int)layout.cpu.enabled
+			              + (int)layout.gpu.enabled + (int)layout.media.enabled;
 			char sz[ 64 ];
 			std::snprintf( sz, sizeof( sz ), "%s  ·  %d module%s",
-				cfg.placement.c_str(), nOn, nOn == 1 ? "" : "s" );
+				cfg.layout_name.empty() ? "no layout" : cfg.layout_name.c_str(),
+				nOn, nOn == 1 ? "" : "s" );
 			return std::string( sz );
 		} );
 
@@ -2134,16 +2118,16 @@ namespace gamescope
 		// deliberately NOT gated by itself -- SPEC §3.13's exception: a
 		// control that is the cause of a greying stays reachable.
 		auto MonitorOn = []{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; };
-		constexpr const char *kOffReason = "the system monitor is off";
+		constexpr const char *kOffReason = "the HUD is off";
 
 		// =================================================================
-		//  Monitor
+		//  HUD
 		// =================================================================
-		a.Group( "Monitor" );
+		a.Group( "HUD" );
 
 		// Issue #70's name: it gates the whole HUD (CPU/GPU/Media/FPS), not
 		// just an FPS readout.
-		a.Switch( "monitor.enabled", "Show system monitor",
+		a.Switch( "hud.enabled", "Show HUD",
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; },
 				[]( bool b )
@@ -2166,6 +2150,16 @@ namespace gamescope
 		// =================================================================
 		//  Modules -- the seven the band's count refers to
 		// =================================================================
+		// Note (HUD layouts Phase 1): these seven rows no longer gate what
+		// DrawReadout() actually draws -- module presence, and the Fps
+		// module's own frametime/graph/percentiles/label sub-rows, are now
+		// exclusively a resolved config::HudLayout's property (see that
+		// function). Left in place and still persisted regardless: Phase
+		// 1's explicit removal list is placement/margins/module_spacing
+		// only, not this group, and folding "which modules a layout shows"
+		// into a real editing UI belongs with Phase 3's layout editor,
+		// which is expected to own that decision rather than this group
+		// being redesigned twice.
 		a.GroupCount( "Modules" );
 
 		auto Module = [ & ]( const char *pszId, const char *pszTitle,
@@ -2186,7 +2180,7 @@ namespace gamescope
 		// rather than an eighth row: it is not a module, and a row on the
 		// band would make the "N / 7" count mean something other than
 		// modules.
-		Module( "monitor.mod_fps", "Frame rate", &config::FpsDisplaySettings::fps_enabled,
+		Module( "hud.mod_fps", "Frame rate", &config::FpsDisplaySettings::fps_enabled,
 			config::FpsDisplaySettings{}.fps_enabled,
 			"The big frames-per-second number.",
 			"fps frame rate module row counter" )
@@ -2197,103 +2191,58 @@ namespace gamescope
 				.Default( config::FpsDisplaySettings{}.fps_label_enabled )
 				.Help( "Off shows just the number, without the \" FPS\" letters after it." );
 
-		Module( "monitor.mod_frametime", "Frametime readout",
+		Module( "hud.mod_frametime", "Frametime readout",
 			&config::FpsDisplaySettings::frametime_enabled,
 			config::FpsDisplaySettings{}.frametime_enabled,
 			"Shows how long each frame took to draw, in milliseconds, next to the FPS number.",
 			"frametime ms readout module row" );
 
-		Module( "monitor.mod_graph", "Frametime graph",
+		Module( "hud.mod_graph", "Frametime graph",
 			&config::FpsDisplaySettings::graph_enabled,
 			config::FpsDisplaySettings{}.graph_enabled,
 			"A small chart of recent frame times under the number, with stutters marked.",
 			"graph frametime spark history module" );
 
-		Module( "monitor.mod_pct", "Percentile row",
+		Module( "hud.mod_pct", "Percentile row",
 			&config::FpsDisplaySettings::percentiles_enabled,
 			config::FpsDisplaySettings{}.percentiles_enabled,
 			"Shows your worst 1% and 0.1% of frames, plus your average frame rate, on one line. "
 			"Useful for spotting stutters an average FPS number would hide.",
 			"percentile lows average module" );
 
-		Module( "monitor.mod_cpu", "CPU load", &config::FpsDisplaySettings::cpu_enabled,
+		Module( "hud.mod_cpu", "CPU load", &config::FpsDisplaySettings::cpu_enabled,
 			config::FpsDisplaySettings{}.cpu_enabled,
 			"How hard your processor is working, and how much memory is in use.",
 			"cpu load ram module processor" );
 
-		Module( "monitor.mod_gpu", "GPU load", &config::FpsDisplaySettings::gpu_enabled,
+		Module( "hud.mod_gpu", "GPU load", &config::FpsDisplaySettings::gpu_enabled,
 			config::FpsDisplaySettings{}.gpu_enabled,
 			"How hard your graphics card is working, how much of its memory is in use, and its "
 			"temperature and power draw.",
 			"gpu load vram temperature power module" );
 
-		Module( "monitor.mod_media", "Now playing", &config::FpsDisplaySettings::media_enabled,
+		Module( "hud.mod_media", "Now playing", &config::FpsDisplaySettings::media_enabled,
 			config::FpsDisplaySettings{}.media_enabled,
 			"Shows the song title and artist from whatever music or media player is playing.",
 			"media now playing mpris module music" );
 
 		// =================================================================
-		//  Placement -- SPEC §4.3's worked example
+		//  Placement -- REMOVED (HUD layouts Phase 1)
 		// =================================================================
-		a.Group( "Placement" );
-
-		// The stored format stays the "top-right"/"center-left" string
-		// kPlacements has always written. The two axes are a VIEW of that
-		// string, not a new representation of it -- which is why each
-		// setter re-parses the current value before composing, rather than
-		// keeping a second copy of the other axis that could drift.
-		a.Composite( "monitor.anchor", "Placement", ui::CompositeKind::Anchor,
-			ui::AnyBind::Of<int>(
-				[]
-				{
-					EnsureConfigLoaded();
-					int nV = 0, nH = 2;
-					ParsePlacement( s_Settings.fps_display.placement, nV, nH );
-					return nV;
-				},
-				[]( int nV )
-				{
-					EnsureConfigLoaded();
-					int nOldV = 0, nH = 2;
-					ParsePlacement( s_Settings.fps_display.placement, nOldV, nH );
-					s_Settings.fps_display.placement = ComposePlacement( nV, nH );
-					PersistSettings();
-				} ),
-			ui::AnyBind::Of<int>(
-				[]
-				{
-					EnsureConfigLoaded();
-					int nV = 0, nH = 2;
-					ParsePlacement( s_Settings.fps_display.placement, nV, nH );
-					return nH;
-				},
-				[]( int nH )
-				{
-					EnsureConfigLoaded();
-					int nV = 0, nOldH = 2;
-					ParsePlacement( s_Settings.fps_display.placement, nV, nOldH );
-					s_Settings.fps_display.placement = ComposePlacement( nV, nH );
-					PersistSettings();
-				} ) )
-			.Help( "Which screen corner the monitor sticks to. The margins below move it a bit "
-			       "away from that corner." )
-			.Default( 0, 2 )
-			.Keywords( "anchor placement position corner where margin offset" )
-			.DisabledUnless( MonitorOn, kOffReason )
-			.Param( "margin_v", "Vertical margin",
-				ui::AnyBind::Of<int>(
-					[]{ EnsureConfigLoaded(); return (int)s_Settings.fps_display.margin_vertical; },
-					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_vertical = (float)n; PersistSettings(); } ) )
-				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
-				.Default( (int)config::FpsDisplaySettings{}.margin_vertical )
-				.Help( "How far the monitor sits from the top or bottom edge." )
-			.Param( "margin_h", "Horizontal margin",
-				ui::AnyBind::Of<int>(
-					[]{ EnsureConfigLoaded(); return (int)s_Settings.fps_display.margin_horizontal; },
-					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_horizontal = (float)n; PersistSettings(); } ) )
-				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
-				.Default( (int)config::FpsDisplaySettings{}.margin_horizontal )
-				.Help( "How far the monitor sits from the left or right edge." );
+		// The single shared anchor + independent vertical/horizontal margin
+		// rows this used to be ("hud.anchor" and its margin_v/margin_h
+		// params, SPEC §4.3's worked example) no longer mean anything under
+		// manual per-module placement: FpsDisplaySettings::placement/
+		// margin_vertical/margin_horizontal are gone (ConfigSchema.h), and
+		// DrawReadout() now positions each module from its own resolved
+		// config::HudLayout entry instead. This is the seam Phase 3's
+		// drag-and-drop layout editor hooks into -- see FpsDisplay.h's
+		// FpsDisplay_RegisterArea() comment and DrawReadout()/
+		// ResolveModuleOrigin() for the exact shape an editor UI would
+		// read/write (config::HudLayout via LoadLayout/SaveLayout/
+		// EnqueueLayoutWrite, ConfigManager.h) -- it is expected to land as
+		// its own file, adding to this same `a` Area rather than replacing
+		// it, in place of this comment.
 
 		// =================================================================
 		//  Appearance
@@ -2322,20 +2271,17 @@ namespace gamescope
 				.DisabledUnless( MonitorOn, kOffReason );
 		};
 
-		FloatRow( "monitor.font_size", "Font size", &config::FpsDisplaySettings::font_size,
-			10.0f, 48.0f, 1.0f, "px", "How big the text is in every module of the monitor.",
+		FloatRow( "hud.font_size", "Font size", &config::FpsDisplaySettings::font_size,
+			10.0f, 48.0f, 1.0f, "px", "How big the text is in every module of the HUD.",
 			"font size text scale monitor hud" );   // 39 positions, whole px
 
-		// Issue #29's own styling option -- see ConfigSchema.h's
-		// module_spacing comment for the two alternatives it rejected.
-		FloatRow( "monitor.module_spacing", "Module spacing",
-			&config::FpsDisplaySettings::module_spacing, 0.0f, 32.0f, 1.0f, "px",   // 33 positions
-			"Space between the FPS, CPU, GPU and Now Playing boxes.", "spacing gap module layout" );
+		// No module_spacing row: removed (HUD layouts Phase 1) along with
+		// the shared stack it used to space -- see ConfigSchema.h.
 
 		static constexpr ui::Option kBlendModes[] = {
 			{ 0, "alpha" }, { 1, "additive" }, { 2, "inverted" },
 		};
-		a.Choice( "monitor.blend_mode", "Blend mode",
+		a.Choice( "hud.blend_mode", "Blend mode",
 			ui::AnyBind::Of<int>(
 				[]
 				{
@@ -2358,7 +2304,7 @@ namespace gamescope
 			.Keywords( "blend mode alpha additive inverted legibility" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
-		FloatRow( "monitor.text_opacity", "Text opacity",
+		FloatRow( "hud.text_opacity", "Text opacity",
 			&config::FpsDisplaySettings::text_opacity, 0.0f, 1.0f, 0.05f, "",   // 21 positions
 			"How see-through the monitor's text is.", "opacity alpha text transparency" );
 
@@ -2367,7 +2313,7 @@ namespace gamescope
 		// modes withdraw the backdrop entirely -- DrawReadout() enforces the
 		// same rule on the render side (ModuleBackdropAllowed()) regardless
 		// of what is stored here.
-		a.Switch( "monitor.backdrop", "Backdrop",
+		a.Switch( "hud.backdrop", "Backdrop",
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_enabled; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_enabled = b; PersistSettings(); } ) )
@@ -2412,19 +2358,19 @@ namespace gamescope
 		// "N / 7" count on that band depends on.
 		a.Group( "Module colours" );
 
-		RegisterModuleColor( a, "monitor.color_fps", "Frame rate colour",
+		RegisterModuleColor( a, "hud.color_fps", "Frame rate colour",
 			&config::FpsDisplaySettings::color_fps,
 			[]{ return gamescope::palette::kAccentValue; },
 			"Colour of the frame-rate number." );
-		RegisterModuleColor( a, "monitor.color_cpu", "CPU colour",
+		RegisterModuleColor( a, "hud.color_cpu", "CPU colour",
 			&config::FpsDisplaySettings::color_cpu,
 			[]{ return gamescope::palette::kAccentIcon; },
 			"Colour of the CPU module's text and numbers." );
-		RegisterModuleColor( a, "monitor.color_gpu", "GPU colour",
+		RegisterModuleColor( a, "hud.color_gpu", "GPU colour",
 			&config::FpsDisplaySettings::color_gpu,
 			[]{ return gamescope::palette::kAccentKnob; },
 			"Colour of the GPU module's text and numbers." );
-		RegisterModuleColor( a, "monitor.color_media", "Now playing colour",
+		RegisterModuleColor( a, "hud.color_media", "Now playing colour",
 			&config::FpsDisplaySettings::color_media,
 			[]{ return gamescope::palette::kAccentHandle; },
 			"Colour of the Now Playing text." );
@@ -2434,7 +2380,7 @@ namespace gamescope
 		// =================================================================
 		a.Group( "Diagnostics" );
 
-		a.Facts( "monitor.sampling", "Sampling",
+		a.Facts( "hud.sampling", "Sampling",
 			[]
 			{
 				char sz[ 64 ];
@@ -2473,7 +2419,7 @@ namespace gamescope
 		// SPEC §4.4's frametime Graph composite, over this file's own 240-
 		// sample ring. Read-only by construction: Entry::ReadOnly() returns
 		// true for CompositeKind::Graph, and Samples() has no setter.
-		a.Composite( "monitor.frametime_graph", "Frametime", ui::CompositeKind::Graph, {} )
+		a.Composite( "hud.frametime_graph", "Frametime", ui::CompositeKind::Graph, {} )
 			.Help( "A live chart of how long each recent frame took to draw. Frames much slower "
 			       "than the rest are highlighted." )
 			.Keywords( "frametime graph strip stutter diagnostics" )
@@ -2531,7 +2477,7 @@ namespace gamescope
 		// because it is what gates the background collection in
 		// FpsDisplay_AddLayer() -- routing it through the normal debounced
 		// path silently dropped every change during manual testing.
-		a.Switch( "monitor.stats_collect", "Collect 60-second history",
+		a.Switch( "hud.stats_collect", "Collect 60-second history",
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.overlay.system_monitor_tab == "statistics"; },
 				[]( bool b )
@@ -2548,7 +2494,7 @@ namespace gamescope
 			.Default( false )
 			.Keywords( "statistics history collect 60 second graph sampling" );
 
-		a.Facts( "monitor.stats_window", "Window",
+		a.Facts( "hud.stats_window", "Window",
 			[]
 			{
 				EnsureConfigLoaded();
@@ -2592,7 +2538,7 @@ namespace gamescope
 				.DisabledUnless( std::move( fnAvailable ), pszUnavailable );
 		};
 
-		StatGraph( "monitor.stats_cpu", "CPU load",
+		StatGraph( "hud.stats_cpu", "CPU load",
 			"How hard your processor has been working over the last minute.",
 			"cpu load statistics graph history",
 			[]
@@ -2603,7 +2549,7 @@ namespace gamescope
 			},
 			Collecting, "60-second history collection is off" );
 
-		StatGraph( "monitor.stats_gpu_busy", "GPU busy",
+		StatGraph( "hud.stats_gpu_busy", "GPU busy",
 			"How hard your graphics card has been working over the last minute.",
 			"gpu busy utilisation statistics graph history",
 			[]
@@ -2615,7 +2561,7 @@ namespace gamescope
 			[ Collecting ]{ return Collecting() && StatsSnapshot().bGpuFound; },
 			"no amdgpu device was found on this system, or collection is off" );
 
-		StatGraph( "monitor.stats_gpu_temp", "GPU temperature",
+		StatGraph( "hud.stats_gpu_temp", "GPU temperature",
 			"How hot your graphics card has been, in degrees Celsius, over the last minute.",
 			"gpu temperature thermal statistics graph history",
 			[]
@@ -2627,7 +2573,7 @@ namespace gamescope
 			[ Collecting ]{ return Collecting() && StatsSnapshot().bHwmonFound; },
 			"no amdgpu hwmon node was found on this system, or collection is off" );
 
-		StatGraph( "monitor.stats_gpu_power", "GPU power",
+		StatGraph( "hud.stats_gpu_power", "GPU power",
 			"How many watts your graphics card has been drawing over the last minute.",
 			"gpu power watts statistics graph history",
 			[]
@@ -2639,7 +2585,7 @@ namespace gamescope
 			[ Collecting ]{ return Collecting() && StatsSnapshot().bHwmonFound; },
 			"no amdgpu hwmon node was found on this system, or collection is off" );
 
-		StatGraph( "monitor.stats_fps", "Frame rate",
+		StatGraph( "hud.stats_fps", "Frame rate",
 			"Your frame rate over the last minute. This is a separate, longer history than the "
 			"live number and percentiles above.",
 			"fps frame rate statistics graph history",

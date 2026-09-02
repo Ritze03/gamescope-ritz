@@ -158,16 +158,17 @@ namespace gamescope::config
                 s.fps_display.fps_enabled = JGetBool( *pFps, "fps_enabled", s.fps_display.fps_enabled );
                 s.fps_display.frametime_enabled = JGetBool( *pFps, "frametime_enabled", s.fps_display.frametime_enabled );
                 s.fps_display.fps_label_enabled = JGetBool( *pFps, "fps_label_enabled", s.fps_display.fps_label_enabled );
-                // Issue #27: placement/margins, same field-shape as OverlaySettings::notification_placement.
-                s.fps_display.placement = JGetString( *pFps, "placement", s.fps_display.placement );
-                s.fps_display.margin_vertical = JGetFloat( *pFps, "margin_vertical", s.fps_display.margin_vertical );
-                s.fps_display.margin_horizontal = JGetFloat( *pFps, "margin_horizontal", s.fps_display.margin_horizontal );
+                // placement/margin_vertical/margin_horizontal removed (HUD
+                // layouts Phase 1, ConfigSchema.h) -- deliberately not read
+                // here any more, same precedent as dock_scale/
+                // opacity_background's own removal below.
                 // Issue #28: per-module enable toggles.
                 s.fps_display.cpu_enabled = JGetBool( *pFps, "cpu_enabled", s.fps_display.cpu_enabled );
                 s.fps_display.gpu_enabled = JGetBool( *pFps, "gpu_enabled", s.fps_display.gpu_enabled );
                 s.fps_display.media_enabled = JGetBool( *pFps, "media_enabled", s.fps_display.media_enabled );
-                // Issue #29: module spacing + optional per-module colour overrides.
-                s.fps_display.module_spacing = JGetFloat( *pFps, "module_spacing", s.fps_display.module_spacing );
+                // module_spacing removed (HUD layouts Phase 1) -- deliberately
+                // not read here any more, same removal precedent.
+                // Issue #29: optional per-module colour overrides.
                 s.fps_display.color_fps = JGetOptInt( *pFps, "color_fps" );
                 s.fps_display.color_cpu = JGetOptInt( *pFps, "color_cpu" );
                 s.fps_display.color_gpu = JGetOptInt( *pFps, "color_gpu" );
@@ -343,13 +344,15 @@ namespace gamescope::config
             jFps[ "fps_enabled" ] = s.fps_display.fps_enabled;
             jFps[ "frametime_enabled" ] = s.fps_display.frametime_enabled;
             jFps[ "fps_label_enabled" ] = s.fps_display.fps_label_enabled;
-            jFps[ "placement" ] = s.fps_display.placement;
-            jFps[ "margin_vertical" ] = s.fps_display.margin_vertical;
-            jFps[ "margin_horizontal" ] = s.fps_display.margin_horizontal;
+            // No placement/margin_vertical/margin_horizontal/module_spacing:
+            // removed with the old single-anchor stack (HUD layouts Phase 1,
+            // ConfigSchema.h). This serializer emits the struct's fields, so
+            // an old file's leftover keys are dropped the first time
+            // anything writes this file -- same accepted-for-a-removed-
+            // feature precedent as dock_scale below.
             jFps[ "cpu_enabled" ] = s.fps_display.cpu_enabled;
             jFps[ "gpu_enabled" ] = s.fps_display.gpu_enabled;
             jFps[ "media_enabled" ] = s.fps_display.media_enabled;
-            jFps[ "module_spacing" ] = s.fps_display.module_spacing;
             jFps[ "color_fps" ] = s.fps_display.color_fps.has_value()
                 ? nlohmann::json( *s.fps_display.color_fps ) : nlohmann::json( nullptr );
             jFps[ "color_cpu" ] = s.fps_display.color_cpu.has_value()

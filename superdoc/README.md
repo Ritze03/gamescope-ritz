@@ -14,8 +14,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Overview](architecture/overview.md) — module map, data flow, "where to look for X". **Start here.**
 - [HUD layouts](architecture/hud-layouts.md) — the named, standalone manual-placement
   HUD layout data model and store (`layouts/<name>.json`); referenced by name, not
-  copied, in contrast to `ApplyProfile()`. Phase 0 only — schema and persistence, no
-  rendering or UI yet.
+  copied, in contrast to `ApplyProfile()`. Phase 1: rendering is live
+  (`FpsDisplay.cpp` draws each module where its layout says), no editor UI yet.
 
 ## features/ — what the project does
 

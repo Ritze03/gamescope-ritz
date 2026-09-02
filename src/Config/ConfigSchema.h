@@ -115,22 +115,13 @@ namespace gamescope::config
         // own report for why generalizing wasn't done silently.
         bool fps_label_enabled = true;
 
-        // Issue #27 (System Monitor part 1/3): one of the 9 anchor strings
-        // Notifications.cpp's kPlacements/OverlaySettings::notification_placement
-        // already use ("top-left" .. "bottom-right", issue #26's model) --
-        // this readout gets its own copy of that field/string-set rather than
-        // sharing OverlaySettings::notification_placement, since that field
-        // is explicitly process-level/global-only (see its own comment)
-        // while this one is a normal per-layer field like every other
-        // fps_display.* setting (global default, per-game overridable).
-        // Replaces the old hardcoded top-right kAnchorOffset
-        // (FpsDisplay.cpp) -- see that file for the 3x3 grid math.
-        std::string placement = "top-right"; // Spec §10: "Default anchor: top-right"
-        // Independent vertical/horizontal margins from whichever edge(s)
-        // the placement selects, replacing the old single kAnchorOffset=32
-        // constant with two config-driven values (issue #27).
-        float margin_vertical = 32.0f;   // px, Spec §10 "offset 32/32"
-        float margin_horizontal = 32.0f; // px, Spec §10 "offset 32/32"
+        // placement / margin_vertical / margin_horizontal removed (HUD
+        // layouts Phase 1, superdoc/architecture/hud-layouts.md): manual
+        // per-module placement (HudLayoutModule::x/y/origin below) replaces
+        // the single anchor-and-margins the whole readout used to share.
+        // Deliberately not read/written by ConfigManager.cpp any more --
+        // an old config's leftover keys are simply never looked up, same
+        // precedent as dock_scale/opacity_background's own removal.
 
         // Issue #28 (System Monitor part 2/3): per-module enable toggles for
         // the three modules issue #27's kModuleOrder framework reserved
@@ -144,18 +135,12 @@ namespace gamescope::config
         bool gpu_enabled = true;
         bool media_enabled = true;
 
-        // Issue #29 (System Monitor part 3/3): gap between stacked module
-        // boxes -- was a fixed 8px constant (FpsDisplay.cpp's old
-        // kModuleGap); now a real slider so tightly-packed HUD stacks (or
-        // extra breathing room next to another overlay) are a user choice
-        // rather than a hardcoded constant. This is this issue's own "at
-        // least one new styling option" acceptance criterion -- see
-        // FpsDisplay.cpp's settings panel for the two options considered
-        // and rejected (corner rounding independent of the backdrop:
-        // redundant with backdrop_rounding, which already exists; a
-        // font-weight-per-module override: this codebase has no baked
-        // alternate-weight glyphs to switch to, so it would be a no-op).
-        float module_spacing = 8.0f;
+        // module_spacing removed (HUD layouts Phase 1): was the gap between
+        // stacked module boxes under the old single-anchor stack; manual
+        // per-module placement (HudLayoutModule::x/y below) has no shared
+        // stack for a spacing constant to apply to any more. Same
+        // deliberately-unread-and-unwritten removal precedent as
+        // placement/margin_vertical/margin_horizontal just above.
 
         // Issue #29: optional per-module colour override for each module's
         // "value" (prominent readout) text -- FPS's Hero number, CPU's
@@ -207,14 +192,18 @@ namespace gamescope::config
         // the Fps module's frametime/graph/percentiles/label sub-rows)
         // moved to HudLayout below by design -- "Simple" and "Advanced"
         // differ in both what's on and where it sits, so both live in the
-        // one entity. The toggles just above this comment
+        // one entity. As of HUD layouts Phase 1, FpsDisplay.cpp's render
+        // path (DrawReadout()) reads the resolved HudLayout's copies of
+        // these exclusively -- the toggles just above this comment
         // (cpu_enabled/gpu_enabled/media_enabled/fps_enabled/
         // graph_enabled/percentiles_enabled/frametime_enabled/
-        // fps_label_enabled) are left untouched for this phase -- they are
-        // still what FpsDisplay.cpp actually reads to render today (Phase
-        // 0 is schema-and-persistence only, no rendering-path change); a
-        // later phase switches FpsDisplay.cpp to read a resolved
-        // HudLayout instead and retires these copies.
+        // fps_label_enabled) are no longer consulted there. They are
+        // deliberately NOT removed from the schema/settings-panel: Phase
+        // 1's explicit removal list is placement/margin_vertical/
+        // margin_horizontal/module_spacing only (the geometry fields the
+        // manual-placement model truly makes meaningless), not these --
+        // see FpsDisplay.cpp's "Modules" settings group for the current
+        // state of that call.
         std::string layout_name;
     };
 
