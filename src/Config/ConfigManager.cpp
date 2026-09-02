@@ -1401,12 +1401,69 @@ namespace gamescope::config
     {
         bool s_bLayoutCacheLoaded = false;
         std::map<std::string, HudLayout> s_LayoutCache;
-        // Returned by ResolveLayoutCached() for "not found" - a
-        // default-constructed HudLayout{} has every module's `enabled`
-        // false, which is already exactly "renders nothing" (this section's
+        // Returned by ResolveLayoutCached() for a NAMED lookup that fails
+        // (deleted / renamed / mistyped layout_name) - a default-
+        // constructed HudLayout{} has every module's `enabled` false,
+        // which is already exactly "renders nothing" (this section's
         // header comment in ConfigSchema.h), so no separate sentinel type
-        // is needed.
+        // is needed. Deliberately NOT what an EMPTY layout_name resolves
+        // to any more - see s_DefaultLayout/BuildDefaultHudLayout() below.
         const HudLayout s_EmptyLayout{};
+
+        // Fix for the fresh-install regression HUD layouts Phase 1/3
+        // introduced: `layout_name` defaulting to "" used to resolve to
+        // s_EmptyLayout above, same as a deleted/mistyped name - so a
+        // config that has simply never named a layout (every new user, and
+        // anyone who upgraded straight through Phase 1-3 without ever
+        // opening the layout editor) got a totally blank HUD, where the
+        // pre-Phase-1 build rendered the stock readout by default
+        // (FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/
+        // media_enabled/frametime_enabled/graph_enabled/percentiles_enabled/
+        // fps_label_enabled, ConfigSchema.h, all default true).
+        //
+        // `Why:` an unset name and a name that used to resolve and stopped
+        // are NOT the same situation - the latter must never resurrect
+        // stale data (hence s_EmptyLayout staying exactly what it was), but
+        // the former has nothing to degrade FROM. This mirrors every other
+        // module's own compiled-in default: "no layout selected" now means
+        // "the stock HUD," not "nothing."
+        //
+        // Deliberately an in-memory constant only, never written to
+        // layouts/*.json - creating a custom.json behind a first-run user's
+        // back is exactly the silent-file-creation this project avoids
+        // elsewhere. `layout_name` stays "" until the user actually edits
+        // something (FpsDisplay.cpp's MutateActiveLayout()/
+        // HudLayoutEditor.cpp's Save(), both already handle "name is empty
+        // -> create 'custom'" on first write, unchanged by this fix) - at
+        // that point ResolveLayoutCached("") is no longer consulted for
+        // that layer, this constant included.
+        //
+        // Placement values approximate the OLD pre-Phase-1 default anchor
+        // ("top-right", ConfigSchema.h's removed FpsDisplaySettings::
+        // placement) cascaded down the right edge so the four modules don't
+        // fully overlap; this is a best-effort approximation, not a promise
+        // of pixel parity with the old auto-stack (Phase 1's own doc
+        // section explains why that auto-stack was replaced) - a real
+        // layout editor session is one drag away for anyone who wants an
+        // exact arrangement.
+        HudLayout BuildDefaultHudLayout()
+        {
+            HudLayout layout{};
+
+            layout.fps.placement = { true, 0.98f, 0.02f, "top-right", 1.0f };
+            layout.fps.frametime_enabled   = true;
+            layout.fps.graph_enabled       = true;
+            layout.fps.percentiles_enabled = true;
+            layout.fps.fps_label_enabled   = true;
+
+            layout.cpu   = { true, 0.98f, 0.18f, "top-right", 1.0f };
+            layout.gpu   = { true, 0.98f, 0.30f, "top-right", 1.0f };
+            layout.media = { true, 0.98f, 0.42f, "top-right", 1.0f };
+
+            return layout;
+        }
+
+        const HudLayout s_DefaultLayout = BuildDefaultHudLayout();
     }
 
     void ReloadLayoutCache()
@@ -1431,8 +1488,12 @@ namespace gamescope::config
         if ( !s_bLayoutCacheLoaded )
             ReloadLayoutCache();
 
+        // "No layout referenced yet" (fresh install, or any profile/game
+        // that has never named one) -> the populated stock default, NOT
+        // the empty sentinel below. See s_DefaultLayout's own comment for
+        // why this differs from a named lookup miss.
         if ( sLayoutName.empty() )
-            return s_EmptyLayout;
+            return s_DefaultLayout;
 
         auto it = s_LayoutCache.find( sLayoutName );
         if ( it == s_LayoutCache.end() )

@@ -138,20 +138,67 @@ here and in `DECISIONS.md` #26 explicitly, not just in code comments.
 
 ## Resolving a missing/deleted/renamed layout
 
-Every place a layout name can fail to resolve — `layout_name` was never set (empty
-string, the default), the file was deleted, the name was mistyped by hand-editing
-JSON, or the layout file's own `schema_version` is newer than this build understands —
-degrades **identically** to a process-wide empty `HudLayout{}` (nothing enabled, i.e.
+A layout name that fails to resolve — the file was deleted, the name was mistyped by
+hand-editing JSON, or the layout file's own `schema_version` is newer than this build
+understands — degrades to a process-wide empty `HudLayout{}` (nothing enabled, i.e.
 "render nothing"). Never a crash, never stale/resurrected data from a previous
 successful load under that name. `ResolveLayoutCached()` (`ConfigManager.h`) returns a
 `const HudLayout&` to that shared empty instance rather than `std::optional`, so a
-render path never has to branch on "found vs. not" — an unresolved name behaves exactly
-like an unset one.
+render path never has to branch on "found vs. not."
 
 `LoadLayout()` itself *does* return `std::optional<HudLayout>` (distinguishing "found,
 empty" from "not found" matters for anything that needs to tell the two apart, e.g. a
 future editor listing what exists) — `ResolveLayoutCached()` is the layer that
-collapses both cases to "nothing to draw."
+collapses that case to "nothing to draw."
+
+## No layout selected (`layout_name` empty)
+
+**This is a *different* case from the section above, not the same one.** An empty
+`layout_name` — a fresh install, or any profile/game that has simply never named a
+layout — used to resolve through the identical "not found" path as a deleted/mistyped
+name (the same shared empty `HudLayout{}`), which rendered a completely blank HUD.
+That was a real regression introduced across HUD layouts Phases 1–3: before this
+rework, `FpsDisplaySettings::fps_enabled`/`cpu_enabled`/`gpu_enabled`/`media_enabled`
+(and the FPS module's own sub-row toggles) all defaulted to `true`, so a fresh config
+showed the stock readout out of the box. Once `DrawReadout()` and the settings panel's
+"Modules" rows moved onto the resolved `HudLayout` exclusively (Phase 1/3, below), that
+old default stopped being read at all, and the *new* default (`layout_name == ""`)
+pointed at an all-disabled empty layout instead — so every new user, and anyone who
+upgraded through these phases without ever opening the layout editor, got a silently
+blank HUD.
+
+Fixed: `ResolveLayoutCached()` now special-cases an *empty* name onto its own constant,
+`ConfigManager.cpp`'s `s_DefaultLayout` (built by `BuildDefaultHudLayout()`) — every
+module enabled, cascaded down the screen's top-right edge (approximating the old
+shared `"top-right"` anchor default, since Phase 1 removed the auto-stacking that used
+to space modules for you — see "Settings removed this phase" below). A *named* lookup
+miss still resolves to the empty `HudLayout{}` from the section above, unchanged.
+
+`Why:` these are not the same situation. A name that once resolved and stopped must
+never resurrect stale data — hence the empty-`HudLayout{}` path staying exactly what it
+was. An empty name has nothing to degrade *from*: "no layout selected" should mean "the
+stock HUD," the same way every other never-touched setting in this schema resolves to
+its own sensible compiled-in default, not to "off."
+
+**This does not create a file.** `s_DefaultLayout` is an in-memory constant only, built
+once at process start and never written to `layouts/*.json` — resolving it is a plain
+read with no side effect, so a first launch never creates a `custom.json` (or any file)
+behind the user's back. `layout_name` stays `""` until the user actually changes
+something: `FpsDisplay.cpp`'s `MutateActiveLayout()` and `HudLayoutEditor.cpp`'s own
+`Save()` both already had "name is empty → create `\"custom\"`" logic for the *first*
+edit (Phase 3), unchanged by this fix — from that point on the saved `"custom"` layout
+is what resolves, seeded with whatever was on screen (via `MutateActiveLayout`'s own
+"read-mutate-save" shape) rather than freshly built from `s_DefaultLayout` again.
+
+**Not seeded from the old `FpsDisplaySettings::*_enabled` fields.** Those fields are
+still serialized (see "Settings removed this phase" below) but have not driven the
+render path since Phase 1 landed — any value in them predates this whole rework and,
+on this branch, was never actually reflected in a running HUD at any point a user could
+have observed it. Reading them into `s_DefaultLayout` would need `ResolveLayoutCached()`
+to take a full `FpsDisplaySettings` instead of just a name, threading that config
+dependency into `ConfigManager.cpp` for every call site — not worth it for a value with
+no real prior HUD state to preserve. `s_DefaultLayout`'s per-module `enabled` values are
+a plain hardcoded `true`, matching those fields' own compiled-in defaults instead.
 
 ## The cache, and when it refreshes
 
@@ -290,13 +337,22 @@ existing users' saved settings load exactly as before under the new UI labels.
 
 ## No default layouts
 
-No default layouts ship — `HudLayout` is reachable via `ConfigManager`'s API,
+No default layout **files** ship — `HudLayout` is reachable via `ConfigManager`'s API,
 `tests/test_config.cpp`'s direct coverage of it, hand-edited `layouts/<name>.json`
 files, and now the Phase 3 editor below. Per the user's locked decision (Phase 0),
 there was also no migration: an existing user's HUD position went blank on upgrading
 into Phase 1 (`layout_name` was never set, so it resolved to an empty `HudLayout{}`)
 and had to be re-placed once this editor existed — see `CHANGELOG.md`'s `[0.3.5]` entry
 for the user-facing warning issued at the time.
+
+**Superseded for the *fresh-install* case by "No layout selected" above.** That section
+still holds for anyone re-placing modules after the Phase 1 upgrade this paragraph
+describes (a real, one-time, already-shipped event) — this paragraph is a historical
+record of it, left as-is. But an empty `layout_name` no longer means blank going
+forward: a fresh install (or a profile/game that has simply never named a layout) now
+resolves to the in-memory `s_DefaultLayout`, not the empty `HudLayout{}` this paragraph
+describes. No layout FILE is shipped either way — "no default layouts ship" still
+holds; only what an *unset* name resolves to changed.
 
 ## Phase 3: the drag editor
 
@@ -427,19 +483,38 @@ a module happens to be parked underneath the bar. `ComputeChromeRect()` runs bef
 `ImGui::Begin()` on every frame (pure style/font metrics, no widget submission needed)
 so the hit test and the painted bar are always the same rect.
 
-**Edit-mode zpos: the HUD drops below the Shell while editing.** The HUD layer
-normally composites *above* the Shell (`g_zposFpsDisplay` > `g_zposSettingsOverlay`,
-`steamcompmgr.hpp`) so the live readout stays visible whether or not the settings panel
-is open. The editor draws its chrome inside the *Shell's* own context (see "Why it
-lives in the Shell's ImGui context" above), so that ordering used to mean the running
-FPS/CPU/GPU numbers printed straight through the Save/Cancel bar. `FpsDisplay_AddLayer()`
-now assigns `layer->zpos` conditionally: `g_zposSettingsOverlay - 1` (a local constant,
-not a new `steamcompmgr.hpp` entry) while `hudedit::IsActive()`, `g_zposFpsDisplay`
-otherwise. `Why:` the HUD still has to keep rendering during an edit — seeing the real
-readout move as a module is dragged is the entire point of the editor — it just must
-stop painting over the editor's own controls; dropping it one slot below the Shell for
-the duration of the edit does exactly that without touching the closed-overlay ordering
-or any constant in `steamcompmgr.hpp`.
+**Edit-mode zpos: reverted, `g_zposFpsDisplay` unconditionally.** A prior revision of
+this section described `FpsDisplay_AddLayer()` assigning `layer->zpos` conditionally —
+a local `kZposHudEditing = g_zposSettingsOverlay - 1` constant while `hudedit::IsActive()`,
+`g_zposFpsDisplay` otherwise — meant to stop the live readout printing through the
+editor's Save/Cancel bar (drawn inside the *Shell's* own context, see "Why it lives in
+the Shell's ImGui context" above) by dropping the HUD layer one slot below the Shell for
+the duration of an edit.
+
+That constant evaluated to `5`, colliding with `g_zposMuraCorrection` (`steamcompmgr.hpp`)
+— a real latent defect (`layer->zpos` would satisfy the screenshot-truncation code's
+`>= g_zposMuraCorrection` check as if this layer were the mura-correction one), though
+never observed in practice since it only applied while the editor was open. Every
+`g_zpos*` rank from `g_zposBase` through `g_zposFpsDisplay` is a consecutive run with no
+free integer between `g_zposCursor` and `g_zposSettingsOverlay` for a distinct edit-mode
+rank to occupy — and this file's own constants stay untouched by design (this section's
+own earlier text). So rather than pick another collision, the special case is gone
+entirely: `layer->zpos` is `g_zposFpsDisplay` unconditionally, editing or not.
+
+`Why this loses nothing`: `paint_all()` (`steamcompmgr.cpp`) always calls
+`SettingsOverlay_AddLayer()` before `FpsDisplay_AddLayer()`, and compositing
+(`rendervulkan.cpp`'s `bind_all_layers()`/`vulkan_composite()`) blends strictly in that
+`push()` order — by array index, never by the `zpos` field's numeric value (no sort by
+`zpos` exists anywhere in this codebase; the field is metadata consumed only by a
+handful of threshold/equality checks in `steamcompmgr.cpp`/`rendervulkan.cpp`, none of
+which reorder anything). So the HUD layer was already composited after — visually on
+top of — the Shell's own layer regardless of which number `layer->zpos` carried; the
+conditional constant never actually changed a single pixel on screen. If the
+Save/Cancel-bleed-through this section used to describe is still visible in practice,
+the fix belongs elsewhere (e.g. genuinely reordering the `AddLayer()` calls in
+`steamcompmgr.cpp` for edit mode, or having the editor's own chrome draw with a
+guaranteed-opaque backdrop) — not a `zpos` number, which this investigation found has
+no bearing on `paint_all()`'s actual layer order.
 
 **The "Modules" rewire.** The same change rewired the settings panel's seven
 `hud.mod_*` toggle rows (and the Fps module's `label` param) off the now-render-inert
@@ -532,5 +607,5 @@ Gaussian blur turns it into exactly the uniform grey field that made the editor 
 The normal Shell's blur/darkening behaviour is untouched: the branch is one `bHudEditing`
 flag inside the frame-info builder, not a change to the blur path itself. `hudedit`'s
 `s_bActive` is a `std::atomic<bool>` for this reason — it is now read from the composite
-thread (here, and by `FpsDisplay_AddLayer()`'s edit-mode zpos) while the overlay thread
-writes it.
+thread (here) while the overlay thread writes it. (`FpsDisplay_AddLayer()` used to read
+it too, for its own now-reverted edit-mode zpos — see "Edit-mode zpos" above.)

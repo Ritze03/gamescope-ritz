@@ -250,13 +250,19 @@ namespace gamescope::config
     // under an already-running process (e.g. a test, or a future editor
     // that just saved and wants the very next frame to see it).
     //
-    // Returns a reference to a process-wide empty HudLayout{} - never
-    // nullptr, never a caller-owned copy - for an empty name, a name with
-    // no on-disk file, a file that failed to parse, or a schema_version
-    // this build refuses: a deleted/renamed/mistyped/never-set
-    // layout_name all degrade identically to "render nothing" rather than
-    // crashing or resurrecting whatever was last successfully loaded under
-    // that name.
+    // Returns a reference to a process-wide constant - never nullptr, never
+    // a caller-owned copy. A NAMED lookup that fails (a name with no
+    // on-disk file, a file that failed to parse, or a schema_version this
+    // build refuses - i.e. deleted/renamed/mistyped) degrades to an empty
+    // HudLayout{} ("render nothing") rather than crashing or resurrecting
+    // whatever was last successfully loaded under that name. An EMPTY name
+    // ("no layout referenced yet" - a fresh install, or any profile/game
+    // that has never named one) is a different case with nothing to
+    // degrade FROM: it resolves to a populated, in-memory-only default
+    // layout instead (ConfigManager.cpp's BuildDefaultHudLayout()/
+    // s_DefaultLayout), so the fresh/no-layout HUD matches this project's
+    // stock pre-layout-rework readout rather than rendering blank. Neither
+    // path ever writes a file - see s_DefaultLayout's own comment.
     const HudLayout &ResolveLayoutCached( const std::string &sLayoutName );
     void ReloadLayoutCache();
 

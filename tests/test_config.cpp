@@ -1451,12 +1451,50 @@ TEST_CASE( "ResolveLayoutCached degrades to an empty layout for a name that does
     REQUIRE_FALSE( missing.cpu.enabled );
     REQUIRE_FALSE( missing.gpu.enabled );
     REQUIRE_FALSE( missing.media.enabled );
+}
 
-    // Same for an empty name (the "no layout referenced" default) --
-    // ConfigSchema.h's FpsDisplaySettings::layout_name default.
+// Regression coverage for the fresh-install/no-layout-picked-yet defect: an
+// empty layout_name ("no layout referenced," ConfigSchema.h's own default)
+// must NOT resolve the same way a deleted/renamed/mistyped name does (the
+// test just above) -- there is nothing to degrade FROM, so it resolves to a
+// populated stock default instead of an all-disabled empty HudLayout{}.
+// Without this, a fresh config (or any profile/game that has simply never
+// named a layout) renders a completely blank HUD, which is the exact
+// regression this covers. See ConfigManager.cpp's BuildDefaultHudLayout()/
+// s_DefaultLayout and superdoc/architecture/hud-layouts.md's "No layout
+// selected" section.
+TEST_CASE( "ResolveLayoutCached resolves an empty layout_name to a populated stock default, not a blank HUD", "[config]" )
+{
+    TempConfigHome home;
+
     const std::string sEmptyName;
-    const HudLayout &empty = ResolveLayoutCached( sEmptyName );
-    REQUIRE_FALSE( empty.fps.placement.enabled );
+    const HudLayout &def = ResolveLayoutCached( sEmptyName );
+
+    // Every module shows by default -- matches this project's pre-layout-
+    // rework compiled-in defaults (FpsDisplaySettings::fps_enabled/
+    // cpu_enabled/gpu_enabled/media_enabled, ConfigSchema.h, all true).
+    REQUIRE( def.fps.placement.enabled );
+    REQUIRE( def.cpu.enabled );
+    REQUIRE( def.gpu.enabled );
+    REQUIRE( def.media.enabled );
+
+    // The Fps module's own sub-rows default on too (frametime_enabled/
+    // graph_enabled/percentiles_enabled/fps_label_enabled's own
+    // pre-rework defaults).
+    REQUIRE( def.fps.frametime_enabled );
+    REQUIRE( def.fps.graph_enabled );
+    REQUIRE( def.fps.percentiles_enabled );
+    REQUIRE( def.fps.fps_label_enabled );
+
+    // Resolving twice returns the exact same populated state -- this is a
+    // stable in-memory constant, not something that mutates or degrades on
+    // a second call.
+    REQUIRE( ResolveLayoutCached( sEmptyName ).fps.placement.enabled );
+
+    // Never written to disk as a side effect of merely resolving it -- a
+    // first read must not create layouts/custom.json (or any file) behind
+    // the user's back.
+    REQUIRE( ListLayouts().empty() );
 }
 
 TEST_CASE( "ResolveLayoutCached degrades to empty for a deleted layout, not stale resurrected data", "[config]" )

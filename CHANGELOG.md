@@ -46,6 +46,9 @@ The newest version below is the one this build reports.
 - **HUD placement editor: the screen's centre and margins are shown**: a faint centre
   cross and edge-margin frame are now always drawn, so it is clear where a module is
   being placed even before a snap guide appears.
+- **The HUD shows something again on a fresh setup**: a config that has never had a HUD
+  layout picked now shows the stock readout (frame rate, CPU, GPU, Now Playing) instead
+  of a blank overlay, matching how the HUD looked before the layout editor existed.
 
 ## [0.3.5] – 2026-08-27
 

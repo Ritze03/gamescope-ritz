@@ -166,12 +166,17 @@ namespace gamescope::config
         // layouts/<name>.json (HudLayout below, ConfigManager's
         // LoadLayout/SaveLayout/ResolveLayoutCached) whose content this
         // layer's HUD should render. Empty (the default -- ship no default
-        // layouts, per the design doc) means "no layout referenced," which
-        // resolves to a completely empty HudLayout{} and therefore renders
-        // nothing -- the same deliberate, valid state a name that no
-        // longer exists on disk also resolves to (ResolveLayoutCached's
-        // own comment): a deleted/renamed/mistyped layout_name degrades to
-        // "nothing drawn," never a crash and never stale/resurrected data.
+        // layout FILES, per the design doc) means "no layout referenced,"
+        // which resolves to a populated, in-memory-only stock default
+        // (ConfigManager.cpp's BuildDefaultHudLayout()/s_DefaultLayout) --
+        // see that comment, and superdoc/architecture/hud-layouts.md's "No
+        // layout selected" section, for why this differs from a name that
+        // no longer exists on disk: THAT case still resolves to a
+        // completely empty HudLayout{} (ResolveLayoutCached's own
+        // comment) -- a deleted/renamed/mistyped layout_name degrades to
+        // "nothing drawn," never a crash and never stale/resurrected data
+        // -- but an empty layout_name has nothing to degrade FROM, so it
+        // is not treated the same way any more.
         //
         // A REFERENCE, not a copy: layered globally/per-profile/per-game
         // exactly like every other field in this struct (the existing
@@ -219,11 +224,15 @@ namespace gamescope::config
     // what ApplyProfile()'s deliberate copy semantics (DECISIONS.md #20)
     // give a profile.
     //
-    // Ships with no default layouts by design (the user's explicit call,
-    // recorded in superdoc/architecture/hud-layouts.md) -- a
+    // Ships with no default layout FILES by design (the user's explicit
+    // call, recorded in superdoc/architecture/hud-layouts.md) -- a
     // default-constructed HudLayout{} has every module's `enabled` false,
-    // so it is already a completely valid "renders nothing" state with no
-    // special-casing required anywhere that resolves one.
+    // so it is a completely valid "renders nothing" state for a NAMED
+    // lookup that fails (deleted/renamed/mistyped, ResolveLayoutCached's
+    // own comment). An unset `layout_name` is handled separately, in
+    // memory only, by ConfigManager.cpp's BuildDefaultHudLayout() --
+    // see FpsDisplaySettings::layout_name's own comment above and
+    // hud-layouts.md's "No layout selected" section for why.
 
     // One module's manual placement within a layout. Shared shape for all
     // four modules (Fps/Cpu/Gpu/Media, FpsDisplay.cpp's ModuleKind) --
