@@ -135,12 +135,18 @@ pass:
   (the Rec.709 weights `0.2126/0.7152/0.0722` sum to 1.0), which collapses
   to **zero** luma separation from the background right at `bgLuma ==
   0.5` — digits would vanish over any surface near mid-grey. When the
-  separation is below **0.25** (chosen as a conservative "clearly
-  legible" floor, not derived from a formal contrast spec), the inverted
-  colour is pushed uniformly toward black or white — away from the
-  background's own luma — by just enough to clear that floor, and no
-  more. Outside that narrow band around mid-grey, the true inversion
-  survives completely untouched.
+  separation is below **0.40** (raised 2026-09-03 from an initial 0.25;
+  chosen from a measured on-screen check at mid grey — background
+  RGB(188,188,188) inverted to a marginal grey-on-grey RGB(138,138,138)
+  at 0.25, versus a comfortably-readable RGB(91,91,91) at 0.40 — not
+  derived from a formal contrast spec), the inverted colour is pushed
+  uniformly toward black or white — away from the background's own luma
+  — by just enough to clear that floor, and no more. That engages for
+  backgrounds with luma roughly in `(0.30, 0.70)` (was `(0.375, 0.625)`
+  at 0.25) — outside that band around mid-grey, the true inversion
+  survives completely untouched. Raising the floor further keeps buying
+  legibility inside that band at the cost of how much of the true
+  inverted colour survives there — the deliberate tension in this knob.
 - **Blend-space / HDR caveat**: `BlendLayer()` runs *after*
   `apply_layer_color_mgmt()` and *before* `encodeOutputColor()` — i.e. in
   linear-light blend space, not the final encoded output. Under HDR/PQ,

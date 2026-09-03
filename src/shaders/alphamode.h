@@ -55,7 +55,15 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
         float flInvLuma = 1.0f - flBgLuma;
         float flSeparation = abs( flInvLuma - flBgLuma );
 
-        const float kMinLumaSeparation = 0.25f;
+        // Chosen from a measured on-screen check, not a formal contrast
+        // standard: at background RGB(188,188,188) (encoded), a literal
+        // invert reads legible-but-marginal at 0.25f (inverted text lands
+        // at ~RGB(138,138,138), grey-on-grey). Raised to 0.40f so that same
+        // background reads at ~RGB(91,91,91) -- comfortably readable.
+        // Raising this further keeps buying legibility in the mid band at
+        // the cost of how much of the *true* inverted colour survives
+        // there -- that trade is the deliberate tension in this knob.
+        const float kMinLumaSeparation = 0.40f;
         if ( flSeparation < kMinLumaSeparation )
         {
             float flPush = kMinLumaSeparation - flSeparation;
