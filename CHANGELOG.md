@@ -70,6 +70,9 @@ The newest version below is the one this build reports.
 - **FPS number is centred in its backdrop again**: a two-digit reading used to sit
   shoved against the right edge with an empty gutter on the left; the digits are now
   centred within the readout's stable-width box.
+- **The FPS readout and toast notifications no longer draw over the settings
+  overlay**: both now sit beneath the settings panel/Shell as intended, instead of
+  covering it.
 
 ### Removed
 - **HUD performance modules**: CPU load, GPU load, the frametime readout, the frametime

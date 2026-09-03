@@ -1042,10 +1042,13 @@ namespace gamescope
 		if ( !layer )
 			return; // out of layer slots this frame
 
-		// The HUD layer sits ABOVE the Shell (g_zposFpsDisplay >
-		// g_zposSettingsOverlay, steamcompmgr.hpp) so the live readout
-		// stays visible whether or not the settings panel is open --
-		// deliberate, see that file's own comment.
+		// The HUD layer sits BELOW the Shell (g_zposFpsDisplay <
+		// g_zposSettingsOverlay, steamcompmgr.hpp) since the 2026-09-03
+		// reorder -- the user wants the settings panel drawn over the HUD,
+		// not the other way round. It still has its own independent
+		// visibility flag from the settings overlay, so the live readout
+		// keeps rendering (just underneath the panel) whether or not the
+		// settings panel is open -- deliberate, see that file's own comment.
 		layer->tex = s_pOverlayTexture;
 		layer->zpos = g_zposFpsDisplay;
 		layer->offset = { 0.0f, 0.0f };

@@ -147,6 +147,14 @@ pass:
   colours here are not bounded to `[0, 1]`, so the background is clamped
   to `[0, 1]` before inverting; skipping that clamp could hand `1.0 - c` a
   negative or wildly out-of-range result.
+- **What it inverts against**: `BlendLayer()` inverts whatever has already
+  been folded into `outputValue` by the time the HUD's layer is reached —
+  i.e. every layer pushed *before* it, not the whole frame (see
+  [compositing-vulkan.md](compositing-vulkan.md#layer-order-zpos)'s push-order
+  note). Since the 2026-09-03 layer-order fix the HUD is pushed before the
+  settings overlay/Shell, so Inverted mode inverts the **game (plus cursor
+  and mura correction) alone** — it no longer sees or inverts the Shell,
+  which composites on top of the HUD now.
 
 Inverted mode can't "invert" already-inverted text to signal a lag spike
 — doing that would show nothing against itself. Instead, **a spike tints

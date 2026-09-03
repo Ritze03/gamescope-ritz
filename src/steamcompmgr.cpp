@@ -3079,20 +3079,35 @@ paint_all( global_focus_t *pFocus, bool async )
 
 	if ( !s_bRitzAbNoOverlay )
 	{
-		// M1 settings overlay: drawn last so it composites above every other layer
-		// built above (including the cursor). Rendering-only for now -- see
-		// SettingsOverlay.h; input capture is Milestone M2.
-		gamescope::SettingsOverlay_AddLayer( &frameInfo );
+		// Push order here IS compositing order: the composite shader folds
+		// layers 1..n-1 onto layer 0 strictly in the order they were pushed
+		// (cs_composite_blit.comp's BlendLayer() loop; see BlitPushData_t in
+		// rendervulkan.cpp) -- it does not sort by zpos. So "drawn last"
+		// below means "composites on top", for real, and the g_zpos* values
+		// in steamcompmgr.hpp are set to agree with this order (keep both
+		// in sync if you ever reorder these calls).
+		//
+		// Why this order: the FPS HUD and toast notifications are pushed
+		// first (below), so the settings overlay/Shell composites above
+		// both -- the user asked for the HUD and toasts to sit beneath the
+		// Shell rather than drawing over it.
 
 		// M4 FPS display: independent visibility flag from the settings overlay
-		// above (see FpsDisplay.h) -- it renders every frame the readout is
+		// below (see FpsDisplay.h) -- it renders every frame the readout is
 		// enabled, whether or not the settings panel itself is open.
 		gamescope::FpsDisplay_AddLayer( &frameInfo );
 
 		// Toast notifications: same independent-lifetime reasoning as the FPS
-		// display above (see Overlay/Notifications.h) -- drawn topmost of
-		// all (g_zposNotifications) whether or not the settings panel is open.
+		// display above (see Overlay/Notifications.h) -- drawn above the HUD
+		// (g_zposNotifications > g_zposFpsDisplay) but still beneath the
+		// settings overlay, whether or not the settings panel is open.
 		gamescope::Notifications::AddLayer( &frameInfo );
+
+		// M1 settings overlay: drawn last so it composites above every other
+		// layer built above (including the cursor, the FPS HUD and the
+		// toasts). Rendering-only for now -- see SettingsOverlay.h; input
+		// capture is Milestone M2.
+		gamescope::SettingsOverlay_AddLayer( &frameInfo );
 	}
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)

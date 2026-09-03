@@ -37,21 +37,33 @@ static const uint32_t g_zposExternalOverlay = 2;
 static const uint32_t g_zposOverlay = 3;
 static const uint32_t g_zposCursor = 4;
 static const uint32_t g_zposMuraCorrection = 5;
-// Settings overlay (M1): drawn topmost, above even the cursor -- matches how
-// the Steam overlay/settings panels of other compositors sit above pointer
-// decoration once open.
-static const uint32_t g_zposSettingsOverlay = 6;
-// FPS display (M4): its own always-drawn HUD layer, topmost of all --
-// independent of g_zposSettingsOverlay so it stays visible/on top whether
-// or not the settings panel itself is open (see SPEC.md Feature 3's
-// lifetime note: the two have separate visibility flags by design).
-static const uint32_t g_zposFpsDisplay = 7;
-// Toast notifications: topmost of all, above even the settings overlay and
-// FPS HUD -- a toast confirming an action (e.g. a config profile applied
-// from inside the settings panel) must stay visible whether or not the
-// settings panel itself is open, same independent-lifetime reasoning as
-// g_zposFpsDisplay above (see Overlay/Notifications.h).
-static const uint32_t g_zposNotifications = 8;
+// FPS display (M4): its own always-drawn HUD layer -- independent of
+// g_zposSettingsOverlay below so it stays visible whether or not the
+// settings panel itself is open (see SPEC.md Feature 3's lifetime note: the
+// two have separate visibility flags by design). Sits above the cursor and
+// mura-correction layers but, per the 2026-09-03 reorder (see paint_all()'s
+// comment in steamcompmgr.cpp), BELOW the settings overlay -- the user
+// wants the HUD readable but not drawn over the settings panel/Shell.
+static const uint32_t g_zposFpsDisplay = 6;
+// Toast notifications: above the FPS HUD -- a toast confirming an action
+// (e.g. a config profile applied from inside the settings panel) must stay
+// visible whether or not the settings panel itself is open, same
+// independent-lifetime reasoning as g_zposFpsDisplay above (see
+// Overlay/Notifications.h). Like the HUD, drawn BELOW the settings overlay
+// since 2026-09-03 -- see g_zposSettingsOverlay's comment.
+static const uint32_t g_zposNotifications = 7;
+// Settings overlay (M1): drawn topmost of all, above the cursor, the FPS
+// HUD and the toasts -- matches how the Steam overlay/settings panels of
+// other compositors sit above pointer decoration once open.
+// Why: originally this sat *below* the FPS HUD and toasts (an inverted
+// z-order that a stale comment in paint_all() claimed was the opposite of
+// what the code actually did). The user asked for the HUD and toasts to
+// sit beneath the settings overlay/Shell instead, so this constant moved
+// to the top of the group on 2026-09-03 and paint_all() was reordered to
+// match -- keep the push order in steamcompmgr.cpp's paint_all() and these
+// values in agreement; the composite shader blends strictly in push order
+// and does not sort by zpos (cs_composite_blit.comp / BlendLayer()).
+static const uint32_t g_zposSettingsOverlay = 8;
 
 extern bool g_bHDRItmEnable;
 extern bool g_bForceHDRSupportDebug;

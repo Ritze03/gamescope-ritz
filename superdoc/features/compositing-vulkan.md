@@ -80,6 +80,30 @@ image ready for presentation.
   page only notes the coupling; the full frame-pacing loop belongs to
   [../architecture/overview.md](../architecture/overview.md).
 
+## Layer order (zpos)
+
+Compositing order is **push order**, not `zpos` order: `bind_all_layers()`'s shader
+loop (`cs_composite_blit.comp` and friends) folds layer `i` onto the accumulated
+result via `BlendLayer()` (`src/shaders/alphamode.h`) strictly for `i` in
+`0..layers.count()-1`, in the order each `Layer_t` was `push()`ed into
+`FrameInfo_t::layers` — nothing sorts by `zpos`. The `g_zpos*` constants
+(`src/steamcompmgr.hpp`) are therefore not an independent sort key; they're a
+same-order tag used elsewhere (screenshot truncation, DRM plane assignment,
+cursor/base-plane identification) that **must** be kept numerically consistent
+with the push order `paint_all()` (`src/steamcompmgr.cpp`) actually uses, or the
+two silently disagree — see that constants block's own comment.
+
+Bottom-to-top as of 2026-09-03: base plane / override / external overlay /
+override-window overlay (`g_zposBase`..`g_zposOverlay`) → cursor
+(`g_zposCursor`) → mura correction (`g_zposMuraCorrection`) → FPS HUD
+(`g_zposFpsDisplay`) → toast notifications (`g_zposNotifications`) → settings
+overlay/Shell (`g_zposSettingsOverlay`), topmost of all. *Why:* the user asked
+for the HUD and toasts to sit **beneath** the Shell rather than drawing over
+it — an earlier version pushed the settings overlay first (so it composited
+*under* the HUD and toasts) while its own comment claimed the opposite; both
+the push order and the `g_zpos*` values were corrected together so they can't
+drift apart again.
+
 ## Using it
 
 There's no direct end-user control surface here — this is the render core other

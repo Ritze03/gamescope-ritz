@@ -13,7 +13,8 @@
 // that triggered it closes. So this follows FpsDisplay.cpp's established
 // pattern exactly: its own fully independent ImGui context, offscreen
 // texture, general-queue submission and timeline semaphore, and its own
-// Layer_t pushed into paint_all()'s frame (topmost of everything, see
+// Layer_t pushed into paint_all()'s frame -- above the FPS HUD but, since
+// the 2026-09-03 reorder, below the settings overlay/Shell (see
 // steamcompmgr.hpp's g_zposNotifications) -- not a second, competing shape.
 #pragma once
 
