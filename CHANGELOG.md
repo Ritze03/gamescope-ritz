@@ -63,6 +63,9 @@ The newest version below is the one this build reports.
 - **The HUD shows something again on a fresh setup**: a config that has never had a HUD
   layout picked now shows the stock readout (frame rate, CPU, GPU, Now Playing) instead
   of a blank overlay, matching how the HUD looked before the layout editor existed.
+- **FPS number is centred in its backdrop again**: a two-digit reading used to sit
+  shoved against the right edge with an empty gutter on the left; the digits are now
+  centred within the readout's stable-width box.
 
 ### Removed
 - **HUD performance modules**: CPU load, GPU load, the frametime readout, the frametime

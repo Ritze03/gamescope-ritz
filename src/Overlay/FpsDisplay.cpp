@@ -752,11 +752,16 @@ namespace gamescope
 		bool bDrawBackdrop = false;
 		ImU32 backdropColor = 0;
 		ImU32 textColor = 0;
-		char szNum[8] = "";
+		char szNum[8] = ""; // unpadded digits actually drawn -- see flTextOffsetX
 		ImVec2 numSize{};
 		ImVec2 textSize{};
 		float flContentWidth = 0.0f;
 		float flContentHeight = 0.0f;
+		// Half the gap between the pinned 3-glyph field width and this
+		// number's own (unpadded) width -- added to the draw origin so the
+		// digits sit centred in the pinned-width box instead of jammed
+		// against its right edge. See MeasureFpsModule()'s own comment.
+		float flTextOffsetX = 0.0f;
 	};
 
 	// Phase 2's spike-reaction colours. A muted warning red rather than a
@@ -844,12 +849,24 @@ namespace gamescope
 			L.eTextMode = FpsModuleLayout::TextMode::Solid;
 		}
 
-		// Right-justified in a fixed 3-character field (blank-, not zero-,
-		// padded) -- 0-999 is plenty for a frame-rate readout.
-		snprintf( L.szNum, sizeof( L.szNum ), "%3d", std::clamp( nFps, 0, 999 ) );
+		// The box is still sized off a blank-padded "%3d" field so it never
+		// resizes as the number crosses a digit-count boundary (0-999 is
+		// plenty for a frame-rate readout). But the padding blanks are no
+		// longer what's drawn: drawing the padded string put the leading
+		// blank glyph's advance INSIDE the text draw, which left a visible
+		// empty gutter on the left of a two-digit number and shoved the
+		// digits against the box's right edge. Instead we measure the
+		// pinned field once for box sizing, then draw the plain (unpadded)
+		// digits centred within that pinned width via flTextOffsetX.
+		char szPadded[8];
+		snprintf( szPadded, sizeof( szPadded ), "%3d", std::clamp( nFps, 0, 999 ) );
+		snprintf( L.szNum, sizeof( L.szNum ), "%d", std::clamp( nFps, 0, 999 ) );
+
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested
-		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
+		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szPadded );
+		const ImVec2 unpaddedSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
+		L.flTextOffsetX = ( L.numSize.x - unpaddedSize.x ) * 0.5f;
 
 		L.textSize = L.numSize;
 		L.flContentWidth = L.textSize.x;
@@ -865,7 +882,9 @@ namespace gamescope
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
 		const ImVec2 rectMin = origin;
-		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding, rectMin.y + cfg.backdrop_padding );
+		// L.flTextOffsetX centres the unpadded digits within the pinned
+		// 3-glyph field width -- see MeasureFpsModule()'s own comment.
+		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX, rectMin.y + cfg.backdrop_padding );
 
 		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, L.backdropColor );
 
