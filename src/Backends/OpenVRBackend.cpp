@@ -1607,6 +1607,10 @@ namespace gamescope
         bool bNeedsCompositeFromFilter = (g_upscaleFilter == GamescopeUpscaleFilter::NEAREST || g_upscaleFilter == GamescopeUpscaleFilter::PIXEL) && !bLayer0ScreenSize;
 
         bNeedsFullComposite |= cv_composite_force;
+        // True per-pixel invert (the FPS HUD's Inverted colour mode) needs
+        // the real composited game colour under it -- see
+        // FrameInfo_t::bNeedsDestinationBlend's own comment.
+        bNeedsFullComposite |= pFrameInfo->bNeedsDestinationBlend;
         bNeedsFullComposite |= pFrameInfo->useFSRLayer0;
         bNeedsFullComposite |= pFrameInfo->useNISLayer0;
         bNeedsFullComposite |= pFrameInfo->blurLayer0;

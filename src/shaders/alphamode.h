@@ -4,6 +4,7 @@
 const int alpha_mode_premult = 0;
 const int alpha_mode_coverage = 1;
 const int alpha_mode_none = 2;
+const int alpha_mode_invert = 3;
 
 const int alpha_mode_max_bits = 4;
 
@@ -28,6 +29,45 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
     else if ( alphaMode == alpha_mode_coverage ) // coverage for accessibility looks
     {
         outputValue = layerColor * layerAlpha + outputValue * (1.0f - layerAlpha);
+    }
+    else if ( alphaMode == alpha_mode_invert )
+    {
+        // True per-pixel "invert what's underneath" mode -- the FPS HUD's
+        // Inverted text-colour option (superdoc/features/fps-display.md).
+        // This runs after apply_layer_color_mgmt() and before
+        // encodeOutputColor(), so `outputValue` is a LINEAR-light
+        // blend-space colour that, under HDR/PQ, is not bounded to [0,1] --
+        // clamp before inverting, or an HDR background can push the
+        // inverted result negative/out-of-range.
+        vec3 bg = clamp( outputValue.rgb, 0.0f, 1.0f );
+        vec3 inverted = 1.0f - bg;
+
+        // Rec.709 luma weights -- same ones FpsDisplay.cpp's host-side code
+        // uses. They sum to 1.0, so a literal invert's luma is exactly
+        // (1.0 - bgLuma): that collapses to zero separation from the
+        // background right at bgLuma == 0.5, making inverted text vanish
+        // over mid-grey. Push the inverted colour toward black or white,
+        // just far enough to clear a minimum luma gap, but ONLY when the
+        // true invert doesn't already clear it on its own -- everywhere
+        // else the real inversion survives untouched.
+        const vec3 kLumaWeights = vec3( 0.2126f, 0.7152f, 0.0722f );
+        float flBgLuma = dot( bg, kLumaWeights );
+        float flInvLuma = 1.0f - flBgLuma;
+        float flSeparation = abs( flInvLuma - flBgLuma );
+
+        const float kMinLumaSeparation = 0.25f;
+        if ( flSeparation < kMinLumaSeparation )
+        {
+            float flPush = kMinLumaSeparation - flSeparation;
+            float flDir = flBgLuma > 0.5f ? -1.0f : 1.0f; // away from the background's own luma
+            inverted = clamp( inverted + flDir * flPush, 0.0f, 1.0f );
+        }
+
+        // Gate on this layer's own alpha so only glyph pixels (near-opaque
+        // in the HUD's offscreen texture) actually get inverted; fully
+        // transparent pixels pass the background through unchanged.
+        outputValue.rgb = mix( outputValue.rgb, inverted, layerAlpha );
+        outputValue.a = layerAlpha + outputValue.a * ( 1.0f - layerAlpha );
     }
     else // none
     {

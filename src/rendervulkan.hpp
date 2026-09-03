@@ -297,6 +297,11 @@ enum AlphaBlendingMode_t
 	ALPHA_BLENDING_MODE_PREMULTIPLIED,
 	ALPHA_BLENDING_MODE_COVERAGE,
 	ALPHA_BLENDING_MODE_NONE,
+	// True per-pixel "invert what's underneath" (src/shaders/alphamode.h's
+	// alpha_mode_invert) -- shader-only, not a real DRM plane blend enum,
+	// so it must never reach liftoff's "pixel blend mode" property; see
+	// DRMBackend.cpp's drm_prepare_liftoff().
+	ALPHA_BLENDING_MODE_INVERT,
 };
 
 //#define DRM_MODE_BLEND_PREMULTI		0
@@ -310,6 +315,19 @@ struct FrameInfo_t
 	bool bFadingOut;
 	BlurMode blurLayer0;
 	int blurRadius;
+
+	// Set whenever a layer this frame uses ALPHA_BLENDING_MODE_INVERT (the
+	// FPS HUD's true per-pixel Inverted colour mode). That mode reads the
+	// real composited colour underneath each glyph pixel, so it only
+	// produces a correct result when this frame is actually running
+	// through the full compute-composite path -- DRM's partial-composition
+	// shortcut (DRMBackend.cpp's bWantsPartialComposite) removes the base
+	// game layer and composites overlays alone onto a plane ABOVE the
+	// game, which would invert transparent black instead of the game's
+	// colour. Backends OR this into their own bNeedsFullComposite decision
+	// (DRMBackend.cpp/WaylandBackend.cpp/OpenVRBackend.cpp's Present()) so
+	// the cost is paid only on the frames that actually need it.
+	bool bNeedsDestinationBlend = false;
 
 	// Issue #20 fix: set by steamcompmgr's preemptive-upscale path
 	// (commit_t::ShouldPreemptivelyUpscale(), paint_window_commit() in

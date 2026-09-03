@@ -111,34 +111,42 @@ was). On a detected lag spike, the resolved colour is inverted
 (`1 - r, 1 - g, 1 - b`) for the hold window — literally "just invert the
 text colour", per the user's own spec.
 
-**Inverted** — picks light or dark text to stay readable against
-whatever's behind it, and OLED-safe (no large flat-colour block; see
-below). **Honest limitation, stated plainly**: this cannot see the actual
-game pixels behind the HUD. The readout renders into its own isolated
-offscreen texture, cleared to transparent every frame, entirely
-independent of the game's own frame — it is composited onto the game
-*later*, on a different queue, using one of gamescope's three fixed
-per-layer Vulkan blend modes (`rendervulkan.hpp`'s `AlphaBlendingMode_t`).
-A literal per-pixel invert of the composited frame is a property of
-*that* later step, not of this file's own draw pass, and implementing it
-for real would mean changing the Vulkan composite path itself — out of
-scope for this feature. So Inverted mode derives its answer from the
-**backdrop's own resolved colour** instead:
+**Inverted** — a **true per-pixel invert** of the game's own colour under
+each glyph pixel (Phase 3, 2026-09-03). This used to be a fake — Fixed-mode
+colour picking derived from the backdrop instead, documented here as an
+honest limitation — but it is now real, implemented one layer down in the
+Vulkan compute-composite shader rather than in this file's own ImGui draw
+pass:
 
-- **Backdrop visible** (opacity > 0): a real luminance test
-  (`0.2126R + 0.7152G + 0.0722B`) on the backdrop's colour picks white or
-  near-black text. The backdrop is always a near-black neutral today (no
-  backdrop-colour option exists), so in practice this always resolves to
-  light text — written as a genuine luminance test rather than hardcoded
-  so it stays correct if a backdrop colour option is ever added.
-- **No backdrop** (opacity == 0): there is nothing to derive a luminance
-  from, and (per the limitation above) no way to sample the game either
-  — falls back to a content-independent black-outline/white-fill
-  technique (`AddTextInvertedSized()`, inherited from issue #29's old
-  "inverted" blend mode), the same "reads over anything" trick real
-  injected overlays (RTSS, MangoHud) use. Mostly-transparent glyph shapes
-  rather than one flat block, which is also the OLED-safe property the
-  user asked for.
+- This file just draws the digits as **plain opaque white** and hands the
+  HUD's layer a new blend mode, `rendervulkan.hpp`'s
+  `ALPHA_BLENDING_MODE_INVERT` (`FpsDisplay_AddLayer()`). Opaque, not
+  `text_opacity`-scaled — a partial alpha here would only dilute the
+  invert, mixing in un-inverted background (see the gating rule below).
+- The actual invert happens in `src/shaders/alphamode.h`'s `BlendLayer()`,
+  which every composite call site shares (plain blit, FSR/RCAS, both blur
+  passes) — one function, one edit, all paths covered. For each pixel:
+  `1.0 - c` on the real background colour it's compositing onto, gated on
+  this layer's own alpha so only glyph pixels are touched:
+  `outputValue.rgb = mix(outputValue.rgb, inverted, layerAlpha)`.
+  Fully-transparent HUD-texture pixels (`layerAlpha == 0`) pass the
+  background through completely unchanged.
+- **Mid-grey guard**: a literal invert's luma is exactly `1.0 - bgLuma`
+  (the Rec.709 weights `0.2126/0.7152/0.0722` sum to 1.0), which collapses
+  to **zero** luma separation from the background right at `bgLuma ==
+  0.5` — digits would vanish over any surface near mid-grey. When the
+  separation is below **0.25** (chosen as a conservative "clearly
+  legible" floor, not derived from a formal contrast spec), the inverted
+  colour is pushed uniformly toward black or white — away from the
+  background's own luma — by just enough to clear that floor, and no
+  more. Outside that narrow band around mid-grey, the true inversion
+  survives completely untouched.
+- **Blend-space / HDR caveat**: `BlendLayer()` runs *after*
+  `apply_layer_color_mgmt()` and *before* `encodeOutputColor()` — i.e. in
+  linear-light blend space, not the final encoded output. Under HDR/PQ,
+  colours here are not bounded to `[0, 1]`, so the background is clamped
+  to `[0, 1]` before inverting; skipping that clamp could hand `1.0 - c` a
+  negative or wildly out-of-range result.
 
 Inverted mode can't "invert" already-inverted text to signal a lag spike
 — doing that would show nothing against itself. Instead, **a spike tints
@@ -153,8 +161,10 @@ change to their stored setting.
 font size — a shadow that grows with a 48px font reads as blur, not
 depth, which is explicitly not what the user asked for ("a shadow that
 reads as depth rather than blur"). Alpha scales with strength up to a
-0.85 ceiling. Applies to both text-colour techniques (Solid and the
-Outline fallback).
+0.85 ceiling. Applies the same way regardless of text-colour mode (Fixed
+or Inverted) — both draw through the same single `AddText()` call now
+that Inverted mode's colour comes from the compute-composite shader
+rather than from a separate draw-time technique.
 
 ## Lag-spike detection
 
@@ -200,6 +210,6 @@ gutter on the left of a two-digit number and shoved the digits against
 the box's right edge (fixed 2026-09-03). `MeasureFpsModule()` measures
 both the padded field and the plain digits and derives `flTextOffsetX`,
 half the width difference, added to the text origin so the digits sit
-centred in the pinned-width box. The shadow and the inverted-mode
-outline both draw at that same offset origin, so they track the digits
-rather than the old padded position.
+centred in the pinned-width box. The shadow and the digits themselves
+both draw at that same offset origin, so they track together rather
+than the old padded position.

@@ -2661,6 +2661,17 @@ drm_prepare_liftoff( struct drm_t *drm, const struct FrameInfo_t *frameInfo, boo
 
 			if ( entry.layerState[i].zpos != g_zposBase )
 			{
+				// ALPHA_BLENDING_MODE_INVERT is a shader-only mode (this
+				// frame's own bNeedsDestinationBlend check upstream should
+				// already have forced full composite instead of ever
+				// reaching here) -- there is no DRM "pixel blend mode" enum
+				// value 3, so reject rather than hand liftoff a bogus
+				// property value.
+				if ( frameInfo->layers.get( i ).eAlphaBlendingMode == ALPHA_BLENDING_MODE_INVERT )
+				{
+					drm_log.debugf("drm_prepare_liftoff: layer %d wants ALPHA_BLENDING_MODE_INVERT, which is not a valid DRM blend mode", i );
+					return -EINVAL;
+				}
 				liftoff_layer_set_property( drm->lo_layers[ i ], "pixel blend mode", (uint64_t) frameInfo->layers.get( i ).eAlphaBlendingMode );
 			}
 			else
@@ -3650,6 +3661,13 @@ namespace gamescope
 			bool bNeedsFullComposite = false;
 			bNeedsFullComposite |= cv_composite_force;
 			bNeedsFullComposite |= bWasFirstFrame;
+			// True per-pixel invert (the FPS HUD's Inverted colour mode)
+			// reads the actual composited game colour under each glyph
+			// pixel -- DRM's partial-composition shortcut below removes the
+			// base game layer and composites overlays alone onto a plane
+			// ABOVE the game, which would invert transparent black instead.
+			// Scoped to only-when-actually-on: see FrameInfo_t's own comment.
+			bNeedsFullComposite |= pFrameInfo->bNeedsDestinationBlend;
 			bNeedsFullComposite |= pFrameInfo->useFSRLayer0;
 			bNeedsFullComposite |= pFrameInfo->useNISLayer0;
 			bNeedsFullComposite |= pFrameInfo->blurLayer0;

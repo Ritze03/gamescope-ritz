@@ -588,52 +588,6 @@ namespace gamescope
 		return col;
 	}
 
-	// The "Inverted" text-colour mode's no-backdrop fallback (Phase 2,
-	// 2026-09-03; this technique itself dates to issue #29's old "inverted"
-	// blend mode). What "inverted" can mean here, and why it is NOT a
-	// literal per-pixel GPU-blend destination-invert
-	// (VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR against the actual composited
-	// game frame), is worth being explicit about rather than silently
-	// under-delivering the user's own literal wording ("Inverted ... so its
-	// always readable"):
-	//
-	// This whole readout renders into its own isolated offscreen texture
-	// (s_pOverlayTexture, cleared to transparent every frame -- see
-	// RenderAndSubmit()'s VK_ATTACHMENT_LOAD_OP_CLEAR) on the general
-	// queue, entirely independent of the game's own frame. It is handed to
-	// paint_all() as one more Layer_t and composited onto the actual game
-	// content LATER, on the compute queue, by vulkan_composite() -- using
-	// one of exactly three fixed per-layer blend equations baked into that
-	// compute shader (rendervulkan.hpp's AlphaBlendingMode_t: PREMULTIPLIED
-	// / COVERAGE / NONE; see rendervulkan.cpp's u_alphaMode packing). A
-	// literal "invert whatever's underneath" mode is a property of THAT
-	// later compositing step, not of this file's own draw pass -- this
-	// file's "destination" during its own ImGui rendering is only ever this
-	// texture's own (normally transparent) prior content, never the game
-	// frame, so no amount of Vulkan blend-state work confined to this file
-	// can make a real per-pixel invert of the actual game picture happen.
-	// That is the HONEST LIMITATION documented in
-	// superdoc/features/fps-display.md: fixing it for real is a Vulkan
-	// composite-path change, out of scope for this task.
-	//
-	// What IS both real and fully in-scope, and what MeasureFpsModule()
-	// falls back to here specifically when Inverted mode has no backdrop
-	// to derive a luminance from: pairing a black outline with a white
-	// fill is the same "reads over anything" technique real injected
-	// overlays (RTSS, MangoHud) rely on, and it is a content-INDEPENDENT
-	// guarantee by construction (mostly-transparent glyph shapes rather
-	// than one large flat-colour block, which is also the literal "OLED
-	// safe" property the user asked for) rather than a fixed single colour
-	// that can still fail against a similar-toned background.
-	static void AddTextInvertedSized( ImDrawList *pDrawList, ImFont *pFont, float flFontSize, ImVec2 pos, const char *pszText )
-	{
-		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
-		const ImU32 outlineColor = IM_COL32( 0, 0, 0, 235 );
-		for ( const ImVec2 &off : kOffsets )
-			pDrawList->AddText( pFont, flFontSize, ImVec2( pos.x + off.x, pos.y + off.y ), outlineColor, pszText );
-		pDrawList->AddText( pFont, flFontSize, pos, IM_COL32( 255, 255, 255, 255 ), pszText );
-	}
-
 	// Shared box backdrop (issue #28: factored out so a future module would
 	// draw an identical backdrop rather than a second copy of the same four
 	// lines -- kept even with only one module left, since the FPS module
@@ -741,14 +695,6 @@ namespace gamescope
 	// draws into it.
 	struct FpsModuleLayout
 	{
-		// Solid: a single flat colour, drawn once (Fixed mode always;
-		// Inverted mode when it has a backdrop to derive a luminance
-		// from). Outline: the content-independent black-outline/white-fill
-		// technique (Inverted mode's no-backdrop fallback -- see
-		// AddTextInvertedSized()'s own comment for the honest limitation).
-		enum class TextMode { Solid, Outline };
-
-		TextMode eTextMode = TextMode::Solid;
 		bool bDrawBackdrop = false;
 		ImU32 backdropColor = 0;
 		ImU32 textColor = 0;
@@ -812,33 +758,18 @@ namespace gamescope
 		// ---- text colour + technique ----------------------------------
 		if ( bInvertedMode )
 		{
-			if ( L.bDrawBackdrop )
-			{
-				// Derived from the BACKDROP's own resolved colour, NOT the
-				// actual game pixels behind it -- see AddTextInvertedSized's
-				// comment for why a real per-pixel read of the composited
-				// frame is out of scope here. Our backdrop is always a
-				// near-black neutral (optionally spike-tinted, still dark),
-				// so in practice this always resolves to light text today;
-				// written as a real luminance test rather than a hardcoded
-				// "always white" so it stays correct if a backdrop colour
-				// option is ever added.
-				const float flLuma = 0.2126f * backdropBase.x + 0.7152f * backdropBase.y + 0.0722f * backdropBase.z;
-				const ImVec4 col = flLuma > 0.5f
-					? ImVec4( 0.05f, 0.05f, 0.06f, cfg.text_opacity )   // dark text on a light backdrop
-					: ImVec4( 0.97f, 0.98f, 1.0f, cfg.text_opacity );  // light text on a dark backdrop
-				L.textColor = ImGui::ColorConvertFloat4ToU32( col );
-				L.eTextMode = FpsModuleLayout::TextMode::Solid;
-			}
-			else
-			{
-				// No backdrop to derive a luminance from, and this file
-				// cannot see the real game pixels behind the HUD (see
-				// AddTextInvertedSized's comment) -- fall back to the
-				// content-independent outline technique, which is legible
-				// and OLED-safe regardless of what's underneath.
-				L.eTextMode = FpsModuleLayout::TextMode::Outline;
-			}
+			// True per-pixel invert now (rendervulkan's
+			// ALPHA_BLENDING_MODE_INVERT, wired up in FpsDisplay_AddLayer()):
+			// the compute-composite shader takes the actual game colour
+			// under each glyph pixel and inverts it (alphamode.h's
+			// BlendLayer(), with a mid-grey guard so it can't vanish over a
+			// near-50%-luminance surface). That means this draw pass just
+			// needs to hand the shader clean, fully-opaque alpha coverage
+			// on the glyph pixels -- plain opaque white, ignoring
+			// text_opacity here (a partial alpha would only dilute the
+			// invert, mixing in un-inverted background per alphamode.h's
+			// own layerAlpha gate). See superdoc/features/fps-display.md.
+			L.textColor = IM_COL32( 255, 255, 255, 255 );
 		}
 		else // "fixed"
 		{
@@ -846,7 +777,6 @@ namespace gamescope
 			if ( bSpike )
 				col = ImVec4( 1.0f - col.x, 1.0f - col.y, 1.0f - col.z, col.w ); // "just invert the text colour"
 			L.textColor = ImGui::ColorConvertFloat4ToU32( col );
-			L.eTextMode = FpsModuleLayout::TextMode::Solid;
 		}
 
 		// The box is still sized off a blank-padded "%3d" field so it never
@@ -909,10 +839,7 @@ namespace gamescope
 			pDrawList->AddText( pFont, flFontSize, shadowPos, shadowColor, L.szNum );
 		}
 
-		if ( L.eTextMode == FpsModuleLayout::TextMode::Outline )
-			AddTextInvertedSized( pDrawList, pFont, flFontSize, textPos, L.szNum );
-		else
-			pDrawList->AddText( pFont, flFontSize, textPos, L.textColor, L.szNum );
+		pDrawList->AddText( pFont, flFontSize, textPos, L.textColor, L.szNum );
 	}
 
 	// Phase 2 (2026-09-03): "Hide if FPS above X" -- persists across calls
@@ -1127,7 +1054,21 @@ namespace gamescope
 		layer->filter = GamescopeUpscaleFilter::LINEAR;
 		layer->blackBorder = false;
 		layer->applyColorMgmt = false;
-		layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE; // straight (non-premultiplied) alpha, same reasoning as SettingsOverlay's own layer
+
+		const bool bInvertedMode = s_Settings.fps_display.color_mode == "inverted";
+		if ( bInvertedMode )
+		{
+			// True per-pixel invert (alphamode.h's alpha_mode_invert) reads
+			// the actual game colour under each glyph pixel, so this frame
+			// MUST go through the full compute-composite path -- see
+			// bNeedsDestinationBlend's own comment in rendervulkan.hpp.
+			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_INVERT;
+			pFrameInfo->bNeedsDestinationBlend = true;
+		}
+		else
+		{
+			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE; // straight (non-premultiplied) alpha, same reasoning as SettingsOverlay's own layer
+		}
 		layer->ctm = nullptr;
 		layer->hdr_metadata_blob = nullptr;
 		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;

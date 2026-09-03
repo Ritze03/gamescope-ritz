@@ -25,6 +25,10 @@ The newest version below is the one this build reports.
 - **HUD text colour modes**: Fixed keeps your accent colour and briefly inverts it
   during a lag spike; Inverted picks light or dark text to stay readable against its
   backdrop, which is also gentler on OLED screens.
+- **Inverted HUD text now truly inverts the game underneath it**: Inverted mode no
+  longer just picks light or dark text from the backdrop; it now inverts the actual
+  game colours showing through each digit, with a safeguard so the text stays
+  visible even over a plain mid-grey background.
 - **HUD text shadow**: a small drop shadow behind the number, with a strength slider
   that turns it off at 0.
 - **HUD lag-spike reaction**: a noticeably slow frame now briefly inverts the HUD's

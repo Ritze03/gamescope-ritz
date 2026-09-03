@@ -88,11 +88,13 @@ namespace gamescope::config
 
         // Phase 2: the two-way text-colour choice. "fixed" keeps today's
         // look (the UI's own accent colour, color_fps below can override
-        // it) and inverts briefly on a detected lag spike; "inverted"
-        // derives light-or-dark text from what's actually behind it
-        // instead -- see FpsDisplay.cpp's MeasureFpsModule() for exactly
-        // what that can and can't see, and superdoc/features/fps-display.md
-        // for the honest limitation stated plainly.
+        // it) and inverts briefly on a detected lag spike; "inverted" is a
+        // true per-pixel invert of the game's own colour under each glyph
+        // -- rendervulkan's ALPHA_BLENDING_MODE_INVERT, wired up in
+        // FpsDisplay.cpp's FpsDisplay_AddLayer() and implemented in
+        // src/shaders/alphamode.h's BlendLayer(). See
+        // superdoc/features/fps-display.md for the mid-grey guard and the
+        // blend-space/HDR caveats.
         std::string color_mode = "fixed"; // fixed | inverted
 
         // Phase 2: drop-shadow strength, 0 = no shadow drawn at all.
