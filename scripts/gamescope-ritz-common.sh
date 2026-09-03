@@ -109,6 +109,59 @@ gcr_refuse_root_build() {
 	fi
 }
 
+# List the PIDs (one per line, possibly none) of processes whose *actual*
+# executable image is $1. Matching by process name (comm/pgrep) is not
+# reliable enough for this: comm is truncated to 15 chars by the kernel (a
+# real gamescope process was missed this way), and an unrelated project's
+# binary here is literally named "ritz" -- a name-based match could catch
+# that instead of the thing we care about. /proc/<pid>/exe is a symlink the
+# kernel maintains to the process's real, already-resolved executable path,
+# so resolving it and comparing against the real (readlink -f'd) target path
+# matches the actual binary and nothing else.
+gcr_pids_running_binary() {
+	local target="$1"
+	[ -e "$target" ] || return 0
+	target=$(readlink -f -- "$target") || return 0
+
+	local exe_link resolved pid
+	for exe_link in /proc/[0-9]*/exe; do
+		# A process can exit between the glob and the readlink below (or we
+		# may lack permission to read another user's /proc/<pid>/exe) --
+		# either way that's just "not a match", not an error.
+		resolved=$(readlink -f -- "$exe_link" 2>/dev/null) || continue
+		[ "$resolved" = "$target" ] || continue
+		pid=${exe_link#/proc/}
+		pid=${pid%/exe}
+		printf '%s\n' "$pid"
+	done
+}
+
+# Build-time guard (added after a build relinked /usr/bin/gamescope-ritz's
+# target nine seconds after the user had already launched a game through
+# it): refuse to rebuild a binary a gamescope-ritz process is currently
+# running as. ninja replaces the output file in place, and a process that is
+# mid-exec (or about to be re-exec'd, e.g. gamescope re-execing itself) of a
+# binary being overwritten underneath it is exactly the risk this closes off.
+# Escape hatch: GCR_BUILD_ANYWAY=1, for when the caller has already verified
+# it's safe (e.g. that running instance is about to be replaced on purpose).
+gcr_refuse_if_running() {
+	local build_dir="$1"
+	local target pids
+
+	if [ "${GCR_BUILD_ANYWAY:-0}" = "1" ]; then
+		return 0
+	fi
+
+	target=$(gcr_release_binary "$build_dir")
+	pids=$(gcr_pids_running_binary "$target")
+	if [ -n "$pids" ]; then
+		gcr_err "refusing to build: '$target' is currently running (pid(s): $(printf '%s' "$pids" | tr '\n' ' '))."
+		gcr_err "Rebuilding now would replace that binary out from under the running process."
+		gcr_err "Stop the running instance first, or set GCR_BUILD_ANYWAY=1 to override if you've already confirmed it's safe."
+		exit 1
+	fi
+}
+
 # True (0) if any of the submodules meson needs are not checked out yet.
 # Without this, meson fails deep in configure with a confusing error like
 # "Include dir reshade/source does not exist" — this checks up front instead.
@@ -173,6 +226,7 @@ gcr_build() {
 	local repo_root="$1" build_dir="$2" buildtype="$3"; shift 3
 	local extra_opts=("$@")
 	gcr_refuse_root_build
+	gcr_refuse_if_running "$build_dir"
 	gcr_ensure_submodules "$repo_root"
 
 	local opts=(--buildtype="$buildtype")
