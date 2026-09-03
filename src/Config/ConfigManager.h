@@ -35,13 +35,6 @@ namespace gamescope::config
     std::string ProfilePath( std::string_view svSanitizedName );
     std::string GamePath( std::string_view svAppId );
 
-    // Phase 0 of the manual-placement HUD-layout rework (ConfigSchema.h's
-    // HudLayout comment, superdoc/architecture/hud-layouts.md) -- a
-    // directory parallel to ProfilesDir()/GamesDir() above, holding only
-    // placement data, never routed through ApplyProfile().
-    std::string LayoutsDir();
-    std::string LayoutPath( std::string_view svSanitizedName );
-
     // Profile names come from user input and become a path component directly.
     // Strips everything outside [A-Za-z0-9 _-], trims surrounding spaces, and
     // rejects a name that ends up empty (or is exactly "." or ".." - unreachable
@@ -49,15 +42,6 @@ namespace gamescope::config
     // A name can never escape the profiles directory as a result: the allowlist
     // simply contains no path separator or '.' character at all.
     std::optional<std::string> SanitizeProfileName( std::string_view svName );
-
-    // Identical rules to SanitizeProfileName immediately above -- same
-    // allowed charset, same trim/empty/"."/".." rejection, same guarantee
-    // that the result can never escape LayoutsDir(). Deliberately a
-    // separate function rather than a shared alias: layout names and
-    // profile names are independent namespaces (a name valid as a profile
-    // makes no claim about being valid, or already taken, as a layout)
-    // even though the sanitisation text happens to be identical today.
-    std::optional<std::string> SanitizeLayoutName( std::string_view svName );
 
     // Loads global.json. Missing file -> compiled-in defaults (Settings{}), not
     // an error. Malformed JSON, or a schema_version newer than this build
@@ -80,39 +64,12 @@ namespace gamescope::config
     // global.json otherwise. Pass std::nullopt when no app id was resolved.
     Settings ResolveEffective( const std::optional<std::string> &oAppId );
 
-    // Loads layouts/<svSanitizedName>.json. std::nullopt if it doesn't exist,
-    // fails to parse, or its own schema_version is newer than this build
-    // understands (already logged in every failing case) - mirrors
-    // LoadProfile's contract exactly. Never returns a default-constructed
-    // HudLayout{} as a stand-in for "not found" - callers that need to tell
-    // the two apart (ResolveLayoutCached below) rely on that.
-    std::optional<HudLayout> LoadLayout( std::string_view svSanitizedName );
-
     // Synchronous atomic writes (temp file + fsync + rename, in the same
     // directory as the target) - safe to call from any thread that isn't the
     // steamcompmgr render thread. Use the Enqueue* functions below from there
     // instead.
     bool SaveGlobal( const Settings &settings );
     bool SaveProfile( std::string_view svSanitizedName, const Settings &settings );
-
-    // Writes layouts/<svSanitizedName>.json - mirrors SaveProfile's shape
-    // exactly, including stamping a "name" key onto the written JSON (not
-    // part of the HudLayout struct itself, same as SaveProfile's "name").
-    bool SaveLayout( std::string_view svSanitizedName, const HudLayout &layout );
-
-    // The only function that deletes layouts/<svSanitizedName>.json -
-    // mirrors DeletePerGameOverride's containment guarantees (refuses a
-    // name containing '/' or equal to "." / ".."; double-checks the
-    // resulting path's parent is exactly LayoutsDir() before removing
-    // anything) and its "missing file is still success" contract. Nothing
-    // else in this header ever deletes a layout file - a layout going away
-    // is always this one explicit, caller-initiated action, same
-    // "toggling something off must never delete data" rule issue #43 set
-    // for per-game overrides. Every reference to this name left behind on
-    // a profile/game's fps_display.layout_name simply resolves to an empty
-    // HudLayout{} afterward (ResolveLayoutCached's own comment) - it is
-    // never rewritten or cleared by this call.
-    bool DeleteLayout( std::string_view svSanitizedName );
 
     // "Override Global Config" snapshot (SPEC.md decision, DECISIONS.md #19):
     // writes games/<AppId>.json with override_global: true and a full copy of
@@ -182,17 +139,6 @@ namespace gamescope::config
     void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot );
     void EnqueueProfileWrite( std::string sSanitizedName, Settings settings );
 
-    // Same background-thread write as EnqueueProfileWrite immediately
-    // above, for layouts/<sSanitizedName>.json - the path a future layout
-    // editor's live drag/resize edits should use rather than SaveLayout()
-    // directly, for the identical steamcompmgr-thread-must-never-block
-    // reason EnqueueProfileWrite exists. Does NOT itself invalidate
-    // ResolveLayoutCached's cache (the write may not have hit disk yet
-    // when this returns) - callers that need the cache to reflect an edit
-    // immediately should call ReloadLayoutCache() after FlushPendingWrites(),
-    // same as any other cache-vs-background-write ordering in this file.
-    void EnqueueLayoutWrite( std::string sSanitizedName, HudLayout layout );
-
     // Issue #35: writes `overlay` (only) to global.json, without the caller
     // needing to hold a fresh copy of every other section - merges onto the
     // freshest full Settings this process has seen (CurrentFullSettings(),
@@ -210,18 +156,6 @@ namespace gamescope::config
     // ConfigSchema.h's PanelGeometry comment for why not the PanelId enum).
     void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry );
 
-    // Issue #40: same shape as EnqueueGeometryWrite() immediately above --
-    // patches OverlaySettings::system_monitor_tab onto the freshest known
-    // `overlay` in-memory and writes that, rather than going through
-    // EnqueueRoutedWrite() (FpsDisplay.cpp's usual persistence path for
-    // every OTHER System Monitor setting), which deliberately discards
-    // any caller-supplied `overlay` and substitutes the freshest known
-    // copy instead (see that function's own comment) -- exactly the
-    // "don't own this field" protection that would otherwise silently
-    // drop a tab-selection edit made through it. sTab is "modules" or
-    // "statistics" (ConfigSchema.h's OverlaySettings::system_monitor_tab).
-    void EnqueueSystemMonitorTabWrite( const std::string &sTab );
-
     // Blocks until every currently-queued write has been flushed to disk. For
     // orderly shutdown and for tests - not for use on the steamcompmgr thread.
     void FlushPendingWrites();
@@ -235,36 +169,6 @@ namespace gamescope::config
     // every frame a panel is drawn.
     std::vector<std::string> ListProfiles();
     std::vector<std::string> ListGameIds();
-    std::vector<std::string> ListLayouts();
-
-    // ---- HUD layout cache ------------------------------------------------
-    // A render path resolving fps_display.layout_name at ~60fps must never
-    // hit disk per frame (this header's own threading note above). This is
-    // that cache: an in-memory map, populated by reading every
-    // layouts/*.json once, refreshed only on an explicit ReloadLayoutCache()
-    // call - which LoadGlobal() and ResolveEffective() both already make
-    // for you at their own "a Settings got (re)loaded" boundary (itself not
-    // a per-frame call site - see their own comments), so ordinary
-    // startup/profile-apply/override-toggle flows need nothing extra. Call
-    // ReloadLayoutCache() yourself only after writing a layout out from
-    // under an already-running process (e.g. a test, or a future editor
-    // that just saved and wants the very next frame to see it).
-    //
-    // Returns a reference to a process-wide constant - never nullptr, never
-    // a caller-owned copy. A NAMED lookup that fails (a name with no
-    // on-disk file, a file that failed to parse, or a schema_version this
-    // build refuses - i.e. deleted/renamed/mistyped) degrades to an empty
-    // HudLayout{} ("render nothing") rather than crashing or resurrecting
-    // whatever was last successfully loaded under that name. An EMPTY name
-    // ("no layout referenced yet" - a fresh install, or any profile/game
-    // that has never named one) is a different case with nothing to
-    // degrade FROM: it resolves to a populated, in-memory-only default
-    // layout instead (ConfigManager.cpp's BuildDefaultHudLayout()/
-    // s_DefaultLayout), so the fresh/no-layout HUD matches this project's
-    // stock pre-layout-rework readout rather than rendering blank. Neither
-    // path ever writes a file - see s_DefaultLayout's own comment.
-    const HudLayout &ResolveLayoutCached( const std::string &sLayoutName );
-    void ReloadLayoutCache();
 
     // Session-wide "where do a live-edited panel's writes belong" routing,
     // shared by every panel that keeps its own locally-cached Settings and

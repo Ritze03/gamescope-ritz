@@ -86,10 +86,10 @@ extern gamescope::ConVar<bool> cv_adaptive_sync;
 extern gamescope::ConVar<bool> cv_hdr_enabled;
 
 // The per-frame application commit clock (src/commit.cpp), for
-// display.budget_meter. Not declared in any header -- src/Metrics/
-// SystemStats.cpp declares its own extern for exactly this variable for
-// exactly this reason, so this follows that precedent rather than adding
-// header plumbing for one read.
+// display.budget_meter. Not declared in any header -- FpsDisplay.cpp
+// declares its own extern for exactly this variable for exactly this
+// reason, so this follows that precedent rather than adding header
+// plumbing for one read.
 extern std::atomic<uint64_t> g_ulLastAppFrametimeNs;
 
 // Set true/false only inside the Steam-focus override branch in

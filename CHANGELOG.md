@@ -50,6 +50,15 @@ The newest version below is the one this build reports.
   layout picked now shows the stock readout (frame rate, CPU, GPU, Now Playing) instead
   of a blank overlay, matching how the HUD looked before the layout editor existed.
 
+### Removed
+- **HUD performance modules**: CPU load, GPU load, the frametime readout, the frametime
+  graph, the 1%/0.1% percentile row, and Now Playing are gone. The HUD is now a single
+  FPS number, drawn cleanly over your game.
+- **HUD placement editor**: the drag-and-drop layout editor is gone. HUD position is now
+  set with a 9-point anchor picker plus horizontal and vertical margin sliders.
+- **Named HUD layouts**: the HUD no longer supports separate saved layouts (such as
+  "Simple" or "Advanced"). Placement is a single anchor and pair of margins instead.
+
 ## [0.3.5] – 2026-08-27
 
 ### Added

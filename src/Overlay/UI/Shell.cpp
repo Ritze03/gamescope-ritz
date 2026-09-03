@@ -35,7 +35,6 @@
 #include "Colors.h"
 #include "CommandPalette.h"
 #include "Controls.h"
-#include "HudLayoutEditor.h"
 #include "Layout.h"
 #include "Lane.h"
 #include "Registry.h"
@@ -699,8 +698,8 @@ namespace gamescope::ui::shell
 		ConCommand cc_overlay_e2_trace(
 			"overlay_e2_trace",
 			"Record which E2 surface drew on each frame: overlay_e2_trace <on|off|clear|dump>. "
-			"One character per frame -- 'L' the standalone launcher, 'S' the full shell, 'H' the "
-			"HUD layout editor, '.' the layer still drawing (fading) with neither surface painted. "
+			"One character per frame -- 'L' the standalone launcher, 'S' the full shell, '.' the "
+			"layer still drawing (fading) with neither surface painted. "
 			"Off by default and free while off. Through gamescopectl the verb is one argument: "
 			"gamescopectl overlay_e2_trace on.",
 			DrawTraceCmd );
@@ -5493,21 +5492,6 @@ namespace gamescope::ui::shell
 				if ( bWasArmed )
 					return;
 
-				// HUD layouts Phase 3: the placement editor owns Esc while
-				// it is up, same "on top of the shell" precedent as the
-				// palette/dropdown/armed-action rungs above it -- it
-				// cancels the in-progress edit rather than falling through
-				// to closing the whole overlay underneath it. Checked here
-				// (not earlier, alongside the palette/dropdown checks at
-				// the top of this function) because RunKeyboard() runs
-				// every frame the editor is up too (Shell::Draw()'s own
-				// early return for it sits AFTER this call, unlike the
-				// launcher's, which returns before RunKeyboard() at all --
-				// see that early return's own comment) and this is where
-				// D26's chain already lives.
-				if ( ui::hudedit::HandleEscape() )
-					return;
-
 				// A field mid-edit owns Esc: it means "cancel this rename",
 				// never "throw the whole overlay away". ImGui deactivates and
 				// reverts the InputText itself; the shell's one bit of
@@ -6255,28 +6239,6 @@ namespace gamescope::ui::shell
 		// once, first, is what guarantees nothing does. Selection is by id
 		// string and survives (Registry.h's Rebuilds()).
 		Reg().SyncDynamicAreas();
-
-		// =================================================================
-		//  HUD layouts Phase 3: the placement editor -- another
-		//  s_bLauncherOnly-shaped early return (see that branch above)
-		// =================================================================
-		// Same shape, same reasoning: an EARLY RETURN rather than a
-		// `if ( !hudedit::IsActive() )` guard threaded through the slab/
-		// rail/sheet/inspector drawing below, so a future region added down
-		// there cannot quietly reappear behind the editor by forgetting a
-		// guard.
-		//
-		// Placed AFTER RunKeyboard() (unlike the launcher branch, which
-		// returns before it) -- hudedit::HandleEscape() is a rung in
-		// RunKeyboard()'s own Esc precedence chain (D26), so Esc has to
-		// reach that function for the editor to be able to cancel itself;
-		// see RunKeyboard() for the exact rung.
-		if ( ui::hudedit::IsActive() )
-		{
-			ui::hudedit::Draw();
-			TraceFrame( 'H' );
-			return;
-		}
 
 		// An armed destructive action disarms itself. Left armed, it would
 		// be one press from deleting a file for as long as the overlay

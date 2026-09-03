@@ -153,30 +153,21 @@ namespace gamescope::config
                 s.fps_display.backdrop_padding = JGetFloat( *pFps, "backdrop_padding", s.fps_display.backdrop_padding );
                 s.fps_display.blend_mode = JGetString( *pFps, "blend_mode", s.fps_display.blend_mode );
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
-                s.fps_display.graph_enabled = JGetBool( *pFps, "graph_enabled", s.fps_display.graph_enabled );
-                s.fps_display.percentiles_enabled = JGetBool( *pFps, "percentiles_enabled", s.fps_display.percentiles_enabled );
                 s.fps_display.fps_enabled = JGetBool( *pFps, "fps_enabled", s.fps_display.fps_enabled );
-                s.fps_display.frametime_enabled = JGetBool( *pFps, "frametime_enabled", s.fps_display.frametime_enabled );
                 s.fps_display.fps_label_enabled = JGetBool( *pFps, "fps_label_enabled", s.fps_display.fps_label_enabled );
-                // placement/margin_vertical/margin_horizontal removed (HUD
-                // layouts Phase 1, ConfigSchema.h) -- deliberately not read
-                // here any more, same precedent as dock_scale/
-                // opacity_background's own removal below.
-                // Issue #28: per-module enable toggles.
-                s.fps_display.cpu_enabled = JGetBool( *pFps, "cpu_enabled", s.fps_display.cpu_enabled );
-                s.fps_display.gpu_enabled = JGetBool( *pFps, "gpu_enabled", s.fps_display.gpu_enabled );
-                s.fps_display.media_enabled = JGetBool( *pFps, "media_enabled", s.fps_display.media_enabled );
-                // module_spacing removed (HUD layouts Phase 1) -- deliberately
-                // not read here any more, same removal precedent.
-                // Issue #29: optional per-module colour overrides.
+                // graph_enabled/percentiles_enabled/cpu_enabled/gpu_enabled/
+                // media_enabled/frametime_enabled/color_cpu/color_gpu/
+                // color_media/layout_name removed 2026-09-03 with the
+                // perf-stats modules and the named-layout system
+                // (superdoc/meta/TERMINOLOGY.md's "profiler" entry) --
+                // deliberately not read here any more, same precedent as
+                // dock_scale/opacity_background's own removal below.
                 s.fps_display.color_fps = JGetOptInt( *pFps, "color_fps" );
-                s.fps_display.color_cpu = JGetOptInt( *pFps, "color_cpu" );
-                s.fps_display.color_gpu = JGetOptInt( *pFps, "color_gpu" );
-                s.fps_display.color_media = JGetOptInt( *pFps, "color_media" );
-                // Phase 0 HUD-layout rework: which layouts/<name>.json this
-                // layer's HUD renders, a plain string reference (see
-                // ConfigSchema.h's FpsDisplaySettings::layout_name comment).
-                s.fps_display.layout_name = JGetString( *pFps, "layout_name", s.fps_display.layout_name );
+                // Placement (scope reduction 2026-09-03): 9-point anchor +
+                // pixel margins, see ConfigSchema.h's own comment.
+                s.fps_display.anchor = JGetString( *pFps, "anchor", s.fps_display.anchor );
+                s.fps_display.margin_x = JGetInt( *pFps, "margin_x", s.fps_display.margin_x );
+                s.fps_display.margin_y = JGetInt( *pFps, "margin_y", s.fps_display.margin_y );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -286,9 +277,8 @@ namespace gamescope::config
                     }
                 }
 
-                // Issue #40: selected System Monitor sub-tab (ConfigSchema.h's
-                // OverlaySettings::system_monitor_tab comment).
-                s.overlay.system_monitor_tab = JGetString( *pOverlay, "system_monitor_tab", s.overlay.system_monitor_tab );
+                // system_monitor_tab removed 2026-09-03 (see ConfigSchema.h)
+                // -- deliberately not read here any more.
 
                 // Cursor tab (ConfigSchema.h's OverlaySettings comment block).
                 s.overlay.cursor_scale = JGetFloat( *pOverlay, "cursor_scale", s.overlay.cursor_scale );
@@ -339,29 +329,21 @@ namespace gamescope::config
             jFps[ "backdrop_padding" ] = s.fps_display.backdrop_padding;
             jFps[ "blend_mode" ] = s.fps_display.blend_mode;
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
-            jFps[ "graph_enabled" ] = s.fps_display.graph_enabled;
-            jFps[ "percentiles_enabled" ] = s.fps_display.percentiles_enabled;
             jFps[ "fps_enabled" ] = s.fps_display.fps_enabled;
-            jFps[ "frametime_enabled" ] = s.fps_display.frametime_enabled;
             jFps[ "fps_label_enabled" ] = s.fps_display.fps_label_enabled;
-            // No placement/margin_vertical/margin_horizontal/module_spacing:
-            // removed with the old single-anchor stack (HUD layouts Phase 1,
-            // ConfigSchema.h). This serializer emits the struct's fields, so
-            // an old file's leftover keys are dropped the first time
-            // anything writes this file -- same accepted-for-a-removed-
-            // feature precedent as dock_scale below.
-            jFps[ "cpu_enabled" ] = s.fps_display.cpu_enabled;
-            jFps[ "gpu_enabled" ] = s.fps_display.gpu_enabled;
-            jFps[ "media_enabled" ] = s.fps_display.media_enabled;
+            // No graph_enabled/percentiles_enabled/cpu_enabled/gpu_enabled/
+            // media_enabled/frametime_enabled/color_cpu/color_gpu/
+            // color_media/layout_name: removed 2026-09-03 with the
+            // perf-stats modules and the named-layout system (see the parse
+            // side above). This serializer emits the struct's fields, so an
+            // old file's leftover keys are dropped the first time anything
+            // writes this file -- same accepted-for-a-removed-feature
+            // precedent as dock_scale below.
             jFps[ "color_fps" ] = s.fps_display.color_fps.has_value()
                 ? nlohmann::json( *s.fps_display.color_fps ) : nlohmann::json( nullptr );
-            jFps[ "color_cpu" ] = s.fps_display.color_cpu.has_value()
-                ? nlohmann::json( *s.fps_display.color_cpu ) : nlohmann::json( nullptr );
-            jFps[ "color_gpu" ] = s.fps_display.color_gpu.has_value()
-                ? nlohmann::json( *s.fps_display.color_gpu ) : nlohmann::json( nullptr );
-            jFps[ "color_media" ] = s.fps_display.color_media.has_value()
-                ? nlohmann::json( *s.fps_display.color_media ) : nlohmann::json( nullptr );
-            jFps[ "layout_name" ] = s.fps_display.layout_name;
+            jFps[ "anchor" ] = s.fps_display.anchor;
+            jFps[ "margin_x" ] = s.fps_display.margin_x;
+            jFps[ "margin_y" ] = s.fps_display.margin_y;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
@@ -454,9 +436,8 @@ namespace gamescope::config
                 }
                 jOverlay[ "panel_geometry" ] = std::move( jGeometry );
 
-                // Issue #40: selected System Monitor sub-tab (see the parse
+                // No system_monitor_tab: removed 2026-09-03 (see the parse
                 // side above and ConfigSchema.h's own comment).
-                jOverlay[ "system_monitor_tab" ] = s.overlay.system_monitor_tab;
 
                 // Cursor tab (see the parse side above and ConfigSchema.h's
                 // OverlaySettings comment block).
@@ -470,96 +451,6 @@ namespace gamescope::config
                 j[ "overlay" ] = std::move( jOverlay );
             }
 
-            return j;
-        }
-
-        // ---- HudLayout <-> json ---------------------------------------------
-        // Phase 0 of the manual-placement HUD-layout rework (ConfigSchema.h's
-        // HudLayout comment). Same type-checked-field-access discipline as
-        // SettingsFromJson/SettingsToJson above, deliberately kept as its
-        // own pair of functions rather than folded into those - a layout
-        // file is a different on-disk shape entirely (layouts/<name>.json,
-        // never a `Settings`), and keeping the two conversions textually
-        // separate is what lets HudLayout's own schema_version
-        // (kCurrentLayoutSchemaVersion) evolve independently of Settings'.
-
-        HudLayoutModule HudLayoutModuleFromJson( const nlohmann::json &j )
-        {
-            HudLayoutModule m{};
-            m.enabled = JGetBool( j, "enabled", m.enabled );
-            m.x = JGetFloat( j, "x", m.x );
-            m.y = JGetFloat( j, "y", m.y );
-            m.origin = JGetString( j, "origin", m.origin );
-            m.scale = JGetFloat( j, "scale", m.scale );
-            return m;
-        }
-
-        nlohmann::json HudLayoutModuleToJson( const HudLayoutModule &m )
-        {
-            nlohmann::json j = nlohmann::json::object();
-            j[ "enabled" ] = m.enabled;
-            j[ "x" ] = m.x;
-            j[ "y" ] = m.y;
-            j[ "origin" ] = m.origin;
-            j[ "scale" ] = m.scale;
-            return j;
-        }
-
-        HudLayoutFpsModule HudLayoutFpsModuleFromJson( const nlohmann::json &j )
-        {
-            HudLayoutFpsModule m{};
-            m.placement = HudLayoutModuleFromJson( j );
-            m.frametime_enabled = JGetBool( j, "frametime_enabled", m.frametime_enabled );
-            m.graph_enabled = JGetBool( j, "graph_enabled", m.graph_enabled );
-            m.percentiles_enabled = JGetBool( j, "percentiles_enabled", m.percentiles_enabled );
-            m.fps_label_enabled = JGetBool( j, "fps_label_enabled", m.fps_label_enabled );
-            return m;
-        }
-
-        nlohmann::json HudLayoutFpsModuleToJson( const HudLayoutFpsModule &m )
-        {
-            // Flattened onto one object (placement's own fields alongside
-            // the sub-row toggles) rather than a nested "placement" object -
-            // every field here is equally "the fps module's own settings"
-            // from the on-disk shape's point of view; the placement/toggle
-            // split is a C++-side grouping only (HudLayoutFpsModule's own
-            // comment in ConfigSchema.h).
-            nlohmann::json j = HudLayoutModuleToJson( m.placement );
-            j[ "frametime_enabled" ] = m.frametime_enabled;
-            j[ "graph_enabled" ] = m.graph_enabled;
-            j[ "percentiles_enabled" ] = m.percentiles_enabled;
-            j[ "fps_label_enabled" ] = m.fps_label_enabled;
-            return j;
-        }
-
-        HudLayout HudLayoutFromJson( const nlohmann::json &j )
-        {
-            HudLayout layout{};
-            if ( const nlohmann::json *pModules = JGetObject( j, "modules" ) )
-            {
-                if ( const nlohmann::json *pFps = JGetObject( *pModules, "fps" ) )
-                    layout.fps = HudLayoutFpsModuleFromJson( *pFps );
-                if ( const nlohmann::json *pCpu = JGetObject( *pModules, "cpu" ) )
-                    layout.cpu = HudLayoutModuleFromJson( *pCpu );
-                if ( const nlohmann::json *pGpu = JGetObject( *pModules, "gpu" ) )
-                    layout.gpu = HudLayoutModuleFromJson( *pGpu );
-                if ( const nlohmann::json *pMedia = JGetObject( *pModules, "media" ) )
-                    layout.media = HudLayoutModuleFromJson( *pMedia );
-            }
-            return layout;
-        }
-
-        nlohmann::json HudLayoutToJson( const HudLayout &layout )
-        {
-            nlohmann::json jModules = nlohmann::json::object();
-            jModules[ "fps" ] = HudLayoutFpsModuleToJson( layout.fps );
-            jModules[ "cpu" ] = HudLayoutModuleToJson( layout.cpu );
-            jModules[ "gpu" ] = HudLayoutModuleToJson( layout.gpu );
-            jModules[ "media" ] = HudLayoutModuleToJson( layout.media );
-
-            nlohmann::json j = nlohmann::json::object();
-            j[ "schema_version" ] = kCurrentLayoutSchemaVersion;
-            j[ "modules" ] = std::move( jModules );
             return j;
         }
 
@@ -812,23 +703,9 @@ namespace gamescope::config
         return GamesDir() + "/" + std::string{ svAppId } + ".json";
     }
 
-    std::string LayoutsDir()
-    {
-        return ConfigRoot() + "/layouts";
-    }
-
-    std::string LayoutPath( std::string_view svSanitizedName )
-    {
-        return LayoutsDir() + "/" + std::string{ svSanitizedName } + ".json";
-    }
-
     namespace
     {
-        // Shared implementation for SanitizeProfileName/SanitizeLayoutName
-        // below - identical rule, kept as one body (rather than two copies
-        // that could quietly drift apart) precisely because the two public
-        // functions are deliberately independent names/namespaces, not
-        // aliases of each other (see each one's own header comment).
+        // Shared implementation for SanitizeProfileName below.
         std::optional<std::string> SanitizeNameForPathComponent( std::string_view svName )
         {
             std::string sOut;
@@ -863,26 +740,12 @@ namespace gamescope::config
         return SanitizeNameForPathComponent( svName );
     }
 
-    std::optional<std::string> SanitizeLayoutName( std::string_view svName )
-    {
-        return SanitizeNameForPathComponent( svName );
-    }
-
     // ---- loading ---------------------------------------------------------------
 
     Settings LoadGlobal()
     {
         std::string sPath = GlobalConfigPath();
         SweepStaleTempFiles( sPath );
-
-        // Phase 0 HUD-layout rework: this is one of the "a Settings got
-        // (re)loaded" boundaries ResolveLayoutCached's own header comment
-        // promises refreshes the layout cache - covers startup and every
-        // direct LoadGlobal() caller, not just the ResolveEffective() path
-        // below (whose per-game-override branch never reaches this
-        // function at all, hence that function making its own equivalent
-        // call too).
-        ReloadLayoutCache();
 
         std::optional<std::string> oText = ReadWholeFile( sPath );
         if ( !oText )
@@ -910,34 +773,6 @@ namespace gamescope::config
         return SettingsFromJson( *oJson );
     }
 
-    std::optional<HudLayout> LoadLayout( std::string_view svSanitizedName )
-    {
-        std::string sPath = LayoutPath( svSanitizedName );
-        SweepStaleTempFiles( sPath );
-        std::optional<std::string> oText = ReadWholeFile( sPath );
-        if ( !oText )
-            return std::nullopt;
-
-        nlohmann::json j = nlohmann::json::parse( *oText, /*callback*/ nullptr, /*allow_exceptions*/ false );
-        if ( j.is_discarded() || !j.is_object() )
-        {
-            s_ConfigLog.errorf( "%s: malformed JSON, treating layout as not found", sPath.c_str() );
-            return std::nullopt;
-        }
-
-        int nVersion = 0;
-        if ( auto it = j.find( "schema_version" ); it != j.end() && it->is_number_integer() )
-            nVersion = it->get<int>();
-        if ( nVersion > kCurrentLayoutSchemaVersion )
-        {
-            s_ConfigLog.errorf( "%s: layout schema_version %d is newer than this build understands (%d) - refusing to guess, treating as not found",
-                sPath.c_str(), nVersion, kCurrentLayoutSchemaVersion );
-            return std::nullopt;
-        }
-
-        return HudLayoutFromJson( j );
-    }
-
     std::optional<Settings> LoadPerGameOverride( std::string_view svAppId )
     {
         std::string sPath = GamePath( svAppId );
@@ -961,16 +796,7 @@ namespace gamescope::config
         if ( oAppId )
         {
             if ( std::optional<Settings> oGame = LoadPerGameOverride( *oAppId ) )
-            {
-                // The per-game-override branch returns without ever
-                // calling LoadGlobal() below, so it needs LoadGlobal()'s
-                // own ReloadLayoutCache() call duplicated here - this is
-                // still one of the "a Settings got (re)loaded" boundaries
-                // ResolveLayoutCached promises a refresh at, regardless of
-                // which layer won.
-                ReloadLayoutCache();
                 return *oGame;
-            }
         }
         return LoadGlobal();
     }
@@ -987,36 +813,6 @@ namespace gamescope::config
         nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
         j[ "name" ] = std::string{ svSanitizedName };
         return WriteFileAtomic( ProfilePath( svSanitizedName ), DumpJson( j ) );
-    }
-
-    bool SaveLayout( std::string_view svSanitizedName, const HudLayout &layout )
-    {
-        nlohmann::json j = HudLayoutToJson( layout );
-        j[ "name" ] = std::string{ svSanitizedName };
-        return WriteFileAtomic( LayoutPath( svSanitizedName ), DumpJson( j ) );
-    }
-
-    bool DeleteLayout( std::string_view svSanitizedName )
-    {
-        // Same bare-name guard as DeletePerGameOverride - no path
-        // separator, not "." / "..".
-        if ( svSanitizedName.empty() || svSanitizedName.find( '/' ) != std::string_view::npos ||
-            svSanitizedName == "." || svSanitizedName == ".." )
-        {
-            s_ConfigLog.errorf( "DeleteLayout: refusing suspicious layout name '%.*s'",
-                (int)svSanitizedName.size(), svSanitizedName.data() );
-            return false;
-        }
-
-        std::filesystem::path path( LayoutPath( svSanitizedName ) );
-        // Containment check, same defense-in-depth as DeletePerGameOverride's
-        // own comment: this must resolve to a direct child of LayoutsDir().
-        if ( path.parent_path() != std::filesystem::path( LayoutsDir() ) )
-            return false;
-
-        std::error_code ec;
-        std::filesystem::remove( path, ec );
-        return !ec || ec == std::errc::no_such_file_or_directory;
     }
 
     bool SnapshotPerGameOverride( std::string_view svAppId, const Settings &snapshot )
@@ -1315,18 +1111,6 @@ namespace gamescope::config
         EnqueueOverlayWrite( overlay );
     }
 
-    // Issue #40: identical shape to EnqueueGeometryWrite() immediately
-    // above, patching one field instead of one map entry -- see this
-    // function's own header comment (ConfigManager.h) for why
-    // FpsDisplay.cpp's usual EnqueueRoutedWrite() path can't be used for
-    // this particular field.
-    void EnqueueSystemMonitorTabWrite( const std::string &sTab )
-    {
-        OverlaySettings overlay = CurrentOverlaySettings();
-        overlay.system_monitor_tab = sTab;
-        EnqueueOverlayWrite( overlay );
-    }
-
     void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot )
     {
         nlohmann::json j = SettingsToJson( snapshot, /*bIncludeOverlay*/ false );
@@ -1339,13 +1123,6 @@ namespace gamescope::config
         nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
         j[ "name" ] = sSanitizedName;
         ConfigWriter::Instance().Enqueue( ProfilePath( sSanitizedName ), DumpJson( j ) );
-    }
-
-    void EnqueueLayoutWrite( std::string sSanitizedName, HudLayout layout )
-    {
-        nlohmann::json j = HudLayoutToJson( layout );
-        j[ "name" ] = sSanitizedName;
-        ConfigWriter::Instance().Enqueue( LayoutPath( sSanitizedName ), DumpJson( j ) );
     }
 
     void FlushPendingWrites()
@@ -1388,118 +1165,6 @@ namespace gamescope::config
     std::vector<std::string> ListGameIds()
     {
         return ListJsonStems( GamesDir() );
-    }
-
-    std::vector<std::string> ListLayouts()
-    {
-        return ListJsonStems( LayoutsDir() );
-    }
-
-    // ---- HUD layout cache -------------------------------------------------
-
-    namespace
-    {
-        bool s_bLayoutCacheLoaded = false;
-        std::map<std::string, HudLayout> s_LayoutCache;
-        // Returned by ResolveLayoutCached() for a NAMED lookup that fails
-        // (deleted / renamed / mistyped layout_name) - a default-
-        // constructed HudLayout{} has every module's `enabled` false,
-        // which is already exactly "renders nothing" (this section's
-        // header comment in ConfigSchema.h), so no separate sentinel type
-        // is needed. Deliberately NOT what an EMPTY layout_name resolves
-        // to any more - see s_DefaultLayout/BuildDefaultHudLayout() below.
-        const HudLayout s_EmptyLayout{};
-
-        // Fix for the fresh-install regression HUD layouts Phase 1/3
-        // introduced: `layout_name` defaulting to "" used to resolve to
-        // s_EmptyLayout above, same as a deleted/mistyped name - so a
-        // config that has simply never named a layout (every new user, and
-        // anyone who upgraded straight through Phase 1-3 without ever
-        // opening the layout editor) got a totally blank HUD, where the
-        // pre-Phase-1 build rendered the stock readout by default
-        // (FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/
-        // media_enabled/frametime_enabled/graph_enabled/percentiles_enabled/
-        // fps_label_enabled, ConfigSchema.h, all default true).
-        //
-        // `Why:` an unset name and a name that used to resolve and stopped
-        // are NOT the same situation - the latter must never resurrect
-        // stale data (hence s_EmptyLayout staying exactly what it was), but
-        // the former has nothing to degrade FROM. This mirrors every other
-        // module's own compiled-in default: "no layout selected" now means
-        // "the stock HUD," not "nothing."
-        //
-        // Deliberately an in-memory constant only, never written to
-        // layouts/*.json - creating a custom.json behind a first-run user's
-        // back is exactly the silent-file-creation this project avoids
-        // elsewhere. `layout_name` stays "" until the user actually edits
-        // something (FpsDisplay.cpp's MutateActiveLayout()/
-        // HudLayoutEditor.cpp's Save(), both already handle "name is empty
-        // -> create 'custom'" on first write, unchanged by this fix) - at
-        // that point ResolveLayoutCached("") is no longer consulted for
-        // that layer, this constant included.
-        //
-        // Placement values approximate the OLD pre-Phase-1 default anchor
-        // ("top-right", ConfigSchema.h's removed FpsDisplaySettings::
-        // placement) cascaded down the right edge so the four modules don't
-        // fully overlap; this is a best-effort approximation, not a promise
-        // of pixel parity with the old auto-stack (Phase 1's own doc
-        // section explains why that auto-stack was replaced) - a real
-        // layout editor session is one drag away for anyone who wants an
-        // exact arrangement.
-        HudLayout BuildDefaultHudLayout()
-        {
-            HudLayout layout{};
-
-            layout.fps.placement = { true, 0.98f, 0.02f, "top-right", 1.0f };
-            layout.fps.frametime_enabled   = true;
-            layout.fps.graph_enabled       = true;
-            layout.fps.percentiles_enabled = true;
-            layout.fps.fps_label_enabled   = true;
-
-            layout.cpu   = { true, 0.98f, 0.18f, "top-right", 1.0f };
-            layout.gpu   = { true, 0.98f, 0.30f, "top-right", 1.0f };
-            layout.media = { true, 0.98f, 0.42f, "top-right", 1.0f };
-
-            return layout;
-        }
-
-        const HudLayout s_DefaultLayout = BuildDefaultHudLayout();
-    }
-
-    void ReloadLayoutCache()
-    {
-        std::map<std::string, HudLayout> fresh;
-        for ( const std::string &sName : ListLayouts() )
-        {
-            if ( std::optional<HudLayout> oLayout = LoadLayout( sName ) )
-                fresh.emplace( sName, std::move( *oLayout ) );
-            // A layout file that fails to load (malformed / too-new
-            // schema_version, already logged by LoadLayout) is simply
-            // absent from the cache - any profile/game still naming it
-            // resolves through ResolveLayoutCached's own "not found" path
-            // below, same as a deleted or never-existing name.
-        }
-        s_LayoutCache = std::move( fresh );
-        s_bLayoutCacheLoaded = true;
-    }
-
-    const HudLayout &ResolveLayoutCached( const std::string &sLayoutName )
-    {
-        if ( !s_bLayoutCacheLoaded )
-            ReloadLayoutCache();
-
-        // "No layout referenced yet" (fresh install, or any profile/game
-        // that has never named one) -> the populated stock default, NOT
-        // the empty sentinel below. See s_DefaultLayout's own comment for
-        // why this differs from a named lookup miss.
-        if ( sLayoutName.empty() )
-            return s_DefaultLayout;
-
-        auto it = s_LayoutCache.find( sLayoutName );
-        if ( it == s_LayoutCache.end() )
-            return s_EmptyLayout;
-
-        return it->second;
     }
 
     // ---- session routing -------------------------------------------------------
@@ -1600,12 +1265,6 @@ namespace gamescope::config
         // Issue #35: CurrentFullSettings()'s cache (above) is the same
         // process-wide hazard, for the same reason.
         s_bLastKnownSettingsLoaded = false;
-        // Phase 0 HUD-layout rework: ResolveLayoutCached's cache is the
-        // same process-wide hazard, for the same reason - a stale entry
-        // read against a prior test's (already-deleted) TempConfigHome
-        // must not leak into the next one.
-        s_bLayoutCacheLoaded = false;
-        s_LayoutCache.clear();
     }
 
     std::string DebugDumpEffective( const std::optional<std::string> &oAppId )

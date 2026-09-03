@@ -52,7 +52,6 @@
 #include "Overlay/Widgets.h"
 #include "Overlay/Palette.h"
 #include "Overlay/UI/Shell.h"
-#include "Overlay/UI/HudLayoutEditor.h"
 #include "Config/ConfigManager.h"
 
 #include <algorithm>
@@ -275,11 +274,6 @@ namespace gamescope
 	// means no blur pass is requested at all (see the radius computation
 	// below), and everything in between scales linearly.
 	static constexpr int k_nMaxOverlayBlurRadius = 11;
-
-	// Ceiling on background_darkening while the HUD layout editor is up --
-	// see the blur computation's own `bHudEditing` note below for why the
-	// backdrop is deliberately near-transparent for the duration of an edit.
-	static constexpr float k_flHudEditMaxDarkening = 0.15f;
 
 	// ponytail: this blurs the *entire* base layer uniformly while the
 	// overlay is visible, not a per-window region sampled from directly
@@ -1235,16 +1229,7 @@ namespace gamescope
 		// now-blurred base layer -- upscale sharpness doesn't matter once
 		// it's blurred anyway).
 		//
-		// One exception: the HUD layout editor (Overlay/UI/HudLayoutEditor.cpp).
-		// `Why:` that editor exists to place a HUD **over the game**, so the
-		// game is the reference the user is aiming against -- a full-screen
-		// Gaussian blur turns it into the uniform grey smudge that made the
-		// editor unusable at 1280x800. While `hudedit::IsActive()` the blur
-		// pass is not requested at all and the darkening is capped to a light
-		// dim; the normal Shell's own blur/darkening behaviour is untouched.
-		const bool bHudEditing = ui::hudedit::IsActive();
-
-		const int nOverlayBlurRadius = bHudEditing ? 0 : std::clamp(
+		const int nOverlayBlurRadius = std::clamp(
 			(int)std::lround( k_nMaxOverlayBlurRadius * g_BackgroundLiveTheme.flBlur * s_flCurrentAlpha ),
 			0, k_nMaxOverlayBlurRadius );
 
@@ -1280,8 +1265,7 @@ namespace gamescope
 		// color-managed pipeline for a cosmetic dim -- darkening simply has
 		// no visible effect in that (uncommon, non-SDR-desktop) case.
 		const float flDarkenStrength = std::clamp(
-			g_BackgroundLiveTheme.flDarkening * s_flCurrentAlpha, 0.0f,
-			bHudEditing ? k_flHudEditMaxDarkening : 1.0f );
+			g_BackgroundLiveTheme.flDarkening * s_flCurrentAlpha, 0.0f, 1.0f );
 
 		if ( flDarkenStrength > 0.0f && pFrameInfo->layers.count() > 0 )
 		{

@@ -24,16 +24,6 @@ namespace gamescope::config
     // migration scaffolding.
     inline constexpr int kCurrentSchemaVersion = 1;
 
-    // Separate version marker for layouts/<name>.json (HudLayout below) --
-    // deliberately its own constant, not kCurrentSchemaVersion above. A
-    // layout is a different on-disk shape from global/profiles/games (all
-    // of which are a `Settings`), written and read by its own Load/Save
-    // pair (ConfigManager's LoadLayout/SaveLayout) -- so a breaking change
-    // to one shape has no reason to force a version bump (and a
-    // newer-than-this-build refusal, see ParseConfigFile's schema_version
-    // check) on files of the other shape.
-    inline constexpr int kCurrentLayoutSchemaVersion = 1;
-
     struct GamescopeSettings
     {
         std::string filter = "LINEAR";   // LINEAR | NEAREST | FSR | NIS | PIXEL
@@ -76,253 +66,51 @@ namespace gamescope::config
         std::string blend_mode = "alpha"; // alpha | additive | inverted
         float text_opacity = 1.0f;
 
-        // Row toggles (spec §11's "ROWS checkbox list") -- independent of
-        // `enabled` above (the HUD as a whole); these just show/hide the
-        // frametime graph and percentile-stats rows within it, reusing this
-        // struct's existing font_size/backdrop_*/blend_mode/text_opacity
-        // fields rather than defining a second set per row.
-        bool graph_enabled = true;
-        bool percentiles_enabled = true;
-
         // Issue #70: `enabled` above used to double as both "HUD as a
-        // whole" and "FPS module specifically" -- the FPS module was the
-        // only one of the four (kModuleOrder's Fps/Cpu/Gpu/Media) with no
-        // toggle of its own, precisely because the master was standing in
-        // for it. This is that toggle, same shape/default as
-        // cpu_enabled/gpu_enabled/media_enabled below. `enabled` now means
-        // only "gate the whole panel" (renamed to "Show System Monitor" in
-        // the settings panel); this field means "show the FPS module
-        // within it," checked in MeasureModule()'s ModuleKind::Fps case the
-        // same way the other three modules already check their own field.
+        // whole" and "FPS module specifically", back when the HUD had
+        // other modules (Cpu/Gpu/Media, removed 2026-09-03 -- see
+        // superdoc/meta/TERMINOLOGY.md's "profiler" entry). Now that the
+        // FPS number is the HUD's only content, this field is dead --
+        // kept, unwired, for Phase 2 rather than deleted along with the
+        // module framework that gave it meaning.
         bool fps_enabled = true;
 
-        // Issue #71: the numeric frametime readout ("16.7 ms", drawn next
-        // to the FPS number in Row 1 -- MeasureFpsModule()'s L.szMs) is a
-        // distinct element from graph_enabled's Row 2 frametime *graph*
-        // above; this toggles the numeric readout on its own, default true
-        // to match every other row toggle's default-on choice. Auto-off
-        // whenever blend_mode is "additive" is unaffected -- that stays a
-        // separate, mode-driven rule (see FpsDisplay.cpp's L.bAdditive
-        // handling), this field only controls the normal alpha/inverted
-        // case.
-        bool frametime_enabled = true;
-
-        // Issue #73: hides Row 1's " FPS" unit label (kUnitText in
-        // FpsDisplay.cpp) so the module shows just the number. FPS-only, as
-        // asked -- CPU/GPU/Media's own row labels ("CPU", "RAM", "GPU",
-        // "VRAM", "MEDIA") are a different, multi-label-per-row shape and
-        // are deliberately not covered by this same field; see the issue's
-        // own report for why generalizing wasn't done silently.
+        // Issue #73: hides the " FPS" unit label (kUnitText in
+        // FpsDisplay.cpp) so the module shows just the number. The
+        // settings row that toggled this was removed 2026-09-03 (scope
+        // reduction, see this repo's CHANGELOG.md) -- the field and its
+        // render-time effect stay, so an old config that turned it off
+        // keeps that choice; Phase 2 decides whether to re-expose it.
         bool fps_label_enabled = true;
 
-        // placement / margin_vertical / margin_horizontal removed (HUD
-        // layouts Phase 1, superdoc/architecture/hud-layouts.md): manual
-        // per-module placement (HudLayoutModule::x/y/origin below) replaces
-        // the single anchor-and-margins the whole readout used to share.
-        // Deliberately not read/written by ConfigManager.cpp any more --
-        // an old config's leftover keys are simply never looked up, same
-        // precedent as dock_scale/opacity_background's own removal.
-
-        // Issue #28 (System Monitor part 2/3): per-module enable toggles for
-        // the three modules issue #27's kModuleOrder framework reserved
-        // slots for (FpsDisplay.cpp's ModuleKind::Cpu/Gpu/Media). Independent
-        // of `enabled` above (the readout as a whole) -- same relationship
-        // graph_enabled/percentiles_enabled already have to the FPS module's
-        // own rows. Default true: once a user turns the System Monitor on,
-        // every module it now has real content for shows by default, same
-        // as graph_enabled/percentiles_enabled's own default-on choice.
-        bool cpu_enabled = true;
-        bool gpu_enabled = true;
-        bool media_enabled = true;
-
-        // module_spacing removed (HUD layouts Phase 1): was the gap between
-        // stacked module boxes under the old single-anchor stack; manual
-        // per-module placement (HudLayoutModule::x/y below) has no shared
-        // stack for a spacing constant to apply to any more. Same
-        // deliberately-unread-and-unwritten removal precedent as
-        // placement/margin_vertical/margin_horizontal just above.
-
-        // Issue #29: optional per-module colour override for each module's
-        // "value" (prominent readout) text -- FPS's Hero number, CPU's
-        // load/RAM figures, GPU's busy/VRAM figures, Media's track line.
+        // Issue #29: optional colour override for the FPS number's text.
         // std::optional, same nullable-field shape as OverlaySettings::
         // fade_ms -- unset (the common/default case) means "derive from
-        // Palette.h's accent family" (FpsDisplay.cpp's ModuleColorU32()),
-        // so every module's default colour moves together if #37's
-        // hue-selectable accent work changes what those Palette.h tokens
-        // resolve to at runtime. A *set* value is a deliberate, explicit
-        // user override (picked via a stock ImGui::ColorEdit3 in the
-        // settings panel) and intentionally does NOT track the accent hue
-        // -- the user asked for exactly this colour. Packed 0xRRGGBB
-        // (24-bit, no stored alpha -- text_opacity already governs alpha
-        // uniformly across every module, same as today).
+        // Palette.h's accent family" (FpsDisplay.cpp's ModuleColorVec4()),
+        // so the default colour moves if #37's hue-selectable accent work
+        // changes what that Palette.h token resolves to at runtime. A *set*
+        // value is a deliberate, explicit user override and intentionally
+        // does NOT track the accent hue. Packed 0xRRGGBB (24-bit, no stored
+        // alpha -- text_opacity already governs alpha).
+        //
+        // color_cpu/color_gpu/color_media (the CPU/GPU/Media modules' own
+        // colour overrides) were removed 2026-09-03 along with those
+        // modules themselves -- see superdoc/meta/TERMINOLOGY.md's
+        // "profiler" entry.
         std::optional<int> color_fps;
-        std::optional<int> color_cpu;
-        std::optional<int> color_gpu;
-        std::optional<int> color_media;
 
-        // Phase 0 of the manual-placement HUD-layout rework (see
-        // superdoc/architecture/hud-layouts.md) -- names a
-        // layouts/<name>.json (HudLayout below, ConfigManager's
-        // LoadLayout/SaveLayout/ResolveLayoutCached) whose content this
-        // layer's HUD should render. Empty (the default -- ship no default
-        // layout FILES, per the design doc) means "no layout referenced,"
-        // which resolves to a populated, in-memory-only stock default
-        // (ConfigManager.cpp's BuildDefaultHudLayout()/s_DefaultLayout) --
-        // see that comment, and superdoc/architecture/hud-layouts.md's "No
-        // layout selected" section, for why this differs from a name that
-        // no longer exists on disk: THAT case still resolves to a
-        // completely empty HudLayout{} (ResolveLayoutCached's own
-        // comment) -- a deleted/renamed/mistyped layout_name degrades to
-        // "nothing drawn," never a crash and never stale/resurrected data
-        // -- but an empty layout_name has nothing to degrade FROM, so it
-        // is not treated the same way any more.
-        //
-        // A REFERENCE, not a copy: layered globally/per-profile/per-game
-        // exactly like every other field in this struct (the existing
-        // layering machinery is reused as-is for the field itself), but
-        // deliberately NOT routed through ApplyProfile()'s one-time-copy
-        // semantics (DECISIONS.md #20) the way `enabled`/font_size/etc.
-        // just above are. ApplyProfile() copies this string like any other
-        // fps_display field (so applying a profile does change WHICH
-        // layout a game points at, once), but the layout's own CONTENT
-        // (module positions, toggles) is never baked into Settings at all
-        // -- it is resolved from the name at use time, so an edit made to
-        // a layout later reaches every profile/game that still names it,
-        // in contrast to every other profile field, which freezes at
-        // apply-time. See superdoc/architecture/hud-layouts.md for the
-        // full reference-vs-copy contrast.
-        //
-        // Per-module content toggles (which of Fps/Cpu/Gpu/Media show, and
-        // the Fps module's frametime/graph/percentiles/label sub-rows)
-        // moved to HudLayout below by design -- "Simple" and "Advanced"
-        // differ in both what's on and where it sits, so both live in the
-        // one entity. As of HUD layouts Phase 1, FpsDisplay.cpp's render
-        // path (DrawReadout()) reads the resolved HudLayout's copies of
-        // these exclusively -- the toggles just above this comment
-        // (cpu_enabled/gpu_enabled/media_enabled/fps_enabled/
-        // graph_enabled/percentiles_enabled/frametime_enabled/
-        // fps_label_enabled) are no longer consulted there. They are
-        // deliberately NOT removed from the schema/settings-panel: Phase
-        // 1's explicit removal list is placement/margin_vertical/
-        // margin_horizontal/module_spacing only (the geometry fields the
-        // manual-placement model truly makes meaningless), not these --
-        // see FpsDisplay.cpp's "Modules" settings group for the current
-        // state of that call.
-        std::string layout_name;
-    };
-
-    // ---- HUD layouts (Phase 0 of the manual-placement rework) ----------------
-    // See superdoc/architecture/hud-layouts.md for the full design and the
-    // reference-vs-copy rationale (FpsDisplaySettings::layout_name's own
-    // comment above has the short version). Stored as its own
-    // layouts/<name>.json, parallel to profiles/<name>.json and
-    // games/<AppId>.json but NEVER routed through ApplyProfile()'s
-    // one-time-copy path -- a layout is referenced by name and resolved at
-    // use time (ConfigManager's LoadLayout/ResolveLayoutCached), so editing
-    // it updates every profile/game that names it, which is the opposite of
-    // what ApplyProfile()'s deliberate copy semantics (DECISIONS.md #20)
-    // give a profile.
-    //
-    // Ships with no default layout FILES by design (the user's explicit
-    // call, recorded in superdoc/architecture/hud-layouts.md) -- a
-    // default-constructed HudLayout{} has every module's `enabled` false,
-    // so it is a completely valid "renders nothing" state for a NAMED
-    // lookup that fails (deleted/renamed/mistyped, ResolveLayoutCached's
-    // own comment). An unset `layout_name` is handled separately, in
-    // memory only, by ConfigManager.cpp's BuildDefaultHudLayout() --
-    // see FpsDisplaySettings::layout_name's own comment above and
-    // hud-layouts.md's "No layout selected" section for why.
-
-    // One module's manual placement within a layout. Shared shape for all
-    // four modules (Fps/Cpu/Gpu/Media, FpsDisplay.cpp's ModuleKind) --
-    // Fps additionally carries its own sub-row toggles, see
-    // HudLayoutFpsModule below.
-    struct HudLayoutModule
-    {
-        // Whether this layout shows the module at all -- replaces
-        // FpsDisplaySettings::cpu_enabled/gpu_enabled/media_enabled/
-        // fps_enabled for any layer whose fps_display.layout_name resolves
-        // to this layout (see that field's comment). Default false, same
-        // "an unset/empty layout renders nothing" reasoning as the whole
-        // HudLayout -- there is no sense in which an unplaced module
-        // (x/y/origin all at their arbitrary defaults below) should
-        // default to visible.
-        bool enabled = false;
-
-        // Normalised position of `origin` below on the display -- (0, 0)
-        // is the screen's own top-left corner, (1, 1) its bottom-right,
-        // resolution-independent by construction (the whole point of this
-        // rework over the old fixed-anchor+pixel-margin scheme). Not
-        // bounds-clamped at parse time (see ConfigManager.cpp's
-        // HudLayoutModuleFromJson) -- a value outside 0..1 places the
-        // module off-screen rather than being silently corrected, exactly
-        // as an out-of-range value elsewhere in this file is handled (e.g.
-        // sdr_gamut_wideness's -1 sentinel); a future editor UI is what
-        // should keep the user from typing one, not the parser.
-        float x = 0.0f; // 0.0..1.0
-        float y = 0.0f; // 0.0..1.0
-
-        // Which of the module's own nine points sits at (x, y) above, so
-        // an edge/corner placement doesn't clip off-screen (e.g. anchoring
-        // to the bottom-right corner of the display needs the MODULE'S
-        // bottom-right corner at (1, 1), not its top-left, to stay fully
-        // visible). One of the same 9 strings FpsDisplaySettings::
-        // placement / OverlaySettings::notification_placement already use
-        // (Overlay/Notifications.cpp's kPlacements 3x3 table, Overlay/UI/
-        // Controls.cpp's AnchorGrid widget) -- reused verbatim rather than
-        // a new enum/int pair so a later layout editor can drive this
-        // field with the exact same AnchorGrid control and string
-        // conversion those already have, and so "one of 9 anchor points"
-        // keeps exactly one representation across the whole codebase.
-        std::string origin = "top-left"; // one of kPlacements' 9 strings
-
-        // Per-module, per-layout size multiplier -- independent of
-        // overlay.display_scale (a global, process-level UI-wide scale)
-        // and of font_size (a global, all-modules-equally value): this is
-        // what lets "Simple" size its one module differently from
-        // "Advanced"'s four. Bounds are 0.25..4.0: floored above zero so a
-        // module can never shrink to an unreadable/zero-size sliver (and
-        // never divide-by-zero anywhere this later multiplies a size), and
-        // capped at 4x so a single mistyped/hand-edited value can't render
-        // something absurdly larger than the display -- 4x still comfortably
-        // covers a deliberate single-module accessibility-sized HUD, which
-        // is the only realistic reason to go that high.
-        float scale = 1.0f; // 0.25..4.0
-    };
-
-    // The Fps module's placement, plus its own sub-row toggles. Frametime/
-    // graph/percentiles/the unit label are sub-rows drawn INSIDE the Fps
-    // module (FpsDisplay.cpp's MeasureFpsModule()), not independently
-    // placeable -- so they carry no x/y/origin/scale of their own, just an
-    // on/off, same as the toggles they replace (FpsDisplaySettings::
-    // frametime_enabled/graph_enabled/percentiles_enabled/
-    // fps_label_enabled -- see that struct's layout_name comment for why
-    // those originals stay put, untouched, for this phase).
-    struct HudLayoutFpsModule
-    {
-        HudLayoutModule placement;
-
-        bool frametime_enabled = false;
-        bool graph_enabled = false;
-        bool percentiles_enabled = false;
-        bool fps_label_enabled = false;
-    };
-
-    // A named, standalone layout -- see this section's header comment.
-    // Explicit named fields (fps/cpu/gpu/media), not a map, mirroring this
-    // file's own convention for a small, fixed, compile-time-known set
-    // (e.g. GamescopeSettings' fields) rather than the open-ended-key-set
-    // shape a std::map earns elsewhere in this file (e.g.
-    // OverlaySettings::panel_geometry, keyed by a set of panel ids that
-    // really can grow/rename over time) -- FpsDisplay.cpp's ModuleKind
-    // enum is exactly four values and has been since it was introduced.
-    struct HudLayout
-    {
-        HudLayoutFpsModule fps;
-        HudLayoutModule cpu;
-        HudLayoutModule gpu;
-        HudLayoutModule media;
+        // Placement (scope reduction 2026-09-03): a 9-point anchor plus
+        // pixel margins -- FpsDisplay.cpp's kPlacements/ResolveAnchoredOrigin().
+        // Replaces the named-layout system (HudLayout/HudLayoutModule/
+        // HudLayoutFpsModule, and this field's own former `layout_name`),
+        // removed the same day as the profiler modules it existed to place
+        // independently -- with a single module left, per-module manual x/y
+        // placement had no reason left to be more complex than the anchor+
+        // margin model this whole rework had originally replaced. See
+        // superdoc/meta/TERMINOLOGY.md's "profiler" entry and CHANGELOG.md.
+        std::string anchor = "top-right"; // one of kPlacements' 9 strings (FpsDisplay.cpp)
+        int margin_x = 24; // px, distance from the left/right edge
+        int margin_y = 24; // px, distance from the top/bottom edge
     };
 
     struct ReshadeVibrancySettings
@@ -525,29 +313,13 @@ namespace gamescope::config
         // unchanged from #34's own default-placement behavior.
         std::map<std::string, PanelGeometry> panel_geometry;
 
-        // Issue #40 (System Monitor part 3/3): which sub-tab of the
-        // System Monitor panel is currently selected -- "modules" (the
-        // pre-#40 checkbox/slider content, issue #27/#28) or "statistics"
-        // (the new 60-second graphs). Process-level UI navigation state,
-        // same "global.json only, never profile/per-game" rule as every
-        // other field in this struct (panel_geometry above is the closest
-        // precedent: which window is where is not a per-game concept
-        // either). Deliberately NOT placed on FpsDisplaySettings alongside
-        // `placement`/`margin_vertical`/`margin_horizontal` (issue #27)
-        // despite living in the same panel -- those are genuinely
-        // per-game-overridable HUD behaviour, while which *tab* is open
-        // is pure navigation, not something a per-game override should
-        // ever need to touch.
-        //
-        // This field is also what makes gating Statistics-tab collection
-        // on tab *selection* rather than the panel's own open/closed
-        // state actually work end to end: FpsDisplay_AddLayer() reads it
-        // every composited frame (via SystemStats::SetHistoryCollectionEnabled(),
-        // independent of whether the System Monitor panel is currently
-        // drawn), so a user who leaves "statistics" selected keeps
-        // collecting from shortly after process start on the next launch,
-        // not from whenever they next happen to click the tab.
-        std::string system_monitor_tab = "modules"; // "modules" | "statistics"
+        // system_monitor_tab (which System Monitor sub-tab -- "modules" or
+        // "statistics" -- was selected) was removed 2026-09-03 along with
+        // the Statistics tab itself and the perf-stats modules it gated
+        // collection for (superdoc/meta/TERMINOLOGY.md's "profiler" entry).
+        // Nothing reads it any more; an old config's leftover key is simply
+        // never looked up, same precedent as dock_scale/opacity_background's
+        // own removal.
 
         // ---- Cursor tab -- Overlay/PanelCursor.{h,cpp} --------------------
         // Controls for the pointer the overlay draws for itself while it is

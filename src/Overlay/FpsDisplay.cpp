@@ -40,14 +40,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <vector>
 
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
@@ -58,9 +56,7 @@
 #include "Config/AppId.h"
 #include "Fonts.h"
 #include "Palette.h"
-#include "Metrics/SystemStats.h"
 #include "UI/Registry.h"
-#include "UI/HudLayoutEditor.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -95,22 +91,19 @@ namespace gamescope
 	// inside it -- stalled the instant the game client stopped producing
 	// frames of its own.
 	//
-	// The HUD is different from the settings overlay in the one way that
-	// matters here: it displays continuously-changing values, so it cannot
-	// just request a frame on a handful of discrete events. But it doesn't
-	// need to free-run either -- the CPU/GPU/media modules only refresh from
-	// SystemStats.cpp's background poll thread at its own 2Hz cadence
-	// (kPollIntervalMs), and RecomputePercentilesIfDue() below only
-	// recomputes every 500ms. Nothing this HUD draws changes any faster than
-	// that, so that's the cadence the repaint request hangs off.
+	// A single number still needs a periodic nudge: without one, a game that
+	// stops committing frames (paused, alt-tabbed) leaves the last FPS value
+	// frozen on screen instead of decaying/refreshing. 500ms matches this
+	// file's own history of picking a cheap, unhurried cadence for exactly
+	// this kind of keepalive.
 	//
 	// A FIRST ATTEMPT hung this off FpsDisplay_AddLayer itself -- call
 	// force_repaint() from in there, gated to at most once per 500ms, the
-	// same shape as RecomputePercentilesIfDue's own interval check. Measured
-	// (headless, idle client, HUD on): it produced exactly one extra frame
-	// and then went silent forever. The reason is structural, not a bug in
-	// the gate: force_repaint() only reaches the NEXT vblank -- steamcompmgr
-	// re-arms its vblank timer on every tick regardless of demand
+	// same shape as a periodic interval check. Measured (headless, idle
+	// client, HUD on): it produced exactly one extra frame and then went
+	// silent forever. The reason is structural, not a bug in the gate:
+	// force_repaint() only reaches the NEXT vblank -- steamcompmgr re-arms
+	// its vblank timer on every tick regardless of demand
 	// (steamcompmgr.cpp, ~16ms later at a 60Hz default), so the flag it sets
 	// is consumed almost immediately, not held for 500ms. FpsDisplay_AddLayer
 	// only runs from inside that one resulting paint, sees its own last
@@ -124,14 +117,12 @@ namespace gamescope
 	//
 	// So the actual 500ms clock has to live outside paint_all() entirely:
 	// a small dedicated thread, sleeping in fixed steps and calling
-	// force_repaint() only while the HUD is enabled -- the same shape
-	// SystemStats.cpp's own background poll thread already uses for exactly
-	// the same cadence, just driving a repaint instead of a sysfs read.
-	// Started lazily, once, from EnsureConfigLoaded() (see that function),
-	// which runs unconditionally the first time ANYTHING touches this
-	// feature's config -- a paint, opening the settings panel, the toggle
-	// command -- so it comes up even if a game client has never rendered a
-	// single frame this session.
+	// force_repaint() only while the HUD is enabled. Started lazily, once,
+	// from EnsureConfigLoaded() (see that function), which runs
+	// unconditionally the first time ANYTHING touches this feature's
+	// config -- a paint, opening the settings panel, the toggle command --
+	// so it comes up even if a game client has never rendered a single
+	// frame this session.
 	//
 	// s_bHudEnabledForTimer mirrors s_Settings.fps_display.enabled for this
 	// thread to read without touching s_Settings itself (which, like the
@@ -151,7 +142,7 @@ namespace gamescope
 		{
 			for ( ;; )
 			{
-				std::this_thread::sleep_for( std::chrono::milliseconds( 500 ) ); // matches SystemStats.cpp's kPollIntervalMs / RecomputePercentilesIfDue's cadence
+				std::this_thread::sleep_for( std::chrono::milliseconds( 500 ) );
 				if ( s_bHudEnabledForTimer.load( std::memory_order_relaxed ) )
 					force_repaint();
 			}
@@ -187,23 +178,6 @@ namespace gamescope
 	static void PersistSettings()
 	{
 		config::EnqueueRoutedWrite( s_Settings );
-	}
-
-	// HUD layouts Phase 3: FpsDisplay.h's exported read/write seam onto
-	// FpsDisplaySettings::layout_name for Overlay/UI/HudLayoutEditor.cpp --
-	// see that header's own comment for why the editor goes through these
-	// rather than keeping a second cached copy of the name itself.
-	const std::string &FpsDisplay_ActiveLayoutName()
-	{
-		EnsureConfigLoaded();
-		return s_Settings.fps_display.layout_name;
-	}
-
-	void FpsDisplay_SetActiveLayoutName( const std::string &sName )
-	{
-		EnsureConfigLoaded();
-		s_Settings.fps_display.layout_name = sName;
-		PersistSettings();
 	}
 
 	// Console/gamescopectl affordance for testing without input capture
@@ -245,123 +219,39 @@ namespace gamescope
 	static float s_flSmoothedFrametimeMs = 1000.0f / 60.0f;
 
 	// -------------------------------------------------------------------
-	// Frametime history: a ring buffer of raw (unsmoothed) per-frame game
-	// frametimes, feeding both the frametime graph and the percentile row.
-	// Every entry is a real g_ulLastAppFrametimeNs sample (commit_t::Signal()'s
-	// game-frame delta, DECISIONS.md #16/#17) -- never the compositor's
-	// composite rate or the display's refresh rate, so the graph/percentiles
-	// stay on the same clock as the headline number, per this feature's task
-	// brief.
+	// Lag-spike detection: a ring buffer of raw (unsmoothed) per-frame game
+	// frametimes. Every entry is a real g_ulLastAppFrametimeNs sample
+	// (commit_t::Signal()'s game-frame delta, DECISIONS.md #16/#17) -- never
+	// the compositor's composite rate or the display's refresh rate, so it
+	// stays on the same clock as the headline number.
+	//
+	// Scope reduction (2026-09-03): this used to also feed a frametime graph
+	// and a percentile row (removed -- see superdoc/meta/TERMINOLOGY.md's
+	// "profiler" entry). The raw history buffer itself is KEPT, deliberately
+	// unused by anything in this file right now: Phase 2 (a separate task)
+	// builds lag-spike detection on top of it, and this is the underlying
+	// per-frame data that detection needs. Nothing currently reads
+	// s_flFrametimeHistoryMs/s_nHistoryCount -- see PushFrametimeSample's own
+	// comment for why it's still fed every frame regardless.
 	//
 	// Sized at 240 samples to match this repo's own spec text for this exact
 	// feature (ui-mockup-precise-spec.md §11's FPS-config-window footer:
 	// "sampling 500 ms · 240-frame window") rather than an invented number.
-	// At typical 60-240fps that's roughly 1-4 seconds of real play: long
-	// enough that a stutter is still on-screen a moment after it happened
-	// and that the 1%/0.1% low buckets have more than a couple of samples to
-	// average (240 * 1% = 2.4 -> 2 samples; 240 * 0.1% = 0.24 -> rounds up to
-	// the single worst frame in the window -- a real limitation of a 240-deep
-	// window worth knowing: a proper 0.1% low usually wants thousands of
-	// frames, so this one reads more like "worst frame in the last few
-	// seconds" than a statistically deep percentile; still an honest number
-	// over its stated window, just a coarse one), short enough that the
-	// graph reads as "right now" instead of a stale minute-old trace. The
-	// on-screen graph draws only as many bars as fit the HUD's width (well
-	// under 240 at typical container sizes) from the tail of this buffer;
-	// the percentile math uses the buffer's full span.
 	static constexpr int kHistoryCapacity = 240;
 	static float s_flFrametimeHistoryMs[kHistoryCapacity] = {};
 	static int s_nHistoryCount = 0;  // valid samples so far (caps at kHistoryCapacity)
 	static int s_nHistoryHead = 0;   // index the NEXT sample will be written to
 
+	// Kept feeding the ring buffer even though nothing in this file reads it
+	// right now (see the buffer's own comment) -- the alternative is Phase 2
+	// discovering it needs per-frame history that was thrown away along with
+	// the graph that used to visualise it.
 	static void PushFrametimeSample( float flMs )
 	{
 		s_flFrametimeHistoryMs[s_nHistoryHead] = flMs;
 		s_nHistoryHead = ( s_nHistoryHead + 1 ) % kHistoryCapacity;
 		if ( s_nHistoryCount < kHistoryCapacity )
 			++s_nHistoryCount;
-	}
-
-	// Graph y-axis ceiling (ms mapped to the top of the 18px strip). Chases
-	// the window's worst sample with a slow EMA rather than the window's raw
-	// max, specifically so a single stutter doesn't yank the whole graph's
-	// scale around (the task brief's own ask: "a scale that does not
-	// rescale distractingly on every spike"). A fresh spike still reads
-	// clearly in the meantime -- it's drawn capped at the strip's full
-	// height and in the amber outlier color (see DrawFrametimeGraph) before
-	// the ceiling has caught up to it, exactly the "obvious at a glance"
-	// treatment the brief asks for, and the ceiling only widens to
-	// accommodate it a little at a time. Floored at a 60fps-equivalent
-	// frametime so a rock-steady high-fps game doesn't get zoomed in so far
-	// that sub-millisecond GPU noise reads as huge bars.
-	static float s_flGraphCeilingMs = ( 1000.0f / 60.0f ) * 1.5f;
-
-	static void UpdateGraphCeiling()
-	{
-		if ( s_nHistoryCount == 0 )
-			return;
-
-		float flMaxMs = 0.0f;
-		for ( int i = 0; i < s_nHistoryCount; ++i )
-			flMaxMs = std::max( flMaxMs, s_flFrametimeHistoryMs[i] );
-
-		const float flDesiredCeiling = std::max( flMaxMs * 1.15f, 1000.0f / 60.0f );
-		constexpr float kCeilingAlpha = 0.03f; // slow -- see this block's own comment for why
-		s_flGraphCeilingMs = s_flGraphCeilingMs * ( 1.0f - kCeilingAlpha ) + flDesiredCeiling * kCeilingAlpha;
-	}
-
-	// -------------------------------------------------------------------
-	// Percentiles: 1% low, 0.1% low, average -- all computed over the same
-	// kHistoryCapacity window and the same game-frametime clock as the
-	// headline number and the graph (never mixed with mangoapp's composited/
-	// display clocks). Recomputed at most every 500ms (matching the spec's
-	// own "sampling 500 ms" footer text) rather than every frame: sorting up
-	// to 240 floats every single draw is wasted work when the result would
-	// otherwise change (and visually jitter) every frame for no benefit --
-	// stats like these are meant to be read as a settled number, not a
-	// twitchy one.
-	// -------------------------------------------------------------------
-
-	static float s_flAverageFps = 60.0f;
-	static float s_flOnePercentLowFps = 60.0f;
-	static float s_flPointOnePercentLowFps = 60.0f;
-	static uint64_t s_ulLastPercentileComputeNanos = 0;
-
-	// Average fps of the worst flFraction of samples in the window (e.g.
-	// 0.01 for 1% low, 0.001 for 0.1% low) -- the standard "1% low" gamer
-	// definition (mean of the slowest bucket), not the single value at that
-	// percentile rank. pSortedMs must be ascending by frametime, so the
-	// worst (highest-ms/lowest-fps) samples are its tail.
-	static float WorstBucketAverageFps( const float *pSortedMs, int nCount, float flFraction )
-	{
-		const int nBucket = std::clamp( (int)std::lround( nCount * flFraction ), 1, nCount );
-		float flSumMs = 0.0f;
-		for ( int i = nCount - nBucket; i < nCount; ++i )
-			flSumMs += pSortedMs[i];
-		return 1000.0f / std::max( flSumMs / nBucket, 0.01f );
-	}
-
-	static void RecomputePercentilesIfDue( uint64_t ulNowNanos )
-	{
-		if ( s_nHistoryCount == 0 )
-			return;
-
-		constexpr uint64_t kRecomputeIntervalNs = 500ull * 1000000ull; // spec §11 footer: "sampling 500 ms"
-		if ( s_ulLastPercentileComputeNanos != 0 && ulNowNanos - s_ulLastPercentileComputeNanos < kRecomputeIntervalNs )
-			return;
-		s_ulLastPercentileComputeNanos = ulNowNanos;
-
-		float flSorted[kHistoryCapacity];
-		std::copy( s_flFrametimeHistoryMs, s_flFrametimeHistoryMs + s_nHistoryCount, flSorted );
-		std::sort( flSorted, flSorted + s_nHistoryCount );
-
-		float flSumMs = 0.0f;
-		for ( int i = 0; i < s_nHistoryCount; ++i )
-			flSumMs += flSorted[i];
-		s_flAverageFps = 1000.0f / std::max( flSumMs / s_nHistoryCount, 0.01f );
-
-		s_flOnePercentLowFps = WorstBucketAverageFps( flSorted, s_nHistoryCount, 0.01f );
-		s_flPointOnePercentLowFps = WorstBucketAverageFps( flSorted, s_nHistoryCount, 0.001f );
 	}
 
 	static float UpdateAndGetSmoothedFps()
@@ -377,11 +267,10 @@ namespace gamescope
 			constexpr float kAlpha = 0.10f;
 			s_flSmoothedFrametimeMs = s_flSmoothedFrametimeMs * ( 1.0f - kAlpha ) + flMs * kAlpha;
 
-			// Same raw sample feeds the graph/percentile history -- one
-			// history entry per real game frame, exactly matching the
-			// headline number's own clock.
+			// Same raw sample feeds the lag-spike history -- one history
+			// entry per real game frame, exactly matching the headline
+			// number's own clock.
 			PushFrametimeSample( flMs );
-			UpdateGraphCeiling();
 		}
 		return 1000.0f / s_flSmoothedFrametimeMs;
 	}
@@ -557,60 +446,10 @@ namespace gamescope
 		return true;
 	}
 
-	// Spec §7 "Meters and graphs" / §10 Row 2: vertical bars, 1px gaps,
-	// bottom-aligned in an 18px-tall strip; normal bar accent @ 60%, outlier
-	// bar spike-amber @ 80%; bar heights 33-100% of the strip. Draws the most
-	// recent bars that fit flWidth, right-aligned (newest at the right edge,
-	// reading left-to-right as old-to-new, the universal waveform/graph
-	// convention) out of the shared kHistoryCapacity history -- see that
-	// buffer's own comment for why 240 samples is comfortably more history
-	// than a HUD-width graph ever draws in one frame.
-	static void DrawFrametimeGraph( ImDrawList *pDrawList, ImVec2 origin, float flWidth, float flHeight )
-	{
-		constexpr float kBarWidth = 2.0f;
-		constexpr float kBarGap = 1.0f; // spec §7: "1px gaps"
-		constexpr float kPitch = kBarWidth + kBarGap;
-
-		const int nBarsFit = std::max( 1, (int)( flWidth / kPitch ) );
-		const int nBars = std::min( nBarsFit, s_nHistoryCount );
-		const float flBottom = origin.y + flHeight;
-
-		// A bar reads as a stutter when it's meaningfully worse than the
-		// *current* short-term pace (the same EMA the headline number uses),
-		// not some stale window-wide average -- otherwise a game that has
-		// genuinely settled into a lower framerate would paint its entire
-		// graph amber forever. 50% slower AND at least 2ms slower (so a
-		// 240fps game's sub-millisecond jitter doesn't false-positive).
-		const float flBaselineMs = s_flSmoothedFrametimeMs;
-
-		float flX = origin.x + flWidth - kBarWidth;
-		for ( int i = 0; i < nBars && flX >= origin.x; ++i )
-		{
-			// s_nHistoryHead is the next WRITE slot, so head-1 is the most
-			// recently written sample; walk backwards through the ring.
-			const int nIdx = ( s_nHistoryHead - 1 - i + kHistoryCapacity ) % kHistoryCapacity;
-			const float flMs = s_flFrametimeHistoryMs[nIdx];
-
-			const float flFrac = std::clamp( flMs / std::max( s_flGraphCeilingMs, 0.001f ), 0.0f, 1.0f );
-			const float flHeightFrac = 0.33f + 0.67f * flFrac; // spec: "bar heights 33-100% of strip"
-			const float flBarHeight = flHeightFrac * flHeight;
-
-			const bool bOutlier = flMs > flBaselineMs * 1.5f && flMs > flBaselineMs + 2.0f;
-			const ImU32 barColor = bOutlier
-				? IM_COL32( 0xF3, 0x82, 0x1D, 204 ) // spec §7 outlier bar: #F3821D @ 80% (0.80*255 = 204)
-				: gamescope::palette::Accent( 0.60f ); // spec §7 normal bar: accent @ 60%
-
-			pDrawList->AddRectFilled( ImVec2( flX, flBottom - flBarHeight ), ImVec2( flX + kBarWidth, flBottom ), barColor );
-			flX -= kPitch;
-		}
-	}
-
 	// -------------------------------------------------------------------
 	// Issue #29 (System Monitor part 3/3): blend_mode gains "inverted"
-	// alongside alpha/additive, and each module (FPS/CPU/GPU/Media) gets an
-	// optional per-module colour override. Shared helpers for both below --
-	// placed ahead of DrawPercentileRow() since that function (and every
-	// module's own Draw*ModuleContent() further down) calls AddTextInverted().
+	// alongside alpha/additive, plus an optional colour override for the
+	// FPS number's text. Shared helpers below.
 	// -------------------------------------------------------------------
 
 	// A filled backdrop only makes sense in "alpha" mode -- additive
@@ -618,22 +457,14 @@ namespace gamescope
 	// B5) and inverted does too, for the same reason this issue's own text
 	// anticipates: a static backdrop fill sits behind the outline/fill
 	// treatment AddTextInverted() draws and would just read as visual
-	// noise rather than helping legibility (verified below -- see the
-	// settings panel's blend-mode combo and this file's own commit
-	// message for the explicit "tested together" combination).
+	// noise rather than helping legibility.
 	static bool ModuleBackdropAllowed( const config::FpsDisplaySettings &cfg )
 	{
 		return cfg.blend_mode == "alpha";
 	}
 
-	// Packs an ImVec4 (0..1 floats, alpha ignored) into the 0xRRGGBB int
-	// config::FpsDisplaySettings::color_fps/cpu/gpu/media store on disk.
-	static int PackColorRgb( ImVec4 col )
-	{
-		auto Channel = []( float f ) { return std::clamp( (int)( f * 255.0f + 0.5f ), 0, 255 ); };
-		return ( Channel( col.x ) << 16 ) | ( Channel( col.y ) << 8 ) | Channel( col.z );
-	}
-
+	// Unpacks the 0xRRGGBB int config::FpsDisplaySettings::color_fps stores
+	// on disk into an ImVec4 (0..1 floats, alpha ignored).
 	static ImVec4 UnpackColorRgb( int nPacked, float flAlpha = 1.0f )
 	{
 		return ImVec4(
@@ -643,25 +474,18 @@ namespace gamescope
 			flAlpha );
 	}
 
-	// Resolves one module's "value" text colour: the user's explicit
-	// ColorEdit3 override when set, else `defaultColor` -- a Palette.h
-	// accent-family token (never an invented literal, per this issue's own
-	// instruction). An unset override therefore moves automatically if
-	// issue #37's hue-selectable accent work changes what that Palette.h
-	// token resolves to at runtime; a set override is a deliberate,
-	// explicit user choice and intentionally does NOT track the accent hue
-	// -- see ConfigSchema.h's color_fps/cpu/gpu/media field comment for the
-	// full rationale this file was asked to document.
+	// Resolves the FPS number's "value" text colour: the user's explicit
+	// override when set, else `defaultColor` -- a Palette.h accent-family
+	// token (never an invented literal). An unset override therefore moves
+	// automatically if issue #37's hue-selectable accent work changes what
+	// that Palette.h token resolves to at runtime; a set override is a
+	// deliberate, explicit user choice and intentionally does NOT track the
+	// accent hue.
 	static ImVec4 ModuleColorVec4( const std::optional<int> &oOverride, ImU32 defaultColor, float flAlpha = 1.0f )
 	{
 		ImVec4 col = oOverride.has_value() ? UnpackColorRgb( *oOverride ) : gamescope::palette::ToVec4( defaultColor );
 		col.w = flAlpha;
 		return col;
-	}
-
-	static ImU32 ModuleColorU32( const std::optional<int> &oOverride, ImU32 defaultColor, float flAlpha )
-	{
-		return ImGui::ColorConvertFloat4ToU32( ModuleColorVec4( oOverride, defaultColor, flAlpha ) );
 	}
 
 	// Issue #29's "Inverted" blend mode. What "inverted" means here, and
@@ -685,13 +509,7 @@ namespace gamescope
 	// ever this texture's own (normally transparent) prior content, never
 	// the game frame, so no amount of Vulkan blend-state work confined to
 	// this file can make a real per-pixel invert of the actual game
-	// picture happen. Reaching that would need a fourth blend mode in
-	// rendervulkan.hpp's compute shader (this issue's scope note keeps
-	// this file out of rendervulkan.hpp/.comp) or safe cross-queue sharing
-	// of the app's own texture into this pass (the kind of setup
-	// s_pOverlayTexture's own bGeneralQueueShared flag needed for THIS
-	// file's texture) -- both genuinely out of this issue's scope, flagged
-	// here as the honest follow-up rather than attempted blind.
+	// picture happen.
 	//
 	// What IS both real and fully in-scope: pairing a black outline with a
 	// white fill is the same "reads over anything" technique real
@@ -703,20 +521,7 @@ namespace gamescope
 	// similar-toned background the way plain "alpha" mode's text can.
 	// Backdrop is auto-disabled in this mode (ModuleBackdropAllowed()) --
 	// a solid backdrop fill behind an outline/fill pair that's already
-	// legible on its own just reads as noise, exactly as issue #29's own
-	// text anticipated for this combination.
-	static void AddTextInverted( ImDrawList *pDrawList, ImVec2 pos, const char *pszText )
-	{
-		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
-		const ImU32 outlineColor = IM_COL32( 0, 0, 0, 235 );
-		for ( const ImVec2 &off : kOffsets )
-			pDrawList->AddText( ImVec2( pos.x + off.x, pos.y + off.y ), outlineColor, pszText );
-		pDrawList->AddText( pos, IM_COL32( 255, 255, 255, 255 ), pszText );
-	}
-
-	// Same, for the explicit-font/size AddText overload (FPS module's Hero
-	// number, which draws at the user's font_size slider rather than a
-	// font style's own baked size).
+	// legible on its own just reads as noise.
 	static void AddTextInvertedSized( ImDrawList *pDrawList, ImFont *pFont, float flFontSize, ImVec2 pos, const char *pszText )
 	{
 		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
@@ -726,49 +531,21 @@ namespace gamescope
 		pDrawList->AddText( pFont, flFontSize, pos, IM_COL32( 255, 255, 255, 255 ), pszText );
 	}
 
-	// Spec §10 Row 3: three Mono 400 10 @ 55% white items, 10px gaps. Task
-	// brief substitutes "average" for the mockup's temperature slot (a
-	// reading this feature has no honest data source for) -- 1% low, 0.1%
-	// low, average, all from the same history window as the graph. Draws
-	// pre-measured strings (see DrawReadout, which builds these once and
-	// reuses the same strings/sizes for both layout and drawing).
-	static void DrawPercentileRow( ImDrawList *pDrawList, ImVec2 origin, float flTextOpacity, bool bInverted,
-		const char *const ( &items )[3], const ImVec2 ( &sizes )[3] )
+	// Same, for the implicit-current-font AddText overload (the " FPS" unit
+	// label, which draws at the Meta style's own baked size).
+	static void AddTextInverted( ImDrawList *pDrawList, ImVec2 pos, const char *pszText )
 	{
-		constexpr float kItemGap = 10.0f; // spec §10: "10px gaps"
-		const ImU32 color = ImGui::GetColorU32( gamescope::palette::White( 0.55f * flTextOpacity ) ); // spec: "@ 55% white"
-
-		// PushFont, then the 3-arg AddText(pos, col, text) overload (implicit
-		// current font/size) -- same pattern as Row 1's unit/ms text below,
-		// not pFont->CalcTextSizeA's explicit-size form (that one's reserved
-		// for Row 1's Hero number, whose size is the user's font_size slider
-		// rather than the Meta style's own baked size).
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		float flX = origin.x;
-		for ( int i = 0; i < 3; ++i )
-		{
-			if ( bInverted )
-				AddTextInverted( pDrawList, ImVec2( flX, origin.y ), items[i] );
-			else
-				pDrawList->AddText( ImVec2( flX, origin.y ), color, items[i] );
-			flX += sizes[i].x + kItemGap;
-		}
-		ImGui::PopFont();
+		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+		const ImU32 outlineColor = IM_COL32( 0, 0, 0, 235 );
+		for ( const ImVec2 &off : kOffsets )
+			pDrawList->AddText( ImVec2( pos.x + off.x, pos.y + off.y ), outlineColor, pszText );
+		pDrawList->AddText( pos, IM_COL32( 255, 255, 255, 255 ), pszText );
 	}
 
-	// Row 1's unit-text run ("FPS"), needed by both the measure and draw
-	// halves of the FPS module below.
-	static constexpr const char *kUnitText = " FPS";
-	// spec §10 row2: "4px above/below gaps" / "18px tall".
-	static constexpr float kRowGap = 4.0f;
-	static constexpr float kGraphHeight = 18.0f;
-
-	// Shared box backdrop for every module (issue #28: factored out of what
-	// was originally DrawFpsModuleContent's own inline block, so the CPU/
-	// GPU/Media modules below draw an identical backdrop rather than a
-	// second copy of the same four lines). Colours are Palette.h's own
-	// tokens/§1 literals -- no new tokens invented, per this issue's own
-	// scope note that #29 owns per-module colour customization.
+	// Shared box backdrop (issue #28: factored out so a future module would
+	// draw an identical backdrop rather than a second copy of the same four
+	// lines -- kept even with only one module left, since the FPS module
+	// still uses it). Colours are Palette.h's own tokens/§1 literals.
 	static void DrawModuleBackdrop( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, bool bDrawBackdrop, const config::FpsDisplaySettings &cfg )
 	{
 		if ( !bDrawBackdrop )
@@ -776,9 +553,6 @@ namespace gamescope
 
 		const ImVec2 rectMin = origin;
 		const ImVec2 rectMax( origin.x + boxSize.x, origin.y + boxSize.y );
-		// Spec §10: "square corners (radius 0)" is the mockup's own default,
-		// but backdrop_rounding stays a real user setting -- see
-		// DrawFpsModuleContent's own identical comment.
 		const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity ) );
 		pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, cfg.backdrop_rounding );
 		pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), cfg.backdrop_rounding );
@@ -786,19 +560,17 @@ namespace gamescope
 
 	// -------------------------------------------------------------------
 	// Placement: 9 anchor positions (issue #26/#27's shared 3x3 grid
-	// model). This is this file's own copy of the same kPlacements/
-	// ParsePlacement shape Notifications.cpp uses for notification_placement
-	// -- kept as a separate copy rather than a shared header since
-	// Notifications.cpp's own version is a file-local static, not exported.
+	// model) plus pixel margins -- this file's own copy of the same
+	// kPlacements/ParsePlacement shape Notifications.cpp uses for
+	// notification_placement (kept as a separate copy rather than a shared
+	// header since Notifications.cpp's own version is a file-local static,
+	// not exported).
 	//
-	// HUD layouts Phase 1: FpsDisplaySettings::placement (the single shared
-	// anchor string this originally served) is gone -- ParsePlacement()'s
-	// remaining job is reading each HudLayoutModule::origin string
-	// (ConfigSchema.h), via ResolveModuleOrigin() in the module framework
-	// below, so a module's own anchor point resolves the same way the old
-	// single readout anchor used to. ComposePlacement() (only ever needed
-	// by the old anchor UI's setter) is gone with that UI; nothing here
-	// writes a placement string any more, only reads one.
+	// Scope reduction (2026-09-03): the named-layout system (per-module
+	// manual x/y placement, layouts/<name>.json) is gone -- see
+	// superdoc/meta/TERMINOLOGY.md's "profiler" entry and CHANGELOG.md.
+	// With only one module left, placement goes back to this simpler
+	// anchor + margin model.
 	// -------------------------------------------------------------------
 
 	namespace
@@ -829,46 +601,47 @@ namespace gamescope
 			nVert = 0;
 			nHoriz = 2;
 		}
+
+		std::string ComposePlacement( int nVert, int nHoriz )
+		{
+			return kPlacements[std::clamp( nVert, 0, 2 )][std::clamp( nHoriz, 0, 2 )];
+		}
+
+		// Resolves `anchor`'s named 3x3 cell, offset by the independent
+		// margin_x/margin_y, into the box's top-left pixel position --
+		// replaces the old per-module HudLayout::x/y/origin resolution
+		// (ResolveModuleOrigin(), deleted with the rest of the module
+		// framework) now that there is only ever one box to place. Clamped
+		// fully on-screen so a large margin can never push the box off the
+		// edge of the display.
+		ImVec2 ResolveAnchoredOrigin( const std::string &sAnchor, float flMarginX, float flMarginY, ImVec2 boxSize, ImVec2 ioDisplay )
+		{
+			int nVert = 0, nHoriz = 2;
+			ParsePlacement( sAnchor, nVert, nHoriz );
+
+			const float flX = ( nHoriz == 0 ) ? flMarginX
+				: ( nHoriz == 1 ) ? ( ioDisplay.x - boxSize.x ) * 0.5f
+				: ( ioDisplay.x - flMarginX - boxSize.x );
+			const float flY = ( nVert == 0 ) ? flMarginY
+				: ( nVert == 1 ) ? ( ioDisplay.y - boxSize.y ) * 0.5f
+				: ( ioDisplay.y - flMarginY - boxSize.y );
+
+			return ImVec2(
+				std::clamp( flX, 0.0f, std::max( 0.0f, ioDisplay.x - boxSize.x ) ),
+				std::clamp( flY, 0.0f, std::max( 0.0f, ioDisplay.y - boxSize.y ) ) );
+		}
 	}
 
 	// -------------------------------------------------------------------
-	// Module framework: the readout is a fixed set of content modules --
-	// FPS, CPU, GPU, Media -- each its own backdrop-boxed block. Every
-	// module reports real content from Metrics/SystemStats.h's
-	// background-polled snapshot, following the same
-	// Measure<X>Module()/Draw<X>Module() shape MeasureFpsModule()/
-	// DrawFpsModuleContent() established. A module still reports zero size
-	// from its measure function when its own per-module `enabled` is off
-	// -- this framework's contract for "not present" is unchanged: it
-	// draws nothing.
-	//
-	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) replaced
-	// the old single anchor-and-margins stack this comment used to
-	// describe: each module now carries its OWN position (a resolved
-	// config::HudLayout's per-module x/y/origin, DrawReadout() below), so
-	// there is no shared anchor, no shared stack width, no inter-module
-	// gap, and no edge-relative draw order to reason about any more --
-	// modules are placed independently and may overlap (the user's
-	// problem by design, no collision avoidance). kModuleOrder below is
-	// now nothing more than a fixed z-order for that overlap case (later
-	// entries draw on top of earlier ones), not a layout algorithm.
+	// The FPS module: number, unit label, backdrop, blend-mode treatment.
+	// Everything that made this a small profiler (CPU/GPU load, the
+	// frametime graph, the percentile row, Now Playing) is gone -- see
+	// this file's header comment.
 	// -------------------------------------------------------------------
 
-	enum class ModuleKind { Fps, Cpu, Gpu, Media, Count };
-	static constexpr int kModuleCount = (int)ModuleKind::Count;
-
-	// Fixed draw/z-order only -- see the block comment above. Independent
-	// per-module placement means this no longer implies any positional
-	// relationship between modules.
-	static constexpr ModuleKind kModuleOrder[kModuleCount] = {
-		ModuleKind::Fps, ModuleKind::Cpu, ModuleKind::Gpu, ModuleKind::Media,
-	};
-
-	// FPS module's measured layout: every string/size the draw half needs,
-	// computed once by MeasureFpsModule() and consumed by
-	// DrawFpsModuleContent() -- split so the module framework can learn
-	// this module's size (for stacking) before it has an origin to draw
-	// at.
+	// Measured layout: every string/size the draw half needs, computed once
+	// so the readout's own box size is known before DrawFpsModuleContent()
+	// draws into it.
 	struct FpsModuleLayout
 	{
 		bool bAdditive = false;
@@ -878,40 +651,19 @@ namespace gamescope
 		char szNum[8] = "";
 		ImVec2 numSize{};
 		ImVec2 unitSize{};
-		char szMs[16] = "";
-		ImVec2 msSize{};
-		bool bShowMs = false; // issue #71: frametime_enabled && !bAdditive
 		ImVec2 textSize{};
-		bool bShowGraph = false;
-		bool bShowPercentiles = false;
-		char szOnePct[24] = "";
-		char szPointOnePct[24] = "";
-		char szAvg[24] = "";
-		ImVec2 percentileSizes[3] = {};
-		float flPercentileRowWidth = 0.0f;
-		float flPercentileRowHeight = 0.0f;
 		float flContentWidth = 0.0f;
 		float flContentHeight = 0.0f;
 	};
 
+	static constexpr const char *kUnitText = " FPS";
+
 	// M8 part 1 (issue #13, typeface swapped to Geist by #53): Geist Mono
 	// is genuinely monospaced, so a fixed-width formatted string
-	// ("%3d FPS") is tabular by construction
-	// -- every digit occupies the same advance width, so the readout
-	// cannot jitter horizontally as the number changes. This replaces the
-	// former DrawTabularInt() helper, which existed only to fake that
-	// property (per-glyph draws at a hand-measured pitch) before a real
-	// tabular-figures font existed; now that one does, the workaround is
-	// gone. Issue #27: any future module (#28's CPU/GPU/Media) showing a
-	// number must follow this same fixed-width-field convention.
-	// `fpsPlacement` is the resolved layout's own Fps entry (config::
-	// ResolveLayoutCached()'s HudLayout::fps) -- HUD layouts Phase 1 moved
-	// the frametime/graph/percentiles/label sub-row toggles this used to
-	// read off `cfg` (FpsDisplaySettings::frametime_enabled/graph_enabled/
-	// percentiles_enabled/fps_label_enabled) onto HudLayoutFpsModule; those
-	// FpsDisplaySettings fields still exist (kept for this phase, see
-	// ConfigSchema.h's layout_name comment) but are no longer read here.
-	static FpsModuleLayout MeasureFpsModule( int nFps, const config::HudLayoutFpsModule &fpsPlacement )
+	// ("%3d") is tabular by construction -- every digit occupies the same
+	// advance width, so the readout cannot jitter horizontally as the
+	// number changes.
+	static FpsModuleLayout MeasureFpsModule( int nFps )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
@@ -921,9 +673,7 @@ namespace gamescope
 		// additive/inverted + a filled backdrop rect would make the
 		// backdrop itself glow (additive, SPEC.md B5) or just read as
 		// noise behind an already-legible outline/fill pair (inverted) --
-		// auto-disable rather than combine them, matching the settings
-		// panel's own auto-disable of the backdrop controls in either mode
-		// (FpsDisplay_DrawSettingsPanel).
+		// auto-disable rather than combine them.
 		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
 
 		// Gamescope's own layer blend modes (rendervulkan.hpp) are
@@ -931,9 +681,8 @@ namespace gamescope
 		// mode to hand this off to. "Additive" here is approximated at
 		// the draw-list level (no backdrop, brighter/accent-tinted text)
 		// rather than literal GPU ADD blend-func compositing against the
-		// scene -- SPEC.md flags this exact interaction as a design-guide
-		// call, not a technical one. "Inverted" draws via AddTextInverted()
-		// instead (see that function's own comment) rather than a flat
+		// scene. "Inverted" draws via AddTextInvertedSized() instead
+		// (see that function's own comment) rather than a flat
 		// L.textColor, so its value here is unused when L.bInverted.
 		const ImVec4 textColorBase = L.bAdditive
 			? ImVec4( 0x7d / 255.0f, 0xe6 / 255.0f, 0xf7 / 255.0f, 1.0f ) // brighter cyan "glow"
@@ -945,109 +694,28 @@ namespace gamescope
 		// padded) -- 0-999 is plenty for a frame-rate readout.
 		snprintf( L.szNum, sizeof( L.szNum ), "%3d", std::clamp( nFps, 0, 999 ) );
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
-		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested, same mechanism the pre-M8 code already relied on
+		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested
 		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
 
-		// Spec §10 Row 1: number (Hero) -> "FPS" unit (Meta, dim) -> spacer
-		// -> frametime in ms (accent-tinted) -- was one flat "%3d FPS" run
-		// in a single color/size; split so the unit and the ms readout can
-		// each carry their own spec'd size/color (gap list item 6).
 		// Issue #73: the unit label is independently hideable
-		// (fps_label_enabled, now the layout's copy) so the module can show
-		// just the number -- zero-sized when off, same "not present
-		// reserves no space" contract MeasureModule() uses for a whole
-		// disabled module.
+		// (fps_label_enabled) so the module can show just the number --
+		// zero-sized when off. This field's own settings row was removed
+		// (see this file's header comment), but the field and this
+		// behaviour stay: an old config that turned it off keeps that
+		// choice.
 		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.unitSize = fpsPlacement.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
+		L.unitSize = cfg.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
 		ImGui::PopFont();
 
-		// Issue #71: the numeric frametime readout, independently of
-		// graph_enabled's Row 2 graph -- off either because the user
-		// disabled it (frametime_enabled, now the layout's copy) or because
-		// additive mode already drops it (L.bAdditive, pre-existing rule,
-		// unchanged).
-		L.bShowMs = fpsPlacement.frametime_enabled && !L.bAdditive;
-		snprintf( L.szMs, sizeof( L.szMs ), "  %.1fms", s_flSmoothedFrametimeMs );
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		L.msSize = L.bShowMs ? ImGui::CalcTextSize( L.szMs ) : ImVec2( 0.0f, 0.0f );
-		ImGui::PopFont();
-
-		L.textSize = ImVec2( L.numSize.x + L.unitSize.x + L.msSize.x, std::max( L.numSize.y, std::max( L.unitSize.y, L.msSize.y ) ) );
-
-		// Row 2 (graph) / Row 3 (percentiles): both independently toggleable
-		// (spec §11's "ROWS checkbox list"), reusing Row 1's font_size/
-		// backdrop/blend_mode/text_opacity rather than a second set of
-		// per-row settings. Toggles are the layout's copies now, same as
-		// the unit label/frametime readout just above.
-		L.bShowGraph = fpsPlacement.graph_enabled;
-		L.bShowPercentiles = fpsPlacement.percentiles_enabled;
-
-		if ( L.bShowPercentiles )
-		{
-			// %3d, same reasoning as szNum above: fixed-width digits so
-			// neither an individual number nor the row's total width
-			// jitters as a value crosses a digit boundary (task brief:
-			// "digits do not jitter").
-			snprintf( L.szOnePct, sizeof( L.szOnePct ), "1%% %3d", std::clamp( (int)std::lround( s_flOnePercentLowFps ), 0, 999 ) );
-			snprintf( L.szPointOnePct, sizeof( L.szPointOnePct ), "0.1%% %3d", std::clamp( (int)std::lround( s_flPointOnePercentLowFps ), 0, 999 ) );
-			snprintf( L.szAvg, sizeof( L.szAvg ), "avg %3d", std::clamp( (int)std::lround( s_flAverageFps ), 0, 999 ) );
-
-			const char *const percentileItems[3] = { L.szOnePct, L.szPointOnePct, L.szAvg };
-			constexpr float kItemGap = 10.0f; // spec §10 row3: "10px gaps"
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			for ( int i = 0; i < 3; ++i )
-			{
-				L.percentileSizes[i] = ImGui::CalcTextSize( percentileItems[i] );
-				L.flPercentileRowHeight = std::max( L.flPercentileRowHeight, L.percentileSizes[i].y );
-			}
-			ImGui::PopFont();
-			L.flPercentileRowWidth = L.percentileSizes[0].x + kItemGap + L.percentileSizes[1].x + kItemGap + L.percentileSizes[2].x;
-		}
-
-		// Issue #80: spec §10's "container ... min-width 186px" is dropped as
-		// a floor here -- deliberately, not an oversight. Investigated before
-		// removing it (this issue's own instruction), not deleted blindly:
-		//   - Backdrop rounding (DrawModuleBackdrop -> AddRectFilled ->
-		//     ImDrawList::PathRect) is self-clamping in Dear ImGui itself:
-		//     PathRect caps `rounding` to (min box dimension)/2 before
-		//     drawing, so a tiny box can never produce a broken/overlapping-
-		//     corner rect -- worst case it degrades to a fully-rounded pill/
-		//     circle, a normal look for a small badge, not a rendering bug.
-		//     No floor is needed to protect backdrop rounding (#29).
-		//   - The position math (DrawReadout below) sizes each module's box
-		//     off its own real measured content, recomputed every frame --
-		//     nothing there hardcodes or assumes a minimum (#27; HUD layouts
-		//     Phase 1 replaced the shared-stack-width version of this note
-		//     with independent per-module boxes, same "no assumed minimum"
-		//     conclusion either way).
-		//   - CPU/GPU/Media's own MeasureXModule() functions already report
-		//     pure content width with no floor at all (Media's is capped
-		//     from ABOVE at 260px, #77, but never floored from below) -- FPS
-		//     was the only module still enforcing this spec number, so
-		//     dropping it here makes FPS consistent with the other three,
-		//     not a new pattern.
-		// So the floor protected nothing real -- it was a literal read of
-		// the spec's own number with no functional backing. Each module's
-		// own minimum is now genuinely its own content width, so FPS-only
-		// with the label hidden (#73) and frametime off (#71) shrinks to fit
-		// just the raw number, per this issue's own ask. #72's shared-width
-		// contract still applies afterward, unchanged: every enabled module
-		// draws at flStackWidth, the widest enabled module's content width.
-		// See ui-mockup-precise-spec.md's dated note on this departure.
-		L.flContentWidth = std::max( L.textSize.x, L.flPercentileRowWidth );
-
+		L.textSize = ImVec2( L.numSize.x + L.unitSize.x, std::max( L.numSize.y, L.unitSize.y ) );
+		L.flContentWidth = L.textSize.x;
 		L.flContentHeight = L.textSize.y;
-		if ( L.bShowGraph )
-			L.flContentHeight += kRowGap + kGraphHeight;
-		if ( L.bShowPercentiles )
-			L.flContentHeight += kRowGap + L.flPercentileRowHeight;
 
 		return L;
 	}
 
 	// Draws the FPS module's backdrop + content into the box
-	// [origin, origin+boxSize) -- boxSize is exactly what MeasureFpsModule()
-	// implied (content size + 2*backdrop_padding), computed by MeasureModule().
+	// [origin, origin+boxSize).
 	static void DrawFpsModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &L )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -1077,675 +745,29 @@ namespace gamescope
 				pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
 			ImGui::PopFont();
 		}
-		cursor.x += L.unitSize.x;
-
-		if ( L.bShowMs ) // issue #71
-		{
-			// Spec §10: frametime readout color oklch(.86 .09 218) = #89E0F8
-			// -- close to, but distinct from, the general accent-value token
-			// (#78DBF6), so it's kept as its own literal rather than routed
-			// through Palette.h's accent family.
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-			const ImVec2 msPos( cursor.x, cursor.y + ( L.numSize.y - L.msSize.y ) );
-			if ( L.bInverted )
-				AddTextInverted( pDrawList, msPos, L.szMs );
-			else
-				pDrawList->AddText( msPos, ImGui::GetColorU32( ImVec4( 0x89 / 255.0f, 0xe0 / 255.0f, 0xf8 / 255.0f, cfg.text_opacity ) ), L.szMs );
-			ImGui::PopFont();
-		}
-
-		float flCursorY = textPos.y + L.textSize.y;
-		if ( L.bShowGraph )
-		{
-			flCursorY += kRowGap;
-			DrawFrametimeGraph( pDrawList, ImVec2( textPos.x, flCursorY ), L.flContentWidth, kGraphHeight );
-			flCursorY += kGraphHeight;
-		}
-		if ( L.bShowPercentiles )
-		{
-			flCursorY += kRowGap;
-			const char *const percentileItems[3] = { L.szOnePct, L.szPointOnePct, L.szAvg };
-			DrawPercentileRow( pDrawList, ImVec2( textPos.x, flCursorY ), cfg.text_opacity, L.bInverted, percentileItems, L.percentileSizes );
-		}
 	}
 
-	// -------------------------------------------------------------------
-	// CPU/GPU/Media modules (issue #28) -- fill in the stubs #27 left.
-	// Same measure/draw split as the FPS module above: a Measure*Module()
-	// call builds every string/size the draw half needs (so the framework
-	// can learn a module's box size before it has an origin to draw at),
-	// and a Draw*ModuleContent() draws into [origin, origin+boxSize).
-	//
-	// Values come from Metrics::Get*State() (Metrics/SystemStats.h) -- a
-	// cheap mutex-guarded copy of a background thread's last poll, never a
-	// direct sysfs/proc read or `playerctl` spawn on this (steamcompmgr)
-	// thread. See that header's own comment for the full threading
-	// contract and data-source rationale (verified live on this machine's
-	// AMD RX 7900 XTX for the GPU sysfs paths).
-	//
-	// Every numeric field below is drawn through Fonts::Style::Value/Meta
-	// (both Geist Mono, genuinely monospaced) at a fixed printf field
-	// width, the same "digits do not jitter" convention MeasureFpsModule's
-	// own comment documents -- e.g. "%3d%%" for GPU busy, not "%d%%".
-	// -------------------------------------------------------------------
-
-	// ---- CPU/RAM module -------------------------------------------------
-
-	struct CpuModuleLayout
-	{
-		bool bDrawBackdrop = false;
-		char szLoadValue[16] = "";  // e.g. " 1.23" or "  n/a"
-		char szRamValue[24] = "";   // e.g. " 6.1/31.9GB" or " n/a"
-		ImVec2 loadLabelSize{}, loadValueSize{}, ramLabelSize{}, ramValueSize{};
-		float flContentWidth = 0.0f;
-		float flContentHeight = 0.0f;
-	};
-
-	static constexpr const char *kCpuLoadLabel = "CPU";
-	static constexpr const char *kCpuRamLabel = "  RAM";
-
-	static CpuModuleLayout MeasureCpuModule()
-	{
-		CpuModuleLayout L;
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
-
-		const gamescope::Metrics::CpuState cpu = gamescope::Metrics::GetCpuState();
-
-		// Fixed-width fields (see this section's header comment) -- a
-		// missing /proc/loadavg or /proc/meminfo read (this issue's own
-		// "degrade gracefully" ask, though far less likely than a missing
-		// amdgpu node) reads as "n/a" in the same field width rather than
-		// a fabricated 0.
-		if ( cpu.bLoadAvailable )
-			snprintf( L.szLoadValue, sizeof( L.szLoadValue ), " %4.2f", cpu.flLoad1 );
-		else
-			snprintf( L.szLoadValue, sizeof( L.szLoadValue ), "  n/a" );
-
-		if ( cpu.bMemAvailable )
-		{
-			const float flUsedGb = (float)cpu.ulMemUsedKb / ( 1024.0f * 1024.0f );
-			const float flTotalGb = (float)cpu.ulMemTotalKb / ( 1024.0f * 1024.0f );
-			snprintf( L.szRamValue, sizeof( L.szRamValue ), " %4.1f/%4.1fGB", flUsedGb, flTotalGb );
-		}
-		else
-		{
-			snprintf( L.szRamValue, sizeof( L.szRamValue ), " n/a" );
-		}
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.loadLabelSize = ImGui::CalcTextSize( kCpuLoadLabel );
-		L.ramLabelSize = ImGui::CalcTextSize( kCpuRamLabel );
-		ImGui::PopFont();
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		L.loadValueSize = ImGui::CalcTextSize( L.szLoadValue );
-		L.ramValueSize = ImGui::CalcTextSize( L.szRamValue );
-		ImGui::PopFont();
-
-		L.flContentWidth = L.loadLabelSize.x + L.loadValueSize.x + L.ramLabelSize.x + L.ramValueSize.x;
-		L.flContentHeight = std::max( { L.loadLabelSize.y, L.loadValueSize.y, L.ramLabelSize.y, L.ramValueSize.y } );
-		return L;
-	}
-
-	static void DrawCpuModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const CpuModuleLayout &L )
-	{
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
-
-		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
-		const bool bInverted = cfg.blend_mode == "inverted";
-		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) ); // matches Row 3's own "55% white" meta treatment
-		const ImU32 valueColor = ModuleColorU32( cfg.color_cpu, gamescope::palette::kAccentIcon, cfg.text_opacity );
-
-		ImVec2 cursor = textPos;
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, kCpuLoadLabel ); else pDrawList->AddText( cursor, labelColor, kCpuLoadLabel );
-		ImGui::PopFont();
-		cursor.x += L.loadLabelSize.x;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szLoadValue ); else pDrawList->AddText( cursor, valueColor, L.szLoadValue );
-		ImGui::PopFont();
-		cursor.x += L.loadValueSize.x;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, kCpuRamLabel ); else pDrawList->AddText( cursor, labelColor, kCpuRamLabel );
-		ImGui::PopFont();
-		cursor.x += L.ramLabelSize.x;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szRamValue ); else pDrawList->AddText( cursor, valueColor, L.szRamValue );
-		ImGui::PopFont();
-	}
-
-	// ---- GPU module -------------------------------------------------------
-
-	struct GpuModuleLayout
-	{
-		bool bDrawBackdrop = false;
-		bool bGpuFound = false;
-		char szUnavailableLine[40] = "";
-		char szBusyValue[8] = "";     // " 63%"
-		char szVramValue[24] = "";    // " 12.1/24.0GB"
-		char szSensorsLine[40] = "";  // " 63.0C   96.0W" or "sensors unavailable"
-		ImVec2 unavailableSize{};
-		ImVec2 busyLabelSize{}, busyValueSize{}, vramLabelSize{}, vramValueSize{}, sensorsLineSize{};
-		float flRow1Height = 0.0f;
-		float flContentWidth = 0.0f;
-		float flContentHeight = 0.0f;
-	};
-
-	static constexpr const char *kGpuBusyLabel = "GPU";
-	static constexpr const char *kGpuVramLabel = "  VRAM";
-
-	static GpuModuleLayout MeasureGpuModule()
-	{
-		GpuModuleLayout L;
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
-
-		const gamescope::Metrics::GpuState gpu = gamescope::Metrics::GetGpuState();
-		L.bGpuFound = gpu.bGpuFound;
-
-		if ( !gpu.bGpuFound )
-		{
-			// No amdgpu DRM device found this session -- non-AMD hardware,
-			// or an AMD card whose driver hasn't bound. Honest
-			// "unavailable" line rather than a fabricated 0% or a crash on
-			// a missing sysfs file -- this issue's own explicit
-			// requirement (this machine is AMD; NVIDIA/Intel were never
-			// testable here, so this path is the honest fallback for them).
-			snprintf( L.szUnavailableLine, sizeof( L.szUnavailableLine ), "GPU  unavailable (no amdgpu)" );
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			L.unavailableSize = ImGui::CalcTextSize( L.szUnavailableLine );
-			ImGui::PopFont();
-			L.flContentWidth = L.unavailableSize.x;
-			L.flContentHeight = L.unavailableSize.y;
-			return L;
-		}
-
-		snprintf( L.szBusyValue, sizeof( L.szBusyValue ), " %3d%%", gpu.nBusyPercent );
-		const float flUsedGb = (float)gpu.ulVramUsedBytes / ( 1024.0f * 1024.0f * 1024.0f );
-		const float flTotalGb = (float)gpu.ulVramTotalBytes / ( 1024.0f * 1024.0f * 1024.0f );
-		snprintf( L.szVramValue, sizeof( L.szVramValue ), " %4.1f/%4.1fGB", flUsedGb, flTotalGb );
-
-		if ( gpu.bHwmonFound )
-			snprintf( L.szSensorsLine, sizeof( L.szSensorsLine ), "%5.1fC   %5.1fW", gpu.flTempC, gpu.flPowerWatts );
-		else
-			snprintf( L.szSensorsLine, sizeof( L.szSensorsLine ), "sensors unavailable" ); // amdgpu DRM node found, but no matching hwmon node -- temp/power specifically unavailable
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.busyLabelSize = ImGui::CalcTextSize( kGpuBusyLabel );
-		L.vramLabelSize = ImGui::CalcTextSize( kGpuVramLabel );
-		L.sensorsLineSize = ImGui::CalcTextSize( L.szSensorsLine );
-		ImGui::PopFont();
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		L.busyValueSize = ImGui::CalcTextSize( L.szBusyValue );
-		L.vramValueSize = ImGui::CalcTextSize( L.szVramValue );
-		ImGui::PopFont();
-
-		const float flRow1Width = L.busyLabelSize.x + L.busyValueSize.x + L.vramLabelSize.x + L.vramValueSize.x;
-		L.flRow1Height = std::max( { L.busyLabelSize.y, L.busyValueSize.y, L.vramLabelSize.y, L.vramValueSize.y } );
-		L.flContentWidth = std::max( flRow1Width, L.sensorsLineSize.x );
-		L.flContentHeight = L.flRow1Height + kRowGap + L.sensorsLineSize.y;
-		return L;
-	}
-
-	static void DrawGpuModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const GpuModuleLayout &L )
-	{
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
-
-		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
-		const bool bInverted = cfg.blend_mode == "inverted";
-		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) );
-		const ImU32 valueColor = ModuleColorU32( cfg.color_gpu, gamescope::palette::kAccentKnob, cfg.text_opacity );
-
-		if ( !L.bGpuFound )
-		{
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			if ( bInverted ) AddTextInverted( pDrawList, textPos, L.szUnavailableLine ); else pDrawList->AddText( textPos, labelColor, L.szUnavailableLine );
-			ImGui::PopFont();
-			return;
-		}
-
-		ImVec2 cursor = textPos;
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, kGpuBusyLabel ); else pDrawList->AddText( cursor, labelColor, kGpuBusyLabel );
-		ImGui::PopFont();
-		cursor.x += L.busyLabelSize.x;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szBusyValue ); else pDrawList->AddText( cursor, valueColor, L.szBusyValue );
-		ImGui::PopFont();
-		cursor.x += L.busyValueSize.x;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, kGpuVramLabel ); else pDrawList->AddText( cursor, labelColor, kGpuVramLabel );
-		ImGui::PopFont();
-		cursor.x += L.vramLabelSize.x;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		if ( bInverted ) AddTextInverted( pDrawList, cursor, L.szVramValue ); else pDrawList->AddText( cursor, valueColor, L.szVramValue );
-		ImGui::PopFont();
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		const ImVec2 sensorsPos( textPos.x, textPos.y + L.flRow1Height + kRowGap );
-		if ( bInverted ) AddTextInverted( pDrawList, sensorsPos, L.szSensorsLine ); else pDrawList->AddText( sensorsPos, labelColor, L.szSensorsLine );
-		ImGui::PopFont();
-	}
-
-	// ---- Media module -------------------------------------------------------
-
-	// Byte-truncation, not UTF-8-aware: acceptable here since this only
-	// clips an already-rare long title/artist string for display width,
-	// and a clipped multibyte glyph at the very tail is a cosmetic edge
-	// case (the font atlas renders whatever bytes remain, at worst one
-	// stray/missing glyph), not a correctness one.
-	static std::string TruncateForDisplay( const std::string &s, size_t nMaxLen )
-	{
-		if ( s.size() <= nMaxLen )
-			return s;
-		return s.substr( 0, nMaxLen ) + "...";
-	}
-
-	// Issue #77: #72 makes every module's backdrop draw at the width of the
-	// widest, and with a real MPRIS session running the Media module's own
-	// track-title line is routinely the widest content in the stack (unlike
-	// FPS/CPU/GPU, whose content is short, digit-denominated fields) --
-	// pinning every OTHER module to Media's width, not the other way
-	// around. #72's shared-width contract itself is kept exactly as spec'd
-	// (see this issue's own investigation comment on GitHub); the fix lives
-	// entirely here, in what Media itself reports as its content width.
-	//
-	// kMediaTrackMaxWidth is a straight pixel ceiling (one of this issue's
-	// own suggested options), sized in the same ballpark as a typical GPU/
-	// CPU row's own width at this file's default font sizes (~200-230px
-	// unscaled: "GPU 63%  VRAM 12.1/24.0GB" and friends) -- issue #80 later
-	// removed MeasureFpsModule()'s separate 186px floor (this cap sits well
-	// above where that floor used to be and is unaffected by its removal)
-	// so a normal "Artist  -  Title" line still draws in full, but close
-	// enough to a
-	// sibling module's own width that one outlier title can no longer drag
-	// the whole stack 2-3x wider than everything else in it. A multiple-of-
-	// next-widest-module cap was considered and rejected: it would make
-	// Media's own width depend on measuring every OTHER module first,
-	// coupling this module's layout to sibling ordering for no real benefit
-	// over a constant tuned to the same ballpark. Scaled by
-	// gamescope::palette::DisplayScale() like every other pixel constant in
-	// this file (Widgets.cpp's #46 segmented-label shrink-to-fit follows
-	// the same rule) so it stays proportionate at 2.0x UI Scale instead of
-	// going relatively tighter as the font grows.
-	static constexpr float kMediaTrackMaxWidth = 260.0f;
-
-	// Issue #77: pixel-width-driven ellipsis truncation for a string that
-	// would otherwise report too wide -- same "measure, and only touch it
-	// if it doesn't fit" shape as Widgets.cpp's #46 segmented-label shrink-
-	// to-fit, but an ellipsis rather than a shrunk font: a shrunk-but-whole
-	// label reads as merely "smaller," while a genuinely cut string needs a
-	// visible "more was here" marker, which only an ellipsis gives. Must be
-	// called with the target font already pushed -- ImGui::CalcTextSize()
-	// samples the currently bound font, same requirement CalcTextSize()
-	// itself has at every other call site in this file. Binary-searches the
-	// byte cut point (cheap either way at this string length, and reads
-	// directly as "longest prefix that still fits" rather than a decrement
-	// loop). Byte-based, not UTF-8-aware -- same accepted tradeoff
-	// TruncateForDisplay() above documents; a clipped multibyte glyph right
-	// at the ellipsis is a cosmetic edge case, not a correctness one.
-	static std::string TruncateToPixelWidth( const std::string &s, float flMaxWidth )
-	{
-		if ( ImGui::CalcTextSize( s.c_str() ).x <= flMaxWidth )
-			return s;
-
-		static constexpr const char *kEllipsis = "\xE2\x80\xA6"; // U+2026 "..."
-		const float flEllipsisWidth = ImGui::CalcTextSize( kEllipsis ).x;
-
-		size_t nLo = 0, nHi = s.size();
-		while ( nLo < nHi )
-		{
-			const size_t nMid = nLo + ( nHi - nLo + 1 ) / 2;
-			const float flWidth = ImGui::CalcTextSize( s.substr( 0, nMid ).c_str() ).x + flEllipsisWidth;
-			if ( flWidth <= flMaxWidth )
-				nLo = nMid;
-			else
-				nHi = nMid - 1;
-		}
-		return s.substr( 0, nLo ) + kEllipsis;
-	}
-
-	struct MediaModuleLayout
-	{
-		bool bDrawBackdrop = false;
-		bool bPlayerAvailable = false;
-		char szStatusLine[24] = "";
-		char szTrackLine[160] = "";
-		ImVec2 statusSize{}, trackSize{};
-		float flContentWidth = 0.0f;
-		float flContentHeight = 0.0f;
-	};
-
-	static MediaModuleLayout MeasureMediaModule()
-	{
-		MediaModuleLayout L;
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
-
-		const gamescope::Metrics::MediaState media = gamescope::Metrics::GetMediaState();
-		L.bPlayerAvailable = media.bPlayerAvailable;
-
-		if ( !media.bPlayerAvailable )
-		{
-			// No MPRIS player currently open (playerctl missing, or simply
-			// nothing playing) -- an honestly-empty module, not an error,
-			// per this issue's own acceptance criterion.
-			snprintf( L.szStatusLine, sizeof( L.szStatusLine ), "no media playing" );
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			L.statusSize = ImGui::CalcTextSize( L.szStatusLine );
-			ImGui::PopFont();
-			L.flContentWidth = L.statusSize.x;
-			L.flContentHeight = L.statusSize.y;
-			return L;
-		}
-
-		const char *pszStatusWord = "media";
-		switch ( media.eStatus )
-		{
-		case gamescope::Metrics::PlaybackStatus::Playing: pszStatusWord = "playing"; break;
-		case gamescope::Metrics::PlaybackStatus::Paused:  pszStatusWord = "paused";  break;
-		case gamescope::Metrics::PlaybackStatus::Stopped: pszStatusWord = "stopped"; break;
-		default: break;
-		}
-		snprintf( L.szStatusLine, sizeof( L.szStatusLine ), "MEDIA  %s", pszStatusWord );
-
-		const std::string sTitle = TruncateForDisplay( media.sTitle.empty() ? "(unknown title)" : media.sTitle, 40 );
-		const std::string sTrack = media.sArtist.empty() ? sTitle : ( sTitle + "  -  " + TruncateForDisplay( media.sArtist, 24 ) );
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.statusSize = ImGui::CalcTextSize( L.szStatusLine );
-		ImGui::PopFont();
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		// Issue #77: clamp to kMediaTrackMaxWidth (see its own comment)
-		// applied to the already-joined "Title  -  Artist" line, so a long
-		// ARTIST is what gets sacrificed first when the two together don't
-		// fit -- the title is the more identifying half and sits at the
-		// front, so a tail cut ("Some Very Long Song Name (Remaste...")
-		// loses less useful information than a head cut would (this
-		// issue's own brief gives this exact example).
-		const float flMaxTrackWidth = kMediaTrackMaxWidth * gamescope::palette::DisplayScale();
-		const std::string sClamped = TruncateToPixelWidth( sTrack, flMaxTrackWidth );
-		snprintf( L.szTrackLine, sizeof( L.szTrackLine ), "%s", sClamped.c_str() );
-		L.trackSize = ImGui::CalcTextSize( L.szTrackLine );
-		ImGui::PopFont();
-
-		L.flContentWidth = std::max( L.statusSize.x, L.trackSize.x );
-		L.flContentHeight = L.statusSize.y + kRowGap + L.trackSize.y;
-		return L;
-	}
-
-	static void DrawMediaModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const MediaModuleLayout &L )
-	{
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
-
-		const ImVec2 textPos( origin.x + cfg.backdrop_padding, origin.y + cfg.backdrop_padding );
-		const bool bInverted = cfg.blend_mode == "inverted";
-		const ImU32 labelColor = ImGui::GetColorU32( gamescope::palette::White( 0.55f * cfg.text_opacity ) );
-		const ImU32 valueColor = ModuleColorU32( cfg.color_media, gamescope::palette::kAccentHandle, cfg.text_opacity );
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		if ( bInverted ) AddTextInverted( pDrawList, textPos, L.szStatusLine ); else pDrawList->AddText( textPos, labelColor, L.szStatusLine );
-		ImGui::PopFont();
-
-		if ( !L.bPlayerAvailable )
-			return;
-
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Value ) );
-		const ImVec2 trackPos( textPos.x, textPos.y + L.statusSize.y + kRowGap );
-		if ( bInverted ) AddTextInverted( pDrawList, trackPos, L.szTrackLine ); else pDrawList->AddText( trackPos, valueColor, L.szTrackLine );
-		ImGui::PopFont();
-	}
-
-	// Returns the resolved layout's own placement entry for `kind` -- the
-	// seam MeasureModule()/DrawReadout() use to stay agnostic of which
-	// concrete HudLayout field belongs to which ModuleKind. Cpu/Gpu/Media
-	// each own a plain HudLayoutModule; Fps's is nested one level down
-	// (HudLayoutFpsModule::placement) since that struct also carries the
-	// sub-row toggles MeasureFpsModule() now reads (see that function).
-	static const config::HudLayoutModule &ModulePlacement( ModuleKind kind, const config::HudLayout &layout )
-	{
-		switch ( kind )
-		{
-		case ModuleKind::Fps:   return layout.fps.placement;
-		case ModuleKind::Cpu:   return layout.cpu;
-		case ModuleKind::Gpu:   return layout.gpu;
-		case ModuleKind::Media: default: return layout.media;
-		}
-	}
-
-	// Measures one module, returning its full box size (content +
-	// 2*backdrop_padding on each axis, matching what each Draw*ModuleContent()
-	// above expects as boxSize) -- (0,0) means "not present," this
-	// framework's contract for a module with no content.
-	//
-	// HUD layouts Phase 1: presence is gated on the resolved layout's own
-	// per-module `enabled` (config::HudLayout, via `layout`) rather than
-	// FpsDisplaySettings::fps_enabled/cpu_enabled/gpu_enabled/media_enabled
-	// -- those fields still exist (see ConfigSchema.h's layout_name
-	// comment) but this is the one call site that stopped reading them.
-	static ImVec2 MeasureModule( ModuleKind kind, int nFps, const config::HudLayout &layout, FpsModuleLayout &outFpsLayout, CpuModuleLayout &outCpuLayout, GpuModuleLayout &outGpuLayout, MediaModuleLayout &outMediaLayout )
-	{
-		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		switch ( kind )
-		{
-		case ModuleKind::Fps:
-		{
-			if ( !layout.fps.placement.enabled )
-				return ImVec2( 0.0f, 0.0f );
-			outFpsLayout = MeasureFpsModule( nFps, layout.fps );
-			return ImVec2( outFpsLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outFpsLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
-		}
-		case ModuleKind::Cpu:
-		{
-			if ( !layout.cpu.enabled )
-				return ImVec2( 0.0f, 0.0f );
-			outCpuLayout = MeasureCpuModule();
-			return ImVec2( outCpuLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outCpuLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
-		}
-		case ModuleKind::Gpu:
-		{
-			if ( !layout.gpu.enabled )
-				return ImVec2( 0.0f, 0.0f );
-			outGpuLayout = MeasureGpuModule();
-			return ImVec2( outGpuLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outGpuLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
-		}
-		case ModuleKind::Media:
-		{
-			if ( !layout.media.enabled )
-				return ImVec2( 0.0f, 0.0f );
-			outMediaLayout = MeasureMediaModule();
-			return ImVec2( outMediaLayout.flContentWidth + cfg.backdrop_padding * 2.0f, outMediaLayout.flContentHeight + cfg.backdrop_padding * 2.0f );
-		}
-		default:
-			return ImVec2( 0.0f, 0.0f );
-		}
-	}
-
-	// Resolves one module's (x, y, origin, boxSize) into the top-left pixel
-	// position Draw*ModuleContent()'s `origin` parameter expects -- the
-	// heart of HUD layouts Phase 1's render change. `origin` names which of
-	// the module's own nine points sits at the normalised (x, y) coordinate,
-	// reusing kPlacements/ParsePlacement's existing 3x3 grid: index 0/1/2 on
-	// each axis is exactly fraction 0.0/0.5/1.0 of the box's own size, so
-	// e.g. "bottom-right" at (1, 1) pulls the box fully up-and-left of that
-	// point, landing its actual bottom-right corner on it rather than
-	// clipping off-screen.
-	//
-	// Clamped fully on-screen the same shape the old single-stack anchor
-	// used (std::clamp against [0, ioDisplay - boxSize]) -- a legitimate,
-	// in-bounds (x, y, origin) already computes into that exact range, so
-	// this never moves a correctly-authored placement; it only pulls back
-	// an out-of-0..1 coordinate or a module bigger than the screen, which
-	// is the one thing "overlap is the user's problem, no collision
-	// avoidance" (this phase's own scope) does NOT extend to -- staying
-	// fully visible is kept, per the task's own "does not clip" ask.
-	// `placement.scale` is deliberately NOT read here (HUD layouts Phase 2,
-	// not this one) -- see DrawReadout()'s own comment on why applying it
-	// only where it's cheap would mean scaling the backdrop box without
-	// scaling the content inside it (Cpu/Gpu/Media's Measure/Draw functions
-	// draw text at Fonts.h's fixed baked-atlas sizes, not an explicit size
-	// parameter the way the Fps module's Hero number alone does), which is
-	// a worse, half-wired result than deferring wholesale.
-	static ImVec2 ResolveModuleOrigin( const config::HudLayoutModule &placement, ImVec2 boxSize, ImVec2 ioDisplay )
-	{
-		int nVert = 0, nHoriz = 0;
-		ParsePlacement( placement.origin, nVert, nHoriz );
-		const ImVec2 point( placement.x * ioDisplay.x, placement.y * ioDisplay.y );
-		ImVec2 topLeft( point.x - boxSize.x * ( nHoriz * 0.5f ), point.y - boxSize.y * ( nVert * 0.5f ) );
-		topLeft.x = std::clamp( topLeft.x, 0.0f, std::max( 0.0f, ioDisplay.x - boxSize.x ) );
-		topLeft.y = std::clamp( topLeft.y, 0.0f, std::max( 0.0f, ioDisplay.y - boxSize.y ) );
-		return topLeft;
-	}
-
-	static void DrawModule( ModuleKind kind, ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &fpsLayout, const CpuModuleLayout &cpuLayout, const GpuModuleLayout &gpuLayout, const MediaModuleLayout &mediaLayout )
-	{
-		switch ( kind )
-		{
-		case ModuleKind::Fps:
-			DrawFpsModuleContent( pDrawList, origin, boxSize, fpsLayout );
-			break;
-		case ModuleKind::Cpu:
-			DrawCpuModuleContent( pDrawList, origin, boxSize, cpuLayout );
-			break;
-		case ModuleKind::Gpu:
-			DrawGpuModuleContent( pDrawList, origin, boxSize, gpuLayout );
-			break;
-		case ModuleKind::Media:
-			DrawMediaModuleContent( pDrawList, origin, boxSize, mediaLayout );
-			break;
-		default:
-			break;
-		}
-	}
-
-	// HUD layouts Phase 3 (superdoc/architecture/hud-layouts.md's "seam for
-	// Phase 3's editor"): FpsDisplay.h's exported counterpart to
-	// DrawReadout()'s own measure+resolve pipeline, for
-	// Overlay/UI/HudLayoutEditor.cpp's live drag preview. Deliberately takes
-	// `layout` as a parameter (the editor's own not-yet-saved working copy)
-	// rather than resolving cfg.layout_name itself -- see FpsDisplay.h's own
-	// comment on this function for the full contract, including why it is
-	// safe to call from the Shell's ImGui context rather than this file's
-	// own s_pImguiContext.
-	void FpsDisplay_GetModuleRects( const config::HudLayout &layout, HudModuleRect (&out)[4],
-	                                float *pflDisplayW, float *pflDisplayH )
-	{
-		EnsureConfigLoaded();
-
-		// "Last known" display size: the HUD's own offscreen texture at
-		// whatever size it was last (re)created at (EnsureTexture(), driven
-		// by g_nOutputWidth/g_nOutputHeight every frame it draws) -- 0x0
-		// only before the HUD has ever rendered a single frame this
-		// process, in which case g_nOutputWidth/g_nOutputHeight (the
-		// compositor's current output size, already valid by the time
-		// anything can open the settings overlay) is the next-best "last
-		// known" answer, and a hardcoded 1920x1080 is the final fallback so
-		// this never hands back a size a caller could divide by zero with.
-		const float flDisplayW = s_uTextureWidth  != 0 ? (float)s_uTextureWidth
-		                        : g_nOutputWidth   != 0 ? (float)g_nOutputWidth  : 1920.0f;
-		const float flDisplayH = s_uTextureHeight != 0 ? (float)s_uTextureHeight
-		                        : g_nOutputHeight  != 0 ? (float)g_nOutputHeight : 1080.0f;
-		if ( pflDisplayW ) *pflDisplayW = flDisplayW;
-		if ( pflDisplayH ) *pflDisplayH = flDisplayH;
-
-		const ImVec2 ioDisplay( flDisplayW, flDisplayH );
-
-		// Last known FPS: derived from s_flSmoothedFrametimeMs the same way
-		// UpdateAndGetSmoothedFps() does, without that function's own side
-		// effect of consuming a fresh g_ulLastAppFrametimeNs sample -- this
-		// call has no frame of its own to attribute a new sample to. Its
-		// static initialiser (1000/60) is already this function's "the HUD
-		// has never drawn a frame" fallback, so no separate branch is needed
-		// here.
-		const int nFps = (int)std::lround( 1000.0f / std::max( s_flSmoothedFrametimeMs, 0.01f ) );
-
-		FpsModuleLayout fpsLayout;
-		CpuModuleLayout cpuLayout;
-		GpuModuleLayout gpuLayout;
-		MediaModuleLayout mediaLayout;
-
-		for ( int i = 0; i < kModuleCount; ++i )
-		{
-			const ModuleKind kind = kModuleOrder[i];
-			const ImVec2 size = MeasureModule( kind, nFps, layout, fpsLayout, cpuLayout, gpuLayout, mediaLayout );
-			HudModuleRect &rect = out[i];
-			rect.bEnabled = size.x > 0.0f || size.y > 0.0f;
-			if ( !rect.bEnabled )
-			{
-				rect.x = rect.y = rect.w = rect.h = 0.0f;
-				continue;
-			}
-			const config::HudLayoutModule &placement = ModulePlacement( kind, layout );
-			const ImVec2 origin = ResolveModuleOrigin( placement, size, ioDisplay );
-			rect.x = origin.x;
-			rect.y = origin.y;
-			rect.w = size.x;
-			rect.h = size.y;
-		}
-	}
-
-	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) replaced
-	// this function's old two-pass "measure the widest module, anchor one
-	// shared stack to a 3x3 cell + margins, walk a cursor down it" shape
-	// with independent per-module placement: `config::ResolveLayoutCached`
-	// is looked up fresh every call (a cheap in-memory map lookup, safe at
-	// this render path's cadence -- see that function's own header comment)
-	// so a layout change is visible on the very next repaint, never staler
-	// than the up-to-500ms bound EnsureRepaintTimerThread already puts on
-	// how often that next repaint happens at all. Each module still gets
-	// measured (pass 1, Measure*Module()) before it has a position to draw
-	// at, same split as before; pass 2 now resolves that position from the
-	// module's own layout entry (ResolveModuleOrigin()) instead of a shared
-	// anchor/cursor. With no layout referenced (layout_name empty, or a
-	// name that doesn't resolve), every module's `enabled` is false and
-	// this function draws nothing -- config::HudLayout{}'s own documented
-	// default, no special-casing needed here.
+	// Scope reduction (2026-09-03): DrawReadout() used to measure and place
+	// a fixed sequence of modules (Fps/Cpu/Gpu/Media) each against its own
+	// entry in a resolved config::HudLayout. That whole framework (ModuleKind,
+	// kModuleOrder, MeasureModule, ModulePlacement, ResolveModuleOrigin,
+	// DrawModule, and the CPU/GPU/Media modules themselves) is gone -- there
+	// is exactly one module now, placed by the plain anchor+margin model
+	// above.
 	static void DrawReadout()
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-		const config::HudLayout &layout = config::ResolveLayoutCached( cfg.layout_name );
 
 		const int nFps = (int)std::lround( UpdateAndGetSmoothedFps() );
-		RecomputePercentilesIfDue( get_time_in_nanos() );
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
 		const ImVec2 io_display = ImGui::GetIO().DisplaySize; // actual output resolution, see FpsDisplay_AddLayer()
 
-		// Pass 1: measure every module the layout enables. kModuleOrder is
-		// now just a fixed draw/z-order (see its own comment) -- there is
-		// no shared width/stack to build any more, each module reports its
-		// own natural content-sized box.
-		FpsModuleLayout fpsLayout;
-		CpuModuleLayout cpuLayout;
-		GpuModuleLayout gpuLayout;
-		MediaModuleLayout mediaLayout;
-		ImVec2 sizes[kModuleCount];
-		for ( int i = 0; i < kModuleCount; ++i )
-			sizes[i] = MeasureModule( kModuleOrder[i], nFps, layout, fpsLayout, cpuLayout, gpuLayout, mediaLayout );
+		const FpsModuleLayout L = MeasureFpsModule( nFps );
+		const ImVec2 boxSize( L.flContentWidth + cfg.backdrop_padding * 2.0f, L.flContentHeight + cfg.backdrop_padding * 2.0f );
+		const ImVec2 origin = ResolveAnchoredOrigin( cfg.anchor, (float)cfg.margin_x, (float)cfg.margin_y, boxSize, io_display );
 
-		// Pass 2: place and draw each present module independently, at the
-		// position/origin its own layout entry specifies.
-		for ( int i = 0; i < kModuleCount; ++i )
-		{
-			const bool bPresent = sizes[i].x > 0.0f || sizes[i].y > 0.0f;
-			if ( !bPresent )
-				continue;
-			const config::HudLayoutModule &placement = ModulePlacement( kModuleOrder[i], layout );
-			const ImVec2 origin = ResolveModuleOrigin( placement, sizes[i], io_display );
-			DrawModule( kModuleOrder[i], pDrawList, origin, sizes[i], fpsLayout, cpuLayout, gpuLayout, mediaLayout );
-		}
+		DrawFpsModuleContent( pDrawList, origin, boxSize, L );
 	}
 
 	static bool RenderAndSubmit()
@@ -1832,28 +854,6 @@ namespace gamescope
 	{
 		EnsureConfigLoaded();
 
-		// Issue #28: starts the CPU/GPU/media background poll thread
-		// (Metrics/SystemStats.h -- mirrors Audio::Init()'s own
-		// call-unconditionally-every-frame, only-first-call-has-effect
-		// shape). Cheap: an atomic exchange check once the thread is up.
-		// Started here rather than gated on `enabled` below so the first
-		// numbers are already warm by the time a user opens the panel and
-		// turns the readout on, rather than starting cold.
-		gamescope::Metrics::Init();
-
-		// Issue #40: gate the Statistics tab's 60-second history on tab
-		// *selection* (the persisted config field), not on this readout's
-		// own `enabled` toggle or the settings overlay's open/closed
-		// state -- called unconditionally, every composited frame,
-		// regardless of either. This is deliberately ABOVE the `enabled`
-		// early-return below: a user who leaves Statistics selected while
-		// the FPS counter itself is off, or with the overlay closed
-		// entirely, still gets a continuously warm 60s window (see
-		// ConfigSchema.h's OverlaySettings::system_monitor_tab and
-		// SystemStats.h's SetHistoryCollectionEnabled() for the full
-		// rationale).
-		gamescope::Metrics::SetHistoryCollectionEnabled( s_Settings.overlay.system_monitor_tab == "statistics" );
-
 		if ( !s_Settings.fps_display.enabled )
 			return;
 
@@ -1918,34 +918,6 @@ namespace gamescope
 		// g_zposSettingsOverlay, steamcompmgr.hpp) so the live readout
 		// stays visible whether or not the settings panel is open --
 		// deliberate, see that file's own comment.
-		//
-		// A prior edit-mode-only special case here (kZposHudEditing =
-		// g_zposSettingsOverlay - 1, meant to drop this layer below the
-		// Shell so the layout editor's Save/Cancel chrome, drawn inside
-		// the Shell's own context, wouldn't have the live numbers painted
-		// over it) evaluated to 5, colliding with g_zposMuraCorrection
-		// (steamcompmgr.hpp) -- a latent defect (never hit in practice,
-		// since it only applied while the editor was open) that would
-		// have made this layer match the screenshot code's `zpos >=
-		// g_zposMuraCorrection` truncation check (steamcompmgr.cpp) as if
-		// it were the mura-correction layer.
-		//
-		// Every g_zpos* constant from g_zposBase through g_zposFpsDisplay
-		// is already a consecutive run (steamcompmgr.hpp) with no free
-		// integer between g_zposCursor and g_zposSettingsOverlay for a new
-		// rank to occupy without colliding, and this file may not touch
-		// steamcompmgr.hpp's own constants (task brief) -- so rather than
-		// pick another collision, this drops the special case entirely
-		// (restructuring instead of adding a rank, per the task's own
-		// alternative). That is also not a behaviour change: paint_all()
-		// (steamcompmgr.cpp) always calls SettingsOverlay_AddLayer()
-		// before FpsDisplay_AddLayer(), and compositing (rendervulkan.cpp's
-		// bind_all_layers()/vulkan_composite()) blends strictly in that
-		// push() order, not by the zpos value -- so this layer was already
-		// composited after (i.e. on top of) the Shell's own layer
-		// regardless of which zpos number it carried; the constant above
-		// never actually changed what was on screen. Always
-		// g_zposFpsDisplay, same as the non-editing case.
 		layer->tex = s_pOverlayTexture;
 		layer->zpos = g_zposFpsDisplay;
 		layer->offset = { 0.0f, 0.0f };
@@ -1986,291 +958,27 @@ namespace gamescope
 		s_ulPendingReadDonePoint = 0;
 	}
 
-	// Chases flDesired the same slow-alpha way DrawFrametimeGraph's
-	// UpdateGraphCeiling() does -- flCeiling == 0.0f (never initialized)
-	// snaps straight to flDesired instead of easing up from zero.
-	//
-	// Shared with the graph rows the Monitor area registers below; it
-	// outlived the legacy Statistics tab it was written for.
-	static void ChaseCeiling( float &flCeiling, float flDesired )
-	{
-		if ( flCeiling <= 0.0f )
-		{
-			flCeiling = flDesired;
-			return;
-		}
-		constexpr float kCeilingAlpha = 0.05f; // slow -- see DrawFrametimeGraph's own kCeilingAlpha comment for why
-		flCeiling = flCeiling * ( 1.0f - kCeilingAlpha ) + flDesired * kCeilingAlpha;
-	}
-
 	// -------------------------------------------------------------------
-	// The Monitor AREA (E2, P3 part C) -- the settings half of this file.
+	// The HUD AREA (E2, P3 part C) -- the settings half of this file.
 	//
-	// THIS FILE STILL DOES TWO JOBS, AND ONLY ONE OF THEM MOVED. Everything
-	// above this line draws the HUD over the game: its own ImGui context,
-	// its own offscreen texture, its own submission (see this file's header
-	// comment). None of it is part of the redesign and none of it changed.
-	// What follows replaced FpsDisplay_DrawSettingsPanel() -- the six-tab
-	// panel issue #59 built -- with a registry declaration, which retired
-	// the last two escape hatches together with PanelLog's. P5 then deleted
-	// that panel, its six tabs and the window that hosted them.
-	//
-	// WHERE THE SIX TABS WENT. General/FPS/CPU/GPU/Media/Statistics were a
-	// tab bar inside one rail item. D13.1 already ruled on that shape for
-	// the Gamescope panel: the rail IS the product's navigation, so a tab
-	// bar redrawn inside it buys nothing. Here the six collapse into GROUPS
-	// of one sheet rather than into rail items, because unlike Display's
-	// four tabs these are not independent subjects -- they are one HUD's
-	// modules, placement, appearance and diagnostics, and the module count
-	// on the group band ("4 / 7") only means anything with all seven on one
-	// sheet.
+	// Scope reduction (2026-09-03): this used to declare seven module
+	// switches, a "hud.edit_layout" drag-editor action, per-module colour
+	// overrides, and Diagnostics/Statistics groups full of graphs -- all
+	// gone along with the profiler modules and the named-layout system they
+	// depended on (see this file's header comment). What's left is
+	// deliberately minimal: Show HUD, placement (anchor + margins), and font
+	// size. Phase 2 (a separate task) rebuilds this tab properly.
 	// -------------------------------------------------------------------
 
-	namespace
-	{
-		// ---- the statistics snapshot, cached per frame ------------------
-		// Metrics::GetHistorySnapshot() copies the whole collected buffer.
-		// The legacy Statistics tab called it once per draw; the E2 sheet
-		// has five graph bands that each need it, so it is taken once per
-		// frame and shared rather than copied five times.
-		Metrics::HistorySnapshot s_StatsSnap;
-		int  s_nStatsSnapFrame = -1;
-
-		// One EMA ceiling per graphed metric, chasing that metric's own
-		// recent worst sample the slow way UpdateGraphCeiling() does
-		// (issue #40's own acceptance criterion: "same EMA-smoothed-ceiling
-		// style ... not a raw-max-jitter scale"). 0.0f means "never
-		// initialized" -- the first real value is taken as-is rather than
-		// eased up from zero over several seconds.
-		//
-		// These are the E2 shell's own, separate from the legacy panel's
-		// identically-named ones above. The two shells are never both
-		// drawing, and a shared ceiling would mean one shell's scale
-		// following the other's -- an easing artefact with no owner.
-		float s_flE2CpuCeiling = 0.0f;
-		float s_flE2GpuBusyCeiling = 100.0f;   // fixed 0-100 scale; never chased
-		float s_flE2GpuTempCeiling = 0.0f;
-		float s_flE2GpuPowerCeiling = 0.0f;
-		float s_flE2FpsCeiling = 0.0f;
-
-		// Detects a collection restart (turning collection back on starts
-		// SystemStats' buffer over from empty) by the sample count going
-		// backwards, since the buffer can only grow while collection stays
-		// live. Every ceiling resets on that edge, so a previous session's
-		// scale never biases the first bars of a fresh warm-up. Starts at
-		// -1 so the very first comparison is a no-op rather than a spurious
-		// reset.
-		int s_nE2LastSeenSampleCount = -1;
-
-		const Metrics::HistorySnapshot &StatsSnapshot()
-		{
-			const int nFrame = ImGui::GetFrameCount();
-			if ( nFrame == s_nStatsSnapFrame )
-				return s_StatsSnap;
-
-			s_StatsSnap = Metrics::GetHistorySnapshot();
-			s_nStatsSnapFrame = nFrame;
-
-			const int nSamples = (int)s_StatsSnap.vecSamples.size();
-			if ( nSamples < s_nE2LastSeenSampleCount )
-			{
-				s_flE2CpuCeiling = 0.0f;
-				s_flE2GpuTempCeiling = 0.0f;
-				s_flE2GpuPowerCeiling = 0.0f;
-				s_flE2FpsCeiling = 0.0f;
-			}
-			s_nE2LastSeenSampleCount = nSamples;
-			return s_StatsSnap;
-		}
-
-		using StatExtractFn = float ( * )( const Metrics::HistorySample & );
-
-		// Builds one metric's SampleWindow out of the shared snapshot.
-		// nAxisSlots is kStatsHistoryCapacity for every statistics graph:
-		// issue #40 requires a partially-filled 60s window to occupy the
-		// left of a full-width axis and leave the rest blank, never to be
-		// stretched across it.
-		ui::SampleWindow StatWindow( std::vector<float> &vecOut, StatExtractFn fnExtract,
-		                             float &flCeiling, float flCeilingFloor, bool bEmaCeiling )
-		{
-			const Metrics::HistorySnapshot &snap = StatsSnapshot();
-
-			vecOut.clear();
-			vecOut.reserve( snap.vecSamples.size() );
-			for ( const Metrics::HistorySample &s : snap.vecSamples )
-				vecOut.push_back( fnExtract( s ) );
-
-			if ( bEmaCeiling )
-			{
-				float flMax = flCeilingFloor;
-				for ( float f : vecOut )
-					flMax = std::max( flMax, f );
-				ChaseCeiling( flCeiling, std::max( flMax * 1.15f, flCeilingFloor ) );
-			}
-			else
-			{
-				flCeiling = flCeilingFloor;
-			}
-
-			ui::SampleWindow win;
-			win.pflSamples = vecOut.empty() ? nullptr : vecOut.data();
-			win.nCount     = vecOut.size();
-			win.flCeiling  = std::max( flCeiling, 0.001f );
-			win.nAxisSlots = (size_t)Metrics::kStatsHistoryCapacity;
-			return win;
-		}
-
-		// ---- issue #29's per-module colour override ---------------------
-		// The stored format is unchanged: std::optional<int>, packed
-		// 0xRRGGBB, nullopt meaning "track the Palette.h accent token".
-		//
-		// WHY THE BAND IS NEVER DISABLED WHEN THE OVERRIDE IS OFF. The
-		// obvious shape is a `custom` switch that greys the colour band
-		// while it is off -- but `custom` is a PARAM of that band, and
-		// SPEC §3.13's inheritance would then grey the very param that
-		// causes the greying, which is the bug that section calls out by
-		// name. So the band always shows the colour in effect, and EDITING
-		// it turns the override on. Turning it back off is what `custom`
-		// is for, and it stays reachable.
-		//
-		// The band deliberately declares NO default of its own, only
-		// `custom`'s. A default packed colour would have to be captured at
-		// registration time, and the token it comes from moves with the
-		// accent hue -- so the "differs from default" edge (D6) would light
-		// up on every row the moment someone rotated the hue, which is not
-		// what it means. With only `custom` carrying a default, the edge
-		// lights exactly when a custom colour is set, and reset clears it.
-		int PackedOrDefault( const std::optional<int> &oColor, ImU32 defaultColor )
-		{
-			return oColor.has_value() ? *oColor
-			                          : PackColorRgb( gamescope::palette::ToVec4( defaultColor ) );
-		}
-
-		void RegisterModuleColor( ui::Area &a, const char *pszId, const char *pszTitle,
-		                          std::optional<int> config::FpsDisplaySettings::*pField,
-		                          ImU32 ( *fnDefault )(), const char *pszHelp )
-		{
-			a.Composite( pszId, pszTitle, ui::CompositeKind::Color,
-				ui::AnyBind::Of<int>(
-					[ pField, fnDefault ]
-					{
-						EnsureConfigLoaded();
-						return PackedOrDefault( s_Settings.fps_display.*pField, fnDefault() );
-					},
-					[ pField ]( int nPacked )
-					{
-						EnsureConfigLoaded();
-						s_Settings.fps_display.*pField = nPacked & 0xFFFFFF;
-						PersistSettings();
-					} ) )
-				.Help( pszHelp )
-				// Issue #29: the override is ignored while Inverted is
-				// active -- that mode's whole point is a guaranteed-legible
-				// pair no fixed hue can improve on. Same "the mode owns the
-				// treatment" precedent additive sets for the backdrop.
-				.DisabledUnless(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.blend_mode != "inverted"; },
-					"the inverted blend mode supplies its own guaranteed-legible colours" )
-				.Keywords( "colour color module override tint" )
-				.Param( "custom", "Custom colour",
-					ui::AnyBind::Of<bool>(
-						[ pField ]
-						{
-							EnsureConfigLoaded();
-							return s_Settings.fps_display.*pField != std::nullopt;
-						},
-						[ pField, fnDefault ]( bool bCustom )
-						{
-							EnsureConfigLoaded();
-							s_Settings.fps_display.*pField = bCustom
-								? std::optional<int>( PackColorRgb(
-									gamescope::palette::ToVec4( fnDefault() ) ) )
-								: std::nullopt;
-							PersistSettings();
-						} ) )
-					.Default( false )
-					.Help( "Off matches the overlay's own accent colour, so this module follows it "
-					       "automatically. On locks it to the colour above." );
-		}
-	}
-
-	// HUD layouts Phase 3: reads the layout the active session's HUD
-	// currently shows (config::ResolveLayoutCached(cfg.layout_name)),
-	// applies `mutator` to a mutable copy, and saves it back -- creating
-	// and selecting "custom" first if no layout is named yet, so a toggle
-	// flipped before any layout exists has somewhere durable to land rather
-	// than vanishing the moment the overlay closes. Every "Modules" row
-	// below (and, separately, Overlay/UI/HudLayoutEditor.cpp's own Save())
-	// follows this exact rule for the identical reason -- see that file for
-	// its own copy of the same "empty name -> custom" logic; it lives
-	// there rather than being shared from here because it operates on its
-	// own already-resolved working-copy snapshot, not a fresh
-	// ResolveLayoutCached() read per edit the way a single Switch flip
-	// needs.
-	//
-	// SaveLayout() + ReloadLayoutCache() (both synchronous/blocking file
-	// I/O), not EnqueueLayoutWrite(), deliberately: a Switch flip is a
-	// discrete, infrequent user click (not a per-frame drag), and
-	// EnqueueLayoutWrite() alone would leave config::ResolveLayoutCached()'s
-	// in-memory cache stale until some unrelated later event refreshed it
-	// (ConfigManager.h's own comment on that function) -- the toggle would
-	// silently not show up in the HUD on the very next repaint, which is
-	// exactly the "control that does nothing" defect class this codebase
-	// works hard to avoid (SPEC §3.13 lineage). force_repaint() at the end
-	// is the same immediate-feedback nudge every other switch in this file
-	// already gives its own edit (see hud.enabled's callback).
-	static void MutateActiveLayout( const std::function<void( config::HudLayout & )> &mutator )
-	{
-		EnsureConfigLoaded();
-		config::HudLayout layout = config::ResolveLayoutCached( s_Settings.fps_display.layout_name );
-		mutator( layout );
-
-		if ( s_Settings.fps_display.layout_name.empty() )
-		{
-			const std::optional<std::string> oName = config::SanitizeLayoutName( "custom" );
-			s_Settings.fps_display.layout_name = oName.value_or( "custom" );
-			PersistSettings();
-		}
-
-		config::SaveLayout( s_Settings.fps_display.layout_name, layout );
-		config::ReloadLayoutCache();
-		force_repaint();
-	}
-
-	// The area. One declaration, no ImGui in it -- which is what let the
-	// last escape hatch go (P5 deleted Area::Escape() itself).
-	// HUD layouts Phase 1 (superdoc/architecture/hud-layouts.md) renamed
-	// this area from "system.monitor"/"Monitor" to "system.hud"/"HUD" --
-	// "Monitor" read as ambiguous against this project's own "Overlay"
-	// (collides with Shell/Click-UI, superdoc/meta/TERMINOLOGY.md) and
-	// "System Monitor" naming; every `monitor.*` entry id below moved to
-	// `hud.*` in the same change. The on-disk JSON key stays the separate
-	// `fps_display` (ConfigManager.cpp), so this is a pure UI-facing
-	// rename -- no config migration needed.
 	void FpsDisplay_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "system.hud", "HUD", ui::Section::System );
 
-		a.Keywords( "hud monitor fps cpu gpu media overlay performance statistics" );
+		a.Keywords( "hud fps overlay performance" );
 		a.Summary( []
 		{
 			EnsureConfigLoaded();
-			const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
-			if ( !cfg.enabled )
-				return std::string( "off" );
-
-			// HUD layouts Phase 1: module presence is now the resolved
-			// layout's own property, not these settings' fps_enabled/
-			// cpu_enabled/gpu_enabled/media_enabled (see DrawReadout()) --
-			// the summary counts what the layout actually shows.
-			const config::HudLayout &layout = config::ResolveLayoutCached( cfg.layout_name );
-			const int nOn = (int)layout.fps.placement.enabled + (int)layout.cpu.enabled
-			              + (int)layout.gpu.enabled + (int)layout.media.enabled;
-			char sz[ 64 ];
-			std::snprintf( sz, sizeof( sz ), "%s  ·  %d module%s",
-				cfg.layout_name.empty() ? "no layout" : cfg.layout_name.c_str(),
-				nOn, nOn == 1 ? "" : "s" );
-			return std::string( sz );
+			return s_Settings.fps_display.enabled ? std::string( "on" ) : std::string( "off" );
 		} );
 
 		// The reason every gated row shares. The master switch is
@@ -2284,8 +992,6 @@ namespace gamescope
 		// =================================================================
 		a.Group( "HUD" );
 
-		// Issue #70's name: it gates the whole HUD (CPU/GPU/Media/FPS), not
-		// just an FPS readout.
 		a.Switch( "hud.enabled", "Show HUD",
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; },
@@ -2301,517 +1007,89 @@ namespace gamescope
 					// cadence afterward.
 					force_repaint();
 				} ) )
-			.Help( "Shows a small readout of FPS and other performance stats over the game. It "
-			       "stays visible even after you close this settings menu." )
+			.Help( "Shows your frame rate over the game. It stays visible even after you close "
+			       "this settings menu." )
 			.Default( config::FpsDisplaySettings{}.enabled )
-			.Keywords( "hud monitor overlay show fps display enable" );
+			.Keywords( "hud overlay show fps display enable" );
 
 		// =================================================================
-		//  Modules -- the seven the band's count refers to
+		//  Placement
 		// =================================================================
-		// HUD layouts Phase 3: rewired off FpsDisplaySettings and onto the
-		// resolved ACTIVE layout (config::ResolveLayoutCached(cfg.layout_name)) --
-		// Phase 1 already pointed DrawReadout() at config::HudLayout
-		// exclusively and deliberately left this group reading/writing the
-		// now-render-inert FpsDisplaySettings fields (that phase's own
-		// comment: "folding ... belongs with Phase 3's layout editor"). This
-		// is that landing. Only WHERE each row's value lives changed --
-		// id/title/help/keywords and the seven-row shape are unchanged, so
-		// the palette/Inspector experience is identical to before.
-		//
-		// FpsDisplaySettings::fps_enabled/frametime_enabled/graph_enabled/
-		// percentiles_enabled/cpu_enabled/gpu_enabled/media_enabled/
-		// fps_label_enabled are UNTOUCHED by this rewire (ConfigSchema.h) --
-		// nothing below reads or writes them any more, but see that
-		// struct's own comment for why they stay in the schema rather than
-		// being deleted this same change.
-		a.GroupCount( "Modules" );
+		a.Group( "Placement" );
 
-		// Cpu/Gpu/Media share one shape: a plain HudLayoutModule owned
-		// directly by HudLayout, toggled via its own `enabled`. Selected by
-		// a pointer to the HudLayout MEMBER (cpu/gpu/media), not to
-		// HudLayoutModule::enabled itself -- HudLayout has three of those
-		// and a single bool-member pointer can't tell them apart.
-		auto ModuleRow = [ & ]( const char *pszId, const char *pszTitle,
-		                       config::HudLayoutModule config::HudLayout::*pModule,
-		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
-		{
-			return a.Switch( pszId, pszTitle,
-				ui::AnyBind::Of<bool>(
-					[ pModule ]{
-						EnsureConfigLoaded();
-						return ( config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).*pModule ).enabled;
-					},
-					[ pModule ]( bool b )
-					{
-						MutateActiveLayout( [ pModule, b ]( config::HudLayout &layout )
-							{ ( layout.*pModule ).enabled = b; } );
-					} ) )
-				.Help( pszHelp )
-				.Default( config::HudLayoutModule{}.enabled )
-				.Keywords( pszKeywords )
-				.DisabledUnless( MonitorOn, kOffReason );
-		};
-
-		// Fps's own sub-row toggles (frametime/graph/percentiles/label) are
-		// plain bool members of HudLayoutFpsModule, one level down from its
-		// own `placement` -- see ConfigSchema.h's HudLayoutFpsModule
-		// comment for why they aren't independently placeable and so carry
-		// no HudLayoutModule of their own.
-		auto FpsSubRow = [ & ]( const char *pszId, const char *pszTitle,
-		                       bool config::HudLayoutFpsModule::*pField,
-		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
-		{
-			return a.Switch( pszId, pszTitle,
-				ui::AnyBind::Of<bool>(
-					[ pField ]{
-						EnsureConfigLoaded();
-						return config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).fps.*pField;
-					},
-					[ pField ]( bool b )
-					{
-						MutateActiveLayout( [ pField, b ]( config::HudLayout &layout )
-							{ layout.fps.*pField = b; } );
-					} ) )
-				.Help( pszHelp )
-				.Default( config::HudLayoutFpsModule{}.*pField )
-				.Keywords( pszKeywords )
-				.DisabledUnless( MonitorOn, kOffReason );
-		};
-
-		// Issue #73's "FPS" unit label is a PARAM of the frame-rate module
-		// rather than an eighth row: it is not a module, and a row on the
-		// band would make the "N / 7" count mean something other than
-		// modules. Fps's own presence lives at layout.fps.placement.enabled
-		// (HudLayoutFpsModule::placement), not a plain HudLayoutModule
-		// member of HudLayout -- so it gets its own a.Switch() rather than
-		// going through ModuleRow().
-		a.Switch( "hud.mod_fps", "Frame rate",
-			ui::AnyBind::Of<bool>(
-				[]{
-					EnsureConfigLoaded();
-					return config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).fps.placement.enabled;
-				},
-				[]( bool b )
+		// The stored format is the same "top-right"/"center-left" string
+		// kPlacements has always written. The two axes are a VIEW of that
+		// string, not a new representation of it -- each setter re-parses
+		// the current value before composing, rather than keeping a second
+		// copy of the other axis that could drift.
+		a.Composite( "hud.anchor", "Placement", ui::CompositeKind::Anchor,
+			ui::AnyBind::Of<int>(
+				[]
 				{
-					MutateActiveLayout( [ b ]( config::HudLayout &layout ) { layout.fps.placement.enabled = b; } );
+					EnsureConfigLoaded();
+					int nV = 0, nH = 2;
+					ParsePlacement( s_Settings.fps_display.anchor, nV, nH );
+					return nV;
+				},
+				[]( int nV )
+				{
+					EnsureConfigLoaded();
+					int nOldV = 0, nH = 2;
+					ParsePlacement( s_Settings.fps_display.anchor, nOldV, nH );
+					s_Settings.fps_display.anchor = ComposePlacement( nV, nH );
+					PersistSettings();
+				} ),
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					int nV = 0, nH = 2;
+					ParsePlacement( s_Settings.fps_display.anchor, nV, nH );
+					return nH;
+				},
+				[]( int nH )
+				{
+					EnsureConfigLoaded();
+					int nV = 0, nOldH = 2;
+					ParsePlacement( s_Settings.fps_display.anchor, nV, nOldH );
+					s_Settings.fps_display.anchor = ComposePlacement( nV, nH );
+					PersistSettings();
 				} ) )
-			.Help( "The big frames-per-second number." )
-			.Default( config::HudLayoutModule{}.enabled )
-			.Keywords( "fps frame rate module row counter" )
+			.Help( "Which screen corner the HUD sticks to. The margins below move it a bit away "
+			       "from that corner." )
+			.Default( 0, 2 )
+			.Keywords( "anchor placement position corner where margin offset" )
 			.DisabledUnless( MonitorOn, kOffReason )
-			.Param( "label", "\"FPS\" label",
-				ui::AnyBind::Of<bool>(
-					[]{
-						EnsureConfigLoaded();
-						return config::ResolveLayoutCached( s_Settings.fps_display.layout_name ).fps.fps_label_enabled;
-					},
-					[]( bool b )
-					{
-						MutateActiveLayout( [ b ]( config::HudLayout &layout ) { layout.fps.fps_label_enabled = b; } );
-					} ) )
-				.Default( config::HudLayoutFpsModule{}.fps_label_enabled )
-				.Help( "Off shows just the number, without the \" FPS\" letters after it." );
-
-		FpsSubRow( "hud.mod_frametime", "Frametime readout", &config::HudLayoutFpsModule::frametime_enabled,
-			"Shows how long each frame took to draw, in milliseconds, next to the FPS number.",
-			"frametime ms readout module row" );
-
-		FpsSubRow( "hud.mod_graph", "Frametime graph", &config::HudLayoutFpsModule::graph_enabled,
-			"A small chart of recent frame times under the number, with stutters marked.",
-			"graph frametime spark history module" );
-
-		FpsSubRow( "hud.mod_pct", "Percentile row", &config::HudLayoutFpsModule::percentiles_enabled,
-			"Shows your worst 1% and 0.1% of frames, plus your average frame rate, on one line. "
-			"Useful for spotting stutters an average FPS number would hide.",
-			"percentile lows average module" );
-
-		ModuleRow( "hud.mod_cpu", "CPU load", &config::HudLayout::cpu,
-			"How hard your processor is working, and how much memory is in use.",
-			"cpu load ram module processor" );
-
-		ModuleRow( "hud.mod_gpu", "GPU load", &config::HudLayout::gpu,
-			"How hard your graphics card is working, how much of its memory is in use, and its "
-			"temperature and power draw.",
-			"gpu load vram temperature power module" );
-
-		ModuleRow( "hud.mod_media", "Now playing", &config::HudLayout::media,
-			"Shows the song title and artist from whatever music or media player is playing.",
-			"media now playing mpris module music" );
-
-		// =================================================================
-		//  Placement -- the HUD layouts Phase 3 drag editor
-		// =================================================================
-		// This REPLACES Phase 1's comment marking where the old shared
-		// anchor + margin rows used to sit ("hud.anchor" and its
-		// margin_v/margin_h params, SPEC §4.3's worked example) -- those
-		// stayed meaningless under manual per-module placement
-		// (FpsDisplaySettings::placement/margin_vertical/margin_horizontal
-		// are gone, ConfigSchema.h) and DrawReadout() has positioned every
-		// module from its own resolved config::HudLayout entry since Phase
-		// 1. This is that phase's own "seam Phase 3 hooks into," landing:
-		// one Action that opens Overlay/UI/HudLayoutEditor.cpp's full-screen
-		// drag editor over the live HUD, reading/writing config::HudLayout
-		// via the same LoadLayout/SaveLayout/EnqueueLayoutWrite API Phase 0
-		// built and this file's own MutateActiveLayout() (just above) also
-		// uses.
-		a.Action( "hud.edit_layout", "Edit placement", "edit", []{ ui::hudedit::Begin(); } )
-			.Help( "Opens a drag editor over the game: move each HUD module to where you want it, "
-			       "then Save to keep the new placement or Esc to cancel." )
-			.Keywords( "hud layout editor placement drag move position edit arrange" )
-			.DisabledUnless( MonitorOn, kOffReason );
+			.Param( "margin_x", "Horizontal margin",
+				ui::AnyBind::Of<int>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.margin_x; },
+					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_x = n; PersistSettings(); } ) )
+				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
+				.Default( config::FpsDisplaySettings{}.margin_x )
+				.Help( "How far the HUD sits from the left or right edge." )
+			.Param( "margin_y", "Vertical margin",
+				ui::AnyBind::Of<int>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.margin_y; },
+					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_y = n; PersistSettings(); } ) )
+				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
+				.Default( config::FpsDisplaySettings{}.margin_y )
+				.Help( "How far the HUD sits from the top or bottom edge." );
 
 		// =================================================================
 		//  Appearance
 		// =================================================================
 		a.Group( "Appearance" );
 
-		// flStep is required, not defaulted: every one of these is a
-		// continuous float, so "no step" is never the right answer here and a
-		// default would let the next row be added without the question being
-		// asked (D27).
-		auto FloatRow = [ & ]( const char *pszId, const char *pszTitle,
-		                       float config::FpsDisplaySettings::*pField,
-		                       float flLo, float flHi, float flStep, const char *pszUnit,
-		                       const char *pszHelp, const char *pszKeywords ) -> ui::Entry &
-		{
-			return a.Slider( pszId, pszTitle,
-				ui::AnyBind::Of<float>(
-					[ pField ]{ EnsureConfigLoaded(); return s_Settings.fps_display.*pField; },
-					[ pField ]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.*pField = f; PersistSettings(); } ) )
-				.Help( pszHelp )
-				.Range( flLo, flHi )
-				.Step( flStep )
-				.Unit( pszUnit )
-				.Default( config::FpsDisplaySettings{}.*pField )
-				.Keywords( pszKeywords )
-				.DisabledUnless( MonitorOn, kOffReason );
-		};
-
-		FloatRow( "hud.font_size", "Font size", &config::FpsDisplaySettings::font_size,
-			10.0f, 48.0f, 1.0f, "px", "How big the text is in every module of the HUD.",
-			"font size text scale monitor hud" );   // 39 positions, whole px
-
-		// No module_spacing row: removed (HUD layouts Phase 1) along with
-		// the shared stack it used to space -- see ConfigSchema.h.
-
-		static constexpr ui::Option kBlendModes[] = {
-			{ 0, "alpha" }, { 1, "additive" }, { 2, "inverted" },
-		};
-		a.Choice( "hud.blend_mode", "Blend mode",
-			ui::AnyBind::Of<int>(
-				[]
-				{
-					EnsureConfigLoaded();
-					const std::string &s = s_Settings.fps_display.blend_mode;
-					return s == "additive" ? 1 : ( s == "inverted" ? 2 : 0 );
-				},
-				[]( int n )
-				{
-					EnsureConfigLoaded();
-					s_Settings.fps_display.blend_mode =
-						n == 1 ? "additive" : ( n == 2 ? "inverted" : "alpha" );
-					PersistSettings();
-				} ),
-			kBlendModes, IM_ARRAYSIZE( kBlendModes ) )
-			.Help( "How the monitor's text is drawn. Inverted always stays readable, no matter "
-			       "what's behind it, using its own black-and-white style instead of your colour "
-			       "choices." )
-			.Default( 0 )
-			.Keywords( "blend mode alpha additive inverted legibility" )
+		a.Slider( "hud.font_size", "Font size",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.font_size; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.font_size = f; PersistSettings(); } ) )
+			.Help( "How big the HUD's text is." )
+			.Range( 10.0f, 48.0f )
+			.Step( 1.0f )
+			.Unit( "px" )
+			.Default( config::FpsDisplaySettings{}.font_size )
+			.Keywords( "font size text scale hud" )   // 39 positions, whole px
 			.DisabledUnless( MonitorOn, kOffReason );
-
-		FloatRow( "hud.text_opacity", "Text opacity",
-			&config::FpsDisplaySettings::text_opacity, 0.0f, 1.0f, 0.05f, "",   // 21 positions
-			"How see-through the monitor's text is.", "opacity alpha text transparency" );
-
-		// Additive pairs oddly with a filled backdrop (the backdrop itself
-		// would glow) and inverted is already legible without one, so both
-		// modes withdraw the backdrop entirely -- DrawReadout() enforces the
-		// same rule on the render side (ModuleBackdropAllowed()) regardless
-		// of what is stored here.
-		a.Switch( "hud.backdrop", "Backdrop",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_enabled; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_enabled = b; PersistSettings(); } ) )
-			.Help( "Draws a solid box behind each module so its text stays readable over bright "
-			       "parts of the game." )
-			.Default( config::FpsDisplaySettings{}.backdrop_enabled )
-			.Keywords( "backdrop background box legibility" )
-			.DisabledUnless(
-				[]
-				{
-					EnsureConfigLoaded();
-					return s_Settings.fps_display.enabled && ModuleBackdropAllowed( s_Settings.fps_display );
-				},
-				"the additive and inverted blend modes draw no backdrop" )
-			.Param( "opacity", "Backdrop opacity",
-				ui::AnyBind::Of<float>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
-					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
-				.Range( 0.0f, 1.0f ).Step( 0.05f ).Default( config::FpsDisplaySettings{}.backdrop_opacity )   // 21 positions
-				.Help( "How solid the box behind each module looks, from see-through to fully "
-				       "solid." )
-			.Param( "rounding", "Backdrop rounding",
-				ui::AnyBind::Of<float>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_rounding; },
-					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_rounding = f; PersistSettings(); } ) )
-				.Range( 0.0f, 16.0f ).Step( 1.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_rounding )   // 17 positions
-				.Help( "How rounded the box's corners are." )
-			.Param( "padding", "Backdrop padding",
-				ui::AnyBind::Of<float>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_padding; },
-					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_padding = f; PersistSettings(); } ) )
-				.Range( 0.0f, 24.0f ).Step( 1.0f ).Unit( "px" ).Default( config::FpsDisplaySettings{}.backdrop_padding )   // 25 positions
-				.Help( "Space between the box's edge and the text inside it, like a margin." );
-
-		// =================================================================
-		//  Module colours -- issue #29
-		// =================================================================
-		// Their own group rather than a param of each module row, because a
-		// Composite cannot be a Param (a Param is one of the ROW kinds, and
-		// a colour override is a band). Grouping them also keeps the seven
-		// module switches reading as one uniform list, which is what the
-		// "N / 7" count on that band depends on.
-		a.Group( "Module colours" );
-
-		RegisterModuleColor( a, "hud.color_fps", "Frame rate colour",
-			&config::FpsDisplaySettings::color_fps,
-			[]{ return gamescope::palette::kAccentValue; },
-			"Colour of the frame-rate number." );
-		RegisterModuleColor( a, "hud.color_cpu", "CPU colour",
-			&config::FpsDisplaySettings::color_cpu,
-			[]{ return gamescope::palette::kAccentIcon; },
-			"Colour of the CPU module's text and numbers." );
-		RegisterModuleColor( a, "hud.color_gpu", "GPU colour",
-			&config::FpsDisplaySettings::color_gpu,
-			[]{ return gamescope::palette::kAccentKnob; },
-			"Colour of the GPU module's text and numbers." );
-		RegisterModuleColor( a, "hud.color_media", "Now playing colour",
-			&config::FpsDisplaySettings::color_media,
-			[]{ return gamescope::palette::kAccentHandle; },
-			"Colour of the Now Playing text." );
-
-		// =================================================================
-		//  Diagnostics
-		// =================================================================
-		a.Group( "Diagnostics" );
-
-		a.Facts( "hud.sampling", "Sampling",
-			[]
-			{
-				char sz[ 64 ];
-				std::snprintf( sz, sizeof( sz ), "500 ms  ·  %d-frame window", kHistoryCapacity );
-				return std::string( sz );
-			} )
-			.Help( "How often the low-frame-rate numbers below update, and how many recent "
-			       "frames they're based on." )
-			.Keywords( "sampling window percentile interval diagnostics" )
-			.Live( "interval", []{ return ui::Fact{ "interval", "500 ms" }; } )
-			.Live( "window", []
-			{
-				char sz[ 32 ];
-				std::snprintf( sz, sizeof( sz ), "%d frames", kHistoryCapacity );
-				return ui::Fact{ "frame window", sz };
-			} )
-			.Live( "avg", []
-			{
-				char sz[ 32 ];
-				std::snprintf( sz, sizeof( sz ), "%.1f fps", s_flAverageFps );
-				return ui::Fact{ "average", sz };
-			} )
-			.Live( "low1", []
-			{
-				char sz[ 32 ];
-				std::snprintf( sz, sizeof( sz ), "%.0f fps", s_flOnePercentLowFps );
-				return ui::Fact{ "1% low", sz };
-			} )
-			.Live( "low01", []
-			{
-				char sz[ 32 ];
-				std::snprintf( sz, sizeof( sz ), "%.0f fps", s_flPointOnePercentLowFps );
-				return ui::Fact{ "0.1% low", sz };
-			} );
-
-		// SPEC §4.4's frametime Graph composite, over this file's own 240-
-		// sample ring. Read-only by construction: Entry::ReadOnly() returns
-		// true for CompositeKind::Graph, and Samples() has no setter.
-		a.Composite( "hud.frametime_graph", "Frametime", ui::CompositeKind::Graph, {} )
-			.Help( "A live chart of how long each recent frame took to draw. Frames much slower "
-			       "than the rest are highlighted." )
-			.Keywords( "frametime graph strip stutter diagnostics" )
-			.Samples( []
-			{
-				// The ring is written newest-at-head and wraps, so it is
-				// linearised oldest-first here before the band sees it.
-				static std::vector<float> s_vec;
-				s_vec.clear();
-				s_vec.reserve( (size_t)s_nHistoryCount );
-				for ( int i = 0; i < s_nHistoryCount; ++i )
-				{
-					const int nIdx = ( s_nHistoryHead - s_nHistoryCount + i + kHistoryCapacity * 2 ) % kHistoryCapacity;
-					s_vec.push_back( s_flFrametimeHistoryMs[ nIdx ] );
-				}
-
-				ui::SampleWindow win;
-				win.pflSamples = s_vec.empty() ? nullptr : s_vec.data();
-				win.nCount     = s_vec.size();
-				win.flCeiling  = std::max( s_flGraphCeilingMs, 0.001f );
-				// The HUD's own graph marks a frame amber at 1.5x the
-				// smoothed frametime; the same threshold is used here so
-				// the two graphs agree about what counts as a stutter.
-				win.flOutlier  = s_flSmoothedFrametimeMs * 1.5f;
-				return win;
-			} )
-			.Live( "smoothed", []
-			{
-				char sz[ 32 ];
-				std::snprintf( sz, sizeof( sz ), "%.2f ms", s_flSmoothedFrametimeMs );
-				return ui::Fact{ "smoothed", sz };
-			} )
-			.Live( "samples", []
-			{
-				char sz[ 32 ];
-				std::snprintf( sz, sizeof( sz ), "%d / %d", s_nHistoryCount, kHistoryCapacity );
-				return ui::Fact{ "samples held", sz };
-			} );
-
-		// =================================================================
-		//  Statistics -- issue #40's 60-second history
-		// =================================================================
-		a.Group( "Statistics" );
-
-		// #40 TIED COLLECTION TO TAB SELECTION. There is no tab bar any
-		// more, so the gating is stated outright as the switch it always
-		// effectively was -- which is also more honest, since the old
-		// version made a background cost a side effect of navigation.
-		//
-		// The config key and BOTH of its string values are unchanged
-		// (overlay.system_monitor_tab, "statistics"/"modules"), so an
-		// existing config keeps loading and a restart still resumes
-		// collecting exactly as before. As before, it is written the
-		// instant it changes rather than batched with unrelated edits,
-		// because it is what gates the background collection in
-		// FpsDisplay_AddLayer() -- routing it through the normal debounced
-		// path silently dropped every change during manual testing.
-		a.Switch( "hud.stats_collect", "Collect 60-second history",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.overlay.system_monitor_tab == "statistics"; },
-				[]( bool b )
-				{
-					EnsureConfigLoaded();
-					const char *pszValue = b ? "statistics" : "modules";
-					if ( s_Settings.overlay.system_monitor_tab == pszValue )
-						return;
-					s_Settings.overlay.system_monitor_tab = pszValue;
-					config::EnqueueSystemMonitorTabWrite( pszValue );
-				} ) )
-			.Help( "Keeps a graph of your CPU, GPU and frame rate over the last 60 seconds. Off "
-			       "uses no extra resources; turning it back on starts a fresh 60 seconds." )
-			.Default( false )
-			.Keywords( "statistics history collect 60 second graph sampling" );
-
-		a.Facts( "hud.stats_window", "Window",
-			[]
-			{
-				EnsureConfigLoaded();
-				if ( s_Settings.overlay.system_monitor_tab != "statistics" )
-					return std::string( "not collecting" );
-
-				const int nSamples = (int)StatsSnapshot().vecSamples.size();
-				if ( nSamples >= Metrics::kStatsHistoryCapacity )
-					return std::string( "last 60 seconds" );
-
-				// A warm-up is never allowed to read as a complete window --
-				// issue #40's own explicit requirement. Elapsed time is
-				// exact (sample count x the poll thread's fixed cadence),
-				// not a wall-clock guess.
-				char sz[ 48 ];
-				std::snprintf( sz, sizeof( sz ), "collecting  ·  %.0fs of 60s",
-					(float)nSamples * ( Metrics::kStatsHistorySampleIntervalMs / 1000.0f ) );
-				return std::string( sz );
-			} )
-			.Help( "How much of the 60-second history has been collected so far." )
-			.Keywords( "warm up collecting window statistics" );
-
-		auto Collecting = []
-		{
-			EnsureConfigLoaded();
-			return s_Settings.overlay.system_monitor_tab == "statistics";
-		};
-
-		// Two independent reasons a stats graph can be empty, and they say
-		// different things: collection is off, or this machine has no such
-		// sensor. Reporting the wrong one would send someone hunting a
-		// driver problem that is really a switch.
-		auto StatGraph = [ & ]( const char *pszId, const char *pszTitle, const char *pszHelp,
-		                        const char *pszKeywords, std::function<ui::SampleWindow()> fnWindow,
-		                        std::function<bool()> fnAvailable, const char *pszUnavailable )
-		{
-			a.Composite( pszId, pszTitle, ui::CompositeKind::Graph, {} )
-				.Help( pszHelp )
-				.Keywords( pszKeywords )
-				.Samples( std::move( fnWindow ) )
-				.DisabledUnless( std::move( fnAvailable ), pszUnavailable );
-		};
-
-		StatGraph( "hud.stats_cpu", "CPU load",
-			"How hard your processor has been working over the last minute.",
-			"cpu load statistics graph history",
-			[]
-			{
-				static std::vector<float> s_vec;
-				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flCpuLoad1; },
-					s_flE2CpuCeiling, 1.0f, true );
-			},
-			Collecting, "60-second history collection is off" );
-
-		StatGraph( "hud.stats_gpu_busy", "GPU busy",
-			"How hard your graphics card has been working over the last minute.",
-			"gpu busy utilisation statistics graph history",
-			[]
-			{
-				static std::vector<float> s_vec;
-				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return (float)s.nGpuBusyPercent; },
-					s_flE2GpuBusyCeiling, 100.0f, false );
-			},
-			[ Collecting ]{ return Collecting() && StatsSnapshot().bGpuFound; },
-			"no amdgpu device was found on this system, or collection is off" );
-
-		StatGraph( "hud.stats_gpu_temp", "GPU temperature",
-			"How hot your graphics card has been, in degrees Celsius, over the last minute.",
-			"gpu temperature thermal statistics graph history",
-			[]
-			{
-				static std::vector<float> s_vec;
-				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flGpuTempC; },
-					s_flE2GpuTempCeiling, 40.0f, true );
-			},
-			[ Collecting ]{ return Collecting() && StatsSnapshot().bHwmonFound; },
-			"no amdgpu hwmon node was found on this system, or collection is off" );
-
-		StatGraph( "hud.stats_gpu_power", "GPU power",
-			"How many watts your graphics card has been drawing over the last minute.",
-			"gpu power watts statistics graph history",
-			[]
-			{
-				static std::vector<float> s_vec;
-				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flGpuPowerWatts; },
-					s_flE2GpuPowerCeiling, 10.0f, true );
-			},
-			[ Collecting ]{ return Collecting() && StatsSnapshot().bHwmonFound; },
-			"no amdgpu hwmon node was found on this system, or collection is off" );
-
-		StatGraph( "hud.stats_fps", "Frame rate",
-			"Your frame rate over the last minute. This is a separate, longer history than the "
-			"live number and percentiles above.",
-			"fps frame rate statistics graph history",
-			[]
-			{
-				static std::vector<float> s_vec;
-				return StatWindow( s_vec, []( const Metrics::HistorySample &s ) { return s.flFps; },
-					s_flE2FpsCeiling, 30.0f, true );
-			},
-			Collecting, "60-second history collection is off" );
 	}
 }
