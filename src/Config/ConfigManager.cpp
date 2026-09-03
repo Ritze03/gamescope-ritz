@@ -175,12 +175,19 @@ namespace gamescope::config
                 s.fps_display.margin_x = JGetInt( *pFps, "margin_x", s.fps_display.margin_x );
                 s.fps_display.margin_y = JGetInt( *pFps, "margin_y", s.fps_display.margin_y );
                 // Phase 2 (2026-09-03): update mode, hide-above-X, text
-                // colour mode, shadow strength -- see ConfigSchema.h.
+                // colour mode, outline strength, lag detection -- see
+                // ConfigSchema.h.
                 s.fps_display.update_mode = JGetString( *pFps, "update_mode", s.fps_display.update_mode );
                 s.fps_display.hide_above_enabled = JGetBool( *pFps, "hide_above_enabled", s.fps_display.hide_above_enabled );
                 s.fps_display.hide_above_fps = JGetFloat( *pFps, "hide_above_fps", s.fps_display.hide_above_fps );
                 s.fps_display.color_mode = JGetString( *pFps, "color_mode", s.fps_display.color_mode );
-                s.fps_display.shadow_strength = JGetFloat( *pFps, "shadow_strength", s.fps_display.shadow_strength );
+                // "shadow_strength" (the drop shadow the outline replaced
+                // 2026-09-03) is deliberately not read: an old config
+                // carrying it falls back to outline_strength's default,
+                // the same "just stop reading an old key" precedent the
+                // removed backdrop keys above follow.
+                s.fps_display.outline_strength = JGetFloat( *pFps, "outline_strength", s.fps_display.outline_strength );
+                s.fps_display.lag_detection_enabled = JGetBool( *pFps, "lag_detection_enabled", s.fps_display.lag_detection_enabled );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -358,7 +365,8 @@ namespace gamescope::config
             jFps[ "hide_above_enabled" ] = s.fps_display.hide_above_enabled;
             jFps[ "hide_above_fps" ] = s.fps_display.hide_above_fps;
             jFps[ "color_mode" ] = s.fps_display.color_mode;
-            jFps[ "shadow_strength" ] = s.fps_display.shadow_strength;
+            jFps[ "outline_strength" ] = s.fps_display.outline_strength;
+            jFps[ "lag_detection_enabled" ] = s.fps_display.lag_detection_enabled;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;

@@ -23,7 +23,9 @@ unchanged since Phase 1.
 
 **Phase 2** (this page) added everything else, following the user's own
 spec verbatim: hide-above-X, three update modes, a plain backdrop, a
-two-way text-colour choice with lag-spike reactions, and a drop shadow.
+two-way text-colour choice with lag-spike reactions, and a black outline
+sized in pixels (a drop shadow until 2026-09-03, when the outline
+replaced it).
 The user's own framing: *"it is nice, instead of feature bloat"* — one
 number, drawn well, not a second profiler.
 
@@ -40,7 +42,8 @@ number, drawn well, not a second profiler.
 | Hide above X | `hide_above_enabled`, `hide_above_fps` | Switch + threshold `.Param()` — see Hysteresis below. |
 | Backdrop opacity | `backdrop_opacity` | 0–1; **0 means no backdrop at all**, not a separate switch. |
 | Text colour | `color_mode` | Fixed / Inverted — see below. |
-| Shadow strength | `shadow_strength` | 0–1; 0 means no shadow drawn at all. |
+| Lag spike detection | `lag_detection_enabled` | Master switch for the whole spike reaction. Default **on**. |
+| Outline size | `outline_strength` | 0–4 px of black outline; 0 means no outline drawn at all. |
 
 Every row is gated `DisabledUnless(MonitorOn, "the HUD is off")` except the
 master switch itself.
@@ -119,10 +122,13 @@ Vulkan compute-composite shader rather than in this file's own ImGui draw
 pass:
 
 - This file just draws the digits as **plain opaque white** and hands the
-  HUD's layer a new blend mode, `rendervulkan.hpp`'s
+  HUD's single layer a new blend mode, `rendervulkan.hpp`'s
   `ALPHA_BLENDING_MODE_INVERT` (`FpsDisplay_AddLayer()`). Opaque, not
   `text_opacity`-scaled — a partial alpha here would only dilute the
   invert, mixing in un-inverted background (see the gating rule below).
+  White specifically: it is also the marker the shader uses to tell the
+  digits apart from the backdrop and the outline, see
+  [What Inverted mode does *not* invert](#what-inverted-mode-does-not-invert).
 - The actual invert happens in `src/shaders/alphamode.h`'s `BlendLayer()`,
   which every composite call site shares (plain blit, FSR/RCAS, both blur
   passes) — one function, one edit, all paths covered. For each pixel:
@@ -164,23 +170,120 @@ pass:
 
 Inverted mode can't "invert" already-inverted text to signal a lag spike
 — doing that would show nothing against itself. Instead, **a spike tints
-the backdrop** toward a muted warning red, and forces at least a faint
-backdrop visible for the hold window even if the user's own opacity
-setting is 0 — a temporary exception for the hold window only, never a
-change to their stored setting.
+the backdrop** toward a muted warning red for the hold window. It only
+does so when a backdrop is actually being drawn: with `backdrop_opacity`
+at 0 there is no spike indication in Inverted mode at all.
 
-## Shadow
+> **Why:** this used to *force* a faint backdrop visible for the hold
+> window even at opacity 0, so an ordinary frame hitch made a backdrop
+> the user had switched off appear on screen — reported as "backdrop
+> opacity 0 doesn't turn the backdrop off in Inverted mode" and fixed
+> 2026-09-03. Losing the spike hint when there is no backdrop is the
+> honest price of letting the opacity setting mean what it says.
 
-`shadow_strength` (0–1, 0 = off). A fixed 2px offset, not scaled with
-font size — a shadow that grows with a 48px font reads as blur, not
-depth, which is explicitly not what the user asked for ("a shadow that
-reads as depth rather than blur"). Alpha scales with strength up to a
-0.85 ceiling. Applies the same way regardless of text-colour mode (Fixed
-or Inverted) — both draw through the same single `AddText()` call now
-that Inverted mode's colour comes from the compute-composite shader
-rather than from a separate draw-time technique.
+### What Inverted mode does *not* invert
+
+Only the **digits' fill**. The backdrop composites normally and the
+outline stays black — neither is inverted (both were, until 2026-09-03).
+
+All three still live in **one** composite layer, and the shader tells
+them apart by the layer's own brightness. `alphamode.h`'s invert branch
+computes a selector from the layer texel's Rec.709 luma —
+`smoothstep(0.25, 0.80, layerLuma)` in linear-light blend space — and
+mixes between the texel's own colour (selector 0, bit-for-bit the
+`alpha_mode_coverage` blend) and the inverted destination (selector 1).
+The HUD's contract with it: the digits' fill is drawn **pure opaque
+white** (luma 1.0) and everything that must not invert is drawn far
+darker — the backdrop base is linear ~0.003, its warning-red spike tint
+~0.05, the outline pure black. Nothing lands in the transition band
+except antialiased glyph edges, which cross-fade, which is what they
+should do.
+
+> **Why one layer and not two.** This was briefly split across two
+> layers — a normally blended backdrop + outline layer with an
+> invert-blended glyph-only layer above it, sampling a double-height
+> texture — and that **broke Inverted mode outright** the same day
+> (2026-09-03): with `backdrop_opacity` at its 0.5 default, the lower
+> layer painted a dark box over the game exactly where the digits were
+> about to land, so the upper layer inverted *the HUD's own backdrop*
+> instead of the game and the digits came out a constant near-white. An
+> outline made it worse still: four black glyph copies 1px out cover the
+> glyph body completely, so the invert read pure black and returned pure
+> white. The general rule the split violated: **a blend that reads the
+> destination cannot be split across two layers that overlap.** Whatever
+> the lower one paints becomes the "background" the upper one inverts.
+>
+> The colour-marker approach above was considered and rejected when the
+> split was written, on the grounds that antialiased glyph edges are
+> mid-grey rather than white and would be misclassified. That objection
+> assumed a hard threshold; a `smoothstep` cross-fade turns the same
+> pixels into a gradient between the outline's black and the inverted
+> colour, which is ordinary antialiasing rather than a misclassification.
+> The backdrop's 12%-white border was the other objection — at 0.12
+> encoded it is linear ~0.014, nowhere near the 0.25 selector floor.
+
+**Layer budget.** Because there is only ever one layer again, the HUD has
+no special layer-budget behaviour: `k_nMaxLayers` / `VKR_MAX_LAYERS` are
+both 6, `LayerStack_t::push()` returns `nullptr` when the frame is full,
+and the HUD then simply draws nothing, with no assert and no log line —
+the same as every other overlay layer. `paint_all()` reserves slots for
+the cursor and the overlay planes but **not** for the HUD, the toasts or
+the Shell, so a busy frame (base + override + external overlay + Steam
+overlay + cursor + mura is already six) can silently lose them. There is
+no degraded single-layer fallback path any more, because there is nothing
+to degrade from.
+
+**Interaction with the outline.** None, now. The outline is black, the
+selector leaves black alone, and the digits invert the game regardless of
+how thick the outline is.
+
+## Outline
+
+`outline_strength` (row "Outline size", 0–4 **pixels**, step 0.25,
+default 0 = off). Its name kept the `_strength` suffix from the few hours
+it spent as a 0–1 opacity on 2026-09-03; a config written in that window
+still loads, and its 0–1 value is simply read as a thin (sub-pixel to
+1px) outline. It replaced the earlier drop shadow the same day at the
+user's request, and the old config key `shadow_strength` is no longer
+read at all (an old file falls back to the default).
+
+The geometry: the digits stamped again in solid black on **concentric
+rings** around the real text position, the fill then drawn on top. Ring
+spacing is capped at 1px (`ceil(radius)` rings), and each ring's stamps
+are spaced at most ~0.75px apart along it (`ceil(2πr / 0.75)`, clamped to
+8–48 per ring). A 1px outline is therefore a single 8-stamp ring — as
+cheap and as crisp as the four-offset version it replaced — while a 4px
+outline is four rings of up to ~34 stamps, ~90 text draws of at most
+three glyphs.
+
+> **Why rings and not four axis-aligned offsets:** four offsets only look
+> solid while the radius is about a pixel. Past that the diagonals open
+> up and the outline reads as a cross, not a stroke. The 1px ring spacing
+> and the ~0.75px stamp spacing are what keep a 4px outline continuous.
+>
+> **Why a size and not an opacity:** the user asked for a *size* ("the
+> max outline size should be 4.0"). It is also the only version that can
+> work — stacking translucent offset copies saturates the alpha byte long
+> before the ring closes, and an outline that fades as it grows reads as
+> blur, which is exactly what the drop shadow was rejected for.
+>
+> **Why 4px is the ceiling:** `backdrop_padding` is 6px, so the outline
+> stays inside the backdrop box at any setting and growing it never
+> changes the readout's footprint.
 
 ## Lag-spike detection
+
+Switchable (`lag_detection_enabled`, row "Lag spike detection", default
+**on** so an existing config keeps today's behaviour). With it **off**
+there is no spike reaction of any kind: Fixed mode never flips the
+number's colour and Inverted mode never tints the backdrop. Nothing else
+in the tab depends on it, so no row greys out when it is off.
+
+> **Why the detector keeps running while the switch is off:** the
+> frametime history is a handful of floats per frame, later work wants it
+> anyway, and keeping it warm means switching detection back on reacts to
+> the very next spike instead of waiting for a window of samples to
+> refill.
 
 The per-frame frametime ring buffer (`s_flFrametimeHistoryMs`, 240
 samples, kept since Phase 1 unused until now) feeds a fixed heuristic —
@@ -214,7 +317,7 @@ and the readout's own box size never changes as the number goes from 1 to
 2 to 3 digits. This is a carry-forward of Phase 1's own choice, not a
 Phase 2 change — recorded here because the quality bar asked for it to be
 stated explicitly, and because it's the reason the box's own width is
-stable enough for the backdrop and shadow above to sit tight against the
+stable enough for the backdrop and outline above to sit tight against the
 text without hunting for a new size every frame.
 
 What's actually *drawn*, though, is the plain unpadded digits (`"%d"`),
@@ -224,6 +327,6 @@ gutter on the left of a two-digit number and shoved the digits against
 the box's right edge (fixed 2026-09-03). `MeasureFpsModule()` measures
 both the padded field and the plain digits and derives `flTextOffsetX`,
 half the width difference, added to the text origin so the digits sit
-centred in the pinned-width box. The shadow and the digits themselves
+centred in the pinned-width box. The outline and the digits themselves
 both draw at that same offset origin, so they track together rather
 than the old padded position.

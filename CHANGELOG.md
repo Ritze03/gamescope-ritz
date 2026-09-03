@@ -34,6 +34,10 @@ The newest version below is the one this build reports.
 - **HUD lag-spike reaction**: a noticeably slow frame now briefly inverts the HUD's
   text colour (or tints its backdrop in Inverted mode) so a stutter is actually
   visible, not just felt.
+- **HUD text outline**: a black outline around the number, sized from 0 to 4 pixels, so
+  the readout stays legible over any background; 0 turns it off.
+- **HUD lag spike detection switch**: the whole lag-spike reaction can now be turned
+  off, leaving the number's colour and backdrop alone.
 
 ### Fixed
 - **The HUD's module toggles work again**: Frame rate, Frametime readout, Frametime
@@ -73,6 +77,11 @@ The newest version below is the one this build reports.
 - **The FPS readout and toast notifications no longer draw over the settings
   overlay**: both now sit beneath the settings panel/Shell as intended, instead of
   covering it.
+- **Inverted HUD text no longer inverts everything around the digits**: the outline
+  now stays black and the backdrop draws in its normal colour, and turning backdrop
+  opacity down to 0 really does remove the backdrop, even during a lag spike.
+- **Inverted HUD text inverts the game again**: with a backdrop or an outline switched
+  on it had stopped tracking what was behind it and always came out plain white.
 
 ### Removed
 - **HUD performance modules**: CPU load, GPU load, the frametime readout, the frametime
@@ -84,6 +93,8 @@ The newest version below is the one this build reports.
   "Simple" or "Advanced"). Placement is a single anchor and pair of margins instead.
 - **HUD "FPS" unit label**: the readout is now a bare number, with no trailing "FPS"
   text next to it.
+- **HUD text shadow**: the drop shadow behind the number is gone, replaced by the
+  black outline above; an existing shadow setting is not carried over.
 
 ## [0.3.5] – 2026-08-27
 

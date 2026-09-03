@@ -259,20 +259,57 @@ TEST_CASE( "fps_display.color_mode round-trips", "[config]" )
     }
 }
 
-TEST_CASE( "fps_display.shadow_strength round-trips", "[config]" )
+// Outline thickness in px, 0..4 (2026-09-03: it was briefly a 0..1 opacity
+// the same day -- an old 0..1 value is still a valid thickness, so both
+// halves of the range must survive a round trip).
+TEST_CASE( "fps_display.outline_strength round-trips across the whole 0-4 px range", "[config]" )
 {
-    for ( float flValue : { 0.0f, 0.25f, 0.5f, 1.0f } )
+    for ( float flValue : { 0.0f, 0.25f, 0.5f, 1.0f, 2.5f, 4.0f } )
     {
         TempConfigHome home;
 
         Settings s{};
-        s.fps_display.shadow_strength = flValue;
+        s.fps_display.outline_strength = flValue;
 
         REQUIRE( SaveGlobal( s ) );
 
         Settings loaded = LoadGlobal();
-        REQUIRE( loaded.fps_display.shadow_strength == flValue );
+        REQUIRE( loaded.fps_display.outline_strength == flValue );
     }
+}
+
+TEST_CASE( "fps_display.lag_detection_enabled round-trips", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.lag_detection_enabled = bValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.lag_detection_enabled == bValue );
+    }
+}
+
+// The drop shadow the outline replaced (2026-09-03): an old config still
+// carrying shadow_strength must load cleanly and simply take
+// outline_strength's default, not error and not inherit the old value.
+TEST_CASE( "a config carrying the removed shadow_strength falls back to the outline default", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {
+        "enabled": true,
+        "shadow_strength": 0.75
+    }})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.enabled == true );
+    REQUIRE( loaded.fps_display.outline_strength == Settings{}.fps_display.outline_strength );
 }
 
 TEST_CASE( "fps_display.backdrop_opacity round-trips at every UI-reachable value", "[config]" )
@@ -314,7 +351,8 @@ TEST_CASE( "a config predating Phase 2 ignores the removed backdrop/blend_mode k
     REQUIRE( loaded.fps_display.update_mode == "smoothing" );
     REQUIRE( loaded.fps_display.color_mode == "fixed" );
     REQUIRE( loaded.fps_display.hide_above_enabled == false );
-    REQUIRE( loaded.fps_display.shadow_strength == 0.0f );
+    REQUIRE( loaded.fps_display.outline_strength == 0.0f );
+    REQUIRE( loaded.fps_display.lag_detection_enabled == true );
 }
 
 TEST_CASE( "no per-game file is ever created until override is enabled", "[config]" )

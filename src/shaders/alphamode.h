@@ -34,6 +34,24 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
     {
         // True per-pixel "invert what's underneath" mode -- the FPS HUD's
         // Inverted text-colour option (superdoc/features/fps-display.md).
+        //
+        // The layer carries BOTH kinds of content at once and this mode
+        // tells them apart by the layer's own brightness (see the
+        // selector below): near-white texels invert the destination,
+        // everything darker composites normally, exactly like
+        // alpha_mode_coverage. That is what lets the HUD keep its
+        // backdrop, its black outline and its inverted digits in ONE
+        // layer.
+        //
+        // Why one layer and not two: an earlier attempt put the backdrop
+        // and the outline in a separate, normally blended layer BELOW
+        // this one. That layer then painted over the game everywhere the
+        // digits were about to land, so this mode inverted the HUD's own
+        // backdrop/outline instead of the game and the digits came out a
+        // constant near-white -- "inverted mode stopped inverting". A
+        // destination-reading blend cannot be split across two layers
+        // that overlap; keep it in one.
+        //
         // This runs after apply_layer_color_mgmt() and before
         // encodeOutputColor(), so `outputValue` is a LINEAR-light
         // blend-space colour that, under HDR/PQ, is not bounded to [0,1] --
@@ -71,10 +89,23 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
             inverted = clamp( inverted + flDir * flPush, 0.0f, 1.0f );
         }
 
-        // Gate on this layer's own alpha so only glyph pixels (near-opaque
-        // in the HUD's offscreen texture) actually get inverted; fully
-        // transparent pixels pass the background through unchanged.
-        outputValue.rgb = mix( outputValue.rgb, inverted, layerAlpha );
+        // The selector: how much of THIS texel wants the inverted colour
+        // rather than its own. The HUD draws the digits' fill in pure
+        // opaque white and everything that must not invert (the backdrop,
+        // the black outline) far darker, so the layer's own luma
+        // separates them with room to spare -- white is 1.0 in this
+        // linear-light space, the darkest usable backdrop tint well under
+        // 0.25. Anti-aliased glyph edges land in between and cross-fade,
+        // which is exactly the right thing for them to do.
+        float flLayerLuma = dot( clamp( layerColor.rgb, 0.0f, 1.0f ), kLumaWeights );
+        float flInvertSelect = smoothstep( 0.25f, 0.80f, flLayerLuma );
+        vec3 target = mix( layerColor.rgb, inverted, flInvertSelect );
+
+        // Gate on this layer's own alpha so only covered pixels are
+        // touched at all; fully transparent pixels pass the background
+        // through unchanged. With flInvertSelect == 0 this is bit-for-bit
+        // the alpha_mode_coverage blend above.
+        outputValue.rgb = mix( outputValue.rgb, target, layerAlpha );
         outputValue.a = layerAlpha + outputValue.a * ( 1.0f - layerAlpha );
     }
     else // none

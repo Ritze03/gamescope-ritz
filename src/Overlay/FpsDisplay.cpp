@@ -696,7 +696,10 @@ namespace gamescope
 	struct FpsModuleLayout
 	{
 		bool bDrawBackdrop = false;
+		bool bDrawOutline = false;
+		float flOutlineRadius = 0.0f; // px, 0 = no outline
 		ImU32 backdropColor = 0;
+		ImU32 outlineColor = 0;
 		ImU32 textColor = 0;
 		char szNum[8] = ""; // unpadded digits actually drawn -- see flTextOffsetX
 		ImVec2 numSize{};
@@ -727,48 +730,64 @@ namespace gamescope
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
 
-		const bool bSpike = IsSpikeActive();
+		// The whole spike reaction hangs off the user's own switch: off
+		// means no colour flip in Fixed mode and no backdrop tint in
+		// Inverted mode, ever. The detector itself keeps running (see
+		// ConfigSchema.h's lag_detection_enabled comment) so turning it
+		// back on reacts immediately.
+		const bool bSpike = cfg.lag_detection_enabled && IsSpikeActive();
 		const bool bInvertedMode = cfg.color_mode == "inverted";
 
 		// ---- backdrop -----------------------------------------------
 		// Opacity 0 IS "no backdrop" (ConfigSchema.h's own comment) -- no
-		// separate enabled flag any more.
+		// separate enabled flag any more, and NOTHING may override it.
 		L.bDrawBackdrop = cfg.backdrop_opacity > 0.0f;
 
 		ImVec4 backdropBase( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity );
-		if ( bInvertedMode && bSpike )
+		if ( bInvertedMode && bSpike && L.bDrawBackdrop )
 		{
 			// Inverted mode can't "invert" already-inverted text to signal
 			// a spike -- doing that would show nothing against itself (the
 			// PLAN's own reasoning). Tint the backdrop toward a warning
-			// colour instead, and -- since the point is for the spike to
-			// actually be seen -- guarantee it's visible for the hold
-			// window even if the user's own opacity setting is 0. This is
-			// a temporary exception for the hold window only, never a
-			// change to their stored setting.
+			// colour instead.
+			//
+			// This used to FORCE the backdrop visible for the hold window
+			// even at opacity 0, which is the bug the user reported as
+			// "backdrop opacity 0 doesn't turn the backdrop off in
+			// Inverted mode": a console-command hitch was enough to make a
+			// backdrop they had switched off appear. Opacity 0 now wins
+			// outright -- with no backdrop there is simply no spike
+			// indication in Inverted mode, which is the honest cost of
+			// letting the setting mean what it says.
 			constexpr float kTintMix = 0.55f;
 			backdropBase.x = backdropBase.x * ( 1.0f - kTintMix ) + kSpikeTintColor.x * kTintMix;
 			backdropBase.y = backdropBase.y * ( 1.0f - kTintMix ) + kSpikeTintColor.y * kTintMix;
 			backdropBase.z = backdropBase.z * ( 1.0f - kTintMix ) + kSpikeTintColor.z * kTintMix;
 			backdropBase.w = std::max( cfg.backdrop_opacity, 0.35f );
-			L.bDrawBackdrop = true;
 		}
 		L.backdropColor = ImGui::ColorConvertFloat4ToU32( backdropBase );
 
 		// ---- text colour + technique ----------------------------------
 		if ( bInvertedMode )
 		{
-			// True per-pixel invert now (rendervulkan's
+			// True per-pixel invert (rendervulkan's
 			// ALPHA_BLENDING_MODE_INVERT, wired up in FpsDisplay_AddLayer()):
 			// the compute-composite shader takes the actual game colour
 			// under each glyph pixel and inverts it (alphamode.h's
 			// BlendLayer(), with a mid-grey guard so it can't vanish over a
-			// near-50%-luminance surface). That means this draw pass just
+			// near-50%-luminance surface). That means the glyph pass just
 			// needs to hand the shader clean, fully-opaque alpha coverage
 			// on the glyph pixels -- plain opaque white, ignoring
 			// text_opacity here (a partial alpha would only dilute the
 			// invert, mixing in un-inverted background per alphamode.h's
 			// own layerAlpha gate). See superdoc/features/fps-display.md.
+			//
+			// Opaque WHITE specifically, and nothing else in this layer
+			// may be anywhere near as bright: alphamode.h's invert branch
+			// uses the layer's own luma to decide which texels invert the
+			// game and which composite normally, so the fill being white
+			// and the backdrop/outline being dark is the contract that
+			// keeps the backdrop and the outline out of the inversion.
 			L.textColor = IM_COL32( 255, 255, 255, 255 );
 		}
 		else // "fixed"
@@ -778,6 +797,22 @@ namespace gamescope
 				col = ImVec4( 1.0f - col.x, 1.0f - col.y, 1.0f - col.z, col.w ); // "just invert the text colour"
 			L.textColor = ImGui::ColorConvertFloat4ToU32( col );
 		}
+
+		// ---- outline --------------------------------------------------
+		// A SIZE in pixels, not an opacity: the setting is the outline's
+		// radius, 0 to 4 px (the user asked for "the max outline size
+		// should be 4.0"). It is always solid black -- an outline that
+		// fades out as it grows would read as a blur, which is exactly
+		// what the drop shadow it replaced was rejected for. Stacking
+		// translucent offset copies could not stay solid at 4px anyway:
+		// the overlapping copies would saturate the alpha byte long
+		// before the ring closed.
+		//
+		// Black also keeps it out of Inverted mode's inversion for free,
+		// since alphamode.h selects on the layer's own luma.
+		L.flOutlineRadius = std::clamp( cfg.outline_strength, 0.0f, 4.0f );
+		L.bDrawOutline = L.flOutlineRadius > 0.0f;
+		L.outlineColor = IM_COL32( 0, 0, 0, 255 );
 
 		// The box is still sized off a blank-padded "%3d" field so it never
 		// resizes as the number crosses a digit-count boundary (0-999 is
@@ -807,6 +842,13 @@ namespace gamescope
 
 	// Draws the FPS module's backdrop + content into the box
 	// [origin, origin+boxSize).
+	//
+	// Backdrop, outline and digits all go into the SAME layer, drawn in
+	// that order. Inverted mode does not change that: alphamode.h's invert
+	// blend tells the digits apart from the rest by their brightness (see
+	// MeasureFpsModule()'s textColor note), so there is nothing to split
+	// across two layers -- and splitting it was what broke the inversion,
+	// see FpsDisplay_AddLayer().
 	static void DrawFpsModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &L )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -816,27 +858,42 @@ namespace gamescope
 		// 3-glyph field width -- see MeasureFpsModule()'s own comment.
 		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX, rectMin.y + cfg.backdrop_padding );
 
-		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, L.backdropColor );
-
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size;
 
-		// ---- drop shadow ---------------------------------------------
-		// A fixed 2px offset rather than one scaled with font size -- a
-		// shadow that grows with a 48px font reads as blur, not depth,
-		// which is explicitly not what the user asked for ("a shadow that
-		// reads as depth rather than blur"). Alpha scales with strength;
-		// 0 draws nothing at all (not even a fully-transparent AddText
-		// call -- skipped outright).
-		constexpr float kShadowOffset = 2.0f;
-		constexpr float kShadowMaxAlpha = 0.85f;
-		const bool bDrawShadow = cfg.shadow_strength > 0.0f;
-		const ImU32 shadowColor = IM_COL32( 0, 0, 0, (int)( cfg.shadow_strength * kShadowMaxAlpha * 255.0f ) );
+		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, L.backdropColor );
 
-		if ( bDrawShadow )
+		// ---- outline --------------------------------------------------
+		// The digits stamped again in black, offset onto a set of rings
+		// around the real text position; the fill then covers the middle,
+		// leaving a solid black stroke of L.flOutlineRadius px. This is
+		// the technique injected overlays (RTSS, MangoHud) use, because it
+		// reads over any background instead of only over a darker one. It
+		// replaced the old single-offset drop shadow on 2026-09-03.
+		//
+		// Why rings rather than the four axis-aligned offsets this started
+		// with: four offsets only look solid while the radius is about a
+		// pixel. Past that they read as a cross with open diagonals. So
+		// the ring spacing is capped at 1px (concentric rings out to the
+		// radius) and each ring's stamps are spaced at most ~0.75px apart
+		// along it, which is what keeps a 4px outline continuous instead
+		// of dotted. A 1px outline still costs only its single 8-stamp
+		// ring, so the small end stays as cheap and as crisp as before.
+		if ( L.bDrawOutline )
 		{
-			const ImVec2 shadowPos( textPos.x + kShadowOffset, textPos.y + kShadowOffset );
-			pDrawList->AddText( pFont, flFontSize, shadowPos, shadowColor, L.szNum );
+			const int nRings = (int)std::ceil( L.flOutlineRadius );
+			for ( int nRing = 1; nRing <= nRings; nRing++ )
+			{
+				const float flRadius = L.flOutlineRadius * (float)nRing / (float)nRings;
+				const int nStamps = std::clamp( (int)std::ceil( 2.0f * 3.14159265f * flRadius / 0.75f ), 8, 48 );
+				for ( int i = 0; i < nStamps; i++ )
+				{
+					const float flAngle = 2.0f * 3.14159265f * (float)i / (float)nStamps;
+					const ImVec2 pos( textPos.x + std::cos( flAngle ) * flRadius,
+					                  textPos.y + std::sin( flAngle ) * flRadius );
+					pDrawList->AddText( pFont, flFontSize, pos, L.outlineColor, L.szNum );
+				}
+			}
 		}
 
 		pDrawList->AddText( pFont, flFontSize, textPos, L.textColor, L.szNum );
@@ -1005,6 +1062,8 @@ namespace gamescope
 
 		ImGui::SetCurrentContext( s_pImguiContext );
 
+		const bool bInvertedMode = s_Settings.fps_display.color_mode == "inverted";
+
 		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
 		{
 			RestoreContext();
@@ -1057,24 +1116,38 @@ namespace gamescope
 		layer->filter = GamescopeUpscaleFilter::LINEAR;
 		layer->blackBorder = false;
 		layer->applyColorMgmt = false;
+		layer->ctm = nullptr;
+		layer->hdr_metadata_blob = nullptr;
+		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
 
-		const bool bInvertedMode = s_Settings.fps_display.color_mode == "inverted";
 		if ( bInvertedMode )
 		{
-			// True per-pixel invert (alphamode.h's alpha_mode_invert) reads
-			// the actual game colour under each glyph pixel, so this frame
-			// MUST go through the full compute-composite path -- see
-			// bNeedsDestinationBlend's own comment in rendervulkan.hpp.
+			// ONE layer carries the whole readout, backdrop and outline
+			// included: alphamode.h's alpha_mode_invert separates the
+			// digits (drawn opaque white) from everything else (drawn
+			// dark) by the layer's own luma, and blends the rest exactly
+			// as ALPHA_BLENDING_MODE_COVERAGE would.
+			//
+			// It was briefly split into two layers -- a normal backdrop +
+			// outline layer with an invert-blended glyph layer above it --
+			// and that is what broke Inverted mode on 2026-09-03. A blend
+			// that reads the destination cannot sit above another layer
+			// covering the same pixels: the lower layer had already
+			// painted the backdrop and the black outline over the game
+			// exactly where the digits land, so the invert inverted the
+			// HUD's own dark pixels and the digits came out a constant
+			// near-white no matter what the game was showing. Keep this in
+			// one layer.
 			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_INVERT;
+			// A true per-pixel invert reads the composited destination, so
+			// the frame MUST go through the full compute-composite path --
+			// see bNeedsDestinationBlend's own comment in rendervulkan.hpp.
 			pFrameInfo->bNeedsDestinationBlend = true;
 		}
 		else
 		{
 			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE; // straight (non-premultiplied) alpha, same reasoning as SettingsOverlay's own layer
 		}
-		layer->ctm = nullptr;
-		layer->hdr_metadata_blob = nullptr;
-		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
 	}
 
 	void FpsDisplay_WaitForRender( CVulkanCmdBuffer *pComputeCmdBuffer )
@@ -1329,23 +1402,36 @@ namespace gamescope
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.color_mode = ColorModeFromInt( n ); PersistSettings(); } ),
 			kColorModeOptions, std::size( kColorModeOptions ) )
 			.Help( "Fixed always uses your UI's accent colour, and flips to its opposite for a "
-			       "moment during a lag spike. Inverted switches between light and dark text to "
-			       "stay readable against its backdrop, which is also gentler on an OLED screen." )
+			       "moment during a lag spike. Inverted flips whatever the game is showing "
+			       "under each digit, so the number stays readable over anything and never "
+			       "burns a fixed bright shape into an OLED screen." )
 			.Default( 0 )
 			.Keywords( "color colour text fixed inverted accent oled readable" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
-		a.Slider( "hud.shadow_strength", "Shadow strength",
+		a.Switch( "hud.lag_detection", "Lag spike detection",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.lag_detection_enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.lag_detection_enabled = b; PersistSettings(); } ) )
+			.Help( "Reacts for a moment when a frame takes far longer than the ones around it. "
+			       "With Fixed text the number flips colour; with Inverted text the backdrop "
+			       "turns red instead, so it does nothing there unless the backdrop is on." )
+			.Default( config::FpsDisplaySettings{}.lag_detection_enabled )
+			.Keywords( "lag spike stutter hitch detection warning frametime" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Slider( "hud.outline_strength", "Outline size",
 			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.shadow_strength; },
-				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.shadow_strength = f; PersistSettings(); } ) )
-			.Help( "Adds a small drop shadow behind the number so it stands out against busy "
-			       "backgrounds. All the way down turns it off." )
-			.Range( 0.0f, 1.0f )
-			.Step( 0.05f )
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.outline_strength; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.outline_strength = f; PersistSettings(); } ) )
+			.Help( "How thick a black outline to draw around the number, in pixels, so it "
+			       "stands out against busy backgrounds. All the way down turns it off." )
+			.Range( 0.0f, 4.0f )
+			.Step( 0.25f )
+			.Unit( "px" )
 			.ZeroMeans( "Off" )
-			.Default( config::FpsDisplaySettings{}.shadow_strength )
-			.Keywords( "shadow depth text strength" )
+			.Default( config::FpsDisplaySettings{}.outline_strength )
+			.Keywords( "outline border stroke edge text size thickness strength" )
 			.DisabledUnless( MonitorOn, kOffReason );
 	}
 }

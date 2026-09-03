@@ -97,8 +97,39 @@ namespace gamescope::config
         // blend-space/HDR caveats.
         std::string color_mode = "fixed"; // fixed | inverted
 
-        // Phase 2: drop-shadow strength, 0 = no shadow drawn at all.
-        float shadow_strength = 0.0f;
+        // Outline thickness in PIXELS, 0 to 4, 0 = no outline drawn at
+        // all. Replaced the former drop shadow (`shadow_strength`)
+        // 2026-09-03: a black outline reads over any background, which a
+        // single offset shadow does not, and -- unlike the shadow -- it
+        // stays useful in Inverted mode, where it is the one part of the
+        // readout that must stay black rather than invert. An old config
+        // still carrying `shadow_strength` simply falls back to this
+        // default (ConfigManager.cpp never reads that key any more).
+        //
+        // The name kept the `_strength` suffix on purpose. It was briefly
+        // an opacity in 0..1 the same day, so a config written in that
+        // window already holds this key; a 0..1 value is still a perfectly
+        // valid thickness (a sub-pixel to 1px outline), so re-reading it
+        // under the new meaning degrades gracefully instead of needing a
+        // second dead key. The setting is labelled "Outline size" in the
+        // UI, which is what the user actually sees.
+        //
+        // 4px is the top of the range because backdrop_padding is 6px:
+        // the outline stays inside the backdrop box at any setting, so
+        // growing it never changes the readout's footprint.
+        float outline_strength = 0.0f;
+
+        // Whether lag-spike detection does anything at all. Default on,
+        // which is what this HUD has always done, so an existing config
+        // keeps the behaviour it had. When off there is no spike reaction
+        // of any kind: Fixed mode never flips the number's colour and
+        // Inverted mode never tints the backdrop. The frametime history
+        // that feeds the detector keeps being collected either way (it is
+        // a handful of floats per frame and is wanted for later work), so
+        // switching this back on works immediately instead of needing to
+        // refill a window of samples first -- see FpsDisplay.cpp's
+        // PushFrametimeSample()/IsSpikeActive().
+        bool lag_detection_enabled = true;
 
         // Issue #29: optional colour override for the FPS number's text.
         // std::optional, same nullable-field shape as OverlaySettings::
