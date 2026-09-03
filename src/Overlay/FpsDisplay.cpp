@@ -211,12 +211,26 @@ namespace gamescope
 	// -------------------------------------------------------------------
 	// Smoothing: a single-pole EMA over the raw per-commit frametime, for
 	// the headline number (DECISIONS.md #16: the game's own frame rate).
+	// One of Phase 2's three update modes -- see UpdateAndGetDisplayFps().
 	// -------------------------------------------------------------------
 
 	static uint64_t s_ulLastRawFrametimeNs = 0;
 	// Seeded at a plausible 60fps so the very first frames show a sane
 	// number instead of 0/infinity before the first real sample arrives.
 	static float s_flSmoothedFrametimeMs = 1000.0f / 60.0f;
+
+	// Phase 2's other two update modes. "Immediate" needs no averaging at
+	// all -- just the latest sample's own instantaneous rate, held between
+	// samples so an idle client doesn't show 0. "Update every second"
+	// accumulates every raw sample since its last publish and only turns
+	// that into a displayed value once the 1-second window rolls over, so
+	// the digits visibly hold still in between -- a real windowed average
+	// (frames-in-window / total-time-in-window), not a resampled EMA.
+	static float s_flImmediateFps = 60.0f;
+	static float s_flPerSecondFps = 60.0f;
+	static float s_flPerSecondAccumMs = 0.0f;
+	static int s_nPerSecondAccumCount = 0;
+	static uint64_t s_ulPerSecondWindowStartNanos = 0;
 
 	// -------------------------------------------------------------------
 	// Lag-spike detection: a ring buffer of raw (unsmoothed) per-frame game
@@ -227,12 +241,9 @@ namespace gamescope
 	//
 	// Scope reduction (2026-09-03): this used to also feed a frametime graph
 	// and a percentile row (removed -- see superdoc/meta/TERMINOLOGY.md's
-	// "profiler" entry). The raw history buffer itself is KEPT, deliberately
-	// unused by anything in this file right now: Phase 2 (a separate task)
-	// builds lag-spike detection on top of it, and this is the underlying
-	// per-frame data that detection needs. Nothing currently reads
-	// s_flFrametimeHistoryMs/s_nHistoryCount -- see PushFrametimeSample's own
-	// comment for why it's still fed every frame regardless.
+	// "profiler" entry). Phase 2 is the "a separate task" the old comment
+	// here referred to: ComputeIsSpike() below is what finally reads this
+	// buffer.
 	//
 	// Sized at 240 samples to match this repo's own spec text for this exact
 	// feature (ui-mockup-precise-spec.md §11's FPS-config-window footer:
@@ -242,10 +253,6 @@ namespace gamescope
 	static int s_nHistoryCount = 0;  // valid samples so far (caps at kHistoryCapacity)
 	static int s_nHistoryHead = 0;   // index the NEXT sample will be written to
 
-	// Kept feeding the ring buffer even though nothing in this file reads it
-	// right now (see the buffer's own comment) -- the alternative is Phase 2
-	// discovering it needs per-frame history that was thrown away along with
-	// the graph that used to visualise it.
 	static void PushFrametimeSample( float flMs )
 	{
 		s_flFrametimeHistoryMs[s_nHistoryHead] = flMs;
@@ -254,8 +261,77 @@ namespace gamescope
 			++s_nHistoryCount;
 	}
 
-	static float UpdateAndGetSmoothedFps()
+	// -------------------------------------------------------------------
+	// Phase 2 lag-spike detection. No user-facing threshold by design (the
+	// PLAN this task followed is explicit: "Do not add a user setting for
+	// the threshold ... deliberately lean feature") -- these are fixed
+	// constants, tuned once here rather than exposed as a control.
+	//
+	// Heuristic: a frame counts as a spike when it is both RELATIVELY much
+	// slower than the recent median (kSpikeFactor) AND ABSOLUTELY slower by
+	// a real amount (kSpikeMinDeltaMs). Relative alone would trip constantly
+	// on a very fast, very stable game (240fps's own frame-to-frame jitter
+	// is easily +75% of a ~4ms median without anything actually being
+	// wrong); absolute alone would never trip on a game already running
+	// slow, where every frame is "big" in milliseconds but nothing has
+	// changed. The median (not the mean) is what "recent" is judged against
+	// so one prior spike doesn't drag the baseline enough to mask the next.
+	//
+	// Detected state is held visible for kSpikeHoldNs after the triggering
+	// frame -- a single bad frame lasts a fraction of a millisecond on
+	// screen otherwise, which is not "perceptible", it's a flicker the eye
+	// filters out. 700ms is long enough to register as a deliberate signal
+	// without lingering into the next stutter's own window.
+	// -------------------------------------------------------------------
+	static constexpr float kSpikeFactor = 1.75f;
+	static constexpr float kSpikeMinDeltaMs = 4.0f;
+	static constexpr int kSpikeMedianWindow = 30; // most recent prior samples judged against
+	static constexpr uint64_t kSpikeHoldNs = 700ull * 1000000ull; // 700ms
+
+	static uint64_t s_ulLastSpikeDetectedNanos = 0;
+
+	// Judges `flNewSampleMs` against the median of the samples already in
+	// the ring buffer -- called BEFORE PushFrametimeSample() adds this one,
+	// so a spike is never compared against itself.
+	static bool ComputeIsSpike( float flNewSampleMs )
 	{
+		const int nCount = std::min( s_nHistoryCount, kSpikeMedianWindow );
+		if ( nCount < 8 )
+			return false; // not enough history yet to know what "normal" is
+
+		float flWindow[kSpikeMedianWindow];
+		for ( int i = 0; i < nCount; i++ )
+		{
+			const int nIdx = ( s_nHistoryHead - 1 - i + kHistoryCapacity ) % kHistoryCapacity;
+			flWindow[i] = s_flFrametimeHistoryMs[nIdx];
+		}
+		std::nth_element( flWindow, flWindow + nCount / 2, flWindow + nCount );
+		const float flMedian = flWindow[nCount / 2];
+
+		return flNewSampleMs > flMedian * kSpikeFactor
+		    && ( flNewSampleMs - flMedian ) > kSpikeMinDeltaMs;
+	}
+
+	// Whether a detected spike's hold window is still open. Read from
+	// MeasureFpsModule() to decide the text/backdrop treatment for this
+	// frame -- see that function's own comment.
+	static bool IsSpikeActive()
+	{
+		return s_ulLastSpikeDetectedNanos != 0
+		    && ( get_time_in_nanos() - s_ulLastSpikeDetectedNanos ) < kSpikeHoldNs;
+	}
+
+	// Phase 2: renamed from UpdateAndGetSmoothedFps() now that "smoothed" is
+	// only one of three update modes (FpsDisplaySettings::update_mode) this
+	// resolves between. All three are kept live regardless of which one is
+	// selected, so switching modes in the settings panel never has to "warm
+	// up" a stale average -- Immediate and Smoothing are just cheap to keep
+	// current, and Update-every-second only publishes its accumulator once
+	// its window rolls over regardless of which mode is active.
+	static float UpdateAndGetDisplayFps()
+	{
+		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+
 		const uint64_t ulRaw = g_ulLastAppFrametimeNs.load( std::memory_order_relaxed );
 		if ( ulRaw != 0 && ulRaw != s_ulLastRawFrametimeNs )
 		{
@@ -264,15 +340,46 @@ namespace gamescope
 			// Clamp a single wild sample (e.g. a resume-from-pause hitch)
 			// from dominating the EMA for multiple seconds.
 			const float flMs = std::clamp( (float)ulRaw / 1e6f, 0.1f, 2000.0f );
+
+			// Smoothing (EMA).
 			constexpr float kAlpha = 0.10f;
 			s_flSmoothedFrametimeMs = s_flSmoothedFrametimeMs * ( 1.0f - kAlpha ) + flMs * kAlpha;
 
-			// Same raw sample feeds the lag-spike history -- one history
-			// entry per real game frame, exactly matching the headline
-			// number's own clock.
+			// Immediate -- this frame's own instantaneous rate, no averaging.
+			s_flImmediateFps = 1000.0f / flMs;
+
+			// Update-every-second -- accumulate; UpdateAndGetDisplayFps()'s
+			// own window check below only turns this into a displayed value
+			// once the second rolls over.
+			s_flPerSecondAccumMs += flMs;
+			s_nPerSecondAccumCount++;
+
+			// Lag-spike detection judges this raw sample against the
+			// history BEFORE it joins that history -- see ComputeIsSpike().
+			if ( ComputeIsSpike( flMs ) )
+				s_ulLastSpikeDetectedNanos = get_time_in_nanos();
 			PushFrametimeSample( flMs );
 		}
-		return 1000.0f / s_flSmoothedFrametimeMs;
+
+		const uint64_t ulNowNanos = get_time_in_nanos();
+		if ( s_ulPerSecondWindowStartNanos == 0 )
+			s_ulPerSecondWindowStartNanos = ulNowNanos;
+		if ( ulNowNanos - s_ulPerSecondWindowStartNanos >= 1000000000ull && s_nPerSecondAccumCount > 0 )
+		{
+			// A real windowed average (frames / total-time-of-those-frames),
+			// not a resample of the EMA -- distinct from Smoothing on
+			// purpose, so the three modes actually look different.
+			s_flPerSecondFps = 1000.0f * (float)s_nPerSecondAccumCount / s_flPerSecondAccumMs;
+			s_flPerSecondAccumMs = 0.0f;
+			s_nPerSecondAccumCount = 0;
+			s_ulPerSecondWindowStartNanos = ulNowNanos;
+		}
+
+		if ( cfg.update_mode == "immediate" )
+			return s_flImmediateFps;
+		if ( cfg.update_mode == "per_second" )
+			return s_flPerSecondFps;
+		return 1000.0f / s_flSmoothedFrametimeMs; // "smoothing" -- also the fallback for an unrecognized/legacy value
 	}
 
 	// -------------------------------------------------------------------
@@ -447,21 +554,14 @@ namespace gamescope
 	}
 
 	// -------------------------------------------------------------------
-	// Issue #29 (System Monitor part 3/3): blend_mode gains "inverted"
-	// alongside alpha/additive, plus an optional colour override for the
-	// FPS number's text. Shared helpers below.
+	// Colour/backdrop helpers. Issue #29 originally built these for a
+	// three-way blend_mode (alpha/additive/inverted); Phase 2 (2026-09-03)
+	// replaced that with the user's actual ask -- a plain backdrop whose
+	// opacity alone decides whether it's drawn, and a text-colour mode
+	// (Fixed/Inverted) that is orthogonal to it, so the backdrop is now
+	// always drawn whenever its opacity is nonzero regardless of colour
+	// mode (there is no more "additive" to auto-disable it for).
 	// -------------------------------------------------------------------
-
-	// A filled backdrop only makes sense in "alpha" mode -- additive
-	// already auto-disables it (a filled rect would itself glow, SPEC.md
-	// B5) and inverted does too, for the same reason this issue's own text
-	// anticipates: a static backdrop fill sits behind the outline/fill
-	// treatment AddTextInverted() draws and would just read as visual
-	// noise rather than helping legibility.
-	static bool ModuleBackdropAllowed( const config::FpsDisplaySettings &cfg )
-	{
-		return cfg.blend_mode == "alpha";
-	}
 
 	// Unpacks the 0xRRGGBB int config::FpsDisplaySettings::color_fps stores
 	// on disk into an ImVec4 (0..1 floats, alpha ignored).
@@ -488,11 +588,14 @@ namespace gamescope
 		return col;
 	}
 
-	// Issue #29's "Inverted" blend mode. What "inverted" means here, and
-	// why it is NOT a literal per-pixel GPU-blend destination-invert
+	// The "Inverted" text-colour mode's no-backdrop fallback (Phase 2,
+	// 2026-09-03; this technique itself dates to issue #29's old "inverted"
+	// blend mode). What "inverted" can mean here, and why it is NOT a
+	// literal per-pixel GPU-blend destination-invert
 	// (VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR against the actual composited
 	// game frame), is worth being explicit about rather than silently
-	// under-delivering the task brief's own literal wording:
+	// under-delivering the user's own literal wording ("Inverted ... so its
+	// always readable"):
 	//
 	// This whole readout renders into its own isolated offscreen texture
 	// (s_pOverlayTexture, cleared to transparent every frame -- see
@@ -503,25 +606,25 @@ namespace gamescope
 	// one of exactly three fixed per-layer blend equations baked into that
 	// compute shader (rendervulkan.hpp's AlphaBlendingMode_t: PREMULTIPLIED
 	// / COVERAGE / NONE; see rendervulkan.cpp's u_alphaMode packing). A
-	// literal "invert whatever's underneath" blend mode is a property of
-	// THAT later compositing step, not of this file's own draw pass --
-	// this file's "destination" during its own ImGui rendering is only
-	// ever this texture's own (normally transparent) prior content, never
-	// the game frame, so no amount of Vulkan blend-state work confined to
-	// this file can make a real per-pixel invert of the actual game
-	// picture happen.
+	// literal "invert whatever's underneath" mode is a property of THAT
+	// later compositing step, not of this file's own draw pass -- this
+	// file's "destination" during its own ImGui rendering is only ever this
+	// texture's own (normally transparent) prior content, never the game
+	// frame, so no amount of Vulkan blend-state work confined to this file
+	// can make a real per-pixel invert of the actual game picture happen.
+	// That is the HONEST LIMITATION documented in
+	// superdoc/features/fps-display.md: fixing it for real is a Vulkan
+	// composite-path change, out of scope for this task.
 	//
-	// What IS both real and fully in-scope: pairing a black outline with a
-	// white fill is the same "reads over anything" technique real
-	// injected overlays (RTSS, MangoHud) rely on, and it is a content-
-	// INDEPENDENT guarantee by construction (mostly-transparent glyph
-	// shapes rather than one large flat-color block, which is also the
-	// literal "useful for OLED" property the task brief asks for) rather
-	// than a fixed single colour that can still fail against a
-	// similar-toned background the way plain "alpha" mode's text can.
-	// Backdrop is auto-disabled in this mode (ModuleBackdropAllowed()) --
-	// a solid backdrop fill behind an outline/fill pair that's already
-	// legible on its own just reads as noise.
+	// What IS both real and fully in-scope, and what MeasureFpsModule()
+	// falls back to here specifically when Inverted mode has no backdrop
+	// to derive a luminance from: pairing a black outline with a white
+	// fill is the same "reads over anything" technique real injected
+	// overlays (RTSS, MangoHud) rely on, and it is a content-INDEPENDENT
+	// guarantee by construction (mostly-transparent glyph shapes rather
+	// than one large flat-colour block, which is also the literal "OLED
+	// safe" property the user asked for) rather than a fixed single colour
+	// that can still fail against a similar-toned background.
 	static void AddTextInvertedSized( ImDrawList *pDrawList, ImFont *pFont, float flFontSize, ImVec2 pos, const char *pszText )
 	{
 		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
@@ -545,17 +648,22 @@ namespace gamescope
 	// Shared box backdrop (issue #28: factored out so a future module would
 	// draw an identical backdrop rather than a second copy of the same four
 	// lines -- kept even with only one module left, since the FPS module
-	// still uses it). Colours are Palette.h's own tokens/§1 literals.
-	static void DrawModuleBackdrop( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, bool bDrawBackdrop, const config::FpsDisplaySettings &cfg )
+	// still uses it). `backdropColor` is resolved by the caller (Fixed
+	// mode's plain neutral, or Inverted mode's spike-tinted variant -- see
+	// MeasureFpsModule()) rather than recomputed here.
+	//
+	// Phase 2 (2026-09-03): NEVER rounds the corners -- the user was
+	// explicit that this is a plain rectangle. backdrop_rounding (a Phase 1
+	// config field) is gone; this always passes 0.0f, not a config read.
+	static void DrawModuleBackdrop( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, bool bDrawBackdrop, ImU32 backdropColor )
 	{
 		if ( !bDrawBackdrop )
 			return;
 
 		const ImVec2 rectMin = origin;
 		const ImVec2 rectMax( origin.x + boxSize.x, origin.y + boxSize.y );
-		const ImU32 backdropColor = ImGui::ColorConvertFloat4ToU32( ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity ) );
-		pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, cfg.backdrop_rounding );
-		pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), cfg.backdrop_rounding );
+		pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, 0.0f );
+		pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), 0.0f );
 	}
 
 	// -------------------------------------------------------------------
@@ -633,7 +741,7 @@ namespace gamescope
 	}
 
 	// -------------------------------------------------------------------
-	// The FPS module: number, unit label, backdrop, blend-mode treatment.
+	// The FPS module: number, unit label, backdrop, colour treatment.
 	// Everything that made this a small profiler (CPU/GPU load, the
 	// frametime graph, the percentile row, Now Playing) is gone -- see
 	// this file's header comment.
@@ -644,9 +752,16 @@ namespace gamescope
 	// draws into it.
 	struct FpsModuleLayout
 	{
-		bool bAdditive = false;
-		bool bInverted = false;
+		// Solid: a single flat colour, drawn once (Fixed mode always;
+		// Inverted mode when it has a backdrop to derive a luminance
+		// from). Outline: the content-independent black-outline/white-fill
+		// technique (Inverted mode's no-backdrop fallback -- see
+		// AddTextInvertedSized()'s own comment for the honest limitation).
+		enum class TextMode { Solid, Outline };
+
+		TextMode eTextMode = TextMode::Solid;
 		bool bDrawBackdrop = false;
+		ImU32 backdropColor = 0;
 		ImU32 textColor = 0;
 		char szNum[8] = "";
 		ImVec2 numSize{};
@@ -658,37 +773,90 @@ namespace gamescope
 
 	static constexpr const char *kUnitText = " FPS";
 
+	// Phase 2's spike-reaction colours. A muted warning red rather than a
+	// saturated alarm red -- this is a HUD digit, not a klaxon, and it only
+	// needs to read as "different from normal" for kSpikeHoldNs.
+	static constexpr ImVec4 kSpikeTintColor( 0.85f, 0.20f, 0.20f, 1.0f );
+
 	// M8 part 1 (issue #13, typeface swapped to Geist by #53): Geist Mono
 	// is genuinely monospaced, so a fixed-width formatted string
 	// ("%3d") is tabular by construction -- every digit occupies the same
 	// advance width, so the readout cannot jitter horizontally as the
-	// number changes.
+	// number changes. Phase 2 keeps exactly this approach rather than
+	// switching to a measured-max-width scheme: it was already correct and
+	// cheaper (no per-frame measurement of "9", "99" and "999").
 	static FpsModuleLayout MeasureFpsModule( int nFps )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
 
-		L.bAdditive = cfg.blend_mode == "additive";
-		L.bInverted = cfg.blend_mode == "inverted";
-		// additive/inverted + a filled backdrop rect would make the
-		// backdrop itself glow (additive, SPEC.md B5) or just read as
-		// noise behind an already-legible outline/fill pair (inverted) --
-		// auto-disable rather than combine them.
-		L.bDrawBackdrop = cfg.backdrop_enabled && ModuleBackdropAllowed( cfg );
+		const bool bSpike = IsSpikeActive();
+		const bool bInvertedMode = cfg.color_mode == "inverted";
 
-		// Gamescope's own layer blend modes (rendervulkan.hpp) are
-		// PREMULTIPLIED/COVERAGE/NONE -- there is no whole-layer additive
-		// mode to hand this off to. "Additive" here is approximated at
-		// the draw-list level (no backdrop, brighter/accent-tinted text)
-		// rather than literal GPU ADD blend-func compositing against the
-		// scene. "Inverted" draws via AddTextInvertedSized() instead
-		// (see that function's own comment) rather than a flat
-		// L.textColor, so its value here is unused when L.bInverted.
-		const ImVec4 textColorBase = L.bAdditive
-			? ImVec4( 0x7d / 255.0f, 0xe6 / 255.0f, 0xf7 / 255.0f, 1.0f ) // brighter cyan "glow"
-			: ModuleColorVec4( cfg.color_fps, gamescope::palette::kAccentValue );
-		L.textColor = ImGui::ColorConvertFloat4ToU32(
-			ImVec4( textColorBase.x, textColorBase.y, textColorBase.z, cfg.text_opacity ) );
+		// ---- backdrop -----------------------------------------------
+		// Opacity 0 IS "no backdrop" (ConfigSchema.h's own comment) -- no
+		// separate enabled flag any more.
+		L.bDrawBackdrop = cfg.backdrop_opacity > 0.0f;
+
+		ImVec4 backdropBase( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity );
+		if ( bInvertedMode && bSpike )
+		{
+			// Inverted mode can't "invert" already-inverted text to signal
+			// a spike -- doing that would show nothing against itself (the
+			// PLAN's own reasoning). Tint the backdrop toward a warning
+			// colour instead, and -- since the point is for the spike to
+			// actually be seen -- guarantee it's visible for the hold
+			// window even if the user's own opacity setting is 0. This is
+			// a temporary exception for the hold window only, never a
+			// change to their stored setting.
+			constexpr float kTintMix = 0.55f;
+			backdropBase.x = backdropBase.x * ( 1.0f - kTintMix ) + kSpikeTintColor.x * kTintMix;
+			backdropBase.y = backdropBase.y * ( 1.0f - kTintMix ) + kSpikeTintColor.y * kTintMix;
+			backdropBase.z = backdropBase.z * ( 1.0f - kTintMix ) + kSpikeTintColor.z * kTintMix;
+			backdropBase.w = std::max( cfg.backdrop_opacity, 0.35f );
+			L.bDrawBackdrop = true;
+		}
+		L.backdropColor = ImGui::ColorConvertFloat4ToU32( backdropBase );
+
+		// ---- text colour + technique ----------------------------------
+		if ( bInvertedMode )
+		{
+			if ( L.bDrawBackdrop )
+			{
+				// Derived from the BACKDROP's own resolved colour, NOT the
+				// actual game pixels behind it -- see AddTextInvertedSized's
+				// comment for why a real per-pixel read of the composited
+				// frame is out of scope here. Our backdrop is always a
+				// near-black neutral (optionally spike-tinted, still dark),
+				// so in practice this always resolves to light text today;
+				// written as a real luminance test rather than a hardcoded
+				// "always white" so it stays correct if a backdrop colour
+				// option is ever added.
+				const float flLuma = 0.2126f * backdropBase.x + 0.7152f * backdropBase.y + 0.0722f * backdropBase.z;
+				const ImVec4 col = flLuma > 0.5f
+					? ImVec4( 0.05f, 0.05f, 0.06f, cfg.text_opacity )   // dark text on a light backdrop
+					: ImVec4( 0.97f, 0.98f, 1.0f, cfg.text_opacity );  // light text on a dark backdrop
+				L.textColor = ImGui::ColorConvertFloat4ToU32( col );
+				L.eTextMode = FpsModuleLayout::TextMode::Solid;
+			}
+			else
+			{
+				// No backdrop to derive a luminance from, and this file
+				// cannot see the real game pixels behind the HUD (see
+				// AddTextInvertedSized's comment) -- fall back to the
+				// content-independent outline technique, which is legible
+				// and OLED-safe regardless of what's underneath.
+				L.eTextMode = FpsModuleLayout::TextMode::Outline;
+			}
+		}
+		else // "fixed"
+		{
+			ImVec4 col = ModuleColorVec4( cfg.color_fps, gamescope::palette::kAccentValue, cfg.text_opacity );
+			if ( bSpike )
+				col = ImVec4( 1.0f - col.x, 1.0f - col.y, 1.0f - col.z, col.w ); // "just invert the text colour"
+			L.textColor = ImGui::ColorConvertFloat4ToU32( col );
+			L.eTextMode = FpsModuleLayout::TextMode::Solid;
+		}
 
 		// Right-justified in a fixed 3-character field (blank-, not zero-,
 		// padded) -- 0-999 is plenty for a frame-rate readout.
@@ -723,13 +891,31 @@ namespace gamescope
 		const ImVec2 rectMin = origin;
 		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding, rectMin.y + cfg.backdrop_padding );
 
-		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, cfg );
+		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, L.backdropColor );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size;
 
+		// ---- drop shadow ---------------------------------------------
+		// A fixed 2px offset rather than one scaled with font size -- a
+		// shadow that grows with a 48px font reads as blur, not depth,
+		// which is explicitly not what the user asked for ("a shadow that
+		// reads as depth rather than blur"). Alpha scales with strength;
+		// 0 draws nothing at all (not even a fully-transparent AddText
+		// call -- skipped outright).
+		constexpr float kShadowOffset = 2.0f;
+		constexpr float kShadowMaxAlpha = 0.85f;
+		const bool bDrawShadow = cfg.shadow_strength > 0.0f;
+		const ImU32 shadowColor = IM_COL32( 0, 0, 0, (int)( cfg.shadow_strength * kShadowMaxAlpha * 255.0f ) );
+
+		if ( bDrawShadow )
+		{
+			const ImVec2 shadowPos( textPos.x + kShadowOffset, textPos.y + kShadowOffset );
+			pDrawList->AddText( pFont, flFontSize, shadowPos, shadowColor, L.szNum );
+		}
+
 		ImVec2 cursor = textPos;
-		if ( L.bInverted )
+		if ( L.eTextMode == FpsModuleLayout::TextMode::Outline )
 			AddTextInvertedSized( pDrawList, pFont, flFontSize, cursor, L.szNum );
 		else
 			pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
@@ -739,13 +925,20 @@ namespace gamescope
 		{
 			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
 			const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
-			if ( L.bInverted )
+			if ( bDrawShadow )
+				pDrawList->AddText( ImVec2( unitPos.x + kShadowOffset, unitPos.y + kShadowOffset ), shadowColor, kUnitText );
+			if ( L.eTextMode == FpsModuleLayout::TextMode::Outline )
 				AddTextInverted( pDrawList, unitPos, kUnitText );
 			else
 				pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
 			ImGui::PopFont();
 		}
 	}
+
+	// Phase 2 (2026-09-03): "Hide if FPS above X" -- persists across calls
+	// so the hysteresis below is a real Schmitt trigger, not re-derived
+	// from scratch every frame. See DrawReadout()'s own comment.
+	static bool s_bHiddenForHighFps = false;
 
 	// Scope reduction (2026-09-03): DrawReadout() used to measure and place
 	// a fixed sequence of modules (Fps/Cpu/Gpu/Media) each against its own
@@ -758,7 +951,35 @@ namespace gamescope
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
-		const int nFps = (int)std::lround( UpdateAndGetSmoothedFps() );
+		const float flDisplayFps = UpdateAndGetDisplayFps();
+
+		// ---- "Hide if FPS above X", with hysteresis (Phase 2) ----------
+		// A plain "hidden = fps > X" flips every frame the reading sits on
+		// either side of X, which at a stable framerate means real visible
+		// flicker (float jitter alone crosses an exact threshold often).
+		// This is a one-sided Schmitt trigger instead: once hidden, only
+		// UNhides at or below X itself; while shown, only hides once fps
+		// climbs kHideHysteresisFps PAST X. That keeps "hide above X"
+		// meaning what it says (X is still the line moving from shown to
+		// hidden requires crossing) while making the reverse crossing
+		// require a further 5fps of margin, which is enough that ordinary
+		// frame-to-frame variance right at the line can't retrigger it.
+		if ( cfg.hide_above_enabled )
+		{
+			constexpr float kHideHysteresisFps = 5.0f;
+			s_bHiddenForHighFps = s_bHiddenForHighFps
+				? ( flDisplayFps > cfg.hide_above_fps )
+				: ( flDisplayFps > cfg.hide_above_fps + kHideHysteresisFps );
+		}
+		else
+		{
+			s_bHiddenForHighFps = false; // re-enabling the switch always starts fresh, visible
+		}
+
+		if ( s_bHiddenForHighFps )
+			return; // frame rate is comfortably high -- draw nothing this frame
+
+		const int nFps = (int)std::lround( flDisplayFps );
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
 		const ImVec2 io_display = ImGui::GetIO().DisplaySize; // actual output resolution, see FpsDisplay_AddLayer()
@@ -965,10 +1186,47 @@ namespace gamescope
 	// switches, a "hud.edit_layout" drag-editor action, per-module colour
 	// overrides, and Diagnostics/Statistics groups full of graphs -- all
 	// gone along with the profiler modules and the named-layout system they
-	// depended on (see this file's header comment). What's left is
+	// depended on (see this file's header comment). Phase 1 left this tab
 	// deliberately minimal: Show HUD, placement (anchor + margins), and font
-	// size. Phase 2 (a separate task) rebuilds this tab properly.
+	// size. Phase 2 (2026-09-03, this block) rebuilds it to the user's own
+	// spec on top of that -- see superdoc/features/fps-display.md.
+	//
+	// Little helpers that turn FpsDisplaySettings' stored strings into the
+	// small int a Choice row binds to, and back -- same shape as
+	// ParsePlacement/ComposePlacement above, kept file-local since nothing
+	// outside this settings block needs them.
 	// -------------------------------------------------------------------
+
+	namespace
+	{
+		int UpdateModeToInt( const std::string &s )
+		{
+			if ( s == "per_second" ) return 1;
+			if ( s == "immediate" )  return 2;
+			return 0; // "smoothing", and the fallback for an unrecognized/legacy value
+		}
+		const char *UpdateModeFromInt( int n )
+		{
+			switch ( n )
+			{
+				case 1: return "per_second";
+				case 2: return "immediate";
+				default: return "smoothing";
+			}
+		}
+		constexpr ui::Option kUpdateModeOptions[] = {
+			{ 0, "Smoothing" },
+			{ 1, "Update every second" },
+			{ 2, "Immediate" },
+		};
+
+		int ColorModeToInt( const std::string &s ) { return s == "inverted" ? 1 : 0; }
+		const char *ColorModeFromInt( int n ) { return n == 1 ? "inverted" : "fixed"; }
+		constexpr ui::Option kColorModeOptions[] = {
+			{ 0, "Fixed" },
+			{ 1, "Inverted" },
+		};
+	}
 
 	void FpsDisplay_RegisterArea( ui::Registry &reg )
 	{
@@ -1090,6 +1348,80 @@ namespace gamescope
 			.Unit( "px" )
 			.Default( config::FpsDisplaySettings{}.font_size )
 			.Keywords( "font size text scale hud" )   // 39 positions, whole px
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Choice( "hud.update_mode", "Update mode",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return UpdateModeToInt( s_Settings.fps_display.update_mode ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.update_mode = UpdateModeFromInt( n ); PersistSettings(); } ),
+			kUpdateModeOptions, std::size( kUpdateModeOptions ) )
+			.Help( "How often the number changes. Smoothing eases between readings so it never "
+			       "jitters; Update every second recomputes once a second so the digits hold "
+			       "still; Immediate shows the very latest frame, jitter and all." )
+			.Default( 0 )
+			.Keywords( "update mode smoothing immediate every second refresh rate ema" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		// "Hide if FPS above X" -- a Switch with a threshold Param, the
+		// same `.Param()` idiom hud.anchor's margin_x/margin_y use above.
+		// The hysteresis band that stops this flickering right at the
+		// threshold is a fixed constant in DrawReadout(), not a setting --
+		// see that function's own comment for the band and why.
+		a.Switch( "hud.hide_above", "Hide above X",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_enabled = b; PersistSettings(); } ) )
+			.Help( "Hides the HUD while your frame rate is comfortably high, and brings it back "
+			       "once it drops." )
+			.Default( config::FpsDisplaySettings{}.hide_above_enabled )
+			.Keywords( "hide above threshold fps high framerate autohide" )
+			.DisabledUnless( MonitorOn, kOffReason )
+			.Param( "fps", "Threshold",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_fps; },
+					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_fps = f; PersistSettings(); } ) )
+				.Range( 30.0f, 300.0f )
+				.Step( 5.0f )
+				.Unit( "fps" )
+				.Default( config::FpsDisplaySettings{}.hide_above_fps )
+				.Help( "The frame rate the HUD disappears above." );
+
+		a.Slider( "hud.backdrop_opacity", "Backdrop opacity",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
+			.Help( "How solid the plain backdrop behind the number is. All the way down turns the "
+			       "backdrop off." )
+			.Range( 0.0f, 1.0f )
+			.Step( 0.05f )
+			.ZeroMeans( "Off" )
+			.Default( config::FpsDisplaySettings{}.backdrop_opacity )
+			.Keywords( "backdrop background opacity box panel" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Choice( "hud.color_mode", "Text colour",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return ColorModeToInt( s_Settings.fps_display.color_mode ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.color_mode = ColorModeFromInt( n ); PersistSettings(); } ),
+			kColorModeOptions, std::size( kColorModeOptions ) )
+			.Help( "Fixed always uses your UI's accent colour, and flips to its opposite for a "
+			       "moment during a lag spike. Inverted switches between light and dark text to "
+			       "stay readable against its backdrop, which is also gentler on an OLED screen." )
+			.Default( 0 )
+			.Keywords( "color colour text fixed inverted accent oled readable" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Slider( "hud.shadow_strength", "Shadow strength",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.shadow_strength; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.shadow_strength = f; PersistSettings(); } ) )
+			.Help( "Adds a small drop shadow behind the number so it stands out against busy "
+			       "backgrounds. All the way down turns it off." )
+			.Range( 0.0f, 1.0f )
+			.Step( 0.05f )
+			.ZeroMeans( "Off" )
+			.Default( config::FpsDisplaySettings{}.shadow_strength )
+			.Keywords( "shadow depth text strength" )
 			.DisabledUnless( MonitorOn, kOffReason );
 	}
 }

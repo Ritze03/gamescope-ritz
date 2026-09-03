@@ -147,11 +147,8 @@ namespace gamescope::config
             {
                 s.fps_display.enabled = JGetBool( *pFps, "enabled", s.fps_display.enabled );
                 s.fps_display.font_size = JGetFloat( *pFps, "font_size", s.fps_display.font_size );
-                s.fps_display.backdrop_enabled = JGetBool( *pFps, "backdrop_enabled", s.fps_display.backdrop_enabled );
                 s.fps_display.backdrop_opacity = JGetFloat( *pFps, "backdrop_opacity", s.fps_display.backdrop_opacity );
-                s.fps_display.backdrop_rounding = JGetFloat( *pFps, "backdrop_rounding", s.fps_display.backdrop_rounding );
                 s.fps_display.backdrop_padding = JGetFloat( *pFps, "backdrop_padding", s.fps_display.backdrop_padding );
-                s.fps_display.blend_mode = JGetString( *pFps, "blend_mode", s.fps_display.blend_mode );
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
                 s.fps_display.fps_enabled = JGetBool( *pFps, "fps_enabled", s.fps_display.fps_enabled );
                 s.fps_display.fps_label_enabled = JGetBool( *pFps, "fps_label_enabled", s.fps_display.fps_label_enabled );
@@ -162,12 +159,26 @@ namespace gamescope::config
                 // (superdoc/meta/TERMINOLOGY.md's "profiler" entry) --
                 // deliberately not read here any more, same precedent as
                 // dock_scale/opacity_background's own removal below.
+                // backdrop_enabled/backdrop_rounding/blend_mode removed
+                // Phase 2 (2026-09-03, see ConfigSchema.h's own comment) --
+                // same "just stop reading an old key" precedent, not a
+                // migration: an old config with backdrop_enabled=false and
+                // a nonzero backdrop_opacity now shows that backdrop, which
+                // is a deliberate behaviour change (documented in
+                // CHANGELOG.md), not an oversight.
                 s.fps_display.color_fps = JGetOptInt( *pFps, "color_fps" );
                 // Placement (scope reduction 2026-09-03): 9-point anchor +
                 // pixel margins, see ConfigSchema.h's own comment.
                 s.fps_display.anchor = JGetString( *pFps, "anchor", s.fps_display.anchor );
                 s.fps_display.margin_x = JGetInt( *pFps, "margin_x", s.fps_display.margin_x );
                 s.fps_display.margin_y = JGetInt( *pFps, "margin_y", s.fps_display.margin_y );
+                // Phase 2 (2026-09-03): update mode, hide-above-X, text
+                // colour mode, shadow strength -- see ConfigSchema.h.
+                s.fps_display.update_mode = JGetString( *pFps, "update_mode", s.fps_display.update_mode );
+                s.fps_display.hide_above_enabled = JGetBool( *pFps, "hide_above_enabled", s.fps_display.hide_above_enabled );
+                s.fps_display.hide_above_fps = JGetFloat( *pFps, "hide_above_fps", s.fps_display.hide_above_fps );
+                s.fps_display.color_mode = JGetString( *pFps, "color_mode", s.fps_display.color_mode );
+                s.fps_display.shadow_strength = JGetFloat( *pFps, "shadow_strength", s.fps_display.shadow_strength );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -323,27 +334,30 @@ namespace gamescope::config
             nlohmann::json jFps = nlohmann::json::object();
             jFps[ "enabled" ] = s.fps_display.enabled;
             jFps[ "font_size" ] = s.fps_display.font_size;
-            jFps[ "backdrop_enabled" ] = s.fps_display.backdrop_enabled;
             jFps[ "backdrop_opacity" ] = s.fps_display.backdrop_opacity;
-            jFps[ "backdrop_rounding" ] = s.fps_display.backdrop_rounding;
             jFps[ "backdrop_padding" ] = s.fps_display.backdrop_padding;
-            jFps[ "blend_mode" ] = s.fps_display.blend_mode;
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
             jFps[ "fps_enabled" ] = s.fps_display.fps_enabled;
             jFps[ "fps_label_enabled" ] = s.fps_display.fps_label_enabled;
             // No graph_enabled/percentiles_enabled/cpu_enabled/gpu_enabled/
             // media_enabled/frametime_enabled/color_cpu/color_gpu/
-            // color_media/layout_name: removed 2026-09-03 with the
-            // perf-stats modules and the named-layout system (see the parse
-            // side above). This serializer emits the struct's fields, so an
-            // old file's leftover keys are dropped the first time anything
-            // writes this file -- same accepted-for-a-removed-feature
-            // precedent as dock_scale below.
+            // color_media/layout_name/backdrop_enabled/backdrop_rounding/
+            // blend_mode: removed 2026-09-03 (Phase 1's perf-stats/layout
+            // removal, then Phase 2's backdrop/colour rework -- see the
+            // parse side above and ConfigSchema.h). This serializer emits
+            // the struct's fields, so an old file's leftover keys are
+            // dropped the first time anything writes this file -- same
+            // accepted-for-a-removed-feature precedent as dock_scale below.
             jFps[ "color_fps" ] = s.fps_display.color_fps.has_value()
                 ? nlohmann::json( *s.fps_display.color_fps ) : nlohmann::json( nullptr );
             jFps[ "anchor" ] = s.fps_display.anchor;
             jFps[ "margin_x" ] = s.fps_display.margin_x;
             jFps[ "margin_y" ] = s.fps_display.margin_y;
+            jFps[ "update_mode" ] = s.fps_display.update_mode;
+            jFps[ "hide_above_enabled" ] = s.fps_display.hide_above_enabled;
+            jFps[ "hide_above_fps" ] = s.fps_display.hide_above_fps;
+            jFps[ "color_mode" ] = s.fps_display.color_mode;
+            jFps[ "shadow_strength" ] = s.fps_display.shadow_strength;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;

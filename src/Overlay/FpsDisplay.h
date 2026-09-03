@@ -5,9 +5,12 @@
 // superdoc/meta/TERMINOLOGY.md's "profiler" entry): this HUD used to be a
 // small performance profiler (CPU/GPU load, a frametime graph, a percentile
 // row, Now Playing) built on top of the FPS readout. All of that is gone.
-// This file now draws exactly one thing: the FPS integer, positioned by a
-// 9-point anchor plus pixel margins. Phase 2 (a separate task) rebuilds the
-// `system.hud` settings area properly on top of what's left here.
+// This file draws exactly one thing: the FPS integer, positioned by a
+// 9-point anchor plus pixel margins. Phase 2 (2026-09-03, same day) rebuilt
+// the `system.hud` settings area on top of what Phase 1 left -- update
+// modes, hide-above-X, a plain backdrop, a two-way text-colour choice and a
+// lag-spike reaction, a drop shadow -- see
+// superdoc/features/fps-display.md for the whole feature as it stands now.
 //
 // Lifetime note (the subtlety that milestone is most likely to get wrong):
 // this readout has its own visibility flag, entirely independent of the
@@ -31,9 +34,10 @@ namespace gamescope
 
 	// Called once per paint_all(), on the steamcompmgr thread. Reads
 	// gamescope-ritz's fps_display config (loaded lazily on first call) and,
-	// when enabled, draws the readout (game frame rate, backdrop, blend-mode
-	// treatment per config) into its own offscreen texture and appends a
-	// Layer_t for it to *pFrameInfo. A no-op when disabled.
+	// when enabled and not currently hidden by "hide above X", draws the
+	// readout (game frame rate, backdrop, text-colour treatment per config)
+	// into its own offscreen texture and appends a Layer_t for it to
+	// *pFrameInfo. A no-op when disabled.
 	void FpsDisplay_AddLayer( FrameInfo_t *pFrameInfo );
 
 	// Called right after vulkan_composite()/vulkan_screenshot() obtain their
@@ -49,9 +53,9 @@ namespace gamescope
 	void FpsDisplay_CommitReads();
 
 	// Declares this feature's settings as the E2 `system.hud` area: the
-	// master switch, the placement anchor and its margins, and font size.
-	// Deliberately minimal (see this file's header comment) -- Phase 2 is
-	// what rebuilds this tab properly.
+	// master switch, placement (anchor + margins), font size, update mode,
+	// hide-above-X, backdrop opacity, text colour and shadow strength -- see
+	// this file's header comment and superdoc/features/fps-display.md.
 	//
 	// This REPLACED FpsDisplay_DrawSettingsPanel(), the six-tab panel issue
 	// #59 built and P5 deleted. It is a declaration, not a draw call: it places no pixel,

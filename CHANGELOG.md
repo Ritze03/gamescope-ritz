@@ -16,6 +16,20 @@ The newest version below is the one this build reports.
   a drag editor right over your game. Move the FPS, CPU, GPU, and Now Playing modules
   wherever you want them; each one snaps to the screen's edges and centre, and to the
   other modules, within a few pixels. Save keeps the new placement, Esc cancels.
+- **HUD update mode**: choose Smoothing (eased, the default), Update every second
+  (digits hold still), or Immediate (the latest frame, no easing).
+- **HUD "Hide above X"**: the HUD can now hide itself while your frame rate stays
+  comfortably above a threshold you set, and reappear once it drops.
+- **HUD backdrop opacity**: the HUD's backdrop is now a single opacity slider, with 0
+  turning it off entirely; it never rounds its corners.
+- **HUD text colour modes**: Fixed keeps your accent colour and briefly inverts it
+  during a lag spike; Inverted picks light or dark text to stay readable against its
+  backdrop, which is also gentler on OLED screens.
+- **HUD text shadow**: a small drop shadow behind the number, with a strength slider
+  that turns it off at 0.
+- **HUD lag-spike reaction**: a noticeably slow frame now briefly inverts the HUD's
+  text colour (or tints its backdrop in Inverted mode) so a stutter is actually
+  visible, not just felt.
 
 ### Fixed
 - **The HUD's module toggles work again**: Frame rate, Frametime readout, Frametime

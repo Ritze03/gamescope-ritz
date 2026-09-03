@@ -270,6 +270,117 @@ TEST_CASE( "a config predating #73 loads fps_label_enabled at its compiled-in de
     REQUIRE( loaded.fps_display.fps_label_enabled == true );
 }
 
+// HUD Phase 2 (2026-09-03): round-trip tests for every field the rebuilt
+// system.hud tab added -- same pattern as #70/#73's tests above.
+
+TEST_CASE( "fps_display.update_mode round-trips", "[config]" )
+{
+    for ( const std::string &sValue : { std::string( "smoothing" ), std::string( "per_second" ), std::string( "immediate" ) } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.update_mode = sValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.update_mode == sValue );
+    }
+}
+
+TEST_CASE( "fps_display.hide_above_enabled and hide_above_fps round-trip", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.hide_above_enabled = bValue;
+        s.fps_display.hide_above_fps = 90.0f;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.hide_above_enabled == bValue );
+        REQUIRE( loaded.fps_display.hide_above_fps == 90.0f );
+    }
+}
+
+TEST_CASE( "fps_display.color_mode round-trips", "[config]" )
+{
+    for ( const std::string &sValue : { std::string( "fixed" ), std::string( "inverted" ) } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.color_mode = sValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.color_mode == sValue );
+    }
+}
+
+TEST_CASE( "fps_display.shadow_strength round-trips", "[config]" )
+{
+    for ( float flValue : { 0.0f, 0.25f, 0.5f, 1.0f } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.shadow_strength = flValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.shadow_strength == flValue );
+    }
+}
+
+TEST_CASE( "fps_display.backdrop_opacity round-trips at every UI-reachable value", "[config]" )
+{
+    for ( float flValue : { 0.0f, 0.05f, 0.5f, 1.0f } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.backdrop_opacity = flValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.fps_display.backdrop_opacity == flValue );
+    }
+}
+
+// Phase 2 removed backdrop_enabled/backdrop_rounding/blend_mode outright
+// (ConfigSchema.h's own comment) rather than deprecating them -- an old
+// config that still has those keys on disk must load cleanly, simply
+// ignoring them, exactly like any other removed field this project has
+// dropped (dock_scale, opacity_background, ...).
+TEST_CASE( "a config predating Phase 2 ignores the removed backdrop/blend_mode keys", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {
+        "enabled": true,
+        "backdrop_enabled": false,
+        "backdrop_rounding": 4.0,
+        "blend_mode": "additive"
+    }})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.enabled == true );
+    // Compiled-in defaults for every Phase 2 field the old file never wrote.
+    REQUIRE( loaded.fps_display.update_mode == "smoothing" );
+    REQUIRE( loaded.fps_display.color_mode == "fixed" );
+    REQUIRE( loaded.fps_display.hide_above_enabled == false );
+    REQUIRE( loaded.fps_display.shadow_strength == 0.0f );
+}
+
 TEST_CASE( "no per-game file is ever created until override is enabled", "[config]" )
 {
     TempConfigHome home;

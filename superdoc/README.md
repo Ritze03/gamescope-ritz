@@ -35,6 +35,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Scaling filters](features/scaling-filters.md) — FSR (EASU/RCAS) and NIS upscaling.
 - [HDR color management](features/hdr-color-management.md) — PQ conversion and color management.
 
+### HUD
+
+- [FPS display](features/fps-display.md) — the single-integer FPS HUD: update modes,
+  hide-above-X, backdrop, text-colour modes (with the Inverted-mode limitation stated
+  plainly), shadow, and the lag-spike heuristic.
+
 ### External surfaces
 
 - [Vulkan WSI layer](features/vk-wsi-layer.md) — `VkLayer_FROG_gamescope_wsi` swapchain redirection.

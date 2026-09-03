@@ -51,28 +51,61 @@ namespace gamescope::config
     {
         bool enabled = false;
         float font_size = 18.0f;
-        bool backdrop_enabled = true;
+
+        // Backdrop (Phase 2, 2026-09-03 -- see CHANGELOG.md and
+        // superdoc/features/fps-display.md): a plain rectangle behind the
+        // number, sized to the text plus backdrop_padding. Collapsed to a
+        // single opacity rather than an "enabled" bool plus an opacity --
+        // 0 IS "off" (the user's own spec: "opacity configurable"), so
+        // there is exactly one control instead of two that can disagree.
+        // backdrop_rounding (a Phase 1 field, 4.0f corners) is REMOVED
+        // outright rather than deprecated-and-kept: the user was explicit
+        // that this backdrop never rounds its corners, so a leftover
+        // nonzero value on an old config would silently contradict that
+        // the moment anything looked at it again -- better gone than
+        // ignored. FpsDisplay.cpp's DrawModuleBackdrop() always draws with
+        // 0.0f rounding now, not a config-read value.
         float backdrop_opacity = 0.5f;
-        float backdrop_rounding = 4.0f;
-        float backdrop_padding = 6.0f;
-        // Issue #29: "inverted" is a third value alongside alpha/additive --
-        // see FpsDisplay.cpp's AddTextInverted()/blend_mode header comment
-        // for what it draws (a black-outline/white-fill pairing rather
-        // than a literal per-pixel GPU-blend invert of the actual game
-        // frame, and why -- this HUD renders into its own isolated
-        // offscreen texture, composited onto the game only afterward on a
-        // different queue, so "the destination" is never real game content
-        // during this file's own draw pass).
-        std::string blend_mode = "alpha"; // alpha | additive | inverted
+        float backdrop_padding = 6.0f; // px -- not user-facing, just hugs the text
         float text_opacity = 1.0f;
+
+        // Phase 2: the three-way update-mode choice (FpsDisplay.cpp's
+        // UpdateAndGetDisplayFps()). "smoothing" is the pre-existing EMA
+        // and stays the default; "per_second" recomputes once a second so
+        // the digits sit still; "immediate" shows the latest frame's own
+        // instantaneous rate with no smoothing at all.
+        std::string update_mode = "smoothing"; // smoothing | per_second | immediate
+
+        // Phase 2: "Hide if FPS above X" -- a Switch (hide_above_enabled)
+        // with a threshold Param (hide_above_fps), the `.Param()` idiom
+        // this file's own hud.anchor row already uses for margin_x/y. The
+        // hysteresis band that stops this flickering at the threshold is
+        // NOT a setting -- it lives as a fixed constant in
+        // FpsDisplay.cpp's DrawReadout(), same "no user setting for a
+        // deliberately lean feature" call as the lag-spike heuristic below.
+        bool hide_above_enabled = false;
+        float hide_above_fps = 120.0f;
+
+        // Phase 2: the two-way text-colour choice. "fixed" keeps today's
+        // look (the UI's own accent colour, color_fps below can override
+        // it) and inverts briefly on a detected lag spike; "inverted"
+        // derives light-or-dark text from what's actually behind it
+        // instead -- see FpsDisplay.cpp's MeasureFpsModule() for exactly
+        // what that can and can't see, and superdoc/features/fps-display.md
+        // for the honest limitation stated plainly.
+        std::string color_mode = "fixed"; // fixed | inverted
+
+        // Phase 2: drop-shadow strength, 0 = no shadow drawn at all.
+        float shadow_strength = 0.0f;
 
         // Issue #70: `enabled` above used to double as both "HUD as a
         // whole" and "FPS module specifically", back when the HUD had
         // other modules (Cpu/Gpu/Media, removed 2026-09-03 -- see
         // superdoc/meta/TERMINOLOGY.md's "profiler" entry). Now that the
-        // FPS number is the HUD's only content, this field is dead --
-        // kept, unwired, for Phase 2 rather than deleted along with the
-        // module framework that gave it meaning.
+        // FPS number is the HUD's only content, this field is still dead --
+        // Phase 2 (2026-09-03) looked at re-exposing it and found nothing
+        // for it to mean with a single module, so it stays kept-but-unwired
+        // rather than deleted, same reasoning as fps_label_enabled below.
         bool fps_enabled = true;
 
         // Issue #73: hides the " FPS" unit label (kUnitText in
