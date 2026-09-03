@@ -98,24 +98,6 @@ namespace gamescope::config
         // Phase 2: drop-shadow strength, 0 = no shadow drawn at all.
         float shadow_strength = 0.0f;
 
-        // Issue #70: `enabled` above used to double as both "HUD as a
-        // whole" and "FPS module specifically", back when the HUD had
-        // other modules (Cpu/Gpu/Media, removed 2026-09-03 -- see
-        // superdoc/meta/TERMINOLOGY.md's "profiler" entry). Now that the
-        // FPS number is the HUD's only content, this field is still dead --
-        // Phase 2 (2026-09-03) looked at re-exposing it and found nothing
-        // for it to mean with a single module, so it stays kept-but-unwired
-        // rather than deleted, same reasoning as fps_label_enabled below.
-        bool fps_enabled = true;
-
-        // Issue #73: hides the " FPS" unit label (kUnitText in
-        // FpsDisplay.cpp) so the module shows just the number. The
-        // settings row that toggled this was removed 2026-09-03 (scope
-        // reduction, see this repo's CHANGELOG.md) -- the field and its
-        // render-time effect stay, so an old config that turned it off
-        // keeps that choice; Phase 2 decides whether to re-expose it.
-        bool fps_label_enabled = true;
-
         // Issue #29: optional colour override for the FPS number's text.
         // std::optional, same nullable-field shape as OverlaySettings::
         // fade_ms -- unset (the common/default case) means "derive from

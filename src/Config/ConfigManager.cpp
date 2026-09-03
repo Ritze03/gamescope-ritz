@@ -150,8 +150,10 @@ namespace gamescope::config
                 s.fps_display.backdrop_opacity = JGetFloat( *pFps, "backdrop_opacity", s.fps_display.backdrop_opacity );
                 s.fps_display.backdrop_padding = JGetFloat( *pFps, "backdrop_padding", s.fps_display.backdrop_padding );
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
-                s.fps_display.fps_enabled = JGetBool( *pFps, "fps_enabled", s.fps_display.fps_enabled );
-                s.fps_display.fps_label_enabled = JGetBool( *pFps, "fps_label_enabled", s.fps_display.fps_label_enabled );
+                // fps_enabled/fps_label_enabled removed 2026-09-03 -- `enabled`
+                // above already covers the module, and the unit-label suffix
+                // is gone entirely (the readout is a bare integer), see
+                // ConfigSchema.h's own comment and this repo's CHANGELOG.md.
                 // graph_enabled/percentiles_enabled/cpu_enabled/gpu_enabled/
                 // media_enabled/frametime_enabled/color_cpu/color_gpu/
                 // color_media/layout_name removed 2026-09-03 with the
@@ -337,9 +339,8 @@ namespace gamescope::config
             jFps[ "backdrop_opacity" ] = s.fps_display.backdrop_opacity;
             jFps[ "backdrop_padding" ] = s.fps_display.backdrop_padding;
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
-            jFps[ "fps_enabled" ] = s.fps_display.fps_enabled;
-            jFps[ "fps_label_enabled" ] = s.fps_display.fps_label_enabled;
-            // No graph_enabled/percentiles_enabled/cpu_enabled/gpu_enabled/
+            // No fps_enabled/fps_label_enabled/graph_enabled/percentiles_enabled/
+            // cpu_enabled/gpu_enabled/
             // media_enabled/frametime_enabled/color_cpu/color_gpu/
             // color_media/layout_name/backdrop_enabled/backdrop_rounding/
             // blend_mode: removed 2026-09-03 (Phase 1's perf-stats/layout

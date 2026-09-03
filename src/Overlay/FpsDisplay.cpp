@@ -634,17 +634,6 @@ namespace gamescope
 		pDrawList->AddText( pFont, flFontSize, pos, IM_COL32( 255, 255, 255, 255 ), pszText );
 	}
 
-	// Same, for the implicit-current-font AddText overload (the " FPS" unit
-	// label, which draws at the Meta style's own baked size).
-	static void AddTextInverted( ImDrawList *pDrawList, ImVec2 pos, const char *pszText )
-	{
-		static constexpr ImVec2 kOffsets[4] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
-		const ImU32 outlineColor = IM_COL32( 0, 0, 0, 235 );
-		for ( const ImVec2 &off : kOffsets )
-			pDrawList->AddText( ImVec2( pos.x + off.x, pos.y + off.y ), outlineColor, pszText );
-		pDrawList->AddText( pos, IM_COL32( 255, 255, 255, 255 ), pszText );
-	}
-
 	// Shared box backdrop (issue #28: factored out so a future module would
 	// draw an identical backdrop rather than a second copy of the same four
 	// lines -- kept even with only one module left, since the FPS module
@@ -765,13 +754,10 @@ namespace gamescope
 		ImU32 textColor = 0;
 		char szNum[8] = "";
 		ImVec2 numSize{};
-		ImVec2 unitSize{};
 		ImVec2 textSize{};
 		float flContentWidth = 0.0f;
 		float flContentHeight = 0.0f;
 	};
-
-	static constexpr const char *kUnitText = " FPS";
 
 	// Phase 2's spike-reaction colours. A muted warning red rather than a
 	// saturated alarm red -- this is a HUD digit, not a klaxon, and it only
@@ -865,17 +851,7 @@ namespace gamescope
 		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested
 		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
 
-		// Issue #73: the unit label is independently hideable
-		// (fps_label_enabled) so the module can show just the number --
-		// zero-sized when off. This field's own settings row was removed
-		// (see this file's header comment), but the field and this
-		// behaviour stay: an old config that turned it off keeps that
-		// choice.
-		ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-		L.unitSize = cfg.fps_label_enabled ? ImGui::CalcTextSize( kUnitText ) : ImVec2( 0.0f, 0.0f );
-		ImGui::PopFont();
-
-		L.textSize = ImVec2( L.numSize.x + L.unitSize.x, std::max( L.numSize.y, L.unitSize.y ) );
+		L.textSize = L.numSize;
 		L.flContentWidth = L.textSize.x;
 		L.flContentHeight = L.textSize.y;
 
@@ -914,25 +890,10 @@ namespace gamescope
 			pDrawList->AddText( pFont, flFontSize, shadowPos, shadowColor, L.szNum );
 		}
 
-		ImVec2 cursor = textPos;
 		if ( L.eTextMode == FpsModuleLayout::TextMode::Outline )
-			AddTextInvertedSized( pDrawList, pFont, flFontSize, cursor, L.szNum );
+			AddTextInvertedSized( pDrawList, pFont, flFontSize, textPos, L.szNum );
 		else
-			pDrawList->AddText( pFont, flFontSize, cursor, L.textColor, L.szNum );
-		cursor.x += L.numSize.x;
-
-		if ( cfg.fps_label_enabled ) // issue #73
-		{
-			ImGui::PushFont( gamescope::fonts::Get( gamescope::fonts::Style::Meta ) );
-			const ImVec2 unitPos( cursor.x, cursor.y + ( L.numSize.y - L.unitSize.y ) );
-			if ( bDrawShadow )
-				pDrawList->AddText( ImVec2( unitPos.x + kShadowOffset, unitPos.y + kShadowOffset ), shadowColor, kUnitText );
-			if ( L.eTextMode == FpsModuleLayout::TextMode::Outline )
-				AddTextInverted( pDrawList, unitPos, kUnitText );
-			else
-				pDrawList->AddText( unitPos, ImGui::GetColorU32( gamescope::palette::White( 0.50f ) ), kUnitText );
-			ImGui::PopFont();
-		}
+			pDrawList->AddText( pFont, flFontSize, textPos, L.textColor, L.szNum );
 	}
 
 	// Phase 2 (2026-09-03): "Hide if FPS above X" -- persists across calls

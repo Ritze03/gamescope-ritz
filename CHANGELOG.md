@@ -72,6 +72,8 @@ The newest version below is the one this build reports.
   set with a 9-point anchor picker plus horizontal and vertical margin sliders.
 - **Named HUD layouts**: the HUD no longer supports separate saved layouts (such as
   "Simple" or "Advanced"). Placement is a single anchor and pair of margins instead.
+- **HUD "FPS" unit label**: the readout is now a bare number, with no trailing "FPS"
+  text next to it.
 
 ## [0.3.5] – 2026-08-27
 
