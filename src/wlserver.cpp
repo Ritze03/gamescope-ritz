@@ -3182,6 +3182,7 @@ void wlserver_run(void)
 	wl_list_remove( &wlserver.new_xdg_surface.link );
 	wl_list_remove( &wlserver.new_xdg_toplevel.link );
 	wl_list_remove( &wlserver.new_layer_shell_surface.link );
+	wl_list_remove( &wlserver.request_set_selection.link );
 
 #if HAVE_SESSION
 	if ( wlserver.wlr.session )

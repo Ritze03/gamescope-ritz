@@ -121,6 +121,18 @@ different reason: SDL raises `SDL_CLIPBOARDUPDATE` for gamescope's own
 already offering that exact text, so the compositor never steals a client's
 selection just to say the same thing back.
 
+`wlserver_handle_request_set_selection()`'s listener on
+`seat->events.request_set_selection` must be removed with `wl_list_remove()`
+before `wl_display_destroy()` runs, in the same teardown block that already
+removes `wlserver`'s other seat/backend listeners (`new_surface_listener`,
+`new_input_listener`, etc. — see the bottom of the wlserver run loop in
+`wlserver.cpp`). `wlr_seat_destroy()` (invoked from a `wl_display` destroy
+listener wlroots installs internally) asserts every one of the seat's signal
+lists is empty, so a listener left registered past that point aborts the
+process on exit rather than merely leaking. This was missed when the listener
+was first wired up and reached users as a shutdown crash on every clean exit;
+fixed by adding it to the existing removal block.
+
 Text is normalised before any of this: `NormalizeClipboardText()` strips
 trailing NULs (X11 selection owners routinely NUL-terminate, Wayland ones never
 do) so a round trip compares equal — without which the guard would not work at
