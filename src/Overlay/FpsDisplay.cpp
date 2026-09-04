@@ -917,19 +917,53 @@ namespace gamescope
 		// pixel grid as the fill, by construction, for any textPos,
 		// font size or radius, rather than by the luck of where textPos's
 		// fractional part happened to land.
+		// Bug (2026-09-04, part 2): rounding each stamp's offset to a whole
+		// pixel (above) is exactly what makes outline 1 and outline 4 land
+		// flush -- but below radius 0.5 every one of the 8 stamps on the
+		// only ring rounds to (0, 0), lands on textPos itself, and is
+		// painted over by the fill. So anything under outline_strength 0.5
+		// drew nothing, where a sub-pixel outline used to draw a faint
+		// one -- the slider's 0.25 step makes that a reachable, live
+		// setting.
+		//
+		// The geometry that fixed the lean must not regress, so keep it:
+		// a sub-pixel radius is not a smaller solid ring (there is no such
+		// thing on a whole-pixel grid), it is a physically faint 1px ring.
+		// Below radius 1, stamp the SAME whole-pixel radius-1 ring the
+		// solid path would use at outline_strength 1, and carry the
+		// fractional radius as the ring's alpha instead of its size. At
+		// radius 1.0 that alpha is exactly 255 -- bit-for-bit the solid
+		// path's own colour -- so the transition across 1.0px has no
+		// visible jump, and outline_strength 1 and 4 take the untouched
+		// `else` geometry and are byte-for-byte unchanged.
+		//
+		// This can't be misread as glyph fill under Inverted mode's
+		// luma selector (alphamode.h's alpha_mode_invert): the outline is
+		// always drawn in pure black onto this layer, and blending black
+		// at ANY alpha only ever pulls the destination's RGB (and so its
+		// luma) toward zero, never up -- so a faint outline cannot cross
+		// smoothstep(0.25, 0.80, layerLuma) into invert-select territory
+		// regardless of how low its alpha goes. No Inverted-mode special
+		// case needed.
 		if ( L.bDrawOutline )
 		{
-			const int nRings = (int)std::ceil( L.flOutlineRadius );
+			const bool bSubPixel = L.flOutlineRadius < 1.0f;
+			const float flGeomRadius = bSubPixel ? 1.0f : L.flOutlineRadius;
+			const ImU32 outlineColor = bSubPixel
+				? IM_COL32( 0, 0, 0, (int)std::round( std::clamp( L.flOutlineRadius, 0.0f, 1.0f ) * 255.0f ) )
+				: L.outlineColor;
+
+			const int nRings = (int)std::ceil( flGeomRadius );
 			for ( int nRing = 1; nRing <= nRings; nRing++ )
 			{
-				const float flRadius = L.flOutlineRadius * (float)nRing / (float)nRings;
+				const float flRadius = flGeomRadius * (float)nRing / (float)nRings;
 				const int nStamps = std::clamp( (int)std::ceil( 2.0f * 3.14159265f * flRadius / 0.75f ), 8, 48 );
 				for ( int i = 0; i < nStamps; i++ )
 				{
 					const float flAngle = 2.0f * 3.14159265f * (float)i / (float)nStamps;
 					const ImVec2 pos( textPos.x + std::round( std::cos( flAngle ) * flRadius ),
 					                  textPos.y + std::round( std::sin( flAngle ) * flRadius ) );
-					pDrawList->AddText( pFont, flFontSize, pos, L.outlineColor, L.szNum );
+					pDrawList->AddText( pFont, flFontSize, pos, outlineColor, L.szNum );
 				}
 			}
 		}

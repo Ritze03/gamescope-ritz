@@ -25,6 +25,8 @@ The newest version below is the one this build reports.
   (max boost) with 1x as unchanged, instead of an additive boost. An existing
   config's untouched value converts automatically, so it still opens looking the
   same rather than desaturated.
+- **Sub-pixel FPS outline**: outline sizes below 1px draw a faint outline again
+  instead of nothing.
 - **HUD outline alignment**: the FPS display's black outline no longer reads
   slightly up and to the left of the digits at larger font and outline sizes.
 

@@ -286,6 +286,28 @@ three glyphs.
 > whole pixel first makes its own floor an exact no-op relative to the
 > fill's, for any text position, font size or radius.
 
+> **Sub-pixel radius (below 1px) is alpha, not smaller geometry
+> (2026-09-04 fix, part 2):** the whole-pixel rounding above fixes the
+> lean, but it also means every stamp on a below-1px ring rounds to
+> `(0, 0)` — right on top of the fill — so radii below 0.5 drew no
+> outline at all, a regression from the pre-rounding version's faint
+> sub-pixel outline. There is no such thing as a smaller-than-1px stroke
+> on a whole-pixel grid, so a sub-pixel radius is rendered as what it
+> physically is: a faint 1px outline. Below radius 1, the code stamps the
+> same whole-pixel radius-1 ring the solid path uses at
+> `outline_strength` 1, and scales that ring's **alpha** by the radius
+> instead of shrinking its geometry — alpha 64 at 0.25, 128 at 0.5, 191
+> at 0.75. At radius 1.0 the alpha is exactly 255, bit-for-bit the solid
+> path's own colour, so the transition across 1px is continuous; radii at
+> or above 1 take the untouched solid-black geometry unchanged. Safe
+> under Inverted mode's luma selector (`alphamode.h`'s
+> `alpha_mode_invert`) for the same reason plain black already was:
+> blending pure black at any alpha can only pull the layer's own RGB (and
+> so its luma) toward zero, never up, so a faint outline cannot cross
+> `smoothstep(0.25, 0.80, layerLuma)` into invert-select territory no
+> matter how low its alpha goes — no separate handling needed for that
+> mode.
+
 ## Lag-spike detection
 
 Switchable (`lag_detection_enabled`, row "Lag spike detection", default
