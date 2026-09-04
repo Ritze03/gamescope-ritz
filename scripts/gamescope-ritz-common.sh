@@ -12,7 +12,17 @@ set -euo pipefail
 GCR_BIN_NAME="gamescope-ritz"
 GCR_FORBIDDEN_TARGET="/usr/bin/gamescope"
 GCR_DEFAULT_PREFIX_DIR="/usr/bin"
-GCR_DEFAULT_BUILD_DIR_NAME="build-release"
+# GCR_BUILD_DIR overrides the default build-dir *name* every script in this
+# repo builds into. Exists so a build can land somewhere other than
+# build-release/ — the directory /usr/bin/gamescope-ritz (the user's own
+# launch path) symlinks into. Building build-release relinks that symlink's
+# target underneath the user; building any other-named dir never touches it,
+# so a caller working on a separate build/test machine (or just alongside a
+# running instance) can build freely without gcr_refuse_if_running's guard
+# ever needing to fire for the user's own binary. The guard itself stays
+# fully in force, just scoped to whichever directory is actually being built
+# (see gcr_refuse_if_running) — this only changes *which* directory that is.
+GCR_DEFAULT_BUILD_DIR_NAME="${GCR_BUILD_DIR:-build-release}"
 
 gcr_err() { printf 'error: %s\n' "$*" >&2; }
 gcr_info() { printf '==> %s\n' "$*"; }

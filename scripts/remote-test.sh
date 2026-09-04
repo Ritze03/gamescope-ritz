@@ -72,7 +72,11 @@ REMOTE_HOST="${GCR_REMOTE_HOST:-mo@192.0.2.167}"
 REMOTE_DIR="${GCR_REMOTE_DIR:-~/gamescope-ritz-remote}"
 SSH=(ssh -o BatchMode=yes "$REMOTE_HOST")
 REPO_ROOT=$(gcr_repo_root)
-LOCAL_BIN="$REPO_ROOT/build-release/src/gamescope"
+# GCR_DEFAULT_BUILD_DIR_NAME already honours a GCR_BUILD_DIR override (see
+# gamescope-ritz-common.sh) — read it through there rather than hardcoding
+# build-release, so `GCR_BUILD_DIR=build-laptop scripts/remote-test.sh sync`
+# builds and ships that directory's binary, never the user's own launch path.
+LOCAL_BIN=$(gcr_release_binary "$REPO_ROOT/$GCR_DEFAULT_BUILD_DIR_NAME")
 
 print_help() { sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
