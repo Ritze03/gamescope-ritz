@@ -294,6 +294,27 @@ TEST_CASE( "fps_display.lag_detection_enabled round-trips", "[config]" )
     }
 }
 
+// cursor_override_game (request #6, 2026-09-04): a separate opt-in from
+// cursor_everywhere that substitutes the overlay's own pointer on the live
+// compositing path (MouseCursor::getTexture(), steamcompmgr.cpp) instead of
+// just the root-window fallback. Off by default -- see
+// superdoc/features/cursor-pipeline.md.
+TEST_CASE( "overlay.cursor_override_game round-trips", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.overlay.cursor_override_game = bValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.overlay.cursor_override_game == bValue );
+    }
+}
+
 // The drop shadow the outline replaced (2026-09-03): an old config still
 // carrying shadow_strength must load cleanly and simply take
 // outline_strength's default, not error and not inherit the old value.

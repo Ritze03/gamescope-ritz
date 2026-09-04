@@ -12,6 +12,10 @@ The newest version below is the one this build reports.
 ## [0.5.0] – 2026-09-04
 
 ### Added
+- **Override game cursor**: a new opt-in Cursor setting that also replaces a
+  cursor the game itself draws, not just one it never set. It still leaves a
+  game's own crosshair alone while the pointer is locked, since there is no
+  cursor layer to replace then.
 - **Clipboard sync**: copy and paste now cross between games, gamescope's own
   windows and — when running nested — the rest of your desktop, updating the
   moment the clipboard changes rather than waiting for a window switch.

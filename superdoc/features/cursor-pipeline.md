@@ -248,6 +248,13 @@ surgery than reinstating deleted code. This toggle does the honest, narrower thi
 or closed) rather than every possible cursor source. The tradeoff is stated here on
 purpose, not left for someone to discover by testing an RTS.
 
+**2026-09-04: that larger surgery was done too, as its own opt-in.** A game
+setting its own cursor beat this fallback in exactly the way predicted here,
+reported against Rust's menus. `cursor_override_game` -- a separate toggle, not a
+widening of this one -- does substitute unconditionally on the live compositing
+path; see "Override game cursor: reaching the live compositing path" further down
+for what changed and why it stayed a second opt-in rather than folding in here.
+
 **Threading.** Exactly the hazard `0d99251` already fixed once, reintroduced by
 the same shape of mistake if the toggle's setter called into `MouseCursor`
 directly: `PanelCursor.cpp`'s row setters are reachable from `overlay_e2_set`,
@@ -285,6 +292,76 @@ instead, and was used to confirm all four cases: off/closed is the plain 24x24
 at hotspot (2,2) whose only two colours are the live accent (`0x36BDDD`) and black,
 matching `CursorArt.cpp`'s geometry exactly; toggling live between the two states
 takes effect within one frame in both directions.
+
+## Override game cursor: reaching the live compositing path -- added 2026-09-04
+
+Request #6, `superdoc/planning/requests-2026-09-04.md`: reported as "the custom cursor
+doesn't work in Rust -- the game still somehow overrides it." Scouting found two
+distinct cases folded into one report -- see that tracker entry for the full
+scouting record -- and this section covers the one that turned out to be fixable:
+Unity-under-Proton setting a real X11 cursor on its own menu window, which always
+wins over `cursor_everywhere`'s root-only fallback per ordinary X11 cursor
+inheritance (the "Scope" note two sections up already named this limit; this is
+where it stopped being accepted).
+
+**What changed.** `config::OverlaySettings::cursor_override_game` (`ConfigSchema.h`),
+surfaced as the Cursor tab's "Override game cursor" switch (`PanelCursor.cpp`, area
+`setup.cursor`, group "Reach", entry id `cursor.override_game`) -- a SEPARATE opt-in
+from `cursor_everywhere`, off by default. When on, `MouseCursor::getTexture()`
+(`steamcompmgr.cpp`) substitutes `CursorArt_Rasterise()`'s bitmap for whatever
+`XFixesGetCursorImage()` reports, on every repaint -- the live compositing path this
+doc's own "Scope" note above said doing this would mean touching, and until now
+never did.
+
+**Why a second toggle, not widening the first.** `cursor_everywhere` only ever
+replaces an *absent* cursor (the root window's fallback); a game that sets its own
+cursor for a reason -- an RTS's unit-select arrow, a strategy game's build cursor --
+keeps it regardless, and that was deliberate: "everywhere" always meant every
+*place*, never every possible cursor source. `cursor_override_game` breaks that
+promise on purpose, so it cannot ride along on the existing switch -- anyone who
+already has "Use everywhere" on for the fallback-only behaviour must not wake up
+with their RTS's unit cursor silently replaced too. The setting's own `.Help()`
+states this plainly rather than leaving it to be discovered by testing an RTS.
+
+**Where it's placed, and why there -- this is the constraint that matters most.**
+`getTexture()` proves whether the client's cursor is empty (`bNoCursor`, from the
+alpha scan already there) *before* the override ever runs, and the existing
+`if (m_imageEmpty) { ...; return false; }` early-return -- unchanged -- still fires
+first. The override block sits strictly *after* that return, so it only ever
+substitutes a cursor the game **set**; it can never resurrect one the game
+**hid**. A game that deliberately hides its cursor -- every first-person title
+during actual gameplay -- still gets no cursor: overriding that would paint the
+triangle in the middle of a crosshair the game drew into its own frame, exactly the
+outcome this had to avoid. Both consumers of the substituted image inside
+`getTexture()` were kept consistent with each other: the Vulkan-plane texture (the
+new code) and the pre-existing `GetNestedHints()->SetCursorImage()` call a few
+lines later, which used to read the real image's `nDesiredWidth/Height` and
+`image->xhot/yhot` directly -- switched to `nContentWidth/Height` and
+`m_hotspotX/Y` instead, values that already equal the old ones in the unoverridden
+case (both branches above keep them in sync) and correctly reflect the override
+when it's on, so the nested-host-cursor path can't end up disagreeing with the
+composited one about what the cursor currently is.
+
+**Hotspot.** `CursorArt_Rasterise()` already reports the *visible* tip as its
+hotspot (see "The hotspot was the path vertex" section below), the same one
+`SetDefaultCursorImage()`'s "Use everywhere" path already trusts -- reused
+directly (`m_hotspotX`/`m_hotspotY` set from its `pnHotX`/`pnHotY` out-params), so
+clicks land where the drawn tip is, not on the rasteriser's padded-bitmap origin.
+
+**What it cannot do.** Locked-pointer gameplay is out of reach for this or any
+compositor: `wlserver_apply_constraint()` returns false for `LOCKED`, the absolute
+pointer freezes, and every cursor source -- this one included -- correctly stands
+down; there is no cursor layer at all to substitute into. The setting's own
+`.Help()` says this in plain language rather than letting a player read "Override
+game cursor" as "fixes the cursor in every game."
+
+**Verification.** Built and unit-tested (`overlay.cursor_override_game` round-trips
+through `SaveGlobal`/`LoadGlobal`, `tests/test_config.cpp`); Rust itself cannot run
+on the test laptop (anti-cheat, weak CPU), so the fix for the reported game is
+unverified against the actual report -- only against synthetic reproductions of the
+same X11 mechanism (a client that calls `XDefineCursor` on its own window, and one
+that hides its cursor via an empty-alpha image), which is a narrower claim than
+"fixes Rust" and is reported as exactly that narrower claim.
 
 ## "Use everywhere" didn't reach the *overlay-open* host cursor -- fixed 2026-08-29
 

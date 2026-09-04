@@ -43,6 +43,19 @@ namespace gamescope
 		// the steamcompmgr thread -- see that function's own comment for
 		// why touching MouseCursor from anywhere else is a data race.
 		bool bEverywhere = false;
+
+		// "Override game cursor" -- a SEPARATE opt-in from bEverywhere
+		// above, off by default. bEverywhere only ever wins on the root
+		// window (upstream's ordinary X11 cursor inheritance still lets a
+		// window that calls XDefineCursor on itself beat it). This one
+		// reaches further: MouseCursor::getTexture() (steamcompmgr.cpp),
+		// the LIVE compositing path, substitutes this pointer for
+		// whatever XFixesGetCursorImage() reports on every repaint, but
+		// only once it has already proven the game didn't hide its
+		// cursor -- a locked-pointer game drawing its own crosshair is
+		// untouched, and is untouchable by any compositor. See
+		// superdoc/features/cursor-pipeline.md.
+		bool bOverrideGame = false;
 	};
 
 	// Backed by the same load-once, cache-in-a-static-and-refresh-on-write

@@ -94,6 +94,7 @@ namespace gamescope
 			: gamescope::overlay::CursorArt_AccentRgb();
 		a.uInlayRgb = (uint32_t)o.cursor_inlay_color;
 		a.bEverywhere = o.cursor_everywhere;
+		a.bOverrideGame = o.cursor_override_game;
 		return a;
 	}
 
@@ -202,5 +203,22 @@ namespace gamescope
 			       "that -- this only replaces what's shown in its absence." )
 			.Default( config::OverlaySettings{}.cursor_everywhere )
 			.Keywords( "everywhere game system default fallback override always" );
+
+		a.Switch( "cursor.override_game", "Override game cursor",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.overlay.cursor_override_game; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.overlay.cursor_override_game = b; QueueSave(); } ) )
+			.Help( "Off (default): a cursor the game draws through the system -- a menu pointer, an "
+			       "RTS unit-select arrow, anything a window sets for itself -- is always shown "
+			       "untouched, same as \"Use everywhere\" above. On: this pointer replaces THAT too, "
+			       "so it looks the same everywhere the game lets the system draw a cursor at all. "
+			       "It also hides any cursor the game uses to communicate something (a unit-select "
+			       "arrow, a resize handle), so turn it on only if you'd rather have one consistent "
+			       "pointer than the game's own. It changes nothing while a game has the pointer "
+			       "locked and is drawing its own crosshair straight into the frame -- there is no "
+			       "cursor layer at all then, in any first-person game during actual gameplay, and "
+			       "nothing a compositor can do reaches that." )
+			.Default( config::OverlaySettings{}.cursor_override_game )
+			.Keywords( "override game system live compositing replace crosshair lock" );
 	}
 }

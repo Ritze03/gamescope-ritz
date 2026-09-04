@@ -1931,6 +1931,46 @@ bool MouseCursor::getTexture()
 		return false;
 	}
 
+	// cursor_override_game (opt-in, off by default -- Overlay/PanelCursor.cpp's
+	// "Override game cursor" row): the game DID set a real cursor here --
+	// m_imageEmpty is false, we already returned above otherwise -- so
+	// substitute our own rasterised pointer for it instead of trusting
+	// XFixesGetCursorImage(), on every repaint. Deliberately placed AFTER the
+	// m_imageEmpty early-return above, never before it: a game that hid its
+	// cursor (every first-person game during locked-pointer gameplay) must
+	// still get no cursor -- overriding that would paint our triangle in the
+	// middle of a crosshair the game drew into its own frame. See
+	// superdoc/features/cursor-pipeline.md.
+	if ( gamescope::GetCursorAppearance().bOverrideGame )
+	{
+		std::vector<uint32_t> vecOverrideBits;
+		int nOverrideWidth = 0, nOverrideHeight = 0, nOverrideHotX = 0, nOverrideHotY = 0;
+		if ( gamescope::overlay::CursorArt_Rasterise( vecOverrideBits, &nOverrideWidth, &nOverrideHeight, &nOverrideHotX, &nOverrideHotY ) )
+		{
+			glm::uvec2 overrideSurfaceSize = GetBackend()->CursorSurfaceSize( glm::uvec2{ (uint32_t)nOverrideWidth, (uint32_t)nOverrideHeight } );
+			surfaceWidth = overrideSurfaceSize.x;
+			surfaceHeight = overrideSurfaceSize.y;
+
+			cursorBuffer.assign( (size_t)surfaceWidth * surfaceHeight, 0u );
+			for ( int i = 0; i < nOverrideHeight && i < (int)surfaceHeight; i++ )
+				for ( int j = 0; j < nOverrideWidth && j < (int)surfaceWidth; j++ )
+					cursorBuffer[ (size_t)i * surfaceWidth + j ] = vecOverrideBits[ (size_t)i * nOverrideWidth + j ];
+
+			nContentWidth = nOverrideWidth;
+			nContentHeight = nOverrideHeight;
+			// Honour the hotspot handling: the visible tip, not the game's
+			// own hotspot, is what clicks should land on now that the
+			// image itself is ours.
+			m_hotspotX = nOverrideHotX;
+			m_hotspotY = nOverrideHotY;
+		}
+		// If the rasteriser fails (degenerate geometry -- practically
+		// unreachable at any UI-reachable scale/outline-width), fall
+		// through and composite the game's own image instead: still a
+		// real, visible cursor, unlike SetDefaultCursorImage()'s root
+		// fallback, which must never go blank.
+	}
+
 	CVulkanTexture::createFlags texCreateFlags;
 	texCreateFlags.bFlippable = true;
 	if ( GetBackend()->SupportsPlaneHardwareCursor() )
@@ -1947,10 +1987,17 @@ bool MouseCursor::getTexture()
 			gamescope::INestedHints::CursorInfo
 			{
 				.pPixels   = std::move( cursorBuffer ),
-				.uWidth    = (uint32_t) nDesiredWidth,
-				.uHeight   = (uint32_t) nDesiredHeight,
-				.uXHotspot = image->xhot,
-				.uYHotspot = image->yhot,
+				// nContentWidth/Height and m_hotspotX/Y already equal
+				// nDesiredWidth/Height and image->xhot/yhot in the
+				// unoverridden case (both branches above keep them in
+				// sync), and reflect the cursor_override_game substitution
+				// when that's on -- so this stays correct either way
+				// instead of quietly handing the host a mismatched size
+				// for whichever image cursorBuffer actually now holds.
+				.uWidth    = (uint32_t) nContentWidth,
+				.uHeight   = (uint32_t) nContentHeight,
+				.uXHotspot = (uint32_t) m_hotspotX,
+				.uYHotspot = (uint32_t) m_hotspotY,
 			});
 		GetBackend()->GetCurrentConnector()->GetNestedHints()->SetCursorImage( std::move( info ) );
 	}

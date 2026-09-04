@@ -437,6 +437,24 @@ namespace gamescope::config
         // embedded mode, grabbed or not. Nobody's setup changes until they
         // opt in. See superdoc/features/cursor-pipeline.md.
         bool cursor_everywhere = false;
+
+        // Off (default): unchanged behaviour -- MouseCursor::getTexture()
+        // (steamcompmgr.cpp), the LIVE compositing path, keeps reading
+        // XFixesGetCursorImage() every repaint and composites whatever the
+        // current X11 cursor actually is, exactly as upstream. On:
+        // substitutes this pointer for that live image on every repaint
+        // instead, but only once getTexture() has already proven the
+        // client didn't hide its cursor -- a game that hid its cursor
+        // (any first-person game during locked-pointer gameplay) still
+        // gets no cursor; this can never resurrect one. A SEPARATE opt-in
+        // from cursor_everywhere above, never folded into it: unlike that
+        // root-only fallback, this also hides a cursor the game itself
+        // meaningfully sets (an RTS's unit-select arrow), so nobody's
+        // setup changes until they opt in to this specifically. Does
+        // nothing while the pointer is locked -- there is no cursor layer
+        // at all then, for any compositor. See
+        // superdoc/features/cursor-pipeline.md.
+        bool cursor_override_game = false;
     };
 
     // Toast notification system (this fork's own addition, see
