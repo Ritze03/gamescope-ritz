@@ -13,15 +13,14 @@ GCR_BIN_NAME="gamescope-ritz"
 GCR_FORBIDDEN_TARGET="/usr/bin/gamescope"
 GCR_DEFAULT_PREFIX_DIR="/usr/bin"
 # GCR_BUILD_DIR overrides the default build-dir *name* every script in this
-# repo builds into. Exists so a build can land somewhere other than
-# build-release/ — the directory /usr/bin/gamescope-ritz (the user's own
-# launch path) symlinks into. Building build-release relinks that symlink's
-# target underneath the user; building any other-named dir never touches it,
-# so a caller working on a separate build/test machine (or just alongside a
-# running instance) can build freely without gcr_refuse_if_running's guard
-# ever needing to fire for the user's own binary. The guard itself stays
-# fully in force, just scoped to whichever directory is actually being built
-# (see gcr_refuse_if_running) — this only changes *which* directory that is.
+# repo builds into. Defaults to build-release/ — the directory
+# /usr/bin/gamescope-ritz (the user's own launch path) symlinks into, so a
+# plain build lands where the user actually installs and runs from. `ld`
+# unlinks and recreates its output file rather than writing through the old
+# inode, so a process already running that binary is unaffected by a build
+# that relinks the symlink underneath it; a caller who wants to build
+# somewhere else entirely (a separate build/test machine, or just to avoid
+# touching the installed binary at all) can still set GCR_BUILD_DIR.
 GCR_DEFAULT_BUILD_DIR_NAME="${GCR_BUILD_DIR:-build-release}"
 
 gcr_err() { printf 'error: %s\n' "$*" >&2; }
@@ -146,29 +145,22 @@ gcr_pids_running_binary() {
 	done
 }
 
-# Build-time guard (added after a build relinked /usr/bin/gamescope-ritz's
-# target nine seconds after the user had already launched a game through
-# it): refuse to rebuild a binary a gamescope-ritz process is currently
-# running as. ninja replaces the output file in place, and a process that is
-# mid-exec (or about to be re-exec'd, e.g. gamescope re-execing itself) of a
-# binary being overwritten underneath it is exactly the risk this closes off.
-# Escape hatch: GCR_BUILD_ANYWAY=1, for when the caller has already verified
-# it's safe (e.g. that running instance is about to be replaced on purpose).
-gcr_refuse_if_running() {
+# Informational notice only (originally a hard refusal, added after a build
+# relinked /usr/bin/gamescope-ritz's target nine seconds after the user had
+# already launched a game through it — but that turned out to be an
+# over-correction: `ld` unlinks and recreates its output file rather than
+# writing through the old inode, so a process already running that binary
+# keeps its original inode and is unaffected by the build; it just keeps
+# running the old code until it's restarted). Still worth telling the caller
+# about, so this stays a heads-up rather than being deleted outright.
+gcr_note_if_running() {
 	local build_dir="$1"
 	local target pids
-
-	if [ "${GCR_BUILD_ANYWAY:-0}" = "1" ]; then
-		return 0
-	fi
 
 	target=$(gcr_release_binary "$build_dir")
 	pids=$(gcr_pids_running_binary "$target")
 	if [ -n "$pids" ]; then
-		gcr_err "refusing to build: '$target' is currently running (pid(s): $(printf '%s' "$pids" | tr '\n' ' '))."
-		gcr_err "Rebuilding now would replace that binary out from under the running process."
-		gcr_err "Stop the running instance first, or set GCR_BUILD_ANYWAY=1 to override if you've already confirmed it's safe."
-		exit 1
+		gcr_info "note: '$target' is currently running (pid(s): $(printf '%s' "$pids" | tr '\n' ' ')) — it keeps the old binary until restarted."
 	fi
 }
 
@@ -236,7 +228,7 @@ gcr_build() {
 	local repo_root="$1" build_dir="$2" buildtype="$3"; shift 3
 	local extra_opts=("$@")
 	gcr_refuse_root_build
-	gcr_refuse_if_running "$build_dir"
+	gcr_note_if_running "$build_dir"
 	gcr_ensure_submodules "$repo_root"
 
 	local opts=(--buildtype="$buildtype")
