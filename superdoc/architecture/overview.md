@@ -236,6 +236,10 @@ covered in depth on their own pages rather than repeated here:
 - **"A game's swapchain isn't taking the fast path"** —
   [vk-wsi-layer](../features/vk-wsi-layer.md)'s `canBypassXWayland()` eligibility
   gate.
+- **"Copy/paste isn't crossing in or out of gamescope"** —
+  [clipboard-sync](../features/clipboard-sync.md): four separate clipboard holders
+  funnelled through `gamescope_broadcast_clipboard()` (`src/steamcompmgr.cpp`), fed by
+  the data-control protocols in `src/Backends/WaylandBackend.cpp`.
 - **"Where does a new build/feature flag get wired up?"** —
   [build-and-tooling](../features/build-and-tooling.md)'s Meson options table.
 - New to the codebase entirely: read this page top to bottom, then

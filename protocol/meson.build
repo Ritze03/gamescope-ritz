@@ -28,6 +28,17 @@ protocols = [
 	# Wayland Protocols not yet in a release.
 	'xdg-toplevel-icon-v1.xml',
 
+	# Clipboard sync (see superdoc/features/clipboard-sync.md).
+	#
+	# Vendored rather than taken from wl_protocol_dir: ext-data-control only
+	# landed in wayland-protocols 1.41, and this build accepts an older
+	# system (or subproject) copy for everything else. Vendoring keeps the
+	# floor where it was instead of forcing every builder to 1.41+.
+	# wlr-data-control has never been in wayland-protocols at all -- it lives
+	# in wlr-protocols -- so it has to be vendored regardless.
+	'ext-data-control-v1.xml',
+	'wlr-data-control-unstable-v1.xml',
+
 	# Frog protocols
 	'frog-color-management-v1.xml',
 

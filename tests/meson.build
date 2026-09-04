@@ -2,7 +2,7 @@ catch2_dep = dependency('catch2-with-main', required: true)
 
 srcdir = '../src'
 unittest_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp']
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp', 'Clipboard/ClipboardSync.cpp']
 	unittest_src += srcdir / src
 endforeach
 
@@ -22,7 +22,7 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp'],
+	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep],
 	cpp_args: gamescope_cpp_args,
@@ -38,3 +38,4 @@ test('overlay_shell', gamescope_tests, args: ['[overlay_shell]'])
 test('overlay_palette', gamescope_tests, args: ['[overlay_palette]'])
 test('cursor_policy', gamescope_tests, args: ['[cursor_policy]'])
 test('changelog_parse', gamescope_tests, args: ['[changelog_parse]'])
+test('clipboard_sync', gamescope_tests, args: ['[clipboard_sync]'])

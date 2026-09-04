@@ -12,6 +12,9 @@ The newest version below is the one this build reports.
 ## [0.5.0] – 2026-09-04
 
 ### Added
+- **Clipboard sync**: copy and paste now cross between games, gamescope's own
+  windows and — when running nested — the rest of your desktop, updating the
+  moment the clipboard changes rather than waiting for a window switch.
 - **Shadow lift**: a new Shaders effect that brightens dark areas in dark games
   while leaving bright areas alone.
 
@@ -25,6 +28,10 @@ The newest version below is the one this build reports.
   (max boost) with 1x as unchanged, instead of an additive boost. An existing
   config's untouched value converts automatically, so it still opens looking the
   same rather than desaturated.
+- **Copy to clipboard in the Log panel**: the button works now, putting the
+  visible log lines on the real clipboard instead of nowhere.
+- **Copying between games**: text copied in one game is now pastable in another
+  when more than one Xwayland server is running.
 - **Sub-pixel FPS outline**: outline sizes below 1px draw a faint outline again
   instead of nothing.
 - **HUD outline alignment**: the FPS display's black outline no longer reads

@@ -6169,6 +6169,57 @@ void gamescope_set_selection(std::string contents, GamescopeSelection eSelection
 	}
 }
 
+// Clipboard sync: the cross-thread inbox, drained once per steamcompmgr loop.
+static std::mutex g_PendingSelectionMutex;
+static std::optional<std::string> g_oPendingSelection;
+
+void gamescope_post_selection( std::string contents )
+{
+	std::scoped_lock lock{ g_PendingSelectionMutex };
+	g_oPendingSelection = std::move( contents );
+}
+
+// Publish szContents everywhere gamescope can hold a clipboard: every Xwayland
+// server, our own native Wayland clients, and (when nested) the host
+// compositor. Safe to call regardless of where the text came from -- each
+// destination drops a value it already holds, so this cannot loop.
+static void gamescope_broadcast_clipboard( const std::shared_ptr<std::string> &szContents )
+{
+	gamescope_set_selection( *szContents, GAMESCOPE_SELECTION_CLIPBOARD );
+
+	{
+		// Callers reach here both with and without the lock (an X11 selection
+		// notify holds nothing; a wlserver-side path may already hold it).
+		const bool bAlreadyHeld = wlserver_is_lock_held();
+		if ( !bAlreadyHeld )
+			wlserver_lock();
+		wlserver_set_selection( szContents );
+		if ( !bAlreadyHeld )
+			wlserver_unlock();
+	}
+
+	gamescope::INestedHints *hints = nullptr;
+	if ( auto connector = GetBackend()->GetCurrentConnector() )
+		hints = connector->GetNestedHints();
+
+	if ( hints )
+		hints->SetSelection( szContents, GAMESCOPE_SELECTION_CLIPBOARD );
+}
+
+static void gamescope_drain_pending_selection()
+{
+	std::optional<std::string> osContents;
+	{
+		std::scoped_lock lock{ g_PendingSelectionMutex };
+		osContents.swap( g_oPendingSelection );
+	}
+
+	if ( !osContents )
+		return;
+
+	gamescope_broadcast_clipboard( std::make_shared<std::string>( std::move( *osContents ) ) );
+}
+
 void gamescope_set_reshade_effect(std::string effect_path)
 {
 	gamescope_xwayland_server_t *server = wlserver_get_xwayland_server(0);
@@ -6262,14 +6313,16 @@ handle_selection_notify(xwayland_ctx_t *ctx, XSelectionEvent *ev)
 
 			if (ev->selection == ctx->atoms.clipboard)
 			{
-				if ( hints )
-				{
-					hints->SetSelection( szContents, GAMESCOPE_SELECTION_CLIPBOARD );
-				}
-				else
-				{
-					gamescope_set_selection( contents, GAMESCOPE_SELECTION_CLIPBOARD );
-				}
+				// Always take ownership locally, then additionally push to the
+				// host when nested. This used to be an either/or, which meant a
+				// copy made in one Xwayland server was not pastable in another
+				// (nor in a native Wayland client of ours) whenever a nested
+				// backend was in use.
+				//
+				// x11_set_selection_owner() skips the server that already owns
+				// it, and the XFixes handler ignores notifications about our own
+				// window, so this does not feed back on itself.
+				gamescope_broadcast_clipboard( szContents );
 			}
 			else if (ev->selection == ctx->atoms.primarySelection)
 			{
@@ -9207,6 +9260,8 @@ steamcompmgr_main(int argc, char **argv)
 		}
 
 		g_SteamCompMgrWaiter.PollEvents();
+
+		gamescope_drain_pending_selection();
 
 		bool vblank = false;
 		if ( std::optional<gamescope::VBlankTime> pendingVBlank = GetVBlankTimer().ProcessVBlank() )

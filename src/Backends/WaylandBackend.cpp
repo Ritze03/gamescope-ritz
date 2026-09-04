@@ -10,6 +10,8 @@
 #include "refresh_rate.h"
 #include "waitable.h"
 #include "Utils/TempFiles.h"
+#include "Clipboard/ClipboardSync.h"
+#include "Clipboard/WaylandDataControl.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -35,6 +37,8 @@
 #include <primary-selection-unstable-v1-client-protocol.h>
 #include <fractional-scale-v1-client-protocol.h>
 #include <xdg-toplevel-icon-v1-client-protocol.h>
+#include <ext-data-control-v1-client-protocol.h>
+#include <wlr-data-control-unstable-v1-client-protocol.h>
 #include "wlr_end.hpp"
 
 #include "drm_include.h"
@@ -794,6 +798,23 @@ namespace gamescope
         void Wayland_DataSource_Cancelled( struct wl_data_source *pSource );
         static const wl_data_source_listener s_DataSourceListener;
 
+        // Clipboard sync -- see superdoc/features/clipboard-sync.md.
+        void InitClipboard();
+        void PushClipboardToHost( const std::string &sText );
+        void OnHostClipboardText( std::string sText );   // any thread
+        void DrainHostClipboard();                       // compositor thread
+
+        // Layer 2: the wl_data_device fallback, for hosts with no
+        // data-control protocol at all (GNOME/Mutter). Its selection event
+        // only arrives while we hold keyboard focus, which is exactly the
+        // "sync on focus gain" fallback -- delivered by the protocol rather
+        // than polled for.
+        void Wayland_DataDevice_DataOffer( struct wl_data_device *pDevice, struct wl_data_offer *pOffer );
+        void Wayland_DataDevice_Selection( struct wl_data_device *pDevice, struct wl_data_offer *pOffer );
+        void Wayland_DataOffer_Offer( struct wl_data_offer *pOffer, const char *pMime );
+        static const wl_data_device_listener s_DataDeviceListener;
+        static const wl_data_offer_listener s_DataOfferListener;
+
         void Wayland_PrimarySelectionSource_Send( struct zwp_primary_selection_source_v1 *pSource, const char *pMime, int nFd );
         void Wayland_PrimarySelectionSource_Cancelled( struct zwp_primary_selection_source_v1 *pSource );
         static const zwp_primary_selection_source_v1_listener s_PrimarySelectionSourceListener;
@@ -828,6 +849,21 @@ namespace gamescope
         wl_data_device_manager *m_pDataDeviceManager = nullptr;
         wl_data_device *m_pDataDevice = nullptr;
         std::shared_ptr<std::string> m_pClipboard = nullptr;
+
+        // Clipboard sync state.
+        ext_data_control_manager_v1  *m_pExtDataControlManager = nullptr;
+        zwlr_data_control_manager_v1 *m_pWlrDataControlManager = nullptr;
+        CDataControlDevice<CExtDataControlTraits> m_ExtDataControl;
+        CDataControlDevice<CWlrDataControlTraits> m_WlrDataControl;
+        bool m_bHaveDataControl = false;
+
+        CClipboardLoopGuard m_ClipboardGuard;
+        // Mailbox: filled by a transfer worker thread, drained by PollState on
+        // the compositor thread. gamescope_set_selection() talks to every
+        // Xwayland server, so it has to run there and nowhere else.
+        std::mutex m_HostClipboardMutex;
+        std::optional<std::string> m_oPendingHostClipboard;
+        std::unordered_map<wl_data_offer *, std::pair<int, std::string>> m_DataOffers;
 
         zwp_primary_selection_device_manager_v1 *m_pPrimarySelectionDeviceManager = nullptr;
         zwp_primary_selection_device_v1 *m_pPrimarySelectionDevice = nullptr;
@@ -960,6 +996,21 @@ namespace gamescope
         .dnd_drop_performed = WAYLAND_NULL(),
         .dnd_finished       = WAYLAND_NULL(),
         .action             = WAYLAND_NULL(),
+    };
+    const wl_data_device_listener CWaylandBackend::s_DataDeviceListener =
+    {
+        .data_offer = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_DataDevice_DataOffer ),
+        .enter      = WAYLAND_NULL(),
+        .leave      = WAYLAND_NULL(),
+        .motion     = WAYLAND_NULL(),
+        .drop       = WAYLAND_NULL(),
+        .selection  = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_DataDevice_Selection ),
+    };
+    const wl_data_offer_listener CWaylandBackend::s_DataOfferListener =
+    {
+        .offer         = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_DataOffer_Offer ),
+        .source_actions = WAYLAND_NULL(),
+        .action        = WAYLAND_NULL(),
     };
     const zwp_primary_selection_source_v1_listener CWaylandBackend::s_PrimarySelectionSourceListener =
     {
@@ -1385,23 +1436,17 @@ namespace gamescope
 
     void CWaylandConnector::SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection )
     {
-        if ( m_pBackend->m_pDataDeviceManager && !m_pBackend->m_pDataDevice )
-            m_pBackend->m_pDataDevice = wl_data_device_manager_get_data_device( m_pBackend->m_pDataDeviceManager, m_pBackend->m_pSeat );
-
+        // The clipboard data device is created up front by InitClipboard(),
+        // and only when it is actually the protocol we settled on -- creating
+        // one here as well would leave a second, listener-less device
+        // receiving offers nobody reads.
         if ( m_pBackend->m_pPrimarySelectionDeviceManager && !m_pBackend->m_pPrimarySelectionDevice )
             m_pBackend->m_pPrimarySelectionDevice = zwp_primary_selection_device_manager_v1_get_device( m_pBackend->m_pPrimarySelectionDeviceManager, m_pBackend->m_pSeat );
 
-        if ( eSelection == GAMESCOPE_SELECTION_CLIPBOARD && m_pBackend->m_pDataDevice )
+        if ( eSelection == GAMESCOPE_SELECTION_CLIPBOARD )
         {
-            m_pBackend->m_pClipboard = szContents;
-            wl_data_source *source = wl_data_device_manager_create_data_source( m_pBackend->m_pDataDeviceManager );
-            wl_data_source_add_listener( source, &m_pBackend->s_DataSourceListener, m_pBackend );
-            wl_data_source_offer( source, "text/plain" );
-            wl_data_source_offer( source, "text/plain;charset=utf-8" );
-            wl_data_source_offer( source, "TEXT" );
-            wl_data_source_offer( source, "STRING" );
-            wl_data_source_offer( source, "UTF8_STRING" );
-            wl_data_device_set_selection( m_pBackend->m_pDataDevice, source, m_pBackend->m_uKeyboardEnterSerial );
+            if ( szContents )
+                m_pBackend->PushClipboardToHost( *szContents );
         }
         else if ( eSelection == GAMESCOPE_SELECTION_PRIMARY && m_pBackend->m_pPrimarySelectionDevice )
         {
@@ -2169,6 +2214,8 @@ namespace gamescope
         wl_registry_destroy( pRegistry );
         pRegistry = nullptr;
 
+        InitClipboard();
+
         if ( m_pWPColorManager )
         {
             m_WPColorManagerFeatures.bSupportsGamescopeColorManagement = [this]() -> bool
@@ -2357,6 +2404,8 @@ namespace gamescope
         }
 
         wl_display_dispatch_pending( m_pDisplay );
+
+        DrainHostClipboard();
 
         return false;
     }
@@ -2795,6 +2844,16 @@ namespace gamescope
         {
             m_pPrimarySelectionDeviceManager = (zwp_primary_selection_device_manager_v1 *)wl_registry_bind( pRegistry, uName, &zwp_primary_selection_device_manager_v1_interface, 1u );
         }
+        else if ( !strcmp( pInterface, ext_data_control_manager_v1_interface.name ) )
+        {
+            m_pExtDataControlManager = (ext_data_control_manager_v1 *)wl_registry_bind( pRegistry, uName, &ext_data_control_manager_v1_interface, 1u );
+        }
+        else if ( !strcmp( pInterface, zwlr_data_control_manager_v1_interface.name ) )
+        {
+            // Version 1 on purpose: v2 only adds the primary selection, which
+            // we deliberately do not sync.
+            m_pWlrDataControlManager = (zwlr_data_control_manager_v1 *)wl_registry_bind( pRegistry, uName, &zwlr_data_control_manager_v1_interface, 1u );
+        }
     }
 
     void CWaylandBackend::Wayland_Modifier( zwp_linux_dmabuf_v1 *pDmabuf, uint32_t uFormat, uint32_t uModifierHi, uint32_t uModifierLo )
@@ -2953,14 +3012,190 @@ namespace gamescope
 
     void CWaylandBackend::Wayland_DataSource_Send( struct wl_data_source *pSource, const char *pMime, int nFd )
     {
-        ssize_t len = m_pClipboard->length();
-        if ( write( nFd, m_pClipboard->c_str(), len ) != len )
-            xdg_log.infof( "Failed to write all %zd bytes to clipboard", len );
-        close( nFd );
+        // Two hazards fixed here, both of which used to bite on the
+        // compositor thread this callback runs on:
+        //
+        //  - m_pClipboard was dereferenced unguarded, so a `send` arriving
+        //    before anything had been copied was a null deref.
+        //  - the write() was blocking. The reader is whatever host
+        //    application asked to paste; if it is slow to read, a full pipe
+        //    buffer stalls gamescope's frame pacing until it isn't.
+        if ( !m_pClipboard )
+        {
+            close( nFd );
+            return;
+        }
+
+        std::thread( [ nFd, sText = *m_pClipboard ]()
+        {
+            WriteClipboardPipe( nFd, sText, k_nClipboardTransferTimeoutMs );
+        } ).detach();
     }
     void CWaylandBackend::Wayland_DataSource_Cancelled( struct wl_data_source *pSource )
     {
         wl_data_source_destroy( pSource );
+    }
+
+    ///////////////////
+    // Clipboard sync
+    ///////////////////
+    //
+    // Fallback chain, best first:
+    //
+    //   1. ext_data_control_manager_v1   -- the standardised protocol.
+    //   2. zwlr_data_control_manager_v1  -- its wlroots predecessor, for
+    //                                       compositors that have not caught
+    //                                       up yet.
+    //   3. wl_data_device                -- the ordinary clipboard, which only
+    //                                       reports selections while we hold
+    //                                       keyboard focus.
+    //
+    // 1 and 2 are true event hooks: the host tells us the moment its clipboard
+    // changes, focused or not. 3 is the focus-based fallback.
+
+    void CWaylandBackend::InitClipboard()
+    {
+        if ( !m_pSeat )
+            return;
+
+        auto fnOnText = [ this ]( std::string sText ) { this->OnHostClipboardText( std::move( sText ) ); };
+
+        if ( m_pExtDataControlManager )
+        {
+            m_ExtDataControl.Init( m_pDisplay, m_pExtDataControlManager, m_pSeat, fnOnText );
+            m_bHaveDataControl = m_ExtDataControl.IsValid();
+        }
+        else if ( m_pWlrDataControlManager )
+        {
+            m_WlrDataControl.Init( m_pDisplay, m_pWlrDataControlManager, m_pSeat, fnOnText );
+            m_bHaveDataControl = m_WlrDataControl.IsValid();
+        }
+
+        if ( m_bHaveDataControl )
+        {
+            xdg_log.infof( "Clipboard sync: using %s.",
+                m_pExtDataControlManager ? CExtDataControlTraits::pszName : CWlrDataControlTraits::pszName );
+            return;
+        }
+
+        if ( m_pDataDeviceManager )
+        {
+            m_pDataDevice = wl_data_device_manager_get_data_device( m_pDataDeviceManager, m_pSeat );
+            wl_data_device_add_listener( m_pDataDevice, &s_DataDeviceListener, this );
+            xdg_log.infof( "Clipboard sync: no data-control protocol on this host; falling back to wl_data_device, "
+                           "which only reports the host clipboard while gamescope is focused." );
+        }
+        else
+        {
+            xdg_log.infof( "Clipboard sync: host offers no clipboard protocol; disabled." );
+        }
+    }
+
+    // Compositor thread. Called with whatever the X11 side (or an overlay
+    // "copy" action) just put on gamescope's clipboard.
+    void CWaylandBackend::PushClipboardToHost( const std::string &sText )
+    {
+        if ( !m_ClipboardGuard.ShouldPushToHost( sText ) )
+            return;
+
+        if ( m_bHaveDataControl )
+        {
+            if ( m_ExtDataControl.IsValid() )
+                m_ExtDataControl.SetSelection( sText );
+            else if ( m_WlrDataControl.IsValid() )
+                m_WlrDataControl.SetSelection( sText );
+            else
+                m_bHaveDataControl = false; // The host revoked the device.
+            return;
+        }
+
+        if ( !m_pDataDevice )
+            return;
+
+        m_pClipboard = std::make_shared<std::string>( sText );
+        wl_data_source *pSource = wl_data_device_manager_create_data_source( m_pDataDeviceManager );
+        wl_data_source_add_listener( pSource, &s_DataSourceListener, this );
+        for ( const char *pMime : k_pszClipboardMimes )
+            wl_data_source_offer( pSource, pMime );
+        wl_data_device_set_selection( m_pDataDevice, pSource, m_uKeyboardEnterSerial );
+    }
+
+    // Any thread: this is where a transfer worker lands.
+    void CWaylandBackend::OnHostClipboardText( std::string sText )
+    {
+        std::scoped_lock lock{ m_HostClipboardMutex };
+        m_oPendingHostClipboard = std::move( sText );
+    }
+
+    // Compositor thread, once per PollState.
+    void CWaylandBackend::DrainHostClipboard()
+    {
+        std::optional<std::string> osText;
+        {
+            std::scoped_lock lock{ m_HostClipboardMutex };
+            osText.swap( m_oPendingHostClipboard );
+        }
+
+        if ( !osText )
+            return;
+
+        if ( !m_ClipboardGuard.ShouldAcceptFromHost( *osText ) )
+            return;
+
+        // Hands it to every Xwayland server and to our own native Wayland
+        // clients. The broadcast also offers it back to the host, which the
+        // loop guard above has already recorded and will refuse -- that is the
+        // Wayland half of the cycle being cut.
+        gamescope_post_selection( *osText );
+    }
+
+    // wl_data_device fallback (layer 3 of the chain).
+
+    void CWaylandBackend::Wayland_DataDevice_DataOffer( struct wl_data_device *pDevice, struct wl_data_offer *pOffer )
+    {
+        wl_data_offer_add_listener( pOffer, &s_DataOfferListener, this );
+        m_DataOffers[ pOffer ] = { 0, std::string{} };
+    }
+
+    void CWaylandBackend::Wayland_DataOffer_Offer( struct wl_data_offer *pOffer, const char *pMime )
+    {
+        auto it = m_DataOffers.find( pOffer );
+        if ( it == m_DataOffers.end() )
+            return;
+
+        int nRank = RankClipboardMime( pMime );
+        if ( nRank > it->second.first )
+            it->second = { nRank, pMime };
+    }
+
+    void CWaylandBackend::Wayland_DataDevice_Selection( struct wl_data_device *pDevice, struct wl_data_offer *pOffer )
+    {
+        if ( !pOffer )
+            return;
+
+        auto it = m_DataOffers.find( pOffer );
+        std::string sMime = it != m_DataOffers.end() ? it->second.second : std::string{};
+
+        if ( !sMime.empty() )
+        {
+            int nPipe[ 2 ];
+            if ( pipe2( nPipe, O_CLOEXEC ) == 0 )
+            {
+                wl_data_offer_receive( pOffer, sMime.c_str(), nPipe[ 1 ] );
+                close( nPipe[ 1 ] );
+                wl_display_flush( m_pDisplay );
+
+                std::thread( [ this, nFd = nPipe[ 0 ] ]()
+                {
+                    std::optional<std::string> osText = ReadClipboardPipe( nFd, k_nClipboardTransferTimeoutMs );
+                    if ( osText )
+                        this->OnHostClipboardText( std::move( *osText ) );
+                } ).detach();
+            }
+        }
+
+        m_DataOffers.erase( pOffer );
+        wl_data_offer_destroy( pOffer );
     }
 
     // Primary Selection Source

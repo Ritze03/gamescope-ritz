@@ -48,6 +48,12 @@
 #include <wlr/util/region.h>
 #include "wlr_end.hpp"
 
+#include <thread>
+#include <optional>
+#include <mutex>
+
+#include "Clipboard/ClipboardSync.h"
+
 #include "gamescope-xwayland-protocol.h"
 #include "gamescope-pipewire-protocol.h"
 #include "gamescope-control-protocol.h"
@@ -2695,6 +2701,154 @@ static gamescope::CAsyncWaiter g_LibEisWaiter( "gamescope-eis" );
 static std::unique_ptr<gamescope::GamescopeInputServer> g_InputServer;
 #endif
 
+
+///////////////////////
+// Clipboard sync
+///////////////////////
+//
+// gamescope's own native Wayland clients (the ones connected to *our*
+// compositor, as opposed to the games running under Xwayland) had no clipboard
+// at all: wlr_data_device_manager_create() was called, but nothing listened for
+// their copies and nothing ever handed them a selection to paste. Both
+// directions are wired up here.
+//
+// See superdoc/features/clipboard-sync.md.
+
+// A compositor-owned source, used to publish gamescope's clipboard to our
+// clients. Text is captured by value because the source outlives the call.
+struct wlserver_clipboard_source
+{
+	struct wlr_data_source base;
+	std::string sText;
+};
+
+// What the seat is currently offering, as text. Written from a transfer
+// worker as well as from the compositor thread, hence the mutex.
+static std::mutex g_WlserverSelectionMutex;
+static std::string g_sWlserverSelection;
+
+static void wlserver_remember_selection( const std::string &sText )
+{
+	std::scoped_lock lock{ g_WlserverSelectionMutex };
+	g_sWlserverSelection = sText;
+}
+
+static bool wlserver_selection_is( const std::string &sText )
+{
+	std::scoped_lock lock{ g_WlserverSelectionMutex };
+	return g_sWlserverSelection == sText;
+}
+
+// `base` is the first member, so the downcast is a no-op. wl_container_of()
+// cannot be used here: it deduces the container type from the variable being
+// assigned, which C++ will not do.
+static wlserver_clipboard_source *wlserver_clipboard_source_from_base( struct wlr_data_source *pSource )
+{
+	return reinterpret_cast<wlserver_clipboard_source *>( pSource );
+}
+
+static void wlserver_clipboard_source_send( struct wlr_data_source *pSource, const char *pMime, int32_t nFd )
+{
+	auto *pOurs = wlserver_clipboard_source_from_base( pSource );
+
+	// A worker, not this thread: the reader is a client of ours which may take
+	// arbitrarily long to drain the pipe, and this runs on the wlserver thread.
+	std::thread( [ nFd, sText = pOurs->sText ]()
+	{
+		gamescope::WriteClipboardPipe( nFd, sText, gamescope::k_nClipboardTransferTimeoutMs );
+	} ).detach();
+}
+
+static void wlserver_clipboard_source_destroy( struct wlr_data_source *pSource )
+{
+	delete wlserver_clipboard_source_from_base( pSource );
+}
+
+static const struct wlr_data_source_impl wlserver_clipboard_source_impl =
+{
+	.send    = wlserver_clipboard_source_send,
+	.destroy = wlserver_clipboard_source_destroy,
+};
+
+void wlserver_set_selection( const std::shared_ptr<std::string>& szContents )
+{
+	if ( !szContents || !wlserver.wlr.seat )
+		return;
+
+	// Already what the seat is offering; replacing the source would just churn
+	// (and, when the current owner is a client of ours, would steal their
+	// selection to say the same thing).
+	if ( wlserver_selection_is( *szContents ) )
+		return;
+
+	auto *pSource = new wlserver_clipboard_source{};
+	wlr_data_source_init( &pSource->base, &wlserver_clipboard_source_impl );
+	pSource->sText = *szContents;
+
+	for ( const char *pMime : gamescope::k_pszClipboardMimes )
+	{
+		char **ppDst = (char **)wl_array_add( &pSource->base.mime_types, sizeof( char * ) );
+		if ( ppDst )
+			*ppDst = strdup( pMime );
+	}
+
+	wlserver_remember_selection( *szContents );
+	wlr_seat_set_selection( wlserver.wlr.seat, &pSource->base, wl_display_next_serial( wlserver.display ) );
+}
+
+// One of our own clients pressed Ctrl+C. Accept it for the seat, then read it
+// out so it can be broadcast to the Xwayland servers and the host.
+static void wlserver_handle_request_set_selection( struct wl_listener *listener, void *data )
+{
+	auto *pEvent = (struct wlr_seat_request_set_selection_event *)data;
+
+	wlr_seat_set_selection( wlserver.wlr.seat, pEvent->source, pEvent->serial );
+
+	if ( !pEvent->source )
+	{
+		wlserver_remember_selection( std::string{} );
+		return;
+	}
+
+	// Pick the best text mime the client actually offers.
+	const char *pBest = nullptr;
+	int nBestRank = 0;
+	const wl_array &MimeTypes = pEvent->source->mime_types;
+	char **ppMimes = (char **)MimeTypes.data;
+	for ( size_t i = 0; i < MimeTypes.size / sizeof( char * ); i++ )
+	{
+		int nRank = gamescope::RankClipboardMime( ppMimes[ i ] );
+		if ( nRank > nBestRank )
+		{
+			nBestRank = nRank;
+			pBest = ppMimes[ i ];
+		}
+	}
+
+	if ( !pBest )
+		return;
+
+	int nPipe[ 2 ];
+	if ( pipe2( nPipe, O_CLOEXEC ) != 0 )
+		return;
+
+	wlr_data_source_send( pEvent->source, pBest, nPipe[ 1 ] );
+	// wlr_data_source_send takes ownership of the write end.
+
+	std::thread( [ nFd = nPipe[ 0 ] ]()
+	{
+		std::optional<std::string> osText = gamescope::ReadClipboardPipe( nFd, gamescope::k_nClipboardTransferTimeoutMs );
+		if ( osText )
+		{
+			// Remember it so wlserver_set_selection() does not immediately
+			// steal the selection back from the client to say the same thing.
+			wlserver_remember_selection( *osText );
+			gamescope_post_selection( std::move( *osText ) );
+		}
+	} ).detach();
+}
+
+
 bool wlserver_init( void ) {
 	assert( wlserver.display != nullptr );
 
@@ -2848,6 +3002,9 @@ bool wlserver_init( void ) {
 
 	wlserver.wlr.seat = wlr_seat_create(wlserver.display, "seat0");
 	wlr_seat_set_capabilities( wlserver.wlr.seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_TOUCH );
+
+	wlserver.request_set_selection.notify = wlserver_handle_request_set_selection;
+	wl_signal_add( &wlserver.wlr.seat->events.request_set_selection, &wlserver.request_set_selection );
 
 	wl_log.infof("Running compositor on wayland display '%s'", wlserver.wl_display_name);
 

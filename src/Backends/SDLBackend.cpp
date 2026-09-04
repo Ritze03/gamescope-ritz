@@ -20,6 +20,7 @@
 #include "steamcompmgr.hpp"
 #include "Utils/Defer.h"
 #include "refresh_rate.h"
+#include "Clipboard/ClipboardSync.h"
 
 #include "sdlscancodetable.hpp"
 
@@ -397,10 +398,19 @@ namespace gamescope
 		m_pBackend->SetIcon( std::move( uIconPixels ) );
 	}
 
+	// Loop guard for the SDL backend's clipboard, shared with the Wayland
+	// backend. SDL raises SDL_CLIPBOARDUPDATE for our own SDL_SetClipboardText
+	// too, so without this a single copy ping-pongs forever.
+	// See superdoc/features/clipboard-sync.md.
+	gamescope::CClipboardLoopGuard g_SDLClipboardGuard;
+
     void CSDLConnector::SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection )
     {
         if (eSelection == GAMESCOPE_SELECTION_CLIPBOARD)
-			SDL_SetClipboardText(szContents->c_str());
+		{
+			if ( g_SDLClipboardGuard.ShouldPushToHost( *szContents ) )
+				SDL_SetClipboardText(szContents->c_str());
+		}
 		else if (eSelection == GAMESCOPE_SELECTION_PRIMARY)
 			SDL_SetPrimarySelectionText(szContents->c_str());
     }
@@ -712,7 +722,11 @@ namespace gamescope
 					char *pClipBoard = SDL_GetClipboardText();
 					char *pPrimarySelection = SDL_GetPrimarySelectionText();
 
-					gamescope_set_selection(pClipBoard, GAMESCOPE_SELECTION_CLIPBOARD);
+					// Posted, not set directly: this runs on the SDL event
+					// thread, and the broadcast has to happen on the
+					// steamcompmgr thread.
+					if ( pClipBoard && g_SDLClipboardGuard.ShouldAcceptFromHost( pClipBoard ) )
+						gamescope_post_selection(pClipBoard);
 					gamescope_set_selection(pPrimarySelection, GAMESCOPE_SELECTION_PRIMARY);
 
 					SDL_free(pClipBoard);

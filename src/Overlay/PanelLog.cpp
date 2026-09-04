@@ -6,6 +6,7 @@
 #include "LogCapture.h"
 #include "Palette.h"
 #include "UI/Registry.h"
+#include "steamcompmgr.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -289,34 +290,36 @@ namespace gamescope
 				return ui::Fact{ "shown", sz };
 			} );
 
-		// ---- Copy, and issue #81 ----------------------------------------
-		// THE BUTTON IS DISABLED, ON PURPOSE, AND SAYS WHY.
+		// ---- Copy (issue #81, now fixed) --------------------------------
+		// This row used to ship DISABLED with a reason: the old
+		// implementation called ImGui::SetClipboardText(), which -- with no
+		// io.SetClipboardTextFn wired for the overlay's context -- wrote to
+		// an internal buffer nothing outside this process could read.
 		//
-		// #81: the old "Copy to clipboard" button called
-		// ImGui::SetClipboardText() and appeared to work. It never reached
-		// the system clipboard, because no clipboard handler is wired for
-		// the overlay's ImGui context -- with io.SetClipboardTextFn unset,
-		// ImGui falls back to an internal buffer that only ImGui itself can
-		// read. Nothing outside this process ever sees the text.
-		//
-		// Wiring it properly is not a small fix and is not this task's
-		// scope: gamescope is the compositor, so a real implementation
-		// means offering a wl_data_source selection on its own seat (and,
-		// nested, deciding what "the system clipboard" even means when the
-		// host session owns one too). That is a feature, with its own
-		// design questions.
-		//
-		// So the row ships DISABLED with a mandatory reason (SPEC §3.13)
-		// rather than shipping a button that lies. A control that looks
-		// right and does nothing is precisely issues #25 and #68 -- the
-		// thing this whole redesign exists to stop -- and "it silently did
-		// nothing" is strictly worse than "it told you it cannot".
-		a.Action( "log.copy", "Copy to clipboard", "copy", []{} )
-			.Help( "Copies every visible line as plain text. Unavailable until the overlay's "
-			       "ImGui context has a clipboard handler -- see issue #81." )
-			.DisabledUnless( []{ return false; },
-				"no clipboard handler is wired for the overlay yet, so a copy would silently "
-				"reach nothing outside gamescope (issue #81)" )
+		// The fix is not an ImGui clipboard handler. gamescope *is* the
+		// compositor, so it goes to the compositor's own clipboard:
+		// gamescope_post_selection() broadcasts the text to every Xwayland
+		// server, to gamescope's native Wayland clients, and (when nested)
+		// to the host session's clipboard. See
+		// superdoc/features/clipboard-sync.md.
+		a.Action( "log.copy", "Copy to clipboard", "copy", []
+			{
+				std::string sOut;
+				for ( const ui::ContentLine &line : BuildLines() )
+				{
+					if ( !line.sScope.empty() )
+					{
+						sOut += line.sScope;
+						sOut += ": ";
+					}
+					sOut += line.sText;
+					sOut += '\n';
+				}
+				gamescope_post_selection( std::move( sOut ) );
+			} )
+			.Help( "Copies every visible line as plain text to the clipboard, where it can be "
+			       "pasted into a game, into another gamescope window, or -- when gamescope is "
+			       "running nested -- into any application on the host session." )
 			.Keywords( "copy clipboard export text" );
 
 		// ---- the captured text itself ------------------------------------

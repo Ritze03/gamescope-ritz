@@ -124,6 +124,7 @@ src = [
   'Config/AppId.cpp',
   'Config/ConfigManager.cpp',
   'Audio/Volume.cpp',
+  'Clipboard/ClipboardSync.cpp',
   'Script/Script.cpp',
   'BufferMemo.cpp',
   'steamcompmgr.cpp',

@@ -60,8 +60,12 @@ initialize.
   `wp_color_manager_v1` / `frog_color_management_factory_v1` (HDR/colorimetry
   negotiation with the host compositor — see
   [hdr-color-management.md](hdr-color-management.md)), `wp_fractional_scale_v1`,
-  `xdg_toplevel_icon_manager_v1`, and clipboard/primary-selection via
-  `wl_data_source`/`zwp_primary_selection_source_v1`.
+  `xdg_toplevel_icon_manager_v1`, primary-selection via
+  `zwp_primary_selection_source_v1`, and the clipboard via
+  `ext_data_control_manager_v1` / `zwlr_data_control_manager_v1` with a
+  `wl_data_device` fallback — see
+  [clipboard-sync.md](clipboard-sync.md) for the fallback chain, the loop guard
+  and why every transfer runs on a worker thread.
 - `SupportsExplicitSync()` is unconditionally `true`
   (`src/Backends/WaylandBackend.cpp:2306`) and `SupportsPlaneHardwareCursor()` is `false`
   (`src/Backends/WaylandBackend.cpp:2285`, same reasoning as SDL: cursor goes through

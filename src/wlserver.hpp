@@ -187,6 +187,7 @@ struct wlserver_t {
 	struct wl_listener new_xdg_toplevel;
 	struct wl_listener new_layer_shell_surface;
 	struct wl_listener new_pointer_constraint;
+	struct wl_listener request_set_selection;
 	std::vector<std::shared_ptr<steamcompmgr_win_t>> xdg_wins;
 	std::atomic<bool> xdg_dirty;
 	std::mutex xdg_commit_lock;
@@ -244,6 +245,13 @@ void wlserver_run(void);
 void wlserver_lock(void);
 void wlserver_unlock(bool flush = true);
 bool wlserver_is_lock_held(void);
+
+// Clipboard sync -- see superdoc/features/clipboard-sync.md.
+//
+// Hand gamescope's current CLIPBOARD contents to our own native Wayland
+// clients, by taking ownership of the seat selection with a compositor-owned
+// data source. Must be called with the wlserver lock held.
+void wlserver_set_selection( const std::shared_ptr<std::string>& szContents );
 
 void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain = true );
 void wlserver_key( uint32_t key, bool press, uint32_t time );

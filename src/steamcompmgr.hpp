@@ -175,6 +175,15 @@ extern std::atomic<std::shared_ptr<std::string>> focusWindow_engine;
 
 void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_server);
 void gamescope_set_selection(std::string contents, GamescopeSelection eSelection);
+
+// Clipboard sync -- see superdoc/features/clipboard-sync.md.
+//
+// Post new CLIPBOARD contents from any thread. The steamcompmgr thread picks
+// it up on its next loop and broadcasts it to every Xwayland server, to our
+// own native Wayland clients, and to the host compositor. Needed because the
+// transfer that produced the text ran on a worker thread, and none of those
+// three destinations may be touched from there.
+void gamescope_post_selection( std::string contents );
 void gamescope_set_reshade_effect(std::string effect_path);
 void gamescope_clear_reshade_effect();
 

@@ -47,6 +47,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Wayland protocols](features/wayland-protocols.md) — custom protocol surface, including `gamescope_control`.
 - [Control / IPC](features/control-ipc.md) — external control and IPC (e.g. `gamescopectl`).
 
+### Clipboard
+
+- [Clipboard sync](features/clipboard-sync.md) — one CLIPBOARD across Xwayland, gamescope's
+  own Wayland clients and the host session: the data-control event hook and its fallback
+  chain, the loop guard, and why every pipe transfer runs on a worker thread.
+
 ### Input
 
 - [Input emulation](features/input-emulation.md) — synthetic input injection.
