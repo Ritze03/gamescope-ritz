@@ -271,6 +271,21 @@ three glyphs.
 > stays inside the backdrop box at any setting and growing it never
 > changes the readout's footprint.
 
+> **Why each stamp's offset is rounded to a whole pixel (2026-09-04
+> fix):** the stamp angles are a full, evenly-spaced sweep, so the *ideal*
+> (unrounded) stamp cloud is provably centred on the text position — but
+> Dear ImGui's `ImFont::RenderText()` independently floors every
+> `AddText()` call's position to a whole pixel before drawing it
+> (`imgui_draw.cpp`'s "Align to be pixel perfect"), and flooring does not
+> distribute over a fractional offset: `floor(textPos + r)` is not always
+> `floor(textPos) + r`. That let individual stamps floor to a different
+> pixel than the fill did, reading as the outline sitting up-left of the
+> digits — worse at a bigger radius (more, farther-flung stamps) and a
+> bigger font (the same misalignment is a larger fraction of a thinner
+> stroke). Rounding the stamp's *offset* from the text position to a
+> whole pixel first makes its own floor an exact no-op relative to the
+> fill's, for any text position, font size or radius.
+
 ## Lag-spike detection
 
 Switchable (`lag_detection_enabled`, row "Lag spike detection", default

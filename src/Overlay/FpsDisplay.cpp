@@ -879,6 +879,44 @@ namespace gamescope
 		// along it, which is what keeps a 4px outline continuous instead
 		// of dotted. A 1px outline still costs only its single 8-stamp
 		// ring, so the small end stays as cheap and as crisp as before.
+		//
+		// Bug (2026-09-04): the outline read visibly offset up-left of the
+		// digits, worse at a bigger font AND a bigger outline. Root cause is
+		// NOT this ring's own geometry -- the stamp angles are a full,
+		// evenly-spaced sweep (i in [0, nStamps) over the full 2*pi), so
+		// their float positions are provably symmetric around textPos
+		// (confirmed both analytically -- an n-point evenly spaced ring
+		// always sums to its centre -- and empirically, rendering the real
+		// embedded Geist Mono SemiBold font at this module's actual min/max
+		// settings and diffing the outline's ink bbox against the fill's:
+		// exactly `radius` px on all four sides, every time).
+		//
+		// The real cause is downstream, in ImFont::RenderText() itself
+		// (imgui_draw.cpp's "Align to be pixel perfect": `x =
+		// IM_TRUNC(x); y = IM_TRUNC(y);`). Every AddText() call -- each of
+		// these stamps, and the plain fill draw below -- independently
+		// floors its OWN position to a whole pixel before rendering.
+		// Flooring does not distribute over adding a fractional offset:
+		// floor(textPos + r) generally != floor(textPos) + r for a
+		// non-integer r, so a stamp offset by, say, +2.6px can floor to a
+		// *different* pixel than textPos's own floor plus 2.6 would
+		// suggest -- while a stamp offset by -2.6px floors the other way.
+		// That is a real, per-stamp, direction-dependent rounding bias
+		// (candidate 1's "wrong rounding, biasing toward negative x/y"),
+		// and it is exactly why a bigger outline radius (more, farther-
+		// flung stamps, more chances for one to floor the "wrong" way) and
+		// a bigger font (the same sub-pixel misalignment is a larger
+		// fraction of a thinner stroke, and more visible on more glyph
+		// pixels) both make it read as more offset -- even though the
+		// ideal, unrounded stamp cloud was centred the whole time.
+		//
+		// Fix: round each stamp's *offset* from textPos to a whole pixel
+		// before adding it. That makes every stamp's own IM_TRUNC an exact
+		// no-op relative to textPos's (floor(a + integer) == floor(a) +
+		// integer, always) -- so every stamp lands on precisely the same
+		// pixel grid as the fill, by construction, for any textPos,
+		// font size or radius, rather than by the luck of where textPos's
+		// fractional part happened to land.
 		if ( L.bDrawOutline )
 		{
 			const int nRings = (int)std::ceil( L.flOutlineRadius );
@@ -889,8 +927,8 @@ namespace gamescope
 				for ( int i = 0; i < nStamps; i++ )
 				{
 					const float flAngle = 2.0f * 3.14159265f * (float)i / (float)nStamps;
-					const ImVec2 pos( textPos.x + std::cos( flAngle ) * flRadius,
-					                  textPos.y + std::sin( flAngle ) * flRadius );
+					const ImVec2 pos( textPos.x + std::round( std::cos( flAngle ) * flRadius ),
+					                  textPos.y + std::round( std::sin( flAngle ) * flRadius ) );
 					pDrawList->AddText( pFont, flFontSize, pos, L.outlineColor, L.szNum );
 				}
 			}
