@@ -979,8 +979,9 @@ namespace gamescope::ui
 			// and meaningless: a colour is not an ordered scalar, and there
 			// is no direction "right" could sensibly mean. Refused here for
 			// the same reason a Bank is (SPEC 3.12), and like the Bank it
-			// keeps its own route -- the Inspector's OKLCH body, which is
-			// the control the row actually offers.
+			// keeps its own route -- the Inspector's R/G/B body (OKLCH
+			// before request #5, 2026-09-04), which is the control the row
+			// actually offers.
 			//
 			// Anchor and Hue are NOT refused: an anchor's axes and a hue's
 			// degrees are both genuinely ordered.

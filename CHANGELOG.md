@@ -15,6 +15,11 @@ The newest version below is the one this build reports.
 - **Shadow lift**: a new Shaders effect that brightens dark areas in dark games
   while leaving bright areas alone.
 
+### Info
+- **RGB colour pickers**: the cursor's outline and inlay colour pickers now use
+  R/G/B sliders (0-255) instead of hue/saturation/lightness, which is easier to
+  read for new users. The accent colour slider is unchanged.
+
 ### Fixed
 - **Vibrancy is now a true multiplier**: the slider runs 0x (greyscale) to 3x
   (max boost) with 1x as unchanged, instead of an additive boost. An existing

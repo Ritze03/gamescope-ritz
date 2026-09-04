@@ -2482,21 +2482,19 @@ namespace gamescope::ui::shell
 				case CompositeKind::Color:
 				{
 					// The stored value is, and stays, a packed 0xRRGGBB int
-					// -- the control edits OKLCH and converts back on every
-					// edit, so no config format changed for this row to
-					// exist.
+					// -- request #5 (2026-09-04) only changed the control
+					// editing it, from OKLCH L/C/H rails to plain R/G/B ones,
+					// so no config format changed for this row to exist.
 					const int nPacked = AsInt( entry.Binding().Get() );
-					float flL = 0.0f, flC = 0.0f, flH = 0.0f;
-					palette::ImU32ToOklch( IM_COL32( ( nPacked >> 16 ) & 0xFF,
-					                                 ( nPacked >> 8 ) & 0xFF,
-					                                 nPacked & 0xFF, 255 ), &flL, &flC, &flH );
-					if ( controls::ColorBody( bl.rcBody, "col", &flL, &flC, &flH ) )
+					float flR = (float)( ( nPacked >> 16 ) & 0xFF );
+					float flG = (float)( ( nPacked >> 8 ) & 0xFF );
+					float flB = (float)( nPacked & 0xFF );
+					if ( controls::ColorBody( bl.rcBody, "col", &flR, &flG, &flB ) )
 					{
-						const ImU32 col = palette::OklchToImU32( flL, flC, flH );
 						entry.Binding().Set( Value{ (int)(
-							( (int)( ( col >> IM_COL32_R_SHIFT ) & 0xFF ) << 16 ) |
-							( (int)( ( col >> IM_COL32_G_SHIFT ) & 0xFF ) << 8 ) |
-							  (int)( ( col >> IM_COL32_B_SHIFT ) & 0xFF ) ) } );
+							( ( (int)( flR + 0.5f ) & 0xFF ) << 16 ) |
+							( ( (int)( flG + 0.5f ) & 0xFF ) << 8 ) |
+							    ( (int)( flB + 0.5f ) & 0xFF ) ) } );
 					}
 					break;
 				}

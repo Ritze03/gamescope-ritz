@@ -236,14 +236,16 @@ namespace gamescope::ui
 		// they share *pflHue and return through the same bool.
 		bool HueBody( const ImRect &rcBody, const char *pszId, float *pflHue );
 
-		// ---- SPEC §4.4 -- Colour override: L/C/H rails + swatch -----------
-		// Operates in OKLCH because that is the space the accent family and
-		// every palette token already live in (Palette.h), so a colour picked
-		// here is expressible in the same terms as everything around it.
-		// The caller owns the sRGB<->OKLCH round trip, so the config format
-		// (a packed RGB int) is untouched by this control existing.
+		// ---- SPEC §4.4 -- Colour override: R/G/B rails + swatch -----------
+		// Plain sRGB, each component 0-255 -- the familiar convention for a
+		// new user editing a colour by hand, and request #5 (2026-09-04)
+		// replaced this control's former OKLCH L/C/H rails with it for that
+		// reason. The accent hue slider (HueBody above) is NOT this control:
+		// it stays a single hue driving the derived OKLCH palette, untouched
+		// by this change. The caller owns the packing, so the config format
+		// (a packed 0xRRGGBB int) is untouched by this control existing.
 		bool ColorBody( const ImRect &rcBody, const char *pszId,
-		                float *pflL, float *pflC, float *pflH );
+		                float *pflR, float *pflG, float *pflB );
 
 		// ---- SPEC §4.4 -- Frametime graph: a 240-sample sparkline ---------
 		// Read-only (Entry::ReadOnly() returns true for CompositeKind::Graph),

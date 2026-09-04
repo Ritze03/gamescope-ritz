@@ -134,6 +134,18 @@ to the live accent, which is the default). Fields live in
 `cursor_outline_color` -- `std::optional<int>`, unset = follow accent --
 `cursor_inlay_color`), global.json-only like every other field in that struct.
 
+Both colours are edited with `ui::CompositeKind::Color` (`Controls.cpp`'s
+`ColorBody()`): a swatch preview plus three plain sRGB rails, R/G/B, each
+0-255 -- request #5 (2026-09-04) replaced this control's former OKLCH L/C/H
+rails with it. `Why:` 0-255 RGB is the convention a new user already
+recognises, where OKLCH's lightness/chroma/hue axes are not. The stored value
+is unchanged either way -- a packed `0xRRGGBB` int -- only the picker's own
+three sliders changed what they mean; `ColorBody()` never touches OKLCH at
+all any more. The **accent hue** slider (`HueBody()`, the "Accent colour" row
+in `setup.appearance`) is a *different* control and stayed exactly as it was:
+it drives the whole derived OKLCH palette from one hue, and turning it into
+RGB would mean rebuilding that model, which request #5 explicitly excluded.
+
 `PanelCursor.h`'s `gamescope::GetCursorAppearance()` is the read side: a
 cached, load-once accessor (same shape as `PanelCursor.cpp`'s own row
 bindings) that resolves `cursor_outline_color` against the live accent

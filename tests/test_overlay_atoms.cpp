@@ -221,9 +221,10 @@ TEST_CASE( "atoms: every atom leaves the ImGui style and ID stacks balanced", "[
 	// case, nest three Rails inside one. A body that leaked a PushID would
 	// corrupt every id after it in the sheet, so they are swept here with
 	// every other atom rather than trusted.
-	float flHue = 218.0f, flL = 0.74f, flC = 0.12f, flH = 218.0f;
+	float flHue = 218.0f;
+	float flR = 60.0f, flG = 189.0f, flB = 221.0f; // request #5: plain 0-255 R/G/B, not OKLCH L/C/H.
 	ui::controls::HueBody( row.Place( 200.0f ), "hb", &flHue );
-	ui::controls::ColorBody( row.Place( 200.0f ), "cb", &flL, &flC, &flH );
+	ui::controls::ColorBody( row.Place( 200.0f ), "cb", &flR, &flG, &flB );
 	const float kSamples[] = { 6.9f, 7.1f, 7.0f, 16.4f, 7.2f };
 	ui::controls::GraphBody( row.Place( 200.0f ), kSamples, IM_ARRAYSIZE( kSamples ), 20.0f, 12.0f );
 

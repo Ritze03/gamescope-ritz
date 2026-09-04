@@ -1299,22 +1299,27 @@ namespace gamescope::ui
 				return palette::OklchToImU32( kAccentL, kAccentC, flT * 360.0f );
 			}
 
-			struct LchUser { float flL, flC, flH; };
+			// request #5 (2026-09-04): the full-colour picker's three rails
+			// are plain sRGB now, not OKLCH -- RgbUser carries the OTHER two
+			// channels (each already in the control's own 0-255 range) so a
+			// rail can gradient itself against what the other two are
+			// currently set to, same shape as LchUser did for L/C/H.
+			struct RgbUser { float flR, flG, flB; };
 
-			ImU32 LStop( float flT, void *pUser )
+			ImU32 RStop( float flT, void *pUser )
 			{
-				const LchUser *u = (const LchUser *)pUser;
-				return palette::OklchToImU32( flT, u->flC, u->flH );
+				const RgbUser *u = (const RgbUser *)pUser;
+				return IM_COL32( (int)( flT * 255.0f + 0.5f ), (int)( u->flG + 0.5f ), (int)( u->flB + 0.5f ), 255 );
 			}
-			ImU32 CStop( float flT, void *pUser )
+			ImU32 GStop( float flT, void *pUser )
 			{
-				const LchUser *u = (const LchUser *)pUser;
-				return palette::OklchToImU32( u->flL, flT * 0.37f, u->flH );
+				const RgbUser *u = (const RgbUser *)pUser;
+				return IM_COL32( (int)( u->flR + 0.5f ), (int)( flT * 255.0f + 0.5f ), (int)( u->flB + 0.5f ), 255 );
 			}
-			ImU32 HStop( float flT, void *pUser )
+			ImU32 BStop( float flT, void *pUser )
 			{
-				const LchUser *u = (const LchUser *)pUser;
-				return palette::OklchToImU32( u->flL, u->flC, flT * 360.0f );
+				const RgbUser *u = (const RgbUser *)pUser;
+				return IM_COL32( (int)( u->flR + 0.5f ), (int)( u->flG + 0.5f ), (int)( flT * 255.0f + 0.5f ), 255 );
 			}
 		}
 
@@ -1382,33 +1387,35 @@ namespace gamescope::ui
 		}
 
 		bool ColorBody( const ImRect &rcBody, const char *pszId,
-		                float *pflL, float *pflC, float *pflH )
+		                float *pflR, float *pflG, float *pflB )
 		{
 			ImGui::PushID( pszId );
 			bool bChanged = false;
 
 			// A square swatch on the left showing the resolved colour, three
-			// stacked rails to its right. The swatch is the only part that
+			// stacked rails to its right -- same layout as before request #5
+			// (2026-09-04), which only changed what the three rails MEAN
+			// (R/G/B, not OKLCH L/C/H). The swatch is the only part that
 			// answers "what did I actually pick", which is why it is drawn
-			// from the same OklchToImU32() the rails sample.
+			// from the exact same 0-255 components the rails edit.
 			const float flGap     = Px( tok::kS );
 			const float flSwatchW = ImMin( rcBody.GetHeight(), rcBody.GetWidth() * 0.25f );
 			const ImRect rcSwatch( rcBody.Min.x, rcBody.Min.y,
 			                       rcBody.Min.x + flSwatchW, rcBody.Max.y );
 
 			Dl()->AddRectFilled( rcSwatch.Min, rcSwatch.Max,
-				palette::OklchToImU32( *pflL, *pflC, *pflH ), Px( 3.0f ) );
+				IM_COL32( (int)( *pflR + 0.5f ), (int)( *pflG + 0.5f ), (int)( *pflB + 0.5f ), 255 ), Px( 3.0f ) );
 			Boundary( rcSwatch, Col( Role::LineControl ), Px( 3.0f ) );
 
 			const float flX0     = rcSwatch.Max.x + flGap;
 			const float flRailGap = Px( 4.0f );
 			const float flRailH  = ( rcBody.GetHeight() - flRailGap * 2.0f ) / 3.0f;
 
-			LchUser u{ *pflL, *pflC, *pflH };
+			RgbUser u{ *pflR, *pflG, *pflB };
 			struct { float *pf; float flLo, flHi; RailColorFn fn; const char *pszId; } kRails[] = {
-				{ pflL, 0.0f, 1.0f,   LStop, "l" },
-				{ pflC, 0.0f, 0.37f,  CStop, "c" },
-				{ pflH, 0.0f, 360.0f, HStop, "h" },
+				{ pflR, 0.0f, 255.0f, RStop, "r" },
+				{ pflG, 0.0f, 255.0f, GStop, "g" },
+				{ pflB, 0.0f, 255.0f, BStop, "b" },
 			};
 
 			for ( int i = 0; i < 3; ++i )
@@ -1420,9 +1427,9 @@ namespace gamescope::ui
 				{
 					// Re-seed the shared user data so the two rails BELOW
 					// this one gradient against the value just set, not the
-					// one it replaced. Without this the C and H strips would
-					// lag a frame behind the L they are supposed to show.
-					u = LchUser{ *pflL, *pflC, *pflH };
+					// one it replaced. Without this the G and B strips would
+					// lag a frame behind the R they are supposed to show.
+					u = RgbUser{ *pflR, *pflG, *pflB };
 					bChanged = true;
 				}
 			}
