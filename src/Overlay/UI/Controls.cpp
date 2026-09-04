@@ -1407,21 +1407,36 @@ namespace gamescope::ui
 				IM_COL32( (int)( *pflR + 0.5f ), (int)( *pflG + 0.5f ), (int)( *pflB + 0.5f ), 255 ), Px( 3.0f ) );
 			Boundary( rcSwatch, Col( Role::LineControl ), Px( 3.0f ) );
 
-			const float flX0     = rcSwatch.Max.x + flGap;
+			// A one-letter channel label sits left of each rail -- Meta role,
+			// same register as every other "unit / mark" in this UI (a
+			// segmented cell's suffix, the Text atom's trailing pencil).
+			// Mono at this size means R/G/B are all the same width, so one
+			// measurement sizes the column for all three; the rails then
+			// start flGap further right than before, which is the only
+			// geometry change -- their hit rects still run flush to
+			// rcBody.Max.x, so nothing about grabbing or dragging a rail
+			// moves except its left edge.
+			const float flLabelW = MeasureText( TypeRole::Meta, "R" ).x;
+			const float flX0     = rcSwatch.Max.x + flGap + flLabelW + flGap;
 			const float flRailGap = Px( 4.0f );
 			const float flRailH  = ( rcBody.GetHeight() - flRailGap * 2.0f ) / 3.0f;
 
 			RgbUser u{ *pflR, *pflG, *pflB };
-			struct { float *pf; float flLo, flHi; RailColorFn fn; const char *pszId; } kRails[] = {
-				{ pflR, 0.0f, 255.0f, RStop, "r" },
-				{ pflG, 0.0f, 255.0f, GStop, "g" },
-				{ pflB, 0.0f, 255.0f, BStop, "b" },
+			struct { float *pf; float flLo, flHi; RailColorFn fn; const char *pszId; const char *pszLabel; } kRails[] = {
+				{ pflR, 0.0f, 255.0f, RStop, "r", "R" },
+				{ pflG, 0.0f, 255.0f, GStop, "g", "G" },
+				{ pflB, 0.0f, 255.0f, BStop, "b", "B" },
 			};
 
 			for ( int i = 0; i < 3; ++i )
 			{
-				const ImRect rcRail( flX0, rcBody.Min.y + (float)i * ( flRailH + flRailGap ),
-				                     rcBody.Max.x, rcBody.Min.y + (float)i * ( flRailH + flRailGap ) + flRailH );
+				const float flY0 = rcBody.Min.y + (float)i * ( flRailH + flRailGap );
+				const float flY1 = flY0 + flRailH;
+
+				const ImRect rcLabel( rcSwatch.Max.x + flGap, flY0, flX0 - flGap, flY1 );
+				DrawText( rcLabel, TypeRole::Meta, Col( Role::TextMeta ), kRails[ i ].pszLabel, TextAlign::Center );
+
+				const ImRect rcRail( flX0, flY0, rcBody.Max.x, flY1 );
 				if ( Rail( rcRail, kRails[ i ].pszId, kRails[ i ].pf,
 					kRails[ i ].flLo, kRails[ i ].flHi, kRails[ i ].fn, &u ) )
 				{

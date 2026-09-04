@@ -141,7 +141,17 @@ rails with it. `Why:` 0-255 RGB is the convention a new user already
 recognises, where OKLCH's lightness/chroma/hue axes are not. The stored value
 is unchanged either way -- a packed `0xRRGGBB` int -- only the picker's own
 three sliders changed what they mean; `ColorBody()` never touches OKLCH at
-all any more. The **accent hue** slider (`HueBody()`, the "Accent colour" row
+all any more. Each rail carries its own one-letter "R"/"G"/"B" label
+(`TypeRole::Meta`, `Role::TextMeta`) in a fixed-width column between the
+swatch and the rail -- gap-fill for request #5, whose R/G/B rails originally
+shipped with no label at all, told apart only by order and end colour. The
+column is sized from a single `MeasureText()` of "R" (the Meta face is
+monospace, so all three letters measure the same) and only moves the rails'
+*left* edge over by that width plus two gaps; the right edge, vertical
+position and hit rect are untouched. No numeric 0-255 readout: the row is
+52px tall for three rails, so each rail is ~14.7px high -- enough for the
+13px Meta label but not for a second line, and not enough vertical room for
+the 16.5px `Value` face a numeric readout would need. The **accent hue** slider (`HueBody()`, the "Accent colour" row
 in `setup.appearance`) is a *different* control and stayed exactly as it was:
 it drives the whole derived OKLCH palette from one hue, and turning it into
 RGB would mean rebuilding that model, which request #5 explicitly excluded.

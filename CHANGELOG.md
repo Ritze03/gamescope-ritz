@@ -36,6 +36,8 @@ The newest version below is the one this build reports.
   visible log lines on the real clipboard instead of nowhere.
 - **Copying between games**: text copied in one game is now pastable in another
   when more than one Xwayland server is running.
+- **Colour picker rail labels**: the cursor colour rails now show an R/G/B letter
+  next to each strip instead of three unlabelled gradients.
 - **Sub-pixel FPS outline**: outline sizes below 1px draw a faint outline again
   instead of nothing.
 - **HUD outline alignment**: the FPS display's black outline no longer reads
