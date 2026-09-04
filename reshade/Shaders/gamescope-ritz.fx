@@ -1,7 +1,9 @@
-// gamescope-ritz.fx -- combined ReShade effect: Vibrancy + Pre-Sharpen +
-// Adaptive Brightness (M9, added after the #17 persistence spike -- see
-// superdoc/planning/DECISIONS.md #14 and reshade-shaders.md for the spike's
-// method/evidence).
+// gamescope-ritz.fx -- combined ReShade effect: Vibrancy + Shadow Lift +
+// Pre-Sharpen + Adaptive Brightness (M9, added after the #17 persistence
+// spike -- see superdoc/planning/DECISIONS.md #14 and reshade-shaders.md
+// for the spike's method/evidence). Shadow Lift (request #3, 2026-09-04)
+// is folded into the Vibrancy pass rather than counted as a separate one --
+// see its own uniform-block comment below for why.
 //
 // One always-loaded technique, two sequential passes, each independently
 // gated by its own on/off uniform, rather than shipped as separate
@@ -51,12 +53,13 @@
 // one it used to have -- Adaptive Brightness's own Apply pass is the new
 // last/implicit-output pass.
 //
-// SDR only for v1 (DECISIONS.md #15): all three effects work directly on
-// the base layer's already-encoded 0..1 RGB, with no HDR-aware colour
-// handling. PanelShaders.cpp refuses to let the user enable any of them
-// while the base layer's colourspace isn't SDR (LINEAR/SRGB), so this file
-// doesn't need to branch on BUFFER_COLOR_SPACE today -- see
-// reshade-shaders.md Q6 for what correct HDR-space math here would require.
+// SDR only for v1 (DECISIONS.md #15): every effect, Shadow Lift included,
+// works directly on the base layer's already-encoded 0..1 RGB, with no
+// HDR-aware colour handling. PanelShaders.cpp refuses to let the user
+// enable any of them while the base layer's colourspace isn't SDR
+// (LINEAR/SRGB), so this file doesn't need to branch on
+// BUFFER_COLOR_SPACE today -- see reshade-shaders.md Q6 for what correct
+// HDR-space math here would require.
 //
 // ponytail: works on encoded (gamma-ish) RGB directly rather than
 // linearizing via the sRGB EOTF before the math and re-encoding after --
@@ -70,15 +73,42 @@ uniform bool VibrancyEnabled <
 	defaultValue = false;
 > = false;
 
+// True saturation multiplier, 0.0..3.0, neutral (image unchanged) at 1.0 --
+// 0.0 is greyscale, 3.0 is maximum boost. Changed 2026-09-04 (request #2)
+// from an additive -1.0..+1.0 boost with 0.0 neutral -- see
+// ConfigSchema.h's ReshadeVibrancySettings::strength and
+// superdoc/features/shader-effects.md for the full why and the config
+// migration that keeps an existing file's neutral value neutral.
 uniform float VibrancyStrength <
 	source = "vibrancy_strength";
-	defaultValue = 0.0;
-> = 0.0;
+	defaultValue = 1.0;
+> = 1.0;
 
 uniform bool VibrancyProtectSkinTones <
 	source = "vibrancy_protect_skin_tones";
 	defaultValue = true;
 > = true;
+
+// ---- Shadow Lift (request #3, 2026-09-04) ------------------------------
+// "A darkness booster for dark games" -- decided as a shadow lift: brightens
+// dark areas so detail becomes visible, leaves highlights essentially alone.
+// Folded into the same pass as Vibrancy (PS_Vibrancy below) rather than
+// given its own render-target pass: both are cheap, purely per-pixel
+// colour-grade operations on one sample with no neighbour reads (unlike
+// Pre-Sharpen) and no cross-frame state (unlike Adaptive Brightness), so
+// there is nothing a separate pass would buy here beyond a redundant
+// full-screen triangle draw and an extra named texture. See
+// ApplyShadowLift() below for the curve and ordering rationale.
+uniform bool ShadowLiftEnabled <
+	source = "shadow_lift_enabled";
+	defaultValue = false;
+> = false;
+
+// 0.0..1.0, 0.0 neutral (identity, no-op). See ApplyShadowLift() below.
+uniform float ShadowLiftStrength <
+	source = "shadow_lift_strength";
+	defaultValue = 0.0;
+> = 0.0;
 
 uniform bool PreSharpenEnabled <
 	source = "pre_sharpen_enabled";
@@ -184,6 +214,26 @@ void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, 
 // Adaptive vibrance: boosts saturation more on already-desaturated pixels
 // (so already-vivid colours don't blow out/clip as fast), with an optional
 // hue-based mask that dampens the effect on warm, skin-tone-like hues.
+//
+// VibrancyStrength is a true saturation multiplier (request #2, 2026-09-04):
+// 0.0 = greyscale, 1.0 = unchanged, 3.0 = maximum boost. Built from two
+// pieces that add together rather than an if/else, so there is exactly one
+// return and no branch-dependent code path to keep in sync:
+//   - `mix` (0.0..1.0): tracks VibrancyStrength directly and uniformly --
+//     min(VibrancyStrength, 1.0). This alone reaches 0.0 = full grey and
+//     1.0 = unchanged. It deliberately carries NONE of the adaptive/
+//     skin-tone shaping below: at the 0.0 end every pixel must land on
+//     exactly the same grey target, so there is nothing left to "protect"
+//     or adapt -- a per-pixel exception there would mean 0.0 is not really
+//     full greyscale for skin-toned or already-saturated pixels.
+//   - `boost` (0.0 at/below neutral): keeps this effect's original adaptive
+//     shape (the (1.0 - sat) lean and the skin-tone damper below) for how
+//     far VibrancyStrength has gone PAST its new 1.0 neutral point, so nudging
+//     the slider from say 2.0 to 2.5 boosts the same way the old
+//     0.0..1.0 boost range used to.
+// mix + boost is 0.0 at VibrancyStrength 0.0, exactly 1.0 (== `color`,
+// boost being zero there) at 1.0, and grows past 1.0 exactly as the
+// pre-request-#2 shader did, just re-zeroed onto the new neutral point.
 float3 ApplyVibrancy(float3 color)
 {
 	float luma = dot(color, float3(0.299, 0.587, 0.114));
@@ -201,13 +251,51 @@ float3 ApplyVibrancy(float3 color)
 	}
 	float protect = lerp(1.0, 0.3, skinMask);
 
-	float amount = VibrancyStrength * (1.0 - sat) * protect;
-	return lerp(luma.xxx, color, 1.0 + amount);
+	float mix = min(VibrancyStrength, 1.0);
+	float boost = max(VibrancyStrength - 1.0, 0.0) * (1.0 - sat) * protect;
+	return lerp(luma.xxx, color, mix + boost);
+}
+
+// Shadow lift (request #3, 2026-09-04): brightens dark areas, leaves
+// highlights essentially alone. A gamma curve on the low end --
+// out = color ^ (1.0 - 0.5 * ShadowLiftStrength), exponent ranging from 1.0
+// (identity, strength 0.0) down to 0.5 (a sqrt() curve, strength 1.0, the
+// same shape a "raise gamma to ~2.0" boost applies). 0.0 and 1.0 are fixed
+// points of every power curve (0^g = 0, 1^g = 1 for any g > 0), so black and
+// white never move -- only the shape between them does, and it concentrates
+// its lift at the low end: at full strength, 0.1 -> 0.316 (+0.216) while
+// 0.9 -> 0.949 (+0.049), a boost an order of magnitude smaller near white.
+// That is the "lift shadows, leave highlights alone" shape request #3
+// asked for, and it is the standard textbook technique for it.
+//
+// Pipeline placement: this runs here, in the same per-pixel pass as
+// Vibrancy, on the already gamma/sRGB-encoded 0..1 colour Vibrancy and
+// Pre-Sharpen below also work in -- this whole file is SDR-only for v1 (see
+// the file's header comment; PanelShaders.cpp's EffectsUsable() gate keeps
+// HDR/scRGB content out of this pass entirely, so there is no linear-light
+// or PQ value that could ever reach pow() here). pow() of a saturated 0..1
+// input to a positive exponent is mathematically bounded to 0..1 -- it can
+// never go negative or overshoot 1 -- so this is safe even before the
+// pass's closing saturate() below. Applied before Vibrancy (not after):
+// this is a tone/exposure-style adjustment, and lift-before-saturate is the
+// conventional order for that family of operations (lift/gamma/gain, then
+// vibrance/saturation) -- it also means Vibrancy's grey target is computed
+// from the already-lifted luma, so a boosted pixel doesn't drift back
+// toward a stale pre-lift grey.
+float3 ApplyShadowLift(float3 color)
+{
+	float exponent = 1.0 - 0.5 * saturate(ShadowLiftStrength);
+	return pow(saturate(color), float3(exponent, exponent, exponent));
 }
 
 void PS_Vibrancy(float4 pos : SV_Position, float2 texcoord : TEXCOORD, out float4 outColor : SV_Target)
 {
 	float3 color = tex2D(samplerColor, texcoord).rgb;
+	// Shadow Lift folded into this pass rather than given its own -- see
+	// its uniform declarations above for why. Order: lift then vibrancy,
+	// see ApplyShadowLift()'s comment.
+	if (ShadowLiftEnabled)
+		color = ApplyShadowLift(color);
 	if (VibrancyEnabled)
 		color = ApplyVibrancy(color);
 	outColor = float4(saturate(color), 1.0);

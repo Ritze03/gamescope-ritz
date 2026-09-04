@@ -22,7 +22,15 @@ namespace gamescope::config
 {
     // Bumped on any breaking rename/removal/type-change. See ConfigManager's
     // migration scaffolding.
-    inline constexpr int kCurrentSchemaVersion = 1;
+    //
+    // 1 -> 2 (2026-09-04, request #2): reshade.vibrancy.strength's meaning
+    // changed from an additive boost (-1.0..+1.0, 0.0 neutral) to a true
+    // saturation multiplier (0.0..3.0, 1.0 neutral). ConfigManager.cpp's
+    // Migrate_1_to_2() shifts an old on-disk value onto the new scale
+    // (+1.0, clamped) so a schema-1 file's neutral 0.0 does not get
+    // silently reread as full greyscale. See superdoc/features/
+    // shader-effects.md's "Vibrancy range" section for the full why.
+    inline constexpr int kCurrentSchemaVersion = 2;
 
     struct GamescopeSettings
     {
@@ -164,8 +172,34 @@ namespace gamescope::config
     struct ReshadeVibrancySettings
     {
         bool enabled = false;
-        float strength = 0.0f;           // -1.0..+1.0
+        // True saturation multiplier, 0.0..3.0, neutral (image unchanged) at
+        // 1.0 -- 0.0 is greyscale, 3.0 is maximum boost. Changed from an
+        // additive -1.0..+1.0 boost (0.0 neutral) 2026-09-04 (request #2);
+        // see kCurrentSchemaVersion's 1->2 comment above and
+        // superdoc/features/shader-effects.md for the migration this default
+        // alone does NOT cover (a schema-1 file needs Migrate_1_to_2() in
+        // ConfigManager.cpp; this default only governs a fresh install that
+        // has no file to migrate at all).
+        float strength = 1.0f;
         bool protect_skin_tones = true;
+    };
+
+    struct ReshadeShadowLiftSettings
+    {
+        // Request #3 (2026-09-04): "a darkness booster for dark games" --
+        // decided as a shadow lift (brightens dark areas, leaves highlights
+        // alone), not a global brightness control. Purely additive field
+        // (new key, new struct), so an old config simply has neither and
+        // resolves to these compiled-in defaults -- no migration needed, see
+        // superdoc/features/shader-effects.md's "Shadow lift" section.
+        bool enabled = false;
+        // 0.0..1.0, 0.0 neutral (identity). Applied in gamescope-ritz.fx as a
+        // gamma curve on the low end: out = pow(color, 1.0 - 0.5*strength).
+        // 0 and 1 are fixed points of any power curve, so black and white
+        // never move; only the shape in between does, with the curve's
+        // effect concentrated at the low end. See that file's own comment
+        // for the reasoning and superdoc/features/shader-effects.md.
+        float strength = 0.0f;
     };
 
     struct ReshadePreSharpenSettings
@@ -197,6 +231,7 @@ namespace gamescope::config
         ReshadeVibrancySettings vibrancy;
         ReshadePreSharpenSettings pre_sharpen;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
+        ReshadeShadowLiftSettings shadow_lift;
     };
 
     // Issue #35: one panel window's saved screen position/size, restored on

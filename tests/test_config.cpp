@@ -1293,3 +1293,128 @@ TEST_CASE( "nothing deletes a per-game config except the explicit delete", "[con
     REQUIRE( DeletePerGameOverride( "1174180" ) );
     REQUIRE( !std::filesystem::exists( pathGame ) );
 }
+
+// ---- Requests #2/#3, 2026-09-04: vibrancy range + shadow lift -----------
+
+TEST_CASE( "a fresh config (no file at all) resolves vibrancy strength to neutral (1.0), not greyscale", "[config]" )
+{
+    TempConfigHome home;
+
+    // No file on disk yet - this exercises ConfigSchema.h's compiled-in
+    // default member initializer, not JGetFloat's fallback path. Under the
+    // old additive-boost meaning, 0.0 was neutral; under the new
+    // multiplier meaning, 0.0 is full greyscale, so the struct default had
+    // to move to 1.0 along with the semantic change, or a fresh install
+    // would open with a desaturated screen.
+    Settings s = LoadGlobal();
+    REQUIRE( s.reshade.vibrancy.strength == 1.0f );
+}
+
+TEST_CASE( "reshade.vibrancy.strength round-trips across the whole 0.0-3.0 multiplier range", "[config]" )
+{
+    for ( float flValue : { 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.reshade.vibrancy.strength = flValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.reshade.vibrancy.strength == flValue );
+    }
+}
+
+// A freshly-saved config already carries the current schema_version, so it
+// takes the "nothing to migrate" path through Migrate_1_to_2 - this pins
+// that a same-version round trip is a true no-op, not just "close enough".
+TEST_CASE( "a config saved under the current schema round-trips vibrancy strength unmigrated", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.reshade.vibrancy.strength = 0.0f; // greyscale under the CURRENT meaning
+    REQUIRE( SaveGlobal( s ) );
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.reshade.vibrancy.strength == 0.0f ); // not bumped to 1.0 again
+}
+
+// Request #2's actual concern: a schema-1 file (the only schema this fork
+// ever shipped before today) must not have its untouched, neutral 0.0
+// silently reread as full greyscale under the new 0.0-3.0 meaning.
+// Migrate_1_to_2 (ConfigManager.cpp) shifts the whole old range onto the
+// new one by the constant that carries old-neutral to new-neutral (+1.0),
+// then clamps into 0.0..3.0 - exercised here at old min/neutral/max.
+TEST_CASE( "a schema-1 config's vibrancy.strength migrates from the old additive scale to the new multiplier scale", "[config]" )
+{
+    struct Case { float flOld; float flExpectedNew; };
+    for ( const Case &c : { Case{ 0.0f, 1.0f }, Case{ -1.0f, 0.0f }, Case{ 1.0f, 2.0f }, Case{ -0.4f, 0.6f } } )
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+
+        std::ofstream( GlobalConfigPath() ) << R"({
+            "schema_version": 1,
+            "reshade": { "vibrancy": { "enabled": true, "strength": )" << c.flOld << R"( } }
+        })";
+
+        Settings s = LoadGlobal();
+        REQUIRE( s.reshade.vibrancy.enabled == true );        // unrelated field untouched
+        REQUIRE( s.reshade.vibrancy.strength == c.flExpectedNew );
+    }
+}
+
+// A config with no schema_version key at all (predates the field itself)
+// takes the same migration path as an explicit schema_version 1 - both
+// predate the vibrancy rename.
+TEST_CASE( "a config with no schema_version field at all also migrates vibrancy.strength", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "reshade": { "vibrancy": { "strength": 0.0 } }
+    })";
+
+    Settings s = LoadGlobal();
+    REQUIRE( s.reshade.vibrancy.strength == 1.0f );
+}
+
+// Request #3: neutral (disabled, strength 0.0) is the default, so an
+// existing config that never mentions shadow_lift at all - which is every
+// config on disk today, since the field is brand new - is unaffected.
+TEST_CASE( "an existing config with no shadow_lift key resolves to the neutral default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "schema_version": 2,
+        "gamescope": { "filter": "FSR" }
+    })";
+
+    Settings s = LoadGlobal();
+    REQUIRE( s.reshade.shadow_lift.enabled == false );
+    REQUIRE( s.reshade.shadow_lift.strength == 0.0f );
+    REQUIRE( s.gamescope.filter == "FSR" ); // unrelated section untouched
+}
+
+TEST_CASE( "reshade.shadow_lift.enabled and strength round-trip", "[config]" )
+{
+    for ( float flValue : { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.reshade.shadow_lift.enabled = true;
+        s.reshade.shadow_lift.strength = flValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.reshade.shadow_lift.enabled == true );
+        REQUIRE( loaded.reshade.shadow_lift.strength == flValue );
+    }
+}

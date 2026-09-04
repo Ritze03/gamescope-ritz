@@ -57,3 +57,4 @@ enables it, and optionally pushes uniform variable values to drive runtime param
 - [scaling-filters](scaling-filters.md) — the separate, built-in FSR/NIS upscale/sharpen path this feature is not part of.
 - [compositing-vulkan](compositing-vulkan.md) — the Vulkan composite path ReShade pipelines execute within.
 - [wayland-protocols](wayland-protocols.md) — conventions for Gamescope's custom protocols, including `gamescope-reshade.xml`.
+- [shader-effects](shader-effects.md) — the settings-panel/effect-content layer built on top of this mechanism (Vibrancy, Shadow Lift, Pre-Sharpen, Adaptive Brightness, `reshade/Shaders/gamescope-ritz.fx`).

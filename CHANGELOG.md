@@ -9,6 +9,20 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.5.0] – 2026-09-04
+
+### Added
+- **Shadow lift**: a new Shaders effect that brightens dark areas in dark games
+  while leaving bright areas alone.
+
+### Fixed
+- **Vibrancy is now a true multiplier**: the slider runs 0x (greyscale) to 3x
+  (max boost) with 1x as unchanged, instead of an additive boost. An existing
+  config's untouched value converts automatically, so it still opens looking the
+  same rather than desaturated.
+- **HUD outline alignment**: the FPS display's black outline no longer reads
+  slightly up and to the left of the digits at larger font and outline sizes.
+
 ## [0.4.0] – 2026-09-03
 
 ### Added

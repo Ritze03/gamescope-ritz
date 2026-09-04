@@ -223,6 +223,13 @@ namespace gamescope::config
                     ab.max_gain = JGetFloat( *pAdaptive, "max_gain", ab.max_gain );
                     ab.strength = JGetFloat( *pAdaptive, "strength", ab.strength );
                 }
+
+                if ( const nlohmann::json *pShadowLift = JGetObject( *pReshade, "shadow_lift" ) )
+                {
+                    auto &sl = s.reshade.shadow_lift;
+                    sl.enabled = JGetBool( *pShadowLift, "enabled", sl.enabled );
+                    sl.strength = JGetFloat( *pShadowLift, "strength", sl.strength );
+                }
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
@@ -389,10 +396,16 @@ namespace gamescope::config
             jAdaptive[ "max_gain" ] = ab.max_gain;
             jAdaptive[ "strength" ] = ab.strength;
 
+            const auto &sl = s.reshade.shadow_lift;
+            nlohmann::json jShadowLift = nlohmann::json::object();
+            jShadowLift[ "enabled" ] = sl.enabled;
+            jShadowLift[ "strength" ] = sl.strength;
+
             nlohmann::json jReshade = nlohmann::json::object();
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
+            jReshade[ "shadow_lift" ] = std::move( jShadowLift );
 
             nlohmann::json jNotifications = nlohmann::json::object();
             jNotifications[ "muted" ] = s.notifications.muted;
@@ -479,12 +492,51 @@ namespace gamescope::config
 
         // ---- parsing / migration --------------------------------------------
 
-        // No migrations exist yet - schema_version 1 is the only version that
-        // has ever shipped. This is the scaffold future schema changes hang
-        // off: add a migrate_N_to_N+1(nlohmann::json &) step here and run it in
-        // ParseConfigFile below as versions accumulate. Deliberately built now
-        // (SPEC.md's "Schema migrations" section) rather than retrofitted once
-        // real files are in the wild without one.
+        // This is the scaffold future schema changes hang off: add a
+        // migrate_N_to_N+1(nlohmann::json &) step here and run it in
+        // ParseConfigFile below as versions accumulate. Deliberately built
+        // (SPEC.md's "Schema migrations" section) rather than retrofitted
+        // once real files are in the wild without one - Migrate_1_to_2 below
+        // is its first real use.
+
+        // Schema 1 -> 2 (2026-09-04, request #2): reshade.vibrancy.strength
+        // changed meaning from an additive boost (-1.0..+1.0, 0.0 neutral) to
+        // a true saturation multiplier (0.0..3.0, 1.0 neutral) - see
+        // ConfigSchema.h's kCurrentSchemaVersion comment and
+        // superdoc/features/shader-effects.md's "Vibrancy range" section.
+        //
+        // Reread blind under the new meaning, a schema-1 file's neutral 0.0
+        // would become full greyscale - exactly the surprise this step
+        // exists to prevent. The transform shifts the whole old range onto
+        // the new one by the constant that carries old-neutral to
+        // new-neutral (+1.0), then clamps into 0.0..3.0:
+        //   - untouched (old 0.0)  -> 1.0  (still neutral, exact)
+        //   - old min   (-1.0)     -> 0.0  (full greyscale, exact)
+        //   - old max   (+1.0)     -> 2.0  (a real boost, short of the new
+        //                                   3.0 ceiling - not exact, but
+        //                                   monotonic and sane)
+        // A config that never touched vibrancy is therefore unaffected by
+        // this rename in the way that matters (no greyscale surprise); one
+        // that did keeps the same displacement from neutral rather than
+        // being silently reset.
+        void Migrate_1_to_2( nlohmann::json &j )
+        {
+            auto itReshade = j.find( "reshade" );
+            if ( itReshade == j.end() || !itReshade->is_object() )
+                return;
+
+            auto itVibrancy = itReshade->find( "vibrancy" );
+            if ( itVibrancy == itReshade->end() || !itVibrancy->is_object() )
+                return;
+
+            auto itStrength = itVibrancy->find( "strength" );
+            if ( itStrength == itVibrancy->end() || !itStrength->is_number() )
+                return;
+
+            const float flOld = itStrength->get<float>();
+            const float flNew = std::clamp( flOld + 1.0f, 0.0f, 3.0f );
+            ( *itVibrancy )[ "strength" ] = flNew;
+        }
 
         // Parses `sText` as JSON without ever throwing/aborting on malformed
         // input, validates schema_version, and returns std::nullopt - having
@@ -512,8 +564,10 @@ namespace gamescope::config
             }
 
             // nVersion < kCurrentSchemaVersion (including the "field missing
-            // entirely" -> 0 case) would run the migration chain here once one
-            // exists. Nothing to do yet.
+            // entirely" -> 0 case) runs the migration chain here. 0 and 1 both
+            // predate the vibrancy rename, so both take this step.
+            if ( nVersion < 2 )
+                Migrate_1_to_2( j );
 
             return j;
         }

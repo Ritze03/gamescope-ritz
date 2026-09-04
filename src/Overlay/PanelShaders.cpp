@@ -152,6 +152,8 @@ namespace gamescope
 		SetRuntimeUniformFloat( "adaptive_brightness_min_gain", r.adaptive_brightness.min_gain );
 		SetRuntimeUniformFloat( "adaptive_brightness_max_gain", r.adaptive_brightness.max_gain );
 		SetRuntimeUniformFloat( "adaptive_brightness_strength", r.adaptive_brightness.strength );
+		SetRuntimeUniformBool( "shadow_lift_enabled", r.shadow_lift.enabled );
+		SetRuntimeUniformFloat( "shadow_lift_strength", r.shadow_lift.strength );
 	}
 
 	static void EnsureConfigLoaded()
@@ -184,7 +186,8 @@ namespace gamescope
 		// PanelConfig-triggered profile/override change mid-session -- must
 		// apply immediately, not wait for the user to touch a widget: load
 		// the effect and push its full state now if anything is on.
-		if ( s_CachedSettings.reshade.vibrancy.enabled || s_CachedSettings.reshade.pre_sharpen.enabled || s_CachedSettings.reshade.adaptive_brightness.enabled )
+		if ( s_CachedSettings.reshade.vibrancy.enabled || s_CachedSettings.reshade.pre_sharpen.enabled
+		     || s_CachedSettings.reshade.adaptive_brightness.enabled || s_CachedSettings.reshade.shadow_lift.enabled )
 			EnsureEffectLoaded();
 		PushAllUniformsToShader();
 	}
@@ -202,17 +205,19 @@ namespace gamescope
 	// P5 deleted the three legacy group drawers this replaced, along with
 	// the floating window that hosted them.
 	//
-	// SHAPE: three switch rows, one per effect, each owning its own
-	// parameters. This is the taxonomy's intended shape for exactly this
-	// data and it is what index.html declares -- an effect is one decision
-	// ("is this on") with tuning behind it, so the sheet stays three rows
-	// deep no matter how many knobs an effect grows.
+	// SHAPE: one switch row per effect, each owning its own parameters. This
+	// is the taxonomy's intended shape for exactly this data -- an effect is
+	// one decision ("is this on") with tuning behind it, so the sheet stays
+	// one row per effect deep no matter how many knobs an effect grows.
+	// (index.html declared three at E2's original writing; Shadow lift
+	// (request #3, 2026-09-04) is the fourth, added the same shape.)
 	//
 	// THE SIX BUDGET, AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY ON IT.
-	// Vibrancy has 2 params, Pre-sharpen 1, Adaptive brightness 6 -- the
-	// maximum a row may own before Registry.cpp aborts registration and
-	// tells the author to promote it to a category. It fits, but with zero
-	// headroom, and that is worth saying out loud: the NEXT parameter added
+	// Vibrancy has 2 params, Pre-sharpen 1, Adaptive brightness 6, Shadow
+	// lift 1 -- the maximum a row may own before Registry.cpp aborts
+	// registration and tells the author to promote it to a category.
+	// Adaptive brightness fits, but with zero headroom, and that is worth
+	// saying out loud: the NEXT parameter added
 	// to this effect does not "just" overflow a limit, it is the signal
 	// that Adaptive brightness has become a category rather than a setting.
 	// Nothing here routes around the budget, and nothing should.
@@ -260,13 +265,14 @@ namespace gamescope
 	void PanelShaders_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
-		a.Keywords( "shader reshade effect vibrancy saturation sharpen adaptive brightness exposure" );
+		a.Keywords( "shader reshade effect vibrancy saturation sharpen adaptive brightness exposure shadow lift darkness" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.vibrancy.enabled ? 1 : 0 )
 			            + ( r.pre_sharpen.enabled ? 1 : 0 )
-			            + ( r.adaptive_brightness.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 3 effects on";
+			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
+			            + ( r.shadow_lift.enabled ? 1 : 0 );
+			return std::to_string( n ) + " of 4 effects on";
 		} );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
@@ -284,14 +290,15 @@ namespace gamescope
 			.Default( false )
 			.Keywords( "vibrancy saturation colour vividness" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
-			.Param( "strength", "Strength",
+			.Param( "strength", "Saturation",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.vibrancy.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, "vibrancy_strength", f ); } ) )
-				.Help( "How strong the effect is. Negative values make colours duller instead." )
-				.Range( -1.0f, 1.0f )
-				.Step( 0.05f )   // 41 positions; 0.00, the default, is the centre notch
-				.Default( 0.0f )
+				.Help( "Colour intensity. 1x is unchanged, 0x is black and white, 3x is maximum boost." )
+				.Range( 0.0f, 3.0f )
+				.Step( 0.05f )   // 61 positions; 1.00, the default, is the neutral notch
+				.Unit( "x" )
+				.Default( 1.0f )
 			.Param( "protect_skin", "Protect skin tones",
 				ui::AnyBind::Of<bool>(
 					[]{ return Cfg().reshade.vibrancy.protect_skin_tones; },
@@ -403,6 +410,32 @@ namespace gamescope
 				.Range( 1.0f, 2.0f )
 				.Step( 0.05f )   // 21 positions
 				.Default( 1.6f );
+
+		// Request #3 (2026-09-04): "a darkness booster for dark games" --
+		// lifts shadows (brightens dark areas so detail becomes visible)
+		// while leaving highlights alone. One param, well under the six
+		// budget -- see this section's header comment. Neutral (0.0,
+		// identity) is the default, so an existing config is unaffected.
+		a.Switch( "image.shaders.shadow_lift", "Shadow lift",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.shadow_lift.enabled; },
+				[]( bool b ) {
+					SetEffectEnabled( &Cfg().reshade.shadow_lift.enabled, "shadow_lift_enabled", b );
+				} ) )
+			.Help( "Brightens dark areas so detail in dark games is easier to see, while leaving "
+			       "bright areas alone." )
+			.Default( false )
+			.Keywords( "shadow lift dark brightness gamma boost darkness" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.shadow_lift.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.shadow_lift.strength,
+						"shadow_lift_strength", f ); } ) )
+				.Help( "How much darker areas are brightened." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions
+				.Default( 0.0f );
 
 		a.Group( "Diagnostics" );
 
