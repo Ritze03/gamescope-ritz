@@ -56,10 +56,35 @@ Verified headless: built, launched `--backend headless` under
 ran `gamescopectl layer_budget_stats` — printed `layer_budget_stats: 0 drop(s),
 high-water mark 0 / 6 layers`. Torn down cleanly, no leftover process.
 
-## [ ] 3. Retire the double-height split texture for Inverted HUD + crosshair
+## [~] 3. Retire the double-height split texture for Inverted HUD + crosshair
 
-Draw the crosshair as an unmarked region of the single HUD layer instead of a
-separate double-height split texture, freeing one layer slot.
+**Implemented and desktop-verified `0b9b79d`, laptop pending.** One HUD layer in every
+mode. The invert shader (`src/shaders/alphamode.h`) now finds the digits by a marker in
+the texel rather than by brightness: the readout draws them pure magenta (`G == 0`) over
+pure-black outline/backdrop, so `G == 0` ⇒ digit with R as its coverage, `G > 0` ⇒
+composite as coverage. The crosshair keeps any colour at any opacity — a colour with no
+green is nudged `G 0 → 1` (one count) while it shares an Inverted layer, and the texture is
+16-bit for exactly that pairing so the nudge survives premultiplication at low opacity.
+Why not an alpha sub-range / low-bit marker in 8 bits: ImGui's over-blend keeps `rgb ≤ a`
+and mixes a digit's edge with what is under it, so no brightness/ratio test separates a
+digit edge over the black outline from a grey crosshair of the same value, and a ±2
+colour restriction drowns in 8-bit premultiplied quantisation below ~50 % opacity; a zero
+channel is the one thing that survives mixing with black. Full reasoning in
+`superdoc/features/fps-display.md` ("What Inverted mode does not invert").
+
+Measured on the desktop (`scripts/pixel-regression.sh`, now 23 checks, all pass): digits
+251 over 51 and 46 over 148 unchanged; `(0,255,0)` arm at 50 % over 51 = `(35, 99, 35)`
+on both the split build and this one (that is the documented premultiplied-then-coverage
+blend, *not* `c×0.5 + bg×0.5` — see `coverage_blend_expected()`); pure red at 10 % on
+both crosshair paths matches to the count; layer high-water mark with readout + crosshair
+on from startup **5 → 4** (`layer-budget` check). Known limitation, documented: a readout
+anchored *on* the crosshair shows a few magenta fringe pixels where a digit edge crosses
+an arm (`build-release/verify-shots/split-retire/zoom/overlap-mid.png`).
+
+Laptop: re-run the fps-display.md pixel recipe with Inverted + crosshair on Intel/ANV, and
+eyeball a red/blue crosshair at 10–50 % opacity in that mode (the 16-bit format switch and
+the pipeline re-creation are the parts this desktop's nested run cannot vouch for on
+another driver).
 
 ## [~] 4. Profiles and per-game config: new concept
 
