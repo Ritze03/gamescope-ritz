@@ -9,6 +9,17 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.6.0] – 2026-09-05
+
+### Added
+- **Shader diagnostics**: the Shaders area now shows which effect file actually
+  loaded and warns when a control's setting is not recognised by it.
+
+### Info
+- **Shader effect names**: Pre-Sharpen, Adaptive Brightness and Shadow Control
+  (formerly "Shadow lift") are now capitalised consistently; saved settings are
+  unaffected.
+
 ## [0.5.0] – 2026-09-04
 
 ### Added

@@ -2,6 +2,8 @@
 
 #include "rendervulkan.hpp"
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace reshadefx
 {
@@ -107,6 +109,18 @@ extern ReshadeEffectManager g_reshadeManager;
 
 
 void reshade_effect_manager_set_uniform_variable(const char *key, uint8_t* value);
+
+// Diagnostics for the Shaders panel. A .fx is compiled at runtime from a
+// file on disk while its C++ driver is compiled into the binary, so the two
+// can drift silently -- see the "Effect diagnostics" comment at the top of
+// reshade_effect_manager.cpp for the failure this exists to make visible.
+//
+// shader_source(): the file the currently-loaded effect actually compiled
+// from, or "" if nothing has compiled yet.
+// missing_uniforms(): names gamescope set that the loaded module does not
+// declare, in first-seen order. Non-empty means those controls do nothing.
+std::string reshade_effect_manager_shader_source();
+std::vector<std::string> reshade_effect_manager_missing_uniforms();
 void reshade_effect_manager_set_effect(const char *path, std::function<void(const char*)> callback);
 void reshade_effect_manager_enable_effect();
 void reshade_effect_manager_disable_effect();

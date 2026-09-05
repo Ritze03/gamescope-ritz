@@ -20,6 +20,8 @@
 #include <stb_image_resize.h>
 
 #include <mutex>
+#include <algorithm>
+#include <unordered_set>
 
 // This is based on wl_array_for_each from `wayland-util.h` in the Wayland client library.
 #define uint8_array_for_each(pos, data, size) \
@@ -33,6 +35,61 @@ static std::mutex g_runtimeUniformsMutex;
 extern int g_nOutputRefresh;
 
 static LogScope reshade_log("gamescope_reshade");
+
+// ---- Effect diagnostics ------------------------------------------------
+//
+// WHY THIS EXISTS. A .fx is compiled at runtime from a file on disk, while
+// the C++ that drives it is compiled into the binary -- so the two can
+// drift, and nothing in a build ever catches it. The concrete failure this
+// was written for: a stale ~/.local/share/gamescope/reshade/Shaders copy of
+// an effect shadowed the current one, the C++ went on writing uniforms
+// ("shadow_lift_strength" and friends) that the loaded shader did not
+// declare, and RuntimeUniform simply never looked them up. Every control
+// moved, nothing changed on screen, and not one line was logged.
+//
+// So: remember which file actually compiled, remember every uniform the
+// compiled module declares, and complain (once per name) the moment
+// something sets a uniform that module has never heard of. The Shaders
+// panel surfaces both -- see reshade_effect_manager_shader_source() and
+// reshade_effect_manager_missing_uniforms(), drawn as Facts rows in
+// Overlay/PanelShaders.cpp.
+//
+// Its own mutex, not g_runtimeUniformsMutex: set_uniform_variable() already
+// holds that one when it reports a miss, and RuntimeUniform::update() takes
+// it every frame. Keeping the two apart means the diagnostics can never
+// deadlock or slow the per-frame uniform path.
+static std::mutex g_reshadeDiagMutex;
+// The file the currently-loaded module was compiled from; empty until one
+// compiles.
+static std::string g_reshadeShaderSource;
+// Every `source = "..."` name the compiled module declares. Empty means
+// "nothing compiled yet", which is why the miss check below is skipped in
+// that state -- a uniform set before the effect loads is normal and gets
+// picked up on load.
+static std::unordered_set<std::string> g_reshadeDeclaredUniforms;
+// Names that were set but are not declared, in first-seen order. Also the
+// log-once ledger: a name in here has already been warned about.
+static std::vector<std::string> g_reshadeMissingUniforms;
+
+// Caller must NOT hold g_reshadeDiagMutex.
+static void ReportUniformIfUndeclared(const std::string &name)
+{
+    std::lock_guard<std::mutex> lock(g_reshadeDiagMutex);
+
+    if (g_reshadeDeclaredUniforms.empty())
+        return; // nothing compiled yet -- see above
+    if (g_reshadeDeclaredUniforms.contains(name))
+        return;
+    if (std::find(g_reshadeMissingUniforms.begin(), g_reshadeMissingUniforms.end(), name) != g_reshadeMissingUniforms.end())
+        return; // already warned
+
+    g_reshadeMissingUniforms.push_back(name);
+    reshade_log.errorf("Uniform \'%s\' is set by gamescope but is not declared by the loaded effect (%s). "
+                       "That control will do nothing. The shader on disk is probably older than this build -- "
+                       "check for a stale copy under ~/.local/share/gamescope/reshade/Shaders.",
+                       name.c_str(), g_reshadeShaderSource.empty() ? "<none>" : g_reshadeShaderSource.c_str());
+}
+
 
 ///////////////
 // Uniforms
@@ -963,6 +1020,14 @@ bool ReshadeEffectPipeline::init(CVulkanDevice *device, const ReshadeEffectKey &
     std::string global_shader_file_path = global_reshade_path + "/Shaders/" + key.path;
     std::string global_shader_file_path_fallback = global_reshade_path_fallback + "/Shaders/" + key.path;
 
+    // The path that actually compiled, remembered for the Shaders panel's
+    // "loaded from" row. The search order below is first-match-wins, and
+    // the legacy unnamespaced .../share/gamescope/reshade fallback can
+    // easily hold an older copy of an effect than the namespaced
+    // gamescope-ritz one -- so "which file won" is the single most useful
+    // fact when an effect silently does nothing.
+    std::string compiled_from;
+
 	if (!pp.append_file(local_shader_file_path))
 	{
         if (!pp.append_file(local_shader_file_path_fallback))
@@ -977,9 +1042,22 @@ bool ReshadeEffectPipeline::init(CVulkanDevice *device, const ReshadeEffectKey &
                         pp.errors().c_str());
                     return false;
                 }
+                compiled_from = global_shader_file_path_fallback;
             }
+            else
+                compiled_from = global_shader_file_path;
         }
+        else
+            compiled_from = local_shader_file_path_fallback;
 	}
+    else
+        compiled_from = local_shader_file_path;
+
+    {
+        std::lock_guard<std::mutex> lock(g_reshadeDiagMutex);
+        g_reshadeShaderSource = compiled_from;
+    }
+    reshade_log.infof("Loaded effect %s from %s", key.path.c_str(), compiled_from.c_str());
 
 	std::string errors = pp.errors();
 	if (!errors.empty())
@@ -1090,6 +1168,34 @@ bool ReshadeEffectPipeline::init(CVulkanDevice *device, const ReshadeEffectKey &
 
     // Create Uniforms
     m_uniforms = createReshadeUniforms(*m_module, &m_flags);
+
+    // Record what this module actually declares, then sweep everything that
+    // was already set. Both halves are needed: the panel writes its whole
+    // config before/while the effect loads (so misses have to be caught
+    // here, at compile time), and it writes again on every control change
+    // afterwards (caught in set_uniform_variable below).
+    {
+        std::vector<std::string> alreadySet;
+        {
+            std::lock_guard<std::mutex> diagLock(g_reshadeDiagMutex);
+            g_reshadeDeclaredUniforms.clear();
+            g_reshadeMissingUniforms.clear();
+            for (const auto &uniform : m_module->uniforms)
+            {
+                auto source = std::ranges::find_if(uniform.annotations,
+                    std::bind_front(std::equal_to{}, "source"), &reshadefx::annotation::name);
+                if (source != uniform.annotations.end() && !source->value.string_data.empty())
+                    g_reshadeDeclaredUniforms.insert(source->value.string_data);
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_runtimeUniformsMutex);
+            for (const auto &[name, value] : g_runtimeUniforms)
+                alreadySet.push_back(name);
+        }
+        for (const auto &name : alreadySet)
+            ReportUniformIfUndeclared(name);
+    }
 
     // Create Textures
     {
@@ -1977,6 +2083,7 @@ ReshadeEffectManager g_reshadeManager;
 
 void reshade_effect_manager_set_uniform_variable(const char *key, uint8_t* value) 
 {
+    {
     std::lock_guard<std::mutex> lock(g_runtimeUniformsMutex);
 
     auto it = g_runtimeUniforms.find(key);
@@ -1985,11 +2092,35 @@ void reshade_effect_manager_set_uniform_variable(const char *key, uint8_t* value
     }
     
     g_runtimeUniforms[std::string(key)] = value;
+    }
+    // Outside the g_runtimeUniforms lock on purpose -- see the diagnostics
+    // block at the top of this file for the lock-ordering rule.
+    ReportUniformIfUndeclared(std::string(key));
     force_repaint();
+}
+
+std::string reshade_effect_manager_shader_source()
+{
+    std::lock_guard<std::mutex> lock(g_reshadeDiagMutex);
+    return g_reshadeShaderSource;
+}
+
+std::vector<std::string> reshade_effect_manager_missing_uniforms()
+{
+    std::lock_guard<std::mutex> lock(g_reshadeDiagMutex);
+    return g_reshadeMissingUniforms;
 }
 
 void reshade_effect_manager_set_effect(const char *path, std::function<void(const char*)> callback)
 {
+    {
+        // A different effect is a different set of declarations; carrying
+        // the old ones over would report bogus misses.
+        std::lock_guard<std::mutex> lock(g_reshadeDiagMutex);
+        g_reshadeShaderSource.clear();
+        g_reshadeDeclaredUniforms.clear();
+        g_reshadeMissingUniforms.clear();
+    }
     g_runtimeUniforms.clear();
     if (g_reshadeEffectPath) free(g_reshadeEffectPath);
     g_reshadeEffectPath = strdup(path);

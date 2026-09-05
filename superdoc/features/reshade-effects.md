@@ -39,6 +39,49 @@ resource/pipeline lifecycle — different enough in shape to be a separate page.
   to clients — a client sets/enables/disables an effect and pushes uniform values over the
   protocol rather than Gamescope reading files off disk itself at the client's request.
 
+## Where effect files are searched, and how a stale copy shadows a new one
+
+`ReshadeEffectPipeline::init()` resolves an effect name to a file by trying four
+directories in order, taking the **first** that has it:
+
+1. `$LOCAL/share/gamescope-ritz/reshade/Shaders/`
+2. `$LOCAL/share/gamescope/reshade/Shaders/` — legacy, unnamespaced
+3. `$USR/share/gamescope-ritz/reshade/Shaders/`
+4. `$USR/share/gamescope/reshade/Shaders/` — legacy, unnamespaced
+
+`Why the legacy entries:` this fork namespaced its data directory to
+`gamescope-ritz` so it can be installed beside a packaged `/usr/bin/gamescope` without
+either clobbering the other's `share/gamescope/reshade`. The plain `gamescope` paths stay
+in the list so a shader library a user already had keeps working instead of silently
+going unread.
+
+**The hazard.** Because a user-scope hit wins over a system-scope one, an old
+`~/.local/share/gamescope/reshade/Shaders/foo.fx` shadows the current
+`/usr/share/gamescope-ritz/reshade/Shaders/foo.fx` — with no error, because the older
+file compiles perfectly well. It is simply the wrong version, and every uniform the
+newer version added is now a name the compiled module never declares. `RuntimeUniform`
+looks each uniform up by its `source = "..."` annotation, so a value pushed under a name
+the module does not declare is *dropped*: the control moves, nothing on screen changes.
+
+**How to tell.** Two Facts rows in the overlay's Shaders area (`Diagnostics` group) exist
+exactly for this:
+
+- **loaded from** — the absolute path the currently-loaded effect actually compiled
+  from. If that says `.../share/gamescope/reshade/...` when you expected the
+  `gamescope-ritz` tree, a stale copy won the search; delete or update it.
+- **uniforms** — `all recognised by the loaded shader`, or a count and the names that
+  the loaded module does not declare, meaning those controls do nothing.
+
+The same mismatch is logged once per uniform name to the `gamescope_reshade` log scope,
+so it is visible without opening the overlay. `Why once, and why it is a warning rather
+than a hard failure:` a user's own `.fx` is allowed to omit uniforms gamescope knows
+about — that is a legitimate, working configuration — so this must not refuse to run the
+effect; and the uniform push happens on every slider tick, so an unthrottled log would
+flood. The state lives in `reshade_effect_manager.cpp`'s "Effect diagnostics" block
+(`reshade_effect_manager_shader_source()` /
+`reshade_effect_manager_missing_uniforms()`), behind its own mutex so it never touches
+the per-frame uniform lock.
+
 ## Using it
 
 A client (or Gamescope's own tooling) binds the `gamescope_reshade` protocol global, sends
@@ -57,4 +100,4 @@ enables it, and optionally pushes uniform variable values to drive runtime param
 - [scaling-filters](scaling-filters.md) — the separate, built-in FSR/NIS upscale/sharpen path this feature is not part of.
 - [compositing-vulkan](compositing-vulkan.md) — the Vulkan composite path ReShade pipelines execute within.
 - [wayland-protocols](wayland-protocols.md) — conventions for Gamescope's custom protocols, including `gamescope-reshade.xml`.
-- [shader-effects](shader-effects.md) — the settings-panel/effect-content layer built on top of this mechanism (Vibrancy, Shadow Lift, Pre-Sharpen, Adaptive Brightness, `reshade/Shaders/gamescope-ritz.fx`).
+- [shader-effects](shader-effects.md) — the settings-panel/effect-content layer built on top of this mechanism (Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness, `reshade/Shaders/gamescope-ritz.fx`).

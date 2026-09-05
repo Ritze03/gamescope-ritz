@@ -1,11 +1,22 @@
-# Shaders settings area — Vibrancy, Shadow Lift, Pre-Sharpen, Adaptive Brightness
+# Shaders settings area — Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
 four independent effects, all implemented as gated passes inside one combined ReShade
 effect file, `reshade/Shaders/gamescope-ritz.fx`. This page covers what each effect does
 and, in depth, the two settings added/changed 2026-09-04 (planning batch
-`requests-2026-09-04.md`, items #2 and #3): **Vibrancy**'s range and **Shadow Lift**, a
+`requests-2026-09-04.md`, items #2 and #3): **Vibrancy**'s range and **Shadow Control**, a
 new effect.
+
+**Titles vs. identifiers.** The three multi-word switches were retitled 2026-09-05:
+"Shadow lift" → **Shadow Control**, "Adaptive brightness" → **Adaptive Brightness**,
+"Pre-sharpen" → **Pre-Sharpen**. `Why only the titles moved:` an entry id is what the
+command palette's saved entries and every cross-reference resolve against, and a config
+key is what a user's `global.json` already contains — renaming either would break
+existing configs and palette state for a purely cosmetic change. So the id
+`image.shaders.shadow_lift`, the config struct `ReshadeShadowLiftSettings`, and the
+uniform names `shadow_lift_enabled` / `shadow_lift_strength` all deliberately keep the
+old spelling. Expect the code and this page to say "shadow lift" where it means the
+identifier and "Shadow Control" where it means the label.
 
 This is the settings-panel/effect-content layer. For how the underlying compile/upload/
 uniform-push mechanism works (the generic `gamescope_reshade` protocol, pipeline caching,
@@ -31,7 +42,7 @@ Every effect on this panel works directly on the base layer's already gamma/sRGB
 `kSdrOnly`) whenever the focused app is presenting HDR or scRGB content — see
 `superdoc/planning/DECISIONS.md` #15 for why this was scoped out of v1, and
 `reshade-shaders.md` Q6 for what correct HDR-space math here would require. Every effect
-below, Shadow Lift included, inherits this gate; none of them needs to branch on
+below, Shadow Control included, inherits this gate; none of them needs to branch on
 `BUFFER_COLOR_SPACE` itself as a result.
 
 ## The four effects
@@ -111,7 +122,7 @@ already carries `schema_version: 2`, so `Migrate_1_to_2` is a no-op for it) — 
 `tests/test_config.cpp`'s `"a config saved under the current schema round-trips vibrancy
 strength unmigrated"`.
 
-### Shadow Lift (`image.shaders.shadow_lift`)
+### Shadow Control (`image.shaders.shadow_lift`)
 
 New effect, added 2026-09-04 (request #3: *"a darkness booster for dark games"*).
 Brightens dark areas so detail in dark games becomes visible, while leaving bright areas
@@ -173,12 +184,27 @@ Unchanged by this batch of work. See `gamescope-ritz.fx`'s header comment and
 pre-upscale; Adaptive Brightness: an auto-exposure EMA against a self-sampled 1×1
 luminance history texture, `superdoc/planning/DECISIONS.md` #14).
 
+## When an effect appears to do nothing
+
+The `.fx` is compiled at runtime from a file on disk while the panel that drives it is
+compiled into the binary, so the two ship separately and can drift — and an older copy of
+`gamescope-ritz.fx` under the legacy `~/.local/share/gamescope/reshade/Shaders/` tree
+wins the search over a newer one in the `gamescope-ritz` tree. When that happens the
+panel writes uniforms the loaded shader never declared, they are silently dropped, and
+the controls move with nothing changing on screen.
+
+The Shaders area's **Diagnostics** group answers this directly: **loaded from** names the
+file that actually compiled, and **uniforms** says whether everything the panel writes is
+recognised by it (and lists what is not). See
+[reshade-effects](reshade-effects.md#where-effect-files-are-searched-and-how-a-stale-copy-shadows-a-new-one)
+for the search order, the mechanism, and the matching log lines.
+
 ## The settings-panel budget
 
 Each switch row may own at most six `Param`s before `Registry.cpp` aborts registration
 (the row must be promoted to a category instead) — see `PanelShaders.cpp`'s own "THE SIX
 BUDGET" comment. Current counts: Vibrancy 2, Pre-Sharpen 1, Adaptive Brightness 6 (zero
-headroom), **Shadow Lift 1**.
+headroom), **Shadow Control 1**.
 
 ## Related links
 
@@ -190,4 +216,4 @@ headroom), **Shadow Lift 1**.
 - `superdoc/planning/DECISIONS.md` #13 (combined-file design), #14 (Adaptive Brightness),
   #15 (SDR-only v1 scope).
 - `superdoc/planning/requests-2026-09-04.md` items #2 and #3 — the requests this page's
-  Vibrancy-migration and Shadow-Lift sections document.
+  Vibrancy-migration and Shadow-Control sections document.

@@ -35,6 +35,8 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "reshade_effect_manager.hpp"
 #include "rendervulkan.hpp"
@@ -209,17 +211,17 @@ namespace gamescope
 	// is the taxonomy's intended shape for exactly this data -- an effect is
 	// one decision ("is this on") with tuning behind it, so the sheet stays
 	// one row per effect deep no matter how many knobs an effect grows.
-	// (index.html declared three at E2's original writing; Shadow lift
+	// (index.html declared three at E2's original writing; Shadow Control
 	// (request #3, 2026-09-04) is the fourth, added the same shape.)
 	//
 	// THE SIX BUDGET, AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY ON IT.
-	// Vibrancy has 2 params, Pre-sharpen 1, Adaptive brightness 6, Shadow
-	// lift 1 -- the maximum a row may own before Registry.cpp aborts
+	// Vibrancy has 2 params, Pre-Sharpen 1, Adaptive Brightness 6, Shadow
+	// Control 1 -- the maximum a row may own before Registry.cpp aborts
 	// registration and tells the author to promote it to a category.
-	// Adaptive brightness fits, but with zero headroom, and that is worth
+	// Adaptive Brightness fits, but with zero headroom, and that is worth
 	// saying out loud: the NEXT parameter added
 	// to this effect does not "just" overflow a limit, it is the signal
-	// that Adaptive brightness has become a category rather than a setting.
+	// that Adaptive Brightness has become a category rather than a setting.
 	// Nothing here routes around the budget, and nothing should.
 	//
 	// EVERY WRITE STILL GOES THROUGH SetRuntimeUniform*(). A plain global
@@ -265,7 +267,7 @@ namespace gamescope
 	void PanelShaders_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
-		a.Keywords( "shader reshade effect vibrancy saturation sharpen adaptive brightness exposure shadow lift darkness" );
+		a.Keywords( "shader reshade effect vibrancy saturation sharpen adaptive brightness exposure shadow control lift darkness" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.vibrancy.enabled ? 1 : 0 )
@@ -310,7 +312,7 @@ namespace gamescope
 				.Help( "Keeps the saturation boost off skin tones, so faces don't turn orange." )
 				.Default( true );
 
-		a.Switch( "image.shaders.presharpen", "Pre-sharpen",
+		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.pre_sharpen.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.pre_sharpen.enabled, "pre_sharpen_enabled", b ); } ) )
@@ -342,7 +344,7 @@ namespace gamescope
 				.Default( 0.5f );
 
 		// SIX PARAMS -- the budget exactly. See this section's header.
-		a.Switch( "image.shaders.adaptive_brightness", "Adaptive brightness",
+		a.Switch( "image.shaders.adaptive_brightness", "Adaptive Brightness",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
 				[]( bool b ) {
@@ -412,11 +414,15 @@ namespace gamescope
 				.Default( 1.6f );
 
 		// Request #3 (2026-09-04): "a darkness booster for dark games" --
-		// lifts shadows (brightens dark areas so detail becomes visible)
+		// titled "Shadow Control" (renamed from "Shadow lift" 2026-09-05);
+		// the entry id and every config key deliberately keep the
+		// shadow_lift spelling so existing configs and saved palette
+		// entries keep working. It lifts shadows (brightens dark areas so
+		// detail becomes visible)
 		// while leaving highlights alone. One param, well under the six
 		// budget -- see this section's header comment. Neutral (0.0,
 		// identity) is the default, so an existing config is unaffected.
-		a.Switch( "image.shaders.shadow_lift", "Shadow lift",
+		a.Switch( "image.shaders.shadow_lift", "Shadow Control",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.shadow_lift.enabled; },
 				[]( bool b ) {
@@ -425,7 +431,7 @@ namespace gamescope
 			.Help( "Brightens dark areas so detail in dark games is easier to see, while leaving "
 			       "bright areas alone." )
 			.Default( false )
-			.Keywords( "shadow lift dark brightness gamma boost darkness" )
+			.Keywords( "shadow control lift dark brightness gamma boost darkness" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
 			.Param( "strength", "Strength",
 				ui::AnyBind::Of<float>(
@@ -455,6 +461,30 @@ namespace gamescope
 				return ui::Fact{ "base layer", IsBaseLayerSdr()
 					? "SDR (linear or sRGB)"
 					: "HDR (scRGB or PQ) -- the SDR-only gate is active" };
+			} )
+			// The .fx is compiled at runtime from a file on disk, so the
+			// shader and this binary are shipped separately and can drift.
+			// These two rows are the whole diagnosis when an effect's
+			// controls move but nothing changes on screen: which file won
+			// the search (a stale copy under the legacy
+			// ~/.local/share/gamescope/reshade tree shadows the current
+			// gamescope-ritz one), and whether anything this panel writes
+			// is unknown to the shader that actually loaded. See
+			// reshade_effect_manager.cpp's "Effect diagnostics" comment.
+			.Live( "loaded from", []{
+				std::string s = reshade_effect_manager_shader_source();
+				return ui::Fact{ "loaded from", s.empty()
+					? std::string( "nothing loaded yet" ) : s };
+			} )
+			.Live( "uniforms", []{
+				std::vector<std::string> missing = reshade_effect_manager_missing_uniforms();
+				if ( missing.empty() )
+					return ui::Fact{ "uniforms", "all recognised by the loaded shader" };
+				std::string s = std::to_string( missing.size() )
+					+ " not in the loaded shader -- those controls do nothing: ";
+				for ( size_t i = 0; i < missing.size(); i++ )
+					s += ( i ? ", " : "" ) + missing[ i ];
+				return ui::Fact{ "uniforms", s };
 			} );
 	}
 
