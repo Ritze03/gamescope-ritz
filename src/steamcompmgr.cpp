@@ -30,6 +30,7 @@
  */
 
 #include "backend.h"
+#include "Clipboard/ClipboardSync.h"
 #include "gamescope_shared.h"
 #include "xwayland_ctx.hpp"
 #include <X11/X.h>
@@ -6334,7 +6335,13 @@ static void gamescope_broadcast_clipboard( const std::shared_ptr<std::string> &s
 		hints = connector->GetNestedHints();
 
 	if ( hints )
-		hints->SetSelection( szContents, GAMESCOPE_SELECTION_CLIPBOARD );
+		// System > Clipboard sync off: the host must not receive our text. This
+		// is the outbound half of the switch; the inbound gates live in the
+		// backends (DrainHostClipboard / SDL_CLIPBOARDUPDATE). Internal X<->X
+		// and X<->wlserver distribution above is untouched -- that is not
+		// "sync with the host".
+		if ( gamescope::g_bClipboardSyncEnabled.load( std::memory_order_relaxed ) )
+			hints->SetSelection( szContents, GAMESCOPE_SELECTION_CLIPBOARD );
 }
 
 static void gamescope_drain_pending_selection()
