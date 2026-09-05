@@ -63,6 +63,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Crosshair scaling is linear**: with Apply Scaling on, the crosshair is now drawn at
+  the game's resolution and stretched with a soft linear filter like a stretched in-game
+  one, so its edges blur slightly and mix colours instead of snapping to hard pixels.
 - **Delete / Use / Rename profile act on the profile shown**: with a profile that
   already existed when gamescope started, the picker showed it selected but the three
   buttons did nothing; they now act on the profile the picker shows.

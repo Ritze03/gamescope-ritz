@@ -44,7 +44,7 @@ that element is off ("the dot is off", and so on).
 | Auto-hide | Hide while holding right-click | `hide_on_right_click` | |
 | | Hide mode | `hide_mode` | Choice. **Stored** in config as a stable string key (`"fade"` / `"focus"` / `"shrink"`, `CrosshairSettings::hide_mode`); the **row is int-backed** like every registry Choice, so `overlay_e2_set crosshair.hide_mode N` takes the option index -- `0` fade, `1` focus, `2` shrink -- and a word is parsed as 0 (fade). `Crosshair.cpp`'s `HideModeToInt()`/`HideModeFromInt()` are the two-way map. |
 | | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides at once |
-| Scaling | Apply scaling | `apply_scaling` | see Geometry |
+| Scaling | Apply scaling | `apply_scaling` | see [Two rendering paths](#two-rendering-paths) |
 
 Pixel sizes are **ints**, not floats: the whole point of the 1px mode is
 that "1" is exactly one pixel, so a fractional size has no meaning here.
@@ -110,16 +110,19 @@ pixels (`ResolveCrosshairFrame()`). With no base plane this frame it falls
 back to the output centre.
 
 **Apply Scaling off:** every size is an output pixel and the crosshair is
-drawn square whatever the game's aspect. **On:** sizes are *game* pixels,
-multiplied per axis by "output pixels per game pixel" = layer 0's
-on-screen size divided by the game's own committed buffer size — so a 4:3
-image stretched to 16:9 gets a horizontally stretched crosshair, exactly
-like a stretched in-game one. The game's buffer size comes from
-`g_uBaseLayerSourceWidth/Height` (`steamcompmgr.hpp`), published by
-`paint_window_commit()` from the raw commit rather than read off layer 0's
-texture, because that texture may already be gamescope's pre-emptively
-upscaled copy (`ShouldPreemptivelyUpscale()`) whose size says nothing
-about the game's.
+drawn square whatever the game's aspect. **On:** sizes are *game* pixels
+and the crosshair is stretched per axis by "output pixels per game pixel"
+= layer 0's on-screen size divided by the game's own committed buffer size
+— so a 4:3 image stretched to 16:9 gets a horizontally stretched
+crosshair, exactly like a stretched in-game one. *How* it is stretched is
+the subject of [Two rendering paths](#two-rendering-paths) below. The
+game's buffer size comes from `g_uBaseLayerSourceWidth/Height`
+(`steamcompmgr.hpp`), published by `paint_window_commit()` from the raw
+commit rather than read off layer 0's texture, because that texture may
+already be gamescope's pre-emptively upscaled copy
+(`ShouldPreemptivelyUpscale()`) whose size says nothing about the game's.
+`CrosshairFrame::uGameWidth/Height` carries it to the draw; 0 (no base
+plane yet) makes Apply Scaling fall back to the pixel path at scale 1.
 
 **1px mode.** Every primitive — arm, dot, outline — is an axis-aligned
 `AddRectFilled` on **whole-pixel** coordinates, drawn with
@@ -135,6 +138,11 @@ centre. The **gap is measured from the centre column/row's own edge**, so
 at gap 0 the arms touch the centre square; that square then joins the arms
 so a closed gap reads as one continuous plus, not two arms with a pixel
 missing.
+
+**1px mode under Apply Scaling** (the pixel-path fallback only, see below):
+sizes snap with `lround` after scaling, so a 1px game-space line would
+become `round(scale)` output pixels, still whole. The raster path does not
+snap at all — that is its point.
 
 **The dot is always a square**, at every size. *Why:* a circle cannot be
 pixel-exact at small sizes, the outline/union arithmetic below works
@@ -152,6 +160,120 @@ darker squares where two meet. Each element's rects are rebuilt as
 non-overlapping bands instead, so every pixel of an element is painted
 exactly once. Draw order: outline, arms, dot (the dot's colour wins where
 it overlaps an arm).
+
+## Two rendering paths
+
+`Crosshair_Draw()` (`Crosshair.cpp`) has two ways of putting the same
+`crosshair::Build()` geometry on screen, chosen by `apply_scaling`:
+
+**Pixel path — Apply Scaling off** (`DrawPixelPath()`). Every rect from
+`Build()` is an `AddRectFilled` on whole output pixels with AA off, as
+described under Geometry. Nothing about this path changed when the raster
+path was added (2026-09-05); its output was measured pixel-for-pixel on
+the laptop (`build-release/verify-shots/crosshair/`) and must not move.
+It is also the fallback for Apply Scaling *on* when the game's buffer size
+is unknown, or when the raster texture could not be created — then sizes
+are scaled per axis and snapped, the pre-2026-09-05 behaviour.
+
+**Raster path — Apply Scaling on** (`DrawRasterPath()`). The crosshair is
+`Build()` at the **game's** resolution (`crosshair::GameFrame()`: scale 1,
+centre = the game buffer's own centre, so parity snapping behaves exactly
+as an in-game crosshair at screen centre of a buffer that size would),
+rasterised on the CPU (`crosshair::Rasterize()`) into a small
+`B8G8R8A8_UNORM` texture that covers just its bounding box plus a
+one-texel transparent margin (`crosshair::RasterRect()`,
+`kRasterMargin = 1`), and drawn into the HUD's draw list as **one**
+`ImDrawList::AddImage` quad, positioned and sized by
+`crosshair::ScaledQuad()` and sampled **linearly**.
+
+> **Why linear, not pixel-snapped** (the user, 2026-09-05: *"it should
+> blur a bit and mix colors, instead of being just perfect pixels"*): the
+> reference is a stretched in-game crosshair. That is a raster at game
+> resolution stretched with the frame by the scaler, so a 1 px game line
+> spans ~1.5 output px *softly* on a 4:3→16:9 stretch, and the outline's
+> black mixes into the fill's green at the edge. A vector re-drawn at
+> output resolution and snapped to whole pixels (what Apply Scaling did
+> before) is crisp, which is exactly *not* the stretched look. Rendering
+> at game resolution and stretching with a linear filter reproduces the
+> reference by construction.
+
+Machinery, and why this much and no more:
+
+- **The sampler.** ImGui 1.92's Vulkan backend binds its own
+  `SamplerLinear` (LINEAR min/mag, CLAMP_TO_EDGE,
+  `subprojects/imgui/backends/imgui_impl_vulkan.cpp`
+  `ImGui_ImplVulkan_CreateDeviceObjects`) for every draw unless a draw
+  callback switches to nearest; the `VkSampler` argument of
+  `ImGui_ImplVulkan_AddTexture` is ignored in this version. So an
+  `AddImage` of our texture *is* a bilinear stretch, with nothing to set.
+- **The texture** (`EnsureRasterTexture()`): a `CVulkanTexture` with
+  `bSampled + bTransferDst`, registered with
+  `ImGui_ImplVulkan_AddTexture( tex->srgbView(), VK_IMAGE_LAYOUT_GENERAL )`
+  in the HUD's ImGui context. `srgbView()` is — despite the name — the
+  UNORM-format view (`ToLinearVulkanFormat`, no decode on read), the same
+  view the HUD renders *into*, so a texel of value *v* is written into the
+  HUD texture as *v*, exactly as a rect of vertex colour *v* would be. No
+  cross-queue sharing: only the HUD's general-queue submission ever
+  touches it (uploads and samples); the compute composite reads the HUD
+  texture, never this one. Re-created only when its size changes; the old
+  one is *retired*, not freed, because the previous HUD submission may
+  still be reading its descriptor set.
+- **The upload** (`Crosshair_RecordUpload()`, called by
+  `FpsDisplay.cpp`'s `RenderAndSubmit()` right after
+  `DrainPrevSubmission()` and before `vkCmdBeginRendering`): the pixels
+  go through `g_device.uploadBufferData()` — the same staging buffer
+  `vulkan_create_texture_from_bits()` uses, a bump allocator only reset on
+  a device idle — and `CVulkanCmdBuffer::copyBufferToImage()` +
+  `insertBarrier()` into the **HUD's own command buffer**, so the copy
+  rides the submission that samples it with no `vkQueueWaitIdle` (which
+  `vulkan_create_texture_from_bits()` does per call, and which would stall
+  the steamcompmgr thread once per animation frame). Retired
+  textures/descriptors are freed here too, after the drain, when nothing
+  on the GPU can still be reading them. This hook is the one line the
+  raster path adds to `FpsDisplay.cpp` besides filling in
+  `uGameWidth/Height`.
+- **Straight alpha and the colour bleed.** Texels are straight-alpha
+  `0xAARRGGBB` (`crosshair::PackArgb`; the little-endian memory order of
+  B8G8R8A8), painted outline → arms → dot with the dot composited *over*
+  (`detail::Over`), matching the vector path's `SRC_ALPHA` blend. A
+  bilinear filter interpolates colour and alpha independently, so a
+  transparent texel left at RGB 0 next to a green line would pull the edge
+  towards black — a dark fringe an in-game raster does not have. So after
+  painting, every fully transparent texel that touches a painted one takes
+  that neighbour's RGB with alpha 0; the edge then reads as the line's own
+  colour at half alpha. With an outline the margin bleeds black, which is
+  the outline's colour anyway.
+- **Hide animation.** Fade is the quad's tint alpha
+  (`IM_COL32(255,255,255,alpha)`, multiplied into the texel alpha by
+  ImGui's shader) — no re-render. Focus and Shrink move the gap/length,
+  which change the pixels, so they rebuild per animation frame; the raster
+  is a few hundred texels and the animation ≤ 2 s.
+
+**Re-render policy.** `RasterKey` holds everything the *pixels* depend on:
+the element switches, every size, gap, colour and opacity, the hide
+state's gap and length multipliers, and the game's buffer size. The
+raster is rebuilt and re-uploaded only when the key differs from the last
+frame's (or when the texture was re-created and does not yet hold these
+pixels); a static crosshair costs one `AddImage` a frame and no upload.
+The hide alpha is deliberately not in the key.
+
+**The pixel-centre mapping.** `composite.h`'s `sampleLayerEx` samples
+layer 0 at texel `t = (o + offset) * scale` for output position `o`, so a
+game pixel `g` sits at `o = g * s + origin`, where `s` is "output px per
+game px" (`CrosshairFrame::flGamePixelScale`) and `origin = -offset` is
+the game rect's top-left. `ResolveCrosshairFrame()` hands over the rect's
+*centre* rather than its origin, and the centre is `gameW/2` game pixels
+in, so `origin = centre − (gameW/2)·s`. Texel `k` of the raster is game
+pixel `texRect.x0 + k`, so the quad is
+`[origin + texRect.x0·s, origin + texRect.x1·s)` per axis — and then texel
+centres `(k + 0.5)` land exactly where the composite puts game pixel
+centres `(texRect.x0 + k + 0.5)·s + origin`. There is no half-pixel term:
+ImGui and the composite both treat integer coordinates as pixel edges
+(pixel *i* covers `[i, i+1)`), so the identity is exact. A half-pixel
+error here would read as a blur *offset* rather than a blur — the test
+"ScaledQuad puts every raster texel centre on the game pixel centre the
+composite samples" pins the mapping against the `sampleLayerEx` inverse
+for both a stretched and a letterboxed layer.
 
 ## Auto-hide while holding right-click
 
@@ -221,11 +343,17 @@ the arithmetic):
   -H 1080`, or any non-matching size) gets the crosshair on the *game*, not
   the output centre.
 - 1px: width 1 is exactly one pixel, no anti-aliasing fringe, in a zoomed
-  capture; with Apply Scaling on and a scaled game it is `round(scale)`
-  pixels, still crisp.
+  capture (Apply Scaling off, or on with the game drawn 1:1).
 - Apply Scaling: a 4:3 game on a 16:9 output with `--scaler stretch` (or
   any per-axis stretch) gives a horizontally stretched crosshair; off keeps
-  it square.
+  it square. **On**, an 8× zoom of a width-1 line with the outline on shows
+  **soft** edges spanning ~1.5 px horizontally, with dark-green
+  intermediate values between the black outline and the green fill; **off**
+  the same capture is pixel-exact, identical to
+  `build-release/verify-shots/crosshair/03-outline-zoom.png`. The centroid
+  must not shift between the two modes.
+- Hide modes still animate with Apply Scaling on (Fade is a tint; Focus
+  and Shrink rebuild the raster per frame).
 - Hide modes at 50 % / 100 % of Time to hide: Fade half-transparent /
   gone; Focus gap closed at full opacity / gone; Shrink gap closed at full
   length / gone (dot included).
@@ -249,4 +377,5 @@ therefore lands at `c·a·a + bg·(1−a)`, slightly darker and thinner than
 always been affected the same way); the crosshair's opacity sliders
 inherit it. Switching the layer to `ALPHA_BLENDING_MODE_PREMULTIPLIED`
 would fix both but changes the HUD's look, so it is left for a deliberate
-HUD-level decision.
+HUD-level decision. The raster path inherits it identically: its texels
+are straight alpha and go through the same ImGui blend.

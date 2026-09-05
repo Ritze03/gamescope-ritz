@@ -14,15 +14,20 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "CrosshairMath.h"
+#include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
+#include "log.hpp"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
 #include "UI/Registry.h"
 
 #include "imgui.h"
+#include "backends/imgui_impl_vulkan.h"
 
 namespace gamescope
 {
@@ -63,6 +68,107 @@ namespace gamescope
 		// "Right button held since <ns>", 0 while not held. Written on the
 		// wlserver thread, read on the steamcompmgr thread.
 		std::atomic<uint64_t> s_ulRightPressNs{ 0 };
+
+		LogScope s_CrosshairLog( "crosshair" );
+
+		// -----------------------------------------------------------------
+		// Apply Scaling's game-resolution raster (Crosshair.h, "two
+		// rendering paths"). Everything below is steamcompmgr-thread only.
+		// -----------------------------------------------------------------
+
+		// Everything the raster's PIXELS depend on. When it is unchanged
+		// from the last frame the texture is simply drawn again; when it
+		// changes the raster is rebuilt on the CPU and re-uploaded. Fade
+		// (HideState::flAlpha) is deliberately NOT in here -- it is applied
+		// as the quad's tint, so a fade re-uploads nothing. Focus/Shrink
+		// move the gap/length, which change the pixels, so those do rebuild
+		// per animation frame (a few hundred texels, for <= 2 s).
+		struct RasterKey
+		{
+			bool bLine = false, bDot = false, bOutline = false;
+			int nLength = 0, nWidth = 0, nGap = 0, nDotSize = 0, nOutlineWidth = 0;
+			int nLineColor = 0, nDotColor = 0, nOutlineColor = 0;
+			float flLineOpacity = 0.0f, flDotOpacity = 0.0f, flOutlineOpacity = 0.0f;
+			float flHideGap = 1.0f, flHideLength = 1.0f;
+			uint32_t uGameW = 0, uGameH = 0;
+			bool operator==( const RasterKey & ) const = default;
+		};
+
+		struct RasterTexture
+		{
+			OwningRc<CVulkanTexture> pTex;
+			VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // ImGui's handle onto pTex, in the HUD context
+			uint32_t uWidth = 0, uHeight = 0;
+		};
+
+		bool s_bRasterValid = false;
+		RasterKey s_RasterKey;
+		crosshair::IRect s_RasterRect;           // game px footprint of the texture
+		std::vector<crosshair::Argb> s_RasterPixels;
+		bool s_bRasterUploadPending = false;
+		// Which texture object the current s_RasterPixels were last copied
+		// into; a re-created texture with an unchanged key still needs them.
+		const CVulkanTexture *s_RasterUploadedTex = nullptr;
+		RasterTexture s_Raster;
+		// Textures whose descriptor set the previous HUD submission may
+		// still be reading; freed by Crosshair_RecordUpload() once that
+		// submission has been drained. In practice 0 or 1 entries.
+		std::vector<RasterTexture> s_RetiredRasters;
+
+		void RetireRaster()
+		{
+			if ( s_Raster.pTex || s_Raster.descriptorSet != VK_NULL_HANDLE )
+				s_RetiredRasters.push_back( std::move( s_Raster ) );
+			s_Raster = RasterTexture{};
+			// The replacement may be allocated at the retired object's
+			// address once that is freed; never let it inherit "uploaded".
+			s_RasterUploadedTex = nullptr;
+		}
+
+		// (Re)creates the raster texture + ImGui descriptor for a footprint
+		// of w x h texels, reusing the current one when the size matches.
+		// Must run with the HUD's ImGui context current (AddTexture reads
+		// the backend data off the current context's IO).
+		bool EnsureRasterTexture( uint32_t w, uint32_t h )
+		{
+			if ( s_Raster.pTex && s_Raster.uWidth == w && s_Raster.uHeight == h && s_Raster.descriptorSet != VK_NULL_HANDLE )
+				return true;
+
+			RetireRaster();
+
+			OwningRc<CVulkanTexture> pTex = new CVulkanTexture();
+			CVulkanTexture::createFlags flags;
+			flags.bSampled = true;      // read by ImGui's fragment shader on the general queue
+			flags.bTransferDst = true;  // written by the buffer->image copy in Crosshair_RecordUpload()
+			// Only ever touched on the general queue (the HUD's own
+			// submission both uploads and samples it), so no cross-queue
+			// sharing: it is the HUD texture, not this one, that the
+			// compute composite reads.
+			if ( !pTex->BInit( w, h, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+			{
+				s_CrosshairLog.errorf( "failed to create the %ux%u scaled-crosshair texture", w, h );
+				return false;
+			}
+
+			// srgbView() is, despite the name, the UNORM-format view (the
+			// bytes as stored, no sRGB decode on read) -- the same view the
+			// HUD renders INTO, so a texel of value v is written to the HUD
+			// texture as v, exactly as a rect of vertex colour v would be.
+			// Layout GENERAL: that is where CVulkanCmdBuffer's barriers
+			// leave every image.
+			VkDescriptorSet ds = ImGui_ImplVulkan_AddTexture( pTex->srgbView(), VK_IMAGE_LAYOUT_GENERAL );
+			if ( ds == VK_NULL_HANDLE )
+			{
+				s_CrosshairLog.errorf( "ImGui_ImplVulkan_AddTexture failed for the scaled-crosshair texture" );
+				return false;
+			}
+
+			s_Raster.pTex = std::move( pTex );
+			s_Raster.descriptorSet = ds;
+			s_Raster.uWidth = w;
+			s_Raster.uHeight = h;
+			return true;
+		}
 
 		ImU32 PackColor( int nRgb, float flAlpha )
 		{
@@ -129,6 +235,113 @@ namespace gamescope
 		force_repaint();
 	}
 
+	namespace
+	{
+		// Apply Scaling OFF (and the fallback for ON when the game's size
+		// is unknown): every primitive is a whole-pixel rect at output
+		// resolution, AA off. Unchanged from before the raster path existed
+		// -- its output was measured pixel-for-pixel and must not move.
+		void DrawPixelPath( ImDrawList *pDrawList, const config::CrosshairSettings &c, const crosshair::Style &st,
+		                    const crosshair::Frame &fr, const crosshair::HideState &hs, float flOffY )
+		{
+			const crosshair::Shape shape = crosshair::Build( st, fr, hs );
+			if ( shape.Empty() )
+				return;
+
+			// 1px mode: every primitive is an axis-aligned filled rect on whole
+			// pixel coordinates (CrosshairMath.h), and anti-aliased fill is
+			// switched off for exactly these draws, so a 1px line is one solid
+			// pixel with no half-alpha neighbours. Restored afterwards -- the
+			// FPS readout in the same draw list wants its glyphs antialiased.
+			const ImDrawListFlags savedFlags = pDrawList->Flags;
+			pDrawList->Flags &= ~( ImDrawListFlags_AntiAliasedFill | ImDrawListFlags_AntiAliasedLines );
+
+			auto Fill = [&]( const std::vector<crosshair::IRect> &rects, ImU32 col )
+			{
+				if ( ( col & IM_COL32_A_MASK ) == 0 )
+					return;
+				for ( const crosshair::IRect &r : rects )
+					pDrawList->AddRectFilled( ImVec2( (float)r.x0, (float)r.y0 + flOffY ),
+					                          ImVec2( (float)r.x1, (float)r.y1 + flOffY ), col, 0.0f );
+			};
+
+			// Outline first (it is already computed as the ring OUTSIDE every
+			// fill, so order only matters where the dot overlaps an arm), then
+			// the arms, then the dot on top.
+			if ( c.outline_enabled )
+				Fill( shape.outline, PackColor( c.outline_color, c.outline_opacity * hs.flAlpha ) );
+			Fill( shape.lines, PackColor( c.line_color, c.line_opacity * hs.flAlpha ) );
+			Fill( shape.dot, PackColor( c.dot_color, c.dot_opacity * hs.flAlpha ) );
+
+			pDrawList->Flags = savedFlags;
+		}
+
+		// Apply Scaling ON: the crosshair Build() at the GAME's resolution,
+		// rasterised into a texture the size of its own bounding box (+1
+		// texel margin), drawn as one quad stretched by the game's per-axis
+		// scale and sampled linearly -- ImGui's Vulkan backend binds its
+		// LINEAR / CLAMP_TO_EDGE sampler for every image draw
+		// (imgui_impl_vulkan.cpp, SamplerLinear). Returns false when the
+		// texture could not be made, so the caller can fall back.
+		bool DrawRasterPath( ImDrawList *pDrawList, const config::CrosshairSettings &c, const crosshair::Style &st,
+		                     const CrosshairFrame &frame, const crosshair::HideState &hs )
+		{
+			RasterKey key;
+			key.bLine = c.line_enabled; key.bDot = c.dot_enabled; key.bOutline = c.outline_enabled;
+			key.nLength = c.line_length; key.nWidth = c.line_width; key.nGap = c.line_gap;
+			key.nDotSize = c.dot_size; key.nOutlineWidth = c.outline_width;
+			key.nLineColor = c.line_color; key.nDotColor = c.dot_color; key.nOutlineColor = c.outline_color;
+			key.flLineOpacity = c.line_opacity; key.flDotOpacity = c.dot_opacity; key.flOutlineOpacity = c.outline_opacity;
+			key.flHideGap = hs.flGap; key.flHideLength = hs.flLength;
+			key.uGameW = frame.uGameWidth; key.uGameH = frame.uGameHeight;
+
+			if ( !s_bRasterValid || !( key == s_RasterKey ) )
+			{
+				// Rebuild: the exact drawing code, in game pixels. Alpha
+				// stays at the configured opacity; the hide fade is the
+				// quad's tint below.
+				const crosshair::Frame gf = crosshair::GameFrame( frame.uGameWidth, frame.uGameHeight );
+				crosshair::HideState hsRaster = hs;
+				hsRaster.flAlpha = 1.0f;
+				const crosshair::Shape shape = crosshair::Build( st, gf, hsRaster );
+				s_RasterRect = crosshair::RasterRect( shape );
+				s_RasterPixels = crosshair::Rasterize( shape, s_RasterRect,
+					crosshair::PackArgb( c.outline_color, c.outline_enabled ? c.outline_opacity : 0.0f ),
+					crosshair::PackArgb( c.line_color, c.line_opacity ),
+					crosshair::PackArgb( c.dot_color, c.dot_opacity ) );
+				s_RasterKey = key;
+				s_bRasterValid = true;
+				s_bRasterUploadPending = !s_RasterRect.Empty();
+			}
+
+			if ( s_RasterRect.Empty() )
+				return true; // nothing to draw this frame (e.g. Shrink at 100 %) -- handled, not a failure
+
+			const uint32_t w = (uint32_t)( s_RasterRect.x1 - s_RasterRect.x0 );
+			const uint32_t h = (uint32_t)( s_RasterRect.y1 - s_RasterRect.y0 );
+			if ( !EnsureRasterTexture( w, h ) )
+				return false;
+			// A fresh texture needs the pixels even if the key did not
+			// change (e.g. the first frame after a size change).
+			if ( s_Raster.pTex && s_RasterUploadedTex != s_Raster.pTex.get() )
+				s_bRasterUploadPending = true;
+
+			crosshair::Frame fr;
+			fr.flCenterX = frame.flCenterX;
+			fr.flCenterY = frame.flCenterY;
+			fr.flScaleX = frame.flGamePixelScaleX;
+			fr.flScaleY = frame.flGamePixelScaleY;
+			const crosshair::FRect q = crosshair::ScaledQuad( s_RasterRect, frame.uGameWidth, frame.uGameHeight, fr );
+
+			const float flOffY = frame.flDrawOffsetY;
+			const ImU32 tint = IM_COL32( 255, 255, 255, (int)std::lround( std::clamp( hs.flAlpha, 0.0f, 1.0f ) * 255.0f ) );
+			pDrawList->AddImage( ImTextureRef( (ImTextureID)(uintptr_t)s_Raster.descriptorSet ),
+			                     ImVec2( q.x0, q.y0 + flOffY ), ImVec2( q.x1, q.y1 + flOffY ),
+			                     ImVec2( 0.0f, 0.0f ), ImVec2( 1.0f, 1.0f ), tint );
+			return true;
+		}
+	}
+
 	bool Crosshair_Draw( ImDrawList *pDrawList, const CrosshairFrame &frame, uint64_t ulNowNs )
 	{
 		EnsureConfigLoaded();
@@ -148,6 +361,8 @@ namespace gamescope
 				bAnimating = f < 1.0f; // fully hidden is static again: no more forced frames
 			}
 		}
+		if ( hs.flAlpha <= 0.0f )
+			return bAnimating;
 
 		crosshair::Style st;
 		st.bLine = c.line_enabled;
@@ -159,47 +374,63 @@ namespace gamescope
 		st.bOutline = c.outline_enabled;
 		st.flOutlineWidth = (float)c.outline_width;
 
+		// Apply Scaling on, and the game's size known: the raster path --
+		// crisp at game resolution, stretched linearly with the game.
+		if ( c.apply_scaling && frame.uGameWidth > 0 && frame.uGameHeight > 0 )
+		{
+			if ( DrawRasterPath( pDrawList, c, st, frame, hs ) )
+				return bAnimating;
+			// Texture creation failed: fall through to the vector path at
+			// the same per-axis scale, so the crosshair is at least there.
+		}
+
+		// Apply Scaling off: every size is an output pixel and the crosshair
+		// is square. (Fallback for ON: sizes are game pixels stretched per
+		// axis and snapped -- the pre-raster behaviour.)
 		crosshair::Frame fr;
 		fr.flCenterX = frame.flCenterX;
 		fr.flCenterY = frame.flCenterY;
-		// Apply Scaling off: every size is an output pixel and the crosshair
-		// is square. On: sizes are game pixels, stretched per axis exactly
-		// as gamescope stretches the game -- see CrosshairFrame.
 		fr.flScaleX = c.apply_scaling ? frame.flGamePixelScaleX : 1.0f;
 		fr.flScaleY = c.apply_scaling ? frame.flGamePixelScaleY : 1.0f;
-
-		const crosshair::Shape shape = crosshair::Build( st, fr, hs );
-		if ( hs.flAlpha <= 0.0f || shape.Empty() )
-			return bAnimating;
-
-		// 1px mode: every primitive is an axis-aligned filled rect on whole
-		// pixel coordinates (CrosshairMath.h), and anti-aliased fill is
-		// switched off for exactly these draws, so a 1px line is one solid
-		// pixel with no half-alpha neighbours. Restored afterwards -- the
-		// FPS readout in the same draw list wants its glyphs antialiased.
-		const ImDrawListFlags savedFlags = pDrawList->Flags;
-		pDrawList->Flags &= ~( ImDrawListFlags_AntiAliasedFill | ImDrawListFlags_AntiAliasedLines );
-
-		const float flOffY = frame.flDrawOffsetY;
-		auto Fill = [&]( const std::vector<crosshair::IRect> &rects, ImU32 col )
-		{
-			if ( ( col & IM_COL32_A_MASK ) == 0 )
-				return;
-			for ( const crosshair::IRect &r : rects )
-				pDrawList->AddRectFilled( ImVec2( (float)r.x0, (float)r.y0 + flOffY ),
-				                          ImVec2( (float)r.x1, (float)r.y1 + flOffY ), col, 0.0f );
-		};
-
-		// Outline first (it is already computed as the ring OUTSIDE every
-		// fill, so order only matters where the dot overlaps an arm), then
-		// the arms, then the dot on top.
-		if ( c.outline_enabled )
-			Fill( shape.outline, PackColor( c.outline_color, c.outline_opacity * hs.flAlpha ) );
-		Fill( shape.lines, PackColor( c.line_color, c.line_opacity * hs.flAlpha ) );
-		Fill( shape.dot, PackColor( c.dot_color, c.dot_opacity * hs.flAlpha ) );
-
-		pDrawList->Flags = savedFlags;
+		DrawPixelPath( pDrawList, c, st, fr, hs, frame.flDrawOffsetY );
 		return bAnimating;
+	}
+
+	void Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer )
+	{
+		// The previous HUD submission has been drained by the caller, so
+		// nothing on the GPU still reads these descriptors / images.
+		for ( RasterTexture &rt : s_RetiredRasters )
+		{
+			if ( rt.descriptorSet != VK_NULL_HANDLE )
+				ImGui_ImplVulkan_RemoveTexture( rt.descriptorSet );
+			rt.pTex = nullptr;
+		}
+		s_RetiredRasters.clear();
+
+		if ( !s_bRasterUploadPending || !pCmdBuffer || !s_Raster.pTex )
+			return;
+		const size_t nExpected = (size_t)s_Raster.uWidth * (size_t)s_Raster.uHeight;
+		if ( s_RasterPixels.size() != nExpected )
+			return; // raster and texture disagree on size; the next Draw() re-syncs them
+
+		// Same staging path vulkan_create_texture_from_bits() uses -- the
+		// device's bump-allocated upload buffer, only reset on a device
+		// idle, so the bytes stay put until this submission has consumed
+		// them -- minus its vkQueueWaitIdle: the copy is recorded into the
+		// HUD's own command buffer ahead of the render pass that samples
+		// the texture. copyBufferToImage() transitions the image to
+		// GENERAL (discarding old contents); the explicit insertBarrier()
+		// after it turns the copy's TRANSFER_WRITE into a SHADER_READ
+		// dependency for the fragment shader.
+		const uint32_t uBytes = (uint32_t)( nExpected * sizeof( crosshair::Argb ) );
+		auto [ pDst, uOffset ] = g_device.uploadBufferData( uBytes );
+		memcpy( pDst, s_RasterPixels.data(), uBytes );
+		pCmdBuffer->copyBufferToImage( g_device.uploadBuffer(), uOffset, 0, s_Raster.pTex.get() );
+		pCmdBuffer->insertBarrier();
+
+		s_RasterUploadedTex = s_Raster.pTex.get();
+		s_bRasterUploadPending = false;
 	}
 
 	// -------------------------------------------------------------------
@@ -409,10 +640,10 @@ namespace gamescope
 		a.Group( "Scaling" );
 
 		a.Switch( "crosshair.apply_scaling", "Apply scaling", CROSSHAIR_BIND( bool, apply_scaling ) )
-			.Help( "Off: sizes are screen pixels and the crosshair is always square. On: sizes "
-			       "are game pixels and the crosshair is stretched exactly like the game is -- "
-			       "a 4:3 game stretched to a 16:9 screen gets a wider crosshair, the way a "
-			       "stretched in-game one looks." )
+			.Help( "Off: sizes are screen pixels and the crosshair is always square, drawn "
+			       "pixel-sharp. On: sizes are game pixels and the crosshair is stretched exactly "
+			       "like the game is, with the same softly filtered edges -- a 4:3 game stretched "
+			       "to a 16:9 screen gets a wider crosshair, the way a stretched in-game one looks." )
 			.Default( S{}.apply_scaling )
 			.Keywords( "scaling stretch aspect ratio 4:3 game pixels resolution" )
 			.DisabledUnless( On, kOffReason );

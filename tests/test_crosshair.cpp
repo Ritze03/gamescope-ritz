@@ -338,3 +338,132 @@ TEST_CASE( "line and dot switched off yield an empty shape (nothing to draw)", "
 	Style st; st.bLine = false; st.bDot = false; st.bOutline = true;
 	REQUIRE( Build( st, {}, {} ).Empty() );
 }
+
+// ---------------------------------------------------------------------
+// Apply Scaling's raster path (crosshair.md, "Two rendering paths")
+// ---------------------------------------------------------------------
+
+TEST_CASE( "RasterRect is the game-pixel bounding box plus a one-texel margin", "[crosshair]" )
+{
+	// A 1280x960 game: centre (640, 480). 1px line, length 4, gap 2, no
+	// dot, no outline -> column/row 640/480, arms 634..638 and 643..647.
+	Style st; st.flWidth = 1.0f; st.flLength = 4.0f; st.flGap = 2.0f; st.bDot = false; st.bOutline = false;
+	const Frame gf = GameFrame( 1280, 960 );
+	REQUIRE( gf.flScaleX == 1.0f );
+	REQUIRE( gf.flScaleY == 1.0f );
+	const Shape s = Build( st, gf, {} );
+
+	REQUIRE( BoundingBox( s ) == IRect{ 634, 474, 647, 487 } );
+	REQUIRE( RasterRect( s ) == IRect{ 633, 473, 648, 488 } ); // 15 x 15 texels
+	REQUIRE( kRasterMargin == 1 );
+
+	// Empty shape -> empty footprint (nothing to upload or draw).
+	Style off; off.bLine = false; off.bDot = false;
+	REQUIRE( RasterRect( Build( off, gf, {} ) ).Empty() );
+	REQUIRE( BoundingBox( Shape{} ).Empty() );
+}
+
+TEST_CASE( "ScaledQuad puts every raster texel centre on the game pixel centre the composite samples", "[crosshair]" )
+{
+	// 1280x960 (4:3) stretched over 1920x1080: layer 0 has offset (0,0) and
+	// scale = tex/out = (2/3, 8/9); "output px per game px" = (1.5, 1.125).
+	// composite.h: texel t = (o + offset) * scale  =>  o = t / scale - offset.
+	Frame fr; fr.flCenterX = 960.0f; fr.flCenterY = 540.0f; fr.flScaleX = 1.5f; fr.flScaleY = 1.125f;
+	const IRect texRect{ 633, 473, 648, 488 };
+	const FRect q = ScaledQuad( texRect, 1280, 960, fr );
+	REQUIRE_THAT( q.x0, WithinAbs( 949.5f, 1e-3f ) );
+	REQUIRE_THAT( q.x1, WithinAbs( 972.0f, 1e-3f ) );
+	REQUIRE_THAT( q.y0, WithinAbs( 532.125f, 1e-3f ) );
+	REQUIRE_THAT( q.y1, WithinAbs( 549.0f, 1e-3f ) );
+
+	const float offX = 0.0f, offY = 0.0f, layerScaleX = 1280.0f / 1920.0f, layerScaleY = 960.0f / 1080.0f;
+	const int w = texRect.x1 - texRect.x0, h = texRect.y1 - texRect.y0;
+	for ( int k = 0; k < w; k++ )
+	{
+		const float flQuadTexelCentre = q.x0 + ( k + 0.5f ) * ( q.x1 - q.x0 ) / (float)w;
+		const float flGamePixelCentre = ( (float)( texRect.x0 + k ) + 0.5f ) / layerScaleX - offX;
+		REQUIRE_THAT( flQuadTexelCentre, WithinAbs( flGamePixelCentre, 1e-3f ) );
+	}
+	for ( int k = 0; k < h; k++ )
+	{
+		const float flQuadTexelCentre = q.y0 + ( k + 0.5f ) * ( q.y1 - q.y0 ) / (float)h;
+		const float flGamePixelCentre = ( (float)( texRect.y0 + k ) + 0.5f ) / layerScaleY - offY;
+		REQUIRE_THAT( flQuadTexelCentre, WithinAbs( flGamePixelCentre, 1e-3f ) );
+	}
+
+	// Letterboxed 1280x720 at 1:1 inside 1920x1080: layer offset (-320,
+	// -180), scale 1. The quad's left edge must be exactly -offset + x0.
+	Frame lb; lb.flCenterX = 320.0f + 640.0f; lb.flCenterY = 180.0f + 360.0f; lb.flScaleX = 1.0f; lb.flScaleY = 1.0f;
+	const FRect q2 = ScaledQuad( IRect{ 630, 350, 651, 371 }, 1280, 720, lb );
+	REQUIRE_THAT( q2.x0, WithinAbs( 320.0f + 630.0f, 1e-3f ) );
+	REQUIRE_THAT( q2.y0, WithinAbs( 180.0f + 350.0f, 1e-3f ) );
+	REQUIRE_THAT( q2.x1 - q2.x0, WithinAbs( 21.0f, 1e-3f ) );
+
+	// The quad's size is the footprint times the per-axis scale.
+	REQUIRE_THAT( q.x1 - q.x0, WithinAbs( 15.0f * 1.5f, 1e-3f ) );
+	REQUIRE_THAT( q.y1 - q.y0, WithinAbs( 15.0f * 1.125f, 1e-3f ) );
+}
+
+TEST_CASE( "Rasterize paints exact texels, bleeds colour into the transparent margin, composites the dot over", "[crosshair]" )
+{
+	Style st; st.flWidth = 1.0f; st.flLength = 4.0f; st.flGap = 2.0f; st.bDot = false; st.bOutline = false;
+	const Frame gf = GameFrame( 1280, 960 );
+	const Shape s = Build( st, gf, {} );
+	const IRect tr = RasterRect( s );
+	const int w = tr.x1 - tr.x0;
+
+	const Argb green = PackArgb( 0x00FF00, 1.0f );
+	REQUIRE( green == 0xFF00FF00u );
+	const std::vector<Argb> px = Rasterize( s, tr, PackArgb( 0x000000, 0.0f ), green, PackArgb( 0xFF0000, 1.0f ) );
+	REQUIRE( px.size() == (size_t)w * (size_t)( tr.y1 - tr.y0 ) );
+	auto At = [&]( int gx, int gy ) { return px[(size_t)( gy - tr.y0 ) * w + ( gx - tr.x0 )]; };
+
+	// A line pixel is exactly the line colour at full alpha ...
+	REQUIRE( At( 643, 480 ) == green );
+	REQUIRE( At( 640, 484 ) == green );
+	// ... the gap and the centre stay fully transparent but take the line's
+	// RGB (they touch a painted texel), so the filter never mixes towards
+	// black ...
+	REQUIRE( At( 642, 480 ) == 0x0000FF00u );
+	REQUIRE( At( 643, 479 ) == 0x0000FF00u ); // row above the right arm
+	// ... the corners of the margin, which touch nothing, are 0 ...
+	REQUIRE( At( tr.x0, tr.y0 ) == 0u );
+	REQUIRE( At( tr.x1 - 1, tr.y1 - 1 ) == 0u );
+	// ... and the margin column next to the arm's far end has the bleed too.
+	REQUIRE( At( 647, 480 ) == 0x0000FF00u );
+
+	// Outline on: the ring is black and opaque; the margin beside it is
+	// transparent black (bled black, which IS the outline's colour).
+	Style so = st; so.bOutline = true; so.flOutlineWidth = 1.0f;
+	const Shape s2 = Build( so, gf, {} );
+	const IRect tr2 = RasterRect( s2 );
+	const int w2 = tr2.x1 - tr2.x0;
+	const std::vector<Argb> px2 = Rasterize( s2, tr2, PackArgb( 0x000000, 1.0f ), green, 0u );
+	auto At2 = [&]( int gx, int gy ) { return px2[(size_t)( gy - tr2.y0 ) * w2 + ( gx - tr2.x0 )]; };
+	REQUIRE( At2( 643, 480 ) == green );
+	REQUIRE( At2( 643, 479 ) == 0xFF000000u ); // outline above the arm
+	REQUIRE( At2( 643, 478 ) == 0x00000000u ); // margin above the outline
+	REQUIRE( At2( 640, 480 ) == 0x00000000u ); // centre pixel: gap, transparent, next to outline -> black RGB
+
+	// A half-transparent red dot over an opaque green plus (gap 0) blends
+	// OVER, as the vector path's SRC_ALPHA blend does: ~(128, 127, 0), alpha 1.
+	Style sd; sd.flWidth = 1.0f; sd.flLength = 3.0f; sd.flGap = 0.0f; sd.bDot = true; sd.flDotSize = 1.0f; sd.bOutline = false;
+	const Shape s3 = Build( sd, gf, {} );
+	const IRect tr3 = RasterRect( s3 );
+	const int w3 = tr3.x1 - tr3.x0;
+	const std::vector<Argb> px3 = Rasterize( s3, tr3, 0u, green, PackArgb( 0xFF0000, 0.5f ) );
+	const Argb c = px3[(size_t)( 480 - tr3.y0 ) * w3 + ( 640 - tr3.x0 )];
+	REQUIRE( ( c >> 24 ) == 0xFF );
+	const int r = ( c >> 16 ) & 0xFF, g = ( c >> 8 ) & 0xFF, b = c & 0xFF;
+	REQUIRE( ( r >= 127 && r <= 128 ) );
+	REQUIRE( ( g >= 127 && g <= 128 ) );
+	REQUIRE( b == 0 );
+}
+
+TEST_CASE( "PackArgb is B8G8R8A8 memory order and clamps alpha", "[crosshair]" )
+{
+	REQUIRE( PackArgb( 0x112233, 1.0f ) == 0xFF112233u );
+	REQUIRE( PackArgb( 0x112233, 0.0f ) == 0x00112233u );
+	REQUIRE( PackArgb( 0x112233, 2.0f ) == 0xFF112233u );
+	REQUIRE( PackArgb( 0x112233, -1.0f ) == 0x00112233u );
+}

@@ -398,4 +398,191 @@ namespace gamescope::crosshair
 		shape.dot = dot;
 		return shape;
 	}
+
+	// ------------------------------------------------------------------
+	// Apply Scaling's raster path (superdoc/features/crosshair.md, "Two
+	// rendering paths"). With Apply Scaling ON the crosshair is not
+	// re-drawn as a vector at output resolution; it is Build() at the
+	// GAME's resolution (GameFrame(), scale 1, centre = the game's own
+	// centre), rasterised on the CPU into a small texture that covers just
+	// its bounding box plus a one-texel transparent margin (RasterRect()),
+	// and stretched onto the output as ONE linearly-sampled quad
+	// (ScaledQuad()) -- the way a stretched in-game raster crosshair looks:
+	// a 1 px game line spanning 1.5 output px softly, the outline's colour
+	// mixing into the fill's at the edge.
+	// ------------------------------------------------------------------
+
+	// One transparent texel around the drawing, so the bilinear filter has
+	// something to blend the outermost pixels against instead of clamping.
+	constexpr int kRasterMargin = 1;
+
+	// The frame Build() takes to draw in game pixels: centre = the game's
+	// own centre, so parity snapping (SnapCenter) behaves exactly as an
+	// in-game crosshair at "screen centre" of a buffer that size would.
+	inline Frame GameFrame( uint32_t uGameW, uint32_t uGameH )
+	{
+		Frame fr;
+		fr.flCenterX = (float)uGameW * 0.5f;
+		fr.flCenterY = (float)uGameH * 0.5f;
+		fr.flScaleX = 1.0f;
+		fr.flScaleY = 1.0f;
+		return fr;
+	}
+
+	// Bounding box of every rect in the shape; empty for an empty shape.
+	inline IRect BoundingBox( const Shape &shape )
+	{
+		IRect bb;
+		bool bAny = false;
+		auto Grow = [&]( const std::vector<IRect> &rects )
+		{
+			for ( const IRect &r : rects )
+			{
+				if ( r.Empty() ) continue;
+				if ( !bAny ) { bb = r; bAny = true; continue; }
+				bb.x0 = std::min( bb.x0, r.x0 ); bb.y0 = std::min( bb.y0, r.y0 );
+				bb.x1 = std::max( bb.x1, r.x1 ); bb.y1 = std::max( bb.y1, r.y1 );
+			}
+		};
+		Grow( shape.outline ); Grow( shape.lines ); Grow( shape.dot );
+		return bAny ? bb : IRect{};
+	}
+
+	// The texture's footprint in game pixels: the bounding box grown by
+	// kRasterMargin on every side. Texel (0,0) is game pixel (x0, y0).
+	inline IRect RasterRect( const Shape &shape )
+	{
+		IRect bb = BoundingBox( shape );
+		if ( bb.Empty() )
+			return IRect{};
+		return { bb.x0 - kRasterMargin, bb.y0 - kRasterMargin, bb.x1 + kRasterMargin, bb.y1 + kRasterMargin };
+	}
+
+	struct FRect
+	{
+		float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
+	};
+
+	// Where the raster lands on the output, in output pixels (ImGui vertex
+	// coordinates: integer = pixel edge, pixel i covers [i, i+1)).
+	//
+	// Derivation. composite.h's sampleLayerEx samples layer 0 at texel
+	// t = (o + offset) * scale for output position o, so game pixel g sits
+	// at o = g * s + origin, with s = "output px per game px" (fr.flScale)
+	// and origin = -offset = the game rect's top-left. The frame carries
+	// the game rect's CENTRE rather than its origin, and the centre is
+	// gameW/2 game pixels in: origin = centre - (gameW/2) * s. A texel k of
+	// the raster is game pixel texRect.x0 + k, so the quad's left edge is
+	// origin + texRect.x0 * s and its width is texRect width * s -- then
+	// texel centres (k + 0.5) land exactly on game pixel centres
+	// (texRect.x0 + k + 0.5) * s + origin, the same spot the composite
+	// puts the game's own pixel under it. No half-pixel offset anywhere:
+	// both ImGui and the composite treat integer coordinates as pixel
+	// edges, so the identity is exact.
+	inline FRect ScaledQuad( const IRect &texRect, uint32_t uGameW, uint32_t uGameH, const Frame &fr )
+	{
+		const float sx = fr.flScaleX, sy = fr.flScaleY;
+		const float flOriginX = fr.flCenterX - (float)uGameW * 0.5f * sx;
+		const float flOriginY = fr.flCenterY - (float)uGameH * 0.5f * sy;
+		FRect q;
+		q.x0 = flOriginX + (float)texRect.x0 * sx;
+		q.y0 = flOriginY + (float)texRect.y0 * sy;
+		q.x1 = flOriginX + (float)texRect.x1 * sx;
+		q.y1 = flOriginY + (float)texRect.y1 * sy;
+		return q;
+	}
+
+	// Straight-alpha 0xAARRGGBB, which is exactly the little-endian memory
+	// order of a B8G8R8A8 texel (bytes B, G, R, A).
+	using Argb = uint32_t;
+
+	inline Argb PackArgb( int nRgb, float flAlpha )
+	{
+		const int a = (int)std::lround( std::clamp( flAlpha, 0.0f, 1.0f ) * 255.0f );
+		return ( (Argb)a << 24 ) | ( (Argb)nRgb & 0xFFFFFF );
+	}
+
+	namespace detail
+	{
+		// `src` OVER `dst`, both straight alpha -- what ImGui's
+		// SRC_ALPHA / ONE_MINUS_SRC_ALPHA blend does when the dot is
+		// drawn over an arm in the vector path, so the two paths agree.
+		inline Argb Over( Argb src, Argb dst )
+		{
+			const float sa = ( ( src >> 24 ) & 0xFF ) / 255.0f;
+			const float da = ( ( dst >> 24 ) & 0xFF ) / 255.0f;
+			if ( sa <= 0.0f ) return dst;
+			if ( da <= 0.0f || sa >= 1.0f ) return src;
+			const float oa = sa + da * ( 1.0f - sa );
+			Argb out = (Argb)std::lround( oa * 255.0f ) << 24;
+			for ( int shift : { 16, 8, 0 } )
+			{
+				const float sc = ( ( src >> shift ) & 0xFF ) / 255.0f;
+				const float dc = ( ( dst >> shift ) & 0xFF ) / 255.0f;
+				const float oc = ( sc * sa + dc * da * ( 1.0f - sa ) ) / oa;
+				out |= (Argb)std::clamp( (long)std::lround( oc * 255.0f ), 0l, 255l ) << shift;
+			}
+			return out;
+		}
+	}
+
+	// Paints the shape into a width x height buffer whose texel (0,0) is
+	// game pixel (texRect.x0, texRect.y0): outline, then arms, then the dot
+	// composited over (the vector path's order). Then every fully
+	// transparent texel that touches a painted one takes that neighbour's
+	// RGB (alpha stays 0): a linear filter interpolates colour and alpha
+	// independently, so a transparent texel left at RGB 0 would drag the
+	// edge of a green line towards black -- a dark fringe an in-game
+	// raster does not have. With the bleed, the edge is the line's own
+	// colour at half alpha, which is the "soft" edge the user asked for.
+	inline std::vector<Argb> Rasterize( const Shape &shape, const IRect &texRect,
+	                                    Argb outline, Argb lines, Argb dot )
+	{
+		const int w = texRect.x1 - texRect.x0, h = texRect.y1 - texRect.y0;
+		std::vector<Argb> px;
+		if ( w <= 0 || h <= 0 )
+			return px;
+		px.assign( (size_t)w * (size_t)h, 0u );
+
+		auto Paint = [&]( const std::vector<IRect> &rects, Argb col )
+		{
+			if ( ( col >> 24 ) == 0 )
+				return;
+			for ( const IRect &r : rects )
+				for ( int y = std::max( r.y0, texRect.y0 ); y < std::min( r.y1, texRect.y1 ); y++ )
+					for ( int x = std::max( r.x0, texRect.x0 ); x < std::min( r.x1, texRect.x1 ); x++ )
+					{
+						Argb &d = px[(size_t)( y - texRect.y0 ) * w + ( x - texRect.x0 )];
+						d = detail::Over( col, d );
+					}
+		};
+		Paint( shape.outline, outline );
+		Paint( shape.lines, lines );
+		Paint( shape.dot, dot );
+
+		// Colour bleed into the transparent neighbours (edge-adjacent
+		// first, then diagonal), from a snapshot so the bleed itself
+		// never propagates further than one texel.
+		const std::vector<Argb> snap = px;
+		constexpr int kN[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, 1 }, { 1, -1 }, { -1, -1 } };
+		for ( int y = 0; y < h; y++ )
+			for ( int x = 0; x < w; x++ )
+			{
+				if ( ( snap[(size_t)y * w + x] >> 24 ) != 0 )
+					continue;
+				for ( const auto &n : kN )
+				{
+					const int nx = x + n[0], ny = y + n[1];
+					if ( nx < 0 || ny < 0 || nx >= w || ny >= h )
+						continue;
+					const Argb v = snap[(size_t)ny * w + nx];
+					if ( ( v >> 24 ) != 0 )
+					{
+						px[(size_t)y * w + x] = v & 0x00FFFFFF;
+						break;
+					}
+				}
+			}
+		return px;
+	}
 }

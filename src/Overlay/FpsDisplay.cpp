@@ -1152,6 +1152,14 @@ namespace gamescope
 
 		VkCommandBuffer rawCmdBuffer = cmdBuffer->rawBuffer();
 
+		// Apply Scaling's game-resolution crosshair raster, when it changed
+		// this frame: a buffer->image copy plus barrier, in THIS command
+		// buffer before the render pass that samples it. Here and not in
+		// Crosshair_Draw() because the copy has to be outside the render
+		// pass and after DrainPrevSubmission() above, which is what makes
+		// freeing last frame's retired texture/descriptor safe.
+		Crosshair_RecordUpload( cmdBuffer.get() );
+
 		if ( s_bTextureNeedsInitialBarrier )
 		{
 			VkImageMemoryBarrier barrier = {
@@ -1244,6 +1252,11 @@ namespace gamescope
 				{
 					frame.flGamePixelScaleX = flOnScreenW / (float)g_uBaseLayerSourceWidth;
 					frame.flGamePixelScaleY = flOnScreenH / (float)g_uBaseLayerSourceHeight;
+					// Apply Scaling's raster path draws at this size and
+					// positions its quad from the centre + this size + the
+					// scale above (crosshair::ScaledQuad).
+					frame.uGameWidth = g_uBaseLayerSourceWidth;
+					frame.uGameHeight = g_uBaseLayerSourceHeight;
 				}
 			}
 		}
