@@ -547,10 +547,27 @@ padded string — drawing a padded string put the leading blank glyph's
 advance inside the text draw, which left a visible empty gutter on the
 left of a two-digit number and shoved the digits against the box's right
 edge (fixed 2026-09-03). `MeasureFpsModule()` measures both the pinned
-field and the plain digits and derives `flTextOffsetX`, half the width
-difference, added to the text origin so the digits sit centred in the
-pinned-width box. The outline and the digits themselves both draw at that
-same offset origin, so they track together.
+field and the plain digits and derives `flTextOffsetX`, the width
+difference (or half of it for a centre anchor), added to the text origin
+so the digits sit at the side of the pinned-width box that faces the
+anchor. The outline and the digits themselves both draw at that same
+offset origin, so they track together.
+
+**Digits hug the anchor's side, not always the box's centre (2026-09-06
+fix).** `flTextOffsetX` used to always be half the pinned-vs-unpadded
+width gap, i.e. always centred, regardless of anchor — so with a
+right-hand anchor a reading like `60` (2 digits in the pinned 3-cell box)
+sat centred rather than flush with the screen edge, and visibly drifted
+sideways as the digit count changed (e.g. `60` → `144`). `MeasureFpsModule()`
+now takes the anchor's horizontal side (`ParsePlacement()`'s `nHoriz`) and
+places the digits flush left, flush right, or centred to match — left and
+right anchors flush, centre anchor unchanged. The box itself (size and
+`ResolveAnchoredOrigin()`'s placement of it) is untouched by this; only
+where the digits sit inside it changed. `fps_display_force "<n>"` (a debug
+ConCommand, `-1` or no argument releases it) forces the displayed reading
+to an exact integer, bypassing smoothing, for pixel-measuring this without
+waiting on a real frame rate — see `build-release/verify-shots/hud-align/`
+for the measured before/after edge positions.
 
 ## Warm-up: `FpsDisplay_WarmUp()`
 

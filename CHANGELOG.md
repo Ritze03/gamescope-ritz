@@ -100,6 +100,9 @@ The newest version below is the one this build reports.
   simply out-running the compositor) reads correctly rather than pinning at 999.
 - **FPS counter shows four- and five-digit rates**: the 999 ceiling is gone, and the
   box only grows wider when the number actually needs more digits.
+- **FPS HUD stays flush with its anchored edge**: with a left or right placement,
+  the digits now sit flush against that edge instead of centred in their box, so
+  they no longer drift sideways as the reading gains or loses a digit.
 - **First toast no longer stutters**: the notification system's one-time setup and
   font baking now happen once at launch, before the startup splash, instead of on
   the first notification shown mid-game; the toast also no longer re-creates its
