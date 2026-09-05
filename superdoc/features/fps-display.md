@@ -222,16 +222,34 @@ should do.
 > The backdrop's 12%-white border was the other objection — at 0.12
 > encoded it is linear ~0.014, nowhere near the 0.25 selector floor.
 
-**Layer budget.** Because there is only ever one layer again, the HUD has
-no special layer-budget behaviour: `k_nMaxLayers` / `VKR_MAX_LAYERS` are
-both 6, `LayerStack_t::push()` returns `nullptr` when the frame is full,
-and the HUD then simply draws nothing, with no assert and no log line —
-the same as every other overlay layer. `paint_all()` reserves slots for
-the cursor and the overlay planes but **not** for the HUD, the toasts or
-the Shell, so a busy frame (base + override + external overlay + Steam
-overlay + cursor + mura is already six) can silently lose them. There is
-no degraded single-layer fallback path any more, because there is nothing
-to degrade from.
+**Layer budget.** The HUD is one layer, with one exception below, so it
+has no special layer-budget behaviour: `k_nMaxLayers` / `VKR_MAX_LAYERS`
+are both 6, `LayerStack_t::push()` returns `nullptr` when the frame is
+full, and the HUD then simply draws nothing, with no assert and no log
+line — the same as every other overlay layer. `paint_all()` reserves
+slots for the cursor and the overlay planes but **not** for the HUD, the
+toasts or the Shell, so a busy frame (base + override + external overlay
++ Steam overlay + cursor + mura is already six) can silently lose them.
+
+**The crosshair shares this layer (2026-09-05).** The
+[crosshair](crosshair.md) is drawn into this same ImGui frame and texture,
+before the readout, and rides the same `Layer_t` — the layer budget above
+is exactly why it has no layer of its own. Two consequences for this file:
+`FpsDisplay_AddLayer()` builds the layer when the readout **or** the
+crosshair is on (and still nothing at all when neither is), and the 500 ms
+repaint-timer flag is recomputed (`UpdateTimerFlag()`) from that same
+predicate. The **one exception** to "one layer": with Inverted text colour
+*and* the crosshair on, a bright crosshair colour would trip the
+luma selector below and invert the game instead of showing its colour, so
+the texture is rendered at twice the output height — readout top,
+crosshair bottom — and two `Layer_t`s sample the two halves of that one
+texture, INVERT then COVERAGE (the second's `offset.y` is the output
+height). If the second push fails on a full frame, the crosshair sits the
+frame out and the readout is unaffected. See
+[crosshair.md](crosshair.md#where-it-is-drawn-the-huds-layer). Note this
+does **not** reintroduce the two-overlapping-layers problem described
+above: the two layers sample disjoint halves and the crosshair layer is
+never *under* the digits' invert.
 
 **Interaction with the outline.** None, now. The outline is black, the
 selector leaves black alone, and the digits invert the game regardless of

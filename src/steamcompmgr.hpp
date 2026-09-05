@@ -163,6 +163,18 @@ extern uint64_t g_lastWinSeq;
 void nudge_steamcompmgr( void );
 void force_repaint( void );
 
+// The base plane's own committed buffer size -- the game's render
+// resolution before any stretch/upscale gamescope applied -- as of the
+// last time paint_window_commit() painted the base plane. Written and read
+// on the steamcompmgr thread only. Overlay/FpsDisplay.cpp divides layer 0's
+// on-screen size by this to get "output pixels per game pixel" per axis,
+// which is what the crosshair's Apply Scaling needs (see
+// superdoc/features/crosshair.md). Kept separate from Layer_t because
+// layer 0's texture may already be gamescope's pre-emptively upscaled copy
+// (ShouldPreemptivelyUpscale()), whose size says nothing about the game's.
+extern uint32_t g_uBaseLayerSourceWidth;
+extern uint32_t g_uBaseLayerSourceHeight;
+
 extern void mangoapp_update( uint64_t visible_frametime, uint64_t app_frametime_ns, uint64_t latency_ns );
 struct wlr_surface *steamcompmgr_get_server_input_surface( size_t idx );
 wlserver_vk_swapchain_feedback* steamcompmgr_get_base_layer_swapchain_feedback();

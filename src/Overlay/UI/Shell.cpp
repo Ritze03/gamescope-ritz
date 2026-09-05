@@ -51,6 +51,7 @@
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/FpsDisplay.h"
+#include "Overlay/Crosshair.h"
 
 #include "convar.h"
 
@@ -749,6 +750,10 @@ namespace gamescope::ui::shell
 			// SETTINGS half only. The HUD over the game is drawn from its
 			// own separate context and was never in the redesign's scope.
 			FpsDisplay_RegisterArea( reg );
+			// The crosshair (2026-09-05): drawn from FpsDisplay.cpp's own
+			// HUD layer but declared as its own area, right after the HUD it
+			// shares that layer with. See Overlay/Crosshair.h.
+			Crosshair_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
 			// P6. The second content area: version identity + the embedded
 			// CHANGELOG.md. Sits next to Log because both answer a question

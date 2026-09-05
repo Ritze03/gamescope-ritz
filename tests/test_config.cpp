@@ -1439,3 +1439,164 @@ TEST_CASE( "reshade.shadow_lift.enabled and strength round-trip", "[config]" )
         REQUIRE( loaded.reshade.shadow_lift.strength == flValue );
     }
 }
+
+// ---------------------------------------------------------------------
+// Crosshair (2026-09-05, superdoc/features/crosshair.md): a normal
+// per-layer section, serialised under the "crosshair" key. Every field
+// round-trips; an old config with no such key resolves to the defaults
+// (master switch off, so nothing changes for anyone until they opt in).
+// ---------------------------------------------------------------------
+
+namespace
+{
+    CrosshairSettings NonDefaultCrosshair()
+    {
+        CrosshairSettings c;
+        c.enabled = true;
+        c.line_enabled = false;
+        c.line_length = 12;
+        c.line_width = 1;
+        c.line_gap = 0;
+        c.line_color = 0x12ABCD;
+        c.line_opacity = 0.35f;
+        c.dot_enabled = true;
+        c.dot_size = 3;
+        c.dot_color = 0xFF00FF;
+        c.dot_opacity = 0.7f;
+        c.outline_enabled = false;
+        c.outline_width = 3;
+        c.outline_opacity = 0.15f;
+        c.outline_color = 0x101010;
+        c.hide_on_right_click = true;
+        c.hide_mode = "shrink";
+        c.hide_time_ms = 450;
+        c.apply_scaling = true;
+        return c;
+    }
+
+    void RequireCrosshairEquals( const CrosshairSettings &a, const CrosshairSettings &b )
+    {
+        REQUIRE( a.enabled == b.enabled );
+        REQUIRE( a.line_enabled == b.line_enabled );
+        REQUIRE( a.line_length == b.line_length );
+        REQUIRE( a.line_width == b.line_width );
+        REQUIRE( a.line_gap == b.line_gap );
+        REQUIRE( a.line_color == b.line_color );
+        REQUIRE( a.line_opacity == b.line_opacity );
+        REQUIRE( a.dot_enabled == b.dot_enabled );
+        REQUIRE( a.dot_size == b.dot_size );
+        REQUIRE( a.dot_color == b.dot_color );
+        REQUIRE( a.dot_opacity == b.dot_opacity );
+        REQUIRE( a.outline_enabled == b.outline_enabled );
+        REQUIRE( a.outline_width == b.outline_width );
+        REQUIRE( a.outline_opacity == b.outline_opacity );
+        REQUIRE( a.outline_color == b.outline_color );
+        REQUIRE( a.hide_on_right_click == b.hide_on_right_click );
+        REQUIRE( a.hide_mode == b.hide_mode );
+        REQUIRE( a.hide_time_ms == b.hide_time_ms );
+        REQUIRE( a.apply_scaling == b.apply_scaling );
+    }
+}
+
+TEST_CASE( "crosshair: every field round-trips through SaveGlobal/LoadGlobal", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.crosshair = NonDefaultCrosshair();
+    // Every value above differs from its default, so a field the serialiser
+    // forgot would show up as the default coming back.
+    REQUIRE( SaveGlobal( s ) );
+
+    Settings loaded = LoadGlobal();
+    RequireCrosshairEquals( loaded.crosshair, NonDefaultCrosshair() );
+}
+
+TEST_CASE( "crosshair: the defaults round-trip too, and the master switch defaults to off", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( Settings{}.crosshair.enabled == false );
+
+    Settings s{};
+    REQUIRE( SaveGlobal( s ) );
+    RequireCrosshairEquals( LoadGlobal().crosshair, CrosshairSettings{} );
+}
+
+TEST_CASE( "crosshair.hide_mode round-trips across all three modes", "[config]" )
+{
+    for ( const char *pszValue : { "fade", "focus", "shrink" } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.crosshair.hide_mode = pszValue;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.crosshair.hide_mode == pszValue );
+    }
+}
+
+TEST_CASE( "crosshair: the three colours and three opacities round-trip independently", "[config]" )
+{
+    for ( int nColor : { 0x000000, 0xFFFFFF, 0x00FF00, 0x7F7F7F } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.crosshair.line_color = nColor;
+        s.crosshair.dot_color = nColor ^ 0x0000FF;
+        s.crosshair.outline_color = nColor ^ 0xFF0000;
+        s.crosshair.line_opacity = 0.25f;
+        s.crosshair.dot_opacity = 0.5f;
+        s.crosshair.outline_opacity = 0.75f;
+
+        REQUIRE( SaveGlobal( s ) );
+
+        Settings loaded = LoadGlobal();
+        REQUIRE( loaded.crosshair.line_color == nColor );
+        REQUIRE( loaded.crosshair.dot_color == ( nColor ^ 0x0000FF ) );
+        REQUIRE( loaded.crosshair.outline_color == ( nColor ^ 0xFF0000 ) );
+        REQUIRE( loaded.crosshair.line_opacity == 0.25f );
+        REQUIRE( loaded.crosshair.dot_opacity == 0.5f );
+        REQUIRE( loaded.crosshair.outline_opacity == 0.75f );
+    }
+}
+
+TEST_CASE( "a config predating the crosshair loads with the crosshair off at its defaults", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true}})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.enabled == true );
+    RequireCrosshairEquals( loaded.crosshair, CrosshairSettings{} );
+}
+
+TEST_CASE( "crosshair rides in a per-game snapshot and in a profile, like fps_display", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    REQUIRE( SaveGlobal( global ) );
+
+    Settings snapshot = ResolveEffective( std::nullopt );
+    snapshot.crosshair = NonDefaultCrosshair();
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+    RequireCrosshairEquals( ResolveEffective( std::optional<std::string>{ "1" } ).crosshair, NonDefaultCrosshair() );
+    RequireCrosshairEquals( ResolveEffective( std::nullopt ).crosshair, CrosshairSettings{} );
+
+    Settings profile{};
+    profile.crosshair = NonDefaultCrosshair();
+    profile.crosshair.hide_mode = "focus";
+    REQUIRE( SaveProfile( "aim", profile ) );
+
+    Settings target{};
+    REQUIRE( ApplyProfile( target, "aim" ) );
+    REQUIRE( target.crosshair.hide_mode == "focus" );
+    REQUIRE( target.crosshair.enabled == true );
+    REQUIRE( target.crosshair.line_length == 12 );
+}

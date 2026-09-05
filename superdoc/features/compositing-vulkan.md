@@ -108,8 +108,11 @@ two silently disagree — see that constants block's own comment.
 Bottom-to-top as of 2026-09-03: base plane / override / external overlay /
 override-window overlay (`g_zposBase`..`g_zposOverlay`) → cursor
 (`g_zposCursor`) → mura correction (`g_zposMuraCorrection`) → FPS HUD
-(`g_zposFpsDisplay`) → toast notifications (`g_zposNotifications`) → settings
-overlay/Shell (`g_zposSettingsOverlay`), topmost of all. *Why:* the user asked
+(`g_zposFpsDisplay`; also carries the [crosshair](crosshair.md), and pushes a
+second `g_zposFpsDisplay` layer sampling the other half of its texture only when
+the HUD's Inverted text colour and the crosshair are both on) → toast
+notifications (`g_zposNotifications`) → settings overlay/Shell
+(`g_zposSettingsOverlay`), topmost of all. *Why:* the user asked
 for the HUD and toasts to sit **beneath** the Shell rather than drawing over
 it — an earlier version pushed the settings overlay first (so it composited
 *under* the HUD and toasts) while its own comment claimed the opposite; both

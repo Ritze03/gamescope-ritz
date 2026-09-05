@@ -12,6 +12,18 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Crosshair**: a new Crosshair area draws a crosshair over the middle of the game
+  -- four lines, an optional centre dot and an optional outline, each with its own
+  colour and opacity -- so it stays sharp even when frame generation smears the
+  game's own.
+- **Crosshair 1px mode**: a line width of 1 is exactly one pixel wide with no soft
+  edges, and the dot is a crisp square at every size.
+- **Crosshair auto-hide**: optionally hides while the right mouse button is held,
+  with Fade out, Focus or Shrink animations over a chosen time, and comes back the
+  instant you let go.
+- **Crosshair Apply scaling**: optionally stretches the crosshair exactly as the game
+  is stretched, so a 4:3 game on a 16:9 screen gets the wide crosshair "stretch"
+  players expect.
 - **Adaptive Brightness**: the effect works again -- dark scenes brighten and
   bright scenes dim toward the target brightness over the chosen seconds, and it
   keeps tracking the scene while switched off so turning it back on is instant.

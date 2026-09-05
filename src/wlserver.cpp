@@ -69,6 +69,9 @@
 // D22: the Left Ctrl + Right Shift palette shortcut lives in this file's
 // hotkey table, so it needs the shell's one-line request API.
 #include "Overlay/UI/Shell.h"
+// The crosshair's right-click auto-hide watches BTN_RIGHT on the game path
+// of wlserver_dispatch_mouse_button() -- see that function.
+#include "Overlay/Crosshair.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -817,6 +820,57 @@ static gamescope::ConCommand cc_wlserver_debug_mouse_motion(
 			wlserver_unlock();
 	} );
 
+// The button half, completing the set with wlserver_debug_key and
+// wlserver_debug_mouse_motion above and confined the same way: it enters at
+// wlserver_mousebutton(), the exact function every real backend (SDL,
+// Wayland, OpenVR, libinput, IME, input emulation) calls, so it reaches
+// wlserver_dispatch_mouse_button() -- the single overlay-vs-game fork --
+// and, on the game path, wlr_seat_pointer_notify_button() plus the
+// crosshair's BTN_RIGHT auto-hide hook, exactly like a real click. It
+// cannot touch the host's pointer.
+//
+// Added for the crosshair's right-click hide (superdoc/features/
+// crosshair.md), whose animation could otherwise only be verified with
+// OS-level input injection, which is banned here (AUTONOMOUS-DECISIONS.md
+// D4).
+static gamescope::ConCommand cc_wlserver_debug_mouse_button(
+	"wlserver_debug_mouse_button",
+	"Send a pointer button event on gamescope's OWN seat: wlserver_debug_mouse_button "
+	"<evdev-button> <0|1> [<button> <0|1> ...]. 1 is press, 0 is release; 272 is BTN_LEFT, 273 "
+	"BTN_RIGHT, 274 BTN_MIDDLE. Enters at wlserver_mousebutton(), the same function a real click "
+	"does, so it exercises the settings overlay's capture gate, the game's seat and the "
+	"crosshair's right-click hide alike; it cannot reach the host's pointer. Through gamescopectl "
+	"the arguments must be ONE quoted argument: gamescopectl wlserver_debug_mouse_button \"273 1\" "
+	"then gamescopectl wlserver_debug_mouse_button \"273 0\".",
+	[]( std::span<std::string_view> args )
+	{
+		if ( args.size() < 3 || ( args.size() - 1 ) % 2 != 0 )
+		{
+			console_log.errorf( "usage: wlserver_debug_mouse_button <evdev-button> <0|1> [<button> <0|1> ...]" );
+			return;
+		}
+
+		// Same conditional lock as wlserver_debug_key: gamescopectl already
+		// dispatches this with the lock held, the script console does not.
+		const bool bNeedLock = !wlserver_is_lock_held();
+		if ( bNeedLock )
+			wlserver_lock();
+		for ( size_t i = 1; i + 1 < args.size(); i += 2 )
+		{
+			const std::optional<int> onButton = gamescope::Parse<int>( args[ i ] );
+			if ( !onButton || *onButton < 0 || *onButton > 0xffff )
+			{
+				console_log.errorf( "wlserver_debug_mouse_button: bad button \"%.*s\"; usage: "
+				                    "wlserver_debug_mouse_button <evdev-button> <0|1> [<button> <0|1> ...]",
+				                    (int)args[ i ].size(), args[ i ].data() );
+				break;
+			}
+			wlserver_mousebutton( *onButton, args[ i + 1 ] != "0", get_time_in_milliseconds() );
+		}
+		if ( bNeedLock )
+			wlserver_unlock();
+	} );
+
 // Which side (the focused game's wl_seat, or the settings overlay) actually
 // received a given key/mouse-button's PRESS, keyed by raw linux keycode/
 // button code. Consulted on RELEASE so a press-and-release pair always goes
@@ -933,6 +987,14 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 			s_setMouseButtonsForwardedToGame.insert( uLinuxButton );
 			wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_PRESSED );
 			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+
+			// Crosshair auto-hide (superdoc/features/crosshair.md): observe
+			// -- never consume or alter -- a right-click that is going TO
+			// THE GAME. Placed on this branch only, so a click the Shell or
+			// Launcher captured above is invisible to it, and after the
+			// notify so nothing here can delay the game's own event.
+			if ( uLinuxButton == BTN_RIGHT )
+				gamescope::Crosshair_NotifyRightButton( true );
 		}
 	}
 	else
@@ -945,6 +1007,12 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 		{
 			wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_RELEASED );
 			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+
+			// The release is paired to the PRESS's destination by the
+			// tracking set, so a right button pressed in the game and
+			// released after the Shell opened still restores the crosshair.
+			if ( uLinuxButton == BTN_RIGHT )
+				gamescope::Crosshair_NotifyRightButton( false );
 		}
 		// else: unmatched release, drop -- see wlserver_dispatch_key()'s comment.
 	}

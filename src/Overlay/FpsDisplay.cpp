@@ -57,6 +57,7 @@
 #include "Fonts.h"
 #include "Palette.h"
 #include "UI/Registry.h"
+#include "Crosshair.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -124,13 +125,29 @@ namespace gamescope
 	// so it comes up even if a game client has never rendered a single
 	// frame this session.
 	//
-	// s_bHudEnabledForTimer mirrors s_Settings.fps_display.enabled for this
-	// thread to read without touching s_Settings itself (which, like the
-	// rest of this file's config state, is only ever safely read/written
-	// from the render-thread call sites) -- kept in sync at every place
-	// fps_display.enabled is assigned (EnsureConfigLoaded's own reload,
-	// cc_toggle_fps_display, and the `hud.enabled` registry switch).
+	// s_bHudEnabledForTimer mirrors "does this file's layer have anything
+	// to draw" -- the FPS readout's own `enabled` OR the crosshair's
+	// (Overlay/Crosshair.cpp draws into this same layer, see
+	// FpsDisplay_AddLayer) -- for this thread to read without touching
+	// s_Settings itself (which, like the rest of this file's config state,
+	// is only ever safely read/written from the render-thread call sites).
+	// Recomputed by UpdateTimerFlag() at every place either half's enabled
+	// state can change: EnsureConfigLoaded's own reload (which every paint
+	// and every setter goes through), cc_toggle_fps_display, and the
+	// `hud.enabled` registry switch. The crosshair's master switch calls
+	// force_repaint(), and the paint that follows re-derives the flag.
+	//
+	// A static crosshair needs no keepalive of its own -- it is simply
+	// re-composited with whatever frame is on screen -- but counting it
+	// here is what keeps this layer's "nothing enabled -> no layer" logic
+	// and the timer's "nothing enabled -> no repaints" logic reading the
+	// same predicate, so they cannot disagree.
 	static std::atomic<bool> s_bHudEnabledForTimer{ false };
+
+	static void UpdateTimerFlag()
+	{
+		s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled || Crosshair_IsEnabled(), std::memory_order_relaxed );
+	}
 
 	static void EnsureRepaintTimerThread()
 	{
@@ -169,7 +186,7 @@ namespace gamescope
 		s_Settings = config::ResolveEffective( config::SessionAppId() );
 		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
-		s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled, std::memory_order_relaxed );
+		UpdateTimerFlag();
 	}
 
 	// M7: routes through config::IsSessionOverrideActive() instead of
@@ -191,7 +208,7 @@ namespace gamescope
 			EnsureConfigLoaded();
 			s_Settings.fps_display.enabled = !s_Settings.fps_display.enabled;
 			PersistSettings();
-			s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled, std::memory_order_relaxed );
+			UpdateTimerFlag();
 
 			// Same reasoning as SettingsOverlay.cpp's visibility ConVar
 			// callback: the master toggle itself is a state change without a
@@ -983,7 +1000,11 @@ namespace gamescope
 	// DrawModule, and the CPU/GPU/Media modules themselves) is gone -- there
 	// is exactly one module now, placed by the plain anchor+margin model
 	// above.
-	static void DrawReadout()
+	// `io_display` is the OUTPUT size, passed in rather than read from
+	// io.DisplaySize: when the crosshair shares this frame in split mode
+	// (see FpsDisplay_AddLayer) the ImGui display is twice the output's
+	// height, and the readout must still anchor within the top half.
+	static void DrawReadout( ImVec2 io_display )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
@@ -1018,7 +1039,6 @@ namespace gamescope
 		const int nFps = (int)std::lround( flDisplayFps );
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
-		const ImVec2 io_display = ImGui::GetIO().DisplaySize; // actual output resolution, see FpsDisplay_AddLayer()
 
 		const FpsModuleLayout L = MeasureFpsModule( nFps );
 		const ImVec2 boxSize( L.flContentWidth + cfg.backdrop_padding * 2.0f, L.flContentHeight + cfg.backdrop_padding * 2.0f );
@@ -1107,11 +1127,58 @@ namespace gamescope
 		return true;
 	}
 
+	// Where this frame's crosshair goes: the centre of the game's on-screen
+	// rect, not the output's, so a letterboxed or offset game still gets the
+	// crosshair on the game. paint_all() has already pushed the base plane
+	// as layer 0 by the time this runs, and Layer_t's offset/scale ARE the
+	// mapping the composite shader samples it with (composite.h's
+	// sampleLayerEx: texcoord = (outputPixel + offset) * scale), so the
+	// base's on-screen rect is [-offset, -offset + texSize / scale) in
+	// output pixels. The "output pixels per game pixel" factor Apply
+	// Scaling wants divides that on-screen size by the game's own buffer
+	// size (g_uBaseLayerSourceWidth/Height, published by
+	// paint_window_commit()) rather than by the texture's, because layer
+	// 0's texture may already be gamescope's pre-emptively upscaled copy.
+	// Falls back to the output centre at 1:1 when there is no base plane
+	// this frame (nothing focused yet).
+	static CrosshairFrame ResolveCrosshairFrame( const FrameInfo_t *pFrameInfo )
+	{
+		CrosshairFrame frame;
+		frame.flCenterX = (float)g_nOutputWidth * 0.5f;
+		frame.flCenterY = (float)g_nOutputHeight * 0.5f;
+
+		if ( pFrameInfo->layers.count() > 0 )
+		{
+			const FrameInfo_t::Layer_t &base = pFrameInfo->layers.get( 0 );
+			if ( base.zpos == (int)g_zposBase && base.tex && base.scale.x > 0.0f && base.scale.y > 0.0f )
+			{
+				const float flOnScreenW = (float)base.tex->width() / base.scale.x;
+				const float flOnScreenH = (float)base.tex->height() / base.scale.y;
+				frame.flCenterX = -base.offset.x + flOnScreenW * 0.5f;
+				frame.flCenterY = -base.offset.y + flOnScreenH * 0.5f;
+				if ( g_uBaseLayerSourceWidth > 0 && g_uBaseLayerSourceHeight > 0 )
+				{
+					frame.flGamePixelScaleX = flOnScreenW / (float)g_uBaseLayerSourceWidth;
+					frame.flGamePixelScaleY = flOnScreenH / (float)g_uBaseLayerSourceHeight;
+				}
+			}
+		}
+		return frame;
+	}
+
 	void FpsDisplay_AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		EnsureConfigLoaded();
 
-		if ( !s_Settings.fps_display.enabled )
+		// This layer carries two independently switchable things: the FPS
+		// readout and the crosshair (Overlay/Crosshair.cpp). It exists when
+		// EITHER is on -- the crosshair must draw with the readout off --
+		// and not at all when neither is, so a run with both off never
+		// creates an ImGui context, a texture or a layer (the same
+		// "nothing enabled -> no layer" guarantee this file always gave).
+		const bool bReadout = s_Settings.fps_display.enabled;
+		const bool bCrosshair = Crosshair_IsEnabled();
+		if ( !bReadout && !bCrosshair )
 			return;
 
 		// Idle-client keepalive lives entirely in the background repaint-
@@ -1134,9 +1201,33 @@ namespace gamescope
 
 		ImGui::SetCurrentContext( s_pImguiContext );
 
-		const bool bInvertedMode = s_Settings.fps_display.color_mode == "inverted";
+		const bool bInvertedMode = bReadout && s_Settings.fps_display.color_mode == "inverted";
 
-		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+		// Split mode. Inverted text colour puts this layer in
+		// ALPHA_BLENDING_MODE_INVERT, whose shader (alphamode.h) decides
+		// per texel BY BRIGHTNESS whether to invert the game or composite
+		// normally -- the contract the readout keeps by drawing its digits
+		// pure white and everything else dark. A crosshair in a bright
+		// user-chosen colour would trip that selector and invert the game
+		// under it instead of showing its colour. So when Inverted mode and
+		// the crosshair are BOTH on, the texture is rendered twice the
+		// output's height: readout in the top half, crosshair in the bottom
+		// half, and two Layer_t's sample the two halves of the ONE texture
+		// (layer B's offset.y = output height), the first INVERT, the
+		// second COVERAGE. Same ImGui context, same render pass, same
+		// submission -- only the push below differs. In every other
+		// combination (readout off, or Fixed colour) both draw into one
+		// output-sized texture and one layer, exactly as before.
+		//
+		// This is the one case this file pushes a second layer, and the
+		// layer budget is why it is confined to that case: k_nMaxLayers is
+		// 6, a busy frame fills it, and LayerStack_t::push() fails silently
+		// when full -- if the second push fails, the crosshair is skipped
+		// for that frame and the readout is unaffected.
+		const bool bSplit = bInvertedMode && bCrosshair;
+		const uint32_t uTextureHeight = bSplit ? g_nOutputHeight * 2u : g_nOutputHeight;
+
+		if ( !EnsureTexture( g_nOutputWidth, uTextureHeight ) )
 		{
 			RestoreContext();
 			return;
@@ -1155,7 +1246,20 @@ namespace gamescope
 
 		ImGui_ImplVulkan_NewFrame();
 		ImGui::NewFrame();
-		DrawReadout();
+
+		// Crosshair first, readout second, both into the background draw
+		// list: if the readout is anchored dead centre it sits over the
+		// crosshair rather than under it.
+		bool bCrosshairAnimating = false;
+		if ( bCrosshair )
+		{
+			CrosshairFrame frame = ResolveCrosshairFrame( pFrameInfo );
+			frame.flDrawOffsetY = bSplit ? (float)g_nOutputHeight : 0.0f;
+			bCrosshairAnimating = Crosshair_Draw( ImGui::GetBackgroundDrawList(), frame, ulNowNanos );
+		}
+		if ( bReadout )
+			DrawReadout( ImVec2( (float)g_nOutputWidth, (float)g_nOutputHeight ) );
+
 		ImGui::Render();
 
 		const bool bSubmitted = RenderAndSubmit();
@@ -1164,6 +1268,14 @@ namespace gamescope
 
 		if ( !bSubmitted )
 			return;
+
+		// While the right-click hide animation is moving, every frame needs
+		// a successor -- the same per-frame force_repaint() the lag-spike
+		// hold relies on the 500ms timer for, but at frame rate, since a
+		// 200ms animation at two frames a second is not an animation. A
+		// static crosshair (idle, or fully hidden) asks for nothing.
+		if ( bCrosshairAnimating )
+			force_repaint();
 
 		// ponytail: relies on the same paint_all()-level bValidContents
 		// precondition SettingsOverlay.h documents at
@@ -1219,6 +1331,20 @@ namespace gamescope
 		else
 		{
 			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE; // straight (non-premultiplied) alpha, same reasoning as SettingsOverlay's own layer
+		}
+
+		if ( bSplit )
+		{
+			// The crosshair's half of the same texture -- see bSplit above.
+			// offset.y = output height makes the composite sample texture
+			// rows [H, 2H) for output rows [0, H).
+			FrameInfo_t::Layer_t *pCrosshairLayer = pFrameInfo->layers.push();
+			if ( !pCrosshairLayer )
+				return; // out of layer slots: the crosshair sits this frame out, the readout above is unaffected
+
+			*pCrosshairLayer = *layer;
+			pCrosshairLayer->offset = { 0.0f, (float)g_nOutputHeight };
+			pCrosshairLayer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE;
 		}
 	}
 
@@ -1327,7 +1453,7 @@ namespace gamescope
 					EnsureConfigLoaded();
 					s_Settings.fps_display.enabled = b;
 					PersistSettings();
-					s_bHudEnabledForTimer.store( b, std::memory_order_relaxed );
+					UpdateTimerFlag();
 					// See cc_toggle_fps_display's identical call for why: an
 					// immediate frame for the toggle itself, on top of the
 					// background repaint-timer thread that sustains the

@@ -190,6 +190,30 @@ namespace gamescope::config
                 s.fps_display.lag_detection_enabled = JGetBool( *pFps, "lag_detection_enabled", s.fps_display.lag_detection_enabled );
             }
 
+            if ( const nlohmann::json *pCross = JGetObject( j, "crosshair" ) )
+            {
+                auto &c = s.crosshair;
+                c.enabled = JGetBool( *pCross, "enabled", c.enabled );
+                c.line_enabled = JGetBool( *pCross, "line_enabled", c.line_enabled );
+                c.line_length = JGetInt( *pCross, "line_length", c.line_length );
+                c.line_width = JGetInt( *pCross, "line_width", c.line_width );
+                c.line_gap = JGetInt( *pCross, "line_gap", c.line_gap );
+                c.line_color = JGetInt( *pCross, "line_color", c.line_color );
+                c.line_opacity = JGetFloat( *pCross, "line_opacity", c.line_opacity );
+                c.dot_enabled = JGetBool( *pCross, "dot_enabled", c.dot_enabled );
+                c.dot_size = JGetInt( *pCross, "dot_size", c.dot_size );
+                c.dot_color = JGetInt( *pCross, "dot_color", c.dot_color );
+                c.dot_opacity = JGetFloat( *pCross, "dot_opacity", c.dot_opacity );
+                c.outline_enabled = JGetBool( *pCross, "outline_enabled", c.outline_enabled );
+                c.outline_width = JGetInt( *pCross, "outline_width", c.outline_width );
+                c.outline_opacity = JGetFloat( *pCross, "outline_opacity", c.outline_opacity );
+                c.outline_color = JGetInt( *pCross, "outline_color", c.outline_color );
+                c.hide_on_right_click = JGetBool( *pCross, "hide_on_right_click", c.hide_on_right_click );
+                c.hide_mode = JGetString( *pCross, "hide_mode", c.hide_mode );
+                c.hide_time_ms = JGetInt( *pCross, "hide_time_ms", c.hide_time_ms );
+                c.apply_scaling = JGetBool( *pCross, "apply_scaling", c.apply_scaling );
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 if ( const nlohmann::json *pVibrancy = JGetObject( *pReshade, "vibrancy" ) )
@@ -376,6 +400,28 @@ namespace gamescope::config
             jFps[ "outline_strength" ] = s.fps_display.outline_strength;
             jFps[ "lag_detection_enabled" ] = s.fps_display.lag_detection_enabled;
 
+            const auto &c = s.crosshair;
+            nlohmann::json jCross = nlohmann::json::object();
+            jCross[ "enabled" ] = c.enabled;
+            jCross[ "line_enabled" ] = c.line_enabled;
+            jCross[ "line_length" ] = c.line_length;
+            jCross[ "line_width" ] = c.line_width;
+            jCross[ "line_gap" ] = c.line_gap;
+            jCross[ "line_color" ] = c.line_color;
+            jCross[ "line_opacity" ] = c.line_opacity;
+            jCross[ "dot_enabled" ] = c.dot_enabled;
+            jCross[ "dot_size" ] = c.dot_size;
+            jCross[ "dot_color" ] = c.dot_color;
+            jCross[ "dot_opacity" ] = c.dot_opacity;
+            jCross[ "outline_enabled" ] = c.outline_enabled;
+            jCross[ "outline_width" ] = c.outline_width;
+            jCross[ "outline_opacity" ] = c.outline_opacity;
+            jCross[ "outline_color" ] = c.outline_color;
+            jCross[ "hide_on_right_click" ] = c.hide_on_right_click;
+            jCross[ "hide_mode" ] = c.hide_mode;
+            jCross[ "hide_time_ms" ] = c.hide_time_ms;
+            jCross[ "apply_scaling" ] = c.apply_scaling;
+
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
             jVibrancy[ "strength" ] = s.reshade.vibrancy.strength;
@@ -418,6 +464,7 @@ namespace gamescope::config
             j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
+            j[ "crosshair" ] = std::move( jCross );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "audio" ] = std::move( jAudio );
@@ -987,6 +1034,7 @@ namespace gamescope::config
         // wrong process for every other game the profile is applied to.
         target.gamescope = oProfile->gamescope;
         target.fps_display = oProfile->fps_display;
+        target.crosshair = oProfile->crosshair;
         target.reshade = oProfile->reshade;
         target.notifications = oProfile->notifications;
 
@@ -1127,7 +1175,7 @@ namespace gamescope::config
         // `overlay`, but EnqueueGlobalWrite() always writes the *entire*
         // Settings object to disk (SettingsToJson() has no partial-write
         // mode) - so a geometry-only write still needs a correct, current
-        // value for every other section (gamescope/fps_display/reshade/
+        // value for every other section (gamescope/fps_display/crosshair/reshade/
         // notifications/audio), or it would silently revert whatever any
         // other panel most recently wrote there. Mirrors
         // CurrentOverlaySettings()'s own fix, pointed the other way: an

@@ -509,6 +509,13 @@ declared correctly. No blocker here.
   artifact class the compositor position solves *better* than a Vulkan layer in the
   game's process.
 
+**Decision, 2026-09-05:** the user chose to keep running **external LSFG** (`lsfg-vk` as a
+layer in the game's process) rather than pursue any in-compositor option here. The one
+piece of the in-game HUD that suffers most under it — the crosshair — is instead drawn by
+gamescope itself, after interpolation, in the HUD's layer: see
+[features/crosshair.md](../features/crosshair.md). That is §5.3's "compositor position
+solves it better" argument applied to the one element that matters for aiming.
+
 Net: **AFMF-1-class output at best**, probably below Lossless Scaling's purpose-built
 colour-only model, on a codebase whose authors never tuned it for this input.
 

@@ -169,6 +169,70 @@ namespace gamescope::config
         int margin_y = 24; // px, distance from the top/bottom edge
     };
 
+    // Compositor-drawn crosshair (2026-09-05, this fork's own addition --
+    // see superdoc/features/crosshair.md). Drawn by Overlay/Crosshair.cpp
+    // into the FPS HUD's own layer (Overlay/FpsDisplay.cpp), centred on
+    // the game's on-screen rect, so it composites AFTER anything running
+    // inside the game -- an external frame-generation layer (lsfg-vk)
+    // interpolates the game's own frame and smears whatever is drawn in
+    // it, above all the in-game crosshair; this one cannot smear.
+    //
+    // A normal per-layer section, shared via global.json unless a game has
+    // "Override Global Config" on, exactly like FpsDisplaySettings.
+    // Colours are packed 0xRRGGBB ints (the same on-disk shape as
+    // color_fps / cursor_inlay_color); every element's alpha is its own
+    // separate 0..1 opacity so the RGB colour picker stays a colour picker.
+    // Pixel sizes are ints: the whole point of the 1px mode is that a
+    // "1" is exactly one pixel, so fractional sizes have no meaning here.
+    struct CrosshairSettings
+    {
+        bool enabled = false; // master switch, default off -- nothing changes for anyone until they turn it on
+
+        // Line: the four arms. length is each arm's own length, gap the
+        // distance from the centre to where an arm starts, width the arm's
+        // thickness. All in pixels (output pixels, or game pixels when
+        // apply_scaling below is on).
+        bool line_enabled = true;
+        int line_length = 6;
+        int line_width = 2;
+        int line_gap = 3;
+        int line_color = 0x00FF00;
+        float line_opacity = 1.0f;
+
+        // Dot: a centred square (always a square, at every size -- see
+        // superdoc/features/crosshair.md's geometry section).
+        bool dot_enabled = false;
+        int dot_size = 2;
+        int dot_color = 0x00FF00;
+        float dot_opacity = 1.0f;
+
+        // Outline: a stroke of outline_width px drawn AROUND every arm and
+        // the dot, strictly outside their fill (never underneath it), so a
+        // translucent line shows the game through it, not the outline.
+        bool outline_enabled = true;
+        int outline_width = 1;
+        float outline_opacity = 0.6f;
+        int outline_color = 0x000000;
+
+        // Auto-hide while the right mouse button is held (aiming down
+        // sights). hide_mode: "fade" (opacity only), "focus" (gap closes
+        // over the first half of hide_time_ms, then fades over the second
+        // half), "shrink" (gap closes over the first half, then the arms
+        // and the dot shrink to nothing over the second half). Release
+        // restores instantly, no reverse animation -- Overlay/CrosshairMath.h.
+        bool hide_on_right_click = false;
+        std::string hide_mode = "fade"; // fade | focus | shrink
+        int hide_time_ms = 200;
+
+        // Off: every size above is in output pixels and the crosshair is
+        // drawn square whatever the game's aspect. On: sizes are GAME
+        // pixels, multiplied per axis by how gamescope stretches the game
+        // onto the output -- a 4:3 game stretched to 16:9 gets a
+        // horizontally stretched crosshair, the way a stretched in-game
+        // one looks.
+        bool apply_scaling = false;
+    };
+
     struct ReshadeVibrancySettings
     {
         bool enabled = false;
@@ -505,6 +569,7 @@ namespace gamescope::config
     {
         GamescopeSettings gamescope;
         FpsDisplaySettings fps_display;
+        CrosshairSettings crosshair;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

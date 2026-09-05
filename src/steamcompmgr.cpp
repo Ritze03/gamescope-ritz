@@ -2196,6 +2196,10 @@ wlserver_vk_swapchain_feedback* steamcompmgr_get_base_layer_swapchain_feedback()
 
 gamescope::ConVar<bool> cv_paint_debug_pause_base_plane( "paint_debug_pause_base_plane", false, "Pause updates to the base plane." );
 
+// See steamcompmgr.hpp -- read by Overlay/FpsDisplay.cpp for the crosshair.
+uint32_t g_uBaseLayerSourceWidth = 0;
+uint32_t g_uBaseLayerSourceHeight = 0;
+
 static FrameInfo_t::Layer_t *
 paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win_t *w, steamcompmgr_win_t *scaleW, struct FrameInfo_t *frameInfo,
 			  MouseCursor *cursor, PaintWindowFlags flags = 0, float flOpacityScale = 1.0f, steamcompmgr_win_t *fit = nullptr )
@@ -2295,6 +2299,16 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 			baseWidth = std::max<uint32_t>( baseWidth, clamp<int>( fitX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
 			baseHeight = std::max<uint32_t>( baseHeight, clamp<int>( fitY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
 		}
+	}
+
+	// The game's own buffer size, for the crosshair's Apply Scaling (see
+	// steamcompmgr.hpp). baseWidth/baseHeight rather than sourceWidth/
+	// sourceHeight: the latter is the (possibly pre-emptively upscaled)
+	// texture actually in the layer, the former the raw commit.
+	if ( flags & PaintWindowFlag::BasePlane )
+	{
+		g_uBaseLayerSourceWidth = (uint32_t)std::max( baseWidth, 0 );
+		g_uBaseLayerSourceHeight = (uint32_t)std::max( baseHeight, 0 );
 	}
 
 	// Compositing ignores the base window's origin, so position overrides relative to it.
