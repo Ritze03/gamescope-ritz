@@ -104,7 +104,9 @@ A check is a `check_*` bash function that calls `take_screenshot`, then one or m
 `run_sampler <subcommand> ...` calls into `pixel_regression_sample.py` (subcommands:
 `pixel`, `digit` — finds a glyph's fill colour in a box and asserts it, `blackcount` —
 counts near-black pixels in a box, `line` — samples a ray of offsets from a centre
-point). Register it in the `should_run`-gated dispatch near the bottom so `--only`
+point, `line_blend` — as `line`, with the target computed from a colour and opacity
+blended over the background through the HUD layer's premultiplied-then-coverage
+blend). Register it in the `should_run`-gated dispatch near the bottom so `--only`
 can select it, and give it a header comment naming the exact assertion (mirroring the
 ones already there).
 

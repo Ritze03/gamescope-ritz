@@ -56,9 +56,19 @@ Verified headless: built, launched `--backend headless` under
 ran `gamescopectl layer_budget_stats` — printed `layer_budget_stats: 0 drop(s),
 high-water mark 0 / 6 layers`. Torn down cleanly, no leftover process.
 
-## [~] 3. Retire the double-height split texture for Inverted HUD + crosshair
+**2026-09-06, laptop (Intel HD 620 / ANV):** `gamescopectl layer_budget_stats`
+responds correctly and reports 0 drops on this driver too — measured `0 drop(s),
+high-water mark 4 / 6 layers` with the Inverted HUD + crosshair on from startup (same
+capture as item 3's laptop pass below). `sway`/PIL aren't installed on this laptop, so
+`pixel-regression.sh` itself didn't run there; replicated by hand with `--backend
+headless` + a real xterm client (confirmed empirically: headless + no client silently
+no-ops the screenshot on this rig too, matching the desktop's documented limitation;
+headless + a connected client does capture correctly). Full numbers and captures:
+`build-release/verify-shots/laptop-round2/`.
 
-**Implemented and desktop-verified `0b9b79d`, laptop pending.** One HUD layer in every
+## [x] 3. Retire the double-height split texture for Inverted HUD + crosshair
+
+**Implemented and verified `0b9b79d` (desktop) + laptop pass below.** One HUD layer in every
 mode. The invert shader (`src/shaders/alphamode.h`) now finds the digits by a marker in
 the texel rather than by brightness: the readout draws them pure magenta (`G == 0`) over
 pure-black outline/backdrop, so `G == 0` ⇒ digit with R as its coverage, `G > 0` ⇒
@@ -81,10 +91,20 @@ on from startup **5 → 4** (`layer-budget` check). Known limitation, documented
 anchored *on* the crosshair shows a few magenta fringe pixels where a digit edge crosses
 an arm (`build-release/verify-shots/split-retire/zoom/overlap-mid.png`).
 
-Laptop: re-run the fps-display.md pixel recipe with Inverted + crosshair on Intel/ANV, and
-eyeball a red/blue crosshair at 10–50 % opacity in that mode (the 16-bit format switch and
-the pipeline re-creation are the parts this desktop's nested run cannot vouch for on
-another driver).
+**2026-09-06, laptop (Intel HD 620 / ANV):** verified. `sway` and python3-PIL are both
+absent on the laptop, so `pixel-regression.sh` couldn't run as-is; replicated its three
+key checks by hand (`--backend headless` + a real xterm client for a flat background —
+headless-with-no-client silently no-ops the screenshot on this rig too, matching the
+desktop's documented limitation, but headless-with-a-client captures correctly; isolated
+`XDG_RUNTIME_DIR`/`XDG_CONFIG_HOME`; a small PIL-free sampler using ImageMagick's raw RGB
+dump). Measured: Inverted digit over dark bg `(51,51,51)` → `(251,251,251)`, gap 200 —
+exact match to the desktop/fps-display.md reference; Inverted + crosshair in one layer:
+arm `(0,255,0)` 10/10 ray samples, outline `(0,0,0)` 2/2 ray samples; `layer_budget_stats`
+→ `0 drop(s), high-water mark 4 / 6 layers`, matching `EXPECTED_LAYER_HWM=4`. Grepped the
+full gamescope log around startup/pipeline creation for `validation`/`VUID`/`error` — zero
+Vulkan validation or format errors from the R16G16B16A16_UNORM switch or the ImGui
+pipeline re-creation. Captures, log, and the full write-up:
+`build-release/verify-shots/laptop-round2/` (git-ignored, not copied into this repo).
 
 ## [~] 4. Profiles and per-game config: new concept
 
@@ -108,7 +128,7 @@ features.
 **2026-09-06:** written — [`feature-ideas-2026-09-05.md`](feature-ideas-2026-09-05.md)
 (16 filters, 17 features, Top 5). A doc, so nothing to verify on the laptop.
 
-## [~] 6. FPS HUD digit alignment to anchor edge
+## [x] 6. FPS HUD digit alignment to anchor edge
 
 Align the FPS HUD digits to the anchor's screen edge so the readout doesn't shift
 when the value's digit width changes.
@@ -127,9 +147,17 @@ screenshot "<path> 4"`, measured digit-ink and backdrop bounding boxes for
 top-left/top-right/top-center at readings 60/144/1000 -- captures and the
 measured-edge table in `build-release/verify-shots/hud-align/`): the anchor-facing
 edge is pixel-stable (within 1px) across all three readings for every anchor,
-including across the 3-to-4-digit box widening. **Not yet verified live on the
-test laptop** per this file's own bar -- left `[~]` rather than `[x]` for that
-reason.
+including across the 3-to-4-digit box widening.
+
+**2026-09-06, laptop (Intel HD 620 / ANV):** verified, top-right anchor (the desktop
+already measured all three; one anchor is enough on the laptop). Same `--backend
+headless` + xterm + isolated-env recipe as items 2/3 above. Digit-ink bbox `xmax`
+constant `1251/1252/1251` px across readings 60/144/1000 — pixel-identical to the
+desktop's own top-right reference (`build-release/verify-shots/hud-align/
+measurements.txt`). Backdrop-box `box_right` constant at `1259` px for all three
+readings, with `box_left` growing only leftward (`1203/1203/1188`) across the
+3-to-4-digit change — again pixel-identical to the desktop's table. Captures and
+full numbers: `build-release/verify-shots/laptop-round2/`.
 
 ---
 
