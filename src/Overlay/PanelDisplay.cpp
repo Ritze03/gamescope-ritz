@@ -822,10 +822,14 @@ namespace gamescope
 	static int  s_nPickWidth = 0, s_nPickHeight = 0;
 	static int  s_nCustomWidth = 0, s_nCustomHeight = 0;   // 0 = not yet used, seed from live
 	static bool s_bLockAspect = true;
-	// The ratio the lock holds, captured when the lock engages (and lazily on
-	// first use) rather than re-derived from the last rounded height, so a
-	// hundred steps of the width stepper cannot drift the aspect.
-	static float s_flLockedAspect = 0.0f;
+	// The pair the lock derives from -- a pair rather than a single ratio
+	// float so repeated rounding on one axis can't quietly drift the other.
+	// Explicitly captured (CaptureLockedAspect(), below) at every point the
+	// reference should change; NEVER derived from s_nCustomWidth/Height
+	// inside a setter that is mid-mutation -- see LockedAspect()'s own
+	// comment for the bug that shipped from doing exactly that. 0/0 = not
+	// yet captured this stretch of Custom.
+	static int s_nLockRefWidth = 0, s_nLockRefHeight = 0;
 
 	static bool NestedModeAvailable()
 	{
@@ -984,6 +988,15 @@ namespace gamescope
 		return nMatch > 0 ? nMatch : kSizeCustom;
 	}
 
+	// The lock's one and only write point (besides the guarded fallback
+	// inside SetCustomWidth()/SetCustomHeight() -- see their comments).
+	// Every other capture site below funnels through this.
+	static void CaptureLockedAspect( int nWidth, int nHeight )
+	{
+		s_nLockRefWidth  = nWidth;
+		s_nLockRefHeight = nHeight;
+	}
+
 	// Custom is seeded from the live mode every time it is picked -- which
 	// is the last preset applied, so a 4:3 pick followed by Custom starts
 	// the steppers at a 4:3 size and the lock (re-captured here) holds 4:3.
@@ -992,7 +1005,7 @@ namespace gamescope
 	{
 		s_nCustomWidth  = g_nNestedWidth;
 		s_nCustomHeight = g_nNestedHeight;
-		s_flLockedAspect = 0.0f;
+		CaptureLockedAspect( s_nCustomWidth, s_nCustomHeight );
 	}
 
 	static void SetSizeChoice( const AspectList &list, int nChoice )
@@ -1062,11 +1075,42 @@ namespace gamescope
 		return pList && CurrentSizeChoice( *pList ) == kSizeCustom;
 	}
 
+	// Deliberately NOT a lazy bootstrap off CustomWidth()/CustomHeight() --
+	// that used to read (new width) / (old height) when called from inside
+	// SetCustomWidth() after it had already written the new width but
+	// before the reference was ever captured (e.g. a fresh session that
+	// starts already in Custom): 1280x960, type width 1600, and the ratio
+	// silently locked to 1600/960 = 1.667 instead of the real 1280/960 =
+	// 1.333, for the rest of the session. The reference is now written
+	// only by CaptureLockedAspect() and its guarded fallback
+	// (EnsureLockedAspectReference(), below) -- never read out of values a
+	// setter is mid-mutation on.
 	static float LockedAspect()
 	{
-		if ( s_flLockedAspect <= 0.0f && CustomHeight() > 0 )
-			s_flLockedAspect = (float)CustomWidth() / (float)CustomHeight();
-		return s_flLockedAspect > 0.0f ? s_flLockedAspect : 16.0f / 9.0f;
+		if ( s_nLockRefWidth > 0 && s_nLockRefHeight > 0 )
+			return (float)s_nLockRefWidth / (float)s_nLockRefHeight;
+		return 16.0f / 9.0f;   // no reference captured yet; never happens once every site below runs
+	}
+
+	// The fallback capture for SetCustomWidth()/SetCustomHeight(): a
+	// session that starts already in Custom (persisted config, no pick
+	// made yet -- PickStillLive() is false because s_nAspectChoice starts
+	// at -1) or the live mode moving for some other reason while Custom
+	// was active (Steam's mode-control atom, a per-game switch, a config
+	// apply -- the same "unpick" CurrentAspect()'s own reflection rule
+	// already treats as live-mode-wins) both leave the reference stale or
+	// never captured. Called BEFORE either setter mutates
+	// s_nCustomWidth/Height, so CustomWidth()/CustomHeight() here still
+	// read the pre-edit, live-accurate pair. Once the edit runs,
+	// ApplyCustomIfActive()'s RecordPick() makes PickStillLive() true
+	// again, so the next edit (and the one after that) skips this and
+	// reads the same captured reference instead of re-deriving off the
+	// last rounded value -- which is what stopped a hundred stepper steps
+	// from drifting the aspect in the first place.
+	static void EnsureLockedAspectReference()
+	{
+		if ( !PickStillLive() )
+			CaptureLockedAspect( CustomWidth(), CustomHeight() );
 	}
 
 	// Even dimensions only: an odd width or height is a size no display mode
@@ -1105,6 +1149,11 @@ namespace gamescope
 		const bool bActive = ResolutionIsCustom();
 		const int nAspectBefore = CurrentAspect();
 		const int nOldHeight = CustomHeight();
+		// Read (and, if stale, refresh) the locked reference BEFORE
+		// mutating s_nCustomWidth -- see EnsureLockedAspectReference()'s
+		// comment for why the order matters.
+		if ( s_bLockAspect )
+			EnsureLockedAspectReference();
 		s_nCustomWidth = ClampDim( nWidth );
 		s_nCustomHeight = s_bLockAspect
 			? SnapEven( (int)std::lround( s_nCustomWidth / LockedAspect() ) )
@@ -1117,6 +1166,10 @@ namespace gamescope
 		const bool bActive = ResolutionIsCustom();
 		const int nAspectBefore = CurrentAspect();
 		const int nOldWidth = CustomWidth();
+		// Symmetric with SetCustomWidth(): read the reference before
+		// mutating s_nCustomHeight.
+		if ( s_bLockAspect )
+			EnsureLockedAspectReference();
 		s_nCustomHeight = ClampDim( nHeight );
 		s_nCustomWidth = s_bLockAspect
 			? SnapEven( (int)std::lround( s_nCustomHeight * LockedAspect() ) )
@@ -1129,9 +1182,8 @@ namespace gamescope
 		s_bLockAspect = bLock;
 		// Re-capture on every engage: the ratio the user locks is the one on
 		// screen when they flip the switch, not the one from last session.
-		s_flLockedAspect = 0.0f;
 		if ( bLock )
-			LockedAspect();
+			CaptureLockedAspect( CustomWidth(), CustomHeight() );
 	}
 
 	// ---- refresh ----------------------------------------------------------

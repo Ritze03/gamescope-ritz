@@ -71,6 +71,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Custom aspect lock ratio**: typing a width or height while the aspect lock is on now
+  keeps the ratio that was on screen when you turned the lock on, instead of sometimes
+  locking to a wrong ratio on the very first edit.
 - **FPS HUD Inverted colour readable over mid-tones**: the inverted digits no longer
   wash out to a faint light grey over mid-grey game scenes, and now stay at least a
   clear step darker or lighter than whatever is behind them.
