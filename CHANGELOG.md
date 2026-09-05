@@ -17,6 +17,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Adaptive Brightness re-enable ramp**: re-enabling Adaptive Brightness as the
+  only active Shaders effect on a changed scene no longer ramps over several
+  seconds; it adapts instantly.
 - **Adaptive Brightness defaults**: the Shaders panel's "reset to default" values now
   match the compiled-in ones (1.0 s brighten, 1.0 s darken, min gain 0.5, max gain
   2.0) instead of the stale 1.5 s / 2.5 s / 0.8 / 1.6.

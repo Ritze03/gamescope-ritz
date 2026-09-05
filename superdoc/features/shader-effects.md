@@ -151,7 +151,7 @@ measure pass grades its taps with exactly the code the per-pixel pass grades its
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<31` reset history (the history texture was created this frame) |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
 | `float u_vibrancy` | 0..3, 1 neutral |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
@@ -289,11 +289,35 @@ Shadow-Control/Vibrancy-graded image the `.fx` measured (its `PreSharpenOut` tex
 and reduces them in shared memory — one workgroup, no atomics, no intermediate texture.
 Sharpening is not applied to the taps; it does not move the mean.
 
-**Keeps adapting while off.** As in the `.fx`, the measure pass runs whenever the pre-pass
-runs at all (any of the four switches on) and never looks at the Adaptive Brightness
-flag; only the per-pixel gain is gated. So re-enabling the switch is instant — the
-history has been tracking the scene the whole time. When *no* effect is on nothing runs
-and the history simply holds its last value.
+**Resets on resume, does not track while off.** The measure pass runs whenever the
+pre-pass runs at all (any of the four switches on) and never looks at the Adaptive
+Brightness flag itself; only the per-pixel gain is gated. But when Adaptive Brightness is
+the *only* switch on and it is turned off, `NativeEffectsState_t::AnyEnabled()` goes
+false and the whole pre-pass — measure dispatch included — stops running, so the 1×1
+history freezes at its last value instead of continuing to track the scene.
+
+`vulkan_composite()` handles this by remembering, across calls, whether the measure
+dispatch ran the *previous* time this code path was reached
+(`s_bEffectsPassRanLastTime`). Whenever it resumes after not having run — the switch
+flipped back on, or content came back to SDR RGB after a stretch of HDR/passthru or
+YCbCr frames that skipped the pass — the pre-pass sets `kResetHistory` for that frame
+exactly as it does for a freshly-created history, so the very first re-enabled frame
+writes the current measurement straight into the history instead of blending with the
+stale one. Re-enabling on a changed scene is therefore instant and correct, with no
+clipped first frame and no re-convergence ramp.
+
+`Why not track while off (the `.fx` did):` the alternative — running the measure dispatch
+even with every switch off, so the history stays warm — would require
+`vulkan_native_effects_active()` (`AnyEnabled()`) to report "active" purely to keep a
+disabled effect's history fresh. The backends OR that into `bNeedsFullComposite`
+(`WaylandBackend.cpp`, `DRMBackend.cpp`, `OpenVRBackend.cpp`), which defeats DRM direct
+scanout for a feature the user has switched off. Reset-on-resume gets the same "instant"
+result — no stale-gain slam, no ramp — for zero cost while off, at the price of one
+`kResetHistory` frame instead of a warm history; the two are indistinguishable to the
+user (both an immediately-correct gain on re-enable), so nothing is lost.
+
+When *no* effect is on and the pre-pass never runs, the history simply holds its last
+value until the pass resumes and resets it.
 
 **`dt`** is host-side: `vulkan_composite()` keeps the `get_time_in_nanos()` of the previous
 effects dispatch (a function-local static) and passes the difference in seconds as

@@ -835,8 +835,8 @@ dispatches, clamped to 0.25 s. The history is bound as a source before it is a
 target in every command buffer, so its layout never passes through
 `UNDEFINED` after the creation frame — the persistence #14's spike could only
 confirm empirically is now guaranteed by the barrier code. The measure pass
-runs whenever the pre-pass runs, so the history keeps tracking while the
-switch is off and re-enabling is instant, as in the `.fx`.
+runs whenever the pre-pass runs. *(Corrected 2026-09-05 below: it does not
+keep tracking while the switch is off.)*
 
 **Consequences:** Nothing in storage changes — config keys stay `reshade.*`,
 entry ids stay `image.shaders.*`, struct `ReshadeSettings` and JSON key
@@ -848,6 +848,25 @@ The backends' full-composite decision now also checks
 Supersedes #13 and #14's `.fx` implementation.
 
 **Source:** `superdoc/features/shader-effects.md`.
+
+**Extension (2026-09-05):** the claim above — "the history keeps tracking while
+the switch is off" — was measured wrong. It only holds when *another* bundled
+effect is also on, since the measure dispatch runs only when the pre-pass runs
+at all (`NativeEffectsState_t::AnyEnabled()`), not specifically when Adaptive
+Brightness is on. With Adaptive Brightness as the *sole* effect, switching it
+off makes `AnyEnabled()` false, the whole pre-pass stops, and the 1×1 history
+freezes — measured: re-enabling on a changed scene gave a fully-clipped first
+frame and a ~3 s re-convergence ramp. `Why not fix it by tracking while off:`
+that would need `vulkan_native_effects_active()` to report "active" — forcing
+`bNeedsFullComposite` on every backend and defeating DRM direct scanout — for a
+feature the user has switched off entirely. Fixed instead by resetting the
+history (`kResetHistory`) whenever the measure dispatch resumes after a call in
+which it did not run — the switch flipping back on, or content returning to
+SDR RGB after a stretch of HDR/passthru or YCbCr frames — so the first
+resumed frame writes the current measurement straight in rather than blending
+with the stale one. Same "instant" result as tracking-while-off, zero cost
+while off. See `superdoc/features/shader-effects.md`'s "Resets on resume"
+section and `rendervulkan.cpp`'s `s_bEffectsPassRanLastTime`.
 
 ---
 

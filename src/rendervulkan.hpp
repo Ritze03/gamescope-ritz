@@ -541,8 +541,10 @@ struct NativeEffectsState_t
 	float flPreSharpen = 0.5f;           // 0..2, the panel's slider scale
 
 	// Adaptive Brightness: consumed by cs_effects_measure.comp (the
-	// measure/adapt pass, which runs whenever the pre-pass runs so the
-	// history keeps tracking while the switch is off) and by
+	// measure/adapt pass, which runs whenever the pre-pass runs -- but the
+	// pre-pass itself stops when AnyEnabled() below is false, so the 1x1
+	// history is reset rather than kept warm across a gap; see
+	// rendervulkan.cpp's s_bEffectsPassRanLastTime) and by
 	// cs_effects_layer0.comp (the visible gain, gated on the switch).
 	bool  bAdaptiveBrightness = false;
 	float flAbTarget = 0.5f;
