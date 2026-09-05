@@ -12,9 +12,9 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
-- **Adaptive Brightness**: the effect works again -- dark scenes brighten and bright
-  scenes dim toward the target brightness over the chosen seconds, and it keeps
-  tracking the scene while switched off so turning it back on is instant.
+- **Adaptive Brightness**: the effect works again -- dark scenes brighten and
+  bright scenes dim toward the target brightness over the chosen seconds, and it
+  keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
 - **Adaptive Brightness defaults**: the Shaders panel's "reset to default" values now
