@@ -77,12 +77,15 @@ namespace gamescope::config
         float backdrop_padding = 6.0f; // px -- not user-facing, just hugs the text
         float text_opacity = 1.0f;
 
-        // Phase 2: the three-way update-mode choice (FpsDisplay.cpp's
-        // UpdateAndGetDisplayFps()). "smoothing" is the pre-existing EMA
-        // and stays the default; "per_second" recomputes once a second so
-        // the digits sit still; "immediate" shows the latest frame's own
-        // instantaneous rate with no smoothing at all.
-        std::string update_mode = "smoothing"; // smoothing | per_second | immediate
+        // The update-mode choice (FpsDisplay.cpp's UpdateAndGetDisplayFps(),
+        // arithmetic in FpsDisplay.h's fpsmath). Two values since 2026-09-05:
+        // "smoothing" (default) samples the commit count once a second,
+        // glides the shown integer to it over 300 ms and holds 700 ms;
+        // "immediate" shows the count over the last 100 ms. The former
+        // "per_second" was subsumed by Smoothing -- a stored "per_second"
+        // (or any unrecognised value) is read as "smoothing" by
+        // fpsmath::UpdateModeToInt(), so old configs load unchanged.
+        std::string update_mode = "smoothing"; // smoothing | immediate  (legacy: per_second -> smoothing)
 
         // Phase 2: "Hide if FPS above X" -- a Switch (hide_above_enabled)
         // with a threshold Param (hide_above_fps), the `.Param()` idiom

@@ -1128,7 +1128,10 @@ namespace gamescope
 
 			gamescope::Notifications::WarmUp();
 
-			// TODO(agent owning FpsDisplay.cpp): FpsDisplay_WarmUp() here --
+			// The HUD's warm-up is the third leg of the same launch pass: it bakes the
+			// readout's digits and performs its atlas upload now rather than on the
+			// first HUD frame mid-game. It pushes no layer.
+			gamescope::FpsDisplay_WarmUp();
 			// the HUD's context is still fully lazy (FpsDisplay.cpp's
 			// EnsureImguiInit()/EnsureTexture() run on its first enabled
 			// frame, and its glyphs bake on first draw). Same shape as

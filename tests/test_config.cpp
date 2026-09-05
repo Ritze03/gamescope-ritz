@@ -12,6 +12,7 @@
 
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
+#include "Overlay/FpsDisplay.h"
 
 using namespace gamescope::config;
 
@@ -211,7 +212,7 @@ TEST_CASE( "overlay.display_scale round-trips through SaveGlobal/LoadGlobal at e
 
 TEST_CASE( "fps_display.update_mode round-trips", "[config]" )
 {
-    for ( const std::string &sValue : { std::string( "smoothing" ), std::string( "per_second" ), std::string( "immediate" ) } )
+    for ( const std::string &sValue : { std::string( "smoothing" ), std::string( "immediate" ) } )
     {
         TempConfigHome home;
 
@@ -222,7 +223,26 @@ TEST_CASE( "fps_display.update_mode round-trips", "[config]" )
 
         Settings loaded = LoadGlobal();
         REQUIRE( loaded.fps_display.update_mode == sValue );
+        REQUIRE( gamescope::fpsmath::UpdateModeFromInt( gamescope::fpsmath::UpdateModeToInt( loaded.fps_display.update_mode ) ) == sValue );
     }
+}
+
+// 2026-09-05: "per_second" was subsumed by Smoothing. A config written while
+// it existed must still load, and the stored value must resolve to the
+// Smoothing choice rather than an unknown one. The string itself is
+// preserved on disk (ConfigManager does no rewriting); the mapping is
+// fpsmath::UpdateModeToInt's fallback rule.
+TEST_CASE( "fps_display.update_mode legacy per_second loads as Smoothing", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"update_mode": "per_second"}})";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.fps_display.update_mode == "per_second" );
+    REQUIRE( gamescope::fpsmath::UpdateModeToInt( loaded.fps_display.update_mode ) == 0 );
+    REQUIRE( std::string( gamescope::fpsmath::UpdateModeFromInt( gamescope::fpsmath::UpdateModeToInt( loaded.fps_display.update_mode ) ) ) == "smoothing" );
 }
 
 TEST_CASE( "fps_display.hide_above_enabled and hide_above_fps round-trip", "[config]" )

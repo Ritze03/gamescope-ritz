@@ -22,6 +22,19 @@ extern gamescope::CAsyncWaiter<gamescope::Rc<commit_t>> g_ImageWaiter;
 // synchronization on this value.
 std::atomic<uint64_t> g_ulLastAppFrametimeNs{ 0 };
 
+// 2026-09-05: a running COUNT of focused-window commits, beside the last
+// frametime above, for the HUD's frame-rate readout (FpsDisplay.cpp's
+// UpdateAndGetDisplayFps() computes delta-count / delta-time over its own
+// windows). Counting is the fix for the "999 FPS" bug: steamcompmgr drains
+// every finished commit in one loop, and when two or more land in a batch
+// (lsfg-vk presenting a real and a generated frame back to back guarantees
+// this) the LAST Signal() in the batch sees a frametime of ~0 -- 10 000 fps
+// once clamped -- and, reading at most one sample per paint, the HUD only
+// ever saw that last write. A count cannot be fooled by batching: two
+// commits are two commits whenever they arrived. Same atomic/relaxed
+// reasoning as g_ulLastAppFrametimeNs.
+std::atomic<uint64_t> g_ulAppCommitCount{ 0 };
+
 commit_t::commit_t()
 {
     static uint64_t maxCommmitID = 0;
@@ -91,6 +104,14 @@ void commit_t::Signal()
         frametime = now - lastFrameTime;
         lastFrameTime = now;
         g_ulLastAppFrametimeNs.store( frametime, std::memory_order_relaxed );
+        // Batching (see g_ulAppCommitCount's comment) also fools the
+        // frametime as a lag-spike signal: a batch of two writes a ~0 ms
+        // sample, and the next real frame then measures ~2x the median.
+        // Accepted for now -- the spike detector only reacts to that
+        // pattern under frame generation, where the frametime is already
+        // not the game's own -- and documented in
+        // superdoc/features/fps-display.md.
+        g_ulAppCommitCount.fetch_add( 1, std::memory_order_relaxed );
     }
 
     // TODO: Move this so it's called in the main loop.

@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Smoothing update mode glides**: the HUD takes a reading once a second, glides to it
+  over 0.3 s and holds still for 0.7 s, instead of easing continuously.
 - **System tab**: a new System settings tab with a clipboard sync switch and a status
   row naming the protocol syncing with the host.
 - **Profiles status**: the Profiles area now opens with what is in use -- which
@@ -41,6 +43,11 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **FPS counter no longer shows 999**: the HUD now counts the game's frames instead of
+  timing them, so a game that hands over two frames at once (frame generation, or
+  simply out-running the compositor) reads correctly rather than pinning at 999.
+- **FPS counter shows four- and five-digit rates**: the 999 ceiling is gone, and the
+  box only grows wider when the number actually needs more digits.
 - **First toast no longer stutters**: the notification system's one-time setup and
   font baking now happen once at launch, before the startup splash, instead of on
   the first notification shown mid-game.
@@ -74,6 +81,8 @@ The newest version below is the one this build reports.
   unaffected.
 
 ### Removed
+- **"Update every second" HUD mode**: folded into Smoothing, which now is a
+  once-a-second reading; a saved "Update every second" setting loads as Smoothing.
 - **Bundled `reshade/` shader folder**: no longer installed or shipped; your own
   ReShade `.fx` files via `--reshade-effect` keep working.
 

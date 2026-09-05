@@ -22,7 +22,7 @@ user-chosen font size. Those three settings (Placement, Font size) are
 unchanged since Phase 1.
 
 **Phase 2** (this page) added everything else, following the user's own
-spec verbatim: hide-above-X, three update modes, a plain backdrop, a
+spec verbatim: hide-above-X, update modes (three then, two since 2026-09-05), a plain backdrop, a
 two-way text-colour choice with lag-spike reactions, and a black outline
 sized in pixels (a drop shadow until 2026-09-03, when the outline
 replaced it).
@@ -38,7 +38,7 @@ number, drawn well, not a second profiler.
 | Show HUD | `enabled` | Master switch. Not gated by itself (SPEC §3.13). |
 | Placement | `anchor`, `margin_x`, `margin_y` | 9-point anchor + pixel margins (Phase 1, unchanged). |
 | Font size | `font_size` | Text size in px. |
-| Update mode | `update_mode` | Smoothing / Update every second / Immediate — see below. |
+| Update mode | `update_mode` | Smoothing / Immediate — see below. ("Update every second" was folded into Smoothing 2026-09-05.) |
 | Hide above X | `hide_above_enabled`, `hide_above_fps` | Switch + threshold `.Param()` — see Hysteresis below. |
 | Backdrop opacity | `backdrop_opacity` | 0–1; **0 means no backdrop at all**, not a separate switch. |
 | Text colour | `color_mode` | Fixed / Inverted — see below. |
@@ -48,24 +48,92 @@ number, drawn well, not a second profiler.
 Every row is gated `DisabledUnless(MonitorOn, "the HUD is off")` except the
 master switch itself.
 
+## What is measured — and why it counts instead of timing
+
+The number is the **commit rate of the focused window**: how many frames
+the game handed the compositor per second. `commit_t::Signal()`
+(`src/commit.cpp`) increments `g_ulAppCommitCount` once per focused-window
+commit (the same `m_bMangoNudge` gate that feeds mangoapp), and
+`UpdateAndGetDisplayFps()` reads that counter at paint time and computes
+`Δcount × 1e9 / Δns` over a window of its own. The pure arithmetic lives in
+`FpsDisplay.h`'s `gamescope::fpsmath` and is unit-tested
+(`tests/test_fps_counter.cpp`).
+
+> **Why counting replaced timing (2026-09-05, the "999 FPS" bug).** Until
+> then the rate came from the per-commit *frametime*
+> (`g_ulLastAppFrametimeNs`, `now − last`), of which the HUD consumed at
+> most one new sample per paint, clamped to `[0.1, 2000] ms`. steamcompmgr
+> drains every finished commit in one loop, and when two or more land in a
+> batch — `lsfg-vk` presenting a real frame and a generated one back to
+> back guarantees it, and any game briefly out-running the compositor can
+> do it — the *last* `Signal()` in the batch measures `≈ 0 ms`, clamped to
+> 0.1 ms, i.e. 10 000 fps. Because the HUD only ever saw that last write,
+> every mode sat on the old 999 clamp, in Rust for one. A count is immune:
+> two commits in a batch are two commits, whenever they arrived.
+>
+> The frametime is kept for the **lag-spike detector only** (below). Note
+> that batching fools it too — a batch of two writes a ~0 ms sample and the
+> next real frame then measures about twice the median. Accepted for now:
+> it only reacts to that pattern under frame generation, where the
+> frametime is already not the game's own.
+
+**Inherent limit to tell the user:** with `lsfg-vk` at ×2 the counter shows
+the **generated** rate. The compositor only sees post-frame-gen presents —
+the same thing MangoHud shows when loaded after the layer — so the
+pre-frame-gen rate is not observable from here.
+
 ## Update modes
 
-Three ways to turn the raw per-commit frametime
-(`g_ulLastAppFrametimeNs`, DECISIONS.md #16/#17) into the number on screen.
-All three are kept live simultaneously in `UpdateAndGetDisplayFps()`
-regardless of which is selected, so switching modes in the settings panel
-never has to "warm up" a stale average:
+Two ways to turn the commit count into the number on screen. Both are kept
+live in `UpdateAndGetDisplayFps()` regardless of which is selected (the
+bookkeeping is two timestamps and two counts), so switching modes never
+shows a stale value:
 
-- **Smoothing** (default) — the pre-existing single-pole EMA (α = 0.10)
-  over the raw frametime. Eases between readings; never jitters.
-- **Update every second** — accumulates every raw sample's frametime and
-  count since its last publish, and only turns that into a displayed
-  value once a full second has elapsed
-  (`frames-in-window / total-time-in-window`, a real windowed average,
-  not a resampled EMA). The digits visibly hold still between updates.
-- **Immediate** — the latest single frame's own instantaneous rate
-  (`1000 / frametime`), no averaging, held between samples so an idle
-  client doesn't show 0.
+- **Smoothing** (default) — the user's own spec, verbatim: every
+  **1000 ms** the window rolls over and `target = Δcount / Δt` is taken;
+  the shown value then **glides from what was on screen to `target` over
+  300 ms** with `smoothstep`, and **holds for the remaining 700 ms**.
+  `DrawReadout()`'s `lround()` walks the digits through every intermediate
+  integer during the move. State: `s_flShownFrom`, `s_flShownTo`,
+  `s_ulGlideStartNs`; `fpsmath::GlideValue()` / `GlideMoving()` are the
+  pure functions. Until the first window completes it shows the Immediate
+  value, so the first second is a real reading rather than a made-up 60.
+- **Immediate** — the count over the last **100 ms**, republished each time
+  that window rolls over. Jittery by design; reacts to a rate change within
+  ~100 ms.
+
+**"Update every second" is gone** (2026-09-05): Smoothing now *is* a
+one-second windowed rate, with the glide on top, so the old mode had
+nothing left to offer. A stored `"per_second"` (or any unrecognised value)
+loads as Smoothing — `fpsmath::UpdateModeToInt()`'s fallback rule, the same
+legacy-value idiom `ParsePlacement()` uses — so existing configs are not
+rewritten and do not break. Covered by `test_config.cpp`'s "legacy
+per_second loads as Smoothing".
+
+### Repaint cadence for the glide
+
+A 300 ms movement needs frames. A game at ≥ 60 fps already paints every
+vblank, so nothing extra happens in the normal case. For an **idle**
+client (paused, alt-tabbed) the HUD's repaint-timer thread
+(`EnsureRepaintTimerThread()`) is what drives paints, and since 2026-09-05
+it is **adaptive**: it wakes every ~16 ms but only calls `force_repaint()`
+every 500 ms — *unless* `s_bGliding` is set, in which case every wake
+requests a paint, so the glide gets ~18 frames instead of one.
+`s_bGliding` is set/cleared by `UpdateAndGetDisplayFps()` itself (true
+while `GlideMoving()` and Smoothing is the selected mode), i.e. by the
+paints the thread provokes, and the paint that sees the glide reach its
+target clears it.
+
+> **Why off-thread, and why not the lag-spike hold's mechanism:** the
+> lesson recorded at the top of `FpsDisplay.cpp` applies — a gate
+> evaluated only inside `paint_all()` cannot manufacture repaints on a
+> clock nothing is driving. And the lag-spike hold does *not* carry its own
+> 700 ms either (an earlier assumption): it relies on the game still
+> committing. So the glide's clock lives in the timer thread. A 16 ms wake
+> that does an atomic load is cheap; the thing rationed is
+> `force_repaint()`, which costs a composite. With an idle client the
+> 1-second window itself is only checked at each paint, so the hold can
+> run up to 500 ms long there — accepted; the glide itself is still smooth.
 
 ## Hide if FPS above X — with hysteresis
 
@@ -363,25 +431,70 @@ triggering frame — a single bad frame lasts a fraction of a millisecond
 on screen otherwise, which isn't "perceptible", it's a flicker the eye
 filters out.
 
-## No layout jitter: pinned digit width
+## No layout jitter: pinned digit width — and no 999 ceiling
 
-The box is sized off a `"%3d"`-formatted (right-justified, blank-padded)
-3-character field (0–999), measured in Geist Mono, which is genuinely
-monospaced — so a fixed-width formatted string is tabular by construction
-and the readout's own box size never changes as the number goes from 1 to
-2 to 3 digits. This is a carry-forward of Phase 1's own choice, not a
-Phase 2 change — recorded here because the quality bar asked for it to be
-stated explicitly, and because it's the reason the box's own width is
-stable enough for the backdrop and outline above to sit tight against the
-text without hunting for a new size every frame.
+The box is sized off a run of `'0'` cells **as long as the current digit
+count, never fewer than 3** (`fpsmath::PinnedDigitCount()`:
+`max(3, digits(fps))`, capped at 7), measured in Geist Mono, which is
+genuinely monospaced — so `'0'` measures the same as any digit and a
+fixed cell count is tabular by construction. 0–999 share one 3-cell box
+that never resizes as the number goes from 1 to 2 to 3 digits; a
+four-digit rate widens it to 4 cells, a five-digit one to 5.
 
-What's actually *drawn*, though, is the plain unpadded digits (`"%d"`),
-not the blank-padded string — drawing the padded string put the leading
-blank glyph's advance inside the text draw, which left a visible empty
-gutter on the left of a two-digit number and shoved the digits against
-the box's right edge (fixed 2026-09-03). `MeasureFpsModule()` measures
-both the padded field and the plain digits and derives `flTextOffsetX`,
-half the width difference, added to the text origin so the digits sit
-centred in the pinned-width box. The outline and the digits themselves
-both draw at that same offset origin, so they track together rather
-than the old padded position.
+**The `std::clamp(nFps, 0, 999)` is gone (2026-09-05).** It turned the
+mis-sampled rate the counting rewrite fixed into a plausible-looking fake
+(the "999 FPS in Rust" report), and it turned a genuine 1200 fps — an
+uncapped mailbox-mode client on a 60 Hz nested output really does this —
+into 999 too. Only the floor at 0 remains.
+
+> **Why the pin follows the number rather than fixing 4 or 5 cells:** a
+> fixed 5-digit pin would make the normal 2–3-digit readout sit in a box
+> twice too wide. **Why the floor is 3 and not the exact count:** a
+> 2-digit reading would otherwise shrink the box every time the game
+> dipped below 100, which is the jitter the pin exists to prevent. The
+> growth to 4+ cells is therefore the one deliberate resize, and it only
+> happens for a reading that needs it.
+
+What's actually *drawn* is the plain unpadded digits (`"%d"`), not the
+padded string — drawing a padded string put the leading blank glyph's
+advance inside the text draw, which left a visible empty gutter on the
+left of a two-digit number and shoved the digits against the box's right
+edge (fixed 2026-09-03). `MeasureFpsModule()` measures both the pinned
+field and the plain digits and derives `flTextOffsetX`, half the width
+difference, added to the text origin so the digits sit centred in the
+pinned-width box. The outline and the digits themselves both draw at that
+same offset origin, so they track together.
+
+## Warm-up: `FpsDisplay_WarmUp()`
+
+ImGui 1.92 bakes glyphs lazily, per (font, size), and
+`ImGui_ImplVulkan_UpdateTexture()` then does a blocking `vkQueueWaitIdle()`
+on the first frame that shows a never-before-drawn glyph — the same first-
+frame hitch the Shell's startup warm-up (`SettingsOverlay.cpp`, issue #30)
+and `Notifications::WarmUp()` exist to pre-pay. `FpsDisplay_WarmUp()`
+(2026-09-05) is the HUD's version, meant to be called from the Shell's
+startup warm-up block. Its steps, exactly:
+
+1. `EnsureConfigLoaded()`; return if the HUD is **off** (an off HUD
+   allocates nothing — this file's standing guarantee; enabling it later
+   pays the one-time cost on that first frame, as before) or the output
+   size is not yet known (try again next call).
+2. `EnsureImguiInit()` → `EnsureTexture(output w, h)`, with the same
+   ImGui-context save/restore `FpsDisplay_AddLayer()` uses.
+3. One hidden frame: `NewFrame`, `AddText("0123456789")` in the **Hero**
+   face at the configured `font_size` — the readout draws digits and
+   nothing else, and the fill and every outline stamp use that same face
+   and size; the crosshair draws rects only and has no glyphs to warm.
+   Opaque colour on purpose: `AddText()` early-outs on alpha 0 and would
+   bake nothing.
+4. `ImGui::Render()` + `RenderAndSubmit()` — the atlas upload, and its
+   `vkQueueWaitIdle`, happen here.
+5. **Stop. No `layers.push()`.** Nothing reaches the screen; the next real
+   frame's `LOAD_OP_CLEAR` wipes the texture. This is the whole contract: a
+   pushed layer would composite the warm-up frame, and a second layer on
+   the stack every frame forces the full composite path for every frame
+   after.
+
+One-shot once init has been attempted. A later font-size change bakes the
+new size on its first frame; that one hitch (on a slider release, not at
+game start) is accepted.

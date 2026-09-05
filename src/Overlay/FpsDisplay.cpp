@@ -68,6 +68,10 @@
 // which two independent writers race on (see commit.cpp's comment at the
 // write site for why that struct isn't safe to read from here).
 extern std::atomic<uint64_t> g_ulLastAppFrametimeNs;
+// Also commit.cpp, same gate: a running count of focused-window commits.
+// This is the frame-rate SOURCE since 2026-09-05; the frametime above only
+// feeds the lag-spike detector now. See UpdateAndGetDisplayFps().
+extern std::atomic<uint64_t> g_ulAppCommitCount;
 
 namespace gamescope
 {
@@ -144,6 +148,17 @@ namespace gamescope
 	// same predicate, so they cannot disagree.
 	static std::atomic<bool> s_bHudEnabledForTimer{ false };
 
+	// Read by the repaint-timer thread: true while Smoothing's 300 ms glide
+	// is mid-move AND Smoothing is the selected mode, so the thread asks
+	// for a repaint every tick only when there is movement to carry. Set
+	// and cleared by UpdateAndGetDisplayFps(), i.e. by the paints the
+	// thread itself provokes -- the paint that sees the glide reach its
+	// target clears it. If the HUD is switched off mid-glide the flag can
+	// stay stale, which is harmless: the thread also checks
+	// s_bHudEnabledForTimer, and the next paint after re-enabling
+	// recomputes it.
+	static std::atomic<bool> s_bGliding{ false };
+
 	static void UpdateTimerFlag()
 	{
 		s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled || Crosshair_IsEnabled(), std::memory_order_relaxed );
@@ -157,11 +172,30 @@ namespace gamescope
 
 		std::thread( []
 		{
+			// 2026-09-05: adaptive. Wakes every ~16 ms (one 60 Hz frame) but
+			// only REQUESTS a repaint every 500 ms -- unless Smoothing's
+			// glide is moving (s_bGliding), in which case every wake
+			// requests one, so the 300 ms movement gets ~18 frames instead
+			// of the one a 500 ms cadence would give it. The 16 ms wake is
+			// an atomic load and a clock read; the thing worth rationing is
+			// force_repaint() itself, which costs a full composite. A game
+			// at >= 60 fps already paints every vblank, so the fast path
+			// only ever matters for an idle client -- which is exactly the
+			// case the lesson above is about: a glide evaluated only inside
+			// paint_all() cannot manufacture the repaints it needs, so the
+			// clock that drives it has to live here, off-thread.
+			uint64_t ulLastKeepaliveNs = 0;
 			for ( ;; )
 			{
-				std::this_thread::sleep_for( std::chrono::milliseconds( 500 ) );
-				if ( s_bHudEnabledForTimer.load( std::memory_order_relaxed ) )
+				std::this_thread::sleep_for( std::chrono::milliseconds( 16 ) );
+				if ( !s_bHudEnabledForTimer.load( std::memory_order_relaxed ) )
+					continue;
+				const uint64_t ulNow = get_time_in_nanos();
+				if ( s_bGliding.load( std::memory_order_relaxed ) || ulNow - ulLastKeepaliveNs >= 500ull * 1000000ull )
+				{
+					ulLastKeepaliveNs = ulNow;
 					force_repaint();
+				}
 			}
 		} ).detach();
 	}
@@ -226,28 +260,50 @@ namespace gamescope
 		} );
 
 	// -------------------------------------------------------------------
-	// Smoothing: a single-pole EMA over the raw per-commit frametime, for
-	// the headline number (DECISIONS.md #16: the game's own frame rate).
-	// One of Phase 2's three update modes -- see UpdateAndGetDisplayFps().
+	// The number itself (2026-09-05 rewrite): COUNT commits, don't time them.
+	//
+	// commit.cpp's commit_t::Signal() bumps g_ulAppCommitCount once per
+	// focused-window commit. Both update modes read that counter at paint
+	// time and compute delta-count / delta-wall-time over a window of their
+	// own -- fpsmath (FpsDisplay.h) holds the constants and the pure
+	// arithmetic, so tests/test_fps_counter.cpp can pin them down.
+	//
+	// Why counting replaced the per-commit frametime (g_ulLastAppFrametimeNs)
+	// as the rate source: steamcompmgr drains every finished commit in one
+	// loop, and when two or more are drained together (lsfg-vk presenting a
+	// real frame and a generated one back to back guarantees it) the last
+	// Signal() of the batch measures ~0 ms -- clamped to 0.1 ms, that is
+	// 10 000 fps -- and this file, reading at most one sample per paint,
+	// only ever saw that last write. Every mode then sat on the old 999
+	// clamp. A count is immune: two commits in a batch are two commits,
+	// whenever they arrived. The frametime is kept below for the lag-spike
+	// detector only.
 	// -------------------------------------------------------------------
 
-	static uint64_t s_ulLastRawFrametimeNs = 0;
-	// Seeded at a plausible 60fps so the very first frames show a sane
-	// number instead of 0/infinity before the first real sample arrives.
-	static float s_flSmoothedFrametimeMs = 1000.0f / 60.0f;
+	// Smoothing: a 1-second tumbling window. When it rolls over, the shown
+	// value glides from what is on screen to the new rate over 300 ms
+	// (smoothstep -- DrawReadout()'s lround() then walks the digits through
+	// every intermediate integer) and holds for the remaining 700 ms. Until
+	// the first window completes it shows the Immediate value, so the first
+	// second is a real reading rather than a made-up 60.
+	static uint64_t s_ulSmoothingWindowStartNs = 0;
+	static uint64_t s_ulSmoothingWindowStartCount = 0;
+	static bool s_bSmoothingSeeded = false;
+	static float s_flShownFrom = 0.0f;
+	static float s_flShownTo = 0.0f;
+	static uint64_t s_ulGlideStartNs = 0;
 
-	// Phase 2's other two update modes. "Immediate" needs no averaging at
-	// all -- just the latest sample's own instantaneous rate, held between
-	// samples so an idle client doesn't show 0. "Update every second"
-	// accumulates every raw sample since its last publish and only turns
-	// that into a displayed value once the 1-second window rolls over, so
-	// the digits visibly hold still in between -- a real windowed average
-	// (frames-in-window / total-time-in-window), not a resampled EMA.
-	static float s_flImmediateFps = 60.0f;
-	static float s_flPerSecondFps = 60.0f;
-	static float s_flPerSecondAccumMs = 0.0f;
-	static int s_nPerSecondAccumCount = 0;
-	static uint64_t s_ulPerSecondWindowStartNanos = 0;
+	// Immediate: the count over the last ~100 ms, republished each time
+	// that window rolls over. Jittery by design -- that is what the mode
+	// promises ("the very latest reading, jitter and all").
+	static uint64_t s_ulImmediateWindowStartNs = 0;
+	static uint64_t s_ulImmediateWindowStartCount = 0;
+	static float s_flImmediateFps = 0.0f;
+
+	// The lag-spike detector's own sample source: the per-commit frametime,
+	// consumed at most once per paint, as it always was. See
+	// ComputeIsSpike() and commit.cpp's note on how batching fools it.
+	static uint64_t s_ulLastRawFrametimeNs = 0;
 
 	// -------------------------------------------------------------------
 	// Lag-spike detection: a ring buffer of raw (unsmoothed) per-frame game
@@ -338,65 +394,81 @@ namespace gamescope
 		    && ( get_time_in_nanos() - s_ulLastSpikeDetectedNanos ) < kSpikeHoldNs;
 	}
 
-	// Phase 2: renamed from UpdateAndGetSmoothedFps() now that "smoothed" is
-	// only one of three update modes (FpsDisplaySettings::update_mode) this
-	// resolves between. All three are kept live regardless of which one is
-	// selected, so switching modes in the settings panel never has to "warm
-	// up" a stale average -- Immediate and Smoothing are just cheap to keep
-	// current, and Update-every-second only publishes its accumulator once
-	// its window rolls over regardless of which mode is active.
+	// Phase 2's UpdateAndGetSmoothedFps() became this when update modes
+	// arrived; 2026-09-05 replaced its EMA / per-second / instantaneous
+	// trio with the two count-based modes above. Both are kept live
+	// regardless of which is selected, so switching modes in the settings
+	// panel never shows a stale value -- the bookkeeping is two timestamps
+	// and two counts, so there is nothing to save by pausing the other one.
 	static float UpdateAndGetDisplayFps()
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
+		// fpsmath::UpdateModeToInt's rule: "immediate" is Immediate, anything
+		// else -- "smoothing", the removed "per_second", garbage -- is Smoothing.
+		const bool bImmediateMode = fpsmath::UpdateModeToInt( cfg.update_mode ) == 1;
 
+		const uint64_t ulNowNanos = get_time_in_nanos();
+		const uint64_t ulCount = g_ulAppCommitCount.load( std::memory_order_relaxed );
+
+		// ---- lag-spike detection: frametime-based, unchanged -------------
 		const uint64_t ulRaw = g_ulLastAppFrametimeNs.load( std::memory_order_relaxed );
 		if ( ulRaw != 0 && ulRaw != s_ulLastRawFrametimeNs )
 		{
 			s_ulLastRawFrametimeNs = ulRaw;
-
-			// Clamp a single wild sample (e.g. a resume-from-pause hitch)
-			// from dominating the EMA for multiple seconds.
+			// Clamp a single wild sample (a resume-from-pause hitch) so it
+			// cannot poison the median for the next 30 frames.
 			const float flMs = std::clamp( (float)ulRaw / 1e6f, 0.1f, 2000.0f );
-
-			// Smoothing (EMA).
-			constexpr float kAlpha = 0.10f;
-			s_flSmoothedFrametimeMs = s_flSmoothedFrametimeMs * ( 1.0f - kAlpha ) + flMs * kAlpha;
-
-			// Immediate -- this frame's own instantaneous rate, no averaging.
-			s_flImmediateFps = 1000.0f / flMs;
-
-			// Update-every-second -- accumulate; UpdateAndGetDisplayFps()'s
-			// own window check below only turns this into a displayed value
-			// once the second rolls over.
-			s_flPerSecondAccumMs += flMs;
-			s_nPerSecondAccumCount++;
-
-			// Lag-spike detection judges this raw sample against the
-			// history BEFORE it joins that history -- see ComputeIsSpike().
+			// Judged against the history BEFORE it joins that history --
+			// see ComputeIsSpike().
 			if ( ComputeIsSpike( flMs ) )
-				s_ulLastSpikeDetectedNanos = get_time_in_nanos();
+				s_ulLastSpikeDetectedNanos = ulNowNanos;
 			PushFrametimeSample( flMs );
 		}
 
-		const uint64_t ulNowNanos = get_time_in_nanos();
-		if ( s_ulPerSecondWindowStartNanos == 0 )
-			s_ulPerSecondWindowStartNanos = ulNowNanos;
-		if ( ulNowNanos - s_ulPerSecondWindowStartNanos >= 1000000000ull && s_nPerSecondAccumCount > 0 )
+		// ---- Immediate: ~100 ms tumbling window ---------------------------
+		if ( s_ulImmediateWindowStartNs == 0 )
 		{
-			// A real windowed average (frames / total-time-of-those-frames),
-			// not a resample of the EMA -- distinct from Smoothing on
-			// purpose, so the three modes actually look different.
-			s_flPerSecondFps = 1000.0f * (float)s_nPerSecondAccumCount / s_flPerSecondAccumMs;
-			s_flPerSecondAccumMs = 0.0f;
-			s_nPerSecondAccumCount = 0;
-			s_ulPerSecondWindowStartNanos = ulNowNanos;
+			s_ulImmediateWindowStartNs = ulNowNanos;
+			s_ulImmediateWindowStartCount = ulCount;
+		}
+		else if ( ulNowNanos - s_ulImmediateWindowStartNs >= fpsmath::kImmediateWindowNs )
+		{
+			s_flImmediateFps = fpsmath::RateFromCounts( ulCount - s_ulImmediateWindowStartCount, ulNowNanos - s_ulImmediateWindowStartNs );
+			s_ulImmediateWindowStartNs = ulNowNanos;
+			s_ulImmediateWindowStartCount = ulCount;
 		}
 
-		if ( cfg.update_mode == "immediate" )
+		// ---- Smoothing: 1 s window -> 300 ms glide -> 700 ms hold ----------
+		if ( s_ulSmoothingWindowStartNs == 0 )
+		{
+			s_ulSmoothingWindowStartNs = ulNowNanos;
+			s_ulSmoothingWindowStartCount = ulCount;
+		}
+		else if ( ulNowNanos - s_ulSmoothingWindowStartNs >= fpsmath::kSmoothingWindowNs )
+		{
+			const float flTarget = fpsmath::RateFromCounts( ulCount - s_ulSmoothingWindowStartCount, ulNowNanos - s_ulSmoothingWindowStartNs );
+			// Glide from whatever is on screen right now. A glide can't
+			// still be in flight here (300 < 1000), so this is the held
+			// value; the first window ever just snaps to its target.
+			s_flShownFrom = s_bSmoothingSeeded
+				? fpsmath::GlideValue( s_flShownFrom, s_flShownTo, ulNowNanos - s_ulGlideStartNs )
+				: flTarget;
+			s_flShownTo = flTarget;
+			s_ulGlideStartNs = ulNowNanos;
+			s_bSmoothingSeeded = true;
+			s_ulSmoothingWindowStartNs = ulNowNanos;
+			s_ulSmoothingWindowStartCount = ulCount;
+		}
+
+		if ( bImmediateMode || !s_bSmoothingSeeded )
+		{
+			s_bGliding.store( false, std::memory_order_relaxed );
 			return s_flImmediateFps;
-		if ( cfg.update_mode == "per_second" )
-			return s_flPerSecondFps;
-		return 1000.0f / s_flSmoothedFrametimeMs; // "smoothing" -- also the fallback for an unrecognized/legacy value
+		}
+
+		const uint64_t ulGlideElapsedNs = ulNowNanos - s_ulGlideStartNs;
+		s_bGliding.store( fpsmath::GlideMoving( ulGlideElapsedNs ), std::memory_order_relaxed );
+		return fpsmath::GlideValue( s_flShownFrom, s_flShownTo, ulGlideElapsedNs );
 	}
 
 	// -------------------------------------------------------------------
@@ -723,10 +795,11 @@ namespace gamescope
 		ImVec2 textSize{};
 		float flContentWidth = 0.0f;
 		float flContentHeight = 0.0f;
-		// Half the gap between the pinned 3-glyph field width and this
-		// number's own (unpadded) width -- added to the draw origin so the
-		// digits sit centred in the pinned-width box instead of jammed
-		// against its right edge. See MeasureFpsModule()'s own comment.
+		// Half the gap between the pinned field width (>= 3 glyph cells,
+		// fpsmath::PinnedDigitCount) and this number's own (unpadded) width
+		// -- added to the draw origin so the digits sit centred in the
+		// pinned-width box instead of jammed against its right edge. See
+		// MeasureFpsModule()'s own comment.
 		float flTextOffsetX = 0.0f;
 	};
 
@@ -736,12 +809,14 @@ namespace gamescope
 	static constexpr ImVec4 kSpikeTintColor( 0.85f, 0.20f, 0.20f, 1.0f );
 
 	// M8 part 1 (issue #13, typeface swapped to Geist by #53): Geist Mono
-	// is genuinely monospaced, so a fixed-width formatted string
-	// ("%3d") is tabular by construction -- every digit occupies the same
-	// advance width, so the readout cannot jitter horizontally as the
-	// number changes. Phase 2 keeps exactly this approach rather than
-	// switching to a measured-max-width scheme: it was already correct and
-	// cheaper (no per-frame measurement of "9", "99" and "999").
+	// is genuinely monospaced, so a fixed-cell-count string is tabular by
+	// construction -- every digit occupies the same advance width, so the
+	// readout cannot jitter horizontally as the number changes within its
+	// digit count. Phase 2 kept exactly this approach rather than a
+	// measured-max-width scheme: it was already correct and cheaper (no
+	// per-frame measurement of "9", "99" and "999"). 2026-09-05 made the
+	// cell count follow the number (never below 3) instead of clamping the
+	// number to the cells -- see the pin comment inside.
 	static FpsModuleLayout MeasureFpsModule( int nFps )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -831,18 +906,27 @@ namespace gamescope
 		L.bDrawOutline = L.flOutlineRadius > 0.0f;
 		L.outlineColor = IM_COL32( 0, 0, 0, 255 );
 
-		// The box is still sized off a blank-padded "%3d" field so it never
-		// resizes as the number crosses a digit-count boundary (0-999 is
-		// plenty for a frame-rate readout). But the padding blanks are no
-		// longer what's drawn: drawing the padded string put the leading
-		// blank glyph's advance INSIDE the text draw, which left a visible
-		// empty gutter on the left of a two-digit number and shoved the
-		// digits against the box's right edge. Instead we measure the
-		// pinned field once for box sizing, then draw the plain (unpadded)
-		// digits centred within that pinned width via flTextOffsetX.
+		// The box is sized off a run of '0' cells as long as the current
+		// digit count, never fewer than 3 (fpsmath::PinnedDigitCount): 0-999
+		// share one box that never resizes, and a four- or five-digit rate
+		// -- an uncapped mailbox-mode client genuinely presents thousands
+		// of frames a second -- widens it by exactly the cells it needs.
+		// The old std::clamp( nFps, 0, 999 ) is gone (2026-09-05): it turned
+		// the mis-sampled rate the counting rewrite fixed into a plausible-
+		// looking fake, and it turned a real 1200 into 999 too. Only the
+		// floor at 0 remains. The padding cells are still not what's drawn:
+		// drawing a padded string put the leading blank's advance INSIDE
+		// the text draw, leaving a visible gutter on the left of a two-
+		// digit number (fixed 2026-09-03) -- so the pinned field is measured
+		// for box sizing only, and the plain digits are centred within it
+		// via flTextOffsetX.
+		nFps = std::max( nFps, 0 );
+		const int nDigits = fpsmath::PinnedDigitCount( nFps ); // 3..7; szPadded/szNum hold 7 digits + NUL
 		char szPadded[8];
-		snprintf( szPadded, sizeof( szPadded ), "%3d", std::clamp( nFps, 0, 999 ) );
-		snprintf( L.szNum, sizeof( L.szNum ), "%d", std::clamp( nFps, 0, 999 ) );
+		for ( int i = 0; i < nDigits; i++ )
+			szPadded[i] = '0';
+		szPadded[nDigits] = '\0';
+		snprintf( L.szNum, sizeof( L.szNum ), "%d", std::min( nFps, 9999999 ) );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested
@@ -872,7 +956,7 @@ namespace gamescope
 
 		const ImVec2 rectMin = origin;
 		// L.flTextOffsetX centres the unpadded digits within the pinned
-		// 3-glyph field width -- see MeasureFpsModule()'s own comment.
+		// field width -- see MeasureFpsModule()'s own comment.
 		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX, rectMin.y + cfg.backdrop_padding );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
@@ -1270,10 +1354,11 @@ namespace gamescope
 			return;
 
 		// While the right-click hide animation is moving, every frame needs
-		// a successor -- the same per-frame force_repaint() the lag-spike
-		// hold relies on the 500ms timer for, but at frame rate, since a
-		// 200ms animation at two frames a second is not an animation. A
-		// static crosshair (idle, or fully hidden) asks for nothing.
+		// a successor -- requested from the paint itself, since a 200ms
+		// animation at the timer thread's 500ms keepalive cadence is not an
+		// animation. (Smoothing's glide gets the same per-frame cadence a
+		// different way: the timer thread's fast ticks while s_bGliding.)
+		// A static crosshair (idle, or fully hidden) asks for nothing.
 		if ( bCrosshairAnimating )
 			force_repaint();
 
@@ -1348,6 +1433,81 @@ namespace gamescope
 		}
 	}
 
+	// See FpsDisplay.h. Mirrors FpsDisplay_AddLayer()'s setup half exactly
+	// -- same context save/restore, same EnsureImguiInit/EnsureTexture, same
+	// NewFrame/Render/RenderAndSubmit -- and then STOPS: no
+	// pFrameInfo->layers.push(). That last point is the whole contract. A
+	// pushed layer would make this frame composite the warm-up texture, and
+	// (worse) a second layer on the stack every frame forces the full
+	// composite path for every frame after -- the layer budget note in
+	// superdoc/features/fps-display.md.
+	void FpsDisplay_WarmUp()
+	{
+		static bool s_bWarmedUp = false;
+		if ( s_bWarmedUp )
+			return;
+
+		EnsureConfigLoaded();
+		// An off HUD creates no context and no texture -- this file's
+		// standing "nothing enabled -> nothing allocated" guarantee -- so
+		// there is nothing to warm. Switching it on later pays the one-time
+		// cost on that first frame, same as before this existed. Not
+		// latched: if the HUD is turned on before the first game frame, the
+		// next call still gets to warm it.
+		if ( !s_Settings.fps_display.enabled )
+			return;
+		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
+			return; // output size not known yet -- try again on the next call
+
+		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
+
+		EnsureImguiInit();
+		s_bWarmedUp = true; // one shot either way: EnsureImguiInit() never retries a failed init, and a successful one needs no second pass
+		if ( !s_bImguiInitialized )
+			return; // EnsureImguiInit() already restored pPrevContext
+
+		ImGui::SetCurrentContext( s_pImguiContext );
+
+		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+		{
+			ImGui::SetCurrentContext( pPrevContext );
+			return;
+		}
+
+		ImGuiIO &io = ImGui::GetIO();
+		io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
+		io.DeltaTime = 1.0f / 60.0f;
+
+		ImGui_ImplVulkan_NewFrame();
+		ImGui::NewFrame();
+
+		// The readout draws digits and nothing else (MeasureFpsModule /
+		// DrawFpsModuleContent: the fill and every outline stamp are the
+		// same digit string in the same Hero face at cfg.font_size), and
+		// ImGui 1.92 bakes glyphs per (font, size) -- so this is exactly the
+		// set the first real frame would otherwise bake, no more. The
+		// crosshair (Crosshair.cpp) draws rects only and has no glyphs to
+		// warm. Opaque colour on purpose: AddText() early-outs on alpha 0
+		// and would bake nothing. Nothing reaches the screen -- no layer is
+		// pushed -- and the next real frame's LOAD_OP_CLEAR wipes it. A
+		// later font-size change bakes a new size on its first frame; that
+		// one hitch is accepted (a slider release, not game start).
+		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
+		ImGui::GetBackgroundDrawList()->AddText( pFont, s_Settings.fps_display.font_size, ImVec2( 0.0f, 0.0f ), IM_COL32_WHITE, "0123456789" );
+
+		ImGui::Render();
+		// ImGui_ImplVulkan_RenderDrawData() in here performs the atlas
+		// upload (ImGui_ImplVulkan_UpdateTexture -> vkQueueWaitIdle) that
+		// this function exists to pre-pay. It also registers the pending
+		// wait point the compute composite will depend on, which is
+		// correct: that submission does write the texture.
+		RenderAndSubmit();
+
+		// Deliberately no layers.push() -- see the function comment.
+
+		ImGui::SetCurrentContext( pPrevContext );
+	}
+
 	void FpsDisplay_WaitForRender( CVulkanCmdBuffer *pComputeCmdBuffer )
 	{
 		if ( !s_bHasPendingWaitPoint )
@@ -1394,25 +1554,12 @@ namespace gamescope
 
 	namespace
 	{
-		int UpdateModeToInt( const std::string &s )
-		{
-			if ( s == "per_second" ) return 1;
-			if ( s == "immediate" )  return 2;
-			return 0; // "smoothing", and the fallback for an unrecognized/legacy value
-		}
-		const char *UpdateModeFromInt( int n )
-		{
-			switch ( n )
-			{
-				case 1: return "per_second";
-				case 2: return "immediate";
-				default: return "smoothing";
-			}
-		}
+		// update_mode's string<->int lives in fpsmath (FpsDisplay.h) so the
+		// legacy "per_second" -> Smoothing mapping is unit-tested; only the
+		// option labels are here. Two modes since 2026-09-05.
 		constexpr ui::Option kUpdateModeOptions[] = {
 			{ 0, "Smoothing" },
-			{ 1, "Update every second" },
-			{ 2, "Immediate" },
+			{ 1, "Immediate" },
 		};
 
 		int ColorModeToInt( const std::string &s ) { return s == "inverted" ? 1 : 0; }
@@ -1547,14 +1694,14 @@ namespace gamescope
 
 		a.Choice( "hud.update_mode", "Update mode",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return UpdateModeToInt( s_Settings.fps_display.update_mode ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.update_mode = UpdateModeFromInt( n ); PersistSettings(); } ),
+				[]{ EnsureConfigLoaded(); return fpsmath::UpdateModeToInt( s_Settings.fps_display.update_mode ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.update_mode = fpsmath::UpdateModeFromInt( n ); PersistSettings(); } ),
 			kUpdateModeOptions, std::size( kUpdateModeOptions ) )
-			.Help( "How often the number changes. Smoothing eases between readings so it never "
-			       "jitters; Update every second recomputes once a second so the digits hold "
-			       "still; Immediate shows the very latest frame, jitter and all." )
+			.Help( "How often the number changes. Smoothing takes a reading once a second, "
+			       "glides to it and holds still until the next; Immediate shows the last "
+			       "tenth of a second, jitter and all." )
 			.Default( 0 )
-			.Keywords( "update mode smoothing immediate every second refresh rate ema" )
+			.Keywords( "update mode smoothing immediate every second refresh rate glide hold" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
 		// "Hide if FPS above X" -- a Switch with a threshold Param, the
