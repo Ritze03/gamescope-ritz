@@ -34,6 +34,9 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Vulkan compositing](features/compositing-vulkan.md) — the per-frame Vulkan compositing pass.
 - [Scaling filters](features/scaling-filters.md) — FSR (EASU/RCAS) and NIS upscaling.
 - [HDR color management](features/hdr-color-management.md) — PQ conversion and color management.
+- [Resolution and refresh](features/resolution-and-refresh.md) — runtime nested game
+  resolution, paced refresh and window-size request (the Display > Resolution area); what
+  is live, what is only a request, and the SDL focus-refresh gotcha.
 
 ### HUD
 

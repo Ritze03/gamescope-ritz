@@ -24,7 +24,13 @@
 
 #include "sdlscancodetable.hpp"
 
-static int g_nOldNestedRefresh = 0;
+// The focused refresh, restored over g_nNestedRefresh on FOCUS_GAINED after
+// FOCUS_LOST swapped in g_nNestedUnfocusedRefresh. Atomic since the Resolution
+// area started changing the refresh at runtime: the SDL thread reads it in the
+// focus handler while the steamcompmgr thread rewrites it through
+// CSDLBackend::OnNestedRefreshChanged() -- a stale copy here would revert a
+// runtime refresh change the first time the window regained focus.
+static std::atomic<int> g_nOldNestedRefresh = { 0 };
 static bool g_bWindowFocused = true;
 
 static int g_nOutputWidthPts = 0;
@@ -52,6 +58,10 @@ namespace gamescope
 		GAMESCOPE_SDL_EVENT_VISIBLE,
 		GAMESCOPE_SDL_EVENT_GRAB,
 		GAMESCOPE_SDL_EVENT_CURSOR,
+		// INestedHints::RequestOutputSize(): SDL_SetWindowSize() must run on
+		// the SDL thread, so the request crosses over as an event with the
+		// size parked in m_uRequestedOutputWidth/Height.
+		GAMESCOPE_SDL_EVENT_RESIZE,
 
 		GAMESCOPE_SDL_EVENT_COUNT,
 	};
@@ -120,6 +130,8 @@ namespace gamescope
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
         virtual const char *GetClipboardSyncStatus() const override { return "SDL clipboard"; }
+        virtual void RequestOutputSize( uint32_t uWidth, uint32_t uHeight ) override;
+        virtual void OnNestedRefreshChanged( int nRefreshmHz ) override;
 
 		//--
 
@@ -186,6 +198,8 @@ namespace gamescope
         void SetTitle( std::shared_ptr<std::string> szTitle );
         void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels );
         void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection );
+        void RequestOutputSize( uint32_t uWidth, uint32_t uHeight );
+        void OnNestedRefreshChanged( int nRefreshmHz );
 	protected:
 		virtual void OnBackendBlobDestroyed( BackendBlob *pBlob ) override;
 	private:
@@ -215,6 +229,10 @@ namespace gamescope
 		// "Use everywhere" needed a way to say no to that.
 		std::atomic<bool> m_bOverlayHostCursorUsable = { false };
 		std::atomic<std::shared_ptr<INestedHints::CursorInfo>> m_pApplicationCursor;
+		// Physical pixels asked for by RequestOutputSize(); consumed by the
+		// GAMESCOPE_SDL_EVENT_RESIZE handler on the SDL thread.
+		std::atomic<uint32_t> m_uRequestedOutputWidth = { 0 };
+		std::atomic<uint32_t> m_uRequestedOutputHeight = { 0 };
 		std::atomic<std::shared_ptr<std::string>> m_pApplicationTitle;
 		std::atomic<std::shared_ptr<std::vector<uint32_t>>> m_pApplicationIcon;
 		SDL_Surface *m_pIconSurface = nullptr;
@@ -397,6 +415,14 @@ namespace gamescope
 	void CSDLConnector::SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels )
 	{
 		m_pBackend->SetIcon( std::move( uIconPixels ) );
+	}
+	void CSDLConnector::RequestOutputSize( uint32_t uWidth, uint32_t uHeight )
+	{
+		m_pBackend->RequestOutputSize( uWidth, uHeight );
+	}
+	void CSDLConnector::OnNestedRefreshChanged( int nRefreshmHz )
+	{
+		m_pBackend->OnNestedRefreshChanged( nRefreshmHz );
 	}
 
 	// Loop guard for the SDL backend's clipboard, shared with the Wayland
@@ -613,6 +639,23 @@ namespace gamescope
 	{
 		m_pApplicationIcon = uIconPixels;
 		PushUserEvent( GAMESCOPE_SDL_EVENT_ICON );
+	}
+	// Called on the steamcompmgr thread (the Resolution area's setter). The
+	// SDL window may only be touched from the SDL thread, hence the hand-off
+	// -- same shape as every other INestedHints setter above.
+	void CSDLBackend::RequestOutputSize( uint32_t uWidth, uint32_t uHeight )
+	{
+		if ( !uWidth || !uHeight )
+			return;
+		m_uRequestedOutputWidth = uWidth;
+		m_uRequestedOutputHeight = uHeight;
+		PushUserEvent( GAMESCOPE_SDL_EVENT_RESIZE );
+	}
+	// See g_nOldNestedRefresh's comment: without this, FOCUS_GAINED would
+	// put the launch-time refresh back over a runtime change.
+	void CSDLBackend::OnNestedRefreshChanged( int nRefreshmHz )
+	{
+		g_nOldNestedRefresh = nRefreshmHz;
 	}
 
 	void CSDLBackend::SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection )
@@ -1010,6 +1053,41 @@ namespace gamescope
 					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_GRAB ) )
 					{
 						SDL_SetRelativeMouseMode( m_bApplicationGrabbed ? SDL_TRUE : SDL_FALSE );
+					}
+					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_RESIZE ) )
+					{
+						const uint32_t uWidth = m_uRequestedOutputWidth;
+						const uint32_t uHeight = m_uRequestedOutputHeight;
+						if ( uWidth && uHeight )
+						{
+							// SDL_SetWindowSize() is ignored while
+							// FULLSCREEN_DESKTOP is set, so a request
+							// leaves fullscreen first -- the user asked for
+							// a window of a size, and a fullscreen window
+							// has no size of its own.
+							if ( g_bFullscreen )
+							{
+								g_bFullscreen = false;
+								SDL_SetWindowFullscreen( m_Connector.GetSDLWindow(), 0 );
+							}
+
+							// The request is in physical pixels (what
+							// g_nOutputWidth/Height read back as);
+							// SDL_SetWindowSize() wants points. On a HiDPI
+							// host the two differ by the window's scale.
+							int nPtsWidth = (int)uWidth;
+							int nPtsHeight = (int)uHeight;
+							if ( g_nOutputWidth && g_nOutputHeight && g_nOutputWidthPts && g_nOutputHeightPts )
+							{
+								nPtsWidth = (int)( (uint64_t)uWidth * g_nOutputWidthPts / g_nOutputWidth );
+								nPtsHeight = (int)( (uint64_t)uHeight * g_nOutputHeightPts / g_nOutputHeight );
+							}
+							// Best effort: the host decides. Whatever it
+							// grants arrives as SDL_WINDOWEVENT_SIZE_CHANGED
+							// above and lands in g_nOutputWidth/Height the
+							// normal way.
+							SDL_SetWindowSize( m_Connector.GetSDLWindow(), nPtsWidth, nPtsHeight );
+						}
 					}
 					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_CURSOR ) )
 					{

@@ -337,6 +337,28 @@ namespace gamescope
         // implements clipboard sync one way or another, but a future one that
         // doesn't need not override this to stay honest).
         virtual const char *GetClipboardSyncStatus() const { return "none"; }
+
+        // Runtime nested resolution/refresh (the Display > Resolution area,
+        // Overlay/PanelDisplay.cpp; superdoc/features/resolution-and-refresh.md).
+        //
+        // RequestOutputSize(): ask the HOST to make gamescope's window this
+        // many physical pixels. A request, not a command -- a tiling host
+        // answers with its own configure and the real size lands in
+        // g_nOutputWidth/Height as it always has. Nested-only by
+        // construction: a DRM connector has no window to ask about, so this
+        // lives on INestedHints rather than IBackendConnector. Default no-op
+        // is the honest answer for OpenVR, whose "window" is an overlay
+        // sized by the HMD. Called on the steamcompmgr thread.
+        virtual void RequestOutputSize( uint32_t uWidth, uint32_t uHeight ) {}
+
+        // OnNestedRefreshChanged(): steamcompmgr_set_nested_mode() just wrote
+        // g_nNestedRefresh (0 = follow the host's refresh). Exists for one
+        // reason: SDLBackend.cpp caches the focused refresh in a file-local
+        // static (g_nOldNestedRefresh) that its FOCUS_GAINED handler writes
+        // back over g_nNestedRefresh -- without this hook a runtime refresh
+        // change would silently revert the first time the window regained
+        // focus. Default no-op for backends with no such cache.
+        virtual void OnNestedRefreshChanged( int nRefreshmHz ) {}
     };
 
     class IBackendFb : public IRcObject

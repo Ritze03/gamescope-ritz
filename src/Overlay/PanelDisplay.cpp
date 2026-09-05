@@ -70,6 +70,12 @@
 #include "wlserver.hpp"
 #include "xwayland_ctx.hpp"
 
+// Resolution area: steamcompmgr_set_nested_mode() (steamcompmgr.hpp) and
+// INestedHints::RequestOutputSize() (backend.h) are the two live paths; the
+// Hz<->mHz helpers are refresh_rate.h's.
+#include "backend.h"
+#include "refresh_rate.h"
+
 // HDR tab's read-only appHDRMetadata readout (DrawHdrAppMetadataReadout()
 // below) -- hdr_output_metadata/hdr_metadata_infoframe (CTA-861.G structs)
 // come from here, the same header steamcompmgr.cpp itself uses for the same
@@ -661,6 +667,602 @@ namespace gamescope
 			} );
 	}
 
+
+	// =====================================================================
+	//  Resolution -- the game's resolution, the paced refresh, the window
+	// =====================================================================
+	// Tracker item 7 (superdoc/planning/requests-2026-09-05.md), Phase A.
+	// Feature doc: superdoc/features/resolution-and-refresh.md.
+	//
+	// THREE DIFFERENT THINGS, DELIBERATELY IN ONE AREA. The user asked for
+	// "the nested resolution and refresh rate"; gamescope has three numbers
+	// that could each be meant, and a user who wants one is one wrong guess
+	// away from the other two:
+	//   * the resolution THE GAME SEES (-w/-h): Xwayland's RandR screen,
+	//     which gamescope scales to the window. Live via
+	//     steamcompmgr_set_nested_mode() -- the same mechanism the Steam
+	//     Deck's GAMESCOPE_XWAYLAND_MODE_CONTROL atom uses.
+	//   * the paced REFRESH (-r): the fake vblank rate and the mode's
+	//     advertised Hz. Live: the vblank timer re-reads g_nNestedRefresh
+	//     every cycle. 0 = follow the host.
+	//   * the WINDOW size (-W/-H): what the host compositor shows. Only ever
+	//     a REQUEST -- INestedHints::RequestOutputSize() -- because a tiled
+	//     host answers with its own size. The rows here read the real
+	//     g_nOutputWidth/Height back, never what was asked for.
+	//
+	// WHAT IS NOT PROMISED, and the help text does not: forcing a tiling
+	// host to honour a window size, changing the host monitor's refresh, or
+	// guaranteeing a running game adopts the new mode. A game that read the
+	// mode list once at start-up lists the new one after a restart; most
+	// switch within a frame or two because determine_and_apply_focus()
+	// force-resizes a fullscreen window to the new root size.
+	//
+	// ui::Applies::NeedsRestart exists (Registry.h) but nothing draws it yet,
+	// so the "some games need a restart" caveat is carried by the Facts row
+	// and the help text rather than a badge. Swap to the badge when the shell
+	// grows one.
+	//
+	// PHASE B (not here): persist nested width/height/refresh in
+	// GamescopeSettings (0 = as launched), serialised by ConfigManager.cpp
+	// and applied in main.cpp's apply_ritz_config_to_startup_state(), which
+	// already runs before getopt so the CLI wins for free. The window size is
+	// NOT to be persisted -- host window rules are the right tool for that.
+	// The seams are marked at the two setters below.
+	//
+	// Nested-only in this phase: AvailableWhen() hides the area when the
+	// current connector has no INestedHints (embedded DRM, where the display
+	// owns the mode). OpenVR implements INestedHints and so sees the area;
+	// its RequestOutputSize() is the default no-op, which is the honest
+	// answer there.
+	//
+	// Threading: every setter below runs on the steamcompmgr thread (see the
+	// file-top comment). steamcompmgr_set_nested_mode() takes wlserver_lock()
+	// itself; the SDL backend hops RequestOutputSize() to its own thread via
+	// a user event. Nothing here needs new synchronisation.
+
+	struct SizePreset { int nWidth, nHeight; };
+
+	static constexpr int kMinDim = 320, kMaxDim = 7680, kDimStep = 8;
+	static constexpr int kMinRefreshHz = 24, kMaxRefreshHz = 500;
+
+	// ---- game resolution --------------------------------------------------
+	static const SizePreset kResolutionPresets[] = {
+		{ 3840, 2160 }, { 2560, 1440 }, { 1920, 1080 }, { 1600, 900 }, { 1280, 720 },
+	};
+	// Option values: 0 = Native, 1..N = kResolutionPresets[value-1], N+1 = Custom.
+	static constexpr int kPresetNative = 0;
+	static constexpr int kPresetCustom = (int)std::size( kResolutionPresets ) + 1;
+	static const ui::Option kResolutionOptions[] = {
+		{ kPresetNative, "Native" },
+		{ 1, "3840 x 2160" }, { 2, "2560 x 1440" }, { 3, "1920 x 1080" },
+		{ 4, "1600 x 900" },  { 5, "1280 x 720" },
+		{ kPresetCustom, "Custom" },
+	};
+
+	// The user's last pick, or -1 before any. Needed because the live numbers
+	// alone are ambiguous: 1920x1080 in a 1920x1080 window is both "Native"
+	// and "1920 x 1080", and a Custom 1280x720 is also the 1280x720 preset.
+	// The pick is trusted while the live value still agrees with it; when it
+	// doesn't (Steam's mode-control atom, a host resize), the live value wins.
+	static int  s_nResolutionChoice = -1;
+	static int  s_nCustomWidth = 0, s_nCustomHeight = 0;   // 0 = not yet used, seed from live
+	static bool s_bLockAspect = true;
+	// The ratio the lock holds, captured when the lock engages (and lazily on
+	// first use) rather than re-derived from the last rounded height, so a
+	// hundred steps of the width stepper cannot drift the aspect.
+	static float s_flLockedAspect = 0.0f;
+
+	static bool NestedModeAvailable()
+	{
+		IBackendConnector *pConnector = GetBackend() ? GetBackend()->GetCurrentConnector() : nullptr;
+		return pConnector && pConnector->GetNestedHints() != nullptr;
+	}
+
+	static INestedHints *NestedHints()
+	{
+		IBackendConnector *pConnector = GetBackend() ? GetBackend()->GetCurrentConnector() : nullptr;
+		return pConnector ? pConnector->GetNestedHints() : nullptr;
+	}
+
+	static int EffectiveNestedRefreshmHz()
+	{
+		return g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh;
+	}
+
+	// The RandR screen the game actually sees, read from the game's Xwayland
+	// root rather than from g_nNestedWidth/Height -- the two agree after a
+	// change from here, but Steam's mode-control atom writes only the former,
+	// and this row exists to show the truth.
+	static SizePreset GameRootSize()
+	{
+		// With --xwayland-count > 1, server #0 is Steam's (kept at the output
+		// size); the game lives on #1.
+		gamescope_xwayland_server_t *pServer = wlserver_get_xwayland_server( g_nXWaylandCount > 1 ? 1 : 0 );
+		if ( pServer && pServer->ctx )
+			return { pServer->ctx->root_width, pServer->ctx->root_height };
+		return { g_nNestedWidth, g_nNestedHeight };
+	}
+
+	static int ClampDim( int n )
+	{
+		return std::clamp( n, kMinDim, kMaxDim );
+	}
+
+	// PHASE B: persist via GamescopeSettings::nested_width/height/refresh_hz
+	// (0 = as launched) -- this is the single write point for all three.
+	static void ApplyNestedMode( int nWidth, int nHeight, int nRefreshmHz )
+	{
+		steamcompmgr_set_nested_mode( ClampDim( nWidth ), ClampDim( nHeight ), nRefreshmHz );
+	}
+
+	static int MatchSizePreset( const SizePreset *pPresets, size_t nPresets, int nWidth, int nHeight )
+	{
+		for ( size_t i = 0; i < nPresets; i++ )
+			if ( pPresets[i].nWidth == nWidth && pPresets[i].nHeight == nHeight )
+				return (int)i + 1;
+		return -1;
+	}
+
+	static bool NestedIsNative()
+	{
+		return g_nNestedWidth == (int)g_nOutputWidth && g_nNestedHeight == (int)g_nOutputHeight;
+	}
+
+	static int CustomWidth()  { return s_nCustomWidth  ? s_nCustomWidth  : g_nNestedWidth; }
+	static int CustomHeight() { return s_nCustomHeight ? s_nCustomHeight : g_nNestedHeight; }
+
+	static int CurrentResolutionChoice()
+	{
+		if ( s_nResolutionChoice == kPresetNative && NestedIsNative() )
+			return kPresetNative;
+		if ( s_nResolutionChoice == kPresetCustom
+		     && g_nNestedWidth == CustomWidth() && g_nNestedHeight == CustomHeight() )
+			return kPresetCustom;
+
+		const int nPreset = MatchSizePreset( kResolutionPresets, std::size( kResolutionPresets ),
+			g_nNestedWidth, g_nNestedHeight );
+		if ( nPreset > 0 )
+			return nPreset;
+		if ( NestedIsNative() )
+			return kPresetNative;
+		return kPresetCustom;
+	}
+
+	static void SetResolutionChoice( int nChoice )
+	{
+		if ( nChoice < kPresetNative || nChoice > kPresetCustom )
+			return;
+		s_nResolutionChoice = nChoice;
+
+		int nWidth, nHeight;
+		if ( nChoice == kPresetNative )
+		{
+			// "Native" is the window size AT THE MOMENT OF THE PICK. It does
+			// not track later host resizes -- nothing in gamescope does with
+			// one Xwayland (only the multi-Xwayland Steam path re-modes).
+			nWidth  = (int)g_nOutputWidth;
+			nHeight = (int)g_nOutputHeight;
+		}
+		else if ( nChoice == kPresetCustom )
+		{
+			// Seed Custom from the live mode so picking it changes nothing
+			// until the steppers move.
+			if ( !s_nCustomWidth || !s_nCustomHeight )
+			{
+				s_nCustomWidth  = g_nNestedWidth;
+				s_nCustomHeight = g_nNestedHeight;
+			}
+			nWidth  = s_nCustomWidth;
+			nHeight = s_nCustomHeight;
+		}
+		else
+		{
+			nWidth  = kResolutionPresets[ nChoice - 1 ].nWidth;
+			nHeight = kResolutionPresets[ nChoice - 1 ].nHeight;
+		}
+		ApplyNestedMode( nWidth, nHeight, g_nNestedRefresh );
+	}
+
+	static bool ResolutionIsCustom()
+	{
+		return CurrentResolutionChoice() == kPresetCustom;
+	}
+
+	static float LockedAspect()
+	{
+		if ( s_flLockedAspect <= 0.0f && CustomHeight() > 0 )
+			s_flLockedAspect = (float)CustomWidth() / (float)CustomHeight();
+		return s_flLockedAspect > 0.0f ? s_flLockedAspect : 16.0f / 9.0f;
+	}
+
+	// Even dimensions only: an odd width or height is a size no display mode
+	// uses, and some video paths choke on it.
+	static int SnapEven( int n )
+	{
+		return ClampDim( ( n + 1 ) & ~1 );
+	}
+
+	// The steppers are enabled by ResolutionIsCustom() -- the DISPLAYED
+	// choice -- which is also true for a launch-time -w/-h that matches no
+	// preset, when nobody has picked anything yet. So the apply gate must be
+	// the same predicate, evaluated BEFORE the mutation (afterwards the live
+	// mode no longer equals the custom numbers), or a stepper the UI shows
+	// as enabled would move its number and change nothing.
+	static void ApplyCustomIfActive( bool bWasActive )
+	{
+		if ( !bWasActive )
+			return;
+		s_nResolutionChoice = kPresetCustom;
+		ApplyNestedMode( CustomWidth(), CustomHeight(), g_nNestedRefresh );
+	}
+
+	static void SetCustomWidth( int nWidth )
+	{
+		const bool bActive = ResolutionIsCustom();
+		const int nOldHeight = CustomHeight();
+		s_nCustomWidth = ClampDim( nWidth );
+		s_nCustomHeight = s_bLockAspect
+			? SnapEven( (int)std::lround( s_nCustomWidth / LockedAspect() ) )
+			: nOldHeight;
+		ApplyCustomIfActive( bActive );
+	}
+
+	static void SetCustomHeight( int nHeight )
+	{
+		const bool bActive = ResolutionIsCustom();
+		const int nOldWidth = CustomWidth();
+		s_nCustomHeight = ClampDim( nHeight );
+		s_nCustomWidth = s_bLockAspect
+			? SnapEven( (int)std::lround( s_nCustomHeight * LockedAspect() ) )
+			: nOldWidth;
+		ApplyCustomIfActive( bActive );
+	}
+
+	static void SetLockAspect( bool bLock )
+	{
+		s_bLockAspect = bLock;
+		// Re-capture on every engage: the ratio the user locks is the one on
+		// screen when they flip the switch, not the one from last session.
+		s_flLockedAspect = 0.0f;
+		if ( bLock )
+			LockedAspect();
+	}
+
+	// ---- refresh ----------------------------------------------------------
+	// Option values are Hz; 0 = follow host, -1 = Custom.
+	static constexpr int kRefreshFollowHost = 0;
+	static constexpr int kRefreshCustom = -1;
+	static const ui::Option kRefreshOptions[] = {
+		{ kRefreshFollowHost, "Follow host" },
+		{ 60, "60 Hz" }, { 90, "90 Hz" }, { 120, "120 Hz" },
+		{ 144, "144 Hz" }, { 165, "165 Hz" }, { 240, "240 Hz" },
+		{ kRefreshCustom, "Custom" },
+	};
+
+	static int s_nRefreshChoice = kRefreshFollowHost;   // last pick; live value wins when it disagrees
+	static int s_nCustomRefreshHz = 0;                  // 0 = not yet used, seed from live
+
+	static int CurrentRefreshChoice()
+	{
+		if ( g_nNestedRefresh == 0 )
+			return kRefreshFollowHost;
+		const int nHz = ConvertmHzToHz( g_nNestedRefresh );
+		if ( s_nRefreshChoice == kRefreshCustom )
+			return kRefreshCustom;
+		for ( const ui::Option &opt : kRefreshOptions )
+			if ( opt.nValue > 0 && opt.nValue == nHz )
+				return nHz;
+		return kRefreshCustom;
+	}
+
+	static int CustomRefreshHz()
+	{
+		return s_nCustomRefreshHz ? s_nCustomRefreshHz : ConvertmHzToHz( EffectiveNestedRefreshmHz() );
+	}
+
+	static void SetRefreshChoice( int nChoice )
+	{
+		s_nRefreshChoice = nChoice;
+		int nRefreshmHz;
+		if ( nChoice == kRefreshFollowHost )
+			nRefreshmHz = 0;
+		else if ( nChoice == kRefreshCustom )
+		{
+			if ( !s_nCustomRefreshHz )
+				s_nCustomRefreshHz = std::clamp( CustomRefreshHz(), kMinRefreshHz, kMaxRefreshHz );
+			nRefreshmHz = ConvertHztomHz( s_nCustomRefreshHz );
+		}
+		else
+			nRefreshmHz = ConvertHztomHz( std::clamp( nChoice, kMinRefreshHz, kMaxRefreshHz ) );
+		ApplyNestedMode( g_nNestedWidth, g_nNestedHeight, nRefreshmHz );
+	}
+
+	static bool RefreshIsCustom()
+	{
+		return CurrentRefreshChoice() == kRefreshCustom;
+	}
+
+	// Same gate as the stepper's DisabledUnless (a launch-time -r 75 shows
+	// as Custom before anyone picked it), for the reason given at
+	// ApplyCustomIfActive().
+	static void SetCustomRefreshHz( int nHz )
+	{
+		const bool bActive = RefreshIsCustom();
+		s_nCustomRefreshHz = std::clamp( nHz, kMinRefreshHz, kMaxRefreshHz );
+		if ( bActive )
+		{
+			s_nRefreshChoice = kRefreshCustom;
+			ApplyNestedMode( g_nNestedWidth, g_nNestedHeight, ConvertHztomHz( s_nCustomRefreshHz ) );
+		}
+	}
+
+	// ---- window (output) size ---------------------------------------------
+	static const SizePreset kOutputPresets[] = { { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } };
+	static constexpr int kOutputFollow = 0;
+	static constexpr int kOutputCustom = (int)std::size( kOutputPresets ) + 1;
+	static const ui::Option kOutputOptions[] = {
+		{ kOutputFollow, "Follow window" },
+		{ 1, "1920 x 1080" }, { 2, "2560 x 1440" }, { 3, "3840 x 2160" },
+		{ kOutputCustom, "Custom" },
+	};
+
+	static int s_nOutputChoice = kOutputFollow;
+	static int s_nOutputCustomWidth = 0, s_nOutputCustomHeight = 0;
+
+	// Reads back what the host GRANTED. A preset shows as selected only while
+	// the window really is that size; a refused request therefore falls back
+	// to "Follow window" and the Facts row shows the host's answer. Custom is
+	// the exception -- it stays selected so the steppers stay enabled while
+	// the user is still dialling a size in.
+	static int CurrentOutputChoice()
+	{
+		if ( s_nOutputChoice == kOutputCustom )
+			return kOutputCustom;
+		if ( s_nOutputChoice > 0
+		     && (int)g_nOutputWidth  == kOutputPresets[ s_nOutputChoice - 1 ].nWidth
+		     && (int)g_nOutputHeight == kOutputPresets[ s_nOutputChoice - 1 ].nHeight )
+			return s_nOutputChoice;
+		return kOutputFollow;
+	}
+
+	static int OutputCustomWidth()  { return s_nOutputCustomWidth  ? s_nOutputCustomWidth  : (int)g_nOutputWidth; }
+	static int OutputCustomHeight() { return s_nOutputCustomHeight ? s_nOutputCustomHeight : (int)g_nOutputHeight; }
+
+	// Not persisted, by design (host window rules are the right tool) -- so
+	// no Phase B seam here.
+	static void RequestOutput( int nWidth, int nHeight )
+	{
+		if ( INestedHints *pHints = NestedHints() )
+			pHints->RequestOutputSize( (uint32_t)ClampDim( nWidth ), (uint32_t)ClampDim( nHeight ) );
+	}
+
+	static void SetOutputChoice( int nChoice )
+	{
+		if ( nChoice < kOutputFollow || nChoice > kOutputCustom )
+			return;
+		s_nOutputChoice = nChoice;
+		if ( nChoice == kOutputFollow )
+			return;   // "whatever the host gives us" -- nothing to ask for
+		if ( nChoice == kOutputCustom )
+		{
+			if ( !s_nOutputCustomWidth || !s_nOutputCustomHeight )
+			{
+				s_nOutputCustomWidth  = (int)g_nOutputWidth;
+				s_nOutputCustomHeight = (int)g_nOutputHeight;
+			}
+			RequestOutput( s_nOutputCustomWidth, s_nOutputCustomHeight );
+			return;
+		}
+		RequestOutput( kOutputPresets[ nChoice - 1 ].nWidth, kOutputPresets[ nChoice - 1 ].nHeight );
+	}
+
+	static void SetOutputCustomWidth( int nWidth )
+	{
+		s_nOutputCustomWidth = ClampDim( nWidth );
+		if ( s_nOutputChoice == kOutputCustom )
+			RequestOutput( OutputCustomWidth(), OutputCustomHeight() );
+	}
+
+	static void SetOutputCustomHeight( int nHeight )
+	{
+		s_nOutputCustomHeight = ClampDim( nHeight );
+		if ( s_nOutputChoice == kOutputCustom )
+			RequestOutput( OutputCustomWidth(), OutputCustomHeight() );
+	}
+
+	static bool OutputIsCustom()
+	{
+		return s_nOutputChoice == kOutputCustom;
+	}
+
+	static std::string ResolutionSummary()
+	{
+		const SizePreset root = GameRootSize();
+		char sz[ 96 ];
+		std::snprintf( sz, sizeof( sz ), "%dx%d @ %d Hz · window %ux%u",
+			root.nWidth, root.nHeight, ConvertmHzToHz( EffectiveNestedRefreshmHz() ),
+			(unsigned)g_nOutputWidth, (unsigned)g_nOutputHeight );
+		return sz;
+	}
+
+	static void RegisterResolution( ui::Registry &reg )
+	{
+		ui::Area &a = reg.Add( "display.resolution", "Resolution", ui::Section::Display );
+		a.Keywords( "resolution render internal nested game size width height refresh hz hertz "
+		            "window output xrandr mode 1080p 1440p 4k 720p" );
+		a.Summary( ResolutionSummary );
+		// Embedded (DRM) has no window and the display owns the mode; that
+		// is a different feature (GetModes() + the dynamic-refresh atom) for
+		// a later phase, not a disabled copy of this one.
+		a.AvailableWhen( NestedModeAvailable );
+
+		a.Group( "Game resolution" );
+
+		a.Choice( "display.resolution.preset", "Resolution",
+			ui::AnyBind::Of<int>(
+				[]{ return CurrentResolutionChoice(); },
+				[]( int n ) { SetResolutionChoice( n ); } ),
+			kResolutionOptions, std::size( kResolutionOptions ) )
+			.Help( "The resolution the game sees and renders at; gamescope scales it to the window. "
+			       "Most games switch instantly; a few only list it after a restart. Native is the "
+			       "window's size at the moment you pick it." )
+			.Default( kPresetNative )
+			.Keywords( "resolution render internal nested native custom 1080p 1440p 4k 720p" );
+
+		static constexpr const char *kNotCustom =
+			"pick Custom in Resolution above to type your own size -- a preset already sets both";
+
+		a.Stepper( "display.resolution.width", "Width",
+			ui::AnyBind::Of<int>(
+				[]{ return CustomWidth(); },
+				[]( int n ) { SetCustomWidth( n ); } ) )
+			.Help( "Width of the custom resolution the game renders at. With the aspect lock on, "
+			       "the height follows so the picture keeps its shape." )
+			.Range( (float)kMinDim, (float)kMaxDim )
+			.Step( (float)kDimStep )
+			.Unit( "px" )
+			.Default( 1280 )
+			.Keywords( "width custom horizontal pixels" )
+			.DisabledUnless( ResolutionIsCustom, kNotCustom )
+			.Param( "lock_aspect", "Lock aspect ratio",
+				ui::AnyBind::Of<bool>(
+					[]{ return s_bLockAspect; },
+					[]( bool b ) { SetLockAspect( b ); } ) )
+				.Help( "Keeps width and height in the same proportion as when you switched this on, "
+				       "so changing one adjusts the other. Off lets you set them independently." )
+				.Default( true )
+				.Keywords( "aspect ratio lock proportion 16:9" );
+
+		a.Stepper( "display.resolution.height", "Height",
+			ui::AnyBind::Of<int>(
+				[]{ return CustomHeight(); },
+				[]( int n ) { SetCustomHeight( n ); } ) )
+			.Help( "Height of the custom resolution the game renders at. With the aspect lock on, "
+			       "the width follows." )
+			.Range( (float)kMinDim, (float)kMaxDim )
+			.Step( (float)kDimStep )
+			.Unit( "px" )
+			.Default( 720 )
+			.Keywords( "height custom vertical pixels" )
+			.DisabledUnless( ResolutionIsCustom, kNotCustom );
+
+		a.Group( "Refresh" );
+
+		a.Choice( "display.refresh", "Refresh rate",
+			ui::AnyBind::Of<int>(
+				[]{ return CurrentRefreshChoice(); },
+				[]( int n ) { SetRefreshChoice( n ); } ),
+			kRefreshOptions, std::size( kRefreshOptions ) )
+			.Help( "The refresh rate the game is paced at and told about. Follow host uses your "
+			       "screen's own rate. Above the host's rate, frames are paced faster than the "
+			       "screen can show them -- this cannot change the monitor's real refresh." )
+			.Default( kRefreshFollowHost )
+			.Keywords( "refresh rate hz hertz vblank pacing follow host 60 120 144" );
+
+		a.Stepper( "display.refresh.custom", "Custom refresh",
+			ui::AnyBind::Of<int>(
+				[]{ return CustomRefreshHz(); },
+				[]( int n ) { SetCustomRefreshHz( n ); } ) )
+			.Help( "A refresh rate not in the list above. Takes effect while Refresh rate is set to "
+			       "Custom." )
+			.Range( (float)kMinRefreshHz, (float)kMaxRefreshHz )
+			.Step( 1.0f )
+			.Unit( "Hz" )
+			.Default( 60 )
+			.Keywords( "custom refresh hz hertz" )
+			.DisabledUnless( RefreshIsCustom, "pick Custom in Refresh rate above to use this number" );
+
+		a.Group( "Window" );
+
+		a.Choice( "display.output_size", "Window size",
+			ui::AnyBind::Of<int>(
+				[]{ return CurrentOutputChoice(); },
+				[]( int n ) { SetOutputChoice( n ); } ),
+			kOutputOptions, std::size( kOutputOptions ) )
+			.Help( "Asks your desktop to resize the gamescope window; a tiled window manager may "
+			       "refuse, and this row then shows what it decided instead. Leaves fullscreen." )
+			.Default( kOutputFollow )
+			.Keywords( "window size output resize host desktop tiled floating" );
+
+		static constexpr const char *kOutputNotCustom =
+			"pick Custom in Window size above to ask for your own size";
+
+		a.Stepper( "display.output_size.width", "Window width",
+			ui::AnyBind::Of<int>(
+				[]{ return OutputCustomWidth(); },
+				[]( int n ) { SetOutputCustomWidth( n ); } ) )
+			.Help( "Window width to ask the desktop for, in pixels. Whether it is granted is up to "
+			       "the desktop." )
+			.Range( (float)kMinDim, (float)kMaxDim )
+			.Step( (float)kDimStep )
+			.Unit( "px" )
+			.Default( 1280 )
+			.Keywords( "window width pixels" )
+			.DisabledUnless( OutputIsCustom, kOutputNotCustom );
+
+		a.Stepper( "display.output_size.height", "Window height",
+			ui::AnyBind::Of<int>(
+				[]{ return OutputCustomHeight(); },
+				[]( int n ) { SetOutputCustomHeight( n ); } ) )
+			.Help( "Window height to ask the desktop for, in pixels. Whether it is granted is up to "
+			       "the desktop." )
+			.Range( (float)kMinDim, (float)kMaxDim )
+			.Step( (float)kDimStep )
+			.Unit( "px" )
+			.Default( 720 )
+			.Keywords( "window height pixels" )
+			.DisabledUnless( OutputIsCustom, kOutputNotCustom );
+
+		a.Group( "Diagnostics" );
+
+		a.Facts( "display.resolution_facts", "Live state", []{
+			const SizePreset root = GameRootSize();
+			char sz[ 128 ];
+			std::snprintf( sz, sizeof( sz ), "Game sees %dx%d @ %d Hz · window %ux%u · host %d Hz",
+				root.nWidth, root.nHeight, ConvertmHzToHz( EffectiveNestedRefreshmHz() ),
+				(unsigned)g_nOutputWidth, (unsigned)g_nOutputHeight,
+				ConvertmHzToHz( g_nOutputRefresh ) );
+			return std::string( sz );
+		} )
+			.Help( "Shows the resolution and refresh the game is actually being given, the window "
+			       "size the desktop actually granted, and your screen's own refresh. Read-only." )
+			.Keywords( "live state actual xrandr root window host refresh facts" )
+			.Live( "game sees", []{
+				const SizePreset root = GameRootSize();
+				char sz[ 48 ];
+				std::snprintf( sz, sizeof( sz ), "%dx%d (Xwayland root)", root.nWidth, root.nHeight );
+				return ui::Fact{ "game sees", sz };
+			} )
+			.Live( "paced at", []{
+				char sz[ 64 ];
+				std::snprintf( sz, sizeof( sz ), "%d Hz%s", ConvertmHzToHz( EffectiveNestedRefreshmHz() ),
+					g_nNestedRefresh ? "" : " (following the host)" );
+				return ui::Fact{ "paced at", sz };
+			} )
+			.Live( "window", []{
+				char sz[ 48 ];
+				std::snprintf( sz, sizeof( sz ), "%ux%u px", (unsigned)g_nOutputWidth, (unsigned)g_nOutputHeight );
+				return ui::Fact{ "window", sz };
+			} )
+			.Live( "host refresh", []{
+				char sz[ 32 ];
+				std::snprintf( sz, sizeof( sz ), "%d Hz", ConvertmHzToHz( g_nOutputRefresh ) );
+				return ui::Fact{ "host refresh", sz };
+			} )
+			// The NeedsRestart caveat, as a fact until the shell draws
+			// ui::Applies::NeedsRestart itself.
+			.Live( "takes effect", []{
+				return ui::Fact{ "takes effect",
+					"now for most games; some only list the new mode after a restart" };
+			} )
+			.Live( "applied via", []{
+				return ui::Fact{ "applied via",
+					"steamcompmgr_set_nested_mode() -> wlserver_set_xwayland_server_mode(), the same "
+					"path as Steam's GAMESCOPE_XWAYLAND_MODE_CONTROL; window size is only a request "
+					"to the host" };
+			} );
+	}
+
 	// ---- the frame budget, and what was spent against it -----------------
 	// The frametime is read straight off the commit clock rather than
 	// through FpsDisplay, because that file's smoothed copy only advances
@@ -1012,6 +1614,10 @@ namespace gamescope
 		// see RegisterGeneral()'s own comment for why.
 		RegisterGeneral( reg );
 		RegisterUpscaling( reg );
+		// Item 7 (2026-09-05): right after Upscaling, since "what the game
+		// renders at" and "how it is scaled to the window" are one decision
+		// seen from two sides.
+		RegisterResolution( reg );
 		RegisterFrameLimiter( reg );
 		RegisterHdr( reg );
 	}

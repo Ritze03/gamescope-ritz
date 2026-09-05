@@ -60,6 +60,14 @@ one most useful for desktop development/testing of gamescope itself.
   conditional on `g_bSupportsAsyncFlips`).
 - `IsSessionBased()` returns `false` (`src/Backends/SDLBackend.cpp:502`) — SDL doesn't
   need the logind/DRM-master session handling that `CDRMBackend` requires.
+- **Runtime window-size request** — `INestedHints::RequestOutputSize(w, h)` parks the size
+  in two atomics and pushes `GAMESCOPE_SDL_EVENT_RESIZE`; the SDL thread leaves
+  `FULLSCREEN_DESKTOP` first (SDL ignores `SDL_SetWindowSize()` while it is set), converts
+  physical pixels to points for HiDPI, and calls `SDL_SetWindowSize()`. The host's answer
+  arrives as `SDL_WINDOWEVENT_SIZE_CHANGED` as usual. **Gotcha:** `g_nOldNestedRefresh`, the
+  focused refresh restored on `FOCUS_GAINED`, is rewritten through
+  `INestedHints::OnNestedRefreshChanged()` — without that a runtime refresh change reverts
+  on the next focus regain. See [resolution-and-refresh.md](resolution-and-refresh.md).
 
 ## Using it
 

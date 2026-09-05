@@ -229,6 +229,10 @@ namespace gamescope
 
         void CommitLibDecor( libdecor_configuration *pConfiguration );
         void Commit();
+        // INestedHints::RequestOutputSize(): make the next Commit() send a
+        // libdecor state carrying the (already updated) g_nOutputWidth/Height,
+        // the same way LibDecor_Frame_Commit() re-arms one.
+        void RequestDecorCommit() { m_bNeedsDecorCommit = true; }
 
         wl_surface *GetSurface() const { return m_pSurface; }
         libdecor_frame *GetFrame() const { return m_pFrame; }
@@ -479,6 +483,7 @@ namespace gamescope
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
         virtual const char *GetClipboardSyncStatus() const override;
+        virtual void RequestOutputSize( uint32_t uWidth, uint32_t uHeight ) override;
     private:
 
         friend CWaylandPlane;
@@ -1387,6 +1392,44 @@ namespace gamescope
     {
         return m_pBackend->PresentOverlayCursor( bOverlayActive, bCursorEverywhere );
     }
+    // Called on the steamcompmgr thread, like SetTitle() below, which already
+    // talks to libdecor from there.
+    //
+    // A REQUEST, not a resize. There is no Wayland request for "make my
+    // toplevel this big" -- a client commits a buffer of the size it wants
+    // and the compositor either lets it stand (a floating window) or answers
+    // with an xdg_toplevel.configure of its own (a tiled one), which
+    // LibDecor_Frame_Configure() then writes back into g_nOutputWidth/Height.
+    // So the honest implementation is exactly what a host-initiated resize
+    // already does, just with our number first: set the output size, mark the
+    // decor commit, and let the next Present() render and commit at it. The
+    // Resolution area reads the real g_nOutputWidth/Height back, so a refused
+    // request shows as the host's answer, not as ours.
+    //
+    // Fullscreen is left first: a fullscreen toplevel's size is the output's,
+    // and libdecor ignores a state size while fullscreen is set.
+    // UpdateFullscreenState() is called directly rather than waiting for the
+    // next Present() so the unset precedes the sized commit.
+    //
+    // uWidth/uHeight are PHYSICAL pixels (what the Facts row reads back);
+    // CommitLibDecor() converts to logical with the surface's current scale.
+    void CWaylandConnector::RequestOutputSize( uint32_t uWidth, uint32_t uHeight )
+    {
+        if ( !uWidth || !uHeight || !m_Planes[0].GetFrame() )
+            return;
+
+        if ( g_bFullscreen || m_bDesiredFullscreenState )
+        {
+            SetFullscreen( false );
+            UpdateFullscreenState();
+        }
+
+        g_nOutputWidth = uWidth;
+        g_nOutputHeight = uHeight;
+        m_Planes[0].RequestDecorCommit();
+        force_repaint();
+    }
+
     void CWaylandConnector::SetTitle( std::shared_ptr<std::string> pAppTitle )
     {
         std::string szTitle = pAppTitle ? *pAppTitle : "gamescope";

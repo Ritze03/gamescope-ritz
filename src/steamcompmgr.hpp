@@ -221,3 +221,12 @@ extern void steamcompmgr_set_force_relative_mouse( bool bForce );
 // from the steamcompmgr thread's own per-frame loop, never from here. See
 // steamcompmgr.cpp's ApplyDefaultCursorPolicy()/ProcessPendingCursorFallbackPolicy().
 extern void steamcompmgr_notify_cursor_appearance_changed();
+
+// Runtime nested resolution and refresh (the Display > Resolution area,
+// Overlay/PanelDisplay.cpp; superdoc/features/resolution-and-refresh.md).
+// Sets the resolution the game sees (Xwayland's RandR screen) and the paced
+// refresh, live, without restarting anything. nRefreshmHz == 0 means "follow
+// the host's refresh" (the -r default). Must be called on the steamcompmgr
+// thread -- it takes wlserver_lock() itself. See the definition's comment for
+// the exact chain it triggers.
+extern void steamcompmgr_set_nested_mode( int nWidth, int nHeight, int nRefreshmHz );

@@ -1063,6 +1063,71 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 	}
 }
 
+// Runtime nested resolution and refresh -- the fork's UI entry point for what
+// Steam Deck's GAMESCOPE_XWAYLAND_MODE_CONTROL root atom already does (see
+// handle_property_notify()'s gamescopeXWaylandModeControl branch below).
+// That atom path deliberately does NOT touch g_nNestedWidth/Height (Steam owns
+// those numbers on the Deck); this one must, because the cursor-scale ratios
+// (steamcompmgr.cpp's XOutputRatio/XRatio), the layer-shell configure size
+// (wlserver.cpp) and the Resolution area's own read-back all come from them.
+//
+// The chain, verified against the code rather than assumed:
+//   wlserver_set_xwayland_server_mode() commits a new custom mode on the
+//   headless wlr_output backing Xwayland #idx
+//   -> Xwayland updates its RandR screen (xrandr inside gamescope reports the
+//      new WxH@Hz) and the X server sends a ConfigureNotify on the ROOT window
+//   -> configure_win() takes the ce->window == ctx->root branch, stores
+//      root_width/height, re-arms placement and MakeFocusDirty()
+//   -> determine_and_apply_focus() force-resizes the focused fullscreen game
+//      window to root_width x root_height (the win_has_game_id() branch).
+// Windowed games with size hints keep their size; games that read the mode
+// list once need a relaunch -- hence the UI's "most games switch instantly; a
+// few only list it after a restart".
+//
+// Refresh needs no chain at all: the vblank timer re-reads g_nNestedRefresh
+// every cycle (vblankmanager.cpp) and the per-frame body recomputes
+// g_SteamCompMgrAppRefreshCycle from it. The only trap is SDL's focus cache,
+// handed to the backend through INestedHints::OnNestedRefreshChanged().
+//
+// With --xwayland-count > 1, server #0 is Steam's and is kept at the OUTPUT
+// size by the per-frame output-changed block (which would fight a nested size
+// written here), so only the game servers (#1..) get the new mode then.
+//
+// Thread: steamcompmgr thread (the Shell's setters run there -- see
+// PanelDisplay.cpp's file-top comment). wlserver_set_xwayland_server_mode()
+// asserts wlserver_lock() is held, so it is taken here, the same way the atom
+// path and the per-frame block take it.
+void steamcompmgr_set_nested_mode( int nWidth, int nHeight, int nRefreshmHz )
+{
+	if ( nWidth <= 0 || nHeight <= 0 || nRefreshmHz < 0 )
+		return;
+
+	g_nNestedWidth = nWidth;
+	g_nNestedHeight = nHeight;
+	g_nNestedRefresh = nRefreshmHz;
+
+	if ( gamescope::IBackendConnector *pConnector = GetBackend()->GetCurrentConnector() )
+	{
+		if ( gamescope::INestedHints *pHints = pConnector->GetNestedHints() )
+			pHints->OnNestedRefreshChanged( nRefreshmHz );
+	}
+
+	// The mode's advertised refresh is what the game sees in xrandr; 0 here
+	// would be an invalid mode, so "follow host" advertises the host's rate,
+	// exactly as wlserver's own startup path does (wlserver.cpp, the
+	// `refresh == 0 -> g_nOutputRefresh` fallback).
+	const int nModeRefreshmHz = nRefreshmHz ? nRefreshmHz : g_nOutputRefresh;
+
+	const size_t uFirstServer = g_nXWaylandCount > 1 ? 1 : 0;
+
+	wlserver_lock();
+	for ( size_t i = uFirstServer; wlserver_get_xwayland_server( i ); i++ )
+		wlserver_set_xwayland_server_mode( i, nWidth, nHeight, nModeRefreshmHz );
+	wlserver_unlock();
+
+	hasRepaint = true;
+}
+
 gamescope::ConCommand cc_debug_set_force_relative_mouse( "debug_set_force_relative_mouse", "Set force-relative-mouse mode (debug)",
 [](std::span<std::string_view> svArgs)
 {

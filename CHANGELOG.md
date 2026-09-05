@@ -12,6 +12,14 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Runtime resolution**: a new Display > Resolution area changes the resolution the
+  game renders at while it runs, with presets from 720p to 4K, a custom size with an
+  aspect lock, and no restart of gamescope or the game.
+- **Runtime refresh rate**: the same area sets the refresh the game is paced at (60 to
+  240 Hz or a custom value), or follows the host screen again.
+- **Window size request**: the Resolution area can ask the desktop to resize the
+  gamescope window; a tiling desktop may refuse, and the area shows the size it
+  granted.
 - **Smoothing update mode glides**: the HUD takes a reading once a second, glides to it
   over 0.3 s and holds still for 0.7 s, instead of easing continuously.
 - **System tab**: a new System settings tab with a clipboard sync switch and a status

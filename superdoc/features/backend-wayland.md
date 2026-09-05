@@ -85,6 +85,12 @@ initialize.
   confirmation can lag the request indefinitely and, observed live under
   `--force-grab-cursor`, may never arrive at all — keying on it alone produced *zero* cursors.
   The shared rule lives in `src/CursorPolicy.h`.
+- **Runtime window-size request** — `INestedHints::RequestOutputSize(w, h)` unsets
+  fullscreen, writes `g_nOutputWidth/Height` and marks plane 0 `RequestDecorCommit()` so the
+  next `Commit()` sends `libdecor_state_new(w, h)` — the same thing a host-initiated
+  `LibDecor_Frame_Configure()` does, with our number first. A tiled host answers with its own
+  configure, which overwrites the globals again; the overlay reads those back rather than the
+  request. See [resolution-and-refresh.md](resolution-and-refresh.md).
 
 ## Using it
 
