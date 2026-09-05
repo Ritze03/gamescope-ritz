@@ -374,6 +374,11 @@ the arithmetic):
   [fps-display.md](fps-display.md#verifying-inverted-mode-pixel-recipe):
   a bright flat client, and the digit core must come out *dark*.
 
+**Automated:** `scripts/pixel-regression.sh` runs the inversion-plus-crosshair
+pixel-sample above, plus the crosshair's own arm/gap/outline geometry, headlessly on
+every run — no laptop, no eyeballing. See `scripts/README.md`'s "Pixel regression"
+section.
+
 ## Known limitation (pre-existing, shared with the HUD)
 
 The ImGui Vulkan backend blends `SRC_ALPHA / ONE_MINUS_SRC_ALPHA` onto a

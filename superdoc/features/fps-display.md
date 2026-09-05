@@ -410,6 +410,11 @@ auto-save, and every combination inverted identically at the baseline and
 at HEAD, on every path (config file, `overlay_e2_set`, the Shell row by
 keyboard and by pointer click, the palette's `adjust`).
 
+**This whole recipe is now automated:** `scripts/pixel-regression.sh` runs it
+headlessly (a private, invisible sway hosting a nested gamescope, no laptop round
+trip) and fails a commit on a regression instead of relying on a human re-measuring
+by hand — see `scripts/README.md`'s "Pixel regression" section.
+
 ## Outline
 
 `outline_strength` (row "Outline size", 0–4 **pixels**, step 0.25,

@@ -61,6 +61,66 @@ scripts/remote-test.sh run -- gamescope-ritz -w 1920 -h 1080 --backend wayland -
 scripts/remote-test.sh screenshot ~/shot.png
 ```
 
+## Pixel regression: does the Inverted HUD still invert the pixel under it
+
+`pixel-regression.sh` is a one-command headless pixel regression gate for the FPS
+HUD/crosshair colour behaviour — inversion, the Fixed-mode colour, both outlines, and
+the crosshair's geometry. It exists because "does the digit actually invert" has
+regressed twice unnoticed (see `superdoc/meta/TERMINOLOGY.md`'s history and the
+`grade-screenshots-not-checklists` memory note) and each time an agent re-did the
+capture-and-sample dance by hand on the laptop. This is that dance, automated, with
+**no visible window** on the desktop and no laptop round trip.
+
+```sh
+scripts/pixel-regression.sh                # run every check (~45s)
+scripts/pixel-regression.sh --only outline # run one check by name
+scripts/pixel-regression.sh --keep         # leave the last instance running for
+                                            # manual `gamescopectl` poking; prints
+                                            # the XDG_RUNTIME_DIR/socket to reach it
+```
+
+**How it sees pixels without touching the real desktop:** a private, invisible sway
+(`WLR_BACKENDS=headless`, its own `XDG_RUNTIME_DIR`, no input devices — nothing any
+real compositor can display) hosts a real nested `gamescope --backend wayland`, and
+`gamescopectl screenshot "<path> 4"` against *that* instance captures the composited
+HUD and crosshair. `gamescope`'s own `--backend headless` was tried first and rejected:
+measured on this rig it captures **no** extra composited layer at all (see
+`superdoc/features/cursor-pipeline.md`'s "Verified by direct X11 query" section) — a
+property of this sandbox's headless Vulkan path, not of the feature under test. The
+test client is `kitty` with matching `-o background=X -o foreground=X -o cursor=X`,
+which paints a perfectly flat colour (xterm is the recipe `superdoc/features/
+fps-display.md` documents, but it isn't installed on this desktop).
+
+**Driving state:** the initial config (`fps_display.*`, `crosshair.*`) is a JSON file
+the script writes into an isolated `XDG_CONFIG_HOME` — never the user's real
+`~/.config/gamescope-ritz`. Everything that changes while an instance is running goes
+through `overlay_e2_set <id> <value>` (the same binding a mouse click writes through)
+and `fps_display_force <n>` (pins the HUD's displayed digit so a screenshot never races
+real frame timing) — both ConCommands over `gamescopectl`, never OS input.
+
+**Adding a check:** every threshold lives as a named constant at the top of the script
+(background colours, tolerances, sample-box geometry) — tune those, never the sampler.
+A check is a `check_*` bash function that calls `take_screenshot`, then one or more
+`run_sampler <subcommand> ...` calls into `pixel_regression_sample.py` (subcommands:
+`pixel`, `digit` — finds a glyph's fill colour in a box and asserts it, `blackcount` —
+counts near-black pixels in a box, `line` — samples a ray of offsets from a centre
+point). Register it in the `should_run`-gated dispatch near the bottom so `--only`
+can select it, and give it a header comment naming the exact assertion (mirroring the
+ones already there).
+
+**Reading a failure:** `results.txt` under the run's own
+`build-release/verify-shots/pixel-regression/<timestamp>/` directory has one line per
+check — `STATUS  name  detail` — plus the PNG each check sampled. A `FAIL` line's
+`detail` names the measured colour/pixel and what was expected; open the matching PNG
+next to it to see why (crop and zoom with PIL rather than trusting the numbers alone —
+see the `grade-screenshots-not-checklists` memory note). A `SKIP` line means `--only`
+excluded that check, not that it failed. Exit code 2 (rather than 1) means a setup
+problem — the binary is missing, sway/gamescopectl aren't found, or an instance never
+came up — not a verdict on the feature; the log line above it says which.
+
+Uses `python3`'s `PIL` (already installed on this machine; no new dependency was
+added — the script fails loudly with a pointer back here if it's ever missing).
+
 ## Installing and updating gamescope-ritz
 
 `install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the
