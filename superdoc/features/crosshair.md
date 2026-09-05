@@ -364,7 +364,15 @@ the arithmetic):
 - Colours and opacity per element; the outline sits outside the fill and a
   translucent line shows the game, not black, through it.
 - Inverted HUD text colour + crosshair: the digits still invert the game
-  and the crosshair keeps its own colour (split mode).
+  and the crosshair keeps its own colour (split mode). **Pixel-sample it;
+  do not eyeball it.** `verify-shots/crosshair/16-inverted-hud.png`
+  (2026-09-04) showed a bright digit over vkcube's dark grey and was
+  accepted as proof — it proved nothing, because over a dark background an
+  inverted digit and a plain white one look the same, and the user then
+  reported "inversion doesn't work" the next day. The recipe that does
+  discriminate is in
+  [fps-display.md](fps-display.md#verifying-inverted-mode-pixel-recipe):
+  a bright flat client, and the digit core must come out *dark*.
 
 ## Known limitation (pre-existing, shared with the HUD)
 

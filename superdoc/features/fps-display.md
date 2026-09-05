@@ -323,6 +323,51 @@ never *under* the digits' invert.
 selector leaves black alone, and the digits invert the game regardless of
 how thick the outline is.
 
+### Verifying Inverted mode (pixel recipe)
+
+A screenshot that *shows* the digits proves nothing about inversion: over a
+dark game (vkcube's flat `(51,51,51)`) an inverted digit is `(251,251,251)`
+and a plain white one is `(255,255,255)` — indistinguishable by eye, and
+the one accepted on 2026-09-04 (`verify-shots/crosshair/16-inverted-hud.png`)
+was exactly that. Over a **bright** background the two diverge completely,
+so that is the check. On the laptop (`scripts/remote-test.sh`), with a
+scratch `XDG_CONFIG_HOME` holding `fps_display.color_mode = "inverted"`,
+`backdrop_opacity 0`, `outline_strength 0`, `font_size 48`, anchor
+`top-center`:
+
+```
+gamescope-ritz -W 1280 -H 720 --force-windows-fullscreen -- \
+    xterm -bg '#bcbcbc' -fg '#bcbcbc' +sb -e sleep 600
+gamescopectl screenshot "/path/shot.png 4"      # one quoted argument
+```
+
+then sample the digit core and the flat background beside it. Expected,
+measured 2026-09-05 at both `0ff8a55` and `773b7e9` (Intel/ANV, nested
+Wayland; captures in `build-release/verify-shots/inversion/`):
+
+| background (encoded) | inverting digit core | not inverting |
+|---|---|---|
+| `(188,188,188)` xterm `#bcbcbc` | `(90,90,90)` — the mid-grey guard's push | `(255,255,255)`, or the accent colour |
+| `(51,51,51)` vkcube | `(251,251,251)` | `(255,255,255)` |
+| `(114,114,114)` vkcube + Shadow Control | `(235,235,235)` | `(255,255,255)` |
+| `(148,148,148)` vkcube's cube face | `(218–221)` — legible but faint, see below | `(255,255,255)` |
+
+The bright row is the only one that discriminates at a glance. Repeat it
+with the crosshair on (split mode) and, when the user's config is known,
+with the user's own settings — the 2026-09-05 report was investigated
+under FSR + STRETCH + all three native effects + font 13 + outline 1 +
+active profile with auto-save, and every combination inverted identically
+at the baseline and at HEAD, on every path (config file, `overlay_e2_set`,
+the Shell row by keyboard and by pointer click, the palette's `adjust`).
+
+**Why a user can still read the result as "not inverting":** the guard
+works in *linear* light. Over the mid-tones that dominate most game
+scenes (encoded ~120–190) the inverted digit lands at encoded ~215–225 —
+a washed-out light grey that reads as "white text that ignores the
+background" unless the outline is on. That is the documented tension in
+`kMinLumaSeparation`, not a defect in the blend; it has been so since the
+floor was set on 2026-09-03.
+
 ## Outline
 
 `outline_strength` (row "Outline size", 0–4 **pixels**, step 0.25,
