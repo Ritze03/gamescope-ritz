@@ -63,9 +63,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
-- **Delete / Use / Rename profile act on the profile shown**: with a profile that already
-  existed when gamescope started, the picker showed it selected but the three buttons
-  did nothing; they now act on the profile the picker shows.
+- **Delete / Use / Rename profile act on the profile shown**: with a profile that
+  already existed when gamescope started, the picker showed it selected but the three
+  buttons did nothing; they now act on the profile the picker shows.
 - **Resolution change from the console no longer hangs**: `gamescopectl overlay_e2_set
   display.resolution.preset N` returns at once instead of freezing every later command.
 - **Clipboard sync setting takes effect from launch**: turning clipboard sync off now
