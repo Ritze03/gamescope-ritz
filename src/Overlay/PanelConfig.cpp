@@ -1,5 +1,6 @@
-// M7 Config panel -- see PanelConfig.h and superdoc/planning/SPEC.md's
-// Feature 6 ("Config system") and "UI structure" -> "Config/Profiles panel".
+// The Setup section's Profiles / Per-game / Appearance areas -- see
+// PanelConfig.h, superdoc/features/profiles-and-per-game.md, and
+// superdoc/planning/SPEC.md's Feature 6 ("Config system").
 //
 // Thread safety: drawn from SettingsOverlay_AddLayer() on the steamcompmgr
 // thread, same as PanelDisplay.cpp/PanelShaders.cpp -- see PanelDisplay.cpp's
@@ -17,6 +18,20 @@
 // choosing *which* file that is (the override checkbox), and bulk-loading a
 // profile or another game's config into it -- never hand-editing individual
 // sliders itself, which would just duplicate those three panels' widgets.
+//
+// WRITES FROM THIS PANEL ARE SYNCHRONOUS (requests-2026-09-05 item 3).
+// Every action here is one button press, not a slider tick, and every one
+// of them is immediately followed by RefreshLists() re-reading the
+// directory -- so the write has to have landed by then. The Enqueue*
+// background-writer family (ConfigManager.h) exists for the per-tick
+// writes the other panels make; used here it produced the bug the user
+// reported ("I need to restart the whole game to actually see a freshly
+// created profile"): the write was still queued when the list was
+// re-read, the cached list never moved, the Rebuilds() hash never moved,
+// and the new profile did not appear until the next process. The only
+// exception is the routed write of a Use/Restore (EnqueueRoutedWrite),
+// which nothing here re-reads afterwards -- the panel updates its own
+// state from the value it just wrote.
 #include "PanelConfig.h"
 
 #include <algorithm>
@@ -66,6 +81,11 @@ namespace gamescope
 
 		int s_nSelectedProfile = -1;
 		int s_nSelectedCopyGame = -1;
+		// Per-game's "Start from profile" picks from the same list as
+		// Profiles' "Use this profile" but keeps its own selection, so
+		// browsing one area never silently changes what the other's button
+		// would do.
+		int s_nStartFromProfile = -1;
 		char s_szNewProfileName[ 64 ] = {};
 
 		// Issue #43 recommendation #10: provenance readout, refreshed
@@ -83,6 +103,14 @@ namespace gamescope
 		// clicks, not a toast/notification queue.
 		std::string s_sStatus;
 
+		// The one-step backup behind "Use this profile" / "Start from
+		// profile" -- see panelconfig::SettingsBackup (PanelConfig.h) for
+		// what it holds and why it lives in memory only. Set by UseProfile(),
+		// consumed by RestorePreviousSettings(). Its presence is part of
+		// ConfigGenerationHash(), which is how the "Restore previous
+		// settings" row appears and disappears.
+		std::optional<panelconfig::SettingsBackup> s_oBackup;
+
 		// ---- window-chrome overhaul: General tab (scale/opacity/effects) --
 		// Unlike the Per-Game tab's fields above, this DOES keep its own
 		// cached config::Settings -- see DrawGeneralTab()'s own comment for
@@ -92,6 +120,19 @@ namespace gamescope
 		// session file).
 		bool s_bGeneralSettingsLoaded = false;
 		config::Settings s_GeneralSettings;
+
+		// Whichever file is authoritative for this session right now, read
+		// fresh: games/<AppId>.json while "Use separate settings for this
+		// game" is on, global.json otherwise. Every action that copies
+		// something in (a profile, another game's config) or out (save as
+		// new profile) starts from this. A real disk read -- only ever
+		// called from a button press or RefreshLists(), never per frame.
+		config::Settings CurrentTarget()
+		{
+			return ( s_bOverrideActive && s_oAppId )
+				? config::ResolveEffective( s_oAppId )
+				: config::LoadGlobal();
+		}
 
 		void RefreshLists()
 		{
@@ -107,19 +148,18 @@ namespace gamescope
 
 			if ( s_nSelectedProfile >= (int)s_ProfileNames.size() )
 				s_nSelectedProfile = s_ProfileNames.empty() ? -1 : 0;
+			if ( s_nStartFromProfile >= (int)s_ProfileNames.size() )
+				s_nStartFromProfile = s_ProfileNames.empty() ? -1 : 0;
 			if ( s_nSelectedCopyGame >= (int)s_OtherGameIds.size() )
 				s_nSelectedCopyGame = s_OtherGameIds.empty() ? -1 : 0;
 
 			// Issue #43 recommendation #10: re-read whichever file is
 			// currently authoritative (same "per-game if override active,
-			// else global" rule ApplySelectedProfile()/SaveCurrentAsNewProfile()
+			// else global" rule UseProfile()/SaveCurrentAsNewProfile()
 			// already use below) for its provenance breadcrumb. A real read,
 			// not free -- but this only runs on RefreshLists()'s own
 			// trigger points (init + after an action), never once per frame.
-			config::Settings current = ( s_bOverrideActive && s_oAppId )
-				? config::ResolveEffective( s_oAppId )
-				: config::LoadGlobal();
-			s_sLastAppliedProfile = current.last_applied_profile;
+			s_sLastAppliedProfile = CurrentTarget().last_applied_profile;
 		}
 
 		// overlay.* is process-level/global.json-only (ConfigSchema.h's own
@@ -283,43 +323,65 @@ namespace gamescope
 		// (Config/ConfigManager.h) so PanelDisplay/PanelShaders/FpsDisplay's
 		// own EnsureConfigLoaded() picks up the change on their very next
 		// draw, without needing a restart -- see those files' M7 comments.
+		//
+		// And every action here WRITES SYNCHRONOUSLY -- see the file-level
+		// comment. The precedent is DisableOverride() below, which always
+		// did: a one-off atomic rewrite from a button press does not need
+		// the background writer that per-tick slider edits do.
 
-		// "Override Global Config" ON (DECISIONS.md #19, amended -- issue
-		// #43): if games/<AppId>.json already has saved values on disk (left
-		// behind by a previous DisableOverride, which no longer deletes it --
-		// see that function below), RESTORE them in place rather than
-		// re-snapshotting from global. "I turned this off and then on again"
-		// is expected to bring back what was there, not silently discard it
-		// -- re-snapshotting here would reintroduce the exact data loss issue
-		// #43 was about, one step later. Only when no saved file exists at
-		// all does this fall back to the original behaviour: a FULL SNAPSHOT
-		// of whatever is currently effective (global.json) -- not a sparse
-		// delta, and later global.json edits won't reach this game from this
-		// point on.
-		void EnableOverride()
+		// "Use separate settings for this game" ON (DECISIONS.md #19,
+		// amended -- issue #43): if games/<AppId>.json already has saved
+		// values on disk (left behind by a previous DisableOverride, which
+		// no longer deletes it -- see that function below), RESTORE them in
+		// place rather than re-snapshotting from global. "I turned this off
+		// and then on again" is expected to bring back what was there, not
+		// silently discard it -- re-snapshotting here would reintroduce the
+		// exact data loss issue #43 was about, one step later. Only when no
+		// saved file exists at all does this fall back to the original
+		// behaviour: a FULL SNAPSHOT of whatever is currently effective
+		// (global.json) -- not a sparse delta, and later global.json edits
+		// won't reach this game from this point on.
+		//
+		// Returns the one-line status for the caller to toast, so "Start
+		// from profile" (which enables and then copies a profile in, in one
+		// press) can show a single message instead of two.
+		std::string EnableOverrideNoToast()
 		{
 			if ( !s_oAppId )
-				return;
+				return {};
 
+			std::string sStatus;
 			if ( config::HasSavedPerGameConfig( *s_oAppId ) && config::RestorePerGameOverride( *s_oAppId ) )
 			{
-				s_sStatus = "Override enabled -- restored this game's previously saved config.";
+				sStatus = "This game now uses its own settings -- the ones you saved for it before.";
 			}
 			else
 			{
-				config::Settings snapshot = config::ResolveEffective( s_oAppId );
-				config::EnqueuePerGameSnapshot( *s_oAppId, snapshot );
-				s_sStatus = "Override enabled -- current settings snapshotted for this game.";
+				// Synchronous on purpose: RefreshLists() right after this
+				// reads HasSavedPerGameConfig() from disk, and the Delete
+				// row's existence hangs off that answer. Queued, the file was
+				// not there yet, the hash did not move, and the row was
+				// missing until something else rebuilt the area.
+				config::SnapshotPerGameOverride( *s_oAppId, config::ResolveEffective( s_oAppId ) );
+				sStatus = "This game now uses its own settings -- a copy of your current ones.";
 			}
 
 			config::SetSessionOverrideActive( true );
 			config::BumpConfigGeneration();
 			s_bOverrideActive = true;
-			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
+			s_sStatus = sStatus;
 			RefreshLists();
+			return sStatus;
 		}
 
-		// "Override Global Config" OFF (issue #43): deactivates
+		void EnableOverride()
+		{
+			std::string sStatus = EnableOverrideNoToast();
+			if ( !sStatus.empty() )
+				gamescope::Notifications::Show( sStatus, gamescope::Notifications::Kind::Ok );
+		}
+
+		// "Use separate settings for this game" OFF (issue #43): deactivates
 		// games/<AppId>.json by flipping its own override_global field to
 		// false IN PLACE -- it no longer deletes the file. This game falls
 		// back to reading global.json again, per Feature 6's strictly-
@@ -334,7 +396,9 @@ namespace gamescope
 		// the way EnqueueRoutedWrite() below does. The Enqueue* family
 		// exists for the fsync()+rename() write paths that can be hit
 		// continuously by a slider drag; a one-off rewrite from a button
-		// click doesn't need the same treatment.
+		// click doesn't need the same treatment. (Since item 3 this is the
+		// rule for the whole panel, not the exception -- see the file-level
+		// comment.)
 		void DisableOverride()
 		{
 			if ( !s_oAppId )
@@ -343,7 +407,7 @@ namespace gamescope
 			config::SetSessionOverrideActive( false );
 			config::BumpConfigGeneration();
 			s_bOverrideActive = false;
-			s_sStatus = "Override disabled -- back to global. This game's saved config was kept, not deleted.";
+			s_sStatus = "This game uses the shared settings again. What you saved for it was kept, not deleted.";
 			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Info );
 			RefreshLists();
 		}
@@ -354,8 +418,7 @@ namespace gamescope
 		// the currently-resolved app id -- never global.json, never anything
 		// under profiles/ -- and DeletePerGameOverride() itself refuses to
 		// touch anything outside GamesDir() as a second layer of defense.
-		// Called from the confirmation modal in DrawPerGameTab(), never
-		// directly from the delete button.
+		// Armed by the row's Confirm(), never a single press.
 		void DeleteSavedPerGameConfig()
 		{
 			if ( !s_oAppId )
@@ -369,76 +432,152 @@ namespace gamescope
 				s_bOverrideActive = false;
 			}
 			s_sStatus = bOk
-				? "Deleted this game's saved config. Back to global."
-				: "Failed to delete this game's saved config.";
+				? "Deleted this game's saved settings. Back to the shared settings."
+				: "Failed to delete this game's saved settings.";
 			gamescope::Notifications::Show( s_sStatus,
 				bOk ? gamescope::Notifications::Kind::Info : gamescope::Notifications::Kind::Error );
 			RefreshLists();
 		}
 
-		// Copies values from a profile into whichever file is currently
-		// authoritative (the per-game snapshot if override is active, else
-		// global.json) -- a ONE-TIME COPY (DECISIONS.md #20): the target
-		// has no memory of which profile it came from, and later edits to
-		// the profile do not retroactively affect it.
-		void ApplySelectedProfile()
+		// "Use this profile" (Profiles) and the second half of "Start from
+		// profile" (Per-game): copies profile sName into whichever file is
+		// authoritative right now -- a ONE-TIME COPY (DECISIONS.md #20): the
+		// target has no memory of which profile it came from, and later
+		// edits to the profile do not retroactively affect it.
+		//
+		// Takes the one-step backup FIRST (DECISIONS.md #20, extended): the
+		// old Apply overwrote the user's live settings wholesale with no way
+		// back, which is the "scared to touch it" the user reported. The
+		// backup is the safety net, so Use itself needs no confirm step.
+		//
+		// Sets s_sStatus; does not toast -- the caller does, so the two
+		// entry points can word their own messages. Returns false, changing
+		// nothing, if the profile cannot be read.
+		bool UseProfile( const std::string &sName )
 		{
-			if ( s_nSelectedProfile < 0 || s_nSelectedProfile >= (int)s_ProfileNames.size() )
-				return;
-			const std::string &sName = s_ProfileNames[ s_nSelectedProfile ];
-
-			config::Settings target = ( s_bOverrideActive && s_oAppId )
-				? config::ResolveEffective( s_oAppId )
-				: config::LoadGlobal();
+			config::Settings target = CurrentTarget();
+			panelconfig::SettingsBackup backup{ target, sName, s_bOverrideActive };
 
 			if ( !config::ApplyProfile( target, sName ) )
 			{
-				s_sStatus = "Failed to apply profile '" + sName + "'.";
-				return;
+				s_sStatus = "Couldn't read profile '" + sName + "'. Nothing was changed.";
+				return false;
 			}
 
+			s_oBackup = std::move( backup );
+
+			// The one queued write left in this panel -- and the one that
+			// does not race anything: nothing below re-reads the file. The
+			// panel's own view (s_sLastAppliedProfile) is set from `target`,
+			// which is exactly what ApplyProfile() just wrote into it.
 			config::EnqueueRoutedWrite( target );
 			config::BumpConfigGeneration();
-			s_sStatus = "Applied profile '" + sName + "'.";
-			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
-
-			// Issue #43 recommendation #10: set directly from `target`
-			// (already in memory, and what config::ApplyProfile() just set
-			// its own last_applied_profile to) rather than a RefreshLists()
-			// disk re-read -- EnqueueRoutedWrite() above is a queued
-			// background write, so a synchronous re-read here could race it
-			// and briefly show the old value.
 			s_sLastAppliedProfile = sName;
+			s_sStatus = "Now using profile '" + sName + "'. Your previous settings are kept as a backup.";
+			return true;
 		}
 
-		// Saves whichever config is currently in effect (per-game if
-		// override is active, else global) as a brand new named profile --
-		// SanitizeProfileName() (reused from M0) is what keeps user text
-		// input from ever escaping profiles/ as a path.
+		void UseSelectedProfile()
+		{
+			if ( s_nSelectedProfile < 0 || s_nSelectedProfile >= (int)s_ProfileNames.size() )
+				return;
+			const bool bOk = UseProfile( s_ProfileNames[ s_nSelectedProfile ] );
+			gamescope::Notifications::Show( s_sStatus,
+				bOk ? gamescope::Notifications::Kind::Ok : gamescope::Notifications::Kind::Error );
+		}
+
+		// "Restore previous settings": writes the backup UseProfile() took
+		// back to the file it came from, then forgets it (one step back,
+		// never two). Refuses -- and the row is disabled with a reason --
+		// when the routing has changed since the backup was taken; see
+		// panelconfig::BackupMatchesRouting().
+		void RestorePreviousSettings()
+		{
+			if ( !s_oBackup || !panelconfig::BackupMatchesRouting( *s_oBackup, s_bOverrideActive ) )
+				return;
+
+			config::EnqueueRoutedWrite( s_oBackup->settings );
+			config::BumpConfigGeneration();
+			s_sLastAppliedProfile = s_oBackup->settings.last_applied_profile;
+			s_sStatus = "Restored the settings you had before using '" + s_oBackup->sReplacedBy + "'.";
+			s_oBackup.reset();
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
+		}
+
+		// Per-game's "Start from profile": the explicit form of what used to
+		// take two steps in two areas (turn the override on here, then go
+		// Apply over in Profiles). Turns separate settings on if they are
+		// off, then copies the chosen profile into this game's own file.
+		// Same one-step backup as Use -- of this game's own settings as
+		// they were just before the copy (for a game whose separate
+		// settings were just switched on, that is the copy of global it
+		// started from, or the saved values a previous "off" left behind).
+		void StartFromProfile()
+		{
+			if ( !s_oAppId || s_nStartFromProfile < 0 || s_nStartFromProfile >= (int)s_ProfileNames.size() )
+				return;
+			const std::string sName = s_ProfileNames[ s_nStartFromProfile ];
+
+			if ( !s_bOverrideActive )
+				EnableOverrideNoToast();
+
+			const bool bOk = UseProfile( sName );
+			if ( bOk )
+				s_sStatus = "This game now uses its own settings, starting from profile '" + sName +
+				            "'. Its previous settings are kept as a backup.";
+			gamescope::Notifications::Show( s_sStatus,
+				bOk ? gamescope::Notifications::Kind::Ok : gamescope::Notifications::Kind::Error );
+		}
+
+		// "Save as new profile": saves whichever config is currently in
+		// effect (per-game if separate settings are on, else global) under
+		// a brand new name -- SanitizeProfileName() (reused from M0) is what
+		// keeps user text input from ever escaping profiles/ as a path.
+		//
+		// SYNCHRONOUS -- this is the function the user's report was about.
+		// config::SaveProfile() has returned with the file on disk before
+		// RefreshLists() lists the directory, so the new name is in
+		// s_ProfileNames, the Rebuilds() hash moves, and the picker shows it
+		// on the very next frame. The old EnqueueProfileWrite() lost that
+		// race every time.
 		void SaveCurrentAsNewProfile()
 		{
 			std::optional<std::string> oSanitized = config::SanitizeProfileName( s_szNewProfileName );
 			if ( !oSanitized )
 			{
 				s_sStatus = "Profile name can't be empty (letters/digits/space/-/_ only).";
+				gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Warning );
 				return;
 			}
 
-			config::Settings current = ( s_bOverrideActive && s_oAppId )
-				? config::ResolveEffective( s_oAppId )
-				: config::LoadGlobal();
+			if ( !config::SaveProfile( *oSanitized, CurrentTarget() ) )
+			{
+				s_sStatus = "Couldn't save profile '" + *oSanitized + "'.";
+				gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Error );
+				return;
+			}
 
-			config::EnqueueProfileWrite( *oSanitized, current );
-			s_sStatus = "Saved profile '" + *oSanitized + "'.";
+			s_sStatus = "Saved profile '" + *oSanitized + "'. It's in the list above.";
 			s_szNewProfileName[ 0 ] = '\0';
 			RefreshLists();
+
+			// Select what was just saved, so "Use this profile" is one press
+			// away and the user can SEE the save happened without hunting
+			// through the list.
+			const auto it = std::find( s_ProfileNames.begin(), s_ProfileNames.end(), *oSanitized );
+			if ( it != s_ProfileNames.end() )
+				s_nSelectedProfile = (int)( it - s_ProfileNames.begin() );
+
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
 		}
 
 		// Copies another game's *entire* config into this game's own
 		// per-game file -- same full-snapshot, one-time-copy semantics as
-		// EnableOverride()/ApplySelectedProfile() above, and implicitly
-		// turns "Override Global Config" on for this game too (there's no
-		// other file for a per-game copy to land in).
+		// EnableOverride()/UseProfile() above, and implicitly turns separate
+		// settings on for this game too (there's no other file for a
+		// per-game copy to land in). Synchronous for the same reason as
+		// SaveCurrentAsNewProfile(): RefreshLists() right after needs the
+		// file to exist.
 		void CopySelectedGameConfig()
 		{
 			if ( !s_oAppId || s_nSelectedCopyGame < 0 || s_nSelectedCopyGame >= (int)s_OtherGameIds.size() )
@@ -452,15 +591,17 @@ namespace gamescope
 			std::optional<config::Settings> oSource = config::LoadPerGameOverride( sSourceId );
 			if ( !oSource )
 			{
-				s_sStatus = "Couldn't read app " + sSourceId + "'s config.";
+				s_sStatus = "Couldn't read app " + sSourceId + "'s settings.";
+				gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Error );
 				return;
 			}
 
-			config::EnqueuePerGameSnapshot( *s_oAppId, *oSource );
+			config::SnapshotPerGameOverride( *s_oAppId, *oSource );
 			config::SetSessionOverrideActive( true );
 			config::BumpConfigGeneration();
 			s_bOverrideActive = true;
-			s_sStatus = "Copied app " + sSourceId + "'s config to this game.";
+			s_sStatus = "Copied app " + sSourceId + "'s settings to this game.";
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
 			RefreshLists();
 		}
 
@@ -476,7 +617,7 @@ namespace gamescope
 	// group sheet would be the same tab bar redrawn as headings.
 	//
 	// Nothing about what these WRITE changed. Same config keys, same
-	// EnableOverride/DisableOverride/ApplySelectedProfile/... functions,
+	// EnableOverride/DisableOverride/UseProfile/... functions,
 	// same routing rules -- including the awkward one that makes the badge
 	// necessary: Appearance always writes global.json, even for a game with
 	// an override active, while Per-game's own toggle routes per session.
@@ -498,7 +639,7 @@ namespace gamescope
 
 		std::string PerGameFilePath()
 		{
-			return s_oAppId ? ( "games/" + *s_oAppId + ".json" ) : std::string( "(no app id)" );
+			return panelconfig::PerGameFilePath( s_oAppId );
 		}
 
 		// ---- profiles ---------------------------------------------------
@@ -514,31 +655,24 @@ namespace gamescope
 		// Profiles and other-game configs are BOTH dynamic sets -- a profile
 		// appears the moment one is saved, and another game's config appears
 		// the moment that game first overrides. So Setup uses the same
-		// rebuild mechanism Audio does (ui::Area::Rebuilds).
+		// rebuild mechanism Audio does (ui::Area::Rebuilds). The inputs are
+		// listed in panelconfig::StatusInputs (PanelConfig.h); the two new
+		// ones since item 3 are the last-applied profile (the Status rows)
+		// and the backup's presence (the "Restore previous settings" row).
 		uint64_t ConfigGenerationHash()
 		{
 			EnsureInitialized();
 
-			uint64_t ulHash = 1469598103934665603ull;
-			const auto Mix = [ &ulHash ]( std::string_view sv )
-			{
-				for ( unsigned char c : sv )
-				{
-					ulHash ^= c;
-					ulHash *= 1099511628211ull;
-				}
-				ulHash ^= 0xff;
-				ulHash *= 1099511628211ull;
-			};
-
-			Mix( s_oAppId ? *s_oAppId : std::string( "-" ) );
-			Mix( s_bOverrideActive ? "override" : "global" );
-			Mix( s_bHasSavedPerGameConfig ? "saved" : "nosaved" );
-			for ( const std::string &s : s_ProfileNames )
-				Mix( s );
-			for ( const std::string &s : s_OtherGameIds )
-				Mix( s );
-			return ulHash;
+			panelconfig::StatusInputs in;
+			in.oAppId = s_oAppId;
+			in.bOverrideActive = s_bOverrideActive;
+			in.bHasSavedPerGameConfig = s_bHasSavedPerGameConfig;
+			in.vecProfileNames = s_ProfileNames;
+			in.vecOtherGameIds = s_OtherGameIds;
+			in.sLastAppliedProfile = s_sLastAppliedProfile;
+			in.bHasBackup = s_oBackup.has_value();
+			in.bBackupWasOverride = s_oBackup ? s_oBackup->bWasOverride : false;
+			return panelconfig::StatusHash( in );
 		}
 
 		void RebuildProfileOptions()
@@ -550,6 +684,18 @@ namespace gamescope
 				s_dqProfileText.emplace_back( s_ProfileNames[ i ] );
 				s_vecProfileOptions.push_back( { (int)i, s_dqProfileText.back().c_str() } );
 			}
+			// The picker exists even before the first profile is saved --
+			// as a disabled row that says so -- instead of vanishing. A row
+			// that is not there cannot explain why, and the old "the whole
+			// picker is missing until I restart" report was exactly the
+			// first-profile case: the row was registered only when the list
+			// was non-empty, and the list never refreshed (see the
+			// file-level comment).
+			if ( s_vecProfileOptions.empty() )
+			{
+				s_dqProfileText.emplace_back( "no profiles yet" );
+				s_vecProfileOptions.push_back( { 0, s_dqProfileText.back().c_str() } );
+			}
 
 			s_dqGameText.clear();
 			s_vecGameOptions.clear();
@@ -560,14 +706,54 @@ namespace gamescope
 			}
 		}
 
+		bool HasProfiles() { return !s_ProfileNames.empty(); }
+		bool CanRestore()  { return s_oBackup && panelconfig::BackupMatchesRouting( *s_oBackup, s_bOverrideActive ); }
+
+		constexpr const char *kNoProfilesReason =
+			"no profiles yet -- save one in the Profiles area first";
+		constexpr const char *kRestoreRoutingReason =
+			"the backup was taken for a different settings file -- switch \"Use separate "
+			"settings for this game\" back the way it was when you used the profile, then restore";
+
 		// ---- Per-game ---------------------------------------------------
 		void BuildPerGameArea( ui::Area &a )
 		{
 			RebuildProfileOptions();
 
-			a.Group( "Routing" );
+			// Status first: what this game is running with, before any
+			// control that changes it. The bare "resolved app id" used to
+			// sit at the bottom of Diagnostics; it is the first thing a
+			// newcomer needs to know, so it leads here.
+			a.Group( "Status" );
+			a.Facts( "config.status", "This game",
+				[]{
+					if ( !s_oAppId )
+						return std::string( "no game identified" );
+					return s_bOverrideActive ? std::string( "own settings" ) : std::string( "shared settings" );
+				} )
+				.Help( "What this game is running with right now: which game was recognised, whether "
+				       "it has its own settings, and which profile they came from." )
+				.Keywords( "status game app id own settings profile saved on disk" )
+				.Live( "game", []{
+					return ui::Fact{ "game", panelconfig::GameFact( s_oAppId ) };
+				} )
+				.Live( "own", []{
+					return ui::Fact{ "own settings", panelconfig::OwnSettingsFact( s_bOverrideActive ) };
+				} )
+				.Live( "profile", []{
+					return ui::Fact{ "profile", panelconfig::ProfileFact( s_sLastAppliedProfile ) };
+				} )
+				.Live( "saved", []{
+					return ui::Fact{ "saved settings on disk", s_bHasSavedPerGameConfig
+						? ( "yes -- " + PerGameFilePath() ) : std::string( "no" ) };
+				} );
+			// PHASE B SEAM (requests-2026-09-05 item 3): a `changes since
+			// applied` fact goes here once Settings carries `active_profile`
+			// and a dirty count can be computed against the profile file.
 
-			a.Switch( "config.override", "Override global config",
+			a.Group( "Settings for this game" );
+
+			a.Switch( "config.override", "Use separate settings for this game",
 				ui::AnyBind::Of<bool>(
 					[]{ return s_bOverrideActive; },
 					[]( bool bOn )
@@ -577,22 +763,57 @@ namespace gamescope
 						else
 							DisableOverride();
 					} ) )
-				.Help( "Gives this game its own settings, separate from everything else. Turn it on to "
-				       "customise just this game; turning it off later keeps what you saved, so turning "
-				       "it back on brings those settings back." )
+				.Help( "On: this game gets its own copy of your settings, applied every time it starts; "
+				       "changes you make while playing are saved to it. Off: this game uses the shared "
+				       "settings again -- what you saved for it is kept." )
 				.Default( false )
-				.Keywords( "override per game routing config file app id snapshot" )
+				.Keywords( "separate settings per game override routing config file app id snapshot" )
 				.DisabledUnless( []{ return s_oAppId.has_value(); },
 					"no game was identified for this session -- gamescope-ritz was launched without "
 					"GS_RITZ_APPID or a Steam app-id, so there is no per-game file to write. Every "
 					"other panel is writing to global.json." );
+
+			// "This game -> profile X", said once, in one place. Before this
+			// row the same thing took the switch above plus a trip to the
+			// Profiles area, and nothing told the user those two steps were
+			// one idea.
+			a.Action( "config.start_from_profile", "Start from profile", "use",
+				[]{ StartFromProfile(); } )
+				.Help( "Copies a profile into this game's settings, switching separate settings on if "
+				       "they were off. Later changes to the profile won't follow -- edit here, or use it "
+				       "again. Your previous settings are kept as a backup." )
+				.Keywords( "start from profile use apply per game preset copy" )
+				.DisabledUnless( []{ return s_oAppId.has_value() && HasProfiles(); },
+					"needs a recognised game and at least one saved profile -- save one in the "
+					"Profiles area first" )
+				.Param( "profile", "Profile",
+					ui::AnyBind::Of<int>(
+						[]{ return std::max( s_nStartFromProfile, 0 ); },
+						[]( int n ) { s_nStartFromProfile = n; } ),
+					s_vecProfileOptions.data(), s_vecProfileOptions.size() )
+					.Help( "Which profile to copy into this game's settings." )
+					.Default( 0 )
+					.DisabledUnless( HasProfiles, kNoProfilesReason );
+
+			// The backup Use/Start from profile took, when it was taken FOR
+			// THIS GAME's file. A backup taken for global.json is restored
+			// from the Profiles area, where it was made.
+			if ( s_oBackup && s_oBackup->bWasOverride )
+			{
+				a.Action( "config.restore", "Restore previous settings", "restore",
+					[]{ RestorePreviousSettings(); } )
+					.Help( "Brings back the settings this game had before you last started it from a "
+					       "profile. Available until you use another profile." )
+					.Keywords( "restore undo previous settings backup profile" )
+					.DisabledUnless( CanRestore, kRestoreRoutingReason );
+			}
 
 			// Copying another game's config. The SOURCE is a parameter
 			// rather than a second row: SPEC §5.3's whole argument is that
 			// an action's operand is depth, and the sheet keeps the verb.
 			if ( !s_OtherGameIds.empty() )
 			{
-				a.Action( "config.copy", "Copy another game's config", "copy",
+				a.Action( "config.copy", "Copy another game's settings", "copy",
 					[]{ CopySelectedGameConfig(); } )
 					.Help( "Copies another game's settings into this game and switches this game to its "
 					       "own settings. It's a one-time copy: later changes to that other game won't "
@@ -616,7 +837,7 @@ namespace gamescope
 			// site has to remember to open.
 			if ( s_bHasSavedPerGameConfig )
 			{
-				a.Action( "config.delete", "Delete saved config", "delete...",
+				a.Action( "config.delete", "Delete saved settings", "delete...",
 					[]{ DeleteSavedPerGameConfig(); } )
 					.Confirm( "delete permanently?" )
 					.Help( "Deletes this game's saved settings for good -- this can't be undone. Press "
@@ -625,26 +846,24 @@ namespace gamescope
 			}
 
 			a.Group( "Diagnostics" );
-			a.Facts( "config.routing", "Resolution order",
-				[]{ return s_bOverrideActive ? std::string( "2 layers" ) : std::string( "global only" ); } )
-				.Help( "Shows whether this game is using its own settings or the shared global "
-				       "ones." )
-				.Keywords( "routing resolution order layers provenance app id" )
-				.Live( "app_id", []{
-					return ui::Fact{ "resolved app id", s_oAppId ? *s_oAppId : "none -- no app id for this session" };
+			a.Facts( "config.routing", "Using",
+				[]{ return s_bOverrideActive ? std::string( "this game's file" ) : std::string( "global" ); } )
+				.Help( "Which settings file this game is reading from, and which one is set aside." )
+				.Keywords( "routing resolution using file provenance layers" )
+				.Live( "file", []{
+					return ui::Fact{ "settings file", s_bOverrideActive
+						? ( PerGameFilePath() + "  (this game's own)" )
+						: std::string( "global.json  (shared)" ) };
 				} )
-				.Live( "layer1", []{
-					return ui::Fact{ "1 - per-game", s_bOverrideActive
-						? ( PerGameFilePath() + "  (active)" )
+				.Live( "aside", []{
+					return ui::Fact{ "set aside", s_bOverrideActive
+						? std::string( "global.json -- this game's own settings win" )
 						: ( s_bHasSavedPerGameConfig
-							? ( PerGameFilePath() + "  (saved, not active)" )
+							? ( PerGameFilePath() + " -- saved, switched off" )
 							: std::string( "none" ) ) };
 				} )
-				.Live( "layer2", []{
-					return ui::Fact{ "2 - global", s_bOverrideActive ? "global.json (shadowed)" : "global.json (active)" };
-				} )
-				.Live( "layer3", []{
-					return ui::Fact{ "3 - default", "compiled in" };
+				.Live( "default", []{
+					return ui::Fact{ "if a value is missing", "the built-in default is used" };
 				} )
 				.Live( "root", []{
 					return ui::Fact{ "config directory", config::ConfigRoot() };
@@ -659,30 +878,76 @@ namespace gamescope
 		{
 			RebuildProfileOptions();
 
-			a.Group( "Saved profiles" );
-
-			if ( !s_ProfileNames.empty() )
+			// Status first: "what is in use" was the question the old area
+			// never answered outright -- the last-applied profile was a
+			// Diagnostics fact at the very bottom.
+			a.Group( "Status" );
+			ui::Entry &status = a.Facts( "profiles.status", "In use",
+				[]{ return s_sLastAppliedProfile.empty()
+					? std::string( "no profile" ) : s_sLastAppliedProfile; } )
+				.Help( "Which profile your current settings came from, where your edits are being "
+				       "saved, and when." )
+				.Keywords( "status in use profile edits go to saving backup" )
+				.Live( "profile", []{
+					return ui::Fact{ "profile", s_sLastAppliedProfile.empty()
+						? std::string( "none -- your settings were never copied from a profile" )
+						: s_sLastAppliedProfile };
+				} )
+				.Live( "target", []{
+					return ui::Fact{ "edits go to", panelconfig::EditsGoTo( s_oAppId, s_bOverrideActive ) };
+				} )
+				.Live( "saving", []{
+					return ui::Fact{ "saving", "every change is saved to disk immediately" };
+				} );
+			if ( s_oBackup )
 			{
-				a.Choice( "profiles.list", "Profile",
-					ui::AnyBind::Of<int>(
-						[]{ return std::max( s_nSelectedProfile, 0 ); },
-						[]( int n ) { s_nSelectedProfile = n; } ),
-					s_vecProfileOptions.data(), s_vecProfileOptions.size() )
-					.Help( "Which saved profile to use. A profile is a saved bundle of settings you "
-					       "can load again any time." )
-					.Default( 0 )
-					.Keywords( "profile preset saved snapshot pick" );
+				status.Live( "backup", []{
+					return ui::Fact{ "backup", s_oBackup
+						? ( "your settings from before '" + s_oBackup->sReplacedBy +
+						    "' -- \"Restore previous settings\" brings them back" )
+						: std::string( "none" ) };
+				} );
+			}
+			// PHASE B SEAM (requests-2026-09-05 item 3): two more facts land
+			// here once Settings carries `active_profile` and
+			// `auto_save_profile`: `changes since applied: N` (the dirty
+			// count against the profile file) and an `auto-save` line naming
+			// whether edits are copied back to the profile.
 
-				a.Action( "profiles.apply", "Apply profile", "apply",
-					[]{ ApplySelectedProfile(); } )
-					.Help( "Loads the selected profile's settings right now. It's a one-time copy: "
-					       "changing the profile later won't update settings you already applied." )
-					.Keywords( "apply profile preset load restore" );
+			a.Group( "Use a profile" );
+
+			a.Choice( "profiles.list", "Profile",
+				ui::AnyBind::Of<int>(
+					[]{ return std::max( s_nSelectedProfile, 0 ); },
+					[]( int n ) { s_nSelectedProfile = n; } ),
+				s_vecProfileOptions.data(), s_vecProfileOptions.size() )
+				.Help( "Which saved profile to use. A profile is a saved bundle of settings you can "
+				       "come back to any time." )
+				.Default( 0 )
+				.Keywords( "profile preset saved snapshot pick" )
+				.DisabledUnless( HasProfiles, kNoProfilesReason );
+
+			a.Action( "profiles.apply", "Use this profile", "use",
+				[]{ UseSelectedProfile(); } )
+				.Help( "Replaces your current settings with the selected profile's. The settings you "
+				       "had are kept as a backup until you use another profile, so you can always go "
+				       "back." )
+				.Keywords( "use apply profile preset load switch" )
+				.DisabledUnless( HasProfiles, kNoProfilesReason );
+
+			if ( s_oBackup )
+			{
+				a.Action( "profiles.restore", "Restore previous settings", "restore",
+					[]{ RestorePreviousSettings(); } )
+					.Help( "Brings back the settings you had before you last used a profile. Available "
+					       "until you use another profile." )
+					.Keywords( "restore undo previous settings backup profile" )
+					.DisabledUnless( CanRestore, kRestoreRoutingReason );
 			}
 
-			a.Group( "New profile" );
+			a.Group( "Save" );
 
-			a.Text( "profiles.name", "Name",
+			a.Text( "profiles.name", "New profile name",
 				ui::AnyBind::Of<std::string>(
 					[]{ return std::string( s_szNewProfileName ); },
 					[]( std::string s )
@@ -703,34 +968,36 @@ namespace gamescope
 					return "";
 				} );
 
-			a.Action( "profiles.save", "Save current settings", "save as profile",
+			a.Action( "profiles.save", "Save as new profile", "save",
 				[]{ SaveCurrentAsNewProfile(); } )
-				.Help( "Saves your current settings as a new profile you can load again later." )
+				.Help( "Saves your current settings under a new name. It appears in the list above "
+				       "right away." )
 				.Keywords( "save profile new snapshot store" )
 				.DisabledUnless( []{ return s_szNewProfileName[ 0 ] != '\0'; },
 				                 "type a name first" );
+			// PHASE B SEAM (requests-2026-09-05 item 3): the rows that need
+			// ConfigManager work land in this group -- "Save changes to
+			// profile" (needs Settings::active_profile), "Rename profile"
+			// (RenameProfile), "Delete profile" (DeleteProfile, containment-
+			// checked like DeletePerGameOverride, with Confirm()), and the
+			// "Auto-save to profile" switch (auto_save_profile, fanned out in
+			// EnqueueRoutedWrite). None is stubbed here: a row that does
+			// nothing must not exist.
 
 			a.Group( "Diagnostics" );
 			a.Facts( "profiles.facts", "Profiles",
 				[]{ return std::to_string( s_ProfileNames.size() ) + " saved"; } )
-				.Help( "Shows how many profiles you've saved and which one you used last." )
-				.Keywords( "profile provenance last applied count diagnostics" )
+				.Help( "Shows how many profiles you've saved and where they live on disk." )
+				.Keywords( "profile count directory diagnostics last action" )
 				.Live( "count", []{
 					return ui::Fact{ "saved profiles", s_ProfileNames.empty()
 						? "none yet" : std::to_string( s_ProfileNames.size() ) };
 				} )
-				// Issue #43 recommendation #10: provenance, not a live link.
-				// "last applied", never "current" -- editing settings
-				// afterwards does not clear it, so it names where the values
-				// STARTED, not what is live now.
-				.Live( "last_applied", []{
-					return ui::Fact{ "last applied profile", s_sLastAppliedProfile.empty()
-						? "none has ever been applied to this config"
-						: s_sLastAppliedProfile };
+				.Live( "dir", []{
+					return ui::Fact{ "profiles directory", config::ProfilesDir() };
 				} )
-				.Live( "target", []{
-					return ui::Fact{ "apply writes to", s_bOverrideActive && s_oAppId
-						? PerGameFilePath() : std::string( "global.json" ) };
+				.Live( "status", []{
+					return ui::Fact{ "last action", s_sStatus.empty() ? "none this session" : s_sStatus };
 				} );
 		}
 
@@ -967,24 +1234,27 @@ namespace gamescope
 	{
 		// ---- Profiles ------------------------------------------------
 		ui::Area &profiles = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
-		profiles.Keywords( "profile preset snapshot save apply named config" );
+		profiles.Keywords( "profile preset snapshot save use apply restore backup named config" );
 		profiles.Summary( []{
 			EnsureInitialized();
-			return std::to_string( s_ProfileNames.size() ) + " saved";
+			std::string sSummary = std::to_string( s_ProfileNames.size() ) + " saved";
+			if ( !s_sLastAppliedProfile.empty() )
+				sSummary += "  ·  using " + s_sLastAppliedProfile;
+			return sSummary;
 		} );
 		profiles.Badge( RoutedBadge );
 		profiles.Rebuilds( ConfigGenerationHash, BuildProfilesArea );
 
 		// ---- Per-game ------------------------------------------------
 		ui::Area &pergame = reg.Add( "setup.pergame", "Per-game", ui::Section::Setup );
-		pergame.Keywords( "per game override routing config file app id copy delete" );
+		pergame.Keywords( "per game separate settings override routing config file app id start from profile copy delete" );
 		pergame.Summary( []{
 			EnsureInitialized();
 			if ( !s_oAppId )
 				return std::string( "no game identified -- everything writes to global.json" );
 			return s_bOverrideActive
-				? ( "override on  ·  " + PerGameFilePath() )
-				: std::string( "global only" );
+				? ( "own settings  ·  " + PerGameFilePath() )
+				: std::string( "shared settings (global)" );
 		} );
 		pergame.Badge( RoutedBadge );
 		pergame.Rebuilds( ConfigGenerationHash, BuildPerGameArea );

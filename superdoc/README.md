@@ -44,6 +44,13 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   outline / right-click auto-hide / Apply Scaling): why it lives in the HUD's layer, the
   centre and 1px snapping rules, the hide modes' maths, and the `BTN_RIGHT` hook's gating.
 
+### Settings & config
+
+- [Profiles and Per-game settings](features/profiles-and-per-game.md) -- the Setup areas
+  that decide which file your settings live in: the model in plain words, every row,
+  the one-step backup behind "Use this profile", why the panel writes synchronously,
+  and the Phase B list still pending.
+
 ### External surfaces
 
 - [Vulkan WSI layer](features/vk-wsi-layer.md) — `VkLayer_FROG_gamescope_wsi` swapchain redirection.

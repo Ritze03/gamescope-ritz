@@ -596,7 +596,43 @@ per-game override does: a one-time copy, not a link that keeps updating.
 not retroactively change anything that already applied it; re-applying is
 required to pick up profile edits.
 
-**Source:** `superdoc/planning/config-system.md`.
+**Extended 2026-09-05 (requests item 3, Phase A):**
+
+- **"Apply" is called "Use" in the UI**, and it is a wholesale replace of the
+  live settings, said so in its help. It takes a **one-step backup first** --
+  the target's `Settings` as they were, kept in memory in `PanelConfig.cpp`
+  (`panelconfig::SettingsBackup`), and exposed as **Restore previous settings**
+  until the next Use. `Why:` the old Apply overwrote live settings with no way
+  back, which is what made the user "scared to touch it". A backup makes Use
+  *reversible*; a confirm dialog would only make it *slow* and still leave no
+  way back after "yes". Restore only writes into the file the backup came from
+  (`BackupMatchesRouting()`) -- it is disabled with a reason, never silently
+  redirected, if separate per-game settings were toggled in between.
+- **Per-game "Start from profile"** is the same one-time copy into
+  `games/<id>.json`, turning separate settings on first if needed -- the
+  explicit form of "this game -> profile X", which used to be two steps in two
+  areas.
+- **The panel's own writes are synchronous** (`config::SaveProfile()`,
+  `SnapshotPerGameOverride()`), not queued through the background writer.
+  `Why:` each is one button press followed immediately by a directory re-read
+  that decides which rows exist; queued, the re-read lost the race every time
+  and a new profile did not appear until restart (the user's report). The
+  `Enqueue*` family exists for per-tick slider writes, which this panel never
+  makes. Precedent: `DisableOverride()` always wrote inline for this reason.
+
+**Phase B, decided but pending** (needs `Settings::active_profile` /
+`auto_save_profile` and `ConfigManager` work): an **Auto-save to profile**
+switch, **off by default** -- on-by-default would make one profile used by
+several games change under every other game's future Use, the spooky action
+the config research argued against; off honours the user's "a toggle for
+auto-saving" as opt-in. The dirty count ("changes since applied") is always
+visible, and the active profile **keeps its name while dirty**. Apply still
+copies in once; auto-save copies edits back *out*; the profile is never a live
+source. Also pending: Save changes / Rename / Delete profile (confirm on
+delete only). See `superdoc/features/profiles-and-per-game.md`.
+
+**Source:** `superdoc/planning/config-system.md`;
+`superdoc/planning/requests-2026-09-05.md` item 3.
 
 ---
 

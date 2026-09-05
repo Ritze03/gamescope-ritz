@@ -12,6 +12,16 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Profiles status**: the Profiles area now opens with what is in use -- which
+  profile your settings came from, where edits are saved, and that every change is
+  saved to disk immediately.
+- **Restore previous settings**: using a profile keeps your previous settings as a
+  backup, and a Restore button brings them back until you use another profile.
+- **Per-game status**: the Per-game area now opens with the recognised game, whether
+  it runs on its own settings, which profile they came from, and whether a saved
+  file exists.
+- **Start from profile**: one press in the Per-game area switches a game to its own
+  settings and copies a chosen profile into them.
 - **Crosshair**: a new Crosshair area draws a crosshair over the middle of the game
   -- four lines, an optional centre dot and an optional outline, each with its own
   colour and opacity -- so it stays sharp even when frame generation smears the
@@ -29,6 +39,10 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **New profiles appear immediately**: a freshly saved profile shows up in the picker
+  at once, pre-selected and confirmed by a toast, instead of after a restart.
+- **Profile picker with no profiles**: the picker is present and explains itself
+  before the first profile exists, instead of being missing until a restart.
 - **Adaptive Brightness re-enable ramp**: re-enabling Adaptive Brightness as the
   only active Shaders effect on a changed scene no longer ramps over several
   seconds; it adapts instantly.
@@ -44,6 +58,9 @@ The newest version below is the one this build reports.
   first frame instead of the first time the Shaders area is opened.
 
 ### Info
+- **Plainer profile wording**: "Apply profile" is now "Use this profile" and says it
+  replaces your current settings; "Override global config" is now "Use separate
+  settings for this game"; "Save current settings" is now "Save as new profile".
 - **Pre-Sharpen uses RCAS**: the pre-scale sharpen now uses the same FSR RCAS filter
   as the Upscaling sharpness, which sharpens without ringing on hard edges; slider
   values are unchanged.

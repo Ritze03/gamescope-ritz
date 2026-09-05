@@ -22,7 +22,7 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp'],
+	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep],
 	cpp_args: gamescope_cpp_args,
@@ -40,3 +40,4 @@ test('cursor_policy', gamescope_tests, args: ['[cursor_policy]'])
 test('changelog_parse', gamescope_tests, args: ['[changelog_parse]'])
 test('clipboard_sync', gamescope_tests, args: ['[clipboard_sync]'])
 test('crosshair', gamescope_tests, args: ['[crosshair]'])
+test('overlay_profiles', gamescope_tests, args: ['[overlay_profiles]'])
