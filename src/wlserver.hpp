@@ -163,6 +163,17 @@ struct wlserver_t {
 		return mouse_constraint.load( std::memory_order_relaxed ) != nullptr;
 	}
 
+	// Requests 2026-09-05 item 10. The last absolute (host-space) pointer
+	// sample wlserver_touchmotion() received, normalised to the output (0..1,
+	// orientation already applied), and whether it is still the freshest
+	// pointer input -- relative motion (wlserver_mousemotion()) invalidates
+	// it, because after a grab the host pointer is wherever the host put it.
+	// wlserver_resync_absolute_pointer() replays it through the current
+	// mapping when that mapping changes under a stationary pointer.
+	bool bAbsolutePointerCurrent = false;
+	double flLastAbsolutePointerX = 0.0;
+	double flLastAbsolutePointerY = 0.0;
+
 	uint64_t ulLastMovedCursorTime = 0;
 	bool bCursorHidden = true;
 	bool bCursorHasImage = true;
@@ -274,6 +285,11 @@ void wlserver_mousewheel( double x, double y, uint32_t time );
 
 void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor = false, gamescope::IBackendConnector* connector = nullptr );
 void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamescope::IBackendConnector* connector = nullptr );
+// Re-derive the client's pointer from the last absolute host sample through
+// the current output -> surface mapping. Called (with the lock held) by
+// update_touch_scaling() when that mapping changed; a no-op when the last
+// input was relative, the overlay owns the pointer, or nothing moved.
+void wlserver_resync_absolute_pointer();
 void wlserver_touchup( int touch_id, uint32_t time );
 
 void wlserver_send_frame_done( struct wlr_surface *surf, const struct timespec *when );

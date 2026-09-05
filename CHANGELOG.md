@@ -63,6 +63,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Pointer under a stretched resolution**: with Force grab cursor off, the game's
+  pointer now follows a runtime resolution change immediately instead of staying at
+  the old position until the mouse next moves.
 - **Crosshair scaling is linear**: with Apply Scaling on, the crosshair is now drawn at
   the game's resolution and stretched with a soft linear filter like a stretched in-game
   one, so its edges blur slightly and mix colours instead of snapping to hard pixels.

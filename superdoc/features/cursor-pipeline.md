@@ -913,3 +913,69 @@ outermost accent-coloured pixel in a `gamescopectl screenshot "<path> 4"`
 The default-case "before" and the max-case "before" both land within a pixel of
 the analytic miter prediction, cross-checking the formula against the actual
 renderer rather than just against itself.
+
+## The absolute pointer under a stretched resolution -- item 10, 2026-09-05
+
+Requests 2026-09-05 item 10: *"When using a stretched res and not having 'force grab
+cursor' enabled, the game recognizes the position wrong. This may be only the case when it is
+toggled while the game is running."*
+
+### Where the mapping lives
+
+With force-grab **off** the nested backends deliver **absolute** host positions
+(`SDLBackend.cpp`'s `SDL_MOUSEMOTION` when not grabbed, `WaylandBackend.cpp`'s
+`Wayland_Pointer_Motion`, real touch), normalised to the output, into
+`wlserver_touchmotion()` / `wlserver_touchdown()` (`wlserver.cpp`). Both go through one helper,
+`wlserver_absolute_to_surface()`: output pixels -> the focused base layer's transform ->
+clamped to the surface's bounds (`wlserver_get_cursor_bounds()`). The transform is four floats,
+`focusedWindowScaleX/Y` + `focusedWindowOffsetX/Y` (`steamcompmgr.cpp`, `update_touch_scaling()`),
+copied from the last painted input-focus layer, whose scale is `1 / calc_scale_factor()` and
+whose offset is the negated centring -- **per axis**, so under `--scaler stretch` a 1280x960
+game in a 1920x1080 window maps X by 1/1.5 and Y by 1/1.125. The arithmetic (scaler ratios,
+layer transform, output -> surface and its inverse) is the pure header `src/PointerMapping.h`,
+pinned by `tests/test_pointer_mapping.cpp`; `calc_scale_factor_scaler()` wraps
+`ComputeScalerRatios()` with the globals, so what is drawn and where the pointer lands come
+from one formula. Under stretch the nested size cancels (`out/src` per axis); under the
+letterboxing scalers it does not, which is why `steamcompmgr_set_nested_mode()` writes
+`g_nNestedWidth/Height` while the Deck's atom path does not.
+
+With force-grab **on** the host delivers relative deltas into `wlserver_mousemotion()`, which
+adds them to the surface-space position unscaled -- no mapping at all, which is why the report
+only shows without force-grab.
+
+### What a runtime change did not do
+
+The cache is refreshed every painted frame, so a runtime resolution change (item 7) *does*
+reach it once the resized game window commits a buffer -- there is no launch-time-only copy.
+What nothing did was tell the **client**. The host pointer sits still while the mapping under
+it changes; the client keeps the game-space position from the old mapping until the next host
+motion event re-derives it. Under stretch that is a different point on every axis (the unit
+test "a runtime mode change moves the mapping under a stationary pointer": output (1440, 810)
+was game (1440, 810) and is now (960, 720)). The same gap opens on any window resize and when
+a fit override appears or goes. At launch the mapping never moves, so nothing was ever wrong.
+
+### The fix
+
+`update_touch_scaling()` now compares the new layer transform with the cached one and, only
+when it changed, writes the four floats **under the wlserver lock** (the readers hold it; the
+compare itself is race-free because paint_all's thread is the only writer) and calls
+`wlserver_resync_absolute_pointer()`. That replays the last absolute host sample --
+`wlserver.flLastAbsolutePointerX/Y`, stored by `wlserver_touchmotion()` after orientation --
+through the new mapping and `wlserver_mousewarp()`s the client's pointer there, synthetically
+(no cursor un-hide). It bails when the last input was **relative**
+(`wlserver_mousemotion()` clears `bAbsolutePointerCurrent`: after a grab the host decides where
+the pointer reappears and its first absolute sample re-syncs on its own), when the overlay owns
+the pointer, when the touch mode never warps the cursor (Passthrough / Trackpad / Disabled), or
+when nothing would move.
+
+*Force-grab toggle:* on -> relative motion invalidates the sample, nothing stale can replay;
+off -> SDL warps the host pointer back and emits a motion, the Wayland backend gets the host's
+next `wl_pointer.motion`, and either arrives as a fresh absolute sample through the normal path.
+No explicit re-sync on the toggle -- the only position we could replay is the pre-grab one, which
+is exactly the wrong one.
+
+*Not covered, X-side:* a game window **larger than the new root** (a windowed game that keeps
+its 1920x1080 window after a 1280x960 mode) has its X sprite clamped to the root by the X server
+itself; gamescope maps to the window's full extent, X cuts it off. That is inherent to a screen
+smaller than a window and is what `--force-windows-fullscreen` exists for.
+

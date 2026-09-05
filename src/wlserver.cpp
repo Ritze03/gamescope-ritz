@@ -62,6 +62,7 @@
 #include "presentation-time-protocol.h"
 
 #include "wlserver.hpp"
+#include "PointerMapping.h"
 #include "hdmi.h"
 #include "main.hpp"
 #include "steamcompmgr.hpp"
@@ -3851,6 +3852,11 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 		return;
 	}
 
+	// Item 10: relative motion is now the freshest input, so the last absolute
+	// sample no longer says where the host pointer is (a grab hides and pins
+	// it). Nothing may replay it until the next absolute sample arrives.
+	wlserver.bAbsolutePointerCurrent = false;
+
 	// Exactly one channel carries each movement, which is the half of the
 	// relative/absolute exclusivity upstream leaves out.
 	//
@@ -4045,6 +4051,69 @@ static void apply_touchscreen_orientation(GamescopePanelOrientation orientation,
 	*y = ty;
 }
 
+// The output -> surface mapping wlserver_touchmotion()/wlserver_touchdown()
+// apply to every absolute sample: normalised output position (orientation
+// already applied) -> output pixels -> the focused base layer's transform
+// (focusedWindowScaleX/Y, focusedWindowOffsetX/Y, per axis so a stretched
+// 4:3 mode maps X and Y differently) -> clamped to the surface's own bounds.
+// The arithmetic is gamescope::OutputToSurface() (PointerMapping.h).
+static void wlserver_absolute_to_surface( double x, double y, double *ptx, double *pty )
+{
+	const gamescope::AbsolutePointerMapping mapping = {
+		.flScaleX = focusedWindowScaleX,
+		.flScaleY = focusedWindowScaleY,
+		.flOffsetX = focusedWindowOffsetX,
+		.flOffsetY = focusedWindowOffsetY,
+	};
+
+	double tx, ty;
+	gamescope::OutputToSurface( mapping, x * g_nOutputWidth, y * g_nOutputHeight, &tx, &ty );
+
+	auto [nWidth, nHeight] = wlserver_get_cursor_bounds();
+	*ptx = clamp( tx, 0.0, nWidth - 0.1 );
+	*pty = clamp( ty, 0.0, nHeight - 0.1 );
+}
+
+// Requests 2026-09-05 item 10. update_touch_scaling() (steamcompmgr.cpp)
+// calls this, lock held, when the base layer's transform changed: a runtime
+// resolution change from the Display > Resolution area, a window resize, a
+// fit override appearing or going. The host pointer did not move, but the
+// game-space point under it did, and with force-grab off the client would
+// keep the old game-space position until the next host motion -- that is
+// the "wrong position" of the report. Replaying the last absolute sample
+// through the new mapping puts the client's pointer back under the host's.
+//
+// Bails when: the last input was relative (the sample is stale -- after a
+// grab the host decides where the pointer reappears and its first absolute
+// sample re-syncs on its own); the overlay owns the pointer; the touch mode
+// does not warp the cursor (Passthrough/Trackpad/Disabled -- those never
+// derive the cursor from an absolute sample either); or nothing would move.
+// The warp is synthetic: it must not unhide a hidden cursor.
+void wlserver_resync_absolute_pointer()
+{
+	assert( wlserver_is_lock_held() );
+
+	if ( !wlserver.bAbsolutePointerCurrent || !wlserver.mouse_focus_surface )
+		return;
+
+	if ( gamescope::SettingsOverlay_IsCapturingInput() )
+		return;
+
+	const gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
+	if ( eMode == gamescope::TouchClickModes::Passthrough ||
+		 eMode == gamescope::TouchClickModes::Disabled ||
+		 eMode == gamescope::TouchClickModes::Trackpad )
+		return;
+
+	double tx, ty;
+	wlserver_absolute_to_surface( wlserver.flLastAbsolutePointerX, wlserver.flLastAbsolutePointerY, &tx, &ty );
+
+	if ( tx == wlserver.mouse_surface_cursorx && ty == wlserver.mouse_surface_cursory )
+		return;
+
+	wlserver_mousewarp( tx, ty, get_time_in_milliseconds(), true );
+}
+
 void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor, gamescope::IBackendConnector* connector )
 {
 	assert( wlserver_is_lock_held() );
@@ -4062,6 +4131,20 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
 	// M2 (no rotated-panel hardware in this milestone's test matrix);
 	// upgrade path is applying the same orientation correction before
 	// queuing.
+	// Item 10: remember the sample (orientation applied) so a later mapping
+	// change can replay it -- wlserver_resync_absolute_pointer(). Recorded
+	// before the overlay gate below: the host pointer is where it is whether
+	// or not the overlay is the one consuming it right now.
+	{
+		double flAbsX = x;
+		double flAbsY = y;
+		if ( connector )
+			apply_touchscreen_orientation( connector->GetCurrentOrientation(), &flAbsX, &flAbsY );
+		wlserver.flLastAbsolutePointerX = flAbsX;
+		wlserver.flLastAbsolutePointerY = flAbsY;
+		wlserver.bAbsolutePointerCurrent = true;
+	}
+
 	if ( gamescope::SettingsOverlay_IsCapturingInput() )
 	{
 		gamescope::SettingsOverlay_QueueMouseMotionAbsolute( x, y );
@@ -4071,24 +4154,10 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
 
 	if ( wlserver.mouse_focus_surface != NULL )
 	{
-		double tx = x;
-		double ty = y;
+		double tx = wlserver.flLastAbsolutePointerX;
+		double ty = wlserver.flLastAbsolutePointerY;
 
-		if ( connector )
-		{
-			apply_touchscreen_orientation(connector->GetCurrentOrientation(), &tx, &ty);
-		}
-
-		tx *= g_nOutputWidth;
-		ty *= g_nOutputHeight;
-		tx += focusedWindowOffsetX;
-		ty += focusedWindowOffsetY;
-		tx *= focusedWindowScaleX;
-		ty *= focusedWindowScaleY;
-
-		auto [nWidth, nHeight] = wlserver_get_cursor_bounds();
-		tx = clamp( tx, 0.0, nWidth - 0.1 );
-		ty = clamp( ty, 0.0, nHeight - 0.1 );
+		wlserver_absolute_to_surface( tx, ty, &tx, &ty );
 
 		double trackpad_dx, trackpad_dy;
 
@@ -4137,12 +4206,19 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
 			apply_touchscreen_orientation(connector->GetCurrentOrientation(), &tx, &ty);
 		}
 
-		tx *= g_nOutputWidth;
-		ty *= g_nOutputHeight;
-		tx += focusedWindowOffsetX;
-		ty += focusedWindowOffsetY;
-		tx *= focusedWindowScaleX;
-		ty *= focusedWindowScaleY;
+		// Same mapping as wlserver_touchmotion(), minus its clamp: upstream
+		// never clamped touch-down, and wlserver_mousewarp() clamps the
+		// cursor itself, so the only difference would be the coordinates
+		// wlr_seat_touch_notify_down() sees in Passthrough mode.
+		{
+			const gamescope::AbsolutePointerMapping mapping = {
+				.flScaleX = focusedWindowScaleX,
+				.flScaleY = focusedWindowScaleY,
+				.flOffsetX = focusedWindowOffsetX,
+				.flOffsetY = focusedWindowOffsetY,
+			};
+			gamescope::OutputToSurface( mapping, tx * g_nOutputWidth, ty * g_nOutputHeight, &tx, &ty );
+		}
 
 		gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
 

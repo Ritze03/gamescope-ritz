@@ -83,6 +83,7 @@
 
 #include "main.hpp"
 #include "wlserver.hpp"
+#include "PointerMapping.h"
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
 #include "vblankmanager.hpp"
@@ -1657,50 +1658,22 @@ window_is_fullscreen( steamcompmgr_win_t *w )
 	return w && ( window_is_steam( w ) || w->isFullscreen );
 }
 
+// The scaler's per-axis source -> output ratios. The arithmetic itself is
+// gamescope::ComputeScalerRatios() (PointerMapping.h), pure and unit-tested;
+// this wrapper only supplies the globals. It is the one formula behind both
+// what is drawn (paint_window_commit(), MouseCursor::paint()) and where the
+// absolute pointer lands in the game (wlserver_touchmotion(), through
+// update_touch_scaling()'s cache), so the two cannot disagree per axis.
 void calc_scale_factor_scaler(float &out_scale_x, float &out_scale_y, float sourceWidth, float sourceHeight)
 {
-	float XOutputRatio = currentOutputWidth / (float)g_nNestedWidth;
-	float YOutputRatio = currentOutputHeight / (float)g_nNestedHeight;
-	float outputScaleRatio = std::min(XOutputRatio, YOutputRatio);
-
-	float XRatio = (float)g_nNestedWidth / sourceWidth;
-	float YRatio = (float)g_nNestedHeight / sourceHeight;
-
-	if (g_upscaleScaler == GamescopeUpscaleScaler::STRETCH)
-	{
-		out_scale_x = XRatio * XOutputRatio;
-		out_scale_y = YRatio * YOutputRatio;
-		return;
-	}
-
-	if (g_upscaleScaler != GamescopeUpscaleScaler::FILL)
-	{
-		out_scale_x = std::min(XRatio, YRatio);
-		out_scale_y = std::min(XRatio, YRatio);
-	}
-	else
-	{
-		out_scale_x = std::max(XRatio, YRatio);
-		out_scale_y = std::max(XRatio, YRatio);
-	}
-
-	if (g_upscaleScaler == GamescopeUpscaleScaler::AUTO)
-	{
-		out_scale_x = std::min(g_flMaxWindowScale, out_scale_x);
-		out_scale_y = std::min(g_flMaxWindowScale, out_scale_y);
-	}
-
-	out_scale_x *= outputScaleRatio;
-	out_scale_y *= outputScaleRatio;
-
-	if (g_upscaleScaler == GamescopeUpscaleScaler::INTEGER)
-	{
-		if (out_scale_x > 1.0f)
-		{
-			// x == y here always.
-			out_scale_x = out_scale_y = floor(out_scale_x);
-		}
-	}
+	const gamescope::ScalerRatios r = gamescope::ComputeScalerRatios(
+		g_upscaleScaler,
+		(float)currentOutputWidth, (float)currentOutputHeight,
+		(float)g_nNestedWidth, (float)g_nNestedHeight,
+		sourceWidth, sourceHeight,
+		g_flMaxWindowScale );
+	out_scale_x = r.x;
+	out_scale_y = r.y;
 }
 
 void calc_scale_factor(float &out_scale_x, float &out_scale_y, float sourceWidth, float sourceHeight)
@@ -2530,15 +2503,48 @@ static bool is_fading_out()
 	return fadeOutStartTime || g_bPendingFade;
 }
 
+// Publish the just-painted input-focus layer's transform as the absolute
+// pointer mapping (focusedWindowScaleX/Y, focusedWindowOffsetX/Y -- read by
+// wlserver_touchmotion()/wlserver_touchdown() on the input threads).
+//
+// Requests 2026-09-05 item 10: the four floats used to be written bare, and
+// nothing noticed when they moved. The mapping moves whenever the base layer
+// is drawn differently -- a runtime resolution change from the Display >
+// Resolution area (steamcompmgr_set_nested_mode()) resizes the game window
+// and, under --scaler stretch, changes the per-axis scale; a fit override
+// appearing changes the offset. The host pointer has not moved, but the
+// game-space point under it has, and until the next host motion event the
+// client kept the OLD game-space position: with force-grab off that is the
+// cursor "recognised in the wrong place" the moment the mode changes. Now the
+// write happens under the wlserver lock (the readers hold it), and when the
+// mapping actually changed the client's pointer is re-derived from the last
+// host sample -- wlserver_resync_absolute_pointer() -- so the game sees the
+// pointer where the host pointer really is, without waiting for a motion.
+//
+// Why compare first: this runs once or twice per painted frame, and the
+// values only change on the events above, so the common frame costs four
+// float compares and no lock. The compare is race-free because this thread
+// is the only writer.
 static void update_touch_scaling( const struct FrameInfo_t *frameInfo )
 {
 	if ( !frameInfo->layers.count() )
 		return;
 
-	focusedWindowScaleX = frameInfo->layers.get( frameInfo->layers.count() - 1 ).scale.x;
-	focusedWindowScaleY = frameInfo->layers.get( frameInfo->layers.count() - 1 ).scale.y;
-	focusedWindowOffsetX = frameInfo->layers.get( frameInfo->layers.count() - 1 ).offset.x;
-	focusedWindowOffsetY = frameInfo->layers.get( frameInfo->layers.count() - 1 ).offset.y;
+	const FrameInfo_t::Layer_t &layer = frameInfo->layers.get( frameInfo->layers.count() - 1 );
+
+	if ( focusedWindowScaleX == layer.scale.x &&
+		 focusedWindowScaleY == layer.scale.y &&
+		 focusedWindowOffsetX == layer.offset.x &&
+		 focusedWindowOffsetY == layer.offset.y )
+		return;
+
+	wlserver_lock();
+	focusedWindowScaleX = layer.scale.x;
+	focusedWindowScaleY = layer.scale.y;
+	focusedWindowOffsetX = layer.offset.x;
+	focusedWindowOffsetY = layer.offset.y;
+	wlserver_resync_absolute_pointer();
+	wlserver_unlock();
 }
 
 #if HAVE_PIPEWIRE
