@@ -180,7 +180,11 @@ namespace gamescope
             auto it = m_Offers.find( pOffer );
             std::string sMime = it != m_Offers.end() ? it->second.sBestMime : std::string{};
 
-            if ( !sMime.empty() )
+            // Privacy gate: the System settings tab's "Clipboard sync" switch
+            // (Overlay/PanelSystem.cpp). Off skips the receive() itself, not
+            // just the broadcast that follows it -- host clipboard text is
+            // never read into this process at all while sync is off.
+            if ( !sMime.empty() && g_bClipboardSyncEnabled.load( std::memory_order_relaxed ) )
                 StartReceive( pOffer, sMime );
 
             DropOffer( pOffer );

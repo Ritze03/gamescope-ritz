@@ -53,7 +53,9 @@ namespace gamescope::ui
 		// transcribe from -- see PanelDisplay.cpp's RegisterGeneral().
 		// setup.cursor is the thirteenth (2026-08-29), and sourced neither
 		// way: it is the actual pointer shape, reused from CursorArt.h's own
-		// corner constants -- see that entry below.
+		// corner constants -- see that entry below. system.general is the
+		// fourteenth (2026-09-05), the System tab's own area -- see
+		// PanelSystem.cpp.
 		//
 		// THE ACCEPTANCE CRITERION THIS TABLE IS WRITTEN AGAINST is not
 		// "does it look like the thing" -- it is "is it ONE SILHOUETTE at 12
@@ -128,6 +130,20 @@ namespace gamescope::ui
 			Poly( { 3.7f, 16.6f }, { 12.0f, 21.0f }, { 20.3f, 16.6f } ) } },
 
 		// ---- SYSTEM -------------------------------------------------------
+		{ "system.general", 5, {
+			// A chip: a square body with one pin centred on each of its
+			// four edges -- the "system/device" mark. Distinct from every
+			// neighbour's shape mix: no other glyph in the set pairs a
+			// single stroked rectangle with lines radiating from its
+			// edge midpoints (Mixer's lines sit ON its rectangles, not
+			// off them; display.general's lines run corner to corner
+			// with circles, not off a square).
+			Rect( 7.5f, 7.5f, 16.5f, 16.5f ),
+			Line( { 12.0f, 7.5f }, { 12.0f, 4.0f } ),
+			Line( { 12.0f, 16.5f }, { 12.0f, 20.0f } ),
+			Line( { 7.5f, 12.0f }, { 4.0f, 12.0f } ),
+			Line( { 16.5f, 12.0f }, { 20.0f, 12.0f } ) } },
+
 		{ "audio.mixer", 6, {
 			// Two faders: a track above and below each cap. The cap is a
 			// stroked rectangle, NOT a filled one, which is the single

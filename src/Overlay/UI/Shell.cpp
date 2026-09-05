@@ -50,6 +50,7 @@
 #include "Overlay/PanelChangelog.h"
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
+#include "Overlay/PanelSystem.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Crosshair.h"
 
@@ -739,7 +740,14 @@ namespace gamescope::ui::shell
 			PanelShaders_RegisterArea( reg );
 
 			// ---- SYSTEM --------------------------------------------------
-			// Mixer leads SYSTEM, ahead of Monitor and Log -- SPEC §8.1's
+			// The System tab (2026-09-05, requests-2026-09-05.md item 5)
+			// leads SYSTEM -- display.general leads DISPLAY the same way
+			// (PanelDisplay.cpp's RegisterGeneral()), and a section's own
+			// general/miscellaneous area reads naturally first rather than
+			// buried after the section's more specific tabs. Phase A: just
+			// the clipboard sync switch. See PanelSystem.h.
+			PanelSystem_RegisterArea( reg );
+			// Mixer follows, ahead of Monitor and Log -- SPEC §8.1's
 			// amendment is explicit that the fold keeps the original
 			// relative order.
 			// P3 part B. The first DYNAMIC area: its rows are one per live

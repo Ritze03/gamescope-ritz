@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <mutex>
@@ -16,6 +17,29 @@
 
 namespace gamescope
 {
+    // Mirrors the System settings tab's "Clipboard sync" switch
+    // (Overlay/PanelSystem.cpp, area `system.general`, row `system.clipboard_sync`).
+    // Read from both nested backends' inbound paths (WaylandBackend.cpp's
+    // DrainHostClipboard() and OnSelection()/StartReceive(), SDLBackend.cpp's
+    // SDL_CLIPBOARDUPDATE handler) to decide whether a host clipboard change is
+    // acted on at all. Lives here, not in either backend file, because it is
+    // compositor-free and both backends already include this header.
+    //
+    // Default true: clipboard sync is opt-out, matching the feature's existing
+    // default behaviour before this switch existed.
+    //
+    // PHASE B: persisted via config::SystemSettings::clipboard_sync once that
+    // exists -- for now PanelSystem.cpp's switch only flips this atomic, so the
+    // value does not survive a restart. See that file's setter comment.
+    //
+    // `inline` (not `extern` + a .cpp definition, unlike e.g. FpsDisplay.cpp's
+    // g_ulLastAppFrametimeNs in commit.cpp): this header is the single owner
+    // of clipboard-sync's compositor-free state, and every translation unit
+    // that includes it -- both backends, this feature's own .cpp, and
+    // PanelSystem.cpp -- shares the one instance an inline variable guarantees
+    // without needing a matching definition in some particular .cpp.
+    inline std::atomic<bool> g_bClipboardSyncEnabled{ true };
+
     // Hard ceiling on a single clipboard transfer. A host application is free
     // to hand us a pipe it never stops writing to; without a cap that is an
     // unbounded allocation driven by another process.

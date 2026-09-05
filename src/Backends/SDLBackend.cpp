@@ -119,6 +119,7 @@ namespace gamescope
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
+        virtual const char *GetClipboardSyncStatus() const override { return "SDL clipboard"; }
 
 		//--
 
@@ -725,7 +726,11 @@ namespace gamescope
 					// Posted, not set directly: this runs on the SDL event
 					// thread, and the broadcast has to happen on the
 					// steamcompmgr thread.
-					if ( pClipBoard && g_SDLClipboardGuard.ShouldAcceptFromHost( pClipBoard ) )
+					// Gate: the System settings tab's "Clipboard sync" switch
+					// (Overlay/PanelSystem.cpp). Off means a host clipboard
+					// change never reaches a client inside gamescope.
+					if ( pClipBoard && gamescope::g_bClipboardSyncEnabled.load( std::memory_order_relaxed ) &&
+					     g_SDLClipboardGuard.ShouldAcceptFromHost( pClipBoard ) )
 						gamescope_post_selection(pClipBoard);
 					gamescope_set_selection(pPrimarySelection, GAMESCOPE_SELECTION_PRIMARY);
 

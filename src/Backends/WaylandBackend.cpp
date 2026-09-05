@@ -478,6 +478,7 @@ namespace gamescope
         virtual void SetTitle( std::shared_ptr<std::string> szTitle ) override;
         virtual void SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels ) override;
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
+        virtual const char *GetClipboardSyncStatus() const override;
     private:
 
         friend CWaylandPlane;
@@ -1463,6 +1464,20 @@ namespace gamescope
             zwp_primary_selection_source_v1_offer( source, "UTF8_STRING" );
             zwp_primary_selection_device_v1_set_selection( m_pBackend->m_pPrimarySelectionDevice, source, m_pBackend->m_uPointerEnterSerial );
         }
+    }
+
+    // The System settings tab's status row (Overlay/PanelSystem.cpp). The
+    // answer is fixed at InitClipboard() time on the main thread, before
+    // steamcompmgr (and this overlay code, which runs off its own thread)
+    // exist -- so reading these fields here, later, from any thread, is safe:
+    // nothing ever writes them again after that one-time decision.
+    const char *CWaylandConnector::GetClipboardSyncStatus() const
+    {
+        if ( m_pBackend->m_bHaveDataControl )
+            return m_pBackend->m_pExtDataControlManager ? "ext_data_control_v1" : "zwlr_data_control_v1";
+        if ( m_pBackend->m_pDataDevice )
+            return "wl_data_device (focus-based)";
+        return "none";
     }
 
     //////////////////
@@ -3142,6 +3157,13 @@ namespace gamescope
         if ( !osText )
             return;
 
+        // Gate: the System settings tab's "Clipboard sync" switch
+        // (Overlay/PanelSystem.cpp). The mailbox is still drained above even
+        // when off, so a host value that arrived while sync was off is
+        // dropped here rather than left to fire the moment it's re-enabled.
+        if ( !g_bClipboardSyncEnabled.load( std::memory_order_relaxed ) )
+            return;
+
         if ( !m_ClipboardGuard.ShouldAcceptFromHost( *osText ) )
             return;
 
@@ -3179,7 +3201,11 @@ namespace gamescope
         auto it = m_DataOffers.find( pOffer );
         std::string sMime = it != m_DataOffers.end() ? it->second.second : std::string{};
 
-        if ( !sMime.empty() )
+        // Privacy gate: the System settings tab's "Clipboard sync" switch
+        // (Overlay/PanelSystem.cpp). Off skips the receive() itself, not just
+        // the broadcast that follows it -- host clipboard text is never read
+        // into this process at all while sync is off.
+        if ( !sMime.empty() && g_bClipboardSyncEnabled.load( std::memory_order_relaxed ) )
         {
             int nPipe[ 2 ];
             if ( pipe2( nPipe, O_CLOEXEC ) == 0 )

@@ -327,6 +327,16 @@ namespace gamescope
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) = 0;
 
         virtual bool ShouldPaintCursor() { return false; }
+
+        // The System settings tab's clipboard status row (Overlay/PanelSystem.cpp)
+        // names the protocol actually in use for host clipboard sync, so a user
+        // debugging "why doesn't clipboard sync work" sees a fact instead of a
+        // guess. Default answers "none" -- correct for any INestedHints
+        // implementation that never had a clipboard story at all (there was, at
+        // the time this was added, exactly one: none -- every backend already
+        // implements clipboard sync one way or another, but a future one that
+        // doesn't need not override this to stay honest).
+        virtual const char *GetClipboardSyncStatus() const { return "none"; }
     };
 
     class IBackendFb : public IRcObject

@@ -1796,7 +1796,7 @@ TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_
 // matter how it is drawn.
 TEST_CASE( "icons: every registered area has one, and no two are the same drawing", "[overlay_ui]" )
 {
-	// The thirteen this build registers. Written out rather than walked off
+	// The fourteen this build registers. Written out rather than walked off
 	// the live registry because the areas are declared in the panel files,
 	// which this test binary deliberately does not link -- so the list is
 	// the test's own statement of what the rail must be able to draw.
@@ -1809,10 +1809,14 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 	// hand-transcribed glyph). system.monitor was renamed to system.hud by
 	// HUD layouts Phase 1 (2026-09-02) -- see FpsDisplay.cpp's
 	// FpsDisplay_RegisterArea() and Icons.cpp's own entry for it.
+	// system.general is the newest, and the fourteenth by plain count
+	// (2026-09-05) -- the System tab's own area, leading SYSTEM. See
+	// PanelSystem.cpp and Icons.cpp's own entry for it.
 	const char *pszAreas[] = {
 		"display.general", "display.upscaling", "display.frame_limiter", "display.hdr",
-		"image.shaders", "audio.mixer", "system.hud", "system.log", "system.changelog",
-		"setup.profiles", "setup.pergame", "setup.appearance", "setup.cursor",
+		"image.shaders", "system.general", "audio.mixer", "system.hud", "system.log",
+		"system.changelog", "setup.profiles", "setup.pergame", "setup.appearance",
+		"setup.cursor",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 

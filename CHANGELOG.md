@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **System tab**: a new System settings tab with a clipboard sync switch and a status
+  row naming the protocol syncing with the host.
 - **Profiles status**: the Profiles area now opens with what is in use -- which
   profile your settings came from, where edits are saved, and that every change is
   saved to disk immediately.

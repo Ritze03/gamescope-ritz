@@ -198,12 +198,90 @@ the button now calls `gamescope_post_selection()` and the log text goes onto the
 real clipboard, reachable from a game, from another gamescope window, and from
 the host session when nested.
 
+## Settings
+
+The System tab (`system.general`, `Overlay/PanelSystem.cpp` — the first area in
+the SYSTEM rail section) has a "Clipboard sync" switch and a read-only status
+row underneath it. Phase A of that tab; see
+`superdoc/planning/requests-2026-09-05.md` item 5.
+
+**The switch** (`system.clipboard_sync`, default on). Off stops the *inbound*
+half of sync: a host clipboard change never reaches a client inside gamescope.
+Concretely, three call sites check `gamescope::g_bClipboardSyncEnabled`
+(`Clipboard/ClipboardSync.h`):
+
+- `CWaylandBackend::DrainHostClipboard()` — the mailbox a transfer worker fills
+  is still drained every `PollState()` even while off, but the value is
+  dropped rather than broadcast. `Why:` draining and discarding, rather than
+  leaving the mailbox alone, is what keeps a stale host value from firing the
+  instant sync is turned back on.
+- `CDataControlDevice::OnSelection()` (`Clipboard/WaylandDataControl.h`) and
+  `CWaylandBackend::Wayland_DataDevice_Selection()` — both skip calling
+  `receive()`/`wl_data_offer_receive()` at all while off, not just the
+  broadcast that would normally follow. So host clipboard text is never read
+  into the process in the first place, which is the stronger, privacy-shaped
+  guarantee: a game or another gamescope client cannot observe host clipboard
+  contents through some other channel while the switch is off, because
+  gamescope itself never received them.
+- `CSDLBackend`'s `SDL_CLIPBOARDUPDATE` handler — skips
+  `gamescope_post_selection()` when off (SDL hands over the text as a side
+  effect of the event itself, so there is no separate receive step to skip
+  the way there is on Wayland).
+
+Copying and pasting *inside* gamescope — between an Xwayland game, a native
+Wayland client, and the overlay — is unaffected either way; only the host
+boundary is gated.
+
+The *outbound* half (a copy made inside gamescope reaching the host) is not
+gated by this switch yet — that is Phase B, at `steamcompmgr.cpp`'s
+`gamescope_broadcast_clipboard()` (`hints->SetSelection()`).
+
+`Why: ignore the data-control device rather than destroy it` — turning the
+switch off does not tear down `m_ExtDataControl`/`m_WlrDataControl` or the
+`wl_data_device`. Destroying either needs a full re-`Init()` to come back
+(`WaylandDataControl.h`'s `Shutdown()`, driven by the compositor's own
+`finished` event via `OnFinished()`), and the `wl_data_device` fallback path
+has no re-creation story at all once torn down (`WaylandBackend.cpp`'s
+`InitClipboard()` decides the protocol once, before steamcompmgr exists). A
+plain runtime flag that every read path checks is one atomic, always safe to
+flip from any thread, and trivially reversible — destroying and rebuilding a
+live Wayland protocol object for what is, in effect, a checkbox would trade
+that simplicity for a re-init path this feature does not otherwise need.
+
+**The re-enable caveat.** Turning the switch back on does not retroactively
+fetch the host's current clipboard value — data-control and `wl_data_device`
+are both push protocols with no "give me your current selection" request, so
+there is nothing to poll. The host value gamescope holds is whatever it was
+when sync was last on, and stays that way until the host clipboard next
+changes (or, on the `wl_data_device` fallback, until gamescope next gains
+focus).
+
+**The status row** (`system.clipboard_status`, read-only) names the protocol
+actually in use, from `INestedHints::GetClipboardSyncStatus()`
+(`backend.h`) — `ext_data_control_v1`, `zwlr_data_control_v1`,
+`wl_data_device (focus-based)`, `SDL clipboard`, or `none`. Decided once by
+each backend's `InitClipboard()`/connector construction, before steamcompmgr
+exists, so every later read (from any thread) sees a value nothing writes
+again — it does not track a data-control device being revoked after the
+fact. In embedded (DRM) mode, where `GetNestedHints()` returns `nullptr`
+(same discriminator `gamescope_broadcast_clipboard()` uses), the panel reports
+`inert: no host (embedded)` instead of calling into a hint object that does
+not exist. The area's own summary line in the rail folds both rows into one
+phrase: `clipboard sync on · <protocol>`, or `clipboard sync off`.
+
+**Not persisted yet.** Phase A's switch only flips the runtime atomic — the
+value does not survive a restart. `config::SystemSettings::clipboard_sync` is
+the Phase B seam that fixes that; see `Overlay/PanelSystem.cpp`'s setter
+comment.
+
 ## Where the code is
 
 | File | What |
 | --- | --- |
-| `src/Clipboard/ClipboardSync.{h,cpp}` | Loop guard, text normalisation, bounded pipe read/write. No compositor dependency; unit-tested. |
+| `src/Clipboard/ClipboardSync.{h,cpp}` | Loop guard, text normalisation, bounded pipe read/write, and `g_bClipboardSyncEnabled`. No compositor dependency; unit-tested. |
+| `src/Overlay/PanelSystem.{h,cpp}` | The System tab's "Clipboard sync" switch and status row. |
 | `src/Clipboard/WaylandDataControl.h` | The `ext_`/`zwlr_` data-control device, written once against a traits struct. |
+| `src/backend.h` | `INestedHints::GetClipboardSyncStatus()` -- the status row's data source. |
 | `src/Backends/WaylandBackend.cpp` | Protocol selection, the `wl_data_device` fallback, inbound mailbox. |
 | `src/Backends/SDLBackend.cpp` | SDL clipboard, now loop-guarded. |
 | `src/wlserver.cpp` | Seat `request_set_selection` handling and the compositor-owned `wlr_data_source`. |
