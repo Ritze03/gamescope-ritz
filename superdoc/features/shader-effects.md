@@ -1,11 +1,13 @@
 # Shaders settings area — Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
-four independent effects, all implemented as gated passes inside one combined ReShade
-effect file, `reshade/Shaders/gamescope-ritz.fx`. This page covers what each effect does
-and, in depth, the two settings added/changed 2026-09-04 (planning batch
-`requests-2026-09-04.md`, items #2 and #3): **Vibrancy**'s range and **Shadow Control**, a
-new effect.
+four independent effects. Since 2026-09-05 they are **one native compute pre-pass compiled
+into the binary at build time** — `src/shaders/cs_effects_layer0.comp`, dispatched from
+`vulkan_composite()` (`src/rendervulkan.cpp`) on the base/game layer at source resolution
+before any scaling. They used to be gated passes inside a runtime-compiled ReShade file,
+`reshade/Shaders/gamescope-ritz.fx`; that file, and the install step that copied it, are
+gone (`superdoc/planning/DECISIONS.md` #27). The ReShade loader itself stays, for users'
+own `.fx` files — see [reshade-effects](reshade-effects.md), which is now third-party-only.
 
 **Titles vs. identifiers.** The three multi-word switches were retitled 2026-09-05:
 "Shadow lift" → **Shadow Control**, "Adaptive brightness" → **Adaptive Brightness**,
@@ -13,207 +15,231 @@ new effect.
 command palette's saved entries and every cross-reference resolve against, and a config
 key is what a user's `global.json` already contains — renaming either would break
 existing configs and palette state for a purely cosmetic change. So the id
-`image.shaders.shadow_lift`, the config struct `ReshadeShadowLiftSettings`, and the
-uniform names `shadow_lift_enabled` / `shadow_lift_strength` all deliberately keep the
+`image.shaders.shadow_lift` and the config struct `ReshadeShadowLiftSettings` keep the
 old spelling. Expect the code and this page to say "shadow lift" where it means the
 identifier and "Shadow Control" where it means the label.
 
-This is the settings-panel/effect-content layer. For how the underlying compile/upload/
-uniform-push mechanism works (the generic `gamescope_reshade` protocol, pipeline caching,
-etc.), see [reshade-effects](reshade-effects.md) — that page is the mechanism, this one is
-what's actually loaded through it.
+## Why a native pre-pass, not the `.fx` (2026-09-05)
 
-## Why one combined `.fx` file, not one per effect
+The `.fx` was compiled at runtime from whichever copy won a four-directory search
+(`reshade-effects.md`). A stale copy under the legacy `~/.local/share/gamescope/reshade`
+tree silently no-op'd Shadow Control and Adaptive Brightness for the user: the panel
+pushed uniforms the compiled module never declared, they were dropped by name, and a
+green build proved nothing because the shader was not part of the build. Diagnostics
+rows were added to *detect* that; the user decided to *remove the possibility* instead.
 
-`gamescope-ritz.fx`'s own header comment (and `superdoc/planning/DECISIONS.md` #13)
-explains this in full: gamescope's ReShade manager recompiles the *entire* pipeline —
-full parse + SPIR-V codegen + Vulkan pipeline build — inline on the render thread
-whenever the active effect changes. Four separate techniques a user "switches between"
-would mean every checkbox toggle pays that cost. Instead there is one always-loaded
-technique with four independently-gated passes/branches; toggling an effect is a single
-uniform write. `PanelShaders.cpp`'s `EnsureEffectLoaded()` loads the whole file once, the
-first time *any* of the four is turned on, and never unloads it again for the session.
+Now `src/meson.build`'s `glsl_generator` compiles `cs_effects_layer0.comp` to
+`cs_effects_layer0.h` (SPIR-V as a C array) alongside every other compute shader. A GLSL
+error **fails the build** — verified by deliberately breaking the shader: `glslang`
+reports the error and `ninja` stops. The panel and the shader ship in one binary and
+cannot drift; there is nothing on disk to shadow.
 
-## SDR only (v1)
+## Where it runs, and why not inside the composite shaders
 
-Every effect on this panel works directly on the base layer's already gamma/sRGB-encoded
-0..1 RGB, with no HDR-aware colour handling. `PanelShaders.cpp`'s `EffectsUsable()` /
-`IsBaseLayerSdr()` gate disables the whole panel (with a stated reason,
-`kSdrOnly`) whenever the focused app is presenting HDR or scRGB content — see
-`superdoc/planning/DECISIONS.md` #15 for why this was scoped out of v1, and
-`reshade-shaders.md` Q6 for what correct HDR-space math here would require. Every effect
-below, Shadow Control included, inherits this gate; none of them needs to branch on
-`BUFFER_COLOR_SPACE` itself as a result.
+`vulkan_composite()` records the pre-pass on the same compute command buffer, right after
+the ReShade block and before the FSR/NIS/blur/blit branch chooses a path:
+
+```
+layer0.tex (game, source res)
+   │  [ReShade, if a user .fx is set]           -- unchanged, general queue + CPU wait
+   ▼
+cs_effects_layer0  ──►  g_output.effectsOutput  (pooled, source res, 8×8 groups)
+   │  frameInfo->layers[0].tex = effectsOutput; bBaseLayerEffectsApplied = true
+   ▼
+FSR / NIS / blur / blit as before
+```
+
+`Why not fold the maths into cs_composite_*.comp:` layer 0 is read four different ways
+there (`composite.h`, `cs_composite_rcas.comp`, `blur.h`, `cs_composite_blur*.comp`), so
+it would be four copies of the maths; Pre-Sharpen needs its neighbours at **source**
+resolution before scaling, which the composite shaders never see; and the composite chain
+has already degamma'd by the time it has a colour, while these effects were authored for
+encoded values (next section). A pre-pass that swaps its output into layer 0 is exactly
+how the ReShade slot already worked, so every downstream path consumes it unchanged.
+
+`Why the same command buffer:` the ReShade block runs on the general queue and then
+`g_device.wait()`s — a per-frame CPU stall. The native pass uses `bindTarget` /
+`uploadConstants` / `dispatch` like EASU→RCAS does, so the barriers are inserted by
+`dispatch()` and nothing waits on the CPU.
+
+**Never twice per frame.** `vulkan_composite()` is called more than once on the *same*
+`FrameInfo_t`: the backend's `Present()` composites `paint_all()`'s frameInfo in place
+(SDL/Wayland/OpenVR pass the pointer through; DRM composites a copy), and
+`gamescopectl screenshot` then re-composites that struct into a mappable texture. Under
+the `.fx` this double-applied — measured live as gain² in a `gamescopectl` screenshot vs
+gain in `grim` of the same frame. Two gates now stop it: `bBaseLayerEffectsApplied`
+(renamed from `bBaseLayerReshaded`) is set on the frameInfo the moment either the native
+pass or ReShade runs, as well as by steamcompmgr for the pre-emptive-upscale texture; and
+the native pass also refuses when layer 0 already *is* `g_output.effectsOutput`.
+
+## Encoded space, on purpose
+
+The ReShade loader bound the input through `view(false)` = `m_srgbView` — the raw UNORM
+view — so the `.fx` always read gamma-encoded 0..1 code values. The native pass matches
+it: `bindTexture(0, layer0.tex); setTextureSrgb(0, true)` selects the same raw view (as
+`bind_all_layers()` does for SRGB layers), and the storage target is written through its
+UNORM view, so encoded goes in and encoded comes out. The composite shaders degamma
+afterwards exactly as before.
+
+**Naming trap** (see `rendervulkan.cpp`'s own TODO on it): `m_srgbView` means *values
+still sRGB-encoded* (the UNORM format); `m_linearView` is the `_SRGB` Vulkan format that
+the hardware linearises on read. `setTextureSrgb(slot, true)` therefore means "give me
+the encoded values".
+
+**SDR only (v1)**, `superdoc/planning/DECISIONS.md` #15: the host skips the dispatch for
+HDR (scRGB / HDR10 PQ) and passthru layers and for YCbCr, and the panel greys every switch
+with the `kSdrOnly` reason via `g_eLastBaseLayerColorspace` / `IsBaseLayerSdr()`. No
+linear-light or PQ value can reach the `pow()`.
+
+**Output format.** The pooled `effectsOutput` uses the input's own DRM format when the
+device supports it as an optimal-tiled storage+sampled image (so a 10-bit game stays
+10-bit), else `ARGB8888` — 10-bit storage images are optional in Vulkan (see
+`vulkan_get_rgb10_capture_format()`'s note on NVIDIA). Checked once per format.
+
+## The uniform block and the seams left for Adaptive Brightness
+
+`EffectsPushData_t` (`src/rendervulkan.cpp`, inside the `#pragma pack(push,1)` region,
+beside `EasuPushData_t`) mirrors the shader's `effects_t` block field-for-field:
+
+| Field | Meaning |
+| --- | --- |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness *(reserved)*, `1<<31` reset history *(reserved)* |
+| `float u_vibrancy` | 0..3, 1 neutral |
+| `float u_shadowLift` | 0..1, 0 neutral |
+| `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
+| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength, u_abDt` | **reserved** for Adaptive Brightness; already filled from config, consumed by nothing yet |
+
+Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
+struct written by `PanelShaders.cpp` and by `main.cpp`'s startup config apply, read by
+`vulkan_composite()` and by the three backends' "needs full composite" decision — all on
+the steamcompmgr thread, same discipline as `g_upscaleFilterSharpness`. `Why the startup
+apply:` under E2 nothing in `PanelShaders.cpp` runs per frame, so without it saved effects
+would only switch on the first time the Shaders area was drawn.
+
+Adaptive Brightness's rows, config, and values are intact and plumbed into the reserved
+fields; the shader multiplies by a constant `1.0` at the clearly marked seam, so the effect
+has **no visible result** until its history/measure half is rebuilt. The seams: sampler
+slot `VKR_EFFECTS_HISTORY_SLOT` (= 1, `descriptor_set_constants.h`) for the 1×1 adapted-
+luminance texel; the reserved `u_ab*` fields and the two reserved flag bits; the second
+`EffectsPushData_t` constructor argument (`flAbDtSeconds`, `0.0f` today); and
+`NativeEffectsState_t::AnyEnabled()`, which deliberately does not count
+`bAdaptiveBrightness` yet so an inert switch does not force a full composite.
+
+## Backends
+
+Every backend already forced a full composite for `!g_reshade_effect.empty()`
+(`DRMBackend.cpp`, `WaylandBackend.cpp`, `OpenVRBackend.cpp`). Each now also ORs in
+`vulkan_native_effects_active()`; without that, direct scanout would skip the pre-pass and
+the effects would silently vanish whenever the base layer could be scanned out directly.
 
 ## The four effects
 
-### Vibrancy (`image.shaders.vibrancy`)
-
-Adaptive saturation: boosts saturation more on already-dull pixels than on already-vivid
-ones (so vivid colours don't clip as fast toward the boost end), with an optional mask
-that dampens the effect on skin-tone-like hues.
-
-**Config**: `ReshadeVibrancySettings` (`src/Config/ConfigSchema.h`) —
-`enabled` (bool), `strength` (float), `protect_skin_tones` (bool, default true).
-
-**`strength` — a true saturation multiplier, 0.0..3.0, neutral at 1.0** (changed
-2026-09-04, request #2, from an additive -1.0..+1.0 boost with 0.0 neutral):
-
-- **0.0** — full greyscale.
-- **1.0** — the image is unchanged. This is the default.
-- **3.0** — maximum boost.
-
-Shader math (`ApplyVibrancy()` in `gamescope-ritz.fx`), built from two pieces that *add*
-rather than an if/else, so there is exactly one return and no branch-dependent code path
-to keep in sync:
-
-```
-mix   = min(VibrancyStrength, 1.0)
-boost = max(VibrancyStrength - 1.0, 0.0) * (1.0 - saturation) * skin_protect
-output = lerp(luma, color, mix + boost)
-```
-
-`mix` alone reaches the two endpoints (0.0 = full grey, 1.0 = unchanged) with a plain
-uniform blend toward luma — deliberately carrying none of the adaptive/skin-tone shaping,
-because at the 0.0 end *every* pixel must land on exactly the same grey target; a
-per-pixel exception there would mean 0.0 isn't really full greyscale for skin-toned or
-already-saturated pixels. `boost` is zero at and below neutral and picks up this effect's
-original adaptive shape above it, reparameterized off the new 1.0 neutral point instead of
-the old 0.0 one.
-
-`Why 0.0..3.0 with neutral at 1.0, not a boost-only 0.0..N range:` the user explicitly
-chose to keep desaturation reachable rather than clamp the slider to boost-only — see
-`requests-2026-09-04.md` item #2's "Decided" note.
-
-#### Migration: an existing config's old value
-
-The old scale's neutral (0.0, additive) does not mean the same thing as the new scale's
-0.0 (full greyscale, multiplicative) — reread blind, every config that never touched
-Vibrancy would suddenly open in black and white. This needed handling explicitly rather
-than shipped as a silent reinterpretation, so this fork's config schema-migration
-scaffold (`src/Config/ConfigManager.cpp`'s `ParseConfigFile`, built but never
-exercised until now — see its own comment) got its first real use:
-
-- `kCurrentSchemaVersion` bumped 1 → 2 (`src/Config/ConfigSchema.h`).
-- `Migrate_1_to_2()` (`src/Config/ConfigManager.cpp`) runs once, on load, for any file
-  whose `schema_version` is below 2 (including a file with no `schema_version` key at
-  all — everything predates the rename). It transforms `reshade.vibrancy.strength` in
-  place: `new = clamp(old + 1.0, 0.0, 3.0)`.
-
-`Why +1.0 and not something more elaborate:` +1.0 is exactly the constant that carries
-old-neutral onto new-neutral, so an untouched config (by far the common case) lands back
-on 1.0 — no greyscale surprise, the actual risk this migration exists to prevent. A
-config that *did* customize the old value keeps the same displacement from neutral
-instead of being reset to a single fallback value:
-
-| Old value (additive, 0.0 neutral) | New value (multiplier, 1.0 neutral) |
-| --- | --- |
-| `-1.0` (old min: full desaturate) | `0.0` (full greyscale) |
-| `0.0` (old neutral, untouched) | `1.0` (new neutral) — **the case that mattered** |
-| `+1.0` (old max boost) | `2.0` (a real boost, short of the new 3.0 ceiling) |
-
-The old max mapping to 2.0 rather than the new 3.0 ceiling is not an exact fidelity
-match — the effect's shape itself changed too (see the math above), so exact
-pixel-for-pixel equivalence was never really on the table — but it is monotonic, sane,
-and, most importantly, gets the untouched-default case exactly right.
-
-A config saved fresh under the new build round-trips its `strength` unmigrated (it
-already carries `schema_version: 2`, so `Migrate_1_to_2` is a no-op for it) — see
-`tests/test_config.cpp`'s `"a config saved under the current schema round-trips vibrancy
-strength unmigrated"`.
+The maths is ported 1:1 from the retired `.fx`, applied **per tap, in this order**:
+Shadow Control → Vibrancy → (Pre-Sharpen) → × Adaptive Brightness gain → `saturate`.
 
 ### Shadow Control (`image.shaders.shadow_lift`)
 
-New effect, added 2026-09-04 (request #3: *"a darkness booster for dark games"*).
-Brightens dark areas so detail in dark games becomes visible, while leaving bright areas
-essentially alone. **Not** a global brightness control (that would also wash out
-highlights) and **not** shadow-crushing (the opposite of what was asked).
+Added 2026-09-04 (request #3: *"a darkness booster for dark games"*). Brightens dark
+areas so detail becomes visible while leaving bright areas essentially alone — **not** a
+global brightness control and **not** shadow-crushing.
 
-**Config**: `ReshadeShadowLiftSettings` (`src/Config/ConfigSchema.h`) — `enabled` (bool,
-default false), `strength` (float, 0.0..1.0, default 0.0/neutral). Purely additive new
-struct/keys, so an existing config — which has neither key, the setting being brand new —
-simply resolves to these defaults. No migration needed for this one, unlike Vibrancy
-above.
-
-**The curve** (`ApplyShadowLift()` in `gamescope-ritz.fx`): a gamma curve on the low end.
+**Config**: `ReshadeShadowLiftSettings` — `enabled` (default false), `strength` (0.0..1.0,
+default 0.0/neutral). Purely additive keys; no migration.
 
 ```
 exponent = 1.0 - 0.5 * strength   // 1.0 (identity) down to 0.5 (sqrt) at strength=1.0
 output   = pow(saturate(color), exponent)
 ```
 
-`Why a gamma curve:` 0.0 and 1.0 are fixed points of *any* power curve (`0^g = 0`,
-`1^g = 1` for any `g > 0`), so black and white never move — only the shape between them
-does — which is exactly the "leave highlights alone" requirement, guaranteed
-mathematically rather than tuned into place. The curve concentrates its effect at the low
-end because a power function's derivative is largest near 0 for `g < 1`: at full
-strength, `0.1 → 0.316` (+0.216) while `0.9 → 0.949` (+0.049) — an order of magnitude
-smaller boost near white. The exponent range (1.0 down to 0.5, not further) was picked as
-the same shape a "raise gamma to ~2.0" boost applies — a familiar, well-understood amount
-rather than an arbitrary one.
+`Why a gamma curve:` 0.0 and 1.0 are fixed points of *any* power curve, so black and white
+never move — the "leave highlights alone" requirement guaranteed mathematically. The
+curve's effect concentrates at the low end (`0.1 → 0.316` vs `0.9 → 0.949` at full
+strength). The exponent floor of 0.5 is the same shape a "raise gamma to ~2.0" boost
+applies. `Why first:` a tone/exposure adjustment; lift-before-saturate is the conventional
+grading order, and it means Vibrancy's grey target is computed from the lifted colour.
 
-**Where in the pipeline, and which colour space:** folded into the *same* pixel-shader
-pass as Vibrancy (`PS_Vibrancy` in `gamescope-ritz.fx`) rather than given its own
-render-target pass. `Why:` both effects are cheap, purely per-pixel operations on one
-texture sample with no neighbour reads (unlike Pre-Sharpen's 4-tap blur) and no
-cross-frame state (unlike Adaptive Brightness's persistent luminance history) — there is
-nothing a separate pass would buy here beyond a redundant full-screen-triangle draw and an
-extra named texture. It runs on the base layer's encoded 0..1 sRGB-ish colour, the same
-space every other effect on this panel operates in (see "SDR only" above) — there is no
-linear-light or PQ value that can ever reach this `pow()` call, since the SDR-only gate
-keeps HDR/scRGB content out of the whole panel, not just this one effect.
+### Vibrancy (`image.shaders.vibrancy`)
 
-**Order relative to Vibrancy:** lift runs first, then Vibrancy. `Why:` this is a
-tone/exposure-style adjustment, and lift-before-saturate is the conventional order for
-that family of operations (the classic lift/gamma/gain grading chain runs tone shaping
-before vibrance/saturation). It also means Vibrancy's grey target (`luma`) is computed
-from the already-lifted colour, so a lifted pixel's desaturated version doesn't drift back
-toward a stale, pre-lift grey.
+Adaptive saturation with an optional skin-tone damper.
 
-**Bounds under HDR:** guaranteed safe by construction, not just by the panel's SDR gate.
-`pow()` of a `saturate()`-clamped 0..1 input to a positive exponent (`0.5..1.0` here) is
-mathematically bounded to 0..1 — it cannot go negative and cannot overshoot 1 — so even if
-the SDR gate were ever bypassed, this specific operation could not itself produce an
-out-of-range value. The pass's own closing `saturate()` (shared with Vibrancy, in
-`PS_Vibrancy`) is a second, independent backstop.
+**Config**: `ReshadeVibrancySettings` — `enabled`, `strength` (float),
+`protect_skin_tones` (default true).
 
-### Pre-Sharpen and Adaptive Brightness
+**`strength` — a true saturation multiplier, 0.0..3.0, neutral at 1.0** (changed
+2026-09-04, request #2, from an additive -1.0..+1.0 boost):
 
-Unchanged by this batch of work. See `gamescope-ritz.fx`'s header comment and
-`PanelShaders.cpp`'s own comments for their design (Pre-Sharpen: a 4-tap unsharp mask
-pre-upscale; Adaptive Brightness: an auto-exposure EMA against a self-sampled 1×1
-luminance history texture, `superdoc/planning/DECISIONS.md` #14).
+```
+mix   = min(strength, 1.0)
+boost = max(strength - 1.0, 0.0) * (1.0 - saturation) * skin_protect
+output = lerp(luma, color, mix + boost)
+```
 
-## When an effect appears to do nothing
+`mix` alone reaches both endpoints (0.0 = full grey, 1.0 = unchanged) with a plain blend
+toward luma, carrying none of the adaptive shaping — at 0.0 *every* pixel must land on the
+same grey. `boost` is zero at and below neutral and picks up the adaptive shape above it.
+`Why 0.0..3.0 with neutral at 1.0:` the user chose to keep desaturation reachable
+(`requests-2026-09-04.md` #2).
 
-The `.fx` is compiled at runtime from a file on disk while the panel that drives it is
-compiled into the binary, so the two ship separately and can drift — and an older copy of
-`gamescope-ritz.fx` under the legacy `~/.local/share/gamescope/reshade/Shaders/` tree
-wins the search over a newer one in the `gamescope-ritz` tree. When that happens the
-panel writes uniforms the loaded shader never declared, they are silently dropped, and
-the controls move with nothing changing on screen.
+#### Migration: an existing config's old value
 
-The Shaders area's **Diagnostics** group answers this directly: **loaded from** names the
-file that actually compiled, and **uniforms** says whether everything the panel writes is
-recognised by it (and lists what is not). See
-[reshade-effects](reshade-effects.md#where-effect-files-are-searched-and-how-a-stale-copy-shadows-a-new-one)
-for the search order, the mechanism, and the matching log lines.
+`kCurrentSchemaVersion` 1 → 2; `Migrate_1_to_2()` (`src/Config/ConfigManager.cpp`)
+transforms `reshade.vibrancy.strength` once, on load: `new = clamp(old + 1.0, 0.0, 3.0)`.
+`Why +1.0:` it carries old-neutral (0.0) onto new-neutral (1.0), so an untouched config
+does not open in black and white; a customised value keeps its displacement from neutral.
+A config saved under schema 2 round-trips unmigrated — `tests/test_config.cpp`.
+
+### Pre-Sharpen (`image.shaders.presharpen`) — now RCAS
+
+**Config**: `ReshadePreSharpenSettings` — `enabled`, `strength` (`optional<float>`,
+0.0..2.0, default 0.5).
+
+The `.fx` used a plain 4-tap unsharp mask. The native pass **reuses FSR1's RCAS**
+(`src/shaders/ffx_fsr1.h`, `FSR_RCAS_F`) instead: the same 5-tap cross, but clip-aware
+(its lobe is limited so a sharpened value cannot overshoot the local min/max ring) and
+normalised, so it does not ring on hard edges at high strength. `FsrRcasLoadF(p)` is
+defined as a clamped `texelFetch` on slot 0 **with Shadow Control and Vibrancy applied to
+each tap**, so the sharpen sees the graded image exactly as the `.fx`'s pass order did;
+when sharpen is off the centre tap is used directly. `FsrRcasInputF` is empty, as in
+`cs_composite_rcas.comp` — input is already encoded.
+
+**Slider → `con.x` mapping**, so today's slider feel is preserved: RCAS scales its lobe by
+`con.x ∈ 0..1` (`FsrRcasCon()` derives it as `exp2(-stops)`). With `k` the slider value,
+
+```
+con.x = clamp( k / (0.75 * (1 + k)), 0, 1 )      // 0→0 (off), 0.5→0.444, 1→0.667, 2→0.889
+```
+
+monotonic and saturating, so the top of the slider is "as sharp as RCAS goes" rather than
+a cliff. Passed as float bits (`u_rcasCon`), like `RcasPushData_t::u_c1`.
+
+### Adaptive Brightness (`image.shaders.adaptive_brightness`)
+
+Six params (the settings budget exactly — see below). Rows and config unchanged; **no
+visible result in this build** — see the seams section above. Its `.Default()` values in
+the panel and `ConfigSchema.h`'s compiled-in defaults currently disagree; that is left to
+the Adaptive Brightness rebuild.
 
 ## The settings-panel budget
 
-Each switch row may own at most six `Param`s before `Registry.cpp` aborts registration
-(the row must be promoted to a category instead) — see `PanelShaders.cpp`'s own "THE SIX
-BUDGET" comment. Current counts: Vibrancy 2, Pre-Sharpen 1, Adaptive Brightness 6 (zero
-headroom), **Shadow Control 1**.
+Each switch row may own at most six `Param`s before `Registry.cpp` aborts registration —
+see `PanelShaders.cpp`'s "THE SIX BUDGET" comment. Counts: Vibrancy 2, Pre-Sharpen 1,
+Adaptive Brightness 6 (zero headroom), Shadow Control 1.
+
+## Diagnostics
+
+The **Pipeline** Facts row keeps "base layer" (the SDR gate) and says the effects are built
+into the binary. The "effect file" / "compiled" / "loaded from" / "uniforms" rows added
+2026-09-05 for the stale-file case were removed the same day along with the failure they
+diagnosed.
 
 ## Related links
 
-- [reshade-effects](reshade-effects.md) — the generic compile/upload/uniform-push
-  mechanism these effects run through.
-- `superdoc/planning/reshade-shaders.md` — the M9 Adaptive Brightness design spike this
-  combined-effect file grew out of, including the HDR-space math question (Q6) still open
-  for a future milestone.
-- `superdoc/planning/DECISIONS.md` #13 (combined-file design), #14 (Adaptive Brightness),
-  #15 (SDR-only v1 scope).
-- `superdoc/planning/requests-2026-09-04.md` items #2 and #3 — the requests this page's
-  Vibrancy-migration and Shadow-Control sections document.
+- [reshade-effects](reshade-effects.md) — the ReShade loader, now for third-party `.fx`
+  files only.
+- [compositing-vulkan](compositing-vulkan.md) — where the pre-pass sits in
+  `vulkan_composite()`.
+- [scaling-filters](scaling-filters.md) — the built-in FSR/NIS path whose RCAS this reuses.
+- `superdoc/planning/DECISIONS.md` #12 (two sharpen controls), #15 (SDR-only), #27 (the
+  native port; #13/#14 superseded).
+- `superdoc/planning/requests-2026-09-04.md` items #2 and #3 — Vibrancy's range and
+  Shadow Control.

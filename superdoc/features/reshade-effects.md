@@ -1,8 +1,18 @@
-# ReShade Effects — runtime post-process shader pipeline
+# ReShade Effects — runtime post-process shader pipeline (third-party `.fx` only)
 
 A runtime pipeline that compiles and runs [ReShade](https://reshade.me/)-style `.fx`
 shader effects against the composited frame, for visual post-processing (e.g. color
 grading, sharpening, CRT-style filters) chosen by the user at runtime.
+
+**Scope since 2026-09-05:** this loader serves a user's *own* `.fx` files —
+`--reshade-effect`, the `gamescope_reshade` protocol, and the four-path search below all
+still work. The fork's **bundled** effects (Vibrancy, Shadow Control, Pre-Sharpen,
+Adaptive Brightness) no longer run through it: they are a native compute pre-pass compiled
+into the binary, see [shader-effects](shader-effects.md) and
+`superdoc/planning/DECISIONS.md` #27. `reshade/Shaders/gamescope-ritz.fx` and the
+install step that copied it are gone. `Why:` the stale-copy hazard described below
+silently no-op'd two of the four bundled effects; for effects the fork itself ships, the
+fix was to remove the runtime compile rather than diagnose it.
 
 This is a **different feature from FSR/NIS upscaling** — those are the *scaling* filters
 covered in [scaling-filters](scaling-filters.md); ReShade effects are arbitrary
@@ -63,17 +73,11 @@ newer version added is now a name the compiled module never declares. `RuntimeUn
 looks each uniform up by its `source = "..."` annotation, so a value pushed under a name
 the module does not declare is *dropped*: the control moves, nothing on screen changes.
 
-**How to tell.** Two Facts rows in the overlay's Shaders area (`Diagnostics` group) exist
-exactly for this:
-
-- **loaded from** — the absolute path the currently-loaded effect actually compiled
-  from. If that says `.../share/gamescope/reshade/...` when you expected the
-  `gamescope-ritz` tree, a stale copy won the search; delete or update it.
-- **uniforms** — `all recognised by the loaded shader`, or a count and the names that
-  the loaded module does not declare, meaning those controls do nothing.
-
-The same mismatch is logged once per uniform name to the `gamescope_reshade` log scope,
-so it is visible without opening the overlay. `Why once, and why it is a warning rather
+**How to tell.** The mismatch is logged once per uniform name to the `gamescope_reshade`
+log scope (the overlay's "loaded from" / "uniforms" Facts rows that surfaced the same
+data were removed 2026-09-05 with the bundled `.fx` they existed to diagnose; the
+diagnostics functions `reshade_effect_manager_shader_source()` /
+`reshade_effect_manager_missing_uniforms()` remain for the log path). `Why once, and why it is a warning rather
 than a hard failure:` a user's own `.fx` is allowed to omit uniforms gamescope knows
 about — that is a legitimate, working configuration — so this must not refuse to run the
 effect; and the uniform push happens on every slider tick, so an unthrottled log would
@@ -100,4 +104,4 @@ enables it, and optionally pushes uniform variable values to drive runtime param
 - [scaling-filters](scaling-filters.md) — the separate, built-in FSR/NIS upscale/sharpen path this feature is not part of.
 - [compositing-vulkan](compositing-vulkan.md) — the Vulkan composite path ReShade pipelines execute within.
 - [wayland-protocols](wayland-protocols.md) — conventions for Gamescope's custom protocols, including `gamescope-reshade.xml`.
-- [shader-effects](shader-effects.md) — the settings-panel/effect-content layer built on top of this mechanism (Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness, `reshade/Shaders/gamescope-ritz.fx`).
+- [shader-effects](shader-effects.md) — the fork's bundled effects (Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness), a native compute pre-pass that *replaced* the combined `.fx` this loader used to run.

@@ -35,6 +35,7 @@
 #include "Utils/Defer.h"
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
+#include "Overlay/PanelShaders.h"
 
 #include "backends.h"
 #include "refresh_rate.h"
@@ -483,6 +484,11 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	g_wantedUpscaleFilter = ritz_config_parse_filter(config.gamescope.filter);
 	g_wantedUpscaleScaler = ritz_config_parse_scaler(config.gamescope.scaler);
 	g_upscaleFilterSharpness = config.gamescope.sharpness;
+
+	// The Shaders area's effects (native compute pre-pass, rendervulkan.hpp's
+	// g_nativeEffects): saved effects are on from the first frame, not from
+	// the first time the overlay is opened.
+	gamescope::PanelShaders_ApplyStartupConfig( config );
 
 	cv_adaptive_sync = config.gamescope.vrr_enabled;
 	cv_hdr_enabled = config.gamescope.hdr_enabled;

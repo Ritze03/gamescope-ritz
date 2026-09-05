@@ -18,9 +18,10 @@
 #   Only build-release/src/gamescope itself by default. gamescopectl is a separate,
 #   distro-packaged binary (owned by the `gamescope-git` pacman package, not this
 #   repo's meson build) and is already present on the laptop the same way it is
-#   here — nothing to transfer. Lua config scripts and reshade effects are optional
-#   at runtime (gamescope fails safe if their directories don't exist) so they are
-#   not shipped unless --extras is given.
+#   here — nothing to transfer. Lua config scripts and looks are optional at
+#   runtime (gamescope fails safe if their directories don't exist) so they are
+#   not shipped unless --extras is given. The bundled shader effects are compiled
+#   into the binary, so there is no reshade/ tree to ship.
 #
 # TWO SSH FACTS THIS SCRIPT EXISTS TO HIDE
 #   1. Every `ssh host 'cmd'` is a fresh, non-interactive shell — none of the
@@ -37,7 +38,7 @@
 #   scripts/remote-test.sh sync [--extras] [--no-build]
 #       Build locally (release; niced +10 / ionice idle by the shared build
 #       helper — see gcr_build in gamescope-ritz-common.sh), then rsync the
-#       binary (and, with --extras, scripts/looks/reshade) to the remote test
+#       binary (and, with --extras, scripts/looks) to the remote test
 #       dir. --no-build skips the local build and ships whatever's already
 #       there.
 #
@@ -140,8 +141,8 @@ cmd_sync() {
 	"${SSH[@]}" "chmod +x $REMOTE_DIR/gamescope-ritz"
 
 	if [ "$extras" = "1" ]; then
-		gcr_info "rsyncing scripts/looks/reshade extras..."
-		for d in scripts looks reshade; do
+		gcr_info "rsyncing scripts/looks extras..."
+		for d in scripts looks; do
 			[ -d "$REPO_ROOT/$d" ] && rsync -avz --delete "$REPO_ROOT/$d/" "$REMOTE_HOST:$REMOTE_DIR/$d/"
 		done
 	fi

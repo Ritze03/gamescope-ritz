@@ -130,7 +130,7 @@ fi
 PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
 if [ -z "$EXTRAS" ]; then
 	echo
-	echo "Also refresh scripts/, looks/ and reshade/ in ${PREFIX_ROOT}/share/gamescope-ritz?"
+	echo "Also refresh scripts/ and looks/ in ${PREFIX_ROOT}/share/gamescope-ritz?"
 	echo "(namespaced by binary name — never touches a distro-packaged"
 	echo "/usr/bin/gamescope's own share/gamescope — see install-gamescope-ritz.sh"
 	echo "for details.)"

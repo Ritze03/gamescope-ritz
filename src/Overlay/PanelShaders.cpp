@@ -5,40 +5,38 @@
 // Two sharpness controls exist in this overlay on purpose (DECISIONS.md
 // #12): PanelDisplay.cpp's "Sharpness" control is gamescope's own built-in
 // post-upscale RCAS/NIS sharpen (only live when Filter is FSR or NIS); this
-// panel's "Pre-Sharpen" is a separate ReShade pass that runs pre-upscale,
-// at source resolution, and works regardless of which filter is active
-// (including Linear/Nearest/Pixel, where the built-in sharpen is a no-op).
-// The two can be combined and can visibly double up if both are pushed
-// hard -- that's an accepted trade-off of shipping both, not a bug.
+// panel's "Pre-Sharpen" is a separate pass that runs pre-upscale, at source
+// resolution, and works regardless of which filter is active (including
+// Linear/Nearest/Pixel, where the built-in sharpen is a no-op). The two can
+// be combined and can visibly double up if both are pushed hard -- that's an
+// accepted trade-off of shipping both, not a bug.
 //
-// Live parameter updates (superdoc/planning/reshade-shaders.md Q1): every
-// value this panel edits must be written via
-// reshade_effect_manager_set_uniform_variable(), which only reaches the
-// shader for a uniform gamescope-ritz.fx declared with its own `source`
-// annotation (RuntimeUniform, src/reshade_effect_manager.cpp:181-597).
-// Writing a plain global here instead would compile and look correct in
-// the UI while silently doing nothing on screen -- the exact failure mode
-// that mechanism warns about. See SetRuntimeUniformFloat/Bool below; every
-// control in this file goes through one of the two.
+// HOW A CONTROL REACHES THE SCREEN (DECISIONS.md #27, 2026-09-05). The four
+// effects are a native compute pre-pass compiled into the binary at build
+// time (src/shaders/cs_effects_layer0.comp, dispatched from
+// vulkan_composite() in rendervulkan.cpp). Every setter here writes the plain
+// host struct g_nativeEffects (rendervulkan.hpp); vulkan_composite() reads
+// it each frame and uploads it as the shader's uniform block. There is no
+// runtime compile, no file on disk, and no uniform-by-name lookup that a
+// stale shader could silently drop -- the failure mode the previous ReShade
+// .fx design had (a stale copy under the legacy ~/.local/share/gamescope/
+// reshade tree won the search and no-op'd every control it didn't declare)
+// is structurally gone: the shader and this panel ship in the same binary,
+// and a GLSL error fails the build.
 //
 // Thread safety: this panel is called from SettingsOverlay_AddLayer() on
 // the steamcompmgr thread, same as PanelDisplay.cpp (see that file's own
-// comment for the full argument). reshade_effect_manager_set_uniform_variable()
-// takes its own internal lock (g_runtimeUniformsMutex,
-// src/reshade_effect_manager.cpp) so it's actually safe to call from any
-// thread -- same-thread-as-the-render-loop is what this file relies on for
-// g_eLastBaseLayerColorspace (a relaxed atomic, but still logically a
-// single-writer/single-reader-per-frame value) and for
-// EnsureEffectLoaded()'s plain (non-atomic) s_bEffectLoaded latch.
+// comment for the full argument) -- the same thread vulkan_composite() and
+// the backends read g_nativeEffects on, so it is a plain struct with no
+// locking, same discipline as g_upscaleFilterSharpness (main.cpp).
+// g_eLastBaseLayerColorspace is a relaxed atomic for the same
+// single-writer/single-reader-per-frame reason it always was.
 #include "PanelShaders.h"
 
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <string>
-#include <vector>
 
-#include "reshade_effect_manager.hpp"
 #include "rendervulkan.hpp"
 #include "Config/ConfigManager.h"
 #include "Fonts.h"
@@ -54,26 +52,9 @@ extern std::atomic<GamescopeAppTextureColorspace> g_eLastBaseLayerColorspace;
 
 namespace gamescope
 {
-	// Install path for the combined effect: default_extras_install.sh
-	// installs this repo's reshade/ tree to $prefix/share/gamescope-ritz/reshade,
-	// matching exactly what ReshadeEffectPipeline::init()
-	// (src/reshade_effect_manager.cpp) looks under (it prefixes this path
-	// with ".../share/gamescope-ritz/reshade/Shaders/", local-usr then
-	// global-usr, falling back to the plain unnamespaced
-	// .../share/gamescope/reshade/Shaders/ at each scope for a user's
-	// pre-existing shader library). See reshade/Shaders/gamescope-ritz.fx
-	// for the effect itself.
-	static constexpr const char *k_pszEffectPath = "gamescope-ritz.fx";
-
 	static bool s_bConfigLoaded = false;
 	static uint64_t s_ulLoadedGeneration = 0;
 	static config::Settings s_CachedSettings;
-
-	// Set once the combined effect has actually been handed to
-	// ReshadeEffectManager. See EnsureEffectLoaded()'s comment for why this
-	// deliberately never goes back to false for the rest of the process's
-	// life once it's true.
-	static bool s_bEffectLoaded = false;
 
 	// M7: routes through config::IsSessionOverrideActive() instead of always
 	// writing global.json -- PanelConfig.cpp is the only thing that ever
@@ -84,78 +65,47 @@ namespace gamescope
 		config::EnqueueRoutedWrite( s_CachedSettings );
 	}
 
-	// Every parameter this panel exposes MUST go through one of these two
-	// helpers, never a plain global write -- see this file's header comment
-	// and gamescope-ritz.fx's own header comment for why. Ownership note:
-	// reshade_effect_manager_set_uniform_variable() takes ownership of the
-	// buffer (it `delete[]`s whatever was stored under the same key on the
-	// *next* call), so always hand it a freshly `new`'d buffer, never a
-	// pointer to a local/static.
-	static void SetRuntimeUniformFloat( const char *pszKey, float flValue )
+	// The one place config state becomes render state. Called after every
+	// edit, after every (re)load, and once at startup (see
+	// PanelShaders_ApplyStartupConfig) so g_nativeEffects can never lag the
+	// settings -- a full copy of a dozen scalars is cheaper than keeping
+	// per-field setters honest.
+	static void PushToRenderer( const config::Settings &settings )
 	{
-		uint8_t *pBuffer = new uint8_t[ sizeof( float ) ];
-		std::memcpy( pBuffer, &flValue, sizeof( float ) );
-		reshade_effect_manager_set_uniform_variable( pszKey, pBuffer );
+		const auto &r = settings.reshade;
+		NativeEffectsState_t &e = g_nativeEffects;
+
+		e.bShadowLift  = r.shadow_lift.enabled;
+		e.flShadowLift = r.shadow_lift.strength;
+
+		e.bVibrancy            = r.vibrancy.enabled;
+		e.flVibrancy           = r.vibrancy.strength;
+		e.bVibrancyProtectSkin = r.vibrancy.protect_skin_tones;
+
+		e.bPreSharpen  = r.pre_sharpen.enabled;
+		e.flPreSharpen = r.pre_sharpen.strength.value_or( 0.5f );
+
+		// Adaptive Brightness: plumbed through to the shader's reserved
+		// fields so Agent B only has to consume them. Until B lands the
+		// history/measure half, the pass multiplies by a constant 1.0 and
+		// this effect has no visible result -- the switch still saves.
+		e.bAdaptiveBrightness = r.adaptive_brightness.enabled;
+		e.flAbTarget    = r.adaptive_brightness.target_luminance;
+		e.flAbUpSpeed   = r.adaptive_brightness.adapt_up_speed;
+		e.flAbDownSpeed = r.adaptive_brightness.adapt_down_speed;
+		e.flAbMinGain   = r.adaptive_brightness.min_gain;
+		e.flAbMaxGain   = r.adaptive_brightness.max_gain;
+		e.flAbStrength  = r.adaptive_brightness.strength;
 	}
 
-	static void SetRuntimeUniformBool( const char *pszKey, bool bValue )
+	static void PushAllToRenderer()
 	{
-		// RuntimeUniform::update's boolean path reads exactly
-		// components() * sizeof(uint8_t) bytes -- one byte for a scalar
-		// bool uniform (src/reshade_effect_manager.cpp:559-565).
-		uint8_t *pBuffer = new uint8_t[ 1 ];
-		pBuffer[ 0 ] = bValue ? 1 : 0;
-		reshade_effect_manager_set_uniform_variable( pszKey, pBuffer );
+		PushToRenderer( s_CachedSettings );
 	}
 
-	// Loads the combined .fx exactly once per process -- the first time any
-	// effect in it is turned on -- and never unloads it again for the rest
-	// of the session, even once every effect is toggled back off. This is
-	// deliberate (DECISIONS.md #13): the whole point of the combined-.fx
-	// design is that toggling an effect costs a uniform write, not a
-	// recompile. Unloading whenever both effects are off would mean the
-	// *next* enable pays the synchronous parse+SPIR-V+pipeline-build cost
-	// on the render thread again, right as the user drags a slider --
-	// exactly the hitch this design exists to avoid. Paying a small
-	// constant per-frame general-queue cost for a loaded-but-fully-gated
-	// technique (both passes short-circuit to a plain copy when their
-	// uniform is off, see gamescope-ritz.fx) for the rest of the session is
-	// the accepted trade-off.
-	//
-	// ponytail: no reference counting or idle-timeout unload -- "load once,
-	// keep for the session" is the simplest thing that satisfies the
-	// "no recompile stutter on toggle" acceptance criterion (SPEC.md
-	// Build order M6). Upgrade path: an idle-timeout unload via
-	// reshade_effect_manager_disable_effect() if the always-loaded general-
-	// queue cost ever turns out to matter with both effects off in
-	// practice.
-	static void EnsureEffectLoaded()
+	void PanelShaders_ApplyStartupConfig( const config::Settings &config )
 	{
-		if ( s_bEffectLoaded )
-			return;
-
-		reshade_effect_manager_set_effect( k_pszEffectPath, nullptr );
-		reshade_effect_manager_enable_effect();
-		s_bEffectLoaded = true;
-	}
-
-	static void PushAllUniformsToShader()
-	{
-		auto &r = s_CachedSettings.reshade;
-		SetRuntimeUniformBool( "vibrancy_enabled", r.vibrancy.enabled );
-		SetRuntimeUniformFloat( "vibrancy_strength", r.vibrancy.strength );
-		SetRuntimeUniformBool( "vibrancy_protect_skin_tones", r.vibrancy.protect_skin_tones );
-		SetRuntimeUniformBool( "pre_sharpen_enabled", r.pre_sharpen.enabled );
-		SetRuntimeUniformFloat( "pre_sharpen_strength", *r.pre_sharpen.strength );
-		SetRuntimeUniformBool( "adaptive_brightness_enabled", r.adaptive_brightness.enabled );
-		SetRuntimeUniformFloat( "adaptive_brightness_target_luminance", r.adaptive_brightness.target_luminance );
-		SetRuntimeUniformFloat( "adaptive_brightness_adapt_up_speed", r.adaptive_brightness.adapt_up_speed );
-		SetRuntimeUniformFloat( "adaptive_brightness_adapt_down_speed", r.adaptive_brightness.adapt_down_speed );
-		SetRuntimeUniformFloat( "adaptive_brightness_min_gain", r.adaptive_brightness.min_gain );
-		SetRuntimeUniformFloat( "adaptive_brightness_max_gain", r.adaptive_brightness.max_gain );
-		SetRuntimeUniformFloat( "adaptive_brightness_strength", r.adaptive_brightness.strength );
-		SetRuntimeUniformBool( "shadow_lift_enabled", r.shadow_lift.enabled );
-		SetRuntimeUniformFloat( "shadow_lift_strength", r.shadow_lift.strength );
+		PushToRenderer( config );
 	}
 
 	static void EnsureConfigLoaded()
@@ -183,15 +133,11 @@ namespace gamescope
 
 		s_bConfigLoaded = true;
 
-		// A (re)load with effects enabled -- whether from a previous
-		// session's saved config on the very first draw, or a
-		// PanelConfig-triggered profile/override change mid-session -- must
-		// apply immediately, not wait for the user to touch a widget: load
-		// the effect and push its full state now if anything is on.
-		if ( s_CachedSettings.reshade.vibrancy.enabled || s_CachedSettings.reshade.pre_sharpen.enabled
-		     || s_CachedSettings.reshade.adaptive_brightness.enabled || s_CachedSettings.reshade.shadow_lift.enabled )
-			EnsureEffectLoaded();
-		PushAllUniformsToShader();
+		// A (re)load -- a previous session's saved config on the very first
+		// draw, or a PanelConfig-triggered profile/override change
+		// mid-session -- must apply immediately, not wait for the user to
+		// touch a widget.
+		PushAllToRenderer();
 	}
 
 	static bool IsBaseLayerSdr()
@@ -202,10 +148,10 @@ namespace gamescope
 	}
 
 	// =====================================================================
-	//  E2 (P3) -- the same three effects, declared instead of drawn
+	//  E2 (P3) -- the effects, declared instead of drawn
 	// =====================================================================
-	// P5 deleted the three legacy group drawers this replaced, along with
-	// the floating window that hosted them.
+	// P5 deleted the legacy group drawers this replaced, along with the
+	// floating window that hosted them.
 	//
 	// SHAPE: one switch row per effect, each owning its own parameters. This
 	// is the taxonomy's intended shape for exactly this data -- an effect is
@@ -224,19 +170,18 @@ namespace gamescope
 	// that Adaptive Brightness has become a category rather than a setting.
 	// Nothing here routes around the budget, and nothing should.
 	//
-	// EVERY WRITE STILL GOES THROUGH SetRuntimeUniform*(). A plain global
-	// write compiles and looks right in the UI while doing nothing on
-	// screen (see this file's header comment); the uniform path is the only
-	// one that reaches the shader. Bindings below therefore call the same
-	// two helpers the legacy controls call, and the enable bindings still
-	// call EnsureEffectLoaded() first.
+	// EVERY WRITE GOES THROUGH SetEffectEnabled()/SetEffectFloat() below --
+	// edit the cached config field, push the whole struct to the renderer,
+	// queue the save. Writing a config field alone would compile and look
+	// right in the UI while doing nothing on screen until the next config
+	// reload; the push is what makes the frame after the click different.
 	static config::Settings &Cfg()
 	{
 		EnsureConfigLoaded();
 		return s_CachedSettings;
 	}
 
-	// One reason string for all three effects, so the SDR gate cannot drift
+	// One reason string for all effects, so the SDR gate cannot drift
 	// between them. It replaces the legacy orange banner: SPEC §3.13 makes a
 	// reason mandatory on every disabled control, which puts the explanation
 	// on the control that is actually greyed instead of at the top of a panel.
@@ -245,29 +190,24 @@ namespace gamescope
 		"effects are SDR-only for now -- the focused app is presenting HDR or scRGB content, "
 		"whose values these passes would clip. A deliberate v1 limitation, not a bug";
 
-	// The enable half of an effect row, shared by all three: load the
-	// combined .fx on first use, push the uniform, persist. Written once
-	// because three copies of it is three chances to forget the load.
-	static void SetEffectEnabled( bool *pbField, const char *pszUniform, bool bOn )
+	static void SetEffectEnabled( bool *pbField, bool bOn )
 	{
 		*pbField = bOn;
-		if ( bOn )
-			EnsureEffectLoaded();
-		SetRuntimeUniformBool( pszUniform, bOn );
+		PushAllToRenderer();
 		QueueSave();
 	}
 
-	static void SetEffectFloat( float *pflField, const char *pszUniform, float flValue )
+	static void SetEffectFloat( float *pflField, float flValue )
 	{
 		*pflField = flValue;
-		SetRuntimeUniformFloat( pszUniform, flValue );
+		PushAllToRenderer();
 		QueueSave();
 	}
 
 	void PanelShaders_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
-		a.Keywords( "shader reshade effect vibrancy saturation sharpen adaptive brightness exposure shadow control lift darkness" );
+		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness exposure shadow control lift darkness" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.vibrancy.enabled ? 1 : 0 )
@@ -279,7 +219,7 @@ namespace gamescope
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
 		// for a switch set, and the shell computes it from the band's own
-		// switch rows. Three independent binaries are three rows -- they are
+		// switch rows. Independent binaries are separate rows -- they are
 		// NOT a Bank, because they can be turned on for unrelated reasons
 		// (SPEC §3.12's governing rule).
 		a.GroupCount( "Effects" );
@@ -287,7 +227,7 @@ namespace gamescope
 		a.Switch( "image.shaders.vibrancy", "Vibrancy",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.vibrancy.enabled; },
-				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, "vibrancy_enabled", b ); } ) )
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, b ); } ) )
 			.Help( "Makes dull colours more vivid, while leaving already-vivid colours alone." )
 			.Default( false )
 			.Keywords( "vibrancy saturation colour vividness" )
@@ -295,7 +235,7 @@ namespace gamescope
 			.Param( "strength", "Saturation",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.vibrancy.strength; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, "vibrancy_strength", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, f ); } ) )
 				.Help( "Colour intensity. 1x is unchanged, 0x is black and white, 3x is maximum boost." )
 				.Range( 0.0f, 3.0f )
 				.Step( 0.05f )   // 61 positions; 1.00, the default, is the neutral notch
@@ -304,22 +244,18 @@ namespace gamescope
 			.Param( "protect_skin", "Protect skin tones",
 				ui::AnyBind::Of<bool>(
 					[]{ return Cfg().reshade.vibrancy.protect_skin_tones; },
-					[]( bool b ) {
-						Cfg().reshade.vibrancy.protect_skin_tones = b;
-						SetRuntimeUniformBool( "vibrancy_protect_skin_tones", b );
-						QueueSave();
-					} ) )
+					[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.protect_skin_tones, b ); } ) )
 				.Help( "Keeps the saturation boost off skin tones, so faces don't turn orange." )
 				.Default( true );
 
 		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.pre_sharpen.enabled; },
-				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.pre_sharpen.enabled, "pre_sharpen_enabled", b ); } ) )
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.pre_sharpen.enabled, b ); } ) )
 			.Help( "Sharpens the picture before it's resized, so it works with any Filter -- unlike "
 			       "the Upscaling area's Sharpness, which only works with FSR or NIS." )
 			.Default( false )
-			.Keywords( "presharpen sharpen pre upscale clarity reshade" )
+			.Keywords( "presharpen sharpen pre upscale clarity" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
 			.Param( "strength", "Strength",
 				ui::AnyBind::Of<float>(
@@ -335,7 +271,7 @@ namespace gamescope
 					[]( float f ) {
 						auto &s = Cfg().reshade.pre_sharpen;
 						s.strength = f;
-						SetRuntimeUniformFloat( "pre_sharpen_strength", f );
+						PushAllToRenderer();
 						QueueSave();
 					} ) )
 				.Help( "How strong the sharpening is." )
@@ -344,23 +280,25 @@ namespace gamescope
 				.Default( 0.5f );
 
 		// SIX PARAMS -- the budget exactly. See this section's header.
+		//
+		// NOTE (2026-09-05): until Agent B lands the native Adaptive
+		// Brightness pass, this switch and its parameters save and are
+		// plumbed through to the shader's reserved fields, but have no
+		// visible result on screen. The Help text says so.
 		a.Switch( "image.shaders.adaptive_brightness", "Adaptive Brightness",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
-				[]( bool b ) {
-					SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled,
-					                  "adaptive_brightness_enabled", b );
-				} ) )
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled, b ); } ) )
 			.Help( "Experimental. Automatically brightens dark scenes and dims bright ones as you "
-			       "play, like your eyes adjusting." )
+			       "play, like your eyes adjusting. Currently being rebuilt -- has no visible "
+			       "effect in this build." )
 			.Default( false )
 			.Keywords( "adaptive brightness eye adaptation exposure auto experimental" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
 			.Param( "strength", "Strength",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.strength; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength,
-						"adaptive_brightness_strength", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength, f ); } ) )
 				.Help( "How strong the effect is." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
@@ -368,8 +306,7 @@ namespace gamescope
 			.Param( "target", "Target brightness",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance,
-						"adaptive_brightness_target_luminance", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance, f ); } ) )
 				.Help( "How bright the picture tries to settle at once it's adjusted." )
 				.Range( 0.1f, 0.9f )
 				.Step( 0.05f )   // 17 positions; both ends sit on the grid
@@ -377,8 +314,7 @@ namespace gamescope
 			.Param( "up_speed", "Brighten speed",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed,
-						"adaptive_brightness_adapt_up_speed", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed, f ); } ) )
 				.Help( "How quickly the picture brightens when a scene gets darker." )
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, one per tenth of a second
@@ -387,8 +323,7 @@ namespace gamescope
 			.Param( "down_speed", "Darken speed",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed,
-						"adaptive_brightness_adapt_down_speed", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed, f ); } ) )
 				.Help( "How quickly the picture dims when a scene gets brighter." )
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, as Brighten speed above
@@ -397,8 +332,7 @@ namespace gamescope
 			.Param( "min_gain", "Min gain",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain,
-						"adaptive_brightness_min_gain", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain, f ); } ) )
 				.Help( "How dark the adjustment is allowed to make the picture." )
 				.Range( 0.5f, 1.0f )
 				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
@@ -406,8 +340,7 @@ namespace gamescope
 			.Param( "max_gain", "Max gain",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain,
-						"adaptive_brightness_max_gain", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain, f ); } ) )
 				.Help( "How bright the adjustment is allowed to make the picture." )
 				.Range( 1.0f, 2.0f )
 				.Step( 0.05f )   // 21 positions
@@ -418,16 +351,14 @@ namespace gamescope
 		// the entry id and every config key deliberately keep the
 		// shadow_lift spelling so existing configs and saved palette
 		// entries keep working. It lifts shadows (brightens dark areas so
-		// detail becomes visible)
-		// while leaving highlights alone. One param, well under the six
-		// budget -- see this section's header comment. Neutral (0.0,
-		// identity) is the default, so an existing config is unaffected.
+		// detail becomes visible) while leaving highlights alone. One param,
+		// well under the six budget -- see this section's header comment.
+		// Neutral (0.0, identity) is the default, so an existing config is
+		// unaffected.
 		a.Switch( "image.shaders.shadow_lift", "Shadow Control",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.shadow_lift.enabled; },
-				[]( bool b ) {
-					SetEffectEnabled( &Cfg().reshade.shadow_lift.enabled, "shadow_lift_enabled", b );
-				} ) )
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.shadow_lift.enabled, b ); } ) )
 			.Help( "Brightens dark areas so detail in dark games is easier to see, while leaving "
 			       "bright areas alone." )
 			.Default( false )
@@ -436,8 +367,7 @@ namespace gamescope
 			.Param( "strength", "Strength",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.shadow_lift.strength; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.shadow_lift.strength,
-						"shadow_lift_strength", f ); } ) )
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.shadow_lift.strength, f ); } ) )
 				.Help( "How much darker areas are brightened." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
@@ -445,46 +375,24 @@ namespace gamescope
 
 		a.Group( "Diagnostics" );
 
+		// The "effect file" / "compiled" / "loaded from" / "uniforms" rows
+		// that used to live here diagnosed the runtime-compiled .fx drifting
+		// from the binary. The effects are compiled into the binary now
+		// (DECISIONS.md #27), so that failure cannot happen and the rows
+		// lost their consumer; only the SDR gate is left to explain.
 		a.Facts( "image.shaders_facts", "Pipeline", []{
 			return std::string( IsBaseLayerSdr() ? "SDR base layer -- effects available"
 			                                     : "HDR base layer -- effects unavailable" );
 		} )
 			.Help( "Shows whether these effects are currently active. Read-only." )
-			.Keywords( "reshade compile effect fx colourspace sdr hdr loaded" )
-			.Live( "effect file", []{ return ui::Fact{ "effect file", k_pszEffectPath }; } )
-			.Live( "compiled", []{
-				return ui::Fact{ "compiled", s_bEffectLoaded
-					? "yes -- loaded once and kept for the session"
-					: "not yet -- the effect is compiled the first time any effect is turned on" };
-			} )
+			.Keywords( "effect colourspace sdr hdr pipeline" )
 			.Live( "base layer", []{
 				return ui::Fact{ "base layer", IsBaseLayerSdr()
 					? "SDR (linear or sRGB)"
 					: "HDR (scRGB or PQ) -- the SDR-only gate is active" };
 			} )
-			// The .fx is compiled at runtime from a file on disk, so the
-			// shader and this binary are shipped separately and can drift.
-			// These two rows are the whole diagnosis when an effect's
-			// controls move but nothing changes on screen: which file won
-			// the search (a stale copy under the legacy
-			// ~/.local/share/gamescope/reshade tree shadows the current
-			// gamescope-ritz one), and whether anything this panel writes
-			// is unknown to the shader that actually loaded. See
-			// reshade_effect_manager.cpp's "Effect diagnostics" comment.
-			.Live( "loaded from", []{
-				std::string s = reshade_effect_manager_shader_source();
-				return ui::Fact{ "loaded from", s.empty()
-					? std::string( "nothing loaded yet" ) : s };
-			} )
-			.Live( "uniforms", []{
-				std::vector<std::string> missing = reshade_effect_manager_missing_uniforms();
-				if ( missing.empty() )
-					return ui::Fact{ "uniforms", "all recognised by the loaded shader" };
-				std::string s = std::to_string( missing.size() )
-					+ " not in the loaded shader -- those controls do nothing: ";
-				for ( size_t i = 0; i < missing.size(); i++ )
-					s += ( i ? ", " : "" ) + missing[ i ];
-				return ui::Fact{ "uniforms", s };
+			.Live( "effects", []{
+				return ui::Fact{ "effects", "built into this binary -- nothing is loaded from disk" };
 			} );
 	}
 

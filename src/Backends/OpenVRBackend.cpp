@@ -47,6 +47,7 @@ extern gamescope::ConVar<bool> cv_composite_force;
 extern bool g_bColorSliderInUse;
 extern bool fadingOut;
 extern std::string g_reshade_effect;
+bool vulkan_native_effects_active(); // rendervulkan.hpp
 
 extern gamescope::ConVar<bool> cv_hdr_enabled;
 
@@ -1618,6 +1619,9 @@ namespace gamescope
         bNeedsFullComposite |= g_bColorSliderInUse;
         bNeedsFullComposite |= pFrameInfo->bFadingOut;
         bNeedsFullComposite |= !g_reshade_effect.empty();
+        // The bundled effects (Shaders area) run as a compute pre-pass inside
+        // vulkan_composite(), so direct scanout would skip them silently.
+        bNeedsFullComposite |= vulkan_native_effects_active();
         bNeedsFullComposite |= !m_pBackend->UsesModifiers();
 
         if ( g_bOutputHDREnabled )

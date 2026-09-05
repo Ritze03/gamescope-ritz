@@ -29,12 +29,17 @@ image ready for presentation.
   detail. Every path ends by binding all layers with `bind_all_layers()`
   (`src/rendervulkan.cpp:3949`), which also decides per-layer nearest-vs-linear
   sampling from `Layer_t::filter` and `isScreenSize()`.
-- Before any of that, if a ReShade effect is active (`g_reshade_effect` non-empty), the
-  base layer's texture is run through `g_reshadeManager`'s pipeline and swapped in
-  place — ReShade sits *before* the main composite dispatch in the same function
-  (`src/rendervulkan.cpp:4037`-`4059`). Effect authoring and options are
-  [reshade-effects.md](reshade-effects.md)'s page; this is only the pipeline-ordering
-  fact.
+- Before any of that, two layer-0 pre-passes may run, in this order, each swapping its
+  output into `layers[0].tex` so the path chosen below consumes it unchanged: (1) if a
+  user's ReShade effect is active (`g_reshade_effect` non-empty), the base layer is run
+  through `g_reshadeManager`'s pipeline on the general queue with a CPU wait; (2) if any
+  bundled Shaders-area effect is on (`g_nativeEffects.AnyEnabled()`), the native
+  `SHADER_TYPE_EFFECTS_LAYER0` compute pass (`cs_effects_layer0.comp`) is recorded on
+  the same command buffer into the pooled `g_output.effectsOutput`, SDR/non-YCbCr only.
+  `FrameInfo_t::bBaseLayerEffectsApplied` guards both against running twice on one
+  frame's layer 0 (the pre-emptive-upscale texture, and the screenshot path's second
+  `vulkan_composite()` on the same struct). Ordering fact only — see
+  [reshade-effects.md](reshade-effects.md) and [shader-effects.md](shader-effects.md).
 - The composited result also gets an inline conversion/blit into an optional
   `pPipewireTexture` output texture in the same command buffer
   (`src/rendervulkan.cpp:4209`-`4255`) when PipeWire streaming is active, reusing the

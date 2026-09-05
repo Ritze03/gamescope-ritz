@@ -11,14 +11,26 @@ The newest version below is the one this build reports.
 
 ## [0.6.0] – 2026-09-05
 
-### Added
-- **Shader diagnostics**: the Shaders area now shows which effect file actually
-  loaded and warns when a control's setting is not recognised by it.
+### Fixed
+- **Shader effects always work**: Vibrancy, Shadow Control and Pre-Sharpen are now
+  built into gamescope-ritz itself instead of loaded from a shader file on disk, so
+  an old or missing file can no longer make a control do nothing.
+- **Screenshots no longer double-apply effects**: a `gamescopectl` screenshot now
+  shows the same picture as the screen when a shader effect is on.
+- **Saved effects apply at launch**: effects saved in your config are on from the
+  first frame instead of the first time the Shaders area is opened.
 
 ### Info
+- **Pre-Sharpen uses RCAS**: the pre-scale sharpen now uses the same FSR RCAS filter
+  as the Upscaling sharpness, which sharpens without ringing on hard edges; slider
+  values are unchanged.
 - **Shader effect names**: Pre-Sharpen, Adaptive Brightness and Shadow Control
   (formerly "Shadow lift") are now capitalised consistently; saved settings are
   unaffected.
+
+### Removed
+- **Bundled `reshade/` shader folder**: no longer installed or shipped; your own
+  ReShade `.fx` files via `--reshade-effect` keep working.
 
 ## [0.5.0] – 2026-09-04
 

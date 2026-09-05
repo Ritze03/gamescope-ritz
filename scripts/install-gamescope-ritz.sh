@@ -106,7 +106,7 @@ if [ "$DO_UNINSTALL" = "1" ]; then
 		# $PREFIX_ROOT/share/gamescope (a distro-packaged gamescope's).
 		case "$EXTRAS_DIR" in
 			*/share/gamescope-ritz)
-				if gcr_confirm "Also remove $EXTRAS_DIR (scripts/looks/reshade extras)?" y; then
+				if gcr_confirm "Also remove $EXTRAS_DIR (scripts/looks extras)?" y; then
 					GCR_PRIV_DIR="$PREFIX_ROOT"
 					gcr_as_priv rm -rf -- "$EXTRAS_DIR"
 					gcr_info "removed $EXTRAS_DIR."
@@ -190,12 +190,12 @@ gcr_info "installed: $TARGET ($MODE mode)"
 PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
 if [ -z "$EXTRAS" ]; then
 	echo
-	echo "default_extras_install.sh copies this repo's scripts/, looks/,"
-	echo "reshade/ and the bundled font license into ${PREFIX_ROOT}/share/gamescope-ritz"
+	echo "default_extras_install.sh copies this repo's scripts/, looks/ and"
+	echo "the bundled font license into ${PREFIX_ROOT}/share/gamescope-ritz"
 	echo "— namespaced by binary name, so it never touches a distro-packaged"
 	echo "/usr/bin/gamescope's own share/gamescope. Needed for gamescope-ritz's"
-	echo "scripts/ReShade/looks features to find their files, and for the"
-	echo "Geist font's OFL license to travel with the install."
+	echo "scripts/looks features to find their files, and for the Geist"
+	echo "font's OFL license to travel with the install."
 	if gcr_confirm "Run it now?" n; then EXTRAS="yes"; else EXTRAS="no"; fi
 fi
 if [ "$EXTRAS" = "yes" ]; then

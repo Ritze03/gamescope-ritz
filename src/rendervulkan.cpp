@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <bitset>
 #include <dlfcn.h>
@@ -46,6 +47,7 @@
 #include "cs_composite_rcas.h"
 #include "cs_easu.h"
 #include "cs_easu_fp16.h"
+#include "cs_effects_layer0.h"
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_nis.h"
 #include "cs_nis_fp16.h"
@@ -984,6 +986,7 @@ bool CVulkanDevice::createShaders()
 		SHADER(NIS, cs_nis);
 	}
 	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
+	SHADER(EFFECTS_LAYER0, cs_effects_layer0);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1214,6 +1217,7 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	SHADER(EASU, 1, 1, 1);
 	SHADER(NIS, 1, 1, 1);
 	SHADER(RGB_TO_NV12, 1, 1, 1);
+	SHADER(EFFECTS_LAYER0, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -3576,6 +3580,62 @@ static void update_tmp_images( uint32_t width, uint32_t height )
 	}
 }
 
+// Storage format for the native effects pre-pass output: the base layer's own
+// DRM format when the device can use it as an optimal-tiled storage+sampled
+// image (keeps a 10-bit game at 10 bits), else ARGB8888. Why the check: 10-bit
+// storage images are an optional Vulkan feature -- see
+// vulkan_get_rgb10_capture_format()'s note about NVIDIA -- and the answer is
+// per-format and constant for the process, so it is cached per format.
+static uint32_t effects_storage_format( uint32_t uInputDrmFormat )
+{
+	static std::unordered_map<uint32_t, uint32_t> s_cache;
+	auto it = s_cache.find( uInputDrmFormat );
+	if ( it != s_cache.end() )
+		return it->second;
+
+	uint32_t uResult = DRM_FORMAT_ARGB8888;
+	VkFormat vkFormat = DRMFormatToVulkan( uInputDrmFormat, false );
+	if ( vkFormat != VK_FORMAT_UNDEFINED && uInputDrmFormat != DRM_FORMAT_ARGB8888 )
+	{
+		VkFormatProperties props;
+		g_device.vk.GetPhysicalDeviceFormatProperties( g_device.physDev(), vkFormat, &props );
+		constexpr VkFormatFeatureFlags uNeeded = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+		if ( ( props.optimalTilingFeatures & uNeeded ) == uNeeded )
+			uResult = uInputDrmFormat;
+	}
+	s_cache[ uInputDrmFormat ] = uResult;
+	return uResult;
+}
+
+// Pooled output for the native effects pre-pass, same shape as
+// update_tmp_images() above: re-created only when the base layer's source
+// size or format changes.
+static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInputDrmFormat )
+{
+	const uint32_t uFormat = effects_storage_format( uInputDrmFormat );
+
+	if ( g_output.effectsOutput != nullptr
+			&& width == g_output.effectsOutput->width()
+			&& height == g_output.effectsOutput->height()
+			&& uFormat == g_output.effectsOutput->drmFormat() )
+	{
+		return true;
+	}
+
+	CVulkanTexture::createFlags createFlags;
+	createFlags.bSampled = true;
+	createFlags.bStorage = true;
+
+	g_output.effectsOutput = new CVulkanTexture();
+	if ( !g_output.effectsOutput->BInit( width, height, 1u, uFormat, createFlags, nullptr ) )
+	{
+		vk_log.errorf( "failed to create native effects output" );
+		g_output.effectsOutput = nullptr;
+		return false;
+	}
+	return true;
+}
+
 
 static bool init_nis_data()
 {
@@ -3938,6 +3998,70 @@ struct EasuPushData_t
 	}
 };
 
+// Uniform block for cs_effects_layer0.comp -- mirrors its `effects_t` block
+// field-for-field. The u_ab* tail is RESERVED for Adaptive Brightness (Agent
+// B): it is filled from the host state already, so B only has to consume it
+// in the shader, and the layout does not shift under B when it lands.
+struct EffectsPushData_t
+{
+	// Bit assignments are the contract with the shader's EFFECT_* consts.
+	static constexpr uint32_t kShadowLift        = 1u << 0;
+	static constexpr uint32_t kVibrancy          = 1u << 1;
+	static constexpr uint32_t kVibrancySkin      = 1u << 2;
+	static constexpr uint32_t kPreSharpen        = 1u << 3;
+	static constexpr uint32_t kAdaptiveBrightness = 1u << 4;  // reserved for Agent B
+	static constexpr uint32_t kResetHistory      = 1u << 31; // reserved for Agent B
+
+	uint32_t u_flags;
+	float    u_vibrancy;
+	float    u_shadowLift;
+	uint32_t u_rcasCon;
+
+	float    u_abTarget;
+	float    u_abUp;
+	float    u_abDown;
+	float    u_abMin;
+	float    u_abMax;
+	float    u_abStrength;
+	float    u_abDt;
+
+	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
+	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
+	// exp2(-sharpness_in_stops)); mapping k -> k / (0.75 * (1 + k)) keeps
+	// today's slider feel: 0 -> 0 (off), 0.5 -> 0.444, 1 -> 0.667, 2 -> 0.889,
+	// monotonic and saturating so the top of the slider is "as sharp as RCAS
+	// goes" rather than a cliff. Passed as float bits, exactly like
+	// RcasPushData_t::u_c1 (RCAS reads con.x with AF1_AU1).
+	static float RcasConX( float flStrength )
+	{
+		const float k = std::clamp( flStrength, 0.0f, 2.0f );
+		return std::clamp( k / ( 0.75f * ( 1.0f + k ) ), 0.0f, 1.0f );
+	}
+
+	EffectsPushData_t( const NativeEffectsState_t &s, float flAbDtSeconds )
+	{
+		u_flags = 0;
+		if ( s.bShadowLift )          u_flags |= kShadowLift;
+		if ( s.bVibrancy )            u_flags |= kVibrancy;
+		if ( s.bVibrancyProtectSkin ) u_flags |= kVibrancySkin;
+		if ( s.bPreSharpen )          u_flags |= kPreSharpen;
+		if ( s.bAdaptiveBrightness )  u_flags |= kAdaptiveBrightness;
+
+		u_vibrancy   = s.flVibrancy;
+		u_shadowLift = s.flShadowLift;
+		const float flCon = s.bPreSharpen ? RcasConX( s.flPreSharpen ) : 0.0f;
+		u_rcasCon = std::bit_cast<uint32_t>( flCon );
+
+		u_abTarget   = s.flAbTarget;
+		u_abUp       = s.flAbUpSpeed;
+		u_abDown     = s.flAbDownSpeed;
+		u_abMin      = s.flAbMinGain;
+		u_abMax      = s.flAbMaxGain;
+		u_abStrength = s.flAbStrength;
+		u_abDt       = flAbDtSeconds;
+	}
+};
+
 struct RcasPushData_t
 {
 	uvec2_t u_layer0Offset;
@@ -4132,6 +4256,13 @@ ReshadeEffectPipeline *g_pLastReshadeEffect = nullptr;
 // for the same single-writer-thread, cross-file-read shape.
 std::atomic<GamescopeAppTextureColorspace> g_eLastBaseLayerColorspace{ GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB };
 
+NativeEffectsState_t g_nativeEffects;
+
+bool vulkan_native_effects_active()
+{
+	return g_nativeEffects.AnyEnabled();
+}
+
 std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pPipewireTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride, bool increment, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer )
 {
 	EOTF outputTF = frameInfo->outputEncodingEOTF;
@@ -4157,7 +4288,7 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	// call. Deliberately leave g_pLastReshadeEffect/g_reshadeManager's
 	// cached pipeline untouched here -- they still reflect the pipeline
 	// the earlier call in this frame already built and ran.
-	else if (!frameInfo->bBaseLayerReshaded)
+	else if (!frameInfo->bBaseLayerEffectsApplied)
 	{
 		if (frameInfo->layers.get( 0 ).tex)
 		{
@@ -4178,6 +4309,14 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 			{
 				uint64_t seq = pipeline->execute(frameInfo->layers.get( 0 ).tex, &frameInfo->layers.get( 0 ).tex);
 				g_device.wait(seq);
+				// Layer 0 now IS the effect output. Mark the struct so a
+				// second vulkan_composite() on this same FrameInfo_t this
+				// frame -- the screenshot path re-compositing paint_all()'s
+				// frameInfo after Present() already did -- does not run the
+				// effect on its own output (measured live as gain^2 in a
+				// gamescopectl screenshot). Same gate the native pre-pass
+				// below relies on.
+				frameInfo->bBaseLayerEffectsApplied = true;
 			}
 		}
 	}
@@ -4203,6 +4342,88 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 
 	for (uint32_t i = 0; i < EOTF_Count; i++)
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);
+
+	// Native layer-0 effects pre-pass (DECISIONS.md #27): the bundled
+	// Shaders-area effects (Shadow Control, Vibrancy, Pre-Sharpen; Adaptive
+	// Brightness once Agent B lands) as ONE compute dispatch over the base
+	// layer at source resolution, whose output is swapped into layer 0 so
+	// the FSR/NIS/blur/blit paths below consume it exactly as they consumed
+	// the ReShade output before. Same command buffer, same compute queue --
+	// no general-queue detour and no g_device.wait() CPU stall like the
+	// ReShade block above pays.
+	//
+	// Why here and not in the composite shaders: layer 0 is read four
+	// different ways there (composite.h, cs_composite_rcas.comp, blur.h,
+	// cs_composite_blur*.comp), Pre-Sharpen needs its neighbours at SOURCE
+	// resolution before scaling, and the composite chain has already
+	// degamma'd by the time it has a colour -- these effects were authored
+	// for encoded 0..1 values (see the shader's header).
+	//
+	// Gates: the same per-frame flag that stops ReShade re-running on a
+	// pre-upscaled texture; SDR only (DECISIONS.md #15 -- HDR/scRGB/passthru
+	// layers are skipped, and the panel greys the switches via
+	// g_eLastBaseLayerColorspace); no YCbCr (the shader samples one RGB
+	// plane); and at least one effect on.
+	//
+	// NEVER TWICE ON ONE FRAME'S LAYER 0. Two independent gates, because
+	// this function is called more than once per frame with the SAME
+	// FrameInfo_t: the backend's Present() composites paint_all()'s
+	// frameInfo in place (SDL/Wayland/OpenVR pass the pointer straight
+	// through), and `gamescopectl screenshot` then re-composites that very
+	// struct into a mappable texture (steamcompmgr.cpp's screenshot block).
+	// Layer 0's tex was swapped for the effects output by the first call,
+	// so the second would grade the graded image -- measured live as
+	// gain^2 in a gamescopectl screenshot vs gain in grim of the same
+	// frame under the ReShade path, which only had the pre-upscale flag.
+	// Gate 1: bBaseLayerEffectsApplied is set on the frameInfo itself the
+	// moment the pass runs (and by steamcompmgr for the pre-emptive-upscale
+	// texture), so any later call on this struct skips. Gate 2: if layer 0
+	// already IS the pooled effects output, it has been processed whatever
+	// the flag says -- belt and braces against a caller that copies the
+	// struct before the flag is set.
+	if ( frameInfo->layers.get( 0 ).tex
+		&& !frameInfo->bBaseLayerEffectsApplied
+		&& frameInfo->layers.get( 0 ).tex.get() != g_output.effectsOutput.get()
+		&& g_nativeEffects.AnyEnabled() )
+	{
+		FrameInfo_t::Layer_t &layer0 = frameInfo->layers.get( 0 );
+		const GamescopeAppTextureColorspace eColorspace = layer0.colorspace;
+		const bool bSdr = !ColorspaceIsHDR( eColorspace ) && eColorspace != GAMESCOPE_APP_TEXTURE_COLORSPACE_PASSTHRU;
+
+		if ( bSdr && !layer0.isYcbcr() )
+		{
+			const uint32_t uWidth  = layer0.tex->width();
+			const uint32_t uHeight = layer0.tex->height();
+
+			if ( update_effects_image( uWidth, uHeight, layer0.tex->drmFormat() ) )
+			{
+				// Encoded in, encoded out: setTextureSrgb(0, true) selects the
+				// raw UNORM view (srgbView() == "values still sRGB-encoded";
+				// bind_all_layers does the same for SRGB layers), and the
+				// storage target is written through its UNORM view too.
+				cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
+				cmdBuffer->bindTarget( g_output.effectsOutput );
+				cmdBuffer->bindTexture( 0, layer0.tex );
+				cmdBuffer->setTextureSrgb( 0, true );
+				cmdBuffer->setSamplerUnnormalized( 0, true );
+				cmdBuffer->setSamplerNearest( 0, true );
+				// AGENT B SEAM: bind the 1x1 adapted-luminance history at
+				// VKR_EFFECTS_HISTORY_SLOT here (setTextureSrgb(slot, true),
+				// nearest), and record B's measure/adapt dispatch(es) just
+				// above this bindPipeline() -- reading layer0.tex (or last
+				// frame's g_output.effectsOutput), writing the history
+				// texture. The frametime for u_abDt goes in the second
+				// constructor argument; 0.0f until then.
+				cmdBuffer->uploadConstants<EffectsPushData_t>( g_nativeEffects, 0.0f );
+
+				const int nPixelsPerGroup = 8;
+				cmdBuffer->dispatch( div_roundup( uWidth, nPixelsPerGroup ), div_roundup( uHeight, nPixelsPerGroup ) );
+
+				layer0.tex = g_output.effectsOutput;
+				frameInfo->bBaseLayerEffectsApplied = true;
+			}
+		}
+	}
 
 	if ( frameInfo->useFSRLayer0 )
 	{

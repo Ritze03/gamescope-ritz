@@ -193,7 +193,8 @@ namespace gamescope::config
         // resolves to these compiled-in defaults -- no migration needed, see
         // superdoc/features/shader-effects.md's "Shadow lift" section.
         bool enabled = false;
-        // 0.0..1.0, 0.0 neutral (identity). Applied in gamescope-ritz.fx as a
+        // 0.0..1.0, 0.0 neutral (identity). Applied in
+        // src/shaders/cs_effects_layer0.comp (the native effects pre-pass) as a
         // gamma curve on the low end: out = pow(color, 1.0 - 0.5*strength).
         // 0 and 1 are fixed points of any power curve, so black and white
         // never move; only the shape in between does, with the curve's

@@ -329,21 +329,21 @@ struct FrameInfo_t
 	// the cost is paid only on the frames that actually need it.
 	bool bNeedsDestinationBlend = false;
 
-	// Issue #20 fix: set by steamcompmgr's preemptive-upscale path
-	// (commit_t::ShouldPreemptivelyUpscale(), paint_window_commit() in
-	// steamcompmgr.cpp) when layers.get(0).tex is *already* the
-	// pre-upscaled, output-resolution texture that a prior, separate
-	// vulkan_composite() call this same frame produced -- ReShade (if
-	// active) already ran on it there, pre-upscale, at source resolution,
-	// per the #11 design intent. Without this, vulkan_composite()'s ReShade
-	// block below would run a *second* time on that same content, now
-	// post-upscale, with a different ReshadeEffectKey (different buffer
-	// dimensions) than the first call used. Since ReshadeEffectManager
-	// caches only one pipeline, the two calls' keys never match each
-	// other and every vulkan_composite() call -- both of them, every
-	// frame -- tears down and fully recompiles the FX pipeline inline on
-	// this thread. See rendervulkan.cpp's vulkan_composite().
-	bool bBaseLayerReshaded;
+	// Issue #20 fix, generalised for the native effects pre-pass: set by
+	// steamcompmgr when layer 0's texture is the pre-upscaled, output-
+	// resolution texture that a prior, separate vulkan_composite() call
+	// this same frame produced -- every layer-0 effect (the native
+	// cs_effects_layer0 pre-pass and ReShade, if active) already ran on it
+	// there, pre-upscale, at source resolution, per the #11 design intent.
+	// Without this, vulkan_composite() would run them a *second* time on
+	// that same content, now post-upscale: the native pass would visibly
+	// double-apply every effect, and ReShade would build a ReshadeEffectKey
+	// with different buffer dimensions than the first call used -- since
+	// ReshadeEffectManager caches only one pipeline, the two calls' keys
+	// never match and every vulkan_composite() call tears down and fully
+	// recompiles the FX pipeline inline on this thread. See
+	// rendervulkan.cpp's vulkan_composite(). (Was bBaseLayerReshaded.)
+	bool bBaseLayerEffectsApplied;
 
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];
 	gamescope::Rc<CVulkanTexture> lut3D[EOTF_Count];
@@ -509,6 +509,51 @@ gamescope::OwningRc<CVulkanTexture> vulkan_create_texture_from_dmabuf( struct wl
 gamescope::OwningRc<CVulkanTexture> vulkan_create_texture_from_bits( uint32_t width, uint32_t height, uint32_t contentWidth, uint32_t contentHeight, uint32_t drmFormat, CVulkanTexture::createFlags texCreateFlags, void *bits );
 gamescope::OwningRc<CVulkanTexture> vulkan_create_texture_from_wlr_buffer( struct wlr_buffer *buf, gamescope::OwningRc<gamescope::IBackendFb> pBackendFb );
 
+// The bundled "Shaders" area effects, run natively as a compute pre-pass on
+// the base layer inside vulkan_composite() (cs_effects_layer0.comp; see
+// superdoc/features/shader-effects.md). Written by Overlay/PanelShaders.cpp
+// and read by vulkan_composite() and the backends' full-composite decision,
+// all on the steamcompmgr thread -- a plain struct, same discipline as
+// g_upscaleFilterSharpness (main.cpp), no atomics needed. Defaults mirror
+// Config/ConfigSchema.h's ReshadeSettings so a frame rendered before the
+// panel's first config load is neutral.
+struct NativeEffectsState_t
+{
+	bool  bShadowLift = false;
+	float flShadowLift = 0.0f;           // 0..1, 0 neutral
+
+	bool  bVibrancy = false;
+	float flVibrancy = 1.0f;             // 0..3, 1 neutral
+	bool  bVibrancyProtectSkin = true;
+
+	bool  bPreSharpen = false;
+	float flPreSharpen = 0.5f;           // 0..2, the panel's slider scale
+
+	// Adaptive Brightness: values are plumbed through to the shader's
+	// reserved u_ab* fields, but the pass multiplies by a constant 1.0
+	// until Agent B lands the history/measure half. Not counted in
+	// AnyEnabled() until then -- B flips that, so an enabled-but-inert
+	// effect does not force a full composite for nothing.
+	bool  bAdaptiveBrightness = false;
+	float flAbTarget = 0.5f;
+	float flAbUpSpeed = 1.0f;
+	float flAbDownSpeed = 1.0f;
+	float flAbMinGain = 0.5f;
+	float flAbMaxGain = 2.0f;
+	float flAbStrength = 1.0f;
+
+	bool AnyEnabled() const
+	{
+		return bShadowLift || bVibrancy || bPreSharpen /* || bAdaptiveBrightness -- Agent B */;
+	}
+};
+extern NativeEffectsState_t g_nativeEffects;
+
+// True when the native pre-pass would run this frame (some bundled effect is
+// on). The backends OR this into their bNeedsFullComposite alongside
+// !g_reshade_effect.empty(), or direct scanout would silently skip it.
+bool vulkan_native_effects_active();
+
 std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
 void vulkan_wait( uint64_t ulSeqNo, bool bReset );
 gamescope::Rc<CVulkanTexture> vulkan_get_last_output_image( bool partial, bool defer );
@@ -646,6 +691,11 @@ struct VulkanOutput_t
 	// NIS and FSR
 	gamescope::OwningRc<CVulkanTexture> tmpOutput;
 
+	// Native layer-0 effects pre-pass output (cs_effects_layer0.comp), pooled
+	// at the base layer's source size like tmpOutput -- see
+	// update_effects_image() in rendervulkan.cpp.
+	gamescope::OwningRc<CVulkanTexture> effectsOutput;
+
 	// NIS
 	gamescope::OwningRc<CVulkanTexture> nisScalerImage;
 	gamescope::OwningRc<CVulkanTexture> nisUsmImage;
@@ -661,6 +711,7 @@ enum ShaderType {
 	SHADER_TYPE_RCAS,
 	SHADER_TYPE_NIS,
 	SHADER_TYPE_RGB_TO_NV12,
+	SHADER_TYPE_EFFECTS_LAYER0, // cs_effects_layer0.comp: the bundled Shaders-area effects, pre-scale, on layer 0
 
 	SHADER_TYPE_COUNT
 };

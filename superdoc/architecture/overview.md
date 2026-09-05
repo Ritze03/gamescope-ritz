@@ -54,10 +54,12 @@ one place that wires all of it together at startup.
   [steamcompmgr-focus](../features/steamcompmgr-focus.md).
 - **Vulkan compositor** — `vulkan_composite()` (`src/rendervulkan.cpp:4030`) turns a
   per-frame `FrameInfo_t` layer stack into a finished image via hand-written compute
-  shaders (blit/FSR/NIS/blur), with ReShade and HDR color-management steps folded
-  into the same dispatch. See [compositing-vulkan](../features/compositing-vulkan.md),
+  shaders (blit/FSR/NIS/blur), with the bundled effects pre-pass, ReShade, and HDR
+  color-management steps folded into the same function. See
+  [compositing-vulkan](../features/compositing-vulkan.md),
   [scaling-filters](../features/scaling-filters.md),
-  [hdr-color-management](../features/hdr-color-management.md), and
+  [hdr-color-management](../features/hdr-color-management.md),
+  [shader-effects](../features/shader-effects.md), and
   [reshade-effects](../features/reshade-effects.md).
 - **Vblank timing** — `gamescope::CVBlankTimer` (`src/vblankmanager.hpp:27`, global
   singleton via `GetVBlankTimer()`, `src/vblankmanager.cpp:405`) is the pacing clock
@@ -158,8 +160,9 @@ pass through `steamcompmgr_main`'s loop, re-derives focus if dirty
 (`src/steamcompmgr.cpp:2564`) walks the focused window stack, fills a `FrameInfo_t`
 (`src/rendervulkan.hpp:281`) with one `Layer_t` per visible layer (base plane,
 override, underlay, decorations, cursor) → `vulkan_composite()`
-(`src/rendervulkan.cpp:4030`) runs the ReShade pass if active
-([reshade-effects](../features/reshade-effects.md)), the FSR/NIS/blit scaling pass
+(`src/rendervulkan.cpp:4030`) runs the ReShade pass if a user `.fx` is active
+([reshade-effects](../features/reshade-effects.md)), then the bundled effects pre-pass
+if any is on ([shader-effects](../features/shader-effects.md)), the FSR/NIS/blit scaling pass
 ([scaling-filters](../features/scaling-filters.md)), and binds the per-EOTF shaper/3D
 LUTs and CTM ([hdr-color-management](../features/hdr-color-management.md)) → the
 active `IBackendConnector::Present()` (`src/backend.h:205`) either submits a real DRM
@@ -185,7 +188,7 @@ commit.cpp                              [import/cache]
 steamcompmgr.cpp:paint_all (:2564)      [owns window/focus state, vblank-paced]
       │  build FrameInfo_t (layer stack)
       ▼
-rendervulkan.cpp:vulkan_composite (:4030)   [reshade → scale/upscale → color mgmt]
+rendervulkan.cpp:vulkan_composite (:4030)   [reshade → effects pre-pass → scale/upscale → color mgmt]
       │  ├─ screenshot tap (control-ipc)
       │  └─ pipewire tap (same cmd buffer)
       ▼

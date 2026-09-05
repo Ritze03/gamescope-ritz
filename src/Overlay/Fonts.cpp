@@ -3,8 +3,8 @@
 // weights (OFL-licensed, see Overlay/fonts/LICENSE-OFL.txt), embedded as C
 // byte arrays at build time (Overlay/fonts/embed_font.py, wired in
 // src/meson.build) rather than loaded from a filesystem path -- gamescope
-// already installs its ReShade assets to a share/ prefix at runtime
-// (PanelShaders.cpp's k_pszEffectPath comment), but a font that must always
+// installs its scripts/looks assets to a share/ prefix at runtime
+// (default_extras_install.sh), but a font that must always
 // be present for basic UI legibility is worth compiling in rather than
 // depending on an install-time copy step succeeding.
 //

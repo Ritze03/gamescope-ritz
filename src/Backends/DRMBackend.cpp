@@ -3676,6 +3676,9 @@ namespace gamescope
 			bNeedsFullComposite |= g_bColorSliderInUse;
 			bNeedsFullComposite |= pFrameInfo->bFadingOut;
 			bNeedsFullComposite |= !g_reshade_effect.empty();
+			// The bundled effects (Shaders area) run as a compute pre-pass inside
+			// vulkan_composite(), so direct scanout would skip them silently.
+			bNeedsFullComposite |= vulkan_native_effects_active();
 
 			if ( g_bOutputHDREnabled )
 			{

@@ -242,7 +242,8 @@ legible, not collapse them into one slider.
 ---
 
 ### 13. ReShade effects ship as one combined `.fx`, each effect gated by its own on/off uniform
-**Status:** DECIDED
+**Status:** SUPERSEDED by #27 (2026-09-05) — the bundled effects are no longer a `.fx`
+at all. The reasoning below still governs the ReShade manager for a user's own effects.
 
 **Why:** gamescope's ReShade manager loads one effect at a time, and
 *switching* effects forces a synchronous FX parse + SPIR-V compile + Vulkan
@@ -264,7 +265,10 @@ constraint in the ReShade manager itself is not being fixed — see
 ---
 
 ### 14. Adaptive Brightness is deferred; Vibrancy and Sharpness ship first
-**Status:** DECIDED — landed on master 2026-08-22, see updates below.
+**Status:** DECIDED — landed on master 2026-08-22, see updates below. The `.fx`
+implementation this records is SUPERSEDED by #27 (2026-09-05): the persistence findings
+below informed the design, but the effect is being rebuilt as part of the native
+pre-pass and has no visible result until that lands.
 
 **Why:** Adaptive Brightness needs persistent inter-frame texture state that
 no shipped effect in the repo exercises, so it carries real risk relative to
@@ -796,10 +800,49 @@ reads them and retiring them is a later, separate phase's job.
 
 ---
 
+### 27. The four bundled effects are a native compute pre-pass compiled at build time
+**Status:** DECIDED (user, 2026-09-05)
+
+**Why:** `reshade/Shaders/gamescope-ritz.fx` compiled at runtime from whichever
+copy won `ReshadeEffectPipeline::init()`'s four-directory search. A stale copy
+under the legacy `~/.local/share/gamescope/reshade` tree silently no-op'd
+Shadow Control and Adaptive Brightness for the user: the panel pushed uniforms
+the compiled module never declared, they were dropped by name, and a green
+build proved nothing because the shader was never part of the build. The
+alternative — keep the `.fx` and add diagnostics rows ("loaded from",
+"uniforms") — was implemented the day before and rejected the same day as
+detecting a failure that should not be possible.
+
+**What:** `src/shaders/cs_effects_layer0.comp`, compiled by `src/meson.build`'s
+`glsl_generator` like every other compute shader (a GLSL error fails the build
+— verified), dispatched from `vulkan_composite()` on the base layer at source
+resolution in the slot ReShade already occupied, on the same compute command
+buffer, on encoded sRGB values (the same UNORM view the `.fx` read). The maths
+is ported 1:1 for Shadow Control and Vibrancy; Pre-Sharpen reuses FSR1's RCAS
+instead of the `.fx`'s unsharp mask (clip-aware, normalised, same 5 taps).
+Adaptive Brightness's fields, flag bits, and a sampler slot are reserved in the
+uniform block so it can land on top without shifting the layout; it has no
+visible result until then.
+
+**Consequences:** Nothing in storage changes — config keys stay `reshade.*`,
+entry ids stay `image.shaders.*`, struct `ReshadeSettings` and JSON key
+`reshade` stay. The `reshade/` tree, its install step, and the diagnostics
+rows are deleted. The ReShade manager, the `gamescope_reshade` protocol,
+`--reshade-effect`, and the four-path search stay for users' own `.fx` files.
+The backends' full-composite decision now also checks
+`vulkan_native_effects_active()`, or direct scanout would skip the pass.
+Supersedes #13 and #14's `.fx` implementation.
+
+**Source:** `superdoc/features/shader-effects.md`.
+
+---
+
 ## Still open
 
 One genuine open item remains: the ReShade manager's single-effect-at-a-time
-constraint. Decision 13 works around it (gating effects behind uniforms
-inside one combined `.fx`) rather than fixing it — extending the manager to
-properly chain/compose multiple effects remains a possible future
+constraint. Decision 13 worked around it (gating effects behind uniforms
+inside one combined `.fx`) rather than fixing it; with #27 the fork's own
+effects no longer depend on the manager at all, so this now only affects a
+user running more than one of their own `.fx` files — extending the manager
+to properly chain/compose multiple effects remains a possible future
 improvement, not ruled out, just not pursued now.
