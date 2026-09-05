@@ -36,6 +36,7 @@
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/PanelShaders.h"
+#include "Overlay/PanelSystem.h"
 
 #include "backends.h"
 #include "refresh_rate.h"
@@ -493,6 +494,21 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	cv_adaptive_sync = config.gamescope.vrr_enabled;
 	cv_hdr_enabled = config.gamescope.hdr_enabled;
 	cv_tearing_enabled = config.gamescope.tearing_enabled;
+
+	// Nested resolution and refresh (requests-2026-09-05 item 7, Phase B):
+	// 0 = "as launched", so a zero field leaves g_nNestedWidth/Height/Refresh
+	// at whatever they already are (gamescope's own compiled-in default)
+	// rather than stomping them. This function runs before the getopt loop
+	// below, so an explicit -w/-h/-r still overwrites whatever is set here --
+	// the CLI wins for free, it just has to run after this call, which it
+	// does (see main()'s call site above the getopt loop).
+	if ( config.gamescope.nested_width && config.gamescope.nested_height )
+	{
+		g_nNestedWidth = config.gamescope.nested_width;
+		g_nNestedHeight = config.gamescope.nested_height;
+	}
+	if ( config.gamescope.nested_refresh_hz )
+		g_nNestedRefresh = gamescope::ConvertHztomHz( config.gamescope.nested_refresh_hz ); // g_nNestedRefresh is mHz
 }
 
 static enum gamescope::GamescopeBackend parse_backend_name(const char *str)
@@ -817,6 +833,18 @@ int main(int argc, char **argv)
 	const char *pszNoConVarSeed = getenv( "GAMESCOPE_RITZ_AB_NO_CONVAR_SEED" );
 	if ( !pszNoConVarSeed || pszNoConVarSeed[0] != '1' )
 		apply_ritz_config_to_startup_state( ritzConfig );
+
+	// Why: PanelSystem's own registry (and the clipboard-sync seed it does on
+	// registration) builds lazily -- only the first time the settings shell
+	// is drawn -- so a session in which the user never opens the overlay
+	// would otherwise run the whole process on the compiled-in default
+	// instead of the saved system.clipboard_sync value. Seed it here too,
+	// right after config is loaded and before getopt, so "switch off ->
+	// restart" holds from the very first clipboard event. Safe this early:
+	// it only calls config::ResolveEffective()/ConfigGeneration() (the same
+	// EnsureConfigLoaded() shape as PanelDisplay.cpp), neither of which
+	// depends on the registry, wlserver, the backend, or steamcompmgr.
+	gamescope::PanelSystem_SeedFromConfig();
 
 	static std::string optstring = build_optstring(gamescope_options);
 	gamescope_optstring = optstring.c_str();

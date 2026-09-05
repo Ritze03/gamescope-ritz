@@ -2,8 +2,8 @@
 
 The Display > **Resolution** area of the settings overlay (`src/Overlay/PanelDisplay.cpp`,
 `RegisterResolution()`) changes three things while gamescope and the game keep running.
-Tracker: `../planning/requests-2026-09-05.md` item 7. This is **Phase A** (live behaviour,
-no persistence); Phase B is marked at the bottom.
+Tracker: `../planning/requests-2026-09-05.md` item 7. Phase A was live behaviour with no
+persistence; **Phase B**, below, persists game resolution and refresh across a restart.
 
 ## The three things, and which are live
 
@@ -112,14 +112,24 @@ plain `x`, not `×` — the overlay font is not known to carry that glyph.
 Embedded (DRM) is a different feature for a later phase — `GetModes()` plus the
 dynamic-refresh atom — not a disabled copy of this area.
 
-## Phase B (not implemented; seams marked)
+## Phase B — persistence
 
-Persist `nested_width`, `nested_height`, `nested_refresh_hz` (`0` = as launched) in
-`GamescopeSettings`, serialised in `Config/ConfigManager.cpp`, applied in `main.cpp`'s
-`apply_ritz_config_to_startup_state()` — which already runs before getopt, so the CLI wins
-for free. **Do not persist the window size**; host window rules are the right tool. The
-seam is `// PHASE B: persist via GamescopeSettings::nested_*` at `ApplyNestedMode()` in
-`PanelDisplay.cpp`, the single write point for all three values.
+Game resolution and refresh survive a restart; the window size deliberately does not (host
+window rules are the right tool for that).
+
+- **Write-back**: `ApplyNestedMode()` in `PanelDisplay.cpp` — the single write point for all
+  three live values — also writes `GamescopeSettings::nested_width/height/refresh_hz` into the
+  routed config (`config::EnqueueRoutedWrite()`) every time it runs, `0` meaning "as launched".
+  Native resolution and Follow-host refresh both write `0`, not the live pixel size / Hz at the
+  moment of the pick — `s_nResolutionChoice == kPresetNative` is what tells "Native" apart from
+  a Custom pick that happens to match the output size; Follow-host already arrives as `nRefreshmHz
+  == 0` from `SetRefreshChoice()`, no extra check needed.
+- **Startup apply**: `main.cpp`'s `apply_ritz_config_to_startup_state()` sets
+  `g_nNestedWidth/Height` when both `nested_width` and `nested_height` are nonzero, and
+  `g_nNestedRefresh` (mHz — converted from the schema's Hz via `ConvertHztomHz()`) when
+  `nested_refresh_hz` is nonzero. This runs before the getopt loop in `main()`, so an explicit
+  CLI `-w`/`-h`/`-r` overwrites it unconditionally and always wins — the ordering is not
+  incidental, it is why this function is called where it is.
 
 ## Related
 

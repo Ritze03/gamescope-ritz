@@ -12,6 +12,9 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Nested resolution and refresh rate persist**: the game resolution and refresh rate
+  chosen in Display > Resolution are remembered and reapplied on the next launch,
+  unless an explicit `-w`/`-h`/`-r` flag overrides them.
 - **Auto-save to profile**: an opt-in switch in Profiles that writes every setting you
   change straight into the active profile; off by default, so a profile only changes
   when you press Save.
@@ -60,6 +63,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Clipboard sync setting takes effect from launch**: turning clipboard sync off now
+  stays off from the moment gamescope starts, not only after the settings overlay
+  has been opened once.
 - **Using a profile asks before discarding unsaved changes**: only when your settings
   differ from the active profile and auto-save is off; otherwise it is one press.
 - **Fewer disk writes while dragging a slider**: settings writes are now coalesced, so

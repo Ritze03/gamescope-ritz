@@ -287,9 +287,13 @@ stores to the atomic first and queues the config write second. The compiled-in
 `Shell.cpp`'s `Reg()` runs `RegisterAll()` the first time the shell is drawn —
 so a process in which the overlay is never opened would run on the compiled-in
 default. `PanelSystem_SeedFromConfig()` (`Overlay/PanelSystem.h`) is the one-line
-call for a startup site (`SettingsOverlay.cpp`'s launch warm-up block, or
-`main.cpp` after `apply_ritz_config_to_startup_state()`); it is idempotent and a
-single config read.
+call that closes that gap: `main.cpp`'s `main()` calls it right after
+`apply_ritz_config_to_startup_state()`, before the getopt loop, so the saved value
+is in force from the first clipboard event of the process rather than only from
+the first time the shell is opened. It is idempotent and a single config read
+(`config::ResolveEffective()`/`ConfigGeneration()`, the same shape
+`EnsureConfigLoaded()` uses elsewhere), so it does not depend on the registry,
+wlserver, the backend, or steamcompmgr existing yet.
 
 ## Where the code is
 

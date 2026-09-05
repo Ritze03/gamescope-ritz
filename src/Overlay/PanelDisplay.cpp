@@ -702,12 +702,12 @@ namespace gamescope
 	// and the help text rather than a badge. Swap to the badge when the shell
 	// grows one.
 	//
-	// PHASE B (not here): persist nested width/height/refresh in
-	// GamescopeSettings (0 = as launched), serialised by ConfigManager.cpp
-	// and applied in main.cpp's apply_ritz_config_to_startup_state(), which
-	// already runs before getopt so the CLI wins for free. The window size is
-	// NOT to be persisted -- host window rules are the right tool for that.
-	// The seams are marked at the two setters below.
+	// Nested width/height/refresh (0 = as launched) are persisted into
+	// GamescopeSettings, serialised by ConfigManager.cpp and applied in
+	// main.cpp's apply_ritz_config_to_startup_state(), which already runs
+	// before getopt so the CLI wins for free. The window size is NOT
+	// persisted -- host window rules are the right tool for that. The single
+	// write point is ApplyNestedMode() below.
 	//
 	// Nested-only in this phase: AvailableWhen() hides the area when the
 	// current connector has no INestedHints (embedded DRM, where the display
@@ -788,11 +788,26 @@ namespace gamescope
 		return std::clamp( n, kMinDim, kMaxDim );
 	}
 
-	// PHASE B: persist via GamescopeSettings::nested_width/height/refresh_hz
-	// (0 = as launched) -- this is the single write point for all three.
+	// Persists GamescopeSettings::nested_width/height/refresh_hz (0 = as
+	// launched, see ConfigSchema.h's comment on that field) -- this is the
+	// single write point for all three. Native resolution passes the actual
+	// output pixel size here (steamcompmgr_set_nested_mode() has no other way
+	// to mean "native"), so storing nWidth/nHeight verbatim would freeze
+	// today's monitor size into config instead of "as launched"; checking
+	// s_nResolutionChoice -- already set to kPresetNative by the caller
+	// before this runs -- is what tells the two apart. Follow-host refresh
+	// needs no such check: SetRefreshChoice's kRefreshFollowHost branch
+	// already passes nRefreshmHz == 0 down to here. Window (output) size is
+	// deliberately not persisted anywhere -- host window rules are the right
+	// tool for that (see the area's top-of-file comment).
 	static void ApplyNestedMode( int nWidth, int nHeight, int nRefreshmHz )
 	{
 		steamcompmgr_set_nested_mode( ClampDim( nWidth ), ClampDim( nHeight ), nRefreshmHz );
+
+		s_CachedSettings.gamescope.nested_width  = ( s_nResolutionChoice == kPresetNative ) ? 0 : ClampDim( nWidth );
+		s_CachedSettings.gamescope.nested_height = ( s_nResolutionChoice == kPresetNative ) ? 0 : ClampDim( nHeight );
+		s_CachedSettings.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
+		QueueSave();
 	}
 
 	static int MatchSizePreset( const SizePreset *pPresets, size_t nPresets, int nWidth, int nHeight )
