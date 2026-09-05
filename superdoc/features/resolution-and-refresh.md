@@ -17,12 +17,22 @@ Nothing restarts: not gamescope, not Xwayland, not the game.
 
 ### Game resolution and refresh — `steamcompmgr_set_nested_mode(w, h, refresh_mHz)`
 
-`src/steamcompmgr.cpp` (declared in `steamcompmgr.hpp`). Steamcompmgr thread only — the
-Shell's setters already run there. It writes `g_nNestedWidth/Height/Refresh`, tells the
-connector's `INestedHints` via `OnNestedRefreshChanged()` (see the SDL gotcha), then under
-`wlserver_lock()` calls the **existing** `wlserver_set_xwayland_server_mode(idx, w, h, mHz)`
-(`src/wlserver.cpp`) — the exact path the Steam Deck's `GAMESCOPE_XWAYLAND_MODE_CONTROL`
-root atom uses. *Why a new function and not the atom:* the atom handler deliberately does
+`src/steamcompmgr.cpp` (declared in `steamcompmgr.hpp`). It writes
+`g_nNestedWidth/Height/Refresh`, tells the connector's `INestedHints` via
+`OnNestedRefreshChanged()` (see the SDL gotcha), then — with the wlserver lock held — calls
+the **existing** `wlserver_set_xwayland_server_mode(idx, w, h, mHz)` (`src/wlserver.cpp`),
+the exact path the Steam Deck's `GAMESCOPE_XWAYLAND_MODE_CONTROL` root atom uses.
+
+*Two callers, opposite lock states.* The Shell's setters run on the steamcompmgr thread
+**without** the lock; `gamescopectl overlay_e2_set display.resolution.preset N` reaches the
+same setter from `gamescope_private_execute()` (`src/wlserver.cpp`), which wlserver dispatches
+**with** the lock already held. The lock is a plain non-recursive mutex, so the first
+version — an unconditional `wlserver_lock()` — deadlocked the console path: the command never
+returned and every later `gamescopectl` command queued behind it (laptop, 2026-09-05). The
+function now takes the lock only if `!wlserver_is_lock_held()`, the same pattern
+`wlserver_debug_key` / `wlserver_debug_mouse_button` use. The keyboard path (Left/Right on
+the Choice row) reaches it too: `AdjustValue()` (`Registry.cpp`) writes the next option
+through `Binding().Set()`, which is `SetResolutionChoice()` → `ApplyNestedMode()`. *Why a new function and not the atom:* the atom handler deliberately does
 not touch `g_nNestedWidth/Height` (Steam owns those on the Deck); the fork's UI must, because
 cursor-scale ratios, the layer-shell configure size and the area's own read-back come from
 them.

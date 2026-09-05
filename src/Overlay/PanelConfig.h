@@ -163,6 +163,30 @@ namespace gamescope
 				( *oDirty == 1 ? " unsaved change?" : " unsaved changes?" );
 		}
 
+		// The picker indices (Profile, Start from profile, Copy from game) as
+		// the ACTIONS see them, made to agree with what the pickers SHOW.
+		//
+		// Why: the three indices start at -1 ("nothing yet"), and the Choice
+		// rows display them through std::max( n, 0 ) -- so with one saved
+		// profile the picker showed that profile selected while the index
+		// underneath was still -1, and Use / Rename / Delete all returned
+		// silently on their range guard. RefreshLists() used to clamp only
+		// the too-large side (n >= count), which is why it bit exactly when
+		// the profile already existed when gamescope started: nothing in that
+		// session had ever assigned the index. Laptop repro 2026-09-05: "Delete
+		// profile" armed and never deleted.
+		//
+		// Rule: an empty list is -1; otherwise anything out of range (either
+		// side) becomes 0, the item the picker draws.
+		inline int ClampPickerSelection( int nSelected, size_t nCount )
+		{
+			if ( nCount == 0 )
+				return -1;
+			if ( nSelected < 0 || nSelected >= (int)nCount )
+				return 0;
+			return nSelected;
+		}
+
 		// The Save-changes row's disabled reason, or "" when it can act.
 		inline std::string SaveChangesBlocker( bool bHasActiveProfile, bool bAutoSave,
 		                                       const std::optional<int> &oDirty )

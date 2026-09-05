@@ -3241,8 +3241,11 @@ void wlserver_run(void)
 	std::unique_lock<std::mutex> xwayland_server_guard(g_SteamCompMgrXWaylandServerMutex);
 	// We need to shutdown Xwayland before disconnecting all clients, otherwise
 	// wlroots will restart it automatically.
+	// Stage markers: see steamcompmgr_exit()'s note (2026-09-05 teardown abort).
+	wl_log.infof( "teardown: event loop left; stopping the Xwayland servers" );
 	wlserver_lock();
 	wlserver.wlr.xwayland_servers.clear();
+	wl_log.infof( "teardown: Xwayland servers stopped; removing listeners" );
 
 	wl_list_remove( &new_surface_listener.link );
 	wl_list_remove( &new_input_listener.link );
@@ -3257,10 +3260,13 @@ void wlserver_run(void)
 		wl_list_remove( &wlserver.session_active.link );
 #endif
 
+	wl_log.infof( "teardown: destroying clients" );
 	wl_display_destroy_clients(wlserver.display);
+	wl_log.infof( "teardown: destroying the display (seat, outputs, backend)" );
 	wl_display_destroy(wlserver.display);
     wlserver.display = NULL;
 	wlserver_unlock(false);
+	wl_log.infof( "teardown: wlserver_run done" );
 }
 
 void wlserver_shutdown()

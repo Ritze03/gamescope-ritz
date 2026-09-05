@@ -1094,10 +1094,16 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 // size by the per-frame output-changed block (which would fight a nested size
 // written here), so only the game servers (#1..) get the new mode then.
 //
-// Thread: steamcompmgr thread (the Shell's setters run there -- see
-// PanelDisplay.cpp's file-top comment). wlserver_set_xwayland_server_mode()
-// asserts wlserver_lock() is held, so it is taken here, the same way the atom
-// path and the per-frame block take it.
+// Thread: TWO callers with opposite lock states. The Shell's setters run on
+// the steamcompmgr thread WITHOUT the wlserver lock (PanelDisplay.cpp's
+// file-top comment); `overlay_e2_set display.resolution.preset N` reaches the
+// same setter from gamescope_private_execute() (wlserver.cpp), which wlserver
+// dispatches WITH the lock already held. wlserver_set_xwayland_server_mode()
+// asserts the lock, so it must be taken here for the first caller -- and the
+// lock is a plain (non-recursive) pthread mutex, so taking it unconditionally
+// deadlocked the second: the gamescopectl command never returned and every
+// later console command queued behind it (laptop, 2026-09-05). Hence the
+// conditional take, the same pattern wlserver_debug_key / _mouse_button use.
 void steamcompmgr_set_nested_mode( int nWidth, int nHeight, int nRefreshmHz )
 {
 	if ( nWidth <= 0 || nHeight <= 0 || nRefreshmHz < 0 )
@@ -1121,10 +1127,13 @@ void steamcompmgr_set_nested_mode( int nWidth, int nHeight, int nRefreshmHz )
 
 	const size_t uFirstServer = g_nXWaylandCount > 1 ? 1 : 0;
 
-	wlserver_lock();
+	const bool bNeedLock = !wlserver_is_lock_held();
+	if ( bNeedLock )
+		wlserver_lock();
 	for ( size_t i = uFirstServer; wlserver_get_xwayland_server( i ); i++ )
 		wlserver_set_xwayland_server_mode( i, nWidth, nHeight, nModeRefreshmHz );
-	wlserver_unlock();
+	if ( bNeedLock )
+		wlserver_unlock();
 
 	hasRepaint = true;
 }
@@ -7456,6 +7465,11 @@ error(Display *dpy, XErrorEvent *ev)
 static void
 steamcompmgr_exit(void)
 {
+	// Teardown stage markers (2026-09-05, SIGTERM -> "Aborted" on the
+	// laptop). Info-level so the last one printed before the abort names the
+	// stage in a plain journal read, without a debugger attached. Cheap and
+	// harmless to leave in; remove once the teardown is known clean.
+	xwm_log.infof( "teardown: steamcompmgr_exit begin" );
 	g_ImageWaiter.Shutdown();
 
 	// Clean up any commits.
@@ -7496,11 +7510,14 @@ steamcompmgr_exit(void)
 
 	g_VirtualConnectorFocuses.clear();
 
+	xwm_log.infof( "teardown: destroying the backend" );
     gamescope::IBackend::Set( nullptr );
+	xwm_log.infof( "teardown: backend destroyed; asking wlserver to shut down" );
 
     wlserver_lock();
     wlserver_shutdown();
     wlserver_unlock(false);
+	xwm_log.infof( "teardown: steamcompmgr_exit end" );
 }
 
 [[noreturn]] static int

@@ -127,6 +127,18 @@ queued write left in the panel is Use/Restore's `EnqueueRoutedWrite()`, which
 nothing re-reads afterwards -- the panel sets its own state from the value it
 just wrote.
 
+**The picker index must agree with what the picker shows** (2026-09-05 laptop: "Delete
+profile" armed and never deleted). The three selection indices (`s_nSelectedProfile`,
+`s_nStartFromProfile`, `s_nSelectedCopyGame`) start at -1, and the Choice rows draw them
+through `std::max( n, 0 )`. `RefreshLists()` used to clamp only the too-large side, so a
+profile that already existed when gamescope started left the index at -1 while the picker
+showed that profile selected — and Use, Rename and Delete all returned silently on their
+range guard. Nothing in the arm/confirm path was wrong (arming is keyed by entry id and
+survives the area's rebuild). *Why fix the clamp and not the guards:* the model must never
+disagree with its view; `panelconfig::ClampPickerSelection()` maps any out-of-range index
+(either side) to 0 — the item drawn — and an empty list to -1, and every list refresh goes
+through it. Pinned by the "picker index agrees" test.
+
 `tests/test_overlay_profiles.cpp` pins the sequence (save, list, hash moves) and
 every hash input, so a row cannot silently stop appearing again.
 

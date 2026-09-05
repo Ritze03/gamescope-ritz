@@ -42,7 +42,7 @@ that element is off ("the dot is off", and so on).
 | | Width | `outline_width` | px, 1–8 |
 | | Opacity / Colour | `outline_opacity`, `outline_color` | |
 | Auto-hide | Hide while holding right-click | `hide_on_right_click` | |
-| | Hide mode | `hide_mode` | Choice: `fade` / `focus` / `shrink` (stable string keys) |
+| | Hide mode | `hide_mode` | Choice. **Stored** in config as a stable string key (`"fade"` / `"focus"` / `"shrink"`, `CrosshairSettings::hide_mode`); the **row is int-backed** like every registry Choice, so `overlay_e2_set crosshair.hide_mode N` takes the option index -- `0` fade, `1` focus, `2` shrink -- and a word is parsed as 0 (fade). `Crosshair.cpp`'s `HideModeToInt()`/`HideModeFromInt()` are the two-way map. |
 | | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides at once |
 | Scaling | Apply scaling | `apply_scaling` | see Geometry |
 

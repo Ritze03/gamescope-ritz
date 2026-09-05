@@ -63,6 +63,11 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Delete / Use / Rename profile act on the profile shown**: with a profile that already
+  existed when gamescope started, the picker showed it selected but the three buttons
+  did nothing; they now act on the profile the picker shows.
+- **Resolution change from the console no longer hangs**: `gamescopectl overlay_e2_set
+  display.resolution.preset N` returns at once instead of freezing every later command.
 - **Clipboard sync setting takes effect from launch**: turning clipboard sync off now
   stays off from the moment gamescope starts, not only after the settings overlay
   has been opened once.
@@ -99,6 +104,8 @@ The newest version below is the one this build reports.
   first frame instead of the first time the Shaders area is opened.
 
 ### Info
+- **Crosshair Hide mode via console**: `overlay_e2_set crosshair.hide_mode` takes 0 for
+  fade, 1 for focus, 2 for shrink; the saved setting keeps its readable name.
 - **Plainer profile wording**: "Apply profile" is now "Use this profile" and says it
   replaces your current settings; "Override global config" is now "Use separate
   settings for this game"; "Save current settings" is now "Save as new profile".

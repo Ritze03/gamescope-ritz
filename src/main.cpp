@@ -1234,9 +1234,13 @@ int main(int argc, char **argv)
 	wlserver_run();
 
 	steamCompMgrThread.join();
+	console_log.infof( "teardown: steamcompmgr thread joined; killing children" );
 
 	gamescope::Process::KillAllChildren( getpid(), SIGTERM );
 	gamescope::Process::WaitForAllChildren();
+	// Anything printed after this line comes from a static destructor or a
+	// thread still running at exit -- see steamcompmgr_exit()'s note.
+	console_log.infof( "teardown: children reaped; leaving main (static destructors next)" );
 }
 
 static void steamCompMgrThreadRun(int argc, char **argv)

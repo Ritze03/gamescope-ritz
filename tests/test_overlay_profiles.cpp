@@ -325,3 +325,22 @@ TEST_CASE( "a backup carries the active profile it replaced", "[overlay_profiles
 	SettingsBackup fresh{ config::Settings{}, "First", false, "" };
 	REQUIRE( fresh.sPreviousActiveProfile.empty() );
 }
+
+TEST_CASE( "the picker index agrees with what the picker shows", "[overlay_profiles]" )
+{
+	// The 2026-09-05 laptop bug: one profile existed at startup, the index was
+	// still -1, the Choice drew item 0, and Delete's range guard returned
+	// silently. -1 with a non-empty list must become 0 -- the item drawn.
+	REQUIRE( ClampPickerSelection( -1, 1 ) == 0 );
+	REQUIRE( ClampPickerSelection( -1, 3 ) == 0 );
+	// Too large (a profile was deleted from the end): back to the first.
+	REQUIRE( ClampPickerSelection( 3, 3 ) == 0 );
+	REQUIRE( ClampPickerSelection( 7, 3 ) == 0 );
+	// In range: untouched.
+	REQUIRE( ClampPickerSelection( 0, 1 ) == 0 );
+	REQUIRE( ClampPickerSelection( 2, 3 ) == 2 );
+	// Empty list: -1 whatever it was, so the actions' guards still refuse.
+	REQUIRE( ClampPickerSelection( -1, 0 ) == -1 );
+	REQUIRE( ClampPickerSelection( 0, 0 ) == -1 );
+	REQUIRE( ClampPickerSelection( 5, 0 ) == -1 );
+}

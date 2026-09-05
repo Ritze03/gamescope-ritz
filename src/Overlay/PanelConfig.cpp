@@ -155,12 +155,14 @@ namespace gamescope
 					s_OtherGameIds.push_back( std::move( sId ) );
 			}
 
-			if ( s_nSelectedProfile >= (int)s_ProfileNames.size() )
-				s_nSelectedProfile = s_ProfileNames.empty() ? -1 : 0;
-			if ( s_nStartFromProfile >= (int)s_ProfileNames.size() )
-				s_nStartFromProfile = s_ProfileNames.empty() ? -1 : 0;
-			if ( s_nSelectedCopyGame >= (int)s_OtherGameIds.size() )
-				s_nSelectedCopyGame = s_OtherGameIds.empty() ? -1 : 0;
+			// Both sides clamped, not just the too-large one: the pickers
+			// draw std::max( n, 0 ), so a -1 left over from before the list
+			// was first read made the picker SHOW the first profile while
+			// every action on "the selected profile" silently did nothing.
+			// See panelconfig::ClampPickerSelection().
+			s_nSelectedProfile  = panelconfig::ClampPickerSelection( s_nSelectedProfile,  s_ProfileNames.size() );
+			s_nStartFromProfile = panelconfig::ClampPickerSelection( s_nStartFromProfile, s_ProfileNames.size() );
+			s_nSelectedCopyGame = panelconfig::ClampPickerSelection( s_nSelectedCopyGame, s_OtherGameIds.size() );
 
 			// Issue #43 recommendation #10: re-read whichever file is
 			// currently authoritative (same "per-game if override active,
