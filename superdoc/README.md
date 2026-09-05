@@ -114,6 +114,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   24 divergences with paired screenshots in `audit-shots/`, each marked as explained by a
   recorded decision or as unexplained drift. Read it before trusting a phase report's
   claim of conformance.
+- [Profiles concept](planning/profiles-concept.md) — 2026-09-06 proposal (awaiting user approval): a profile is the file you edit, every game points at one, `--profile <name>` picks the session's; what it deletes, migration, phases.
+- [Feature ideas 2026-09-05](planning/feature-ideas-2026-09-05.md) — prioritised filters (native pre-pass and colour management) and features, with a Top 5.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.

@@ -44,7 +44,7 @@ high-water mark 0 / 6 layers`. Torn down cleanly, no leftover process.
 Draw the crosshair as an unmarked region of the single HUD layer instead of a
 separate double-height split texture, freeing one layer slot.
 
-## [ ] 4. Profiles and per-game config: new concept
+## [~] 4. Profiles and per-game config: new concept
 
 A new, easy and extensible concept for profiles and per-game config, including
 loading a named profile from the command line at launch (`--profile <name>`).
@@ -53,10 +53,16 @@ Concept doc first, implementation after the user approves.
 `--profile` flag implemented against the current model once the concept fixes its
 semantics.
 
-## [ ] 5. Brainstorm of further filters and features
+**2026-09-06:** concept written, awaiting user approval —
+[`profiles-concept.md`](profiles-concept.md). Implementation and `--profile` not started.
+
+## [x] 5. Brainstorm of further filters and features
 
 A prioritised planning doc brainstorming further native-effect filters and other
 features.
+
+**2026-09-06:** written — [`feature-ideas-2026-09-05.md`](feature-ideas-2026-09-05.md)
+(16 filters, 17 features, Top 5). A doc, so nothing to verify on the laptop.
 
 ## [ ] 6. FPS HUD digit alignment to anchor edge
 
