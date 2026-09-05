@@ -1,6 +1,7 @@
 #include "ConfigManager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -141,6 +142,12 @@ namespace gamescope::config
                 s.gamescope.sdr_on_hdr_brightness_nits = JGetFloat( *pGamescope, "sdr_on_hdr_brightness_nits", s.gamescope.sdr_on_hdr_brightness_nits );
                 s.gamescope.hdr_input_gain = JGetFloat( *pGamescope, "hdr_input_gain", s.gamescope.hdr_input_gain );
                 s.gamescope.sdr_input_gain = JGetFloat( *pGamescope, "sdr_input_gain", s.gamescope.sdr_input_gain );
+                // Item 7 (2026-09-05): absent on every file written before
+                // these existed -- the struct's 0 ("as launched") is exactly
+                // the right fallback.
+                s.gamescope.nested_width = JGetInt( *pGamescope, "nested_width", s.gamescope.nested_width );
+                s.gamescope.nested_height = JGetInt( *pGamescope, "nested_height", s.gamescope.nested_height );
+                s.gamescope.nested_refresh_hz = JGetInt( *pGamescope, "nested_refresh_hz", s.gamescope.nested_refresh_hz );
             }
 
             if ( const nlohmann::json *pFps = JGetObject( j, "fps_display" ) )
@@ -346,12 +353,24 @@ namespace gamescope::config
             if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
                 s.audio.manual_node_binary = JGetString( *pAudio, "manual_node_binary", s.audio.manual_node_binary );
 
+            // System tab (item 5, Phase B) -- see ConfigSchema.h's
+            // SystemSettings. Absent on older files: default (sync on).
+            if ( const nlohmann::json *pSystem = JGetObject( j, "system" ) )
+                s.system.clipboard_sync = JGetBool( *pSystem, "clipboard_sync", s.system.clipboard_sync );
+
             // Issue #43 recommendation #10: top-level, not nested -- see
             // ConfigSchema.h's Settings::last_applied_profile comment. A
             // config predating this field has no key here and JGetString's
             // own default-value contract makes that "" (the "never applied"
             // state), not a parse failure.
             s.last_applied_profile = JGetString( j, "last_applied_profile", s.last_applied_profile );
+
+            // Profiles Phase B session fields (ConfigSchema.h). Only ever
+            // written to global.json (SettingsToJson below), so on a profile
+            // or per-game file these keys are simply absent and parse to the
+            // struct's own "no profile / auto-save off" defaults.
+            s.active_profile = JGetString( j, "active_profile", s.active_profile );
+            s.auto_save_profile = JGetBool( j, "auto_save_profile", s.auto_save_profile );
 
             return s;
         }
@@ -371,6 +390,9 @@ namespace gamescope::config
             jGamescope[ "sdr_on_hdr_brightness_nits" ] = s.gamescope.sdr_on_hdr_brightness_nits;
             jGamescope[ "hdr_input_gain" ] = s.gamescope.hdr_input_gain;
             jGamescope[ "sdr_input_gain" ] = s.gamescope.sdr_input_gain;
+            jGamescope[ "nested_width" ] = s.gamescope.nested_width;
+            jGamescope[ "nested_height" ] = s.gamescope.nested_height;
+            jGamescope[ "nested_refresh_hz" ] = s.gamescope.nested_refresh_hz;
 
             nlohmann::json jFps = nlohmann::json::object();
             jFps[ "enabled" ] = s.fps_display.enabled;
@@ -460,6 +482,9 @@ namespace gamescope::config
             nlohmann::json jAudio = nlohmann::json::object();
             jAudio[ "manual_node_binary" ] = s.audio.manual_node_binary;
 
+            nlohmann::json jSystem = nlohmann::json::object();
+            jSystem[ "clipboard_sync" ] = s.system.clipboard_sync;
+
             nlohmann::json j = nlohmann::json::object();
             j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "gamescope" ] = std::move( jGamescope );
@@ -468,6 +493,7 @@ namespace gamescope::config
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "audio" ] = std::move( jAudio );
+            j[ "system" ] = std::move( jSystem );
 
             // Issue #43 recommendation #10: top-level, unconditional --
             // meaningful on every file this schema writes (global/profile/
@@ -476,9 +502,14 @@ namespace gamescope::config
             j[ "last_applied_profile" ] = s.last_applied_profile;
 
             // Process-level UI preference, only ever present on global.json -
-            // see ConfigSchema.h's OverlaySettings comment.
+            // see ConfigSchema.h's OverlaySettings comment. The Profiles
+            // Phase B session fields ride the same gate for the same reason
+            // (ConfigSchema.h's active_profile comment).
             if ( bIncludeOverlay )
             {
+                j[ "active_profile" ] = s.active_profile;
+                j[ "auto_save_profile" ] = s.auto_save_profile;
+
                 nlohmann::json jOverlay = nlohmann::json::object();
                 jOverlay[ "fade_ms" ] = s.overlay.fade_ms.has_value()
                     ? nlohmann::json( *s.overlay.fade_ms )
@@ -790,6 +821,69 @@ namespace gamescope::config
             // input.
             return j.dump( 2, ' ', false, nlohmann::json::error_handler_t::replace );
         }
+
+        // ---- in-process mirrors of what was last written -------------------
+        // Declared up here because both the synchronous Save*/Snapshot*
+        // functions and the background-writer Enqueue* functions further
+        // down keep them current. Each is documented where it is used
+        // (CurrentOverlaySettings() / CurrentFullSettings() /
+        // CurrentRoutedSettings()).
+        bool s_bLastKnownOverlayLoaded = false;
+        OverlaySettings s_LastKnownOverlay;
+        bool s_bLastKnownSettingsLoaded = false;
+        Settings s_LastKnownSettings;
+        // The last per-game snapshot this process wrote, and for which app
+        // id -- CurrentRoutedSettings()'s per-game branch. Reset (nullopt)
+        // by anything that edits games/<id>.json in place rather than from
+        // a Settings value (Clear/Restore/DeletePerGameOverride), so the
+        // next read goes to disk instead of trusting a stale mirror.
+        std::optional<std::string> s_oLastKnownPerGameId;
+        Settings s_LastKnownPerGame;
+        // The last profile this process wrote (SaveProfile / the queued
+        // EnqueueProfileWrite) and its contents -- ActiveProfileDirtySections()
+        // diffs against this when it names the active profile, so an
+        // auto-save fan-out that is still sitting in the coalescing queue
+        // already counts as saved. Renamed with RenameProfile, dropped by
+        // DeleteProfile.
+        std::optional<std::string> s_oLastKnownProfileName;
+        Settings s_LastKnownProfile;
+
+        // Bumped by every path in this file that changes a file on disk (or
+        // queues a change), or the active profile / auto-save state. The
+        // one thing that reads it is ActiveProfileDirtySections()'s cache:
+        // "has anything at all changed since I last diffed?" Never
+        // compared across processes, never persisted.
+        uint64_t s_ulMutationSeq = 1;
+        void BumpMutation() { s_ulMutationSeq++; }
+
+        void RememberGlobal( const Settings &settings )
+        {
+            s_LastKnownOverlay = settings.overlay;
+            s_bLastKnownOverlayLoaded = true;
+            s_LastKnownSettings = settings;
+            s_bLastKnownSettingsLoaded = true;
+            BumpMutation();
+        }
+
+        void RememberPerGame( std::string_view svAppId, const Settings &snapshot )
+        {
+            s_oLastKnownPerGameId = std::string( svAppId );
+            s_LastKnownPerGame = snapshot;
+            BumpMutation();
+        }
+
+        void ForgetPerGame()
+        {
+            s_oLastKnownPerGameId.reset();
+            BumpMutation();
+        }
+
+        void RememberProfile( std::string_view svName, const Settings &settings )
+        {
+            s_oLastKnownProfileName = std::string( svName );
+            s_LastKnownProfile = settings;
+            BumpMutation();
+        }
     }
 
     // ---- paths ---------------------------------------------------------------
@@ -931,6 +1025,10 @@ namespace gamescope::config
 
     bool SaveGlobal( const Settings &settings )
     {
+        // Keeps the in-memory mirrors (CurrentFullSettings() and friends)
+        // honest too: a synchronous global write that bypassed them would
+        // be silently reverted by the next mirror-based write.
+        RememberGlobal( settings );
         return WriteFileAtomic( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
     }
 
@@ -938,6 +1036,7 @@ namespace gamescope::config
     {
         nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
         j[ "name" ] = std::string{ svSanitizedName };
+        RememberProfile( svSanitizedName, settings );
         return WriteFileAtomic( ProfilePath( svSanitizedName ), DumpJson( j ) );
     }
 
@@ -945,6 +1044,7 @@ namespace gamescope::config
     {
         nlohmann::json j = SettingsToJson( snapshot, /*bIncludeOverlay*/ false );
         j[ "override_global" ] = true;
+        RememberPerGame( svAppId, snapshot );
         return WriteFileAtomic( GamePath( svAppId ), DumpJson( j ) );
     }
 
@@ -974,6 +1074,7 @@ namespace gamescope::config
             return true; // nothing on disk - nothing to deactivate
 
         ( *oJson )[ "override_global" ] = false;
+        ForgetPerGame();
         return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
     }
 
@@ -989,6 +1090,7 @@ namespace gamescope::config
             return false;
 
         ( *oJson )[ "override_global" ] = true;
+        ForgetPerGame();
         return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
     }
 
@@ -1014,9 +1116,99 @@ namespace gamescope::config
         if ( path.parent_path() != std::filesystem::path( GamesDir() ) )
             return false;
 
+        ForgetPerGame();
         std::error_code ec;
         std::filesystem::remove( path, ec );
         return !ec || ec == std::errc::no_such_file_or_directory;
+    }
+
+    // ---- Profiles Phase B: rename / delete -------------------------------------
+
+    namespace
+    {
+        // The containment check RenameProfile/DeleteProfile share: the name
+        // must survive SanitizeProfileName() unchanged (so it has no path
+        // separator, no '.', and is not empty), and the path it produces
+        // must be a direct child of ProfilesDir(). Two layers on purpose,
+        // mirroring DeletePerGameOverride: a name from the picker was
+        // listed from that directory and a typed name was validated by the
+        // Text row, but a delete path never relies on one layer of defense.
+        std::optional<std::filesystem::path> ContainedProfilePath( std::string_view svName, const char *pszWho )
+        {
+            std::optional<std::string> oSanitized = SanitizeProfileName( svName );
+            if ( !oSanitized || *oSanitized != svName )
+            {
+                s_ConfigLog.errorf( "%s: refusing suspicious profile name '%.*s'",
+                    pszWho, (int)svName.size(), svName.data() );
+                return std::nullopt;
+            }
+
+            std::filesystem::path path( ProfilePath( *oSanitized ) );
+            if ( path.parent_path() != std::filesystem::path( ProfilesDir() ) )
+                return std::nullopt;
+            return path;
+        }
+    }
+
+    bool RenameProfile( std::string_view svOldName, std::string_view svNewName )
+    {
+        std::optional<std::filesystem::path> oOld = ContainedProfilePath( svOldName, "RenameProfile" );
+        std::optional<std::filesystem::path> oNew = ContainedProfilePath( svNewName, "RenameProfile" );
+        if ( !oOld || !oNew )
+            return false;
+        if ( svOldName == svNewName )
+            return true; // nothing to do, and not an error
+
+        std::error_code ec;
+        if ( !std::filesystem::exists( *oOld, ec ) || ec )
+            return false;
+        if ( std::filesystem::exists( *oNew, ec ) )
+            return false; // renaming over another profile would be a delete in disguise
+
+        // Rewrite the file's own "name" key on the way, so the file never
+        // disagrees with its filename. A file that no longer parses is
+        // still renamed as-is (the listing is by filename, and a broken
+        // profile is the user's to fix or delete -- not ours to drop).
+        std::optional<std::string> oText = ReadWholeFile( oOld->string() );
+        std::optional<nlohmann::json> oJson = oText ? ParseConfigFile( *oText, oOld->string() ) : std::nullopt;
+        if ( oJson )
+        {
+            ( *oJson )[ "name" ] = std::string( svNewName );
+            if ( !WriteFileAtomic( oNew->string(), DumpJson( *oJson ) ) )
+                return false;
+            std::filesystem::remove( *oOld, ec );
+        }
+        else
+        {
+            std::filesystem::rename( *oOld, *oNew, ec );
+            if ( ec )
+                return false;
+        }
+
+        if ( ActiveProfile() == svOldName )
+            SetActiveProfile( svNewName );
+        if ( s_oLastKnownProfileName && *s_oLastKnownProfileName == svOldName )
+            s_oLastKnownProfileName = std::string( svNewName );
+        BumpMutation();
+        return true;
+    }
+
+    bool DeleteProfile( std::string_view svSanitizedName )
+    {
+        std::optional<std::filesystem::path> oPath = ContainedProfilePath( svSanitizedName, "DeleteProfile" );
+        if ( !oPath )
+            return false;
+
+        std::error_code ec;
+        std::filesystem::remove( *oPath, ec );
+        const bool bOk = !ec || ec == std::errc::no_such_file_or_directory;
+
+        if ( bOk && ActiveProfile() == svSanitizedName )
+            SetActiveProfile( "" );
+        if ( bOk && s_oLastKnownProfileName && *s_oLastKnownProfileName == svSanitizedName )
+            s_oLastKnownProfileName.reset();
+        BumpMutation();
+        return bOk;
     }
 
     bool ApplyProfile( Settings &target, std::string_view svSanitizedName )
@@ -1032,11 +1224,16 @@ namespace gamescope::config
         // process, so copying it in from a profile (meant to be reusable
         // across different games) would silently point volume control at the
         // wrong process for every other game the profile is applied to.
+        // `active_profile` / `auto_save_profile` are session state (never in
+        // a profile file to begin with) and stay untouched too. This list
+        // is also the definition of what ActiveProfileDirtySections() below
+        // compares -- keep the two in step.
         target.gamescope = oProfile->gamescope;
         target.fps_display = oProfile->fps_display;
         target.crosshair = oProfile->crosshair;
         target.reshade = oProfile->reshade;
         target.notifications = oProfile->notifications;
+        target.system = oProfile->system;
 
         // Issue #43 recommendation #10: record provenance, still as a
         // one-time copy -- `target.last_applied_profile` is just data now,
@@ -1081,11 +1278,34 @@ namespace gamescope::config
                 return *s_pInstance;
             }
 
+            // Coalescing (see ConfigManager.h's EnqueueGlobalWrite comment).
+            // Two halves: a pending write to the same path is REPLACED
+            // (last wins -- which is also what writing both in order would
+            // have produced, minus the first fsync), and ThreadMain waits
+            // for the queue to go quiet before taking a batch. Both are a
+            // few lines because the worker already batches: the swap-out
+            // in ThreadMain is unchanged.
+            static constexpr auto kWriteCoalesceMs = std::chrono::milliseconds( 50 );
+            // Cap on how long an unbroken stream of edits (a long slider
+            // drag) can hold the disk copy back. Bounded so a crash mid-drag
+            // loses at most this much, not the whole drag.
+            static constexpr auto kWriteCoalesceMaxMs = std::chrono::milliseconds( 500 );
+
             void Enqueue( std::string sPath, std::string sContents )
             {
                 {
                     std::lock_guard<std::mutex> lock( m_Mutex );
-                    m_Pending.push_back( PendingWrite{ std::move( sPath ), std::move( sContents ) } );
+                    const auto tNow = std::chrono::steady_clock::now();
+                    m_tLastEnqueue = tNow;
+                    if ( m_Pending.empty() )
+                        m_tOldestPending = tNow;
+
+                    auto it = std::find_if( m_Pending.begin(), m_Pending.end(),
+                        [&]( const PendingWrite &w ) { return w.sPath == sPath; } );
+                    if ( it != m_Pending.end() )
+                        it->sContents = std::move( sContents );
+                    else
+                        m_Pending.push_back( PendingWrite{ std::move( sPath ), std::move( sContents ) } );
                 }
                 m_Cv.notify_all();
             }
@@ -1093,7 +1313,10 @@ namespace gamescope::config
             void Flush()
             {
                 std::unique_lock<std::mutex> lock( m_Mutex );
+                m_nFlushWaiters++;
+                m_Cv.notify_all(); // wake the worker out of its quiet-period wait
                 m_Cv.wait( lock, [this]() { return m_Pending.empty() && !m_bWriting; } );
+                m_nFlushWaiters--;
             }
 
         private:
@@ -1118,6 +1341,22 @@ namespace gamescope::config
                 {
                     m_Cv.wait( lock, [this]() { return !m_Pending.empty(); } );
 
+                    // Quiet period: keep waiting while edits keep arriving,
+                    // until kWriteCoalesceMs pass with none, the batch has
+                    // been held kWriteCoalesceMaxMs, or someone is blocked
+                    // in Flush() and wants it on disk now.
+                    for ( ;; )
+                    {
+                        if ( m_nFlushWaiters > 0 )
+                            break;
+                        const auto tNow = std::chrono::steady_clock::now();
+                        const auto tDeadline = std::min( m_tLastEnqueue + kWriteCoalesceMs,
+                                                         m_tOldestPending + kWriteCoalesceMaxMs );
+                        if ( tNow >= tDeadline )
+                            break;
+                        m_Cv.wait_until( lock, tDeadline );
+                    }
+
                     std::vector<PendingWrite> batch;
                     batch.swap( m_Pending );
                     m_bWriting = true;
@@ -1137,6 +1376,9 @@ namespace gamescope::config
             std::condition_variable m_Cv;
             std::vector<PendingWrite> m_Pending;
             bool m_bWriting = false;
+            int m_nFlushWaiters = 0;
+            std::chrono::steady_clock::time_point m_tLastEnqueue{};
+            std::chrono::steady_clock::time_point m_tOldestPending{};
         };
     }
 
@@ -1151,9 +1393,10 @@ namespace gamescope::config
         // just-enqueued-but-not-yet-flushed overlay write from the same
         // frame hasn't hit disk yet -- reading this in-memory value instead
         // always reflects the latest enqueued write instantly, flushed or
-        // not.
-        bool s_bLastKnownOverlayLoaded = false;
-        OverlaySettings s_LastKnownOverlay;
+        // not. (The variables themselves -- s_bLastKnownOverlayLoaded /
+        // s_LastKnownOverlay -- are declared near the top of this file,
+        // beside the other mirrors, since SaveGlobal() keeps them current
+        // too.)
 
         const OverlaySettings &CurrentOverlaySettings()
         {
@@ -1180,9 +1423,8 @@ namespace gamescope::config
         // other panel most recently wrote there. Mirrors
         // CurrentOverlaySettings()'s own fix, pointed the other way: an
         // in-memory, no-disk-read-on-the-common-path cache of the whole
-        // struct, kept current by every EnqueueGlobalWrite() call.
-        bool s_bLastKnownSettingsLoaded = false;
-        Settings s_LastKnownSettings;
+        // struct, kept current by every EnqueueGlobalWrite() call (and, since
+        // Phase B, SaveGlobal()). Declared near the top of this file.
 
         const Settings &CurrentFullSettings()
         {
@@ -1201,10 +1443,7 @@ namespace gamescope::config
 
     void EnqueueGlobalWrite( Settings settings )
     {
-        s_LastKnownOverlay = settings.overlay;
-        s_bLastKnownOverlayLoaded = true;
-        s_LastKnownSettings = settings;
-        s_bLastKnownSettingsLoaded = true;
+        RememberGlobal( settings );
         ConfigWriter::Instance().Enqueue( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
     }
 
@@ -1242,6 +1481,7 @@ namespace gamescope::config
     {
         nlohmann::json j = SettingsToJson( snapshot, /*bIncludeOverlay*/ false );
         j[ "override_global" ] = true;
+        RememberPerGame( sAppId, snapshot );
         ConfigWriter::Instance().Enqueue( GamePath( sAppId ), DumpJson( j ) );
     }
 
@@ -1249,6 +1489,7 @@ namespace gamescope::config
     {
         nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
         j[ "name" ] = sSanitizedName;
+        RememberProfile( sSanitizedName, settings );
         ConfigWriter::Instance().Enqueue( ProfilePath( sSanitizedName ), DumpJson( j ) );
     }
 
@@ -1342,12 +1583,32 @@ namespace gamescope::config
         s_ulConfigGeneration++;
     }
 
+    namespace
+    {
+        // The auto-save half of DECISIONS.md #20's Phase B extension: with
+        // auto-save on, every routed write is also copied OUT to the active
+        // profile. Called from both of EnqueueRoutedWrite()'s branches --
+        // "any setting you change while a profile is active" does not
+        // depend on which file the change itself lands in. The profile
+        // write drops `overlay` and the session fields as every profile
+        // write does, so the profile never learns which profile is active
+        // (itself) or that auto-save is on.
+        void FanOutToActiveProfile( const Settings &settings )
+        {
+            const Settings &session = CurrentFullSettings();
+            if ( !session.auto_save_profile || session.active_profile.empty() )
+                return;
+            EnqueueProfileWrite( session.active_profile, settings );
+        }
+    }
+
     void EnqueueRoutedWrite( const Settings &settings )
     {
         const std::optional<std::string> &oAppId = SessionAppId();
         if ( oAppId.has_value() && IsSessionOverrideActive() )
         {
             EnqueuePerGameSnapshot( *oAppId, settings );
+            FanOutToActiveProfile( settings );
             return;
         }
 
@@ -1372,7 +1633,125 @@ namespace gamescope::config
         // instead of forwarding this caller's own stale copy.
         Settings toWrite = settings;
         toWrite.overlay = CurrentOverlaySettings();
+        // Same hazard, same fix, for the Profiles Phase B session fields:
+        // no caller of this function owns active_profile/auto_save_profile
+        // (PanelConfig sets them through SetActiveProfile()/
+        // SetAutoSaveProfile() below), so the copy in `settings` is whatever
+        // this panel loaded at open time and must not overwrite the live
+        // value.
+        {
+            const Settings &session = CurrentFullSettings();
+            toWrite.active_profile = session.active_profile;
+            toWrite.auto_save_profile = session.auto_save_profile;
+        }
         EnqueueGlobalWrite( std::move( toWrite ) );
+        FanOutToActiveProfile( settings );
+    }
+
+    // ---- Profiles Phase B: session state and the dirty count ------------------
+
+    const std::string &ActiveProfile()
+    {
+        return CurrentFullSettings().active_profile;
+    }
+
+    void SetActiveProfile( std::string_view svSanitizedName )
+    {
+        Settings toWrite = CurrentFullSettings();
+        if ( toWrite.active_profile == svSanitizedName )
+            return;
+        toWrite.active_profile = std::string( svSanitizedName );
+        EnqueueGlobalWrite( std::move( toWrite ) );
+    }
+
+    bool AutoSaveProfile()
+    {
+        return CurrentFullSettings().auto_save_profile;
+    }
+
+    void SetAutoSaveProfile( bool bEnabled )
+    {
+        Settings toWrite = CurrentFullSettings();
+        if ( toWrite.auto_save_profile == bEnabled )
+            return;
+        toWrite.auto_save_profile = bEnabled;
+        EnqueueGlobalWrite( std::move( toWrite ) );
+    }
+
+    Settings CurrentRoutedSettings()
+    {
+        const std::optional<std::string> &oAppId = SessionAppId();
+        if ( oAppId.has_value() && IsSessionOverrideActive() )
+        {
+            if ( s_oLastKnownPerGameId && *s_oLastKnownPerGameId == *oAppId )
+                return s_LastKnownPerGame;
+            // Nothing written to this game's file yet this process (or it was
+            // last edited in place): one disk read, then mirrored.
+            Settings fromDisk = ResolveEffective( oAppId );
+            s_oLastKnownPerGameId = *oAppId;
+            s_LastKnownPerGame = fromDisk;
+            return fromDisk;
+        }
+        return CurrentFullSettings();
+    }
+
+    namespace
+    {
+        // The sections a profile carries -- the same list ApplyProfile()
+        // copies, and nothing else. `audio` is excluded because ApplyProfile
+        // never copies it (it names one game's process), so it would
+        // otherwise read as a permanent "1 section changed" against any
+        // profile saved from another game.
+        constexpr const char *kProfileSections[] =
+        {
+            "gamescope", "fps_display", "crosshair", "reshade", "notifications", "system",
+        };
+
+        uint64_t s_ulDirtyCachedSeq = 0;
+        std::optional<int> s_oDirtyCached;
+    }
+
+    std::optional<int> ActiveProfileDirtySections()
+    {
+        if ( s_ulDirtyCachedSeq == s_ulMutationSeq )
+            return s_oDirtyCached;
+
+        std::optional<int> oResult;
+        const std::string &sActive = ActiveProfile();
+        if ( !sActive.empty() )
+        {
+            // The in-memory mirror first: a profile write this process just
+            // queued (auto-save's fan-out, or Save changes) is what the
+            // profile IS, whether or not the coalescing writer has put it
+            // on disk yet. Disk only when this process has not written it.
+            std::optional<Settings> oProfile;
+            if ( s_oLastKnownProfileName && *s_oLastKnownProfileName == sActive )
+                oProfile = s_LastKnownProfile;
+            else
+                oProfile = LoadProfile( sActive );
+
+            if ( oProfile )
+            {
+                const nlohmann::json jLive = SettingsToJson( CurrentRoutedSettings(), /*bIncludeOverlay*/ false );
+                const nlohmann::json jProfile = SettingsToJson( *oProfile, /*bIncludeOverlay*/ false );
+                int nChanged = 0;
+                for ( const char *pszSection : kProfileSections )
+                {
+                    // Canonical text per section: the same serializer built
+                    // both, so equal values dump to equal strings.
+                    if ( DumpJson( jLive[ pszSection ] ) != DumpJson( jProfile[ pszSection ] ) )
+                        nChanged++;
+                }
+                oResult = nChanged;
+            }
+        }
+
+        // Read the sequence AFTER the work above: LoadProfile() does not
+        // bump it, but recording it first would let a write that raced in
+        // between be cached over.
+        s_ulDirtyCachedSeq = s_ulMutationSeq;
+        s_oDirtyCached = oResult;
+        return oResult;
     }
 
     void ResetSessionRoutingForTests()
@@ -1382,6 +1761,12 @@ namespace gamescope::config
         s_bSessionOverrideActive = false;
         s_bSessionOverrideResolved = false;
         s_ulConfigGeneration = 0;
+        // Phase B mirrors and the dirty cache: same process-wide hazard.
+        s_oLastKnownPerGameId.reset();
+        s_oLastKnownProfileName.reset();
+        s_ulDirtyCachedSeq = 0;
+        s_oDirtyCached.reset();
+        BumpMutation();
         // CurrentOverlaySettings()'s cache (above) is process-wide, same
         // hazard every other piece of session-routing state here has:
         // catch2 runs every [config] TEST_CASE in one shared process, each

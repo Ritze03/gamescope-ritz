@@ -246,3 +246,82 @@ TEST_CASE( "a synchronously saved profile is listed by the next directory read",
 	REQUIRE( oLoaded.has_value() );
 	REQUIRE( oLoaded->gamescope.sharpness == 4 );
 }
+
+// =========================================================================
+//  Phase B -- the inputs and wording the active profile / auto-save added
+// =========================================================================
+TEST_CASE( "the status hash moves on the Phase B inputs", "[overlay_profiles]" )
+{
+	StatusInputs base = Baseline();
+
+	SECTION( "the active profile -- Status, Save changes, auto-save's disabled state" )
+	{
+		StatusInputs b = base;
+		b.sActiveProfile = "FPS";
+		REQUIRE( StatusHash( base ) != StatusHash( b ) );
+	}
+	SECTION( "auto-save -- the saving fact and the Use confirm" )
+	{
+		StatusInputs b = base;
+		b.bAutoSave = true;
+		REQUIRE( StatusHash( base ) != StatusHash( b ) );
+	}
+	SECTION( "the dirty count -- every value is a different sheet" )
+	{
+		StatusInputs unknown = base; unknown.nDirtySections = -1;
+		StatusInputs clean = base;   clean.nDirtySections = 0;
+		StatusInputs one = base;     one.nDirtySections = 1;
+		StatusInputs two = base;     two.nDirtySections = 2;
+		REQUIRE( StatusHash( unknown ) != StatusHash( clean ) );
+		REQUIRE( StatusHash( clean ) != StatusHash( one ) );
+		REQUIRE( StatusHash( one ) != StatusHash( two ) );
+	}
+}
+
+TEST_CASE( "the changes-since-applied fact", "[overlay_profiles]" )
+{
+	REQUIRE( ChangesFact( std::nullopt ) == "n/a -- no profile is active" );
+	REQUIRE( ChangesFact( 0 ) == "none" );
+	REQUIRE( ChangesFact( 1 ) == "1 section changed" );
+	REQUIRE( ChangesFact( 3 ) == "3 sections changed" );
+}
+
+TEST_CASE( "the saving fact names where edits go", "[overlay_profiles]" )
+{
+	REQUIRE( SavingFact( false, false ) == "every change is saved to disk immediately" );
+	REQUIRE( SavingFact( false, true ) == "every change is saved to disk immediately" ); // auto-save with no profile: nothing to say
+	REQUIRE( SavingFact( true, true ).find( "automatically into the profile" ) != std::string::npos );
+	REQUIRE( SavingFact( true, false ).find( "press Save changes" ) != std::string::npos );
+}
+
+TEST_CASE( "Use confirms only when there is something to lose", "[overlay_profiles]" )
+{
+	// Clean, or no active profile: a plain press.
+	REQUIRE( UseConfirmPrompt( std::nullopt, false ).empty() );
+	REQUIRE( UseConfirmPrompt( 0, false ).empty() );
+	// Dirty with auto-save on: already saved, nothing to lose.
+	REQUIRE( UseConfirmPrompt( 3, true ).empty() );
+	// Dirty with auto-save off: the one case that asks, and says how much.
+	REQUIRE( UseConfirmPrompt( 1, false ) == "discard 1 unsaved change?" );
+	REQUIRE( UseConfirmPrompt( 2, false ) == "discard 2 unsaved changes?" );
+}
+
+TEST_CASE( "Save changes is disabled for exactly three reasons", "[overlay_profiles]" )
+{
+	REQUIRE( SaveChangesBlocker( false, false, std::nullopt ) == "no profile is active" );
+	REQUIRE( SaveChangesBlocker( true, true, 2 ) == "auto-save is on -- already saved" );
+	REQUIRE( SaveChangesBlocker( true, false, 0 ) == "nothing has changed" );
+	// Dirty with auto-save off: enabled.
+	REQUIRE( SaveChangesBlocker( true, false, 1 ).empty() );
+	// Profile unreadable (nullopt) but active: let the user try -- the
+	// action itself reports the failure.
+	REQUIRE( SaveChangesBlocker( true, false, std::nullopt ).empty() );
+}
+
+TEST_CASE( "a backup carries the active profile it replaced", "[overlay_profiles]" )
+{
+	SettingsBackup backup{ config::Settings{}, "New", false, "Old" };
+	REQUIRE( backup.sPreviousActiveProfile == "Old" );
+	SettingsBackup fresh{ config::Settings{}, "First", false, "" };
+	REQUIRE( fresh.sPreviousActiveProfile.empty() );
+}

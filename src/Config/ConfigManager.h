@@ -120,21 +120,83 @@ namespace gamescope::config
 
     // Applying a profile copies its values into `target` once (DECISIONS.md
     // #20) - not a live reference. `target.overlay` (a process-level, not a
-    // per-game/profile, preference) is left untouched. Returns false, leaving
-    // `target` unmodified, if the profile can't be loaded.
+    // per-game/profile, preference) is left untouched, and so are
+    // `target.active_profile` / `target.auto_save_profile` (session state,
+    // see ConfigSchema.h) and `target.audio` (names one game's process).
+    // Returns false, leaving `target` unmodified, if the profile can't be
+    // loaded.
     bool ApplyProfile( Settings &target, std::string_view svSanitizedName );
+
+    // ---- Profiles Phase B (requests-2026-09-05 item 3) ------------------------
+
+    // Renames profiles/<old>.json to profiles/<new>.json, rewriting the
+    // file's own "name" key to match. Both names must be exactly what
+    // SanitizeProfileName() would return for them (so neither can carry a
+    // path separator or be "."/".."), and both paths must resolve to direct
+    // children of ProfilesDir() -- the same two-layer containment
+    // DeletePerGameOverride has. Refuses (false, nothing touched) if the
+    // source is missing or the destination already exists: renaming over
+    // another profile is a delete in disguise, and deletes are a separate,
+    // confirmed action. If the renamed profile was the active one,
+    // ActiveProfile() follows the new name. Synchronous.
+    bool RenameProfile( std::string_view svOldName, std::string_view svNewName );
+
+    // Deletes profiles/<name>.json -- the only function here that does, with
+    // DeletePerGameOverride's containment checks pointed at ProfilesDir().
+    // Never touches global.json or anything under games/. Missing file is
+    // success. If the deleted profile was the active one, ActiveProfile()
+    // is cleared (there is nothing left for auto-save to write into).
+    // Synchronous.
+    bool DeleteProfile( std::string_view svSanitizedName );
+
+    // The active profile and the auto-save switch (Settings::active_profile /
+    // auto_save_profile -- see ConfigSchema.h for what they mean and why
+    // they are global-only). Read from an in-memory mirror of global.json
+    // (no disk read after the first), written straight to global.json via
+    // the background writer -- never routed into a per-game file.
+    // Set*() also bumps the mutation sequence ActiveProfileDirtySections()
+    // caches on. SetActiveProfile("") means "no profile is active".
+    const std::string &ActiveProfile();
+    void SetActiveProfile( std::string_view svSanitizedName );
+    bool AutoSaveProfile();
+    void SetAutoSaveProfile( bool bEnabled );
+
+    // The freshest Settings this process knows for whichever file
+    // EnqueueRoutedWrite() would write to right now -- the last routed
+    // write if there has been one, else a disk read. A slider drag's writes
+    // sit in the background queue (coalesced, see EnqueueGlobalWrite) for a
+    // moment before they land, so anything that wants "what the user is
+    // running right now" must read this, not the file.
+    Settings CurrentRoutedSettings();
+
+    // "Changes since applied": how many of the sections a profile carries
+    // (gamescope, fps_display, crosshair, reshade, notifications, system --
+    // exactly the set ApplyProfile() copies; `audio`, `overlay` and the
+    // provenance breadcrumb are not part of a profile's identity) differ
+    // between CurrentRoutedSettings() and the active profile's file. 0 means
+    // clean. std::nullopt when no profile is active or its file cannot be
+    // read. Compared as canonical JSON text per section (Settings has no
+    // operator==, and the JSON form is what both sides are made of anyway).
+    //
+    // Cached on the mutation sequence every write path in this file bumps,
+    // so calling it once per frame from a rebuild-hash function costs
+    // nothing until something actually changed; the recompute itself is one
+    // profile-file read.
+    std::optional<int> ActiveProfileDirtySections();
 
     // Queues an atomic write onto a small dedicated background thread instead of
     // writing inline - the steamcompmgr thread (or any caller that can't afford
     // a blocking fsync()/rename()) should use these instead of the synchronous
     // Save*/Snapshot* functions above.
     //
-    // ponytail: no per-slider debounce/coalescing yet - M0 ships no live-edit UI
-    // to debounce in the first place. The queue + dedicated worker thread (not a
-    // raw cross-thread struct write) is the load-bearing part or SPEC.md's "disk
-    // I/O must never happen on the steamcompmgr thread" requirement; a "coalesce
-    // edits within N ms of inactivity" policy is a small addition on top of this
-    // once a later milestone's overlay actually produces per-frame edits.
+    // Coalescing (Profiles Phase B, 2026-09-05): a write queued for a path
+    // that already has one pending REPLACES it (last wins, position kept),
+    // and the worker waits for kWriteCoalesceMs of quiet -- capped at
+    // kWriteCoalesceMaxMs since the oldest pending write -- before it takes
+    // a batch. A slider drag therefore costs one write per file per pause,
+    // not one per tick; with auto-save fanning every routed write out to the
+    // active profile as well, that halves what would otherwise be doubled
+    // volume. FlushPendingWrites() skips the quiet period.
     void EnqueueGlobalWrite( Settings settings );
     void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot );
     void EnqueueProfileWrite( std::string sSanitizedName, Settings settings );
@@ -204,6 +266,14 @@ namespace gamescope::config
     // with a locally-cached Settings struct should call this instead of
     // EnqueueGlobalWrite() directly so "Override Global Config" routes every
     // panel's writes the same way.
+    //
+    // Auto-save fan-out (Profiles Phase B): when AutoSaveProfile() is on and
+    // ActiveProfile() names a profile, the same settings are ALSO queued as
+    // a profile write to that profile (minus `overlay` and the session
+    // fields, as every profile write is). This is the single funnel every
+    // panel's edits go through, which is what makes "any setting you change
+    // while a profile is active is saved into it" true without each panel
+    // knowing profiles exist.
     void EnqueueRoutedWrite( const Settings &settings );
 
     // Test-only: resets every piece of the session-routing cache above

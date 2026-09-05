@@ -53,6 +53,25 @@ namespace gamescope::config
         float sdr_on_hdr_brightness_nits = 203.0f; // gamescope_color_mgmt_t::flSDROnHDRBrightness
         float hdr_input_gain = 1.0f;           // gamescope_color_mgmt_t::flHDRInputGain
         float sdr_input_gain = 1.0f;           // gamescope_color_mgmt_t::flSDRInputGain
+
+        // Nested resolution and refresh (requests-2026-09-05 item 7): the
+        // game's internal size (-w/-h, what Xwayland reports via XRandR)
+        // and the paced refresh (-r). 0 = "as launched" -- the CLI value,
+        // or gamescope's own default, stays in force and nothing here is
+        // applied. The OUTPUT window size (-W/-H) is deliberately NOT
+        // persisted: a tiling host decides that, and window rules are the
+        // right tool.
+        //
+        // SCHEMA ONLY here. The consumers are item 7's own work, in files
+        // this schema change does not touch: main.cpp's
+        // apply_ritz_config_to_startup_state() seeds g_nNestedWidth/Height/
+        // Refresh from these before getopt runs (so an explicit CLI flag
+        // still wins), and Overlay/PanelDisplay.cpp's `display.resolution`
+        // setters write them back and call
+        // wlserver_set_xwayland_server_mode() live.
+        int nested_width = 0;
+        int nested_height = 0;
+        int nested_refresh_hz = 0;
     };
 
     struct FpsDisplaySettings
@@ -565,6 +584,22 @@ namespace gamescope::config
         std::string manual_node_binary;
     };
 
+    // The System tab (Overlay/PanelSystem.cpp, area `system.general`;
+    // requests-2026-09-05 item 5). A normal per-layer section, like
+    // NotificationSettings above: shared via global.json unless a game has
+    // separate settings on, so one game can e.g. keep its clipboard to
+    // itself without changing the default for every other game.
+    struct SystemSettings
+    {
+        // Mirrors the runtime flag gamescope::g_bClipboardSyncEnabled
+        // (Clipboard/ClipboardSync.h), which is what the nested backends
+        // actually read. PanelSystem.cpp seeds the flag from this on load
+        // and writes both on every change, so the switch survives a
+        // restart. Default true: sync is opt-out, matching the feature's
+        // behaviour before the switch existed.
+        bool clipboard_sync = true;
+    };
+
     // The full settings shape shared by global.json, profiles/<name>.json, and
     // games/<AppId>.json. `overlay` is only meaningful on the global instance -
     // see OverlaySettings above.
@@ -577,6 +612,7 @@ namespace gamescope::config
         OverlaySettings overlay;
         NotificationSettings notifications;
         AudioSettings audio;
+        SystemSettings system;
 
         // Issue #43 (config-UI intuitiveness pass) recommendation #10: a
         // plain provenance breadcrumb, not a live link -- DECISIONS.md #20's
@@ -596,5 +632,37 @@ namespace gamescope::config
         // editing settings afterward does not clear it, same honesty rule
         // PanelConfig.cpp's status line already follows.
         std::string last_applied_profile;
+
+        // ---- Profiles Phase B (requests-2026-09-05 item 3) ----------------
+        // GLOBAL-ONLY, like `overlay`: written to global.json only
+        // (SettingsToJson's bIncludeOverlay gate), never into a profile or a
+        // per-game file, and never copied by ApplyProfile(). They describe
+        // the user's *session* -- "which saved profile am I working against,
+        // and do my edits flow back into it" -- not any one file's values,
+        // so a per-game file carrying its own copy would make the answer
+        // depend on which game happened to be running.
+        //
+        // active_profile: the profile the user last chose to work against --
+        // set by "Use this profile", "Start from profile" and "Save as new
+        // profile"; renamed with the profile; cleared when it is deleted.
+        // It KEEPS ITS NAME while the live settings drift away from the
+        // profile (the Status row shows the drift as a section count
+        // instead) -- deciding it silently stops being "active" on the first
+        // edit would make the name vanish exactly when the user is looking
+        // for it. Distinct from last_applied_profile above, which is a
+        // per-FILE provenance breadcrumb and is meaningful on every file.
+        std::string active_profile;
+
+        // auto_save_profile: when true and active_profile is set, every
+        // routed write (EnqueueRoutedWrite(), the funnel every panel's edits
+        // go through) is also copied OUT into the active profile, so the
+        // profile follows the edits. DECISIONS.md #20 extended: Use copies
+        // in once, auto-save copies back out, the profile is still never a
+        // live *source*. Default OFF -- `Why:` on by default, one profile
+        // Used by several games would change under every other game's
+        // future Use the moment any of them touched a slider (the "spooky
+        // action" the config research argued against); off honours the
+        // user's own "a toggle for auto-saving" as an opt-in.
+        bool auto_save_profile = false;
     };
 }

@@ -620,16 +620,37 @@ required to pick up profile edits.
   `Enqueue*` family exists for per-tick slider writes, which this panel never
   makes. Precedent: `DisableOverride()` always wrote inline for this reason.
 
-**Phase B, decided but pending** (needs `Settings::active_profile` /
-`auto_save_profile` and `ConfigManager` work): an **Auto-save to profile**
-switch, **off by default** -- on-by-default would make one profile used by
-several games change under every other game's future Use, the spooky action
-the config research argued against; off honours the user's "a toggle for
-auto-saving" as opt-in. The dirty count ("changes since applied") is always
-visible, and the active profile **keeps its name while dirty**. Apply still
-copies in once; auto-save copies edits back *out*; the profile is never a live
-source. Also pending: Save changes / Rename / Delete profile (confirm on
-delete only). See `superdoc/features/profiles-and-per-game.md`.
+**Extended 2026-09-05 (requests item 3, Phase B -- implemented):**
+
+- **The active profile** (`Settings::active_profile`, global.json only) is the
+  profile the user last chose to work against -- set by Use / Start from profile
+  / Save as new, renamed with the profile, cleared on delete. It **keeps its
+  name while dirty**; the drift is shown as `changes since applied: N sections
+  changed`, always visible, computed on write triggers and never per frame.
+  `Why:` a name that vanishes on the first edit disappears exactly when the
+  user is looking for it.
+- **Auto-save to profile** (`Settings::auto_save_profile`, global-only) is
+  **off by default**. `Why:` on by default, one profile Used by several games
+  would change under every other game's future Use the moment any of them
+  touched a slider -- the spooky action the config research argued against;
+  off honours the user's own "a toggle for auto-saving" as opt-in. The fan-out
+  lives in `EnqueueRoutedWrite()`, the single funnel every panel's edits go
+  through, in both routing branches.
+- **Apply still copies in once; auto-save copies edits back *out*; the profile
+  is never a live *source*.** That is the whole of this decision's change:
+  the direction profile -> live is still a one-time copy, and only the reverse
+  direction gained an (opt-in) live link.
+- **Save changes to profile** is the manual form of the same reverse copy; it
+  never confirms. **Rename** and **Delete** act on the picker's selection;
+  Delete is the only one of the new rows that confirms. **Use** confirms only
+  when dirty with auto-save off -- the one case where the thing being replaced
+  was never saved anywhere but the live file.
+- **Write coalescing** (50 ms quiet, 500 ms cap, per-path last-wins) landed
+  with this, because auto-save doubles the writes a slider drag makes. The
+  panel and the dirty count therefore read `ConfigManager`'s in-memory mirrors,
+  never the disk.
+
+See `superdoc/features/profiles-and-per-game.md` for the rows and mechanics.
 
 **Source:** `superdoc/planning/config-system.md`;
 `superdoc/planning/requests-2026-09-05.md` item 3.

@@ -87,6 +87,13 @@ namespace gamescope
 		// would do.
 		int s_nStartFromProfile = -1;
 		char s_szNewProfileName[ 64 ] = {};
+		// Phase B: the "Rename profile" row's target name. Its own buffer,
+		// not s_szNewProfileName's -- a registry Param cannot be a Text
+		// control (Registry.cpp's AddParam(): options mean Choice, a range
+		// means Slider, neither means Switch), so the name is a sibling Text
+		// row, and sharing the Save group's field would make "Save as new"
+		// and "Rename" race for the same text.
+		char s_szRenameTo[ 64 ] = {};
 
 		// Issue #43 recommendation #10: provenance readout, refreshed
 		// alongside s_bHasSavedPerGameConfig/s_ProfileNames above by
@@ -121,17 +128,19 @@ namespace gamescope
 		bool s_bGeneralSettingsLoaded = false;
 		config::Settings s_GeneralSettings;
 
-		// Whichever file is authoritative for this session right now, read
-		// fresh: games/<AppId>.json while "Use separate settings for this
-		// game" is on, global.json otherwise. Every action that copies
-		// something in (a profile, another game's config) or out (save as
-		// new profile) starts from this. A real disk read -- only ever
-		// called from a button press or RefreshLists(), never per frame.
+		// Whichever file is authoritative for this session right now --
+		// games/<AppId>.json while "Use separate settings for this game" is
+		// on, global.json otherwise -- as the user is RUNNING it:
+		// config::CurrentRoutedSettings() answers from ConfigManager's
+		// in-memory mirror of the last routed write, falling back to disk
+		// only when nothing has been written this process. Since Phase B's
+		// write coalescing, a disk read here could be up to half a second
+		// behind a slider another area just moved; the mirror never is.
+		// Every action that copies something in (a profile, another game's
+		// config) or out (save as new profile, save changes) starts from this.
 		config::Settings CurrentTarget()
 		{
-			return ( s_bOverrideActive && s_oAppId )
-				? config::ResolveEffective( s_oAppId )
-				: config::LoadGlobal();
+			return config::CurrentRoutedSettings();
 		}
 
 		void RefreshLists()
@@ -362,7 +371,7 @@ namespace gamescope
 				// row's existence hangs off that answer. Queued, the file was
 				// not there yet, the hash did not move, and the row was
 				// missing until something else rebuilt the area.
-				config::SnapshotPerGameOverride( *s_oAppId, config::ResolveEffective( s_oAppId ) );
+				config::SnapshotPerGameOverride( *s_oAppId, CurrentTarget() );
 				sStatus = "This game now uses its own settings -- a copy of your current ones.";
 			}
 
@@ -455,8 +464,11 @@ namespace gamescope
 		// nothing, if the profile cannot be read.
 		bool UseProfile( const std::string &sName )
 		{
-			config::Settings target = CurrentTarget();
-			panelconfig::SettingsBackup backup{ target, sName, s_bOverrideActive };
+			// CurrentRoutedSettings(), not a disk read: another panel's
+			// slider write may still be sitting in the (coalesced) queue,
+			// and the backup has to hold what the user is actually running.
+			config::Settings target = config::CurrentRoutedSettings();
+			panelconfig::SettingsBackup backup{ target, sName, s_bOverrideActive, config::ActiveProfile() };
 
 			if ( !config::ApplyProfile( target, sName ) )
 			{
@@ -465,6 +477,12 @@ namespace gamescope
 			}
 
 			s_oBackup = std::move( backup );
+
+			// Phase B: this profile is now the active one -- set BEFORE the
+			// routed write below, so that write's auto-save fan-out (if on)
+			// targets the profile just used, not the one before it. (It
+			// writes the profile's own values back into it: a no-op.)
+			config::SetActiveProfile( sName );
 
 			// The one queued write left in this panel -- and the one that
 			// does not race anything: nothing below re-reads the file. The
@@ -496,6 +514,9 @@ namespace gamescope
 			if ( !s_oBackup || !panelconfig::BackupMatchesRouting( *s_oBackup, s_bOverrideActive ) )
 				return;
 
+			// Active profile back first -- see SettingsBackup's own comment
+			// on sPreviousActiveProfile for why the order matters.
+			config::SetActiveProfile( s_oBackup->sPreviousActiveProfile );
 			config::EnqueueRoutedWrite( s_oBackup->settings );
 			config::BumpConfigGeneration();
 			s_sLastAppliedProfile = s_oBackup->settings.last_applied_profile;
@@ -550,12 +571,17 @@ namespace gamescope
 				return;
 			}
 
-			if ( !config::SaveProfile( *oSanitized, CurrentTarget() ) )
+			if ( !config::SaveProfile( *oSanitized, config::CurrentRoutedSettings() ) )
 			{
 				s_sStatus = "Couldn't save profile '" + *oSanitized + "'.";
 				gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Error );
 				return;
 			}
+
+			// Phase B: a freshly saved profile IS the current settings, so it
+			// becomes the active one -- "changes since applied: none" from
+			// this moment, and auto-save (if on) keeps it that way.
+			config::SetActiveProfile( *oSanitized );
 
 			s_sStatus = "Saved profile '" + *oSanitized + "'. It's in the list above.";
 			s_szNewProfileName[ 0 ] = '\0';
@@ -602,6 +628,105 @@ namespace gamescope
 			s_bOverrideActive = true;
 			s_sStatus = "Copied app " + sSourceId + "'s settings to this game.";
 			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Ok );
+			RefreshLists();
+		}
+
+		// ---- Phase B actions (requests-2026-09-05 item 3) ------------------
+
+		// "Save changes to profile": the manual half of auto-save. Writes
+		// what the user is running right now into the active profile,
+		// replacing it. Synchronous, like every other button here.
+		void SaveChangesToActiveProfile()
+		{
+			const std::string sActive = config::ActiveProfile();
+			if ( sActive.empty() )
+				return;
+
+			const bool bOk = config::SaveProfile( sActive, config::CurrentRoutedSettings() );
+			s_sStatus = bOk
+				? "Saved your changes into profile '" + sActive + "'."
+				: "Couldn't write profile '" + sActive + "'.";
+			gamescope::Notifications::Show( s_sStatus,
+				bOk ? gamescope::Notifications::Kind::Ok : gamescope::Notifications::Kind::Error );
+			RefreshLists();
+		}
+
+		// "Rename profile": the SELECTED profile (the picker) takes the name
+		// typed in the Manage group's Text row. config::RenameProfile() does
+		// the containment checks and moves the active-profile name along if
+		// it was the one renamed; the picker follows because RefreshLists()
+		// re-lists and the selection is re-pointed at the new name below.
+		void RenameSelectedProfile()
+		{
+			if ( s_nSelectedProfile < 0 || s_nSelectedProfile >= (int)s_ProfileNames.size() )
+				return;
+			const std::string sOld = s_ProfileNames[ s_nSelectedProfile ];
+
+			std::optional<std::string> oNew = config::SanitizeProfileName( s_szRenameTo );
+			if ( !oNew )
+			{
+				s_sStatus = "New name can't be empty (letters/digits/space/-/_ only).";
+				gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Warning );
+				return;
+			}
+
+			const bool bOk = config::RenameProfile( sOld, *oNew );
+			s_sStatus = bOk
+				? "Renamed profile '" + sOld + "' to '" + *oNew + "'."
+				: "Couldn't rename '" + sOld + "' to '" + *oNew + "' -- does a profile with that name exist?";
+			gamescope::Notifications::Show( s_sStatus,
+				bOk ? gamescope::Notifications::Kind::Ok : gamescope::Notifications::Kind::Error );
+			if ( !bOk )
+				return;
+
+			s_szRenameTo[ 0 ] = '\0';
+			if ( s_sLastAppliedProfile == sOld )
+				s_sLastAppliedProfile = *oNew; // the file's breadcrumb still says the old name; the Status row should not
+			RefreshLists();
+			const auto it = std::find( s_ProfileNames.begin(), s_ProfileNames.end(), *oNew );
+			if ( it != s_ProfileNames.end() )
+				s_nSelectedProfile = (int)( it - s_ProfileNames.begin() );
+		}
+
+		// "Delete profile": the second destructive action in the product,
+		// armed by Confirm() like the first. Only ever the SELECTED profile,
+		// and config::DeleteProfile() refuses anything outside profiles/.
+		// Running settings are untouched -- a profile is a saved copy, and
+		// deleting the copy does not change what was copied from it.
+		void DeleteSelectedProfile()
+		{
+			if ( s_nSelectedProfile < 0 || s_nSelectedProfile >= (int)s_ProfileNames.size() )
+				return;
+			const std::string sName = s_ProfileNames[ s_nSelectedProfile ];
+
+			const bool bOk = config::DeleteProfile( sName );
+			s_sStatus = bOk
+				? "Deleted profile '" + sName + "'. Your current settings are unchanged."
+				: "Couldn't delete profile '" + sName + "'.";
+			gamescope::Notifications::Show( s_sStatus,
+				bOk ? gamescope::Notifications::Kind::Info : gamescope::Notifications::Kind::Error );
+			RefreshLists();
+		}
+
+		void SetAutoSave( bool bOn )
+		{
+			config::SetAutoSaveProfile( bOn );
+			const std::string &sActive = config::ActiveProfile();
+			if ( bOn && !sActive.empty() )
+			{
+				// Turning it on means "keep the profile equal to my settings
+				// from now on" -- so start by making that true, rather than
+				// leaving any existing drift in place until the next edit.
+				config::SaveProfile( sActive, config::CurrentRoutedSettings() );
+				s_sStatus = "Auto-save on: '" + sActive + "' now follows every change you make.";
+			}
+			else
+			{
+				s_sStatus = bOn
+					? "Auto-save on. It starts working once a profile is active."
+					: "Auto-save off. Profiles only change when you press Save changes.";
+			}
+			gamescope::Notifications::Show( s_sStatus, gamescope::Notifications::Kind::Info );
 			RefreshLists();
 		}
 
@@ -672,8 +797,19 @@ namespace gamescope
 			in.sLastAppliedProfile = s_sLastAppliedProfile;
 			in.bHasBackup = s_oBackup.has_value();
 			in.bBackupWasOverride = s_oBackup ? s_oBackup->bWasOverride : false;
+			// Phase B. All three are in-memory reads: the active profile and
+			// auto-save come from ConfigManager's global.json mirror, and the
+			// dirty count is cached on its mutation sequence -- it only
+			// re-diffs (one profile-file read) after something was written.
+			// So this runs every frame the area is shown without touching
+			// the disk, and still notices a slider moved in another area.
+			in.sActiveProfile = config::ActiveProfile();
+			in.bAutoSave = config::AutoSaveProfile();
+			in.nDirtySections = config::ActiveProfileDirtySections().value_or( -1 );
 			return panelconfig::StatusHash( in );
 		}
+
+		bool HasActiveProfile() { return !config::ActiveProfile().empty(); }
 
 		void RebuildProfileOptions()
 		{
@@ -746,10 +882,14 @@ namespace gamescope
 				.Live( "saved", []{
 					return ui::Fact{ "saved settings on disk", s_bHasSavedPerGameConfig
 						? ( "yes -- " + PerGameFilePath() ) : std::string( "no" ) };
+				} )
+				// Phase B: how far this game's running settings have drifted
+				// from the active profile. Same fact, same wording as the
+				// Profiles area's -- one question, one answer.
+				.Live( "changes", []{
+					return ui::Fact{ "changes since applied",
+						panelconfig::ChangesFact( config::ActiveProfileDirtySections() ) };
 				} );
-			// PHASE B SEAM (requests-2026-09-05 item 3): a `changes since
-			// applied` fact goes here once Settings carries `active_profile`
-			// and a dirty count can be computed against the profile file.
 
 			a.Group( "Settings for this game" );
 
@@ -881,23 +1021,39 @@ namespace gamescope
 			// Status first: "what is in use" was the question the old area
 			// never answered outright -- the last-applied profile was a
 			// Diagnostics fact at the very bottom.
+			// Phase B: the Status row reads the ACTIVE profile (Settings::
+			// active_profile -- the one Use/Start from/Save as new last
+			// chose), not the per-file provenance breadcrumb it read in
+			// Phase A. The two agree except after a rename or delete, where
+			// the file's breadcrumb still names the old profile and the
+			// Status row must not.
 			a.Group( "Status" );
 			ui::Entry &status = a.Facts( "profiles.status", "In use",
-				[]{ return s_sLastAppliedProfile.empty()
-					? std::string( "no profile" ) : s_sLastAppliedProfile; } )
-				.Help( "Which profile your current settings came from, where your edits are being "
-				       "saved, and when." )
-				.Keywords( "status in use profile edits go to saving backup" )
+				[]{
+					const std::string &sActive = config::ActiveProfile();
+					if ( sActive.empty() )
+						return std::string( "no profile" );
+					const std::optional<int> oDirty = config::ActiveProfileDirtySections();
+					return ( oDirty && *oDirty > 0 ) ? sActive + "  ·  " + panelconfig::ChangesFact( oDirty ) : sActive;
+				} )
+				.Help( "Which profile you're working against, how far your settings have drifted from "
+				       "it, where your edits are being saved, and whether the profile follows them." )
+				.Keywords( "status in use active profile changes since applied dirty edits go to saving auto-save backup" )
 				.Live( "profile", []{
-					return ui::Fact{ "profile", s_sLastAppliedProfile.empty()
-						? std::string( "none -- your settings were never copied from a profile" )
-						: s_sLastAppliedProfile };
+					return ui::Fact{ "profile", HasActiveProfile()
+						? config::ActiveProfile()
+						: std::string( "none -- use a profile or save one to make it active" ) };
+				} )
+				.Live( "changes", []{
+					return ui::Fact{ "changes since applied",
+						panelconfig::ChangesFact( config::ActiveProfileDirtySections() ) };
 				} )
 				.Live( "target", []{
 					return ui::Fact{ "edits go to", panelconfig::EditsGoTo( s_oAppId, s_bOverrideActive ) };
 				} )
 				.Live( "saving", []{
-					return ui::Fact{ "saving", "every change is saved to disk immediately" };
+					return ui::Fact{ "saving",
+						panelconfig::SavingFact( HasActiveProfile(), config::AutoSaveProfile() ) };
 				} );
 			if ( s_oBackup )
 			{
@@ -908,11 +1064,6 @@ namespace gamescope
 						: std::string( "none" ) };
 				} );
 			}
-			// PHASE B SEAM (requests-2026-09-05 item 3): two more facts land
-			// here once Settings carries `active_profile` and
-			// `auto_save_profile`: `changes since applied: N` (the dirty
-			// count against the profile file) and an `auto-save` line naming
-			// whether edits are copied back to the profile.
 
 			a.Group( "Use a profile" );
 
@@ -927,13 +1078,26 @@ namespace gamescope
 				.Keywords( "profile preset saved snapshot pick" )
 				.DisabledUnless( HasProfiles, kNoProfilesReason );
 
-			a.Action( "profiles.apply", "Use this profile", "use",
+			// Phase B: confirm ONLY when there is something to lose -- edits
+			// that drifted from the active profile with auto-save off. The
+			// backup still makes Use reversible either way; the confirm is
+			// for the case where the thing being replaced was never saved
+			// anywhere but the live file. Decided at build time (the dirty
+			// count and auto-save are both rebuild inputs), so a clean state
+			// is a plain single press, as in Phase A.
+			ui::Entry &apply = a.Action( "profiles.apply", "Use this profile", "use",
 				[]{ UseSelectedProfile(); } )
 				.Help( "Replaces your current settings with the selected profile's. The settings you "
 				       "had are kept as a backup until you use another profile, so you can always go "
-				       "back." )
+				       "back. If you have unsaved changes to the active profile, this asks first." )
 				.Keywords( "use apply profile preset load switch" )
 				.DisabledUnless( HasProfiles, kNoProfilesReason );
+			{
+				const std::string sPrompt = panelconfig::UseConfirmPrompt(
+					config::ActiveProfileDirtySections(), config::AutoSaveProfile() );
+				if ( !sPrompt.empty() )
+					apply.Confirm( sPrompt.c_str() );
+			}
 
 			if ( s_oBackup )
 			{
@@ -975,14 +1139,80 @@ namespace gamescope
 				.Keywords( "save profile new snapshot store" )
 				.DisabledUnless( []{ return s_szNewProfileName[ 0 ] != '\0'; },
 				                 "type a name first" );
-			// PHASE B SEAM (requests-2026-09-05 item 3): the rows that need
-			// ConfigManager work land in this group -- "Save changes to
-			// profile" (needs Settings::active_profile), "Rename profile"
-			// (RenameProfile), "Delete profile" (DeleteProfile, containment-
-			// checked like DeletePerGameOverride, with Confirm()), and the
-			// "Auto-save to profile" switch (auto_save_profile, fanned out in
-			// EnqueueRoutedWrite). None is stubbed here: a row that does
-			// nothing must not exist.
+
+			// ---- Phase B: the active profile's own save path ---------------
+			// The disabled reason is picked at build time from the three
+			// states the row can be in; the area rebuilds whenever any of
+			// them changes (ConfigGenerationHash), so the reason is never
+			// stale. No confirm: this overwrites a profile with the settings
+			// the user is looking at, which is exactly what the button says.
+			{
+				ui::Entry &saveChanges = a.Action( "profiles.save_changes", "Save changes to profile", "save",
+					[]{ SaveChangesToActiveProfile(); } )
+					.Help( "Writes your current settings into the active profile, replacing what it had." )
+					.Keywords( "save changes profile update overwrite active dirty" );
+				const std::string sBlocker = panelconfig::SaveChangesBlocker(
+					HasActiveProfile(), config::AutoSaveProfile(), config::ActiveProfileDirtySections() );
+				if ( !sBlocker.empty() )
+					saveChanges.DisabledUnless( []{ return false; }, sBlocker.c_str() );
+			}
+
+			a.Switch( "profiles.autosave", "Auto-save to profile",
+				ui::AnyBind::Of<bool>(
+					[]{ return config::AutoSaveProfile(); },
+					[]( bool bOn ) { SetAutoSave( bOn ); } ) )
+				.Help( "When on, any setting you change while a profile is active is saved into that "
+				       "profile straight away. When off, changes stay in your current settings but the "
+				       "profile keeps its old values until you press Save." )
+				.Default( false )
+				.Keywords( "auto-save autosave profile follow sync changes automatically" )
+				.DisabledUnless( HasActiveProfile, "no profile is active" );
+
+			// ---- Phase B: manage the SELECTED profile ----------------------
+			// Rename and Delete act on the picker's selection (the same one
+			// "Use this profile" would use), not on the active profile --
+			// you should be able to tidy a profile you are not running.
+			a.Group( "Manage selected profile" );
+
+			a.Text( "profiles.rename_to", "New name",
+				ui::AnyBind::Of<std::string>(
+					[]{ return std::string( s_szRenameTo ); },
+					[]( std::string s )
+					{
+						std::snprintf( s_szRenameTo, sizeof( s_szRenameTo ), "%s", s.c_str() );
+					} ) )
+				.Help( "The name the selected profile should have. Letters, digits, spaces, hyphens "
+				       "and underscores only." )
+				.Keywords( "rename profile new name" )
+				.DisabledUnless( HasProfiles, kNoProfilesReason )
+				.Validate( []( const std::string &s ) -> std::string
+				{
+					if ( s.empty() )
+						return "";
+					if ( !config::SanitizeProfileName( s ) )
+						return "letters, digits, space, hyphen and underscore only";
+					if ( std::find( s_ProfileNames.begin(), s_ProfileNames.end(), s ) != s_ProfileNames.end() )
+						return "a profile with that name already exists";
+					return "";
+				} );
+
+			a.Action( "profiles.rename", "Rename profile", "rename",
+				[]{ RenameSelectedProfile(); } )
+				.Help( "Gives the selected profile the name typed above. If it's the active profile, "
+				       "everything follows the new name." )
+				.Keywords( "rename profile move name" )
+				.DisabledUnless( []{ return HasProfiles() && s_szRenameTo[ 0 ] != '\0'; },
+				                 "select a profile and type its new name first" );
+
+			// Armed by Confirm(), same as the per-game delete: the user's
+			// rule is that nothing destroys a config on a single press.
+			a.Action( "profiles.delete", "Delete profile", "delete...",
+				[]{ DeleteSelectedProfile(); } )
+				.Confirm( "delete permanently?" )
+				.Help( "Deletes this saved profile. Settings you're running right now are not "
+				       "affected. Press once to arm the button, then again to confirm." )
+				.Keywords( "delete remove destroy profile file" )
+				.DisabledUnless( HasProfiles, kNoProfilesReason );
 
 			a.Group( "Diagnostics" );
 			a.Facts( "profiles.facts", "Profiles",
@@ -1238,8 +1468,14 @@ namespace gamescope
 		profiles.Summary( []{
 			EnsureInitialized();
 			std::string sSummary = std::to_string( s_ProfileNames.size() ) + " saved";
-			if ( !s_sLastAppliedProfile.empty() )
-				sSummary += "  ·  using " + s_sLastAppliedProfile;
+			const std::string &sActive = config::ActiveProfile();
+			if ( !sActive.empty() )
+			{
+				sSummary += "  ·  using " + sActive;
+				const std::optional<int> oDirty = config::ActiveProfileDirtySections();
+				if ( oDirty && *oDirty > 0 )
+					sSummary += " (" + panelconfig::ChangesFact( oDirty ) + ")";
+			}
 			return sSummary;
 		} );
 		profiles.Badge( RoutedBadge );

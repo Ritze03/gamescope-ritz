@@ -1620,3 +1620,403 @@ TEST_CASE( "crosshair rides in a per-game snapshot and in a profile, like fps_di
     REQUIRE( target.crosshair.enabled == true );
     REQUIRE( target.crosshair.line_length == 12 );
 }
+
+// ---- Profiles Phase B (requests-2026-09-05 item 3) --------------------------
+
+TEST_CASE( "active_profile and auto_save_profile round-trip through global.json only", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.active_profile = "FPS";
+    s.auto_save_profile = true;
+    s.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( s ) );
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.active_profile == "FPS" );
+    REQUIRE( loaded.auto_save_profile );
+
+    // Neither field ever rides along into a profile or a per-game file --
+    // same gate as `overlay` (ConfigSchema.h's active_profile comment).
+    REQUIRE( SaveProfile( "P", s ) );
+    REQUIRE( SnapshotPerGameOverride( "77", s ) );
+    for ( const std::string &sPath : { ProfilePath( "P" ), GamePath( "77" ) } )
+    {
+        std::ifstream f( sPath );
+        std::string sText( ( std::istreambuf_iterator<char>( f ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sText.find( "active_profile" ) == std::string::npos );
+        REQUIRE( sText.find( "auto_save_profile" ) == std::string::npos );
+        REQUIRE( sText.find( "\"overlay\"" ) == std::string::npos );
+    }
+    // And reading them back yields the struct defaults, not the global's
+    // values.
+    std::optional<Settings> oProfile = LoadProfile( "P" );
+    REQUIRE( oProfile.has_value() );
+    REQUIRE( oProfile->active_profile.empty() );
+    REQUIRE_FALSE( oProfile->auto_save_profile );
+
+    // ApplyProfile leaves the target's session fields alone too.
+    Settings target{};
+    target.active_profile = "Other";
+    target.auto_save_profile = true;
+    REQUIRE( ApplyProfile( target, "P" ) );
+    REQUIRE( target.active_profile == "Other" );
+    REQUIRE( target.auto_save_profile );
+    REQUIRE( target.gamescope.filter == "FSR" );
+}
+
+TEST_CASE( "a config predating Phase B loads with no active profile and auto-save off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+    {
+        std::ofstream f( GlobalConfigPath() );
+        f << R"({"schema_version": 2, "gamescope": {"filter": "NIS"}})";
+    }
+    Settings s = LoadGlobal();
+    REQUIRE( s.gamescope.filter == "NIS" );
+    REQUIRE( s.active_profile.empty() );
+    REQUIRE_FALSE( s.auto_save_profile );
+    REQUIRE( s.system.clipboard_sync ); // item 5: default on
+    REQUIRE( s.gamescope.nested_width == 0 ); // item 7: as launched
+}
+
+TEST_CASE( "SetActiveProfile / SetAutoSaveProfile persist to global.json and never to the per-game file", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "77" );
+
+    REQUIRE( ActiveProfile().empty() );
+    REQUIRE_FALSE( AutoSaveProfile() );
+
+    // Route everything into the per-game file first, so a wrongly routed
+    // session field would be visible.
+    EnqueuePerGameSnapshot( "77", Settings{} );
+    SetSessionOverrideActive( true );
+
+    SetActiveProfile( "FPS" );
+    SetAutoSaveProfile( true );
+    REQUIRE( ActiveProfile() == "FPS" );      // in-memory, immediately
+    REQUIRE( AutoSaveProfile() );
+    FlushPendingWrites();
+
+    Settings global = LoadGlobal();
+    REQUIRE( global.active_profile == "FPS" );
+    REQUIRE( global.auto_save_profile );
+    std::optional<Settings> oGame = LoadPerGameOverride( "77" );
+    REQUIRE( oGame.has_value() );
+    REQUIRE( oGame->active_profile.empty() );
+
+    // A routed write from a panel holding a stale copy of the session
+    // fields must not clobber them (the same hazard `overlay` had).
+    SetSessionOverrideActive( false );
+    Settings stale{}; // active_profile "", auto_save false -- as loaded before the Set*() calls
+    stale.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( stale );
+    FlushPendingWrites();
+    global = LoadGlobal();
+    REQUIRE( global.gamescope.filter == "FSR" );
+    REQUIRE( global.active_profile == "FPS" );
+    REQUIRE( global.auto_save_profile );
+}
+
+TEST_CASE( "auto-save fans a routed write out to the active profile, and only then", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    Settings base{};
+    base.gamescope.filter = "LINEAR";
+    REQUIRE( SaveProfile( "X", base ) );
+    SetActiveProfile( "X" );
+
+    // Auto-save OFF (the default): the profile keeps its old values.
+    Settings edited = base;
+    edited.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( edited );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+    REQUIRE( LoadProfile( "X" )->gamescope.filter == "LINEAR" );
+
+    // Auto-save ON: the same routed write also lands in the profile.
+    SetAutoSaveProfile( true );
+    edited.gamescope.filter = "NIS";
+    EnqueueRoutedWrite( edited );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().gamescope.filter == "NIS" );
+    REQUIRE( LoadProfile( "X" )->gamescope.filter == "NIS" );
+
+    // The fan-out is a profile write like any other: no overlay, no
+    // session fields, and the file's own name key intact.
+    {
+        std::ifstream f( ProfilePath( "X" ) );
+        std::string sText( ( std::istreambuf_iterator<char>( f ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sText.find( "\"overlay\"" ) == std::string::npos );
+        REQUIRE( sText.find( "active_profile" ) == std::string::npos );
+        REQUIRE( sText.find( "\"name\": \"X\"" ) != std::string::npos );
+    }
+
+    // Per-game routing fans out too -- "while a profile is active" does
+    // not depend on which file the edit itself lands in.
+    {
+        ScopedSessionAppId perGame( "77" );
+        SetActiveProfile( "X" );
+        SetAutoSaveProfile( true );
+        EnqueuePerGameSnapshot( "77", edited );
+        SetSessionOverrideActive( true );
+        edited.gamescope.filter = "PIXEL";
+        EnqueueRoutedWrite( edited );
+        FlushPendingWrites();
+        REQUIRE( LoadPerGameOverride( "77" )->gamescope.filter == "PIXEL" );
+        REQUIRE( LoadProfile( "X" )->gamescope.filter == "PIXEL" );
+        REQUIRE( LoadGlobal().gamescope.filter == "NIS" ); // global untouched by the per-game edit
+    }
+
+    // No active profile: nothing to fan out to, nothing written.
+    SetActiveProfile( "" );
+    REQUIRE( DeleteProfile( "X" ) );
+    edited.gamescope.filter = "LINEAR";
+    EnqueueRoutedWrite( edited );
+    FlushPendingWrites();
+    REQUIRE_FALSE( std::filesystem::exists( ProfilePath( "X" ) ) );
+}
+
+TEST_CASE( "ActiveProfileDirtySections counts the sections that differ from the active profile", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // No active profile: not applicable.
+    REQUIRE_FALSE( ActiveProfileDirtySections().has_value() );
+
+    Settings live{};
+    live.gamescope.filter = "LINEAR";
+    live.audio.manual_node_binary = "game.exe";
+    EnqueueRoutedWrite( live );
+    REQUIRE( SaveProfile( "X", live ) );
+    SetActiveProfile( "X" );
+    REQUIRE( ActiveProfileDirtySections() == 0 );
+
+    // One section drifts -> 1. The live side is the routed mirror, so this
+    // is visible before the queued write has even hit the disk.
+    live.gamescope.filter = "FSR";
+    EnqueueRoutedWrite( live );
+    REQUIRE( ActiveProfileDirtySections() == 1 );
+
+    // A second section -> 2.
+    live.fps_display.enabled = !live.fps_display.enabled;
+    EnqueueRoutedWrite( live );
+    REQUIRE( ActiveProfileDirtySections() == 2 );
+
+    // `audio` is not part of a profile's identity (ApplyProfile never copies
+    // it), so changing it is not a change against the profile.
+    live.audio.manual_node_binary = "other.exe";
+    EnqueueRoutedWrite( live );
+    REQUIRE( ActiveProfileDirtySections() == 2 );
+
+    // Nor is `overlay` (global-only) or the provenance breadcrumb.
+    live.overlay.display_scale = 1.5f;
+    live.last_applied_profile = "Somewhere";
+    EnqueueRoutedWrite( live );
+    REQUIRE( ActiveProfileDirtySections() == 2 );
+
+    // "Save changes" -> clean again.
+    REQUIRE( SaveProfile( "X", live ) );
+    REQUIRE( ActiveProfileDirtySections() == 0 );
+
+    // With auto-save on, an edit is clean the moment it is written.
+    SetAutoSaveProfile( true );
+    live.crosshair.enabled = true;
+    EnqueueRoutedWrite( live );
+    REQUIRE( ActiveProfileDirtySections() == 0 );
+
+    // An unreadable active profile is "unknown", not "clean". This process
+    // mirrors the last profile it wrote, so the diff only goes to disk in a
+    // fresh process -- which ResetSessionRoutingForTests() stands in for
+    // (global.json still names X as active; X's file is gone).
+    FlushPendingWrites();
+    std::filesystem::remove( ProfilePath( "X" ) );
+    ResetSessionRoutingForTests();
+    REQUIRE( ActiveProfile() == "X" );
+    REQUIRE_FALSE( ActiveProfileDirtySections().has_value() );
+}
+
+TEST_CASE( "RenameProfile moves the file, its name key and the active profile", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    Settings p{};
+    p.gamescope.sharpness = 9;
+    REQUIRE( SaveProfile( "Old", p ) );
+    REQUIRE( SaveProfile( "Other", Settings{} ) );
+    SetActiveProfile( "Old" );
+
+    REQUIRE( RenameProfile( "Old", "New" ) );
+    REQUIRE_FALSE( std::filesystem::exists( ProfilePath( "Old" ) ) );
+    REQUIRE( std::filesystem::exists( ProfilePath( "New" ) ) );
+    REQUIRE( LoadProfile( "New" )->gamescope.sharpness == 9 );
+    REQUIRE( ActiveProfile() == "New" );
+    {
+        std::ifstream f( ProfilePath( "New" ) );
+        std::string sText( ( std::istreambuf_iterator<char>( f ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sText.find( "\"name\": \"New\"" ) != std::string::npos );
+        REQUIRE( sText.find( "\"name\": \"Old\"" ) == std::string::npos );
+    }
+
+    // Renaming a profile that is not the active one leaves it alone.
+    REQUIRE( RenameProfile( "Other", "Another" ) );
+    REQUIRE( ActiveProfile() == "New" );
+
+    // Refusals: missing source, existing destination, same name is a no-op.
+    REQUIRE_FALSE( RenameProfile( "Missing", "Whatever" ) );
+    REQUIRE_FALSE( RenameProfile( "New", "Another" ) );
+    REQUIRE( LoadProfile( "Another" )->gamescope.sharpness == GamescopeSettings{}.sharpness ); // untouched
+    REQUIRE( RenameProfile( "New", "New" ) );
+    REQUIRE( ActiveProfile() == "New" );
+}
+
+TEST_CASE( "RenameProfile and DeleteProfile refuse anything outside profiles/", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    Settings global{};
+    global.gamescope.filter = "FSR";
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE( SnapshotPerGameOverride( "1", Settings{} ) );
+    REQUIRE( SaveProfile( "P", Settings{} ) );
+
+    for ( const char *pszBad : { "../global", "../games/1", "..", ".", "", "a/b", "P.json", "P/../P" } )
+    {
+        REQUIRE_FALSE( DeleteProfile( pszBad ) );
+        REQUIRE_FALSE( RenameProfile( pszBad, "Fine" ) );
+        REQUIRE_FALSE( RenameProfile( "P", pszBad ) );
+    }
+    // A name that only differs by what sanitising would strip is refused
+    // too -- the caller must pass exactly the sanitised form.
+    REQUIRE_FALSE( DeleteProfile( " P" ) );
+    REQUIRE_FALSE( RenameProfile( "P", " Q" ) );
+
+    REQUIRE( std::filesystem::exists( GlobalConfigPath() ) );
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+    REQUIRE( std::filesystem::exists( GamePath( "1" ) ) );
+    REQUIRE( std::filesystem::exists( ProfilePath( "P" ) ) );
+}
+
+TEST_CASE( "DeleteProfile removes only the intended profile and clears it as active", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    REQUIRE( SaveProfile( "A", Settings{} ) );
+    REQUIRE( SaveProfile( "B", Settings{} ) );
+    SetActiveProfile( "A" );
+    SetAutoSaveProfile( true );
+
+    REQUIRE( DeleteProfile( "B" ) );
+    REQUIRE( ActiveProfile() == "A" ); // a different profile: still active
+    REQUIRE_FALSE( std::filesystem::exists( ProfilePath( "B" ) ) );
+    REQUIRE( std::filesystem::exists( ProfilePath( "A" ) ) );
+
+    REQUIRE( DeleteProfile( "A" ) );
+    REQUIRE( ActiveProfile().empty() );
+    REQUIRE( AutoSaveProfile() ); // the switch's own state is the user's, and stays
+    REQUIRE_FALSE( std::filesystem::exists( ProfilePath( "A" ) ) );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().active_profile.empty() );
+
+    // Missing file is success, like DeletePerGameOverride.
+    REQUIRE( DeleteProfile( "A" ) );
+    REQUIRE( ListProfiles().empty() );
+}
+
+TEST_CASE( "queued writes to the same path coalesce, last wins", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // A burst, like a slider drag. Whatever the worker batches, the file
+    // must end up holding the LAST value -- and Flush must not wait out the
+    // quiet period.
+    for ( int i = 0; i < 25; i++ )
+    {
+        Settings s{};
+        s.gamescope.sharpness = i;
+        EnqueueRoutedWrite( s );
+    }
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().gamescope.sharpness == 24 );
+
+    // Two different paths in one burst both land.
+    Settings g{};
+    g.gamescope.filter = "FSR";
+    EnqueueGlobalWrite( g );
+    EnqueueProfileWrite( "P", g );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" );
+    REQUIRE( LoadProfile( "P" )->gamescope.filter == "FSR" );
+}
+
+// ---- System tab Phase B (requests-2026-09-05 item 5) ------------------------
+
+TEST_CASE( "system.clipboard_sync round-trips and resolves per-game like every other per-layer field", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings global{};
+    REQUIRE( global.system.clipboard_sync ); // default on
+    global.system.clipboard_sync = false;
+    REQUIRE( SaveGlobal( global ) );
+    REQUIRE_FALSE( LoadGlobal().system.clipboard_sync );
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "1" } ).system.clipboard_sync );
+
+    // A per-game override carries its own value.
+    Settings snapshot = ResolveEffective( std::optional<std::string>{ "1" } );
+    snapshot.system.clipboard_sync = true;
+    REQUIRE( SnapshotPerGameOverride( "1", snapshot ) );
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "1" } ).system.clipboard_sync );
+    REQUIRE_FALSE( ResolveEffective( std::optional<std::string>{ "2" } ).system.clipboard_sync );
+    REQUIRE_FALSE( ResolveEffective( std::nullopt ).system.clipboard_sync );
+
+    // And a profile carries it, and ApplyProfile copies it.
+    Settings profile{};
+    profile.system.clipboard_sync = true;
+    REQUIRE( SaveProfile( "Sync", profile ) );
+    Settings target = LoadGlobal();
+    REQUIRE_FALSE( target.system.clipboard_sync );
+    REQUIRE( ApplyProfile( target, "Sync" ) );
+    REQUIRE( target.system.clipboard_sync );
+}
+
+// ---- Nested resolution schema half (requests-2026-09-05 item 7) --------------
+
+TEST_CASE( "gamescope.nested_width/height/refresh_hz round-trip and default to as-launched", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE( s.gamescope.nested_width == 0 );
+    REQUIRE( s.gamescope.nested_height == 0 );
+    REQUIRE( s.gamescope.nested_refresh_hz == 0 );
+
+    s.gamescope.nested_width = 1280;
+    s.gamescope.nested_height = 720;
+    s.gamescope.nested_refresh_hz = 144;
+    REQUIRE( SaveGlobal( s ) );
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.gamescope.nested_width == 1280 );
+    REQUIRE( loaded.gamescope.nested_height == 720 );
+    REQUIRE( loaded.gamescope.nested_refresh_hz == 144 );
+
+    // Rides in a profile and is copied by ApplyProfile with the rest of
+    // the gamescope section.
+    REQUIRE( SaveProfile( "Res", s ) );
+    Settings target{};
+    REQUIRE( ApplyProfile( target, "Res" ) );
+    REQUIRE( target.gamescope.nested_width == 1280 );
+    REQUIRE( target.gamescope.nested_height == 720 );
+    REQUIRE( target.gamescope.nested_refresh_hz == 144 );
+}

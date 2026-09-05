@@ -28,9 +28,14 @@ namespace gamescope
     // Default true: clipboard sync is opt-out, matching the feature's existing
     // default behaviour before this switch existed.
     //
-    // PHASE B: persisted via config::SystemSettings::clipboard_sync once that
-    // exists -- for now PanelSystem.cpp's switch only flips this atomic, so the
-    // value does not survive a restart. See that file's setter comment.
+    // Persisted as config::SystemSettings::clipboard_sync (Config/
+    // ConfigSchema.h). This atomic is the RUNTIME mirror of that field:
+    // PanelSystem.cpp seeds it from config (EnsureConfigLoaded(), on
+    // registration and on every config-generation change) and stores to it
+    // on every switch flip before queuing the config write. Nothing else
+    // writes it. The compiled-in `true` below is only what a process runs on
+    // until that seed happens -- see PanelSystem_SeedFromConfig() in
+    // Overlay/PanelSystem.h for the startup call that closes that window.
     //
     // `inline` (not `extern` + a .cpp definition, unlike e.g. FpsDisplay.cpp's
     // g_ulLastAppFrametimeNs in commit.cpp): this header is the single owner

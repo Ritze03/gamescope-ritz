@@ -1,10 +1,10 @@
 // The Setup section's three areas of the settings overlay -- Profiles,
 // Per-game and Appearance: the "Use separate settings for this game"
-// switch, the profile manager (use / restore / save as new), and the
-// overlay's own appearance settings. See superdoc/features/
-// profiles-and-per-game.md (the model in plain words, and what is still
-// pending as Phase B), superdoc/planning/SPEC.md's Feature 6 ("Config
-// system"), and superdoc/planning/DECISIONS.md #19-#21.
+// switch, the profile manager (use / restore / save as new / save changes /
+// auto-save / rename / delete), and the overlay's own appearance settings.
+// See superdoc/features/profiles-and-per-game.md (the model in plain words,
+// the dirty rule and the auto-save fan-out), superdoc/planning/SPEC.md's
+// Feature 6 ("Config system"), and superdoc/planning/DECISIONS.md #19-#21.
 //
 // This is the only panel that ever changes *which file* the other panels
 // (PanelDisplay, PanelShaders, FpsDisplay) persist their own live edits
@@ -57,6 +57,12 @@ namespace gamescope
 			config::Settings settings;         // the target as it was before the Use
 			std::string sReplacedBy;           // the profile whose Use took the backup
 			bool bWasOverride = false;         // routing when it was taken: per-game file or global.json
+			// Phase B: the active profile before the Use, restored with the
+			// settings. Restore goes through the same routed write Use did,
+			// and with auto-save on that write fans out to the ACTIVE
+			// profile -- so the active profile has to be put back first, or
+			// "undo using X" would write the old settings into X.
+			std::string sPreviousActiveProfile;
 		};
 
 		// A backup is only ever written back to the file it was taken from.
@@ -84,6 +90,14 @@ namespace gamescope
 			std::string sLastAppliedProfile;
 			bool bHasBackup = false;           // "Restore previous settings" exists only while this is true
 			bool bBackupWasOverride = false;   // which area's Restore row applies
+			// Phase B (requests-2026-09-05 item 3). The dirty count drives the
+			// Status fact, the Save-changes row's disabled reason and whether
+			// "Use this profile" carries a confirm -- all decided at build
+			// time, so it must be a rebuild input. -1 = unknown (no active
+			// profile, or its file could not be read).
+			std::string sActiveProfile;
+			bool bAutoSave = false;
+			int nDirtySections = -1;
 		};
 
 		inline uint64_t StatusHash( const StatusInputs &in )
@@ -111,7 +125,55 @@ namespace gamescope
 			Mix( "|" );
 			Mix( in.sLastAppliedProfile );
 			Mix( in.bHasBackup ? ( in.bBackupWasOverride ? "backup-pergame" : "backup-global" ) : "nobackup" );
+			Mix( in.sActiveProfile );
+			Mix( in.bAutoSave ? "autosave" : "manual" );
+			Mix( std::to_string( in.nDirtySections ) );
 			return ulHash;
+		}
+
+		// Phase B wording, shared by both areas' Status rows and pinned by
+		// tests. oDirty is ActiveProfileDirtySections(): nullopt = no active
+		// profile (or unreadable), 0 = clean, N = that many sections differ.
+		inline std::string ChangesFact( const std::optional<int> &oDirty )
+		{
+			if ( !oDirty )
+				return "n/a -- no profile is active";
+			if ( *oDirty == 0 )
+				return "none";
+			return std::to_string( *oDirty ) + ( *oDirty == 1 ? " section changed" : " sections changed" );
+		}
+
+		inline std::string SavingFact( bool bHasActiveProfile, bool bAutoSave )
+		{
+			if ( !bHasActiveProfile )
+				return "every change is saved to disk immediately";
+			return bAutoSave
+				? "every change is saved to disk immediately, and automatically into the profile"
+				: "every change is saved to disk immediately; the profile only when you press Save changes";
+		}
+
+		// "Use this profile" is a plain press unless there is something to
+		// lose: unsaved drift from the active profile with auto-save off.
+		// Returns the confirm prompt, or "" for no confirm.
+		inline std::string UseConfirmPrompt( const std::optional<int> &oDirty, bool bAutoSave )
+		{
+			if ( bAutoSave || !oDirty || *oDirty <= 0 )
+				return "";
+			return "discard " + std::to_string( *oDirty ) +
+				( *oDirty == 1 ? " unsaved change?" : " unsaved changes?" );
+		}
+
+		// The Save-changes row's disabled reason, or "" when it can act.
+		inline std::string SaveChangesBlocker( bool bHasActiveProfile, bool bAutoSave,
+		                                       const std::optional<int> &oDirty )
+		{
+			if ( !bHasActiveProfile )
+				return "no profile is active";
+			if ( bAutoSave )
+				return "auto-save is on -- already saved";
+			if ( oDirty && *oDirty == 0 )
+				return "nothing has changed";
+			return "";
 		}
 
 		// The Status rows' wording, in one place so the two areas cannot

@@ -202,8 +202,7 @@ the host session when nested.
 
 The System tab (`system.general`, `Overlay/PanelSystem.cpp` — the first area in
 the SYSTEM rail section) has a "Clipboard sync" switch and a read-only status
-row underneath it. Phase A of that tab; see
-`superdoc/planning/requests-2026-09-05.md` item 5.
+row underneath it. See `superdoc/planning/requests-2026-09-05.md` item 5.
 
 **The switch** (`system.clipboard_sync`, default on). Off stops the *inbound*
 half of sync: a host clipboard change never reaches a client inside gamescope.
@@ -269,17 +268,36 @@ fact. In embedded (DRM) mode, where `GetNestedHints()` returns `nullptr`
 not exist. The area's own summary line in the rail folds both rows into one
 phrase: `clipboard sync on · <protocol>`, or `clipboard sync off`.
 
-**Not persisted yet.** Phase A's switch only flips the runtime atomic — the
-value does not survive a restart. `config::SystemSettings::clipboard_sync` is
-the Phase B seam that fixes that; see `Overlay/PanelSystem.cpp`'s setter
-comment.
+**Persistence** (Phase B). The switch is `config::SystemSettings::clipboard_sync`
+(`Config/ConfigSchema.h`, JSON `system.clipboard_sync`, default `true`) — a
+normal per-layer field like `notifications.muted`: shared via `global.json`
+unless the game has separate settings on, carried by profiles and copied by
+`ApplyProfile()`, written through `config::EnqueueRoutedWrite()`. So one game can
+keep its clipboard to itself without changing the default for every other game.
+
+`g_bClipboardSyncEnabled` is the *runtime mirror* of that field, and
+`PanelSystem.cpp` is its only writer: a generation-checked loader
+(`EnsureConfigLoaded()`, the same shape as `Notifications.cpp`'s) seeds the
+atomic from `ResolveEffective()` on registration and again whenever the config
+generation moves (a profile Use, a per-game toggle), and the switch's setter
+stores to the atomic first and queues the config write second. The compiled-in
+`true` in `ClipboardSync.h` is only what a process runs on until that seed.
+
+`Why the seed needs a startup call:` the registry is built lazily —
+`Shell.cpp`'s `Reg()` runs `RegisterAll()` the first time the shell is drawn —
+so a process in which the overlay is never opened would run on the compiled-in
+default. `PanelSystem_SeedFromConfig()` (`Overlay/PanelSystem.h`) is the one-line
+call for a startup site (`SettingsOverlay.cpp`'s launch warm-up block, or
+`main.cpp` after `apply_ritz_config_to_startup_state()`); it is idempotent and a
+single config read.
 
 ## Where the code is
 
 | File | What |
 | --- | --- |
 | `src/Clipboard/ClipboardSync.{h,cpp}` | Loop guard, text normalisation, bounded pipe read/write, and `g_bClipboardSyncEnabled`. No compositor dependency; unit-tested. |
-| `src/Overlay/PanelSystem.{h,cpp}` | The System tab's "Clipboard sync" switch and status row. |
+| `src/Overlay/PanelSystem.{h,cpp}` | The System tab's "Clipboard sync" switch and status row; seeds `g_bClipboardSyncEnabled` from `config::SystemSettings`. |
+| `src/Config/ConfigSchema.h` | `SystemSettings::clipboard_sync` -- the persisted value. |
 | `src/Clipboard/WaylandDataControl.h` | The `ext_`/`zwlr_` data-control device, written once against a traits struct. |
 | `src/backend.h` | `INestedHints::GetClipboardSyncStatus()` -- the status row's data source. |
 | `src/Backends/WaylandBackend.cpp` | Protocol selection, the `wl_data_device` fallback, inbound mailbox. |

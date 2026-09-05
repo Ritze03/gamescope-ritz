@@ -12,6 +12,15 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Auto-save to profile**: an opt-in switch in Profiles that writes every setting you
+  change straight into the active profile; off by default, so a profile only changes
+  when you press Save.
+- **Save changes to profile**: writes your current settings into the active profile,
+  and the Status row now shows how many sections have changed since you applied it.
+- **Rename and Delete profile**: manage the selected profile from the Profiles area;
+  Delete asks for a second press, and never touches the settings you are running.
+- **Clipboard sync is remembered**: the System tab's switch now survives a restart and
+  can differ per game like every other setting.
 - **Runtime resolution**: a new Display > Resolution area changes the resolution the
   game renders at while it runs, with presets from 720p to 4K, a custom size with an
   aspect lock, and no restart of gamescope or the game.
@@ -51,6 +60,10 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **Using a profile asks before discarding unsaved changes**: only when your settings
+  differ from the active profile and auto-save is off; otherwise it is one press.
+- **Fewer disk writes while dragging a slider**: settings writes are now coalesced, so
+  a drag costs one write per pause instead of one per tick.
 - **FPS counter no longer shows 999**: the HUD now counts the game's frames instead of
   timing them, so a game that hands over two frames at once (frame generation, or
   simply out-running the compositor) reads correctly rather than pinning at 999.
