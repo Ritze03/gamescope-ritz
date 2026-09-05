@@ -216,8 +216,10 @@ namespace gamescope::config
 
     struct ReshadeAdaptiveBrightnessSettings
     {
-        // Deferred to M9 (SPEC.md decision) - reserved here now so schema_version
-        // doesn't need a breaking bump when it lands.
+        // Consumed by src/shaders/cs_effects_measure.comp (the adapt maths) and
+        // cs_effects_layer0.comp (the gain). These are THE defaults: the panel's
+        // .Default()s in Overlay/PanelShaders.cpp read this struct rather than
+        // repeating the numbers, so change them here only.
         bool enabled = false;
         float target_luminance = 0.5f;   // 0.1..0.9
         float adapt_up_speed = 1.0f;     // 0.1..5.0 seconds to ~63% of target

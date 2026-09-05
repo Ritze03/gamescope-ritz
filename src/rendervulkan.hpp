@@ -529,11 +529,10 @@ struct NativeEffectsState_t
 	bool  bPreSharpen = false;
 	float flPreSharpen = 0.5f;           // 0..2, the panel's slider scale
 
-	// Adaptive Brightness: values are plumbed through to the shader's
-	// reserved u_ab* fields, but the pass multiplies by a constant 1.0
-	// until Agent B lands the history/measure half. Not counted in
-	// AnyEnabled() until then -- B flips that, so an enabled-but-inert
-	// effect does not force a full composite for nothing.
+	// Adaptive Brightness: consumed by cs_effects_measure.comp (the
+	// measure/adapt pass, which runs whenever the pre-pass runs so the
+	// history keeps tracking while the switch is off) and by
+	// cs_effects_layer0.comp (the visible gain, gated on the switch).
 	bool  bAdaptiveBrightness = false;
 	float flAbTarget = 0.5f;
 	float flAbUpSpeed = 1.0f;
@@ -544,7 +543,7 @@ struct NativeEffectsState_t
 
 	bool AnyEnabled() const
 	{
-		return bShadowLift || bVibrancy || bPreSharpen /* || bAdaptiveBrightness -- Agent B */;
+		return bShadowLift || bVibrancy || bPreSharpen || bAdaptiveBrightness;
 	}
 };
 extern NativeEffectsState_t g_nativeEffects;
@@ -696,6 +695,14 @@ struct VulkanOutput_t
 	// update_effects_image() in rendervulkan.cpp.
 	gamescope::OwningRc<CVulkanTexture> effectsOutput;
 
+	// Adaptive Brightness's persistent 1x1 adapted-luminance history
+	// (cs_effects_measure.comp writes it, cs_effects_layer0.comp reads it).
+	// One float packed into an RGBA8 texel -- see effects_common.h's
+	// history_pack(). Created once by update_effects_history() and kept for
+	// the life of the output; its contents are the effect's cross-frame
+	// state, so it is never re-created on a resolution change.
+	gamescope::OwningRc<CVulkanTexture> effectsHistory;
+
 	// NIS
 	gamescope::OwningRc<CVulkanTexture> nisScalerImage;
 	gamescope::OwningRc<CVulkanTexture> nisUsmImage;
@@ -712,6 +719,7 @@ enum ShaderType {
 	SHADER_TYPE_NIS,
 	SHADER_TYPE_RGB_TO_NV12,
 	SHADER_TYPE_EFFECTS_LAYER0, // cs_effects_layer0.comp: the bundled Shaders-area effects, pre-scale, on layer 0
+	SHADER_TYPE_EFFECTS_MEASURE, // cs_effects_measure.comp: Adaptive Brightness's one-workgroup measure/adapt pass
 
 	SHADER_TYPE_COUNT
 };

@@ -34,8 +34,10 @@ image ready for presentation.
   user's ReShade effect is active (`g_reshade_effect` non-empty), the base layer is run
   through `g_reshadeManager`'s pipeline on the general queue with a CPU wait; (2) if any
   bundled Shaders-area effect is on (`g_nativeEffects.AnyEnabled()`), the native
-  `SHADER_TYPE_EFFECTS_LAYER0` compute pass (`cs_effects_layer0.comp`) is recorded on
-  the same command buffer into the pooled `g_output.effectsOutput`, SDR/non-YCbCr only.
+  `SHADER_TYPE_EFFECTS_MEASURE` (one workgroup, Adaptive Brightness's luminance EMA into
+  the persistent 1×1 `g_output.effectsHistory`) and `SHADER_TYPE_EFFECTS_LAYER0`
+  (`cs_effects_layer0.comp`, per pixel) compute passes are recorded on the same command
+  buffer into the pooled `g_output.effectsOutput`, SDR/non-YCbCr only.
   `FrameInfo_t::bBaseLayerEffectsApplied` guards both against running twice on one
   frame's layer 0 (the pre-emptive-upscale texture, and the screenshot path's second
   `vulkan_composite()` on the same struct). Ordering fact only — see

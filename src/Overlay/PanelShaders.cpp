@@ -85,10 +85,8 @@ namespace gamescope
 		e.bPreSharpen  = r.pre_sharpen.enabled;
 		e.flPreSharpen = r.pre_sharpen.strength.value_or( 0.5f );
 
-		// Adaptive Brightness: plumbed through to the shader's reserved
-		// fields so Agent B only has to consume them. Until B lands the
-		// history/measure half, the pass multiplies by a constant 1.0 and
-		// this effect has no visible result -- the switch still saves.
+		// Adaptive Brightness: consumed by cs_effects_measure.comp (the
+		// adapt maths) and cs_effects_layer0.comp (the visible gain).
 		e.bAdaptiveBrightness = r.adaptive_brightness.enabled;
 		e.flAbTarget    = r.adaptive_brightness.target_luminance;
 		e.flAbUpSpeed   = r.adaptive_brightness.adapt_up_speed;
@@ -281,18 +279,19 @@ namespace gamescope
 
 		// SIX PARAMS -- the budget exactly. See this section's header.
 		//
-		// NOTE (2026-09-05): until Agent B lands the native Adaptive
-		// Brightness pass, this switch and its parameters save and are
-		// plumbed through to the shader's reserved fields, but have no
-		// visible result on screen. The Help text says so.
+		// The .Default()s below read the compiled-in ConfigSchema.h values
+		// (as PanelCursor.cpp's rows do) rather than repeating literals:
+		// the two drifted once (panel said 1.5s/2.5s/0.8/1.6, schema said
+		// 1.0s/1.0s/0.5/2.0) and a "reset to default" then landed on a
+		// value no fresh install ever had.
+		using AbDefaults = config::ReshadeAdaptiveBrightnessSettings;
 		a.Switch( "image.shaders.adaptive_brightness", "Adaptive Brightness",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled, b ); } ) )
 			.Help( "Experimental. Automatically brightens dark scenes and dims bright ones as you "
-			       "play, like your eyes adjusting. Currently being rebuilt -- has no visible "
-			       "effect in this build." )
-			.Default( false )
+			       "play, like your eyes adjusting." )
+			.Default( AbDefaults{}.enabled )
 			.Keywords( "adaptive brightness eye adaptation exposure auto experimental" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
 			.Param( "strength", "Strength",
@@ -302,7 +301,7 @@ namespace gamescope
 				.Help( "How strong the effect is." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
-				.Default( 1.0f )
+				.Default( AbDefaults{}.strength )
 			.Param( "target", "Target brightness",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
@@ -310,7 +309,7 @@ namespace gamescope
 				.Help( "How bright the picture tries to settle at once it's adjusted." )
 				.Range( 0.1f, 0.9f )
 				.Step( 0.05f )   // 17 positions; both ends sit on the grid
-				.Default( 0.5f )
+				.Default( AbDefaults{}.target_luminance )
 			.Param( "up_speed", "Brighten speed",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
@@ -319,7 +318,7 @@ namespace gamescope
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, one per tenth of a second
 				.Unit( "s" )
-				.Default( 1.5f )
+				.Default( AbDefaults{}.adapt_up_speed )
 			.Param( "down_speed", "Darken speed",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
@@ -328,7 +327,7 @@ namespace gamescope
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, as Brighten speed above
 				.Unit( "s" )
-				.Default( 2.5f )
+				.Default( AbDefaults{}.adapt_down_speed )
 			.Param( "min_gain", "Min gain",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
@@ -336,7 +335,7 @@ namespace gamescope
 				.Help( "How dark the adjustment is allowed to make the picture." )
 				.Range( 0.5f, 1.0f )
 				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
-				.Default( 0.8f )
+				.Default( AbDefaults{}.min_gain )
 			.Param( "max_gain", "Max gain",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
@@ -344,7 +343,7 @@ namespace gamescope
 				.Help( "How bright the adjustment is allowed to make the picture." )
 				.Range( 1.0f, 2.0f )
 				.Step( 0.05f )   // 21 positions
-				.Default( 1.6f );
+				.Default( AbDefaults{}.max_gain );
 
 		// Request #3 (2026-09-04): "a darkness booster for dark games" --
 		// titled "Shadow Control" (renamed from "Shadow lift" 2026-09-05);

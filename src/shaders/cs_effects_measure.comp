@@ -1,0 +1,117 @@
+#version 460
+
+// cs_effects_measure.comp -- Adaptive Brightness's measure/adapt half: ONE
+// workgroup that averages the graded base layer's luminance and folds it
+// into the persistent 1x1 adapted-luminance history, which
+// cs_effects_layer0.comp then reads per pixel in the same frame. Compiled at
+// build time like every other compute shader here (DECISIONS.md #27); the
+// host records it immediately before the per-pixel pass, on the same
+// command buffer, whenever the effects pre-pass runs at all.
+//
+// Ported from the retired reshade/Shaders/gamescope-ritz.fx (MeasureLuminance
+// + PS_AdaptiveBrightnessAdapt), which was measured live to converge on its
+// own model, so the ADAPT maths is unchanged:
+//   tau   = measured > adapted ? up : down
+//   alpha = 1 - exp(-dt / max(tau, 0.001))
+//   adapted' = lerp(adapted, measured, alpha)
+// The MEASURE is the one deliberate upgrade: the .fx averaged 25 fixed taps,
+// which a single stray highlight could swing. This pass takes a 64x64 grid
+// of taps (16x16 threads, 4x4 per thread, 4096 total) over the whole image,
+// each graded exactly as the apply pass grades its pixels (effects_common.h's
+// grade() -- the .fx measured its post-Shadow-Control/Vibrancy texture, so
+// this matches its input), and reduces them in shared memory. One
+// workgroup, no atomics, no second pass, no intermediate texture.
+//
+// The .fx ran its Adapt pass even while the effect was switched off so
+// re-enabling was instant; the host preserves that by dispatching this pass
+// whenever the pre-pass runs (any effect on), and this pass never looks at
+// EFFECT_ADAPTIVE_BRIGHTNESS -- only the apply pass gates the visible gain.
+//
+// Self-sampling: the history texel is bound BOTH as sampler
+// VKR_EFFECTS_HISTORY_SLOT and as this pass's storage target `dst`. Only
+// invocation 0 touches it, and its fetch precedes its store in program
+// order, so there is no hazard between invocations; the layout is GENERAL
+// for both bindings. See rendervulkan.cpp's pre-pass block for the barrier
+// story between this dispatch, the apply dispatch, and the next frame.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+
+layout(
+  local_size_x = 16,
+  local_size_y = 16,
+  local_size_z = 1) in;
+
+const uint THREADS_PER_AXIS = 16u;   // == local_size_x == local_size_y
+const uint TAPS_PER_THREAD_AXIS = 4u;
+const uint GRID = THREADS_PER_AXIS * TAPS_PER_THREAD_AXIS;   // 64 taps per axis
+const uint THREAD_COUNT = THREADS_PER_AXIS * THREADS_PER_AXIS;
+
+shared float s_sum[THREAD_COUNT];
+
+void main()
+{
+    ivec2 size = textureSize(s_samplers[0], 0);
+
+    // Each thread owns a 4x4 block of the 64x64 tap grid; tap (gx, gy) sits
+    // at the centre of grid cell (gx, gy) over the full image, clamped so a
+    // tiny image never fetches out of bounds.
+    uvec2 base = gl_LocalInvocationID.xy * TAPS_PER_THREAD_AXIS;
+    float sum = 0.0;
+    for (uint y = 0u; y < TAPS_PER_THREAD_AXIS; y++)
+    {
+        for (uint x = 0u; x < TAPS_PER_THREAD_AXIS; x++)
+        {
+            vec2 g = vec2(base + uvec2(x, y)) + 0.5;
+            ivec2 p = ivec2(g / float(GRID) * vec2(size));
+            p = clamp(p, ivec2(0), size - ivec2(1));
+            sum += effects_luma(grade(texelFetch(s_samplers[0], p, 0).rgb));
+        }
+    }
+
+    s_sum[gl_LocalInvocationIndex] = sum;
+    memoryBarrierShared();
+    barrier();
+
+    // Tree reduction; uniform control flow, so the barriers are legal.
+    for (uint stride = THREAD_COUNT / 2u; stride > 0u; stride >>= 1u)
+    {
+        if (gl_LocalInvocationIndex < stride)
+            s_sum[gl_LocalInvocationIndex] += s_sum[gl_LocalInvocationIndex + stride];
+        memoryBarrierShared();
+        barrier();
+    }
+
+    if (gl_LocalInvocationIndex != 0u)
+        return;
+
+    float measured = clamp(s_sum[0] / float(GRID * GRID), 0.0, 1.0);
+
+    float adapted;
+    if ((u_flags & EFFECT_RESET_HISTORY) != 0u)
+    {
+        // Fresh texture: nothing to blend with (its contents are undefined
+        // after the host's discard), so start exactly at the measurement.
+        adapted = measured;
+    }
+    else
+    {
+        adapted = history_read();
+        // Belt and braces: the history only ever holds values this shader
+        // wrote, all in 0..1, but a NaN or inf here would poison every later
+        // frame through the EMA, so snap to the measurement rather than
+        // propagate one.
+        if (isnan(adapted) || isinf(adapted))
+            adapted = measured;
+        adapted = clamp(adapted, 0.0, 1.0);
+
+        float tau   = (measured > adapted) ? u_abUp : u_abDown;
+        float alpha = clamp(1.0 - exp(-u_abDt / max(tau, 0.001)), 0.0, 1.0);
+        adapted = mix(adapted, measured, alpha);
+    }
+
+    imageStore(dst, ivec2(0), history_pack(adapted));
+}

@@ -266,9 +266,14 @@ constraint in the ReShade manager itself is not being fixed — see
 
 ### 14. Adaptive Brightness is deferred; Vibrancy and Sharpness ship first
 **Status:** DECIDED — landed on master 2026-08-22, see updates below. The `.fx`
-implementation this records is SUPERSEDED by #27 (2026-09-05): the persistence findings
-below informed the design, but the effect is being rebuilt as part of the native
-pre-pass and has no visible result until that lands.
+implementation this records is SUPERSEDED by #27 (2026-09-05): the effect is now the
+native pre-pass's `cs_effects_measure.comp` + the gain step of `cs_effects_layer0.comp`.
+The persistence findings below informed the design but are **no longer relied on**: the
+spike proved empirically that RADV kept an `UNDEFINED`-layout render target's contents
+between frames, which the spec permits a driver not to do. The native history texture is
+bound as a *source* before it is a target in each command buffer, so its layout
+transition is `GENERAL → GENERAL` (or nothing) — persistence by contract, on any driver.
+See `superdoc/features/shader-effects.md`, "The history texture".
 
 **Why:** Adaptive Brightness needs persistent inter-frame texture state that
 no shipped effect in the repo exercises, so it carries real risk relative to
@@ -820,9 +825,18 @@ resolution in the slot ReShade already occupied, on the same compute command
 buffer, on encoded sRGB values (the same UNORM view the `.fx` read). The maths
 is ported 1:1 for Shadow Control and Vibrancy; Pre-Sharpen reuses FSR1's RCAS
 instead of the `.fx`'s unsharp mask (clip-aware, normalised, same 5 taps).
-Adaptive Brightness's fields, flag bits, and a sampler slot are reserved in the
-uniform block so it can land on top without shifting the layout; it has no
-visible result until then.
+Adaptive Brightness landed the same day as a second, one-workgroup compute
+shader (`cs_effects_measure.comp`): a 64×64-tap graded-luminance reduction
+(the `.fx` used 25 fixed taps) whose EMA result lives in a persistent 1×1
+`ABGR8888` texture (`g_output.effectsHistory`), one float packed over the four
+byte lanes so the shared `rgba8` `dst` binding serves it unchanged. The adapt/
+apply maths is the `.fx`'s, verbatim; `dt` is host-measured wall time between
+dispatches, clamped to 0.25 s. The history is bound as a source before it is a
+target in every command buffer, so its layout never passes through
+`UNDEFINED` after the creation frame — the persistence #14's spike could only
+confirm empirically is now guaranteed by the barrier code. The measure pass
+runs whenever the pre-pass runs, so the history keeps tracking while the
+switch is off and re-enabling is instant, as in the `.fx`.
 
 **Consequences:** Nothing in storage changes — config keys stay `reshade.*`,
 entry ids stay `image.shaders.*`, struct `ReshadeSettings` and JSON key

@@ -48,6 +48,7 @@
 #include "cs_easu.h"
 #include "cs_easu_fp16.h"
 #include "cs_effects_layer0.h"
+#include "cs_effects_measure.h"
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_nis.h"
 #include "cs_nis_fp16.h"
@@ -987,6 +988,7 @@ bool CVulkanDevice::createShaders()
 	}
 	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
 	SHADER(EFFECTS_LAYER0, cs_effects_layer0);
+	SHADER(EFFECTS_MEASURE, cs_effects_measure);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1218,6 +1220,7 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	SHADER(NIS, 1, 1, 1);
 	SHADER(RGB_TO_NV12, 1, 1, 1);
 	SHADER(EFFECTS_LAYER0, 1, 1, 1);
+	SHADER(EFFECTS_MEASURE, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -3636,6 +3639,41 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 	return true;
 }
 
+// Adaptive Brightness's persistent 1x1 history (see the field's comment in
+// rendervulkan.hpp). Created once and kept: unlike effectsOutput it does not
+// depend on the game's size or format, and its contents ARE the effect's
+// cross-frame state. Sets bCreated when this call made the texture, so the
+// caller can discard its undefined contents and tell the shader to start from
+// the measurement (EFFECT_RESET_HISTORY) instead of blending with garbage.
+//
+// Format: ABGR8888 (VK_FORMAT_R8G8B8A8_UNORM), whose storage-image support is
+// mandatory in Vulkan, holding one float spread over the four channels --
+// effects_common.h's history_pack() explains the encoding and why it is
+// lossless. Why not R32F: `dst` in descriptor_set.h is rgba8 and
+// CVulkanCmdBuffer::dispatch() binds a single RGB target there; an r32f
+// second-target path through the shared descriptor set for this one texel
+// was judged more plumbing than four exact byte lanes.
+static bool update_effects_history( bool &bCreated )
+{
+	bCreated = false;
+	if ( g_output.effectsHistory != nullptr )
+		return true;
+
+	CVulkanTexture::createFlags createFlags;
+	createFlags.bSampled = true;
+	createFlags.bStorage = true;
+
+	g_output.effectsHistory = new CVulkanTexture();
+	if ( !g_output.effectsHistory->BInit( 1u, 1u, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
+	{
+		vk_log.errorf( "failed to create native effects history" );
+		g_output.effectsHistory = nullptr;
+		return false;
+	}
+	bCreated = true;
+	return true;
+}
+
 
 static bool init_nis_data()
 {
@@ -3998,10 +4036,9 @@ struct EasuPushData_t
 	}
 };
 
-// Uniform block for cs_effects_layer0.comp -- mirrors its `effects_t` block
-// field-for-field. The u_ab* tail is RESERVED for Adaptive Brightness (Agent
-// B): it is filled from the host state already, so B only has to consume it
-// in the shader, and the layout does not shift under B when it lands.
+// Uniform block for cs_effects_layer0.comp and cs_effects_measure.comp --
+// mirrors effects_common.h's `effects_t` block field-for-field. One upload
+// serves both dispatches of a frame (they read the same values).
 struct EffectsPushData_t
 {
 	// Bit assignments are the contract with the shader's EFFECT_* consts.
@@ -4009,8 +4046,10 @@ struct EffectsPushData_t
 	static constexpr uint32_t kVibrancy          = 1u << 1;
 	static constexpr uint32_t kVibrancySkin      = 1u << 2;
 	static constexpr uint32_t kPreSharpen        = 1u << 3;
-	static constexpr uint32_t kAdaptiveBrightness = 1u << 4;  // reserved for Agent B
-	static constexpr uint32_t kResetHistory      = 1u << 31; // reserved for Agent B
+	static constexpr uint32_t kAdaptiveBrightness = 1u << 4;
+	// The history texture was created this frame: the measure pass writes
+	// the measurement straight in rather than blending with undefined bits.
+	static constexpr uint32_t kResetHistory      = 1u << 31;
 
 	uint32_t u_flags;
 	float    u_vibrancy;
@@ -4038,7 +4077,7 @@ struct EffectsPushData_t
 		return std::clamp( k / ( 0.75f * ( 1.0f + k ) ), 0.0f, 1.0f );
 	}
 
-	EffectsPushData_t( const NativeEffectsState_t &s, float flAbDtSeconds )
+	EffectsPushData_t( const NativeEffectsState_t &s, float flAbDtSeconds, bool bResetHistory )
 	{
 		u_flags = 0;
 		if ( s.bShadowLift )          u_flags |= kShadowLift;
@@ -4046,6 +4085,7 @@ struct EffectsPushData_t
 		if ( s.bVibrancyProtectSkin ) u_flags |= kVibrancySkin;
 		if ( s.bPreSharpen )          u_flags |= kPreSharpen;
 		if ( s.bAdaptiveBrightness )  u_flags |= kAdaptiveBrightness;
+		if ( bResetHistory )          u_flags |= kResetHistory;
 
 		u_vibrancy   = s.flVibrancy;
 		u_shadowLift = s.flShadowLift;
@@ -4344,9 +4384,10 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 		cmdBuffer->bindColorMgmtLuts(i, frameInfo->shaperLut[i], frameInfo->lut3D[i]);
 
 	// Native layer-0 effects pre-pass (DECISIONS.md #27): the bundled
-	// Shaders-area effects (Shadow Control, Vibrancy, Pre-Sharpen; Adaptive
-	// Brightness once Agent B lands) as ONE compute dispatch over the base
-	// layer at source resolution, whose output is swapped into layer 0 so
+	// Shaders-area effects (Shadow Control, Vibrancy, Pre-Sharpen, Adaptive
+	// Brightness) as one per-pixel compute dispatch over the base layer at
+	// source resolution -- preceded by Adaptive Brightness's one-workgroup
+	// measure/adapt dispatch -- whose output is swapped into layer 0 so
 	// the FSR/NIS/blur/blit paths below consume it exactly as they consumed
 	// the ReShade output before. Same command buffer, same compute queue --
 	// no general-queue detour and no g_device.wait() CPU stall like the
@@ -4397,27 +4438,124 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 
 			if ( update_effects_image( uWidth, uHeight, layer0.tex->drmFormat() ) )
 			{
+				// Inside the success branch on purpose: a history created on
+				// a frame whose pass then did not run would be read next
+				// frame without its reset (bHistoryCreated is per call).
+				bool bHistoryCreated = false;
+				const bool bHaveHistory = update_effects_history( bHistoryCreated );
+
+				// Adaptive Brightness's dt: wall time since the previous
+				// effects dispatch (this block runs once per presented frame
+				// -- the two gates above skip the screenshot re-composite),
+				// in seconds for the EMA's exp(-dt / tau). Clamped so a hitch,
+				// a pause, or the first frame after a long idle nudges the
+				// history by at most a quarter-second's worth instead of
+				// slamming it to the new measurement in one step.
+				static uint64_t s_ulLastEffectsDispatchNs = 0;
+				const uint64_t ulNow = get_time_in_nanos();
+				float flAbDt = 0.0f;
+				if ( s_ulLastEffectsDispatchNs != 0 && ulNow > s_ulLastEffectsDispatchNs )
+					flAbDt = std::min( float( ulNow - s_ulLastEffectsDispatchNs ) * 1e-9f, 0.25f );
+				s_ulLastEffectsDispatchNs = ulNow;
+
+				// Without a history texture (allocation failed) the visible
+				// gain must not read an unbound slot: run the pass with the
+				// effect masked off and skip the measure dispatch.
+				NativeEffectsState_t state = g_nativeEffects;
+				if ( !bHaveHistory )
+					state.bAdaptiveBrightness = false;
+
+				// One upload for both dispatches: the measure pass and the
+				// per-pixel pass read the same effects_t block, and the
+				// descriptor offset uploadConstants() records persists until
+				// the next upload.
+				cmdBuffer->uploadConstants<EffectsPushData_t>( state, flAbDt, bHistoryCreated );
+
 				// Encoded in, encoded out: setTextureSrgb(0, true) selects the
 				// raw UNORM view (srgbView() == "values still sRGB-encoded";
 				// bind_all_layers does the same for SRGB layers), and the
-				// storage target is written through its UNORM view too.
-				cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
-				cmdBuffer->bindTarget( g_output.effectsOutput );
+				// storage targets are written through their UNORM views too.
 				cmdBuffer->bindTexture( 0, layer0.tex );
 				cmdBuffer->setTextureSrgb( 0, true );
 				cmdBuffer->setSamplerUnnormalized( 0, true );
 				cmdBuffer->setSamplerNearest( 0, true );
-				// AGENT B SEAM: bind the 1x1 adapted-luminance history at
-				// VKR_EFFECTS_HISTORY_SLOT here (setTextureSrgb(slot, true),
-				// nearest), and record B's measure/adapt dispatch(es) just
-				// above this bindPipeline() -- reading layer0.tex (or last
-				// frame's g_output.effectsOutput), writing the history
-				// texture. The frametime for u_abDt goes in the second
-				// constructor argument; 0.0f until then.
-				cmdBuffer->uploadConstants<EffectsPushData_t>( g_nativeEffects, 0.0f );
+
+				if ( bHaveHistory )
+				{
+					// Adaptive Brightness measure/adapt: one workgroup that
+					// averages the graded base layer and blends the result
+					// into the 1x1 history, which the per-pixel pass below
+					// reads THIS frame (no lag). Runs whether or not the
+					// switch is on, as the .fx's Adapt pass did, so the
+					// history keeps tracking and re-enabling is instant.
+					//
+					// HISTORY BARRIERS -- read carefully, this is the part a
+					// different driver would break silently. The history is
+					// bound to this dispatch both as sampler slot
+					// VKR_EFFECTS_HISTORY_SLOT and as the storage target, and
+					// dispatch() drives CVulkanCmdBuffer's per-command-buffer
+					// m_textureState in this order:
+					//   1. prepareSrcImage(history) -- first sight of the
+					//      image this command buffer: tracked with
+					//      discarded=false. Then prepareDestImage(history)
+					//      returns early (already tracked), so it does NOT
+					//      set discarded=true the way it does for a target it
+					//      sees first. insertBarrier() therefore emits either
+					//      nothing for the history (steady state: not dirty,
+					//      not discarded) or GENERAL->GENERAL -- never
+					//      oldLayout=UNDEFINED, which would license the driver
+					//      to drop last frame's value. That is what makes the
+					//      persistence a contract instead of the empirical
+					//      luck the .fx relied on (DECISIONS.md #14 spike).
+					//   2. The one exception is the creation frame: the
+					//      VkImage is genuinely in UNDEFINED layout, so
+					//      discardImage() below marks it discarded FIRST
+					//      (emplace wins; prepareSrcImage's emplace then no-
+					//      ops), insertBarrier() emits UNDEFINED->GENERAL, and
+					//      kResetHistory tells the shader not to read it.
+					//   3. dispatch() ends with markDirty(history). The per-
+					//      pixel dispatch below binds the history as a source
+					//      again; its insertBarrier() sees dirty=true and
+					//      emits srcAccess=SHADER_WRITE -> dstAccess=SHADER_READ,
+					//      GENERAL->GENERAL, ALL_COMMANDS->ALL_COMMANDS: the
+					//      read-after-write hazard between the two dispatches,
+					//      closed.
+					//   4. Across frames: the barrier in step 3 made frame
+					//      N's write available to every later shader read on
+					//      this queue (and the fresh command buffer's
+					//      m_textureState starts empty, so frame N+1 goes
+					//      through step 1 again). Frame N+1's measure dispatch
+					//      overwrites the texel frame N's per-pixel pass read
+					//      (a WAR hazard, execution-only): insertBarrier()
+					//      records a vkCmdPipelineBarrier ALL_COMMANDS ->
+					//      ALL_COMMANDS unconditionally, even with zero image
+					//      barriers, and pipeline barriers order against all
+					//      earlier work on the same queue across command
+					//      buffers, so N's read completes before N+1's write.
+					//      Every vulkan_composite() runs on this compute
+					//      queue; nothing else touches the history.
+					if ( bHistoryCreated )
+						cmdBuffer->discardImage( g_output.effectsHistory.get() );
+					cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, g_output.effectsHistory );
+					cmdBuffer->setTextureSrgb( VKR_EFFECTS_HISTORY_SLOT, true );
+					cmdBuffer->setSamplerUnnormalized( VKR_EFFECTS_HISTORY_SLOT, true );
+					cmdBuffer->setSamplerNearest( VKR_EFFECTS_HISTORY_SLOT, true );
+
+					cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_MEASURE ) );
+					cmdBuffer->bindTarget( g_output.effectsHistory );
+					cmdBuffer->dispatch( 1, 1, 1 );
+				}
+
+				cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
+				cmdBuffer->bindTarget( g_output.effectsOutput );
 
 				const int nPixelsPerGroup = 8;
 				cmdBuffer->dispatch( div_roundup( uWidth, nPixelsPerGroup ), div_roundup( uHeight, nPixelsPerGroup ) );
+
+				// Leave slot 1 clear for the FSR/NIS/blit dispatches that
+				// follow; they bind layers 0..n-1 and would otherwise
+				// carry a stray history descriptor on single-layer frames.
+				cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
 
 				layer0.tex = g_output.effectsOutput;
 				frameInfo->bBaseLayerEffectsApplied = true;

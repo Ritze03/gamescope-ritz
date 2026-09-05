@@ -11,9 +11,17 @@ The newest version below is the one this build reports.
 
 ## [0.6.0] – 2026-09-05
 
+### Added
+- **Adaptive Brightness**: the effect works again -- dark scenes brighten and bright
+  scenes dim toward the target brightness over the chosen seconds, and it keeps
+  tracking the scene while switched off so turning it back on is instant.
+
 ### Fixed
-- **Shader effects always work**: Vibrancy, Shadow Control and Pre-Sharpen are now
-  built into gamescope-ritz itself instead of loaded from a shader file on disk, so
+- **Adaptive Brightness defaults**: the Shaders panel's "reset to default" values now
+  match the compiled-in ones (1.0 s brighten, 1.0 s darken, min gain 0.5, max gain
+  2.0) instead of the stale 1.5 s / 2.5 s / 0.8 / 1.6.
+- **Shader effects always work**: Vibrancy, Shadow Control, Pre-Sharpen and
+  Adaptive Brightness are now built into gamescope-ritz itself instead of loaded from a shader file on disk, so
   an old or missing file can no longer make a control do nothing.
 - **Screenshots no longer double-apply effects**: a `gamescopectl` screenshot now
   shows the same picture as the screen when a shader effect is on.

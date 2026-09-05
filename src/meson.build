@@ -67,6 +67,7 @@ shader_src = [
   'shaders/cs_easu.comp',
   'shaders/cs_easu_fp16.comp',
   'shaders/cs_effects_layer0.comp',
+  'shaders/cs_effects_measure.comp',
   'shaders/cs_gaussian_blur_horizontal.comp',
   'shaders/cs_nis.comp',
   'shaders/cs_nis_fp16.comp',

@@ -1,15 +1,14 @@
 #version 460
 
 // cs_effects_layer0.comp -- the bundled "Shaders" area effects (Shadow
-// Control, Vibrancy, Pre-Sharpen, and the seam for Adaptive Brightness) as
-// one native compute pre-pass over the base/game layer, at source
-// resolution, before any scaling. Compiled at BUILD time by src/meson.build's
-// glsl_generator into cs_effects_layer0.h -- a GLSL error here fails the
-// build, which is the whole point of this port (superdoc/planning/
-// DECISIONS.md #27): the previous ReShade .fx was compiled at runtime from
-// whichever copy won a four-directory search, and a stale copy silently
-// dropped every uniform it did not declare. There is nothing on disk to
-// drift any more.
+// Control, Vibrancy, Pre-Sharpen, Adaptive Brightness) as one native compute
+// pre-pass over the base/game layer, at source resolution, before any
+// scaling. Compiled at BUILD time by src/meson.build's glsl_generator into
+// cs_effects_layer0.h -- a GLSL error here fails the build, which is the
+// whole point of this port (superdoc/planning/DECISIONS.md #27): the
+// previous ReShade .fx was compiled at runtime from whichever copy won a
+// four-directory search, and a stale copy silently dropped every uniform it
+// did not declare. There is nothing on disk to drift any more.
 //
 // ENCODED SPACE, ON PURPOSE. The host binds the input via its raw UNORM view
 // (CVulkanCmdBuffer::setTextureSrgb(0, true) -> CVulkanTexture::srgbView(),
@@ -22,92 +21,29 @@
 // HDR/scRGB/passthru layers, so no linear-light or PQ value reaches pow().
 //
 // The maths is ported 1:1 from the retired reshade/Shaders/gamescope-ritz.fx
-// (ApplyShadowLift, ApplyVibrancy) with one deliberate substitution: Pre-
-// Sharpen reuses FSR1's RCAS (ffx_fsr1.h) instead of the .fx's plain 4-tap
-// unsharp mask. Same 5-tap cross, but RCAS is clip-aware (its lobe is
-// limited so a sharpened value cannot overshoot the local min/max ring) and
-// normalised, so it does not ring on hard edges the way the unsharp mask
-// did at strength > 1. See superdoc/features/shader-effects.md for the
-// slider -> con.x mapping the host applies.
+// (ApplyShadowLift, ApplyVibrancy, PS_AdaptiveBrightnessApply) with one
+// deliberate substitution: Pre-Sharpen reuses FSR1's RCAS (ffx_fsr1.h)
+// instead of the .fx's plain 4-tap unsharp mask. Same 5-tap cross, but RCAS
+// is clip-aware (its lobe is limited so a sharpened value cannot overshoot
+// the local min/max ring) and normalised, so it does not ring on hard edges
+// the way the unsharp mask did at strength > 1. See
+// superdoc/features/shader-effects.md for the slider -> con.x mapping the
+// host applies.
+//
+// The uniform block, flag bits and the per-tap grade() live in
+// effects_common.h, shared with cs_effects_measure.comp (Adaptive
+// Brightness's measure/adapt pass, dispatched just before this one).
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_scalar_block_layout : require
 
 #include "descriptor_set.h"
+#include "effects_common.h"
 
 layout(
   local_size_x = 8,
   local_size_y = 8,
   local_size_z = 1) in;
-
-// Mirrors EffectsPushData_t in src/rendervulkan.cpp field-for-field -- keep
-// the two in step. The u_ab* block is reserved for Adaptive Brightness
-// (Agent B) so the layout does not shift under it when it lands.
-layout(binding = 0, scalar)
-uniform effects_t {
-    uint  u_flags;        // EFFECT_* bits below
-    float u_vibrancy;     // 0.0..3.0, 1.0 neutral
-    float u_shadowLift;   // 0.0..1.0, 0.0 neutral
-    uint  u_rcasCon;      // floatBitsToUint(con.x) for FsrRcasF; 0 = no sharpen
-
-    // ---- reserved for Adaptive Brightness (Agent B) ----
-    float u_abTarget;     // target luminance, 0.1..0.9
-    float u_abUp;         // brighten time constant, seconds
-    float u_abDown;       // darken time constant, seconds
-    float u_abMin;        // min gain, 0.5..1.0
-    float u_abMax;        // max gain, 1.0..2.0
-    float u_abStrength;   // dry/wet mix, 0.0..1.0
-    float u_abDt;         // frame time, seconds
-};
-
-// Bit assignments are the contract with EffectsPushData_t's constructor.
-const uint EFFECT_SHADOW_LIFT         = 1u << 0;
-const uint EFFECT_VIBRANCY            = 1u << 1;
-const uint EFFECT_VIBRANCY_SKIN       = 1u << 2;
-const uint EFFECT_PRE_SHARPEN         = 1u << 3;
-const uint EFFECT_ADAPTIVE_BRIGHTNESS = 1u << 4;   // reserved for Agent B
-const uint EFFECT_RESET_HISTORY       = 1u << 31;  // reserved for Agent B: discard the adapted-luminance history this frame
-
-// Per-tap colour grade: steps 1 and 2 of the effect order, applied to EVERY
-// tap RCAS reads (5x a few ALU ops), so the sharpen sees the graded image
-// exactly as the .fx's pass order (Shadow Control -> Vibrancy -> Pre-Sharpen)
-// did. Both are pure per-pixel operations on one sample, so applying them
-// inside the load is equivalent to a separate pass and saves a texture
-// round trip.
-vec3 grade(vec3 c)
-{
-    // 1. Shadow Control: a gamma curve on the low end, exponent 1.0
-    //    (identity) down to 0.5 (sqrt) at full strength. 0 and 1 are fixed
-    //    points of any power curve, so black and white never move.
-    if ((u_flags & EFFECT_SHADOW_LIFT) != 0u)
-    {
-        float e = 1.0 - 0.5 * clamp(u_shadowLift, 0.0, 1.0);
-        c = pow(clamp(c, 0.0, 1.0), vec3(e));
-    }
-
-    // 2. Vibrancy: `m` alone walks 0.0 (grey) .. 1.0 (unchanged) uniformly;
-    //    `boost` carries the adaptive/skin-tone shape only above neutral.
-    if ((u_flags & EFFECT_VIBRANCY) != 0u)
-    {
-        float luma = dot(c, vec3(0.299, 0.587, 0.114));
-        float sat  = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
-        float skin = 0.0;
-        if ((u_flags & EFFECT_VIBRANCY_SKIN) != 0u)
-        {
-            // Warm hues where red clearly leads blue and green sits
-            // roughly between them -- a cheap, deliberately approximate
-            // skin-tone mask.
-            skin = clamp((c.r - c.b) * 3.0, 0.0, 1.0)
-                 * clamp(1.0 - abs(c.g - (c.r + c.b) * 0.5) * 4.0, 0.0, 1.0);
-        }
-        float prot  = mix(1.0, 0.3, skin);
-        float m     = min(u_vibrancy, 1.0);
-        float boost = max(u_vibrancy - 1.0, 0.0) * (1.0 - sat) * prot;
-        c = clamp(mix(vec3(luma), c, m + boost), 0.0, 1.0);
-    }
-
-    return c;
-}
 
 // 3. Pre-Sharpen via RCAS. FsrRcasLoadF is the only place the source is
 //    read, so grading here means every one of RCAS's five taps is graded.
@@ -142,18 +78,21 @@ void main()
     else
         c = FsrRcasLoadF(ivec2(pos)).rgb;
 
-    // 4. Adaptive Brightness gain -- SEAM FOR AGENT B. The adapted-luminance
-    //    history texel is to be bound at s_samplers[VKR_EFFECTS_HISTORY_SLOT]
-    //    (descriptor_set_constants.h); B replaces the constant below with
-    //    something like
-    //      float adapted = texelFetch(s_samplers[VKR_EFFECTS_HISTORY_SLOT], ivec2(0), 0).r;
-    //      float gain = (u_flags & EFFECT_ADAPTIVE_BRIGHTNESS) != 0u
-    //          ? mix(1.0, clamp(u_abTarget / max(adapted, 0.001), u_abMin, u_abMax), u_abStrength)
-    //          : 1.0;
-    //    Until then the multiply is by exactly 1.0 and the effect has no
-    //    visible result.
-    float gain = 1.0;
-    c = clamp(c * gain, 0.0, 1.0);
+    // 4. Adaptive Brightness: the .fx's PS_AdaptiveBrightnessApply, 1:1.
+    //    `adapted` is the smoothed scene luminance cs_effects_measure.comp
+    //    wrote to the 1x1 history this same frame (the host orders and
+    //    barriers the two dispatches); the gain pulls the picture toward
+    //    the target, clamped to the min/max bounds, then dry/wet mixed. The
+    //    max(., 0.001) guards the divide; the measure pass guarantees the
+    //    value itself is finite and in 0..1, and the reset frame writes the
+    //    measurement directly so a fresh texture is never read here.
+    if ((u_flags & EFFECT_ADAPTIVE_BRIGHTNESS) != 0u)
+    {
+        float adapted = history_read();
+        float gain = clamp(u_abTarget / max(adapted, 0.001), u_abMin, u_abMax);
+        c = mix(c, c * gain, clamp(u_abStrength, 0.0, 1.0));
+    }
+    c = clamp(c, 0.0, 1.0);
 
     imageStore(dst, ivec2(pos), vec4(c, 1.0));
 }

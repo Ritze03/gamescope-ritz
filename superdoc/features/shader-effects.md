@@ -43,11 +43,18 @@ the ReShade block and before the FSR/NIS/blur/blit branch chooses a path:
 layer0.tex (game, source res)
    │  [ReShade, if a user .fx is set]           -- unchanged, general queue + CPU wait
    ▼
+cs_effects_measure ──► g_output.effectsHistory  (1×1, persistent; one 16×16 workgroup,
+   │                    ▲   reads last frame's value, writes this frame's)
+   ▼                    │
 cs_effects_layer0  ──►  g_output.effectsOutput  (pooled, source res, 8×8 groups)
    │  frameInfo->layers[0].tex = effectsOutput; bBaseLayerEffectsApplied = true
    ▼
 FSR / NIS / blur / blit as before
 ```
+
+Both dispatches share one `uploadConstants<EffectsPushData_t>()` (same `effects_t` block,
+same values); the measure dispatch runs whenever the pre-pass runs at all — see
+[Adaptive Brightness](#adaptive-brightness-imageshadersadaptive_brightness) below.
 
 `Why not fold the maths into cs_composite_*.comp:` layer 0 is read four different ways
 there (`composite.h`, `cs_composite_rcas.comp`, `blur.h`, `cs_composite_blur*.comp`), so
@@ -96,18 +103,22 @@ device supports it as an optimal-tiled storage+sampled image (so a 10-bit game s
 10-bit), else `ARGB8888` — 10-bit storage images are optional in Vulkan (see
 `vulkan_get_rgb10_capture_format()`'s note on NVIDIA). Checked once per format.
 
-## The uniform block and the seams left for Adaptive Brightness
+## The uniform block
 
 `EffectsPushData_t` (`src/rendervulkan.cpp`, inside the `#pragma pack(push,1)` region,
-beside `EasuPushData_t`) mirrors the shader's `effects_t` block field-for-field:
+beside `EasuPushData_t`) mirrors the `effects_t` block in `src/shaders/effects_common.h`
+field-for-field. That header is shared by both shaders and also holds the flag bits, the
+per-tap `grade()` (Shadow Control + Vibrancy) and the history pack/unpack helpers, so the
+measure pass grades its taps with exactly the code the per-pixel pass grades its pixels.
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness *(reserved)*, `1<<31` reset history *(reserved)* |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<31` reset history (the history texture was created this frame) |
 | `float u_vibrancy` | 0..3, 1 neutral |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
-| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength, u_abDt` | **reserved** for Adaptive Brightness; already filled from config, consumed by nothing yet |
+| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six parameters, straight from config |
+| `float u_abDt` | seconds since the previous effects dispatch, host-measured and clamped (see Adaptive Brightness) |
 
 Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
 struct written by `PanelShaders.cpp` and by `main.cpp`'s startup config apply, read by
@@ -116,14 +127,8 @@ the steamcompmgr thread, same discipline as `g_upscaleFilterSharpness`. `Why the
 apply:` under E2 nothing in `PanelShaders.cpp` runs per frame, so without it saved effects
 would only switch on the first time the Shaders area was drawn.
 
-Adaptive Brightness's rows, config, and values are intact and plumbed into the reserved
-fields; the shader multiplies by a constant `1.0` at the clearly marked seam, so the effect
-has **no visible result** until its history/measure half is rebuilt. The seams: sampler
-slot `VKR_EFFECTS_HISTORY_SLOT` (= 1, `descriptor_set_constants.h`) for the 1×1 adapted-
-luminance texel; the reserved `u_ab*` fields and the two reserved flag bits; the second
-`EffectsPushData_t` constructor argument (`flAbDtSeconds`, `0.0f` today); and
-`NativeEffectsState_t::AnyEnabled()`, which deliberately does not count
-`bAdaptiveBrightness` yet so an inert switch does not force a full composite.
+`NativeEffectsState_t::AnyEnabled()` counts all four switches, Adaptive Brightness
+included, so any one of them forces the full composite the pre-pass needs.
 
 ## Backends
 
@@ -214,10 +219,111 @@ a cliff. Passed as float bits (`u_rcasCon`), like `RcasPushData_t::u_c1`.
 
 ### Adaptive Brightness (`image.shaders.adaptive_brightness`)
 
-Six params (the settings budget exactly — see below). Rows and config unchanged; **no
-visible result in this build** — see the seams section above. Its `.Default()` values in
-the panel and `ConfigSchema.h`'s compiled-in defaults currently disagree; that is left to
-the Adaptive Brightness rebuild.
+Six params (the settings budget exactly — see below): `strength`, `target`, `up_speed`,
+`down_speed`, `min_gain`, `max_gain`. **Config**: `ReshadeAdaptiveBrightnessSettings` —
+defaults 1.0 / 0.5 / 1.0 s / 1.0 s / 0.5 / 2.0. The panel's `.Default()`s read that struct
+(`config::ReshadeAdaptiveBrightnessSettings{}.field`, the `PanelCursor.cpp` pattern)
+instead of repeating literals. `Why:` the two had drifted (panel said 1.5 s / 2.5 s / 0.8 /
+1.6), so "reset to default" landed on values no fresh install ever had.
+
+Two dispatches per frame, ported from the retired `.fx` (`MeasureLuminance`,
+`PS_AdaptiveBrightnessAdapt`, `PS_AdaptiveBrightnessApply`), which was measured live to
+converge on its own model — so the **adapt** and **apply** maths are unchanged:
+
+```
+// cs_effects_measure.comp, one 16×16 workgroup, invocation 0 finishes:
+tau      = measured > adapted ? up_speed : down_speed
+alpha    = clamp(1 - exp(-dt / max(tau, 0.001)), 0, 1)
+adapted' = mix(adapted, measured, alpha)          // written to the 1×1 history
+
+// cs_effects_layer0.comp, per pixel, only when the switch is on:
+gain = clamp(target / max(adapted', 0.001), min_gain, max_gain)
+out  = mix(c, c * gain, strength)
+```
+
+Luma is Rec.601 `(.299, .587, .114)` on **encoded** values, as the `.fx` computed it.
+
+**The measure pass** (`cs_effects_measure.comp`, `SHADER_TYPE_EFFECTS_MEASURE`) is the
+one deliberate upgrade. The `.fx` averaged 25 fixed taps, which a single stray highlight
+could swing. The native pass takes a **64×64 grid of taps** over the whole image (16×16
+threads, 4×4 per thread, 4096 taps), each run through `grade()` so it measures the
+Shadow-Control/Vibrancy-graded image the `.fx` measured (its `PreSharpenOut` texture),
+and reduces them in shared memory — one workgroup, no atomics, no intermediate texture.
+Sharpening is not applied to the taps; it does not move the mean.
+
+**Keeps adapting while off.** As in the `.fx`, the measure pass runs whenever the pre-pass
+runs at all (any of the four switches on) and never looks at the Adaptive Brightness
+flag; only the per-pixel gain is gated. So re-enabling the switch is instant — the
+history has been tracking the scene the whole time. When *no* effect is on nothing runs
+and the history simply holds its last value.
+
+**`dt`** is host-side: `vulkan_composite()` keeps the `get_time_in_nanos()` of the previous
+effects dispatch (a function-local static; the block runs once per presented frame, since
+the two double-apply gates skip the `gamescopectl screenshot` re-composite) and passes
+the difference in seconds as `u_abDt`, **clamped to 0.25 s**. `Why the clamp:` a hitch, a
+pause, or the first frame after a long idle would otherwise slam the EMA to the new
+measurement in one step; a quarter-second nudge keeps the transition smooth. The first
+dispatch passes `0`.
+
+#### The history texture — persistence as a contract, not luck
+
+`g_output.effectsHistory` is a **1×1 `ABGR8888` storage+sampled texture**, created once by
+`update_effects_history()` and kept for the life of the output (it does not depend on the
+game's size, and its contents *are* the effect's state — so, unlike the `.fx`, a
+resolution change does not reset it).
+
+**Storage format — RGBA8 bytes, not R32F.** The float is spread bit-for-bit over the four
+8-bit channels (`history_pack` = `unpackUnorm4x8(floatBitsToUint(v))`, `history_unpack` =
+`uintBitsToFloat(packUnorm4x8(t))`, `effects_common.h`). `Why:` `dst` in `descriptor_set.h`
+is declared `rgba8` and `CVulkanCmdBuffer::dispatch()` binds one RGB target there; an
+`r32f` second-target path through the shared descriptor set, for one texel used by one
+pass, was judged more plumbing than four exact byte lanes. `Why it is lossless:`
+`unpackUnorm4x8` yields `b/255`; UNORM8 storage rounds `b/255·255` back to `b` (float→UNORM
+conversion is round-to-nearest by spec); the fetch returns `b/255` again and `packUnorm4x8`
+rounds it back to `b`. Both sides go through the same raw UNORM view, so the format's channel
+order cancels. `Why not plain 8-bit:` an EMA step of `alpha·(measured − adapted)` at
+`alpha ≈ 0.016` (60 fps, τ = 1 s) is below `1/255` whenever the gap is under 0.25, so the
+value would freeze short of its target.
+
+**Discard-safe binding.** `CVulkanCmdBuffer::prepareDestImage()` marks a target it sees for
+the first time in a command buffer `discarded`, and `insertBarrier()` then emits
+`oldLayout = UNDEFINED`, which *permits the driver to drop the contents*. The `.fx` version
+relied on that never actually happening (DECISIONS.md #14: "confirmed empirically on
+RADV") — luck, not contract. The native pass binds the history as a **source first**: in the
+measure dispatch it is sampler slot `VKR_EFFECTS_HISTORY_SLOT` (= 1) *and* the storage
+target, and `dispatch()` runs `prepareSrcImage()` (tracks it with `discarded = false`) before
+`prepareDestImage()` (returns early for a tracked image). So the barrier for it is either
+nothing (steady state) or `GENERAL → GENERAL`; never `UNDEFINED`. `Why self-sampling is
+safe:` only invocation 0 touches the texel, and its fetch precedes its store in program
+order; the layout is `GENERAL` for both bindings. The `.fx` did the same.
+
+The one legitimate `UNDEFINED` is the creation frame: the fresh `VkImage` really is in
+`UNDEFINED` layout, so `vulkan_composite()` calls `discardImage()` on it *before* the
+dispatch (its `emplace` wins, so the later `prepareSrcImage` no-ops), the barrier is
+`UNDEFINED → GENERAL`, and `kResetHistory` (`1<<31`) tells the shader to write `measured`
+directly rather than blend with undefined bits. The shader additionally snaps a NaN/inf
+history to the measurement and clamps to 0..1, so the value can never poison later frames.
+
+**Barrier sequence** (the full write-up is the comment above the measure dispatch in
+`rendervulkan.cpp`): (1) measure dispatch — history tracked as source, no `UNDEFINED`;
+(2) `dispatch()` ends with `markDirty(history)`; (3) the per-pixel dispatch binds it as a
+source again, `insertBarrier()` sees `dirty` and emits `SHADER_WRITE → SHADER_READ`,
+`GENERAL → GENERAL`, `ALL_COMMANDS → ALL_COMMANDS` — the read-after-write between the two
+dispatches; (4) across frames, that same barrier made frame N's write available to all
+later reads on the queue, and the write-after-read (frame N+1's measure overwriting what
+frame N's per-pixel pass read) is ordered because `insertBarrier()` records a
+`vkCmdPipelineBarrier ALL_COMMANDS → ALL_COMMANDS` unconditionally, even with zero image
+barriers, and pipeline barriers order against all earlier work on the queue across command
+buffers. Every `vulkan_composite()` runs on the compute queue; nothing else touches the
+history.
+
+**No lag, by ordering.** Measure runs before apply on the same command buffer, so the gain a
+frame receives is computed from that frame's own measurement (as the `.fx`'s pass order
+did). If the history allocation ever fails, the pre-pass still runs with the Adaptive
+Brightness flag masked off and the measure dispatch skipped.
+
+After the per-pixel dispatch slot 1 is unbound, so the FSR/NIS/blit dispatches that follow
+(which bind layers `0..n-1`) do not carry a stray history descriptor on single-layer frames.
 
 ## The settings-panel budget
 
