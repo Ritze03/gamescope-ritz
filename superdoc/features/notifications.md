@@ -56,14 +56,14 @@ enabled. In order:
 1. `EnsureConfigLoaded()` -- the two JSON reads, off the first toast's frame.
 2. `EnsureImguiInit()` -- context, font parse, pipeline.
 3. `EnsureTexture(g_nOutputWidth, g_nOutputHeight)` -- the offscreen target.
-4. Two hidden frames: `NewFrame` -> `fonts::WarmGlyphs()` draws `U+0020..U+00FF` plus
-   `U+2026` (the fallback glyph) with `ToastFont()` at `ToastFontSize()`, wrapped to the
-   display width -> `Render` -> `RenderAndSubmit()`. The first frame does the atlas
-   texture create/upload and its `vkQueueWaitIdle` once, at launch, with every glyph a
-   later toast can use already resident (so the atlas never grows mid-game either). Two
-   frames because the backend rotates through `ImageCount` (2) vertex/index buffer
-   slots and allocates each on first use; the glyph string is longer than any toast, so
-   those buffers never hit the resize path later.
+4. Two hidden frames (`RunHiddenFrame(true)`): `NewFrame` -> `fonts::WarmGlyphs()` draws
+   `U+0020..U+00FF` plus `U+2026` (the fallback glyph) with `ToastFont()` at
+   `ToastFontSize()`, wrapped to the display width -> `Render` -> `RenderAndSubmit()`.
+   The first frame does the atlas texture create/upload and its `vkQueueWaitIdle` once,
+   at launch, with every glyph a later toast can use already resident (so the atlas
+   never grows mid-game either). Two frames because the backend rotates through
+   `ImageCount` (2) vertex/index buffer slots and allocates each on first use; the glyph
+   string is longer than any toast, so those buffers never hit the resize path later.
 5. **No `Layer_t` is pushed.** `AddLayer()` still early-outs on an empty queue, nothing
    composites the warm-up's pixels, and `s_bHasPendingWaitPoint` is cleared so
    `WaitForRender()` stays a no-op. Pushing a layer would make `layers.count() > 1` and
@@ -71,8 +71,60 @@ enabled. In order:
    The general-queue work is still fenced: the next real `RenderAndSubmit()`'s
    `DrainPrevSubmission()` waits on it before clearing the texture.
 
-`WarmUp()` logs one info line with its wall time. If it never runs (output size unknown,
-Vulkan init failed), every guard is still lazy and the old behaviour is the fallback.
+`WarmUp()` logs one info line with its wall time and the texture size. If it never runs
+(output size unknown, Vulkan init failed), every guard is still lazy and the old
+behaviour is the fallback.
+
+### The residual cost: the texture is keyed on the output size
+
+With all of the above in place a fresh launch still measured the first toast frame at
+3-5 ms against a 0.1-1 ms steady state (three trials, `notifications_time_render 1`,
+text entirely inside the baked range). Everything `AddLayer()` does inside that timer
+runs identically every frame -- the glyphs, the bake lookup, the buffers, the command
+buffer, the submit -- except `EnsureTexture(g_nOutputWidth, g_nOutputHeight)`. The
+output size can change **after** the warm-up: in nested mode the SDL backend rewrites
+`g_nOutputWidth/Height` from its event thread on `SDL_WINDOWEVENT_SIZE_CHANGED`, and a
+tiling compositor resizes the window right after it maps, i.e. after the first sized
+frame the warm-up keys off. The first toast then re-creates the full-output BGRA8
+texture (`vkCreateImage` + `vkAllocateMemory`, ~8 MB at 1080p), re-arms the
+`UNDEFINED->GENERAL` barrier, and its `vkQueueSubmit` faults the fresh backing pages
+in -- once, on the render thread, inside the timed window.
+
+`ReWarmTextureIfResized()` closes it: on every frame with no toast queued, if the output
+size differs from the texture's and has held that value for 500 ms
+(`kResizeSettleNanos`), the texture is re-created and one glyph-less hidden frame is
+run, then the wait point is cleared exactly as in `WarmUp()`. It is settle-gated so an
+interactive window resize (a new size per frame) does not allocate a texture per frame,
+and wall-clock rather than frame-counted so it means the same thing at 40 Hz and
+144 Hz. The cost lands once, half a second after the resize ends, on a frame with nothing
+on screen. A toast that is already up during a resize takes `AddLayer()`'s existing lazy
+path (re-created on its next frame) and the settle clock is reset by the size match.
+Logged as `re-warmed the offscreen texture at WxH after a resize`. **Not mirrored in
+the HUD**: an enabled HUD draws every frame and so re-creates on the resize frame
+itself; a disabled HUD has no texture. The Shell re-creates lazily on its next drawn
+frame, which is a user opening it.
+
+### The composite pipeline (outside the timer)
+
+`CVulkanDevice::compileAllPipelines()` precompiles every (layer count, ycbcr, blur)
+combination on a background thread, but its `PipelineInfo_t` keys default the trailing
+members: `colorspaceMask = 0`, `outputEOTF = 0`, `itmEnable = false`. A real composite
+keys on `frameInfo->colorspaceMask()`, and any sRGB layer makes that non-zero -- so with
+a game on screen the precompiled set is never hit, and every new (layer count,
+colourspace) pair compiles a compute pipeline synchronously in `pipeline()`, on the
+render thread, on the first frame that needs it. The first toast is such a frame
+whenever it brings a layer count the session has not composited yet (HUD on: game + HUD
++ toast = 3), and the compile happens in `vulkan_composite()` after `AddLayer()` returns,
+so `notifications_time_render` never sees it. Upstream behaviour, not this fork's.
+
+The launch block now calls `vulkan_warm_overlay_composite_pipelines(pFrameInfo, 2)`
+(`rendervulkan.cpp`) after the three warm-ups: it pushes one, then two, screen-size sRGB
+layers onto a **copy** of the launch frame and asks `pipeline()` for the key the final
+pass would use each time (RCAS under FSR, BLUR/BLUR_COND if `blurLayer0` is already set,
+BLIT otherwise -- NIS included). Synchronous, deliberately: it is launch time, the user
+asked for launch cost over mid-game cost, and with the startup announcement enabled the
++1 key was already being compiled synchronously on that very frame by the
+announcement's own composite. The frame is not modified; nothing is pushed onto it.
 
 **Why the Shell block, not `steamcompmgr.cpp`:** `SettingsOverlay_AddLayer()` already
 owned issue #30's warm-up (the announcement racing its own setup) and runs on the same
@@ -93,17 +145,28 @@ user-initiated Appearance edit with the Shell open, so the one-time re-bake land
 interaction the user is already watching, not mid-game. Re-running the glyph pass from
 `ApplyPendingRebuild()` is the obvious follow-up if that ever reads as a hitch.
 
-**HUD seam.** `FpsDisplay.cpp`'s context is still fully lazy (init, texture and Hero-size
-glyphs on its first enabled frame). The call site carries
-`// TODO(agent owning FpsDisplay.cpp): FpsDisplay_WarmUp() here`; the intended shape is
-identical to `Notifications::WarmUp()`.
+**HUD.** `FpsDisplay_WarmUp()` is the third leg of the same launch block, same shape as
+`Notifications::WarmUp()` (init, texture, hidden glyph frames, no `Layer_t`). A HUD that
+is off at launch has nothing to warm and stays lazy until it is switched on; that first
+enabled frame pays the one-time cost, by design ("nothing enabled -> nothing allocated").
 
 ## Verifying
 
 `notifications_time_render` (ConVar, default off) logs the render-thread wall time of
-every frame that actually draws a toast, plus the queue depth and whether the warm-up
-ran. With it on: fire a toast right after a settings change (or `notify_test`) and read
-the first frame's time against the following ones -- the first should be within noise of
-steady state, not a multi-millisecond outlier. `overlay_e2_trace on` before the first
-toast, then `dump`, confirms the composite-forced state does not flip on the warm-up
-frame (no toast queued, no layer pushed).
+every frame that actually draws a toast, plus the queue depth, whether the warm-up ran,
+the texture size, and `recreated=` -- whether that frame had to (re)create the texture.
+With it on: fire a toast right after a settings change (or `notify_test`) and read the
+first frame's time against the following ones -- the first should be within ~1.5x of
+steady state, not a multi-millisecond outlier. A first-toast line with `recreated=1`
+means the output size changed after launch and the settle re-warm did not get its
+500 ms (or the toast came first); `recreated=0` with a spike points elsewhere.
+
+Two log lines say what the warm-up did and did not do, and they are the check that the
+hidden passes push nothing (there is no other: `overlay_e2_trace`'s `TraceFrame()` is
+called only from `Shell.cpp` and never observes the notification layer):
+
+- `notifications: warm-up done in N ms (... texture WxH, layers pushed: 0)` -- the
+  literal is a statement of the contract; `WarmUp()` has no `FrameInfo_t` to push to.
+- `settings_overlay: launch warm-up done in N ms (... composite pipelines for A and B
+  layers in M ms; layers pushed: 0)` -- the count is measured: `pFrameInfo->layers.count()`
+  after the whole block minus before it. Anything but `0` there is a bug.

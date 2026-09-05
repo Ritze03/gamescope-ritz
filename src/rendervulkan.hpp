@@ -568,6 +568,15 @@ bool vulkan_native_effects_active();
 
 std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
 void vulkan_wait( uint64_t ulSeqNo, bool bReset );
+// Launch-time warm-up for the overlay layers -- called once from
+// SettingsOverlay.cpp's launch block. Synchronously compiles the final-pass
+// composite pipeline vulkan_composite() would select for *pFrameInfo with
+// 1..nExtraLayers extra screen-size sRGB layers pushed on top: exactly the key
+// the first toast (Notifications::AddLayer()), the Shell, or both add when they
+// first appear over the running game. Pushes onto a copy; *pFrameInfo is not
+// modified. See the definition for why compileAllPipelines()' background pass
+// never covers these keys.
+void vulkan_warm_overlay_composite_pipelines( const struct FrameInfo_t *pFrameInfo, uint32_t nExtraLayers );
 gamescope::Rc<CVulkanTexture> vulkan_get_last_output_image( bool partial, bool defer );
 gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace = k_EStreamColorspace_Unknown);
 gamescope::Rc<CVulkanTexture> vulkan_acquire_capture_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace = k_EStreamColorspace_Unknown);

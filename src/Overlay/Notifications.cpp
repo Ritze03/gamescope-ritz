@@ -727,6 +727,26 @@ namespace gamescope::Notifications
 			ImGui::GetIO().DisplaySize.x );
 	}
 
+	// One hidden frame on this file's context -- NewFrame, optionally the
+	// glyph pass, Render, RenderAndSubmit() -- sized to the current
+	// texture. Shared by WarmUp() and ReWarmTextureIfResized() so the two
+	// cannot drift. The caller has made s_pImguiContext current and holds a
+	// texture; it also owns clearing s_bHasPendingWaitPoint afterwards,
+	// since nothing a hidden frame draws is ever composited.
+	static bool RunHiddenFrame( bool bDrawGlyphs )
+	{
+		ImGuiIO &io = ImGui::GetIO();
+		io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
+		io.DeltaTime = 1.0f / 60.0f;
+
+		ImGui_ImplVulkan_NewFrame();
+		ImGui::NewFrame();
+		if ( bDrawGlyphs )
+			DrawGlyphWarmUp();
+		ImGui::Render();
+		return RenderAndSubmit();
+	}
+
 	void WarmUp()
 	{
 		if ( s_bWarmedUp )
@@ -757,10 +777,6 @@ namespace gamescope::Notifications
 		// Cost 3: the full-output BGRA8 offscreen texture.
 		if ( EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
 		{
-			ImGuiIO &io = ImGui::GetIO();
-			io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
-			io.DeltaTime = 1.0f / 60.0f;
-
 			// Cost 1, the big one: the first RenderDrawData() creates and
 			// uploads the font atlas texture and vkQueueWaitIdle()s the
 			// general queue. Drawing the whole baked range here means that
@@ -768,11 +784,7 @@ namespace gamescope::Notifications
 			// trigger later -- happens now, once, with nothing on screen.
 			for ( int i = 0; i < kWarmUpFrames; i++ )
 			{
-				ImGui_ImplVulkan_NewFrame();
-				ImGui::NewFrame();
-				DrawGlyphWarmUp();
-				ImGui::Render();
-				if ( !RenderAndSubmit() )
+				if ( !RunHiddenFrame( /* bDrawGlyphs = */ true ) )
 					break;
 			}
 
@@ -797,8 +809,92 @@ namespace gamescope::Notifications
 		// the first real toast's delta is already sane.
 
 		const double flMs = double( get_time_in_nanos() - ulStartNanos ) / 1e6;
-		s_NotifLog.infof( "warm-up done in %.2f ms (%d hidden frames, glyphs U+%04X..U+%04X at %.0fpx)",
-			flMs, kWarmUpFrames, fonts::kBakedFirst, fonts::kBakedLast, ToastFontSize() );
+		s_NotifLog.infof( "warm-up done in %.2f ms (%d hidden frames, glyphs U+%04X..U+%04X at %.0fpx, texture %ux%u, layers pushed: 0)",
+			flMs, kWarmUpFrames, fonts::kBakedFirst, fonts::kBakedLast, ToastFontSize(), s_uTextureWidth, s_uTextureHeight );
+	}
+
+	// The residual first-toast cost (2026-09-05, second pass). With the
+	// warm-up above in place, a fresh launch still measured the first toast
+	// frame at 3-5 ms against a 0.1-1 ms steady state. Everything AddLayer()
+	// does inside cv_notifications_time_render's window runs identically
+	// every frame -- except EnsureTexture(), which is keyed on the OUTPUT
+	// size, and that size can change after WarmUp() ran: in nested mode the
+	// SDL backend rewrites g_nOutputWidth/Height from its event thread on
+	// SDL_WINDOWEVENT_SIZE_CHANGED, and a tiling compositor resizes the
+	// window right after it maps, i.e. after the first sized frame the
+	// warm-up keys off. The first toast then re-creates the full-output
+	// BGRA8 texture (vkCreateImage + vkAllocateMemory, ~8 MB at 1080p),
+	// re-arms the UNDEFINED->GENERAL barrier, and its vkQueueSubmit faults
+	// the fresh backing pages in -- all on the render thread, all inside the
+	// timed window, exactly once.
+	//
+	// So while no toast is queued, once the output size has sat at a value
+	// the texture does not match for kResizeSettleNanos, re-create it and
+	// run one hidden frame right then. Settle-gated so an interactive window
+	// resize (a new size per frame) does not allocate a texture per frame:
+	// the cost lands once, ~half a second after the resize ends, on a frame
+	// with nothing on screen and a window the user has just been watching
+	// change -- not mid-toast. Wall-clock rather than frame-counted so it
+	// means the same thing at 40 Hz and 144 Hz. A toast that is already up
+	// during a resize takes the existing lazy path in AddLayer() (the
+	// texture is re-created on its next frame) and the settle clock is
+	// reset by the size match.
+	//
+	// Not mirrored in FpsDisplay.cpp: an enabled HUD draws every frame, so
+	// its texture is re-created on the resize frame itself and there is no
+	// gap; a disabled HUD has no texture. The Shell re-creates lazily on its
+	// next drawn frame, which is a user opening it.
+	static constexpr uint64_t kResizeSettleNanos = 500'000'000ull;
+	static uint32_t s_uSettleWidth = 0;
+	static uint32_t s_uSettleHeight = 0;
+	static uint64_t s_ulSettleSinceNanos = 0;
+
+	static void ReWarmTextureIfResized( uint64_t ulNowNanos )
+	{
+		if ( !s_bWarmedUp || !s_bImguiInitialized || !s_pOverlayTexture )
+			return; // never warmed (or init failed): the lazy path is the fallback, as documented
+		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
+			return;
+
+		if ( g_nOutputWidth == s_uTextureWidth && g_nOutputHeight == s_uTextureHeight )
+		{
+			s_ulSettleSinceNanos = 0;
+			return; // the common case, every frame: nothing to do
+		}
+
+		if ( s_ulSettleSinceNanos == 0 || g_nOutputWidth != s_uSettleWidth || g_nOutputHeight != s_uSettleHeight )
+		{
+			s_uSettleWidth = g_nOutputWidth;
+			s_uSettleHeight = g_nOutputHeight;
+			s_ulSettleSinceNanos = ulNowNanos;
+			return;
+		}
+
+		if ( ulNowNanos - s_ulSettleSinceNanos < kResizeSettleNanos )
+			return;
+		s_ulSettleSinceNanos = 0;
+
+		const uint64_t ulStartNanos = get_time_in_nanos();
+		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
+		ImGui::SetCurrentContext( s_pImguiContext );
+
+		bool bOk = EnsureTexture( g_nOutputWidth, g_nOutputHeight );
+		if ( bOk )
+		{
+			// One frame, no glyphs: the atlas and the vertex/index buffers
+			// survived the resize; only the render target is new. The frame
+			// records the initial barrier and the clear, and its submit is
+			// what pins the new allocation's pages.
+			bOk = RunHiddenFrame( /* bDrawGlyphs = */ false );
+			// Same as WarmUp(): no layer was pushed, nothing samples this,
+			// so no compute pass needs to wait on it.
+			s_bHasPendingWaitPoint = false;
+		}
+
+		ImGui::SetCurrentContext( pPrevContext );
+
+		s_NotifLog.infof( "re-warmed the offscreen texture at %ux%u after a resize in %.2f ms (ok=%d, layers pushed: 0)",
+			s_uTextureWidth, s_uTextureHeight, double( get_time_in_nanos() - ulStartNanos ) / 1e6, (int)bOk );
 	}
 
 	void AddLayer( FrameInfo_t *pFrameInfo )
@@ -815,7 +911,13 @@ namespace gamescope::Notifications
 		UpdateToasts( flDeltaTime );
 
 		if ( s_Toasts.empty() )
-			return; // nothing to draw this frame -- skip the whole render pass, same as FpsDisplay's disabled-state early-out
+		{
+			// Nothing to draw this frame -- skip the whole render pass, same
+			// as FpsDisplay's disabled-state early-out. The quiet frames are
+			// also where a resize's texture re-creation is pre-paid.
+			ReWarmTextureIfResized( ulNowNanos );
+			return;
+		}
 
 		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
 			return;
@@ -835,11 +937,16 @@ namespace gamescope::Notifications
 
 		ImGui::SetCurrentContext( s_pImguiContext );
 
+		// For the timing log below: a toast frame that had to (re)create the
+		// texture is the resize case ReWarmTextureIfResized() exists to
+		// pre-empt, and the one thing in this window that is not steady-state.
+		CVulkanTexture *pTextureBefore = s_pOverlayTexture.get();
 		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
 		{
 			RestoreContext();
 			return;
 		}
+		const bool bTextureRecreated = s_pOverlayTexture.get() != pTextureBefore;
 
 		ImGuiIO &io = ImGui::GetIO();
 		io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
@@ -856,8 +963,9 @@ namespace gamescope::Notifications
 
 		if ( cv_notifications_time_render )
 		{
-			s_NotifLog.infof( "toast frame rendered in %.3f ms (%zu queued, warmed=%d)",
-				double( get_time_in_nanos() - ulRenderStartNanos ) / 1e6, s_Toasts.size(), (int)s_bWarmedUp );
+			s_NotifLog.infof( "toast frame rendered in %.3f ms (%zu queued, warmed=%d, texture %ux%u, recreated=%d)",
+				double( get_time_in_nanos() - ulRenderStartNanos ) / 1e6, s_Toasts.size(), (int)s_bWarmedUp,
+				s_uTextureWidth, s_uTextureHeight, (int)bTextureRecreated );
 		}
 
 		if ( !bSubmitted )

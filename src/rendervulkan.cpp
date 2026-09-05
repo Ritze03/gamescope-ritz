@@ -4845,6 +4845,87 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 	return sequence;
 }
 
+// requests-2026-09-05 item 6, second pass ("chase the residual first-toast
+// cost"). compileAllPipelines() precompiles every (layer count, ycbcr, blur)
+// combination on a background thread, but its PipelineInfo_t keys are built
+// with the trailing members defaulted: colorspaceMask = 0, outputEOTF = 0
+// (EOTF_Gamma22), itmEnable = false. A real composite keys on
+// frameInfo->colorspaceMask(), and any sRGB layer (GAMESCOPE_APP_TEXTURE_
+// COLORSPACE_SRGB == 1) makes that mask non-zero -- so with a game on screen
+// the precompiled set is never hit, and every new (layer count, colorspace)
+// combination compiles synchronously in pipeline(), on the render thread, on
+// the first frame that needs it. For the overlay that frame is the first toast
+// (or the first Shell open) mid-game: a shader compile of the fully-unrolled
+// blit shader, tens of milliseconds on a slow CPU, and invisible to
+// Notifications.cpp's cv_notifications_time_render because it happens in the
+// composite after AddLayer() returns.
+//
+// This pays it at launch instead: for the frame the launch block sees (the game
+// layers, plus the HUD if it is already on), push nExtraLayers sRGB layers one
+// at a time onto a COPY and ask pipeline() for the key the final pass would
+// use each time. Synchronous on purpose -- it is launch time, the user asked
+// for launch-time cost over mid-game cost, and when the startup announcement
+// is enabled the +1 key was already being compiled synchronously on this very
+// frame by the announcement's own composite; this just adds the next one(s).
+// Only the fields the key reads need to be right on the pushed layer:
+// colorspace (sRGB, what all three overlays push) and isYcbcr() (false for a
+// null tex, so a texture is not needed).
+//
+// Mirrors vulkan_composite()'s final-pass selection: RCAS under FSR (layer 0's
+// ycbcr bit cleared -- it samples the EASU output), BLIT otherwise (NIS also
+// ends in BLIT with layer 0 swapped for the RGBA tmpOutput, hence the same
+// cleared bit), and the BLUR/BLUR_COND pair when blurLayer0 is set at launch
+// (the Steam-overlay blur on a Deck). A blur the Shell itself requests when
+// it opens is a user interaction, and is compiled then.
+void vulkan_warm_overlay_composite_pipelines( const struct FrameInfo_t *pFrameInfo, uint32_t nExtraLayers )
+{
+	if ( pFrameInfo == nullptr || pFrameInfo->layers.count() == 0 )
+		return;
+
+	FrameInfo_t warm = *pFrameInfo;
+
+	EOTF outputTF = warm.outputEncodingEOTF;
+	if ( !warm.applyOutputColorMgmt )
+		outputTF = EOTF_Count; // same rule as vulkan_composite()
+
+	for ( uint32_t i = 0; i < nExtraLayers; i++ )
+	{
+		FrameInfo_t::Layer_t *layer = warm.layers.push();
+		if ( layer == nullptr )
+			break; // k_nMaxLayers: nothing could push a layer here later either
+
+		*layer = {};
+		layer->zpos = g_zposOverlay;
+		layer->scale = { 1.0f, 1.0f };
+		layer->opacity = 1.0f;
+		layer->colorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
+		layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE;
+
+		const uint32_t uLayerCount = warm.layers.count();
+		const uint32_t uColorspaceMask = warm.colorspaceMask();
+		uint32_t uYcbcrMask = warm.ycbcrMask();
+
+		if ( warm.useFSRLayer0 )
+		{
+			g_device.pipeline( SHADER_TYPE_RCAS, uLayerCount, uYcbcrMask & ~1u, 0u, uColorspaceMask, outputTF );
+		}
+		else if ( warm.blurLayer0 )
+		{
+			uint32_t blur_layer_count = 1;
+			if ( warm.layers.count() >= 2 && warm.layers.get( 1 ).zpos == g_zposOverride )
+				blur_layer_count++;
+			const ShaderType type = warm.blurLayer0 == BLUR_MODE_COND ? SHADER_TYPE_BLUR_COND : SHADER_TYPE_BLUR;
+			g_device.pipeline( type, uLayerCount, uYcbcrMask, blur_layer_count, uColorspaceMask, outputTF );
+		}
+		else
+		{
+			if ( warm.useNISLayer0 )
+				uYcbcrMask &= ~1u;
+			g_device.pipeline( SHADER_TYPE_BLIT, uLayerCount, uYcbcrMask, 0u, uColorspaceMask, outputTF );
+		}
+	}
+}
+
 void vulkan_wait( uint64_t ulSeqNo, bool bReset )
 {
 	return g_device.wait( ulSeqNo, bReset );

@@ -1089,6 +1089,11 @@ namespace gamescope
 		{
 			s_bWarmedUp = true; // one attempt; a failure below leaves the lazy paths in place
 			const uint64_t ulWarmStartNanos = get_time_in_nanos();
+			// Logged at the end as "layers pushed": the whole point of the
+			// hidden passes is that none of them adds a Layer_t, and this is
+			// the check that actually observes it (overlay_e2_trace cannot --
+			// TraceFrame() only ever sees the Shell's own layer).
+			const int nLayersBefore = pFrameInfo->layers.count();
 
 			EnsureImguiInit();
 			if ( s_bImguiInitialized && EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
@@ -1128,18 +1133,31 @@ namespace gamescope
 
 			gamescope::Notifications::WarmUp();
 
-			// The HUD's warm-up is the third leg of the same launch pass: it bakes the
-			// readout's digits and performs its atlas upload now rather than on the
-			// first HUD frame mid-game. It pushes no layer.
-			gamescope::FpsDisplay_WarmUp();
-			// the HUD's context is still fully lazy (FpsDisplay.cpp's
-			// EnsureImguiInit()/EnsureTexture() run on its first enabled
-			// frame, and its glyphs bake on first draw). Same shape as
+			// The HUD's warm-up is the third leg of the same launch pass: it
+			// bakes the readout's digits and performs its atlas upload now
+			// rather than on the first HUD frame mid-game. Same shape as
 			// Notifications::WarmUp(): init, texture, hidden glyph frames at
-			// the HUD's Hero size(s), no Layer_t pushed.
+			// the HUD's size(s), no Layer_t pushed. A HUD that is off has
+			// nothing to warm and stays lazy until it is switched on.
+			gamescope::FpsDisplay_WarmUp();
 
-			s_OverlayLog.infof( "launch warm-up done in %.2f ms (shell glyph pass + notifications)",
-				double( get_time_in_nanos() - ulWarmStartNanos ) / 1e6 );
+			// Fourth leg: the composite pipelines the overlays will need.
+			// The background precompile never matches a real frame's
+			// colourspace key (see vulkan_warm_overlay_composite_pipelines()
+			// in rendervulkan.cpp), so the first toast / first Shell open
+			// otherwise compiles a compute pipeline synchronously, mid-game,
+			// in the composite -- after AddLayer() returns, so outside every
+			// per-file render timer. +1 is a toast alone (or the Shell
+			// alone), +2 is both; the frame here already holds the game and
+			// the HUD if it is on.
+			const uint64_t ulPipelineStartNanos = get_time_in_nanos();
+			vulkan_warm_overlay_composite_pipelines( pFrameInfo, 2 );
+			const double flPipelineMs = double( get_time_in_nanos() - ulPipelineStartNanos ) / 1e6;
+
+			s_OverlayLog.infof( "launch warm-up done in %.2f ms (shell glyph pass + notifications + HUD; composite pipelines for %d and %d layers in %.2f ms; layers pushed: %d)",
+				double( get_time_in_nanos() - ulWarmStartNanos ) / 1e6,
+				nLayersBefore + 1, nLayersBefore + 2, flPipelineMs,
+				pFrameInfo->layers.count() - nLayersBefore );
 		}
 
 		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted &&

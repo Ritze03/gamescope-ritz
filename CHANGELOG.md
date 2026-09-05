@@ -77,7 +77,9 @@ The newest version below is the one this build reports.
   box only grows wider when the number actually needs more digits.
 - **First toast no longer stutters**: the notification system's one-time setup and
   font baking now happen once at launch, before the startup splash, instead of on
-  the first notification shown mid-game.
+  the first notification shown mid-game; the toast also no longer re-creates its
+  offscreen texture or compiles a composite shader on its first frame after the
+  window was resized at start-up.
 - **New profiles appear immediately**: a freshly saved profile shows up in the picker
   at once, pre-selected and confirmed by a toast, instead of after a restart.
 - **Profile picker with no profiles**: the picker is present and explains itself
