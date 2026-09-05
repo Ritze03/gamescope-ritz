@@ -79,22 +79,35 @@ Consequences for the HUD's own logic, all in `FpsDisplay.cpp`:
   layer" and "no keepalive repaints" cannot disagree. A static crosshair
   needs no keepalive of its own; counting it costs two idle repaints a
   second while it is on.
-- **Split mode.** The readout's *Inverted* text colour puts the layer in
-  `ALPHA_BLENDING_MODE_INVERT`, whose shader (`src/shaders/alphamode.h`)
-  decides **by brightness** which texels invert the game — the contract the
-  readout keeps by drawing its digits pure white and everything else dark
-  ([fps-display.md](fps-display.md#text-colour-fixed-vs-inverted)). A
-  bright user-chosen crosshair colour would trip that selector and invert
-  the game under it instead of showing its colour. So when Inverted mode
-  and the crosshair are **both** on, the HUD texture is rendered at twice
-  the output's height — readout in the top half, crosshair in the bottom
-  half — and two `Layer_t`s sample the two halves of the one texture
-  (`composite.h`'s `sampleLayerEx`: `texcoord = (pixel + offset) * scale`,
-  so the second layer's `offset.y = output height`), the first INVERT, the
-  second COVERAGE. Same context, same render pass, same submission. This is
-  the **one** case the HUD pushes a second layer; if that push fails the
-  crosshair sits the frame out and the readout is unaffected. Every other
-  combination is one output-sized texture and one layer, as before.
+- **Sharing an Inverted layer (2026-09-06).** The readout's *Inverted*
+  text colour puts the layer in `ALPHA_BLENDING_MODE_INVERT`, whose shader
+  (`src/shaders/alphamode.h`) tells the digits apart from everything else
+  by a **marker in the texel**: the digits are magenta with `G == 0`, and
+  a texel with any green at all composites exactly as coverage would
+  ([fps-display.md](fps-display.md#what-inverted-mode-does-not-invert) has
+  the whole scheme). The crosshair's only obligation is therefore to never
+  put a `G == 0` texel in that layer: `FpsDisplay_AddLayer()` sets
+  `CrosshairFrame::bReserveInvertMarker` while the readout is Inverted, and
+  `ReserveInvertMarker()` then nudges a colour with no green — pure red,
+  blue, magenta, black — from `G = 0` to `G = 1`, on both rendering paths
+  (the raster path keys its rebuild on the flag too). One count; every
+  other colour is used exactly as configured, and Fixed text colour or no
+  readout leaves all of them alone. The HUD renders the shared texture at
+  16 bits per channel in that pairing so the nudge survives
+  premultiplication at low opacity. Measured: a `(0,255,0)` arm at 50 %
+  over encoded 51 is `(35, 99, 35)` in this mode, identical to the
+  Fixed-mode/split-mode value (`scripts/pixel-regression.sh`,
+  `inversion-crosshair-alpha`), and the outline is `(0, 1, 0)` — the
+  nudge. One output-sized texture and **one layer in every combination**.
+
+  > **What this replaced.** From 2026-09-05 to 2026-09-06 the shader chose
+  > by *brightness*, a bright crosshair would have inverted the game, and
+  > so with Inverted text colour the HUD rendered a double-height texture
+  > (readout top, crosshair bottom) and pushed a second `Layer_t` sampling
+  > the bottom half — "split mode", one of the six layer slots spent on
+  > the HUD. Known limitation of the marker in exchange: a readout
+  > anchored *on* the crosshair shows a few magenta fringe pixels where a
+  > digit's edge crosses an arm — see fps-display.md's note.
 
 ## Geometry
 
@@ -364,8 +377,8 @@ the arithmetic):
 - Colours and opacity per element; the outline sits outside the fill and a
   translucent line shows the game, not black, through it.
 - Inverted HUD text colour + crosshair: the digits still invert the game
-  and the crosshair keeps its own colour (split mode). **Pixel-sample it;
-  do not eyeball it.** `verify-shots/crosshair/16-inverted-hud.png`
+  and the crosshair keeps its own colour, at full and at partial opacity
+  (they share one layer). **Pixel-sample it; do not eyeball it.** `verify-shots/crosshair/16-inverted-hud.png`
   (2026-09-04) showed a bright digit over vkcube's dark grey and was
   accepted as proof — it proved nothing, because over a dark background an
   inverted digit and a plain white one look the same, and the user then
@@ -391,4 +404,10 @@ always been affected the same way); the crosshair's opacity sliders
 inherit it. Switching the layer to `ALPHA_BLENDING_MODE_PREMULTIPLIED`
 would fix both but changes the HUD's look, so it is left for a deliberate
 HUD-level decision. The raster path inherits it identically: its texels
-are straight alpha and go through the same ImGui blend.
+are straight alpha and go through the same ImGui blend. The exact value
+is pinned by `scripts/pixel-regression.sh`'s `inversion-crosshair-alpha`
+check (`pixel_regression_sample.py`'s `coverage_blend_expected()` is the
+arithmetic): a `(0,255,0)` arm at 50 % over encoded 51 measures
+`(35, 99, 35)`, not the `(35, 190, 35)` an ideal half-blend would give —
+so whoever makes that decision changes that check's formula in the same
+commit, with the new measurement.

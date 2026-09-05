@@ -527,6 +527,15 @@ namespace gamescope
 	static OwningRc<CVulkanTexture> s_pOverlayTexture;
 	static uint32_t s_uTextureWidth = 0;
 	static uint32_t s_uTextureHeight = 0;
+	// The HUD texture's format, and the format ImGui's main pipeline was
+	// last built for -- see ResolveTextureFormat() and EnsureTexture():
+	// B8G8R8A8_UNORM normally, R16G16B16A16_UNORM when the Inverted-mode
+	// digit marker has to survive a low-opacity crosshair in the same
+	// texture. The pipeline is re-created (ImGui_ImplVulkan_CreateMainPipeline)
+	// whenever the two disagree, after the previous submission has drained.
+	static VkFormat s_eTextureFormat = VK_FORMAT_B8G8R8A8_UNORM;
+	static VkFormat s_ePipelineFormat = VK_FORMAT_B8G8R8A8_UNORM;
+	static ImGui_ImplVulkan_PipelineInfo s_PipelineInfo = {};
 	static bool s_bTextureNeedsInitialBarrier = true;
 
 	static std::unique_ptr<CVulkanCmdBuffer> s_pPrevCmdBuffer;
@@ -596,7 +605,7 @@ namespace gamescope
 		s_pTimelineSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 		s_pReadDoneSemaphore = g_device.CreateTimelineSemaphore( 0, /* bShared = */ false );
 
-		static VkFormat s_ColorAttachmentFormat = VK_FORMAT_B8G8R8A8_UNORM;
+		s_ePipelineFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
 		ImGui_ImplVulkan_InitInfo init_info = {};
 		init_info.ApiVersion = VK_API_VERSION_1_3;
@@ -613,7 +622,7 @@ namespace gamescope
 		init_info.UseDynamicRendering = true;
 		init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
 		init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-		init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &s_ColorAttachmentFormat;
+		init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &s_ePipelineFormat;
 		init_info.CheckVkResultFn = []( VkResult err )
 		{
 			if ( err != VK_SUCCESS )
@@ -626,6 +635,10 @@ namespace gamescope
 			ImGui::SetCurrentContext( pPrevContext );
 			return;
 		}
+
+		// Kept for EnsureTexture()'s pipeline re-creation on a format
+		// switch: everything but the attachment format is reused as-is.
+		s_PipelineInfo = init_info.PipelineInfoMain;
 
 		s_bImguiInitialized = true;
 		ImGui::SetCurrentContext( pPrevContext );
@@ -651,9 +664,29 @@ namespace gamescope
 		s_bHasPrevSubmission = false;
 	}
 
-	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight )
+	// Which format the HUD texture takes this frame. 8 bits per channel is
+	// plenty for the readout and the crosshair on their own -- and for the
+	// Inverted-mode digit marker alone, since that marker (G == 0, see
+	// MeasureFpsModule()'s textColor note and alphamode.h) is an exact zero
+	// at any depth. It is NOT enough once the crosshair shares an Inverted
+	// layer: a crosshair colour whose G was nudged from 0 to 1 so it is not
+	// mistaken for a digit is stored premultiplied, and 1/255 * opacity
+	// rounds back to 0 in 8 bits below 50 % opacity -- inverting a faint
+	// red or blue crosshair. 16 bits keep it non-zero down to ~0.4 %
+	// opacity, below which the crosshair contributes under half a count
+	// anyway. Confined to exactly that combination so every other
+	// configuration pays nothing; in that one it costs the same bytes the
+	// retired double-height split texture (two 8-bit halves) did.
+	static VkFormat ResolveTextureFormat( bool bInvertedMode, bool bCrosshair )
 	{
-		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight )
+		return ( bInvertedMode && bCrosshair ) ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_B8G8R8A8_UNORM;
+	}
+
+	// Must run with the HUD's ImGui context current (the pipeline
+	// re-creation below reads the backend data off it).
+	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight, VkFormat eFormat )
+	{
+		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight && s_eTextureFormat == eFormat )
 			return true;
 
 		// Drain before dropping the old texture (see DrainPrevSubmission) -- the in-flight general-queue
@@ -672,15 +705,30 @@ namespace gamescope
 		// CVulkanTexture::createFlags::bGeneralQueueShared.
 		flags.bGeneralQueueShared = true;
 
-		if ( !pNewTexture->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+		if ( !pNewTexture->BInit( uWidth, uHeight, 1u, VulkanFormatToDRM( eFormat ), flags ) )
 		{
-			s_FpsLog.errorf( "failed to (re)create the FPS display's offscreen texture at %ux%u", uWidth, uHeight );
+			s_FpsLog.errorf( "failed to (re)create the FPS display's offscreen texture at %ux%u (format %d)", uWidth, uHeight, (int)eFormat );
 			return false;
+		}
+
+		// ImGui's pipeline names its colour attachment format at creation
+		// (dynamic rendering), so a texture in a different format needs the
+		// pipeline rebuilt to match. Safe here: DrainPrevSubmission() above
+		// has already waited for the last command buffer that used the old
+		// one. Rare by construction -- only when the Inverted+crosshair
+		// combination is switched on or off.
+		if ( s_ePipelineFormat != eFormat )
+		{
+			s_ePipelineFormat = eFormat;
+			s_PipelineInfo.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+			s_PipelineInfo.PipelineRenderingCreateInfo.pColorAttachmentFormats = &s_ePipelineFormat;
+			ImGui_ImplVulkan_CreateMainPipeline( &s_PipelineInfo );
 		}
 
 		s_pOverlayTexture = std::move( pNewTexture );
 		s_uTextureWidth = uWidth;
 		s_uTextureHeight = uHeight;
+		s_eTextureFormat = eFormat;
 		s_bTextureNeedsInitialBarrier = true;
 		return true;
 	}
@@ -851,6 +899,9 @@ namespace gamescope
 	// saturated alarm red -- this is a HUD digit, not a klaxon, and it only
 	// needs to read as "different from normal" for kSpikeHoldNs.
 	static constexpr ImVec4 kSpikeTintColor( 0.85f, 0.20f, 0.20f, 1.0f );
+	// Inverted mode's variant of the same tint with no green at all -- see
+	// MeasureFpsModule()'s backdrop note for why G must stay 0 there.
+	static constexpr ImVec4 kSpikeTintColorInverted( 0.85f, 0.0f, 0.20f, 1.0f );
 
 	// M8 part 1 (issue #13, typeface swapped to Geist by #53): Geist Mono
 	// is genuinely monospaced, so a fixed-cell-count string is tabular by
@@ -890,7 +941,15 @@ namespace gamescope
 		// separate enabled flag any more, and NOTHING may override it.
 		L.bDrawBackdrop = cfg.backdrop_opacity > 0.0f;
 
-		ImVec4 backdropBase( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity );
+		// Inverted mode draws the backdrop PURE black rather than the
+		// Fixed-mode near-black (9,11,14): the digits' antialiased edges
+		// blend into whatever is under them, and alphamode.h's marker
+		// (below) only reconstructs an edge exactly when that something is
+		// black. On screen the two are within a count of each other (the
+		// near-black is linear ~0.003 before the opacity even applies).
+		ImVec4 backdropBase = bInvertedMode
+			? ImVec4( 0.0f, 0.0f, 0.0f, cfg.backdrop_opacity )
+			: ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity );
 		if ( bInvertedMode && bSpike && L.bDrawBackdrop )
 		{
 			// Inverted mode can't "invert" already-inverted text to signal
@@ -906,10 +965,14 @@ namespace gamescope
 			// outright -- with no backdrop there is simply no spike
 			// indication in Inverted mode, which is the honest cost of
 			// letting the setting mean what it says.
+			// G stays 0 -- the tint is (0.85, 0, 0.20), not kSpikeTintColor's
+			// (0.85, 0.20, 0.20): the tinted backdrop sits under the digits'
+			// edges too, and any green in it would un-mark them (see the
+			// backdrop note above). Reads as the same muted warning red.
 			constexpr float kTintMix = 0.55f;
-			backdropBase.x = backdropBase.x * ( 1.0f - kTintMix ) + kSpikeTintColor.x * kTintMix;
-			backdropBase.y = backdropBase.y * ( 1.0f - kTintMix ) + kSpikeTintColor.y * kTintMix;
-			backdropBase.z = backdropBase.z * ( 1.0f - kTintMix ) + kSpikeTintColor.z * kTintMix;
+			backdropBase.x = backdropBase.x * ( 1.0f - kTintMix ) + kSpikeTintColorInverted.x * kTintMix;
+			backdropBase.y = backdropBase.y * ( 1.0f - kTintMix ) + kSpikeTintColorInverted.y * kTintMix;
+			backdropBase.z = backdropBase.z * ( 1.0f - kTintMix ) + kSpikeTintColorInverted.z * kTintMix;
 			backdropBase.w = std::max( cfg.backdrop_opacity, 0.35f );
 		}
 		L.backdropColor = ImGui::ColorConvertFloat4ToU32( backdropBase );
@@ -921,21 +984,24 @@ namespace gamescope
 			// ALPHA_BLENDING_MODE_INVERT, wired up in FpsDisplay_AddLayer()):
 			// the compute-composite shader takes the actual game colour
 			// under each glyph pixel and inverts it (alphamode.h's
-			// BlendLayer(), with a mid-grey guard so it can't vanish over a
-			// near-50%-luminance surface). That means the glyph pass just
-			// needs to hand the shader clean, fully-opaque alpha coverage
-			// on the glyph pixels -- plain opaque white, ignoring
-			// text_opacity here (a partial alpha would only dilute the
-			// invert, mixing in un-inverted background per alphamode.h's
-			// own layerAlpha gate). See superdoc/features/fps-display.md.
+			// BlendLayer(), with a perceptual contrast guard so it can't
+			// vanish over a mid-grey surface). The glyph pass hands the
+			// shader coverage, not a colour: opaque, ignoring text_opacity
+			// (a partial alpha would only dilute the invert).
 			//
-			// Opaque WHITE specifically, and nothing else in this layer
-			// may be anywhere near as bright: alphamode.h's invert branch
-			// uses the layer's own luma to decide which texels invert the
-			// game and which composite normally, so the fill being white
-			// and the backdrop/outline being dark is the contract that
-			// keeps the backdrop and the outline out of the inversion.
-			L.textColor = IM_COL32( 255, 255, 255, 255 );
+			// Pure opaque MAGENTA, (255, 0, 255), is the marker alphamode.h
+			// reads (2026-09-06): a texel with G == 0 is "digit plus
+			// black", its R is the digit's own coverage, and G > 0 means
+			// "not a digit, composite normally". That is what lets the
+			// backdrop, the black outline AND the crosshair -- in any colour
+			// the user picks -- share this one layer. The contract on this
+			// side: the outline is pure black, the backdrop (and its spike
+			// tint) has no green, and the crosshair nudges a G of 0 to 1
+			// (Crosshair.cpp, CrosshairFrame::bReserveInvertMarker). It
+			// replaced opaque white plus a luma selector, which could not
+			// tell a white digit from a white crosshair and so needed a
+			// second layer for the crosshair.
+			L.textColor = IM_COL32( 255, 0, 255, 255 );
 		}
 		else // "fixed"
 		{
@@ -955,8 +1021,9 @@ namespace gamescope
 		// the overlapping copies would saturate the alpha byte long
 		// before the ring closed.
 		//
-		// Black also keeps it out of Inverted mode's inversion for free,
-		// since alphamode.h selects on the layer's own luma.
+		// Black is also what Inverted mode's marker requires of anything
+		// under a digit's edge (alphamode.h): pure black has G == 0 and
+		// R == 0, so it never reads as digit coverage.
 		L.flOutlineRadius = std::clamp( cfg.outline_strength, 0.0f, 4.0f );
 		L.bDrawOutline = L.flOutlineRadius > 0.0f;
 		L.outlineColor = IM_COL32( 0, 0, 0, 255 );
@@ -1147,9 +1214,10 @@ namespace gamescope
 	// is exactly one module now, placed by the plain anchor+margin model
 	// above.
 	// `io_display` is the OUTPUT size, passed in rather than read from
-	// io.DisplaySize: when the crosshair shares this frame in split mode
-	// (see FpsDisplay_AddLayer) the ImGui display is twice the output's
-	// height, and the readout must still anchor within the top half.
+	// io.DisplaySize -- a habit from the retired split mode (2026-09-05 to
+	// 2026-09-06), when the texture was twice the output's height; the two
+	// are equal again now, and the parameter stays because it keeps this
+	// function independent of the texture's shape.
 	static void DrawReadout( ImVec2 io_display )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -1375,31 +1443,29 @@ namespace gamescope
 
 		const bool bInvertedMode = bReadout && s_Settings.fps_display.color_mode == "inverted";
 
-		// Split mode. Inverted text colour puts this layer in
-		// ALPHA_BLENDING_MODE_INVERT, whose shader (alphamode.h) decides
-		// per texel BY BRIGHTNESS whether to invert the game or composite
-		// normally -- the contract the readout keeps by drawing its digits
-		// pure white and everything else dark. A crosshair in a bright
-		// user-chosen colour would trip that selector and invert the game
-		// under it instead of showing its colour. So when Inverted mode and
-		// the crosshair are BOTH on, the texture is rendered twice the
-		// output's height: readout in the top half, crosshair in the bottom
-		// half, and two Layer_t's sample the two halves of the ONE texture
-		// (layer B's offset.y = output height), the first INVERT, the
-		// second COVERAGE. Same ImGui context, same render pass, same
-		// submission -- only the push below differs. In every other
-		// combination (readout off, or Fixed colour) both draw into one
-		// output-sized texture and one layer, exactly as before.
+		// One output-sized texture and ONE layer in every combination
+		// (2026-09-06). Inverted text colour puts the layer in
+		// ALPHA_BLENDING_MODE_INVERT, whose shader (alphamode.h) tells the
+		// digits apart from everything else by a marker the readout encodes
+		// into the texel (magenta digits, G == 0 -- see MeasureFpsModule()'s
+		// textColor note), so the crosshair can share the layer in any
+		// colour: it only has to keep a non-zero G, which Crosshair.cpp
+		// does by nudging 0 to 1 when asked (bReserveInvertMarker), and the
+		// texture goes to 16 bits per channel for exactly that pairing so
+		// the nudge survives premultiplication at low opacity
+		// (ResolveTextureFormat()).
 		//
-		// This is the one case this file pushes a second layer, and the
-		// layer budget is why it is confined to that case: k_nMaxLayers is
-		// 6, a busy frame fills it, and LayerStack_t::push() fails silently
-		// when full -- if the second push fails, the crosshair is skipped
-		// for that frame and the readout is unaffected.
-		const bool bSplit = bInvertedMode && bCrosshair;
-		const uint32_t uTextureHeight = bSplit ? g_nOutputHeight * 2u : g_nOutputHeight;
+		// This retired the "split mode" of 2026-09-05: the readout in the
+		// top half and the crosshair in the bottom half of a double-height
+		// texture, pushed as two Layer_t's (INVERT, then COVERAGE) because
+		// the shader's old brightness selector could not tell a white digit
+		// from a white crosshair. That spent one of the six layer slots
+		// (k_nMaxLayers) on a HUD, and a busy frame (base + override +
+		// external overlay + Steam overlay + cursor + mura is already six)
+		// could drop the crosshair, or the whole HUD, for it.
+		const bool bCrosshairSharesInvert = bInvertedMode && bCrosshair;
 
-		if ( !EnsureTexture( g_nOutputWidth, uTextureHeight ) )
+		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight, ResolveTextureFormat( bInvertedMode, bCrosshair ) ) )
 		{
 			RestoreContext();
 			return;
@@ -1426,7 +1492,7 @@ namespace gamescope
 		if ( bCrosshair )
 		{
 			CrosshairFrame frame = ResolveCrosshairFrame( pFrameInfo );
-			frame.flDrawOffsetY = bSplit ? (float)g_nOutputHeight : 0.0f;
+			frame.bReserveInvertMarker = bCrosshairSharesInvert;
 			bCrosshairAnimating = Crosshair_Draw( ImGui::GetBackgroundDrawList(), frame, ulNowNanos );
 		}
 		if ( bReadout )
@@ -1488,10 +1554,11 @@ namespace gamescope
 		if ( bInvertedMode )
 		{
 			// ONE layer carries the whole readout, backdrop and outline
-			// included: alphamode.h's alpha_mode_invert separates the
-			// digits (drawn opaque white) from everything else (drawn
-			// dark) by the layer's own luma, and blends the rest exactly
-			// as ALPHA_BLENDING_MODE_COVERAGE would.
+			// included, and the crosshair: alphamode.h's alpha_mode_invert
+			// separates the digits (drawn opaque magenta, G == 0) from
+			// everything else (which keeps G > 0, or is black) by that
+			// marker, and blends the rest exactly as
+			// ALPHA_BLENDING_MODE_COVERAGE would.
 			//
 			// It was briefly split into two layers -- a normal backdrop +
 			// outline layer with an invert-blended glyph layer above it --
@@ -1512,28 +1579,6 @@ namespace gamescope
 		else
 		{
 			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE; // straight (non-premultiplied) alpha, same reasoning as SettingsOverlay's own layer
-		}
-
-		if ( bSplit )
-		{
-			// The crosshair's half of the same texture -- see bSplit above.
-			// offset.y = output height makes the composite sample texture
-			// rows [H, 2H) for output rows [0, H).
-			FrameInfo_t::Layer_t *pCrosshairLayer = pFrameInfo->layers.push();
-			if ( !pCrosshairLayer )
-			{
-				// superdoc/planning/requests-2026-09-05-round2.md item 2:
-				// was a silent drop -- log it, rate-limited.
-				static uint32_t s_nDropped = 0;
-				if ( ( ++s_nDropped % 600 ) == 1 )
-					s_FpsLog.warnf( "crosshair split layer dropped: layer budget full (%d/%d), %u drop(s) so far",
-					                 pFrameInfo->layers.count(), k_nMaxLayers, s_nDropped );
-				return; // out of layer slots: the crosshair sits this frame out, the readout above is unaffected
-			}
-
-			*pCrosshairLayer = *layer;
-			pCrosshairLayer->offset = { 0.0f, (float)g_nOutputHeight };
-			pCrosshairLayer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_COVERAGE;
 		}
 	}
 
@@ -1572,7 +1617,8 @@ namespace gamescope
 
 		ImGui::SetCurrentContext( s_pImguiContext );
 
-		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+		if ( !EnsureTexture( g_nOutputWidth, g_nOutputHeight,
+		                     ResolveTextureFormat( s_Settings.fps_display.color_mode == "inverted", Crosshair_IsEnabled() ) ) )
 		{
 			ImGui::SetCurrentContext( pPrevContext );
 			return;

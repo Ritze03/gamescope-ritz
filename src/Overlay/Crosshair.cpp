@@ -91,6 +91,7 @@ namespace gamescope
 			float flLineOpacity = 0.0f, flDotOpacity = 0.0f, flOutlineOpacity = 0.0f;
 			float flHideGap = 1.0f, flHideLength = 1.0f;
 			uint32_t uGameW = 0, uGameH = 0;
+			bool bReserveInvertMarker = false; // the colours' G nudge (CrosshairFrame) changes the texels
 			bool operator==( const RasterKey & ) const = default;
 		};
 
@@ -176,6 +177,17 @@ namespace gamescope
 			return IM_COL32( ( nRgb >> 16 ) & 0xFF, ( nRgb >> 8 ) & 0xFF, nRgb & 0xFF, a );
 		}
 
+		// CrosshairFrame::bReserveInvertMarker: a G of exactly 0 is the
+		// Inverted HUD's "this texel is a digit" marker (alphamode.h), so a
+		// crosshair colour with no green becomes G == 1 while sharing that
+		// layer. One count, invisible; every other colour is untouched.
+		int ReserveInvertMarker( int nRgb, bool bReserve )
+		{
+			if ( bReserve && ( ( nRgb >> 8 ) & 0xFF ) == 0 )
+				return nRgb | 0x000100;
+			return nRgb;
+		}
+
 		// Hide-mode Choice <-> stored string, same helper shape as
 		// FpsDisplay.cpp's UpdateModeToInt()/UpdateModeFromInt().
 		int HideModeToInt( const std::string &s )
@@ -242,7 +254,7 @@ namespace gamescope
 		// resolution, AA off. Unchanged from before the raster path existed
 		// -- its output was measured pixel-for-pixel and must not move.
 		void DrawPixelPath( ImDrawList *pDrawList, const config::CrosshairSettings &c, const crosshair::Style &st,
-		                    const crosshair::Frame &fr, const crosshair::HideState &hs, float flOffY )
+		                    const crosshair::Frame &fr, const crosshair::HideState &hs, bool bReserveMarker )
 		{
 			const crosshair::Shape shape = crosshair::Build( st, fr, hs );
 			if ( shape.Empty() )
@@ -261,17 +273,17 @@ namespace gamescope
 				if ( ( col & IM_COL32_A_MASK ) == 0 )
 					return;
 				for ( const crosshair::IRect &r : rects )
-					pDrawList->AddRectFilled( ImVec2( (float)r.x0, (float)r.y0 + flOffY ),
-					                          ImVec2( (float)r.x1, (float)r.y1 + flOffY ), col, 0.0f );
+					pDrawList->AddRectFilled( ImVec2( (float)r.x0, (float)r.y0 ),
+					                          ImVec2( (float)r.x1, (float)r.y1 ), col, 0.0f );
 			};
 
 			// Outline first (it is already computed as the ring OUTSIDE every
 			// fill, so order only matters where the dot overlaps an arm), then
 			// the arms, then the dot on top.
 			if ( c.outline_enabled )
-				Fill( shape.outline, PackColor( c.outline_color, c.outline_opacity * hs.flAlpha ) );
-			Fill( shape.lines, PackColor( c.line_color, c.line_opacity * hs.flAlpha ) );
-			Fill( shape.dot, PackColor( c.dot_color, c.dot_opacity * hs.flAlpha ) );
+				Fill( shape.outline, PackColor( ReserveInvertMarker( c.outline_color, bReserveMarker ), c.outline_opacity * hs.flAlpha ) );
+			Fill( shape.lines, PackColor( ReserveInvertMarker( c.line_color, bReserveMarker ), c.line_opacity * hs.flAlpha ) );
+			Fill( shape.dot, PackColor( ReserveInvertMarker( c.dot_color, bReserveMarker ), c.dot_opacity * hs.flAlpha ) );
 
 			pDrawList->Flags = savedFlags;
 		}
@@ -294,6 +306,7 @@ namespace gamescope
 			key.flLineOpacity = c.line_opacity; key.flDotOpacity = c.dot_opacity; key.flOutlineOpacity = c.outline_opacity;
 			key.flHideGap = hs.flGap; key.flHideLength = hs.flLength;
 			key.uGameW = frame.uGameWidth; key.uGameH = frame.uGameHeight;
+			key.bReserveInvertMarker = frame.bReserveInvertMarker;
 
 			if ( !s_bRasterValid || !( key == s_RasterKey ) )
 			{
@@ -306,9 +319,9 @@ namespace gamescope
 				const crosshair::Shape shape = crosshair::Build( st, gf, hsRaster );
 				s_RasterRect = crosshair::RasterRect( shape );
 				s_RasterPixels = crosshair::Rasterize( shape, s_RasterRect,
-					crosshair::PackArgb( c.outline_color, c.outline_enabled ? c.outline_opacity : 0.0f ),
-					crosshair::PackArgb( c.line_color, c.line_opacity ),
-					crosshair::PackArgb( c.dot_color, c.dot_opacity ) );
+					crosshair::PackArgb( ReserveInvertMarker( c.outline_color, frame.bReserveInvertMarker ), c.outline_enabled ? c.outline_opacity : 0.0f ),
+					crosshair::PackArgb( ReserveInvertMarker( c.line_color, frame.bReserveInvertMarker ), c.line_opacity ),
+					crosshair::PackArgb( ReserveInvertMarker( c.dot_color, frame.bReserveInvertMarker ), c.dot_opacity ) );
 				s_RasterKey = key;
 				s_bRasterValid = true;
 				s_bRasterUploadPending = !s_RasterRect.Empty();
@@ -333,10 +346,9 @@ namespace gamescope
 			fr.flScaleY = frame.flGamePixelScaleY;
 			const crosshair::FRect q = crosshair::ScaledQuad( s_RasterRect, frame.uGameWidth, frame.uGameHeight, fr );
 
-			const float flOffY = frame.flDrawOffsetY;
 			const ImU32 tint = IM_COL32( 255, 255, 255, (int)std::lround( std::clamp( hs.flAlpha, 0.0f, 1.0f ) * 255.0f ) );
 			pDrawList->AddImage( ImTextureRef( (ImTextureID)(uintptr_t)s_Raster.descriptorSet ),
-			                     ImVec2( q.x0, q.y0 + flOffY ), ImVec2( q.x1, q.y1 + flOffY ),
+			                     ImVec2( q.x0, q.y0 ), ImVec2( q.x1, q.y1 ),
 			                     ImVec2( 0.0f, 0.0f ), ImVec2( 1.0f, 1.0f ), tint );
 			return true;
 		}
@@ -392,7 +404,7 @@ namespace gamescope
 		fr.flCenterY = frame.flCenterY;
 		fr.flScaleX = c.apply_scaling ? frame.flGamePixelScaleX : 1.0f;
 		fr.flScaleY = c.apply_scaling ? frame.flGamePixelScaleY : 1.0f;
-		DrawPixelPath( pDrawList, c, st, fr, hs, frame.flDrawOffsetY );
+		DrawPixelPath( pDrawList, c, st, fr, hs, frame.bReserveInvertMarker );
 		return bAnimating;
 	}
 

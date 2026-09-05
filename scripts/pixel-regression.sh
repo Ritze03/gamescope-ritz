@@ -62,10 +62,22 @@
 #   inversion-midtone     -- HUD digit still discriminates at a mid-tone
 #                            background (the perceptual-floor push, the exact
 #                            band a past regression silently broke)
-#   inversion-crosshair    -- split-mode: digit still inverts AND the
-#                            crosshair keeps its own colour AND its outline
-#                            stays black, all at once (the check that
-#                            regressed unnoticed on 2026-09-05)
+#   inversion-crosshair    -- Inverted HUD + crosshair in ONE layer: digit
+#                            still inverts AND the crosshair keeps its own
+#                            colour AND its outline stays black, all at once
+#                            (the check that regressed unnoticed on
+#                            2026-09-05, when this was the two-layer "split
+#                            mode")
+#   inversion-crosshair-alpha -- same configuration, crosshair at 50 %
+#                            opacity: the arm measures the documented
+#                            premultiplied-then-coverage blend of its colour
+#                            over the background (crosshair.md "Known
+#                            limitation"), i.e. the invert marker did not eat
+#                            a translucent crosshair
+#   layer-budget           -- `layer_budget_stats` high-water mark with the
+#                            Inverted HUD and the crosshair both on from
+#                            startup: exactly the count one shared HUD layer
+#                            gives (the split mode's second layer is gone)
 #   fixed                 -- Fixed text-colour mode paints the configured
 #                            colour exactly
 #   outline                -- the HUD's own black digit outline, on and off
@@ -156,6 +168,28 @@ CH_LINE_COLOR_HEX=0x00FF00
 CH_OUTLINE_WIDTH=2
 CH_OUTLINE_COLOR_R=0; CH_OUTLINE_COLOR_G=0; CH_OUTLINE_COLOR_B=0
 CH_COLOR_TOL=8
+# Semi-transparent crosshair (inversion-crosshair-alpha): the arm at this
+# opacity over BG_DARK must measure the premultiplied-then-coverage blend
+# pixel_regression_sample.py's coverage_blend_expected() derives -- for the
+# green above that is (35, 99, 35), measured identically on the last split-mode
+# build (2026-09-06, build-release/verify-shots/split-retire/before/) and on
+# the single-layer one. NOT the ideal c*0.5 + bg*0.5 (which would be 153 or
+# 190 in G): see that function's docstring for the arithmetic and why the
+# check pins the real mechanism rather than an ideal it never had.
+CH_ALPHA_OPACITY=0.5
+CH_ALPHA_TOL=3                 # task spec: +/-3
+CH_ALPHA_TEXEL_BITS=16         # Inverted + crosshair share a 16-bit texture (FpsDisplay.cpp ResolveTextureFormat)
+
+# Layer budget (layer-budget): `layer_budget_stats`' high-water mark is global
+# since startup, and on this harness the startup itself peaks at 3 layers
+# plus whatever the HUD pushes (measured 2026-09-06: 4 with the readout alone,
+# on every build) -- so the readout AND the crosshair must be on FROM THE
+# CONFIG FILE for the mark to include the HUD's crosshair handling at all.
+# With both on at startup, the last split-mode build (two HUD layers) measured
+# 5 (build-release/verify-shots/split-retire/hwm2/gs-true.log) and the
+# single-layer build measures 4. Asserted as an exact value: a 5 here means a
+# second HUD layer is back.
+EXPECTED_LAYER_HWM=4
 # Safe sample windows along each arm's own axis, offset from centre in px.
 # Measured directly off a real capture (crosshair.md's outline is "strictly
 # outside the fill", on EVERY side -- including the side facing the centre,
@@ -323,6 +357,10 @@ start_sway() {
 
 # ---------------------------------------------------------------------------
 # Config file this script writes and owns -- never the user's real one.
+#
+# The crosshair starts ON (with the Inverted readout) so that layer-budget
+# sees the HUD's startup layer count -- see EXPECTED_LAYER_HWM; every check
+# that wants it off switches it off first (run section below).
 # ---------------------------------------------------------------------------
 write_config() {
 	mkdir -p "$CONFIGHOME/gamescope-ritz"
@@ -348,7 +386,7 @@ write_config() {
 		        "margin_y": $MARGIN_Y
 		    },
 		    "crosshair": {
-		        "enabled": false,
+		        "enabled": true,
 		        "line_enabled": true,
 		        "line_length": $CH_LINE_LENGTH,
 		        "line_width": $CH_LINE_WIDTH,
@@ -555,6 +593,49 @@ check_inversion_crosshair() {
 	set_val "crosshair.enabled" 0
 }
 
+# Semi-transparent crosshair in the Inverted configuration: the arm at 50 %
+# opacity measures the documented blend of its colour over the background
+# (CH_ALPHA_* above). The old brightness selector would have inverted or
+# darkened a translucent bright crosshair; the marker must leave it alone.
+check_inversion_crosshair_alpha() {
+	should_run inversion-crosshair-alpha || { skip_check inversion-crosshair-alpha "--only excluded it"; return; }
+	set_val "crosshair.enabled" 1
+	set_val "crosshair.line_opacity" "$CH_ALPHA_OPACITY"
+	local shot; shot="$(take_screenshot 08-inversion-crosshair-alpha)"
+	local ch_r ch_g ch_b
+	ch_r=$(( (CH_LINE_COLOR_HEX >> 16) & 0xFF )); ch_g=$(( (CH_LINE_COLOR_HEX >> 8) & 0xFF )); ch_b=$(( CH_LINE_COLOR_HEX & 0xFF ))
+	run_sampler line_blend "$shot" "$CH_CENTER_X" "$CH_CENTER_Y" 0 -1 "$CH_ARM_LO" "$CH_ARM_HI" all \
+		"$ch_r" "$ch_g" "$ch_b" "$CH_ALPHA_OPACITY" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" "$CH_ALPHA_TEXEL_BITS" \
+		"$CH_ALPHA_TOL" "inversion-crosshair-alpha-arm"
+	# The digit must still invert with a translucent crosshair in the layer.
+	run_sampler digit "$shot" "$DIGIT_BOX_X0" "$DIGIT_BOX_Y0" "$DIGIT_BOX_X1" "$DIGIT_BOX_Y1" \
+		"$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" "$DIFF_THRESH" "$BLACK_THRESH" \
+		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$MIN_ENCODED_SEPARATION" \
+		"inversion-crosshair-alpha-digit"
+	set_val "crosshair.line_opacity" 1.0
+	set_val "crosshair.enabled" 0
+}
+
+# Layer budget: with the Inverted readout and the crosshair both on from
+# startup (write_config), `layer_budget_stats`' high-water mark must be
+# exactly EXPECTED_LAYER_HWM. Runs FIRST on the dark instance, before any
+# other check changes what is on screen.
+check_layer_budget() {
+	should_run layer-budget || { skip_check layer-budget "--only excluded it"; return; }
+	local out hwm
+	out="$(gsctl layer_budget_stats 2>&1 || true)"
+	hwm="$(grep -oP 'high-water mark \K[0-9]+' <<<"$out" | head -1 || true)"
+	if [[ -z "$hwm" ]]; then
+		record_line "FAIL	layer-budget	layer_budget_stats gave no high-water mark (output: ${out//$'\n'/ | })"
+		return
+	fi
+	if [[ "$hwm" -eq "$EXPECTED_LAYER_HWM" ]]; then
+		record_line "PASS	layer-budget	high-water mark $hwm / 6 with Inverted readout + crosshair from startup (expected $EXPECTED_LAYER_HWM; the split-mode build measured 5)"
+	else
+		record_line "FAIL	layer-budget	high-water mark $hwm / 6, expected exactly $EXPECTED_LAYER_HWM (the split-mode build measured 5: a second HUD layer is back, or the startup layer set changed)"
+	fi
+}
+
 # Fixed colour mode: digit equals the configured colour within +/-2.
 check_fixed() {
 	should_run fixed || { skip_check fixed "--only excluded it"; return; }
@@ -619,16 +700,19 @@ write_config
 start_sway
 
 need_dark=0; need_mid=0
-for c in inversion inversion-crosshair fixed outline crosshair-geometry; do
+for c in layer-budget inversion inversion-crosshair inversion-crosshair-alpha fixed outline crosshair-geometry; do
 	should_run "$c" && need_dark=1
 done
 should_run inversion-midtone && need_mid=1
 
 if [[ "$need_dark" -eq 1 ]]; then
 	start_instance "$BG_DARK_HEX"
+	check_layer_budget           # first: reads the startup high-water mark
+	set_val "crosshair.enabled" 0  # the config starts it on (see write_config); the checks below want it off
 	apply_fps_force
 	check_inversion
 	check_inversion_crosshair
+	check_inversion_crosshair_alpha
 	check_fixed
 	check_outline
 	check_crosshair_geometry
@@ -636,6 +720,7 @@ fi
 
 if [[ "$need_mid" -eq 1 ]]; then
 	start_instance "$BG_MID_HEX"
+	set_val "crosshair.enabled" 0  # as above
 	apply_fps_force
 	check_inversion_midtone
 fi

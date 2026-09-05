@@ -35,21 +35,31 @@ namespace gamescope
 	// game's on-screen rect (layer 0), and how many output pixels one game
 	// pixel covers per axis (1 when the game is drawn 1:1). FpsDisplay.cpp
 	// derives it from paint_all()'s FrameInfo_t -- see
-	// FpsDisplay_AddLayer(). flDrawOffsetY shifts the whole drawing down
-	// inside the HUD texture (0 normally; the texture height when the HUD
-	// is rendering the readout and the crosshair into separate halves).
-	// uGameWidth/Height is the game's own committed buffer size in game
-	// pixels (g_uBaseLayerSourceWidth/Height); 0 when unknown, in which
-	// case Apply Scaling falls back to the pixel path at scale 1.
+	// FpsDisplay_AddLayer(). uGameWidth/Height is the game's own committed
+	// buffer size in game pixels (g_uBaseLayerSourceWidth/Height); 0 when
+	// unknown, in which case Apply Scaling falls back to the pixel path at
+	// scale 1.
+	//
+	// bReserveInvertMarker: true when the HUD layer is in Inverted text
+	// mode (ALPHA_BLENDING_MODE_INVERT). That shader tells the readout's
+	// digits apart from everything else by a marker in the texel itself --
+	// G == 0 means "digit" (src/shaders/alphamode.h) -- so a crosshair
+	// colour with no green at all (pure red, blue, magenta, black) would
+	// read as digit coverage and invert the game instead of showing. When
+	// set, every crosshair colour has its G nudged from 0 to 1, a one-count
+	// change the eye cannot see, and nothing else about the drawing moves.
+	// Off (Fixed text colour, or no readout) the colours are used exactly
+	// as configured. Replaced the 2026-09-05 "split mode" (a double-height
+	// texture and a second Layer_t for the crosshair), 2026-09-06.
 	struct CrosshairFrame
 	{
 		float flCenterX = 0.0f;
 		float flCenterY = 0.0f;
 		float flGamePixelScaleX = 1.0f;
 		float flGamePixelScaleY = 1.0f;
-		float flDrawOffsetY = 0.0f;
 		uint32_t uGameWidth = 0;
 		uint32_t uGameHeight = 0;
+		bool bReserveInvertMarker = false;
 	};
 
 	// True when the master switch is on. Reads (and lazily loads/reloads)

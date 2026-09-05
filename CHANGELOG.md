@@ -74,6 +74,10 @@ The newest version below is the one this build reports.
   Use this profile.
 
 ### Fixed
+- **HUD and crosshair no longer compete for a layer slot**: with Inverted text colour
+  and the crosshair on, the HUD used two of the compositor's six layers, so a busy
+  frame could drop the crosshair or the whole HUD; they now share one, and the
+  crosshair keeps its exact colour and opacity.
 - **Custom aspect lock ratio**: typing a width or height while the aspect lock is on now
   keeps the ratio that was on screen when you turned the lock on, instead of sometimes
   locking to a wrong ratio on the very first edit.

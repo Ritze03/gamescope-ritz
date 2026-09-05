@@ -110,6 +110,90 @@ def cmd_blackcount(a):
     emit(ok, a.name, detail)
 
 
+def srgb_to_linear(x):
+    return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+
+
+def linear_to_srgb(x):
+    return x * 12.92 if x <= 0.0031308 else 1.055 * x ** (1 / 2.4) - 0.055
+
+
+def coverage_blend_expected(color, alpha, bg, bits):
+    """What a straight-alpha ImGui draw of `color` at `alpha` composites to
+    over the flat `bg` through the HUD layer's blend -- the crosshair.md
+    "Known limitation" arithmetic, made explicit so the check pins the
+    mechanism rather than an ideal:
+
+      * ImGui blends SRC_ALPHA / ONE_MINUS_SRC_ALPHA onto a texture cleared
+        to 0, so the stored texel is PREMULTIPLIED: (c * a, a), quantised to
+        `bits` per channel (8 normally; 16 when the Inverted HUD and the
+        crosshair share the texture -- see FpsDisplay.cpp's
+        ResolveTextureFormat()).
+      * The composite (alphamode.h, the coverage blend and the invert
+        layer's non-digit path alike) decodes the texel's RGB from sRGB and
+        blends it as if it were STRAIGHT alpha, in linear light:
+        out = lin(texel) * a + lin(bg) * (1 - a).
+
+    So a 50 % crosshair lands at c * a * a + bg * (1 - a) in linear light --
+    (0,255,0) over (51,51,51) measures (35, 99, 35), not the (26,153,26) or
+    (35,190,35) an ideal encoded/linear half-blend would give. That is the
+    HUD's long-standing look (the backdrop has always been composited the
+    same way) and NOT something this check may "fix" by itself.
+    """
+    q = (1 << bits) - 1
+    texel_a = round(q * alpha) / q
+    out = []
+    for ch, b in zip(color, bg):
+        texel = round(q * (ch / 255.0) * alpha) / q
+        lin = srgb_to_linear(texel) * texel_a + srgb_to_linear(b / 255.0) * (1.0 - texel_a)
+        out.append(int(round(linear_to_srgb(lin) * 255.0)))
+    return tuple(out)
+
+
+def sample_ray(a, img):
+    offsets = range(a.start, a.end + 1)
+    samples = []
+    for off in offsets:
+        x = a.cx + a.dx * off
+        y = a.cy + a.dy * off
+        if not (0 <= x < img.width and 0 <= y < img.height):
+            print(f"FAIL\tline:{a.name}\tsample ({x},{y}) outside the {img.width}x{img.height} image",
+                  file=sys.stderr)
+            sys.exit(2)
+        samples.append(((x, y), img.getpixel((x, y))))
+    return samples
+
+
+def assert_ray(a, samples, target, extra=""):
+    matches = [(pos, c) for pos, c in samples if chebyshev(c, target) <= a.tol]
+    if a.mode == "all":
+        ok = len(matches) == len(samples)
+    else:  # "any"
+        ok = len(matches) > 0
+
+    if ok:
+        detail = f"{len(matches)}/{len(samples)} offsets matched {target} (tol {a.tol}){extra}"
+    else:
+        # Name the first mismatch/absence for a human reading results.txt.
+        if a.mode == "all":
+            bad_pos, bad_c = next((pos, c) for pos, c in samples if chebyshev(c, target) > a.tol)
+            detail = f"offset {bad_pos} = {bad_c}, expected {target} (tol {a.tol}){extra}"
+        else:
+            detail = f"none of {len(samples)} offsets matched {target} (tol {a.tol}); sample={samples[0][1]}{extra}"
+    emit(ok, a.name, detail)
+
+
+def cmd_line_blend(a):
+    # `line`, but the target is computed from a configured colour, its
+    # opacity and the flat background via coverage_blend_expected() -- the
+    # semi-transparent crosshair check.
+    img = load(a.image)
+    samples = sample_ray(a, img)
+    target = coverage_blend_expected((a.r, a.g, a.b), a.alpha, (a.bg_r, a.bg_g, a.bg_b), a.bits)
+    assert_ray(a, samples, target,
+               extra=f" [colour ({a.r},{a.g},{a.b}) @ {a.alpha:.2f} over ({a.bg_r},{a.bg_g},{a.bg_b}), {a.bits}-bit texel]")
+
+
 def cmd_line(a):
     img = load(a.image)
     offsets = range(a.start, a.end + 1)
@@ -187,6 +271,21 @@ def main():
     sp.add_argument("tol", type=int)
     sp.add_argument("name")
     sp.set_defaults(func=cmd_line)
+
+    sp = sub.add_parser("line_blend", help="as `line`, with the target computed from colour x opacity over the background "
+                                           "through the HUD layer's premultiplied-then-coverage blend")
+    sp.add_argument("image")
+    sp.add_argument("cx", type=int); sp.add_argument("cy", type=int)
+    sp.add_argument("dx", type=int); sp.add_argument("dy", type=int)
+    sp.add_argument("start", type=int); sp.add_argument("end", type=int)
+    sp.add_argument("mode", choices=["all", "any"])
+    sp.add_argument("r", type=int); sp.add_argument("g", type=int); sp.add_argument("b", type=int)
+    sp.add_argument("alpha", type=float)
+    sp.add_argument("bg_r", type=int); sp.add_argument("bg_g", type=int); sp.add_argument("bg_b", type=int)
+    sp.add_argument("bits", type=int, choices=[8, 16])
+    sp.add_argument("tol", type=int)
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_line_blend)
 
     args = p.parse_args()
     args.func(args)

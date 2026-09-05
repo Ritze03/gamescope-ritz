@@ -189,20 +189,23 @@ honest limitation — but it is now real, implemented one layer down in the
 Vulkan compute-composite shader rather than in this file's own ImGui draw
 pass:
 
-- This file just draws the digits as **plain opaque white** and hands the
-  HUD's single layer a new blend mode, `rendervulkan.hpp`'s
-  `ALPHA_BLENDING_MODE_INVERT` (`FpsDisplay_AddLayer()`). Opaque, not
-  `text_opacity`-scaled — a partial alpha here would only dilute the
-  invert, mixing in un-inverted background (see the gating rule below).
-  White specifically: it is also the marker the shader uses to tell the
-  digits apart from the backdrop and the outline, see
+- This file just draws the digits as **plain opaque magenta**, `(255, 0,
+  255)`, and hands the HUD's single layer a new blend mode,
+  `rendervulkan.hpp`'s `ALPHA_BLENDING_MODE_INVERT` (`FpsDisplay_AddLayer()`).
+  Opaque, not `text_opacity`-scaled — a partial alpha here would only dilute
+  the invert, mixing in un-inverted background (see the gating rule below).
+  Magenta specifically: its **zero green channel** is the marker the shader
+  uses to tell the digits apart from the backdrop, the outline and the
+  crosshair, see
   [What Inverted mode does *not* invert](#what-inverted-mode-does-not-invert).
+  (Opaque white until 2026-09-06, when the marker replaced a brightness
+  selector — same section.)
 - The actual invert happens in `src/shaders/alphamode.h`'s `BlendLayer()`,
   which every composite call site shares (plain blit, FSR/RCAS, both blur
   passes) — one function, one edit, all paths covered. For each pixel:
-  `1.0 - c` on the real background colour it's compositing onto, gated on
-  this layer's own alpha so only glyph pixels are touched:
-  `outputValue.rgb = mix(outputValue.rgb, inverted, layerAlpha)`.
+  `1.0 - c` on the real background colour it's compositing onto, weighted
+  by the digit coverage `d` the marker recovers (below), so only glyph
+  pixels are touched: `outputValue.rgb = bg * (1 - layerAlpha) + inverted * d`.
   Fully-transparent HUD-texture pixels (`layerAlpha == 0`) pass the
   background through completely unchanged.
 - **Contrast guard (perceptual, 2026-09-05)**: a literal invert can land
@@ -288,52 +291,108 @@ at 0 there is no spike indication in Inverted mode at all.
 ### What Inverted mode does *not* invert
 
 Only the **digits' fill**. The backdrop composites normally and the
-outline stays black — neither is inverted (both were, until 2026-09-03).
+outline stays black — neither is inverted (both were, until 2026-09-03) —
+and so does the [crosshair](crosshair.md), in whatever colour and opacity
+it was given.
 
-All three still live in **one** composite layer, and the shader tells
-them apart by the layer's own brightness. `alphamode.h`'s invert branch
-computes a selector from the layer texel's Rec.709 luma —
-`smoothstep(0.25, 0.80, layerLuma)` in linear-light blend space — and
-mixes between the texel's own colour (selector 0, bit-for-bit the
-`alpha_mode_coverage` blend) and the inverted destination (selector 1).
-The HUD's contract with it: the digits' fill is drawn **pure opaque
-white** (luma 1.0) and everything that must not invert is drawn far
-darker — the backdrop base is linear ~0.003, its warning-red spike tint
-~0.05, the outline pure black. Nothing lands in the transition band
-except antialiased glyph edges, which cross-fade, which is what they
-should do.
+All of it lives in **one** composite layer, and the shader tells the
+digits apart from everything else by a **marker in the texel** (2026-09-06):
 
+- The digits' fill is drawn pure opaque **magenta**, `(255, 0, 255)`, and
+  everything that may end up *under a digit's antialiased edge* is pure
+  **black**: the outline stamps, the backdrop (pure black in this mode, not
+  Fixed mode's near-black `(9, 11, 14)` — within a count on screen), the
+  backdrop's spike tint (`(0.85, 0, 0.20)` here instead of
+  `kSpikeTintColor`'s `(0.85, 0.20, 0.20)`), and the cleared texture.
+- ImGui's straight-alpha blend over black or clear therefore leaves a digit
+  texel as `d · (1, 0, 1) + (a − d) · black` with **G exactly 0**, where
+  `d` is the digit's own coverage and `a` the texel's alpha. So in
+  `alphamode.h`'s invert branch: `G == 0` ⇒ digit; the encoded R *is* `d`;
+  the pixel becomes `bg · (1 − a) + inverted · d`, the black share
+  contributing nothing. That reconstructs the layering **exactly** —
+  an edge over the outline is a clean ramp from black to the inverted
+  colour (measured: `0, 22, 45, 46` across a stroke over encoded 148 with
+  a 2 px outline and a 50 % backdrop), a full digit texel is exactly the
+  inverted colour, and an outline-only texel is exactly the coverage
+  blend of black.
+- `G > 0` ⇒ not a digit; the texel blends **bit-for-bit as
+  `alpha_mode_coverage`** would. That is the backdrop's 12 %-white border
+  and, above all, the crosshair. A crosshair colour with no green at all
+  (pure red, blue, magenta, black) is nudged from `G = 0` to `G = 1` while
+  it shares an Inverted layer (`CrosshairFrame::bReserveInvertMarker`,
+  `Crosshair.cpp`'s `ReserveInvertMarker()`) — one count, not visible —
+  and every other colour is used exactly as configured.
+- **16 bits per channel for that one pairing.** The nudge is stored
+  premultiplied, and `1/255 × opacity` rounds back to 0 in an 8-bit
+  texture below 50 % opacity — a faint red crosshair would invert. So
+  `ResolveTextureFormat()` makes the HUD texture `R16G16B16A16_UNORM`
+  exactly when the readout is Inverted **and** the crosshair is on (the
+  marker keeps `G ≥ 1/514 × opacity` there, i.e. down to ~0.4 % opacity,
+  below which the crosshair adds under half a count anyway), and
+  `B8G8R8A8_UNORM` in every other configuration, which therefore pays
+  nothing. ImGui's pipeline names its attachment format, so `EnsureTexture()`
+  rebuilds it (`ImGui_ImplVulkan_CreateMainPipeline`) on a switch, after
+  the previous submission has drained. The bytes in that configuration
+  equal what the retired double-height 8-bit texture used.
+
+> **Why a marker, and why this one.** The selector before it (2026-09-03 to
+> 2026-09-06) was the texel's own *brightness*: `smoothstep(0.25, 0.80,
+> luma)` on white digits, with the backdrop and outline dark. It could
+> not tell a white digit from a white crosshair, so the crosshair had to
+> leave the layer — the "split mode" below — and that cost a layer slot.
+> Any per-texel encoding has to survive ImGui's over-blend, which keeps
+> `rgb ≤ a` and mixes the digit's edge with whatever is under it; a
+> brightness or ratio test therefore cannot separate a digit's edge over
+> the black outline from a grey crosshair of that same value (both are
+> `(v, v, v, 1)`), and an 8-bit colour restriction of ±2 counts on the
+> crosshair drowns in premultiplied quantisation below ~50 % opacity.
+> What *does* survive mixing with black is a **zero channel**: `0 · cov +
+> 0 · (1 − cov)` is 0. Hence "G == 0 marks a digit", black for everything
+> under a digit, `G ≥ 1` for everything else, and 16 bits so `G ≥ 1`
+> stays non-zero after premultiplication. Magenta rather than red so the
+> marker reads as a marker (the same `(1, 0, 1)` `composite.h` uses for
+> its plane-border debug view) if the texture is ever dumped; the shader
+> reads only R and G.
+>
 > **Why one layer and not two.** This was briefly split across two
 > layers — a normally blended backdrop + outline layer with an
-> invert-blended glyph-only layer above it, sampling a double-height
-> texture — and that **broke Inverted mode outright** the same day
-> (2026-09-03): with `backdrop_opacity` at its 0.5 default, the lower
-> layer painted a dark box over the game exactly where the digits were
-> about to land, so the upper layer inverted *the HUD's own backdrop*
-> instead of the game and the digits came out a constant near-white. An
-> outline made it worse still: four black glyph copies 1px out cover the
-> glyph body completely, so the invert read pure black and returned pure
-> white. The general rule the split violated: **a blend that reads the
-> destination cannot be split across two layers that overlap.** Whatever
-> the lower one paints becomes the "background" the upper one inverts.
->
-> The colour-marker approach above was considered and rejected when the
-> split was written, on the grounds that antialiased glyph edges are
-> mid-grey rather than white and would be misclassified. That objection
-> assumed a hard threshold; a `smoothstep` cross-fade turns the same
-> pixels into a gradient between the outline's black and the inverted
-> colour, which is ordinary antialiasing rather than a misclassification.
-> The backdrop's 12%-white border was the other objection — at 0.12
-> encoded it is linear ~0.014, nowhere near the 0.25 selector floor.
+> invert-blended glyph-only layer above it — and that **broke Inverted
+> mode outright** the same day (2026-09-03): with `backdrop_opacity` at
+> its 0.5 default, the lower layer painted a dark box over the game
+> exactly where the digits were about to land, so the upper layer
+> inverted *the HUD's own backdrop* instead of the game and the digits
+> came out a constant near-white. The general rule the split violated:
+> **a blend that reads the destination cannot be split across two layers
+> that overlap.** Whatever the lower one paints becomes the "background"
+> the upper one inverts.
 
-**Layer budget.** The HUD is one layer, with one exception below, so it
+**Known limitation — the readout drawn *on top of* the crosshair.** The
+marker only survives mixing with *black*. If the readout is anchored so
+its digits overlap the crosshair (anchor `center`, small margins — the
+crosshair sits at the game rect's centre), a digit's antialiased edge
+pixels that land on a green/coloured arm pick up that arm's `G > 0`,
+are classified "not a digit", and composite as their own magenta-tinted
+colour: a few magenta fringe pixels along the digit's edge where it
+crosses the arm (measured 2026-09-06 on encoded 148 with the default green
+crosshair: 35 such pixels in the glyph pair,
+`build-release/verify-shots/split-retire/zoom/overlap-mid.png`). The
+digit's interior over the arm inverts correctly; the crosshair everywhere
+else is untouched. The split mode rendered this configuration cleanly
+(separate layers), so this is the trade for the layer slot — accepted
+because an FPS number placed on the crosshair is not a configuration
+anyone runs on purpose, and every other anchor never overlaps it.
+Drawing the crosshair *after* the readout in this mode would move the
+fringe to a translucent arm over a digit instead; left as is.
+
+**Layer budget.** The HUD is **one layer in every configuration**, so it
 has no special layer-budget behaviour: `k_nMaxLayers` / `VKR_MAX_LAYERS`
 are both 6, `LayerStack_t::push()` returns `nullptr` when the frame is
-full, and the HUD then simply draws nothing, with no assert and no log
-line — the same as every other overlay layer. `paint_all()` reserves
-slots for the cursor and the overlay planes but **not** for the HUD, the
-toasts or the Shell, so a busy frame (base + override + external overlay
-+ Steam overlay + cursor + mura is already six) can silently lose them.
+full (and, since 2026-09-06, counts the drop for `layer_budget_stats`),
+and the HUD then draws nothing that frame with a rate-limited warning.
+`paint_all()` reserves slots for the cursor and the overlay planes but
+**not** for the HUD, the toasts or the Shell, so a busy frame (base +
+override + external overlay + Steam overlay + cursor + mura is already
+six) can lose them.
 
 **The crosshair shares this layer (2026-09-05).** The
 [crosshair](crosshair.md) is drawn into this same ImGui frame and texture,
@@ -342,18 +401,18 @@ is exactly why it has no layer of its own. Two consequences for this file:
 `FpsDisplay_AddLayer()` builds the layer when the readout **or** the
 crosshair is on (and still nothing at all when neither is), and the 500 ms
 repaint-timer flag is recomputed (`UpdateTimerFlag()`) from that same
-predicate. The **one exception** to "one layer": with Inverted text colour
-*and* the crosshair on, a bright crosshair colour would trip the
-luma selector below and invert the game instead of showing its colour, so
-the texture is rendered at twice the output height — readout top,
-crosshair bottom — and two `Layer_t`s sample the two halves of that one
-texture, INVERT then COVERAGE (the second's `offset.y` is the output
-height). If the second push fails on a full frame, the crosshair sits the
-frame out and the readout is unaffected. See
-[crosshair.md](crosshair.md#where-it-is-drawn-the-huds-layer). Note this
-does **not** reintroduce the two-overlapping-layers problem described
-above: the two layers sample disjoint halves and the crosshair layer is
-never *under* the digits' invert.
+predicate. See
+[crosshair.md](crosshair.md#where-it-is-drawn-the-huds-layer).
+
+> **The retired split mode (2026-09-05 → 2026-09-06).** With Inverted text
+> colour *and* the crosshair on, the brightness selector of the time would
+> have inverted a bright crosshair, so the texture was rendered at twice
+> the output height — readout top, crosshair bottom — and two `Layer_t`s
+> sampled the two halves (INVERT then COVERAGE, the second's `offset.y`
+> the output height). That was one of the six layer slots spent on a HUD:
+> measured with both on from startup, the frame's high-water mark was 5
+> layers on the split build and is 4 now (`scripts/pixel-regression.sh`'s
+> `layer-budget` check pins the 4). The marker above made it unnecessary.
 
 **Interaction with the outline.** None, now. The outline is black, the
 selector leaves black alone, and the digits invert the game regardless of
@@ -403,7 +462,7 @@ exactly on the computed ones. Sampling note: take the digit core as the
 most common non-background colour inside the glyph's own rows; the
 nested window's top edge (a black row and a ~26-row darker band at the
 very top of the capture) is not the HUD. Repeat with the crosshair on
-(split mode) and, when the user's config is known, with the user's own
+(it shares the layer) and, when the user's config is known, with the user's own
 settings — the 2026-09-05 report was investigated under FSR + STRETCH +
 all three native effects + font 13 + outline 1 + active profile with
 auto-save, and every combination inverted identically at the baseline and
@@ -478,13 +537,10 @@ three glyphs.
 > at 0.75. At radius 1.0 the alpha is exactly 255, bit-for-bit the solid
 > path's own colour, so the transition across 1px is continuous; radii at
 > or above 1 take the untouched solid-black geometry unchanged. Safe
-> under Inverted mode's luma selector (`alphamode.h`'s
-> `alpha_mode_invert`) for the same reason plain black already was:
-> blending pure black at any alpha can only pull the layer's own RGB (and
-> so its luma) toward zero, never up, so a faint outline cannot cross
-> `smoothstep(0.25, 0.80, layerLuma)` into invert-select territory no
-> matter how low its alpha goes — no separate handling needed for that
-> mode.
+> under Inverted mode's marker (`alphamode.h`'s `alpha_mode_invert`) for
+> the same reason plain black already was: black at any alpha has
+> `R == G == 0`, so it is never read as digit coverage and never un-marks
+> a digit edge drawn over it — no separate handling needed for that mode.
 
 ## Lag-spike detection
 
