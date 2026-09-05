@@ -379,24 +379,30 @@ gamescopectl screenshot "/path/shot.png 4"      # one quoted argument
 
 then sample the digit core and the flat background beside it. Repeat the
 xterm run at `-bg '#949494'` (148) and `-bg '#727272'` (114) — those are
-the mid-tones the old guard failed on. Expected under the perceptual guard
-(2026-09-05; computed from the rule, to be confirmed on the laptop — the
-"before" column is what was measured at both `0ff8a55` and `773b7e9`
-under the old linear guard, Intel/ANV, nested Wayland, captures in
-`build-release/verify-shots/inversion/`):
+the mid-tones the old guard failed on. Measured 2026-09-05 at `f9e8c84`
+(the perceptual guard; Intel/ANV, nested Wayland, captures in
+`build-release/verify-shots/inversion-perceptual/`, crosshair off **and**
+on — the two were pixel-identical in every run). The "before" column is
+what the old linear guard measured at both `0ff8a55` and `773b7e9`
+(captures in `build-release/verify-shots/inversion/`); the 219 row is
+computed from the rule, not yet measured:
 
-| background (encoded) | inverting digit core (expected) | how | before (linear guard) | not inverting |
+| background (encoded) | inverting digit core (measured) | how | before (linear guard) | not inverting |
 |---|---|---|---|---|
-| `(51,51,51)` vkcube | `(251,251,251)` | true invert, untouched (gap 0.78) | `(251,251,251)` | `(255,255,255)` |
-| `(114,114,114)` xterm `#727272` / vkcube + Shadow Control | `(235,235,235)` | true invert, untouched (gap 0.47) | `(235,235,235)` | `(255,255,255)` |
-| `(148,148,148)` xterm `#949494` / vkcube's cube face | `(46,46,46)` | pushed dark to `bg − 0.40` | `(218–221)` — faint | `(255,255,255)` |
-| `(188,188,188)` xterm `#bcbcbc` | `(86,86,86)` | pushed dark to `bg − 0.40` | `(90,90,90)` | `(255,255,255)`, or the accent colour |
-| `(219,219,219)` | `(117,117,117)` | pushed dark to `bg − 0.40` | `(147,147,147)` | `(255,255,255)` |
+| `(51,51,51)` vkcube | `(251,251,251)`, gap 200 | true invert, untouched (gap 0.78) | `(251,251,251)` | `(255,255,255)` |
+| `(114,114,114)` xterm `#727272` / vkcube + Shadow Control | `(235,235,235)`, gap 121 | true invert, untouched (gap 0.47) | `(235,235,235)` | `(255,255,255)` |
+| `(148,148,148)` xterm `#949494` / vkcube's cube face | `(46,46,46)`, gap 102 | pushed dark to `bg − 0.40` | `(218–221)` — faint | `(255,255,255)` |
+| `(188,188,188)` xterm `#bcbcbc` | `(86,86,86)`, gap 102 | pushed dark to `bg − 0.40` | `(90,90,90)` | `(255,255,255)`, or the accent colour |
+| `(219,219,219)` | `(117,117,117)` expected | pushed dark to `bg − 0.40` | `(147,147,147)` | `(255,255,255)` |
 
 Every row's gap is ≥ ~100 encoded, so **any** of these backgrounds now
 discriminates at a glance; the 148 row is the one that failed before.
 Tolerance: ±3 per channel (the blend runs in linear light and is
-re-encoded; ANV's `pow` is not bit-exact). Repeat with the crosshair on
+re-encoded; ANV's `pow` is not bit-exact) — the measured values landed
+exactly on the computed ones. Sampling note: take the digit core as the
+most common non-background colour inside the glyph's own rows; the
+nested window's top edge (a black row and a ~26-row darker band at the
+very top of the capture) is not the HUD. Repeat with the crosshair on
 (split mode) and, when the user's config is known, with the user's own
 settings — the 2026-09-05 report was investigated under FSR + STRETCH +
 all three native effects + font 13 + outline 1 + active profile with
