@@ -1245,6 +1245,30 @@ namespace gamescope::config
         return true;
     }
 
+    bool ApplyProfileAtStartup( Settings &target, std::string_view svName )
+    {
+        std::optional<std::string> oSanitized = SanitizeProfileName( svName );
+        if ( !oSanitized )
+            return false;
+
+        if ( !ApplyProfile( target, *oSanitized ) )
+            return false;
+
+        // Same order UseProfile() (PanelConfig.cpp) uses: the active profile
+        // is set BEFORE the routed write below, so that write's auto-save
+        // fan-out (if already on from a previous session) targets the
+        // profile just applied rather than whichever was active before.
+        SetActiveProfile( *oSanitized );
+
+        // Routes to games/<AppId>.json when this session's per-game override
+        // is active, global.json otherwise - the same SessionAppId()/
+        // IsSessionOverrideActive() this function's caller already resolved
+        // via ResolveEffective() to produce `target`, so the two agree.
+        EnqueueRoutedWrite( target );
+        BumpConfigGeneration();
+        return true;
+    }
+
     // ---- background writer ---------------------------------------------------
 
     namespace

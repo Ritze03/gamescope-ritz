@@ -671,6 +671,67 @@ namespace
     };
 }
 
+TEST_CASE( "ApplyProfileAtStartup sanitizes the raw --profile/GS_RITZ_PROFILE value", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr ); // no per-game override -- global.json routing
+
+    Settings profile{};
+    profile.gamescope.filter = "FSR";
+    REQUIRE( SaveProfile( "Comp", profile ) ); // sanitized form of "  Comp  "
+
+    Settings target{};
+    target.gamescope.filter = "LINEAR";
+    REQUIRE( ApplyProfileAtStartup( target, "  Comp  " ) ); // raw CLI-style value, untrimmed
+    REQUIRE( target.gamescope.filter == "FSR" );
+    REQUIRE( target.last_applied_profile == "Comp" );
+    REQUIRE( ActiveProfile() == "Comp" ); // set exactly like UseProfile() would
+
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().gamescope.filter == "FSR" ); // routed write landed in global.json
+    REQUIRE( LoadGlobal().active_profile == "Comp" );
+}
+
+TEST_CASE( "ApplyProfileAtStartup routes into the per-game file when a per-game override is active", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "77" );
+
+    Settings profile{};
+    profile.gamescope.filter = "NIS";
+    REQUIRE( SaveProfile( "Comp", profile ) );
+
+    Settings snapshot{};
+    REQUIRE( SnapshotPerGameOverride( "77", snapshot ) );
+    SetSessionOverrideActive( true );
+
+    Settings target = ResolveEffective( SessionAppId() );
+    REQUIRE( ApplyProfileAtStartup( target, "Comp" ) );
+    FlushPendingWrites();
+
+    REQUIRE( ResolveEffective( std::optional<std::string>{ "77" } ).gamescope.filter == "NIS" );
+    REQUIRE( LoadGlobal().active_profile == "Comp" ); // active_profile is always global, even under override
+}
+
+TEST_CASE( "ApplyProfileAtStartup leaves the target unmodified for an unknown or unsanitizable name", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    Settings target{};
+    target.gamescope.filter = "LINEAR";
+
+    REQUIRE_FALSE( ApplyProfileAtStartup( target, "NoSuchProfile" ) );
+    REQUIRE( target.gamescope.filter == "LINEAR" );
+
+    REQUIRE_FALSE( ApplyProfileAtStartup( target, "../../etc/passwd" ) ); // sanitizes, but still no such profile
+    REQUIRE( target.gamescope.filter == "LINEAR" );
+
+    REQUIRE_FALSE( ApplyProfileAtStartup( target, "   " ) ); // sanitizes to nullopt outright
+    REQUIRE( target.gamescope.filter == "LINEAR" );
+    REQUIRE( ActiveProfile().empty() ); // never set on any failure path
+}
+
 TEST_CASE( "EnqueueRoutedWrite goes to global.json until override is active", "[config]" )
 {
     TempConfigHome home;

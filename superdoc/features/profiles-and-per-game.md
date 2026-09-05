@@ -231,3 +231,57 @@ in-memory mirrors rather than the disk (above).
 Nothing to do: the session fields are read lazily from global.json the first
 time anything asks (`CurrentFullSettings()`), and an old config with neither key
 parses to "no profile active, auto-save off".
+
+## Command line
+
+`--profile <name>` (long option only) or `GS_RITZ_PROFILE=<name>` applies a
+saved profile at launch, e.g. `gamescope --profile Comp -- game` or as a Steam
+launch option (`gamescope --profile Comp -- %command%`). The flag wins if both
+are given.
+
+**This is an interim implementation against the current copy-on-Use model**,
+matching the flag/env-var shape (and the "flag wins", pre-scan-before-getopt
+ordering) of `superdoc/planning/profiles-concept.md` section 4, but not that
+doc's proposed redesign -- a profile named at launch does not become a
+session-only pointer that edits write straight into; it is copied in once,
+exactly like pressing **Use this profile** in the overlay:
+
+- `main.cpp` pre-scans `argv` for `--profile`/`--profile=` (stopping at `--`
+  so the launched game's own arguments are never misread), falling back to
+  `GS_RITZ_PROFILE` if the flag wasn't given. This happens after
+  `ResolveEffective()` loads the session's settings and before
+  `apply_ritz_config_to_startup_state()` reads them -- config apply has to run
+  before the getopt loop for the same reason `-w`/`-h`/`-r` win over
+  `nested_width` today, so a plain `getopt_long` case would be too late.
+  `--profile` stays in `gamescope_options[]` purely so `getopt_long` doesn't
+  reject it and `--help` lists it; the loop's own case for it is a no-op.
+- `config::ApplyProfileAtStartup()` (`ConfigManager.{h,cpp}`) does the actual
+  work: sanitizes the raw name, then `ApplyProfile()` into the resolved
+  startup settings, `SetActiveProfile()`, and the routed write -- the same
+  three steps, same order, `PanelConfig.cpp`'s `UseProfile()` uses.
+- **Per-game settings**: if the game identified for this session already has
+  its own settings enabled (`config.override`), the profile is applied into
+  *those* (`games/<AppId>.json`), not `global.json` -- exactly what Use does
+  once a game is identified, because the routing (`SessionAppId()`/
+  `IsSessionOverrideActive()`) is the same either way. `active_profile` itself
+  is still always written to `global.json` (it's global-only, like every
+  other session field).
+- **Unknown or unreadable name**: logged to stderr
+  (`gamescope: --profile: no profile named '<name>' found, using normal
+  settings`) and a warning toast is queued via `Notifications::Show()` --
+  safe to call this early since it only pushes onto an in-memory queue, and
+  this runs before `main()` spawns the `steamCompMgrThread` that later drains
+  it. The session then continues with whatever settings `ResolveEffective()`
+  already resolved, unchanged.
+- **Not reproduced**: the overlay's one-step "Restore previous settings"
+  backup. That backup is `PanelConfig.cpp`'s own in-memory state, populated
+  only by a Use/Start-from-profile press made *through the overlay* -- no
+  panel exists yet at this point in startup, so a CLI-applied profile leaves
+  nothing for Restore to undo once the overlay opens. Opening the overlay
+  after a `--profile` launch shows the profile as active and clean, with no
+  backup available.
+
+See `superdoc/planning/profiles-concept.md` section 4 for where this is
+ultimately headed (a real session-only pointer, "create if missing", a
+`gamescopectl ritz_profile <name>` live switch) -- none of that is built yet;
+this section describes only what actually ships today.

@@ -69,6 +69,9 @@ The newest version below is the one this build reports.
 - **Adaptive Brightness**: the effect works again -- dark scenes brighten and
   bright scenes dim toward the target brightness over the chosen seconds, and it
   keeps tracking the scene while switched off so turning it back on is instant.
+- **Launch with a profile**: `--profile <name>` (or `GS_RITZ_PROFILE=<name>`, e.g. in
+  a Steam launch option) applies a saved profile at startup, the same as pressing
+  Use this profile.
 
 ### Fixed
 - **Custom aspect lock ratio**: typing a width or height while the aspect lock is on now

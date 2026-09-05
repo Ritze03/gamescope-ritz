@@ -127,6 +127,36 @@ namespace gamescope::config
     // loaded.
     bool ApplyProfile( Settings &target, std::string_view svSanitizedName );
 
+    // ---- Command-line profile launch (requests-2026-09-05 round2 item 4) -----
+    //
+    // `--profile <name>` / `GS_RITZ_PROFILE=<name>` (main.cpp pre-scans argv for
+    // the flag - see its own comment on why - and the flag wins if both are
+    // given). This is the INTERIM implementation against the current
+    // copy-on-Use model; superdoc/planning/profiles-concept.md section 4 is a
+    // not-yet-approved redesign toward a session-only pointer (edits during the
+    // session write into the named profile itself, nothing is copied) that this
+    // does not build. Until then, `--profile Comp` does exactly what pressing
+    // "Use this profile" in the overlay does, at the ConfigManager layer: raw
+    // `svName` is sanitized, ApplyProfile() copies the profile's sections into
+    // `target` (the already-`ResolveEffective()`d startup settings - so a
+    // per-game override active for this session gets the profile copied into
+    // ITS file, matching what Use does when a game is identified), then
+    // SetActiveProfile() and the routed write, in the same order UseProfile()
+    // (PanelConfig.cpp) uses.
+    //
+    // Does NOT reproduce Use's one-step in-memory backup ("Restore previous
+    // settings"): that backup is PanelConfig.cpp's own file-static state,
+    // populated only by a Use/Start-from-profile press made through the
+    // overlay, and no panel exists yet at this point in startup - so a CLI-
+    // applied profile leaves no backup to restore from once the overlay opens
+    // (superdoc/features/profiles-and-per-game.md's Command line section notes
+    // this for users of that button).
+    //
+    // Returns false, leaving `target` unmodified and nothing written, if
+    // `svName` doesn't sanitize to a non-empty name or no such profile file
+    // exists - the caller logs/toasts and falls through to `target` as-is.
+    bool ApplyProfileAtStartup( Settings &target, std::string_view svName );
+
     // ---- Profiles Phase B (requests-2026-09-05 item 3) ------------------------
 
     // Renames profiles/<old>.json to profiles/<new>.json, rewriting the
