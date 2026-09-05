@@ -41,6 +41,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **First toast no longer stutters**: the notification system's one-time setup and
+  font baking now happen once at launch, before the startup splash, instead of on
+  the first notification shown mid-game.
 - **New profiles appear immediately**: a freshly saved profile shows up in the picker
   at once, pre-selected and confirmed by a toast, instead of after a restart.
 - **Profile picker with no profiles**: the picker is present and explains itself

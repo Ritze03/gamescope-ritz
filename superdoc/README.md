@@ -37,6 +37,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 ### HUD
 
+- [Notifications](features/notifications.md) — toasts: the independent-context shape, the lazy glyph-bake/QueueWaitIdle hazard, the launch warm-up and why it never pushes a layer, the HUD seam.
 - [FPS display](features/fps-display.md) — the single-integer FPS HUD: update modes,
   hide-above-X, backdrop, text-colour modes (with the Inverted-mode limitation stated
   plainly), shadow, and the lag-spike heuristic.

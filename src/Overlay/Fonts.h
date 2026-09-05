@@ -12,6 +12,7 @@
 #include <cstdint>
 
 struct ImFont;
+struct ImDrawList;
 
 namespace gamescope::fonts
 {
@@ -270,4 +271,34 @@ namespace gamescope::fonts
 	// is a bug in whatever produced the string, and silently ignoring it is
 	// how a mojibake label survives review.
 	uint32_t FirstUnbakedCodepoint( const char *pszUtf8 );
+
+	// ---- pre-baking glyphs, so the first real draw does not pay for it --
+	// requests-2026-09-05 item 6 (the first-toast lag spike). This ImGui
+	// version bakes glyphs LAZILY, per (font, integer pixel size), the first
+	// time a draw actually needs one: ImFont::RenderText() -> FindGlyph() ->
+	// ImFontBaked_BuildLoadGlyph() rasterises it into the atlas texture and
+	// flags that texture WantCreate/WantUpdates. The Vulkan backend then
+	// services that flag inside the next ImGui_ImplVulkan_RenderDrawData()
+	// with a staging upload followed by a blocking vkQueueWaitIdle() on the
+	// GENERAL queue (imgui_impl_vulkan.cpp's UpdateTexture(), its own
+	// "FIXME-OPT: Suboptimal!"). So every frame that shows a never-before-
+	// drawn glyph at a never-before-drawn size stalls the render thread for
+	// a full queue drain -- that is the mid-game hitch, and it recurs.
+	//
+	// Draws every code point in the baked range (kBakedFirst..kBakedLast,
+	// plus U+2026 so the fallback glyph is baked too) with pFont at flSizePx
+	// into pDrawList, wrapped at flWrapWidth so every glyph lands inside
+	// the visible area. The pixels are irrelevant -- callers use this in a
+	// hidden frame whose texture is never pushed as a layer -- what matters
+	// is that RenderText() has now baked every glyph a later real frame can
+	// ask for at that size, so the upload and the queue wait happen ONCE, at
+	// launch. It has to be a DRAW, not a CalcTextSizeA(): above
+	// IMGUI_FONT_SIZE_THRESHOLD_FOR_LOADADVANCEXONLYMODE the measuring path
+	// loads advances only and leaves rasterisation to the first draw.
+	//
+	// Must be called between ImGui::NewFrame() and ImGui::Render() on the
+	// context that owns pFont. A rebuild (RebuildAll(), on display_scale
+	// change) clears every bake, so the range is lazy again afterwards until
+	// a caller warms it a second time.
+	void WarmGlyphs( ImDrawList *pDrawList, ImFont *pFont, float flSizePx, float flWrapWidth );
 }

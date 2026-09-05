@@ -52,6 +52,8 @@
 #include "Overlay/Widgets.h"
 #include "Overlay/Palette.h"
 #include "Overlay/UI/Shell.h"
+#include "Overlay/UI/Tokens.h"
+#include "Overlay/Notifications.h"
 #include "Config/ConfigManager.h"
 
 #include <algorithm>
@@ -646,6 +648,11 @@ namespace gamescope
 	static constexpr unsigned int k_uStartupAnnounceFadeOutMs = 550;
 	static constexpr unsigned int k_uStartupAnnounceTotalMs =
 		k_uStartupAnnounceFadeInMs + k_uStartupAnnounceHoldMs + k_uStartupAnnounceFadeOutMs;
+	// The announcement's two explicit text sizes (unscaled: it is a launch
+	// splash, not part of the display_scale'd shell). Named so the glyph
+	// warm-up below bakes exactly what DrawStartupAnnounce() later draws.
+	static constexpr float k_flStartupAnnounceTitleSizePx = 20.0f; // Style::Hero
+	static constexpr float k_flStartupAnnounceHintSizePx  = 13.0f; // Style::Meta
 
 	static bool s_bStartupAnnounceConfigLoaded = false;
 	static bool s_bStartupAnnounceEnabled = true;
@@ -752,8 +759,8 @@ namespace gamescope
 
 		ImFont *pTitleFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		ImFont *pHintFont = gamescope::fonts::Get( gamescope::fonts::Style::Meta );
-		const float flTitleSize = 20.0f;
-		const float flHintSize = 13.0f;
+		const float flTitleSize = k_flStartupAnnounceTitleSizePx;
+		const float flHintSize = k_flStartupAnnounceHintSizePx;
 
 		const ImVec2 titleSize = pTitleFont->CalcTextSizeA( flTitleSize, FLT_MAX, 0.0f, pszTitle );
 		const ImVec2 hotkeySize = pHintFont->CalcTextSizeA( flHintSize, FLT_MAX, 0.0f, pszHotkey );
@@ -811,6 +818,50 @@ namespace gamescope
 		pDrawList->AddText( pHintFont, flHintSize, hotkeyPos, palette::Accent( 0.9f * flAlpha ), pszHotkey );
 		const ImVec2 hintPos( hotkeyPos.x + flHotkeyColW + 8.0f, cardMin.y + flHintY );
 		pDrawList->AddText( pHintFont, flHintSize, hintPos, palette::Text( 0.55f * flAlpha ), pszHint );
+	}
+
+	// requests-2026-09-05 item 6 -- see the s_bWarmedUp block in
+	// SettingsOverlay_AddLayer() for why this exists and when it runs.
+	static bool s_bWarmedUp = false;
+
+	// The hidden glyph pass for THIS context: every (face, size) pair the
+	// shell and the startup announcement draw text with, so a later real
+	// frame finds its glyphs already baked and uploaded (Fonts.h's
+	// WarmGlyphs()). The pairs are the union of the two role->face maps the
+	// kit has -- Controls.cpp's FaceFor() (Section -> SegmentLabel) and
+	// Shell.cpp's FontFor() (Section -> Meta) -- at Controls.cpp's
+	// RasterSize(TypeSizePx(role)), plus DrawStartupAnnounce()'s two fixed
+	// sizes. Both maps are file-local where they live; duplicating six
+	// lines here is cheaper than exporting either, and a pair that drifts
+	// costs one lazy bake on first use, not a wrong draw. Rare sizes drawn
+	// nowhere else (a widget's own one-off) stay lazy on purpose.
+	static void DrawGlyphWarmUp()
+	{
+		using gamescope::fonts::Style;
+		using gamescope::ui::TypeRole;
+
+		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
+		const float flWrapWidth = ImGui::GetIO().DisplaySize.x;
+
+		auto SizeFor = []( TypeRole eRole )
+		{
+			return gamescope::fonts::RasterSize( gamescope::ui::TypeSizePx( eRole ) );
+		};
+
+		struct Pair { Style eStyle; float flSizePx; };
+		const Pair pairs[] = {
+			{ Style::Title,        SizeFor( TypeRole::Title ) },
+			{ Style::SegmentLabel, SizeFor( TypeRole::Section ) }, // Controls.cpp FaceFor()
+			{ Style::Meta,         SizeFor( TypeRole::Section ) }, // Shell.cpp FontFor()
+			{ Style::Label,        SizeFor( TypeRole::Label ) },
+			{ Style::Label,        SizeFor( TypeRole::Body ) },
+			{ Style::Value,        SizeFor( TypeRole::Value ) },
+			{ Style::Meta,         SizeFor( TypeRole::Meta ) },
+			{ Style::Hero,         k_flStartupAnnounceTitleSizePx },
+			{ Style::Meta,         k_flStartupAnnounceHintSizePx },
+		};
+		for ( const Pair &p : pairs )
+			gamescope::fonts::WarmGlyphs( pDrawList, gamescope::fonts::Get( p.eStyle ), p.flSizePx, flWrapWidth );
 	}
 
 	// Records the ImGui draw into s_pOverlayTexture on the general queue and
@@ -1006,6 +1057,88 @@ namespace gamescope
 		// After this change, the setup finishes one call earlier than the
 		// first visible alpha>0 draw, every run -- the two no longer land on
 		// the same frame.
+		//
+		// requests-2026-09-05 item 6 extends this in three ways, all inside
+		// the s_bWarmedUp block below, which runs exactly once, on the first
+		// call with a known output size, whether or not the announcement is
+		// enabled -- the warm-up is for the whole session, not for the
+		// splash:
+		//
+		//  1. #30's warm-up did no DRAW pass, so this ImGui build's lazy
+		//     glyph baking (Fonts.h's WarmGlyphs() comment: bake on first
+		//     draw -> atlas texture upload -> blocking vkQueueWaitIdle on
+		//     the general queue) still landed on the announcement's first
+		//     visible frame, and again on the first frame of every later
+		//     string that used a new glyph. Two hidden frames now draw the
+		//     whole baked range at every (face, size) the shell and the
+		//     announcement use, and submit -- with no Layer_t pushed, so
+		//     nothing is composited and direct scanout is untouched.
+		//  2. The real display_scale is applied FIRST (EnsureThemeLoaded()
+		//     -> RebuildAll(), which defers this context's rebuild; then
+		//     Pump/ApplyPendingRebuild() to perform it now). Baking against
+		//     the 1.0x bootstrap atlas would be wiped by that rebuild the
+		//     moment the shell first opened, making the pass worthless.
+		//     Side effect, and a fix: the announcement now draws with the
+		//     user's configured accent hue instead of the compiled default,
+		//     since UpdateAccentFamily() runs before its first frame.
+		//  3. Notifications::WarmUp() runs here too, before the timer is
+		//     armed: the first toast is the user's reported hitch, and the
+		//     announcement is the "initial splash" they asked to have the
+		//     cost paid before.
+		if ( !s_bWarmedUp && g_nOutputWidth != 0 && g_nOutputHeight != 0 )
+		{
+			s_bWarmedUp = true; // one attempt; a failure below leaves the lazy paths in place
+			const uint64_t ulWarmStartNanos = get_time_in_nanos();
+
+			EnsureImguiInit();
+			if ( s_bImguiInitialized && EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+			{
+				gamescope::palette::EnsureThemeLoaded();
+				gamescope::fonts::PumpRequestedRebuild();
+				gamescope::fonts::ApplyPendingRebuild();
+				// Tokens.h's one scale input, normally pushed by shell::Draw()
+				// -- TypeSizePx() below reads it.
+				gamescope::ui::SetScale( gamescope::palette::DisplayScale() );
+
+				ImGuiIO &io = ImGui::GetIO();
+				io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
+				io.DeltaTime = 1.0f / 60.0f;
+				io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard; // D22, same as the real frame below
+
+				// Two frames, for the same reason Notifications.cpp's
+				// kWarmUpFrames gives: the backend rotates through
+				// ImageCount (2) vertex/index buffer slots and allocates each
+				// on its first use.
+				for ( int i = 0; i < 2; i++ )
+				{
+					ImGui_ImplVulkan_NewFrame();
+					ImGui::NewFrame();
+					DrawGlyphWarmUp();
+					ImGui::Render();
+					if ( !RenderAndSubmit() )
+						break;
+				}
+
+				// Nothing samples what those frames drew (no layer was
+				// pushed), so no compute pass needs to wait on them; the next
+				// real RenderAndSubmit()'s DrainPrevSubmission() still fences
+				// the general-queue work before the texture is cleared.
+				s_bHasPendingWaitPoint = false;
+			}
+
+			gamescope::Notifications::WarmUp();
+
+			// TODO(agent owning FpsDisplay.cpp): FpsDisplay_WarmUp() here --
+			// the HUD's context is still fully lazy (FpsDisplay.cpp's
+			// EnsureImguiInit()/EnsureTexture() run on its first enabled
+			// frame, and its glyphs bake on first draw). Same shape as
+			// Notifications::WarmUp(): init, texture, hidden glyph frames at
+			// the HUD's Hero size(s), no Layer_t pushed.
+
+			s_OverlayLog.infof( "launch warm-up done in %.2f ms (shell glyph pass + notifications)",
+				double( get_time_in_nanos() - ulWarmStartNanos ) / 1e6 );
+		}
+
 		if ( s_bStartupAnnounceEnabled && !s_bStartupAnnounceStarted &&
 			g_nOutputWidth != 0 && g_nOutputHeight != 0 )
 		{

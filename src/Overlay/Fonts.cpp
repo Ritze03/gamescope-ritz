@@ -109,6 +109,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 
 namespace gamescope::fonts
@@ -595,5 +596,42 @@ namespace gamescope::fonts
 			p += nLen;
 		}
 		return 0;
+	}
+
+	// See Fonts.h. The string is built once: the range is a compile-time
+	// constant, and this runs from a launch-time warm-up, not per frame.
+	void WarmGlyphs( ImDrawList *pDrawList, ImFont *pFont, float flSizePx, float flWrapWidth )
+	{
+		if ( pDrawList == nullptr || pFont == nullptr || flSizePx <= 0.0f )
+			return;
+
+		static const std::string s_sRange = []
+		{
+			std::string s;
+			s.reserve( ( kBakedLast - kBakedFirst + 1 ) * 2 + 3 );
+			for ( uint32_t cp = kBakedFirst; cp <= kBakedLast; cp++ )
+			{
+				if ( cp < 0x80 )
+				{
+					s.push_back( (char)cp );
+				}
+				else
+				{
+					s.push_back( (char)( 0xC0 | ( cp >> 6 ) ) );
+					s.push_back( (char)( 0x80 | ( cp & 0x3F ) ) );
+				}
+			}
+			// U+2026 HORIZONTAL ELLIPSIS: outside the baked range on purpose
+			// (Notifications.cpp's Show() appends it when truncating), so
+			// drawing it here bakes the FALLBACK glyph every out-of-range
+			// code point resolves to.
+			s += "\xE2\x80\xA6";
+			return s;
+		}();
+
+		// Opaque on purpose: ImDrawList::AddText() returns early for a
+		// colour with zero alpha and would bake nothing.
+		pDrawList->AddText( pFont, flSizePx, ImVec2( 0.0f, 0.0f ), IM_COL32_WHITE,
+			s_sRange.c_str(), nullptr, flWrapWidth > 0.0f ? flWrapWidth : 0.0f );
 	}
 }

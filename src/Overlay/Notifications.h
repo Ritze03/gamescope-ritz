@@ -77,6 +77,24 @@ namespace gamescope::Notifications
 	// *pFrameInfo. A no-op when nothing is queued.
 	void AddLayer( FrameInfo_t *pFrameInfo );
 
+	// requests-2026-09-05 item 6: pays this feature's every one-time cost
+	// at LAUNCH instead of on the first toast mid-game. Idempotent; a no-op
+	// until the output size is known (g_nOutputWidth/Height != 0). Same
+	// thread contract as AddLayer(). Called by SettingsOverlay_AddLayer()
+	// on its first sized frame, before the startup announcement is armed.
+	//
+	// What it does, in order: loads the config (the two JSON reads
+	// EnsureConfigLoaded() would otherwise do on the first toast's frame),
+	// creates the ImGui context + Vulkan pipeline (EnsureImguiInit()),
+	// allocates the offscreen texture (EnsureTexture()), then runs hidden
+	// frames that draw the whole baked glyph range at the toast font size
+	// and submit -- which forces the font-atlas texture create/upload and
+	// its blocking vkQueueWaitIdle (see Fonts.h's WarmGlyphs()) and the
+	// vertex/index buffer allocations to happen now. It never pushes a
+	// Layer_t: nothing it draws is ever composited, and an extra layer
+	// would force full composition every frame and defeat direct scanout.
+	void WarmUp();
+
 	// Called right after vulkan_composite()/vulkan_screenshot() obtain their
 	// compute-queue command buffer, before recording any dispatches that
 	// might sample the notification texture -- same cross-queue

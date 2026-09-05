@@ -352,22 +352,18 @@ namespace gamescope::Notifications
 
 	// Issue #30 looked at this file's own EnsureImguiInit()/EnsureTexture()
 	// as a structurally-identical latent case of the settings overlay's
-	// startup hitch (same lazy-first-use shape), and asked to fix it too "if
-	// a fix is cheap alongside this issue" -- deliberately left lazy here,
-	// not eagerly warmed at launch like SettingsOverlay.cpp's own pair now
-	// is. The two aren't actually the same situation: SettingsOverlay's hitch
-	// came from an *unconditional* startup timer (the announcement) racing
-	// its own one-time setup on the exact same frame, which is what made
-	// eager warm-up the correct fix there. This context's own first use is
-	// never startup-triggered by default -- nothing calls Show() at process
-	// start (see #30's own root-cause writeup), so its lazy init only ever
-	// runs the first time a real toast fires, i.e. genuine first use, not a
-	// launch-time cost. Eagerly warming this context's ImGui/Vulkan setup
-	// (a second, independent context/pipeline/texture from SettingsOverlay's
-	// own) at every launch regardless of whether a toast is ever shown this
-	// session would be pure added cost with no observed hitch to fix,
-	// against the task's own "moving the cost is the goal, not adding to
-	// it" constraint -- so this stays exactly as lazy as it already was.
+	// startup hitch and deliberately left it lazy: nothing calls Show() at
+	// process start, so its first use was "genuine first use", and warming a
+	// second context at every launch read as added cost with no observed
+	// hitch to fix. That reasoning did not survive contact with the user
+	// (requests-2026-09-05 item 6): "When the first notification is being
+	// shown, there is always a small but visible lag spike ... I would
+	// rather have a ghost lag at launch than a lag while being mid-game."
+	// Genuine first use IS mid-game -- the first toast usually follows a
+	// settings edit -- and the hitch is real. So these are now warmed at
+	// launch by WarmUp() below; they are still written as lazy guards so a
+	// warm-up that never ran (output size unknown, Vulkan init failed) falls
+	// back to exactly the old behaviour rather than to no toasts at all.
 	static void EnsureImguiInit()
 	{
 		if ( s_bImguiInitialized )
@@ -472,6 +468,24 @@ namespace gamescope::Notifications
 		return true;
 	}
 
+	// The ONE (font, size) pair every toast is drawn with. Shared by
+	// DrawToasts() and WarmUp()'s glyph pass so the two cannot drift: a
+	// warm-up at a size the real draw does not use would bake the wrong
+	// glyphs and leave the first-toast stall exactly where it was.
+	static ImFont *ToastFont()
+	{
+		return gamescope::fonts::Get( gamescope::fonts::Style::Label );
+	}
+
+	static float ToastFontSize()
+	{
+		// Issue #99: snapped to a whole pixel -- 14 * a fractional scale is
+		// otherwise served by the nearest integer bake and resampled. See
+		// Fonts.h's RasterSize(). 14 matches Style::Label's real size
+		// (Fonts.cpp kSpecs) -- issue #83.
+		return fonts::RasterSize( 14.0f * GetUiScale() );
+	}
+
 	static void DrawToasts()
 	{
 		if ( s_Toasts.empty() )
@@ -485,11 +499,8 @@ namespace gamescope::Notifications
 		int nVert = 0, nHoriz = 2;
 		ParsePlacement( s_GlobalOverlay.notification_placement, nVert, nHoriz );
 
-		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Label );
-		// Issue #99: snapped to a whole pixel -- 14 * a fractional scale is
-		// otherwise served by the nearest integer bake and resampled. See
-		// Fonts.h's RasterSize().
-		const float flFontSize = fonts::RasterSize( 14.0f * flScale ); // match Style::Label's real size (Fonts.cpp kSpecs) — issue #83
+		ImFont *pFont = ToastFont();
+		const float flFontSize = ToastFontSize();
 		const float flPadding = 12.0f * flScale;
 		const float flAccentBarW = 3.0f * flScale;
 		const float flCardWidth = kCardWidth * flScale;
@@ -683,6 +694,113 @@ namespace gamescope::Notifications
 		return true;
 	}
 
+	// -------------------------------------------------------------------
+	// Launch-time warm-up -- requests-2026-09-05 item 6. See Notifications.h
+	// for the contract and Fonts.h's WarmGlyphs() for the mechanism it
+	// exists to pre-pay.
+	// -------------------------------------------------------------------
+
+	// Verification aid for the item-6 fix, off by default and free while
+	// off: logs the wall time this file spends on the render thread for
+	// every frame that actually renders a toast, and for WarmUp() itself.
+	// Left in on purpose so the lead can measure the first toast after a
+	// settings change against steady-state frames on real hardware without
+	// rebuilding -- see superdoc/features/notifications.md's "Verifying".
+	static ConVar<bool> cv_notifications_time_render(
+		"notifications_time_render", false,
+		"Log the wall time of every toast frame this file renders (and of its launch warm-up), in ms." );
+
+	static bool s_bWarmedUp = false;
+
+	// Two hidden frames, not one: ImGui's Vulkan backend keeps ImageCount
+	// (= 2, EnsureImguiInit()'s init_info) vertex/index buffer slots and
+	// rotates through them per RenderDrawData(), allocating each slot's
+	// buffers the first time it comes round. One frame would leave the
+	// second slot's vkAllocateMemory for the first toast's SECOND frame.
+	// The glyph string is far longer than any toast, so the buffers this
+	// sizes never need the resize path later either.
+	static constexpr int kWarmUpFrames = 2;
+
+	static void DrawGlyphWarmUp()
+	{
+		fonts::WarmGlyphs( ImGui::GetBackgroundDrawList(), ToastFont(), ToastFontSize(),
+			ImGui::GetIO().DisplaySize.x );
+	}
+
+	void WarmUp()
+	{
+		if ( s_bWarmedUp )
+			return;
+		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
+			return; // no texture size to warm against yet -- the caller retries next frame
+		s_bWarmedUp = true; // one attempt; anything that fails below stays on the lazy path
+
+		const uint64_t ulStartNanos = get_time_in_nanos();
+
+		// Cost 5 of the scout's ranking: two blocking JSON reads
+		// (ResolveEffective() + LoadGlobal()) that AddLayer() would otherwise
+		// do on the first frame after this file is first touched -- which,
+		// since the first toast usually follows a settings edit, is the very
+		// frame that also bumps the generation and forces the re-read.
+		EnsureConfigLoaded();
+
+		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
+
+		// Costs 2 and 4: context + font atlas parse, shader modules +
+		// vkCreateGraphicsPipelines with no pipeline cache.
+		EnsureImguiInit();
+		if ( !s_bImguiInitialized )
+			return; // EnsureImguiInit() already restored pPrevContext on failure
+
+		ImGui::SetCurrentContext( s_pImguiContext );
+
+		// Cost 3: the full-output BGRA8 offscreen texture.
+		if ( EnsureTexture( g_nOutputWidth, g_nOutputHeight ) )
+		{
+			ImGuiIO &io = ImGui::GetIO();
+			io.DisplaySize = ImVec2( (float)s_uTextureWidth, (float)s_uTextureHeight );
+			io.DeltaTime = 1.0f / 60.0f;
+
+			// Cost 1, the big one: the first RenderDrawData() creates and
+			// uploads the font atlas texture and vkQueueWaitIdle()s the
+			// general queue. Drawing the whole baked range here means that
+			// upload -- and the atlas growth a long toast would otherwise
+			// trigger later -- happens now, once, with nothing on screen.
+			for ( int i = 0; i < kWarmUpFrames; i++ )
+			{
+				ImGui_ImplVulkan_NewFrame();
+				ImGui::NewFrame();
+				DrawGlyphWarmUp();
+				ImGui::Render();
+				if ( !RenderAndSubmit() )
+					break;
+			}
+
+			// NO LAYER IS PUSHED -- deliberately. AddLayer() early-outs on an
+			// empty queue, so the texture the frames above wrote is never
+			// sampled by any composite; a Layer_t here would make
+			// layers.count() > 1 and force full composition every frame,
+			// defeating direct scanout for the rest of the session. For the
+			// same reason no compute pass needs to wait on these submissions:
+			// clear the wait point RenderAndSubmit() armed, so WaitForRender()
+			// stays the no-op it was before anything was ever drawn. The
+			// general-queue work itself is still fenced -- the next real
+			// RenderAndSubmit()'s DrainPrevSubmission() waits on it before
+			// touching the texture.
+			s_bHasPendingWaitPoint = false;
+		}
+
+		ImGui::SetCurrentContext( pPrevContext );
+
+		// s_ulLastFrameTimeNanos is untouched on purpose: AddLayer() owns it
+		// and runs every frame regardless of whether a toast is queued, so
+		// the first real toast's delta is already sane.
+
+		const double flMs = double( get_time_in_nanos() - ulStartNanos ) / 1e6;
+		s_NotifLog.infof( "warm-up done in %.2f ms (%d hidden frames, glyphs U+%04X..U+%04X at %.0fpx)",
+			flMs, kWarmUpFrames, fonts::kBakedFirst, fonts::kBakedLast, ToastFontSize() );
+	}
+
 	void AddLayer( FrameInfo_t *pFrameInfo )
 	{
 		EnsureConfigLoaded();
@@ -701,6 +819,12 @@ namespace gamescope::Notifications
 
 		if ( g_nOutputWidth == 0 || g_nOutputHeight == 0 )
 			return;
+
+		// Only frames that actually render are timed -- see
+		// cv_notifications_time_render. The clock starts here, past the
+		// early-outs, so the log line is the render-thread cost of a toast
+		// frame and nothing else.
+		const uint64_t ulRenderStartNanos = cv_notifications_time_render ? get_time_in_nanos() : 0;
 
 		ImGuiContext *pPrevContext = ImGui::GetCurrentContext();
 		auto RestoreContext = [pPrevContext] { ImGui::SetCurrentContext( pPrevContext ); };
@@ -729,6 +853,12 @@ namespace gamescope::Notifications
 		const bool bSubmitted = RenderAndSubmit();
 
 		RestoreContext();
+
+		if ( cv_notifications_time_render )
+		{
+			s_NotifLog.infof( "toast frame rendered in %.3f ms (%zu queued, warmed=%d)",
+				double( get_time_in_nanos() - ulRenderStartNanos ) / 1e6, s_Toasts.size(), (int)s_bWarmedUp );
+		}
 
 		if ( !bSubmitted )
 			return;
