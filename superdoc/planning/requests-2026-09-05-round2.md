@@ -17,13 +17,27 @@ captures a screenshot, samples known pixels for HUD inversion, crosshair colour,
 outline, and fails on a threshold. Intended to catch regressions like item 11 in the
 round-1 tracker automatically instead of relying on a manual bisect.
 
-## [ ] 2. Layer budget fails loudly
+## [x] 2. Layer budget fails loudly
 
-`LayerStack_t::push()` (`src/rendervulkan.hpp` ~line 433) returns `nullptr` when
-`m_nCount >= k_nMaxLayers`, and callers silently drop the layer. Log each dropped
-push (rate-limited, naming the layer and current count / `k_nMaxLayers`) via the
-module's existing logger, add a global atomic drop counter, and expose it via a
-ConVar/ConCommand. Do not raise `k_nMaxLayers`.
+**Done `84a50f6`.** `LayerStack_t::push()` (`src/rendervulkan.hpp`) now bumps a global
+atomic drop counter and a high-water mark on every call, regardless of what the caller
+does. Each real call site that silently dropped a layer (HUD, crosshair split,
+notifications, shell, cursor, base and window/game layers in `steamcompmgr.cpp`,
+`FpsDisplay.cpp`, `Notifications.cpp`, `SettingsOverlay.cpp`) now logs a rate-limited
+warning (first drop, then every 600th) via its module's own `LogScope`, naming which
+layer was dropped and the count / `k_nMaxLayers`. New `layer_budget_stats` ConCommand
+prints both counters. `k_nMaxLayers` unchanged. Two call sites in `steamcompmgr.cpp`
+(the Steam-overlay blank-texture layer and the mura-correction layer) were left as
+their existing `assert()` because both are already pre-guarded with
+`frameInfo.layers.count() < k_nMaxLayers` immediately before the push — `push()` cannot
+fail there, so it isn't a real drop site. DRMBackend.cpp's internal
+`presentCompFrameInfo` pushes were left alone too: a separate, always-small transient
+stack, not one of the frame's user-visible layer types.
+
+Verified headless: built, launched `--backend headless` under
+`scripts/with-gamescope-lock.sh` with an isolated `XDG_CONFIG_HOME`/`XDG_RUNTIME_DIR`,
+ran `gamescopectl layer_budget_stats` — printed `layer_budget_stats: 0 drop(s),
+high-water mark 0 / 6 layers`. Torn down cleanly, no leftover process.
 
 ## [ ] 3. Retire the double-height split texture for Inverted HUD + crosshair
 
