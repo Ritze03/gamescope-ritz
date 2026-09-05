@@ -573,6 +573,189 @@ TEST_CASE( "atoms: nothing crashes or inverts at the extremes of display_scale",
 }
 
 // =========================================================================
+//  Typed entry on a Stepper -- request #14 (2026-09-05)
+// =========================================================================
+// The pure half: what a typed string becomes. Parse -> clamp to the range,
+// and NOTHING else: the step is the buttons' increment, not a grid a typed
+// value has to land on (Controls.h's Why). The worked cases are the
+// custom-resolution row (320..7680, step 8) the request named and the
+// fps-limit row (0..480, step 10) whose off-grid 144 is D13.3's proof.
+TEST_CASE( "atoms: a typed stepper value is parsed and clamped, never snapped", "[overlay_atoms]" )
+{
+	int n = -1;
+
+	// In range: exactly what was typed, on the step-8 row's grid or off it.
+	REQUIRE( ui::controls::ParseClampedInt( "1000", 320, 7680, &n ) );
+	REQUIRE( n == 1000 );
+	REQUIRE( ui::controls::ParseClampedInt( "1003", 320, 7680, &n ) );
+	REQUIRE( n == 1003 );
+	REQUIRE( ui::controls::ParseClampedInt( "1005", 320, 7680, &n ) );
+	REQUIRE( n == 1005 );
+
+	// 144 on the step-10 fps row means 144.
+	REQUIRE( ui::controls::ParseClampedInt( "144", 0, 480, &n ) );
+	REQUIRE( n == 144 );
+
+	// Out of range: clamped to the end.
+	REQUIRE( ui::controls::ParseClampedInt( "99999", 320, 7680, &n ) );
+	REQUIRE( n == 7680 );
+	REQUIRE( ui::controls::ParseClampedInt( "0", 320, 7680, &n ) );
+	REQUIRE( n == 320 );
+	REQUIRE( ui::controls::ParseClampedInt( "-50", 320, 7680, &n ) );
+	REQUIRE( n == 320 );
+
+	// Surrounding whitespace is tolerated; a sign is a sign.
+	REQUIRE( ui::controls::ParseClampedInt( "  1600 ", 320, 7680, &n ) );
+	REQUIRE( n == 1600 );
+	REQUIRE( ui::controls::ParseClampedInt( "+144", 24, 500, &n ) );
+	REQUIRE( n == 144 );
+
+	// Not a whole number: refused, and the output is untouched -- that is
+	// what "cancel with the old value" is built on.
+	n = 4242;
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "abc",    320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "",       320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "   ",    320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "12.5",   320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "1e3",    320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "1600px", 320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( "99999999999999999999", 320, 7680, &n ) );
+	REQUIRE_FALSE( ui::controls::ParseClampedInt( nullptr,  320, 7680, &n ) );
+	REQUIRE( n == 4242 );
+}
+
+// The drawn half. The edit field is a real ImGui InputText swapped into the
+// value column, so the thing to check headlessly is that opening it,
+// committing it and cancelling it all leave ImGui's stacks where they were,
+// that the field's width is the one measurement the row split against, and
+// that a click on the number is what opens it.
+TEST_CASE( "atoms: a stepper's typed entry opens on the number and keeps the stacks balanced",
+           "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+
+	const float flTop = 300.0f;
+	int nValue = 1280;
+	bool bEditing = false;
+
+	// The row's split, exactly as the shell does it: the value's measured
+	// width, right-bound one gutter before the stepper group.
+	auto Split = [&]( const ui::RowCtx &row, float flW )
+	{
+		ImRect rcLabel, rcValue;
+		row.SplitLabelZone( flW, row.Place( ui::tok::kStepperW ).Min.x, &rcLabel, &rcValue );
+		return rcValue;
+	};
+	auto Draw = [&]( const ui::RowCtx &row )
+	{
+		const float flW = bEditing
+			? ui::controls::StepperEditWidthPx( "px" )
+			: ui::MeasureText( ui::TypeRole::Value, "1280 px" ).x;
+		ui::controls::StepperEdit edit;
+		edit.rcValue   = Split( row, flW );
+		edit.pbEditing = &bEditing;
+		edit.pszUnit   = "px";
+		return ui::controls::Stepper( row, "st", &nValue, 320, 7680, 8, &edit );
+	};
+
+	// Frame 0: idle. Where is the number?
+	h.BeginFrame();
+	const ImRect rcNumber = Split( MakeRow( flTop ), ui::MeasureText( ui::TypeRole::Value, "1280 px" ).x );
+	Draw( MakeRow( flTop ) );
+	h.EndFrame();
+	REQUIRE( rcNumber.GetWidth() > 0.0f );
+
+	// The field is wider than the number, and carries the unit outside it.
+	REQUIRE( ui::controls::StepperEditWidthPx( "px" ) > ui::controls::StepperEditWidthPx( nullptr ) );
+	REQUIRE( ui::controls::StepperEditWidthPx( nullptr ) > ui::MeasureText( ui::TypeRole::Value, "7680" ).x );
+
+	// Click on the number: hover, press, release.
+	h.MoveMouse( rcNumber.GetCenter() );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	REQUIRE( bEditing );
+
+	// Editing frames: the InputText is live. Stacks must balance across it.
+	{
+		h.BeginFrame();
+		ImGuiContext &g = *ImGui::GetCurrentContext();
+		const int nStyleVars = g.StyleVarStack.Size;
+		const int nColors    = g.ColorStack.Size;
+		const int nIds       = ImGui::GetCurrentWindow()->IDStack.Size;
+		const int nItemFlags = g.ItemFlagsStack.Size;
+		REQUIRE_FALSE( Draw( MakeRow( flTop ) ) );
+		REQUIRE( g.StyleVarStack.Size == nStyleVars );
+		REQUIRE( g.ColorStack.Size == nColors );
+		REQUIRE( ImGui::GetCurrentWindow()->IDStack.Size == nIds );
+		REQUIRE( g.ItemFlagsStack.Size == nItemFlags );
+		h.EndFrame();
+	}
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	REQUIRE( bEditing );
+	REQUIRE( ImGui::IsAnyItemActive() );
+
+	// A key press, twice. ImGui routes InputText's Esc through Shortcut(),
+	// and a shortcut route requested on frame N is granted on frame N+1
+	// (SetShortcutRouting: RoutingNext -> RoutingCurr at NewFrame), so the
+	// very first Esc after a field opens is a routing request, not a
+	// cancel. The product never notices -- the shell's own Esc handler
+	// drops the editing bit the same frame -- but this harness has no
+	// shell, so it presses twice: the second press lands with the route
+	// held. Returns whether any frame reported a commit.
+	auto Press = [&]( ImGuiKey eKey )
+	{
+		bool bAny = false;
+		for ( int i = 0; i < 2; ++i )
+		{
+			ImGui::GetIO().AddKeyEvent( eKey, true );
+			h.BeginFrame(); bAny |= Draw( MakeRow( flTop ) ); h.EndFrame();
+			ImGui::GetIO().AddKeyEvent( eKey, false );
+			h.BeginFrame(); bAny |= Draw( MakeRow( flTop ) ); h.EndFrame();
+		}
+		return bAny;
+	};
+
+	// Esc: ImGui reverts and deactivates; the atom drops the bit and the
+	// value is untouched.
+	REQUIRE_FALSE( Press( ImGuiKey_Escape ) );
+	REQUIRE_FALSE( bEditing );
+	REQUIRE( nValue == 1280 );
+
+	// Open again, type a replacement (AutoSelectAll: the typed text replaces
+	// the pre-filled number), Enter commits through the parse/clamp.
+	bEditing = true;
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	REQUIRE( ImGui::IsAnyItemActive() );
+	for ( char c : std::string( "1603" ) )
+		ImGui::GetIO().AddInputCharacter( (unsigned int)c );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	REQUIRE( Press( ImGuiKey_Enter ) );
+	REQUIRE_FALSE( bEditing );
+	REQUIRE( nValue == 1603 );   // exactly as typed -- off the step-8 grid, on purpose
+
+	// Buttons still work alongside the field: no edit in flight, so "+"
+	// steps as it always has.
+	const ImRect rcPlus = ImRect(
+		MakeRow( flTop ).Place( ui::tok::kStepperW ).Max.x - ui::Px( ui::tok::kStepperGlyphW ),
+		MakeRow( flTop ).Place( ui::tok::kStepperW ).Min.y,
+		MakeRow( flTop ).Place( ui::tok::kStepperW ).Max.x,
+		MakeRow( flTop ).Place( ui::tok::kStepperW ).Max.y );
+	h.MoveMouse( rcPlus.GetCenter() );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); Draw( MakeRow( flTop ) ); h.EndFrame();
+	REQUIRE( nValue == 1611 );
+	REQUIRE_FALSE( bEditing );
+}
+
+// =========================================================================
 //  OKLCH round trip -- the Colour override composite's binding
 // =========================================================================
 TEST_CASE( "palette: sRGB survives a round trip through OKLCH", "[overlay_atoms]" )

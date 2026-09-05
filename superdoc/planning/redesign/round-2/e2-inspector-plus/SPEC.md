@@ -626,6 +626,42 @@ B draws it (`<span class="val">Unlimited</span><span class="step">− +</span>`)
 This replaces the first version's 96-wide bordered box, which was E2's own invention and
 did not match any control in either direction.
 
+> **Amended 2026-09-05 (request #14): the number is editable.** The user: *"Rework
+> spinners (like for custom resolution), so the user can enter custom values, instead of
+> having to keep pressing on the buttons."* A 320..7680 range at step 8 is hundreds of
+> presses. So the value in the value column is also a **click target**, and `Enter` on the
+> focused row is *begin entry* (§8.2's third verb, the same as Text). Either swaps the
+> number for §3.6's inline input — literally the same one: `EditField()` in `Controls.cpp`
+> is the single editor both Text and Stepper draw, so caret, fill, bottom edge, `Enter`
+> commits, `Esc` reverts, outside click commits are one rule. The field opens with the
+> number **pre-selected**, so typing replaces; the unit (`px`, `Hz`) stays a label
+> **outside** the field, so the user types only the number. The field sits in the value
+> column at the control's `--H` height — the row does not grow and the label does not
+> move; the column is split to the field's width (`controls::StepperEditWidthPx()`, the
+> one measurement the atom lays out against). `−`/`+` and `←→` are unchanged.
+>
+> **What a typed value becomes** (`controls::ParseClampedInt()`, pure and tested): a whole
+> number, else the edit is cancelled and the old value stands (`abc`, `12.5`, empty);
+> then clamped to `Range()` (99999 → 7680, 0 → 320); and that is the value — **it is not
+> snapped to `Step()`** (1003 stays 1003, 144 on the step-10 fps row stays 144).
+> *Why:* a Stepper's step is the **increment** `−`/`+` and `←→` move by, not a grid of
+> valid values. `Registry.cpp`'s `Parameter::Step()` already refuses to snap a Stepper for
+> the drag path — "a Stepper anchored somewhere off its own grid is a documented, wanted
+> state" — and D13.3's off-grid `fps_limit` of 144 (loads, displays, works) is the proof.
+> Typed entry exists precisely so a user can reach a value the buttons cannot; snapping it
+> would hand the buttons' limitation straight back. The domain setter behind the binding
+> keeps its own validity rules (`SetFpsLimit`'s floor, `SetCustomWidth`'s clamp), exactly
+> as for every other write path. The value commits through the same `Binding().Set()` the
+> buttons use, so persistence, repaint and a derived row (`display.resolution.width`'s
+> aspect lock) cannot tell typing from stepping. Editing state is Text's own
+> `s_sEditingText`, keyed by row id, so `Esc`, the keyboard guard and `ResetTransient()`
+> already treat a Stepper mid-edit as a field.
+>
+> Hosts: the sheet row, an expanded param row and the Inspector's param rows all split a
+> value column, so all three offer it. The **command palette does not** — its adjust-in-place
+> is `←→` on a value *readout* with no atom drawn; `Enter` there jumps to the row, where
+> `Enter` again begins entry.
+
 ### 3.6 Text — free text
 
 B's text field is the current value in Mono 500 16 followed by a `✎` glyph, `--H` hit

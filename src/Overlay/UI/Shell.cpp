@@ -1997,6 +1997,51 @@ namespace gamescope::ui::shell
 			return s;
 		}
 
+		// Request #14 (2026-09-05): a Stepper's number is being TYPED into.
+		// The same one bit of state Text uses (s_sEditingText), keyed the same
+		// way, so Esc, the keyboard guard and ResetTransient() already treat
+		// a Stepper mid-edit exactly like a Text mid-edit without a second
+		// variable to keep in step.
+		template <typename TDecl>
+		bool IsTypingInto( const TDecl &decl )
+		{
+			return decl.GetKind() == Kind::Stepper && s_sEditingText == decl.Id();
+		}
+
+		// The value column, for the three row painters (sheet row, inline
+		// param, Inspector param): ONE split and ONE value label, so the
+		// three cannot lay the column out differently. Returns the two rects
+		// the split produced; the caller draws its own title into *prcLabel
+		// (its colour depends on selection, which only the caller knows) and
+		// hands *prcValue to DrawSharedControl() so a Stepper can make the
+		// number a target.
+		//
+		// While a Stepper is being typed into, the column is the atom's: the
+		// split is sized to the FIELD (controls::StepperEditWidthPx, the
+		// same measurement the atom lays out against) and no label is drawn,
+		// so the field replaces the number in place and the row's height
+		// and label never move.
+		float ValueAnchorPx( Kind eKind, const RowCtx &row );   // defined with the row painters below
+
+		template <typename TDecl>
+		void SplitValueColumn( const TDecl &decl, const std::string &sValue, const RowCtx &row,
+		                       ImRect *prcLabel, ImRect *prcValue )
+		{
+			const bool bTyping = IsTypingInto( decl );
+			float flValueW = 0.0f;
+			if ( bTyping )
+				flValueW = controls::StepperEditWidthPx( decl.Unit().c_str() );
+			else if ( decl.UsesValue() && !sValue.empty() )
+				flValueW = MeasureText( TypeRole::Value, sValue.c_str() ).x;
+
+			row.SplitLabelZone( flValueW, ValueAnchorPx( decl.GetKind(), row ), prcLabel, prcValue );
+
+			if ( !bTyping && flValueW > 0.0f )
+				Label( { prcValue->Min.x, prcValue->Min.y, prcValue->Max.x, prcValue->Max.y },
+				       TypeRole::Value, Col( Role::TextPrimary ),
+				       sValue.c_str(), TextAlign::Right );
+		}
+
 		// The four kinds an Entry and a Parameter both have. Entry-only kinds
 		// (Action, Facts, Meter, Composite) stay in DrawEntryRow, because a
 		// Parameter cannot be one and the type system should keep saying so.
@@ -2007,7 +2052,8 @@ namespace gamescope::ui::shell
 		// (Controls.h). A caller cannot declare an int slider and bind a float.
 		template <typename TDecl>
 		bool DrawSharedControl( const TDecl &decl, const RowCtx &row, const char *pszId,
-		                        const std::string &sPopupKey, Region eRegion, int nBankChip = -1 )
+		                        const std::string &sPopupKey, Region eRegion, int nBankChip = -1,
+		                        const ImRect *prcValue = nullptr )
 		{
 			if ( !decl.Binding().IsBound() )
 				return false;
@@ -2054,12 +2100,30 @@ namespace gamescope::ui::shell
 				{
 					int n = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
 					const int nStep = decl.StepSize() > 0.0f ? (int)decl.StepSize() : 1;
-					if ( controls::Stepper( row, pszId, &n, (int)decl.Lo(), (int)decl.Hi(), nStep ) )
+					// Typed entry (request #14) rides on Text's one bit of
+					// editing state, keyed identically, and a typed value
+					// commits through the SAME Binding().Set() the buttons
+					// use -- so persistence, force_repaint and a derived
+					// row (display.resolution.width's aspect lock) cannot
+					// tell the two apart. Only a host that split a value
+					// column can offer it; the palette has none.
+					bool bEditing = ( s_sEditingText == sPopupKey );
+					controls::StepperEdit edit;
+					edit.rcValue   = prcValue ? *prcValue : ImRect();
+					edit.pbEditing = &bEditing;
+					edit.pszUnit   = decl.Unit().c_str();
+					bool bChanged = false;
+					if ( controls::Stepper( row, pszId, &n, (int)decl.Lo(), (int)decl.Hi(), nStep,
+						prcValue ? &edit : nullptr ) )
 					{
 						decl.Binding().Set( Value{ n } );
-						return true;
+						bChanged = true;
 					}
-					return false;
+					if ( bEditing )
+						s_sEditingText = sPopupKey;
+					else if ( s_sEditingText == sPopupKey )
+						s_sEditingText.clear();
+					return bChanged;
 				}
 				case Kind::Choice:
 				{
@@ -2632,18 +2696,12 @@ namespace gamescope::ui::shell
 				sValue = FormatDeclValue( entry );
 
 			ImRect rcLabel, rcValue;
-			const float flValueW = entry.UsesValue() && !sValue.empty()
-				? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-			row.SplitLabelZone( flValueW, ValueAnchorPx( entry.GetKind(), row ), &rcLabel, &rcValue );
+			SplitValueColumn( entry, sValue, row, &rcLabel, &rcValue );
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 			       TypeRole::Label,
 			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 			       entry.Title().c_str() );
-			if ( flValueW > 0.0f )
-				Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
-				       TypeRole::Value, Col( Role::TextPrimary ),
-				       sValue.c_str(), TextAlign::Right );
 
 			// The control. Every atom is right-bound by construction --
 			// RowCtx has no other kind of allocator (see Row.h).
@@ -2680,7 +2738,8 @@ namespace gamescope::ui::shell
 						( bAffordance
 							? ( s_eFocusRegion == Region::Sheet && bSelected )
 							: ( s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 ) )
-						? s_nBankChip : -1 );
+						? s_nBankChip : -1,
+						&rcValue );
 					break;
 				case Kind::Action:
 				{
@@ -2825,22 +2884,15 @@ namespace gamescope::ui::shell
 				const ScopedDim dim( bDisabled );
 
 				ImRect rcLabel, rcValue;
-				const std::string sValue = FormatDeclValue( param );
-				const float flValueW = param.UsesValue() && !sValue.empty()
-					? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-				row.SplitLabelZone( flValueW, ValueAnchorPx( param.GetKind(), row ), &rcLabel, &rcValue );
+				SplitValueColumn( param, FormatDeclValue( param ), row, &rcLabel, &rcValue );
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
-				if ( flValueW > 0.0f )
-					Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
-					       TypeRole::Value, Col( Role::TextPrimary ),
-					       sValue.c_str(), TextAlign::Right );
 
 				if ( bDisabled )
 					ImGui::BeginDisabled();
 				DrawSharedControl( param, row, "ictl", param.Id(), Region::Sheet,
-					bFocused ? s_nBankChip : -1 );
+					bFocused ? s_nBankChip : -1, &rcValue );
 				if ( bDisabled )
 					ImGui::EndDisabled();
 
@@ -3634,17 +3686,10 @@ namespace gamescope::ui::shell
 				const ScopedDim dimParam( bParamDisabled );
 
 				ImRect rcLabel, rcValue;
-				const std::string sValue = FormatDeclValue( param );
-				const float flValueW = param.UsesValue() && !sValue.empty()
-					? MeasureText( TypeRole::Value, sValue.c_str() ).x : 0.0f;
-				row.SplitLabelZone( flValueW, ValueAnchorPx( param.GetKind(), row ), &rcLabel, &rcValue );
+				SplitValueColumn( param, FormatDeclValue( param ), row, &rcLabel, &rcValue );
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
-				if ( flValueW > 0.0f )
-					Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
-					       TypeRole::Value, Col( Role::TextPrimary ),
-					       sValue.c_str(), TextAlign::Right );
 
 				ImGui::PushID( (int)i + 1000 );
 				if ( bParamDisabled )
@@ -3654,7 +3699,8 @@ namespace gamescope::ui::shell
 				// two are literally one code path.
 				DrawSharedControl( param, row, "pctl", param.Id(), Region::Inspector,
 					( s_eFocusRegion == Region::Inspector &&
-					  s_nInspectorFocus == (int)i + 1 ) ? s_nBankChip : -1 );
+					  s_nInspectorFocus == (int)i + 1 ) ? s_nBankChip : -1,
+					&rcValue );
 				if ( bParamDisabled )
 					ImGui::EndDisabled();
 				ImGui::PopID();
@@ -5642,8 +5688,11 @@ namespace gamescope::ui::shell
 							s_nPopupFocus = -1;
 						}
 					}
-					else if ( eKind == Kind::Text )
+					else if ( eKind == Kind::Text || eKind == Kind::Stepper )
 					{
+						// A Stepper begins typed entry here too (request
+						// #14): the same bit, the same key, so the atom
+						// opens its field on the next frame.
 						s_sEditingText = bOwnRow ? pIn->Id() : pParam->Id();
 					}
 					else if ( bOwnRow && eKind == Kind::Action )
@@ -5750,7 +5799,7 @@ namespace gamescope::ui::shell
 						if ( const bool *p = std::get_if<bool>( &v ) )
 							param.Binding().Set( Value{ !*p } );
 					}
-					else if ( param.GetKind() == Kind::Text )
+					else if ( param.GetKind() == Kind::Text || param.GetKind() == Kind::Stepper )
 					{
 						s_sEditingText = param.Id();
 					}
@@ -5805,8 +5854,10 @@ namespace gamescope::ui::shell
 				// from a click, so a text row was pointer-only -- and a
 				// Choice that had downgraded to a dropdown could not be
 				// opened at all without one.
-				else if ( pSel->GetKind() == Kind::Text )
+				else if ( pSel->GetKind() == Kind::Text || pSel->GetKind() == Kind::Stepper )
 				{
+					// A Stepper's Enter is "begin entry" as well (request
+					// #14): the number becomes a field, pre-selected.
 					s_sEditingText = pSel->Id();
 				}
 				else if ( pSel->GetKind() == Kind::Choice && DrawsAsDropdown( pSel->Id() ) )

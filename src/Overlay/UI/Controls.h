@@ -157,8 +157,54 @@ namespace gamescope::ui
 		// ---- SPEC §3.5 -- exact or unbounded ------------------------------
 		// B's borderless "- +". Carries no number; the number is in the value
 		// column, which the row draws.
+		//
+		// TYPED ENTRY (request #14, 2026-09-05). The number is also
+		// EDITABLE: a click on it, or Enter on the focused row, swaps in the
+		// same inline input Text() uses (one editor -- see EditField in
+		// Controls.cpp), pre-selected so typing replaces. Enter or an outside
+		// click commits, Esc reverts. The user's words: *"so the user can
+		// enter custom values, instead of having to keep pressing on the
+		// buttons"* -- a 320..7680 range at step 8 is hundreds of presses.
+		//
+		// The row owns the value column, so the row hands the atom the value
+		// rect it split (SplitLabelZone's second output) and its unit, and
+		// keeps the one bit of editing state exactly as it does for Text.
+		// Pass nullptr and the stepper is buttons-only, as before.
+		struct StepperEdit
+		{
+			ImRect      rcValue;              // the value column the row split
+			bool       *pbEditing = nullptr;  // the caller's one bit of state
+			const char *pszUnit   = nullptr;  // drawn OUTSIDE the field: the user types the number only
+		};
 		bool Stepper( const RowCtx &row, const char *pszId, int *pnValue,
-		              int nMin, int nMax, int nStep = 1 );
+		              int nMin, int nMax, int nStep = 1, const StepperEdit *pEdit = nullptr );
+
+		// The width the value column needs while a Stepper's number is being
+		// typed: the field plus the unit. ONE measurement, two consumers --
+		// the row's SplitLabelZone() asks it so the label ellipsizes
+		// correctly, and Stepper() lays the field out inside whatever rect
+		// that split produced. Same rule as MeasureCells().
+		float StepperEditWidthPx( const char *pszUnit );
+
+		// What a typed value becomes. Pure, so the tests can pin it:
+		// whole-number parse (surrounding whitespace allowed, nothing else)
+		// -> clamp to [nMin, nMax] -> that is the value. Returns false for
+		// anything that is not a whole number ("abc", "", "12.5") and leaves
+		// *pnOut alone -- the caller keeps the old value, which is what
+		// "cancel" means.
+		//
+		// NO SNAPPING TO Step(). Why: a Stepper's step is the increment the
+		// "-"/"+" buttons and the arrow keys move by, not a grid of valid
+		// values -- Registry.cpp's Parameter::Step() says so for the drag
+		// path ("a Stepper anchored somewhere off its own grid is a
+		// documented, wanted state", D13.3: an fps_limit of 144 on a step-10
+		// row loads, displays and works), and typed entry exists precisely
+		// so a user can reach a value the buttons cannot. Someone who types
+		// 144 means 144; someone who types 1603 for a width means 1603. The
+		// domain setter behind the binding still owns its own validity
+		// (SetFpsLimit's floor, SetCustomWidth's clamp), as it does for
+		// every other write path.
+		bool ParseClampedInt( const char *pszText, int nMin, int nMax, int *pnOut );
 
 		// ---- SPEC §3.2 / §3.3 -- mutually exclusive -----------------------
 		// One helper for both hosts. It MEASURES and auto-downgrades to a

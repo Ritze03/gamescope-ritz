@@ -15,7 +15,11 @@
 
 #include "convar.h"
 
+#include <algorithm>
+#include <cerrno>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace gamescope::ui
@@ -788,10 +792,105 @@ namespace gamescope::ui
 		}
 
 		// =================================================================
+		//  The one inline editor -- Text's edit state, and the Stepper's
+		// =================================================================
+		// SPEC §3.6's field: raised fill, 1px Accent bottom edge, Accent
+		// caret, Enter commits, Esc reverts, an outside click commits. When
+		// request #14 (2026-09-05) gave the Stepper typed entry, the choice
+		// was between calling this or writing a second InputText with its
+		// own commit rules -- and "what does blur do" is exactly the kind of
+		// question two copies answer differently within a month. So there is
+		// one editor; Text() and Stepper() both draw it, and the only things
+		// they decide are the rect, the flags and what to do with the text.
+		//
+		// Returns true on commit, with szBuf holding the text to commit.
+		// *pbEditing is cleared on EVERY exit, commit or cancel, so the
+		// caller's one bit of state can never outlive the field.
+		bool EditField( const ImRect &rc, char *szBuf, size_t nBuf, bool *pbEditing,
+		                ImGuiInputTextFlags nFlags, bool bError )
+		{
+			Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::SurfaceRaised ) );
+			Dl()->AddRectFilled( ImVec2( rc.Min.x, rc.Max.y - Hairline() ), rc.Max,
+				bError ? Col( Role::Danger ) : Col( Role::AccentBase ) );
+
+			ImGui::SetCursorScreenPos( ImVec2( rc.Min.x + Px( tok::kSelfPadX ), rc.Min.y ) );
+			ImGui::SetNextItemWidth( ImMax( rc.GetWidth() - Px( tok::kSelfPadX ) * 2.0f, 1.0f ) );
+			ImGui::PushStyleColor( ImGuiCol_FrameBg, IM_COL32_BLACK_TRANS );
+			ImGui::PushStyleColor( ImGuiCol_Text, Col( Role::TextPrimary ) );
+			if ( ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive() )
+				ImGui::SetKeyboardFocusHere();
+
+			bool bCommitted = false;
+			if ( ImGui::InputText( "##edit", szBuf, nBuf, nFlags | ImGuiInputTextFlags_EnterReturnsTrue ) )
+			{
+				bCommitted = true;
+				*pbEditing = false;
+			}
+			else if ( ImGui::IsItemDeactivated() )
+			{
+				// ImGui itself reverts the buffer on Esc; the shell's Esc
+				// handler also drops the caller's bit, so this branch is
+				// reached for an outside click, a Tab away, or an Esc the
+				// shell did not see first. Either way the field closes.
+				bCommitted = !ImGui::IsKeyPressed( ImGuiKey_Escape );
+				*pbEditing = false;
+			}
+			ImGui::PopStyleColor( 2 );
+			return bCommitted;
+		}
+
+		// =================================================================
 		//  Stepper -- SPEC §3.5
 		// =================================================================
+		// The typed field's width, in base units. Six digits of Mono Value
+		// text plus the caret: wide enough for every range a Stepper in the
+		// product declares (7680, 500, 480) with room to type past it, and
+		// the parse clamps whatever lands. A constant here, not in Tokens.h,
+		// because it is this atom's alone (Controls.h: "per-control widths
+		// are constants in Controls.cpp").
+		constexpr float kStepperEditW = 72.0f;
+
+		float StepperEditWidthPx( const char *pszUnit )
+		{
+			float flW = Px( kStepperEditW );
+			if ( pszUnit && *pszUnit )
+				flW += Px( tok::kS ) + MeasureText( TypeRole::Value, pszUnit ).x;
+			return flW;
+		}
+
+		bool ParseClampedInt( const char *pszText, int nMin, int nMax, int *pnOut )
+		{
+			if ( !pszText || !pnOut )
+				return false;
+			while ( *pszText == ' ' || *pszText == '\t' )
+				++pszText;
+			if ( !*pszText )
+				return false;
+
+			char *pEnd = nullptr;
+			errno = 0;
+			const long lParsed = strtol( pszText, &pEnd, 10 );
+			if ( pEnd == pszText || errno == ERANGE )
+				return false;
+			while ( *pEnd == ' ' || *pEnd == '\t' )
+				++pEnd;
+			// "12.5", "1e3", "1600px": not a whole number -> not a value.
+			// The field's CharsDecimal filter already keeps letters out; this
+			// is the rule for what gets past it, and for tests.
+			if ( *pEnd )
+				return false;
+
+			if ( nMin > nMax )
+				std::swap( nMin, nMax );
+			// Clamped to the range and nothing else -- deliberately NOT
+			// snapped to the step; see Controls.h for why (the step is the
+			// buttons' increment, not a validity grid).
+			*pnOut = (int)std::clamp( lParsed, (long)nMin, (long)nMax );
+			return true;
+		}
+
 		bool Stepper( const RowCtx &row, const char *pszId, int *pnValue,
-		              int nMin, int nMax, int nStep )
+		              int nMin, int nMax, int nStep, const StepperEdit *pEdit )
 		{
 			// B's borderless "- +": two 18-wide glyph hit boxes, 8 apart. The
 			// number is NOT here -- it lives in the value column, which is
@@ -801,6 +900,64 @@ namespace gamescope::ui
 
 			ImGui::PushID( pszId );
 			bool bChanged = false;
+
+			// ---- typed entry (request #14) -------------------------------
+			// The value column belongs to the row, which drew the number
+			// there before calling this; the atom is handed that rect and
+			// makes it a target. Vertically it takes the control's own hit
+			// box, not the row's full height, so the field is exactly as
+			// tall as Text()'s and the row does not grow.
+			if ( pEdit && pEdit->pbEditing )
+			{
+				const ImRect rcVal( pEdit->rcValue.Min.x, rcGroup.Min.y,
+				                    pEdit->rcValue.Max.x, rcGroup.Max.y );
+				const bool bUnit = pEdit->pszUnit && *pEdit->pszUnit;
+
+				if ( *pEdit->pbEditing )
+				{
+					// [ field ][ gap ][ unit ]. The unit stays a label
+					// outside the field so the user types only the number;
+					// the field takes whatever the split left after it.
+					const float flUnitW = bUnit
+						? MeasureText( TypeRole::Value, pEdit->pszUnit ).x + Px( tok::kS ) : 0.0f;
+					const ImRect rcField( rcVal.Min.x, rcVal.Min.y,
+					                      ImMax( rcVal.Min.x, rcVal.Max.x - flUnitW ), rcVal.Max.y );
+
+					char szBuf[ 32 ];
+					snprintf( szBuf, sizeof( szBuf ), "%d", *pnValue );
+
+					// Submitted BEFORE the buttons: a click on "-" while the
+					// field is open blurs the field (commit) and then steps,
+					// in that order, within this one frame.
+					if ( EditField( rcField, szBuf, sizeof( szBuf ), pEdit->pbEditing,
+						ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_CharsDecimal, false ) )
+					{
+						int nTyped = *pnValue;
+						if ( ParseClampedInt( szBuf, nMin, nMax, &nTyped ) && nTyped != *pnValue )
+						{
+							*pnValue = nTyped;
+							bChanged = true;
+						}
+					}
+					if ( bUnit )
+						DrawText( ImRect( rcField.Max.x, rcVal.Min.y, rcVal.Max.x, rcVal.Max.y ),
+							TypeRole::Value, Col( Role::TextPrimary ), pEdit->pszUnit, TextAlign::Right );
+				}
+				else if ( rcVal.GetWidth() > 0.0f )
+				{
+					// Closed: the number is a click target with Text()'s
+					// closed-state grammar -- hairline on hover, nothing at
+					// rest. The number itself was already drawn by the row.
+					const Atom aVal = Begin( rcVal, "val" );
+					if ( aVal && aVal.bPressed )
+						*pEdit->pbEditing = true;
+					if ( aVal.bHovered )
+					{
+						Dl()->AddRectFilled( rcVal.Min, rcVal.Max, palette::White( 0.06f ) );
+						Boundary( rcVal, Col( Role::LineControl ) );
+					}
+				}
+			}
 
 			const ImRect rcMinus( rcGroup.Min.x, rcGroup.Min.y, rcGroup.Min.x + flGlyphW, rcGroup.Max.y );
 			const ImRect rcPlus ( rcGroup.Max.x - flGlyphW, rcGroup.Min.y, rcGroup.Max.x, rcGroup.Max.y );
@@ -968,38 +1125,16 @@ namespace gamescope::ui
 
 			if ( pbEditing && *pbEditing )
 			{
-				// A real input, swapped in: caret Accent, 1px Accent bottom
-				// edge, raised fill. Enter commits, Esc reverts, an outside
-				// click commits.
-				Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::SurfaceRaised ) );
-				Dl()->AddRectFilled( ImVec2( rc.Min.x, rc.Max.y - Hairline() ), rc.Max,
-					pszError ? Col( Role::Danger ) : Col( Role::AccentBase ) );
-
+				// A real input, swapped in -- EditField() above, shared with
+				// the Stepper's typed entry. Enter commits, Esc reverts, an
+				// outside click commits.
 				char szBuf[ 256 ];
 				snprintf( szBuf, sizeof( szBuf ), "%s", psValue->c_str() );
-
-				ImGui::SetCursorScreenPos( ImVec2( rc.Min.x + Px( tok::kSelfPadX ), rc.Min.y ) );
-				ImGui::SetNextItemWidth( rc.GetWidth() - Px( tok::kSelfPadX ) * 2.0f );
-				ImGui::PushStyleColor( ImGuiCol_FrameBg, IM_COL32_BLACK_TRANS );
-				ImGui::PushStyleColor( ImGuiCol_Text, Col( Role::TextPrimary ) );
-				if ( ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive() )
-					ImGui::SetKeyboardFocusHere();
-				if ( ImGui::InputText( "##edit", szBuf, sizeof( szBuf ), ImGuiInputTextFlags_EnterReturnsTrue ) )
+				if ( EditField( rc, szBuf, sizeof( szBuf ), pbEditing, 0, pszError != nullptr ) )
 				{
 					*psValue = szBuf;
-					*pbEditing = false;
 					bCommitted = true;
 				}
-				else if ( ImGui::IsItemDeactivated() )
-				{
-					if ( !ImGui::IsKeyPressed( ImGuiKey_Escape ) )
-					{
-						*psValue = szBuf;
-						bCommitted = true;
-					}
-					*pbEditing = false;
-				}
-				ImGui::PopStyleColor( 2 );
 			}
 			else
 			{

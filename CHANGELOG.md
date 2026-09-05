@@ -12,6 +12,9 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Type a value into any stepper**: click the number (or press Enter on the row), type,
+  and Enter to set it -- kept exactly as typed within the row's range, so a custom width,
+  refresh rate or FPS limit no longer takes hundreds of button presses.
 - **Rail icons for Crosshair and Resolution**: the two areas now show drawn glyphs in
   the rail, a reticle and a screen with a resize arrow, instead of the letters C and R.
 - **Resolution presets by aspect ratio**: Display > Resolution picks the shape first
