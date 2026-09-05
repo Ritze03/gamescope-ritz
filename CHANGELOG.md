@@ -23,8 +23,8 @@ The newest version below is the one this build reports.
 - **Shader effects always work**: Vibrancy, Shadow Control, Pre-Sharpen and Adaptive
   Brightness are now built into gamescope-ritz itself instead of loaded from a shader
   file on disk, so an old or missing file can no longer make a control do nothing.
-- **Screenshots no longer double-apply effects**: a `gamescopectl` screenshot now
-  shows the same picture as the screen when a shader effect is on.
+- **Screenshots match the screen**: a `gamescopectl screenshot` (types 3 and 4) now
+  applies the Shaders-area effects exactly once, the same as the presented frame.
 - **Saved effects apply at launch**: effects saved in your config are on from the
   first frame instead of the first time the Shaders area is opened.
 

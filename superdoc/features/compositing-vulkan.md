@@ -29,19 +29,24 @@ image ready for presentation.
   detail. Every path ends by binding all layers with `bind_all_layers()`
   (`src/rendervulkan.cpp:3949`), which also decides per-layer nearest-vs-linear
   sampling from `Layer_t::filter` and `isScreenSize()`.
-- Before any of that, two layer-0 pre-passes may run, in this order, each swapping its
-  output into `layers[0].tex` so the path chosen below consumes it unchanged: (1) if a
-  user's ReShade effect is active (`g_reshade_effect` non-empty), the base layer is run
-  through `g_reshadeManager`'s pipeline on the general queue with a CPU wait; (2) if any
-  bundled Shaders-area effect is on (`g_nativeEffects.AnyEnabled()`), the native
-  `SHADER_TYPE_EFFECTS_MEASURE` (one workgroup, Adaptive Brightness's luminance EMA into
-  the persistent 1×1 `g_output.effectsHistory`) and `SHADER_TYPE_EFFECTS_LAYER0`
-  (`cs_effects_layer0.comp`, per pixel) compute passes are recorded on the same command
-  buffer into the pooled `g_output.effectsOutput`, SDR/non-YCbCr only.
-  `FrameInfo_t::bBaseLayerEffectsApplied` guards both against running twice on one
-  frame's layer 0 (the pre-emptive-upscale texture, and the screenshot path's second
-  `vulkan_composite()` on the same struct). Ordering fact only — see
-  [reshade-effects.md](reshade-effects.md) and [shader-effects.md](shader-effects.md).
+- Before any of that, two layer-0 pre-passes may run, in this order, each substituting
+  its output for `layers[0].tex` in a *private copy* of the `FrameInfo_t` so the path
+  chosen below consumes it unchanged — `vulkan_composite()` takes a `const FrameInfo_t *`
+  and never writes the caller's struct: (1) if a user's ReShade effect is active
+  (`g_reshade_effect` non-empty), the base layer is run through `g_reshadeManager`'s
+  pipeline on the general queue with a CPU wait; (2) if any bundled Shaders-area effect
+  is on (`g_nativeEffects.AnyEnabled()`), the native `SHADER_TYPE_EFFECTS_MEASURE` (one
+  workgroup, Adaptive Brightness's luminance EMA into the persistent 1×1
+  `g_output.effectsHistory`) and `SHADER_TYPE_EFFECTS_LAYER0` (`cs_effects_layer0.comp`,
+  per pixel) compute passes are recorded on the same command buffer into the pooled
+  `g_output.effectsOutput`, SDR/non-YCbCr only. Both run on the ReShade output when a
+  user `.fx` is set. `FrameInfo_t::bBaseLayerEffectsApplied` — set only by steamcompmgr,
+  on a struct whose layer 0 is the pre-emptively upscaled texture — skips both, since
+  that texture was built by a `vulkan_composite()` that already ran them; every other
+  composite of a frame (the present one, DRM's copy, a `gamescopectl screenshot`
+  re-composite of the same struct) runs them fresh from the raw layer 0, exactly once
+  each. Ordering fact only — see [reshade-effects.md](reshade-effects.md) and
+  [shader-effects.md](shader-effects.md).
 - The composited result also gets an inline conversion/blit into an optional
   `pPipewireTexture` output texture in the same command buffer
   (`src/rendervulkan.cpp:4209`-`4255`) when PipeWire streaming is active, reusing the

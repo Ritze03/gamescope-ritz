@@ -2245,7 +2245,10 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 	// again here at (now) output resolution; see the flag's comment in
 	// rendervulkan.hpp for why re-running ReShade caused an unrecoverable
 	// black screen (per-frame full pipeline recompilation), and re-running
-	// the native pass would double-apply every effect.
+	// the native pass would double-apply every effect. This is the flag's
+	// ONLY writer: vulkan_composite() reads it and never touches the struct
+	// it is given, so the flag describes the texture this code put in layer
+	// 0 and nothing else.
 	if ( layer == &frameInfo->layers.get( 0 ) &&
 		 lastCommit->upscaledTexture &&
 		 lastCommit->upscaledTexture->pTexture == layer->tex )

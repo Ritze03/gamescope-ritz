@@ -329,10 +329,11 @@ struct FrameInfo_t
 	// the cost is paid only on the frames that actually need it.
 	bool bNeedsDestinationBlend = false;
 
-	// Issue #20 fix, generalised for the native effects pre-pass: set by
-	// steamcompmgr when layer 0's texture is the pre-upscaled, output-
-	// resolution texture that a prior, separate vulkan_composite() call
-	// this same frame produced -- every layer-0 effect (the native
+	// Issue #20 fix, generalised for the native effects pre-pass: "layer 0's
+	// texture already carries the layer-0 effects". Set by steamcompmgr
+	// (paint_window_commit) when layer 0 is the pre-upscaled, output-
+	// resolution texture that a prior, separate vulkan_composite() call this
+	// same frame produced -- every layer-0 effect (the native
 	// cs_effects_layer0 pre-pass and ReShade, if active) already ran on it
 	// there, pre-upscale, at source resolution, per the #11 design intent.
 	// Without this, vulkan_composite() would run them a *second* time on
@@ -341,8 +342,18 @@ struct FrameInfo_t
 	// with different buffer dimensions than the first call used -- since
 	// ReshadeEffectManager caches only one pipeline, the two calls' keys
 	// never match and every vulkan_composite() call tears down and fully
-	// recompiles the FX pipeline inline on this thread. See
-	// rendervulkan.cpp's vulkan_composite(). (Was bBaseLayerReshaded.)
+	// recompiles the FX pipeline inline on this thread.
+	//
+	// steamcompmgr is the ONLY writer. vulkan_composite() reads it and never
+	// sets it: it does not write the caller's struct at all (it works on a
+	// private copy once a pass has run), so a second composite of the same
+	// frame -- a gamescopectl screenshot, DRM's copy -- starts from the raw
+	// layer 0 and applies the passes exactly once, the same as the first.
+	// It used to be set here on the struct after the pass ran, as a "skip me
+	// next time" marker; that made the screenshot composite depend on the
+	// present composite's side effects and was measured live as the effects
+	// missing from the screenshot entirely. See rendervulkan.cpp's
+	// vulkan_composite(). (Was bBaseLayerReshaded.)
 	bool bBaseLayerEffectsApplied;
 
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];
@@ -553,7 +564,7 @@ extern NativeEffectsState_t g_nativeEffects;
 // !g_reshade_effect.empty(), or direct scanout would silently skip it.
 bool vulkan_native_effects_active();
 
-std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
+std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
 void vulkan_wait( uint64_t ulSeqNo, bool bReset );
 gamescope::Rc<CVulkanTexture> vulkan_get_last_output_image( bool partial, bool defer );
 gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace = k_EStreamColorspace_Unknown);

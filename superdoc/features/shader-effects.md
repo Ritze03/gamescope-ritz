@@ -47,7 +47,8 @@ cs_effects_measure ──► g_output.effectsHistory  (1×1, persistent; one 16�
    │                    ▲   reads last frame's value, writes this frame's)
    ▼                    │
 cs_effects_layer0  ──►  g_output.effectsOutput  (pooled, source res, 8×8 groups)
-   │  frameInfo->layers[0].tex = effectsOutput; bBaseLayerEffectsApplied = true
+   │  a private copy of the FrameInfo_t gets layers[0].tex = effectsOutput;
+   │  the caller's struct is never written
    ▼
 FSR / NIS / blur / blit as before
 ```
@@ -69,15 +70,52 @@ how the ReShade slot already worked, so every downstream path consumes it unchan
 `uploadConstants` / `dispatch` like EASU→RCAS does, so the barriers are inserted by
 `dispatch()` and nothing waits on the CPU.
 
-**Never twice per frame.** `vulkan_composite()` is called more than once on the *same*
-`FrameInfo_t`: the backend's `Present()` composites `paint_all()`'s frameInfo in place
-(SDL/Wayland/OpenVR pass the pointer through; DRM composites a copy), and
-`gamescopectl screenshot` then re-composites that struct into a mappable texture. Under
-the `.fx` this double-applied — measured live as gain² in a `gamescopectl` screenshot vs
-gain in `grim` of the same frame. Two gates now stop it: `bBaseLayerEffectsApplied`
-(renamed from `bBaseLayerReshaded`) is set on the frameInfo the moment either the native
-pass or ReShade runs, as well as by steamcompmgr for the pre-emptive-upscale texture; and
-the native pass also refuses when layer 0 already *is* `g_output.effectsOutput`.
+**Exactly once per composite — and the caller's struct is never written.**
+`vulkan_composite()` is called more than once on the *same* `FrameInfo_t`: the backend's
+`Present()` composites `paint_all()`'s frameInfo (SDL/Wayland/OpenVR pass the pointer
+through, `steamcompmgr.cpp` `paint_all()` → `Present()`; DRM composites a copy,
+`DRMBackend.cpp`'s `compositeFrameInfo`), and `gamescopectl screenshot` types 3 and 4
+(`full_composition`, `screen_buffer`) then composite that very struct again into a
+mappable texture (`steamcompmgr.cpp`'s screenshot block, right after `Present()`). Type 1
+and 2 captures go through `vulkan_screenshot()` instead, which runs no effect pass at all
+— see the follow-up note below.
+
+The rule is about the **texture** in layer 0, never about which call this is: *grade it
+unless it already carries the effects*. Two textures do — the pre-emptively upscaled one
+(`steamcompmgr.cpp` `paint_window_commit()` marks the struct it puts it in with
+`bBaseLayerEffectsApplied`; the passes ran at source resolution while building it) and
+the pooled `g_output.effectsOutput` itself (an identity check no caller's struct can
+trigger any more, kept because it is free). Everything else is raw and gets the pass. To
+make that hold, `vulkan_composite()` takes a `const FrameInfo_t *` and **never writes
+it**: once ReShade or the native pass has run, the function continues on a private copy
+of the struct whose layer 0 is the processed texture (`SubstituteLayer0` in
+`rendervulkan.cpp`), so the caller's layer 0 stays raw. Every composite of a frame then
+starts from the same raw source and runs the passes fresh — the present composite, DRM's
+copy, and a screenshot composite each apply them once, and the screenshot is pixel-
+identical to the presented frame (same source, same shaders, same uniforms). The cost is
+one extra sub-millisecond pass on a screenshot frame only. `steamcompmgr` is the flag's
+only writer.
+
+`Why not the flag-based version (2026-09-05, removed the same day):` the first native
+port set `bBaseLayerEffectsApplied` on the struct **after** the pass ran and swapped
+`layers[0].tex` for `effectsOutput` in place, so the second call would skip. That made
+every later composite depend on the *first* call's side effects — which struct it ran on
+(DRM's copy or `paint_all()`'s own), whether the flag travelled with the texture it
+described, and whether the pooled texture layer 0 now pointed at still held *this* frame.
+Measured live on the laptop: under the `.fx` (no flag) a `gamescopectl screenshot "<p>
+4"` showed the effects **twice** (gain²) against `grim`'s once; with the flag it showed
+them **not at all** (Vibrancy 3×: `(199,24,0)` = raw in the screenshot vs `(254,2,0)` on
+screen; Shadow Control 1.0: `(0,196,48)` vs `(0,225,112)`). A "skip me next time" marker
+on a shared, mutable struct is the wrong tool for "apply once": whether it is *right* is a
+question about another call's history. Do not reintroduce it — the const signature is
+there to make the in-place swap a compile error.
+
+**Follow-up (not done):** `vulkan_screenshot()` — screenshot types 1 (`base_plane_only`,
+the default, and the type Steam's own F12 uses via the X11 property) and 2
+(`all_real_layers`), plus the PipeWire capture — is a plain blit and has never run either
+effect pass, so those captures show the raw game. Making it call the same pre-pass helper
+would give every capture path the presented look; it is a separate decision because it
+also changes what a PipeWire stream carries.
 
 ## Encoded space, on purpose
 
@@ -258,12 +296,17 @@ history has been tracking the scene the whole time. When *no* effect is on nothi
 and the history simply holds its last value.
 
 **`dt`** is host-side: `vulkan_composite()` keeps the `get_time_in_nanos()` of the previous
-effects dispatch (a function-local static; the block runs once per presented frame, since
-the two double-apply gates skip the `gamescopectl screenshot` re-composite) and passes
-the difference in seconds as `u_abDt`, **clamped to 0.25 s**. `Why the clamp:` a hitch, a
-pause, or the first frame after a long idle would otherwise slam the EMA to the new
-measurement in one step; a quarter-second nudge keeps the transition smooth. The first
-dispatch passes `0`.
+effects dispatch (a function-local static) and passes the difference in seconds as
+`u_abDt`, **clamped to 0.25 s**. `Why wall time and not a per-frame constant:` the pass
+runs once per *composite*, and a `gamescopectl screenshot` frame composites twice (see
+"Exactly once per composite" above), so the measure dispatch runs again a fraction of a
+millisecond after the presented one. With wall-time `dt` that second step is worth exactly
+that fraction, and the next frame's step is shorter by the same amount — the EMA
+integrates elapsed time, so adaptation over any interval is unchanged and the screenshot's
+Adaptive Brightness gain is within a sub-millisecond step of the screen's. `Why the
+clamp:` a hitch, a pause, or the first frame after a long idle would otherwise slam the
+EMA to the new measurement in one step; a quarter-second nudge keeps the transition
+smooth. The first dispatch passes `0`.
 
 #### The history texture — persistence as a contract, not luck
 

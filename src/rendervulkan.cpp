@@ -4303,8 +4303,51 @@ bool vulkan_native_effects_active()
 	return g_nativeEffects.AnyEnabled();
 }
 
-std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pPipewireTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride, bool increment, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer )
+std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrameInfo, gamescope::Rc<CVulkanTexture> pPipewireTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride, bool increment, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer )
 {
+	// THE CALLER'S FrameInfo_t IS NEVER WRITTEN. The two layer-0 effect
+	// passes below (ReShade, then the native pre-pass) hand the rest of this
+	// function a processed texture in place of layer 0 -- but through a
+	// private copy of the struct, never by swapping the caller's layer 0.
+	//
+	// Why: this function runs more than once on one frame's struct. The
+	// backend's Present() composites paint_all()'s frameInfo (SDL/Wayland/
+	// OpenVR pass the pointer straight through; DRM composites a copy), and
+	// `gamescopectl screenshot` types 3 and 4 then composite that very struct
+	// again into a mappable texture (steamcompmgr.cpp's screenshot block).
+	// The previous design swapped layer 0 for the effects output in place and
+	// set bBaseLayerEffectsApplied on the struct so the second call would skip
+	// the pass -- which made every later composite depend on the FIRST
+	// call's side effects: which struct it ran on (DRM's copy vs paint_all's
+	// own), whether the flag travelled with the layer it described, and
+	// whether the pooled texture layer 0 now pointed at still held THIS
+	// frame. Measured live: the screenshot showed the effects twice under
+	// the .fx (no flag) and not at all after the flag was added, while the
+	// screen showed them once. With no writes to the caller's struct, every
+	// composite starts from the same raw layer 0 and runs the passes fresh,
+	// so each one applies them exactly once and a screenshot composite is
+	// pixel-identical to the presented one (same source, same shaders, same
+	// uniforms). The pass is a fraction of a millisecond of compute, and a
+	// screenshot frame is the only time it runs twice.
+	//
+	// The one remaining input from the caller is bBaseLayerEffectsApplied
+	// (rendervulkan.hpp), which steamcompmgr sets on a struct whose layer 0
+	// IS the pre-emptively upscaled texture -- a texture the passes already
+	// ran on, at source resolution, when it was built. That is a fact about
+	// the texture in the struct, set by the code that put it there; nothing
+	// here sets it.
+	const FrameInfo_t *frameInfo = pCallerFrameInfo;
+	FrameInfo_t effectsFrameInfo{};
+	auto SubstituteLayer0 = [&]( gamescope::Rc<CVulkanTexture> pTex )
+	{
+		if ( frameInfo != &effectsFrameInfo )
+		{
+			effectsFrameInfo = *pCallerFrameInfo;
+			frameInfo = &effectsFrameInfo;
+		}
+		effectsFrameInfo.layers.get( 0 ).tex = std::move( pTex );
+	};
+
 	EOTF outputTF = frameInfo->outputEncodingEOTF;
 	if (!frameInfo->applyOutputColorMgmt)
 		outputTF = EOTF_Count; //Disable blending stuff.
@@ -4347,16 +4390,17 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 
 			if (pipeline != nullptr)
 			{
-				uint64_t seq = pipeline->execute(frameInfo->layers.get( 0 ).tex, &frameInfo->layers.get( 0 ).tex);
+				// The effect's output replaces layer 0 for the rest of THIS
+				// call only (see the head of the function): the caller's
+				// struct keeps the raw texture, so a later composite of the
+				// same frame runs the effect on the raw texture again, not on
+				// this output (which was the gain^2 a gamescopectl screenshot
+				// showed under the in-place swap). Same-size input, same key,
+				// so the manager's cached pipeline is reused, not rebuilt.
+				gamescope::Rc<CVulkanTexture> pReshadeOutput = frameInfo->layers.get( 0 ).tex;
+				uint64_t seq = pipeline->execute(frameInfo->layers.get( 0 ).tex, &pReshadeOutput);
 				g_device.wait(seq);
-				// Layer 0 now IS the effect output. Mark the struct so a
-				// second vulkan_composite() on this same FrameInfo_t this
-				// frame -- the screenshot path re-compositing paint_all()'s
-				// frameInfo after Present() already did -- does not run the
-				// effect on its own output (measured live as gain^2 in a
-				// gamescopectl screenshot). Same gate the native pre-pass
-				// below relies on.
-				frameInfo->bBaseLayerEffectsApplied = true;
+				SubstituteLayer0( std::move( pReshadeOutput ) );
 			}
 		}
 	}
@@ -4400,34 +4444,30 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 	// degamma'd by the time it has a colour -- these effects were authored
 	// for encoded 0..1 values (see the shader's header).
 	//
-	// Gates: the same per-frame flag that stops ReShade re-running on a
-	// pre-upscaled texture; SDR only (DECISIONS.md #15 -- HDR/scRGB/passthru
-	// layers are skipped, and the panel greys the switches via
+	// Gates: SDR only (DECISIONS.md #15 -- HDR/scRGB/passthru layers are
+	// skipped, and the panel greys the switches via
 	// g_eLastBaseLayerColorspace); no YCbCr (the shader samples one RGB
-	// plane); and at least one effect on.
+	// plane); at least one effect on; and layer 0 is not a texture the pass
+	// already ran on.
 	//
-	// NEVER TWICE ON ONE FRAME'S LAYER 0. Two independent gates, because
-	// this function is called more than once per frame with the SAME
-	// FrameInfo_t: the backend's Present() composites paint_all()'s
-	// frameInfo in place (SDL/Wayland/OpenVR pass the pointer straight
-	// through), and `gamescopectl screenshot` then re-composites that very
-	// struct into a mappable texture (steamcompmgr.cpp's screenshot block).
-	// Layer 0's tex was swapped for the effects output by the first call,
-	// so the second would grade the graded image -- measured live as
-	// gain^2 in a gamescopectl screenshot vs gain in grim of the same
-	// frame under the ReShade path, which only had the pre-upscale flag.
-	// Gate 1: bBaseLayerEffectsApplied is set on the frameInfo itself the
-	// moment the pass runs (and by steamcompmgr for the pre-emptive-upscale
-	// texture), so any later call on this struct skips. Gate 2: if layer 0
-	// already IS the pooled effects output, it has been processed whatever
-	// the flag says -- belt and braces against a caller that copies the
-	// struct before the flag is set.
+	// EXACTLY ONCE PER COMPOSITE. The rule is about the TEXTURE in layer 0,
+	// never about which call this is: grade it unless it already carries the
+	// effects. Two textures do -- the pre-emptively upscaled one, which
+	// steamcompmgr marks with bBaseLayerEffectsApplied on the struct it puts
+	// it in (the passes ran at source resolution while building it, and a
+	// second run here would be post-upscale and visibly doubled), and the
+	// pooled effects output itself, which no caller's struct can hold now
+	// that this function never writes one (see the head of the function),
+	// kept as a cheap identity check all the same. Everything else is raw
+	// and gets the pass, so the present composite, DRM's copy, and a
+	// gamescopectl screenshot's re-composite each apply it once from the
+	// same source and agree pixel for pixel.
 	if ( frameInfo->layers.get( 0 ).tex
 		&& !frameInfo->bBaseLayerEffectsApplied
 		&& frameInfo->layers.get( 0 ).tex.get() != g_output.effectsOutput.get()
 		&& g_nativeEffects.AnyEnabled() )
 	{
-		FrameInfo_t::Layer_t &layer0 = frameInfo->layers.get( 0 );
+		const FrameInfo_t::Layer_t &layer0 = frameInfo->layers.get( 0 );
 		const GamescopeAppTextureColorspace eColorspace = layer0.colorspace;
 		const bool bSdr = !ColorspaceIsHDR( eColorspace ) && eColorspace != GAMESCOPE_APP_TEXTURE_COLORSPACE_PASSTHRU;
 
@@ -4445,12 +4485,18 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 				const bool bHaveHistory = update_effects_history( bHistoryCreated );
 
 				// Adaptive Brightness's dt: wall time since the previous
-				// effects dispatch (this block runs once per presented frame
-				// -- the two gates above skip the screenshot re-composite),
-				// in seconds for the EMA's exp(-dt / tau). Clamped so a hitch,
-				// a pause, or the first frame after a long idle nudges the
-				// history by at most a quarter-second's worth instead of
-				// slamming it to the new measurement in one step.
+				// effects dispatch, in seconds for the EMA's exp(-dt / tau).
+				// Wall time, not a per-frame constant, so the EMA integrates
+				// elapsed time however many composites a frame gets: a
+				// gamescopectl screenshot's re-composite runs the measure
+				// dispatch again a fraction of a millisecond after the
+				// present one, and that second step is worth exactly that
+				// fraction -- the next frame's step is shorter by the same
+				// amount, and the adaptation over any interval is unchanged.
+				// Clamped so a hitch, a pause, or the first frame after a
+				// long idle nudges the history by at most a quarter-second's
+				// worth instead of slamming it to the new measurement in one
+				// step.
 				static uint64_t s_ulLastEffectsDispatchNs = 0;
 				const uint64_t ulNow = get_time_in_nanos();
 				float flAbDt = 0.0f;
@@ -4557,8 +4603,9 @@ std::optional<uint64_t> vulkan_composite( struct FrameInfo_t *frameInfo, gamesco
 				// carry a stray history descriptor on single-layer frames.
 				cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
 
-				layer0.tex = g_output.effectsOutput;
-				frameInfo->bBaseLayerEffectsApplied = true;
+				// The graded image stands in for layer 0 from here on, in
+				// this call's private copy of the struct only.
+				SubstituteLayer0( g_output.effectsOutput );
 			}
 		}
 	}
