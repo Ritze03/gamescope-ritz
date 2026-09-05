@@ -73,6 +73,8 @@ semantics.
 **2026-09-06:** concept written, awaiting user approval —
 [`profiles-concept.md`](profiles-concept.md). Implementation and `--profile` not started.
 
+`--profile` / `GS_RITZ_PROFILE` implemented against the current model, `4caee05`.
+
 ## [x] 5. Brainstorm of further filters and features
 
 A prioritised planning doc brainstorming further native-effect filters and other
