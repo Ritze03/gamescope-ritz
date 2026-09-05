@@ -2136,7 +2136,15 @@ void MouseCursor::paint(steamcompmgr_win_t *window, steamcompmgr_win_t *fit, str
 
 	FrameInfo_t::Layer_t *layer = frameInfo->layers.push();
 	if ( !layer )
+	{
+		// superdoc/planning/requests-2026-09-05-round2.md item 2: was a
+		// silent drop -- log it, rate-limited.
+		static uint32_t s_nDropped = 0;
+		if ( ( ++s_nDropped % 600 ) == 1 )
+			xwm_log.warnf( "cursor layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+			                frameInfo->layers.count(), k_nMaxLayers, s_nDropped );
 		return;
+	}
 
 	layer->opacity = 1.0;
 
@@ -2196,7 +2204,15 @@ paint_cached_base_layer(const gamescope::Rc<commit_t>& commit, const BaseLayerIn
 {
 	FrameInfo_t::Layer_t *layer = frameInfo->layers.push();
 	if ( !layer )
+	{
+		// superdoc/planning/requests-2026-09-05-round2.md item 2: was a
+		// silent drop -- log it, rate-limited.
+		static uint32_t s_nDropped = 0;
+		if ( ( ++s_nDropped % 600 ) == 1 )
+			xwm_log.warnf( "base layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+			                frameInfo->layers.count(), k_nMaxLayers, s_nDropped );
 		return;
+	}
 
 	layer->scale.x = base.scale[0];
 	layer->scale.y = base.scale[1];
@@ -2283,7 +2299,15 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	FrameInfo_t::Layer_t *layer = frameInfo->layers.push();
 	if ( !layer )
+	{
+		// superdoc/planning/requests-2026-09-05-round2.md item 2: was a
+		// silent drop -- log it, rate-limited.
+		static uint32_t s_nDropped = 0;
+		if ( ( ++s_nDropped % 600 ) == 1 )
+			xwm_log.warnf( "window layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+			                frameInfo->layers.count(), k_nMaxLayers, s_nDropped );
 		return nullptr;
+	}
 
 	layer->filter = ( flags & PaintWindowFlag::NoFilter ) ? GamescopeUpscaleFilter::LINEAR : g_upscaleFilter;
 

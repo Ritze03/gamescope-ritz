@@ -973,7 +973,15 @@ namespace gamescope::Notifications
 
 		FrameInfo_t::Layer_t *layer = pFrameInfo->layers.push();
 		if ( !layer )
+		{
+			// superdoc/planning/requests-2026-09-05-round2.md item 2: was a
+			// silent drop -- log it, rate-limited.
+			static uint32_t s_nDropped = 0;
+			if ( ( ++s_nDropped % 600 ) == 1 )
+				s_NotifLog.warnf( "notification layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+				                   pFrameInfo->layers.count(), k_nMaxLayers, s_nDropped );
 			return; // out of layer slots this frame
+		}
 
 		layer->tex = s_pOverlayTexture;
 		layer->zpos = g_zposNotifications;

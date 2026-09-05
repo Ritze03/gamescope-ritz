@@ -135,6 +135,10 @@ The newest version below is the one this build reports.
 - **Shader effect names**: Pre-Sharpen, Adaptive Brightness and Shadow Control
   (formerly "Shadow lift") are now capitalised consistently; saved settings are
   unaffected.
+- **Layer budget drops now log**: if a frame's HUD, notification, crosshair, cursor,
+  override or game layer is ever silently dropped for hitting the 6-layer limit, it's
+  now logged and counted instead of just vanishing with no clue why; the new
+  `layer_budget_stats` console command reports the running total.
 
 ### Removed
 - **"Update every second" HUD mode**: folded into Smoothing, which now is a

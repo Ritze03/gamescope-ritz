@@ -233,6 +233,12 @@ covered in depth on their own pages rather than repeated here:
 - **"A frame isn't compositing/presenting correctly"** — walk the data-flow sketch
   above; `paint_all()` (`src/steamcompmgr.cpp:2564`) and `vulkan_composite()`
   (`src/rendervulkan.cpp:4030`) are the two functions to break on.
+- **"A layer (HUD, notification, crosshair, cursor, override, …) silently
+  vanished"** — `LayerStack_t::push()` (`src/rendervulkan.hpp:433`) returns
+  `nullptr` once a frame's `FrameInfo_t` hits `k_nMaxLayers` (6); callers now log
+  a rate-limited warning naming which layer was dropped, and the
+  `layer_budget_stats` ConCommand (`src/rendervulkan.cpp`) prints the running
+  drop count and the highest layer count any frame has reached.
 - **"I want to drive gamescope from outside"** —
   [control-ipc](../features/control-ipc.md) (`gamescopectl`, convars, screenshots) and
   [wayland-protocols](../features/wayland-protocols.md) for the full protocol index.

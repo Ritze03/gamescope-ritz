@@ -231,6 +231,14 @@ namespace gamescope
 		config::EnqueueRoutedWrite( s_Settings );
 	}
 
+	// Debug/test-only override (2026-09-06, cc_fps_display_force below):
+	// when >= 0, DrawReadout() shows exactly this integer instead of
+	// UpdateAndGetDisplayFps()'s live reading, bypassing smoothing/immediate
+	// windowing entirely -- so a screenshot-based regression test can pin an
+	// exact digit count (e.g. 60/144/1000) without waiting on real frame
+	// timing. -1 is "not forced", the default.
+	static int s_nForcedFps = -1;
+
 	// Console/gamescopectl affordance for testing without input capture
 	// into the settings panel's own checkbox (that widget isn't clickable
 	// until Milestone 2 lands) -- same shape as SettingsOverlay.cpp's
@@ -256,6 +264,41 @@ namespace gamescope
 			// entirely (a console/gamescopectl command callback), so only
 			// g_bForceRepaint's top-of-loop consumption (and its nudge)
 			// reliably reaches a possibly-idle main loop.
+			force_repaint();
+		} );
+
+	// Debug/test affordance (2026-09-06): forces the HUD's displayed reading
+	// to an exact integer, bypassing UpdateAndGetDisplayFps()'s smoothing/
+	// immediate windowing entirely -- written for a regression test of the
+	// anchor-edge alignment fix, which needs specific, repeatable digit
+	// counts (60/144/1000) rather than whatever the real commit rate happens
+	// to be. "-1" (or no argument) releases the override and returns to the
+	// live reading. Same gamescope::ConCommand shape as wlserver.cpp's
+	// wlserver_debug_mouse_button; through gamescopectl the argument must be
+	// ONE quoted argument: gamescopectl fps_display_force "144".
+	static ConCommand cc_fps_display_force(
+		"fps_display_force", "Force the FPS HUD's displayed reading to an exact integer for "
+		"testing, bypassing smoothing: fps_display_force \"<n>\". \"-1\" (or no argument) "
+		"releases the override and returns to the live reading.",
+		[]( std::span<std::string_view> args )
+		{
+			if ( args.size() < 2 )
+			{
+				s_nForcedFps = -1;
+				force_repaint();
+				return;
+			}
+
+			const std::optional<int> onValue = Parse<int>( args[1] );
+			if ( !onValue )
+			{
+				s_FpsLog.errorf( "fps_display_force: bad value \"%.*s\"; usage: fps_display_force "
+				                  "\"<n>\" (\"-1\" or no argument releases the override)",
+				                  (int)args[1].size(), args[1].data() );
+				return;
+			}
+
+			s_nForcedFps = *onValue;
 			force_repaint();
 		} );
 
@@ -795,11 +838,12 @@ namespace gamescope
 		ImVec2 textSize{};
 		float flContentWidth = 0.0f;
 		float flContentHeight = 0.0f;
-		// Half the gap between the pinned field width (>= 3 glyph cells,
-		// fpsmath::PinnedDigitCount) and this number's own (unpadded) width
-		// -- added to the draw origin so the digits sit centred in the
-		// pinned-width box instead of jammed against its right edge. See
-		// MeasureFpsModule()'s own comment.
+		// The gap between the pinned field width (>= 3 glyph cells,
+		// fpsmath::PinnedDigitCount) and this number's own (unpadded) width,
+		// added to the draw origin so the digits sit at the side of the
+		// pinned-width box that faces the anchor -- see MeasureFpsModule()'s
+		// own comment (2026-09-06: was always half this gap, i.e. always
+		// centred, regardless of anchor).
 		float flTextOffsetX = 0.0f;
 	};
 
@@ -817,7 +861,18 @@ namespace gamescope
 	// per-frame measurement of "9", "99" and "999"). 2026-09-05 made the
 	// cell count follow the number (never below 3) instead of clamping the
 	// number to the cells -- see the pin comment inside.
-	static FpsModuleLayout MeasureFpsModule( int nFps )
+	//
+	// `nHoriz` is the anchor's horizontal side (0 left, 1 centre, 2 right --
+	// ParsePlacement's own numbering), which decides which side of the
+	// pinned-width box the unpadded digits hug (2026-09-06 fix): a two-digit
+	// reading like "60" used to always sit centred in the pinned 3-cell box,
+	// so with a right-hand anchor its digits weren't flush with the screen
+	// edge and visibly drifted sideways as the digit count changed (e.g.
+	// 60 -> 144). Left/right anchors now flush the digits to that same
+	// side of the box; centre keeps the old centred behaviour. The box
+	// itself (boxSize, and so ResolveAnchoredOrigin's placement of it) is
+	// unchanged by this -- only where the digits sit inside it.
+	static FpsModuleLayout MeasureFpsModule( int nFps, int nHoriz )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
@@ -918,8 +973,8 @@ namespace gamescope
 		// drawing a padded string put the leading blank's advance INSIDE
 		// the text draw, leaving a visible gutter on the left of a two-
 		// digit number (fixed 2026-09-03) -- so the pinned field is measured
-		// for box sizing only, and the plain digits are centred within it
-		// via flTextOffsetX.
+		// for box sizing only, and the plain digits are placed within it
+		// via flTextOffsetX (side depends on nHoriz -- see below).
 		nFps = std::max( nFps, 0 );
 		const int nDigits = fpsmath::PinnedDigitCount( nFps ); // 3..7; szPadded/szNum hold 7 digits + NUL
 		char szPadded[8];
@@ -932,7 +987,13 @@ namespace gamescope
 		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested
 		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szPadded );
 		const ImVec2 unpaddedSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
-		L.flTextOffsetX = ( L.numSize.x - unpaddedSize.x ) * 0.5f;
+		const float flGap = L.numSize.x - unpaddedSize.x;
+		// 0 (left anchor): flush against the box's left edge.
+		// 1 (centre anchor): centred, as before this fix.
+		// 2 (right anchor): flush against the box's right edge.
+		L.flTextOffsetX = ( nHoriz == 0 ) ? 0.0f
+			: ( nHoriz == 1 ) ? flGap * 0.5f
+			: flGap;
 
 		L.textSize = L.numSize;
 		L.flContentWidth = L.textSize.x;
@@ -955,8 +1016,9 @@ namespace gamescope
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
 		const ImVec2 rectMin = origin;
-		// L.flTextOffsetX centres the unpadded digits within the pinned
-		// field width -- see MeasureFpsModule()'s own comment.
+		// L.flTextOffsetX places the unpadded digits within the pinned
+		// field width, on the side the anchor faces -- see
+		// MeasureFpsModule()'s own comment.
 		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX, rectMin.y + cfg.backdrop_padding );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
@@ -1092,7 +1154,13 @@ namespace gamescope
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
-		const float flDisplayFps = UpdateAndGetDisplayFps();
+		// Still called even while forced: keeps the smoothing/immediate
+		// bookkeeping (and the lag-spike detector, which reads its own
+		// frametime source independently) live, so releasing the force
+		// resumes on a real reading instead of a stale one. See
+		// s_nForcedFps's own comment.
+		const float flLiveDisplayFps = UpdateAndGetDisplayFps();
+		const float flDisplayFps = ( s_nForcedFps >= 0 ) ? (float)s_nForcedFps : flLiveDisplayFps;
 
 		// ---- "Hide if FPS above X", with hysteresis (Phase 2) ----------
 		// A plain "hidden = fps > X" flips every frame the reading sits on
@@ -1124,7 +1192,14 @@ namespace gamescope
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
 
-		const FpsModuleLayout L = MeasureFpsModule( nFps );
+		// nHoriz decides which side of the pinned-width box the digits hug
+		// -- see MeasureFpsModule()'s own comment. nVert is unused here;
+		// ResolveAnchoredOrigin() re-parses the same anchor string for the
+		// box's own placement.
+		int nVert = 0, nHoriz = 2;
+		ParsePlacement( cfg.anchor, nVert, nHoriz );
+
+		const FpsModuleLayout L = MeasureFpsModule( nFps, nHoriz );
 		const ImVec2 boxSize( L.flContentWidth + cfg.backdrop_padding * 2.0f, L.flContentHeight + cfg.backdrop_padding * 2.0f );
 		const ImVec2 origin = ResolveAnchoredOrigin( cfg.anchor, (float)cfg.margin_x, (float)cfg.margin_y, boxSize, io_display );
 
@@ -1381,7 +1456,15 @@ namespace gamescope
 		// shared paint_all() behaviour, not specific to this feature.
 		FrameInfo_t::Layer_t *layer = pFrameInfo->layers.push();
 		if ( !layer )
+		{
+			// superdoc/planning/requests-2026-09-05-round2.md item 2: was a
+			// silent drop -- log it, rate-limited.
+			static uint32_t s_nDropped = 0;
+			if ( ( ++s_nDropped % 600 ) == 1 )
+				s_FpsLog.warnf( "HUD layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+				                 pFrameInfo->layers.count(), k_nMaxLayers, s_nDropped );
 			return; // out of layer slots this frame
+		}
 
 		// The HUD layer sits BELOW the Shell (g_zposFpsDisplay <
 		// g_zposSettingsOverlay, steamcompmgr.hpp) since the 2026-09-03
@@ -1438,7 +1521,15 @@ namespace gamescope
 			// rows [H, 2H) for output rows [0, H).
 			FrameInfo_t::Layer_t *pCrosshairLayer = pFrameInfo->layers.push();
 			if ( !pCrosshairLayer )
+			{
+				// superdoc/planning/requests-2026-09-05-round2.md item 2:
+				// was a silent drop -- log it, rate-limited.
+				static uint32_t s_nDropped = 0;
+				if ( ( ++s_nDropped % 600 ) == 1 )
+					s_FpsLog.warnf( "crosshair split layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+					                 pFrameInfo->layers.count(), k_nMaxLayers, s_nDropped );
 				return; // out of layer slots: the crosshair sits this frame out, the readout above is unaffected
+			}
 
 			*pCrosshairLayer = *layer;
 			pCrosshairLayer->offset = { 0.0f, (float)g_nOutputHeight };

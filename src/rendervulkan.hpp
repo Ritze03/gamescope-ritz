@@ -38,6 +38,16 @@ class CVulkanCmdBuffer;
 // 5: Primary Overlay (Steam Overlay)
 // 6: Cursor
 #define k_nMaxLayers 6
+
+// Layer budget stats (superdoc/planning/requests-2026-09-05-round2.md item 2):
+// bumped inside LayerStack_t::push() itself, read by the "layer_budget_stats"
+// ConCommand in rendervulkan.cpp. g_nLayerPushDrops counts every push() call
+// that returned nullptr because the stack was already at k_nMaxLayers;
+// g_nLayerPushMaxCount is the highest layer count any LayerStack_t has ever
+// reached, so "how close did we get" is answerable even when nothing dropped.
+extern std::atomic<uint64_t> g_nLayerPushDrops;
+extern std::atomic<int> g_nLayerPushMaxCount;
+
 #define k_nMaxYcbcrMask 16
 #define k_nMaxYcbcrMask_ToPreCompile 3
 
@@ -430,12 +440,28 @@ struct FrameInfo_t
 	class LayerStack_t
 	{
 	public:
+		// Global, cross-frame budget stats (superdoc/planning/
+		// requests-2026-09-05-round2.md item 2): every failed push here --
+		// whatever the caller does about it -- counts toward
+		// g_nLayerPushDrops, and every successful push updates the
+		// high-water mark, so `layer_budget_stats` can answer "has this
+		// ever happened" without any caller having to report in.
 		Layer_t *push()
 		{
 			if ( m_nCount >= k_nMaxLayers )
+			{
+				g_nLayerPushDrops.fetch_add( 1, std::memory_order_relaxed );
 				return nullptr;
+			}
 
-			return &m_Layers[ m_nCount++ ];
+			Layer_t *pLayer = &m_Layers[ m_nCount++ ];
+
+			int nPrevMax = g_nLayerPushMaxCount.load( std::memory_order_relaxed );
+			while ( m_nCount > nPrevMax &&
+			        !g_nLayerPushMaxCount.compare_exchange_weak( nPrevMax, m_nCount, std::memory_order_relaxed ) )
+				;
+
+			return pLayer;
 		}
 
 		void pop()

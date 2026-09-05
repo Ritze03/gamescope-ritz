@@ -40,6 +40,7 @@
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
+#include "convar.h"
 
 #include "cs_composite_blit.h"
 #include "cs_composite_blur.h"
@@ -144,6 +145,11 @@ std::span<const uint64_t> GetSupportedSampleModifiers( uint32_t uDrmFormat )
 }
 
 static LogScope vk_log("vulkan");
+
+// Definitions for the layer budget stats declared in rendervulkan.hpp;
+// bumped inside LayerStack_t::push(), read by "layer_budget_stats" below.
+std::atomic<uint64_t> g_nLayerPushDrops{ 0 };
+std::atomic<int> g_nLayerPushMaxCount{ 0 };
 
 static void vk_errorf(VkResult result, const char *fmt, ...) {
 	static char buf[1024];
@@ -5172,3 +5178,20 @@ gamescope::OwningRc<CVulkanTexture> vulkan_create_texture_from_wlr_buffer( struc
 
 	return pTex;
 }
+
+// superdoc/planning/requests-2026-09-05-round2.md item 2: prints the layer
+// budget stats LayerStack_t::push() has been keeping since startup, so
+// "has this ever been full" is one command away instead of only visible as
+// a missing HUD/notification/etc with no clue why.
+static gamescope::ConCommand cc_layer_budget_stats(
+	"layer_budget_stats",
+	"Print the layer-budget stats LayerStack_t::push() has tracked since startup: how many "
+	"pushes were dropped for hitting k_nMaxLayers, and the highest layer count any frame has "
+	"reached.",
+	[]( std::span<std::string_view> args )
+	{
+		console_log.infof( "layer_budget_stats: %lu drop(s), high-water mark %d / %d layers",
+		                    (unsigned long)g_nLayerPushDrops.load( std::memory_order_relaxed ),
+		                    g_nLayerPushMaxCount.load( std::memory_order_relaxed ),
+		                    k_nMaxLayers );
+	} );
