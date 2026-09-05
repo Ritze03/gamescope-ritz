@@ -205,22 +205,58 @@ pass:
   `outputValue.rgb = mix(outputValue.rgb, inverted, layerAlpha)`.
   Fully-transparent HUD-texture pixels (`layerAlpha == 0`) pass the
   background through completely unchanged.
-- **Mid-grey guard**: a literal invert's luma is exactly `1.0 - bgLuma`
-  (the Rec.709 weights `0.2126/0.7152/0.0722` sum to 1.0), which collapses
-  to **zero** luma separation from the background right at `bgLuma ==
-  0.5` — digits would vanish over any surface near mid-grey. When the
-  separation is below **0.40** (raised 2026-09-03 from an initial 0.25;
-  chosen from a measured on-screen check at mid grey — background
-  RGB(188,188,188) inverted to a marginal grey-on-grey RGB(138,138,138)
-  at 0.25, versus a comfortably-readable RGB(91,91,91) at 0.40 — not
-  derived from a formal contrast spec), the inverted colour is pushed
-  uniformly toward black or white — away from the background's own luma
-  — by just enough to clear that floor, and no more. That engages for
-  backgrounds with luma roughly in `(0.30, 0.70)` (was `(0.375, 0.625)`
-  at 0.25) — outside that band around mid-grey, the true inversion
-  survives completely untouched. Raising the floor further keeps buying
-  legibility inside that band at the cost of how much of the true
-  inverted colour survives there — the deliberate tension in this knob.
+- **Contrast guard (perceptual, 2026-09-05)**: a literal invert can land
+  too close to the background to read. The shader judges "too close" in
+  **encoded (sRGB) space**, because that is the scale the eye compares
+  on: it encodes both the background and its true invert
+  (`linearToSrgb`), takes each one's Rec.709 luma on the encoded
+  channels (`0.2126/0.7152/0.0722`, i.e. Y'), and requires
+  `|Y'(inverted) − Y'(bg)| ≥ 0.40` (≈100/255). Where the true invert
+  already clears that, it is left **exactly** as it is. Where it does
+  not, the inverted colour is moved uniformly in every channel (so
+  whatever hue survives is kept) to sit exactly 0.40 from the
+  background's Y' on the side *away* from the background — below it when
+  the background is brighter than perceptual mid grey (`Y' > 0.5`),
+  above it otherwise — then decoded back to linear for the blend. The
+  floor is not arbitrary: at `Y'(bg) = 0.5` (encoded 128) the true
+  invert's Y' is ~0.896, a gap of ~0.40, so **0.40 is exactly what a true
+  invert gives at perceptual mid grey**. Consequences a reader can check
+  from one screenshot: every background darker than encoded 128 keeps
+  its true inversion untouched (the digit is a light colour ≥ ~0.40
+  above it); over anything brighter, the push engages (encoded ~128–229
+  for greys) and the digit is a **dark** colour 0.40 below the
+  background. The one hard transition in the mapping — light digits
+  flipping to dark — sits at encoded 128, perceptual mid grey, where any
+  minimum-gap rule must have one. Expected values are tabulated under
+  [Verifying Inverted mode](#verifying-inverted-mode-pixel-recipe).
+
+  > **Why perceptual, and why not the linear rule it replaced.** The
+  > guard was originally (2026-09-03) computed in *linear* light:
+  > `|(1 − bgLuma) − bgLuma| ≥ kMinLumaSeparation`, floor 0.25 then
+  > raised the same day to 0.40 from a single on-screen check at
+  > encoded 188 (188 inverted to a marginal grey-on-grey 138 at 0.25,
+  > to a readable 91 at 0.40). That rule only engages for **linear** luma
+  > in `(0.30, 0.70)` — encoded ~149–225 — and the linear invert of the
+  > mid-tones that dominate real game scenes lands just outside it:
+  > encoded 148 is linear 0.30, its true invert linear 0.70 encodes to
+  > ~218, and the guard, seeing a linear gap of 0.40, did nothing. The
+  > result over encoded ~120–190 was a faint light grey at ~215–225 that
+  > reads as "white text that ignores the background" — reported
+  > 2026-09-05 as "the colour inversion doesn't work anymore". A bisect
+  > found no regression (identical pixels at `0ff8a55` and HEAD); the
+  > defect had been there since the 0.40 floor. Linear-light separation
+  > is simply not what the eye judges. Do not revert to a linear rule
+  > for "purity": the true inversion is still what you get everywhere it
+  > reads (all of the dark half and the very bright end); the guard only
+  > touches the band where the true invert *cannot* be read.
+
+  > **Cost.** The guard adds two `linearToSrgb` evaluations (three
+  > `pow`s each) plus a `srgbToLinear` (three more) when the push
+  > engages — a dozen ALU ops, and only on pixels the HUD texture
+  > actually covers: the invert branch returns early where the layer's
+  > alpha is 0 (bit-identical to what the blend produced there anyway),
+  > so the rest of the frame pays nothing. Not measurable.
+
 - **Blend-space / HDR caveat**: `BlendLayer()` runs *after*
   `apply_layer_color_mgmt()` and *before* `encodeOutputColor()` — i.e. in
   linear-light blend space, not the final encoded output. Under HDR/PQ,
@@ -341,32 +377,32 @@ gamescope-ritz -W 1280 -H 720 --force-windows-fullscreen -- \
 gamescopectl screenshot "/path/shot.png 4"      # one quoted argument
 ```
 
-then sample the digit core and the flat background beside it. Expected,
-measured 2026-09-05 at both `0ff8a55` and `773b7e9` (Intel/ANV, nested
-Wayland; captures in `build-release/verify-shots/inversion/`):
+then sample the digit core and the flat background beside it. Repeat the
+xterm run at `-bg '#949494'` (148) and `-bg '#727272'` (114) — those are
+the mid-tones the old guard failed on. Expected under the perceptual guard
+(2026-09-05; computed from the rule, to be confirmed on the laptop — the
+"before" column is what was measured at both `0ff8a55` and `773b7e9`
+under the old linear guard, Intel/ANV, nested Wayland, captures in
+`build-release/verify-shots/inversion/`):
 
-| background (encoded) | inverting digit core | not inverting |
-|---|---|---|
-| `(188,188,188)` xterm `#bcbcbc` | `(90,90,90)` — the mid-grey guard's push | `(255,255,255)`, or the accent colour |
-| `(51,51,51)` vkcube | `(251,251,251)` | `(255,255,255)` |
-| `(114,114,114)` vkcube + Shadow Control | `(235,235,235)` | `(255,255,255)` |
-| `(148,148,148)` vkcube's cube face | `(218–221)` — legible but faint, see below | `(255,255,255)` |
+| background (encoded) | inverting digit core (expected) | how | before (linear guard) | not inverting |
+|---|---|---|---|---|
+| `(51,51,51)` vkcube | `(251,251,251)` | true invert, untouched (gap 0.78) | `(251,251,251)` | `(255,255,255)` |
+| `(114,114,114)` xterm `#727272` / vkcube + Shadow Control | `(235,235,235)` | true invert, untouched (gap 0.47) | `(235,235,235)` | `(255,255,255)` |
+| `(148,148,148)` xterm `#949494` / vkcube's cube face | `(46,46,46)` | pushed dark to `bg − 0.40` | `(218–221)` — faint | `(255,255,255)` |
+| `(188,188,188)` xterm `#bcbcbc` | `(86,86,86)` | pushed dark to `bg − 0.40` | `(90,90,90)` | `(255,255,255)`, or the accent colour |
+| `(219,219,219)` | `(117,117,117)` | pushed dark to `bg − 0.40` | `(147,147,147)` | `(255,255,255)` |
 
-The bright row is the only one that discriminates at a glance. Repeat it
-with the crosshair on (split mode) and, when the user's config is known,
-with the user's own settings — the 2026-09-05 report was investigated
-under FSR + STRETCH + all three native effects + font 13 + outline 1 +
-active profile with auto-save, and every combination inverted identically
-at the baseline and at HEAD, on every path (config file, `overlay_e2_set`,
-the Shell row by keyboard and by pointer click, the palette's `adjust`).
-
-**Why a user can still read the result as "not inverting":** the guard
-works in *linear* light. Over the mid-tones that dominate most game
-scenes (encoded ~120–190) the inverted digit lands at encoded ~215–225 —
-a washed-out light grey that reads as "white text that ignores the
-background" unless the outline is on. That is the documented tension in
-`kMinLumaSeparation`, not a defect in the blend; it has been so since the
-floor was set on 2026-09-03.
+Every row's gap is ≥ ~100 encoded, so **any** of these backgrounds now
+discriminates at a glance; the 148 row is the one that failed before.
+Tolerance: ±3 per channel (the blend runs in linear light and is
+re-encoded; ANV's `pow` is not bit-exact). Repeat with the crosshair on
+(split mode) and, when the user's config is known, with the user's own
+settings — the 2026-09-05 report was investigated under FSR + STRETCH +
+all three native effects + font 13 + outline 1 + active profile with
+auto-save, and every combination inverted identically at the baseline and
+at HEAD, on every path (config file, `overlay_e2_set`, the Shell row by
+keyboard and by pointer click, the palette's `adjust`).
 
 ## Outline
 

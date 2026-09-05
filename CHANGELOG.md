@@ -71,6 +71,9 @@ The newest version below is the one this build reports.
   keeps tracking the scene while switched off so turning it back on is instant.
 
 ### Fixed
+- **FPS HUD Inverted colour readable over mid-tones**: the inverted digits no longer
+  wash out to a faint light grey over mid-grey game scenes, and now stay at least a
+  clear step darker or lighter than whatever is behind them.
 - **Pointer under a stretched resolution**: with Force grab cursor off, the game's
   pointer now follows a runtime resolution change immediately instead of staying at
   the old position until the mouse next moves.
