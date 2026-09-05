@@ -54,6 +54,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 
 #include "main.hpp"
 #include "steamcompmgr.hpp"
@@ -726,25 +727,99 @@ namespace gamescope
 	static constexpr int kMinRefreshHz = 24, kMaxRefreshHz = 500;
 
 	// ---- game resolution --------------------------------------------------
-	static const SizePreset kResolutionPresets[] = {
-		{ 3840, 2160 }, { 2560, 1440 }, { 1920, 1080 }, { 1600, 900 }, { 1280, 720 },
+	// Two rows (requests item 13, 2026-09-05): the SHAPE first (Aspect:
+	// Native / 16:9 / 4:3 / 16:10 / 21:9 / Custom), then a size for it. The
+	// Registry copies a Choice's option list at registration and has no
+	// per-entry visibility gate, so "the size list changes with the aspect"
+	// is one Choice PER SHAPE, each DisabledUnless() its aspect is the live
+	// one -- a greyed dropdown row is compact, carries its reason, and is
+	// what the Registry supports without a per-frame rebuild. Every size
+	// list ends in Custom so a mode that has the shape but is on no list
+	// (a launch-time -w 1600 -h 1200, say) can still be reflected as
+	// "4:3 + Custom" rather than as a dropdown with nothing selected.
+	enum Aspect : int
+	{
+		kAspectNative = 0,
+		kAspect16x9   = 1,
+		kAspect4x3    = 2,
+		kAspect16x10  = 3,
+		kAspect21x9   = 4,
+		kAspectCustom = 5,
 	};
-	// Option values: 0 = Native, 1..N = kResolutionPresets[value-1], N+1 = Custom.
-	static constexpr int kPresetNative = 0;
-	static constexpr int kPresetCustom = (int)std::size( kResolutionPresets ) + 1;
-	static const ui::Option kResolutionOptions[] = {
-		{ kPresetNative, "Native" },
-		{ 1, "3840 x 2160" }, { 2, "2560 x 1440" }, { 3, "1920 x 1080" },
-		{ 4, "1600 x 900" },  { 5, "1280 x 720" },
-		{ kPresetCustom, "Custom" },
+	static const ui::Option kAspectOptions[] = {
+		{ kAspectNative, "Native" },
+		{ kAspect16x9, "16:9" }, { kAspect4x3, "4:3" }, { kAspect16x10, "16:10" }, { kAspect21x9, "21:9" },
+		{ kAspectCustom, "Custom" },
 	};
 
-	// The user's last pick, or -1 before any. Needed because the live numbers
-	// alone are ambiguous: 1920x1080 in a 1920x1080 window is both "Native"
-	// and "1920 x 1080", and a Custom 1280x720 is also the 1280x720 preset.
-	// The pick is trusted while the live value still agrees with it; when it
-	// doesn't (Steam's mode-control atom, a host resize), the live value wins.
-	static int  s_nResolutionChoice = -1;
+	// Per-shape option values: 1..N = the shape's size table [value-1];
+	// kSizeCustom hands the size to the Width/Height steppers.
+	static constexpr int kSizeCustom = 0;
+
+	static const SizePreset kSizes16x9[]  = { { 3840, 2160 }, { 2560, 1440 }, { 1920, 1080 }, { 1600, 900 }, { 1280, 720 } };
+	static const SizePreset kSizes4x3[]   = { { 2880, 2160 }, { 1920, 1440 }, { 1440, 1080 }, { 1280, 960 } };
+	static const SizePreset kSizes16x10[] = { { 3840, 2400 }, { 2560, 1600 }, { 1920, 1200 }, { 1680, 1050 }, { 1440, 900 }, { 1280, 800 } };
+	static const SizePreset kSizes21x9[]  = { { 5120, 2160 }, { 3440, 1440 }, { 2560, 1080 } };
+
+	static const ui::Option kSizeOptions16x9[] = {
+		{ 1, "3840 x 2160" }, { 2, "2560 x 1440" }, { 3, "1920 x 1080" }, { 4, "1600 x 900" }, { 5, "1280 x 720" },
+		{ kSizeCustom, "Custom" },
+	};
+	static const ui::Option kSizeOptions4x3[] = {
+		{ 1, "2880 x 2160" }, { 2, "1920 x 1440" }, { 3, "1440 x 1080" }, { 4, "1280 x 960" },
+		{ kSizeCustom, "Custom" },
+	};
+	static const ui::Option kSizeOptions16x10[] = {
+		{ 1, "3840 x 2400" }, { 2, "2560 x 1600" }, { 3, "1920 x 1200" }, { 4, "1680 x 1050" }, { 5, "1440 x 900" },
+		{ 6, "1280 x 800" },
+		{ kSizeCustom, "Custom" },
+	};
+	static const ui::Option kSizeOptions21x9[] = {
+		{ 1, "5120 x 2160" }, { 2, "3440 x 1440" }, { 3, "2560 x 1080" },
+		{ kSizeCustom, "Custom" },
+	};
+
+	struct AspectList
+	{
+		int               nAspect;
+		float             flRatio;      // nominal; 21:9 panels are really ~2.37, hence the tolerance below
+		const SizePreset *pSizes;
+		size_t            nSizes;
+		const ui::Option *pOptions;
+		size_t            nOptions;
+		const char       *pszId;
+		const char       *pszTitle;
+		const char       *pszReason;
+	};
+	static const AspectList kAspectLists[] = {
+		{ kAspect16x9,  16.0f / 9.0f,  kSizes16x9,  std::size( kSizes16x9 ),  kSizeOptions16x9,  std::size( kSizeOptions16x9 ),
+		  "display.resolution.preset_16_9",  "16:9 size",  "pick 16:9 in Aspect above to use this list" },
+		{ kAspect4x3,   4.0f / 3.0f,   kSizes4x3,   std::size( kSizes4x3 ),   kSizeOptions4x3,   std::size( kSizeOptions4x3 ),
+		  "display.resolution.preset_4_3",   "4:3 size",   "pick 4:3 in Aspect above to use this list" },
+		{ kAspect16x10, 16.0f / 10.0f, kSizes16x10, std::size( kSizes16x10 ), kSizeOptions16x10, std::size( kSizeOptions16x10 ),
+		  "display.resolution.preset_16_10", "16:10 size", "pick 16:10 in Aspect above to use this list" },
+		{ kAspect21x9,  64.0f / 27.0f, kSizes21x9,  std::size( kSizes21x9 ),  kSizeOptions21x9,  std::size( kSizeOptions21x9 ),
+		  "display.resolution.preset_21_9",  "21:9 size",  "pick 21:9 in Aspect above to use this list" },
+	};
+	// How far a live w/h may sit from a shape's nominal ratio and still be
+	// called that shape. 3% covers true 21:9 (2.333) against the 2.37-2.39
+	// the list's own sizes have, while 16:10 (1.6) and 16:9 (1.78) stay
+	// 11% apart.
+	static constexpr float kAspectTolerance = 0.03f;
+
+	// The user's last picks, or -1 before any. Needed because the live
+	// numbers alone are ambiguous: 1920x1080 in a 1920x1080 window is both
+	// "Native" and "16:9 + 1920 x 1080", and a Custom 1280x720 is also the
+	// 16:9 preset -- and because a shape can be picked WITHOUT a size, which
+	// the live numbers cannot express at all. A pick is trusted while the
+	// live mode is still the one it was made against; once the mode changes
+	// for any other reason (Steam's mode-control atom, a per-game switch, a
+	// config apply), the live value wins.
+	static int  s_nAspectChoice = -1;
+	static int  s_nSizeChoice   = -1;   // within s_nAspectChoice's list; kSizeCustom or 1..N; -1 = none yet
+	// The live mode at the moment of the pick. The pick is trusted exactly
+	// as long as the live mode still equals this -- see CurrentAspect().
+	static int  s_nPickWidth = 0, s_nPickHeight = 0;
 	static int  s_nCustomWidth = 0, s_nCustomHeight = 0;   // 0 = not yet used, seed from live
 	static bool s_bLockAspect = true;
 	// The ratio the lock holds, captured when the lock engages (and lazily on
@@ -794,18 +869,18 @@ namespace gamescope
 	// output pixel size here (steamcompmgr_set_nested_mode() has no other way
 	// to mean "native"), so storing nWidth/nHeight verbatim would freeze
 	// today's monitor size into config instead of "as launched"; checking
-	// s_nResolutionChoice -- already set to kPresetNative by the caller
-	// before this runs -- is what tells the two apart. Follow-host refresh
-	// needs no such check: SetRefreshChoice's kRefreshFollowHost branch
-	// already passes nRefreshmHz == 0 down to here. Window (output) size is
+	// s_nAspectChoice -- already set to kAspectNative by the caller before
+	// this runs -- is what tells the two apart. Follow-host refresh needs no
+	// such check: SetRefreshChoice's kRefreshFollowHost branch already
+	// passes nRefreshmHz == 0 down to here. Window (output) size is
 	// deliberately not persisted anywhere -- host window rules are the right
 	// tool for that (see the area's top-of-file comment).
 	static void ApplyNestedMode( int nWidth, int nHeight, int nRefreshmHz )
 	{
 		steamcompmgr_set_nested_mode( ClampDim( nWidth ), ClampDim( nHeight ), nRefreshmHz );
 
-		s_CachedSettings.gamescope.nested_width  = ( s_nResolutionChoice == kPresetNative ) ? 0 : ClampDim( nWidth );
-		s_CachedSettings.gamescope.nested_height = ( s_nResolutionChoice == kPresetNative ) ? 0 : ClampDim( nHeight );
+		s_CachedSettings.gamescope.nested_width  = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nWidth );
+		s_CachedSettings.gamescope.nested_height = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nHeight );
 		s_CachedSettings.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
 		QueueSave();
 	}
@@ -818,6 +893,35 @@ namespace gamescope
 		return -1;
 	}
 
+	static const AspectList *ListFor( int nAspect )
+	{
+		for ( const AspectList &list : kAspectLists )
+			if ( list.nAspect == nAspect )
+				return &list;
+		return nullptr;
+	}
+
+	// The shape whose nominal ratio the size sits within kAspectTolerance
+	// of, or -1. Nearest wins if two ever qualified (none do at 3%).
+	static int NearestAspect( int nWidth, int nHeight )
+	{
+		if ( nWidth <= 0 || nHeight <= 0 )
+			return -1;
+		const float flRatio = (float)nWidth / (float)nHeight;
+		int nBest = -1;
+		float flBestErr = kAspectTolerance;
+		for ( const AspectList &list : kAspectLists )
+		{
+			const float flErr = std::fabs( flRatio - list.flRatio ) / list.flRatio;
+			if ( flErr <= flBestErr )
+			{
+				flBestErr = flErr;
+				nBest = list.nAspect;
+			}
+		}
+		return nBest;
+	}
+
 	static bool NestedIsNative()
 	{
 		return g_nNestedWidth == (int)g_nOutputWidth && g_nNestedHeight == (int)g_nOutputHeight;
@@ -826,61 +930,136 @@ namespace gamescope
 	static int CustomWidth()  { return s_nCustomWidth  ? s_nCustomWidth  : g_nNestedWidth; }
 	static int CustomHeight() { return s_nCustomHeight ? s_nCustomHeight : g_nNestedHeight; }
 
-	static int CurrentResolutionChoice()
+	// Records the pick against the live mode it was made on (after any
+	// apply, so a size pick is recorded against the size it applied).
+	static void RecordPick( int nAspect, int nSize )
 	{
-		if ( s_nResolutionChoice == kPresetNative && NestedIsNative() )
-			return kPresetNative;
-		if ( s_nResolutionChoice == kPresetCustom
-		     && g_nNestedWidth == CustomWidth() && g_nNestedHeight == CustomHeight() )
-			return kPresetCustom;
-
-		const int nPreset = MatchSizePreset( kResolutionPresets, std::size( kResolutionPresets ),
-			g_nNestedWidth, g_nNestedHeight );
-		if ( nPreset > 0 )
-			return nPreset;
-		if ( NestedIsNative() )
-			return kPresetNative;
-		return kPresetCustom;
+		s_nAspectChoice = nAspect;
+		s_nSizeChoice   = nSize;
+		s_nPickWidth    = g_nNestedWidth;
+		s_nPickHeight   = g_nNestedHeight;
 	}
 
-	static void SetResolutionChoice( int nChoice )
+	static bool PickStillLive()
 	{
-		if ( nChoice < kPresetNative || nChoice > kPresetCustom )
-			return;
-		s_nResolutionChoice = nChoice;
+		return s_nAspectChoice >= 0
+		    && g_nNestedWidth == s_nPickWidth && g_nNestedHeight == s_nPickHeight;
+	}
 
-		int nWidth, nHeight;
-		if ( nChoice == kPresetNative )
+	// THE REFLECTION RULE. An explicit pick is trusted for as long as the
+	// live mode is still the one it was made against -- which is what lets
+	// a shape stay selected while the user browses its list, and what tells
+	// "Native" from "16:9 + 1920 x 1080" in a 1920x1080 window. The moment
+	// the mode changes for any other reason (a preset applied elsewhere,
+	// Steam's atom, a per-game switch, a config apply), the live mode is
+	// classified on its own: a size on any list -> that shape; the window's
+	// own size -> Native; a ratio within tolerance of a shape -> that shape
+	// (+ Custom in its list); anything else -> Custom. That is also what a
+	// fresh open sees, so a persisted 1280x960 comes back as "4:3 + 1280 x
+	// 960" with no pick stored anywhere.
+	static int CurrentAspect()
+	{
+		if ( PickStillLive() )
+			return s_nAspectChoice;
+
+		for ( const AspectList &list : kAspectLists )
+			if ( MatchSizePreset( list.pSizes, list.nSizes, g_nNestedWidth, g_nNestedHeight ) > 0 )
+				return list.nAspect;
+		if ( NestedIsNative() )
+			return kAspectNative;
+		const int nNear = NearestAspect( g_nNestedWidth, g_nNestedHeight );
+		return nNear >= 0 ? nNear : kAspectCustom;
+	}
+
+	// The value a shape's size row shows: the live mode's entry when it is
+	// on that list, else Custom. Deliberately the same answer for the live
+	// shape and the three greyed ones -- a row shows what IS, never a
+	// suggestion of what a pick would do (that would be a control that
+	// displays what was asked for while the screen shows something else).
+	// So a browsed shape whose list has no live entry reads "Custom" with
+	// the steppers at the live size, which is the truth.
+	static int CurrentSizeChoice( const AspectList &list )
+	{
+		const int nMatch = MatchSizePreset( list.pSizes, list.nSizes, g_nNestedWidth, g_nNestedHeight );
+		return nMatch > 0 ? nMatch : kSizeCustom;
+	}
+
+	// Custom is seeded from the live mode every time it is picked -- which
+	// is the last preset applied, so a 4:3 pick followed by Custom starts
+	// the steppers at a 4:3 size and the lock (re-captured here) holds 4:3.
+	// Picking Custom therefore changes nothing until a stepper moves.
+	static void SeedCustomFromLive()
+	{
+		s_nCustomWidth  = g_nNestedWidth;
+		s_nCustomHeight = g_nNestedHeight;
+		s_flLockedAspect = 0.0f;
+	}
+
+	static void SetSizeChoice( const AspectList &list, int nChoice )
+	{
+		if ( nChoice < kSizeCustom || nChoice > (int)list.nSizes )
+			return;
+		// ApplyNestedMode() keys the persisted "as launched" zero on the
+		// aspect, so the pick must be set before the apply; the live size
+		// is captured after it.
+		s_nAspectChoice = list.nAspect;
+		s_nSizeChoice   = nChoice;
+		if ( nChoice == kSizeCustom )
+		{
+			SeedCustomFromLive();
+			ApplyNestedMode( CustomWidth(), CustomHeight(), g_nNestedRefresh );
+		}
+		else
+		{
+			ApplyNestedMode( list.pSizes[ nChoice - 1 ].nWidth, list.pSizes[ nChoice - 1 ].nHeight, g_nNestedRefresh );
+		}
+		RecordPick( list.nAspect, nChoice );
+	}
+
+	// Picking a SHAPE applies nothing: it only chooses which size list is
+	// enabled, and the game's mode changes when a SIZE is picked (or a
+	// Custom stepper moves). Why: changing the resolution as a side effect
+	// of browsing a list is exactly the kind of surprise the user asked to
+	// have removed from the profile UI. The pick is recorded against the
+	// live mode so CurrentAspect() keeps showing it until a size is picked
+	// or the mode changes for some other reason. Native and Custom are
+	// sizes in their own right, not shapes with a list, so they behave as
+	// before: Native applies the window size, Custom seeds the steppers
+	// from the live mode and applies that same size (a no-op on screen).
+	static void SetAspectChoice( int nChoice )
+	{
+		if ( nChoice < kAspectNative || nChoice > kAspectCustom )
+			return;
+		if ( ListFor( nChoice ) )
+		{
+			RecordPick( nChoice, -1 );
+			return;
+		}
+		s_nAspectChoice = nChoice;
+		s_nSizeChoice   = -1;
+		if ( nChoice == kAspectNative )
 		{
 			// "Native" is the window size AT THE MOMENT OF THE PICK. It does
 			// not track later host resizes -- nothing in gamescope does with
 			// one Xwayland (only the multi-Xwayland Steam path re-modes).
-			nWidth  = (int)g_nOutputWidth;
-			nHeight = (int)g_nOutputHeight;
-		}
-		else if ( nChoice == kPresetCustom )
-		{
-			// Seed Custom from the live mode so picking it changes nothing
-			// until the steppers move.
-			if ( !s_nCustomWidth || !s_nCustomHeight )
-			{
-				s_nCustomWidth  = g_nNestedWidth;
-				s_nCustomHeight = g_nNestedHeight;
-			}
-			nWidth  = s_nCustomWidth;
-			nHeight = s_nCustomHeight;
+			ApplyNestedMode( (int)g_nOutputWidth, (int)g_nOutputHeight, g_nNestedRefresh );
 		}
 		else
 		{
-			nWidth  = kResolutionPresets[ nChoice - 1 ].nWidth;
-			nHeight = kResolutionPresets[ nChoice - 1 ].nHeight;
+			SeedCustomFromLive();
+			ApplyNestedMode( CustomWidth(), CustomHeight(), g_nNestedRefresh );
 		}
-		ApplyNestedMode( nWidth, nHeight, g_nNestedRefresh );
+		RecordPick( nChoice, -1 );
 	}
 
+	// The steppers' gate: Custom as the shape, or Custom within a shape.
 	static bool ResolutionIsCustom()
 	{
-		return CurrentResolutionChoice() == kPresetCustom;
+		const int nAspect = CurrentAspect();
+		if ( nAspect == kAspectCustom )
+			return true;
+		const AspectList *pList = ListFor( nAspect );
+		return pList && CurrentSizeChoice( *pList ) == kSizeCustom;
 	}
 
 	static float LockedAspect()
@@ -902,35 +1081,47 @@ namespace gamescope
 	// preset, when nobody has picked anything yet. So the apply gate must be
 	// the same predicate, evaluated BEFORE the mutation (afterwards the live
 	// mode no longer equals the custom numbers), or a stepper the UI shows
-	// as enabled would move its number and change nothing.
-	static void ApplyCustomIfActive( bool bWasActive )
+	// as enabled would move its number and change nothing. The shape is
+	// captured before the mutation for the same reason: afterwards the
+	// live 1920x1080 no longer matches the custom numbers and would be
+	// re-classified as "16:9" even though the user had just picked the
+	// Custom shape. The pick is recorded as Custom within that shape when
+	// it is one (so a 4:3 + Custom stays 4:3 while the lock holds), else as
+	// the Custom shape.
+	static void ApplyCustomIfActive( bool bWasActive, int nAspectBefore )
 	{
 		if ( !bWasActive )
 			return;
-		s_nResolutionChoice = kPresetCustom;
+		const int nAspect = ListFor( nAspectBefore ) ? nAspectBefore : kAspectCustom;
+		const int nSize   = ListFor( nAspectBefore ) ? kSizeCustom : -1;
+		s_nAspectChoice = nAspect;   // before the apply: ApplyNestedMode() reads it
+		s_nSizeChoice   = nSize;
 		ApplyNestedMode( CustomWidth(), CustomHeight(), g_nNestedRefresh );
+		RecordPick( nAspect, nSize );
 	}
 
 	static void SetCustomWidth( int nWidth )
 	{
 		const bool bActive = ResolutionIsCustom();
+		const int nAspectBefore = CurrentAspect();
 		const int nOldHeight = CustomHeight();
 		s_nCustomWidth = ClampDim( nWidth );
 		s_nCustomHeight = s_bLockAspect
 			? SnapEven( (int)std::lround( s_nCustomWidth / LockedAspect() ) )
 			: nOldHeight;
-		ApplyCustomIfActive( bActive );
+		ApplyCustomIfActive( bActive, nAspectBefore );
 	}
 
 	static void SetCustomHeight( int nHeight )
 	{
 		const bool bActive = ResolutionIsCustom();
+		const int nAspectBefore = CurrentAspect();
 		const int nOldWidth = CustomWidth();
 		s_nCustomHeight = ClampDim( nHeight );
 		s_nCustomWidth = s_bLockAspect
 			? SnapEven( (int)std::lround( s_nCustomHeight * LockedAspect() ) )
 			: nOldWidth;
-		ApplyCustomIfActive( bActive );
+		ApplyCustomIfActive( bActive, nAspectBefore );
 	}
 
 	static void SetLockAspect( bool bLock )
@@ -1104,7 +1295,7 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "display.resolution", "Resolution", ui::Section::Display );
 		a.Keywords( "resolution render internal nested game size width height refresh hz hertz "
-		            "window output xrandr mode 1080p 1440p 4k 720p" );
+		            "window output xrandr mode aspect ratio 1080p 1440p 4k 720p" );
 		a.Summary( ResolutionSummary );
 		// Embedded (DRM) has no window and the display owns the mode; that
 		// is a different feature (GetModes() + the dynamic-refresh atom) for
@@ -1113,19 +1304,38 @@ namespace gamescope
 
 		a.Group( "Game resolution" );
 
-		a.Choice( "display.resolution.preset", "Resolution",
+		a.Choice( "display.resolution.aspect", "Aspect",
 			ui::AnyBind::Of<int>(
-				[]{ return CurrentResolutionChoice(); },
-				[]( int n ) { SetResolutionChoice( n ); } ),
-			kResolutionOptions, std::size( kResolutionOptions ) )
-			.Help( "The resolution the game sees and renders at; gamescope scales it to the window. "
-			       "Most games switch instantly; a few only list it after a restart. Native is the "
-			       "window's size at the moment you pick it." )
-			.Default( kPresetNative )
-			.Keywords( "resolution render internal nested native custom 1080p 1440p 4k 720p" );
+				[]{ return CurrentAspect(); },
+				[]( int n ) { SetAspectChoice( n ); } ),
+			kAspectOptions, std::size( kAspectOptions ) )
+			.Help( "Pick the shape first; the list below shows common sizes for it. Native uses "
+			       "the window's size; Custom lets you type any size. Picking a shape changes "
+			       "nothing on its own -- the resolution changes when you pick a size." )
+			.Default( kAspectNative )
+			.Keywords( "resolution aspect ratio shape native custom 16:9 4:3 16:10 21:9 widescreen "
+			           "ultrawide" );
+
+		// One size row per shape -- see the "game resolution" comment above
+		// for why this is four rows and not one with a changing list.
+		for ( const AspectList &list : kAspectLists )
+		{
+			const AspectList *pList = &list;
+			a.Choice( list.pszId, list.pszTitle,
+				ui::AnyBind::Of<int>(
+					[ pList ]{ return CurrentSizeChoice( *pList ); },
+					[ pList ]( int n ) { SetSizeChoice( *pList, n ); } ),
+				list.pOptions, list.nOptions )
+				.Help( "Common sizes for this shape; the game sees and renders at the one you pick "
+				       "and gamescope scales it to the window. Most games switch instantly; a few "
+				       "only list it after a restart. Custom hands the size to Width and Height "
+				       "below." )
+				.Keywords( "resolution render internal nested preset size 1080p 1440p 4k 720p 1200p" )
+				.DisabledUnless( [ pList ]{ return CurrentAspect() == pList->nAspect; }, list.pszReason );
+		}
 
 		static constexpr const char *kNotCustom =
-			"pick Custom in Resolution above to type your own size -- a preset already sets both";
+			"pick Custom in Aspect above, or in the size list, to type your own size";
 
 		a.Stepper( "display.resolution.width", "Width",
 			ui::AnyBind::Of<int>(

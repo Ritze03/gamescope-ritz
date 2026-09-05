@@ -45,7 +45,7 @@ namespace gamescope::ui
 		// =================================================================
 		//  THE SET (SPEC §8.0)
 		// =================================================================
-		// Thirteen glyphs, one 24-unit grid, one stroke weight. Eleven are
+		// Sixteen glyphs, one 24-unit grid, one stroke weight. Eleven are
 		// transcribed from index.html's ICONS table (SPEC §8.0's own count);
 		// display.general is the twelfth, added when the user's direct
 		// correction to D13.1 (2026-08-24) gave DISPLAY a new rail item that
@@ -55,7 +55,10 @@ namespace gamescope::ui
 		// way: it is the actual pointer shape, reused from CursorArt.h's own
 		// corner constants -- see that entry below. system.general is the
 		// fourteenth (2026-09-05), the System tab's own area -- see
-		// PanelSystem.cpp.
+		// PanelSystem.cpp. display.resolution and system.crosshair are the
+		// fifteenth and sixteenth (2026-09-05, requests item 12): both areas
+		// had shipped drawing the rail's letter fallback (`R`, `C`) and were
+		// drawn freehand here in the set's own style -- see their entries.
 		//
 		// THE ACCEPTANCE CRITERION THIS TABLE IS WRITTEN AGAINST is not
 		// "does it look like the thing" -- it is "is it ONE SILHOUETTE at 12
@@ -106,6 +109,20 @@ namespace gamescope::ui
 			Poly( { 3.5f, 9.5f }, { 3.5f, 3.5f }, { 9.5f, 3.5f } ),
 			Poly( { 20.5f, 14.5f }, { 20.5f, 20.5f }, { 14.5f, 20.5f } ),
 			Rect( 8.5f, 8.5f, 15.5f, 15.5f ) } },
+
+		{ "display.resolution", 4, {
+			// A screen outline with a double-headed diagonal arrow inside
+			// it -- the "size of the picture" mark. Sits right after
+			// Upscaling in the rail, so it is read against that glyph
+			// first: Upscaling is a SMALL square with brackets pulling
+			// away OUTSIDE it, this is a LARGE frame with the arrow held
+			// INSIDE it. At 12 px the arrowheads close up and the mark is
+			// a frame with a slash, which no other glyph is. Freehand
+			// (2026-09-05): the mockup predates the area.
+			Rect( 3.5f, 5.5f, 20.5f, 18.5f ),
+			Line( { 8.0f, 15.0f }, { 16.0f, 9.0f } ),
+			Poly( { 11.5f, 9.0f }, { 16.0f, 9.0f }, { 16.0f, 12.5f } ),
+			Poly( { 12.5f, 15.0f }, { 8.0f, 15.0f }, { 8.0f, 11.5f } ) } },
 
 		{ "display.frame_limiter", 2, {
 			// A clock. The hands are one open polyline so the join at the
@@ -164,6 +181,23 @@ namespace gamescope::ui
 			Bar( 4.5f, 12.0f, 8.5f, 18.0f ),
 			Bar( 10.0f, 6.5f, 14.0f, 18.0f ),
 			Bar( 15.5f, 15.0f, 19.5f, 18.0f ) } },
+
+		{ "system.crosshair", 5, {
+			// A reticle: a ring with four arms that cross its edge and stop
+			// short of the centre, leaving it open. The arms cross the ring
+			// on purpose -- four arms alone with a gap read as a dashed
+			// plus at 12 px (tried, rejected), and the ring is what says
+			// "sight" rather than "add". Read against system.general's
+			// chip, its nearest shape mix: the chip's pins stand OFF the
+			// edges of a small square, these arms run THROUGH the edge of
+			// a large circle and the centre is a hole. Freehand
+			// (2026-09-05) -- the crosshair feature itself is a later
+			// addition than the mockup; see Crosshair.cpp.
+			Circ( 12.0f, 12.0f, 7.0f ),
+			Line( { 12.0f, 2.5f }, { 12.0f, 9.0f } ),
+			Line( { 12.0f, 15.0f }, { 12.0f, 21.5f } ),
+			Line( { 2.5f, 12.0f }, { 9.0f, 12.0f } ),
+			Line( { 15.0f, 12.0f }, { 21.5f, 12.0f } ) } },
 
 		{ "system.log", 4, {
 			// Four rules of decreasing length: lines of text, ragged right.

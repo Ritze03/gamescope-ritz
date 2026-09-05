@@ -24,15 +24,15 @@ the **existing** `wlserver_set_xwayland_server_mode(idx, w, h, mHz)` (`src/wlser
 the exact path the Steam Deck's `GAMESCOPE_XWAYLAND_MODE_CONTROL` root atom uses.
 
 *Two callers, opposite lock states.* The Shell's setters run on the steamcompmgr thread
-**without** the lock; `gamescopectl overlay_e2_set display.resolution.preset N` reaches the
-same setter from `gamescope_private_execute()` (`src/wlserver.cpp`), which wlserver dispatches
+**without** the lock; `gamescopectl overlay_e2_set display.resolution.aspect N` (or one of the
+`preset_*` rows) reaches the same setter from `gamescope_private_execute()` (`src/wlserver.cpp`), which wlserver dispatches
 **with** the lock already held. The lock is a plain non-recursive mutex, so the first
 version — an unconditional `wlserver_lock()` — deadlocked the console path: the command never
 returned and every later `gamescopectl` command queued behind it (laptop, 2026-09-05). The
 function now takes the lock only if `!wlserver_is_lock_held()`, the same pattern
 `wlserver_debug_key` / `wlserver_debug_mouse_button` use. The keyboard path (Left/Right on
 the Choice row) reaches it too: `AdjustValue()` (`Registry.cpp`) writes the next option
-through `Binding().Set()`, which is `SetResolutionChoice()` → `ApplyNestedMode()`. *Why a new function and not the atom:* the atom handler deliberately does
+through `Binding().Set()`, which is `SetAspectChoice()` / `SetSizeChoice()` → `ApplyNestedMode()`. *Why a new function and not the atom:* the atom handler deliberately does
 not touch `g_nNestedWidth/Height` (Steam owns those on the Deck); the fork's UI must, because
 cursor-scale ratios, the layer-shell configure size and the area's own read-back come from
 them.
@@ -79,6 +79,16 @@ size, so a refused request falls back to **Follow window** and the Facts row sho
 host's answer. *Why:* a control that displays what was asked for while the window shows
 something else is the "renders but does nothing" defect class (#25/#68) again.
 
+### The pointer follows the change
+
+The absolute-pointer mapping (force-grab off) is rebuilt from the painted base layer every
+frame, so it follows the resized window on its own; what did not follow was the client's
+pointer, which kept the old game-space position until the next host motion. Since item 10
+(2026-09-05) `update_touch_scaling()` re-syncs it from the last host sample the moment the
+mapping changes. Details, including the force-grab toggle and the X-side limit for windows
+larger than the new root: [cursor-pipeline.md](cursor-pipeline.md), "The absolute pointer under
+a stretched resolution".
+
 ## Honest limits (the help text says these too)
 
 Not achievable at runtime in nested mode, and not promised anywhere in the UI or here:
@@ -107,13 +117,73 @@ thread reads it while the steamcompmgr thread writes it.
 
 | id | kind | notes |
 |---|---|---|
-| `display.resolution.preset` | Choice | Native (window size at the moment of the pick), 3840x2160, 2560x1440, 1920x1080, 1600x900, 1280x720, Custom |
-| `display.resolution.width` / `.height` | Stepper | 320–7680, step 8, `DisabledUnless` Custom; `width.lock_aspect` Param holds the ratio captured when the lock engaged (no drift) |
+| `display.resolution.aspect` | Choice | Native (window size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — see [Two rows](#two-rows-aspect-then-size) |
+| `display.resolution.preset_16_9` | Choice | 3840x2160, 2560x1440, 1920x1080, 1600x900, 1280x720, Custom; `DisabledUnless` Aspect is 16:9 |
+| `display.resolution.preset_4_3` | Choice | 2880x2160, 1920x1440, 1440x1080, 1280x960, Custom; `DisabledUnless` Aspect is 4:3 |
+| `display.resolution.preset_16_10` | Choice | 3840x2400, 2560x1600, 1920x1200, 1680x1050, 1440x900, 1280x800, Custom; `DisabledUnless` Aspect is 16:10 |
+| `display.resolution.preset_21_9` | Choice | 5120x2160, 3440x1440, 2560x1080, Custom; `DisabledUnless` Aspect is 21:9 |
+| `display.resolution.width` / `.height` | Stepper | 320–7680, step 8, `DisabledUnless` Custom (as the aspect, or within a shape's list); `width.lock_aspect` Param holds the ratio captured when the lock engaged (no drift) |
 | `display.refresh` | Choice | Follow host, 60, 90, 120, 144, 165, 240, Custom |
 | `display.refresh.custom` | Stepper | 24–500 Hz, `DisabledUnless` Custom |
 | `display.output_size` | Choice | Follow window, 1920x1080, 2560x1440, 3840x2160, Custom → `RequestOutputSize()` |
 | `display.output_size.width` / `.height` | Stepper | 320–7680, step 8, `DisabledUnless` Custom |
 | `display.resolution_facts` | Facts | `Game sees WxH @ R Hz · window WxH · host R Hz`, from the game Xwayland root's `root_width/height`, `g_nNestedRefresh` (host when 0), `g_nOutputWidth/Height`, `g_nOutputRefresh`; plus "takes effect" and "applied via" lines |
+
+### Two rows: aspect, then size
+
+Tracker item 13 (2026-09-05). The user picks the **shape** first (Aspect row), then a
+**size** from that shape's list; Custom stays. The four lists are exactly the user's.
+
+*Why four size rows and not one whose list changes.* The Registry copies a Choice's
+options at registration (`Entry::m_Options`, filled by `Area::Choice()`) and has no
+per-entry visibility gate — `AvailableWhen` exists only on an Area. So "the list follows
+the aspect" is one Choice per shape, each `DisabledUnless` its shape is the live one. All
+five rows are dropdowns (labels over 8 characters, or more than 5 options, auto-downgrade
+from segmented), so the three greyed rows are compact and each carries its reason
+("pick 4:3 in Aspect above to use this list"). Every size row — live or greyed — shows the
+live mode's entry when it is on that list and Custom otherwise; a row shows what *is*, never
+a suggestion of what a pick would do.
+
+*Why every list ends in Custom.* A live mode with the shape but on no list (a launch-time
+`-w 1600 -h 1200`) has to be reflectable as "4:3 + Custom"; a dropdown with no matching
+value draws an empty label, which is the "shows nothing" defect class again.
+
+*Picking a shape applies nothing — the shape you pick stays selected until you choose a
+size.* The Aspect row only decides which size list is enabled; the game's mode changes when
+a **size** is picked (or a Custom stepper moves). Picking 4:3 over a live 1920x1080 changes
+nothing on screen, `xrandr` still reports 1920x1080, the 4:3 row is enabled reading
+"Custom" (no 4:3 entry is live) with the steppers at 1920x1080, and only picking 1440x1080
+applies it. **Why:** changing the game's resolution as a side effect of browsing a list is
+exactly the kind of surprise the user asked to have removed from the profile UI. Native and
+Custom are sizes in their own right rather than shapes with a list, so they keep applying
+as before (Native the window size; Custom the live size, a no-op on screen).
+
+*Custom seeding.* Picking Custom — as the aspect, or inside a shape's list — seeds the
+steppers from the live mode (which is the last preset applied) and re-captures the lock
+ratio, so "16:10, then Custom" starts at a 16:10 size with the lock holding 16:10. Picking
+Custom therefore changes nothing until a stepper moves. A stepper move under "4:3 + Custom"
+stays recorded as 4:3 (the lock holds the ratio); under the Custom shape it stays Custom.
+
+### The reflection rule (`CurrentAspect()` / `CurrentSizeChoice()`)
+
+The rows read the live `g_nNestedWidth/Height`, never a stored pick, so a fresh open and a
+change from outside (Steam's atom, a host resize) both show the truth:
+
+1. An explicit pick is trusted **while the live mode is still the one it was made against**
+   (`s_nPickWidth/Height`, captured at pick time — after the apply for a size pick, so it is
+   recorded against the size it applied). This is what keeps a browsed shape selected, and
+   what tells "Native" from "16:9 + 1920 x 1080" in a 1920x1080 window. Picking a size sets
+   the pick to that size's shape. The trust ends the moment the mode changes for any other
+   reason — a CLI/config apply, a per-game switch, Steam's atom.
+2. Otherwise the live size is classified on its own: on any shape's list → that shape + that
+   entry; equal to the window → Native; within 3 % of a shape's nominal ratio
+   (`kAspectTolerance`; 21:9 is nominally 64:27 = 2.37 so the 2.37–2.39 panel sizes and true
+   2.33 all qualify) → that shape + Custom; anything else → Custom.
+
+So a persisted `nested_width/height` of 1280x960 reopens as Aspect 4:3, size 1280x960, with
+no pick stored anywhere. Applying and persisting are unchanged: every path ends in
+`ApplyNestedMode()` (Phase B below); `nested_*` write `0` for Native as before, keyed on
+`s_nAspectChoice == kAspectNative`.
 
 "Game sees" reads the Xwayland root, not `g_nNestedWidth/Height`, because Steam's atom path
 changes the former without the latter and the row exists to show the truth. Labels use a
@@ -131,7 +201,7 @@ window rules are the right tool for that).
   three live values — also writes `GamescopeSettings::nested_width/height/refresh_hz` into the
   routed config (`config::EnqueueRoutedWrite()`) every time it runs, `0` meaning "as launched".
   Native resolution and Follow-host refresh both write `0`, not the live pixel size / Hz at the
-  moment of the pick — `s_nResolutionChoice == kPresetNative` is what tells "Native" apart from
+  moment of the pick — `s_nAspectChoice == kAspectNative` is what tells "Native" apart from
   a Custom pick that happens to match the output size; Follow-host already arrives as `nRefreshmHz
   == 0` from `SetRefreshChoice()`, no extra check needed.
 - **Startup apply**: `main.cpp`'s `apply_ritz_config_to_startup_state()` sets

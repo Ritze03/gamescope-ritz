@@ -12,6 +12,11 @@ The newest version below is the one this build reports.
 ## [0.6.0] – 2026-09-05
 
 ### Added
+- **Rail icons for Crosshair and Resolution**: the two areas now show drawn glyphs in
+  the rail, a reticle and a screen with a resize arrow, instead of the letters C and R.
+- **Resolution presets by aspect ratio**: Display > Resolution picks the shape first
+  (Native, 16:9, 4:3, 16:10, 21:9, Custom), then a common size for it; picking a shape
+  changes nothing on its own, and Custom still lets you type any size.
 - **Nested resolution and refresh rate persist**: the game resolution and refresh rate
   chosen in Display > Resolution are remembered and reapplied on the next launch,
   unless an explicit `-w`/`-h`/`-r` flag overrides them.

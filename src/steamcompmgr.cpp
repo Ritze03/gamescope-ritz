@@ -1097,8 +1097,10 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 //
 // Thread: TWO callers with opposite lock states. The Shell's setters run on
 // the steamcompmgr thread WITHOUT the wlserver lock (PanelDisplay.cpp's
-// file-top comment); `overlay_e2_set display.resolution.preset N` reaches the
-// same setter from gamescope_private_execute() (wlserver.cpp), which wlserver
+// file-top comment); `overlay_e2_set display.resolution.aspect N` (or one of
+// the `display.resolution.preset_16_9` / `_4_3` / `_16_10` / `_21_9` size
+// rows) reaches the same setter from gamescope_private_execute()
+// (wlserver.cpp), which wlserver
 // dispatches WITH the lock already held. wlserver_set_xwayland_server_mode()
 // asserts the lock, so it must be taken here for the first caller -- and the
 // lock is a plain (non-recursive) pthread mutex, so taking it unconditionally
