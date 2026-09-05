@@ -10,12 +10,29 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done and verified
 
 ---
 
-## [ ] 1. Pixel-regression script
+## [x] 1. Pixel-regression script
 
-A headless capture-and-sample script under `scripts/`: launches gamescope headless,
-captures a screenshot, samples known pixels for HUD inversion, crosshair colour, and
-outline, and fails on a threshold. Intended to catch regressions like item 11 in the
-round-1 tracker automatically instead of relying on a manual bisect.
+**Done `d976392`.** `scripts/pixel-regression.sh` (+ `scripts/pixel_regression_sample.py`,
+a PIL sampler — PIL was already installed, no new dependency). Deliberately **desktop-only
+by design**, not a laptop check: that is the entire point (the laptop round trip is what
+this replaces). `gamescope --backend headless` was tried first and rejected — measured on
+this rig it captures no extra composited layer at all via `gamescopectl screenshot`, see
+`superdoc/features/cursor-pipeline.md`'s "Verified by direct X11 query" section. Instead: a
+private, invisible sway (`WLR_BACKENDS=headless`, isolated `XDG_RUNTIME_DIR`, no input
+devices) hosts a real nested `gamescope --backend wayland`, and `gamescopectl screenshot
+"<path> 4"` against that instance does capture the HUD/crosshair. Test client is `kitty`
+with matching `-o background/foreground/cursor` (xterm, the documented recipe, is not
+installed here). State is driven via an isolated config file plus `overlay_e2_set` /
+`fps_display_force` over `gamescopectl` — no OS input.
+
+19 checks, all passing on the real binary (46s runtime): HUD inversion at a dark and a
+mid-tone background, Inverted-HUD-plus-crosshair split mode (digit still inverts, crosshair
+keeps its colour, crosshair's own outline stays black — the exact regression from round-1
+item 11), Fixed-mode colour, the HUD's own outline on/off, and all four crosshair arms'
+colour/gap/outline geometry. Exits non-zero on any real failure, so it gates a commit; see
+`scripts/README.md`'s "Pixel regression" section for how to add a check and read a failure.
+Docs: `superdoc/features/fps-display.md` and `crosshair.md` point at it, and the
+`grade-screenshots-not-checklists` memory note now says to run it.
 
 ## [x] 2. Layer budget fails loudly
 
