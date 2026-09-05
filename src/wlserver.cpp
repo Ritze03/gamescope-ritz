@@ -872,6 +872,58 @@ static gamescope::ConCommand cc_wlserver_debug_mouse_button(
 			wlserver_unlock();
 	} );
 
+// Item 10 (superdoc/planning/requests-2026-09-05.md): drives the exact
+// absolute-pointer path a real nested backend takes for a host pointer with
+// force grab off -- SDLBackend.cpp's SDL_MOUSEMOTION case and
+// WaylandBackend.cpp's pointer-motion handler both normalise their host
+// event to 0..1 per axis and call wlserver_touchmotion() with touch_id 0
+// and no connector (mouse motion isn't a touchscreen sample, so there's no
+// orientation to correct). Entering there -- not some lower-level helper --
+// means this command records the sample the same way
+// (flLastAbsolutePointerX/Y, bAbsolutePointerCurrent, both set inside
+// wlserver_touchmotion() itself) and runs it through the same
+// wlserver_absolute_to_surface() mapping, so it can verify the item-10
+// re-sync fix above (wlserver_resync_absolute_pointer()) without OS-level
+// input injection (AUTONOMOUS-DECISIONS.md D4). Contrast with
+// wlserver_debug_mouse_motion above, which is RELATIVE and marks this
+// absolute sample stale rather than refreshing it.
+static gamescope::ConCommand cc_wlserver_debug_absolute_motion(
+	"wlserver_debug_absolute_motion",
+	"Send an absolute pointer sample on gamescope's OWN seat: wlserver_debug_absolute_motion "
+	"<x> <y>, normalised output coordinates 0.0-1.0 per axis. Enters at wlserver_touchmotion(), "
+	"the same function a real host pointer sample takes with force grab off, so it exercises the "
+	"same output->surface mapping and absolute-pointer re-sync path a real sample would; it "
+	"cannot reach the host's pointer. Contrast with wlserver_debug_mouse_motion, which is "
+	"RELATIVE and marks this absolute sample stale. Through gamescopectl the arguments must be "
+	"ONE quoted argument: gamescopectl wlserver_debug_absolute_motion \"0.75 0.25\".",
+	[]( std::span<std::string_view> args )
+	{
+		if ( args.size() < 3 )
+		{
+			console_log.errorf( "usage: wlserver_debug_absolute_motion <x> <y>" );
+			return;
+		}
+
+		const std::optional<double> ox = gamescope::Parse<double>( args[ 1 ] );
+		const std::optional<double> oy = gamescope::Parse<double>( args[ 2 ] );
+		if ( !ox || !oy || *ox < 0.0 || *ox > 1.0 || *oy < 0.0 || *oy > 1.0 )
+		{
+			console_log.errorf( "wlserver_debug_absolute_motion: <x> <y> must be normalised 0.0-1.0; "
+			                    "usage: wlserver_debug_absolute_motion <x> <y>" );
+			return;
+		}
+
+		// Same conditional lock as the sibling debug commands above:
+		// gamescopectl already dispatches this with the lock held, the
+		// script console does not.
+		const bool bNeedLock = !wlserver_is_lock_held();
+		if ( bNeedLock )
+			wlserver_lock();
+		wlserver_touchmotion( *ox, *oy, 0, get_time_in_milliseconds() );
+		if ( bNeedLock )
+			wlserver_unlock();
+	} );
+
 // Which side (the focused game's wl_seat, or the settings overlay) actually
 // received a given key/mouse-button's PRESS, keyed by raw linux keycode/
 // button code. Consulted on RELEASE so a press-and-release pair always goes

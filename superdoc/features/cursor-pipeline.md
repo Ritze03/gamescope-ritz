@@ -979,3 +979,15 @@ its 1920x1080 window after a 1280x960 mode) has its X sprite clamped to the root
 itself; gamescope maps to the window's full extent, X cuts it off. That is inherent to a screen
 smaller than a window and is what `--force-windows-fullscreen` exists for.
 
+### Driving the absolute path without OS-level input
+
+`wlserver_debug_absolute_motion "<x> <y>"` (`wlserver.cpp`, next to
+`wlserver_debug_mouse_motion`/`_button`) is the sanctioned way to exercise this exact path from
+`gamescopectl` in a test: it takes normalised output coordinates (0.0-1.0 per axis) and enters
+at `wlserver_touchmotion()` with touch id 0 and no connector, precisely as `SDLBackend.cpp`'s
+ungrabbed `SDL_MOUSEMOTION` case and `WaylandBackend.cpp`'s pointer-motion handler do for a
+real host pointer with force grab off -- so it records `flLastAbsolutePointerX/Y` and
+`bAbsolutePointerCurrent` and runs the sample through the real `wlserver_absolute_to_surface()`
+mapping, letting `wlserver_resync_absolute_pointer()`'s behaviour above be verified on a laptop
+with no host input device involved.
+
