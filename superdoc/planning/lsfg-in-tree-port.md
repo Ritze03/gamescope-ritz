@@ -341,7 +341,7 @@ above confirms the model's output quality is worth the Milestone 3 investment.
 - **Overlay/UI ghosting (Q3):** unresolved by the algorithm itself — requires the
   overlay composite step to move to *after* frame generation in the pipeline, a
   restructuring of `paint_all()`'s current single-pass composite order.
-- **Latency regression:** frame generation adds at least one real frame of delay by
+- **Latency regression** *(corrected 2026-09-05 — see [`fidelityfx-opticalflow-framegen.md`](fidelityfx-opticalflow-framegen.md) §5: with the target pinned to the display refresh and the FPS-limiter vblank divisor holding the game at refresh/2, 2x frame gen is one composite + one present per vblank, and the added latency is one refresh interval plus compute, not a full game frame)*: frame generation adds at least one real frame of delay by
   construction, independent of how well pacing is engineered — a real user-facing cost
   on latency-sensitive targets (Steam Deck, OpenVR) that no amount of implementation
   quality removes.

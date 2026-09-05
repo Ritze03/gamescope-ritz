@@ -75,6 +75,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 ## planning/ — overlay UI implementation notes
 
+- Frame-generation studies — [FidelityFX OpticalFlow / Frame Interpolation](planning/fidelityfx-opticalflow-framegen.md) (2026-09-05: feasible but not sensible — FI needs game depth and motion vectors a compositor never has) and the earlier [lsfg-vk in-tree port](planning/lsfg-in-tree-port.md) (GPLv3 blocker). Both conclude: run `lsfg-vk` as a layer under gamescope instead.
 - [UI mockup — pixel-exact spec](planning/ui-mockup-precise-spec.md) — the settings
   overlay's full chrome/color/typography/control spec, measured from the original design
   mockup.
