@@ -64,10 +64,28 @@ features.
 **2026-09-06:** written — [`feature-ideas-2026-09-05.md`](feature-ideas-2026-09-05.md)
 (16 filters, 17 features, Top 5). A doc, so nothing to verify on the laptop.
 
-## [ ] 6. FPS HUD digit alignment to anchor edge
+## [~] 6. FPS HUD digit alignment to anchor edge
 
 Align the FPS HUD digits to the anchor's screen edge so the readout doesn't shift
 when the value's digit width changes.
+
+**2026-09-06:** implemented and built -- `MeasureFpsModule()`/`DrawReadout()` in
+`FpsDisplay.cpp` now place the unpadded digits flush to the anchor's horizontal
+side (left/right anchors flush, centre unchanged) instead of always centring them
+in the pinned-width box; `ResolveAnchoredOrigin()` already kept the box's
+anchor-facing edge fixed across a digit-count change, confirmed rather than
+assumed. New debug ConCommand `fps_display_force "<n>"` forces the reading for
+testing. Code landed in `84a50f6` (bundled there by a concurrent edit to the same
+working tree, not its own commit); the changelog entry and feature-doc section are
+`392fdac`. Pixel-verified **headless on the desktop** only (`--backend headless`,
+isolated `XDG_RUNTIME_DIR`/`XDG_CONFIG_HOME`, `fps_display_force` + `gamescopectl
+screenshot "<path> 4"`, measured digit-ink and backdrop bounding boxes for
+top-left/top-right/top-center at readings 60/144/1000 -- captures and the
+measured-edge table in `build-release/verify-shots/hud-align/`): the anchor-facing
+edge is pixel-stable (within 1px) across all three readings for every anchor,
+including across the 3-to-4-digit box widening. **Not yet verified live on the
+test laptop** per this file's own bar -- left `[~]` rather than `[x]` for that
+reason.
 
 ---
 
