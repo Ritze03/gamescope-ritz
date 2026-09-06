@@ -215,7 +215,17 @@ samples while locked reached the client as 6 motions (`xrel=426/853`), and 2 sca
 2 nested-mode changes while locked delivered 2 re-sync motions; fixed binary — 0 and 0
 (`motions_locked=0`, `resyncs=0`, `warps_suppressed_locked` +1 per change), unlocked exactly
 1 re-sync per real change / 0 per no-op / 0 over 2 s idle. 20/20. Evidence:
-`build-release/verify-shots/pointer-regression/`. **Needs the user's CS2 check** (below).
+`build-release/verify-shots/pointer-regression/`.
+
+**2026-09-06, laptop (Intel HD 620 / ANV), build `4d0dea9` deployed via `remote-test.sh
+sync`:** the same counting checks replicated by hand with `--backend headless` (no sway
+there; no window at all), isolated `XDG_RUNTIME_DIR`/`XDG_CONFIG_HOME`, the shipped
+`pointer_lock_client` inside gamescope's Xwayland — **17/17**: `constraint=locked`, 10/10
+relative injections seen, 0/6 absolute samples seen, 4 mapping changes with `resyncs=0`
+and `motions_locked=0` (`warps_suppressed_locked` +5 = the sample + 4 changes), unlocked
+exactly 1 re-sync per real change / 0 per no-op / 0 idle. Logs and `results.txt`:
+`build-release/verify-shots/pointer-regression/laptop/pointer-check-20260906-042303/`.
+**Needs the user's CS2 check** (below).
 
 ---
 
