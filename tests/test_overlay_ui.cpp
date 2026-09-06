@@ -2187,21 +2187,67 @@ TEST_CASE( "selection: a value change selects the row exactly like a click does"
            "[overlay_ui]" )
 {
 	// Neither happened: nothing to select.
-	REQUIRE_FALSE( ui::controls::ShouldSelectRow( false, false ) );
+	REQUIRE_FALSE( ui::controls::ShouldSelectRow( false, false, false ) );
 
 	// The existing behaviour: a raw click on the row (or its label) still
 	// selects it, with no value change at all -- e.g. an Action or Facts row.
-	REQUIRE( ui::controls::ShouldSelectRow( true, false ) );
+	REQUIRE( ui::controls::ShouldSelectRow( true, false, false ) );
 
-	// The fix: a SIMULATED value change with no click -- exactly what a
-	// slider drag, a stepper's -/+ or typed edit, a switch flip, a segmented
-	// Choice pick, or a committed Dropdown pick produces when the pointer
-	// lands on the atom rather than on the row's own button -- selects the
-	// row on its own.
-	REQUIRE( ui::controls::ShouldSelectRow( false, true ) );
+	// A SIMULATED value change with no click -- exactly what a slider drag, a
+	// stepper's -/+ or typed edit, a switch flip, a segmented Choice pick, or
+	// a committed Dropdown pick produces when the pointer lands on the atom
+	// rather than on the row's own button -- selects the row on its own.
+	REQUIRE( ui::controls::ShouldSelectRow( false, true, false ) );
 
-	// Both at once (unusual, but not a special case): still selects.
-	REQUIRE( ui::controls::ShouldSelectRow( true, true ) );
+	// 2026-09-08: the third route, and the one the other two missed. A press
+	// that lands on a control which changes NO value still selects: opening a
+	// dropdown, pressing a slider handle without moving it, and every press
+	// inside a composite band (whose own atoms report no change up to the row
+	// painter at all).
+	REQUIRE( ui::controls::ShouldSelectRow( false, false, true ) );
+
+	// All at once (unusual, but not a special case): still selects.
+	REQUIRE( ui::controls::ShouldSelectRow( true, true, true ) );
+}
+
+// =========================================================================
+//  2026-09-08 -- what counts as "a press landed on this row's control"
+// =========================================================================
+// The row painters snapshot ImGui's ActiveId either side of submitting their
+// control. This is the whole rule that turns the two snapshots into an
+// answer, pinned here because getting either half of it wrong is silent:
+// dropping the `!= nBefore` test would make EVERY row drawn during a drag
+// claim the press (the sheet's selection would follow the mouse down the
+// column), and dropping the `!= 0` test would make the frame a drag ENDS
+// re-select whichever row happened to be drawn first.
+TEST_CASE( "selection: engagement is 'a NEW, non-zero ActiveId, taken right here'",
+           "[overlay_ui]" )
+{
+	// Nothing was active before, something is now: this row's control took
+	// the press. The one case that must select.
+	REQUIRE( ui::controls::ControlEngaged( 0u, 4242u ) );
+
+	// Nothing active either side -- an ordinary row being painted while the
+	// pointer is elsewhere, or merely hovering.
+	REQUIRE_FALSE( ui::controls::ControlEngaged( 0u, 0u ) );
+
+	// Something was ALREADY active before this row drew, and still is: a
+	// slider on another row is mid-drag. Every other row in the sheet sees
+	// exactly this, every frame of that drag, and none of them may steal the
+	// selection.
+	REQUIRE_FALSE( ui::controls::ControlEngaged( 4242u, 4242u ) );
+
+	// ...including the dragged row itself on frames 2..n: it took ActiveId on
+	// frame 1 (which is where the selection moved) and holds it after.
+	REQUIRE_FALSE( ui::controls::ControlEngaged( 99u, 99u ) );
+
+	// The release frame: ActiveId falls back to zero while this row draws.
+	// The selection already moved on the press; nothing to do here.
+	REQUIRE_FALSE( ui::controls::ControlEngaged( 99u, 0u ) );
+
+	// A handover -- one control released and another took it inside this same
+	// row's draw. Rare, but it is still this row that was pressed.
+	REQUIRE( ui::controls::ControlEngaged( 99u, 100u ) );
 }
 
 // =========================================================================

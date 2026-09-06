@@ -34,6 +34,7 @@
 #include "Overlay/UI/Tokens.h"
 
 #include <string>
+#include <utility>
 
 // palette::g_LiveTheme used to be defined HERE, because its real definition
 // lived in Chrome.cpp -- the legacy overlay's 1600 lines of dock/window/drag
@@ -392,6 +393,164 @@ TEST_CASE( "atoms: a control inside a full-width row selector still takes the cl
 
 	REQUIRE( nRowClicks == 1 ); // the row got it...
 	REQUIRE( bValue );          // ...and the switch is untouched
+}
+
+// =========================================================================
+//  "Selection follows edit" -- the press, not the value (2026-09-08)
+// =========================================================================
+// requests-2026-09-08 item 2. Shipping "select the row when its value
+// changes" left three real cases dead, all measured with real clicks against
+// a running binary: opening a dropdown (changes no value), pressing a slider
+// handle without dragging it off its current value, and EVERY composite band
+// -- the accent hue rail, a colour picker's R/G/B rails, the anchor grid, a
+// list row -- whose body atoms report nothing up to the row painter at all.
+//
+// The replacement rule is engagement: the row painter snapshots ImGui's
+// ActiveId either side of submitting its control, and a control that TOOK the
+// press selects its row whether or not anything moved. This test drives the
+// real arrangement (row selector first with AllowOverlap, atom second, both
+// inside the row's PushID) and asserts the snapshot pair for each atom kind,
+// so the claim rests on what ImGui actually did rather than on the
+// arithmetic alone (which test_overlay_ui.cpp pins separately).
+TEST_CASE( "atoms: a press on a row's control reports engagement; a hover does not",
+           "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame(); h.EndFrame();
+
+	const float  flTop  = 200.0f;
+	const ImRect rcRow  = MakeRow( flTop ).Bounds();
+
+	enum class Atom { Slider, Switch, Stepper, Dropdown };
+	Atom eAtom = Atom::Slider;
+
+	float flSlider = 0.5f;
+	bool  bSwitch  = false;
+	int   nStepper = 5;
+	int   nChoice  = 1;
+	// This test's own options -- the file's kInheritOptions is declared
+	// further down, next to the dropdown cases that came later.
+	static constexpr ui::Option kOpts[] = { { 0, "Off" }, { 1, "Casual" }, { 2, "Full" } };
+
+	int  nRowClicks = 0;
+	bool bEngaged   = false;
+	bool bChanged   = false;
+
+	// The row painter's own arrangement, reduced to what decides the answer.
+	const auto Frame = [ & ]()
+	{
+		h.BeginFrame();
+		bEngaged = false;
+		bChanged = false;
+		ImGui::SetCursorScreenPos( rcRow.Min );
+		ImGui::PushID( "row" );
+		ImGui::SetNextItemAllowOverlap();
+		if ( ImGui::InvisibleButton( "##row", rcRow.GetSize() ) )
+			nRowClicks++;
+
+		const ImGuiID idBefore = ImGui::GetActiveID();
+		const ui::RowCtx row = MakeRow( flTop );
+		switch ( eAtom )
+		{
+			case Atom::Slider:
+				bChanged = ui::controls::Slider( row, "sl", &flSlider, 0.0f, 1.0f, 0.5f, true );
+				break;
+			case Atom::Switch:
+				bChanged = ui::controls::Switch( row, "sw", &bSwitch );
+				break;
+			case Atom::Stepper:
+				bChanged = ui::controls::Stepper( row, "st", &nStepper, 0, 10, 1 );
+				break;
+			case Atom::Dropdown:
+				bChanged = ui::controls::Dropdown( row, "dd", &nChoice,
+					kOpts, IM_ARRAYSIZE( kOpts ) ).bChanged;
+				break;
+		}
+		bEngaged = ui::controls::ControlEngaged( idBefore, ImGui::GetActiveID() );
+		ImGui::PopID();
+		h.EndFrame();
+	};
+
+	// A press, at `vAt`, reported on the frame the button goes down.
+	const auto PressAt = [ & ]( const ImVec2 &vAt )
+	{
+		h.MoveMouse( vAt );
+		Frame();
+		h.MouseButton( true );
+		Frame();                     // <- the frame under test
+		const bool bWasEngaged = bEngaged;
+		const bool bWasChanged = bChanged;
+		h.MouseButton( false );
+		Frame();
+		return std::pair<bool, bool>( bWasEngaged, bWasChanged );
+	};
+
+	SECTION( "a slider handle pressed where it already sits selects the row" )
+	{
+		eAtom = Atom::Slider;
+		// Hovering alone is not engagement -- the sheet's selection must not
+		// follow the mouse around.
+		h.MoveMouse( MakeRow( flTop ).PlaceFull().GetCenter() );
+		Frame();
+		REQUIRE_FALSE( bEngaged );
+
+		// 0.5 of a 0..1 range: the grab is already under the pointer, so this
+		// is the press that used to do nothing at all for selection.
+		const auto [ bPressEngaged, bPressChanged ] =
+			PressAt( MakeRow( flTop ).PlaceFull().GetCenter() );
+		REQUIRE( bPressEngaged );
+		REQUIRE( ui::controls::ShouldSelectRow( false, bPressChanged, bPressEngaged ) );
+		REQUIRE( nRowClicks == 0 );   // the row's own button never saw it
+	}
+
+	SECTION( "a switch knob press selects the row" )
+	{
+		eAtom = Atom::Switch;
+		const auto [ bPressEngaged, bPressChanged ] =
+			PressAt( MakeRow( flTop ).Place( ui::tok::kSwitchW ).GetCenter() );
+		REQUIRE( bPressEngaged );
+		REQUIRE( ui::controls::ShouldSelectRow( false, bPressChanged, bPressEngaged ) );
+	}
+
+	SECTION( "a stepper arrow press selects the row" )
+	{
+		eAtom = Atom::Stepper;
+		const ImRect rcStep = MakeRow( flTop ).Place( ui::tok::kStepperW );
+		// The "+" half -- the right end of the stepper's own group.
+		const auto [ bPressEngaged, bPressChanged ] = PressAt(
+			ImVec2( rcStep.Max.x - 4.0f, rcStep.GetCenter().y ) );
+		REQUIRE( bPressEngaged );
+		REQUIRE( ui::controls::ShouldSelectRow( false, bPressChanged, bPressEngaged ) );
+	}
+
+	SECTION( "opening a dropdown selects the row, though it changes no value" )
+	{
+		eAtom = Atom::Dropdown;
+		const auto [ bPressEngaged, bPressChanged ] =
+			PressAt( MakeRow( flTop ).PlaceFull().GetCenter() );
+		REQUIRE( bPressEngaged );
+		REQUIRE_FALSE( bPressChanged );   // this is exactly why change was not enough
+		REQUIRE( ui::controls::ShouldSelectRow( false, bPressChanged, bPressEngaged ) );
+
+		ui::CloseDropdownPopup();   // leave shared state clean for the next test
+		h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+		h.MouseButton( false );
+		h.BeginFrame(); h.EndFrame();
+	}
+
+	SECTION( "a press on the row's own label zone is a row click, not engagement" )
+	{
+		eAtom = Atom::Slider;
+		const auto [ bPressEngaged, bPressChanged ] =
+			PressAt( ImVec2( rcRow.Min.x + 8.0f, rcRow.GetCenter().y ) );
+		REQUIRE_FALSE( bPressEngaged );
+		REQUIRE_FALSE( bPressChanged );
+		REQUIRE( nRowClicks == 1 );
+		REQUIRE( ui::controls::ShouldSelectRow( true, bPressChanged, bPressEngaged ) );
+	}
 }
 
 // D22. The OTHER half of the same bug, pinned as an executable rule.

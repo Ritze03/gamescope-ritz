@@ -785,9 +785,14 @@ namespace gamescope::ui
 		// the fix; this is the whole rule, kept free of ImGui and of
 		// Shell.cpp's own privacy for the same reason ConstantWidthGrab()
 		// above is.
-		bool ShouldSelectRow( bool bClicked, bool bValueChanged )
+		bool ShouldSelectRow( bool bClicked, bool bValueChanged, bool bControlEngaged )
 		{
-			return bClicked || bValueChanged;
+			return bClicked || bValueChanged || bControlEngaged;
+		}
+
+		bool ControlEngaged( ImGuiID nActiveIdBefore, ImGuiID nActiveIdAfter )
+		{
+			return nActiveIdAfter != 0 && nActiveIdAfter != nActiveIdBefore;
 		}
 
 		// See Controls.h's own comment on ParametersHeaderText() for why

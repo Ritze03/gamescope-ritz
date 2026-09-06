@@ -1402,6 +1402,18 @@ namespace gamescope::ui::shell
 		{
 			if ( args.size() < 2 )
 			{
+				// The listing's first line is the CURRENT selection, so a
+				// script can ask "what is selected right now?" -- the one
+				// question "editing a row selects it" is actually about, and
+				// the one thing this shell had no console readback for. Every
+				// earlier verification of selection had to read a screenshot,
+				// which is why the 2026-09-06 pass could only check one atom.
+				const Entry *pSel = SelectedEntry();
+				console_log.infof( "E2 selection: area=%s row=%s region=%s",
+					s_sSelectedArea.empty() ? "(none)" : s_sSelectedArea.c_str(),
+					pSel ? pSel->Id().c_str() : "(none)",
+					s_eFocusRegion == Region::Sheet ? "sheet"
+						: s_eFocusRegion == Region::Inspector ? "inspector" : "rail" );
 				console_log.infof( "E2 areas:" );
 				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
 				{
@@ -2662,6 +2674,23 @@ namespace gamescope::ui::shell
 			if ( bDisabled )
 				ImGui::BeginDisabled();
 
+			// The band's half of "selection follows edit" (2026-09-08). A
+			// composite's BODY is where the user's "slider" actually is --
+			// the accent hue rail, a colour picker's three R/G/B rails, the
+			// anchor grid, a list box row -- and until now none of them
+			// selected the band they live in: this function returned its
+			// bare "##band" click, which D22's AllowOverlap rule guarantees
+			// does NOT fire for a press that lands on the body. Measured
+			// before the fix: dragging the accent hue rail moved the hue
+			// from 218 deg to 60 deg with the selection and the Inspector
+			// left on the row above it.
+			//
+			// Same mechanism as DrawEntryRow's, for the same reason: every
+			// body atom goes through the kit's own Begin(), so a press
+			// always takes ActiveId, and one test covers a rail, a grid
+			// cell, a swatch and a list row alike.
+			const ImGuiID idActiveBefore = ImGui::GetActiveID();
+
 			switch ( entry.GetCompositeKind() )
 			{
 				case CompositeKind::Anchor:
@@ -2767,6 +2796,9 @@ namespace gamescope::ui::shell
 				}
 			}
 
+			const bool bControlEngaged =
+				controls::ControlEngaged( idActiveBefore, ImGui::GetActiveID() );
+
 			if ( bDisabled )
 				ImGui::EndDisabled();
 
@@ -2777,7 +2809,8 @@ namespace gamescope::ui::shell
 				DrawAffordance( entry, bl.line1 );
 
 			ImGui::PopID();
-			return bClicked;
+			return controls::ShouldSelectRow( bClicked, /* bValueChanged */ false,
+			                                  bControlEngaged );
 		}
 
 		// The value's anchor for Row.h's two-argument SplitLabelZone().
@@ -2910,7 +2943,18 @@ namespace gamescope::ui::shell
 			// fed by the same atoms' own bChanged -- so a value-changing
 			// interaction selects the row exactly as reliably as clicking
 			// its label always did.
+			//
+			// 2026-09-08: a value change alone was NOT enough (the user:
+			// "Nope, doesnt work. Even editing a slider should make it
+			// select the line"). Opening a dropdown changes no value, and
+			// nothing at all fired for a composite band -- see
+			// DrawCompositeBand and controls::ShouldSelectRow's own comment
+			// for the measured before/after. The third route below is the
+			// general one: ImGui's ActiveId, snapshotted either side of the
+			// control, says a press LANDED on this row's control whether or
+			// not it moved anything.
 			bool bValueChanged = false;
+			const ImGuiID idActiveBefore = ImGui::GetActiveID();
 
 			switch ( entry.GetKind() )
 			{
@@ -2998,6 +3042,12 @@ namespace gamescope::ui::shell
 					break;   // the rest carry no control
 			}
 
+			// Read BEFORE EndDisabled() and before the affordance's own
+			// disclosure button, so this answers "did a press land on this
+			// row's CONTROL", not "did anything at all happen in this row".
+			const bool bControlEngaged =
+				controls::ControlEngaged( idActiveBefore, ImGui::GetActiveID() );
+
 			if ( bDisabled )
 				ImGui::EndDisabled();
 
@@ -3012,7 +3062,7 @@ namespace gamescope::ui::shell
 			// changed FROM the Inspector's copy from re-selecting anything
 			// or resetting the Inspector's own focus (item B: editing must
 			// not jump selection INTO the Inspector's copy).
-			return controls::ShouldSelectRow( bClicked, bValueChanged );
+			return controls::ShouldSelectRow( bClicked, bValueChanged, bControlEngaged );
 		}
 
 		// =================================================================

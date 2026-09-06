@@ -17,6 +17,11 @@ The newest version below is the one this build reports.
   instead of using their own requested size. Takes effect immediately, even on windows
   already open.
 
+### Fixed
+- **Using a control selects its row**: pressing any control in the settings overlay now
+  highlights that row and shows it in the inspector -- including the ones that did not
+  before: opening a dropdown, and every colour, hue, placement-grid and list control.
+
 ## [0.6.1] – 2026-09-06
 
 ### Added

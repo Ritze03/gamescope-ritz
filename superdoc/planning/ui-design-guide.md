@@ -541,13 +541,36 @@ actually drawn) so a plain unit test can pin it without an ImGui context -- see
 groups; it kept its former `Setup` neighbours (Profiles, Appearance) under SETTINGS rather
 than a placement the request never specified.
 
-### Selection follows edit (2026-09-06/07, requests-2026-09-07.md item 8)
+### Selection follows edit (2026-09-06/07/08, requests-2026-09-07.md item 8, requests-2026-09-08.md item 2)
 
-**The rule:** any interaction that changes a Sheet row's value -- a slider drag, a
-stepper's -/+ or a typed edit committed, a switch flip, a segmented Choice pick, a
-committed Dropdown pick, or an Action press (arming or firing) -- selects that row, the
-same as clicking it does. The user's own framing: *"editing any element should
-automatically select it, so it also pops up in the inspector rail."*
+**The rule:** any press that lands on a Sheet row's own control selects that row, the
+same as clicking the row does -- whether or not it moves a value. A slider handle
+pressed where it already sits, a dropdown *opened*, a hue rail, a colour picker's R/G/B
+rail, an anchor-grid cell, a list row, a switch, a stepper's -/+ or typed commit, a
+segmented Choice cell, an Action press: all of them select. The user's own framing:
+*"editing any element should automatically select it, so it also pops up in the
+inspector rail."*
+
+**It was first written as "any VALUE CHANGE selects", and that was not enough** -- the
+user's reply was *"Nope, doesnt work. Even editing a slider should make it select the
+line."* Measured with one real click or drag per atom kind against a running binary
+(`build-release/verify-shots/selection-follows-edit-2026-09-08/`), the value-change rule
+left 6 of 13 cases dead:
+
+| what was pressed | before | after |
+|---|---|---|
+| Slider (click, and drag), Switch, Stepper (-/+ and typed), segmented Choice, Action | selects | selects |
+| Dropdown -- opening it | **no** (opening changes no value) | selects |
+| Dropdown -- committing a pick | **no** (the commit happens in `DrawDropdownList`, after the slab, outside the row painter's return) | selects |
+| Composite band -- accent hue rail | **no** (hue moved 218 deg to 60 deg, selection stayed on the row above) | selects |
+| Composite band -- a colour picker's R/G/B rails | **no** | selects |
+| Composite band -- anchor grid cell | **no** | selects |
+| Composite band -- list row | **no** | selects |
+
+Note *which* cases those are. A composite band's body is where the user's "slider"
+actually lives -- the accent hue rail and a colour picker's three R/G/B rails **are**
+sliders -- and `DrawCompositeBand` returned nothing but its own bare `##band` click,
+which D22's AllowOverlap rule guarantees never fires for a press that lands on the body.
 
 **Why this needed a fix at all, not just a wire-up:** D22's own AllowOverlap rule (see
 its comment on `DrawEntryRow` in `Shell.cpp`) means a press that lands ON an atom --
@@ -558,17 +581,48 @@ picking a Choice) on a row that was not already selected changed the value but l
 whatever row *was* selected highlighted, with the Inspector still showing the wrong
 one -- selection only ever moved on a raw click that missed every control.
 
-**The mechanism:** `DrawEntryRow` now returns true -- meaning "select me" to its Sheet
-call site -- on a raw click OR on `bValueChanged`, the atom's own `bChanged` threaded
-back up through `DrawSharedControl`'s return. The boolean rule itself
-(`ui::controls::ShouldSelectRow( bClicked, bValueChanged )`) is extracted into
-`Controls.h`/`.cpp`, the same reason `ConstantWidthGrab()` is: `Shell.cpp`'s row-drawing
-functions are file-private by design (`Shell.h`'s own header comment -- "this is the
-whole of its public surface... deliberately") and unreachable from a test, so the one
-line of new logic is named and pinned in `test_overlay_ui.cpp` instead of living
-unexplained at the call site. `Text` is deliberately excluded (its own
-`DrawSharedControl` case always returns `false`) -- editing a name field is not part of
-this rule.
+**The mechanism: engagement, read off ImGui's `ActiveId`.** Both row painters --
+`DrawEntryRow` *and* `DrawCompositeBand` -- snapshot `ImGui::GetActiveID()` immediately
+before submitting their control and again immediately after it, and return "select me"
+when `ui::controls::ControlEngaged( before, after )` says a control took the press right
+there: `after != 0 && after != before`. Every atom in the kit goes through
+`Controls.cpp`'s `Begin()` -> `ItemAdd()` + `ButtonBehavior()`/`SliderBehavior()`, so a
+press *always* takes `ActiveId` -- which is why one test covers a rail, a grid cell, a
+swatch, a list row and a plain switch alike, instead of each atom kind having to
+remember to report itself upward.
+
+The two halves of the test each carry their own weight, and getting either wrong is
+silent. Dropping `!= before` would make **every** row drawn during a drag claim the
+press, so the selection would follow the mouse down the column; dropping `!= 0` would
+make the frame a drag *ends* re-select whichever row drew first.
+
+The earlier routes are kept, not replaced: `ui::controls::ShouldSelectRow( bClicked,
+bValueChanged, bControlEngaged )` is the OR of all three, so a raw click on the row and a
+value change (e.g. one arriving from the keyboard) still select exactly as before. The
+rule lives in `Controls.h`/`.cpp` for the same reason `ConstantWidthGrab()` does:
+`Shell.cpp`'s row painters are file-private by design (`Shell.h`'s own header comment --
+"this is the whole of its public surface... deliberately") and unreachable from a test,
+so the logic is named and pinned in `test_overlay_ui.cpp` (the truth tables) and
+`test_overlay_atoms.cpp` (a real press per atom kind, in the headless ImGui harness)
+rather than living unexplained at the call site.
+
+**What is deliberately NOT covered, and why.** Selection is a *Sheet* concept, so only
+the Sheet's own row loop acts on the painters' return value:
+
+- **The Inspector's own-row copy** of the selected Entry (`bAffordance == false`)
+  discards it entirely. Editing there must not look like a fresh selection -- that is
+  what keeps a value changed in the Inspector from resetting the Inspector's own focus.
+- **Parameter rows**, wherever they are drawn -- inline under an expanded row
+  (`DrawInlineParams`) and in the Inspector's VALUES block. A parameter is not a row and
+  cannot be selected at all; there is nothing for the selection to move *to*. (The
+  2026-09-06 pass excluded these on the grounds that "inline mode has no inspector";
+  that reasoning was wrong -- inline mode is a layout, not the reason -- but the
+  exclusion itself is right, for the reason given here.)
+- **`Text`** (a profile/game name field): its `DrawSharedControl` case returns `false` by
+  its own design and typing in it is not "editing a control" in the sense above.
+  Clicking into the field still selects the row through the engagement route, because
+  the field takes `ActiveId` like any other control -- which is the behaviour that was
+  wanted anyway.
 
 **The bug this rule's OWN fix nearly reintroduced (item 9/B):** `DrawEntryRow` is called
 twice per frame for the currently-selected Entry -- once as the Sheet's own row, once

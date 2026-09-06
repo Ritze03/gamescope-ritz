@@ -351,10 +351,46 @@ namespace gamescope::ui
 		// (Shell.h's own header comment: "this is the whole of its public
 		// surface... deliberately, because... there is no header a category
 		// file could include to reach into it") and cannot be reached from a
-		// test directly, so the one line of logic the fix actually adds --
-		// "select on a click OR on a value change" -- is named and pinned
-		// here instead of appearing unexplained, untested, at the call site.
-		bool ShouldSelectRow( bool bClicked, bool bValueChanged );
+		// test directly, so the one line of logic the fix actually adds is
+		// named and pinned here instead of appearing unexplained, untested,
+		// at the call site.
+		//
+		// 2026-09-08 -- "select on a VALUE CHANGE" was not enough, and the
+		// user's report ("Nope, doesnt work. Even editing a slider should
+		// make it select the line") was right. Measured, one real click or
+		// drag per atom kind: Slider, Switch, Stepper, segmented Choice and
+		// Action did select, but a DROPDOWN (opening its list changes no
+		// value, so nothing fired) and every COMPOSITE BAND -- the accent
+		// hue rail, a colour picker's R/G/B rails, the anchor grid, a list
+		// box row -- did not, even though the band's value visibly moved.
+		// A composite is where the user's "slider" actually lives: the hue
+		// and R/G/B rails ARE sliders, drawn inside a band whose own return
+		// value was its bare click.
+		//
+		// So the rule is now ENGAGEMENT, not change: any press that lands on
+		// a row's own control selects that row, whether or not a value moves
+		// -- which also makes a slider select on the press instead of only
+		// once the value has crossed a step, and a dropdown select when it
+		// opens. See ControlEngaged() for how a press is detected.
+		bool ShouldSelectRow( bool bClicked, bool bValueChanged, bool bControlEngaged );
+
+		// Did a control drawn inside this row's own draw take ImGui's
+		// ActiveId on this frame? The row painter snapshots ImGui::GetActiveID()
+		// immediately before submitting its control and again immediately
+		// after, and hands both here.
+		//
+		// Every atom in this kit runs through Begin() -> ItemAdd() +
+		// ButtonBehavior() (or SliderBehavior), so a press ALWAYS takes
+		// ActiveId -- which makes this one test cover every atom kind at
+		// once, including the ones with no value to change, instead of each
+		// kind having to remember to report itself.
+		//
+		// `nAfter != nBefore` is what keeps it to THIS row: while a slider is
+		// held, every other row drawn that frame sees the same non-zero id
+		// before and after its own control, so only the row that actually
+		// took activation reads as engaged -- and only on the frame it took
+		// it, which is the frame selection should move.
+		bool ControlEngaged( ImGuiID nActiveIdBefore, ImGuiID nActiveIdAfter );
 
 		// requests-2026-09-07 item 12: the Inspector's CONFIGURE header
 		// ("PARAMETERS n of N") hardcoded the denominator as a literal "6"
