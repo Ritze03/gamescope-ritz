@@ -115,10 +115,10 @@ thread reads it while the steamcompmgr thread writes it.
 | id | kind | notes |
 |---|---|---|
 | `display.resolution.aspect` | Choice | Native (window size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — picking a shape applies the closest size in it, see [One size row](#one-size-row-and-a-shape-that-applies) |
-| `display.resolution.size` | Choice, `Dropdown()` | **One** row; its option list is the selected aspect's sizes plus Custom, served live by `Entry::OptionsFrom()`. Native/Custom have no list, so it shows their one true entry and is disabled |
+| `display.resolution.size` | Choice, `Dropdown()` | **One** row; its option list is the selected aspect's real sizes, served live by `Entry::OptionsFrom()` — **no Custom entry** (item 3, below). Native/Custom have no list, so it shows their one true entry and is disabled |
 | `display.refresh` | Choice | Follow host, 60, 90, 120, 144, 165, 240, Custom |
 | `display.refresh.custom` | Stepper | 24–500 Hz, `DisabledUnless` Custom |
-| `display.resolution_facts` | Facts | `paced at R Hz · window WxH · host R Hz`, from `g_nNestedRefresh` (host when 0), `g_nOutputWidth/Height`, `g_nOutputRefresh`; plus "takes effect" and "applied via" lines |
+| `display.resolution_facts` | Facts | `nested WxH@Hz · output WxH@Hz` (item 4, below), from `g_nNestedWidth/Height`, `g_nNestedRefresh` (host when 0), `g_nOutputWidth/Height`, `g_nOutputRefresh`; plus "takes effect" and "applied via" lines |
 
 ### One size row, and a shape that applies
 
@@ -150,9 +150,41 @@ window-size ones loads, and its stored 1440x1080 still classifies as "4:3 + 1440
 
 *Native and Custom keep the row honest.* They are sizes in their own right rather than shapes
 with a list, so the row shows their single true entry ("Window size" / "Custom") and greys out
-with the reason. Every shape's list still ends in Custom, so a live mode with the shape but on
-no list (a launch-time `-w 1600 -h 1200`) is reflectable as "4:3 + Custom" rather than as a
-dropdown drawing an empty label.
+with the reason.
+
+*UPDATE, 2026-09-07 (tracker item 3): the four real lists no longer end in Custom.* The user:
+*"There is an option for a custom resolution, but the custom selection should only be a part
+of the aspect ratio. Setting Aspect ratio to custom should allow the editing of the custom
+resolution. The resolution selection should still switch to custom, but it shouldnt be visible
+to the user."* So Custom now lives **only** on the Aspect row — the Resolution dropdown for
+16:9 / 4:3 / 16:10 / 21:9 offers real sizes and nothing else; there is no "Custom" entry sitting
+among "1920 x 1080" and friends for the user to notice or pick.
+
+- **What that means for a size on no list.** Before this, a live mode with the shape but not
+  on its list (a launch-time `-w 1600 -h 1200`, a console/config value) reflected as
+  "4:3 + Custom" — the Resolution row's own Custom entry standing in for the mismatch. That
+  entry is gone, so there is nothing left to show it with; the size now flips the **Aspect**
+  itself to Custom instead (see the reflection rule below). The user's own wording — "the
+  resolution selection should still switch to custom, but it shouldnt be visible to the user" —
+  is implemented literally: `s_nSizeChoice` internally still carries `kSizeCustom` in this
+  state, it is simply never one of the *options* a real shape's dropdown offers.
+- **The steppers' gate is now exactly "Aspect is Custom".** `ResolutionIsCustom()`
+  (`PanelDisplay.cpp`) used to also fire for a "shape + Custom" live size; that state no longer
+  exists, so the predicate collapsed to a single aspect comparison. Width/Height are editable
+  exactly when Aspect reads Custom, disabled with the same reason otherwise
+  ("pick Custom in Aspect above to type your own size").
+- **The Resolution row itself while Aspect is Custom.** Kept as it already was: disabled,
+  showing its own single "Custom" placeholder entry (`kSizeOptionsCustom`) — this is the
+  clearer of the two options the task named (hide entirely vs. show-disabled), because it
+  keeps the row physically present at a stable position in the Group rather than having rows
+  above and below it shift depending on Aspect, and its disabled reason text
+  ("pick a shape ... to choose a size") explains itself without the user needing to already
+  know Custom moved.
+- **A console/config write of `kSizeCustom` to a real shape's list is redirected, not
+  rejected.** `overlay_e2_set display.resolution.size 0` while Aspect is 16:9 (say, from an
+  old script) now calls `SetAspectChoice(kAspectCustom)` — the same seed-and-apply a genuine
+  Aspect→Custom pick makes — rather than either landing on the now-impossible "shape + Custom"
+  state or silently doing nothing.
 
 *Picking a shape now APPLIES the closest size, measured by height.* **This reverses**
 2026-09-05's "picking a shape applies nothing", on the user's own instruction of 2026-09-06:
@@ -179,8 +211,8 @@ recorded as 4:3 (the lock holds the ratio); under the Custom shape it stays Cust
 ### The pure half is a header
 
 `src/Overlay/ResolutionPresets.h` holds the shapes, their size tables, `MatchSizePreset()`,
-`NearestAspect()` and `ClosestByHeight()` — no ImGui, no backend, no compositor — so
-`tests/test_resolution.cpp` can pin them directly. Same split as
+`NearestAspect()`, `ClosestByHeight()`, `ClassifyAspect()` and `FormatLiveLine()` — no ImGui,
+no backend, no compositor — so `tests/test_resolution.cpp` can pin them directly. Same split as
 `src/Overlay/CrosshairMath.h`. `PanelDisplay.cpp` keeps everything that touches live state.
 
 ### The reflection rule (`CurrentAspect()` / `CurrentSizeChoice()`)
@@ -194,22 +226,58 @@ change from outside (Steam's atom, a host resize) both show the truth:
    what tells "Native" from "16:9 + 1920 x 1080" in a 1920x1080 window. Picking a size sets
    the pick to that size's shape. The trust ends the moment the mode changes for any other
    reason — a CLI/config apply, a per-game switch, Steam's atom.
-2. Otherwise the live size is classified on its own: on any shape's list → that shape + that
-   entry; equal to the window → Native; within 3 % of a shape's nominal ratio
-   (`kAspectTolerance`; 21:9 is nominally 64:27 = 2.37 so the 2.37–2.39 panel sizes and true
-   2.33 all qualify) → that shape + Custom; anything else → Custom.
+2. Otherwise the live size is classified by `ClassifyAspect()` (`ResolutionPresets.h`, pure and
+   unit-tested): on any shape's list → that shape; equal to the output's own size → Native;
+   anything else → Custom.
+
+**UPDATE, 2026-09-07 (tracker item 3): no more "shape + Custom" in step 2.** Before this, a
+size merely *close* to a shape's nominal ratio (the old `NearestAspect()`-based fallback, within
+`kAspectTolerance` — 21:9 is nominally 64:27 = 2.37 so the 2.37–2.39 panel sizes and true 2.33
+all qualified) classified as that shape, with the Resolution row's Custom entry standing in for
+the mismatch. That entry is gone (see [One size row](#one-size-row-and-a-shape-that-applies)
+above), so there is nothing left for the in-between state to display: a size that is not an
+*exact* list entry and not the output's own size now classifies straight as the Custom
+**aspect**. `ClassifyAspect()` is exactly this rule, extracted pure so
+`tests/test_resolution.cpp` can pin "no exact match ⇒ Custom" (including cases the old
+tolerance-based rule would have forgiven, like a true-21:9 2520×1080) without faking a live
+nested/output global. `CurrentAspect()` in `PanelDisplay.cpp` is now just step 1 above plus a
+call into `ClassifyAspect()` for step 2 — `NearestAspect()` itself is untouched and still used
+(and tested) on its own terms, it is simply no longer part of this fallback.
 
 So a persisted `nested_width/height` of 1280x960 reopens as Aspect 4:3, size 1280x960, with
-no pick stored anywhere. Applying and persisting are unchanged: every path ends in
-`ApplyNestedMode()` (Phase B below); `nested_*` write `0` for Native as before, keyed on
+no pick stored anywhere; a persisted 1300x975 (same ratio, no exact entry) now reopens as
+Aspect **Custom** rather than "4:3 + Custom". Applying and persisting are unchanged: every path
+ends in `ApplyNestedMode()` (Phase B below); `nested_*` write `0` for Native as before, keyed on
 `s_nAspectChoice == kAspectNative`.
 
 The Live state's **"Game sees" line is gone** (item 9, 2026-09-06: *"For the Live state,
 remove the 'Game sees' part, but keep the rest."*) — both the fact and the summary's leading
 half. The Xwayland root it read still drives the *area's* rail summary (`ResolutionSummary()`),
-which is where a player looks for that number; the facts row keeps `paced at`, `window`,
-`host refresh`, `takes effect` and `applied via`. Labels use a plain `x`, not `×` — the
-overlay font is not known to carry that glyph.
+which is where a player looks for that number; the facts row keeps `takes effect` and
+`applied via`. Labels use a plain `x`, not `×` — the overlay font is not known to carry that
+glyph.
+
+**UPDATE, 2026-09-07 (tracker item 4): the Live-state line itself.** The user: *'Use the
+terminology "nested" and "output". Make the line like this: "nested
+<nested_res>@<nested_refresh> · output <output_res>@<output_refresh>"'*. This replaces the old
+`paced at R Hz · window WxH · host R Hz` line, and drops the three sub-facts it used to carry
+underneath (`paced at`, `window`, `host refresh`) — the one line already says everything they
+said, so keeping both would just be the same three numbers twice. `takes effect` and
+`applied via` stay, since the new line doesn't cover them.
+
+- **Why these words.** "nested" and "output" are the actual variable prefixes this feature uses
+  everywhere else in the code (`g_nNestedWidth/Height/Refresh`, `g_nOutputWidth/Height/Refresh`)
+  — the old line's "paced at"/"window"/"host" wording named the same numbers with three
+  different words that agreed with neither each other nor the code. See TERMINOLOGY.md's
+  "Nested resolution / refresh" and "Output resolution / refresh" entries.
+  Pairing each side's own resolution with its own refresh, rather than the old flat
+  `A Hz · B WxH · C Hz`, reads as two facts (what the game sees, what the host granted)
+  instead of three loose numbers, and — unlike the old line — includes the nested
+  *resolution*, which the old wording dropped entirely.
+- **The formatter is pure.** `FormatLiveLine()` (`ResolutionPresets.h`) takes the six numbers
+  (nested W/H/Hz, output W/H/Hz, refresh already converted to Hz by the caller) and returns the
+  exact string; `tests/test_resolution.cpp` pins the wording directly rather than through a
+  live nested/output global.
 
 Embedded (DRM) is a different feature for a later phase — `GetModes()` plus the
 dynamic-refresh atom — not a disabled copy of this area.
@@ -240,3 +308,5 @@ Game resolution and refresh survive a restart; there is nothing else in the area
 - [../planning/requests-2026-09-05.md](../planning/requests-2026-09-05.md) — item 7 scouting.
 - [../planning/requests-2026-09-06.md](../planning/requests-2026-09-06.md) — items 7–10, the
   one-row reshape.
+- [../planning/requests-2026-09-07.md](../planning/requests-2026-09-07.md) — items 3–4: Custom
+  moves onto the Aspect row only, and the Live-state line's "nested"/"output" wording.

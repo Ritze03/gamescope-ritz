@@ -15,10 +15,10 @@ The newest version below is the one this build reports.
 - **Crosshair "Animate back"**: letting go of right-click now plays the auto-hide
   animation backwards from wherever it was instead of popping the crosshair straight
   back; a new switch under Auto-hide (on by default) turns this off.
-- **Adaptive Brightness modes**: the Shaders row is now Off / Whole image / Dynamic --
-  Whole image is the old single-gain behaviour, Dynamic is a per-scene levels + gamma
-  + soft-shoulder curve that lifts dark maps, tames bright ones and rolls the
-  highlights off so nothing blows out.
+- **Adaptive Brightness modes**: Shaders > Adaptive Brightness can now run in Whole
+  image (the old single-gain behaviour) or Dynamic, a per-scene levels + gamma +
+  soft-shoulder curve that lifts dark maps, tames bright ones and rolls the highlights
+  off so nothing blows out; picked from the side panel when the row is selected.
 - **Profiles area**: a list of every profile leads the sheet -- click a line to switch
   to it (that profile is then this game's, and every change is saved into it) -- with
   Create, Copy, Edit and Delete underneath, an Inherits dropdown for a game profile, a
@@ -107,7 +107,11 @@ The newest version below is the one this build reports.
   slider replaces all three.
 
 ### Info
-- **Crosshair settings order**: the Dot group now comes before the Line group.
+- **Crosshair settings order**: now Crosshair, Line, Dot on the left and Outline,
+  Auto-hide, Scaling on the right.
+- **Adaptive Brightness mode moved to the side panel**: the Shaders row is a plain
+  on/off switch again; Whole image vs. Dynamic is now a setting inside the side panel
+  when that row is selected, the same way its other options already work.
 - **Profiles are rebuilt underneath**: your settings now live in a profile that saves
   every change straight away; an old config is moved into a `Default` profile and each
   game's separate settings into a `[Game]` profile on first launch, and

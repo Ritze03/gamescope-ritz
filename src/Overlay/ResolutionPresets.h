@@ -13,8 +13,10 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <iterator>
+#include <string>
 
 namespace gamescope::resolution
 {
@@ -129,5 +131,59 @@ namespace gamescope::resolution
 	inline int ClosestByHeight( const AspectList &list, int nHeight )
 	{
 		return ClosestByHeight( list.pSizes, list.nSizes, nHeight );
+	}
+
+	// The Resolution area's reflection rule for a live size with no trusted
+	// pick (requests-2026-09-07 item 3, replacing the old NearestAspect()
+	// fallback in PanelDisplay.cpp's CurrentAspect()): an exact match on a
+	// shape's own list -> that shape; the output's own size -> Native;
+	// anything else -> Custom. Extracted here, pure, so
+	// tests/test_resolution.cpp can pin "no exact match => Custom" without a
+	// live nested/output global to fake -- PanelDisplay.cpp's CurrentAspect()
+	// is this function plus the "trust an explicit pick while it is still
+	// live" half, which only makes sense against real global state.
+	//
+	// Why no more "shape + Custom": a live size that was merely CLOSE to a
+	// shape's nominal ratio used to classify as that shape, with the
+	// Resolution row showing a "Custom" entry to represent the mismatch. Item
+	// 3 removes that entry from every real shape's list (it must not appear
+	// as one of several options a user could pick), so there is nothing left
+	// for that in-between state to display -- an inexact size now classifies
+	// straight as the Custom ASPECT, which is where "Custom" exclusively
+	// lives now.
+	inline int ClassifyAspect( int nWidth, int nHeight, int nOutputWidth, int nOutputHeight )
+	{
+		for ( const AspectList &list : kAspectLists )
+			if ( MatchSizePreset( list.pSizes, list.nSizes, nWidth, nHeight ) > 0 )
+				return list.nAspect;
+		if ( nWidth == nOutputWidth && nHeight == nOutputHeight )
+			return kAspectNative;
+		return kAspectCustom;
+	}
+
+	// The Resolution area's Live-state line (requests-2026-09-07 item 4, the
+	// user: 'Use the terminology "nested" and "output". Make the line like
+	// this: "nested <nested_res>@<nested_refresh> · output <output_res>@
+	// <output_refresh>"'). Pure so tests/test_resolution.cpp can pin the exact
+	// wording without a live nested/output state to fake.
+	//
+	// Why these two words and these two number pairs: "nested" and "output"
+	// are the actual variable prefixes this feature already uses everywhere
+	// else in the code (g_nNestedWidth/Height/Refresh, g_nOutputWidth/Height/
+	// Refresh) -- the old line's "paced at"/"window"/"host" wording named the
+	// same three numbers with three different words that did not match each
+	// other or the code, and it was missing the nested (game) resolution
+	// entirely. Pairing each side's own resolution with its own refresh --
+	// rather than the old flat "A Hz · B WxH · C Hz" -- reads as two facts
+	// (what the game sees, what the host granted) instead of three
+	// loose numbers.
+	inline std::string FormatLiveLine( int nNestedWidth, int nNestedHeight, int nNestedRefreshHz,
+	                                    int nOutputWidth, int nOutputHeight, int nOutputRefreshHz )
+	{
+		char sz[ 96 ];
+		std::snprintf( sz, sizeof( sz ), "nested %dx%d@%d · output %dx%d@%d",
+			nNestedWidth, nNestedHeight, nNestedRefreshHz,
+			nOutputWidth, nOutputHeight, nOutputRefreshHz );
+		return sz;
 	}
 }
