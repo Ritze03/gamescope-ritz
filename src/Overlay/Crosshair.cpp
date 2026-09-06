@@ -447,10 +447,11 @@ namespace gamescope
 
 	// -------------------------------------------------------------------
 	// The settings area: system.crosshair, right after the HUD's own area
-	// in the rail. Groups in the user's own order -- Line, Dot, Outline,
-	// Auto-hide, Scaling -- under a master switch. Every dependent row is
-	// greyed with a reason while its element (or the whole crosshair) is
-	// off; the master switch itself is never gated (SPEC §3.13).
+	// in the rail. Groups in the user's own order -- Dot, Line, Outline,
+	// Auto-hide, Scaling (Dot ahead of Line since 2026-09-06, request #15)
+	// -- under a master switch. Every dependent row is greyed with a
+	// reason while its element (or the whole crosshair) is off; the master
+	// switch itself is never gated (SPEC §3.13).
 	// -------------------------------------------------------------------
 	void Crosshair_RegisterArea( ui::Registry &reg )
 	{
@@ -491,6 +492,41 @@ namespace gamescope
 			       "game's own crosshair, and it stays up after you close this menu." )
 			.Default( S{}.enabled )
 			.Keywords( "crosshair show enable reticle aim" );
+
+		// =================================================================
+		//  Dot
+		// =================================================================
+		a.Group( "Dot" );
+
+		a.Switch( "crosshair.dot", "Show dot", CROSSHAIR_BIND( bool, dot_enabled ) )
+			.Key( "crosshair.dot_enabled" )
+			.Help( "A small square in the exact centre, on its own or inside the arms' gap." )
+			.Default( S{}.dot_enabled )
+			.Keywords( "dot centre center point enable show" )
+			.DisabledUnless( On, kOffReason );
+
+		a.Slider( "crosshair.dot_size", "Size", CROSSHAIR_BIND( int, dot_size ) )
+			.Help( "The dot's width and height, in pixels. 1 is a single pixel." )
+			.Range( 1.0f, 16.0f ).Step( 1.0f ).Unit( "px" )
+			.Default( S{}.dot_size )
+			.Keywords( "dot size big small" )
+			.DisabledUnless( DotOn, kDotOffReason );
+
+		a.Composite( "crosshair.dot_color", "Colour", ui::CompositeKind::Color,
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.crosshair.dot_color; },
+				[]( int nPacked ) { EnsureConfigLoaded(); s_Settings.crosshair.dot_color = nPacked & 0xFFFFFF; PersistAndRepaint(); } ) )
+			.Help( "Colour of the dot." )
+			.Default( S{}.dot_color )
+			.Keywords( "dot colour color tint rgb" )
+			.DisabledUnless( DotOn, kDotOffReason );
+
+		a.Slider( "crosshair.dot_opacity", "Opacity", CROSSHAIR_BIND( float, dot_opacity ) )
+			.Help( "How solid the dot is. All the way down makes it fully transparent." )
+			.Range( 0.0f, 1.0f ).Step( 0.05f )
+			.Default( S{}.dot_opacity )
+			.Keywords( "dot opacity transparency alpha" )
+			.DisabledUnless( DotOn, kDotOffReason );
 
 		// =================================================================
 		//  Line
@@ -543,41 +579,6 @@ namespace gamescope
 			.Default( S{}.line_opacity )
 			.Keywords( "line opacity transparency alpha see-through" )
 			.DisabledUnless( LineOn, kLineOffReason );
-
-		// =================================================================
-		//  Dot
-		// =================================================================
-		a.Group( "Dot" );
-
-		a.Switch( "crosshair.dot", "Show dot", CROSSHAIR_BIND( bool, dot_enabled ) )
-			.Key( "crosshair.dot_enabled" )
-			.Help( "A small square in the exact centre, on its own or inside the arms' gap." )
-			.Default( S{}.dot_enabled )
-			.Keywords( "dot centre center point enable show" )
-			.DisabledUnless( On, kOffReason );
-
-		a.Slider( "crosshair.dot_size", "Size", CROSSHAIR_BIND( int, dot_size ) )
-			.Help( "The dot's width and height, in pixels. 1 is a single pixel." )
-			.Range( 1.0f, 16.0f ).Step( 1.0f ).Unit( "px" )
-			.Default( S{}.dot_size )
-			.Keywords( "dot size big small" )
-			.DisabledUnless( DotOn, kDotOffReason );
-
-		a.Composite( "crosshair.dot_color", "Colour", ui::CompositeKind::Color,
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return s_Settings.crosshair.dot_color; },
-				[]( int nPacked ) { EnsureConfigLoaded(); s_Settings.crosshair.dot_color = nPacked & 0xFFFFFF; PersistAndRepaint(); } ) )
-			.Help( "Colour of the dot." )
-			.Default( S{}.dot_color )
-			.Keywords( "dot colour color tint rgb" )
-			.DisabledUnless( DotOn, kDotOffReason );
-
-		a.Slider( "crosshair.dot_opacity", "Opacity", CROSSHAIR_BIND( float, dot_opacity ) )
-			.Help( "How solid the dot is. All the way down makes it fully transparent." )
-			.Range( 0.0f, 1.0f ).Step( 0.05f )
-			.Default( S{}.dot_opacity )
-			.Keywords( "dot opacity transparency alpha" )
-			.DisabledUnless( DotOn, kDotOffReason );
 
 		// =================================================================
 		//  Outline

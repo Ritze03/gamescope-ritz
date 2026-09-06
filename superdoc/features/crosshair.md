@@ -29,15 +29,15 @@ that element is off ("the dot is off", and so on).
 | Group | Row | Config field | Notes |
 | --- | --- | --- | --- |
 | Crosshair | Show crosshair | `enabled` | Master switch. Default off. |
+| Dot | Show dot | `dot_enabled` | Dot ahead of Line since 2026-09-06 (request #15, the user's order). |
+| | Size | `dot_size` | px, 1–16. Always a **square** — see geometry. |
+| | Colour / Opacity | `dot_color`, `dot_opacity` | as for the line |
 | Line | Show lines | `line_enabled` | The four arms. |
 | | Length | `line_length` | px, 1–64. Each arm's own length. |
 | | Width | `line_width` | px, 1–16. **1 is exactly one pixel** — see 1px mode. |
 | | Gap | `line_gap` | px, 0–64, from the centre column/row's *edge* to the arm. 0 joins the arms into a solid plus. |
 | | Colour | `line_color` | `0xRRGGBB`, the shared RGB colour picker (`CompositeKind::Color`, as `PanelCursor.cpp` uses). |
 | | Opacity | `line_opacity` | 0–1. The user's word is "transparency"; the row is labelled Opacity because a slider whose 0 means invisible reads backwards under the other name. `transparency` is a search keyword. |
-| Dot | Show dot | `dot_enabled` | |
-| | Size | `dot_size` | px, 1–16. Always a **square** — see geometry. |
-| | Colour / Opacity | `dot_color`, `dot_opacity` | as for the line |
 | Outline | Show outline | `outline_enabled` | |
 | | Width | `outline_width` | px, 1–8 |
 | | Opacity / Colour | `outline_opacity`, `outline_color` | |

@@ -60,6 +60,7 @@ The newest version below is the one this build reports.
   gone -- a profile is the live settings now, so there is nothing to apply or save.
 
 ### Info
+- **Crosshair settings order**: the Dot group now comes before the Line group.
 - **Profiles are rebuilt underneath**: your settings now live in a profile that saves
   every change straight away; an old config is moved into a `Default` profile and each
   game's separate settings into a `[Game]` profile on first launch, and
