@@ -119,10 +119,23 @@ namespace gamescope::ui
 			// INSIDE it. At 12 px the arrowheads close up and the mark is
 			// a frame with a slash, which no other glyph is. Freehand
 			// (2026-09-05): the mockup predates the area.
+			//
+			// REDRAWN 2026-09-06 (requests-2026-09-06.md item 3): the
+			// original shaft ran (8,15)-(16,9), a dx:dy of 8:-6 -- not the
+			// 45 degrees an "L-bracket" arrowhead like upscaling's own
+			// corner brackets implicitly bisects to, so the two heads sat
+			// crooked against the shaft, and their arms were unequal
+			// lengths (4.5 vs 3.5) on top of that, reading heavier on one
+			// side. Fixed the same way upscaling's brackets already get it
+			// right: dx == dy (a true 45 degree shaft through the frame's
+			// own centre, (12,12)) and both bracket arms the same length
+			// (3.5, upscaling's own corner margin), so each head's corner
+			// sits exactly on the shaft's own endpoint and its two arms
+			// split evenly around it.
 			Rect( 3.5f, 5.5f, 20.5f, 18.5f ),
-			Line( { 8.0f, 15.0f }, { 16.0f, 9.0f } ),
-			Poly( { 11.5f, 9.0f }, { 16.0f, 9.0f }, { 16.0f, 12.5f } ),
-			Poly( { 12.5f, 15.0f }, { 8.0f, 15.0f }, { 8.0f, 11.5f } ) } },
+			Line( { 8.0f, 16.0f }, { 16.0f, 8.0f } ),
+			Poly( { 12.5f, 8.0f }, { 16.0f, 8.0f }, { 16.0f, 11.5f } ),
+			Poly( { 8.0f, 12.5f }, { 8.0f, 16.0f }, { 11.5f, 16.0f } ) } },
 
 		{ "display.frame_limiter", 2, {
 			// A clock. The hands are one open polyline so the join at the
