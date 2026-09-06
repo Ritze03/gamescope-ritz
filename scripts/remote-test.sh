@@ -149,7 +149,10 @@ cmd_sync() {
 
 	gcr_info "verifying the transferred binary actually runs..."
 	local ver
-	ver=$("${SSH[@]}" "$REMOTE_DIR/gamescope-ritz --version" 2>&1) || {
+	# Isolated XDG_CONFIG_HOME: --version still runs through config loading, and
+	# without this it hit the remote user's real ~/.config/gamescope-ritz and
+	# triggered the schema 2->3 migration on their live laptop config.
+	ver=$("${SSH[@]}" 'd=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; XDG_CONFIG_HOME="$d" '"$REMOTE_DIR"'/gamescope-ritz --version' 2>&1) || {
 		gcr_err "transferred binary failed to run on $REMOTE_HOST:"
 		printf '%s\n' "$ver" >&2
 		gcr_err "check 'ldd $REMOTE_DIR/gamescope-ritz' on the remote host for missing libraries."

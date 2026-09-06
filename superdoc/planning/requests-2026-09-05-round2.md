@@ -106,7 +106,7 @@ Vulkan validation or format errors from the R16G16B16A16_UNORM switch or the ImG
 pipeline re-creation. Captures, log, and the full write-up:
 `build-release/verify-shots/laptop-round2/` (git-ignored, not copied into this repo).
 
-## [~] 4. Profiles and per-game config: new concept
+## [x] 4. Profiles and per-game config: new concept
 
 A new, easy and extensible concept for profiles and per-game config, including
 loading a named profile from the command line at launch (`--profile <name>`).
@@ -147,6 +147,49 @@ before and after a reset, the Crosshair badge, a click-select, `--profile`),
 **UI landed, laptop check pending**: select, create (typed name), copy, edit (refusal
 wording), delete (bake), filter, launch option visible -- the headless harness cannot
 type into a field, so the Create-with-a-name path is unit-tested only.
+
+**2026-09-06, laptop (Intel HD 620 / ANV):** the migrated real config was inspected
+read-only first (`~/.config/gamescope-ritz/`, no `games/` directory and no other
+profile ever existed there, so the migration had nothing to lose): `global.json` is
+schema 3 with the real `overlay.display_scale` (1.5, the laptop's own prior setting)
+preserved and every other overlay field at the code default; `profiles/Default.json`
+holds every per-layer section at the code default, `last_general: "Default"`,
+`profiles.games: {}` -- exactly what the migration table predicts for a config that
+had no per-layer customisation and no per-game files to begin with. Nothing lost,
+nothing to fix. Snapshot: `build-release/verify-shots/laptop-profiles/config-snapshot/`.
+
+Then the UI itself, via `gamescope --backend headless` + a connected `kitty` client
+(no sway on this laptop) with an isolated `XDG_CONFIG_HOME` seeded like
+`profiles-v2-ui/capture.sh` (3 general + 2 game profiles): the area at rest, all four
+modals, Inherits, Reset to inherited, the Crosshair badge, and `--profile Casual`'s
+launch-option row all captured pixel-identical to the desktop's own reference
+captures on this different GPU/driver -- no overlap, no smudging, nothing to flag.
+Clicking another profile in the list (`Casual`) was confirmed to persist:
+`games.252490.selected` flipped from `Rust` to `Casual` and `last_general` updated
+in the temp `global.json`, read directly off disk.
+
+**Typing into the Create modal, resolved:** `overlay_e2_set` cannot address a modal's
+text field -- it only resolves ids through the settings Registry
+(`Reg().FindEntry`/`FindParam`), and a modal's `Form` fields (`s_Form.sName`) are
+local UI state, never registered there (confirmed: `overlay_e2_set "name X"` replies
+`no such E2 id: name`). `overlay_e2_key` **can** type into it, but only once the field
+is opened by a real click (`overlay_e2_pointer`) -- keyboard alone can never open it,
+since `controls::Text()` only flips into edit mode on `a.bPressed`. One harness quirk
+found and worked around, not a product bug: the very first character sent immediately
+after that click is dropped (a one-frame focus-acquisition race also visible with
+plain ImGui `InputText`), so the first chord has to be sent twice; a bare Enter to
+submit also needs sending twice on some passes (it first commits the field, then a
+second, separately-timed Enter with no field editing fires the modal's primary). With
+that, a profile named `LaptopTest` was typed and created end to end, confirmed by
+reading `profiles/LaptopTest.json` off disk (schema 3, `kind: general`, correct
+name). Captures and logs: `build-release/verify-shots/laptop-profiles/profiles-ui/`.
+
+Also fixed in this pass (not a Profiles change, found while syncing for this check):
+`scripts/remote-test.sh`'s post-sync `--version` smoke probe ran against the remote
+user's real `~/.config/gamescope-ritz`, not an isolated one, and had silently
+triggered today's schema 2 -> 3 migration on the laptop earlier. Now isolated with a
+throwaway `XDG_CONFIG_HOME`; verified by comparing the real config's file mtimes
+before and after a sync -- unchanged.
 
 ## [x] 5. Brainstorm of further filters and features
 
@@ -258,3 +301,10 @@ exactly 1 re-sync per real change / 0 per no-op / 0 idle. Logs and `results.txt`
 If anything still drifts: `gamescopectl wlserver_pointer_stats` while it happens and note the
 line — `constraint=locked` with `warps_suppressed_locked` climbing as you move means the host
 is still delivering absolute samples to a locked game (a different bug, now visible).
+
+**Item 4 — Profiles, a real game:**
+1. Open Profiles in a game, create a game profile for it.
+2. Move a slider somewhere else in the overlay (e.g. Display > Upscaling > Sharpness).
+3. Check the Profiles inspector: the row should show the overridden dot and a working
+   **Reset to inherited** chip.
+4. Relaunch the game and confirm the same profile is still selected.
