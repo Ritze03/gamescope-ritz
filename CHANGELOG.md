@@ -32,8 +32,18 @@ The newest version below is the one this build reports.
 - **Inherits is a dropdown, not a row of buttons**: picking the general profile a game
   profile inherits from now opens a real dropdown list instead of a row of segmented
   buttons.
+- **One resolution list instead of four**: Display > Resolution now has a single
+  Resolution dropdown whose sizes are the ones for the aspect ratio you picked, in place
+  of the four per-aspect rows.
+- **Changing the aspect ratio picks a size**: switching shape jumps straight to that
+  shape's size closest in height to the one you are on, instead of leaving the picture
+  unchanged.
 
 ### Removed
+- **Window sizing rows**: Display > Resolution no longer asks your desktop to resize the
+  gamescope window -- use your window manager's own rules for that.
+- **"Game sees" in the Live state**: the Resolution area's Live state drops that line
+  and keeps the rest; the same numbers are still in the area's summary.
 - **Per-game area and the profile buttons**: the Per-game area, "Use this profile",
   "Restore previous settings", "Save changes to profile" and the Auto-save switch are
   gone -- a profile is the live settings now, so there is nothing to apply or save.
