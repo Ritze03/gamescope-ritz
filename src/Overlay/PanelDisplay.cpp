@@ -137,6 +137,11 @@ namespace gamescope
 	static config::Settings s_CachedSettings;
 
 	static void PushCachedSettingsToLiveState();
+	// Forward-declared (defined below, near the E2 registration code) so the
+	// Upscaling/Frame-limiter/Resolution setters above it in the file can
+	// route through it too -- see Cfg()'s own comment for why every setter
+	// that touches s_CachedSettings must call this first.
+	static config::Settings &Cfg();
 
 	static void EnsureConfigLoaded()
 	{
@@ -144,20 +149,26 @@ namespace gamescope
 		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
 
-		const bool bIsReload = s_bConfigLoaded; // false only on this panel's very first draw
 		s_CachedSettings = config::ResolvedSettings();
 		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
 
-		// The very first load's values are already applied to the live
-		// globals/ConVars by main.cpp's apply_ritz_config_to_startup_state()
-		// before this panel ever draws -- only a later reload (PanelConfig
-		// applied a profile, enabled/cleared override, or copied another
-		// game's config in, bumping the generation) needs pushing here too,
-		// or this panel's sliders would show new values that never actually
-		// took effect.
-		if ( bIsReload )
-			PushCachedSettingsToLiveState();
+		// Pushed unconditionally, including on this panel's very first load
+		// (2026-09-06 -- dropped the old `if ( bIsReload )` guard). That
+		// guard assumed the very first load's values were already applied to
+		// the live globals/ConVars by main.cpp's
+		// apply_ritz_config_to_startup_state() before this panel ever draws
+		// -- true only if the session profile hasn't changed since startup.
+		// A select made from the Profiles area before this panel's first
+		// draw bumps the generation and changes what ResolvedSettings()
+		// returns here, so "first load" is not always "the startup state"
+		// and skipping the push left this panel's sliders showing a value
+		// that had never actually taken effect. config::SetLiveApplyHook()
+		// now also pushes on every such bump regardless of which panel has
+		// drawn, so this call is idempotent with it and with the startup
+		// apply on the common path -- unconditional is simpler and closes
+		// the one path where the guard was wrong.
+		PushCachedSettingsToLiveState();
 	}
 
 	static void QueueSave()
@@ -300,7 +311,16 @@ namespace gamescope
 	{
 		const int nRaw = RawSharpnessFromUiPercent( nUiPercent );
 		g_upscaleFilterSharpness = nRaw;
-		s_CachedSettings.gamescope.sharpness = nRaw;
+		// Cfg() (EnsureConfigLoaded()) FIRST -- this is the fix for the
+		// documented ceiling (superdoc/features/profiles.md's routed-write
+		// merge section): writing straight to s_CachedSettings without
+		// loading first left every other field at its struct default, which
+		// EnqueueRoutedWrite() cannot tell from a real edit and so wrote
+		// into the profile (measured: crosshair defaults and filter LINEAR
+		// landing in a game profile from the first Upscaling edit of a
+		// session). Reachable from the palette or overlay_e2_set before this
+		// area has ever drawn.
+		Cfg().gamescope.sharpness = nRaw;
 		QueueSave();
 	}
 
@@ -331,7 +351,7 @@ namespace gamescope
 	{
 		const bool bFilterChanged = ( eFilter != g_wantedUpscaleFilter );
 		g_wantedUpscaleFilter = eFilter;
-		s_CachedSettings.gamescope.filter = FilterToString( eFilter );
+		Cfg().gamescope.filter = FilterToString( eFilter ); // Cfg() loads first -- see SetSharpnessUiPercent()
 		if ( bFilterChanged )
 			SetSharpnessUiPercent( 0 ); // QueueSave()s on its own
 		QueueSave();
@@ -340,7 +360,7 @@ namespace gamescope
 	static void SetScaler( GamescopeUpscaleScaler eScaler )
 	{
 		g_wantedUpscaleScaler = eScaler;
-		s_CachedSettings.gamescope.scaler = ScalerToString( eScaler );
+		Cfg().gamescope.scaler = ScalerToString( eScaler ); // Cfg() loads first -- see SetSharpnessUiPercent()
 		QueueSave();
 	}
 
@@ -397,7 +417,7 @@ namespace gamescope
 	static void SetFpsLimit( int nFps )
 	{
 		nFps = ( nFps <= 0 ) ? 0 : std::clamp( nFps, kMinFpsLimit, kMaxFpsLimit );
-		s_CachedSettings.gamescope.fps_limit = nFps;
+		Cfg().gamescope.fps_limit = nFps; // Cfg() loads first -- see SetSharpnessUiPercent()
 		QueueSave();
 
 		steamcompmgr_set_app_refresh_cycle_override( GetBackend()->GetScreenType(), nFps, true, true );
@@ -868,9 +888,14 @@ namespace gamescope
 	{
 		steamcompmgr_set_nested_mode( ClampDim( nWidth ), ClampDim( nHeight ), nRefreshmHz );
 
-		s_CachedSettings.gamescope.nested_width  = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nWidth );
-		s_CachedSettings.gamescope.nested_height = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nHeight );
-		s_CachedSettings.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
+		// Cfg() loads first -- see SetSharpnessUiPercent()'s comment. This
+		// setter is reachable (Aspect/Resolution/refresh rows, or
+		// overlay_e2_set) before any other area of this panel has drawn, the
+		// same "first Upscaling edit of the session" trap.
+		config::Settings &cfg = Cfg();
+		cfg.gamescope.nested_width  = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nWidth );
+		cfg.gamescope.nested_height = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nHeight );
+		cfg.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
 		QueueSave();
 	}
 

@@ -935,7 +935,6 @@ namespace
         c.hide_mode = "shrink";
         c.hide_time_ms = 450;
         c.hide_animate_back = false;
-        c.hide_animate_back = false;
         c.apply_scaling = true;
         return c;
     }
@@ -960,7 +959,6 @@ namespace
         REQUIRE( a.hide_on_right_click == b.hide_on_right_click );
         REQUIRE( a.hide_mode == b.hide_mode );
         REQUIRE( a.hide_time_ms == b.hide_time_ms );
-        REQUIRE( a.hide_animate_back == b.hide_animate_back );
         REQUIRE( a.hide_animate_back == b.hide_animate_back );
         REQUIRE( a.apply_scaling == b.apply_scaling );
     }
@@ -2050,4 +2048,63 @@ TEST_CASE( "a routed write from one panel never undoes another panel's edit (per
     REQUIRE( LoadProfile( "CS2" )->gamescope.sharpness == 11 );
     REQUIRE( LoadProfile( "CS2" )->crosshair.line_gap == 6 );
     REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 9 );
+}
+
+TEST_CASE( "a routed write from a caller that never resolved settings first clobbers sections it never "
+           "touched -- the documented ceiling, and why loading first (Cfg()) avoids it", "[config]" )
+{
+    // 2026-09-06, PanelDisplay's Upscaling/Frame-limiter/Resolution setters:
+    // each used to write straight into its own file-static Settings without
+    // ever calling EnsureConfigLoaded()/ResolvedSettings() first, reachable
+    // as the very first edit of a session (before any other area of that
+    // panel had drawn). The struct default-constructs every OTHER section,
+    // and the funnel (EnqueueRoutedWrite, see s_CallerBase/s_HandedOut
+    // above) cannot tell "never loaded" from "deliberately reset to this" --
+    // measured live as crosshair defaults and `filter: LINEAR` landing in a
+    // game profile from a single sharpness edit. PanelDisplay's fix is to
+    // always call Cfg() (EnsureConfigLoaded() -> ResolvedSettings()) before
+    // mutating; this pins the failure mode that made that necessary and
+    // confirms the fix's shape (resolve, then mutate one field, then write)
+    // closes it. See superdoc/features/profiles.md's routed-write-merge
+    // ceiling paragraph.
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "730" );
+
+    Settings general{};
+    general.gamescope.filter = "FSR";
+    general.gamescope.sharpness = 4;
+    general.crosshair.line_length = 30;
+    REQUIRE( SaveProfile( General( "A" ), general ) );
+    REQUIRE( SelectProfile( "A" ) );
+    REQUIRE( CreateProfile( Game( "CS2", "730", "A" ) ) ); // from ResolvedSettings() == A's values: an empty diff
+    REQUIRE( SelectProfile( "CS2" ) );
+    REQUIRE( LoadProfile( "CS2" )->crosshair.line_length == 30 );  // inherited from A to start
+
+    // THE CEILING: a caller struct that is default-constructed and never
+    // passed through ResolvedSettings() -- exactly a setter that skips
+    // EnsureConfigLoaded(). Only sharpness is a deliberate edit; every other
+    // field is a struct default the caller never read.
+    Settings neverLoaded{};
+    neverLoaded.gamescope.sharpness = 10;
+    EnqueueRoutedWrite( neverLoaded );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "CS2" )->gamescope.sharpness == 10 );      // the deliberate edit
+    REQUIRE( LoadProfile( "CS2" )->crosshair.line_length == 6 );     // clobbered: struct default, was 30
+    REQUIRE( LoadProfile( "CS2" )->gamescope.filter == "LINEAR" );   // clobbered: struct default, was FSR
+
+    // Start CS2 over as a clean diff-free child for the fixed half below.
+    REQUIRE( DeleteProfile( "CS2" ) );
+    REQUIRE( CreateProfile( Game( "CS2", "730", "A" ) ) );
+    REQUIRE( SelectProfile( "CS2" ) );
+
+    // THE FIX'S SHAPE: a caller that resolves settings FIRST -- exactly what
+    // PanelDisplay's Cfg()/EnsureConfigLoaded() now guarantees before any
+    // setter mutates -- edits one field and touches nothing else.
+    Settings loadedFirst = ResolvedSettings();
+    loadedFirst.gamescope.sharpness = 10;
+    EnqueueRoutedWrite( loadedFirst );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "CS2" )->gamescope.sharpness == 10 );
+    REQUIRE( LoadProfile( "CS2" )->crosshair.line_length == 30 );  // untouched, still inherited from A
+    REQUIRE( LoadProfile( "CS2" )->gamescope.filter == "FSR" );    // untouched, still inherited from A
 }

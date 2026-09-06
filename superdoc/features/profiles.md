@@ -174,11 +174,33 @@ that loaded between two edits of another, and a revert to the loaded value).
 `Why at the funnel and not per-section writes in every panel:` the same reason the
 inheritance diff lives there -- every existing and future section gets it with zero
 panel code, and the panels' whole-struct habit is exactly what the funnel was written
-to absorb. `Ceiling:` a panel that writes **without ever loading** (a setter that
-skips its `EnsureConfigLoaded()`) passes struct defaults, which were never handed out
-and so count as edits; PanelDisplay's sharpness setter is the one known case
-(reachable from the palette or `overlay_e2_set` before that area has drawn) and is a
-one-line fix in that file.
+to absorb. `Ceiling (narrowed, 2026-09-06):` a panel that writes **without ever
+loading** (a setter that skips its `EnsureConfigLoaded()`) passes struct defaults,
+which were never handed out and so count as edits. PanelDisplay's Upscaling
+(`SetSharpnessUiPercent`, `SetFilter`, `SetScaler`), Frame limiter (`SetFpsLimit`) and
+Resolution (`ApplyNestedMode`) setters were the known case -- reachable from the
+palette or `overlay_e2_set` before any other Display area had drawn, since only the
+Frame limiter's `fps_limit` *getter* went through `Cfg()`/`EnsureConfigLoaded()` and
+every other setter there mutated `s_CachedSettings` directly (measured: crosshair
+defaults and `filter: LINEAR` landing in a game profile from the first Upscaling edit
+of a session). Fixed by routing every one of those setters through `Cfg()` first (a
+forward-declared `Cfg()`, since some of them are defined above its own declaration in
+the file) and by dropping the `if ( bIsReload )` guard around
+`PushCachedSettingsToLiveState()` in `EnsureConfigLoaded()` -- that guard assumed a
+panel's very first load was always the untouched startup state, which stopped being
+true once `SetLiveApplyHook()` existed and a select could land before this panel's
+first draw. Pinned by `tests/test_config.cpp`'s "a routed write from a caller that
+never resolved settings first clobbers sections it never touched" case and measured
+headless in `build-release/verify-shots/paneldisplay-routing/results.txt`: an
+Upscaling-first session and a Crosshair-first session each land only their own key in
+the game profile, nothing else. **What remains:** the underlying design property is
+unchanged -- `EnqueueRoutedWrite()` still has no way to tell "this caller never
+loaded" from "this caller deliberately reset every field to its default", so a
+*future* panel that writes through the funnel without ever calling
+`ResolvedSettings()`/`EnsureConfigLoaded()` first would reproduce the same failure.
+There is no longer a known reachable instance of it in the tree; the residue is a
+coding discipline every panel must keep (load before you mutate the whole struct you
+hand to `EnqueueRoutedWrite()`), not a guarantee the config layer itself enforces.
 
 `OverriddenKeys()` is the set of dotted keys the session profile stores itself
 (`"reshade.vibrancy.strength"`, `"fps_display.enabled"`), cached on the write

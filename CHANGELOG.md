@@ -42,6 +42,10 @@ The newest version below is the one this build reports.
   picture at once (filter, sharpness, shaders, crosshair, HUD), and an edit made in
   one area is no longer undone on disk by the next edit made in another area -- the
   "edit, switch, switch back, nothing changed" case.
+- **A settings area no longer overwrites others on its first edit**: changing
+  Upscaling, Frame limiter or Resolution as the very first action of a session no
+  longer resets crosshair, filter and other unrelated settings to their defaults in
+  the profile.
 - **Game profiles show their own name**: a game profile is listed as `[Game] <profile
   name>` everywhere (list, header badge, Status, toasts); the game's title and what it
   inherits sit in the line's muted text instead.
