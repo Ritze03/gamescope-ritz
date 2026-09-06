@@ -176,6 +176,34 @@ namespace gamescope
 		config::EnqueueRoutedWrite( s_CachedSettings );
 	}
 
+	// THE ORDERING RULE, and the single door every setter in this panel goes
+	// through (2026-09-06). Write the cached config FIRST, apply the live
+	// value SECOND, persist LAST.
+	//
+	// `Why:` Cfg() is not a plain accessor. On the first call after a
+	// generation bump -- session start, or a profile select made before this
+	// panel had ever drawn -- it synchronously reloads s_CachedSettings from
+	// config::ResolvedSettings() and pushes that (still PRE-edit) snapshot
+	// into the very same live globals/ConVars/setters these controls write,
+	// via PushCachedSettingsToLiveState(). A setter that assigned its live
+	// global first and only then called Cfg() therefore had its assignment
+	// silently overwritten one line later: the value was saved and displayed
+	// correctly, but had no live effect until the identical edit was made a
+	// second time (same generation -> no re-push). That was the
+	// pointer-regression.sh `unlocked-resync` failure bisected to a6c413d;
+	// see superdoc/features/profiles.md's "How a select reaches the screen".
+	//
+	// Taking the two halves as callables rather than leaving each setter to
+	// sequence them is the guard: a call site physically cannot get the order
+	// wrong, and a setter added later inherits the rule for free.
+	template <typename TWriteCfg, typename TApplyLive>
+	static void ApplyEdit( TWriteCfg &&fnWriteCfg, TApplyLive &&fnApplyLive )
+	{
+		fnWriteCfg( Cfg() );  // 1. config first -- Cfg() may re-push stale live state
+		fnApplyLive();        // 2. live second -- so this always wins
+		QueueSave();          // 3. persist
+	}
+
 	static const char *FilterToString( GamescopeUpscaleFilter eFilter )
 	{
 		switch ( eFilter )
@@ -310,18 +338,18 @@ namespace gamescope
 	static void SetSharpnessUiPercent( int nUiPercent )
 	{
 		const int nRaw = RawSharpnessFromUiPercent( nUiPercent );
-		g_upscaleFilterSharpness = nRaw;
-		// Cfg() (EnsureConfigLoaded()) FIRST -- this is the fix for the
-		// documented ceiling (superdoc/features/profiles.md's routed-write
-		// merge section): writing straight to s_CachedSettings without
-		// loading first left every other field at its struct default, which
-		// EnqueueRoutedWrite() cannot tell from a real edit and so wrote
+		// Cfg() (EnsureConfigLoaded()) FIRST -- see ApplyEdit()'s comment for
+		// both reasons it has to be: writing straight to s_CachedSettings
+		// without loading first left every other field at its struct default,
+		// which EnqueueRoutedWrite() cannot tell from a real edit and so wrote
 		// into the profile (measured: crosshair defaults and filter LINEAR
 		// landing in a game profile from the first Upscaling edit of a
-		// session). Reachable from the palette or overlay_e2_set before this
-		// area has ever drawn.
-		Cfg().gamescope.sharpness = nRaw;
-		QueueSave();
+		// session); and assigning the live global before Cfg() got that
+		// assignment clobbered by the reload's re-push. Reachable from the
+		// palette or overlay_e2_set before this area has ever drawn.
+		ApplyEdit(
+			[ nRaw ]( config::Settings &cfg ) { cfg.gamescope.sharpness = nRaw; },
+			[ nRaw ] { g_upscaleFilterSharpness = nRaw; } );
 	}
 
 	// Changing the filter RESETS sharpness to 0% (the user, 2026-08-24: "The
@@ -349,19 +377,24 @@ namespace gamescope
 	// value) must not wipe a sharpness the user just set.
 	static void SetFilter( GamescopeUpscaleFilter eFilter )
 	{
+		// Cfg() before the comparison, not just before the write: on a
+		// generation bump it re-pushes the resolved filter into
+		// g_wantedUpscaleFilter, so asking "did the filter actually change?"
+		// any earlier would answer against a value about to be replaced.
+		Cfg();
 		const bool bFilterChanged = ( eFilter != g_wantedUpscaleFilter );
-		g_wantedUpscaleFilter = eFilter;
-		Cfg().gamescope.filter = FilterToString( eFilter ); // Cfg() loads first -- see SetSharpnessUiPercent()
+		ApplyEdit(
+			[ eFilter ]( config::Settings &cfg ) { cfg.gamescope.filter = FilterToString( eFilter ); },
+			[ eFilter ] { g_wantedUpscaleFilter = eFilter; } );
 		if ( bFilterChanged )
 			SetSharpnessUiPercent( 0 ); // QueueSave()s on its own
-		QueueSave();
 	}
 
 	static void SetScaler( GamescopeUpscaleScaler eScaler )
 	{
-		g_wantedUpscaleScaler = eScaler;
-		Cfg().gamescope.scaler = ScalerToString( eScaler ); // Cfg() loads first -- see SetSharpnessUiPercent()
-		QueueSave();
+		ApplyEdit(
+			[ eScaler ]( config::Settings &cfg ) { cfg.gamescope.scaler = ScalerToString( eScaler ); },
+			[ eScaler ] { g_wantedUpscaleScaler = eScaler; } );
 	}
 
 	// Frame Limiter tab.
@@ -414,12 +447,8 @@ namespace gamescope
 	static constexpr int kMinFpsLimit = 10;
 	static constexpr int kMaxFpsLimit = 480;
 
-	static void SetFpsLimit( int nFps )
+	static void ApplyFpsLimitLive( int nFps )
 	{
-		nFps = ( nFps <= 0 ) ? 0 : std::clamp( nFps, kMinFpsLimit, kMaxFpsLimit );
-		Cfg().gamescope.fps_limit = nFps; // Cfg() loads first -- see SetSharpnessUiPercent()
-		QueueSave();
-
 		steamcompmgr_set_app_refresh_cycle_override( GetBackend()->GetScreenType(), nFps, true, true );
 
 		gamescope_xwayland_server_t *pRootServer = wlserver_get_xwayland_server( 0 );
@@ -439,6 +468,17 @@ namespace gamescope
 			// PropertyNotify this control depends on is even sent.
 			XFlush( pRootCtx->dpy );
 		}
+	}
+
+	static void SetFpsLimit( int nFps )
+	{
+		nFps = ( nFps <= 0 ) ? 0 : std::clamp( nFps, kMinFpsLimit, kMaxFpsLimit );
+		// Already had the right order before ApplyEdit() existed; routed
+		// through it anyway so "every setter here goes through one door" is
+		// true with no exception a reader has to check.
+		ApplyEdit(
+			[ nFps ]( config::Settings &cfg ) { cfg.gamescope.fps_limit = nFps; },
+			[ nFps ] { ApplyFpsLimitLive( nFps ); } );
 	}
 
 	// =====================================================================
@@ -544,9 +584,9 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return cv_adaptive_sync.Get(); },
 				[]( bool b ) {
-					cv_adaptive_sync = b;
-					Cfg().gamescope.vrr_enabled = b;
-					QueueSave();
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.vrr_enabled = b; },
+						[ b ] { cv_adaptive_sync = b; } );
 				} ) )
 			.Key( "gamescope.vrr_enabled" )
 			.Help( "Matches your screen's refresh rate to the game so motion looks smoother with "
@@ -558,9 +598,9 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return cv_tearing_enabled.Get(); },
 				[]( bool b ) {
-					cv_tearing_enabled = b;
-					Cfg().gamescope.tearing_enabled = b;
-					QueueSave();
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.tearing_enabled = b; },
+						[ b ] { cv_tearing_enabled = b; } );
 				} ) )
 			.Key( "gamescope.tearing_enabled" )
 			.Help( "Shows new frames the instant they're ready instead of waiting for the screen. "
@@ -578,9 +618,9 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return g_bForceRelativeMouse; },
 				[]( bool b ) {
-					steamcompmgr_set_force_relative_mouse( b );
-					Cfg().gamescope.force_grab_cursor = b;
-					QueueSave();
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.force_grab_cursor = b; },
+						[ b ] { steamcompmgr_set_force_relative_mouse( b ); } );
 				} ) )
 			.Key( "gamescope.force_grab_cursor" )
 			.Help( "Keeps your mouse locked to the game at all times, not just when the cursor is "
@@ -886,17 +926,21 @@ namespace gamescope
 	// tool for that (see the area's top-of-file comment).
 	static void ApplyNestedMode( int nWidth, int nHeight, int nRefreshmHz )
 	{
-		steamcompmgr_set_nested_mode( ClampDim( nWidth ), ClampDim( nHeight ), nRefreshmHz );
-
-		// Cfg() loads first -- see SetSharpnessUiPercent()'s comment. This
-		// setter is reachable (Aspect/Resolution/refresh rows, or
-		// overlay_e2_set) before any other area of this panel has drawn, the
-		// same "first Upscaling edit of the session" trap.
-		config::Settings &cfg = Cfg();
-		cfg.gamescope.nested_width  = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nWidth );
-		cfg.gamescope.nested_height = ( s_nAspectChoice == kAspectNative ) ? 0 : ClampDim( nHeight );
-		cfg.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
-		QueueSave();
+		// Config first, live second -- see ApplyEdit(). This setter is
+		// reachable (Aspect/Resolution/refresh rows, or overlay_e2_set)
+		// before any other area of this panel has drawn, the same "first
+		// Upscaling edit of the session" trap. The live push does not carry
+		// the nested mode today, so only half the hazard bites here; the
+		// order is uniform anyway rather than depending on that staying true.
+		const int nW = ClampDim( nWidth );
+		const int nH = ClampDim( nHeight );
+		ApplyEdit(
+			[ nW, nH, nRefreshmHz ]( config::Settings &cfg ) {
+				cfg.gamescope.nested_width  = ( s_nAspectChoice == kAspectNative ) ? 0 : nW;
+				cfg.gamescope.nested_height = ( s_nAspectChoice == kAspectNative ) ? 0 : nH;
+				cfg.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
+			},
+			[ nW, nH, nRefreshmHz ] { steamcompmgr_set_nested_mode( nW, nH, nRefreshmHz ); } );
 	}
 
 	static bool NestedIsNative()
@@ -1627,9 +1671,9 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return cv_hdr_enabled.Get(); },
 				[]( bool b ) {
-					cv_hdr_enabled = b;
-					Cfg().gamescope.hdr_enabled = b;
-					QueueSave();
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.hdr_enabled = b; },
+						[ b ] { cv_hdr_enabled = b; } );
 				} ) )
 			.Key( "gamescope.hdr_enabled" )
 			.Help( "Turns on HDR for richer colour and brighter highlights, on a screen that "
@@ -1649,9 +1693,9 @@ namespace gamescope
 			ui::AnyBind::Of<float>(
 				[]{ return std::clamp( g_ColorMgmt.pending.sdrGamutWideness, 0.0f, 1.0f ); },
 				[]( float f ) {
-					set_color_sdr_gamut_wideness( f );
-					Cfg().gamescope.sdr_gamut_wideness = f;
-					QueueSave();
+					ApplyEdit(
+						[ f ]( config::Settings &cfg ) { cfg.gamescope.sdr_gamut_wideness = f; },
+						[ f ] { set_color_sdr_gamut_wideness( f ); } );
 				} ) )
 			.Key( "gamescope.sdr_gamut_wideness" )
 			.Help( "Makes colours in regular (non-HDR) content richer by stretching them toward "
@@ -1666,9 +1710,9 @@ namespace gamescope
 			ui::AnyBind::Of<float>(
 				[]{ return g_ColorMgmt.pending.flSDROnHDRBrightness; },
 				[]( float f ) {
-					set_sdr_on_hdr_brightness( f );
-					Cfg().gamescope.sdr_on_hdr_brightness_nits = f;
-					QueueSave();
+					ApplyEdit(
+						[ f ]( config::Settings &cfg ) { cfg.gamescope.sdr_on_hdr_brightness_nits = f; },
+						[ f ] { set_sdr_on_hdr_brightness( f ); } );
 				} ) )
 			.Key( "gamescope.sdr_on_hdr_brightness_nits" )
 			.Help( "Sets how bright regular (non-HDR) content looks when it's shown next to HDR "
@@ -1690,9 +1734,9 @@ namespace gamescope
 			ui::AnyBind::Of<float>(
 				[]{ return g_ColorMgmt.pending.flHDRInputGain; },
 				[]( float f ) {
-					set_hdr_input_gain( f );
-					Cfg().gamescope.hdr_input_gain = f;
-					QueueSave();
+					ApplyEdit(
+						[ f ]( config::Settings &cfg ) { cfg.gamescope.hdr_input_gain = f; },
+						[ f ] { set_hdr_input_gain( f ); } );
 				} ) )
 			.Key( "gamescope.hdr_input_gain" )
 			.Help( "Turns HDR content brighter or dimmer before it's shown on screen." )
@@ -1707,9 +1751,9 @@ namespace gamescope
 			ui::AnyBind::Of<float>(
 				[]{ return g_ColorMgmt.pending.flSDRInputGain; },
 				[]( float f ) {
-					set_sdr_input_gain( f );
-					Cfg().gamescope.sdr_input_gain = f;
-					QueueSave();
+					ApplyEdit(
+						[ f ]( config::Settings &cfg ) { cfg.gamescope.sdr_input_gain = f; },
+						[ f ] { set_sdr_input_gain( f ); } );
 				} ) )
 			.Key( "gamescope.sdr_input_gain" )
 			.Help( "Turns regular (non-HDR) content brighter or dimmer before it's blended in with "

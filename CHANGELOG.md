@@ -32,6 +32,10 @@ The newest version below is the one this build reports.
   every area's header badge names the profile being edited.
 
 ### Fixed
+- **The first change you make in a session takes effect immediately**: an Upscaling,
+  HDR, VRR, tearing, cursor-grab or Resolution change made first in a session -- or
+  first after switching profile -- no longer needs a second, identical change before
+  anything happens on screen.
 - **Scaled crosshair really stretches**: with Apply scaling on, a stretched game gets a
   crosshair that is properly thicker, softly blurred at the edges and with the gap
   scaled to match, instead of a dimmer, thinner one with too wide a gap.

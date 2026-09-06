@@ -2108,3 +2108,64 @@ TEST_CASE( "a routed write from a caller that never resolved settings first clob
     REQUIRE( LoadProfile( "CS2" )->crosshair.line_length == 30 );  // untouched, still inherited from A
     REQUIRE( LoadProfile( "CS2" )->gamescope.filter == "FSR" );    // untouched, still inherited from A
 }
+
+TEST_CASE( "the live-apply hook fires synchronously on a generation bump, which is why a setter must "
+           "write config before it applies live", "[config]" )
+{
+    // 2026-09-06, the ordering hazard behind pointer-regression.sh's
+    // `unlocked-resync` failure (bisected to a6c413d). PanelDisplay's
+    // EnsureConfigLoaded() reloads AND re-pushes the resolved settings into
+    // the live globals on every generation change, and the live-apply hook
+    // below does the same on the bump itself. Both are synchronous, so a
+    // setter that assigned its live global and only THEN called Cfg() had
+    // that assignment overwritten by the still-PRE-edit snapshot one line
+    // later: saved and displayed correctly, no live effect until the same
+    // edit was made twice. PanelDisplay's ApplyEdit() now forces
+    // config-then-live at every call site.
+    //
+    // The panel itself is not linkable here (steamcompmgr globals, X11, the
+    // backend), so what this pins is the ConfigManager-side contract the
+    // rule rests on -- a bump applies the RESOLVED settings, synchronously,
+    // over whatever the live state currently holds -- plus the consequence
+    // for each of the two orders, modelled with a stand-in live variable.
+    TempConfigHome home;
+
+    Settings base{};
+    base.gamescope.scaler = "AUTO";
+    REQUIRE( SaveProfile( General( "A" ), base ) );
+    REQUIRE( SelectProfile( "A" ) );
+
+    // Stands in for g_wantedUpscaleScaler + PushCachedSettingsToLiveState().
+    static std::string sLive;
+    static int nApplies;
+    sLive = ResolvedSettings().gamescope.scaler;
+    nApplies = 0;
+    SetLiveApplyHook( []( const Settings &s ) { sLive = s.gamescope.scaler; nApplies++; } );
+
+    // The contract: synchronous, and with the freshly resolved values.
+    Settings edited = ResolvedSettings();
+    edited.gamescope.scaler = "FIT";
+    REQUIRE( SaveProfile( General( "A" ), edited ) );
+    const int nBefore = nApplies;
+    BumpConfigGeneration();
+    REQUIRE( nApplies == nBefore + 1 );      // fired, and before this line ran
+    REQUIRE( sLive == "FIT" );
+
+    // WRONG ORDER: live first, then the config read that follows a bump.
+    // The pre-edit snapshot wins and the live assignment is lost.
+    REQUIRE( SelectProfile( "A" ) );          // bump; live == "FIT"
+    sLive = "STRETCH";                        // the setter's live assignment
+    BumpConfigGeneration();                   // stands in for the reload+re-push Cfg() does
+    REQUIRE( sLive == "FIT" );                // clobbered -- the regression
+
+    // RIGHT ORDER: config first, live second. The reload happens under the
+    // config write, so the live assignment is the last word.
+    Settings cfg = ResolvedSettings();
+    cfg.gamescope.scaler = "STRETCH";
+    EnqueueRoutedWrite( cfg );
+    BumpConfigGeneration();                   // any reload/re-push lands here...
+    sLive = "STRETCH";                        // ...and the live apply comes after it
+    REQUIRE( sLive == "STRETCH" );
+
+    SetLiveApplyHook( nullptr );
+}

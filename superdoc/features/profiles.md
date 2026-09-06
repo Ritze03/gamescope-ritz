@@ -139,6 +139,28 @@ Reset to inherited, a rename or delete that touches the session):
 2. **Every panel reloads** on its next draw or edit (`EnsureConfigLoaded()` compares
    the generation), so the sheet's rows show the selected profile's values.
 
+**The ordering rule this forces on every setter (2026-09-06): write the config first,
+apply the live value second.** Both halves above are *synchronous*, and `Cfg()` is not
+a plain accessor -- the first call after a generation bump reloads `s_CachedSettings`
+and pushes that still-pre-edit snapshot back into the very globals the controls write
+(`PushCachedSettingsToLiveState()`). So a setter that assigned its live global and only
+then called `Cfg()` had the assignment overwritten one line later: the value was saved
+and displayed correctly but had no live effect until the identical edit was made a
+second time (same generation, no re-push). `Why it took a regression gate to find:` the
+row, the summary and the JSON all read correct throughout -- only the picture was
+stale. Measured as `scripts/pointer-regression.sh`'s `unlocked-resync` losing the
+resync from an Auto->Stretch scaler toggle and crediting it to the no-op repeat
+(bisected to `a6c413d`, which made the push unconditional). PanelDisplay now routes
+every setter through one helper, `ApplyEdit( fnWriteCfg, fnApplyLive )`, which
+sequences config-then-live-then-save, so a call site cannot get the order wrong and a
+setter added later inherits the rule. The `BumpConfigGeneration()` half of the contract
+is pinned by `tests/test_config.cpp`'s "the live-apply hook fires synchronously on a
+generation bump" case; the panel itself is not unit-linkable (steamcompmgr globals,
+X11, the backend), so the end-to-end behaviour is measured headless instead --
+`build-release/verify-shots/setter-order-fix/`, where one scaler edit made as a
+session's first action, and again straight after a select, moves the letterbox bar's
+pixels before and not after the fix.
+
 ## Inheritance: how the diff works, and its ceiling
 
 On every write of an inheriting game profile (`EnqueueRoutedWrite()` from any panel,
