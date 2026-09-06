@@ -13,10 +13,10 @@
 // Shell and the toasts, which is exactly where a crosshair belongs. This
 // file therefore owns the crosshair's CONFIG, its SETTINGS AREA, its
 // right-click state and its per-frame DRAW into a draw list it is handed;
-// it owns no ImGui context and no Layer_t. The one texture it does own is
-// Apply Scaling's small game-resolution raster (see Crosshair_Draw), which
-// is sampled INTO the HUD's draw list as a single quad, never composited
-// as a layer of its own.
+// it owns no ImGui context, no Layer_t and no texture. The one Vulkan
+// object it does own is a small host-visible staging buffer for Apply
+// Scaling's stretched raster, which is copied INTO the HUD's texture
+// (see Crosshair_RecordUpload), never composited as a layer of its own.
 //
 // Geometry and the hide animation's arithmetic live in CrosshairMath.h
 // (pure, unit-tested); this file only resolves config into them.
@@ -26,6 +26,7 @@
 
 struct ImDrawList;
 class CVulkanCmdBuffer;
+class CVulkanTexture;
 
 namespace gamescope
 {
@@ -75,25 +76,34 @@ namespace gamescope
 	//
 	// Two rendering paths (superdoc/features/crosshair.md): with Apply
 	// Scaling OFF every primitive is a whole-pixel rect at output
-	// resolution, AA off. With it ON the crosshair is Build() at the GAME's
-	// resolution, rasterised on the CPU into a small texture (its own
-	// bounding box + 1 texel margin) and drawn as ONE linearly-sampled
-	// quad stretched by layer 0's per-axis scale -- the look of a stretched
-	// in-game raster. The raster is re-built only when its geometry,
-	// colours or the Focus/Shrink animation change; Fade is a tint on the
-	// quad. Any pending re-upload is recorded by Crosshair_RecordUpload().
+	// resolution, AA off, into pDrawList. With it ON nothing goes into the
+	// draw list at all: the crosshair is Build() at the GAME's resolution,
+	// rasterised on the CPU (its own bounding box + 1 texel margin),
+	// stretched to the output by a CPU bilinear resample at layer 0's
+	// per-axis scale -- the look of a stretched in-game raster -- and held
+	// for Crosshair_RecordUpload() to copy straight into the HUD texture.
+	// The raster is re-built only when its geometry, colours, placement or
+	// the hide animation change.
 	bool Crosshair_Draw( ImDrawList *pDrawList, const CrosshairFrame &frame, uint64_t ulNowNs );
 
-	// Called by FpsDisplay.cpp's RenderAndSubmit() with the HUD's ImGui
-	// context current, on the general-queue command buffer it is about to
-	// render the HUD with, OUTSIDE the render pass and after the previous
-	// HUD submission has been drained. Records the copy of a re-built
-	// raster into its texture (plus the barrier that makes it sampleable)
-	// so the upload rides the same submission as the frame that samples
-	// it -- no vkQueueWaitIdle, unlike vulkan_create_texture_from_bits() --
-	// and frees textures/descriptors the previous frame retired. A no-op
-	// when nothing is pending.
-	void Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer );
+	// Called by FpsDisplay.cpp's RenderAndSubmit() on the general-queue
+	// command buffer it is about to render the HUD with, OUTSIDE the
+	// render pass, after the previous HUD submission has been drained and
+	// after pHudTexture's initial layout barrier. When this frame's
+	// Crosshair_Draw() produced a stretched raster: clears pHudTexture,
+	// copies the raster into it (a small host-visible staging buffer this
+	// file owns, rewritten only when the pixels changed) and returns true
+	// -- the caller then LOADs the texture in its render pass instead of
+	// clearing it, so the readout still draws over the crosshair. Returns
+	// false, recording nothing, when there is nothing to copy.
+	//
+	// Why a copy into the HUD texture rather than an ImGui image quad:
+	// everything ImGui draws goes through its SRC_ALPHA blend, so a
+	// stretched edge texel of coverage w landed premultiplied and the
+	// composite (which reads the HUD texel as straight alpha) showed it at
+	// w * w -- crushed soft edges, a dimmer line and a gap that read too
+	// wide. See crosshair::ResampleToOutput() in CrosshairMath.h.
+	bool Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer, CVulkanTexture *pHudTexture );
 
 	// Called from wlserver's pointer-button dispatch, on the wlserver
 	// thread, for a BTN_RIGHT press/release that is being delivered TO THE

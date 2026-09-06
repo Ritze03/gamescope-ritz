@@ -564,3 +564,102 @@ TEST_CASE( "AdvanceHide climbs from the press like HideProgress, reverses from t
 	REQUIRE_FALSE( HideAnimating( e ) );
 }
 
+namespace
+{
+	// Straight-alpha channel helpers for OutputRaster texels.
+	int A8( Argb v ) { return (int)( ( v >> 24 ) & 0xFF ); }
+	int G8( Argb v ) { return (int)( ( v >> 8 ) & 0xFF ); }
+	int R8( Argb v ) { return (int)( ( v >> 16 ) & 0xFF ); }
+}
+
+TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 25 %, gap and length scale with it", "[crosshair]" )
+{
+	// A 640x360 game drawn 2x onto 1280x720: centre (640, 360), scale (2, 2).
+	Style st; st.flWidth = 1.0f; st.flLength = 12.0f; st.flGap = 8.0f; st.bDot = false; st.bOutline = false;
+	const Frame gf = GameFrame( 640, 360 );
+	const Shape s = Build( st, gf, {} );
+	const IRect tr = RasterRect( s );
+	const Argb green = PackArgb( 0x00FF00, 1.0f );
+	const std::vector<Argb> gamePx = Rasterize( s, tr, 0u, green, 0u );
+
+	Frame fr; fr.flCenterX = 640.0f; fr.flCenterY = 360.0f; fr.flScaleX = 2.0f; fr.flScaleY = 2.0f;
+	const OutputRaster out = ResampleToOutput( gamePx, tr, 640, 360, fr );
+	REQUIRE_FALSE( out.Empty() );
+	const FRect q = ScaledQuad( tr, 640, 360, fr );
+	REQUIRE( out.rect.x0 == (int)std::floor( q.x0 ) );
+	REQUIRE( out.rect.x1 == (int)std::ceil( q.x1 ) );
+	const int ow = out.rect.x1 - out.rect.x0;
+	auto At = [&]( int ox, int oy ) -> Argb
+	{
+		if ( ox < out.rect.x0 || oy < out.rect.y0 || ox >= out.rect.x1 || oy >= out.rect.y1 )
+			return 0u;
+		return out.px[(size_t)( oy - out.rect.y0 ) * ow + ( ox - out.rect.x0 )];
+	};
+
+	// In game pixels the right arm is x 329..340 on row 180 (centre column
+	// 320, gap 8). Stretched 2x: output x 658..681, rows 360 and 361.
+	// Across the arm the bilinear filter puts 75 % on the two rows it
+	// covers and 25 % on the two beside them -- at the LINE's colour, not
+	// a darker one (#14: "properly thicker and sub-pixel blurry").
+	REQUIRE( A8( At( 665, 360 ) ) == 191 ); REQUIRE( G8( At( 665, 360 ) ) == 255 ); REQUIRE( R8( At( 665, 360 ) ) == 0 );
+	REQUIRE( A8( At( 665, 361 ) ) == 191 );
+	REQUIRE( A8( At( 665, 359 ) ) == 64 );  REQUIRE( G8( At( 665, 359 ) ) == 255 );
+	REQUIRE( A8( At( 665, 362 ) ) == 64 );
+	REQUIRE( A8( At( 665, 358 ) ) == 0 );
+	REQUIRE( A8( At( 665, 363 ) ) == 0 );
+	// Along the arm: the end pixels are 75 % x 75 %, the ones past them
+	// 25 % x 75 %, and the gap itself is empty.
+	REQUIRE( A8( At( 658, 360 ) ) == 143 );
+	REQUIRE( A8( At( 657, 360 ) ) == 48 );
+	REQUIRE( A8( At( 681, 360 ) ) == 143 );
+	REQUIRE( A8( At( 682, 360 ) ) == 48 );
+	REQUIRE( A8( At( 683, 360 ) ) == 0 );
+	REQUIRE( A8( At( 640, 360 ) ) == 0 );
+	REQUIRE( A8( At( 650, 360 ) ) == 0 );
+
+	// Measured the way scripts/pixel-regression.sh measures: the run of
+	// >= 50 % coverage along the row is the arm. Gap from the centre
+	// column's right edge (642) = 16 = 8 x 2; length 24 = 12 x 2; width 2.
+	int nFirst = -1, nLast = -1;
+	for ( int x = 641; x < 700; x++ )
+		if ( A8( At( x, 360 ) ) >= 128 ) { if ( nFirst < 0 ) nFirst = x; nLast = x; }
+	REQUIRE( nFirst == 658 );
+	REQUIRE( nLast == 681 );
+	int nWidth = 0;
+	for ( int y = 350; y < 370; y++ )
+		if ( A8( At( 665, y ) ) >= 128 ) nWidth++;
+	REQUIRE( nWidth == 2 );
+
+	// Coverage is conserved: 48 opaque game texels x 4 output px each.
+	double flSum = 0.0;
+	for ( Argb v : out.px )
+		flSum += A8( v ) / 255.0;
+	REQUIRE_THAT( flSum, WithinAbs( 48.0 * 4.0, 1.0 ) );
+
+	// Opacity 0.5: the texel carries the colour the pixel path's blend
+	// would have written (colour x opacity) and coverage x opacity as
+	// alpha, so an interior pixel is (0, 128, 0) at 75 % x 50 %.
+	const std::vector<Argb> halfPx = Rasterize( s, tr, 0u, PackArgb( 0x00FF00, 0.5f ), 0u );
+	const OutputRaster half = ResampleToOutput( halfPx, tr, 640, 360, fr );
+	const Argb h = half.px[(size_t)( 360 - half.rect.y0 ) * ( half.rect.x1 - half.rect.x0 ) + ( 665 - half.rect.x0 )];
+	REQUIRE( ( G8( h ) >= 127 && G8( h ) <= 129 ) );
+	REQUIRE( ( A8( h ) >= 95 && A8( h ) <= 97 ) );
+
+	// An outline edge mixes the outline's black into the line's green at
+	// the line's own coverage -- never towards a transparent texel's RGB.
+	Style so = st; so.bOutline = true; so.flOutlineWidth = 1.0f;
+	const Shape s2 = Build( so, gf, {} );
+	const IRect tr2 = RasterRect( s2 );
+	const OutputRaster o2 = ResampleToOutput( Rasterize( s2, tr2, PackArgb( 0x000000, 1.0f ), green, 0u ), tr2, 640, 360, fr );
+	const int ow2 = o2.rect.x1 - o2.rect.x0;
+	auto At2 = [&]( int ox, int oy ) { return o2.px[(size_t)( oy - o2.rect.y0 ) * ow2 + ( ox - o2.rect.x0 )]; };
+	REQUIRE( A8( At2( 665, 359 ) ) == 255 );                 // fully covered: 25 % line + 75 % outline
+	REQUIRE( ( G8( At2( 665, 359 ) ) >= 63 && G8( At2( 665, 359 ) ) <= 65 ) );
+	REQUIRE( A8( At2( 665, 357 ) ) == 64 );                  // outline's own soft edge
+	REQUIRE( G8( At2( 665, 357 ) ) == 0 );
+
+	// An empty raster (Shrink at 100 %) resamples to nothing.
+	Style off; off.bLine = false; off.bDot = false;
+	const Shape s3 = Build( off, gf, {} );
+	REQUIRE( ResampleToOutput( {}, RasterRect( s3 ), 640, 360, fr ).Empty() );
+}

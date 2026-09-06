@@ -84,6 +84,19 @@
 #   crosshair-geometry     -- all four arms are the configured colour at the
 #                            expected offsets, background shows in the gap,
 #                            and the crosshair's own outline is black
+#   crosshair-shrink-rate  -- Shrink auto-hide: the gap closes and the arms
+#                            shorten at the SAME pixels-per-second (request
+#                            #11, 2026-09-06), measured from captures at known
+#                            times after a debug right-click press
+#   crosshair-reverse      -- Animate back (request #13): released half way
+#                            through a Shrink hide, the crosshair is part way
+#                            back a quarter later and fully back after
+#   crosshair-scaled       -- Apply Scaling (request #14): a 640x360 game
+#                            stretched 2x onto the 1280x720 output gets arms
+#                            2x as long, 2x as far apart, 2x as wide, with
+#                            soft (10..90 % coverage) edges -- measured by
+#                            coverage, i.e. the composite's straight-alpha
+#                            blend, not by colour
 #
 # USAGE
 #   scripts/pixel-regression.sh                # run everything
@@ -209,6 +222,45 @@ CH_OUT_LO=$CH_LINE_GAP;                          CH_OUT_HI=$((CH_LINE_GAP + CH_O
 CH_ARM_LO=$((CH_LINE_GAP + CH_OUTLINE_WIDTH + 1)); CH_ARM_HI=$((CH_LINE_GAP + CH_OUTLINE_WIDTH + CH_LINE_LENGTH - 2))
 CH_CENTER_X=$((OUT_W / 2))
 CH_CENTER_Y=$((OUT_H / 2))
+
+# Shrink-rate / Animate-back (crosshair-shrink-rate, crosshair-reverse): the
+# pixel path at 1:1, width 1 and the outline off so an arm is one exact run of
+# CH_LINE_COLOR along its ray (pixel_regression_sample.py gap_len()). Slow
+# animations so screenshot latency (~50-150 ms observed) is a fraction of a
+# pixel: 20 px of edge travel over 4 s is 5 px/s.
+CH_ANIM_LINE_WIDTH=1
+CH_SHRINK_HIDE_MS=4000
+CH_SHRINK_T1_MS=400;  CH_SHRINK_T2_MS=1200   # phase 1 (gap closes over the first 8/20 = 1600 ms)
+CH_SHRINK_T3_MS=2400; CH_SHRINK_T4_MS=3200   # phase 2 (arms shorten)
+CH_SHRINK_T5_MS=2000                          # the 50 % capture (taken between T2 and T3)
+CH_SHRINK_TOL_PX=1                            # rate difference over the phase-1 interval, and the 50 % state
+CH_REVERSE_HIDE_MS=2000
+CH_REVERSE_RELEASE_MS=1000                    # release at 50 %
+CH_REVERSE_MID_MS=1500                        # capture at 75 %: expect f = 0.25 -> 5 px travelled -> gap 3 of 8
+CH_REVERSE_END_MS=2600                        # capture after the reveal has finished
+CH_REVERSE_TOL_PX=1.5                         # 1 px plus timing slack at 10 px/s
+
+# Apply Scaling (crosshair-scaled): a 640x360 client stretched 2x onto the
+# 1280x720 output (--scaler stretch). Width 1, outline off, gap/length as
+# above -> in output pixels: arms 24 long, 2 wide, inner ends 2*16 + 2 = 34
+# apart (the centre column is 2 px wide at 2x). Measured by COVERAGE: each
+# pixel's coverage is read back through the composite's straight-alpha blend
+# (pixel_regression_sample.py coverage_of()), an arm is the run of >= 50 %,
+# and the pixel past each end / beside each side must be 10..90 % -- the
+# soft edge a bilinear stretch of a 1 px line has (75 % / 25 % rows at 2x).
+CH_SCALED_GAME_W=640
+CH_SCALED_GAME_H=360
+CH_SCALED_SCALER=stretch
+CH_SCALED_SCALE=$((OUT_W / CH_SCALED_GAME_W))   # 2 (integer by construction)
+CH_SCALED_EXP_LEN=$((CH_LINE_LENGTH * CH_SCALED_SCALE))
+CH_SCALED_EXP_SEP=$((2 * CH_LINE_GAP * CH_SCALED_SCALE + CH_ANIM_LINE_WIDTH * CH_SCALED_SCALE))
+CH_SCALED_EXP_WIDTH=$((CH_ANIM_LINE_WIDTH * CH_SCALED_SCALE))
+CH_SCALED_TOL_PX=1
+CH_SCALED_SPAN=120
+# At 2x the game's centre pixel column [320,321) lands on output [640,642): the
+# crosshair is centred on x = 641.0, so scan from pixel 641 / 361.
+CH_SCALED_CENTER_X=$((OUT_W / 2 + 1))
+CH_SCALED_CENTER_Y=$((OUT_H / 2 + 1))
 
 READY_TIMEOUT_S=20
 SWAY_READY_TIMEOUT_S=10
@@ -429,13 +481,16 @@ GS_WL_NAME=""
 
 start_instance() {
 	local bg_hex="$1"
+	# Optional: the client's own size and the scaler (crosshair-scaled runs
+	# a 640x360 client stretched onto the 1280x720 output); default 1:1.
+	local game_w="${2:-$OUT_W}" game_h="${3:-$OUT_H}" scaler="${4:-auto}"
 	teardown_instance   # only one instance (one xterm background) at a time
 
 	GS_LOG="$RUNDIR/gamescope-$(date +%s%N).log"
-	log "starting gamescope instance, background $bg_hex"
+	log "starting gamescope instance, background $bg_hex, client ${game_w}x${game_h}, scaler $scaler"
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
-		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" \
-		--force-windows-fullscreen -- \
+		"$GAMESCOPE_BIN" --backend wayland -w "$game_w" -h "$game_h" -W "$OUT_W" -H "$OUT_H" \
+		--scaler "$scaler" --force-windows-fullscreen -- \
 		kitty -c NONE -o background="$bg_hex" -o foreground="$bg_hex" -o cursor="$bg_hex" \
 			-o cursor_blink_interval=0 -o remember_window_size=no \
 			sleep 600 \
@@ -702,6 +757,140 @@ check_crosshair_geometry() {
 	set_val "crosshair.enabled" 0
 }
 
+# Milliseconds since the epoch, for the timed captures below.
+now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
+
+# Sleeps until `since_ms + target_ms`, if that is still in the future.
+sleep_until() {
+	local since_ms="$1" target_ms="$2" now
+	now="$(now_ms)"
+	local wait_ms=$(( since_ms + target_ms - now ))
+	if (( wait_ms > 0 )); then
+		sleep "$(awk "BEGIN { printf \"%.3f\", $wait_ms / 1000 }")"
+	fi
+}
+
+# Requests a screenshot and records the request time (ms since the press
+# given in $2) into the variable named by $3 and the path into TS_PATH --
+# called directly, never in a $(...) (a subshell would drop both). The
+# capture itself lands on the next paint, and the animation forces one per
+# frame, so the request time is the capture time to within a frame.
+TS_PATH=""
+timed_shot() {
+	local name="$1" since_ms="$2" var="$3"
+	local path="$OUT_DIR/$name.png"
+	local t=$(( $(now_ms) - since_ms ))
+	gsctl screenshot "$path 4" >/dev/null 2>&1 || true
+	printf -v "$var" '%s' "$t"
+	TS_PATH="$path"
+	# Wait for the file to stabilise (as take_screenshot), so the next
+	# request does not race this one's write.
+	local waited=0 last_size=-1 size=0
+	while (( waited < SCREENSHOT_TIMEOUT_S * 20 )); do
+		if [[ -f "$path" ]]; then
+			size="$(stat -c%s "$path" 2>/dev/null || echo 0)"
+			if [[ "$size" -gt 0 && "$size" == "$last_size" ]]; then break; fi
+			last_size="$size"
+		fi
+		sleep 0.05
+		waited=$((waited + 1))
+	done
+}
+
+# Puts the crosshair into the animation checks' configuration: pixel path,
+# 1 px line, outline off, Shrink, a given hide time and Animate back state.
+crosshair_anim_setup() {
+	local hide_ms="$1" animate_back="$2"
+	set_val "crosshair.enabled" 1
+	set_val "crosshair.outline" 0
+	set_val "crosshair.line_width" "$CH_ANIM_LINE_WIDTH"
+	set_val "crosshair.hide" 1
+	set_val "crosshair.hide_mode" 2          # kHideModeOptions: 0 fade, 1 focus, 2 shrink
+	set_val "crosshair.hide_time" "$hide_ms"
+	set_val "crosshair.hide_animate_back" "$animate_back"
+}
+
+crosshair_anim_teardown() {
+	gsctl wlserver_debug_mouse_button "273 0" >/dev/null 2>&1 || true
+	set_val "crosshair.hide" 0
+	set_val "crosshair.hide_animate_back" 1
+	set_val "crosshair.line_width" "$CH_LINE_WIDTH"
+	set_val "crosshair.outline" 1
+	set_val "crosshair.enabled" 0
+}
+
+# Shrink rate (request #11): press, capture twice while the gap closes and
+# twice while the arms shorten, plus once at 50 %; the sampler compares the
+# two edge speeds and the 50 % state against crosshair::ShrinkSplit's model.
+check_crosshair_shrink_rate() {
+	should_run crosshair-shrink-rate || { skip_check crosshair-shrink-rate "--only excluded it"; return; }
+	crosshair_anim_setup "$CH_SHRINK_HIDE_MS" 0
+	local t0 s1 s2 s3 s4 s5 t1 t2 t3 t4 t5
+	t0="$(now_ms)"
+	gsctl wlserver_debug_mouse_button "273 1" >/dev/null 2>&1 || true
+	sleep_until "$t0" "$CH_SHRINK_T1_MS"; timed_shot 09-shrink-t1 "$t0" t1; s1="$TS_PATH"
+	sleep_until "$t0" "$CH_SHRINK_T2_MS"; timed_shot 09-shrink-t2 "$t0" t2; s2="$TS_PATH"
+	sleep_until "$t0" "$CH_SHRINK_T5_MS"; timed_shot 09-shrink-t5-mid "$t0" t5; s5="$TS_PATH"
+	sleep_until "$t0" "$CH_SHRINK_T3_MS"; timed_shot 09-shrink-t3 "$t0" t3; s3="$TS_PATH"
+	sleep_until "$t0" "$CH_SHRINK_T4_MS"; timed_shot 09-shrink-t4 "$t0" t4; s4="$TS_PATH"
+	gsctl wlserver_debug_mouse_button "273 0" >/dev/null 2>&1 || true
+	local ch_r ch_g ch_b
+	ch_r=$(( (CH_LINE_COLOR_HEX >> 16) & 0xFF )); ch_g=$(( (CH_LINE_COLOR_HEX >> 8) & 0xFF )); ch_b=$(( CH_LINE_COLOR_HEX & 0xFF ))
+	run_sampler shrink_rate "$s1" "$t1" "$s2" "$t2" "$s3" "$t3" "$s4" "$t4" "$s5" "$t5" \
+		"$CH_CENTER_X" "$CH_CENTER_Y" "$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" \
+		"$CH_SHRINK_HIDE_MS" "$CH_LINE_GAP" "$CH_LINE_LENGTH" "$CH_SHRINK_TOL_PX" "crosshair-shrink-rate"
+	crosshair_anim_teardown
+}
+
+# Animate back (request #13): press, release at 50 %, capture at 75 % (part
+# way back: gap 3 of 8 on the model) and after the reveal (fully back).
+check_crosshair_reverse() {
+	should_run crosshair-reverse || { skip_check crosshair-reverse "--only excluded it"; return; }
+	crosshair_anim_setup "$CH_REVERSE_HIDE_MS" 1
+	local t0 s_mid s_end t_rel t_mid t_end
+	t0="$(now_ms)"
+	gsctl wlserver_debug_mouse_button "273 1" >/dev/null 2>&1 || true
+	sleep_until "$t0" "$CH_REVERSE_RELEASE_MS"
+	t_rel=$(( $(now_ms) - t0 ))
+	gsctl wlserver_debug_mouse_button "273 0" >/dev/null 2>&1 || true
+	sleep_until "$t0" "$CH_REVERSE_MID_MS"; timed_shot 10-reverse-mid "$t0" t_mid; s_mid="$TS_PATH"
+	sleep_until "$t0" "$CH_REVERSE_END_MS"; timed_shot 10-reverse-end "$t0" t_end; s_end="$TS_PATH"
+	local ch_r ch_g ch_b
+	ch_r=$(( (CH_LINE_COLOR_HEX >> 16) & 0xFF )); ch_g=$(( (CH_LINE_COLOR_HEX >> 8) & 0xFF )); ch_b=$(( CH_LINE_COLOR_HEX & 0xFF ))
+	run_sampler reverse "$s_mid" "$s_end" "$t_rel" "$t_mid" "$t_end" \
+		"$CH_CENTER_X" "$CH_CENTER_Y" "$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" \
+		"$CH_REVERSE_HIDE_MS" "$CH_LINE_GAP" "$CH_LINE_LENGTH" "$CH_REVERSE_TOL_PX" "crosshair-reverse"
+	crosshair_anim_teardown
+}
+
+# Apply Scaling (request #14): needs the stretched instance -- see the run
+# section. Row and column through the centre, each must show two arms of
+# the stretched length, separation and width, with soft edges.
+check_crosshair_scaled() {
+	should_run crosshair-scaled || { skip_check crosshair-scaled "--only excluded it"; return; }
+	set_val "crosshair.enabled" 1
+	set_val "crosshair.outline" 0
+	set_val "crosshair.line_width" "$CH_ANIM_LINE_WIDTH"
+	set_val "crosshair.apply_scaling" 1
+	local shot; shot="$(take_screenshot 11-crosshair-scaled)"
+	local ch_r ch_g ch_b
+	ch_r=$(( (CH_LINE_COLOR_HEX >> 16) & 0xFF )); ch_g=$(( (CH_LINE_COLOR_HEX >> 8) & 0xFF )); ch_b=$(( CH_LINE_COLOR_HEX & 0xFF ))
+	run_sampler scaled_axis "$shot" "$CH_SCALED_CENTER_X" "$CH_SCALED_CENTER_Y" 1 0 "$CH_SCALED_SPAN" \
+		"$ch_r" "$ch_g" "$ch_b" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" \
+		"$CH_SCALED_EXP_LEN" "$CH_SCALED_EXP_SEP" "$CH_SCALED_EXP_WIDTH" "$CH_SCALED_TOL_PX" "crosshair-scaled-row"
+	run_sampler scaled_axis "$shot" "$CH_SCALED_CENTER_X" "$CH_SCALED_CENTER_Y" 0 1 "$CH_SCALED_SPAN" \
+		"$ch_r" "$ch_g" "$ch_b" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" \
+		"$CH_SCALED_EXP_LEN" "$CH_SCALED_EXP_SEP" "$CH_SCALED_EXP_WIDTH" "$CH_SCALED_TOL_PX" "crosshair-scaled-column"
+	# Apply Scaling OFF on the same stretched instance: the pixel path draws
+	# in output pixels, so the arm is the UNstretched length again, exact.
+	set_val "crosshair.apply_scaling" 0
+	local shot_off; shot_off="$(take_screenshot 11-crosshair-unscaled)"
+	run_sampler armscan "$shot_off" "$CH_CENTER_X" "$CH_CENTER_Y" 1 0 "$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "crosshair-scaled-off-armscan"
+	set_val "crosshair.line_width" "$CH_LINE_WIDTH"
+	set_val "crosshair.outline" 1
+	set_val "crosshair.enabled" 0
+}
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -710,11 +899,12 @@ START_TS=$(date +%s)
 write_config
 start_sway
 
-need_dark=0; need_mid=0
-for c in layer-budget inversion inversion-crosshair inversion-crosshair-alpha fixed outline crosshair-geometry; do
+need_dark=0; need_mid=0; need_scaled=0
+for c in layer-budget inversion inversion-crosshair inversion-crosshair-alpha fixed outline crosshair-geometry crosshair-shrink-rate crosshair-reverse; do
 	should_run "$c" && need_dark=1
 done
 should_run inversion-midtone && need_mid=1
+should_run crosshair-scaled && need_scaled=1
 
 if [[ "$need_dark" -eq 1 ]]; then
 	start_instance "$BG_DARK_HEX"
@@ -727,6 +917,8 @@ if [[ "$need_dark" -eq 1 ]]; then
 	check_fixed
 	check_outline
 	check_crosshair_geometry
+	check_crosshair_shrink_rate
+	check_crosshair_reverse
 fi
 
 if [[ "$need_mid" -eq 1 ]]; then
@@ -734,6 +926,12 @@ if [[ "$need_mid" -eq 1 ]]; then
 	set_val "crosshair.enabled" 0  # as above
 	apply_fps_force
 	check_inversion_midtone
+fi
+
+if [[ "$need_scaled" -eq 1 ]]; then
+	start_instance "$BG_DARK_HEX" "$CH_SCALED_GAME_W" "$CH_SCALED_GAME_H" "$CH_SCALED_SCALER"
+	set_val "crosshair.enabled" 0  # as above
+	check_crosshair_scaled
 fi
 
 END_TS=$(date +%s)

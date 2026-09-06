@@ -508,12 +508,13 @@ namespace gamescope::crosshair
 	// rendering paths"). With Apply Scaling ON the crosshair is not
 	// re-drawn as a vector at output resolution; it is Build() at the
 	// GAME's resolution (GameFrame(), scale 1, centre = the game's own
-	// centre), rasterised on the CPU into a small texture that covers just
+	// centre), rasterised on the CPU into a small raster that covers just
 	// its bounding box plus a one-texel transparent margin (RasterRect()),
-	// and stretched onto the output as ONE linearly-sampled quad
-	// (ScaledQuad()) -- the way a stretched in-game raster crosshair looks:
-	// a 1 px game line spanning 1.5 output px softly, the outline's colour
-	// mixing into the fill's at the edge.
+	// and stretched onto the output by a bilinear resample on the CPU
+	// (ResampleToOutput(), placed by ScaledQuad()) whose texels are copied
+	// straight into the HUD texture -- the way a stretched in-game raster
+	// crosshair looks: a 1 px game line spanning 1.5 output px softly, the
+	// outline's colour mixing into the fill's at the edge.
 	// ------------------------------------------------------------------
 
 	// One transparent texel around the drawing, so the bilinear filter has
@@ -688,5 +689,108 @@ namespace gamescope::crosshair
 				}
 			}
 		return px;
+	}
+
+	// The game-resolution raster stretched onto the output, on the CPU
+	// (2026-09-06, request #14). Output texels are what the HUD texture
+	// must END UP holding for the composite to show the stretched crosshair
+	// correctly: RGB = the colour the pixel path would have written for
+	// that element (its colour x its configured opacity -- ImGui's blend
+	// premultiplies in the encoded domain, and "render it normally, then
+	// scale it" means matching that, quirk included), A = the bilinear
+	// COVERAGE of the element at that output pixel x its opacity. The
+	// composite treats a HUD texel as straight alpha (alphamode.h's
+	// coverage blend), so a soft edge at coverage w comes out as
+	// colour * w + background * (1 - w): a 1 px game line stretched 2x is
+	// two rows at 75 % and two at 25 % of its colour.
+	//
+	// Why not sample the raster on the GPU (the 2026-09-05 path, an ImGui
+	// AddImage quad through the linear sampler): whatever ImGui draws goes
+	// through its SRC_ALPHA blend onto a cleared texture, so a sampled edge
+	// texel of coverage w landed as (colour * w, w) and the composite --
+	// which reads that RGB as if it were straight -- showed it at
+	// colour * w * w: the 75 % rows at 56 %, the 25 % rows at 6 %. The line
+	// looked dimmer instead of thicker, and its ends vanished so the gap
+	// read too wide. The only way past that blend is to not go through
+	// it: this raster is copied straight into the HUD texture
+	// (Crosshair_RecordUpload). The pixel path is untouched.
+	//
+	// The bilinear mapping is ScaledQuad()'s: texel k's centre sits at
+	// q.x0 + (k + 0.5) * scale; an output pixel centre (ox + 0.5) samples
+	// texel coordinate u = (ox + 0.5 - q.x0) / scale - 0.5. Texels outside
+	// the raster are transparent (its margin is transparent anyway).
+	// Interpolation is premultiplied -- weights carry each source texel's
+	// alpha -- so the RGB of a transparent texel never pulls an edge
+	// towards black, whatever Rasterize()'s bleed left there.
+	struct OutputRaster
+	{
+		IRect rect;            // the footprint in output pixels (unclipped)
+		std::vector<Argb> px;  // rect's width x height straight-alpha texels
+		bool Empty() const { return rect.Empty() || px.empty(); }
+	};
+
+	inline OutputRaster ResampleToOutput( const std::vector<Argb> &src, const IRect &texRect,
+	                                      uint32_t uGameW, uint32_t uGameH, const Frame &fr )
+	{
+		OutputRaster out;
+		const int sw = texRect.x1 - texRect.x0, sh = texRect.y1 - texRect.y0;
+		if ( sw <= 0 || sh <= 0 || src.size() != (size_t)sw * (size_t)sh )
+			return out;
+		const float sx = std::max( fr.flScaleX, 1e-3f ), sy = std::max( fr.flScaleY, 1e-3f );
+		Frame frSafe = fr;
+		frSafe.flScaleX = sx;
+		frSafe.flScaleY = sy;
+		const FRect q = ScaledQuad( texRect, uGameW, uGameH, frSafe );
+		out.rect = { (int)std::floor( q.x0 ), (int)std::floor( q.y0 ), (int)std::ceil( q.x1 ), (int)std::ceil( q.y1 ) };
+		const int ow = out.rect.x1 - out.rect.x0, oh = out.rect.y1 - out.rect.y0;
+		if ( ow <= 0 || oh <= 0 )
+		{
+			out.rect = IRect{};
+			return out;
+		}
+		out.px.assign( (size_t)ow * (size_t)oh, 0u );
+
+		auto Tap = [&]( int tx, int ty, float w, float acc[4] )
+		{
+			if ( w <= 0.0f || tx < 0 || ty < 0 || tx >= sw || ty >= sh )
+				return;
+			const Argb v = src[(size_t)ty * sw + tx];
+			const float a = ( ( v >> 24 ) & 0xFF ) / 255.0f;
+			if ( a <= 0.0f )
+				return;
+			acc[3] += w * a;
+			// The pixel path's texel for this element is (c * a, a); the
+			// coverage lerp weights that by a again.
+			acc[0] += w * ( ( ( v >> 16 ) & 0xFF ) / 255.0f ) * a * a;
+			acc[1] += w * ( ( ( v >> 8 ) & 0xFF ) / 255.0f ) * a * a;
+			acc[2] += w * ( ( v & 0xFF ) / 255.0f ) * a * a;
+		};
+
+		for ( int oy = 0; oy < oh; oy++ )
+		{
+			const float v = ( (float)( out.rect.y0 + oy ) + 0.5f - q.y0 ) / sy - 0.5f;
+			const int ty0 = (int)std::floor( v );
+			const float fy = v - (float)ty0;
+			for ( int ox = 0; ox < ow; ox++ )
+			{
+				const float u = ( (float)( out.rect.x0 + ox ) + 0.5f - q.x0 ) / sx - 0.5f;
+				const int tx0 = (int)std::floor( u );
+				const float fx = u - (float)tx0;
+				float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				Tap( tx0,     ty0,     ( 1.0f - fx ) * ( 1.0f - fy ), acc );
+				Tap( tx0 + 1, ty0,     fx * ( 1.0f - fy ), acc );
+				Tap( tx0,     ty0 + 1, ( 1.0f - fx ) * fy, acc );
+				Tap( tx0 + 1, ty0 + 1, fx * fy, acc );
+				const float A = acc[3];
+				if ( A <= 1e-6f )
+					continue;
+				const int a8 = (int)std::lround( std::clamp( A, 0.0f, 1.0f ) * 255.0f );
+				if ( a8 <= 0 )
+					continue;
+				auto Ch = [&]( float p ) { return (Argb)std::clamp( (long)std::lround( ( p / A ) * 255.0f ), 0l, 255l ); };
+				out.px[(size_t)oy * ow + ox] = ( (Argb)a8 << 24 ) | ( Ch( acc[0] ) << 16 ) | ( Ch( acc[1] ) << 8 ) | Ch( acc[2] );
+			}
+		}
+		return out;
 	}
 }

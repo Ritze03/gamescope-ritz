@@ -27,7 +27,6 @@
 #include "UI/Registry.h"
 
 #include "imgui.h"
-#include "backends/imgui_impl_vulkan.h"
 
 namespace gamescope
 {
@@ -78,103 +77,162 @@ namespace gamescope
 		LogScope s_CrosshairLog( "crosshair" );
 
 		// -----------------------------------------------------------------
-		// Apply Scaling's game-resolution raster (Crosshair.h, "two
-		// rendering paths"). Everything below is steamcompmgr-thread only.
+		// Apply Scaling's stretched raster (Crosshair.h, "two rendering
+		// paths"). Everything below is steamcompmgr-thread only.
 		// -----------------------------------------------------------------
 
-		// Everything the raster's PIXELS depend on. When it is unchanged
-		// from the last frame the texture is simply drawn again; when it
-		// changes the raster is rebuilt on the CPU and re-uploaded. Fade
-		// (HideState::flAlpha) is deliberately NOT in here -- it is applied
-		// as the quad's tint, so a fade re-uploads nothing. Focus/Shrink
-		// move the gap/length, which change the pixels, so those do rebuild
-		// per animation frame (a few hundred texels, for <= 2 s).
+		// Everything the output raster's PIXELS depend on. When it is
+		// unchanged from the last frame the staging buffer is copied again
+		// as it is; when it changes the raster is rebuilt on the CPU and
+		// re-encoded into the staging buffer. Unlike the 2026-09-05 quad,
+		// the hide fade IS in here: there is no tint any more, the fade is
+		// baked into the texels (a few thousand of them, for <= 2 s).
 		struct RasterKey
 		{
 			bool bLine = false, bDot = false, bOutline = false;
 			int nLength = 0, nWidth = 0, nGap = 0, nDotSize = 0, nOutlineWidth = 0;
 			int nLineColor = 0, nDotColor = 0, nOutlineColor = 0;
 			float flLineOpacity = 0.0f, flDotOpacity = 0.0f, flOutlineOpacity = 0.0f;
-			float flHideGap = 1.0f, flHideLength = 1.0f;
+			float flHideGap = 1.0f, flHideLength = 1.0f, flHideAlpha = 1.0f;
 			uint32_t uGameW = 0, uGameH = 0;
+			float flCenterX = 0.0f, flCenterY = 0.0f, flScaleX = 1.0f, flScaleY = 1.0f;
 			bool bReserveInvertMarker = false; // the colours' G nudge (CrosshairFrame) changes the texels
 			bool operator==( const RasterKey & ) const = default;
 		};
 
-		struct RasterTexture
-		{
-			OwningRc<CVulkanTexture> pTex;
-			VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // ImGui's handle onto pTex, in the HUD context
-			uint32_t uWidth = 0, uHeight = 0;
-		};
-
-		bool s_bRasterValid = false;
+		bool s_bRasterValid = false;       // s_Out matches s_RasterKey
 		RasterKey s_RasterKey;
-		crosshair::IRect s_RasterRect;           // game px footprint of the texture
-		std::vector<crosshair::Argb> s_RasterPixels;
-		bool s_bRasterUploadPending = false;
-		// Which texture object the current s_RasterPixels were last copied
-		// into; a re-created texture with an unchanged key still needs them.
-		const CVulkanTexture *s_RasterUploadedTex = nullptr;
-		RasterTexture s_Raster;
-		// Textures whose descriptor set the previous HUD submission may
-		// still be reading; freed by Crosshair_RecordUpload() once that
-		// submission has been drained. In practice 0 or 1 entries.
-		std::vector<RasterTexture> s_RetiredRasters;
+		crosshair::OutputRaster s_Out;     // this frame's stretched raster, output pixels, straight alpha
+		bool s_bOutThisFrame = false;      // Crosshair_Draw() produced s_Out this frame; consumed by Crosshair_RecordUpload()
+		uint64_t s_ulOutGeneration = 0;    // bumped whenever s_Out's pixels change
+		uint64_t s_ulStagedGeneration = 0; // the generation encoded in the staging buffer
+		VkFormat s_eStagedFormat = VK_FORMAT_UNDEFINED; // ... and the HUD format it was encoded for
 
-		void RetireRaster()
+		// The host-visible staging buffer the raster is copied from. Its
+		// own, not g_device.uploadBufferData(): that bump allocator is only
+		// reset by a device wait, and with the fade baked into the texels
+		// an animation frame now re-uploads every frame -- a 4K-scale
+		// crosshair at 144 Hz would walk through it. Rewritten only after
+		// the caller has drained the previous HUD submission (the one that
+		// last read it), so a single buffer is enough.
+		struct Staging
 		{
-			if ( s_Raster.pTex || s_Raster.descriptorSet != VK_NULL_HANDLE )
-				s_RetiredRasters.push_back( std::move( s_Raster ) );
-			s_Raster = RasterTexture{};
-			// The replacement may be allocated at the retired object's
-			// address once that is freed; never let it inherit "uploaded".
-			s_RasterUploadedTex = nullptr;
+			VkBuffer buffer = VK_NULL_HANDLE;
+			VkDeviceMemory memory = VK_NULL_HANDLE;
+			uint8_t *pMapped = nullptr;
+			VkDeviceSize ulSize = 0;
+		};
+		Staging s_Staging;
+
+		void DestroyStaging()
+		{
+			if ( s_Staging.pMapped )
+				g_device.vk.UnmapMemory( g_device.device(), s_Staging.memory );
+			if ( s_Staging.buffer != VK_NULL_HANDLE )
+				g_device.vk.DestroyBuffer( g_device.device(), s_Staging.buffer, nullptr );
+			if ( s_Staging.memory != VK_NULL_HANDLE )
+				g_device.vk.FreeMemory( g_device.device(), s_Staging.memory, nullptr );
+			s_Staging = Staging{};
+			s_ulStagedGeneration = 0;
+			s_eStagedFormat = VK_FORMAT_UNDEFINED;
 		}
 
-		// (Re)creates the raster texture + ImGui descriptor for a footprint
-		// of w x h texels, reusing the current one when the size matches.
-		// Must run with the HUD's ImGui context current (AddTexture reads
-		// the backend data off the current context's IO).
-		bool EnsureRasterTexture( uint32_t w, uint32_t h )
+		// Grows the staging buffer to at least ulBytes (never shrinks;
+		// rounded up so an animation that wobbles the footprint does not
+		// re-allocate every frame). Only valid after the previous HUD
+		// submission has been drained -- see Crosshair_RecordUpload().
+		bool EnsureStaging( VkDeviceSize ulBytes )
 		{
-			if ( s_Raster.pTex && s_Raster.uWidth == w && s_Raster.uHeight == h && s_Raster.descriptorSet != VK_NULL_HANDLE )
+			if ( s_Staging.buffer != VK_NULL_HANDLE && s_Staging.ulSize >= ulBytes )
 				return true;
+			DestroyStaging();
 
-			RetireRaster();
+			constexpr VkDeviceSize kMinBytes = 64u * 1024u;
+			VkDeviceSize ulSize = kMinBytes;
+			while ( ulSize < ulBytes )
+				ulSize *= 2;
 
-			OwningRc<CVulkanTexture> pTex = new CVulkanTexture();
-			CVulkanTexture::createFlags flags;
-			flags.bSampled = true;      // read by ImGui's fragment shader on the general queue
-			flags.bTransferDst = true;  // written by the buffer->image copy in Crosshair_RecordUpload()
-			// Only ever touched on the general queue (the HUD's own
-			// submission both uploads and samples it), so no cross-queue
-			// sharing: it is the HUD texture, not this one, that the
-			// compute composite reads.
-			if ( !pTex->BInit( w, h, 1u, VulkanFormatToDRM( VK_FORMAT_B8G8R8A8_UNORM ), flags ) )
+			VkBufferCreateInfo bufferInfo = {
+				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+				.size = ulSize,
+				.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			};
+			VkResult res = g_device.vk.CreateBuffer( g_device.device(), &bufferInfo, nullptr, &s_Staging.buffer );
+			if ( res != VK_SUCCESS )
 			{
-				s_CrosshairLog.errorf( "failed to create the %ux%u scaled-crosshair texture", w, h );
+				s_CrosshairLog.errorf( "vkCreateBuffer failed for the scaled-crosshair staging buffer (%d)", (int)res );
+				s_Staging = Staging{};
 				return false;
 			}
-
-			// srgbView() is, despite the name, the UNORM-format view (the
-			// bytes as stored, no sRGB decode on read) -- the same view the
-			// HUD renders INTO, so a texel of value v is written to the HUD
-			// texture as v, exactly as a rect of vertex colour v would be.
-			// Layout GENERAL: that is where CVulkanCmdBuffer's barriers
-			// leave every image.
-			VkDescriptorSet ds = ImGui_ImplVulkan_AddTexture( pTex->srgbView(), VK_IMAGE_LAYOUT_GENERAL );
-			if ( ds == VK_NULL_HANDLE )
+			VkMemoryRequirements memReq;
+			g_device.vk.GetBufferMemoryRequirements( g_device.device(), s_Staging.buffer, &memReq );
+			const int32_t nMemType = g_device.findMemoryType( VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, memReq.memoryTypeBits );
+			if ( nMemType < 0 )
 			{
-				s_CrosshairLog.errorf( "ImGui_ImplVulkan_AddTexture failed for the scaled-crosshair texture" );
+				s_CrosshairLog.errorf( "no host-visible memory type for the scaled-crosshair staging buffer" );
+				DestroyStaging();
 				return false;
 			}
-
-			s_Raster.pTex = std::move( pTex );
-			s_Raster.descriptorSet = ds;
-			s_Raster.uWidth = w;
-			s_Raster.uHeight = h;
+			VkMemoryAllocateInfo allocInfo = {
+				.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+				.allocationSize = memReq.size,
+				.memoryTypeIndex = (uint32_t)nMemType,
+			};
+			res = g_device.vk.AllocateMemory( g_device.device(), &allocInfo, nullptr, &s_Staging.memory );
+			if ( res != VK_SUCCESS )
+			{
+				s_CrosshairLog.errorf( "vkAllocateMemory failed for the scaled-crosshair staging buffer (%d)", (int)res );
+				DestroyStaging();
+				return false;
+			}
+			g_device.vk.BindBufferMemory( g_device.device(), s_Staging.buffer, s_Staging.memory, 0 );
+			void *pMapped = nullptr;
+			res = g_device.vk.MapMemory( g_device.device(), s_Staging.memory, 0, VK_WHOLE_SIZE, 0, &pMapped );
+			if ( res != VK_SUCCESS )
+			{
+				s_CrosshairLog.errorf( "vkMapMemory failed for the scaled-crosshair staging buffer (%d)", (int)res );
+				DestroyStaging();
+				return false;
+			}
+			s_Staging.pMapped = (uint8_t *)pMapped;
+			s_Staging.ulSize = ulSize;
 			return true;
+		}
+
+		// Bytes per texel of the HUD texture formats FpsDisplay.cpp's
+		// ResolveTextureFormat() can hand us; 0 for anything else.
+		uint32_t HudBytesPerTexel( VkFormat eFormat )
+		{
+			switch ( eFormat )
+			{
+				case VK_FORMAT_B8G8R8A8_UNORM:     return 4;
+				case VK_FORMAT_R16G16B16A16_UNORM: return 8;
+				default:                           return 0;
+			}
+		}
+
+		// Encodes s_Out into the staging buffer in the HUD texture's
+		// format. B8G8R8A8: an Argb IS the little-endian texel. R16G16B16A16:
+		// each 8-bit channel spread to 16 (x 257), R first.
+		void EncodeStaging( VkFormat eFormat )
+		{
+			const size_t n = s_Out.px.size();
+			if ( eFormat == VK_FORMAT_B8G8R8A8_UNORM )
+			{
+				memcpy( s_Staging.pMapped, s_Out.px.data(), n * sizeof( crosshair::Argb ) );
+			}
+			else
+			{
+				uint16_t *pDst = (uint16_t *)s_Staging.pMapped;
+				for ( size_t i = 0; i < n; i++ )
+				{
+					const crosshair::Argb v = s_Out.px[i];
+					pDst[i * 4 + 0] = (uint16_t)( ( ( v >> 16 ) & 0xFF ) * 257u );
+					pDst[i * 4 + 1] = (uint16_t)( ( ( v >> 8 ) & 0xFF ) * 257u );
+					pDst[i * 4 + 2] = (uint16_t)( ( v & 0xFF ) * 257u );
+					pDst[i * 4 + 3] = (uint16_t)( ( ( v >> 24 ) & 0xFF ) * 257u );
+				}
+			}
 		}
 
 		ImU32 PackColor( int nRgb, float flAlpha )
@@ -297,14 +355,16 @@ namespace gamescope
 		}
 
 		// Apply Scaling ON: the crosshair Build() at the GAME's resolution,
-		// rasterised into a texture the size of its own bounding box (+1
-		// texel margin), drawn as one quad stretched by the game's per-axis
-		// scale and sampled linearly -- ImGui's Vulkan backend binds its
-		// LINEAR / CLAMP_TO_EDGE sampler for every image draw
-		// (imgui_impl_vulkan.cpp, SamplerLinear). Returns false when the
-		// texture could not be made, so the caller can fall back.
-		bool DrawRasterPath( ImDrawList *pDrawList, const config::CrosshairSettings &c, const crosshair::Style &st,
-		                     const CrosshairFrame &frame, const crosshair::HideState &hs )
+		// rasterised at that resolution (its own bounding box + 1 texel
+		// margin), then stretched to the output by a CPU bilinear resample
+		// at the game's per-axis scale (crosshair::ResampleToOutput). The
+		// result is held in s_Out for Crosshair_RecordUpload() to copy into
+		// the HUD texture; nothing is drawn through ImGui. Always succeeds
+		// (the copy may still be skipped later if the staging buffer
+		// cannot be made -- then the crosshair is simply absent for that
+		// frame, and an error is logged once).
+		void ComputeRasterPath( const config::CrosshairSettings &c, const crosshair::Style &st,
+		                        const CrosshairFrame &frame, const crosshair::HideState &hs )
 		{
 			RasterKey key;
 			key.bLine = c.line_enabled; key.bDot = c.dot_enabled; key.bOutline = c.outline_enabled;
@@ -312,53 +372,40 @@ namespace gamescope
 			key.nDotSize = c.dot_size; key.nOutlineWidth = c.outline_width;
 			key.nLineColor = c.line_color; key.nDotColor = c.dot_color; key.nOutlineColor = c.outline_color;
 			key.flLineOpacity = c.line_opacity; key.flDotOpacity = c.dot_opacity; key.flOutlineOpacity = c.outline_opacity;
-			key.flHideGap = hs.flGap; key.flHideLength = hs.flLength;
+			key.flHideGap = hs.flGap; key.flHideLength = hs.flLength; key.flHideAlpha = hs.flAlpha;
 			key.uGameW = frame.uGameWidth; key.uGameH = frame.uGameHeight;
+			key.flCenterX = frame.flCenterX; key.flCenterY = frame.flCenterY;
+			key.flScaleX = frame.flGamePixelScaleX; key.flScaleY = frame.flGamePixelScaleY;
 			key.bReserveInvertMarker = frame.bReserveInvertMarker;
 
 			if ( !s_bRasterValid || !( key == s_RasterKey ) )
 			{
-				// Rebuild: the exact drawing code, in game pixels. Alpha
-				// stays at the configured opacity; the hide fade is the
-				// quad's tint below.
+				// Rebuild: the exact drawing code, in game pixels, at the
+				// configured opacity times the hide fade -- exactly the
+				// alpha the pixel path would give PackColor().
 				const crosshair::Frame gf = crosshair::GameFrame( frame.uGameWidth, frame.uGameHeight );
 				crosshair::HideState hsRaster = hs;
 				hsRaster.flAlpha = 1.0f;
 				const crosshair::Shape shape = crosshair::Build( st, gf, hsRaster );
-				s_RasterRect = crosshair::RasterRect( shape );
-				s_RasterPixels = crosshair::Rasterize( shape, s_RasterRect,
-					crosshair::PackArgb( ReserveInvertMarker( c.outline_color, frame.bReserveInvertMarker ), c.outline_enabled ? c.outline_opacity : 0.0f ),
-					crosshair::PackArgb( ReserveInvertMarker( c.line_color, frame.bReserveInvertMarker ), c.line_opacity ),
-					crosshair::PackArgb( ReserveInvertMarker( c.dot_color, frame.bReserveInvertMarker ), c.dot_opacity ) );
+				const crosshair::IRect texRect = crosshair::RasterRect( shape );
+				const float flFade = std::clamp( hs.flAlpha, 0.0f, 1.0f );
+				const std::vector<crosshair::Argb> gamePx = crosshair::Rasterize( shape, texRect,
+					crosshair::PackArgb( ReserveInvertMarker( c.outline_color, frame.bReserveInvertMarker ), ( c.outline_enabled ? c.outline_opacity : 0.0f ) * flFade ),
+					crosshair::PackArgb( ReserveInvertMarker( c.line_color, frame.bReserveInvertMarker ), c.line_opacity * flFade ),
+					crosshair::PackArgb( ReserveInvertMarker( c.dot_color, frame.bReserveInvertMarker ), c.dot_opacity * flFade ) );
+
+				crosshair::Frame fr;
+				fr.flCenterX = frame.flCenterX;
+				fr.flCenterY = frame.flCenterY;
+				fr.flScaleX = frame.flGamePixelScaleX;
+				fr.flScaleY = frame.flGamePixelScaleY;
+				s_Out = texRect.Empty() ? crosshair::OutputRaster{}
+				                        : crosshair::ResampleToOutput( gamePx, texRect, frame.uGameWidth, frame.uGameHeight, fr );
 				s_RasterKey = key;
 				s_bRasterValid = true;
-				s_bRasterUploadPending = !s_RasterRect.Empty();
+				s_ulOutGeneration++;
 			}
-
-			if ( s_RasterRect.Empty() )
-				return true; // nothing to draw this frame (e.g. Shrink at 100 %) -- handled, not a failure
-
-			const uint32_t w = (uint32_t)( s_RasterRect.x1 - s_RasterRect.x0 );
-			const uint32_t h = (uint32_t)( s_RasterRect.y1 - s_RasterRect.y0 );
-			if ( !EnsureRasterTexture( w, h ) )
-				return false;
-			// A fresh texture needs the pixels even if the key did not
-			// change (e.g. the first frame after a size change).
-			if ( s_Raster.pTex && s_RasterUploadedTex != s_Raster.pTex.get() )
-				s_bRasterUploadPending = true;
-
-			crosshair::Frame fr;
-			fr.flCenterX = frame.flCenterX;
-			fr.flCenterY = frame.flCenterY;
-			fr.flScaleX = frame.flGamePixelScaleX;
-			fr.flScaleY = frame.flGamePixelScaleY;
-			const crosshair::FRect q = crosshair::ScaledQuad( s_RasterRect, frame.uGameWidth, frame.uGameHeight, fr );
-
-			const ImU32 tint = IM_COL32( 255, 255, 255, (int)std::lround( std::clamp( hs.flAlpha, 0.0f, 1.0f ) * 255.0f ) );
-			pDrawList->AddImage( ImTextureRef( (ImTextureID)(uintptr_t)s_Raster.descriptorSet ),
-			                     ImVec2( q.x0, q.y0 ), ImVec2( q.x1, q.y1 ),
-			                     ImVec2( 0.0f, 0.0f ), ImVec2( 1.0f, 1.0f ), tint );
-			return true;
+			s_bOutThisFrame = !s_Out.Empty();
 		}
 	}
 
@@ -368,6 +415,8 @@ namespace gamescope
 		const config::CrosshairSettings &c = s_Settings.crosshair;
 		if ( !c.enabled || !pDrawList )
 			return false;
+
+		s_bOutThisFrame = false;
 
 		crosshair::HideState hs;
 		bool bAnimating = false;
@@ -401,13 +450,12 @@ namespace gamescope
 		st.flOutlineWidth = (float)c.outline_width;
 
 		// Apply Scaling on, and the game's size known: the raster path --
-		// crisp at game resolution, stretched linearly with the game.
+		// crisp at game resolution, stretched linearly with the game, and
+		// copied into the HUD texture by Crosshair_RecordUpload().
 		if ( c.apply_scaling && frame.uGameWidth > 0 && frame.uGameHeight > 0 )
 		{
-			if ( DrawRasterPath( pDrawList, c, st, frame, hs ) )
-				return bAnimating;
-			// Texture creation failed: fall through to the vector path at
-			// the same per-axis scale, so the crosshair is at least there.
+			ComputeRasterPath( c, st, frame, hs );
+			return bAnimating;
 		}
 
 		// Apply Scaling off: every size is an output pixel and the crosshair
@@ -422,41 +470,100 @@ namespace gamescope
 		return bAnimating;
 	}
 
-	void Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer )
+	bool Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer, CVulkanTexture *pHudTexture )
 	{
-		// The previous HUD submission has been drained by the caller, so
-		// nothing on the GPU still reads these descriptors / images.
-		for ( RasterTexture &rt : s_RetiredRasters )
+		// One frame's worth: Crosshair_Draw() sets this every frame it has
+		// a stretched raster, so a frame without one (crosshair off, Apply
+		// Scaling off, hidden) records nothing and the pass clears.
+		if ( !s_bOutThisFrame || !pCmdBuffer || !pHudTexture || s_Out.Empty() )
+			return false;
+		s_bOutThisFrame = false;
+
+		const VkFormat eFormat = pHudTexture->format();
+		const uint32_t uBpp = HudBytesPerTexel( eFormat );
+		if ( uBpp == 0 )
 		{
-			if ( rt.descriptorSet != VK_NULL_HANDLE )
-				ImGui_ImplVulkan_RemoveTexture( rt.descriptorSet );
-			rt.pTex = nullptr;
+			static bool s_bWarned = false;
+			if ( !s_bWarned )
+				s_CrosshairLog.errorf( "HUD texture format %d is not one the scaled crosshair can encode; scaled crosshair off", (int)eFormat );
+			s_bWarned = true;
+			return false;
 		}
-		s_RetiredRasters.clear();
 
-		if ( !s_bRasterUploadPending || !pCmdBuffer || !s_Raster.pTex )
-			return;
-		const size_t nExpected = (size_t)s_Raster.uWidth * (size_t)s_Raster.uHeight;
-		if ( s_RasterPixels.size() != nExpected )
-			return; // raster and texture disagree on size; the next Draw() re-syncs them
+		// Clip the footprint to the texture; the buffer keeps the full
+		// footprint's row length and the copy starts at the clipped corner.
+		const int ow = s_Out.rect.x1 - s_Out.rect.x0, oh = s_Out.rect.y1 - s_Out.rect.y0;
+		const int cx0 = std::max( s_Out.rect.x0, 0 ), cy0 = std::max( s_Out.rect.y0, 0 );
+		const int cx1 = std::min( s_Out.rect.x1, (int)pHudTexture->width() );
+		const int cy1 = std::min( s_Out.rect.y1, (int)pHudTexture->height() );
+		if ( cx1 <= cx0 || cy1 <= cy0 )
+			return false;
 
-		// Same staging path vulkan_create_texture_from_bits() uses -- the
-		// device's bump-allocated upload buffer, only reset on a device
-		// idle, so the bytes stay put until this submission has consumed
-		// them -- minus its vkQueueWaitIdle: the copy is recorded into the
-		// HUD's own command buffer ahead of the render pass that samples
-		// the texture. copyBufferToImage() transitions the image to
-		// GENERAL (discarding old contents); the explicit insertBarrier()
-		// after it turns the copy's TRANSFER_WRITE into a SHADER_READ
-		// dependency for the fragment shader.
-		const uint32_t uBytes = (uint32_t)( nExpected * sizeof( crosshair::Argb ) );
-		auto [ pDst, uOffset ] = g_device.uploadBufferData( uBytes );
-		memcpy( pDst, s_RasterPixels.data(), uBytes );
-		pCmdBuffer->copyBufferToImage( g_device.uploadBuffer(), uOffset, 0, s_Raster.pTex.get() );
-		pCmdBuffer->insertBarrier();
+		// The previous HUD submission -- the last reader of the staging
+		// buffer -- has been drained by the caller, so it can be rewritten
+		// (or replaced) here.
+		const VkDeviceSize ulBytes = (VkDeviceSize)ow * (VkDeviceSize)oh * uBpp;
+		if ( !EnsureStaging( ulBytes ) )
+			return false;
+		if ( s_ulStagedGeneration != s_ulOutGeneration || s_eStagedFormat != eFormat )
+		{
+			EncodeStaging( eFormat );
+			s_ulStagedGeneration = s_ulOutGeneration;
+			s_eStagedFormat = eFormat;
+		}
 
-		s_RasterUploadedTex = s_Raster.pTex.get();
-		s_bRasterUploadPending = false;
+		// Record: clear the whole texture, copy the raster's clipped
+		// footprint into it, and hand it to the render pass. The first
+		// barrier's source stage is COLOR_ATTACHMENT_OUTPUT -- the stage
+		// the caller's semaphore wait (Issue #22, the previous composite's
+		// read of this texture) is attached to -- so the clear cannot start
+		// before that read has finished; TRANSFER on its own is not in that
+		// wait mask. Layout stays GENERAL throughout (the caller's initial
+		// barrier put it there). The clear and the copy both write the
+		// image, hence the transfer->transfer barrier between them.
+		VkCommandBuffer raw = pCmdBuffer->rawBuffer();
+		const VkImageSubresourceRange range = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.levelCount = 1,
+			.layerCount = 1,
+		};
+		auto ImageBarrier = [&]( VkPipelineStageFlags srcStage, VkAccessFlags srcAccess, VkPipelineStageFlags dstStage, VkAccessFlags dstAccess )
+		{
+			VkImageMemoryBarrier barrier = {
+				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+				.srcAccessMask = srcAccess,
+				.dstAccessMask = dstAccess,
+				.oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+				.newLayout = VK_IMAGE_LAYOUT_GENERAL,
+				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+				.image = pHudTexture->vkImage(),
+				.subresourceRange = range,
+			};
+			g_device.vk.CmdPipelineBarrier( raw, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier );
+		};
+
+		ImageBarrier( VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+		              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT );
+		const VkClearColorValue clear = { .float32 = { 0.0f, 0.0f, 0.0f, 0.0f } };
+		g_device.vk.CmdClearColorImage( raw, pHudTexture->vkImage(), VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range );
+		ImageBarrier( VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+		              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT );
+		const VkBufferImageCopy region = {
+			.bufferOffset = ( (VkDeviceSize)( cy0 - s_Out.rect.y0 ) * (VkDeviceSize)ow + (VkDeviceSize)( cx0 - s_Out.rect.x0 ) ) * uBpp,
+			.bufferRowLength = (uint32_t)ow,
+			.bufferImageHeight = (uint32_t)oh,
+			.imageSubresource = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.layerCount = 1,
+			},
+			.imageOffset = { cx0, cy0, 0 },
+			.imageExtent = { (uint32_t)( cx1 - cx0 ), (uint32_t)( cy1 - cy0 ), 1 },
+		};
+		g_device.vk.CmdCopyBufferToImage( raw, s_Staging.buffer, pHudTexture->vkImage(), VK_IMAGE_LAYOUT_GENERAL, 1, &region );
+		ImageBarrier( VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+		              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT );
+		return true;
 	}
 
 	// -------------------------------------------------------------------

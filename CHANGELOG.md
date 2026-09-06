@@ -32,6 +32,9 @@ The newest version below is the one this build reports.
   every area's header badge names the profile being edited.
 
 ### Fixed
+- **Scaled crosshair really stretches**: with Apply scaling on, a stretched game gets a
+  crosshair that is properly thicker, softly blurred at the edges and with the gap
+  scaled to match, instead of a dimmer, thinner one with too wide a gap.
 - **Crosshair Shrink hide runs at one speed**: the gap no longer closes at half the
   speed the arms then shrink at; the two phases share the hide time in proportion to
   how far each edge moves, so the whole animation moves at one pace.

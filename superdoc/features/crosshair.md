@@ -189,16 +189,51 @@ It is also the fallback for Apply Scaling *on* when the game's buffer size
 is unknown, or when the raster texture could not be created — then sizes
 are scaled per axis and snapped, the pre-2026-09-05 behaviour.
 
-**Raster path — Apply Scaling on** (`DrawRasterPath()`). The crosshair is
-`Build()` at the **game's** resolution (`crosshair::GameFrame()`: scale 1,
-centre = the game buffer's own centre, so parity snapping behaves exactly
-as an in-game crosshair at screen centre of a buffer that size would),
-rasterised on the CPU (`crosshair::Rasterize()`) into a small
-`B8G8R8A8_UNORM` texture that covers just its bounding box plus a
-one-texel transparent margin (`crosshair::RasterRect()`,
-`kRasterMargin = 1`), and drawn into the HUD's draw list as **one**
-`ImDrawList::AddImage` quad, positioned and sized by
-`crosshair::ScaledQuad()` and sampled **linearly**.
+**Raster path — Apply Scaling on** (`ComputeRasterPath()` +
+`Crosshair_RecordUpload()`). "Render it normally, then scale it": the
+crosshair is `Build()` at the **game's** resolution
+(`crosshair::GameFrame()`: scale 1, centre = the game buffer's own centre,
+so parity snapping behaves exactly as an in-game crosshair at screen
+centre of a buffer that size would) with the pixel path's own geometry —
+same gap, length, width, outline, dot — rasterised on the CPU
+(`crosshair::Rasterize()`) over just its bounding box plus a one-texel
+transparent margin (`crosshair::RasterRect()`, `kRasterMargin = 1`), then
+stretched to the output by a **CPU bilinear resample**
+(`crosshair::ResampleToOutput()`, placed by `crosshair::ScaledQuad()`) at
+layer 0's per-axis scale, and **copied straight into the HUD texture**
+ahead of the HUD's render pass. Nothing of it goes through ImGui.
+
+> **Why a copy and not an image quad (2026-09-06, request #14).** From
+> 2026-09-05 to 2026-09-06 the raster was a small `B8G8R8A8` texture drawn
+> as one `AddImage` quad through ImGui's linear sampler. The stretch itself
+> was right — at 2x the arm started at output 658 = 642 + 8·2 and ran 24
+> px — but everything ImGui draws goes through its `SRC_ALPHA /
+> ONE_MINUS_SRC_ALPHA` blend onto the cleared texture, so a sampled edge
+> texel of coverage *w* landed **premultiplied**, `(c·w, w)`, and the
+> composite — which reads a HUD texel as *straight* alpha (the [Known
+> limitation](#known-limitation-pre-existing-shared-with-the-hud) below) —
+> showed it at `c·w·w`. A 1 px game line stretched 2x is two rows at 75 %
+> coverage and two at 25 %; through that blend they came out at 56 % and
+> 6 %: measured `(23, 169, 23)` for a `(0, 255, 0)` line over `(51, 51, 51)`
+> on the core rows, the fringe rows nearly invisible, the arm's 56 %-covered
+> end pixels dim enough that the gap read a pixel too wide on each side.
+> That is the user's *"doesn't properly get thicker and sub-pixel blurry
+> … the gap doesn't work right"*: a dimmer, thinner line, not a stretched
+> one. No encoding of the source texels can undo it — the blend multiplies
+> RGB by the *interpolated* alpha, and Vulkan clamps the fragment's colour
+> to [0, 1] before blending on a UNORM target — so the only way past the
+> blend is to not go through it. The resampled texels are written into the
+> HUD texture as they are: RGB = the colour the pixel path's blend would
+> have written for that element (colour × opacity — the pixel path's
+> quirk, kept so "normally" means *exactly* the unscaled look), A =
+> bilinear coverage × opacity. The composite then shows a soft edge as
+> `colour·w + background·(1−w)` in linear light, which is what the game's
+> own scaler does to an in-game crosshair. Measured after the change
+> (`scripts/pixel-regression.sh crosshair-scaled`, 640×360 client stretched
+> 2x onto 1280×720, width 1, gap 8, length 12): arms **24** long, inner
+> ends **34** apart (2·16 + the 2 px centre column), **2** wide by ≥ 50 %
+> coverage, with **0.25** coverage beside each arm and **0.19** (= 0.25 ×
+> 0.75) past each end — the bilinear model exactly.
 
 > **Why linear, not pixel-snapped** (the user, 2026-09-05: *"it should
 > blur a bit and mix colors, instead of being just perfect pixels"*): the
@@ -213,63 +248,65 @@ one-texel transparent margin (`crosshair::RasterRect()`,
 
 Machinery, and why this much and no more:
 
-- **The sampler.** ImGui 1.92's Vulkan backend binds its own
-  `SamplerLinear` (LINEAR min/mag, CLAMP_TO_EDGE,
-  `subprojects/imgui/backends/imgui_impl_vulkan.cpp`
-  `ImGui_ImplVulkan_CreateDeviceObjects`) for every draw unless a draw
-  callback switches to nearest; the `VkSampler` argument of
-  `ImGui_ImplVulkan_AddTexture` is ignored in this version. So an
-  `AddImage` of our texture *is* a bilinear stretch, with nothing to set.
-- **The texture** (`EnsureRasterTexture()`): a `CVulkanTexture` with
-  `bSampled + bTransferDst`, registered with
-  `ImGui_ImplVulkan_AddTexture( tex->srgbView(), VK_IMAGE_LAYOUT_GENERAL )`
-  in the HUD's ImGui context. `srgbView()` is — despite the name — the
-  UNORM-format view (`ToLinearVulkanFormat`, no decode on read), the same
-  view the HUD renders *into*, so a texel of value *v* is written into the
-  HUD texture as *v*, exactly as a rect of vertex colour *v* would be. No
-  cross-queue sharing: only the HUD's general-queue submission ever
-  touches it (uploads and samples); the compute composite reads the HUD
-  texture, never this one. Re-created only when its size changes; the old
-  one is *retired*, not freed, because the previous HUD submission may
-  still be reading its descriptor set.
-- **The upload** (`Crosshair_RecordUpload()`, called by
-  `FpsDisplay.cpp`'s `RenderAndSubmit()` right after
-  `DrainPrevSubmission()` and before `vkCmdBeginRendering`): the pixels
-  go through `g_device.uploadBufferData()` — the same staging buffer
-  `vulkan_create_texture_from_bits()` uses, a bump allocator only reset on
-  a device idle — and `CVulkanCmdBuffer::copyBufferToImage()` +
-  `insertBarrier()` into the **HUD's own command buffer**, so the copy
-  rides the submission that samples it with no `vkQueueWaitIdle` (which
-  `vulkan_create_texture_from_bits()` does per call, and which would stall
-  the steamcompmgr thread once per animation frame). Retired
-  textures/descriptors are freed here too, after the drain, when nothing
-  on the GPU can still be reading them. This hook is the one line the
-  raster path adds to `FpsDisplay.cpp` besides filling in
-  `uGameWidth/Height`.
-- **Straight alpha and the colour bleed.** Texels are straight-alpha
-  `0xAARRGGBB` (`crosshair::PackArgb`; the little-endian memory order of
-  B8G8R8A8), painted outline → arms → dot with the dot composited *over*
-  (`detail::Over`), matching the vector path's `SRC_ALPHA` blend. A
-  bilinear filter interpolates colour and alpha independently, so a
-  transparent texel left at RGB 0 next to a green line would pull the edge
-  towards black — a dark fringe an in-game raster does not have. So after
-  painting, every fully transparent texel that touches a painted one takes
-  that neighbour's RGB with alpha 0; the edge then reads as the line's own
-  colour at half alpha. With an outline the margin bleeds black, which is
-  the outline's colour anyway.
-- **Hide animation.** Fade is the quad's tint alpha
-  (`IM_COL32(255,255,255,alpha)`, multiplied into the texel alpha by
-  ImGui's shader) — no re-render. Focus and Shrink move the gap/length,
-  which change the pixels, so they rebuild per animation frame; the raster
-  is a few hundred texels and the animation ≤ 2 s.
+- **The game-resolution raster** (`crosshair::Rasterize()`): straight-alpha
+  `0xAARRGGBB` texels (`crosshair::PackArgb`; the little-endian memory
+  order of B8G8R8A8), painted outline → arms → dot with the dot composited
+  *over* (`detail::Over`), matching the vector path's `SRC_ALPHA` blend,
+  at each element's configured opacity × the hide fade. The colour bleed
+  into transparent neighbours it also does is harmless now and kept only
+  because the tests pin it: the resample below weights RGB by alpha, so a
+  transparent texel's RGB never reaches an edge.
+- **The resample** (`crosshair::ResampleToOutput()`): for every output
+  pixel of the quad's footprint (`ScaledQuad()`, floored/ceiled to whole
+  pixels), a four-tap bilinear at texel coordinate
+  `u = (ox + 0.5 − q.x0) / scale − 0.5` — texel *k*'s centre at `u = k`,
+  the same mapping the GPU sampler used — done **premultiplied** (each
+  tap's weight carries its alpha) and un-premultiplied at the end. The
+  source value per tap is the pixel path's *HUD texel* for that element,
+  `(c·a, a)`, so the output is `RGB = c·a`, `A = coverage·a`: an interior
+  pixel of a translucent line is the pixel path's exact texel and an edge
+  pixel of an opaque line is `(c, coverage)`. Texels outside the raster are
+  transparent. Cost: the footprint is the crosshair's size in output
+  pixels (a few thousand texels), and it is only recomputed when the key
+  changes.
+- **The copy** (`Crosshair_RecordUpload( cmdBuffer, hudTexture )`, called
+  by `FpsDisplay.cpp`'s `RenderAndSubmit()` after `DrainPrevSubmission()`
+  and after the HUD texture's initial layout barrier, before
+  `vkCmdBeginRendering`): when this frame's `Crosshair_Draw()` produced a
+  raster, it is encoded into a small **host-visible staging buffer this
+  file owns** (`EnsureStaging()`, grown in powers of two from 64 KiB, never
+  shrunk; `B8G8R8A8` as-is, `R16G16B16A16_UNORM` as each channel × 257
+  when the HUD is 16-bit — see the Inverted note above), rewritten only
+  when the pixels or the format changed (the drain guarantees the previous
+  submission, the buffer's last reader, is done), and the command buffer
+  gets: a `COLOR_ATTACHMENT_OUTPUT → TRANSFER` image barrier (that source
+  stage is the one the HUD's Issue-#22 semaphore wait is attached to, so
+  the clear cannot start before the previous composite has finished
+  reading the texture — `TRANSFER` alone is not in that wait mask), a
+  `vkCmdClearColorImage` of the whole texture, a `TRANSFER → TRANSFER`
+  barrier, a `vkCmdCopyBufferToImage` of the footprint clipped to the
+  texture (`bufferRowLength` = the unclipped width), and a `TRANSFER →
+  COLOR_ATTACHMENT_OUTPUT` barrier. The hook returns **true** and
+  `RenderAndSubmit()` then opens its render pass with `LOAD_OP_LOAD`
+  instead of `CLEAR`, so the readout still draws **over** the crosshair
+  exactly as it does on the pixel path; a frame without a raster records
+  nothing and the pass clears as before. The HUD texture carries
+  `bTransferDst` for this. Why its own staging buffer and not
+  `g_device.uploadBufferData()`: that bump allocator is only reset by a
+  device wait, and with the fade baked into the texels an animation
+  re-uploads every frame. No texture, no descriptor set, no ImGui object
+  is owned any more.
+- **Hide animation.** Every mode changes the pixels now (the fade is baked
+  in, there is no quad to tint), so all three rebuild per animation frame:
+  a few thousand texels, ≤ 2 s.
 
 **Re-render policy.** `RasterKey` holds everything the *pixels* depend on:
 the element switches, every size, gap, colour and opacity, the hide
-state's gap and length multipliers, and the game's buffer size. The
-raster is rebuilt and re-uploaded only when the key differs from the last
-frame's (or when the texture was re-created and does not yet hold these
-pixels); a static crosshair costs one `AddImage` a frame and no upload.
-The hide alpha is deliberately not in the key.
+state's gap, length **and alpha** multipliers, the game's buffer size, and
+the frame's centre and per-axis scale (the output raster depends on where
+it lands). The raster is recomputed and re-encoded only when the key
+differs from the last frame's; a static crosshair costs one clear + one
+small copy a frame and no CPU work.
 
 **The pixel-centre mapping.** `composite.h`'s `sampleLayerEx` samples
 layer 0 at texel `t = (o + offset) * scale` for output position `o`, so a
@@ -310,7 +347,7 @@ split below:
 | **Shrink** (`p = gap / (gap + length)`) | `gap = 1 − f/p` | gap 0, `length = 1 − (f − p)/(1 − p)`, **dot size × the same** |
 
 `alpha` scales every element's opacity, outline included. In **Shrink**
-the dot shrinks with the arms over the second half — a dot left behind
+the dot shrinks with the arms over the second phase — a dot left behind
 would defeat the point of hiding (the in-game scope has its own reticle).
 At `f = 1` nothing is drawn.
 
@@ -446,11 +483,16 @@ therefore lands at `c·a·a + bg·(1−a)`, slightly darker and thinner than
 always been affected the same way); the crosshair's opacity sliders
 inherit it. Switching the layer to `ALPHA_BLENDING_MODE_PREMULTIPLIED`
 would fix both but changes the HUD's look, so it is left for a deliberate
-HUD-level decision. The raster path inherits it identically: its texels
-are straight alpha and go through the same ImGui blend. The exact value
-is pinned by `scripts/pixel-regression.sh`'s `inversion-crosshair-alpha`
-check (`pixel_regression_sample.py`'s `coverage_blend_expected()` is the
-arithmetic): a `(0,255,0)` arm at 50 % over encoded 51 measures
-`(35, 99, 35)`, not the `(35, 190, 35)` an ideal half-blend would give —
-so whoever makes that decision changes that check's formula in the same
-commit, with the new measurement.
+HUD-level decision. The raster path (Apply Scaling on) reproduces it on
+purpose for *opacity* — its texels carry `colour × opacity` as the pixel
+path's blend would have written them, so the two paths agree at any
+opacity — but its stretched **edges** do not go through the ImGui blend
+at all (they are copied into the texture as straight coverage, see the
+raster path's *Why a copy* note), which is what makes them soft instead
+of crushed. The exact value is pinned by `scripts/pixel-regression.sh`'s
+`inversion-crosshair-alpha` check (`pixel_regression_sample.py`'s
+`coverage_blend_expected()` is the arithmetic): a `(0,255,0)` arm at 50 %
+over encoded 51 measures `(35, 99, 35)`, not the `(35, 190, 35)` an ideal
+half-blend would give — so whoever makes that decision changes that
+check's formula in the same commit, with the new measurement, and drops
+the `× opacity` from `ResampleToOutput()`'s RGB in the same breath.

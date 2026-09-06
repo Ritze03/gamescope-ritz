@@ -700,6 +700,10 @@ namespace gamescope
 		CVulkanTexture::createFlags flags;
 		flags.bSampled = true;
 		flags.bColorAttachment = true;
+		// The stretched crosshair (Apply Scaling) is cleared-and-copied
+		// into this texture by Crosshair_RecordUpload() ahead of the render
+		// pass: TRANSFER_DST for the clear and the buffer->image copy.
+		flags.bTransferDst = true;
 		// Written on the general queue, sampled on the compute queue: needs
 		// CONCURRENT sharing across both families. See
 		// CVulkanTexture::createFlags::bGeneralQueueShared.
@@ -1295,14 +1299,6 @@ namespace gamescope
 
 		VkCommandBuffer rawCmdBuffer = cmdBuffer->rawBuffer();
 
-		// Apply Scaling's game-resolution crosshair raster, when it changed
-		// this frame: a buffer->image copy plus barrier, in THIS command
-		// buffer before the render pass that samples it. Here and not in
-		// Crosshair_Draw() because the copy has to be outside the render
-		// pass and after DrainPrevSubmission() above, which is what makes
-		// freeing last frame's retired texture/descriptor safe.
-		Crosshair_RecordUpload( cmdBuffer.get() );
-
 		if ( s_bTextureNeedsInitialBarrier )
 		{
 			VkImageMemoryBarrier barrier = {
@@ -1326,11 +1322,24 @@ namespace gamescope
 			s_bTextureNeedsInitialBarrier = false;
 		}
 
+		// Apply Scaling's stretched crosshair raster: cleared-and-copied
+		// straight into THIS texture, in this command buffer, before the
+		// render pass -- which then LOADs instead of clearing, so the
+		// readout still draws over the crosshair. Here and not in
+		// Crosshair_Draw() because the copy has to be outside the render
+		// pass, after DrainPrevSubmission() (so its staging buffer is free
+		// to be rewritten) and after the initial layout barrier above.
+		// Why a copy and not an ImGui image quad: see
+		// crosshair::ResampleToOutput() -- everything ImGui draws goes
+		// through its SRC_ALPHA blend, which is what crushed the stretched
+		// crosshair's soft edges.
+		const bool bCrosshairInTexture = Crosshair_RecordUpload( cmdBuffer.get(), s_pOverlayTexture.get() );
+
 		VkRenderingAttachmentInfo colorAttachment = {
 			.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
 			.imageView = s_pOverlayTexture->srgbView(),
 			.imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-			.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+			.loadOp = bCrosshairInTexture ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
 			.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
 			.clearValue = { .color = { .float32 = { 0.0f, 0.0f, 0.0f, 0.0f } } },
 		};
