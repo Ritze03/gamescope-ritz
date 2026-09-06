@@ -1,20 +1,48 @@
-# Profiles and per-game settings: a simpler concept
+# Profiles and per-game settings: the concept
 
-**Status: concept written 2026-09-06, awaiting user approval. No code changed.**
+**v2, 2026-09-06: the user's list/modal layout replaced v1's rows; inheritance added.**
+The file layer for v2 (sections 2-6, 9 below) is implemented -- `src/Config/
+ConfigManager.{h,cpp}`, schema 3 -- and documented for users of the code in
+[`../features/profiles.md`](../features/profiles.md); the Profiles area UI is the
+follow-up. Sections 1 and 7 are kept as written on 2026-09-06 morning, as the history
+of how v1 was found wanting. The four decisions v2 adds over v1, each with its why:
+
+1. **A list with Create / Copy / Edit / Delete modals, an Inherits dropdown and a
+   "Filter Game Profiles" checkbox, instead of v1's Choice + Action rows.** `Why:` the
+   user's own layout; a list shows every profile at once and which one is selected,
+   where v1's picker showed one name and hid the rest behind a dropdown.
+2. **Two kinds -- general and game -- and only a game profile may inherit, only from a
+   general one.** `Why:` the user's model is "a base setup, tweaked per game"; a chain
+   (game from game) was never asked for and would turn "where does this value come
+   from" from a glance into a walk.
+3. **Selecting a profile in the list loads it and is the assignment; every edit is saved
+   into it; no load/save buttons.** `Why:` one action, one meaning. v1's separate
+   Use / Save / Auto-save switch existed only because a profile was a copy; once the
+   profile is the live file there is nothing left for those buttons to do.
+4. **Inheritance is live and diff-based** (a game profile stores only what differs from
+   its parent; resolution is deep-merge parent then child). `Why live:` the point of a
+   base profile is that tuning it reaches every game built on it. `Why diff-based rather
+   than per-key plumbing:` every panel writes a whole `Settings` through one funnel, so
+   a diff at the funnel gives inheritance to every section, present and future, with no
+   panel code -- at the cost of one ceiling: a value set *equal* to the parent's reads
+   as inherited (recorded as a `ponytail:` note in `ConfigManager.h` and in
+   `features/profiles.md`).
+
 Request: `requests-2026-09-05-round2.md` item 4 -- *"a really good concept for the
 Profiles and Game config (Easy and extensible). It should also be possible to load a
 certain profile from the command line on launch."*
 
 The one-sentence version: **a profile is the settings file you are editing; every game
-points at one; `--profile` says which one to start with.** Nothing is ever copied,
-nothing is ever "applied", and there is exactly one answer to "where did my edit go".
+remembers which one it selected; a game profile may inherit from a general one;
+`--profile` says which one to start with.** Nothing is ever copied, nothing is ever
+"applied", and there is exactly one answer to "where did my edit go".
 
 ---
 
 ## 1. Problem: what is confusing today, in the code
 
 The current model (`src/Config/ConfigManager.h`, `src/Overlay/PanelConfig.{h,cpp}`,
-`superdoc/features/profiles-and-per-game.md`) is correct and every state is visible.
+`superdoc/features/profiles.md`'s history section) is correct and every state is visible.
 It is also nine concepts deep, and the user has to hold them all to predict a slider:
 
 | Concept | Where | What it is |
@@ -80,72 +108,87 @@ DECISIONS #26 describes `layout_name`/`ResolveLayoutCached()`, removed 2026-09-0
 
 ---
 
-## 2. Proposed model
+## 2. The model (v2)
 
-Three concepts survive. Everything else in the table above is deleted.
+Four concepts. Everything else in the table above is deleted.
 
 - **Profile** -- a named settings file, `profiles/<Name>.json`, carrying every
   per-layer section (`gamescope`, `fps_display`, `crosshair`, `reshade`,
   `notifications`, `system`, and any section added later). **It is the file you are
-  editing.** Every change is saved into it immediately, the way `global.json` is today.
-  There is always at least one; a fresh install has **Default**.
-- **Assignment** -- which profile a game uses: `games: { "<AppId>": { "profile":
-  "Rust" } }` plus one `default` entry for games without their own. Assignments are
-  pointers. Switching one changes nothing inside any profile.
-- **Launch profile** -- `--profile <name>` (or `GS_RITZ_PROFILE`): the profile this
-  session starts in, overriding the assignment for the session only (section 4).
+  editing.** Every change is saved into it immediately. There is always at least one; a
+  fresh install has **Default**.
+- **Kind** -- a profile is **general** (`Comp`, `Casual`) or a **game** profile, bound to
+  one app id and shown as `[Game] Rust`. Only a game profile can **inherit**, and only
+  from a general profile: two levels, no chains.
+- **Assignment** -- which profile a game uses: `games.<AppId>.selected`, set by
+  selecting in the list; plus `last_general`, the general profile most recently
+  selected anywhere, which a game seen for the first time starts on. Assignments are
+  pointers; switching one changes nothing inside any profile.
+- **Session override** -- `--profile <name>` / `GS_RITZ_PROFILE` / `ritz_profile`: the
+  profile this session edits, overriding the assignment for the session only.
 
 **The mental model, one sentence:** *you are always editing exactly one profile, its
-name is at the top of every area, and each game remembers which one it uses.*
+name is at the top of every area, and each game remembers which one it selected.*
 
 ### Where does an edit go
 
 | Situation | Every edit goes to |
 |---|---|
-| No game identified (persistent session, non-Steam launch) | the `default` profile |
-| Game identified, no assignment of its own | the `default` profile |
-| Game assigned to `Rust` | `Rust` |
-| Launched with `--profile Comp` (whatever the assignment says) | `Comp` |
-| Appearance area (`overlay`: scale, accent, cursor look, window geometry) | `global.json`, always -- the one exception, kept because it is about the player's screen, not the game (`ConfigSchema.h`'s `OverlaySettings` comment); the area's badge already says so |
+| No game identified (persistent session, non-Steam launch) | `last_general` |
+| Game identified, never selected anything | `last_general` |
+| Game selected `Rust` (a game profile inheriting `Comp`) | `Rust` -- as the keys that differ from `Comp`; the rest follows `Comp` |
+| Game selected `Comp` (a general profile) | `Comp` -- shared with every other game on it |
+| Launched with `--profile Tourney` (whatever the assignment says) | `Tourney` |
+| Appearance area (`overlay`: scale, accent, cursor look, window geometry) | `global.json`, always -- the one exception, because it is about the player's screen, not the game |
 
 There is no second write. No fan-out, no breadcrumb, no dirty state, no backup --
 because there is nothing a profile could drift *from*. "Do my edits go into the
 profile?" is always yes.
 
-**Sharing is real sharing.** If Rust and CS both use `Comp`, an edit under Rust is an
-edit to `Comp` and CS sees it next launch. That is what using the same profile means
-in every application that has profiles (OBS, browsers, peripheral software), and the
-Status row says `used by: 2 games`. A player who wants Rust isolated presses **Give
-this game its own copy** once. `Why this and not the current "copy in, never link":`
-the copy model made the user restart to see anything and left every game silently
-frozen at the moment of its copy; the link model is what he described wanting when he
-asked for auto-save ("a toggle for auto-saving") -- he wanted the profile to *be* his
-settings, not to chase them.
+**Sharing is real sharing.** If Rust and CS both select `Comp`, an edit under Rust is an
+edit to `Comp` and CS sees it next launch. A player who wants Rust to differ creates a
+game profile for it, inheriting `Comp` -- and then only the values they change in Rust
+are Rust's; everything else keeps following `Comp`. `Why this and not v1's "copy in,
+never link":` the copy model made the user restart to see anything and left every game
+silently frozen at the moment of its copy; the link model is what he described wanting
+when he asked for auto-save -- the profile *is* his settings.
+
+### Inheritance
+
+- A game profile with `inherits` stores only the keys whose JSON value differs from its
+  parent's (`SparseDiff()`, computed on every write against the resolved parent);
+  reading deep-merges the parent's sections, then the child's, then parses. Resolution
+  is canonical (through the struct), so a parent written by an older build does not
+  make a newer section look wholly overridden.
+- Per value the UI shows *inherited* vs *overridden* (`OverriddenKeys()`, a set of
+  dotted keys) and offers *Reset to inherited* (`ResetKeyToInherited()`).
+- **The ceiling, on purpose:** a value set equal to the parent's is stored as nothing
+  and reads as inherited -- it will follow the parent later. Per-key "explicitly set"
+  plumbing through every panel would remove the ceiling at the cost of touching every
+  binding; not worth it until it bites.
+- **Delete a parent:** its children get the resolved values baked in and become
+  standalone. **Edit** may switch a profile between general and game and change its app
+  id, name and parent; turning a parent into a game profile is refused while it has
+  children; a rename follows every pointer (assignments, children's `inherits`, the
+  session override); switching parents keeps the resolved values, re-expressed against
+  the new parent.
+- A standalone game profile (`inherits` empty) stores everything, like a general one.
 
 ### Extensibility
 
-- **A new section slots in with zero profile code.** `SettingsToJson()` /
-  `SettingsFromJson()` serialise the struct; a profile is the struct. Adding a
-  `filters` or `keybinds` section (or crosshair presets inside `crosshair`) means one
-  struct, one serializer block, one panel -- exactly what Crosshair and System needed
-  in 2026-09-05, minus the `ApplyProfile()`/`kProfileSections[]` edits and their
-  ride-along test. The only section-aware code left is the `overlay` gate, which
-  stays (`bIncludeOverlay`).
-- **Partial profiles ("crosshair only"): no, on purpose.** A profile carrying a subset
-  of sections means the missing sections resolve from *somewhere else*, which is
-  layering -- and layering brings back exactly the question this design removes ("this
-  value: from the game's layer, the profile, or global?"). The need behind "crosshair
-  only" is real but is a **preset**: a named value for one section, applied by copying
-  those fields into the current profile (a `Choice` row in the Crosshair area, values
-  stored as a list in `global.json` or `presets/crosshair/<name>.json`). Presets are
-  small, copy-once, and never affect routing. See `feature-ideas-2026-09-05.md`.
-- **Per-game facts that are not settings** move to the assignment entry. Today
-  `AudioSettings::manual_node_binary` "names one game's process" and `ApplyProfile()`
-  has to special-case it; in a shared profile it would point CS's volume control at
-  Rust's process. It becomes `games.<AppId>.audio_node`, read by `PanelAudio.cpp`
-  through a `config::GameEntry()` accessor. `notifications.muted` stays a normal
-  section (DECISIONS #25 made it per-game *eligible*, not per-game only); a game that
-  wants toasts muted gets its own profile, which is one press.
+- **A new section slots in with zero profile code.** `SectionsToJson()` /
+  `SettingsFromJson()` serialise the struct; a profile is the struct; the diff is a
+  JSON diff. Adding a `filters` or `keybinds` section means one struct, one serializer
+  block, one panel -- and inheritance, markers and reset come for free.
+- **Partial profiles ("crosshair only"): no, on purpose.** Inheritance already answers
+  the real need (a game profile that changes *only* the crosshair stores only the
+  crosshair) without a second source per value. Presets remain the answer for "apply
+  this crosshair to whatever I am editing"; see `feature-ideas-2026-09-05.md`.
+- **Per-game facts that are not settings** live on the game's entry in `global.json`:
+  `games.<AppId>.audio_node` (was `AudioSettings::manual_node_binary`), read and written
+  by `PanelAudio.cpp` through `config::GameEntry()` / `SetGameAudioNode()`, because it
+  names one game's process and a profile can be shared. `notifications.muted` stays a
+  normal section (DECISIONS #25 made it per-game *eligible*, not per-game only).
 
 ### File layout (schema 3)
 
@@ -153,62 +196,48 @@ settings, not to chase them.
 ~/.config/gamescope-ritz/
   global.json                 schema_version 3
                               overlay: { ...unchanged... }
-                              profiles: { default: "Default",
-                                          games: { "252490": { profile: "Rust", audio_node: "" } } }
-  profiles/Default.json       name + the per-layer sections (the file shape of today's profiles)
-  profiles/Rust.json
+                              profiles: { last_general: "Comp",
+                                          games: { "252490": { selected: "Rust", audio_node: "" } } }
+  profiles/Comp.json          name, kind "general", every section
+  profiles/Rust.json          name, kind "game", app_id, game_name, inherits "Comp",
+                              only the differing keys
   games/                      left untouched after migration (section 5); never read again
 ```
 
-`global.json` keeps its name and stays "the machine's own file": process-level
-appearance plus the pointers. Assignments live there rather than in a separate file
-so there is one place to look and one file to hand-edit.
+`global.json` stays "the machine's own file": process-level appearance plus the
+pointers, and **no per-layer section any more** -- the sections live in profiles, so a
+hand-edit to `global.json`'s `gamescope` (which v1 would have honoured) cannot
+silently do nothing. Examples of each file: `features/profiles.md`.
 
 ---
 
-## 3. The UI afterwards
+## 3. The UI afterwards (the user's layout)
 
-One area, **Profiles** (`setup.profiles`). The **Per-game** area (`setup.pergame`)
-is retired: under this model it would be one Choice row and one Action, and a rail
-item that thin is a concept the user has to place. The palette keywords
-("per-game", "this game", "override") point at the rows below. Appearance is
-unchanged.
+One area, **Profiles** (`setup.profiles`). The **Per-game** area (`setup.pergame`) is
+retired: a game's settings are a profile.
 
-| Group | Row id | Control | What it does |
-|---|---|---|---|
-| Status | `profiles.status` | Facts | `editing: Rust -- every change is saved into it immediately` · `used by: this game, 1 other, and games without their own` · `game: app 252490 \| none identified` · `launch option: Comp (this session only)` when `--profile` was given |
-| This game *(only with an app id)* | `profiles.game` | Choice | **This game uses** -- `Same as other games` first, then every profile. Changing it switches the session at once (the reload path Use triggers today: `BumpConfigGeneration()`, every panel's `EnsureConfigLoaded()` re-resolves and pushes live) and saves the assignment. |
-| This game | `profiles.copy_for_game` | Action | **Give this game its own copy** -- saves the profile in use as `Game 252490` (rename later) and assigns it. One press, no toggle. Disabled with `already has its own` when assigned to a profile no other game uses. |
-| All other games | `profiles.default` | Choice | **Games without their own choice use** -- the `default` pointer. Same switch-at-once behaviour when it is the one in effect. |
-| Manage | `profiles.name` + `profiles.save` | Text + Action | **Save a copy as** -- copies the profile being edited to the new name and switches this game (or the default) to it. Validation as today (`SanitizeProfileName()`, "already exists"). |
-| Manage | `profiles.rename_to` + `profiles.rename` | Text + Action | **Rename** the selected profile; assignments follow (`RenameProfile()` rewrites the pointers, not just `name`). Separate Text row because a registry Param cannot be Text (`Registry.cpp`'s `AddParam()`), as today. |
-| Manage | `profiles.list` + `profiles.delete` | Choice + Action (Confirm) | **Delete** the selected profile. **Refused with a reason while any assignment points at it** (`in use by this game` / `in use by 2 games` / `it is the default`), so nothing ever has to fall back. The last remaining profile cannot be deleted. |
-| Diagnostics | `profiles.facts` | Facts | count, `profiles/` path, last action. |
+- **The list.** Every profile, general ones by name, game ones as `[Game] <title>`
+  (the app id until a title has been seen). The selected row is the profile the
+  session edits; **selecting a row loads it and is the assignment.** A session
+  override (`--profile`) shows as the selected row with a `launch option` badge; picking
+  any row ends the override for the session and persists as usual.
+- **Filter Game Profiles** (checkbox, on by default): other games' game profiles are
+  hidden; general profiles always show; this game's own always show.
+- **Create** (modal): name, kind (general / game), app id and display name prefilled
+  from the session for a game profile, **Inherits** dropdown (general profiles only,
+  enabled for a game profile). Values: the current resolved settings.
+- **Copy** (modal): the same fields, values from the selected profile's *resolved*
+  settings.
+- **Edit** (modal): the same fields on the selected profile; refused with a reason
+  when it would make a parent a game profile.
+- **Delete** (confirm): children are baked, pointers cleared; the session falls
+  through the resolution order if it was editing the deleted one.
+- **Per value, everywhere:** an *inherited* / *overridden* marker on rows of an
+  inheriting game profile, and *Reset to inherited* in the inspector.
+- **Every area shows the profile** as its badge (`Rust`, or `Tourney (launch option)`).
 
-Rows that **stay** (renamed where noted): the Status facts (reworded), the profile
-picker, Save as new (now "Save a copy as"), Rename + its Text row, Delete + confirm,
-Diagnostics.
-
-Rows that **go**, and why: `profiles.apply` Use this profile (nothing is copied any
-more; the picker *is* the switch), `profiles.restore` Restore previous settings (no
-wholesale replace to undo), `profiles.save_changes` (every edit is already in the
-profile), `profiles.autosave` (always on, so not a switch), `config.override` Use
-separate settings (replaced by the Choice + the copy Action), `config.start_from_profile`
-(is the Choice), `config.restore`, `config.copy` Copy another game's settings (pick
-that game's profile, or Save a copy as), `config.delete` Delete saved settings (a
-game's own settings are a profile; Delete profile covers it), `config.routing` Using
-(the Status row says it in one line). 19 rows today, 10 afterwards, one area instead
-of two.
-
-**Every area shows the profile.** `RoutedBadge()` (`PanelConfig.cpp`) already derives
-an `Area::Badge` for the Setup areas; the same badge -- `Rust`, or `Comp (launch)`
--- goes on every area, or once in the shell header. That is the whole answer to
-"the user should never have to think about where an edit goes": it is written above
-the slider.
-
-Toasts: switching profile (`Now editing 'Comp'`), creating a copy, and the launch
-case (`Started with profile 'Comp' from the launch options`). Everything else is
-silent, as edits are today.
+Toasts: switching profile, creating one, and the launch case (`Created profile
+'Tourney' from '252490'`). Everything else is silent, as edits are today.
 
 ---
 
@@ -217,159 +246,122 @@ silent, as edits are today.
 ```
 gamescope --profile <name> [other flags] -- game
 GS_RITZ_PROFILE=<name> gamescope -- game          # equivalent; the flag wins if both are set
+gamescopectl ritz_profile <name>                  # the live switch, same code path
 ```
 
 Steam launch options: `gamescope --profile Comp -- %command%`, or, when the flag is
-awkward (a wrapper script that owns argv, or `GS_RITZ_APPID`-style setups),
-`GS_RITZ_PROFILE=Comp gamescope -- %command%`. `Why GS_RITZ_ and not GAMESCOPE_RITZ_:`
-`GS_RITZ_APPID` (`src/Config/AppId.cpp`) is the env var users already set; the
-`GAMESCOPE_RITZ_AB_*` family (`main.cpp`, `steamcompmgr.cpp`) is test tooling. The two
-prefixes coexist today; the user-facing one is `GS_RITZ_`.
+awkward (a wrapper script that owns argv), `GS_RITZ_PROFILE=Comp gamescope --
+%command%`. `Why GS_RITZ_ and not GAMESCOPE_RITZ_:` `GS_RITZ_APPID`
+(`src/Config/AppId.cpp`) is the env var users already set.
 
-**Exact semantics (recommended):**
+**Semantics (implemented):**
 
 1. The name goes through `SanitizeProfileName()`; the file is `profiles/<name>.json`.
 2. **It selects the profile for this session and nothing else.** The assignment on
    disk is untouched; the next launch without the flag is back to the assignment.
-   The flag beats the assignment the way `-w`/`-h`/`-r` beat `nested_width` today
+   The flag beats the assignment the way `-w`/`-h`/`-r` beat `nested_width`
    (`apply_ritz_config_to_startup_state()` runs, then getopt overrides).
 3. **Edits during the session go into that profile**, like any session. Nothing is
-   session-only; nothing is lost at quit. The Status row and badge say
-   `Comp (launch option)` so it is never a surprise.
-4. **If the name does not exist, it is created** as a copy of the profile the game
-   would otherwise have used (its assignment, else the default), with a toast:
-   `Created profile 'Comp' from 'Default'`. `Why create:` `--profile Comp` in a launch
-   option is the natural way to say "give this game a Comp setup"; a fallback to the
-   shared profile would send that session's edits into the wrong file, which is the
-   exact failure mode this design exists to remove. A typo produces a visible,
-   deletable profile rather than an invisible fallback.
-5. `--profile` combined with an existing per-game assignment: the flag wins for the
-   session; the Per-game rows show both (`This game uses: Rust` and `launch option:
-   Comp`), and choosing anything in the picker saves that as the assignment as usual.
-   A one-press **Keep using this** is unnecessary: the picker already lists `Comp`.
-6. A live switch is the same code path from the console: `gamescopectl ritz_profile
-   <name>` (a `ConCommand` calling `config::SetSessionProfile()`), which is also what
-   a future hotkey binds to.
-7. Startup order: `ResolveAppId()` -> read `global.json` pointers -> `--profile`/env
-   override -> `LoadProfile()` -> `apply_ritz_config_to_startup_state()` -> getopt.
-   `--profile` must be known *before* the config is applied and the config is applied
-   *before* getopt, so `main()` pre-scans `argv` for `--profile` / `--profile=` up to
-   `--` (about fifteen lines); the option is still in `gamescope_options[]` so
-   `--help` lists it and the loop's own case is a no-op. `--ritz-dump-config` gains a
-   `session_profile` line.
+   session-only; nothing is lost at quit.
+4. **If the name does not exist, it is created** as a general profile copied from
+   what the session would otherwise have used (the game's selection, else
+   `last_general`, else `Default`), with a toast. `Why create:` `--profile Comp` in a
+   launch option is the natural way to say "give this game a Comp setup"; a fallback
+   would send that session's edits into the wrong file, the exact failure this design
+   exists to remove. A typo produces a visible, deletable profile rather than an
+   invisible fallback.
+5. Any profile, even another game's game profile, can be named.
+6. `ritz_profile <name>` (a `ConCommand` in `main.cpp`) calls the same
+   `ritz_use_session_profile()`, which a future hotkey binds to.
+7. Startup order: `ResolveAppId()` -> `--profile`/env pre-scan ->
+   `UseSessionProfile()` -> `ResolvedSettings()` -> `apply_ritz_config_to_startup_state()`
+   -> getopt. `--ritz-dump-config` prints `session_profile`, `kind`, `inherits`,
+   `source` and `launch_option`.
 
-**Why the alternatives lose:**
-
-- *One-time copy into the live settings (today's Use, at launch):* every launch
-  overwrites the previous session's edits; the profile stays pristine and the
-  changes land in some other file. Restores the "where did it go" problem.
-- *A session-only layer never written to disk:* edits vanish at quit; "every change is
-  saved immediately" stops being true for exactly the sessions the user cares most
-  about (the ones he bothered to name a profile for).
-- *Persist it as the assignment / active profile:* a per-launch flag silently changing
-  what the *next* flagless launch uses is the kind of hidden state this removes; and
-  Steam launch options are per-game, so persisting globally is wrong by construction.
-- *Refuse a missing name:* see point 4; a warning in a log nobody reads, and the
-  session's edits in the wrong file.
+**Why the alternatives lose:** as in v1's analysis -- a one-time copy at launch
+overwrites the previous session's edits; a session-only layer loses them at quit;
+persisting the flag as the assignment is hidden state; refusing a missing name sends
+edits to the wrong file.
 
 ---
 
 ## 5. Migration (read old, write new, no user action)
 
-Triggered once, when `global.json` is read with `schema_version` 2 (or none). Written
-as `Migrate_2_to_3()` beside `Migrate_1_to_2()` in `ConfigManager.cpp`, but at file
-level rather than key level because it creates files. Rules:
+Triggered once, when `global.json` is read with `schema_version` below 3
+(`EnsureMigrated()` -> `MigrateV2ToV3()`, file-level because it creates files). Profile
+files are written **first**, `global.json` **last**, and every step is idempotent, so an
+interruption re-runs cleanly on the next launch -- the user's real config has no
+backup. The full table with every rule: `features/profiles.md`, "Migration". In short:
 
 | Old | New |
 |---|---|
-| `global.json` per-layer sections | `profiles/Default.json` (if a profile named `Default` already exists: `Default (migrated)`). `overlay` stays in `global.json`. |
-| `global.json` `active_profile` + `auto_save_profile: true`, profile exists | `default` pointer = that profile. `Why:` with auto-save on the two files were kept identical by the fan-out, so the user was in effect already editing that profile. |
-| `active_profile` with auto-save off, or no active profile | `default` pointer = `Default`. The active name was a breadcrumb; the values in `global.json` are what was running. |
-| `profiles/*.json` | Unchanged. Their `schema_version` bumps on next write. |
-| `games/<AppId>.json`, `override_global: true` | `profiles/Game <AppId>.json` + `games.<AppId>.profile = "Game <AppId>"`. Its `audio.manual_node_binary` -> `games.<AppId>.audio_node`. |
-| `games/<AppId>.json`, `override_global: false` | `profiles/Game <AppId>.json` too (the values were deliberately kept, DECISIONS #19 amendment), but **not** assigned. The user sees it in the picker. |
-| `last_applied_profile` (every file) | Dropped. Nothing is applied any more. |
-| `auto_save_profile`, `active_profile`, `override_global` | Dropped after the rules above. |
+| `global.json` per-layer sections | general profile `Default` (an identical existing profile is used instead; a different `Default` stays and the old values go to `Default 2`) |
+| `active_profile` (if it exists) | `last_general`; else `Default` |
+| `profiles/*.json` | unchanged; read as general profiles |
+| `games/<AppId>.json` | game profile `<AppId>`, `inherits` = its `last_applied_profile` if that exists, else `Default`, stored as the diff; **selected only if `override_global` was true** |
+| `audio.manual_node_binary` (game file) | `games.<AppId>.audio_node` |
+| `last_applied_profile`, `auto_save_profile`, global `audio` | dropped |
 
 The old `games/` files are **left in place, unread**. `Why not delete or rename:` the
 user's own rule -- "never delete configs automatically" (DECISIONS #19, issue #43).
-Re-running is prevented by `global.json` being schema 3 afterwards; a schema-2 file
-is never looked at again once the pointers exist. A fresh install with no
-`global.json` skips migration and creates `Default` from `Settings{}` on first write.
-A newer schema than the build understands still falls back to defaults and logs, as
-`ParseConfigFile()` does today.
 
 ---
 
-## 6. What gets deleted from the code
+## 6. What was deleted from the code
 
 `src/Config/ConfigSchema.h`: `Settings::last_applied_profile`, `active_profile`,
-`auto_save_profile`; `AudioSettings` leaves `Settings` (its one field moves to the
-game entry). Added: `ProfileAssignments { std::string default_profile; std::map<AppId,
-GameEntry> games; }` on the global file only (same `bIncludeOverlay`-style gate).
+`auto_save_profile`, `AudioSettings` and `Settings::audio`. Added: `ProfileKind`,
+`ProfileMeta`, `GameAssignment`, `ProfileAssignments`; `kCurrentSchemaVersion = 3`.
 
-`src/Config/ConfigManager.{h,cpp}` -- delete: `LoadPerGameOverride()`,
-`ResolveEffective( oAppId )` (replaced by `SessionSettings()`),
-`SnapshotPerGameOverride()`, `ClearPerGameOverride()`, `HasSavedPerGameConfig()`,
-`RestorePerGameOverride()`, `DeletePerGameOverride()`, `ApplyProfile()`,
-`ActiveProfile()`/`SetActiveProfile()`, `AutoSaveProfile()`/`SetAutoSaveProfile()`,
-`FanOutToActiveProfile()`, `kProfileSections[]`, `ActiveProfileDirtySections()`,
-`CurrentRoutedSettings()`, `EnqueuePerGameSnapshot()`, `IsSessionOverrideActive()`/
-`SetSessionOverrideActive()`, `ListGameIds()`, `GamePath()`/`GamesDir()` (kept only
-inside the migration), `RememberPerGame()`/`ForgetPerGame()` and the per-game mirror.
-Keep: the path helpers, `SanitizeProfileName()`, `LoadProfile()`/`SaveProfile()`/
-`RenameProfile()`/`DeleteProfile()`/`ListProfiles()`, `ConfigWriter` and its
-coalescing, `EnqueueGlobalWrite()`/`EnqueueOverlayWrite()`/`EnqueueGeometryWrite()`,
-`EnqueueProfileWrite()`, `EnqueueRoutedWrite()` (now: "write the session profile"),
-`ConfigGeneration()`/`BumpConfigGeneration()`, `CurrentFullSettings()`,
-`FlushPendingWrites()`, `DebugDumpEffective()`. Add: `SessionProfile()`,
-`SetSessionProfile()`, `Assignments()`/`SetAssignment()`, `GameEntry()`.
-`EnqueueRoutedWrite()` shrinks to: substitute the fresh `overlay`, write
-`profiles/<session>.json`, done.
+`src/Config/ConfigManager.{h,cpp}` -- deleted: `LoadPerGameOverride()`,
+`ResolveEffective()`, `SnapshotPerGameOverride()`, `ClearPerGameOverride()`,
+`HasSavedPerGameConfig()`, `RestorePerGameOverride()`, `DeletePerGameOverride()`,
+`ApplyProfile()`, `ApplyProfileAtStartup()`, `ActiveProfile()`/`SetActiveProfile()`,
+`AutoSaveProfile()`/`SetAutoSaveProfile()`, `FanOutToActiveProfile()`,
+`kProfileSections[]`, `ActiveProfileDirtySections()`, `CurrentRoutedSettings()`,
+`EnqueuePerGameSnapshot()`, `IsSessionOverrideActive()`/`SetSessionOverrideActive()`,
+`ListGameIds()`, `GamePath()`, `RenameProfile()` (folded into `EditProfileMeta()`).
+Kept: the path helpers, `SanitizeProfileName()`, `LoadGlobal()`/`SaveGlobal()` (now
+overlay + pointers only), `LoadProfile()` (now resolved), `SaveProfile()` (now takes a
+`ProfileMeta`), `ListProfiles()` (now returns metas), `ConfigWriter` and its
+coalescing (plus `Discard()`), the three `overlay` write paths, `EnqueueRoutedWrite()`
+(now: write the session profile), `ConfigGeneration()`/`BumpConfigGeneration()`,
+`FlushPendingWrites()`, `DebugDumpEffective()` (now no-arg). Added: `SessionProfile()`,
+`SessionProfileOverride()`, `SessionProfileParent()`, `ResolvedSettings()`,
+`SelectProfile()`, `UseSessionProfile()`, `CreateProfile()`, `CopyProfile()`,
+`EditProfileMeta()`, `DeleteProfile()`, `OverriddenKeys()`, `ResetKeyToInherited()`,
+`GameEntry()`, `SetGameAudioNode()`, `NoteFocusedWindowTitle()`, `SessionGameName()`,
+`LoadProfileMeta()`, `ProfileExists()`, `GamesDir()` (migration input only).
 
-`src/Overlay/PanelConfig.h`: `SettingsBackup`, `BackupMatchesRouting()`,
-`ChangesFact()`, `SavingFact()`, `UseConfirmPrompt()`, `SaveChangesBlocker()`,
-`EditsGoTo()`, `OwnSettingsFact()`, `PerGameFilePath()`; `StatusInputs` shrinks to
-app id, profile list, session profile, assignment of this game, default pointer,
-launch-flag name. Keep `StatusHash()`, `ClampPickerSelection()`, `ProfileFact()`/
-`GameFact()` (reworded).
-
-`src/Overlay/PanelConfig.cpp`: `EnableOverride()`/`EnableOverrideNoToast()`,
+`src/Overlay/PanelConfig.{h,cpp}`: the whole v1 Profiles/Per-game surface
+(`SettingsBackup`, `BackupMatchesRouting()`, `ChangesFact()`, `SavingFact()`,
+`UseConfirmPrompt()`, `SaveChangesBlocker()`, `EditsGoTo()`, `OwnSettingsFact()`,
+`PerGameFilePath()`, `StatusInputs`/`StatusHash()`, `EnableOverride()`,
 `DisableOverride()`, `DeleteSavedPerGameConfig()`, `UseProfile()`,
-`UseSelectedProfile()`, `RestorePreviousSettings()`, `StartFromProfile()`,
-`CopySelectedGameConfig()`, `SaveChangesToActiveProfile()`, `SetAutoSave()`,
-`BuildPerGameArea()`, `s_oBackup`, `s_bOverrideActive`, `s_sLastAppliedProfile`,
-`s_nStartFromProfile`, `s_nSelectedCopyGame`, `s_OtherGameIds`. The Per-game
-registration in `PanelConfig_RegisterAreas()`.
+`RestorePreviousSettings()`, `StartFromProfile()`, `CopySelectedGameConfig()`,
+`SaveChangesToActiveProfile()`, `SetAutoSave()`, `BuildPerGameArea()`, the Per-game
+registration). Kept in the header for the rebuild: `ClampPickerSelection()`,
+`GameFact()`; added `ListLabel()` and `ShowsInList()` (the `[Game]` label and the
+filter rule, pinned by tests). The area is a placeholder Status row until the list UI
+lands.
 
-`src/main.cpp`: `ResolveEffective( oRitzAppId )` call becomes
-`config::SessionSettings()` after the `--profile` pre-scan; `PanelSystem_SeedFromConfig()`
-and every panel's `EnsureConfigLoaded()` call the same function (they currently call
-`ResolveEffective( SessionAppId() )`, e.g. `PanelDisplay.cpp:144`).
+`src/main.cpp`: `ResolveEffective( oRitzAppId )` became `config::ResolvedSettings()`
+after the `--profile` pre-scan; every panel's `EnsureConfigLoaded()` calls the same.
+`src/Overlay/PanelAudio.cpp` reads/writes `GameEntry()`. `src/steamcompmgr.cpp` feeds
+the focused window's title to `NoteFocusedWindowTitle()`.
 
-Tests replaced: in `tests/test_config.cpp` the per-game snapshot/clear/restore/delete
-cases, "active_profile and auto_save_profile round-trip", "a config predating Phase
-B", "SetActiveProfile / SetAutoSaveProfile persist", "auto-save fans a routed write
-out", "ActiveProfileDirtySections counts", "crosshair rides in a per-game snapshot
-and in a profile"; in `tests/test_overlay_profiles.cpp` the backup, changes-fact,
-saving-fact, Use-confirm, Save-changes-blocker and Phase B hash cases. Migration
-tests are new (fixture files for each row of the table in section 5).
+Tests replaced in `tests/test_config.cpp`: every per-game snapshot/clear/restore/delete
+case, the ApplyProfile/ApplyProfileAtStartup cases, the Phase B (active profile,
+auto-save, dirty count, rename/delete) cases; section round-trips now go through a
+profile file, old-config fixtures through `ResolvedSettings()` (which exercises the
+migration). New: schema, inheritance/diff, the migration table (one test per row),
+session resolution, routing, `UseSessionProfile`, the CRUD rules, markers/reset, the
+game name, the dump. `tests/test_overlay_profiles.cpp`: the label, filter, clamp and
+save-then-list cases.
 
-DECISIONS superseded: **#19** (no per-game snapshot; the rule that survives is "never
-delete a config automatically", now enforced by Delete refusing while in use and by
-migration leaving `games/` alone), **#20** (there is no apply; the profile is the
-live source -- the opposite of #20, chosen on purpose, and the half of
-`config-system.md`'s recommendation the original implementation declined), **#26**
-(already moot). **#21** (app id resolution) and **#25** (toast placement global,
-muting per-game-eligible) stand. TERMINOLOGY entries to rewrite: Profile, Per-game
-settings, Use, Active profile, Auto-save (the last three become "removed 2026-09-xx,
-see profiles-concept.md" notes for one release, then go).
-
-Plainly: this is a **replacement of the model executed mostly as deletion**, not a
-rewrite. The file layer loses about twenty functions and gains four; the panel loses
-one area and eleven rows; the schema loses three fields and gains one small struct.
-"Keep the current model and remove X and Y" was considered (section 7, alternative
-A) and loses on all three criteria in the brief.
+DECISIONS superseded: **#19** and **#20** (see their notes and **#28**). **#21** (app id
+resolution) and **#25** stand. TERMINOLOGY: Profile, Inherits, Selected profile,
+Session profile replace the v1 entries; the history moved to `features/profiles.md`.
 
 ---
 
@@ -389,9 +381,11 @@ A) and loses on all three criteria in the brief.
 
 ---
 
-## 8. Open questions for the user
+## 8. Open questions for the user (answered 2026-09-06)
 
-Only the ones that change the design:
+Answers: 1 -- no locked mode; a launch-option profile is edited like any other.
+2 -- create it (section 4, point 4). 3 -- one area; the list is the whole surface.
+The questions as asked:
 
 1. **A launch-option profile that must not change:** do you ever want `--profile
    Comp` to be *protected* from in-game edits (a tournament setup you tune once)? If
@@ -409,37 +403,22 @@ Not asked, decided: no partial profiles (presets instead); Appearance stays glob
 
 ---
 
-## 9. Implementation sketch (one commit + test each)
+## 9. Implementation (v2)
 
-1. **Schema 3 read/write, no behaviour change.** `ProfileAssignments` in
-   `ConfigSchema.h`; serialise under `profiles` in `global.json` only; `Assignments()`
-   / `SetAssignment()`. Test: round-trip, absent-key defaults.
-2. **Migration 2 -> 3.** `Migrate_2_to_3()` per section 5, gated on the global
-   file's version; fixture-driven tests for every row of the table (including the
-   name-collision and the auto-save-on rule), and "games/ files are still there
-   afterwards".
-3. **Session resolution.** `SessionProfile()` (assignment -> default -> `Default`),
-   `SessionSettings()`, `SetSessionProfile()` (bumps generation), `EnqueueRoutedWrite()`
-   writing the session profile; delete the per-game API and the Phase B API and their
-   tests. Every panel's `EnsureConfigLoaded()` and `main.cpp` call `SessionSettings()`.
-   Test: routing writes the session profile and only it; switching reloads.
-4. **`--profile` / `GS_RITZ_PROFILE` / `ritz_profile`.** Pre-scan in `main()`,
-   option in the table, env fallback, create-if-missing with toast, `--ritz-dump-config`
-   shows `session_profile`. Test: `test_config` for the resolver with an injected
-   env/flag; a `--ritz-dump-config` run under a temp `XDG_CONFIG_HOME` for the
-   end-to-end (the DECISIONS #21 verification pattern).
-5. **Profiles area rewrite, Per-game area retired.** Rows per section 3; `PanelConfig.h`
-   pure helpers trimmed; `test_overlay_profiles` re-pinned (hash inputs, Delete
-   refusal wording, picker agreement). Laptop check: switch, copy, rename, delete
-   refusal, launch option visible.
-6. **Badge everywhere.** The session profile as every area's `Badge`, or in the
-   shell header. Screenshot check.
-7. **Audio node to the game entry.** `PanelAudio.cpp` reads/writes `GameEntry()`;
-   `AudioSettings` leaves `Settings`; migration row covered in step 2's test.
-8. **Docs.** `features/profiles-and-per-game.md` rewritten (rename to
-   `profiles.md`), TERMINOLOGY, DECISIONS #19/#20 superseded notes plus a new entry,
-   CHANGELOG `Added`/`Removed`/`Info` lines, README index.
+Phases 1-4 landed together in one commit (the schema removal does not compile without
+the new routing, and the migration is entangled with the loaders), with the tests
+listed in section 6 and a headless end-to-end
+(`build-release/verify-shots/profiles-v2/e2e.sh`, 25 checks: migration, a routed edit
+landing as a diff, `--profile` create-if-missing with the assignment untouched,
+`GS_RITZ_PROFILE`, `ritz_profile`, the flagless launch back on the assignment).
+`scripts/pixel-regression.sh` seeds a schema-3 config (`profiles/Pixel.json` +
+pointers) and stays green.
 
-Steps 1-4 are invisible to the user and can land first; the UI (5-6) is where the
-change becomes real. Total: about the size of the 2026-09-05 Phase A + B work, with a
-negative line count.
+Still to do, in order:
+
+5. **Profiles area rewrite** (the list, the four modals, the filter, the badge on every
+   area, the per-value markers and *Reset to inherited*), against the API in
+   `features/profiles.md`; `test_overlay_profiles` re-pinned. Laptop check: select,
+   create, copy, edit (refusal wording), delete (bake), filter, launch option visible.
+6. **CHANGELOG** `Added`/`Removed` lines for the UI once it is visible; the 2026-09-06
+   `Info` line already says the model changed underneath.

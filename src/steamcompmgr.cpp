@@ -102,6 +102,7 @@
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
+#include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
 #include "Audio/Volume.h"
 #include "BufferMemo.h"
@@ -5228,6 +5229,11 @@ determine_and_apply_focus( global_focus_t *pFocus )
 			{
 				pFocus->GetNestedHints()->SetTitle( pFocus->focusWindow->title );
 				pFocus->GetNestedHints()->SetIcon( pFocus->focusWindow->icon );
+				// Profiles v2: the focused game's title is the display name a
+				// game profile shows in the list ("[Game] Rust") -- see
+				// Config/ConfigManager.h's NoteFocusedWindowTitle().
+				if ( pFocus->focusWindow->title )
+					gamescope::config::NoteFocusedWindowTitle( *pFocus->focusWindow->title );
 			}
 		}
 		else
@@ -6925,6 +6931,8 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 				{
 					if ( pFocus->GetNestedHints() )
 						pFocus->GetNestedHints()->SetTitle( w->title );
+					if ( w->title )
+						gamescope::config::NoteFocusedWindowTitle( *w->title );
 				}
 			}
 		}

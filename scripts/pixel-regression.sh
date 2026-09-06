@@ -363,13 +363,24 @@ start_sway() {
 # that wants it off switches it off first (run section below).
 # ---------------------------------------------------------------------------
 write_config() {
-	mkdir -p "$CONFIGHOME/gamescope-ritz"
+	mkdir -p "$CONFIGHOME/gamescope-ritz/profiles"
 	local color_fps_dec ch_line_color_dec
 	color_fps_dec=$((FIXED_COLOR_HEX))
 	ch_line_color_dec=$((CH_LINE_COLOR_HEX))
+	# Schema 3 (Profiles v2, 2026-09-06): global.json carries only the
+	# overlay appearance and the profile pointers; the per-layer sections
+	# live in profiles/<Name>.json. The session resolves to last_general.
 	cat > "$CONFIGHOME/gamescope-ritz/global.json" <<-EOF
 		{
-		    "schema_version": 2,
+		    "schema_version": 3,
+		    "profiles": { "last_general": "Pixel", "games": {} }
+		}
+	EOF
+	cat > "$CONFIGHOME/gamescope-ritz/profiles/Pixel.json" <<-EOF
+		{
+		    "schema_version": 3,
+		    "name": "Pixel",
+		    "kind": "general",
 		    "fps_display": {
 		        "enabled": true,
 		        "font_size": $FONT_SIZE,

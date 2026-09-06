@@ -118,7 +118,7 @@ namespace gamescope
 		// every PanelConfig-triggered generation bump too (profile applied,
 		// override toggled, another game's config copied in), not just the
 		// first draw.
-		s_CachedSettings = config::ResolveEffective( config::SessionAppId() );
+		s_CachedSettings = config::ResolvedSettings();
 		s_ulLoadedGeneration = ulGeneration;
 
 		// Defensive: ConfigSchema.h's default member initializer already

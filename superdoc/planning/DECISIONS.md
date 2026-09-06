@@ -508,7 +508,11 @@ depends on the app id resolution order in decision 21.
 ---
 
 ### 19. "Override Global Config" takes a full snapshot, not a diff
-**Status:** DECIDED — amended 2026-08-22, see update below.
+**Status:** SUPERSEDED 2026-09-06 by #28 (Profiles v2) — there is no per-game
+snapshot any more; a game's settings are a game profile, and the one rule that
+survives is "never delete a config automatically" (the migration leaves `games/`
+untouched; Delete is the only destructive action). Kept below as history; amended
+2026-08-22, see update.
 
 **Why:** When enabled for a game, the per-game file captures every setting
 value at that moment; subsequent changes to the global config do not
@@ -586,7 +590,9 @@ silent data loss is worse.
 ---
 
 ### 20. Applying a profile copies values in once; it is not a live reference
-**Status:** ASSUMED — overridable
+**Status:** SUPERSEDED 2026-09-06 by #28 (Profiles v2) — the opposite was chosen on
+purpose: a profile IS the live file, nothing is applied, and a game profile
+inherits from a general one live. Kept below as history.
 
 **Why:** Kept consistent with the snapshot semantics of decision 19 — a
 profile "applied" to global or per-game config should behave the same way a
@@ -650,7 +656,7 @@ required to pick up profile edits.
   panel and the dirty count therefore read `ConfigManager`'s in-memory mirrors,
   never the disk.
 
-See `superdoc/features/profiles-and-per-game.md` for the rows and mechanics.
+See `superdoc/features/profiles.md` ("What v1 had, and where it went") for the v1 rows and mechanics.
 
 **Source:** `superdoc/planning/config-system.md`;
 `superdoc/planning/requests-2026-09-05.md` item 3.
@@ -924,6 +930,62 @@ resumed frame writes the current measurement straight in rather than blending
 with the stale one. Same "instant" result as tracking-while-off, zero cost
 while off. See `superdoc/features/shader-effects.md`'s "Resets on resume"
 section and `rendervulkan.cpp`'s `s_bEffectsPassRanLastTime`.
+
+---
+
+## Profiles v2
+
+### 28. A profile is the file being edited; game profiles inherit from general ones, diff-based
+**Status:** DECIDED, by the user (the model and the UI layout); the diff-based
+implementation is the agent's call.
+
+**What:** `profiles/<Name>.json` is the settings the session edits -- every change
+is saved into it, there are no load/save/apply buttons, and selecting a profile in
+the list is the assignment the game remembers (`global.json`'s
+`profiles.games.<AppId>.selected`; `last_general` for a game never seen). A
+**general** profile stands alone; a **game** profile is bound to one app id and may
+**inherit** from exactly one general profile -- two levels, no chains. `--profile`
+/ `GS_RITZ_PROFILE` / `ritz_profile` select a profile for the session only,
+creating it from what the session would have used when missing. Appearance stays
+in `global.json`; the per-game audio node moves to the game's entry there. Schema
+3; the 2 -> 3 migration writes profiles first and `global.json` last, is
+idempotent, and never touches `games/`. Full text:
+`superdoc/planning/profiles-concept.md` (v2) and `superdoc/features/profiles.md`.
+
+**Why a live file rather than #20's copy:** the user asked for auto-save by name
+("a toggle for auto-saving"); what he wanted was for the profile to *be* his
+settings, not to chase them. The copy model needed nine concepts (the table in
+`profiles-concept.md` section 1) to answer "where did my edit go"; the live model
+needs one.
+
+**Why inheritance is diff-based, and its ceiling:** on every write of an inheriting
+game profile the resolved settings and the resolved parent are serialised and only
+the differing keys are stored; reading deep-merges parent then child. This gives
+inheritance, per-value markers (`OverriddenKeys()`) and *Reset to inherited* to
+every section -- present and future -- with zero panel code, because every panel
+already writes a whole `Settings` through `EnqueueRoutedWrite()`. The ceiling: a
+value the user sets *equal* to the parent's is stored as nothing and reads as
+inherited, so it will follow the parent later. The alternative (a per-key
+"explicitly set" flag threaded through every binding) removes the ceiling at the
+cost of touching every panel; deferred until it bites. Recorded as a `ponytail:`
+note beside `OverriddenKeys()` in `ConfigManager.h`.
+
+**Why the synchronous CRUD writes discard queued writes:** the coalescing writer may
+still hold a slider's write for the same file; a synchronous write computed from
+the in-process mirror is the newer of the two, and the queued one landing later
+undid it in the tests. `ConfigWriter::Discard()` is the fix; the mirror
+(`s_Written`, per profile) is what every read in the file consults first.
+
+**Consequences:** sharing is real -- two games on `Comp` edit the same file; a game
+that wants to differ gets a game profile inheriting `Comp`. `global.json` carries no
+per-layer section any more. A parent written by an older build lacks newer sections;
+resolution canonicalises through the struct so the diff does not store a whole new
+section as "overridden" (seen once in the headless end-to-end).
+
+**Source:** the user, 2026-09-06 (list/modal layout, two kinds, inherit rules,
+select-is-assign, `--profile` session-only, create-if-missing);
+`requests-2026-09-05-round2.md` item 4; `src/Config/ConfigManager.{h,cpp}`;
+`tests/test_config.cpp`.
 
 ---
 

@@ -119,10 +119,22 @@ namespace gamescope
 			return pending.bMuted;
 		}
 
+		// Profiles v2: the manual stream pick is a per-GAME fact, not a
+		// setting -- it lives in global.json's games.<AppId>.audio_node
+		// (config::GameEntry()), never in a profile, because it names one
+		// game's process. With no app id it is session-only.
+		std::string s_sManualNode;
+
 		void PushManualSelectionToLiveState()
 		{
-			const std::string &sBinary = s_CachedSettings.audio.manual_node_binary;
+			const std::string &sBinary = s_sManualNode;
 			Audio::SetManualSelection( sBinary.empty() ? std::nullopt : std::optional<std::string>( sBinary ) );
+		}
+
+		void SaveManualNode()
+		{
+			if ( const std::optional<std::string> &oAppId = config::SessionAppId() )
+				config::SetGameAudioNode( *oAppId, s_sManualNode );
 		}
 
 		void EnsureConfigLoaded()
@@ -131,7 +143,9 @@ namespace gamescope
 			if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 				return;
 
-			s_CachedSettings = config::ResolveEffective( config::SessionAppId() );
+			s_CachedSettings = config::ResolvedSettings();
+			if ( const std::optional<std::string> &oAppId = config::SessionAppId() )
+				s_sManualNode = config::GameEntry( *oAppId ).audio_node;
 			s_ulLoadedGeneration = ulGeneration;
 			s_bConfigLoaded = true;
 
@@ -269,7 +283,7 @@ namespace gamescope
 			Mix( s_AreaState.bWpctlAvailable ? "wpctl" : "no-wpctl" );
 			Mix( s_AreaState.bDetected ? "detected" : "undetected" );
 			Mix( s_AreaState.sManualSelection );
-			Mix( s_CachedSettings.audio.manual_node_binary );
+			Mix( s_sManualNode );
 			for ( int nId : s_AreaState.vecMatchedNodeIds )
 				Mix( std::to_string( nId ) );
 			for ( const Audio::StreamCandidate &c : s_vecAreaStreams )
@@ -364,7 +378,7 @@ namespace gamescope
 			// to be SHOWN, or the picker would read "Automatic" while an
 			// override is in force -- and the next click would silently
 			// clear a setting the user never touched.
-			const std::string &sManual = s_CachedSettings.audio.manual_node_binary;
+			const std::string &sManual = s_sManualNode;
 			if ( !sManual.empty() &&
 			     std::find( s_vecOptionIdentity.begin(), s_vecOptionIdentity.end(), sManual )
 			         == s_vecOptionIdentity.end() )
@@ -378,7 +392,7 @@ namespace gamescope
 
 		int CurrentPickerIndex()
 		{
-			const std::string &sManual = s_CachedSettings.audio.manual_node_binary;
+			const std::string &sManual = s_sManualNode;
 			if ( sManual.empty() )
 				return 0;
 			for ( size_t i = 0; i < s_vecOptionIdentity.size(); ++i )
@@ -416,9 +430,9 @@ namespace gamescope
 						{
 							if ( nIndex < 0 || nIndex >= (int)s_vecOptionIdentity.size() )
 								return;
-							s_CachedSettings.audio.manual_node_binary = s_vecOptionIdentity[ nIndex ];
+							s_sManualNode = s_vecOptionIdentity[ nIndex ];
 							PushManualSelectionToLiveState();
-							QueueSave();
+							SaveManualNode();
 						} ),
 					s_vecStreamOptions.data(), s_vecStreamOptions.size() )
 					.Help( "Which audio stream is this game's. Automatic finds it on its own, or pick "
@@ -546,7 +560,7 @@ namespace gamescope
 					return ui::Fact{ "streams", s };
 				} )
 				.Live( "override", []{
-					const std::string &sManual = s_CachedSettings.audio.manual_node_binary;
+					const std::string &sManual = s_sManualNode;
 					if ( sManual.empty() )
 						return ui::Fact{ "manual override", "none -- detection is automatic" };
 					return ui::Fact{ "manual override", sManual +

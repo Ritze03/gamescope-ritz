@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -9,317 +10,212 @@
 #include "ConfigSchema.h"
 
 // Load/save/resolve for gamescope-ritz's config directory
-// (~/.config/gamescope-ritz, or $XDG_CONFIG_HOME/gamescope-ritz when set) -
-// global.json, profiles/<Name>.json, games/<AppId>.json. See
-// superdoc/planning/SPEC.md's "Config schema" / Feature 6 sections; this header
-// is the implementation of that design.
+// (~/.config/gamescope-ritz, or $XDG_CONFIG_HOME/gamescope-ritz when set):
+// global.json (overlay appearance + the profile pointers) and
+// profiles/<Name>.json (everything else). Profiles v2, 2026-09-06 -- see
+// superdoc/features/profiles.md and superdoc/planning/profiles-concept.md.
 //
-// Threading (SPEC.md's threading section): everything in this header is safe to
-// call from any single thread, but per-frame reads on the steamcompmgr thread
-// should read an already-resolved Settings struct the caller owns, not call
-// ResolveEffective() every frame - these Load*/Resolve* functions do blocking
-// file I/O and JSON parsing, which is fine at startup/profile-apply time but not
-// on the vblank-paced render loop. The Enqueue*Write functions below exist
-// specifically so writes never happen inline on that thread either.
+// The model in one sentence: a profile is the settings file being edited;
+// each game remembers which one it selected; `--profile` picks one for the
+// session. A GAME profile may inherit from one GENERAL profile, storing only
+// the values that differ (ConfigManager.cpp's SparseDiff/DeepMerge).
+//
+// Threading: everything here is safe to call from any single thread, but
+// per-frame reads on the steamcompmgr thread should read an already-resolved
+// Settings struct the caller owns (every panel's EnsureConfigLoaded() does),
+// not call ResolvedSettings() every frame -- the Load*/Resolve* functions do
+// blocking file I/O. The Enqueue*Write functions exist so writes never happen
+// inline on that thread either.
 
 namespace gamescope::config
 {
-    // Directory/path helpers. Re-read $XDG_CONFIG_HOME on every call (cheap, and
-    // only ever called at startup/save time, never per-frame) rather than
-    // caching, so behaviour stays correct under a temporary XDG_CONFIG_HOME in
-    // tests.
+    // ---- paths -----------------------------------------------------------------
+    // Re-read $XDG_CONFIG_HOME on every call (cheap, never per-frame) so
+    // behaviour stays correct under a temporary XDG_CONFIG_HOME in tests.
     std::string ConfigRoot();
     std::string GlobalConfigPath();
     std::string ProfilesDir();
-    std::string GamesDir();
     std::string ProfilePath( std::string_view svSanitizedName );
-    std::string GamePath( std::string_view svAppId );
+    // Schema-2 leftover: games/<AppId>.json. Read by the 2 -> 3 migration
+    // only, never by anything else; the files are left on disk untouched.
+    std::string GamesDir();
 
-    // Profile names come from user input and become a path component directly.
-    // Strips everything outside [A-Za-z0-9 _-], trims surrounding spaces, and
-    // rejects a name that ends up empty (or is exactly "." or ".." - unreachable
-    // via the allowlist today, but checked explicitly as cheap defense in depth).
-    // A name can never escape the profiles directory as a result: the allowlist
-    // simply contains no path separator or '.' character at all.
+    // Profile names come from user input and become a path component
+    // directly. Strips everything outside [A-Za-z0-9 _-], trims surrounding
+    // spaces, and rejects a name that ends up empty. A name can never escape
+    // the profiles directory as a result: the allowlist contains no path
+    // separator or '.' at all.
     std::optional<std::string> SanitizeProfileName( std::string_view svName );
 
-    // Loads global.json. Missing file -> compiled-in defaults (Settings{}), not
-    // an error. Malformed JSON, or a schema_version newer than this build
-    // understands -> logs loudly and falls back to defaults too - never blocks
-    // startup, never crashes gamescope.
+    // ---- global.json -------------------------------------------------------------
+    // global.json carries `overlay` and the `profiles` pointers, nothing
+    // else. LoadGlobal() returns a Settings whose `overlay` is the file's
+    // and whose other sections are the struct defaults -- callers that need
+    // the running settings want ResolvedSettings() below. Missing file ->
+    // defaults; malformed JSON or a schema newer than this build -> logs
+    // loudly and falls back to defaults, never blocks startup.
     Settings LoadGlobal();
-
-    // Loads profiles/<svSanitizedName>.json. std::nullopt if it doesn't exist or
-    // fails to load (already logged in the latter case).
-    std::optional<Settings> LoadProfile( std::string_view svSanitizedName );
-
-    // Loads games/<svAppId>.json, but only returns a value when the file exists
-    // AND its own override_global field is true - a missing file, a parse
-    // failure, or override_global: false all behave identically (std::nullopt,
-    // i.e. "fall through to global"), per SPEC.md's per-layer fallback policy.
-    std::optional<Settings> LoadPerGameOverride( std::string_view svAppId );
-
-    // Two-level resolution (SPEC.md Feature 6 - a full snapshot, not a per-key
-    // merge): games/<AppId>.json when it exists and override_global is true, OR
-    // global.json otherwise. Pass std::nullopt when no app id was resolved.
-    Settings ResolveEffective( const std::optional<std::string> &oAppId );
-
-    // Synchronous atomic writes (temp file + fsync + rename, in the same
-    // directory as the target) - safe to call from any thread that isn't the
-    // steamcompmgr render thread. Use the Enqueue* functions below from there
-    // instead.
+    // Writes `settings.overlay` (only) plus the current pointers.
     bool SaveGlobal( const Settings &settings );
-    bool SaveProfile( std::string_view svSanitizedName, const Settings &settings );
 
-    // "Override Global Config" snapshot (SPEC.md decision, DECISIONS.md #19):
-    // writes games/<AppId>.json with override_global: true and a full copy of
-    // `snapshot` - not a sparse delta. This is the only way a per-game file ever
-    // comes into existence; if a game never enables the override, its file is
-    // never created.
-    bool SnapshotPerGameOverride( std::string_view svAppId, const Settings &snapshot );
+    // ---- profile files -----------------------------------------------------------
+    // Resolved read: a general or standalone profile as stored; an
+    // inheriting game profile deep-merged onto its parent, then parsed.
+    // std::nullopt if the file is missing or unreadable (already logged).
+    std::optional<Settings> LoadProfile( std::string_view svSanitizedName );
+    std::optional<ProfileMeta> LoadProfileMeta( std::string_view svSanitizedName );
+    bool ProfileExists( std::string_view svSanitizedName );
 
-    // "Turn the override back off" (DECISIONS.md #19's amendment, issue #43):
-    // marks games/<AppId>.json inactive by flipping its own override_global
-    // field to false, in place - it deliberately does NOT delete the file.
-    // The saved values stay on disk so a later EnableOverride (see
-    // RestorePerGameOverride below) can bring them back. Missing file is
-    // treated as success (nothing to deactivate). Deleting the file outright
-    // is a separate, explicit, user-confirmed action - see
-    // DeletePerGameOverride.
-    bool ClearPerGameOverride( std::string_view svAppId );
+    // Synchronous atomic write (temp + fsync + rename). For an inheriting
+    // game profile only the keys whose JSON value differs from the resolved
+    // parent are stored. Not for the steamcompmgr thread -- use
+    // EnqueueProfileWrite / EnqueueRoutedWrite there.
+    bool SaveProfile( const ProfileMeta &meta, const Settings &settings );
 
-    // True when games/<AppId>.json exists and parses, regardless of its own
-    // override_global flag - i.e. "is there a saved per-game config to
-    // restore or delete", independent of whether it's currently active. Used
-    // by the Per-Game tab to decide between "Override enabled: restored" and
-    // "Override enabled: snapshotted", and to show the honest "a saved
-    // config exists but isn't in use" state (DECISIONS.md #19's amendment).
-    bool HasSavedPerGameConfig( std::string_view svAppId );
+    // Every profile on disk, sorted by name. Blocking directory I/O: callers
+    // cache and refresh on an explicit user action, never per frame.
+    std::vector<ProfileMeta> ListProfiles();
 
-    // Re-activates an existing games/<AppId>.json by flipping its
-    // override_global field back to true IN PLACE, preserving every value
-    // already on disk rather than re-snapshotting from global (DECISIONS.md
-    // #19's amendment) - "I turned this off and back on" restores what was
-    // there, it does not silently discard it. Returns false, writing
-    // nothing, if the file doesn't exist or fails to parse; the caller
-    // (PanelConfig's EnableOverride) falls back to SnapshotPerGameOverride
-    // in that case.
-    bool RestorePerGameOverride( std::string_view svAppId );
-
-    // The ONLY function in this file that actually deletes games/<AppId>.json
-    // (issue #43: a toggle must never do this - only an explicit,
-    // user-confirmed action may). Refuses (returns false, deletes nothing)
-    // unless svAppId is a bare id with no path separator and isn't "." or
-    // "..", and unless the resulting path's parent directory is exactly
-    // GamesDir() - defense in depth in the same spirit as
-    // SanitizeProfileName's profiles/ containment, even though app ids come
-    // from ResolveAppId()/env vars rather than free-text UI input. Never
-    // touches global.json or anything under profiles/. Missing file is
-    // treated as success.
-    bool DeletePerGameOverride( std::string_view svAppId );
-
-    // Applying a profile copies its values into `target` once (DECISIONS.md
-    // #20) - not a live reference. `target.overlay` (a process-level, not a
-    // per-game/profile, preference) is left untouched, and so are
-    // `target.active_profile` / `target.auto_save_profile` (session state,
-    // see ConfigSchema.h) and `target.audio` (names one game's process).
-    // Returns false, leaving `target` unmodified, if the profile can't be
-    // loaded.
-    bool ApplyProfile( Settings &target, std::string_view svSanitizedName );
-
-    // ---- Command-line profile launch (requests-2026-09-05 round2 item 4) -----
-    //
-    // `--profile <name>` / `GS_RITZ_PROFILE=<name>` (main.cpp pre-scans argv for
-    // the flag - see its own comment on why - and the flag wins if both are
-    // given). This is the INTERIM implementation against the current
-    // copy-on-Use model; superdoc/planning/profiles-concept.md section 4 is a
-    // not-yet-approved redesign toward a session-only pointer (edits during the
-    // session write into the named profile itself, nothing is copied) that this
-    // does not build. Until then, `--profile Comp` does exactly what pressing
-    // "Use this profile" in the overlay does, at the ConfigManager layer: raw
-    // `svName` is sanitized, ApplyProfile() copies the profile's sections into
-    // `target` (the already-`ResolveEffective()`d startup settings - so a
-    // per-game override active for this session gets the profile copied into
-    // ITS file, matching what Use does when a game is identified), then
-    // SetActiveProfile() and the routed write, in the same order UseProfile()
-    // (PanelConfig.cpp) uses.
-    //
-    // Does NOT reproduce Use's one-step in-memory backup ("Restore previous
-    // settings"): that backup is PanelConfig.cpp's own file-static state,
-    // populated only by a Use/Start-from-profile press made through the
-    // overlay, and no panel exists yet at this point in startup - so a CLI-
-    // applied profile leaves no backup to restore from once the overlay opens
-    // (superdoc/features/profiles-and-per-game.md's Command line section notes
-    // this for users of that button).
-    //
-    // Returns false, leaving `target` unmodified and nothing written, if
-    // `svName` doesn't sanitize to a non-empty name or no such profile file
-    // exists - the caller logs/toasts and falls through to `target` as-is.
-    bool ApplyProfileAtStartup( Settings &target, std::string_view svName );
-
-    // ---- Profiles Phase B (requests-2026-09-05 item 3) ------------------------
-
-    // Renames profiles/<old>.json to profiles/<new>.json, rewriting the
-    // file's own "name" key to match. Both names must be exactly what
-    // SanitizeProfileName() would return for them (so neither can carry a
-    // path separator or be "."/".."), and both paths must resolve to direct
-    // children of ProfilesDir() -- the same two-layer containment
-    // DeletePerGameOverride has. Refuses (false, nothing touched) if the
-    // source is missing or the destination already exists: renaming over
-    // another profile is a delete in disguise, and deletes are a separate,
-    // confirmed action. If the renamed profile was the active one,
-    // ActiveProfile() follows the new name. Synchronous.
-    bool RenameProfile( std::string_view svOldName, std::string_view svNewName );
-
-    // Deletes profiles/<name>.json -- the only function here that does, with
-    // DeletePerGameOverride's containment checks pointed at ProfilesDir().
-    // Never touches global.json or anything under games/. Missing file is
-    // success. If the deleted profile was the active one, ActiveProfile()
-    // is cleared (there is nothing left for auto-save to write into).
-    // Synchronous.
-    bool DeleteProfile( std::string_view svSanitizedName );
-
-    // The active profile and the auto-save switch (Settings::active_profile /
-    // auto_save_profile -- see ConfigSchema.h for what they mean and why
-    // they are global-only). Read from an in-memory mirror of global.json
-    // (no disk read after the first), written straight to global.json via
-    // the background writer -- never routed into a per-game file.
-    // Set*() also bumps the mutation sequence ActiveProfileDirtySections()
-    // caches on. SetActiveProfile("") means "no profile is active".
-    const std::string &ActiveProfile();
-    void SetActiveProfile( std::string_view svSanitizedName );
-    bool AutoSaveProfile();
-    void SetAutoSaveProfile( bool bEnabled );
-
-    // The freshest Settings this process knows for whichever file
-    // EnqueueRoutedWrite() would write to right now -- the last routed
-    // write if there has been one, else a disk read. A slider drag's writes
-    // sit in the background queue (coalesced, see EnqueueGlobalWrite) for a
-    // moment before they land, so anything that wants "what the user is
-    // running right now" must read this, not the file.
-    Settings CurrentRoutedSettings();
-
-    // "Changes since applied": how many of the sections a profile carries
-    // (gamescope, fps_display, crosshair, reshade, notifications, system --
-    // exactly the set ApplyProfile() copies; `audio`, `overlay` and the
-    // provenance breadcrumb are not part of a profile's identity) differ
-    // between CurrentRoutedSettings() and the active profile's file. 0 means
-    // clean. std::nullopt when no profile is active or its file cannot be
-    // read. Compared as canonical JSON text per section (Settings has no
-    // operator==, and the JSON form is what both sides are made of anyway).
-    //
-    // Cached on the mutation sequence every write path in this file bumps,
-    // so calling it once per frame from a rebuild-hash function costs
-    // nothing until something actually changed; the recompute itself is one
-    // profile-file read.
-    std::optional<int> ActiveProfileDirtySections();
-
-    // Queues an atomic write onto a small dedicated background thread instead of
-    // writing inline - the steamcompmgr thread (or any caller that can't afford
-    // a blocking fsync()/rename()) should use these instead of the synchronous
-    // Save*/Snapshot* functions above.
-    //
-    // Coalescing (Profiles Phase B, 2026-09-05): a write queued for a path
-    // that already has one pending REPLACES it (last wins, position kept),
-    // and the worker waits for kWriteCoalesceMs of quiet -- capped at
-    // kWriteCoalesceMaxMs since the oldest pending write -- before it takes
-    // a batch. A slider drag therefore costs one write per file per pause,
-    // not one per tick; with auto-save fanning every routed write out to the
-    // active profile as well, that halves what would otherwise be doubled
-    // volume. FlushPendingWrites() skips the quiet period.
-    void EnqueueGlobalWrite( Settings settings );
-    void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot );
-    void EnqueueProfileWrite( std::string sSanitizedName, Settings settings );
-
-    // Issue #35: writes `overlay` (only) to global.json, without the caller
-    // needing to hold a fresh copy of every other section - merges onto the
-    // freshest full Settings this process has seen (CurrentFullSettings(),
-    // ConfigManager.cpp), the same "don't clobber a section you don't own"
-    // protection EnqueueRoutedWrite() already gives `overlay` itself,
-    // pointed the other way.
-    void EnqueueOverlayWrite( const OverlaySettings &overlay );
-
-    // Issue #35: the call Chrome.cpp's panel-geometry autosave actually
-    // makes - patches a single PanelGeometry entry onto the freshest known
-    // `overlay` in-memory (see ConfigManager.cpp's CurrentOverlaySettings())
-    // and writes that, so Chrome.cpp never needs to keep its own copy of
-    // every other General-tab overlay field just to save one panel's
-    // position/size. sPanelKey is a stable per-panel string (see
-    // ConfigSchema.h's PanelGeometry comment for why not the PanelId enum).
-    void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry );
-
-    // Blocks until every currently-queued write has been flushed to disk. For
-    // orderly shutdown and for tests - not for use on the steamcompmgr thread.
-    void FlushPendingWrites();
-
-    // Directory listing for the Config/Profiles panel (SPEC.md's UI structure
-    // section) - sanitized profile names / game app ids currently on disk,
-    // sorted, with no ".json" suffix. Empty when the respective directory
-    // doesn't exist yet. Still blocking directory I/O like every other
-    // function in this header - callers should cache and refresh on an
-    // explicit user action (panel open, profile created/applied), not call
-    // every frame a panel is drawn.
-    std::vector<std::string> ListProfiles();
-    std::vector<std::string> ListGameIds();
-
-    // Session-wide "where do a live-edited panel's writes belong" routing,
-    // shared by every panel that keeps its own locally-cached Settings and
-    // persists it on every edit (PanelDisplay, PanelShaders, FpsDisplay,
-    // PanelConfig - see each file's own EnsureConfigLoaded()/QueueSave()
-    // pair). SessionAppId() resolves once and is cached for the rest of the
-    // process's life, matching SPEC.md's "no live app-id reload" decision
-    // (Feature 6). IsSessionOverrideActive() is a small cached bool, lazily
-    // seeded from an on-disk check the first time anything asks and from then
-    // on kept current only by SetSessionOverrideActive() (PanelConfig calls
-    // it right after it enables/clears/replaces the per-game snapshot) - so
-    // answering "which file does this edit belong in?" on every keystroke
-    // never needs a blocking disk read (see this header's threading note).
+    // ---- session ------------------------------------------------------------------
+    // The app id this session belongs to, resolved once (AppId.h's order)
+    // and cached for the life of the process.
     const std::optional<std::string> &SessionAppId();
-    bool IsSessionOverrideActive();
-    void SetSessionOverrideActive( bool bActive );
 
-    // Bumped by PanelConfig whenever one of its own actions (override
-    // enabled/cleared, profile applied, another game's config copied in)
-    // changes what's authoritative for the current session - never by an
-    // ordinary per-slider edit in another panel. Every panel's own
-    // EnsureConfigLoaded() compares this against the generation it last
-    // loaded at and reloads via ResolveEffective() when they differ - the
-    // whole mechanism "pick a profile, other already-open panels pick it up"
-    // relies on, without a shared observer/event system.
+    // The profile this session is editing:
+    //   1. the session override (`--profile` / GS_RITZ_PROFILE / ritz_profile),
+    //   2. games[<app id>].selected,
+    //   3. last_general,
+    //   4. "Default" -- created from the struct defaults if nothing exists.
+    // Cached; every function below that can change the answer refreshes it.
+    const std::string &SessionProfile();
+    // The `--profile`-style override in force, if any.
+    const std::optional<std::string> &SessionProfileOverride();
+    // The session profile's parent (inherits), or nullopt.
+    std::optional<std::string> SessionProfileParent();
+
+    // The resolved settings of the session profile: the in-process mirror
+    // of the last write to it if this process wrote it, else a disk read.
+    // `overlay` is filled from global.json's mirror so the struct is whole.
+    Settings ResolvedSettings();
+
+    // Selecting a profile in the list: loads it AND remembers the choice --
+    // games[<app id>].selected when a game is identified, and last_general
+    // whenever the profile is general. Clears any session override, bumps
+    // ConfigGeneration() so every panel reloads. With no app id a GAME
+    // profile can only be selected for the session (there is no game to
+    // remember it for). False if no such profile.
+    bool SelectProfile( std::string_view svSanitizedName );
+
+    // `--profile <name>` / GS_RITZ_PROFILE / the `ritz_profile` ConCommand:
+    // selects a profile for THIS SESSION ONLY -- the assignment on disk is
+    // untouched, the next flagless launch is back on it. Any profile, even
+    // another game's. A name that does not exist is CREATED as a general
+    // profile copied from what the session would otherwise have used
+    // (`created` and `copied_from` say so, for the caller's toast). The raw
+    // name is sanitized; `ok` is false only when it sanitizes to nothing.
+    struct SessionProfileResult
+    {
+        bool ok = false;
+        std::string name;
+        bool created = false;
+        std::string copied_from;
+    };
+    SessionProfileResult UseSessionProfile( std::string_view svRawName );
+
+    // Persists `settings` (minus `overlay`) into the session profile -- the
+    // single funnel every panel's edits go through. Queued on the
+    // background writer; for an inheriting game profile the sparse diff is
+    // computed here, against a cached copy of the parent.
+    void EnqueueRoutedWrite( const Settings &settings );
+
+    // Bumped by everything here that changes which profile is authoritative
+    // or what it resolves to (select, create-as-session, edit, delete, reset
+    // to inherited) -- never by an ordinary slider edit. Every panel's
+    // EnsureConfigLoaded() compares it against the generation it last
+    // loaded at and reloads via ResolvedSettings() when they differ.
     uint64_t ConfigGeneration();
     void BumpConfigGeneration();
 
-    // Persists `settings` to whichever file SessionAppId()/
-    // IsSessionOverrideActive() currently say is authoritative for this
-    // session - games/<AppId>.json (as a full snapshot, DECISIONS.md #19)
-    // when a per-game override is active, global.json otherwise. Every panel
-    // with a locally-cached Settings struct should call this instead of
-    // EnqueueGlobalWrite() directly so "Override Global Config" routes every
-    // panel's writes the same way.
-    //
-    // Auto-save fan-out (Profiles Phase B): when AutoSaveProfile() is on and
-    // ActiveProfile() names a profile, the same settings are ALSO queued as
-    // a profile write to that profile (minus `overlay` and the session
-    // fields, as every profile write is). This is the single funnel every
-    // panel's edits go through, which is what makes "any setting you change
-    // while a profile is active is saved into it" true without each panel
-    // knowing profiles exist.
-    void EnqueueRoutedWrite( const Settings &settings );
+    // ---- CRUD for the Profiles list ------------------------------------------------
+    // Every operation is synchronous and returns why it refused, so the UI
+    // can say it. The rules (superdoc/planning/profiles-concept.md, v2):
+    //   - only a game profile may inherit, and only from a general profile;
+    //   - a general profile with children cannot become a game profile;
+    //   - rename follows every pointer (assignments, children's `inherits`,
+    //     the session override);
+    //   - deleting a parent bakes its children (resolved values written,
+    //     `inherits` cleared) rather than orphaning them.
+    struct ProfileOp
+    {
+        bool ok = true;
+        std::string error;
+        explicit operator bool() const { return ok; }
+    };
 
-    // Test-only: resets every piece of the session-routing cache above
-    // (SessionAppId/IsSessionOverrideActive/ConfigGeneration) as if this
-    // were a fresh process. Production code never calls this - an app id is
-    // resolved once for the life of the real process by design (SPEC.md's
-    // "no live app-id reload" decision, Feature 6); tests/test_config.cpp
-    // needs it purely because catch2 runs every [config]-tagged TEST_CASE in
-    // one shared process, and each test wants its own session identity.
+    // Creates `meta` with `from`'s values, or the current ResolvedSettings()
+    // when `from` is null. Does not select it.
+    ProfileOp CreateProfile( const ProfileMeta &meta, const Settings *pFrom = nullptr );
+    // A copy of `svSource`'s RESOLVED values under `meta`.
+    ProfileOp CopyProfile( std::string_view svSource, const ProfileMeta &meta );
+    // Rename / kind / app id / game name / inherits, in one call. The
+    // profile's RESOLVED values are preserved: switching parents re-diffs
+    // them against the new parent; becoming general bakes them in.
+    ProfileOp EditProfileMeta( std::string_view svOldName, const ProfileMeta &meta );
+    ProfileOp DeleteProfile( std::string_view svSanitizedName );
+
+    // ---- inheritance markers -----------------------------------------------------
+    // The dotted keys ("reshade.vibrancy.strength", "fps_display.enabled")
+    // the session profile stores itself, i.e. OVERRIDES its parent for.
+    // Empty for a general or standalone profile. Cached on the write
+    // sequence, so it is free to call every frame.
+    //
+    // ponytail: diff-based, so a value the user sets EQUAL to the parent's
+    // is stored as nothing and reads as inherited (it will follow the parent
+    // later). The alternative -- per-key "explicitly set" plumbing through
+    // every panel -- was not worth it for this ceiling.
+    const std::set<std::string> &OverriddenKeys();
+    // Drops one overridden key from the session profile's file so the value
+    // follows the parent again. False if the profile does not inherit or the
+    // key was not overridden. Synchronous; bumps ConfigGeneration().
+    bool ResetKeyToInherited( std::string_view svDottedKey );
+
+    // ---- the per-game entry ---------------------------------------------------------
+    GameAssignment GameEntry( std::string_view svAppId );
+    void SetGameAudioNode( std::string_view svAppId, std::string_view svBinary );
+
+    // ---- the game's display name -------------------------------------------------
+    // "[Game] Rust" needs a name; the code knows the focused window's title
+    // (steamcompmgr) and the app id, nothing more. The first title seen for
+    // this session's app id is written into any game profile bound to it
+    // that has no game_name yet, so the list can show it while the game is
+    // not running. SessionGameName() is that title, else the app id, else "".
+    void NoteFocusedWindowTitle( std::string_view svTitle );
+    std::string SessionGameName();
+
+    // ---- global.json writes ----------------------------------------------------------
+    // Queued atomic writes (see EnqueueRoutedWrite). Coalesced: a write for
+    // a path that already has one pending replaces it, and the worker waits
+    // for kWriteCoalesceMs of quiet (capped at kWriteCoalesceMaxMs) before
+    // taking a batch, so a slider drag costs one write per file per pause.
+    // FlushPendingWrites() skips the quiet period.
+    void EnqueueGlobalWrite( Settings settings );
+    void EnqueueProfileWrite( const ProfileMeta &meta, const Settings &settings );
+    // Issue #35: writes `overlay` (only) to global.json.
+    void EnqueueOverlayWrite( const OverlaySettings &overlay );
+    // Issue #35: patches one PanelGeometry entry onto the freshest known
+    // `overlay` in memory and writes that, so Chrome.cpp never needs a copy
+    // of every other overlay field just to save one panel's position.
+    void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry );
+    // Blocks until every queued write is on disk. Shutdown and tests only.
+    void FlushPendingWrites();
+
+    // Test-only: forgets every cached piece of session state (app id,
+    // override, session profile, mirrors, migration flag) as if this were a
+    // fresh process. catch2 runs every [config] TEST_CASE in one process,
+    // each against its own temporary config home.
     void ResetSessionRoutingForTests();
 
-    // Debug-only: a pretty-printed JSON dump of the effective config for
-    // `oAppId` (global.json when std::nullopt), plus which layer won. M0 ships
-    // no UI yet (SPEC.md's Build order) - this is the "temporary CLI flag ...
-    // that dumps the resolved effective config to stderr" that milestone's
-    // acceptance criterion asks for; a real UI/gamescopectl command can reuse
-    // it later.
-    std::string DebugDumpEffective( const std::optional<std::string> &oAppId );
+    // --ritz-dump-config: the session profile, its parent, the launch
+    // option, which rule chose it, and the resolved settings, as JSON.
+    std::string DebugDumpEffective();
 }

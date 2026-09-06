@@ -50,10 +50,10 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 ### Settings & config
 
-- [Profiles and Per-game settings](features/profiles-and-per-game.md) -- the Setup areas
-  that decide which file your settings live in: the model in plain words, every row,
-  the one-step backup behind "Use this profile", why the panel writes synchronously,
-  and the Phase B list still pending.
+- [Profiles](features/profiles.md) -- Profiles v2: a profile is the file you edit,
+  general vs game profiles, live diff-based inheritance and its ceiling, the file
+  formats, the resolution order, the API the Profiles area calls, `--profile` /
+  `ritz_profile`, and the schema 2 -> 3 migration table (the v1 model as history).
 
 ### External surfaces
 
@@ -114,7 +114,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   24 divergences with paired screenshots in `audit-shots/`, each marked as explained by a
   recorded decision or as unexplained drift. Read it before trusting a phase report's
   claim of conformance.
-- [Profiles concept](planning/profiles-concept.md) — 2026-09-06 proposal (awaiting user approval): a profile is the file you edit, every game points at one, `--profile <name>` picks the session's; what it deletes, migration, phases.
+- [Profiles concept](planning/profiles-concept.md) — v2 (2026-09-06, file layer implemented): a profile is the file you edit, general and game profiles, live inheritance, `--profile <name>` for the session; why each decision, what it deleted, the UI still to build.
 - [Feature ideas 2026-09-05](planning/feature-ideas-2026-09-05.md) — prioritised filters (native pre-pass and colour management) and features, with a Top 5.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so

@@ -8,7 +8,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -350,32 +352,25 @@ namespace gamescope::config
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
                 s.notifications.muted = JGetBool( *pNotifications, "muted", s.notifications.muted );
 
-            if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
-                s.audio.manual_node_binary = JGetString( *pAudio, "manual_node_binary", s.audio.manual_node_binary );
-
             // System tab (item 5, Phase B) -- see ConfigSchema.h's
             // SystemSettings. Absent on older files: default (sync on).
             if ( const nlohmann::json *pSystem = JGetObject( j, "system" ) )
                 s.system.clipboard_sync = JGetBool( *pSystem, "clipboard_sync", s.system.clipboard_sync );
 
-            // Issue #43 recommendation #10: top-level, not nested -- see
-            // ConfigSchema.h's Settings::last_applied_profile comment. A
-            // config predating this field has no key here and JGetString's
-            // own default-value contract makes that "" (the "never applied"
-            // state), not a parse failure.
-            s.last_applied_profile = JGetString( j, "last_applied_profile", s.last_applied_profile );
-
-            // Profiles Phase B session fields (ConfigSchema.h). Only ever
-            // written to global.json (SettingsToJson below), so on a profile
-            // or per-game file these keys are simply absent and parse to the
-            // struct's own "no profile / auto-save off" defaults.
-            s.active_profile = JGetString( j, "active_profile", s.active_profile );
-            s.auto_save_profile = JGetBool( j, "auto_save_profile", s.auto_save_profile );
+            // No audio / last_applied_profile / active_profile /
+            // auto_save_profile: schema 3 dropped them (ConfigSchema.h's
+            // Settings comment). An old file's keys are simply never looked
+            // up -- the migration reads the ones it needs itself.
 
             return s;
         }
 
-        nlohmann::json SettingsToJson( const Settings &s, bool bIncludeOverlay )
+        // The per-layer sections, exactly as a profile file stores them
+        // (no schema_version, no metadata -- ProfileFileJson() adds those).
+        // This serializer emits the struct's fields, so an old file's
+        // leftover keys for a removed feature are dropped the first time
+        // anything rewrites it -- the accepted precedent since dock_scale.
+        nlohmann::json SectionsToJson( const Settings &s )
         {
             nlohmann::json jGamescope = nlohmann::json::object();
             jGamescope[ "filter" ] = s.gamescope.filter;
@@ -479,95 +474,79 @@ namespace gamescope::config
             nlohmann::json jNotifications = nlohmann::json::object();
             jNotifications[ "muted" ] = s.notifications.muted;
 
-            nlohmann::json jAudio = nlohmann::json::object();
-            jAudio[ "manual_node_binary" ] = s.audio.manual_node_binary;
-
             nlohmann::json jSystem = nlohmann::json::object();
             jSystem[ "clipboard_sync" ] = s.system.clipboard_sync;
 
             nlohmann::json j = nlohmann::json::object();
-            j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
             j[ "crosshair" ] = std::move( jCross );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
-            j[ "audio" ] = std::move( jAudio );
             j[ "system" ] = std::move( jSystem );
 
-            // Issue #43 recommendation #10: top-level, unconditional --
-            // meaningful on every file this schema writes (global/profile/
-            // per-game alike), unlike `overlay` below. See ConfigSchema.h's
-            // Settings::last_applied_profile comment.
-            j[ "last_applied_profile" ] = s.last_applied_profile;
-
-            // Process-level UI preference, only ever present on global.json -
-            // see ConfigSchema.h's OverlaySettings comment. The Profiles
-            // Phase B session fields ride the same gate for the same reason
-            // (ConfigSchema.h's active_profile comment).
-            if ( bIncludeOverlay )
-            {
-                j[ "active_profile" ] = s.active_profile;
-                j[ "auto_save_profile" ] = s.auto_save_profile;
-
-                nlohmann::json jOverlay = nlohmann::json::object();
-                jOverlay[ "fade_ms" ] = s.overlay.fade_ms.has_value()
-                    ? nlohmann::json( *s.overlay.fade_ms )
-                    : nlohmann::json( nullptr );
-                jOverlay[ "notification_placement" ] = s.overlay.notification_placement;
-
-                // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
-                // No dock_scale: removed with the dock. This serializer emits
-                // the struct's fields, so an old file's leftover dock_scale is
-                // dropped the first time anything writes global.json - stated
-                // in ConfigSchema.h, and accepted for a removed feature.
-                jOverlay[ "display_scale" ] = s.overlay.display_scale;
-                jOverlay[ "notification_scale" ] = s.overlay.notification_scale;
-                jOverlay[ "opacity_windows_focused" ] = s.overlay.opacity_windows_focused;
-                jOverlay[ "opacity_windows_unfocused" ] = s.overlay.opacity_windows_unfocused;
-                jOverlay[ "opacity_dock" ] = s.overlay.opacity_dock;
-                jOverlay[ "opacity_notifications" ] = s.overlay.opacity_notifications;
-                jOverlay[ "accent_hue" ] = s.overlay.accent_hue;
-                jOverlay[ "background_blur" ] = s.overlay.background_blur;
-                jOverlay[ "background_darkening" ] = s.overlay.background_darkening;
-
-                jOverlay[ "startup_announce_enabled" ] = s.overlay.startup_announce_enabled;
-                jOverlay[ "capture_all_keyboard_input" ] = s.overlay.capture_all_keyboard_input;
-                jOverlay[ "keyboard_navigation_enabled" ] = s.overlay.keyboard_navigation_enabled;
-
-                // Issue #35: per-panel saved window geometry - see the parse
-                // side above and ConfigSchema.h's PanelGeometry/
-                // OverlaySettings::panel_geometry comments.
-                nlohmann::json jGeometry = nlohmann::json::object();
-                for ( const auto &[ sKey, g ] : s.overlay.panel_geometry )
-                {
-                    nlohmann::json jg = nlohmann::json::object();
-                    jg[ "x" ] = g.x;
-                    jg[ "y" ] = g.y;
-                    jg[ "w" ] = g.w;
-                    jg[ "h" ] = g.h;
-                    jg[ "scale" ] = g.scale; // issue #47 -- see PanelGeometry::scale's comment
-                    jGeometry[ sKey ] = std::move( jg );
-                }
-                jOverlay[ "panel_geometry" ] = std::move( jGeometry );
-
-                // No system_monitor_tab: removed 2026-09-03 (see the parse
-                // side above and ConfigSchema.h's own comment).
-
-                // Cursor tab (see the parse side above and ConfigSchema.h's
-                // OverlaySettings comment block).
-                jOverlay[ "cursor_scale" ] = s.overlay.cursor_scale;
-                jOverlay[ "cursor_outline_width" ] = s.overlay.cursor_outline_width;
-                jOverlay[ "cursor_outline_color" ] = s.overlay.cursor_outline_color.has_value()
-                    ? nlohmann::json( *s.overlay.cursor_outline_color ) : nlohmann::json( nullptr );
-                jOverlay[ "cursor_inlay_color" ] = s.overlay.cursor_inlay_color;
-                jOverlay[ "cursor_everywhere" ] = s.overlay.cursor_everywhere;
-                jOverlay[ "cursor_override_game" ] = s.overlay.cursor_override_game;
-
-                j[ "overlay" ] = std::move( jOverlay );
-            }
-
             return j;
+        }
+
+        // global.json's `overlay` object -- process-level UI preference,
+        // never in a profile (ConfigSchema.h's OverlaySettings comment).
+        nlohmann::json OverlayToJson( const OverlaySettings &o )
+        {
+            nlohmann::json jOverlay = nlohmann::json::object();
+            jOverlay[ "fade_ms" ] = o.fade_ms.has_value()
+                ? nlohmann::json( *o.fade_ms )
+                : nlohmann::json( nullptr );
+            jOverlay[ "notification_placement" ] = o.notification_placement;
+
+            // ---- window-chrome overhaul fields (see ConfigSchema.h) ----
+            // No dock_scale: removed with the dock. This serializer emits
+            // the struct's fields, so an old file's leftover dock_scale is
+            // dropped the first time anything writes global.json - stated
+            // in ConfigSchema.h, and accepted for a removed feature.
+            jOverlay[ "display_scale" ] = o.display_scale;
+            jOverlay[ "notification_scale" ] = o.notification_scale;
+            jOverlay[ "opacity_windows_focused" ] = o.opacity_windows_focused;
+            jOverlay[ "opacity_windows_unfocused" ] = o.opacity_windows_unfocused;
+            jOverlay[ "opacity_dock" ] = o.opacity_dock;
+            jOverlay[ "opacity_notifications" ] = o.opacity_notifications;
+            jOverlay[ "accent_hue" ] = o.accent_hue;
+            jOverlay[ "background_blur" ] = o.background_blur;
+            jOverlay[ "background_darkening" ] = o.background_darkening;
+
+            jOverlay[ "startup_announce_enabled" ] = o.startup_announce_enabled;
+            jOverlay[ "capture_all_keyboard_input" ] = o.capture_all_keyboard_input;
+            jOverlay[ "keyboard_navigation_enabled" ] = o.keyboard_navigation_enabled;
+
+            // Issue #35: per-panel saved window geometry - see the parse
+            // side above and ConfigSchema.h's PanelGeometry/
+            // OverlaySettings::panel_geometry comments.
+            nlohmann::json jGeometry = nlohmann::json::object();
+            for ( const auto &[ sKey, g ] : o.panel_geometry )
+            {
+                nlohmann::json jg = nlohmann::json::object();
+                jg[ "x" ] = g.x;
+                jg[ "y" ] = g.y;
+                jg[ "w" ] = g.w;
+                jg[ "h" ] = g.h;
+                jg[ "scale" ] = g.scale; // issue #47 -- see PanelGeometry::scale's comment
+                jGeometry[ sKey ] = std::move( jg );
+            }
+            jOverlay[ "panel_geometry" ] = std::move( jGeometry );
+
+            // No system_monitor_tab: removed 2026-09-03 (see the parse
+            // side above and ConfigSchema.h's own comment).
+
+            // Cursor tab (see the parse side above and ConfigSchema.h's
+            // OverlaySettings comment block).
+            jOverlay[ "cursor_scale" ] = o.cursor_scale;
+            jOverlay[ "cursor_outline_width" ] = o.cursor_outline_width;
+            jOverlay[ "cursor_outline_color" ] = o.cursor_outline_color.has_value()
+                ? nlohmann::json( *o.cursor_outline_color ) : nlohmann::json( nullptr );
+            jOverlay[ "cursor_inlay_color" ] = o.cursor_inlay_color;
+            jOverlay[ "cursor_everywhere" ] = o.cursor_everywhere;
+            jOverlay[ "cursor_override_game" ] = o.cursor_override_game;
+
+            return jOverlay;
         }
 
         // ---- parsing / migration --------------------------------------------
@@ -822,68 +801,272 @@ namespace gamescope::config
             return j.dump( 2, ' ', false, nlohmann::json::error_handler_t::replace );
         }
 
-        // ---- in-process mirrors of what was last written -------------------
-        // Declared up here because both the synchronous Save*/Snapshot*
-        // functions and the background-writer Enqueue* functions further
-        // down keep them current. Each is documented where it is used
-        // (CurrentOverlaySettings() / CurrentFullSettings() /
-        // CurrentRoutedSettings()).
-        bool s_bLastKnownOverlayLoaded = false;
-        OverlaySettings s_LastKnownOverlay;
-        bool s_bLastKnownSettingsLoaded = false;
-        Settings s_LastKnownSettings;
-        // The last per-game snapshot this process wrote, and for which app
-        // id -- CurrentRoutedSettings()'s per-game branch. Reset (nullopt)
-        // by anything that edits games/<id>.json in place rather than from
-        // a Settings value (Clear/Restore/DeletePerGameOverride), so the
-        // next read goes to disk instead of trusting a stale mirror.
-        std::optional<std::string> s_oLastKnownPerGameId;
-        Settings s_LastKnownPerGame;
-        // The last profile this process wrote (SaveProfile / the queued
-        // EnqueueProfileWrite) and its contents -- ActiveProfileDirtySections()
-        // diffs against this when it names the active profile, so an
-        // auto-save fan-out that is still sitting in the coalescing queue
-        // already counts as saved. Renamed with RenameProfile, dropped by
-        // DeleteProfile.
-        std::optional<std::string> s_oLastKnownProfileName;
-        Settings s_LastKnownProfile;
 
-        // Bumped by every path in this file that changes a file on disk (or
-        // queues a change), or the active profile / auto-save state. The
-        // one thing that reads it is ActiveProfileDirtySections()'s cache:
-        // "has anything at all changed since I last diffed?" Never
-        // compared across processes, never persisted.
+        // ---- profile metadata <-> json --------------------------------------
+
+        const char *KindToString( ProfileKind eKind )
+        {
+            return eKind == ProfileKind::Game ? "game" : "general";
+        }
+
+        ProfileKind KindFromString( const std::string &s )
+        {
+            return s == "game" ? ProfileKind::Game : ProfileKind::General;
+        }
+
+        // The metadata keys sit beside the sections at the top level of a
+        // profile file. `name` is always the filename stem (RenameProfile
+        // keeps the two equal; a hand-edited mismatch loses to the stem).
+        ProfileMeta MetaFromJson( const nlohmann::json &j, std::string_view svStem )
+        {
+            ProfileMeta m;
+            m.name = std::string( svStem );
+            m.kind = KindFromString( JGetString( j, "kind", "general" ) );
+            if ( m.kind == ProfileKind::Game )
+            {
+                m.app_id = JGetString( j, "app_id", "" );
+                m.game_name = JGetString( j, "game_name", "" );
+                m.inherits = JGetString( j, "inherits", "" );
+            }
+            return m;
+        }
+
+        void MetaToJson( nlohmann::json &j, const ProfileMeta &m )
+        {
+            j[ "name" ] = m.name;
+            j[ "kind" ] = KindToString( m.kind );
+            if ( m.kind == ProfileKind::Game )
+            {
+                j[ "app_id" ] = m.app_id;
+                j[ "game_name" ] = m.game_name;
+                j[ "inherits" ] = m.inherits;
+            }
+        }
+
+        constexpr const char *kMetaKeys[] = { "schema_version", "name", "kind", "app_id", "game_name", "inherits" };
+
+        bool IsMetaKey( const std::string &sKey )
+        {
+            for ( const char *psz : kMetaKeys )
+                if ( sKey == psz )
+                    return true;
+            return false;
+        }
+
+        // The sections of a profile file, with the metadata stripped.
+        nlohmann::json SectionsOf( const nlohmann::json &jFile )
+        {
+            nlohmann::json j = nlohmann::json::object();
+            if ( !jFile.is_object() )
+                return j;
+            for ( auto it = jFile.begin(); it != jFile.end(); ++it )
+                if ( !IsMetaKey( it.key() ) )
+                    j[ it.key() ] = *it;
+            return j;
+        }
+
+        // ---- the pointers <-> json ----------------------------------------------
+
+        ProfileAssignments AssignmentsFromJson( const nlohmann::json &jGlobal )
+        {
+            ProfileAssignments a;
+            const nlohmann::json *pProfiles = JGetObject( jGlobal, "profiles" );
+            if ( !pProfiles )
+                return a;
+            a.last_general = JGetString( *pProfiles, "last_general", "" );
+            if ( const nlohmann::json *pGames = JGetObject( *pProfiles, "games" ) )
+            {
+                for ( auto it = pGames->begin(); it != pGames->end(); ++it )
+                {
+                    if ( !it->is_object() )
+                        continue;
+                    GameAssignment g;
+                    g.selected = JGetString( *it, "selected", "" );
+                    g.audio_node = JGetString( *it, "audio_node", "" );
+                    a.games[ it.key() ] = std::move( g );
+                }
+            }
+            return a;
+        }
+
+        nlohmann::json AssignmentsToJson( const ProfileAssignments &a )
+        {
+            nlohmann::json jGames = nlohmann::json::object();
+            for ( const auto &[ sAppId, g ] : a.games )
+            {
+                // An entry that says nothing is not written: the map would
+                // otherwise grow one empty row per game ever launched.
+                if ( g.selected.empty() && g.audio_node.empty() )
+                    continue;
+                nlohmann::json jg = nlohmann::json::object();
+                jg[ "selected" ] = g.selected;
+                jg[ "audio_node" ] = g.audio_node;
+                jGames[ sAppId ] = std::move( jg );
+            }
+            nlohmann::json j = nlohmann::json::object();
+            j[ "last_general" ] = a.last_general;
+            j[ "games" ] = std::move( jGames );
+            return j;
+        }
+
+        nlohmann::json GlobalToJson( const OverlaySettings &overlay, const ProfileAssignments &assignments )
+        {
+            nlohmann::json j = nlohmann::json::object();
+            j[ "schema_version" ] = kCurrentSchemaVersion;
+            j[ "overlay" ] = OverlayToJson( overlay );
+            j[ "profiles" ] = AssignmentsToJson( assignments );
+            return j;
+        }
+
+        // ---- inheritance: diff and merge -------------------------------------
+        // A game profile that inherits stores only what differs from its
+        // parent. Both directions are plain recursive JSON operations on the
+        // section objects the same serializer built, so "equal" is exact.
+
+        // Keys of `child` whose value differs from `parent`'s; nested
+        // objects recurse and vanish when nothing inside differs.
+        nlohmann::json SparseDiff( const nlohmann::json &child, const nlohmann::json &parent )
+        {
+            nlohmann::json out = nlohmann::json::object();
+            if ( !child.is_object() )
+                return out;
+            for ( auto it = child.begin(); it != child.end(); ++it )
+            {
+                const nlohmann::json *pParent = parent.is_object() ? JGetObject( parent, it.key().c_str() ) : nullptr;
+                if ( it->is_object() && pParent )
+                {
+                    nlohmann::json sub = SparseDiff( *it, *pParent );
+                    if ( !sub.empty() )
+                        out[ it.key() ] = std::move( sub );
+                    continue;
+                }
+                auto itParent = parent.is_object() ? parent.find( it.key() ) : parent.end();
+                if ( itParent == parent.end() || *itParent != *it )
+                    out[ it.key() ] = *it;
+            }
+            return out;
+        }
+
+        // `over`'s values onto `base`: objects merge, anything else replaces.
+        void DeepMerge( nlohmann::json &base, const nlohmann::json &over )
+        {
+            if ( !over.is_object() )
+                return;
+            if ( !base.is_object() )
+                base = nlohmann::json::object();
+            for ( auto it = over.begin(); it != over.end(); ++it )
+            {
+                if ( it->is_object() && base.contains( it.key() ) && base[ it.key() ].is_object() )
+                    DeepMerge( base[ it.key() ], *it );
+                else
+                    base[ it.key() ] = *it;
+            }
+        }
+
+        // "reshade.vibrancy.strength" for every leaf of `j`.
+        void FlattenKeys( const nlohmann::json &j, const std::string &sPrefix, std::set<std::string> &out )
+        {
+            if ( !j.is_object() )
+                return;
+            for ( auto it = j.begin(); it != j.end(); ++it )
+            {
+                const std::string sPath = sPrefix.empty() ? it.key() : sPrefix + "." + it.key();
+                if ( it->is_object() )
+                    FlattenKeys( *it, sPath, out );
+                else
+                    out.insert( sPath );
+            }
+        }
+
+        // Removes the leaf at a dotted path; empty parents go with it.
+        // False if the path was not there.
+        bool RemoveDottedKey( nlohmann::json &j, std::string_view svPath )
+        {
+            if ( !j.is_object() )
+                return false;
+            const size_t nDot = svPath.find( '.' );
+            const std::string sHead( svPath.substr( 0, nDot ) );
+            auto it = j.find( sHead );
+            if ( it == j.end() )
+                return false;
+            if ( nDot == std::string_view::npos )
+            {
+                j.erase( it );
+                return true;
+            }
+            if ( !RemoveDottedKey( *it, svPath.substr( nDot + 1 ) ) )
+                return false;
+            if ( it->is_object() && it->empty() )
+                j.erase( it );
+            return true;
+        }
+
+        // ---- in-process state ---------------------------------------------------
+        // Everything below is process-wide, single-thread data (the panels
+        // draw on the steamcompmgr thread; the console thread's ritz_profile
+        // goes through the same functions -- see main.cpp). Reset for tests
+        // by ResetSessionRoutingForTests().
+
+        // global.json's mirror: what this process last read or wrote.
+        bool s_bGlobalLoaded = false;
+        OverlaySettings s_Overlay;
+        ProfileAssignments s_Assignments;
+
+        // Every profile this process has written and what it holds -- the
+        // resolved settings and the JSON that actually went to disk (sparse
+        // for an inheriting game profile). Every read in this file prefers
+        // this to the disk: the coalescing writer may still have the write
+        // queued, and a synchronous write that read the file instead would
+        // then be overtaken by the older queued one (seen in the tests).
+        struct WrittenProfile
+        {
+            Settings settings;
+            nlohmann::json json;
+        };
+        std::map<std::string, WrittenProfile> s_Written;
+
+        const WrittenProfile *Written( std::string_view svName )
+        {
+            auto it = s_Written.find( std::string( svName ) );
+            return it == s_Written.end() ? nullptr : &it->second;
+        }
+
+        // Session identity.
+        std::optional<std::string> s_oSessionAppId;
+        bool s_bSessionAppIdResolved = false;
+        std::optional<std::string> s_oSessionOverride;
+        // The resolution cache: the session profile, its metadata and (for
+        // an inheriting game profile) the parent's resolved sections, so a
+        // routed write's diff never reads the parent's file per slider tick.
+        std::optional<std::string> s_oSessionProfile;
+        ProfileMeta s_SessionMeta;
+        std::optional<nlohmann::json> s_oSessionParentSections;
+        const char *s_pszSessionSource = "";
+        uint64_t s_ulConfigGeneration = 0;
+
+        // Focused-window title, for the game display name.
+        std::string s_sFocusedTitle;
+        bool s_bGameNameNoted = false;
+
+        // Bumped on every write or state change; OverriddenKeys() caches on it.
         uint64_t s_ulMutationSeq = 1;
         void BumpMutation() { s_ulMutationSeq++; }
 
-        void RememberGlobal( const Settings &settings )
+        bool s_bMigrationChecked = false;
+
+        void InvalidateSession()
         {
-            s_LastKnownOverlay = settings.overlay;
-            s_bLastKnownOverlayLoaded = true;
-            s_LastKnownSettings = settings;
-            s_bLastKnownSettingsLoaded = true;
+            s_oSessionProfile.reset();
+            s_oSessionParentSections.reset();
             BumpMutation();
         }
 
-        void RememberPerGame( std::string_view svAppId, const Settings &snapshot )
-        {
-            s_oLastKnownPerGameId = std::string( svAppId );
-            s_LastKnownPerGame = snapshot;
-            BumpMutation();
-        }
-
-        void ForgetPerGame()
-        {
-            s_oLastKnownPerGameId.reset();
-            BumpMutation();
-        }
-
-        void RememberProfile( std::string_view svName, const Settings &settings )
-        {
-            s_oLastKnownProfileName = std::string( svName );
-            s_LastKnownProfile = settings;
-            BumpMutation();
-        }
+        // Forward declarations for the migration, which uses the loaders.
+        std::optional<nlohmann::json> ReadProfileFileJson( std::string_view svName );
+        void EnsureMigrated();
+        void EnsureGlobalLoaded();
+        bool WriteGlobalNow();
+        void DiscardQueuedWrite( const std::string &sPath );
     }
 
     // ---- paths ---------------------------------------------------------------
@@ -918,52 +1101,247 @@ namespace gamescope::config
         return ProfilesDir() + "/" + std::string{ svSanitizedName } + ".json";
     }
 
-    std::string GamePath( std::string_view svAppId )
+    std::optional<std::string> SanitizeProfileName( std::string_view svName )
     {
-        return GamesDir() + "/" + std::string{ svAppId } + ".json";
+        std::string sOut;
+        sOut.reserve( svName.size() );
+        for ( char c : svName )
+        {
+            bool bAllowed = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) ||
+                ( c >= '0' && c <= '9' ) || c == ' ' || c == '_' || c == '-';
+            if ( bAllowed )
+                sOut.push_back( c );
+        }
+
+        size_t nStart = sOut.find_first_not_of( ' ' );
+        if ( nStart == std::string::npos )
+            return std::nullopt;
+        size_t nEnd = sOut.find_last_not_of( ' ' );
+        sOut = sOut.substr( nStart, nEnd - nStart + 1 );
+
+        if ( sOut.empty() || sOut == "." || sOut == ".." )
+            return std::nullopt;
+
+        constexpr size_t kMaxLength = 100;
+        if ( sOut.size() > kMaxLength )
+            sOut.resize( kMaxLength );
+
+        return sOut;
     }
+
+    // ---- file primitives -----------------------------------------------------
 
     namespace
     {
-        // Shared implementation for SanitizeProfileName below.
-        std::optional<std::string> SanitizeNameForPathComponent( std::string_view svName )
+        // A profile name is only ever a direct child of ProfilesDir():
+        // the name must survive SanitizeProfileName() unchanged, and the
+        // path it produces must resolve there. Two layers, the same
+        // defense every deleting path in this file has always had.
+        std::optional<std::filesystem::path> ContainedProfilePath( std::string_view svName, const char *pszWho )
         {
-            std::string sOut;
-            sOut.reserve( svName.size() );
-            for ( char c : svName )
+            std::optional<std::string> oSanitized = SanitizeProfileName( svName );
+            if ( !oSanitized || *oSanitized != svName )
             {
-                bool bAllowed = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) ||
-                    ( c >= '0' && c <= '9' ) || c == ' ' || c == '_' || c == '-';
-                if ( bAllowed )
-                    sOut.push_back( c );
+                s_ConfigLog.errorf( "%s: refusing suspicious profile name '%.*s'",
+                    pszWho, (int)svName.size(), svName.data() );
+                return std::nullopt;
             }
-
-            size_t nStart = sOut.find_first_not_of( ' ' );
-            if ( nStart == std::string::npos )
+            std::filesystem::path path( ProfilePath( *oSanitized ) );
+            if ( path.parent_path() != std::filesystem::path( ProfilesDir() ) )
                 return std::nullopt;
-            size_t nEnd = sOut.find_last_not_of( ' ' );
-            sOut = sOut.substr( nStart, nEnd - nStart + 1 );
+            return path;
+        }
 
-            if ( sOut.empty() || sOut == "." || sOut == ".." )
+        std::optional<nlohmann::json> ReadProfileFileJson( std::string_view svName )
+        {
+            std::string sPath = ProfilePath( svName );
+            SweepStaleTempFiles( sPath );
+            std::optional<std::string> oText = ReadWholeFile( sPath );
+            if ( !oText )
                 return std::nullopt;
+            return ParseConfigFile( *oText, sPath );
+        }
 
-            constexpr size_t kMaxLength = 100;
-            if ( sOut.size() > kMaxLength )
-                sOut.resize( kMaxLength );
+        // The freshest JSON for a profile: what this process last queued or
+        // wrote for it, else the file.
+        std::optional<nlohmann::json> CurrentProfileJson( std::string_view svName )
+        {
+            if ( const WrittenProfile *pWritten = Written( svName ) )
+                return pWritten->json;
+            return ReadProfileFileJson( svName );
+        }
 
-            return sOut;
+        std::vector<std::string> ListJsonStems( const std::string &sDir )
+        {
+            std::vector<std::string> out;
+            std::error_code ec;
+            std::filesystem::directory_iterator it( sDir, ec );
+            if ( ec )
+                return out; // directory doesn't exist yet - empty, not an error
+
+            for ( const std::filesystem::directory_entry &entry : it )
+            {
+                std::error_code ecFile;
+                if ( !entry.is_regular_file( ecFile ) || ecFile )
+                    continue;
+                const std::filesystem::path &path = entry.path();
+                if ( path.extension() != ".json" )
+                    continue;
+                out.push_back( path.stem().string() );
+            }
+            std::sort( out.begin(), out.end() );
+            return out;
+        }
+
+        // The resolved sections of a profile as CANONICAL JSON (every key
+        // the struct has, in the serializer's shape): the file's own for a
+        // general/standalone profile, the parent's with the child's sparse
+        // keys merged over for an inheriting one. A missing parent makes
+        // the child behave as standalone (logged once per read).
+        //
+        // Canonical matters for the diff: a parent written by an older
+        // build lacks the sections added since, and a raw comparison would
+        // then store a child's whole `crosshair` object as "different"
+        // (seen in the headless end-to-end, 2026-09-06).
+        std::optional<nlohmann::json> ResolvedSectionsJson( std::string_view svName, ProfileMeta *pMetaOut = nullptr )
+        {
+            std::optional<nlohmann::json> oFile = CurrentProfileJson( svName );
+            if ( !oFile )
+                return std::nullopt;
+            ProfileMeta meta = MetaFromJson( *oFile, svName );
+            if ( pMetaOut )
+                *pMetaOut = meta;
+            nlohmann::json own = SectionsOf( *oFile );
+            if ( meta.kind != ProfileKind::Game || meta.inherits.empty() )
+                return SectionsToJson( SettingsFromJson( own ) );
+
+            std::optional<nlohmann::json> oParentFile = CurrentProfileJson( meta.inherits );
+            if ( !oParentFile )
+            {
+                s_ConfigLog.errorf( "profile '%s' inherits from '%s', which does not exist -- treating it as standalone",
+                    meta.name.c_str(), meta.inherits.c_str() );
+                return SectionsToJson( SettingsFromJson( own ) );
+            }
+            nlohmann::json merged = SectionsOf( *oParentFile );
+            DeepMerge( merged, own );
+            return SectionsToJson( SettingsFromJson( merged ) );
+        }
+
+        // What actually goes to disk for `meta`: the sections (sparse when
+        // inheriting, against `pParentSections` if the caller has them
+        // cached, else the parent's file), the metadata, the version.
+        nlohmann::json ProfileFileJson( const ProfileMeta &meta, const Settings &settings,
+                                        const nlohmann::json *pParentSections )
+        {
+            nlohmann::json sections = SectionsToJson( settings );
+            if ( meta.kind == ProfileKind::Game && !meta.inherits.empty() )
+            {
+                std::optional<nlohmann::json> oParent;
+                if ( !pParentSections )
+                    oParent = ResolvedSectionsJson( meta.inherits );
+                const nlohmann::json *pParent = pParentSections ? pParentSections : ( oParent ? &*oParent : nullptr );
+                if ( pParent )
+                    sections = SparseDiff( sections, *pParent );
+            }
+            nlohmann::json j = std::move( sections );
+            j[ "schema_version" ] = kCurrentSchemaVersion;
+            MetaToJson( j, meta );
+            return j;
+        }
+
+        void RememberProfileWrite( const ProfileMeta &meta, const Settings &settings, nlohmann::json jFile )
+        {
+            s_Written[ meta.name ] = WrittenProfile{ settings, std::move( jFile ) };
+            BumpMutation();
+        }
+
+        // The freshest resolved settings for a profile: the mirror, else
+        // the file.
+        std::optional<Settings> ProfileSettingsNow( std::string_view svName )
+        {
+            if ( const WrittenProfile *pWritten = Written( svName ) )
+                return pWritten->settings;
+            std::optional<nlohmann::json> oSections = ResolvedSectionsJson( svName );
+            if ( !oSections )
+                return std::nullopt;
+            return SettingsFromJson( *oSections );
+        }
+
+        // Synchronous write. Anything still queued for the same file is
+        // dropped first: this write was computed from the mirror, so it is
+        // the newer of the two, and the queued one landing later would undo
+        // it.
+        bool WriteProfileNow( const ProfileMeta &meta, const Settings &settings, const nlohmann::json *pParentSections )
+        {
+            nlohmann::json j = ProfileFileJson( meta, settings, pParentSections );
+            const std::string sText = DumpJson( j );
+            RememberProfileWrite( meta, settings, std::move( j ) );
+            const std::string sPath = ProfilePath( meta.name );
+            DiscardQueuedWrite( sPath );
+            return WriteFileAtomic( sPath, sText );
+        }
+
+        // Rewrites a profile file in place with `edit` applied to its JSON
+        // (metadata or single-key edits that must not re-diff anything).
+        template <typename Fn>
+        bool PatchProfileFile( std::string_view svName, Fn &&edit )
+        {
+            std::optional<nlohmann::json> oFile = CurrentProfileJson( svName );
+            if ( !oFile )
+                return false;
+            edit( *oFile );
+            ( *oFile )[ "schema_version" ] = kCurrentSchemaVersion;
+            auto it = s_Written.find( std::string( svName ) );
+            if ( it != s_Written.end() )
+                it->second.json = *oFile;
+            BumpMutation();
+            const std::string sPath = ProfilePath( svName );
+            DiscardQueuedWrite( sPath );
+            return WriteFileAtomic( sPath, DumpJson( *oFile ) );
+        }
+
+        void ForgetWritten( std::string_view svName )
+        {
+            s_Written.erase( std::string( svName ) );
+            DiscardQueuedWrite( ProfilePath( svName ) );
         }
     }
 
-    std::optional<std::string> SanitizeProfileName( std::string_view svName )
-    {
-        return SanitizeNameForPathComponent( svName );
-    }
+    // ---- global.json ---------------------------------------------------------
 
-    // ---- loading ---------------------------------------------------------------
+    namespace
+    {
+        void EnsureGlobalLoaded()
+        {
+            if ( s_bGlobalLoaded )
+                return;
+            EnsureMigrated();
+            s_Overlay = OverlaySettings{};
+            s_Assignments = ProfileAssignments{};
+            std::string sPath = GlobalConfigPath();
+            SweepStaleTempFiles( sPath );
+            if ( std::optional<std::string> oText = ReadWholeFile( sPath ) )
+            {
+                if ( std::optional<nlohmann::json> oJson = ParseConfigFile( *oText, sPath ) )
+                {
+                    s_Overlay = SettingsFromJson( *oJson ).overlay;
+                    s_Assignments = AssignmentsFromJson( *oJson );
+                }
+            }
+            s_bGlobalLoaded = true;
+        }
+
+        bool WriteGlobalNow()
+        {
+            EnsureGlobalLoaded();
+            BumpMutation();
+            return WriteFileAtomic( GlobalConfigPath(), DumpJson( GlobalToJson( s_Overlay, s_Assignments ) ) );
+        }
+    }
 
     Settings LoadGlobal()
     {
+        EnsureMigrated();
         std::string sPath = GlobalConfigPath();
         SweepStaleTempFiles( sPath );
 
@@ -975,298 +1353,221 @@ namespace gamescope::config
         if ( !oJson )
             return Settings{};
 
-        return SettingsFromJson( *oJson );
+        Settings s{};
+        s.overlay = SettingsFromJson( *oJson ).overlay;
+        return s;
     }
-
-    std::optional<Settings> LoadProfile( std::string_view svSanitizedName )
-    {
-        std::string sPath = ProfilePath( svSanitizedName );
-        SweepStaleTempFiles( sPath );
-        std::optional<std::string> oText = ReadWholeFile( sPath );
-        if ( !oText )
-            return std::nullopt;
-
-        std::optional<nlohmann::json> oJson = ParseConfigFile( *oText, sPath );
-        if ( !oJson )
-            return std::nullopt;
-
-        return SettingsFromJson( *oJson );
-    }
-
-    std::optional<Settings> LoadPerGameOverride( std::string_view svAppId )
-    {
-        std::string sPath = GamePath( svAppId );
-        SweepStaleTempFiles( sPath );
-        std::optional<std::string> oText = ReadWholeFile( sPath );
-        if ( !oText )
-            return std::nullopt;
-
-        std::optional<nlohmann::json> oJson = ParseConfigFile( *oText, sPath );
-        if ( !oJson )
-            return std::nullopt; // parse failure -> behave as if override_global were off
-
-        if ( !JGetBool( *oJson, "override_global", false ) )
-            return std::nullopt;
-
-        return SettingsFromJson( *oJson );
-    }
-
-    Settings ResolveEffective( const std::optional<std::string> &oAppId )
-    {
-        if ( oAppId )
-        {
-            if ( std::optional<Settings> oGame = LoadPerGameOverride( *oAppId ) )
-                return *oGame;
-        }
-        return LoadGlobal();
-    }
-
-    // ---- saving ---------------------------------------------------------------
 
     bool SaveGlobal( const Settings &settings )
     {
-        // Keeps the in-memory mirrors (CurrentFullSettings() and friends)
-        // honest too: a synchronous global write that bypassed them would
-        // be silently reverted by the next mirror-based write.
-        RememberGlobal( settings );
-        return WriteFileAtomic( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
+        EnsureGlobalLoaded();
+        s_Overlay = settings.overlay;
+        return WriteGlobalNow();
     }
 
-    bool SaveProfile( std::string_view svSanitizedName, const Settings &settings )
+    // ---- profile files --------------------------------------------------------
+
+    std::optional<Settings> LoadProfile( std::string_view svSanitizedName )
     {
-        nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
-        j[ "name" ] = std::string{ svSanitizedName };
-        RememberProfile( svSanitizedName, settings );
-        return WriteFileAtomic( ProfilePath( svSanitizedName ), DumpJson( j ) );
+        EnsureMigrated();
+        std::optional<nlohmann::json> oSections = ResolvedSectionsJson( svSanitizedName );
+        if ( !oSections )
+            return std::nullopt;
+        return SettingsFromJson( *oSections );
     }
 
-    bool SnapshotPerGameOverride( std::string_view svAppId, const Settings &snapshot )
+    std::optional<ProfileMeta> LoadProfileMeta( std::string_view svSanitizedName )
     {
-        nlohmann::json j = SettingsToJson( snapshot, /*bIncludeOverlay*/ false );
-        j[ "override_global" ] = true;
-        RememberPerGame( svAppId, snapshot );
-        return WriteFileAtomic( GamePath( svAppId ), DumpJson( j ) );
+        EnsureMigrated();
+        std::optional<nlohmann::json> oFile = ReadProfileFileJson( svSanitizedName );
+        if ( !oFile )
+            return std::nullopt;
+        return MetaFromJson( *oFile, svSanitizedName );
     }
 
-    namespace
+    bool ProfileExists( std::string_view svSanitizedName )
     {
-        // Reads games/<AppId>.json regardless of its own override_global
-        // flag and returns the parsed object - unlike LoadPerGameOverride
-        // (ConfigSchema-typed, gated on the flag), this is "is there
-        // anything on disk to restore/deactivate/delete at all", which
-        // ClearPerGameOverride/RestorePerGameOverride/HasSavedPerGameConfig
-        // below all need to answer without caring whether it's currently
-        // active.
-        std::optional<nlohmann::json> ReadGameFileJson( std::string_view svAppId )
-        {
-            std::string sPath = GamePath( svAppId );
-            std::optional<std::string> oText = ReadWholeFile( sPath );
-            if ( !oText )
-                return std::nullopt;
-            return ParseConfigFile( *oText, sPath );
-        }
-    }
-
-    bool ClearPerGameOverride( std::string_view svAppId )
-    {
-        std::optional<nlohmann::json> oJson = ReadGameFileJson( svAppId );
-        if ( !oJson )
-            return true; // nothing on disk - nothing to deactivate
-
-        ( *oJson )[ "override_global" ] = false;
-        ForgetPerGame();
-        return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
-    }
-
-    bool HasSavedPerGameConfig( std::string_view svAppId )
-    {
-        return ReadGameFileJson( svAppId ).has_value();
-    }
-
-    bool RestorePerGameOverride( std::string_view svAppId )
-    {
-        std::optional<nlohmann::json> oJson = ReadGameFileJson( svAppId );
-        if ( !oJson )
+        if ( svSanitizedName.empty() )
             return false;
-
-        ( *oJson )[ "override_global" ] = true;
-        ForgetPerGame();
-        return WriteFileAtomic( GamePath( svAppId ), DumpJson( *oJson ) );
-    }
-
-    bool DeletePerGameOverride( std::string_view svAppId )
-    {
-        // Bare-id guard: no path separator, and not "." / ".." - mirrors
-        // SanitizeProfileName's profiles/ containment in spirit (see
-        // ConfigManager.h's comment on this function).
-        if ( svAppId.empty() || svAppId.find( '/' ) != std::string_view::npos ||
-            svAppId == "." || svAppId == ".." )
-        {
-            s_ConfigLog.errorf( "DeletePerGameOverride: refusing suspicious app id '%.*s'",
-                (int)svAppId.size(), svAppId.data() );
-            return false;
-        }
-
-        std::filesystem::path path( GamePath( svAppId ) );
-        // Containment check: the path this function is about to remove must
-        // resolve to a direct child of GamesDir(), never anything else -
-        // GamePath() can only ever produce that shape given the guard above,
-        // but this is checked again anyway so the delete path never relies
-        // on a single layer of defense.
-        if ( path.parent_path() != std::filesystem::path( GamesDir() ) )
-            return false;
-
-        ForgetPerGame();
         std::error_code ec;
-        std::filesystem::remove( path, ec );
-        return !ec || ec == std::errc::no_such_file_or_directory;
+        return std::filesystem::exists( ProfilePath( svSanitizedName ), ec ) && !ec;
     }
 
-    // ---- Profiles Phase B: rename / delete -------------------------------------
-
-    namespace
+    bool SaveProfile( const ProfileMeta &meta, const Settings &settings )
     {
-        // The containment check RenameProfile/DeleteProfile share: the name
-        // must survive SanitizeProfileName() unchanged (so it has no path
-        // separator, no '.', and is not empty), and the path it produces
-        // must be a direct child of ProfilesDir(). Two layers on purpose,
-        // mirroring DeletePerGameOverride: a name from the picker was
-        // listed from that directory and a typed name was validated by the
-        // Text row, but a delete path never relies on one layer of defense.
-        std::optional<std::filesystem::path> ContainedProfilePath( std::string_view svName, const char *pszWho )
-        {
-            std::optional<std::string> oSanitized = SanitizeProfileName( svName );
-            if ( !oSanitized || *oSanitized != svName )
-            {
-                s_ConfigLog.errorf( "%s: refusing suspicious profile name '%.*s'",
-                    pszWho, (int)svName.size(), svName.data() );
-                return std::nullopt;
-            }
-
-            std::filesystem::path path( ProfilePath( *oSanitized ) );
-            if ( path.parent_path() != std::filesystem::path( ProfilesDir() ) )
-                return std::nullopt;
-            return path;
-        }
-    }
-
-    bool RenameProfile( std::string_view svOldName, std::string_view svNewName )
-    {
-        std::optional<std::filesystem::path> oOld = ContainedProfilePath( svOldName, "RenameProfile" );
-        std::optional<std::filesystem::path> oNew = ContainedProfilePath( svNewName, "RenameProfile" );
-        if ( !oOld || !oNew )
+        EnsureMigrated();
+        if ( !ContainedProfilePath( meta.name, "SaveProfile" ) )
             return false;
-        if ( svOldName == svNewName )
-            return true; // nothing to do, and not an error
-
-        std::error_code ec;
-        if ( !std::filesystem::exists( *oOld, ec ) || ec )
-            return false;
-        if ( std::filesystem::exists( *oNew, ec ) )
-            return false; // renaming over another profile would be a delete in disguise
-
-        // Rewrite the file's own "name" key on the way, so the file never
-        // disagrees with its filename. A file that no longer parses is
-        // still renamed as-is (the listing is by filename, and a broken
-        // profile is the user's to fix or delete -- not ours to drop).
-        std::optional<std::string> oText = ReadWholeFile( oOld->string() );
-        std::optional<nlohmann::json> oJson = oText ? ParseConfigFile( *oText, oOld->string() ) : std::nullopt;
-        if ( oJson )
-        {
-            ( *oJson )[ "name" ] = std::string( svNewName );
-            if ( !WriteFileAtomic( oNew->string(), DumpJson( *oJson ) ) )
-                return false;
-            std::filesystem::remove( *oOld, ec );
-        }
-        else
-        {
-            std::filesystem::rename( *oOld, *oNew, ec );
-            if ( ec )
-                return false;
-        }
-
-        if ( ActiveProfile() == svOldName )
-            SetActiveProfile( svNewName );
-        if ( s_oLastKnownProfileName && *s_oLastKnownProfileName == svOldName )
-            s_oLastKnownProfileName = std::string( svNewName );
-        BumpMutation();
-        return true;
-    }
-
-    bool DeleteProfile( std::string_view svSanitizedName )
-    {
-        std::optional<std::filesystem::path> oPath = ContainedProfilePath( svSanitizedName, "DeleteProfile" );
-        if ( !oPath )
-            return false;
-
-        std::error_code ec;
-        std::filesystem::remove( *oPath, ec );
-        const bool bOk = !ec || ec == std::errc::no_such_file_or_directory;
-
-        if ( bOk && ActiveProfile() == svSanitizedName )
-            SetActiveProfile( "" );
-        if ( bOk && s_oLastKnownProfileName && *s_oLastKnownProfileName == svSanitizedName )
-            s_oLastKnownProfileName.reset();
-        BumpMutation();
+        const bool bOk = WriteProfileNow( meta, settings, nullptr );
+        // Writing the session profile's parent changes what the session
+        // resolves to: drop the cached parent so the next routed write
+        // diffs against the new values.
+        if ( s_oSessionProfile && s_SessionMeta.inherits == meta.name )
+            InvalidateSession();
         return bOk;
     }
 
-    bool ApplyProfile( Settings &target, std::string_view svSanitizedName )
+    std::vector<ProfileMeta> ListProfiles()
     {
-        std::optional<Settings> oProfile = LoadProfile( svSanitizedName );
-        if ( !oProfile )
-            return false;
-
-        // One-time copy (DECISIONS.md #20) - not a live reference. `overlay` is
-        // a process-level preference, not part of a profile's shape, so it's
-        // deliberately left untouched on `target`. `audio.manual_node_binary`
-        // is deliberately left untouched too - it names one specific game's
-        // process, so copying it in from a profile (meant to be reusable
-        // across different games) would silently point volume control at the
-        // wrong process for every other game the profile is applied to.
-        // `active_profile` / `auto_save_profile` are session state (never in
-        // a profile file to begin with) and stay untouched too. This list
-        // is also the definition of what ActiveProfileDirtySections() below
-        // compares -- keep the two in step.
-        target.gamescope = oProfile->gamescope;
-        target.fps_display = oProfile->fps_display;
-        target.crosshair = oProfile->crosshair;
-        target.reshade = oProfile->reshade;
-        target.notifications = oProfile->notifications;
-        target.system = oProfile->system;
-
-        // Issue #43 recommendation #10: record provenance, still as a
-        // one-time copy -- `target.last_applied_profile` is just data now,
-        // with no memory of where it came from either; editing the profile
-        // later does not retroactively change this string, same as every
-        // other field this function just copied.
-        target.last_applied_profile = std::string( svSanitizedName );
-
-        return true;
+        EnsureMigrated();
+        std::vector<ProfileMeta> out;
+        for ( const std::string &sStem : ListJsonStems( ProfilesDir() ) )
+        {
+            std::optional<nlohmann::json> oFile = ReadProfileFileJson( sStem );
+            // A file that no longer parses is still listed (as general):
+            // the user's to fix or delete, not ours to hide.
+            out.push_back( oFile ? MetaFromJson( *oFile, sStem ) : ProfileMeta{ sStem } );
+        }
+        return out;
     }
 
-    bool ApplyProfileAtStartup( Settings &target, std::string_view svName )
+    // ---- schema 2 -> 3 migration ----------------------------------------------
+
+    namespace
     {
-        std::optional<std::string> oSanitized = SanitizeProfileName( svName );
-        if ( !oSanitized )
-            return false;
+        // A name that does not collide with an existing profile: `sBase`,
+        // then "<sBase> 2", "<sBase> 3", ...
+        std::string FreeProfileName( const std::string &sBase )
+        {
+            if ( !ProfileExists( sBase ) )
+                return sBase;
+            for ( int n = 2; n < 1000; n++ )
+            {
+                std::string s = sBase + " " + std::to_string( n );
+                if ( !ProfileExists( s ) )
+                    return s;
+            }
+            return sBase;
+        }
 
-        if ( !ApplyProfile( target, *oSanitized ) )
-            return false;
+        bool IsGeneralProfile( const std::string &sName )
+        {
+            std::optional<ProfileMeta> oMeta = LoadProfileMeta( sName );
+            return oMeta && oMeta->kind == ProfileKind::General;
+        }
 
-        // Same order UseProfile() (PanelConfig.cpp) uses: the active profile
-        // is set BEFORE the routed write below, so that write's auto-save
-        // fan-out (if already on from a previous session) targets the
-        // profile just applied rather than whichever was active before.
-        SetActiveProfile( *oSanitized );
+        // Schema 2 -> 3 (2026-09-06, Profiles v2). File-level, because it
+        // creates files. Order matters for the user's un-backed-up config:
+        // every profile file is written FIRST and global.json LAST, so an
+        // interruption leaves a schema-2 global.json that re-runs this on
+        // the next launch -- and every step is idempotent (an identical
+        // Default is found, not duplicated; a game profile already bound to
+        // its app id is kept). The old games/ files are never touched
+        // (the user's rule: never delete a config automatically).
+        //
+        //   old global.json sections          -> profiles/Default.json (general),
+        //                                        unless an existing profile has
+        //                                        identical sections
+        //   active_profile (if it exists)     -> last_general, else Default
+        //   profiles/*.json                   -> unchanged; they are general
+        //   games/<AppId>.json                -> game profile "<AppId>", inheriting
+        //                                        its last_applied_profile if that
+        //                                        exists, else Default; stored as the
+        //                                        diff; games[<AppId>].selected set
+        //                                        only if override_global was true
+        //   audio.manual_node_binary (game)   -> games[<AppId>].audio_node
+        //   last_applied_profile, auto_save   -> dropped
+        void MigrateV2ToV3( const nlohmann::json &jOld )
+        {
+            const Settings oldGlobal = SettingsFromJson( jOld );
+            const nlohmann::json oldSections = SectionsToJson( oldGlobal );
 
-        // Routes to games/<AppId>.json when this session's per-game override
-        // is active, global.json otherwise - the same SessionAppId()/
-        // IsSessionOverrideActive() this function's caller already resolved
-        // via ResolveEffective() to produce `target`, so the two agree.
-        EnqueueRoutedWrite( target );
-        BumpConfigGeneration();
-        return true;
+            // 1. Where the old global.json's values go.
+            std::string sDefault;
+            for ( const std::string &sStem : ListJsonStems( ProfilesDir() ) )
+            {
+                std::optional<nlohmann::json> oFile = ReadProfileFileJson( sStem );
+                if ( !oFile || MetaFromJson( *oFile, sStem ).kind != ProfileKind::General )
+                    continue;
+                // Canonicalise through the struct so an old file's dropped
+                // keys and key order do not count as a difference.
+                if ( SectionsToJson( SettingsFromJson( SectionsOf( *oFile ) ) ) == oldSections )
+                {
+                    sDefault = sStem;
+                    break;
+                }
+            }
+            if ( sDefault.empty() )
+            {
+                sDefault = FreeProfileName( "Default" );
+                ProfileMeta meta{ sDefault };
+                WriteProfileNow( meta, oldGlobal, nullptr );
+                s_ConfigLog.infof( "migration 2->3: global.json's settings are now profile '%s'", sDefault.c_str() );
+            }
+            else
+            {
+                s_ConfigLog.infof( "migration 2->3: profile '%s' already holds global.json's settings", sDefault.c_str() );
+            }
+
+            // 2. The general pointer.
+            ProfileAssignments assignments;
+            const std::string sActive = JGetString( jOld, "active_profile", "" );
+            assignments.last_general = ( !sActive.empty() && IsGeneralProfile( sActive ) ) ? sActive : sDefault;
+
+            // 3. Every games/<AppId>.json becomes a game profile.
+            for ( const std::string &sAppId : ListJsonStems( GamesDir() ) )
+            {
+                std::string sPath = GamesDir() + "/" + sAppId + ".json";
+                std::optional<std::string> oText = ReadWholeFile( sPath );
+                std::optional<nlohmann::json> oGame = oText ? ParseConfigFile( *oText, sPath ) : std::nullopt;
+                if ( !oGame )
+                    continue;
+
+                std::string sName = sAppId;
+                std::optional<ProfileMeta> oExisting = LoadProfileMeta( sName );
+                const bool bAlreadyMigrated = oExisting && oExisting->kind == ProfileKind::Game && oExisting->app_id == sAppId;
+                if ( oExisting && !bAlreadyMigrated )
+                    sName = FreeProfileName( "Game " + sAppId );
+
+                if ( !bAlreadyMigrated )
+                {
+                    const std::string sLastApplied = JGetString( *oGame, "last_applied_profile", "" );
+                    ProfileMeta meta;
+                    meta.name = sName;
+                    meta.kind = ProfileKind::Game;
+                    meta.app_id = sAppId;
+                    meta.inherits = ( !sLastApplied.empty() && IsGeneralProfile( sLastApplied ) ) ? sLastApplied : sDefault;
+                    WriteProfileNow( meta, SettingsFromJson( *oGame ), nullptr );
+                    s_ConfigLog.infof( "migration 2->3: games/%s.json is now game profile '%s' inheriting '%s'",
+                        sAppId.c_str(), sName.c_str(), meta.inherits.c_str() );
+                }
+
+                GameAssignment &entry = assignments.games[ sAppId ];
+                entry.selected = JGetBool( *oGame, "override_global", false ) ? sName : "";
+                if ( const nlohmann::json *pAudio = JGetObject( *oGame, "audio" ) )
+                    entry.audio_node = JGetString( *pAudio, "manual_node_binary", "" );
+            }
+
+            // 4. global.json last.
+            s_Overlay = oldGlobal.overlay;
+            s_Assignments = std::move( assignments );
+            s_bGlobalLoaded = true;
+            if ( WriteGlobalNow() )
+                s_ConfigLog.infof( "migration 2->3: global.json rewritten (schema %d)", kCurrentSchemaVersion );
+        }
+
+        void EnsureMigrated()
+        {
+            if ( s_bMigrationChecked )
+                return;
+            s_bMigrationChecked = true;
+
+            std::string sPath = GlobalConfigPath();
+            std::optional<std::string> oText = ReadWholeFile( sPath );
+            if ( !oText )
+                return; // fresh install: nothing to migrate
+            nlohmann::json j = nlohmann::json::parse( *oText, nullptr, false );
+            if ( j.is_discarded() || !j.is_object() )
+                return; // LoadGlobal() logs the malformed file
+            int nVersion = 0;
+            if ( auto it = j.find( "schema_version" ); it != j.end() && it->is_number_integer() )
+                nVersion = it->get<int>();
+            if ( nVersion >= 3 )
+                return;
+            std::optional<nlohmann::json> oParsed = ParseConfigFile( *oText, sPath ); // runs 1->2 first
+            if ( oParsed )
+                MigrateV2ToV3( *oParsed );
+        }
     }
 
     // ---- background writer ---------------------------------------------------
@@ -1306,9 +1607,7 @@ namespace gamescope::config
             // Two halves: a pending write to the same path is REPLACED
             // (last wins -- which is also what writing both in order would
             // have produced, minus the first fsync), and ThreadMain waits
-            // for the queue to go quiet before taking a batch. Both are a
-            // few lines because the worker already batches: the swap-out
-            // in ThreadMain is unchanged.
+            // for the queue to go quiet before taking a batch.
             static constexpr auto kWriteCoalesceMs = std::chrono::milliseconds( 50 );
             // Cap on how long an unbroken stream of edits (a long slider
             // drag) can hold the disk copy back. Bounded so a crash mid-drag
@@ -1334,6 +1633,15 @@ namespace gamescope::config
                 m_Cv.notify_all();
             }
 
+            // Drops a pending write for `sPath` (a synchronous, newer write
+            // is about to land there -- see WriteProfileNow).
+            void Discard( const std::string &sPath )
+            {
+                std::lock_guard<std::mutex> lock( m_Mutex );
+                m_Pending.erase( std::remove_if( m_Pending.begin(), m_Pending.end(),
+                    [&]( const PendingWrite &w ) { return w.sPath == sPath; } ), m_Pending.end() );
+            }
+
             void Flush()
             {
                 std::unique_lock<std::mutex> lock( m_Mutex );
@@ -1350,9 +1658,7 @@ namespace gamescope::config
             // threads the OS reclaims on exit. A joinable std::thread destroyed
             // without join()/detach() calls std::terminate(), which a
             // function-local static's exit-time destructor would otherwise hit
-            // here; detaching avoids that outright. Add Shutdown()/join() if
-            // this ever needs orderly teardown (e.g. a future test harness
-            // spinning many of these up).
+            // here; detaching avoids that outright.
             ConfigWriter()
                 : m_Thread( [this]() { ThreadMain(); } )
             {
@@ -1404,117 +1710,56 @@ namespace gamescope::config
             std::chrono::steady_clock::time_point m_tLastEnqueue{};
             std::chrono::steady_clock::time_point m_tOldestPending{};
         };
-    }
 
-    namespace
-    {
-        // In-process mirror of the most recently *known-good* `overlay`
-        // sub-object, updated synchronously (no disk round trip) by every
-        // EnqueueGlobalWrite() call below. Exists so EnqueueRoutedWrite()'s
-        // global-write branch (further down) can pull a fresh `overlay`
-        // without racing the background ConfigWriter thread: a disk read
-        // right before enqueueing looks fresh but isn't, if an
-        // just-enqueued-but-not-yet-flushed overlay write from the same
-        // frame hasn't hit disk yet -- reading this in-memory value instead
-        // always reflects the latest enqueued write instantly, flushed or
-        // not. (The variables themselves -- s_bLastKnownOverlayLoaded /
-        // s_LastKnownOverlay -- are declared near the top of this file,
-        // beside the other mirrors, since SaveGlobal() keeps them current
-        // too.)
-
-        const OverlaySettings &CurrentOverlaySettings()
+        void DiscardQueuedWrite( const std::string &sPath )
         {
-            if ( !s_bLastKnownOverlayLoaded )
-            {
-                // First call this process (nothing has written global.json's
-                // overlay yet this session, e.g. the very first edit the
-                // user makes is on a non-General tab) -- fall back to a
-                // one-time disk read, same as before this cache existed.
-                s_LastKnownOverlay = LoadGlobal().overlay;
-                s_bLastKnownOverlayLoaded = true;
-            }
-            return s_LastKnownOverlay;
+            ConfigWriter::Instance().Discard( sPath );
         }
 
-        // Issue #35: same hazard as CurrentOverlaySettings() above, but for
-        // the *rest* of a Settings object. Chrome.cpp's panel-geometry
-        // autosave (EnqueueOverlayWrite() below) only ever changes
-        // `overlay`, but EnqueueGlobalWrite() always writes the *entire*
-        // Settings object to disk (SettingsToJson() has no partial-write
-        // mode) - so a geometry-only write still needs a correct, current
-        // value for every other section (gamescope/fps_display/crosshair/reshade/
-        // notifications/audio), or it would silently revert whatever any
-        // other panel most recently wrote there. Mirrors
-        // CurrentOverlaySettings()'s own fix, pointed the other way: an
-        // in-memory, no-disk-read-on-the-common-path cache of the whole
-        // struct, kept current by every EnqueueGlobalWrite() call (and, since
-        // Phase B, SaveGlobal()). Declared near the top of this file.
-
-        const Settings &CurrentFullSettings()
+        void EnqueueGlobalFromMirror()
         {
-            if ( !s_bLastKnownSettingsLoaded )
-            {
-                // First write this process (nothing has gone through
-                // EnqueueGlobalWrite() yet) - one-time blocking disk read,
-                // same tradeoff CurrentOverlaySettings() already accepts
-                // above, for the identical reason.
-                s_LastKnownSettings = LoadGlobal();
-                s_bLastKnownSettingsLoaded = true;
-            }
-            return s_LastKnownSettings;
+            EnsureGlobalLoaded();
+            BumpMutation();
+            ConfigWriter::Instance().Enqueue( GlobalConfigPath(), DumpJson( GlobalToJson( s_Overlay, s_Assignments ) ) );
         }
     }
 
+    // Every global write goes through the mirror: `overlay` from the
+    // caller, the pointers from what this process knows. No caller of these
+    // owns the pointers (SelectProfile & co. do), so a panel's stale copy
+    // can never overwrite them -- the same "don't clobber a field you don't
+    // own" rule the old routed write applied to `overlay` itself.
     void EnqueueGlobalWrite( Settings settings )
     {
-        RememberGlobal( settings );
-        ConfigWriter::Instance().Enqueue( GlobalConfigPath(), DumpJson( SettingsToJson( settings, /*bIncludeOverlay*/ true ) ) );
+        EnsureGlobalLoaded();
+        s_Overlay = settings.overlay;
+        EnqueueGlobalFromMirror();
     }
 
-    // Issue #35: writes `overlay` only, merging onto CurrentFullSettings()
-    // (above) for every other section so a geometry autosave can never
-    // clobber a concurrent edit from another panel - see that function's
-    // comment. Chrome.cpp's panel-geometry autosave is the only caller
-    // today; PanelConfig's General tab keeps using EnqueueGlobalWrite()
-    // directly (QueueGeneralSave()), since it already holds a fresh,
-    // just-loaded full Settings of its own.
     void EnqueueOverlayWrite( const OverlaySettings &overlay )
     {
-        Settings toWrite = CurrentFullSettings();
-        toWrite.overlay = overlay;
-        EnqueueGlobalWrite( std::move( toWrite ) );
+        EnsureGlobalLoaded();
+        s_Overlay = overlay;
+        EnqueueGlobalFromMirror();
     }
 
-    // Issue #35: the actual call Chrome.cpp's panel-geometry autosave makes.
-    // Patches a single panel_geometry entry onto CurrentOverlaySettings()
-    // (the freshest known `overlay`, in-memory) rather than taking a whole
-    // OverlaySettings from the caller - Chrome.cpp otherwise has no reason
-    // to keep its own up-to-date copy of every General-tab scalar
-    // (display_scale, opacity_*, ...) just to avoid reverting them the moment
-    // it wants to save one panel's position, and a stale copy of those
-    // would hit EnqueueOverlayWrite() the same way a stale full Settings
-    // would hit EnqueueGlobalWrite() - see that function's own comment.
     void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry )
     {
-        OverlaySettings overlay = CurrentOverlaySettings();
-        overlay.panel_geometry[ sPanelKey ] = geometry;
-        EnqueueOverlayWrite( overlay );
+        EnsureGlobalLoaded();
+        s_Overlay.panel_geometry[ sPanelKey ] = geometry;
+        EnqueueGlobalFromMirror();
     }
 
-    void EnqueuePerGameSnapshot( std::string sAppId, Settings snapshot )
+    void EnqueueProfileWrite( const ProfileMeta &meta, const Settings &settings )
     {
-        nlohmann::json j = SettingsToJson( snapshot, /*bIncludeOverlay*/ false );
-        j[ "override_global" ] = true;
-        RememberPerGame( sAppId, snapshot );
-        ConfigWriter::Instance().Enqueue( GamePath( sAppId ), DumpJson( j ) );
-    }
-
-    void EnqueueProfileWrite( std::string sSanitizedName, Settings settings )
-    {
-        nlohmann::json j = SettingsToJson( settings, /*bIncludeOverlay*/ false );
-        j[ "name" ] = sSanitizedName;
-        RememberProfile( sSanitizedName, settings );
-        ConfigWriter::Instance().Enqueue( ProfilePath( sSanitizedName ), DumpJson( j ) );
+        EnsureMigrated();
+        const nlohmann::json *pParent = nullptr;
+        if ( s_oSessionProfile && *s_oSessionProfile == meta.name && s_oSessionParentSections )
+            pParent = &*s_oSessionParentSections;
+        nlohmann::json j = ProfileFileJson( meta, settings, pParent );
+        const std::string sText = DumpJson( j );
+        RememberProfileWrite( meta, settings, std::move( j ) );
+        ConfigWriter::Instance().Enqueue( ProfilePath( meta.name ), sText );
     }
 
     void FlushPendingWrites()
@@ -1522,53 +1767,7 @@ namespace gamescope::config
         ConfigWriter::Instance().Flush();
     }
 
-    // ---- directory listings ---------------------------------------------------
-
-    namespace
-    {
-        std::vector<std::string> ListJsonStems( const std::string &sDir )
-        {
-            std::vector<std::string> out;
-            std::error_code ec;
-            std::filesystem::directory_iterator it( sDir, ec );
-            if ( ec )
-                return out; // directory doesn't exist yet - empty, not an error
-
-            for ( const std::filesystem::directory_entry &entry : it )
-            {
-                std::error_code ecFile;
-                if ( !entry.is_regular_file( ecFile ) || ecFile )
-                    continue;
-                const std::filesystem::path &path = entry.path();
-                if ( path.extension() != ".json" )
-                    continue;
-                out.push_back( path.stem().string() );
-            }
-            std::sort( out.begin(), out.end() );
-            return out;
-        }
-    }
-
-    std::vector<std::string> ListProfiles()
-    {
-        return ListJsonStems( ProfilesDir() );
-    }
-
-    std::vector<std::string> ListGameIds()
-    {
-        return ListJsonStems( GamesDir() );
-    }
-
-    // ---- session routing -------------------------------------------------------
-
-    namespace
-    {
-        std::optional<std::string> s_oSessionAppId;
-        bool s_bSessionAppIdResolved = false;
-        bool s_bSessionOverrideActive = false;
-        bool s_bSessionOverrideResolved = false;
-        uint64_t s_ulConfigGeneration = 0;
-    }
+    // ---- session ----------------------------------------------------------------
 
     const std::optional<std::string> &SessionAppId()
     {
@@ -1580,21 +1779,140 @@ namespace gamescope::config
         return s_oSessionAppId;
     }
 
-    bool IsSessionOverrideActive()
+    namespace
     {
-        if ( !s_bSessionOverrideResolved )
+        // The flagless rule: assignment, then last_general, then Default.
+        // `pszSource` names the rule that won, for --ritz-dump-config.
+        std::string ResolveAssignedProfile( const char **ppszSource )
         {
+            EnsureGlobalLoaded();
             const std::optional<std::string> &oAppId = SessionAppId();
-            s_bSessionOverrideActive = oAppId.has_value() && LoadPerGameOverride( *oAppId ).has_value();
-            s_bSessionOverrideResolved = true;
+            if ( oAppId )
+            {
+                auto it = s_Assignments.games.find( *oAppId );
+                if ( it != s_Assignments.games.end() && ProfileExists( it->second.selected ) )
+                {
+                    *ppszSource = "selected by this game";
+                    return it->second.selected;
+                }
+            }
+            if ( ProfileExists( s_Assignments.last_general ) )
+            {
+                *ppszSource = "last general profile";
+                return s_Assignments.last_general;
+            }
+            *ppszSource = "default";
+            if ( !ProfileExists( "Default" ) )
+            {
+                WriteProfileNow( ProfileMeta{ "Default" }, Settings{}, nullptr );
+                s_ConfigLog.infof( "created profiles/Default.json from the built-in defaults" );
+            }
+            return "Default";
         }
-        return s_bSessionOverrideActive;
+
+        void ResolveSession()
+        {
+            if ( s_oSessionProfile )
+                return;
+            EnsureGlobalLoaded();
+            std::string sName;
+            if ( s_oSessionOverride && ProfileExists( *s_oSessionOverride ) )
+            {
+                sName = *s_oSessionOverride;
+                s_pszSessionSource = "session override";
+            }
+            else
+            {
+                s_oSessionOverride.reset();
+                sName = ResolveAssignedProfile( &s_pszSessionSource );
+            }
+            s_SessionMeta = LoadProfileMeta( sName ).value_or( ProfileMeta{ sName } );
+            s_oSessionParentSections.reset();
+            if ( s_SessionMeta.kind == ProfileKind::Game && !s_SessionMeta.inherits.empty() )
+                s_oSessionParentSections = ResolvedSectionsJson( s_SessionMeta.inherits );
+            s_oSessionProfile = sName;
+        }
     }
 
-    void SetSessionOverrideActive( bool bActive )
+    const std::string &SessionProfile()
     {
-        s_bSessionOverrideActive = bActive;
-        s_bSessionOverrideResolved = true;
+        ResolveSession();
+        return *s_oSessionProfile;
+    }
+
+    const std::optional<std::string> &SessionProfileOverride()
+    {
+        ResolveSession();
+        return s_oSessionOverride;
+    }
+
+    std::optional<std::string> SessionProfileParent()
+    {
+        ResolveSession();
+        if ( s_SessionMeta.kind == ProfileKind::Game && !s_SessionMeta.inherits.empty() )
+            return s_SessionMeta.inherits;
+        return std::nullopt;
+    }
+
+    Settings ResolvedSettings()
+    {
+        const std::string &sName = SessionProfile();
+        Settings s = ProfileSettingsNow( sName ).value_or( Settings{} );
+        EnsureGlobalLoaded();
+        s.overlay = s_Overlay;
+        return s;
+    }
+
+    bool SelectProfile( std::string_view svSanitizedName )
+    {
+        EnsureGlobalLoaded();
+        std::optional<ProfileMeta> oMeta = LoadProfileMeta( svSanitizedName );
+        if ( !oMeta )
+            return false;
+        const std::string sName( svSanitizedName );
+        s_oSessionOverride.reset();
+
+        const std::optional<std::string> &oAppId = SessionAppId();
+        if ( oAppId )
+            s_Assignments.games[ *oAppId ].selected = sName;
+        if ( oMeta->kind == ProfileKind::General )
+            s_Assignments.last_general = sName;
+        else if ( !oAppId )
+            s_oSessionOverride = sName; // no game to remember it for: this session only
+
+        WriteGlobalNow();
+        InvalidateSession();
+        BumpConfigGeneration();
+        return true;
+    }
+
+    SessionProfileResult UseSessionProfile( std::string_view svRawName )
+    {
+        SessionProfileResult r;
+        std::optional<std::string> oName = SanitizeProfileName( svRawName );
+        if ( !oName )
+            return r;
+        r.ok = true;
+        r.name = *oName;
+        EnsureGlobalLoaded();
+        if ( !ProfileExists( r.name ) )
+        {
+            const char *pszUnused = "";
+            r.copied_from = ResolveAssignedProfile( &pszUnused );
+            r.created = true;
+            WriteProfileNow( ProfileMeta{ r.name }, ProfileSettingsNow( r.copied_from ).value_or( Settings{} ), nullptr );
+            s_ConfigLog.infof( "created profile '%s' from '%s'", r.name.c_str(), r.copied_from.c_str() );
+        }
+        s_oSessionOverride = r.name;
+        InvalidateSession();
+        BumpConfigGeneration();
+        return r;
+    }
+
+    void EnqueueRoutedWrite( const Settings &settings )
+    {
+        ResolveSession();
+        EnqueueProfileWrite( s_SessionMeta, settings );
     }
 
     uint64_t ConfigGeneration()
@@ -1607,212 +1925,325 @@ namespace gamescope::config
         s_ulConfigGeneration++;
     }
 
-    namespace
-    {
-        // The auto-save half of DECISIONS.md #20's Phase B extension: with
-        // auto-save on, every routed write is also copied OUT to the active
-        // profile. Called from both of EnqueueRoutedWrite()'s branches --
-        // "any setting you change while a profile is active" does not
-        // depend on which file the change itself lands in. The profile
-        // write drops `overlay` and the session fields as every profile
-        // write does, so the profile never learns which profile is active
-        // (itself) or that auto-save is on.
-        void FanOutToActiveProfile( const Settings &settings )
-        {
-            const Settings &session = CurrentFullSettings();
-            if ( !session.auto_save_profile || session.active_profile.empty() )
-                return;
-            EnqueueProfileWrite( session.active_profile, settings );
-        }
-    }
-
-    void EnqueueRoutedWrite( const Settings &settings )
-    {
-        const std::optional<std::string> &oAppId = SessionAppId();
-        if ( oAppId.has_value() && IsSessionOverrideActive() )
-        {
-            EnqueuePerGameSnapshot( *oAppId, settings );
-            FanOutToActiveProfile( settings );
-            return;
-        }
-
-        // global.json is the one file every panel can end up writing to
-        // (whenever no per-game override is active), but `overlay` is
-        // deliberately process-level/General-tab-owned (ConfigSchema.h's
-        // OverlaySettings comment: "process-level and global.json-only").
-        // No caller of EnqueueRoutedWrite() owns that field -- PanelConfig's
-        // General tab persists overlay edits through EnqueueGlobalWrite()
-        // directly (PanelConfig.cpp's QueueGeneralSave()), never through
-        // here. Every OTHER panel's cached `settings.overlay` here is
-        // whatever it happened to load at panel-open time, which goes stale
-        // the instant the General tab writes a change: a General-tab edit
-        // deliberately never bumps ConfigGeneration (see
-        // EnsureGeneralSettingsLoaded()'s own comment), so nothing reloads
-        // these callers' caches. Forwarding that stale `overlay` straight
-        // through used to silently overwrite every General-tab change on
-        // the very next unrelated routed write from any other panel --
-        // "changed General settings, they don't stick" was this exact bug.
-        // Fix: substitute in the freshest known `overlay` (see
-        // CurrentOverlaySettings() above) immediately before writing,
-        // instead of forwarding this caller's own stale copy.
-        Settings toWrite = settings;
-        toWrite.overlay = CurrentOverlaySettings();
-        // Same hazard, same fix, for the Profiles Phase B session fields:
-        // no caller of this function owns active_profile/auto_save_profile
-        // (PanelConfig sets them through SetActiveProfile()/
-        // SetAutoSaveProfile() below), so the copy in `settings` is whatever
-        // this panel loaded at open time and must not overwrite the live
-        // value.
-        {
-            const Settings &session = CurrentFullSettings();
-            toWrite.active_profile = session.active_profile;
-            toWrite.auto_save_profile = session.auto_save_profile;
-        }
-        EnqueueGlobalWrite( std::move( toWrite ) );
-        FanOutToActiveProfile( settings );
-    }
-
-    // ---- Profiles Phase B: session state and the dirty count ------------------
-
-    const std::string &ActiveProfile()
-    {
-        return CurrentFullSettings().active_profile;
-    }
-
-    void SetActiveProfile( std::string_view svSanitizedName )
-    {
-        Settings toWrite = CurrentFullSettings();
-        if ( toWrite.active_profile == svSanitizedName )
-            return;
-        toWrite.active_profile = std::string( svSanitizedName );
-        EnqueueGlobalWrite( std::move( toWrite ) );
-    }
-
-    bool AutoSaveProfile()
-    {
-        return CurrentFullSettings().auto_save_profile;
-    }
-
-    void SetAutoSaveProfile( bool bEnabled )
-    {
-        Settings toWrite = CurrentFullSettings();
-        if ( toWrite.auto_save_profile == bEnabled )
-            return;
-        toWrite.auto_save_profile = bEnabled;
-        EnqueueGlobalWrite( std::move( toWrite ) );
-    }
-
-    Settings CurrentRoutedSettings()
-    {
-        const std::optional<std::string> &oAppId = SessionAppId();
-        if ( oAppId.has_value() && IsSessionOverrideActive() )
-        {
-            if ( s_oLastKnownPerGameId && *s_oLastKnownPerGameId == *oAppId )
-                return s_LastKnownPerGame;
-            // Nothing written to this game's file yet this process (or it was
-            // last edited in place): one disk read, then mirrored.
-            Settings fromDisk = ResolveEffective( oAppId );
-            s_oLastKnownPerGameId = *oAppId;
-            s_LastKnownPerGame = fromDisk;
-            return fromDisk;
-        }
-        return CurrentFullSettings();
-    }
+    // ---- CRUD ------------------------------------------------------------------------
 
     namespace
     {
-        // The sections a profile carries -- the same list ApplyProfile()
-        // copies, and nothing else. `audio` is excluded because ApplyProfile
-        // never copies it (it names one game's process), so it would
-        // otherwise read as a permanent "1 section changed" against any
-        // profile saved from another game.
-        constexpr const char *kProfileSections[] =
+        ProfileOp Fail( std::string s )
         {
-            "gamescope", "fps_display", "crosshair", "reshade", "notifications", "system",
-        };
+            return ProfileOp{ false, std::move( s ) };
+        }
 
-        uint64_t s_ulDirtyCachedSeq = 0;
-        std::optional<int> s_oDirtyCached;
-    }
-
-    std::optional<int> ActiveProfileDirtySections()
-    {
-        if ( s_ulDirtyCachedSeq == s_ulMutationSeq )
-            return s_oDirtyCached;
-
-        std::optional<int> oResult;
-        const std::string &sActive = ActiveProfile();
-        if ( !sActive.empty() )
+        // The rules every create/copy/edit checks. `svSelf` is the name the
+        // profile will have, so it cannot inherit from itself.
+        ProfileOp ValidateMeta( const ProfileMeta &meta )
         {
-            // The in-memory mirror first: a profile write this process just
-            // queued (auto-save's fan-out, or Save changes) is what the
-            // profile IS, whether or not the coalescing writer has put it
-            // on disk yet. Disk only when this process has not written it.
-            std::optional<Settings> oProfile;
-            if ( s_oLastKnownProfileName && *s_oLastKnownProfileName == sActive )
-                oProfile = s_LastKnownProfile;
-            else
-                oProfile = LoadProfile( sActive );
-
-            if ( oProfile )
+            std::optional<std::string> oName = SanitizeProfileName( meta.name );
+            if ( !oName || *oName != meta.name )
+                return Fail( "name must be letters, digits, space, hyphen or underscore" );
+            if ( meta.kind == ProfileKind::General )
             {
-                const nlohmann::json jLive = SettingsToJson( CurrentRoutedSettings(), /*bIncludeOverlay*/ false );
-                const nlohmann::json jProfile = SettingsToJson( *oProfile, /*bIncludeOverlay*/ false );
-                int nChanged = 0;
-                for ( const char *pszSection : kProfileSections )
-                {
-                    // Canonical text per section: the same serializer built
-                    // both, so equal values dump to equal strings.
-                    if ( DumpJson( jLive[ pszSection ] ) != DumpJson( jProfile[ pszSection ] ) )
-                        nChanged++;
-                }
-                oResult = nChanged;
+                if ( !meta.inherits.empty() )
+                    return Fail( "only a game profile can inherit" );
+                return {};
             }
+            if ( meta.app_id.empty() )
+                return Fail( "a game profile needs an app id" );
+            if ( !meta.inherits.empty() )
+            {
+                if ( meta.inherits == meta.name )
+                    return Fail( "a profile cannot inherit from itself" );
+                std::optional<ProfileMeta> oParent = LoadProfileMeta( meta.inherits );
+                if ( !oParent )
+                    return Fail( "no profile named '" + meta.inherits + "' to inherit from" );
+                if ( oParent->kind != ProfileKind::General )
+                    return Fail( "'" + meta.inherits + "' is a game profile -- only a general profile can be inherited" );
+            }
+            return {};
         }
 
-        // Read the sequence AFTER the work above: LoadProfile() does not
-        // bump it, but recording it first would let a write that raced in
-        // between be cached over.
-        s_ulDirtyCachedSeq = s_ulMutationSeq;
-        s_oDirtyCached = oResult;
-        return oResult;
+        std::vector<ProfileMeta> ChildrenOf( std::string_view svName )
+        {
+            std::vector<ProfileMeta> out;
+            for ( ProfileMeta &m : ListProfiles() )
+                if ( m.kind == ProfileKind::Game && m.inherits == svName )
+                    out.push_back( std::move( m ) );
+            return out;
+        }
+
+        // A pointer change (rename, delete) touches the session too.
+        void AfterPointerChange()
+        {
+            WriteGlobalNow();
+            InvalidateSession();
+            BumpConfigGeneration();
+        }
     }
+
+    ProfileOp CreateProfile( const ProfileMeta &meta, const Settings *pFrom )
+    {
+        EnsureGlobalLoaded();
+        if ( ProfileOp op = ValidateMeta( meta ); !op )
+            return op;
+        if ( ProfileExists( meta.name ) )
+            return Fail( "a profile named '" + meta.name + "' already exists" );
+        const Settings settings = pFrom ? *pFrom : ResolvedSettings();
+        if ( !WriteProfileNow( meta, settings, nullptr ) )
+            return Fail( "could not write '" + meta.name + "'" );
+        BumpConfigGeneration();
+        return {};
+    }
+
+    ProfileOp CopyProfile( std::string_view svSource, const ProfileMeta &meta )
+    {
+        EnsureGlobalLoaded();
+        EnsureMigrated();
+        std::optional<Settings> oSource = ProfileSettingsNow( svSource );
+        if ( !oSource )
+            return Fail( "could not read '" + std::string( svSource ) + "'" );
+        return CreateProfile( meta, &*oSource );
+    }
+
+    ProfileOp EditProfileMeta( std::string_view svOldName, const ProfileMeta &meta )
+    {
+        EnsureGlobalLoaded();
+        std::optional<ProfileMeta> oOld = LoadProfileMeta( svOldName );
+        if ( !oOld || !ContainedProfilePath( svOldName, "EditProfileMeta" ) )
+            return Fail( "no profile named '" + std::string( svOldName ) + "'" );
+        if ( ProfileOp op = ValidateMeta( meta ); !op )
+            return op;
+        const bool bRename = meta.name != svOldName;
+        if ( bRename && ProfileExists( meta.name ) )
+            return Fail( "a profile named '" + meta.name + "' already exists" );
+
+        std::vector<ProfileMeta> children;
+        if ( oOld->kind == ProfileKind::General )
+        {
+            children = ChildrenOf( svOldName );
+            if ( meta.kind == ProfileKind::Game && !children.empty() )
+                return Fail( "'" + std::string( svOldName ) + "' is inherited by " +
+                    std::to_string( children.size() ) + ( children.size() == 1 ? " game profile" : " game profiles" ) +
+                    " -- a game profile cannot be a parent" );
+        }
+
+        // The resolved values survive whatever the metadata does: a new
+        // parent re-diffs them, becoming general bakes them in.
+        std::optional<Settings> oResolved = ProfileSettingsNow( svOldName );
+        if ( !oResolved )
+            return Fail( "could not read '" + std::string( svOldName ) + "'" );
+        if ( bRename )
+            ForgetWritten( svOldName );
+        if ( !WriteProfileNow( meta, *oResolved, nullptr ) )
+            return Fail( "could not write '" + meta.name + "'" );
+
+        if ( bRename )
+        {
+            std::error_code ec;
+            std::filesystem::remove( ProfilePath( svOldName ), ec );
+
+            // Every pointer follows.
+            for ( auto &[ sAppId, g ] : s_Assignments.games )
+                if ( g.selected == svOldName )
+                    g.selected = meta.name;
+            if ( s_Assignments.last_general == svOldName )
+                s_Assignments.last_general = meta.name;
+            if ( s_oSessionOverride && *s_oSessionOverride == svOldName )
+                s_oSessionOverride = meta.name;
+            for ( const ProfileMeta &child : children )
+                PatchProfileFile( child.name, [&]( nlohmann::json &j ) { j[ "inherits" ] = meta.name; } );
+        }
+        AfterPointerChange();
+        return {};
+    }
+
+    ProfileOp DeleteProfile( std::string_view svSanitizedName )
+    {
+        EnsureGlobalLoaded();
+        std::optional<std::filesystem::path> oPath = ContainedProfilePath( svSanitizedName, "DeleteProfile" );
+        if ( !oPath )
+            return Fail( "refusing suspicious profile name" );
+        if ( !ProfileExists( svSanitizedName ) )
+            return {}; // already gone
+
+        // Children get the resolved values baked in and stand alone.
+        for ( const ProfileMeta &child : ChildrenOf( svSanitizedName ) )
+        {
+            std::optional<Settings> oResolved = ProfileSettingsNow( child.name );
+            ProfileMeta baked = child;
+            baked.inherits.clear();
+            if ( oResolved )
+                WriteProfileNow( baked, *oResolved, nullptr );
+        }
+
+        ForgetWritten( svSanitizedName );
+        std::error_code ec;
+        std::filesystem::remove( *oPath, ec );
+        if ( ec && ec != std::errc::no_such_file_or_directory )
+            return Fail( "could not delete '" + std::string( svSanitizedName ) + "': " + ec.message() );
+
+        for ( auto &[ sAppId, g ] : s_Assignments.games )
+            if ( g.selected == svSanitizedName )
+                g.selected.clear();
+        if ( s_Assignments.last_general == svSanitizedName )
+            s_Assignments.last_general.clear();
+        if ( s_oSessionOverride && *s_oSessionOverride == svSanitizedName )
+            s_oSessionOverride.reset();
+        AfterPointerChange();
+        return {};
+    }
+
+    // ---- inheritance markers -----------------------------------------------------
+
+    namespace
+    {
+        uint64_t s_ulOverriddenCachedSeq = 0;
+        std::set<std::string> s_OverriddenCached;
+    }
+
+    const std::set<std::string> &OverriddenKeys()
+    {
+        ResolveSession();
+        if ( s_ulOverriddenCachedSeq == s_ulMutationSeq )
+            return s_OverriddenCached;
+
+        s_OverriddenCached.clear();
+        if ( s_SessionMeta.kind == ProfileKind::Game && !s_SessionMeta.inherits.empty() )
+        {
+            if ( std::optional<nlohmann::json> oFile = CurrentProfileJson( *s_oSessionProfile ) )
+                FlattenKeys( SectionsOf( *oFile ), "", s_OverriddenCached );
+        }
+        // Read AFTER the work: a write that raced in would otherwise be
+        // cached over.
+        s_ulOverriddenCachedSeq = s_ulMutationSeq;
+        return s_OverriddenCached;
+    }
+
+    bool ResetKeyToInherited( std::string_view svDottedKey )
+    {
+        ResolveSession();
+        if ( s_SessionMeta.kind != ProfileKind::Game || s_SessionMeta.inherits.empty() )
+            return false;
+        const std::string sName = *s_oSessionProfile;
+
+        // Start from what is queued if this process wrote it -- the file on
+        // disk may be up to the coalescing window behind.
+        std::optional<nlohmann::json> oJson = CurrentProfileJson( sName );
+        if ( !oJson )
+            return false;
+        nlohmann::json j = std::move( *oJson );
+        if ( !RemoveDottedKey( j, svDottedKey ) )
+            return false;
+        j[ "schema_version" ] = kCurrentSchemaVersion;
+        MetaToJson( j, s_SessionMeta );
+        const std::string sPath = ProfilePath( sName );
+        DiscardQueuedWrite( sPath );
+        const bool bOk = WriteFileAtomic( sPath, DumpJson( j ) );
+
+        // Keep the mirror honest: the resolved settings are the parent's
+        // with what is left merged over.
+        nlohmann::json merged = s_oSessionParentSections ? *s_oSessionParentSections : nlohmann::json::object();
+        DeepMerge( merged, SectionsOf( j ) );
+        RememberProfileWrite( s_SessionMeta, SettingsFromJson( merged ), std::move( j ) );
+        BumpConfigGeneration();
+        return bOk;
+    }
+
+    // ---- the per-game entry -----------------------------------------------------------
+
+    GameAssignment GameEntry( std::string_view svAppId )
+    {
+        EnsureGlobalLoaded();
+        auto it = s_Assignments.games.find( std::string( svAppId ) );
+        return it == s_Assignments.games.end() ? GameAssignment{} : it->second;
+    }
+
+    void SetGameAudioNode( std::string_view svAppId, std::string_view svBinary )
+    {
+        EnsureGlobalLoaded();
+        GameAssignment &g = s_Assignments.games[ std::string( svAppId ) ];
+        if ( g.audio_node == svBinary )
+            return;
+        g.audio_node = std::string( svBinary );
+        EnqueueGlobalFromMirror();
+    }
+
+    // ---- the game's display name ----------------------------------------------------
+
+    void NoteFocusedWindowTitle( std::string_view svTitle )
+    {
+        if ( svTitle.empty() )
+            return;
+        s_sFocusedTitle = std::string( svTitle );
+        if ( s_bGameNameNoted )
+            return;
+        const std::optional<std::string> &oAppId = SessionAppId();
+        if ( !oAppId )
+            return;
+        s_bGameNameNoted = true;
+        // Once per process: fill in any game profile of this app that has
+        // no display name yet. A small read per profile, then a queued
+        // write -- fine for a once-only step on the compositor thread.
+        for ( const ProfileMeta &m : ListProfiles() )
+        {
+            if ( m.kind != ProfileKind::Game || m.app_id != *oAppId || !m.game_name.empty() )
+                continue;
+            std::optional<nlohmann::json> oFile = CurrentProfileJson( m.name );
+            if ( !oFile )
+                continue;
+            ( *oFile )[ "game_name" ] = s_sFocusedTitle;
+            ( *oFile )[ "schema_version" ] = kCurrentSchemaVersion;
+            auto it = s_Written.find( m.name );
+            if ( it != s_Written.end() )
+                it->second.json = *oFile;
+            if ( s_oSessionProfile && *s_oSessionProfile == m.name )
+                s_SessionMeta.game_name = s_sFocusedTitle;
+            ConfigWriter::Instance().Enqueue( ProfilePath( m.name ), DumpJson( *oFile ) );
+        }
+    }
+
+    std::string SessionGameName()
+    {
+        if ( !s_sFocusedTitle.empty() )
+            return s_sFocusedTitle;
+        return SessionAppId().value_or( "" );
+    }
+
+    // ---- tests / debug --------------------------------------------------------------------
 
     void ResetSessionRoutingForTests()
     {
         s_oSessionAppId.reset();
         s_bSessionAppIdResolved = false;
-        s_bSessionOverrideActive = false;
-        s_bSessionOverrideResolved = false;
+        s_oSessionOverride.reset();
+        s_oSessionProfile.reset();
+        s_SessionMeta = ProfileMeta{};
+        s_oSessionParentSections.reset();
+        s_pszSessionSource = "";
         s_ulConfigGeneration = 0;
-        // Phase B mirrors and the dirty cache: same process-wide hazard.
-        s_oLastKnownPerGameId.reset();
-        s_oLastKnownProfileName.reset();
-        s_ulDirtyCachedSeq = 0;
-        s_oDirtyCached.reset();
+        s_bGlobalLoaded = false;
+        s_Written.clear();
+        s_sFocusedTitle.clear();
+        s_bGameNameNoted = false;
+        s_bMigrationChecked = false;
+        s_ulOverriddenCachedSeq = 0;
+        s_OverriddenCached.clear();
         BumpMutation();
-        // CurrentOverlaySettings()'s cache (above) is process-wide, same
-        // hazard every other piece of session-routing state here has:
-        // catch2 runs every [config] TEST_CASE in one shared process, each
-        // against its own fresh TempConfigHome, so a value cached against a
-        // prior test's (already-deleted) temp directory must not leak into
-        // the next one.
-        s_bLastKnownOverlayLoaded = false;
-        // Issue #35: CurrentFullSettings()'s cache (above) is the same
-        // process-wide hazard, for the same reason.
-        s_bLastKnownSettingsLoaded = false;
     }
 
-    std::string DebugDumpEffective( const std::optional<std::string> &oAppId )
+    std::string DebugDumpEffective()
     {
-        bool bPerGame = oAppId.has_value() && LoadPerGameOverride( *oAppId ).has_value();
-        Settings effective = ResolveEffective( oAppId );
-
+        ResolveSession();
         nlohmann::json j = nlohmann::json::object();
-        j[ "resolved_app_id" ] = oAppId.has_value() ? nlohmann::json( *oAppId ) : nlohmann::json( nullptr );
-        j[ "source" ] = bPerGame ? "per-game override" : "global";
-        j[ "settings" ] = SettingsToJson( effective, /*bIncludeOverlay*/ !bPerGame );
-
+        const std::optional<std::string> &oAppId = SessionAppId();
+        j[ "resolved_app_id" ] = oAppId ? nlohmann::json( *oAppId ) : nlohmann::json( nullptr );
+        j[ "session_profile" ] = *s_oSessionProfile;
+        j[ "kind" ] = KindToString( s_SessionMeta.kind );
+        j[ "inherits" ] = s_SessionMeta.inherits.empty() ? nlohmann::json( nullptr ) : nlohmann::json( s_SessionMeta.inherits );
+        j[ "source" ] = s_pszSessionSource;
+        j[ "launch_option" ] = s_oSessionOverride ? nlohmann::json( *s_oSessionOverride ) : nlohmann::json( nullptr );
+        nlohmann::json jSettings = SectionsToJson( ResolvedSettings() );
+        jSettings[ "overlay" ] = OverlayToJson( s_Overlay );
+        j[ "settings" ] = std::move( jSettings );
         return DumpJson( j );
     }
 }

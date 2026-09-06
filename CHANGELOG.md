@@ -9,6 +9,16 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.6.1] – 2026-09-06
+
+### Info
+- **Profiles are being rebuilt**: your settings now live in a profile that saves every
+  change straight away -- "Use this profile", "Restore previous settings", "Save
+  changes", the Auto-save switch and the Per-game area are gone, an old config is
+  moved into a `Default` profile and each game's separate settings into a `[Game]`
+  profile on first launch, and `--profile <name>` now picks a profile for that
+  session only (creating it if missing); the new Profiles list follows.
+
 ## [0.6.0] – 2026-09-05
 
 ### Added

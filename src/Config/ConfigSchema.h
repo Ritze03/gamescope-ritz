@@ -30,7 +30,14 @@ namespace gamescope::config
     // (+1.0, clamped) so a schema-1 file's neutral 0.0 does not get
     // silently reread as full greyscale. See superdoc/features/
     // shader-effects.md's "Vibrancy range" section for the full why.
-    inline constexpr int kCurrentSchemaVersion = 2;
+    //
+    // 2 -> 3 (2026-09-06, Profiles v2): a profile is the file being edited.
+    // global.json keeps only `overlay` and the `profiles` pointers; every
+    // per-layer section lives in profiles/<Name>.json; games/<AppId>.json is
+    // no longer read. ConfigManager.cpp's MigrateV2ToV3() moves an old
+    // global.json's sections into a general profile and each games/ file
+    // into a game profile (see superdoc/features/profiles.md, "Migration").
+    inline constexpr int kCurrentSchemaVersion = 3;
 
     struct GamescopeSettings
     {
@@ -199,8 +206,8 @@ namespace gamescope::config
     // interpolates the game's own frame and smears whatever is drawn in
     // it, above all the in-game crosshair; this one cannot smear.
     //
-    // A normal per-layer section, shared via global.json unless a game has
-    // "Override Global Config" on, exactly like FpsDisplaySettings.
+    // A normal per-layer section, carried by every profile, exactly like
+    // FpsDisplaySettings.
     // Colours are packed 0xRRGGBB ints (the same on-disk shape as
     // color_fps / cursor_inlay_color); every element's alpha is its own
     // separate 0..1 opacity so the RGB colour picker stays a colour picker.
@@ -548,47 +555,18 @@ namespace gamescope::config
 
     // Toast notification system (this fork's own addition, see
     // Overlay/Notifications.h and DECISIONS.md #25). Unlike OverlaySettings
-    // above, this is a normal per-layer field - shared via global.json
-    // unless a game has "Override Global Config" on, exactly like
-    // FpsDisplaySettings::enabled, so a game can mute toasts for itself
-    // without affecting any other game or the global default.
+    // above, this is a normal per-layer field carried by every profile,
+    // exactly like FpsDisplaySettings::enabled, so a game with its own
+    // profile can mute toasts for itself without affecting any other.
     struct NotificationSettings
     {
         bool muted = false;
 
     };
 
-    // M5 addition (see Audio/Volume.h, superdoc/planning/DECISIONS.md #22/#23):
-    // a manual override for which PipeWire stream this game's volume control
-    // targets, set from the Audio panel's picker when automatic detection
-    // (PID-tree walk, then process-name match, then "newest stream since
-    // launch") fails or picks the wrong one.
-    struct AudioSettings
-    {
-        // The stream's application.process.binary (falling back to
-        // application.name if the client never set .binary) - a value
-        // that's stable across relaunches, unlike the wpctl node id, which
-        // is a fresh integer every session. Empty means "no manual
-        // override, use automatic detection." A normal per-layer field
-        // (like NotificationSettings::muted above), but in practice only
-        // ever meaningful per-game - "which stream is this game" has no
-        // sensible global default.
-        //
-        // Distinct from volume/mute themselves (Audio/Volume.h's header
-        // comment): this is a node *selection*, not a volume level -
-        // WirePlumber already owns remembering the volume value itself
-        // (node.stream.restore-props), so gamescope deliberately doesn't
-        // duplicate that, but WirePlumber has no concept of "which stream
-        // did the user mean," so there's nothing else that could remember
-        // this choice.
-        std::string manual_node_binary;
-    };
-
     // The System tab (Overlay/PanelSystem.cpp, area `system.general`;
     // requests-2026-09-05 item 5). A normal per-layer section, like
-    // NotificationSettings above: shared via global.json unless a game has
-    // separate settings on, so one game can e.g. keep its clipboard to
-    // itself without changing the default for every other game.
+    // NotificationSettings above.
     struct SystemSettings
     {
         // Mirrors the runtime flag gamescope::g_bClipboardSyncEnabled
@@ -600,9 +578,19 @@ namespace gamescope::config
         bool clipboard_sync = true;
     };
 
-    // The full settings shape shared by global.json, profiles/<name>.json, and
-    // games/<AppId>.json. `overlay` is only meaningful on the global instance -
-    // see OverlaySettings above.
+    // The per-layer settings shape: what a profile file carries
+    // (profiles/<Name>.json). `overlay` is the one exception -- process-level,
+    // stored in global.json only (see OverlaySettings above); it is carried
+    // here so the resolved struct a panel holds is complete, but no profile
+    // write ever serialises it and no profile read ever fills it.
+    //
+    // Profiles v2 (2026-09-06, superdoc/planning/profiles-concept.md): the
+    // former session fields (last_applied_profile / active_profile /
+    // auto_save_profile) and the per-game `audio` section are gone. A
+    // profile IS the settings being edited, so there is nothing to "apply",
+    // nothing to fan out to, and no provenance to remember; the one per-game
+    // fact that is not a setting (which PipeWire stream is this game) moved
+    // to GameAssignment::audio_node below.
     struct Settings
     {
         GamescopeSettings gamescope;
@@ -611,58 +599,67 @@ namespace gamescope::config
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;
-        AudioSettings audio;
         SystemSettings system;
+    };
 
-        // Issue #43 (config-UI intuitiveness pass) recommendation #10: a
-        // plain provenance breadcrumb, not a live link -- DECISIONS.md #20's
-        // one-time-copy semantics for profile apply stay exactly as they
-        // are (see ConfigManager.cpp's ApplyProfile(), the sole writer of
-        // this field). Empty means "no profile has ever been applied to
-        // this file" (or it predates this field -- an old config on disk
-        // with no key here just parses to ""). Deliberately top-level, not
-        // nested under any of the structs above: it describes the *file*
-        // (which profile last touched it), not any one settings group, and
-        // unlike `overlay` it IS meaningful on every file this schema is
-        // used for (global/profile/per-game alike), so it is never gated
-        // behind SettingsToJson()'s bIncludeOverlay. Overwritten on every
-        // ApplyProfile() call; left untouched by every other write path (a
-        // slider edit does not un-set "where this game's values last came
-        // from"). Displayed as "last applied profile: X", never "current" --
-        // editing settings afterward does not clear it, same honesty rule
-        // PanelConfig.cpp's status line already follows.
-        std::string last_applied_profile;
+    // ---- Profiles v2: the file-level metadata -------------------------------
 
-        // ---- Profiles Phase B (requests-2026-09-05 item 3) ----------------
-        // GLOBAL-ONLY, like `overlay`: written to global.json only
-        // (SettingsToJson's bIncludeOverlay gate), never into a profile or a
-        // per-game file, and never copied by ApplyProfile(). They describe
-        // the user's *session* -- "which saved profile am I working against,
-        // and do my edits flow back into it" -- not any one file's values,
-        // so a per-game file carrying its own copy would make the answer
-        // depend on which game happened to be running.
-        //
-        // active_profile: the profile the user last chose to work against --
-        // set by "Use this profile", "Start from profile" and "Save as new
-        // profile"; renamed with the profile; cleared when it is deleted.
-        // It KEEPS ITS NAME while the live settings drift away from the
-        // profile (the Status row shows the drift as a section count
-        // instead) -- deciding it silently stops being "active" on the first
-        // edit would make the name vanish exactly when the user is looking
-        // for it. Distinct from last_applied_profile above, which is a
-        // per-FILE provenance breadcrumb and is meaningful on every file.
-        std::string active_profile;
+    // Two kinds, no chains: a GENERAL profile stands alone; a GAME profile is
+    // bound to one app id and may inherit from exactly one general profile.
+    // `Why two levels:` the user's model is "a base setup, tweaked per game";
+    // a game inheriting from another game's profile was never asked for and
+    // would make "where does this value come from" a walk instead of a
+    // glance.
+    enum class ProfileKind
+    {
+        General,
+        Game,
+    };
 
-        // auto_save_profile: when true and active_profile is set, every
-        // routed write (EnqueueRoutedWrite(), the funnel every panel's edits
-        // go through) is also copied OUT into the active profile, so the
-        // profile follows the edits. DECISIONS.md #20 extended: Use copies
-        // in once, auto-save copies back out, the profile is still never a
-        // live *source*. Default OFF -- `Why:` on by default, one profile
-        // Used by several games would change under every other game's
-        // future Use the moment any of them touched a slider (the "spooky
-        // action" the config research argued against); off honours the
-        // user's own "a toggle for auto-saving" as an opt-in.
-        bool auto_save_profile = false;
+    // The top-level keys of a profile file beside the settings sections.
+    struct ProfileMeta
+    {
+        // The file name without ".json"; always exactly what
+        // SanitizeProfileName() returns for itself.
+        std::string name;
+        ProfileKind kind = ProfileKind::General;
+        // Game profiles only: the app id this profile belongs to, and a
+        // display name for it ("[Game] Rust" in the list) captured from the
+        // running game the first time one is seen, so the list can show it
+        // while the game is not running.
+        std::string app_id;
+        std::string game_name;
+        // Game profiles only: the general profile this one inherits from, or
+        // empty for a standalone game profile. An inheriting profile's file
+        // stores only the keys whose value differs from the parent's
+        // (ConfigManager.cpp's SparseDiff); everything else follows the
+        // parent live.
+        std::string inherits;
+    };
+
+    // One game's entry in global.json's `profiles.games` map.
+    struct GameAssignment
+    {
+        // The profile this game last selected in the list; "" means "never
+        // chose" and the game uses `last_general` (ProfileAssignments below).
+        std::string selected;
+        // Was AudioSettings::manual_node_binary (M5, DECISIONS.md #22/#23):
+        // the PipeWire stream's application.process.binary this game's
+        // volume control targets when automatic detection picks wrong.
+        // Empty means automatic. Lives here, not in a profile, because it
+        // names one game's process -- in a profile shared by two games it
+        // would point one game's volume control at the other's process.
+        std::string audio_node;
+    };
+
+    // global.json's `profiles` object: the pointers. Assignments are
+    // pointers, never copies -- switching one changes nothing inside any
+    // profile.
+    struct ProfileAssignments
+    {
+        // The general profile most recently selected anywhere. A game seen
+        // for the first time starts on it.
+        std::string last_general;
+        std::map<std::string, GameAssignment> games;
     };
 }

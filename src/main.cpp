@@ -190,8 +190,8 @@ const char usage[] =
 	"                                     fsr => AMD FidelityFX™ Super Resolution 1.0\n"
 	"                                     nis => NVIDIA Image Scaling v1.0.3\n"
 	"  --sharpness, --fsr-sharpness   upscaler sharpness from 0 (max) to 20 (min)\n"
-	"  --profile <name>               apply a saved gamescope-ritz profile at startup\n"
-	"                                     (env: GS_RITZ_PROFILE; the flag wins if both are set)\n"
+	"  --profile <name>               use this gamescope-ritz profile for this session only\n"
+	"                                     (created if missing; env: GS_RITZ_PROFILE; the flag wins)\n"
 	"  --expose-wayland               support wayland clients using xdg-shell\n"
 	"  -s, --mouse-sensitivity        multiply mouse movement by given decimal number\n"
 	"  --backend                      select rendering backend\n"
@@ -477,15 +477,58 @@ static GamescopeUpscaleScaler ritz_config_parse_scaler(const std::string &sValue
 	return GamescopeUpscaleScaler::AUTO;
 }
 
-// --profile / GS_RITZ_PROFILE (requests-2026-09-05 round2 item 4's interim
-// implementation - see ConfigManager.h's ApplyProfileAtStartup() comment for
-// what it does and does not reproduce from the overlay's "Use this profile").
-// This must run, and the profile it names must be applied, BEFORE
-// apply_ritz_config_to_startup_state() reads the resolved config below -
-// which itself has to run before the getopt loop so an explicit -w/-h/-r
-// still wins (see that function's own comment). A plain getopt_long pass
-// over argv would be too late for either reason, so scan argv by hand here,
-// stopping at "--" so the launched game's own arguments are never
+// The one code path behind --profile, GS_RITZ_PROFILE and the `ritz_profile`
+// console command (so a later hotkey binds to the same thing): select a
+// profile for this session only, creating it if missing, and say so. From
+// the console the toast is the only feedback the user sees; at startup the
+// stderr line is the one that lands in the log.
+static void ritz_use_session_profile( const std::string &sName, bool bFromConsole )
+{
+	const gamescope::config::SessionProfileResult r = gamescope::config::UseSessionProfile( sName );
+	if ( !r.ok )
+	{
+		fprintf( stderr, "gamescope: --profile: '%s' is not a usable profile name (letters, digits, space, - and _ only)\n", sName.c_str() );
+		gamescope::Notifications::Show( "'" + sName + "' is not a usable profile name.", gamescope::Notifications::Kind::Warning );
+		return;
+	}
+	if ( r.created )
+	{
+		fprintf( stderr, "gamescope: --profile: created profile '%s' from '%s'\n", r.name.c_str(), r.copied_from.c_str() );
+		gamescope::Notifications::Show( "Created profile '" + r.name + "' from '" + r.copied_from + "'.", gamescope::Notifications::Kind::Ok );
+	}
+	else if ( bFromConsole )
+	{
+		gamescope::Notifications::Show( "Now editing profile '" + r.name + "' (this session only).", gamescope::Notifications::Kind::Info );
+	}
+	fprintf( stderr, "gamescope: --profile: using profile '%s' for this session\n", r.name.c_str() );
+}
+
+static gamescope::ConCommand cc_ritz_profile( "ritz_profile", "Use a gamescope-ritz profile for this session only (created if missing)",
+[]( std::span<std::string_view> svArgs )
+{
+	if ( svArgs.size() < 2 )
+	{
+		console_log.infof( "usage: ritz_profile <name>  (current: '%s')", gamescope::config::SessionProfile().c_str() );
+		return;
+	}
+	// A name may contain spaces: everything after the command is the name.
+	std::string sName;
+	for ( size_t i = 1; i < svArgs.size(); i++ )
+	{
+		if ( i > 1 )
+			sName += ' ';
+		sName += std::string( svArgs[ i ] );
+	}
+	ritz_use_session_profile( sName, /*bFromConsole*/ true );
+});
+
+// --profile / GS_RITZ_PROFILE (Profiles v2, superdoc/features/profiles.md):
+// selects the profile this session edits, for this session only. It must be
+// known BEFORE apply_ritz_config_to_startup_state() reads the resolved config
+// below - which itself has to run before the getopt loop so an explicit
+// -w/-h/-r still wins (see that function's own comment). A plain getopt_long
+// pass over argv would be too late for either reason, so scan argv by hand
+// here, stopping at "--" so the launched game's own arguments are never
 // misread as gamescope's. "--profile" stays in gamescope_options[] purely so
 // getopt_long doesn't reject it (and --help lists it) when the real loop
 // reaches it again further down, where its case is a deliberate no-op.
@@ -851,27 +894,19 @@ int main(int argc, char **argv)
 	// Force disable this horrible broken layer.
 	setenv("DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1", "1", 1);
 
-	// gamescope-ritz config system (M0): resolve which game (if any) this
-	// session belongs to, and load its effective settings - as early as
-	// architecturally possible, before wlserver/backend/steamcompmgr init, per
-	// superdoc/planning/SPEC.md's Feature 6 and DECISIONS.md #21. This is a
-	// pure env-var read + file load; it does not depend on anything else in
-	// main() having run yet.
-	std::optional<std::string> oRitzAppId = gamescope::config::ResolveAppId();
-	gamescope::config::Settings ritzConfig = gamescope::config::ResolveEffective( oRitzAppId );
-
-	// --profile / GS_RITZ_PROFILE (requests-2026-09-05 round2 item 4): the
-	// flag wins if both are given (ritz_prescan_profile_arg()'s own comment
-	// explains why this can't just be a getopt case). Merges the named
-	// profile into `ritzConfig` in place and persists it exactly as "Use
-	// this profile" would (ConfigManager.h's ApplyProfileAtStartup()) -
-	// before apply_ritz_config_to_startup_state() below reads `ritzConfig`.
-	// An unknown name logs a warning and falls through to the normal,
-	// unmodified settings; this runs early enough that a toast queued here
-	// (a plain in-memory push, see Notifications::Show()) is safely visible
-	// to steamcompmgr's later paint loop without a lock, since it happens-
-	// before that thread is even spawned (this function's own std::thread
-	// steamCompMgrThread(...) call, further down).
+	// gamescope-ritz config system: resolve which game (if any) this session
+	// belongs to and which profile it edits, as early as architecturally
+	// possible, before wlserver/backend/steamcompmgr init (SPEC.md's Feature
+	// 6, DECISIONS.md #21). Pure env-var reads plus file loads; nothing else
+	// in main() needs to have run yet.
+	//
+	// --profile / GS_RITZ_PROFILE: the flag wins if both are given
+	// (ritz_prescan_profile_arg()'s own comment explains why this can't just
+	// be a getopt case). A name that does not exist is created as a general
+	// profile copied from what the session would otherwise have used, with a
+	// toast -- a plain in-memory push (Notifications::Show()) that is safely
+	// visible to steamcompmgr's later paint loop without a lock, since it
+	// happens-before that thread is even spawned.
 	std::optional<std::string> oRitzProfileArg = ritz_prescan_profile_arg( argc, argv );
 	if ( !oRitzProfileArg )
 	{
@@ -880,19 +915,11 @@ int main(int argc, char **argv)
 			oRitzProfileArg = pszEnvProfile;
 	}
 	if ( oRitzProfileArg && !oRitzProfileArg->empty() )
-	{
-		if ( gamescope::config::ApplyProfileAtStartup( ritzConfig, *oRitzProfileArg ) )
-		{
-			fprintf( stderr, "gamescope: --profile: applied profile '%s' at startup\n", oRitzProfileArg->c_str() );
-		}
-		else
-		{
-			fprintf( stderr, "gamescope: --profile: no profile named '%s' found, using normal settings\n", oRitzProfileArg->c_str() );
-			gamescope::Notifications::Show(
-				"No profile named '" + *oRitzProfileArg + "' found -- using normal settings.",
-				gamescope::Notifications::Kind::Warning );
-		}
-	}
+		ritz_use_session_profile( *oRitzProfileArg, /*bFromConsole*/ false );
+
+	gamescope::config::Settings ritzConfig = gamescope::config::ResolvedSettings();
+	fprintf( stderr, "gamescope: profile '%s'%s\n", gamescope::config::SessionProfile().c_str(),
+		gamescope::config::SessionProfileOverride() ? " (this session only)" : "" );
 
 	// A/B flicker test kit (superdoc/planning/flicker-ab-test-plan.md):
 	// GAMESCOPE_RITZ_AB_NO_CONVAR_SEED=1 skips this call so cv_adaptive_sync/
@@ -988,10 +1015,10 @@ int main(int argc, char **argv)
 					// Temporary M0 acceptance hook (SPEC.md's Build order) - no
 					// UI exists yet to show the resolved config. A later
 					// milestone's overlay/gamescopectl command replaces this.
-					fprintf( stderr, "%s\n", gamescope::config::DebugDumpEffective( oRitzAppId ).c_str() );
+					fprintf( stderr, "%s\n", gamescope::config::DebugDumpEffective().c_str() );
 				} else if (strcmp(opt_name, "profile") == 0) {
-					// Already applied by ritz_prescan_profile_arg()/
-					// ApplyProfileAtStartup() above, before this loop even
+					// Already handled by ritz_prescan_profile_arg()/
+					// ritz_use_session_profile() above, before this loop even
 					// started - deliberately a no-op here so getopt_long still
 					// consumes its argument like any other recognized option.
 				} else if (strcmp(opt_name, "debug-layers") == 0) {

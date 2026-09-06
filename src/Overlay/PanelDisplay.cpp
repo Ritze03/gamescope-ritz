@@ -141,7 +141,7 @@ namespace gamescope
 			return;
 
 		const bool bIsReload = s_bConfigLoaded; // false only on this panel's very first draw
-		s_CachedSettings = config::ResolveEffective( config::SessionAppId() );
+		s_CachedSettings = config::ResolvedSettings();
 		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
 

@@ -77,7 +77,7 @@ namespace gamescope::Notifications
 		const uint64_t ulGeneration = config::ConfigGeneration();
 		if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 			return;
-		s_Settings = config::ResolveEffective( config::SessionAppId() );
+		s_Settings = config::ResolvedSettings();
 		s_GlobalOverlay = config::LoadGlobal().overlay;
 		s_ulLoadedGeneration = ulGeneration;
 		s_bConfigLoaded = true;
