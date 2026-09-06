@@ -253,15 +253,62 @@ def arm_run(img, cx, cy, dx, dy, target, tol, max_off):
     return first, last
 
 
+def hole_run(img, cx, cy, dx, dy, target, tol, max_off):
+    """The BIDIRECTIONAL run of non-`target`-coloured pixels through
+    (cx, cy) along (dx, dy) -- 0 if (cx, cy) itself is `target`-coloured
+    (no hole). This is the crosshair gap invariant (2026-09-08,
+    crosshair.md's "Gap"): a gap of N means exactly N pixels missing
+    across the centre, counting the centre pixel once -- not a per-side
+    inset -- and it holds whether the missing pixels are plain background
+    or outline (the outline sits INSIDE part of the hole; it is never the
+    line's own fill colour, so it never moves where this run ends).
+    Returns None if the scan runs off the image or off `max_off` without
+    ever finding `target` on one side (something is wrong upstream)."""
+    def is_fill(off):
+        x, y = cx + dx * off, cy + dy * off
+        if not (0 <= x < img.width and 0 <= y < img.height):
+            return None
+        return chebyshev(img.getpixel((x, y)), target) <= tol
+
+    centre = is_fill(0)
+    if centre is None:
+        return None
+    if centre:
+        return 0
+    lo = hi = None
+    for off in range(-1, -max_off - 1, -1):
+        f = is_fill(off)
+        if f is None:
+            return None
+        if f:
+            lo = off + 1
+            break
+    for off in range(1, max_off + 1):
+        f = is_fill(off)
+        if f is None:
+            return None
+        if f:
+            hi = off - 1
+            break
+    if lo is None or hi is None:
+        return None
+    return hi - lo + 1
+
+
 def gap_len(img, cx, cy, dx, dy, target, tol, max_off):
-    """(gap, length) in pixels along one arm's ray: gap = pixels between the
-    centre pixel and the arm (the centre column/row's own edge is the
-    centre pixel for the 1 px-wide line these checks use, and the centre
-    square joins the arms at gap 0 -- crosshair.md, Geometry)."""
+    """(gap, length) in pixels along one arm's ray: gap is the FULL
+    bidirectional hole through the centre point (hole_run() -- the total
+    run of missing pixels across the centre, counting the centre pixel
+    once, matching Build()'s gapX/gapY exactly; see crosshair.md's "Gap",
+    2026-09-08 -- this used to be a plain one-sided distance, which was
+    only ever equal to the raw config gap by coincidence of the OLD
+    per-side semantics), and length is the run of `target`-coloured pixels
+    found going outward along (dx, dy) (unaffected by the gap
+    redefinition)."""
     first, last = arm_run(img, cx, cy, dx, dy, target, tol, max_off)
-    if first is None:
-        return None, 0
-    return first - 1, last - first + 1
+    length = 0 if first is None else last - first + 1
+    gap = hole_run(img, cx, cy, dx, dy, target, tol, max_off)
+    return gap, length
 
 
 def shrink_model(t_ms, hide_ms, gap_px, len_px):
@@ -422,6 +469,20 @@ def cmd_armscan(a):
     emit(True, a.name, f"gap={g} len={l}")
 
 
+def cmd_hole(a):
+    """Assert the crosshair gap invariant (2026-09-08, crosshair.md's
+    "Gap"): the bidirectional run of non-fill pixels through the centre
+    point along (dx, dy) equals `expect` exactly. Used at (1, 0) and
+    (0, 1) to check the FULL hole on each axis independently of the
+    line's own width, and with the outline on or off (see hole_run's own
+    docstring for why the outline case still holds)."""
+    img = load(a.image)
+    n = hole_run(img, a.cx, a.cy, a.dx, a.dy, (a.r, a.g, a.b), a.tol, a.max_off)
+    ok = n is not None and n == a.expect
+    detail = f"hole={n} expected={a.expect}"
+    emit(ok, a.name, detail)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -491,6 +552,17 @@ def main():
     sp.add_argument("tol", type=int)
     sp.add_argument("name")
     sp.set_defaults(func=cmd_armscan)
+
+    sp = sub.add_parser("hole", help="gap invariant: bidirectional non-fill run through the centre point must equal `expect` exactly")
+    sp.add_argument("image")
+    sp.add_argument("cx", type=int); sp.add_argument("cy", type=int)
+    sp.add_argument("dx", type=int); sp.add_argument("dy", type=int)
+    sp.add_argument("r", type=int); sp.add_argument("g", type=int); sp.add_argument("b", type=int)
+    sp.add_argument("tol", type=int)
+    sp.add_argument("max_off", type=int)
+    sp.add_argument("expect", type=int)
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_hole)
 
     sp = sub.add_parser("shrink_rate", help="Shrink hide: equal edge speed in both phases, and the 50 % state")
     for i in range(1, 6):
