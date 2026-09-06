@@ -12,6 +12,9 @@ The newest version below is the one this build reports.
 ## [0.6.1] – 2026-09-06
 
 ### Added
+- **Crosshair "Animate back"**: letting go of right-click now plays the auto-hide
+  animation backwards from wherever it was instead of popping the crosshair straight
+  back; a new switch under Auto-hide (on by default) turns this off.
 - **Adaptive Brightness modes**: the Shaders row is now Off / Whole image / Dynamic --
   Whole image is the old single-gain behaviour, Dynamic is a per-scene levels + gamma +
   soft-shoulder curve that lifts dark maps, tames bright ones and rolls the highlights off

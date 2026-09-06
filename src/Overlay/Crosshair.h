@@ -97,9 +97,11 @@ namespace gamescope
 
 	// Called from wlserver's pointer-button dispatch, on the wlserver
 	// thread, for a BTN_RIGHT press/release that is being delivered TO THE
-	// GAME (never one the Shell/Launcher captured). Records the press time
-	// in an atomic the render side reads; never touches the event itself.
-	// Release restores the crosshair instantly (no reverse animation).
+	// GAME (never one the Shell/Launcher captured). Records the edge and
+	// its time in an atomic the render side reads; never touches the event
+	// itself. With "Animate back" on (the default) a release plays the
+	// hide animation backwards from wherever it was; off, it restores the
+	// crosshair instantly.
 	void Crosshair_NotifyRightButton( bool bPressed );
 
 	// Declares the `system.crosshair` settings area. A declaration, not a

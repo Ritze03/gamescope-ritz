@@ -2,8 +2,8 @@
 
 A crosshair gamescope draws over the game: four arms, an optional centre
 dot, an optional outline, an optional auto-hide while the right mouse
-button is held, and an optional per-axis stretch to match a stretched
-game. `src/Overlay/Crosshair.{h,cpp}` (config, settings area, right-click
+button is held (animated both ways), and an optional per-axis stretch to
+match a stretched game. `src/Overlay/Crosshair.{h,cpp}` (config, settings area, right-click
 state, the draw), `src/Overlay/CrosshairMath.h` (the geometry and the hide
 animation, pure and unit-tested in `tests/test_crosshair.cpp`), config in
 `config::CrosshairSettings` (`src/Config/ConfigSchema.h`, JSON key
@@ -43,7 +43,8 @@ that element is off ("the dot is off", and so on).
 | | Opacity / Colour | `outline_opacity`, `outline_color` | |
 | Auto-hide | Hide while holding right-click | `hide_on_right_click` | |
 | | Hide mode | `hide_mode` | Choice. **Stored** in config as a stable string key (`"fade"` / `"focus"` / `"shrink"`, `CrosshairSettings::hide_mode`); the **row is int-backed** like every registry Choice, so `overlay_e2_set crosshair.hide_mode N` takes the option index -- `0` fade, `1` focus, `2` shrink -- and a word is parsed as 0 (fade). `Crosshair.cpp`'s `HideModeToInt()`/`HideModeFromInt()` are the two-way map. |
-| | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides at once |
+| | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides (and comes back) at once |
+| | Animate back | `hide_animate_back` | Default **on** (2026-09-06, request #13). Release plays the hide backwards from wherever it was; off restores instantly. See [Auto-hide](#auto-hide-while-holding-right-click). |
 | Scaling | Apply scaling | `apply_scaling` | see [Two rendering paths](#two-rendering-paths) |
 
 Pixel sizes are **ints**, not floats: the whole point of the 1px mode is
@@ -290,9 +291,17 @@ for both a stretched and a letterboxed layer.
 
 ## Auto-hide while holding right-click
 
-`f = clamp((now − pressNs) / hide_time_ms, 0, 1)`; `hide_time_ms ≤ 0`
-means `f = 1` at once (`crosshair::HideProgress`). Multipliers
-(`crosshair::EvaluateHide`), applied before `Build()`:
+The animation is a progress `f`, 0 (shown) … 1 (hidden), driven by an
+**integrator** (`crosshair::HideAnim` / `AdvanceHide()`, 2026-09-06): while
+the button is held `f` climbs at `1 / hide_time_ms` per ms; released, it
+descends at the same rate with **Animate back** on, or snaps to 0 with it
+off. `hide_time_ms ≤ 0` means at once, both ways. The button edges carry
+their timestamps (one atomic word: bit 0 = held, the rest the edge's ns),
+so the first frame after a press covers exactly `now − press` — the same
+value the old `HideProgress()` (still there, still tested) gave — and a
+release seen a frame late is accounted from its own instant. Multipliers
+(`crosshair::EvaluateHide`), applied before `Build()`, with `p` the phase
+split below:
 
 | Mode | first phase | second phase |
 | --- | --- | --- |
@@ -321,17 +330,30 @@ phase is a fade, there is no edge speed to match. Measured
 4000 ms): gap rate **5.00 px/s**, arm rate **5.00 px/s**; at 50 % the gap
 is 0 and the arms are 10 of 12 px, on the model.
 
-**Release restores instantly** — there is deliberately no reverse
-animation. *Why:* the moment the player comes off the sights they want the
-crosshair back to re-acquire; an ease-in there is the one place a delay is
-actually felt.
+**Animate back** (`hide_animate_back`, default **on**, 2026-09-06, request
+#13: *"an option for the auto-hide animations to reverse again, so it
+doesn't just instantly pop in again"*). On release the same animation
+plays backwards **from wherever it was**, at the same rate — a release at
+50 % plays the first half of the hide in reverse; a press during that
+reveal resumes the hide from the reveal's current progress; there is never
+a jump in either direction. Every mode, since it is the one `f` that runs
+back. *Why on by default:* the user asked for the reversal and there is
+one switch, not a second time slider — the mirrored time read right in the
+captures, so a separate "Show time" was not worth a row. *Why the switch
+exists at all* (the pre-2026-09-06 rationale, now the **off** case): the
+moment the player comes off the sights they may want the crosshair back
+to re-acquire, and an ease-in there is the one place a delay is felt.
+Measured (`crosshair-reverse`, Shrink, 2000 ms, released at 1002 ms,
+captured at 1503 ms): gap **3** of 8, length 12 — `f = 0.25`, exactly the
+model — and fully back (gap 8) at 2603 ms.
 
-**Repaints.** `Crosshair_Draw()` returns "still animating" (`f < 1`), and
-`FpsDisplay_AddLayer()` then calls `force_repaint()` for one more frame —
-per frame, the way the HUD's lag-spike hold does, but at frame rate. Idle
-or fully hidden, it asks for nothing. The press and release themselves
-call `force_repaint()` too, so the animation starts (and the crosshair
-comes back) on an idle game without waiting for it to commit.
+**Repaints.** `Crosshair_Draw()` returns "still animating"
+(`crosshair::HideAnimating()`: `f < 1` while held, `f > 0` while released),
+and `FpsDisplay_AddLayer()` then calls `force_repaint()` for one more
+frame — per frame, the way the HUD's lag-spike hold does, but at frame
+rate. Idle, fully hidden or fully back, it asks for nothing. The press and
+release themselves call `force_repaint()` too, so the animation starts
+(and the reveal begins) on an idle game without waiting for it to commit.
 
 ### The right-click hook and its gating
 
@@ -345,9 +367,11 @@ to the press's destination by the existing tracking set
 (`s_setMouseButtonsForwardedToGame`), a right button pressed in the game
 and released after the Shell opened still restores the crosshair, and a
 click captured by the Shell never starts a hide. The hook runs on the
-wlserver thread and touches one atomic ("held since <ns>", 0 when not
-held; only the first press starts the clock) plus `force_repaint()`; it
-never reads the config cache. The render side reads the atomic.
+wlserver thread and touches one atomic (the latest edge: bit 0 = held,
+the rest its timestamp; only the first press of a hold is recorded) plus
+`force_repaint()`; it never reads the config cache — what a release
+*means* (reverse, or instant) is the render side's decision, which reads
+the atomic and the config together.
 
 ## Verification
 
@@ -381,12 +405,15 @@ the arithmetic):
   the same capture is pixel-exact, identical to
   `build-release/verify-shots/crosshair/03-outline-zoom.png`. The centroid
   must not shift between the two modes.
-- Hide modes still animate with Apply Scaling on (Fade is a tint; Focus
-  and Shrink rebuild the raster per frame).
-- Hide modes at 50 % / 100 % of Time to hide: Fade half-transparent /
-  gone; Focus gap closed at full opacity / gone; Shrink gap closed at full
-  length / gone (dot included).
-- Release: instant, no fade-in.
+- Hide modes still animate with Apply Scaling on (all three rebuild the
+  raster per frame).
+- Hide modes at 100 % of Time to hide: all gone (dot included). Focus at
+  50 %: gap closed at full opacity. Shrink at `gap / (gap + length)` of the
+  time: gap closed at full length; the arms then shorten at the same px/s
+  the gap closed at.
+- Release with Animate back on: the animation runs backwards from where it
+  was, no jump; a press mid-reveal resumes the hide from there. Off:
+  instant, no fade-in.
 - No hide while the Shell is open (the right-click goes to the Shell, not
   the game); a press made in the game and released after opening the Shell
   still restores.

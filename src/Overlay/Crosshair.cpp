@@ -65,9 +65,15 @@ namespace gamescope
 			force_repaint();
 		}
 
-		// "Right button held since <ns>", 0 while not held. Written on the
-		// wlserver thread, read on the steamcompmgr thread.
-		std::atomic<uint64_t> s_ulRightPressNs{ 0 };
+		// The right button's latest edge: bit 0 = held, the rest = the
+		// edge's timestamp in ns with that bit cleared. One word so the
+		// render side always sees a state and the time it began together.
+		// Written on the wlserver thread, read on the steamcompmgr thread.
+		std::atomic<uint64_t> s_ulRightEdge{ 0 };
+
+		// The hide animation's integrator (crosshair::AdvanceHide) --
+		// steamcompmgr thread only.
+		crosshair::HideAnim s_HideAnim;
 
 		LogScope s_CrosshairLog( "crosshair" );
 
@@ -223,21 +229,23 @@ namespace gamescope
 
 	void Crosshair_NotifyRightButton( bool bPressed )
 	{
+		const uint64_t ulNow = get_time_in_nanos() & ~1ull;
 		if ( bPressed )
 		{
 			// Only the FIRST press starts the clock; a repeated press event
 			// for a button already held (some backends re-report) must not
-			// restart a hide that is already under way.
-			uint64_t ulExpected = 0;
-			s_ulRightPressNs.compare_exchange_strong( ulExpected, get_time_in_nanos() );
+			// restart a hide that is already under way. wlserver is the
+			// only writer, so a plain load/store pair is race-free.
+			if ( ( s_ulRightEdge.load( std::memory_order_relaxed ) & 1ull ) == 0 )
+				s_ulRightEdge.store( ulNow | 1ull );
 		}
 		else
 		{
-			// Instant restore on release -- deliberately no reverse
-			// animation. The moment the player comes off the sights they
-			// want the crosshair back to re-acquire; an ease-in there would
-			// be the one place a delay is actually felt.
-			s_ulRightPressNs.store( 0 );
+			// The render side decides what a release means: with "Animate
+			// back" the hide runs backwards from where it is, without it
+			// the crosshair is restored at once (crosshair::AdvanceHide).
+			// Never read the config cache here -- wrong thread.
+			s_ulRightEdge.store( ulNow );
 		}
 		// The press/release itself is a state change with no game frame
 		// attached (an idle menu, a paused game): ask for one so the
@@ -365,14 +373,19 @@ namespace gamescope
 		bool bAnimating = false;
 		if ( c.hide_on_right_click )
 		{
-			const uint64_t ulPress = s_ulRightPressNs.load( std::memory_order_relaxed );
-			if ( ulPress != 0 )
-			{
-				const float f = crosshair::HideProgress( ulPress, ulNowNs, c.hide_time_ms );
-				hs = crosshair::EvaluateHide( crosshair::ParseHideMode( c.hide_mode ), f,
-				                              crosshair::ShrinkSplit( (float)c.line_gap, (float)c.line_length ) );
-				bAnimating = f < 1.0f; // fully hidden is static again: no more forced frames
-			}
+			const uint64_t ulEdge = s_ulRightEdge.load( std::memory_order_relaxed );
+			const bool bHeld = ( ulEdge & 1ull ) != 0;
+			const float f = crosshair::AdvanceHide( s_HideAnim, bHeld, ulEdge & ~1ull, ulNowNs,
+			                                        c.hide_time_ms, c.hide_animate_back );
+			hs = crosshair::EvaluateHide( crosshair::ParseHideMode( c.hide_mode ), f,
+			                              crosshair::ShrinkSplit( (float)c.line_gap, (float)c.line_length ) );
+			// Fully hidden, or fully back, is static again: no more forced
+			// frames until the next edge.
+			bAnimating = crosshair::HideAnimating( s_HideAnim );
+		}
+		else
+		{
+			s_HideAnim = crosshair::HideAnim{};
 		}
 		if ( hs.flAlpha <= 0.0f )
 			return bAnimating;
@@ -646,11 +659,19 @@ namespace gamescope
 		a.Slider( "crosshair.hide_time", "Time to hide", CROSSHAIR_BIND( int, hide_time_ms ) )
 			.Key( "crosshair.hide_time_ms" )
 			.Help( "How long the hide takes from the moment you press, in milliseconds. 0 hides "
-			       "at once. Coming back is always instant." )
+			       "at once. With Animate back on, coming back takes the same time." )
 			.Range( 0.0f, 2000.0f ).Step( 10.0f ).Unit( "ms" )
 			.ZeroMeans( "Instant" )
 			.Default( S{}.hide_time_ms )
 			.Keywords( "hide time duration milliseconds speed" )
+			.DisabledUnless( HideOn, kHideOffReason );
+
+		a.Switch( "crosshair.hide_animate_back", "Animate back", CROSSHAIR_BIND( bool, hide_animate_back ) )
+			.Help( "When you let go, plays the hide animation backwards from wherever it was, at "
+			       "the same speed, instead of the crosshair popping straight back. Off brings it "
+			       "back instantly." )
+			.Default( S{}.hide_animate_back )
+			.Keywords( "hide animate back reverse release restore pop" )
 			.DisabledUnless( HideOn, kHideOffReason );
 
 		// =================================================================

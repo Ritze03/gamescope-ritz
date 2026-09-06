@@ -935,6 +935,7 @@ namespace
         c.hide_mode = "shrink";
         c.hide_time_ms = 450;
         c.hide_animate_back = false;
+        c.hide_animate_back = false;
         c.apply_scaling = true;
         return c;
     }
@@ -959,6 +960,7 @@ namespace
         REQUIRE( a.hide_on_right_click == b.hide_on_right_click );
         REQUIRE( a.hide_mode == b.hide_mode );
         REQUIRE( a.hide_time_ms == b.hide_time_ms );
+        REQUIRE( a.hide_animate_back == b.hide_animate_back );
         REQUIRE( a.hide_animate_back == b.hide_animate_back );
         REQUIRE( a.apply_scaling == b.apply_scaling );
     }

@@ -82,6 +82,82 @@ namespace gamescope::crosshair
 		return (float)std::clamp( flElapsedMs / double( nTimeToHideMs ), 0.0, 1.0 );
 	}
 
+	// The hide animation as an integrator (2026-09-06, "Animate back"): f
+	// runs 0 (shown) .. 1 (hidden), climbing at 1/nTimeToHideMs per ms
+	// while the button is held and, with bAnimateBack, descending at the
+	// same rate once it is released -- from wherever it was, so a release
+	// halfway through a hide plays the second half of the hide backwards
+	// and never jumps. Without bAnimateBack a release snaps f to 0 (the
+	// pre-2026-09-06 behaviour: instant restore).
+	//
+	// Why an integrator and not "progress since the press": the reveal has
+	// to start from the hide's CURRENT progress, and a press during a
+	// reveal has to start from the reveal's, so the state is f itself, not
+	// a timestamp. The button edges still carry their timestamps so the
+	// first frame after a press covers exactly (now - press), as
+	// HideProgress() did -- the render thread may run a frame late.
+	struct HideAnim
+	{
+		float f = 0.0f;        // 0 shown .. 1 hidden
+		bool bHeld = false;    // the button state f was last advanced with
+		uint64_t ulLastNs = 0; // when f was last advanced; 0 = never
+	};
+
+	// bHeld / ulEdgeNs: the button's state and the timestamp of the edge
+	// (press or release) that produced it; ulEdgeNs 0 = no edge yet.
+	// Returns the new f.
+	inline float AdvanceHide( HideAnim &a, bool bHeld, uint64_t ulEdgeNs, uint64_t ulNowNs,
+	                          int nTimeToHideMs, bool bAnimateBack )
+	{
+		auto Step = [&]( bool bTowardsHidden, uint64_t ulFrom, uint64_t ulTo )
+		{
+			if ( ulTo <= ulFrom )
+				return;
+			const float d = (float)( double( ulTo - ulFrom ) / 1e6 / double( nTimeToHideMs ) );
+			if ( bTowardsHidden )
+				a.f = std::min( 1.0f, a.f + d );
+			else
+				a.f = std::max( 0.0f, a.f - d );
+		};
+
+		if ( nTimeToHideMs <= 0 )
+		{
+			// "Hide at once" -- and, since a reveal at the same rate is
+			// instant too, come back at once as well.
+			a.f = bHeld ? 1.0f : 0.0f;
+			a.bHeld = bHeld;
+			a.ulLastNs = ulNowNs;
+			return a.f;
+		}
+		if ( !bHeld && !bAnimateBack )
+		{
+			a.f = 0.0f;
+			a.bHeld = false;
+			a.ulLastNs = ulNowNs;
+			return a.f;
+		}
+
+		if ( a.ulLastNs == 0 )
+			a.ulLastNs = ulEdgeNs != 0 ? ulEdgeNs : ulNowNs;
+		if ( bHeld != a.bHeld )
+		{
+			// The old direction ran up to the edge, the new one from it.
+			const uint64_t ulSwitch = std::clamp( ulEdgeNs, a.ulLastNs, std::max( a.ulLastNs, ulNowNs ) );
+			Step( a.bHeld, a.ulLastNs, ulSwitch );
+			a.bHeld = bHeld;
+			a.ulLastNs = ulSwitch;
+		}
+		Step( a.bHeld, a.ulLastNs, ulNowNs );
+		a.ulLastNs = std::max( a.ulLastNs, ulNowNs );
+		return a.f;
+	}
+
+	// True while f is still moving towards its target (1 held, 0 released).
+	inline bool HideAnimating( const HideAnim &a )
+	{
+		return a.bHeld ? a.f < 1.0f : a.f > 0.0f;
+	}
+
 	// Multipliers applied to the Style before Build(): flAlpha scales every
 	// element's opacity (outline included), flGap the arms' gap, flLength
 	// the arms' length AND the dot's size (Shrink's second half shrinks the

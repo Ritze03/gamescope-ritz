@@ -246,12 +246,16 @@ namespace gamescope::config
         // Auto-hide while the right mouse button is held (aiming down
         // sights). hide_mode: "fade" (opacity only), "focus" (gap closes
         // over the first half of hide_time_ms, then fades over the second
-        // half), "shrink" (gap closes over the first half, then the arms
-        // and the dot shrink to nothing over the second half). Release
-        // restores instantly, no reverse animation -- Overlay/CrosshairMath.h.
+        // half), "shrink" (gap closes, then the arms and the dot shrink to
+        // nothing, the two phases sharing hide_time_ms in proportion to
+        // gap : length so the visible edge moves at one speed).
+        // hide_animate_back: on release the animation runs backwards from
+        // wherever it was (default, 2026-09-06 request #13); off restores
+        // the crosshair instantly -- Overlay/CrosshairMath.h.
         bool hide_on_right_click = false;
         std::string hide_mode = "fade"; // fade | focus | shrink
         int hide_time_ms = 200;
+        bool hide_animate_back = true;
 
         // Off: every size above is in output pixels and the crosshair is
         // drawn square whatever the game's aspect. On: sizes are GAME

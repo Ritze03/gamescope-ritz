@@ -516,3 +516,51 @@ TEST_CASE( "ShrinkSplit gives each Shrink phase time in proportion to the distan
 	REQUIRE( EvaluateHide( HideMode::Focus, 0.5f, 0.1f ).flAlpha == 1.0f );
 }
 
+TEST_CASE( "AdvanceHide climbs from the press like HideProgress, reverses from the current progress on release, and never jumps", "[crosshair]" )
+{
+	constexpr int T = 200; // ms
+	constexpr uint64_t ms = 1'000'000ull;
+	HideAnim a;
+
+	// Press at 1000 ms; the first frame lands at 1100 ms: half way, exactly
+	// what HideProgress() would have said.
+	REQUIRE_THAT( AdvanceHide( a, true, 1000 * ms, 1100 * ms, T, true ), WithinAbs( 0.5f, 1e-5f ) );
+	REQUIRE( HideAnimating( a ) );
+	REQUIRE_THAT( AdvanceHide( a, true, 1000 * ms, 1150 * ms, T, true ), WithinAbs( 0.75f, 1e-5f ) );
+
+	// Release at 1150 ms: the reveal starts from 0.75, at the same rate.
+	REQUIRE_THAT( AdvanceHide( a, false, 1150 * ms, 1200 * ms, T, true ), WithinAbs( 0.5f, 1e-5f ) );
+	REQUIRE( HideAnimating( a ) );
+	REQUIRE_THAT( AdvanceHide( a, false, 1150 * ms, 1250 * ms, T, true ), WithinAbs( 0.25f, 1e-5f ) );
+
+	// Press again at 1250 ms, mid-reveal: the hide resumes from 0.25 (#13:
+	// "reverses from the current state, no jump").
+	REQUIRE_THAT( AdvanceHide( a, true, 1250 * ms, 1300 * ms, T, true ), WithinAbs( 0.5f, 1e-5f ) );
+	REQUIRE_THAT( AdvanceHide( a, true, 1250 * ms, 1400 * ms, T, true ), WithinAbs( 1.0f, 1e-5f ) );
+	REQUIRE_FALSE( HideAnimating( a ) ); // fully hidden: static, no forced frames
+
+	// A release seen one frame late is accounted from its own timestamp:
+	// 0.05 more of hide up to the release, then 0.2 of reveal.
+	HideAnim b;
+	REQUIRE_THAT( AdvanceHide( b, true, 1000 * ms, 1050 * ms, T, true ), WithinAbs( 0.25f, 1e-5f ) );
+	REQUIRE_THAT( AdvanceHide( b, false, 1060 * ms, 1100 * ms, T, true ), WithinAbs( 0.1f, 1e-5f ) );
+	REQUIRE_THAT( AdvanceHide( b, false, 1060 * ms, 1200 * ms, T, true ), WithinAbs( 0.0f, 1e-5f ) );
+	REQUIRE_FALSE( HideAnimating( b ) ); // fully back: static again
+
+	// Animate back OFF: a release restores at once, whatever f was.
+	HideAnim c;
+	REQUIRE_THAT( AdvanceHide( c, true, 1000 * ms, 1150 * ms, T, false ), WithinAbs( 0.75f, 1e-5f ) );
+	REQUIRE( AdvanceHide( c, false, 1150 * ms, 1151 * ms, T, false ) == 0.0f );
+	REQUIRE_FALSE( HideAnimating( c ) );
+
+	// Time to hide 0: at once, both ways.
+	HideAnim d;
+	REQUIRE( AdvanceHide( d, true, 1000 * ms, 1000 * ms + 1, 0, true ) == 1.0f );
+	REQUIRE( AdvanceHide( d, false, 1001 * ms, 1001 * ms + 1, 0, true ) == 0.0f );
+
+	// Not held and never pressed: nothing to do.
+	HideAnim e;
+	REQUIRE( AdvanceHide( e, false, 0, 5000 * ms, T, true ) == 0.0f );
+	REQUIRE_FALSE( HideAnimating( e ) );
+}
+
