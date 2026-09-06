@@ -134,7 +134,19 @@ not compile without the new routing, and the migration is entangled with the loa
   `--ritz-dump-config` shows the session profile and its parent.
 Headless end-to-end green (25 checks, `build-release/verify-shots/profiles-v2/`),
 `meson test` 75/75, `pixel-regression.sh` green on a schema-3 seed.
-Still open: the Profiles list UI (concept section 3 / 9) and its laptop check.
+
+The visible layer -- the widgets `9c9af8a` (ListBox, Modal), the area `77afe9a`
+(`features/profiles.md`, "The Profiles area"): the list leading the sheet, Create /
+Copy / Edit / Delete as modals with inline validation, the Inherits dropdown, the
+"Filter game profiles" switch, one Status row; every area's header badge is the
+session profile; overridden rows carry a dot and the Inspector offers *Reset to
+inherited*. Headless captures in `build-release/verify-shots/profiles-v2-ui/`
+(the area at rest, each modal, an inline error, Inherits, filter off, the Inspector
+before and after a reset, the Crosshair badge, a click-select, `--profile`),
+`meson test` 75/75, `pixel-regression.sh` green.
+**UI landed, laptop check pending**: select, create (typed name), copy, edit (refusal
+wording), delete (bake), filter, launch option visible -- the headless harness cannot
+type into a field, so the Create-with-a-name path is unit-tested only.
 
 ## [x] 5. Brainstorm of further filters and features
 
