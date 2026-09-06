@@ -7,7 +7,9 @@
 //
 //   1. THE PREFIX LAW      a Param's id is synthesised as "<parent>.<leaf>",
 //                          so it cannot name an unrelated setting.
-//   2. THE SIX BUDGET      a row owns at most 6 Params; a 7th aborts.
+//   2. THE SIX BUDGET      a row owns at most 7 Params (raised from 6,
+//                          2026-09-06 -- see Registry.cpp's kParamBudget
+//                          comment); the next one past that aborts.
 //   3. ID UNIQUENESS       every Entry and every Param id is unique registry-wide.
 //   4. HELP IS REQUIRED    .Help() must be called with non-empty text.
 //
@@ -56,6 +58,15 @@ namespace gamescope::ui
 	};
 
 	const char *LawName( Law eLaw );
+
+	// The Six Budget's own ceiling (Registry.cpp's kParamBudget, raised
+	// 6 -> 7 2026-09-06 -- see that constant's own comment). Exposed so a
+	// user-visible string (Shell.cpp's Inspector "PARAMETERS n of N"
+	// header) reads the live number instead of a second, hand-copied
+	// literal that can silently disagree with it again -- exactly what
+	// happened here: the header still said "of 6" after the budget moved
+	// to 7 (requests-2026-09-07.md item 12).
+	size_t ParamBudget();
 
 	struct Violation
 	{

@@ -258,28 +258,90 @@ a cliff. Passed as float bits (`u_rcasCon`), like `RcasPushData_t::u_c1`.
 
 ### Adaptive Brightness (`image.shaders.adaptive_brightness`)
 
-**One row, two modes** (request #16, 2026-09-06). The row is a three-way **Choice** —
-`Off` | `Whole image` | `Dynamic` — in its own **Adaptive Brightness** band below the
-Effects band, with the same six params behind it: `strength`, `target`, `up_speed`,
-`down_speed`, `min_gain`, `max_gain`. **Config**: `ReshadeAdaptiveBrightnessSettings` —
-`enabled` (bool, kept) plus `mode` (`"whole_image"` | `"dynamic"`, default
-`whole_image`, an unknown value on disk resolves to it) and the six floats, defaults
-1.0 / 0.5 / 1.0 s / 1.0 s / 0.5 / 2.0. `Off` leaves `mode` alone, so switching back
-lands on the mode the user had. The panel's `.Default()`s read that struct
-(`config::ReshadeAdaptiveBrightnessSettings{}.field`, the `PanelCursor.cpp` pattern)
-instead of repeating literals. `Why:` the two had drifted (panel said 1.5 s / 2.5 s / 0.8 /
-1.6), so "reset to default" landed on values no fresh install ever had.
+**A plain switch, with Mode as a Param** (request #17, 2026-09-07,
+`requests-2026-09-07.md` item 7: *"the adaptive brightness mode selector should be
+inside of the inspector rail. In the main view, it should still only be a switch."*
+This supersedes the previous day's three-way-Choice shape — see the history note
+below). The sheet row is back to a plain **Switch**, on/off, in the shared **Effects**
+`GroupCount` band alongside Vibrancy, Pre-Sharpen and Shadow Control (the pre-request-16
+shape, restored). The mode lives in the Inspector's **Configure** page as the row's own
+first `Param` — a two-way Choice, `Whole image` | `Dynamic` — ahead of the same six
+existing params: `strength`, `target`, `up_speed`, `down_speed`, `min_gain`, `max_gain`.
+**Config**: `ReshadeAdaptiveBrightnessSettings` — `enabled` (bool) and `mode`
+(`"whole_image"` | `"dynamic"`, default `whole_image`, an unknown value on disk resolves
+to it) are independent fields, written independently: the Switch's setter only ever
+touches `enabled`, the Mode param's setter only ever touches `mode`, so switching the
+effect off and back on leaves the mode exactly where the user left it. The panel's
+`.Default()`s still read `ReshadeAdaptiveBrightnessSettings{}` (the `PanelCursor.cpp`
+pattern) rather than repeating literals.
 
-`Why a three-way Choice and not a Mode param:` the Six Budget (`PanelShaders.cpp`'s
-header comment, SPEC §5.2 clause 3) — the row already owned six params, and a seventh is
-a registration abort whose remedy is a whole new rail area for one effect. On/off and
-mode are one decision ("which adaptation, if any"), so they became one control. The id
-`image.shaders.adaptive_brightness` and every config key are unchanged;
-`overlay_e2_set "image.shaders.adaptive_brightness 1"` means what the old switch's "on"
-meant (Whole image is the original behaviour). `Why its own band:` the Effects band's
-`n / m` corner count is computed from **Switch** rows only (`Shell.cpp`'s
-`DrawGroupBand`), so a Choice row among the switches would make "3 / 3" sit under four
-visible rows. The rail Summary still says "N of 4 effects on".
+#### The budget decision: seven params, not six (2026-09-06/07)
+
+Putting the mode back where a knob belongs (the Inspector's params column) made it a
+genuine **seventh** `Param` on a row that already had six — a real registration abort
+(SPEC §5.2 clause 3, `Registry.cpp`'s `kParamBudget`), not a styling choice. Two ways out
+were weighed, honestly, against the existing six:
+
+- **Merge or relocate one of the six.** No candidate survived scrutiny. `strength` and
+  `target` are the effect's core dial and target and apply to both modes; `min_gain` and
+  `max_gain` are independently meaningful bounds (a floor and a ceiling are not one
+  number); `up_speed`/`down_speed` were the closest candidate — one "Adaptation speed"
+  in place of two — but they are a **deliberate, documented asymmetry** ("Adapt to
+  brighter" vs "Adapt to darker", retitled 2026-09-06 specifically because the old
+  labels described the wrong direction — see [above](#the-statistics-both-modes)), not
+  two names for one idea. Collapsing them would be a real capability loss (no more
+  "react fast to a sudden bright flash, ease into darkness"), not a tidy-up. No merge
+  was honest.
+- **Raise the shared budget.** `Registry.cpp`'s `kParamBudget` went `6 → 7`, with its
+  own comment carrying the same reasoning. This is a **one-time, evidenced exception**,
+  not a standing invitation — the law's name and enum (`Law::SixBudget`) are unchanged,
+  and the next param added anywhere is still a signal to promote, not to raise the
+  number again.
+
+Verified by capture before committing to it, not just argued: at 2560×1440 (2x-ish
+shell width) the Inspector's Configure page renders all 7 rows —  Mode, Strength,
+Target brightness, Adapt to brighter, Adapt to darker, Min gain, Max gain — with well
+over half the panel's height still empty below them
+(`build-release/verify-shots/requests-07-item2-7/03-shaders-ab-selected-whole.png`). No
+crowding at this width; a narrow drawer at high UI scale (D13.4's 2.0x case,
+`tests/test_overlay_shell.cpp`) still needs to scroll, exactly as it already did at six.
+
+**Follow-up fixed 2026-09-07 (requests-2026-09-07.md item 12):** `Shell.cpp`'s Inspector
+header used to hardcode the denominator — `snprintf(..., "PARAMETERS   %d of 6", ...)`
+— so a capture of this very row showed the header reading **"PARAMETERS 7 of 6"**,
+literally wrong once the ceiling moved to 7. `Registry.h`/`.cpp` gained `ParamBudget()`
+(reads `kParamBudget` outside its former anonymous namespace) and `Shell.cpp` now builds
+the header via `controls::ParametersHeaderText( nCount, nBudget )` (`Controls.h`/`.cpp`,
+pure formatting, pinned in `test_overlay_ui.cpp`) instead of a second hand-copied
+literal — the header and the registry constant cannot silently disagree again.
+Verified: selecting this row now reads **"PARAMETERS 7 of 7"**
+(`build-release/verify-shots/accent-header-2026-09-07/02-adaptive-brightness-inspector.png`).
+
+`Why the declaration order matters elsewhere too:` groups in a sheet area are packed
+into columns by a greedy shortest-column algorithm over declaration order, not by an
+explicit column API (`Registry.h`; see `crosshair.md`'s note on the same mechanism) —
+unrelated to the budget, but the same "the shell has no per-group/per-param placement
+API, only ordering" shape shows up twice this cycle.
+
+The id `image.shaders.adaptive_brightness` and every config key from the Choice-row era
+are unchanged; `overlay_e2_set image.shaders.adaptive_brightness 1` still means "on",
+and the mode is now set the same way any Param is —
+`overlay_e2_set image.shaders.adaptive_brightness.mode 1` for Dynamic (`Registry::FindParam()`
+resolves a Param id exactly like an Entry id).
+
+<details>
+<summary>History: the three-way Choice (2026-09-06, superseded the next day)</summary>
+
+Request #16 first asked only for a mode, and the row briefly became a three-way
+**Choice** — `Off` | `Whole image` | `Dynamic` — in its own **Adaptive Brightness** band
+below Effects, to stay under the six-param budget without a seventh param: on/off and
+mode were treated as one decision ("which adaptation, if any"). It needed its own band
+because the Effects band's `n / m` count is computed from **Switch** rows only
+(`Shell.cpp`'s `DrawGroupBand`), and a Choice row among the switches would have made the
+count read one short. Request #17 the next day asked for the opposite layout, which is
+what the rest of this section describes.
+
+</details>
 
 #### The statistics (both modes)
 
@@ -544,10 +606,13 @@ After the per-pixel dispatch slot 1 is unbound, so the FSR/NIS/blit dispatches t
 
 ## The settings-panel budget
 
-Each row may own at most six `Param`s before `Registry.cpp` aborts registration —
-see `PanelShaders.cpp`'s "THE SIX BUDGET" comment. Counts: Vibrancy 2, Pre-Sharpen 1,
-Adaptive Brightness 6 (zero headroom — which is why its mode is the row's own three-way
-value rather than a seventh param, see its section), Shadow Control 1.
+Each row may own at most **seven** `Param`s before `Registry.cpp` aborts registration —
+raised from six 2026-09-06 (request #17, see the
+[Adaptive Brightness budget decision](#the-budget-decision-seven-params-not-six-2026-0607)
+for the evidence and the why). See `PanelShaders.cpp`'s "THE SIX BUDGET" comment and
+`Registry.cpp`'s `kParamBudget`. Counts: Vibrancy 2, Pre-Sharpen 1, Adaptive Brightness 7
+(zero headroom, again — the next param added here is the signal to promote it to its own
+category, not to raise the number a second time), Shadow Control 1.
 
 ## Diagnostics
 
@@ -566,5 +631,7 @@ diagnosed.
 - `superdoc/planning/DECISIONS.md` #12 (two sharpen controls), #15 (SDR-only), #27 (the
   native port; #13/#14 superseded).
 - `superdoc/planning/requests-2026-09-04.md` items #2 and #3 — Vibrancy's range and
-  Shadow Control; `requests-2026-09-06.md` item #16 — Adaptive Brightness's modes.
+  Shadow Control; `requests-2026-09-06.md` item #16 — Adaptive Brightness's modes;
+  `requests-2026-09-07.md` item 7 — the mode moved into the Inspector and the Six
+  Budget raised to 7.
 - `scripts/effects-regression.sh` — the headless measurement gate for both modes.

@@ -356,6 +356,19 @@ namespace gamescope::ui
 		// here instead of appearing unexplained, untested, at the call site.
 		bool ShouldSelectRow( bool bClicked, bool bValueChanged );
 
+		// requests-2026-09-07 item 12: the Inspector's CONFIGURE header
+		// ("PARAMETERS n of N") hardcoded the denominator as a literal "6"
+		// in Shell.cpp, so it kept reading "of 6" after Registry.cpp's
+		// kParamBudget was raised to 7 (2026-09-06) -- a row at the new
+		// ceiling read "PARAMETERS 7 of 6". Pure text formatting, kept
+		// free of ImGui (same reason ConstantWidthGrab()/ShouldSelectRow()
+		// above are) so it can be pinned against ui::ParamBudget()
+		// directly rather than only read by eye in a capture. The caller
+		// passes both numbers rather than this function reaching for
+		// ParamBudget() itself, so a test can also exercise a budget other
+		// than the live one without touching Registry state.
+		std::string ParametersHeaderText( size_t nCount, size_t nBudget );
+
 		// ---- SPEC §3.5 -- exact or unbounded ------------------------------
 		// B's borderless "- +". Carries no number; the number is in the value
 		// column, which the row draws.
@@ -631,11 +644,38 @@ namespace gamescope::ui
 		bool Rail( const ImRect &rcRail, const char *pszId, float *pflValue,
 		           float flMin, float flMax, RailColorFn fnColorAt, void *pUser = nullptr );
 
-		// ---- SPEC §4.4 -- Accent hue: hue rail + 8 swatches ---------------
-		// The swatches are the eight 45-degree stops. They are PRESETS on the
-		// same one value the rail sets, not a second setting -- which is why
-		// they share *pflHue and return through the same bool.
+		// ---- SPEC §4.4 -- Accent hue: hue rail + 9 swatches ---------------
+		// The swatches are the nine 45-degree stops (0..360 inclusive,
+		// requests-2026-09-07 item 11: a 9th swatch was added at the
+		// rightmost, "basically the same as the leftmost", so the row's
+		// swatch centres line up with the rail it drives). They are
+		// PRESETS on the same one value the rail sets, not a second
+		// setting -- which is why they share *pflHue and return through
+		// the same bool.
 		bool HueBody( const ImRect &rcBody, const char *pszId, float *pflHue );
+
+		// requests-2026-09-07 item 11: "This will make the slider align
+		// with the presets properly." Before this, HueBody() tiled N
+		// EQUAL-WIDTH BLOCKS edge to edge across rcBody -- every block's
+		// own CENTRE sat half a cell width IN from the true edge, which is
+		// the actual misalignment the user was pointing at (adding a 9th
+		// block to that same math would not have fixed it). This instead
+		// spaces N swatch CENTRES evenly across the full width -- centre(i)
+		// = flBodyMinX + i * (width / (nSwatches-1)) -- so centre(0) lands
+		// exactly on flBodyMinX and centre(nSwatches-1) exactly on
+		// flBodyMaxX: the same two points PlaceFull()'s rail already spans
+		// ("the track IS the range"). Every swatch, including the two
+		// outer ones, is the same width and drawn symmetrically around its
+		// own centre; the outer two consequently extend a little past
+		// rcBody's own edges, the same way a slider's handle can slightly
+		// overhang its track's endpoints.
+		//
+		// Pure geometry, kept free of ImGui and returned with a zero Y
+		// range (the caller supplies the actual top/bottom) for the same
+		// reason ConstantWidthGrab() above is: test_overlay_ui.cpp pins it
+		// directly.
+		ImRect HueSwatchRect( float flBodyMinX, float flBodyMaxX,
+		                     int nIndex, int nSwatches, float flGapPx );
 
 		// ---- SPEC §4.4 -- Colour override: R/G/B rails + swatch -----------
 		// Plain sRGB, each component 0-255 -- the familiar convention for a

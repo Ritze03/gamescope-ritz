@@ -23,9 +23,23 @@ namespace gamescope::ui
 		Entry     &SinkEntry();
 		Parameter &SinkParam();
 
-		// The Six Budget, SPEC §5.2 clause 3.
-		constexpr size_t kParamBudget = 6;
+		// The Six Budget, SPEC §5.2 clause 3 -- raised 6 -> 7, 2026-09-06
+		// (requests-2026-09-07.md item 7 / superdoc/features/shader-effects.md's
+		// "Adaptive Brightness"). Adaptive Brightness's mode moved from the
+		// row's own Choice back into a Param so it lives in the Inspector's
+		// params column like every other knob, and its six existing params
+		// (strength, target, up_speed, down_speed, min_gain, max_gain) are
+		// each independently meaningful with no honest merge -- up_speed and
+		// down_speed in particular are a deliberate, documented asymmetry
+		// (see shader-effects.md), not padding. Raising the shared constant
+		// by one was judged the smaller cost than losing a real capability to
+		// stay under the old ceiling; the law's name and enum (`SixBudget`)
+		// are unchanged; the raised number is the historical exception, not
+		// a precedent for more headroom without the same scrutiny.
+		constexpr size_t kParamBudget = 7;
 	}
+
+	size_t ParamBudget() { return kParamBudget; }
 
 	const char *LawName( Law eLaw )
 	{
@@ -551,7 +565,8 @@ namespace gamescope::ui
 		if ( m_Params.size() >= kParamBudget )
 		{
 			ReportViolation( Law::SixBudget, m_sId,
-				"'" + m_sId + "' has 7 parameters. A row may own at most 6. Promote '"
+				"'" + m_sId + "' has " + std::to_string( kParamBudget + 1 ) + " parameters. A row may "
+				"own at most " + std::to_string( kParamBudget ) + ". Promote '"
 				+ m_sId + "' to a category (SPEC.md 5.2 clause 3)." );
 			return SinkParam();
 		}

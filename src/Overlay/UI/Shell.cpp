@@ -3949,16 +3949,20 @@ namespace gamescope::ui::shell
 			DrawEntryRow( entry, lane, rcIn.x0, y, bFocusOwnRow, /* bAffordance */ false );
 			y += Px( tok::kRowH ) * (float)LinesFor( entry );
 
-			// index.html's `parameters  <n> of 6` header. The denominator is
-			// the Six Budget itself, so the header is also the place the
-			// budget is visible to a user rather than only to a test.
+			// index.html's `parameters  <n> of N` header. The denominator is
+			// the Six Budget itself (ui::ParamBudget(), Registry.cpp's
+			// kParamBudget) -- read live rather than a hand-copied literal,
+			// which is exactly what silently went stale (requests-2026-09-07
+			// item 12: this string still said "of 6" after the budget was
+			// raised to 7) -- so the header is also the place the budget is
+			// visible to a user rather than only to a test.
 			if ( entry.ParamCount() )
 			{
 				y += Px( tok::kM );
-				char szHead[ 48 ];
-				snprintf( szHead, sizeof( szHead ), "PARAMETERS   %d of 6", (int)entry.ParamCount() );
+				const std::string sHead =
+					controls::ParametersHeaderText( entry.ParamCount(), ParamBudget() );
 				Label( { rcIn.x0, y, rcIn.x1, y + Px( 14.0f ) }, TypeRole::Section,
-				       Col( Role::TextMeta ), szHead );
+				       Col( Role::TextMeta ), sHead.c_str() );
 				y += Px( shelltok::kSectionLine );
 			}
 

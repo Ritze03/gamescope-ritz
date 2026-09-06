@@ -790,6 +790,19 @@ namespace gamescope::ui
 			return bClicked || bValueChanged;
 		}
 
+		// See Controls.h's own comment on ParametersHeaderText() for why
+		// this exists: the caller (Shell.cpp) had hand-copied the Six
+		// Budget's ceiling as a literal "6" into this string, which
+		// silently disagreed with Registry.cpp's kParamBudget once that
+		// was raised to 7.
+		std::string ParametersHeaderText( size_t nCount, size_t nBudget )
+		{
+			char szHead[ 48 ];
+			snprintf( szHead, sizeof( szHead ), "PARAMETERS   %d of %d",
+			         (int)nCount, (int)nBudget );
+			return szHead;
+		}
+
 		namespace
 		{
 			// THE ONE PLACE A SLIDER GRAB IS SIZED.
@@ -1702,13 +1715,27 @@ namespace gamescope::ui
 			}
 		}
 
+		// See Controls.h's own comment on HueSwatchRect() for the bug (block
+		// centres sat half a cell in from the true edge) and the fix
+		// (centres spaced evenly across the full width, including the two
+		// endpoints); this is just the arithmetic, kept free of ImGui so
+		// test_overlay_ui.cpp's ImGui-free binary can pin it directly.
+		ImRect HueSwatchRect( float flBodyMinX, float flBodyMaxX,
+		                     int nIndex, int nSwatches, float flGapPx )
+		{
+			const float flSpacing = ( flBodyMaxX - flBodyMinX ) / (float)( nSwatches - 1 );
+			const float flCellW   = std::max( flSpacing - flGapPx, 1.0f );
+			const float flCenterX = flBodyMinX + (float)nIndex * flSpacing;
+			return ImRect( flCenterX - flCellW * 0.5f, 0.0f, flCenterX + flCellW * 0.5f, 0.0f );
+		}
+
 		bool HueBody( const ImRect &rcBody, const char *pszId, float *pflHue )
 		{
 			ImGui::PushID( pszId );
 			bool bChanged = false;
 
 			// Two stacked rows inside the band's own body rect: the rail on
-			// top, the eight preset swatches beneath it. Both are sized from
+			// top, the nine preset swatches beneath it. Both are sized from
 			// rcBody alone -- see Controls.h on why a body never measures
 			// itself.
 			const float flGap     = Px( tok::kS );
@@ -1720,20 +1747,22 @@ namespace gamescope::ui
 			                     rcBody.Max.x, rcBody.Min.y + flRailH );
 			bChanged |= Rail( rcRail, "hue", pflHue, 0.0f, 360.0f, HueStop );
 
-			// Eight 45-degree presets. They set the SAME value the rail does
-			// -- a swatch is a shortcut, never a second setting, which is
-			// what keeps this one row of the sheet rather than nine.
-			constexpr int kSwatches = 8;
+			// Nine 45-degree presets (requests-2026-09-07 item 11): the
+			// hue step is 360 / (kSwatches-1) so the last swatch lands
+			// exactly on 360 -- "basically the same as the leftmost"
+			// hue-0 swatch, by construction rather than by coincidence.
+			// They set the SAME value the rail does -- a swatch is a
+			// shortcut, never a second setting, which is what keeps this
+			// one row of the sheet rather than nine.
+			constexpr int kSwatches = 9;
 			const float flCellGap = Px( tok::kGapSeg );
-			const float flCellW   = ( rcBody.GetWidth() - flCellGap * (float)( kSwatches - 1 ) ) / (float)kSwatches;
 			const float flTop     = rcBody.Max.y - flSwatchH;
 
 			for ( int i = 0; i < kSwatches; ++i )
 			{
-				const float flHue = ( 360.0f * (float)i ) / (float)kSwatches;
-				const ImRect rcCell( rcBody.Min.x + (float)i * ( flCellW + flCellGap ), flTop,
-				                     rcBody.Min.x + (float)i * ( flCellW + flCellGap ) + flCellW,
-				                     rcBody.Max.y );
+				const float flHue = ( 360.0f * (float)i ) / (float)( kSwatches - 1 );
+				const ImRect rcX = HueSwatchRect( rcBody.Min.x, rcBody.Max.x, i, kSwatches, flCellGap );
+				const ImRect rcCell( rcX.Min.x, flTop, rcX.Max.x, rcBody.Max.y );
 
 				char szId[ 8 ];
 				snprintf( szId, sizeof( szId ), "s%d", i );
@@ -1746,7 +1775,7 @@ namespace gamescope::ui
 				float flDelta = fabsf( *pflHue - flHue );
 				if ( flDelta > 180.0f )
 					flDelta = 360.0f - flDelta;
-				const bool bOn = flDelta < ( 360.0f / (float)kSwatches ) * 0.5f;
+				const bool bOn = flDelta < ( 360.0f / (float)( kSwatches - 1 ) ) * 0.5f;
 
 				Dl()->AddRectFilled( rcCell.Min, rcCell.Max,
 					palette::OklchToImU32( kAccentL, kAccentC, flHue ), Px( 2.0f ) );

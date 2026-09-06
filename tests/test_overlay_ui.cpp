@@ -2093,6 +2093,79 @@ TEST_CASE( "slider: the same constant applies at every display_scale", "[overlay
 }
 
 // =========================================================================
+//  HueBody's nine swatches -- requests-2026-09-07.md item 11
+// =========================================================================
+// "Add one more preset button for the right most color ... This will make
+// the slider align with the presets properly." The old math tiled N
+// equal-width blocks edge to edge, which put every block's own CENTRE half
+// a cell width IN from the true edge -- the actual misalignment. The fix
+// spaces N swatch CENTRES evenly across the full width instead, so the
+// first and last land exactly on the rail's own endpoints (the same two
+// points PlaceFull()'s rail already spans). HueSwatchRect() is the pure
+// half of that fix, pinned here the same way ConstantWidthGrab() above is.
+TEST_CASE( "hue swatches: nine centres evenly span the full width", "[overlay_ui]" )
+{
+	constexpr int kSwatches = 9;
+	const float flMinX = 100.0f;
+	const float flMaxX = 460.0f;   // 360px wide -> 45px between centres
+	const float flGap  = 4.0f;
+
+	// The first and last swatch centres land exactly on the body's own
+	// edges -- the property the user actually asked for ("align with the
+	// presets properly"), and the one a screenshot measurement pins to
+	// within 1-2px.
+	const ImRect rcFirst = ui::controls::HueSwatchRect( flMinX, flMaxX, 0, kSwatches, flGap );
+	const ImRect rcLast  = ui::controls::HueSwatchRect( flMinX, flMaxX, kSwatches - 1, kSwatches, flGap );
+	REQUIRE_THAT( rcFirst.GetCenter().x, WithinAbs( flMinX, 1e-3f ) );
+	REQUIRE_THAT( rcLast.GetCenter().x,  WithinAbs( flMaxX, 1e-3f ) );
+
+	// Every swatch, including the outer two, is the same width -- drawn
+	// symmetrically around its own centre, not clipped to half a block.
+	for ( int i = 0; i < kSwatches; ++i )
+	{
+		const ImRect rc = ui::controls::HueSwatchRect( flMinX, flMaxX, i, kSwatches, flGap );
+		REQUIRE_THAT( rc.GetWidth(), WithinAbs( rcFirst.GetWidth(), 1e-3f ) );
+	}
+
+	// Interior centres are evenly spaced at (width / (kSwatches-1)).
+	const float flSpacing = ( flMaxX - flMinX ) / (float)( kSwatches - 1 );
+	for ( int i = 1; i < kSwatches - 1; ++i )
+	{
+		const ImRect rc = ui::controls::HueSwatchRect( flMinX, flMaxX, i, kSwatches, flGap );
+		REQUIRE_THAT( rc.GetCenter().x, WithinAbs( flMinX + (float)i * flSpacing, 1e-3f ) );
+	}
+}
+
+TEST_CASE( "hue swatches: a pathologically small gap never inverts a cell", "[overlay_ui]" )
+{
+	// A gap wider than the spacing between centres would otherwise make
+	// flCellW negative -- clamped to a 1px floor instead of a Min > Max
+	// rect no caller could draw.
+	const ImRect rc = ui::controls::HueSwatchRect( 0.0f, 8.0f, 4, 9, /* flGapPx */ 100.0f );
+	REQUIRE( rc.GetWidth() >= 1.0f );
+	REQUIRE( rc.Min.x <= rc.Max.x );
+}
+
+// =========================================================================
+//  Inspector "PARAMETERS n of N" header -- requests-2026-09-07.md item 12
+// =========================================================================
+// Shell.cpp hardcoded the Six Budget's ceiling as a literal "6" in this
+// string, so it kept reading "of 6" after Registry.cpp's kParamBudget was
+// raised to 7 (2026-09-06): a row at the new ceiling read "PARAMETERS 7 of
+// 6". ParametersHeaderText() is the pure formatting half of the fix; this
+// pins it against ui::ParamBudget() directly so the two can never disagree
+// again without a test noticing.
+TEST_CASE( "parameters header: reads the live budget, not a hardcoded 6",
+           "[overlay_ui]" )
+{
+	REQUIRE( ui::ParamBudget() == 7 );
+	REQUIRE( ui::controls::ParametersHeaderText( 7, ui::ParamBudget() ) ==
+	         "PARAMETERS   7 of 7" );
+	REQUIRE( ui::controls::ParametersHeaderText( 3, ui::ParamBudget() ) ==
+	         "PARAMETERS   3 of 7" );
+}
+
+// =========================================================================
 //  Selection follows edit -- requests-2026-09-07.md item 8/A
 // =========================================================================
 // The user: "editing any element should automatically select it, so it also

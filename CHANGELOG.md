@@ -98,6 +98,11 @@ The newest version below is the one this build reports.
   spinner's number in the main settings list to type a value could open the typing
   cursor in the side panel's copy of that row instead of where you clicked; typing now
   always happens where you clicked.
+- **Accent colour has a ninth preset, and they line up with the slider**: a preset
+  button was added for the rightmost colour, and every preset now sits centred under
+  the slider rather than a half-step off, so the row and the presets finally align.
+- **Inspector header no longer disagrees with itself**: a row with seven parameters
+  (Adaptive Brightness) read "PARAMETERS 7 of 6"; it now reads "PARAMETERS 7 of 7".
 
 ### Removed
 - **Window sizing rows**: Display > Resolution no longer asks your desktop to resize the
