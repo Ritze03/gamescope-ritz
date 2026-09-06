@@ -329,6 +329,52 @@ namespace gamescope::crosshair
 		{
 			return (int)std::lround( std::max( 0.0f, fl ) );
 		}
+
+		// Splits a gap into the two arms' own insets from the crossing's
+		// far edges (2026-09-08, "count the centre pixel once"). `nHole` is
+		// the TOTAL run of missing pixels the gap should produce along this
+		// axis -- not a per-side inset -- and `nCross` is the crossing's own
+		// width/height on this axis (tV or tH): `nHole` already includes
+		// whatever of the crossing the arms don't cover, so what each arm
+		// moves by is (nHole - nCross) split in half, not nHole itself.
+		// `nHole == nCross` (the common case, gap >= width) reproduces the
+		// old "inset from the column edge" shape exactly (nLow = nHigh =
+		// (nHole - nCross)/2); `nHole < nCross` (a gap narrower than the
+		// line) makes an arm's own fill overlap into the crossing, eating
+		// into it from its own side.
+		//
+		// `nHole == 0` is deliberately its OWN case, not just "nCross falls
+		// out of the formula above": for an ODD nCross that general formula
+		// would absorb the crossing's one unsplittable middle pixel into
+		// whichever arm the even-gap bias favours, making that arm's own
+		// visible length one pixel SHORTER than its opposite (an asymmetric
+		// plus for a symmetric gap of 0, which the "arm length still counts
+		// outward from the hole's edge" rule this change must not touch
+		// forbids). So nHole 0 always returns (0, 0) -- both arms sit
+		// exactly at the crossing's own edges, matching every other gap
+		// rule unchanged -- and Build()'s pre-existing explicit crossing
+		// square (added whenever either axis' gap is exactly 0) is what
+		// fills the now-untouched crossing, exactly as it always has.
+		//
+		// The odd remainder in the nHole >= 1 branch goes to nHigh -- the
+		// even-gap bias (crosshair.md's "Gap", 2026-09-08): right for the X
+		// axis, bottom for the Y axis, chosen because those are the
+		// increasing-coordinate sides in screen space, so one rule ("the
+		// higher coordinate gets the extra pixel") covers both axes without
+		// a special case.
+		inline void HoleSplit( int nHole, int nCross, int &nLow, int &nHigh )
+		{
+			if ( nHole <= 0 )
+			{
+				nLow = nHigh = 0;
+				return;
+			}
+			const int nDiff = nHole - nCross;
+			// floor(nDiff / 2), rounding towards -infinity so a negative
+			// nDiff (a gap narrower than the line) still biases correctly.
+			nLow = ( nDiff >= 0 ) ? nDiff / 2 : -( ( -nDiff + 1 ) / 2 );
+			nHigh = nDiff - nLow;
+		}
 	}
 
 	// The union of `add` minus the union of `sub`, as non-overlapping rects
@@ -406,7 +452,8 @@ namespace gamescope::crosshair
 	// Builds the whole crosshair for one frame. Every output rect is in
 	// whole output pixels; the arms are symmetric about the snapped centre
 	// (see detail::SnapCenter), so a 1px-wide arm is exactly one pixel wide
-	// and a 1px gap is exactly one pixel on each side of the centre.
+	// and a gap of N is exactly N pixels missing across the centre in total
+	// (2026-09-08; see detail::HoleSplit), not N per side.
 	inline Shape Build( const Style &st, const Frame &fr, const HideState &hs )
 	{
 		Shape shape;
@@ -423,6 +470,11 @@ namespace gamescope::crosshair
 			const int tV = std::max( 1, detail::SnapSize( st.flWidth * sx ) );
 			const int lenX = detail::SnapSize( st.flLength * hs.flLength * sx );
 			const int lenY = detail::SnapSize( st.flLength * hs.flLength * sy );
+			// gapX/gapY are now the TOTAL run of missing pixels across the
+			// centre on that axis (2026-09-08), not a per-side inset -- see
+			// detail::HoleSplit and crosshair.md's "Gap". gap 0 still means
+			// no hole at all; gap 1 means exactly one pixel missing (the
+			// centre pixel itself, at width 1); gap N means N.
 			const int gapX = detail::SnapSize( st.flGap * hs.flGap * sx );
 			const int gapY = detail::SnapSize( st.flGap * hs.flGap * sy );
 
@@ -437,31 +489,35 @@ namespace gamescope::crosshair
 			const int colX0 = (int)std::lround( cx - tV / 2.0 );
 			if ( lenX >= 1 )
 			{
-				// Right arm starts at the centre column's right edge + gap;
-				// left arm ends at its left edge - gap. With an odd tV the
-				// column is the single pixel at floor(cx); with an even one
-				// the column's edge is cx itself -- either way the two arms
-				// are mirror images about the snapped centre.
-				const int rightX0 = (int)std::lround( cx + tV / 2.0 ) + gapX;
-				const int leftX1 = colX0 - gapX;
+				// gapX is the TOTAL hole width; HoleSplit divides off the
+				// column's own width first, then splits what remains (right
+				// gets the odd pixel) -- so at gapX == tV the arms sit right
+				// at the column's edges (the pre-2026-09-08 gap 0 shape),
+				// and at gapX == 0 the two arms' near edges coincide and
+				// together tile the column with no separate fill needed.
+				int nLeftGap, nRightGap;
+				detail::HoleSplit( gapX, tV, nLeftGap, nRightGap );
+				const int rightX0 = (int)std::lround( cx + tV / 2.0 ) + nRightGap;
+				const int leftX1 = colX0 - nLeftGap;
 				arms.push_back( { rightX0, rowY0, rightX0 + lenX, rowY0 + tH } );
 				arms.push_back( { leftX1 - lenX, rowY0, leftX1, rowY0 + tH } );
 			}
 			if ( lenY >= 1 )
 			{
-				const int downY0 = (int)std::lround( cy + tH / 2.0 ) + gapY;
-				const int upY1 = rowY0 - gapY;
+				int nUpGap, nDownGap;
+				detail::HoleSplit( gapY, tH, nUpGap, nDownGap );
+				const int downY0 = (int)std::lround( cy + tH / 2.0 ) + nDownGap;
+				const int upY1 = rowY0 - nUpGap;
 				arms.push_back( { colX0, downY0, colX0 + tV, downY0 + lenY } );
 				arms.push_back( { colX0, upY1 - lenY, colX0 + tV, upY1 } );
 			}
 
-			// The gap is measured from the centre column/row's own edge, so
-			// at gap 0 the arms TOUCH the centre square (tV x tH) without
-			// covering it. A bar that has closed its gap should read as one
-			// continuous line, not two arms with a pixel missing between
-			// them -- Focus and Shrink drive the gap to exactly 0 -- so the
-			// centre square joins the arms as soon as either axis' gap hits
-			// zero. Decompose() below absorbs the overlap.
+			// HoleSplit returns (0, 0) for a gap of exactly 0 (see its own
+			// comment on why it does not try to self-tile that case), so
+			// both arms on an axis whose gap is 0 sit exactly at the
+			// crossing's own edges -- unchanged from before this file's
+			// 2026-09-08 change -- and this square is what joins them into
+			// one continuous line, exactly as it always has.
 			if ( ( lenX >= 1 && gapX == 0 ) || ( lenY >= 1 && gapY == 0 ) )
 				arms.push_back( { colX0, rowY0, colX0 + tV, rowY0 + tH } );
 		}
