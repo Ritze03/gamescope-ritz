@@ -156,6 +156,17 @@ force-grab toggle and the X-side limit for windows larger than the new root:
 and "Locked pointer => never an absolute event". Regression gate:
 `scripts/pointer-regression.sh`.
 
+### A game that keeps its window (2026-09-08)
+
+A Wine game answers the force-resize above by putting its window back to its own size and
+dropping `_NET_WM_STATE_FULLSCREEN` (measured with `tests/pointer_probe_win32.c`; it is how
+Wine decides "fullscreen", so it is what every Proton game does). Since 2026-09-08 a focused
+game window heading for a size **larger than the new screen** is resized to the root anyway
+-- the X server confines the pointer to the root, so the part beyond it could be seen but
+never pointed at, which was the Rust report. A window smaller than the new screen is left
+alone. Details and the measurements: [cursor-pipeline.md](cursor-pipeline.md), "A window
+larger than the screen".
+
 ## Honest limits (the help text says these too)
 
 Not achievable at runtime in nested mode, and not promised anywhere in the UI or here:

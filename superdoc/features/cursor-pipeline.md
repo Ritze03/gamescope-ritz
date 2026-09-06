@@ -1212,3 +1212,98 @@ the menu `motions` and `relatives` advance together; in the match only `relative
 `motions_locked` stays 0. `relatives` not advancing while the mouse moves in the match means the
 host is not delivering relative motion (the nested backend's lock was not confirmed by Hyprland);
 `motions_locked` advancing means an absolute emitter this document does not know about.
+
+## A window larger than the screen -- fixed 2026-09-08 (Rust: "changing the resolution breaks the mouse positioning")
+
+Report, verbatim: *"Changing the Resolution breaks the mouse positioning in Rust."* CS2 had passed
+a mid-match change the same day, so this was game- or state-specific. Rust is a Unity game
+under Proton: the client gamescope's Xwayland talks to is **Wine**, not SDL.
+
+### Reproduced -- with Wine, headless
+
+`tests/pointer_probe_win32.c` is a Win32 program built with the mingw cross compiler and run
+with the system `wine` (11.16) inside gamescope's own Xwayland, in the private sway of
+`scripts/pointer-regression.sh`: a screen-sized popup (which Wine marks
+`_NET_WM_STATE_FULLSCREEN` and clips the cursor to), Unity's Locked mode on request
+(`ShowCursor(FALSE)` + `ClipCursor(window)` + `SetCursorPos(centre)` every frame, `WM_INPUT`
+raw deltas), and a line per `WM_MOUSEMOVE` in client and screen coordinates. Alongside it,
+`xdotool`/`xprop` polled the X root, the window's geometry and its `_NET_WM_STATE` five times a
+second, and temporary logging in `DetermineAndApplyFocus()` recorded every resize decision.
+Runs: `build-release/verify-shots/pointer-regression/explore-20260906-21*-wine-*`.
+
+The sequence, output 1280x720, nested mode changed by `steamcompmgr_debug_set_nested_mode`:
+
+| step | X root | Wine window (X) | gamescope | what the game got for a sample at (0.95, 0.95) |
+| --- | --- | --- | --- | --- |
+| start | 1280x720 | 1280x720, FULLSCREEN | mapping 1.0 | -- |
+| mode 1280x1024 | 1280x1024 | gamescope resizes it to 1280x1024; **Wine puts it back to 1280x720**, drops `_NET_WM_STATE_FULLSCREEN`, sets fixed size hints | `isFullscreen=0 hints=1 req=1280x720` -> the size-hints branch keeps 1280x720 | consistent (window smaller than the root) |
+| mode 960x540 | 960x540 | stays 1280x720, larger than the screen | mapping 1.0 (the window fills the output) -> cursor (1216, 684) | **(959, 539)** -- the root corner |
+
+The last row is the bug. gamescope composites the whole 1280x720 buffer over the whole output
+and maps the host pointer onto all of it, but the X server confines the sprite to the 960x540
+root: the right and bottom quarter of the picture can be seen and never pointed at, and every
+host position in that band lands on the root edge instead. From the user's chair: the cursor
+they see (the host's) and the click the game gets disagree over a quarter of the screen. Wine
+additionally confines its own cursor to the new 960x540 virtual screen.
+
+The same happens to a native client left with a plain window carrying size hints (the SDL3
+client after `--fullscreen`, which recreates its window that way), so the rule below is not
+Wine-specific; Wine is just what every Proton game is.
+
+*Why Wine does that:* it decides "fullscreen" by comparing the Win32 window rect with the
+monitor. The RandR change makes the monitor 1280x1024 while the game's window is still
+1280x720, so the window is no longer fullscreen to Wine, and a non-fullscreen Win32 window of
+fixed size gets `WM_NORMAL_HINTS` and its own size re-asserted through a ConfigureRequest,
+which gamescope (the WM) honours. The game itself never hears of it: no `WM_DISPLAYCHANGE`,
+no `WM_SIZE` (measured -- `GetSystemMetrics` did change). This is Wine's window-state
+machinery, not Proton's, so it is what Rust runs on.
+
+### The fix
+
+`DetermineAndApplyFocus()` (`steamcompmgr.cpp`, the `win_has_game_id()` branch) now gives a
+focused game window that is **heading for a size larger than the screen** the same treatment
+as a fullscreen one: resize to the root. "Heading for" is its size hints when it has them,
+its geometry otherwise -- a window just shrunk to the root still asks for its old size through
+`WM_NORMAL_HINTS`, and judging the geometry alone sent it into the size-hints branch, which
+grew it back, at frame rate (the first cut of the fix; measured as `SIZE 1280x720 <-> 960x540`
+flapping and `resyncs=70` in six seconds). Wine accepts the second resize (it did every pass
+under `--force-windows-fullscreen`, which is the same resize applied unconditionally), and the
+window converges: the X window is 960x540, the Win32 window still believes 1280x720, the game
+draws its top-left 960x540 into it, and that is exactly the region the pointer can reach.
+
+A window **smaller** than the root is left alone: it is fully reachable, and forcing it up
+would hand a Wine game an X window bigger than the surface it draws (the upsize direction,
+1280x720 -> 1280x1024, stays as it was: Wine's window stays 1280x720, non-fullscreen, drawn
+by the scaler, pointer consistent).
+
+*What this does not do:* make the game render at the new mode. A game that keeps its window
+is cropped to the new screen, honestly -- as any X desktop would show it -- with a working
+pointer; a game that follows the display change (a borderless "fullscreen window" that
+resizes on `WM_DISPLAYCHANGE`, or Proton's emulated exclusive modes re-fitting the window)
+adopts the new mode and never hits this rule. Which of the two Rust is could not be measured
+here: no Proton, no Rust. `--force-windows-fullscreen` (the Quick toggles switch of the same
+day) resizes every game window to the root regardless of size and ends in the same state.
+
+### Also measured, and left as is
+
+- **A Wine menu that has not been moved yet is a LOCK to Xwayland.** Wine clips the cursor to
+  a fullscreen window from the moment it is foreground; the X cursor is only defined once
+  Wine handles a `WM_SETCURSOR`, i.e. after the first mouse move. Confining grab + no cursor is
+  Xwayland's lock rule, so `wlserver_pointer_stats` says `constraint=locked` before anything
+  has moved, and the 2026-09-06 gate refuses absolute samples until the first relative one
+  (which the host delivers, since gamescope holds the host lock) lets Wine set its cursor.
+  Then `confined`, then `none`. One movement; self-healing; the same after a game unlocks
+  (Unity's `CursorLockMode.None`): three absolute samples were refused, one relative nudge
+  and the next absolute sample landed where mapped. `wine-lock-mode` pins that order.
+- **Relative motion across a mode change while locked is untouched**: 10 x `dx=5` before and
+  after, `motions_locked=0`.
+
+### Gate
+
+`scripts/pointer-regression.sh`: `oversized-window` (SDL3, no Wine needed -- the resize
+happens once, no flapping over 2 s, mapping 0.75, the sample reaches the client at 912,513 and
+that equals gamescope's own cursor), `wine-mode` (the Wine menu, same assertions) and
+`wine-lock-mode` (locked across the change, then the unlock order above). The wine checks
+need `x86_64-w64-mingw32-gcc` at build time and `wine` at run time and SKIP otherwise; a
+private `WINEPREFIX` is booted per run. 32 -> 50 checks, all passing on the desktop.
+

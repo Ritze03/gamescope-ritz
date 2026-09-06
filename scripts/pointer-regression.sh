@@ -46,6 +46,23 @@
 #   real host path with force-grab off and on. See cursor-pipeline.md, "The
 #   device SDL3 remembers".
 #
+#   2026-09-08, Rust: "Changing the Resolution breaks the mouse positioning."
+#   Rust is a Unity game under Proton, so the client is Wine. Measured with
+#   tests/pointer_probe_win32.c under the system wine: a runtime nested-mode
+#   change resizes the Xwayland root, gamescope resizes the fullscreen game
+#   window to it, and Wine puts the window straight back to its own size and
+#   drops _NET_WM_STATE_FULLSCREEN. When the new mode is SMALLER than that
+#   window, X confines the pointer to the root while gamescope keeps mapping
+#   the whole output onto the whole window: a host sample at 95% of the
+#   output reached the game at the clamped root corner (959,539 instead of
+#   the 912,513 gamescope had mapped). The fix keeps a focused game window
+#   within the screen -- a window heading for a size larger than the root
+#   is resized to the root, as a fullscreen one is -- and Wine accepts that
+#   second resize. The oversized-window and wine-* checks below pin it,
+#   plus "no flapping": the first version of the rule judged the window's
+#   geometry, and the size-hints branch grew it back every frame. See
+#   cursor-pipeline.md, "A window larger than the screen".
+#
 # HOW IT RUNS WITHOUT TOUCHING THE USER'S DESKTOP
 #   Same recipe as pixel-regression.sh (read that script's header for the
 #   full reasoning): a private, invisible sway (WLR_BACKENDS=headless, its own
@@ -69,6 +86,16 @@
 #   every raw event with its device (RAW dev= src=) and the master's axis
 #   mode as SDL3 saw it (DEVICE ... axis0=rel|abs). Needs SDL3 at build time;
 #   the x11-* checks are SKIPped without it.
+#
+#   build-release/tests/pointer_probe_win32.exe (tests/pointer_probe_win32.c):
+#   the Rust-shaped one -- a Win32 program run with the system wine inside
+#   gamescope's Xwayland: a screen-sized popup (Wine marks it fullscreen and
+#   clips the cursor to it), Unity's Locked mode with --lock-after S
+#   (hidden cursor + ClipCursor + SetCursorPos every frame, WM_INPUT raw
+#   deltas) and --unlock-after S to leave it. Prints MOTION (client and
+#   screen coordinates), RAW dx/dy, LOCKED/UNLOCKED. Needs the mingw cross
+#   compiler at build time and wine at run time; the wine-* checks are
+#   SKIPped without them. A private WINEPREFIX is created per run.
 #
 #   build-release/tests/virtual_pointer_tool (tests/virtual_pointer_tool.c):
 #   a zwlr_virtual_pointer_v1 client that plugs a host mouse into the
@@ -111,8 +138,24 @@
 #                     sends relative motion -> 10 x xrel=5; force-grab on ->
 #                     5 more x xrel=5
 #
+#   oversized-window  the SDL3 client as a 1280x720 window with size hints,
+#                     then nested mode 960x540 (smaller than the window):
+#                     the window is brought to 960x540 exactly once (no
+#                     flapping over 2 s), and a host sample at (0.95, 0.95)
+#                     reaches the client at the position gamescope mapped,
+#                     912,513 -- not the root-clamped 959,539
+#   wine-mode         the Wine probe as a menu (screen-sized, cursor shown):
+#                     the same mode change -> the window converges to the
+#                     root (mapping 0.75), the sample reaches the game at
+#                     the mapped 912,513
+#   wine-lock-mode    the Wine probe locked (Unity's Locked): 10 relative
+#                     injections before and after the mode change arrive as
+#                     RAW dx=5, motions_locked 0; then it unlocks, the first
+#                     relative nudge lets Wine define a cursor and Xwayland
+#                     drop the lock, and an absolute sample lands at 912,513
+#
 # USAGE
-#   scripts/pointer-regression.sh                     # every check (~30s)
+#   scripts/pointer-regression.sh                     # every check (~90s)
 #   scripts/pointer-regression.sh --only locked-absolute
 #   scripts/pointer-regression.sh --only x11-host
 #   scripts/pointer-regression.sh --keep              # leave the last instance up
@@ -139,6 +182,7 @@ GAMESCOPECTL_BIN="$REPO_ROOT/build-release/src/gamescopectl"
 CLIENT_BIN="$REPO_ROOT/build-release/tests/pointer_lock_client"
 CLIENT_X11_BIN="$REPO_ROOT/build-release/tests/pointer_grab_client_x11"
 VP_TOOL_BIN="$REPO_ROOT/build-release/tests/virtual_pointer_tool"
+PROBE_WIN32_EXE="$REPO_ROOT/build-release/tests/pointer_probe_win32.exe"
 
 # ---------------------------------------------------------------------------
 # Named constants
@@ -161,6 +205,16 @@ SCALER_STRETCH=4             # GamescopeUpscaleScaler::STRETCH
 # 1280x720 -> 1.5).
 MODE_A="1280 1024 0"
 MODE_B="1280 720 0"
+# A mode SMALLER than a 1280x720 window (oversized-window, wine-*): the
+# window must be brought within it, and a sample at OVERSIZED_ABS maps to
+# (0.95*1280, 0.95*720) * (960/1280) = (912, 513) once it is. Before the
+# fix the client got X's root-clamped (959, 539).
+MODE_SMALL="960 540 0"
+OVERSIZED_ABS="0.95 0.95"
+OVERSIZED_EXPECT="912,513"
+WINE_LOCK_AFTER_S=3          # the Wine probe stays a menu this long, then locks
+WINE_UNLOCK_AFTER_S=14       # ...and leaves the lock this long after start
+UNLOCK_TIMEOUT_S=20          # how long wine-lock-mode waits for that unlock
 # The absolute sample the unlocked check re-syncs from. Off-centre on
 # purpose: the output centre maps to the window centre under every scaler,
 # so a re-sync from it would move nothing and be (correctly) skipped.
@@ -216,6 +270,12 @@ log() { echo "[pointer-regression] $*" >&2; }
 teardown_instance() {
 	if [[ -n "$GS_PID" ]] && kill -0 "$GS_PID" 2>/dev/null; then
 		kill "$GS_PID" 2>/dev/null || true
+		# Give gamescope its orderly teardown, then sweep the process group it
+		# leads (setsid in start_instance): a wine client does not always
+		# leave with its X server, and the wait below would hang on it.
+		local waited=0
+		while (( waited < 30 )) && kill -0 "$GS_PID" 2>/dev/null; do sleep 0.1; waited=$((waited + 1)); done
+		kill -9 -- -"$GS_PID" 2>/dev/null || true
 		wait "$GS_PID" 2>/dev/null || true
 	fi
 	GS_PID=""
@@ -273,6 +333,9 @@ X11_CLIENT_AVAILABLE=1
 [[ -x "$CLIENT_X11_BIN" ]] || { X11_CLIENT_AVAILABLE=0; log "note: $CLIENT_X11_BIN not built (needs SDL3) -- x11-* checks will be SKIPped"; }
 VP_TOOL_AVAILABLE=1
 [[ -x "$VP_TOOL_BIN" ]] || { VP_TOOL_AVAILABLE=0; log "note: $VP_TOOL_BIN not built -- x11-host will be SKIPped"; }
+WINE_AVAILABLE=1
+[[ -f "$PROBE_WIN32_EXE" ]] || { WINE_AVAILABLE=0; log "note: $PROBE_WIN32_EXE not built (needs x86_64-w64-mingw32-gcc) -- wine-* checks will be SKIPped"; }
+command -v wine >/dev/null 2>&1 || { WINE_AVAILABLE=0; log "note: wine not found -- wine-* checks will be SKIPped"; }
 
 # ---------------------------------------------------------------------------
 # Private sway host
@@ -331,6 +394,30 @@ start_vp() {
 # vp <command line> -- one line to the tool (abs x y w h | move dx dy | ...).
 vp() { echo "$*" >&8; }
 
+# A private Wine prefix for the wine-* checks, made once per run with no
+# display attached (wineboot needs none), so the first probe start inside
+# gamescope is not also the prefix's first boot. mscoree/mshtml disabled:
+# no Mono/Gecko prompts in a headless run.
+WINEPREFIX_DIR=""
+start_wine_prefix() {
+	[[ "$WINE_AVAILABLE" -eq 1 ]] || return 0
+	WINEPREFIX_DIR="$CONFIGHOME/wineprefix"
+	log "creating a private wine prefix at $WINEPREFIX_DIR"
+	if ! env -u DISPLAY -u WAYLAND_DISPLAY WINEPREFIX="$WINEPREFIX_DIR" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all \
+		wineboot -i > "$RUNDIR/wineboot.log" 2>&1; then
+		log "note: wineboot failed -- wine-* checks will be SKIPped"; cat "$RUNDIR/wineboot.log" >&2
+		WINE_AVAILABLE=0
+		return 0
+	fi
+	# The boot's wineserver (and its display-less explorer.exe) lingers a few
+	# seconds; a probe started into it gets no desktop and CreateWindowEx
+	# fails. Stop it and wait for it to be gone.
+	WINEPREFIX="$WINEPREFIX_DIR" wineserver -k 2>/dev/null || true
+	WINEPREFIX="$WINEPREFIX_DIR" wineserver -w 2>/dev/null || true
+}
+# Environment the wine probe's command line carries, as one string.
+wine_env() { echo "WINEPREFIX='$WINEPREFIX_DIR' WINEDLLOVERRIDES='mscoree,mshtml=' WINEDEBUG=-all"; }
+
 # ---------------------------------------------------------------------------
 # One gamescope instance with one client (locked or not). Windowed client,
 # no --force-windows-fullscreen: a 640x480 window in a 1280x720 output is
@@ -342,18 +429,23 @@ CLIENT_LOG=""
 GS_WL_NAME=""
 
 start_instance() {
-	local lockarg="$1"          # "--lock", "--lock-after N" or ""
+	local lockarg="$1"          # "--lock", "--lock-after N" or "" (any client args, really)
 	local client="${2:-$CLIENT_BIN}"
 	local tag="${3:-${lockarg#--}}"
+	local launcher="${4:-}"     # "wine" for the Win32 probe, empty for a native client
 	teardown_instance
 
 	GS_LOG="$RUNDIR/gamescope-${tag}.log"
 	CLIENT_LOG="$RUNDIR/client-${tag}.log"
 	: > "$CLIENT_LOG"
-	log "starting gamescope instance, client $(basename "$client") ${lockarg:-unlocked}"
+	local env_prefix="SDL_VIDEODRIVER=x11"
+	[[ "$launcher" == wine ]] && env_prefix="$(wine_env)"
+	log "starting gamescope instance, client ${launcher:+$launcher }$(basename "$client") ${lockarg:-unlocked}"
+	# setsid: the client's own children (wine's server and its X connections)
+	# must die with the instance, so the whole tree is one process group.
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
-		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$client' $lockarg --seconds 600 > '$CLIENT_LOG' 2>&1" \
+		setsid "$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" -- \
+		sh -c "$env_prefix exec $launcher '$client' $lockarg --seconds 600 >> '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -415,6 +507,35 @@ stat() {
 }
 
 client_motions() { grep -c '^MOTION' "$CLIENT_LOG" 2>/dev/null || true; }
+# The Wine probe's raw-input packets carrying exactly dx=<n> dy=0.
+client_raw_dx() { grep -c "^RAW dx=$1 dy=0 " "$CLIENT_LOG" 2>/dev/null || true; }
+# The last MOTION line's position as "x,y" (integer; both clients print it
+# first as x=.. y=..).
+client_last_pos() { grep '^MOTION' "$CLIENT_LOG" 2>/dev/null | tail -1 | sed -E 's/^MOTION x=([0-9]+)(\.[0-9]+)? y=([0-9]+)(\.[0-9]+)?.*/\1,\3/' || true; }
+# gamescope's own idea of the pointer, "x,y" (integer), from the stats line.
+stats_cursor() { stat cursor "${1:-}" | tr -d '()' | sed -E 's/([0-9]+)(\.[0-9]+)?,([0-9]+)(\.[0-9]+)?/\1,\3/'; }
+# Lines the client prints when its window changes size (SIZE for SDL3,
+# WINDOW for the Wine probe).
+client_resizes() { grep -c '^SIZE\|^WINDOW' "$CLIENT_LOG" 2>/dev/null || true; }
+
+wait_for_client_line() {
+	local pattern="$1" timeout="${2:-$LOCK_TIMEOUT_S}" waited=0
+	while (( waited < timeout * 10 )); do
+		grep -q "$pattern" "$CLIENT_LOG" 2>/dev/null && return 0
+		sleep 0.1; waited=$((waited + 1))
+	done
+	return 1
+}
+# wait_for_constraint <state> [<state>...]: until the constraint is one of them.
+wait_for_constraint() {
+	local waited=0 want
+	[[ "$STATS_AVAILABLE" -eq 1 ]] || return 0
+	while (( waited < LOCK_TIMEOUT_S * 10 )); do
+		for want in "$@"; do [[ "$(stat constraint)" == "$want" ]] && return 0; done
+		sleep 0.1; waited=$((waited + 1))
+	done
+	return 1
+}
 
 # Evidence trail: the full stats line at each step, into the run log.
 trace() { log "  [$1] $(stats_line) client_motions=$(client_motions)"; }
@@ -720,6 +841,125 @@ check_x11_host() {
 }
 
 # ---------------------------------------------------------------------------
+# Checks -- a window larger than the screen (the Rust report, 2026-09-08)
+# ---------------------------------------------------------------------------
+# Shared tail of oversized-window and wine-mode: the instance holds a
+# 1280x720 client that fills the 1280x720 output; the nested mode goes to
+# 960x540, smaller than the window. The window must be brought within the
+# root exactly once, and an absolute sample must reach the client where
+# gamescope mapped it -- which is only possible once it has.
+oversized_tail() {
+	local name="$1" reports_size="$2" s0 s1 s2 r1 r2 line pos cur
+	s0="$(client_resizes)"
+	trace "$name: before nested mode $MODE_SMALL"
+	gsctl steamcompmgr_debug_set_nested_mode "$MODE_SMALL" >/dev/null 2>&1 || true
+	sleep "$SETTLE_S"; sleep "$SETTLE_S"   # root change, our resize, the client's own reply, our second resize
+	s1="$(client_resizes)"
+	trace "$name: after nested mode $MODE_SMALL"
+	# The SDL3 client reports every ConfigureNotify; Wine keeps a WM resize
+	# to itself (its Win32 window stays 1280x720, measured), so for the Wine
+	# probe the X-side evidence is the mapping below instead.
+	if [[ "$reports_size" -eq 1 ]]; then
+		if (( s1 - s0 >= 1 )); then
+			record PASS "$name" "client window resized after nested mode $MODE_SMALL (+$((s1 - s0)) size events)"
+		else
+			record FAIL "$name" "client window never resized after nested mode $MODE_SMALL"
+		fi
+	fi
+	# No flapping: a window bounced between two sizes re-syncs the pointer
+	# every frame (measured: resyncs=70 in 6 s on the first cut of the fix).
+	r1="$(stat resyncs)"
+	sleep "$IDLE_S"
+	s2="$(client_resizes)"; r2="$(stat resyncs)"
+	assert_eq "$name" "size events over ${IDLE_S}s idle (no flapping)" 0 "$((s2 - s1))"
+	[[ "$STATS_AVAILABLE" -eq 1 ]] && assert_eq "$name" "resyncs over ${IDLE_S}s idle (no flapping)" 0 "$((r2 - r1))"
+	if [[ "$STATS_AVAILABLE" -eq 1 ]]; then
+		line="$(stats_line)"
+		local mapping; mapping="$(stat mapping "$line" | cut -d, -f1 | tr -d '(')"
+		assert_eq "$name" "mapping scale (the window is 960x540 in a 1280x720 output)" "0.7500" "$mapping"
+	fi
+	gsctl wlserver_debug_absolute_motion "$OVERSIZED_ABS" >/dev/null 2>&1 || true
+	sleep 0.5
+	pos="$(client_last_pos)"
+	assert_eq "$name" "client position from a sample at ($OVERSIZED_ABS)" "$OVERSIZED_EXPECT" "$pos"
+	if [[ "$STATS_AVAILABLE" -eq 1 ]]; then
+		cur="$(stats_cursor)"
+		assert_eq "$name" "the same position as gamescope's own cursor" "$cur" "$pos"
+	fi
+	trace "$name: done"
+}
+
+check_oversized_window() {
+	should_run oversized-window || { record SKIP oversized-window "--only excluded it"; return; }
+	if ! wait_for_client_line '^SIZE 1280x720'; then
+		record FAIL oversized-window "the SDL3 client never became 1280x720: $(stats_line)"
+		return
+	fi
+	sleep 0.5
+	oversized_tail oversized-window 1
+}
+
+check_wine_mode() {
+	should_run wine-mode || { record SKIP wine-mode "--only excluded it"; return; }
+	# Wine's fullscreen clip plus no cursor yet (nothing has moved) is a
+	# LOCK to Xwayland; one relative nudge makes Wine define its cursor and
+	# the lock become the clip's CONFINE (none once the window no longer
+	# covers the screen). Then the menu is a menu.
+	gsctl wlserver_debug_mouse_motion "3 0 3" >/dev/null 2>&1 || true
+	if ! wait_for_constraint confined none; then
+		record FAIL wine-mode "the Wine menu never left its lock: $(stats_line)"
+		return
+	fi
+	record PASS wine-mode "the Wine menu is $(stat constraint) after one relative nudge (locked until Wine defined a cursor)"
+	oversized_tail wine-mode 0
+}
+
+check_wine_lock_mode() {
+	should_run wine-lock-mode || { record SKIP wine-lock-mode "--only excluded it"; return; }
+	if ! wait_for_client_line '^LOCKED' || ! wait_for_lock; then
+		record FAIL wine-lock-mode "the Wine probe never locked: $(stats_line)"
+		return
+	fi
+	sleep 0.5
+	local r0 r1
+	r0="$(client_raw_dx "$REL_DX")"
+	gsctl wlserver_debug_mouse_motion "$REL_DX 0 $REL_COUNT" >/dev/null 2>&1 || true
+	sleep 0.5
+	r1="$(client_raw_dx "$REL_DX")"
+	assert_eq wine-lock-mode "RAW dx=$REL_DX packets from $REL_COUNT relative injections, locked" "$REL_COUNT" "$((r1 - r0))"
+	trace "wine-lock-mode: before nested mode $MODE_SMALL, locked"
+	gsctl steamcompmgr_debug_set_nested_mode "$MODE_SMALL" >/dev/null 2>&1 || true
+	sleep "$SETTLE_S"; sleep "$SETTLE_S"
+	trace "wine-lock-mode: after nested mode $MODE_SMALL, locked"
+	r0="$(client_raw_dx "$REL_DX")"
+	gsctl wlserver_debug_mouse_motion "$REL_DX 0 $REL_COUNT" >/dev/null 2>&1 || true
+	sleep 0.5
+	r1="$(client_raw_dx "$REL_DX")"
+	assert_eq wine-lock-mode "RAW dx=$REL_DX packets from $REL_COUNT relative injections after the mode change" "$REL_COUNT" "$((r1 - r0))"
+	[[ "$STATS_AVAILABLE" -eq 1 ]] && assert_eq wine-lock-mode "motions_locked" 0 "$(stat motions_locked)"
+	if ! wait_for_client_line '^UNLOCKED' "$UNLOCK_TIMEOUT_S"; then
+		record FAIL wine-lock-mode "the Wine probe never unlocked"
+		return
+	fi
+	# Unlocked in Windows terms, still LOCKED to Xwayland until Wine defines
+	# a cursor, which takes a mouse move: the host lock is still held at this
+	# point, so that move is relative.
+	gsctl wlserver_debug_mouse_motion "2 0 3" >/dev/null 2>&1 || true
+	if wait_for_constraint none confined; then
+		record PASS wine-lock-mode "constraint $(stat constraint) after the unlock and a relative nudge"
+	else
+		record FAIL wine-lock-mode "constraint still $(stat constraint) after the unlock and a relative nudge"
+		return
+	fi
+	gsctl wlserver_debug_absolute_motion "$OVERSIZED_ABS" >/dev/null 2>&1 || true
+	sleep 0.5
+	local pos; pos="$(client_last_pos)"
+	assert_eq wine-lock-mode "client position from a sample at ($OVERSIZED_ABS) after the unlock" "$OVERSIZED_EXPECT" "$pos"
+	[[ "$STATS_AVAILABLE" -eq 1 ]] && assert_eq wine-lock-mode "the same position as gamescope's own cursor" "$(stats_cursor)" "$pos"
+	trace "wine-lock-mode: done"
+}
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 log "binary: $GAMESCOPE_BIN"
@@ -727,11 +967,13 @@ log "results: $OUT_DIR"
 start_sway
 start_vp
 
-need_locked=0; need_unlocked=0; need_x11=0; need_x11_host=0
+need_locked=0; need_unlocked=0; need_x11=0; need_x11_host=0; need_oversized=0; need_wine=0
 for c in locked-relative locked-absolute locked-mapping; do should_run "$c" && need_locked=1; done
 should_run unlocked-resync && need_unlocked=1
 for c in x11-menu-lock x11-locked-abs; do should_run "$c" && need_x11=1; done
 should_run x11-host && need_x11_host=1
+should_run oversized-window && need_oversized=1
+for c in wine-mode wine-lock-mode; do should_run "$c" && need_wine=1; done
 
 if [[ "$need_locked" -eq 1 ]]; then
 	start_instance "--lock"
@@ -779,6 +1021,35 @@ if [[ "$need_x11_host" -eq 1 ]]; then
 		check_x11_host
 	else
 		record SKIP x11-host "needs pointer_grab_client_x11 (SDL3) and virtual_pointer_tool"
+	fi
+fi
+
+if [[ "$need_oversized" -eq 1 ]]; then
+	if [[ "$X11_CLIENT_AVAILABLE" -eq 1 ]]; then
+		# --fullscreen: SDL3 ends up with a plain 1280x720 window carrying
+		# 1280x720 size hints (it recreates the window), which is exactly the
+		# shape Wine leaves a game in after a mode change -- see the header.
+		start_instance "--fullscreen" "$CLIENT_X11_BIN" "oversized"
+		check_oversized_window
+	else
+		record SKIP oversized-window "pointer_grab_client_x11 not built (needs SDL3)"
+	fi
+fi
+
+if [[ "$need_wine" -eq 1 ]]; then
+	start_wine_prefix
+	if [[ "$WINE_AVAILABLE" -eq 1 ]]; then
+		if should_run wine-mode; then
+			start_instance "--screen" "$PROBE_WIN32_EXE" "wine-mode" wine
+			check_wine_mode
+		fi
+		if should_run wine-lock-mode; then
+			start_instance "--screen --lock-after $WINE_LOCK_AFTER_S --unlock-after $WINE_UNLOCK_AFTER_S" "$PROBE_WIN32_EXE" "wine-lock" wine
+			check_wine_lock_mode
+		fi
+	else
+		record SKIP wine-mode "needs pointer_probe_win32.exe (mingw) and wine"
+		record SKIP wine-lock-mode "needs pointer_probe_win32.exe (mingw) and wine"
 	fi
 fi
 

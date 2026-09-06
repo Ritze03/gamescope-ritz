@@ -18,9 +18,16 @@ The newest version below is the one this build reports.
   already open.
 
 ### Fixed
+- **Mouse after a resolution change**: a game that keeps its window at the old size when
+  the game resolution is lowered (Wine/Proton games do) no longer loses the mouse over
+  the part of the picture past the new screen edge; the window is kept within the screen
+  so where you point is where the game gets it.
 - **Using a control selects its row**: pressing any control in the settings overlay now
   highlights that row and shows it in the inspector -- including the ones that did not
   before: opening a dropdown, and every colour, hue, placement-grid and list control.
+- **Crosshair gap now means the total hole, not a per-side inset**: a gap of 1 leaves
+  exactly one pixel missing at the centre instead of a much wider gap; a saved gap value
+  now renders visibly tighter than before.
 
 ## [0.6.1] – 2026-09-06
 

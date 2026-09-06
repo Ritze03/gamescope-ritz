@@ -92,6 +92,22 @@ if wayland_client_tests_dep.found()
 	)
 endif
 
+# The Wine-shaped client for the same script: a Win32 program (Unity's
+# cursor lock/confine/menu states, ChangeDisplaySettings, WM_INPUT) built with
+# the mingw cross compiler and run with the system wine inside gamescope's
+# Xwayland. Not a meson test; the script SKIPs its checks without the .exe or
+# wine. See the file's own header.
+mingw_cc = find_program('x86_64-w64-mingw32-gcc', required: false)
+if mingw_cc.found()
+	custom_target(
+		'pointer_probe_win32',
+		input: files('pointer_probe_win32.c'),
+		output: 'pointer_probe_win32.exe',
+		command: [mingw_cc, '-O1', '-Wall', '-mconsole', '-o', '@OUTPUT@', '@INPUT@', '-lgdi32', '-luser32'],
+		build_by_default: true,
+	)
+endif
+
 # The CS2-shaped client: native SDL3 relative mode under Xwayland, with an
 # XI2 raw-event tap. See the file's own header.
 sdl3_dep = dependency('sdl3', required: false)

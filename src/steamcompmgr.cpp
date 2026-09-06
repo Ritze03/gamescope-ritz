@@ -4657,7 +4657,40 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
 
 	if ( win_has_game_id( w ) )
 	{
-		if ( window_is_fullscreen( ctx->focus.focusWindow ) || ctx->force_windows_fullscreen )
+		// A game window larger than the screen gets the fullscreen treatment
+		// too (added 2026-09-08 -- "changing the resolution breaks the mouse
+		// in Rust", superdoc/features/cursor-pipeline.md, "A window larger
+		// than the screen"). X confines the pointer to the screen, so the part
+		// of such a window past the root edge can be seen (we composite the
+		// whole buffer) but never pointed at: the sprite stops at the root
+		// edge while the host pointer, mapped onto the whole window, goes on.
+		// Measured with a Wine client across a runtime nested-mode change:
+		// the resize below lands, Wine puts its window back to its own size
+		// and drops _NET_WM_STATE_FULLSCREEN, and from then on a host sample
+		// at 95% of the output reached the game at the clamped root corner.
+		// Wine accepts the second resize (verified; --force-windows-fullscreen
+		// does exactly this every pass and converges), so the rule is simply
+		// that the focused game window never exceeds the screen. A window
+		// SMALLER than the root is left alone: it is fully reachable, and
+		// forcing it up would hand a Wine game an X window bigger than the
+		// surface it draws.
+		//
+		// Judged on the size the window is HEADING for -- its size hints when
+		// it has them, its geometry otherwise -- not on its geometry alone:
+		// a window we have just shrunk to the root still asks for its old size
+		// through WM_NORMAL_HINTS, and judging the geometry would send it back
+		// through the size-hints branch below, which would grow it again, and
+		// so on at frame rate (measured: an SDL3 client flapped 1280x720 <->
+		// 960x540 for the rest of the session).
+		bool bWantsRootSize = window_is_fullscreen( ctx->focus.focusWindow ) || ctx->force_windows_fullscreen;
+		if ( !bWantsRootSize )
+		{
+			const int nHeadingWidth  = ctx->focus.focusWindow->sizeHintsSpecified ? (int)ctx->focus.focusWindow->requestedWidth  : w->GetGeometry().nWidth;
+			const int nHeadingHeight = ctx->focus.focusWindow->sizeHintsSpecified ? (int)ctx->focus.focusWindow->requestedHeight : w->GetGeometry().nHeight;
+			bWantsRootSize = nHeadingWidth > ctx->root_width || nHeadingHeight > ctx->root_height;
+		}
+
+		if ( bWantsRootSize )
 		{
 			bool bIsSteam = window_is_steam( ctx->focus.focusWindow );
 			int fs_width  = ctx->root_width;
