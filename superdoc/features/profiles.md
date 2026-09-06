@@ -8,11 +8,11 @@ remembers which one it selected; a game profile may inherit from a general one;
 `tests/test_config.cpp` (file layer, migration, session, CRUD) and
 `tests/test_overlay_profiles.cpp` (the pure half of the area).
 
-**The Profiles area itself (`setup.profiles`) is being rebuilt** around a list with
-Create / Copy / Edit / Delete modals, an Inherits dropdown and a "Filter Game
-Profiles" checkbox. Until it lands, `src/Overlay/PanelConfig.cpp` registers a
-placeholder Status row (editing / inherits / launch option / game). The old
-Per-game area (`setup.pergame`) is gone for good: a game's settings *are* a profile.
+**The Profiles area itself (`setup.profiles`)** is the user's own sketch -- a list
+leading the sheet, Create / Copy / Edit / Delete under it as modals, an Inherits
+dropdown, a "Filter game profiles" switch and one Status row -- see
+[The Profiles area](#the-profiles-area-setupprofiles) below. The old Per-game area
+(`setup.pergame`) is gone for good: a game's settings *are* a profile.
 
 ## The model, in plain words
 
@@ -140,6 +140,101 @@ a redesign. Stated in `ConfigManager.h` beside `OverriddenKeys()`.
 and writes the whole thing through one funnel; a diff at that funnel gives inheritance
 to every existing and future section with zero panel code, which is the extensibility
 the concept was written for.
+
+## The Profiles area (`setup.profiles`)
+
+`src/Overlay/PanelConfig.cpp` (drawing and the config calls) and `PanelConfig.h`'s
+`panelconfig` namespace (every decision, pure, pinned by `tests/test_overlay_profiles.cpp`).
+Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
+`capture.sh` there). Top to bottom, exactly the sketch:
+
+1. **The list** (`profiles.list`, a `CompositeKind::List` band -- six rows tall, edge
+   to edge, the one composite that spends the label column). One line per profile
+   from `ListProfiles()`: general ones by name, game ones as a muted `[Game]` tag plus
+   the game's title (`ListLabel()`), `inherits Comp` right-aligned on an inheriting
+   line, `launch option` on the line a `--profile` override selected. The session
+   profile is the outlined line. **Clicking a line (or Enter while hovering it) is
+   `SelectProfile()`**: it loads the profile and is the assignment this game remembers;
+   the toast says `Now editing 'Comp'`. Left/Right on the selected band step the
+   selection too (the same `AdjustValue()` every row uses). `Why no load or save
+   buttons:` a profile is the live file (concept v2, decision 3) -- selecting *is*
+   loading, and every edit is already saved, so a Load or Save button would be a verb
+   with nothing left to do; the v1 rows it replaces (Use / Restore / Save changes /
+   Auto-save) existed only because a profile used to be a copy. `Why the list leads:`
+   the user's sketch; the list is the whole model on one screen -- which profiles exist,
+   which is selected, which inherit from what -- and everything under it acts on the
+   selected line, so it has to be read first.
+2. **Create · Copy · Edit · Delete** -- four equal chips on the band's last line
+   (`Entry::ListAction()`, drawn by `controls::VerbStrip`), each a `ui::Modal`:
+   - **Create**: `Game specific` switch (off by default) -> when on, `GameID` (prefilled
+     with the running game's app id, editable) -> `New profile name`; primary
+     **Create** -> `CreateProfile( meta )` from the current resolved values, then the
+     new profile is selected (`Created 'X'`). A new game profile inherits the general
+     profile in play (`NewGameInherits()`: the session profile when it is general,
+     else the session's own parent), so it starts as a clean child storing nothing.
+   - **Copy** (`Copy 'Rust'`): the same fields prefilled from the selected profile;
+     primary **Copy** -> `CopyProfile()` of its *resolved* values, then selected.
+   - **Edit** (`Edit 'Rust'`): the same fields prefilled from the profile's own
+     metadata; primary **Save** -> `EditProfileMeta()` (rename follows every pointer;
+     becoming general clears app id and inherits).
+   - **Delete** (`Delete 'Rust'?`): `Are you sure?` and, when it has children, `N
+     profiles inherit from it and will keep its values.`; primary **Delete** is
+     danger-tinted. The last remaining profile's Delete chip is disabled and the
+     Inspector's CONFIGURE page says why (`DeleteBlocker()`): deleting the only profile
+     would recreate `Default` from the built-in defaults behind the user's back.
+   Validation (`CheckProfileForm()`): the name must survive `SanitizeProfileName()`
+   unchanged and be free; the app id is digits only. **Every refusal is inline** -- the
+   offending field gets the Text atom's red boundary and its sentence sits under the
+   form, a config-layer refusal (a parent with children turned into a game profile, a
+   name collision the check missed) is printed the same way, and the modal stays open
+   with the typed fields intact (`ModalSpec::fnValidate`). `Why inline and never a
+   toast:` a toast disappears while the user is still looking at the form, and the fix
+   is in the form; the only toasts the area emits are the three successes (`Now
+   editing`, `Created`, `Deleted`).
+3. **Inherits** (`profiles.inherits`, a Choice: `None` + every general profile), drawn
+   only while the selected profile is a game profile; changing it is
+   `EditProfileMeta()` with the new parent (resolved values kept, re-diffed). A refusal
+   here is the one toast-shaped error, because the row has no field to sit beside.
+   **Filter game profiles** (`profiles.filter`, a Switch, **on by default**): on hides
+   other games' game profiles, general ones always show, and the session profile is
+   always listed whatever the filter says (a `--profile` of another game's profile
+   would otherwise have no line to outline). Persisted in `global.json` as
+   `overlay.profiles_filter_other_games` -- a view preference about this screen, not
+   a setting a game could want differently, so it rides with the other overlay
+   preferences rather than in a profile. `Why on by default:` with one profile per
+   game the list grows by one line per game played; the common question is "which
+   profile does *this* game use", and the other games' lines only answer it by noise.
+   Two rows rather than the sketch's one: a segmented Choice and a labelled switch
+   sharing one row would fight for the control zone at every width the shell supports.
+4. **Status** (`profiles.status`, one Facts row, last): `[Game] Rust · inherits Comp`,
+   naming the game only when the profile's label does not already (`Casual · game
+   Rust`, `Casual (launch) · game Rust`), so it fits the control zone beside a column
+   Inspector; the Inspector's DETAILS carry the long form with the app id
+   (`editing: [Game] Rust · inherits Comp · game: Rust (252490)`), the launch option,
+   the file and the profiles directory. The list's own DETAILS hold the counts.
+
+**Everywhere else.** While the session profile is a game profile with a parent:
+
+- Every row of every area that resolves to a config key is *inherited* or
+  *overridden* (`OverriddenKeys()`); an **overridden** row carries a small accent dot
+  after its label, an inherited one nothing -- the parent's values are the baseline
+  and what a glance should pick out is where this game deviates. The Inspector's
+  CONFIGURE page says `inherited from Comp`, or `overridden` with a **Reset to
+  inherited** chip that drops the row's key *and* its parameters' (`ResetKeyToInherited()`,
+  the same scope as `reset`). The key a row resolves to is its `Entry::Key()` /
+  `Parameter::Key()` (`"fps_display.enabled"`), else its registry id when that is
+  already a real key (`crosshair.line_length`); a row that resolves to nothing
+  (`audio.*`, `cursor.*`, the Log's filter) shows nothing (`Registry::KeyStateFor()`,
+  `config::IsSettingsKey()`). The Profiles area installs the answers through
+  `Registry::Inheritance()`, so the registry itself stays free of the config layer.
+- The **badge** in every area's sheet header is the session profile as the list labels
+  it (`[Game] Rust`, or `Casual (launch)` under `--profile`) -- `Registry::DefaultBadge()`,
+  which an area's own `Badge()` still overrides: Appearance keeps `global only`.
+
+Keyboard reach: the list's Up/Down/Enter apply while hovered (Controls.h), Left/Right on
+the selected band step the selection; the four verbs and the Reset chip are pointer (and
+palette-jump-to-row) only -- a keyboard route to a verb strip needs a focus cursor the kit
+does not have yet, flagged rather than faked.
 
 ## The API the Profiles area calls (`Config/ConfigManager.h`)
 

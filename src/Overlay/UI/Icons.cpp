@@ -230,18 +230,6 @@ namespace gamescope::ui
 			                                        { 20.5f, 3.5f }, { 20.5f, 16.5f },
 			                                        { 16.5f, 16.5f } } } } },
 
-		{ "setup.pergame", 3, {
-			// One page with a folded corner: a per-title file, not a stack.
-			// The fold is filled -- it is the third licensed fill, and it is
-			// what distinguishes this outline from Profiles' front card at
-			// 12 px, where the corner notch alone would close up.
-			IconShape{ IconOp::Loop, 5, 0.0f, { { 13.5f, 3.5f }, { 6.5f, 3.5f },
-			                                    { 6.5f, 20.5f }, { 17.5f, 20.5f },
-			                                    { 17.5f, 7.5f } } },
-			IconShape{ IconOp::FillPoly, 3, 0.0f, { { 13.5f, 3.5f }, { 17.5f, 7.5f },
-			                                        { 13.5f, 7.5f } } },
-			Line( { 9.5f, 14.5f }, { 14.5f, 14.5f } ) } },
-
 		{ "setup.appearance", 1, {
 			// A droplet -- the colour/paint mark. The only curve in the set
 			// that is not a circle, and the reason IconOp::Teardrop exists:

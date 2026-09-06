@@ -226,6 +226,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.vibrancy.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, b ); } ) )
+			.Key( "reshade.vibrancy.enabled" )
 			.Help( "Makes dull colours more vivid, while leaving already-vivid colours alone." )
 			.Default( false )
 			.Keywords( "vibrancy saturation colour vividness" )
@@ -234,6 +235,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.vibrancy.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, f ); } ) )
+				.Key( "reshade.vibrancy.strength" )
 				.Help( "Colour intensity. 1x is unchanged, 0x is black and white, 3x is maximum boost." )
 				.Range( 0.0f, 3.0f )
 				.Step( 0.05f )   // 61 positions; 1.00, the default, is the neutral notch
@@ -243,6 +245,7 @@ namespace gamescope
 				ui::AnyBind::Of<bool>(
 					[]{ return Cfg().reshade.vibrancy.protect_skin_tones; },
 					[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.protect_skin_tones, b ); } ) )
+				.Key( "reshade.vibrancy.protect_skin_tones" )
 				.Help( "Keeps the saturation boost off skin tones, so faces don't turn orange." )
 				.Default( true );
 
@@ -250,6 +253,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.pre_sharpen.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.pre_sharpen.enabled, b ); } ) )
+			.Key( "reshade.pre_sharpen.enabled" )
 			.Help( "Sharpens the picture before it's resized, so it works with any Filter -- unlike "
 			       "the Upscaling area's Sharpness, which only works with FSR or NIS." )
 			.Default( false )
@@ -272,6 +276,7 @@ namespace gamescope
 						PushAllToRenderer();
 						QueueSave();
 					} ) )
+				.Key( "reshade.pre_sharpen.strength" )
 				.Help( "How strong the sharpening is." )
 				.Range( 0.0f, 2.0f )
 				.Step( 0.05f )   // 41 positions
@@ -289,6 +294,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled, b ); } ) )
+			.Key( "reshade.adaptive_brightness.enabled" )
 			.Help( "Experimental. Automatically brightens dark scenes and dims bright ones as you "
 			       "play, like your eyes adjusting." )
 			.Default( AbDefaults{}.enabled )
@@ -298,6 +304,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength, f ); } ) )
+				.Key( "reshade.adaptive_brightness.strength" )
 				.Help( "How strong the effect is." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
@@ -306,6 +313,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance, f ); } ) )
+				.Key( "reshade.adaptive_brightness.target_luminance" )
 				.Help( "How bright the picture tries to settle at once it's adjusted." )
 				.Range( 0.1f, 0.9f )
 				.Step( 0.05f )   // 17 positions; both ends sit on the grid
@@ -314,6 +322,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed, f ); } ) )
+				.Key( "reshade.adaptive_brightness.adapt_up_speed" )
 				.Help( "How quickly the picture brightens when a scene gets darker." )
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, one per tenth of a second
@@ -323,6 +332,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed, f ); } ) )
+				.Key( "reshade.adaptive_brightness.adapt_down_speed" )
 				.Help( "How quickly the picture dims when a scene gets brighter." )
 				.Range( 0.1f, 5.0f )
 				.Step( 0.1f )    // 50 positions, as Brighten speed above
@@ -332,6 +342,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain, f ); } ) )
+				.Key( "reshade.adaptive_brightness.min_gain" )
 				.Help( "How dark the adjustment is allowed to make the picture." )
 				.Range( 0.5f, 1.0f )
 				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
@@ -340,6 +351,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain, f ); } ) )
+				.Key( "reshade.adaptive_brightness.max_gain" )
 				.Help( "How bright the adjustment is allowed to make the picture." )
 				.Range( 1.0f, 2.0f )
 				.Step( 0.05f )   // 21 positions
@@ -358,6 +370,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.shadow_lift.enabled; },
 				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.shadow_lift.enabled, b ); } ) )
+			.Key( "reshade.shadow_lift.enabled" )
 			.Help( "Brightens dark areas so detail in dark games is easier to see, while leaving "
 			       "bright areas alone." )
 			.Default( false )
@@ -367,6 +380,7 @@ namespace gamescope
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.shadow_lift.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.shadow_lift.strength, f ); } ) )
+				.Key( "reshade.shadow_lift.strength" )
 				.Help( "How much darker areas are brightened." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions

@@ -143,7 +143,12 @@ namespace gamescope::ui
 
 		// ---- Composite bands (SPEC §4.2) ----------------------------------
 		inline constexpr int   kBandMinLines = 2;
-		inline constexpr int   kBandMaxLines = 3;
+		// 3 for every composite in SPEC §4.4's table; 6 is the List band's
+		// (Band.cpp: 5 lines of list rows plus one for its verb strip),
+		// the one composite the sketch has leading a sheet rather than
+		// sitting in a row.
+		inline constexpr int   kBandMaxLines = 6;
+		inline constexpr int   kListBandLines = 6;
 		inline constexpr float kAnchorCell   = kControlH;  // the 3x3 grid sits on the control module
 	}
 

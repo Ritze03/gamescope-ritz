@@ -1334,6 +1334,28 @@ namespace gamescope::ui
 			return VerbAt( row.PlacePx( flW ), pszId, pszVerb, eIntent, bEnabled );
 		}
 
+		int VerbStrip( const ImRect &rcStrip, const char *pszId, const VerbSpec *pVerbs, size_t nVerbs )
+		{
+			if ( !pVerbs || nVerbs == 0 || rcStrip.GetWidth() <= 0.0f )
+				return -1;
+			ImGui::PushID( pszId );
+			const float flGap  = Px( tok::kGapSeg );
+			const float flCell = ( rcStrip.GetWidth() - flGap * (float)( nVerbs - 1 ) ) / (float)nVerbs;
+			int nPressed = -1;
+			for ( size_t i = 0; i < nVerbs; ++i )
+			{
+				const float x0 = rcStrip.Min.x + (float)i * ( flCell + flGap );
+				const ImRect rc( x0, rcStrip.Min.y, x0 + flCell, rcStrip.Max.y );
+				char szId[ 16 ];
+				snprintf( szId, sizeof( szId ), "verb%d", (int)i );
+				if ( VerbAt( rc, szId, pVerbs[ i ].pszLabel ? pVerbs[ i ].pszLabel : "",
+				             pVerbs[ i ].eIntent, pVerbs[ i ].bEnabled ) )
+					nPressed = (int)i;
+			}
+			ImGui::PopID();
+			return nPressed;
+		}
+
 		// =================================================================
 		//  Anchor grid -- SPEC §4.3, the composite body that fix #3 names
 		// =================================================================
@@ -2031,7 +2053,8 @@ namespace gamescope::ui
 			if ( fnCancel )
 				fnCancel();
 		}
-		else if ( bPrimaryClicked || bEnter )
+		else if ( ( bPrimaryClicked || bEnter ) &&
+		          ( !s_Modal.spec.fnValidate || s_Modal.spec.fnValidate() ) )
 		{
 			std::function<void()> fnPrimary = std::move( s_Modal.spec.fnPrimary );
 			CloseModal();

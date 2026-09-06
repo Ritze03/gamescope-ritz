@@ -1757,6 +1757,7 @@ namespace gamescope
 					// cadence afterward.
 					force_repaint();
 				} ) )
+			.Key( "fps_display.enabled" )
 			.Help( "Shows your frame rate over the game. It stays visible even after you close "
 			       "this settings menu." )
 			.Default( config::FpsDisplaySettings{}.enabled )
@@ -1805,6 +1806,7 @@ namespace gamescope
 					s_Settings.fps_display.anchor = ComposePlacement( nV, nH );
 					PersistSettings();
 				} ) )
+			.Key( "fps_display.anchor" )
 			.Help( "Which screen corner the HUD sticks to. The margins below move it a bit away "
 			       "from that corner." )
 			.Default( 0, 2 )
@@ -1816,6 +1818,7 @@ namespace gamescope
 					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_x = n; PersistSettings(); } ) )
 				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
 				.Default( config::FpsDisplaySettings{}.margin_x )
+				.Key( "fps_display.margin_x" )
 				.Help( "How far the HUD sits from the left or right edge." )
 			.Param( "margin_y", "Vertical margin",
 				ui::AnyBind::Of<int>(
@@ -1823,6 +1826,7 @@ namespace gamescope
 					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_y = n; PersistSettings(); } ) )
 				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
 				.Default( config::FpsDisplaySettings{}.margin_y )
+				.Key( "fps_display.margin_y" )
 				.Help( "How far the HUD sits from the top or bottom edge." );
 
 		// =================================================================
@@ -1834,6 +1838,7 @@ namespace gamescope
 			ui::AnyBind::Of<float>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.font_size; },
 				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.font_size = f; PersistSettings(); } ) )
+			.Key( "fps_display.font_size" )
 			.Help( "How big the HUD's text is." )
 			.Range( 10.0f, 48.0f )
 			.Step( 1.0f )
@@ -1847,6 +1852,7 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return fpsmath::UpdateModeToInt( s_Settings.fps_display.update_mode ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.update_mode = fpsmath::UpdateModeFromInt( n ); PersistSettings(); } ),
 			kUpdateModeOptions, std::size( kUpdateModeOptions ) )
+			.Key( "fps_display.update_mode" )
 			.Help( "How often the number changes. Smoothing takes a reading once a second, "
 			       "glides to it and holds still until the next; Immediate shows the last "
 			       "tenth of a second, jitter and all." )
@@ -1863,6 +1869,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_enabled; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_enabled = b; PersistSettings(); } ) )
+			.Key( "fps_display.hide_above_enabled" )
 			.Help( "Hides the HUD while your frame rate is comfortably high, and brings it back "
 			       "once it drops." )
 			.Default( config::FpsDisplaySettings{}.hide_above_enabled )
@@ -1876,12 +1883,14 @@ namespace gamescope
 				.Step( 5.0f )
 				.Unit( "fps" )
 				.Default( config::FpsDisplaySettings{}.hide_above_fps )
+				.Key( "fps_display.hide_above_fps" )
 				.Help( "The frame rate the HUD disappears above." );
 
 		a.Slider( "hud.backdrop_opacity", "Backdrop opacity",
 			ui::AnyBind::Of<float>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
 				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
+			.Key( "fps_display.backdrop_opacity" )
 			.Help( "How solid the plain backdrop behind the number is. All the way down turns the "
 			       "backdrop off." )
 			.Range( 0.0f, 1.0f )
@@ -1896,6 +1905,7 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return ColorModeToInt( s_Settings.fps_display.color_mode ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.color_mode = ColorModeFromInt( n ); PersistSettings(); } ),
 			kColorModeOptions, std::size( kColorModeOptions ) )
+			.Key( "fps_display.color_mode" )
 			.Help( "Fixed always uses your UI's accent colour, and flips to its opposite for a "
 			       "moment during a lag spike. Inverted flips whatever the game is showing "
 			       "under each digit, so the number stays readable over anything and never "
@@ -1908,6 +1918,7 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.lag_detection_enabled; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.lag_detection_enabled = b; PersistSettings(); } ) )
+			.Key( "fps_display.lag_detection_enabled" )
 			.Help( "Reacts for a moment when a frame takes far longer than the ones around it. "
 			       "With Fixed text the number flips colour; with Inverted text the backdrop "
 			       "turns red instead, so it does nothing there unless the backdrop is on." )
@@ -1919,6 +1930,7 @@ namespace gamescope
 			ui::AnyBind::Of<float>(
 				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.outline_strength; },
 				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.outline_strength = f; PersistSettings(); } ) )
+			.Key( "fps_display.outline_strength" )
 			.Help( "How thick a black outline to draw around the number, in pixels, so it "
 			       "stands out against busy backgrounds. All the way down turns it off." )
 			.Range( 0.0f, 4.0f )

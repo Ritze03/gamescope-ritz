@@ -11,19 +11,35 @@ The newest version below is the one this build reports.
 
 ## [0.6.1] – 2026-09-06
 
+### Added
+- **Profiles area**: a list of every profile leads the sheet -- click a line to switch
+  to it (that profile is then this game's, and every change is saved into it) -- with
+  Create, Copy, Edit and Delete underneath, an Inherits dropdown for a game profile, a
+  "Filter game profiles" switch and a Status row.
+- **Profile inheritance**: a `[Game]` profile can inherit a general one, storing only
+  what you change and following the parent for everything else, and `--profile` from
+  another game shows as `launch option` in the list.
+- **Inherited / overridden markers**: while a game profile inherits, a value you have
+  changed for this game shows a small dot after its name in every area, and its
+  Inspector page says `inherited from` or `overridden` with a Reset to inherited button;
+  every area's header badge names the profile being edited.
+
 ### Fixed
 - **In-game mouse look no longer drifts back to the centre**: a game that has grabbed
   the mouse (CS2 in a match, any first-person game in play) no longer receives absolute
   pointer positions -- neither from a resolution or scaler change nor from the host
   pointer -- so the view stops snapping towards the host cursor; menus are unaffected.
 
+### Removed
+- **Per-game area and the profile buttons**: the Per-game area, "Use this profile",
+  "Restore previous settings", "Save changes to profile" and the Auto-save switch are
+  gone -- a profile is the live settings now, so there is nothing to apply or save.
+
 ### Info
-- **Profiles are being rebuilt**: your settings now live in a profile that saves every
-  change straight away -- "Use this profile", "Restore previous settings", "Save
-  changes", the Auto-save switch and the Per-game area are gone, an old config is
-  moved into a `Default` profile and each game's separate settings into a `[Game]`
-  profile on first launch, and `--profile <name>` now picks a profile for that
-  session only (creating it if missing); the new Profiles list follows.
+- **Profiles are rebuilt underneath**: your settings now live in a profile that saves
+  every change straight away; an old config is moved into a `Default` profile and each
+  game's separate settings into a `[Game]` profile on first launch, and
+  `--profile <name>` picks a profile for that session only (creating it if missing).
 
 ## [0.6.0] – 2026-09-05
 

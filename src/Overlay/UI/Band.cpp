@@ -16,6 +16,13 @@ namespace gamescope::ui
 			case CompositeKind::Strip:  return { 2, ImVec2(  0.0f, 52.0f ) };
 			case CompositeKind::Graph:  return { 3, ImVec2(  0.0f, 96.0f ) };
 			case CompositeKind::Color:  return { 2, ImVec2(  0.0f, 52.0f ) };
+			// The Profiles list (2026-09-06): five lines of list rows plus
+			// one for Create / Copy / Edit / Delete. Edge to edge, because
+			// the sketch has the list LEADING the sheet, not sitting in a
+			// row's control column -- so this is the one band that spends
+			// its label column, and clauses 2 and 4 are deliberately not
+			// honoured for it (line 1 is list rows, not a labelled row).
+			case CompositeKind::List:   return { tok::kListBandLines, ImVec2( 0.0f, 0.0f ), true };
 		}
 		return { 2, ImVec2( 0.0f, 44.0f ) };
 	}
@@ -47,12 +54,38 @@ namespace gamescope::ui
 		const float flBodyH = ImMin( Px( spec.bodyBase.y ), rcBand.GetHeight() );
 		const float flCy    = rcBand.GetCenter().y;
 
+		if ( spec.bSpansRow )
+		{
+			// The List band. Left edge: the label column's own left, taken
+			// from the one call that knows it (SplitLabelZone) rather than a
+			// second copy of Lane's inset. Right edge: the control line, as
+			// every body. Height: whole list rows only -- the ListBox draws
+			// floor(height / kControlH) rows and would leave a blank strip
+			// of box under a fractional remainder -- centred in the n-1
+			// lines above the strip. The strip takes the last line.
+			ImRect rcLabel, rcValue;
+			line1.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+			const float flLeft  = rcLabel.Min.x;
+			const float flRowPx = Px( tok::kRowH );
+			const float flItemH = Px( tok::kControlH );
+			const float flListAreaH = flRowPx * (float)( nLines - 1 );
+			const int   nItems  = ImMax( 1, (int)( ( flListAreaH - Px( tok::kS ) * 2.0f ) / flItemH ) );
+			const float flListH = flItemH * (float)nItems;
+			const float flListY = rcBand.Min.y + ( flListAreaH - flListH ) * 0.5f;
+			const ImRect rcList( flLeft, flListY, flRight, flListY + flListH );
+
+			const float flStripTop = rcBand.Max.y - flRowPx;
+			const ImRect rcStrip( flLeft, flStripTop + ( flRowPx - flItemH ) * 0.5f,
+			                      flRight, flStripTop + ( flRowPx + flItemH ) * 0.5f );
+			return BandLayout{ rcBand, rcList, line1, rcStrip };
+		}
+
 		const ImRect rcBody( flRight - ImMin( flBodyW, line1.CtlWidthPx() ), flCy - flBodyH * 0.5f,
 		                     flRight,                                        flCy + flBodyH * 0.5f );
 
 		// Clause 4 needs no code: no allocator in this file ever produces a
 		// rect in the label column of lines 2..n, so there is nothing to put
 		// there. "It is air."
-		return BandLayout{ rcBand, rcBody, line1 };
+		return BandLayout{ rcBand, rcBody, line1, ImRect() };
 	}
 }

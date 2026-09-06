@@ -283,6 +283,7 @@ namespace gamescope::ui
 	Parameter &Parameter::Unit( const char *psz )   { m_sUnit = psz ? psz : ""; return *this; }
 	Parameter &Parameter::ZeroMeans( const char *psz ) { m_sZeroMeans = psz ? psz : ""; return *this; }
 	Parameter &Parameter::Keywords( const char *psz )  { m_sKeywords = psz ? psz : ""; return *this; }
+	Parameter &Parameter::Key( const char *psz )       { m_sKey = psz ? psz : ""; return *this; }
 
 	Parameter &Parameter::Help( const char *pszHelp )
 	{
@@ -365,6 +366,15 @@ namespace gamescope::ui
 	Entry &Entry::Unit( const char *psz )            { m_sUnit = psz ? psz : ""; return *this; }
 	Entry &Entry::ZeroMeans( const char *psz )       { m_sZeroMeans = psz ? psz : ""; return *this; }
 	Entry &Entry::Keywords( const char *psz )        { m_sKeywords = psz ? psz : ""; return *this; }
+	Entry &Entry::Key( const char *psz )             { m_sKey = psz ? psz : ""; return *this; }
+	Entry &Entry::Items( std::function<std::vector<ListItem>()> fn ) { m_Items = std::move( fn ); return *this; }
+	Entry &Entry::ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger,
+	                          std::function<std::string()> fnDisabledReason )
+	{
+		m_ListActions.push_back( ui::ListVerb{ pszLabel ? pszLabel : "", std::move( fn ), bDanger,
+		                                         std::move( fnDisabledReason ) } );
+		return *this;
+	}
 	Entry &Entry::Validate( std::function<std::string( const std::string & )> fn ) { m_Validate = std::move( fn ); return *this; }
 
 	// ---- reset (P3b) ----------------------------------------------------
@@ -765,6 +775,31 @@ namespace gamescope::ui
 	// =====================================================================
 	//  Registry
 	// =====================================================================
+	std::string Area::BadgeText() const
+	{
+		if ( m_Badge )
+			return m_Badge();
+		if ( m_pRegistry && m_pRegistry->m_DefaultBadge )
+			return m_pRegistry->m_DefaultBadge();
+		return {};
+	}
+
+	Registry &Registry::DefaultBadge( std::function<std::string()> fn )
+	{
+		m_DefaultBadge = std::move( fn );
+		return *this;
+	}
+
+	Registry &Registry::Inheritance( std::function<std::string()> fnParent,
+	                                 std::function<InheritState( const std::string & )> fnState,
+	                                 std::function<bool( const std::string & )> fnReset )
+	{
+		m_fnParent = std::move( fnParent );
+		m_fnState  = std::move( fnState );
+		m_fnReset  = std::move( fnReset );
+		return *this;
+	}
+
 	Area &Registry::Add( const char *pszId, const char *pszTitle, Section eSection )
 	{
 		const std::string sId = pszId ? pszId : "";
@@ -899,9 +934,12 @@ namespace gamescope::ui
 	// =====================================================================
 	Adjustable Adjustable::Of( const Entry &e )
 	{
-		return Adjustable{ e.GetKind(), &e.Binding(), e.HasRange(),
-		                   e.Lo(), e.Hi(), e.StepSize(), &e.Options(),
-		                   e.GetCompositeKind() };
+		Adjustable adj{ e.GetKind(), &e.Binding(), e.HasRange(),
+		                e.Lo(), e.Hi(), e.StepSize(), &e.Options(),
+		                e.GetCompositeKind() };
+		if ( e.GetKind() == Kind::Composite && e.GetCompositeKind() == CompositeKind::List )
+			adj.nListCount = (int)e.ListItems().size();
+		return adj;
 	}
 
 	Adjustable Adjustable::Of( const Parameter &p )
@@ -988,6 +1026,22 @@ namespace gamescope::ui
 			case Kind::Composite:
 				if ( adj.eComposite == CompositeKind::Color )
 					return false;
+				// A List's value is an index into its items, so the arrow
+				// keys step it exactly as a Choice steps its options: one
+				// item at a time, stopping at both ends, and "nothing
+				// selected" (-1) lands on the first item -- the same "first
+				// arrow lands inside the list" rule ListBoxStep() applies.
+				if ( adj.eComposite == CompositeKind::List )
+				{
+					const int *p = std::get_if<int>( &vNow );
+					if ( p == nullptr || adj.nListCount <= 0 )
+						return false;
+					const int nNext = *p < 0 ? 0 : std::clamp( *p + nDir, 0, adj.nListCount - 1 );
+					if ( nNext == *p )
+						return false;
+					adj.pBind->Set( Value{ nNext } );
+					return true;
+				}
 				[[fallthrough]];
 
 			case Kind::Slider:
@@ -1071,6 +1125,8 @@ namespace gamescope::ui
 			// A packed colour is not an ordered scalar -- see the Composite
 			// case above for why. Anchor, Hue, Strip and Graph are.
 			case Kind::Composite:
+				if ( adj.eComposite == CompositeKind::List )
+					return adj.nListCount > 0;
 				return adj.eComposite != CompositeKind::Color;
 
 			// Text, Bank, Action: no ordering an arrow could follow.

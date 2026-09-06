@@ -1797,7 +1797,9 @@ TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_
 // matter how it is drawn.
 TEST_CASE( "icons: every registered area has one, and no two are the same drawing", "[overlay_ui]" )
 {
-	// The sixteen this build registers. Written out rather than walked off
+	// The fifteen this build registers (setup.pergame left with Profiles v2,
+	// 2026-09-06 -- a game's settings are a profile now, so the area and its
+	// glyph went together). Written out rather than walked off
 	// the live registry because the areas are declared in the panel files,
 	// which this test binary deliberately does not link -- so the list is
 	// the test's own statement of what the rail must be able to draw.
@@ -1822,7 +1824,7 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		"display.general", "display.upscaling", "display.resolution",
 		"display.frame_limiter", "display.hdr", "image.shaders", "system.general",
 		"audio.mixer", "system.hud", "system.crosshair", "system.log",
-		"system.changelog", "setup.profiles", "setup.pergame", "setup.appearance",
+		"system.changelog", "setup.profiles", "setup.appearance",
 		"setup.cursor",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
@@ -2100,6 +2102,138 @@ TEST_CASE( "palette panel: only scale and surface size move it", "[overlay_ui]" 
 	// itself.
 	ScopedScale s( 1.0f );
 	REQUIRE( SolveLauncher( 1080.0f ).flTop > SolveLauncher( 720.0f ).flTop );
+}
+
+// =========================================================================
+//  Profiles v2 (2026-09-06): the registry's session seam
+// =========================================================================
+// The Profiles area installs three registry-wide things: a default badge
+// every area inherits, an inheritance seam every row's marker asks, and a
+// List composite whose value is an index into its items. Each is pinned
+// here on a bare registry, no config layer.
+TEST_CASE( "badge: an area without its own falls back to the registry default", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+
+	ui::Area &crosshair = reg.Add( "system.crosshair", "Crosshair", ui::Section::System );
+	ui::Area &appearance = reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+	appearance.Badge( []{ return std::string( "global only" ); } );
+
+	// Before the Profiles area registers: no badge, exactly as before.
+	REQUIRE( crosshair.BadgeText().empty() );
+
+	std::string sSession = "[Game] Rust";
+	reg.DefaultBadge( [ &sSession ]{ return sSession; } );
+	REQUIRE( crosshair.BadgeText() == "[Game] Rust" );
+	sSession = "Casual (launch)";
+	REQUIRE( crosshair.BadgeText() == "Casual (launch)" );
+
+	// An area's own badge still wins -- Appearance keeps "global only"
+	// whatever the session edits, which is the whole point of it.
+	REQUIRE( appearance.BadgeText() == "global only" );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "inheritance: a row resolves to its Key() or its id, and answers None without the seam", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "system.hud", "HUD", ui::Section::System );
+
+	bool bEnabled = true;
+	int  nLength  = 12;
+	float flStrength = 1.0f;
+	ui::Entry &hud = a.Switch( "hud.enabled", "Show HUD", ui::Bind( &bEnabled ) )
+		.Help( "h" ).Key( "fps_display.enabled" );
+	ui::Entry &len = a.Slider( "crosshair.line_length", "Length", ui::Bind( &nLength ) )
+		.Help( "h" );
+	ui::Entry &vib = a.Switch( "image.shaders.vibrancy", "Vibrancy", ui::Bind( &bEnabled ) )
+		.Help( "h" ).Key( "reshade.vibrancy.enabled" );
+	vib.Param( "strength", "Saturation", ui::Bind( &flStrength ) )
+		.Help( "h" ).Key( "reshade.vibrancy.strength" );
+
+	// The key a declaration resolves to: the declared one, else the id.
+	REQUIRE( ui::Registry::KeyOf( hud ) == "fps_display.enabled" );
+	REQUIRE( ui::Registry::KeyOf( len ) == "crosshair.line_length" );
+	REQUIRE( ui::Registry::KeyOf( vib.ParamAt( 0 ) ) == "reshade.vibrancy.strength" );
+
+	// No seam registered: every row is None, so no marker can appear and
+	// the Inspector prints nothing -- the state of every build before
+	// Profiles v2, and of a test binary that never links the config layer.
+	REQUIRE( reg.KeyStateFor( hud ) == ui::InheritState::Plain );
+	REQUIRE( reg.InheritedParent().empty() );
+	REQUIRE_FALSE( reg.ResetKeyToInherited( "fps_display.enabled" ) );
+
+	// With the seam: the shell asks by resolved key and gets the answer the
+	// config layer would give. A key the layer does not know is None even
+	// though the row has a binding -- the "audio.stream" case.
+	std::vector<std::string> vReset;
+	reg.Inheritance(
+		[]{ return std::string( "Comp" ); },
+		[]( const std::string &sKey )
+		{
+			if ( sKey == "fps_display.enabled" ) return ui::InheritState::Overridden;
+			if ( sKey == "crosshair.line_length" || sKey == "reshade.vibrancy.strength" )
+				return ui::InheritState::Inherited;
+			return ui::InheritState::Plain;
+		},
+		[ &vReset ]( const std::string &sKey ) { vReset.push_back( sKey ); return true; } );
+
+	REQUIRE( reg.InheritedParent() == "Comp" );
+	REQUIRE( reg.KeyStateFor( hud ) == ui::InheritState::Overridden );
+	REQUIRE( reg.KeyStateFor( len ) == ui::InheritState::Inherited );
+	REQUIRE( reg.KeyStateFor( vib ) == ui::InheritState::Plain );
+	REQUIRE( reg.KeyStateFor( vib.ParamAt( 0 ) ) == ui::InheritState::Inherited );
+	REQUIRE( reg.ResetKeyToInherited( ui::Registry::KeyOf( hud ) ) );
+	REQUIRE( vReset == std::vector<std::string>{ "fps_display.enabled" } );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "list composite: its value steps across its items and its verbs are declared", "[overlay_ui]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &a = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
+
+	int nSelected = 1;
+	int nCreate = 0, nDelete = 0;
+	bool bLast = true;
+	ui::Entry &list = a.Composite( "profiles.list", "Profiles", ui::CompositeKind::List, ui::Bind( &nSelected ) )
+		.Items( []{
+			return std::vector<ui::ListItem>{ { "Rust", "[Game]", "inherits Comp" }, { "Comp", "", "" }, { "Casual", "", "" } };
+		} )
+		.ListAction( "Create", [ & ]{ ++nCreate; } )
+		.ListAction( "Delete", [ & ]{ ++nDelete; }, true,
+			[ & ]{ return bLast ? std::string( "last profile" ) : std::string(); } )
+		.Help( "h" );
+
+	REQUIRE( list.ListItems().size() == 3 );
+	REQUIRE( list.ListActionCount() == 2 );
+	REQUIRE( list.ListActionAt( 1 ).bDanger );
+	REQUIRE( list.ListActionAt( 1 ).fnDisabledReason() == "last profile" );
+	bLast = false;
+	REQUIRE( list.ListActionAt( 1 ).fnDisabledReason().empty() );
+	list.ListActionAt( 0 ).fn();
+	REQUIRE( nCreate == 1 );
+	REQUIRE( nDelete == 0 );
+
+	// Left/Right on the band step the index like a Choice steps its
+	// options: one item, stopping at the ends, -1 landing on the first.
+	const ui::Adjustable adj = ui::Adjustable::Of( list );
+	REQUIRE( ui::CanAdjust( adj ) );
+	REQUIRE( ui::AdjustValue( adj, +1, false ) );
+	REQUIRE( nSelected == 2 );
+	REQUIRE_FALSE( ui::AdjustValue( adj, +1, false ) );
+	REQUIRE( nSelected == 2 );
+	nSelected = -1;
+	REQUIRE( ui::AdjustValue( adj, -1, false ) );
+	REQUIRE( nSelected == 0 );
+
+	// The list is not read-only (it has a real setter) and, unlike a
+	// Graph, is offered by the palette.
+	REQUIRE_FALSE( list.ReadOnly() );
+	REQUIRE( rec.Count() == 0 );
 }
 
 // =========================================================================

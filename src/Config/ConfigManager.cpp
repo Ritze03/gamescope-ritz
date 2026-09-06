@@ -292,6 +292,7 @@ namespace gamescope::config
                 s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
                 s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
                 s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
+                s.overlay.profiles_filter_other_games = JGetBool( *pOverlay, "profiles_filter_other_games", s.overlay.profiles_filter_other_games );
 
                 // Issue #35: per-panel saved window geometry (ConfigSchema.h's
                 // PanelGeometry/OverlaySettings::panel_geometry comments).
@@ -516,6 +517,7 @@ namespace gamescope::config
             jOverlay[ "startup_announce_enabled" ] = o.startup_announce_enabled;
             jOverlay[ "capture_all_keyboard_input" ] = o.capture_all_keyboard_input;
             jOverlay[ "keyboard_navigation_enabled" ] = o.keyboard_navigation_enabled;
+            jOverlay[ "profiles_filter_other_games" ] = o.profiles_filter_other_games;
 
             // Issue #35: per-panel saved window geometry - see the parse
             // side above and ConfigSchema.h's PanelGeometry/
@@ -1383,6 +1385,19 @@ namespace gamescope::config
         if ( !oFile )
             return std::nullopt;
         return MetaFromJson( *oFile, svSanitizedName );
+    }
+
+    bool IsSettingsKey( std::string_view svDottedKey )
+    {
+        // The struct's own serializer is the one list of keys a profile
+        // can hold, so it is the one list this answers from -- a key added
+        // to SectionsToJson() is known here without a second table.
+        static const std::set<std::string> s_Keys = []{
+            std::set<std::string> keys;
+            FlattenKeys( SectionsToJson( Settings{} ), "", keys );
+            return keys;
+        }();
+        return s_Keys.count( std::string( svDottedKey ) ) > 0;
     }
 
     bool ProfileExists( std::string_view svSanitizedName )

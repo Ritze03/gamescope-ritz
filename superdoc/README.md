@@ -52,7 +52,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 - [Profiles](features/profiles.md) -- Profiles v2: a profile is the file you edit,
   general vs game profiles, live diff-based inheritance and its ceiling, the file
-  formats, the resolution order, the API the Profiles area calls, `--profile` /
+  formats, the resolution order, the Profiles area (the list, the four modals, the
+  inherited/overridden markers, the session badge), the API it calls, `--profile` /
   `ritz_profile`, and the schema 2 -> 3 migration table (the v1 model as history).
 
 ### External surfaces

@@ -1,19 +1,24 @@
 // The Setup section's areas of the settings overlay -- Profiles and
-// Appearance. See superdoc/features/profiles.md and
-// superdoc/planning/profiles-concept.md (v2).
+// Appearance. See superdoc/features/profiles.md (Profiles v2; "The Profiles
+// area" section is this file's UI) and superdoc/planning/profiles-concept.md.
 //
-// PROFILES AREA: BEING REBUILT (2026-09-06). The v1 rows (Use / Restore /
-// Save as new / Save changes / Auto-save / Rename / Delete, and the whole
-// Per-game area) were removed with the model they served; the invisible
-// layer underneath is done (Config/ConfigManager.h: SessionProfile(),
-// SelectProfile(), CreateProfile()/CopyProfile()/EditProfileMeta()/
-// DeleteProfile(), ListProfiles(), OverriddenKeys(), ResetKeyToInherited())
-// and the list-with-modals UI the user chose lands in a follow-up. Until
-// then the area is one honest Facts row saying what the session is editing.
+// PROFILES AREA (2026-09-06, the user's own sketch): a list of every
+// profile leading the sheet, four equal verbs under it (Create / Copy / Edit
+// / Delete, each a modal), an Inherits dropdown for a game profile, the
+// "Filter game profiles" switch, and one Status row at the bottom. There are
+// NO load or save buttons anywhere: selecting a line IS loading it (and is
+// the assignment this game remembers), and every edit is saved into it as it
+// happens -- profiles-concept.md v2, decision 3.
+//
+// The decisions live in PanelConfig.h's pure helpers (labels, filter,
+// validation, status text) so tests can hold them; this file draws and calls
+// the config layer.
 //
 // Thread safety: drawn from SettingsOverlay_AddLayer() on the steamcompmgr
 // thread, same as PanelDisplay.cpp/PanelShaders.cpp -- see PanelDisplay.cpp's
-// file-level comment for the full argument.
+// file-level comment for the full argument. The CRUD calls are synchronous
+// file writes from that thread, on purpose: a button press followed by a
+// directory re-read is the 2026-09-05 "restart to see a new profile" lesson.
 #include "PanelConfig.h"
 
 #include <algorithm>
@@ -28,11 +33,13 @@
 
 #include "Config/ConfigManager.h"
 #include "UI/Registry.h"
-#include "UI/Controls.h"   // controls::DeferToRelease() -- UI scale applies on release
+#include "UI/Controls.h"   // controls::DeferToRelease(), the modals' atoms
+#include "UI/Colors.h"
 #include "Notifications.h"
 #include "Palette.h"
 #include "Fonts.h"
 #include "../SettingsOverlay.h"
+#include "steamcompmgr.hpp"   // force_repaint()
 
 #include "imgui.h"
 
@@ -185,32 +192,497 @@ namespace gamescope
 			gamescope::fonts::RequestRebuild( s_GeneralSettings.overlay.display_scale );
 		}
 
-		// ---- Profiles (placeholder while the area is rebuilt) ----------
+		// =================================================================
+		//  Profiles
+		// =================================================================
+		// ---- the cached directory read ------------------------------------
+		// ListProfiles() is blocking directory I/O, so it is read once per
+		// change, never per frame: the config generation covers everything
+		// the config layer does (select, CRUD, reset), s_nListDirty covers
+		// what only this file knows about (the filter switch).
+		struct ProfilesCache
+		{
+			bool                              bLoaded = false;
+			uint64_t                          ulGeneration = 0;
+			uint32_t                          nDirty = 0;
+			std::vector<config::ProfileMeta>  all;
+			std::vector<size_t>               visible;
+			std::vector<ui::ListItem>         items;
+			std::vector<std::string>          inheritNames;   // "None" + generals
+		};
+		// The Inherits dropdown's option labels. Refreshed ONLY inside
+		// BuildProfilesArea(), never by EnsureProfilesLoaded(): an Entry's
+		// Options keep pszLabel pointers into these strings, and a cache
+		// refresh mid-frame (a setter's own re-read) would otherwise free
+		// them under a Choice drawn later that same frame. The area rebuilds
+		// on the same triggers the cache refreshes on, so the two cannot
+		// drift for more than the frame in which the change happened.
+		std::vector<std::string> s_InheritLabels;
+		std::vector<ui::Option>  s_InheritOptions;
+		ProfilesCache s_Profiles;
+		uint32_t      s_nListDirty = 0;
+
+		bool FilterOtherGames()
+		{
+			EnsureGeneralSettingsLoaded();
+			return s_GeneralSettings.overlay.profiles_filter_other_games;
+		}
+
+		void EnsureProfilesLoaded()
+		{
+			const uint64_t ulGen = config::ConfigGeneration();
+			if ( s_Profiles.bLoaded && s_Profiles.ulGeneration == ulGen && s_Profiles.nDirty == s_nListDirty )
+				return;
+			s_Profiles.bLoaded      = true;
+			s_Profiles.ulGeneration = ulGen;
+			s_Profiles.nDirty       = s_nListDirty;
+
+			s_Profiles.all     = config::ListProfiles();
+			s_Profiles.visible = panelconfig::VisibleProfiles( s_Profiles.all, FilterOtherGames(),
+				config::SessionAppId(), config::SessionProfile() );
+
+			const bool bOverride = config::SessionProfileOverride().has_value();
+			s_Profiles.items.clear();
+			for ( size_t i : s_Profiles.visible )
+			{
+				const config::ProfileMeta &m = s_Profiles.all[ i ];
+				s_Profiles.items.push_back( ui::ListItem{ panelconfig::ListName( m ), panelconfig::ListTag( m ),
+					panelconfig::ListSecondary( m, config::SessionProfile(), bOverride ) } );
+			}
+
+			s_Profiles.inheritNames = panelconfig::InheritOptionNames( s_Profiles.all );
+		}
+
+		// The session profile's metadata, from the cache; a profile the
+		// directory read did not find (a race with an external delete) still
+		// yields a usable general meta named after the session.
+		config::ProfileMeta SessionMeta()
+		{
+			EnsureProfilesLoaded();
+			for ( const config::ProfileMeta &m : s_Profiles.all )
+				if ( m.name == config::SessionProfile() )
+					return m;
+			config::ProfileMeta m;
+			m.name = config::SessionProfile();
+			return m;
+		}
+
 		std::string SessionBadge()
 		{
-			const std::string &sProfile = config::SessionProfile();
-			return config::SessionProfileOverride() ? sProfile + " (launch option)" : sProfile;
+			return panelconfig::SessionBadge( SessionMeta(), config::SessionProfileOverride().has_value() );
 		}
 
+		// Rebuild input for the dynamic area: which rows exist (the
+		// Inherits row only for a game profile) and what the dropdown offers
+		// both follow the profile set, which the generation and the dirty
+		// counter together track.
 		uint64_t ProfilesHash()
 		{
-			// The placeholder shows only what the session resolves to, so
-			// the config generation is the whole rebuild input.
-			return config::ConfigGeneration() + 1;
+			return ( config::ConfigGeneration() + 1 ) * 1315423911ull ^ (uint64_t)s_nListDirty;
 		}
 
+		void Toast( const std::string &s, Notifications::Kind eKind = Notifications::Kind::Info )
+		{
+			Notifications::Show( s, eKind );
+		}
+
+		// Selecting a line: the one action the list has. Loads the profile
+		// and remembers it for this game (config::SelectProfile), which is
+		// why there is no Load button -- and clears a `--profile` override,
+		// so selecting the override's own line turns it into the assignment.
+		void SelectVisible( int nIndex )
+		{
+			EnsureProfilesLoaded();
+			if ( nIndex < 0 || nIndex >= (int)s_Profiles.visible.size() )
+				return;
+			const std::string sName = s_Profiles.all[ s_Profiles.visible[ (size_t)nIndex ] ].name;
+			if ( sName == config::SessionProfile() && !config::SessionProfileOverride() )
+				return;
+			if ( config::SelectProfile( sName ) )
+			{
+				Toast( "Now editing '" + sName + "'" );
+				force_repaint();
+			}
+		}
+
+		// ---- the modals -----------------------------------------------------
+		// A modal body's rows are ordinary rows, so a LABEL is the same thing
+		// a sheet row draws for itself via SplitLabelZone() -- one call, and
+		// the modal gets the sheet's own label column.
+		ui::RowCtx LabeledRow( ui::ModalBodyCtx &ctx, const char *pszLabel )
+		{
+			ui::RowCtx row = ui::ModalNextRow( ctx );
+			ImRect rcLabel, rcValue;
+			row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+			ui::DrawText( rcLabel, ui::TypeRole::Label, ui::Col( ui::Role::TextLabel ), pszLabel );
+			return row;
+		}
+
+		// One line of prose in a modal body -- the Delete prompt, an error.
+		void ModalLine( ui::ModalBodyCtx &ctx, const char *pszText, ui::Role eRole )
+		{
+			const ImRect rc = ui::ModalNextBlock( ctx, ui::Px( ui::tok::kControlH ) );
+			ui::DrawText( rc, ui::TypeRole::Body, ui::Col( eRole ), pszText );
+		}
+
+		enum class FormKind { Create, Copy, Edit };
+
+		// The Create / Copy / Edit form. One state, one body: the three
+		// differ only in what they are prefilled with and which config call
+		// the primary makes. Errors stay INLINE -- the modal stays open with
+		// the typed fields intact (ModalSpec::fnValidate), never a toast.
+		struct Form
+		{
+			FormKind    eKind = FormKind::Create;
+			std::string sSubject;        // the profile Copy/Edit acts on
+			bool        bGame = false;
+			std::string sAppId, sName;
+			bool        bEditingAppId = false, bEditingName = false;
+			std::string sNameError, sAppIdError, sOpError;
+			std::string sCreatedName;    // set by fnValidate for fnPrimary
+		};
+		Form s_Form;
+
+		float FormRows()
+		{
+			float fl = s_Form.bGame ? 3.0f : 2.0f;
+			if ( !s_Form.sNameError.empty() ) fl += 1.0f;
+			if ( !s_Form.sAppIdError.empty() ) fl += 1.0f;
+			if ( !s_Form.sOpError.empty() ) fl += 1.0f;
+			return fl;
+		}
+
+		void DrawFormBody( ui::ModalBodyCtx &ctx )
+		{
+			Form &f = s_Form;
+			ui::controls::Switch( LabeledRow( ctx, "Game specific" ), "gamespecific", &f.bGame );
+			if ( f.bGame )
+			{
+				ui::controls::Text( LabeledRow( ctx, "GameID" ), "gameid", &f.sAppId, &f.bEditingAppId,
+				                    "app id", f.sAppIdError.empty() ? nullptr : f.sAppIdError.c_str() );
+				if ( !f.sAppIdError.empty() )
+					ModalLine( ctx, f.sAppIdError.c_str(), ui::Role::WarnText );
+			}
+			ui::controls::Text( LabeledRow( ctx, f.eKind == FormKind::Edit ? "Profile name" : "New profile name" ),
+			                    "name", &f.sName, &f.bEditingName, "name",
+			                    f.sNameError.empty() ? nullptr : f.sNameError.c_str() );
+			if ( !f.sNameError.empty() )
+				ModalLine( ctx, f.sNameError.c_str(), ui::Role::WarnText );
+			if ( !f.sOpError.empty() )
+				ModalLine( ctx, f.sOpError.c_str(), ui::Role::WarnText );
+		}
+
+		// The primary press: check the fields, then ask the config layer.
+		// Either refusal is written into the form and keeps the modal open.
+		bool FormValidate()
+		{
+			Form &f = s_Form;
+			EnsureProfilesLoaded();
+			const panelconfig::FormCheck check = panelconfig::CheckProfileForm(
+				f.bGame, f.sAppId, f.sName, s_Profiles.all,
+				f.eKind == FormKind::Edit ? f.sSubject : std::string() );
+			f.sNameError  = check.sNameError;
+			f.sAppIdError = check.sAppIdError;
+			f.sOpError.clear();
+			if ( !check.ok() )
+				return false;
+
+			const config::ProfileMeta session = SessionMeta();
+			config::ProfileMeta meta;
+			if ( f.eKind == FormKind::Edit )
+			{
+				for ( const config::ProfileMeta &m : s_Profiles.all )
+					if ( m.name == f.sSubject )
+						meta = m;
+			}
+			meta.name = check.sName;
+			meta.kind = f.bGame ? config::ProfileKind::Game : config::ProfileKind::General;
+			if ( f.bGame )
+			{
+				meta.app_id = f.sAppId;
+				// The running game's title, when the id is the running game's.
+				if ( config::SessionAppId() && *config::SessionAppId() == f.sAppId &&
+				     config::SessionGameName() != f.sAppId )
+					meta.game_name = config::SessionGameName();
+				if ( f.eKind != FormKind::Edit )
+				{
+					// A new child of the general profile in play (Create), or
+					// of what the source inherits (Copy of a game profile) /
+					// the source itself (Copy of a general one).
+					if ( f.eKind == FormKind::Create )
+						meta.inherits = panelconfig::NewGameInherits( session );
+					else
+					{
+						for ( const config::ProfileMeta &m : s_Profiles.all )
+							if ( m.name == f.sSubject )
+								meta.inherits = m.kind == config::ProfileKind::Game ? m.inherits : m.name;
+					}
+					if ( meta.inherits == meta.name )
+						meta.inherits.clear();
+				}
+			}
+			else
+			{
+				meta.app_id.clear();
+				meta.game_name.clear();
+				meta.inherits.clear();
+			}
+
+			config::ProfileOp op;
+			switch ( f.eKind )
+			{
+				case FormKind::Create: op = config::CreateProfile( meta ); break;
+				case FormKind::Copy:   op = config::CopyProfile( f.sSubject, meta ); break;
+				case FormKind::Edit:   op = config::EditProfileMeta( f.sSubject, meta ); break;
+			}
+			if ( !op )
+			{
+				f.sOpError = op.error;
+				return false;
+			}
+			f.sCreatedName = meta.name;
+			return true;
+		}
+
+		void FormPrimary()
+		{
+			const Form f = s_Form;
+			s_nListDirty++;
+			switch ( f.eKind )
+			{
+				case FormKind::Create:
+				case FormKind::Copy:
+					// A new profile is selected straight away -- the user
+					// made it to use it -- with the one toast that says so.
+					config::SelectProfile( f.sCreatedName );
+					Toast( ( f.eKind == FormKind::Create ? "Created '" : "Copied to '" ) + f.sCreatedName + "'" );
+					break;
+				case FormKind::Edit:
+					Toast( "Saved '" + f.sCreatedName + "'" );
+					break;
+			}
+			force_repaint();
+		}
+
+		void OpenForm( FormKind eKind )
+		{
+			if ( ui::IsModalOpen() )
+				return;
+			EnsureProfilesLoaded();
+			const config::ProfileMeta session = SessionMeta();
+			const std::optional<std::string> &oAppId = config::SessionAppId();
+
+			s_Form = Form{};
+			s_Form.eKind    = eKind;
+			s_Form.sSubject = session.name;
+			switch ( eKind )
+			{
+				case FormKind::Create:
+					s_Form.bGame  = false;
+					s_Form.sAppId = oAppId ? *oAppId : std::string();
+					break;
+				case FormKind::Copy:
+					s_Form.bGame  = session.kind == config::ProfileKind::Game;
+					s_Form.sAppId = !session.app_id.empty() ? session.app_id : ( oAppId ? *oAppId : std::string() );
+					break;
+				case FormKind::Edit:
+					s_Form.bGame  = session.kind == config::ProfileKind::Game;
+					s_Form.sAppId = !session.app_id.empty() ? session.app_id : ( oAppId ? *oAppId : std::string() );
+					s_Form.sName  = session.name;
+					break;
+			}
+
+			ui::ModalSpec spec;
+			switch ( eKind )
+			{
+				case FormKind::Create: spec.sTitle = "Create profile";           spec.sPrimaryLabel = "Create"; break;
+				case FormKind::Copy:   spec.sTitle = "Copy '" + session.name + "'"; spec.sPrimaryLabel = "Copy";   break;
+				case FormKind::Edit:   spec.sTitle = "Edit '" + session.name + "'"; spec.sPrimaryLabel = "Save";   break;
+			}
+			spec.flMinBodyRows = FormRows();
+			spec.fnBody     = DrawFormBody;
+			spec.fnValidate = FormValidate;
+			spec.fnPrimary  = FormPrimary;
+			ui::OpenModal( std::move( spec ) );
+		}
+
+		// Delete: a question, the consequence for its children, and a
+		// danger-tinted primary. The last profile's Delete verb is disabled
+		// before this is ever reached (DeleteBlocker), so the modal never
+		// has to refuse for that reason; a config-layer refusal is still
+		// shown inline.
+		std::string s_sDeleteError;
+
+		void OpenDelete()
+		{
+			if ( ui::IsModalOpen() )
+				return;
+			EnsureProfilesLoaded();
+			const config::ProfileMeta session = SessionMeta();
+			const size_t nChildren = panelconfig::CountChildren( s_Profiles.all, session.name );
+			s_sDeleteError.clear();
+
+			ui::ModalSpec spec;
+			spec.sTitle         = "Delete '" + session.name + "'?";
+			spec.sPrimaryLabel  = "Delete";
+			spec.bPrimaryDanger = true;
+			spec.flMinBodyRows  = nChildren ? 2.0f : 1.0f;
+			const std::string sChildren = panelconfig::DeleteChildrenLine( nChildren );
+			spec.fnBody = [ sChildren ]( ui::ModalBodyCtx &ctx )
+			{
+				ModalLine( ctx, "Are you sure?", ui::Role::TextBody );
+				if ( !sChildren.empty() )
+					ModalLine( ctx, sChildren.c_str(), ui::Role::TextMeta );
+				if ( !s_sDeleteError.empty() )
+					ModalLine( ctx, s_sDeleteError.c_str(), ui::Role::WarnText );
+			};
+			const std::string sName = session.name;
+			spec.fnValidate = [ sName ]
+			{
+				const config::ProfileOp op = config::DeleteProfile( sName );
+				if ( !op )
+				{
+					s_sDeleteError = op.error;
+					return false;
+				}
+				return true;
+			};
+			spec.fnPrimary = [ sName ]
+			{
+				s_nListDirty++;
+				Toast( "Deleted '" + sName + "'" );
+				force_repaint();
+			};
+			ui::OpenModal( std::move( spec ) );
+		}
+
+		std::string DeleteReason()
+		{
+			EnsureProfilesLoaded();
+			return panelconfig::DeleteBlocker( s_Profiles.all.size() );
+		}
+
+		// ---- the Inherits dropdown --------------------------------------------
+		void SetInherits( int nOption )
+		{
+			EnsureProfilesLoaded();
+			config::ProfileMeta meta = SessionMeta();
+			if ( meta.kind != config::ProfileKind::Game )
+				return;
+			if ( nOption < 0 || nOption >= (int)s_Profiles.inheritNames.size() )
+				return;
+			const std::string sParent = nOption == 0 ? std::string() : s_Profiles.inheritNames[ (size_t)nOption ];
+			if ( sParent == meta.inherits )
+				return;
+			meta.inherits = sParent;
+			const config::ProfileOp op = config::EditProfileMeta( meta.name, meta );
+			if ( !op )
+			{
+				// The one Profiles control that is not a modal; the refusal
+				// still has to be seen somewhere, and this row has no field
+				// to sit beside.
+				Toast( op.error, Notifications::Kind::Error );
+				return;
+			}
+			s_nListDirty++;
+			force_repaint();
+		}
+
+		// ---- the area ----------------------------------------------------------
 		void BuildProfilesArea( ui::Area &a )
 		{
-			a.Group( "Status" );
-			a.Facts( "profiles.status", "Being rebuilt",
-				[]{ return SessionBadge(); } )
-				.Help( "The Profiles area is being rebuilt around a list of profiles with Create, Copy, "
-				       "Edit and Delete. Until then this shows which profile every change is saved into." )
-				.Keywords( "profile status session editing inherits launch option game" )
-				.Live( "editing", []{
-					return ui::Fact{ "editing", config::SessionProfile() + " -- every change is saved into it" };
+			EnsureProfilesLoaded();
+			const config::ProfileMeta session = SessionMeta();
+
+			// See s_InheritLabels: the labels an Entry points at live here,
+			// and only a rebuild -- which frees the old Entry first -- may
+			// replace them.
+			s_InheritLabels = s_Profiles.inheritNames;
+			s_InheritOptions.clear();
+			for ( size_t i = 0; i < s_InheritLabels.size(); ++i )
+				s_InheritOptions.push_back( ui::Option{ (int)i, s_InheritLabels[ i ].c_str() } );
+
+			a.Group( "Profiles" );
+
+			a.Composite( "profiles.list", "Profiles", ui::CompositeKind::List,
+				ui::AnyBind::Of<int>(
+					[]{
+						EnsureProfilesLoaded();
+						return panelconfig::VisibleIndexOf( s_Profiles.all, s_Profiles.visible,
+							config::SessionProfile() );
+					},
+					[]( int n ) { SelectVisible( n ); } ) )
+				.Items( []{ EnsureProfilesLoaded(); return s_Profiles.items; } )
+				.ListAction( "Create", []{ OpenForm( FormKind::Create ); } )
+				.ListAction( "Copy",   []{ OpenForm( FormKind::Copy ); } )
+				.ListAction( "Edit",   []{ OpenForm( FormKind::Edit ); } )
+				.ListAction( "Delete", OpenDelete, /* bDanger */ true, DeleteReason )
+				.Help( "Every saved profile. Selecting one loads it and makes it this game's profile -- "
+				       "every change you make afterwards is saved straight into it. Game profiles are "
+				       "marked [Game] and may inherit a general profile's values. Create, Copy, Edit and "
+				       "Delete act on the selected profile." )
+				.Keywords( "profile profiles list select load save use apply restore per-game this game "
+				           "override game general create copy edit delete rename inherit inherits" )
+				.Live( "count", []{
+					EnsureProfilesLoaded();
+					return ui::Fact{ "profiles", std::to_string( s_Profiles.all.size() ) + " on disk, " +
+						std::to_string( s_Profiles.visible.size() ) + " shown" };
 				} )
-				.Live( "kind", []{
+				.Live( "file", []{
+					return ui::Fact{ "file", config::ProfilePath( config::SessionProfile() ) };
+				} )
+				.Live( "dir", []{
+					return ui::Fact{ "profiles directory", config::ProfilesDir() };
+				} );
+
+			if ( session.kind == config::ProfileKind::Game )
+			{
+				a.Choice( "profiles.inherits", "Inherits",
+					ui::AnyBind::Of<int>(
+						[]{
+							EnsureProfilesLoaded();
+							return panelconfig::InheritIndex( s_Profiles.inheritNames, SessionMeta().inherits );
+						},
+						SetInherits ),
+					s_InheritOptions.data(), s_InheritOptions.size() )
+					.Help( "The general profile this game profile takes its values from. Only what you "
+					       "change here is stored in this profile; everything else follows the parent as "
+					       "it changes. None makes it stand alone with a full copy of the values." )
+					.Keywords( "inherits inherit parent base general profile" );
+			}
+
+			a.Switch( "profiles.filter", "Filter game profiles",
+				ui::AnyBind::Of<bool>(
+					[]{ return FilterOtherGames(); },
+					[]( bool b )
+					{
+						EnsureGeneralSettingsLoaded();
+						s_GeneralSettings.overlay.profiles_filter_other_games = b;
+						QueueGeneralSave();
+						s_nListDirty++;
+					} ) )
+				.Help( "On, the list shows only general profiles and this game's own. Off, it shows "
+				       "every game's profiles too." )
+				.Default( config::OverlaySettings{}.profiles_filter_other_games )
+				.Keywords( "filter game profiles show hide other games list" );
+
+			a.Group( "Status" );
+			a.Facts( "profiles.status", "Status",
+				[]{
+					return panelconfig::StatusSummary( SessionMeta(), config::SessionGameName(),
+						config::SessionAppId(), config::SessionProfileOverride() );
+				} )
+				.Help( "Which profile every change is saved into right now, what it inherits, and "
+				       "which game this session belongs to." )
+				.Keywords( "status editing session inherits launch option game" )
+				.Live( "summary", []{
+					return ui::Fact{ "status", panelconfig::StatusLong( SessionMeta(), config::SessionGameName(),
+						config::SessionAppId(), config::SessionProfileOverride() ) };
+				} )
+				.Live( "editing", []{
+					return ui::Fact{ "editing", panelconfig::ListLabel( SessionMeta() ) + " (" + config::SessionProfile() + ".json)" };
+				} )
+				.Live( "inherits", []{
 					const std::optional<std::string> oParent = config::SessionProfileParent();
 					return ui::Fact{ "inherits", oParent ? *oParent : std::string( "nothing -- a standalone profile" ) };
 				} )
@@ -219,10 +691,7 @@ namespace gamescope
 					return ui::Fact{ "launch option", oOverride ? *oOverride + " (this session only)" : std::string( "none" ) };
 				} )
 				.Live( "game", []{
-					return ui::Fact{ "game", panelconfig::GameFact( config::SessionAppId() ) };
-				} )
-				.Live( "dir", []{
-					return ui::Fact{ "profiles directory", config::ProfilesDir() };
+					return ui::Fact{ "game", panelconfig::GameStatusFact( config::SessionGameName(), config::SessionAppId() ) };
 				} );
 		}
 
@@ -457,11 +926,35 @@ namespace gamescope
 
 	void PanelConfig_RegisterAreas( ui::Registry &reg )
 	{
+		// ---- the session, registry-wide ---------------------------------
+		// Every area's badge is the session profile unless it declares its
+		// own (Appearance below), and every row's inherited / overridden
+		// marker is answered here -- the one place that knows profiles.
+		reg.DefaultBadge( SessionBadge );
+		reg.Inheritance(
+			[]{
+				const std::optional<std::string> oParent = config::SessionProfileParent();
+				return oParent ? *oParent : std::string();
+			},
+			[]( const std::string &sKey )
+			{
+				if ( !config::SessionProfileParent() || !config::IsSettingsKey( sKey ) )
+					return ui::InheritState::Plain;
+				return config::OverriddenKeys().count( sKey )
+					? ui::InheritState::Overridden : ui::InheritState::Inherited;
+			},
+			[]( const std::string &sKey )
+			{
+				const bool bOk = config::ResetKeyToInherited( sKey );
+				if ( bOk )
+					force_repaint();
+				return bOk;
+			} );
+
 		// ---- Profiles ------------------------------------------------
 		ui::Area &profiles = reg.Add( "setup.profiles", "Profiles", ui::Section::Setup );
-		profiles.Keywords( "profile preset game general inherits create copy edit delete named config" );
+		profiles.Keywords( "profile preset game general inherits create copy edit delete named config per-game" );
 		profiles.Summary( []{ return "editing " + SessionBadge(); } );
-		profiles.Badge( SessionBadge );
 		profiles.Rebuilds( ProfilesHash, BuildProfilesArea );
 
 		// ---- Appearance ----------------------------------------------

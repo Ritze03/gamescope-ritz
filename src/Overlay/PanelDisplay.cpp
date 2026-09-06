@@ -524,6 +524,7 @@ namespace gamescope
 					Cfg().gamescope.vrr_enabled = b;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.vrr_enabled" )
 			.Help( "Matches your screen's refresh rate to the game so motion looks smoother with "
 			       "less stutter. Needs a screen and cable that support VRR (FreeSync or G-Sync)." )
 			.Default( false )
@@ -537,6 +538,7 @@ namespace gamescope
 					Cfg().gamescope.tearing_enabled = b;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.tearing_enabled" )
 			.Help( "Shows new frames the instant they're ready instead of waiting for the screen. "
 			       "Feels more responsive, but fast camera movement can show a faint horizontal line." )
 			.Default( false )
@@ -556,6 +558,7 @@ namespace gamescope
 					Cfg().gamescope.force_grab_cursor = b;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.force_grab_cursor" )
 			.Help( "Keeps your mouse locked to the game at all times, not just when the cursor is "
 			       "hidden. Turn this on if the mouse ever seems to escape the game window." )
 			.Default( false )
@@ -582,6 +585,7 @@ namespace gamescope
 				[]{ return (int)g_wantedUpscaleFilter; },
 				[]( int n ) { SetFilter( (GamescopeUpscaleFilter)n ); } ),
 			kFilterOptions, std::size( kFilterOptions ) )
+			.Key( "gamescope.filter" )
 			.Help( "Chooses how the game's picture is stretched to fill your screen. FSR and NIS "
 			       "also sharpen it afterward; Pixel stays blocky except at exact resolution "
 			       "multiples." )
@@ -597,6 +601,7 @@ namespace gamescope
 			ui::AnyBind::Of<int>(
 				[]{ return UiPercentFromRawSharpness( g_upscaleFilterSharpness ); },
 				[]( int n ) { SetSharpnessUiPercent( n ); } ) )
+			.Key( "gamescope.sharpness" )
 			.Help( "How much extra sharpening FSR or NIS adds after resizing the picture. Higher "
 			       "looks crisper but too high adds haloing; this is separate from the Shaders "
 			       "area's Pre-sharpen, which works with any filter." )
@@ -628,6 +633,7 @@ namespace gamescope
 				[]{ return (int)g_wantedUpscaleScaler; },
 				[]( int n ) { SetScaler( (GamescopeUpscaleScaler)n ); } ),
 			kScalerOptions, std::size( kScalerOptions ) )
+			.Key( "gamescope.scaler" )
 			.Help( "Decides how the picture fits your screen when its shape doesn't match. Integer "
 			       "only resizes in whole-number steps, which stays sharp but can add black bars." )
 			.Default( (int)GamescopeUpscaleScaler::AUTO )
@@ -1393,6 +1399,7 @@ namespace gamescope
 			ui::AnyBind::Of<int>(
 				[]{ return CustomWidth(); },
 				[]( int n ) { SetCustomWidth( n ); } ) )
+			.Key( "gamescope.nested_width" )
 			.Help( "Width of the custom resolution the game renders at. With the aspect lock on, "
 			       "the height follows so the picture keeps its shape." )
 			.Range( (float)kMinDim, (float)kMaxDim )
@@ -1414,6 +1421,7 @@ namespace gamescope
 			ui::AnyBind::Of<int>(
 				[]{ return CustomHeight(); },
 				[]( int n ) { SetCustomHeight( n ); } ) )
+			.Key( "gamescope.nested_height" )
 			.Help( "Height of the custom resolution the game renders at. With the aspect lock on, "
 			       "the width follows." )
 			.Range( (float)kMinDim, (float)kMaxDim )
@@ -1430,6 +1438,7 @@ namespace gamescope
 				[]{ return CurrentRefreshChoice(); },
 				[]( int n ) { SetRefreshChoice( n ); } ),
 			kRefreshOptions, std::size( kRefreshOptions ) )
+			.Key( "gamescope.nested_refresh_hz" )
 			.Help( "The refresh rate the game is paced at and told about. Follow host uses your "
 			       "screen's own rate. Above the host's rate, frames are paced faster than the "
 			       "screen can show them -- this cannot change the monitor's real refresh." )
@@ -1440,6 +1449,7 @@ namespace gamescope
 			ui::AnyBind::Of<int>(
 				[]{ return CustomRefreshHz(); },
 				[]( int n ) { SetCustomRefreshHz( n ); } ) )
+			.Key( "gamescope.nested_refresh_hz" )
 			.Help( "A refresh rate not in the list above. Takes effect while Refresh rate is set to "
 			       "Custom." )
 			.Range( (float)kMinRefreshHz, (float)kMaxRefreshHz )
@@ -1596,6 +1606,7 @@ namespace gamescope
 			ui::AnyBind::Of<int>(
 				[]{ return Cfg().gamescope.fps_limit; },
 				[]( int n ) { SetFpsLimit( n ); } ) )
+			.Key( "gamescope.fps_limit" )
 			.Help( "Limits how many frames per second the game can show. Stepping down from 10 "
 			       "jumps straight to Unlimited -- the overlay itself gets too slow below that." )
 			.Range( 0.0f, (float)kMaxFpsLimit )
@@ -1727,6 +1738,7 @@ namespace gamescope
 					Cfg().gamescope.hdr_enabled = b;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.hdr_enabled" )
 			.Help( "Turns on HDR for richer colour and brighter highlights, on a screen that "
 			       "supports it. Every other setting in this area only matters while this is on." )
 			.Default( false )
@@ -1748,6 +1760,7 @@ namespace gamescope
 					Cfg().gamescope.sdr_gamut_wideness = f;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.sdr_gamut_wideness" )
 			.Help( "Makes colours in regular (non-HDR) content richer by stretching them toward "
 			       "your screen's wider colour range. 0 leaves colours exactly as the game intended." )
 			.Range( 0.0f, 1.0f )
@@ -1764,6 +1777,7 @@ namespace gamescope
 					Cfg().gamescope.sdr_on_hdr_brightness_nits = f;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.sdr_on_hdr_brightness_nits" )
 			.Help( "Sets how bright regular (non-HDR) content looks when it's shown next to HDR "
 			       "content." )
 			.Range( 50.0f, 1000.0f )
@@ -1787,6 +1801,7 @@ namespace gamescope
 					Cfg().gamescope.hdr_input_gain = f;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.hdr_input_gain" )
 			.Help( "Turns HDR content brighter or dimmer before it's shown on screen." )
 			.Range( 0.0f, 4.0f )
 			.Step( 0.05f )       // 81 positions; 1.00x, the default, is on the grid
@@ -1803,6 +1818,7 @@ namespace gamescope
 					Cfg().gamescope.sdr_input_gain = f;
 					QueueSave();
 				} ) )
+			.Key( "gamescope.sdr_input_gain" )
 			.Help( "Turns regular (non-HDR) content brighter or dimmer before it's blended in with "
 			       "the HDR picture." )
 			.Range( 0.0f, 4.0f )

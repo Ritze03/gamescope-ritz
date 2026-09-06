@@ -26,8 +26,12 @@ namespace gamescope::ui
 {
 	struct BandSpec
 	{
-		int    nLines   = 2;      // n, in {2, 3}
+		int    nLines   = 2;      // n, in {2, 3} -- or tok::kListBandLines for a List
 		ImVec2 bodyBase = {};     // base-unit body size; x == 0 means full-bleed
+		// List only: the body spans the label column too (the sketch's
+		// edge-to-edge list), and its last line is reserved for the verb
+		// strip -- see LayOutBand()'s List case and BandLayout::rcStrip.
+		bool   bSpansRow = false;
 	};
 
 	// API.md §7's kSpecs, verbatim.
@@ -38,6 +42,10 @@ namespace gamescope::ui
 		ImRect rcBand;    // the whole n x 44 band
 		ImRect rcBody;    // right-bound to the lane's control edge, spanning lines 1..n
 		RowCtx line1;     // "line 1 reads as a row" -- clause 2
+		// List only: the verb strip's rect on the band's LAST line, the same
+		// width as rcBody, kControlH tall and centred in that line. Zero for
+		// every other composite.
+		ImRect rcStrip;
 	};
 
 	// The four clauses, all mechanical, all satisfied here:

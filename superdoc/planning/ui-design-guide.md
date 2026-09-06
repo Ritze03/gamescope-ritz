@@ -429,3 +429,28 @@ and `.cpp`, GitHub, checked 2026-08-21):
 7. **Motion**: the source design specifies zero transition/animation timing. Should the overlay open
    (`SHIFT+TAB`) instantly as the design implies, or is a brief fade/scale-in wanted even though nothing
    in the handoff calls for it?
+
+### The List band, its verb strip, and the inherited/overridden dot (2026-09-06, Profiles)
+
+`CompositeKind::List` hosts `ListBox` in the sheet: a **six-line band** (`tok::kListBandLines`;
+every other composite is 2 or 3), edge to edge -- the one band that spends the label column,
+because the Profiles sketch has the list *leading* the sheet rather than sitting in a row's
+control column (Band.cpp's List case gives up SPEC §4.2's clauses 2 and 4 for it, on
+purpose). Lines 1–5 are whole list rows (the box is sized to `floor(h / kControlH)` rows so no
+blank strip is left under a fractional remainder); line 6 is the **verb strip**
+(`controls::VerbStrip`): N *equal-width* verb chips, `kGapSeg` apart, in `Verb`'s own accent /
+danger colours -- equal rather than measured widths because the sketch draws four same-size
+buttons and a strip whose chips resized as their labels changed would jitter. No row-selection
+wash behind the band (a 6-line accent slab under a box with its own frame read as an error);
+the state edge stays. The Inspector's CONFIGURE page does **not** redraw a List band (it did,
+and put a second list with a second Create/Copy/Edit/Delete beside the real one) -- it prints
+the selection and the verbs' disabled reasons instead.
+
+**The inherited/overridden dot:** a `Px(2.5)` accent circle `kS` after a row's label, on
+*overridden* rows only, while the session profile inherits. It is the design guide's "status
+dot" at its smallest; it shares neither the state edge's slot (D6: differs-from-default) nor
+the affordance column (SPEC §2.4: one glyph, by priority), so it can displace nothing.
+Inherited rows draw nothing -- the parent's values are the baseline, and marking the majority
+would bury the deviations the dot exists to show. The words (`inherited from Comp`,
+`overridden` + a neutral **Reset to inherited** chip) live in the Inspector's CONFIGURE page.
+

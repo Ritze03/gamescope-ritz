@@ -475,6 +475,15 @@ namespace gamescope::config
         // routing risk.
         bool keyboard_navigation_enabled = true;
 
+        // Profiles v2 (2026-09-06): the Profiles area's "Filter game
+        // profiles" switch -- on hides other games' game profiles from the
+        // list (general ones always show). A VIEW preference about this
+        // screen, not a setting a game could want differently, which is why
+        // it lives here in global.json with the other overlay preferences
+        // rather than in a profile (where it could hide the very profile it
+        // rode in on).
+        bool profiles_filter_other_games = true;
+
         // Issue #35: per-panel window position/size, restored on next
         // launch - replaces the "remembered only for the life of the ImGui
         // context" behavior ImGuiCond_FirstUseEver alone gives (Chrome.h's

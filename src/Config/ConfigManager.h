@@ -174,6 +174,10 @@ namespace gamescope::config
     // later). The alternative -- per-key "explicitly set" plumbing through
     // every panel -- was not worth it for this ceiling.
     const std::set<std::string> &OverriddenKeys();
+    // Whether a dotted key names a value a profile file can hold -- the
+    // Overlay's inheritance markers ask before marking a row, so a row whose
+    // registry id merely looks like a key ("audio.stream") shows nothing.
+    bool IsSettingsKey( std::string_view svDottedKey );
     // Drops one overridden key from the session profile's file so the value
     // follows the parent again. False if the profile does not inherit or the
     // key was not overridden. Synchronous; bumps ConfigGeneration().

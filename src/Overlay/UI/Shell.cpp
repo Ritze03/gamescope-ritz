@@ -2375,8 +2375,50 @@ namespace gamescope::ui::shell
 				case CompositeKind::Graph:
 				case CompositeKind::Strip:
 					return entry.SummaryText();
+				case CompositeKind::List:
+				{
+					// The selected item's label -- what the palette and
+					// DETAILS' `now` print for the list, the same way a
+					// Choice prints its option rather than its index.
+					const int n = AsInt( entry.Binding().Get() );
+					const std::vector<ListItem> items = entry.ListItems();
+					if ( n < 0 || n >= (int)items.size() )
+						return {};
+					return items[ (size_t)n ].sTag.empty()
+						? items[ (size_t)n ].sLabel
+						: items[ (size_t)n ].sTag + " " + items[ (size_t)n ].sLabel;
+				}
 			}
 			return {};
+		}
+
+		// =================================================================
+		//  Profiles v2 (2026-09-06): the inherited / overridden marker
+		// =================================================================
+		// While the session profile is a game profile with a parent, a row
+		// whose key the profile stores itself (config::OverriddenKeys()) is
+		// OVERRIDDEN; every other resolvable row is INHERITED. The sheet
+		// marks only the overridden ones -- a small accent dot after the
+		// label -- and says nothing for inherited: the parent's values are
+		// the baseline, and what a glance down a sheet should pick out is
+		// where THIS game deviates, not the majority that does not. The
+		// Inspector's CONFIGURE page names both states in words and carries
+		// the `Reset to inherited` verb (DrawConfigure).
+		//
+		// Kept quiet by design (the design guide's "status dot" is the one
+		// mark in its vocabulary this small): it shares neither the state
+		// edge's slot (D6: differs-from-default) nor the affordance column
+		// (SPEC §2.4: one glyph, by priority), so it cannot displace either.
+		template <typename TDecl>
+		void DrawInheritMark( const TDecl &decl, const ImRect &rcLabel, const char *pszTitle )
+		{
+			if ( Reg().KeyStateFor( decl ) != InheritState::Overridden )
+				return;
+			const float flR = Px( 2.5f );
+			float x = rcLabel.Min.x + MeasureText( TypeRole::Label, pszTitle ).x + Px( tok::kS ) + flR;
+			x = std::min( x, rcLabel.Max.x - flR );
+			ImGui::GetWindowDrawList()->AddCircleFilled(
+				ImVec2( x, rcLabel.GetCenter().y ), flR, Col( Role::AccentBase ) );
 		}
 
 		// One composite band. Structurally the same function as DrawEntryRow
@@ -2489,9 +2531,16 @@ namespace gamescope::ui::shell
 			const bool bClicked = ImGui::InvisibleButton( "##band", rcHit.GetSize() );
 			const bool bHovered = ImGui::IsItemHovered();
 
-			if ( bSelected )
+			// The List band spends its whole width on the list box and its
+			// verb strip (Band.cpp), so the row-selection wash and the
+			// hover tint would paint a 6-line accent slab behind a box
+			// that already draws its own frame. The state edge stays -- it
+			// is the sheet's one vertical "you are here" -- and the list's
+			// own accent outline marks the selected item inside.
+			const bool bList = entry.GetCompositeKind() == CompositeKind::List;
+			if ( bSelected && !bList )
 				Fill( { rcBand.Min.x, rcBand.Min.y, rcBand.Max.x, rcBand.Max.y }, Accent( 0.08f ) );
-			else if ( bHovered )
+			else if ( bHovered && !bList )
 				Fill( { rcBand.Min.x, rcBand.Min.y, rcBand.Max.x, rcBand.Max.y },
 				      IM_COL32( 255, 255, 255, 10 ) );
 
@@ -2522,13 +2571,21 @@ namespace gamescope::ui::shell
 			// for -- see the fixed-width-atom comment above ValueAnchorPx().
 			bl.line1.SplitLabelZone( flValueW, bl.rcBody.Min.x, &rcLabel, &rcValue );
 
-			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
-			       TypeRole::Label,
-			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
-			       entry.Title().c_str() );
-			if ( flValueW > 0.0f )
-				Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
-				       TypeRole::Value, Col( Role::TextPrimary ), sValue.c_str(), TextAlign::Right );
+			// Not for the List: its line 1 IS list rows (Band.cpp's List case
+			// gives up clause 2 on purpose), so a title there would sit under
+			// the box. The palette, the crumb and the Inspector still carry
+			// the entry's title.
+			if ( !bList )
+			{
+				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
+				       TypeRole::Label,
+				       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
+				       entry.Title().c_str() );
+				DrawInheritMark( entry, rcLabel, entry.Title().c_str() );
+				if ( flValueW > 0.0f )
+					Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
+					       TypeRole::Value, Col( Role::TextPrimary ), sValue.c_str(), TextAlign::Right );
+			}
 
 			// Clause 4 needs nothing here: the only rect this function draws
 			// into below line 1 is bl.rcBody, which Band.cpp right-bound. The
@@ -2588,6 +2645,57 @@ namespace gamescope::ui::shell
 					// than inventing a body no declaration asks for -- a
 					// control that renders and does nothing is #25 and #68.
 					break;
+				case CompositeKind::List:
+				{
+					// The items are re-asked every frame (Entry::Items() is a
+					// read, like Samples()); the atom wants C strings, so
+					// they are marshalled here and nowhere else.
+					const std::vector<ListItem> items = entry.ListItems();
+					std::vector<controls::ListBoxItem> atoms;
+					atoms.reserve( items.size() );
+					for ( const ListItem &it : items )
+						atoms.push_back( controls::ListBoxItem{ it.sLabel.c_str(),
+							it.sTag.empty() ? nullptr : it.sTag.c_str(),
+							it.sSecondary.empty() ? nullptr : it.sSecondary.c_str() } );
+
+					// The binding is read fresh and written only on a real
+					// activation (a click, or Enter while hovering): the
+					// list's own Up/Down move the highlight without
+					// committing, so a wander through the list does not
+					// switch profiles at every step. `bChanged` alone is
+					// therefore deliberately NOT a write.
+					int nSel = AsInt( entry.Binding().Get() );
+					const controls::ListBoxResult res = controls::ListBox(
+						bl.rcBody, "list", &nSel, atoms.data(), atoms.size(),
+						/* nMaxVisibleRows */ 64 );
+					if ( res.bActivated )
+						entry.Binding().Set( Value{ nSel } );
+
+					// The verb strip -- equal chips, declaration order.
+					std::vector<controls::VerbSpec> verbs;
+					std::vector<std::string> reasons;
+					verbs.reserve( entry.ListActionCount() );
+					reasons.reserve( entry.ListActionCount() );
+					for ( size_t i = 0; i < entry.ListActionCount(); ++i )
+					{
+						const ListVerb &la = entry.ListActionAt( i );
+						reasons.push_back( la.fnDisabledReason ? la.fnDisabledReason() : std::string() );
+						verbs.push_back( controls::VerbSpec{ la.sLabel.c_str(),
+							la.bDanger ? controls::Intent::Danger : controls::Intent::Accent,
+							reasons.back().empty() } );
+					}
+					const int nPressed = controls::VerbStrip( bl.rcStrip, "verbs", verbs.data(), verbs.size() );
+					if ( nPressed >= 0 && entry.ListActionAt( (size_t)nPressed ).fn )
+					{
+						// Pressing a verb also selects the row, so the
+						// Inspector shows the list's own page (its disabled
+						// reasons, its facts) while the modal is up.
+						Select( &entry );
+						s_eFocusRegion = Region::Sheet;
+						entry.ListActionAt( (size_t)nPressed ).fn();
+					}
+					break;
+				}
 			}
 
 			if ( bDisabled )
@@ -2596,7 +2704,7 @@ namespace gamescope::ui::shell
 			// Clause 2: "line 1 reads as a row" -- including its affordance,
 			// which is how a Graph band advertises that it is read-only and
 			// how the Anchor advertises its two margins.
-			if ( bAffordance )
+			if ( bAffordance && !bList )
 				DrawAffordance( entry, bl.line1 );
 
 			ImGui::PopID();
@@ -2702,6 +2810,7 @@ namespace gamescope::ui::shell
 			       TypeRole::Label,
 			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 			       entry.Title().c_str() );
+			DrawInheritMark( entry, rcLabel, entry.Title().c_str() );
 
 			// The control. Every atom is right-bound by construction --
 			// RowCtx has no other kind of allocator (see Row.h).
@@ -2888,6 +2997,7 @@ namespace gamescope::ui::shell
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
+				DrawInheritMark( param, rcLabel, param.Title().c_str() );
 
 				if ( bDisabled )
 					ImGui::BeginDisabled();
@@ -3583,6 +3693,77 @@ namespace gamescope::ui::shell
 				y += Px( tok::kS );
 			}
 
+			// A List's verbs owe a reason too when they are dimmed -- the
+			// same contract DisabledUnless() has for a row, one line per
+			// verb, so a greyed "Delete" can always be explained here.
+			for ( size_t i = 0; i < entry.ListActionCount(); ++i )
+			{
+				const ListVerb &la = entry.ListActionAt( i );
+				const std::string sWhy = la.fnDisabledReason ? la.fnDisabledReason() : std::string();
+				if ( sWhy.empty() )
+					continue;
+				const std::string sLine = la.sLabel + ": " + sWhy;
+				y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::WarnText ), sLine.c_str(), y );
+				y += Px( tok::kS );
+			}
+
+			// Profiles v2: the row's relation to the session profile's
+			// parent, in words, and the one verb that changes it. Only while
+			// there IS a parent and the row resolves to a config key -- see
+			// DrawInheritMark() for the sheet-side half and Registry.h's
+			// KeyStateFor() for what "resolves" means.
+			{
+				const std::string sParent = Reg().InheritedParent();
+				const InheritState eOwn = Reg().KeyStateFor( entry );
+				std::vector<std::string> vOverridden;
+				if ( !sParent.empty() )
+				{
+					if ( eOwn == InheritState::Overridden )
+						vOverridden.push_back( Registry::KeyOf( entry ) );
+					for ( size_t i = 0; i < entry.ParamCount(); ++i )
+						if ( Reg().KeyStateFor( entry.ParamAt( i ) ) == InheritState::Overridden )
+							vOverridden.push_back( Registry::KeyOf( entry.ParamAt( i ) ) );
+				}
+				if ( !sParent.empty() && ( eOwn != InheritState::Plain || !vOverridden.empty() ) )
+				{
+					if ( vOverridden.empty() )
+					{
+						const std::string sLine = "inherited from " + sParent;
+						y = DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), sLine.c_str(), y );
+						y += Px( tok::kS );
+					}
+					else
+					{
+						// "overridden" and, on the same line, the verb. Chip
+						// geometry is the verb atom's own (VerbAt's padding);
+						// only its rect is chosen here, right-bound like
+						// every other control in the Inspector.
+						const char *pszVerb = "Reset to inherited";
+						const float flVerbW = MeasureText( TypeRole::Meta, pszVerb ).x + Px( tok::kVerbPadX ) * 2.0f;
+						const float flLineH = Px( tok::kControlH );
+						const Rect  rcLine { rcIn.x0, y, rcIn.x1, y + flLineH };
+						const std::string sWord = vOverridden.size() > 1 && eOwn != InheritState::Overridden
+							? "overridden (parameters)" : "overridden";
+						Label( { rcLine.x0, rcLine.y0, rcLine.x1 - flVerbW - Px( tok::kM ), rcLine.y1 },
+						       TypeRole::Meta, Col( Role::AccentValue ), sWord.c_str() );
+						controls::VerbSpec verb{ pszVerb, controls::Intent::Neutral, true };
+						ImGui::PushID( "##inherit" );
+						const int nPressed = controls::VerbStrip(
+							ImRect( rcLine.x1 - flVerbW, rcLine.y0, rcLine.x1, rcLine.y1 ), "reset", &verb, 1 );
+						ImGui::PopID();
+						if ( nPressed == 0 )
+						{
+							// The row AND its parameters, the same scope
+							// ResetToDefault() has (D6): one press puts the
+							// whole declaration back on the parent.
+							for ( const std::string &sKey : vOverridden )
+								Reg().ResetKeyToInherited( sKey );
+						}
+						y += flLineH + Px( tok::kS );
+					}
+				}
+			}
+
 			if ( entry.ReadOnly() )
 			{
 				// SPEC §5.1: "For a read-only row the values block is
@@ -3590,6 +3771,21 @@ namespace gamescope::ui::shell
 				// Details."
 				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
 					"This row is a readout -- there is nothing here to set. Its live values are in DETAILS.", y );
+			}
+
+			// A List band is six lines of list box and verb strip; drawing
+			// it a second time in the Inspector's VALUES block (as every
+			// other row is) put a duplicate list, with a duplicate Create
+			// / Copy / Edit / Delete, beside the real one. The sheet's copy
+			// is the control; this page carries its help, its verbs'
+			// reasons (above) and its facts (DETAILS).
+			if ( entry.GetKind() == Kind::Composite && entry.GetCompositeKind() == CompositeKind::List )
+			{
+				const std::string sNow = CompositeValue( entry );
+				const std::string sLine = sNow.empty()
+					? std::string( "Nothing selected. Its live facts are in DETAILS." )
+					: "Selected: " + sNow + ". Its live facts are in DETAILS.";
+				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ), sLine.c_str(), y );
 			}
 
 			// The values block: the row's own control as an Inspector row,
@@ -3690,6 +3886,7 @@ namespace gamescope::ui::shell
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
+				DrawInheritMark( param, rcLabel, param.Title().c_str() );
 
 				ImGui::PushID( (int)i + 1000 );
 				if ( bParamDisabled )

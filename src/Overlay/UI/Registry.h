@@ -172,7 +172,12 @@ namespace gamescope::ui
 		Switch, Slider, Stepper, Choice, Text, Bank, Action, Meter, Facts, Composite,
 	};
 
-	enum class CompositeKind : uint8_t { Anchor, Hue, Strip, Graph, Color };
+	// List (2026-09-06): the Profiles area's tall list of saved profiles
+	// with its verb strip (Create / Copy / Edit / Delete) underneath. Its
+	// band spans the WHOLE row width, label column included -- the one
+	// composite that does, because the user's sketch has the list leading
+	// the sheet edge to edge (see Band.cpp's List case for the rule).
+	enum class CompositeKind : uint8_t { Anchor, Hue, Strip, Graph, Color, List };
 
 	// The kind's own name, for Details' binding grid. A lookup rather than a
 	// string a call site passes, so the grid cannot be told a kind that is
@@ -236,6 +241,36 @@ namespace gamescope::ui
 		std::string sValue;
 	};
 
+	// One line of a Composite(List) -- what Entry::Items() returns. Owned
+	// strings, not pointers: the provider is called at draw time and the
+	// area that supplies them is dynamic (rebuilt on every profile change),
+	// so a pointer into its storage would dangle exactly when it matters.
+	struct ListItem
+	{
+		std::string sLabel;       // "Rust" -- never empty
+		std::string sTag;         // "[Game]"; empty draws no tag
+		std::string sSecondary;   // "inherits Comp"; empty draws none
+	};
+
+	// One verb of a Composite(List)'s strip -- Entry::ListAction(). Drawn
+	// as equal-width chips under the list, by the shell. `fnDisabledReason`
+	// answers "" when the verb is usable; anything else dims the chip and
+	// is printed in the Inspector's CONFIGURE page as the reason (the same
+	// contract as DisabledUnless(), per verb).
+	struct ListVerb
+	{
+		std::string                  sLabel;
+		std::function<void()>        fn;
+		bool                         bDanger = false;
+		std::function<std::string()> fnDisabledReason;
+	};
+
+	// Profiles v2 (2026-09-06): a row's relation to the session profile's
+	// parent. Asked by the shell through Registry::KeyStateFor() for every
+	// row that resolves to a config key; None for a row that does not, or
+	// while the session profile has no parent.
+	enum class InheritState : uint8_t { Plain, Inherited, Overridden };   // Plain, not None: Xlib #defines None
+
 	class Entry;
 	class Area;
 	class Registry;
@@ -263,6 +298,8 @@ namespace gamescope::ui
 		Parameter &ZeroMeans( const char *pszWord );
 		Parameter &Keywords( const char *pszKeywords );
 		Parameter &DisabledUnless( std::function<bool()> pred, const char *pszReason );
+		// See Entry::Key().
+		Parameter &Key( const char *pszDottedKey );
 
 		// Sibling factory -- forwards to the owning Entry and returns another
 		// child of that same Entry. This is what keeps API.md §7's chained
@@ -280,6 +317,7 @@ namespace gamescope::ui
 		// is the reason the setter has existed since P1 -- until now nothing
 		// consumed it, so a keyword list was a declaration with no reader.
 		const std::string &KeywordText() const { return m_sKeywords; }
+		const std::string &ConfigKey() const { return m_sKey; }
 		Kind  GetKind() const            { return m_eKind; }
 		const AnyBind &Binding() const   { return m_Bind; }
 		const Value &DefaultValue() const { return m_Default; }
@@ -316,7 +354,7 @@ namespace gamescope::ui
 	private:
 		friend class Entry;
 
-		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason;
+		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason, m_sKey;
 		Kind        m_eKind = Kind::Switch;
 		AnyBind     m_Bind;
 		Value       m_Default;
@@ -378,6 +416,34 @@ namespace gamescope::ui
 		// visibility changes without an explicit call.
 		Entry &HideFromPalette() { m_bExcludeFromPalette = true; return *this; }
 		bool  ExcludedFromPalette() const { return m_bExcludeFromPalette; }
+
+		// ---- the config key (Profiles v2, 2026-09-06) ----------------------
+		// The dotted key this row's binding reads and writes in a profile
+		// file ("fps_display.enabled", "reshade.vibrancy.strength") --
+		// what the inheritance markers look up in config::OverriddenKeys().
+		// A row whose registry id IS its config key (crosshair.line_length,
+		// notifications.muted) need not declare one: Registry::KeyStateFor()
+		// falls back to the id. A row that never resolves to a real key
+		// (audio.*, cursor.*, the Log's filter) simply shows no marker --
+		// see KeyStateFor()'s comment for why that is by design.
+		Entry &Key( const char *pszDottedKey );
+		const std::string &ConfigKey() const { return m_sKey; }
+
+		// ---- Composite(List)'s items and verbs -----------------------------
+		// The list's lines, exactly Samples()'s shape: a READ, re-asked every
+		// frame the band is on screen, never a setter. The binding (axis A)
+		// is the selected INDEX into this vector; -1 selects nothing.
+		Entry &Items( std::function<std::vector<ListItem>()> fn );
+		std::vector<ListItem> ListItems() const { return m_Items ? m_Items() : std::vector<ListItem>{}; }
+
+		// One verb of the strip under the list. Declared like Action()'s
+		// callback, drawn by the shell as equal-width chips in declaration
+		// order. Not a fifth generator: these are the list's own actions, as
+		// Action()'s verb is the row's, and a category still places no pixel.
+		Entry &ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger = false,
+		                   std::function<std::string()> fnDisabledReason = {} );
+		size_t ListActionCount() const { return m_ListActions.size(); }
+		const ListVerb &ListActionAt( size_t i ) const { return m_ListActions[ i ]; }
 
 		// ---- generator 3: Configure rows ---------------------------------
 		// Takes a LEAF, never an id. The full id is synthesised from the
@@ -482,8 +548,10 @@ namespace gamescope::ui
 		Parameter &AddParam( const char *pszLeaf, const char *pszTitle, AnyBind bind,
 		                     const Option *pOptions, size_t nOptions );
 
-		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason;
+		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason, m_sKey;
 		std::string m_sConfirm;   // Confirm() -- a destructive Action's second-press prompt
+		std::function<std::vector<ListItem>()> m_Items;        // Composite(List)
+		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
@@ -592,7 +660,10 @@ namespace gamescope::ui
 		// file a whole sheet routes to. A row-level badge would repeat the
 		// same word down the sheet and still not be visible from Overview.
 		Area &Badge( std::function<std::string()> fn );
-		std::string BadgeText() const { return m_Badge ? m_Badge() : std::string(); }
+		// The area's own badge, else the registry's default (Profiles v2:
+		// the session profile, on every area that did not say otherwise --
+		// see Registry::DefaultBadge()), else "".
+		std::string BadgeText() const;
 
 		void Group( const char *pszName );
 		void GroupCount( const char *pszName );
@@ -827,9 +898,56 @@ namespace gamescope::ui
 		// area. Returns how many rebuilt. See Area::Rebuilds().
 		size_t SyncDynamicAreas();
 
+		// ---- Profiles v2 (2026-09-06): the session, registry-wide -------
+		// The badge every area shows unless it declared its own -- issue
+		// #43's question ("where does what I change here get written?")
+		// now has ONE answer for every routed area, the session profile,
+		// and only Appearance ("global only") differs. Set once, by the
+		// Profiles area's registration, so no other panel has to know what
+		// a profile is.
+		Registry &DefaultBadge( std::function<std::string()> fn );
+
+		// The inheritance seam. Three answers the shell needs and the
+		// registry cannot know on its own: the session profile's parent
+		// (empty = none), what state a dotted key is in, and how to drop an
+		// override. Registered by the Profiles area beside DefaultBadge();
+		// until then every row answers Plain and the markers stay off.
+		//
+		// The registry stays free of the config layer on purpose: it is
+		// data plus laws, testable without a disk, and the panels that own
+		// the bindings are the ones that know the keys (Entry::Key()).
+		Registry &Inheritance( std::function<std::string()> fnParent,
+		                       std::function<InheritState( const std::string & )> fnState,
+		                       std::function<bool( const std::string & )> fnReset );
+		std::string InheritedParent() const { return m_fnParent ? m_fnParent() : std::string(); }
+		bool ResetKeyToInherited( const std::string &sKey ) const { return m_fnReset && m_fnReset( sKey ); }
+
+		// The key a declaration resolves to -- its Key(), else its id --
+		// and that key's state. A key the config layer does not know
+		// answers Plain, which is what makes it safe to fall back to the id:
+		// a row whose id merely LOOKS like a key ("audio.stream") gets no
+		// marker rather than a wrong one.
+		template <typename TDecl>
+		InheritState KeyStateFor( const TDecl &decl ) const
+		{
+			if ( !m_fnState )
+				return InheritState::Plain;
+			return m_fnState( decl.ConfigKey().empty() ? decl.Id() : decl.ConfigKey() );
+		}
+		template <typename TDecl>
+		static std::string KeyOf( const TDecl &decl )
+		{
+			return decl.ConfigKey().empty() ? decl.Id() : decl.ConfigKey();
+		}
+
 	private:
 		friend class Area;
 		friend class Entry;
+
+		std::function<std::string()>                          m_DefaultBadge;
+		std::function<std::string()>                          m_fnParent;
+		std::function<InheritState( const std::string & )>    m_fnState;
+		std::function<bool( const std::string & )>            m_fnReset;
 
 		// Returns false (and reports Law::UniqueId) if the id is taken.
 		bool ClaimId( const std::string &sId );
@@ -875,6 +993,12 @@ namespace gamescope::ui
 		// Anchor's axes and a Hue's degrees do, a packed 0xRRGGBB colour
 		// does not. Anchor for a Parameter, which is never a composite.
 		CompositeKind               eComposite = CompositeKind::Anchor;
+
+		// Composite(List) only: how many items the index may step across.
+		// Filled by Of(Entry) from the entry's own provider, so the arrow
+		// keys stop at the list's real ends rather than at a declared Range
+		// the list does not have.
+		int                         nListCount = 0;
 
 		static Adjustable Of( const Entry &e );
 		static Adjustable Of( const Parameter &p );

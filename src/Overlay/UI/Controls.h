@@ -169,6 +169,16 @@ namespace gamescope::ui
 		// kit does not have).
 		std::function<void()> fnPrimary;
 
+		// OPTIONAL gate in front of fnPrimary: runs on the primary press
+		// while the modal is STILL OPEN, and a false answer keeps it open --
+		// the Profiles modals' "errors inline in the modal, never a toast":
+		// the caller records why (a name that sanitizes to something else,
+		// a CreateProfile() refusal) in its own state, fnBody prints it on
+		// the next frame, and the user's typed fields are still there to be
+		// corrected. A true answer (or no gate at all) closes the modal and
+		// fires fnPrimary exactly as before.
+		std::function<bool()> fnValidate;
+
 		// Invoked once, after the modal has already closed, on Cancel or Esc.
 		// Optional -- most callers have nothing to undo.
 		std::function<void()> fnCancel;
@@ -348,6 +358,20 @@ namespace gamescope::ui
 		enum class Intent : unsigned char { Accent, Neutral, Danger };
 		bool Verb( const RowCtx &row, const char *pszId, const char *pszVerb,
 		           Intent eIntent = Intent::Accent, bool bEnabled = true );
+
+		// N EQUAL-WIDTH verb chips across a rect the caller already laid out
+		// (the List band's Create / Copy / Edit / Delete strip, Band.cpp's
+		// BandLayout::rcStrip), kGapSeg apart. Equal rather than measured
+		// widths on purpose: the sketch draws four same-size buttons, and a
+		// strip whose chips resize as their labels change would jitter when
+		// "Delete" dims. Returns the index pressed this frame, or -1.
+		struct VerbSpec
+		{
+			const char *pszLabel  = nullptr;
+			Intent      eIntent   = Intent::Accent;
+			bool        bEnabled  = true;
+		};
+		int VerbStrip( const ImRect &rcStrip, const char *pszId, const VerbSpec *pVerbs, size_t nVerbs );
 
 		// =====================================================================
 		//  ListBox -- SPEC gap: the Profiles rebuild's tall list of saved

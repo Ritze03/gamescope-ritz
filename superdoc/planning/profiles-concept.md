@@ -3,8 +3,8 @@
 **v2, 2026-09-06: the user's list/modal layout replaced v1's rows; inheritance added.**
 The file layer for v2 (sections 2-6, 9 below) is implemented -- `src/Config/
 ConfigManager.{h,cpp}`, schema 3 -- and documented for users of the code in
-[`../features/profiles.md`](../features/profiles.md); the Profiles area UI is the
-follow-up. Sections 1 and 7 are kept as written on 2026-09-06 morning, as the history
+[`../features/profiles.md`](../features/profiles.md); the Profiles area UI landed the
+same day (that doc's "The Profiles area"). Sections 1 and 7 are kept as written on 2026-09-06 morning, as the history
 of how v1 was found wanting. The four decisions v2 adds over v1, each with its why:
 
 1. **A list with Create / Copy / Edit / Delete modals, an Inherits dropdown and a
@@ -342,8 +342,9 @@ coalescing (plus `Discard()`), the three `overlay` write paths, `EnqueueRoutedWr
 `SaveChangesToActiveProfile()`, `SetAutoSave()`, `BuildPerGameArea()`, the Per-game
 registration). Kept in the header for the rebuild: `ClampPickerSelection()`,
 `GameFact()`; added `ListLabel()` and `ShowsInList()` (the `[Game]` label and the
-filter rule, pinned by tests). The area is a placeholder Status row until the list UI
-lands.
+filter rule, pinned by tests). The list UI landed later the same day (see
+`features/profiles.md`, "The Profiles area"); `ClampPickerSelection()` and `GameFact()`
+went with the picker they served.
 
 `src/main.cpp`: `ResolveEffective( oRitzAppId )` became `config::ResolvedSettings()`
 after the `--profile` pre-scan; every panel's `EnsureConfigLoaded()` calls the same.
@@ -414,11 +415,11 @@ landing as a diff, `--profile` create-if-missing with the assignment untouched,
 `scripts/pixel-regression.sh` seeds a schema-3 config (`profiles/Pixel.json` +
 pointers) and stays green.
 
-Still to do, in order:
+Done later the same day:
 
 5. **Profiles area rewrite** (the list, the four modals, the filter, the badge on every
-   area, the per-value markers and *Reset to inherited*), against the API in
-   `features/profiles.md`; `test_overlay_profiles` re-pinned. Laptop check: select,
-   create, copy, edit (refusal wording), delete (bake), filter, launch option visible.
-6. **CHANGELOG** `Added`/`Removed` lines for the UI once it is visible; the 2026-09-06
-   `Info` line already says the model changed underneath.
+   area, the per-value markers and *Reset to inherited*) -- `features/profiles.md`,
+   "The Profiles area"; `test_overlay_profiles` re-pinned; headless captures in
+   `build-release/verify-shots/profiles-v2-ui/`. Still open: the laptop check (select,
+   create, copy, edit (refusal wording), delete (bake), filter, launch option visible).
+6. **CHANGELOG** `Added`/`Removed` lines for the UI -- in the 0.6.1 block.

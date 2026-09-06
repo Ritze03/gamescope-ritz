@@ -498,6 +498,7 @@ namespace gamescope
 		a.Group( "Line" );
 
 		a.Switch( "crosshair.line", "Show lines", CROSSHAIR_BIND( bool, line_enabled ) )
+			.Key( "crosshair.line_enabled" )
 			.Help( "The four arms of the crosshair. Turn them off for a dot-only crosshair." )
 			.Default( S{}.line_enabled )
 			.Keywords( "line arms enable show" )
@@ -549,6 +550,7 @@ namespace gamescope
 		a.Group( "Dot" );
 
 		a.Switch( "crosshair.dot", "Show dot", CROSSHAIR_BIND( bool, dot_enabled ) )
+			.Key( "crosshair.dot_enabled" )
 			.Help( "A small square in the exact centre, on its own or inside the arms' gap." )
 			.Default( S{}.dot_enabled )
 			.Keywords( "dot centre center point enable show" )
@@ -583,6 +585,7 @@ namespace gamescope
 		a.Group( "Outline" );
 
 		a.Switch( "crosshair.outline", "Show outline", CROSSHAIR_BIND( bool, outline_enabled ) )
+			.Key( "crosshair.outline_enabled" )
 			.Help( "A border drawn around the arms and the dot, just outside them, so the "
 			       "crosshair stays visible over bright or busy scenes." )
 			.Default( S{}.outline_enabled )
@@ -618,6 +621,7 @@ namespace gamescope
 		a.Group( "Auto-hide" );
 
 		a.Switch( "crosshair.hide", "Hide while holding right-click", CROSSHAIR_BIND( bool, hide_on_right_click ) )
+			.Key( "crosshair.hide_on_right_click" )
 			.Help( "Hides the crosshair while the right mouse button is held -- aiming down "
 			       "sights, in most games -- and brings it back the instant you let go. Only a "
 			       "right-click that reaches the game counts; clicks inside this menu never do." )
@@ -638,6 +642,7 @@ namespace gamescope
 			.DisabledUnless( HideOn, kHideOffReason );
 
 		a.Slider( "crosshair.hide_time", "Time to hide", CROSSHAIR_BIND( int, hide_time_ms ) )
+			.Key( "crosshair.hide_time_ms" )
 			.Help( "How long the hide takes from the moment you press, in milliseconds. 0 hides "
 			       "at once. Coming back is always instant." )
 			.Range( 0.0f, 2000.0f ).Step( 10.0f ).Unit( "ms" )
