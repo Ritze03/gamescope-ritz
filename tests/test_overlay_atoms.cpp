@@ -27,6 +27,7 @@
 
 #include "Overlay/Fonts.h"
 #include "Overlay/Palette.h"
+#include "Overlay/UI/Colors.h"
 #include "Overlay/UI/Controls.h"
 #include "Overlay/UI/Lane.h"
 #include "Overlay/UI/Row.h"
@@ -841,6 +842,78 @@ TEST_CASE( "palette: a neutral grey has no meaningful chroma", "[overlay_atoms]"
 	REQUIRE( flC < 0.01f );
 	REQUIRE( flL > 0.4f );
 	REQUIRE( flL < 0.7f );
+}
+
+// requests-2026-09-07 item 9/C: "Transparency/Opacity at 1.0 should actually
+// be opaque (not transparent at all)." Shell.cpp used to build the slab's and
+// the Inspector's own drawn colour with Dim( Col( Role::Surface/
+// SurfaceInspector ), WindowOpacity() ) -- Dim() SCALES whatever alpha the
+// role already carries, and Role::Surface's own literal is baked at 88%
+// alpha (its designed glass look, Colors.h's own comment: "slab base
+// rgba(9,10,12,.88)"). So window_opacity=1.0 produced 0.88*255 (~224), not
+// 255 -- "no transparency" was still see-through. WithAlpha() replaces this:
+// it sets the FINAL alpha outright, ignoring whatever the role's own alpha
+// was, which is what makes 1.0 exactly opaque and 0.4 sit strictly between
+// fully opaque and fully transparent.
+TEST_CASE( "colors: WithAlpha sets the final alpha, not a scale of it",
+           "[overlay_atoms]" )
+{
+	using gamescope::ui::Col;
+	using gamescope::ui::Role;
+	using gamescope::ui::WithAlpha;
+
+	// Role::Surface's own literal is alpha 224 (0.88 of 255) -- see
+	// TintedNeutral( kSurfaceL, kSurfaceC, 0.88f ) in Colors.cpp. WithAlpha
+	// must override that, not scale it.
+	const ImU32 colBase = Col( Role::Surface );
+	const unsigned nBaseAlpha = ( colBase >> IM_COL32_A_SHIFT ) & 0xFF;
+	REQUIRE( nBaseAlpha != 255 );   // sanity: the base literal is NOT opaque
+
+	// window_opacity's slider range is 0.3..1.0 (PanelConfig.cpp) -- 1.0 is
+	// the "no transparency at all" end the user's report is about.
+	const ImU32 colOpaque = WithAlpha( colBase, 1.0f );
+	REQUIRE( ( ( colOpaque >> IM_COL32_A_SHIFT ) & 0xFF ) == 255 );
+	// RGB is untouched -- WithAlpha only ever replaces the alpha channel.
+	REQUIRE( ( colOpaque & ~( 0xFFu << IM_COL32_A_SHIFT ) ) ==
+	         ( colBase   & ~( 0xFFu << IM_COL32_A_SHIFT ) ) );
+
+	// A mid slider value sits strictly between fully transparent and fully
+	// opaque, on the SLIDER's own scale (0..255), not on Role::Surface's own
+	// 88% -- the exact distinction Dim() got wrong.
+	const ImU32 colMid = WithAlpha( colBase, 0.4f );
+	const unsigned nMidAlpha = ( colMid >> IM_COL32_A_SHIFT ) & 0xFF;
+	REQUIRE( nMidAlpha > 0 );
+	REQUIRE( nMidAlpha < 255 );
+	REQUIRE_THAT( (float)nMidAlpha, WithinAbs( 0.4f * 255.0f, 1.0f ) );
+
+	// Out-of-range input clamps rather than wrapping the alpha byte.
+	REQUIRE( ( ( WithAlpha( colBase, 2.0f )  >> IM_COL32_A_SHIFT ) & 0xFF ) == 255 );
+	REQUIRE( ( ( WithAlpha( colBase, -1.0f ) >> IM_COL32_A_SHIFT ) & 0xFF ) == 0 );
+}
+
+// The same fix, exercised through the actual reader Shell.cpp uses --
+// palette::WindowOpacity() -- rather than a raw float, so a future change to
+// how window_opacity is stored/clamped is still caught here.
+TEST_CASE( "colors: window_opacity 1.0 renders the slab fully opaque",
+           "[overlay_atoms]" )
+{
+	using gamescope::ui::Col;
+	using gamescope::ui::Role;
+	using gamescope::ui::WithAlpha;
+
+	const float flSaved = gamescope::palette::g_LiveTheme.flWindowOpacity;
+
+	gamescope::palette::g_LiveTheme.flWindowOpacity = 1.0f;
+	const ImU32 colAt1 = WithAlpha( Col( Role::Surface ), gamescope::palette::WindowOpacity() );
+	REQUIRE( ( ( colAt1 >> IM_COL32_A_SHIFT ) & 0xFF ) == 255 );
+
+	gamescope::palette::g_LiveTheme.flWindowOpacity = 0.4f;
+	const ImU32 colAt04 = WithAlpha( Col( Role::Surface ), gamescope::palette::WindowOpacity() );
+	const unsigned nAlpha04 = ( colAt04 >> IM_COL32_A_SHIFT ) & 0xFF;
+	REQUIRE( nAlpha04 > 0 );
+	REQUIRE( nAlpha04 < 255 );
+
+	gamescope::palette::g_LiveTheme.flWindowOpacity = flSaved;
 }
 
 // D27, item 2. The user: "The UI scale should update, when the slider is
