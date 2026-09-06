@@ -115,10 +115,26 @@ Concept doc first, implementation after the user approves.
 `--profile` flag implemented against the current model once the concept fixes its
 semantics.
 
-**2026-09-06:** concept written, awaiting user approval —
-[`profiles-concept.md`](profiles-concept.md). Implementation and `--profile` not started.
+**2026-09-06:** concept written ([`profiles-concept.md`](profiles-concept.md)); the
+user replaced its UI with his own list/modal layout and added inheritance (v2, same
+doc). `--profile` / `GS_RITZ_PROFILE` first landed against the v1 model (`4caee05`),
+then re-targeted below.
 
-`--profile` / `GS_RITZ_PROFILE` implemented against the current model, `4caee05`.
+The invisible layer, v2 -- `b6f11c4` (phases 1-4 in one commit: the schema removal does
+not compile without the new routing, and the migration is entangled with the loaders):
+- Phase 1, schema: `ProfileMeta`, `GameAssignment`/`ProfileAssignments`, schema 3,
+  `Settings` loses the session fields and `audio` (moved to `games.<AppId>.audio_node`).
+- Phase 2, migration 2 -> 3: fixture-driven test per table row, idempotent, profiles
+  first / global last, `games/` untouched.
+- Phase 3, session resolution + routing + CRUD: `SessionProfile()`,
+  `ResolvedSettings()`, `SelectProfile()`, `EnqueueRoutedWrite()` (diff for game
+  profiles), Create/Copy/EditMeta/Delete, `OverriddenKeys()`/`ResetKeyToInherited()`;
+  v1 API and areas deleted, placeholder Status row in `setup.profiles`.
+- Phase 4, `--profile` / env / `ritz_profile` session-only with create-if-missing;
+  `--ritz-dump-config` shows the session profile and its parent.
+Headless end-to-end green (25 checks, `build-release/verify-shots/profiles-v2/`),
+`meson test` 75/75, `pixel-regression.sh` green on a schema-3 seed.
+Still open: the Profiles list UI (concept section 3 / 9) and its laptop check.
 
 ## [x] 5. Brainstorm of further filters and features
 
