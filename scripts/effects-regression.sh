@@ -61,7 +61,8 @@ SCREENSHOT_TIMEOUT_S=6
 SETTLE_S=0.3      # after a mode change; the history is already warm, this is for the composite
 ADAPT_SETTLE_S=5  # after a scene switch, > 4 tau (tau = 1 s) before a "settled" capture
 
-AB_ID="image.shaders.adaptive_brightness"   # Choice: 0 Off, 1 Whole image, 2 Dynamic
+AB_ID="image.shaders.adaptive_brightness"        # Switch: on/off
+AB_MODE_ID="image.shaders.adaptive_brightness.mode"  # Param, a Choice: 0 Whole image, 1 Dynamic
 
 KEEP=0
 OUT_LABEL=""
@@ -219,7 +220,20 @@ gsctl() {
 }
 
 set_ab() {   # 0 off, 1 whole image, 2 dynamic
-	gsctl overlay_e2_set "$AB_ID $1" >/dev/null 2>&1 || true
+	# 2026-09-06 (requests-2026-09-07.md item 7): the row went back to a
+	# plain Switch and the mode moved to its own Param
+	# (image.shaders.adaptive_brightness.mode, 0 whole_image / 1 dynamic),
+	# addressable the same way any Param is (Shell.cpp's overlay_e2_set
+	# resolves a Param id through Registry::FindParam() exactly like an
+	# Entry id). Off leaves the mode alone, matching the panel's own
+	# behaviour; the caller's 0/1/2 vocabulary is unchanged.
+	case "$1" in
+		0) gsctl overlay_e2_set "$AB_ID 0" >/dev/null 2>&1 || true ;;
+		1) gsctl overlay_e2_set "$AB_MODE_ID 0" >/dev/null 2>&1 || true
+		   gsctl overlay_e2_set "$AB_ID 1" >/dev/null 2>&1 || true ;;
+		2) gsctl overlay_e2_set "$AB_MODE_ID 1" >/dev/null 2>&1 || true
+		   gsctl overlay_e2_set "$AB_ID 1" >/dev/null 2>&1 || true ;;
+	esac
 	sleep "$SETTLE_S"
 }
 

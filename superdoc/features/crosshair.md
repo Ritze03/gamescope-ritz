@@ -21,31 +21,49 @@ right after the HUD). Default **off**.
 
 ## The settings, top to bottom
 
-`system.crosshair`'s row order matches this list (`Crosshair_RegisterArea()`).
-Every row except the master switch is greyed with a reason while the
-crosshair is off; each element's own rows are additionally greyed while
-that element is off ("the dot is off", and so on).
+`system.crosshair` renders as **two columns** at a wide enough shell width
+(Shell.cpp's greedy group packer, `superdoc/architecture/overview.md`'s Shell
+notes): **left** Crosshair, Line, Dot; **right** Outline, Auto-hide, Scaling
+(2026-09-06, request #2, `requests-2026-09-07.md` item 2 — supersedes the
+prior day's "Dot ahead of Line" instruction with a full layout). The row
+order within a group, and within a narrow single-column shell, matches this
+table top to bottom (`Crosshair_RegisterArea()`). Every row except the
+master switch is greyed with a reason while the crosshair is off; each
+element's own rows are additionally greyed while that element is off ("the
+dot is off", and so on).
 
-| Group | Row | Config field | Notes |
-| --- | --- | --- | --- |
-| Crosshair | Show crosshair | `enabled` | Master switch. Default off. |
-| Dot | Show dot | `dot_enabled` | Dot ahead of Line since 2026-09-06 (request #15, the user's order). |
-| | Size | `dot_size` | px, 1–16. Always a **square** — see geometry. |
-| | Colour / Opacity | `dot_color`, `dot_opacity` | as for the line |
-| Line | Show lines | `line_enabled` | The four arms. |
-| | Length | `line_length` | px, 1–64. Each arm's own length. |
-| | Width | `line_width` | px, 1–16. **1 is exactly one pixel** — see 1px mode. |
-| | Gap | `line_gap` | px, 0–64, from the centre column/row's *edge* to the arm. 0 joins the arms into a solid plus. |
-| | Colour | `line_color` | `0xRRGGBB`, the shared RGB colour picker (`CompositeKind::Color`, as `PanelCursor.cpp` uses). |
-| | Opacity | `line_opacity` | 0–1. The user's word is "transparency"; the row is labelled Opacity because a slider whose 0 means invisible reads backwards under the other name. `transparency` is a search keyword. |
-| Outline | Show outline | `outline_enabled` | |
-| | Width | `outline_width` | px, 1–8 |
-| | Opacity / Colour | `outline_opacity`, `outline_color` | |
-| Auto-hide | Hide while holding right-click | `hide_on_right_click` | |
-| | Hide mode | `hide_mode` | Choice. **Stored** in config as a stable string key (`"fade"` / `"focus"` / `"shrink"`, `CrosshairSettings::hide_mode`); the **row is int-backed** like every registry Choice, so `overlay_e2_set crosshair.hide_mode N` takes the option index -- `0` fade, `1` focus, `2` shrink -- and a word is parsed as 0 (fade). `Crosshair.cpp`'s `HideModeToInt()`/`HideModeFromInt()` are the two-way map. |
-| | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides (and comes back) at once |
-| | Animate back | `hide_animate_back` | Default **on** (2026-09-06, request #13). Release plays the hide backwards from wherever it was; off restores instantly. See [Auto-hide](#auto-hide-while-holding-right-click). |
-| Scaling | Apply scaling | `apply_scaling` | see [Two rendering paths](#two-rendering-paths) |
+> **The declaration order is not the reading order.** There is no per-group
+> column API (`Registry.h` packs whole groups into columns by a greedy
+> shortest-column algorithm, in declaration order — see
+> `superdoc/features/shader-effects.md`'s note on the same mechanism for
+> Adaptive Brightness's budget, and `Crosshair.cpp`'s own comment above
+> `Crosshair_RegisterArea()`), so hitting this exact two-column split means
+> declaring the six groups Crosshair, **Outline**, **Line**, **Auto-hide**,
+> **Dot**, Scaling — not the left-then-right reading order. This is fragile
+> to a future row-count change in any one group: adding or removing a row
+> can tip the greedy balance and silently move a group to the other column.
+> Verify with a screenshot after touching any group's row count.
+
+| Group | Column | Row | Config field | Notes |
+| --- | --- | --- | --- | --- |
+| Crosshair | Left | Show crosshair | `enabled` | Master switch. Default off. |
+| Line | Left | Show lines | `line_enabled` | The four arms. |
+| | Left | Length | `line_length` | px, 1–64. Each arm's own length. |
+| | Left | Width | `line_width` | px, 1–16. **1 is exactly one pixel** — see 1px mode. |
+| | Left | Gap | `line_gap` | px, 0–64, from the centre column/row's *edge* to the arm. 0 joins the arms into a solid plus. |
+| | Left | Colour | `line_color` | `0xRRGGBB`, the shared RGB colour picker (`CompositeKind::Color`, as `PanelCursor.cpp` uses). |
+| | Left | Opacity | `line_opacity` | 0–1. The user's word is "transparency"; the row is labelled Opacity because a slider whose 0 means invisible reads backwards under the other name. `transparency` is a search keyword. |
+| Dot | Left | Show dot | `dot_enabled` | |
+| | Left | Size | `dot_size` | px, 1–16. Always a **square** — see geometry. |
+| | Left | Colour / Opacity | `dot_color`, `dot_opacity` | as for the line |
+| Outline | Right | Show outline | `outline_enabled` | |
+| | Right | Width | `outline_width` | px, 1–8 |
+| | Right | Opacity / Colour | `outline_opacity`, `outline_color` | |
+| Auto-hide | Right | Hide while holding right-click | `hide_on_right_click` | |
+| | Right | Hide mode | `hide_mode` | Choice. **Stored** in config as a stable string key (`"fade"` / `"focus"` / `"shrink"`, `CrosshairSettings::hide_mode`); the **row is int-backed** like every registry Choice, so `overlay_e2_set crosshair.hide_mode N` takes the option index -- `0` fade, `1` focus, `2` shrink -- and a word is parsed as 0 (fade). `Crosshair.cpp`'s `HideModeToInt()`/`HideModeFromInt()` are the two-way map. |
+| | Right | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides (and comes back) at once |
+| | Right | Animate back | `hide_animate_back` | Default **on** (2026-09-06, request #13). Release plays the hide backwards from wherever it was; off restores instantly. See [Auto-hide](#auto-hide-while-holding-right-click). |
+| Scaling | Right | Apply scaling | `apply_scaling` | see [Two rendering paths](#two-rendering-paths) |
 
 Pixel sizes are **ints**, not floats: the whole point of the 1px mode is
 that "1" is exactly one pixel, so a fractional size has no meaning here.

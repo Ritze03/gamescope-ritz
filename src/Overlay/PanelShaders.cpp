@@ -159,25 +159,35 @@ namespace gamescope
 	// (index.html declared three at E2's original writing; Shadow Control
 	// (request #3, 2026-09-04) is the fourth, added the same shape.)
 	//
-	// THE SIX BUDGET, AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY ON IT.
-	// Vibrancy has 2 params, Pre-Sharpen 1, Adaptive Brightness 6, Shadow
-	// Control 1 -- the maximum a row may own before Registry.cpp aborts
-	// registration and tells the author to promote it to a category.
+	// THE SIX BUDGET (now seven), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
+	// ON IT. Vibrancy has 2 params, Pre-Sharpen 1, Adaptive Brightness 7,
+	// Shadow Control 1 -- the maximum a row may own before Registry.cpp
+	// aborts registration and tells the author to promote it to a category.
 	// Adaptive Brightness fits, but with zero headroom, and that is worth
-	// saying out loud: the NEXT parameter added
-	// to this effect does not "just" overflow a limit, it is the signal
-	// that Adaptive Brightness has become a category rather than a setting.
-	// Nothing here routes around the budget, and nothing should.
+	// saying out loud: the NEXT parameter added to this effect does not
+	// "just" overflow a limit, it is the signal that Adaptive Brightness has
+	// become a category rather than a setting.
 	//
-	// Request #16 (2026-09-06) asked for a MODE on Adaptive Brightness --
-	// the seventh knob. It did not become a param: the row's on/off and its
-	// mode are one decision ("which adaptation, if any"), so the Switch
-	// became a three-way Choice, Off | Whole image | Dynamic, with the same
-	// id and the same six params behind it. The row moved into its own band
-	// because the Effects band's `n / m` count is computed from Switch rows
-	// only (Shell.cpp's DrawGroupBand) and a Choice row sitting among them
-	// would make that count read one short. Still not a category: one row,
-	// six params, and the budget untouched.
+	// Request #16 (2026-09-06) asked for a MODE on Adaptive Brightness, and
+	// it briefly lived as the row's own three-way Choice (Off | Whole image
+	// | Dynamic) rather than a seventh param, to stay under the budget --
+	// see the git history on this file for that shape. Request #17
+	// (2026-09-07, requests-2026-09-07.md item 7) asked for the opposite:
+	// "the mode selector should be inside of the inspector rail. In the main
+	// view, it should still only be a switch." That put the mode back
+	// exactly where a knob belongs (the Inspector's params column) but made
+	// it a genuine seventh param on a row that already had six.
+	//
+	// THE BUDGET DECISION (superdoc/features/shader-effects.md has the full
+	// write-up). Every one of the six existing params -- strength, target,
+	// up_speed, down_speed, min_gain, max_gain -- is independently
+	// documented and independently meaningful; up_speed/down_speed in
+	// particular are a deliberate asymmetry (adapting to a brighter vs a
+	// darker scene), not two names for one idea, so merging them would be a
+	// real loss, not a tidy-up. No honest merge or relocation existed, so
+	// Registry.cpp's kParamBudget was raised 6 -> 7 instead (its own comment
+	// carries the same reasoning) -- a one-time, evidenced exception, not a
+	// standing invitation to keep adding params here.
 	//
 	// EVERY WRITE GOES THROUGH SetEffectEnabled()/SetEffectFloat() below --
 	// edit the cached config field, push the whole struct to the renderer,
@@ -213,31 +223,24 @@ namespace gamescope
 		QueueSave();
 	}
 
-	// Adaptive Brightness's three-way row: 0 Off, 1 Whole image, 2 Dynamic.
-	// Off leaves `mode` alone so switching back lands on the mode the user
-	// had, and overlay_e2_set "... 1" still means what the old Switch's
-	// "on" meant (Whole image is the original behaviour).
-	enum AbChoice : int { kAbOff = 0, kAbWholeImage = 1, kAbDynamic = 2 };
+	// Adaptive Brightness's mode: a Param, not the row's own value (request
+	// #17, 2026-09-07) -- the row itself is a plain on/off Switch again, and
+	// this two-way choice lives in the Inspector's params column with the
+	// other six knobs. `enabled` and `mode` are independent config fields
+	// (ConfigSchema.h), so this only ever writes `mode`; the Switch's own
+	// SetEffectEnabled() owns `enabled`.
+	enum AbModeChoice : int { kAbWholeImage = 0, kAbDynamic = 1 };
 	static const ui::Option kAbModeOptions[] = {
-		{ kAbOff,        "Off" },
 		{ kAbWholeImage, "Whole image" },
 		{ kAbDynamic,    "Dynamic" },
 	};
-	static int GetAbChoice()
+	static int GetAbMode()
 	{
-		const auto &ab = Cfg().reshade.adaptive_brightness;
-		if ( !ab.enabled )
-			return kAbOff;
-		return ab.mode == "dynamic" ? kAbDynamic : kAbWholeImage;
+		return Cfg().reshade.adaptive_brightness.mode == "dynamic" ? kAbDynamic : kAbWholeImage;
 	}
-	static void SetAbChoice( int n )
+	static void SetAbMode( int n )
 	{
-		auto &ab = Cfg().reshade.adaptive_brightness;
-		ab.enabled = n != kAbOff;
-		if ( n == kAbDynamic )
-			ab.mode = "dynamic";
-		else if ( n == kAbWholeImage )
-			ab.mode = "whole_image";
+		Cfg().reshade.adaptive_brightness.mode = ( n == kAbDynamic ) ? "dynamic" : "whole_image";
 		PushAllToRenderer();
 		QueueSave();
 	}
@@ -351,30 +354,38 @@ namespace gamescope
 				.Step( 0.05f )   // 21 positions
 				.Default( 0.0f );
 
-		// SIX PARAMS -- the budget exactly. See this section's header for
-		// why the mode is the row's own value rather than a seventh param,
-		// and why the row has its own band.
+		// SEVEN PARAMS -- the raised budget, exactly (see this section's
+		// header comment for why the budget moved rather than the mode).
+		// Back in the Effects GroupCount band as a plain Switch (request
+		// #17, 2026-09-07): the mode is now the row's first Param instead of
+		// the row's own value, so it shows in the Inspector's params column
+		// like the other six.
 		//
 		// The .Default()s below read the compiled-in ConfigSchema.h values
 		// (as PanelCursor.cpp's rows do) rather than repeating literals:
 		// the two drifted once (panel said 1.5s/2.5s/0.8/1.6, schema said
 		// 1.0s/1.0s/0.5/2.0) and a "reset to default" then landed on a
 		// value no fresh install ever had.
-		a.Group( "Adaptive Brightness" );
-
 		using AbDefaults = config::ReshadeAdaptiveBrightnessSettings;
-		a.Choice( "image.shaders.adaptive_brightness", "Mode",
-			ui::AnyBind::Of<int>( GetAbChoice, SetAbChoice ),
-			kAbModeOptions, std::size( kAbModeOptions ) )
+		a.Switch( "image.shaders.adaptive_brightness", "Adaptive Brightness",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled, b ); } ) )
 			.Key( "reshade.adaptive_brightness.enabled" )
-			.Help( "Adjusts the picture as you play, like your eyes adjusting. Whole image: one "
-			       "brightness gain from the average. Dynamic: lifts dark scenes, tames bright "
-			       "ones and rolls off the highlights so nothing blows out -- for maps that are "
-			       "much darker or brighter than the rest." )
-			.Default( (int)( AbDefaults{}.enabled ? kAbWholeImage : kAbOff ) )
+			.Help( "Adjusts the picture as you play, like your eyes adjusting. See the Mode param "
+			       "for Whole image vs. Dynamic." )
+			.Default( AbDefaults{}.enabled )
 			.Keywords( "adaptive brightness eye adaptation exposure auto dynamic contrast gamma "
 			           "whole image tone mapping" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "mode", "Mode",
+				ui::AnyBind::Of<int>( GetAbMode, SetAbMode ),
+				kAbModeOptions, std::size( kAbModeOptions ) )
+				.Key( "reshade.adaptive_brightness.mode" )
+				.Help( "Whole image: one brightness gain from the average. Dynamic: lifts dark "
+				       "scenes, tames bright ones and rolls off the highlights so nothing blows "
+				       "out -- for maps that are much darker or brighter than the rest." )
+				.Default( (int)( AbDefaults{}.mode == "dynamic" ? kAbDynamic : kAbWholeImage ) )
 			.Param( "strength", "Strength",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_brightness.strength; },
