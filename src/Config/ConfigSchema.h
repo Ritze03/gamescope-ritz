@@ -446,7 +446,7 @@ namespace gamescope::config
         // flDockAlpha were written on every edit and never read back by
         // anything. window_opacity below is their replacement: ONE slider,
         // wired to something that actually draws now.
-        float window_opacity = 1.0f;             // 0.3..1 - the E2 shell's own backdrop alpha: Shell.cpp's slab background (ImGuiCol_WindowBg) and the Inspector's own fill (Role::SurfaceInspector), via palette::WindowOpacity()/Dim(). Text is never dimmed by this -- only the surfaces behind it.
+        float window_opacity = 1.0f;             // 0.3..1 - the E2 shell's own backdrop alpha: Shell.cpp's slab background (ImGuiCol_WindowBg) and the Inspector's own fill (Role::SurfaceInspector), via palette::WindowOpacity()/WithAlpha() -- 1.0 is fully opaque (sets the final alpha, does not scale the surface's own baked-in alpha). Text is never dimmed by this -- only the surfaces behind it.
         float opacity_notifications = 0.9f;      // 0.3..1 - Notifications.cpp's DrawToasts() GetUiOpacity(): multiplies each toast card's bg/border/accent/text alpha uniformly.
         // Issue #37: hue-only accent picker. Degrees, OKLCH hue (0..360,
         // wraps). Saturation/lightness (OKLCH C/L) are NOT user-tunable -

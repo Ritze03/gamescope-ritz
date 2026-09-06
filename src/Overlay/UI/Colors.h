@@ -91,6 +91,16 @@ namespace gamescope::ui
 	// "one edit here rather than a hunt through every panel's alpha literals"
 	// property the header comment above claims for Role itself.
 	//
+	// Sets the FINAL alpha to flAlpha (0..1 of 255), replacing whatever alpha
+	// `col` already carried rather than scaling it -- the opposite contract
+	// from Dim() above. window_opacity needs this, not Dim(): Role::Surface's
+	// own literal is baked at 88% alpha (its designed glass look), so
+	// Dim( Col( Role::Surface ), 1.0f ) used to return 88%-alpha, not opaque
+	// -- "transparency at 1.0" was still transparent (requests-2026-09-07
+	// item 9). WithAlpha( Col( Role::Surface ), 1.0f ) returns the surface's
+	// RGB at alpha 255, exactly the theme colour, no residual blend.
+	ImU32 WithAlpha( ImU32 col, float flAlpha );
+
 	// Scoped, so it cannot leak into the next row.
 	class ScopedDim
 	{

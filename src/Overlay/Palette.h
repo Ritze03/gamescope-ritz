@@ -188,12 +188,15 @@ namespace gamescope::palette
 	inline float DisplayScale() { return g_LiveTheme.flDisplayScale; }
 
 	// OverlaySettings::window_opacity (0.3..1), read fresh every call like
-	// DisplayScale() above. Shell.cpp multiplies this into the slab's own
-	// background fill and the Inspector's fill via Dim() -- see Colors.h's
-	// Dim() (scales alpha only, never RGB, so it never touches text drawn
-	// on top). Named for what it does, not the field it mirrors 1:1, since
-	// nothing else in this header follows the "fl + FieldName" pattern
-	// DisplayScale() itself breaks from too.
+	// DisplayScale() above. Shell.cpp sets this as the FINAL drawn alpha of
+	// the slab's own background fill and the Inspector's fill, via Colors.h's
+	// WithAlpha() (replaces the alpha channel outright, never touches RGB or
+	// text drawn on top). Not Dim() any more -- Dim() would scale Role::
+	// Surface/Role::SurfaceInspector's own baked-in ~88% alpha, leaving 1.0
+	// still translucent (requests-2026-09-07 item 9). Named for what it
+	// does, not the field it mirrors 1:1, since nothing else in this header
+	// follows the "fl + FieldName" pattern DisplayScale() itself breaks
+	// from too.
 	inline float WindowOpacity() { return g_LiveTheme.flWindowOpacity; }
 
 	// Loads the overlay's process-level theme (display_scale, accent hue,

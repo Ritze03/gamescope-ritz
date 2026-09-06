@@ -174,4 +174,13 @@ namespace gamescope::ui
 		const unsigned nNew = (unsigned)( (float)nA * flFactor + 0.5f );
 		return ( col & ~( 0xFFu << IM_COL32_A_SHIFT ) ) | ( ( nNew & 0xFF ) << IM_COL32_A_SHIFT );
 	}
+
+	ImU32 WithAlpha( ImU32 col, float flAlpha )
+	{
+		// Clamp first: a caller passing window_opacity straight through must
+		// not be able to wrap the alpha byte on an out-of-range slider value.
+		const float flClamped = flAlpha < 0.0f ? 0.0f : ( flAlpha > 1.0f ? 1.0f : flAlpha );
+		const unsigned nNew = (unsigned)( flClamped * 255.0f + 0.5f );
+		return ( col & ~( 0xFFu << IM_COL32_A_SHIFT ) ) | ( ( nNew & 0xFF ) << IM_COL32_A_SHIFT );
+	}
 }
