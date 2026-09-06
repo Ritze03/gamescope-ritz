@@ -215,6 +215,22 @@ namespace gamescope::ui::shell
 		// openable/closable. See DrawSharedControl's Choice case.
 		Region s_eOpenDropdownRegion = Region::Sheet;
 
+		// Which region opened the field named by s_sEditingText -- the exact
+		// same disease as s_eOpenDropdownRegion just above, and it was
+		// missing here (requests-2026-09-07 item 9/B, "manually editing a
+		// spinner selects the element in the inspector rail"). The Sheet row
+		// and the Inspector's own-row copy of the selected Entry render with
+		// the IDENTICAL Id() every frame it is selected; comparing the id
+		// alone meant a click that opened the SHEET's Stepper field this
+		// frame also read back as "I am the one being edited" for the
+		// INSPECTOR's copy of the SAME id, drawn later the SAME frame --
+		// which opened ITS field too, called SetKeyboardFocusHere() a second
+		// time, and won: the visible caret ended up in the Inspector's copy,
+		// not the Sheet field the user actually clicked. Qualifying the
+		// match by region makes the two copies independently
+		// open/closeable, so opening one can never reach into the other's.
+		Region s_eEditingRegion = Region::Sheet;
+
 		// How far the rail is scrolled, in physical px. Non-zero only when
 		// the item column is taller than the rail -- which it is from 2.0x
 		// (and at 1.75x on a short slab). DrawRail() clamps it every frame,
@@ -2010,10 +2026,16 @@ namespace gamescope::ui::shell
 		// way, so Esc, the keyboard guard and ResetTransient() already treat
 		// a Stepper mid-edit exactly like a Text mid-edit without a second
 		// variable to keep in step.
+		//
+		// `eRegion` is required, not defaulted: the Sheet row and the
+		// Inspector's own-row copy of a selected Entry share one Id(), so
+		// the id alone cannot say WHICH copy's field is open -- see
+		// s_eEditingRegion's own comment for the bug this closes.
 		template <typename TDecl>
-		bool IsTypingInto( const TDecl &decl )
+		bool IsTypingInto( const TDecl &decl, Region eRegion )
 		{
-			return decl.GetKind() == Kind::Stepper && s_sEditingText == decl.Id();
+			return decl.GetKind() == Kind::Stepper && s_sEditingText == decl.Id() &&
+			       s_eEditingRegion == eRegion;
 		}
 
 		// The value column, for the three row painters (sheet row, inline
@@ -2033,9 +2055,9 @@ namespace gamescope::ui::shell
 
 		template <typename TDecl>
 		void SplitValueColumn( const TDecl &decl, const std::string &sValue, const RowCtx &row,
-		                       ImRect *prcLabel, ImRect *prcValue )
+		                       Region eRegion, ImRect *prcLabel, ImRect *prcValue )
 		{
-			const bool bTyping = IsTypingInto( decl );
+			const bool bTyping = IsTypingInto( decl, eRegion );
 			float flValueW = 0.0f;
 			if ( bTyping )
 				flValueW = controls::StepperEditWidthPx( decl.Unit().c_str() );
@@ -2115,7 +2137,15 @@ namespace gamescope::ui::shell
 					// row (display.resolution.width's aspect lock) cannot
 					// tell the two apart. Only a host that split a value
 					// column can offer it; the palette has none.
-					bool bEditing = ( s_sEditingText == sPopupKey );
+					//
+					// Region-qualified, same as s_sOpenDropdown's own check
+					// below: the Sheet's row and the Inspector's own-row copy
+					// of a selected Entry render with the IDENTICAL Id() --
+					// comparing the id alone let whichever copy's field
+					// opened THIS frame read back as open for the OTHER
+					// copy too, drawn moments later, which stole the actual
+					// ImGui keyboard focus. See s_eEditingRegion's comment.
+					bool bEditing = ( s_sEditingText == sPopupKey && s_eEditingRegion == eRegion );
 					controls::StepperEdit edit;
 					edit.rcValue   = prcValue ? *prcValue : ImRect();
 					edit.pbEditing = &bEditing;
@@ -2128,8 +2158,11 @@ namespace gamescope::ui::shell
 						bChanged = true;
 					}
 					if ( bEditing )
-						s_sEditingText = sPopupKey;
-					else if ( s_sEditingText == sPopupKey )
+					{
+						s_sEditingText   = sPopupKey;
+						s_eEditingRegion = eRegion;
+					}
+					else if ( s_sEditingText == sPopupKey && s_eEditingRegion == eRegion )
 						s_sEditingText.clear();
 					return bChanged;
 				}
@@ -2247,7 +2280,9 @@ namespace gamescope::ui::shell
 				{
 					std::string s = std::holds_alternative<std::string>( v )
 						? std::get<std::string>( v ) : std::string();
-					bool bEditing = ( s_sEditingText == sPopupKey );
+					// Region-qualified for the same reason the Stepper case
+					// above is -- see s_eEditingRegion's comment.
+					bool bEditing = ( s_sEditingText == sPopupKey && s_eEditingRegion == eRegion );
 					if ( controls::Text( row, pszId, &s, &bEditing ) )
 					{
 						decl.Binding().Set( Value{ s } );
@@ -2256,8 +2291,11 @@ namespace gamescope::ui::shell
 						// close the field on the same frame.
 					}
 					if ( bEditing )
-						s_sEditingText = sPopupKey;
-					else if ( s_sEditingText == sPopupKey )
+					{
+						s_sEditingText   = sPopupKey;
+						s_eEditingRegion = eRegion;
+					}
+					else if ( s_sEditingText == sPopupKey && s_eEditingRegion == eRegion )
 						s_sEditingText.clear();
 					return false;
 				}
@@ -2835,7 +2873,10 @@ namespace gamescope::ui::shell
 				sValue = FormatDeclValue( entry );
 
 			ImRect rcLabel, rcValue;
-			SplitValueColumn( entry, sValue, row, &rcLabel, &rcValue );
+			// bAffordance is exactly the sheet/inspector distinction --
+			// see its own use two switch cases down for DrawSharedControl.
+			SplitValueColumn( entry, sValue, row,
+				bAffordance ? Region::Sheet : Region::Inspector, &rcLabel, &rcValue );
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 			       TypeRole::Label,
@@ -2853,6 +2894,23 @@ namespace gamescope::ui::shell
 			// they cannot disagree about which rows are disabled.
 			if ( bDisabled )
 				ImGui::BeginDisabled();
+
+			// requests-2026-09-07 item 8/A: "editing any element should
+			// automatically select it, so it also pops up in the inspector
+			// rail." bClicked (the invisible row button below) only fires
+			// for a press that lands OUTSIDE every atom -- D22's own
+			// AllowOverlap comment above explains why: a press that lands ON
+			// an atom (a slider handle, a switch, a stepper's -/+ , a
+			// segmented cell, a dropdown) resolves the hit test to THAT
+			// atom, not to the row button beneath it, so dragging a slider
+			// or flipping a switch on a row that was not already selected
+			// changed the value but left the OLD row highlighted and the
+			// Inspector showing the wrong thing. bValueChanged is this
+			// function's second, independent way of returning "select me",
+			// fed by the same atoms' own bChanged -- so a value-changing
+			// interaction selects the row exactly as reliably as clicking
+			// its label always did.
+			bool bValueChanged = false;
 
 			switch ( entry.GetKind() )
 			{
@@ -2873,7 +2931,13 @@ namespace gamescope::ui::shell
 					// only for the sheet. The focus ring therefore appears in
 					// the one region the arrow keys are actually driving,
 					// rather than on both copies of a selected row's bank.
-					DrawSharedControl( entry, row, "ctl", entry.Id(),
+					//
+					// Text is deliberately excluded from the "select on
+					// change" list above (DrawSharedControl's Text case
+					// always returns false, by its own design) -- editing a
+					// profile/game-id NAME field is not in item A's list and
+					// stays exactly as it was.
+					bValueChanged = DrawSharedControl( entry, row, "ctl", entry.Id(),
 						bAffordance ? Region::Sheet : Region::Inspector,
 						( bAffordance
 							? ( s_eFocusRegion == Region::Sheet && bSelected )
@@ -2892,6 +2956,9 @@ namespace gamescope::ui::shell
 						bArmed ? entry.ConfirmPrompt().c_str() : entry.Verb().c_str(),
 						entry.NeedsConfirm() ? controls::Intent::Danger : controls::Intent::Accent ) )
 					{
+						// "action press" is in item A's own list -- arming a
+						// confirm as much as firing it outright.
+						bValueChanged = true;
 						if ( !entry.NeedsConfirm() )
 						{
 							entry.Invoke();
@@ -2938,7 +3005,14 @@ namespace gamescope::ui::shell
 				DrawAffordance( entry, row );
 
 			ImGui::PopID();
-			return bClicked;
+			// The Sheet's own row-loop call site is the only one that acts
+			// on this return value (Select() + focus region) -- the
+			// Inspector's "own row" copy of the selected Entry (bAffordance
+			// false) discards it entirely, which is what keeps a value
+			// changed FROM the Inspector's copy from re-selecting anything
+			// or resetting the Inspector's own focus (item B: editing must
+			// not jump selection INTO the Inspector's copy).
+			return controls::ShouldSelectRow( bClicked, bValueChanged );
 		}
 
 		// =================================================================
@@ -3024,7 +3098,10 @@ namespace gamescope::ui::shell
 				const ScopedDim dim( bDisabled );
 
 				ImRect rcLabel, rcValue;
-				SplitValueColumn( param, FormatDeclValue( param ), row, &rcLabel, &rcValue );
+				// DrawInlineParams renders only inside the Sheet -- see
+				// DrawSharedControl's own Region::Sheet just below.
+				SplitValueColumn( param, FormatDeclValue( param ), row,
+					Region::Sheet, &rcLabel, &rcValue );
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
@@ -3913,7 +3990,10 @@ namespace gamescope::ui::shell
 				const ScopedDim dimParam( bParamDisabled );
 
 				ImRect rcLabel, rcValue;
-				SplitValueColumn( param, FormatDeclValue( param ), row, &rcLabel, &rcValue );
+				// This loop is the Inspector's own -- see DrawSharedControl's
+				// Region::Inspector just below.
+				SplitValueColumn( param, FormatDeclValue( param ), row,
+					Region::Inspector, &rcLabel, &rcValue );
 
 				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 				       TypeRole::Label, Col( Role::TextLabel ), param.Title().c_str() );
@@ -4329,10 +4409,14 @@ namespace gamescope::ui::shell
 			// Role::Surface rather than respecting window_opacity. The
 			// docked Inspector fill is a real region of the slab, so it
 			// follows the same transparency the slab background does
-			// (requests-2026-09-06.md item 2).
+			// (requests-2026-09-06.md item 2). WithAlpha(), not Dim(): the
+			// slider is meant to set the FINAL drawn alpha directly, so 1.0
+			// means opaque -- Dim() would have scaled Role::SurfaceInspector's
+			// own baked-in alpha instead, leaving 1.0 still see-through
+			// (requests-2026-09-07 item 9; see WithAlpha()'s own comment).
 			ImGui::PushStyleColor( ImGuiCol_ChildBg, bDrawer
 				? IM_COL32( 12, 14, 17, 251 )       // index.html's .insp.drawer
-				: Dim( Col( Role::SurfaceInspector ), gamescope::palette::WindowOpacity() ) );
+				: WithAlpha( Col( Role::SurfaceInspector ), gamescope::palette::WindowOpacity() ) );
 			ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 0.0f );
 
 			const bool bOpen = ImGui::BeginChild( "##insp",
@@ -5936,8 +6020,13 @@ namespace gamescope::ui::shell
 					{
 						// A Stepper begins typed entry here too (request
 						// #14): the same bit, the same key, so the atom
-						// opens its field on the next frame.
-						s_sEditingText = bOwnRow ? pIn->Id() : pParam->Id();
+						// opens its field on the next frame. Region is
+						// Inspector -- this whole branch only runs while
+						// s_eFocusRegion is (see the guard above) -- so the
+						// Sheet's own copy of the same id, if any, stays
+						// unaffected (s_eEditingRegion's comment).
+						s_sEditingText   = bOwnRow ? pIn->Id() : pParam->Id();
+						s_eEditingRegion = Region::Inspector;
 					}
 					else if ( bOwnRow && eKind == Kind::Action )
 					{
@@ -6045,7 +6134,8 @@ namespace gamescope::ui::shell
 					}
 					else if ( param.GetKind() == Kind::Text || param.GetKind() == Kind::Stepper )
 					{
-						s_sEditingText = param.Id();
+						s_sEditingText   = param.Id();
+						s_eEditingRegion = Region::Sheet;
 					}
 					else if ( param.GetKind() == Kind::Choice && DrawsAsDropdown( param.Id() ) )
 					{
@@ -6102,7 +6192,8 @@ namespace gamescope::ui::shell
 				{
 					// A Stepper's Enter is "begin entry" as well (request
 					// #14): the number becomes a field, pre-selected.
-					s_sEditingText = pSel->Id();
+					s_sEditingText   = pSel->Id();
+					s_eEditingRegion = Region::Sheet;
 				}
 				else if ( pSel->GetKind() == Kind::Choice && DrawsAsDropdown( pSel->Id() ) )
 				{
@@ -6728,12 +6819,17 @@ namespace gamescope::ui::shell
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, Hairline() );
 		// overlay.window_opacity (requests-2026-09-06.md item 2): this is
 		// the slab's own background, which the sheet draws directly onto
-		// (it fills no background of its own) -- so dimming it here is what
+		// (it fills no background of its own) -- so setting it here is what
 		// makes both "slab background" and "sheet fill" respect the slider
-		// with one edit. Dim() scales alpha only, never RGB or the text
-		// drawn on top of it.
+		// with one edit. WithAlpha(), not Dim(): the slider sets the FINAL
+		// drawn alpha, so 1.0 means fully opaque (the theme colour, no
+		// residual blend, game never shows through) -- Dim() would have
+		// scaled Role::Surface's own baked-in 88%-alpha literal instead, so
+		// 1.0 still rendered translucent (requests-2026-09-07 item 9; fixed
+		// alongside the same bug in the Inspector fill above). Neither
+		// function ever touches RGB or the text drawn on top.
 		ImGui::PushStyleColor( ImGuiCol_WindowBg,
-			Dim( Col( Role::Surface ), gamescope::palette::WindowOpacity() ) );
+			WithAlpha( Col( Role::Surface ), gamescope::palette::WindowOpacity() ) );
 		ImGui::PushStyleColor( ImGuiCol_Border, Accent( 0.42f ) );
 
 		const ImGuiWindowFlags flags =

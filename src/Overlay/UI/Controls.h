@@ -334,6 +334,28 @@ namespace gamescope::ui
 		// wider than the row it is drawn in.
 		ImRect ConstantWidthGrab( const ImRect &grab, float flConstantW, float flHitW );
 
+		// requests-2026-09-07 item 8/A: "editing any element should
+		// automatically select it, so it also pops up in the inspector
+		// rail." Before this, a Sheet row was only selected by a raw click
+		// (Shell.cpp's DrawEntryRow returning true from its own row-spanning
+		// InvisibleButton) -- but D22's own AllowOverlap rule (see that
+		// comment in Shell.cpp) means a press that lands ON an atom -- a
+		// slider handle, a switch, a stepper's -/+, a segmented cell, a
+		// dropdown pick -- resolves the hit test to THAT ATOM, never to the
+		// row button beneath it. So dragging a slider or flipping a switch
+		// on a row that was not already selected changed the value but left
+		// the OLD row highlighted and the Inspector showing the wrong row.
+		//
+		// This is the pure half of the fix, same reason ConstantWidthGrab()
+		// above is one: Shell.cpp's row-drawing functions are file-private
+		// (Shell.h's own header comment: "this is the whole of its public
+		// surface... deliberately, because... there is no header a category
+		// file could include to reach into it") and cannot be reached from a
+		// test directly, so the one line of logic the fix actually adds --
+		// "select on a click OR on a value change" -- is named and pinned
+		// here instead of appearing unexplained, untested, at the call site.
+		bool ShouldSelectRow( bool bClicked, bool bValueChanged );
+
 		// ---- SPEC §3.5 -- exact or unbounded ------------------------------
 		// B's borderless "- +". Carries no number; the number is in the value
 		// column, which the row draws.

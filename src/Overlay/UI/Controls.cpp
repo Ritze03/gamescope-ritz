@@ -781,6 +781,15 @@ namespace gamescope::ui
 			return ImRect( flCenterX - flHalfW, grab.Min.y, flCenterX + flHalfW, grab.Max.y );
 		}
 
+		// See Controls.h's own comment on ShouldSelectRow() for the bug and
+		// the fix; this is the whole rule, kept free of ImGui and of
+		// Shell.cpp's own privacy for the same reason ConstantWidthGrab()
+		// above is.
+		bool ShouldSelectRow( bool bClicked, bool bValueChanged )
+		{
+			return bClicked || bValueChanged;
+		}
+
 		namespace
 		{
 			// THE ONE PLACE A SLIDER GRAB IS SIZED.
