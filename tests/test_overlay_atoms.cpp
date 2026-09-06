@@ -140,6 +140,42 @@ namespace
 		return ImRect( ImGui::GetItemRectMin(), ImGui::GetItemRectMax() );
 	}
 
+	// DrawModal()'s own footer geometry, replicated -- the same technique
+	// MakeRow() above already uses for a sheet row. LastItemRect() cannot
+	// stand in for this one the way it does for a plain row atom: DrawModal()
+	// is self-hosted in its OWN top-level window (Controls.cpp's own
+	// comment on why -- the same reason DrawPalette() is), and ImGui's own
+	// End() restores g.LastItemData to whatever it was in the CALLER's
+	// window before that Begin() (imgui.cpp: `g.LastItemData =
+	// window_stack_data.ParentLastItemDataBackup;`) precisely so an item
+	// inside a nested window cannot leak out as "the last item" once it
+	// closes -- correct behaviour, and the reason this test cannot simply
+	// ask ImGui where the button ended up the way the row-atom tests do.
+	//
+	// Valid only for a spec with no fnBody (every test that uses this
+	// leaves it unset), so the body is always exactly one kRowH tall -- the
+	// one number this needs that isn't already a token.
+	ImRect ModalPrimaryButtonRect( const ImRect &rcSlab, const char *pszPrimaryLabel )
+	{
+		const float flW      = std::clamp( rcSlab.GetWidth() - ui::Px( ui::tok::kXL ) * 2.0f,
+		                                   ui::Px( 240.0f ), ui::Px( 420.0f ) );
+		const float flTitleH = ui::Px( ui::tok::kRowH );
+		const float flFootH  = ui::Px( ui::tok::kRowH );
+		const float flBodyH  = ui::Px( ui::tok::kRowH );   // no fnBody -> exactly one row
+		const float flH      = flTitleH + flBodyH + flFootH;
+
+		const float x1 = rcSlab.Min.x + ( rcSlab.GetWidth()  - flW ) * 0.5f + flW;
+		const float y1 = rcSlab.Min.y + ( rcSlab.GetHeight() - flH ) * 0.5f + flH;
+
+		const float flPad     = ui::Px( ui::tok::kL );
+		const float flBtnH    = ui::Px( ui::tok::kControlH );
+		const float flPrimaryW = ui::MeasureText( ui::TypeRole::Meta, pszPrimaryLabel ).x
+		                        + ui::Px( ui::tok::kVerbPadX ) * 2.0f;
+		const float flBtnY    = ( y1 - flFootH ) + ( flFootH - flBtnH ) * 0.5f;
+
+		return ImRect( x1 - flPad - flPrimaryW, flBtnY, x1 - flPad, flBtnY + flBtnH );
+	}
+
 	void RequireSameRect( const ImRect &a, const ImRect &b )
 	{
 		REQUIRE_THAT( a.Min.x, WithinAbs( b.Min.x, 1e-3f ) );
@@ -918,4 +954,241 @@ TEST_CASE( "atoms: with no drag in flight a write is not deferred", "[overlay_at
 	}
 
 	REQUIRE_FALSE( ui::IsPointerDragActive() );
+}
+
+// =========================================================================
+//  ListBox -- the interactive half. The pure nav/scroll/layout arithmetic
+//  is tested without a context in test_overlay_ui.cpp; this is the click
+//  and keyboard-through-ImGui's-own-queue half that needs one.
+// =========================================================================
+namespace
+{
+	// The sketch's own four lines, verbatim.
+	constexpr ui::controls::ListBoxItem kProfileItems[] = {
+		{ "Rust",     "[Game]", nullptr },
+		{ "Profile1", nullptr,  nullptr },
+		{ "Comp",     nullptr,  nullptr },
+		{ "Casual",   nullptr,  "inherits Comp" },
+	};
+}
+
+TEST_CASE( "atoms: listbox selects and activates the row that was clicked", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nSelected = -1;
+	const float flRowH = ui::Px( ui::tok::kControlH );
+	const ImRect rcBody( 40.0f, 200.0f, 40.0f + ui::Px( 300.0f ), 200.0f + flRowH * 10.0f );
+
+	auto Draw = [ & ]
+	{
+		return ui::controls::ListBox( rcBody, "profiles", &nSelected,
+		                              kProfileItems, IM_ARRAYSIZE( kProfileItems ) );
+	};
+
+	h.BeginFrame(); Draw(); h.EndFrame();
+	REQUIRE( nSelected == -1 );   // nothing selected yet
+
+	// Click row index 1 ("Profile1"): hover, press, release.
+	const ImVec2 vRow1Center( rcBody.GetCenter().x, rcBody.Min.y + flRowH * 1.5f );
+	h.MoveMouse( vRow1Center );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame();
+	const ui::controls::ListBoxResult res = Draw();
+	h.EndFrame();
+
+	REQUIRE( nSelected == 1 );
+	REQUIRE( res.bChanged );
+	REQUIRE( res.bActivated );   // Controls.h: "a click ... same as Enter"
+
+	// Clicking the ALREADY-selected row changes nothing but still activates
+	// -- "Enter = activate = same as click" holds for a click too.
+	h.MoveMouse( vRow1Center );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame();
+	const ui::controls::ListBoxResult res2 = Draw();
+	h.EndFrame();
+
+	REQUIRE( nSelected == 1 );
+	REQUIRE_FALSE( res2.bChanged );
+	REQUIRE( res2.bActivated );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+}
+
+TEST_CASE( "atoms: listbox keyboard nav applies only while the pointer hovers it", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MouseButton( false );
+
+	int nSelected = 0;
+	const float flRowH = ui::Px( ui::tok::kControlH );
+	const ImRect rcBody( 40.0f, 200.0f, 40.0f + ui::Px( 300.0f ), 200.0f + flRowH * 10.0f );
+
+	auto Draw = [ & ]
+	{
+		return ui::controls::ListBox( rcBody, "profiles2", &nSelected,
+		                              kProfileItems, IM_ARRAYSIZE( kProfileItems ) );
+	};
+
+	// Hovering the list, Down moves the selection.
+	h.MoveMouse( rcBody.GetCenter() );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_DownArrow, true );
+	h.BeginFrame();
+	const ui::controls::ListBoxResult resDown = Draw();
+	h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_DownArrow, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	REQUIRE( nSelected == 1 );
+	REQUIRE( resDown.bChanged );
+
+	// Pointer OFF the list: the same key does nothing. This widget has no
+	// keyboard-focus system of its own (Controls.h's ListBox() comment) --
+	// hovering is the whole of how it claims the keyboard.
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_DownArrow, true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_DownArrow, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	REQUIRE( nSelected == 1 );   // unchanged
+
+	// Home/End, back over the list.
+	h.MoveMouse( rcBody.GetCenter() );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_End, true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_End, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	REQUIRE( nSelected == 3 );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); Draw(); h.EndFrame();
+}
+
+// =========================================================================
+//  Modal -- Esc/primary/Enter, against a live frame. Open/close bookkeeping
+//  on its own is tested without a context in test_overlay_ui.cpp.
+// =========================================================================
+TEST_CASE( "atoms: modal Esc cancels and calls fnCancel exactly once", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );   // clear of the footer buttons
+	h.MouseButton( false );
+
+	int nCancel = 0, nPrimary = 0;
+	ui::ModalSpec spec;
+	spec.sTitle        = "Delete profile?";
+	spec.sPrimaryLabel = "Delete";
+	spec.bPrimaryDanger = true;
+	spec.fnCancel  = [ & ] { ++nCancel; };
+	spec.fnPrimary = [ & ] { ++nPrimary; };
+	ui::OpenModal( spec );
+
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	REQUIRE( ui::IsModalOpen() );
+	REQUIRE( nCancel == 0 );
+
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Escape, true );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Escape, false );
+	h.BeginFrame(); h.EndFrame();
+
+	REQUIRE_FALSE( ui::IsModalOpen() );
+	REQUIRE( nCancel == 1 );
+	REQUIRE( nPrimary == 0 );
+
+	// A further frame draws nothing -- the modal is closed -- so the count
+	// does not move again.
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	REQUIRE( nCancel == 1 );
+}
+
+TEST_CASE( "atoms: modal primary button fires fnPrimary exactly once, and closes it", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nPrimary = 0, nCancel = 0;
+	ui::ModalSpec spec;
+	spec.sTitle        = "Create profile";
+	spec.sPrimaryLabel = "Create";
+	spec.fnPrimary = [ & ] { ++nPrimary; };
+	spec.fnCancel  = [ & ] { ++nCancel; };
+	ui::OpenModal( spec );
+
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+	const ImRect rcPrimary = ModalPrimaryButtonRect( rcSlab, "Create" );
+
+	h.MoveMouse( rcPrimary.GetCenter() );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+
+	REQUIRE_FALSE( ui::IsModalOpen() );
+	REQUIRE( nPrimary == 1 );
+	REQUIRE( nCancel == 0 );
+
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	REQUIRE( nPrimary == 1 );   // closed -- a further frame cannot fire it again
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "atoms: modal Enter confirms once nothing is being edited", "[overlay_atoms]" )
+{
+	// Controls.h's ModalSpec::fnPrimary records the exact simplification:
+	// with no cross-field tab order in this kit, "the LAST Text field"
+	// cannot be told apart from any other, so Enter fires the primary
+	// whenever no field is active -- which this body never makes active at
+	// all (it draws no Text control), so the very first Enter confirms.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nPrimary = 0;
+	ui::ModalSpec spec;
+	spec.sTitle        = "Create profile";
+	spec.sPrimaryLabel = "Create";
+	spec.fnPrimary = [ & ] { ++nPrimary; };
+	ui::OpenModal( spec );
+
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Enter, true );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Enter, false );
+	h.BeginFrame(); h.EndFrame();
+
+	REQUIRE_FALSE( ui::IsModalOpen() );
+	REQUIRE( nPrimary == 1 );
 }

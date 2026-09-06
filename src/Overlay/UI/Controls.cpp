@@ -543,6 +543,55 @@ namespace gamescope::ui
 			Dl()->AddRect( rc.Min, rc.Max, col, flRounding, 0, Hairline() );
 		}
 
+		// The verb chip's visuals, at a caller-given rect rather than a row's
+		// own PlacePx() -- shared by controls::Verb() (SPEC §3.9, row-hosted)
+		// and DrawModal()'s Cancel/primary footer buttons (screen-hosted, no
+		// row at all). One function decides what a verb chip looks like; both
+		// hosts draw the same thing rather than the footer growing a second,
+		// almost-identical button style.
+		bool VerbAt( const ImRect &rc, const char *pszId, const char *pszVerb,
+		            controls::Intent eIntent, bool bEnabled )
+		{
+			const Atom a = Begin( rc, pszId );
+			if ( !a )
+				return false;
+
+			ImU32 colFill, colText;
+			switch ( eIntent )
+			{
+				case controls::Intent::Danger:
+					// SPEC §3.9: fill Danger@14%, text DangerText. Danger is
+					// hue-fixed and outside the accent family on purpose.
+					colFill = Dim( Col( Role::Danger ), a.bHovered ? 0.26f : 0.14f );
+					colText = Col( Role::DangerText );
+					break;
+				case controls::Intent::Neutral:
+					colFill = palette::White( 0.05f );
+					colText = Col( Role::TextBody );
+					break;
+				default:
+					colFill = Accent( a.bHovered ? 0.26f : 0.16f );
+					colText = a.bHovered ? Col( Role::AccentSeg ) : Col( Role::AccentText );
+					break;
+			}
+
+			if ( !bEnabled )
+			{
+				colFill = Dim( colFill, 0.45f );
+				colText = Dim( colText, 0.45f );
+			}
+
+			Dl()->AddRectFilled( a.rc.Min, a.rc.Max, colFill );
+			// The one place a verb gets a border: `neutral`, whose text is
+			// dimmer than an accent verb's, so the fill alone would not
+			// identify it (SPEC §3.9).
+			if ( eIntent == controls::Intent::Neutral )
+				Boundary( a.rc, Col( Role::LineControl ) );
+
+			DrawText( a.rc, TypeRole::Meta, colText, pszVerb, TextAlign::Center );
+			return bEnabled && a.bPressed;
+		}
+
 		// ---- one measurement, two consumers ---------------------------
 		// Segmented cells and chip-bank cells are CONTENT-SIZED (B's design,
 		// SPEC §3.2/§3.12), so their width has to be measured. This is the
@@ -1282,44 +1331,7 @@ namespace gamescope::ui
 		           Intent eIntent, bool bEnabled )
 		{
 			const float flW = MeasureText( TypeRole::Meta, pszVerb ).x + Px( tok::kVerbPadX ) * 2.0f;
-			const Atom a = Begin( row.PlacePx( flW ), pszId );
-			if ( !a )
-				return false;
-
-			ImU32 colFill, colText;
-			switch ( eIntent )
-			{
-				case Intent::Danger:
-					// SPEC §3.9: fill Danger@14%, text DangerText. Danger is
-					// hue-fixed and outside the accent family on purpose.
-					colFill = Dim( Col( Role::Danger ), a.bHovered ? 0.26f : 0.14f );
-					colText = Col( Role::DangerText );
-					break;
-				case Intent::Neutral:
-					colFill = palette::White( 0.05f );
-					colText = Col( Role::TextBody );
-					break;
-				default:
-					colFill = Accent( a.bHovered ? 0.26f : 0.16f );
-					colText = a.bHovered ? Col( Role::AccentSeg ) : Col( Role::AccentText );
-					break;
-			}
-
-			if ( !bEnabled )
-			{
-				colFill = Dim( colFill, 0.45f );
-				colText = Dim( colText, 0.45f );
-			}
-
-			Dl()->AddRectFilled( a.rc.Min, a.rc.Max, colFill );
-			// The one place a verb gets a border: `neutral`, whose text is
-			// dimmer than an accent verb's, so the fill alone would not
-			// identify it (SPEC §3.9).
-			if ( eIntent == Intent::Neutral )
-				Boundary( a.rc, Col( Role::LineControl ) );
-
-			DrawText( a.rc, TypeRole::Meta, colText, pszVerb, TextAlign::Center );
-			return bEnabled && a.bPressed;
+			return VerbAt( row.PlacePx( flW ), pszId, pszVerb, eIntent, bEnabled );
 		}
 
 		// =================================================================
@@ -1630,5 +1642,405 @@ namespace gamescope::ui
 			for ( int i = 0; i < nBars; ++i )
 				Bar( rcBody.Max.x - (float)( nBars - i ) * flBarW, flBarW, pflSamples[ nFirst + (size_t)i ] );
 		}
+
+		// =================================================================
+		//  ListBox -- see Controls.h
+		// =================================================================
+		int ListBoxStep( int nSelected, int nCount, ListBoxNav eNav )
+		{
+			if ( nCount <= 0 )
+				return -1;
+			switch ( eNav )
+			{
+				case ListBoxNav::Home: return 0;
+				case ListBoxNav::End:  return nCount - 1;
+				case ListBoxNav::Up:   return nSelected <= 0 ? 0 : nSelected - 1;
+				case ListBoxNav::Down: return nSelected < 0 ? 0 : std::min( nSelected + 1, nCount - 1 );
+			}
+			return std::clamp( nSelected, 0, nCount - 1 );
+		}
+
+		int ListBoxScrollForSelection( int nScrollTop, int nSelected, int nVisibleRows, int nCount )
+		{
+			const int nMaxTop = std::max( 0, nCount - std::max( 0, nVisibleRows ) );
+			nScrollTop = std::clamp( nScrollTop, 0, nMaxTop );
+			if ( nSelected < 0 || nVisibleRows <= 0 )
+				return nScrollTop;
+			if ( nSelected < nScrollTop )
+				nScrollTop = nSelected;
+			else if ( nSelected >= nScrollTop + nVisibleRows )
+				nScrollTop = nSelected - nVisibleRows + 1;
+			return std::clamp( nScrollTop, 0, nMaxTop );
+		}
+
+		ListBoxItemLayout LayoutListBoxItem( const ImRect &rcItem, float flTagWidthPx,
+		                                     float flSecondaryWidthPx, float flPadPx )
+		{
+			ListBoxItemLayout out;
+
+			float flX = rcItem.Min.x;
+			if ( flTagWidthPx > 0.0f )
+			{
+				out.rcTag = ImRect( flX, rcItem.Min.y, flX + flTagWidthPx, rcItem.Max.y );
+				flX = out.rcTag.Max.x + flPadPx;
+			}
+			else
+			{
+				out.rcTag = ImRect( flX, rcItem.Min.y, flX, rcItem.Max.y );
+			}
+
+			// The secondary column is reserved only when doing so still
+			// leaves the label at least one padding's worth of width --
+			// SPEC states no minimum label width, so kGapLabel (the row
+			// grammar's own label<->value gap) is reused as "the smallest
+			// gap that still reads as two columns" rather than inventing a
+			// second constant nobody asked for.
+			float flLabelMax = rcItem.Max.x;
+			if ( flSecondaryWidthPx > 0.0f &&
+			     ( rcItem.Max.x - flSecondaryWidthPx - flPadPx - flX ) >= flPadPx )
+			{
+				out.rcSecondary = ImRect( rcItem.Max.x - flSecondaryWidthPx, rcItem.Min.y,
+				                         rcItem.Max.x, rcItem.Max.y );
+				flLabelMax = out.rcSecondary.Min.x - flPadPx;
+				out.bSecondaryShown = true;
+			}
+			else
+			{
+				out.rcSecondary = ImRect( rcItem.Max.x, rcItem.Min.y, rcItem.Max.x, rcItem.Max.y );
+			}
+
+			out.rcLabel = ImRect( flX, rcItem.Min.y, std::max( flX, flLabelMax ), rcItem.Max.y );
+			return out;
+		}
+
+		ListBoxResult ListBox( const ImRect &rcBody, const char *pszId, int *pnSelected,
+		                      const ListBoxItem *pItems, size_t nItems, int nMaxVisibleRows )
+		{
+			ListBoxResult out;
+			if ( !pnSelected )
+				return out;
+
+			ImGui::PushID( pszId );
+			const ImGuiID id = ImGui::GetID( "##scroll" );
+			ImGuiStorage *pStorage = ImGui::GetStateStorage();
+
+			const int   nCount  = (int)nItems;
+			const float flRowH  = Px( tok::kControlH );
+			const int   nFit    = ( rcBody.GetHeight() > 0.0f && flRowH > 0.0f )
+			                     ? (int)( rcBody.GetHeight() / flRowH ) : 0;
+			const int   nVisible = std::max( 1, std::min( std::max( 1, nMaxVisibleRows ), std::max( 1, nFit ) ) );
+
+			// KEYBOARD: only while the pointer hovers the list. See
+			// Controls.h's ListBox() comment for why this widget has no
+			// ID-based focus of its own.
+			const bool bHovered = ImGui::IsMouseHoveringRect( rcBody.Min, rcBody.Max );
+			if ( bHovered && nCount > 0 )
+			{
+				bool       bNav = true;
+				ListBoxNav eNav = ListBoxNav::Down;
+				if      ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ) eNav = ListBoxNav::Down;
+				else if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ) eNav = ListBoxNav::Up;
+				else if ( ImGui::IsKeyPressed( ImGuiKey_Home,      false ) ) eNav = ListBoxNav::Home;
+				else if ( ImGui::IsKeyPressed( ImGuiKey_End,       false ) ) eNav = ListBoxNav::End;
+				else bNav = false;
+
+				if ( bNav )
+				{
+					const int nNext = ListBoxStep( *pnSelected, nCount, eNav );
+					if ( nNext != *pnSelected )
+					{
+						*pnSelected = nNext;
+						out.bChanged = true;
+					}
+				}
+
+				if ( *pnSelected >= 0 &&
+				     ( ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+				       ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) ) )
+					out.bActivated = true;
+			}
+
+			int nScroll = pStorage->GetInt( id, 0 );
+			if ( bHovered && nCount > nVisible )
+			{
+				const float flWheel = ImGui::GetIO().MouseWheel;
+				if ( flWheel != 0.0f )
+					nScroll -= (int)flWheel;
+			}
+			nScroll = ListBoxScrollForSelection( nScroll, *pnSelected, nVisible, nCount );
+
+			// ---- chrome: wire lines only, no fill, no rounding (the sketch) --
+			Dl()->AddRectFilled( rcBody.Min, rcBody.Max, palette::White( 0.03f ) );
+			Boundary( rcBody, Col( Role::LineControl ) );
+
+			const bool  bScrollbar   = nCount > nVisible;
+			const float flScrollbarW = bScrollbar ? Px( tok::kXS ) : 0.0f;
+			const float flPad        = Px( tok::kS );
+
+			for ( int nRow = 0; nRow < nVisible; ++nRow )
+			{
+				const int i = nScroll + nRow;
+				if ( i < 0 || i >= nCount )
+					break;
+
+				const ImRect rcItem( rcBody.Min.x, rcBody.Min.y + flRowH * (float)nRow,
+				                     rcBody.Max.x - flScrollbarW, rcBody.Min.y + flRowH * (float)( nRow + 1 ) );
+
+				char szRowId[ 16 ];
+				snprintf( szRowId, sizeof( szRowId ), "row%d", i );
+				const Atom a = Begin( rcItem, szRowId );
+
+				const bool bSelected = ( i == *pnSelected );
+				if ( a && a.bPressed )
+				{
+					if ( *pnSelected != i )
+					{
+						*pnSelected = i;
+						out.bChanged = true;
+					}
+					// Click == activate (Controls.h: "Enter = activate = same
+					// as click"), whether or not the selection actually moved.
+					out.bActivated = true;
+				}
+
+				if ( a.bHovered && !bSelected )
+					Dl()->AddRectFilled( rcItem.Min, rcItem.Max, palette::White( 0.05f ) );
+
+				const ListBoxItem &item  = pItems[ i ];
+				const bool  bHasTag      = item.pszTag && *item.pszTag;
+				const bool  bHasSecond   = item.pszSecondary && *item.pszSecondary;
+				const float flTagW       = bHasTag    ? MeasureText( TypeRole::Meta, item.pszTag ).x + Px( tok::kS ) : 0.0f;
+				const float flSecW       = bHasSecond ? MeasureText( TypeRole::Meta, item.pszSecondary ).x : 0.0f;
+
+				const ImRect rcInner( rcItem.Min.x + flPad, rcItem.Min.y, rcItem.Max.x - flPad, rcItem.Max.y );
+				const ListBoxItemLayout lay = LayoutListBoxItem( rcInner, flTagW, flSecW, Px( tok::kGapLabel ) );
+
+				if ( bHasTag )
+					DrawText( lay.rcTag, TypeRole::Meta, Col( Role::TextMeta ), item.pszTag );
+				if ( item.pszLabel )
+					DrawText( lay.rcLabel, TypeRole::Label,
+					         bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ), item.pszLabel );
+				if ( lay.bSecondaryShown && bHasSecond )
+					DrawText( lay.rcSecondary, TypeRole::Meta, Col( Role::TextMeta ), item.pszSecondary, TextAlign::Right );
+
+				// Selected: a 1px accent outline, no fill -- exactly the sketch.
+				if ( bSelected )
+					Boundary( rcItem, Accent( 1.0f ) );
+				if ( nRow + 1 < nVisible )
+					Dl()->AddLine( ImVec2( rcItem.Min.x, rcItem.Max.y ), ImVec2( rcItem.Max.x, rcItem.Max.y ),
+					              Col( Role::Line ), Hairline() );
+			}
+
+			if ( bScrollbar )
+			{
+				const float flTrackX = rcBody.Max.x - flScrollbarW;
+				Dl()->AddRectFilled( ImVec2( flTrackX, rcBody.Min.y ), ImVec2( rcBody.Max.x, rcBody.Max.y ),
+				                    palette::White( 0.05f ) );
+
+				const float flThumbH = std::max( flRowH, rcBody.GetHeight() * ( (float)nVisible / (float)nCount ) );
+				const float flRange  = std::max( 1, nCount - nVisible );
+				const float flThumbY = rcBody.Min.y +
+					( (float)nScroll / (float)flRange ) * ( rcBody.GetHeight() - flThumbH );
+				Dl()->AddRectFilled( ImVec2( flTrackX, flThumbY ), ImVec2( rcBody.Max.x, flThumbY + flThumbH ),
+				                    Accent( 0.55f ) );
+			}
+
+			pStorage->SetInt( id, nScroll );
+			ImGui::PopID();
+			return out;
+		}
+	}
+
+	// =========================================================================
+	//  Modal -- see Controls.h
+	// =========================================================================
+	namespace
+	{
+		struct ModalState
+		{
+			bool       bOpen = false;
+			ModalSpec  spec;
+			// The previous frame's measured body height, so the panel can be
+			// sized and centred BEFORE fnBody runs this frame -- the standard
+			// immediate-mode "auto-size from last frame" trick (the same one
+			// ImGuiWindowFlags_AlwaysAutoResize itself relies on). The one
+			// visible cost: a body whose row count changes on its own (the
+			// sketch's Switch-gated GameID/name fields) grows or shrinks the
+			// dialog one frame after the toggle, not the same frame. Accepted
+			// rather than running fnBody twice a frame to measure it first --
+			// fnBody may itself have side effects (EditField's own commit-on-
+			// Enter), and running a control atom's Begin()/ItemAdd() twice in
+			// one frame against the same ids is not a thing this kit's atoms
+			// are built to tolerate.
+			float      flLastBodyHeightPx = 0.0f;
+		};
+		ModalState s_Modal;
+	}
+
+	RowCtx ModalNextRow( ModalBodyCtx &ctx )
+	{
+		const RowCtx row = RowCtx::ForRow( ctx.lane, ctx.rcBody.Min.x, ctx.flCursorY );
+		ctx.flCursorY += Px( tok::kRowH );
+		return row;
+	}
+
+	ImRect ModalNextBlock( ModalBodyCtx &ctx, float flHeightPx )
+	{
+		const ImRect rc( ctx.rcBody.Min.x, ctx.flCursorY, ctx.rcBody.Max.x, ctx.flCursorY + flHeightPx );
+		ctx.flCursorY += flHeightPx;
+		return rc;
+	}
+
+	void OpenModal( ModalSpec spec )
+	{
+		// SPEC gap, resolved per this task's brief: "opening one while
+		// another is open is a programming error" -- IM_ASSERT() in a debug/
+		// assertions build (imgui.h's own default: assert() from <cassert>,
+		// compiled out under NDEBUG), the open modal left untouched either
+		// way so a release build degrades to "ignored" rather than a crash
+		// or a clobbered dialog.
+		IM_ASSERT( !s_Modal.bOpen && "OpenModal() called while a modal is already open" );
+		if ( s_Modal.bOpen )
+			return;
+
+		s_Modal.bOpen = true;
+		// One row tall, or `flMinBodyRows` rows if the caller stated one,
+		// until DrawModal() has measured a real body -- see ModalSpec's own
+		// comment on flMinBodyRows for why this is a hint and not a
+		// guarantee (a body whose row count changes at runtime still grows
+		// or shrinks a frame late either way).
+		s_Modal.flLastBodyHeightPx = Px( tok::kRowH ) * std::max( 1.0f, spec.flMinBodyRows );
+		s_Modal.spec  = std::move( spec );
+	}
+
+	void CloseModal()
+	{
+		s_Modal = ModalState{};
+	}
+
+	bool IsModalOpen() { return s_Modal.bOpen; }
+
+	void DrawModal( const ImRect &rcSlab )
+	{
+		if ( !s_Modal.bOpen )
+			return;
+
+		// ITS OWN TOP-LEVEL WINDOW, exactly Shell.cpp's DrawPalette()/
+		// DrawDropdownList() reasoning: `Dl()` below is `GetCurrentWindow()->
+		// DrawList`, and a caller that draws this without an enclosing
+		// Begin()/End() of its own would post into WHATEVER window ImGui
+		// currently considers current -- the implicit debug window, most
+		// likely, with that window's own (unrelated, and much smaller) clip
+		// rect silently truncating every rect computed above. `SetNextWindow
+		// Focus()` and no `NoBringToFrontOnFocus` bring it above the slab,
+		// the same way the palette's own window does.
+		ImGui::SetNextWindowPos( rcSlab.Min );
+		ImGui::SetNextWindowSize( rcSlab.GetSize() );
+		ImGui::SetNextWindowFocus();
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+		const ImGuiWindowFlags eHostFlags =
+			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+			ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+			ImGuiWindowFlags_NoBackground;
+		if ( !ImGui::Begin( "##e2modalhost", nullptr, eHostFlags ) )
+		{
+			ImGui::End();
+			ImGui::PopStyleVar( 2 );
+			return;
+		}
+
+		ImGui::PushID( "e2modal" );
+
+		const float flW      = std::clamp( rcSlab.GetWidth() - Px( tok::kXL ) * 2.0f, Px( 240.0f ), Px( 420.0f ) );
+		const float flTitleH = Px( tok::kRowH );
+		const float flFootH  = Px( tok::kRowH );
+		const float flBodyH  = std::max( s_Modal.flLastBodyHeightPx, Px( tok::kRowH ) );
+		const float flH      = flTitleH + flBodyH + flFootH;
+
+		const float x0 = rcSlab.Min.x + ( rcSlab.GetWidth()  - flW ) * 0.5f;
+		const float y0 = rcSlab.Min.y + ( rcSlab.GetHeight() - flH ) * 0.5f;
+		const ImRect rc( x0, y0, x0 + flW, y0 + flH );
+
+		// The scrim -- the exact fill Shell.cpp's DrawPalette() dims the slab
+		// with, repeated rather than reinvented, so the shell never grows a
+		// second "surface behind me is dimmed" look.
+		Dl()->AddRectFilled( rcSlab.Min, rcSlab.Max, IM_COL32( 0, 0, 0, 150 ) );
+
+		// Two coats, same reason DrawPalette() gives: Role::Surface's own 88%
+		// alpha reads a sheet's controls straight through a panel sitting on
+		// top of them.
+		Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::Surface ) );
+		Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::Surface ) );
+		Boundary( rc, Accent( 0.42f ) );
+
+		const float flPad = Px( tok::kL );
+		const ImRect rcTitle( rc.Min.x + flPad, rc.Min.y, rc.Max.x - flPad, rc.Min.y + flTitleH );
+		DrawText( rcTitle, TypeRole::Title, Col( Role::TextPrimary ), s_Modal.spec.sTitle.c_str() );
+		Dl()->AddLine( ImVec2( rc.Min.x, rcTitle.Max.y ), ImVec2( rc.Max.x, rcTitle.Max.y ),
+		              Col( Role::Line ), Hairline() );
+
+		const ImRect rcFoot( rc.Min.x, rc.Max.y - flFootH, rc.Max.x, rc.Max.y );
+		Dl()->AddLine( ImVec2( rc.Min.x, rcFoot.Min.y ), ImVec2( rc.Max.x, rcFoot.Min.y ),
+		              Col( Role::Line ), Hairline() );
+
+		// ---- body: ordinary rows, the sheet's own grammar ------------------
+		ModalBodyCtx ctx;
+		ctx.rcBody    = ImRect( rc.Min.x + flPad, rcTitle.Max.y, rc.Max.x - flPad, rcFoot.Min.y );
+		ctx.lane      = Lane::ForColumn( ImMax( 0.0f, ctx.rcBody.GetWidth() ) / std::max( Scale(), 0.01f ) );
+		ctx.flCursorY = ctx.rcBody.Min.y;
+		if ( s_Modal.spec.fnBody )
+			s_Modal.spec.fnBody( ctx );
+		s_Modal.flLastBodyHeightPx = std::max( ctx.flCursorY - ctx.rcBody.Min.y, Px( tok::kRowH ) );
+
+		// ---- footer: Cancel, then the caller's primary ---------------------
+		const float flBtnH     = Px( tok::kControlH );
+		const float flBtnGap   = Px( tok::kM );
+		const char *pszPrimary = s_Modal.spec.sPrimaryLabel.empty() ? "OK" : s_Modal.spec.sPrimaryLabel.c_str();
+		const float flPrimaryW = MeasureText( TypeRole::Meta, pszPrimary ).x + Px( tok::kVerbPadX ) * 2.0f;
+		const float flCancelW  = MeasureText( TypeRole::Meta, "Cancel" ).x + Px( tok::kVerbPadX ) * 2.0f;
+		const float flBtnY     = rcFoot.Min.y + ( rcFoot.GetHeight() - flBtnH ) * 0.5f;
+
+		const ImRect rcPrimary( rc.Max.x - flPad - flPrimaryW, flBtnY, rc.Max.x - flPad, flBtnY + flBtnH );
+		const ImRect rcCancel( rcPrimary.Min.x - flBtnGap - flCancelW, flBtnY,
+		                       rcPrimary.Min.x - flBtnGap, flBtnY + flBtnH );
+
+		const bool bCancelClicked  = VerbAt( rcCancel, "cancel", "Cancel", controls::Intent::Neutral, true );
+		const bool bPrimaryClicked = VerbAt( rcPrimary, "primary", pszPrimary,
+		                                    s_Modal.spec.bPrimaryDanger ? controls::Intent::Danger
+		                                                                : controls::Intent::Accent,
+		                                    true );
+
+		// ---- keyboard: Esc cancels; Enter confirms when no field is being
+		// edited. Controls.h's ModalSpec::fnPrimary comment records why "the
+		// LAST Text field" specifically could not be told apart from any
+		// other field -- there is no cross-field tab order in this kit, so
+		// "nothing is currently active" is the closest honest approximation,
+		// and it is also true on the very frame a field's own Enter has just
+		// committed it.
+		const bool bEsc   = ImGui::IsKeyPressed( ImGuiKey_Escape, false );
+		const bool bEnter = ( ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+		                     ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) ) &&
+		                   !ImGui::IsAnyItemActive();
+
+		if ( bCancelClicked || bEsc )
+		{
+			std::function<void()> fnCancel = std::move( s_Modal.spec.fnCancel );
+			CloseModal();
+			if ( fnCancel )
+				fnCancel();
+		}
+		else if ( bPrimaryClicked || bEnter )
+		{
+			std::function<void()> fnPrimary = std::move( s_Modal.spec.fnPrimary );
+			CloseModal();
+			if ( fnPrimary )
+				fnPrimary();
+		}
+
+		ImGui::PopID();
+		ImGui::End();
+		ImGui::PopStyleVar( 2 );
 	}
 }

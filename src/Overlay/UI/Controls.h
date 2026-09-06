@@ -108,6 +108,109 @@ namespace gamescope::ui
 		void RailIcon( const Icon &icon, ImVec2 vCenterPx, float flBoxPx, ImU32 col );
 	}
 
+	// =========================================================================
+	//  Modal -- SPEC gap: the Profiles rebuild's Create/Copy/Edit/Delete
+	//  dialogs. A small centred dialog over the sheet, reusing the palette's
+	//  own scrim (Shell.cpp's DrawPalette -- see DrawModal()'s definition for
+	//  the exact fill it repeats rather than reinvents) so the shell never
+	//  grows a second "surface behind me is dimmed" look.
+	//
+	//  WHY THIS SITS OUTSIDE `controls::` AND NOT INSIDE IT. Every atom in
+	//  that namespace draws into a rect an existing allocator (RowCtx, or a
+	//  Composite's own rcBody) already produced. A modal has no such parent --
+	//  it is a whole SCREEN-LEVEL surface, the same job DrawPalette() already
+	//  does for the command palette -- so it belongs beside DrawText()/
+	//  MeasureText()/glyph:: at this file's top level, not among the row
+	//  atoms.
+	//
+	//  THE BODY IS ORDINARY ROWS. ModalBodyCtx::NextRow() returns exactly the
+	//  RowCtx RowCtx::ForRow() gives the sheet, built from a Lane over the
+	//  modal's own content width -- so a caller draws its fields with the
+	//  unmodified control atoms above (controls::Switch, controls::Text, ...)
+	//  and gets the sheet's own row grammar for free, rather than a second,
+	//  modal-only layout language.
+	// =========================================================================
+	struct ModalBodyCtx
+	{
+		ImRect rcBody;             // the modal's content rect, already inset from its chrome
+		Lane   lane;               // ForColumn() over rcBody's width -- built once, before fnBody runs
+		float  flCursorY = 0.0f;   // next row's top, screen space; starts at rcBody.Min.y
+	};
+
+	// Advances ctx.flCursorY by one row and returns the RowCtx for it -- a
+	// free function rather than a ModalBodyCtx method because RowCtx::ForRow()
+	// is itself a free function of a Lane, an origin and a top, and this is
+	// nothing more than remembering the top between calls.
+	RowCtx ModalNextRow( ModalBodyCtx &ctx );
+
+	// A free-form block below the last row -- the Delete confirmation's
+	// prompt paragraph -- at whatever height the caller measured for it.
+	ImRect ModalNextBlock( ModalBodyCtx &ctx, float flHeightPx );
+
+	struct ModalSpec
+	{
+		std::string sTitle;
+		std::string sPrimaryLabel;              // "Create" / "Copy" / "Save" / "Delete"
+		bool        bPrimaryDanger = false;     // red-tinted primary -- Delete's confirmation
+
+		// Draws the body: one or more controls::Switch/Text/etc. calls, each
+		// against a RowCtx from ModalNextRow(ctx), or a Facts-style paragraph
+		// drawn into ModalNextBlock(ctx, height). Re-run every frame the modal
+		// is open, so a body that reads a live *pbGameSpecific and only calls
+		// ModalNextRow() twice when it is off, three times when it is on, is
+		// exactly how the sketch's "(when on) GameID + New profile name" is
+		// expressed -- there is no separate "declare N rows" step.
+		std::function<void( ModalBodyCtx & )> fnBody;
+
+		// Invoked once, after the modal has already closed, when the primary
+		// button fires (a click, or Enter while no field is being edited --
+		// see DrawModal()'s own comment for why "the LAST Text field" could
+		// not be told apart from any other without a focus-order system this
+		// kit does not have).
+		std::function<void()> fnPrimary;
+
+		// Invoked once, after the modal has already closed, on Cancel or Esc.
+		// Optional -- most callers have nothing to undo.
+		std::function<void()> fnCancel;
+
+		// OPTIONAL: how tall the body will measure on its very first frame,
+		// in rows (kRowH each) -- e.g. 3.0f for the sketch's Switch + two
+		// Text fields. DrawModal() auto-sizes to whatever fnBody actually
+		// drew, but only AFTER a frame has measured it (see DrawModal()'s
+		// own comment on why: measuring by drawing twice in one frame is not
+		// safe with these atoms' ID/ItemAdd model), so an unhinted dialog
+		// opens ONE ROW TALL and grows into shape a frame later. That is
+		// invisible against a live, continuously-redrawn overlay -- but a
+		// caller that already knows its own row count (every real caller
+		// here does: Create/Copy/Edit know their field count from
+		// *pbGameSpecific, Delete's confirmation is always the same shape)
+		// can skip the flash by stating it. 0 (default) keeps the old
+		// one-row-then-grow behaviour.
+		float flMinBodyRows = 0.0f;
+	};
+
+	// Only one modal at a time. A second OpenModal() while one is already
+	// open is a programming error -- IM_ASSERT() in a debug/assertions build,
+	// silently ignored (the first modal's spec is untouched) otherwise.
+	void OpenModal( ModalSpec spec );
+
+	// One frame of whatever modal is open, or nothing at all when none is.
+	// Call from Shell's Draw(), in its own top-level window, opened AFTER the
+	// slab and BEFORE the palette -- exactly DrawPalette()'s own placement
+	// reasoning (Shell.cpp: a child window's draw list posts after its
+	// parent's regardless of submission order, so a sibling window opened
+	// later is the only thing guaranteed to paint over both). `rcSlab` is the
+	// surface the dialog centres inside and the scrim covers, in screen space.
+	void DrawModal( const ImRect &rcSlab );
+
+	// Closes whatever modal is open without invoking either callback. Esc and
+	// the two footer buttons already do this internally; exposed for a caller
+	// that needs to withdraw a modal it opened for a reason that stopped
+	// applying (e.g. the row it was editing disappeared from a rebuilt area).
+	void CloseModal();
+
+	bool IsModalOpen();
+
 	namespace controls
 	{
 		// ---- the pointer drag, and writes that must wait for it to end ----
@@ -245,6 +348,90 @@ namespace gamescope::ui
 		enum class Intent : unsigned char { Accent, Neutral, Danger };
 		bool Verb( const RowCtx &row, const char *pszId, const char *pszVerb,
 		           Intent eIntent = Intent::Accent, bool bEnabled = true );
+
+		// =====================================================================
+		//  ListBox -- SPEC gap: the Profiles rebuild's tall list of saved
+		//  profiles (ui-design-guide.md's own "List rows" section already
+		//  flags this as undesigned -- no scrolling list appears anywhere in
+		//  the handoff). A row-spanning body, like Facts is allowed to be: it
+		//  takes the rcBody the CALLER sized and draws entirely inside it.
+		// =====================================================================
+		struct ListBoxItem
+		{
+			const char *pszLabel     = nullptr;  // e.g. "Rust" -- never empty
+			const char *pszTag       = nullptr;  // e.g. "[Game]"; nullptr draws no tag
+			const char *pszSecondary = nullptr;  // e.g. "inherits Comp"; nullptr draws none
+		};
+
+		// Pure -- no ImGui, no draw call, testable with a bare int. Up/Down
+		// clamp at the ends rather than wrapping (D16.6's rule, applied here
+		// too); Home/End jump regardless of the current selection. nCount <= 0
+		// always answers -1: an empty list has nothing to select. -1 in means
+		// "nothing selected yet"; Up and Down from there both land on the
+		// first row, the same "first arrow lands inside the list" rule the
+		// sheet's own dropdown nav uses.
+		enum class ListBoxNav : unsigned char { Up, Down, Home, End };
+		int ListBoxStep( int nSelected, int nCount, ListBoxNav eNav );
+
+		// Pure: the first visible row (`nScrollTop`, updated) that keeps
+		// `nSelected` inside a `nVisibleRows`-tall window, clamped so the list
+		// never scrolls past its own last page. Called every frame with last
+		// frame's answer as `nScrollTop`, exactly like an "ensure visible"
+		// scroll in any list widget.
+		int ListBoxScrollForSelection( int nScrollTop, int nSelected,
+		                               int nVisibleRows, int nCount );
+
+		// Pure geometry for one item's row: where the tag, the label and the
+		// secondary text sit, at the priority the sketch implies -- the LABEL
+		// is never sacrificed; the secondary is the one dropped
+		// (bSecondaryShown false) when the row is too narrow to hold all three
+		// without clipping the label to nothing. By construction
+		// rcTag.Max.x <= rcLabel.Min.x and rcLabel.Max.x <= rcSecondary.Min.x
+		// always -- there is no code path that can make two of these overlap,
+		// which is the property tests/test_overlay_ui.cpp checks at the
+		// narrowest sheet width the shell allows.
+		struct ListBoxItemLayout
+		{
+			ImRect rcTag;                     // zero-width at the left edge when pszTag is absent
+			ImRect rcLabel;
+			ImRect rcSecondary;                // zero-width at the right edge when dropped
+			bool   bSecondaryShown = false;
+		};
+		ListBoxItemLayout LayoutListBoxItem( const ImRect &rcItem, float flTagWidthPx,
+		                                     float flSecondaryWidthPx, float flPadPx );
+
+		struct ListBoxResult
+		{
+			bool bChanged   = false;  // *pnSelected moved this frame (click or Up/Down/Home/End)
+			bool bActivated = false;  // a click, or Enter on the current selection -- "open/act on this"
+		};
+
+		// Draws N items inside rcBody, one row `tok::kControlH` tall each,
+		// selection outlined in the accent with no fill (the sketch's own
+		// styling), a wire background/frame and no rounding beyond what every
+		// other atom in the kit uses.
+		//
+		// SCROLLING. `nMaxVisibleRows` caps the box before an inner
+		// scrollbar/mouse-wheel take over -- capped again by however many
+		// whole rows actually fit rcBody's height. The scroll offset is NOT
+		// caller state (unlike *pnSelected): it lives in ImGui's own per-ID
+		// storage, keyed off pszId, so a caller only ever owns the one int a
+		// Choice-style control already asks for. Mouse wheel scrolls while the
+		// pointer is over the list and touches nothing outside rcBody, so it
+		// cannot fight the sheet's own scrolling.
+		//
+		// KEYBOARD. Up/Down/Home/End/Enter apply only while the pointer hovers
+		// rcBody. This kit deliberately never turns on ImGui's own nav
+		// (Shell.cpp's dropdown-nav comment: "the adjust grammar of SPEC §8.2
+		// away from the rows"), and a standalone widget has no generic
+		// keyboard-focus system to hook a "this list owns the keyboard right
+		// now" state into without one being built for it (out of scope here --
+		// flagged in this task's report). Hover-to-navigate is therefore the
+		// whole of it; a future panel that wants Up/Down to reach the list
+		// from elsewhere has to forward those keys itself.
+		ListBoxResult ListBox( const ImRect &rcBody, const char *pszId, int *pnSelected,
+		                      const ListBoxItem *pItems, size_t nItems,
+		                      int nMaxVisibleRows = 10 );
 
 		// ---- SPEC §4.3 -- the anchor grid, a composite body ---------------
 		// 3x3 cells on the control module, so the grid agrees with every other

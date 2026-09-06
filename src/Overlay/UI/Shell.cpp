@@ -5335,6 +5335,15 @@ namespace gamescope::ui::shell
 		{
 			const ImGuiIO &io = ImGui::GetIO();
 
+			// A modal (Controls.h's ui::Modal, drawn later this same frame in
+			// Draw()) owns the keyboard entirely while it is open -- Esc and
+			// Enter are DrawModal()'s own to read, and nothing below may act
+			// on an arrow key or a shortcut meant for a row the modal is
+			// covering. Same rule as `s_bPaletteOpen` a few lines down, for
+			// the same reason: a surface on top of the shell gets the input.
+			if ( IsModalOpen() )
+				return;
+
 			// Ctrl+K: the command palette. Checked FIRST and before the
 			// palette's own handler, so it also works while the palette is
 			// already open (re-opening clears the query, which is what every
@@ -6023,6 +6032,129 @@ namespace gamescope::ui::shell
 		s_bOverlayHiddenNotice.store( true, std::memory_order_release );
 	}
 
+#ifndef NDEBUG
+	// =====================================================================
+	//  DEBUG ONLY -- overlay_e2_demo_widgets
+	// =====================================================================
+	// A throwaway screen for screenshotting Controls.h's new ui::ListBox and
+	// ui::Modal in isolation, ahead of the Profiles rebuild that will
+	// actually wire them to real data. Not a panel, not an Area, not
+	// reachable from any menu -- toggled from the console/gamescopectl only,
+	// same as `overlay_e2_debug_hitboxes` a few files over.
+	//
+	// `#ifndef NDEBUG` IS THE STANDARD IDIOM for "does not exist in a
+	// release build", used here rather than invented fresh -- but this
+	// repo's OWN build-release configuration does not currently define
+	// NDEBUG (confirmed against build-release/build.ninja's cpp_COMPILER
+	// ARGS while building this), so as the project is configured today this
+	// guard does not actually strip the command from a build-release
+	// binary. That is a pre-existing gap in the project's debug/release
+	// split, not something introduced here -- no other debug-gated
+	// ConCommand precedent exists in this codebase to match instead (grepped
+	// for one before adding this).
+	namespace demowidgets
+	{
+		bool        s_bActive         = false;
+		int         s_nListSelected   = -1;
+		// Defaults ON so a single screenshot already shows the sketch's
+		// "(when on) GameID + New profile name" pair -- there is no real
+		// panel wiring here to drive it from the outside otherwise.
+		bool        s_bGameSpecific   = true;
+		std::string s_sGameId         = "252490";
+		std::string s_sNewName;
+		bool        s_bEditingGameId  = false;
+		bool        s_bEditingName    = false;
+
+		// A modal body's rows are ordinary rows -- so a LABEL is the same
+		// thing a real sheet row draws for itself via SplitLabelZone(), not
+		// something the widgets add on their own. This is that one call,
+		// exactly as a Profiles panel would make it.
+		RowCtx LabeledRow( ModalBodyCtx &ctx, const char *pszLabel )
+		{
+			RowCtx row = ModalNextRow( ctx );
+			ImRect rcLabel, rcValue;
+			row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+			DrawText( rcLabel, TypeRole::Label, Col( Role::TextLabel ), pszLabel );
+			return row;
+		}
+
+		void Draw()
+		{
+			ImGuiIO &io = ImGui::GetIO();
+
+			ImGui::SetNextWindowPos( ImVec2( 0.0f, 0.0f ) );
+			ImGui::SetNextWindowSize( io.DisplaySize );
+			ImGui::PushStyleColor( ImGuiCol_WindowBg, Col( Role::Surface ) );
+			const ImGuiWindowFlags flags =
+				ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+				ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings;
+			if ( ImGui::Begin( "##e2demowidgets", nullptr, flags ) )
+			{
+				// The sketch's own four lines, verbatim.
+				static constexpr controls::ListBoxItem kItems[] = {
+					{ "Rust",     "[Game]", nullptr },
+					{ "Profile1", nullptr,  nullptr },
+					{ "Comp",     nullptr,  nullptr },
+					{ "Casual",   nullptr,  nullptr },
+				};
+
+				const float flX = Px( tok::kXXL );
+				const float flY = Px( tok::kXXL );
+				const float flW = Px( 420.0f );
+				const float flRowH = Px( tok::kControlH );
+				const ImRect rcList( flX, flY, flX + flW, flY + flRowH * 4.0f );
+
+				DrawText( { flX, flY - flRowH, flX + flW, flY }, TypeRole::Title,
+				          Col( Role::TextPrimary ), "ui::ListBox demo" );
+				controls::ListBox( rcList, "demo_profiles", &s_nListSelected,
+				                   kItems, IM_ARRAYSIZE( kItems ) );
+			}
+			ImGui::End();
+			ImGui::PopStyleColor();
+
+			// The modal draws itself, above this window, once opened.
+			if ( !IsModalOpen() )
+			{
+				ModalSpec spec;
+				spec.sTitle        = "Create profile";
+				spec.sPrimaryLabel = "Create";
+				// s_bGameSpecific defaults true (see its own comment), so the
+				// body is always 3 rows here -- stated up front so this
+				// demo's one screenshot does not land on the pre-measurement
+				// frame (ModalSpec::flMinBodyRows' own comment).
+				spec.flMinBodyRows = 3.0f;
+				spec.fnBody = []( ModalBodyCtx &ctx )
+				{
+					controls::Switch( LabeledRow( ctx, "Game specific" ), "gamespecific", &s_bGameSpecific );
+					if ( s_bGameSpecific )
+					{
+						controls::Text( LabeledRow( ctx, "GameID" ), "gameid", &s_sGameId,
+						                &s_bEditingGameId, "GameID" );
+						controls::Text( LabeledRow( ctx, "New profile name" ), "name", &s_sNewName,
+						                &s_bEditingName, "New profile name" );
+					}
+				};
+				spec.fnPrimary = [] { s_bActive = false; };
+				spec.fnCancel  = [] { s_bActive = false; };
+				OpenModal( spec );
+			}
+			DrawModal( ImRect( ImVec2( 0.0f, 0.0f ), io.DisplaySize ) );
+		}
+	}
+
+	ConCommand cc_overlay_e2_demo_widgets(
+		"overlay_e2_demo_widgets",
+		"Debug: toggles a throwaway screen showing Controls.h's ListBox and Create modal alone, for a screenshot.",
+		[]( std::span<std::string_view> args )
+		{
+			(void)args;
+			demowidgets::s_bActive = !demowidgets::s_bActive;
+			if ( !demowidgets::s_bActive )
+				CloseModal();
+		} );
+#endif // !NDEBUG
+
 	void Draw()
 	{
 		// Issue #79's fix for this path -- see Palette.h. Without it the
@@ -6036,6 +6168,18 @@ namespace gamescope::ui::shell
 		SetScale( gamescope::palette::DisplayScale() );
 
 		const ImGuiIO &io = ImGui::GetIO();
+
+#ifndef NDEBUG
+		// See overlay_e2_demo_widgets above: replaces the whole shell frame
+		// while active, exactly like the explain page replaces the sheet --
+		// nothing here is real Area/Registry content, so nothing downstream
+		// may see it.
+		if ( demowidgets::s_bActive )
+		{
+			demowidgets::Draw();
+			return;
+		}
+#endif
 
 		// Publish the surface size for every reader that has no ImGui
 		// context -- the console thread's, above all.
@@ -6420,6 +6564,16 @@ namespace gamescope::ui::shell
 		// popup-focus one -- see DrawDropdownList. Same rcSlab
 		// DismissOpenDropdownOnOutsideClick() used earlier this frame.
 		DrawDropdownList( rcSlab );
+
+		// A Profiles-style modal (Controls.h's ui::Modal), above the slab
+		// and its dropdown, below the palette -- the same ordering
+		// DrawPalette() below is placed for, and for the same reason: a
+		// sibling window opened later paints over both the slab and
+		// whatever child windows it has open, regardless of what draws
+		// into which window's own list first. `Rect` -> `ImRect`: Layout.h
+		// deliberately stays ImGui-free (see its own comment), so this is
+		// the one place the two coordinate types meet.
+		DrawModal( ImRect( ImVec2( rcSlab.x0, rcSlab.y0 ), ImVec2( rcSlab.x1, rcSlab.y1 ) ) );
 
 		// The palette gets its OWN top-level window, opened after the slab's
 		// has closed.

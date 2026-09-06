@@ -208,6 +208,79 @@ flexible value column, 11–14px row gap). Use the checkbox-row pattern for any 
   reset/restore (not present — needs a fresh circular-arrow glyph in the same stroke weight), close (×,
   present), collapse/minimize (–, present), dock overflow/more (not present — needs a fresh glyph).
 
+## Controls added since this handoff, not covered by it
+
+The handoff's own gaps above ("List rows" has no scrolling list; "Text inputs" section
+notes no dropdown/scrollbar/free-text design exists at all) are exactly what the Profiles
+area's rebuild needed a widget for. Two were added directly to `src/Overlay/UI/Controls.{h,cpp}`
+(2026-09-06); this is their entry per this doc's own convention — when to use, keyboard
+behaviour — the API contract itself lives in Controls.h's comments.
+
+### `ui::controls::ListBox` — a tall, scrollable list of items
+
+**When to use:** a single-select list of named items too numerous or too tall for an
+ordinary row — the Profiles area's list of saved profiles is the first and, so far, only
+user. Not a substitute for `Choice` (a handful of mutually-exclusive options still belongs
+on a segmented control or dropdown) or for `Bank` (a multi-select set of independent
+switches) — `ListBox` is for a genuinely *long*, single-selection list.
+
+**Styling:** wire lines only — a 1px hairline frame, 1px row separators, the selected row
+outlined in the accent at full strength with **no fill** (this is the one place in the kit
+a "selected" state is shown by an outline alone, because the sketch that specified it drew
+it that way). An optional muted prefix *tag* (`[Game]`) and an optional right-aligned
+*secondary* string (`inherits Comp`) per item; the secondary is the one thing dropped when
+a row is too narrow to hold all three without clipping the label — never the label itself.
+
+**Keyboard:** Up / Down / Home / End move the selection; Enter, or a click, "activates" it
+(the same event — Controls.h: *"Enter = activate = same as click"*). All of it applies
+**only while the pointer hovers the list** — this kit deliberately never turns on ImGui's
+own keyboard nav (see Shell.cpp's dropdown-nav comment on why: it would hand every arrow
+key in the shell to ImGui's nav and take SPEC §8.2's row-adjust grammar away), and a
+standalone widget has no ID-based keyboard-focus system of its own to hook a "this list
+owns the keyboard right now" state into. A future host that wants Up/Down to reach the
+list from somewhere else (a search box above it, say) has to forward those keys itself —
+flagged here rather than silently assumed.
+
+**Scrolling:** capped at `nMaxVisibleRows` (10 by default) before a thin accent-on-track
+scrollbar appears; the mouse wheel scrolls it while hovered and touches nothing outside
+the list's own rect, so it can never fight a host region's own scrolling.
+
+### `ui::Modal` — a small centred dialog
+
+**When to use:** a short, focused task that needs the user's full attention before
+anything else continues — Create/Copy/Edit's field-entry dialogs and Delete's
+confirmation prompt, per the Profiles sketch. Not a place to put a whole settings surface
+(that is what the sheet and the Inspector are for) — if a "modal" would need to scroll or
+carry more than a handful of rows, it is the wrong control.
+
+**Composition:** a title, a **body** of ordinary rows (drawn with the exact same row
+allocator the sheet uses — `ModalNextRow()`/`ModalNextBlock()` hand out a `RowCtx`/`ImRect`
+the same way `RowCtx::ForRow()` does for a sheet row, so `controls::Switch`,
+`controls::Text` and the rest work inside it completely unchanged), and a footer with
+**Cancel** and one caller-labelled primary button (red-tinted when `bPrimaryDanger` is
+set — Delete's own colour, matching `Verb`'s existing `Intent::Danger`, since no separate
+danger colour exists anywhere else in this doc's palette to draw from instead).
+
+**Keyboard:** **Esc** always cancels. **Enter** confirms (fires the primary) whenever no
+field is currently being edited — this is a deliberate simplification, not the literal
+"Enter in the LAST Text field" the Profiles sketch describes: this kit has no cross-field
+tab order for a modal to know which field is "last," and building one was out of this
+task's scope (Controls.h's `ModalSpec::fnPrimary` comment records the reasoning). Tab-
+between-fields does **not exist** for the same reason — the shell's own `Text` control has
+no focus-traversal system to extend, only a per-field click-to-edit toggle.
+
+**Scrim and layering:** reuses the exact scrim fill Shell.cpp's command palette already
+dims the shell with, rather than inventing a second "surface behind me is dimmed" look. In
+the shell, `ui::DrawModal()` is drawn from its own top-level ImGui window (`SetNextWindowFocus`,
+no `NoBringToFrontOnFocus`) opened after the slab and before the palette, so it sits above
+every sheet/Inspector content and below the palette — matching the palette's own
+documented layering reasoning exactly.
+
+**One at a time:** a second `OpenModal()` while one is already open is a programming
+error (`IM_ASSERT()` in a build with assertions compiled in — this repo's own
+`build-release` does not currently pass `-DNDEBUG`, so that guard fires there today too,
+not only in a `build/` debug tree); the already-open modal is left untouched either way.
+
 ## Motion / interaction feel
 
 The handoff is static HTML/CSS mockups — **no transition durations, easing curves, or animation timing

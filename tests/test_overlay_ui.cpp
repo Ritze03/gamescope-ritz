@@ -24,6 +24,7 @@
 
 #include "Overlay/Fonts.h"
 #include "Overlay/UI/Band.h"
+#include "Overlay/UI/Controls.h"
 #include "Overlay/UI/Icons.h"
 #include "Overlay/UI/Lane.h"
 #include "Overlay/UI/Layout.h"
@@ -2099,4 +2100,204 @@ TEST_CASE( "palette panel: only scale and surface size move it", "[overlay_ui]" 
 	// itself.
 	ScopedScale s( 1.0f );
 	REQUIRE( SolveLauncher( 1080.0f ).flTop > SolveLauncher( 720.0f ).flTop );
+}
+
+// =========================================================================
+//  ListBox -- the Profiles rebuild's widget, tested per this file's own
+//  rule: the pure arithmetic (nav stepping, scroll-follow, item layout)
+//  needs no ImGui context and lives here. Click/hover/keyboard-through-
+//  ImGui's-own-event-queue belongs to test_overlay_atoms.cpp's headless
+//  harness instead -- see that file's TEST_CASEs tagged "listbox".
+// =========================================================================
+TEST_CASE( "listbox: Up/Down clamp at the ends rather than wrapping", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+
+	// D16.6's no-wrap rule, applied to this list the same way it already
+	// applies to a Choice and to the palette's own highlight.
+	REQUIRE( ListBoxStep( 0, 5, ListBoxNav::Up ) == 0 );
+	REQUIRE( ListBoxStep( 4, 5, ListBoxNav::Down ) == 4 );
+
+	REQUIRE( ListBoxStep( 2, 5, ListBoxNav::Up ) == 1 );
+	REQUIRE( ListBoxStep( 2, 5, ListBoxNav::Down ) == 3 );
+
+	// Home/End jump regardless of where the selection currently sits.
+	REQUIRE( ListBoxStep( 2, 5, ListBoxNav::Home ) == 0 );
+	REQUIRE( ListBoxStep( 2, 5, ListBoxNav::End ) == 4 );
+}
+
+TEST_CASE( "listbox: with nothing selected, the first arrow lands inside the list", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+
+	// Same "first arrow lands on something real" rule the sheet's own
+	// dropdown nav uses (Shell.cpp's RunKeyboard()) rather than stepping off
+	// an imaginary -1th row.
+	REQUIRE( ListBoxStep( -1, 5, ListBoxNav::Down ) == 0 );
+	REQUIRE( ListBoxStep( -1, 5, ListBoxNav::Up ) == 0 );
+}
+
+TEST_CASE( "listbox: an empty list has nothing to select, ever", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+
+	for ( ListBoxNav eNav : { ListBoxNav::Up, ListBoxNav::Down, ListBoxNav::Home, ListBoxNav::End } )
+		REQUIRE( ListBoxStep( -1, 0, eNav ) == -1 );
+}
+
+TEST_CASE( "listbox: scroll follows the selection into view and no further", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+
+	// 10 items, a 4-row window. Selecting row 7 (below the current page)
+	// pulls the window down just far enough to show it, not further.
+	REQUIRE( ListBoxScrollForSelection( 0, 7, 4, 10 ) == 4 );
+
+	// Selecting row 1 (above the current page) pulls it back up to exactly
+	// that row, not to the top.
+	REQUIRE( ListBoxScrollForSelection( 6, 1, 4, 10 ) == 1 );
+
+	// Already-visible selections do not move the window at all.
+	REQUIRE( ListBoxScrollForSelection( 2, 3, 4, 10 ) == 2 );
+
+	// The window never scrolls past its own last page, even if it was asked
+	// to (a stale scroll offset from a longer list that just got shorter).
+	REQUIRE( ListBoxScrollForSelection( 100, -1, 4, 10 ) == 6 );
+
+	// Nothing selected: the offset is only ever clamped, never moved to
+	// chase a selection that does not exist.
+	REQUIRE( ListBoxScrollForSelection( 3, -1, 4, 10 ) == 3 );
+}
+
+TEST_CASE( "listbox: an item's tag, label and secondary text never overlap", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+	using namespace gamescope::ui;
+
+	// The narrowest a sheet row's own control gets: Lane.h's kLaneMin (200
+	// base) is the label+value zone alone, and DrawModal() clamps a whole
+	// dialog no narrower than 240 base -- the floor this widget is actually
+	// asked to draw inside, in the one host (a Profiles modal) the sketch
+	// describes it living in.
+	ScopedScale scale( 1.0f );
+	const float flPad = Px( tok::kGapLabel );
+
+	for ( float flItemW : { 60.0f, 100.0f, Px( 240.0f ), Px( 420.0f ) } )
+	{
+		const ImRect rcItem( 0.0f, 0.0f, flItemW, Px( tok::kControlH ) );
+
+		for ( float flTagW : { 0.0f, Px( 40.0f ) } )
+		{
+			for ( float flSecW : { 0.0f, Px( 30.0f ), Px( 120.0f ) } )
+			{
+				INFO( "itemW=" << flItemW << " tagW=" << flTagW << " secW=" << flSecW );
+				const ListBoxItemLayout lay = LayoutListBoxItem( rcItem, flTagW, flSecW, flPad );
+
+				// By construction (Controls.h's own claim): tag ends at or
+				// before the label starts, and the label ends at or before
+				// the secondary starts. This is the property that makes
+				// "overlap" impossible rather than merely unlikely.
+				REQUIRE( lay.rcTag.Max.x <= lay.rcLabel.Min.x + 1e-3f );
+				REQUIRE( lay.rcLabel.Max.x <= lay.rcSecondary.Min.x + 1e-3f );
+
+				// The label is never negative-width, however narrow the row.
+				REQUIRE( lay.rcLabel.Max.x >= lay.rcLabel.Min.x );
+
+				// A secondary too wide for the narrowest row is DROPPED
+				// (bSecondaryShown false) rather than drawn overlapping --
+				// the label keeps the space instead.
+				if ( flSecW > 0.0f && !lay.bSecondaryShown )
+					REQUIRE( lay.rcLabel.Max.x > lay.rcSecondary.Min.x - 1.0f );
+			}
+		}
+	}
+}
+
+TEST_CASE( "listbox: the secondary column is only sacrificed when it must be", "[overlay_ui]" )
+{
+	// A row with room to spare keeps the secondary text; the sketch's own
+	// "inherits Comp" is exactly this case and must not silently vanish on
+	// an ordinary-width list.
+	using namespace gamescope::ui::controls;
+	using namespace gamescope::ui;
+	ScopedScale scale( 1.0f );
+
+	const ImRect rcItem( 0.0f, 0.0f, Px( 420.0f ), Px( tok::kControlH ) );
+	const ListBoxItemLayout lay = LayoutListBoxItem( rcItem, 0.0f, Px( 60.0f ), Px( tok::kGapLabel ) );
+	REQUIRE( lay.bSecondaryShown );
+	REQUIRE( lay.rcSecondary.GetWidth() > 0.0f );
+}
+
+// =========================================================================
+//  Modal -- the state-machine half only (no ImGui context; see this file's
+//  header comment). OpenModal()/CloseModal()/IsModalOpen() touch no ImGui
+//  API at all, so the open/closed bookkeeping is testable here exactly like
+//  the registry's own state. DrawModal()'s Esc/Enter/click handling, and
+//  the "primary fires exactly once" guarantee, are exercised for real
+//  against a live frame in test_overlay_atoms.cpp instead.
+// =========================================================================
+TEST_CASE( "modal: closed by default, and OpenModal opens it", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+
+	REQUIRE_FALSE( IsModalOpen() );
+
+	ModalSpec spec;
+	spec.sTitle = "Create profile";
+	spec.sPrimaryLabel = "Create";
+	OpenModal( spec );
+
+	REQUIRE( IsModalOpen() );
+	CloseModal();   // leave the suite's global modal state as we found it
+	REQUIRE_FALSE( IsModalOpen() );
+}
+
+TEST_CASE( "modal: CloseModal() invokes neither callback", "[overlay_ui]" )
+{
+	// CloseModal() is documented as a plain withdrawal -- a caller that
+	// wants Cancel's side effect calls fnCancel itself. Only DrawModal()'s
+	// own Esc/button handling is allowed to invoke it, which is exercised
+	// in test_overlay_atoms.cpp where a live frame can press Esc for real.
+	using namespace gamescope::ui;
+
+	int nPrimaryCalls = 0, nCancelCalls = 0;
+	ModalSpec spec;
+	spec.sTitle = "Delete profile?";
+	spec.sPrimaryLabel = "Delete";
+	spec.bPrimaryDanger = true;
+	spec.fnPrimary = [ & ] { ++nPrimaryCalls; };
+	spec.fnCancel  = [ & ] { ++nCancelCalls; };
+
+	OpenModal( spec );
+	REQUIRE( IsModalOpen() );
+	CloseModal();
+
+	REQUIRE_FALSE( IsModalOpen() );
+	REQUIRE( nPrimaryCalls == 0 );
+	REQUIRE( nCancelCalls == 0 );
+}
+
+TEST_CASE( "modal: closing and reopening in sequence works cleanly", "[overlay_ui]" )
+{
+	// The sequential case every real usage actually is -- Delete's
+	// confirmation closes, and the Profiles area may open a different modal
+	// (Edit on another row) right afterward. Only a SECOND modal on top of
+	// an already-open one is the documented programming error, and this
+	// project's test binary links assertions in (no -DNDEBUG on this
+	// target -- see build-release/build.ninja), so deliberately triggering
+	// that IM_ASSERT() here would abort the whole suite rather than fail
+	// one test. That specific guard is therefore exercised by inspection
+	// and by the header/.cpp comments recording the intended debug/release
+	// split, not by a test that calls OpenModal() twice back to back.
+	using namespace gamescope::ui;
+
+	for ( int i = 0; i < 3; ++i )
+	{
+		ModalSpec spec;
+		spec.sTitle = "modal " + std::to_string( i );
+		OpenModal( spec );
+		REQUIRE( IsModalOpen() );
+		CloseModal();
+		REQUIRE_FALSE( IsModalOpen() );
+	}
 }
