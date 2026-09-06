@@ -2026,7 +2026,19 @@ namespace gamescope::ui
 					out.bActivated = true;
 				}
 
-				if ( a.bHovered && !bSelected )
+				// requests-2026-09-06.md item 5: an outline alone (below)
+				// read as not-selected-enough against the Profiles list's
+				// busy rows. Filled now with the same accent-soft backdrop
+				// DrawRail() paints behind the selected rail item
+				// (Shell.cpp: `Fill( rcItem, Accent( 0.10f ) )`) -- the
+				// nearest sibling in this kit's own language, a single
+				// selected row in a vertical list, rather than a
+				// segmented Choice cell's stronger 24% (that fill marks
+				// which of several buttons is "on", not which row of many
+				// is selected).
+				if ( bSelected )
+					Dl()->AddRectFilled( rcItem.Min, rcItem.Max, Accent( 0.10f ) );
+				else if ( a.bHovered )
 					Dl()->AddRectFilled( rcItem.Min, rcItem.Max, palette::White( 0.05f ) );
 
 				const ListBoxItem &item  = pItems[ i ];
