@@ -541,3 +541,70 @@ actually drawn) so a plain unit test can pin it without an ImGui context -- see
 groups; it kept its former `Setup` neighbours (Profiles, Appearance) under SETTINGS rather
 than a placement the request never specified.
 
+### Selection follows edit (2026-09-06/07, requests-2026-09-07.md item 8)
+
+**The rule:** any interaction that changes a Sheet row's value -- a slider drag, a
+stepper's -/+ or a typed edit committed, a switch flip, a segmented Choice pick, a
+committed Dropdown pick, or an Action press (arming or firing) -- selects that row, the
+same as clicking it does. The user's own framing: *"editing any element should
+automatically select it, so it also pops up in the inspector rail."*
+
+**Why this needed a fix at all, not just a wire-up:** D22's own AllowOverlap rule (see
+its comment on `DrawEntryRow` in `Shell.cpp`) means a press that lands ON an atom --
+the slider handle, the switch, the stepper's glyphs, a segmented cell, the dropdown --
+resolves ImGui's hit test to *that atom*, never to the row's own full-width selector
+button underneath it. So before this fix, dragging a slider (or flipping a switch, or
+picking a Choice) on a row that was not already selected changed the value but left
+whatever row *was* selected highlighted, with the Inspector still showing the wrong
+one -- selection only ever moved on a raw click that missed every control.
+
+**The mechanism:** `DrawEntryRow` now returns true -- meaning "select me" to its Sheet
+call site -- on a raw click OR on `bValueChanged`, the atom's own `bChanged` threaded
+back up through `DrawSharedControl`'s return. The boolean rule itself
+(`ui::controls::ShouldSelectRow( bClicked, bValueChanged )`) is extracted into
+`Controls.h`/`.cpp`, the same reason `ConstantWidthGrab()` is: `Shell.cpp`'s row-drawing
+functions are file-private by design (`Shell.h`'s own header comment -- "this is the
+whole of its public surface... deliberately") and unreachable from a test, so the one
+line of new logic is named and pinned in `test_overlay_ui.cpp` instead of living
+unexplained at the call site. `Text` is deliberately excluded (its own
+`DrawSharedControl` case always returns `false`) -- editing a name field is not part of
+this rule.
+
+**The bug this rule's OWN fix nearly reintroduced (item 9/B):** `DrawEntryRow` is called
+twice per frame for the currently-selected Entry -- once as the Sheet's own row, once
+again inside the Inspector to draw "the row's own control" at the top of its VALUES
+block (`Shell.cpp`'s `DrawInspector`) -- and both calls share the exact same `Id()`.
+Typed entry's one bit of state (`s_sEditingText`, keyed by id alone) could not tell
+those two copies apart: opening the Sheet's Stepper field one frame set the global to
+that id, and the Inspector's copy -- drawn moments later the SAME frame, reading the
+now-set global back as "I am the one being edited" -- opened ITS OWN field too and won
+the actual ImGui keyboard focus (`SetKeyboardFocusHere()`), so the visible caret ended
+up in the Inspector's copy rather than the Sheet field the user clicked. Fixed the same
+way `s_sOpenDropdown`/`s_eOpenDropdownRegion` already solved the identical disease for
+dropdowns: a companion `Region s_eEditingRegion` qualifies every read and write of
+`s_sEditingText`, so the Sheet's field and the Inspector's copy of the same id are
+independently open/closeable. The Inspector's own-row `DrawEntryRow` call discards its
+return value entirely, which is what keeps a value change made there from re-selecting
+anything or resetting the Inspector's own scroll/focus -- editing IN the Inspector's
+copy must never look like a fresh selection.
+
+### Window transparency: 1.0 means opaque (2026-09-07, requests-2026-09-07.md item 9/C)
+
+**The mapping:** `overlay.window_opacity` (0.3..1.0, `PanelConfig.cpp`) sets the FINAL
+drawn alpha of the slab background and the Inspector's own fill directly -- at 1.0 the
+surface is the theme colour at alpha 255, no residual blend, and the game cannot show
+through at all; at the slider's 0.3 floor the chrome is dim but still legible, not
+invisible (kept as-is; no floor change was needed).
+
+**Why `Dim()` was the wrong function:** `Dim( col, factor )` *scales* whatever alpha
+`col` already carries. `Role::Surface`'s own literal is baked at 88% alpha (its
+designed glass look -- see this guide's own colour palette table above), so
+`Dim( Col( Role::Surface ), 1.0f )` returned alpha ≈224, not 255: "no transparency"
+was still visibly see-through. `Colors.h` gained `WithAlpha( col, alpha )`, which
+replaces the alpha channel outright instead of scaling it -- the opposite contract from
+`Dim()`, used everywhere else Sheet rows dim for disabled state. Both `Shell.cpp` call
+sites (the slab's `ImGuiCol_WindowBg` and the Inspector's `ImGuiCol_ChildBg`) now use
+`WithAlpha( Col( Role::Surface / SurfaceInspector ), palette::WindowOpacity() )`.
+Pinned in `test_overlay_atoms.cpp` ("colors: WithAlpha..." / "colors: window_opacity
+1.0 renders the slab fully opaque").
+
