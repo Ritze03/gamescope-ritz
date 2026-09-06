@@ -184,6 +184,55 @@ from Pre-Sharpen or it is dropped.
 
 ---
 
+## [~] 8. In-game mouse recentring in CS2 (relative mode)
+
+Report: *"In CS2, my mouse did work in the menus, but ingame, it behaved like a joystick
+almost (going back to center …). This has to be an issue with one of the earlier changes."*
+
+**Root cause.** A game in play holds a `zwp_locked_pointer_v1` (Xwayland asks for it when
+the game hides and warps its cursor) and reads relative motion only. `wlserver_mousemotion()`
+has always dropped its `wl_pointer.motion` for a LOCKED constraint, but `wlserver_mousewarp()`
+never checked the lock — and item 10's re-sync of the absolute pointer after a mapping change
+(`wlserver_resync_absolute_pointer()`, 2026-09-05) is a warp: with the last input an absolute
+sample and the mapping moving (resolution/scaler change, a resize, a fit override), it replayed
+the host position into a locked client. Xwayland republishes every pointer event as XI2 raw
+motion and SDL reads raw valuators as deltas, so each such event reaches the game as a jump the
+size of the *position* (measured: `xrel=640 yrel=360` for one sample at the centre) — the
+joystick. The upstream host-sample path (`wlserver_touchmotion()` → warp, until the host itself
+confirms relative mode) is the same class of event and was open too.
+
+**Fix `c81391e`.** One gate at the emitter: `wlserver_mousewarp()` refuses to move or notify
+while the seat's constraint is LOCKED; the re-sync bails on the same test first. Unlocked
+behaviour unchanged (exactly one re-sync per real mapping change, none per frame). Counters in
+`wlserver_t` + `wlserver_pointer_stats` ConCommand; `steamcompmgr_debug_set_nested_mode`
+ConCommand; `tests/pointer_lock_client.c` (SDL2, `--lock` = relative mode) +
+`scripts/pointer-regression.sh` (20 checks) + a `test_pointer_mapping.cpp` case for the
+change-detection compare. Docs: `cursor-pipeline.md` "Locked pointer => never an absolute
+event", `resolution-and-refresh.md`, `scripts/README.md`.
+
+**Desktop-verified** (headless, `scripts/pointer-regression.sh`): pre-fix binary — 6 absolute
+samples while locked reached the client as 6 motions (`xrel=426/853`), and 2 scaler toggles +
+2 nested-mode changes while locked delivered 2 re-sync motions; fixed binary — 0 and 0
+(`motions_locked=0`, `resyncs=0`, `warps_suppressed_locked` +1 per change), unlocked exactly
+1 re-sync per real change / 0 per no-op / 0 over 2 s idle. 20/20. Evidence:
+`build-release/verify-shots/pointer-regression/`. **Needs the user's CS2 check** (below).
+
+---
+
 ## For the user to test (cannot be verified here)
 
-(empty — nothing completed yet this round)
+**Item 8 — CS2 mouse look (new build on the laptop):**
+1. Launch CS2 through the new build, with force grab cursor **off** (the report's setup).
+2. In the menus, move the mouse: the pointer should track normally.
+3. Enter a match (or a practice map) and move the mouse: the view must follow the mouse
+   only — no drifting or snapping back towards the centre, no "joystick" motion when the
+   mouse is still.
+4. While in the match, open the overlay and change the resolution (Display > Resolution),
+   and also switch the scaler to Stretch and back (Display > Upscaling > Scaler): the view
+   must not jump when the change applies.
+5. Repeat step 3 with the stretched resolution **on** and **off**.
+6. Repeat step 3 with Cursor > Override game cursor **off** and **on**.
+7. Back in the menus after the match: the pointer must track normally again.
+If anything still drifts: `gamescopectl wlserver_pointer_stats` while it happens and note the
+line — `constraint=locked` with `warps_suppressed_locked` climbing as you move means the host
+is still delivering absolute samples to a locked game (a different bug, now visible).
