@@ -1,35 +1,47 @@
 #version 460
 
 // cs_effects_measure.comp -- Adaptive Brightness's measure/adapt half: ONE
-// workgroup that averages the graded base layer's luminance and folds it
-// into the persistent 1x1 adapted-luminance history, which
+// workgroup that measures the graded base layer's luminance statistics and
+// folds them into the persistent HISTORY_COUNT x 1 history, which
 // cs_effects_layer0.comp then reads per pixel in the same frame. Compiled at
 // build time like every other compute shader here (DECISIONS.md #27); the
 // host records it immediately before the per-pixel pass, on the same
 // command buffer, whenever the effects pre-pass runs at all.
 //
+// Four statistics, all on the graded ENCODED luma of a 64x64 grid of taps
+// (16x16 threads, 4x4 per thread, 4096 total) over the whole image:
+//   HISTORY_MEAN  arithmetic mean          -- Whole-image mode's input
+//   HISTORY_P2    2nd percentile (shadows)  \
+//   HISTORY_P50   median                     > Dynamic mode's inputs
+//   HISTORY_P98   98th percentile (lights)  /
+// The percentiles come from a 64-bin shared-memory histogram (one atomicAdd
+// per tap, then invocation 0 walks the 64 bins), interpolated inside the bin
+// the target count falls in so a percentile is continuous rather than
+// stepping by 4 code values when a scene drifts across a bin edge. No
+// buffer atomics, no second pass, no intermediate texture -- the histogram
+// lives entirely in this workgroup's shared memory.
+//
 // Ported from the retired reshade/Shaders/gamescope-ritz.fx (MeasureLuminance
 // + PS_AdaptiveBrightnessAdapt), which was measured live to converge on its
-// own model, so the ADAPT maths is unchanged:
+// own model, so the ADAPT maths is unchanged and applied per statistic:
 //   tau   = measured > adapted ? up : down
 //   alpha = 1 - exp(-dt / max(tau, 0.001))
 //   adapted' = lerp(adapted, measured, alpha)
-// The MEASURE is the one deliberate upgrade: the .fx averaged 25 fixed taps,
-// which a single stray highlight could swing. This pass takes a 64x64 grid
-// of taps (16x16 threads, 4x4 per thread, 4096 total) over the whole image,
-// each graded exactly as the apply pass grades its pixels (effects_common.h's
-// grade() -- the .fx measured its post-Shadow-Control/Vibrancy texture, so
-// this matches its input), and reduces them in shared memory. One
-// workgroup, no atomics, no second pass, no intermediate texture.
+// `up` is the time constant while a statistic RISES (the scene got brighter,
+// the picture will be dimmed), `down` while it FALLS (the scene got darker,
+// the picture will be lifted). Each tap is graded exactly as the apply pass
+// grades its pixels (effects_common.h's grade() -- the .fx measured its
+// post-Shadow-Control/Vibrancy texture, so this matches its input).
 //
-// The .fx ran its Adapt pass even while the effect was switched off so
-// re-enabling was instant; the host preserves that by dispatching this pass
-// whenever the pre-pass runs (any effect on), and this pass never looks at
-// EFFECT_ADAPTIVE_BRIGHTNESS -- only the apply pass gates the visible gain.
+// Every statistic is tracked whatever the mode, and this pass never looks at
+// EFFECT_ADAPTIVE_BRIGHTNESS or EFFECT_AB_DYNAMIC -- only the apply pass
+// gates the visible effect -- so switching the effect on, or between modes,
+// is instant. The host dispatches this pass whenever the pre-pass runs (any
+// effect on); see rendervulkan.cpp for the reset-on-resume rule.
 //
-// Self-sampling: the history texel is bound BOTH as sampler
+// Self-sampling: the history is bound BOTH as sampler
 // VKR_EFFECTS_HISTORY_SLOT and as this pass's storage target `dst`. Only
-// invocation 0 touches it, and its fetch precedes its store in program
+// invocation 0 touches it, and its fetches precede its stores in program
 // order, so there is no hazard between invocations; the layout is GENERAL
 // for both bindings. See rendervulkan.cpp's pre-pass block for the barrier
 // story between this dispatch, the apply dispatch, and the next frame.
@@ -49,12 +61,58 @@ const uint THREADS_PER_AXIS = 16u;   // == local_size_x == local_size_y
 const uint TAPS_PER_THREAD_AXIS = 4u;
 const uint GRID = THREADS_PER_AXIS * TAPS_PER_THREAD_AXIS;   // 64 taps per axis
 const uint THREAD_COUNT = THREADS_PER_AXIS * THREADS_PER_AXIS;
+const uint TAP_COUNT = GRID * GRID;                          // 4096
+const uint HIST_BINS = 64u;
 
 shared float s_sum[THREAD_COUNT];
+shared uint  s_hist[HIST_BINS];
+
+// The value at which `rank` taps (counting from black) have been seen,
+// interpolated inside the bin that crosses it. Percentile p of N taps is
+// rank = p * N.
+float histogram_percentile(float rank)
+{
+    uint cum = 0u;
+    for (uint b = 0u; b < HIST_BINS; b++)
+    {
+        uint n = s_hist[b];
+        if (float(cum + n) >= rank)
+        {
+            float frac = (n == 0u) ? 0.0 : clamp((rank - float(cum)) / float(n), 0.0, 1.0);
+            return (float(b) + frac) / float(HIST_BINS);
+        }
+        cum += n;
+    }
+    return 1.0;
+}
+
+// One EMA step toward `measured` from the stored value, or a straight write
+// on a reset frame. The stored value only ever holds what this shader wrote,
+// all in 0..1, but a NaN or inf would poison every later frame through the
+// EMA, so snap to the measurement rather than propagate one.
+float adapt(int which, float measured)
+{
+    if ((u_flags & EFFECT_RESET_HISTORY) != 0u)
+        return measured;
+
+    float adapted = history_read(which);
+    if (isnan(adapted) || isinf(adapted))
+        adapted = measured;
+    adapted = clamp(adapted, 0.0, 1.0);
+
+    float tau   = (measured > adapted) ? u_abUp : u_abDown;
+    float alpha = clamp(1.0 - exp(-u_abDt / max(tau, 0.001)), 0.0, 1.0);
+    return mix(adapted, measured, alpha);
+}
 
 void main()
 {
     ivec2 size = textureSize(s_samplers[0], 0);
+
+    if (gl_LocalInvocationIndex < HIST_BINS)
+        s_hist[gl_LocalInvocationIndex] = 0u;
+    memoryBarrierShared();
+    barrier();
 
     // Each thread owns a 4x4 block of the 64x64 tap grid; tap (gx, gy) sits
     // at the centre of grid cell (gx, gy) over the full image, clamped so a
@@ -68,7 +126,10 @@ void main()
             vec2 g = vec2(base + uvec2(x, y)) + 0.5;
             ivec2 p = ivec2(g / float(GRID) * vec2(size));
             p = clamp(p, ivec2(0), size - ivec2(1));
-            sum += effects_luma(grade(texelFetch(s_samplers[0], p, 0).rgb));
+            float luma = clamp(effects_luma(grade(texelFetch(s_samplers[0], p, 0).rgb)), 0.0, 1.0);
+            sum += luma;
+            uint bin = min(uint(luma * float(HIST_BINS)), HIST_BINS - 1u);
+            atomicAdd(s_hist[bin], 1u);
         }
     }
 
@@ -88,30 +149,13 @@ void main()
     if (gl_LocalInvocationIndex != 0u)
         return;
 
-    float measured = clamp(s_sum[0] / float(GRID * GRID), 0.0, 1.0);
+    float mean = clamp(s_sum[0] / float(TAP_COUNT), 0.0, 1.0);
+    float p2   = histogram_percentile(0.02 * float(TAP_COUNT));
+    float p50  = histogram_percentile(0.50 * float(TAP_COUNT));
+    float p98  = histogram_percentile(0.98 * float(TAP_COUNT));
 
-    float adapted;
-    if ((u_flags & EFFECT_RESET_HISTORY) != 0u)
-    {
-        // Fresh texture: nothing to blend with (its contents are undefined
-        // after the host's discard), so start exactly at the measurement.
-        adapted = measured;
-    }
-    else
-    {
-        adapted = history_read();
-        // Belt and braces: the history only ever holds values this shader
-        // wrote, all in 0..1, but a NaN or inf here would poison every later
-        // frame through the EMA, so snap to the measurement rather than
-        // propagate one.
-        if (isnan(adapted) || isinf(adapted))
-            adapted = measured;
-        adapted = clamp(adapted, 0.0, 1.0);
-
-        float tau   = (measured > adapted) ? u_abUp : u_abDown;
-        float alpha = clamp(1.0 - exp(-u_abDt / max(tau, 0.001)), 0.0, 1.0);
-        adapted = mix(adapted, measured, alpha);
-    }
-
-    imageStore(dst, ivec2(0), history_pack(adapted));
+    imageStore(dst, ivec2(HISTORY_MEAN, 0), history_pack(adapt(HISTORY_MEAN, mean)));
+    imageStore(dst, ivec2(HISTORY_P2,   0), history_pack(adapt(HISTORY_P2,   p2)));
+    imageStore(dst, ivec2(HISTORY_P50,  0), history_pack(adapt(HISTORY_P50,  p50)));
+    imageStore(dst, ivec2(HISTORY_P98,  0), history_pack(adapt(HISTORY_P98,  p98)));
 }

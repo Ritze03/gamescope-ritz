@@ -43,7 +43,7 @@ the ReShade block and before the FSR/NIS/blur/blit branch chooses a path:
 layer0.tex (game, source res)
    │  [ReShade, if a user .fx is set]           -- unchanged, general queue + CPU wait
    ▼
-cs_effects_measure ──► g_output.effectsHistory  (1×1, persistent; one 16×16 workgroup,
+cs_effects_measure ──► g_output.effectsHistory  (4×1, persistent; one 16×16 workgroup,
    │                    ▲   reads last frame's value, writes this frame's)
    ▼                    │
 cs_effects_layer0  ──►  g_output.effectsOutput  (pooled, source res, 8×8 groups)
@@ -151,11 +151,11 @@ measure pass grades its taps with exactly the code the per-pixel pass grades its
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
 | `float u_vibrancy` | 0..3, 1 neutral |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
-| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six parameters, straight from config |
+| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six parameters, straight from config (both modes read all six — see the Dynamic section for what each means there) |
 | `float u_abDt` | seconds since the previous effects dispatch, host-measured and clamped (see Adaptive Brightness) |
 
 Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
@@ -178,7 +178,8 @@ the effects would silently vanish whenever the base layer could be scanned out d
 ## The four effects
 
 The maths is ported 1:1 from the retired `.fx`, applied **per tap, in this order**:
-Shadow Control → Vibrancy → (Pre-Sharpen) → × Adaptive Brightness gain → `saturate`.
+Shadow Control → Vibrancy → (Pre-Sharpen) → Adaptive Brightness (Whole image's gain, or
+Dynamic's curve) → `saturate`.
 
 ### Shadow Control (`image.shaders.shadow_lift`)
 
@@ -257,44 +258,191 @@ a cliff. Passed as float bits (`u_rcasCon`), like `RcasPushData_t::u_c1`.
 
 ### Adaptive Brightness (`image.shaders.adaptive_brightness`)
 
-Six params (the settings budget exactly — see below): `strength`, `target`, `up_speed`,
+**One row, two modes** (request #16, 2026-09-06). The row is a three-way **Choice** —
+`Off` | `Whole image` | `Dynamic` — in its own **Adaptive Brightness** band below the
+Effects band, with the same six params behind it: `strength`, `target`, `up_speed`,
 `down_speed`, `min_gain`, `max_gain`. **Config**: `ReshadeAdaptiveBrightnessSettings` —
-defaults 1.0 / 0.5 / 1.0 s / 1.0 s / 0.5 / 2.0. The panel's `.Default()`s read that struct
+`enabled` (bool, kept) plus `mode` (`"whole_image"` | `"dynamic"`, default
+`whole_image`, an unknown value on disk resolves to it) and the six floats, defaults
+1.0 / 0.5 / 1.0 s / 1.0 s / 0.5 / 2.0. `Off` leaves `mode` alone, so switching back
+lands on the mode the user had. The panel's `.Default()`s read that struct
 (`config::ReshadeAdaptiveBrightnessSettings{}.field`, the `PanelCursor.cpp` pattern)
 instead of repeating literals. `Why:` the two had drifted (panel said 1.5 s / 2.5 s / 0.8 /
 1.6), so "reset to default" landed on values no fresh install ever had.
 
-Two dispatches per frame, ported from the retired `.fx` (`MeasureLuminance`,
-`PS_AdaptiveBrightnessAdapt`, `PS_AdaptiveBrightnessApply`), which was measured live to
-converge on its own model — so the **adapt** and **apply** maths are unchanged:
+`Why a three-way Choice and not a Mode param:` the Six Budget (`PanelShaders.cpp`'s
+header comment, SPEC §5.2 clause 3) — the row already owned six params, and a seventh is
+a registration abort whose remedy is a whole new rail area for one effect. On/off and
+mode are one decision ("which adaptation, if any"), so they became one control. The id
+`image.shaders.adaptive_brightness` and every config key are unchanged;
+`overlay_e2_set "image.shaders.adaptive_brightness 1"` means what the old switch's "on"
+meant (Whole image is the original behaviour). `Why its own band:` the Effects band's
+`n / m` corner count is computed from **Switch** rows only (`Shell.cpp`'s
+`DrawGroupBand`), so a Choice row among the switches would make "3 / 3" sit under four
+visible rows. The rail Summary still says "N of 4 effects on".
+
+#### The statistics (both modes)
+
+Two dispatches per frame. **The measure pass** (`cs_effects_measure.comp`,
+`SHADER_TYPE_EFFECTS_MEASURE`) takes a **64×64 grid of taps** over the whole image (16×16
+threads, 4×4 per thread, 4096 taps), each run through `grade()` so it measures the
+Shadow-Control/Vibrancy-graded image the `.fx` measured (its `PreSharpenOut` texture) —
+sharpening is not applied to the taps; it does not move the statistics. From those taps it
+derives four numbers on the **encoded** Rec.601 luma (`(.299, .587, .114)`, as the `.fx`
+computed it):
+
+| History texel | Statistic | Read by |
+| --- | --- | --- |
+| `HISTORY_MEAN` (0) | arithmetic mean (shared-memory tree reduction, as before) | Whole image |
+| `HISTORY_P2` (1) | 2nd percentile — the shadows | Dynamic (shadow cap) |
+| `HISTORY_P50` (2) | median — the mid-tone anchor | Dynamic (gamma) |
+| `HISTORY_P98` (3) | 98th percentile — the highlights | Dynamic (levels gain) |
+
+The percentiles come from a **64-bin histogram in shared memory** (one `atomicAdd` per
+tap, then invocation 0 walks the bins), **interpolated inside the bin** the target count
+falls in — so a percentile is continuous rather than stepping by 4 code values as a
+scene drifts across a bin edge. `Why 64 bins:` 4096 taps over 64 bins is 64 per bin on a
+flat image; finer bins would be mostly empty and the interpolation already recovers
+sub-bin precision. `Why median, not the mean, for Dynamic:` a few bright windows in a dark
+room must not read as "the room is lit" — the `.fx`'s 25 fixed taps could be swung by one
+highlight, the mean by a few percent of the image, the median by neither.
+
+**Each statistic is smoothed with the `.fx`'s EMA**, unchanged, per statistic:
 
 ```
-// cs_effects_measure.comp, one 16×16 workgroup, invocation 0 finishes:
 tau      = measured > adapted ? up_speed : down_speed
 alpha    = clamp(1 - exp(-dt / max(tau, 0.001)), 0, 1)
-adapted' = mix(adapted, measured, alpha)          // written to the 1×1 history
+adapted' = mix(adapted, measured, alpha)          // written to its history texel
+```
 
-// cs_effects_layer0.comp, per pixel, only when the switch is on:
-gain = clamp(target / max(adapted', 0.001), min_gain, max_gain)
+`up_speed` is the time constant while a statistic **rises** (the scene got brighter; the
+picture will be dimmed), `down_speed` while it **falls** (the scene got darker; the picture
+will be lifted). The panel now says exactly that — "Adapt to brighter" / "Adapt to darker",
+retitled 2026-09-06 from "Brighten speed" / "Darken speed", whose help text described the
+opposite direction to the one the code used. Defaults are symmetric (1 s / 1 s); the eye
+adapts to brightness faster than to darkness, and a game wants the blown-out case fixed
+fast too, so a user who wants asymmetry sets `up_speed` shorter. Every statistic is
+measured and smoothed **whatever the mode**, and the measure pass never looks at the
+Adaptive Brightness flags, so a mode switch needs no re-convergence.
+
+#### Whole image (`mode: whole_image`) — the original behaviour
+
+```
+// cs_effects_layer0.comp, per pixel:
+gain = clamp(target / max(adapted_mean, 0.001), min_gain, max_gain)
 out  = mix(c, c * gain, strength)
 ```
 
-Luma is Rec.601 `(.299, .587, .114)` on **encoded** values, as the `.fx` computed it.
+One gain for the frame from the smoothed mean, ported 1:1 from the `.fx`'s
+`PS_AdaptiveBrightnessApply`. Its known weakness is the reason Dynamic exists: in a dark
+scene the gain hits `max_gain` and every value above `1 / max_gain` **clips** — the
+"blown-out parts" the user asked to be rid of (measured below).
 
-**The measure pass** (`cs_effects_measure.comp`, `SHADER_TYPE_EFFECTS_MEASURE`) is the
-one deliberate upgrade. The `.fx` averaged 25 fixed taps, which a single stray highlight
-could swing. The native pass takes a **64×64 grid of taps** over the whole image (16×16
-threads, 4×4 per thread, 4096 taps), each run through `grade()` so it measures the
-Shadow-Control/Vibrancy-graded image the `.fx` measured (its `PreSharpenOut` texture),
-and reduces them in shared memory — one workgroup, no atomics, no intermediate texture.
-Sharpening is not applied to the taps; it does not move the mean.
+#### Dynamic (`mode: dynamic`) — levels + gamma + shoulder
+
+The curve lives in **`src/shaders/effects_curve.h`**, a header of pure scalar functions
+that the GLSL pass and the C++ unit tests (`tests/test_effects_curve.cpp`) compile from the
+same text, so the properties below are asserted on the code the GPU runs. Encoded space
+in, encoded out, per channel, from the smoothed `p2 / p50 / p98`:
+
+```
+1. GAIN      G = clamp(0.9 / p98, min_gain, max_gain)            // levels: p98 -> WHITE
+2. GAMMA     g = ln(target) / ln(p50 * G), clamped to [0.5, 1.5]   // median -> target
+             if g > 1: g = min(g, ln(p2 * min_gain) / ln(p2 * G))  // shadow cap
+3. SHOULDER  y = (x * G)^g;  top = G^g
+             if top > 1 and y > 0.7:  u = y - 0.7;  y = 0.7 + u / (1 + u / c)
+             with c = (top - 0.7)(0.3) / (top - 1), so x = 1 lands exactly on 1.0
+out = mix(c, curve(c), strength)
+```
+
+- **Levels**: the smoothed 98th percentile is pulled toward `WHITE = 0.9`, as far as the
+  user's gain bounds allow — a dark scene gets `max_gain`, a bright one a touch under 1.
+  `Why no black-point subtraction, though "levels" usually has one:` pulling p2 toward black
+  crushes the deepest shadows, which is the opposite of what a dark map needs, and capped
+  small enough to be harmless on a mid scene it is also too small to do anything. Every
+  step passes through (0, 0), so black stays black without a floor being needed.
+- **Gamma**: the exponent that lands the smoothed **median** on `target` after the gain,
+  bounded to `[0.5, 1.5]`. `Why 0.5:` a sqrt lift — the same floor Shadow Control uses —
+  and with `max_gain` 2 it takes a 5..20-code scene to the 50..100 range. `Why 1.5:` a
+  darkening gamma crushes shadows by nature; beyond 1.5 the shadow cap is all that keeps
+  detail. **The shadow cap** is `min_gain`'s Dynamic meaning: a darkening gamma may not
+  push the smoothed 2nd percentile below `p2 × min_gain` — "how dark may it go", applied
+  to the shadows. `max_gain` bounds the levels gain only; the gamma lift on top is what
+  lets a *super* dark map get further than Whole image's 2× ever could.
+- **Shoulder**: only when the curve's own top (`G^g`, its value at x = 1) exceeds 1.0 —
+  i.e. only when something *would* clip. Reinhard-shaped on the excess above the knee
+  `0.7`, with `c` chosen so x = 1 lands exactly on 1.0: slope 1 at the knee (no visible
+  break), monotonic for any overshoot, and it degenerates to the identity as the top → 1,
+  so a scene that needs no compression gets none. `Why not a fixed asymptote below 1:` a mid
+  scene's whites would dim for nothing; adaptive knee-to-top mapping keeps near-identity
+  scenes near-identical.
+- **Strength** blends the curve with the identity; at 0 the picture is untouched (tested).
+- `Why encoded space, not linear light:` the pre-pass runs in encoded space on purpose (see
+  "Encoded space, on purpose" above); the statistics, the sibling effects and `target`
+  (an encoded mean target in Whole image mode) all live there; and the gain/gamma bounds are
+  perceptual numbers — a 2× gain in encoded terms is a 2× perceptual step, which is what a
+  user-facing "Max gain" should mean. The hard properties (monotonic, bounded, 0 → 0) hold
+  in either space.
+
+**Properties asserted on the CPU** (`[effects_curve]`, 11 cases, 1.26 M assertions over
+seven scenes × five targets × nine gain-bound pairs): output in `[0, 1]` and finite;
+monotonic in the input; `0 → 0`; `x = 1 → exactly 1` whenever the shoulder is active;
+identity at strength 0; the mid reference scene is the identity; the gamma clamps and the
+shadow cap hold; the shoulder is C0/C1-continuous at the knee. Plus the config round-trip
+of `mode` and its unknown-value fallback.
+
+#### Measured (desktop, headless, `scripts/effects-regression.sh`, 2026-09-06)
+
+The recipe is `pixel-regression.sh`'s (private headless sway, nested `gamescope --backend
+wayland`, `gamescopectl screenshot "<path> 4"`), with `tests/effects_scene_client.c` as
+the game: an SDL2 window painting three synthetic scenes from flat regions at known pixel
+positions — **dark** (bands 5/8/12/16/20, a pure-black corner, six 240 squares ≈ 1 % of the
+image), **bright** (bands 200/215/230/245/255, six 30-valued rectangles ≈ 4 %, so p2 *is*
+the shadows) and **mid** (26/77/128/179/230) — advanced with `SIGUSR1`. Every number is the
+mean grey of a region's interior, all six Adaptive Brightness params at their defaults,
+strength 1.0. Captures: `build-release/verify-shots/adaptive-2026-09-06/`.
+
+| Scene / region (input) | Off | Whole image | **Dynamic** | Dynamic must |
+| --- | --- | --- | --- | --- |
+| dark: darkest band (5) | 5 | 10 | **50** | be readable: ≥ 30 |
+| dark: bands 8 / 12 / 16 / 20 | 8 / 12 / 16 / 20 | 16 / 24 / 32 / 40 | **64 / 78 / 90 / 101** | keep their order |
+| dark: 240 highlights | 240 | **255 — clipped** | **253** | stay < 255, above every band |
+| dark: pure black | 0 | 0 | **0** | stay ≤ 2 |
+| bright: bands 200 / 215 / 230 | 200 / 215 / 230 | 115 / 124 / 132 | **165 / 180 / 196** | keep their order |
+| bright: 245 band (p98 region) | 245 | 141 | **213** | come down below 235 |
+| bright: white (255) | 255 | 146 | **224** | — |
+| bright: 30 shadows (p2) | 30 | 17 | **15** | not crushed: ≥ 8, and ≥ 30 × min_gain 0.5 |
+| mid: 26 / 77 / 128 / 179 / 230 | identical | 26 / 77 / 128 / 178 / 229 | **25 / 75 / 126 / 177 / 228** | near-identity: worst ≤ 6 (measured 2) |
+
+Whole image on the dark scene is the blown-out case the user described: the gain hits
+`max_gain` 2 and the 240 highlights go to 255 with everything above 128 clipping, while the
+darkest band only reaches 10. Dynamic takes that band to 50 and keeps the highlights at
+253, two counts below white. On the bright scene Whole image dims everything to ~0.57×
+(shadows 30 → 17); Dynamic keeps more of the picture (median 230 → 196) and the shadow cap
+holds at exactly `30 × min_gain` = 15. The bright captures under Whole image are not
+asserted — they are recorded as INFO lines to show the difference.
+
+**Temporal** (dark → bright under Dynamic, `tau` 1 s; the "requested at" times are
+measured from the `SIGUSR1` to the screenshot request, the screenshot itself adds a
+frame): the 230 band read **252** at 0.37 s, **245** at 1.29 s, **205** at 3.36 s, and
+**196** settled — monotonic, no overshoot, within 12 counts of settled at 3 s. The first
+second looks slow because while the smoothed gain is still above 1 the shoulder pins the
+bright bands near white; once the gain drops under 1 the curve releases them. No
+oscillation was seen in any capture.
+
+**Per-frame cost.** The measure pass is still one 16×16 workgroup over 4096 taps; the
+histogram adds one shared-memory `atomicAdd` per tap and a 64-iteration walk on one
+invocation. The per-pixel pass, in Dynamic mode, adds two `log`s per invocation (gain and
+gamma are frame constants) and three `pow`s plus three divides per pixel. Neither is
+measurable against the ~sub-millisecond pre-pass on this desktop's GPU; there is no
+GPU-timestamp instrumentation in `vulkan_composite()` to give a finer number.
 
 **Resets on resume, does not track while off.** The measure pass runs whenever the
 pre-pass runs at all (any of the four switches on) and never looks at the Adaptive
 Brightness flag itself; only the per-pixel gain is gated. But when Adaptive Brightness is
 the *only* switch on and it is turned off, `NativeEffectsState_t::AnyEnabled()` goes
-false and the whole pre-pass — measure dispatch included — stops running, so the 1×1
-history freezes at its last value instead of continuing to track the scene.
+false and the whole pre-pass — measure dispatch included — stops running, so the
+history freezes at its last values instead of continuing to track the scene.
 
 `vulkan_composite()` handles this by remembering, across calls, whether the measure
 dispatch ran the *previous* time this code path was reached
@@ -334,13 +482,15 @@ smooth. The first dispatch passes `0`.
 
 #### The history texture — persistence as a contract, not luck
 
-`g_output.effectsHistory` is a **1×1 `ABGR8888` storage+sampled texture**, created once by
-`update_effects_history()` and kept for the life of the output (it does not depend on the
-game's size, and its contents *are* the effect's state — so, unlike the `.fx`, a
-resolution change does not reset it).
+`g_output.effectsHistory` is a **4×1 `ABGR8888` storage+sampled texture** (one texel per
+statistic — `HISTORY_MEAN`, `_P2`, `_P50`, `_P98`; `kEffectsHistoryTexels` on the host
+mirrors the shader's `HISTORY_COUNT`), created once by `update_effects_history()` and kept
+for the life of the output (it does not depend on the game's size, and its contents *are*
+the effect's state — so, unlike the `.fx`, a resolution change does not reset it). It was
+1×1 until Dynamic mode (2026-09-06) needed the percentiles.
 
-**Storage format — RGBA8 bytes, not R32F.** The float is spread bit-for-bit over the four
-8-bit channels (`history_pack` = `unpackUnorm4x8(floatBitsToUint(v))`, `history_unpack` =
+**Storage format — RGBA8 bytes, not R32F.** Each float is spread bit-for-bit over the four
+8-bit channels of its texel (`history_pack` = `unpackUnorm4x8(floatBitsToUint(v))`, `history_unpack` =
 `uintBitsToFloat(packUnorm4x8(t))`, `effects_common.h`). `Why:` `dst` in `descriptor_set.h`
 is declared `rgba8` and `CVulkanCmdBuffer::dispatch()` binds one RGB target there; an
 `r32f` second-target path through the shared descriptor set, for one texel used by one
@@ -361,7 +511,7 @@ measure dispatch it is sampler slot `VKR_EFFECTS_HISTORY_SLOT` (= 1) *and* the s
 target, and `dispatch()` runs `prepareSrcImage()` (tracks it with `discarded = false`) before
 `prepareDestImage()` (returns early for a tracked image). So the barrier for it is either
 nothing (steady state) or `GENERAL → GENERAL`; never `UNDEFINED`. `Why self-sampling is
-safe:` only invocation 0 touches the texel, and its fetch precedes its store in program
+safe:` only invocation 0 touches the texels, and its fetches precede its stores in program
 order; the layout is `GENERAL` for both bindings. The `.fx` did the same.
 
 The one legitimate `UNDEFINED` is the creation frame: the fresh `VkImage` really is in
@@ -394,9 +544,10 @@ After the per-pixel dispatch slot 1 is unbound, so the FSR/NIS/blit dispatches t
 
 ## The settings-panel budget
 
-Each switch row may own at most six `Param`s before `Registry.cpp` aborts registration —
+Each row may own at most six `Param`s before `Registry.cpp` aborts registration —
 see `PanelShaders.cpp`'s "THE SIX BUDGET" comment. Counts: Vibrancy 2, Pre-Sharpen 1,
-Adaptive Brightness 6 (zero headroom), Shadow Control 1.
+Adaptive Brightness 6 (zero headroom — which is why its mode is the row's own three-way
+value rather than a seventh param, see its section), Shadow Control 1.
 
 ## Diagnostics
 
@@ -415,4 +566,5 @@ diagnosed.
 - `superdoc/planning/DECISIONS.md` #12 (two sharpen controls), #15 (SDR-only), #27 (the
   native port; #13/#14 superseded).
 - `superdoc/planning/requests-2026-09-04.md` items #2 and #3 — Vibrancy's range and
-  Shadow Control.
+  Shadow Control; `requests-2026-09-06.md` item #16 — Adaptive Brightness's modes.
+- `scripts/effects-regression.sh` — the headless measurement gate for both modes.

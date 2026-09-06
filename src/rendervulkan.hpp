@@ -573,6 +573,7 @@ struct NativeEffectsState_t
 	// rendervulkan.cpp's s_bEffectsPassRanLastTime) and by
 	// cs_effects_layer0.comp (the visible gain, gated on the switch).
 	bool  bAdaptiveBrightness = false;
+	bool  bAbDynamic = false;            // Dynamic mode (effects_curve.h) vs Whole image
 	float flAbTarget = 0.5f;
 	float flAbUpSpeed = 1.0f;
 	float flAbDownSpeed = 1.0f;
@@ -745,8 +746,9 @@ struct VulkanOutput_t
 
 	// Adaptive Brightness's persistent 1x1 adapted-luminance history
 	// (cs_effects_measure.comp writes it, cs_effects_layer0.comp reads it).
-	// One float packed into an RGBA8 texel -- see effects_common.h's
-	// history_pack(). Created once by update_effects_history() and kept for
+	// HISTORY_COUNT (4) x 1 texels -- mean, p2, p50, p98 -- each one float
+	// packed into an RGBA8 texel, see effects_common.h's history_pack().
+	// Created once by update_effects_history() and kept for
 	// the life of the output; its contents are the effect's cross-frame
 	// state, so it is never re-created on a resolution change.
 	gamescope::OwningRc<CVulkanTexture> effectsHistory;

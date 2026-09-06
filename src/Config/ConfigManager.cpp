@@ -250,6 +250,9 @@ namespace gamescope::config
                     auto &ab = s.reshade.adaptive_brightness;
                     ab.enabled = JGetBool( *pAdaptive, "enabled", ab.enabled );
                     ab.target_luminance = JGetFloat( *pAdaptive, "target_luminance", ab.target_luminance );
+                    ab.mode = JGetString( *pAdaptive, "mode", ab.mode );
+                    if ( ab.mode != "dynamic" )
+                        ab.mode = "whole_image";
                     ab.adapt_up_speed = JGetFloat( *pAdaptive, "adapt_up_speed", ab.adapt_up_speed );
                     ab.adapt_down_speed = JGetFloat( *pAdaptive, "adapt_down_speed", ab.adapt_down_speed );
                     ab.min_gain = JGetFloat( *pAdaptive, "min_gain", ab.min_gain );
@@ -458,6 +461,7 @@ namespace gamescope::config
             jAdaptive[ "adapt_up_speed" ] = ab.adapt_up_speed;
             jAdaptive[ "adapt_down_speed" ] = ab.adapt_down_speed;
             jAdaptive[ "min_gain" ] = ab.min_gain;
+            jAdaptive[ "mode" ] = ab.mode;
             jAdaptive[ "max_gain" ] = ab.max_gain;
             jAdaptive[ "strength" ] = ab.strength;
 

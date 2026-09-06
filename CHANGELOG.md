@@ -12,6 +12,10 @@ The newest version below is the one this build reports.
 ## [0.6.1] – 2026-09-06
 
 ### Added
+- **Adaptive Brightness modes**: the Shaders row is now Off / Whole image / Dynamic --
+  Whole image is the old single-gain behaviour, Dynamic is a per-scene levels + gamma +
+  soft-shoulder curve that lifts dark maps, tames bright ones and rolls the highlights off
+  so nothing blows out.
 - **Profiles area**: a list of every profile leads the sheet -- click a line to switch
   to it (that profile is then this game's, and every change is saved into it) -- with
   Create, Copy, Edit and Delete underneath, an Inherits dropdown for a game profile, a

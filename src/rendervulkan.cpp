@@ -3645,8 +3645,10 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 	return true;
 }
 
-// Adaptive Brightness's persistent 1x1 history (see the field's comment in
-// rendervulkan.hpp). Created once and kept: unlike effectsOutput it does not
+// Adaptive Brightness's persistent history -- kEffectsHistoryTexels x 1,
+// one smoothed statistic per texel (mean, p2, p50, p98; the shader's
+// HISTORY_* indices, see effects_common.h). Created once and kept: unlike
+// effectsOutput it does not
 // depend on the game's size or format, and its contents ARE the effect's
 // cross-frame state. Sets bCreated when this call made the texture, so the
 // caller can discard its undefined contents and tell the shader to start from
@@ -3659,6 +3661,8 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 // CVulkanCmdBuffer::dispatch() binds a single RGB target there; an r32f
 // second-target path through the shared descriptor set for this one texel
 // was judged more plumbing than four exact byte lanes.
+static constexpr uint32_t kEffectsHistoryTexels = 4;   // == HISTORY_COUNT in effects_common.h
+
 static bool update_effects_history( bool &bCreated )
 {
 	bCreated = false;
@@ -3670,7 +3674,7 @@ static bool update_effects_history( bool &bCreated )
 	createFlags.bStorage = true;
 
 	g_output.effectsHistory = new CVulkanTexture();
-	if ( !g_output.effectsHistory->BInit( 1u, 1u, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
+	if ( !g_output.effectsHistory->BInit( kEffectsHistoryTexels, 1u, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
 	{
 		vk_log.errorf( "failed to create native effects history" );
 		g_output.effectsHistory = nullptr;
@@ -4053,6 +4057,7 @@ struct EffectsPushData_t
 	static constexpr uint32_t kVibrancySkin      = 1u << 2;
 	static constexpr uint32_t kPreSharpen        = 1u << 3;
 	static constexpr uint32_t kAdaptiveBrightness = 1u << 4;
+	static constexpr uint32_t kAbDynamic         = 1u << 5;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -4091,6 +4096,7 @@ struct EffectsPushData_t
 		if ( s.bVibrancyProtectSkin ) u_flags |= kVibrancySkin;
 		if ( s.bPreSharpen )          u_flags |= kPreSharpen;
 		if ( s.bAdaptiveBrightness )  u_flags |= kAdaptiveBrightness;
+		if ( s.bAbDynamic )           u_flags |= kAbDynamic;
 		if ( bResetHistory )          u_flags |= kResetHistory;
 
 		u_vibrancy   = s.flVibrancy;
@@ -4564,8 +4570,9 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						bMeasureRanThisTime = true;
 
 						// Adaptive Brightness measure/adapt: one workgroup that
-						// averages the graded base layer and blends the result
-						// into the 1x1 history, which the per-pixel pass below
+						// measures the graded base layer (mean + three
+						// percentiles) and blends the results into the 4x1
+						// history, which the per-pixel pass below
 						// reads THIS frame (no lag). Runs whenever the pre-pass
 						// runs (regardless of the switch), matching the .fx's
 						// Adapt pass -- but unlike the .fx, this history is

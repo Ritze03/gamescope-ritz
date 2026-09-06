@@ -31,12 +31,28 @@ uniform effects_t {
     float u_abDt;         // seconds since the previous effects dispatch, host-clamped
 };
 
+// The history texture is HISTORY_COUNT x 1 texels, one smoothed statistic
+// per texel (each a float packed into RGBA8 -- see history_pack() below).
+// Whole-image mode reads only HISTORY_MEAN; Dynamic mode reads the three
+// percentiles. All four are measured and smoothed every frame the pre-pass
+// runs, whatever the mode, so a mode switch needs no re-convergence.
+const int HISTORY_MEAN  = 0;   // arithmetic mean of the graded encoded luma
+const int HISTORY_P2    = 1;   // 2nd percentile  (shadows)
+const int HISTORY_P50   = 2;   // median          (the Dynamic curve's anchor)
+const int HISTORY_P98   = 3;   // 98th percentile (highlights)
+const int HISTORY_COUNT = 4;
+
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
 const uint EFFECT_VIBRANCY            = 1u << 1;
 const uint EFFECT_VIBRANCY_SKIN       = 1u << 2;
 const uint EFFECT_PRE_SHARPEN         = 1u << 3;
 const uint EFFECT_ADAPTIVE_BRIGHTNESS = 1u << 4;
+// Adaptive Brightness's Dynamic mode (effects_curve.h's percentile tone
+// curve) instead of the Whole-image gain. Only the apply pass reads it; the
+// measure pass tracks every statistic regardless of mode, so switching
+// modes is instant.
+const uint EFFECT_AB_DYNAMIC          = 1u << 5;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;
@@ -89,7 +105,7 @@ vec3 grade(vec3 c)
     return c;
 }
 
-// ---- Adaptive Brightness history: one float in a 1x1 RGBA8 texel ----
+// ---- Adaptive Brightness history: one float per RGBA8 texel ----
 //
 // The history is stored in the same `dst` binding every pass writes
 // (descriptor_set.h declares it rgba8, and CVulkanCmdBuffer::dispatch()
@@ -113,9 +129,9 @@ float history_unpack(vec4 t)
     return uintBitsToFloat(packUnorm4x8(t));
 }
 
-float history_read()
+float history_read(int which)
 {
-    return history_unpack(texelFetch(s_samplers[VKR_EFFECTS_HISTORY_SLOT], ivec2(0), 0));
+    return history_unpack(texelFetch(s_samplers[VKR_EFFECTS_HISTORY_SLOT], ivec2(which, 0), 0));
 }
 
 #endif // EFFECTS_COMMON_H_

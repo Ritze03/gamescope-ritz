@@ -88,6 +88,7 @@ namespace gamescope
 		// Adaptive Brightness: consumed by cs_effects_measure.comp (the
 		// adapt maths) and cs_effects_layer0.comp (the visible gain).
 		e.bAdaptiveBrightness = r.adaptive_brightness.enabled;
+		e.bAbDynamic    = r.adaptive_brightness.mode == "dynamic";
 		e.flAbTarget    = r.adaptive_brightness.target_luminance;
 		e.flAbUpSpeed   = r.adaptive_brightness.adapt_up_speed;
 		e.flAbDownSpeed = r.adaptive_brightness.adapt_down_speed;
@@ -168,6 +169,16 @@ namespace gamescope
 	// that Adaptive Brightness has become a category rather than a setting.
 	// Nothing here routes around the budget, and nothing should.
 	//
+	// Request #16 (2026-09-06) asked for a MODE on Adaptive Brightness --
+	// the seventh knob. It did not become a param: the row's on/off and its
+	// mode are one decision ("which adaptation, if any"), so the Switch
+	// became a three-way Choice, Off | Whole image | Dynamic, with the same
+	// id and the same six params behind it. The row moved into its own band
+	// because the Effects band's `n / m` count is computed from Switch rows
+	// only (Shell.cpp's DrawGroupBand) and a Choice row sitting among them
+	// would make that count read one short. Still not a category: one row,
+	// six params, and the budget untouched.
+	//
 	// EVERY WRITE GOES THROUGH SetEffectEnabled()/SetEffectFloat() below --
 	// edit the cached config field, push the whole struct to the renderer,
 	// queue the save. Writing a config field alone would compile and look
@@ -198,6 +209,35 @@ namespace gamescope
 	static void SetEffectFloat( float *pflField, float flValue )
 	{
 		*pflField = flValue;
+		PushAllToRenderer();
+		QueueSave();
+	}
+
+	// Adaptive Brightness's three-way row: 0 Off, 1 Whole image, 2 Dynamic.
+	// Off leaves `mode` alone so switching back lands on the mode the user
+	// had, and overlay_e2_set "... 1" still means what the old Switch's
+	// "on" meant (Whole image is the original behaviour).
+	enum AbChoice : int { kAbOff = 0, kAbWholeImage = 1, kAbDynamic = 2 };
+	static const ui::Option kAbModeOptions[] = {
+		{ kAbOff,        "Off" },
+		{ kAbWholeImage, "Whole image" },
+		{ kAbDynamic,    "Dynamic" },
+	};
+	static int GetAbChoice()
+	{
+		const auto &ab = Cfg().reshade.adaptive_brightness;
+		if ( !ab.enabled )
+			return kAbOff;
+		return ab.mode == "dynamic" ? kAbDynamic : kAbWholeImage;
+	}
+	static void SetAbChoice( int n )
+	{
+		auto &ab = Cfg().reshade.adaptive_brightness;
+		ab.enabled = n != kAbOff;
+		if ( n == kAbDynamic )
+			ab.mode = "dynamic";
+		else if ( n == kAbWholeImage )
+			ab.mode = "whole_image";
 		PushAllToRenderer();
 		QueueSave();
 	}
@@ -282,81 +322,6 @@ namespace gamescope
 				.Step( 0.05f )   // 41 positions
 				.Default( 0.5f );
 
-		// SIX PARAMS -- the budget exactly. See this section's header.
-		//
-		// The .Default()s below read the compiled-in ConfigSchema.h values
-		// (as PanelCursor.cpp's rows do) rather than repeating literals:
-		// the two drifted once (panel said 1.5s/2.5s/0.8/1.6, schema said
-		// 1.0s/1.0s/0.5/2.0) and a "reset to default" then landed on a
-		// value no fresh install ever had.
-		using AbDefaults = config::ReshadeAdaptiveBrightnessSettings;
-		a.Switch( "image.shaders.adaptive_brightness", "Adaptive Brightness",
-			ui::AnyBind::Of<bool>(
-				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
-				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled, b ); } ) )
-			.Key( "reshade.adaptive_brightness.enabled" )
-			.Help( "Experimental. Automatically brightens dark scenes and dims bright ones as you "
-			       "play, like your eyes adjusting." )
-			.Default( AbDefaults{}.enabled )
-			.Keywords( "adaptive brightness eye adaptation exposure auto experimental" )
-			.DisabledUnless( EffectsUsable, kSdrOnly )
-			.Param( "strength", "Strength",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.adaptive_brightness.strength; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength, f ); } ) )
-				.Key( "reshade.adaptive_brightness.strength" )
-				.Help( "How strong the effect is." )
-				.Range( 0.0f, 1.0f )
-				.Step( 0.05f )   // 21 positions
-				.Default( AbDefaults{}.strength )
-			.Param( "target", "Target brightness",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance, f ); } ) )
-				.Key( "reshade.adaptive_brightness.target_luminance" )
-				.Help( "How bright the picture tries to settle at once it's adjusted." )
-				.Range( 0.1f, 0.9f )
-				.Step( 0.05f )   // 17 positions; both ends sit on the grid
-				.Default( AbDefaults{}.target_luminance )
-			.Param( "up_speed", "Brighten speed",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed, f ); } ) )
-				.Key( "reshade.adaptive_brightness.adapt_up_speed" )
-				.Help( "How quickly the picture brightens when a scene gets darker." )
-				.Range( 0.1f, 5.0f )
-				.Step( 0.1f )    // 50 positions, one per tenth of a second
-				.Unit( "s" )
-				.Default( AbDefaults{}.adapt_up_speed )
-			.Param( "down_speed", "Darken speed",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed, f ); } ) )
-				.Key( "reshade.adaptive_brightness.adapt_down_speed" )
-				.Help( "How quickly the picture dims when a scene gets brighter." )
-				.Range( 0.1f, 5.0f )
-				.Step( 0.1f )    // 50 positions, as Brighten speed above
-				.Unit( "s" )
-				.Default( AbDefaults{}.adapt_down_speed )
-			.Param( "min_gain", "Min gain",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain, f ); } ) )
-				.Key( "reshade.adaptive_brightness.min_gain" )
-				.Help( "How dark the adjustment is allowed to make the picture." )
-				.Range( 0.5f, 1.0f )
-				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
-				.Default( AbDefaults{}.min_gain )
-			.Param( "max_gain", "Max gain",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain, f ); } ) )
-				.Key( "reshade.adaptive_brightness.max_gain" )
-				.Help( "How bright the adjustment is allowed to make the picture." )
-				.Range( 1.0f, 2.0f )
-				.Step( 0.05f )   // 21 positions
-				.Default( AbDefaults{}.max_gain );
-
 		// Request #3 (2026-09-04): "a darkness booster for dark games" --
 		// titled "Shadow Control" (renamed from "Shadow lift" 2026-09-05);
 		// the entry id and every config key deliberately keep the
@@ -385,6 +350,93 @@ namespace gamescope
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
 				.Default( 0.0f );
+
+		// SIX PARAMS -- the budget exactly. See this section's header for
+		// why the mode is the row's own value rather than a seventh param,
+		// and why the row has its own band.
+		//
+		// The .Default()s below read the compiled-in ConfigSchema.h values
+		// (as PanelCursor.cpp's rows do) rather than repeating literals:
+		// the two drifted once (panel said 1.5s/2.5s/0.8/1.6, schema said
+		// 1.0s/1.0s/0.5/2.0) and a "reset to default" then landed on a
+		// value no fresh install ever had.
+		a.Group( "Adaptive Brightness" );
+
+		using AbDefaults = config::ReshadeAdaptiveBrightnessSettings;
+		a.Choice( "image.shaders.adaptive_brightness", "Mode",
+			ui::AnyBind::Of<int>( GetAbChoice, SetAbChoice ),
+			kAbModeOptions, std::size( kAbModeOptions ) )
+			.Key( "reshade.adaptive_brightness.enabled" )
+			.Help( "Adjusts the picture as you play, like your eyes adjusting. Whole image: one "
+			       "brightness gain from the average. Dynamic: lifts dark scenes, tames bright "
+			       "ones and rolls off the highlights so nothing blows out -- for maps that are "
+			       "much darker or brighter than the rest." )
+			.Default( (int)( AbDefaults{}.enabled ? kAbWholeImage : kAbOff ) )
+			.Keywords( "adaptive brightness eye adaptation exposure auto dynamic contrast gamma "
+			           "whole image tone mapping" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.strength, f ); } ) )
+				.Key( "reshade.adaptive_brightness.strength" )
+				.Help( "How strong the effect is: blends between the untouched picture and the "
+				       "fully adjusted one." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions
+				.Default( AbDefaults{}.strength )
+			.Param( "target", "Target brightness",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.target_luminance; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.target_luminance, f ); } ) )
+				.Key( "reshade.adaptive_brightness.target_luminance" )
+				.Help( "Where the picture settles once adjusted -- Whole image aims its average "
+				       "here, Dynamic aims its mid-tones here." )
+				.Range( 0.1f, 0.9f )
+				.Step( 0.05f )   // 17 positions; both ends sit on the grid
+				.Default( AbDefaults{}.target_luminance )
+			.Param( "up_speed", "Adapt to brighter",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.adapt_up_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_up_speed, f ); } ) )
+				.Key( "reshade.adaptive_brightness.adapt_up_speed" )
+				.Help( "How long it takes to settle after the scene gets brighter (the picture "
+				       "is dimmed). Shorter reacts faster; longer is calmer." )
+				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )    // 50 positions, one per tenth of a second
+				.Unit( "s" )
+				.Default( AbDefaults{}.adapt_up_speed )
+			.Param( "down_speed", "Adapt to darker",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.adapt_down_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.adapt_down_speed, f ); } ) )
+				.Key( "reshade.adaptive_brightness.adapt_down_speed" )
+				.Help( "How long it takes to settle after the scene gets darker (the picture is "
+				       "lifted). Shorter reacts faster; longer is calmer." )
+				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )    // 50 positions, as above
+				.Unit( "s" )
+				.Default( AbDefaults{}.adapt_down_speed )
+			.Param( "min_gain", "Min gain",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.min_gain; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.min_gain, f ); } ) )
+				.Key( "reshade.adaptive_brightness.min_gain" )
+				.Help( "How dark the adjustment may make the picture. In Dynamic, also how far "
+				       "the deepest shadows may be pushed down." )
+				.Range( 0.5f, 1.0f )
+				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
+				.Default( AbDefaults{}.min_gain )
+			.Param( "max_gain", "Max gain",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain, f ); } ) )
+				.Key( "reshade.adaptive_brightness.max_gain" )
+				.Help( "How bright the adjustment may make the picture. In Dynamic, the gain "
+				       "applied before the gamma lift takes over." )
+				.Range( 1.0f, 2.0f )
+				.Step( 0.05f )   // 21 positions
+				.Default( AbDefaults{}.max_gain );
 
 		a.Group( "Diagnostics" );
 

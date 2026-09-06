@@ -314,7 +314,15 @@ namespace gamescope::config
         // .Default()s in Overlay/PanelShaders.cpp read this struct rather than
         // repeating the numbers, so change them here only.
         bool enabled = false;
-        float target_luminance = 0.5f;   // 0.1..0.9
+        // "whole_image": one gain from the smoothed mean luma (the original
+        // behaviour). "dynamic": a per-frame tone curve from smoothed
+        // percentiles -- levels gain, median gamma, soft highlight shoulder
+        // (src/shaders/effects_curve.h; request #16, 2026-09-06). Kept
+        // separate from `enabled` so switching the effect off and on
+        // remembers the mode. Additive key: an old config has none and
+        // resolves to the original behaviour.
+        std::string mode = "whole_image";   // whole_image | dynamic
+        float target_luminance = 0.5f;   // 0.1..0.9 -- Whole image: the mean's target; Dynamic: the median's
         float adapt_up_speed = 1.0f;     // 0.1..5.0 seconds to ~63% of target
         float adapt_down_speed = 1.0f;   // 0.1..5.0
         float min_gain = 0.5f;           // 0.5..1.0

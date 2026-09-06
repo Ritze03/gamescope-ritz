@@ -39,6 +39,7 @@
 
 #include "descriptor_set.h"
 #include "effects_common.h"
+#include "effects_curve.h"
 
 layout(
   local_size_x = 8,
@@ -78,19 +79,38 @@ void main()
     else
         c = FsrRcasLoadF(ivec2(pos)).rgb;
 
-    // 4. Adaptive Brightness: the .fx's PS_AdaptiveBrightnessApply, 1:1.
-    //    `adapted` is the smoothed scene luminance cs_effects_measure.comp
-    //    wrote to the 1x1 history this same frame (the host orders and
-    //    barriers the two dispatches); the gain pulls the picture toward
-    //    the target, clamped to the min/max bounds, then dry/wet mixed. The
-    //    max(., 0.001) guards the divide; the measure pass guarantees the
-    //    value itself is finite and in 0..1, and the reset frame writes the
-    //    measurement directly so a fresh texture is never read here.
+    // 4. Adaptive Brightness. The statistics are what cs_effects_measure.comp
+    //    wrote to the history THIS frame (the host orders and barriers the
+    //    two dispatches); the reset frame writes the measurements directly,
+    //    so a fresh texture is never read here, and the measure pass
+    //    guarantees every value is finite and in 0..1.
     if ((u_flags & EFFECT_ADAPTIVE_BRIGHTNESS) != 0u)
     {
-        float adapted = history_read();
-        float gain = clamp(u_abTarget / max(adapted, 0.001), u_abMin, u_abMax);
-        c = mix(c, c * gain, clamp(u_abStrength, 0.0, 1.0));
+        float strength = clamp(u_abStrength, 0.0, 1.0);
+        if ((u_flags & EFFECT_AB_DYNAMIC) != 0u)
+        {
+            // Dynamic: effects_curve.h's levels-gain + median gamma + soft
+            // shoulder, per channel, from the smoothed percentiles. The two
+            // parameters are the same for every pixel of the frame -- a
+            // couple of logs per invocation is cheaper than another texel
+            // of history to carry them in.
+            float gain  = ab_dyn_gain(history_read(HISTORY_P98), u_abMin, u_abMax);
+            float gamma = ab_dyn_gamma(history_read(HISTORY_P2), history_read(HISTORY_P50),
+                                       gain, u_abTarget, u_abMin);
+            vec3 graded = vec3(ab_dyn_curve(c.r, gain, gamma),
+                               ab_dyn_curve(c.g, gain, gamma),
+                               ab_dyn_curve(c.b, gain, gamma));
+            c = mix(c, graded, strength);
+        }
+        else
+        {
+            // Whole image: the .fx's PS_AdaptiveBrightnessApply, 1:1 -- one
+            // gain that pulls the smoothed mean toward the target, clamped
+            // to the min/max bounds. The max(., 0.001) guards the divide.
+            float adapted = history_read(HISTORY_MEAN);
+            float gain = clamp(u_abTarget / max(adapted, 0.001), u_abMin, u_abMax);
+            c = mix(c, c * gain, strength);
+        }
     }
     c = clamp(c, 0.0, 1.0);
 
