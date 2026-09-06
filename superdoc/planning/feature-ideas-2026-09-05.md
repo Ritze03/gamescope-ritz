@@ -50,6 +50,9 @@ No per-frame numbers below have been measured; costs are reasoned from the pass 
 Recommended order: F3, F4, F1, F7, F8, F15, then F5/F6 as a "Look" group if wanted.
 F2 folds into F3. F9-F12 only on request.
 
+F6: User (2026-09-06): approved in principle; ship only if an A/B screenshot reads
+distinctly from Pre-Sharpen.
+
 ## Features
 
 | # | Feature | Value | Effort | Concept |

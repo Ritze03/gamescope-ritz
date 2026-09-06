@@ -161,6 +161,13 @@ full numbers: `build-release/verify-shots/laptop-round2/`.
 
 ---
 
+## [ ] 7. Local contrast / clarity filter (feature-ideas F6)
+
+User approved 2026-09-06. Not started; gate: an A/B screenshot must read distinctly
+from Pre-Sharpen or it is dropped.
+
+---
+
 ## For the user to test (cannot be verified here)
 
 (empty — nothing completed yet this round)
