@@ -72,7 +72,7 @@ capture-and-sample dance by hand on the laptop. This is that dance, automated, w
 **no visible window** on the desktop and no laptop round trip.
 
 ```sh
-scripts/pixel-regression.sh                # run every check (~45s)
+scripts/pixel-regression.sh                # run every check (~100s)
 scripts/pixel-regression.sh --only outline # run one check by name
 scripts/pixel-regression.sh --keep         # leave the last instance running for
                                             # manual `gamescopectl` poking; prints

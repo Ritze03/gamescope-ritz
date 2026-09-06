@@ -50,7 +50,7 @@ dot is off", and so on).
 | Line | Left | Show lines | `line_enabled` | The four arms. |
 | | Left | Length | `line_length` | px, 1–64. Each arm's own length. |
 | | Left | Width | `line_width` | px, 1–16. **1 is exactly one pixel** — see 1px mode. |
-| | Left | Gap | `line_gap` | px, 0–64, from the centre column/row's *edge* to the arm. 0 joins the arms into a solid plus. |
+| | Left | Gap | `line_gap` | px, 0–64. **The TOTAL pixels missing across the centre** (2026-09-08, see [Gap](#gap)) — gap 1 is one pixel missing, not one per side. 0 joins the arms into a solid plus. |
 | | Left | Colour | `line_color` | `0xRRGGBB`, the shared RGB colour picker (`CompositeKind::Color`, as `PanelCursor.cpp` uses). |
 | | Left | Opacity | `line_opacity` | 0–1. The user's word is "transparency"; the row is labelled Opacity because a slider whose 0 means invisible reads backwards under the other name. `transparency` is a search keyword. |
 | Dot | Left | Show dot | `dot_enabled` | |
@@ -166,10 +166,71 @@ still whole); a thickness never snaps below 1; an arm whose length snaps
 below 1 is omitted. The centre snaps by parity (`detail::SnapCenter`): an
 odd thickness centres on a pixel, an even one on a pixel edge, so every
 element is exactly its thickness and mirror-symmetric about the snapped
-centre. The **gap is measured from the centre column/row's own edge**, so
-at gap 0 the arms touch the centre square; that square then joins the arms
-so a closed gap reads as one continuous plus, not two arms with a pixel
-missing.
+centre.
+
+### Gap
+
+**The gap is the TOTAL run of pixels missing across the centre** (changed
+2026-09-08), counting the centre pixel once — not a per-side inset. Before
+this change, a configured gap of *N* put *N* empty pixels on **each side**
+of the centre column/row, so the actual hole was `2N + width` pixels wide;
+a `line_gap` of 1 therefore looked like a wide 3+ pixel gap instead of a
+single missing pixel, however small the width. Concretely, for every arm
+width:
+
+- **Gap 0** — no hole at all: the arms meet and the centre pixel is drawn,
+  a solid plus (`Build()`'s pre-existing "join the crossing square" logic,
+  unchanged — see below).
+- **Gap 1** — exactly **one** pixel missing: the centre pixel itself. The
+  arms touch its edges on all four sides.
+- **Gap *N* (N ≥ 1)** — exactly *N* pixels missing, centred on the crossing.
+
+**Why (the user, 2026-09-08):** *"Make sure that the crosshair gaps middle
+pixel is counted twice. So a gap of 1px actually results in a single pixel
+missing in the middle."* The picture that came with the request showed
+today's behaviour (left) — arms far apart around a large empty centre — next
+to the wanted one (right) — arms meeting with exactly one pixel missing.
+The fix is `crosshair::HoleSplit()` (`CrosshairMath.h`): each arm's own
+inset from the crossing's far edge is `(gap − crossing_width)` split in
+half, rather than the OLD code adding the raw `gap` value symmetrically on
+top of the crossing's own width.
+
+**The even-gap bias.** A gap that cannot split evenly around one pixel (any
+even *N*, since the crossing itself may be an even number of pixels wide
+too) gives the leftover pixel to the **higher-coordinate side — right on
+the X axis, bottom (down) on the Y axis** — chosen because "increasing
+coordinate" is the one rule that names a side on both axes without a
+separate case for each. So gap 2 at width 1 leaves the centre pixel AND the
+pixel to its right missing (not to its left); gap 2 at width 1 vertically
+leaves the centre pixel and the pixel below it (not above). `HoleSplit()` is
+the single place this bias is decided; `crosshair.md`'s invariant and
+`tests/test_crosshair.cpp`'s "An even gap gives the extra pixel to the
+right and to the bottom" test both pin it.
+
+**This changes what an existing saved gap value looks like.** A `line_gap`
+of, say, 8 used to draw a ~19px-wide hole (`2·8 + width`) and now draws
+exactly an 8px one — visibly, noticeably tighter, at every saved profile,
+per-game config and global setting that has a nonzero gap. No migration
+rewrites the stored number: the user asked for the *new* gap meaning, not
+for old configs to keep rendering the old (unwanted) width, so the value is
+interpreted under the new rule as-is. Anyone who set a gap specifically to
+match the old look will need to raise it back up (roughly `2·old_value +
+width` to reproduce the old hole size, though a fresh, smaller value is
+probably what was actually wanted).
+
+The join-into-a-solid-plus behaviour at gap 0 is untouched by any of this:
+`Build()` still draws the crossing square explicitly whenever either axis'
+gap is exactly 0 (`HoleSplit()` special-cases gap 0 to return `(0, 0)`
+rather than trying to self-tile it — an odd crossing width cannot split
+into two equal non-negative shares, and self-tiling would have made one
+arm's own length one pixel shorter than its opposite for a *symmetric* gap
+of 0, which the "arm length still counts outward from the hole's edge" rule
+below forbids).
+
+**Arm length still counts outward from the hole's edge**, width, outline
+expansion, the dot and the hide-animation phases are all unaffected by this
+change — only where the two arms' own near edges sit relative to the
+crossing moved.
 
 **1px mode under Apply Scaling** (the pixel-path fallback only, see below):
 sizes snap with `lround` after scaling, so a 1px game-space line would
@@ -249,9 +310,12 @@ ahead of the HUD's render pass. Nothing of it goes through ImGui.
 > own scaler does to an in-game crosshair. Measured after the change
 > (`scripts/pixel-regression.sh crosshair-scaled`, 640×360 client stretched
 > 2x onto 1280×720, width 1, gap 8, length 12): arms **24** long, inner
-> ends **34** apart (2·16 + the 2 px centre column), **2** wide by ≥ 50 %
-> coverage, with **0.25** coverage beside each arm and **0.19** (= 0.25 ×
-> 0.75) past each end — the bilinear model exactly.
+> ends **16** apart (gap 8 × scale 2 — the TOTAL hole, [Gap](#gap)'s
+> 2026-09-08 semantics, scaled by the same factor as everything else; a
+> pre-2026-09-08 build measured 34 apart here, `2·16 + the 2px centre
+> column`, the OLD per-side formula), **2** wide by ≥ 50 % coverage, with
+> **0.25** coverage beside each arm and **0.19** (= 0.25 × 0.75) past each
+> end — the bilinear model exactly.
 
 > **Why linear, not pixel-snapped** (the user, 2026-09-05: *"it should
 > blur a bit and mix colors, instead of being just perfect pixels"*): the
@@ -486,9 +550,11 @@ the arithmetic):
   a bright flat client, and the digit core must come out *dark*.
 
 **Automated:** `scripts/pixel-regression.sh` runs the inversion-plus-crosshair
-pixel-sample above, plus the crosshair's own arm/gap/outline geometry, headlessly on
-every run — no laptop, no eyeballing. See `scripts/README.md`'s "Pixel regression"
-section.
+pixel-sample above, the crosshair's own arm/gap/outline geometry, the [Gap](#gap)
+invariant at width 1 and 2 / gap 0–3 / outline off and on (`crosshair-gap-invariant`),
+and the same invariant scaled by Apply Scaling (`crosshair-scaled`,
+`crosshair-scaled-gap`), headlessly on every run — no laptop, no eyeballing. See
+`scripts/README.md`'s "Pixel regression" section.
 
 ## Known limitation (pre-existing, shared with the HUD)
 
