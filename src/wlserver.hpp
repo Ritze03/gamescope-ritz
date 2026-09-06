@@ -193,6 +193,11 @@ struct wlserver_t {
 	//                                was locked
 	std::atomic<uint64_t> ulAbsoluteMotionsSent = { 0 };
 	std::atomic<uint64_t> ulAbsoluteMotionsSentLocked = { 0 };
+	//   ulRelativeMotionsSent        every zwp_relative_pointer_v1 event sent;
+	//                                one per movement, locked or not, so it
+	//                                is never lower than ulAbsoluteMotionsSent
+	//                                (see wlserver_mousemotion())
+	std::atomic<uint64_t> ulRelativeMotionsSent = { 0 };
 	std::atomic<uint64_t> ulResyncsSent = { 0 };
 	std::atomic<uint64_t> ulWarpsSuppressedLocked = { 0 };
 

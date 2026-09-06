@@ -62,3 +62,43 @@ if sdl2_dep.found()
 		dependencies: [sdl2_dep],
 	)
 endif
+
+# The host mouse for the same script: a zwlr_virtual_pointer_v1 client that
+# plugs a pointer into the private sway so the nested backend's own host path
+# (absolute samples, host lock, relative motion) runs for real. The protocol
+# XML is a verbatim copy of wlroots' protocol/wlr-virtual-pointer-unstable-v1.xml
+# (meson refuses to read a file out of a subproject); sway implements it.
+wayland_client_tests_dep = dependency('wayland-client', required: false)
+virtual_pointer_xml = files('wlr-virtual-pointer-unstable-v1.xml')
+if wayland_client_tests_dep.found()
+	virtual_pointer_proto = [
+		custom_target(
+			'wlr-virtual-pointer-unstable-v1-tests-protocol.c',
+			input: virtual_pointer_xml,
+			output: 'wlr-virtual-pointer-unstable-v1-protocol.c',
+			command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+		),
+		custom_target(
+			'wlr-virtual-pointer-unstable-v1-tests-client-protocol.h',
+			input: virtual_pointer_xml,
+			output: 'wlr-virtual-pointer-unstable-v1-client-protocol.h',
+			command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+		),
+	]
+	executable(
+		'virtual_pointer_tool',
+		['virtual_pointer_tool.c'] + virtual_pointer_proto,
+		dependencies: [wayland_client_tests_dep],
+	)
+endif
+
+# The CS2-shaped client: native SDL3 relative mode under Xwayland, with an
+# XI2 raw-event tap. See the file's own header.
+sdl3_dep = dependency('sdl3', required: false)
+if sdl3_dep.found()
+	executable(
+		'pointer_grab_client_x11',
+		['pointer_grab_client_x11.c'],
+		dependencies: [sdl3_dep, dep_x11, dep_xi],
+	)
+endif

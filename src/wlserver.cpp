@@ -937,7 +937,9 @@ static gamescope::ConCommand cc_wlserver_pointer_stats(
 	"Print the pointer-motion counters and constraint state: constraint (none/locked/confined), "
 	"whether the last input was an absolute host sample, the mapping in use, and how many "
 	"wl_pointer.motion events went to the client in total / while locked (must be 0), how many "
-	"absolute re-syncs were sent, and how many warps were suppressed by a lock.",
+	"zwp_relative_pointer_v1 events went out (one per movement, locked or not -- must never be "
+	"lower than motions), how many absolute re-syncs were sent, and how many warps were "
+	"suppressed by a lock.",
 	[]( std::span<std::string_view> args )
 	{
 		const struct wlr_pointer_constraint_v1 *pConstraint = wlserver.mouse_constraint.load( std::memory_order_relaxed );
@@ -947,7 +949,7 @@ static gamescope::ConCommand cc_wlserver_pointer_stats(
 
 		console_log.infof( "wlserver_pointer_stats: constraint=%s abs_current=%d last_abs=(%.4f,%.4f) "
 		                   "cursor=(%.1f,%.1f) mapping=(%.4f,%.4f,%.1f,%.1f) motions=%" PRIu64
-		                   " motions_locked=%" PRIu64 " resyncs=%" PRIu64 " warps_suppressed_locked=%" PRIu64,
+		                   " motions_locked=%" PRIu64 " relatives=%" PRIu64 " resyncs=%" PRIu64 " warps_suppressed_locked=%" PRIu64,
 			pszConstraint,
 			wlserver.bAbsolutePointerCurrent ? 1 : 0,
 			wlserver.flLastAbsolutePointerX, wlserver.flLastAbsolutePointerY,
@@ -955,6 +957,7 @@ static gamescope::ConCommand cc_wlserver_pointer_stats(
 			focusedWindowScaleX, focusedWindowScaleY, focusedWindowOffsetX, focusedWindowOffsetY,
 			wlserver.ulAbsoluteMotionsSent.load( std::memory_order_relaxed ),
 			wlserver.ulAbsoluteMotionsSentLocked.load( std::memory_order_relaxed ),
+			wlserver.ulRelativeMotionsSent.load( std::memory_order_relaxed ),
 			wlserver.ulResyncsSent.load( std::memory_order_relaxed ),
 			wlserver.ulWarpsSuppressedLocked.load( std::memory_order_relaxed ) );
 	} );
@@ -1166,10 +1169,15 @@ static void wlserver_handle_key(struct wl_listener *listener, void *data)
 	bump_input_counter();
 }
 
+// The one place a zwp_relative_pointer_v1.relative_motion leaves for the
+// client. Sent alongside EVERY pointer movement, locked or not, exactly as
+// upstream and every wlroots/Mutter/KWin host do -- see wlserver_mousemotion()
+// for why the 2026-08-28 "relative only while locked" rule had to go.
 static void wlserver_perform_rel_pointer_motion(double unaccel_dx, double unaccel_dy)
 {
 	assert( wlserver_is_lock_held() );
 
+	wlserver.ulRelativeMotionsSent.fetch_add( 1, std::memory_order_relaxed );
 	wlr_relative_pointer_manager_v1_send_relative_motion( wlserver.relative_pointer_manager, wlserver.wlr.seat, 0, unaccel_dx, unaccel_dy, unaccel_dx, unaccel_dy );
 }
 
@@ -3970,30 +3978,30 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 	// it). Nothing may replay it until the next absolute sample arrives.
 	wlserver.bAbsolutePointerCurrent = false;
 
-	// Exactly one channel carries each movement, which is the half of the
-	// relative/absolute exclusivity upstream leaves out.
-	//
-	// wlserver_apply_constraint() below already drops the absolute
-	// wl_pointer.motion for a LOCKED constraint, because a locked client reads
-	// relative motion instead. The mirror image was missing: relative motion was
-	// sent unconditionally, so an *unlocked* client got the same movement twice
-	// over -- once as zwp_relative_pointer_v1 (which Xwayland republishes as XI2
-	// raw motion) and once as wl_pointer.motion (which drives the X sprite). A
-	// client that reads both -- several Wine/Proton raw-input paths do -- then
-	// applies it twice: the doubled look/aim sensitivity reported under
-	// force-grab. Measured through wlserver_debug_mouse_motion: 20 injections of
-	// dx=10 produced 20 relative-motion events AND 20 wl_pointer.motion events,
-	// 400px of delivered movement for 200px of input.
-	//
-	// Force-grab is what exposes it: with force-grab off the nested backends feed
-	// absolute host motion into wlserver_touchmotion(), which never emits
-	// relative motion at all, so switching force-grab on used to *add* a second
-	// channel. It must not change what the client receives.
-	//
-	// So: LOCKED -> relative only, everything else -> absolute only.
-	// See superdoc/features/cursor-pipeline.md.
-	if ( wlserver_pointer_is_locked() )
-		wlserver_perform_rel_pointer_motion( dx, dy );
+	// Relative motion goes out on EVERY movement, locked or not -- upstream
+	// verbatim, restored 2026-09-06 after the 2026-08-28 "relative only while
+	// LOCKED" rule (32b98bb) turned out to be the CS2 "mouse springs back to
+	// centre" bug. The two channels are not a duplicate: Xwayland has two
+	// pointer slaves, "xwayland-pointer" (absolute axes, fed by
+	// wl_pointer.motion) and "xwayland-relative-pointer" (relative axes, fed by
+	// this event), and when a frame carries BOTH it posts the raw deltas from
+	// the relative slave and the sprite position through the relative slave
+	// with NORAW -- one raw event per movement, never two. An absolute-only
+	// movement instead goes through the ABSOLUTE slave, raw events included,
+	// and the master "Virtual core pointer" takes on that slave's axis
+	// classes. SDL3 (CS2) caches the master's classes at the first raw event
+	// it sees and never refreshes them: a menu driven absolute-only made it
+	// remember "absolute", so the match's relative deltas were differenced
+	// (delta = this raw value minus the last) -- one jump the size of the
+	// last menu position, nothing while moving steadily, a kick back on every
+	// change of direction. Measured with tests/pointer_grab_client_x11.c:
+	// 10 injections of dx=5 after 4 absolute samples reached SDL as one
+	// xrel=-592. With relative motion on every movement the master never
+	// leaves the relative slave and the same 10 injections arrive as 10 x
+	// xrel=5. The 08-28 "2.0x" measurement added the sprite's travel to the
+	// raw deltas of the same movement; nothing was delivered twice.
+	// See superdoc/features/cursor-pipeline.md, "The device SDL3 remembers".
+	wlserver_perform_rel_pointer_motion( dx, dy );
 
 	if ( !wlserver_apply_constraint( &dx, &dy ) )
 	{
@@ -4039,6 +4047,9 @@ void wlserver_mousewarp( double x, double y, uint32_t time, bool bSynthetic )
 		return;
 	}
 
+	const double flPrevX = wlserver.mouse_surface_cursorx;
+	const double flPrevY = wlserver.mouse_surface_cursory;
+
 	wlserver.mouse_surface_cursorx = x;
 	wlserver.mouse_surface_cursory = y;
 
@@ -4050,6 +4061,15 @@ void wlserver_mousewarp( double x, double y, uint32_t time, bool bSynthetic )
 
 	wlserver_oncursorevent();
 
+	// A warp is a movement too, and the same rule as wlserver_mousemotion()
+	// applies: an absolute event on its own moves Xwayland's master pointer
+	// onto the absolute slave, and whichever slave posted first is what SDL3
+	// remembers for the rest of the game. With force-grab off every host
+	// sample arrives here, so a menu of these followed by a locked match is
+	// exactly the CS2 sequence. The companion delta is the clamped travel,
+	// so a client that integrates relative motion (Xwayland's warp emulator
+	// does, for a hidden-cursor window) lands where the absolute event says.
+	wlserver_perform_rel_pointer_motion( wlserver.mouse_surface_cursorx - flPrevX, wlserver.mouse_surface_cursory - flPrevY );
 	wlserver_send_absolute_motion( time );
 }
 

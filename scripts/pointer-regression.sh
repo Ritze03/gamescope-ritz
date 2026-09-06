@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# pointer-regression.sh -- one-command headless regression gate for the rule
-# "a LOCKED pointer never receives an absolute motion event", and for the
-# absolute-pointer re-sync firing exactly once per real mapping change.
+# pointer-regression.sh -- one-command headless regression gate for three
+# pointer rules: "a LOCKED pointer never receives an absolute motion event",
+# "the absolute-pointer re-sync fires exactly once per real mapping change",
+# and -- the one that actually fixed CS2 -- "every movement carries relative
+# motion, so Xwayland's master pointer never changes device under a game".
 #
 # WHY THIS EXISTS
 #   2026-09-06, CS2: mouse look in play "behaved like a joystick, constantly
@@ -20,6 +22,30 @@
 #   superdoc/features/cursor-pipeline.md, "Locked pointer => never an
 #   absolute event".
 #
+#   2026-09-06, later the same day: "Still broken. Same behavior." The gate
+#   above passed because its client locked before it ever saw a menu. CS2's
+#   order is menu first: absolute pointer, THEN relative mode. Xwayland feeds
+#   absolute motion through one X slave device (xwayland-pointer, absolute
+#   axes) and relative motion through another (xwayland-relative-pointer),
+#   and the master "Virtual core pointer" copies the axis classes of
+#   whichever slave posted last. SDL3 (CS2) caches the master's classes at
+#   the first raw event it sees and never refreshes them, so a menu driven
+#   by absolute-only events makes it read the match's relative deltas as
+#   absolute positions and difference them: one jump the size of the last
+#   menu position, nothing while moving steadily, a kick back on every
+#   change of direction. That is the joystick, and it survived the warp
+#   gate because no absolute event was involved any more. Every real
+#   compositor sends zwp_relative_pointer_v1 motion with every movement --
+#   Xwayland then routes both channels through the RELATIVE slave (the
+#   absolute half with no raw event), and the master never changes device.
+#   Upstream gamescope did the same in wlserver_mousemotion(); this fork's
+#   32b98bb (2026-08-28) had narrowed it to "only while locked", and the
+#   host-sample warp path never had it. Both now send it. The x11-* checks
+#   below replay CS2's order with a native SDL3 client and, with a virtual
+#   host mouse plugged into the private sway, through the nested backend's
+#   real host path with force-grab off and on. See cursor-pipeline.md, "The
+#   device SDL3 remembers".
+#
 # HOW IT RUNS WITHOUT TOUCHING THE USER'S DESKTOP
 #   Same recipe as pixel-regression.sh (read that script's header for the
 #   full reasoning): a private, invisible sway (WLR_BACKENDS=headless, its own
@@ -29,13 +55,26 @@
 #   is ever visible on the real desktop and no other gamescope on the machine
 #   can address this instance.
 #
-# THE TEST CLIENT
+# THE TEST CLIENTS
 #   build-release/tests/pointer_lock_client (tests/pointer_lock_client.c): a
 #   real SDL2 window inside gamescope's Xwayland. With --lock it calls
 #   SDL_SetRelativeMouseMode(SDL_TRUE) -- exactly what a first-person game
 #   does in play -- which makes Xwayland request the LOCKED constraint from
 #   gamescope. It prints one MOTION line per SDL_MOUSEMOTION it receives, so
 #   the count of what "the game" saw is read straight off its log.
+#
+#   build-release/tests/pointer_grab_client_x11 (tests/pointer_grab_client_x11.c):
+#   the CS2-shaped one -- native SDL3, SDL_SetWindowRelativeMouseMode, with
+#   --lock-after S so it is a plain menu first, and an XI2 tap that prints
+#   every raw event with its device (RAW dev= src=) and the master's axis
+#   mode as SDL3 saw it (DEVICE ... axis0=rel|abs). Needs SDL3 at build time;
+#   the x11-* checks are SKIPped without it.
+#
+#   build-release/tests/virtual_pointer_tool (tests/virtual_pointer_tool.c):
+#   a zwlr_virtual_pointer_v1 client that plugs a host mouse into the
+#   private sway (which has no input devices) so the x11-host check drives
+#   the nested backend's real host path. Kept alive for the whole run: sway
+#   drops the seat's pointer the moment the last virtual pointer goes.
 #
 # WHAT IS DRIVEN
 #   wlserver_debug_mouse_motion     relative host motion (the grabbed path)
@@ -45,8 +84,11 @@
 #   steamcompmgr_debug_set_nested_mode "<w> <h> 0"   a runtime resolution
 #                                   change, the item-10 path
 #   wlserver_pointer_stats          the counters: motions / motions_locked /
-#                                   resyncs / warps_suppressed_locked, and
-#                                   the constraint state
+#                                   relatives / resyncs /
+#                                   warps_suppressed_locked, and the
+#                                   constraint state
+#   virtual_pointer_tool            host absolute samples and host relative
+#                                   motion through the private sway
 #
 # CHECKS (each is a check_* function; assertions are the named constants)
 #   locked-relative   relative motion still reaches the locked client
@@ -58,10 +100,21 @@
 #   unlocked-resync   with no constraint: one absolute sample, then a scaler
 #                     toggle -> resyncs +1 and client +1; the same value
 #                     again -> +0; 2 s idle -> +0; a nested-mode change -> +1
+#   x11-menu-lock     CS2's order, SDL3 client: absolute samples while a
+#                     menu, then relative mode, then 10 relative injections
+#                     -> the master pointer SDL3 cached is relative, all 10
+#                     arrive as xrel=5, relatives >= motions
+#   x11-locked-abs    the SDL3 client, locked: 6 absolute samples -> +0
+#   x11-host          the same order through the nested backend's real host
+#                     path: a virtual host mouse moves absolutely (force-grab
+#                     off), the client locks, the host confirms the lock and
+#                     sends relative motion -> 10 x xrel=5; force-grab on ->
+#                     5 more x xrel=5
 #
 # USAGE
 #   scripts/pointer-regression.sh                     # every check (~30s)
 #   scripts/pointer-regression.sh --only locked-absolute
+#   scripts/pointer-regression.sh --only x11-host
 #   scripts/pointer-regression.sh --keep              # leave the last instance up
 #   scripts/pointer-regression.sh --gamescope <bin>   # another binary (e.g. the
 #                                                     # pre-fix one, for a baseline;
@@ -84,6 +137,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GAMESCOPE_BIN="$REPO_ROOT/build-release/src/gamescope"
 GAMESCOPECTL_BIN="$REPO_ROOT/build-release/src/gamescopectl"
 CLIENT_BIN="$REPO_ROOT/build-release/tests/pointer_lock_client"
+CLIENT_X11_BIN="$REPO_ROOT/build-release/tests/pointer_grab_client_x11"
+VP_TOOL_BIN="$REPO_ROOT/build-release/tests/virtual_pointer_tool"
 
 # ---------------------------------------------------------------------------
 # Named constants
@@ -93,6 +148,10 @@ OUT_H=720
 REL_DX=5
 REL_COUNT=10                 # relative injections; the locked client must see all of them
 ABS_SAMPLES=6                # absolute injections while locked; the client must see none
+MENU_SAMPLES=4               # absolute samples delivered to a menu before it locks (x11-*)
+LOCK_AFTER_S=3               # how long the SDL3 client stays a menu before locking
+HOST_REL_DX=5                # host relative motion per step (x11-host), force-grab off
+HOST_FG_COUNT=5              # host relative steps after force-grab on
 SCALER_AUTO=0                # GamescopeUpscaleScaler::AUTO
 SCALER_STRETCH=4             # GamescopeUpscaleScaler::STRETCH
 # Nested mode changes (refresh 0 = follow host). MODE_A has a different
@@ -148,6 +207,8 @@ SWAY_CFG="$RUNDIR/sway.conf"
 
 SWAY_PID=""
 GS_PID=""
+VP_PID=""
+VP_FIFO=""
 
 log() { echo "[pointer-regression] $*" >&2; }
 
@@ -162,6 +223,13 @@ teardown_instance() {
 
 teardown_all() {
 	teardown_instance
+	if [[ -n "$VP_PID" ]] && kill -0 "$VP_PID" 2>/dev/null; then
+		vp quit 2>/dev/null || true
+		exec 8>&- 2>/dev/null || true
+		kill "$VP_PID" 2>/dev/null || true
+		wait "$VP_PID" 2>/dev/null || true
+	fi
+	VP_PID=""
 	if [[ -n "$SWAY_PID" ]] && kill -0 "$SWAY_PID" 2>/dev/null; then
 		kill "$SWAY_PID" 2>/dev/null || true
 		wait "$SWAY_PID" 2>/dev/null || true
@@ -201,6 +269,10 @@ if ! command -v sway >/dev/null 2>&1; then
 	log "FATAL: sway not found -- needed as the private, invisible host compositor."
 	exit 2
 fi
+X11_CLIENT_AVAILABLE=1
+[[ -x "$CLIENT_X11_BIN" ]] || { X11_CLIENT_AVAILABLE=0; log "note: $CLIENT_X11_BIN not built (needs SDL3) -- x11-* checks will be SKIPped"; }
+VP_TOOL_AVAILABLE=1
+[[ -x "$VP_TOOL_BIN" ]] || { VP_TOOL_AVAILABLE=0; log "note: $VP_TOOL_BIN not built -- x11-host will be SKIPped"; }
 
 # ---------------------------------------------------------------------------
 # Private sway host
@@ -234,6 +306,31 @@ start_sway() {
 	log "private sway ready: pid $SWAY_PID, socket $SWAY_WL_NAME"
 }
 
+# The host mouse: one virtual_pointer_tool for the whole run, fed through a
+# fifo held open on fd 8 (closing it would end the tool and, with it, the
+# seat's pointer). Started before any gamescope instance so every instance
+# binds a wl_pointer from the start, as it does on a real desktop.
+start_vp() {
+	[[ "$VP_TOOL_AVAILABLE" -eq 1 ]] || return 0
+	VP_FIFO="$RUNDIR/vp.fifo"
+	mkfifo "$VP_FIFO"
+	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" \
+		"$VP_TOOL_BIN" < "$VP_FIFO" > "$RUNDIR/virtual-pointer.log" 2>&1 9>&- &
+	VP_PID=$!
+	exec 8>"$VP_FIFO"
+	local waited=0
+	while (( waited < 50 )); do
+		grep -q '^READY' "$RUNDIR/virtual-pointer.log" 2>/dev/null && break
+		kill -0 "$VP_PID" 2>/dev/null || { log "note: virtual_pointer_tool exited early -- x11-host will be SKIPped"; cat "$RUNDIR/virtual-pointer.log" >&2; VP_TOOL_AVAILABLE=0; VP_PID=""; return 0; }
+		sleep 0.1
+		waited=$((waited + 1))
+	done
+	log "host mouse ready: virtual_pointer_tool pid $VP_PID"
+}
+
+# vp <command line> -- one line to the tool (abs x y w h | move dx dy | ...).
+vp() { echo "$*" >&8; }
+
 # ---------------------------------------------------------------------------
 # One gamescope instance with one client (locked or not). Windowed client,
 # no --force-windows-fullscreen: a 640x480 window in a 1280x720 output is
@@ -245,16 +342,18 @@ CLIENT_LOG=""
 GS_WL_NAME=""
 
 start_instance() {
-	local lockarg="$1"   # "--lock" or ""
+	local lockarg="$1"          # "--lock", "--lock-after N" or ""
+	local client="${2:-$CLIENT_BIN}"
+	local tag="${3:-${lockarg#--}}"
 	teardown_instance
 
-	GS_LOG="$RUNDIR/gamescope-${lockarg#--}.log"
-	CLIENT_LOG="$RUNDIR/client-${lockarg#--}.log"
+	GS_LOG="$RUNDIR/gamescope-${tag}.log"
+	CLIENT_LOG="$RUNDIR/client-${tag}.log"
 	: > "$CLIENT_LOG"
-	log "starting gamescope instance, client ${lockarg:-unlocked}"
+	log "starting gamescope instance, client $(basename "$client") ${lockarg:-unlocked}"
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
 		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' $lockarg --seconds 600 > '$CLIENT_LOG' 2>&1" \
+		sh -c "SDL_VIDEODRIVER=x11 exec '$client' $lockarg --seconds 600 > '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -331,11 +430,11 @@ wait_for_lock() {
 		done
 		return 1
 	fi
-	# No stats (a pre-fix binary): probe through behaviour. This fork sends
-	# relative motion only to a LOCKED client (cursor-pipeline.md, "one
-	# channel per movement"), so a 1px relative injection that shows up at
-	# the client proves the lock. The probe lines are counted before the
-	# checks start, so they do not pollute them.
+	# No stats (a pre-fix binary): probe through behaviour -- a 1px relative
+	# injection that shows up at the client as xrel=1. (Weak: an unlocked
+	# client reports the same from core motion; it only rules out "nothing
+	# arrives at all".) The probe lines are counted before the checks start,
+	# so they do not pollute them.
 	while (( waited < LOCK_TIMEOUT_S * 2 )); do
 		local before; before="$(grep -c '^MOTION.*xrel=1 ' "$CLIENT_LOG" || true)"
 		gsctl wlserver_debug_mouse_motion "1 0 1" >/dev/null 2>&1 || true
@@ -516,15 +615,123 @@ check_unlocked_resync() {
 }
 
 # ---------------------------------------------------------------------------
+# Checks -- the SDL3 (CS2-shaped) client, CS2's order
+# ---------------------------------------------------------------------------
+# x11_menu_phase: MENU_SAMPLES absolute samples delivered to the not-yet-locked
+# client, then wait for its lock. Shared by x11-menu-lock and x11-locked-abs,
+# which run on one instance.
+x11_menu_phase() {
+	local i
+	for (( i = 0; i < MENU_SAMPLES; i++ )); do
+		gsctl wlserver_debug_absolute_motion "0.$((30 + i * 5)) 0.$((30 + i * 3))" >/dev/null 2>&1 || true
+		sleep 0.1
+	done
+	trace "x11 menu phase: $MENU_SAMPLES absolute samples"
+}
+
+check_x11_menu_lock() {
+	should_run x11-menu-lock || { record SKIP x11-menu-lock "--only excluded it"; return; }
+	if ! grep -q '^LOCKED' "$CLIENT_LOG"; then
+		record FAIL x11-menu-lock "the SDL3 client never entered relative mode: $(stats_line)"
+		return
+	fi
+	local before after
+	before="$(client_motions)"
+	gsctl wlserver_debug_mouse_motion "$REL_DX 0 $REL_COUNT" >/dev/null 2>&1 || true
+	sleep 0.5
+	after="$(client_motions)"
+	assert_eq x11-menu-lock "client MOTION lines from $REL_COUNT relative injections after a menu" "$REL_COUNT" "$((after - before))"
+	local dxs; dxs="$(grep '^MOTION' "$CLIENT_LOG" | tail -n "$REL_COUNT" | grep -c "xrel=$REL_DX.0 " || true)"
+	assert_eq x11-menu-lock "of which carried xrel=$REL_DX.0 (not differenced)" "$REL_COUNT" "$dxs"
+	# The device SDL3 cached for the master pointer -- the whole mechanism.
+	local axis; axis="$(grep '^DEVICE id=2 ' "$CLIENT_LOG" | head -1 | grep -o 'axis0=[a-z]*' | cut -d= -f2 || true)"
+	assert_eq x11-menu-lock "master pointer axis mode as SDL3 cached it" rel "${axis:-none}"
+	if [[ "$STATS_AVAILABLE" -eq 1 ]]; then
+		local line m r; line="$(stats_line)"
+		m="$(stat motions "$line")"; r="$(stat relatives "$line")"
+		if (( r >= m && r > 0 )); then
+			record PASS x11-menu-lock "relatives=$r >= motions=$m (every movement carried relative motion)"
+		else
+			record FAIL x11-menu-lock "relatives=$r motions=$m -- a movement went out absolute-only"
+		fi
+	fi
+}
+
+check_x11_locked_absolute() {
+	should_run x11-locked-abs || { record SKIP x11-locked-abs "--only excluded it"; return; }
+	local before after i
+	before="$(client_motions)"
+	for (( i = 0; i < ABS_SAMPLES / 2; i++ )); do
+		gsctl wlserver_debug_absolute_motion "0.25 0.25" >/dev/null 2>&1 || true
+		gsctl wlserver_debug_absolute_motion "0.75 0.75" >/dev/null 2>&1 || true
+	done
+	sleep 0.5
+	after="$(client_motions)"
+	assert_eq x11-locked-abs "client MOTION lines from $ABS_SAMPLES absolute samples while locked (SDL3)" 0 "$((after - before))"
+	[[ "$STATS_AVAILABLE" -eq 1 ]] && assert_eq x11-locked-abs "motions_locked" 0 "$(stat motions_locked)"
+}
+
+# The host path: a virtual mouse in the private sway. Force-grab off, so the
+# menu's samples arrive as absolute host motion (wlserver_touchmotion ->
+# wlserver_mousewarp), the game's lock makes gamescope lock the HOST pointer,
+# and once the host confirms it the host's relative motion is what the
+# client gets. Then force-grab on, which keeps the host lock, for good measure.
+check_x11_host() {
+	should_run x11-host || { record SKIP x11-host "--only excluded it"; return; }
+	# The private sway has no keyboard, so gamescope never gets keyboard
+	# focus; by default it drops host relative motion without it.
+	gsctl wayland_mouse_relmotion_without_keyboard_focus 1 >/dev/null 2>&1 || true
+	local c0 c1 i
+	c0="$(client_motions)"
+	vp abs 400 300 "$OUT_W" "$OUT_H"; sleep 0.2
+	for (( i = 0; i < MENU_SAMPLES; i++ )); do vp move 30 10; sleep 0.15; done
+	sleep 0.3
+	c1="$(client_motions)"
+	trace "x11-host menu phase: 1 absolute + $MENU_SAMPLES host moves, force-grab off"
+	if (( c1 - c0 < MENU_SAMPLES )); then
+		record FAIL x11-host "host motion did not reach the client in the menu (client +$((c1 - c0)) from $((MENU_SAMPLES + 1)) host samples)"
+		return
+	fi
+	record PASS x11-host "host absolute samples reached the menu (client +$((c1 - c0)))"
+	if ! wait_for_lock; then
+		record FAIL x11-host "no LOCKED constraint within ${LOCK_TIMEOUT_S}s after the client asked: $(stats_line)"
+		return
+	fi
+	sleep 1.0   # the host has to confirm gamescope's own lock before relative motion flows
+	c0="$(client_motions)"
+	for (( i = 0; i < REL_COUNT; i++ )); do vp move "$HOST_REL_DX" 0; sleep 0.05; done
+	sleep 0.5
+	c1="$(client_motions)"
+	assert_eq x11-host "client MOTION lines from $REL_COUNT host relative steps, locked, force-grab off" "$REL_COUNT" "$((c1 - c0))"
+	local dxs; dxs="$(grep '^MOTION' "$CLIENT_LOG" | tail -n "$REL_COUNT" | grep -c "xrel=$HOST_REL_DX.0 " || true)"
+	assert_eq x11-host "of which carried xrel=$HOST_REL_DX.0" "$REL_COUNT" "$dxs"
+	local axis; axis="$(grep '^DEVICE id=2 ' "$CLIENT_LOG" | head -1 | grep -o 'axis0=[a-z]*' | cut -d= -f2 || true)"
+	assert_eq x11-host "master pointer axis mode as SDL3 cached it (host-driven menu)" rel "${axis:-none}"
+	# Force-grab on: the host lock is already held; motion must keep flowing.
+	gsctl debug_set_force_relative_mouse 1 >/dev/null 2>&1 || true
+	sleep 0.5
+	c0="$(client_motions)"
+	for (( i = 0; i < HOST_FG_COUNT; i++ )); do vp move "$HOST_REL_DX" 0; sleep 0.05; done
+	sleep 0.5
+	c1="$(client_motions)"
+	assert_eq x11-host "client MOTION lines from $HOST_FG_COUNT host relative steps, force-grab on" "$HOST_FG_COUNT" "$((c1 - c0))"
+	[[ "$STATS_AVAILABLE" -eq 1 ]] && assert_eq x11-host "motions_locked" 0 "$(stat motions_locked)"
+	trace "x11-host done"
+}
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 log "binary: $GAMESCOPE_BIN"
 log "results: $OUT_DIR"
 start_sway
+start_vp
 
-need_locked=0; need_unlocked=0
+need_locked=0; need_unlocked=0; need_x11=0; need_x11_host=0
 for c in locked-relative locked-absolute locked-mapping; do should_run "$c" && need_locked=1; done
 should_run unlocked-resync && need_unlocked=1
+for c in x11-menu-lock x11-locked-abs; do should_run "$c" && need_x11=1; done
+should_run x11-host && need_x11_host=1
 
 if [[ "$need_locked" -eq 1 ]]; then
 	start_instance "--lock"
@@ -546,6 +753,33 @@ fi
 if [[ "$need_unlocked" -eq 1 ]]; then
 	start_instance ""
 	check_unlocked_resync
+fi
+
+if [[ "$need_x11" -eq 1 ]]; then
+	if [[ "$X11_CLIENT_AVAILABLE" -eq 1 ]]; then
+		start_instance "--lock-after $LOCK_AFTER_S" "$CLIENT_X11_BIN" "x11-menu"
+		x11_menu_phase
+		if wait_for_lock; then
+			sleep 0.5
+			check_x11_menu_lock
+			check_x11_locked_absolute
+		else
+			record FAIL x11-menu-lock "no LOCKED constraint within ${LOCK_TIMEOUT_S}s: $(stats_line)"
+			record SKIP x11-locked-abs "no lock"
+		fi
+	else
+		record SKIP x11-menu-lock "pointer_grab_client_x11 not built (needs SDL3)"
+		record SKIP x11-locked-abs "pointer_grab_client_x11 not built (needs SDL3)"
+	fi
+fi
+
+if [[ "$need_x11_host" -eq 1 ]]; then
+	if [[ "$X11_CLIENT_AVAILABLE" -eq 1 && "$VP_TOOL_AVAILABLE" -eq 1 ]]; then
+		start_instance "--lock-after $(( LOCK_AFTER_S + 2 ))" "$CLIENT_X11_BIN" "x11-host"
+		check_x11_host
+	else
+		record SKIP x11-host "needs pointer_grab_client_x11 (SDL3) and virtual_pointer_tool"
+	fi
 fi
 
 # ---------------------------------------------------------------------------

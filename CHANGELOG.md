@@ -32,6 +32,11 @@ The newest version below is the one this build reports.
   every area's header badge names the profile being edited.
 
 ### Fixed
+- **CS2 mouse look no longer springs back to centre**: the in-match "joystick" drift --
+  a jump when play starts, nothing while moving steadily, a kick back on every change of
+  direction, in a match but not in the menus, with force grab cursor on or off -- is
+  gone; every pointer movement now also carries relative motion, as on any other
+  compositor, so the game reads its raw mouse deltas as deltas.
 - **The first change you make in a session takes effect immediately**: an Upscaling,
   HDR, VRR, tearing, cursor-grab or Resolution change made first in a session -- or
   first after switching profile -- no longer needs a second, identical change before

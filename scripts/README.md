@@ -123,13 +123,16 @@ came up — not a verdict on the feature; the log line above it says which.
 Uses `python3`'s `PIL` (already installed on this machine; no new dependency was
 added — the script fails loudly with a pointer back here if it's ever missing).
 
-## Pointer regression: a locked pointer never gets an absolute event
+## Pointer regression: a locked pointer never gets an absolute event, and every movement carries relative motion
 
 `pointer-regression.sh` is the same headless recipe as the pixel gate (private invisible
 sway, nested `gamescope --backend wayland`, `gamescopectl` ConCommands, no OS input) for the
-input rule behind the 2026-09-06 CS2 fix: **a game holding a pointer lock must never receive
-`wl_pointer.motion`**, and the absolute-pointer re-sync after a mapping change must fire
-exactly once per real change while unlocked. Non-zero exit gates a commit.
+input rules behind the two 2026-09-06 CS2 fixes: **a game holding a pointer lock must never
+receive `wl_pointer.motion`**, the absolute-pointer re-sync after a mapping change must fire
+exactly once per real change while unlocked, and **every movement must carry
+`zwp_relative_pointer_v1` motion** so Xwayland's master pointer never changes device under a
+game (the one that actually fixed CS2 -- SDL3 caches that device once, in the menu). Non-zero
+exit gates a commit.
 
 ```sh
 scripts/pointer-regression.sh                     # every check (~30s)
@@ -138,20 +141,28 @@ scripts/pointer-regression.sh --keep              # leave the last instance runn
 scripts/pointer-regression.sh --gamescope <bin>   # another binary, e.g. a pre-fix one
 ```
 
-**The client** is `build-release/tests/pointer_lock_client` (`tests/pointer_lock_client.c`,
+**The clients** are `build-release/tests/pointer_lock_client` (`tests/pointer_lock_client.c`,
 built with `--test`): a real SDL2 window inside gamescope's Xwayland that, with `--lock`,
 calls `SDL_SetRelativeMouseMode(SDL_TRUE)` -- what a first-person game does in play -- and
-prints one `MOTION` line per `SDL_MOUSEMOTION` it receives. Xwayland republishes every
+prints one `MOTION` line per `SDL_MOUSEMOTION` it receives (Xwayland republishes every
 pointer event as XI2 raw motion and SDL reads raw valuators as deltas, so an absolute event
-that reaches a locked client shows up here as a position-sized jump (`xrel=640` for a sample
-at the output centre) -- the "joystick" of the report, measurable.
+that reaches a locked client shows up here as a position-sized jump); and
+`build-release/tests/pointer_grab_client_x11` (`tests/pointer_grab_client_x11.c`, needs SDL3):
+the CS2-shaped one, native SDL3 with `--lock-after S` so it is a menu first, and an XI2 tap
+that prints every raw event with its device (`RAW dev= src=`) and the master pointer's axis
+mode as SDL3 cached it (`DEVICE ... axis0=rel|abs`). **The host mouse** for the `x11-host`
+check is `build-release/tests/virtual_pointer_tool` (`tests/virtual_pointer_tool.c`), a
+`zwlr_virtual_pointer_v1` client that plugs a pointer into the private sway, which otherwise
+has no input devices, and stays alive for the run (sway drops the seat's pointer with the
+last virtual one).
 
 **What is driven:** `wlserver_debug_mouse_motion` (relative), `wlserver_debug_absolute_motion`
 (an absolute host sample), `overlay_e2_set display.filter.scaler 4|0` (Stretch/Auto: a
 mapping change with no resize), `steamcompmgr_debug_set_nested_mode "<w> <h> 0"` (a runtime
-resolution change), and `wlserver_pointer_stats` for the compositor-side counters
-(`motions`, `motions_locked`, `resyncs`, `warps_suppressed_locked`) plus the constraint
-state. A binary without `wlserver_pointer_stats` gets its compositor-side assertions
+resolution change), `virtual_pointer_tool` for host absolute samples and host relative motion,
+and `wlserver_pointer_stats` for the compositor-side counters
+(`motions`, `motions_locked`, `relatives`, `resyncs`, `warps_suppressed_locked`) plus the
+constraint state. A binary without `wlserver_pointer_stats` gets its compositor-side assertions
 SKIPped and is judged on the client counts alone (how the pre-fix baseline was measured).
 
 **Checks:** `locked-relative` (relative motion still reaches the locked client -- proves the
@@ -159,12 +170,19 @@ lock is real), `locked-absolute` (6 absolute samples: client +0, `motions_locked
 `locked-mapping` (2 scaler toggles + 2 mode changes: `resyncs` +0, client +0, and
 `warps_suppressed_locked` advanced, or the mapping never moved and the check is void),
 `unlocked-resync` (one sample -> client +1; 2 s idle -> +0; Auto->Stretch -> exactly +1; the
-same value again -> +0; a 5:4 nested mode -> +1). The nested mode and the sample point are
+same value again -> +0; a 5:4 nested mode -> +1), `x11-menu-lock` (CS2's order with the SDL3
+client: 4 absolute samples to the menu, then relative mode, then 10 relative injections ->
+the cached master axis is `rel`, all 10 arrive as `xrel=5.0`, `relatives >= motions`),
+`x11-locked-abs` (the SDL3 client locked: 6 absolute samples -> +0), `x11-host` (the same
+order through the nested backend's real host path with the virtual mouse, force-grab off:
+menu samples arrive, the client locks, the host confirms and 10 host steps arrive as
+`xrel=5.0`; then force-grab on: 5 more). The nested mode and the sample point are
 deliberately non-degenerate -- a same-aspect mode under Auto does not move the mapping and
 the output centre maps to the window centre under every scaler; both are pinned in
 `tests/test_pointer_mapping.cpp`. Logs and `results.txt` land in
 `build-release/verify-shots/pointer-regression/<timestamp>/`. Spec and measurements:
-`superdoc/features/cursor-pipeline.md`, "Locked pointer => never an absolute event".
+`superdoc/features/cursor-pipeline.md`, "Locked pointer => never an absolute event" and "The
+device SDL3 remembers".
 
 ## Installing and updating gamescope-ritz
 
