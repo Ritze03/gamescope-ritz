@@ -1,19 +1,27 @@
 # Resolution and refresh at runtime (nested mode)
 
 The Display > **Resolution** area of the settings overlay (`src/Overlay/PanelDisplay.cpp`,
-`RegisterResolution()`) changes three things while gamescope and the game keep running.
-Tracker: `../planning/requests-2026-09-05.md` item 7. Phase A was live behaviour with no
-persistence; **Phase B**, below, persists game resolution and refresh across a restart.
+`RegisterResolution()`) changes two things while gamescope and the game keep running.
+Tracker: `../planning/requests-2026-09-05.md` item 7 (the area), `../planning/requests-2026-09-06.md`
+items 7–10 (its present shape). Phase A was live behaviour with no persistence; **Phase B**,
+below, persists game resolution and refresh across a restart.
 
-## The three things, and which are live
+## The two things, and which are live
 
 | | CLI | What it is | Live? | How |
 |---|---|---|---|---|
 | **Game resolution** | `-w/-h` | The RandR screen Xwayland reports to the game; gamescope scales it to the window. | Yes | `steamcompmgr_set_nested_mode()` |
 | **Refresh** | `-r` | The paced (fake-vblank) rate and the mode's advertised Hz. `0` = follow the host. | Yes | same call; `g_nNestedRefresh` |
-| **Window size** | `-W/-H` | The size the host compositor gives gamescope's window. | **Request only** | `INestedHints::RequestOutputSize()` |
 
 Nothing restarts: not gamescope, not Xwayland, not the game.
+
+**The window size is no longer here.** A third group of rows (`display.output_size` and two
+steppers) used to ask the host to resize gamescope's own window through
+`INestedHints::RequestOutputSize()`. The user had it removed on 2026-09-06 (item 10:
+*"Remove the 'WINDOW'/Window sizing part."*) — it was a request a tiled host could refuse,
+and host window rules are the right tool for it. The interface and its SDL/Wayland
+implementations are untouched (they are backend API, and the panel was only their caller);
+what the host granted is still reported, as the Live state's `window` fact.
 
 ### Game resolution and refresh — `steamcompmgr_set_nested_mode(w, h, refresh_mHz)`
 
@@ -24,8 +32,8 @@ the **existing** `wlserver_set_xwayland_server_mode(idx, w, h, mHz)` (`src/wlser
 the exact path the Steam Deck's `GAMESCOPE_XWAYLAND_MODE_CONTROL` root atom uses.
 
 *Two callers, opposite lock states.* The Shell's setters run on the steamcompmgr thread
-**without** the lock; `gamescopectl overlay_e2_set display.resolution.aspect N` (or one of the
-`preset_*` rows) reaches the same setter from `gamescope_private_execute()` (`src/wlserver.cpp`), which wlserver dispatches
+**without** the lock; `gamescopectl overlay_e2_set display.resolution.aspect N` (or
+`display.resolution.size N`) reaches the same setter from `gamescope_private_execute()` (`src/wlserver.cpp`), which wlserver dispatches
 **with** the lock already held. The lock is a plain non-recursive mutex, so the first
 version — an unconditional `wlserver_lock()` — deadlocked the console path: the command never
 returned and every later `gamescopectl` command queued behind it (laptop, 2026-09-05). The
@@ -55,29 +63,14 @@ path does — a 0 Hz mode would be invalid.
 With `--xwayland-count > 1` only servers `#1..` get the new mode; `#0` is Steam's and the
 per-frame output-changed block keeps it at the output size.
 
-### Window size — `INestedHints::RequestOutputSize(w, h)` (`src/backend.h`)
+### Window size — removed from the UI (2026-09-06)
 
-Default no-op (OpenVR, whose "window" is HMD-sized). Physical pixels, matching what
-`g_nOutputWidth/Height` read back as.
-
-- **SDL** (`src/Backends/SDLBackend.cpp`): parks the size in two atomics and pushes
-  `GAMESCOPE_SDL_EVENT_RESIZE`; the SDL thread leaves `FULLSCREEN_DESKTOP` (SDL ignores
-  `SDL_SetWindowSize()` while it is set), converts pixels to points using the current
-  pts/pixels ratio (HiDPI), and calls `SDL_SetWindowSize()`. The grant arrives as
-  `SDL_WINDOWEVENT_SIZE_CHANGED` and lands in `g_nOutputWidth/Height` the normal way.
-- **Wayland** (`src/Backends/WaylandBackend.cpp`): unsets fullscreen
-  (`SetFullscreen(false)` + `UpdateFullscreenState()`), writes `g_nOutputWidth/Height`, and
-  marks plane 0 `RequestDecorCommit()` so the next `Commit()` sends `libdecor_state_new(w,h)`
-  — the same thing a host-initiated `LibDecor_Frame_Configure()` already does, with our
-  number first. A floating window keeps it; a tiled host answers with its own configure,
-  which overwrites `g_nOutputWidth/Height` again. Scale: physical in, logical on the wire
-  via `CommitLibDecor()`.
-
-The area never shows the requested size as fact. The `display.output_size` Choice reads back
-`g_nOutputWidth/Height`: a preset shows as selected only while the window really is that
-size, so a refused request falls back to **Follow window** and the Facts row shows the
-host's answer. *Why:* a control that displays what was asked for while the window shows
-something else is the "renders but does nothing" defect class (#25/#68) again.
+`INestedHints::RequestOutputSize(w, h)` (`src/backend.h`, default no-op) is still implemented
+by the SDL backend (parks the size in two atomics, pushes `GAMESCOPE_SDL_EVENT_RESIZE`, leaves
+`FULLSCREEN_DESKTOP`, converts pixels to points, `SDL_SetWindowSize()`) and by the Wayland
+backend (unsets fullscreen, writes `g_nOutputWidth/Height`, `RequestDecorCommit()` so the next
+`Commit()` sends `libdecor_state_new(w,h)`). Nothing in the tree calls either any more. Details
+of both live in [backend-sdl.md](backend-sdl.md) and [backend-wayland.md](backend-wayland.md).
 
 ### The pointer follows the change
 
@@ -98,7 +91,6 @@ and "Locked pointer => never an absolute event". Regression gate:
 
 Not achievable at runtime in nested mode, and not promised anywhere in the UI or here:
 
-- **Forcing a tiling host to honour a window size.** Best effort; the host decides.
 - **Changing the host monitor's refresh.** A refresh above the host's rate means frames are
   paced faster than the screen can show them.
 - **Guaranteeing a running game adopts the new mode.** Fullscreen windows are resized within
@@ -122,52 +114,74 @@ thread reads it while the steamcompmgr thread writes it.
 
 | id | kind | notes |
 |---|---|---|
-| `display.resolution.aspect` | Choice | Native (window size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — see [Two rows](#two-rows-aspect-then-size) |
-| `display.resolution.preset_16_9` | Choice | 3840x2160, 2560x1440, 1920x1080, 1600x900, 1280x720, Custom; `DisabledUnless` Aspect is 16:9 |
-| `display.resolution.preset_4_3` | Choice | 2880x2160, 1920x1440, 1440x1080, 1280x960, Custom; `DisabledUnless` Aspect is 4:3 |
-| `display.resolution.preset_16_10` | Choice | 3840x2400, 2560x1600, 1920x1200, 1680x1050, 1440x900, 1280x800, Custom; `DisabledUnless` Aspect is 16:10 |
-| `display.resolution.preset_21_9` | Choice | 5120x2160, 3440x1440, 2560x1080, Custom; `DisabledUnless` Aspect is 21:9 |
-| `display.resolution.width` / `.height` | Stepper | 320–7680, step 8, `DisabledUnless` Custom (as the aspect, or within a shape's list); `width.lock_aspect` Param holds the ratio captured when the lock engaged (no drift) |
+| `display.resolution.aspect` | Choice | Native (window size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — picking a shape applies the closest size in it, see [One size row](#one-size-row-and-a-shape-that-applies) |
+| `display.resolution.size` | Choice, `Dropdown()` | **One** row; its option list is the selected aspect's sizes plus Custom, served live by `Entry::OptionsFrom()`. Native/Custom have no list, so it shows their one true entry and is disabled |
 | `display.refresh` | Choice | Follow host, 60, 90, 120, 144, 165, 240, Custom |
 | `display.refresh.custom` | Stepper | 24–500 Hz, `DisabledUnless` Custom |
-| `display.output_size` | Choice | Follow window, 1920x1080, 2560x1440, 3840x2160, Custom → `RequestOutputSize()` |
-| `display.output_size.width` / `.height` | Stepper | 320–7680, step 8, `DisabledUnless` Custom |
-| `display.resolution_facts` | Facts | `Game sees WxH @ R Hz · window WxH · host R Hz`, from the game Xwayland root's `root_width/height`, `g_nNestedRefresh` (host when 0), `g_nOutputWidth/Height`, `g_nOutputRefresh`; plus "takes effect" and "applied via" lines |
+| `display.resolution_facts` | Facts | `paced at R Hz · window WxH · host R Hz`, from `g_nNestedRefresh` (host when 0), `g_nOutputWidth/Height`, `g_nOutputRefresh`; plus "takes effect" and "applied via" lines |
 
-### Two rows: aspect, then size
+### One size row, and a shape that applies
 
-Tracker item 13 (2026-09-05). The user picks the **shape** first (Aspect row), then a
-**size** from that shape's list; Custom stays. The four lists are exactly the user's.
+Tracker items 7 and 8 (2026-09-06). The user picks the **shape** (Aspect), and the single
+**Resolution** row below it offers that shape's sizes. This replaces the four
+`display.resolution.preset_*` rows of 2026-09-05's item 13, on the user's instruction:
+*"There shouldnt be individual resolution elements for the different aspect ratios. It should
+only change the available option."*
 
-*Why four size rows and not one whose list changes.* The Registry copies a Choice's
-options at registration (`Entry::m_Options`, filled by `Area::Choice()`) and has no
-per-entry visibility gate — `AvailableWhen` exists only on an Area. So "the list follows
-the aspect" is one Choice per shape, each `DisabledUnless` its shape is the live one. All
-five rows are dropdowns (labels over 8 characters, or more than 5 options, auto-downgrade
-from segmented), so the three greyed rows are compact and each carries its reason
-("pick 4:3 in Aspect above to use this list"). Every size row — live or greyed — shows the
-live mode's entry when it is on that list and Custom otherwise; a row shows what *is*, never
-a suggestion of what a pick would do.
+*Why one row is possible now.* The old design's reason for four rows was that the Registry
+copied a Choice's options once at registration (`Entry::m_Options`, filled by `Area::Choice()`)
+and has no per-entry visibility gate — so "the list follows the aspect" had to be one Choice
+per shape, each `DisabledUnless` its shape was live. `Entry::OptionsFrom()` (Registry.h, added
+for this) makes the option set a **read** instead: a provider re-asked whenever the row is
+drawn, searched or written, its answer cached and only re-assigned when it actually differs,
+so a caller iterating `Options()` cannot have the vector reallocated under it. Labels are
+still borrowed `const char *`, so a provider must return static storage —
+`SizeOptionsForAspect()` hands out the same four static tables the four rows used.
 
-*Why every list ends in Custom.* A live mode with the shape but on no list (a launch-time
-`-w 1600 -h 1200`) has to be reflectable as "4:3 + Custom"; a dropdown with no matching
-value draws an empty label, which is the "shows nothing" defect class again.
+The row is forced to `Dropdown()`: seven entries of "3840 x 2400" is exactly the unbounded
+option set that guide's Dropdown-vs-segmented rule names.
 
-*Picking a shape applies nothing — the shape you pick stays selected until you choose a
-size.* The Aspect row only decides which size list is enabled; the game's mode changes when
-a **size** is picked (or a Custom stepper moves). Picking 4:3 over a live 1920x1080 changes
-nothing on screen, `xrandr` still reports 1920x1080, the 4:3 row is enabled reading
-"Custom" (no 4:3 entry is live) with the steppers at 1920x1080, and only picking 1440x1080
-applies it. **Why:** changing the game's resolution as a side effect of browsing a list is
-exactly the kind of surprise the user asked to have removed from the profile UI. Native and
-Custom are sizes in their own right rather than shapes with a list, so they keep applying
-as before (Native the window size; Custom the live size, a no-op on screen).
+*Why the four ids can just disappear.* None of them was ever a config key (`.Key()` was
+never called on them) — only `nested_width/height/refresh_hz` are persisted. So an old config
+carries nothing to migrate, and a stale `gamescopectl overlay_e2_set
+display.resolution.preset_16_9 3` simply reports an unknown id instead of doing damage.
+`tests/test_resolution.cpp` pins that: a profile file carrying all four keys plus the removed
+window-size ones loads, and its stored 1440x1080 still classifies as "4:3 + 1440 x 1080".
+
+*Native and Custom keep the row honest.* They are sizes in their own right rather than shapes
+with a list, so the row shows their single true entry ("Window size" / "Custom") and greys out
+with the reason. Every shape's list still ends in Custom, so a live mode with the shape but on
+no list (a launch-time `-w 1600 -h 1200`) is reflectable as "4:3 + Custom" rather than as a
+dropdown drawing an empty label.
+
+*Picking a shape now APPLIES the closest size, measured by height.* **This reverses**
+2026-09-05's "picking a shape applies nothing", on the user's own instruction of 2026-09-06:
+*"When changing the aspect ratio, make it automatically pick the closest resolution (measured
+by height)."* `ClosestByHeight()` (`src/Overlay/ResolutionPresets.h`) returns the entry whose
+height is nearest the height on screen, ties going to the **wider** one, and the shape switch
+then runs the exact path a click in the Resolution row would (`SetSizeChoice()`), so there is
+one apply path and one persistence write.
+
+- **Why height** — the user named the axis, and it is the axis that survives a shape change:
+  1920x1080 → 4:3 lands on 1440x1080, the same vertical detail in a different shape.
+- **Why ties go wider** — of two equally tall modes, the wider one shows more.
+- **Why the old rule went** — with one row instead of four, a shape pick that changed nothing
+  left the Resolution row offering a list that did not describe the picture on screen. The
+  2026-09-05 rationale (don't change the resolution as a side effect of browsing) applied to a
+  *browsable* shape row; the user has now decided the jump is what they want.
 
 *Custom seeding.* Picking Custom — as the aspect, or inside a shape's list — seeds the
-steppers from the live mode (which is the last preset applied) and re-captures the lock
-ratio, so "16:10, then Custom" starts at a 16:10 size with the lock holding 16:10. Picking
-Custom therefore changes nothing until a stepper moves. A stepper move under "4:3 + Custom"
-stays recorded as 4:3 (the lock holds the ratio); under the Custom shape it stays Custom.
+steppers from the live mode (which is the last size applied) and re-captures the lock ratio,
+so "16:10, then Custom" starts at a 16:10 size with the lock holding 16:10. Picking Custom
+therefore changes nothing until a stepper moves. A stepper move under "4:3 + Custom" stays
+recorded as 4:3 (the lock holds the ratio); under the Custom shape it stays Custom.
+
+### The pure half is a header
+
+`src/Overlay/ResolutionPresets.h` holds the shapes, their size tables, `MatchSizePreset()`,
+`NearestAspect()` and `ClosestByHeight()` — no ImGui, no backend, no compositor — so
+`tests/test_resolution.cpp` can pin them directly. Same split as
+`src/Overlay/CrosshairMath.h`. `PanelDisplay.cpp` keeps everything that touches live state.
 
 ### The reflection rule (`CurrentAspect()` / `CurrentSizeChoice()`)
 
@@ -190,17 +204,19 @@ no pick stored anywhere. Applying and persisting are unchanged: every path ends 
 `ApplyNestedMode()` (Phase B below); `nested_*` write `0` for Native as before, keyed on
 `s_nAspectChoice == kAspectNative`.
 
-"Game sees" reads the Xwayland root, not `g_nNestedWidth/Height`, because Steam's atom path
-changes the former without the latter and the row exists to show the truth. Labels use a
-plain `x`, not `×` — the overlay font is not known to carry that glyph.
+The Live state's **"Game sees" line is gone** (item 9, 2026-09-06: *"For the Live state,
+remove the 'Game sees' part, but keep the rest."*) — both the fact and the summary's leading
+half. The Xwayland root it read still drives the *area's* rail summary (`ResolutionSummary()`),
+which is where a player looks for that number; the facts row keeps `paced at`, `window`,
+`host refresh`, `takes effect` and `applied via`. Labels use a plain `x`, not `×` — the
+overlay font is not known to carry that glyph.
 
 Embedded (DRM) is a different feature for a later phase — `GetModes()` plus the
 dynamic-refresh atom — not a disabled copy of this area.
 
 ## Phase B — persistence
 
-Game resolution and refresh survive a restart; the window size deliberately does not (host
-window rules are the right tool for that).
+Game resolution and refresh survive a restart; there is nothing else in the area to persist.
 
 - **Write-back**: `ApplyNestedMode()` in `PanelDisplay.cpp` — the single write point for all
   three live values — also writes `GamescopeSettings::nested_width/height/refresh_hz` into the
@@ -219,6 +235,8 @@ window rules are the right tool for that).
 ## Related
 
 - [backend-sdl.md](backend-sdl.md), [backend-wayland.md](backend-wayland.md) — the two
-  `RequestOutputSize()` implementations.
+  `RequestOutputSize()` implementations, now with no caller.
 - [steamcompmgr-focus.md](steamcompmgr-focus.md) — the force-resize the mode change relies on.
 - [../planning/requests-2026-09-05.md](../planning/requests-2026-09-05.md) — item 7 scouting.
+- [../planning/requests-2026-09-06.md](../planning/requests-2026-09-06.md) — items 7–10, the
+  one-row reshape.

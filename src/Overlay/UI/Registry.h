@@ -520,7 +520,36 @@ namespace gamescope::ui
 		float Lo() const                    { return m_flLo; }
 		float Hi() const                    { return m_flHi; }
 		float StepSize() const              { return m_flStep; }
-		const std::vector<Option> &Options() const { return m_Options; }
+		// ---- the option set, fixed or live (2026-09-06, requests item 7) --
+		// Normally the set is copied once at registration. OptionsFrom()
+		// makes it a READ, re-asked whenever the shell, the palette or
+		// `overlay_e2_set` looks at the row -- which is what lets ONE row's
+		// list follow another row's value (display.resolution.size follows
+		// the Aspect above it) instead of needing one registered row per
+		// list. The answer is cached and only re-assigned when it actually
+		// differs, so a caller that iterates Options() and asks again inside
+		// the loop cannot have the vector reallocated under it.
+		//
+		// Labels are borrowed `const char *` exactly as in the fixed form,
+		// so a provider must return pointers with static lifetime.
+		Entry &OptionsFrom( std::function<std::vector<Option>()> fn )
+		{
+			m_OptionsFn = std::move( fn );
+			return *this;
+		}
+		const std::vector<Option> &Options() const
+		{
+			if ( m_OptionsFn )
+			{
+				std::vector<Option> now = m_OptionsFn();
+				bool bSame = now.size() == m_Options.size();
+				for ( size_t i = 0; bSame && i < now.size(); i++ )
+					bSame = now[i].nValue == m_Options[i].nValue && now[i].pszLabel == m_Options[i].pszLabel;
+				if ( !bSame )
+					m_Options = std::move( now );
+			}
+			return m_Options;
+		}
 
 		size_t ParamCount() const { return m_Params.size(); }
 		const Parameter &ParamAt( size_t i ) const { return *m_Params[ i ]; }
@@ -584,7 +613,8 @@ namespace gamescope::ui
 		Value       m_Default, m_DefaultB;
 		float       m_flLo = 0.0f, m_flHi = 0.0f, m_flStep = 0.0f;
 		bool        m_bHasRange = false;
-		std::vector<Option> m_Options;
+		mutable std::vector<Option> m_Options;                    // cache when m_OptionsFn is set
+		std::function<std::vector<Option>()> m_OptionsFn;         // OptionsFrom() -- a live option set
 		std::function<bool()> m_Enabled;
 		std::function<std::string( const std::string & )> m_Validate;
 		std::function<double()>      m_Scalar;    // Meter
@@ -663,7 +693,17 @@ namespace gamescope::ui
 	// =====================================================================
 	//  Area -- one rail item / one sheet
 	// =====================================================================
-	enum class Section : uint8_t { Display, System, Setup };   // SPEC §8.1, after D8
+	// SPEC §8.1, after D8. NOTE (requests-2026-09-06.md item 1): the rail's
+	// actual on-screen grouping and order are no longer derived from this
+	// field -- Shell.cpp's own kRailOrder table (local to DrawRail()) is
+	// the one place that lists all areas' rail groups and positions now,
+	// deliberately independent of both this enum and each area's own
+	// registration order. This enum still exists because Registry::Add()
+	// takes one and every Area still carries it, but nothing outside this
+	// header reads GetSection() any more. Left in place rather than
+	// removed, to avoid an unrelated diff across every panel file's
+	// reg.Add() call for a value none of them can see used.
+	enum class Section : uint8_t { Display, System, Setup };
 
 	class Area
 	{
