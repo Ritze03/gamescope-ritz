@@ -212,9 +212,7 @@ namespace gamescope::palette
 		// this, and it writes straight into g_LiveTheme on every edit.
 		const config::Settings s = config::LoadGlobal();
 		g_LiveTheme.flDisplayScale         = s.overlay.display_scale;
-		g_LiveTheme.flWindowAlphaFocused   = s.overlay.opacity_windows_focused;
-		g_LiveTheme.flWindowAlphaUnfocused = s.overlay.opacity_windows_unfocused;
-		g_LiveTheme.flDockAlpha            = s.overlay.opacity_dock;
+		g_LiveTheme.flWindowOpacity        = s.overlay.window_opacity;
 		g_LiveTheme.flAccentHue            = s.overlay.accent_hue;
 		ImGui::GetIO().FontGlobalScale     = s.overlay.display_scale;
 

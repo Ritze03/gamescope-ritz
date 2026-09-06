@@ -435,9 +435,18 @@ namespace gamescope::config
         // parses fine - ConfigManager.cpp's read side never looked it up by
         // iterating the JSON object, only by explicit named lookups, so a
         // leftover key is simply never read, not an error.
-        float opacity_windows_focused = 1.0f;    // 0.3..1 - focused panel window/popup surface alpha (the window currently holding overlay input focus). Chrome.cpp's BeginPanelWindow() applies this vs. opacity_windows_unfocused per-window using the same one-frame-cached focus state that already drives its border-alpha/thickness focus treatment.
-        float opacity_windows_unfocused = 0.9f;  // 0.3..1 - every other (unfocused) panel window/popup surface alpha.
-        float opacity_dock = 0.7f;               // 0.3..1 - dock container alpha, spec §8 default.
+        // opacity_windows_focused, opacity_windows_unfocused and opacity_dock
+        // were removed 2026-09-06 (requests-2026-09-06.md item 2), on the
+        // same "removed feature, key just never read again" precedent as
+        // dock_scale/opacity_background above. All three targeted surfaces
+        // Chrome.cpp drew (per-window focus alpha, the dock container) that
+        // P5 already deleted along with Chrome.cpp itself -- so, exactly
+        // like dock_scale, the sliders moved a value nothing on screen ever
+        // read: Palette.h's g_LiveTheme.flWindowAlphaFocused/Unfocused/
+        // flDockAlpha were written on every edit and never read back by
+        // anything. window_opacity below is their replacement: ONE slider,
+        // wired to something that actually draws now.
+        float window_opacity = 1.0f;             // 0.3..1 - the E2 shell's own backdrop alpha: Shell.cpp's slab background (ImGuiCol_WindowBg) and the Inspector's own fill (Role::SurfaceInspector), via palette::WindowOpacity()/Dim(). Text is never dimmed by this -- only the surfaces behind it.
         float opacity_notifications = 0.9f;      // 0.3..1 - Notifications.cpp's DrawToasts() GetUiOpacity(): multiplies each toast card's bg/border/accent/text alpha uniformly.
         // Issue #37: hue-only accent picker. Degrees, OKLCH hue (0..360,
         // wraps). Saturation/lightness (OKLCH C/L) are NOT user-tunable -

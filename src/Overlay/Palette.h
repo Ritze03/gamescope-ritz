@@ -158,9 +158,14 @@ namespace gamescope::palette
 		// flDockScale was removed 2026-08-24 with OverlaySettings::dock_scale
 		// itself -- P5 deleted the dock, so nothing read it any more.
 		float flDisplayScale       = 1.0f;  // OverlaySettings::display_scale -- see ConfigSchema.h's ceiling note
-		float flWindowAlphaFocused   = 1.0f; // OverlaySettings::opacity_windows_focused
-		float flWindowAlphaUnfocused = 0.9f; // OverlaySettings::opacity_windows_unfocused
-		float flDockAlpha          = 0.86f; // OverlaySettings::opacity_dock
+		// flWindowAlphaFocused/Unfocused and flDockAlpha were removed
+		// 2026-09-06 (requests-2026-09-06.md item 2) along with
+		// OverlaySettings::opacity_windows_focused/unfocused/opacity_dock --
+		// all three were written on every Appearance edit and never read by
+		// anything, the same dead-field shape as flDockScale above.
+		// flWindowOpacity replaces them: the E2 shell (Shell.cpp) is the
+		// one real reader now, via WindowOpacity() below.
+		float flWindowOpacity      = 1.0f;  // OverlaySettings::window_opacity
 		// OverlaySettings::accent_hue, degrees, OKLCH hue -- issue #37.
 		// Default 218 reproduces today's #36BDDD family exactly (see
 		// Palette.cpp's per-token L/C table). Setting this alone does
@@ -181,6 +186,15 @@ namespace gamescope::palette
 	// this closes the gap #24 found, where every hand-drawn widget/chrome
 	// pixel constant ignored it outright while text scaled around them.
 	inline float DisplayScale() { return g_LiveTheme.flDisplayScale; }
+
+	// OverlaySettings::window_opacity (0.3..1), read fresh every call like
+	// DisplayScale() above. Shell.cpp multiplies this into the slab's own
+	// background fill and the Inspector's fill via Dim() -- see Colors.h's
+	// Dim() (scales alpha only, never RGB, so it never touches text drawn
+	// on top). Named for what it does, not the field it mirrors 1:1, since
+	// nothing else in this header follows the "fl + FieldName" pattern
+	// DisplayScale() itself breaks from too.
+	inline float WindowOpacity() { return g_LiveTheme.flWindowOpacity; }
 
 	// Loads the overlay's process-level theme (display_scale, accent hue,
 	// opacities) out of global.json into g_LiveTheme, exactly once per

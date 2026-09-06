@@ -72,9 +72,9 @@ namespace gamescope
 			s_GeneralSettings = config::LoadGlobal();
 		}
 
-		// Pushes the fields Widgets.cpp reads live (display scale, and the
-		// window/dock opacities that outlived their surfaces)
-		// into gamescope::palette::g_LiveTheme, notification_scale/
+		// Pushes the fields Widgets.cpp/Shell.cpp read live (display scale,
+		// window transparency) into gamescope::palette::g_LiveTheme,
+		// notification_scale/
 		// opacity_notifications into gamescope::Notifications::g_LiveTheme
 		// (Notifications.cpp's own consumer, wired the same way -- see that
 		// file's Notifications.h comment), and background_blur/
@@ -88,9 +88,7 @@ namespace gamescope
 			auto &live = gamescope::palette::g_LiveTheme;
 			const auto &o = s_GeneralSettings.overlay;
 			live.flDisplayScale = o.display_scale;
-			live.flWindowAlphaFocused = o.opacity_windows_focused;
-			live.flWindowAlphaUnfocused = o.opacity_windows_unfocused;
-			live.flDockAlpha = o.opacity_dock;
+			live.flWindowOpacity = o.window_opacity;
 
 			// NOTE (2026-08-24, D27): this function no longer runs on every
 			// tick of a UI-scale drag. `overlay.display_scale`'s setter now
@@ -840,29 +838,24 @@ namespace gamescope
 
 			a.Group( "Transparency" );
 
-			a.Slider( "overlay.opacity_windows_focused", "Window (focused)",
-				BindOverlayFloat( &config::OverlaySettings::opacity_windows_focused ) )
-				.Help( "How see-through an overlay window is while you're using it." )
+			// requests-2026-09-06.md item 2: the three sliders that used to
+			// live here (Window focused/unfocused, Dock) wrote
+			// OverlaySettings::opacity_windows_focused/unfocused/opacity_dock
+			// -- fields Chrome.cpp's multi-window era read and P5's dock/
+			// panel-window deletion left with no reader at all (see
+			// ConfigSchema.h and Palette.h's own removal notes). Deleted
+			// rather than left dormant, same as dock_scale before them. This
+			// one slider replaces all three: it is wired to something that
+			// actually draws now -- Shell.cpp's slab background and
+			// Inspector fill, via palette::WindowOpacity().
+			a.Slider( "overlay.window_opacity", "Window transparency",
+				BindOverlayFloat( &config::OverlaySettings::window_opacity ) )
+				.Help( "How see-through the settings window is. Lower it to see more of the game "
+				       "behind it." )
 				.Range( 0.3f, 1.0f )
 				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
-				.Default( config::OverlaySettings{}.opacity_windows_focused )
-				.Keywords( "opacity transparency window focused alpha" );
-
-			a.Slider( "overlay.opacity_windows_unfocused", "Window (unfocused)",
-				BindOverlayFloat( &config::OverlaySettings::opacity_windows_unfocused ) )
-				.Help( "How see-through an overlay window is when you're not actively using it." )
-				.Range( 0.3f, 1.0f )
-				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
-				.Default( config::OverlaySettings{}.opacity_windows_unfocused )
-				.Keywords( "opacity transparency window unfocused alpha fade" );
-
-			a.Slider( "overlay.opacity_dock", "Dock",
-				BindOverlayFloat( &config::OverlaySettings::opacity_dock ) )
-				.Help( "How see-through the dock bar is." )
-				.Range( 0.3f, 1.0f )
-				.Step( 0.05f )       // 15 positions; every alpha default is on the grid
-				.Default( config::OverlaySettings{}.opacity_dock )
-				.Keywords( "opacity transparency dock alpha" );
+				.Default( config::OverlaySettings{}.window_opacity )
+				.Keywords( "opacity transparency window alpha see-through backdrop" );
 
 			a.Slider( "overlay.opacity_notifications", "Notifications",
 				BindOverlayFloat( &config::OverlaySettings::opacity_notifications ) )
