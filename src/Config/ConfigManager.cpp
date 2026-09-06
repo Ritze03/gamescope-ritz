@@ -220,6 +220,7 @@ namespace gamescope::config
                 c.hide_on_right_click = JGetBool( *pCross, "hide_on_right_click", c.hide_on_right_click );
                 c.hide_mode = JGetString( *pCross, "hide_mode", c.hide_mode );
                 c.hide_time_ms = JGetInt( *pCross, "hide_time_ms", c.hide_time_ms );
+                c.hide_animate_back = JGetBool( *pCross, "hide_animate_back", c.hide_animate_back );
                 c.apply_scaling = JGetBool( *pCross, "apply_scaling", c.apply_scaling );
             }
 
@@ -249,10 +250,10 @@ namespace gamescope::config
                 {
                     auto &ab = s.reshade.adaptive_brightness;
                     ab.enabled = JGetBool( *pAdaptive, "enabled", ab.enabled );
-                    ab.target_luminance = JGetFloat( *pAdaptive, "target_luminance", ab.target_luminance );
                     ab.mode = JGetString( *pAdaptive, "mode", ab.mode );
                     if ( ab.mode != "dynamic" )
                         ab.mode = "whole_image";
+                    ab.target_luminance = JGetFloat( *pAdaptive, "target_luminance", ab.target_luminance );
                     ab.adapt_up_speed = JGetFloat( *pAdaptive, "adapt_up_speed", ab.adapt_up_speed );
                     ab.adapt_down_speed = JGetFloat( *pAdaptive, "adapt_down_speed", ab.adapt_down_speed );
                     ab.min_gain = JGetFloat( *pAdaptive, "min_gain", ab.min_gain );
@@ -284,9 +285,11 @@ namespace gamescope::config
                 // never looked up, which is exactly what "ignore an unknown field
                 // gracefully" means for this named-lookup (not iterate-and-
                 // validate) parse style.
-                s.overlay.opacity_windows_focused = JGetFloat( *pOverlay, "opacity_windows_focused", s.overlay.opacity_windows_focused );
-                s.overlay.opacity_windows_unfocused = JGetFloat( *pOverlay, "opacity_windows_unfocused", s.overlay.opacity_windows_unfocused );
-                s.overlay.opacity_dock = JGetFloat( *pOverlay, "opacity_dock", s.overlay.opacity_dock );
+                // opacity_windows_focused/unfocused and opacity_dock removed
+                // 2026-09-06 (see ConfigSchema.h) - deliberately not read
+                // here any more, same as opacity_background above. An old
+                // config's leftover keys are simply never looked up.
+                s.overlay.window_opacity = JGetFloat( *pOverlay, "window_opacity", s.overlay.window_opacity );
                 s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
                 s.overlay.accent_hue = JGetFloat( *pOverlay, "accent_hue", s.overlay.accent_hue );
                 s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
@@ -441,6 +444,7 @@ namespace gamescope::config
             jCross[ "hide_on_right_click" ] = c.hide_on_right_click;
             jCross[ "hide_mode" ] = c.hide_mode;
             jCross[ "hide_time_ms" ] = c.hide_time_ms;
+            jCross[ "hide_animate_back" ] = c.hide_animate_back;
             jCross[ "apply_scaling" ] = c.apply_scaling;
 
             nlohmann::json jVibrancy = nlohmann::json::object();
@@ -457,11 +461,11 @@ namespace gamescope::config
             const auto &ab = s.reshade.adaptive_brightness;
             nlohmann::json jAdaptive = nlohmann::json::object();
             jAdaptive[ "enabled" ] = ab.enabled;
+            jAdaptive[ "mode" ] = ab.mode;
             jAdaptive[ "target_luminance" ] = ab.target_luminance;
             jAdaptive[ "adapt_up_speed" ] = ab.adapt_up_speed;
             jAdaptive[ "adapt_down_speed" ] = ab.adapt_down_speed;
             jAdaptive[ "min_gain" ] = ab.min_gain;
-            jAdaptive[ "mode" ] = ab.mode;
             jAdaptive[ "max_gain" ] = ab.max_gain;
             jAdaptive[ "strength" ] = ab.strength;
 
@@ -510,9 +514,12 @@ namespace gamescope::config
             // in ConfigSchema.h, and accepted for a removed feature.
             jOverlay[ "display_scale" ] = o.display_scale;
             jOverlay[ "notification_scale" ] = o.notification_scale;
-            jOverlay[ "opacity_windows_focused" ] = o.opacity_windows_focused;
-            jOverlay[ "opacity_windows_unfocused" ] = o.opacity_windows_unfocused;
-            jOverlay[ "opacity_dock" ] = o.opacity_dock;
+            // No opacity_windows_focused/unfocused or opacity_dock: removed
+            // with the surfaces they targeted (see ConfigSchema.h). This
+            // serializer emits the struct's fields, so an old file's
+            // leftover keys are dropped the first time anything writes
+            // global.json - accepted for a removed feature.
+            jOverlay[ "window_opacity" ] = o.window_opacity;
             jOverlay[ "opacity_notifications" ] = o.opacity_notifications;
             jOverlay[ "accent_hue" ] = o.accent_hue;
             jOverlay[ "background_blur" ] = o.background_blur;
@@ -1049,6 +1056,37 @@ namespace gamescope::config
         std::optional<nlohmann::json> s_oSessionParentSections;
         const char *s_pszSessionSource = "";
         uint64_t s_ulConfigGeneration = 0;
+
+        // ---- the routed-write merge (requests-2026-09-06 item 1) ----------
+        // Every panel keeps a whole Settings and writes the whole thing, but
+        // its copy of the OTHER sections is only as fresh as its last reload
+        // -- a generation bump, never another panel's edit. So a write from
+        // panel Y used to carry X's section as Y last saw it, undoing X's
+        // edit on disk AND in the mirror (measured: a crosshair edit put
+        // sharpness back to 5 after the Display area had set it to 10). The
+        // funnel merges instead (EnqueueRoutedWrite): a section is taken
+        // from the caller only when the CALLER changed it, else the mirror's
+        // current value stays. "Changed by the caller" is judged against:
+        //   - the caller's own last write since the last generation bump,
+        //     keyed by the address of the struct it passes (every panel
+        //     passes its file-static copy, so the address is the panel);
+        //   - failing that, the states ResolvedSettings() has handed out
+        //     since that bump: a section equal to one of those is a copy the
+        //     caller loaded, not an edit.
+        // Both are cleared on every generation bump, when every panel
+        // reloads anyway.
+        std::map<const Settings *, nlohmann::json> s_CallerBase;
+        std::map<std::string, std::vector<std::string>> s_HandedOut; // section -> compact dumps
+        constexpr size_t kMaxHandedOutPerSection = 256;
+
+        void ForgetRoutedWriteBases()
+        {
+            s_CallerBase.clear();
+            s_HandedOut.clear();
+        }
+
+        // See SetLiveApplyHook().
+        std::function<void( const Settings & )> s_fnLiveApply;
 
         // Focused-window title, for the game display name.
         std::string s_sFocusedTitle;
@@ -1879,6 +1917,21 @@ namespace gamescope::config
         Settings s = ProfileSettingsNow( sName ).value_or( Settings{} );
         EnsureGlobalLoaded();
         s.overlay = s_Overlay;
+
+        // Remember what went out, per section, so a later routed write can
+        // tell a loaded copy from an edit (see s_HandedOut). Deduplicated
+        // and bounded; a bump clears it.
+        const nlohmann::json sections = SectionsToJson( s );
+        for ( auto it = sections.begin(); it != sections.end(); ++it )
+        {
+            std::vector<std::string> &v = s_HandedOut[ it.key() ];
+            const std::string sDump = it->dump();
+            if ( std::find( v.begin(), v.end(), sDump ) != v.end() )
+                continue;
+            if ( v.size() >= kMaxHandedOutPerSection )
+                v.erase( v.begin() );
+            v.push_back( sDump );
+        }
         return s;
     }
 
@@ -1931,7 +1984,48 @@ namespace gamescope::config
     void EnqueueRoutedWrite( const Settings &settings )
     {
         ResolveSession();
-        EnqueueProfileWrite( s_SessionMeta, settings );
+
+        // The merge (see s_CallerBase): start from the mirror's current
+        // sections and take from the caller only what the caller changed.
+        const nlohmann::json caller = SectionsToJson( settings );
+        std::optional<Settings> oCur = ProfileSettingsNow( *s_oSessionProfile );
+        if ( !oCur )
+        {
+            // Nothing to merge against (no mirror, no readable file): the
+            // caller's struct is the whole truth, as before.
+            s_CallerBase[ &settings ] = caller;
+            EnqueueProfileWrite( s_SessionMeta, settings );
+            return;
+        }
+
+        nlohmann::json out = SectionsToJson( *oCur );
+        const auto itBase = s_CallerBase.find( &settings );
+        for ( auto it = caller.begin(); it != caller.end(); ++it )
+        {
+            const std::string &sSection = it.key();
+            if ( out.contains( sSection ) && out[ sSection ] == *it )
+                continue; // same as the mirror: nothing to decide
+            bool bCallerChanged;
+            if ( itBase != s_CallerBase.end() )
+            {
+                const nlohmann::json &base = itBase->second;
+                bCallerChanged = !( base.contains( sSection ) && base[ sSection ] == *it );
+            }
+            else
+            {
+                const auto itHanded = s_HandedOut.find( sSection );
+                const std::string sDump = it->dump();
+                bCallerChanged = itHanded == s_HandedOut.end() ||
+                    std::find( itHanded->second.begin(), itHanded->second.end(), sDump ) == itHanded->second.end();
+            }
+            if ( bCallerChanged )
+                out[ sSection ] = *it;
+        }
+        s_CallerBase[ &settings ] = caller;
+
+        Settings merged = SettingsFromJson( out );
+        merged.overlay = settings.overlay; // ignored by the profile write either way
+        EnqueueProfileWrite( s_SessionMeta, merged );
     }
 
     uint64_t ConfigGeneration()
@@ -1942,6 +2036,14 @@ namespace gamescope::config
     void BumpConfigGeneration()
     {
         s_ulConfigGeneration++;
+        ForgetRoutedWriteBases(); // every panel reloads now; their old copies are no longer a base
+        if ( s_fnLiveApply )
+            s_fnLiveApply( ResolvedSettings() );
+    }
+
+    void SetLiveApplyHook( std::function<void( const Settings & )> fn )
+    {
+        s_fnLiveApply = std::move( fn );
     }
 
     // ---- CRUD ------------------------------------------------------------------------
@@ -2239,6 +2341,8 @@ namespace gamescope::config
         s_oSessionParentSections.reset();
         s_pszSessionSource = "";
         s_ulConfigGeneration = 0;
+        ForgetRoutedWriteBases();
+        s_fnLiveApply = nullptr;
         s_bGlobalLoaded = false;
         s_Written.clear();
         s_sFocusedTitle.clear();

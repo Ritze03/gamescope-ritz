@@ -84,30 +84,45 @@ namespace
 	}
 }
 
-TEST_CASE( "the list labels game profiles as [Game] <name>, falling back to the app id", "[overlay_profiles]" )
+TEST_CASE( "the list labels game profiles as [Game] <profile name>, never the game's name", "[overlay_profiles]" )
 {
+	// requests-2026-09-06 item 2: "It shows the process/game name. Not the
+	// actual profile name." A profile named CS2 reads as CS2 whatever the
+	// game's window title is.
 	REQUIRE( ListLabel( General( "Comp" ) ) == "Comp" );
-	REQUIRE( ListLabel( Game( "Rust Ranked", "252490", "Rust" ) ) == "[Game] Rust" );
-	// A migrated profile that has never run: no title seen yet.
+	REQUIRE( ListLabel( Game( "CS2", "730", "Counter-Strike 2" ) ) == "[Game] CS2" );
+	REQUIRE( ListLabel( Game( "Rust Ranked", "252490", "Rust" ) ) == "[Game] Rust Ranked" );
+	// A migrated profile that has never run: no title seen yet, still its name.
 	REQUIRE( ListLabel( Game( "252490", "252490" ) ) == "[Game] 252490" );
 
 	// The tag/name split the list box draws (tag muted, name in the label
 	// role) is the same string cut in two -- never a second spelling.
-	REQUIRE( ListTag( Game( "Rust", "252490", "Rust" ) ) == "[Game]" );
-	REQUIRE( ListName( Game( "Rust", "252490", "Rust" ) ) == "Rust" );
+	REQUIRE( ListTag( Game( "CS2", "730", "Counter-Strike 2" ) ) == "[Game]" );
+	REQUIRE( ListName( Game( "CS2", "730", "Counter-Strike 2" ) ) == "CS2" );
 	REQUIRE( ListTag( General( "Comp" ) ).empty() );
 	REQUIRE( ListName( General( "Comp" ) ) == "Comp" );
+
+	// The game's name moved to the line's muted text: the title seen, else
+	// the app id; nothing for a general profile.
+	REQUIRE( GameName( Game( "CS2", "730", "Counter-Strike 2" ) ) == "Counter-Strike 2" );
+	REQUIRE( GameName( Game( "252490", "252490" ) ) == "252490" );
+	REQUIRE( GameName( General( "Comp" ) ).empty() );
 }
 
 TEST_CASE( "a line's secondary text: inherits <parent>, or launch option on the override's line", "[overlay_profiles]" )
 {
-	REQUIRE( ListSecondary( Game( "Rust", "252490", "Rust", "Comp" ), "Comp", false ) == "inherits Comp" );
-	REQUIRE( ListSecondary( Game( "Rust", "252490", "Rust" ), "Rust", false ).empty() );
+	// A game profile's line names its game (muted, right-aligned), then
+	// its parent: `Counter-Strike 2 · inherits Comp`, or the game alone.
+	REQUIRE( ListSecondary( Game( "CS2", "730", "Counter-Strike 2", "Comp" ), "Comp", false )
+	         == "Counter-Strike 2 · inherits Comp" );
+	REQUIRE( ListSecondary( Game( "CS2", "730", "Counter-Strike 2" ), "CS2", false ) == "Counter-Strike 2" );
+	REQUIRE( ListSecondary( Game( "252490", "252490" ), "252490", false ) == "252490" );
 	REQUIRE( ListSecondary( General( "Comp" ), "Comp", false ).empty() );
-	// `--profile Casual`: the line the session edits says so, and outranks
-	// "inherits" -- the override is the more surprising fact.
+	// `--profile Casual`: the line the session edits says so, first -- the
+	// override is the more surprising fact.
 	REQUIRE( ListSecondary( General( "Casual" ), "Casual", true ) == "launch option" );
-	REQUIRE( ListSecondary( Game( "Rust", "252490", "Rust", "Comp" ), "Rust", true ) == "launch option" );
+	REQUIRE( ListSecondary( Game( "CS2", "730", "Counter-Strike 2", "Comp" ), "CS2", true )
+	         == "launch option · Counter-Strike 2 · inherits Comp" );
 	REQUIRE( ListSecondary( General( "Comp" ), "Casual", true ).empty() );
 }
 
@@ -223,7 +238,7 @@ TEST_CASE( "the status row and the badge name the session", "[overlay_profiles]"
 	// Another game's profile under Rust (a --profile pick made permanent
 	// by selecting it): the game is worth saying then.
 	REQUIRE( StatusSummary( Game( "Dota", "570", "Dota 2", "Casual" ), "Rust", oRust, std::nullopt )
-	         == "[Game] Dota 2 · inherits Casual · game Rust" );
+	         == "[Game] Dota · inherits Casual · game Rust" );
 	REQUIRE( StatusSummary( General( "Comp" ), "", oNone, std::nullopt )
 	         == "Comp · no game identified" );
 	REQUIRE( StatusSummary( General( "Casual" ), "Rust", oRust, std::string( "Casual" ) )

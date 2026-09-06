@@ -29,6 +29,13 @@ The newest version below is the one this build reports.
   every area's header badge names the profile being edited.
 
 ### Fixed
+- **Selecting a profile now takes effect**: clicking a profile in the list changes the
+  picture at once (filter, sharpness, shaders, crosshair, HUD), and an edit made in
+  one area is no longer undone on disk by the next edit made in another area -- the
+  "edit, switch, switch back, nothing changed" case.
+- **Game profiles show their own name**: a game profile is listed as `[Game] <profile
+  name>` everywhere (list, header badge, Status, toasts); the game's title and what it
+  inherits sit in the line's muted text instead.
 - **In-game mouse look no longer drifts back to the centre**: a game that has grabbed
   the mouse (CS2 in a match, any first-person game in play) no longer receives absolute
   pointer positions -- neither from a resolution or scaler change nor from the host

@@ -20,9 +20,9 @@ dropdown, a "Filter game profiles" switch and one Status row -- see
   change is saved into it immediately**; there are no load/save buttons and nothing
   is ever "applied" or copied.
 - Two kinds. A **general** profile (`Comp`, `Casual`) stands alone. A **game**
-  profile is bound to one app id (shown as `[Game] Rust`) and may **inherit** from
-  exactly one general profile. Two levels, no chains -- a game profile can never be
-  a parent.
+  profile is bound to one app id (shown as `[Game] <profile name>`, the game's own
+  name on the line's muted text) and may **inherit** from exactly one general
+  profile. Two levels, no chains -- a game profile can never be a parent.
 - **Selecting a profile in the list loads it and is the assignment**: the current
   game remembers the selection (`games.<AppId>.selected`). A game seen for the first
   time uses the general profile last selected anywhere (`last_general`). There is
@@ -95,8 +95,10 @@ A game profile inheriting from it (`profiles/Rust.json`) -- only what differs:
 
 A standalone game profile (`"inherits": ""`) stores everything, like a general one.
 `name` always equals the file name; `game_name` is the focused window's title, written
-the first time the game is seen (`NoteFocusedWindowTitle()`), so the list can show
-`[Game] Rust` while the game is not running; before that the list shows the app id.
+the first time the game is seen (`NoteFocusedWindowTitle()`), so the list's muted text
+can name the game (`Rust · inherits Comp`) while it is not running; before that it
+shows the app id. **The label is always the profile's name** (`[Game] Rust Ranked`),
+never `game_name` -- see the label rule under the Profiles area.
 
 ## Which profile a session edits (`SessionProfile()`)
 
@@ -114,6 +116,29 @@ reloads through `ResolvedSettings()`. With no app id a *game* profile can only b
 selected for the session (there is no game to remember it for); a general one is
 remembered as `last_general`.
 
+### How a select reaches the screen (2026-09-06)
+
+Two things happen on every generation bump (select, `ritz_profile`, Create/Copy,
+Reset to inherited, a rename or delete that touches the session):
+
+1. **The live-apply hook.** `BumpConfigGeneration()` calls the function `main.cpp`
+   installed with `config::SetLiveApplyHook()` -- `ritz_apply_config_live()`, the
+   live half of the startup apply -- with the freshly resolved settings: filter,
+   scaler, sharpness, the VRR/HDR/tearing ConVars, the shader effects, force-grab
+   cursor, the colour-management setters and the clipboard-sync flag. `Why:` panels
+   reload **lazily**, the first time they draw after the bump, and the Display area
+   is the one whose values live in compositor globals rather than in something read
+   per frame. Before the hook, a profile selected from the Profiles area changed
+   nothing on screen until the Display area itself was opened -- and not even then
+   on that area's *first* load, which assumed the startup apply had covered it
+   (measured headless, requests-2026-09-06 item 1: the sharpness row still read the
+   old profile's value after a select). The per-frame readers (HUD, crosshair,
+   notifications) reload themselves within a frame and were never the problem. The
+   hook is installed *after* the startup apply, so the `--profile` bump at launch is
+   covered by that and never by the live path (which wants a running compositor).
+2. **Every panel reloads** on its next draw or edit (`EnsureConfigLoaded()` compares
+   the generation), so the sheet's rows show the selected profile's values.
+
 ## Inheritance: how the diff works, and its ceiling
 
 On every write of an inheriting game profile (`EnqueueRoutedWrite()` from any panel,
@@ -124,6 +149,36 @@ Reading is the reverse: the parent's sections, the child's sparse keys deep-merg
 over them, then parsed (`DeepMerge()`, `ResolvedSectionsJson()`). Both sides are
 canonicalised through the struct first, so a parent written by an older build (missing
 a section added since) does not make every key of that section look overridden.
+
+### The routed-write merge (2026-09-06)
+
+`EnqueueRoutedWrite(settings)` does **not** write the caller's struct whole. Every
+panel keeps a full `Settings` and passes the whole thing, but its copy of the *other*
+sections is only as fresh as its last generation reload -- a select, never another
+panel's edit. So a write from the Crosshair area used to carry `gamescope.sharpness`
+as that area last saw it and put it back on disk **and in the mirror**, undoing the
+Display area's edit; the next select then reloaded the reverted value. That was the
+whole of the user's *"edit something, switch, switch back -- nothing changed"* report
+(measured: sharpness 10 -> crosshair gap edit -> sharpness 5 again).
+
+The funnel merges per top-level section instead: it starts from the mirror's current
+sections and takes a section from the caller only when **the caller changed it**,
+judged against (a) the caller's own last write since the last generation bump -- keyed
+by the address of the struct it passes, which is each panel's file-static copy -- or,
+on its first write, (b) the states `ResolvedSettings()` has handed out since that bump:
+a section equal to one of those is a copy the caller loaded, not an edit. Both records
+are cleared on every bump, when every panel reloads anyway. Pinned by
+`tests/test_config.cpp`'s "never undoes another panel's edit" case (including a panel
+that loaded between two edits of another, and a revert to the loaded value).
+
+`Why at the funnel and not per-section writes in every panel:` the same reason the
+inheritance diff lives there -- every existing and future section gets it with zero
+panel code, and the panels' whole-struct habit is exactly what the funnel was written
+to absorb. `Ceiling:` a panel that writes **without ever loading** (a setter that
+skips its `EnsureConfigLoaded()`) passes struct defaults, which were never handed out
+and so count as edits; PanelDisplay's sharpness setter is the one known case
+(reachable from the palette or `overlay_e2_set` before that area has drawn) and is a
+one-line fix in that file.
 
 `OverriddenKeys()` is the set of dotted keys the session profile stores itself
 (`"reshade.vibrancy.strength"`, `"fps_display.enabled"`), cached on the write
@@ -151,8 +206,16 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
 1. **The list** (`profiles.list`, a `CompositeKind::List` band -- six rows tall, edge
    to edge, the one composite that spends the label column). One line per profile
    from `ListProfiles()`: general ones by name, game ones as a muted `[Game]` tag plus
-   the game's title (`ListLabel()`), `inherits Comp` right-aligned on an inheriting
-   line, `launch option` on the line a `--profile` override selected. The session
+   **the profile's own name** (`ListLabel()`); the muted right-aligned text is the
+   game's title (else its app id) and the parent -- `Counter-Strike 2 · inherits
+   Comp`, or the game alone -- with `launch option` first on the line a `--profile`
+   override selected (`ListSecondary()`). **The label rule** (2026-09-06, user
+   feedback verbatim: *"It shows the process/game name. Not the actual profile
+   name."*): wherever a profile is named -- list, badge, Status, toasts, modal titles
+   -- it is `[Game] <profile name>`, never the game's window title. `Why:` the name
+   is what the user typed, what the toast says and what the file is called; a
+   profile named `CS2` that showed as `Counter-Strike 2` could not be matched to any
+   of those, and two profiles for one game would have been indistinguishable. The session
    profile is the outlined line. **Clicking a line (or Enter while hovering it) is
    `SelectProfile()`**: it loads the profile and is the assignment this game remembers;
    the toast says `Now editing 'Comp'`. Left/Right on the selected band step the
@@ -215,7 +278,7 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
    Two rows rather than the sketch's one: a dropdown and a labelled switch sharing one
    row would fight for the control zone at every width the shell supports.
 4. **Status** (`profiles.status`, one Facts row, last): `[Game] Rust · inherits Comp`,
-   naming the game only when the profile's label does not already (`Casual · game
+   naming the game only when the profile is not this game's own (`Casual · game
    Rust`, `Casual (launch) · game Rust`), so it fits the control zone beside a column
    Inspector; the Inspector's DETAILS carry the long form with the app id
    (`editing: [Game] Rust · inherits Comp · game: Rust (252490)`), the launch option,
@@ -273,9 +336,10 @@ pick is session-only.
 
 ## Where a write goes, and when
 
-- **Every panel** -> `EnqueueRoutedWrite(settings)` -> the session profile's file,
-  queued on the coalescing background writer (50 ms quiet, 500 ms cap, per-path
-  last-wins); `overlay` is ignored. For an inheriting game profile the diff is
+- **Every panel** -> `EnqueueRoutedWrite(settings)` -> merged per section against
+  the mirror (see [The routed-write merge](#the-routed-write-merge-2026-09-06)) ->
+  the session profile's file, queued on the coalescing background writer (50 ms
+  quiet, 500 ms cap, per-path last-wins); `overlay` is ignored. For an inheriting game profile the diff is
   computed at enqueue time against a cached copy of the parent's resolved sections
   (`s_oSessionParentSections`), so a slider tick never reads the parent's file.
 - **Appearance** -> `EnqueueGlobalWrite` / `EnqueueOverlayWrite` /
@@ -345,8 +409,14 @@ writes. A `schema_version` newer than the build still falls back to defaults and
 as `ParseConfigFile()` always did. The 1 -> 2 vibrancy step runs first on the old
 file, so a schema-1 config migrates through both.
 
-Verified headless (2026-09-06, `build-release/verify-shots/profiles-v2/e2e.sh`, 25
-checks): an old-schema config with a global, a profile and a `games/` file migrates as
+Verified headless (2026-09-06, `build-release/verify-shots/profiles-load-save/run.sh`,
+`results-*.txt` there): on CS2 (`STEAM_COMPAT_APP_ID=730`, game profile inheriting A)
+an edit lands in `CS2.json` as a diff and survives another area's edit; clicking B
+changes the sharpness row, the crosshair rows **and the crosshair pixels on screen**
+(red/short -> blue/long, sampled at the game's centre) before any other area draws;
+an edit then lands in `B.json` only; clicking CS2 and A brings each one's values
+back; the same under `--profile B` and with `SteamAppId=730`. Earlier the same day
+(`profiles-v2/e2e.sh`, 25 checks): an old-schema config with a global, a profile and a `games/` file migrates as
 the table says; an `overlay_e2_set` edit lands in the selected game profile as a diff;
 `--profile Tourney` creates it from the game's profile and leaves the assignment alone;
 `GS_RITZ_PROFILE` selects; `ritz_profile` switches live; the next flagless launch is

@@ -482,6 +482,13 @@ static GamescopeUpscaleScaler ritz_config_parse_scaler(const std::string &sValue
 // profile for this session only, creating it if missing, and say so. From
 // the console the toast is the only feedback the user sees; at startup the
 // stderr line is the one that lands in the log.
+// steamcompmgr.cpp's colour-management setters, declared as PanelDisplay.cpp
+// declares them (no header carries them).
+extern bool set_color_sdr_gamut_wideness( float flVal );
+extern bool set_sdr_on_hdr_brightness( float flVal );
+extern bool set_hdr_input_gain( float flVal );
+extern bool set_sdr_input_gain( float flVal );
+
 static void ritz_use_session_profile( const std::string &sName, bool bFromConsole )
 {
 	const gamescope::config::SessionProfileResult r = gamescope::config::UseSessionProfile( sName );
@@ -559,7 +566,19 @@ static std::optional<std::string> ritz_prescan_profile_arg(int argc, char **argv
 // cases in the getopt loop below). Plain globals (filter/scaler/sharpness) are
 // set directly; VRR/HDR/tearing already have real ConVars (see
 // superdoc/planning/config-system.md's ConVar hybrid section).
-static void apply_ritz_config_to_startup_state(const gamescope::config::Settings &config)
+//
+// Split in two since 2026-09-06: ritz_apply_config_live() is the part a
+// PROFILE SWITCH must also push into the running compositor, installed as
+// config::SetLiveApplyHook() so every generation bump (a click in the
+// Profiles list, `ritz_profile`, Create/Copy, Reset to inherited) reaches the
+// screen at once. Before that, the Display-owned values (filter, sharpness,
+// VRR/HDR/tearing, ...) only followed a switch once the Display area itself
+// drew and reloaded -- and not even then on its first load, which assumed
+// this startup apply had covered it (measured: the sharpness row still read
+// the old profile's value after selecting another one from the Profiles
+// area; requests-2026-09-06 item 1). The per-frame readers (HUD, crosshair,
+// notifications) reload themselves and need nothing here.
+static void ritz_apply_config_live(const gamescope::config::Settings &config, bool bStartup)
 {
 	g_wantedUpscaleFilter = ritz_config_parse_filter(config.gamescope.filter);
 	g_wantedUpscaleScaler = ritz_config_parse_scaler(config.gamescope.scaler);
@@ -573,6 +592,26 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	cv_adaptive_sync = config.gamescope.vrr_enabled;
 	cv_hdr_enabled = config.gamescope.hdr_enabled;
 	cv_tearing_enabled = config.gamescope.tearing_enabled;
+
+	if ( bStartup )
+		return;
+
+	// The rest needs a running compositor -- the same set PanelDisplay.cpp's
+	// PushCachedSettingsToLiveState() pushes when that area reloads (fps_limit
+	// deliberately not: it round-trips through an X11 property, see there).
+	steamcompmgr_set_force_relative_mouse( config.gamescope.force_grab_cursor );
+	set_color_sdr_gamut_wideness( config.gamescope.sdr_gamut_wideness );
+	set_sdr_on_hdr_brightness( config.gamescope.sdr_on_hdr_brightness_nits );
+	set_hdr_input_gain( config.gamescope.hdr_input_gain );
+	set_sdr_input_gain( config.gamescope.sdr_input_gain );
+	// system.clipboard_sync: PanelSystem reloads on the bump, but only when
+	// it next draws; seed the runtime flag now, as at startup.
+	gamescope::PanelSystem_SeedFromConfig();
+}
+
+static void apply_ritz_config_to_startup_state(const gamescope::config::Settings &config)
+{
+	ritz_apply_config_live( config, /*bStartup*/ true );
 
 	// Nested resolution and refresh (requests-2026-09-05 item 7, Phase B):
 	// 0 = "as launched", so a zero field leaves g_nNestedWidth/Height/Refresh
@@ -931,6 +970,15 @@ int main(int argc, char **argv)
 	const char *pszNoConVarSeed = getenv( "GAMESCOPE_RITZ_AB_NO_CONVAR_SEED" );
 	if ( !pszNoConVarSeed || pszNoConVarSeed[0] != '1' )
 		apply_ritz_config_to_startup_state( ritzConfig );
+
+	// From here on, every profile switch pushes the same values live (see
+	// ritz_apply_config_live). Installed AFTER the startup apply so the
+	// `--profile` bump above stays covered by it rather than by the live
+	// path, which wants a running compositor.
+	gamescope::config::SetLiveApplyHook( []( const gamescope::config::Settings &config )
+	{
+		ritz_apply_config_live( config, /*bStartup*/ false );
+	} );
 
 	// Why: PanelSystem's own registry (and the clipboard-sync seed it does on
 	// registration) builds lazily -- only the first time the settings shell

@@ -680,6 +680,7 @@ TEST_CASE( "a config written before the E2 rework loads with every value intact"
     "opacity_windows_focused": 0.77,
     "opacity_windows_unfocused": 0.55,
     "opacity_dock": 0.66,
+    "window_opacity": 0.6,
     "opacity_notifications": 0.88,
     "background_blur": 0.42,
     "background_darkening": 0.31,
@@ -705,9 +706,11 @@ TEST_CASE( "a config written before the E2 rework loads with every value intact"
     // with the dock. The key is still in the fixture above on purpose --
     // an old config carrying a removed key still loads.
     REQUIRE( g.overlay.notification_scale == 1.1f );
-    REQUIRE( g.overlay.opacity_windows_focused == 0.77f );
-    REQUIRE( g.overlay.opacity_windows_unfocused == 0.55f );
-    REQUIRE( g.overlay.opacity_dock == 0.66f );
+    // opacity_windows_focused/unfocused and opacity_dock are deliberately
+    // NOT asserted: removed 2026-09-06 with the surfaces they targeted
+    // (see ConfigSchema.h). The keys stay in the fixture above on purpose --
+    // an old config carrying removed keys still loads.
+    REQUIRE( g.overlay.window_opacity == 0.6f );
     REQUIRE( g.overlay.opacity_notifications == 0.88f );
     REQUIRE( g.overlay.background_blur == 0.42f );
     REQUIRE( g.overlay.background_darkening == 0.31f );
@@ -931,6 +934,7 @@ namespace
         c.hide_on_right_click = true;
         c.hide_mode = "shrink";
         c.hide_time_ms = 450;
+        c.hide_animate_back = false;
         c.apply_scaling = true;
         return c;
     }
@@ -955,6 +959,7 @@ namespace
         REQUIRE( a.hide_on_right_click == b.hide_on_right_click );
         REQUIRE( a.hide_mode == b.hide_mode );
         REQUIRE( a.hide_time_ms == b.hide_time_ms );
+        REQUIRE( a.hide_animate_back == b.hide_animate_back );
         REQUIRE( a.apply_scaling == b.apply_scaling );
     }
 }
@@ -1914,4 +1919,133 @@ TEST_CASE( "gamescope.nested_width/height/refresh_hz round-trip and default to a
     REQUIRE( loaded.gamescope.nested_width == 1280 );
     REQUIRE( loaded.gamescope.nested_height == 720 );
     REQUIRE( loaded.gamescope.nested_refresh_hz == 144 );
+}
+
+// ---- requests-2026-09-06 item 1: select loads, and edits land in the selection ----
+
+TEST_CASE( "select B then a routed write: B's file changes and A's does not; ResolvedSettings follows the selection", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "730" );
+
+    Settings a{};
+    a.gamescope.sharpness = 2;
+    a.crosshair.line_length = 12;
+    Settings b{};
+    b.gamescope.sharpness = 8;
+    b.crosshair.line_length = 30;
+    REQUIRE( SaveProfile( General( "A" ), a ) );
+    REQUIRE( SaveProfile( General( "B" ), b ) );
+    REQUIRE( SelectProfile( "A" ) );
+    REQUIRE( ResolvedSettings().gamescope.sharpness == 2 );
+    REQUIRE( ResolvedSettings().crosshair.line_length == 12 );
+
+    // Select B: the resolved values are B's at once, before any write.
+    REQUIRE( SelectProfile( "B" ) );
+    REQUIRE( SessionProfile() == "B" );
+    REQUIRE( ResolvedSettings().gamescope.sharpness == 8 );
+    REQUIRE( ResolvedSettings().crosshair.line_length == 30 );
+
+    // A panel reloads (as every EnsureConfigLoaded() does on the bump) and
+    // edits one value: B's file changes, A's does not.
+    const std::string sABefore = ReadText( ProfilePath( "A" ) );
+    static Settings panel; // a panel's file-static copy, the caller identity
+    panel = ResolvedSettings();
+    panel.crosshair.line_length = 40;
+    EnqueueRoutedWrite( panel );
+    FlushPendingWrites();
+    REQUIRE( ReadText( ProfilePath( "A" ) ) == sABefore );
+    REQUIRE( ReadText( ProfilePath( "B" ) ).find( "\"line_length\": 40" ) != std::string::npos );
+    REQUIRE( LoadProfile( "B" )->gamescope.sharpness == 8 );
+    REQUIRE( LoadProfile( "A" )->crosshair.line_length == 12 );
+
+    // Back to A: A's values, with B's edit kept in B.
+    REQUIRE( SelectProfile( "A" ) );
+    REQUIRE( ResolvedSettings().gamescope.sharpness == 2 );
+    REQUIRE( ResolvedSettings().crosshair.line_length == 12 );
+    REQUIRE( LoadProfile( "B" )->crosshair.line_length == 40 );
+}
+
+TEST_CASE( "a routed write from one panel never undoes another panel's edit (per-section merge)", "[config]" )
+{
+    // The 2026-09-06 root cause: every panel writes its WHOLE Settings, and
+    // its copy of the other sections is only as fresh as its last generation
+    // reload. Measured headless: the Display area set sharpness, the
+    // Crosshair area then changed a gap, and the crosshair write put
+    // sharpness back. The funnel now merges per section.
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "730" );
+
+    Settings base{};
+    base.gamescope.sharpness = 5;
+    base.crosshair.line_gap = 3;
+    REQUIRE( SaveProfile( General( "A" ), base ) );
+    REQUIRE( SelectProfile( "A" ) );
+
+    // Two panels load at the same generation -- two file-static copies.
+    static Settings display;
+    static Settings crosshair;
+    display = ResolvedSettings();
+    crosshair = ResolvedSettings();
+
+    // Display edits sharpness; the crosshair panel's copy still says 5.
+    display.gamescope.sharpness = 10;
+    EnqueueRoutedWrite( display );
+    REQUIRE( ResolvedSettings().gamescope.sharpness == 10 );
+
+    // Crosshair edits its own section and writes its (stale) whole struct.
+    crosshair.crosshair.line_gap = 4;
+    EnqueueRoutedWrite( crosshair );
+    FlushPendingWrites();
+    REQUIRE( ResolvedSettings().gamescope.sharpness == 10 );  // kept
+    REQUIRE( ResolvedSettings().crosshair.line_gap == 4 );    // taken
+    REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 10 );
+    REQUIRE( LoadProfile( "A" )->crosshair.line_gap == 4 );
+
+    // Display's next edit (its copy of crosshair is stale too) keeps the gap.
+    display.gamescope.sharpness = 12;
+    EnqueueRoutedWrite( display );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 12 );
+    REQUIRE( LoadProfile( "A" )->crosshair.line_gap == 4 );
+
+    // Reverting to a value a panel loaded with is still that panel's edit.
+    display.gamescope.sharpness = 5;
+    EnqueueRoutedWrite( display );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 5 );
+    REQUIRE( LoadProfile( "A" )->crosshair.line_gap == 4 );
+
+    // A panel that loaded BETWEEN two edits of another panel, writing for
+    // the first time, does not resurrect the older value either.
+    static Settings hud;
+    display.gamescope.sharpness = 7;
+    EnqueueRoutedWrite( display );
+    hud = ResolvedSettings();          // sees 7
+    display.gamescope.sharpness = 9;
+    EnqueueRoutedWrite( display );
+    hud.fps_display.font_size = 30.0f;
+    EnqueueRoutedWrite( hud );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 9 );
+    REQUIRE( LoadProfile( "A" )->fps_display.font_size == 30.0f );
+
+    // And the same through an inheriting game profile: the diff is taken
+    // from the merged result, so only the two edited keys are stored.
+    REQUIRE( SaveProfile( Game( "CS2", "730", "A" ), *LoadProfile( "A" ) ) );
+    REQUIRE( SelectProfile( "CS2" ) );
+    display = ResolvedSettings();
+    crosshair = ResolvedSettings();
+    display.gamescope.sharpness = 11;
+    EnqueueRoutedWrite( display );
+    crosshair.crosshair.line_gap = 6;
+    EnqueueRoutedWrite( crosshair );
+    FlushPendingWrites();
+    const std::string sCs2 = ReadText( ProfilePath( "CS2" ) );
+    REQUIRE( sCs2.find( "\"sharpness\": 11" ) != std::string::npos );
+    REQUIRE( sCs2.find( "\"line_gap\": 6" ) != std::string::npos );
+    REQUIRE( sCs2.find( "\"line_length\"" ) == std::string::npos );
+    REQUIRE( LoadProfile( "CS2" )->gamescope.sharpness == 11 );
+    REQUIRE( LoadProfile( "CS2" )->crosshair.line_gap == 6 );
+    REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 9 );
 }

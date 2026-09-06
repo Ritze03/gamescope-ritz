@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -126,6 +127,18 @@ namespace gamescope::config
     // single funnel every panel's edits go through. Queued on the
     // background writer; for an inheriting game profile the sparse diff is
     // computed here, against a cached copy of the parent.
+    //
+    // MERGED PER SECTION, not written whole (2026-09-06): only the sections
+    // the caller changed are taken from `settings`; every other section
+    // keeps the mirror's current value. A panel's copy of the other
+    // sections is only as fresh as its last generation reload, so writing
+    // it whole undid every other panel's edits since (the "edit, switch
+    // profile, switch back -- nothing changed" report). `settings` must be
+    // the caller's own persistent copy (every panel's file-static struct):
+    // its address identifies the caller between generation bumps, and a
+    // section that differs from what this caller last wrote -- or, on its
+    // first write, from every state ResolvedSettings() handed out -- is the
+    // caller's edit. ConfigManager.cpp's s_CallerBase has the details.
     void EnqueueRoutedWrite( const Settings &settings );
 
     // Bumped by everything here that changes which profile is authoritative
@@ -135,6 +148,18 @@ namespace gamescope::config
     // loaded at and reloads via ResolvedSettings() when they differ.
     uint64_t ConfigGeneration();
     void BumpConfigGeneration();
+
+    // The live half of a generation bump (2026-09-06). Panels reload
+    // lazily -- the first time they draw after the bump -- and the Display
+    // area is the one whose values live in compositor globals (filter,
+    // scaler, sharpness, VRR/HDR/tearing, force-grab, colour) rather than
+    // in something read per frame; until that area draws, a selected
+    // profile's picture would stay the old one, and its own first load
+    // does not push at all. main.cpp installs its startup apply here, and
+    // every bump calls it with the freshly resolved settings, so a select
+    // reaches the screen on the spot whatever area is open. Not called for
+    // the startup `--profile` bump (installed after the startup apply).
+    void SetLiveApplyHook( std::function<void( const Settings & )> fn );
 
     // ---- CRUD for the Profiles list ------------------------------------------------
     // Every operation is synchronous and returns why it refused, so the UI

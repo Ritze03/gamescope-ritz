@@ -34,17 +34,18 @@ namespace gamescope
 	// the config layer.
 	namespace panelconfig
 	{
-		// What the list shows for a profile: general profiles by name, game
-		// profiles as "[Game] <display name>" -- the game's title when one
-		// has been seen, else its app id, so a migrated profile that has
-		// never run yet still reads as a game's.
+		// What the list, the badge, the Status row and the modal titles call
+		// a profile: general profiles by name, game profiles as
+		// "[Game] <profile name>" -- ALWAYS the profile's own name, never
+		// the game's. (Until 2026-09-06 a game profile was labelled with the
+		// game's window title; the user: "It shows the process/game name.
+		// Not the actual profile name." A profile named CS2 for the game
+		// "Counter-Strike 2" must read as CS2 everywhere, because that is
+		// the name the user typed, the name in the toast, and the file.)
+		// The game's name is the LINE's secondary text -- GameName() below.
 		inline std::string ListLabel( const config::ProfileMeta &m )
 		{
-			if ( m.kind != config::ProfileKind::Game )
-				return m.name;
-			const std::string &sGame = !m.game_name.empty() ? m.game_name
-				: ( !m.app_id.empty() ? m.app_id : m.name );
-			return "[Game] " + sGame;
+			return m.kind == config::ProfileKind::Game ? "[Game] " + m.name : m.name;
 		}
 
 		// The list's tag / label split of ListLabel(): the tag is drawn
@@ -55,22 +56,42 @@ namespace gamescope
 		}
 		inline std::string ListName( const config::ProfileMeta &m )
 		{
-			const std::string s = ListLabel( m );
-			return m.kind == config::ProfileKind::Game ? s.substr( 7 ) : s;
+			return m.name;
 		}
 
-		// The right-aligned secondary text of one line: "launch option" on
-		// the line the `--profile` override selected (it is what the session
-		// edits, but not the assignment), else "inherits <parent>" for an
-		// inheriting game profile, else nothing.
+		// The game a game profile belongs to, for the muted text: the title
+		// seen for it (`game_name`), else its app id, so a migrated profile
+		// that has never run yet still says which game it is.
+		inline std::string GameName( const config::ProfileMeta &m )
+		{
+			if ( m.kind != config::ProfileKind::Game )
+				return {};
+			return !m.game_name.empty() ? m.game_name : m.app_id;
+		}
+
+		// The right-aligned, muted secondary text of one line:
+		// "launch option" on the line the `--profile` override selected (it
+		// is what the session edits, but not the assignment); the game's
+		// name on a game profile's line, then "inherits <parent>" when it
+		// inherits -- `Counter-Strike 2 · inherits Comp`, or the game alone.
 		inline std::string ListSecondary( const config::ProfileMeta &m, std::string_view svSessionProfile,
 		                                  bool bSessionOverride )
 		{
+			std::string s;
+			auto Add = [ &s ]( const std::string &sPart )
+			{
+				if ( sPart.empty() )
+					return;
+				if ( !s.empty() )
+					s += " · ";
+				s += sPart;
+			};
 			if ( bSessionOverride && m.name == svSessionProfile )
-				return "launch option";
+				Add( "launch option" );
+			Add( GameName( m ) );
 			if ( m.kind == config::ProfileKind::Game && !m.inherits.empty() )
-				return "inherits " + m.inherits;
-			return {};
+				Add( "inherits " + m.inherits );
+			return s;
 		}
 
 		// "Filter Game Profiles": a general profile always shows; a game
@@ -232,12 +253,13 @@ namespace gamescope
 		}
 
 		// The Status row's summary, in the sheet's control zone:
-		// `[Game] Rust · inherits Comp · game Rust`, or `Casual (launch) ·
-		// game Rust` while `--profile` is in force. Kept to the essentials
-		// because the control zone beside a column Inspector is ~40
-		// characters wide and DrawText clips the tail; the app id and the
-		// long form (`editing: ... · game: Rust (252490) · launch option:
-		// Casual (this session)`) are the row's Live facts, one per line.
+		// `[Game] Rust · inherits Comp`, `Casual · game Rust`, or `Casual
+		// (launch) · game Rust` while `--profile` is in force. Kept to the
+		// essentials because the control zone beside a column Inspector is
+		// ~40 characters wide and DrawText clips the tail; the app id and
+		// the long form (`editing: ... · game: Rust (252490) · launch
+		// option: Casual (this session)`) are the row's Live facts, one per
+		// line.
 		inline std::string StatusSummary( const config::ProfileMeta &session, std::string_view svGameName,
 		                                  const std::optional<std::string> &oAppId,
 		                                  const std::optional<std::string> &oOverride )
@@ -245,15 +267,15 @@ namespace gamescope
 			std::string s = oOverride ? *oOverride + " (launch)" : ListLabel( session );
 			if ( !oOverride && session.kind == config::ProfileKind::Game && !session.inherits.empty() )
 				s += " · inherits " + session.inherits;
-			// The game, only when the profile's own label does not already
-			// say it: "[Game] Rust" under Rust is the common case and
-			// repeating the name there is the difference between fitting
-			// the control zone and clipping.
-			const bool bLabelSaysGame = !oOverride && session.kind == config::ProfileKind::Game &&
+			// The game, only when the profile is not this game's own: a
+			// game profile bound to the running game is the common case,
+			// and naming the game there is the difference between fitting
+			// the control zone and clipping (the Live facts carry it).
+			const bool bOwnGameProfile = !oOverride && session.kind == config::ProfileKind::Game &&
 				oAppId && session.app_id == *oAppId;
 			if ( !oAppId )
 				s += " · no game identified";
-			else if ( !bLabelSaysGame )
+			else if ( !bOwnGameProfile )
 				s += " · game " + ( svGameName.empty() ? *oAppId : std::string( svGameName ) );
 			return s;
 		}
