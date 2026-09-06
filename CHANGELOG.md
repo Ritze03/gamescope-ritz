@@ -11,6 +11,12 @@ The newest version below is the one this build reports.
 
 ## [0.6.1] – 2026-09-06
 
+### Fixed
+- **In-game mouse look no longer drifts back to the centre**: a game that has grabbed
+  the mouse (CS2 in a match, any first-person game in play) no longer receives absolute
+  pointer positions -- neither from a resolution or scaler change nor from the host
+  pointer -- so the view stops snapping towards the host cursor; menus are unaffected.
+
 ### Info
 - **Profiles are being rebuilt**: your settings now live in a profile that saves every
   change straight away -- "Use this profile", "Restore previous settings", "Save

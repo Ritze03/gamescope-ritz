@@ -123,6 +123,49 @@ came up — not a verdict on the feature; the log line above it says which.
 Uses `python3`'s `PIL` (already installed on this machine; no new dependency was
 added — the script fails loudly with a pointer back here if it's ever missing).
 
+## Pointer regression: a locked pointer never gets an absolute event
+
+`pointer-regression.sh` is the same headless recipe as the pixel gate (private invisible
+sway, nested `gamescope --backend wayland`, `gamescopectl` ConCommands, no OS input) for the
+input rule behind the 2026-09-06 CS2 fix: **a game holding a pointer lock must never receive
+`wl_pointer.motion`**, and the absolute-pointer re-sync after a mapping change must fire
+exactly once per real change while unlocked. Non-zero exit gates a commit.
+
+```sh
+scripts/pointer-regression.sh                     # every check (~30s)
+scripts/pointer-regression.sh --only locked-absolute
+scripts/pointer-regression.sh --keep              # leave the last instance running
+scripts/pointer-regression.sh --gamescope <bin>   # another binary, e.g. a pre-fix one
+```
+
+**The client** is `build-release/tests/pointer_lock_client` (`tests/pointer_lock_client.c`,
+built with `--test`): a real SDL2 window inside gamescope's Xwayland that, with `--lock`,
+calls `SDL_SetRelativeMouseMode(SDL_TRUE)` -- what a first-person game does in play -- and
+prints one `MOTION` line per `SDL_MOUSEMOTION` it receives. Xwayland republishes every
+pointer event as XI2 raw motion and SDL reads raw valuators as deltas, so an absolute event
+that reaches a locked client shows up here as a position-sized jump (`xrel=640` for a sample
+at the output centre) -- the "joystick" of the report, measurable.
+
+**What is driven:** `wlserver_debug_mouse_motion` (relative), `wlserver_debug_absolute_motion`
+(an absolute host sample), `overlay_e2_set display.filter.scaler 4|0` (Stretch/Auto: a
+mapping change with no resize), `steamcompmgr_debug_set_nested_mode "<w> <h> 0"` (a runtime
+resolution change), and `wlserver_pointer_stats` for the compositor-side counters
+(`motions`, `motions_locked`, `resyncs`, `warps_suppressed_locked`) plus the constraint
+state. A binary without `wlserver_pointer_stats` gets its compositor-side assertions
+SKIPped and is judged on the client counts alone (how the pre-fix baseline was measured).
+
+**Checks:** `locked-relative` (relative motion still reaches the locked client -- proves the
+lock is real), `locked-absolute` (6 absolute samples: client +0, `motions_locked` 0),
+`locked-mapping` (2 scaler toggles + 2 mode changes: `resyncs` +0, client +0, and
+`warps_suppressed_locked` advanced, or the mapping never moved and the check is void),
+`unlocked-resync` (one sample -> client +1; 2 s idle -> +0; Auto->Stretch -> exactly +1; the
+same value again -> +0; a 5:4 nested mode -> +1). The nested mode and the sample point are
+deliberately non-degenerate -- a same-aspect mode under Auto does not move the mapping and
+the output centre maps to the window centre under every scaler; both are pinned in
+`tests/test_pointer_mapping.cpp`. Logs and `results.txt` land in
+`build-release/verify-shots/pointer-regression/<timestamp>/`. Spec and measurements:
+`superdoc/features/cursor-pipeline.md`, "Locked pointer => never an absolute event".
+
 ## Installing and updating gamescope-ritz
 
 `install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the

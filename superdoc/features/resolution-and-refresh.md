@@ -85,9 +85,14 @@ The absolute-pointer mapping (force-grab off) is rebuilt from the painted base l
 frame, so it follows the resized window on its own; what did not follow was the client's
 pointer, which kept the old game-space position until the next host motion. Since item 10
 (2026-09-05) `update_touch_scaling()` re-syncs it from the last host sample the moment the
-mapping changes. Details, including the force-grab toggle and the X-side limit for windows
-larger than the new root: [cursor-pipeline.md](cursor-pipeline.md), "The absolute pointer under
-a stretched resolution".
+mapping changes -- exactly once per real change, and **never while the game holds a pointer
+lock** (2026-09-06: a locked client reads relative motion only, and the re-sync's absolute
+event reached CS2 in play as a jump to the host position, "mouse look drifting back to
+centre"; `wlserver_mousewarp()` now refuses every warp while locked). Details, including the
+force-grab toggle and the X-side limit for windows larger than the new root:
+[cursor-pipeline.md](cursor-pipeline.md), "The absolute pointer under a stretched resolution"
+and "Locked pointer => never an absolute event". Regression gate:
+`scripts/pointer-regression.sh`.
 
 ## Honest limits (the help text says these too)
 

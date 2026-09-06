@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <cinttypes>
 #include <unistd.h>
 #include <pthread.h>
 #include <string.h>
@@ -922,6 +923,40 @@ static gamescope::ConCommand cc_wlserver_debug_absolute_motion(
 		wlserver_touchmotion( *ox, *oy, 0, get_time_in_milliseconds() );
 		if ( bNeedLock )
 			wlserver_unlock();
+	} );
+
+// The read-out for scripts/pointer-regression.sh (2026-09-06, the CS2
+// "mouse look drifts back to centre" report): one line, key=value, of the
+// pointer state and the motion counters in wlserver_t. The invariants the
+// script asserts are motions_locked == 0 always, and resyncs advancing by
+// exactly one per real mapping change while unlocked and by zero while
+// locked. Reads atomics and the constraint pointer only, so it needs no
+// lock and cannot stall the input threads.
+static gamescope::ConCommand cc_wlserver_pointer_stats(
+	"wlserver_pointer_stats",
+	"Print the pointer-motion counters and constraint state: constraint (none/locked/confined), "
+	"whether the last input was an absolute host sample, the mapping in use, and how many "
+	"wl_pointer.motion events went to the client in total / while locked (must be 0), how many "
+	"absolute re-syncs were sent, and how many warps were suppressed by a lock.",
+	[]( std::span<std::string_view> args )
+	{
+		const struct wlr_pointer_constraint_v1 *pConstraint = wlserver.mouse_constraint.load( std::memory_order_relaxed );
+		const char *pszConstraint = "none";
+		if ( pConstraint )
+			pszConstraint = pConstraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED ? "locked" : "confined";
+
+		console_log.infof( "wlserver_pointer_stats: constraint=%s abs_current=%d last_abs=(%.4f,%.4f) "
+		                   "cursor=(%.1f,%.1f) mapping=(%.4f,%.4f,%.1f,%.1f) motions=%" PRIu64
+		                   " motions_locked=%" PRIu64 " resyncs=%" PRIu64 " warps_suppressed_locked=%" PRIu64,
+			pszConstraint,
+			wlserver.bAbsolutePointerCurrent ? 1 : 0,
+			wlserver.flLastAbsolutePointerX, wlserver.flLastAbsolutePointerY,
+			wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory,
+			focusedWindowScaleX, focusedWindowScaleY, focusedWindowOffsetX, focusedWindowOffsetY,
+			wlserver.ulAbsoluteMotionsSent.load( std::memory_order_relaxed ),
+			wlserver.ulAbsoluteMotionsSentLocked.load( std::memory_order_relaxed ),
+			wlserver.ulResyncsSent.load( std::memory_order_relaxed ),
+			wlserver.ulWarpsSuppressedLocked.load( std::memory_order_relaxed ) );
 	} );
 
 // Which side (the focused game's wl_seat, or the settings overlay) actually
@@ -3887,6 +3922,32 @@ static bool wlserver_apply_constraint( double *dx, double *dy )
 	return true;
 }
 
+// Is the focused client's pointer LOCKED (zwp_locked_pointer_v1 -- what
+// Xwayland asks for when a game hides its cursor and warps it, i.e. every
+// first-person game in play)? A locked client reads relative motion only;
+// wl_pointer.motion must not reach it at all. Both emitters below honour
+// this: wlserver_mousemotion() via wlserver_apply_constraint(), and
+// wlserver_mousewarp() directly (added 2026-09-06 -- the in-game "mouse
+// drifts back to centre" report, superdoc/features/cursor-pipeline.md).
+static bool wlserver_pointer_is_locked()
+{
+	assert( wlserver_is_lock_held() );
+	const struct wlr_pointer_constraint_v1 *pConstraint = wlserver.GetCursorConstraint();
+	return pConstraint && pConstraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED;
+}
+
+// The one place a wl_pointer.motion leaves for the client, so the
+// regression counters (wlserver_pointer_stats) see every one of them.
+static void wlserver_send_absolute_motion( uint32_t time )
+{
+	assert( wlserver_is_lock_held() );
+	wlserver.ulAbsoluteMotionsSent.fetch_add( 1, std::memory_order_relaxed );
+	if ( wlserver_pointer_is_locked() )
+		wlserver.ulAbsoluteMotionsSentLocked.fetch_add( 1, std::memory_order_relaxed );
+	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
+	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+}
+
 void wlserver_mousemotion( double dx, double dy, uint32_t time )
 {
 	assert( wlserver_is_lock_held() );
@@ -3931,10 +3992,7 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 	//
 	// So: LOCKED -> relative only, everything else -> absolute only.
 	// See superdoc/features/cursor-pipeline.md.
-	const struct wlr_pointer_constraint_v1 *pConstraint = wlserver.GetCursorConstraint();
-	const bool bPointerLocked = pConstraint && pConstraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED;
-
-	if ( bPointerLocked )
+	if ( wlserver_pointer_is_locked() )
 		wlserver_perform_rel_pointer_motion( dx, dy );
 
 	if ( !wlserver_apply_constraint( &dx, &dy ) )
@@ -3953,18 +4011,33 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 
 	wlserver_oncursorevent();
 
-	// Upstream verbatim, and it must stay that way: this is what actually moves
-	// the pointer for the focused client. Withholding it while
+	// Upstream verbatim in effect, and it must stay that way: this is what
+	// actually moves the pointer for the focused client. Withholding it while
 	// g_bForceRelativeMouse was set (4583d6f) froze pointer input outright --
 	// force-grab describes gamescope's relationship with the HOST compositor,
 	// not the client's input mode.
-	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
-	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+	wlserver_send_absolute_motion( time );
 }
 
 void wlserver_mousewarp( double x, double y, uint32_t time, bool bSynthetic )
 {
 	assert( wlserver_is_lock_held() );
+
+	// Locked pointer => never an absolute event. wlserver_mousemotion() has
+	// always dropped its wl_pointer.motion for a LOCKED constraint (via
+	// wlserver_apply_constraint()); a warp is the same event with a
+	// different origin -- a host absolute sample that arrived before the
+	// host itself went relative, the re-sync after a mapping change, a
+	// focus-change warp to centre -- and the client treats it the same way:
+	// Xwayland moves the X sprite, the game reads the jump as real motion
+	// and its own warp-to-centre no longer lands. Upstream only gates the
+	// relative path; this is the missing half. The position is left where
+	// the lock froze it, exactly as the relative path leaves it.
+	if ( wlserver_pointer_is_locked() )
+	{
+		wlserver.ulWarpsSuppressedLocked.fetch_add( 1, std::memory_order_relaxed );
+		return;
+	}
 
 	wlserver.mouse_surface_cursorx = x;
 	wlserver.mouse_surface_cursory = y;
@@ -3977,8 +4050,7 @@ void wlserver_mousewarp( double x, double y, uint32_t time, bool bSynthetic )
 
 	wlserver_oncursorevent();
 
-	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
-	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+	wlserver_send_absolute_motion( time );
 }
 
 void wlserver_fake_mouse_pos( double x, double y )
@@ -4148,6 +4220,15 @@ void wlserver_resync_absolute_pointer()
 	if ( !wlserver.bAbsolutePointerCurrent || !wlserver.mouse_focus_surface )
 		return;
 
+	// Locked => relative only; there is no absolute position to re-sync
+	// (wlserver_mousewarp() refuses too -- this early-out keeps the stats
+	// honest: a suppressed re-sync is not a sent one).
+	if ( wlserver_pointer_is_locked() )
+	{
+		wlserver.ulWarpsSuppressedLocked.fetch_add( 1, std::memory_order_relaxed );
+		return;
+	}
+
 	if ( gamescope::SettingsOverlay_IsCapturingInput() )
 		return;
 
@@ -4163,6 +4244,9 @@ void wlserver_resync_absolute_pointer()
 	if ( tx == wlserver.mouse_surface_cursorx && ty == wlserver.mouse_surface_cursory )
 		return;
 
+	wlserver.ulResyncsSent.fetch_add( 1, std::memory_order_relaxed );
+	wl_log.debugf( "absolute pointer re-sync: host (%.4f, %.4f) -> surface (%.1f, %.1f)",
+		wlserver.flLastAbsolutePointerX, wlserver.flLastAbsolutePointerY, tx, ty );
 	wlserver_mousewarp( tx, ty, get_time_in_milliseconds(), true );
 }
 

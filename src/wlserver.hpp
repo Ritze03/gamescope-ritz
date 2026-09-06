@@ -174,6 +174,28 @@ struct wlserver_t {
 	double flLastAbsolutePointerX = 0.0;
 	double flLastAbsolutePointerY = 0.0;
 
+	// Pointer-motion accounting, read by the wlserver_pointer_stats
+	// ConCommand for scripts/pointer-regression.sh. Written with the lock
+	// held; atomics only so the console thread can print them without it.
+	//   ulAbsoluteMotionsSent        every wl_pointer.motion sent to the client
+	//   ulAbsoluteMotionsSentLocked  ...of those, sent while a LOCKED
+	//                                constraint was active. Must stay 0: a
+	//                                locked client reads relative motion only,
+	//                                and an absolute event is what makes a
+	//                                game's mouse look snap back to centre
+	//                                (CS2, 2026-09-06 -- see
+	//                                superdoc/features/cursor-pipeline.md).
+	//   ulResyncsSent                wlserver_resync_absolute_pointer() warps
+	//                                that reached the client (one per real
+	//                                mapping change, never per frame)
+	//   ulWarpsSuppressedLocked      warps (re-syncs, host absolute samples,
+	//                                focus warps) refused because the pointer
+	//                                was locked
+	std::atomic<uint64_t> ulAbsoluteMotionsSent = { 0 };
+	std::atomic<uint64_t> ulAbsoluteMotionsSentLocked = { 0 };
+	std::atomic<uint64_t> ulResyncsSent = { 0 };
+	std::atomic<uint64_t> ulWarpsSuppressedLocked = { 0 };
+
 	uint64_t ulLastMovedCursorTime = 0;
 	bool bCursorHidden = true;
 	bool bCursorHasImage = true;

@@ -43,3 +43,14 @@ test('crosshair', gamescope_tests, args: ['[crosshair]'])
 test('overlay_profiles', gamescope_tests, args: ['[overlay_profiles]'])
 test('fps_counter', gamescope_tests, args: ['[fps_counter]'])
 test('pointer_mapping', gamescope_tests, args: ['[pointer_mapping]'])
+
+# scripts/pointer-regression.sh's test client -- not a meson test (it needs a
+# running gamescope), just built here so the script has a binary. See the
+# file's own header.
+if sdl2_dep.found()
+	executable(
+		'pointer_lock_client',
+		['pointer_lock_client.c'],
+		dependencies: [sdl2_dep],
+	)
+endif

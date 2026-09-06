@@ -962,11 +962,12 @@ compare itself is race-free because paint_all's thread is the only writer) and c
 `wlserver_resync_absolute_pointer()`. That replays the last absolute host sample --
 `wlserver.flLastAbsolutePointerX/Y`, stored by `wlserver_touchmotion()` after orientation --
 through the new mapping and `wlserver_mousewarp()`s the client's pointer there, synthetically
-(no cursor un-hide). It bails when the last input was **relative**
-(`wlserver_mousemotion()` clears `bAbsolutePointerCurrent`: after a grab the host decides where
-the pointer reappears and its first absolute sample re-syncs on its own), when the overlay owns
-the pointer, when the touch mode never warps the cursor (Passthrough / Trackpad / Disabled), or
-when nothing would move.
+(no cursor un-hide). It bails when the pointer is **locked** (added 2026-09-06 -- see the next
+section; a locked client reads relative motion only, so there is nothing to re-sync), when the
+last input was **relative** (`wlserver_mousemotion()` clears `bAbsolutePointerCurrent`: after a
+grab the host decides where the pointer reappears and its first absolute sample re-syncs on its
+own), when the overlay owns the pointer, when the touch mode never warps the cursor (Passthrough /
+Trackpad / Disabled), or when nothing would move.
 
 *Force-grab toggle:* on -> relative motion invalidates the sample, nothing stale can replay;
 off -> SDL warps the host pointer back and emits a motion, the Wayland backend gets the host's
@@ -991,3 +992,97 @@ real host pointer with force grab off -- so it records `flLastAbsolutePointerX/Y
 mapping, letting `wlserver_resync_absolute_pointer()`'s behaviour above be verified on a laptop
 with no host input device involved.
 
+
+## Locked pointer => never an absolute event -- fixed 2026-09-06 (CS2 mouse look drifting to centre)
+
+Report, verbatim: *"In CS2, my mouse did work in the menus, but ingame, it behaved like a
+joystick almost (going back to center, looked almost like it would, when the mouse didnt hide
+properly (constantly moving back to center))."*
+
+### What a game in play is, to the compositor
+
+A first-person game in play hides its cursor and warps it to the window centre (SDL's relative
+mouse mode). Under Xwayland that becomes a **`zwp_locked_pointer_v1`** request to gamescope --
+`handle_pointer_constraint()` / `wlserver_constrain_cursor()` -- and from then on the client reads
+**relative motion only** (`zwp_relative_pointer_v1`, republished by Xwayland as XI2 raw motion).
+The menus are the other state: cursor shown, no constraint, an absolute pointer. That is why the
+report splits along menu/in-game.
+
+### Why one absolute event is a "joystick"
+
+Xwayland republishes **every** pointer event it gets as an XI2 raw event, and SDL's relative mode
+reads raw valuators as deltas. Xwayland's pointer device has *absolute* axes, so a
+`wl_pointer.motion` delivered to a locked client arrives at the game as a delta the size of the
+**position**, not of any movement. Measured with `tests/pointer_lock_client.c` (a real SDL2
+window in relative mode, inside gamescope's Xwayland): one absolute sample at the output centre
+reached the client as `xrel=640 yrel=360`; the pre-fix binary delivered 6 of 6 absolute samples
+to a locked client as `xrel=426 / 853` jumps. A stream of those, one per host sample, is a mouse
+that "moves back to centre" on its own.
+
+### The emitters
+
+`wlserver_mousemotion()` has always dropped its `wl_pointer.motion` for a LOCKED constraint
+(`wlserver_apply_constraint()` returns false) -- upstream behaviour, kept verbatim. But that is
+only the relative path. **`wlserver_mousewarp()`** sends the same event from a different origin
+and never checked the lock, in upstream or here:
+
+- a **host absolute sample** (`wlserver_touchmotion()` -> `wlserver_mousewarp()`), which the
+  nested backends keep delivering with force-grab off until the *host* itself has confirmed
+  relative mode -- and always, if it never does;
+- the item-10 **re-sync** above (`wlserver_resync_absolute_pointer()`, added 2026-09-05): a
+  mapping change while the last input was an absolute sample replays that sample as a warp.
+  Confirmed on the pre-fix binary: with the pointer locked, two scaler toggles and two nested-mode
+  changes delivered 2 motion lines to the client (`build-release/verify-shots/pointer-regression/`,
+  the `--gamescope gamescope-before-fix` runs). This is the fork's own addition and the one the
+  2026-09-04/05 batch introduced; the host-sample path is upstream's, but it is the same class of
+  event and the same fix closes it;
+- the focus-change **warp to centre** (`bResetToCenter` / `bResetToCorner` in
+  `determine_and_apply_focus()`), synthetic, upstream.
+
+### The fix
+
+One gate, at the emitter: `wlserver_mousewarp()` returns without moving or notifying when
+`wlserver_pointer_is_locked()` (a LOCKED constraint on the seat). `wlserver_resync_absolute_pointer()`
+bails on the same test first, so the *suppressed* counter says "re-sync reached and refused" rather
+than "re-sync sent". The position is left where the lock froze it, exactly as the relative path
+leaves it; on unlock `wlserver_warp_to_constraint_hint()` places the pointer from the client's
+hint as before.
+
+**Why the rule is absolute, not "only synthetic warps":** the protocol says a locked pointer
+gets no motion events, full stop; the client has told us it is reading relative motion, and any
+absolute event it gets is misread as movement. Gating only the synthetic warps would have left the
+host-sample path open, which is the larger emitter whenever the host is slow to (or does not)
+confirm relative mode. The one behaviour this removes that upstream had: a touchscreen tap on a
+locked game (the Deck's DRM path) no longer jumps the pointer -- which was an absolute event to a
+relative-only client, i.e. the bug, on a device this fork does not target.
+
+**Why not per-frame, why exactly once:** the re-sync still fires only from
+`update_touch_scaling()`'s change detection (the four cached floats vs the freshly painted
+layer), so an unlocked client gets exactly one re-sync per real mapping change, none on a no-op
+set, none at rest. `tests/test_pointer_mapping.cpp` pins the comparison and the two degenerate
+cases (a same-aspect nested mode under Auto does not move the mapping; the output centre maps to
+the window centre under every scaler) so the regression script's "exactly one" means something.
+
+### Measured (`scripts/pointer-regression.sh`, 2026-09-06)
+
+Headless (private sway + nested `--backend wayland`, the pixel-regression recipe), client
+`pointer_lock_client --lock`, motion driven by `wlserver_debug_mouse_motion` /
+`wlserver_debug_absolute_motion`, mapping changes by `overlay_e2_set display.filter.scaler` and
+`steamcompmgr_debug_set_nested_mode`, counters from `wlserver_pointer_stats`:
+
+| check | pre-fix binary | fixed |
+| --- | --- | --- |
+| 10 relative injections, locked | (lock flaky to detect without stats) | client saw 10, all `xrel=5` |
+| 6 absolute samples, locked | client saw **6** (`xrel=426/853`) | client saw 0; `motions_locked=0` |
+| 2 scaler toggles + 2 mode changes, locked | client saw **2** (the re-syncs) | client saw 0; `resyncs=0`, `warps_suppressed_locked` +4 (one per change) |
+| unlocked: 1 sample, 2 s idle, Stretch, Stretch again, 1280x1024 | n/a | 1 / 0 / **1** / 0 / **1** re-syncs, matching client motions |
+
+### Diagnosing it live
+
+`gamescopectl wlserver_pointer_stats` prints `constraint=locked|confined|none`, whether the last
+input was absolute, the mapping in use, and the counters. With a game in play: `constraint=locked`
+and `motions_locked=0` is the rule holding. `warps_suppressed_locked` climbing while the mouse
+moves means the **host** is still delivering absolute samples to a locked client -- i.e. the
+nested backend was not put into relative mode (`bImageEmpty && bHasPointerConstraint` in
+`steamcompmgr.cpp`'s paint loop) -- which is a different bug to chase, now visible instead of
+felt.

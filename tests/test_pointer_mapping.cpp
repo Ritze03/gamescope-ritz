@@ -196,3 +196,55 @@ TEST_CASE( "integer scaler floors a scale above one", "[pointer_mapping]" )
 	CHECK_THAT( r.x, WithinAbs( 2.0, 1e-6 ) );
 	CHECK_THAT( r.y, WithinAbs( 2.0, 1e-6 ) );
 }
+
+// 2026-09-06, the CS2 "mouse look drifts back to centre" fix: the re-sync
+// must fire at most once per REAL mapping change, never on a no-op. The
+// live gate is update_touch_scaling()'s compare of the cached four floats
+// against the freshly painted layer; this pins the comparison itself, and
+// the two degenerate cases scripts/pointer-regression.sh had to steer
+// around so that its "exactly one" assertion means something.
+TEST_CASE( "the mapping compares equal to itself and different after a real change", "[pointer_mapping]" )
+{
+	// A windowed 640x480 client in a 1280x720 output, as the script runs.
+	constexpr int kWinW = 640, kWinH = 480;
+
+	const AbsolutePointerMapping autoNow = MappingForBaseLayer(
+		ComputeScalerRatios( GamescopeUpscaleScaler::AUTO, kOutW, kOutH, kOutW, kOutH, kWinW, kWinH, kMaxScale ),
+		kOutW, kOutH, kWinW, kWinH );
+	const AbsolutePointerMapping autoAgain = MappingForBaseLayer(
+		ComputeScalerRatios( GamescopeUpscaleScaler::AUTO, kOutW, kOutH, kOutW, kOutH, kWinW, kWinH, kMaxScale ),
+		kOutW, kOutH, kWinW, kWinH );
+	const AbsolutePointerMapping stretch = MappingForBaseLayer(
+		ComputeScalerRatios( GamescopeUpscaleScaler::STRETCH, kOutW, kOutH, kOutW, kOutH, kWinW, kWinH, kMaxScale ),
+		kOutW, kOutH, kWinW, kWinH );
+
+	// Same inputs, same frame after frame: no change, no re-sync.
+	CHECK( autoNow == autoAgain );
+	// Auto -> Stretch on a 4:3 window in a 16:9 output: a real change.
+	CHECK( autoNow != stretch );
+
+	// Degenerate case 1: under Auto, a nested mode that shares the window's
+	// aspect gives the same min(out/src) ratio -- the mapping does NOT move,
+	// so a re-sync count of 0 there is correct, not a regression.
+	const AbsolutePointerMapping sameAspectMode = MappingForBaseLayer(
+		ComputeScalerRatios( GamescopeUpscaleScaler::AUTO, kOutW, kOutH, 960, 720, kWinW, kWinH, kMaxScale ),
+		kOutW, kOutH, kWinW, kWinH );
+	CHECK( autoNow == sameAspectMode );
+	// ...whereas a 5:4 nested mode does move it (1280x1024 -> ratio 1.406).
+	const AbsolutePointerMapping otherAspectMode = MappingForBaseLayer(
+		ComputeScalerRatios( GamescopeUpscaleScaler::AUTO, kOutW, kOutH, 1280, 1024, kWinW, kWinH, kMaxScale ),
+		kOutW, kOutH, kWinW, kWinH );
+	CHECK( autoNow != otherAspectMode );
+
+	// Degenerate case 2: the output centre lands on the window centre under
+	// every scaler, so a re-sync from a centred sample moves nothing and is
+	// (correctly) skipped -- the script samples off-centre for that reason.
+	double ax, ay, sx, sy;
+	OutputToSurface( autoNow, kOutW / 2.0, kOutH / 2.0, &ax, &ay );
+	OutputToSurface( stretch, kOutW / 2.0, kOutH / 2.0, &sx, &sy );
+	CHECK_THAT( ax, WithinAbs( sx, 1e-6 ) );
+	CHECK_THAT( ay, WithinAbs( sy, 1e-6 ) );
+	OutputToSurface( autoNow, kOutW / 4.0, kOutH / 4.0, &ax, &ay );
+	OutputToSurface( stretch, kOutW / 4.0, kOutH / 4.0, &sx, &sy );
+	CHECK( ax != sx );
+}

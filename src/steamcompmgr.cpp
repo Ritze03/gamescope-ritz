@@ -1142,6 +1142,34 @@ void steamcompmgr_set_nested_mode( int nWidth, int nHeight, int nRefreshmHz )
 	hasRepaint = true;
 }
 
+// scripts/pointer-regression.sh's way of firing a real mapping change
+// (2026-09-06): enters steamcompmgr_set_nested_mode() exactly as the Display
+// > Resolution rows do, so the game window is resized, the next painted
+// frame moves the absolute-pointer mapping, and update_touch_scaling()'s
+// change detection + wlserver_resync_absolute_pointer() run for real.
+// Through gamescopectl the arguments must be ONE quoted argument:
+// gamescopectl steamcompmgr_debug_set_nested_mode "1280 960 0".
+gamescope::ConCommand cc_steamcompmgr_debug_set_nested_mode( "steamcompmgr_debug_set_nested_mode",
+	"Set the nested (game) resolution and refresh at runtime: steamcompmgr_debug_set_nested_mode "
+	"<width> <height> [refresh-mHz, 0 = follow host]. Same path as Display > Resolution.",
+[]( std::span<std::string_view> svArgs )
+{
+	if ( svArgs.size() < 3 )
+	{
+		console_log.errorf( "usage: steamcompmgr_debug_set_nested_mode <width> <height> [refresh-mHz]" );
+		return;
+	}
+	const std::optional<int> onWidth = gamescope::Parse<int>( svArgs[1] );
+	const std::optional<int> onHeight = gamescope::Parse<int>( svArgs[2] );
+	const std::optional<int> onRefresh = svArgs.size() >= 4 ? gamescope::Parse<int>( svArgs[3] ) : std::optional<int>( 0 );
+	if ( !onWidth || !onHeight || !onRefresh || *onWidth <= 0 || *onHeight <= 0 || *onRefresh < 0 )
+	{
+		console_log.errorf( "steamcompmgr_debug_set_nested_mode: bad argument; usage: <width> <height> [refresh-mHz]" );
+		return;
+	}
+	steamcompmgr_set_nested_mode( *onWidth, *onHeight, *onRefresh );
+});
+
 gamescope::ConCommand cc_debug_set_force_relative_mouse( "debug_set_force_relative_mouse", "Set force-relative-mouse mode (debug)",
 [](std::span<std::string_view> svArgs)
 {
