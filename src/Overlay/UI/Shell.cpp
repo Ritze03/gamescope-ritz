@@ -1646,16 +1646,13 @@ namespace gamescope::ui::shell
 		// =================================================================
 		//  Region 1 -- the rail (SPEC §8.1)
 		// =================================================================
-		const char *SectionName( Section eSection )
-		{
-			switch ( eSection )
-			{
-				case Section::Display: return "DISPLAY";
-				case Section::System:  return "SYSTEM";
-				case Section::Setup:   return "SETUP";
-			}
-			return "";
-		}
+		// The rail's grouping/order table (RailGroup, RailOrder(),
+		// RailGroupFor()) and Registry::RailAreas() live in Registry.h/.cpp
+		// now, not here -- see that header's own comment on why (this test
+		// binary does not link Shell.cpp, so a table that lived only here
+		// could not be pinned by a plain unit test). This file only draws
+		// from them.
+		std::vector<const Area *> RailAreas() { return Reg().RailAreas(); }
 
 		// `bIcons` is the LADDER's answer, never a threshold re-derived from
 		// the width this function was handed. The width is animated (SPEC
@@ -1689,23 +1686,24 @@ namespace gamescope::ui::shell
 			// keeping two copies of the same arithmetic in step by hand.
 			const float flSecAdvance = bIcons ? Px( 20.0f ) : ( flSecH + Px( tok::kXS ) );
 
+			const std::vector<const Area *> railAreas = RailAreas();
+
 			const auto Walk = [ & ]( auto &&fnSection, auto &&fnItem ) -> float
 			{
-				float   y            = rc.y0 + Px( tok::kS );
-				Section eLastSection = Section::Setup;
-				bool    bFirst       = true;
+				float     y          = rc.y0 + Px( tok::kS );
+				RailGroup eLastGroup = RailGroup::Other;
+				bool      bFirst     = true;
 
-				for ( size_t i = 0; i < Reg().AreaCount(); ++i )
+				for ( size_t i = 0; i < railAreas.size(); ++i )
 				{
-					const Area &area = Reg().AreaAt( i );
-					if ( !area.Available() )
-						continue;
+					const Area &area = *railAreas[ i ];
+					const RailGroup eGroup = RailGroupFor( area );
 
-					if ( bFirst || area.GetSection() != eLastSection )
+					if ( bFirst || eGroup != eLastGroup )
 					{
-						eLastSection = area.GetSection();
+						eLastGroup = eGroup;
 						bFirst = false;
-						fnSection( area.GetSection(), y );
+						fnSection( eGroup, y );
 						y += flSecAdvance;
 					}
 
@@ -1715,7 +1713,7 @@ namespace gamescope::ui::shell
 				return y;
 			};
 
-			const auto NoSection = []( Section, float ) {};
+			const auto NoSection = []( RailGroup, float ) {};
 			const auto NoItem    = []( size_t, const Area &, float ) {};
 
 			// Measure, then decide the scroll offset. Content height carries
@@ -1748,7 +1746,7 @@ namespace gamescope::ui::shell
 			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
 
 			Walk(
-				[ & ]( Section eSection, float yRaw )
+				[ & ]( RailGroup eGroup, float yRaw )
 				{
 					const float y = yRaw - s_flRailScroll;
 					if ( bIcons )
@@ -1762,7 +1760,7 @@ namespace gamescope::ui::shell
 					else
 					{
 						Label( { rc.x0 + flPadX, y + Px( tok::kM ), rc.x1, y + flSecH },
-						       TypeRole::Section, Col( Role::TextMeta ), SectionName( eSection ) );
+						       TypeRole::Section, Col( Role::TextMeta ), RailGroupName( eGroup ) );
 					}
 				},
 				[ & ]( size_t i, const Area &area, float yRaw )
@@ -1879,12 +1877,12 @@ namespace gamescope::ui::shell
 			const Entry *pExplained = s_bExplainPage ? SelectedEntry() : nullptr;
 			if ( pExplained )
 				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s  /  %s   -   ^/ back",
-					pArea ? SectionName( pArea->GetSection() ) : "",
+					pArea ? RailGroupName( RailGroupFor( *pArea ) ) : "",
 					pArea ? pArea->Title().c_str() : "",
 					pExplained->Title().c_str() );
 			else
 				snprintf( szCrumb, sizeof( szCrumb ), "%s  /  %s",
-					pArea ? SectionName( pArea->GetSection() ) : "",
+					pArea ? RailGroupName( RailGroupFor( *pArea ) ) : "",
 					pArea ? pArea->Title().c_str() : "" );
 			Label( { rc.x0 + Px( tok::kSheetPad ), rc.y0, rc.x1 - Px( tok::kSheetPad ), rc.y1 },
 			       TypeRole::Section, Col( Role::TextPrimary ), szCrumb );
@@ -4042,7 +4040,7 @@ namespace gamescope::ui::shell
 
 			char szTitle[ 128 ];
 			snprintf( szTitle, sizeof( szTitle ), "%s / %s",
-				SectionName( pArea->GetSection() ), pArea->Title().c_str() );
+				RailGroupName( RailGroupFor( *pArea ) ), pArea->Title().c_str() );
 			Label( { rcIn.x0, y, rcIn.x1, y + Px( 18.0f ) }, TypeRole::Title,
 			       Col( Role::TextPrimary ), szTitle );
 			y += Px( 26.0f );
@@ -4324,9 +4322,17 @@ namespace gamescope::ui::shell
 			// strip is fixed inside it and only the body scrolls, in a
 			// nested child.
 			ImGui::SetCursorScreenPos( ImVec2( regions.rcInspector.x0, regions.rcInspector.y0 ) );
+			// The drawer variant stays at its own near-opaque constant: it
+			// floats OVER the sheet (the whole reason for the child-window
+			// shape above) and must occlude the rows behind it, the same
+			// reason the dropdown/palette popups below double-coat
+			// Role::Surface rather than respecting window_opacity. The
+			// docked Inspector fill is a real region of the slab, so it
+			// follows the same transparency the slab background does
+			// (requests-2026-09-06.md item 2).
 			ImGui::PushStyleColor( ImGuiCol_ChildBg, bDrawer
 				? IM_COL32( 12, 14, 17, 251 )       // index.html's .insp.drawer
-				: Col( Role::SurfaceInspector ) );
+				: Dim( Col( Role::SurfaceInspector ), gamescope::palette::WindowOpacity() ) );
 			ImGui::PushStyleVar( ImGuiStyleVar_ChildBorderSize, 0.0f );
 
 			const bool bOpen = ImGui::BeginChild( "##insp",
@@ -5477,11 +5483,10 @@ namespace gamescope::ui::shell
 		// over a hidden area and look like a dropped keypress.
 		std::vector<const Area *> VisibleAreas()
 		{
-			std::vector<const Area *> out;
-			for ( size_t i = 0; i < Reg().AreaCount(); ++i )
-				if ( Reg().AreaAt( i ).Available() )
-					out.push_back( &Reg().AreaAt( i ) );
-			return out;
+			// The same fixed rail order DrawRail() draws (item 1,
+			// requests-2026-09-06.md) -- Ctrl+Left/Right must walk the
+			// order the eye sees, not raw registration order.
+			return RailAreas();
 		}
 
 		void StepArea( int nDir )
@@ -6721,7 +6726,14 @@ namespace gamescope::ui::shell
 		ImGui::SetNextWindowSize( ImVec2( slab.flWidthPx, slab.flHeightPx ) );
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
 		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, Hairline() );
-		ImGui::PushStyleColor( ImGuiCol_WindowBg, Col( Role::Surface ) );
+		// overlay.window_opacity (requests-2026-09-06.md item 2): this is
+		// the slab's own background, which the sheet draws directly onto
+		// (it fills no background of its own) -- so dimming it here is what
+		// makes both "slab background" and "sheet fill" respect the slider
+		// with one edit. Dim() scales alpha only, never RGB or the text
+		// drawn on top of it.
+		ImGui::PushStyleColor( ImGuiCol_WindowBg,
+			Dim( Col( Role::Surface ), gamescope::palette::WindowOpacity() ) );
 		ImGui::PushStyleColor( ImGuiCol_Border, Accent( 0.42f ) );
 
 		const ImGuiWindowFlags flags =

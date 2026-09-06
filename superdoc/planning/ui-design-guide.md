@@ -137,6 +137,15 @@ not something shown directly**, flag it as such to implementers.
 - Disabled/inactive slider (e.g. NIS sharpness when FSR is selected): whole control drops to **34%
   opacity** and the fill/handle desaturate to plain white instead of accent — this is the standard
   "control present but currently inert" treatment, reusable anywhere.
+- **The handle width rule (2026-09-06 fix, requests item 12/D4): constant, whatever the range or
+  step.** ImGui's own `SliderBehavior` widens a `SliderInt`'s grab past the token width on purpose,
+  to "represent one unit" of a coarse range — the Crosshair panel's Outline Width, Dot > Size and
+  Line > Width sliders (small integer ranges) all shipped with an oversized, lopsided handle as a
+  result, while every float `Slider` looked correct by coincidence. `Controls.cpp`'s `SliderGrab()`
+  now re-centres the returned grab rect to the token width (`kHandleW`) after `SliderBehavior` has
+  already resolved the frame's click/drag/keyboard step, so only the *painted* width changes — see
+  `ui::controls::ConstantWidthGrab()` (pure arithmetic, pinned in `test_overlay_ui.cpp` without an
+  ImGui context) and `Controls.h`'s own comment on it for the full mechanism.
 
 **Toggles (switches)**
 - **30×15px** track (26×13 or 24×12 in denser variants — 30×15 is the canonical size per 2b), no radius
@@ -228,9 +237,13 @@ on a segmented control or dropdown) or for `Bank` (a multi-select set of indepen
 switches) — `ListBox` is for a genuinely *long*, single-selection list.
 
 **Styling:** wire lines only — a 1px hairline frame, 1px row separators, the selected row
-outlined in the accent at full strength with **no fill** (this is the one place in the kit
-a "selected" state is shown by an outline alone, because the sketch that specified it drew
-it that way). An optional muted prefix *tag* (`[Game]`) and an optional right-aligned
+outlined in the accent at full strength (the sketch that specified this widget drew it that
+way) **and** filled with `Accent(0.10f)` — the same accent-soft backdrop `DrawRail()` paints
+behind the selected rail item. The outline-only look shipped first and read as
+under-selected against the Profiles list's busy rows (requests-2026-09-06.md item 3: "not
+visible enough... use the properly colored backdrop"); the fill was added 2026-09-06,
+keeping the outline rather than replacing it. An optional muted prefix *tag* (`[Game]`) and
+an optional right-aligned
 *secondary* string (`inherits Comp`) per item; the secondary is the one thing dropped when
 a row is too narrow to hold all three without clipping the label — never the label itself.
 
@@ -506,4 +519,25 @@ the affordance column (SPEC §2.4: one glyph, by priority), so it can displace n
 Inherited rows draw nothing -- the parent's values are the baseline, and marking the majority
 would bury the deviations the dot exists to show. The words (`inherited from Comp`,
 `overridden` + a neutral **Reset to inherited** chip) live in the Inspector's CONFIGURE page.
+
+### Rail groups (2026-09-06)
+
+The rail's small uppercase section dividers (`TypeRole::Section`, `Col(Role::TextMeta)` --
+the same label vocabulary the group/section headers elsewhere in this guide use) mark four
+fixed groups, in this order (requests-2026-09-06.md item 4): **DISPLAY** (General, Resolution,
+Upscaling, Frame limiter, HDR, Shaders), **MISC** (HUD, Mixer, Crosshair), **SETTINGS**
+(Profiles, System, Appearance, Cursor), **OTHER** (Log, Changelog). The icon-collapsed rail
+keeps the divider as a bare rule (§8.0's collapse is about width, and a heading is the one
+thing that cannot survive it) exactly as the section dividers already did.
+
+This replaced an earlier three-way `DISPLAY` / `SYSTEM` / `SETUP` grouping keyed off each
+area's own `Section` at registration -- that enum (`Registry.h`) still exists (every
+`reg.Add()` call still takes one) but nothing draws from it any more. The four groups above
+are their own fixed table (`RailGroup`, `RailOrder()`, `RailGroupFor()` in `Registry.h`/`.cpp`,
+walked by `Registry::RailAreas()`), independent of both `Section` and each area's own
+registration order, and kept in `Registry.cpp` rather than `Shell.cpp` (where the rail is
+actually drawn) so a plain unit test can pin it without an ImGui context -- see
+`test_overlay_ui.cpp`'s "rail:" test cases. `setup.cursor` is not named by the request's four
+groups; it kept its former `Setup` neighbours (Profiles, Appearance) under SETTINGS rather
+than a placement the request never specified.
 

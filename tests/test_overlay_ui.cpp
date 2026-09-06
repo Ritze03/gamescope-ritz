@@ -1932,6 +1932,97 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 }
 
 // =========================================================================
+//  Rail order & groups -- requests-2026-09-06.md item 1
+// =========================================================================
+// "Reorder the left sidebar: DISPLAY (General, Resolution, Upscaling, Frame
+// limiter, HDR, Shaders); MISC (HUD, Mixer, Crosshair); SETTINGS (Profiles,
+// System, Appearance); OTHER (Log, Changelog)." A pinned list, the same
+// shape as the icon census above: written out rather than walked off
+// RegisterAll() (which this test binary does not link -- see that test's
+// own comment), so this is the test's own statement of what the rail must
+// draw, and the one place a future edit to Registry.cpp's kRailOrder has to
+// agree with.
+TEST_CASE( "rail: the four groups are in the order the request named", "[overlay_ui]" )
+{
+	struct Expected { const char *pszId; ui::RailGroup eGroup; };
+	const Expected expected[] = {
+		{ "display.general",       ui::RailGroup::Display },
+		{ "display.resolution",    ui::RailGroup::Display },
+		{ "display.upscaling",     ui::RailGroup::Display },
+		{ "display.frame_limiter", ui::RailGroup::Display },
+		{ "display.hdr",           ui::RailGroup::Display },
+		{ "image.shaders",         ui::RailGroup::Display },
+		{ "system.hud",            ui::RailGroup::Misc },
+		{ "audio.mixer",           ui::RailGroup::Misc },
+		{ "system.crosshair",      ui::RailGroup::Misc },
+		{ "setup.profiles",        ui::RailGroup::Settings },
+		{ "system.general",        ui::RailGroup::Settings },
+		{ "setup.appearance",      ui::RailGroup::Settings },
+		{ "setup.cursor",          ui::RailGroup::Settings },
+		{ "system.log",            ui::RailGroup::Other },
+		{ "system.changelog",      ui::RailGroup::Other },
+	};
+	const size_t nExpected = sizeof( expected ) / sizeof( expected[ 0 ] );
+
+	REQUIRE( ui::RailOrderCount() == nExpected );
+	for ( size_t i = 0; i < nExpected; ++i )
+	{
+		INFO( "slot " << i << ": " << expected[ i ].pszId );
+		REQUIRE( std::string( ui::RailOrder()[ i ].pszAreaId ) == expected[ i ].pszId );
+		REQUIRE( ui::RailOrder()[ i ].eGroup == expected[ i ].eGroup );
+		REQUIRE( ui::RailGroupForId( expected[ i ].pszId ) == expected[ i ].eGroup );
+	}
+
+	// Every entry is claimed exactly once -- the icon census's own
+	// anti-collision shape, applied to placement instead of drawing: a
+	// duplicated id would silently draw the rail item twice (DrawRail()
+	// walks this table once per area id) and a missing one would drop an
+	// area off the rail's fixed order (Registry::RailAreas() only ever
+	// looks up ids this table names).
+	for ( size_t i = 0; i < nExpected; ++i )
+		for ( size_t j = i + 1; j < nExpected; ++j )
+			REQUIRE( std::string( expected[ i ].pszId ) != expected[ j ].pszId );
+}
+
+TEST_CASE( "rail: the group labels are the request's own words", "[overlay_ui]" )
+{
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Display ) )  == "DISPLAY" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Misc ) )     == "MISC" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Settings ) ) == "SETTINGS" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Other ) )    == "OTHER" );
+}
+
+TEST_CASE( "rail: an id RailOrder() does not name falls back to Other", "[overlay_ui]" )
+{
+	// The same "never silently drop an area" contract Icons.h's own header
+	// comment states for a forgotten icon -- an area added and not yet
+	// placed in the table still lands somewhere or the whole set collapses.
+	REQUIRE( ui::RailGroupForId( "setup.nonexistent" ) == ui::RailGroup::Other );
+}
+
+TEST_CASE( "rail: Registry::RailAreas() follows the fixed order, not registration order", "[overlay_ui]" )
+{
+	// Registered in the OPPOSITE of the fixed table's order, and with one
+	// (audio.mixer) skipped entirely -- if RailAreas() were still walking
+	// AreaCount()/AreaAt() in registration order (the bug this exists to
+	// prevent), this would come back reversed and full-length instead.
+	ui::Registry reg;
+	reg.Add( "system.changelog", "Changelog",  ui::Section::System );
+	reg.Add( "system.log",       "Log",        ui::Section::System );
+	reg.Add( "setup.appearance", "Appearance", ui::Section::Setup );
+	reg.Add( "setup.profiles",   "Profiles",   ui::Section::Setup );
+	reg.Add( "display.general",  "General",    ui::Section::Display );
+
+	const std::vector<const ui::Area *> areas = reg.RailAreas();
+	REQUIRE( areas.size() == 5 );   // audio.mixer never registered -- skipped, not a crash
+	REQUIRE( areas[ 0 ]->Id() == "display.general" );
+	REQUIRE( areas[ 1 ]->Id() == "setup.profiles" );
+	REQUIRE( areas[ 2 ]->Id() == "setup.appearance" );
+	REQUIRE( areas[ 3 ]->Id() == "system.log" );
+	REQUIRE( areas[ 4 ]->Id() == "system.changelog" );
+}
+
+// =========================================================================
 //  D31 -- the palette / launcher panel is centred ONCE, at its row cap
 // =========================================================================
 // The user's report: *"make sure, that it is vertically centered, in its

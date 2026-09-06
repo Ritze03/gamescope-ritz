@@ -815,6 +815,65 @@ namespace gamescope::ui
 		return a;
 	}
 
+	std::vector<const Area *> Registry::RailAreas() const
+	{
+		std::vector<const Area *> out;
+		for ( size_t i = 0; i < RailOrderCount(); ++i )
+		{
+			const Area *pArea = FindArea( RailOrder()[ i ].pszAreaId );
+			if ( pArea && pArea->Available() )
+				out.push_back( pArea );
+		}
+		return out;
+	}
+
+	// =========================================================================
+	//  Rail order & groups -- see the declarations' own comment in Registry.h
+	// =========================================================================
+	const char *RailGroupName( RailGroup eGroup )
+	{
+		switch ( eGroup )
+		{
+			case RailGroup::Display:  return "DISPLAY";
+			case RailGroup::Misc:     return "MISC";
+			case RailGroup::Settings: return "SETTINGS";
+			case RailGroup::Other:    return "OTHER";
+		}
+		return "";
+	}
+
+	namespace
+	{
+		constexpr RailSlot kRailOrder[] = {
+			{ "display.general",       RailGroup::Display },
+			{ "display.resolution",    RailGroup::Display },
+			{ "display.upscaling",     RailGroup::Display },
+			{ "display.frame_limiter", RailGroup::Display },
+			{ "display.hdr",           RailGroup::Display },
+			{ "image.shaders",         RailGroup::Display },
+			{ "system.hud",            RailGroup::Misc },
+			{ "audio.mixer",           RailGroup::Misc },
+			{ "system.crosshair",      RailGroup::Misc },
+			{ "setup.profiles",        RailGroup::Settings },
+			{ "system.general",        RailGroup::Settings },
+			{ "setup.appearance",      RailGroup::Settings },
+			{ "setup.cursor",          RailGroup::Settings },
+			{ "system.log",            RailGroup::Other },
+			{ "system.changelog",      RailGroup::Other },
+		};
+	}
+
+	const RailSlot *RailOrder()      { return kRailOrder; }
+	size_t          RailOrderCount() { return sizeof( kRailOrder ) / sizeof( kRailOrder[ 0 ] ); }
+
+	RailGroup RailGroupForId( const std::string &sAreaId )
+	{
+		for ( size_t i = 0; i < RailOrderCount(); ++i )
+			if ( sAreaId == kRailOrder[ i ].pszAreaId )
+				return kRailOrder[ i ].eGroup;
+		return RailGroup::Other;   // an area not yet placed in the table
+	}
+
 	bool Registry::ClaimId( const std::string &sId )
 	{
 		if ( std::find( m_ClaimedIds.begin(), m_ClaimedIds.end(), sId ) != m_ClaimedIds.end() )

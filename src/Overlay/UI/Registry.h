@@ -987,6 +987,15 @@ namespace gamescope::ui
 		std::string InheritedParent() const { return m_fnParent ? m_fnParent() : std::string(); }
 		bool ResetKeyToInherited( const std::string &sKey ) const { return m_fnReset && m_fnReset( sKey ); }
 
+		// The rail's items, in RailOrder()'s fixed order below -- never
+		// registration order. Skips an id RailOrder() names but this
+		// registry never registered (a test's own trimmed-down registry)
+		// and an area that is registered but not Available(). Shell.cpp's
+		// DrawRail() and its keyboard cycling both call this, so the
+		// pointer, the keyboard and Ctrl+Left/Right can never disagree
+		// about the sequence.
+		std::vector<const Area *> RailAreas() const;
+
 		// The key a declaration resolves to -- its Key(), else its id --
 		// and that key's state. A key the config layer does not know
 		// answers Plain, which is what makes it safe to fall back to the id:
@@ -1025,6 +1034,47 @@ namespace gamescope::ui
 		std::vector<std::unique_ptr<Area>> m_Areas;
 		std::vector<std::string>           m_ClaimedIds;
 	};
+
+	// =====================================================================
+	//  Rail order & groups -- presentation, not registry structure
+	// =====================================================================
+	// requests-2026-09-06.md item 1: "Reorder the left sidebar: DISPLAY
+	// (General, Resolution, Upscaling, Frame limiter, HDR, Shaders); MISC
+	// (HUD, Mixer, Crosshair); SETTINGS (Profiles, System, Appearance);
+	// OTHER (Log, Changelog)."
+	//
+	// Deliberately NOT Section above (see that enum's own comment) and NOT
+	// derived from registration order -- this is its own fixed, hand-
+	// ordered table. It lives HERE, in Registry.h/.cpp, rather than in
+	// Shell.cpp (where the rail is actually drawn), for one reason: this
+	// test binary does not link Shell.cpp or any panel file (see
+	// tests/meson.build's own comment on why Registry is kept ImGui-free),
+	// so a table that lived only in Shell.cpp could not be pinned by a
+	// plain unit test. Putting it beside Section, which every area's own
+	// reg.Add() call already takes, keeps the one other rail-ordering
+	// concept in the same file.
+	//
+	// setup.cursor is not named by the request's four groups. It keeps its
+	// former Section::Setup neighbours (Profiles, Appearance) here under
+	// Settings, at the end, rather than inventing a placement the request
+	// never specified.
+	enum class RailGroup : uint8_t { Display, Misc, Settings, Other };
+
+	const char *RailGroupName( RailGroup eGroup );
+
+	struct RailSlot { const char *pszAreaId; RailGroup eGroup; };
+
+	// The table itself, and its length -- exposed as data (not just a
+	// lookup) so a test can walk every slot directly, the same way
+	// test_overlay_ui.cpp's icon census walks its own pinned area list.
+	const RailSlot *RailOrder();
+	size_t          RailOrderCount();
+
+	// An id RailOrder() does not name (an area registered and not yet
+	// placed in the table) answers Other -- the same fallback an unplaced
+	// area gets when it reaches the rail at all.
+	RailGroup RailGroupForId( const std::string &sAreaId );
+	inline RailGroup RailGroupFor( const Area &area ) { return RailGroupForId( area.Id() ); }
 
 	// =====================================================================
 	//  Adjustable -- "step this declaration's value by one"

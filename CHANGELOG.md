@@ -58,6 +58,16 @@ The newest version below is the one this build reports.
 - **Changing the aspect ratio picks a size**: switching shape jumps straight to that
   shape's size closest in height to the one you are on, instead of leaving the picture
   unchanged.
+- **Slider handle is a constant width**: Outline Width, Dot > Size and Line > Width no
+  longer draw an oversized grab handle -- every slider's handle is the same size now,
+  whatever its range or step.
+- **Window transparency slider now works**: Appearance's window transparency slider
+  actually dims the settings window's background and side panel now, instead of doing
+  nothing.
+- **Selected item in a list is easier to see**: the Profiles list (and any other list)
+  now fills the selected row with the accent colour instead of only outlining it.
+- **Resolution rail icon redrawn**: the icon's arrow heads are now centred on the shaft
+  and match its angle, instead of sitting crooked with an oversized corner.
 
 ### Removed
 - **Window sizing rows**: Display > Resolution no longer asks your desktop to resize the
@@ -67,6 +77,9 @@ The newest version below is the one this build reports.
 - **Per-game area and the profile buttons**: the Per-game area, "Use this profile",
   "Restore previous settings", "Save changes to profile" and the Auto-save switch are
   gone -- a profile is the live settings now, so there is nothing to apply or save.
+- **Separate window/dock transparency sliders**: Appearance's "Window (focused)",
+  "Window (unfocused)" and "Dock" sliders are gone -- one working "Window transparency"
+  slider replaces all three.
 
 ### Info
 - **Crosshair settings order**: the Dot group now comes before the Line group.
@@ -74,6 +87,8 @@ The newest version below is the one this build reports.
   every change straight away; an old config is moved into a `Default` profile and each
   game's separate settings into a `[Game]` profile on first launch, and
   `--profile <name>` picks a profile for that session only (creating it if missing).
+- **Sidebar reorganised into groups**: the left sidebar now groups its areas under
+  DISPLAY, MISC, SETTINGS and OTHER headings, with a new order within each group.
 
 ## [0.6.0] – 2026-09-05
 
