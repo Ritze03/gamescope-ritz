@@ -771,6 +771,16 @@ namespace gamescope::ui
 		// =================================================================
 		//  Slider -- SPEC §3.4
 		// =================================================================
+		// See Controls.h's own comment on ConstantWidthGrab() for the bug
+		// and the fix; this is just the arithmetic, kept free of ImGui so
+		// test_overlay_ui.cpp's ImGui-free binary can pin it directly.
+		ImRect ConstantWidthGrab( const ImRect &grab, float flConstantW, float flHitW )
+		{
+			const float flCenterX = grab.GetCenter().x;
+			const float flHalfW   = std::min( flConstantW, flHitW ) * 0.5f;
+			return ImRect( flCenterX - flHalfW, grab.Min.y, flCenterX + flHalfW, grab.Max.y );
+		}
+
 		namespace
 		{
 			// THE ONE PLACE A SLIDER GRAB IS SIZED.
@@ -821,6 +831,26 @@ namespace gamescope::ui
 					rcBehaviour, id, eType, pValue, pMin, pMax, pszFormat,
 					ImGuiSliderFlags_AlwaysClamp, pOutGrab );
 				ImGui::PopStyleVar();
+
+				// requests-2026-09-06.md item 4: "Outline Width", "Dot >
+				// Size" and "Line > Width" all drew a grab far wider than
+				// every other slider's. GrabMinSize is a MINIMUM, and for a
+				// non-decimal data type (every SliderInt) ImGui's own
+				// SliderBehaviorT widens the grab past it on purpose --
+				// "if possible have the grab size represent 1 unit"
+				// (imgui_widgets.cpp) -- so a coarse, small-range int
+				// slider gets a grab spanning a large fraction of the
+				// track. No style var caps that growth, only a floor.
+				//
+				// Recentring pOutGrab here, AFTER SliderBehavior has
+				// already used its own (possibly wider) grab rect to
+				// resolve this frame's click/drag and step the value, is
+				// what keeps the keyboard step and drag math untouched --
+				// only the PAINTED width changes. Clamped to the hit
+				// rect's own width so a pathologically narrow track still
+				// cannot overflow it.
+				if ( pOutGrab )
+					*pOutGrab = ConstantWidthGrab( *pOutGrab, Px( tok::kHandleW ), rcTrackHit.GetWidth() );
 				return bChanged;
 			}
 

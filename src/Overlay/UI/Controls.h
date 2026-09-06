@@ -30,11 +30,25 @@
 //
 //   1. ONE RECT PER ATOM. The rect handed to ItemAdd() is the same C++ object
 //      handed to the painter. An atom never recomputes its own geometry.
-//   2. THE SLIDER'S HANDLE IS NOT A CONSTANT. SliderGrab() below is the only
-//      code in the kit that names a grab width; it pushes that width into
-//      GrabMinSize, calls SliderBehavior(), and returns the grab rect
-//      SliderBehavior itself produced. The painter draws that rect. There is
-//      no second number, so there is nothing to keep in step.
+//   2. THE SLIDER'S HANDLE IS ONE CONSTANT WIDTH, PAINTED WHERE SliderBehavior
+//      SAYS. SliderGrab() below is the only code in the kit that names a grab
+//      width; it pushes that width into GrabMinSize, calls SliderBehavior(),
+//      and gets back the grab rect SliderBehavior itself produced.
+//
+//      GrabMinSize is a FLOOR, not a ceiling: for a non-decimal data type
+//      (every SliderInt) ImGui's own SliderBehaviorT widens the grab past it
+//      on purpose, "so a coarse, small-range int slider (Outline Width,
+//      Dot > Size, Line > Width -- requests-2026-09-06.md item 4) can
+//      represent one unit" -- and that widening has no style-var knob to cap
+//      it. SliderGrab() re-centres the returned rect to the kit's own
+//      constant width AFTER SliderBehavior has already used its own (wider)
+//      grab to resolve this frame's click, drag and keyboard step -- so the
+//      CENTRE the painter draws at is still exactly where SliderBehavior put
+//      it, nothing about hit-testing or the value changes, and only the
+//      drawn WIDTH is a second, later assignment. That is the one deliberate
+//      exception to "an atom never recomputes its own geometry" above: it
+//      touches only a size, never a position, and never before
+//      SliderBehavior has already committed this frame's interaction.
 //
 // The same rule applies to the measured atoms: MeasureCells() is the single
 // function that decides how wide a segmented group or a chip bank is, and both
@@ -303,6 +317,22 @@ namespace gamescope::ui
 		             float flMin, float flMax, float flDefault = 0.0f, bool bHasDefault = false );
 		bool SliderInt( const RowCtx &row, const char *pszId, int *pnValue,
 		                int nMin, int nMax, int nDefault = 0, bool bHasDefault = false );
+
+		// requests-2026-09-06.md item 4: "Outline Width", "Dot > Size" and
+		// "Line > Width" drew a grab far wider than every other slider's.
+		// ImGui's own SliderBehaviorT widens a non-decimal (every SliderInt)
+		// grab past GrabMinSize on purpose -- "if possible have the grab
+		// size represent 1 unit" -- which a coarse, small-range int slider
+		// turns into a grab spanning a large fraction of the track.
+		//
+		// This is the pure half of the fix, extracted out of SliderGrab()
+		// (Controls.cpp, its only caller) so it is checkable without an
+		// ImGui context: recentre `grab` to `flConstantW` wide around its
+		// OWN centre -- the centre SliderBehavior already computed for this
+		// frame's value/drag/click, left untouched -- clamped to `flHitW`
+		// so a pathologically narrow track cannot make the returned rect
+		// wider than the row it is drawn in.
+		ImRect ConstantWidthGrab( const ImRect &grab, float flConstantW, float flHitW );
 
 		// ---- SPEC §3.5 -- exact or unbounded ------------------------------
 		// B's borderless "- +". Carries no number; the number is in the value
