@@ -854,38 +854,41 @@ TEST_CASE( "law: a Param leaf containing a dot is rejected -- the One-Level Rule
 	REQUIRE( e.ParamCount() == 0 );
 }
 
-TEST_CASE( "law: the seventh Param aborts registration -- the Six Budget", "[overlay_ui]" )
+TEST_CASE( "law: the eighth Param aborts registration -- the Six Budget", "[overlay_ui]" )
 {
-	// SPEC §5.2 clause 3: "A row may own at most 6 Params ... The 7th .Param()
-	// is a registration abort whose message is 'monitor.modules has 7
-	// parameters -- promote it to a category.' Junk-drawer pressure is thereby
-	// converted into a structural decision that shows up in the rail."
+	// SPEC §5.2 clause 3 originally put this ceiling at 6; Registry.cpp's
+	// kParamBudget was raised 6 -> 7 on 2026-09-06 (requests-2026-09-07.md
+	// item 7 / superdoc/features/shader-effects.md) when Adaptive
+	// Brightness's mode moved from the row's own Choice into a genuine
+	// seventh Param and no honest merge of the existing six avoided it. The
+	// law's name and enum (Law::SixBudget) are unchanged; only the number is.
 	ui::Registry reg;
 	ui::Area &area = reg.Add( "system.monitor", "Monitor", ui::Section::System );
 	bool b = false;
 	ui::Entry &e = area.Switch( "monitor.modules", "Modules", ui::Bind( &b ) ).Help( "h" );
 
-	// Six is the budget, and exactly six must be legal -- API.md §8 registers
-	// Adaptive Brightness at exactly six on purpose ("the intended pressure").
+	// Seven is the budget, and exactly seven must be legal -- Adaptive
+	// Brightness registers at exactly seven on purpose (the same "intended
+	// pressure" API.md §8 describes, one param higher now).
 	{
 		ui::LawRecorder rec;
-		for ( int i = 0; i < 6; ++i )
+		for ( int i = 0; i < 7; ++i )
 		{
 			char szLeaf[ 16 ];
 			snprintf( szLeaf, sizeof( szLeaf ), "p%d", i );
 			e.Param( szLeaf, "P", ui::Bind( &b ) ).Help( "h" );
 		}
 		REQUIRE( rec.Count() == 0 );
-		REQUIRE( e.ParamCount() == 6 );
+		REQUIRE( e.ParamCount() == 7 );
 	}
 
-	// The seventh fires, and is not added.
+	// The eighth fires, and is not added.
 	{
 		ui::LawRecorder rec;
-		e.Param( "seventh", "Seventh", ui::Bind( &b ) ).Help( "h" );
+		e.Param( "eighth", "Eighth", ui::Bind( &b ) ).Help( "h" );
 		REQUIRE( rec.Caught( ui::Law::SixBudget ) );
-		REQUIRE( e.ParamCount() == 6 );
-		REQUIRE( rec.Violations().front().sMessage.find( "at most 6" ) != std::string::npos );
+		REQUIRE( e.ParamCount() == 7 );
+		REQUIRE( rec.Violations().front().sMessage.find( "at most 7" ) != std::string::npos );
 	}
 }
 
@@ -2090,6 +2093,45 @@ TEST_CASE( "slider: the same constant applies at every display_scale", "[overlay
 }
 
 // =========================================================================
+//  Selection follows edit -- requests-2026-09-07.md item 8/A
+// =========================================================================
+// The user: "editing any element should automatically select it, so it also
+// pops up in the inspector rail." Shell.cpp's DrawEntryRow used to select a
+// row only off its own row-spanning InvisibleButton's click -- but D22's own
+// AllowOverlap rule means a press that lands ON an atom (a slider handle, a
+// switch, a stepper's -/+, a segmented cell, a dropdown pick) resolves the
+// hit test to THAT ATOM, never to the row button beneath it. So dragging a
+// slider or flipping a switch on a row that was not already selected
+// changed the value but left the wrong row highlighted.
+//
+// DrawEntryRow itself is file-private (Shell.h's own header comment: this is
+// deliberate, "there is no header a category file could include to reach
+// into it") and cannot be driven from a test directly. The one line of
+// logic the fix adds -- "select on a click OR on a value change" -- is
+// extracted as ui::controls::ShouldSelectRow() for the same reason
+// ConstantWidthGrab() above is, and pinned here as a truth table.
+TEST_CASE( "selection: a value change selects the row exactly like a click does",
+           "[overlay_ui]" )
+{
+	// Neither happened: nothing to select.
+	REQUIRE_FALSE( ui::controls::ShouldSelectRow( false, false ) );
+
+	// The existing behaviour: a raw click on the row (or its label) still
+	// selects it, with no value change at all -- e.g. an Action or Facts row.
+	REQUIRE( ui::controls::ShouldSelectRow( true, false ) );
+
+	// The fix: a SIMULATED value change with no click -- exactly what a
+	// slider drag, a stepper's -/+ or typed edit, a switch flip, a segmented
+	// Choice pick, or a committed Dropdown pick produces when the pointer
+	// lands on the atom rather than on the row's own button -- selects the
+	// row on its own.
+	REQUIRE( ui::controls::ShouldSelectRow( false, true ) );
+
+	// Both at once (unusual, but not a special case): still selects.
+	REQUIRE( ui::controls::ShouldSelectRow( true, true ) );
+}
+
+// =========================================================================
 //  D31 -- the palette / launcher panel is centred ONCE, at its row cap
 // =========================================================================
 // The user's report: *"make sure, that it is vertically centered, in its
@@ -2709,4 +2751,35 @@ TEST_CASE( "dropdown popup rect: grows for a long label, but never past the slab
 	const ImRect rcAnchorWide( 700.0f, 300.0f, 780.0f, 300.0f + Px( tok::kControlH ) );
 	const ImRect rcWide = DropdownPopupRect( rcAnchorWide, rcSlabWide, 260.0f, 4, 8 );
 	REQUIRE_THAT( rcWide.GetWidth(), WithinAbs( 260.0f, 1e-3f ) );
+}
+
+// =========================================================================
+//  Appearance's column count -- requests-2026-09-07.md item 10
+// =========================================================================
+// The Appearance area regressed from two columns to one during the
+// 2026-09-06 transparency work (`6d62695`): three dead opacity sliders
+// (Window focused/unfocused, Dock) were replaced with one working
+// `overlay.window_opacity` slider, dropping the area's row count from 13
+// to 11 -- crossing UNDER Layout.cpp's own `kRowsPerColumn == 12` content
+// cap (`ceil(11/12) == 1` where `ceil(13/12) == 2`). PanelConfig.cpp is not
+// linked here (see the icon census test's own comment on why), so this
+// pins the ladder's actual mechanism at the two row counts that matter for
+// THIS regression, rather than re-deriving Layout.cpp's own general table
+// (already covered by test_overlay_shell.cpp's "the responsive ladder
+// reproduces SPEC 8.3's worked table"). PanelConfig.cpp's Diagnostics
+// group was split from one Facts row into three (Routing / Font atlas /
+// Config location) to restore the count to 13.
+TEST_CASE( "layout: 11 rows is one column, 13 is two -- the Appearance boundary", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+
+	// A slab wide enough that width alone would allow two (or three)
+	// columns, so the row-count content cap is the only thing under test.
+	const Slab slab = Slab::For( 1920.0f, 1080.0f, 1.0f );
+
+	const LadderResult before = Solve( slab, InspectorHost::Column, 11 );
+	REQUIRE( before.nColumns == 1 );
+
+	const LadderResult after = Solve( slab, InspectorHost::Column, 13 );
+	REQUIRE( after.nColumns == 2 );
 }

@@ -66,6 +66,12 @@ The newest version below is the one this build reports.
 - **Changing the aspect ratio picks a size**: switching shape jumps straight to that
   shape's size closest in height to the one you are on, instead of leaving the picture
   unchanged.
+- **Custom resolution belongs to Aspect, not the size list**: the Resolution dropdown no
+  longer shows a "Custom" entry of its own; set Aspect to Custom to type a size, and a
+  size that matches no preset switches Aspect to Custom for you.
+- **Resolution's live line renamed**: the Live state row now reads "nested
+  <res>@<refresh> · output <res>@<refresh>" in place of the old "paced at / window /
+  host" wording, and includes the nested resolution, which that wording had dropped.
 - **Slider handle is a constant width**: Outline Width, Dot > Size and Line > Width no
   longer draw an oversized grab handle -- every slider's handle is the same size now,
   whatever its range or step.
@@ -74,8 +80,19 @@ The newest version below is the one this build reports.
   nothing.
 - **Selected item in a list is easier to see**: the Profiles list (and any other list)
   now fills the selected row with the accent colour instead of only outlining it.
-- **Resolution rail icon redrawn**: the icon's arrow heads are now centred on the shaft
-  and match its angle, instead of sitting crooked with an oversized corner.
+- **Resolution rail icon redrawn again**: the icon is now two nested frames (a picture
+  held inside a smaller one), replacing the double-headed diagonal arrow entirely
+  rather than only straightening it.
+- **Appearance is two columns again**: the tab had narrowed to one column; its
+  Diagnostics readout is now three named rows (Routing, Font atlas, Config location)
+  instead of one, which was enough on its own to bring the second column back.
+- **Window transparency at maximum is now fully opaque**: the slider's top end used to
+  still let a little of the game show through the settings window; at maximum the
+  window background is now solid, with the game never visible behind it.
+- **Typing into a number field no longer jumps to the side panel**: clicking a
+  spinner's number in the main settings list to type a value could open the typing
+  cursor in the side panel's copy of that row instead of where you clicked; typing now
+  always happens where you clicked.
 
 ### Removed
 - **Window sizing rows**: Display > Resolution no longer asks your desktop to resize the
@@ -97,6 +114,9 @@ The newest version below is the one this build reports.
   `--profile <name>` picks a profile for that session only (creating it if missing).
 - **Sidebar reorganised into groups**: the left sidebar now groups its areas under
   DISPLAY, MISC, SETTINGS and OTHER headings, with a new order within each group.
+- **Editing a row selects it**: dragging a slider, pressing a spinner's -/+, typing a
+  number, flipping a switch, or picking a segmented or dropdown value now selects that
+  row -- and shows it in the side panel -- the same way clicking it already did.
 
 ## [0.6.0] – 2026-09-05
 

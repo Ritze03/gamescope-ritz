@@ -110,32 +110,29 @@ namespace gamescope::ui
 			Poly( { 20.5f, 14.5f }, { 20.5f, 20.5f }, { 14.5f, 20.5f } ),
 			Rect( 8.5f, 8.5f, 15.5f, 15.5f ) } },
 
-		{ "display.resolution", 4, {
-			// A screen outline with a double-headed diagonal arrow inside
-			// it -- the "size of the picture" mark. Sits right after
-			// Upscaling in the rail, so it is read against that glyph
-			// first: Upscaling is a SMALL square with brackets pulling
-			// away OUTSIDE it, this is a LARGE frame with the arrow held
-			// INSIDE it. At 12 px the arrowheads close up and the mark is
-			// a frame with a slash, which no other glyph is. Freehand
-			// (2026-09-05): the mockup predates the area.
+		{ "display.resolution", 2, {
+			// REDRAWN 2026-09-07 (requests-2026-09-07.md item 6): the user
+			// rejected the 2026-09-06 angle fix outright ("still looks the
+			// same as before") -- rightly, since that pass only straightened
+			// the old shaft and arrowheads without changing the underlying
+			// idea, and a diagonal double-headed arrow inside a frame is
+			// exactly the mark being rejected, correctly drawn or not. This
+			// throws that idea away rather than tuning it again: no arrow,
+			// no diagonal, no line at all.
 			//
-			// REDRAWN 2026-09-06 (requests-2026-09-06.md item 3): the
-			// original shaft ran (8,15)-(16,9), a dx:dy of 8:-6 -- not the
-			// 45 degrees an "L-bracket" arrowhead like upscaling's own
-			// corner brackets implicitly bisects to, so the two heads sat
-			// crooked against the shaft, and their arms were unequal
-			// lengths (4.5 vs 3.5) on top of that, reading heavier on one
-			// side. Fixed the same way upscaling's brackets already get it
-			// right: dx == dy (a true 45 degree shaft through the frame's
-			// own centre, (12,12)) and both bracket arms the same length
-			// (3.5, upscaling's own corner margin), so each head's corner
-			// sits exactly on the shaft's own endpoint and its two arms
-			// split evenly around it.
+			// Two concentric frames, uniformly inset -- a picture held
+			// inside a smaller picture, which is what a resolution change
+			// actually is (the same image, at a different size). Read
+			// against its rail neighbours: Upscaling (just above) is a
+			// SMALL centred square with two L-brackets pulling AWAY from
+			// it, open at the corners and drawing nothing at the box's own
+			// edge; this is a LARGE outer frame flush with the box's edge
+			// with a second, smaller, fully-closed frame concentric inside
+			// it -- two closed rectangles, not brackets and a square. At
+			// 12 px it reads as a frame-in-a-frame; at 48 px it is still
+			// exactly that, no new detail earned by the extra pixels.
 			Rect( 3.5f, 5.5f, 20.5f, 18.5f ),
-			Line( { 8.0f, 16.0f }, { 16.0f, 8.0f } ),
-			Poly( { 12.5f, 8.0f }, { 16.0f, 8.0f }, { 16.0f, 11.5f } ),
-			Poly( { 8.0f, 12.5f }, { 8.0f, 16.0f }, { 11.5f, 16.0f } ) } },
+			Rect( 7.5f, 8.5f, 16.5f, 15.5f ) } },
 
 		{ "display.frame_limiter", 2, {
 			// A clock. The hands are one open polyline so the join at the

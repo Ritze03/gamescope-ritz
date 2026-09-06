@@ -898,26 +898,61 @@ namespace gamescope
 			gamescope::Notifications::RegisterRows( a );
 
 			a.Group( "Diagnostics" );
-			a.Facts( "overlay.appearance_facts", "Appearance",
+
+			// requests-2026-09-07 item 10: this used to be ONE Facts row
+			// bundling three genuinely different topics (write routing, the
+			// font atlas' live bake scale, and the on-disk config path)
+			// under a single generic "Appearance" title. Split into three
+			// named rows -- the same convention PanelChangelog.cpp already
+			// uses for its own three Facts rows (gamescope / gamescope-ritz
+			// / Changelog) -- so each summary line says what it is about
+			// instead of three unrelated facts sharing one label. No new
+			// information: same three Live() facts as before, just given
+			// their own row and title apiece.
+			//
+			// This also happens to be why the area regressed to one column
+			// during the same day's transparency work (`6d62695`): the
+			// column ladder is driven purely by row COUNT (Layout.cpp's
+			// Solve(), `ceil(EntryCount / kRowsPerColumn)`, kRowsPerColumn
+			// == 12 -- there is no per-area column override), and that
+			// commit's three-sliders-into-one simplification dropped this
+			// area from 13 rows to 11, crossing under the 12-row threshold
+			// for a second column. Splitting this one Facts row into three
+			// restores 13 -- the fix earns its own keep on clarity grounds
+			// above, and the column count follows from it rather than the
+			// other way around.
+			a.Facts( "overlay.appearance_routing_facts", "Routing",
 				[]{
-					EnsureGeneralSettingsLoaded();
-					char sz[ 64 ];
-					std::snprintf( sz, sizeof( sz ), "hue %.0f deg  ·  scale %.2fx",
-						s_GeneralSettings.overlay.accent_hue, s_GeneralSettings.overlay.display_scale );
-					return std::string( sz );
+					return std::string( "global.json always" );
 				} )
-				.Help( "Shows how these appearance settings are currently saved." )
-				.Keywords( "appearance diagnostics global routing atlas scale" )
+				.Help( "Shows where these appearance settings are saved." )
+				.Keywords( "appearance diagnostics global routing" )
 				.Live( "routing", []{
 					return ui::Fact{ "written to",
 						"global.json always -- overlay appearance is process-level, so a per-game "
 						"override does not apply to it" };
+				} );
+
+			a.Facts( "overlay.appearance_atlas_facts", "Font atlas",
+				[]{
+					char sz[ 48 ];
+					std::snprintf( sz, sizeof( sz ), "%.2fx", gamescope::fonts::BuiltScale() );
+					return std::string( sz );
 				} )
+				.Help( "Shows the scale the overlay's font atlas is currently baked at." )
+				.Keywords( "appearance diagnostics atlas font scale" )
 				.Live( "atlas", []{
 					char sz[ 48 ];
 					std::snprintf( sz, sizeof( sz ), "%.2fx", gamescope::fonts::BuiltScale() );
 					return ui::Fact{ "font atlas baked at", sz };
+				} );
+
+			a.Facts( "overlay.appearance_root_facts", "Config location",
+				[]{
+					return config::ConfigRoot();
 				} )
+				.Help( "Shows the directory these appearance settings are read from and written to." )
+				.Keywords( "appearance diagnostics config directory root path" )
 				.Live( "root", []{
 					return ui::Fact{ "config directory", config::ConfigRoot() };
 				} );
