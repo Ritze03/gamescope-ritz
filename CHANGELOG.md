@@ -29,6 +29,9 @@ The newest version below is the one this build reports.
   every area's header badge names the profile being edited.
 
 ### Fixed
+- **Crosshair Shrink hide runs at one speed**: the gap no longer closes at half the
+  speed the arms then shrink at; the two phases share the hide time in proportion to
+  how far each edge moves, so the whole animation moves at one pace.
 - **Selecting a profile now takes effect**: clicking a profile in the list changes the
   picture at once (filter, sharpness, shaders, crosshair, HUD), and an edit made in
   one area is no longer undone on disk by the next edit made in another area -- the

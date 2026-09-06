@@ -369,7 +369,8 @@ namespace gamescope
 			if ( ulPress != 0 )
 			{
 				const float f = crosshair::HideProgress( ulPress, ulNowNs, c.hide_time_ms );
-				hs = crosshair::EvaluateHide( crosshair::ParseHideMode( c.hide_mode ), f );
+				hs = crosshair::EvaluateHide( crosshair::ParseHideMode( c.hide_mode ), f,
+				                              crosshair::ShrinkSplit( (float)c.line_gap, (float)c.line_length ) );
 				bAnimating = f < 1.0f; // fully hidden is static again: no more forced frames
 			}
 		}

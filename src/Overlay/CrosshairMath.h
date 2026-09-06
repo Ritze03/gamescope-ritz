@@ -93,7 +93,30 @@ namespace gamescope::crosshair
 		float flLength = 1.0f;
 	};
 
-	inline HideState EvaluateHide( HideMode eMode, float f )
+	// Where Shrink switches from closing the gap to shortening the arms, as
+	// a fraction of the hide time: gap / (gap + length), so the arm's
+	// visible edge moves at ONE speed through both phases -- the inner end
+	// travels `gap` pixels in the first phase, the outer end `length`
+	// pixels in the second, each in time proportional to its distance.
+	//
+	// Why (2026-09-06, request #11): a fixed 50/50 split moved the gap at
+	// gap/(T/2) px/s and the arms at length/(T/2) px/s; with the default
+	// gap 3, length 6 the second phase looked twice as fast as the first
+	// ("the gap part moves half as fast as the shrinking lines part").
+	// With no gap there is nothing to close and the whole time shrinks the
+	// arms; with no length the whole time closes the gap.
+	inline float ShrinkSplit( float flGap, float flLength )
+	{
+		const float flTotal = std::max( 0.0f, flGap ) + std::max( 0.0f, flLength );
+		if ( flTotal <= 0.0f )
+			return 0.5f;
+		return std::clamp( std::max( 0.0f, flGap ) / flTotal, 0.0f, 1.0f );
+	}
+
+	// flShrinkSplit: ShrinkSplit() for the style being drawn; only Shrink
+	// reads it. Focus keeps a 50/50 split -- its second phase is a fade,
+	// there is no edge speed to match.
+	inline HideState EvaluateHide( HideMode eMode, float f, float flShrinkSplit = 0.5f )
 	{
 		f = std::clamp( f, 0.0f, 1.0f );
 		HideState s;
@@ -112,14 +135,19 @@ namespace gamescope::crosshair
 				}
 				break;
 			case HideMode::Shrink:
-				if ( f < 0.5f )
-					s.flGap = 1.0f - 2.0f * f;
+			{
+				const float p = std::clamp( flShrinkSplit, 0.0f, 1.0f );
+				if ( f < p )
+					s.flGap = 1.0f - f / p;
 				else
 				{
 					s.flGap = 0.0f;
-					s.flLength = 2.0f - 2.0f * f;
+					s.flLength = p >= 1.0f ? 1.0f : 1.0f - ( f - p ) / ( 1.0f - p );
+					if ( f >= 1.0f )
+						s.flLength = 0.0f;
 				}
 				break;
+			}
 		}
 		return s;
 	}

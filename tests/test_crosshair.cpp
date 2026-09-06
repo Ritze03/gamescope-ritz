@@ -467,3 +467,52 @@ TEST_CASE( "PackArgb is B8G8R8A8 memory order and clamps alpha", "[crosshair]" )
 	REQUIRE( PackArgb( 0x112233, 2.0f ) == 0xFF112233u );
 	REQUIRE( PackArgb( 0x112233, -1.0f ) == 0x00112233u );
 }
+
+// ---------------------------------------------------------------------
+// 2026-09-06: Shrink's phase split, the reversible hide animation, and
+// the CPU-stretched raster (requests #11, #13, #14)
+// ---------------------------------------------------------------------
+
+TEST_CASE( "ShrinkSplit gives each Shrink phase time in proportion to the distance its edge travels", "[crosshair]" )
+{
+	REQUIRE_THAT( ShrinkSplit( 3.0f, 6.0f ), WithinAbs( 1.0f / 3.0f, 1e-6f ) );
+	REQUIRE( ShrinkSplit( 0.0f, 6.0f ) == 0.0f );
+	REQUIRE( ShrinkSplit( 6.0f, 0.0f ) == 1.0f );
+	REQUIRE( ShrinkSplit( 0.0f, 0.0f ) == 0.5f );
+
+	// Gap 3, length 6: the gap closes over the first third, the arms
+	// shrink over the remaining two thirds ...
+	const float p = ShrinkSplit( 3.0f, 6.0f );
+	HideState s = EvaluateHide( HideMode::Shrink, 1.0f / 6.0f, p );
+	REQUIRE_THAT( s.flGap, WithinAbs( 0.5f, 1e-5f ) );
+	REQUIRE( s.flLength == 1.0f );
+	s = EvaluateHide( HideMode::Shrink, 1.0f / 3.0f, p );
+	REQUIRE_THAT( s.flGap, WithinAbs( 0.0f, 1e-5f ) );
+	REQUIRE_THAT( s.flLength, WithinAbs( 1.0f, 1e-5f ) );
+	s = EvaluateHide( HideMode::Shrink, 2.0f / 3.0f, p );
+	REQUIRE( s.flGap == 0.0f );
+	REQUIRE_THAT( s.flLength, WithinAbs( 0.5f, 1e-5f ) );
+	REQUIRE( EvaluateHide( HideMode::Shrink, 1.0f, p ).flLength == 0.0f );
+
+	// ... so the visible edge's travel -- gap closed plus length lost, in
+	// pixels -- is LINEAR in f: the same speed in both phases (#11).
+	auto Travel = [&]( float f )
+	{
+		const HideState h = EvaluateHide( HideMode::Shrink, f, p );
+		return 3.0f * ( 1.0f - h.flGap ) + 6.0f * ( 1.0f - h.flLength );
+	};
+	for ( int i = 0; i <= 8; i++ )
+		REQUIRE_THAT( Travel( i / 8.0f ), WithinAbs( 9.0f * i / 8.0f, 1e-4f ) );
+
+	// The old 50/50 split is still what a caller gets by default, and
+	// with no gap the whole time shrinks the arms.
+	REQUIRE( EvaluateHide( HideMode::Shrink, 0.5f ).flGap == 0.0f );
+	REQUIRE( EvaluateHide( HideMode::Shrink, 0.5f ).flLength == 1.0f );
+	REQUIRE_THAT( EvaluateHide( HideMode::Shrink, 0.25f, 0.0f ).flLength, WithinAbs( 0.75f, 1e-5f ) );
+	REQUIRE_THAT( EvaluateHide( HideMode::Shrink, 0.25f, 1.0f ).flGap, WithinAbs( 0.75f, 1e-5f ) );
+	REQUIRE( EvaluateHide( HideMode::Shrink, 0.25f, 1.0f ).flLength == 1.0f );
+	// Focus keeps its 50/50 split whatever the style.
+	REQUIRE( EvaluateHide( HideMode::Focus, 0.5f, 0.1f ).flGap == 0.0f );
+	REQUIRE( EvaluateHide( HideMode::Focus, 0.5f, 0.1f ).flAlpha == 1.0f );
+}
+

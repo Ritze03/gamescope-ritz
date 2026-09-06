@@ -294,16 +294,32 @@ for both a stretched and a letterboxed layer.
 means `f = 1` at once (`crosshair::HideProgress`). Multipliers
 (`crosshair::EvaluateHide`), applied before `Build()`:
 
-| Mode | `f < 0.5` | `f ≥ 0.5` |
+| Mode | first phase | second phase |
 | --- | --- | --- |
 | **Fade out** | `alpha = 1 − f` | (same, continuous) |
-| **Focus** | `gap = 1 − 2f`, alpha 1 | gap 0, `alpha = 2 − 2f` |
-| **Shrink** | `gap = 1 − 2f` | gap 0, `length = 2 − 2f`, **dot size × the same** |
+| **Focus** (`p = 0.5`) | `gap = 1 − 2f`, alpha 1 | gap 0, `alpha = 2 − 2f` |
+| **Shrink** (`p = gap / (gap + length)`) | `gap = 1 − f/p` | gap 0, `length = 1 − (f − p)/(1 − p)`, **dot size × the same** |
 
 `alpha` scales every element's opacity, outline included. In **Shrink**
 the dot shrinks with the arms over the second half — a dot left behind
 would defeat the point of hiding (the in-game scope has its own reticle).
 At `f = 1` nothing is drawn.
+
+**Shrink's phase split** (`crosshair::ShrinkSplit()`, 2026-09-06, request
+#11). *Why:* with a fixed 50/50 split the gap closed at `gap / (T/2)` px/s
+and the arms shortened at `length / (T/2)` px/s, so with the defaults (gap
+3, length 6) the second phase ran twice as fast as the first — the user's
+*"the gap part moves half as fast as the shrinking lines part"*. The split
+is now `gap : length`, which makes the **visible edge move at one speed**
+throughout: the inner end travels `gap` px in the first phase, the outer
+end `length` px in the second, each in time proportional to its distance
+(`(gap + length) / T` px/s overall; a straight line of travel against
+time, pinned by the tests). No gap → the whole time shrinks the arms; no
+length → the whole time closes the gap. Focus keeps 50/50: its second
+phase is a fade, there is no edge speed to match. Measured
+(`scripts/pixel-regression.sh crosshair-shrink-rate`, gap 8, length 12,
+4000 ms): gap rate **5.00 px/s**, arm rate **5.00 px/s**; at 50 % the gap
+is 0 and the arms are 10 of 12 px, on the model.
 
 **Release restores instantly** — there is deliberately no reverse
 animation. *Why:* the moment the player comes off the sights they want the
