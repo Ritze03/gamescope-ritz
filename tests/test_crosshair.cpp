@@ -44,6 +44,25 @@ namespace
 				return false;
 		return true;
 	}
+
+	// The bidirectional run of NOT-covered points through (cx, cy) along
+	// (dx, dy) -- 0 if (cx, cy) itself is covered. This is the crosshair
+	// gap invariant (2026-09-08, crosshair.md's "Gap"): a gap of N means
+	// exactly N missing pixels across the centre, counting the centre
+	// pixel once, not N per side. Mirrors
+	// scripts/pixel_regression_sample.py's hole_run(), which pins the same
+	// invariant against a real screen capture.
+	int HoleRun( const std::set<std::pair<int, int>> &px, int cx, int cy, int dx, int dy )
+	{
+		if ( px.count( { cx, cy } ) )
+			return 0;
+		int nLow = 0, nHigh = 0;
+		for ( int off = -1; ; off-- )
+			if ( px.count( { cx + dx * off, cy + dy * off } ) ) { nLow = off + 1; break; }
+		for ( int off = 1; ; off++ )
+			if ( px.count( { cx + dx * off, cy + dy * off } ) ) { nHigh = off - 1; break; }
+		return nHigh - nLow + 1;
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -132,22 +151,31 @@ TEST_CASE( "a 1px line is exactly one pixel wide, symmetric about an even-size o
 
 	// Odd thickness centres on pixel column 960 / row 540 (floor of the
 	// centre). Horizontal arms occupy row 540 only; vertical arms column
-	// 960 only.
+	// 960 only. Gap 2 is the TOTAL hole now (2026-09-08): 1 pixel each
+	// side of the centre pixel 960/540, not 2 pixels each side.
 	const auto px = Pixels( s.lines );
 	REQUIRE( px.size() == 4 * 4 );
-	for ( int x = 963; x < 967; x++ ) REQUIRE( px.count( { x, 540 } ) );       // right arm: col 960 + gap 2 -> starts at 963
-	for ( int x = 954; x < 958; x++ ) REQUIRE( px.count( { x, 540 } ) );       // left arm: ends at 958 (exclusive)
-	for ( int y = 543; y < 547; y++ ) REQUIRE( px.count( { 960, y } ) );       // down arm
-	for ( int y = 534; y < 538; y++ ) REQUIRE( px.count( { 960, y } ) );       // up arm
-	// Nothing on rows 539/541 or columns 959/961 -- no half-alpha neighbours
-	// can exist because nothing is emitted there at all.
+	for ( int x = 962; x < 966; x++ ) REQUIRE( px.count( { x, 540 } ) );       // right arm starts at 962 (960 + gap 2)
+	for ( int x = 956; x < 960; x++ ) REQUIRE( px.count( { x, 540 } ) );       // left arm ends at 960 (exclusive)
+	for ( int y = 542; y < 546; y++ ) REQUIRE( px.count( { 960, y } ) );       // down arm
+	for ( int y = 536; y < 540; y++ ) REQUIRE( px.count( { 960, y } ) );       // up arm
+	// Nothing on rows 539/541 or columns 959/961, EXCEPT column 960 itself
+	// -- the up/down arms' own column -- where the tighter 2026-09-08 gap
+	// now puts their nearest pixel (up's is at row 539, immediately beside
+	// the horizontal row, since gap 2's one bias-side pixel went to the
+	// down arm instead -- crosshair.md's "Gap"). No half-alpha neighbours
+	// can exist off that column because nothing is emitted there at all.
 	for ( int x = 950; x < 970; x++ )
 	{
+		if ( x == 960 ) continue;
 		REQUIRE_FALSE( px.count( { x, 539 } ) );
 		REQUIRE_FALSE( px.count( { x, 541 } ) );
 	}
+	// Same exception for row 540 itself: the left arm's own nearest pixel
+	// is column 959 (its bias-side gap is 0, same reasoning as above).
 	for ( int y = 530; y < 550; y++ )
 	{
+		if ( y == 540 ) continue;
 		REQUIRE_FALSE( px.count( { 959, y } ) );
 		REQUIRE_FALSE( px.count( { 961, y } ) );
 	}
@@ -162,24 +190,142 @@ TEST_CASE( "an even-width line straddles the centre edge symmetrically", "[cross
 	const Shape s = Build( st, fr, {} );
 	const auto px = Pixels( s.lines );
 	// Even thickness centres on the pixel EDGE at 960/540: the centre
-	// column is 959..960, the centre row 539..540. The gap is measured from
-	// that column/row's edge, so the right arm starts at 961 + 3 = 964 and
-	// the left arm ends at 959 - 3 = 956 (exclusive).
+	// column is 959..960, the centre row 539..540. Gap 3 is the TOTAL hole
+	// now (2026-09-08) -- exactly 3 pixels missing (959, 960, 961 / 539,
+	// 540, 541), not 3 per side -- so the right arm starts at 962 and the
+	// left arm ends at 959 (exclusive).
 	for ( int y : { 539, 540 } )
 	{
-		for ( int x = 964; x < 967; x++ ) REQUIRE( px.count( { x, y } ) );
-		for ( int x = 953; x < 956; x++ ) REQUIRE( px.count( { x, y } ) );
+		for ( int x = 962; x < 965; x++ ) REQUIRE( px.count( { x, y } ) );
+		for ( int x = 956; x < 959; x++ ) REQUIRE( px.count( { x, y } ) );
 	}
-	// Vertical arms: columns 959 and 960. Down 544..547, up 533..536.
+	// Vertical arms: columns 959 and 960. Down 542..545, up 536..539.
 	for ( int x : { 959, 960 } )
 	{
-		for ( int y = 544; y < 547; y++ ) REQUIRE( px.count( { x, y } ) );
-		for ( int y = 533; y < 536; y++ ) REQUIRE( px.count( { x, y } ) );
+		for ( int y = 542; y < 545; y++ ) REQUIRE( px.count( { x, y } ) );
+		for ( int y = 536; y < 539; y++ ) REQUIRE( px.count( { x, y } ) );
 	}
 	REQUIRE( px.size() == 4 * 3 * 2 );
 	// The centre 2x2 stays empty while the gap is open.
 	REQUIRE_FALSE( px.count( { 959, 539 } ) );
 	REQUIRE_FALSE( px.count( { 960, 540 } ) );
+}
+
+TEST_CASE( "Gap N is exactly N pixels missing across the centre, at width 1 and width 2", "[crosshair]" )
+{
+	// 2026-09-08: the gap used to be a per-side inset -- a configured gap
+	// of N put N empty pixels on EACH side of the centre column/row, so
+	// the total hole was 2N + width. It is now the TOTAL hole, counting
+	// the centre pixel once: gap 0 is no hole at all (the crossing square
+	// joins the arms into a solid plus -- see the Focus/Shrink gap-0 case
+	// below); gap N for N >= 1 is exactly N pixels missing, on BOTH axes,
+	// independent of the line's own width.
+	for ( int nWidth : { 1, 2 } )
+	{
+		for ( int nGap = 0; nGap <= 3; nGap++ )
+		{
+			Style st;
+			st.flWidth = (float)nWidth; st.flLength = 6.0f; st.flGap = (float)nGap;
+			st.bDot = false; st.bOutline = false;
+			Frame fr; fr.flCenterX = 100.0f; fr.flCenterY = 100.0f;
+
+			const auto px = Pixels( Build( st, fr, {} ).lines );
+			REQUIRE( HoleRun( px, 100, 100, 1, 0 ) == nGap );
+			REQUIRE( HoleRun( px, 100, 100, 0, 1 ) == nGap );
+		}
+	}
+}
+
+TEST_CASE( "an outline redraws over part of the hole but the true gap invariant still holds", "[crosshair]" )
+{
+	// The outline sits INSIDE the geometric hole (crosshair.md: it expands
+	// outward from the fill, eating into what would otherwise be
+	// background), so with the outline on, "missing" means "not the
+	// line's own fill colour" -- background OR outline -- while the count
+	// of such pixels between the two arms is still exactly the gap.
+	for ( int nWidth : { 1, 2 } )
+	{
+		for ( int nGap = 0; nGap <= 3; nGap++ )
+		{
+			Style st;
+			st.flWidth = (float)nWidth; st.flLength = 6.0f; st.flGap = (float)nGap;
+			st.bDot = false; st.bOutline = true; st.flOutlineWidth = 1.0f;
+			Frame fr; fr.flCenterX = 100.0f; fr.flCenterY = 100.0f;
+
+			// HoleRun against `lines` alone: the outline paints part of
+			// this same run, but never the arm's own fill colour, so the
+			// run's ENDPOINTS (where the fill starts) do not move.
+			const auto px = Pixels( Build( st, fr, {} ).lines );
+			REQUIRE( HoleRun( px, 100, 100, 1, 0 ) == nGap );
+			REQUIRE( HoleRun( px, 100, 100, 0, 1 ) == nGap );
+		}
+	}
+}
+
+TEST_CASE( "An even gap gives the extra pixel to the right and to the bottom", "[crosshair]" )
+{
+	// crosshair.md's even-gap bias (2026-09-08): a gap that cannot split
+	// symmetrically around one pixel gives the leftover pixel to the
+	// higher-coordinate side -- right on X, bottom (i.e. down) on Y --
+	// chosen so one rule covers both axes without a special case.
+	Style st; st.flWidth = 1.0f; st.flLength = 6.0f; st.flGap = 2.0f; st.bDot = false; st.bOutline = false;
+	Frame fr; fr.flCenterX = 100.0f; fr.flCenterY = 100.0f;
+	const auto px = Pixels( Build( st, fr, {} ).lines );
+
+	// Horizontal hole at row 100 is columns 100 (the original centre
+	// pixel) and 101 (the extra pixel) -- NOT 99 and 100. 99 is still the
+	// left arm's own last pixel.
+	REQUIRE( px.count( { 99, 100 } ) );         // the left arm's own last pixel
+	REQUIRE_FALSE( px.count( { 100, 100 } ) );
+	REQUIRE_FALSE( px.count( { 101, 100 } ) );
+	REQUIRE( px.count( { 102, 100 } ) );        // the right arm starts here
+
+	// Vertical hole at column 100 is rows 100 (centre) and 101 (extra,
+	// downward) -- NOT 99 and 100. 99 is still the up arm's own last pixel.
+	REQUIRE( px.count( { 100, 99 } ) );         // the up arm's own last pixel
+	REQUIRE_FALSE( px.count( { 100, 101 } ) );
+	REQUIRE( px.count( { 100, 102 } ) );        // the down arm starts here
+}
+
+TEST_CASE( "Apply Scaling's raster path scales the hole by the same factor as everything else", "[crosshair]" )
+{
+	// The gap invariant is measured in GAME pixels inside Build() (the
+	// raster path draws at the game's own resolution, unscaled -- see
+	// crosshair.md's "Two rendering paths"), so it is unaffected by this
+	// change on its own; what this test pins is that the coverage-based
+	// hole survives the CPU resample at the same scale as the arms
+	// themselves -- "the hole should be gap x scale" (2026-09-08).
+	Style st; st.flWidth = 1.0f; st.flLength = 6.0f; st.bDot = false; st.bOutline = false;
+	const Frame gf = GameFrame( 200, 200 );
+	Frame outFr; outFr.flCenterX = 100.0f; outFr.flCenterY = 100.0f; outFr.flScaleX = 2.0f; outFr.flScaleY = 2.0f;
+
+	for ( int nGap : { 1, 2, 3 } )
+	{
+		st.flGap = (float)nGap;
+		const Shape s = Build( st, gf, {} );
+		const IRect tr = RasterRect( s );
+		const Argb green = PackArgb( 0x00FF00, 1.0f );
+		const std::vector<Argb> gamePx = Rasterize( s, tr, 0u, green, 0u );
+		const OutputRaster out = ResampleToOutput( gamePx, tr, 200, 200, outFr );
+		const int ow = out.rect.x1 - out.rect.x0;
+		auto Cov = [&]( int ox, int oy ) -> int
+		{
+			if ( ox < out.rect.x0 || oy < out.rect.y0 || ox >= out.rect.x1 || oy >= out.rect.y1 )
+				return 0;
+			return (int)( out.px[(size_t)( oy - out.rect.y0 ) * ow + ( ox - out.rect.x0 )] >> 24 );
+		};
+		// The run of >= 50 % coverage on each side of the centre row, and
+		// the gap between those two runs -- exactly gap * scale.
+		int nRightStart = -1;
+		for ( int ox = 100; ox < 200; ox++ )
+			if ( Cov( ox, 100 ) >= 128 ) { nRightStart = ox; break; }
+		int nLeftEnd = -1;
+		for ( int ox = 100; ox > 0; ox-- )
+			if ( Cov( ox, 100 ) >= 128 ) { nLeftEnd = ox; break; }
+		REQUIRE( nRightStart > 0 );
+		REQUIRE( nLeftEnd > 0 );
+		REQUIRE( nRightStart - nLeftEnd - 1 == nGap * 2 );
+	}
 }
 
 TEST_CASE( "the dot is a centred square and a 1px dot is one pixel", "[crosshair]" )
@@ -309,11 +455,13 @@ TEST_CASE( "an off-centre, letterboxed game centre is honoured exactly", "[cross
 	Frame fr; fr.flCenterX = 500.0f; fr.flCenterY = 350.0f;
 	const Shape s = Build( st, fr, {} );
 	REQUIRE( s.dot[0] == IRect{ 500, 350, 501, 351 } );
+	// Gap 1 is the TOTAL hole (2026-09-08): exactly the centre pixel
+	// (500, 350) itself is missing, so the arms touch its edges directly.
 	const auto px = Pixels( s.lines );
-	REQUIRE( px.count( { 502, 350 } ) ); REQUIRE( px.count( { 503, 350 } ) );
-	REQUIRE( px.count( { 497, 350 } ) ); REQUIRE( px.count( { 498, 350 } ) );
-	REQUIRE( px.count( { 500, 352 } ) ); REQUIRE( px.count( { 500, 353 } ) );
-	REQUIRE( px.count( { 500, 347 } ) ); REQUIRE( px.count( { 500, 348 } ) );
+	REQUIRE( px.count( { 501, 350 } ) ); REQUIRE( px.count( { 502, 350 } ) );
+	REQUIRE( px.count( { 498, 350 } ) ); REQUIRE( px.count( { 499, 350 } ) );
+	REQUIRE( px.count( { 500, 351 } ) ); REQUIRE( px.count( { 500, 352 } ) );
+	REQUIRE( px.count( { 500, 348 } ) ); REQUIRE( px.count( { 500, 349 } ) );
 	REQUIRE( px.size() == 8 );
 }
 
@@ -345,16 +493,17 @@ TEST_CASE( "line and dot switched off yield an empty shape (nothing to draw)", "
 
 TEST_CASE( "RasterRect is the game-pixel bounding box plus a one-texel margin", "[crosshair]" )
 {
-	// A 1280x960 game: centre (640, 480). 1px line, length 4, gap 2, no
-	// dot, no outline -> column/row 640/480, arms 634..638 and 643..647.
+	// A 1280x960 game: centre (640, 480). 1px line, length 4, gap 2 (the
+	// TOTAL hole, 2026-09-08 -- 640/480 +/- 1 pixel), no dot, no outline
+	// -> column/row 640/480, arms 636..639 and 642..645.
 	Style st; st.flWidth = 1.0f; st.flLength = 4.0f; st.flGap = 2.0f; st.bDot = false; st.bOutline = false;
 	const Frame gf = GameFrame( 1280, 960 );
 	REQUIRE( gf.flScaleX == 1.0f );
 	REQUIRE( gf.flScaleY == 1.0f );
 	const Shape s = Build( st, gf, {} );
 
-	REQUIRE( BoundingBox( s ) == IRect{ 634, 474, 647, 487 } );
-	REQUIRE( RasterRect( s ) == IRect{ 633, 473, 648, 488 } ); // 15 x 15 texels
+	REQUIRE( BoundingBox( s ) == IRect{ 636, 476, 646, 486 } );
+	REQUIRE( RasterRect( s ) == IRect{ 635, 475, 647, 487 } ); // 12 x 12 texels
 	REQUIRE( kRasterMargin == 1 );
 
 	// Empty shape -> empty footprint (nothing to upload or draw).
@@ -423,18 +572,23 @@ TEST_CASE( "Rasterize paints exact texels, bleeds colour into the transparent ma
 	REQUIRE( At( 640, 484 ) == green );
 	// ... the gap and the centre stay fully transparent but take the line's
 	// RGB (they touch a painted texel), so the filter never mixes towards
-	// black ...
-	REQUIRE( At( 642, 480 ) == 0x0000FF00u );
+	// black -- gap 2 is the TOTAL hole now (2026-09-08), columns 640/641 ...
+	REQUIRE( At( 641, 480 ) == 0x0000FF00u );
 	REQUIRE( At( 643, 479 ) == 0x0000FF00u ); // row above the right arm
 	// ... the corners of the margin, which touch nothing, are 0 ...
 	REQUIRE( At( tr.x0, tr.y0 ) == 0u );
 	REQUIRE( At( tr.x1 - 1, tr.y1 - 1 ) == 0u );
 	// ... and the margin column next to the arm's far end has the bleed too.
-	REQUIRE( At( 647, 480 ) == 0x0000FF00u );
+	REQUIRE( At( 646, 480 ) == 0x0000FF00u );
 
 	// Outline on: the ring is black and opaque; the margin beside it is
-	// transparent black (bled black, which IS the outline's colour).
-	Style so = st; so.bOutline = true; so.flOutlineWidth = 1.0f;
+	// transparent black (bled black, which IS the outline's colour). Gap 3
+	// here (not 2): with the tighter 2026-09-08 hole a gap of 2 leaves no
+	// truly free pixel at width 1 + outline 1 (the near rings from both
+	// sides meet with nothing between them -- crosshair.md's "Gap"), so
+	// this needs one more pixel of hole to still have a genuinely
+	// transparent centre pixel to test the bleed against.
+	Style so = st; so.bOutline = true; so.flOutlineWidth = 1.0f; so.flGap = 3.0f;
 	const Shape s2 = Build( so, gf, {} );
 	const IRect tr2 = RasterRect( s2 );
 	const int w2 = tr2.x1 - tr2.x0;
@@ -596,38 +750,40 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 		return out.px[(size_t)( oy - out.rect.y0 ) * ow + ( ox - out.rect.x0 )];
 	};
 
-	// In game pixels the right arm is x 329..340 on row 180 (centre column
-	// 320, gap 8). Stretched 2x: output x 658..681, rows 360 and 361.
-	// Across the arm the bilinear filter puts 75 % on the two rows it
-	// covers and 25 % on the two beside them -- at the LINE's colour, not
-	// a darker one (#14: "properly thicker and sub-pixel blurry").
-	REQUIRE( A8( At( 665, 360 ) ) == 191 ); REQUIRE( G8( At( 665, 360 ) ) == 255 ); REQUIRE( R8( At( 665, 360 ) ) == 0 );
-	REQUIRE( A8( At( 665, 361 ) ) == 191 );
-	REQUIRE( A8( At( 665, 359 ) ) == 64 );  REQUIRE( G8( At( 665, 359 ) ) == 255 );
-	REQUIRE( A8( At( 665, 362 ) ) == 64 );
-	REQUIRE( A8( At( 665, 358 ) ) == 0 );
-	REQUIRE( A8( At( 665, 363 ) ) == 0 );
+	// In game pixels the right arm is x 325..336 on row 180 (centre column
+	// 320, gap 8 -- the TOTAL hole now, 2026-09-08: 317..324, 8 pixels, not
+	// 16). Stretched 2x: output x 650..673, rows 360 and 361. Across the
+	// arm the bilinear filter puts 75 % on the two rows it covers and 25 %
+	// on the two beside them -- at the LINE's colour, not a darker one
+	// (#14: "properly thicker and sub-pixel blurry").
+	REQUIRE( A8( At( 657, 360 ) ) == 191 ); REQUIRE( G8( At( 657, 360 ) ) == 255 ); REQUIRE( R8( At( 657, 360 ) ) == 0 );
+	REQUIRE( A8( At( 657, 361 ) ) == 191 );
+	REQUIRE( A8( At( 657, 359 ) ) == 64 );  REQUIRE( G8( At( 657, 359 ) ) == 255 );
+	REQUIRE( A8( At( 657, 362 ) ) == 64 );
+	REQUIRE( A8( At( 657, 358 ) ) == 0 );
+	REQUIRE( A8( At( 657, 363 ) ) == 0 );
 	// Along the arm: the end pixels are 75 % x 75 %, the ones past them
 	// 25 % x 75 %, and the gap itself is empty.
-	REQUIRE( A8( At( 658, 360 ) ) == 143 );
-	REQUIRE( A8( At( 657, 360 ) ) == 48 );
-	REQUIRE( A8( At( 681, 360 ) ) == 143 );
-	REQUIRE( A8( At( 682, 360 ) ) == 48 );
-	REQUIRE( A8( At( 683, 360 ) ) == 0 );
+	REQUIRE( A8( At( 650, 360 ) ) == 143 );
+	REQUIRE( A8( At( 649, 360 ) ) == 48 );
+	REQUIRE( A8( At( 673, 360 ) ) == 143 );
+	REQUIRE( A8( At( 674, 360 ) ) == 48 );
+	REQUIRE( A8( At( 675, 360 ) ) == 0 );
 	REQUIRE( A8( At( 640, 360 ) ) == 0 );
-	REQUIRE( A8( At( 650, 360 ) ) == 0 );
+	REQUIRE( A8( At( 645, 360 ) ) == 0 );
 
 	// Measured the way scripts/pixel-regression.sh measures: the run of
 	// >= 50 % coverage along the row is the arm. Gap from the centre
-	// column's right edge (642) = 16 = 8 x 2; length 24 = 12 x 2; width 2.
+	// column's right edge = 8 x 2 = 16 (634..649); length 24 = 12 x 2;
+	// width 2.
 	int nFirst = -1, nLast = -1;
-	for ( int x = 641; x < 700; x++ )
+	for ( int x = 634; x < 700; x++ )
 		if ( A8( At( x, 360 ) ) >= 128 ) { if ( nFirst < 0 ) nFirst = x; nLast = x; }
-	REQUIRE( nFirst == 658 );
-	REQUIRE( nLast == 681 );
+	REQUIRE( nFirst == 650 );
+	REQUIRE( nLast == 673 );
 	int nWidth = 0;
 	for ( int y = 350; y < 370; y++ )
-		if ( A8( At( 665, y ) ) >= 128 ) nWidth++;
+		if ( A8( At( 657, y ) ) >= 128 ) nWidth++;
 	REQUIRE( nWidth == 2 );
 
 	// Coverage is conserved: 48 opaque game texels x 4 output px each.
@@ -641,7 +797,7 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 	// alpha, so an interior pixel is (0, 128, 0) at 75 % x 50 %.
 	const std::vector<Argb> halfPx = Rasterize( s, tr, 0u, PackArgb( 0x00FF00, 0.5f ), 0u );
 	const OutputRaster half = ResampleToOutput( halfPx, tr, 640, 360, fr );
-	const Argb h = half.px[(size_t)( 360 - half.rect.y0 ) * ( half.rect.x1 - half.rect.x0 ) + ( 665 - half.rect.x0 )];
+	const Argb h = half.px[(size_t)( 360 - half.rect.y0 ) * ( half.rect.x1 - half.rect.x0 ) + ( 657 - half.rect.x0 )];
 	REQUIRE( ( G8( h ) >= 127 && G8( h ) <= 129 ) );
 	REQUIRE( ( A8( h ) >= 95 && A8( h ) <= 97 ) );
 
@@ -653,10 +809,10 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 	const OutputRaster o2 = ResampleToOutput( Rasterize( s2, tr2, PackArgb( 0x000000, 1.0f ), green, 0u ), tr2, 640, 360, fr );
 	const int ow2 = o2.rect.x1 - o2.rect.x0;
 	auto At2 = [&]( int ox, int oy ) { return o2.px[(size_t)( oy - o2.rect.y0 ) * ow2 + ( ox - o2.rect.x0 )]; };
-	REQUIRE( A8( At2( 665, 359 ) ) == 255 );                 // fully covered: 25 % line + 75 % outline
-	REQUIRE( ( G8( At2( 665, 359 ) ) >= 63 && G8( At2( 665, 359 ) ) <= 65 ) );
-	REQUIRE( A8( At2( 665, 357 ) ) == 64 );                  // outline's own soft edge
-	REQUIRE( G8( At2( 665, 357 ) ) == 0 );
+	REQUIRE( A8( At2( 657, 359 ) ) == 255 );                 // fully covered: 25 % line + 75 % outline
+	REQUIRE( ( G8( At2( 657, 359 ) ) >= 63 && G8( At2( 657, 359 ) ) <= 65 ) );
+	REQUIRE( A8( At2( 657, 357 ) ) == 64 );                  // outline's own soft edge
+	REQUIRE( G8( At2( 657, 357 ) ) == 0 );
 
 	// An empty raster (Shrink at 100 %) resamples to nothing.
 	Style off; off.bLine = false; off.bDot = false;
