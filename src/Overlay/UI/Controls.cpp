@@ -622,6 +622,97 @@ namespace gamescope::ui
 			}
 			return run;
 		}
+
+		// B's dropdown chrome: the resolved value in Mono 500 right-aligned,
+		// followed by a caret in Meta, a hairline on hover/open. Shared by
+		// Choice()'s own auto-downgrade dropdown branch and controls::
+		// Dropdown() below -- ONE definition of what this control looks like,
+		// regardless of which of the two decided to draw it.
+		Atom DrawDropdownChrome( const RowCtx &row, int nValue, const Option *pOptions,
+		                        size_t nOptions, bool bOpenNow )
+		{
+			const Atom a = Begin( row.PlaceFull(), "dd" );
+
+			const char *pszLabel = "";
+			for ( size_t i = 0; i < nOptions; ++i )
+				if ( pOptions[ i ].nValue == nValue )
+					pszLabel = pOptions[ i ].pszLabel;
+
+			if ( bOpenNow )
+			{
+				Dl()->AddRectFilled( a.rc.Min, a.rc.Max, Accent( 0.14f ) );
+				Boundary( a.rc, Col( Role::AccentBase ) );
+			}
+			else if ( a.bHovered )
+			{
+				Dl()->AddRectFilled( a.rc.Min, a.rc.Max, palette::White( 0.06f ) );
+				Boundary( a.rc, Col( Role::LineControl ) );
+			}
+
+			const float flPad   = Px( tok::kSelfPadX );
+			const float flGap   = Px( tok::kS );
+
+			// D18: the caret was a lowercase "v" -- a letter standing in for a
+			// triangle. It is a drawn chevron now, so its width is a token
+			// rather than a text measurement.
+			const float flCaret = Px( tok::kGlyphChevron );
+			const ImRect rcCaret( a.rc.Max.x - flPad - flCaret, a.rc.Min.y, a.rc.Max.x - flPad, a.rc.Max.y );
+			const ImRect rcValue( a.rc.Min.x + flPad, a.rc.Min.y, rcCaret.Min.x - flGap, a.rc.Max.y );
+
+			// The value ellipsizes from the left of the group so the caret's
+			// right edge stays on the lane (SPEC §3.3); DrawText's clip rect
+			// is what implements that.
+			DrawText( rcValue, TypeRole::Value,
+				bOpenNow ? Col( Role::AccentSeg ) : Col( Role::TextPrimary ),
+				pszLabel, TextAlign::Right );
+			glyph::Chevron( rcCaret.GetCenter(), flCaret, glyph::Dir::Down, Col( Role::TextMeta ) );
+
+			return a;
+		}
+
+		// ---- controls::Dropdown()'s self-owned popup state -----------------
+		// Keyed by the caller's FULL ImGuiID (window stack included), not by
+		// the bare pszId string -- Shell.cpp's Sheet and Inspector both call
+		// this with the SAME "profiles.inherits" string for the SAME
+		// selected row, once each, in the same frame, from two different
+		// child windows. A string key cannot tell those two calls apart, and
+		// the collision is not theoretical: the first version of this code
+		// kept it string-keyed, and the Inspector's copy -- drawn after the
+		// Sheet's in Shell.cpp's own Draw() order -- stomped the anchor the
+		// Sheet's own click had just set, so the popup opened at the
+		// INSPECTOR's box while the click landed on the SHEET's (caught by
+		// this task's own mandatory capture, not by inspection). ImGuiID
+		// already disambiguates this for free: two Begin()s with the same
+		// pszId in two different windows hash to two different ids, exactly
+		// the property ItemAdd()'s own hit-testing already relies on.
+		struct DropdownPopupState
+		{
+			ImGuiID       idOpen    = 0;           // the open popup's ImGuiID; 0 = none
+			const Option *pOptions  = nullptr;    // borrowed for this frame's draw only
+			size_t        nOptions  = 0;
+			ImRect        rcAnchor;                // the closed box's own rect, screen space
+			int           nSelected = -1;          // ListBox's index cursor into pOptions
+
+			// A pick made in the popup, waiting for its owning Dropdown() call
+			// to apply it -- see Controls.h's "ONE-FRAME-LATE COMMIT" comment.
+			bool    bHasCommit   = false;
+			ImGuiID idCommit     = 0;
+			int     nCommitValue = 0;
+		};
+		DropdownPopupState s_DropdownPopup;
+
+		// The popup's minimum content width: wide enough for every option's
+		// label, plus the same padding a segmented cell gets. One scan,
+		// shared by DismissDropdownOnOutsideClick() and DrawDropdownPopup()
+		// so the two can never compute a different rect for the same click.
+		float DropdownContentWidthPx( const DropdownPopupState &st )
+		{
+			float flW = Px( 180.0f );
+			for ( size_t i = 0; i < st.nOptions; ++i )
+				flW = std::max( flW, MeasureText( TypeRole::Value,
+					st.pOptions[ i ].pszLabel ? st.pOptions[ i ].pszLabel : "" ).x + Px( tok::kXL ) * 2.0f );
+			return flW;
+		}
 	}
 
 	// =====================================================================
@@ -1115,51 +1206,131 @@ namespace gamescope::ui
 				// B's dropdown is NOT a box: the resolved value in Mono 500 16
 				// followed by a caret in Meta, with a hairline appearing on
 				// hover and focus. Full lane, so the caret's right edge stays
-				// on the control line.
-				const Atom a = Begin( row.PlaceFull(), "dd" );
+				// on the control line. DrawDropdownChrome() is the one place
+				// that draws this -- controls::Dropdown() below shares it.
+				const Atom a = DrawDropdownChrome( row, *pnValue, pOptions, nOptions, bPopupOpen );
 				if ( a && a.bPressed )
 					res.bWantsPopup = true;
-
-				const char *pszLabel = "";
-				for ( size_t i = 0; i < nOptions; ++i )
-					if ( pOptions[ i ].nValue == *pnValue )
-						pszLabel = pOptions[ i ].pszLabel;
-
-				if ( bPopupOpen )
-				{
-					Dl()->AddRectFilled( a.rc.Min, a.rc.Max, Accent( 0.14f ) );
-					Boundary( a.rc, Col( Role::AccentBase ) );
-				}
-				else if ( a.bHovered )
-				{
-					Dl()->AddRectFilled( a.rc.Min, a.rc.Max, palette::White( 0.06f ) );
-					Boundary( a.rc, Col( Role::LineControl ) );
-				}
-
-				const float flPad   = Px( tok::kSelfPadX );
-				const float flGap   = Px( tok::kS );
-
-				// D18: the caret was a lowercase "v" -- a letter standing in
-				// for a triangle, hinted and weighted like a letter, and
-				// sized by whatever the Meta face happened to make it. It is
-				// a drawn chevron now, so its width is a token rather than a
-				// text measurement.
-				const float flCaret = Px( tok::kGlyphChevron );
-				const ImRect rcCaret( a.rc.Max.x - flPad - flCaret, a.rc.Min.y, a.rc.Max.x - flPad, a.rc.Max.y );
-				const ImRect rcValue( a.rc.Min.x + flPad, a.rc.Min.y, rcCaret.Min.x - flGap, a.rc.Max.y );
-
-				// The value ellipsizes from the left of the group so the
-				// caret's right edge stays on the lane (SPEC §3.3); DrawText's
-				// clip rect is what implements that.
-				DrawText( rcValue, TypeRole::Value,
-					bPopupOpen ? Col( Role::AccentSeg ) : Col( Role::TextPrimary ),
-					pszLabel, TextAlign::Right );
-				glyph::Chevron( rcCaret.GetCenter(), flCaret, glyph::Dir::Down,
-					Col( Role::TextMeta ) );
 			}
 
 			ImGui::PopID();
 			return res;
+		}
+
+		// =================================================================
+		//  Dropdown -- see Controls.h
+		// =================================================================
+		DropdownResult Dropdown( const RowCtx &row, const char *pszId, int *pnValue,
+		                        const Option *pOptions, size_t nOptions, bool bRowSelected )
+		{
+			DropdownResult out;
+			if ( !pOptions || nOptions == 0 || !pnValue )
+				return out;
+
+			ImGui::PushID( pszId );
+
+			// The disambiguating key -- see DropdownPopupState's own comment
+			// for why this is an ImGuiID and not pszId itself. "dd" is
+			// exactly the id string DrawDropdownChrome()'s Begin() call
+			// hashes next, from the same window/PushID stack this GetID()
+			// reads right now, so the two are guaranteed to agree.
+			const ImGuiID idScope = ImGui::GetID( "dd" );
+
+			// Apply a pick the popup made on an earlier frame, if it belongs
+			// to THIS control -- see Controls.h's "ONE-FRAME-LATE COMMIT".
+			if ( s_DropdownPopup.bHasCommit && s_DropdownPopup.idCommit == idScope )
+			{
+				if ( *pnValue != s_DropdownPopup.nCommitValue )
+				{
+					*pnValue = s_DropdownPopup.nCommitValue;
+					out.bChanged = true;
+				}
+				s_DropdownPopup.bHasCommit = false;
+				s_DropdownPopup.idCommit = 0;
+			}
+
+			// This frame's chrome mirrors LAST frame's open state -- exactly
+			// the lag Shell.cpp's own bPopupOpen already has (it is computed
+			// from the previous frame's s_sOpenDropdown before this same
+			// Choice/Dropdown call runs), so a freshly-opened box does not
+			// show the accent tint until the frame after. Accepted there
+			// already; accepted here for the same reason.
+			const bool bWasOpen = ( s_DropdownPopup.idOpen == idScope );
+			const Atom a = DrawDropdownChrome( row, *pnValue, pOptions, nOptions, bWasOpen );
+
+			bool bWantsOpen = ( a && a.bPressed );
+			if ( !bWantsOpen && bRowSelected &&
+			     ( ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+			       ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) ||
+			       ImGui::IsKeyPressed( ImGuiKey_Space, false ) ) )
+				bWantsOpen = true;
+
+			if ( bWantsOpen )
+			{
+				if ( bWasOpen )
+				{
+					// A second press on the OWNING control while its own list
+					// is open toggles it closed -- native dropdown behaviour.
+					s_DropdownPopup = DropdownPopupState{};
+				}
+				else if ( !IsModalOpen() )
+				{
+					s_DropdownPopup             = DropdownPopupState{};
+					s_DropdownPopup.idOpen      = idScope;
+					s_DropdownPopup.pOptions    = pOptions;
+					s_DropdownPopup.nOptions    = nOptions;
+					s_DropdownPopup.rcAnchor    = a.rc;
+					for ( size_t i = 0; i < nOptions; ++i )
+						if ( pOptions[ i ].nValue == *pnValue )
+							s_DropdownPopup.nSelected = (int)i;
+				}
+			}
+			else if ( bWasOpen )
+			{
+				// Keep the anchor/options fresh across frames the popup stays
+				// open without a click here -- the row this box belongs to
+				// can move (a scroll, a rebuilt area above it).
+				s_DropdownPopup.rcAnchor = a.rc;
+				s_DropdownPopup.pOptions = pOptions;
+				s_DropdownPopup.nOptions = nOptions;
+			}
+
+			ImGui::PopID();
+			return out;
+		}
+
+		ImRect DropdownPopupRect( const ImRect &rcAnchor, const ImRect &rcSlab,
+		                         float flMinContentWidthPx, int nItemCount,
+		                         int nMaxVisibleRows )
+		{
+			// ListBox()'s own row height -- see this function's header
+			// comment for why the two must never disagree.
+			const float flRowH = Px( tok::kControlH );
+			const int   nVisible = std::max( 1, std::min( std::max( 1, nMaxVisibleRows ), std::max( 1, nItemCount ) ) );
+			const float flH = flRowH * (float)nVisible;
+
+			// Never narrower than the box it drops from, never wider than
+			// the slab (minus a hairline margin either side).
+			const float flMarginPx = Px( tok::kS );
+			float flW = std::max( rcAnchor.GetWidth(), flMinContentWidthPx );
+			flW = std::min( flW, std::max( 1.0f, rcSlab.GetWidth() - flMarginPx * 2.0f ) );
+
+			// Right-aligned under the box, exactly as Choice's own dropdown
+			// value column is right-aligned in its lane -- a list dropping
+			// from the LEFT edge would not line up with the control it came
+			// from. Clamped so it never runs past either slab edge.
+			float x1 = std::min( rcAnchor.Max.x, rcSlab.Max.x - flMarginPx );
+			x1 = std::max( x1, rcSlab.Min.x + flMarginPx + flW );
+			const float x0 = x1 - flW;
+
+			// Flip above the anchor when there is no room below -- a list
+			// that runs off the bottom of the slab is "the control is there
+			// but you cannot reach it", the same failure a scroll fixes.
+			float y0 = rcAnchor.Max.y;
+			if ( y0 + flH > rcSlab.Max.y - flMarginPx )
+				y0 = std::max( rcSlab.Min.y, rcAnchor.Min.y - flH );
+
+			return ImRect( x0, y0, x0 + flW, y0 + flH );
 		}
 
 		// =================================================================
@@ -2066,4 +2237,122 @@ namespace gamescope::ui
 		ImGui::End();
 		ImGui::PopStyleVar( 2 );
 	}
+
+	// =========================================================================
+	//  Dropdown popup -- see Controls.h
+	// =========================================================================
+	void DismissDropdownOnOutsideClick( const ImRect &rcSlab )
+	{
+		if ( s_DropdownPopup.idOpen == 0 )
+			return;
+		if ( !ImGui::IsMouseClicked( ImGuiMouseButton_Left ) )
+			return;
+		if ( s_DropdownPopup.pOptions == nullptr || s_DropdownPopup.nOptions == 0 )
+			return;
+
+		const float flMinW = DropdownContentWidthPx( s_DropdownPopup );
+		const ImRect rcList = controls::DropdownPopupRect( s_DropdownPopup.rcAnchor, rcSlab,
+			flMinW, (int)s_DropdownPopup.nOptions, 8 );
+
+		const ImVec2 vMouse = ImGui::GetIO().MousePos;
+		if ( rcList.Contains( vMouse ) || s_DropdownPopup.rcAnchor.Contains( vMouse ) )
+			return;   // inside the list, or the box that owns it -- its own click handles this
+
+		s_DropdownPopup = DropdownPopupState{};
+
+		// Swallow, exactly Shell.cpp's own former DismissOpenDropdownOnOutsideClick()'s
+		// reasoning: without this, a control under the cursor still sees
+		// MouseClicked this same frame and can arm itself.
+		ImGui::GetIO().MouseClicked[ ImGuiMouseButton_Left ] = false;
+	}
+
+	void DrawDropdownPopup( const ImRect &rcSlab )
+	{
+		if ( s_DropdownPopup.idOpen == 0 )
+			return;
+
+		// A Modal opened on top wins outright -- it owns the whole surface,
+		// and controls::Dropdown() already refuses to OPEN a new popup while
+		// one is up, so the only way to reach this state is a Modal opened
+		// from elsewhere while a Dropdown was already open. Self-heal the
+		// same way DrawDropdownList() used to: close rather than draw two
+		// surfaces that both claim the input.
+		//
+		// Also self-heals the row-not-drawn-this-frame case: the options
+		// pointer is borrowed for one frame only, so a null/empty one means
+		// the owning row did not run (the user navigated away, or a dynamic
+		// area rebuilt underneath it).
+		if ( IsModalOpen() || s_DropdownPopup.pOptions == nullptr || s_DropdownPopup.nOptions == 0 )
+		{
+			s_DropdownPopup = DropdownPopupState{};
+			return;
+		}
+
+		if ( ImGui::IsKeyPressed( ImGuiKey_Escape, false ) )
+		{
+			s_DropdownPopup = DropdownPopupState{};
+			return;
+		}
+
+		const float flMinW = DropdownContentWidthPx( s_DropdownPopup );
+		const ImRect rc = controls::DropdownPopupRect( s_DropdownPopup.rcAnchor, rcSlab,
+			flMinW, (int)s_DropdownPopup.nOptions, 8 );
+
+		ImGui::SetNextWindowPos( rcSlab.Min );
+		ImGui::SetNextWindowSize( rcSlab.GetSize() );
+		ImGui::SetNextWindowFocus();
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+		const ImGuiWindowFlags eFlags =
+			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+			ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+			ImGuiWindowFlags_NoBackground;
+
+		if ( !ImGui::Begin( "##e2dropdownpopup", nullptr, eFlags ) )
+		{
+			ImGui::End();
+			ImGui::PopStyleVar( 2 );
+			return;
+		}
+
+		ImGui::PushID( "e2dropdown" );
+
+		// Two coats, same reason DrawModal()/DrawPalette() give: Role::
+		// Surface's own translucency reads a sheet's controls straight
+		// through a single coat.
+		Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::Surface ) );
+		Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::Surface ) );
+		Boundary( rc, Col( Role::AccentBase ) );
+
+		std::vector<controls::ListBoxItem> items;
+		items.reserve( s_DropdownPopup.nOptions );
+		for ( size_t i = 0; i < s_DropdownPopup.nOptions; ++i )
+			items.push_back( controls::ListBoxItem{ s_DropdownPopup.pOptions[ i ].pszLabel, nullptr, nullptr } );
+
+		// ListBox() itself is the entire Up/Down/Home/End/Enter/wheel/click
+		// story (Controls.h's own ListBox() comment) -- reused rather than a
+		// second, parallel list widget just for this popup.
+		const controls::ListBoxResult res = controls::ListBox( rc, "##items",
+			&s_DropdownPopup.nSelected, items.data(), items.size(), 8 );
+
+		if ( res.bActivated && s_DropdownPopup.nSelected >= 0 &&
+		     (size_t)s_DropdownPopup.nSelected < s_DropdownPopup.nOptions )
+		{
+			const ImGuiID idOwner = s_DropdownPopup.idOpen;
+			const int nValue = s_DropdownPopup.pOptions[ s_DropdownPopup.nSelected ].nValue;
+			s_DropdownPopup = DropdownPopupState{};
+			s_DropdownPopup.bHasCommit   = true;
+			s_DropdownPopup.idCommit     = idOwner;
+			s_DropdownPopup.nCommitValue = nValue;
+		}
+
+		ImGui::PopID();
+		ImGui::End();
+		ImGui::PopStyleVar( 2 );
+	}
+
+	bool IsDropdownPopupOpen() { return s_DropdownPopup.idOpen != 0; }
+
+	void CloseDropdownPopup() { s_DropdownPopup = DropdownPopupState{}; }
 }

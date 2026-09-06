@@ -212,9 +212,12 @@ flexible value column, 11–14px row gap). Use the checkbox-row pattern for any 
 
 The handoff's own gaps above ("List rows" has no scrolling list; "Text inputs" section
 notes no dropdown/scrollbar/free-text design exists at all) are exactly what the Profiles
-area's rebuild needed a widget for. Two were added directly to `src/Overlay/UI/Controls.{h,cpp}`
-(2026-09-06); this is their entry per this doc's own convention — when to use, keyboard
-behaviour — the API contract itself lives in Controls.h's comments.
+area's rebuild needed widgets for. `ListBox` and `Modal` were added directly to
+`src/Overlay/UI/Controls.{h,cpp}` on 2026-09-06; `Dropdown` followed the same day, once
+user feedback on the Inherits row ("a dropdown, not multiple buttons") made the auto-
+downgrade-only dropdown `Choice` already had not enough — a caller needed to be able to
+ask for one outright. This is their entry per this doc's own convention — when to use,
+keyboard behaviour — the API contract itself lives in Controls.h's comments.
 
 ### `ui::controls::ListBox` — a tall, scrollable list of items
 
@@ -244,6 +247,56 @@ flagged here rather than silently assumed.
 **Scrolling:** capped at `nMaxVisibleRows` (10 by default) before a thin accent-on-track
 scrollbar appears; the mouse wheel scrolls it while hovered and touches nothing outside
 the list's own rect, so it can never fight a host region's own scrolling.
+
+### `ui::controls::Dropdown` — a real dropdown, forced
+
+**When to use this vs a segmented `Choice`:** a `Kind::Choice` already auto-downgrades
+to a dropdown-shaped control when a segmented strip would not fit (more than 5 options,
+a label over 8 characters, or the measured group too wide for its lane) — a caller never
+picks that, the measurement does. `Entry::Dropdown()` is the one override: it forces the
+dropdown presentation regardless of whether the option set would technically fit
+segmented. Use it when the option set is **user-created or unbounded** — one row per
+saved profile, one row per detected display, anything whose count and labels the user
+controls rather than the product — even if today it happens to be short enough to fit
+five segments. Segmented stays the right call for a **fixed set of ≤5 short words** the
+product itself defines (a filter type, an anchor corner): those are enumerable at design
+time and reads faster as a row of buttons than as a click-to-open list. Feedback that
+sent this in, verbatim: *"The inheritance selector should be a dropdown. Not multiple
+buttons."* — `profiles.inherits` is exactly the user-created case (one option per saved
+general profile) that had been fitting into a segmented strip by accident of having few
+profiles, not because the option set was actually fixed.
+
+**Closed state:** one box spanning the row's control zone — current value right-aligned
+in Mono 500, a chevron at the right edge, same border/height vocabulary as `Text` and
+`Choice`'s own dropdown branch (they share one drawing function). Hairline on hover;
+accent tint and border while its popup is open.
+
+**Open state:** a popup list anchored under the box (flipped above it when the slab has
+no room below), drawn in its own top-level window exactly the way `ui::DrawModal()` is —
+never clipped by the sheet's child window, and above every ordinary row. It reuses
+`controls::ListBox` for the items, current value preselected, so it inherits that
+widget's own scrolling (capped at 8 visible rows here), wheel and click behaviour
+outright rather than a second implementation of a list. Up/Down/Home/End move, Enter or
+a click picks, Esc or a click outside the box and the list closes it without changing
+anything. Only one `Dropdown` popup is open at a time; a `Modal` opened on top closes it
+outright, and the command palette closes it on its own opening edge.
+
+**Why a distinct entry point from `Choice`, not a parameter on it:** `Choice`'s popup
+(the auto-downgrade case) is owned by the shell's own `s_sOpenDropdown` state machine,
+keyed by a Registry id string and resolved back through the Registry to write a value.
+`Dropdown`'s popup is entirely self-contained inside `Controls.cpp` — no Registry lookup,
+keyed by the caller's own `ImGuiID` — because its open/commit state has to survive past
+the one frame the caller's own `int*` binding is valid for (the popup draws from a
+separate top-level window, after the row that owns it has already returned). That means
+a picked value lands in the caller's `int*` one frame after the click rather than the
+same frame — imperceptible at any real frame rate, and the same trick `Text`/`Stepper`'s
+own editing-state already use to cross a frame boundary through caller-owned storage.
+One consequence worth knowing if this control gets a second user: its state is keyed by
+the full `ImGuiID` (window stack included), not by the bare id string, specifically
+because the **same** row can draw twice in one frame under the same string id — the
+Sheet's own copy and the Inspector's copy of a selected row's CONFIGURE page both do —
+and a string key cannot tell those two apart (the popup opened at the wrong box's
+position the first time this was tried, caught by this feature's own mandatory capture).
 
 ### `ui::Modal` — a small centred dialog
 

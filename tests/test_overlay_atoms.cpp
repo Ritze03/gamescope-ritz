@@ -1192,3 +1192,217 @@ TEST_CASE( "atoms: modal Enter confirms once nothing is being edited", "[overlay
 	REQUIRE_FALSE( ui::IsModalOpen() );
 	REQUIRE( nPrimary == 1 );
 }
+
+// =========================================================================
+//  Dropdown -- the click-driven half. DropdownPopupRect()'s pure geometry
+//  and the IsDropdownPopupOpen()/CloseDropdownPopup() bookkeeping are
+//  tested without a context in test_overlay_ui.cpp; this is open/commit/
+//  cancel through a live frame, the same split ListBox and Modal already
+//  use above.
+// =========================================================================
+namespace
+{
+	// profiles.inherits' own option set (PanelConfig.cpp), small enough to
+	// reuse verbatim.
+	constexpr ui::Option kInheritOptions[] = {
+		{ 0, "None" }, { 1, "Casual" }, { 2, "Comp" }, { 3, "Profile1" },
+	};
+
+	// Replicates DrawDropdownPopup()'s own file-local minimum content width
+	// -- the same "replicate the internal geometry to compute a click
+	// target" approach ModalPrimaryButtonRect() above already uses for
+	// DrawModal()'s footer.
+	float InheritPopupMinWidth()
+	{
+		float flW = ui::Px( 180.0f );
+		for ( const ui::Option &o : kInheritOptions )
+			flW = std::max( flW, ui::MeasureText( ui::TypeRole::Value, o.pszLabel ).x + ui::Px( ui::tok::kXL ) * 2.0f );
+		return flW;
+	}
+}
+
+TEST_CASE( "atoms: dropdown click opens the popup", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nValue = 1;   // "Casual"
+	const ui::RowCtx row = MakeRow();
+	auto DrawRow = [ & ]
+	{
+		return ui::controls::Dropdown( row, "inherits1", &nValue,
+		                               kInheritOptions, IM_ARRAYSIZE( kInheritOptions ) );
+	};
+
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	REQUIRE_FALSE( ui::IsDropdownPopupOpen() );
+
+	const ImRect rcBox = row.PlaceFull();
+	h.MoveMouse( rcBox.GetCenter() );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame();
+	const ui::controls::DropdownResult res = DrawRow();
+	h.EndFrame();
+
+	REQUIRE( ui::IsDropdownPopupOpen() );
+	REQUIRE_FALSE( res.bChanged );   // opening never changes the value by itself
+	REQUIRE( nValue == 1 );
+
+	ui::CloseDropdownPopup();   // leave shared state clean for the next test
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "atoms: dropdown click on an item commits once", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nValue = 0;   // "None"
+	const ui::RowCtx row = MakeRow();
+	auto DrawRow = [ & ]
+	{
+		return ui::controls::Dropdown( row, "inherits2", &nValue,
+		                               kInheritOptions, IM_ARRAYSIZE( kInheritOptions ) );
+	};
+	const ImRect rcBox  = row.PlaceFull();
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
+	// Open it.
+	h.MoveMouse( rcBox.GetCenter() );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	REQUIRE( ui::IsDropdownPopupOpen() );
+
+	// The list's own rect -- DropdownPopupRect() is the one function that
+	// decides this, shared by production and this click target.
+	const ImRect rcPopup = ui::controls::DropdownPopupRect( rcBox, rcSlab, InheritPopupMinWidth(),
+	                                                        IM_ARRAYSIZE( kInheritOptions ), 8 );
+	const float flRowH = ui::Px( ui::tok::kControlH );
+	const ImVec2 vItem1( rcPopup.GetCenter().x, rcPopup.Min.y + flRowH * 1.5f );   // "Casual"
+
+	h.MoveMouse( vItem1 );
+	h.BeginFrame(); ui::DrawDropdownPopup( rcSlab ); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); ui::DrawDropdownPopup( rcSlab ); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); ui::DrawDropdownPopup( rcSlab ); h.EndFrame();
+
+	// The popup closes the moment it commits.
+	REQUIRE_FALSE( ui::IsDropdownPopupOpen() );
+
+	// Controls.h's documented one-frame-late commit: *pnValue changes on
+	// the OWNING control's next call, not the frame of the click itself.
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame();
+	const ui::controls::DropdownResult res = DrawRow();
+	h.EndFrame();
+
+	REQUIRE( res.bChanged );
+	REQUIRE( nValue == 1 );   // "Casual"
+
+	// Exactly once -- a further frame with nothing pending changes nothing.
+	h.BeginFrame();
+	const ui::controls::DropdownResult res2 = DrawRow();
+	h.EndFrame();
+	REQUIRE_FALSE( res2.bChanged );
+}
+
+TEST_CASE( "atoms: dropdown Esc cancels", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nValue = 2;   // "Comp"
+	const ui::RowCtx row = MakeRow();
+	auto DrawRow = [ & ]
+	{
+		return ui::controls::Dropdown( row, "inherits3", &nValue,
+		                               kInheritOptions, IM_ARRAYSIZE( kInheritOptions ) );
+	};
+	const ImRect rcBox  = row.PlaceFull();
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
+	h.MoveMouse( rcBox.GetCenter() );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	REQUIRE( ui::IsDropdownPopupOpen() );
+
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Escape, true );
+	h.BeginFrame(); ui::DrawDropdownPopup( rcSlab ); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Escape, false );
+	h.BeginFrame(); h.EndFrame();
+
+	REQUIRE_FALSE( ui::IsDropdownPopupOpen() );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame();
+	const ui::controls::DropdownResult res = DrawRow();
+	h.EndFrame();
+	REQUIRE_FALSE( res.bChanged );
+	REQUIRE( nValue == 2 );   // unchanged
+}
+
+TEST_CASE( "atoms: dropdown click outside cancels", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nValue = 0;   // "None"
+	const ui::RowCtx row = MakeRow();
+	auto DrawRow = [ & ]
+	{
+		return ui::controls::Dropdown( row, "inherits4", &nValue,
+		                               kInheritOptions, IM_ARRAYSIZE( kInheritOptions ) );
+	};
+	const ImRect rcBox  = row.PlaceFull();
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
+	h.MoveMouse( rcBox.GetCenter() );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); DrawRow(); h.EndFrame();
+	REQUIRE( ui::IsDropdownPopupOpen() );
+
+	// Clear of both the box and the popup it dropped.
+	const ImVec2 vOutside( 4.0f, ImGui::GetIO().DisplaySize.y - 4.0f );
+	h.MoveMouse( vOutside );
+	h.BeginFrame(); h.EndFrame();
+
+	h.MouseButton( true );
+	h.BeginFrame();
+	ui::DismissDropdownOnOutsideClick( rcSlab );
+	h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame(); h.EndFrame();
+
+	REQUIRE_FALSE( ui::IsDropdownPopupOpen() );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame();
+	const ui::controls::DropdownResult res = DrawRow();
+	h.EndFrame();
+	REQUIRE_FALSE( res.bChanged );
+	REQUIRE( nValue == 0 );   // unchanged
+}

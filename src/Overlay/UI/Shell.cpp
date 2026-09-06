@@ -354,6 +354,16 @@ namespace gamescope::ui::shell
 
 		void OpenPalette()
 		{
+			// Only one popup at a time: the palette is allowed to cover
+			// everything (see DrawPalette()'s own comment on why), which
+			// means a forced Dropdown popup (controls::Dropdown(), Profiles
+			// v2) left open underneath it would be keyboard-dead and
+			// invisible both. The auto-downgraded Choice's own popup
+			// (s_sOpenDropdown) does not need the same call: it is drawn
+			// and dismissed against the SLAB's rect, which the palette does
+			// not cover in a way that orphans its state the way this one's
+			// self-contained popup could.
+			CloseDropdownPopup();
 			s_bPaletteOpen = true;
 
 			// Default: start clean, same as always. The one exception is the
@@ -2128,6 +2138,29 @@ namespace gamescope::ui::shell
 				case Kind::Choice:
 				{
 					int n = std::holds_alternative<int>( v ) ? std::get<int>( v ) : 0;
+
+					// Profiles v2 dropdown (2026-09-06): Registry.h's
+					// Entry::Dropdown() presentation flag. A forced dropdown
+					// owns its popup entirely inside Controls.cpp -- open
+					// state, anchor, the pending commit -- rather than
+					// through the s_sOpenDropdown machinery below, which
+					// stays exactly as it was for the auto-downgrade case.
+					// See controls::Dropdown()'s own header comment for why
+					// the two mechanisms are kept apart rather than unified.
+					if ( decl.DropdownStyle() )
+					{
+						const bool bRowSelected = ( eRegion == Region::Sheet ) &&
+							SelectedEntry() && SelectedEntry()->Id() == sPopupKey;
+						const controls::DropdownResult res = controls::Dropdown(
+							row, pszId, &n, decl.Options().data(), decl.Options().size(), bRowSelected );
+						if ( res.bChanged )
+						{
+							decl.Binding().Set( Value{ n } );
+							return true;
+						}
+						return false;
+					}
+
 					// Region-qualified: see s_eOpenDropdownRegion. Without the
 					// region half, the Sheet's copy of a selected Choice and
 					// the Inspector's copy of the SAME entry -- drawn every
@@ -6609,6 +6642,10 @@ namespace gamescope::ui::shell
 		// now, when this frame's input is read.
 		DismissOpenDropdownOnOutsideClick( rcSlab );
 
+		// Same ordering, for controls::Dropdown()'s own self-contained popup
+		// (Profiles v2, 2026-09-06) -- see that function's header comment.
+		DismissDropdownOnOutsideClick( Rc( rcSlab ) );
+
 		// D18: hand the just-finished frame's dropdown record to the
 		// keyboard, and start a fresh one for the frame about to be drawn.
 		// Here, immediately before RunKeyboard(), because this is the one
@@ -6761,6 +6798,10 @@ namespace gamescope::ui::shell
 		// popup-focus one -- see DrawDropdownList. Same rcSlab
 		// DismissOpenDropdownOnOutsideClick() used earlier this frame.
 		DrawDropdownList( rcSlab );
+
+		// controls::Dropdown()'s own self-contained popup (Profiles v2,
+		// 2026-09-06) -- same slot, same reasoning, its own state.
+		DrawDropdownPopup( Rc( rcSlab ) );
 
 		// A Profiles-style modal (Controls.h's ui::Modal), above the slab
 		// and its dropdown, below the palette -- the same ordering

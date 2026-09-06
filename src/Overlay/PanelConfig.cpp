@@ -645,6 +645,13 @@ namespace gamescope
 						},
 						SetInherits ),
 					s_InheritOptions.data(), s_InheritOptions.size() )
+					// Dropdown, not segmented (2026-09-06, user feedback: "The
+					// inheritance selector should be a dropdown. Not multiple
+					// buttons."). The option set is every saved general
+					// profile -- user-created and unbounded, not a fixed
+					// handful of words -- exactly ui-design-guide.md's
+					// Dropdown-vs-segmented rule for when to force this.
+					.Dropdown()
 					.Help( "The general profile this game profile takes its values from. Only what you "
 					       "change here is stored in this profile; everything else follows the parent as "
 					       "it changes. None makes it stand alone with a full copy of the values." )

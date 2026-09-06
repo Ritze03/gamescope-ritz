@@ -339,6 +339,13 @@ namespace gamescope::ui
 		const std::string &ZeroWord() const { return m_sZeroMeans; }
 		bool  UsesValue() const          { return UsesValueColumn( m_eKind ); }
 
+		// A Param's fluent surface has no .Dropdown() (API.md's "strict
+		// subset" of Entry's -- see this class's own header comment): always
+		// false, so DrawSharedControl<TDecl>()'s templated Choice case can
+		// read this on a Parameter exactly as it does on an Entry without a
+		// second, kind-specific branch.
+		bool  DropdownStyle() const      { return false; }
+
 		// SPEC §3.13: "A parameter inherits its parent's reason, EXCEPT when
 		// it is the cause of it." That exception is why this reads the Param's
 		// OWN predicate and never walks to Owner() -- a param that gates its
@@ -416,6 +423,23 @@ namespace gamescope::ui
 		// visibility changes without an explicit call.
 		Entry &HideFromPalette() { m_bExcludeFromPalette = true; return *this; }
 		bool  ExcludedFromPalette() const { return m_bExcludeFromPalette; }
+
+		// ---- presentation flag: dropdown instead of segmented (2026-09-06) --
+		// A Kind::Choice presents as a segmented strip when it fits and as
+		// Choice's own auto-downgrade dropdown when it does not (SPEC §3.2/
+		// §3.3) -- a caller has no say in that, on purpose (API.md §12.6).
+		// This is the one override: it forces controls::Dropdown() instead of
+		// controls::Choice() regardless of the measured fit, for an option
+		// SET that is user-created or unbounded rather than a fixed few words
+		// -- profiles.inherits (one row per saved profile) is the first and,
+		// so far, only user. ui-design-guide.md's Dropdown entry has the
+		// "when to use this vs segmented" rule. Still plain Kind::Choice with
+		// an int index everywhere else that matters: the palette,
+		// overlay_e2_set/get, the Inspector and persistence all keep reading
+		// it exactly as before -- only the Sheet/Inspector row painter's
+		// choice of atom changes.
+		Entry &Dropdown() { m_bDropdownStyle = true; return *this; }
+		bool  DropdownStyle() const { return m_bDropdownStyle; }
 
 		// ---- the config key (Profiles v2, 2026-09-06) ----------------------
 		// The dotted key this row's binding reads and writes in a profile
@@ -553,6 +577,7 @@ namespace gamescope::ui
 		std::function<std::vector<ListItem>()> m_Items;        // Composite(List)
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
+		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;

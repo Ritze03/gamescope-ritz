@@ -2435,3 +2435,120 @@ TEST_CASE( "modal: closing and reopening in sequence works cleanly", "[overlay_u
 		REQUIRE_FALSE( IsModalOpen() );
 	}
 }
+
+// =========================================================================
+//  Dropdown -- ui-design-guide.md's Dropdown entry (Profiles v2, 2026-09-06).
+//  DropdownPopupRect() is pure geometry, no ImGui context, tested here
+//  exactly like ModalPrimaryButtonRect()'s replicated geometry is used in
+//  test_overlay_atoms.cpp -- except this one IS the production function,
+//  not a replica, since Controls.h exposes it precisely so the popup and
+//  the tests can never disagree about where it draws (this file's own
+//  header comment's rule, same as LayoutListBoxItem()'s). The click-driven
+//  open/commit/cancel behaviour needs a live frame and lives in
+//  test_overlay_atoms.cpp instead; IsDropdownPopupOpen()/
+//  CloseDropdownPopup() are the one slice of that state machine touching
+//  no ImGui API, tested here the same way Modal's OpenModal()/CloseModal()/
+//  IsModalOpen() bookkeeping is above.
+// =========================================================================
+TEST_CASE( "dropdown: closed by default, and CloseDropdownPopup is safe when nothing is open", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+
+	REQUIRE_FALSE( IsDropdownPopupOpen() );
+	CloseDropdownPopup();   // a no-op withdrawal, not an error, same as CloseModal()
+	REQUIRE_FALSE( IsDropdownPopupOpen() );
+}
+
+TEST_CASE( "dropdown popup rect: anchored under the box, right-aligned, clamped inside the slab", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	using namespace gamescope::ui::controls;
+	ScopedScale scale( 1.0f );
+
+	const ImRect rcSlab( 0.0f, 0.0f, 1920.0f, 1080.0f );
+	const ImRect rcAnchor( 700.0f, 300.0f, 800.0f, 300.0f + Px( tok::kControlH ) );
+
+	const ImRect rc = DropdownPopupRect( rcAnchor, rcSlab, Px( 180.0f ), 4, 8 );
+
+	// Drops from directly under the box, right edge lined up with it --
+	// the same "value column is right-aligned in its lane" rule Choice's
+	// own dropdown value follows.
+	REQUIRE_THAT( rc.Min.y, WithinAbs( rcAnchor.Max.y, 1e-3f ) );
+	REQUIRE_THAT( rc.Max.x, WithinAbs( rcAnchor.Max.x, 1e-3f ) );
+
+	// Never narrower than the box itself.
+	REQUIRE( rc.GetWidth() >= rcAnchor.GetWidth() - 1e-3f );
+
+	// Exactly 4 rows of ListBox()'s own row height -- nItemCount (4) is
+	// under nMaxVisibleRows (8), so nothing is capped.
+	REQUIRE_THAT( rc.GetHeight(), WithinAbs( Px( tok::kControlH ) * 4.0f, 1e-3f ) );
+
+	// Entirely inside the slab.
+	REQUIRE( rc.Min.x >= rcSlab.Min.x );
+	REQUIRE( rc.Max.x <= rcSlab.Max.x );
+	REQUIRE( rc.Min.y >= rcSlab.Min.y );
+	REQUIRE( rc.Max.y <= rcSlab.Max.y );
+}
+
+TEST_CASE( "dropdown popup rect: capped to nMaxVisibleRows before it would have to scroll", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	using namespace gamescope::ui::controls;
+	ScopedScale scale( 1.0f );
+
+	const ImRect rcSlab( 0.0f, 0.0f, 1920.0f, 1080.0f );
+	const ImRect rcAnchor( 700.0f, 300.0f, 800.0f, 300.0f + Px( tok::kControlH ) );
+
+	// 20 saved profiles -- exactly the "unbounded, user-created" case this
+	// control exists for. The box stays 8 rows tall; ListBox() itself is
+	// what scrolls the rest into view.
+	const ImRect rc = DropdownPopupRect( rcAnchor, rcSlab, Px( 180.0f ), 20, 8 );
+	REQUIRE_THAT( rc.GetHeight(), WithinAbs( Px( tok::kControlH ) * 8.0f, 1e-3f ) );
+}
+
+TEST_CASE( "dropdown popup rect: flips above the anchor when there is no room below", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	using namespace gamescope::ui::controls;
+	ScopedScale scale( 1.0f );
+
+	const ImRect rcSlab( 0.0f, 0.0f, 1920.0f, 1080.0f );
+
+	// A box hard against the bottom of the slab -- 8 rows will not fit
+	// below it.
+	const ImRect rcAnchor( 700.0f, 1060.0f, 800.0f, 1060.0f + Px( tok::kControlH ) );
+	const ImRect rc = DropdownPopupRect( rcAnchor, rcSlab, Px( 180.0f ), 8, 8 );
+
+	// It ends at or above the anchor's own top instead of dropping below.
+	REQUIRE( rc.Max.y <= rcAnchor.Min.y + 1e-3f );
+	REQUIRE( rc.Min.y >= rcSlab.Min.y - 1e-3f );
+
+	// A box near the TOP of the slab, by contrast, keeps the normal
+	// below-anchor placement -- the flip is conditional, not unconditional.
+	const ImRect rcAnchorTop( 700.0f, 20.0f, 800.0f, 20.0f + Px( tok::kControlH ) );
+	const ImRect rcTop = DropdownPopupRect( rcAnchorTop, rcSlab, Px( 180.0f ), 8, 8 );
+	REQUIRE_THAT( rcTop.Min.y, WithinAbs( rcAnchorTop.Max.y, 1e-3f ) );
+}
+
+TEST_CASE( "dropdown popup rect: grows for a long label, but never past the slab", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	using namespace gamescope::ui::controls;
+	ScopedScale scale( 1.0f );
+
+	// A narrow box, a slab too small to hold "content width" -- the width
+	// still clamps to the slab rather than overflowing it.
+	const ImRect rcSlabNarrow( 0.0f, 0.0f, 260.0f, 1080.0f );
+	const ImRect rcAnchorNarrow( 10.0f, 300.0f, 90.0f, 300.0f + Px( tok::kControlH ) );
+	const ImRect rcClamped = DropdownPopupRect( rcAnchorNarrow, rcSlabNarrow, 5000.0f, 4, 8 );
+	REQUIRE( rcClamped.GetWidth() <= rcSlabNarrow.GetWidth() + 1e-3f );
+	REQUIRE( rcClamped.Min.x >= rcSlabNarrow.Min.x - 1e-3f );
+	REQUIRE( rcClamped.Max.x <= rcSlabNarrow.Max.x + 1e-3f );
+
+	// A wide slab: the requested content width wins outright over the
+	// anchor's own (narrower) width, exactly "at least as wide as the box".
+	const ImRect rcSlabWide( 0.0f, 0.0f, 1920.0f, 1080.0f );
+	const ImRect rcAnchorWide( 700.0f, 300.0f, 780.0f, 300.0f + Px( tok::kControlH ) );
+	const ImRect rcWide = DropdownPopupRect( rcAnchorWide, rcSlabWide, 260.0f, 4, 8 );
+	REQUIRE_THAT( rcWide.GetWidth(), WithinAbs( 260.0f, 1e-3f ) );
+}

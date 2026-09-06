@@ -29,6 +29,9 @@ The newest version below is the one this build reports.
   the mouse (CS2 in a match, any first-person game in play) no longer receives absolute
   pointer positions -- neither from a resolution or scaler change nor from the host
   pointer -- so the view stops snapping towards the host cursor; menus are unaffected.
+- **Inherits is a dropdown, not a row of buttons**: picking the general profile a game
+  profile inherits from now opens a real dropdown list instead of a row of segmented
+  buttons.
 
 ### Removed
 - **Per-game area and the profile buttons**: the Per-game area, "Use this profile",

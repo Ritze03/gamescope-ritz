@@ -195,6 +195,14 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
    only while the selected profile is a game profile; changing it is
    `EditProfileMeta()` with the new parent (resolved values kept, re-diffed). A refusal
    here is the one toast-shaped error, because the row has no field to sit beside.
+   **Rendered as a real dropdown** (`Entry::Dropdown()`, 2026-09-06 -- user feedback,
+   verbatim: *"The inheritance selector should be a dropdown. Not multiple buttons."*)
+   rather than `Choice`'s own segmented-or-auto-downgrade rendering: the option set is
+   one row per saved general profile, which is user-created and unbounded, not a fixed
+   handful of words -- see `ui-design-guide.md`'s `ui::controls::Dropdown` entry for the
+   full when-to-use rule. Still a plain `Kind::Choice` with an int index everywhere else
+   that matters (the palette, `overlay_e2_set`/`get`, the Inspector, persistence) --
+   only the Sheet/Inspector row's choice of atom changed.
    **Filter game profiles** (`profiles.filter`, a Switch, **on by default**): on hides
    other games' game profiles, general ones always show, and the session profile is
    always listed whatever the filter says (a `--profile` of another game's profile
@@ -204,8 +212,8 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
    preferences rather than in a profile. `Why on by default:` with one profile per
    game the list grows by one line per game played; the common question is "which
    profile does *this* game use", and the other games' lines only answer it by noise.
-   Two rows rather than the sketch's one: a segmented Choice and a labelled switch
-   sharing one row would fight for the control zone at every width the shell supports.
+   Two rows rather than the sketch's one: a dropdown and a labelled switch sharing one
+   row would fight for the control zone at every width the shell supports.
 4. **Status** (`profiles.status`, one Facts row, last): `[Game] Rust · inherits Comp`,
    naming the game only when the profile's label does not already (`Casual · game
    Rust`, `Casual (launch) · game Rust`), so it fits the control zone beside a column

@@ -221,6 +221,43 @@ namespace gamescope::ui
 
 	bool IsModalOpen();
 
+	// =========================================================================
+	//  Dropdown popup -- SPEC gap addendum (2026-09-06): ui-design-guide.md's
+	//  Dropdown entry. controls::Dropdown() below draws the CLOSED box inline,
+	//  in the row's own place; its OPEN list cannot be, for the identical
+	//  reason DrawModal() and the palette cannot be drawn from inside the
+	//  sheet's child window (see DrawModal()'s own comment) -- so the list is
+	//  its own top-level surface, drawn once per frame from here, in the same
+	//  slot Shell.cpp gave the auto-downgraded Choice's own popup: after
+	//  DrawModal() (a modal owns the whole surface; a dropdown answers one
+	//  row, so a modal opened on top wins outright) and before the palette
+	//  (transient and keyboard-only, the one thing allowed to cover
+	//  everything else).
+	// =========================================================================
+
+	// Call from the shell's own frame prologue, BEFORE a single row is drawn
+	// -- swallows a press outside the open popup (and outside the box that
+	// owns it, so the SAME click that opened it this frame cannot also close
+	// it) so nothing underneath can react to that click too. A no-op when
+	// nothing is open. Mirrors Shell.cpp's own former
+	// DismissOpenDropdownOnOutsideClick() and its documented reason: decided
+	// on the press, before ButtonBehavior on any other control gets a look.
+	void DismissDropdownOnOutsideClick( const ImRect &rcSlab );
+
+	// One frame of whatever Dropdown popup is open, or nothing. `rcSlab` is
+	// the surface it is clamped inside and the box it drops from is
+	// borrowed from -- the exact same rect DrawModal() and DismissDropdown-
+	// OnOutsideClick() above are given.
+	void DrawDropdownPopup( const ImRect &rcSlab );
+
+	bool IsDropdownPopupOpen();
+
+	// Closes it without commit -- for a caller that must guarantee no two
+	// popups are ever open together (the palette's own open gesture; a
+	// second Dropdown's box already refuses to open under a live Modal, see
+	// controls::Dropdown()'s own comment, so that direction needs no call).
+	void CloseDropdownPopup();
+
 	namespace controls
 	{
 		// ---- the pointer drag, and writes that must wait for it to end ----
@@ -331,6 +368,61 @@ namespace gamescope::ui
 		};
 		ChoiceResult Choice( const RowCtx &row, const char *pszId, int *pnValue,
 		                     const Option *pOptions, size_t nOptions, bool bPopupOpen = false );
+
+		// ---- Dropdown -- ui-design-guide.md's Dropdown entry ---------------
+		// A Choice FORCED to present as a dropdown, regardless of whether it
+		// would fit segmented -- Registry.h's Entry::Dropdown() is the
+		// presentation flag a panel sets to ask for this instead of Choice().
+		// Same box/chevron/hover chrome as Choice's own auto-downgrade
+		// dropdown branch (one code path draws both), but this one owns its
+		// popup ENTIRELY -- open/close state, the anchor rect, the pending
+		// commit -- inside Controls.cpp rather than in the Shell's
+		// s_sOpenDropdown machinery, which is why it is a distinct entry
+		// point and not just another bPopupOpen-style parameter: the two
+		// mechanisms never share state, and Controls.cpp has no registry to
+		// look an id up in.
+		//
+		// THE ONE-FRAME-LATE COMMIT. *pnValue only changes (bChanged comes
+		// back true) on the frame AFTER an item is picked in the popup, not
+		// the frame of the click itself. Reason: *pnValue's address is a
+		// caller-side local (Shell.cpp reads a Value into a stack int and
+		// passes &that), valid only for the duration of THIS call -- long
+		// gone by the time DrawDropdownPopup() runs later in the same frame
+		// from its own top-level window (the same z-order requirement that
+		// makes the popup a separate draw call at all). So a pick is stashed
+		// against this pszId and applied the next time THIS SAME control is
+		// called, which -- since every atom here redraws every frame -- is
+		// one frame later: imperceptible, and the same trick Text/Stepper's
+		// *pbEditing already relies on to cross a frame boundary through
+		// caller-owned storage instead of a held pointer.
+		//
+		// `bRowSelected`: true while the row this box belongs to is the
+		// keyboard's current selection, so Enter/Space open it exactly as a
+		// click would (SPEC §8.2's "Enter/Space -- activate"). Only one
+		// popup open at a time: opening this one closes any other Dropdown
+		// popup that was open, and it refuses to open at all while a Modal
+		// is up (IsModalOpen()) -- the Modal already owns the whole surface.
+		struct DropdownResult
+		{
+			bool bChanged = false;   // *pnValue was just updated by an earlier pick -- see above
+		};
+		DropdownResult Dropdown( const RowCtx &row, const char *pszId, int *pnValue,
+		                        const Option *pOptions, size_t nOptions,
+		                        bool bRowSelected = false );
+
+		// Pure: the popup's rect anchored under rcAnchor (or, flipped, above
+		// it), at least as wide as rcAnchor and at least flMinContentWidthPx
+		// wide, clamped so it never draws past rcSlab's edges. Tall enough
+		// for min(nItemCount, nMaxVisibleRows) rows of tok::kControlH each --
+		// ListBox()'s own row height, kept in the same token so the rect
+		// this returns and what ListBox() actually draws inside it can
+		// never disagree about how tall a row is. Shared by
+		// DrawDropdownPopup() and the tests, the same reason
+		// ModalPrimaryButtonRect()-style geometry is shared everywhere else
+		// in this kit rather than replicated.
+		ImRect DropdownPopupRect( const ImRect &rcAnchor, const ImRect &rcSlab,
+		                         float flMinContentWidthPx, int nItemCount,
+		                         int nMaxVisibleRows = 8 );
 
 		// ---- SPEC §3.6 -- free text ---------------------------------------
 		// B's value + pencil; clicking swaps in a real input. *pbEditing is
