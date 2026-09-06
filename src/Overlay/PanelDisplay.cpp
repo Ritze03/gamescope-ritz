@@ -266,6 +266,7 @@ namespace gamescope
 		// rather than writing g_bForceRelativeMouse directly -- see that
 		// function's comment for why a direct write has no live effect.
 		steamcompmgr_set_force_relative_mouse( s_CachedSettings.gamescope.force_grab_cursor );
+		steamcompmgr_set_force_windows_fullscreen( s_CachedSettings.gamescope.force_windows_fullscreen );
 
 		set_color_sdr_gamut_wideness( s_CachedSettings.gamescope.sdr_gamut_wideness );
 		set_sdr_on_hdr_brightness( s_CachedSettings.gamescope.sdr_on_hdr_brightness_nits );
@@ -570,11 +571,13 @@ namespace gamescope
 	static void RegisterGeneral( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
-		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing cursor grab" );
+		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing cursor grab "
+		            "maximize fullscreen nested window" );
 		a.Summary( []{
 			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
 			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
 			s += g_bForceRelativeMouse ? " · cursor grabbed" : " · cursor free";
+			s += steamcompmgr_get_force_windows_fullscreen() ? " · nested windows maximized" : "";
 			return s;
 		} );
 
@@ -627,6 +630,32 @@ namespace gamescope
 			       "hidden. Turn this on if the mouse ever seems to escape the game window." )
 			.Default( false )
 			.Keywords( "mouse pointer capture confine grab relative" );
+
+		// --force-windows-fullscreen (upstream flag; xwayland_ctx_t::
+		// force_windows_fullscreen). Genuinely live, same shape as Force
+		// grab cursor just above: routed through
+		// steamcompmgr_set_force_windows_fullscreen(), which sets every
+		// live Xwayland ctx and marks focus dirty so
+		// determine_and_apply_focus() force-resizes the focused window on
+		// the very next frame -- not a startup-only flag despite having
+		// been CLI-only before this toggle existed. See that function's
+		// definition comment in steamcompmgr.cpp for the two consumers
+		// this reaches (the game-window branch in
+		// determine_and_apply_focus() and handle_desktop_window()).
+		a.Switch( "display.force_windows_fullscreen", "Force maximize nested window",
+			ui::AnyBind::Of<bool>(
+				[]{ return steamcompmgr_get_force_windows_fullscreen(); },
+				[]( bool b ) {
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.force_windows_fullscreen = b; },
+						[ b ] { steamcompmgr_set_force_windows_fullscreen( b ); } );
+				} ) )
+			.Key( "gamescope.force_windows_fullscreen" )
+			.Help( "Makes windows inside gamescope open maximized/fullscreen, filling the nested "
+			       "display instead of using their own requested size. Takes effect immediately, "
+			       "even on windows already open." )
+			.Default( false )
+			.Keywords( "maximize fullscreen nested window force size windows-fullscreen" );
 	}
 
 	static void RegisterUpscaling( ui::Registry &reg )

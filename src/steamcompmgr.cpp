@@ -1066,6 +1066,35 @@ void steamcompmgr_set_force_relative_mouse( bool bForce )
 	}
 }
 
+// Overlay entry point for --force-windows-fullscreen's per-Xwayland-ctx
+// state (xwayland_ctx_t::force_windows_fullscreen), added for the Quick
+// toggles' "Force maximize nested window". The flag already had a live path
+// -- an external tool writing the GAMESCOPE_FORCE_WINDOWS_FULLSCREEN root
+// X11 property, read back by the PropertyNotify handler below ("ev->atom ==
+// ctx->atoms.gamescopeForceWindowsFullscreen") -- this just gives the
+// in-process overlay the same effect without round-tripping through X11.
+// Sets every currently-live ctx (there is normally one; more with
+// --xwayland-count) and marks focus dirty so determine_and_apply_focus()
+// force-resizes the focused game window on the very next frame, exactly as
+// the PropertyNotify path does -- see that function's win_has_game_id()
+// branch and handle_desktop_window() for the two places the flag is read.
+void steamcompmgr_set_force_windows_fullscreen( bool bForce )
+{
+	gamescope_xwayland_server_t *server = nullptr;
+	for ( size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++ )
+	{
+		if ( server->ctx )
+			server->ctx->force_windows_fullscreen = bForce;
+	}
+	MakeFocusDirty();
+}
+
+bool steamcompmgr_get_force_windows_fullscreen()
+{
+	gamescope_xwayland_server_t *server = wlserver_get_xwayland_server( 0 );
+	return server && server->ctx && server->ctx->force_windows_fullscreen;
+}
+
 // Runtime nested resolution and refresh -- the fork's UI entry point for what
 // Steam Deck's GAMESCOPE_XWAYLAND_MODE_CONTROL root atom already does (see
 // handle_property_notify()'s gamescopeXWaylandModeControl branch below).
@@ -9282,7 +9311,12 @@ steamcompmgr_main(int argc, char **argv)
 
 	int o;
 	int opt_index = -1;
-	bool bForceWindowsFullscreen = false;
+	// Seeded from config (see main.cpp's apply_ritz_config_to_startup_state(),
+	// which runs before this getopt parse) so --force-windows-fullscreen's
+	// absence doesn't silently override the config's "on" -- an explicit CLI
+	// flag below still forces this true unconditionally either way, so it
+	// still wins over config, same guarantee as -w/-h/-r.
+	bool bForceWindowsFullscreen = g_bForceWindowsFullscreenStartup;
 	while ((o = getopt_long(argc, argv, gamescope_optstring, gamescope_options, &opt_index)) != -1)
 	{
 		const char *opt_name;

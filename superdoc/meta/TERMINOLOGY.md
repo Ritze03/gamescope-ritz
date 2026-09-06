@@ -13,6 +13,7 @@ amend the entry here.
 - **steamcompmgr** — the X11 window-manager subsystem inside gamescope (historically a standalone project this compositor absorbed); not the whole binary.
 - **Backend** — the display-output abstraction (`IBackend`); one of DRM, SDL, OpenVR, Headless, Wayland, selected at startup. Not a "client backend".
 - **Nested mode** — running gamescope as a window inside an existing desktop session (SDL/Wayland backend).
+- **Nested window** — a client window running *inside* gamescope's own embedded Xwayland session (an app or game window, addressed by `xwayland_ctx_t`/`steamcompmgr_win_t`) — not gamescope's own outer window, which **Nested mode** (above) is about. The General area's "Force maximize nested window" toggle (`display.force_windows_fullscreen`, mirrors `--force-windows-fullscreen`) names this sense: it makes every such window open at the full nested canvas size regardless of its own requested size. See `superdoc/features/resolution-and-refresh.md`'s "Force maximize nested window" section.
 - **Embedded mode** — gamescope owning the physical display directly via DRM/KMS (the Steam Deck / console usecase).
 - **Override window** — a window painted on top of the focused app window (e.g. the Steam overlay) without taking full focus.
 - **Underlay window** — a window painted beneath the current override, preserved across override changes.

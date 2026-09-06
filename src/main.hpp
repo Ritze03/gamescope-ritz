@@ -18,6 +18,11 @@ extern int g_nNestedDisplayIndex;
 extern uint32_t g_nOutputWidth;
 extern uint32_t g_nOutputHeight;
 extern bool g_bForceRelativeMouse;
+// One-shot bridge from config to steamcompmgr_main()'s own getopt-parsed
+// local `bForceWindowsFullscreen` (steamcompmgr.cpp) -- see
+// apply_ritz_config_to_startup_state()'s comment in main.cpp for why this
+// can't be written straight into a live global the way -w/-h/-r are.
+extern bool g_bForceWindowsFullscreenStartup;
 extern int g_nOutputRefresh; // mHz
 extern bool g_bOutputHDREnabled;
 extern bool g_bForceInternal;

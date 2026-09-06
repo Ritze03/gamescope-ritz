@@ -9,6 +9,14 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.6.2] – 2026-09-08
+
+### Added
+- **Force maximize nested window**: a new Quick toggles switch in Display > General
+  makes windows inside gamescope open maximized/fullscreen, filling the nested display
+  instead of using their own requested size. Takes effect immediately, even on windows
+  already open.
+
 ## [0.6.1] – 2026-09-06
 
 ### Added

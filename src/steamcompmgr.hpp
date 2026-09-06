@@ -212,6 +212,22 @@ extern void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScr
 // effect once the process is already running.
 extern void steamcompmgr_set_force_relative_mouse( bool bForce );
 
+// Live-effect entry point for --force-windows-fullscreen's per-Xwayland-ctx
+// state (xwayland_ctx_t::force_windows_fullscreen) -- mirrors what the
+// GAMESCOPE_FORCE_WINDOWS_FULLSCREEN root-window X11 property's
+// PropertyNotify handler already does for an external tool, but callable
+// in-process (the Overlay's Quick toggles). See this function's own
+// definition comment in steamcompmgr.cpp.
+extern void steamcompmgr_set_force_windows_fullscreen( bool bForce );
+
+// Read-back for the Overlay's toggle, so it reflects the real live state
+// (including a change made by an external tool via the root X11 property)
+// rather than only the config cache. Reads the primary (index 0) Xwayland
+// ctx -- steamcompmgr_set_force_windows_fullscreen() above sets every ctx
+// uniformly, so this is representative unless something outside the panel
+// changed just one ctx directly.
+extern bool steamcompmgr_get_force_windows_fullscreen();
+
 // Nudges the game-side fallback-cursor policy (steamcompmgr.cpp's
 // SetDefaultCursorImage(), gated by the Cursor tab's "Use everywhere"
 // toggle -- PanelCursor.h's CursorAppearance::bEverywhere) to reapply on

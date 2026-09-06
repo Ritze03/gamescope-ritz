@@ -1921,6 +1921,33 @@ TEST_CASE( "gamescope.nested_width/height/refresh_hz round-trip and default to a
     REQUIRE( loaded.gamescope.nested_refresh_hz == 144 );
 }
 
+TEST_CASE( "gamescope.force_windows_fullscreen round-trips and defaults to off", "[config]" )
+{
+    // Requests-2026-09-08 item 3: Quick toggles' "Force maximize nested
+    // window" (--force-windows-fullscreen). This is the config-layer half
+    // only -- SaveSections()/LoadSections() round-tripping the field, the
+    // same shape as the nested_width/height/refresh_hz test above. The
+    // CLI-wins-over-config precedence (main.cpp's
+    // apply_ritz_config_to_startup_state() seeding
+    // g_bForceWindowsFullscreenStartup before either getopt parse runs, an
+    // explicit --force-windows-fullscreen still forcing the ctx flag true
+    // unconditionally) is enforced by process-startup code ordering in
+    // main.cpp/steamcompmgr.cpp, not by anything Settings/ConfigManager
+    // know about -- there is no argv or CLI concept at this layer, the same
+    // reason -w/-h/-r's own precedence over nested_width/height/refresh_hz
+    // has no equivalent case here either.
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE_FALSE( s.gamescope.force_windows_fullscreen );
+
+    s.gamescope.force_windows_fullscreen = true;
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.gamescope.force_windows_fullscreen );
+}
+
 // ---- requests-2026-09-06 item 1: select loads, and edits land in the selection ----
 
 TEST_CASE( "select B then a routed write: B's file changes and A's does not; ResolvedSettings follows the selection", "[config]" )

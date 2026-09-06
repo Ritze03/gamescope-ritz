@@ -52,6 +52,7 @@ namespace gamescope::config
         // mechanisms the fields above already use -- see PanelDisplay.cpp.
         int fps_limit = 0;                     // 0 = unlimited, matches g_nSteamCompMgrTargetFPS's own semantics; live via the GAMESCOPE_FPS_LIMIT X11 property
         bool force_grab_cursor = false;        // mirrors --force-grab-cursor's runtime effect on g_bForceRelativeMouse; genuinely live, not startup-only
+        bool force_windows_fullscreen = false; // mirrors --force-windows-fullscreen; per-Xwayland-ctx, genuinely live via steamcompmgr_set_force_windows_fullscreen()
 
         // HDR tab -- gamescope_color_mgmt_t fields (rendervulkan.hpp) via
         // their existing set_*() functions. Meaningless while hdr_enabled is

@@ -72,6 +72,75 @@ backend (unsets fullscreen, writes `g_nOutputWidth/Height`, `RequestDecorCommit(
 `Commit()` sends `libdecor_state_new(w,h)`). Nothing in the tree calls either any more. Details
 of both live in [backend-sdl.md](backend-sdl.md) and [backend-wayland.md](backend-wayland.md).
 
+### Force maximize nested window (`display.force_windows_fullscreen`)
+
+Tracker: `../planning/requests-2026-09-08.md` item 3. A Quick toggles switch in
+`display.general` (`src/Overlay/PanelDisplay.cpp`, alongside Adaptive sync / Allow
+tearing / Force grab cursor), persisted as `gamescope.force_windows_fullscreen` and
+mirroring the pre-existing `--force-windows-fullscreen` CLI flag (upstream's own, unused
+by this fork's UI until now). See TERMINOLOGY.md's **Nested window** entry for what
+"nested window" means here — a client window inside gamescope's own Xwayland session, not
+gamescope's own outer window (**Nested mode**).
+
+**What it actually does.** `xwayland_ctx_t::force_windows_fullscreen` (`steamcompmgr.cpp`)
+is read in exactly two places: `determine_and_apply_focus()`'s `win_has_game_id()` branch
+(a focused Steam-tracked game window) and `handle_desktop_window()` (every other mapped
+top-level window). Both already treat "is fullscreen" and "the flag is set" identically —
+either resizes the window to the nested canvas (`root_width x root_height`) instead of the
+size the window itself requested (`sizeHintsSpecified` / `requestedWidth/Height`). The
+toggle changes nothing about *how* those two functions resize a window; it only supplies
+the boolean they already read.
+
+**Genuinely live, not startup-only** — determined by reading every consumer before
+wiring the row, per this feature's own precedent (issues #25 and #68 both shipped a
+control that rendered and silently did nothing). Two things made this the small, safe
+case rather than the "label it startup-only" case:
+
+1. The flag already had a live path *upstream never used from this UI*: an external tool
+   writing the `GAMESCOPE_FORCE_WINDOWS_FULLSCREEN` root-window X11 property is caught by
+   a `PropertyNotify` handler (`steamcompmgr.cpp`) that writes the ctx's flag and calls
+   `MakeFocusDirty()`.
+2. `MakeFocusDirty()` bumps a serial every `global_focus_t` checks once per frame
+   (`focus_t::IsDirty()`), on the very same steamcompmgr thread `PanelDisplay_Draw()`
+   itself runs on (see this file's own "Thread safety" header comment) — so a dirtied
+   focus reaches `determine_and_apply_focus()` the next frame, for every focused window,
+   the exact same effect the atom path gets from an external tool.
+
+So `steamcompmgr_set_force_windows_fullscreen( bool )` (new, `steamcompmgr.cpp`/`.hpp`)
+just does in-process what the atom handler does for an external one: sets every currently
+live Xwayland ctx's flag (there is normally one; more under `--xwayland-count`) and calls
+`MakeFocusDirty()`. `steamcompmgr_get_force_windows_fullscreen()` reads ctx 0 back for the
+row's own state and the area's Summary line. Measured (headless nested gamescope, a raw
+Xlib client with fixed `WM_NORMAL_HINTS` so it takes the `handle_desktop_window()` branch):
+toggling the row while that same client keeps running moves it between its own requested
+size and the nested canvas size with no relaunch — `build-release/verify-shots/
+force-maximize-2026-09-08/results.txt`.
+
+**CLI still wins over config, the same way `-w/-h/-r` beat `nested_width/height/refresh_hz`
+— but the mechanism differs because this flag's own CLI parse lives somewhere else.**
+`-w/-h/-r` and their config fields are both read inside `main.cpp`, so "config first, CLI
+after" is one function's own call order. `--force-windows-fullscreen` has never been
+parsed there: it is parsed inside `steamcompmgr_main()`'s *own*, separate
+`getopt_long()` pass over the same `argv` (`steamcompmgr.cpp`) — a second, independent
+parse that several long-only flags this fork's UI doesn't touch already go through. So
+the config value cannot be written straight into a live global the way `g_nNestedWidth`
+is; instead `apply_ritz_config_to_startup_state()` (`main.cpp`, still runs before *both*
+getopt passes) seeds a small bridge global, `g_bForceWindowsFullscreenStartup`, and
+`steamcompmgr_main()`'s own local `bForceWindowsFullscreen` (previously always
+`false`-initialized) now seeds from it before its getopt loop runs. Since the flag is
+`no_argument` (`--force-windows-fullscreen` can only ever set it *true*, there is no
+`--no-force-windows-fullscreen`), an explicit CLI flag still forces the local variable
+`true` unconditionally regardless of what the config seed was — the same one-directional
+"CLI wins" guarantee, just enforced across two getopt passes instead of one. Verified
+(same headless run): config `false` + `--force-windows-fullscreen` on the command line
+still starts the probe client maximized.
+
+Also live-applied on every non-startup config reload path that already carries
+`force_grab_cursor` (`ritz_apply_config_live()` in `main.cpp`, and
+`PanelDisplay.cpp`'s `PushCachedSettingsToLiveState()`), so a profile switch or a
+per-game config swap while running picks it up immediately, not only at the next
+launch.
+
 ### The pointer follows the change
 
 The absolute-pointer mapping (force-grab off) is rebuilt from the painted base layer every
@@ -310,3 +379,5 @@ Game resolution and refresh survive a restart; there is nothing else in the area
   one-row reshape.
 - [../planning/requests-2026-09-07.md](../planning/requests-2026-09-07.md) — items 3–4: Custom
   moves onto the Aspect row only, and the Live-state line's "nested"/"output" wording.
+- [../planning/requests-2026-09-08.md](../planning/requests-2026-09-08.md) — item 3: Force
+  maximize nested window.

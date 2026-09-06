@@ -318,6 +318,7 @@ bool g_bOutputHDREnabled = false;
 
 bool g_bFullscreen = false;
 bool g_bForceRelativeMouse = false;
+bool g_bForceWindowsFullscreenStartup = false;
 
 bool g_bGrabbed = false;
 
@@ -600,6 +601,7 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// PushCachedSettingsToLiveState() pushes when that area reloads (fps_limit
 	// deliberately not: it round-trips through an X11 property, see there).
 	steamcompmgr_set_force_relative_mouse( config.gamescope.force_grab_cursor );
+	steamcompmgr_set_force_windows_fullscreen( config.gamescope.force_windows_fullscreen );
 	set_color_sdr_gamut_wideness( config.gamescope.sdr_gamut_wideness );
 	set_sdr_on_hdr_brightness( config.gamescope.sdr_on_hdr_brightness_nits );
 	set_hdr_input_gain( config.gamescope.hdr_input_gain );
@@ -627,6 +629,20 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	}
 	if ( config.gamescope.nested_refresh_hz )
 		g_nNestedRefresh = gamescope::ConvertHztomHz( config.gamescope.nested_refresh_hz ); // g_nNestedRefresh is mHz
+
+	// --force-windows-fullscreen ("Force maximize nested window" in Quick
+	// toggles): unlike -w/-h/-r, this flag's own state lives per Xwayland
+	// ctx (xwayland_ctx_t::force_windows_fullscreen) and no ctx exists yet
+	// at this point in startup -- steamcompmgr_main() creates them later
+	// (called at the bottom of this file) from its OWN independent getopt
+	// parse of the same argv, seeding each ctx from a local bool. So the
+	// config value can't be written into a live global the way nested_width
+	// is; it is instead parked in g_bForceWindowsFullscreenStartup, which
+	// that local bool is seeded from -- this function still runs before
+	// BOTH getopt loops (this file's own, and steamcompmgr_main()'s later
+	// one), so an explicit CLI flag still overwrites it unconditionally and
+	// wins, the same guarantee nested_width/height/refresh get above.
+	g_bForceWindowsFullscreenStartup = config.gamescope.force_windows_fullscreen;
 }
 
 static enum gamescope::GamescopeBackend parse_backend_name(const char *str)
