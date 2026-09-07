@@ -84,11 +84,16 @@
 #   crosshair-geometry     -- all four arms are the configured colour at the
 #                            expected offsets, background shows in the gap,
 #                            and the crosshair's own outline is black
-#   crosshair-gap-invariant -- the gap is the TOTAL hole across the centre
-#                            (2026-09-08, crosshair.md's "Gap"): gap N is
-#                            exactly N pixels missing, counting the centre
-#                            pixel once, at width 1 and 2, gap 0..3, outline
-#                            off and on
+#   crosshair-gap-invariant -- the hole across the centre is
+#                            2*(gap-1)+width, and ALWAYS SYMMETRIC -- both
+#                            arms of an axis the same distance from the
+#                            centre, at every gap (2026-09-08, revised same
+#                            day after the first same-day formula's
+#                            even-gap bias shipped a visibly lopsided
+#                            crosshair -- crosshair.md's "Gap"): checked at
+#                            width 1 and 2, gap 0..4, outline off and on,
+#                            both the exact hole width and the symmetry
+#                            itself
 #   crosshair-shrink-rate  -- Shrink auto-hide: the gap closes and the arms
 #                            shorten at the SAME pixels-per-second (request
 #                            #11, 2026-09-06), measured from captures at known
@@ -98,14 +103,16 @@
 #                            back a quarter later and fully back after
 #   crosshair-scaled       -- Apply Scaling (request #14): a 640x360 game
 #                            stretched 2x onto the 1280x720 output gets arms
-#                            2x as long, 2x as wide, and a hole 2x the
-#                            configured gap (2026-09-08's "Gap"), with soft
-#                            (10..90 % coverage) edges -- measured by
-#                            coverage, i.e. the composite's straight-alpha
-#                            blend, not by colour
-#   crosshair-scaled-gap   -- the same "hole = gap x scale" invariant at a
-#                            second, smaller gap value, distinguishing it
-#                            from the old (2*gap+width) formula
+#                            2x as long, 2x as wide, a hole of
+#                            (2*(gap-1)+width) x scale (2026-09-08, revised
+#                            same day), and soft (10..90 % coverage) edges --
+#                            measured by coverage, i.e. the composite's
+#                            straight-alpha blend, not by colour -- plus the
+#                            same symmetry assertion as crosshair-gap-invariant
+#   crosshair-scaled-gap   -- the same hole-formula invariant at a second,
+#                            smaller gap value, distinguishing it from both
+#                            the pre-2026-09-08 (hole=2*gap+width) and the
+#                            first same-day (hole=gap, biased) formulas
 #
 # USAGE
 #   scripts/pixel-regression.sh                # run everything
@@ -217,41 +224,31 @@ EXPECTED_LAYER_HWM=4
 # outside the fill", on EVERY side -- including the side facing the centre,
 # which is easy to miss from the spec alone).
 #
-# Since 2026-09-08 (crosshair.md's "Gap") the gap is the TOTAL hole across
-# the centre, not a per-side inset, so with an ODD CH_LINE_WIDTH the two
-# arms on an axis sit at DIFFERENT offsets from the centre point (one gets
-# the even-gap bias's extra pixel, the other doesn't -- CrosshairMath.h's
-# HoleSplit). The arm offset from the centre is E = (width+1)/2 [the
-# column/row's own half-width] + a share of (gap - width): the LOW share
-# (up, left) for CH_ARM_LO_OFFSET, the HIGH share (down, right, which gets
-# any odd remainder) for CH_ARM_HI_OFFSET.
-#
-# check_inversion_crosshair / -alpha sample ONE direction only (up), at
-# whatever gap/width the crosshair actually has RUNNING at that point in the
-# script -- CH_LINE_GAP/CH_LINE_WIDTH, the startup config's values -- so
-# their windows use CH_ARM_LO_OFFSET (up is the LOW side, the one that does
-# NOT get the even-gap bias's extra pixel). gap 8, width 3: (8-3)=5, low
-# share 2 -> offset 2+2=4 (the high/down/right side would be 2+3=5, unused
-# here since nothing samples that direction in these two checks).
-#
-# check_crosshair_geometry instead samples all FOUR directions with ONE
-# shared set of windows, so it needs low == high -- CH_GEO_LINE_GAP (15) is
-# chosen so (gap - width) = 12 is even, giving both arms on every axis the
-# SAME offset (2 + 6 = 8) instead of the low/high split above. CH_LINE_GAP
-# (8) itself is left alone for the other checks that depend on it
-# (shrink-rate/reverse; hole_run()'s bidirectional measurement there is
-# unaffected by low/high asymmetry regardless).
-CH_ARM_LO_OFFSET=$(( (CH_LINE_WIDTH + 1) / 2 + (CH_LINE_GAP - CH_LINE_WIDTH) / 2 ))
-# A scan up from the centre (the LOW side, offset E = CH_ARM_LO_OFFSET = 4)
-# reads: outline (black) at E-ow..E-1 (the NEAR ring -- it eats into what a
-# naive "gap = background" reading would expect); fill (line colour) at
-# E+1..E+length-2, a 1px margin off both boundaries.
-CH_OUT_LO=$((CH_ARM_LO_OFFSET - CH_OUTLINE_WIDTH)); CH_OUT_HI=$((CH_ARM_LO_OFFSET - 1))
-CH_ARM_LO=$((CH_ARM_LO_OFFSET + 1));                CH_ARM_HI=$((CH_ARM_LO_OFFSET + CH_LINE_LENGTH - 2))
+# 2026-09-08, revised same day: the gap is 2*(gap-1)+width, and -- unlike
+# the same-day formula this replaced -- BOTH arms of an axis sit at the
+# SAME offset from the centre, at every gap value, odd or even (the
+# even-gap bias that put the extra pixel on the high side is gone --
+# CrosshairMath.h's HoleSplit). So there is only one offset to compute now:
+# E = (width+1)/2 [the column/row's own half-width, as an integer pixel
+# distance from the centre] + (gap - 1) [the shared per-side inset].
+CH_ARM_OFFSET=$(( (CH_LINE_WIDTH + 1) / 2 + (CH_LINE_GAP - 1) ))
+# A scan up from the centre (offset E = CH_ARM_OFFSET) reads: outline
+# (black) at E-ow..E-1 (the NEAR ring -- it eats into what a naive
+# "gap = background" reading would expect); fill (line colour) at
+# E+1..E+length-2, a 1px margin off both boundaries. Because the offset no
+# longer differs by side, the SAME window now also works for the other
+# three directions -- check_crosshair_geometry below reuses it exactly
+# (CH_GEO_LINE_GAP, its former "force symmetry" gap value, is no longer
+# needed for that reason but is kept at 15 as a different-from-CH_LINE_GAP
+# sanity check that the formula holds at more than one gap value).
+CH_OUT_LO=$((CH_ARM_OFFSET - CH_OUTLINE_WIDTH)); CH_OUT_HI=$((CH_ARM_OFFSET - 1))
+CH_ARM_LO=$((CH_ARM_OFFSET + 1));                CH_ARM_HI=$((CH_ARM_OFFSET + CH_LINE_LENGTH - 2))
 
-# check_crosshair_geometry's own symmetric gap (see the comment above).
+# check_crosshair_geometry's own gap, kept distinct from CH_LINE_GAP simply
+# to exercise a second value (symmetry no longer depends on which one is
+# picked -- see the comment above).
 CH_GEO_LINE_GAP=15
-CH_GEO_ARM_OFFSET=$(( (CH_LINE_WIDTH + 1) / 2 + (CH_GEO_LINE_GAP - CH_LINE_WIDTH) / 2 ))
+CH_GEO_ARM_OFFSET=$(( (CH_LINE_WIDTH + 1) / 2 + (CH_GEO_LINE_GAP - 1) ))
 CH_GEO_GAP_LO=1;                                       CH_GEO_GAP_HI=$((CH_GEO_ARM_OFFSET - CH_OUTLINE_WIDTH - 2))
 CH_GEO_OUT_LO=$((CH_GEO_ARM_OFFSET - CH_OUTLINE_WIDTH)); CH_GEO_OUT_HI=$((CH_GEO_ARM_OFFSET - 1))
 CH_GEO_ARM_LO=$((CH_GEO_ARM_OFFSET + 1));                CH_GEO_ARM_HI=$((CH_GEO_ARM_OFFSET + CH_LINE_LENGTH - 2))
@@ -266,9 +263,9 @@ CH_CENTER_Y=$((OUT_H / 2))
 # longest possible hole plus a margin; the line stays short (6px) so the
 # scan never confuses the hole with the far end of the opposite arm.
 CH_GAPINV_WIDTHS=( 1 2 )
-CH_GAPINV_GAPS=( 0 1 2 3 )
+CH_GAPINV_GAPS=( 0 1 2 3 4 )
 CH_GAPINV_LENGTH=10
-CH_GAPINV_MAX_OFF=8
+CH_GAPINV_MAX_OFF=12
 
 # Shrink-rate / Animate-back (crosshair-shrink-rate, crosshair-reverse): the
 # pixel path at 1:1, width 1 and the outline off so an arm is one exact run of
@@ -288,29 +285,37 @@ CH_REVERSE_END_MS=2600                        # capture after the reveal has fin
 CH_REVERSE_TOL_PX=1.5                         # 1 px plus timing slack at 10 px/s
 
 # Apply Scaling (crosshair-scaled): a 640x360 client stretched 2x onto the
-# 1280x720 output (--scaler stretch). Width 1, outline off, gap/length as
-# above -> in output pixels: arms 24 long, 2 wide, inner ends 16 apart (gap
-# 8 x scale 2 -- the TOTAL hole, 2026-09-08's "Gap", scales by the same
-# factor as everything else; it is no longer 2*gap+width). Measured by
-# COVERAGE: each pixel's coverage is read back through the composite's
-# straight-alpha blend (pixel_regression_sample.py coverage_of()), an arm is
-# the run of >= 50 %, and the pixel past each end / beside each side must be
-# 10..90 % -- the soft edge a bilinear stretch of a 1 px line has (75 % /
-# 25 % rows at 2x).
+# 1280x720 output (--scaler stretch). Width 1 (CH_ANIM_LINE_WIDTH), outline
+# off, length/gap as the startup config (CH_LINE_LENGTH / CH_LINE_GAP) ->
+# in GAME pixels the hole is 2*(gap-1)+width = 2*(8-1)+1 = 15 (2026-09-08,
+# revised same day), which the raster path scales by the same factor as
+# everything else -- in OUTPUT pixels: arms 24 long, 2 wide, inner ends 30
+# apart (15 x scale 2). Measured by COVERAGE: each pixel's coverage is read
+# back through the composite's straight-alpha blend
+# (pixel_regression_sample.py coverage_of()), an arm is the run of >= 50 %,
+# the pixel past each end / beside each side must be 10..90 % -- the soft
+# edge a bilinear stretch of a 1 px line has (75 % / 25 % rows at 2x) -- and
+# the two arms must be equidistant from the centre (cmd_scaled_axis's own
+# symmetry assertion, `-l1 == r0`).
 CH_SCALED_GAME_W=640
 CH_SCALED_GAME_H=360
 CH_SCALED_SCALER=stretch
 CH_SCALED_SCALE=$((OUT_W / CH_SCALED_GAME_W))   # 2 (integer by construction)
 CH_SCALED_EXP_LEN=$((CH_LINE_LENGTH * CH_SCALED_SCALE))
-CH_SCALED_EXP_SEP=$((CH_LINE_GAP * CH_SCALED_SCALE))
+CH_SCALED_EXP_HOLE=$(( 2 * (CH_LINE_GAP - 1) + CH_ANIM_LINE_WIDTH ))
+CH_SCALED_EXP_SEP=$((CH_SCALED_EXP_HOLE * CH_SCALED_SCALE))
 CH_SCALED_EXP_WIDTH=$((CH_ANIM_LINE_WIDTH * CH_SCALED_SCALE))
 CH_SCALED_TOL_PX=1
 CH_SCALED_SPAN=120
 # A second, smaller gap re-run of the same check (crosshair-scaled-gap) to
-# pin "hole = gap x scale" at a value where the old (2*gap+width) formula
-# would have given a visibly different number: gap 2 -> sep 4, not 2*2+2=6.
+# pin the formula at a value where the OLD (pre-2026-09-08, and the first
+# same-day attempt's biased) formulas would each have given a visibly
+# different number: gap 2, width 1 -> hole = 2*(2-1)+1 = 3, sep = 6 (not
+# 2*2=4 as a bare "hole=gap" reading would give, nor an even/odd-biased 2
+# or 4 either).
 CH_SCALED_GAP2=2
-CH_SCALED_GAP2_EXP_SEP=$((CH_SCALED_GAP2 * CH_SCALED_SCALE))
+CH_SCALED_GAP2_EXP_HOLE=$(( 2 * (CH_SCALED_GAP2 - 1) + CH_ANIM_LINE_WIDTH ))
+CH_SCALED_GAP2_EXP_SEP=$((CH_SCALED_GAP2_EXP_HOLE * CH_SCALED_SCALE))
 # At 2x the game's centre pixel column [320,321) lands on output [640,642): the
 # crosshair is centred on x = 641.0, so scan from pixel 641 / 361.
 CH_SCALED_CENTER_X=$((OUT_W / 2 + 1))
@@ -817,12 +822,19 @@ check_crosshair_geometry() {
 	set_val "crosshair.enabled" 0
 }
 
-# Gap invariant (2026-09-08, crosshair.md's "Gap"): gap N is exactly N
-# pixels missing across the centre, counting the centre pixel once -- not a
-# per-side inset. Checked at width 1 and width 2, gap 0..3, outline off and
-# on, on both axes, via pixel_regression_sample.py's hole_run() (the
-# bidirectional non-fill run through the centre point -- background OR
-# outline both count as "missing", since neither is the line's own fill).
+# Gap invariant (2026-09-08, revised same day: "basically like the old
+# formula, just with the gap with 1 deducted", after the first same-day
+# attempt's even-gap bias shipped a visibly lopsided crosshair -- see
+# crosshair.md's "Gap"): the hole across the centre is 2*(gap-1)+width, and
+# it is ALWAYS SYMMETRIC -- both arms of an axis sit the same distance from
+# the centre, at every gap value, odd or even. Checked at width 1 and width
+# 2, gap 0..4, outline off and on, on both axes: the exact hole width via
+# pixel_regression_sample.py's hole_run() (the bidirectional non-fill run
+# through the centre point -- background OR outline both count as
+# "missing", since neither is the line's own fill), AND the symmetry
+# itself via its new `symmetry` command (the near end of each of the two
+# arms on an axis, measured from the crossing's own two edge pixels, must
+# be the same distance out).
 check_crosshair_gap_invariant() {
 	should_run crosshair-gap-invariant || { skip_check crosshair-gap-invariant "--only excluded it"; return; }
 	set_val "crosshair.enabled" 1
@@ -833,17 +845,36 @@ check_crosshair_gap_invariant() {
 	local width gap outline
 	for width in "${CH_GAPINV_WIDTHS[@]}"; do
 		set_val "crosshair.line_width" "$width"
+		# The crossing's own low/high edge PIXELS on this width -- e.g.
+		# width 1: both edges are the crossing's one and only pixel
+		# (CH_CENTER_X itself); width 2: the crossing straddles the centre,
+		# so its two edges are CH_CENTER_X-1 and CH_CENTER_X. Each is
+		# independently symmetric about the TRUE (possibly half-pixel, for
+		# an odd width) centre -- see cmd_symmetry's own docstring and
+		# CrosshairMath.h's detail::SnapCenter -- which a single shared
+		# integer anchor is not, for an even width.
+		local half=$(( width / 2 ))
+		local lo_x=$(( CH_CENTER_X - half )); local hi_x=$(( lo_x + width - 1 ))
+		local lo_y=$(( CH_CENTER_Y - half )); local hi_y=$(( lo_y + width - 1 ))
 		for outline in 0 1; do
 			set_val "crosshair.outline" "$outline"
 			for gap in "${CH_GAPINV_GAPS[@]}"; do
 				set_val "crosshair.line_gap" "$gap"
+				local expect_hole=0
+				if (( gap >= 1 )); then expect_hole=$(( 2 * (gap - 1) + width )); fi
 				local shot; shot="$(take_screenshot "12-gap-invariant-w${width}-g${gap}-o${outline}")"
 				run_sampler hole "$shot" "$CH_CENTER_X" "$CH_CENTER_Y" 1 0 \
-					"$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "$CH_GAPINV_MAX_OFF" "$gap" \
+					"$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "$CH_GAPINV_MAX_OFF" "$expect_hole" \
 					"crosshair-gap-inv-x-w${width}-g${gap}-o${outline}"
 				run_sampler hole "$shot" "$CH_CENTER_X" "$CH_CENTER_Y" 0 1 \
-					"$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "$CH_GAPINV_MAX_OFF" "$gap" \
+					"$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "$CH_GAPINV_MAX_OFF" "$expect_hole" \
 					"crosshair-gap-inv-y-w${width}-g${gap}-o${outline}"
+				run_sampler symmetry "$shot" "$lo_x" "$CH_CENTER_Y" "$hi_x" "$CH_CENTER_Y" 1 0 \
+					"$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "$CH_GAPINV_MAX_OFF" \
+					"crosshair-gap-sym-x-w${width}-g${gap}-o${outline}"
+				run_sampler symmetry "$shot" "$CH_CENTER_X" "$lo_y" "$CH_CENTER_X" "$hi_y" 0 1 \
+					"$ch_r" "$ch_g" "$ch_b" "$CH_COLOR_TOL" "$CH_GAPINV_MAX_OFF" \
+					"crosshair-gap-sym-y-w${width}-g${gap}-o${outline}"
 			done
 		done
 	done

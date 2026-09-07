@@ -296,18 +296,25 @@ def hole_run(img, cx, cy, dx, dy, target, tol, max_off):
 
 
 def gap_len(img, cx, cy, dx, dy, target, tol, max_off):
-    """(gap, length) in pixels along one arm's ray: gap is the FULL
-    bidirectional hole through the centre point (hole_run() -- the total
-    run of missing pixels across the centre, counting the centre pixel
-    once, matching Build()'s gapX/gapY exactly; see crosshair.md's "Gap",
-    2026-09-08 -- this used to be a plain one-sided distance, which was
-    only ever equal to the raw config gap by coincidence of the OLD
-    per-side semantics), and length is the run of `target`-coloured pixels
-    found going outward along (dx, dy) (unaffected by the gap
-    redefinition)."""
+    """(gap, length) in pixels along ONE arm's ray, both one-sided offsets
+    from (cx, cy): length is the run of `target`-coloured pixels found
+    going outward along (dx, dy) (arm_run()'s own (first, last)), and gap
+    is arm_run()'s `first` itself -- the distance from (cx, cy) to that
+    SAME arm's own near edge.
+
+    Deliberately one-sided, not the bidirectional hole_run() total (used
+    briefly between 2026-09-08's two same-day revisions): the hole is
+    2*(gap-1)+width now (crosshair.md's "Gap"), so BOTH arms of an axis
+    move by the same amount at once and the bidirectional total shrinks at
+    TWICE the rate either arm's own edge does. Shrink's "the visible edge
+    moves at one speed" claim (ShrinkSplit) is about a single edge, which
+    is exactly what this one-sided measurement gives -- for the width-1
+    line these animation checks use, it also happens to equal the raw
+    configured gap value exactly (crossing width 1 -> offset = gap for
+    gap >= 1), so shrink_model()'s plain linear model needs no change."""
     first, last = arm_run(img, cx, cy, dx, dy, target, tol, max_off)
     length = 0 if first is None else last - first + 1
-    gap = hole_run(img, cx, cy, dx, dy, target, tol, max_off)
+    gap = first if first is not None else None
     return gap, length
 
 
@@ -451,12 +458,20 @@ def cmd_scaled_axis(a):
                 cov_at(x + px * (max(ks) + 1), y + py * (max(ks) + 1))]
     sides = beside((l0 + l1) // 2) + beside((r0 + r1) // 2)
     soft_ok = all(soft(c) for c in ends) and all(soft(c) for c in sides)
+    # Symmetry (2026-09-08, revised same day): l1 is the left run's near
+    # (high) edge, r0 the right run's near (low) edge, both as offsets from
+    # the centre a.cx/a.cy -- a symmetric hole has these equidistant from
+    # the centre, i.e. -l1 == r0. a.cx/a.cy is already the axis' own true
+    # (possibly half-pixel-shifted) centre for this configuration -- see
+    # CH_SCALED_CENTER_X/Y's own comment in pixel-regression.sh.
+    sym_ok = abs( -l1 - r0 ) <= a.tol
     ok = (abs(len_l - a.exp_len) <= a.tol and abs(len_r - a.exp_len) <= a.tol
           and abs(sep - a.exp_sep) <= a.tol
           and abs(w_l - a.exp_width) <= a.tol and abs(w_r - a.exp_width) <= a.tol
-          and soft_ok)
+          and soft_ok and sym_ok)
     detail = (f"arms len={len_l}/{len_r} (exp {a.exp_len}) sep={sep} (exp {a.exp_sep}) "
-              f"width={w_l}/{w_r} (exp {a.exp_width}) tol={a.tol}; "
+              f"width={w_l}/{w_r} (exp {a.exp_width}) tol={a.tol}; symmetry near_lo={-l1} near_hi={r0}"
+              f"{'' if sym_ok else ' NOT SYMMETRIC'}; "
               f"edge coverage past ends={[round(c, 2) for c in ends]} beside={[round(c, 2) for c in sides]} "
               f"(soft = 0.10..0.90){'' if soft_ok else ' NOT SOFT'}")
     emit(ok, a.name, detail)
@@ -480,6 +495,34 @@ def cmd_hole(a):
     n = hole_run(img, a.cx, a.cy, a.dx, a.dy, (a.r, a.g, a.b), a.tol, a.max_off)
     ok = n is not None and n == a.expect
     detail = f"hole={n} expected={a.expect}"
+    emit(ok, a.name, detail)
+
+
+def cmd_symmetry(a):
+    """Assert the crosshair's hole is SYMMETRIC (2026-09-08, revised same
+    day): the near end of the low-side arm and the near end of the
+    high-side arm sit the same number of pixels out from the crossing's
+    own two edges.
+
+    (lo_x, lo_y) and (hi_x, hi_y) are the crossing's own LOW and HIGH edge
+    pixels on this axis -- e.g. for a horizontal gap check, the crossing's
+    leftmost and rightmost own columns -- picked so each is independently
+    symmetric about the true (possibly half-pixel, for an odd line width)
+    centre; crosshair.md's "Gap" and CrosshairMath.h's detail::SnapCenter
+    are why these two are not simply `centre` used twice. (dx, dy) is the
+    OUTWARD direction from the high edge (e.g. (1, 0) for a rightward
+    scan); the low side is scanned in the opposite direction from its own
+    edge. Both offsets measure "how many pixels from the crossing's own
+    edge pixel to the first pixel of this side's arm" -- 1 at gap 0 (the
+    very next pixel is already fill, arms flush against the crossing), and
+    growing together as the gap grows. A regression that biases one side
+    (crosshair.md's rejected first-attempt formula) makes these differ."""
+    img = load(a.image)
+    target = (a.r, a.g, a.b)
+    near_lo, _ = arm_run(img, a.lo_x, a.lo_y, -a.dx, -a.dy, target, a.tol, a.max_off)
+    near_hi, _ = arm_run(img, a.hi_x, a.hi_y, a.dx, a.dy, target, a.tol, a.max_off)
+    ok = near_lo is not None and near_hi is not None and near_lo == near_hi
+    detail = f"near_lo={near_lo} near_hi={near_hi} (must be equal) [edges ({a.lo_x},{a.lo_y})/({a.hi_x},{a.hi_y})]"
     emit(ok, a.name, detail)
 
 
@@ -563,6 +606,17 @@ def main():
     sp.add_argument("expect", type=int)
     sp.add_argument("name")
     sp.set_defaults(func=cmd_hole)
+
+    sp = sub.add_parser("symmetry", help="gap symmetry: the near end of each of the two arms on an axis must be equidistant from the crossing's own edges")
+    sp.add_argument("image")
+    sp.add_argument("lo_x", type=int); sp.add_argument("lo_y", type=int)
+    sp.add_argument("hi_x", type=int); sp.add_argument("hi_y", type=int)
+    sp.add_argument("dx", type=int); sp.add_argument("dy", type=int)
+    sp.add_argument("r", type=int); sp.add_argument("g", type=int); sp.add_argument("b", type=int)
+    sp.add_argument("tol", type=int)
+    sp.add_argument("max_off", type=int)
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_symmetry)
 
     sp = sub.add_parser("shrink_rate", help="Shrink hide: equal edge speed in both phases, and the 50 % state")
     for i in range(1, 6):
