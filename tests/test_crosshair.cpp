@@ -578,6 +578,69 @@ TEST_CASE( "ScaledQuad puts every raster texel centre on the game pixel centre t
 	REQUIRE_THAT( q.y1 - q.y0, WithinAbs( 15.0f * 1.125f, 1e-3f ) );
 }
 
+TEST_CASE( "the identity case: scale 1.0 puts the raster's quad exactly on the game rect, no fractional offset anywhere", "[crosshair]" )
+{
+	// 2026-09-07 bug fix: Apply Scaling at nested == output (no stretch at
+	// all) must be the identity transform, not merely "close". This is the
+	// pure-math half of that guarantee -- ScaledQuad's own derivation
+	// (game pixel g -> output o = g*s + origin) collapses to o = g exactly
+	// when s = 1 and centre is the game's own half-size, for BOTH an even
+	// and an odd game width (the odd case is the one a stray +0.5 would
+	// slip through unnoticed on).
+	for ( const uint32_t uGameW : { 1280u, 1281u } )
+	{
+		for ( const uint32_t uGameH : { 720u, 721u } )
+		{
+			Frame fr;
+			fr.flCenterX = (float)uGameW * 0.5f; fr.flCenterY = (float)uGameH * 0.5f;
+			fr.flScaleX = 1.0f; fr.flScaleY = 1.0f;
+			const IRect texRect{ 633, 340, 648, 355 };
+			const FRect q = ScaledQuad( texRect, uGameW, uGameH, fr );
+			// origin = centre - (gameW/2)*scale = 0 exactly, whatever the
+			// parity of gameW/gameH -- the two halves cancel bit-for-bit
+			// because GameFrame() and this test compute centre the same
+			// way ScaledQuad subtracts it.
+			REQUIRE_THAT( q.x0, WithinAbs( (float)texRect.x0, 1e-6f ) );
+			REQUIRE_THAT( q.y0, WithinAbs( (float)texRect.y0, 1e-6f ) );
+			REQUIRE_THAT( q.x1, WithinAbs( (float)texRect.x1, 1e-6f ) );
+			REQUIRE_THAT( q.y1, WithinAbs( (float)texRect.y1, 1e-6f ) );
+		}
+	}
+}
+
+TEST_CASE( "the identity case: ResampleToOutput at scale 1.0 reproduces the source raster's own texels exactly", "[crosshair]" )
+{
+	// The other half of the 2026-09-07 fix: not just "the quad lands in the
+	// right place" but "every texel comes out bit-identical to what the
+	// pixel path would have painted at that pixel" -- an interior opaque
+	// green line texel must stay pure green at full alpha, a translucent
+	// texel must stay at exactly its own alpha, and a soft-edge texel from
+	// the rasteriser's own colour bleed must resample to itself, not to a
+	// blend with a neighbour.
+	Style st; st.flWidth = 1.0f; st.flLength = 6.0f; st.flGap = 2.0f; st.bDot = false; st.flOutlineWidth = 1.0f; st.bOutline = true;
+	const uint32_t uGameW = 200, uGameH = 200;
+	const Frame gf = GameFrame( uGameW, uGameH );
+	const Shape s = Build( st, gf, {} );
+	const IRect tr = RasterRect( s );
+	const Argb green = PackArgb( 0x00FF00, 1.0f );
+	const Argb black = PackArgb( 0x000000, 1.0f );
+	const std::vector<Argb> src = Rasterize( s, tr, black, green, 0u );
+
+	Frame fr; fr.flCenterX = gf.flCenterX; fr.flCenterY = gf.flCenterY; fr.flScaleX = 1.0f; fr.flScaleY = 1.0f;
+	const OutputRaster out = ResampleToOutput( src, tr, uGameW, uGameH, fr );
+	REQUIRE( !out.Empty() );
+	// Same footprint, same pixel count.
+	REQUIRE( out.rect.x1 - out.rect.x0 == tr.x1 - tr.x0 );
+	REQUIRE( out.rect.y1 - out.rect.y0 == tr.y1 - tr.y0 );
+	REQUIRE( out.px.size() == src.size() );
+	// Every texel: bit-identical. Not "close" -- exact, because scale 1.0
+	// with an integer-aligned quad puts each output pixel's sample point
+	// exactly on one source texel centre (fx = fy = 0), the single-tap
+	// case of the bilinear filter.
+	for ( size_t i = 0; i < src.size(); i++ )
+		REQUIRE( out.px[i] == src[i] );
+}
+
 TEST_CASE( "Rasterize paints exact texels, bleeds colour into the transparent margin, composites the dot over", "[crosshair]" )
 {
 	Style st; st.flWidth = 1.0f; st.flLength = 4.0f; st.flGap = 2.0f; st.bDot = false; st.bOutline = false;

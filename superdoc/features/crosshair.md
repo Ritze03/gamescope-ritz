@@ -156,6 +156,59 @@ already be gamescope's pre-emptively upscaled copy
 `CrosshairFrame::uGameWidth/Height` carries it to the draw; 0 (no base
 plane yet) makes Apply Scaling fall back to the pixel path at scale 1.
 
+### The identity invariant (2026-09-07 bug fix)
+
+**At native resolution — nested equals output, no stretch at all — Apply
+Scaling ON must render pixel-identical to OFF.** That is the whole of what
+the option is for: reproduce *exactly* the transform the GAME IMAGE
+receives, nothing more and nothing less. A player who plays stretched
+expects the compositor's crosshair distorted the same way; a player who
+isn't being stretched must see no difference switching the option on.
+
+**The user's report:** *"for the 'Apply Scaling' option for the crosshair,
+it even stretches it, when the nested window is running at native res."*
+Investigated by instrumenting the live values (a temporary debug log,
+removed again) and by measuring the built binary directly rather than by
+re-deriving the maths on paper: at nested == output with `--scaler auto`,
+`ResolveCrosshairFrame()` (`FpsDisplay.cpp`) reported
+`gameW=1280 gameH=720 scaleX=1.000000 scaleY=1.000000` — exactly identity
+— and `scripts/pixel-regression.sh`'s `crosshair-scaled-identity` check
+(added the same day) diffs an ON capture against an OFF capture of the
+same instance directly, pixel for pixel: `max_diff=0`, across several
+element/opacity combinations (line only, plus a translucent dot, plus the
+Inverted-HUD marker nudge). **The pipeline as it stands already satisfies
+the invariant** — this was the 2026-09-06 resample rework's own intent,
+and the maths holds: `layer->scale` is upstream's own `1.0`/`1.0` at equal
+sizes (steamcompmgr.cpp's `paint_window()` skips `calc_scale_factor()`
+entirely when `sourceWidth == currentOutputWidth &&
+sourceHeight == currentOutputHeight`, the fast path for "nothing to
+scale"), so `frame.flGamePixelScaleX/Y` — derived from that same
+`base.scale`/`base.tex` pair, never recomputed — comes out at exactly
+`1.0`, and `ResampleToOutput()`'s bilinear tap lands on an exact texel
+centre (`fx = fy = 0`) at scale 1.0, so every output texel is bit-identical
+to what `DrawPixelPath()` would have written for it — pinned directly by
+`tests/test_crosshair.cpp`'s *"the identity case: ResampleToOutput at
+scale 1.0 reproduces the source raster's own texels exactly"*.
+
+So no code change to the transform itself was needed: the true source of
+the transform — `FrameInfo_t::Layer_t`'s own `scale`/`offset`/`tex` for
+layer 0, and `g_uBaseLayerSourceWidth/Height` for the game's own committed
+buffer size, exactly the values [above](#geometry) already describes — was
+already correct where it was read. What was missing was a **permanent
+regression gate proving it**: nothing before 2026-09-07 diffed an ON
+capture against an OFF capture of the *same* native-resolution instance,
+so a regression in this exact spot (an assumed factor, the wrong pair of
+rects, output/nested inverted, or a factor that is never quite 1 — any of
+which could still land on the same *nominal* "12 long, 8 gap" reading
+while visibly softening every edge) would not have been caught by the
+existing measure-both-sides-to-the-same-numbers checks. `crosshair-scaled-
+identity` (identity, case 1), `crosshair-scaled-aniso` (two *different*
+per-axis factors from a real 1920x1080 output, case 2 — catches a
+swapped or dropped axis) and `crosshair-scaled-fit` (a letterboxed game
+rect, case 4 — catches the crosshair drifting to the *output's* centre
+instead of the *game rect's*) close that gap. Measured tables and capture
+paths: `superdoc/planning/requests-2026-09-08.md`.
+
 **1px mode.** Every primitive — arm, dot, outline — is an axis-aligned
 `AddRectFilled` on **whole-pixel** coordinates, drawn with
 `ImDrawListFlags_AntiAliasedFill` (and `…Lines`) cleared for exactly those
@@ -559,6 +612,21 @@ invariant AND its symmetry at width 1 and 2 / gap 0–4 / outline off and on
 Apply Scaling (`crosshair-scaled`, `crosshair-scaled-gap`), headlessly on
 every run — no laptop, no eyeballing. See
 `scripts/README.md`'s "Pixel regression" section.
+
+[The identity invariant](#the-identity-invariant-2026-09-07-bug-fix) above
+adds three more, all 2026-09-07: `crosshair-scaled-identity` (nested ==
+output, scaler auto — diffs an ON capture against an OFF capture of the
+same instance directly, `max_diff` must be `0`), `crosshair-scaled-aniso`
+(1280x960 into a real 1920x1080 output, `--scaler stretch` — 1.5x
+horizontal, 1.125x vertical, two *different* factors so a swapped or
+dropped axis cannot hide behind a symmetric result), and
+`crosshair-scaled-fit` (640x160 fit onto 1280x720 — 2x, pillarboxed top
+and bottom — the crosshair must scale by the *fit* factor, stay inside the
+shrunk game rect, and leave the letterbox bars untouched). Pure-math
+identity cases live in `tests/test_crosshair.cpp` too: `ScaledQuad` at
+scale 1.0 collapses to the exact game rect for both even and odd game
+dimensions, and `ResampleToOutput` at scale 1.0 reproduces the source
+raster's own texels bit-for-bit.
 
 ## Known limitation (pre-existing, shared with the HUD)
 

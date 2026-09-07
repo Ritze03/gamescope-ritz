@@ -121,6 +121,21 @@
 #                            smaller gap value, distinguishing it from both
 #                            the pre-2026-09-08 (hole=2*gap+width) and the
 #                            first same-day (hole=gap, biased) formulas
+#   crosshair-scaled-identity -- Apply Scaling's IDENTITY invariant
+#                            (2026-09-07 bug fix): nested == output, scaler
+#                            auto -- no stretch at all, so ON must be
+#                            PIXEL-IDENTICAL to OFF. Proven by diffing the
+#                            two captures against EACH OTHER, not by
+#                            measuring both to the same nominal numbers
+#   crosshair-scaled-aniso -- Apply Scaling with two DIFFERENT per-axis
+#                            factors (1280x960 into a real 1920x1080
+#                            output, stretch: 1.5x horizontal, 1.125x
+#                            vertical) -- catches a swapped or dropped axis
+#   crosshair-scaled-fit   -- Apply Scaling with a letterboxed game rect
+#                            (640x160 fit onto 1280x720: 2x, pillarboxed
+#                            top/bottom) -- the crosshair must scale by the
+#                            FIT factor and stay inside the game rect, not
+#                            the output's letterbox bars
 #
 # USAGE
 #   scripts/pixel-regression.sh                # run everything
@@ -345,6 +360,85 @@ CH_SCALED_GAP2_EXP_SEP=$((CH_SCALED_GAP2_EXP_HOLE * CH_SCALED_SCALE))
 CH_SCALED_CENTER_X=$((OUT_W / 2 + 1))
 CH_SCALED_CENTER_Y=$((OUT_H / 2 + 1))
 
+# Apply Scaling's IDENTITY invariant (2026-09-07 bug fix, crosshair.md's
+# Apply Scaling section): nested == output, scaler auto -- no stretch at
+# all, so the game-pixel-to-output-pixel factor is exactly 1 on both axes
+# and Apply Scaling ON must render PIXEL-IDENTICAL to OFF. Reuses the
+# default OUT_W x OUT_H instance (game_w = OUT_W, game_h = OUT_H, the
+# start_instance() default). Diffed image-vs-image
+# (pixel_regression_sample.py's `diff`), not measured to the same nominal
+# numbers on each side -- see that command's own docstring for why a
+# same-numbers comparison would not actually catch this bug class (an
+# assumed factor, the wrong pair of rects, output/nested inverted, or a
+# factor that is never quite 1 could each still land on the same nominal
+# "12 long, 8 gap" reading while visibly softening every edge).
+CH_IDENT_DIFF_TOL=0        # exact: not even 1 count of difference is allowed
+CH_IDENT_BOX_SPAN=80       # generous box around the centre -- bigger than
+                           # the largest arm+outline+dot extent this config uses
+CH_IDENT_ZOOM=8            # verify-shots zoom factor for the human-eyeball crop
+
+# Apply Scaling, ANISOTROPIC (case 2, 2026-09-07): 1280x960 nested into a
+# genuinely different 1920x1080 OUTPUT (not this script's usual 1280x720),
+# scaler stretch -- horizontal factor 1920/1280 = 1.5, vertical
+# 1080/960 = 1.125, two different per-axis factors on purpose (a bug that
+# swaps X/Y or applies only one axis would show as a symmetric result here
+# when it should not be).
+CH_ANISO_GAME_W=1280
+CH_ANISO_GAME_H=960
+CH_ANISO_OUT_W=1920
+CH_ANISO_OUT_H=1080
+CH_ANISO_SCALE_X="1.5"
+CH_ANISO_SCALE_Y="1.125"
+CH_ANISO_EXP_LEN_X=$(python3 -c "print($CH_LINE_LENGTH * $CH_ANISO_SCALE_X)")
+CH_ANISO_EXP_LEN_Y=$(python3 -c "print($CH_LINE_LENGTH * $CH_ANISO_SCALE_Y)")
+CH_ANISO_EXP_WIDTH_X=$(python3 -c "print($CH_ANIM_LINE_WIDTH * $CH_ANISO_SCALE_X)")
+CH_ANISO_EXP_WIDTH_Y=$(python3 -c "print($CH_ANIM_LINE_WIDTH * $CH_ANISO_SCALE_Y)")
+CH_ANISO_EXP_HOLE=$(( 2 * (CH_LINE_GAP - 1) + CH_ANIM_LINE_WIDTH ))
+CH_ANISO_EXP_SEP_X=$(python3 -c "print($CH_ANISO_EXP_HOLE * $CH_ANISO_SCALE_X)")
+CH_ANISO_EXP_SEP_Y=$(python3 -c "print($CH_ANISO_EXP_HOLE * $CH_ANISO_SCALE_Y)")
+CH_ANISO_TOL_PX=1.2
+CH_ANISO_SPAN=140
+CH_ANISO_CENTER_X=$((CH_ANISO_OUT_W / 2))
+CH_ANISO_CENTER_Y=$((CH_ANISO_OUT_H / 2))
+
+# Apply Scaling, FIT/LETTERBOXED (case 4, 2026-09-07): a 640x160 game (4:1,
+# far wider than tall) fit onto the 1280x720 output -- fit scales by the
+# SMALLER per-axis ratio (1280/640=2 horizontally, 720/160=4.5 vertically;
+# fit picks 2), so the game rect is 1280x320 CENTRED vertically, with a
+# 200px letterbox bar top and bottom. The crosshair must stay centred on
+# that 1280x320 rect (which happens to share the output's horizontal
+# centre and, since gamescope's own centring is always symmetric with no
+# override/fit window in play, its vertical centre too -- see
+# crosshair.md's rewritten Apply Scaling section for why that makes the
+# CENTRE point alone a weak witness) and, the check that actually
+# distinguishes it from an output-sized crosshair: the arms must not
+# extend into the letterbox bars. CH_LINE_LENGTH=12 at scale 2 is 24px
+# long each way from the centre -- comfortably inside the 160px half-
+# height of the 320px-tall game rect, so a correctly-scaled crosshair
+# never gets near the bar; an UNSCALED (output-pixel) 12px-long arm would
+# also fit here, so length alone can't prove it -- the real proof is the
+# measured arm length matching the SCALED value exactly (scaled_axis, as
+# case 2/3 already check) plus the letterbox bars themselves staying the
+# flat background colour right up to the game rect's own edge.
+CH_FIT_GAME_W=640
+CH_FIT_GAME_H=160
+CH_FIT_SCALER=fit
+CH_FIT_SCALE="2"           # min(1280/640, 720/160) = min(2, 4.5) = 2
+CH_FIT_RECT_H=320          # 160 * 2
+CH_FIT_BAR_H=$(( (OUT_H - CH_FIT_RECT_H) / 2 ))   # 200
+CH_FIT_EXP_LEN=$(python3 -c "print($CH_LINE_LENGTH * $CH_FIT_SCALE)")
+CH_FIT_EXP_WIDTH=$(python3 -c "print($CH_ANIM_LINE_WIDTH * $CH_FIT_SCALE)")
+CH_FIT_EXP_HOLE=$(( 2 * (CH_LINE_GAP - 1) + CH_ANIM_LINE_WIDTH ))
+CH_FIT_EXP_SEP=$(python3 -c "print($CH_FIT_EXP_HOLE * $CH_FIT_SCALE)")
+CH_FIT_TOL_PX=1.2
+CH_FIT_SPAN=100
+CH_FIT_CENTER_X=$((OUT_W / 2))
+CH_FIT_CENTER_Y=$((OUT_H / 2))
+# A point well inside the top letterbox bar, on the crosshair's own
+# vertical axis -- must stay the flat background colour (nothing painted
+# there) at every gap/apply_scaling combination this check exercises.
+CH_FIT_BAR_SAMPLE_Y=$(( CH_FIT_BAR_H / 2 ))
+
 READY_TIMEOUT_S=20
 SWAY_READY_TIMEOUT_S=10
 SCREENSHOT_TIMEOUT_S=6
@@ -377,6 +471,10 @@ TS="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="$REPO_ROOT/build-release/verify-shots/pixel-regression/$TS"
 mkdir -p "$OUT_DIR"
 RESULTS_FILE="$OUT_DIR/results.txt"
+# Case 1's own 8x-zoom human-eyeball crops (Apply Scaling identity bug fix,
+# 2026-09-07) -- a fixed, findable path rather than under the timestamped
+# OUT_DIR above, per the task's own capture-path requirement.
+VERIFY_SHOTS_DIR="$REPO_ROOT/build-release/verify-shots/crosshair-scaling-2026-09-07"
 
 # Short-path scratch dirs -- MUST be short: a unix socket path is capped at
 # 108 bytes and this repo's own scratchpad path is long enough to overflow it
@@ -452,8 +550,19 @@ fi
 # Private sway host (headless backend, no input devices, nothing visible)
 # ---------------------------------------------------------------------------
 start_sway() {
+	# Optional override: the private sway host's own HEADLESS-1 output
+	# resolution, default OUT_W/OUT_H. crosshair-scaled-aniso needs sway
+	# itself to grant a genuinely bigger output (1920x1080) -- sway tiles a
+	# lone window to fill its output regardless of the -W/-H gamescope was
+	# launched with, so a gamescope asking for more than sway's own output
+	# resolution silently gets capped back down to it (found the hard way:
+	# `-W 1920 -H 1080` against a 1280x720 sway output produced a
+	# 1280x720 screenshot, not 1920x1080 -- gamescope's own request lost to
+	# sway's tiling configure). Callers that resize sway MUST restore the
+	# default afterwards before any check that assumes OUT_W/OUT_H.
+	local sway_out_w="${1:-$OUT_W}" sway_out_h="${2:-$OUT_H}"
 	cat > "$SWAY_CFG" <<-EOF
-		output HEADLESS-1 resolution ${OUT_W}x${OUT_H} position 0,0
+		output HEADLESS-1 resolution ${sway_out_w}x${sway_out_h} position 0,0
 		default_border none
 		default_floating_border none
 		gaps inner 0
@@ -607,13 +716,17 @@ start_instance() {
 	local bg_hex="$1"
 	# Optional: the client's own size and the scaler (crosshair-scaled runs
 	# a 640x360 client stretched onto the 1280x720 output); default 1:1.
+	# Optional 5th/6th args override the OUTPUT size (default OUT_W/OUT_H) --
+	# crosshair-scaled-aniso needs a genuinely different output resolution
+	# (1920x1080) to get two different per-axis factors.
 	local game_w="${2:-$OUT_W}" game_h="${3:-$OUT_H}" scaler="${4:-auto}"
+	local out_w="${5:-$OUT_W}" out_h="${6:-$OUT_H}"
 	teardown_instance   # only one instance (one xterm background) at a time
 
 	GS_LOG="$RUNDIR/gamescope-$(date +%s%N).log"
-	log "starting gamescope instance, background $bg_hex, client ${game_w}x${game_h}, scaler $scaler"
+	log "starting gamescope instance, background $bg_hex, client ${game_w}x${game_h}, scaler $scaler, output ${out_w}x${out_h}"
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
-		"$GAMESCOPE_BIN" --backend wayland -w "$game_w" -h "$game_h" -W "$OUT_W" -H "$OUT_H" \
+		"$GAMESCOPE_BIN" --backend wayland -w "$game_w" -h "$game_h" -W "$out_w" -H "$out_h" \
 		--scaler "$scaler" --force-windows-fullscreen -- \
 		kitty -c NONE -o background="$bg_hex" -o foreground="$bg_hex" -o cursor="$bg_hex" \
 			-o cursor_blink_interval=0 -o remember_window_size=no \
@@ -1174,6 +1287,105 @@ check_crosshair_scaled_gap() {
 	set_val "crosshair.enabled" 0
 }
 
+# Apply Scaling IDENTITY (case 1, 2026-09-07 bug fix): nested == output, no
+# stretch at all -- ON must be pixel-identical to OFF. Uses the DEFAULT
+# instance (start_instance's own game_w/game_h default to OUT_W/OUT_H,
+# scaler auto), the startup config's own geometry (length/width/gap/
+# outline all on), diffed image-vs-image over a generous box around the
+# centre -- see CH_IDENT_* above for why a diff beats measuring both sides
+# to the same nominal numbers. Also saves 8x zoom crops of both captures
+# under build-release/verify-shots/crosshair-scaling-2026-09-07/ for a
+# human to eyeball, since "identical" is the kind of claim a number can
+# lie about and an image cannot.
+check_crosshair_scaled_identity() {
+	should_run crosshair-scaled-identity || { skip_check crosshair-scaled-identity "--only excluded it"; return; }
+	set_val "crosshair.enabled" 1
+	set_val "crosshair.apply_scaling" 1
+	local shot_on; shot_on="$(take_screenshot 14-crosshair-identity-on)"
+	set_val "crosshair.apply_scaling" 0
+	local shot_off; shot_off="$(take_screenshot 14-crosshair-identity-off)"
+	local x0=$((CH_CENTER_X - CH_IDENT_BOX_SPAN)) y0=$((CH_CENTER_Y - CH_IDENT_BOX_SPAN))
+	local x1=$((CH_CENTER_X + CH_IDENT_BOX_SPAN)) y1=$((CH_CENTER_Y + CH_IDENT_BOX_SPAN))
+	run_sampler diff "$shot_on" "$shot_off" "$x0" "$y0" "$x1" "$y1" "$CH_IDENT_DIFF_TOL" "crosshair-scaled-identity"
+	if [[ -n "$VERIFY_SHOTS_DIR" ]]; then
+		mkdir -p "$VERIFY_SHOTS_DIR"
+		python3 - "$shot_on" "$shot_off" "$VERIFY_SHOTS_DIR" "$x0" "$y0" "$x1" "$y1" "$CH_IDENT_ZOOM" <<-'PYEOF' 2>>"$OUT_DIR/sampler.log" || true
+			import sys
+			from PIL import Image
+			shot_on, shot_off, out_dir, x0, y0, x1, y1, zoom = sys.argv[1], sys.argv[2], sys.argv[3], *map(int, sys.argv[4:8]), int(sys.argv[8])
+			for label, path in (("on", shot_on), ("off", shot_off)):
+			    img = Image.open(path).convert("RGB")
+			    crop = img.crop((x0, y0, x1, y1))
+			    crop = crop.resize((crop.width * zoom, crop.height * zoom), Image.NEAREST)
+			    crop.save(f"{out_dir}/case1-{label}-8x.png")
+		PYEOF
+	fi
+	set_val "crosshair.enabled" 0
+}
+
+# Apply Scaling, ANISOTROPIC (case 2, 2026-09-07): 1280x960 nested into a
+# 1920x1080 output, --scaler stretch -- horizontal 1.5x, vertical 1.125x,
+# two DIFFERENT per-axis factors so a bug that swaps or drops an axis shows
+# up as an asymmetric result rather than a coincidentally-right symmetric
+# one.
+check_crosshair_scaled_aniso() {
+	should_run crosshair-scaled-aniso || { skip_check crosshair-scaled-aniso "--only excluded it"; return; }
+	set_val "crosshair.enabled" 1
+	set_val "crosshair.outline" 0
+	set_val "crosshair.line_width" "$CH_ANIM_LINE_WIDTH"
+	set_val "crosshair.apply_scaling" 1
+	local shot; shot="$(take_screenshot 15-crosshair-aniso)"
+	local ch_r ch_g ch_b
+	ch_r=$(( (CH_LINE_COLOR_HEX >> 16) & 0xFF )); ch_g=$(( (CH_LINE_COLOR_HEX >> 8) & 0xFF )); ch_b=$(( CH_LINE_COLOR_HEX & 0xFF ))
+	run_sampler scaled_axis "$shot" "$CH_ANISO_CENTER_X" "$CH_ANISO_CENTER_Y" 1 0 "$CH_ANISO_SPAN" \
+		"$ch_r" "$ch_g" "$ch_b" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" \
+		"$CH_ANISO_EXP_LEN_X" "$CH_ANISO_EXP_SEP_X" "$CH_ANISO_EXP_WIDTH_X" "$CH_ANISO_TOL_PX" "crosshair-scaled-aniso-row" --no-soft
+	run_sampler scaled_axis "$shot" "$CH_ANISO_CENTER_X" "$CH_ANISO_CENTER_Y" 0 1 "$CH_ANISO_SPAN" \
+		"$ch_r" "$ch_g" "$ch_b" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" \
+		"$CH_ANISO_EXP_LEN_Y" "$CH_ANISO_EXP_SEP_Y" "$CH_ANISO_EXP_WIDTH_Y" "$CH_ANISO_TOL_PX" "crosshair-scaled-aniso-column" --no-soft
+	set_val "crosshair.apply_scaling" 0
+	set_val "crosshair.line_width" "$CH_LINE_WIDTH"
+	set_val "crosshair.outline" 1
+	set_val "crosshair.enabled" 0
+}
+
+# Apply Scaling, FIT/LETTERBOXED (case 4, 2026-09-07): the game rect does
+# not fill the output -- the crosshair must stay centred on the GAME rect
+# and scale by the FIT factor (2x here, the smaller of the two per-axis
+# ratios), not by the output's own size. See CH_FIT_* above for the exact
+# geometry and why the measured length/width/sep matching the SCALED
+# formula (not the output-pixel one) is the proof that actually
+# distinguishes this from an unscaled crosshair, since the letterbox bars
+# are generous enough that a merely-not-clipped crosshair proves nothing
+# on its own.
+check_crosshair_scaled_fit() {
+	should_run crosshair-scaled-fit || { skip_check crosshair-scaled-fit "--only excluded it"; return; }
+	set_val "crosshair.enabled" 1
+	set_val "crosshair.outline" 0
+	set_val "crosshair.line_width" "$CH_ANIM_LINE_WIDTH"
+	set_val "crosshair.apply_scaling" 1
+	local shot; shot="$(take_screenshot 16-crosshair-fit)"
+	local ch_r ch_g ch_b
+	ch_r=$(( (CH_LINE_COLOR_HEX >> 16) & 0xFF )); ch_g=$(( (CH_LINE_COLOR_HEX >> 8) & 0xFF )); ch_b=$(( CH_LINE_COLOR_HEX & 0xFF ))
+	run_sampler scaled_axis "$shot" "$CH_FIT_CENTER_X" "$CH_FIT_CENTER_Y" 1 0 "$CH_FIT_SPAN" \
+		"$ch_r" "$ch_g" "$ch_b" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" \
+		"$CH_FIT_EXP_LEN" "$CH_FIT_EXP_SEP" "$CH_FIT_EXP_WIDTH" "$CH_FIT_TOL_PX" "crosshair-scaled-fit-row"
+	run_sampler scaled_axis "$shot" "$CH_FIT_CENTER_X" "$CH_FIT_CENTER_Y" 0 1 "$CH_FIT_SPAN" \
+		"$ch_r" "$ch_g" "$ch_b" "$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" \
+		"$CH_FIT_EXP_LEN" "$CH_FIT_EXP_SEP" "$CH_FIT_EXP_WIDTH" "$CH_FIT_TOL_PX" "crosshair-scaled-fit-column"
+	# The top letterbox bar is OUTSIDE the game rect entirely -- gamescope
+	# fills it with its own black border, not the game's own flat colour
+	# (measured: (0,0,0), not BG_DARK_HEX's (51,51,51)) -- so "clean" here
+	# means flat black, and any deviation from that (the crosshair's own
+	# colour, its outline) proves it painted outside the shrunk game rect.
+	run_sampler flat "$shot" "$((CH_FIT_CENTER_X - 40))" 5 "$((CH_FIT_CENTER_X + 40))" "$((CH_FIT_BAR_H - 5))" \
+		0 0 0 "$DIFF_THRESH" "crosshair-scaled-fit-bar-clean"
+	set_val "crosshair.apply_scaling" 0
+	set_val "crosshair.line_width" "$CH_LINE_WIDTH"
+	set_val "crosshair.outline" 1
+	set_val "crosshair.enabled" 0
+}
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -1182,14 +1394,16 @@ START_TS=$(date +%s)
 write_config
 start_sway
 
-need_dark=0; need_mid=0; need_scaled=0
-for c in layer-budget inversion inversion-crosshair inversion-crosshair-alpha fixed outline crosshair-geometry crosshair-gap-invariant crosshair-shrink-rate crosshair-reverse; do
+need_dark=0; need_mid=0; need_scaled=0; need_aniso=0; need_fit=0
+for c in layer-budget inversion inversion-crosshair inversion-crosshair-alpha fixed outline crosshair-geometry crosshair-gap-invariant crosshair-shrink-rate crosshair-reverse crosshair-scaled-identity; do
 	should_run "$c" && need_dark=1
 done
 should_run inversion-midtone && need_mid=1
 for c in crosshair-scaled crosshair-scaled-gap; do
 	should_run "$c" && need_scaled=1
 done
+should_run crosshair-scaled-aniso && need_aniso=1
+should_run crosshair-scaled-fit && need_fit=1
 
 if [[ "$need_dark" -eq 1 ]]; then
 	start_instance "$BG_DARK_HEX"
@@ -1205,6 +1419,9 @@ if [[ "$need_dark" -eq 1 ]]; then
 	check_crosshair_gap_invariant
 	check_crosshair_shrink_rate
 	check_crosshair_reverse
+	# Same instance as the checks above: default game/output size (both
+	# OUT_W x OUT_H), scaler auto -- exactly case 1's "no stretch at all".
+	check_crosshair_scaled_identity
 fi
 
 if [[ "$need_mid" -eq 1 ]]; then
@@ -1219,6 +1436,26 @@ if [[ "$need_scaled" -eq 1 ]]; then
 	set_val "crosshair.enabled" 0  # as above
 	check_crosshair_scaled
 	check_crosshair_scaled_gap
+fi
+
+if [[ "$need_aniso" -eq 1 ]]; then
+	# Needs a genuinely bigger private-sway output too -- see start_sway()'s
+	# own comment on why gamescope's -W/-H alone is not enough.
+	teardown_all
+	start_sway "$CH_ANISO_OUT_W" "$CH_ANISO_OUT_H"
+	start_instance "$BG_DARK_HEX" "$CH_ANISO_GAME_W" "$CH_ANISO_GAME_H" stretch "$CH_ANISO_OUT_W" "$CH_ANISO_OUT_H"
+	set_val "crosshair.enabled" 0  # as above
+	check_crosshair_scaled_aniso
+	# Restore the default sway output for every check that runs after this
+	# one and assumes OUT_W/OUT_H (crosshair-scaled-fit, hud-margin).
+	teardown_all
+	start_sway
+fi
+
+if [[ "$need_fit" -eq 1 ]]; then
+	start_instance "$BG_DARK_HEX" "$CH_FIT_GAME_W" "$CH_FIT_GAME_H" "$CH_FIT_SCALER"
+	set_val "crosshair.enabled" 0  # as above
+	check_crosshair_scaled_fit
 fi
 
 # Self-contained: guards itself on should_run before starting anything, and

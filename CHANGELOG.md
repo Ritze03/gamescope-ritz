@@ -56,6 +56,11 @@ The newest version below is the one this build reports.
   the margin you set (worse on the top/bottom edges than the left/right ones); a
   saved margin now positions the readout snugly against the edge as configured. The
   backdrop, when on, was already exact and is unchanged.
+- **Crosshair Apply Scaling verified to leave a native-resolution game untouched**:
+  when the game isn't being stretched at all, turning Apply Scaling on now provably
+  looks identical to off, arm for arm and pixel for pixel; a stretched game still
+  gets a correctly, per-axis stretched crosshair, staying centred and confined to a
+  letterboxed picture instead of the full screen.
 
 ### Info
 - **Adaptive Brightness min/max gain range widened**: Min gain now goes down to 0.3

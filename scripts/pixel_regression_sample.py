@@ -510,7 +510,7 @@ def cmd_scaled_axis(a):
         return [cov_at(x + px * (min(ks) - 1), y + py * (min(ks) - 1)),
                 cov_at(x + px * (max(ks) + 1), y + py * (max(ks) + 1))]
     sides = beside((l0 + l1) // 2) + beside((r0 + r1) // 2)
-    soft_ok = all(soft(c) for c in ends) and all(soft(c) for c in sides)
+    soft_ok = True if a.no_soft else (all(soft(c) for c in ends) and all(soft(c) for c in sides))
     # Symmetry (2026-09-08, revised same day): l1 is the left run's near
     # (high) edge, r0 the right run's near (low) edge, both as offsets from
     # the centre a.cx/a.cy -- a symmetric hole has these equidistant from
@@ -525,6 +525,8 @@ def cmd_scaled_axis(a):
     detail = (f"arms len={len_l}/{len_r} (exp {a.exp_len}) sep={sep} (exp {a.exp_sep}) "
               f"width={w_l}/{w_r} (exp {a.exp_width}) tol={a.tol}; symmetry near_lo={-l1} near_hi={r0}"
               f"{'' if sym_ok else ' NOT SYMMETRIC'}; "
+              f"edge coverage past ends={[round(c, 2) for c in ends]} beside={[round(c, 2) for c in sides]} "
+              f"(soft = 0.10..0.90, skipped){'' if soft_ok else ' NOT SOFT'}" if a.no_soft else
               f"edge coverage past ends={[round(c, 2) for c in ends]} beside={[round(c, 2) for c in sides]} "
               f"(soft = 0.10..0.90){'' if soft_ok else ' NOT SOFT'}")
     emit(ok, a.name, detail)
@@ -576,6 +578,63 @@ def cmd_symmetry(a):
     near_hi, _ = arm_run(img, a.hi_x, a.hi_y, a.dx, a.dy, target, a.tol, a.max_off)
     ok = near_lo is not None and near_hi is not None and near_lo == near_hi
     detail = f"near_lo={near_lo} near_hi={near_hi} (must be equal) [edges ({a.lo_x},{a.lo_y})/({a.hi_x},{a.hi_y})]"
+    emit(ok, a.name, detail)
+
+
+def cmd_flat(a):
+    """Assert every pixel in `box` is within `diff_thresh` of the flat
+    background colour -- used for the Apply Scaling fit/letterbox check
+    (crosshair.md, case 4) to prove the crosshair does not paint into the
+    letterbox bars: nothing at all should be drawn there."""
+    img = load(a.image)
+    box = (a.x0, a.y0, a.x1, a.y1)
+    if not (0 <= box[0] < box[2] <= img.width and 0 <= box[1] < box[3] <= img.height):
+        print(f"FAIL\t{a.name}\tbox {box} outside the {img.width}x{img.height} image", file=sys.stderr)
+        sys.exit(2)
+    bg = (a.bg_r, a.bg_g, a.bg_b)
+    worst = 0
+    worst_xy = None
+    for y in range(box[1], box[3]):
+        for x in range(box[0], box[2]):
+            d = chebyshev(img.getpixel((x, y)), bg)
+            if d > worst:
+                worst = d
+                worst_xy = (x, y)
+    ok = worst <= a.diff_thresh
+    emit(ok, a.name, f"worst={worst} at {worst_xy} diff_thresh={a.diff_thresh} bg={bg} box={box}")
+
+
+def cmd_diff(a):
+    """Direct image-to-image comparison (2026-09-07, Apply Scaling's
+    native-resolution identity invariant -- superdoc/features/crosshair.md):
+    Apply Scaling ON at nested == output must be pixel-identical to OFF, and
+    the only way to actually prove that is to diff the two captures against
+    EACH OTHER, not to measure both against the same nominal numbers (two
+    independently-computed "correct" values can agree with each other while
+    both being wrong the same way). Reports the worst (max Chebyshev)
+    per-channel difference anywhere in `box`, and where it is."""
+    imgA = load(a.image_a)
+    imgB = load(a.image_b)
+    if imgA.size != imgB.size:
+        print(f"FAIL\t{a.name}\tsize mismatch: {imgA.size} vs {imgB.size}", file=sys.stderr)
+        sys.exit(2)
+    box = (a.x0, a.y0, a.x1, a.y1)
+    if not (0 <= box[0] < box[2] <= imgA.width and 0 <= box[1] < box[3] <= imgA.height):
+        print(f"FAIL\t{a.name}\tbox {box} outside the {imgA.width}x{imgA.height} image", file=sys.stderr)
+        sys.exit(2)
+    pxA = imgA.load(); pxB = imgB.load()
+    worst = -1
+    worst_xy = None
+    for y in range(box[1], box[3]):
+        for x in range(box[0], box[2]):
+            d = chebyshev(pxA[x, y], pxB[x, y])
+            if d > worst:
+                worst = d
+                worst_xy = (x, y)
+    ok = worst <= a.tol
+    detail = f"max_diff={worst} at {worst_xy} tol={a.tol} box={box}"
+    if worst_xy is not None:
+        detail += f" a={pxA[worst_xy]} b={pxB[worst_xy]}"
     emit(ok, a.name, detail)
 
 
@@ -718,7 +777,30 @@ def main():
     sp.add_argument("exp_len", type=float); sp.add_argument("exp_sep", type=float); sp.add_argument("exp_width", type=float)
     sp.add_argument("tol", type=float)
     sp.add_argument("name")
+    sp.add_argument("--no-soft", action="store_true",
+                     help="skip the exact-adjacent-pixel softness check -- a fractional "
+                          "(non-power-of-2) scale still has a soft edge, but a linear filter "
+                          "can spread it over more than one neighbour depending on phase, so "
+                          "checking the IMMEDIATE neighbour alone (right for the clean 2x case) "
+                          "is not a general test at an arbitrary scale (crosshair-scaled-aniso).")
     sp.set_defaults(func=cmd_scaled_axis)
+
+    sp = sub.add_parser("flat", help="assert a box is entirely within diff_thresh of a flat background colour")
+    sp.add_argument("image")
+    sp.add_argument("x0", type=int); sp.add_argument("y0", type=int)
+    sp.add_argument("x1", type=int); sp.add_argument("y1", type=int)
+    sp.add_argument("bg_r", type=int); sp.add_argument("bg_g", type=int); sp.add_argument("bg_b", type=int)
+    sp.add_argument("diff_thresh", type=int)
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_flat)
+
+    sp = sub.add_parser("diff", help="direct image-vs-image comparison over a box: worst per-channel diff must be <= tol")
+    sp.add_argument("image_a"); sp.add_argument("image_b")
+    sp.add_argument("x0", type=int); sp.add_argument("y0", type=int)
+    sp.add_argument("x1", type=int); sp.add_argument("y1", type=int)
+    sp.add_argument("tol", type=int)
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_diff)
 
     args = p.parse_args()
     args.func(args)
