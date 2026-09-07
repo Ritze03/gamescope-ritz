@@ -240,6 +240,61 @@ and writes the whole thing through one funnel; a diff at that funnel gives inher
 to every existing and future section with zero panel code, which is the extensibility
 the concept was written for.
 
+### The same merge on the global path (2026-09-07)
+
+`global.json`'s `overlay` section had the **identical bug class**, and it was measured by
+`scripts/settings-audit.sh` on 2026-09-07 (`build-release/verify-shots/settings-audit-2026-09-07/`).
+`EnqueueGlobalWrite(settings)` assigned `settings.overlay` over the mirror whole, and that
+one section has **several** writers, each holding its own long-lived copy:
+`PanelConfig.cpp`'s `s_GeneralSettings` (Appearance and the Profiles filter),
+`PanelCursor.cpp`'s `s_Settings` (the Cursor area), and the notification placement.
+So one write from the Cursor area put **nine** Appearance/Profiles fields back —
+accent hue 255 -> 218, display scale 1.05 -> 1.0, background blur, background darkening,
+window opacity, notification opacity, notification scale, notification placement and the
+profiles filter — in all three routing situations; symmetric in the other direction. In
+the user's terms: *the Appearance and Cursor areas undid each other.*
+
+`How it was fixed:` the routed write's merge was **generalised**, not duplicated. The
+judgement in `ConfigManager.cpp` moved into one `CallerEditMerge` struct (the base map
+keyed by the caller's address, the handed-out set, the `Merge()` that starts from the
+mirror and takes a key only when the caller changed it, `Forget()` on a generation bump),
+and there are now two instances of it: `s_RoutedMerge`, which merges per top-level
+**section** of the session profile, and `s_GlobalMerge`, which merges per **field** of
+`overlay`. `EnqueueGlobalWrite()` and `EnqueueOverlayWrite()` both go through
+`MergeOverlayFromCaller()`; the latter is keyed by the `OverlaySettings`' own address, so
+`Chrome.cpp`'s geometry autosave and `Shell.cpp` are distinct callers.
+
+`Why per field and not per section here:` `overlay` **is** one section. A per-section merge
+would have asked "did this caller change `overlay`?", answered yes (it changed one field of
+it), and taken the caller's whole copy — exactly the clobber. The unit of ownership on this
+path is the field, because the writers each own a handful of fields of one shared section.
+That is the whole difference between the two instances; the judgement is the same code.
+
+`LoadGlobal() serves the mirror, not the file (same change):` reading the file handed a
+caller a copy that was already behind a queued write — the writer coalesces for up to 500 ms
+— and that copy then went straight back through `EnqueueGlobalWrite()`. The notification
+placement's "fresh `LoadGlobal()` per click" was such a caller. Serving the in-process
+mirror makes a fresh copy equal to the mirror in every field the caller did not touch, so
+the merge has nothing to misjudge, and every read is recorded as handed out. The stale
+`.tmp-<pid>` sweep (#21) deliberately stayed on `LoadGlobal()` rather than moving into the
+mirror's own `EnsureGlobalLoaded()`, which latches after the first load and would never
+collect a file orphaned later in the same process.
+
+`And the panels' side:` `PanelCursor.cpp` and `PanelConfig.cpp` both carried a comment
+saying their copy was loaded once per process and nothing could make it stale, *because*
+no profile apply or reload touches `overlay`. That reasoning was wrong — it only ever
+considered the *profile* writers, and missed that these two areas write the same `overlay`
+object as each other. Both now reload on `config::ConfigGeneration()` like every other
+panel. The merge alone makes the staleness harmless on the **write** side; the reload keeps
+the **read** side honest (a row must not go on showing a value another area has since
+changed) and matches the merge's own bookkeeping, which a bump clears.
+
+`Pinned by:` `tests/test_config.cpp`'s *"a second writer with a stale copy cannot revert
+another writer's global-section field"* (both directions, plus a deliberate revert to the
+caller's own last-written value, which must still reach disk) and *"EnqueueOverlayWrite
+merges per field too, against its own caller identity"*. Measured green end to end by the
+audit re-run in `results-after-fix.txt`: 42 failures -> 0.
+
 ## The Profiles area (`setup.profiles`)
 
 `src/Overlay/PanelConfig.cpp` (drawing and the config calls) and `PanelConfig.h`'s

@@ -643,6 +643,20 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	// one), so an explicit CLI flag still overwrites it unconditionally and
 	// wins, the same guarantee nested_width/height/refresh get above.
 	g_bForceWindowsFullscreenStartup = config.gamescope.force_windows_fullscreen;
+
+	// --force-grab-cursor ("Force grab cursor" in Quick toggles): the same
+	// seed-before-getopt shape. g_bForceRelativeMouse is read once by each
+	// nested backend as it comes up (CWaylandConnector::Init(),
+	// CSDLBackend::Run()) to enter relative mode from the start, and
+	// steamcompmgr_set_force_relative_mouse() -- the live path the Display
+	// area and ritz_apply_config_live() use -- needs a focus to push to,
+	// which does not exist yet. So the flag itself is seeded here; an
+	// explicit --force-grab-cursor in the getopt loop below still sets it
+	// true afterwards and wins. Before 2026-09-07 nothing seeded it: a
+	// saved `true` came back as off after a restart until some Display
+	// row's getter happened to reload the area and re-push it
+	// (settings-audit 2026-09-07, "late apply").
+	g_bForceRelativeMouse = config.gamescope.force_grab_cursor;
 }
 
 static enum gamescope::GamescopeBackend parse_backend_name(const char *str)

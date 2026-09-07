@@ -94,6 +94,29 @@ HDR is opt-in and depends on backend + display capability:
   compositor polls (e.g. `flSDROnHDRBrightness` is settable from a CLI flag parsed at
   `src/steamcompmgr.cpp:8734` and updated live at `src/steamcompmgr.cpp:569`-`572`).
 
+### SDR gamut wideness has a third state, and the UI can now reach it (2026-09-07)
+
+`sdrGamutWideness` defaults to `-1`, which `color_helpers.cpp`'s `buildSDRColorimetry()`
+reads as *"unset — use the display's own gamut"*: effectively 1.0 on a wide-gamut screen and
+0.0 on a normal one. That is a real, distinct state, and **no single value in 0..1
+reproduces it** — it is the only place in the settings where the stored value is a
+tri-state and the control was a plain slider.
+
+`scripts/settings-audit.sh` recorded the consequence on 2026-09-07: the slider clamps the
+*displayed* value into 0..1, so a screen following its own gamut showed `0`, and the first
+touch of the slider wrote a literal `0.0` — turning "follow the display" into a manual zero
+permanently, with no way back from the UI. The row round-tripped correctly, so it was not a
+persistence failure; it was a **state the UI could not represent**, which is why the audit
+filed it as a note rather than a FAIL.
+
+`Fixed by making the sentinel reachable:` `display.sdr_gamut_wideness` gained a **`manual`**
+parameter ("Set manually", default off) on the same key — off writes `-1`, on keeps whatever
+the slider shows. The shape is copied from the cursor outline colour's `custom` switch
+(`PanelCursor.cpp`): one config field, a switch that flips it between a sentinel and a
+value, both rows declaring the same key so a reader knows the switch's write is the switch's
+own and not a stale copy. Measured in the audit's re-run: `0.05 -> -1.0` on disk, surviving
+a restart, in all three routing situations.
+
 ## Related links
 
 - [compositing-vulkan.md](compositing-vulkan.md) — where the shaper/3D LUTs and CTM

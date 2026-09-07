@@ -913,7 +913,14 @@ namespace gamescope
 	// as long as the live mode still equals this -- see CurrentAspect().
 	static int  s_nPickWidth = 0, s_nPickHeight = 0;
 	static int  s_nCustomWidth = 0, s_nCustomHeight = 0;   // 0 = not yet used, seed from live
-	static bool s_bLockAspect = true;
+	// "Lock aspect ratio" lives in the config (GamescopeSettings::
+	// nested_lock_aspect, 2026-09-07) beside the size it constrains, so it
+	// survives a restart like the size does; the captured pair below is
+	// the only session-local part, re-derived when first needed.
+	static bool LockAspect()
+	{
+		return Cfg().gamescope.nested_lock_aspect;
+	}
 	// The pair the lock derives from -- a pair rather than a single ratio
 	// float so repeated rounding on one axis can't quietly drift the other.
 	// Explicitly captured (CaptureLockedAspect(), below) at every point the
@@ -1261,10 +1268,11 @@ namespace gamescope
 		// Read (and, if stale, refresh) the locked reference BEFORE
 		// mutating s_nCustomWidth -- see EnsureLockedAspectReference()'s
 		// comment for why the order matters.
-		if ( s_bLockAspect )
+		const bool bLock = LockAspect();
+		if ( bLock )
 			EnsureLockedAspectReference();
 		s_nCustomWidth = ClampDim( nWidth );
-		s_nCustomHeight = s_bLockAspect
+		s_nCustomHeight = bLock
 			? SnapEven( (int)std::lround( s_nCustomWidth / LockedAspect() ) )
 			: nOldHeight;
 		ApplyCustomIfActive( bActive );
@@ -1276,10 +1284,11 @@ namespace gamescope
 		const int nOldWidth = CustomWidth();
 		// Symmetric with SetCustomWidth(): read the reference before
 		// mutating s_nCustomHeight.
-		if ( s_bLockAspect )
+		const bool bLock = LockAspect();
+		if ( bLock )
 			EnsureLockedAspectReference();
 		s_nCustomHeight = ClampDim( nHeight );
-		s_nCustomWidth = s_bLockAspect
+		s_nCustomWidth = bLock
 			? SnapEven( (int)std::lround( s_nCustomHeight * LockedAspect() ) )
 			: nOldWidth;
 		ApplyCustomIfActive( bActive );
@@ -1287,11 +1296,18 @@ namespace gamescope
 
 	static void SetLockAspect( bool bLock )
 	{
-		s_bLockAspect = bLock;
-		// Re-capture on every engage: the ratio the user locks is the one on
-		// screen when they flip the switch, not the one from last session.
-		if ( bLock )
-			CaptureLockedAspect( CustomWidth(), CustomHeight() );
+		ApplyEdit(
+			[ bLock ]( config::Settings &cfg ) { cfg.gamescope.nested_lock_aspect = bLock; },
+			[ bLock ]
+			{
+				// Re-capture on every engage: the ratio the user locks is the
+				// one on screen when they flip the switch, not the one from
+				// last session (a persisted `true` captures lazily, from the
+				// persisted size, on the first edit -- see
+				// EnsureLockedAspectReference()).
+				if ( bLock )
+					CaptureLockedAspect( CustomWidth(), CustomHeight() );
+			} );
 	}
 
 	// ---- refresh ----------------------------------------------------------
@@ -1444,8 +1460,9 @@ namespace gamescope
 			.DisabledUnless( ResolutionIsCustom, kNotCustom )
 			.Param( "lock_aspect", "Lock aspect ratio",
 				ui::AnyBind::Of<bool>(
-					[]{ return s_bLockAspect; },
+					[]{ return LockAspect(); },
 					[]( bool b ) { SetLockAspect( b ); } ) )
+				.Key( "gamescope.nested_lock_aspect" )
 				.Help( "Keeps width and height in the same proportion as when you switched this on, "
 				       "so changing one adjusts the other. Off lets you set them independently." )
 				.Default( true )
@@ -1733,9 +1750,17 @@ namespace gamescope
 		const auto HdrOn = []{ return cv_hdr_enabled.Get(); };
 		static constexpr const char *kHdrOff = "HDR output is off -- this does nothing until it is on";
 
-		// sdrGamutWideness defaults to -1 ("unset / display-native"); only the
-		// DISPLAYED value is clamped into 0..1, so the -1 is not silently
-		// written back over before the user has touched the control.
+		// sdrGamutWideness defaults to -1: "unset / display-native", which
+		// color_helpers.cpp's buildSDRColorimetry() reads as the display's
+		// own gamut (1.0 on a wide-gamut screen, 0.0 otherwise) -- a real
+		// state no single 0..1 value reproduces. Only the DISPLAYED value is
+		// clamped into 0..1; touching the slider sets a manual amount, and
+		// the `manual` switch below (2026-09-07) is the way back to -1.
+		// Before it, any touch turned "follow the display" into a manual
+		// 0.0 for good (settings-audit 2026-09-07). Same shape as the
+		// cursor outline colour's `custom` switch (PanelCursor.cpp): one
+		// key, the switch flips it between the sentinel and a value.
+		static constexpr float kGamutFollowDisplay = -1.0f;
 		a.Slider( "display.sdr_gamut_wideness", "SDR gamut wideness",
 			ui::AnyBind::Of<float>(
 				[]{ return std::clamp( g_ColorMgmt.pending.sdrGamutWideness, 0.0f, 1.0f ); },
@@ -1746,12 +1771,35 @@ namespace gamescope
 				} ) )
 			.Key( "gamescope.sdr_gamut_wideness" )
 			.Help( "Makes colours in regular (non-HDR) content richer by stretching them toward "
-			       "your screen's wider colour range. 0 leaves colours exactly as the game intended." )
+			       "your screen's wider colour range. 0 leaves colours exactly as the game intended. "
+			       "Moving this sets an amount of your own; the switch below hands it back to the "
+			       "screen." )
 			.Range( 0.0f, 1.0f )
 			.Step( 0.05f )       // 21 positions across a 0..1 normalised amount
 			.Default( 0.0f )
 			.Keywords( "gamut wideness sdr saturation bt709 bt2020" )
-			.DisabledUnless( HdrOn, kHdrOff );
+			.DisabledUnless( HdrOn, kHdrOff )
+			.Param( "manual", "Set manually",
+				ui::AnyBind::Of<bool>(
+					[]{ return g_ColorMgmt.pending.sdrGamutWideness >= 0.0f; },
+					[]( bool bManual )
+					{
+						// On keeps whatever the slider shows (0 when it was
+						// following the display); off restores the sentinel.
+						const float f = bManual
+							? std::clamp( g_ColorMgmt.pending.sdrGamutWideness, 0.0f, 1.0f )
+							: kGamutFollowDisplay;
+						ApplyEdit(
+							[ f ]( config::Settings &cfg ) { cfg.gamescope.sdr_gamut_wideness = f; },
+							[ f ] { set_color_sdr_gamut_wideness( f ); } );
+					} ) )
+				.Key( "gamescope.sdr_gamut_wideness" )
+				.Help( "Off (default): the screen decides -- regular content uses its full colour "
+				       "range on a wide-gamut screen and is left alone on a normal one. On: the "
+				       "amount above is used instead." )
+				.Default( false )
+				.Keywords( "gamut manual native follow display automatic" )
+				.DisabledUnless( HdrOn, kHdrOff );
 
 		a.Slider( "display.sdr_on_hdr_brightness", "SDR-on-HDR brightness",
 			ui::AnyBind::Of<float>(

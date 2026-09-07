@@ -67,6 +67,15 @@ dispatches.
   (`src/main.hpp:66`, default `2`, `src/main.cpp:318`), 0–20, set via `--sharpness` or
   the `GAMESCOPE_SHARPNESS` X11 property (clamped in `src/steamcompmgr.cpp:6578`); FSR
   and NIS each remap it into their own native sharpness range as noted above.
+- **Changing the filter resets sharpness to 0 %, deliberately** (`PanelDisplay.cpp`'s
+  `SetFilter()` -> `SetSharpnessUiPercent(0)`, which on disk is the raw `20` — the UI
+  percentage is inverted, `0 %` is the minimum). This is the user's own wording for
+  "combine them": each filter sharpens differently, so carrying a percentage across a
+  filter change produced a picture that jumped for no reason the user had asked for.
+  `scripts/settings-audit.sh` records it as a collateral key on the `display.filter` row
+  (the row itself passes); re-confirmed 2026-09-07 as intended behaviour, not a
+  persistence bug — a value written *because of* an edit is not a value clobbered *by*
+  one.
 
 ## Using it
 

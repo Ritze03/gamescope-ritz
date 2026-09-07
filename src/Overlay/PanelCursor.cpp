@@ -16,7 +16,13 @@
 // config::EnqueueGlobalWrite(), exactly like PanelConfig.cpp's
 // EnsureGeneralSettingsLoaded()/QueueGeneralSave() do for accent_hue and
 // its neighbours -- copied rather than shared because that pair is static
-// to PanelConfig.cpp's own translation unit, not exported.
+// to PanelConfig.cpp's own translation unit, not exported. Both write the
+// SAME `overlay` object from their own copies; EnqueueGlobalWrite() merges
+// per field (2026-09-07), so a write from here carries only the cursor
+// fields this tab changed and never puts an Appearance edit back -- which
+// one write from here used to do to nine of them (settings-audit
+// 2026-09-07). Every row declares its `overlay.*` key so the audit can
+// check that landing.
 //
 // The outline colour's "follow accent / custom" shape is copied from
 // FpsDisplay.cpp's RegisterModuleColor() (system.hud's per-module
@@ -29,6 +35,7 @@
 // accent hue moves.
 #include "PanelCursor.h"
 
+#include <cstdint>
 #include <cstdio>
 
 #include "Config/ConfigManager.h"
@@ -39,21 +46,28 @@ namespace gamescope
 {
 	namespace
 	{
-		// Loaded once per process and refreshed on every write this tab
-		// makes -- same shape as PanelConfig.cpp's s_GeneralSettings/
-		// EnsureGeneralSettingsLoaded(), and safe for the same reason: no
-		// profile apply, per-game override toggle, or config reload ever
-		// touches `overlay` (ConfigManager.h's ApplyProfile() doc comment),
-		// so nothing outside this file can make the cache stale.
+		// This tab's own copy, reloaded on every config generation bump --
+		// the shape every other panel uses. The old "loaded once per
+		// process, nothing can make it stale" claim was false: the
+		// Appearance area and the notification placement write the same
+		// `overlay` object, so this copy IS stale the moment either of
+		// them saves. The per-field merge in config::EnqueueGlobalWrite()
+		// makes that staleness harmless on the write side; the reload
+		// keeps the copy honest for the read side too, and matches the
+		// merge's bookkeeping (cleared on every bump). LoadGlobal() serves
+		// the in-process mirror, so this is cheap.
 		bool s_bConfigLoaded = false;
+		uint64_t s_ulLoadedGeneration = 0;
 		config::Settings s_Settings;
 
 		void EnsureConfigLoaded()
 		{
-			if ( s_bConfigLoaded )
+			const uint64_t ulGeneration = config::ConfigGeneration();
+			if ( s_bConfigLoaded && ulGeneration == s_ulLoadedGeneration )
 				return;
-			s_bConfigLoaded = true;
 			s_Settings = config::LoadGlobal();
+			s_ulLoadedGeneration = ulGeneration;
+			s_bConfigLoaded = true;
 		}
 
 		void QueueSave()
@@ -123,6 +137,7 @@ namespace gamescope
 				[]( float f ) { EnsureConfigLoaded(); s_Settings.overlay.cursor_scale = f; QueueSave(); } ) )
 			.Help( "How big the pointer is while the overlay is open. Turn it up if it's easy to "
 			       "lose track of on a bright or busy screen, or down if it feels oversized." )
+			.Key( "overlay.cursor_scale" )
 			.Range( 0.5f, 3.0f )
 			.Step( 0.1f )
 			.Unit( "x" )
@@ -135,6 +150,7 @@ namespace gamescope
 				[]( float f ) { EnsureConfigLoaded(); s_Settings.overlay.cursor_outline_width = f; QueueSave(); } ) )
 			.Help( "How thick the outline around the pointer is. A heavier outline stays visible "
 			       "over bright or busy game content; a thinner one is less distracting." )
+			.Key( "overlay.cursor_outline_width" )
 			.Range( 1.0f, 6.0f )
 			.Step( 0.5f )
 			.Unit( "px" )
@@ -160,6 +176,13 @@ namespace gamescope
 				} ) )
 			.Help( "Colour of the pointer's outline. Off follows the overlay's own accent colour "
 			       "automatically; on locks it to the colour you pick below." )
+			// The band and its `custom` switch share ONE key: the switch
+			// writes null (follow the accent) or the captured colour into
+			// the same field the band edits. Declared on both so a reader
+			// of the two rows -- the settings audit included -- knows a
+			// null from the switch is the switch's own write, not a stale
+			// copy putting the band's colour back.
+			.Key( "overlay.cursor_outline_color" )
 			.Keywords( "outline colour color accent tint" )
 			.Param( "custom", "Custom colour",
 				ui::AnyBind::Of<bool>(
@@ -172,6 +195,7 @@ namespace gamescope
 							: std::nullopt;
 						QueueSave();
 					} ) )
+				.Key( "overlay.cursor_outline_color" )
 				.Default( false )
 				.Help( "Off matches the overlay's own accent colour, so the outline follows it "
 				       "automatically. On locks it to the colour above." );
@@ -186,6 +210,7 @@ namespace gamescope
 					QueueSave();
 				} ) )
 			.Help( "Colour of the solid fill inside the pointer's outline." )
+			.Key( "overlay.cursor_inlay_color" )
 			.Default( config::OverlaySettings{}.cursor_inlay_color )
 			.Keywords( "inlay fill colour color inside" );
 
@@ -201,6 +226,7 @@ namespace gamescope
 			       "closed, so the look you designed above follows you outside the overlay too. A "
 			       "game that sets its own cursor (an RTS's unit-select arrow, say) still shows "
 			       "that -- this only replaces what's shown in its absence." )
+			.Key( "overlay.cursor_everywhere" )
 			.Default( config::OverlaySettings{}.cursor_everywhere )
 			.Keywords( "everywhere game system default fallback override always" );
 
@@ -218,6 +244,7 @@ namespace gamescope
 			       "locked and is drawing its own crosshair straight into the frame -- there is no "
 			       "cursor layer at all then, in any first-person game during actual gameplay, and "
 			       "nothing a compositor can do reaches that." )
+			.Key( "overlay.cursor_override_game" )
 			.Default( config::OverlaySettings{}.cursor_override_game )
 			.Keywords( "override game system live compositing replace crosshair lock" );
 	}

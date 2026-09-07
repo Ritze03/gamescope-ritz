@@ -59,17 +59,26 @@ namespace gamescope
 		// overlay.* is process-level/global.json-only (ConfigSchema.h's own
 		// comment on OverlaySettings) -- deliberately config::LoadGlobal(),
 		// never config::ResolvedSettings(): a profile never carries
-		// `overlay`. Loaded once per process, matching every other panel's
-		// "cache locally, push on every edit" shape -- and unlike those
-		// panels, this one never needs a config::ConfigGeneration() reload
-		// check: switching profiles never touches `overlay`, so nothing
-		// outside this area itself can ever make s_GeneralSettings stale.
+		// `overlay`. Reloaded on every config generation bump like every
+		// other panel (2026-09-07). The old "nothing outside this area can
+		// make s_GeneralSettings stale" claim was false: the Cursor area
+		// and the notification placement write the same `overlay` object
+		// from their own copies, and this copy was written back whole --
+		// one Cursor write undid nine of this area's fields, and this
+		// area's next write undid the Cursor's (settings-audit 2026-09-07).
+		// config::EnqueueGlobalWrite() now merges per field, so a stale
+		// copy cannot clobber; the reload keeps the read side honest and
+		// matches the merge's bookkeeping, which a bump clears.
+		// LoadGlobal() serves the in-process mirror, so this is cheap.
+		uint64_t s_ulGeneralLoadedGeneration = 0;
 		void EnsureGeneralSettingsLoaded()
 		{
-			if ( s_bGeneralSettingsLoaded )
+			const uint64_t ulGeneration = config::ConfigGeneration();
+			if ( s_bGeneralSettingsLoaded && ulGeneration == s_ulGeneralLoadedGeneration )
 				return;
-			s_bGeneralSettingsLoaded = true;
 			s_GeneralSettings = config::LoadGlobal();
+			s_ulGeneralLoadedGeneration = ulGeneration;
+			s_bGeneralSettingsLoaded = true;
 		}
 
 		// Pushes the fields Widgets.cpp/Shell.cpp read live (display scale,
@@ -668,6 +677,7 @@ namespace gamescope
 					} ) )
 				.Help( "On, the list shows only general profiles and this game's own. Off, it shows "
 				       "every game's profiles too." )
+				.Key( "overlay.profiles_filter_other_games" )
 				.Default( config::OverlaySettings{}.profiles_filter_other_games )
 				.Keywords( "filter game profiles show hide other games list" );
 
@@ -753,6 +763,7 @@ namespace gamescope
 					} ) )
 				.Help( "Changes the overlay's accent colour -- sliders, toggles and highlights all "
 				       "follow it. Pick any colour; it's always kept easy to read." )
+				.Key( "overlay.accent_hue" )
 				.Range( 0.0f, 360.0f )
 				.Default( config::OverlaySettings{}.accent_hue )
 				.Unit( "deg" )
@@ -878,8 +889,9 @@ namespace gamescope
 			// pushes it live into Notifications::g_LiveTheme). Re-binding it
 			// inside Notifications.cpp would have made a SECOND writer of
 			// global.json's overlay object, against this panel's own cached
-			// s_GeneralSettings -- the stale-cache clobber this file's
-			// EnsureGeneralSettingsLoaded() comment already warns about.
+			// s_GeneralSettings -- the stale-cache clobber that
+			// EnqueueGlobalWrite()'s per-field merge closed on 2026-09-07
+			// (see EnsureGeneralSettingsLoaded()'s comment).
 			a.Group( "Notifications" );
 
 			a.Slider( "overlay.notification_scale", "Notification scale",

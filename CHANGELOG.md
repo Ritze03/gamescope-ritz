@@ -12,12 +12,24 @@ The newest version below is the one this build reports.
 ## [0.6.2] – 2026-09-08
 
 ### Added
+- **SDR gamut wideness: Set manually**: a new switch beside the slider; off (the
+  default) lets the screen decide how wide regular content's colours go, on uses the
+  amount you set -- there was previously no way back once the slider had been touched.
 - **Force maximize nested window**: a new Quick toggles switch in Display > General
   makes windows inside gamescope open maximized/fullscreen, filling the nested display
   instead of using their own requested size. Takes effect immediately, even on windows
   already open.
 
 ### Fixed
+- **Appearance and Cursor settings no longer undo each other**: changing something in
+  Appearance (accent colour, overlay scale, blur, opacity, notification size or
+  placement) and then something in Cursor -- or the other way round -- no longer puts
+  the first change back; both are kept.
+- **Force grab cursor is applied again when gamescope starts**: the switch was saved but
+  ignored at launch, so it came back off until you opened the Display settings; a saved
+  on is now in force from the first frame.
+- **Lock aspect ratio is remembered**: the Custom resolution steppers' switch keeps the
+  setting you left it on instead of turning itself back on at every launch.
 - **Mouse after a resolution change**: a game that keeps its window at the old size when
   the game resolution is lowered (Wine/Proton games do) no longer loses the mouse over
   the part of the picture past the new screen edge; the window is kept within the screen

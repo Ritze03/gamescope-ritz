@@ -80,6 +80,13 @@ namespace gamescope::config
         int nested_width = 0;
         int nested_height = 0;
         int nested_refresh_hz = 0;
+        // The Custom size steppers' "Lock aspect ratio" switch (2026-09-07).
+        // Persisted beside the size it constrains: it reads as one of that
+        // row's settings, and the bool is its whole state -- the ratio it
+        // holds is re-derived from nested_width/height when first needed
+        // (PanelDisplay.cpp's EnsureLockedAspectReference()), never stored.
+        // See superdoc/features/resolution-and-refresh.md, "Phase B".
+        bool nested_lock_aspect = true;
     };
 
     struct FpsDisplaySettings

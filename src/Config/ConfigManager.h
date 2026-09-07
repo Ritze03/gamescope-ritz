@@ -50,11 +50,16 @@ namespace gamescope::config
 
     // ---- global.json -------------------------------------------------------------
     // global.json carries `overlay` and the `profiles` pointers, nothing
-    // else. LoadGlobal() returns a Settings whose `overlay` is the file's
-    // and whose other sections are the struct defaults -- callers that need
-    // the running settings want ResolvedSettings() below. Missing file ->
+    // else. LoadGlobal() returns a Settings whose `overlay` is this
+    // process's mirror of the file -- what it last queued or wrote, else
+    // the file as first read (2026-09-07; it used to re-read the file,
+    // which handed out a copy already behind a queued write) -- and whose
+    // other sections are the struct defaults; callers that need the
+    // running settings want ResolvedSettings() below. Missing file ->
     // defaults; malformed JSON or a schema newer than this build -> logs
-    // loudly and falls back to defaults, never blocks startup.
+    // loudly and falls back to defaults, never blocks startup. Cheap once
+    // loaded, but still not a per-frame call: panels cache it and reload
+    // on ConfigGeneration().
     Settings LoadGlobal();
     // Writes `settings.overlay` (only) plus the current pointers.
     bool SaveGlobal( const Settings &settings );
@@ -138,7 +143,9 @@ namespace gamescope::config
     // its address identifies the caller between generation bumps, and a
     // section that differs from what this caller last wrote -- or, on its
     // first write, from every state ResolvedSettings() handed out -- is the
-    // caller's edit. ConfigManager.cpp's s_CallerBase has the details.
+    // caller's edit. ConfigManager.cpp's CallerEditMerge has the details;
+    // EnqueueGlobalWrite below applies the same judgement per field of
+    // `overlay`.
     void EnqueueRoutedWrite( const Settings &settings );
 
     // Bumped by everything here that changes which profile is authoritative
@@ -227,9 +234,20 @@ namespace gamescope::config
     // for kWriteCoalesceMs of quiet (capped at kWriteCoalesceMaxMs) before
     // taking a batch, so a slider drag costs one write per file per pause.
     // FlushPendingWrites() skips the quiet period.
-    void EnqueueGlobalWrite( Settings settings );
+    //
+    // MERGED PER FIELD of `overlay` (2026-09-07), the same judgement
+    // EnqueueRoutedWrite applies per section: a field is taken from
+    // `settings.overlay` only when this caller changed it, else the
+    // mirror's current value stays. Several panels write this one section
+    // (Appearance, Cursor, the notification placement), each from its own
+    // copy, and assigning the copy whole let one Cursor write put nine
+    // Appearance/Profiles fields back (settings-audit 2026-09-07). Same
+    // contract as the routed write: pass the caller's own persistent
+    // struct (its address is the caller), reload it on a generation bump.
+    void EnqueueGlobalWrite( const Settings &settings );
     void EnqueueProfileWrite( const ProfileMeta &meta, const Settings &settings );
-    // Issue #35: writes `overlay` (only) to global.json.
+    // Issue #35: writes `overlay` (only) to global.json -- merged per
+    // field like EnqueueGlobalWrite, keyed by `overlay`'s address.
     void EnqueueOverlayWrite( const OverlaySettings &overlay );
     // Issue #35: patches one PanelGeometry entry onto the freshest known
     // `overlay` in memory and writes that, so Chrome.cpp never needs a copy

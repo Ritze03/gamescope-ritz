@@ -151,6 +151,7 @@ namespace gamescope::config
                 s.gamescope.nested_width = JGetInt( *pGamescope, "nested_width", s.gamescope.nested_width );
                 s.gamescope.nested_height = JGetInt( *pGamescope, "nested_height", s.gamescope.nested_height );
                 s.gamescope.nested_refresh_hz = JGetInt( *pGamescope, "nested_refresh_hz", s.gamescope.nested_refresh_hz );
+                s.gamescope.nested_lock_aspect = JGetBool( *pGamescope, "nested_lock_aspect", s.gamescope.nested_lock_aspect );
             }
 
             if ( const nlohmann::json *pFps = JGetObject( j, "fps_display" ) )
@@ -397,6 +398,7 @@ namespace gamescope::config
             jGamescope[ "nested_width" ] = s.gamescope.nested_width;
             jGamescope[ "nested_height" ] = s.gamescope.nested_height;
             jGamescope[ "nested_refresh_hz" ] = s.gamescope.nested_refresh_hz;
+            jGamescope[ "nested_lock_aspect" ] = s.gamescope.nested_lock_aspect;
 
             nlohmann::json jFps = nlohmann::json::object();
             jFps[ "enabled" ] = s.fps_display.enabled;
@@ -1059,32 +1061,107 @@ namespace gamescope::config
         const char *s_pszSessionSource = "";
         uint64_t s_ulConfigGeneration = 0;
 
-        // ---- the routed-write merge (requests-2026-09-06 item 1) ----------
+        // ---- the caller-edit merge (requests-2026-09-06 item 1; the global
+        // path 2026-09-07) --------------------------------------------------
         // Every panel keeps a whole Settings and writes the whole thing, but
-        // its copy of the OTHER sections is only as fresh as its last reload
-        // -- a generation bump, never another panel's edit. So a write from
-        // panel Y used to carry X's section as Y last saw it, undoing X's
-        // edit on disk AND in the mirror (measured: a crosshair edit put
-        // sharpness back to 5 after the Display area had set it to 10). The
-        // funnel merges instead (EnqueueRoutedWrite): a section is taken
-        // from the caller only when the CALLER changed it, else the mirror's
-        // current value stays. "Changed by the caller" is judged against:
+        // its copy of the OTHER parts is only as fresh as its last reload --
+        // a generation bump, never another panel's edit. So a write from
+        // panel Y used to carry X's values as Y last saw them, undoing X's
+        // edit on disk AND in the mirror. Measured twice, in two files:
+        //   - profile: a crosshair edit put sharpness back to 5 after the
+        //     Display area had set it to 10 (2026-09-06);
+        //   - global.json: one Cursor-area write put nine Appearance/
+        //     Profiles fields back (accent hue 255 -> 218, UI scale 1.05 ->
+        //     1.0, blur, darkening, window and notification opacity,
+        //     notification scale and placement, the profiles filter) --
+        //     settings-audit 2026-09-07, symmetric in the other direction.
+        // The funnels merge instead: a key is taken from the caller only
+        // when the CALLER changed it, else the mirror's current value stays.
+        // "Changed by the caller" is judged against:
         //   - the caller's own last write since the last generation bump,
         //     keyed by the address of the struct it passes (every panel
         //     passes its file-static copy, so the address is the panel);
-        //   - failing that, the states ResolvedSettings() has handed out
-        //     since that bump: a section equal to one of those is a copy the
-        //     caller loaded, not an edit.
+        //   - failing that, the states handed out since that bump
+        //     (ResolvedSettings(), LoadGlobal()): a value equal to one of
+        //     those is a copy the caller loaded, not an edit.
         // Both are cleared on every generation bump, when every panel
         // reloads anyway.
-        std::map<const Settings *, nlohmann::json> s_CallerBase;
-        std::map<std::string, std::vector<std::string>> s_HandedOut; // section -> compact dumps
-        constexpr size_t kMaxHandedOutPerSection = 256;
+        //
+        // One mechanism, two instances: the routed write (EnqueueRoutedWrite)
+        // merges per top-level SECTION of the session profile; the global
+        // write (EnqueueGlobalWrite) merges per FIELD of global.json's
+        // `overlay`, because that one section has several writers
+        // (Appearance, Cursor, the notification placement) which each own a
+        // few of its fields -- a per-section merge would still have let the
+        // last writer's whole copy win.
+        constexpr size_t kMaxHandedOutPerKey = 256;
+
+        struct CallerEditMerge
+        {
+            std::map<const void *, nlohmann::json> bases;                    // caller -> what it last wrote
+            std::map<std::string, std::vector<std::string>> handedOut;       // key -> compact dumps handed out
+
+            void Forget()
+            {
+                bases.clear();
+                handedOut.clear();
+            }
+
+            // Records one object's keys as "handed out" (deduplicated and
+            // bounded per key).
+            void RememberHandedOut( const nlohmann::json &jObject )
+            {
+                for ( auto it = jObject.begin(); it != jObject.end(); ++it )
+                {
+                    std::vector<std::string> &v = handedOut[ it.key() ];
+                    const std::string sDump = it->dump();
+                    if ( std::find( v.begin(), v.end(), sDump ) != v.end() )
+                        continue;
+                    if ( v.size() >= kMaxHandedOutPerKey )
+                        v.erase( v.begin() );
+                    v.push_back( sDump );
+                }
+            }
+
+            // Starts from `mirror` and takes a key from `caller` only when
+            // the caller changed it (see above). Records `caller` as this
+            // caller's base for its next write.
+            nlohmann::json Merge( const void *pCaller, const nlohmann::json &mirror, const nlohmann::json &caller )
+            {
+                nlohmann::json out = mirror;
+                const auto itBase = bases.find( pCaller );
+                for ( auto it = caller.begin(); it != caller.end(); ++it )
+                {
+                    const std::string &sKey = it.key();
+                    if ( out.contains( sKey ) && out[ sKey ] == *it )
+                        continue; // same as the mirror: nothing to decide
+                    bool bCallerChanged;
+                    if ( itBase != bases.end() )
+                    {
+                        const nlohmann::json &base = itBase->second;
+                        bCallerChanged = !( base.contains( sKey ) && base[ sKey ] == *it );
+                    }
+                    else
+                    {
+                        const auto itHanded = handedOut.find( sKey );
+                        const std::string sDump = it->dump();
+                        bCallerChanged = itHanded == handedOut.end() ||
+                            std::find( itHanded->second.begin(), itHanded->second.end(), sDump ) == itHanded->second.end();
+                    }
+                    if ( bCallerChanged )
+                        out[ sKey ] = *it;
+                }
+                bases[ pCaller ] = caller;
+                return out;
+            }
+        };
+        CallerEditMerge s_RoutedMerge; // per section of the session profile
+        CallerEditMerge s_GlobalMerge; // per field of global.json's `overlay`
 
         void ForgetRoutedWriteBases()
         {
-            s_CallerBase.clear();
-            s_HandedOut.clear();
+            s_RoutedMerge.Forget();
+            s_GlobalMerge.Forget();
         }
 
         // See SetLiveApplyHook().
@@ -1387,20 +1464,27 @@ namespace gamescope::config
 
     Settings LoadGlobal()
     {
-        EnsureMigrated();
-        std::string sPath = GlobalConfigPath();
-        SweepStaleTempFiles( sPath );
-
-        std::optional<std::string> oText = ReadWholeFile( sPath );
-        if ( !oText )
-            return Settings{};
-
-        std::optional<nlohmann::json> oJson = ParseConfigFile( *oText, sPath );
-        if ( !oJson )
-            return Settings{};
-
+        // The mirror, not the file (2026-09-07): what this process last
+        // queued or wrote for global.json, else the file as first read.
+        // Reading the file here handed a caller a copy that was already
+        // behind a queued write (the writer coalesces for up to 500 ms), and
+        // the copy then went back through EnqueueGlobalWrite() -- the
+        // notification placement's "fresh LoadGlobal() per click" was such
+        // a caller. Serving the mirror makes a fresh copy equal to the
+        // mirror in every field the caller did not touch, so the per-field
+        // merge below has nothing to misjudge. Every read is recorded as
+        // handed out for that merge.
+        //
+        // The stale-temp sweep (#21) stays on THIS call rather than moving
+        // into EnsureGlobalLoaded(): that one latches after the first load,
+        // so a temp file orphaned by a later kill would never be collected
+        // again in this process. A readdir of the config directory is the
+        // whole cost, and this runs on a generation bump, not per frame.
+        SweepStaleTempFiles( GlobalConfigPath() );
+        EnsureGlobalLoaded();
         Settings s{};
-        s.overlay = SettingsFromJson( *oJson ).overlay;
+        s.overlay = s_Overlay;
+        s_GlobalMerge.RememberHandedOut( OverlayToJson( s.overlay ) );
         return s;
     }
 
@@ -1788,18 +1872,37 @@ namespace gamescope::config
     // owns the pointers (SelectProfile & co. do), so a panel's stale copy
     // can never overwrite them -- the same "don't clobber a field you don't
     // own" rule the old routed write applied to `overlay` itself.
-    void EnqueueGlobalWrite( Settings settings )
+    //
+    // And since 2026-09-07 the same rule INSIDE `overlay`: the caller's
+    // copy is merged onto the mirror one field at a time (s_GlobalMerge --
+    // see the CallerEditMerge comment for the judgement and the measured
+    // clobber this replaces), so a panel only contributes the fields it
+    // actually changed.
+    namespace
     {
-        EnsureGlobalLoaded();
-        s_Overlay = settings.overlay;
-        EnqueueGlobalFromMirror();
+        void MergeOverlayFromCaller( const void *pCaller, const OverlaySettings &overlay )
+        {
+            EnsureGlobalLoaded();
+            const nlohmann::json mirror = OverlayToJson( s_Overlay );
+            const nlohmann::json merged = s_GlobalMerge.Merge( pCaller, mirror, OverlayToJson( overlay ) );
+            if ( merged != mirror )
+            {
+                nlohmann::json jDoc = nlohmann::json::object();
+                jDoc[ "overlay" ] = merged;
+                s_Overlay = SettingsFromJson( jDoc ).overlay;
+            }
+            EnqueueGlobalFromMirror();
+        }
+    }
+
+    void EnqueueGlobalWrite( const Settings &settings )
+    {
+        MergeOverlayFromCaller( &settings, settings.overlay );
     }
 
     void EnqueueOverlayWrite( const OverlaySettings &overlay )
     {
-        EnsureGlobalLoaded();
-        s_Overlay = overlay;
-        EnqueueGlobalFromMirror();
+        MergeOverlayFromCaller( &overlay, overlay );
     }
 
     void EnqueueGeometryWrite( const std::string &sPanelKey, const PanelGeometry &geometry )
@@ -1920,20 +2023,11 @@ namespace gamescope::config
         EnsureGlobalLoaded();
         s.overlay = s_Overlay;
 
-        // Remember what went out, per section, so a later routed write can
-        // tell a loaded copy from an edit (see s_HandedOut). Deduplicated
-        // and bounded; a bump clears it.
-        const nlohmann::json sections = SectionsToJson( s );
-        for ( auto it = sections.begin(); it != sections.end(); ++it )
-        {
-            std::vector<std::string> &v = s_HandedOut[ it.key() ];
-            const std::string sDump = it->dump();
-            if ( std::find( v.begin(), v.end(), sDump ) != v.end() )
-                continue;
-            if ( v.size() >= kMaxHandedOutPerSection )
-                v.erase( v.begin() );
-            v.push_back( sDump );
-        }
+        // Remember what went out -- per section for the routed write, per
+        // overlay field for the global one -- so a later write can tell a
+        // loaded copy from an edit (see CallerEditMerge). A bump clears it.
+        s_RoutedMerge.RememberHandedOut( SectionsToJson( s ) );
+        s_GlobalMerge.RememberHandedOut( OverlayToJson( s.overlay ) );
         return s;
     }
 
@@ -1987,7 +2081,7 @@ namespace gamescope::config
     {
         ResolveSession();
 
-        // The merge (see s_CallerBase): start from the mirror's current
+        // The merge (see CallerEditMerge): start from the mirror's current
         // sections and take from the caller only what the caller changed.
         const nlohmann::json caller = SectionsToJson( settings );
         std::optional<Settings> oCur = ProfileSettingsNow( *s_oSessionProfile );
@@ -1995,36 +2089,12 @@ namespace gamescope::config
         {
             // Nothing to merge against (no mirror, no readable file): the
             // caller's struct is the whole truth, as before.
-            s_CallerBase[ &settings ] = caller;
+            s_RoutedMerge.bases[ &settings ] = caller;
             EnqueueProfileWrite( s_SessionMeta, settings );
             return;
         }
 
-        nlohmann::json out = SectionsToJson( *oCur );
-        const auto itBase = s_CallerBase.find( &settings );
-        for ( auto it = caller.begin(); it != caller.end(); ++it )
-        {
-            const std::string &sSection = it.key();
-            if ( out.contains( sSection ) && out[ sSection ] == *it )
-                continue; // same as the mirror: nothing to decide
-            bool bCallerChanged;
-            if ( itBase != s_CallerBase.end() )
-            {
-                const nlohmann::json &base = itBase->second;
-                bCallerChanged = !( base.contains( sSection ) && base[ sSection ] == *it );
-            }
-            else
-            {
-                const auto itHanded = s_HandedOut.find( sSection );
-                const std::string sDump = it->dump();
-                bCallerChanged = itHanded == s_HandedOut.end() ||
-                    std::find( itHanded->second.begin(), itHanded->second.end(), sDump ) == itHanded->second.end();
-            }
-            if ( bCallerChanged )
-                out[ sSection ] = *it;
-        }
-        s_CallerBase[ &settings ] = caller;
-
+        const nlohmann::json out = s_RoutedMerge.Merge( &settings, SectionsToJson( *oCur ), caller );
         Settings merged = SettingsFromJson( out );
         merged.overlay = settings.overlay; // ignored by the profile write either way
         EnqueueProfileWrite( s_SessionMeta, merged );

@@ -364,7 +364,8 @@ dynamic-refresh atom — not a disabled copy of this area.
 
 ## Phase B — persistence
 
-Game resolution and refresh survive a restart; there is nothing else in the area to persist.
+Game resolution and refresh survive a restart, and so does the Custom steppers' **Lock
+aspect ratio** switch (2026-09-07); there is nothing else in the area to persist.
 
 - **Write-back**: `ApplyNestedMode()` in `PanelDisplay.cpp` — the single write point for all
   three live values — also writes `GamescopeSettings::nested_width/height/refresh_hz` into the
@@ -379,6 +380,34 @@ Game resolution and refresh survive a restart; there is nothing else in the area
   `nested_refresh_hz` is nonzero. This runs before the getopt loop in `main()`, so an explicit
   CLI `-w`/`-h`/`-r` overwrites it unconditionally and always wins — the ordering is not
   incidental, it is why this function is called where it is.
+
+### Lock aspect ratio is persisted (`gamescope.nested_lock_aspect`, 2026-09-07)
+
+`scripts/settings-audit.sh` found `display.resolution.width.lock_aspect` to be the one
+registered row in the whole overlay with **no config field at all** — a file-static
+`s_bLockAspect` in `PanelDisplay.cpp`, session-only by construction, so it silently came
+back on at every launch.
+
+`Decision: persist it,` as `GamescopeSettings::nested_lock_aspect` (default `true`), beside
+the size it constrains. The argument for leaving it session-only is that it is a UI
+convenience rather than a display setting — it changes how the two steppers *behave*, not
+what the display does. The argument that won: the user cannot tell those apart from the
+outside. It is a switch in the settings overlay, in the same row as the size, drawn beside
+values that all persist; a switch that quietly resets every launch reads as a bug, not as a
+category distinction. Cost is one bool in the schema and one already-existing sparse-diff
+key, against a row that would otherwise have to be re-set every session by anyone who wants
+the axes independent.
+
+`What is NOT persisted:` the captured reference pair (`s_nLockRefWidth/Height`) the ratio is
+derived from. That stays session-local and is re-derived lazily on the first edit after a
+launch (`EnsureLockedAspectReference()`, which fires because `PickStillLive()` is false in a
+fresh session) — from the *persisted* size, which is the pair on screen, which is exactly
+what the switch's own rule says the locked ratio should be. Storing a ratio as well would
+have added a second source of truth for a number that is always recoverable from the first.
+
+`Pinned by:` `tests/test_config.cpp`'s *"gamescope.nested_lock_aspect round-trips and
+defaults to on"*, and the audit's own row (`results-after-fix.txt`: `on-disk` and
+`survives-restart` OK in all three situations, where before it changed nothing on disk).
 
 ## Related
 

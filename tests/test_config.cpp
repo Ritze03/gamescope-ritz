@@ -655,6 +655,135 @@ TEST_CASE( "EnqueueGeometryWrite saves one panel's geometry without clobbering a
     REQUIRE( final_.overlay.panel_geometry.at( "audio" ).w == 440.0f );
 }
 
+// ---- settings-audit 2026-09-07 item 1: the global-section per-field merge ----
+
+TEST_CASE( "a second writer with a stale copy cannot revert another writer's global-section field", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // Two panels, two long-lived copies of the SAME `overlay` object:
+    // PanelConfig.cpp's s_GeneralSettings (Appearance + the Profiles
+    // filter) and PanelCursor.cpp's s_Settings. Distinct objects, which is
+    // exactly what identifies the caller to the merge -- each panel passes
+    // its own file-static struct.
+    Settings appearance = LoadGlobal();
+    Settings cursor     = LoadGlobal();   // loaded now; goes stale below
+
+    // The Appearance area edits its own fields.
+    appearance.overlay.accent_hue = 255.0f;
+    appearance.overlay.display_scale = 1.05f;
+    appearance.overlay.background_darkening = 0.85f;
+    appearance.overlay.profiles_filter_other_games = false;
+    EnqueueGlobalWrite( appearance );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().overlay.accent_hue == 255.0f );
+
+    // The Cursor area now saves ONE field from a copy that still holds the
+    // pre-edit hue, scale, darkening and filter. Measured before the merge
+    // (settings-audit 2026-09-07): this single write put nine Appearance/
+    // Profiles fields back on disk, in all three routing situations.
+    cursor.overlay.cursor_scale = 0.9f;
+    EnqueueGlobalWrite( cursor );
+    FlushPendingWrites();
+
+    Settings after = LoadGlobal();
+    REQUIRE( after.overlay.cursor_scale == 0.9f );            // the Cursor edit landed
+    REQUIRE( after.overlay.accent_hue == 255.0f );            // and reverted nothing
+    REQUIRE( after.overlay.display_scale == 1.05f );
+    REQUIRE( after.overlay.background_darkening == 0.85f );
+    REQUIRE_FALSE( after.overlay.profiles_filter_other_games );
+
+    // Symmetric in the other direction: the Appearance copy is now the
+    // stale one (it has never seen cursor_scale = 0.9).
+    appearance.overlay.background_blur = 0.95f;
+    EnqueueGlobalWrite( appearance );
+    FlushPendingWrites();
+
+    Settings final2 = LoadGlobal();
+    REQUIRE( final2.overlay.background_blur == 0.95f );       // the Appearance edit landed
+    REQUIRE( final2.overlay.cursor_scale == 0.9f );           // and reverted nothing
+
+    // A deliberate revert is still a write: setting a field BACK to the
+    // value this caller last wrote it to must reach disk, or the merge
+    // would have turned "undo my own edit" into a no-op.
+    appearance.overlay.accent_hue = 218.0f;
+    EnqueueGlobalWrite( appearance );
+    FlushPendingWrites();
+    REQUIRE( LoadGlobal().overlay.accent_hue == 218.0f );
+    REQUIRE( LoadGlobal().overlay.cursor_scale == 0.9f );
+}
+
+TEST_CASE( "EnqueueOverlayWrite merges per field too, against its own caller identity", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+
+    // Shell.cpp/Chrome.cpp write the bare OverlaySettings rather than a
+    // whole Settings; that path is keyed by the OverlaySettings' address
+    // and must obey the same rule.
+    Settings appearance = LoadGlobal();
+    OverlaySettings other = LoadGlobal().overlay;
+
+    appearance.overlay.accent_hue = 300.0f;
+    EnqueueGlobalWrite( appearance );
+    FlushPendingWrites();
+
+    other.notification_scale = 1.05f;   // stale for accent_hue
+    EnqueueOverlayWrite( other );
+    FlushPendingWrites();
+
+    Settings after = LoadGlobal();
+    REQUIRE( after.overlay.notification_scale == 1.05f );
+    REQUIRE( after.overlay.accent_hue == 300.0f );
+}
+
+TEST_CASE( "gamescope.force_grab_cursor round-trips and defaults to off", "[config]" )
+{
+    // settings-audit 2026-09-07 item 2: "Force grab cursor" was saved but
+    // never seeded at startup, so a stored `true` read as off after a
+    // relaunch until some Display row happened to reload the area and
+    // re-push it. The fix is main.cpp's apply_ritz_config_to_startup_state()
+    // assigning g_bForceRelativeMouse from this field, beside the
+    // g_bForceWindowsFullscreenStartup seed and before BOTH getopt loops,
+    // so an explicit --force-grab-cursor still wins.
+    //
+    // Only the config-layer half is pinned here, for the same reason the
+    // force_windows_fullscreen case above states: main.cpp is not linked
+    // into this binary and there is no argv or CLI concept at this layer.
+    // The seed itself is measured end-to-end by scripts/settings-audit.sh's
+    // survives-restart column on `display.force_grab_cursor`, which
+    // relaunches the real binary in all three routing situations.
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE_FALSE( s.gamescope.force_grab_cursor );
+
+    s.gamescope.force_grab_cursor = true;
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.gamescope.force_grab_cursor );
+}
+
+TEST_CASE( "gamescope.nested_lock_aspect round-trips and defaults to on", "[config]" )
+{
+    // settings-audit 2026-09-07 item 3: the Custom size steppers' "Lock
+    // aspect ratio" switch used to be a file-static bool, so it was the one
+    // registered row with no config field at all. It is persisted beside
+    // the size it constrains (ConfigSchema.h's own comment for why).
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE( s.gamescope.nested_lock_aspect );
+
+    s.gamescope.nested_lock_aspect = false;
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE_FALSE( loaded.gamescope.nested_lock_aspect );
+}
+
 // =========================================================================
 //  An existing config must load with every value intact
 // =========================================================================
