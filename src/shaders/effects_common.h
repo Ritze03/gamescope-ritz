@@ -25,14 +25,16 @@ uniform effects_t {
     float u_abTarget;     // target luminance, 0.1..0.9
     float u_abUp;         // brighten time constant, seconds
     float u_abDown;       // darken time constant, seconds
-    float u_abMin;        // min gain, 0.5..1.0
-    float u_abMax;        // max gain, 1.0..2.0
+    float u_abMin;        // min gain, 0.3..1.0
+    float u_abMax;        // max gain, 1.0..4.0
     float u_abStrength;   // dry/wet mix, 0.0..1.0
     float u_abDt;         // seconds since the previous effects dispatch, host-clamped
+    float u_abLocal;      // Local adaptation, 0.0..1.0 (Dynamic only; 0 = the global curve)
 };
 
-// The history texture is HISTORY_COUNT x 1 texels, one smoothed statistic
-// per texel (each a float packed into RGBA8 -- see history_pack() below).
+// ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
+// statistic per texel (each a float packed into RGBA8 -- see history_pack()
+// below). The rows under it are the local luminance map, see AB_LOCAL_* .
 // Whole-image mode reads only HISTORY_MEAN; Dynamic mode reads the three
 // percentiles. All four are measured and smoothed every frame the pre-pass
 // runs, whatever the mode, so a mode switch needs no re-convergence.
@@ -46,6 +48,38 @@ const int HISTORY_P98   = 3;   // 98th percentile (highlights)
 // next to smoothed and tell sampling noise from adaptation dynamics.
 const int HISTORY_RAW   = 4;
 const int HISTORY_COUNT = 8;
+
+// ---- The local luminance map (Local adaptation, 2026-09-07) ----
+//
+// Row 0 of the history texture is the eight statistics above. Rows
+// AB_LOCAL_ROW .. AB_LOCAL_ROW + AB_LOCAL_GRID - 1 are an
+// AB_LOCAL_GRID x AB_LOCAL_GRID grid of SMOOTHED local mean luminances --
+// one texel per cell, packed the same way, so the whole thing is still one
+// texture, one storage target and one sampler slot. Cell (cx, cy) lives at
+// texel (cx, AB_LOCAL_ROW + cy) and covers image rect
+// [cx/GRID, (cx+1)/GRID) x [cy/GRID, (cy+1)/GRID).
+//
+// `Why 16x16, and why exactly that:` the measure pass is 16x16 threads and
+// thread (tx, ty) already owns the contiguous 8x8 block of the 128x128 tap
+// grid covering exactly that image cell, so its per-thread tap sum -- which
+// it computes anyway, for the mean's tree reduction -- IS the cell's mean.
+// The map therefore costs ZERO extra taps and zero extra fetches in the
+// measure pass. A finer grid (the 32x18 first sketched) would need its own
+// tap layout and would make the operator's radius smaller, which is the
+// wrong direction: coarse is what keeps halos away (shader-effects.md).
+//
+// `Why arithmetic mean of the ENCODED luma, not a log mean:` the whole
+// pre-pass works on gamma-encoded code values on purpose (see
+// cs_effects_layer0.comp's header), and an encoded value is already
+// perceptually spaced -- taking a log of it would apply a second
+// perceptual curve. The global HISTORY_MEAN is the arithmetic mean of the
+// same quantity, so local/global is a pure ratio of like for like.
+const int AB_LOCAL_GRID = 16;
+const int AB_LOCAL_ROW  = 1;
+// The whole history texture. Mirrored by kEffectsHistoryWidth/Height in
+// rendervulkan.cpp -- keep the two in step.
+const int HISTORY_TEX_W = 16;   // max(HISTORY_COUNT, AB_LOCAL_GRID)
+const int HISTORY_TEX_H = AB_LOCAL_ROW + AB_LOCAL_GRID;
 
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
@@ -134,9 +168,38 @@ float history_unpack(vec4 t)
     return uintBitsToFloat(packUnorm4x8(t));
 }
 
+float history_read_at(ivec2 texel)
+{
+    return history_unpack(texelFetch(s_samplers[VKR_EFFECTS_HISTORY_SLOT], texel, 0));
+}
+
 float history_read(int which)
 {
-    return history_unpack(texelFetch(s_samplers[VKR_EFFECTS_HISTORY_SLOT], ivec2(which, 0), 0));
+    return history_read_at(ivec2(which, 0));
+}
+
+// The local map, sampled BILINEARLY at normalised image position uv.
+// Bilinear by hand, on the UNPACKED floats: the texels are float bits
+// spread over four UNORM8 lanes (history_pack above), so hardware
+// filtering would interpolate the bytes and yield noise. Four fetches of a
+// 16x17 texture that is fully resident in cache, plus three mixes.
+//
+// Clamp-to-edge at the border: the half-cell outside the outermost cell
+// centres reads that cell, which is what a "local mean around here" should
+// do at the image edge (an extrapolation there would push the gain the
+// wrong way in exactly the corner a HUD or a letterbox occupies).
+float ab_local_sample(vec2 uv)
+{
+    vec2 g = clamp(clamp(uv, 0.0, 1.0) * float(AB_LOCAL_GRID) - 0.5,
+                   0.0, float(AB_LOCAL_GRID - 1));
+    ivec2 i0 = ivec2(floor(g));
+    ivec2 i1 = min(i0 + ivec2(1), ivec2(AB_LOCAL_GRID - 1));
+    vec2 f = g - vec2(i0);
+    float a = history_read_at(ivec2(i0.x, AB_LOCAL_ROW + i0.y));
+    float b = history_read_at(ivec2(i1.x, AB_LOCAL_ROW + i0.y));
+    float c = history_read_at(ivec2(i0.x, AB_LOCAL_ROW + i1.y));
+    float d = history_read_at(ivec2(i1.x, AB_LOCAL_ROW + i1.y));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
 #endif // EFFECTS_COMMON_H_

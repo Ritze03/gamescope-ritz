@@ -91,11 +91,30 @@ void main()
         {
             // Dynamic: effects_curve.h's levels-gain + median gamma + soft
             // shoulder, per channel, from the smoothed percentiles. The two
-            // parameters are the same for every pixel of the frame -- a
-            // couple of logs per invocation is cheaper than another texel
-            // of history to carry them in.
-            float gain  = ab_dyn_gain(history_read(HISTORY_P98), u_abMin, u_abMax);
-            float gamma = ab_dyn_gamma(history_read(HISTORY_P2), history_read(HISTORY_P50),
+            // parameters were already recomputed per invocation rather than
+            // carried in a texel -- a couple of logs is cheaper than another
+            // round trip -- which is what makes LOCAL adaptation nearly
+            // free below: the same two calls, different inputs.
+            //
+            // LOCAL ADAPTATION. A global curve cannot serve a frame that is
+            // half dark interior and half bright sky: lifting the interior
+            // blows the sky, protecting the sky leaves the interior black.
+            // So each pixel's curve is fitted to ITS OWN neighbourhood --
+            // the frame's histogram shifted by how bright this part of the
+            // frame is relative to the whole (effects_curve.h's
+            // ab_local_shift(), the measure pass's 16x16 map). `rEff` is
+            // exactly 1.0 when the strength is 0 or the neighbourhood is
+            // average, so this is bit-for-bit the old global path in both
+            // cases; the branch only skips the four map fetches.
+            float rEff = 1.0;
+            if (u_abLocal > 0.0)
+            {
+                float local = ab_local_sample((vec2(pos) + 0.5) / vec2(size));
+                rEff = ab_local_shift(local, history_read(HISTORY_MEAN), u_abLocal);
+            }
+            float gain  = ab_dyn_gain(history_read(HISTORY_P98) * rEff, u_abMin, u_abMax);
+            float gamma = ab_dyn_gamma(history_read(HISTORY_P2) * rEff,
+                                       history_read(HISTORY_P50) * rEff,
                                        gain, u_abTarget, u_abMin);
             vec3 graded = vec3(ab_dyn_curve(c.r, gain, gamma),
                                ab_dyn_curve(c.g, gain, gamma),

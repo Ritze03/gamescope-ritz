@@ -76,6 +76,12 @@ const float AB_DYN_KNEE      = 0.7f;   // shoulder starts here (encoded)
 const float AB_DYN_GAMMA_MIN = 0.5f;   // strongest lift
 const float AB_DYN_GAMMA_MAX = 1.5f;   // strongest darkening
 
+// LOCAL ADAPTATION (2026-09-07). How far a cell's own level may be treated
+// as differing from the frame's. See ab_local_ratio() below for the whole
+// argument; these are the only two new constants the operator introduces.
+const float AB_LOCAL_RATIO_MIN = 0.25f;
+const float AB_LOCAL_RATIO_MAX = 4.0f;
+
 // Step 1. Levels gain from the smoothed 98th percentile.
 EC_FUNC float ab_dyn_gain( float p98, float minGain, float maxGain )
 {
@@ -100,6 +106,68 @@ EC_FUNC float ab_dyn_gamma( float p2, float p50, float gain, float target, float
 		}
 	}
 	return g;
+}
+
+// LOCAL ADAPTATION, step 0 (2026-09-07). One number per pixel: how bright
+// THIS part of the frame is relative to the frame as a whole, blended
+// toward 1 by the user's Local adaptation strength.
+//
+//   r = clamp(local_mean / global_mean, RATIO_MIN, RATIO_MAX)
+//   r_eff = mix(1, r, strength)
+//
+// The apply pass then runs the SAME ab_dyn_gain / ab_dyn_gamma above on
+// p98 * r_eff, p50 * r_eff, p2 * r_eff -- i.e. on the frame's own histogram
+// SHIFTED to this neighbourhood's level. That is the whole operator:
+//
+//   * `Why a shift of the global histogram, not a second set of local
+//     statistics:` a 16x16 cell has one number, not a histogram; assuming a
+//     dark corner has the frame's shape at a lower level is the cheapest
+//     assumption that is exactly right when the frame is uniform.
+//   * `Why this is EXACTLY the identity at strength 0:` r_eff is then 1 and
+//     every input to the curve is bit-for-bit what the global path passes.
+//     No "local off" branch is needed for correctness -- the apply pass
+//     branches only to skip the four map fetches.
+//   * `Why the deviation clamp:` r is the only thing that can push a pixel's
+//     curve away from the frame's. Bounding it bounds the halo amplitude
+//     directly, and because ab_dyn_gain() and ab_dyn_gamma() clamp their
+//     own outputs afterwards, a locally-adapted pixel can never leave the
+//     user's [min_gain, max_gain] and [GAMMA_MIN, GAMMA_MAX] -- local
+//     adaptation redistributes inside the user's bounds, it never widens
+//     them. `Why 0.25..4:` two stops each way in encoded terms. Measured on
+//     the 50/50 split scene -- the hardest case the test client has -- the
+//     RAW ratios run 0.21..1.93, so the low clamp does bind there (by a
+//     little) and the high one does not. It binds harmlessly: at 0.25 the
+//     gain it produces is already 3.6, so the user's own max_gain 4.0 takes
+//     over almost immediately after it.
+EC_FUNC float ab_local_ratio( float localMean, float globalMean )
+{
+	float r = clamp( localMean, 0.0f, 1.0f ) / max( globalMean, 0.001f );
+	return clamp( r, AB_LOCAL_RATIO_MIN, AB_LOCAL_RATIO_MAX );
+}
+
+// The blend the apply pass actually uses: r^strength, NOT mix(1, r,
+// strength). Separate from ab_local_ratio() so the "strength 0 is the global
+// path exactly" property is one testable line rather than an inline blend.
+//
+// `Why the geometric blend:` the ratio's whole job is to divide into the
+// white point, so the GAIN it produces goes as 1/r -- and a linear blend of
+// r therefore gives a wildly uneven slider. Measured on the 50/50 split
+// scene at ratio 0.25 (the clamp), linear blend, strengths 0/25/50/75/100 %:
+// the dark half's gain read 0.90 / 1.11 / 1.44 / 2.06 / 3.60 -- three
+// quarters of the effect crammed into the last quarter of the travel. r^s
+// makes it 0.90 / 1.27 / 1.80 / 2.55 / 3.60: an even step in stops per step
+// of the slider (every ratio 1.41), which is what a brightness control
+// should be. Both forms
+// are exactly 1 at s = 0 and exactly r at s = 1; only the middle differs.
+// pow is safe here because ab_local_ratio() has already clamped r away
+// from 0, and r^s for 0 <= s <= 1 always lies between 1 and r, so the
+// deviation clamp still bounds the result.
+EC_FUNC float ab_local_shift( float localMean, float globalMean, float strength )
+{
+	float s = clamp( strength, 0.0f, 1.0f );
+	if ( s <= 0.0f )
+		return 1.0f;
+	return pow( ab_local_ratio( localMean, globalMean ), s );
 }
 
 // Step 3 applied to one channel: gain, gamma, then the shoulder if the

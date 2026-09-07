@@ -155,8 +155,9 @@ measure pass grades its taps with exactly the code the per-pixel pass grades its
 | `float u_vibrancy` | 0..3, 1 neutral |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
-| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six parameters, straight from config (both modes read all six — see the Dynamic section for what each means there) |
+| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six original parameters, straight from config (both modes read all six — see the Dynamic section for what each means there) |
 | `float u_abDt` | seconds since the previous effects dispatch, host-measured and clamped (see Adaptive Brightness) |
+| `float u_abLocal` | Local adaptation, 0..1. **Masked to 0 by the host in Whole image mode** (`EffectsPushData_t`'s constructor) rather than in the shader, so the uniform says exactly what the frame did — which is what `effects_ab_log` prints |
 
 Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
 struct written by `PanelShaders.cpp` and by `main.cpp`'s startup config apply, read by
@@ -266,7 +267,9 @@ below). The sheet row is back to a plain **Switch**, on/off, in the shared **Eff
 `GroupCount` band alongside Vibrancy, Pre-Sharpen and Shadow Control (the pre-request-16
 shape, restored). The mode lives in the Inspector's **Configure** page as the row's own
 first `Param` — a two-way Choice, `Whole image` | `Dynamic` — ahead of the same six
-existing params: `strength`, `target`, `up_speed`, `down_speed`, `min_gain`, `max_gain`.
+existing params: `strength`, `target`, `up_speed`, `down_speed`, `min_gain`, `max_gain` —
+plus, from 2026-09-07, an eighth, `local_strength`
+([Local adaptation](#local-adaptation-local_strength-2026-09-07--one-curve-per-neighbourhood)).
 **Config**: `ReshadeAdaptiveBrightnessSettings` — `enabled` (bool) and `mode`
 (`"whole_image"` | `"dynamic"`, default `whole_image`, an unknown value on disk resolves
 to it) are independent fields, written independently: the Switch's setter only ever
@@ -574,6 +577,240 @@ at 3.9 s (the shoulder holds it near white while the gain is still above 1). The
 EMA's numbers and the 2026-09-07 estimator change did not touch the EMA, so they are the
 same before and after that fix.
 
+#### Does Dynamic actually work above `max_gain` 2.0? (2026-09-07 — measured, yes)
+
+Asked directly (*"Does the adaptive brightness even work above 2.0 gain? Check that."*),
+and answered by sweeping the knob on the dark reference scene rather than by reading the
+code. Dynamic, everything else at the schema defaults, Local adaptation forced to 0 so
+this is the global curve alone; the applied gain is `effects_ab_log`'s, the band values
+are the capture's
+(`build-release/verify-shots/adaptive-local-2026-09-07/dark-maxgain-{1.5,2,3,4}.png`):
+
+| `max_gain` | applied gain | gamma | dark bands 5 / 8 / 12 / 16 / 20 | 240 lights |
+| --- | --- | --- | --- | --- |
+| 1.5 | **1.500** | 0.500 | 44 / 55 / 68 / 78 / 87 | 252 |
+| 2.0 | **2.000** | 0.500 | 50 / 64 / 78 / 90 / 101 | 253 |
+| 3.0 | **3.000** | 0.500 | 62 / 78 / 96 / 111 / 124 | 254 |
+| 4.0 | **4.000** | 0.500 | 71 / 90 / 111 / 128 / 143 | 254 |
+
+**The gain reaches its bound exactly, at every setting, and the picture keeps getting
+brighter past 2.0** — nothing on the path clamps earlier. Checked one by one: `ab_dyn_gain`
+clamps to `[min_gain, max_gain]` and lands *on* `max_gain` here (a 20-code p98 wants
+`0.9 / 0.078` = 11.5, far above any bound); the gamma clamps do not touch the gain; the
+shadow cap only exists for a *darkening* gamma (`g > 1`) and this scene's gamma is 0.5, its
+opposite bound; the shoulder compresses only above the 0.7 knee, and the 240 lights land at
+252–254 rather than clipping; `EffectsPushData_t` passes `flAbMaxGain` through untouched;
+and the panel's own `Range( 1.0f, 4.0f )` is the only ceiling in the system, at 4.0.
+
+**But the returns are square-root, and that is worth knowing.** On any scene dark enough to
+want maximum lift, the gamma is pinned at `GAMMA_MIN` 0.5, so the curve is `(x·G)^0.5` and
+doubling `G` multiplies the output by only **√2**: 50 → 71 for a 2× gain step, not 50 → 100.
+That is the honest shape of "does it work above 2" — it works, and each further stop of Max
+gain buys 41 % rather than 100 %, because the *gamma floor is already saturated*, not because
+anything clamps the gain. Raising `GAMMA_MIN` would be the lever there, and it is deliberately
+not touched (see the constant's note in `effects_curve.h`).
+
+#### Local adaptation (`local_strength`, 2026-09-07) — one curve per neighbourhood
+
+`requests-2026-09-08.md`: *"we need to somehow make it more aggressive/adapt better. It
+doesn't really seem like it can handle a lot of different brightness differences on the
+screen."*
+
+**The diagnosis, confirmed by capture before anything was built.** Everything above is a
+*global* curve: one gain, one gamma, one shoulder for the whole frame. On a frame that is
+half dark interior and half bright sky there is no such curve — lifting the interior blows
+the sky, protecting the sky leaves the interior black. Measured on the new `halfsplit` scene
+(left half the dark scene's 5 / 8 / 12 / 16 / 20 bands, right half the bright scene's
+200 / 215 / 230 / 245 / 255): with Dynamic on and the global curve alone, the frame's p98
+comes from the bright half, the gain settles at **0.90**, and the dark half reads
+**12 / 17 / 23 / 28 / 34** — barely distinguishable from the effect being off
+(`split-off.png` vs `split-local-0.png` in the captures directory are nearly the same
+picture). More aggression in a global curve cannot fix that; it only moves which half is
+wrong.
+
+**The operator.** Three pieces, all inside the two dispatches that already exist:
+
+1. **A 16×16 map of local mean luminance**, written by `cs_effects_measure.comp` into rows
+   1..16 of the same history texture (which grew from 8×1 to 16×17; row 0 is still the
+   statistics). *It costs no taps at all*: the measure pass is 16×16 threads and thread
+   (tx, ty) already owns exactly the 8×8 block of the 128×128 tap grid covering image cell
+   (tx, ty), so the per-thread sum it computes for the mean's tree reduction **is** that
+   cell's mean. `Why the arithmetic mean of the encoded luma and not a log mean:` the pass
+   works in encoded space on purpose and an encoded value is already perceptually spaced —
+   a log of it would apply a second perceptual curve — and `HISTORY_MEAN` is the arithmetic
+   mean of the same quantity, so local ÷ global is a ratio of like for like.
+2. **Smoothing, spatial then temporal.** Spatially, a separable 5-tap binomial blur over
+   that 16×16 grid in shared memory, run at strides 4, 2, 1, 1 (the à-trous trick: a
+   stride-*k* pass costs the same five taps but carries variance *k*²), total variance 22,
+   i.e. **σ ≈ 4.7 of the 16 cells** — getting on for a third of the frame. Temporally, the
+   **same EMA with the same asymmetric `up_speed`/`down_speed`** every other statistic gets,
+   per cell.
+3. **A per-pixel shift of the frame's own histogram.** The apply pass samples the map
+   bilinearly (by hand, on the unpacked floats — the texels are float bits spread over four
+   UNORM8 lanes, so hardware filtering would interpolate the *bytes*), forms
+   `r = clamp(local / global_mean, 0.25, 4)`, blends it as `r_eff = r^strength`, and feeds
+   `p98·r_eff`, `p50·r_eff`, `p2·r_eff` into the **same** `ab_dyn_gain` / `ab_dyn_gamma` /
+   `ab_dyn_curve` as before. Nothing about the curve changed.
+
+```
+r      = clamp(local_mean / mean, 0.25, 4.0)      // effects_curve.h, ab_local_ratio
+r_eff  = r ^ local_strength                       //                  ab_local_shift
+gain   = ab_dyn_gain (p98 * r_eff, min_gain, max_gain)
+gamma  = ab_dyn_gamma(p2 * r_eff, p50 * r_eff, gain, target, min_gain)
+```
+
+- `Why shift the global histogram rather than measure a local one:` a 16×16 cell holds one
+  number, not a histogram. "This corner has the frame's shape at a lower level" is the
+  cheapest assumption available and it is *exactly right* when the frame is uniform.
+- **Strength 0 is the old behaviour, exactly.** `r_eff` is then the literal 1.0 and
+  `p98 * 1.0` is exact for every finite float, so the same bits reach the same functions.
+  The apply pass's `if (u_abLocal > 0.0)` skips only the four map fetches; it is not what
+  makes the identity hold. Pinned in `tests/test_effects_curve.cpp`.
+- **The user's bounds are never widened.** `ab_dyn_gain` still clamps to
+  `[min_gain, max_gain]` and `ab_dyn_gamma` to `[0.5, 1.5]` *after* the shift, so a
+  locally-adapted pixel can never leave the range the user set — local adaptation
+  redistributes gain **inside** those bounds. Asserted over every scene × bound × ratio ×
+  strength combination on the CPU.
+- `Why r^strength and not mix(1, r, strength):` the ratio divides into the white point, so
+  the gain goes as 1/r and a linear blend gives a wildly uneven slider. Measured on the
+  split scene (r at its 0.25 clamp), strengths 0 / 25 / 50 / 75 / 100 %: linear gave gains
+  **0.90 / 1.11 / 1.44 / 2.06 / 3.60** — three quarters of the effect in the last quarter
+  of the travel — and `r^s` gives **0.90 / 1.27 / 1.80 / 2.55 / 3.60**, every step a
+  constant 1.41× (half a stop). Both are exactly 1 at 0 and exactly *r* at 1; only the
+  middle differs.
+
+##### Halo control: the make-or-break, and what the radius actually buys
+
+A local tone operator's signature artefact is a bright rim around a dark object on a bright
+field. Two scenes were added to measure it rather than argue about it: **`halobox`** (a flat
+200 field with one flat 10 box, 320×320 — a quarter of the frame across) and **`haloinv`**
+(the inverse, a 220 box on a 15 field), sampled along a line straight out from the box's
+right edge. This is a deliberately adversarial case: a hard, straight, high-contrast edge on
+a perfectly flat field is the worst thing a local operator can be shown.
+
+**There is no ring, at any strength, by construction and by measurement.** The map is a
+non-negative, symmetric, unimodal blur of the image, and such a kernel maps a step to a
+*monotone* ramp — it cannot overshoot. Every profile below is monotone out from the edge;
+`effects-regression.sh` asserts that at every strength, precisely so that a later
+"improvement" (a sharper map, an edge-aware filter) that reintroduces a rim fails loudly.
+
+What *does* exist is a broad gradient, and its amplitude is what the radius buys.
+`halobox`, at Local adaptation 100 %, field value at 12 px from the box edge vs 460 px away:
+
+| blur σ (cells) | beside the box | far field | amplitude | what the capture shows |
+| --- | --- | --- | --- | --- |
+| 1.4 (first attempt) | 246 | 189 | **+57** | an unmistakable white glow ringing the box |
+| 2.2 | 243 | 190 | +53 | barely better — see below |
+| **4.7 (shipped)** | **219** | **204** | **+15** | a faint frame-wide shading; no glow |
+| 4.7, at the 50 % default | 216 | 208 | **+8** | not visible on the flat field |
+
+`haloinv` mirrors it: −56 codes at σ 1.4, **−14** at σ 4.7 / 100 %, **−7** at the default.
+
+`Why widening from 1.4 to 2.2 did almost nothing, and 4.7 did everything:` right *at* a step
+edge a blurred step always sits halfway between the two sides, whatever the σ — widening the
+kernel widens the ramp without lowering it. What changes the amplitude is making the kernel
+much **larger than the object**, so the object contributes its share of the kernel's *area*
+instead of half a step. A 4-cell box inside a σ-4.7 kernel is a small fraction of it.
+
+`Why that costs the feature almost nothing:` the case this exists for is *big*. A
+half-dark/half-bright frame is an 8-cell feature, and a Gaussian this wide still passes
+~90 % of an 8-cell step while passing ~30 % of a 4-cell box. Measured, on the split scene at
+100 %: widening 1.4 → 4.7 cost the dark half's lift **34 → 28 codes** (a fifth) and removed
+**three quarters** of the halo. The coarse 16×16 grid and this blur are the same decision
+twice — the operator is deliberately incapable of resolving an object's outline, and just
+capable of resolving which half of the screen you are in. That asymmetry *is* the design,
+and it is why the slider's full 0..100 % range is shippable rather than needing a cap.
+
+##### Measured: the split scene, off vs on
+
+`scripts/effects-regression.sh`'s `halfsplit`, Dynamic, defaults, strength 1.0. "Local 0" is
+the global curve — the same numbers this feature exists to fix. Captures:
+`build-release/verify-shots/adaptive-local-2026-09-07/split-local-{0,50,100}.png`.
+
+| Local adaptation | dark half 5 / 8 / 12 / 16 / 20 | bright half 200 / 215 / 230 / 245 / 255 | bright half's spread |
+| --- | --- | --- | --- |
+| effect off | 5 / 8 / 12 / 16 / 20 | 200 / 215 / 230 / 245 / 255 | 55 |
+| 0 % (global curve) | 12 / 17 / 23 / 28 / 34 | 195 / 207 / 217 / 228 / 235 | 40 |
+| 25 % | 14 / 20 / 27 / 34 / 39 | 182 / 191 / 199 / 207 / 212 | 30 |
+| **50 % (default)** | **18 / 25 / 33 / 39 / 46** | **169 / 176 / 182 / 187 / 191** | **22** |
+| 75 % | 22 / 31 / 39 / 47 / 53 | 157 / 163 / 166 / 170 / 172 | 15 |
+| 100 % | 28 / 37 / 47 / 55 / 62 | 146 / 150 / 152 / 154 / 155 | 8 |
+
+Both halves are serviceable from 50 % on: the dark half's darkest band goes from 12 (a value
+that reads as black) to 18, and its top band from 34 to 46, while the bright half comes down
+from "near white" to a light grey that still has 22 codes of internal separation across its
+five bands. The `effects_ab_log` readback on the same frame shows what the operator is
+actually doing: the smoothed map spans **24.7 .. 228.1 codes** and the per-pixel gain it
+produces spans **3.600 .. 0.476** — a 7.6× range across one frame, entirely inside the user's
+own `[0.3, 4.0]`.
+
+**`Why the default is 50 % and not 100 %`**, decided from those captures and not from taste:
+the second failure mode of any local operator is the opposite of a halo — pushing every
+neighbourhood toward its own target flattens the contrast *inside* each one, and the last
+column shows exactly that. At 100 % the bright half's five bands collapse to 8 codes apart
+and the picture reads flat and grey; at 50 % they keep 22, more than half of what the global
+curve left them, while the dark half is already visibly readable. 50 % is also where the
+halo amplitude on the adversarial scene (+8 / −7 codes) is below what shows on a flat field.
+100 % remains available and remains ring-free; it is a stronger look, not a broken one.
+`effects-regression.sh` guards the collapse directly ("the bright half keeps ≥ 6 counts of
+internal contrast").
+
+##### Stability: it does not reintroduce the pulse
+
+The [2026-09-07 pulse fix](#the-pulse-rank-cuts-on-a-bimodal-histogram-2026-09-07) set the
+standard — a still frame must produce a *constant* output, peak-to-peak zero — and the local
+map is held to it, at three strengths, by `stability-static` in the gate:
+
+| Local adaptation | raw p98 p2p | smoothed p98 p2p | gain p2p | output pixel p2p |
+| --- | --- | --- | --- | --- |
+| 0 % | 0 | 0.038 codes | 0.00093 | **0** |
+| 50 % | 0 | 0.000 codes | 0.000010 | **0** |
+| 100 % | 0 | 0.000 codes | 0.000000 | **0** |
+
+Under a **pan** (the same `--periodic` scene, whose *global* statistics are constant by
+construction) the probe cell's gain does move: p2p **0.009 / 0.072 / 0.103** at 0 / 50 /
+100 % over 300 frames. That is reported, not asserted, and it is the operator working
+rather than a pulse: `--periodic` fixes the frame's histogram, not its *layout*, so a cell
+genuinely sees different content as the texture scrolls past and its gain is supposed to
+follow. The movement is a ~5 % drift over five seconds with the EMA's own time constant, not
+a frame-to-frame flicker — and the still-frame column above is exactly zero, which is the
+test that would catch a real oscillation.
+
+##### Cost, stated plainly
+
+- **Measure pass**: zero extra taps and zero extra texture fetches — the cell means are the
+  per-thread sums it already computes. Added: four blur passes (each two half-passes of five
+  shared-memory reads per thread, 16 barriers in total) and one `imageStore` per thread.
+- **Apply pass**, and only when Local adaptation > 0: **four extra `texelFetch`es** of a
+  16×17 texture per pixel, plus three `mix`es and one `pow`. The two `log`s were already
+  per-pixel (the gain and gamma were never frame constants here), so the curve maths costs
+  nothing new — it just gets different inputs.
+- **Memory**: the history texture 8×1 → 16×17 `ABGR8888` (32 bytes → 1088), and the
+  `effects_ab_log` staging copy the same.
+- **There is still no GPU-timestamp instrumentation in `vulkan_composite()`**, so there is
+  no measured microsecond figure for any of this, and none is claimed. What can be said is
+  that the whole pre-pass is sub-millisecond on this desktop's GPU and that the added work
+  is a few hundred shared-memory reads in one workgroup plus four cached fetches per pixel.
+
+##### The white point (0.9) and the knee (0.7), reconsidered
+
+The standing *"some things are still overblown"* complaint pointed at these two constants,
+and they were re-examined against the new measurements. **Local adaptation makes them
+materially less critical, and neither was changed.** The reason the bright reference scene
+compresses hard is not the white point — it is the *global* gamma riding `GAMMA_MAX` 1.5
+(see "Why min_gain 0.3, max_gain 4.0" above), and a local operator attacks that at its
+source: a bright region now gets its own `r > 1`, its own lower gain and its own gamma
+instead of one compromise for the frame. On the split scene the bright half's five bands
+keep 22 codes of separation at the default where the global curve left them 40 and a
+*stronger* global compression would have left them fewer.
+
+Where a highlight control would still help is the case local adaptation cannot reach: a
+frame that is uniformly bright, where every neighbourhood has the same level and `r ≡ 1` by
+definition, so the local path is the global path. **A "Highlight headroom" control (the knee,
+or the white point, exposed) is still worth having and is recommended — but not built here**,
+and deliberately not built in the same change as the local operator, so the two can be judged
+against each other rather than as one indivisible "it looks different now".
+
 #### The pulse: rank cuts on a bimodal histogram (2026-09-07)
 
 `requests-2026-09-08.md` item 6: *"For the dynamic mode, sometimes the whole image
@@ -700,14 +937,20 @@ smooth. The first dispatch passes `0`.
 
 #### The history texture — persistence as a contract, not luck
 
-`g_output.effectsHistory` is an **8×1 `ABGR8888` storage+sampled texture** (one texel per
-smoothed statistic — `HISTORY_MEAN`, `_P2`, `_P50`, `_P98` — plus, from `HISTORY_RAW` = 4,
-the same four unsmoothed, for the readback only; `kEffectsHistoryTexels` on the host
-mirrors the shader's `HISTORY_COUNT`), created once by `update_effects_history()` and kept
+`g_output.effectsHistory` is a **16×17 `ABGR8888` storage+sampled texture**.
+**Row 0** is one texel per smoothed statistic — `HISTORY_MEAN`, `_P2`, `_P50`, `_P98` —
+plus, from `HISTORY_RAW` = 4, the same four unsmoothed, for the readback only.
+**Rows 1..16** are Local adaptation's 16×16 map of smoothed local mean luminances
+(`AB_LOCAL_ROW`, `AB_LOCAL_GRID`); `kEffectsHistoryWidth`/`Height` on the host mirror the
+shader's `HISTORY_TEX_W`/`_H`. It is created once by `update_effects_history()` and kept
 for the life of the output (it does not depend on the game's size, and its contents *are*
 the effect's state — so, unlike the `.fx`, a resolution change does not reset it). It was
 1×1 until Dynamic mode (2026-09-06) needed the percentiles, 4×1 until the pulse
-investigation (2026-09-07) wanted measured next to smoothed.
+investigation (2026-09-07) wanted measured next to smoothed, and 8×1 until Local adaptation
+the same day. `Why the map rides in the same texture:` `dst` in `descriptor_set.h` is a
+single `rgba8` target and `dispatch()` binds one, so a second storage image would mean
+teaching the shared descriptor set a second target for the sake of one pass — where one
+extra sampler-slot-free texture row costs nothing and keeps both dispatches on one bind.
 
 **Storage format — RGBA8 bytes, not R32F.** Each float is spread bit-for-bit over the four
 8-bit channels of its texel (`history_pack` = `unpackUnorm4x8(floatBitsToUint(v))`, `history_unpack` =
@@ -731,8 +974,10 @@ measure dispatch it is sampler slot `VKR_EFFECTS_HISTORY_SLOT` (= 1) *and* the s
 target, and `dispatch()` runs `prepareSrcImage()` (tracks it with `discarded = false`) before
 `prepareDestImage()` (returns early for a tracked image). So the barrier for it is either
 nothing (steady state) or `GENERAL → GENERAL`; never `UNDEFINED`. `Why self-sampling is
-safe:` only invocation 0 touches the texels, and its fetches precede its stores in program
-order; the layout is `GENERAL` for both bindings. The `.fx` did the same.
+safe:` row 0's texels are touched by invocation 0 alone, and its fetches precede its stores
+in program order; every *other* invocation touches exactly one local-map texel, its own,
+and reads it before writing it, so no two invocations address the same texel either way.
+The layout is `GENERAL` for both bindings. The `.fx` did the same.
 
 The one legitimate `UNDEFINED` is the creation frame: the fresh `VkImage` really is in
 `UNDEFINED` layout, so `vulkan_composite()` calls `discardImage()` on it *before* the
@@ -764,13 +1009,29 @@ After the per-pixel dispatch slot 1 is unbound, so the FSR/NIS/blit dispatches t
 
 ## The settings-panel budget
 
-Each row may own at most **seven** `Param`s before `Registry.cpp` aborts registration —
+Each row may own at most **eight** `Param`s before `Registry.cpp` aborts registration —
 raised from six 2026-09-06 (request #17, see the
 [Adaptive Brightness budget decision](#the-budget-decision-seven-params-not-six-2026-0607)
-for the evidence and the why). See `PanelShaders.cpp`'s "THE SIX BUDGET" comment and
-`Registry.cpp`'s `kParamBudget`. Counts: Vibrancy 2, Pre-Sharpen 1, Adaptive Brightness 7
-(zero headroom, again — the next param added here is the signal to promote it to its own
-category, not to raise the number a second time), Shadow Control 1.
+for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below). See
+`PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
+Vibrancy 2, Pre-Sharpen 1, Adaptive Brightness 8 (zero headroom), Shadow Control 1.
+
+**The second raise, 7 → 8 (2026-09-07), and the debt it books.** The note left after the
+first raise said the next param was the signal to **promote** Adaptive Brightness to its own
+rail category, not to raise the number again. Local adaptation is that param, and the number
+was raised anyway — knowingly, not by oversight. The reasoning, so the next author can
+disagree with it on the record: the promotion is still the right end state, but it moves the
+effect out of "Shaders" where every capture, keyword and doc link currently points at it, and
+it is a shell-layout change whose risk has nothing to do with the tone curve this request was
+about — landing both together would make one hard-to-judge diff out of two easy ones. The
+measured cost of the raise itself is one more Inspector row: verified by capture at 2560×1440
+(`build-release/verify-shots/adaptive-local-2026-09-07/inspector-8-params.png`) with the
+header correctly reading **"PARAMETERS 8 of 8"** and well over half the panel empty below the
+rows; `test_overlay_shell.cpp` still shows the same row set scrolling at 2.0×, as it did at
+six and at seven. **The promotion is now owed work** (`requests-2026-09-08.md`), and Adaptive
+Brightness is the only row in the whole registry above two params — this constant exists for
+it alone, which is exactly why promoting it, rather than raising it a third time, is what
+happens next.
 
 ## Diagnostics
 
@@ -786,12 +1047,18 @@ Adaptive Brightness's state for the next N composites, one line each on `console
 ```
 ab_log n=<i> t=<ms> dt=<ms> <off|whole|dynamic> raw mean=… p2=… p50=… p98=…
        smooth mean=… p2=… p50=… p98=… gain=… gamma=… px(<x>,<y>)=<r>,<g>,<b>
+       local=… lmin=… lmax=… lprobe=… gainlo=… gainhi=…
 ```
 
 `raw` is this frame's measurement, `smooth` the history the pixel pass read, `gain` and
 `gamma` are recomputed on the host with the same `effects_curve.h` the shader compiles,
 and `px` is one pixel of the graded output (`effectsOutput`) before scaling — the probe
-defaults to the centre of the game image. `How:` the pre-pass block copies the history
+defaults to the centre of the game image. The `local…` fields (2026-09-07) are Local
+adaptation's: the strength in force, the darkest and brightest cell of the smoothed 16×16
+map, the cell the probe pixel falls in, and the two **extreme per-pixel gains** the map
+produces this frame (`gainlo` from `lmin`, `gainhi` from `lmax`) — which is how "the
+operator is spreading the gain 3.60 … 0.476 across this frame" becomes a number instead of
+an impression. `gain`/`gamma` are the probe cell's. `How:` the pre-pass block copies the history
 and the probe pixel into two host-mappable staging textures (`effectsDebugHistory`,
 `effectsDebugPixel`, created on first use) and `vulkan_composite()` waits for that
 submit right after it, so every logged composite stalls the render thread by one GPU
@@ -815,4 +1082,5 @@ about. `scripts/effects-regression.sh` drives it for its per-frame checks
   `requests-2026-09-07.md` item 7 — the mode moved into the Inspector and the Six
   Budget raised to 7.
 - `scripts/effects-regression.sh` — the headless measurement gate for both modes.
-- `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed.
+- `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed;
+  and the Local adaptation item — the split-scene, halo and gain-sweep evidence.

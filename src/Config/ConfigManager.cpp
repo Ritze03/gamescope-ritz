@@ -261,6 +261,7 @@ namespace gamescope::config
                     ab.min_gain = JGetFloat( *pAdaptive, "min_gain", ab.min_gain );
                     ab.max_gain = JGetFloat( *pAdaptive, "max_gain", ab.max_gain );
                     ab.strength = JGetFloat( *pAdaptive, "strength", ab.strength );
+                    ab.local_strength = JGetFloat( *pAdaptive, "local_strength", ab.local_strength );
                 }
 
                 if ( const nlohmann::json *pShadowLift = JGetObject( *pReshade, "shadow_lift" ) )
@@ -472,6 +473,7 @@ namespace gamescope::config
             jAdaptive[ "min_gain" ] = ab.min_gain;
             jAdaptive[ "max_gain" ] = ab.max_gain;
             jAdaptive[ "strength" ] = ab.strength;
+            jAdaptive[ "local_strength" ] = ab.local_strength;
 
             const auto &sl = s.reshade.shadow_lift;
             nlohmann::json jShadowLift = nlohmann::json::object();

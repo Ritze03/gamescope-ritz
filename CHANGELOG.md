@@ -25,6 +25,11 @@ The newest version below is the one this build reports.
   while Text colour is set to Fixed.
 - **Startup announcement can be turned off**: a new switch, Appearance > Startup, for
   the brief toast gamescope-ritz shows on launch. Takes effect the next time it starts.
+- **Adaptive Brightness: Local adaptation**: a new slider on Adaptive Brightness's
+  Dynamic mode adjusts each part of the picture for its own brightness instead of the
+  whole frame's, so a dark room and a bright window are both readable at once; on a
+  half-dark, half-bright scene the dark half's detail went from unreadable to clear at
+  the 50% default, with no glow around dark objects.
 
 ### Fixed
 - **Appearance and Cursor settings no longer undo each other**: changing something in

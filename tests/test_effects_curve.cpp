@@ -36,15 +36,36 @@ namespace
 	constexpr float kMaxGain = 4.0f;
 
 	// Whole curve for one channel value, with the dry/wet mix the shader
-	// applies (mix(c, graded, strength)).
-	float Apply( float x, const Scene &sc, float flStrength,
-	             float flTarget = kTarget, float flMin = kMinGain, float flMax = kMaxGain )
+	// applies (mix(c, graded, strength)). `flLocal` / `flRatio` mirror
+	// cs_effects_layer0.comp's Local adaptation: the frame's percentiles are
+	// SHIFTED by ab_local_shift(local_mean, global_mean, local_strength)
+	// before the same two curve parameters are derived from them. flRatio
+	// stands in for local_mean / global_mean directly, so a test can sweep
+	// the ratio without inventing a pair of means for every case.
+	float ApplyLocal( float x, const Scene &sc, float flStrength, float flRatio, float flLocal,
+	                  float flTarget = kTarget, float flMin = kMinGain, float flMax = kMaxGain )
 	{
-		const float gain  = ab_dyn_gain( sc.p98, flMin, flMax );
-		const float gamma = ab_dyn_gamma( sc.p2, sc.p50, gain, flTarget, flMin );
+		// A ratio, expressed as a (local, global) pair the operator could
+		// actually see: both means live in 0..1, so a global mean of 0.2
+		// lets flRatio sweep the whole 0.05..8 range below without
+		// ab_local_ratio()'s own clamp(localMean, 0, 1) truncating it first.
+		const float r = ab_local_shift( flRatio * 0.2f, 0.2f, flLocal );
+		const float gain  = ab_dyn_gain( sc.p98 * r, flMin, flMax );
+		const float gamma = ab_dyn_gamma( sc.p2 * r, sc.p50 * r, gain, flTarget, flMin );
 		const float y = ab_dyn_curve( x, gain, gamma );
 		return x + ( y - x ) * flStrength;
 	}
+
+	float Apply( float x, const Scene &sc, float flStrength,
+	             float flTarget = kTarget, float flMin = kMinGain, float flMax = kMaxGain )
+	{
+		return ApplyLocal( x, sc, flStrength, 1.0f, 0.0f, flTarget, flMin, flMax );
+	}
+
+	// The local ratios the operator can actually produce, plus both clamp
+	// ends and 1.0 (the "this neighbourhood is average" no-op).
+	const float kLocalRatios[] = { 0.05f, 0.25f, 0.36f, 0.5f, 1.0f, 1.72f, 2.5f, 4.0f, 8.0f };
+	const float kLocalStrengths[] = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
 
 	// Every scene / bound / target combination the properties are checked over.
 	const Scene kScenes[] = { kDark, kBright, kMid,
@@ -270,6 +291,23 @@ TEST_CASE( "reshade.adaptive_brightness.mode defaults to whole_image and round-t
 	REQUIRE( loaded->reshade.adaptive_brightness.mode == "dynamic" );
 }
 
+TEST_CASE( "reshade.adaptive_brightness.local_strength defaults to 0.5 and round-trips", "[effects_curve][config]" )
+{
+	TempConfigHome home;
+
+	Settings s{};
+	REQUIRE_THAT( s.reshade.adaptive_brightness.local_strength, WithinAbs( 0.5f, 1e-6f ) );
+
+	s.reshade.adaptive_brightness.local_strength = 0.25f;
+	ProfileMeta meta;
+	meta.name = "Effects";
+	REQUIRE( SaveProfile( meta, s ) );
+
+	std::optional<Settings> loaded = LoadProfile( "Effects" );
+	REQUIRE( loaded.has_value() );
+	REQUIRE_THAT( loaded->reshade.adaptive_brightness.local_strength, WithinAbs( 0.25f, 1e-6f ) );
+}
+
 TEST_CASE( "reshade.adaptive_brightness.mode: an unknown value on disk resolves to whole_image", "[effects_curve][config]" )
 {
 	TempConfigHome home;
@@ -283,4 +321,150 @@ TEST_CASE( "reshade.adaptive_brightness.mode: an unknown value on disk resolves 
 	std::optional<Settings> loaded = LoadProfile( "Effects" );
 	REQUIRE( loaded.has_value() );
 	REQUIRE( loaded->reshade.adaptive_brightness.mode == "whole_image" );
+}
+
+
+// ---------------------------------------------------------------------------
+// Local adaptation (2026-09-07). The per-pixel shift, and the properties the
+// whole curve must keep once every pixel may get its own gain and gamma.
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "local shift: strength 0 is exactly 1.0, for every neighbourhood", "[effects_curve]" )
+{
+	// The identity that makes "Local adaptation 0 %" bit-for-bit the old
+	// global path: the apply pass feeds p98 * shift, p50 * shift, p2 * shift
+	// into the same two functions, so shift == 1.0 exactly means the same
+	// floats reach them.
+	for ( float r : kLocalRatios )
+	{
+		REQUIRE( ab_local_shift( r, 1.0f, 0.0f ) == 1.0f );
+		REQUIRE( ab_local_shift( r, 0.2f, 0.0f ) == 1.0f );
+		REQUIRE( ab_local_shift( r, 0.9f, -1.0f ) == 1.0f );   // clamped strength
+	}
+	// And an average neighbourhood is the identity at ANY strength.
+	for ( float s : kLocalStrengths )
+		REQUIRE_THAT( ab_local_shift( 0.4f, 0.4f, s ), WithinAbs( 1.0f, 1e-6f ) );
+}
+
+TEST_CASE( "local shift: bounded by the deviation clamp, monotone in the neighbourhood",
+           "[effects_curve]" )
+{
+	for ( float s : kLocalStrengths )
+	{
+		float flPrev = -1.0f;
+		for ( int i = 0; i <= 400; i++ )
+		{
+			const float flLocal = i / 400.0f;
+			const float v = ab_local_shift( flLocal, 0.25f, s );
+			REQUIRE( std::isfinite( v ) );
+			// Never outside the clamp, whatever the neighbourhood does.
+			REQUIRE( v >= AB_LOCAL_RATIO_MIN - 1e-6f );
+			REQUIRE( v <= AB_LOCAL_RATIO_MAX + 1e-6f );
+			// A brighter neighbourhood never gives a smaller shift: this is
+			// what stops the map's smooth ramp across an edge from turning
+			// into a non-monotone ring in the output (halo control).
+			REQUIRE( v >= flPrev - 1e-6f );
+			flPrev = v;
+		}
+	}
+	// A zero global mean cannot divide by zero.
+	REQUIRE( std::isfinite( ab_local_shift( 0.5f, 0.0f, 1.0f ) ) );
+	REQUIRE( std::isfinite( ab_local_shift( 0.0f, 0.0f, 1.0f ) ) );
+}
+
+TEST_CASE( "local curve: still bounded, monotone and black-preserving at every local strength",
+           "[effects_curve]" )
+{
+	// Everything the global curve promises must survive the shift, because
+	// with Local adaptation on EVERY pixel may see a different gain/gamma
+	// pair and the promises are per pixel.
+	for ( const Scene &sc : kScenes )
+		for ( float lo : kMinGains )
+			for ( float hi : kMaxGains )
+				for ( float r : kLocalRatios )
+					for ( float ls : kLocalStrengths )
+					{
+						float flPrev = -1.0f;
+						for ( int i = 0; i <= 200; i++ )
+						{
+							const float x = i / 200.0f;
+							const float y = ApplyLocal( x, sc, 1.0f, r, ls, kTarget, lo, hi );
+							REQUIRE( std::isfinite( y ) );
+							REQUIRE( y >= 0.0f );
+							REQUIRE( y <= 1.0f );
+							REQUIRE( y >= flPrev - 1e-6f );
+							flPrev = y;
+						}
+						REQUIRE_THAT( ApplyLocal( 0.0f, sc, 1.0f, r, ls, kTarget, lo, hi ),
+						              WithinAbs( 0.0f, 1e-6f ) );
+						// Strength 0 is still the untouched picture, local or not.
+						REQUIRE_THAT( ApplyLocal( 0.37f, sc, 0.0f, r, ls, kTarget, lo, hi ),
+						              WithinAbs( 0.37f, 1e-6f ) );
+					}
+}
+
+TEST_CASE( "local curve: local strength 0 is the global curve, whatever the neighbourhood",
+           "[effects_curve]" )
+{
+	// In the SHADER this is bit-for-bit identity: ab_local_shift() returns
+	// the literal 1.0 and `p98 * 1.0` is exact for every finite float, so
+	// ab_dyn_gain/ab_dyn_gamma receive the same bits the global path passes
+	// them. Here it is asserted to within a float ulp rather than with ==,
+	// because -O3 + LTO is free to contract the two inlined copies of the
+	// same expression differently (one with an FMA, one without) and a
+	// last-bit difference in the TEST HARNESS would say nothing about the
+	// property. ab_local_shift( ., ., 0 ) == 1.0f exactly is asserted above,
+	// which is the half of this that is actually about the code.
+	for ( const Scene &sc : kScenes )
+		for ( float r : kLocalRatios )
+			for ( int i = 0; i <= 255; i++ )
+			{
+				const float x = i / 255.0f;
+				REQUIRE_THAT( ApplyLocal( x, sc, 1.0f, r, 0.0f ),
+				              WithinAbs( Apply( x, sc, 1.0f ), 1e-6f ) );
+			}
+}
+
+TEST_CASE( "local curve: a dark neighbourhood is lifted further than the frame's own curve",
+           "[effects_curve]" )
+{
+	// The whole point, as one number. The 50/50 split scene: half the frame
+	// dark (bands 5..20), half bright (200..255). Globally the curve sees a
+	// mid frame and does almost nothing to either half. Locally the dark
+	// half's neighbourhood sits well under the frame mean, so its shift is
+	// < 1, p98 * shift is small, and the gain climbs.
+	const Scene split = { 8.0f / 255.0f, 128.0f / 255.0f, 250.0f / 255.0f };
+	const float flDarkBand = 12.0f / 255.0f;
+
+	const float flGlobal = ApplyLocal( flDarkBand, split, 1.0f, 1.0f, 0.0f );
+	const float flLocal  = ApplyLocal( flDarkBand, split, 1.0f, 0.36f, 1.0f );
+	INFO( "global " << flGlobal * 255.0f << " local " << flLocal * 255.0f );
+	REQUIRE( flLocal > flGlobal );
+
+	// ... and a bright neighbourhood is brought DOWN relative to the same
+	// global curve, which is the other half of "both halves serviceable".
+	const float flBrightBand = 245.0f / 255.0f;
+	REQUIRE( ApplyLocal( flBrightBand, split, 1.0f, 1.72f, 1.0f )
+	         < ApplyLocal( flBrightBand, split, 1.0f, 1.0f, 0.0f ) );
+}
+
+TEST_CASE( "local curve: the per-pixel gain never leaves the user's bounds", "[effects_curve]" )
+{
+	// The safety property the deviation clamp buys: Local adaptation
+	// redistributes gain WITHIN [min_gain, max_gain], it never widens the
+	// range the user set. Same for the gamma clamps.
+	for ( const Scene &sc : kScenes )
+		for ( float lo : kMinGains )
+			for ( float hi : kMaxGains )
+				for ( float r : kLocalRatios )
+					for ( float ls : kLocalStrengths )
+					{
+						const float shift = ab_local_shift( r, 1.0f, ls );
+						const float gain  = ab_dyn_gain( sc.p98 * shift, lo, hi );
+						const float gamma = ab_dyn_gamma( sc.p2 * shift, sc.p50 * shift, gain, kTarget, lo );
+						REQUIRE( gain >= lo - 1e-6f );
+						REQUIRE( gain <= hi + 1e-6f );
+						REQUIRE( gamma >= AB_DYN_GAMMA_MIN - 1e-6f );
+						REQUIRE( gamma <= AB_DYN_GAMMA_MAX + 1e-6f );
+					}
 }

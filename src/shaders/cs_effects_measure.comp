@@ -2,7 +2,8 @@
 
 // cs_effects_measure.comp -- Adaptive Brightness's measure/adapt half: ONE
 // workgroup that measures the graded base layer's luminance statistics and
-// folds them into the persistent HISTORY_COUNT x 1 history, which
+// folds them into row 0 of the persistent HISTORY_TEX_W x HISTORY_TEX_H
+// history (whose remaining rows are the local map, below), which
 // cs_effects_layer0.comp then reads per pixel in the same frame. Compiled at
 // build time like every other compute shader here (DECISIONS.md #27); the
 // host records it immediately before the per-pixel pass, on the same
@@ -61,12 +62,28 @@
 // is instant. The host dispatches this pass whenever the pre-pass runs (any
 // effect on); see rendervulkan.cpp for the reset-on-resume rule.
 //
+// THE LOCAL MAP (Local adaptation, 2026-09-07). Besides the four global
+// statistics this pass also writes a 16x16 grid of smoothed LOCAL mean
+// luminances into rows 1..16 of the same history texture (effects_common.h's
+// AB_LOCAL_*), which the apply pass samples bilinearly to give each pixel a
+// curve fitted to its own part of the frame. It is free in taps: thread
+// (tx, ty) already owns exactly the 8x8 tap block covering image cell
+// (tx, ty), so the per-thread sum it computes for the mean's tree reduction
+// IS that cell's mean. What it adds is a separable binomial blur over the
+// 16x16 grid in shared memory (blur_local_once() below, run twice) and one
+// EMA + imageStore per thread. The blur is the halo control and the EMA is
+// the flicker control -- same asymmetric time constants as every other
+// statistic, so a local cell can no more pulse than the global gain can.
+//
 // Self-sampling: the history is bound BOTH as sampler
-// VKR_EFFECTS_HISTORY_SLOT and as this pass's storage target `dst`. Only
-// invocation 0 touches it, and its fetches precede its stores in program
-// order, so there is no hazard between invocations; the layout is GENERAL
-// for both bindings. See rendervulkan.cpp's pre-pass block for the barrier
-// story between this dispatch, the apply dispatch, and the next frame.
+// VKR_EFFECTS_HISTORY_SLOT and as this pass's storage target `dst`. Row 0
+// (the statistics) is touched by invocation 0 alone, and its fetches
+// precede its stores in program order. Every OTHER invocation touches
+// exactly one local-map texel, its own, and reads it before writing it --
+// no two invocations address the same texel, so there is no hazard between
+// invocations either way. The layout is GENERAL for both bindings. See
+// rendervulkan.cpp's pre-pass block for the barrier story between this
+// dispatch, the apply dispatch, and the next frame.
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_scalar_block_layout : require
@@ -89,6 +106,14 @@ const uint HIST_BINS = 64u;
 shared float s_sum[THREAD_COUNT];
 shared uint  s_hist[HIST_BINS];      // taps per bin
 shared uint  s_histSum[HIST_BINS];   // sum of the taps' luma per bin, fixed point (x LUMA_FIXED)
+
+// The local luminance map (effects_common.h's AB_LOCAL_*). One cell per
+// THREAD -- thread (tx, ty) owns exactly the 8x8 tap block covering image
+// cell (tx, ty), so its own tap sum is the cell's mean and the map costs no
+// extra fetches. AB_LOCAL_GRID is 16 == THREADS_PER_AXIS by construction;
+// s_localTmp is the separable blur's intermediate.
+shared float s_local[THREAD_COUNT];
+shared float s_localTmp[THREAD_COUNT];
 
 // Fixed-point scale for s_histSum: 16384 taps x 65535 < 2^32.
 const float LUMA_FIXED = 65535.0;
@@ -124,16 +149,96 @@ float histogram_window_mean(float lo, float hi)
     return (taps > 0.0) ? clamp(total / taps, 0.0, 1.0) : 0.0;
 }
 
+// ---- The local map's spatial smoothing -------------------------------
+//
+// A separable 5-tap binomial [1 4 6 4 1]/16 on each axis, run once per entry
+// of BLUR_STRIDES with its taps spread that many cells apart (the a-trous
+// trick: a stride-k pass costs the same five taps but carries variance k^2,
+// so a wide Gaussian is three cheap passes instead of twenty-odd). Edges are
+// clamped to the outermost cell, so the kernel stays normalised everywhere.
+// Total variance 4^2 + 2^2 + 1 + 1 = 22, i.e. sigma ~= 4.7 of the 16 cells
+// on an axis -- getting on for a THIRD of the frame.
+//
+// WHY SO ABSURDLY WIDE. This is the halo control, and it was set by
+// measurement, not taste. A local tone operator's artefact is a glow around
+// a dark object on a bright field, and its size is set by how well the
+// luminance map resolves the object's outline. Measured on a flat 200 field
+// with a flat 10 box a quarter of the frame across (the halo scenes in
+// tests/effects_scene_client.c), at Local adaptation 100 %:
+//
+//   sigma 1.4 cells   the field reads 246 beside the box and 189 far away
+//                     -- a 57-code white glow, unmistakable in the capture
+//   sigma 2.2 cells   243 / 190, 53 codes. Barely better: right AT a step
+//                     edge a blurred step always sits halfway between the
+//                     two sides, whatever the sigma. Widening the ramp does
+//                     not lower it.
+//   sigma 4.7 cells   219 / 204, 15 codes -- and 8 at the 50 % default. The
+//                     kernel is now far larger than the box, so the box
+//                     contributes only its share of the kernel's AREA
+//                     instead of half a step. In the capture the glow is
+//                     gone; what is left reads as a faint, frame-wide
+//                     shading. See shader-effects.md for the profiles.
+//
+// And it costs the case this exists for almost nothing, because that case is
+// BIG: a half-dark/half-bright frame is an 8-cell feature, and a Gaussian
+// this wide still passes ~90 % of an 8-cell step while passing ~30 % of a
+// 4-cell box. Measured, on the split scene at 100 %: widening the blur from
+// sigma 1.4 to 4.7 cost the dark half's lift 34 -> 28 codes (a fifth) and
+// removed three quarters of the halo. The operator is deliberately incapable
+// of resolving an object's outline, and just capable of resolving which half
+// of the screen you are in. That asymmetry IS the design.
+//
+// `Why binomial and not a box:` a non-negative, symmetric, unimodal kernel
+// maps a step to a MONOTONE ramp -- it cannot overshoot, so the profile
+// across a hard edge has no ring by construction, not just by measurement.
+const int BLUR_STRIDES[4] = int[4](4, 2, 1, 1);
+const float BLUR_W0 = 6.0 / 16.0;
+const float BLUR_W1 = 4.0 / 16.0;
+const float BLUR_W2 = 1.0 / 16.0;
+
+int local_cell( int x, int y )
+{
+    return clamp(y, 0, AB_LOCAL_GRID - 1) * AB_LOCAL_GRID + clamp(x, 0, AB_LOCAL_GRID - 1);
+}
+
+// One horizontal + one vertical pass over s_local, in place, with the taps
+// `stride` cells apart. Every invocation reaches every barrier: the control
+// flow here is uniform.
+void blur_local_once(int stride)
+{
+    int cx = int(gl_LocalInvocationID.x);
+    int cy = int(gl_LocalInvocationID.y);
+    int s1 = stride, s2 = 2 * stride;
+
+    float h = BLUR_W0 *  s_local[local_cell(cx,      cy)]
+            + BLUR_W1 * (s_local[local_cell(cx - s1, cy)] + s_local[local_cell(cx + s1, cy)])
+            + BLUR_W2 * (s_local[local_cell(cx - s2, cy)] + s_local[local_cell(cx + s2, cy)]);
+    memoryBarrierShared();
+    barrier();
+    s_localTmp[local_cell(cx, cy)] = h;
+    memoryBarrierShared();
+    barrier();
+
+    float v = BLUR_W0 *  s_localTmp[local_cell(cx, cy)]
+            + BLUR_W1 * (s_localTmp[local_cell(cx, cy - s1)] + s_localTmp[local_cell(cx, cy + s1)])
+            + BLUR_W2 * (s_localTmp[local_cell(cx, cy - s2)] + s_localTmp[local_cell(cx, cy + s2)]);
+    memoryBarrierShared();
+    barrier();
+    s_local[local_cell(cx, cy)] = v;
+    memoryBarrierShared();
+    barrier();
+}
+
 // One EMA step toward `measured` from the stored value, or a straight write
 // on a reset frame. The stored value only ever holds what this shader wrote,
 // all in 0..1, but a NaN or inf would poison every later frame through the
 // EMA, so snap to the measurement rather than propagate one.
-float adapt(int which, float measured)
+float adapt_at(ivec2 texel, float measured)
 {
     if ((u_flags & EFFECT_RESET_HISTORY) != 0u)
         return measured;
 
-    float adapted = history_read(which);
+    float adapted = history_read_at(texel);
     if (isnan(adapted) || isinf(adapted))
         adapted = measured;
     adapted = clamp(adapted, 0.0, 1.0);
@@ -141,6 +246,11 @@ float adapt(int which, float measured)
     float tau   = (measured > adapted) ? u_abUp : u_abDown;
     float alpha = clamp(1.0 - exp(-u_abDt / max(tau, 0.001)), 0.0, 1.0);
     return mix(adapted, measured, alpha);
+}
+
+float adapt(int which, float measured)
+{
+    return adapt_at(ivec2(which, 0), measured);
 }
 
 void main()
@@ -176,6 +286,9 @@ void main()
     }
 
     s_sum[gl_LocalInvocationIndex] = sum;
+    // This thread's own 8x8 tap block IS image cell (tx, ty) -- see
+    // effects_common.h's AB_LOCAL_* note. Free: `sum` is already computed.
+    s_local[gl_LocalInvocationIndex] = sum / float(TAPS_PER_THREAD_AXIS * TAPS_PER_THREAD_AXIS);
     memoryBarrierShared();
     barrier();
 
@@ -186,6 +299,22 @@ void main()
             s_sum[gl_LocalInvocationIndex] += s_sum[gl_LocalInvocationIndex + stride];
         memoryBarrierShared();
         barrier();
+    }
+
+    // ---- The local map: blur, then the same EMA the statistics get ----
+    // Every invocation must reach these barriers, so this happens BEFORE
+    // the invocation-0 early-out below.
+    //
+    // Self-sampling is safe for the same reason it is for row 0, one step
+    // stronger: each thread reads ONLY its own texel and writes ONLY its
+    // own texel, and its read precedes its write in program order. No two
+    // invocations touch the same texel at all.
+    for (int pass = 0; pass < BLUR_STRIDES.length(); pass++)
+        blur_local_once(BLUR_STRIDES[pass]);
+    {
+        ivec2 texel = ivec2(int(gl_LocalInvocationID.x), AB_LOCAL_ROW + int(gl_LocalInvocationID.y));
+        float measured = clamp(s_local[gl_LocalInvocationIndex], 0.0, 1.0);
+        imageStore(dst, texel, history_pack(adapt_at(texel, measured)));
     }
 
     if (gl_LocalInvocationIndex != 0u)

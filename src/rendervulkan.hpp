@@ -580,6 +580,11 @@ struct NativeEffectsState_t
 	float flAbMinGain = 0.5f;
 	float flAbMaxGain = 2.0f;
 	float flAbStrength = 1.0f;
+	// Local adaptation (2026-09-07): 0 = one curve for the whole frame (the
+	// original behaviour, bit-for-bit), 1 = each pixel's curve fitted to its
+	// own neighbourhood from cs_effects_measure.comp's 16x16 map. Dynamic
+	// mode only. See superdoc/features/shader-effects.md.
+	float flAbLocal = 0.0f;
 
 	bool AnyEnabled() const
 	{
@@ -744,10 +749,13 @@ struct VulkanOutput_t
 	// update_effects_image() in rendervulkan.cpp.
 	gamescope::OwningRc<CVulkanTexture> effectsOutput;
 
-	// Adaptive Brightness's persistent 1x1 adapted-luminance history
+	// Adaptive Brightness's persistent adapted-luminance history
 	// (cs_effects_measure.comp writes it, cs_effects_layer0.comp reads it).
-	// HISTORY_COUNT (4) x 1 texels -- mean, p2, p50, p98 -- each one float
-	// packed into an RGBA8 texel, see effects_common.h's history_pack().
+	// kEffectsHistoryWidth x kEffectsHistoryHeight texels: ROW 0 is the eight
+	// statistics -- mean, p2, p50, p98, then the same four unsmoothed for the
+	// effects_ab_log readback -- and rows 1..16 are Local adaptation's 16x16
+	// map of smoothed local mean luminances. Each texel is one float packed
+	// into RGBA8, see effects_common.h's history_pack().
 	// Created once by update_effects_history() and kept for
 	// the life of the output; its contents are the effect's cross-frame
 	// state, so it is never re-created on a resolution change.

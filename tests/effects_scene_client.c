@@ -24,7 +24,16 @@
 //           with the same sampling properties.
 //   texsplit --split PCT (default 50) of the cells bright (150..230), the
 //           rest dark: "sky and ground", a bimodal histogram whose median
-//           sits in the empty gap between the modes.
+//           sits in the empty gap between the modes. Note this scatters the
+//           two populations over the WHOLE frame -- it is a histogram test,
+//           not a spatial one. halfsplit below is the spatial version.
+//   halfsplit the left half of the frame is the dark scene's bands, the
+//           right half the bright scene's: a genuine "dark interior, bright
+//           sky" frame, and the case Local adaptation exists for.
+//   halobox a flat 200 field with one flat 10 box (320x320) in the middle,
+//           and haloinv the inverse (a 220 box on a 15 field). A local tone
+//           operator's classic artefact is a rim around such a box; the
+//           script samples a line out from the box's edge to measure it.
 //   --lights PCT (default 1.5) sets texdark's share of light cells; at 2.0
 //   the 98th percentile sits exactly in that scene's gap. --periodic makes
 //   the textures repeat every 80 cells (one 1280-wide frame), so under
@@ -58,6 +67,9 @@ static volatile sig_atomic_t s_nMotionToggle = 0;
 static void OnUsr1( int sig ) { (void)sig; s_nAdvance++; }
 static void OnUsr2( int sig ) { (void)sig; s_nMotionToggle++; }
 
+// nSpecial: 0 the flat band scenes below, 1 halfsplit, 2 halobox,
+// 3 haloinv -- the three scenes Local adaptation (2026-09-07) is measured
+// on. See PaintSpecial().
 typedef struct
 {
 	const char *pszName;
@@ -65,16 +77,37 @@ typedef struct
 	unsigned char rectValue;       // the six middle-band rectangles
 	int nRectW, nRectH;
 	int bBlackCorner;              // dark only: a 0-valued rectangle top-left
+	int nSpecial;
 } Scene;
 
 static const Scene kScenes[] = {
-	{ "dark",    {   5,   8,  12,  16,  20 }, 240,  40,  40, 1 },
-	{ "bright",  { 200, 215, 230, 245, 255 },  30, 120,  50, 0 },
-	{ "mid",     {  26,  77, 128, 179, 230 },   0,   0,   0, 0 },
-	{ "texdark",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0 },
-	{ "texmid",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0 },
-	{ "texsplit", {   0,   0,   0,   0,   0 },   0,   0,   0, 0 },
+	{ "dark",    {   5,   8,  12,  16,  20 }, 240,  40,  40, 1, 0 },
+	{ "bright",  { 200, 215, 230, 245, 255 },  30, 120,  50, 0, 0 },
+	{ "mid",     {  26,  77, 128, 179, 230 },   0,   0,   0, 0, 0 },
+	{ "texdark",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
+	{ "texmid",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
+	{ "texsplit", {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
+	{ "halfsplit",{   0,   0,   0,   0,   0 },   0,   0,   0, 0, 1 },
+	{ "halobox",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 2 },
+	{ "haloinv",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 3 },
 };
+
+// The three Local-adaptation scenes, in the same 1280x720 reference frame
+// the flat scenes use (scaled to the real window like everything else).
+//
+//   halfsplit  LEFT half the dark scene's five bands (5/8/12/16/20), RIGHT
+//              half the bright scene's (200/215/230/245/255). The headline
+//              case: no single global curve serves both halves, so this is
+//              where local adaptation either earns itself or does not.
+//   halobox    a flat 200 field with one flat 10 box, 320x320, centred.
+//   haloinv    the inverse: a flat 15 field with one flat 220 box.
+//              The two halo scenes exist to measure the artefact a local
+//              tone operator is known for -- a bright rim around a dark
+//              object, or a dark rim around a bright one -- by sampling a
+//              line straight out from the box's right edge. A hard,
+//              high-contrast, straight edge is the worst case there is.
+#define HALO_BOX_W 320
+#define HALO_BOX_H 320
 
 static void FillRect( SDL_Surface *pSurface, int x, int y, int w, int h, unsigned char v )
 {
@@ -129,6 +162,34 @@ static void PaintTexture( SDL_Surface *pSurface, int nKind, int nScroll )
 	}
 }
 
+static void PaintSpecial( SDL_Surface *pSurface, int nSpecial )
+{
+	const int W = pSurface->w, H = pSurface->h;
+	const float sx = W / 1280.0f, sy = H / 720.0f;
+
+	if ( nSpecial == 1 )
+	{
+		static const unsigned char kLeft[5]  = {   5,   8,  12,  16,  20 };
+		static const unsigned char kRight[5] = { 200, 215, 230, 245, 255 };
+		const int nMid = W / 2;
+		for ( int i = 0; i < 5; i++ )
+		{
+			const int y0 = i * H / 5, y1 = ( i + 1 ) * H / 5;
+			FillRect( pSurface, 0, y0, nMid, y1 - y0, kLeft[i] );
+			FillRect( pSurface, nMid, y0, W - nMid, y1 - y0, kRight[i] );
+		}
+		return;
+	}
+
+	{
+		const unsigned char field = ( nSpecial == 2 ) ? 200 : 15;
+		const unsigned char box   = ( nSpecial == 2 ) ?  10 : 220;
+		const int bw = (int)( HALO_BOX_W * sx ), bh = (int)( HALO_BOX_H * sy );
+		FillRect( pSurface, 0, 0, W, H, field );
+		FillRect( pSurface, W / 2 - bw / 2, H / 2 - bh / 2, bw, bh, box );
+	}
+}
+
 static const Scene *FindScene( const char *pszName )
 {
 	for ( size_t i = 0; i < sizeof( kScenes ) / sizeof( kScenes[0] ); i++ )
@@ -144,6 +205,11 @@ static void Paint( SDL_Surface *pSurface, const Scene *pScene )
 {
 	const int W = pSurface->w, H = pSurface->h;
 	const float sx = W / 1280.0f, sy = H / 720.0f;
+	if ( pScene->nSpecial != 0 )
+	{
+		PaintSpecial( pSurface, pScene->nSpecial );
+		return;
+	}
 	if ( !strncmp( pScene->pszName, "tex", 3 ) )
 	{
 		const int nScroll = (int)( ( s_nFrame * (long)s_nMotionPx ) % 100000L );
@@ -176,7 +242,7 @@ int main( int argc, char **argv )
 {
 	int nW = 1280, nH = 720, nSeconds = 600;
 	const char *pszPidFile = NULL;   // so the script can SIGUSR1 exactly this process
-	const Scene *pList[8];
+	const Scene *pList[12];
 	int nList = 0;
 
 	for ( int i = 1; i < argc; i++ )
@@ -184,10 +250,10 @@ int main( int argc, char **argv )
 		if ( !strcmp( argv[i], "--scenes" ) && i + 1 < argc )
 		{
 			char *psz = strdup( argv[++i] );
-			for ( char *tok = strtok( psz, "," ); tok && nList < 8; tok = strtok( NULL, "," ) )
+			for ( char *tok = strtok( psz, "," ); tok && nList < 12; tok = strtok( NULL, "," ) )
 			{
 				const Scene *p = FindScene( tok );
-				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit)\n", tok ); return 2; }
+				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|halfsplit|halobox|haloinv)\n", tok ); return 2; }
 				pList[nList++] = p;
 			}
 			free( psz );
@@ -202,7 +268,7 @@ int main( int argc, char **argv )
 		else if ( !strcmp( argv[i], "--periodic" ) )                 s_bPeriodic = 1;
 		else
 		{
-			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
+			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,halfsplit,halobox,haloinv] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
 			return 2;
 		}
 	}

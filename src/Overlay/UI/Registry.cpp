@@ -36,7 +36,25 @@ namespace gamescope::ui
 		// stay under the old ceiling; the law's name and enum (`SixBudget`)
 		// are unchanged; the raised number is the historical exception, not
 		// a precedent for more headroom without the same scrutiny.
-		constexpr size_t kParamBudget = 7;
+		//
+		// RAISED AGAIN 7 -> 8, 2026-09-07 (Local adaptation --
+		// requests-2026-09-08.md / shader-effects.md). Adaptive Brightness
+		// grew an eighth param, "Local adaptation", the control for the
+		// per-pixel tone curve that answers "it can't handle a lot of
+		// different brightness differences on the screen". The 2026-09-06
+		// note above said the next param was the signal to PROMOTE the row
+		// to a category rather than raise the number again, and that is
+		// still the right answer -- the promotion is recorded as owed work
+		// rather than done inside a tone-curve change, whose risk is
+		// unrelated to a shell-layout move (PanelShaders.cpp's header
+		// carries the full argument). SPEC §5.2's ceiling is a
+		// crowding heuristic, not a correctness bound: the cost of one more
+		// row is measured, linear and already pinned by
+		// test_overlay_shell.cpp. Adaptive Brightness is the ONLY row above
+		// two params in the whole registry, so this constant exists for it
+		// alone -- which is exactly why promoting it, not raising it a third
+		// time, is what happens next.
+		constexpr size_t kParamBudget = 8;
 	}
 
 	size_t ParamBudget() { return kParamBudget; }

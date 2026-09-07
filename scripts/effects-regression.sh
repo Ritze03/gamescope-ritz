@@ -44,7 +44,24 @@
 #   stability-static -- the same scene held still: the raw measurement and
 #                       the output pixel do not move AT ALL over 300 frames,
 #                       the smoothed p98 by < 0.1 code and the gain by < 0.002
-#                       (the EMA finishing its last fraction of a percent)
+#                       (the EMA finishing its last fraction of a percent).
+#                       Run three times, at Local adaptation 0 / 50 / 100 %:
+#                       the local map must not reintroduce the pulse the
+#                       2026-09-07 estimator fix removed
+#   halfsplit-off    -- the split scene with the effect off is the identity
+#   split-local      -- THE HEADLINE CHECK (2026-09-07): the same half-dark /
+#                       half-bright frame under Dynamic at Local adaptation
+#                       0 % vs 100 %. Every dark-half band must lift, the
+#                       darkest to >= 30, while the bright half is not pushed
+#                       up at all and its 245 band stays off the ceiling --
+#                       "both halves serviceable", as two sets of numbers
+#   halo-halobox-*   -- a flat 200 field with a flat 10 box, and haloinv the
+#   halo-haloinv-*      inverse. At Local adaptation 0 the field must come out
+#                       FLAT (the control); at 50 % and 100 % the profile out
+#                       from the box's edge must be monotone (a ramp, not a
+#                       ring) and its amplitude within 12 counts
+#   local-pan-*      -- INFO: the same panning scene at three local strengths,
+#                       with the map's range and the extreme gains it produces
 #   Whole-image captures of every scene are taken too and reported as INFO
 #   lines (they show the clipping Dynamic exists to avoid), not asserted.
 #
@@ -79,6 +96,8 @@ ADAPT_SETTLE_S=5  # after a scene switch, > 4 tau (tau = 1 s) before a "settled"
 
 AB_ID="image.shaders.adaptive_brightness"        # Switch: on/off
 AB_MODE_ID="image.shaders.adaptive_brightness.mode"  # Param, a Choice: 0 Whole image, 1 Dynamic
+AB_LOCAL_ID="image.shaders.adaptive_brightness.local_strength"  # Param, 0.0..1.0 (Local adaptation)
+AB_LOCAL_DEFAULT=0.5   # == ConfigSchema.h's ReshadeAdaptiveBrightnessSettings::local_strength
 
 KEEP=0
 OUT_LABEL=""
@@ -187,7 +206,8 @@ write_config() {
 		        "vibrancy": { "enabled": false },
 		        "pre_sharpen": { "enabled": false },
 		        "shadow_lift": { "enabled": false },
-		        "adaptive_brightness": { "enabled": false, "mode": "whole_image", "strength": 1.0 }
+		        "adaptive_brightness": { "enabled": false, "mode": "whole_image", "strength": 1.0,
+		                                 "local_strength": 0.0 }
 		    }
 		}
 	EOF
@@ -209,7 +229,7 @@ start_instance() {
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
 		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" \
 		--force-windows-fullscreen -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid,texdark --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 600 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
+		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid,texdark,halfsplit,halobox,haloinv --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -254,6 +274,11 @@ set_ab() {   # 0 off, 1 whole image, 2 dynamic
 		2) gsctl overlay_e2_set "$AB_MODE_ID 1" >/dev/null 2>&1 || true
 		   gsctl overlay_e2_set "$AB_ID 1" >/dev/null 2>&1 || true ;;
 	esac
+	sleep "$SETTLE_S"
+}
+
+set_local() {   # Local adaptation strength, 0.0 .. 1.0
+	gsctl overlay_e2_set "$AB_LOCAL_ID $1" >/dev/null 2>&1 || true
 	sleep "$SETTLE_S"
 }
 
@@ -375,6 +400,67 @@ sleep "$ADAPT_SETTLE_S"
 arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-06-static.txt"
 run_sampler ablog "$OUT_DIR/ablog-06-static.txt" static
 take_screenshot 06-texdark-still-dynamic >/dev/null
+
+# ---------------------------------------------------------------------------
+# Scenes 5-7: Local adaptation (2026-09-07). The measure pass writes a 16x16
+# map of smoothed local means beside the four global statistics, and the
+# apply pass fits each pixel's curve to its own neighbourhood. Three things
+# have to be true and none of them can be argued -- they have to be measured:
+#   * a still frame is still constant, at every local strength (the pulse
+#     fix's standard, re-run three times below on texdark);
+#   * the half-dark / half-bright frame becomes serviceable in BOTH halves;
+#   * a hard edge does not grow a ring.
+# ---------------------------------------------------------------------------
+
+# Still stability at three local strengths, on the scene already held still.
+for L in 0.5 1.0; do
+	set_local "$L"
+	arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-06-static-local$L.txt"
+	run_sampler ablog "$OUT_DIR/ablog-06-static-local$L.txt" static
+done
+# ... and the same scene panning again, reported not asserted (see the
+# sampler's `panlocal`: a pan genuinely changes each cell's own content).
+toggle_motion
+sleep "$ADAPT_SETTLE_S"
+for L in 0 0.5 1.0; do
+	set_local "$L"
+	arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-06-pan-local$L.txt"
+	run_sampler ablog "$OUT_DIR/ablog-06-pan-local$L.txt" panlocal
+done
+toggle_motion
+
+# Scene 5: halfsplit -- the headline case.
+next_scene
+sleep "$ADAPT_SETTLE_S"
+set_ab 0; set_local 0
+S_OFF="$(take_screenshot 07-halfsplit-off)"
+run_sampler split "$S_OFF" off
+set_ab 2
+set_local 0;                  S_L0="$(take_screenshot 07-halfsplit-local-0)"
+set_local "$AB_LOCAL_DEFAULT"; S_LD="$(take_screenshot 07-halfsplit-local-default)"
+set_local 1.0;                S_L1="$(take_screenshot 07-halfsplit-local-100)"
+run_sampler split "$S_L0" "local-0"
+run_sampler split "$S_LD" "local-$AB_LOCAL_DEFAULT"
+run_sampler split "$S_L1" "local-100"
+run_sampler splitcmp "$S_L0" "$S_L1"
+run_sampler splitcmp "$S_L0" "$S_LD"
+arm_ab_log 150; wait_ab_log 150 "$OUT_DIR/ablog-07-halfsplit.txt"
+run_sampler ablog "$OUT_DIR/ablog-07-halfsplit.txt" panlocal
+
+# Scenes 6 and 7: the halo pair. Dynamic stays on from above.
+for pair in "08 halobox" "09 haloinv"; do
+	set -- $pair
+	idx="$1"; scene="$2"
+	next_scene
+	sleep "$ADAPT_SETTLE_S"
+	set_local 0;   SH0="$(take_screenshot "${idx}-${scene}-local-0")"
+	set_local "$AB_LOCAL_DEFAULT"; SHD="$(take_screenshot "${idx}-${scene}-local-default")"
+	set_local 1.0; SH1="$(take_screenshot "${idx}-${scene}-local-100")"
+	run_sampler halo "$SH0" "$scene" off
+	run_sampler halo "$SHD" "$scene" on 12    # the 50 % default: measured 8 counts
+	run_sampler halo "$SH1" "$scene" on 18    # 100 %:            measured 15 counts
+done
+set_local "$AB_LOCAL_DEFAULT"
 
 END_TS=$(date +%s)
 {

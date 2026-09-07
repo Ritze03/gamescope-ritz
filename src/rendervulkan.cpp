@@ -3680,9 +3680,14 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 	return true;
 }
 
-// Adaptive Brightness's persistent history -- kEffectsHistoryTexels x 1,
-// one smoothed statistic per texel (mean, p2, p50, p98; the shader's
-// HISTORY_* indices, see effects_common.h). Created once and kept: unlike
+// Adaptive Brightness's persistent history -- kEffectsHistoryWidth x
+// kEffectsHistoryHeight. Row 0 is one smoothed statistic per texel (mean,
+// p2, p50, p98, then the same four raw; the shader's HISTORY_* indices),
+// and the sixteen rows under it are Local adaptation's 16x16 map of
+// smoothed LOCAL mean luminances -- one texture, one storage target, one
+// sampler slot for both (see effects_common.h's AB_LOCAL_* note for why the
+// map rides along in here rather than becoming a second target the shared
+// descriptor set would have to learn). Created once and kept: unlike
 // effectsOutput it does not
 // depend on the game's size or format, and its contents ARE the effect's
 // cross-frame state. Sets bCreated when this call made the texture, so the
@@ -3696,7 +3701,12 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 // CVulkanCmdBuffer::dispatch() binds a single RGB target there; an r32f
 // second-target path through the shared descriptor set for this one texel
 // was judged more plumbing than four exact byte lanes.
-static constexpr uint32_t kEffectsHistoryTexels = 8;   // == HISTORY_COUNT in effects_common.h (4 smoothed + 4 raw)
+// == HISTORY_TEX_W / HISTORY_TEX_H in effects_common.h -- keep in step.
+static constexpr uint32_t kEffectsHistoryWidth  = 16;  // >= HISTORY_COUNT (8) and == AB_LOCAL_GRID
+static constexpr uint32_t kEffectsHistoryHeight = 17;  // row 0 statistics + AB_LOCAL_GRID map rows
+static constexpr uint32_t kEffectsLocalGrid     = 16;  // == AB_LOCAL_GRID
+static constexpr uint32_t kEffectsLocalRow      = 1;   // == AB_LOCAL_ROW
+static constexpr uint32_t kEffectsHistoryStats  = 8;   // == HISTORY_COUNT (4 smoothed + 4 raw), row 0
 
 static bool update_effects_history( bool &bCreated )
 {
@@ -3710,7 +3720,7 @@ static bool update_effects_history( bool &bCreated )
 	createFlags.bTransferSrc = true;   // the effects_ab_log readback copy
 
 	g_output.effectsHistory = new CVulkanTexture();
-	if ( !g_output.effectsHistory->BInit( kEffectsHistoryTexels, 1u, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
+	if ( !g_output.effectsHistory->BInit( kEffectsHistoryWidth, kEffectsHistoryHeight, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
 	{
 		vk_log.errorf( "failed to create native effects history" );
 		g_output.effectsHistory = nullptr;
@@ -3784,7 +3794,7 @@ static bool update_effects_debug_staging( uint32_t uPixelFormat )
 	if ( g_output.effectsDebugHistory == nullptr )
 	{
 		g_output.effectsDebugHistory = new CVulkanTexture();
-		if ( !g_output.effectsDebugHistory->BInit( kEffectsHistoryTexels, 1u, 1u, DRM_FORMAT_ABGR8888, flags, nullptr ) )
+		if ( !g_output.effectsDebugHistory->BInit( kEffectsHistoryWidth, kEffectsHistoryHeight, 1u, DRM_FORMAT_ABGR8888, flags, nullptr ) )
 		{
 			g_output.effectsDebugHistory = nullptr;
 			return false;
@@ -3832,13 +3842,41 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 
 	g_device.wait( ulSequence, false );
 
-	float h[ kEffectsHistoryTexels ];
 	const uint8_t *pHist = g_output.effectsDebugHistory->mappedData();
-	for ( uint32_t i = 0; i < kEffectsHistoryTexels; i++ )
+	const uint32_t uHistPitch = g_output.effectsDebugHistory->rowPitch();
+	auto HistTexel = [&]( uint32_t x, uint32_t y ) -> float
 	{
 		uint32_t uBits = 0;
-		memcpy( &uBits, pHist + i * 4, 4 );   // R8G8B8A8 bytes == the float's little-endian bits (history_pack)
-		h[i] = std::bit_cast<float>( uBits );
+		memcpy( &uBits, pHist + y * uHistPitch + x * 4, 4 );   // R8G8B8A8 bytes == the float's little-endian bits (history_pack)
+		return std::bit_cast<float>( uBits );
+	};
+
+	float h[ kEffectsHistoryStats ];
+	for ( uint32_t i = 0; i < kEffectsHistoryStats; i++ )
+		h[i] = HistTexel( i, 0 );
+
+	// The local map's extremes, and the cell the probe pixel falls in.
+	// These three are what makes Local adaptation measurable the same way
+	// the pulse investigation made the global statistics measurable: the
+	// spread lmin..lmax IS how much local variation the operator sees, and
+	// gainlo/gainhi are the two extreme per-pixel gains it produces from it.
+	float flLocalMin = 1.0f, flLocalMax = 0.0f, flLocalProbe = 0.0f;
+	{
+		int px = s_nAbLogProbeX.load( std::memory_order_relaxed );
+		int py = s_nAbLogProbeY.load( std::memory_order_relaxed );
+		if ( px < 0 || py < 0 ) { px = uWidth / 2; py = uHeight / 2; }
+		const uint32_t uProbeCx = std::min<uint32_t>( uint32_t( std::max( px, 0 ) ) * kEffectsLocalGrid / std::max( uWidth, 1u ), kEffectsLocalGrid - 1 );
+		const uint32_t uProbeCy = std::min<uint32_t>( uint32_t( std::max( py, 0 ) ) * kEffectsLocalGrid / std::max( uHeight, 1u ), kEffectsLocalGrid - 1 );
+		flLocalProbe = HistTexel( uProbeCx, kEffectsLocalRow + uProbeCy );
+		for ( uint32_t cy = 0; cy < kEffectsLocalGrid; cy++ )
+		{
+			for ( uint32_t cx = 0; cx < kEffectsLocalGrid; cx++ )
+			{
+				const float v = HistTexel( cx, kEffectsLocalRow + cy );
+				flLocalMin = std::min( flLocalMin, v );
+				flLocalMax = std::max( flLocalMax, v );
+			}
+		}
 	}
 
 	const uint8_t *pPx = g_output.effectsDebugPixel->mappedData();
@@ -3847,15 +3885,23 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	if ( uFmt == DRM_FORMAT_ARGB8888 || uFmt == DRM_FORMAT_XRGB8888 )
 		std::swap( r, b );   // B,G,R,A in memory
 
-	float flGain, flGamma = 1.0f;
+	// The gain/gamma the pixel pass used at the probe, plus -- when Local
+	// adaptation is on -- the gains the darkest and brightest cells of the
+	// map get, which bound every per-pixel gain in the frame.
+	namespace ec = gamescope::effects_curve;
+	float flGain, flGamma = 1.0f, flGainLo = 0.0f, flGainHi = 0.0f;
 	if ( state.bAbDynamic )
 	{
-		flGain  = gamescope::effects_curve::ab_dyn_gain( h[3], state.flAbMinGain, state.flAbMaxGain );
-		flGamma = gamescope::effects_curve::ab_dyn_gamma( h[1], h[2], flGain, state.flAbTarget, state.flAbMinGain );
+		const float flShift = ec::ab_local_shift( flLocalProbe, h[0], state.flAbLocal );
+		flGain  = ec::ab_dyn_gain( h[3] * flShift, state.flAbMinGain, state.flAbMaxGain );
+		flGamma = ec::ab_dyn_gamma( h[1] * flShift, h[2] * flShift, flGain, state.flAbTarget, state.flAbMinGain );
+		flGainLo = ec::ab_dyn_gain( h[3] * ec::ab_local_shift( flLocalMin, h[0], state.flAbLocal ), state.flAbMinGain, state.flAbMaxGain );
+		flGainHi = ec::ab_dyn_gain( h[3] * ec::ab_local_shift( flLocalMax, h[0], state.flAbLocal ), state.flAbMinGain, state.flAbMaxGain );
 	}
 	else
 	{
 		flGain = std::clamp( state.flAbTarget / std::max( h[0], 0.001f ), state.flAbMinGain, state.flAbMaxGain );
+		flGainLo = flGainHi = flGain;
 	}
 
 	const uint64_t ulNow = get_time_in_nanos();
@@ -3866,10 +3912,11 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	int y = s_nAbLogProbeY.load( std::memory_order_relaxed );
 	if ( x < 0 || y < 0 ) { x = uWidth / 2; y = uHeight / 2; }
 
-	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d",
+	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d local=%.3f lmin=%.5f lmax=%.5f lprobe=%.5f gainlo=%.5f gainhi=%.5f",
 		s_nAbLogIndex++, double( ulNow - s_ulAbLogFirstNs ) * 1e-6, double( flDt ) * 1e3,
 		!state.bAdaptiveBrightness ? "off" : ( state.bAbDynamic ? "dynamic" : "whole" ),
-		h[4], h[5], h[6], h[7], h[0], h[1], h[2], h[3], flGain, flGamma, x, y, r, g, b );
+		h[4], h[5], h[6], h[7], h[0], h[1], h[2], h[3], flGain, flGamma, x, y, r, g, b,
+		state.flAbLocal, flLocalMin, flLocalMax, flLocalProbe, flGainLo, flGainHi );
 
 	if ( s_nAbLogFrames.load( std::memory_order_relaxed ) > 0 )
 		s_nAbLogFrames.fetch_sub( 1, std::memory_order_relaxed );
@@ -4264,6 +4311,7 @@ struct EffectsPushData_t
 	float    u_abMax;
 	float    u_abStrength;
 	float    u_abDt;
+	float    u_abLocal;
 
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
@@ -4301,6 +4349,11 @@ struct EffectsPushData_t
 		u_abMax      = s.flAbMaxGain;
 		u_abStrength = s.flAbStrength;
 		u_abDt       = flAbDtSeconds;
+		// Dynamic only: the Whole-image path has no curve to fit locally,
+		// and the request that added this deliberately left that mode
+		// untouched. Masked here rather than in the shader so the uniform
+		// says exactly what the frame did, which is what ab_log prints.
+		u_abLocal    = s.bAbDynamic ? std::clamp( s.flAbLocal, 0.0f, 1.0f ) : 0.0f;
 	}
 };
 

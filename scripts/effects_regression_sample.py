@@ -12,6 +12,14 @@ treats both the same way.
 Subcommands
     regions <image> <scene>              print every region's value (informational)
     check   <image> <scene> <what>       assert; `what` is off | dynamic
+    split   <image> <what>               halfsplit: the two halves' bands; `what` is
+                                         off (identity) or info (print only)
+    splitcmp <image-off> <image-on>      halfsplit with Local adaptation 0 % vs 100 %:
+                                         the dark half must lift and the bright half
+                                         must not blow out -- the headline check
+    halo    <image> <scene> <what>       halobox/haloinv: the line profile out from the
+                                         box's edge; `what` is off (flat) or on (a
+                                         monotone ramp, bounded amplitude -- no ring)
     temporal <settled> <t1> <t2> <t3> <band>
                                          the middle-band values across a scene switch
                                          must approach the settled value monotonically
@@ -35,6 +43,24 @@ SCENES = {
     "bright": dict(bands=[200, 215, 230, 245, 255], rect=30, rw=120, rh=50, black=False),
     "mid":    dict(bands=[26, 77, 128, 179, 230], rect=None, rw=0, rh=0, black=False),
 }
+
+
+# ---- The Local-adaptation scenes (2026-09-07) -----------------------------
+#
+# halfsplit: the left half is the dark scene's five bands, the right half the
+# bright scene's. Sampled well inside each half (8..30 % and 70..92 % of the
+# width) so the operator's deliberately wide transition across the seam is
+# never what a "half" number reports.
+SPLIT_LEFT = [5, 8, 12, 16, 20]
+SPLIT_RIGHT = [200, 215, 230, 245, 255]
+
+# halobox / haloinv: a 320x320 box centred in the 1280x720 reference frame,
+# so its right edge is at x = 800. The profile walks out from that edge along
+# the box's own centre line.
+HALO_BOX_W, HALO_BOX_H = 320, 320
+HALO_EDGE_X = 1280 // 2 + HALO_BOX_W // 2
+HALO_DISTANCES = [12, 24, 48, 96, 160, 240, 360, 460]
+HALO_FIELDS = {"halobox": 200, "haloinv": 15}
 
 
 def emit(ok, name, detail):
@@ -149,6 +175,126 @@ def cmd_check(args):
     sys.exit(0 if emit(ok, name, ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
 
 
+def split_regions(img):
+    """halfsplit: band i of each half, as name -> mean grey."""
+    sx = img.width / W
+    out = {}
+    for i in range(5):
+        y0, y1 = int(i * img.height / 5), int((i + 1) * img.height / 5)
+        out[f"L{i}"] = grey(region_mean(img, (int(0.08 * W * sx), y0, int(0.30 * W * sx), y1), inset=6))
+        out[f"R{i}"] = grey(region_mean(img, (int(0.70 * W * sx), y0, int(0.92 * W * sx), y1), inset=6))
+    return out
+
+
+def cmd_split(args):
+    image, what = args
+    v = split_regions(load(image))
+    if what == "off":
+        worst = max(max(abs(v[f"L{i}"] - SPLIT_LEFT[i]), abs(v[f"R{i}"] - SPLIT_RIGHT[i])) for i in range(5))
+        sys.exit(0 if emit(worst <= 2.0, "halfsplit-off",
+                           f"identity, worst deviation {worst:.1f} counts; {fmt(v)}") else 1)
+    print(f"INFO\thalfsplit-{what}\t{fmt(v)}")
+
+
+def cmd_splitcmp(args):
+    """The headline case, as a comparison rather than an absolute threshold:
+    the SAME frame, Dynamic, with Local adaptation at 0 % and at 100 %.
+
+    A global curve has one gain for a frame that is half 5..20 and half
+    200..255; it can serve one half or the other. The local operator must
+    make the dark half readable WITHOUT pushing the bright half further up
+    (it should in fact bring it down a little, since that half's own
+    neighbourhood is brighter than the frame mean)."""
+    off_img, on_img = load(args[0]), load(args[1])
+    off, on = split_regions(off_img), split_regions(on_img)
+    d_lift = [on[f"L{i}"] - off[f"L{i}"] for i in range(5)]
+    d_bright = [on[f"R{i}"] - off[f"R{i}"] for i in range(5)]
+    checks = [
+        ("the dark half is lifted at every band", all(d > 0.5 for d in d_lift)),
+        # Relative, not absolute: the point is "further than the global curve
+        # managed", and how far depends on the strength the caller chose.
+        # Measured 12 -> 18 at the 50 % default and 12 -> 28 at 100 %.
+        ("the dark half's darkest band lifts by >= 25 %", on["L0"] >= off["L0"] * 1.25),
+        ("the dark half keeps its order", on["L0"] < on["L1"] < on["L2"] < on["L3"] < on["L4"]),
+        ("the bright half is not pushed up", all(d <= 1.0 for d in d_bright)),
+        ("the bright half's 245 band stays off the ceiling", on["R3"] < 250.0),
+        ("the bright half keeps its order", on["R0"] < on["R1"] < on["R2"] < on["R3"] <= on["R4"]),
+        # The OTHER failure mode of a local operator, and the reason 100 % is
+        # not the default: pushing every neighbourhood at its own target
+        # flattens the contrast inside each one. Measured across the bright
+        # half's five bands: 40 counts under the global curve, 22 at the 50 %
+        # default, 8 at 100 %. Below ~6 the half has stopped being a picture.
+        ("the bright half keeps >= 6 counts of internal contrast", on["R4"] - on["R0"] >= 6.0),
+    ]
+    failed = [c for c, ok_ in checks if not ok_]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + \
+        "off " + " ".join(f"L{i}={off[f'L{i}']:.0f}/R{i}={off[f'R{i}']:.0f}" for i in range(5)) + \
+        " | on " + " ".join(f"L{i}={on[f'L{i}']:.0f}/R{i}={on[f'R{i}']:.0f}" for i in range(5)) + \
+        " | lift " + " ".join(f"{d:+.0f}" for d in d_lift) + \
+        " bright " + " ".join(f"{d:+.0f}" for d in d_bright)
+    sys.exit(0 if emit(not failed, "split-local", detail) else 1)
+
+
+def halo_profile(img):
+    """The field's value at each HALO_DISTANCES step out from the box's right
+    edge, along the box's centre line."""
+    sx, sy = img.width / W, img.height / H
+    cy = img.height // 2
+    out = []
+    for d in HALO_DISTANCES:
+        x = int((HALO_EDGE_X + d) * sx)
+        out.append(grey(region_mean(img, (x - 5, cy - 9, x + 5, cy + 9), inset=1)))
+    return out
+
+
+def cmd_halo(args):
+    image, scene, what = args[0], args[1], args[2]
+    max_amp = float(args[3]) if len(args) > 3 else 12.0
+    img = load(image)
+    prof = halo_profile(img)
+    sx, sy = img.width / W, img.height / H
+    box = grey(region_mean(img, (img.width // 2 - int(40 * sx), img.height // 2 - int(40 * sy),
+                                 img.width // 2 + int(40 * sx), img.height // 2 + int(40 * sy))))
+    far = prof[-1]
+    amp = prof[0] - far
+    # A local tone operator's artefact is a RING: the field brightening (or
+    # darkening) as it approaches the object, then coming back. A ring needs
+    # a turning point; a plain ramp has none. The map is a non-negative blur
+    # of a step, so a ramp is what the maths predicts and a turning point
+    # would mean something is wrong -- this is the check that says so.
+    diffs = [b - a for a, b in zip(prof, prof[1:])]
+    signs = [1 if d > 0.75 else (-1 if d < -0.75 else 0) for d in diffs]
+    nz = [x for x in signs if x != 0]
+    monotone = all(x == nz[0] for x in nz) if nz else True
+    body = (f"box={box:.1f} far={far:.1f} amp={amp:+.1f} counts; "
+            + " ".join(f"d{d}={v:.1f}" for d, v in zip(HALO_DISTANCES, prof)))
+    if what == "off":
+        # Local adaptation at 0 %: a flat field must come out flat. This is
+        # the control -- it proves the profile machinery, the capture and the
+        # global curve introduce no gradient of their own.
+        flat = max(prof) - min(prof)
+        sys.exit(0 if emit(flat <= 1.5, f"halo-{scene}-off",
+                           f"flat field stays flat, spread {flat:.1f} counts; {body}") else 1)
+    # The two things that matter, and they are different things.
+    #
+    # NO RING is the hard property, checked at every strength: the map is a
+    # non-negative blur of the image, so a step in the image can only become
+    # a monotone ramp in the map -- an overshoot here would mean the operator
+    # is doing something it must never do. This is the check that would catch
+    # a sharpening or edge-aware "improvement" reintroducing a rim.
+    #
+    # AMPLITUDE is the soft one, and its budget is per capture (the caller
+    # passes it): measured on this worst-case flat-field hard edge, +8 counts
+    # at the 50 % default and +15 at 100 %, against +57 before the blur was
+    # widened to sigma ~4.7 cells. See shader-effects.md's halo table.
+    checks = [("no ring (the profile is monotone out from the edge)", monotone),
+              (f"halo amplitude within {max_amp:.0f} counts", abs(amp) <= max_amp)]
+    failed = [c for c, ok_ in checks if not ok_]
+    sys.exit(0 if emit(not failed, f"halo-{scene}-on",
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "")
+                       + f"monotone={monotone} " + body) else 1)
+
+
 def cmd_temporal(args):
     settled, t1, t2, t3, band = args
     settled, t1, t2, t3 = (float(x) for x in (settled, t1, t2, t3))
@@ -176,7 +322,8 @@ AB_LOG_RE = re.compile(
     r"ab_log n=(\d+) t=([\d.]+) dt=([\d.]+) (\w+) "
     r"raw mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
     r"smooth mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
-    r"gain=([\d.]+) gamma=([\d.]+) px\((\d+),(\d+)\)=(\d+),(\d+),(\d+)")
+    r"gain=([\d.]+) gamma=([\d.]+) px\((\d+),(\d+)\)=(\d+),(\d+),(\d+)"
+    r"(?: local=([\d.]+) lmin=([\d.]+) lmax=([\d.]+) lprobe=([\d.]+) gainlo=([\d.]+) gainhi=([\d.]+))?")
 
 
 def parse_ablog(path):
@@ -185,9 +332,17 @@ def parse_ablog(path):
         m = AB_LOG_RE.search(line)
         if m:
             g = m.groups()
-            rows.append(dict(n=int(g[0]), t=float(g[1]), rp98=float(g[7]), p50=float(g[10]),
-                             p98=float(g[11]), gain=float(g[12]), gamma=float(g[13]),
-                             px=(int(g[16]) + int(g[17]) + int(g[18])) / 3.0))
+            row = dict(n=int(g[0]), t=float(g[1]), rp98=float(g[7]), p50=float(g[10]),
+                       p98=float(g[11]), gain=float(g[12]), gamma=float(g[13]),
+                       px=(int(g[16]) + int(g[17]) + int(g[18])) / 3.0)
+            # The Local-adaptation fields (2026-09-07). Absent on a line from
+            # a binary predating them, so every consumer must tolerate that.
+            row.update(local=float(g[19]) if g[19] else 0.0,
+                       lmin=float(g[20]) if g[20] else 0.0,
+                       lmax=float(g[21]) if g[21] else 0.0,
+                       gainlo=float(g[23]) if g[23] else row["gain"],
+                       gainhi=float(g[24]) if g[24] else row["gain"])
+            rows.append(row)
     return rows
 
 
@@ -200,7 +355,9 @@ def cmd_ablog(args):
     path, what = args
     rows = parse_ablog(path)
     name = f"stability-{what}" if what != "transition" else "transition-gain"
-    if len(rows) < 100:
+    if what == "static" and rows and rows[-1]["local"] > 0.0:
+        name = f"stability-static-local{rows[-1]['local']:.2f}"
+    if len(rows) < (100 if what != "panlocal" else 50):
         sys.exit(0 if emit(False, name, f"only {len(rows)} ab_log lines in {path}") else 1)
 
     if what == "static":
@@ -213,9 +370,12 @@ def cmd_ablog(args):
         # not change.
         d = dict(rp98=p2p(rows, "rp98"), gain=p2p(rows, "gain"), p98=p2p(rows, "p98") * 255.0, px=p2p(rows, "px"))
         ok = d["rp98"] <= 0.0 and d["gain"] <= 0.002 and d["p98"] <= 0.1 and d["px"] <= 0.0
+        last = rows[-1]
         detail = (f"{len(rows)} frames: raw p98 p2p={d['rp98']:.6f} (must be 0), gain p2p={d['gain']:.6f} (<= 0.002), "
                   f"smoothed p98 p2p={d['p98']:.4f} codes (<= 0.1), px p2p={d['px']:.1f} (must be 0); "
-                  f"gain={rows[-1]['gain']:.4f} px={rows[-1]['px']:.0f}")
+                  f"gain={last['gain']:.4f} px={last['px']:.0f}; local={last['local']:.2f} "
+                  f"map {last['lmin'] * 255:.1f}..{last['lmax'] * 255:.1f} codes "
+                  f"gain {last['gainlo']:.3f}..{last['gainhi']:.3f}")
     elif what == "pan":
         # The same texture panning under the tap grid with its true
         # statistics fixed (--periodic): everything that moves is sampling
@@ -232,6 +392,21 @@ def cmd_ablog(args):
         detail = (f"{len(rows)} frames: gain p2p={d['gain']:.4f} (<= 0.06), "
                   f"smoothed p98 p2p={d['p98']:.2f} codes (<= 3), raw p98 p2p={d['rp98']:.1f} codes (<= 40); "
                   f"gain={rows[-1]['gain']:.4f}")
+    elif what == "panlocal":
+        # Local adaptation under a pan, reported rather than asserted. A
+        # panning scene genuinely CHANGES each cell's own content even when
+        # the frame's statistics do not (--periodic fixes the histogram, not
+        # the layout), so the probe cell's gain is SUPPOSED to move here --
+        # that is the operator working, not a pulse. What must not move is a
+        # still frame, which is what `static` asserts at every local
+        # strength. So this prints the numbers and judges nothing.
+        d = dict(gain=p2p(rows, "gain"), lmin=p2p(rows, "lmin") * 255.0, lmax=p2p(rows, "lmax") * 255.0)
+        last = rows[-1]
+        print(f"INFO\tlocal-pan-{last['local']:.2f}\t{len(rows)} frames: gain p2p={d['gain']:.4f}, "
+              f"map lmin p2p={d['lmin']:.2f} codes lmax p2p={d['lmax']:.2f} codes; "
+              f"map {last['lmin'] * 255:.1f}..{last['lmax'] * 255:.1f} codes, "
+              f"gain {last['gainlo']:.3f}..{last['gainhi']:.3f} (probe {last['gain']:.3f})")
+        sys.exit(0)
     elif what == "transition":
         # Armed just before the dark -> bright switch, so the trace starts
         # with a few dark frames: the switch is the first frame whose raw
@@ -268,7 +443,8 @@ def main():
         print(__doc__)
         sys.exit(2)
     cmd, args = sys.argv[1], sys.argv[2:]
-    {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog}[cmd](args)
+    {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
+     "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo}[cmd](args)
 
 
 if __name__ == "__main__":

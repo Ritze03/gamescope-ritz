@@ -342,6 +342,14 @@ namespace gamescope::config
                                           // shader-effects.md for the re-measured curve)
         float max_gain = 4.0f;           // 1.0..4.0 (was 1.0..2.0, same request)
         float strength = 1.0f;           // 0.0..1.0 dry/wet mix
+        // Local adaptation (2026-09-07): 0.0 = one curve for the whole
+        // frame (exactly the pre-2026-09-07 behaviour), 1.0 = every pixel's
+        // curve fitted to its own neighbourhood from the measure pass's
+        // 16x16 luminance map. DYNAMIC MODE ONLY -- Whole image ignores it.
+        // Additive key: an old config has none and gets this default.
+        // The default is 0.5, chosen from captures, not taste: see
+        // shader-effects.md's split-scene and halo tables.
+        float local_strength = 0.5f;     // 0.0..1.0
     };
 
     struct ReshadeSettings

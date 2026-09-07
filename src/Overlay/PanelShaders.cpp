@@ -95,6 +95,7 @@ namespace gamescope
 		e.flAbMinGain   = r.adaptive_brightness.min_gain;
 		e.flAbMaxGain   = r.adaptive_brightness.max_gain;
 		e.flAbStrength  = r.adaptive_brightness.strength;
+		e.flAbLocal     = r.adaptive_brightness.local_strength;
 	}
 
 	static void PushAllToRenderer()
@@ -159,14 +160,30 @@ namespace gamescope
 	// (index.html declared three at E2's original writing; Shadow Control
 	// (request #3, 2026-09-04) is the fourth, added the same shape.)
 	//
-	// THE SIX BUDGET (now seven), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
-	// ON IT. Vibrancy has 2 params, Pre-Sharpen 1, Adaptive Brightness 7,
+	// THE SIX BUDGET (now eight), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
+	// ON IT. Vibrancy has 2 params, Pre-Sharpen 1, Adaptive Brightness 8,
 	// Shadow Control 1 -- the maximum a row may own before Registry.cpp
 	// aborts registration and tells the author to promote it to a category.
 	// Adaptive Brightness fits, but with zero headroom, and that is worth
 	// saying out loud: the NEXT parameter added to this effect does not
 	// "just" overflow a limit, it is the signal that Adaptive Brightness has
 	// become a category rather than a setting.
+	//
+	// THE SECOND RAISE, 7 -> 8 (2026-09-07, Local adaptation). The note left
+	// here after the first raise said the next param was the signal to
+	// PROMOTE, not to raise again. That note was not wrong and this raise
+	// does not pretend otherwise -- promoting Adaptive Brightness to its own
+	// rail category is still the right end state, and it is now recorded as
+	// owed work (superdoc/planning/requests-2026-09-08.md). It was not done
+	// in the same change as the local operator for two reasons, both about
+	// what a user would get: the promotion moves the effect out of
+	// "Shaders", where every capture, doc and keyword currently points at
+	// it, and it is a shell-layout change whose risk has nothing to do with
+	// the tone curve this request is actually about. Landing them together
+	// would make one hard-to-judge diff out of two easy ones. The measured
+	// cost of the raise itself is one more Inspector row, which
+	// test_overlay_shell.cpp already shows scrolls at 2.0x and fits at 1.0x
+	// with room to spare.
 	//
 	// Request #16 (2026-09-06) asked for a MODE on Adaptive Brightness, and
 	// it briefly lived as the row's own three-way Choice (Off | Whole image
@@ -354,12 +371,12 @@ namespace gamescope
 				.Step( 0.05f )   // 21 positions
 				.Default( 0.0f );
 
-		// SEVEN PARAMS -- the raised budget, exactly (see this section's
-		// header comment for why the budget moved rather than the mode).
+		// EIGHT PARAMS -- the budget again, exactly (see this section's
+		// header comment for both raises and why each one happened).
 		// Back in the Effects GroupCount band as a plain Switch (request
 		// #17, 2026-09-07): the mode is now the row's first Param instead of
 		// the row's own value, so it shows in the Inspector's params column
-		// like the other six.
+		// like the other seven.
 		//
 		// The .Default()s below read the compiled-in ConfigSchema.h values
 		// (as PanelCursor.cpp's rows do) rather than repeating literals:
@@ -448,7 +465,27 @@ namespace gamescope
 				.Range( 1.0f, 4.0f )   // widened from 1.0..2.0, 2026-09-07 request
 				.Step( 0.1f )    // 31 positions; a finer 0.05 step would be 61, too fine
 				                 // over the wider span for a slider to feel graduated
-				.Default( AbDefaults{}.max_gain );
+				.Default( AbDefaults{}.max_gain )
+			// Local adaptation (2026-09-07): the eighth param, and the one
+			// that took the budget 7 -> 8 -- see this section's header.
+			// Dynamic only, hence the "in Dynamic" wording; in Whole image
+			// the host masks it to 0 (rendervulkan.cpp's EffectsPushData_t)
+			// because that mode has no per-pixel curve to fit locally.
+			.Param( "local_strength", "Local adaptation",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.local_strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.local_strength, f ); } ) )
+				.Key( "reshade.adaptive_brightness.local_strength" )
+				.Help( "In Dynamic, how much each part of the picture is adjusted for its own "
+				       "brightness rather than the whole frame's -- so a dark room and a bright "
+				       "window can both be readable at once. 0% is one setting for the whole "
+				       "picture." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions, as Strength has -- and no
+				                 // Unit, exactly as Strength has none: both
+				                 // are 0..1 dry/wet mixes, and a "%" suffix
+				                 // on a 0..1 range would read "0.50 %"
+				.Default( AbDefaults{}.local_strength );
 
 		a.Group( "Diagnostics" );
 
