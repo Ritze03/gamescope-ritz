@@ -29,6 +29,22 @@
 #                       band's value at 0.2 s / 1 s / 3 s approaches the
 #                       settled value monotonically (no oscillation) and is
 #                       within 12 counts of it at 3 s (tau = 1 s)
+#   transition-gain  -- the same dark -> bright switch, per frame, from
+#                       gamescope's `effects_ab_log` readback: the gain and
+#                       the probe pixel come down monotonically, never
+#                       overshoot where they settle, and are within 5 % of
+#                       settled inside 4 s
+#   stability-pan    -- a textured dark scene with 2 % lights (the 98th
+#                       percentile sits in the histogram's gap) panning under
+#                       the tap grid with --periodic, so its true statistics
+#                       never change: over 300 frames the gain moves <= 0.06,
+#                       the smoothed p98 <= 3 codes, the raw p98 <= 40 codes
+#                       (the rank-cut estimator this replaced read 0.81 /
+#                       16 / 107 -- "the whole image pulsates", 2026-09-07)
+#   stability-static -- the same scene held still: the raw measurement and
+#                       the output pixel do not move AT ALL over 300 frames,
+#                       the smoothed p98 by < 0.1 code and the gain by < 0.002
+#                       (the EMA finishing its last fraction of a percent)
 #   Whole-image captures of every scene are taken too and reported as INFO
 #   lines (they show the clipping Dynamic exists to avoid), not asserted.
 #
@@ -186,11 +202,14 @@ start_instance() {
 	CLIENT_LOG="$OUT_DIR/client.log"
 	: > "$CLIENT_LOG"
 	rm -f "$PIDFILE"
-	log "starting gamescope + effects_scene_client (dark,bright,mid)"
+	log "starting gamescope + effects_scene_client (dark,bright,mid,texdark)"
+	# texdark: 2 % lights so the 98th percentile sits in the histogram's gap,
+	# --periodic so the 3 px/frame pan changes nothing but where the taps
+	# land (the stability checks). --motion only moves the textured scene.
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
 		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" \
 		--force-windows-fullscreen -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid --width $OUT_W --height $OUT_H --seconds 600 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
+		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid,texdark --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 600 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -241,6 +260,28 @@ set_ab() {   # 0 off, 1 whole image, 2 dynamic
 next_scene() {
 	# Only ever the pid the client itself wrote -- never a name match.
 	kill -USR1 "$CLIENT_PID"
+}
+toggle_motion() { kill -USR2 "$CLIENT_PID"; }
+
+# Per-frame statistics from gamescope's own `effects_ab_log` readback
+# (rendervulkan.cpp): arm N composites with the probe on the middle band,
+# wait for them to land in the gamescope log, and cut the last N lines into
+# a file the sampler's `ablog` subcommand reads.
+AB_LOG_TIMEOUT_S=20
+AB_LOG_SEEN=0
+ab_log_count() { grep -c 'ab_log n=' "$GS_LOG" 2>/dev/null || true; }
+arm_ab_log() {   # <count>; probe (1200, 360): the middle band, clear of the rectangles
+	AB_LOG_SEEN="$(ab_log_count)"; AB_LOG_SEEN="${AB_LOG_SEEN:-0}"
+	gsctl effects_ab_log "$1 1200 360" >/dev/null 2>&1 || true
+}
+wait_ab_log() {   # <count> <out-file>: the <count> lines the last arm_ab_log produced
+	local n="$1" out="$2" waited=0 seen
+	while (( waited < AB_LOG_TIMEOUT_S * 10 )); do
+		seen="$(ab_log_count)"
+		[[ "${seen:-0}" -ge $(( AB_LOG_SEEN + n )) ]] && break
+		sleep 0.1; waited=$((waited + 1))
+	done
+	grep 'ab_log n=' "$GS_LOG" | tail -n "+$(( AB_LOG_SEEN + 1 ))" | head -n "$n" > "$out"
 }
 
 take_screenshot() {
@@ -299,6 +340,8 @@ start_instance
 capture_scene dark 01
 
 elapsed() { python3 -c "import time,sys; print(f'{time.time()-float(sys.argv[1]):.2f}')" "$1"; }
+AB_FRAMES=300
+arm_ab_log "$AB_FRAMES"    # per-frame trace across the switch (transition-gain)
 T0=$(date +%s.%N)
 next_scene
 sleep 0.2;  S1="$(take_screenshot 02-bright-dynamic-t0.2s)"; E1=$(elapsed "$T0")
@@ -309,6 +352,8 @@ S4="$(take_screenshot 02-bright-dynamic-settled)"
 record_line "INFO	temporal-elapsed	captures requested at ${E1}s ${E2}s ${E3}s after the switch (tau 1 s)"
 run_sampler regions "$S1" bright; run_sampler regions "$S2" bright; run_sampler regions "$S3" bright
 run_sampler temporal "$(band2_of "$S4" bright)" "$(band2_of "$S1" bright)" "$(band2_of "$S2" bright)" "$(band2_of "$S3" bright)" band2
+wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-02-transition.txt"
+run_sampler ablog "$OUT_DIR/ablog-02-transition.txt" transition
 
 # Scene 2: bright, settled.
 capture_scene bright 03
@@ -317,6 +362,19 @@ capture_scene bright 03
 next_scene
 sleep "$ADAPT_SETTLE_S"
 capture_scene mid 04
+
+# Scene 4: texdark, panning (periodic) -- sampling noise only -- then still.
+# Dynamic is still on from capture_scene.
+next_scene
+sleep "$ADAPT_SETTLE_S"
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-05-pan.txt"
+run_sampler ablog "$OUT_DIR/ablog-05-pan.txt" pan
+take_screenshot 05-texdark-pan-dynamic >/dev/null
+toggle_motion
+sleep "$ADAPT_SETTLE_S"
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-06-static.txt"
+run_sampler ablog "$OUT_DIR/ablog-06-static.txt" static
+take_screenshot 06-texdark-still-dynamic >/dev/null
 
 END_TS=$(date +%s)
 {

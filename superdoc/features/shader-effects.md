@@ -43,7 +43,7 @@ the ReShade block and before the FSR/NIS/blur/blit branch chooses a path:
 layer0.tex (game, source res)
    │  [ReShade, if a user .fx is set]           -- unchanged, general queue + CPU wait
    ▼
-cs_effects_measure ──► g_output.effectsHistory  (4×1, persistent; one 16×16 workgroup,
+cs_effects_measure ──► g_output.effectsHistory  (8×1, persistent; one 16×16 workgroup,
    │                    ▲   reads last frame's value, writes this frame's)
    ▼                    │
 cs_effects_layer0  ──►  g_output.effectsOutput  (pooled, source res, 8×8 groups)
@@ -346,28 +346,37 @@ what the rest of this section describes.
 #### The statistics (both modes)
 
 Two dispatches per frame. **The measure pass** (`cs_effects_measure.comp`,
-`SHADER_TYPE_EFFECTS_MEASURE`) takes a **64×64 grid of taps** over the whole image (16×16
-threads, 4×4 per thread, 4096 taps), each run through `grade()` so it measures the
-Shadow-Control/Vibrancy-graded image the `.fx` measured (its `PreSharpenOut` texture) —
-sharpening is not applied to the taps; it does not move the statistics. From those taps it
-derives four numbers on the **encoded** Rec.601 luma (`(.299, .587, .114)`, as the `.fx`
-computed it):
+`SHADER_TYPE_EFFECTS_MEASURE`) takes a **128×128 grid of taps** over the whole image (16×16
+threads, 8×8 per thread, 16384 taps — 64×64 / 4096 until 2026-09-07, see
+[the pulse](#the-pulse-rank-cuts-on-a-bimodal-histogram-2026-09-07) below), each run
+through `grade()` so it measures the Shadow-Control/Vibrancy-graded image the `.fx`
+measured (its `PreSharpenOut` texture) — sharpening is not applied to the taps; it does
+not move the statistics. From those taps it derives four numbers on the **encoded**
+Rec.601 luma (`(.299, .587, .114)`, as the `.fx` computed it):
 
 | History texel | Statistic | Read by |
 | --- | --- | --- |
 | `HISTORY_MEAN` (0) | arithmetic mean (shared-memory tree reduction, as before) | Whole image |
-| `HISTORY_P2` (1) | 2nd percentile — the shadows | Dynamic (shadow cap) |
-| `HISTORY_P50` (2) | median — the mid-tone anchor | Dynamic (gamma) |
-| `HISTORY_P98` (3) | 98th percentile — the highlights | Dynamic (levels gain) |
+| `HISTORY_P2` (1) | mean of the taps ranked 1 %..3 % — the shadows | Dynamic (shadow cap) |
+| `HISTORY_P50` (2) | mean of the taps ranked 25 %..75 % — the mid-tone anchor | Dynamic (gamma) |
+| `HISTORY_P98` (3) | mean of the taps ranked 97 %..99 % — the highlights | Dynamic (levels gain) |
+| `HISTORY_RAW` + 0..3 (4..7) | this frame's unsmoothed measurement of the same four | nothing — the `effects_ab_log` readback only |
 
-The percentiles come from a **64-bin histogram in shared memory** (one `atomicAdd` per
-tap, then invocation 0 walks the bins), **interpolated inside the bin** the target count
-falls in — so a percentile is continuous rather than stepping by 4 code values as a
-scene drifts across a bin edge. `Why 64 bins:` 4096 taps over 64 bins is 64 per bin on a
-flat image; finer bins would be mostly empty and the interpolation already recovers
-sub-bin precision. `Why median, not the mean, for Dynamic:` a few bright windows in a dark
-room must not read as "the room is lit" — the `.fx`'s 25 fixed taps could be swung by one
-highlight, the mean by a few percent of the image, the median by neither.
+The three ranked statistics are **rank-window means** — the mean luma of the taps whose
+rank, sorted from black, falls in a window centred on the named percentile — computed
+from a **64-bin histogram in shared memory** of counts *and* value sums (two
+`atomicAdd`s per tap, then invocation 0 walks the bins once). The part of a bin that
+falls inside the window contributes that many taps at the bin's own mean value, so on a
+dense histogram this *is* the interpolated percentile at the window's centre: the flat
+reference scenes below measure identically to the rank-cut percentiles they replaced, to
+the code value. Where the histogram has an empty stretch the two differ, and that is the
+point — a rank *cut* jumps across the gap on a single tap, a window *mean* moves by
+`gap / window taps` (see the pulse section). `Why 64 bins:` 16384 taps over 64 bins is
+256 per bin on a flat image; finer bins would be mostly empty and the in-bin mean already
+recovers sub-bin precision. `Why the median (well, its window), not the mean, for
+Dynamic:` a few bright windows in a dark room must not read as "the room is lit" — the
+`.fx`'s 25 fixed taps could be swung by one highlight, the mean by a few percent of the
+image, the 25..75 % window by neither (anything in the top quarter is outside it).
 
 **Each statistic is smoothed with the `.fx`'s EMA**, unchanged, per statistic:
 
@@ -558,7 +567,86 @@ from 252/245/205/196 at the old 0.5/2.0 defaults — the settled value is lower 
 "compresses the highlights harder" reason as the table above). The first second looks slow
 because while the smoothed gain is still above 1 the shoulder pins the bright bands near
 white; once the gain drops under 1 the curve releases them. No oscillation was seen in any
-capture.
+capture. Per frame (`transition-gain`, the `effects_ab_log` trace the script takes across
+the same switch): the gain goes 4.000 → 0.905 monotonically, never below its settled value,
+within 5 % of it at **1.73 s**; the 230-band pixel goes 254 → 188 monotonically, within 5 %
+at 3.9 s (the shoulder holds it near white while the gain is still above 1). These are the
+EMA's numbers and the 2026-09-07 estimator change did not touch the EMA, so they are the
+same before and after that fix.
+
+#### The pulse: rank cuts on a bimodal histogram (2026-09-07)
+
+`requests-2026-09-08.md` item 6: *"For the dynamic mode, sometimes the whole image
+pulsates for some reason."* Found by measurement, not argument — the `effects_ab_log`
+readback (below) was built for it and is what the numbers here come from
+(`build-release/verify-shots/adaptive-pulse-2026-09-07/`, `results.txt` has every run).
+
+**What it was not.** A completely still frame (`tests/effects_scene_client.c`'s `texdark`,
+no motion) logged for 400 composites at both `max_gain` 2 and 4: raw and smoothed
+statistics, gain, gamma and the output pixel **identical every frame** — peak-to-peak
+zero, to the last float bit. That rules out the feedback-loop hypothesis outright (the
+measure pass reads `layer0.tex`, the game's own buffer, and the pre-pass block is guarded
+against ever seeing `effectsOutput` or a pre-upscaled texture; the log confirms the loop
+is open), and with it any limit cycle of the EMA, the gain/gamma coupling, the shoulder
+or the shadow cap switching: nothing internal moves without the input moving.
+
+**What it was.** A percentile is a rank *cut*: the value of the k-th brightest tap. On a
+histogram with an empty stretch — a dark scene with a few lights, a half-sky/half-ground
+view: precisely the scenes Dynamic exists for — the cut sits in the gap, and **one tap**
+moving from one mode to the other flips it from the top of the lower mode to the bottom
+of the upper one. Under camera motion the tap grid lands on different pixels every frame,
+so the count straddling the cut jitters by ±√(N·p·q) ≈ 9 taps and the cut telegraphs
+between the two modes at random. The EMA cannot hide a square wave of that size; it turns
+it into a slow wander, which the gain (`0.9 / p98`) and the gamma (from `p50`) turn into
+the picture breathing. Measured on `texdark` with **2 %** light cells (so the 98th
+percentile sits in the gap) panning at 3 px/frame, 340 frames:
+
+| | raw p98 p2p | smoothed p98 p2p | gain p2p @ max 2 | gain p2p @ max 4 |
+| --- | --- | --- | --- | --- |
+| rank cut, 64×64 taps (before) | **107 codes** (0.217 ↔ 0.636) | 16.8 codes | 0 (pinned at 2.0) | **0.81** (3.19..4.00, 25 %) |
+| rank-window mean, 64×64 | 46 codes | 9.6 codes | 0 (pinned) | 0.22 (2.16..2.38) |
+| rank-window mean, 128×128 (after) | 36 codes | 17.6 codes* | 0 (pinned) | 0.45* |
+| … same, `--periodic` (true statistics constant) | 11 codes | **0.6 codes** | — | **0.013** (2.24..2.25, 0.6 %) |
+
+And the same cliff on the **median**: `texsplit` 50/50 panning, rank cut: raw p50 p2p
+**98 codes** (0.214 ↔ 0.599), smoothed 33 codes, **gamma 0.86..1.18** with the gain not
+moving at all — the midtones alone breathing between a lift and a darkening. After: raw
+7.5 codes, smoothed 2.5, gamma p2p 0.02; periodic: smoothed 0.15 codes, gamma p2p 0.0013.
+
+\* The non-periodic pan is not a fair "noise" number: the texture scrolling in at the
+frame edge changes the scene's true light population, which the effect is *supposed* to
+follow, and the window mean now follows it continuously instead of in jumps. The
+`--periodic` row (the same texture repeating every frame width, so a pan changes nothing
+but where the taps land) is the sampling noise alone — and that is what the tap count
+buys: 64×64 → 128×128 halves the raw spread (26.8 → 11.3 codes, the expected 1/√4) and
+the smoothed gain's (0.025 → 0.013). At `max_gain` 2 the dark scene sits on the clamp and
+the pulse was invisible; **at 4.0 it is worse than what the user saw**, since a 25 %
+swing at gain 4 is the whole picture moving a stop — the widening landed the same day, so
+the report predates it and the fix was measured at both.
+
+**The fix**, in `cs_effects_measure.comp` only: the three percentiles became the
+rank-window means described above (`histogram_window_mean()`, from a histogram of counts
+and fixed-point value sums), and the tap grid went 64×64 → 128×128 (four times the
+fetches in the same single workgroup; still nowhere near a millisecond). The EMA, its
+asymmetric time constants, `dt`, the curve and the history contract are untouched, so
+**adaptation is exactly as fast as before** — the trade-off chosen is *no* added lag: the
+residual (a ≤ 1 % gain wander with the EMA's own correlation time on the pathological
+scene, zero on a still one) was judged below notice, while a deadband or a longer smoothing
+would have been visible as steps or sluggishness on every real transition. `Why not more
+taps still:` on spatially coherent content the taps are not independent samples (the
+16-px cells of the test texture already show 128×128 not gaining the full 2× on the
+non-periodic pan), so past this point taps buy little; the estimator's continuity is what
+mattered. `Why the same numbers on the reference scenes:` see the statistics section —
+the flat scenes have no gap, so `effects-regression.sh`'s dark/bright/mid tables above
+are unchanged to the code value by this fix.
+
+**Guarded by** three new `effects-regression.sh` checks, all on the per-frame readback:
+`transition-gain` (monotone, no overshoot, settling time reported), `stability-pan` (the
+2 %-lights scene, periodic, panning: gain p2p ≤ 0.06, smoothed p98 ≤ 3 codes, raw p98
+≤ 40 codes — the rank cut read 0.81 / 16 / 107) and `stability-static` (the same scene
+held still via `SIGUSR2`: raw p98 p2p **exactly 0**, output pixel exactly 0, smoothed p98
+< 0.1 code and gain < 0.002 — the EMA's last fraction of a percent of convergence after
+the pan stops). Measured on the final run: 0.025 / 1.16 / 11.3 and 0 / 0 / 0.013 / 0.0003.
 
 **Per-frame cost.** The measure pass is still one 16×16 workgroup over 4096 taps; the
 histogram adds one shared-memory `atomicAdd` per tap and a 64-iteration walk on one
@@ -612,12 +700,14 @@ smooth. The first dispatch passes `0`.
 
 #### The history texture — persistence as a contract, not luck
 
-`g_output.effectsHistory` is a **4×1 `ABGR8888` storage+sampled texture** (one texel per
-statistic — `HISTORY_MEAN`, `_P2`, `_P50`, `_P98`; `kEffectsHistoryTexels` on the host
+`g_output.effectsHistory` is an **8×1 `ABGR8888` storage+sampled texture** (one texel per
+smoothed statistic — `HISTORY_MEAN`, `_P2`, `_P50`, `_P98` — plus, from `HISTORY_RAW` = 4,
+the same four unsmoothed, for the readback only; `kEffectsHistoryTexels` on the host
 mirrors the shader's `HISTORY_COUNT`), created once by `update_effects_history()` and kept
 for the life of the output (it does not depend on the game's size, and its contents *are*
 the effect's state — so, unlike the `.fx`, a resolution change does not reset it). It was
-1×1 until Dynamic mode (2026-09-06) needed the percentiles.
+1×1 until Dynamic mode (2026-09-06) needed the percentiles, 4×1 until the pulse
+investigation (2026-09-07) wanted measured next to smoothed.
 
 **Storage format — RGBA8 bytes, not R32F.** Each float is spread bit-for-bit over the four
 8-bit channels of its texel (`history_pack` = `unpackUnorm4x8(floatBitsToUint(v))`, `history_unpack` =
@@ -689,6 +779,28 @@ into the binary. The "effect file" / "compiled" / "loaded from" / "uniforms" row
 2026-09-05 for the stale-file case were removed the same day along with the failure they
 diagnosed.
 
+**`effects_ab_log [frames] [x y]`** (ConCommand, `rendervulkan.cpp`, 2026-09-07): prints
+Adaptive Brightness's state for the next N composites, one line each on `console_log`
+(so `gamescopectl effects_ab_log 300` shows it live, and it lands in gamescope's log):
+
+```
+ab_log n=<i> t=<ms> dt=<ms> <off|whole|dynamic> raw mean=… p2=… p50=… p98=…
+       smooth mean=… p2=… p50=… p98=… gain=… gamma=… px(<x>,<y>)=<r>,<g>,<b>
+```
+
+`raw` is this frame's measurement, `smooth` the history the pixel pass read, `gain` and
+`gamma` are recomputed on the host with the same `effects_curve.h` the shader compiles,
+and `px` is one pixel of the graded output (`effectsOutput`) before scaling — the probe
+defaults to the centre of the game image. `How:` the pre-pass block copies the history
+and the probe pixel into two host-mappable staging textures (`effectsDebugHistory`,
+`effectsDebugPixel`, created on first use) and `vulkan_composite()` waits for that
+submit right after it, so every logged composite stalls the render thread by one GPU
+frame — which is why it is a bounded count, not a switch; `frames` defaults to 1. The
+history's state is on the GPU and used to be unobservable except through screenshots at
+a few frames per second; this is what made the pulse measurable rather than argued
+about. `scripts/effects-regression.sh` drives it for its per-frame checks
+(`effects_regression_sample.py ablog`).
+
 ## Related links
 
 - [reshade-effects](reshade-effects.md) — the ReShade loader, now for third-party `.fx`
@@ -703,3 +815,4 @@ diagnosed.
   `requests-2026-09-07.md` item 7 — the mode moved into the Inspector and the Six
   Budget raised to 7.
 - `scripts/effects-regression.sh` — the headless measurement gate for both modes.
+- `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed.

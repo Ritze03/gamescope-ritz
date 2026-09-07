@@ -29,6 +29,10 @@ The newest version below is the one this build reports.
   symmetric**: a gap of 1 leaves exactly one pixel missing at the centre, larger gaps
   split evenly on both sides with no stagger between the two arms of an axis, and a
   saved gap value now renders visibly tighter than before.
+- **Adaptive Brightness no longer pulses in Dynamic mode**: the picture no longer
+  breathes brighter and darker on a dark scene with a few lights, or on a half-sky
+  view, while the camera moves; the highlight, mid-tone and shadow readings the curve
+  follows now change smoothly instead of jumping, and adaptation is as fast as before.
 
 ### Info
 - **Adaptive Brightness min/max gain range widened**: Min gain now goes down to 0.3

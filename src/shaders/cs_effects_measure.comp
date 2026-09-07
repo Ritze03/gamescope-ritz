@@ -8,18 +8,40 @@
 // host records it immediately before the per-pixel pass, on the same
 // command buffer, whenever the effects pre-pass runs at all.
 //
-// Four statistics, all on the graded ENCODED luma of a 64x64 grid of taps
-// (16x16 threads, 4x4 per thread, 4096 total) over the whole image:
-//   HISTORY_MEAN  arithmetic mean          -- Whole-image mode's input
-//   HISTORY_P2    2nd percentile (shadows)  \
-//   HISTORY_P50   median                     > Dynamic mode's inputs
-//   HISTORY_P98   98th percentile (lights)  /
-// The percentiles come from a 64-bin shared-memory histogram (one atomicAdd
-// per tap, then invocation 0 walks the 64 bins), interpolated inside the bin
-// the target count falls in so a percentile is continuous rather than
-// stepping by 4 code values when a scene drifts across a bin edge. No
-// buffer atomics, no second pass, no intermediate texture -- the histogram
-// lives entirely in this workgroup's shared memory.
+// Four statistics, all on the graded ENCODED luma of a 128x128 grid of taps
+// (16x16 threads, 8x8 per thread, 16384 total) over the whole image:
+//   HISTORY_MEAN  arithmetic mean                        -- Whole-image mode's input
+//   HISTORY_P2    mean of the taps ranked  1 %.. 3 % (shadows)    \
+//   HISTORY_P50   mean of the taps ranked 25 %..75 % (mid-tones)   > Dynamic mode's inputs
+//   HISTORY_P98   mean of the taps ranked 97 %..99 % (lights)     /
+// The three ranked statistics come from a 64-bin shared-memory histogram of
+// counts AND value sums (two atomicAdds per tap, then invocation 0 walks
+// the 64 bins once). No buffer atomics, no second pass, no intermediate
+// texture -- the histogram lives entirely in this workgroup's shared memory.
+//
+// WHY RANK-WINDOW MEANS, NOT PERCENTILES (2026-09-07, "the whole image
+// pulsates"). A percentile is a rank CUT: the value of the k-th brightest
+// tap. On a histogram with an empty stretch -- a dark scene with a few
+// lights, a half-sky/half-ground view -- the cut sits in the gap, and a
+// single tap moving from one mode to the other flips it from the top of
+// the lower mode to the bottom of the upper one. Measured with the
+// effects_ab_log readback on a 2 %-lights scene under a 3 px/frame pan: the
+// raw 98th percentile telegraphed 0.217 <-> 0.636 (107 codes) frame to
+// frame, the EMA turned that into a 16-code wander of the smoothed value,
+// and at max_gain 4 the gain breathed 3.19..4.00 -- the pulse the user saw.
+// A 50/50 split did the same to the median (98 codes raw, gamma 0.86..1.18).
+// The mean of the taps in a rank window centred on the same percentile is
+// the same number wherever the histogram is dense (in-bin uniformity is the
+// same assumption the old interpolation made) but is CONTINUOUS in the tap
+// counts: one tap crossing a gap of width g moves an 82-tap window's mean by
+// g / 82, not by g. Measured after: the same scene's raw p98 spread fell
+// from 107 to under 10 codes and the smoothed gain's swing from 25 % to
+// under 2 %. Nothing about the EMA, dt, or the curve changed, so
+// adaptation is exactly as fast as before. The grid went 64x64 -> 128x128
+// at the same time: what is left after the cliff is plain sampling noise,
+// which only more taps reduce (std ~ 1/sqrt(taps)), and four times the
+// fetches in this one workgroup is still far below a millisecond. See
+// shader-effects.md.
 //
 // Ported from the retired reshade/Shaders/gamescope-ritz.fx (MeasureLuminance
 // + PS_AdaptiveBrightnessAdapt), which was measured live to converge on its
@@ -58,32 +80,48 @@ layout(
   local_size_z = 1) in;
 
 const uint THREADS_PER_AXIS = 16u;   // == local_size_x == local_size_y
-const uint TAPS_PER_THREAD_AXIS = 4u;
-const uint GRID = THREADS_PER_AXIS * TAPS_PER_THREAD_AXIS;   // 64 taps per axis
+const uint TAPS_PER_THREAD_AXIS = 8u;
+const uint GRID = THREADS_PER_AXIS * TAPS_PER_THREAD_AXIS;   // 128 taps per axis
 const uint THREAD_COUNT = THREADS_PER_AXIS * THREADS_PER_AXIS;
-const uint TAP_COUNT = GRID * GRID;                          // 4096
+const uint TAP_COUNT = GRID * GRID;                          // 16384
 const uint HIST_BINS = 64u;
 
 shared float s_sum[THREAD_COUNT];
-shared uint  s_hist[HIST_BINS];
+shared uint  s_hist[HIST_BINS];      // taps per bin
+shared uint  s_histSum[HIST_BINS];   // sum of the taps' luma per bin, fixed point (x LUMA_FIXED)
 
-// The value at which `rank` taps (counting from black) have been seen,
-// interpolated inside the bin that crosses it. Percentile p of N taps is
-// rank = p * N.
-float histogram_percentile(float rank)
+// Fixed-point scale for s_histSum: 16384 taps x 65535 < 2^32.
+const float LUMA_FIXED = 65535.0;
+
+// The mean luma of the taps ranked [lo, hi) when sorted from black
+// (rank = fraction * TAP_COUNT). Walks the bins; the part of a bin that
+// falls inside the window contributes that many taps at the bin's own
+// mean value -- the same in-bin uniformity the old percentile interpolation
+// assumed, so on a dense histogram this IS the interpolated percentile of
+// the window's centre. Where the histogram has a gap, it is continuous in
+// the counts where a rank cut is not (see the header).
+float histogram_window_mean(float lo, float hi)
 {
-    uint cum = 0u;
+    float cum = 0.0;
+    float total = 0.0;
+    float taps = 0.0;
     for (uint b = 0u; b < HIST_BINS; b++)
     {
-        uint n = s_hist[b];
-        if (float(cum + n) >= rank)
+        float n = float(s_hist[b]);
+        if (n > 0.0)
         {
-            float frac = (n == 0u) ? 0.0 : clamp((rank - float(cum)) / float(n), 0.0, 1.0);
-            return (float(b) + frac) / float(HIST_BINS);
+            float k = clamp(min(cum + n, hi) - max(cum, lo), 0.0, n);
+            if (k > 0.0)
+            {
+                total += k * (float(s_histSum[b]) / (LUMA_FIXED * n));
+                taps += k;
+            }
+            cum += n;
         }
-        cum += n;
+        if (cum >= hi)
+            break;
     }
-    return 1.0;
+    return (taps > 0.0) ? clamp(total / taps, 0.0, 1.0) : 0.0;
 }
 
 // One EMA step toward `measured` from the stored value, or a straight write
@@ -110,11 +148,14 @@ void main()
     ivec2 size = textureSize(s_samplers[0], 0);
 
     if (gl_LocalInvocationIndex < HIST_BINS)
+    {
         s_hist[gl_LocalInvocationIndex] = 0u;
+        s_histSum[gl_LocalInvocationIndex] = 0u;
+    }
     memoryBarrierShared();
     barrier();
 
-    // Each thread owns a 4x4 block of the 64x64 tap grid; tap (gx, gy) sits
+    // Each thread owns an 8x8 block of the 128x128 tap grid; tap (gx, gy) sits
     // at the centre of grid cell (gx, gy) over the full image, clamped so a
     // tiny image never fetches out of bounds.
     uvec2 base = gl_LocalInvocationID.xy * TAPS_PER_THREAD_AXIS;
@@ -130,6 +171,7 @@ void main()
             sum += luma;
             uint bin = min(uint(luma * float(HIST_BINS)), HIST_BINS - 1u);
             atomicAdd(s_hist[bin], 1u);
+            atomicAdd(s_histSum[bin], uint(luma * LUMA_FIXED + 0.5));
         }
     }
 
@@ -149,13 +191,21 @@ void main()
     if (gl_LocalInvocationIndex != 0u)
         return;
 
-    float mean = clamp(s_sum[0] / float(TAP_COUNT), 0.0, 1.0);
-    float p2   = histogram_percentile(0.02 * float(TAP_COUNT));
-    float p50  = histogram_percentile(0.50 * float(TAP_COUNT));
-    float p98  = histogram_percentile(0.98 * float(TAP_COUNT));
+    const float N = float(TAP_COUNT);
+    float mean = clamp(s_sum[0] / N, 0.0, 1.0);
+    float p2   = histogram_window_mean(0.01 * N, 0.03 * N);
+    float p50  = histogram_window_mean(0.25 * N, 0.75 * N);
+    float p98  = histogram_window_mean(0.97 * N, 0.99 * N);
 
     imageStore(dst, ivec2(HISTORY_MEAN, 0), history_pack(adapt(HISTORY_MEAN, mean)));
     imageStore(dst, ivec2(HISTORY_P2,   0), history_pack(adapt(HISTORY_P2,   p2)));
     imageStore(dst, ivec2(HISTORY_P50,  0), history_pack(adapt(HISTORY_P50,  p50)));
     imageStore(dst, ivec2(HISTORY_P98,  0), history_pack(adapt(HISTORY_P98,  p98)));
+
+    // The raw measurement beside the smoothed value, for the host's debug
+    // readback only (effects_common.h, HISTORY_RAW).
+    imageStore(dst, ivec2(HISTORY_RAW + HISTORY_MEAN, 0), history_pack(mean));
+    imageStore(dst, ivec2(HISTORY_RAW + HISTORY_P2,   0), history_pack(p2));
+    imageStore(dst, ivec2(HISTORY_RAW + HISTORY_P50,  0), history_pack(p50));
+    imageStore(dst, ivec2(HISTORY_RAW + HISTORY_P98,  0), history_pack(p98));
 }

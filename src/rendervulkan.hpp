@@ -752,6 +752,11 @@ struct VulkanOutput_t
 	// the life of the output; its contents are the effect's cross-frame
 	// state, so it is never re-created on a resolution change.
 	gamescope::OwningRc<CVulkanTexture> effectsHistory;
+	// Host-mappable staging for the `effects_ab_log` debug readback: a copy
+	// of the history, and one probe pixel of effectsOutput. Created on the
+	// first logged frame, kept; only touched while a log is armed.
+	gamescope::OwningRc<CVulkanTexture> effectsDebugHistory;
+	gamescope::OwningRc<CVulkanTexture> effectsDebugPixel;
 
 	// NIS
 	gamescope::OwningRc<CVulkanTexture> nisScalerImage;
@@ -1165,6 +1170,9 @@ public:
 	void bindPipeline(VkPipeline pipeline);
 	void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 	void copyImage(gamescope::Rc<CVulkanTexture> src, gamescope::Rc<CVulkanTexture> dst);
+	// A dst-sized window of src, taken at (srcX, srcY), into dst -- the
+	// effects_ab_log readback's one-pixel probe (rendervulkan.cpp).
+	void copyImageRegion(gamescope::Rc<CVulkanTexture> src, uint32_t srcX, uint32_t srcY, gamescope::Rc<CVulkanTexture> dst);
 	void copyBufferToImage(VkBuffer buffer, VkDeviceSize offset, uint32_t stride, gamescope::Rc<CVulkanTexture> dst);
 
 

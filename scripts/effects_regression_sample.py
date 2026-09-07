@@ -15,7 +15,10 @@ Subcommands
     temporal <settled> <t1> <t2> <t3> <band>
                                          the middle-band values across a scene switch
                                          must approach the settled value monotonically
+    ablog   <file> <what>                per-frame `effects_ab_log` lines (gamescope's
+                                         console log); `what` is static | pan | transition
 """
+import re
 import sys
 
 try:
@@ -163,12 +166,109 @@ def cmd_temporal(args):
                        f"monotone={mono} no-overshoot={same_side} within-12-at-3s={close}") else 1)
 
 
+# ---- effects_ab_log traces (2026-09-07, "the whole image pulsates") ----
+#
+# One line per composite, printed by gamescope's `effects_ab_log` command
+# (src/rendervulkan.cpp): the raw and smoothed statistics, the gain and
+# gamma the pixel pass used, and one probe pixel of the graded output.
+
+AB_LOG_RE = re.compile(
+    r"ab_log n=(\d+) t=([\d.]+) dt=([\d.]+) (\w+) "
+    r"raw mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
+    r"smooth mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
+    r"gain=([\d.]+) gamma=([\d.]+) px\((\d+),(\d+)\)=(\d+),(\d+),(\d+)")
+
+
+def parse_ablog(path):
+    rows = []
+    for line in open(path):
+        m = AB_LOG_RE.search(line)
+        if m:
+            g = m.groups()
+            rows.append(dict(n=int(g[0]), t=float(g[1]), rp98=float(g[7]), p50=float(g[10]),
+                             p98=float(g[11]), gain=float(g[12]), gamma=float(g[13]),
+                             px=(int(g[16]) + int(g[17]) + int(g[18])) / 3.0))
+    return rows
+
+
+def p2p(rows, key):
+    v = [r[key] for r in rows]
+    return max(v) - min(v)
+
+
+def cmd_ablog(args):
+    path, what = args
+    rows = parse_ablog(path)
+    name = f"stability-{what}" if what != "transition" else "transition-gain"
+    if len(rows) < 100:
+        sys.exit(0 if emit(False, name, f"only {len(rows)} ab_log lines in {path}") else 1)
+
+    if what == "static":
+        # A perfectly still frame: the measurement is deterministic, so the
+        # RAW statistics must not move at all -- zero, not "a little" (a
+        # feedback loop or a non-deterministic estimator would show here
+        # first). The smoothed values are still finishing the EMA's last
+        # fraction of a percent after the pan stopped 5 s earlier, so they
+        # get a tolerance far below one code, and the output pixel must
+        # not change.
+        d = dict(rp98=p2p(rows, "rp98"), gain=p2p(rows, "gain"), p98=p2p(rows, "p98") * 255.0, px=p2p(rows, "px"))
+        ok = d["rp98"] <= 0.0 and d["gain"] <= 0.002 and d["p98"] <= 0.1 and d["px"] <= 0.0
+        detail = (f"{len(rows)} frames: raw p98 p2p={d['rp98']:.6f} (must be 0), gain p2p={d['gain']:.6f} (<= 0.002), "
+                  f"smoothed p98 p2p={d['p98']:.4f} codes (<= 0.1), px p2p={d['px']:.1f} (must be 0); "
+                  f"gain={rows[-1]['gain']:.4f} px={rows[-1]['px']:.0f}")
+    elif what == "pan":
+        # The same texture panning under the tap grid with its true
+        # statistics fixed (--periodic): everything that moves is sampling
+        # noise, and after the EMA it must stay far below what the eye
+        # picks up. The raw 98th-percentile spread is reported so a
+        # regression of the estimator itself (the rank-cut cliff: 100+
+        # codes raw) is visible even before the EMA hides it.
+        # Thresholds: measured 0.013..0.033 / 0.6..1.5 codes / 11 codes over
+        # several 300-frame runs after the fix (part of it the EMA's last
+        # percent of convergence from the previous scene); the rank-cut
+        # estimator read 0.81 / 16.4 codes / 107 codes on this scene.
+        d = dict(gain=p2p(rows, "gain"), p98=p2p(rows, "p98") * 255.0, rp98=p2p(rows, "rp98") * 255.0)
+        ok = d["gain"] <= 0.06 and d["p98"] <= 3.0 and d["rp98"] <= 40.0
+        detail = (f"{len(rows)} frames: gain p2p={d['gain']:.4f} (<= 0.06), "
+                  f"smoothed p98 p2p={d['p98']:.2f} codes (<= 3), raw p98 p2p={d['rp98']:.1f} codes (<= 40); "
+                  f"gain={rows[-1]['gain']:.4f}")
+    elif what == "transition":
+        # Armed just before the dark -> bright switch, so the trace starts
+        # with a few dark frames: the switch is the first frame whose raw
+        # p98 has jumped, and the probe pixel (the 230 band) first leaps to
+        # white under the still-dark gain. From there the gain and the
+        # pixel must come down without ever going below where they settle
+        # (no overshoot); settling times are measured from the switch.
+        i0 = next((i for i, r in enumerate(rows) if abs(r["rp98"] - rows[0]["rp98"]) > 0.1), 0)
+        t0 = rows[i0]["t"]
+        rows = rows[i0:]
+        gains = [r["gain"] for r in rows]
+        pxs = [r["px"] for r in rows]
+        settled_g, settled_px = gains[-1], pxs[-1]
+        mono_g = all(b <= a + 1e-4 for a, b in zip(gains, gains[1:]))
+        mono_px = all(b <= a + 1.0 for a, b in zip(pxs, pxs[1:]))
+        no_over_g = min(gains) >= settled_g - 1e-3
+        no_over_px = min(pxs) >= settled_px - 1.0
+        span = abs(gains[0] - settled_g)
+        t_settle = next((r["t"] - t0 for r in rows if abs(r["gain"] - settled_g) <= 0.05 * span), None)
+        px_span = abs(pxs[0] - settled_px)
+        t_settle_px = next((r["t"] - t0 for r in rows if abs(r["px"] - settled_px) <= max(0.05 * px_span, 1.0)), None)
+        ok = mono_g and mono_px and no_over_g and no_over_px and t_settle is not None and t_settle <= 4000.0
+        detail = (f"{len(rows)} frames: gain {gains[0]:.3f} -> {settled_g:.3f}, monotone={mono_g} "
+                  f"no-overshoot={no_over_g}, within 5% at {t_settle if t_settle is None else round(t_settle)} ms (<= 4000); "
+                  f"px {pxs[0]:.0f} -> {settled_px:.0f}, monotone={mono_px} no-overshoot={no_over_px}, "
+                  f"within 5% at {t_settle_px if t_settle_px is None else round(t_settle_px)} ms")
+    else:
+        sys.exit(2)
+    sys.exit(0 if emit(ok, name, detail) else 1)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)
     cmd, args = sys.argv[1], sys.argv[2:]
-    {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal}[cmd](args)
+    {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog}[cmd](args)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,29 @@
 //           the middle band -- "a super bright map with some shade".
 //   mid     bands at 26 / 77 / 128 / 179 / 230 (0.1 .. 0.9): the scene the
 //           curve must leave alone.
+//   texdark a textured stand-in for a real dark game frame (added for the
+//           2026-09-07 "the image pulsates" investigation): a fixed grid of
+//           16x16 cells, each a hashed grey 6..56 with a continuous, non-flat
+//           distribution, and ~1.5 % of the cells a 160..255 light. Unlike
+//           the flat scenes its histogram has no 800-tap bins, so the
+//           measure pass's 64x64 tap grid actually samples it.
+//   texmid  the same texture with the cells spread 40..220 -- a mid scene
+//           with the same sampling properties.
+//   texsplit --split PCT (default 50) of the cells bright (150..230), the
+//           rest dark: "sky and ground", a bimodal histogram whose median
+//           sits in the empty gap between the modes.
+//   --lights PCT (default 1.5) sets texdark's share of light cells; at 2.0
+//   the 98th percentile sits exactly in that scene's gap. --periodic makes
+//   the textures repeat every 80 cells (one 1280-wide frame), so under
+//   --motion the image's true statistics never change and every frame-to-
+//   frame difference in the measurement is sampling noise alone.
+//
+// --motion PX scrolls the TEXTURED scenes horizontally by PX pixels every
+// frame (the flat scenes never move, so their sampled regions stay put), so
+// the tap grid lands on different pixels each frame the way it does under
+// camera motion in a game. 0 (the default) is a perfectly still frame.
+// SIGUSR2 pauses/resumes the motion, so one run can measure the same scene
+// panning and then perfectly still.
 //
 // The layout is mirrored in scripts/effects_regression_sample.py; change one,
 // change both. SIGUSR1 advances to the next scene in --scenes, which is how
@@ -31,7 +54,9 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t s_nAdvance = 0;
+static volatile sig_atomic_t s_nMotionToggle = 0;
 static void OnUsr1( int sig ) { (void)sig; s_nAdvance++; }
+static void OnUsr2( int sig ) { (void)sig; s_nMotionToggle++; }
 
 typedef struct
 {
@@ -43,10 +68,66 @@ typedef struct
 } Scene;
 
 static const Scene kScenes[] = {
-	{ "dark",   {   5,   8,  12,  16,  20 }, 240,  40,  40, 1 },
-	{ "bright", { 200, 215, 230, 245, 255 },  30, 120,  50, 0 },
-	{ "mid",    {  26,  77, 128, 179, 230 },   0,   0,   0, 0 },
+	{ "dark",    {   5,   8,  12,  16,  20 }, 240,  40,  40, 1 },
+	{ "bright",  { 200, 215, 230, 245, 255 },  30, 120,  50, 0 },
+	{ "mid",     {  26,  77, 128, 179, 230 },   0,   0,   0, 0 },
+	{ "texdark",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0 },
+	{ "texmid",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0 },
+	{ "texsplit", {   0,   0,   0,   0,   0 },   0,   0,   0, 0 },
 };
+
+static void FillRect( SDL_Surface *pSurface, int x, int y, int w, int h, unsigned char v )
+{
+	SDL_Rect r = { x, y, w, h };
+	SDL_FillRect( pSurface, &r, SDL_MapRGB( pSurface->format, v, v, v ) );
+}
+
+static int s_nMotionPx = 0;      // --motion: horizontal scroll per frame (textured scenes)
+static int s_bMotionPaused = 0;  // SIGUSR2 toggles
+static float s_flLights = 1.5f;  // --lights: % of texdark cells that are a light
+static float s_flSplit = 50.0f;  // --split: % of texsplit cells that are bright
+static int s_bPeriodic = 0;      // --periodic: the texture repeats every 80 cells (one frame width), so a pan changes nothing but which pixels the taps land on
+static long s_nFrame = 0;
+
+// A cheap integer hash for the textured scenes: the same (cx, cy) always
+// gives the same cell, so a scrolled frame is the SAME texture moved, not
+// new noise -- exactly the "camera pan over static content" case.
+static unsigned Hash( unsigned x, unsigned y )
+{
+	unsigned h = x * 0x9E3779B1u ^ ( y + 0x7F4A7C15u ) * 0x85EBCA77u;
+	h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+	return h;
+}
+
+// kind: 0 texdark (dark cells, `s_flLights` % lights 160..255), 1 texmid
+// (cells 40..220), 2 texsplit (`s_flSplit` % bright cells 150..230, the
+// rest dark -- a bimodal "sky and ground" histogram whose median sits in
+// the gap between the two modes when the split is 50 %).
+static void PaintTexture( SDL_Surface *pSurface, int nKind, int nScroll )
+{
+	const int W = pSurface->w, H = pSurface->h, CELL = 16;
+	const int nFirst = nScroll / CELL;
+	for ( int cy = 0; cy * CELL < H; cy++ )
+	{
+		for ( int cx = nFirst; ( cx - nFirst ) * CELL - ( nScroll % CELL ) < W; cx++ )
+		{
+			const unsigned h = Hash( (unsigned)( s_bPeriodic ? cx % 80 : cx ), (unsigned)cy );
+			const float r = ( h & 0xFFFFu ) / 65535.0f;          // 0..1
+			const float light = ( ( h >> 16 ) & 0xFFFu ) / 4095.0f;
+			unsigned char v;
+			if ( nKind == 1 )
+				v = (unsigned char)( 40.0f + 180.0f * r );
+			else if ( nKind == 2 && light < s_flSplit * 0.01f )
+				v = (unsigned char)( 150.0f + 80.0f * r );
+			else if ( nKind == 0 && light < s_flLights * 0.01f )
+				v = (unsigned char)( 160.0f + 95.0f * r );
+			else
+				v = (unsigned char)( 6.0f + 50.0f * r * r );
+			const int x = ( cx - nFirst ) * CELL - ( nScroll % CELL );
+			FillRect( pSurface, x, cy * CELL, CELL, CELL, v );
+		}
+	}
+}
 
 static const Scene *FindScene( const char *pszName )
 {
@@ -56,12 +137,6 @@ static const Scene *FindScene( const char *pszName )
 	return NULL;
 }
 
-static void FillRect( SDL_Surface *pSurface, int x, int y, int w, int h, unsigned char v )
-{
-	SDL_Rect r = { x, y, w, h };
-	SDL_FillRect( pSurface, &r, SDL_MapRGB( pSurface->format, v, v, v ) );
-}
-
 // Geometry, in a 1280x720 frame, scaled to the actual window: bands are
 // fifths of the height; the six rectangles are centred in the middle band
 // at x = 100 + k * 190 (k = 0..5); the black corner is (40,40)-(200,120).
@@ -69,6 +144,12 @@ static void Paint( SDL_Surface *pSurface, const Scene *pScene )
 {
 	const int W = pSurface->w, H = pSurface->h;
 	const float sx = W / 1280.0f, sy = H / 720.0f;
+	if ( !strncmp( pScene->pszName, "tex", 3 ) )
+	{
+		const int nScroll = (int)( ( s_nFrame * (long)s_nMotionPx ) % 100000L );
+		PaintTexture( pSurface, !strcmp( pScene->pszName, "texmid" ) ? 1 : !strcmp( pScene->pszName, "texsplit" ) ? 2 : 0, nScroll );
+		return;
+	}
 
 	for ( int i = 0; i < 5; i++ )
 	{
@@ -106,7 +187,7 @@ int main( int argc, char **argv )
 			for ( char *tok = strtok( psz, "," ); tok && nList < 8; tok = strtok( NULL, "," ) )
 			{
 				const Scene *p = FindScene( tok );
-				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid)\n", tok ); return 2; }
+				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit)\n", tok ); return 2; }
 				pList[nList++] = p;
 			}
 			free( psz );
@@ -115,9 +196,13 @@ int main( int argc, char **argv )
 		else if ( !strcmp( argv[i], "--height" ) && i + 1 < argc )  nH = atoi( argv[++i] );
 		else if ( !strcmp( argv[i], "--seconds" ) && i + 1 < argc ) nSeconds = atoi( argv[++i] );
 		else if ( !strcmp( argv[i], "--pidfile" ) && i + 1 < argc ) pszPidFile = argv[++i];
+		else if ( !strcmp( argv[i], "--motion" ) && i + 1 < argc )  s_nMotionPx = atoi( argv[++i] );
+		else if ( !strcmp( argv[i], "--lights" ) && i + 1 < argc )  s_flLights = (float)atof( argv[++i] );
+		else if ( !strcmp( argv[i], "--split" ) && i + 1 < argc )   s_flSplit = (float)atof( argv[++i] );
+		else if ( !strcmp( argv[i], "--periodic" ) )                 s_bPeriodic = 1;
 		else
 		{
-			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid] [--width W] [--height H] [--seconds N] [--pidfile PATH]\n" );
+			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
 			return 2;
 		}
 	}
@@ -126,6 +211,7 @@ int main( int argc, char **argv )
 
 	setvbuf( stdout, NULL, _IOLBF, 0 );
 	signal( SIGUSR1, OnUsr1 );
+	signal( SIGUSR2, OnUsr2 );
 	if ( pszPidFile )
 	{
 		FILE *f = fopen( pszPidFile, "w" );
@@ -146,7 +232,7 @@ int main( int argc, char **argv )
 		return 1;
 	}
 
-	int nCur = 0, nSeen = 0;
+	int nCur = 0, nSeen = 0, nMotionSeen = 0;
 	printf( "scene %s\n", pList[nCur]->pszName );
 
 	const Uint32 uEnd = SDL_GetTicks() + (Uint32)nSeconds * 1000u;
@@ -163,6 +249,12 @@ int main( int argc, char **argv )
 			nCur = ( nCur + 1 ) % nList;
 			printf( "scene %s\n", pList[nCur]->pszName );
 		}
+		if ( s_nMotionToggle != nMotionSeen )
+		{
+			nMotionSeen = s_nMotionToggle;
+			s_bMotionPaused = !s_bMotionPaused;
+			printf( "motion %s\n", s_bMotionPaused ? "paused" : "running" );
+		}
 
 		// Repaint every frame, as a game would, so the compositor keeps
 		// receiving fresh buffers and the effect pass keeps measuring.
@@ -172,6 +264,8 @@ int main( int argc, char **argv )
 			Paint( pSurface, pList[nCur] );
 			SDL_UpdateWindowSurface( pWindow );
 		}
+		if ( !s_bMotionPaused )
+			s_nFrame++;
 		SDL_Delay( 16 );
 	}
 done:

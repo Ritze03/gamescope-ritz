@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <array>
 #include <bitset>
@@ -50,6 +51,7 @@
 #include "cs_easu_fp16.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
+#include "shaders/effects_curve.h"
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_nis.h"
 #include "cs_nis_fp16.h"
@@ -1905,6 +1907,38 @@ void CVulkanCmdBuffer::copyImage(gamescope::Rc<CVulkanTexture> src, gamescope::R
 	m_textureRefs.emplace_back(std::move(dst));
 }
 
+void CVulkanCmdBuffer::copyImageRegion(gamescope::Rc<CVulkanTexture> src, uint32_t srcX, uint32_t srcY, gamescope::Rc<CVulkanTexture> dst)
+{
+	assert(srcX + dst->width() <= src->width());
+	assert(srcY + dst->height() <= src->height());
+	prepareSrcImage(src.get());
+	prepareDestImage(dst.get());
+	insertBarrier();
+
+	VkImageCopy region = {
+		.srcSubresource = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.layerCount = 1
+		},
+		.srcOffset = { (int32_t)srcX, (int32_t)srcY, 0 },
+		.dstSubresource = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.layerCount = 1
+		},
+		.extent = {
+			.width = dst->width(),
+			.height = dst->height(),
+			.depth = 1
+		},
+	};
+
+	m_device->vk.CmdCopyImage(m_cmdBuffer, src->vkImage(), VK_IMAGE_LAYOUT_GENERAL, dst->vkImage(), VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+
+	markDirty(dst.get());
+	m_textureRefs.emplace_back(std::move(src));
+	m_textureRefs.emplace_back(std::move(dst));
+}
+
 void CVulkanCmdBuffer::copyBufferToImage(VkBuffer buffer, VkDeviceSize offset, uint32_t stride, gamescope::Rc<CVulkanTexture> dst)
 {
 	prepareDestImage(dst.get());
@@ -3634,6 +3668,7 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 	CVulkanTexture::createFlags createFlags;
 	createFlags.bSampled = true;
 	createFlags.bStorage = true;
+	createFlags.bTransferSrc = true;   // the effects_ab_log probe pixel
 
 	g_output.effectsOutput = new CVulkanTexture();
 	if ( !g_output.effectsOutput->BInit( width, height, 1u, uFormat, createFlags, nullptr ) )
@@ -3661,7 +3696,7 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 // CVulkanCmdBuffer::dispatch() binds a single RGB target there; an r32f
 // second-target path through the shared descriptor set for this one texel
 // was judged more plumbing than four exact byte lanes.
-static constexpr uint32_t kEffectsHistoryTexels = 4;   // == HISTORY_COUNT in effects_common.h
+static constexpr uint32_t kEffectsHistoryTexels = 8;   // == HISTORY_COUNT in effects_common.h (4 smoothed + 4 raw)
 
 static bool update_effects_history( bool &bCreated )
 {
@@ -3672,6 +3707,7 @@ static bool update_effects_history( bool &bCreated )
 	CVulkanTexture::createFlags createFlags;
 	createFlags.bSampled = true;
 	createFlags.bStorage = true;
+	createFlags.bTransferSrc = true;   // the effects_ab_log readback copy
 
 	g_output.effectsHistory = new CVulkanTexture();
 	if ( !g_output.effectsHistory->BInit( kEffectsHistoryTexels, 1u, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
@@ -3684,6 +3720,160 @@ static bool update_effects_history( bool &bCreated )
 	return true;
 }
 
+
+// ---- `effects_ab_log` -- Adaptive Brightness's per-frame debug readback ----
+//
+// requests-2026-09-08.md, "the whole image pulsates" in Dynamic mode. The
+// history texture is the effect's entire state and lives on the GPU, so
+// until this existed the only way to see what the adaptation was doing was
+// to screenshot the result at a few frames per second and guess. This arms
+// N composites: each one copies the history (smoothed AND raw statistics,
+// effects_common.h's HISTORY_RAW) and one probe pixel of the graded output
+// into host-mappable staging, waits for the GPU right after the submit, and
+// prints one line per composite on console_log:
+//
+//   ab_log n=<i> t=<ms> dt=<ms> <mode> raw mean/p2/p50/p98=... smooth ...=...
+//          gain=<g> gamma=<g> px(<x>,<y>)=<r>,<g>,<b>
+//
+// gain and gamma are recomputed on the host with the same effects_curve.h
+// the shader compiles, from the smoothed values -- exactly what the pixel
+// pass used for that frame. The wait stalls the render thread by one GPU
+// frame per logged composite, which is why this is a bounded count and not
+// a switch. `effects_ab_log [frames] [x y]`: frames defaults to 1, the probe
+// defaults to the centre of the game image.
+static std::atomic<int> s_nAbLogFrames{ 0 };
+static std::atomic<int> s_nAbLogProbeX{ -1 };
+static std::atomic<int> s_nAbLogProbeY{ -1 };
+static bool s_bAbLogPending = false;     // render thread only: a copy was recorded this composite
+static uint64_t s_ulAbLogFirstNs = 0;
+static int s_nAbLogIndex = 0;
+
+static gamescope::ConCommand cc_effects_ab_log(
+	"effects_ab_log",
+	"Print Adaptive Brightness's statistics for the next N composites: raw and smoothed "
+	"mean/p2/p50/p98, the gain and gamma the pixel pass used, and one probe pixel of the "
+	"graded output. Usage: effects_ab_log [frames=1] [x y] (probe defaults to the centre).",
+	[]( std::span<std::string_view> args )
+	{
+		// args[0] is the command's own name (ConCommand::Exec).
+		int nFrames = 1;
+		if ( args.size() >= 2 )
+			nFrames = std::max( 0, (int)atoi( std::string( args[1] ).c_str() ) );
+		if ( args.size() >= 4 )
+		{
+			s_nAbLogProbeX = atoi( std::string( args[2] ).c_str() );
+			s_nAbLogProbeY = atoi( std::string( args[3] ).c_str() );
+		}
+		else
+		{
+			s_nAbLogProbeX = -1;
+			s_nAbLogProbeY = -1;
+		}
+		s_ulAbLogFirstNs = 0;
+		s_nAbLogIndex = 0;
+		s_nAbLogFrames = nFrames;
+		console_log.infof( "effects_ab_log: armed for %d composite(s)", nFrames );
+	} );
+
+static bool update_effects_debug_staging( uint32_t uPixelFormat )
+{
+	CVulkanTexture::createFlags flags;
+	flags.bMappable = true;
+	flags.bTransferDst = true;
+
+	if ( g_output.effectsDebugHistory == nullptr )
+	{
+		g_output.effectsDebugHistory = new CVulkanTexture();
+		if ( !g_output.effectsDebugHistory->BInit( kEffectsHistoryTexels, 1u, 1u, DRM_FORMAT_ABGR8888, flags, nullptr ) )
+		{
+			g_output.effectsDebugHistory = nullptr;
+			return false;
+		}
+	}
+	if ( g_output.effectsDebugPixel == nullptr || g_output.effectsDebugPixel->drmFormat() != uPixelFormat )
+	{
+		g_output.effectsDebugPixel = new CVulkanTexture();
+		if ( !g_output.effectsDebugPixel->BInit( 1u, 1u, 1u, uPixelFormat, flags, nullptr ) )
+		{
+			g_output.effectsDebugPixel = nullptr;
+			return false;
+		}
+	}
+	return true;
+}
+
+// Records the two copies. Called inside the pre-pass block, after the
+// per-pixel dispatch, only while a log is armed.
+static void effects_ab_log_record( CVulkanCmdBuffer *cmdBuffer, uint32_t uWidth, uint32_t uHeight )
+{
+	if ( s_nAbLogFrames.load( std::memory_order_relaxed ) <= 0 )
+		return;
+	if ( !update_effects_debug_staging( g_output.effectsOutput->drmFormat() ) )
+		return;
+
+	int x = s_nAbLogProbeX.load( std::memory_order_relaxed );
+	int y = s_nAbLogProbeY.load( std::memory_order_relaxed );
+	if ( x < 0 || y < 0 ) { x = uWidth / 2; y = uHeight / 2; }
+	x = std::min( x, (int)uWidth - 1 );
+	y = std::min( y, (int)uHeight - 1 );
+
+	cmdBuffer->copyImage( g_output.effectsHistory, g_output.effectsDebugHistory );
+	cmdBuffer->copyImageRegion( g_output.effectsOutput, x, y, g_output.effectsDebugPixel );
+	s_bAbLogPending = true;
+}
+
+// Waits for the submitted composite and prints the line. Called right after
+// g_device.submit() in vulkan_composite().
+static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_t &state, float flDt, uint32_t uWidth, uint32_t uHeight )
+{
+	if ( !s_bAbLogPending )
+		return;
+	s_bAbLogPending = false;
+
+	g_device.wait( ulSequence, false );
+
+	float h[ kEffectsHistoryTexels ];
+	const uint8_t *pHist = g_output.effectsDebugHistory->mappedData();
+	for ( uint32_t i = 0; i < kEffectsHistoryTexels; i++ )
+	{
+		uint32_t uBits = 0;
+		memcpy( &uBits, pHist + i * 4, 4 );   // R8G8B8A8 bytes == the float's little-endian bits (history_pack)
+		h[i] = std::bit_cast<float>( uBits );
+	}
+
+	const uint8_t *pPx = g_output.effectsDebugPixel->mappedData();
+	const uint32_t uFmt = g_output.effectsDebugPixel->drmFormat();
+	int r = pPx[0], g = pPx[1], b = pPx[2];
+	if ( uFmt == DRM_FORMAT_ARGB8888 || uFmt == DRM_FORMAT_XRGB8888 )
+		std::swap( r, b );   // B,G,R,A in memory
+
+	float flGain, flGamma = 1.0f;
+	if ( state.bAbDynamic )
+	{
+		flGain  = gamescope::effects_curve::ab_dyn_gain( h[3], state.flAbMinGain, state.flAbMaxGain );
+		flGamma = gamescope::effects_curve::ab_dyn_gamma( h[1], h[2], flGain, state.flAbTarget, state.flAbMinGain );
+	}
+	else
+	{
+		flGain = std::clamp( state.flAbTarget / std::max( h[0], 0.001f ), state.flAbMinGain, state.flAbMaxGain );
+	}
+
+	const uint64_t ulNow = get_time_in_nanos();
+	if ( s_ulAbLogFirstNs == 0 )
+		s_ulAbLogFirstNs = ulNow;
+
+	int x = s_nAbLogProbeX.load( std::memory_order_relaxed );
+	int y = s_nAbLogProbeY.load( std::memory_order_relaxed );
+	if ( x < 0 || y < 0 ) { x = uWidth / 2; y = uHeight / 2; }
+
+	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d",
+		s_nAbLogIndex++, double( ulNow - s_ulAbLogFirstNs ) * 1e-6, double( flDt ) * 1e3,
+		!state.bAdaptiveBrightness ? "off" : ( state.bAbDynamic ? "dynamic" : "whole" ),
+		h[4], h[5], h[6], h[7], h[0], h[1], h[2], h[3], flGain, flGamma, x, y, r, g, b );
+
+	if ( s_nAbLogFrames.load( std::memory_order_relaxed ) > 0 )
+		s_nAbLogFrames.fetch_sub( 1, std::memory_order_relaxed );
+}
 
 static bool init_nis_data()
 {
@@ -4491,6 +4681,12 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 	// call within the same frame and must not be seen as a gap.
 	static bool s_bEffectsPassRanLastTime = false;
 
+	// What effects_ab_log_flush() prints after the submit below, captured
+	// here because the pre-pass state is local to this block.
+	NativeEffectsState_t abLogState;
+	float flAbLogDt = 0.0f;
+	uint32_t uAbLogWidth = 0, uAbLogHeight = 0;
+
 	if ( frameInfo->layers.get( 0 ).tex
 		&& !frameInfo->bBaseLayerEffectsApplied
 		&& frameInfo->layers.get( 0 ).tex.get() != g_output.effectsOutput.get() )
@@ -4652,6 +4848,16 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					// follow; they bind layers 0..n-1 and would otherwise
 					// carry a stray history descriptor on single-layer frames.
 					cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
+
+					// `effects_ab_log` debug readback (see the command above).
+					if ( bHaveHistory )
+					{
+						effects_ab_log_record( cmdBuffer.get(), uWidth, uHeight );
+						abLogState = state;
+						flAbLogDt = flAbDt;
+						uAbLogWidth = uWidth;
+						uAbLogHeight = uHeight;
+					}
 
 					// The graded image stands in for layer 0 from here on, in
 					// this call's private copy of the struct only.
@@ -4840,6 +5046,8 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 	}
 
 	uint64_t sequence = g_device.submit(std::move(cmdBuffer));
+
+	effects_ab_log_flush( sequence, abLogState, flAbLogDt, uAbLogWidth, uAbLogHeight );
 
 	// Issue #22: the read-done points recorded by *_WaitForRender() above are
 	// only reachable now that this submission is on the queue. Promoting them

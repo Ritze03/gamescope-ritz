@@ -40,7 +40,12 @@ const int HISTORY_MEAN  = 0;   // arithmetic mean of the graded encoded luma
 const int HISTORY_P2    = 1;   // 2nd percentile  (shadows)
 const int HISTORY_P50   = 2;   // median          (the Dynamic curve's anchor)
 const int HISTORY_P98   = 3;   // 98th percentile (highlights)
-const int HISTORY_COUNT = 4;
+// Texels 4..7 hold this frame's RAW (unsmoothed) measurement of the same
+// four statistics, in the same order. No pass reads them; they exist so the
+// host's `effects_ab_log` readback (rendervulkan.cpp) can print measured
+// next to smoothed and tell sampling noise from adaptation dynamics.
+const int HISTORY_RAW   = 4;
+const int HISTORY_COUNT = 8;
 
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
