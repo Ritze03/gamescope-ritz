@@ -184,6 +184,76 @@ the output centre maps to the window centre under every scaler; both are pinned 
 `superdoc/features/cursor-pipeline.md`, "Locked pointer => never an absolute event" and "The
 device SDL3 remembers".
 
+## Settings audit: is every setting actually saved, to the right file, and back after a restart
+
+`settings-audit.sh` walks **every row the overlay registers** through the real
+binding, watches the real config files and relaunches the real binary. It exists
+because "is every setting actually being saved?" only ever had a hand-checked answer
+for a few rows: the unit tests pin the config layer's round-trip and the profile
+diff, and the pixel/pointer gates pin the pictures, but nothing proved persistence
+end to end, per row, across a restart. It is an **audit** -- it reports, it never
+fixes -- and its enumeration is the registry's own (`overlay_e2_dump_keys`), so a row
+added to any panel is audited on the next run without anyone editing the script.
+
+```sh
+scripts/settings-audit.sh                     # all three situations (~5 min)
+scripts/settings-audit.sh --situations b      # just the inheriting game profile
+scripts/settings-audit.sh --only hud.enabled,crosshair.line_gap
+scripts/settings-audit.sh --headless          # no sway: faster, Resolution area NOT COVERED
+```
+
+**What it proves, per row, in three routing situations** -- (a) no game identified,
+editing a general profile; (b) a game identified whose game profile inherits a general
+one; (c) the same game with `--profile <name>` forcing the session:
+
+| column | the check |
+|---|---|
+| `live-get` | `overlay_e2_set` a *different* valid value (a Switch flips; a Choice steps to the next option; a Slider/Stepper moves one step inside its range, off both the current value and the default; a colour composite shifts its RGB; the anchor moves a row; the hue turns 37 degrees), then `overlay_e2_get` reads it back |
+| `on-disk` | the isolated config directory is snapshotted before the set and polled until the write lands; the row's key (its `.Key()`, else its id when that is a real settings key) must have changed in the **session profile's** file -- or, for the Appearance / Cursor / Profiles-filter rows, in `global.json`'s `overlay` section. A row with no key is judged by whatever changed in that file and the keys are printed (`no key declared; landed at ...`); nothing changing is a FAIL |
+| `correct-file` | nothing else moved: not `global.json` for a profile row, no profile for an overlay row, never the parent profile; in (b) the value must be a diff stored in the child |
+| `survives-restart` | gamescope is stopped and relaunched with the identical environment and flags, the overlay opened, and every row read again -- the value before the stop must be the value after; the files are also diffed across the restart, so a relaunch that rewrites a value is caught |
+| `restore` | every original value is set back and read back (in (b) this also shows the diff collapsing when a value equals the parent's) |
+
+Every row gets a verdict. Anything the round-trip cannot exercise is listed as **NOT
+COVERED** with the reason and what covers it instead (an Action, a Text field, the Log's
+view state, the Mixer's PipeWire rows, the Profiles list and Inherits dropdown -- see
+`NOT_COVERED` / `KIND_NOT_COVERED` in `settings_audit.py`). Two small tables in the
+driver are the only hand-written knowledge: `GATES` (a setter that only applies while
+another row is in a state -- the Custom resolution steppers, the custom refresh -- gets
+that gate opened first) and `SIBLING_KEYS` (a write that legitimately moves a second
+key, such as the aspect-locked width moving the height).
+
+**How it runs without touching the desktop:** the pixel gate's recipe -- a private,
+invisible sway (`WLR_BACKENDS=headless`, its own `XDG_RUNTIME_DIR`, no input devices)
+hosting a real nested `gamescope --backend wayland` with a flat-background `kitty`
+client, so the Resolution area (which needs a nested backend) is available and the
+overlay actually draws (the dynamic areas -- Profiles, Mixer -- only build their rows on
+the shell's first draw). Every value is driven and read over `gamescopectl`
+(`overlay_e2_dump_keys`, `overlay_e2_set`, `overlay_e2_get`, `ritz_profile`,
+`settings_overlay_visible`), never OS input; every launch uses a throwaway
+`XDG_CONFIG_HOME` under `/tmp`, never `~/.config/gamescope-ritz`; launches carry no
+`-w`/`-h` on purpose, because an explicit CLI size wins over the saved nested resolution
+by design and would make those rows look unpersisted. Runs under
+`with-gamescope-lock.sh`; kills only the PIDs it started.
+
+**Reading a failure:** `results.txt` under the run's own
+`build-release/verify-shots/settings-audit-<date>/` has one tab-separated line per row
+per situation (`sit id key kind set-value live-get on-disk correct-file survives-restart
+restore verdict enabled-at-set notes`), a `## failures` list naming the stage and the
+observed vs expected value, the `## not covered` list, and a final `SUMMARY:` line
+(`N settings audited, M passed, K failed, L not covered`). `steps.jsonl` beside it is
+the evidence: every set, readback and file diff as JSON. `situation-<x>/` holds the
+registry dump the run enumerated from and the config directory as it was at the
+baseline, after the sets, after the restart and after the restore, plus each launch's
+log. A `notes` cell saying `collateral keys in ...` means the set moved a key that is
+not the row's own -- read the `steps.jsonl` entry to see which and by how much. Exit
+code 2 (rather than 1) is a setup problem -- binary missing, sway/kitty not found, an
+instance never came up -- not a verdict on persistence.
+
+**How long:** about 90 s per situation (one launch, ~90 rows at ~0.5 s each, a relaunch,
+the restore), so ~5 minutes for all three; `--headless` is faster but drops the
+Resolution area.
+
 ## Installing and updating gamescope-ritz
 
 `install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (plus the

@@ -54,6 +54,8 @@
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Crosshair.h"
 
+#include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
+
 #include "convar.h"
 
 // D18: overlay_e2_key pushes onto the overlay's OWN input queue, which is
@@ -74,6 +76,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <string>
+#include <type_traits>
 
 namespace gamescope::ui::shell
 {
@@ -597,6 +600,7 @@ namespace gamescope::ui::shell
 		void KeyCmd( std::span<std::string_view> args );
 		void PointerCmd( std::span<std::string_view> args );
 		void GetById( std::span<std::string_view> args );
+		void DumpKeys( std::span<std::string_view> args );
 
 		// The palette's two helpers the console command reaches before the
 		// drawing section defines them.
@@ -645,6 +649,28 @@ namespace gamescope::ui::shell
 			"rather than \"did something repaint?\". With no id, prints every registered row and "
 			"its value.",
 			GetById );
+
+		// The settings audit's enumeration half (scripts/settings-audit.sh,
+		// 2026-09-07). overlay_e2_get prints an id, a kind and a value --
+		// enough to read a row, not enough to PROVE it persists: the audit
+		// needs each declaration's config key, its value range and step (to
+		// pick a different valid value), its options (to step a Choice), its
+		// binding type (to format the value the way SetById parses it) and
+		// whether the row is reachable at all. Walking Reg() here rather
+		// than keeping a list in the script is the whole point: a row added
+		// to any panel is audited on the next run without anyone editing
+		// the script, and the script can never drift from the registry.
+		//
+		// Tab-separated, one row per line, a `#`-prefixed header naming the
+		// columns, so the script reads columns by name rather than position.
+		// Read-only, never writes anything.
+		ConCommand cc_overlay_e2_dump_keys(
+			"overlay_e2_dump_keys",
+			"Print every registered E2 row and parameter as one tab-separated line: area, id, "
+			"parent, kind, config key, resolved key, binding type, range, step, options, default, "
+			"availability, disabled reason and current value. Machine-readable; the first line "
+			"(`#`) names the columns. This is what scripts/settings-audit.sh enumerates from.",
+			DumpKeys );
 
 		ConCommand cc_overlay_e2_select(
 			"overlay_e2_select",
@@ -1160,6 +1186,145 @@ namespace gamescope::ui::shell
 						PrintOne( entry.ParamAt( p ).Id(), entry.ParamAt( p ).GetKind() );
 				}
 			}
+		}
+
+		// See cc_overlay_e2_dump_keys. One line per Entry and per Param, in
+		// registration order (the same walk GetById makes), tab-separated.
+		void DumpKeys( std::span<std::string_view> )
+		{
+			const auto TypeName = []( const Value &v ) -> const char *
+			{
+				if ( std::holds_alternative<bool>( v ) )        return "bool";
+				if ( std::holds_alternative<int>( v ) )         return "int";
+				if ( std::holds_alternative<float>( v ) )       return "float";
+				if ( std::holds_alternative<std::string>( v ) ) return "string";
+				return "none";
+			};
+			const auto CompositeName = []( CompositeKind e ) -> const char *
+			{
+				switch ( e )
+				{
+					case CompositeKind::Anchor: return "anchor";
+					case CompositeKind::Hue:    return "hue";
+					case CompositeKind::Strip:  return "strip";
+					case CompositeKind::Graph:  return "graph";
+					case CompositeKind::Color:  return "color";
+					case CompositeKind::List:   return "list";
+				}
+				return "unknown";
+			};
+			// A cell must never contain the separator or a line break, or
+			// the script would read the wrong column for every cell after.
+			const auto Cell = []( std::string s ) -> std::string
+			{
+				if ( s.empty() )
+					return "-";
+				for ( char &c : s )
+					if ( c == '\t' || c == '\n' || c == '\r' )
+						c = ' ';
+				return s;
+			};
+			const auto Num = []( float f ) -> std::string
+			{
+				char sz[ 32 ];
+				snprintf( sz, sizeof( sz ), "%g", (double)f );
+				return sz;
+			};
+			const auto OptionText = []( const std::vector<Option> &opts ) -> std::string
+			{
+				std::string s;
+				for ( const Option &o : opts )
+				{
+					if ( !s.empty() )
+						s += "|";
+					s += std::to_string( o.nValue ) + "=" + ( o.pszLabel ? o.pszLabel : "" );
+				}
+				return s;
+			};
+			const auto DefaultText = []( const auto &d ) -> std::string
+			{
+				return d.HasDefault() ? ValueToString( d.DefaultValue() ) : std::string();
+			};
+
+			console_log.infof( "%s", "#area\tid\tparent\tkind\tcomposite\tdeclared_key\tresolved_key"
+				"\tsettings_key\ttype_a\ttype_b\tlo\thi\tstep\tunit\toptions\tdefault\tdefault_b"
+				"\tarea_available\tdisabled_reason\treadonly\tbound\tvalue" );
+
+			size_t nEntries = 0, nParams = 0;
+			// Generic over Entry and Parameter: both expose the accessors
+			// the columns need (Registry.h, "P3 read side"), and the few
+			// that only an Entry has are guarded by `if constexpr`.
+			const auto Line = [ & ]( const Area &area, const std::string &sParent, const auto &d )
+			{
+				using TDecl = std::decay_t<decltype( d )>;
+				constexpr bool bEntry = std::is_same_v<TDecl, Entry>;
+
+				const Value vA = d.Binding().IsBound() ? d.Binding().Get() : Value{};
+				std::string sComposite, sTypeB, sDefaultB, sReadOnly = "no";
+				if constexpr ( bEntry )
+				{
+					if ( d.GetKind() == Kind::Composite )
+					{
+						sComposite = CompositeName( d.GetCompositeKind() );
+						if ( d.BindingB().IsBound() )
+						{
+							sTypeB = TypeName( d.BindingB().Get() );
+							sDefaultB = ValueToString( d.DefaultValueB() );
+						}
+					}
+					sReadOnly = d.ReadOnly() ? "yes" : "no";
+				}
+				else
+				{
+					sReadOnly = IsReadOnly( d.GetKind() ) ? "yes" : "no";
+				}
+
+				const std::string sResolved = Registry::KeyOf( d );
+				const std::string sDisabled = d.DisabledReason();
+
+				std::string sLine;
+				sLine += Cell( area.Id() ) + "\t";
+				sLine += Cell( d.Id() ) + "\t";
+				sLine += Cell( sParent ) + "\t";
+				sLine += Cell( KindName( d.GetKind() ) ) + "\t";
+				sLine += Cell( sComposite ) + "\t";
+				sLine += Cell( d.ConfigKey() ) + "\t";
+				sLine += Cell( sResolved ) + "\t";
+				sLine += ( config::IsSettingsKey( sResolved ) ? "yes" : "no" ) + std::string( "\t" );
+				sLine += Cell( TypeName( vA ) ) + "\t";
+				sLine += Cell( sTypeB ) + "\t";
+				sLine += Cell( d.HasRange() ? Num( d.Lo() ) : "" ) + "\t";
+				sLine += Cell( d.HasRange() ? Num( d.Hi() ) : "" ) + "\t";
+				sLine += Cell( d.StepSize() > 0.0f ? Num( d.StepSize() ) : "" ) + "\t";
+				sLine += Cell( d.Unit() ) + "\t";
+				sLine += Cell( OptionText( d.Options() ) ) + "\t";
+				sLine += Cell( DefaultText( d ) ) + "\t";
+				sLine += Cell( sDefaultB ) + "\t";
+				sLine += ( area.Available() ? "yes" : "no" ) + std::string( "\t" );
+				sLine += Cell( sDisabled ) + "\t";
+				sLine += sReadOnly + "\t";
+				sLine += ( d.Binding().IsBound() ? "yes" : "no" ) + std::string( "\t" );
+				sLine += Cell( PaletteValueText( d.Id() ) );
+				console_log.infof( "%s", sLine.c_str() );
+			};
+
+			for ( size_t a = 0; a < Reg().AreaCount(); ++a )
+			{
+				const Area &area = Reg().AreaAt( a );
+				for ( size_t e = 0; e < area.EntryCount(); ++e )
+				{
+					const Entry &entry = area.EntryAt( e );
+					Line( area, std::string(), entry );
+					nEntries++;
+					for ( size_t p = 0; p < entry.ParamCount(); ++p )
+					{
+						Line( area, entry.Id(), entry.ParamAt( p ) );
+						nParams++;
+					}
+				}
+			}
+			console_log.infof( "#end\t%zu areas\t%zu entries\t%zu params",
+				Reg().AreaCount(), nEntries, nParams );
 		}
 
 		// =================================================================
