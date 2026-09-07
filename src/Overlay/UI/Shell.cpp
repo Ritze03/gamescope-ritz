@@ -4132,11 +4132,10 @@ namespace gamescope::ui::shell
 				// is drawn ABOVE the params, so every pixel of it pushes
 				// them down, and at 1280x720 this row's eight params already
 				// filled the Inspector body exactly. 320 (the first size
-				// tried, captured in this task's verify-shots) cost four
-				// param rows of visible space; 240 costs three and is still
-				// legible enough to judge tone on -- which is what the strip
-				// is for. See shader-effects.md for the honest note on what
-				// scrolls at 720p.
+				// tried) left three params visible at that resolution; 240
+				// leaves four, and is still legible enough to judge tone on
+				// -- which is what the strip is for. See shader-effects.md
+				// for the honest note on what scrolls at 720p.
 				const float flW = std::min( rcIn.Width(), Px( 240.0f ) );
 				const float flH = controls::ComparePreviewHeight( flW );
 				overlay::AbPreview_Draw( ImRect( rcIn.x0, y, rcIn.x0 + flW, y + flH ) );

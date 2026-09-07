@@ -974,9 +974,8 @@ picture plus a 14-px label line and a 4-px gap: 153 px total). `Why capped, and 
 there:` the strip is drawn *above* the params so it is on screen while they are reached
 for, which means every pixel of it pushes them down — and at 1280×720 this row's eight
 params already filled the Inspector body exactly. Measured at that size: 320 px wide
-(the first size tried, and the size the earlier captures in the verify-shots directory
-show) left three params visible; 240 leaves four, and is still legible enough to judge
-tone on.
+(the first size tried, measured during this task and not kept) left three params visible;
+240 leaves four, and is still legible enough to judge tone on.
 
 **The honest limitation**: at 1280×720 the CONFIGURE page scrolls, and scrolling down to
 Min gain or Local adaptation takes the strip off the top of the page with it — so the
