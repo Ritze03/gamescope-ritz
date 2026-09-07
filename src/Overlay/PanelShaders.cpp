@@ -435,8 +435,8 @@ namespace gamescope
 				.Key( "reshade.adaptive_brightness.min_gain" )
 				.Help( "How dark the adjustment may make the picture. In Dynamic, also how far "
 				       "the deepest shadows may be pushed down." )
-				.Range( 0.5f, 1.0f )
-				.Step( 0.05f )   // 11 positions; Shift+arrow still subdivides it
+				.Range( 0.3f, 1.0f )   // widened from 0.5..1.0, 2026-09-07 request
+				.Step( 0.05f )   // 15 positions; Shift+arrow still subdivides it
 				.Default( AbDefaults{}.min_gain )
 			.Param( "max_gain", "Max gain",
 				ui::AnyBind::Of<float>(
@@ -445,8 +445,9 @@ namespace gamescope
 				.Key( "reshade.adaptive_brightness.max_gain" )
 				.Help( "How bright the adjustment may make the picture. In Dynamic, the gain "
 				       "applied before the gamma lift takes over." )
-				.Range( 1.0f, 2.0f )
-				.Step( 0.05f )   // 21 positions
+				.Range( 1.0f, 4.0f )   // widened from 1.0..2.0, 2026-09-07 request
+				.Step( 0.1f )    // 31 positions; a finer 0.05 step would be 61, too fine
+				                 // over the wider span for a slider to feel graduated
 				.Default( AbDefaults{}.max_gain );
 
 		a.Group( "Diagnostics" );

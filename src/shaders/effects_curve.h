@@ -38,11 +38,19 @@
 // passes through (0, 0), so black stays black without a floor being needed.
 //
 // Why these bounds: GAMMA_MIN 0.5 is a sqrt lift -- the same floor Shadow
-// Control uses -- and with max_gain 2.0 lets a 5..20-code scene reach the
-// 50..100 range; GAMMA_MAX 1.5 is as far as a darkening gamma goes before
-// the shadow cap above becomes the only thing keeping detail. WHITE 0.9 leaves
-// the top 10 % for the highlights above p98. KNEE 0.7 keeps the shoulder off
-// the midtones. Measured numbers for the three reference scenes are in
+// Control uses -- and with max_gain 4.0 (widened from 2.0, 2026-09-07 request:
+// "make min gain 0.3, max gain 4.0") lets a 5..20-code scene reach the
+// 71..143 range, up from 50..101 at max_gain 2.0 -- see shader-effects.md for
+// the re-measured tables. GAMMA_MAX 1.5 is as far as a darkening gamma goes
+// before the shadow cap above becomes the only thing keeping detail; that cap
+// is measurably looser at min_gain 0.3 than it was at 0.5 -- see the "Why
+// min_gain 0.3" note in shader-effects.md for the numbers, not changed here.
+// WHITE 0.9 leaves the top 10 % for the highlights above p98. KNEE 0.7 keeps
+// the shoulder off the midtones. GAMMA_MIN, GAMMA_MAX, KNEE and WHITE are
+// unchanged by the 2026-09-07 gain-range widening on purpose (a separate
+// highlight-rolloff change is being designed against those four constants;
+// keeping them fixed here lets the two changes be judged independently).
+// Measured numbers for the three reference scenes are in
 // superdoc/features/shader-effects.md.
 
 #ifndef EFFECTS_CURVE_H_

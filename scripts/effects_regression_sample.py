@@ -127,7 +127,11 @@ def cmd_check(args):
             ("band3 (245) brought below 250 - actually below 235", v["band3"] < 235.0),
             ("band4 (255) not above 255", v["band4"] <= 255.0),
             ("30 shadows not crushed: >= 8", v["rect"] >= 8.0),
-            ("30 shadows dimmed no further than 30 * min_gain 0.5", v["rect"] >= 14.0),
+            # min_gain 0.3 (widened from 0.5, 2026-09-07 request): the floor
+            # is 30 * 0.3 = 9.0, down from 30 * 0.5 = 15.0 -- effects_curve.h
+            # math gives 9.05, so 8.0 leaves ~1 count of capture-rounding
+            # room the same way the old 14.0 did for a 15.0 target.
+            ("30 shadows dimmed no further than 30 * min_gain 0.3", v["rect"] >= 8.0),
             ("bands keep their order", v["band0"] < v["band1"] < v["band2"] < v["band3"] <= v["band4"]),
         ]
     elif scene == "mid":

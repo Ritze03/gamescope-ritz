@@ -30,6 +30,12 @@ The newest version below is the one this build reports.
   split evenly on both sides with no stagger between the two arms of an axis, and a
   saved gap value now renders visibly tighter than before.
 
+### Info
+- **Adaptive Brightness min/max gain range widened**: Min gain now goes down to 0.3
+  (was 0.5) and Max gain up to 4.0 (was 2.0); both sliders now default to their new
+  extreme instead of the old one. An existing config keeps whatever value it already
+  had saved.
+
 ## [0.6.1] – 2026-09-06
 
 ### Added

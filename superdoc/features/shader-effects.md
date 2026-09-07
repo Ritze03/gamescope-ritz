@@ -425,12 +425,50 @@ out = mix(c, curve(c), strength)
   step passes through (0, 0), so black stays black without a floor being needed.
 - **Gamma**: the exponent that lands the smoothed **median** on `target` after the gain,
   bounded to `[0.5, 1.5]`. `Why 0.5:` a sqrt lift — the same floor Shadow Control uses —
-  and with `max_gain` 2 it takes a 5..20-code scene to the 50..100 range. `Why 1.5:` a
-  darkening gamma crushes shadows by nature; beyond 1.5 the shadow cap is all that keeps
-  detail. **The shadow cap** is `min_gain`'s Dynamic meaning: a darkening gamma may not
-  push the smoothed 2nd percentile below `p2 × min_gain` — "how dark may it go", applied
-  to the shadows. `max_gain` bounds the levels gain only; the gamma lift on top is what
-  lets a *super* dark map get further than Whole image's 2× ever could.
+  and with `max_gain` 4 (widened from 2, see below) it takes a 5..20-code scene to the
+  71..143 range, up from 50..101. `Why 1.5:` a darkening gamma crushes shadows by nature;
+  beyond 1.5 the shadow cap is all that keeps detail. **The shadow cap** is `min_gain`'s
+  Dynamic meaning: a darkening gamma may not push the smoothed 2nd percentile below
+  `p2 × min_gain` — "how dark may it go", applied to the shadows. `max_gain` bounds the
+  levels gain only; the gamma lift on top is what lets a *super* dark map get further than
+  Whole image's 2× ever could.
+
+#### Why min_gain 0.3, max_gain 4.0 (2026-09-07 request: *"make min gain 0.3, max gain
+4.0"*)
+
+Ranges widened from 0.5..1.0 / 1.0..2.0 to **0.3..1.0 / 1.0..4.0**, and the schema
+**defaults moved to the new extremes** — `min_gain` 0.5 → 0.3, `max_gain` 2.0 → 4.0
+(`ConfigSchema.h`) — the plain reading of "make min gain 0.3, max gain 4.0". An existing
+config keeps whatever value it already stored; only a config that never set these keys
+(or a fresh install) sees the new numbers. `GAMMA_MIN`, `GAMMA_MAX`, `KNEE` and `WHITE`
+(`effects_curve.h`) are deliberately **unchanged** by this request — a separate
+highlight-rolloff change touching those four is being designed against the user
+separately, and keeping them fixed here lets the two be judged independently.
+
+Two consequences checked by measurement rather than assumed:
+
+- **The shadow cap loosens.** `min_gain` is also "how dark may the 2nd percentile go"
+  inside the gamma shadow cap (above). On the bright reference scene (p2=30, p50=225,
+  p98=250, target 0.5, gain 0.918 unaffected since it is not at either bound): at
+  `min_gain` 0.5 the cap itself was the binding constraint and held the shadows at
+  exactly `p2 × 0.5` = **15**; at `min_gain` 0.3 the cap's own ceiling (`ln(p2 × 0.3) /
+  ln(p2 × gain)` ≈ 1.503) now exceeds `GAMMA_MAX` 1.5, so **`GAMMA_MAX` becomes the
+  binding constraint instead of the cap**, and the shadows land at **9** — measured
+  identically off the GPU (`scripts/effects-regression.sh`'s `bright-dynamic`: rect
+  9.0) and from the pure curve function (`tests/test_effects_curve.cpp`'s dedicated
+  "min_gain 0.3 loosens the shadow cap" case). The cap's own invariant (never below
+  `p2 × min_gain` = 9.0 exactly) still holds — 9.0..9.05 is within float rounding of
+  it — so nothing is mathematically broken, but the **margin above "crushed" is real
+  and roughly halved** (15 vs a floor of "distinguishable from black" versus 9 vs the
+  same floor). Visually (`build-release/verify-shots/adaptive-gain-2026-09-07/`,
+  bright scene, min_gain 0.5 vs 0.3, both at `max_gain` 4.0): the 30-value shadow
+  rectangles read as very dark grey in both captures, not literally crushed to black,
+  but the 0.3 capture is visibly the darker of the two — the loosened cap is a real,
+  if secondary, effect of this request and not just a formula footnote.
+- **The dark scene's shadows lift much further, without crushing anything.** In the
+  dark reference scene the darkening branch of the gamma never engages (the scene needs
+  a *lift*, not a darken), so the shadow cap is irrelevant there; the whole change is
+  driven by `max_gain` alone. See the re-measured table below.
 - **Shoulder**: only when the curve's own top (`G^g`, its value at x = 1) exceeds 1.0 —
   i.e. only when something *would* clip. Reinhard-shaped on the excess above the knee
   `0.7`, with `c` chosen so x = 1 lands exactly on 1.0: slope 1 at the knee (no visible
@@ -446,14 +484,20 @@ out = mix(c, curve(c), strength)
   user-facing "Max gain" should mean. The hard properties (monotonic, bounded, 0 → 0) hold
   in either space.
 
-**Properties asserted on the CPU** (`[effects_curve]`, 11 cases, 1.26 M assertions over
-seven scenes × five targets × nine gain-bound pairs): output in `[0, 1]` and finite;
-monotonic in the input; `0 → 0`; `x = 1 → exactly 1` whenever the shoulder is active;
-identity at strength 0; the mid reference scene is the identity; the gamma clamps and the
-shadow cap hold; the shoulder is C0/C1-continuous at the knee. Plus the config round-trip
-of `mode` and its unknown-value fallback.
+**Properties asserted on the CPU** (`[effects_curve]`, 12 cases, 2.80 M assertions over
+seven scenes × five targets × twenty gain-bound pairs — widened 2026-09-07 from nine
+pairs / 1.26 M assertions to cover the full 0.3..1.0 / 1.0..4.0 panel ranges, gain 4.0
+included at every gamma in range): output in
+`[0, 1]` and finite; monotonic in the input; `0 → 0`; `x = 1 → exactly 1` whenever the
+shoulder is active; identity at strength 0; the mid reference scene is the identity; the
+gamma clamps and the shadow cap hold; the shoulder is C0/C1-continuous at the knee; the
+shadow cap at min_gain 0.3 is measurably looser than at 0.5 yet still holds its own
+invariant (new 2026-09-07 case). Plus the config round-trip of `mode` and its
+unknown-value fallback.
 
-#### Measured (desktop, headless, `scripts/effects-regression.sh`, 2026-09-06)
+#### Measured (desktop, headless, `scripts/effects-regression.sh`, re-measured 2026-09-07
+at the new min_gain 0.3 / max_gain 4.0 defaults; superseded numbers at the old 0.5 / 2.0
+defaults are kept alongside for comparison)
 
 The recipe is `pixel-regression.sh`'s (private headless sway, nested `gamescope --backend
 wayland`, `gamescopectl screenshot "<path> 4"`), with `tests/effects_scene_client.c` as
@@ -462,35 +506,59 @@ positions — **dark** (bands 5/8/12/16/20, a pure-black corner, six 240 squares
 image), **bright** (bands 200/215/230/245/255, six 30-valued rectangles ≈ 4 %, so p2 *is*
 the shadows) and **mid** (26/77/128/179/230) — advanced with `SIGUSR1`. Every number is the
 mean grey of a region's interior, all six Adaptive Brightness params at their defaults,
-strength 1.0. Captures: `build-release/verify-shots/adaptive-2026-09-06/`.
+strength 1.0. Captures: `build-release/verify-shots/effects-regression/20260907-055139/`
+and, for a direct old-vs-new side-by-side at fixed scenes,
+`build-release/verify-shots/adaptive-gain-2026-09-07/`.
 
-| Scene / region (input) | Off | Whole image | **Dynamic** | Dynamic must |
-| --- | --- | --- | --- | --- |
-| dark: darkest band (5) | 5 | 10 | **50** | be readable: ≥ 30 |
-| dark: bands 8 / 12 / 16 / 20 | 8 / 12 / 16 / 20 | 16 / 24 / 32 / 40 | **64 / 78 / 90 / 101** | keep their order |
-| dark: 240 highlights | 240 | **255 — clipped** | **253** | stay < 255, above every band |
-| dark: pure black | 0 | 0 | **0** | stay ≤ 2 |
-| bright: bands 200 / 215 / 230 | 200 / 215 / 230 | 115 / 124 / 132 | **165 / 180 / 196** | keep their order |
-| bright: 245 band (p98 region) | 245 | 141 | **213** | come down below 235 |
-| bright: white (255) | 255 | 146 | **224** | — |
-| bright: 30 shadows (p2) | 30 | 17 | **15** | not crushed: ≥ 8, and ≥ 30 × min_gain 0.5 |
-| mid: 26 / 77 / 128 / 179 / 230 | identical | 26 / 77 / 128 / 178 / 229 | **25 / 75 / 126 / 177 / 228** | near-identity: worst ≤ 6 (measured 2) |
+| Scene / region (input) | Off | Whole image (new) | **Dynamic (new)** | Dynamic (old 0.5/2.0) | Dynamic must |
+| --- | --- | --- | --- | --- | --- |
+| dark: darkest band (5) | 5 | 20 | **71** | 50 | be readable: ≥ 30 |
+| dark: bands 8 / 12 / 16 / 20 | 8/12/16/20 | 32/48/64/80 | **90 / 111 / 128 / 143** | 64/78/90/101 | keep their order |
+| dark: 240 highlights | 240 | **255 — clipped** | **254** | 253 | stay < 255, above every band |
+| dark: pure black | 0 | 0 | **0** | 0 | stay ≤ 2 |
+| bright: bands 200 / 215 / 230 | 200/215/230 | 115/124/132 | **152 / 169 / 187** | 165/180/196 | keep their order |
+| bright: 245 band (p98 region) | 245 | 141 | **206** | 213 | come down below 235 |
+| bright: white (255) | 255 | 146 | **218** | 224 | — |
+| bright: 30 shadows (p2) | 30 | 17 | **9** | 15 | not crushed: ≥ 8, and ≥ 30 × min_gain (0.3 → 9.0) |
+| mid: 26 / 77 / 128 / 179 / 230 | identical | 26/77/128/178/229 | **25 / 75 / 126 / 177 / 228** | 25/75/126/177/228 | near-identity: worst ≤ 6 (measured 2) |
 
-Whole image on the dark scene is the blown-out case the user described: the gain hits
-`max_gain` 2 and the 240 highlights go to 255 with everything above 128 clipping, while the
-darkest band only reaches 10. Dynamic takes that band to 50 and keeps the highlights at
-253, two counts below white. On the bright scene Whole image dims everything to ~0.57×
-(shadows 30 → 17); Dynamic keeps more of the picture (median 230 → 196) and the shadow cap
-holds at exactly `30 × min_gain` = 15. The bright captures under Whole image are not
-asserted — they are recorded as INFO lines to show the difference.
+Widening `max_gain` to 4.0 roughly doubles how far Dynamic lifts a dark scene: the
+darkest band goes from 50 to **71** (a √2× step, since the curve's gamma floor stays at
+0.5 and the gain doubled), and every darker band lifts proportionally more — genuinely
+more readable shadow detail, still monotonic, still nowhere near clipping (254, two
+counts under white, essentially unchanged from the old 253). Whole image on the dark
+scene is still the blown-out case the user described, more so now: the gain hits the new
+`max_gain` 4 and the 240 highlights still go to 255 with far more of the image clipping
+above it, while the darkest band only reaches 20 (was 10 at the old `max_gain` 2). This is
+exactly the contrast Dynamic exists to fix, sharper than before.
+
+On the **bright** scene the honest, less flattering half of this change: `max_gain` 4.0
+does not touch the bright scene at all (its gain, 0.918, sits well inside both the old and
+new bounds), but `min_gain` 0.3 pulls every highlight number **down** relative to the old
+0.5 default — the 245-band figure that "comes down below 235" now reads **206** instead of
+213, and white itself lands at **218** instead of 224. That is *more* compression of the
+highlights, not less: the user's standing complaint is "some things are still overblown",
+and on this scene alone the new defaults compress the top end **harder**, not softer — a
+real trade-off of the wider range, not a pure win. It happens because the same gamma that
+governs the highlight fall-off is now clamped to `GAMMA_MAX` 1.5 (unchanged, per the
+task's constraint) instead of the old, tighter shadow cap — see "Why min_gain 0.3, max_gain
+4.0" above for the mechanism. The shadow cap itself is why: at `min_gain` 0.5 the cap held
+gamma to 1.273; at `min_gain` 0.3 the cap's own ceiling (≈1.503) now exceeds `GAMMA_MAX`
+1.5, so gamma rides the fixed 1.5 ceiling instead — a bigger darkening exponent, which is
+what drags every bright-scene number down together. Whole image is unaffected on this
+scene either way (INFO only, not asserted) since its one linear gain, 0.567, is inside
+both ranges. `Why the 2nd-percentile shadows are the sharpest change (15 → 9):` the shadow
+cap is `min_gain`'s own knob for that value specifically — see above.
 
 **Temporal** (dark → bright under Dynamic, `tau` 1 s; the "requested at" times are
 measured from the `SIGUSR1` to the screenshot request, the screenshot itself adds a
-frame): the 230 band read **252** at 0.37 s, **245** at 1.29 s, **205** at 3.36 s, and
-**196** settled — monotonic, no overshoot, within 12 counts of settled at 3 s. The first
-second looks slow because while the smoothed gain is still above 1 the shoulder pins the
-bright bands near white; once the gain drops under 1 the curve releases them. No
-oscillation was seen in any capture.
+frame): the middle (230) band read **254** at 0.37 s, **245** at 1.28 s, **198** at 3.35 s,
+and **187** settled — monotonic, no overshoot, within 12 counts of settled at 3 s (down
+from 252/245/205/196 at the old 0.5/2.0 defaults — the settled value is lower for the same
+"compresses the highlights harder" reason as the table above). The first second looks slow
+because while the smoothed gain is still above 1 the shoulder pins the bright bands near
+white; once the gain drops under 1 the curve releases them. No oscillation was seen in any
+capture.
 
 **Per-frame cost.** The measure pass is still one 16×16 workgroup over 4096 taps; the
 histogram adds one shared-memory `atomicAdd` per tap and a 64-iteration walk on one

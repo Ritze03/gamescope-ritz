@@ -330,8 +330,10 @@ namespace gamescope::config
         float target_luminance = 0.5f;   // 0.1..0.9 -- Whole image: the mean's target; Dynamic: the median's
         float adapt_up_speed = 1.0f;     // 0.1..5.0 seconds to ~63% of target
         float adapt_down_speed = 1.0f;   // 0.1..5.0
-        float min_gain = 0.5f;           // 0.5..1.0
-        float max_gain = 2.0f;           // 1.0..2.0
+        float min_gain = 0.3f;           // 0.3..1.0 (was 0.5..1.0; widened 2026-09-07, request:
+                                          // "make min gain 0.3, max gain 4.0" -- see
+                                          // shader-effects.md for the re-measured curve)
+        float max_gain = 4.0f;           // 1.0..4.0 (was 1.0..2.0, same request)
         float strength = 1.0f;           // 0.0..1.0 dry/wet mix
     };
 

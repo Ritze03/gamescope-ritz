@@ -21,9 +21,9 @@
 #   dark-dynamic     -- the darkest band (5) is lifted to >= 30, the 240
 #                       highlights stay < 255 and above every band, pure
 #                       black stays <= 2, band order is kept
-#   bright-dynamic   -- the 245 band comes down below 235, the 30 shadows
-#                       are dimmed no further than 30 x min_gain (0.5) and
-#                       never crushed, order kept
+#   bright-dynamic   -- the 245 band comes down below 235, the 30 shadows are
+#                       dimmed no further than 30 x min_gain (0.3, widened
+#                       from 0.5 on 2026-09-07) and never crushed, order kept
 #   mid-dynamic      -- a 0.1..0.9 scene is left alone to within 6 counts
 #   temporal-band2   -- switching dark -> bright with Dynamic on: the middle
 #                       band's value at 0.2 s / 1 s / 3 s approaches the
@@ -153,7 +153,8 @@ start_sway() {
 
 # Everything off; the HUD and crosshair too, so the captures are the game
 # alone. Adaptive Brightness's parameters are the schema defaults (target
-# 0.5, 1 s / 1 s, gains 0.5..2.0, strength 1.0) -- the numbers the doc quotes.
+# 0.5, 1 s / 1 s, gains 0.3..4.0 -- widened 2026-09-07 from 0.5..2.0, strength
+# 1.0) -- the numbers the doc quotes.
 write_config() {
 	mkdir -p "$CONFIGHOME/gamescope-ritz/profiles"
 	cat > "$CONFIGHOME/gamescope-ritz/global.json" <<-EOF

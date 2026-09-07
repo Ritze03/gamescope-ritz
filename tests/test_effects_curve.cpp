@@ -29,8 +29,11 @@ namespace
 	constexpr Scene kMid    = { 0.1f, 0.5f, 0.9f };
 
 	constexpr float kTarget = 0.5f;
-	constexpr float kMinGain = 0.5f;
-	constexpr float kMaxGain = 2.0f;
+	// The schema defaults (src/Config/ConfigSchema.h), widened 2026-09-07
+	// from 0.5/2.0 to 0.3/4.0 -- see shader-effects.md for the re-measured
+	// numbers these defaults produce on the three reference scenes.
+	constexpr float kMinGain = 0.3f;
+	constexpr float kMaxGain = 4.0f;
 
 	// Whole curve for one channel value, with the dry/wet mix the shader
 	// applies (mix(c, graded, strength)).
@@ -50,8 +53,10 @@ namespace
 		{ 0.02f, 0.3f, 0.99f },        // dark room, bright window
 		{ 0.6f, 0.8f, 0.85f } };       // flat and bright
 	const float kTargets[]  = { 0.1f, 0.3f, 0.5f, 0.7f, 0.9f };
-	const float kMinGains[] = { 0.5f, 0.75f, 1.0f };
-	const float kMaxGains[] = { 1.0f, 1.5f, 2.0f };
+	// Spans the full 2026-09-07 panel ranges (0.3..1.0 / 1.0..4.0), including
+	// both new extremes, not just the pre-widening set.
+	const float kMinGains[] = { 0.3f, 0.5f, 0.75f, 1.0f };
+	const float kMaxGains[] = { 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
 }
 
 TEST_CASE( "dynamic curve: output never exceeds 1.0 and never goes negative", "[effects_curve]" )
@@ -129,7 +134,9 @@ TEST_CASE( "dynamic curve: the dark reference scene is lifted, its highlights co
 	const float p50  = Apply( kDark.p50, kDark, 1.0f ) * 255.0f;
 	const float hi   = Apply( 240.0f / 255.0f, kDark, 1.0f ) * 255.0f;
 	const float wht  = Apply( 1.0f, kDark, 1.0f ) * 255.0f;
-	REQUIRE( p2 > 30.0f );          // the 2 % percentile becomes readable
+	// At max_gain 4.0 (widened from 2.0, 2026-09-07) the darkest band lifts
+	// to ~71 rather than ~50 -- still well clear of the "readable" floor.
+	REQUIRE( p2 > 65.0f );          // the 2 % percentile becomes readable
 	REQUIRE( p50 > p2 );
 	REQUIRE( hi < 255.0f );         // a 240 highlight is not blown out
 	REQUIRE( hi > p50 );            // and keeps its rank
@@ -149,9 +156,42 @@ TEST_CASE( "dynamic curve: the bright reference scene is dimmed and its shadows 
 	REQUIRE( p98 < 250.0f );
 	REQUIRE( p50 < 225.0f );
 	// min_gain's Dynamic meaning: the 2nd percentile is never pushed below
-	// p2 * min_gain.
+	// p2 * min_gain. At min_gain 0.3 (widened from 0.5, 2026-09-07) the
+	// floor drops from 15 to 9 -- the shadow cap is real but the margin
+	// above "crushed" is now visibly thinner (see the dedicated shadow-cap
+	// comparison test below, and shader-effects.md's "Why min_gain 0.3"
+	// note, for the numbers this loosening produces).
 	REQUIRE( sh >= 30.0f * kMinGain - 0.5f );
-	REQUIRE( sh > 4.0f );
+	REQUIRE( sh > 8.0f );
+}
+
+TEST_CASE( "dynamic curve: min_gain 0.3 loosens the shadow cap relative to 0.5, measurably",
+           "[effects_curve]" )
+{
+	// Same bright reference scene, same gain (unaffected -- 0.918 is inside
+	// both old and new bounds), only min_gain differs. Answers the
+	// 2026-09-07 request's question directly: does the widened floor let
+	// deep shadows crush? The cap still holds (never below p2 * min_gain),
+	// but the permitted floor itself moved from 15 to 9 -- both are "not
+	// crushed" by the >= 8 counts a human can still distinguish from black,
+	// but 9 leaves much less headroom than 15 did.
+	constexpr float p2 = 30.0f / 255.0f, p50 = 225.0f / 255.0f, p98 = 250.0f / 255.0f;
+	const float gainOld = ab_dyn_gain( p98, 0.5f, 2.0f );
+	const float gainNew = ab_dyn_gain( p98, 0.3f, 4.0f );
+	REQUIRE_THAT( gainOld, WithinAbs( gainNew, 1e-6f ) );   // 0.918 either way, not clamped
+
+	const float gammaOld = ab_dyn_gamma( p2, p50, gainOld, 0.5f, 0.5f );
+	const float gammaNew = ab_dyn_gamma( p2, p50, gainNew, 0.5f, 0.3f );
+	REQUIRE( gammaNew > gammaOld );          // the looser cap permits more darkening
+	REQUIRE_THAT( gammaNew, WithinAbs( AB_DYN_GAMMA_MAX, 1e-3f ) );   // GAMMA_MAX now binds, not the cap
+
+	const float shOld = ab_dyn_curve( p2, gainOld, gammaOld ) * 255.0f;
+	const float shNew = ab_dyn_curve( p2, gainNew, gammaNew ) * 255.0f;
+	REQUIRE_THAT( shOld, WithinAbs( 15.0f, 0.5f ) );
+	REQUIRE_THAT( shNew, WithinAbs( 9.0f, 0.5f ) );
+	// Neither is crushed to black, and the cap invariant holds for both.
+	REQUIRE( shOld >= 30.0f * 0.5f - 0.5f );
+	REQUIRE( shNew >= 30.0f * 0.3f - 0.5f );
 }
 
 TEST_CASE( "dynamic curve: the gamma is clamped to its bounds and the shadow cap holds", "[effects_curve]" )
