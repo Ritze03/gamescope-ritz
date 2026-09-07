@@ -40,6 +40,10 @@ optional, on-demand read.
   Strict format, four categories, one version bump per dated block. The overlay parses
   this file, and the build reads the top block's version as the project's own — so
   `CHANGELOG.md` **is** the version marker; there is no other.
+- **TEMPORARY — pending user tests** — @superdoc/planning/PENDING-USER-TESTS.md — force-loaded
+  for one reason only: to remind you to ask the user for these results at the start of a
+  session. Once the user has answered the checklist, delete BOTH this bullet and the file —
+  the `@`-budget rule below means it must not linger.
 
 Path base: `CLAUDE.md` uses repo-root-relative paths (`@superdoc/...`, `` `superdoc/...` ``);
 links *inside* docs are docs-relative. Precedence: `CLAUDE.md` is authoritative for
