@@ -30,6 +30,11 @@ The newest version below is the one this build reports.
   whole frame's, so a dark room and a bright window are both readable at once; on a
   half-dark, half-bright scene the dark half's detail went from unreadable to clear at
   the 50% default, with no glow around dark objects.
+- **Adaptive Brightness: a before/after preview**: selecting Adaptive Brightness now
+  shows a small picture in the settings panel -- a frame from the game frozen the
+  moment you open it, untouched on the left and with the effect applied on the right --
+  which re-draws as you move the sliders, so you can judge a setting without hunting
+  for a scene that shows it.
 
 ### Fixed
 - **Appearance and Cursor settings no longer undo each other**: changing something in

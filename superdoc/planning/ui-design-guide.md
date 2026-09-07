@@ -311,6 +311,56 @@ Sheet's own copy and the Inspector's copy of a selected row's CONFIGURE page bot
 and a string key cannot tell those two apart (the popup opened at the wrong box's
 position the first time this was tried, caught by this feature's own mandatory capture).
 
+### The Inspector's before/after comparison strip (2026-09-07)
+
+**When to use:** a row whose whole subject is *how the picture looks*, where a number
+cannot answer "is this setting right". Adaptive Brightness is the first and, so far,
+only user (`requests-2026-09-08.md`). Not a general-purpose picture slot: a row declares
+it by *name* — `Entry::Preview( PreviewKind::AdaptiveBrightness )`, an enum in
+`Registry.h` — and `Shell.cpp` decides what that name draws. `Why an enum and not a
+`std::function<void(ImRect)>`:` a callback here would be a general custom-draw escape
+hatch in the registry, which is precisely the door SPEC §5.2's registration laws exist
+to keep shut. Adding a second preview is a deliberate act in two files.
+
+**Shape.** One block, laid out by `controls::LayoutComparePreview()`, reserved by
+`controls::ComparePreviewHeight()`:
+
+```
+BEFORE                              AFTER     <- 14px label line, TextMeta
+                                              <- 4px gap
++-------------------+-------------------+
+|                   |                   |     <- one picture, 16:9,
+|   captured frame  ‖  same frame with  |        1px Role::Line hairline
+|                   ‖  the effect on    |
++-------------------+-------------------+
+                    ^ divider, on the midpoint
+```
+
+- **Width** is the Inspector's content width, **capped at 240 logical px**. The block
+  sits *above* the VALUES/params, so every pixel of it pushes them down; 320 px (tried
+  first) cost four param rows of visible space at 1280×720, 240 costs three.
+- **The two labels sit outside the picture, one per half**, each aligned to its own
+  half's outer edge. `Why not inside the picture:` a `TextMeta` label is only quiet if
+  it is legible, and inside it would be sitting on arbitrary game content.
+- **The divider is two coats, not a hairline**: a 4px black at 55 % with a 1px white at
+  85 % down its middle, so a dark fringe survives on each side of the bright line. Same reason — a single hairline of any one colour disappears
+  against half the content it can land on. This is a deliberate exception to the
+  1px-hairline rule, and the only one: it is a *boundary between two images*, not a
+  boundary between two UI surfaces.
+- **The empty state is a bordered box with one centred `TextMeta` sentence**, on the
+  `SurfaceRaised` fill — never a black rectangle, which reads as broken rather than as
+  empty. `Controls.h`'s `ComparePreviewStatusFor()` is the whole state machine and
+  every not-ready branch names itself; see `superdoc/features/shader-effects.md` for the
+  three messages and their ordering.
+
+**Where the pixels come from, and the refresh rule** are the feature's own, not this
+guide's: `shader-effects.md`, "The Inspector's before/after preview".
+
+**Known limitation.** The strip scrolls with the rest of the CONFIGURE page, so at
+1280×720 — where this row's eight params already overflowed the Inspector body — the
+lowest params cannot be dragged while watching it. Pinning it above the scrolling body
+is the fix and is deliberately not in this change.
+
 ### `ui::Modal` — a small centred dialog
 
 **When to use:** a short, focused task that needs the user's full attention before

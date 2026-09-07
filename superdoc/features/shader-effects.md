@@ -811,6 +811,180 @@ or the white point, exposed) is still worth having and is recommended — but no
 and deliberately not built in the same change as the local operator, so the two can be judged
 against each other rather than as one indivisible "it looks different now".
 
+#### The Inspector's before/after preview (2026-09-07)
+
+`requests-2026-09-08.md`: *"You could maybe add a small comparison picture to the
+inspector rail, that is split in half (left/right) with one being the original image
+(captured frame, when the UI was opened) and the one modified by the adaptive
+brightness."*
+
+Selecting the **Adaptive Brightness** row now puts a small 16:9 picture in the
+Inspector's CONFIGURE page, above the VALUES block: **one frozen frame from the game,
+split down the middle — the left half as the picture reaches Adaptive Brightness, the
+right half with the effect applied at whatever the sliders currently say.** Moving a
+slider re-grades the frozen frame, so a setting can be judged immediately instead of by
+hunting for a scene that shows it. It is a **read**: nothing in it touches the
+compositing path.
+
+##### Where the pixels come from
+
+Two things are captured, **on one composite, together**:
+
+1. **The picture.** `src/shaders/cs_effects_preview.comp` — a new 256×144 compute
+   dispatch — box-averages the base layer down to that size and runs
+   `effects_common.h`'s **`grade()`** on every tap, so what it writes is *exactly the
+   image `cs_effects_layer0.comp`'s Adaptive Brightness block is about to receive*:
+   Shadow Control and Vibrancy already applied, in encoded space, on the same slot-0
+   raw-UNORM binding the other two dispatches use. Pre-Sharpen is deliberately not
+   applied (a 5-tap cross at source resolution is invisible after a ~7× downscale, and
+   it does not move the statistics either).
+2. **The statistics.** The `effectsHistory` texture `cs_effects_measure.comp` wrote for
+   *that same frame* — mean, p2, p50, p98 and Local adaptation's 16×16 map — copied out
+   beside the pixels.
+
+`Why capture the statistics rather than re-estimate them on the CPU:` this is the whole
+reason the right half agrees with a screenshot to the code value. The measure pass's
+estimator is a 128×128 tap grid, a 64-bin histogram and rank-window means, followed by
+an EMA (see [The statistics](#the-statistics-both-modes)); a CPU re-implementation of
+all that would be a second definition to keep in step, and would differ from the shader
+by whatever the two implementations disagreed about. Copying the history is exact and
+free. It also satisfies "the stats come from the captured frame itself": both halves of
+the capture are from one composite and are frozen together, so the preview never drifts
+with what the live game is doing behind the UI.
+
+The apply half is `src/Overlay/EffectPreviewMath.h`, which runs
+**`effects_curve.h` — the same text the GPU compiles** — over the captured pixels: the
+same `ab_local_shift` / `ab_dyn_gain` / `ab_dyn_gamma` / `ab_dyn_curve`, in the same
+order, with the same clamps, plus a line-for-line port of `ab_local_sample()`'s
+hand-rolled bilinear.
+
+##### The refresh rule
+
+- **A frame is captured when the strip appears on screen**, and only then. "Appears"
+  is defined as *not drawn for 250 ms* — which covers the overlay being opened,
+  another row or rail area being selected, the DETAILS page, the Inspector being
+  hidden, and the strip being scrolled out of view. One rule for all of them, and it
+  is also what makes a stale frame from an earlier session structurally impossible:
+  nothing older than a quarter-second-before-it-appeared can be displayed.
+- **The right half is re-graded when a parameter changes**, or when a new frame
+  arrives. Nothing else redraws it; a still overlay costs nothing.
+- **The capture is armed only while the effect's own switch is on**, so the preview
+  never asks the compositor for work on a frame the pre-pass would not otherwise run.
+
+##### Degradation
+
+Every not-ready case draws a bordered box with one muted sentence in it, never a black
+rectangle and never a stale picture. Ordered by what the user can act on:
+
+| Case | What is shown |
+| --- | --- |
+| Base layer is not SDR RGB | "Preview unavailable: these effects only run on an SDR picture." |
+| Adaptive Brightness switched off | "Turn Adaptive Brightness on to preview it." |
+| Armed, no frame yet (no game, HDR frames, allocation failed) | "Open the overlay over a game to preview." |
+
+`Why not-SDR outranks switched-off:` the switch is greyed out under the `kSdrOnly`
+reason in that state, so "turn it on" would be advice the user cannot take. A texture
+allocation failure disarms rather than retrying every composite, and a resolution
+change cannot break anything: the capture is a fixed 256×144 downscale, so the strip's
+size never depends on the game's.
+
+##### Measured: the right half is the effect, not an impression
+
+`build-release/verify-shots/ab-preview-2026-09-07/`, headless, `pixel-regression.sh`'s
+recipe, `tests/effects_scene_client.c` as the game, Adaptive Brightness alone (the other
+three off), Dynamic, schema defaults. The strip is sampled in the capture and compared
+against a `gamescopectl screenshot "<p> 4"` of the *same scene with the effect on and
+the overlay closed*:
+
+| Scene | Preview, left half (before) | Preview, right half (after) | The real effect, same scene | Error |
+| --- | --- | --- | --- | --- |
+| `dark`, bands 5 / 8 / 12 / 16 / 20 | 5 / 8 / 12 / 16 / 20 | **71 / 90 / 111 / 128 / 143** | 71 / 90 / 111 / 128 / 143 | **0 counts** |
+| `halfsplit`, bright half 200…255 | (its own dark half) | **196 / 207 / 218 / 229 / 236** | 196 / 207 / 218 / 229 / 236 | **0 counts** |
+| `texdark` (a textured frame), mean | 24.9 | **124.1** | 121.1 | 3.0 counts |
+
+The two flat scenes are exact to the code value. `texdark`'s 2-count difference is the
+one honest inexactness and it is inherent to previewing a *downscaled* frame: the strip
+grades the box mean of each 7×5 source block, while the real frame grades each source
+pixel and is then averaged by the measurement — `curve(mean(x))` against `mean(curve(x))`
+on a non-linear curve. It is a property of the thumbnail, not of the maths, and at 3
+counts on the hardest content the test client has it is below what a user can see.
+
+Two more behaviours measured in the same run, both from the strip itself:
+
+- **Strength → 0 makes the right half byte-identical to the left** (5/8/12/16/20 on both
+  sides) — the slider-change proof, and the identity property asserted on the CPU as
+  well.
+- **Local adaptation 0 → 50 % moves the right half on `halfsplit`** (196/207/218/229/236
+  → 173/181/187/192/195) and **does not move it at all on `dark`** — correct in both
+  cases: a uniform frame has `r ≡ 1` by construction, so there is nothing local to
+  adapt to.
+
+##### Cost, stated plainly
+
+- **The capture**: one 256×144 dispatch (36,864 invocations, 16 texelFetches each), two
+  small image copies, and one `g_device.wait()` — the same one-GPU-frame stall
+  `effects_ab_log` takes, paid **once per time the strip appears**, not per frame. Every
+  other frame the pipeline is never bound.
+- **The re-grade**, measured on this desktop (`-O2`, 256×144, the right half only —
+  18,432 pixels):
+
+  | Case | Per update |
+  | --- | --- |
+  | Whole image | **32 µs** |
+  | Dynamic, Local adaptation 0 | **47 µs** |
+  | Dynamic, Local adaptation > 0 | **2.1 ms** |
+
+  The first two are cheap because the effect is then a pure function of one byte — gain
+  and gamma are frame constants — so `Compose()` evaluates the curve **256 times** into
+  a table instead of 55,296 times. The table is built by calling the *same*
+  `ApplyPixel()`, and `test_overlay_ui.cpp` asserts the two paths are equal for every
+  byte value in both modes, so it is a speed-up and not an approximation.
+
+  With Local adaptation on, every pixel has its own gain and the table cannot apply, so
+  it is ~2.1 ms — six transcendentals per pixel, run on the steamcompmgr thread inside
+  the overlay's own draw. **That is the honest worst case**, and it is bounded: it
+  happens only on frames the overlay is *already* redrawing, only when a value actually
+  changed (a still overlay recomposes nothing), and only in Dynamic mode above 0 %
+  Local adaptation. No throttle was added on purpose — throttling risks the strip
+  showing the *previous* slider position if the overlay then stops redrawing, and a
+  preview that lies is worse than a 2 ms frame. If it ever needs to be faster, the
+  table generalises by quantising the local ratio, at the price of the exactness the
+  table has today.
+- **Memory**: a 256×144 storage texture plus two host-mappable staging copies (147 KB +
+  147 KB + 1 KB), created on the first capture and kept.
+
+##### What it deliberately does not show
+
+- **Only Adaptive Brightness.** Shadow Control and Vibrancy are baked into *both* halves
+  by the capture's `grade()` call, so the strip isolates this effect — which is what a
+  before/after for this row should do.
+- **The same frame on both sides, not two crops.** The divider is the midpoint of one
+  picture, so a feature straddling it shows its own before and after touching each
+  other. On a scene that is itself spatially split (`halfsplit`), that means each side
+  of the strip shows a different part of the frame — inherent to the shape the request
+  asked for.
+- **Not 16:9 content.** The capture is a fixed 256×144, so a 16:10 or ultrawide frame is
+  stretched to the strip's shape rather than letterboxed. Tone, which is what the strip
+  is for, is unaffected.
+
+##### The size, and what it costs the params
+
+The block is the Inspector's content width capped at **240 logical px** (a 135-px
+picture plus a 14-px label line and a 4-px gap: 153 px total). `Why capped, and why
+there:` the strip is drawn *above* the params so it is on screen while they are reached
+for, which means every pixel of it pushes them down — and at 1280×720 this row's eight
+params already filled the Inspector body exactly. Measured at that size: 320 px wide
+(the first size tried, and the size the earlier captures in the verify-shots directory
+show) left three params visible; 240 leaves four, and is still legible enough to judge
+tone on.
+
+**The honest limitation**: at 1280×720 the CONFIGURE page scrolls, and scrolling down to
+Min gain or Local adaptation takes the strip off the top of the page with it — so the
+lowest params cannot be dragged while watching the preview. At 2560×1440 everything is
+on screen together. Pinning the strip above the Inspector's scrolling body would fix it
+and is the obvious follow-up; it was not done here because it is a change to
+`DrawInspector()`'s region split, with nothing to do with this feature's own risk.
+
 #### The pulse: rank cuts on a bimodal histogram (2026-09-07)
 
 `requests-2026-09-08.md` item 6: *"For the dynamic mode, sometimes the whole image

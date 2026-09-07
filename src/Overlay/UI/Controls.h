@@ -744,5 +744,47 @@ namespace gamescope::ui
 		//         samples across the full width would do.
 		void GraphBody( const ImRect &rcBody, const float *pflSamples, size_t nSamples,
 		                float flCeiling, float flOutlierMs, size_t nAxisSlots = 0 );
+
+		// ---- The Inspector's before/after comparison strip ---------------
+		//
+		// One 16:9 picture split down the middle: the captured frame on the
+		// left, the same frame with the effect applied on the right. Only
+		// the arithmetic and the state machine live here (Controls.cpp is
+		// linked into the unit tests, EffectPreview.cpp is not) -- the
+		// pixels, the capture and the texture upload are
+		// src/Overlay/EffectPreview.cpp's.
+		//
+		// The block is: one label line ("BEFORE" left, "AFTER" right), a
+		// small gap, then the 16:9 image. The labels are OUTSIDE the image
+		// on purpose: drawn inside it they would sit on arbitrary game
+		// content, and a muted-colour label is only quiet if it is legible.
+		struct ComparePreviewLayout
+		{
+			ImRect rcImage;        // the picture itself, exactly 16:9
+			ImRect rcLeftLabel;    // "BEFORE", left-aligned, above the image
+			ImRect rcRightLabel;   // "AFTER", right-aligned, above the image
+			float  flDividerX = 0.0f;   // the split, at the image's midpoint
+		};
+		// Lays the block out inside rcBlock, using its WIDTH and ignoring its
+		// height (the caller sizes the block with ComparePreviewHeight()).
+		ComparePreviewLayout LayoutComparePreview( const ImRect &rcBlock );
+		// The total height the block needs for a given width. Pure, so a
+		// caller can reserve space before it has anything to draw.
+		float ComparePreviewHeight( float flWidthPx );
+
+		// The strip has exactly two states, and the reasons it can be in the
+		// first are ordered from "the user can fix this" downwards -- see
+		// ComparePreviewStatusFor().
+		enum class ComparePreviewState { Placeholder, Ready };
+		struct ComparePreviewStatus
+		{
+			ComparePreviewState eState = ComparePreviewState::Placeholder;
+			const char *pszMessage = "";   // empty when Ready
+		};
+		// bEnabled: the effect's own switch. bSupported: the base layer is
+		// SDR RGB, i.e. the pre-pass can run at all. bHaveFrame: a capture
+		// has arrived. Every false case names itself rather than showing a
+		// black box or, worse, a frame left over from another session.
+		ComparePreviewStatus ComparePreviewStatusFor( bool bEnabled, bool bSupported, bool bHaveFrame );
 	}
 }

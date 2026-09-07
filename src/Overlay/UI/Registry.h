@@ -452,6 +452,27 @@ namespace gamescope::ui
 		Entry &Dropdown() { m_bDropdownStyle = true; return *this; }
 		bool  DropdownStyle() const { return m_bDropdownStyle; }
 
+		// ---- the Inspector's live preview block (2026-09-07) -------------
+		// A row may ask the Inspector to draw ONE named picture above its
+		// VALUES block. Named, not a callback: the registry stays a
+		// declaration of data (API.md's rule -- a row declares WHAT it is,
+		// the shell decides how it is drawn), and a `std::function<void(
+		// ImRect )>` here would be a general-purpose custom-draw escape
+		// hatch, which is precisely the door SPEC §5.2's laws exist to keep
+		// shut. One enumerator per preview the shell knows how to paint;
+		// adding one is a deliberate act in two files, not an invitation.
+		// `Nothing`, not `None`: X11's headers, which this translation
+		// unit transitively pulls in, `#define None 0L`.
+		enum class PreviewKind : unsigned char
+		{
+			Nothing = 0,
+			// Adaptive Brightness's before/after strip
+			// (src/Overlay/EffectPreview.cpp).
+			AdaptiveBrightness,
+		};
+		Entry &Preview( PreviewKind eKind ) { m_ePreview = eKind; return *this; }
+		PreviewKind PreviewOf() const { return m_ePreview; }
+
 		// ---- the config key (Profiles v2, 2026-09-06) ----------------------
 		// The dotted key this row's binding reads and writes in a profile
 		// file ("fps_display.enabled", "reshade.vibrancy.strength") --
@@ -618,6 +639,7 @@ namespace gamescope::ui
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
+		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;

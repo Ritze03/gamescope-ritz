@@ -598,6 +598,47 @@ extern NativeEffectsState_t g_nativeEffects;
 // !g_reshade_effect.empty(), or direct scanout would silently skip it.
 bool vulkan_native_effects_active();
 
+// ---- The Inspector's Adaptive Brightness before/after preview -----------
+//
+// One downscaled, GRADED copy of the base layer -- exactly the image
+// cs_effects_layer0.comp's Adaptive Brightness block receives -- captured on
+// demand together with the statistics cs_effects_measure.comp measured for
+// that same frame. The settings overlay re-runs effects_curve.h over it on
+// the CPU to paint the strip's "after" half, so dragging a slider re-grades a
+// frozen frame instead of waiting for the game to show the difference. See
+// superdoc/features/shader-effects.md and src/Overlay/EffectPreview.cpp.
+//
+// NOTHING HERE WRITES INTO THE COMPOSITING PATH: the capture is one extra
+// dispatch into a private texture plus two copies out of it. Layer 0, the
+// history and the effects output are read, never modified.
+static constexpr uint32_t kAbPreviewWidth  = 256;   // == effects_common.h's AB_PREVIEW_W
+static constexpr uint32_t kAbPreviewHeight = 144;   // == effects_common.h's AB_PREVIEW_H
+static constexpr uint32_t kAbPreviewLocalGrid = 16; // == effects_common.h's AB_LOCAL_GRID
+
+struct AbPreviewFrame_t
+{
+	// 0 while nothing has ever been captured; bumped once per completed
+	// capture, so a consumer can tell "the same frame again" from "a new one".
+	uint64_t ulGeneration = 0;
+	// AB_PREVIEW_W x AB_PREVIEW_H, tightly packed, 3 bytes per pixel, top
+	// row first -- ENCODED (gamma) values, the space the pre-pass works in.
+	uint8_t  rgb[ kAbPreviewWidth * kAbPreviewHeight * 3 ] = {};
+	// The SMOOTHED statistics the frame was actually graded with, straight
+	// out of the history texture (effects_common.h's HISTORY_* row 0).
+	float    flMean = 0.0f, flP2 = 0.0f, flP50 = 0.0f, flP98 = 0.0f;
+	// Local adaptation's smoothed 16x16 map, row-major.
+	float    flLocal[ kAbPreviewLocalGrid * kAbPreviewLocalGrid ] = {};
+};
+
+// Ask the next eligible composite to capture. Cheap and idempotent: an
+// already-armed request is not duplicated, and a request that can never be
+// served (no effect on, HDR/YCbCr content) simply never produces a frame,
+// which the overlay renders as its placeholder. Callable from any thread.
+void vulkan_effects_preview_request();
+// Copy the newest capture out, if it is newer than ulHaveGeneration. Returns
+// false (leaving *pOut alone) when there is nothing newer. Any thread.
+bool vulkan_effects_preview_fetch( AbPreviewFrame_t *pOut, uint64_t ulHaveGeneration );
+
 std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
 void vulkan_wait( uint64_t ulSeqNo, bool bReset );
 // Launch-time warm-up for the overlay layers -- called once from
@@ -766,6 +807,16 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsDebugHistory;
 	gamescope::OwningRc<CVulkanTexture> effectsDebugPixel;
 
+	// The settings Inspector's Adaptive Brightness before/after strip
+	// (cs_effects_preview.comp, src/Overlay/EffectPreview.cpp). The storage
+	// target the preview pass writes, plus host-mappable staging for it and
+	// for the history it was captured alongside. All three are created on
+	// the first armed capture and kept -- they are 147 KB and 1 KB, and the
+	// alternative is re-creating them every time the Inspector is opened.
+	gamescope::OwningRc<CVulkanTexture> effectsPreview;
+	gamescope::OwningRc<CVulkanTexture> effectsPreviewStaging;
+	gamescope::OwningRc<CVulkanTexture> effectsPreviewHistory;
+
 	// NIS
 	gamescope::OwningRc<CVulkanTexture> nisScalerImage;
 	gamescope::OwningRc<CVulkanTexture> nisUsmImage;
@@ -783,6 +834,7 @@ enum ShaderType {
 	SHADER_TYPE_RGB_TO_NV12,
 	SHADER_TYPE_EFFECTS_LAYER0, // cs_effects_layer0.comp: the bundled Shaders-area effects, pre-scale, on layer 0
 	SHADER_TYPE_EFFECTS_MEASURE, // cs_effects_measure.comp: Adaptive Brightness's one-workgroup measure/adapt pass
+	SHADER_TYPE_EFFECTS_PREVIEW, // cs_effects_preview.comp: one downscaled graded copy for the Inspector's before/after strip
 
 	SHADER_TYPE_COUNT
 };

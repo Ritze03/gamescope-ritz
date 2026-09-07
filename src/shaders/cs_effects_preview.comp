@@ -1,0 +1,71 @@
+#version 460
+
+// cs_effects_preview.comp -- ONE downscaled copy of the frame the Adaptive
+// Brightness stage is about to receive, for the settings Inspector's
+// before/after comparison strip (src/Overlay/EffectPreview.cpp).
+//
+// WHAT IT WRITES, AND WHY THAT EXACT IMAGE. The strip's left half must be
+// "the picture as it is now, before Adaptive Brightness" and its right half
+// the same picture with the curve applied -- and the right half is computed
+// on the CPU, from this capture, by effects_curve.h. For the two halves to
+// be comparable with each other AND with what is actually on screen, the
+// captured image has to be exactly what cs_effects_layer0.comp's Adaptive
+// Brightness block sees: the base layer with grade() applied (Shadow Control
+// then Vibrancy, effects_common.h), in encoded space. So this pass calls the
+// SAME grade() the apply pass and the measure pass call, on the same slot-0
+// binding (raw UNORM view, unnormalised nearest sampler) the host has
+// already set up for those two dispatches. Pre-Sharpen is deliberately not
+// applied: it is a 5-tap cross at source resolution and is invisible after a
+// 7x downscale, while running RCAS here would cost a second set of taps for
+// nothing.
+//
+// The statistics the CPU needs (mean / p2 / p50 / p98 and the 16x16 local
+// map) are NOT recomputed here -- the host copies the history texture
+// cs_effects_measure.comp just wrote for this very frame, so the preview's
+// curve is fitted with the numbers the real frame was graded with rather
+// than with a re-implementation of the estimator.
+//
+// COST. AB_PREVIEW_W x AB_PREVIEW_H invocations (256x144 = 36864), 16
+// texelFetches each, once -- when the Inspector arms a capture, not per
+// frame. Every other frame this pipeline is never bound.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+// 4x4 evenly-spaced taps inside each output pixel's source footprint. A box
+// mean rather than one bilinear tap: at a ~7x reduction a single tap turns
+// the reference scenes' fine texture into aliasing noise, and the strip is
+// meant to be judged for tone, which is exactly what an area mean preserves.
+const int AB_PREVIEW_TAPS = 4;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= AB_PREVIEW_W || p.y >= AB_PREVIEW_H)
+        return;
+
+    ivec2 srcSize = textureSize(s_samplers[0], 0);
+    vec2  dstSize = vec2(float(AB_PREVIEW_W), float(AB_PREVIEW_H));
+
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < AB_PREVIEW_TAPS; j++)
+    {
+        for (int i = 0; i < AB_PREVIEW_TAPS; i++)
+        {
+            vec2 uv = (vec2(p) + (vec2(float(i), float(j)) + 0.5) / float(AB_PREVIEW_TAPS)) / dstSize;
+            ivec2 t = clamp(ivec2(uv * vec2(srcSize)), ivec2(0), srcSize - ivec2(1));
+            sum += grade(texelFetch(s_samplers[0], t, 0).rgb);
+        }
+    }
+
+    vec3 c = clamp(sum / float(AB_PREVIEW_TAPS * AB_PREVIEW_TAPS), 0.0, 1.0);
+    imageStore(dst, p, vec4(c, 1.0));
+}

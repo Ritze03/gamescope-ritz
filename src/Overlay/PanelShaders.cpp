@@ -395,6 +395,14 @@ namespace gamescope
 			.Keywords( "adaptive brightness eye adaptation exposure auto dynamic contrast gamma "
 			           "whole image tone mapping" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
+			// The Inspector's before/after strip (2026-09-07 request):
+			// a frame captured from the game the moment the page appears,
+			// split down the middle -- untouched on the left, this effect
+			// applied on the right -- re-graded on the CPU as the params
+			// below are dragged. See src/Overlay/EffectPreview.cpp.
+			// Declared, not drawn: Registry.h's PreviewKind names it and
+			// Shell.cpp decides where and how big it goes.
+			.Preview( ui::Entry::PreviewKind::AdaptiveBrightness )
 			.Param( "mode", "Mode",
 				ui::AnyBind::Of<int>( GetAbMode, SetAbMode ),
 				kAbModeOptions, std::size( kAbModeOptions ) )

@@ -55,6 +55,7 @@
 #include "Overlay/Crosshair.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
+#include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
 
 #include "convar.h"
 
@@ -4109,6 +4110,37 @@ namespace gamescope::ui::shell
 					? std::string( "Nothing selected. Its live facts are in DETAILS." )
 					: "Selected: " + sNow + ". Its live facts are in DETAILS.";
 				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ), sLine.c_str(), y );
+			}
+
+			// The row's declared preview picture, if it has one
+			// (Registry.h's PreviewKind -- currently Adaptive Brightness's
+			// before/after strip alone). Above VALUES, not below the params:
+			// this is the thing the params are being judged against, so it
+			// has to be on screen while they are reached for, and putting it
+			// at the bottom of a page that already scrolls at 2.0x would
+			// have hidden it exactly when the user started dragging.
+			//
+			// Width: the Inspector's own content width, capped so the strip
+			// stays a strip on a very wide slab. Height is the block's own
+			// (16:9 plus its label line), asked for BEFORE anything is
+			// drawn, so the params below sit at the same place whether the
+			// preview has a frame yet or not.
+			if ( entry.PreviewOf() == Entry::PreviewKind::AdaptiveBrightness )
+			{
+				// 240 logical px, so the picture is 135 tall and the whole
+				// block 153. `Why capped, and why at this number:` the strip
+				// is drawn ABOVE the params, so every pixel of it pushes
+				// them down, and at 1280x720 this row's eight params already
+				// filled the Inspector body exactly. 320 (the first size
+				// tried, captured in this task's verify-shots) cost four
+				// param rows of visible space; 240 costs three and is still
+				// legible enough to judge tone on -- which is what the strip
+				// is for. See shader-effects.md for the honest note on what
+				// scrolls at 720p.
+				const float flW = std::min( rcIn.Width(), Px( 240.0f ) );
+				const float flH = controls::ComparePreviewHeight( flW );
+				overlay::AbPreview_Draw( ImRect( rcIn.x0, y, rcIn.x0 + flW, y + flH ) );
+				y += flH + Px( tok::kM );
 			}
 
 			// The values block: the row's own control as an Inspector row,

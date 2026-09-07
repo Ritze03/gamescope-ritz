@@ -1910,6 +1910,67 @@ namespace gamescope::ui
 		}
 
 		// =================================================================
+		//  The Inspector's before/after comparison strip -- see Controls.h
+		// =================================================================
+		namespace
+		{
+			// The label line above the picture. One Meta line plus a small
+			// gap, all in logical px so Px() scales the whole block together.
+			constexpr float kComparePreviewLabelH = 14.0f;
+			constexpr float kComparePreviewGap    = 4.0f;
+		}
+
+		float ComparePreviewHeight( float flWidthPx )
+		{
+			// 16:9 on the picture, which is the shape the request asked for
+			// and the shape almost every game presents at -- a strip at any
+			// other ratio would letterbox the capture for no gain.
+			const float flImageH = std::max( 0.0f, flWidthPx ) * 9.0f / 16.0f;
+			return Px( kComparePreviewLabelH ) + Px( kComparePreviewGap ) + flImageH;
+		}
+
+		ComparePreviewLayout LayoutComparePreview( const ImRect &rcBlock )
+		{
+			ComparePreviewLayout out;
+			const float flW = std::max( 0.0f, rcBlock.GetWidth() );
+			const float flLabelH = Px( kComparePreviewLabelH );
+			const float flImageY = rcBlock.Min.y + flLabelH + Px( kComparePreviewGap );
+			const float flImageH = flW * 9.0f / 16.0f;
+
+			out.rcImage = ImRect( rcBlock.Min.x, flImageY, rcBlock.Min.x + flW, flImageY + flImageH );
+			// The two labels split the line in half; each is aligned to its
+			// own half's outer edge, which puts them directly over the half
+			// they name.
+			out.rcLeftLabel  = ImRect( rcBlock.Min.x, rcBlock.Min.y,
+			                           rcBlock.Min.x + flW * 0.5f, rcBlock.Min.y + flLabelH );
+			out.rcRightLabel = ImRect( rcBlock.Min.x + flW * 0.5f, rcBlock.Min.y,
+			                           rcBlock.Min.x + flW, rcBlock.Min.y + flLabelH );
+			// The divider sits on the picture's midpoint, which is where
+			// abpreview::SplitColumn() splits the texture -- the same line,
+			// stated once per side of the boundary and tested to agree.
+			out.flDividerX = rcBlock.Min.x + flW * 0.5f;
+			return out;
+		}
+
+		ComparePreviewStatus ComparePreviewStatusFor( bool bEnabled, bool bSupported, bool bHaveFrame )
+		{
+			// Ordered by what the user can do about it. "Not SDR" is checked
+			// before "switched off" because the switch is greyed out in that
+			// case anyway (the kSdrOnly reason), so telling them to turn it
+			// on would be advice they cannot take.
+			if ( !bSupported )
+				return { ComparePreviewState::Placeholder,
+				         "Preview unavailable: these effects only run on an SDR picture." };
+			if ( !bEnabled )
+				return { ComparePreviewState::Placeholder,
+				         "Turn Adaptive Brightness on to preview it." };
+			if ( !bHaveFrame )
+				return { ComparePreviewState::Placeholder,
+				         "Open the overlay over a game to preview." };
+			return { ComparePreviewState::Ready, "" };
+		}
+
+		// =================================================================
 		//  ListBox -- see Controls.h
 		// =================================================================
 		int ListBoxStep( int nSelected, int nCount, ListBoxNav eNav )

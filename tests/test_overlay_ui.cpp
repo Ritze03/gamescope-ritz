@@ -23,6 +23,7 @@
 #include <iterator>
 
 #include "Overlay/Fonts.h"
+#include "Overlay/EffectPreviewMath.h"
 #include "Overlay/UI/Band.h"
 #include "Overlay/UI/Controls.h"
 #include "Overlay/UI/Icons.h"
@@ -34,6 +35,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace gamescope;
 using Catch::Matchers::WithinAbs;
@@ -2904,4 +2906,286 @@ TEST_CASE( "layout: 11 rows is one column, 13 is two -- the Appearance boundary"
 
 	const LadderResult after = Solve( slab, InspectorHost::Column, 13 );
 	REQUIRE( after.nColumns == 2 );
+}
+
+// =========================================================================
+//  The Inspector's before/after comparison strip -- requests-2026-09-08.md
+// =========================================================================
+// The strip itself needs a captured game frame and a GPU. Everything that
+// DECIDES what it looks like does not: the block's geometry, where the two
+// labels go, which of the four states it is in, and the pixel maths that
+// makes the right half. All four are pinned here, on the same
+// "everything with real arithmetic in it is testable headless" split this
+// file exists for.
+//
+// Source of truth: src/Overlay/UI/Controls.h (the layout and the state
+// machine), src/Overlay/EffectPreviewMath.h (the pixels),
+// superdoc/features/shader-effects.md ("The Inspector's before/after
+// preview").
+TEST_CASE( "ab preview: the block is a label line plus a 16:9 picture", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	ScopedScale scale( 1.0f );
+
+	// 14 label + 4 gap + 320 * 9/16 = 198.
+	REQUIRE_THAT( controls::ComparePreviewHeight( 320.0f ), WithinAbs( 14.0f + 4.0f + 180.0f, 0.01f ) );
+
+	// The height scales with the block, not just the picture: at 2.0x both
+	// the label line and the gap double along with everything else.
+	ScopedScale twice( 2.0f );
+	REQUIRE_THAT( controls::ComparePreviewHeight( 320.0f ), WithinAbs( 28.0f + 8.0f + 180.0f, 0.01f ) );
+}
+
+TEST_CASE( "ab preview: the picture is 16:9 and the divider is its midpoint", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	ScopedScale scale( 1.0f );
+
+	const ImRect rcBlock( 100.0f, 200.0f, 420.0f, 200.0f + controls::ComparePreviewHeight( 320.0f ) );
+	const controls::ComparePreviewLayout lay = controls::LayoutComparePreview( rcBlock );
+
+	// The picture starts under the label line and is exactly 16:9.
+	REQUIRE_THAT( lay.rcImage.Min.y, WithinAbs( 200.0f + 14.0f + 4.0f, 0.01f ) );
+	REQUIRE_THAT( lay.rcImage.GetWidth(), WithinAbs( 320.0f, 0.01f ) );
+	REQUIRE_THAT( lay.rcImage.GetHeight(), WithinAbs( 180.0f, 0.01f ) );
+
+	// The block's own bottom edge is where the picture ends -- the caller
+	// reserves ComparePreviewHeight() and nothing spills past it, which is
+	// what keeps the params below at a fixed place.
+	REQUIRE_THAT( lay.rcImage.Max.y, WithinAbs( rcBlock.Max.y, 0.01f ) );
+
+	// THE INVARIANT THAT MATTERS: the drawn divider and the column the
+	// texture is actually split at are the same line. SplitColumn() splits
+	// the 256-wide capture at 128, i.e. exactly half, and the divider is
+	// drawn at exactly half the picture's width.
+	REQUIRE_THAT( lay.flDividerX, WithinAbs( lay.rcImage.Min.x + lay.rcImage.GetWidth() * 0.5f, 0.01f ) );
+	REQUIRE( gamescope::overlay::abpreview::SplitColumn( 256 ) == 128 );
+	REQUIRE_THAT( (float)gamescope::overlay::abpreview::SplitColumn( 256 ) / 256.0f,
+	              WithinAbs( ( lay.flDividerX - lay.rcImage.Min.x ) / lay.rcImage.GetWidth(), 0.001f ) );
+}
+
+TEST_CASE( "ab preview: each label sits over the half it names, outside the picture", "[overlay_ui]" )
+{
+	using namespace gamescope::ui;
+	ScopedScale scale( 1.0f );
+
+	const ImRect rcBlock( 100.0f, 200.0f, 420.0f, 200.0f + controls::ComparePreviewHeight( 320.0f ) );
+	const controls::ComparePreviewLayout lay = controls::LayoutComparePreview( rcBlock );
+
+	// Above the picture, never on it: a muted label drawn over arbitrary
+	// game content is not a quiet label, it is an unreadable one.
+	REQUIRE( lay.rcLeftLabel.Max.y <= lay.rcImage.Min.y );
+	REQUIRE( lay.rcRightLabel.Max.y <= lay.rcImage.Min.y );
+
+	// BEFORE owns the left half, AFTER the right, and they meet exactly on
+	// the divider -- so each word points at the half it describes.
+	REQUIRE_THAT( lay.rcLeftLabel.Min.x, WithinAbs( lay.rcImage.Min.x, 0.01f ) );
+	REQUIRE_THAT( lay.rcLeftLabel.Max.x, WithinAbs( lay.flDividerX, 0.01f ) );
+	REQUIRE_THAT( lay.rcRightLabel.Min.x, WithinAbs( lay.flDividerX, 0.01f ) );
+	REQUIRE_THAT( lay.rcRightLabel.Max.x, WithinAbs( lay.rcImage.Max.x, 0.01f ) );
+}
+
+TEST_CASE( "ab preview: every not-ready state names itself", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+
+	// Ready is the ONLY state with no message -- there is no way to reach a
+	// blank picture box.
+	const ComparePreviewStatus ready = ComparePreviewStatusFor( true, true, true );
+	REQUIRE( ready.eState == ComparePreviewState::Ready );
+	REQUIRE( std::string( ready.pszMessage ).empty() );
+
+	const ComparePreviewStatus noFrame = ComparePreviewStatusFor( true, true, false );
+	REQUIRE( noFrame.eState == ComparePreviewState::Placeholder );
+	REQUIRE( std::string( noFrame.pszMessage ).find( "over a game" ) != std::string::npos );
+
+	const ComparePreviewStatus off = ComparePreviewStatusFor( false, true, true );
+	REQUIRE( off.eState == ComparePreviewState::Placeholder );
+	REQUIRE( std::string( off.pszMessage ).find( "Turn Adaptive Brightness on" ) != std::string::npos );
+
+	// Not-SDR wins over "switched off": the switch is greyed out in that
+	// case, so "turn it on" would be advice the user cannot take.
+	const ComparePreviewStatus hdr = ComparePreviewStatusFor( false, false, false );
+	REQUIRE( hdr.eState == ComparePreviewState::Placeholder );
+	REQUIRE( std::string( hdr.pszMessage ).find( "SDR" ) != std::string::npos );
+}
+
+TEST_CASE( "ab preview: the local map is sampled exactly as the shader samples it", "[overlay_ui]" )
+{
+	using namespace gamescope::overlay::abpreview;
+
+	// A 4x4 map with a horizontal ramp; the port must reproduce
+	// effects_common.h's ab_local_sample(), clamp-to-edge included.
+	float map[16];
+	for ( int y = 0; y < 4; y++ )
+		for ( int x = 0; x < 4; x++ )
+			map[ y * 4 + x ] = (float)x * 0.25f;
+
+	// Dead on a cell centre (cell 1 of 4 spans 0.25..0.50, centre 0.375).
+	REQUIRE_THAT( LocalSample( map, 4, 0.375f, 0.5f ), WithinAbs( 0.25f, 1e-5f ) );
+	// Halfway between two cell centres is their mean.
+	REQUIRE_THAT( LocalSample( map, 4, 0.500f, 0.5f ), WithinAbs( 0.375f, 1e-5f ) );
+	// Outside the outermost cell centres it clamps to that cell rather than
+	// extrapolating -- the frame edge must not push the gain the wrong way.
+	REQUIRE_THAT( LocalSample( map, 4, 0.0f, 0.5f ), WithinAbs( 0.0f, 1e-5f ) );
+	REQUIRE_THAT( LocalSample( map, 4, 1.0f, 0.5f ), WithinAbs( 0.75f, 1e-5f ) );
+	// No map at all is a zero, never a dereference.
+	REQUIRE_THAT( LocalSample( nullptr, 4, 0.5f, 0.5f ), WithinAbs( 0.0f, 1e-5f ) );
+}
+
+TEST_CASE( "ab preview: strength 0 is the identity, in both modes", "[overlay_ui]" )
+{
+	using namespace gamescope::overlay::abpreview;
+
+	Stats st;
+	st.flMean = 0.08f; st.flP2 = 0.02f; st.flP50 = 0.06f; st.flP98 = 0.20f;
+
+	for ( bool bDynamic : { false, true } )
+	{
+		Params p;
+		p.bDynamic = bDynamic;
+		p.flStrength = 0.0f;
+		float rgb[3] = { 0.10f, 0.40f, 0.90f };
+		ApplyPixel( 0.5f, 0.5f, st, p, rgb );
+		REQUIRE_THAT( rgb[0], WithinAbs( 0.10f, 1e-6f ) );
+		REQUIRE_THAT( rgb[1], WithinAbs( 0.40f, 1e-6f ) );
+		REQUIRE_THAT( rgb[2], WithinAbs( 0.90f, 1e-6f ) );
+	}
+}
+
+TEST_CASE( "ab preview: Compose leaves the left half untouched and lifts the right", "[overlay_ui]" )
+{
+	using namespace gamescope::overlay::abpreview;
+
+	// A tiny flat dark frame: 8x2 at code 20, the sort of value Dynamic
+	// exists to lift.
+	constexpr int kW = 8, kH = 2;
+	uint8_t src[ kW * kH * 3 ];
+	for ( int i = 0; i < kW * kH * 3; i++ )
+		src[i] = 20;
+
+	Stats st;
+	st.flMean = 20.0f / 255.0f; st.flP2 = st.flMean; st.flP50 = st.flMean; st.flP98 = st.flMean;
+
+	Params p;
+	p.bDynamic = true;
+	p.flStrength = 1.0f;
+	p.flMinGain = 0.3f; p.flMaxGain = 4.0f; p.flTarget = 0.5f;
+
+	uint8_t dst[ kW * kH * 4 ];
+	Compose( src, kW, kH, st, p, dst );
+
+	const int nSplit = SplitColumn( kW );
+	for ( int y = 0; y < kH; y++ )
+	{
+		for ( int x = 0; x < nSplit; x++ )
+		{
+			// BYTE-IDENTICAL, not "close": the left half is the capture, so
+			// nothing may touch it -- that is what makes the two halves a
+			// comparison rather than two gradings.
+			const uint8_t *pD = dst + ( y * kW + x ) * 4;
+			REQUIRE( (int)pD[0] == 20 );
+			REQUIRE( (int)pD[1] == 20 );
+			REQUIRE( (int)pD[2] == 20 );
+			REQUIRE( (int)pD[3] == 255 );
+		}
+		for ( int x = nSplit; x < kW; x++ )
+		{
+			const uint8_t *pD = dst + ( y * kW + x ) * 4;
+			REQUIRE( (int)pD[0] > 20 );      // a dark frame gets lifted
+			REQUIRE( (int)pD[3] == 255 );
+		}
+	}
+
+	// And the right half is EXACTLY effects_curve.h's answer -- the same
+	// text the GPU compiles, not an approximation of it.
+	namespace ec = gamescope::effects_curve;
+	const float flGain  = ec::ab_dyn_gain( st.flP98, p.flMinGain, p.flMaxGain );
+	const float flGamma = ec::ab_dyn_gamma( st.flP2, st.flP50, flGain, p.flTarget, p.flMinGain );
+	const int nExpect = (int)std::lround( ec::ab_dyn_curve( 20.0f / 255.0f, flGain, flGamma ) * 255.0f );
+	REQUIRE( (int)dst[ ( 0 * kW + nSplit ) * 4 ] == nExpect );
+}
+
+TEST_CASE( "ab preview: Local adaptation at 0 is bit-for-bit the global curve", "[overlay_ui]" )
+{
+	using namespace gamescope::overlay::abpreview;
+
+	// The same property effects_curve.h promises for the shader, asserted
+	// on the preview's own path: a map that is wildly off the frame's mean
+	// must change nothing at all while the strength is 0.
+	float map[ 16 * 16 ];
+	for ( int i = 0; i < 16 * 16; i++ )
+		map[i] = ( i % 2 ) ? 0.9f : 0.01f;
+
+	Stats st;
+	st.flMean = 0.30f; st.flP2 = 0.05f; st.flP50 = 0.28f; st.flP98 = 0.70f;
+	st.pflLocal = map; st.nGrid = 16;
+
+	Params p;
+	p.bDynamic = true; p.flStrength = 1.0f;
+
+	for ( float u : { 0.05f, 0.33f, 0.5f, 0.97f } )
+	{
+		float a[3] = { 0.2f, 0.5f, 0.8f };
+		float b[3] = { 0.2f, 0.5f, 0.8f };
+		p.flLocal = 0.0f;
+		ApplyPixel( u, 0.5f, st, p, a );
+
+		Stats stNoMap = st;
+		stNoMap.pflLocal = nullptr;
+		ApplyPixel( u, 0.5f, stNoMap, p, b );
+
+		for ( int i = 0; i < 3; i++ )
+			REQUIRE( a[i] == b[i] );
+	}
+}
+
+TEST_CASE( "ab preview: the 256-entry fast path is equal to the per-pixel one", "[overlay_ui]" )
+{
+	using namespace gamescope::overlay::abpreview;
+
+	// Compose() takes a table when the gain and gamma are frame constants
+	// (IsUniform()). That is a 46x speed-up, and it is only legitimate if it
+	// is EQUAL to the general path, not close to it -- so assert exactly
+	// that, over every byte value and both modes, by running the general
+	// path's own ApplyPixel() beside it.
+	Stats st;
+	st.flMean = 0.12f; st.flP2 = 0.03f; st.flP50 = 0.10f; st.flP98 = 0.35f;
+
+	constexpr int kW = 512, kH = 1;   // 256 graded columns == every byte
+	std::vector<uint8_t> src( kW * kH * 3 ), dst( kW * kH * 4 );
+	for ( int x = 0; x < kW; x++ )
+	{
+		const uint8_t v = (uint8_t)( x % 256 );
+		src[ x * 3 + 0 ] = src[ x * 3 + 1 ] = src[ x * 3 + 2 ] = v;
+	}
+
+	for ( bool bDynamic : { false, true } )
+	{
+		Params p;
+		p.bDynamic = bDynamic;
+		p.flStrength = 0.8f;   // not 1.0, so the dry/wet blend is exercised too
+		REQUIRE( IsUniform( st, p ) );
+
+		Compose( src.data(), kW, kH, st, p, dst.data() );
+
+		for ( int x = SplitColumn( kW ); x < kW; x++ )
+		{
+			float ref[3];
+			ref[0] = ref[1] = ref[2] = src[ x * 3 ] / 255.0f;
+			ApplyPixel( ( (float)x + 0.5f ) / (float)kW, 0.5f, st, p, ref );
+			const uint8_t nRef = (uint8_t)std::lround( ref[0] * 255.0f );
+			REQUIRE( (int)dst[ x * 4 ] == (int)nRef );
+		}
+	}
+
+	// And Local adaptation switches the table off, because then every pixel
+	// has its own gain -- the property the fast path depends on is gone.
+	float map[ 16 * 16 ] = {};
+	Stats stLocal = st;
+	stLocal.pflLocal = map;
+	Params pLocal;
+	pLocal.bDynamic = true;
+	pLocal.flLocal = 0.5f;
+	REQUIRE_FALSE( IsUniform( stLocal, pLocal ) );
 }

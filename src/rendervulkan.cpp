@@ -11,6 +11,8 @@
 #include <bit>
 #include <array>
 #include <bitset>
+#include <cmath>
+#include <mutex>
 #include <dlfcn.h>
 #include "vulkan_include.h"
 #include "Utils/Algorithm.h"
@@ -51,6 +53,7 @@
 #include "cs_easu_fp16.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
+#include "cs_effects_preview.h"
 #include "shaders/effects_curve.h"
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_nis.h"
@@ -997,6 +1000,7 @@ bool CVulkanDevice::createShaders()
 	SHADER(RGB_TO_NV12, cs_rgb_to_nv12);
 	SHADER(EFFECTS_LAYER0, cs_effects_layer0);
 	SHADER(EFFECTS_MEASURE, cs_effects_measure);
+	SHADER(EFFECTS_PREVIEW, cs_effects_preview);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -3922,6 +3926,187 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 		s_nAbLogFrames.fetch_sub( 1, std::memory_order_relaxed );
 }
 
+// ---- The Inspector's Adaptive Brightness before/after preview capture ----
+//
+// requests-2026-09-08.md: "a small comparison picture to the inspector rail,
+// split in half (left/right) with one being the original image (captured
+// frame, when the UI was opened) and the one modified by the adaptive
+// brightness".
+//
+// WHAT IS CAPTURED, AND WHY BOTH HALVES OF IT. Exactly two things, on one
+// composite: (1) cs_effects_preview.comp's downscaled, grade()d copy of the
+// base layer -- the image the Adaptive Brightness block is about to receive
+// -- and (2) the history texture cs_effects_measure.comp wrote for that same
+// frame. The overlay then re-runs effects_curve.h on the CPU over the
+// captured pixels using the captured statistics, so the strip's "after" half
+// is what THIS frame would look like at the CURRENT slider positions, and it
+// updates as the user drags without touching the game. Capturing the
+// statistics rather than re-estimating them on the CPU is the whole reason
+// the right half agrees with a screenshot to within rounding: it is the same
+// curve, fed the same numbers, applied to the same pixels.
+//
+// It reads and never writes: layer 0 and the history are sources, the target
+// is a private texture nothing else composites. The pass runs only on the
+// composite that serves an armed request -- one per Inspector open, not per
+// frame -- and costs one 256x144 dispatch, two small copies and one GPU wait.
+static std::atomic<bool> s_bAbPreviewArmed{ false };
+static std::atomic<uint64_t> s_ulAbPreviewGeneration{ 0 };
+static std::mutex s_AbPreviewMutex;
+static AbPreviewFrame_t s_AbPreviewFrame;        // guarded by s_AbPreviewMutex
+static bool s_bAbPreviewPending = false;         // render thread only
+
+void vulkan_effects_preview_request()
+{
+	s_bAbPreviewArmed.store( true, std::memory_order_relaxed );
+}
+
+bool vulkan_effects_preview_fetch( AbPreviewFrame_t *pOut, uint64_t ulHaveGeneration )
+{
+	if ( !pOut )
+		return false;
+	// The cheap check first: the generation is bumped last, after the frame
+	// is fully written under the mutex, so an unchanged generation means
+	// there is provably nothing new to copy and the lock is not taken.
+	if ( s_ulAbPreviewGeneration.load( std::memory_order_acquire ) <= ulHaveGeneration )
+		return false;
+	std::scoped_lock lock( s_AbPreviewMutex );
+	if ( s_AbPreviewFrame.ulGeneration <= ulHaveGeneration )
+		return false;
+	*pOut = s_AbPreviewFrame;
+	return true;
+}
+
+static bool update_effects_preview_images()
+{
+	if ( g_output.effectsPreview == nullptr )
+	{
+		CVulkanTexture::createFlags flags;
+		flags.bStorage     = true;
+		flags.bSampled     = true;
+		flags.bTransferSrc = true;
+		g_output.effectsPreview = new CVulkanTexture();
+		if ( !g_output.effectsPreview->BInit( kAbPreviewWidth, kAbPreviewHeight, 1u, DRM_FORMAT_ABGR8888, flags, nullptr ) )
+		{
+			g_output.effectsPreview = nullptr;
+			return false;
+		}
+	}
+
+	CVulkanTexture::createFlags staging;
+	staging.bMappable   = true;
+	staging.bTransferDst = true;
+	if ( g_output.effectsPreviewStaging == nullptr )
+	{
+		g_output.effectsPreviewStaging = new CVulkanTexture();
+		if ( !g_output.effectsPreviewStaging->BInit( kAbPreviewWidth, kAbPreviewHeight, 1u, DRM_FORMAT_ABGR8888, staging, nullptr ) )
+		{
+			g_output.effectsPreviewStaging = nullptr;
+			return false;
+		}
+	}
+	if ( g_output.effectsPreviewHistory == nullptr )
+	{
+		g_output.effectsPreviewHistory = new CVulkanTexture();
+		if ( !g_output.effectsPreviewHistory->BInit( kEffectsHistoryWidth, kEffectsHistoryHeight, 1u, DRM_FORMAT_ABGR8888, staging, nullptr ) )
+		{
+			g_output.effectsPreviewHistory = nullptr;
+			return false;
+		}
+	}
+	return true;
+}
+
+// Records the capture. Called from inside the pre-pass block, AFTER the
+// measure dispatch (so the history holds this frame's statistics) and before
+// the per-pixel dispatch rebinds the pipeline and the target. Slot 0 is
+// already layer 0 on its raw UNORM view with the unnormalised nearest
+// sampler -- the exact binding cs_effects_preview.comp's grade() taps need --
+// and the effects_t block is already uploaded, so this adds no state of its
+// own beyond the pipeline and the target, both of which the caller rebinds
+// immediately after.
+static void effects_preview_record( CVulkanCmdBuffer *cmdBuffer )
+{
+	if ( !s_bAbPreviewArmed.load( std::memory_order_relaxed ) )
+		return;
+	if ( !update_effects_preview_images() )
+	{
+		// Allocation failed: disarm rather than retry every composite. The
+		// overlay keeps showing its placeholder.
+		s_bAbPreviewArmed.store( false, std::memory_order_relaxed );
+		return;
+	}
+	s_bAbPreviewArmed.store( false, std::memory_order_relaxed );
+
+	cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_PREVIEW ) );
+	cmdBuffer->bindTarget( g_output.effectsPreview );
+
+	const int nPixelsPerGroup = 8;   // == cs_effects_preview.comp's local_size
+	cmdBuffer->dispatch( div_roundup( kAbPreviewWidth, (uint32_t)nPixelsPerGroup ),
+	                     div_roundup( kAbPreviewHeight, (uint32_t)nPixelsPerGroup ) );
+
+	cmdBuffer->copyImage( g_output.effectsPreview, g_output.effectsPreviewStaging );
+	cmdBuffer->copyImage( g_output.effectsHistory, g_output.effectsPreviewHistory );
+	s_bAbPreviewPending = true;
+}
+
+// Waits for the composite that carried the copies and publishes the frame.
+// Called right after g_device.submit(), like effects_ab_log_flush(). The wait
+// is one GPU frame, ONCE per armed request -- not per frame.
+static void effects_preview_flush( uint64_t ulSequence )
+{
+	if ( !s_bAbPreviewPending )
+		return;
+	s_bAbPreviewPending = false;
+
+	g_device.wait( ulSequence, false );
+
+	const uint8_t *pPix = g_output.effectsPreviewStaging->mappedData();
+	const uint8_t *pHist = g_output.effectsPreviewHistory->mappedData();
+	if ( !pPix || !pHist )
+		return;
+
+	const uint32_t uPixPitch  = g_output.effectsPreviewStaging->rowPitch();
+	const uint32_t uHistPitch = g_output.effectsPreviewHistory->rowPitch();
+
+	std::scoped_lock lock( s_AbPreviewMutex );
+
+	// ABGR8888 == VK_FORMAT_R8G8B8A8_UNORM: R, G, B, A in memory, which is
+	// the order the overlay wants. Row pitch is the staging texture's own
+	// (linear tiling pads rows), so it is read per row, never as one memcpy.
+	for ( uint32_t y = 0; y < kAbPreviewHeight; y++ )
+	{
+		const uint8_t *pRow = pPix + y * uPixPitch;
+		uint8_t *pOut = s_AbPreviewFrame.rgb + y * kAbPreviewWidth * 3;
+		for ( uint32_t x = 0; x < kAbPreviewWidth; x++ )
+		{
+			pOut[ x * 3 + 0 ] = pRow[ x * 4 + 0 ];
+			pOut[ x * 3 + 1 ] = pRow[ x * 4 + 1 ];
+			pOut[ x * 3 + 2 ] = pRow[ x * 4 + 2 ];
+		}
+	}
+
+	auto HistTexel = [&]( uint32_t x, uint32_t y ) -> float
+	{
+		uint32_t uBits = 0;
+		memcpy( &uBits, pHist + y * uHistPitch + x * 4, 4 );   // history_pack: the float's bytes
+		const float fl = std::bit_cast<float>( uBits );
+		return std::isfinite( fl ) ? std::clamp( fl, 0.0f, 1.0f ) : 0.0f;
+	};
+
+	s_AbPreviewFrame.flMean = HistTexel( 0, 0 );
+	s_AbPreviewFrame.flP2   = HistTexel( 1, 0 );
+	s_AbPreviewFrame.flP50  = HistTexel( 2, 0 );
+	s_AbPreviewFrame.flP98  = HistTexel( 3, 0 );
+	for ( uint32_t cy = 0; cy < kAbPreviewLocalGrid; cy++ )
+		for ( uint32_t cx = 0; cx < kAbPreviewLocalGrid; cx++ )
+			s_AbPreviewFrame.flLocal[ cy * kAbPreviewLocalGrid + cx ] = HistTexel( cx, kEffectsLocalRow + cy );
+
+	// Published last: vulkan_effects_preview_fetch() reads the generation
+	// without the lock to decide whether there is anything to copy at all.
+	s_AbPreviewFrame.ulGeneration = s_ulAbPreviewGeneration.load( std::memory_order_relaxed ) + 1;
+	s_ulAbPreviewGeneration.store( s_AbPreviewFrame.ulGeneration, std::memory_order_release );
+}
+
 static bool init_nis_data()
 {
 	// Create the NIS images
@@ -4889,6 +5074,17 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_MEASURE ) );
 						cmdBuffer->bindTarget( g_output.effectsHistory );
 						cmdBuffer->dispatch( 1, 1, 1 );
+
+						// The Inspector's before/after strip, when it has
+						// asked for a frame. Here and not elsewhere because
+						// this is the one point where BOTH halves of what it
+						// needs are current: slot 0 still holds layer 0 on
+						// the raw view, and the history one line above now
+						// holds this frame's statistics. Only Adaptive
+						// Brightness's own switch arms it, so this never
+						// runs on a frame the effect is off for.
+						if ( state.bAdaptiveBrightness )
+							effects_preview_record( cmdBuffer.get() );
 					}
 
 					cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
@@ -5101,6 +5297,7 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 	uint64_t sequence = g_device.submit(std::move(cmdBuffer));
 
 	effects_ab_log_flush( sequence, abLogState, flAbLogDt, uAbLogWidth, uAbLogHeight );
+	effects_preview_flush( sequence );
 
 	// Issue #22: the read-done points recorded by *_WaitForRender() above are
 	// only reachable now that this submission is on the queue. Promoting them

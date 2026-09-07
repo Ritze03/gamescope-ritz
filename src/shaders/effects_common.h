@@ -81,6 +81,20 @@ const int AB_LOCAL_ROW  = 1;
 const int HISTORY_TEX_W = 16;   // max(HISTORY_COUNT, AB_LOCAL_GRID)
 const int HISTORY_TEX_H = AB_LOCAL_ROW + AB_LOCAL_GRID;
 
+// ---- The Inspector's before/after preview capture (2026-09-07) ----
+//
+// cs_effects_preview.comp writes one downscaled, graded copy of the base
+// layer at this size; the host copies it to host-mappable staging and the
+// settings Inspector re-runs effects_curve.h over it on the CPU (see
+// src/Overlay/EffectPreview.cpp). Mirrored by kAbPreviewWidth/Height in
+// rendervulkan.hpp -- keep the three in step. `Why 256x144:` 16:9, the shape
+// the strip is drawn at, and 36864 pixels -- small enough that a full CPU
+// re-apply of the curve is well under a millisecond, large enough that the
+// strip is not visibly blocky at the widths the Inspector uses (it is drawn
+// at 200..320 logical px wide, i.e. always downscaled again).
+const int AB_PREVIEW_W = 256;
+const int AB_PREVIEW_H = 144;
+
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
 const uint EFFECT_VIBRANCY            = 1u << 1;
