@@ -25,9 +25,10 @@ The newest version below is the one this build reports.
 - **Using a control selects its row**: pressing any control in the settings overlay now
   highlights that row and shows it in the inspector -- including the ones that did not
   before: opening a dropdown, and every colour, hue, placement-grid and list control.
-- **Crosshair gap now means the total hole, not a per-side inset**: a gap of 1 leaves
-  exactly one pixel missing at the centre instead of a much wider gap; a saved gap value
-  now renders visibly tighter than before.
+- **Crosshair gap now means the total hole, not a per-side inset, and is always
+  symmetric**: a gap of 1 leaves exactly one pixel missing at the centre, larger gaps
+  split evenly on both sides with no stagger between the two arms of an axis, and a
+  saved gap value now renders visibly tighter than before.
 
 ## [0.6.1] – 2026-09-06
 
