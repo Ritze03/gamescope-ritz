@@ -630,6 +630,86 @@ to an exact integer, bypassing smoothing, for pixel-measuring this without
 waiting on a real frame rate — see `build-release/verify-shots/hud-align/`
 for the measured before/after edge positions.
 
+## Margin
+
+**Definition:** `margin_x`/`margin_y` is the distance, in pixels, from the
+screen edge to the **nearest drawn pixel** of the HUD — whatever is
+outermost in the current configuration. With margin 0 that outermost pixel
+touches the screen edge exactly; with margin 10 there are exactly 10 blank
+pixels between the edge and it. Same rule on both axes, at every anchor.
+
+**Which element the measurement lands on, per configuration:**
+
+| Backdrop | Outline | Outermost element | Exact? |
+|---|---|---|---|
+| on | either | the backdrop rect | **Exact.** `AddRectFilled` with no rounding takes ImGui's `PrimRect` fast path — no antialiasing fringe — and `ResolveAnchoredOrigin()`'s box placement puts that rect's own edge at exactly `margin` regardless of anything else (`boxSize` cancels out algebraically for a far-edge placement: `origin + boxSize == display - margin` no matter what `boxSize` is). |
+| off | on | the outline's outer ring | Within 1px — a real, sub-1-count font antialiasing fringe sits right at the true edge (see below); this is the AA a rendered glyph always carries, not a placement error. |
+| off | off | the glyph ink | Within 1px, same reason. |
+
+**The bug (fixed 2026-09-07):** with the backdrop off, nothing pinned the
+digits' own ink to the invisible box at all. They sat inset from it by
+`backdrop_padding` (6px, **always** added whether or not a backdrop is
+actually drawn — it is also what gives the backdrop breathing room around
+the text when one *is* drawn) plus each glyph's own **side bearing** /
+**cap-height gap**: `ImFont::CalcTextSizeA()` measures the ADVANCE box (pen
+cell width, full ascent-to-descent line height), not the tight box the
+glyph's own ink occupies, and a digit's ink starts a little in from the
+left of its cell and stops a little short of the font's full ascent — gaps
+`CalcTextSizeA()` cannot see and the old code never corrected for. Measured
+2026-09-07 at font size 36, backdrop off, outline off, top-left anchor
+(`build-release/verify-shots/hud-margin-2026-09-07/`):
+
+| margin | measured left | measured top |
+|---|---|---|
+| 0 | 7 | 14 |
+| 5 | 12 | 19 |
+
+— i.e. +7px horizontally (`padding(6) + ~1px` bearing) and +14px vertically
+(`padding(6) + ~8px` of cap-height headroom the digits' own ink never
+reaches). Both **before-fix screenshots showed the readout sitting visibly
+off the corner even at margin 0**, when it should have been flush.
+
+**The fix:** `MeasureFpsModule()` measures the true ink bounding box
+directly off the font's own glyph metrics — `ImFontGlyph::X0/Y0/X1/Y1`, via
+`ImFont::GetFontBaked()` (public API, no `imgui_internal.h` needed) — for
+the pinned `'0'`-run string (the same reference the pinned-width box
+sizing already uses, so this stays as jitter-free as that scheme: every
+digit shares this font's tabular bearings by construction). On whichever
+axis the anchor actually hugs an edge — not the centred axis, which has no
+margin claim to satisfy — it shifts the digits by exactly enough to cancel
+`padding + bearing`, so the ink (or the outline's own outer ring, when one
+is drawn instead) lands flush at the margin. The pure arithmetic is
+`fpsmath::EdgeShift()` (`FpsDisplay.h`), covered by
+`tests/test_fps_counter.cpp`; `MeasureFpsModule()` supplies the font's own
+measured bearings and the outline's geometric reach (never less than 1px
+once an outline is drawn at all, matching the sub-pixel-radius path's own
+whole-pixel ring — see the Outline section above).
+
+**Why 1px, not 0px, remains for the ink/outline cases:** a rendered glyph's
+edge is antialiased, so the true boundary carries a fractional-coverage
+fringe (measured: a pixel differing from its flat background by a single
+count, right where the ink is supposed to start) that a purely geometric
+placement cannot make crisper without changing how fonts rasterize. The
+backdrop rect has no such fringe (see the table above), which is why it
+alone gets an exact-0 tolerance in both the tests and
+`scripts/pixel-regression.sh`'s `check_hud_margin()`.
+
+**Measured after the fix** (same configuration as the table above):
+
+| margin | measured left | measured top |
+|---|---|---|
+| 0 | 0 | 1 |
+| 5 | 5 | 6 |
+
+Verified across all four corners, all four edge-centre anchors, margins
+0/1/5/20, all four backdrop×outline combinations, and 2-/3-/4-digit
+readings (97/97 checks passing) — `build-release/verify-shots/
+hud-margin-2026-09-07/` has the full table, the before/after screenshots,
+and 8×-zoomed corner crops at margin 0 and margin 5.
+`scripts/pixel-regression.sh`'s `check_hud_margin()` keeps a compact,
+permanent subset of that matrix green: all four corners at margins 0 and
+8, backdrop off and on, plus one 4-digit reading.
+
 ## Warm-up: `FpsDisplay_WarmUp()`
 
 ImGui 1.92 bakes glyphs lazily, per (font, size), and

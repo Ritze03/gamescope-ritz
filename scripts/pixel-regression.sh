@@ -81,6 +81,14 @@
 #   fixed                 -- Fixed text-colour mode paints the configured
 #                            colour exactly
 #   outline                -- the HUD's own black digit outline, on and off
+#   hud-margin             -- the configured margin lands the outermost
+#                            drawn pixel (backdrop rect, exact; ink/outline
+#                            otherwise, within 1px of AA fringe) exactly
+#                            that far from the screen edge, at all four
+#                            corners and two margins, backdrop off and on,
+#                            plus a 4-digit reading (2026-09-07 fix; see
+#                            build-release/verify-shots/hud-margin-2026-09-07/
+#                            for the full matrix this is a compact subset of)
 #   crosshair-geometry     -- all four arms are the configured colour at the
 #                            expected offsets, background shows in the gap,
 #                            and the crosshair's own outline is black
@@ -177,6 +185,22 @@ FIXED_COLOR_TOL=2          # task spec: "within ±2"
 HUD_OUTLINE_STRENGTH=2
 HUD_OUTLINE_MIN_BLACK_PX=8   # a 2px outline ring around two glyphs is easily
                             # this many pixels; regressed-to-off would be ~0
+
+# HUD margin fix (2026-09-07, superdoc/features/fps-display.md's "Margin"):
+# compact permanent subset of the full verification matrix (build-release/
+# verify-shots/hud-margin-2026-09-07/ has the rest) -- all four corners at
+# two margins, backdrop off (ink only) and on, plus one 4-digit reading.
+# hud.anchor's Composite binding only exposes its VERTICAL axis under a
+# console id (Registry.cpp's own "Prefix Law" comment -- the horizontal
+# half, m_BindB, has none), so switching CORNER needs a fresh config file;
+# margin_x/margin_y and backdrop_opacity are plain Params/Sliders and stay
+# live-settable via overlay_e2_set within that corner's own instance.
+HUD_MARGIN_CORNERS=(top-left top-right bottom-left bottom-right)
+HUD_MARGIN_VALUES=(0 8)
+HUD_MARGIN_DIGITS_FPS=1234        # the 4-digit case's own forced reading
+HUD_MARGIN_BOX_SPAN=140           # search box span from the corner, generous around the "60"/"1234" glyphs
+HUD_MARGIN_TOL_BACKDROP=0         # a crisp AddRectFilled edge -- exact by construction
+HUD_MARGIN_TOL_INK=1              # a real, sub-count font AA fringe right at the edge -- see fps-display.md
 
 # Dark and mid-tone backgrounds, and the reference digit values measured
 # 2026-09-05 (superdoc/features/fps-display.md, "Verifying Inverted mode").
@@ -532,6 +556,47 @@ write_config() {
 	EOF
 }
 
+# check_hud_margin()'s own config: same shape as write_config() above, minus
+# the crosshair (off, irrelevant to the margin fix) and with anchor/
+# margin_x/margin_y parameterised -- switching CORNER needs a fresh config
+# file (see HUD_MARGIN_* comment above), so this is called once per corner
+# rather than once for the whole script. Overwrites the SAME profile file
+# write_config() does; check_hud_margin() calls write_config() again at its
+# own end so every check that runs after it still sees the standard config.
+write_config_hud_margin() {
+	local anchor="$1" mx="$2" my="$3"
+	mkdir -p "$CONFIGHOME/gamescope-ritz/profiles"
+	cat > "$CONFIGHOME/gamescope-ritz/global.json" <<-EOF
+		{
+		    "schema_version": 3,
+		    "profiles": { "last_general": "Pixel", "games": {} }
+		}
+	EOF
+	cat > "$CONFIGHOME/gamescope-ritz/profiles/Pixel.json" <<-EOF
+		{
+		    "schema_version": 3,
+		    "name": "Pixel",
+		    "kind": "general",
+		    "fps_display": {
+		        "enabled": true,
+		        "font_size": $FONT_SIZE,
+		        "backdrop_opacity": 0.0,
+		        "text_opacity": 1.0,
+		        "update_mode": "smoothing",
+		        "hide_above_enabled": false,
+		        "color_mode": "fixed",
+		        "outline_strength": 0.0,
+		        "lag_detection_enabled": false,
+		        "color_fps": $((FIXED_COLOR_HEX)),
+		        "anchor": "$anchor",
+		        "margin_x": $mx,
+		        "margin_y": $my
+		    },
+		    "crosshair": { "enabled": false }
+		}
+	EOF
+}
+
 # ---------------------------------------------------------------------------
 # One nested gamescope instance against a given flat xterm background.
 # ---------------------------------------------------------------------------
@@ -789,6 +854,71 @@ check_outline() {
 	run_sampler blackcount "$shot_off" "$DIGIT_BOX_X0" "$DIGIT_BOX_Y0" "$DIGIT_BOX_X1" "$DIGIT_BOX_Y1" \
 		"$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" "$DIFF_THRESH" "$BLACK_THRESH" \
 		"$HUD_OUTLINE_MIN_BLACK_PX" 0 "hud-outline-off"
+}
+
+# HUD margin fix (2026-09-07): the configured margin is the distance from
+# the screen edge to the OUTERMOST drawn pixel -- exact (tol 0) when the
+# backdrop is drawn, within a 1px font-AA fringe (tol 1) otherwise. See the
+# HUD_MARGIN_* constants' own comment for why this restarts the instance
+# once per corner, and build-release/verify-shots/hud-margin-2026-09-07/
+# for the full matrix this is a compact, permanent subset of. Manages its
+# own instance restarts (not the shared "dark" instance the checks above
+# use), and restores the standard config at its own end.
+#
+# Uses BG_MID, not BG_DARK: the near-black backdrop (9,11,14) at opacity
+# 0.5 blended over BG_DARK (51,51,51) measures too close to BG_DARK itself
+# (empirically under DIFF_THRESH), which silently degenerated the
+# backdrop-on cases into re-measuring the ink underneath. Over BG_MID
+# (148,148,148) the same blend measures ~(108,108,108) -- a safely
+# separated ~40.
+check_hud_margin() {
+	should_run hud-margin || { skip_check hud-margin "--only excluded it"; return; }
+
+	local anchor mval edges bx0 by0 bx1 by1 shot
+	for anchor in "${HUD_MARGIN_CORNERS[@]}"; do
+		case "$anchor" in
+			top-left)     edges="left,top";     bx0=0; by0=0 ;;
+			top-right)    edges="right,top";    bx0=$((OUT_W - HUD_MARGIN_BOX_SPAN)); by0=0 ;;
+			bottom-left)  edges="left,bottom";  bx0=0; by0=$((OUT_H - HUD_MARGIN_BOX_SPAN)) ;;
+			bottom-right) edges="right,bottom"; bx0=$((OUT_W - HUD_MARGIN_BOX_SPAN)); by0=$((OUT_H - HUD_MARGIN_BOX_SPAN)) ;;
+		esac
+		bx1=$((bx0 + HUD_MARGIN_BOX_SPAN)); by1=$((by0 + HUD_MARGIN_BOX_SPAN))
+
+		for mval in "${HUD_MARGIN_VALUES[@]}"; do
+			write_config_hud_margin "$anchor" "$mval" "$mval"
+			start_instance "$BG_MID_HEX"
+			apply_fps_force
+
+			shot="$(take_screenshot "20-hud-margin-${anchor}-m${mval}-ink")"
+			run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
+				"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$edges" \
+				"$mval" "$mval" "$HUD_MARGIN_TOL_INK" "hud-margin-${anchor}-m${mval}-ink"
+
+			set_val "hud.backdrop_opacity" 0.5
+			shot="$(take_screenshot "21-hud-margin-${anchor}-m${mval}-bd")"
+			run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
+				"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$edges" \
+				"$mval" "$mval" "$HUD_MARGIN_TOL_BACKDROP" "hud-margin-${anchor}-m${mval}-bd"
+			set_val "hud.backdrop_opacity" 0
+		done
+	done
+
+	# One 4-digit reading (top-left, this script's own default margin): the
+	# digit-count/pinned-width interaction the 2026-09-06 alignment fix and
+	# this margin fix both touch.
+	write_config_hud_margin "top-left" "$MARGIN_X" "$MARGIN_Y"
+	start_instance "$BG_MID_HEX"
+	gsctl fps_display_force "$HUD_MARGIN_DIGITS_FPS" >/dev/null 2>&1 || true
+	sleep "$SETTLE_S"
+	shot="$(take_screenshot "22-hud-margin-digits4")"
+	run_sampler margin "$shot" 0 0 "$HUD_MARGIN_BOX_SPAN" "$HUD_MARGIN_BOX_SPAN" \
+		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "left,top" \
+		"$MARGIN_X" "$MARGIN_Y" "$HUD_MARGIN_TOL_INK" "hud-margin-digits4"
+
+	# Every check above restarted the instance with its own config -- put
+	# the standard one back so anything run after this in the same
+	# invocation sees what it expects.
+	write_config
 }
 
 # Crosshair geometry: all four arms are the configured colour at the expected
@@ -1090,6 +1220,11 @@ if [[ "$need_scaled" -eq 1 ]]; then
 	check_crosshair_scaled
 	check_crosshair_scaled_gap
 fi
+
+# Self-contained: guards itself on should_run before starting anything, and
+# manages its own instance restarts (one per corner) rather than the shared
+# "dark" instance above -- see its own comment.
+check_hud_margin
 
 END_TS=$(date +%s)
 RUNTIME_S=$((END_TS - START_TS))

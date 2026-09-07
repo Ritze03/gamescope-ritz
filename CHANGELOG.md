@@ -45,6 +45,11 @@ The newest version below is the one this build reports.
   breathes brighter and darker on a dark scene with a few lights, or on a half-sky
   view, while the camera moves; the highlight, mid-tone and shadow readings the curve
   follows now change smoothly instead of jumping, and adaptation is as fast as before.
+- **HUD margin now measures to the readout itself, not past it**: with the backdrop
+  off, the FPS number used to sit several pixels further from the screen edge than
+  the margin you set (worse on the top/bottom edges than the left/right ones); a
+  saved margin now positions the readout snugly against the edge as configured. The
+  backdrop, when on, was already exact and is unchanged.
 
 ### Info
 - **Adaptive Brightness min/max gain range widened**: Min gain now goes down to 0.3

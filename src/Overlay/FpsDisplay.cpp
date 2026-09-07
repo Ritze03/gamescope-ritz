@@ -897,7 +897,55 @@ namespace gamescope
 		// own comment (2026-09-06: was always half this gap, i.e. always
 		// centred, regardless of anchor).
 		float flTextOffsetX = 0.0f;
+		// 2026-09-07 margin fix: the extra shift (on top of flTextOffsetX/
+		// backdrop_padding) that pulls the digits toward the anchor's facing
+		// edge when there is no backdrop to pin the margin to instead -- see
+		// MeasureFpsModule()'s own comment below and fps-display.md's
+		// "Margin" section. Zero whenever the backdrop is drawn, or on an
+		// axis the anchor centres rather than hugs an edge on.
+		float flEdgeShiftX = 0.0f;
+		float flEdgeShiftY = 0.0f;
 	};
+
+	// The ink bounding box of `text` at `flFontSize`, in the same pixel
+	// space AddText()/RenderText() place glyphs in relative to the pen
+	// position they are drawn at (i.e. BEFORE that position's own per-draw
+	// IM_TRUNC snap -- see DrawFpsModuleContent()'s outline comment for why
+	// that snap does not disturb offsets measured relative to the pen
+	// itself). This is NOT what ImFont::CalcTextSizeA() returns: that is
+	// the ADVANCE box (cursor-to-cursor cell width, full line height from
+	// the font's ascent/descent), whereas this is the tight box the glyphs'
+	// own ink actually occupies -- the two differ by each glyph's side
+	// bearing (left/right) and by how far short of the font's full
+	// ascent/descent a digit's cap-height/no-descender ink falls (top/
+	// bottom). That gap is exactly what let a margin with no backdrop to
+	// visually pin it to land wrong -- see MeasureFpsModule()'s own
+	// comment for how this is used to correct it, and fps-display.md's
+	// "Margin" section for the measured numbers.
+	struct InkExtent { float left, top, right, bottom; };
+	static InkExtent MeasureInkExtent( ImFont *pFont, float flFontSize, const char *text )
+	{
+		ImFontBaked *pBaked = pFont->GetFontBaked( flFontSize );
+		const float flScale = pBaked->Size > 0.0f ? flFontSize / pBaked->Size : 1.0f;
+
+		InkExtent ext{ FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX };
+		float flPenX = 0.0f;
+		bool bAny = false;
+		for ( const char *p = text; *p; ++p )
+		{
+			ImFontGlyph *pGlyph = pBaked->FindGlyph( (ImWchar)(unsigned char)*p );
+			if ( pGlyph && pGlyph->Visible )
+			{
+				ext.left   = std::min( ext.left,   flPenX + pGlyph->X0 * flScale );
+				ext.right  = std::max( ext.right,  flPenX + pGlyph->X1 * flScale );
+				ext.top    = std::min( ext.top,    pGlyph->Y0 * flScale );
+				ext.bottom = std::max( ext.bottom, pGlyph->Y1 * flScale );
+				bAny = true;
+			}
+			flPenX += pGlyph ? pGlyph->AdvanceX * flScale : 0.0f;
+		}
+		return bAny ? ext : InkExtent{ 0.0f, 0.0f, 0.0f, 0.0f };
+	}
 
 	// Phase 2's spike-reaction colours. A muted warning red rather than a
 	// saturated alarm red -- this is a HUD digit, not a klaxon, and it only
@@ -927,7 +975,7 @@ namespace gamescope
 	// side of the box; centre keeps the old centred behaviour. The box
 	// itself (boxSize, and so ResolveAnchoredOrigin's placement of it) is
 	// unchanged by this -- only where the digits sit inside it.
-	static FpsModuleLayout MeasureFpsModule( int nFps, int nHoriz )
+	static FpsModuleLayout MeasureFpsModule( int nFps, int nVert, int nHoriz )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
@@ -1070,6 +1118,76 @@ namespace gamescope
 		L.flContentWidth = L.textSize.x;
 		L.flContentHeight = L.textSize.y;
 
+		// ---- margin fix (2026-09-07) -----------------------------------
+		// The rule (fps-display.md's "Margin"): the configured margin is
+		// the distance from the screen edge to the OUTERMOST drawn pixel --
+		// the backdrop's if it is drawn, else the outline's if it is drawn,
+		// else the glyph ink's. ResolveAnchoredOrigin()/boxSize already put
+		// the BOX's own edge exactly `margin` px from the screen edge (that
+		// math is exact regardless of any of this -- boxSize cancels out of
+		// a far-edge placement algebraically, and an integer margin plus an
+		// integer origin never leaves AddRectFilled's crisp, unantialiased
+		// fast path anything to round). So when the backdrop IS drawn, nothing
+		// below applies: the backdrop rect IS that box edge, and the margin
+		// is already exactly right.
+		//
+		// With no backdrop, though, the box is invisible and nothing pins
+		// the digits' own ink to it -- they sit inset from it by
+		// backdrop_padding (always added, backdrop or not, so the digits
+		// don't hug the very edge of an invisible box either) PLUS each
+		// glyph's own side bearing / cap-height-vs-ascent gap, since
+		// CalcTextSizeA measures the ADVANCE box, not the tight ink
+		// MeasureInkExtent() above returns. Measured 2026-09-07 at font
+		// size 36, backdrop off, outline off, margin 24 (build-release/
+		// verify-shots/hud-margin-2026-09-07/): the digit ink actually
+		// landed at 31px from the left/right edges and 37-38px from the
+		// top/bottom -- padding (6px) plus ~1px of horizontal bearing and
+		// ~7-8px of vertical headroom the digits' own cap-height/no-
+		// descender ink never uses.
+		//
+		// The correction: on whichever axis the anchor hugs an edge (not
+		// centred), shift the digits by exactly enough to cancel that
+		// padding+bearing gap, so the outermost drawn pixel -- ink, or the
+		// outline's ink-plus-radius when the outline is on and drawn
+		// instead -- lands exactly `margin` px out. Measured with the
+		// glyph baked at '0' (MeasureInkExtent's own szPadded argument
+		// below): every digit shares this font's tabular bearings by
+		// design (the same property that makes the whole pinned-width
+		// scheme above jitter-free), so using '0' here is the same
+		// stability choice the box-sizing measurement already makes, not a
+		// new assumption.
+		//
+		// The outline's own outward reach is never less than 1px once it
+		// is drawn at all -- DrawFpsModuleContent()'s own sub-pixel-radius
+		// path always stamps a whole-pixel ring and carries a radius under
+		// 1.0 as that ring's alpha instead of shrinking its geometry (see
+		// that function's comment), so a "radius 0.25" outline still
+		// reaches exactly 1px out, not 0.25px.
+		// Rounded to a whole pixel: RenderText() truncates the WHOLE pen
+		// position to a pixel before adding each glyph's (unrounded) X0/Y0,
+		// so a fractional bearing here would otherwise carry a fractional
+		// pen position through that truncation and land the ink a
+		// sub-pixel off from the intended column/row -- a font glyph's own
+		// anti-aliased edge already blurs across about a pixel of its own
+		// accord (this is the one place that residual AA softness cannot
+		// be engineered away, see fps-display.md's "Margin"), so there is
+		// nothing to gain from keeping this sub-pixel-precise and a whole
+		// pixel to lose from not rounding it.
+		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szPadded );
+		const float flBearingLeft   = std::round( inkPinned.left );
+		const float flBearingRight  = std::round( L.numSize.x - inkPinned.right );
+		const float flBearingTop    = std::round( inkPinned.top );
+		const float flBearingBottom = std::round( L.numSize.y - inkPinned.bottom );
+		const float flOutlineGeomRadius = L.bDrawOutline ? std::max( L.flOutlineRadius, 1.0f ) : 0.0f;
+
+		// fpsmath::EdgeShift (FpsDisplay.h) is the pure arithmetic under
+		// test in tests/test_fps_counter.cpp; this just supplies the two
+		// sides' own bearings per axis.
+		const float flBearingHoriz = ( nHoriz == 0 ) ? flBearingLeft : flBearingRight;
+		const float flBearingVert  = ( nVert  == 0 ) ? flBearingTop  : flBearingBottom;
+		L.flEdgeShiftX = fpsmath::EdgeShift( L.bDrawBackdrop, nHoriz, cfg.backdrop_padding, flBearingHoriz, flOutlineGeomRadius );
+		L.flEdgeShiftY = fpsmath::EdgeShift( L.bDrawBackdrop, nVert,  cfg.backdrop_padding, flBearingVert,  flOutlineGeomRadius );
+
 		return L;
 	}
 
@@ -1089,8 +1207,12 @@ namespace gamescope
 		const ImVec2 rectMin = origin;
 		// L.flTextOffsetX places the unpadded digits within the pinned
 		// field width, on the side the anchor faces -- see
-		// MeasureFpsModule()'s own comment.
-		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX, rectMin.y + cfg.backdrop_padding );
+		// MeasureFpsModule()'s own comment. L.flEdgeShiftX/Y is the
+		// 2026-09-07 margin fix's own correction, zero whenever the
+		// backdrop is drawn (see that comment for why only the no-backdrop
+		// case needs one).
+		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX + L.flEdgeShiftX,
+		                       rectMin.y + cfg.backdrop_padding + L.flEdgeShiftY );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size;
@@ -1264,14 +1386,15 @@ namespace gamescope
 
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
 
-		// nHoriz decides which side of the pinned-width box the digits hug
-		// -- see MeasureFpsModule()'s own comment. nVert is unused here;
-		// ResolveAnchoredOrigin() re-parses the same anchor string for the
-		// box's own placement.
+		// nHoriz/nVert decide which side(s) of the pinned-width box the
+		// digits hug (and, since 2026-09-07, which side(s) get the no-
+		// backdrop margin correction) -- see MeasureFpsModule()'s own
+		// comment. ResolveAnchoredOrigin() re-parses the same anchor string
+		// for the box's own placement.
 		int nVert = 0, nHoriz = 2;
 		ParsePlacement( cfg.anchor, nVert, nHoriz );
 
-		const FpsModuleLayout L = MeasureFpsModule( nFps, nHoriz );
+		const FpsModuleLayout L = MeasureFpsModule( nFps, nVert, nHoriz );
 		const ImVec2 boxSize( L.flContentWidth + cfg.backdrop_padding * 2.0f, L.flContentHeight + cfg.backdrop_padding * 2.0f );
 		const ImVec2 origin = ResolveAnchoredOrigin( cfg.anchor, (float)cfg.margin_x, (float)cfg.margin_y, boxSize, io_display );
 

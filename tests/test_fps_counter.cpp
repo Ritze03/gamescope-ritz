@@ -153,3 +153,63 @@ TEST_CASE( "update mode: two choices, and legacy per_second maps to Smoothing", 
     for ( const char *psz : { "smoothing", "immediate" } )
         REQUIRE( std::string( UpdateModeFromInt( UpdateModeToInt( psz ) ) ) == psz );
 }
+
+// ---- margin fix (2026-09-07): EdgeShift ------------------------------------
+//
+// FpsDisplay.cpp's MeasureFpsModule() comment and superdoc/features/
+// fps-display.md's "Margin" section carry the full reasoning: the
+// configured margin is the distance from the screen edge to the outermost
+// DRAWN pixel. A drawn backdrop already puts its own rect there exactly (no
+// correction needed -- EdgeShift returns 0 whenever bDrawBackdrop is true).
+// With no backdrop, nothing else pins the digits to the box, so they sit
+// inset by backdrop_padding (always added, backdrop or not) plus the
+// glyph's own side bearing / cap-height gap (`flBearing`) -- EdgeShift is
+// the pure correction that cancels exactly that, pulling the ink (or the
+// outline's own outer ring, `flOutlineGeomRadius` px further out) flush to
+// the margin instead.
+
+TEST_CASE( "EdgeShift is zero whenever the backdrop is drawn", "[fps_counter][margin]" )
+{
+    // The backdrop rect is already exactly at the margin by construction
+    // (ResolveAnchoredOrigin() -- boxSize cancels out algebraically for a
+    // far-edge placement) regardless of padding, bearing or outline, so
+    // nothing here may move the digits at all.
+    REQUIRE( EdgeShift( true, 0, 6.0f, 1.0f, 0.0f ) == 0.0f );
+    REQUIRE( EdgeShift( true, 2, 6.0f, 1.0f, 2.0f ) == 0.0f );
+    REQUIRE( EdgeShift( true, 0, 6.0f, 100.0f, 4.0f ) == 0.0f );
+}
+
+TEST_CASE( "EdgeShift is zero on a centred axis", "[fps_counter][margin]" )
+{
+    // nSide == 1 (centre) has no edge to hug -- and so no margin claim to
+    // satisfy -- regardless of backdrop state.
+    REQUIRE( EdgeShift( false, 1, 6.0f, 1.0f, 0.0f ) == 0.0f );
+    REQUIRE( EdgeShift( true, 1, 6.0f, 1.0f, 0.0f ) == 0.0f );
+}
+
+TEST_CASE( "EdgeShift with no backdrop and no outline cancels padding plus bearing", "[fps_counter][margin]" )
+{
+    // Near edge (left/top, nSide 0): moving the ink OUTWARD (toward the
+    // edge) by exactly padding+bearing is a NEGATIVE shift (smaller x/y).
+    REQUIRE( EdgeShift( false, 0, 6.0f, 1.0f, 0.0f ) == -7.0f );
+    // Far edge (right/bottom, nSide 2): moving the ink outward is a
+    // POSITIVE shift (larger x/y, i.e. toward the far screen edge).
+    REQUIRE( EdgeShift( false, 2, 6.0f, 1.0f, 0.0f ) == 7.0f );
+    // Measured 2026-09-07 (build-release/verify-shots/hud-margin-2026-09-07/):
+    // padding 6 + ~8px of vertical cap-height headroom on the top edge.
+    REQUIRE( EdgeShift( false, 0, 6.0f, 8.0f, 0.0f ) == -14.0f );
+}
+
+TEST_CASE( "EdgeShift with an outline reduces the correction by the outline's own reach", "[fps_counter][margin]" )
+{
+    // The outline pokes `flOutlineGeomRadius` px further out than the fill
+    // ink on every side, so the ink itself needs to sit that much LESS far
+    // toward the edge than the no-outline case for the outline's own outer
+    // ring to land on the margin.
+    REQUIRE( EdgeShift( false, 0, 6.0f, 1.0f, 2.0f ) == -5.0f );
+    REQUIRE( EdgeShift( false, 2, 6.0f, 1.0f, 2.0f ) == 5.0f );
+    // A radius that would exceed padding+bearing flips the shift's sign --
+    // not reachable in practice (outline caps at 4px, padding alone is
+    // already 6px), but the arithmetic itself has no special case for it.
+    REQUIRE( EdgeShift( false, 0, 6.0f, 1.0f, 10.0f ) == 3.0f );
+}

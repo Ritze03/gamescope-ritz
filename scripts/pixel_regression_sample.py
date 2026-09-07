@@ -110,6 +110,59 @@ def cmd_blackcount(a):
     emit(ok, a.name, detail)
 
 
+def cmd_margin(a):
+    """HUD margin fix (2026-09-07, FpsDisplay.cpp's MeasureFpsModule() and
+    superdoc/features/fps-display.md's "Margin"): the configured margin is
+    the distance from the screen edge to the OUTERMOST drawn pixel --
+    asserted here as the bounding box of every pixel in `box` that differs
+    from the flat background by more than `diff_thresh` (this repo's own
+    "is this pixel not the background" convention, see cmd_digit above),
+    translated back to full-image coordinates and read off whichever of
+    the image's own four edges `edges` names (a comma list drawn from
+    left/right/top/bottom -- only the side(s) the anchor under test
+    actually hugs an edge on). `tol` is 0 for a drawn backdrop (a crisp,
+    non-antialiased rect edge, exact by construction) and 1 otherwise (a
+    real antialiasing fringe right at the ink/outline edge -- see
+    fps-display.md and the zoom captures under build-release/verify-shots/
+    hud-margin-2026-09-07/)."""
+    img = load(a.image)
+    box = (a.x0, a.y0, a.x1, a.y1)
+    if not (0 <= box[0] < box[2] <= img.width and 0 <= box[1] < box[3] <= img.height):
+        print(f"FAIL\tmargin:{a.name}\tbox {box} outside the {img.width}x{img.height} image", file=sys.stderr)
+        sys.exit(2)
+
+    bg = (a.bg_r, a.bg_g, a.bg_b)
+    crop = img.crop(box)
+    minx = miny = maxx = maxy = None
+    for y in range(crop.height):
+        for x in range(crop.width):
+            if chebyshev(crop.getpixel((x, y)), bg) > a.diff_thresh:
+                if minx is None or x < minx: minx = x
+                if maxx is None or x > maxx: maxx = x
+                if miny is None or y < miny: miny = y
+                if maxy is None or y > maxy: maxy = y
+    if minx is None:
+        emit(False, a.name, f"nothing drawn in box {box} (bg={bg}, diff_thresh={a.diff_thresh})")
+
+    minx += box[0]; maxx += box[0]; miny += box[1]; maxy += box[1]
+    edges = set(a.edges.split(","))
+    results = []
+    all_ok = True
+    if "left" in edges:
+        m = minx; ok = abs(m - a.expect_x) <= a.tol; all_ok &= ok
+        results.append(f"left={m} expect={a.expect_x}")
+    if "right" in edges:
+        m = img.width - 1 - maxx; ok = abs(m - a.expect_x) <= a.tol; all_ok &= ok
+        results.append(f"right={m} expect={a.expect_x}")
+    if "top" in edges:
+        m = miny; ok = abs(m - a.expect_y) <= a.tol; all_ok &= ok
+        results.append(f"top={m} expect={a.expect_y}")
+    if "bottom" in edges:
+        m = img.height - 1 - maxy; ok = abs(m - a.expect_y) <= a.tol; all_ok &= ok
+        results.append(f"bottom={m} expect={a.expect_y}")
+    emit(bool(all_ok), a.name, f"tol={a.tol} " + " ".join(results))
+
+
 def srgb_to_linear(x):
     return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
 
@@ -560,6 +613,19 @@ def main():
     sp.add_argument("expect_present", type=int)
     sp.add_argument("name")
     sp.set_defaults(func=cmd_blackcount)
+
+    sp = sub.add_parser("margin", help="HUD margin fix: distance from named screen edge(s) to the nearest drawn pixel in a box")
+    sp.add_argument("image")
+    sp.add_argument("x0", type=int); sp.add_argument("y0", type=int)
+    sp.add_argument("x1", type=int); sp.add_argument("y1", type=int)
+    sp.add_argument("bg_r", type=int); sp.add_argument("bg_g", type=int); sp.add_argument("bg_b", type=int)
+    sp.add_argument("diff_thresh", type=int)
+    sp.add_argument("edges", help="comma list from left,right,top,bottom -- the edge(s) this anchor hugs")
+    sp.add_argument("expect_x", type=int, help="expected margin for left/right")
+    sp.add_argument("expect_y", type=int, help="expected margin for top/bottom")
+    sp.add_argument("tol", type=int)
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_margin)
 
     sp = sub.add_parser("line", help="sample a ray of offsets from a centre point and assert their colour")
     sp.add_argument("image")

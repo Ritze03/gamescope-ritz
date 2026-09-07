@@ -121,6 +121,36 @@ namespace gamescope
 		{
 			return n == 1 ? "immediate" : "smoothing";
 		}
+
+		// 2026-09-07 margin fix's pure arithmetic (FpsDisplay.cpp's
+		// MeasureFpsModule(), "margin fix" comment, and fps-display.md's
+		// "Margin" section carry the full reasoning): how far to shift the
+		// digits, along one axis, so that the OUTERMOST drawn pixel on the
+		// side facing the anchored edge -- glyph ink, or the outline's
+		// ink-plus-radius when an outline is drawn instead of a backdrop --
+		// lands exactly `flMargin`'s own configured distance from the
+		// screen edge, when there is no backdrop rect to pin it there
+		// instead (a drawn backdrop needs no correction at all: its own
+		// edge already sits exactly at the margin by construction, see
+		// ResolveAnchoredOrigin()).
+		//
+		// `nSide` is ParsePlacement's own axis numbering: 0 = the near
+		// edge (left/top), 2 = the far edge (right/bottom), 1 = centred
+		// (no edge to hug, so no shift). `flPadding` is backdrop_padding
+		// (always added whether or not a backdrop is actually drawn --
+		// see MeasureFpsModule()'s comment for why); `flBearing` is the
+		// glyph's own ink offset on this side (MeasureInkExtent()'s
+		// left/top, or the numSize-relative right/bottom gap) -- rounded
+		// to a whole pixel by the caller, see that comment for why;
+		// `flOutlineGeomRadius` is the outline's actual geometric reach
+		// (0 when no outline is drawn).
+		inline float EdgeShift( bool bDrawBackdrop, int nSide, float flPadding, float flBearing, float flOutlineGeomRadius )
+		{
+			if ( bDrawBackdrop || nSide == 1 )
+				return 0.0f;
+			const float flInset = flPadding + flBearing - flOutlineGeomRadius;
+			return ( nSide == 0 ) ? -flInset : flInset;
+		}
 	}
 
 	// Called once per paint_all(), on the steamcompmgr thread. Reads
