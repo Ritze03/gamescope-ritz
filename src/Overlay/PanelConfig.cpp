@@ -876,6 +876,36 @@ namespace gamescope
 				.Default( config::OverlaySettings{}.opacity_notifications )
 				.Keywords( "opacity transparency notification toast alpha" );
 
+			// requests-2026-09-08: ConfigSchema.h's overlay.startup_announce_
+			// enabled had a comment claiming this tab already surfaced it as
+			// a checkbox, when nothing did -- the static cross-check found
+			// it as a schema field with no UI row. It genuinely is a useful
+			// per-user preference (whether the launch toast plays at all),
+			// so it earns the row the old comment already promised, rather
+			// than just deleting the false claim. Its own group, not folded
+			// into Notifications below: it isn't part of the toast system
+			// Notifications.cpp owns (no Show() call, its own bespoke
+			// SettingsOverlay.cpp draw path -- see fps-display.md's sibling
+			// docs and SettingsOverlay.cpp's DrawStartupAnnounce()), so
+			// "Mute notifications" must not appear to also affect it.
+			a.Group( "Startup" );
+
+			a.Switch( "overlay.startup_announce", "Startup announcement",
+				ui::AnyBind::Of<bool>(
+					[]{ EnsureGeneralSettingsLoaded(); return s_GeneralSettings.overlay.startup_announce_enabled; },
+					[]( bool b )
+					{
+						EnsureGeneralSettingsLoaded();
+						s_GeneralSettings.overlay.startup_announce_enabled = b;
+						QueueGeneralSave();
+					} ) )
+				.Help( "Plays a brief animated toast naming gamescope-ritz, with the Ctrl+Shift+O "
+				       "hint, when it starts. Takes effect the next time it starts, not this "
+				       "session -- always global." )
+				.Key( "overlay.startup_announce_enabled" )
+				.Default( config::OverlaySettings{}.startup_announce_enabled )
+				.Keywords( "startup announce announcement toast splash launch hint" );
+
 			// The Notifications group. THIS FILE OPENS IT, and
 			// Notifications::RegisterRows() below adds the rest of its rows
 			// without opening a second one -- Area::Group() is a band marker,

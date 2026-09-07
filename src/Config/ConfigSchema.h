@@ -478,8 +478,14 @@ namespace gamescope::config
         // Process-level UI preference, same rules as fade_ms above - read
         // once by SettingsOverlay.cpp directly via LoadGlobal(), never via
         // ResolveEffective()/a per-game override. Default true so a fresh
-        // install still gets the hint at least once per launch; the General
-        // tab surfaces this as a checkbox.
+        // install still gets the hint at least once per launch; the
+        // Appearance tab's "Startup" group surfaces this as a checkbox
+        // (PanelConfig.cpp's BuildAppearanceArea(), overlay.startup_announce
+        // -- added 2026-09-07, this comment previously said "the General
+        // tab", which is this same area's own former/legacy name, not a
+        // second tab). The checkbox only affects the NEXT launch: the flag
+        // is latched by EnsureStartupAnnounceConfigLoaded() before the Shell
+        // (and so this row) can ever be opened.
         bool startup_announce_enabled = true;
 
         // Keyboard-control toggles for the overlay's own input capture (M2)

@@ -19,6 +19,12 @@ The newest version below is the one this build reports.
   makes windows inside gamescope open maximized/fullscreen, filling the nested display
   instead of using their own requested size. Takes effect immediately, even on windows
   already open.
+- **HUD number colour and text opacity**: two new rows under HUD > Text colour --
+  "Number colour" locks the FPS number to a colour of your choice instead of following
+  your UI's accent colour, and "Text opacity" fades the number itself. Both only apply
+  while Text colour is set to Fixed.
+- **Startup announcement can be turned off**: a new switch, Appearance > Startup, for
+  the brief toast gamescope-ritz shows on launch. Takes effect the next time it starts.
 
 ### Fixed
 - **Appearance and Cursor settings no longer undo each other**: changing something in

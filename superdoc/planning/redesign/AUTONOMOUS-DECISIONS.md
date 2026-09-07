@@ -982,6 +982,15 @@ every control remains, it simply stopped competing with the pointer.
 `overlay.keyboard_navigation_enabled` in the config schema was already read and never consumed;
 it is untouched, so existing configs keep loading exactly as before.
 
+> **2026-09-07 addendum, static settings cross-check:** `overlay.capture_all_keyboard_input` is
+> in the identical position — read from and written back to disk (`ConfigManager.cpp`), but
+> `SettingsOverlay_IsCapturingKeyboard()` (`SettingsOverlay.cpp`) is driven entirely by the
+> `settings_overlay_capture_keyboard` ConVar, never by this field. Neither field earned a UI row
+> in the HUD-missing-rows pass that day (`build-release/verify-shots/settings-audit-2026-09-07/
+> static-crosscheck.md`) for that reason: a switch that visibly does nothing is worse than no
+> switch. Wiring either field into its ConVar (or replacing the ConVar with the field outright)
+> is a small follow-up, not done here — this note exists so it isn't rediscovered from scratch.
+
 ### D22.2 · Right Ctrl opens the overlay; Left Ctrl + Right Ctrl opens the palette
 
 > **2026-09-01 update:** rebound to Right Shift / Left Ctrl + Right Shift — Ctrl and Shift see

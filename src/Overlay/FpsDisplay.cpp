@@ -758,6 +758,18 @@ namespace gamescope
 			flAlpha );
 	}
 
+	// Packs an ImU32-ish 0xAARRGGBB/accent value down to 0xRRGGBB, the
+	// on-disk shape color_fps stores (matches PanelCursor.cpp's own
+	// PackRgb() -- copied rather than shared, same file-local reasoning
+	// that file's own comment gives -- it is static there too). Needed now
+	// that hud.color_fps below is a writable row (2026-09-07): the accent
+	// colour, read here as an ImU32, is what "custom off" captures as a
+	// starting point when the custom switch is first turned on.
+	static int PackColorRgb( uint32_t uArgbOrRgb )
+	{
+		return (int)( uArgbOrRgb & 0xFFFFFFu );
+	}
+
 	// Resolves the FPS number's "value" text colour: the user's explicit
 	// override when set, else `defaultColor` -- a Palette.h accent-family
 	// token (never an invented literal). An unset override therefore moves
@@ -1869,6 +1881,16 @@ namespace gamescope
 		auto MonitorOn = []{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; };
 		constexpr const char *kOffReason = "the HUD is off";
 
+		// Number colour and Text opacity (below) only ever affect Fixed
+		// mode: Inverted mode draws the digits as an opaque marker colour
+		// that alphamode.h's shader replaces per-pixel (see
+		// superdoc/features/fps-display.md's "Text colour: Fixed vs.
+		// Inverted") -- neither an explicit colour override nor a partial
+		// alpha survives that, so both rows grey out together with the same
+		// reason the moment the mode is switched to Inverted.
+		auto FixedColorApplies = []{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled && s_Settings.fps_display.color_mode != "inverted"; };
+		constexpr const char *kInvertedColorReason = "text colour is set to Inverted";
+
 		// =================================================================
 		//  HUD
 		// =================================================================
@@ -2045,6 +2067,61 @@ namespace gamescope
 			.Default( 0 )
 			.Keywords( "color colour text fixed inverted accent oled readable" )
 			.DisabledUnless( MonitorOn, kOffReason );
+
+		// Same custom/accent-follow idiom as PanelCursor.cpp's
+		// cursor.outline_color: the band's own bind resolves the accent
+		// colour whenever the field is unset, and the "custom" Param
+		// switches between std::nullopt (follow the accent) and a captured
+		// literal, sharing this row's own Key so a reader of the audit
+		// (or the settings JSON) sees one field, not two disagreeing ones.
+		a.Composite( "hud.color_fps", "Number colour", ui::CompositeKind::Color,
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					return s_Settings.fps_display.color_fps.has_value()
+						? *s_Settings.fps_display.color_fps
+						: PackColorRgb( gamescope::palette::kAccentValue );
+				},
+				[]( int nPacked )
+				{
+					EnsureConfigLoaded();
+					s_Settings.fps_display.color_fps = nPacked & 0xFFFFFF;
+					PersistSettings();
+				} ) )
+			.Key( "fps_display.color_fps" )
+			.Help( "Colour of the number in Fixed mode. Off follows your UI's own accent colour "
+			       "automatically; on locks it to the colour you pick below." )
+			.Keywords( "colour color number text tint accent fixed override value" )
+			.DisabledUnless( FixedColorApplies, kInvertedColorReason )
+			.Param( "custom", "Custom colour",
+				ui::AnyBind::Of<bool>(
+					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.color_fps.has_value(); },
+					[]( bool bCustom )
+					{
+						EnsureConfigLoaded();
+						s_Settings.fps_display.color_fps = bCustom
+							? std::optional<int>( PackColorRgb( gamescope::palette::kAccentValue ) )
+							: std::nullopt;
+						PersistSettings();
+					} ) )
+				.Key( "fps_display.color_fps" )
+				.Default( false )
+				.Help( "Off matches your UI's own accent colour, so the number follows it "
+				       "automatically. On locks it to the colour above." );
+
+		a.Slider( "hud.text_opacity", "Text opacity",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.text_opacity; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.text_opacity = f; PersistSettings(); } ) )
+			.Key( "fps_display.text_opacity" )
+			.Help( "How solid the number itself is, in Fixed mode. Inverted mode always draws it "
+			       "fully opaque -- a partial alpha there would only dilute the invert." )
+			.Range( 0.0f, 1.0f )
+			.Step( 0.05f )
+			.Default( config::FpsDisplaySettings{}.text_opacity )
+			.Keywords( "text opacity transparency alpha fade number see-through" )
+			.DisabledUnless( FixedColorApplies, kInvertedColorReason );
 
 		a.Switch( "hud.lag_detection", "Lag spike detection",
 			ui::AnyBind::Of<bool>(

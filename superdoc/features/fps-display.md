@@ -42,11 +42,60 @@ number, drawn well, not a second profiler.
 | Hide above X | `hide_above_enabled`, `hide_above_fps` | Switch + threshold `.Param()` — see Hysteresis below. |
 | Backdrop opacity | `backdrop_opacity` | 0–1; **0 means no backdrop at all**, not a separate switch. |
 | Text colour | `color_mode` | Fixed / Inverted — see below. |
+| Number colour | `color_fps` | Fixed mode only — see "Number colour and Text opacity" below. |
+| Text opacity | `text_opacity` | Fixed mode only — see "Number colour and Text opacity" below. |
 | Lag spike detection | `lag_detection_enabled` | Master switch for the whole spike reaction. Default **on**. |
 | Outline size | `outline_strength` | 0–4 px of black outline; 0 means no outline drawn at all. |
 
 Every row is gated `DisabledUnless(MonitorOn, "the HUD is off")` except the
 master switch itself.
+
+### Number colour and Text opacity (2026-09-07)
+
+Both fields existed in the schema and were already read by the renderer
+(`color_fps` since issue #29, `text_opacity` since Phase 2) but had no row
+of their own — a static cross-check
+(`build-release/verify-shots/settings-audit-2026-09-07/static-crosscheck.md`)
+caught this. They now sit right below "Text colour", in the shape their
+siblings use:
+
+- **Number colour** (`hud.color_fps`) is a `Composite(Color)` row with the
+  same custom/accent-follow idiom as `PanelCursor.cpp`'s
+  `cursor.outline_color`: the band shows and edits the UI's own accent
+  colour whenever `color_fps` is unset, and a `custom` `.Param()` switch
+  toggles between `std::nullopt` (follow the accent) and a captured literal
+  — sharing the row's own `Key()` so a stored `null` reads as "the switch's
+  own write", not a stale copy contradicting the band. `PackColorRgb()`
+  (`FpsDisplay.cpp`, mirrors `PanelCursor.cpp`'s own `PackRgb()`) packs the
+  accent's `ImU32` down to the same `0xRRGGBB` shape `UnpackColorRgb()`
+  already read.
+- **Text opacity** (`hud.text_opacity`) is a plain 0–1 `Slider`, the same
+  shape as the crosshair's own opacity sliders.
+
+**Both are gated to Fixed mode only**, sharing one predicate
+(`FixedColorApplies` in `FpsDisplay.cpp`, `MonitorOn && color_mode !=
+"inverted"`) and one disabled reason ("text colour is set to Inverted").
+Neither has any effect in Inverted mode: that mode draws the digits as an
+opaque magenta *marker* the compositor's shader replaces per-pixel (see
+"Text colour: Fixed vs. Inverted" below) — an explicit colour override
+would never be seen, and a partial alpha would only dilute the invert
+(already documented, before this pass, in that section's "Opaque, not
+`text_opacity`-scaled" note). Rather than silently doing nothing, both rows
+grey out the moment Inverted is selected, the way every other conditionally-
+irrelevant row in this codebase does.
+
+Rendered proof (`build-release/verify-shots/hud-missing-rows-2026-09-07/`):
+against a flat `#202020` background, `color_fps` unset measured the digit
+fill at `(120, 219, 246)` (the UI accent); setting it to `0xFF3B30` over the
+real `overlay_e2_set` path measured `(255, 70, 48)`, matching within
+antialiasing tolerance. With that colour held fixed, `text_opacity 1.0`
+measured the same `(255, 70, 48)` (fully opaque) and `text_opacity 0.4`
+measured `(70, 30, 28)` — markedly pulled toward the background, proving
+the slider reaches the render. (The exact blend arithmetic isn't
+hand-verified against a formula here — like the Inverted-mode contrast
+guard above, this compositor blends in linear light and re-encodes, which a
+naive sRGB lerp doesn't reproduce — but the two opacities produce two
+clearly different, correctly-ordered results.)
 
 ## What is measured — and why it counts instead of timing
 
@@ -177,8 +226,10 @@ was left non-zero — a deliberate behaviour change, noted in
 ## Text colour: Fixed vs. Inverted
 
 **Fixed** — the UI's own accent colour (`Palette.h`'s `kAccentValue`,
-overridable by the unexposed `color_fps` field the same way it always
-was). On a detected lag spike, the resolved colour is inverted
+overridable by the "Number colour" row, `color_fps` — see "Number colour and
+Text opacity" above; unexposed in the UI until 2026-09-07, though the field
+and the render-side read of it existed since issue #29). On a detected lag
+spike, the resolved colour is inverted
 (`1 - r, 1 - g, 1 - b`) for the hold window — literally "just invert the
 text colour", per the user's own spec.
 
