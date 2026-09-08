@@ -30,15 +30,22 @@
 # Actions (choose at most one; no action = interactive menu):
 #   --install           check deps, build a release binary if needed, install
 #                       it (symlink or copy — asked interactively unless
-#                       --link/--copy is given)
+#                       --link/--copy is given). If a Ritz install is
+#                       detected, also offers to install this repo's Ritz
+#                       launcher extension.
 #   --remove            uninstall the binary/symlink this installed, and any
 #                       extras (scripts/looks under share/gamescope-ritz).
-#                       Never touches ~/.config/gamescope-ritz.
+#                       Also offers to remove the Ritz extension manifest
+#                       this installed, if present — nothing else under
+#                       ~/.config/ritz/extensions is touched. Never touches
+#                       ~/.config/gamescope-ritz.
 #   --update            git pull --ff-only (refuses on a dirty tree unless
 #                       --allow-dirty), rebuild, and reinstall by whichever
 #                       method (symlink/copy) is already in place — a
 #                       symlink install needs no copy step, the rebuilt
-#                       binary is live immediately.
+#                       binary is live immediately. Also offers to refresh
+#                       the Ritz extension manifest if this previously
+#                       installed one and the repo's copy has changed.
 #   -h, --help          show this help and exit
 #
 # Options:
@@ -60,6 +67,13 @@
 #                       testing this script without touching the real system
 #   --build-dir DIR     release build directory name, relative to the repo
 #                       root (default: build-release)
+#   --with-ritz-extension  copy this repo's Ritz launcher extension manifest
+#                       (extensions/gamescope-ritz.json) into
+#                       ~/.config/ritz/extensions/ (or refresh it there on
+#                       --update), no prompt. Only does anything if a Ritz
+#                       install is detected (~/.config/ritz exists, or the
+#                       `ritz` binary is on PATH).
+#   --no-ritz-extension skip/decline the Ritz extension step, no prompt
 #
 # Examples:
 #   ./install.sh                          # detect state, offer a menu
@@ -82,8 +96,9 @@ REBUILD=0
 PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
 ALLOW_DIRTY=0
+RITZ_EXT=""         # "" = ask, "yes", "no" (--with-ritz-extension / --no-ritz-extension)
 
-print_help() { sed -n '2,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,77p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 set_action() {
 	if [ -n "$ACTION" ] && [ "$ACTION" != "$1" ]; then
@@ -105,6 +120,8 @@ while [ $# -gt 0 ]; do
 		--no-extras) EXTRAS="no" ;;
 		--rebuild) REBUILD=1 ;;
 		--allow-dirty) ALLOW_DIRTY=1 ;;
+		--with-ritz-extension) RITZ_EXT="yes" ;;
+		--no-ritz-extension) RITZ_EXT="no" ;;
 		--prefix) PREFIX_DIR="$2"; shift ;;
 		--build-dir) BUILD_DIR_NAME="$2"; shift ;;
 		-h|--help) print_help; exit 0 ;;
@@ -223,6 +240,108 @@ target_state() {
 	fi
 }
 
+# --- Ritz launcher extension ---------------------------------------------
+# Optional, offered — never forced. This repo ships a Ritz
+# (https://ritze03.github.io/ritz/extensions.html) launcher module at
+# extensions/gamescope-ritz.json that wraps THIS binary (gamescope-ritz),
+# not upstream gamescope. See superdoc/features/ritz-extension.md.
+#
+# Honours XDG_CONFIG_HOME (not just $HOME/.config) so a test run can point
+# this at a scratch directory instead of the user's real ~/.config/ritz.
+ritz_config_dir() {
+	printf '%s/ritz\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+# True (0) if Ritz looks present on this machine. The docs name no signal
+# more specific than its config dir; checking for the `ritz` binary too
+# covers a fresh Ritz install that hasn't written that dir yet.
+gcr_ritz_present() {
+	[ -d "$(ritz_config_dir)" ] && return 0
+	command -v ritz >/dev/null 2>&1 && return 0
+	return 1
+}
+
+ritz_manifest_src() { printf '%s/extensions/gamescope-ritz.json\n' "$REPO_ROOT"; }
+ritz_manifest_dst() { printf '%s/extensions/gamescope-ritz.json\n' "$(ritz_config_dir)"; }
+
+# Offer to install (mode=install) or refresh (mode=update) the Ritz
+# extension manifest. Honours RITZ_EXT ("yes"/"no"/"" = ask). A no-op if
+# Ritz isn't detected, or (update mode) if this never installed one here.
+ritz_extension_prompt() {
+	local mode="$1" src dst
+	src=$(ritz_manifest_src)
+	dst=$(ritz_manifest_dst)
+
+	gcr_ritz_present || return 0
+
+	if [ "$mode" = "update" ]; then
+		if [ ! -f "$dst" ]; then
+			# Nothing installed here before -- --update only refreshes an
+			# existing copy; offering a new one is --install's job.
+			return 0
+		fi
+		if cmp -s -- "$src" "$dst" 2>/dev/null; then
+			gcr_info "Ritz extension: $dst is already up to date."
+			return 0
+		fi
+		if [ "$RITZ_EXT" = "no" ]; then
+			gcr_info "Ritz extension: --no-ritz-extension given, leaving $dst as-is."
+			return 0
+		fi
+		if [ "$RITZ_EXT" != "yes" ]; then
+			echo
+			echo "This repo's Ritz extension manifest has changed since it was last"
+			echo "copied to $dst."
+			gcr_confirm "Refresh it?" y || { gcr_info "left $dst as-is."; return 0; }
+		fi
+		cp -f -- "$src" "$dst"
+		gcr_info "refreshed Ritz extension: $dst"
+		return 0
+	fi
+
+	# mode = "install"
+	if [ -f "$dst" ] && cmp -s -- "$src" "$dst" 2>/dev/null; then
+		gcr_info "Ritz extension: $dst is already up to date."
+		return 0
+	fi
+	if [ "$RITZ_EXT" = "no" ]; then
+		gcr_info "Ritz extension: --no-ritz-extension given, skipping."
+		return 0
+	fi
+	if [ "$RITZ_EXT" != "yes" ]; then
+		echo
+		echo "A Ritz install was detected ($(ritz_config_dir))."
+		echo "This repo ships a Ritz launcher extension (extensions/gamescope-ritz.json)"
+		echo "wrapping gamescope-ritz — Profile, nested width/height/refresh,"
+		echo "fullscreen, force-windows-fullscreen, scaler and filter, all from Ritz's UI."
+		gcr_confirm "Install it to $dst?" n || {
+			gcr_info "skipped the Ritz extension. Re-run with --with-ritz-extension later if you want it."
+			return 0
+		}
+	fi
+	mkdir -p -- "$(dirname -- "$dst")"
+	cp -f -- "$src" "$dst"
+	gcr_info "installed Ritz extension: $dst"
+}
+
+# Offer to remove exactly the one manifest this script may have installed.
+# Never touches anything else under ~/.config/ritz/extensions.
+ritz_extension_remove_prompt() {
+	local dst; dst=$(ritz_manifest_dst)
+	[ -f "$dst" ] || return 0
+	if [ "$RITZ_EXT" = "no" ]; then
+		gcr_info "Ritz extension: --no-ritz-extension given, leaving $dst in place."
+		return 0
+	fi
+	gcr_info "found a Ritz extension manifest: $dst"
+	if [ "$RITZ_EXT" = "yes" ] || gcr_confirm "Remove it?" y; then
+		rm -f -- "$dst"
+		gcr_info "removed $dst."
+	else
+		gcr_info "left $dst in place."
+	fi
+}
+
 # --- actions ------------------------------------------------------------
 do_install() {
 	gcr_info "gamescope-ritz installer"
@@ -285,6 +404,7 @@ do_install() {
 	gcr_info "installed: $TARGET ($MODE mode)"
 
 	install_extras_prompt
+	ritz_extension_prompt install
 	echo
 	gcr_info "done. Run: $TARGET --help"
 	[ "$MODE" = "link" ] && gcr_warn "symlink mode: moving or deleting $REPO_ROOT will break $TARGET."
@@ -298,7 +418,7 @@ do_remove() {
 	gcr_info "gamescope-ritz remover"
 	gcr_info "target: $TARGET"
 
-	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && [ ! -e "$extras_dir" ]; then
+	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && [ ! -e "$extras_dir" ] && [ ! -f "$(ritz_manifest_dst)" ]; then
 		gcr_info "$TARGET does not exist and $extras_dir does not exist, nothing to remove."
 		gcr_info "your settings (~/.config/gamescope-ritz) are never touched by this script."
 		exit 0
@@ -338,6 +458,8 @@ do_remove() {
 	else
 		gcr_info "$extras_dir does not exist, nothing to remove there."
 	fi
+
+	ritz_extension_remove_prompt
 
 	echo
 	gcr_info "your settings (~/.config/gamescope-ritz) are kept — this script never touches them."
@@ -412,6 +534,7 @@ do_update() {
 	fi
 
 	install_extras_prompt
+	ritz_extension_prompt update
 	echo
 	gcr_info "done. $TARGET is up to date."
 }
