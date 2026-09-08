@@ -64,3 +64,26 @@ through this list, tell your assistant the results — answering it lets the tem
   split into `--profile My Profile` as two separate words. The quoted form is correct;
   two separate words is the bug this pass could only prove by hand-construction, not by
   running Ritz itself — your one test settles it either way.
+- [ ] **Vibrancy's direction.** The new Vibrancy boosts a colour's saturation *more*
+  the more saturated it already is — that's what you asked for, but it's the inverse of
+  what Apple's Photos calls "Vibrance" (which pushes muted colours harder and leaves
+  punchy ones alone). Try both it and Saturation and say whether Vibrancy's direction
+  feels right, or should be flipped to the Apple sense.
+- [ ] **Adaptive Gamma vs. Adaptive Brightness, on a dark map.** Turning one on turns
+  the other off — try each on the same dark scene and say which you prefer, and whether
+  forcing them to be mutually exclusive is the right call or you'd rather run both.
+- [ ] **Bloom, on a real game.** Everything measured for this so far was synthetic
+  (flat test fields); try it on something you actually play and say whether it looks
+  good, and whether Threshold, Intensity and Radius are the right three knobs or
+  something's missing.
+- [ ] **Keybinds: rebind something.** Pick a chord under Settings > Keybinds, rebind it
+  to something else, and confirm it takes effect immediately with no restart needed —
+  then restart gamescope-ritz and confirm the rebind is still there. Also check the
+  recovery path still works: `Ctrl+Alt+Shift+O` should always open the settings, even
+  if you've rebound everything else to something odd.
+- [ ] **Steam chat companion, on `Ctrl+Shift+Tab`.** Is it worth keeping, given it needs
+  its own separate login from your Steam client, has no notifications, and costs you a
+  browser? The alternative: turning off your Ritz `clear_ld_preload` setting for your
+  gamescope titles would restore Steam's own overlay instead — with voice, invites and
+  notifications — at the cost of it smearing under frame generation. Which would you
+  rather have?
