@@ -593,9 +593,32 @@ struct NativeEffectsState_t
 	// mode only. See superdoc/features/shader-effects.md.
 	float flAbLocal = 0.0f;
 
+	// Adaptive Gamma (NEW 2026-09-08, ConfigSchema.h's
+	// ReshadeAdaptiveGammaSettings): the same measured statistics, one
+	// exponent, no gain and no shoulder -- src/shaders/effects_curve.h's
+	// ag_* block. Mutually exclusive with Adaptive Brightness: the panel's
+	// setters make turning either one on turn the other off, and
+	// EffectsPushData_t drops this effect if a hand-edited config asks for
+	// both. See superdoc/features/shader-effects.md.
+	bool  bAdaptiveGamma = false;
+	float flAgTarget = 0.5f;
+	float flAgMaxLift = 4.0f;
+	float flAgMaxDarken = 1.5f;
+	float flAgStrength = 1.0f;
+	float flAgLocal = 0.0f;
+
+	// True when some effect needs the measure pass's statistics, i.e. when
+	// the history texture has to be kept alive and the measure dispatch
+	// recorded. Both adaptive effects read it; the other four do not.
+	bool NeedsStatistics() const
+	{
+		return bAdaptiveBrightness || bAdaptiveGamma;
+	}
+
 	bool AnyEnabled() const
 	{
-		return bShadowLift || bSaturation || bVibrancy || bPreSharpen || bAdaptiveBrightness;
+		return bShadowLift || bSaturation || bVibrancy || bPreSharpen
+			|| bAdaptiveBrightness || bAdaptiveGamma;
 	}
 };
 extern NativeEffectsState_t g_nativeEffects;

@@ -3895,7 +3895,27 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	namespace ec = gamescope::effects_curve;
 	float flGain, flGamma = 1.0f, flGainLo = 0.0f, flGainHi = 0.0f;
 	int nBinding = ec::AB_BIND_NONE;
-	if ( state.bAbDynamic )
+	const char *pszBindText = nullptr;
+	// Adaptive Gamma reads the same statistics and the same 16x16 map, so it
+	// gets the same trace: `gain` is 1.0 (it has none), `gamma` is its one
+	// exponent at the probe, gainlo/gainhi become the exponents the darkest
+	// and brightest cells of the map produce, and `bind` is ag_binding()'s
+	// code in ag_binding_text()'s words. One line format for both effects, so
+	// effects_regression_sample.py's ablog parser needs no second shape.
+	if ( state.bAdaptiveGamma && !state.bAdaptiveBrightness )
+	{
+		const float flShift   = ec::ab_local_shift( flLocalProbe, h[0], state.flAgLocal );
+		const float flShiftLo = ec::ab_local_shift( flLocalMin, h[0], state.flAgLocal );
+		const float flShiftHi = ec::ab_local_shift( flLocalMax, h[0], state.flAgLocal );
+		flGain   = 1.0f;
+		flGamma  = ec::ag_gamma( h[2] * flShift, state.flAgTarget, state.flAgMaxLift, state.flAgMaxDarken );
+		flGainLo = ec::ag_gamma( h[2] * flShiftLo, state.flAgTarget, state.flAgMaxLift, state.flAgMaxDarken );
+		flGainHi = ec::ag_gamma( h[2] * flShiftHi, state.flAgTarget, state.flAgMaxLift, state.flAgMaxDarken );
+		nBinding = ec::ag_binding( h[2] * flShift, state.flAgTarget,
+		                           state.flAgMaxLift, state.flAgMaxDarken, state.flAgStrength );
+		pszBindText = ec::ag_binding_text( nBinding );
+	}
+	else if ( state.bAbDynamic )
 	{
 		const float flShift = ec::ab_local_shift( flLocalProbe, h[0], state.flAbLocal );
 		flGain  = ec::ab_dyn_gain( h[3] * flShift, h[2] * flShift, state.flAbTarget, state.flAbMinGain, state.flAbMaxGain );
@@ -3927,10 +3947,12 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 
 	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d local=%.3f lmin=%.5f lmax=%.5f lprobe=%.5f gainlo=%.5f gainhi=%.5f bind=%d (%s)",
 		s_nAbLogIndex++, double( ulNow - s_ulAbLogFirstNs ) * 1e-6, double( flDt ) * 1e3,
-		!state.bAdaptiveBrightness ? "off" : ( state.bAbDynamic ? "dynamic" : "whole" ),
+		state.bAdaptiveBrightness ? ( state.bAbDynamic ? "dynamic" : "whole" )
+		                          : ( state.bAdaptiveGamma ? "gamma" : "off" ),
 		h[4], h[5], h[6], h[7], h[0], h[1], h[2], h[3], flGain, flGamma, x, y, r, g, b,
-		state.flAbLocal, flLocalMin, flLocalMax, flLocalProbe, flGainLo, flGainHi,
-		nBinding, ec::ab_binding_text( nBinding ) );
+		state.bAdaptiveGamma && !state.bAdaptiveBrightness ? state.flAgLocal : state.flAbLocal,
+		flLocalMin, flLocalMax, flLocalProbe, flGainLo, flGainHi,
+		nBinding, pszBindText ? pszBindText : ec::ab_binding_text( nBinding ) );
 
 	if ( s_nAbLogFrames.load( std::memory_order_relaxed ) > 0 )
 		s_nAbLogFrames.fetch_sub( 1, std::memory_order_relaxed );
@@ -4495,6 +4517,8 @@ struct EffectsPushData_t
 	// NEW 2026-09-08: the "punchy colours punchier" effect. A new bit
 	// rather than reusing one of the above -- see NativeEffectsState_t.
 	static constexpr uint32_t kVibrancy          = 1u << 6;
+	// NEW 2026-09-08: Adaptive Gamma (effects_curve.h's ag_* block).
+	static constexpr uint32_t kAdaptiveGamma     = 1u << 7;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -4513,6 +4537,12 @@ struct EffectsPushData_t
 	float    u_abStrength;
 	float    u_abDt;
 	float    u_abLocal;
+
+	float    u_agTarget;
+	float    u_agMaxLift;
+	float    u_agMaxDarken;
+	float    u_agStrength;
+	float    u_agLocal;
 
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
@@ -4537,6 +4567,20 @@ struct EffectsPushData_t
 		if ( s.bPreSharpen )            u_flags |= kPreSharpen;
 		if ( s.bAdaptiveBrightness )    u_flags |= kAdaptiveBrightness;
 		if ( s.bAbDynamic )             u_flags |= kAbDynamic;
+		// ADAPTIVE GAMMA IS DROPPED WHEN ADAPTIVE BRIGHTNESS IS ON. Both aim
+		// the frame's mid-tones at a target, and both derive that from the
+		// SAME pre-effect statistics (the measure pass grades its taps but
+		// knows nothing about either effect), so running them together would
+		// apply the same correction twice -- the second one fitted to a
+		// median the first one has already moved. The panel makes this
+		// unreachable (turning either switch on turns the other off), so
+		// this only ever fires for a hand-edited config; Adaptive Brightness
+		// wins because it is the older, richer effect and the one every
+		// existing config, capture and doc refers to. See
+		// superdoc/features/shader-effects.md's "Adaptive Gamma vs Adaptive
+		// Brightness".
+		const bool bAdaptiveGamma = s.bAdaptiveGamma && !s.bAdaptiveBrightness;
+		if ( bAdaptiveGamma )           u_flags |= kAdaptiveGamma;
 		if ( bResetHistory )            u_flags |= kResetHistory;
 
 		u_saturation = s.flSaturation;
@@ -4557,6 +4601,16 @@ struct EffectsPushData_t
 		// untouched. Masked here rather than in the shader so the uniform
 		// says exactly what the frame did, which is what ab_log prints.
 		u_abLocal    = s.bAbDynamic ? std::clamp( s.flAbLocal, 0.0f, 1.0f ) : 0.0f;
+
+		// Adaptive Gamma. Masked to its neutral values when the effect is
+		// not the one running, for the same reason u_abLocal is masked
+		// above: the uniform block should say exactly what the frame did,
+		// which is what the `effects_ab_log` trace prints.
+		u_agTarget    = bAdaptiveGamma ? s.flAgTarget : 0.5f;
+		u_agMaxLift   = bAdaptiveGamma ? s.flAgMaxLift : 1.0f;
+		u_agMaxDarken = bAdaptiveGamma ? s.flAgMaxDarken : 1.0f;
+		u_agStrength  = bAdaptiveGamma ? std::clamp( s.flAgStrength, 0.0f, 1.0f ) : 0.0f;
+		u_agLocal     = bAdaptiveGamma ? std::clamp( s.flAgLocal, 0.0f, 1.0f ) : 0.0f;
 	}
 };
 
@@ -5000,7 +5054,10 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					// effect masked off and skip the measure dispatch.
 					NativeEffectsState_t state = g_nativeEffects;
 					if ( !bHaveHistory )
+					{
 						state.bAdaptiveBrightness = false;
+						state.bAdaptiveGamma = false;   // reads the same history
+					}
 
 					// One upload for both dispatches: the measure pass and the
 					// per-pixel pass read the same effects_t block, and the
@@ -5098,10 +5155,12 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						// this is the one point where BOTH halves of what it
 						// needs are current: slot 0 still holds layer 0 on
 						// the raw view, and the history one line above now
-						// holds this frame's statistics. Only Adaptive
-						// Brightness's own switch arms it, so this never
-						// runs on a frame the effect is off for.
-						if ( state.bAdaptiveBrightness )
+						// holds this frame's statistics. Only an adaptive
+						// effect's own switch arms it, so this never runs
+						// on a frame neither is on for -- Adaptive Gamma
+						// shares the strip (they are mutually exclusive,
+						// so only one of them can ever be previewing).
+						if ( state.NeedsStatistics() )
 							effects_preview_record( cmdBuffer.get() );
 					}
 

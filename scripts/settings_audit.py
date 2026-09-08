@@ -154,6 +154,15 @@ SIBLING_KEYS = {
     "display.resolution.height": {"gamescope.nested_width"},
     "display.resolution.size": {"gamescope.nested_width", "gamescope.nested_height"},
     "display.resolution.aspect": {"gamescope.nested_width", "gamescope.nested_height"},
+    # Adaptive Brightness and Adaptive Gamma are mutually exclusive (2026-09-08):
+    # both aim the frame's mid-tones at a Target from the same statistics, so
+    # turning either ON turns the other OFF. That cross-write is the feature --
+    # see superdoc/features/shader-effects.md's "Adaptive Gamma vs Adaptive
+    # Brightness" -- and only ever happens on the ON edge, so declaring it here
+    # keeps the audit a real gate instead of reporting the same intentional
+    # write as a clobber on every future run.
+    "image.shaders.adaptive_brightness": {"reshade.adaptive_gamma.enabled"},
+    "image.shaders.adaptive_gamma": {"reshade.adaptive_brightness.enabled"},
 }
 
 ANCHOR_NAMES = [

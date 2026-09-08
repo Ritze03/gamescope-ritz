@@ -31,6 +31,19 @@ uniform effects_t {
     float u_abStrength;   // dry/wet mix, 0.0..1.0
     float u_abDt;         // seconds since the previous effects dispatch, host-clamped
     float u_abLocal;      // Local adaptation, 0.0..1.0 (Dynamic only; 0 = the global curve)
+
+    // ---- Adaptive Gamma (NEW 2026-09-08) ----
+    // The same statistics, one exponent, no gain and no shoulder -- see
+    // effects_curve.h's ADAPTIVE GAMMA block for the whole operator and why
+    // its two bounds are user-facing. The host masks EVERY field here to
+    // its neutral value when Adaptive Brightness is also on (the two aim
+    // the same mid-tones at the same target, so composing them would
+    // correct the picture twice); see EffectsPushData_t.
+    float u_agTarget;     // where the smoothed median is put, 0.1..0.9
+    float u_agMaxLift;    // 1.0..4.0; the exponent floor is 1/this
+    float u_agMaxDarken;  // 1.0..4.0; the exponent ceiling IS this
+    float u_agStrength;   // dry/wet mix, 0.0..1.0
+    float u_agLocal;      // Local adaptation, 0.0..1.0 -- the SAME operator
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -111,6 +124,11 @@ const uint EFFECT_ADAPTIVE_BRIGHTNESS = 1u << 4;
 const uint EFFECT_AB_DYNAMIC          = 1u << 5;
 // NEW 2026-09-08: the "punchy colours punchier" effect -- see grade() below.
 const uint EFFECT_VIBRANCY            = 1u << 6;
+// NEW 2026-09-08: Adaptive Gamma -- one adaptive exponent, no levels gain
+// and no shoulder (effects_curve.h's ag_* block). Applied by
+// cs_effects_layer0.comp after Adaptive Brightness; the host never sets
+// both bits at once, so the order between them is a formality.
+const uint EFFECT_ADAPTIVE_GAMMA      = 1u << 7;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;

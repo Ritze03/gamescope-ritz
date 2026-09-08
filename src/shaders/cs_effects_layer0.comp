@@ -1,8 +1,9 @@
 #version 460
 
 // cs_effects_layer0.comp -- the bundled "Shaders" area effects (Shadow
-// Control, Saturation, Vibrancy, Pre-Sharpen, Adaptive Brightness) as one
-// native compute pre-pass over the base/game layer, at source resolution,
+// Control, Saturation, Vibrancy, Pre-Sharpen, Adaptive Brightness, Adaptive
+// Gamma) as one native compute pre-pass over the base/game layer, at source
+// resolution,
 // before any scaling. Compiled at BUILD time by src/meson.build's glsl_generator into
 // cs_effects_layer0.h -- a GLSL error here fails the build, which is the
 // whole point of this port (superdoc/planning/DECISIONS.md #27): the
@@ -133,6 +134,42 @@ void main()
             c = mix(c, c * gain, strength);
         }
     }
+
+    // 5. Adaptive Gamma (NEW 2026-09-08). The same smoothed statistics, and
+    //    ONE exponent: no levels gain, no shoulder, no white point. For an
+    //    encoded value in 0..1 a pure exponent lands back in 0..1 with 0 and
+    //    1 as exact fixed points, so this operator cannot clip at any
+    //    setting and needs nothing to protect the highlights -- see
+    //    effects_curve.h's ADAPTIVE GAMMA block for the full argument and
+    //    for why its two bounds are the user's own params.
+    //
+    //    Local adaptation is the SAME operator Adaptive Brightness uses
+    //    (ab_local_shift over the measure pass's 16x16 map), shifting the
+    //    median this pixel's exponent is fitted to. At strength 0 rEff is
+    //    exactly 1.0, so this is bit-for-bit the global exponent and the
+    //    branch only skips the four map fetches.
+    //
+    //    The host never sets this bit together with
+    //    EFFECT_ADAPTIVE_BRIGHTNESS (both aim the frame's mid-tones at a
+    //    target from the same pre-effect statistics, so running both would
+    //    apply the correction twice); if a hand-edited config asks for
+    //    both, EffectsPushData_t drops this one.
+    if ((u_flags & EFFECT_ADAPTIVE_GAMMA) != 0u)
+    {
+        float rEff = 1.0;
+        if (u_agLocal > 0.0)
+        {
+            float local = ab_local_sample((vec2(pos) + 0.5) / vec2(size));
+            rEff = ab_local_shift(local, history_read(HISTORY_MEAN), u_agLocal);
+        }
+        float gamma = ag_gamma(history_read(HISTORY_P50) * rEff,
+                               u_agTarget, u_agMaxLift, u_agMaxDarken);
+        vec3 graded = vec3(ag_curve(c.r, gamma),
+                           ag_curve(c.g, gamma),
+                           ag_curve(c.b, gamma));
+        c = mix(c, graded, clamp(u_agStrength, 0.0, 1.0));
+    }
+
     c = clamp(c, 0.0, 1.0);
 
     imageStore(dst, ivec2(pos), vec4(c, 1.0));

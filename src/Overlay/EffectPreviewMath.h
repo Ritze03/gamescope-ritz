@@ -1,8 +1,10 @@
 #pragma once
 
-// EffectPreviewMath.h -- the pure half of the Inspector's Adaptive Brightness
-// before/after strip: everything that turns a captured frame plus a set of
-// slider values into the RGBA pixels the strip shows. Header-only and free of
+// EffectPreviewMath.h -- the pure half of the Inspector's before/after strip
+// for whichever adaptive effect is on (Adaptive Brightness, or -- since
+// 2026-09-08 -- Adaptive Gamma; they are mutually exclusive, so the strip
+// never has to show two things at once): everything that turns a captured
+// frame plus a set of slider values into the RGBA pixels the strip shows. Header-only and free of
 // ImGui, Vulkan and every overlay global, exactly like CrosshairMath.h, so
 // tests/test_overlay_ui.cpp can exercise it without a GPU or a context.
 //
@@ -17,7 +19,7 @@
 // resolution -- invisible after the ~7x downscale, and it does not move the
 // statistics either). Shadow Control, Saturation and Vibrancy are already
 // baked into the captured pixels by cs_effects_preview.comp's grade() call,
-// so both halves carry them and the strip isolates Adaptive Brightness
+// so both halves carry them and the strip isolates the adaptive effect
 // alone -- which is what it is for.
 
 #include <algorithm>
@@ -42,14 +44,25 @@ namespace gamescope::overlay::abpreview
 
 	// The slider positions, straight from the panel. Names match
 	// NativeEffectsState_t's, deliberately -- this is the same parameter set.
+	//
+	// ONE STRUCT FOR BOTH ADAPTIVE EFFECTS (Adaptive Gamma, 2026-09-08).
+	// They are mutually exclusive, so only one of them can ever be the one
+	// the strip is showing; `bGamma` says which. The three fields that mean
+	// the same thing in both -- Target, Strength, Local adaptation -- are
+	// shared rather than duplicated with an `Ag` prefix; the bounds are not
+	// shared, because a gain bound and an exponent bound are different
+	// numbers with different units. The caller fills whichever set applies.
 	struct Params
 	{
-		bool  bDynamic   = false;
+		bool  bGamma     = false;   // Adaptive Gamma instead of Adaptive Brightness
+		bool  bDynamic   = false;   // Adaptive Brightness's Dynamic mode
 		float flTarget   = 0.5f;
-		float flMinGain  = 0.3f;
-		float flMaxGain  = 4.0f;
+		float flMinGain  = 0.3f;    // Adaptive Brightness only
+		float flMaxGain  = 4.0f;    // Adaptive Brightness only
 		float flStrength = 1.0f;
 		float flLocal    = 0.0f;
+		float flMaxLift   = 4.0f;   // Adaptive Gamma only: exponent floor = 1/this
+		float flMaxDarken = 1.5f;   // Adaptive Gamma only: exponent ceiling
 	};
 
 	// The local map, sampled bilinearly at normalised image position (u, v).
@@ -73,17 +86,33 @@ namespace gamescope::overlay::abpreview
 		return ( a + ( b - a ) * fx ) + ( ( c + ( d - c ) * fx ) - ( a + ( b - a ) * fx ) ) * fy;
 	}
 
-	// Adaptive Brightness applied to one encoded RGB triplet at normalised
+	// The adaptive effect applied to one encoded RGB triplet at normalised
 	// image position (u, v). A port of cs_effects_layer0.comp's Adaptive
-	// Brightness block, both modes, in the same order and with the same
-	// clamps. Values in and out are 0..1 encoded.
+	// Brightness block (both modes) and its Adaptive Gamma block, in the same
+	// order and with the same clamps. Values in and out are 0..1 encoded.
 	inline void ApplyPixel( float u, float v, const Stats &st, const Params &p, float flRgb[3] )
 	{
 		const auto Cl = []( float x, float lo, float hi ) { return std::min( std::max( x, lo ), hi ); };
 		const float flStrength = Cl( p.flStrength, 0.0f, 1.0f );
 
 		namespace ec = gamescope::effects_curve;
-		if ( p.bDynamic )
+		if ( p.bGamma )
+		{
+			// Adaptive Gamma: a port of cs_effects_layer0.comp's step 5, in
+			// the same order and with the same clamps -- one exponent from
+			// the (optionally locally-shifted) median, no gain and no
+			// shoulder to model because the effect has neither.
+			float flREff = 1.0f;
+			if ( p.flLocal > 0.0f && st.pflLocal )
+				flREff = ec::ab_local_shift( LocalSample( st.pflLocal, st.nGrid, u, v ), st.flMean, p.flLocal );
+			const float flGamma = ec::ag_gamma( st.flP50 * flREff, p.flTarget, p.flMaxLift, p.flMaxDarken );
+			for ( int i = 0; i < 3; i++ )
+			{
+				const float flGraded = ec::ag_curve( flRgb[i], flGamma );
+				flRgb[i] = Cl( flRgb[i] + ( flGraded - flRgb[i] ) * flStrength, 0.0f, 1.0f );
+			}
+		}
+		else if ( p.bDynamic )
 		{
 			float flREff = 1.0f;
 			if ( p.flLocal > 0.0f && st.pflLocal )
@@ -116,15 +145,18 @@ namespace gamescope::overlay::abpreview
 
 	// True when the effect is a pure per-byte function of the input, i.e.
 	// when its gain and gamma are frame constants: Whole image always, and
-	// Dynamic while Local adaptation is off. Compose() then evaluates the
-	// curve 256 times instead of 110,592 times -- see its comment.
+	// Dynamic (or Adaptive Gamma) while Local adaptation is off. Compose()
+	// then evaluates the curve 256 times instead of 110,592 times -- see its
+	// comment.
 	inline bool IsUniform( const Stats &st, const Params &p )
 	{
-		return !p.bDynamic || p.flLocal <= 0.0f || st.pflLocal == nullptr;
+		const bool bPerPixel = ( p.bGamma || p.bDynamic )
+			&& p.flLocal > 0.0f && st.pflLocal != nullptr;
+		return !bPerPixel;
 	}
 
 	// Compose the strip's texture: an RGBA32 image of the captured frame with
-	// Adaptive Brightness applied to the RIGHT half only. `pSrcRgb` is
+	// the adaptive effect applied to the RIGHT half only. `pSrcRgb` is
 	// nWidth * nHeight * 3 tightly packed bytes; `pDstRgba` is
 	// nWidth * nHeight * 4.
 	//

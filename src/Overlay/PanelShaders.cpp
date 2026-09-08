@@ -100,6 +100,18 @@ namespace gamescope
 		e.flAbMaxGain   = r.adaptive_brightness.max_gain;
 		e.flAbStrength  = r.adaptive_brightness.strength;
 		e.flAbLocal     = r.adaptive_brightness.local_strength;
+
+		// Adaptive Gamma (2026-09-08): the same statistics, one exponent.
+		// The exclusion with Adaptive Brightness is NOT applied here -- the
+		// struct carries what the config says, and EffectsPushData_t drops
+		// the flag for the frame. Masking it here too would make the panel
+		// and the uniform disagree about what the user's config holds.
+		e.bAdaptiveGamma = r.adaptive_gamma.enabled;
+		e.flAgTarget     = r.adaptive_gamma.target_luminance;
+		e.flAgMaxLift    = r.adaptive_gamma.max_lift;
+		e.flAgMaxDarken  = r.adaptive_gamma.max_darken;
+		e.flAgStrength   = r.adaptive_gamma.strength;
+		e.flAgLocal      = r.adaptive_gamma.local_strength;
 	}
 
 	static void PushAllToRenderer()
@@ -164,13 +176,15 @@ namespace gamescope
 	// (index.html declared three at E2's original writing; Shadow Control
 	// (request #3, 2026-09-04) is the fourth, added the same shape; Vibrancy
 	// (2026-09-08, alongside the Vibrancy -> Saturation rename) is the
-	// fifth.)
+	// fifth; Adaptive Gamma (2026-09-08) is the sixth.)
 	//
 	// THE SIX BUDGET (now eight), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
 	// ON IT. Saturation has 2 params, Vibrancy 1, Pre-Sharpen 1, Adaptive
-	// Brightness 8, Shadow Control 1 -- the maximum a row may own before
-	// Registry.cpp aborts registration and tells the author to promote it
-	// to a category.
+	// Brightness 8, Adaptive Gamma 5, Shadow Control 1 -- the maximum a row
+	// may own before Registry.cpp aborts registration and tells the author
+	// to promote it to a category. The budget was NOT raised again for
+	// Adaptive Gamma and did not need to be: it has fewer knobs because it
+	// has fewer mechanisms (no gain to bound, no shadow cap, no mode).
 	// Adaptive Brightness fits, but with zero headroom, and that is worth
 	// saying out loud: the NEXT parameter added to this effect does not
 	// "just" overflow a limit, it is the signal that Adaptive Brightness has
@@ -247,6 +261,47 @@ namespace gamescope
 		QueueSave();
 	}
 
+	// THE TWO ADAPTIVE EFFECTS ARE MUTUALLY EXCLUSIVE (2026-09-08). Adaptive
+	// Brightness and Adaptive Gamma both aim the frame's mid-tones at a
+	// Target, and both read the SAME statistics -- the measure pass grades
+	// its taps but knows nothing about either effect, so its p50 is always
+	// the PRE-effect median. Run together, the second one would fit its
+	// curve to a median the first has already moved and correct the picture
+	// twice; the result is not "both, a bit" but a visible over-lift with no
+	// setting that fixes it.
+	//
+	// `Why a radio and not a greyed-out switch:` greying Adaptive Gamma
+	// while Adaptive Brightness is on would leave a config that somehow has
+	// both stuck (neither row toggleable), and greying only one of them
+	// makes the pair asymmetric for no reason a user could infer. Turning
+	// one on turning the other off is a familiar interaction and it is
+	// VISIBLE: both switches sit in the same Effects band, so the user sees
+	// the other one go dark in the same frame. `Why not compose them and
+	// document the result:` the composed result is not a look anybody would
+	// choose -- see the doc's measured numbers. The host enforces the same
+	// rule again (EffectsPushData_t drops Adaptive Gamma when Adaptive
+	// Brightness is on) so a hand-edited config with both cannot produce the
+	// double correction either.
+	static void SetAdaptiveBrightnessEnabled( bool bOn )
+	{
+		auto &r = Cfg().reshade;
+		r.adaptive_brightness.enabled = bOn;
+		if ( bOn )
+			r.adaptive_gamma.enabled = false;
+		PushAllToRenderer();
+		QueueSave();
+	}
+
+	static void SetAdaptiveGammaEnabled( bool bOn )
+	{
+		auto &r = Cfg().reshade;
+		r.adaptive_gamma.enabled = bOn;
+		if ( bOn )
+			r.adaptive_brightness.enabled = false;
+		PushAllToRenderer();
+		QueueSave();
+	}
+
 	// Adaptive Brightness's mode: a Param, not the row's own value (request
 	// #17, 2026-09-07) -- the row itself is a plain on/off Switch again, and
 	// this two-way choice lives in the Inspector's params column with the
@@ -272,15 +327,17 @@ namespace gamescope
 	void PanelShaders_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
-		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness exposure shadow control lift darkness" );
+		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness gamma contrast "
+		            "exposure shadow control lift darkness" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.saturation.enabled ? 1 : 0 )
 			            + ( r.vibrancy.enabled ? 1 : 0 )
 			            + ( r.pre_sharpen.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
+			            + ( r.adaptive_gamma.enabled ? 1 : 0 )
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 5 effects on";
+			return std::to_string( n ) + " of 6 effects on";
 		} );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
@@ -431,10 +488,11 @@ namespace gamescope
 		a.Switch( "image.shaders.adaptive_brightness", "Adaptive Brightness",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.adaptive_brightness.enabled; },
-				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.adaptive_brightness.enabled, b ); } ) )
+				[]( bool b ) { SetAdaptiveBrightnessEnabled( b ); } ) )
 			.Key( "reshade.adaptive_brightness.enabled" )
 			.Help( "Adjusts the picture as you play, like your eyes adjusting. See the Mode param "
-			       "for Whole image vs. Dynamic." )
+			       "for Whole image vs. Dynamic. Turning this on turns Adaptive Gamma off -- they "
+			       "aim the same mid-tones at the same target." )
 			.Default( AbDefaults{}.enabled )
 			.Keywords( "adaptive brightness eye adaptation exposure auto dynamic contrast gamma "
 			           "whole image tone mapping" )
@@ -540,6 +598,101 @@ namespace gamescope
 				                 // on a 0..1 range would read "0.50 %"
 				.Default( AbDefaults{}.local_strength );
 
+		// ADAPTIVE GAMMA -- NEW 2026-09-08. The user's request, verbatim:
+		// "Make something similar, but make it gamma based. Call it adaptive
+		// gamma." The same measured statistics, and the whole operator is
+		// ONE exponent fitted to land the smoothed median on Target: no
+		// levels gain, no white point, no shoulder. See
+		// src/shaders/effects_curve.h's ADAPTIVE GAMMA block for the
+		// arithmetic and superdoc/features/shader-effects.md for the
+		// measurements.
+		//
+		// FIVE PARAMS, not eight -- Strength, Target brightness, Max lift,
+		// Max darken, Local adaptation -- so this row sits well inside the
+		// budget (Registry.cpp's kParamBudget, 8) rather than on it the way
+		// Adaptive Brightness does. It has fewer knobs because it has fewer
+		// mechanisms: there is no gain to bound and no shadow cap, so
+		// min_gain/max_gain/mode have no counterpart here.
+		//
+		// `Why Max lift and Max darken are params at all, rather than two
+		// constants in the header:` Target reaches the picture ONLY through
+		// the exponent, so whatever clamps the exponent decides where Target
+		// stops doing anything -- and 2026-09-08 cost a whole session to the
+		// discovery that a clamped slider looks exactly like a working one.
+		// Every limit that can stop this effect is therefore a control the
+		// user can see and move, and the Diagnostics row below names which
+		// one is binding right now. Placed immediately after Adaptive
+		// Brightness because the two are alternatives to each other.
+		using AgDefaults = config::ReshadeAdaptiveGammaSettings;
+		a.Switch( "image.shaders.adaptive_gamma", "Adaptive Gamma",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.adaptive_gamma.enabled; },
+				[]( bool b ) { SetAdaptiveGammaEnabled( b ); } ) )
+			.Key( "reshade.adaptive_gamma.enabled" )
+			.Help( "Adjusts the picture's contrast as you play by bending the mid-tones toward a "
+			       "target, leaving black and white exactly where they are -- so nothing can blow "
+			       "out. Turning this on turns Adaptive Brightness off." )
+			.Default( AgDefaults{}.enabled )
+			.Keywords( "adaptive gamma contrast curve exposure auto tone midtones dark bright" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			// The same before/after strip Adaptive Brightness declares, and
+			// deliberately the same PreviewKind: the two effects are
+			// mutually exclusive, so only one of them can ever be the one
+			// being previewed, and EffectPreview.cpp picks whichever is on.
+			.Preview( ui::Entry::PreviewKind::AdaptiveBrightness )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.strength, f ); } ) )
+				.Key( "reshade.adaptive_gamma.strength" )
+				.Help( "How strong the effect is: blends between the untouched picture and the "
+				       "fully adjusted one." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions, as Adaptive Brightness's Strength has
+				.Default( AgDefaults{}.strength )
+			.Param( "target", "Target brightness",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.target_luminance; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.target_luminance, f ); } ) )
+				.Key( "reshade.adaptive_gamma.target_luminance" )
+				.Help( "Where the picture's mid-tones settle. Higher lifts the whole middle of the "
+				       "picture; black and white stay where they are either way." )
+				.Range( 0.1f, 0.9f )
+				.Step( 0.05f )   // 17 positions; both ends sit on the grid
+				.Default( AgDefaults{}.target_luminance )
+			.Param( "max_lift", "Max lift",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.max_lift; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.max_lift, f ); } ) )
+				.Key( "reshade.adaptive_gamma.max_lift" )
+				.Help( "How far the mid-tones may be brightened on a dark scene. 1.0 means \"do not "
+				       "brighten\". Raise it if the Diagnostics line says Max lift is what's "
+				       "stopping Target brightness." )
+				.Range( 1.0f, 4.0f )
+				.Step( 0.1f )    // 31 positions, as Adaptive Brightness's Max gain has
+				.Default( AgDefaults{}.max_lift )
+			.Param( "max_darken", "Max darken",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.max_darken; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.max_darken, f ); } ) )
+				.Key( "reshade.adaptive_gamma.max_darken" )
+				.Help( "How far the mid-tones may be darkened on a bright scene. 1.0 means \"do not "
+				       "darken\". Above about 1.5 the deepest shadows start to go black." )
+				.Range( 1.0f, 4.0f )
+				.Step( 0.1f )    // 31 positions, the same grid as Max lift
+				.Default( AgDefaults{}.max_darken )
+			.Param( "local_strength", "Local adaptation",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.local_strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.local_strength, f ); } ) )
+				.Key( "reshade.adaptive_gamma.local_strength" )
+				.Help( "How much each part of the picture is adjusted for its own brightness rather "
+				       "than the whole frame's, so a dark room and a bright window can both be "
+				       "readable. Does nothing on a picture that is evenly lit." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions, as Adaptive Brightness's own has
+				.Default( AgDefaults{}.local_strength );
+
 		a.Group( "Diagnostics" );
 
 		// The "effect file" / "compiled" / "loaded from" / "uniforms" rows
@@ -571,10 +724,13 @@ namespace gamescope
 			// classifier, so the panel and a trace cannot disagree. It
 			// describes the FRAME's curve (Local adaptation redistributes
 			// inside these same bounds, it never widens them).
+			// Serves BOTH adaptive effects (Adaptive Gamma, 2026-09-08):
+			// they are mutually exclusive, so exactly one classifier can
+			// apply at a time and the row never has to choose.
 			.Live( "adaptive limit", []{
 				std::string sLine;
 				if ( !gamescope::overlay::AbPreview_BindingLine( sLine ) )
-					sLine = "not measured -- turn Adaptive Brightness on over an SDR game";
+					sLine = "not measured -- turn Adaptive Brightness or Adaptive Gamma on over an SDR game";
 				return ui::Fact{ "adaptive limit", sLine };
 			} );
 	}

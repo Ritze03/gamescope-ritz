@@ -25,6 +25,14 @@ Subcommands
                                          must approach the settled value monotonically
     ablog   <file> <what>                per-frame `effects_ab_log` lines (gamescope's
                                          console log); `what` is static | pan | transition
+                                         | panlocal | agstatic | agpan | bind (the last
+                                         three are Adaptive Gamma's, 2026-09-08: the same
+                                         stability bars applied to its ONE exponent, plus
+                                         an INFO line naming the binding limit)
+    noclip  <image> <scene> <label>      Adaptive Gamma's no-clipping property: bands stay
+                                         ordered and apart, near-white highlights stay
+                                         below white, black stays black
+    means   <label> <img...>             INFO: each capture's frame mean, in order
     colorcheck <image> <effect> <strength>
                                          the "colors" scene (2026-09-08): pins one
                                          effect's per-band output against the closed-
@@ -320,6 +328,61 @@ def cmd_halo(args):
                        + f"monotone={monotone} " + body) else 1)
 
 
+def cmd_noclip(args):
+    """noclip <image> <scene> <label> -- ADAPTIVE GAMMA's headline property,
+    measured rather than argued: an exponent on 0..1 has 0 and 1 as exact
+    fixed points and is strictly increasing, so it cannot clip and cannot
+    flatten the highlights, at ANY setting. Stated as three things a capture
+    can show:
+
+      * every band strictly ordered and at least 2 counts apart -- nothing
+        has been compressed into its neighbour;
+      * the highlight region (the `dark` scene's 240 squares) stays BELOW
+        white, i.e. a value that was distinguishable from white still is
+        (Adaptive Brightness's Whole image mode drives exactly this region
+        to a clipped 255 on this scene -- see shader-effects.md's table);
+      * on the `bright` scene, whose top band IS 255, the 245 band stays
+        strictly below it, which is the same statement where the input
+        already touches the ceiling.
+    """
+    image, scene, label = args
+    vals = regions(load(image), scene)
+    bands = [vals[f"band{i}"] for i in range(5)]
+    checks = []
+    for i in range(4):
+        checks.append((f"band{i} < band{i + 1} by >= 2 counts "
+                       f"({bands[i]:.1f} vs {bands[i + 1]:.1f})",
+                       bands[i + 1] - bands[i] >= 2.0))
+    if "rect" in vals:
+        # The rectangles mean different things per scene, so the assertion
+        # has to follow the INPUT: `dark`'s are 240 (highlights, brighter
+        # than every band), `bright`'s are 30 (shadows, darker than every
+        # band). Only the highlight case is a no-clip statement.
+        sc = SCENES[scene]
+        if sc["rect"] > max(sc["bands"]):
+            checks.append((f"the {sc['rect']} highlights stay below white ({vals['rect']:.1f} < 254)",
+                           vals["rect"] < 254.0))
+            checks.append((f"the {sc['rect']} highlights stay above every band "
+                           f"({vals['rect']:.1f} > {bands[4]:.1f})", vals["rect"] > bands[4]))
+        else:
+            # A darkening exponent has no shadow cap here (that is Adaptive
+            # Brightness's min_gain, which this effect does not have), so a
+            # deep shadow CAN be pushed to black at a high Max darken -- that
+            # is a documented trade-off, not a clip. What must still hold is
+            # the ordering: the shadows stay below the darkest band.
+            checks.append((f"the {sc['rect']} shadows stay below every band "
+                           f"({vals['rect']:.1f} < {bands[0]:.1f})", vals["rect"] < bands[0]))
+    if scene == "bright":
+        checks.append((f"the 245 band stays below the 255 band "
+                       f"({bands[3]:.1f} < {bands[4]:.1f})", bands[3] < bands[4] - 1.0))
+    if "black" in vals:
+        checks.append((f"pure black stays black ({vals['black']:.1f} <= 2)", vals["black"] <= 2.0))
+
+    failed = [c for c, ok in checks if not ok]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(vals)
+    sys.exit(0 if emit(not failed, f"noclip-{scene}-{label}", detail) else 1)
+
+
 def frame_mean(path):
     """The whole frame's mean grey, at a 160x90 downsample. The cheapest
     honest "did the picture move" measure there is: it is what a person sees
@@ -330,6 +393,16 @@ def frame_mean(path):
     return sum(grey(p) for p in px) / len(px)
 
 
+def cmd_means(args):
+    """means <label> <img...> -- INFO: each capture's frame mean, in order.
+    For showing what a state change did to the picture where the statement
+    worth making is "these are different pictures" rather than a threshold."""
+    label = args[0]
+    vals = [frame_mean(p) for p in args[1:]]
+    print(f"INFO\t{label}\tframe mean " + " | ".join(f"{v:.1f}" for v in vals))
+    sys.exit(0)
+
+
 def cmd_slider(args):
     """slider <label> <min-step> <img...> -- the check that pins the
     2026-09-08 report: *"anything above target brightness 0.5 and max gain
@@ -337,15 +410,20 @@ def cmd_slider(args):
     increasing order; every adjacent step must brighten the frame by at
     least <min-step> counts. Before the fix, the pairs this is run on were
     bit-identical (a step of 0.00), which is exactly what an inert slider
-    looks like from the outside."""
+    looks like from the outside.
+
+    A NEGATIVE <min-step> means the knob is expected to DARKEN the picture
+    (Adaptive Gamma's Max darken, 2026-09-08): every step must then be at
+    most that, i.e. at least |min-step| counts downwards. Same statement,
+    the other way up -- an inert slider is still a step of 0.00."""
     label, step = args[0], float(args[1])
     vals = [frame_mean(p) for p in args[2:]]
     steps = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
-    ok = all(d >= step for d in steps)
+    ok = all(d <= step for d in steps) if step < 0 else all(d >= step for d in steps)
     emit(ok, label,
          "frame mean " + " -> ".join(f"{v:.1f}" for v in vals)
          + "; steps " + " ".join(f"{d:+.1f}" for d in steps)
-         + f" (each must be >= {step:.1f})")
+         + f" (each must be {'<=' if step < 0 else '>='} {step:.1f})")
 
 
 def cmd_temporal(args):
@@ -376,7 +454,8 @@ AB_LOG_RE = re.compile(
     r"raw mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
     r"smooth mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
     r"gain=([\d.]+) gamma=([\d.]+) px\((\d+),(\d+)\)=(\d+),(\d+),(\d+)"
-    r"(?: local=([\d.]+) lmin=([\d.]+) lmax=([\d.]+) lprobe=([\d.]+) gainlo=([\d.]+) gainhi=([\d.]+))?")
+    r"(?: local=([\d.]+) lmin=([\d.]+) lmax=([\d.]+) lprobe=([\d.]+) gainlo=([\d.]+) gainhi=([\d.]+))?"
+    r"(?: bind=(\d+) \(([^)]*)\))?")
 
 
 def parse_ablog(path):
@@ -385,9 +464,12 @@ def parse_ablog(path):
         m = AB_LOG_RE.search(line)
         if m:
             g = m.groups()
-            row = dict(n=int(g[0]), t=float(g[1]), rp98=float(g[7]), p50=float(g[10]),
+            row = dict(n=int(g[0]), t=float(g[1]), mode=g[3], rp98=float(g[7]), p50=float(g[10]),
                        p98=float(g[11]), gain=float(g[12]), gamma=float(g[13]),
                        px=(int(g[16]) + int(g[17]) + int(g[18])) / 3.0)
+            # The binding readout (2026-09-08). Optional for the same reason
+            # the local fields are: an older binary's line does not carry it.
+            row.update(bind=int(g[25]) if g[25] else -1, bindtext=g[26] or "")
             # The Local-adaptation fields (2026-09-07). Absent on a line from
             # a binary predating them, so every consumer must tolerate that.
             row.update(local=float(g[19]) if g[19] else 0.0,
@@ -410,7 +492,9 @@ def cmd_ablog(args):
     name = f"stability-{what}" if what != "transition" else "transition-gain"
     if what == "static" and rows and rows[-1]["local"] > 0.0:
         name = f"stability-static-local{rows[-1]['local']:.2f}"
-    if len(rows) < (100 if what != "panlocal" else 50):
+    # `bind` is a one-line INFO readout of the frame's own classifier, so it
+    # is armed for a handful of composites, not three hundred.
+    if len(rows) < (100 if what not in ("panlocal", "bind") else (50 if what == "panlocal" else 5)):
         sys.exit(0 if emit(False, name, f"only {len(rows)} ab_log lines in {path}") else 1)
 
     if what == "static":
@@ -459,6 +543,47 @@ def cmd_ablog(args):
               f"map lmin p2p={d['lmin']:.2f} codes lmax p2p={d['lmax']:.2f} codes; "
               f"map {last['lmin'] * 255:.1f}..{last['lmax'] * 255:.1f} codes, "
               f"gain {last['gainlo']:.3f}..{last['gainhi']:.3f} (probe {last['gain']:.3f})")
+        sys.exit(0)
+    elif what in ("agstatic", "agpan"):
+        # ADAPTIVE GAMMA's stability, held to the standard the 2026-09-07
+        # pulse fix set. The effect has no gain -- its whole state is the one
+        # exponent -- so `gamma` is what must not move here, where the
+        # Adaptive Brightness checks above watch `gain`. Everything else is
+        # identical, deliberately: the same still frame, the same panning
+        # --periodic frame, the same estimator underneath, so a regression
+        # in the shared measure pass fails both effects' checks at once.
+        d = dict(rp98=p2p(rows, "rp98"), gamma=p2p(rows, "gamma"),
+                 p98=p2p(rows, "p98") * 255.0, px=p2p(rows, "px"))
+        last = rows[-1]
+        if what == "agstatic":
+            name = f"ag-stability-static-local{last['local']:.2f}"
+            ok = d["rp98"] <= 0.0 and d["gamma"] <= 0.002 and d["p98"] <= 0.1 and d["px"] <= 0.0
+            bounds = "(raw must be 0, gamma <= 0.002, smoothed p98 <= 0.1 codes, px must be 0)"
+        else:
+            # A pan with --periodic: the frame's true statistics never
+            # change, so everything that moves is sampling noise. Same
+            # thresholds the Adaptive Brightness `pan` check uses, with the
+            # exponent standing in for the gain (the exponent's own scale is
+            # smaller, so this is if anything the tighter bar).
+            name = f"ag-stability-pan-local{last['local']:.2f}"
+            ok = d["gamma"] <= 0.06 and d["p98"] <= 3.0 and d["rp98"] * 255.0 <= 40.0
+            bounds = "(gamma <= 0.06, smoothed p98 <= 3 codes, raw p98 <= 40 codes)"
+            d["rp98"] *= 255.0
+        detail = (f"{len(rows)} frames, mode={last['mode']}: raw p98 p2p={d['rp98']:.6f}, "
+                  f"gamma p2p={d['gamma']:.6f}, smoothed p98 p2p={d['p98']:.4f} codes, "
+                  f"px p2p={d['px']:.1f} {bounds}; gamma={last['gamma']:.4f} px={last['px']:.0f}; "
+                  f"local={last['local']:.2f} map {last['lmin'] * 255:.1f}..{last['lmax'] * 255:.1f} codes "
+                  f"exponent {last['gainlo']:.3f}..{last['gainhi']:.3f}; bind={last['bindtext']}")
+    elif what == "bind":
+        # INFO only: WHICH LIMIT the frame's own classifier says is binding,
+        # in the panel's exact words (effects_curve.h names them once and
+        # both surfaces print that one string). This is how a sweep's "where
+        # does it stop, and does the UI say so" question becomes a line in
+        # results.txt rather than an opinion.
+        last = rows[-1]
+        print(f"INFO\tbind-{last['mode']}\t{len(rows)} frames, last: gain={last['gain']:.4f} "
+              f"gamma={last['gamma']:.4f} px={last['px']:.0f} "
+              f"bind={last['bind']} ({last['bindtext']})")
         sys.exit(0)
     elif what == "transition":
         # Armed just before the dark -> bright switch, so the trace starts
@@ -635,7 +760,8 @@ def main():
     cmd, args = sys.argv[1], sys.argv[2:]
     {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
      "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider,
-     "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape}[cmd](args)
+     "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape, "noclip": cmd_noclip,
+     "means": cmd_means}[cmd](args)
 
 
 if __name__ == "__main__":

@@ -283,6 +283,20 @@ namespace gamescope::config
                     ab.local_strength = JGetFloat( *pAdaptive, "local_strength", ab.local_strength );
                 }
 
+                // NEW 2026-09-08: Adaptive Gamma -- see ConfigSchema.h's
+                // ReshadeAdaptiveGammaSettings. Additive keys; an old config
+                // has none and resolves to the compiled-in defaults.
+                if ( const nlohmann::json *pAdaptiveGamma = JGetObject( *pReshade, "adaptive_gamma" ) )
+                {
+                    auto &ag = s.reshade.adaptive_gamma;
+                    ag.enabled = JGetBool( *pAdaptiveGamma, "enabled", ag.enabled );
+                    ag.target_luminance = JGetFloat( *pAdaptiveGamma, "target_luminance", ag.target_luminance );
+                    ag.max_lift = JGetFloat( *pAdaptiveGamma, "max_lift", ag.max_lift );
+                    ag.max_darken = JGetFloat( *pAdaptiveGamma, "max_darken", ag.max_darken );
+                    ag.strength = JGetFloat( *pAdaptiveGamma, "strength", ag.strength );
+                    ag.local_strength = JGetFloat( *pAdaptiveGamma, "local_strength", ag.local_strength );
+                }
+
                 if ( const nlohmann::json *pShadowLift = JGetObject( *pReshade, "shadow_lift" ) )
                 {
                     auto &sl = s.reshade.shadow_lift;
@@ -526,6 +540,15 @@ namespace gamescope::config
             jAdaptive[ "strength" ] = ab.strength;
             jAdaptive[ "local_strength" ] = ab.local_strength;
 
+            const auto &ag = s.reshade.adaptive_gamma;
+            nlohmann::json jAdaptiveGamma = nlohmann::json::object();
+            jAdaptiveGamma[ "enabled" ] = ag.enabled;
+            jAdaptiveGamma[ "target_luminance" ] = ag.target_luminance;
+            jAdaptiveGamma[ "max_lift" ] = ag.max_lift;
+            jAdaptiveGamma[ "max_darken" ] = ag.max_darken;
+            jAdaptiveGamma[ "strength" ] = ag.strength;
+            jAdaptiveGamma[ "local_strength" ] = ag.local_strength;
+
             const auto &sl = s.reshade.shadow_lift;
             nlohmann::json jShadowLift = nlohmann::json::object();
             jShadowLift[ "enabled" ] = sl.enabled;
@@ -536,6 +559,7 @@ namespace gamescope::config
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
+            jReshade[ "adaptive_gamma" ] = std::move( jAdaptiveGamma );
             jReshade[ "shadow_lift" ] = std::move( jShadowLift );
 
             nlohmann::json jNotifications = nlohmann::json::object();

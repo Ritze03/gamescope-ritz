@@ -3192,3 +3192,78 @@ TEST_CASE( "ab preview: the 256-entry fast path is equal to the per-pixel one", 
 	pLocal.flLocal = 0.5f;
 	REQUIRE_FALSE( IsUniform( stLocal, pLocal ) );
 }
+
+TEST_CASE( "ag preview: Adaptive Gamma takes the same fast path, and the same identities",
+           "[overlay_ui]" )
+{
+	using namespace gamescope::overlay::abpreview;
+
+	// The strip serves BOTH adaptive effects since 2026-09-08 (they are
+	// mutually exclusive, so one struct and one branch covers it). Everything
+	// the Adaptive Brightness path is held to is asserted here for the gamma
+	// path: the 256-entry table is EQUAL to the per-pixel evaluation rather
+	// than close to it, Local adaptation at 0 changes nothing at all, and
+	// Local adaptation above 0 correctly disqualifies the table.
+	Stats st;
+	st.flMean = 0.12f; st.flP2 = 0.03f; st.flP50 = 0.10f; st.flP98 = 0.35f;
+
+	constexpr int kW = 512, kH = 1;   // 256 graded columns == every byte
+	std::vector<uint8_t> src( kW * kH * 3 ), dst( kW * kH * 4 );
+	for ( int x = 0; x < kW; x++ )
+	{
+		const uint8_t v = (uint8_t)( x % 256 );
+		src[ x * 3 + 0 ] = src[ x * 3 + 1 ] = src[ x * 3 + 2 ] = v;
+	}
+
+	Params p;
+	p.bGamma = true;
+	p.flTarget = 0.5f;
+	p.flMaxLift = 4.0f;
+	p.flMaxDarken = 1.5f;
+	p.flStrength = 0.8f;   // not 1.0, so the dry/wet blend is exercised too
+	REQUIRE( IsUniform( st, p ) );
+
+	Compose( src.data(), kW, kH, st, p, dst.data() );
+
+	for ( int x = 0; x < SplitColumn( kW ); x++ )
+		REQUIRE( (int)dst[ x * 4 ] == (int)src[ x * 3 ] );   // the BEFORE half is untouched
+	for ( int x = SplitColumn( kW ); x < kW; x++ )
+	{
+		float ref[3];
+		ref[0] = ref[1] = ref[2] = src[ x * 3 ] / 255.0f;
+		ApplyPixel( ( (float)x + 0.5f ) / (float)kW, 0.5f, st, p, ref );
+		const uint8_t nRef = (uint8_t)std::lround( ref[0] * 255.0f );
+		REQUIRE( (int)dst[ x * 4 ] == (int)nRef );
+	}
+
+	// Strength 0 makes the AFTER half byte-identical to the BEFORE half --
+	// the same slider-change proof the Adaptive Brightness strip carries.
+	Params pOff = p;
+	pOff.flStrength = 0.0f;
+	Compose( src.data(), kW, kH, st, pOff, dst.data() );
+	for ( int x = 0; x < kW; x++ )
+		REQUIRE( (int)dst[ x * 4 ] == (int)src[ x * 3 ] );
+
+	// Local adaptation at 0 is bit-for-bit the global exponent, whatever the
+	// map says; above 0 the table cannot apply.
+	float map[ 16 * 16 ];
+	for ( int i = 0; i < 16 * 16; i++ )
+		map[i] = ( i % 2 ) ? 0.9f : 0.01f;
+	Stats stMap = st;
+	stMap.pflLocal = map;
+	stMap.nGrid = 16;
+	for ( float u : { 0.05f, 0.33f, 0.5f, 0.97f } )
+	{
+		float a[3] = { 0.2f, 0.5f, 0.8f };
+		float b[3] = { 0.2f, 0.5f, 0.8f };
+		Params pZero = p;
+		pZero.flLocal = 0.0f;
+		ApplyPixel( u, 0.5f, stMap, pZero, a );
+		ApplyPixel( u, 0.5f, st, pZero, b );
+		for ( int i = 0; i < 3; i++ )
+			REQUIRE( a[i] == b[i] );
+	}
+	Params pLocal = p;
+	pLocal.flLocal = 0.5f;
+	REQUIRE_FALSE( IsUniform( stMap, pLocal ) );
+}

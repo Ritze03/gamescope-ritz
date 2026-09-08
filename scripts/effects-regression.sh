@@ -70,6 +70,15 @@
 #                       user's "does nothing at all", as a number
 #   Whole-image captures of every scene are taken too and reported as INFO
 #   lines (they show the clipping Dynamic exists to avoid), not asserted.
+#   ag-*             2026-09-08, ADAPTIVE GAMMA: ag-noclip-* (a pure
+#                     exponent cannot clip or flatten, at every setting),
+#                     ag-target-moves / ag-strength-moves / ag-maxlift-moves
+#                     (each slider's every step moves the frame mean),
+#                     ag-stability-static / ag-stability-pan (a still frame
+#                     is exactly constant; a --periodic pan does not pulse),
+#                     ag-exclusive (turning either adaptive effect on turns
+#                     the other off). See the block at the bottom of this
+#                     script for what each one is measuring and why.
 #   colors-*         2026-09-08, the Saturation/Vibrancy split: Saturation
 #                     (renamed from "Vibrancy") and the new Vibrancy each
 #                     pinned against their closed-form formula on a scene
@@ -605,6 +614,199 @@ done
 set_vibrancy 0
 
 run_sampler colorshape "$SHOT_SAT_SHAPE" "$SHOT_VIB_SHAPE"
+
+# ---------------------------------------------------------------------------
+# ADAPTIVE GAMMA (2026-09-08). "Make something similar, but make it gamma
+# based." Same statistics, ONE exponent: no levels gain, no shoulder. Four
+# things have to be measured, not argued:
+#
+#   ag-noclip-*        the property the shape promises and Adaptive
+#                      Brightness's cannot -- a pure exponent maps [0,1] onto
+#                      [0,1] with 0 and 1 as exact fixed points, so nothing
+#                      clips and nothing flattens, AT EVERY SETTING. Run over
+#                      a matrix of Target / Strength / Max lift / Max darken
+#                      on the dark scene (whose 240 highlights Whole-image
+#                      mode drives to a clipped 255) and on the bright scene
+#                      (whose top band already IS 255).
+#   ag-target-moves    Target, swept on the textured dark scene -- the scene
+#   ag-strength-moves  with a CONTINUOUS histogram, chosen for the same
+#   ag-maxlift-moves   reason the 2026-09-08 Adaptive Brightness sweeps use
+#                      it: a flat band chart flatters this kind of operator.
+#                      Every step must move the frame mean.
+#   ag-stability-*     a still frame must be EXACTLY constant and a
+#                      --periodic pan must not pulse, to the standard the
+#                      2026-09-07 fix set -- watching the exponent, which is
+#                      this effect's entire state.
+#   ag-exclusive       the two adaptive effects are mutually exclusive:
+#                      turning either on turns the other off, whichever way
+#                      round, so the double correction is unreachable.
+#
+# Every INFO `bind-*` line names which limit the frame's own classifier says
+# is binding, in the panel's exact words -- that is how "where does this
+# slider stop working" is answered by the gate rather than by a user.
+# ---------------------------------------------------------------------------
+AG_ID="image.shaders.adaptive_gamma"
+AG_TARGET_ID="image.shaders.adaptive_gamma.target"
+AG_STRENGTH_ID="image.shaders.adaptive_gamma.strength"
+AG_LIFT_ID="image.shaders.adaptive_gamma.max_lift"
+AG_DARKEN_ID="image.shaders.adaptive_gamma.max_darken"
+AG_LOCAL_ID="image.shaders.adaptive_gamma.local_strength"
+AG_TARGET_DEFAULT=0.5   # == ConfigSchema.h's ReshadeAdaptiveGammaSettings
+AG_LIFT_DEFAULT=4.0
+AG_DARKEN_DEFAULT=1.5
+
+set_ag() { gsctl overlay_e2_set "$AG_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+set_ag_param() { gsctl overlay_e2_set "$1 $2" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+# The live value of one row or param, as the registry itself reports it
+# (`overlay_e2_get` prints "<id> <kind> <value>"; a bool is "on"/"off").
+# Every stage is guarded: under `set -euo pipefail` an unmatched grep inside
+# a command substitution would abort the whole script rather than yield an
+# empty string, and an empty string is what the caller wants to see reported.
+get_e2() {
+	local out
+	out="$( gsctl overlay_e2_get "$1" 2>&1 || true )"
+	printf '%s\n' "$out" | grep -F "$1" | tail -1 | awk '{ print $3 }' || true
+}
+ag_defaults() {
+	set_ag_param "$AG_TARGET_ID" "$AG_TARGET_DEFAULT"
+	set_ag_param "$AG_STRENGTH_ID" 1.0
+	set_ag_param "$AG_LIFT_ID" "$AG_LIFT_DEFAULT"
+	set_ag_param "$AG_DARKEN_ID" "$AG_DARKEN_DEFAULT"
+	set_ag_param "$AG_LOCAL_ID" 0.0
+}
+
+set_saturation 0; set_vibrancy 0; set_ab 0
+ag_defaults
+set_ag 1
+
+# Scene 9: back round to `dark` (SIGUSR1 wraps).
+next_scene
+sleep "$ADAPT_SETTLE_S"
+run_sampler noclip "$(take_screenshot 11-dark-ag-default)" dark ag-default
+# The no-clip property over a matrix of settings, not just the defaults:
+# these are the four corners of what the row can be set to.
+for spec in "target 0.3:$AG_TARGET_ID:0.3" "target 0.9:$AG_TARGET_ID:0.9" \
+            "strength 0.5:$AG_STRENGTH_ID:0.5" "maxlift 1.5:$AG_LIFT_ID:1.5" \
+            "maxdarken 4.0:$AG_DARKEN_ID:4.0" "local 1.0:$AG_LOCAL_ID:1.0"; do
+	LBL="${spec%%:*}"; REST="${spec#*:}"; PID="${REST%%:*}"; PVAL="${REST#*:}"
+	set_ag_param "$PID" "$PVAL"
+	run_sampler noclip "$(take_screenshot "11-dark-ag-${LBL// /}")" dark "ag-${LBL// /-}"
+	ag_defaults
+done
+# Max lift is the binding limit on this flat chart at EVERY setting (its
+# median is 0.047, below every floor in range), so every step of it must
+# move the picture -- and the readout must say Max lift is what binds.
+declare -a AG_LIFT_SHOTS=()
+for L in 1.5 2.0 3.0 4.0; do
+	set_ag_param "$AG_LIFT_ID" "$L"
+	AG_LIFT_SHOTS+=( "$(take_screenshot "11-dark-ag-maxlift-$L")" )
+done
+run_sampler slider ag-maxlift-moves 8 "${AG_LIFT_SHOTS[@]}"
+arm_ab_log 30; wait_ab_log 30 "$OUT_DIR/ablog-11-dark-ag.txt"
+run_sampler ablog "$OUT_DIR/ablog-11-dark-ag.txt" bind
+ag_defaults
+
+# Scene 10: bright -- the darkening side, and the harder no-clip case (its
+# top band is already 255, so "did anything below white get flattened into
+# it" is the whole question).
+next_scene
+sleep "$ADAPT_SETTLE_S"
+run_sampler noclip "$(take_screenshot 12-bright-ag-default)" bright ag-default
+# On THIS scene (median 0.898) the exponent the target asks for is 6.4 at
+# the default target and 11.2 at 0.3 -- far above Max darken -- so Target is
+# genuinely inert here and Max darken is the control that moves the picture.
+# That is measured as such: Max darken swept DOWNWARD (a negative step), and
+# the INFO bind line below has to be naming the darkening limit. An inert
+# Target that the readout NAMES is the design; an inert Target that says
+# nothing is the 2026-09-08 bug.
+declare -a AG_DARKEN_SHOTS=()
+for D in 1.0 1.5 2.0 3.0; do
+	set_ag_param "$AG_DARKEN_ID" "$D"
+	AG_DARKEN_SHOTS+=( "$(take_screenshot "12-bright-ag-maxdarken-$D")" )
+done
+run_sampler slider ag-maxdarken-moves -8 "${AG_DARKEN_SHOTS[@]}"
+run_sampler noclip "${AG_DARKEN_SHOTS[3]}" bright ag-maxdarken-3.0
+ag_defaults
+arm_ab_log 30; wait_ab_log 30 "$OUT_DIR/ablog-12-bright-ag.txt"
+run_sampler ablog "$OUT_DIR/ablog-12-bright-ag.txt" bind
+
+# Scene 11: mid -- a 0.1..0.9 scene is very nearly the identity.
+next_scene
+sleep "$ADAPT_SETTLE_S"
+run_sampler noclip "$(take_screenshot 13-mid-ag-default)" mid ag-default
+run_sampler regions "$(take_screenshot 13-mid-ag-default)" mid
+
+# Scene 12: texdark -- the continuous histogram. The two sweeps that pin
+# "Target moves the picture" and "Strength moves the picture", then
+# stability (the scene is panning; toggle_motion holds it still).
+next_scene
+sleep "$ADAPT_SETTLE_S"
+# Target, over the range it is FREE on this frame. Its median is 0.076, so
+# with Max lift at the top of its slider (exponent floor 0.25) the highest
+# target the exponent can still reach is 0.076^0.25 = 0.52 -- above that the
+# floor holds it and Target stops moving the picture. That is the residual
+# ceiling of an exponent-only operator and it is stated, not hidden: the
+# sweep below covers 0.2 .. 0.5, and the capture after it at 0.7 must have
+# the readout naming Max lift.
+declare -a AG_TARGET_SHOTS=()
+for T in 0.2 0.35 0.5; do
+	set_ag_param "$AG_TARGET_ID" "$T"
+	AG_TARGET_SHOTS+=( "$(take_screenshot "14-texdark-ag-target-$T")" )
+done
+run_sampler slider ag-target-moves 15 "${AG_TARGET_SHOTS[@]}"
+set_ag_param "$AG_TARGET_ID" 0.7
+take_screenshot 14-texdark-ag-target-0.7 >/dev/null
+arm_ab_log 30; wait_ab_log 30 "$OUT_DIR/ablog-14-ag-target0.7.txt"
+run_sampler ablog "$OUT_DIR/ablog-14-ag-target0.7.txt" bind
+set_ag_param "$AG_TARGET_ID" "$AG_TARGET_DEFAULT"
+
+declare -a AG_STRENGTH_SHOTS=()
+for S in 0.0 0.5 1.0; do
+	set_ag_param "$AG_STRENGTH_ID" "$S"
+	AG_STRENGTH_SHOTS+=( "$(take_screenshot "14-texdark-ag-strength-$S")" )
+done
+run_sampler slider ag-strength-moves 8 "${AG_STRENGTH_SHOTS[@]}"
+set_ag_param "$AG_STRENGTH_ID" 1.0
+
+# STILL FIRST, then panning. The Local-adaptation section above left the
+# client's motion PAUSED (it toggles three times), so the still measurement
+# is the one that needs no toggle -- getting this the wrong way round
+# measures a pan and calls it a still frame, which is exactly the mistake
+# this comment exists to stop the next author repeating.
+for L in 0.0 1.0; do
+	set_ag_param "$AG_LOCAL_ID" "$L"
+	arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-14-ag-static-local$L.txt"
+	run_sampler ablog "$OUT_DIR/ablog-14-ag-static-local$L.txt" agstatic
+done
+set_ag_param "$AG_LOCAL_ID" 0.0
+toggle_motion   # -> panning, --periodic: the true statistics do not change
+sleep "$ADAPT_SETTLE_S"
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-14-ag-pan.txt"
+run_sampler ablog "$OUT_DIR/ablog-14-ag-pan.txt" agpan
+toggle_motion   # leave the client as it was found
+
+# THE EXCLUSION, both ways round. overlay_e2_set writes through the binding
+# -- the same setter the switch uses -- so this exercises exactly what a
+# click does, and the greying the panel does on top is not what enforces it.
+set_ag 1
+X_AG="$(take_screenshot 15-exclusive-1-gamma)"
+set_ab 2
+AG_AFTER_AB="$(get_e2 "$AG_ID")"
+X_AB="$(take_screenshot 15-exclusive-2-brightness)"
+set_ag 1
+AB_AFTER_AG="$(get_e2 "$AB_ID")"
+X_AG2="$(take_screenshot 15-exclusive-3-gamma-again)"
+# What the pictures say, beside what the config says: the frame is one
+# effect's or the other's and never a compounding of both, and switching
+# back returns the first one's picture.
+run_sampler means ag-exclusive-pictures "$X_AG" "$X_AB" "$X_AG2"
+record_line "INFO	ag-exclusive-raw	overlay_e2_get after each flip: adaptive_gamma='$AG_AFTER_AB' adaptive_brightness='$AB_AFTER_AG'"
+if [[ "$AG_AFTER_AB" == "off" && "$AB_AFTER_AG" == "off" ]]; then
+	record_line "PASS	ag-exclusive	turning Adaptive Brightness on left Adaptive Gamma '$AG_AFTER_AB'; turning Adaptive Gamma on left Adaptive Brightness '$AB_AFTER_AG'"
+else
+	record_line "FAIL	ag-exclusive	expected both 'off'; got adaptive_gamma='$AG_AFTER_AB' adaptive_brightness='$AB_AFTER_AG'"
+fi
+set_ag 0
 
 END_TS=$(date +%s)
 {

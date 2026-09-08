@@ -110,21 +110,53 @@ namespace gamescope::overlay
 
 		bool SameParams( const abpreview::Params &a, const abpreview::Params &b )
 		{
-			return a.bDynamic == b.bDynamic
+			return a.bGamma == b.bGamma
+				&& a.bDynamic == b.bDynamic
 				&& a.flTarget == b.flTarget
 				&& a.flMinGain == b.flMinGain
 				&& a.flMaxGain == b.flMaxGain
 				&& a.flStrength == b.flStrength
-				&& a.flLocal == b.flLocal;
+				&& a.flLocal == b.flLocal
+				&& a.flMaxLift == b.flMaxLift
+				&& a.flMaxDarken == b.flMaxDarken;
 		}
 
-		// The parameters the pre-pass is running with right now. Read from
-		// g_nativeEffects rather than from the config: that struct IS what
-		// the shader was handed, it is written by PanelShaders.cpp on this
-		// same (steamcompmgr) thread, and reading it means the strip can
-		// never disagree with the frame about what "current" means.
+		// Which of the two adaptive effects the strip is showing. They are
+		// mutually exclusive (PanelShaders.cpp's setters make turning one on
+		// turn the other off, and the host drops Adaptive Gamma if a
+		// hand-edited config asks for both), so "whichever is on" is
+		// unambiguous, and Adaptive Brightness is checked first for the same
+		// reason the host prefers it. False when neither is on -- the strip
+		// then draws its placeholder rather than a picture.
+		bool GammaIsTheOneOn()
+		{
+			return g_nativeEffects.bAdaptiveGamma && !g_nativeEffects.bAdaptiveBrightness;
+		}
+		bool EitherIsOn()
+		{
+			return g_nativeEffects.bAdaptiveBrightness || g_nativeEffects.bAdaptiveGamma;
+		}
+
+		// The parameters the pre-pass is running with right now, for whichever
+		// adaptive effect is on. Read from g_nativeEffects rather than from
+		// the config: that struct IS what the shader was handed, it is written
+		// by PanelShaders.cpp on this same (steamcompmgr) thread, and reading
+		// it means the strip can never disagree with the frame about what
+		// "current" means.
 		abpreview::Params CurrentParams()
 		{
+			if ( GammaIsTheOneOn() )
+			{
+				abpreview::Params p;
+				p.bGamma      = true;
+				p.flTarget    = g_nativeEffects.flAgTarget;
+				p.flMaxLift   = g_nativeEffects.flAgMaxLift;
+				p.flMaxDarken = g_nativeEffects.flAgMaxDarken;
+				p.flStrength  = g_nativeEffects.flAgStrength;
+				p.flLocal     = g_nativeEffects.flAgLocal;
+				return p;
+			}
+
 			abpreview::Params p;
 			p.bDynamic   = g_nativeEffects.bAbDynamic;
 			p.flTarget   = g_nativeEffects.flAbTarget;
@@ -244,7 +276,7 @@ namespace gamescope::overlay
 	{
 		State &st = St();
 
-		const bool bEnabled   = g_nativeEffects.bAdaptiveBrightness;
+		const bool bEnabled   = EitherIsOn();
 		const bool bSupported = BaseLayerIsSdr();
 		if ( !bEnabled || !bSupported )
 			return false;
@@ -260,6 +292,16 @@ namespace gamescope::overlay
 			return false;
 
 		const abpreview::Params p = CurrentParams();
+		namespace ecg = gamescope::effects_curve;
+		if ( p.bGamma )
+		{
+			// Adaptive Gamma's own classifier and its own wording: naming
+			// "Max gain" on a row that has no such slider would send the
+			// user hunting for a control that is not there.
+			sOut = ecg::ag_binding_text( ecg::ag_binding( st.frame.flP50, p.flTarget,
+			                                             p.flMaxLift, p.flMaxDarken, p.flStrength ) );
+			return true;
+		}
 		if ( !p.bDynamic )
 		{
 			// Whole image has no curve to clamp: its single gain is
@@ -288,7 +330,7 @@ namespace gamescope::overlay
 
 		const controls::ComparePreviewLayout lay = controls::LayoutComparePreview( rcBlock );
 
-		const bool bEnabled   = g_nativeEffects.bAdaptiveBrightness;
+		const bool bEnabled   = EitherIsOn();
 		const bool bSupported = BaseLayerIsSdr();
 
 		// Coming back on screen drops whatever was held: the promise is a
@@ -325,8 +367,16 @@ namespace gamescope::overlay
 		DrawText( lay.rcLeftLabel,  TypeRole::Meta, Col( Role::TextMeta ), "BEFORE", TextAlign::Left );
 		DrawText( lay.rcRightLabel, TypeRole::Meta, Col( Role::TextMeta ), "AFTER",  TextAlign::Right );
 
-		const controls::ComparePreviewStatus status =
+		controls::ComparePreviewStatus status =
 			controls::ComparePreviewStatusFor( bEnabled, bSupported, st.bHaveFrame );
+		// The strip now serves BOTH adaptive effects (Adaptive Gamma,
+		// 2026-09-08), so the "switched off" sentence has to name both.
+		// Overridden here rather than by threading a name through
+		// ComparePreviewStatusFor(): that function's ORDERING (which
+		// unavailable reason outranks which) is the part worth keeping in
+		// one tested place, and it is untouched.
+		if ( status.eState != controls::ComparePreviewState::Ready && bSupported && !bEnabled )
+			status.pszMessage = "Turn Adaptive Brightness or Adaptive Gamma on to preview it.";
 		if ( status.eState != controls::ComparePreviewState::Ready )
 		{
 			DrawPlaceholder( lay.rcImage, status.pszMessage );

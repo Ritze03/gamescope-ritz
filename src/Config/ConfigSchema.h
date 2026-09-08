@@ -398,12 +398,65 @@ namespace gamescope::config
         float local_strength = 0.5f;     // 0.0..1.0
     };
 
+    // NEW 2026-09-08 (the user: "Make something similar, but make it gamma
+    // based. Call it adaptive gamma."). The same measured statistics
+    // Adaptive Brightness uses, but the whole operator is ONE exponent:
+    // g = ln(target)/ln(p50), clamped to the user's own two limits, applied
+    // as x^g per channel and blended by strength. No levels gain, no white
+    // point and no shoulder -- for an encoded 0..1 value a pure exponent
+    // lands back in 0..1 with 0 and 1 as exact fixed points, so it cannot
+    // clip and has nothing to protect the highlights FROM. See
+    // src/shaders/effects_curve.h's ADAPTIVE GAMMA block and
+    // superdoc/features/shader-effects.md.
+    //
+    // MUTUALLY EXCLUSIVE WITH adaptive_brightness: both aim the frame's
+    // mid-tones at a target from the same pre-effect statistics, so both at
+    // once would correct the picture twice. The panel's setters turn the
+    // other one off, and the host drops this effect if a hand-edited config
+    // asks for both (Adaptive Brightness wins).
+    //
+    // Purely additive keys: an old config has none of them, gets these
+    // compiled-in defaults, and needs no schema bump or migration -- the
+    // same shape ReshadeShadowLiftSettings was added in.
+    struct ReshadeAdaptiveGammaSettings
+    {
+        bool enabled = false;
+        // 0.1..0.9 -- where the smoothed MEDIAN is put, exactly as Adaptive
+        // Brightness's Dynamic mode means it.
+        float target_luminance = 0.5f;
+        // The two bounds on the exponent, both 1.0 at their "do nothing in
+        // this direction" end. They are USER-FACING on purpose: Target
+        // reaches the picture only through the exponent, so whatever clamps
+        // the exponent decides where Target stops working -- and a clamp the
+        // user can neither see nor reach is exactly what cost a session on
+        // 2026-09-08. max_lift 4.0 gives an exponent floor of 0.25 (the same
+        // floor Adaptive Brightness's AB_DYN_GAMMA_MIN allows at max_gain
+        // 4.0), which keeps Target live on a realistic dark frame.
+        float max_lift = 4.0f;     // 1.0..4.0; exponent floor = 1 / max_lift
+        // 1.5, not 4.0, by default: a darkening exponent crushes shadows by
+        // nature and this operator has no shadow cap to hold them up (that
+        // is Adaptive Brightness's min_gain, which does not exist here), so
+        // the shipped default stops where Adaptive Brightness's GAMMA_MAX
+        // stops. A user who wants a harder darken can have it.
+        float max_darken = 1.5f;   // 1.0..4.0; exponent ceiling = max_darken
+        float strength = 1.0f;     // 0.0..1.0 dry/wet mix
+        // The SAME local operator Adaptive Brightness uses (the measure
+        // pass's 16x16 map, ab_local_shift), shifting the median each
+        // pixel's exponent is fitted to. Defaults to 0, unlike Adaptive
+        // Brightness's 0.5: this effect's whole identity is the cheap,
+        // purely global exponent, so that is what it ships as; the local
+        // path costs four texture fetches and a pow per pixel and is opted
+        // into. See shader-effects.md.
+        float local_strength = 0.0f;   // 0.0..1.0
+    };
+
     struct ReshadeSettings
     {
         ReshadeSaturationSettings saturation;
         ReshadeVibrancySettings vibrancy;
         ReshadePreSharpenSettings pre_sharpen;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
+        ReshadeAdaptiveGammaSettings adaptive_gamma;
         ReshadeShadowLiftSettings shadow_lift;
     };
 

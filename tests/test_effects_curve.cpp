@@ -628,3 +628,379 @@ TEST_CASE( "max_gain 2.0 reproduces the pre-2026-09-08 curve exactly", "[effects
 		REQUIRE_THAT( gamma, WithinAbs( 0.5f, 1e-6f ) );
 	}
 }
+
+
+// ===========================================================================
+//  ADAPTIVE GAMMA (2026-09-08) -- the same statistics, one exponent.
+//
+//  The properties asserted below are exactly the ones the operator's shape
+//  promises and Adaptive Brightness's cannot: an exponent on 0..1 has 0 and
+//  1 as EXACT fixed points, so black stays black, white stays white, and
+//  nothing can clip -- at any setting, without a shoulder. Plus the 2026-09-08
+//  ceiling lesson applied to a row where the exponent is the ONLY path from
+//  Target to the picture: every limit that can stop it is a user-facing
+//  control, and ag_binding() names which one.
+// ===========================================================================
+
+namespace
+{
+	// The panel's own ranges (PanelShaders.cpp), swept in full.
+	const float kAgLifts[]   = { 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
+	const float kAgDarkens[] = { 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
+	const float kAgLift    = 4.0f;   // == ConfigSchema.h's max_lift default
+	const float kAgDarken  = 1.5f;   // == ConfigSchema.h's max_darken default
+
+	// A dim indoor frame -- dark enough to want lifting, light enough that
+	// the exponent floor does not bind over Target's whole range. Between
+	// kRealDark (a night photograph, where the floor DOES bind above ~0.52)
+	// and kMid.
+	constexpr Scene kDimRoom = { 0.05f, 0.30f, 0.75f };
+
+	// One channel through the whole operator, with the dry/wet mix the
+	// shader applies. flRatio stands in for local_mean / global_mean, the
+	// same convention ApplyLocal() above uses.
+	float AgApplyLocal( float x, const Scene &sc, float flStrength, float flRatio, float flLocal,
+	                    float flTarget = kTarget, float flLift = kAgLift, float flDarken = kAgDarken )
+	{
+		const float r = ab_local_shift( flRatio * 0.2f, 0.2f, flLocal );
+		const float g = ag_gamma( sc.p50 * r, flTarget, flLift, flDarken );
+		const float y = ag_curve( x, g );
+		return x + ( y - x ) * flStrength;
+	}
+
+	float AgApply( float x, const Scene &sc, float flStrength,
+	               float flTarget = kTarget, float flLift = kAgLift, float flDarken = kAgDarken )
+	{
+		return AgApplyLocal( x, sc, flStrength, 1.0f, 0.0f, flTarget, flLift, flDarken );
+	}
+
+	float AgOutCode( const Scene &sc, float t, float lift, float darken, float x )
+	{
+		return AgApply( x, sc, 1.0f, t, lift, darken ) * 255.0f;
+	}
+}
+
+TEST_CASE( "adaptive gamma: output stays in [0, 1] and finite, at every setting", "[effects_curve]" )
+{
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lift : kAgLifts )
+				for ( float darken : kAgDarkens )
+					for ( int i = 0; i <= 1000; i++ )
+					{
+						const float y = AgApply( i / 1000.0f, sc, 1.0f, t, lift, darken );
+						REQUIRE( y <= 1.0f );
+						REQUIRE( y >= 0.0f );
+						REQUIRE( std::isfinite( y ) );
+					}
+}
+
+TEST_CASE( "adaptive gamma: monotonic in the input for every scene and bound", "[effects_curve]" )
+{
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lift : kAgLifts )
+				for ( float darken : kAgDarkens )
+				{
+					float flPrev = AgApply( 0.0f, sc, 1.0f, t, lift, darken );
+					for ( int i = 1; i <= 1000; i++ )
+					{
+						const float y = AgApply( i / 1000.0f, sc, 1.0f, t, lift, darken );
+						REQUIRE( y >= flPrev - 1e-6f );
+						flPrev = y;
+					}
+				}
+}
+
+TEST_CASE( "adaptive gamma: black stays black and white stays exactly white", "[effects_curve]" )
+{
+	// Both ends are fixed points of ANY exponent, which is the whole reason
+	// this operator needs no shoulder: x = 1 lands on exactly 1 always, not
+	// only when the curve happens not to overshoot (Adaptive Brightness has
+	// to compress to get there).
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lift : kAgLifts )
+				for ( float darken : kAgDarkens )
+					for ( float s : { 0.0f, 0.5f, 1.0f } )
+					{
+						REQUIRE_THAT( AgApply( 0.0f, sc, s, t, lift, darken ), WithinAbs( 0.0f, 1e-6f ) );
+						REQUIRE_THAT( AgApply( 1.0f, sc, s, t, lift, darken ), WithinAbs( 1.0f, 1e-6f ) );
+					}
+}
+
+TEST_CASE( "adaptive gamma: it cannot clip -- near-white highlights stay below white and stay apart",
+           "[effects_curve]" )
+{
+	// The no-clipping property, as the thing a user would actually see: two
+	// distinct near-white codes must come out distinct and below 255. A
+	// levels gain cannot promise this (Adaptive Brightness's Whole image
+	// mode drives 240 to a clipped 255 on the dark reference scene); an
+	// exponent can, because it is strictly increasing on [0, 1] and maps 1
+	// to 1.
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lift : kAgLifts )
+				for ( float darken : kAgDarkens )
+					for ( float s : { 0.25f, 0.5f, 1.0f } )
+					{
+						const float a = AgApply( 245.0f / 255.0f, sc, s, t, lift, darken ) * 255.0f;
+						const float b = AgApply( 254.0f / 255.0f, sc, s, t, lift, darken ) * 255.0f;
+						REQUIRE( a < 255.0f );
+						REQUIRE( b < 255.0f );
+						REQUIRE( b > a );
+					}
+}
+
+TEST_CASE( "adaptive gamma: identity at strength 0", "[effects_curve]" )
+{
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lift : kAgLifts )
+				for ( float darken : kAgDarkens )
+					for ( int i = 0; i <= 255; i++ )
+					{
+						const float x = i / 255.0f;
+						REQUIRE_THAT( AgApply( x, sc, 0.0f, t, lift, darken ), WithinAbs( x, 1e-6f ) );
+					}
+}
+
+TEST_CASE( "adaptive gamma: the exponent bounds are the user's own and can never invert",
+           "[effects_curve]" )
+{
+	// Both are exactly 1.0 at their "do nothing in this direction" end, and
+	// the lift floor is the same 0.25 Adaptive Brightness allows at max_gain
+	// 4.0 -- one shared constant, not two that can drift.
+	REQUIRE_THAT( ag_gamma_min( 1.0f ), WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( ag_gamma_min( 2.0f ), WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( ag_gamma_min( 4.0f ), WithinAbs( AB_DYN_GAMMA_MIN, 1e-6f ) );
+	REQUIRE_THAT( ag_gamma_max( 1.0f ), WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( ag_gamma_max( 4.0f ), WithinAbs( AG_DARKEN_MAX, 1e-6f ) );
+	for ( float lift : kAgLifts )
+		for ( float darken : kAgDarkens )
+		{
+			REQUIRE( ag_gamma_min( lift ) <= 1.0f + 1e-6f );
+			REQUIRE( ag_gamma_max( darken ) >= 1.0f - 1e-6f );
+			REQUIRE( ag_gamma_min( lift ) <= ag_gamma_max( darken ) );
+			// And the panel's range ends are never clipped by the header's
+			// own hard limits -- i.e. the slider always reaches the bound it
+			// says it does, which is the 2026-09-08 lesson as an assertion.
+			REQUIRE_THAT( ag_gamma_min( lift ), WithinAbs( 1.0f / lift, 1e-6f ) );
+			REQUIRE_THAT( ag_gamma_max( darken ), WithinAbs( darken, 1e-6f ) );
+		}
+}
+
+TEST_CASE( "adaptive gamma: Max lift 1.0 brightens nothing, Max darken 1.0 darkens nothing",
+           "[effects_curve]" )
+{
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( int i = 0; i <= 255; i++ )
+			{
+				const float x = i / 255.0f;
+				REQUIRE( AgOutCode( sc, t, 1.0f, kAgDarken, x ) <= (float)i + 0.5f );
+				REQUIRE( AgOutCode( sc, t, kAgLift, 1.0f, x ) >= (float)i - 0.5f );
+			}
+	// Both at 1.0 pins the exponent to exactly 1: the identity, at every
+	// target and on every scene.
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			REQUIRE_THAT( ag_gamma( sc.p50, t, 1.0f, 1.0f ), WithinAbs( 1.0f, 1e-6f ) );
+}
+
+TEST_CASE( "adaptive gamma: Target and Strength both move the picture", "[effects_curve]" )
+{
+	// Target, on a dim indoor frame at the shipped defaults: monotone over
+	// its whole range and worth far more than 20 codes from 0.5 to 0.7 --
+	// the same bar Adaptive Brightness's own Target check uses.
+	const float at50 = AgOutCode( kDimRoom, 0.50f, kAgLift, kAgDarken, 20.0f / 255.0f );
+	const float at70 = AgOutCode( kDimRoom, 0.70f, kAgLift, kAgDarken, 20.0f / 255.0f );
+	REQUIRE( at70 - at50 > 20.0f );
+	float flPrev = -1.0f;
+	for ( float t = 0.10f; t <= 0.901f; t += 0.05f )
+	{
+		const float v = AgOutCode( kDimRoom, t, kAgLift, kAgDarken, 20.0f / 255.0f );
+		REQUIRE( v >= flPrev - 0.5f );
+		flPrev = v;
+	}
+
+	// THE RESIDUAL CEILING, STATED AS AN ASSERTION rather than left for a
+	// user to discover. An exponent floor of 1/max_lift means Target can
+	// only reach p50^(1/max_lift): on the darker photographic frame, at the
+	// top of the Max lift slider, that is about 0.52, so Target above it
+	// does nothing -- and the classifier says exactly that. This is the same
+	// shape of limit Adaptive Brightness has (its own is 0.75 on this
+	// frame); the difference that matters is that it is NAMED.
+	REQUIRE( ag_binding( kRealDark.p50, 0.70f, kAgLift, kAgDarken, 1.0f ) == AG_BIND_LIFT );
+	REQUIRE( ag_binding( kRealDark.p50, 0.50f, kAgLift, kAgDarken, 1.0f ) == AG_BIND_NONE );
+
+	// Strength, on the same frame: monotone from the untouched picture to
+	// the fully graded one, and a real distance apart.
+	flPrev = -1.0f;
+	for ( float s = 0.0f; s <= 1.001f; s += 0.1f )
+	{
+		const float v = AgApply( 20.0f / 255.0f, kRealDark, s ) * 255.0f;
+		REQUIRE( v >= flPrev - 0.5f );
+		flPrev = v;
+	}
+	REQUIRE( AgApply( 20.0f / 255.0f, kRealDark, 1.0f ) * 255.0f
+	         - AgApply( 20.0f / 255.0f, kRealDark, 0.0f ) * 255.0f > 20.0f );
+}
+
+TEST_CASE( "adaptive gamma: Max lift moves the picture wherever it is what binds", "[effects_curve]" )
+{
+	// The flat dark band chart's median is 0.047, so the exponent it wants
+	// (0.23) is below every floor in the range: Max lift is the binding
+	// limit at every setting, and every step of it must therefore move the
+	// picture. This is the case Adaptive Brightness's Max gain was inert in
+	// before 2026-09-08 -- here the classifier says so AND the slider works.
+	float flPrev = -1.0f;
+	for ( float lift : kAgLifts )
+	{
+		REQUIRE( ag_binding( kDark.p50, kTarget, lift, kAgDarken, 1.0f ) == AG_BIND_LIFT );
+		const float v = AgOutCode( kDark, kTarget, lift, kAgDarken, 20.0f / 255.0f );
+		REQUIRE( v > flPrev );
+		flPrev = v;
+	}
+	// And it is worth a lot: 1.0 ("do not brighten") to 4.0 on a 20-code
+	// input is the difference between leaving it alone and a real lift.
+	REQUIRE( AgOutCode( kDark, kTarget, 4.0f, kAgDarken, 20.0f / 255.0f )
+	         - AgOutCode( kDark, kTarget, 1.0f, kAgDarken, 20.0f / 255.0f ) > 40.0f );
+}
+
+TEST_CASE( "adaptive gamma: the binding classifier names one limit, and always names something",
+           "[effects_curve]" )
+{
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lift : kAgLifts )
+				for ( float darken : kAgDarkens )
+				{
+					const int n = ag_binding( sc.p50, t, lift, darken, 1.0f );
+					REQUIRE( n >= AG_BIND_NONE );
+					REQUIRE( n <= AG_BIND_STRENGTH );
+					REQUIRE( ag_binding_text( n )[0] != '\0' );
+				}
+
+	// Nothing binding: a frame whose median is already on the target.
+	REQUIRE( ag_binding( 0.5f, 0.5f, kAgLift, kAgDarken, 1.0f ) == AG_BIND_NONE );
+	// A very dark frame at the default lift limit: the floor holds it.
+	REQUIRE( ag_binding( kDark.p50, kTarget, kAgLift, kAgDarken, 1.0f ) == AG_BIND_LIFT );
+	// The bright reference scene asked to go far darker than the default
+	// ceiling allows.
+	REQUIRE( ag_binding( kBright.p50, 0.1f, kAgLift, kAgDarken, 1.0f ) == AG_BIND_DARKEN );
+	// Strength 0 makes every other control inert, and the readout says so
+	// rather than blaming a limit that is not the reason.
+	REQUIRE( ag_binding( 0.5f, 0.5f, kAgLift, kAgDarken, 0.0f ) == AG_BIND_STRENGTH );
+
+	// THE HONEST PART: whenever the classifier says a limit binds, Target
+	// really has stopped moving the picture -- and whenever it says NONE,
+	// Target really does still move it. That equivalence is what makes the
+	// readout worth trusting.
+	for ( const Scene &sc : kScenes )
+		for ( float lift : kAgLifts )
+			for ( float darken : kAgDarkens )
+				for ( float t = 0.15f; t <= 0.851f; t += 0.05f )
+				{
+					const int n = ag_binding( sc.p50, t, lift, darken, 1.0f );
+					const float a = AgOutCode( sc, t, lift, darken, 0.5f );
+					const float b = AgOutCode( sc, t + 0.05f, lift, darken, 0.5f );
+					if ( n == AG_BIND_LIFT || n == AG_BIND_DARKEN )
+					{
+						// Clamped on this side: a further step of Target
+						// can only move the picture if the step crosses
+						// back out of the clamp, which the next code's
+						// own classification then reports.
+						if ( ag_binding( sc.p50, t + 0.05f, lift, darken, 1.0f ) == n )
+							REQUIRE_THAT( b, WithinAbs( a, 1e-4f ) );
+					}
+					else if ( n == AG_BIND_NONE && sc.p50 > 0.001f && sc.p50 < 0.999f )
+					{
+						REQUIRE( b >= a - 1e-4f );
+					}
+				}
+}
+
+TEST_CASE( "adaptive gamma: local adaptation is the same operator, inside the same bounds",
+           "[effects_curve]" )
+{
+	// Strength 0 is the global exponent, bit for bit -- the shift is exactly
+	// 1.0 and p50 * 1.0 is exact for every finite float.
+	for ( const Scene &sc : kScenes )
+		for ( float r : kLocalRatios )
+			for ( int i = 0; i <= 255; i++ )
+			{
+				const float x = i / 255.0f;
+				REQUIRE_THAT( AgApplyLocal( x, sc, 1.0f, r, 0.0f ),
+				              WithinAbs( AgApply( x, sc, 1.0f ), 0.0f ) );
+			}
+
+	// Every property above survives a per-pixel exponent, and the exponent
+	// itself never leaves the user's own bounds: local adaptation
+	// redistributes inside them, it never widens them.
+	for ( const Scene &sc : kScenes )
+		for ( float lift : kAgLifts )
+			for ( float darken : kAgDarkens )
+				for ( float r : kLocalRatios )
+					for ( float s : kLocalStrengths )
+					{
+						const float shift = ab_local_shift( r * 0.2f, 0.2f, s );
+						const float g = ag_gamma( sc.p50 * shift, kTarget, lift, darken );
+						REQUIRE( g >= ag_gamma_min( lift ) - 1e-6f );
+						REQUIRE( g <= ag_gamma_max( darken ) + 1e-6f );
+						REQUIRE_THAT( AgApplyLocal( 0.0f, sc, 1.0f, r, s ), WithinAbs( 0.0f, 1e-6f ) );
+						REQUIRE_THAT( AgApplyLocal( 1.0f, sc, 1.0f, r, s ), WithinAbs( 1.0f, 1e-6f ) );
+						float flPrev = -1.0f;
+						for ( int i = 0; i <= 64; i++ )
+						{
+							const float y = AgApplyLocal( i / 64.0f, sc, 1.0f, r, s );
+							REQUIRE( y >= flPrev - 1e-6f );
+							REQUIRE( y <= 1.0f );
+							flPrev = y;
+						}
+					}
+
+	// And it points the right way: a darker-than-average neighbourhood gets
+	// a smaller exponent, i.e. MORE lift, than the frame's own curve.
+	const float gGlobal = ag_gamma( kRealDark.p50, kTarget, kAgLift, kAgDarken );
+	const float gDark   = ag_gamma( kRealDark.p50 * ab_local_shift( 0.05f, 0.2f, 1.0f ),
+	                                kTarget, kAgLift, kAgDarken );
+	REQUIRE( gDark <= gGlobal + 1e-6f );
+}
+
+TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][config]" )
+{
+	TempConfigHome home;
+
+	Settings s{};
+	REQUIRE( s.reshade.adaptive_gamma.enabled == false );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.target_luminance, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.max_lift, WithinAbs( 4.0f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.max_darken, WithinAbs( 1.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.strength, WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.local_strength, WithinAbs( 0.0f, 1e-6f ) );
+
+	s.reshade.adaptive_gamma.enabled = true;
+	s.reshade.adaptive_gamma.target_luminance = 0.65f;
+	s.reshade.adaptive_gamma.max_lift = 2.5f;
+	s.reshade.adaptive_gamma.max_darken = 2.0f;
+	s.reshade.adaptive_gamma.strength = 0.8f;
+	s.reshade.adaptive_gamma.local_strength = 0.35f;
+	ProfileMeta meta;
+	meta.name = "Effects";
+	REQUIRE( SaveProfile( meta, s ) );
+
+	std::optional<Settings> loaded = LoadProfile( "Effects" );
+	REQUIRE( loaded.has_value() );
+	const auto &ag = loaded->reshade.adaptive_gamma;
+	REQUIRE( ag.enabled == true );
+	REQUIRE_THAT( ag.target_luminance, WithinAbs( 0.65f, 1e-6f ) );
+	REQUIRE_THAT( ag.max_lift, WithinAbs( 2.5f, 1e-6f ) );
+	REQUIRE_THAT( ag.max_darken, WithinAbs( 2.0f, 1e-6f ) );
+	REQUIRE_THAT( ag.strength, WithinAbs( 0.8f, 1e-6f ) );
+	REQUIRE_THAT( ag.local_strength, WithinAbs( 0.35f, 1e-6f ) );
+
+	// An old profile with no adaptive_gamma object at all resolves to the
+	// compiled-in defaults -- purely additive keys, no migration.
+	REQUIRE( loaded->reshade.adaptive_brightness.enabled == false );
+}

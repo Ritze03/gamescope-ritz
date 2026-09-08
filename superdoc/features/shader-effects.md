@@ -1,7 +1,8 @@
-# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness
+# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness, Adaptive Gamma
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
-five independent effects. Since 2026-09-05 they are **one native compute pre-pass compiled
+six effects — five independent, plus **Adaptive Gamma** (new 2026-09-08), which is
+mutually exclusive with Adaptive Brightness and with nothing else. Since 2026-09-05 they are **one native compute pre-pass compiled
 into the binary at build time** — `src/shaders/cs_effects_layer0.comp`, dispatched from
 `vulkan_composite()` (`src/rendervulkan.cpp`) on the base/game layer at source resolution
 before any scaling. They used to be gated passes inside a runtime-compiled ReShade file,
@@ -160,7 +161,7 @@ grades its pixels.
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<7` Adaptive Gamma (added 2026-09-08), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
 | `float u_saturation` | 0..3, 1 neutral (renamed from `u_vibrancy` 2026-09-08 — same meaning, see below) |
 | `float u_vibrancy` | 0..2, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
 | `float u_shadowLift` | 0..1, 0 neutral |
@@ -168,6 +169,7 @@ grades its pixels.
 | `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six original parameters, straight from config (both modes read all six — see the Dynamic section for what each means there) |
 | `float u_abDt` | seconds since the previous effects dispatch, host-measured and clamped (see Adaptive Brightness) |
 | `float u_abLocal` | Local adaptation, 0..1. **Masked to 0 by the host in Whole image mode** (`EffectsPushData_t`'s constructor) rather than in the shader, so the uniform says exactly what the frame did — which is what `effects_ab_log` prints |
+| `float u_agTarget, u_agMaxLift, u_agMaxDarken, u_agStrength, u_agLocal` | Adaptive Gamma's five parameters (added 2026-09-08). **All masked to their neutral values by the host whenever Adaptive Brightness is also on**, for the same "the uniform says what the frame did" reason as `u_abLocal` — see [the exclusion](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive) |
 
 Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
 struct written by `PanelShaders.cpp` and by `main.cpp`'s startup config apply, read by
@@ -176,8 +178,10 @@ the steamcompmgr thread, same discipline as `g_upscaleFilterSharpness`. `Why the
 apply:` under E2 nothing in `PanelShaders.cpp` runs per frame, so without it saved effects
 would only switch on the first time the Shaders area was drawn.
 
-`NativeEffectsState_t::AnyEnabled()` counts all five switches, Adaptive Brightness
+`NativeEffectsState_t::AnyEnabled()` counts all six switches, both adaptive effects
 included, so any one of them forces the full composite the pre-pass needs.
+`NeedsStatistics()` is the narrower question — "does anything read the measure pass's
+history" — and is true for Adaptive Brightness and Adaptive Gamma alone.
 
 ## Backends
 
@@ -186,12 +190,15 @@ Every backend already forced a full composite for `!g_reshade_effect.empty()`
 `vulkan_native_effects_active()`; without that, direct scanout would skip the pre-pass and
 the effects would silently vanish whenever the base layer could be scanned out directly.
 
-## The five effects
+## The six effects
 
 Shadow Control, Saturation and Pre-Sharpen's maths is ported 1:1 from the retired `.fx`;
-Vibrancy is new (2026-09-08). Applied **per tap, in this order**: Shadow Control →
-Saturation → Vibrancy → (Pre-Sharpen) → Adaptive Brightness (Whole image's gain, or
-Dynamic's curve) → `saturate`. `Why Vibrancy right after Saturation:` both are colour-
+Vibrancy and Adaptive Gamma are new (2026-09-08). Applied **per tap, in this order**:
+Shadow Control → Saturation → Vibrancy → (Pre-Sharpen) → Adaptive Brightness (Whole
+image's gain, or Dynamic's curve) → Adaptive Gamma (one exponent) → `saturate`. The last
+two can never both run — see
+[Adaptive Gamma vs Adaptive Brightness](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive)
+— so the order between them is a formality the shader states rather than a behaviour. `Why Vibrancy right after Saturation:` both are colour-
 intensity effects and belong next to each other in the pipeline the same way they sit
 next to each other in the panel (see the Vibrancy section's own note on Effects-band
 ordering); Vibrancy reads the *already-saturated* colour Saturation just produced, the
@@ -1516,6 +1523,296 @@ Brightness flag masked off and the measure dispatch skipped.
 After the per-pixel dispatch slot 1 is unbound, so the FSR/NIS/blit dispatches that follow
 (which bind layers `0..n-1`) do not carry a stray history descriptor on single-layer frames.
 
+### Adaptive Gamma (`image.shaders.adaptive_gamma`) — NEW 2026-09-08
+
+The user's request, verbatim: *"Make something similar, but make it gamma based. Call it
+adaptive gamma."* — "similar" meaning
+[Adaptive Brightness](#adaptive-brightness-imageshadersadaptive_brightness) above.
+
+Built as the **exponent-only** operator that description implies: the same measured
+statistics, and the whole effect is *one exponent*. No levels gain, no white point, no
+shoulder, no shadow cap. It is not a cheaper Adaptive Brightness — it is a different
+thing that a gain cannot be, for a reason that is arithmetic rather than taste (below).
+
+**Config**: `ReshadeAdaptiveGammaSettings` (`ConfigSchema.h`) — `enabled` (false),
+`target_luminance` (0.5), `max_lift` (4.0), `max_darken` (1.5), `strength` (1.0),
+`local_strength` (0.0). Purely additive keys, so `kCurrentSchemaVersion` stays **4** and
+there is no migration: an old profile has none of them and takes these compiled-in
+defaults, exactly the shape [Shadow Control](#shadow-control-imageshadersshadow_lift) was
+added in.
+
+#### The formula
+
+`src/shaders/effects_curve.h`'s `ag_*` block — the same header the GLSL pass and
+`tests/test_effects_curve.cpp` both compile, so the properties below are asserted on the
+code the GPU runs. Encoded space in, encoded out, per channel:
+
+```
+gmin = clamp(1 / max_lift,  0.25, 1.0)          // the user's own bounds
+gmax = clamp(max_darken,    1.0,  4.0)
+r    = ab_local_shift(local_mean, mean, local_strength)   // exactly 1.0 when off
+g    = clamp( ln(target) / ln(p50 * r), gmin, gmax )
+out  = mix(x, x^g, strength)
+```
+
+`g` is the exponent that lands the smoothed **median** on Target. Median, not mean, for
+the reason Dynamic mode gives: a few bright windows in a dark room must not read as "the
+room is lit".
+
+#### Why an exponent alone is a different effect
+
+For `x` in `[0, 1]` and any `g > 0`, `x^g` is again in `[0, 1]`, with **0 and 1 as exact
+fixed points** and strictly increasing in between. Three consequences, and each is why a
+piece of Adaptive Brightness's machinery is *absent* here rather than merely omitted:
+
+- **It cannot clip, at any setting** — so it needs no shoulder, no knee and no white
+  point. Adaptive Brightness needs all three because its levels gain multiplies and can
+  push a value past 1.0; there is nothing here to protect the highlights *from*. Measured:
+  on the dark reference scene the 240 highlights read **251** at the defaults and never go
+  above 251 at any setting tried, while Whole-image mode drives that same region to a
+  **clipped 255**. A near-white value stays near-white *and still distinct from white*.
+- **It changes contrast, not exposure.** A gain moves every value by the same factor; an
+  exponent moves the mid-tones a lot and the two ends not at all. So the picture's black
+  and white points are untouched by construction and only the shape between them adapts.
+  That is a different look — flatter blacks stay black, which on a dark game is either
+  exactly what you want (no milky lifted blacks) or not enough (the deepest shadows are
+  never raised off the floor). The doc's job is to say which it is, not to pretend the
+  trade does not exist.
+- **It is cheaper**: one `log` and one `pow` per channel, no gain, no shoulder branch, and
+  with Local adaptation off the exponent is a frame constant.
+
+#### The bounds are the user's own — and why that is the whole point
+
+Target reaches the picture **only** through this exponent. So whatever clamps the exponent
+also decides where Target stops working — and the most expensive lesson of 2026-09-08 was
+that [a clamped slider looks exactly like a working one](#the-ceiling-target-brightness-and-max-gain-went-inert-2026-09-08).
+With a fixed `[0.5, 1.5]` — the constants Adaptive Brightness used to carry — Target on
+this row would go inert above `sqrt(p50)` with nothing on screen saying so and no control
+to reach past it. That is the exact bug, rebuilt.
+
+So the two bounds are **params**, `Max lift` and `Max darken`, and the header's hard
+clamps are the panel's own `Range()` ends (`AG_LIFT_MAX` / `AG_DARKEN_MAX`, both 4.0) —
+asserted equal in `test_effects_curve.cpp`, so a slider always reaches the bound it says
+it does and there is no second, hidden ceiling underneath it.
+
+- **Max lift** `L` sets the exponent **floor** to `1 / L`. `1.0` means "do not brighten",
+  exactly (pinned by test at every target on every scene). The default **4.0** gives a
+  floor of 0.25 — the same floor `AB_DYN_GAMMA_MIN` allows Adaptive Brightness at
+  `max_gain` 4.0, one shared constant with one justification: below a fourth-root lift a
+  single code of near-black lands above 90 and sensor noise is the whole picture.
+- **Max darken** `D` **is** the exponent ceiling. `1.0` means "do not darken", exactly.
+  The default is **1.5**, not 4.0: a darkening exponent crushes shadows by nature and this
+  operator has no shadow cap to hold them up (that is Adaptive Brightness's `min_gain`,
+  which has no counterpart here), so the shipped default stops where Adaptive Brightness's
+  own `GAMMA_MAX` stops. Measured cost of going past it, bright reference scene: at
+  `max_darken` 1.5 the 30-value shadows read **10**; at 3.0 they read **0**. Ordering is
+  kept either way (the gate asserts it), but detail is genuinely gone — available on
+  purpose, not a default.
+
+**The residual ceiling, stated plainly.** Because the exponent is the only mechanism, the
+highest target it can reach on a frame is **`p50 ^ (1 / max_lift)`**. On the textured dark
+scene (`p50` = 0.076) with Max lift at the top of its slider that is **0.52**, so Target
+above about 0.5 does nothing there — measured: 0.2 / 0.35 / 0.5 move the frame mean
+**55.1 → 91.3 → 128.0**, and 0.7 produces the same picture as 0.5 with the readout saying
+`Max lift -- Target brightness does no more here`. Adaptive Brightness gets further on the
+same frame because its gain carries what the exponent cannot; that is the honest price of
+"only an exponent", and it is *named* rather than silent.
+
+#### Which limit is binding
+
+`ag_binding()` / `ag_binding_text()`, the same two-part pattern
+[`ab_dyn_binding()`](#which-limit-is-binding-2026-09-08) uses — codes in the shared header
+because it compiles as GLSL too, wording on the C++ side — so the panel and the
+`effects_ab_log` trace print one string and cannot drift:
+
+| code | shown as |
+| --- | --- |
+| `AG_BIND_NONE` | `none -- the mid-tones are on Target brightness` |
+| `AG_BIND_LIFT` | `Max lift -- Target brightness does no more here` |
+| `AG_BIND_DARKEN` | `Max darken -- Target brightness does no more here` |
+| `AG_BIND_STRENGTH` | `Strength is 0 -- nothing is applied` |
+
+Every control this row owns can be inert, and each of those states has a code: Target when
+the exponent is clamped (LIFT / DARKEN); Max lift and Max darken when the target is
+already reached (NONE — "nothing is stopping the picture", so raising the limit that is
+not binding buys nothing); Strength at 0, which makes *all* of them inert and is the one
+case a limit code would blame the wrong control for. `Why a fourth code rather than
+reusing Adaptive Brightness's six:` the wordings name controls, and this row has no "Max
+gain" or "Min gain" — pointing a user at a slider that is not on the page is precisely the
+near-miss the readout exists to prevent. `test_effects_curve.cpp` asserts the equivalence
+the readout claims: whenever it says a limit binds, a further step of Target really does
+change nothing, and whenever it says NONE, Target really does still move the picture.
+
+The line appears in both places Adaptive Brightness's does — appended to every
+`effects_ab_log` line as `bind=<n> (<text>)`, and as the Shaders area's **Pipeline** facts
+row `adaptive limit`. That row now serves **both** adaptive effects and never has to
+choose between them, because they cannot both be on.
+
+#### Local adaptation — included, and it is the same operator
+
+`local_strength` reuses [`ab_local_shift()`](#local-adaptation-local_strength-2026-09-07--one-curve-per-neighbourhood)
+verbatim: the measure pass's 16×16 map, the `r = clamp(local/mean, 0.25, 4)` deviation
+clamp, the `r^strength` geometric blend, the hand-rolled bilinear sample. Only what the
+shifted median feeds changes — `ag_gamma(p50 * r_eff, …)` instead of the gain/gamma pair.
+
+`Why include it at all, on an effect whose selling point is simplicity:` the map costs the
+measure pass **nothing** (it is the per-thread tap sums it already computes), the apply
+pass pays four cached `texelFetch`es *only above 0*, and without it a half-dark /
+half-bright frame is unfixable by any single exponent — the same failure that made local
+adaptation necessary for Adaptive Brightness. Reusing the existing operator means one
+definition of "how bright is this part of the frame", one halo argument, and one set of
+measurements; inventing a second would be two things to keep true.
+
+`Why the default is 0.0, where Adaptive Brightness defaults to 0.5:` this effect's whole
+identity is the cheap, purely global exponent, so that is what it should be out of the
+box — and it makes the shipped default exactly the operator the user asked for, "only an
+exponent", with no per-pixel work at all. Local adaptation is available and opted into.
+The consequence, stated rather than buried: **on a mixed-brightness frame Adaptive Gamma
+does nothing about the mix until you raise this slider**, and on an evenly-lit frame the
+slider does nothing at all (every cell's ratio is 1 by construction — a no-op that is
+correct, not broken, and is why it is not classified as a "binding limit" above).
+
+Bounded exactly as Adaptive Brightness's is: `ag_gamma` clamps *after* the shift, so a
+locally-adapted pixel can never leave `[1/max_lift, max_darken]` — local adaptation
+redistributes inside the user's bounds and never widens them. Asserted over every
+scene × bound × ratio × strength combination on the CPU.
+
+#### Adaptive Gamma vs Adaptive Brightness: mutually exclusive
+
+**Decided and enforced, not left undefined.** Both effects aim the frame's mid-tones at a
+Target, and both read the **same** statistics — the measure pass grades its taps but knows
+nothing about either effect, so its `p50` is always the *pre-effect* median. Run together,
+the second operator fits its curve to a median the first has already moved and the
+correction is applied **twice**. On the textured dark scene that is not "both, a bit": the
+frame Adaptive Brightness settles at a mean of ~129 would be taken to about **212** by
+Adaptive Gamma's exponent (0.269) on top of it — a washed-out picture no setting of either
+effect fixes.
+
+So turning either switch on turns the other off (`PanelShaders.cpp`'s
+`SetAdaptiveBrightnessEnabled` / `SetAdaptiveGammaEnabled`), and `EffectsPushData_t` drops
+Adaptive Gamma's flag and neutralises its uniforms whenever Adaptive Brightness is also
+on, so a **hand-edited config** with both cannot produce the double correction either
+(Adaptive Brightness wins: it is the older, richer effect and the one every existing
+config, capture and doc points at).
+
+`Why a radio and not a greyed-out switch:` greying Adaptive Gamma out while Adaptive
+Brightness is on leaves a config that somehow has both **stuck** — neither row toggleable
+— and greying only one of the pair is an asymmetry a user cannot infer. Turning one on
+turning the other off is a familiar interaction and it is *visible*: both switches sit in
+the same Effects band, so the other one goes dark in the same frame. `Why not compose them
+and document the result:` the composed result is not a look anybody would choose, and
+"both on does something surprising" is exactly the class of undefined behaviour this
+project keeps having to go back and fix.
+
+Measured (`effects-regression.sh`'s `ag-exclusive`, driven through `overlay_e2_set`, i.e.
+through the same setter a click uses): with Adaptive Gamma on, turning Adaptive Brightness
+on leaves `image.shaders.adaptive_gamma` reading **off**; turning Adaptive Gamma back on
+leaves `image.shaders.adaptive_brightness` reading **off**. The three captures either side
+of those flips read frame means **128.2 | 129.1 | 128.3** — one effect's picture or the
+other's, and back again, never the ~212 a compounded frame would be.
+
+#### The Inspector's before/after preview
+
+The row declares the **same** `PreviewKind::AdaptiveBrightness` strip, deliberately: the
+two effects are mutually exclusive, so only one of them can ever be the thing being
+previewed, and `EffectPreview.cpp` picks whichever is on. That made extending it cheap —
+`EffectPreviewMath.h`'s `Params` gained `bGamma`, `flMaxLift` and `flMaxDarken` and
+`ApplyPixel()` gained one branch that calls `ag_gamma` / `ag_curve`; nothing in
+`Shell.cpp`, `Registry.h` or the capture pass changed, and the 256-entry LUT fast path
+applies unchanged (Adaptive Gamma's exponent is a frame constant whenever Local adaptation
+is off, so `IsUniform()` is true and a re-grade is ~45 µs rather than ~2 ms). The
+placeholder sentence for "switched off" now names both effects.
+
+#### Measured (desktop, headless, `scripts/effects-regression.sh`, 2026-09-08)
+
+Same recipe as everything above (private headless sway, nested `gamescope --backend
+wayland`, `gamescopectl screenshot "<path> 4"`, `tests/effects_scene_client.c` as the
+game). Adaptive Gamma alone, every other effect off, defaults unless stated. Captures:
+`build-release/verify-shots/adaptive-gamma-2026-09-08/`.
+
+| dark scene / region (input) | Off | Whole image | Dynamic | **Adaptive Gamma** |
+| --- | --- | --- | --- | --- |
+| bands 5 / 8 / 12 / 16 / 20 | 5/8/12/16/20 | 20/32/48/64/80 | 88/107/127/143/157 | **95 / 107 / 119 / 128 / 135** |
+| 240 highlights | 240 | **255 — clipped** | 254 | **251** |
+| pure black | 0 | 0 | 0 | **0** |
+
+The dark scene is where the difference in *shape* is visible rather than argued: Adaptive
+Gamma's five bands span 40 codes where Dynamic's span 69 — the exponent flattens the very
+bottom of the range as it lifts it, because a toe that steep has less slope left over —
+while the highlights come out two counts lower than Dynamic's and nine below white. Whole
+image is the blown-out case both exist to avoid.
+
+| setting (dark scene) | bands | 240 highlights |
+| --- | --- | --- |
+| defaults (target 0.5, lift 4.0, darken 1.5, strength 1.0, local 0) | 95 / 107 / 119 / 128 / 135 | 251 |
+| Target 0.3 | 53 / 64 / 75 / 84 / 92 | 249 |
+| Target 0.9 | 95 / 107 / 119 / 128 / 135 (**identical** — `Max lift` binds) | 251 |
+| Strength 0.5 | 50 / 58 / 65 / 72 / 77 | 246 |
+| Max lift 1.5 | 19 / 25 / 33 / 40 / 47 | 245 |
+| Max darken 4.0 | 95 / 107 / 119 / 128 / 135 (identical — slack on a dark scene) | 251 |
+| Local adaptation 1.0 | 95 / 107 / 119 / 128 / 135 (identical — this frame is evenly lit) | 251 |
+
+| sweep | frame mean |
+| --- | --- |
+| Max lift 1.5 → 2 → 3 → 4 (dark chart, where it binds at every setting) | 34.7 → 55.7 → 90.9 → **116.9** |
+| Target 0.2 → 0.35 → 0.5 (textured dark, continuous histogram) | 55.1 → 91.3 → **128.0** |
+| Strength 0 → 0.5 → 1.0 (textured dark) | 25.7 → 77.0 → **128.4** |
+| Max darken 1.0 → 1.5 → 2 → 3 (bright scene, where Target is pinned) | 221.2 → 209.3 → 199.1 → **181.5** |
+
+| bright / mid scene | Off | **Adaptive Gamma** |
+| --- | --- | --- |
+| bright: bands 200 / 215 / 230 / 245 / 255 | 200/215/230/245/255 | **177 / 197 / 218 / 240 / 255** |
+| bright: 30 shadows | 30 | **10** (and **0** at Max darken 3.0) |
+| mid: 26 / 77 / 128 / 179 / 230 | identical | **25 / 76 / 127 / 178 / 230** (near-identity, worst 1) |
+
+**No clipping, proved rather than asserted.** `effects-regression.sh`'s `noclip-*` checks
+sample seven settings on the dark scene and two on the bright one and require, every time:
+each band at least 2 counts above the one below it (nothing compressed into its
+neighbour), the 240 highlights below 254 *and* above every band, pure black ≤ 2, and — on
+the bright scene, whose top band already **is** 255 — the 245 band strictly below it. All
+PASS. Note the one place the property genuinely does not extend: the **shadow** side has no
+cap, so a high `Max darken` can take a deep shadow to 0 (the bright scene's 30-rectangles
+at `max_darken` 3.0). Ordering survives; detail does not. That is a documented trade of
+having no `min_gain`, not a clip, and the gate asserts the ordering rather than pretending
+the darkening is free.
+
+**Stability, to the standard the [2026-09-07 pulse fix](#the-pulse-rank-cuts-on-a-bimodal-histogram-2026-09-07)
+set.** `ag-stability-static` / `ag-stability-pan`, 300 frames each off the same
+`effects_ab_log` readback, watching the **exponent** (this effect's entire state) where the
+Adaptive Brightness checks watch the gain:
+
+| | raw p98 p2p | smoothed p98 p2p | exponent p2p | output pixel p2p |
+| --- | --- | --- | --- | --- |
+| still frame, Local 0 % | **0** | 0.015 codes | 0.00006 | **0** |
+| still frame, Local 100 % | **0** | 0.000 codes | 0.000000 | **0** |
+| panning (`--periodic`), Local 0 % | 11.3 codes | 0.59 codes | 0.00009 | 147 (the probe pixel moves with the texture) |
+
+A still frame is exactly constant — peak-to-peak zero on the raw measurement and on the
+output pixel — and the panning case's exponent moves by nine hundred-thousandths, three
+orders of magnitude below what the pulse looked like. Nothing here is new machinery: the
+estimator and the EMA are shared with Adaptive Brightness, which is why a regression in
+either fails both effects' checks at once.
+
+**The settings audit.** `scripts/settings-audit.sh` covers all six new rows in all
+three routing situations (400 settings, 300 passed, 0 failed, 100 not covered). It took
+one change to the audit itself, recorded here rather than buried: the first run reported
+three FAILs, one per situation, all of them the same thing — setting
+`image.shaders.adaptive_gamma` on also writes `reshade.adaptive_brightness.enabled`,
+which the audit's "nothing else moved" rule correctly flags as a collateral write. That
+write **is** the exclusion working, so it was declared in `scripts/settings_audit.py`'s
+existing `SIBLING_KEYS` table ("a row whose own write legitimately moves a second key" —
+the mechanism the Resolution rows' locked aspect ratio already uses), in both directions.
+`Why declare rather than redesign:` the alternative that avoids the cross-write is greying
+the switch, which is the shape rejected above; and an audit that reports the same
+intentional write as a bug on every future run trains people to ignore it.
+
+**Row count and the parameter budget.** The Effects band went from 5 switch rows to
+**6**. Adaptive Gamma owns **5** params (Strength, Target brightness, Max lift, Max
+darken, Local adaptation) against `kParamBudget`'s 8 — comfortably inside it, and
+deliberately: it has fewer knobs because it has fewer mechanisms (no gain to bound, no
+shadow cap, no mode). Adaptive Brightness is still the only row in the registry above two
+params, and the budget was **not** raised for this change.
+
 ## The settings-panel budget
 
 Each row may own at most **eight** `Param`s before `Registry.cpp` aborts registration —
@@ -1524,7 +1821,9 @@ raised from six 2026-09-06 (request #17, see the
 for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below). See
 `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
 Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Adaptive Brightness 8 (zero
-headroom), Shadow Control 1.
+headroom), Adaptive Gamma 5 (new 2026-09-08), Shadow Control 1. **The budget was not
+raised again** for Adaptive Gamma and did not need to be — see that effect's own section
+for why five params is its honest count rather than a squeeze.
 
 **The second raise, 7 → 8 (2026-09-07), and the debt it books.** The note left after the
 first raise said the next param was the signal to **promote** Adaptive Brightness to its own
@@ -1593,6 +1892,8 @@ about. `scripts/effects-regression.sh` drives it for its per-frame checks
   Budget raised to 7.
 - `scripts/effects-regression.sh` — the headless measurement gate for Adaptive
   Brightness's both modes, and (2026-09-08) the `colors` scene pinning Saturation and
-  Vibrancy against their closed-form formulas.
+  Vibrancy against their closed-form formulas plus the `ag-*` / `noclip-*` checks pinning
+  Adaptive Gamma's sliders, its no-clipping property, its stability and the exclusion
+  with Adaptive Brightness.
 - `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed;
   and the Local adaptation item — the split-scene, halo and gain-sweep evidence.

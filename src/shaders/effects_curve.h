@@ -317,6 +317,134 @@ EC_FUNC float ab_dyn_curve( float x, float gain, float gamma )
 	return min( y, 1.0f );
 }
 
+// ===========================================================================
+//  ADAPTIVE GAMMA (2026-09-08) -- the same statistics, one exponent, nothing
+//  else. The user's request, verbatim: *"Make something similar, but make it
+//  gamma based. Call it adaptive gamma."*
+// ===========================================================================
+//
+// The whole operator, per channel, on the SAME smoothed statistics the
+// measure pass already produces for Adaptive Brightness (there is no second
+// measurement path -- see cs_effects_measure.comp):
+//
+//   gmin = clamp(1 / max_lift, 0.25, 1.0)          // the user's own bounds
+//   gmax = clamp(max_darken, 1.0, 4.0)
+//   r    = ab_local_shift(local_mean, mean, local_strength)   // 1.0 when off
+//   g    = clamp( ln(target) / ln(p50 * r), gmin, gmax )
+//   out  = mix(x, x^g, strength)
+//
+// `Why an exponent alone is a different effect and not a cheaper Adaptive
+// Brightness:` for x in [0, 1] and any g > 0, x^g is again in [0, 1], with
+// 0 and 1 as EXACT fixed points. So this operator
+//
+//   * cannot clip, ever, at any setting -- which is why it needs no
+//     shoulder, no white point and no knee. Adaptive Brightness needs all
+//     three because its levels gain multiplies and can push a value past
+//     1.0; nothing here can. A near-white highlight comes out near-white and
+//     STILL DISTINCT from white, rather than compressed by a shoulder or
+//     clamped flat;
+//   * changes CONTRAST rather than exposure. A gain moves every value by the
+//     same factor; an exponent moves the mid-tones a lot and the ends not at
+//     all, so the picture's black and white points are untouched by
+//     construction and only the shape between them adapts. That is a
+//     different look, deliberately, not a worse one;
+//   * is cheaper: one log and one pow per channel, no gain, no shoulder
+//     branch, and (with Local adaptation off) no per-pixel work at all
+//     beyond the pow -- g is a frame constant.
+//
+// `Why the bounds are the user's, not two more constants:` this is the whole
+// lesson of the 2026-09-08 ceiling (see the long note above). Target reaches
+// the picture ONLY through this exponent, so whatever clamps the exponent
+// also decides where Target stops working -- and a clamped slider looks
+// exactly like a working one. With a fixed [0.5, 1.5] the way Adaptive
+// Brightness had, Target would go inert on a dark frame at about
+// sqrt(p50) and the user would have no way to see it or to reach past it.
+// Making the two bounds the row's own params (`Max lift`, `Max darken`)
+// means the limit that is binding is always a control the user can move,
+// and ag_binding() below names which one it is. Both are 1.0 at their "do
+// nothing in this direction" end, so max_lift 1.0 really does not brighten
+// and max_darken 1.0 really does not darken -- exactly the property Adaptive
+// Brightness's gamma bounds were given on 2026-09-08 for the same reason.
+//
+// `Why the hard clamps are still there:` they are the panel's own range
+// ends, not a second, hidden ceiling -- AG_LIFT_MAX / AG_DARKEN_MAX are the
+// numbers PanelShaders.cpp's Range() uses, so neither can bind before the
+// slider does. The 0.25 floor is shared with Adaptive Brightness's
+// AB_DYN_GAMMA_MIN and carries the same justification (a fourth-root lift;
+// below it a single code of near-black lands above 90 and sensor noise is
+// the whole picture).
+const float AG_LIFT_MAX   = 4.0f;   // == PanelShaders.cpp's Max lift Range() top
+const float AG_DARKEN_MAX = 4.0f;   // == PanelShaders.cpp's Max darken Range() top
+
+EC_FUNC float ag_gamma_min( float maxLift )
+{
+	// Deliberately the same expression ab_gamma_min() uses, against the same
+	// shared constant: "how far may it brighten" has one honest floor in this
+	// pipeline, and two copies of it would drift.
+	return clamp( 1.0f / max( maxLift, 0.001f ), AB_DYN_GAMMA_MIN, 1.0f );
+}
+
+EC_FUNC float ag_gamma_max( float maxDarken )
+{
+	return clamp( maxDarken, 1.0f, AG_DARKEN_MAX );
+}
+
+// The exponent that lands the smoothed median on the target, bounded by the
+// user's own two limits. Median, not mean, for the reason ab_dyn_gamma()
+// gives: a few bright windows in a dark room must not read as "the room is
+// lit". `p50` is already SHIFTED by ab_local_shift() when Local adaptation
+// is on -- the caller does that, exactly as the Adaptive Brightness path
+// does, so the two operators share one local-adaptation definition.
+EC_FUNC float ag_gamma( float p50, float target, float maxLift, float maxDarken )
+{
+	float m = clamp( p50, 0.001f, 0.999f );
+	float t = clamp( target, 0.01f, 0.99f );
+	return clamp( log( t ) / log( m ), ag_gamma_min( maxLift ), ag_gamma_max( maxDarken ) );
+}
+
+// One channel. The clamp on the way in is what makes "never above 1.0" a
+// property of the arithmetic rather than of the caller: x in [0, 1] and
+// g > 0 give x^g in [0, 1], with x = 0 and x = 1 exact fixed points, so
+// there is nothing to clip and no shoulder to fit.
+EC_FUNC float ag_curve( float x, float gamma )
+{
+	return pow( clamp( x, 0.0f, 1.0f ), gamma );
+}
+
+// WHICH LIMIT IS BINDING, Adaptive Gamma's own. Same contract as
+// ab_dyn_binding() above -- codes here because this header is compiled as
+// GLSL too, wording in ag_binding_text() on the C++ side -- so the panel's
+// Diagnostics fact and the `effects_ab_log` trace cannot say different
+// things about one frame. Every control this row owns can be inert, and
+// each of those states has a code:
+//   * Target, once the exponent is clamped              -> LIFT / DARKEN
+//   * Max lift / Max darken, once the target is reached -> NONE (nothing is
+//     stopping the picture; raising the limit that is not binding buys
+//     nothing, which is what NONE's wording says)
+//   * Strength at 0, which makes ALL of them inert      -> STRENGTH
+// Local adaptation's own no-op case (a uniform frame, where every cell's
+// ratio is 1 by construction) is not a limit and is not classified here;
+// it is documented on the param itself and visible in `effects_ab_log`'s
+// lmin/lmax spread.
+const int AG_BIND_NONE     = 0;
+const int AG_BIND_LIFT     = 1;   // exponent at its floor  -- Max lift binds
+const int AG_BIND_DARKEN   = 2;   // exponent at its ceiling -- Max darken binds
+const int AG_BIND_STRENGTH = 3;   // Strength 0: nothing is applied at all
+
+EC_FUNC int ag_binding( float p50, float target, float maxLift, float maxDarken, float strength )
+{
+	if ( strength <= 0.0f )
+		return AG_BIND_STRENGTH;
+	float m   = clamp( p50, 0.001f, 0.999f );
+	float t   = clamp( target, 0.01f, 0.99f );
+	float raw = log( t ) / log( m );
+	if ( raw <= ag_gamma_min( maxLift ) )
+		return AG_BIND_LIFT;
+	if ( raw >= ag_gamma_max( maxDarken ) )
+		return AG_BIND_DARKEN;
+	return AG_BIND_NONE;
+}
+
 #ifdef __cplusplus
 // The one wording of ab_dyn_binding()'s codes: the settings panel's
 // Diagnostics fact and the `effects_ab_log` trace both print this, so the
@@ -331,6 +459,21 @@ inline const char *ab_binding_text( int nBinding )
 		case AB_BIND_LIFT:     return "Max gain -- Target brightness does no more here";
 		case AB_BIND_DARKEN:   return "the darkening limit -- Target brightness does no more here";
 		case AB_BIND_SHADOW:   return "Min gain, holding the shadows up";
+		default:               return "none -- the mid-tones are on Target brightness";
+	}
+}
+
+// The same, for Adaptive Gamma's ag_binding() codes. A separate wording
+// because the controls have different names: naming "Max gain" on a row
+// that has no such slider is exactly the kind of near-miss that sent a
+// user hunting for a control that was not there.
+inline const char *ag_binding_text( int nBinding )
+{
+	switch ( nBinding )
+	{
+		case AG_BIND_LIFT:     return "Max lift -- Target brightness does no more here";
+		case AG_BIND_DARKEN:   return "Max darken -- Target brightness does no more here";
+		case AG_BIND_STRENGTH: return "Strength is 0 -- nothing is applied";
 		default:               return "none -- the mid-tones are on Target brightness";
 	}
 }
