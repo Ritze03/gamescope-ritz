@@ -50,6 +50,7 @@
 #include "Overlay/PanelChangelog.h"
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
+#include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
 #include "Overlay/FpsDisplay.h"
@@ -451,6 +452,32 @@ namespace gamescope::ui::shell
 		// spelled out separately because it means the opposite thing.
 		std::atomic<bool> s_bPaletteCloseRequested{ false };
 
+		// Phase 4 of the friends list: "put the shell on this rail area",
+		// asked for from the wlserver thread. A bare const char* because every
+		// caller passes a string literal (Shell.h's RequestArea contract) --
+		// storing a std::string would need a lock the hotkey path must not
+		// take, and a hash would lose the ability to say WHICH area was asked
+		// for when it does not exist.
+		std::atomic<const char *> s_pszAreaRequested{ nullptr };
+		// What is on screen, republished every frame, so wlserver can turn its
+		// binding into a toggle without reading s_sSelectedArea across threads.
+		std::atomic<uint64_t> s_ulActiveAreaHash{ 0 };
+
+		uint64_t AreaHash( std::string_view sv )
+		{
+			// FNV-1a. A hash rather than the string because this crosses a
+			// thread boundary every frame and a collision costs one wrong
+			// toggle, never a wrong action -- the area id is still matched
+			// exactly by FindArea() on the thread that owns it.
+			uint64_t ul = 1469598103934665603ull;
+			for ( char c : sv )
+			{
+				ul ^= (uint64_t)(unsigned char)c;
+				ul *= 1099511628211ull;
+			}
+			return ul;
+		}
+
 		// The overlay's layer went down at some point. See
 		// shell::NotifyOverlayHidden(). It exists ONLY to catch a hide and a
 		// re-open that both land between two frames, which the visible flag
@@ -802,6 +829,13 @@ namespace gamescope::ui::shell
 			// buried after the section's more specific tabs. Phase A: just
 			// the clipboard sync switch. See PanelSystem.h.
 			PanelSystem_RegisterArea( reg );
+			// The friends you can join (2026-09-08). Next to the Steam chat
+			// rows PanelSystem.cpp registers, because they are the two halves
+			// of "gamescope talking to Steam" and a user looking for one will
+			// look where the other is -- but its own file and its own area,
+			// because this one has a background poller, a list and a join
+			// action, and none of that belongs beside a clipboard switch.
+			PanelFriends_RegisterArea( reg );
 			// Mixer follows, ahead of Monitor and Log -- SPEC §8.1's
 			// amendment is explicit that the fold keeps the original
 			// relative order.
@@ -6592,6 +6626,18 @@ namespace gamescope::ui::shell
 		s_bLauncherRequested.store( true, std::memory_order_release );
 	}
 
+	void RequestArea( const char *pszAreaId )
+	{
+		s_pszAreaRequested.store( pszAreaId, std::memory_order_release );
+	}
+
+	bool AreaActive( const char *pszAreaId )
+	{
+		if ( !pszAreaId )
+			return false;
+		return s_ulActiveAreaHash.load( std::memory_order_acquire ) == AreaHash( pszAreaId );
+	}
+
 	// D31: DERIVED, and that is what lets the mode survive a close.
 	//
 	// The flash fix stops every closing path from clearing s_bLauncherOnly,
@@ -6875,6 +6921,24 @@ namespace gamescope::ui::shell
 			OpenPalette();
 			s_bLauncherOnly = true;
 		}
+		// Phase 4's friends binding. Selected through Select( nullptr ) --
+		// never by assigning s_sSelectedEntry by hand -- for exactly the
+		// reason SelectById() gives: a selection made any other way skips the
+		// Inspector reset and the destructive-action disarm, and every test
+		// driven through it would then be testing a state the product never
+		// reaches. An area that does not exist is ignored rather than
+		// clearing the selection.
+		if ( const char *pszArea = s_pszAreaRequested.exchange( nullptr, std::memory_order_acq_rel ) )
+		{
+			if ( Reg().FindArea( pszArea ) )
+			{
+				s_sSelectedArea = pszArea;
+				Select( nullptr );
+				s_eFocusRegion = Region::Sheet;
+				s_bPaletteOpen = false;
+				s_bLauncherOnly = false;
+			}
+		}
 		// Issue #88: the combo's close half. Mutually exclusive with the two
 		// opens above by construction -- wlserver only ever sends one of the
 		// three per press, deciding open-vs-close itself from PaletteActive()
@@ -7066,6 +7130,11 @@ namespace gamescope::ui::shell
 		// string and survives (Registry.h's Rebuilds()).
 		Reg().SyncDynamicAreas();
 
+		// The friends panel's deferred join. Run here, once per frame on the
+		// thread that owns the overlay, because a click (or a ConCommand on
+		// the console thread) only RECORDS a join -- see PanelFriends.h.
+		PanelFriends_Tick();
+
 		// An armed destructive action disarms itself. Left armed, it would
 		// be one press from deleting a file for as long as the overlay
 		// stayed open -- which is exactly the "never delete a config
@@ -7076,6 +7145,15 @@ namespace gamescope::ui::shell
 			s_sArmedAction.clear();
 
 		const Area *pArea = SelectedArea();
+
+		// Publish what is on screen for wlserver's toggle (Shell.h's
+		// AreaActive). Doing it every frame is what keeps it true after a rail
+		// click, a palette jump, or an area going unavailable under the
+		// selection -- SelectedArea() above is the one function that resolves
+		// all three.
+		s_ulActiveAreaHash.store( AreaHash( pArea ? std::string_view( pArea->Id() ) : std::string_view{} ),
+			std::memory_order_release );
+
 		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0,
 		                             AreaIsUnsplittable( pArea ) );
 

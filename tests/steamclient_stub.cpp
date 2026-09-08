@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 using HSteamPipe = int32_t;
 using HSteamUser = int32_t;
@@ -168,6 +169,11 @@ namespace
 
 	bool FriendsGetFriendGamePlayed( ISteamFriends *, uint64_t ulSteamId, FriendGameInfo_t *pInfo )
 	{
+		// "idle": everybody is signed in and nobody is playing anything. The
+		// panel's "nobody's in a game right now" empty state.
+		if ( ModeIs( "idle" ) )
+			return false;
+
 		const FakeFriend *p = Find( ulSteamId );
 		if ( !p || !p->bInGame || !pInfo )
 			return false;
@@ -175,7 +181,11 @@ namespace
 		pInfo->m_unGameIP     = 0;
 		pInfo->m_usGamePort   = 0;
 		pInfo->m_usQueryPort  = 0;
-		pInfo->m_steamIDLobby = p->ulLobbyId;
+		// "busy": everybody is playing and NOBODY is in a joinable lobby --
+		// which is also exactly what a wrong m_steamIDLobby offset would look
+		// like, and is why the panel lists them anyway rather than showing an
+		// empty box (superdoc/features/steam-friends.md).
+		pInfo->m_steamIDLobby = ModeIs( "busy" ) ? 0 : p->ulLobbyId;
 		return true;
 	}
 
@@ -197,6 +207,15 @@ namespace
 	// ---------------------------------------------------------------------
 	HSteamPipe ClientCreateSteamPipe( ISteamClient * )
 	{
+		// "slow" stands for the failure mode a background poller exists for:
+		// a Steam client that takes seconds to answer (swapping, starting up,
+		// or wedged). The compositor must not notice. The sleep is here, at
+		// the FIRST call of a snapshot, so it covers the whole round trip.
+		if ( ModeIs( "slow" ) )
+		{
+			struct timespec ts = { 1, 500 * 1000 * 1000 };   // 1.5 s
+			nanosleep( &ts, nullptr );
+		}
 		return ModeIs( "nopipe" ) ? 0 : 7;   // "Steam isn't running"
 	}
 

@@ -102,6 +102,7 @@
 // same STEAM_OVERLAY/STEAM_INPUT_FOCUS properties this file already reads.
 // Ticked from the main loop, torn down in steamcompmgr_exit().
 #include "SteamCompanion.h"
+#include "SteamFriends.h"
 #include "Overlay/CursorArt.h"
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
@@ -7620,6 +7621,9 @@ steamcompmgr_exit(void)
 	// window nobody can see on a display that no longer exists. First of the
 	// three guarantees it cannot -- see SteamCompanion.cpp's Shutdown().
 	gamescope::companion::Shutdown();
+	// The friends poller's worker thread. Joined here so it can never
+	// outlive the statics it publishes into -- see SteamFriends.cpp.
+	gamescope::steamfriends::Shutdown();
 
 	g_ImageWaiter.Shutdown();
 

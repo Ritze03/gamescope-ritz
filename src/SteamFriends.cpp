@@ -11,17 +11,24 @@
 #include "convar.h"
 #include "log.hpp"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <dlfcn.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <pthread.h>
 #include <unistd.h>
 
 static LogScope friends_log( "friends" );
@@ -225,6 +232,13 @@ namespace gamescope::steamfriends
 		Reason     g_eLastReason     = Reason::Ok;
 		bool       g_bReasonLogged   = false;
 		size_t     g_nLastJoinable   = 0;
+		size_t     g_nLastInGame     = 0;
+
+		// app id -> the game's name, or "" for "looked and did not find it".
+		// Filled on whichever thread called Snapshot(); the empty entry is
+		// what stops a friend playing something this machine does not have
+		// from re-reading the disk on every poll.
+		std::unordered_map<uint32_t, std::string> g_mapAppNames;
 
 		// The last `steam <url>` forwarder. It exits within a moment of being
 		// started, but gamescope is a subreaper, so somebody has to collect it:
@@ -342,6 +356,90 @@ namespace gamescope::steamfriends
 			return false;
 		}
 
+		// =====================================================================
+		//  The game's name
+		// =====================================================================
+		// ISteamFriends gives an app id and no name (SteamFriendsCmd.h's
+		// GameLabel comment). The name is read out of Steam's own
+		// appmanifest_<appid>.acf -- the file the client writes for every
+		// INSTALLED game -- and cached forever, including the "not found"
+		// answer, so a friend playing something this machine does not have
+		// costs one failed open() and never another.
+		//
+		// This runs on whichever thread called Snapshot(), which for the panel
+		// is the poller thread and never the frame path -- which is the whole
+		// reason a blocking file read is acceptable here at all.
+		std::string ReadWholeFile( const std::string &sPath, size_t nMaxBytes )
+		{
+			std::ifstream f( sPath, std::ios::binary );
+			if ( !f )
+				return {};
+			std::string s;
+			s.resize( nMaxBytes );
+			f.read( s.data(), (std::streamsize)nMaxBytes );
+			s.resize( (size_t)f.gcount() );
+			return s;
+		}
+
+		// Every steamapps/ directory Steam knows about: the default one, plus
+		// whatever libraryfolders.vdf lists (a second drive, an external disk).
+		const std::vector<std::string> &SteamAppsDirs()
+		{
+			static const std::vector<std::string> s_vecDirs = []
+			{
+				std::vector<std::string> vec;
+				const char *pszHome = getenv( "HOME" );
+				if ( !pszHome || !*pszHome )
+					return vec;
+
+				// GS_RITZ_STEAMAPPS lets a test point the lookup at a fixture
+				// directory, the same lever GS_RITZ_STEAMCLIENT is for the
+				// library. Colon-separated, like a PATH.
+				if ( const char *pszOverride = getenv( "GS_RITZ_STEAMAPPS" ); pszOverride && *pszOverride )
+				{
+					std::stringstream ss( pszOverride );
+					std::string sPart;
+					while ( std::getline( ss, sPart, ':' ) )
+						if ( !sPart.empty() )
+							vec.push_back( sPart );
+					return vec;
+				}
+
+				const std::string sRoot = std::string( pszHome ) + "/.steam/steam";
+				vec.push_back( sRoot + "/steamapps" );
+				for ( const std::string &sLib :
+				      LibraryPathsFromVdf( ReadWholeFile( sRoot + "/steamapps/libraryfolders.vdf", 64 * 1024 ) ) )
+				{
+					std::string sDir = sLib + "/steamapps";
+					if ( sDir != vec.front() )
+						vec.push_back( std::move( sDir ) );
+				}
+				return vec;
+			}();
+			return s_vecDirs;
+		}
+
+		// Caller must hold g_Mutex.
+		std::string AppNameFor( uint32_t uAppId )
+		{
+			if ( uAppId == 0 )
+				return {};
+			if ( auto it = g_mapAppNames.find( uAppId ); it != g_mapAppNames.end() )
+				return it->second;
+
+			std::string sName;
+			for ( const std::string &sDir : SteamAppsDirs() )
+			{
+				sName = AppNameFromManifest( ReadWholeFile(
+					sDir + "/appmanifest_" + std::to_string( (unsigned long long)uAppId ) + ".acf",
+					16 * 1024 ) );
+				if ( !sName.empty() )
+					break;
+			}
+			g_mapAppNames[ uAppId ] = sName;   // "" is cached too, on purpose
+			return sName;
+		}
+
 		void ReapJoinChild()
 		{
 			if ( g_nLastJoinPid <= 0 )
@@ -364,12 +462,13 @@ namespace gamescope::steamfriends
 	//
 	// EVERY EXIT FROM THIS FUNCTION IS AN EMPTY VECTOR PLUS ONE LOGGED REASON.
 	// There is no throw, no fatal path, and no blocking wait anywhere in it.
-	std::vector<JoinableFriend> Snapshot()
+	std::vector<Friend> Snapshot()
 	{
 		std::scoped_lock lock( g_Mutex );
 		ReapJoinChild();
 
 		g_nLastJoinable = 0;
+		g_nLastInGame   = 0;
 
 		if ( !EnsureLibrary() )
 			return {};
@@ -423,9 +522,9 @@ namespace gamescope::steamfriends
 			}
 		}
 
-		std::vector<JoinableFriend> vecOut;
+		std::vector<Friend> vecOut;
 		Reason eReason = Reason::NoInterface;
-		int nFriends = 0, nInGame = 0, nOddLobby = 0;
+		int nFriends = 0, nInGame = 0, nOddLobby = 0, nJoinable = 0;
 
 		if ( pFriends && pFriends->vt )
 		{
@@ -456,18 +555,26 @@ namespace gamescope::steamfriends
 					continue;
 				nInGame++;
 
-				if ( !IsJoinable( info.m_gameID, info.m_steamIDLobby, ulSteamId ) )
-					continue;
-
-				if ( !LooksLikeLobbyId( info.m_steamIDLobby ) )
-					nOddLobby++;
-
-				JoinableFriend f;
+				// EVERY friend in a game is kept, joinable or not -- phase 1
+				// kept only the joinable ones. See SteamFriendsCmd.h's
+				// Joinability comment for why that changed: with
+				// m_steamIDLobby's offset unproven, an empty joinable-only
+				// list and a broken read look identical.
+				Friend f;
 				f.uAppId    = AppIdFromGameId( info.m_gameID );
 				f.ulLobbyId = info.m_steamIDLobby;
 				f.ulSteamId = ulSteamId;
+				f.eJoinable = JoinabilityOf( info.m_gameID, info.m_steamIDLobby, ulSteamId );
 				if ( const char *pszName = pFriends->vt->GetFriendPersonaName( pFriends, ulSteamId ) )
 					f.sPersona = pszName;
+				f.sGame = GameLabel( f.uAppId, AppNameFor( f.uAppId ) );
+
+				if ( f.CanJoin() )
+				{
+					nJoinable++;
+					if ( !LooksLikeLobbyId( info.m_steamIDLobby ) )
+						nOddLobby++;
+				}
 
 				vecOut.push_back( std::move( f ) );
 			}
@@ -483,19 +590,20 @@ namespace gamescope::steamfriends
 		// line `log_friends debug` turns on when something needs diagnosing,
 		// and it is what the phase 1/2 live check read.
 		friends_log.debugf( "%d friends, %d in a game, %d joinable, %d with an odd lobby id (%.*s / %.*s)",
-			nFriends, nInGame, (int)vecOut.size(), nOddLobby,
+			nFriends, nInGame, nJoinable, nOddLobby,
 			(int)svClientVersion.size(), svClientVersion.data(),
 			(int)svFriendsVersion.size(), svFriendsVersion.data() );
 
 		SetReason( eReason );
-		g_nLastJoinable = vecOut.size();
+		g_nLastInGame   = vecOut.size();
+		g_nLastJoinable = (size_t)nJoinable;
 		return vecOut;
 	}
 
 	// =========================================================================
 	//  The join
 	// =========================================================================
-	bool Join( const JoinableFriend &friendToJoin, std::string *psError )
+	bool Join( const Friend &friendToJoin, std::string *psError )
 	{
 		auto Fail = [ & ]( std::string sWhy ) {
 			if ( psError ) *psError = std::move( sWhy );
@@ -550,18 +658,199 @@ namespace gamescope::steamfriends
 
 		if ( g_eLastReason != Reason::Ok )
 			return ReasonText( g_eLastReason );
-		if ( g_nLastJoinable == 0 )
-			return "nobody's in a joinable game.";
-		if ( g_nLastJoinable == 1 )
-			return "1 friend you can join.";
-		return std::to_string( g_nLastJoinable ) + " friends you can join.";
+		return StatusLine( g_nLastInGame, g_nLastJoinable );
 	}
 
 	// =========================================================================
-	//  The console surface -- phases 1 and 2's ONLY way in
+	//  The poller
 	// =========================================================================
-	// No hotkey and no panel yet; that is phases 3 and 4
-	// (superdoc/planning/steam-friends-join.md §7b).
+	// See SteamFriends.h's poller section for the contract. What is here is
+	// the mechanism, and it is deliberately the smallest one that keeps the
+	// promise: ONE thread, ONE published View, ONE condition variable.
+	//
+	// THE PROPERTY THAT MATTERS: nothing on the frame path ever waits for
+	// Steam. CurrentView() takes g_ViewMutex -- which is held only for the
+	// microseconds it takes to copy a vector of a handful of rows -- and never
+	// g_Mutex, which is the lock Snapshot() holds for the whole round trip to
+	// the Steam client. The two locks cannot be the same lock, or a wedged
+	// client would stall the caller of CurrentView() exactly as if the panel
+	// had called Snapshot() itself; that is the bug this split exists to make
+	// unrepresentable, and tests/test_steam_friends.cpp pins it with a stub
+	// that sleeps.
+	namespace
+	{
+		// Presence does not change faster than a human reads a list, and each
+		// poll is a round trip to another process.
+		constexpr auto kPollInterval  = std::chrono::seconds( 3 );
+		// How long after the last CurrentView() the worker keeps polling. One
+		// interval of slack, so a panel redrawn every frame never sees a gap
+		// and a closed panel stops the polling within a few seconds.
+		constexpr auto kInterestWindow = std::chrono::seconds( 8 );
+
+		std::mutex              g_ViewMutex;      // guards g_View ONLY
+		View                    g_View;
+		std::chrono::steady_clock::time_point g_tPolled{};
+
+		std::mutex              g_PollMutex;      // guards the three below
+		std::condition_variable g_PollCv;
+		bool                    g_bStop      = false;
+		bool                    g_bRefreshNow = false;
+		std::chrono::steady_clock::time_point g_tWanted{};
+
+		std::thread             g_Thread;
+		std::once_flag          g_OnceStart;
+
+		void PollOnce()
+		{
+			// Snapshot() takes g_Mutex; StatusText() takes it again after.
+			// Neither is g_ViewMutex, so the copy below is the only thing a
+			// CurrentView() caller can ever be behind.
+			std::vector<Friend> vec = Snapshot();
+			std::string sStatus = StatusText();
+
+			size_t nJoinable = 0;
+			for ( const Friend &f : vec )
+				if ( f.CanJoin() )
+					nJoinable++;
+
+			std::scoped_lock lock( g_ViewMutex );
+			g_View.vecFriends = std::move( vec );
+			g_View.sStatus    = std::move( sStatus );
+			g_View.nJoinable  = nJoinable;
+			g_View.bPolled    = true;
+			g_tPolled         = std::chrono::steady_clock::now();
+		}
+
+		void PollLoop()
+		{
+			pthread_setname_np( pthread_self(), "gs-friends" );
+			for ( ;; )
+			{
+				bool bPoll = false;
+				{
+					std::unique_lock lock( g_PollMutex );
+					// Sleep until: told to stop, told to refresh, or the
+					// interval elapsed while somebody is still looking.
+					g_PollCv.wait_for( lock, kPollInterval, []
+						{
+							return g_bStop || g_bRefreshNow;
+						} );
+					if ( g_bStop )
+						return;
+					const bool bWanted = std::chrono::steady_clock::now() - g_tWanted < kInterestWindow;
+					bPoll = g_bRefreshNow || bWanted;
+					g_bRefreshNow = false;
+
+					if ( !bPoll )
+					{
+						// Nobody is looking. Sleep indefinitely rather than
+						// spinning a Steam round trip every three seconds for
+						// a panel that is not on screen.
+						g_PollCv.wait( lock, []
+							{
+								return g_bStop || g_bRefreshNow ||
+								       std::chrono::steady_clock::now() - g_tWanted < kInterestWindow;
+							} );
+						if ( g_bStop )
+							return;
+						g_bRefreshNow = false;
+					}
+				}
+				PollOnce();
+			}
+		}
+
+		// Records the ask and starts the thread on the first one. `Why the
+		// thread is started lazily and never at boot:` dlopening Steam's 46 MB
+		// client library is the first thing a poll does, and a build whose
+		// friends panel is never opened must never pay for it (SteamFriends.h's
+		// first rule).
+		void ArmPoller()
+		{
+			{
+				std::scoped_lock lock( g_PollMutex );
+				g_tWanted = std::chrono::steady_clock::now();
+			}
+			std::call_once( g_OnceStart, []
+				{
+					// The FIRST poll happens at once rather than one interval
+					// later: a panel that opened to "asking Steam..." and then
+					// sat there for three seconds would read as broken.
+					{
+						std::scoped_lock lock( g_PollMutex );
+						g_bRefreshNow = true;
+					}
+					g_Thread = std::thread( PollLoop );
+				} );
+			g_PollCv.notify_all();
+		}
+	}
+
+	View CurrentView()
+	{
+		ArmPoller();
+
+		std::scoped_lock lock( g_ViewMutex );
+		View v = g_View;
+		if ( v.bPolled )
+		{
+			v.flAgeSec = std::chrono::duration<double>(
+				std::chrono::steady_clock::now() - g_tPolled ).count();
+		}
+		else
+		{
+			// Before the first poll finishes there is nothing true to say
+			// about Steam, so say what is actually happening instead of
+			// "nobody's in a game", which would be a guess presented as a fact.
+			v.sStatus = "asking Steam...";
+		}
+		return v;
+	}
+
+	void RequestRefresh()
+	{
+		ArmPoller();
+		{
+			std::scoped_lock lock( g_PollMutex );
+			g_bRefreshNow = true;
+		}
+		g_PollCv.notify_all();
+	}
+
+	// `Why this JOINS rather than detaches:` a detached worker would outlive
+	// the statics it writes into (g_View owns a vector), which is a crash at
+	// exit rather than a clean one. The cost is that a Steam that has stopped
+	// answering can delay gamescope's exit by up to one round trip -- an exit,
+	// never a frame, and the alternative is undefined behaviour.
+	void Shutdown()
+	{
+		{
+			std::scoped_lock lock( g_PollMutex );
+			g_bStop = true;
+		}
+		g_PollCv.notify_all();
+		if ( g_Thread.joinable() )
+			g_Thread.join();
+
+		// The stop flag is CLEARED again once the worker is gone, so this
+		// function leaves no trace in the process it ran in. That matters for
+		// exactly one caller -- tests/test_steam_friends.cpp forks children
+		// out of a parent that has already run this -- and a Shutdown() that
+		// permanently poisoned the flag would silently stop every forked
+		// child's poller from ever starting, which is a test that passes for
+		// the wrong reason. Nothing restarts here: g_OnceStart is still
+		// consumed, so a CurrentView() after a shutdown answers from the last
+		// published view and starts no thread.
+		std::scoped_lock lock( g_PollMutex );
+		g_bStop = false;
+	}
+
+	// =========================================================================
+	//  The console surface
+	// =========================================================================
+	// Phases 1 and 2's only way in, and still the way a headless check drives
+	// the feature without a screenshot. The panel (phase 3) and the hotkey
+	// (phase 4) are on top of the same two calls, not beside them.
 	namespace
 	{
 		// WHAT THIS PRINTS, AND WHAT IT DELIBERATELY DOES NOT.
@@ -578,14 +867,23 @@ namespace gamescope::steamfriends
 		// never has to see -- or retype -- an id to use the feature at all.
 		static ConCommand cc_friends_dump(
 			"friends_dump",
-			"List the friends you could join right now, by index. Prints counts and app ids "
-			"only -- never names, Steam IDs or lobby ids. Use friends_join <n> to act on a line.",
+			"List the friends who are in a game right now, by index, and which of them you can "
+			"join. Prints counts and app ids only -- never names, Steam IDs or lobby ids. Use "
+			"friends_join <n> to act on a line.",
 			[]( std::span<std::string_view> )
 			{
-				const std::vector<JoinableFriend> vec = Snapshot();
+				const std::vector<Friend> vec = Snapshot();
 				console_log.infof( "friends: %s", StatusText().c_str() );
 				for ( size_t i = 0; i < vec.size(); i++ )
-					console_log.infof( "  #%zu  appid %u", i, vec[ i ].uAppId );
+				{
+					// The joinable marker is what makes this listing readable
+					// now that it carries every in-game friend rather than only
+					// the joinable ones -- and the reason beside a row that is
+					// not joinable is the same sentence the panel prints.
+					console_log.infof( "  #%zu  appid %-8u %s", i, vec[ i ].uAppId,
+						vec[ i ].CanJoin() ? "joinable"
+							: std::string( JoinabilityText( vec[ i ].eJoinable ) ).c_str() );
+				}
 			} );
 
 		static ConCommand cc_friends_join(
@@ -606,7 +904,7 @@ namespace gamescope::steamfriends
 					return;
 				}
 
-				const std::vector<JoinableFriend> vec = Snapshot();
+				const std::vector<Friend> vec = Snapshot();
 				if ( *oIndex >= vec.size() )
 				{
 					console_log.errorf( "there is no #%u right now: %s", *oIndex, StatusText().c_str() );

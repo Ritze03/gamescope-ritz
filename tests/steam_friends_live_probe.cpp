@@ -323,7 +323,7 @@ int main( int argc, char **argv )
 			return diag::Run();
 	}
 
-	std::vector<JoinableFriend> vec;
+	std::vector<Friend> vec;
 	for ( int i = 0; i < nWatch; i++ )
 	{
 		if ( i )
@@ -331,17 +331,32 @@ int main( int argc, char **argv )
 		vec = Snapshot();
 	}
 
+	size_t nJoinable = 0;
+	for ( const Friend &f : vec )
+		if ( f.CanJoin() )
+			nJoinable++;
+
 	printf( "\nRESULT status: %s\n", StatusText().c_str() );
-	printf( "RESULT joinable rows: %zu\n", vec.size() );
+	// PHASE 3: Snapshot() returns everyone IN A GAME now, not only the
+	// joinable ones, so these are two numbers rather than one -- and
+	// "joinable rows" is still the line the planning doc's §8 step 1 asks the
+	// user to read.
+	printf( "RESULT in-game rows: %zu\n", vec.size() );
+	printf( "RESULT joinable rows: %zu\n", nJoinable );
 
 	int nBadSteamId = 0, nBadLobby = 0, nBadAppId = 0, nBadName = 0;
 
 	for ( size_t i = 0; i < vec.size(); i++ )
 	{
-		const JoinableFriend &f = vec[ i ];
+		const Friend &f = vec[ i ];
 
 		const bool bSteamIdOk = f.ulSteamId >= kIndividualMin && f.ulSteamId <= kIndividualMax;
-		const bool bLobbyOk   = f.ulLobbyId >= kChatMin && f.ulLobbyId <= kChatMax;
+		// Only a row that CLAIMS a lobby is range-checked. A friend simply
+		// not in a lobby has m_steamIDLobby == 0, which is outside the chat
+		// band and is not a fault -- counting it would make every ordinary
+		// run report FAIL.
+		const bool bLobbyOk   = !f.CanJoin() ||
+		                        ( f.ulLobbyId >= kChatMin && f.ulLobbyId <= kChatMax );
 		const bool bAppIdOk   = f.uAppId > 0 && f.uAppId < ( 1u << 24 );
 		const bool bNameOk    = LooksPrintable( f.sPersona );
 
@@ -350,11 +365,13 @@ int main( int argc, char **argv )
 		nBadAppId   += !bAppIdOk;
 		nBadName    += !bNameOk;
 
-		// App id only. The three verdicts are shape, not value.
-		printf( "  #%zu  appid %-8u steamid:%s  lobby:%s  persona:%s (%zu chars)\n",
+		// App id and the game's NAME -- a name Steam wrote into its own
+		// appmanifest on this machine, never anything a friend controls.
+		printf( "  #%zu  appid %-8u %-12s steamid:%s  lobby:%s  persona:%s (%zu chars)\n",
 			i, f.uAppId,
+			f.CanJoin() ? "JOINABLE" : "not joinable",
 			bSteamIdOk ? "individual-range OK" : "OUT OF RANGE",
-			bLobbyOk   ? "chat-range OK"       : "OUT OF RANGE",
+			f.CanJoin() ? ( bLobbyOk ? "chat-range OK" : "OUT OF RANGE" ) : "none",
 			bNameOk    ? "printable"           : "NOT PRINTABLE",
 			f.sPersona.size() );
 
@@ -362,7 +379,11 @@ int main( int argc, char **argv )
 		// NOTHING IS FIRED: this only proves the builder accepts real live
 		// values and produces the documented shape.
 		std::string sUrl, sWhy;
-		if ( BuildJoinUrl( f, &sUrl, &sWhy ) )
+		if ( !f.CanJoin() )
+		{
+			printf( "       no URL: %s\n", std::string( JoinabilityText( f.eJoinable ) ).c_str() );
+		}
+		else if ( BuildJoinUrl( f, &sUrl, &sWhy ) )
 		{
 			const size_t nThird = sUrl.find( '/', sizeof( "steam://joinlobby" ) );
 			printf( "       would build: %s/<%zu-digit lobby id>/<%zu-digit steamid64>  (NOT fired)\n",

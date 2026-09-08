@@ -26,10 +26,13 @@
 #include "SteamFriends.h"
 #include "SteamFriendsCmd.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+
+#include <time.h>
 
 #include <limits.h>
 #include <signal.h>
@@ -111,12 +114,104 @@ TEST_CASE( "joinable means a lobby id, on a real Steam app, from a real friend",
 	REQUIRE_FALSE( IsJoinable( 730, 555, 0 ) );
 }
 
+// PHASE 3: the predicate answers WHY, because the panel prints a reason beside
+// every row it cannot join. The order of the checks is part of the contract --
+// a friend in a non-Steam game with no lobby reads as "not a Steam game", the
+// more specific and more useful of the two true statements.
+TEST_CASE( "a row that cannot be joined carries the one reason why", "[steam_friends]" )
+{
+	REQUIRE( JoinabilityOf( 730, 555, 101 ) == Joinability::Yes );
+	REQUIRE( JoinabilityOf( 730, 0,   101 ) == Joinability::NoLobby );
+	REQUIRE( JoinabilityOf( 252490ull | ( 1ull << 24 ), 777, 102 ) == Joinability::NotASteamApp );
+	REQUIRE( JoinabilityOf( 252490ull | ( 1ull << 24 ), 0,   102 ) == Joinability::NotASteamApp );
+	REQUIRE( JoinabilityOf( 0,   888, 103 ) == Joinability::NoApp );
+	REQUIRE( JoinabilityOf( 730, 555, 0 )   == Joinability::NoSteamId );
+
+	// Every reason is a sentence fragment the panel can print, and the
+	// joinable case is EMPTY so a caller can print it unconditionally.
+	REQUIRE( JoinabilityText( Joinability::Yes ).empty() );
+	for ( Joinability e : { Joinability::NoLobby, Joinability::NotASteamApp,
+	                        Joinability::NoApp, Joinability::NoSteamId } )
+		REQUIRE_FALSE( JoinabilityText( e ).empty() );
+}
+
+// ===========================================================================
+//  The status line
+// ===========================================================================
+// The list carries two numbers now (in a game, joinable) and the empty states
+// have to be TELLABLE APART by a user -- "nobody is playing" and "everybody is
+// playing something you cannot join" are different facts and must not share a
+// sentence.
+TEST_CASE( "the status line tells the empty states apart", "[steam_friends]" )
+{
+	REQUIRE( StatusLine( 0, 0 ) == "nobody's in a game right now." );
+	REQUIRE( StatusLine( 3, 0 ) == "3 friends in a game, none you can join." );
+	REQUIRE( StatusLine( 1, 0 ) == "1 friend in a game, none you can join." );
+	REQUIRE( StatusLine( 1, 1 ) == "1 friend in a game, all joinable." );
+	REQUIRE( StatusLine( 5, 2 ) == "5 friends in a game, 2 you can join." );
+
+	// No two of them are the same string, which is the property that matters.
+	const std::vector<std::string> v = {
+		StatusLine( 0, 0 ), StatusLine( 3, 0 ), StatusLine( 1, 1 ), StatusLine( 5, 2 ) };
+	for ( size_t i = 0; i < v.size(); i++ )
+		for ( size_t j = i + 1; j < v.size(); j++ )
+			REQUIRE( v[ i ] != v[ j ] );
+}
+
+// ===========================================================================
+//  The game's name
+// ===========================================================================
+// ISteamFriends gives an app id and no name, so the panel reads Steam's own
+// appmanifest_<appid>.acf. These are the two minimal readers that do it.
+TEST_CASE( "a game's name is read out of its appmanifest", "[steam_friends]" )
+{
+	const std::string sAcf =
+		"\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n\t\"Universe\"\t\t\"1\"\n"
+		"\t\"name\"\t\t\"Counter-Strike 2\"\n\t\"StateFlags\"\t\t\"4\"\n}\n";
+	REQUIRE( AppNameFromManifest( sAcf ) == "Counter-Strike 2" );
+
+	// A file that is not a manifest, an empty file and a truncated one all
+	// answer "" rather than a fragment -- GameLabel() then prints the app id,
+	// which is always true.
+	REQUIRE( AppNameFromManifest( "" ).empty() );
+	REQUIRE( AppNameFromManifest( "\"AppState\"\n{\n\t\"appid\"\t\"730\"\n}" ).empty() );
+	REQUIRE( AppNameFromManifest( "\"name\"\t\"unterminated" ).empty() );
+
+	// A key that merely CONTAINS the name is not the name.
+	REQUIRE( AppNameFromManifest( "\"nameless\"\t\"no\"\n\t\"name\"\t\"yes\"" ) == "yes" );
+}
+
+TEST_CASE( "the extra Steam libraries are read out of libraryfolders.vdf", "[steam_friends]" )
+{
+	const std::string sVdf =
+		"\"libraryfolders\"\n{\n"
+		"\t\"0\"\n\t{\n\t\t\"path\"\t\t\"/home/mo/.steam/steam\"\n\t}\n"
+		"\t\"1\"\n\t{\n\t\t\"path\"\t\t\"/mnt/games/SteamLibrary\"\n\t}\n}\n";
+	const std::vector<std::string> v = LibraryPathsFromVdf( sVdf );
+	REQUIRE( v.size() == 2 );
+	REQUIRE( v[ 0 ] == "/home/mo/.steam/steam" );
+	REQUIRE( v[ 1 ] == "/mnt/games/SteamLibrary" );
+
+	REQUIRE( LibraryPathsFromVdf( "" ).empty() );
+	REQUIRE( LibraryPathsFromVdf( "\"path\"\t\"\"" ).empty() );   // an empty path is not a library
+}
+
+TEST_CASE( "a game with no manifest still gets a label", "[steam_friends]" )
+{
+	REQUIRE( GameLabel( 730, "Counter-Strike 2" ) == "Counter-Strike 2" );
+	REQUIRE( GameLabel( 730, "" ) == "App 730" );
+	REQUIRE( GameLabel( 0, "" ) == "a game Steam has no id for" );
+	// Never empty: the panel draws this into a column and a blank would read
+	// as a bug rather than as an unknown.
+	REQUIRE_FALSE( GameLabel( 12345, "" ).empty() );
+}
+
 // ===========================================================================
 //  The URL
 // ===========================================================================
 TEST_CASE( "the join URL is steam://joinlobby/appid/lobby/steamid", "[steam_friends]" )
 {
-	JoinableFriend f;
+	Friend f;
 	f.sPersona  = "someone";
 	f.uAppId    = 730;
 	f.ulLobbyId = 109775241234567890ull;
@@ -129,7 +224,7 @@ TEST_CASE( "the join URL is steam://joinlobby/appid/lobby/steamid", "[steam_frie
 
 	// 64-bit ids must survive intact -- a lobby id truncated to 32 bits is a
 	// join request for somebody else's lobby.
-	JoinableFriend big;
+	Friend big;
 	big.uAppId    = 4294967295u;
 	big.ulLobbyId = 18446744073709551615ull;
 	big.ulSteamId = 18446744073709551614ull;
@@ -139,7 +234,7 @@ TEST_CASE( "the join URL is steam://joinlobby/appid/lobby/steamid", "[steam_frie
 
 TEST_CASE( "a lobby id of 0 is refused, not formatted", "[steam_friends]" )
 {
-	JoinableFriend f;
+	Friend f;
 	f.uAppId    = 730;
 	f.ulLobbyId = 0;
 	f.ulSteamId = 76561198000000000ull;
@@ -163,7 +258,7 @@ TEST_CASE( "a lobby id of 0 is refused, not formatted", "[steam_friends]" )
 
 // This is the case the whole struct-shaped signature exists for.
 //
-// A persona name is the ONE field in a JoinableFriend that a remote person
+// A persona name is the ONE field in a Friend that a remote person
 // chooses, and it is the only string in the row. If it could reach the command
 // line, a friend could rename themselves into extra arguments for `steam` --
 // so the design is that BuildJoinUrl() reads three INTEGERS and never looks at
@@ -171,7 +266,7 @@ TEST_CASE( "a lobby id of 0 is refused, not formatted", "[steam_friends]" )
 // routine somebody could forget to call, and this is what pins it.
 TEST_CASE( "a hostile persona name cannot influence the join command", "[steam_friends]" )
 {
-	JoinableFriend base;
+	Friend base;
 	base.sPersona  = "";
 	base.uAppId    = 730;
 	base.ulLobbyId = 555;
@@ -193,7 +288,7 @@ TEST_CASE( "a hostile persona name cannot influence the join command", "[steam_f
 
 	for ( const char *pszName : kHostileNames )
 	{
-		JoinableFriend f = base;
+		Friend f = base;
 		f.sPersona = pszName;
 
 		std::string sUrl;
@@ -240,7 +335,7 @@ namespace
 
 	struct Probe
 	{
-		int         nJoinable = -1;   // the child's exit code
+		int         nRows = -1;      // the child's exit code: rows Snapshot() returned
 		std::string sStderr;
 	};
 
@@ -265,6 +360,11 @@ namespace
 			close( nPipe[ 1 ] );
 
 			setenv( "GS_RITZ_STEAMCLIENT", sLibPath.c_str(), 1 );
+			// Keep the game-name lookup off the developer's own Steam
+			// install: an empty override means "look in this directory",
+			// which has no appmanifest files, so every row falls back to
+			// "App <id>" deterministically.
+			setenv( "GS_RITZ_STEAMAPPS", "/nonexistent/steamapps", 1 );
 			if ( pszMode )
 				setenv( "GS_RITZ_TEST_STEAMCLIENT_MODE", pszMode, 1 );
 			else
@@ -274,19 +374,34 @@ namespace
 			bool bStable = true;
 			for ( int i = 0; i < nTimes; i++ )
 			{
-				const std::vector<JoinableFriend> vec = Snapshot();
+				const std::vector<Friend> vec = Snapshot();
 				if ( i > 0 && vec.size() != nLast )
 					bStable = false;
 				nLast = vec.size();
 
+				size_t nJoinable = 0;
+				for ( const Friend &f : vec )
+					if ( f.CanJoin() )
+						nJoinable++;
+				fprintf( stderr, "PROBE-JOINABLE: %zu\n", nJoinable );
+
 				// The success path's contents, checked here because only the
-				// child ever has them: two rows, in list order, with the app
-				// ids, lobby ids and SteamIDs the stub's fake friends carry.
+				// child ever has them. FIVE rows -- every fake friend who is
+				// in a game, joinable or not (phase 3's change) -- in list
+				// order, with the app ids, lobby ids, SteamIDs and the exact
+				// non-joinable reason each of them carries.
 				constexpr uint64_t kBase = 76561197960265728ull;
-				if ( vec.size() == 2 &&
-				     vec[ 0 ].uAppId == 730 && vec[ 0 ].ulLobbyId == 555 && vec[ 0 ].ulSteamId == kBase + 101 &&
-				     vec[ 1 ].uAppId == 440 && vec[ 1 ].ulLobbyId == 999 && vec[ 1 ].ulSteamId == kBase + 104 &&
-				     vec[ 1 ].sPersona.find( "rm -rf" ) != std::string::npos )
+				if ( vec.size() == 5 &&
+				     vec[ 0 ].eJoinable == Joinability::NoLobby &&
+				     vec[ 0 ].uAppId == 730 && vec[ 0 ].ulSteamId == kBase + 100 &&
+				     vec[ 1 ].CanJoin() &&
+				     vec[ 1 ].uAppId == 730 && vec[ 1 ].ulLobbyId == 555 && vec[ 1 ].ulSteamId == kBase + 101 &&
+				     vec[ 2 ].eJoinable == Joinability::NotASteamApp &&
+				     vec[ 3 ].eJoinable == Joinability::NoApp &&
+				     vec[ 4 ].CanJoin() &&
+				     vec[ 4 ].uAppId == 440 && vec[ 4 ].ulLobbyId == 999 && vec[ 4 ].ulSteamId == kBase + 104 &&
+				     vec[ 4 ].sPersona.find( "rm -rf" ) != std::string::npos &&
+				     vec[ 4 ].sGame == "App 440" )
 				{
 					fprintf( stderr, "PROBE-CONTENTS-OK\n" );
 				}
@@ -315,7 +430,7 @@ namespace
 		p.sStderr = std::move( sOut );
 		// A child that died on a signal is the one outcome this feature must
 		// never produce, so it is reported as such rather than as a count.
-		p.nJoinable = WIFEXITED( nStatus ) ? WEXITSTATUS( nStatus ) : -1;
+		p.nRows = WIFEXITED( nStatus ) ? WEXITSTATUS( nStatus ) : -1;
 		return p;
 	}
 
@@ -343,7 +458,7 @@ TEST_CASE( "the test stubs were built next to this binary", "[steam_friends]" )
 TEST_CASE( "a missing library is an empty list and one log line", "[steam_friends]" )
 {
 	const Probe p = RunProbe( "/nonexistent/definitely/not/steamclient.so", nullptr );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "Steam isn't installed here." ) != std::string::npos );
 	REQUIRE( p.sStderr.find( "PROBE-STABLE" ) != std::string::npos );
@@ -356,7 +471,7 @@ TEST_CASE( "a library that is not Steam's client is refused before any vtable ca
 	// check this run would cast a stranger's pointer to a vtable and call
 	// through it; with it, the run is one log line and an empty list.
 	const Probe p = RunProbe( NotSteamPath(), nullptr );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "isn't the one we know" ) != std::string::npos );
 }
@@ -364,7 +479,7 @@ TEST_CASE( "a library that is not Steam's client is refused before any vtable ca
 TEST_CASE( "an interface version we do not know disables the feature", "[steam_friends]" )
 {
 	const Probe p = RunProbe( StubPath(), "noiface" );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "newer than this build knows" ) != std::string::npos );
 }
@@ -374,7 +489,7 @@ TEST_CASE( "an unknown ISteamFriends version disables the feature too", "[steam_
 	// The second half of the same guard: the client answered, its friends
 	// interface did not.
 	const Probe p = RunProbe( StubPath(), "nofriends" );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "newer than this build knows" ) != std::string::npos );
 }
@@ -382,7 +497,7 @@ TEST_CASE( "an unknown ISteamFriends version disables the feature too", "[steam_
 TEST_CASE( "Steam not running is an empty list, said in those words", "[steam_friends]" )
 {
 	const Probe p = RunProbe( StubPath(), "nopipe" );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "Steam isn't running." ) != std::string::npos );
 	REQUIRE( p.sStderr.find( "PROBE-STATUS: Steam isn't running." ) != std::string::npos );
@@ -391,7 +506,7 @@ TEST_CASE( "Steam not running is an empty list, said in those words", "[steam_fr
 TEST_CASE( "a signed-out client is an empty list, said in those words", "[steam_friends]" )
 {
 	const Probe p = RunProbe( StubPath(), "nouser" );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "Steam is signed out." ) != std::string::npos );
 }
@@ -411,19 +526,153 @@ TEST_CASE( "a signed-out client is an empty list, said in those words", "[steam_
 TEST_CASE( "ids that are not SteamIDs are reported, not quietly dropped", "[steam_friends]" )
 {
 	const Probe p = RunProbe( StubPath(), "badids" );
-	REQUIRE( p.nJoinable == 0 );
+	REQUIRE( p.nRows == 0 );
 	REQUIRE( CountOf( p.sStderr, "the join list is unavailable" ) == 1 );
 	REQUIRE( p.sStderr.find( "isn't laid out the way this build expects" ) != std::string::npos );
 }
 
-TEST_CASE( "the success path keeps only the joinable rows, with the right fields", "[steam_friends]" )
+// PHASE 3'S CHANGE, PINNED. Snapshot() used to return only the joinable rows;
+// it now returns everyone in a game, each carrying the one reason it cannot be
+// joined. A regression to the old behaviour shows up here as three missing
+// rows -- see SteamFriendsCmd.h's Joinability comment for why that would be
+// the wrong answer even though it is the smaller list.
+TEST_CASE( "the success path lists everyone in a game and marks the joinable ones", "[steam_friends]" )
 {
-	// Six fake friends, of which exactly two are joinable -- the other four
-	// are each rejected by a different clause, so a loader that forgot the
-	// filter would come back with more than two here.
+	// Six fake friends: five in a game, of which exactly two are joinable --
+	// the other three are each rejected by a different clause of
+	// JoinabilityOf(), and the sixth is not in a game at all and must NOT
+	// appear.
 	const Probe p = RunProbe( StubPath(), "ok" );
-	REQUIRE( p.nJoinable == 2 );
+	REQUIRE( p.nRows == 5 );
+	REQUIRE( p.sStderr.find( "PROBE-JOINABLE: 2" ) != std::string::npos );
 	REQUIRE( p.sStderr.find( "PROBE-CONTENTS-OK" ) != std::string::npos );
 	REQUIRE( p.sStderr.find( "the join list is unavailable" ) == std::string::npos );
-	REQUIRE( p.sStderr.find( "PROBE-STATUS: 2 friends you can join." ) != std::string::npos );
+	REQUIRE( p.sStderr.find( "PROBE-STATUS: 5 friends in a game, 2 you can join." ) != std::string::npos );
+}
+
+// ===========================================================================
+//  The poller -- the proof that a slow Steam cannot stall a frame
+// ===========================================================================
+// THIS IS THE CASE THE WHOLE BACKGROUND THREAD EXISTS FOR, so it is tested
+// against a stub that is DELIBERATELY SLOW (tests/steamclient_stub.cpp's
+// "slow" mode sleeps 1.5 s inside CreateSteamPipe, which is the first call of
+// every snapshot). A panel that called Snapshot() directly would block for
+// that long, once per poll, on the compositor's own thread.
+//
+// The measurement is the WORST single CurrentView() call while a poll is in
+// flight, in microseconds. It is compared against a threshold two orders of
+// magnitude below the stub's sleep, so this fails on a genuinely blocking
+// implementation and passes on a loaded machine.
+static Probe RunPollerProbe( const std::string &sLibPath, const char *pszMode )
+{
+	int nPipe[ 2 ] = { -1, -1 };
+	REQUIRE( pipe( nPipe ) == 0 );
+
+	const pid_t nChild = fork();
+	REQUIRE( nChild >= 0 );
+
+	if ( nChild == 0 )
+	{
+		close( nPipe[ 0 ] );
+		dup2( nPipe[ 1 ], STDERR_FILENO );
+		close( nPipe[ 1 ] );
+
+		setenv( "GS_RITZ_STEAMCLIENT", sLibPath.c_str(), 1 );
+		setenv( "GS_RITZ_STEAMAPPS", "/nonexistent/steamapps", 1 );
+		setenv( "GS_RITZ_TEST_STEAMCLIENT_MODE", pszMode, 1 );
+
+		// The first call arms the poller and starts the worker; every call
+		// after it is racing a snapshot that is asleep inside the stub.
+		long nWorstUs = 0;
+		bool bPolled = false;
+		for ( int i = 0; i < 400; i++ )   // ~2 s of 5 ms frames, past the stub's 1.5 s sleep
+		{
+			const auto t0 = std::chrono::steady_clock::now();
+			const View v = CurrentView();
+			const auto t1 = std::chrono::steady_clock::now();
+
+			const long nUs = (long)std::chrono::duration_cast<std::chrono::microseconds>( t1 - t0 ).count();
+			if ( nUs > nWorstUs )
+				nWorstUs = nUs;
+			if ( v.bPolled )
+				bPolled = true;
+
+			// A status is available on the very first call, before any poll
+			// has finished -- an empty panel with nothing to say is the
+			// failure this replaces.
+			if ( v.sStatus.empty() )
+				fprintf( stderr, "PROBE-EMPTY-STATUS\n" );
+
+			struct timespec ts = { 0, 5 * 1000 * 1000 };   // 5 ms, ~a frame
+			nanosleep( &ts, nullptr );
+		}
+
+		fprintf( stderr, "PROBE-WORST-VIEW-US: %ld\n", nWorstUs );
+		fprintf( stderr, "PROBE-POLL-FINISHED: %d\n", bPolled ? 1 : 0 );
+
+		// Joining the worker is what proves Shutdown() terminates at all --
+		// a poller that could not be stopped would hang this child and the
+		// case would fail on the read below rather than silently pass.
+		Shutdown();
+		fprintf( stderr, "PROBE-SHUTDOWN-OK\n" );
+		fflush( stderr );
+		_exit( 0 );
+	}
+
+	close( nPipe[ 1 ] );
+	std::string sOut;
+	char szBuf[ 512 ];
+	for ( ssize_t n; ( n = read( nPipe[ 0 ], szBuf, sizeof( szBuf ) ) ) > 0; )
+		sOut.append( szBuf, (size_t)n );
+	close( nPipe[ 0 ] );
+
+	int nStatus = 0;
+	waitpid( nChild, &nStatus, 0 );
+
+	Probe p;
+	p.sStderr = std::move( sOut );
+	p.nRows = WIFEXITED( nStatus ) ? WEXITSTATUS( nStatus ) : -1;
+	return p;
+}
+
+static long WorstViewUs( const std::string &sStderr )
+{
+	const std::string sKey = "PROBE-WORST-VIEW-US: ";
+	const size_t nAt = sStderr.find( sKey );
+	if ( nAt == std::string::npos )
+		return -1;
+	return strtol( sStderr.c_str() + nAt + sKey.size(), nullptr, 10 );
+}
+
+TEST_CASE( "a Steam client that takes seconds to answer never delays a reader", "[steam_friends]" )
+{
+	const Probe p = RunPollerProbe( StubPath(), "slow" );
+	REQUIRE( p.nRows == 0 );                       // the child exited cleanly
+	REQUIRE( p.sStderr.find( "PROBE-SHUTDOWN-OK" ) != std::string::npos );
+
+	const long nWorstUs = WorstViewUs( p.sStderr );
+	REQUIRE( nWorstUs >= 0 );
+
+	// 15 ms: two orders of magnitude below the stub's 1.5 s sleep, and still
+	// generous enough for a scheduler hiccup on a machine running a build.
+	// A CurrentView() that waited for the snapshot would measure ~1 500 000.
+	REQUIRE( nWorstUs < 15000 );
+
+	// And the poll it was racing really did happen -- otherwise the fast
+	// answers above would only prove that nothing was ever asked.
+	REQUIRE( p.sStderr.find( "PROBE-POLL-FINISHED: 1" ) != std::string::npos );
+
+	// Every reader saw a sentence, including the ones before the first poll
+	// landed.
+	REQUIRE( p.sStderr.find( "PROBE-EMPTY-STATUS" ) == std::string::npos );
+}
+
+TEST_CASE( "the poller stops cleanly when it was never armed", "[steam_friends]" )
+{
+	// Shutdown() with no worker started is a no-op, and gamescope's exit path
+	// calls it unconditionally -- including in a run that never opened the
+	// friends panel, which is most of them.
+	Shutdown();
+	Shutdown();
+	REQUIRE( true );
 }

@@ -14,12 +14,14 @@
 // Same split, and the same reason, as SteamCompanionCmd.h next door.
 //
 // WHAT LIVES HERE:
-//   * JoinableFriend      -- the one row the feature is about.
+//   * Friend              -- the one row the feature is about.
 //   * the interface version lists, newest-first, and the order's reasoning.
 //   * AppIdFromGameId()/GameIdType() -- unpacking Valve's CGameID.
-//   * IsJoinable()        -- the whole filter, in one predicate.
+//   * JoinabilityOf()     -- joinable, or the one reason it is not.
 //   * BuildJoinUrl()      -- steam://joinlobby/..., and its guards.
 //   * BuildJoinArgv()     -- the argv handed to Process::SpawnProcess().
+//   * AppNameFromManifest()/LibraryPathsFromVdf()/GameLabel() -- turning an
+//     app id into the words the panel prints.
 
 #include <array>
 #include <cstdint>
@@ -30,16 +32,59 @@
 namespace gamescope::steamfriends
 {
 	// =========================================================================
-	//  One joinable friend
+	//  Why a friend cannot be joined
 	// =========================================================================
-	// Exactly the four fields a join needs, plus the one the UI shows. Note
+	// PHASE 3 CHANGED WHAT THE LIST CONTAINS, AND THIS ENUM IS THE CHANGE.
+	// Phase 1 returned only friends with a non-zero m_steamIDLobby and threw
+	// the rest away. The panel lists EVERY friend who is in a game and marks
+	// which of them can be joined, because m_steamIDLobby's offset in
+	// FriendGameInfo_t is still unproven (superdoc/planning/
+	// steam-friends-join.md §6e): nobody was in a joinable lobby while the
+	// read path was measured, and a WRONG OFFSET READS AS ZERO EXACTLY LIKE
+	// "not joinable". A joinable-only list would therefore be
+	// indistinguishable from a broken one -- an empty panel, and no way for
+	// the user to tell which it was. Listing everyone in a game degrades
+	// honestly: the user sees their friends and no Join, rather than nothing
+	// at all.
+	enum class Joinability : uint8_t
+	{
+		Yes = 0,        // the lobby id is non-zero and the row can build a URL
+		NoLobby,        // in a game, but not in a lobby you can join
+		NotASteamApp,   // a mod, a shortcut or a non-Steam game they added
+		NoApp,          // a lobby with no app behind it
+		NoSteamId,      // nobody to join
+	};
+
+	// The quiet reason a row is not joinable, in the panel's own words. Empty
+	// for Yes, so a caller can print it unconditionally.
+	inline constexpr std::string_view JoinabilityText( Joinability e )
+	{
+		switch ( e )
+		{
+		case Joinability::Yes:          return "";
+		case Joinability::NoLobby:      return "not in a lobby you can join";
+		case Joinability::NotASteamApp: return "not a Steam game";
+		case Joinability::NoApp:        return "no game to join";
+		case Joinability::NoSteamId:    return "no Steam ID";
+		}
+		return "";
+	}
+
+	// =========================================================================
+	//  One friend who is in a game
+	// =========================================================================
+	// Exactly the four fields a join needs, plus the two the UI shows. Note
 	// which of them the URL is allowed to touch: see BuildJoinUrl().
-	struct JoinableFriend
+	struct Friend
 	{
 		std::string sPersona;    // display only -- NEVER reaches a command line
+		std::string sGame;       // display only -- "Counter-Strike 2", else "App 730"
 		uint32_t    uAppId   = 0;
 		uint64_t    ulLobbyId = 0;
 		uint64_t    ulSteamId = 0;
+		Joinability eJoinable = Joinability::NoLobby;
+
+		bool CanJoin() const { return eJoinable == Joinability::Yes; }
 	};
 
 	// =========================================================================
@@ -124,17 +169,26 @@ namespace gamescope::steamfriends
 	// join. That single field is what the whole join list is built on (§5). The
 	// other two conditions are what keeps the row USABLE once it is shown: a
 	// row we cannot build a URL from is worse than no row.
+	//
+	// It answers WHY rather than yes/no because phase 3's list shows the
+	// friends it rejects (see Joinability above) and has to say something
+	// true beside each of them.
+	inline constexpr Joinability JoinabilityOf( uint64_t ulGameId, uint64_t ulLobbyId, uint64_t ulSteamId )
+	{
+		if ( ulSteamId == 0 )
+			return Joinability::NoSteamId;                   // nobody to join
+		if ( GameIdType( ulGameId ) != kGameIdTypeApp )
+			return Joinability::NotASteamApp;                // a mod/shortcut, not a Steam app
+		if ( AppIdFromGameId( ulGameId ) == 0 )
+			return Joinability::NoApp;                       // no app to join
+		if ( ulLobbyId == 0 )
+			return Joinability::NoLobby;                     // not in a joinable lobby
+		return Joinability::Yes;
+	}
+
 	inline constexpr bool IsJoinable( uint64_t ulGameId, uint64_t ulLobbyId, uint64_t ulSteamId )
 	{
-		if ( ulLobbyId == 0 )
-			return false;                                    // not in a joinable lobby
-		if ( GameIdType( ulGameId ) != kGameIdTypeApp )
-			return false;                                    // a mod/shortcut, not a Steam app
-		if ( AppIdFromGameId( ulGameId ) == 0 )
-			return false;                                    // no app to join
-		if ( ulSteamId == 0 )
-			return false;                                    // nobody to join
-		return true;
+		return JoinabilityOf( ulGameId, ulLobbyId, ulSteamId ) == Joinability::Yes;
 	}
 
 	// =========================================================================
@@ -166,7 +220,7 @@ namespace gamescope::steamfriends
 	// id of 0 means "this friend is not joinable", and firing
 	// steam://joinlobby/730/0/... at the client is a nonsense request we should
 	// never make. Same for an app id or a SteamID of 0.
-	inline bool BuildJoinUrl( const JoinableFriend &f, std::string *pOut, std::string *psError )
+	inline bool BuildJoinUrl( const Friend &f, std::string *pOut, std::string *psError )
 	{
 		auto Fail = [ & ]( const char *pszWhy ) {
 			if ( psError ) *psError = pszWhy;
@@ -204,5 +258,124 @@ namespace gamescope::steamfriends
 	inline std::vector<std::string> BuildJoinArgv( std::string_view svUrl )
 	{
 		return { std::string( kSteamProgram ), std::string( svUrl ) };
+	}
+
+	// =========================================================================
+	//  What to call the game
+	// =========================================================================
+	// ISteamFriends hands back an APP ID and nothing else -- there is no name
+	// anywhere in the read path. "App 730" on every row would be a list of
+	// numbers, so the name is looked up in the one place it is already on this
+	// machine for free: Steam's own appmanifest_<appid>.acf, the file the
+	// client writes for every INSTALLED game.
+	//
+	// `Why that is enough rather than a half-measure:` the case this feature
+	// exists for is joining a friend in the game you are already in, and a
+	// game you can join is a game you have installed. A friend in something
+	// you do not own falls back to "App <id>", which is true, short and never
+	// wrong -- unlike a web lookup, which would need a network call, a key or
+	// both to say the same thing.
+	//
+	// Both parsers below are deliberate MINIMAL readers, not VDF parsers. They
+	// take the first `"key" "value"` pair whose key matches, which is all
+	// these two files need and is why they can live in a header a test runs
+	// with no Steam installed.
+
+	// The value of the first `"<key>" "<value>"` pair in `svText`. Empty when
+	// there is none. Escapes are not interpreted: Steam writes app names
+	// verbatim, and a half-done unescaper would be worse than none.
+	inline std::string VdfFirstValue( std::string_view svText, std::string_view svKey )
+	{
+		std::string sNeedle = "\"";
+		sNeedle += std::string( svKey );
+		sNeedle += "\"";
+
+		size_t nAt = 0;
+		while ( ( nAt = svText.find( sNeedle, nAt ) ) != std::string_view::npos )
+		{
+			size_t i = nAt + sNeedle.size();
+			// Only whitespace may sit between the key and its value.
+			while ( i < svText.size() && ( svText[ i ] == ' ' || svText[ i ] == '\t' ) )
+				i++;
+			if ( i >= svText.size() || svText[ i ] != '"' )
+			{
+				nAt += sNeedle.size();
+				continue;
+			}
+			const size_t nStart = i + 1;
+			const size_t nEnd = svText.find( '"', nStart );
+			if ( nEnd == std::string_view::npos )
+				return {};
+			return std::string( svText.substr( nStart, nEnd - nStart ) );
+		}
+		return {};
+	}
+
+	// The game's name out of an appmanifest_<appid>.acf.
+	inline std::string AppNameFromManifest( std::string_view svAcf )
+	{
+		return VdfFirstValue( svAcf, "name" );
+	}
+
+	// Every library root listed in a libraryfolders.vdf, in file order. Steam
+	// writes one `"path"` per numbered block; the games on a second drive live
+	// under those, and a friend playing one of them would otherwise be a bare
+	// app id.
+	inline std::vector<std::string> LibraryPathsFromVdf( std::string_view svVdf )
+	{
+		std::vector<std::string> vecOut;
+		const std::string_view svKey = "\"path\"";
+		size_t nAt = 0;
+		while ( ( nAt = svVdf.find( svKey, nAt ) ) != std::string_view::npos )
+		{
+			size_t i = nAt + svKey.size();
+			while ( i < svVdf.size() && ( svVdf[ i ] == ' ' || svVdf[ i ] == '\t' ) )
+				i++;
+			nAt += svKey.size();
+			if ( i >= svVdf.size() || svVdf[ i ] != '"' )
+				continue;
+			const size_t nStart = i + 1;
+			const size_t nEnd = svVdf.find( '"', nStart );
+			if ( nEnd == std::string_view::npos )
+				break;
+			if ( nEnd > nStart )
+				vecOut.push_back( std::string( svVdf.substr( nStart, nEnd - nStart ) ) );
+			nAt = nEnd;
+		}
+		return vecOut;
+	}
+
+	// =========================================================================
+	//  The one line that says why the list is the length it is
+	// =========================================================================
+	// The list shows every friend in a game, so "how many are there" and "how
+	// many can I actually join" are two different numbers and the status line
+	// has to carry both without becoming a sentence nobody reads. Pure, so
+	// tests/test_steam_friends.cpp holds every wording.
+	inline std::string StatusLine( size_t nInGame, size_t nJoinable )
+	{
+		if ( nInGame == 0 )
+			return "nobody's in a game right now.";
+
+		const std::string sInGame = std::to_string( (unsigned long long)nInGame ) +
+			( nInGame == 1 ? " friend in a game" : " friends in a game" );
+
+		if ( nJoinable == 0 )
+			return sInGame + ", none you can join.";
+		if ( nJoinable == nInGame )
+			return sInGame + ", all joinable.";
+		return sInGame + ", " + std::to_string( (unsigned long long)nJoinable ) + " you can join.";
+	}
+
+	// What the row prints for the game: the name when one was found, else the
+	// app id in words. Never empty for a real app, so the panel never has to
+	// draw a blank column.
+	inline std::string GameLabel( uint32_t uAppId, std::string_view svName )
+	{
+		if ( !svName.empty() )
+			return std::string( svName );
+		if ( uAppId == 0 )
+			return "a game Steam has no id for";
+		return "App " + std::to_string( (unsigned long long)uAppId );
 	}
 }

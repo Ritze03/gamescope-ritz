@@ -133,4 +133,24 @@ namespace gamescope::ui::shell
 	// time it actually runs, on the thread that owns the string -- so the
 	// two threads never race on anything but a bool.
 	void RequestLauncherClosePreservingQuery();
+
+	// Phase 4 of the friends list: put the shell on ONE named rail area,
+	// asked for from another thread.
+	//
+	// `pszAreaId` must have static lifetime -- it is stored as a bare pointer
+	// and read on the next frame, and every caller passes a string literal.
+	// Same threading contract as RequestPalette() above: one atomic, consumed
+	// by Draw() on the thread that owns the selection.
+	//
+	// WHY THIS IS NOT overlay_e2_select. That ConCommand assigns the selection
+	// straight from the CONSOLE thread, which is tolerable for a debug surface
+	// driven by a script and is not tolerable for a hotkey that fires while
+	// the shell is drawing.
+	void RequestArea( const char *pszAreaId );
+
+	// Is that area the one on screen right now? wlserver reads it to make a
+	// hotkey a genuine TOGGLE -- pressing it again on the area it opened
+	// closes the overlay rather than re-selecting what is already selected.
+	// Atomic, readable from any thread.
+	bool AreaActive( const char *pszAreaId );
 }
