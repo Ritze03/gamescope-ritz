@@ -53,3 +53,14 @@ through this list, tell your assistant the results — answering it lets the tem
   Fixed: turn on Number colour and pick one — the FPS digits should switch to it
   instead of following your UI accent. Then lower Text opacity from 1.0 — the digits
   should visibly fade toward the background.
+- [ ] **The Ritz extension, in Ritz's own UI (this needed the GUI, couldn't be driven
+  headlessly).** Drop `extensions/gamescope-ritz.json` into
+  `~/.config/ritz/extensions/` (or accept the installer's offer to do it for you on
+  `--install`/`--update`). In Ritz, find "Gamescope Ritz" among your modules and turn on
+  its enable toggle — the second field right below it should be a free-text **Profile**
+  box (not third, not a dropdown). Type a profile name **with a space in it**, e.g. `My
+  Profile`, then use `ritz --print %command%` (or Ritz's own command preview) and check
+  the assembled command contains `--profile "My Profile"` as one quoted argument, not
+  split into `--profile My Profile` as two separate words. The quoted form is correct;
+  two separate words is the bug this pass could only prove by hand-construction, not by
+  running Ritz itself — your one test settles it either way.

@@ -12,6 +12,12 @@ The newest version below is the one this build reports.
 ## [0.6.2] – 2026-09-08
 
 ### Added
+- **`install.sh`**: a single install/update/remove entry point at the repo root
+  (`--install` / `--update` / `--remove`, or no flag for an interactive menu). It
+  checks that wlroots is actually usable before building -- not just that a package
+  manager says it's installed -- and names the exact fix (`sudo pacman -S
+  wlroots0.20` on Arch/CachyOS). Installing still offers a symlink instead of a
+  copy, so later updates need no root.
 - **SDR gamut wideness: Set manually**: a new switch beside the slider; off (the
   default) lets the screen decide how wide regular content's colours go, on uses the
   amount you set -- there was previously no way back once the slider had been touched.
@@ -35,6 +41,10 @@ The newest version below is the one this build reports.
   moment you open it, untouched on the left and with the effect applied on the right --
   which re-draws as you move the sliders, so you can judge a setting without hunting
   for a scene that shows it.
+- **Ritz launcher module**: a Ritz extension for this fork is now included
+  (`extensions/gamescope-ritz.json`) and offered by the installer -- profile, nested
+  resolution/refresh, fullscreen, force-maximize-nested-window, scaler and filter are
+  all settable from Ritz's own UI, no command line needed.
 
 ### Fixed
 - **Appearance and Cursor settings no longer undo each other**: changing something in

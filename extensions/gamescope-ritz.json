@@ -1,0 +1,100 @@
+{
+  "Extension": {
+    "Name": "Gamescope Ritz",
+    "Author": "Ritze",
+    "Version": "1.0",
+    "Description": "Wrap this fork's gamescope-ritz binary instead of upstream Gamescope."
+  },
+  "ForkedFrom": "Ritze::Gamescope",
+  "UI": {
+    "Gamescope Ritz": [
+      {
+        "Name": "Gamescope Ritz Enabled",
+        "Description": "Enable the gamescope-ritz wrapper (this fork's gamescope, not upstream).",
+        "Type": "toggle",
+        "Variable": "enabled",
+        "Default": false
+      },
+      {
+        "Name": "Profile",
+        "Description": "gamescope-ritz --profile — load this settings profile for this session only (created from the current default if it doesn't exist yet). Leave blank to use whichever profile is otherwise selected. The name is quoted for you, so spaces are fine; a double-quote character in the name is not supported and will break the launch.",
+        "Type": "string",
+        "Variable": "profile",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Nested Width (-w)",
+        "Description": "--nested-width — the game's own render width in pixels. 0 leaves it unset.",
+        "Type": "integer",
+        "Options": { "min": 0, "max": 7680, "step": 1 },
+        "Variable": "nested_width",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Nested Height (-h)",
+        "Description": "--nested-height — the game's own render height in pixels. 0 leaves it unset.",
+        "Type": "integer",
+        "Options": { "min": 0, "max": 4320, "step": 1 },
+        "Variable": "nested_height",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Nested Refresh (-r)",
+        "Description": "--nested-refresh — the game's own paced refresh rate in Hz. 0 leaves it unset.",
+        "Type": "integer",
+        "Options": { "min": 0, "max": 360, "step": 1 },
+        "Variable": "nested_refresh",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Fullscreen (-f)",
+        "Description": "--fullscreen — make gamescope-ritz's own window fullscreen (nested mode).",
+        "Type": "toggle",
+        "Variable": "fullscreen",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Force Maximize Nested Window",
+        "Description": "--force-windows-fullscreen — force every window inside gamescope-ritz's embedded Xwayland to open at the full nested canvas size.",
+        "Type": "toggle",
+        "Variable": "force_windows_fullscreen",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Scaler (-S)",
+        "Description": "--scaler — how the game's picture is fit to the output window.",
+        "Type": "selection",
+        "DisplayOptions": ["(unset)", "Auto", "Integer", "Fit", "Fill", "Stretch"],
+        "Options": ["", "auto", "integer", "fit", "fill", "stretch"],
+        "Variable": "scaler",
+        "Requires": "enabled"
+      },
+      {
+        "Name": "Filter (-F)",
+        "Description": "--filter — upscaler filter used when the picture is scaled.",
+        "Type": "selection",
+        "DisplayOptions": ["(unset)", "Linear", "Nearest", "FSR", "NIS", "Pixel"],
+        "Options": ["", "linear", "nearest", "fsr", "nis", "pixel"],
+        "Variable": "filter",
+        "Requires": "enabled"
+      }
+    ]
+  },
+  "WRAPPERS": [
+    {
+      "CommandSyntax": "gamescope-ritz {OPTIONS} --",
+      "Requires": "enabled",
+      "Priority": 100,
+      "Builder": [
+        { "Requires": "profile", "Value": "--profile \"{profile}\"" },
+        { "Requires": "nested_width", "Value": "-w {nested_width}" },
+        { "Requires": "nested_height", "Value": "-h {nested_height}" },
+        { "Requires": "nested_refresh", "Value": "-r {nested_refresh}" },
+        { "Requires": "fullscreen", "Value": "-f" },
+        { "Requires": "force_windows_fullscreen", "Value": "--force-windows-fullscreen" },
+        { "Requires": "scaler", "Value": "-S {scaler}" },
+        { "Requires": "filter", "Value": "-F {filter}" }
+      ]
+    }
+  ]
+}

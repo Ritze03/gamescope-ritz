@@ -60,6 +60,9 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 - [Vulkan WSI layer](features/vk-wsi-layer.md) — `VkLayer_FROG_gamescope_wsi` swapchain redirection.
 - [Wayland protocols](features/wayland-protocols.md) — custom protocol surface, including `gamescope_control`.
+- [Ritz extension](features/ritz-extension.md) — the `extensions/gamescope-ritz.json` Ritz
+  launcher module: fields, the `--profile` shell-split quoting, and the installer's offer
+  to copy it into `~/.config/ritz/extensions/`.
 - [Control / IPC](features/control-ipc.md) — external control and IPC (e.g. `gamescopectl`).
 
 ### Clipboard
