@@ -137,6 +137,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   the real Friends window belongs to the host's Xwayland and cannot be moved, captured
   usefully, or clicked from a nested compositor; what *does* work (an interactive overlay
   on gamescope's own Xwayland, proven end to end) and why Shift+Tab may cover it already.
+- [Joining friends from inside the game](planning/steam-friends-join.md) — 2026-09-08:
+  the real goal was never the Friends window but *joining* a friend; why moving a window
+  between X servers, a child session, a second Steam client and Steam's CEF debugging
+  endpoint were each rejected (with the measurements), and the approach that wins — a
+  native join list reading the joinable lobby id out of the running client's own
+  `steamclient.so`, with no API key, no browser and no app id.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.

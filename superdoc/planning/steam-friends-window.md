@@ -1,5 +1,13 @@
 # Steam's Friends window inside gamescope-ritz — feasibility
 
+> **Superseded in part, same day.** The question was re-asked with a different target —
+> *"the thing that is most important to me is to join friends"* — and that target has a
+> much better answer than anything on this page, including what shipped. See
+> [`steam-friends-join.md`](steam-friends-join.md), which also closes the
+> "just move the window" and "run it in a child session" ideas for good, and records the
+> one approach this page never considered (Steam's own CEF remote-debugging endpoint:
+> mechanically proven, then killed by an occlusion measurement).
+
 **Status: SETTLED and BUILT, 2026-09-08.** Approach 4 below was implemented the same
 day and shipped; the feature's own page is
 [`../features/steam-companion.md`](../features/steam-companion.md), and that is the page
