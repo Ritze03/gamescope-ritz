@@ -151,17 +151,31 @@ namespace gamescope::keybinds
 			{ "launcher", "Open launcher", "LCtrl+RShift",
 			  "The chord that opens the command palette alone over the game -- and closes it "
 			  "again when it is already up." },
-			// Ctrl+Shift+Tab is Steam's own overlay chord for the friends
-			// list. That is deliberate, and it is not a conflict: gamescope
-			// swallows the key here, so neither the game nor Steam's overlay
-			// (which this fork's own users have switched off anyway -- see
-			// superdoc/planning/steam-friends-window.md §2) ever sees it, and
-			// the muscle memory is already the right one.
-			{ "companion", "Open Steam chat", "Ctrl+Shift+Tab",
+			// MOVED OFF Ctrl+Shift+Tab ON 2026-09-08, and the reason is worth
+			// stating: that chord is Steam's own "friends list" muscle memory,
+			// and this fork now HAS a friends list (the row below). The chat
+			// companion is a browser that explicitly cannot join anybody
+			// (superdoc/planning/steam-friends-join.md §4), so it was holding
+			// the chord the user actually wanted for the other feature.
+			// Ctrl+Shift+C for Chat: free in this table, not the reserved
+			// chord, and not a combination a game is likely to want, since
+			// Ctrl+Shift+<letter> is a browser/tooling shape rather than a
+			// gameplay one.
+			{ "companion", "Open Steam chat", "Ctrl+Shift+C",
 			  "The chord that opens Steam's web chat over the game, in a browser gamescope runs "
 			  "on its own display -- and hides it again when it is already up. The first press "
 			  "has to start the browser, so it takes a moment; after that it is instant. Set the "
 			  "browser and the page in Settings > System > Steam chat." },
+			// Ctrl+Shift+Tab is Steam's own overlay chord for the friends
+			// list, and this is a friends list -- so the muscle memory is
+			// already the right one. That is deliberate and is not a conflict:
+			// gamescope swallows the key here, so neither the game nor Steam's
+			// own overlay (which this fork's users have switched off anyway --
+			// see superdoc/planning/steam-friends-window.md §2) ever sees it.
+			{ "friends", "Open friends list", "Ctrl+Shift+Tab",
+			  "The chord that opens the list of friends you can join, over the game -- and closes "
+			  "it again when it is already up. It reads the Steam client already running on this "
+			  "machine, so there is nothing to sign in to. See Settings > System > Friends." },
 		};
 
 		// ---------------------------------------------------------------------

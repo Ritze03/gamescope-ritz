@@ -60,6 +60,7 @@ namespace gamescope::keybinds
 		ShellAlt,       // ... and its alternate chord; same effect
 		Launcher,       // the command palette alone over the game
 		Companion,      // the Steam chat overlay (src/SteamCompanion.h)
+		Friends,        // the friends-you-can-join list (src/SteamFriends.h)
 		Count,
 	};
 

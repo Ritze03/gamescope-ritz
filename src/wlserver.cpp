@@ -448,6 +448,31 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 			gamescope::companion::RequestToggle();
 			break;
 
+		case Action::Friends:
+			// The friends-you-can-join list (src/SteamFriends.h, the
+			// `system.friends` area). A TOGGLE on its own area: pressing it
+			// again while that area is the one on screen closes the overlay,
+			// rather than re-selecting what is already selected and leaving
+			// the user with no way back out on the same key.
+			//
+			// Nothing Steam-shaped happens here. Selecting the area is one
+			// atomic the shell consumes on its next frame, and the first
+			// Steam call of the whole feature is made later still, by the
+			// poller's own thread -- so this key path cannot wait on Steam
+			// even once.
+			if ( gamescope::SettingsOverlay_IsCapturingInput() &&
+			     !gamescope::ui::shell::LauncherOnlyActive() &&
+			     gamescope::ui::shell::AreaActive( "system.friends" ) )
+			{
+				gamescope::SettingsOverlay_SetVisible( false );
+			}
+			else
+			{
+				gamescope::SettingsOverlay_SetVisible( true );
+				gamescope::ui::shell::RequestArea( "system.friends" );
+			}
+			break;
+
 		case Action::Count:
 			break;
 	}
