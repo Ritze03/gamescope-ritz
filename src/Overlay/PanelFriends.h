@@ -27,6 +27,13 @@ namespace gamescope
 {
 	void PanelFriends_RegisterArea( ui::Registry &reg );
 
+	// Seeds src/SteamFriends.cpp's "may I look game names up online" flag from
+	// global.json. Called at startup from main.cpp, beside
+	// PanelSystem_SeedFromConfig() and for the same reason: the registry is
+	// built lazily, and the poller can be reached from the console before the
+	// shell has ever drawn. See the definition in PanelFriends.cpp.
+	void PanelFriends_SeedFromConfig();
+
 	// Once per frame, from Overlay/UI/Shell.cpp's Draw(), on the steamcompmgr
 	// thread. Acts on a join a click or a script asked for -- either firing it
 	// or opening the confirmation the different-game case needs.

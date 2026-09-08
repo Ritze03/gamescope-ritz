@@ -22,9 +22,13 @@
 //   * BuildJoinArgv()     -- the argv handed to Process::SpawnProcess().
 //   * AppNameFromManifest()/LibraryPathsFromVdf()/GameLabel() -- turning an
 //     app id into the words the panel prints.
+//   * GroupOf()/FriendOrderLess() -- the order the list is drawn in.
+//   * the app-name CACHE: its file format, its bound, and the one URL this
+//     compositor is ever allowed to fetch.
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -83,6 +87,22 @@ namespace gamescope::steamfriends
 		uint64_t    ulLobbyId = 0;
 		uint64_t    ulSteamId = 0;
 		Joinability eJoinable = Joinability::NoLobby;
+
+		// "This person has invited you, and the invite is still waiting."
+		//
+		// NOTHING IN THE SHIPPING READ PATH EVER SETS THIS, and that is a
+		// measured conclusion rather than an unfinished job: Steamworks has no
+		// call that enumerates a pending received invite, and the two
+		// invite-shaped callbacks it does have (GameLobbyJoinRequested_t,
+		// GameRichPresenceJoinRequested_t) fire when the user has ALREADY
+		// accepted one in Steam's own UI, addressed to the game registered for
+		// that app id. See superdoc/features/steam-friends.md, "Received
+		// invites", for the whole measurement and for what would have to
+		// change. The field is here because FriendOrderLess() below encodes
+		// the user's stated order ("topmost should be invites") in full, and
+		// tests/test_steam_friends.cpp pins BOTH halves: that the band sorts
+		// first, and that Snapshot() never puts a row in it.
+		bool        bInvited = false;
 
 		bool CanJoin() const { return eJoinable == Joinability::Yes; }
 	};
@@ -189,6 +209,75 @@ namespace gamescope::steamfriends
 	inline constexpr bool IsJoinable( uint64_t ulGameId, uint64_t ulLobbyId, uint64_t ulSteamId )
 	{
 		return JoinabilityOf( ulGameId, ulLobbyId, ulSteamId ) == Joinability::Yes;
+	}
+
+	// =========================================================================
+	//  The order the list is drawn in
+	// =========================================================================
+	// Requested 2026-09-09: "Joinable players should be sorted towards the top.
+	// And topmost should be invites." Three bands, in that order, and inside a
+	// band the rows are alphabetical.
+	//
+	// `Why the Invite band exists even though NOTHING PRODUCES ONE TODAY:` the
+	// rule above is the user's, and it is written here in full so the day
+	// invites become readable the ordering needs no second thought. But be
+	// clear about the state of that day -- superdoc/features/steam-friends.md's
+	// "Received invites" section is the measurement, and the short version is
+	// that Steamworks has NO call that enumerates a pending received invite,
+	// so GroupOf() below can only ever return Joinable or InGame. The panel
+	// draws no invite row and offers no Accept/Deny, because there is nothing
+	// true to draw. This enum is the rule, not a promise that it fires.
+	enum class FriendGroup : uint8_t
+	{
+		Invite   = 0,   // an invite waiting for an answer -- see above: never produced today
+		Joinable = 1,   // [Join] -- in a lobby you can walk into
+		InGame   = 2,   // playing something, but not joinable
+	};
+
+	inline constexpr FriendGroup GroupOf( const Friend &f )
+	{
+		if ( f.bInvited )
+			return FriendGroup::Invite;
+		return f.CanJoin() ? FriendGroup::Joinable : FriendGroup::InGame;
+	}
+
+	// ASCII-only lowering, deliberately: this runs over persona names, which
+	// are arbitrary UTF-8, and a locale-aware fold would make the order depend
+	// on the user's locale AND drag std::locale into a header a test includes.
+	// Bytes >= 0x80 are left alone, so two names that differ only in accents
+	// sort by their bytes -- stable, predictable, and never wrong twice.
+	inline std::string LowerAscii( std::string_view sv )
+	{
+		std::string s( sv );
+		for ( char &c : s )
+			if ( c >= 'A' && c <= 'Z' )
+				c = (char)( c - 'A' + 'a' );
+		return s;
+	}
+
+	// A STRICT WEAK ORDERING, and a TOTAL one: band, then persona folded to
+	// lower case, then the SteamID.
+	//
+	// `Why the SteamID is in there at all:` two friends can share a display
+	// name -- personas are not unique, and a friend can rename themselves into
+	// somebody else's name on purpose. Without a final tiebreak std::sort
+	// would be free to swap them on every poll, and the list would flicker
+	// between two orders while nothing about it had changed. The SteamID makes
+	// the order a function of the DATA rather than of the sort's internals, so
+	// an unchanged friends list draws identically forever.
+	inline bool FriendOrderLess( const Friend &a, const Friend &b )
+	{
+		const FriendGroup eA = GroupOf( a );
+		const FriendGroup eB = GroupOf( b );
+		if ( eA != eB )
+			return (uint8_t)eA < (uint8_t)eB;
+
+		const std::string sA = LowerAscii( a.sPersona );
+		const std::string sB = LowerAscii( b.sPersona );
+		if ( sA != sB )
+			return sA < sB;
+
+		return a.ulSteamId < b.ulSteamId;
 	}
 
 	// =========================================================================

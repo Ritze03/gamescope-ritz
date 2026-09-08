@@ -89,6 +89,36 @@ namespace gamescope::steamfriends
 	std::string StatusText();
 
 	// =========================================================================
+	//  Game names, and the one switch that lets this process open a socket
+	// =========================================================================
+	// A game's name comes from Steam's own appmanifest_<id>.acf first -- free,
+	// offline, and complete for everything INSTALLED here. For a friend playing
+	// something this machine does not have, the id is looked up once against
+	// Steam's keyless public endpoint and CACHED TO DISK FOREVER
+	// (SteamAppNames.h: the endpoint comparison, what exactly is sent, the file
+	// format and its bound).
+	//
+	// THIS IS THE COMPOSITOR'S ONLY OUTBOUND NETWORK REQUEST, so it has a
+	// switch, and the switch is honoured at the one place that matters: with it
+	// off, no fetch is ever spawned and an unknown game reads "App <id>".
+	// Seeded from OverlaySettings::friends_lookup_names by
+	// PanelFriends_SeedFromConfig(); safe from any thread.
+	void SetLookupNames( bool bEnabled );
+	bool LookupNamesEnabled();
+
+	// What the Friends area's Status row reports about the cache. Cheap, but it
+	// takes the snapshot lock, so it is a status read and not a per-frame one.
+	struct NameCacheInfo
+	{
+		std::string sPath;          // "" when there is nowhere to put it
+		size_t      nEntries = 0;
+		size_t      nMax     = 0;
+		size_t      nPending = 0;   // ids waiting on the next lookup
+	};
+
+	NameCacheInfo NameCache();
+
+	// =========================================================================
 	//  The poller -- the only thing the panel is allowed to touch
 	// =========================================================================
 	// ONE BACKGROUND THREAD, AND THE PANEL NEVER WAITS ON IT. Snapshot() is a

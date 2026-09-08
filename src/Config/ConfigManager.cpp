@@ -430,6 +430,7 @@ namespace gamescope::config
                 s.overlay.companion_enabled = JGetBool( *pOverlay, "companion_enabled", s.overlay.companion_enabled );
                 s.overlay.companion_command = JGetString( *pOverlay, "companion_command", s.overlay.companion_command );
                 s.overlay.companion_url = JGetString( *pOverlay, "companion_url", s.overlay.companion_url );
+                s.overlay.friends_lookup_names = JGetBool( *pOverlay, "friends_lookup_names", s.overlay.friends_lookup_names );
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -676,6 +677,7 @@ namespace gamescope::config
             jOverlay[ "companion_enabled" ] = o.companion_enabled;
             jOverlay[ "companion_command" ] = o.companion_command;
             jOverlay[ "companion_url" ] = o.companion_url;
+            jOverlay[ "friends_lookup_names" ] = o.friends_lookup_names;
 
             return jOverlay;
         }

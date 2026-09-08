@@ -9,6 +9,31 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.7.0] – 2026-09-09
+
+### Added
+- **Game names for games you do not own**: a friend playing something you have not
+  installed used to show as "App 252490"; the friends list now looks those names up
+  once against Steam's public list and remembers them on disk, so it happens once per
+  game ever. Only app ids are sent, nothing about you, and only while the list is
+  open.
+- **Look up game names online**: a new switch in the Friends area turns that lookup
+  off -- with it off, nothing leaves your machine and an unknown game stays
+  "App 252490".
+- **Joinable friends first**: the friends list is now ordered with the ones you can
+  join at the top and everyone else below, alphabetically within each group.
+
+### Fixed
+- **The friends list no longer moves under you**: the highlighted row now follows the
+  person you picked when the list reorders itself, instead of staying on a row number
+  and quietly selecting somebody else.
+
+### Info
+- **Invites are not in the friends list, and cannot be**: Steam offers no way to tell
+  this list about an invite you have been sent, so there is no invite row and no
+  accept/deny -- accept invites in Steam itself. The Friends area's Status says so
+  too.
+
 ## [0.6.2] – 2026-09-08
 
 ### Added

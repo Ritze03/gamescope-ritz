@@ -37,6 +37,7 @@
 #include "Config/ConfigManager.h"
 #include "Overlay/Notifications.h"
 #include "Overlay/PanelShaders.h"
+#include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
 
@@ -616,6 +617,9 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// system.clipboard_sync: PanelSystem reloads on the bump, but only when
 	// it next draws; seed the runtime flag now, as at startup.
 	gamescope::PanelSystem_SeedFromConfig();
+	// overlay.friends_lookup_names, same shape: the friends poller reads an
+	// atomic, not the config file, so a config reload has to push it.
+	gamescope::PanelFriends_SeedFromConfig();
 }
 
 static void apply_ritz_config_to_startup_state(const gamescope::config::Settings &config)
@@ -1028,6 +1032,10 @@ int main(int argc, char **argv)
 	// EnsureConfigLoaded() shape as PanelDisplay.cpp), neither of which
 	// depends on the registry, wlserver, the backend, or steamcompmgr.
 	gamescope::PanelSystem_SeedFromConfig();
+	// Same reasoning for the friends list's "look game names up online"
+	// switch: it is the one setting that decides whether this process ever
+	// opens a socket, so it must be in force before anything can poll.
+	gamescope::PanelFriends_SeedFromConfig();
 
 	static std::string optstring = build_optstring(gamescope_options);
 	gamescope_optstring = optstring.c_str();

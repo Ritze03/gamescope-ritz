@@ -5,24 +5,32 @@
 // library below loads and every symbol it needs resolves).
 
 #include "SteamFriends.h"
+#include "SteamAppNames.h"
 #include "SteamFriendsCmd.h"
 
 #include "Utils/Process.h"
 #include "convar.h"
 #include "log.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <sys/stat.h>
 
 #include <dlfcn.h>
 #include <signal.h>
@@ -234,11 +242,42 @@ namespace gamescope::steamfriends
 		size_t     g_nLastJoinable   = 0;
 		size_t     g_nLastInGame     = 0;
 
-		// app id -> the game's name, or "" for "looked and did not find it".
-		// Filled on whichever thread called Snapshot(); the empty entry is
-		// what stops a friend playing something this machine does not have
-		// from re-reading the disk on every poll.
-		std::unordered_map<uint32_t, std::string> g_mapAppNames;
+		// ---- the game's name, in three layers ------------------------------
+		// app id -> what the LOCAL appmanifest said, "" for "looked, this
+		// machine does not have it". Session-only and never written to disk:
+		// it is a memo of a file read, and re-reading it next session is how a
+		// renamed or uninstalled game corrects itself for free.
+		std::unordered_map<uint32_t, std::string> g_mapManifestNames;
+
+		// app id -> what STEAM said, when the manifest could not answer. This
+		// one is persistent (SteamAppNames.h's AppNameCachePath) and its ""
+		// entries are meaningful: "Steam has no name for this id".
+		AppNameMap g_mapNetNames;
+		bool       g_bNetCacheLoaded = false;
+		bool       g_bNetCacheDirty  = false;
+
+		// The ids this poll could answer from neither. Filled by AppNameFor()
+		// under g_Mutex, drained by the poller between snapshots.
+		std::set<uint32_t> g_setUnresolved;
+
+		// THE SWITCH, and the reason it is an atomic here rather than a
+		// config::LoadGlobal() call: this is read on the POLLER thread, and
+		// gamescope's config generation counter is a plain uint64_t that the
+		// draw thread writes. Seeding one atomic from the panel
+		// (PanelFriends_SeedFromConfig) keeps the worker away from the config
+		// layer's locking entirely. The default matches
+		// OverlaySettings::friends_lookup_names, so a build that never gets
+		// around to seeding behaves as configured-by-default rather than as
+		// something else.
+		std::atomic<bool> g_bLookupNames{ true };
+
+		// A network that is not answering is a fact about the NETWORK, not
+		// about one app id, so the backoff is global: one failed fetch stops
+		// all of them for five minutes rather than retrying every three
+		// seconds for as long as the panel is open.
+		std::chrono::steady_clock::time_point g_tNextFetch{};
+		bool   g_bFetchFailureLogged = false;
+		size_t g_nNamesResolved      = 0;   // for the status/debug line only
 
 		// The last `steam <url>` forwarder. It exits within a moment of being
 		// started, but gamescope is a subreaper, so somebody has to collect it:
@@ -419,25 +458,128 @@ namespace gamescope::steamfriends
 			return s_vecDirs;
 		}
 
+		// =====================================================================
+		//  The persistent half of the name cache
+		// =====================================================================
+		// SteamAppNames.h holds the format, the bound and the reasoning; this
+		// is only the file handling. All of it runs on the poller thread, and
+		// every failure is silent and empty -- a cache is by definition a thing
+		// the program must work without.
+		bool WriteWholeFile( const std::string &sPath, const std::string &sText )
+		{
+			// Written through a temporary and renamed, so a crash or a full
+			// disk leaves the OLD cache rather than half of a new one. It costs
+			// two syscalls and removes the only way this file could ever be the
+			// corrupt input ParseAppNameCache() has to tolerate.
+			const std::string sTmp = sPath + ".tmp";
+			{
+				std::ofstream f( sTmp, std::ios::binary | std::ios::trunc );
+				if ( !f )
+					return false;
+				f.write( sText.data(), (std::streamsize)sText.size() );
+				if ( !f )
+					return false;
+			}
+			return rename( sTmp.c_str(), sPath.c_str() ) == 0;
+		}
+
+		// Caller must hold g_Mutex.
+		void EnsureNetCacheLoaded()
+		{
+			if ( g_bNetCacheLoaded )
+				return;
+			g_bNetCacheLoaded = true;
+
+			const std::string sPath = AppNameCachePath();
+			if ( sPath.empty() )
+				return;
+			// A corrupt, truncated or hostile file parses as EMPTY rather than
+			// as a failure -- see ParseAppNameCache(). Starting empty is
+			// indistinguishable from a machine that never had the file, which
+			// is the only behaviour a cache is allowed to have.
+			g_mapNetNames = ParseAppNameCache(
+				ReadWholeFile( sPath, kAppNameCacheMaxBytes ) );
+			TrimAppNameCache( g_mapNetNames );
+		}
+
+		// Caller must hold g_Mutex.
+		void SaveNetCache()
+		{
+			if ( !g_bNetCacheDirty )
+				return;
+			g_bNetCacheDirty = false;
+
+			const std::string sPath = AppNameCachePath();
+			if ( sPath.empty() )
+				return;
+
+			// THE BOUND IS APPLIED ON EVERY WRITE, not only on load: the file
+			// that lands on disk is the thing that has to be bounded, and
+			// enforcing it here means no path can grow it past the cap.
+			TrimAppNameCache( g_mapNetNames );
+
+			const size_t nSlash = sPath.rfind( '/' );
+			if ( nSlash != std::string::npos && nSlash > 0 )
+				mkdir( sPath.substr( 0, nSlash ).c_str(), 0755 );   // EEXIST is fine
+			WriteWholeFile( sPath, SerialiseAppNameCache( g_mapNetNames ) );
+		}
+
+		// =====================================================================
+		//  What to call the game -- three layers, cheapest first
+		// =====================================================================
+		//   1. the local appmanifest: free, offline, and the only source that
+		//      is authoritative about what THIS machine has;
+		//   2. the persistent cache of what Steam said last time;
+		//   3. nothing -- the id goes on the unresolved list, the row reads
+		//      "App <id>" for now, and the poller may ask Steam between
+		//      snapshots. It NEVER asks here: this runs inside Snapshot(),
+		//      which holds g_Mutex, and a network round trip under that lock
+		//      would block friends_dump and StatusText() for its duration.
+		//
 		// Caller must hold g_Mutex.
 		std::string AppNameFor( uint32_t uAppId )
 		{
 			if ( uAppId == 0 )
 				return {};
-			if ( auto it = g_mapAppNames.find( uAppId ); it != g_mapAppNames.end() )
-				return it->second;
 
-			std::string sName;
-			for ( const std::string &sDir : SteamAppsDirs() )
+			auto itManifest = g_mapManifestNames.find( uAppId );
+			if ( itManifest == g_mapManifestNames.end() )
 			{
-				sName = AppNameFromManifest( ReadWholeFile(
-					sDir + "/appmanifest_" + std::to_string( (unsigned long long)uAppId ) + ".acf",
-					16 * 1024 ) );
-				if ( !sName.empty() )
-					break;
+				std::string sName;
+				for ( const std::string &sDir : SteamAppsDirs() )
+				{
+					sName = AppNameFromManifest( ReadWholeFile(
+						sDir + "/appmanifest_" + std::to_string( (unsigned long long)uAppId ) + ".acf",
+						16 * 1024 ) );
+					if ( !sName.empty() )
+						break;
+				}
+				// "" is memoised too, on purpose: a friend playing something
+				// this machine does not have costs one failed open() per
+				// session and never another.
+				itManifest = g_mapManifestNames.emplace( uAppId, std::move( sName ) ).first;
 			}
-			g_mapAppNames[ uAppId ] = sName;   // "" is cached too, on purpose
-			return sName;
+			if ( !itManifest->second.empty() )
+				return itManifest->second;
+
+			EnsureNetCacheLoaded();
+			if ( auto it = g_mapNetNames.find( uAppId ); it != g_mapNetNames.end() )
+			{
+				// Touching it is what makes the bound an LRU rather than a
+				// guillotine: the games the user's friends actually play stay,
+				// and the ones nobody has touched in years are what falls off.
+				const int64_t nNow = (int64_t)time( nullptr );
+				if ( it->second.nSeen != nNow )
+				{
+					it->second.nSeen = nNow;
+					g_bNetCacheDirty = true;
+				}
+				return it->second.sName;   // "" == Steam has no name for it
+			}
+
+			if ( g_bLookupNames.load( std::memory_order_relaxed ) )
+				g_setUnresolved.insert( uAppId );
+			return {};
 		}
 
 		void ReapJoinChild()
@@ -594,6 +736,18 @@ namespace gamescope::steamfriends
 			(int)svClientVersion.size(), svClientVersion.data(),
 			(int)svFriendsVersion.size(), svFriendsVersion.data() );
 
+		// THE ORDER, and it is applied HERE rather than in the panel so every
+		// reader agrees: the panel, `friends_dump`, `friends_join <n>`'s
+		// indices and the live probe all see one list in one order. A panel
+		// that sorted its own copy would make friends_dump's index numbers
+		// mean something different from the numbers on screen.
+		//
+		// FriendOrderLess() is a total order over the data (SteamFriendsCmd.h),
+		// so an unchanged friends list sorts to the identical sequence every
+		// poll -- which is what stops the rows shuffling under a user who is
+		// reading them.
+		std::sort( vecOut.begin(), vecOut.end(), FriendOrderLess );
+
 		SetReason( eReason );
 		g_nLastInGame   = vecOut.size();
 		g_nLastJoinable = (size_t)nJoinable;
@@ -661,6 +815,32 @@ namespace gamescope::steamfriends
 		return StatusLine( g_nLastInGame, g_nLastJoinable );
 	}
 
+	// The one switch that decides whether this process ever opens a socket.
+	// Seeded from OverlaySettings::friends_lookup_names by
+	// PanelFriends_SeedFromConfig() and flipped by the row in the Friends area.
+	void SetLookupNames( bool bEnabled )
+	{
+		g_bLookupNames.store( bEnabled, std::memory_order_relaxed );
+		if ( !bEnabled )
+		{
+			std::scoped_lock lock( g_Mutex );
+			g_setUnresolved.clear();
+		}
+	}
+
+	bool LookupNamesEnabled()
+	{
+		return g_bLookupNames.load( std::memory_order_relaxed );
+	}
+
+	NameCacheInfo NameCache()
+	{
+		std::scoped_lock lock( g_Mutex );
+		EnsureNetCacheLoaded();
+		return NameCacheInfo{ AppNameCachePath(), g_mapNetNames.size(), kAppNameCacheMax,
+			g_setUnresolved.size() };
+	}
+
 	// =========================================================================
 	//  The poller
 	// =========================================================================
@@ -700,14 +880,173 @@ namespace gamescope::steamfriends
 		std::thread             g_Thread;
 		std::once_flag          g_OnceStart;
 
-		void PollOnce()
+		bool StopRequested()
 		{
-			// Snapshot() takes g_Mutex; StatusText() takes it again after.
-			// Neither is g_ViewMutex, so the copy below is the only thing a
-			// CurrentView() caller can ever be behind.
-			std::vector<Friend> vec = Snapshot();
-			std::string sStatus = StatusText();
+			std::scoped_lock lock( g_PollMutex );
+			return g_bStop;
+		}
 
+		// =================================================================
+		//  Asking Steam what a game is called
+		// =================================================================
+		// THE ONLY OUTBOUND NETWORK REQUEST THIS COMPOSITOR EVER MAKES, and
+		// SteamAppNames.h is where the decision, the endpoint comparison and
+		// the exact contents of the request are written down. Read that
+		// first; this is only the mechanism.
+		//
+		// FOUR PROPERTIES, EACH LOAD-BEARING:
+		//
+		//   * IT RUNS ON THE POLLER THREAD, never on a frame and never
+		//     inside Snapshot()'s lock. The panel reads CurrentView(), which
+		//     touches neither -- so an endpoint that never answers costs a
+		//     stale label and nothing else. tests/test_steam_friends.cpp
+		//     measures it against a blackholed address, exactly as the slow
+		//     Steam stub measures the poll.
+		//
+		//   * IT IS BOUNDED TWICE. curl's own --max-time, and a wait loop
+		//     here that kills the child if it outlives it -- because
+		//     "somebody else enforces the timeout" is only true while that
+		//     somebody is alive.
+		//
+		//   * IT NEVER HOLDS g_Mutex WHILE IT WAITS. The ids come out under
+		//     the lock, the fetch happens with the lock released, and the
+		//     answer goes back in under the lock. A round trip under g_Mutex
+		//     would block friends_dump and StatusText() for its duration.
+		//
+		//   * A FAILURE IS NOT AN ANSWER. Nothing is written to the cache on
+		//     a failed fetch, so a flight-mode afternoon cannot bake "App
+		//     252490" into the file permanently; a global five-minute
+		//     backoff stops the retry from becoming a poll-rate hammer.
+		//
+		// Returns true when it resolved something new, which is the poller's
+		// cue to re-snapshot so the names appear now rather than in three
+		// seconds.
+		bool RunFetch( const std::string &sUrl, const std::string &sOutPath )
+		{
+			if ( !Process::ExecutableExists( std::string( kFetchProgram ) ) )
+				return false;
+
+			std::vector<std::string> vecArgs = BuildFetchArgv( sUrl, sOutPath );
+			std::vector<char *> vecArgv;
+			vecArgv.reserve( vecArgs.size() + 1 );
+			for ( std::string &s : vecArgs )
+				vecArgv.push_back( s.data() );
+			vecArgv.push_back( nullptr );
+
+			// Its own process group, and SIGKILL on our death: the same spawn
+			// discipline Join() and the companion browser use, for the same
+			// reason -- a gamescope that is killed outright must not leave a
+			// network client behind.
+			const pid_t nPid = Process::SpawnProcess( vecArgv.data(), []()
+				{
+					setpgid( 0, 0 );
+					Process::SetDeathSignal( SIGKILL );
+				} );
+			if ( nPid <= 0 )
+				return false;
+
+			// Two seconds of slack past curl's own --max-time: if curl has not
+			// honoured its own bound by then it is not going to, and this is
+			// the wait that guarantees Shutdown() cannot be held up by the
+			// network. StopRequested() makes an exiting gamescope cut it short.
+			const auto tDeadline = std::chrono::steady_clock::now() +
+				std::chrono::seconds( kFetchTimeoutSec + 2 );
+			for ( ;; )
+			{
+				int nStatus = 0;
+				const pid_t nDone = waitpid( nPid, &nStatus, WNOHANG );
+				if ( nDone == nPid )
+					return WIFEXITED( nStatus ) && WEXITSTATUS( nStatus ) == 0;
+				if ( nDone < 0 )
+					return false;
+
+				if ( StopRequested() || std::chrono::steady_clock::now() > tDeadline )
+				{
+					kill( nPid, SIGKILL );
+					waitpid( nPid, nullptr, 0 );
+					return false;
+				}
+				std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
+			}
+		}
+
+		bool ResolveUnknownNames()
+		{
+			std::vector<uint32_t> vecAsk;
+			std::string sTmpPath;
+			{
+				std::scoped_lock lock( g_Mutex );
+				if ( !g_bLookupNames.load( std::memory_order_relaxed ) )
+				{
+					// OFF MEANS NO REQUEST, not a queued one. The list is
+					// dropped rather than kept, so switching the setting on
+					// later starts from what is on screen then.
+					g_setUnresolved.clear();
+					return false;
+				}
+				if ( g_setUnresolved.empty() )
+					return false;
+				if ( std::chrono::steady_clock::now() < g_tNextFetch )
+					return false;
+
+				for ( uint32_t uAppId : g_setUnresolved )
+				{
+					if ( vecAsk.size() >= kAppNamesPerRequest )
+						break;
+					vecAsk.push_back( uAppId );
+				}
+				g_setUnresolved.clear();
+
+				const std::string sPath = AppNameCachePath();
+				if ( sPath.empty() )
+					return false;
+				sTmpPath = sPath + ".fetch";
+				const size_t nSlash = sPath.rfind( '/' );
+				if ( nSlash != std::string::npos && nSlash > 0 )
+					mkdir( sPath.substr( 0, nSlash ).c_str(), 0755 );
+			}
+
+			const std::string sUrl = BuildAppNamesUrl( vecAsk );
+			if ( sUrl.empty() )
+				return false;
+
+			const bool bOk = RunFetch( sUrl, sTmpPath );
+			std::string sBody = bOk ? ReadWholeFile( sTmpPath, kAppNameCacheMaxBytes ) : std::string();
+			unlink( sTmpPath.c_str() );
+
+			const AppNameMap mapAnswer = ParseAppNamesResponse( sBody, (int64_t)time( nullptr ) );
+
+			std::scoped_lock lock( g_Mutex );
+			if ( mapAnswer.empty() )
+			{
+				g_tNextFetch = std::chrono::steady_clock::now() + std::chrono::minutes( 5 );
+				if ( !g_bFetchFailureLogged )
+				{
+					g_bFetchFailureLogged = true;
+					// The app ids are ours to log (SteamFriends.h's rule is
+					// about ids that name a PERSON); the count is what a user
+					// reading this actually needs.
+					friends_log.infof( "couldn't look up %zu game name(s) online; "
+						"they'll show as \"App <id>\". Retrying in 5 minutes.", vecAsk.size() );
+				}
+				return false;
+			}
+
+			g_bFetchFailureLogged = false;
+			EnsureNetCacheLoaded();
+			for ( const auto &[ uAppId, entry ] : mapAnswer )
+				g_mapNetNames[ uAppId ] = entry;
+			g_bNetCacheDirty = true;
+			g_nNamesResolved += mapAnswer.size();
+			SaveNetCache();
+
+			friends_log.debugf( "looked up %zu game name(s); the cache holds %zu.",
+				mapAnswer.size(), g_mapNetNames.size() );
+			return true;
+		}
+
+		void PublishView( std::vector<Friend> vec, std::string sStatus )
+		{
 			size_t nJoinable = 0;
 			for ( const Friend &f : vec )
 				if ( f.CanJoin() )
@@ -719,6 +1058,23 @@ namespace gamescope::steamfriends
 			g_View.nJoinable  = nJoinable;
 			g_View.bPolled    = true;
 			g_tPolled         = std::chrono::steady_clock::now();
+		}
+
+		void PollOnce()
+		{
+			// Snapshot() takes g_Mutex; StatusText() takes it again after.
+			// Neither is g_ViewMutex, so the copy below is the only thing a
+			// CurrentView() caller can ever be behind.
+			PublishView( Snapshot(), StatusText() );
+
+			// The names the snapshot could not answer, asked in ONE request,
+			// with the view already published -- so the rows are on screen
+			// (as "App <id>") before the network is touched at all. If the
+			// answer comes back, re-snapshot so the names appear now rather
+			// than at the next interval; the second snapshot resolves
+			// everything from the cache and asks nothing.
+			if ( ResolveUnknownNames() )
+				PublishView( Snapshot(), StatusText() );
 		}
 
 		void PollLoop()
@@ -874,6 +1230,11 @@ namespace gamescope::steamfriends
 			{
 				const std::vector<Friend> vec = Snapshot();
 				console_log.infof( "friends: %s", StatusText().c_str() );
+				// The name cache, because "why does this row say App 252490"
+				// is the question this listing is most often run to answer.
+				const NameCacheInfo info = NameCache();
+				console_log.infof( "  game names: online lookup %s, %zu/%zu remembered, %zu pending",
+					LookupNamesEnabled() ? "on" : "off", info.nEntries, info.nMax, info.nPending );
 				for ( size_t i = 0; i < vec.size(); i++ )
 				{
 					// The joinable marker is what makes this listing readable

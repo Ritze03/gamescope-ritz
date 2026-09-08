@@ -58,29 +58,74 @@ namespace gamescope
 		// buying a data race with.
 		steamfriends::View ViewNow() { return steamfriends::CurrentView(); }
 
+		// ---- the one setting on this page ------------------------------------
+		// global.json, not the session profile: see ConfigSchema.h's
+		// friends_lookup_names. Cached against the config generation, exactly
+		// as PanelSystem.cpp and PanelCursor.cpp do for their own global rows
+		// -- re-reading the file on every draw would be a file read per frame.
+		bool     s_bGlobalLoaded = false;
+		uint64_t s_ulGlobalGeneration = 0;
+		config::Settings s_Global;
+
+		void EnsureGlobalLoaded()
+		{
+			const uint64_t ulGeneration = config::ConfigGeneration();
+			if ( s_bGlobalLoaded && ulGeneration == s_ulGlobalGeneration )
+				return;
+			s_Global = config::LoadGlobal();
+			s_ulGlobalGeneration = ulGeneration;
+			s_bGlobalLoaded = true;
+		}
+
 		// ---- selection and the pending join ---------------------------------
-		// -1 is "nothing selected". The index addresses ViewNow().vecFriends,
-		// which the poller can replace between the click and the Tick() that
-		// acts on it -- so the pending join stores the SteamID and app id it
-		// was aimed at, not only the index, and Tick() refuses if the row it
-		// finds is not the row that was clicked. Joining the wrong person
-		// because a list refreshed underneath a click is exactly the bug an
-		// index-only handoff produces.
-		int      s_nSelected = -1;
+		// THE SELECTION IS A PERSON, NOT A ROW NUMBER, and that is the whole
+		// point of storing a SteamID here rather than an int.
+		//
+		// `Why:` the list is SORTED (SteamFriendsCmd.h's FriendOrderLess --
+		// invites, then joinable, then everyone else) and the poller replaces
+		// it every three seconds. The moment one friend joins a lobby, every
+		// row below them moves. An index-based selection would then be
+		// pointing at whoever slid into that slot -- the outline would jump to
+		// a different person under a user who had not touched anything, and
+		// the Join verb would be aimed at them. Keeping the SteamID and
+		// looking the index up per frame makes the highlight FOLLOW the person
+		// through every reorder, which is what a reader expects and is the
+		// classic bug in a list that sorts itself.
+		//
+		// The pending join keeps the same id for the same reason one step
+		// later: Tick() must join who was clicked, not who is at that index by
+		// the time the frame runs.
+		uint64_t s_ulSelectedSteamId = 0;   // 0 == nothing selected
 		bool     s_bJoinPending = false;
 		uint64_t s_ulPendingSteamId = 0;
 		uint32_t s_uPendingAppId = 0;
 
 		bool ListIsEmpty() { return ViewNow().vecFriends.empty(); }
 
+		// Where the selected person is RIGHT NOW, or -1 if they are gone (went
+		// offline, quit the game) -- which is a selection that has genuinely
+		// stopped existing, not one that moved.
+		int SelectedIndexIn( const steamfriends::View &v )
+		{
+			if ( !s_ulSelectedSteamId )
+				return -1;
+			for ( size_t i = 0; i < v.vecFriends.size(); i++ )
+				if ( v.vecFriends[ i ].ulSteamId == s_ulSelectedSteamId )
+					return (int)i;
+			return -1;
+		}
+
+		int SelectedIndex() { return SelectedIndexIn( ViewNow() ); }
+
 		// By VALUE, not by pointer: the view it came out of is a temporary,
 		// and a pointer into it would dangle the moment the caller used it.
 		std::optional<Friend> SelectedFriend()
 		{
 			const steamfriends::View v = ViewNow();
-			if ( s_nSelected < 0 || (size_t)s_nSelected >= v.vecFriends.size() )
+			const int nIndex = SelectedIndexIn( v );
+			if ( nIndex < 0 )
 				return std::nullopt;
-			return v.vecFriends[ (size_t)s_nSelected ];
+			return v.vecFriends[ (size_t)nIndex ];
 		}
 
 		// The app id this session is running under, as a number. nullopt when
@@ -160,12 +205,12 @@ namespace gamescope
 			{
 				// The placeholder row (an empty list is one item of text).
 				// Selecting it is not an error and is not a join.
-				s_nSelected = -1;
+				s_ulSelectedSteamId = 0;
 				return;
 			}
 
-			s_nSelected = nIndex;
 			const Friend &f = v.vecFriends[ (size_t)nIndex ];
+			s_ulSelectedSteamId = f.ulSteamId;
 			if ( !f.CanJoin() )
 			{
 				// The quiet reason, without saying WHO -- a toast is on screen
@@ -294,34 +339,38 @@ namespace gamescope
 		ui::Area &a = reg.Add( "system.friends", "Friends", ui::Section::System );
 		a.Keywords( "friends friend steam join joinable lobby party invite play playing game "
 		            "list persona online who" );
-		// No badge: this area has no settings and writes no file, so the
-		// session-profile badge every other area carries would be answering a
-		// question ("where does what I change here get written") that nothing
-		// on this page asks.
-		a.Badge( []{ return std::string(); } );
+		// "global only", the badge Appearance, Cursor and Keybinds carry: the
+		// one setting on this page (the name lookup below) writes global.json
+		// whatever profile the session is editing, because "may this machine
+		// reach the network" is a fact about the machine and not about the
+		// game. Until 2026-09-09 this area had no settings at all and
+		// deliberately carried no badge.
+		a.Badge( []{ return std::string( "global only" ); } );
 		a.Summary( []{ return steamfriends::CurrentView().sStatus; } );
 
 		a.Group( "Friends in a game" );
 
 		a.Composite( "friends.list", "Friends", ui::CompositeKind::List,
 			ui::AnyBind::Of<int>(
-				[]{ return s_nSelected; },
+				[]{ return SelectedIndex(); },
 				[]( int n ) { ActivateRow( n ); } ) )
 			.Items( []{ return Items(); } )
 			.ListAction( "Join", []
 				{
-					if ( JoinBlocker().empty() && s_nSelected >= 0 )
-						ActivateRow( s_nSelected );
+					const int nIndex = SelectedIndex();
+					if ( JoinBlocker().empty() && nIndex >= 0 )
+						ActivateRow( nIndex );
 				}, /* bDanger */ false, JoinBlocker )
 			.ListAction( "Refresh", []{ steamfriends::RequestRefresh(); } )
 			.Help( "Everyone on your Steam friends list who is in a game right now, read straight "
 			       "from the Steam client already running on this machine - no separate sign-in. "
-			       "A friend marked [Join] is in a lobby you can join: click them, or press Enter, "
-			       "and Steam moves you in. Friends without the mark are playing but not in a "
-			       "joinable lobby; the line says which. Joining somebody in the game you are "
-			       "already in happens straight away; joining a different game asks first, because "
-			       "it starts that game over this one." )
-			.Keywords( "friends list join lobby joinable playing game persona refresh" )
+			       "The ones you can join are listed first, then everyone else, alphabetically "
+			       "within each group. A friend marked [Join] is in a lobby you can join: click "
+			       "them, or press Enter, and Steam moves you in. Friends without the mark are "
+			       "playing but not in a joinable lobby; the line says which. Joining somebody in "
+			       "the game you are already in happens straight away; joining a different game "
+			       "asks first, because it starts that game over this one." )
+			.Keywords( "friends list join lobby joinable playing game persona refresh order sort" )
 			.Live( "status", []
 				{
 					return ui::Fact{ "friends", steamfriends::CurrentView().sStatus };
@@ -350,6 +399,55 @@ namespace gamescope
 						keybinds::ChordTextFor( keybinds::Action::Friends ) + " opens this list" };
 				} );
 
+		a.Group( "Game names" );
+
+		// THE ONE ROW IN THIS FORK THAT DECIDES WHETHER THE COMPOSITOR OPENS A
+		// SOCKET. ConfigSchema.h's friends_lookup_names carries the full
+		// argument for the default; the Help below is the user-facing half of
+		// it, and it names exactly what leaves the machine rather than saying
+		// "looks names up online" and leaving them to wonder.
+		a.Switch( "overlay.friends_lookup_names", "Look up game names online",
+			ui::AnyBind::Of<bool>(
+				[]
+				{
+					EnsureGlobalLoaded();
+					return s_Global.overlay.friends_lookup_names;
+				},
+				[]( bool b )
+				{
+					EnsureGlobalLoaded();
+					s_Global.overlay.friends_lookup_names = b;
+					// The runtime flag and the file move together: the poller
+					// reads the flag, and a switch that only wrote the file
+					// would not take effect until the next launch.
+					steamfriends::SetLookupNames( b );
+					config::EnqueueGlobalWrite( s_Global );
+				} ) )
+			.Help( "A friend playing something you have not installed shows as \"App 252490\", "
+			       "because the name comes from the game's own files on this machine. With this "
+			       "on, those ids are looked up once against Steam's public list and remembered "
+			       "on disk, so it happens once per game ever. What is sent is a list of app ids "
+			       "and nothing else - no Steam ID, no name, nothing about you - and only while "
+			       "this list is open. Off, an unknown game stays \"App 252490\" and nothing "
+			       "leaves this machine." )
+			.Key( "overlay.friends_lookup_names" )
+			.Default( config::OverlaySettings{}.friends_lookup_names )
+			.Keywords( "game name lookup online network internet steam api cache offline privacy" )
+			.Live( "cache", []
+				{
+					const steamfriends::NameCacheInfo info = steamfriends::NameCache();
+					char sz[ 96 ];
+					snprintf( sz, sizeof( sz ), "%zu of %zu names remembered",
+						info.nEntries, info.nMax );
+					return ui::Fact{ "cache", sz };
+				} )
+			.Live( "cache_file", []
+				{
+					const steamfriends::NameCacheInfo info = steamfriends::NameCache();
+					return ui::Fact{ "stored in",
+						info.sPath.empty() ? std::string( "nowhere - no cache directory" ) : info.sPath };
+				} );
+
 		a.Group( "Status" );
 
 		a.Facts( "friends.status", "Status", []{ return steamfriends::CurrentView().sStatus; } )
@@ -373,6 +471,30 @@ namespace gamescope
 					return ui::Fact{ "note",
 						"the joinable mark has not yet been seen light up on a real lobby - "
 						"see the Steam friends page in the docs" };
+				} )
+			.Live( "invites", []
+				{
+					// SAID IN THE PRODUCT, NOT ONLY IN THE DOCS, because
+					// "where are my invites" is the obvious next question of
+					// anybody looking at a friends list -- and the honest
+					// answer is that Steam does not offer them to us. See
+					// superdoc/features/steam-friends.md, "Received invites",
+					// for the measurement behind this sentence.
+					return ui::Fact{ "invites",
+						"not shown - Steam has no way to tell this list about an invite you "
+						"have been sent; accept those in Steam itself" };
 				} );
+	}
+
+	// Called at startup, from main.cpp, beside PanelSystem_SeedFromConfig().
+	// `Why it is not enough to seed at registration:` the registry is built
+	// lazily, the first time the shell is drawn -- but `friends_dump` on the
+	// console reaches the poller without the shell ever existing. Seeding here
+	// means the network switch is honoured from the first Steam call of the
+	// process, not from the first time somebody opens the overlay.
+	void PanelFriends_SeedFromConfig()
+	{
+		EnsureGlobalLoaded();
+		steamfriends::SetLookupNames( s_Global.overlay.friends_lookup_names );
 	}
 }

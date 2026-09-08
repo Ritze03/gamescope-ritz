@@ -34,6 +34,7 @@
 // and safe to paste into an issue, which is the rule src/SteamFriends.cpp's own
 // logging follows for the same reason.
 
+#include "SteamAppNames.h"
 #include "SteamFriends.h"
 #include "SteamFriendsCmd.h"
 #include "convar.h"
@@ -41,11 +42,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <dlfcn.h>
+#include <time.h>
 #include <unistd.h>
 
 // ---------------------------------------------------------------------------
@@ -266,6 +269,162 @@ namespace diag
 	}
 }
 
+// ---------------------------------------------------------------------------
+//  --callbacks N: can a pipe with NO app id observe anything invite-shaped?
+// ---------------------------------------------------------------------------
+// The measurement behind superdoc/features/steam-friends.md's "Received
+// invites" verdict, kept here so it is reproducible rather than a claim.
+//
+// IT DECLARES NO VTABLE AND CALLS NO SLOT. Every symbol below is a FLAT
+// exported C function out of steamclient.so whose signature is the published
+// flat-API one -- Steam_CreateSteamPipe, Steam_ConnectToGlobalUser,
+// Steam_BGetCallback, Steam_FreeLastCallback, Steam_ReleaseUser,
+// Steam_BReleaseSteamPipe. So §6e's rule ("never call a slot whose shape you
+// have not measured") is not in play at all: there are no slots here.
+//
+// SAFE AGAINST A RUNNING GAME. Steamworks callback queues are PER PIPE. This
+// creates its own pipe; freeing a callback on it cannot remove one from the
+// pipe the user's game owns.
+//
+// PRIVACY: callback IDs, payload SIZES and counts. Never a payload byte,
+// never a name, never a SteamID.
+namespace callbacks
+{
+	struct CallbackMsg_t
+	{
+		int32_t  m_hSteamUser;
+		int      m_iCallback;
+		uint8_t *m_pubParam;
+		int      m_cubParam;
+	};
+
+	int Run( int nSeconds )
+	{
+		const std::string sPath = std::string( getenv( "HOME" ) ? getenv( "HOME" ) : "" ) +
+			"/.steam/steam/linux64/steamclient.so";
+		void *pLib = dlopen( sPath.c_str(), RTLD_LAZY | RTLD_LOCAL );
+		if ( !pLib ) { printf( "RESULT callbacks: FAIL (no library)\n" ); return 1; }
+
+		auto CreatePipe   = (int32_t (*)())                      dlsym( pLib, "Steam_CreateSteamPipe" );
+		auto ConnectGlob  = (int32_t (*)( int32_t ))             dlsym( pLib, "Steam_ConnectToGlobalUser" );
+		auto BGetCallback = (bool (*)( int32_t, CallbackMsg_t * ))dlsym( pLib, "Steam_BGetCallback" );
+		auto FreeLast     = (void (*)( int32_t ))                dlsym( pLib, "Steam_FreeLastCallback" );
+		auto ReleaseUser  = (void (*)( int32_t, int32_t ))       dlsym( pLib, "Steam_ReleaseUser" );
+		auto ReleasePipe  = (bool (*)( int32_t ))                dlsym( pLib, "Steam_BReleaseSteamPipe" );
+		if ( !CreatePipe || !ConnectGlob || !BGetCallback || !FreeLast || !ReleaseUser || !ReleasePipe )
+		{ printf( "RESULT callback symbols: FAIL\n" ); return 1; }
+		printf( "RESULT callback symbols: PASS (all flat, none is a vtable slot)\n" );
+
+		const int32_t hPipe = CreatePipe();
+		if ( !hPipe ) { printf( "RESULT callbacks: FAIL (Steam isn't running)\n" ); return 1; }
+		const int32_t hUser = ConnectGlob( hPipe );
+		if ( !hUser ) { ReleasePipe( hPipe ); printf( "RESULT callbacks: FAIL (signed out)\n" ); return 1; }
+
+		std::map<int, long> mapCounts;
+		std::map<int, int>  mapSizes;
+		long nTotal = 0;
+		const time_t tEnd = time( nullptr ) + nSeconds;
+		printf( "pumping for %d s, on a pipe with NO app id (ids and sizes only)...\n", nSeconds );
+		while ( time( nullptr ) < tEnd )
+		{
+			CallbackMsg_t msg{};
+			while ( BGetCallback( hPipe, &msg ) )
+			{
+				mapCounts[ msg.m_iCallback ]++;
+				mapSizes[ msg.m_iCallback ] = msg.m_cubParam;
+				nTotal++;
+				FreeLast( hPipe );
+				memset( &msg, 0, sizeof( msg ) );
+			}
+			struct timespec ts = { 0, 50 * 1000 * 1000 };
+			nanosleep( &ts, nullptr );
+		}
+
+		printf( "RESULT callbacks delivered: %ld\n", nTotal );
+		bool bFriendsRange = false, bInviteShaped = false;
+		for ( const auto &kv : mapCounts )
+		{
+			// k_iSteamFriendsCallbacks is 300. 333 is GameLobbyJoinRequested_t,
+			// 337 GameRichPresenceJoinRequested_t, 343
+			// GameConnectedFriendChatMsg_t -- the only three that could carry
+			// anything invite-shaped.
+			const char *pszWhat = "";
+			if ( kv.first == 304 ) pszWhat = "  (PersonaStateChange_t)";
+			if ( kv.first == 336 ) pszWhat = "  (FriendRichPresenceUpdate_t)";
+			if ( kv.first == 333 ) { pszWhat = "  (GameLobbyJoinRequested_t)"; bInviteShaped = true; }
+			if ( kv.first == 337 ) { pszWhat = "  (GameRichPresenceJoinRequested_t)"; bInviteShaped = true; }
+			if ( kv.first == 343 ) { pszWhat = "  (GameConnectedFriendChatMsg_t)"; bInviteShaped = true; }
+			if ( kv.first >= 300 && kv.first < 400 )
+				bFriendsRange = true;
+			printf( "  callback id %-8d x%-6ld payload %d bytes%s\n",
+				kv.first, kv.second, mapSizes[ kv.first ], pszWhat );
+		}
+		printf( "RESULT callbacks reach a no-app-id pipe: %s\n", nTotal ? "YES" : "no" );
+		printf( "RESULT friends-range (300..399) callbacks seen: %s\n", bFriendsRange ? "YES" : "no" );
+		printf( "RESULT invite-shaped callbacks (333/337/343) seen: %s\n",
+			bInviteShaped ? "YES -- rethink the docs" : "NO" );
+
+		ReleaseUser( hPipe, hUser );
+		ReleasePipe( hPipe );
+		return 0;
+	}
+}
+
+// ---------------------------------------------------------------------------
+//  --names N: does a game this machine does not have get a name, and is it
+//  remembered?
+// ---------------------------------------------------------------------------
+// The one thing the unit tests genuinely cannot answer, because they answer it
+// against a shim `curl` and a fake friends list: does the REAL endpoint, asked
+// about the REAL app ids the user's real friends are in, come back with names?
+//
+// It drives the POLLER (CurrentView()), not Snapshot(), because the lookup
+// happens between snapshots and on the poller's own thread -- which is the
+// arrangement being checked.
+//
+// Point GS_RITZ_APPNAME_CACHE somewhere scratch before running it, so a live
+// check never writes into the user's real cache.
+namespace names
+{
+	using namespace gamescope::steamfriends;
+
+	int Run( int nSeconds )
+	{
+		printf( "RESULT name cache file: %s\n", AppNameCachePath().c_str() );
+		printf( "RESULT online lookup: %s\n", LookupNamesEnabled() ? "on" : "off" );
+
+		View v;
+		const time_t tEnd = time( nullptr ) + nSeconds;
+		while ( time( nullptr ) < tEnd )
+		{
+			v = CurrentView();
+			struct timespec ts = { 0, 200 * 1000 * 1000 };
+			nanosleep( &ts, nullptr );
+		}
+		Shutdown();
+
+		int nNamed = 0, nBare = 0;
+		for ( const Friend &f : v.vecFriends )
+		{
+			const bool bBare = f.sGame.rfind( "App ", 0 ) == 0;
+			nBare += bBare;
+			nNamed += !bBare;
+			// The app id and the words Steam uses for it. No persona, no
+			// SteamID, no lobby id -- this file's standing rule.
+			printf( "  appid %-8u %-9s %s\n", f.uAppId,
+				f.CanJoin() ? "JOINABLE" : "in a game", f.sGame.c_str() );
+		}
+
+		const NameCacheInfo info = NameCache();
+		printf( "RESULT rows: %zu (%d named, %d still \"App <id>\")\n",
+			v.vecFriends.size(), nNamed, nBare );
+		printf( "RESULT cache entries after the run: %zu of %zu\n", info.nEntries, info.nMax );
+		printf( "RESULT names resolved online: %s\n",
+			info.nEntries > 0 ? "YES" : "none needed or none answered" );
+		return 0;
+	}
+}
+
 using namespace gamescope;
 using namespace gamescope::steamfriends;
 
@@ -321,6 +480,10 @@ int main( int argc, char **argv )
 			diag::g_pszFind = argv[ i + 1 ];
 		if ( std::string_view( argv[ i ] ) == "--diagnose" )
 			return diag::Run();
+		if ( std::string_view( argv[ i ] ) == "--callbacks" )
+			return callbacks::Run( i + 1 < argc ? atoi( argv[ i + 1 ] ) : 30 );
+		if ( std::string_view( argv[ i ] ) == "--names" )
+			return names::Run( i + 1 < argc ? atoi( argv[ i + 1 ] ) : 12 );
 	}
 
 	std::vector<Friend> vec;

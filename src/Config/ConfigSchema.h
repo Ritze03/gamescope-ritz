@@ -823,6 +823,45 @@ namespace gamescope::config
         // (a wiki, a guide, a second-screen tool), which is the reason this is
         // a setting rather than a constant.
         std::string companion_url = "https://steamcommunity.com/chat";
+
+        // ---- Friends list: look game names up online -- src/SteamAppNames.h,
+        // ---- area `system.friends` (2026-09-09) ---------------------------
+        // THE ONLY SETTING IN THIS WHOLE FORK THAT DECIDES WHETHER THE
+        // COMPOSITOR OPENS A SOCKET, so it gets the long comment.
+        //
+        // The friends list gets an app id out of Steam and looks the name up in
+        // Steam's own appmanifest_<id>.acf. That covers every game INSTALLED
+        // here and nothing else, so a friend playing something the user does
+        // not own read as "App 252490". With this on, ids the local files
+        // cannot answer are looked up once against Steam's keyless public
+        // endpoint and cached to disk forever.
+        //
+        // WHAT IS SENT: a list of app ids, and nothing else. No SteamID, no
+        // persona name, no lobby id, no account name, no identifier of any
+        // kind -- SteamAppNames.h's BuildAppNamesUrl() builds the whole query
+        // string out of std::to_string() over integers, so there is no string
+        // input for anything else to travel in. Plus what any HTTP request
+        // carries: this machine's IP, and curl's version as the User-Agent. No
+        // cookie, no curlrc, no netrc.
+        //
+        // DEFAULT ON, and the argument is worth writing down because the
+        // opposite is defensible. FOR: the request contains nothing about the
+        // user; it happens ONLY while the friends list is actually being
+        // looked at (the poller sleeps otherwise) and only for ids the disk
+        // could not answer, so an idle compositor and a user who never opens
+        // the panel make zero requests; and defaulting it off would ship the
+        // "App 252490" the feature exists to fix, behind a switch nobody knows
+        // to look for. AGAINST: a compositor talking to the internet is a new
+        // class of behaviour, and consent is normally opt-in. The tie is broken
+        // by what is actually at stake -- an app id is not a fact about a
+        // person -- and by the switch being one row away, in the same area, with
+        // its Help line naming exactly what leaves the machine.
+        //
+        // GLOBAL, like the three companion fields above and for the same
+        // reason: "may this machine reach the network" is a fact about the
+        // machine, not about which game is running. A per-profile version
+        // would mean names appear in CS2 and not in Rust with no visible cause.
+        bool friends_lookup_names = true;
     };
 
     // Toast notification system (this fork's own addition, see
