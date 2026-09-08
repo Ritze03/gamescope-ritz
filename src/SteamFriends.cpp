@@ -287,7 +287,17 @@ namespace gamescope::steamfriends
 		// seconds for as long as the panel is open.
 		std::chrono::steady_clock::time_point g_tNextFetch{};
 		bool   g_bFetchFailureLogged = false;
-		size_t g_nNamesResolved      = 0;   // for the status/debug line only
+
+		// WHAT THE STATUS ROW READS, AND WHY IT IS TWO ATOMICS RATHER THAN A
+		// LOOK INSIDE THE MAPS. NameCache() is called from a .Live() fact,
+		// which runs on the DRAW THREAD -- and g_Mutex is the lock Snapshot()
+		// holds for a whole round trip to the Steam client. Reading the maps
+		// under it would put the frame path behind a wedged Steam, which is
+		// precisely the bug this file's whole two-lock arrangement exists to
+		// make unrepresentable (SteamFriends.h's threading note). Two atomics
+		// can be a poll out of date; they can never block a frame.
+		std::atomic<size_t> g_nCacheEntries{ 0 };
+		std::atomic<size_t> g_nCachePending{ 0 };
 
 		// The last `steam <url>` forwarder. It exits within a moment of being
 		// started, but gamescope is a subreaper, so somebody has to collect it:
@@ -510,6 +520,7 @@ namespace gamescope::steamfriends
 			g_mapNetNames = ParseAppNameCache(
 				ReadWholeFile( sPath, kAppNameCacheMaxBytes ) );
 			TrimAppNameCache( g_mapNetNames );
+			g_nCacheEntries.store( g_mapNetNames.size(), std::memory_order_relaxed );
 		}
 
 		// Caller must hold g_Mutex.
@@ -536,6 +547,7 @@ namespace gamescope::steamfriends
 			// that lands on disk is the thing that has to be bounded, and
 			// enforcing it here means no path can grow it past the cap.
 			TrimAppNameCache( g_mapNetNames );
+			g_nCacheEntries.store( g_mapNetNames.size(), std::memory_order_relaxed );
 
 			const size_t nSlash = sPath.rfind( '/' );
 			if ( nSlash != std::string::npos && nSlash > 0 )
@@ -598,7 +610,10 @@ namespace gamescope::steamfriends
 
 			if ( g_bLookupNames.load( std::memory_order_relaxed ) &&
 			     !g_setAskedUnanswered.count( uAppId ) )
+			{
 				g_setUnresolved.insert( uAppId );
+				g_nCachePending.store( g_setUnresolved.size(), std::memory_order_relaxed );
+			}
 			return {};
 		}
 
@@ -838,14 +853,14 @@ namespace gamescope::steamfriends
 	// The one switch that decides whether this process ever opens a socket.
 	// Seeded from OverlaySettings::friends_lookup_names by
 	// PanelFriends_SeedFromConfig() and flipped by the row in the Friends area.
+	// NO LOCK, DELIBERATELY. This is called from the switch's setter, on the
+	// DRAW THREAD, and g_Mutex is held for a whole Steam round trip -- taking
+	// it here would let a wedged Steam stall the frame that flipped a toggle.
+	// Nothing needs clearing either: ResolveUnknownNames() drops the pending
+	// list itself the first time it sees the flag off.
 	void SetLookupNames( bool bEnabled )
 	{
 		g_bLookupNames.store( bEnabled, std::memory_order_relaxed );
-		if ( !bEnabled )
-		{
-			std::scoped_lock lock( g_Mutex );
-			g_setUnresolved.clear();
-		}
 	}
 
 	bool LookupNamesEnabled()
@@ -853,12 +868,15 @@ namespace gamescope::steamfriends
 		return g_bLookupNames.load( std::memory_order_relaxed );
 	}
 
+	// NO LOCK EITHER, for the same reason -- see g_nCacheEntries' comment.
+	// The two counts can be one poll stale; a status row is allowed to be.
 	NameCacheInfo NameCache()
 	{
-		std::scoped_lock lock( g_Mutex );
-		EnsureNetCacheLoaded();
-		return NameCacheInfo{ AppNameCachePath(), g_mapNetNames.size(), kAppNameCacheMax,
-			g_setUnresolved.size() };
+		return NameCacheInfo{
+			AppNameCachePath(),
+			g_nCacheEntries.load( std::memory_order_relaxed ),
+			kAppNameCacheMax,
+			g_nCachePending.load( std::memory_order_relaxed ) };
 	}
 
 	// =========================================================================
@@ -1002,6 +1020,7 @@ namespace gamescope::steamfriends
 					// dropped rather than kept, so switching the setting on
 					// later starts from what is on screen then.
 					g_setUnresolved.clear();
+					g_nCachePending.store( 0, std::memory_order_relaxed );
 					return false;
 				}
 				if ( g_setUnresolved.empty() )
@@ -1016,6 +1035,7 @@ namespace gamescope::steamfriends
 					vecAsk.push_back( uAppId );
 				}
 				g_setUnresolved.clear();
+				g_nCachePending.store( 0, std::memory_order_relaxed );
 
 				const std::string sPath = AppNameCachePath();
 				if ( sPath.empty() )
@@ -1062,7 +1082,6 @@ namespace gamescope::steamfriends
 				if ( !mapAnswer.count( uAppId ) )
 					g_setAskedUnanswered.insert( uAppId );
 			g_bNetCacheDirty = true;
-			g_nNamesResolved += mapAnswer.size();
 			SaveNetCache();
 
 			friends_log.debugf( "looked up %zu game name(s); the cache holds %zu.",

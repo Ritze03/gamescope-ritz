@@ -106,8 +106,10 @@ namespace gamescope::steamfriends
 	void SetLookupNames( bool bEnabled );
 	bool LookupNamesEnabled();
 
-	// What the Friends area's Status row reports about the cache. Cheap, but it
-	// takes the snapshot lock, so it is a status read and not a per-frame one.
+	// What the Friends area's "Look up game names online" row reports about the
+	// cache. LOCK-FREE, because it is read from a .Live() fact on the draw
+	// thread: the two counts come out of atomics the poller publishes, so they
+	// can be one poll stale but can never put a frame behind a wedged Steam.
 	struct NameCacheInfo
 	{
 		std::string sPath;          // "" when there is nowhere to put it
