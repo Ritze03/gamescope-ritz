@@ -1836,6 +1836,11 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		"audio.mixer", "system.hud", "system.crosshair", "system.log",
 		"system.changelog", "setup.profiles", "setup.appearance",
 		"setup.cursor", "setup.keybinds",
+		// The seventeenth and eighteenth (2026-09-08): the friends list and
+		// the Steam chat companion. Both had shipped on the letter fallback
+		// -- and the companion's `S` collided with Shaders and Shell, which
+		// is the original bug this whole file exists to catch.
+		"system.friends", "system.companion",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 

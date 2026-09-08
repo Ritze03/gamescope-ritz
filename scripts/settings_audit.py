@@ -116,6 +116,17 @@ NOT_COVERED = {
     "keybinds.shell_alt": "as keybinds.shell",
     "keybinds.launcher": "as keybinds.shell",
     "keybinds.companion": "as keybinds.shell",
+    "keybinds.friends": "as keybinds.shell",
+    # The friends list (2026-09-08). Bound to an int index, but that index is
+    # not a persisted value: selecting a line ACTS on it (it joins, or says
+    # why it cannot), the list's contents come from the running Steam client
+    # rather than from a config file, and the harness has no Steam. Covered by
+    # tests/test_steam_friends.cpp and, live, by
+    # build-release/verify-shots/steam-friends-phase345-2026-09-08/.
+    "friends.list": "selecting a line asks Steam to join that friend -- it acts, it does not "
+                    "store a value, and the rows come from the Steam client rather than from "
+                    "a config file; tests/test_steam_friends.cpp and "
+                    "build-release/verify-shots/steam-friends-phase345-2026-09-08/ cover it",
     # The Steam chat overlay's two free-text rows (2026-09-08). Persisted --
     # global.json's overlay.companion_command / companion_url -- but there is
     # no "next value" for a browser command line, so the generic round trip
