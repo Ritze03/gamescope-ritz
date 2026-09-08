@@ -17,33 +17,51 @@ If running RadeonSI clients with older cards (GFX8 and below), currently have to
 
 ## Quickstart (gamescope-ritz)
 
-This fork ships helper scripts that build and install `gamescope-ritz` as its
-own binary, side by side with any distro-packaged `gamescope` — they never
-touch `/usr/bin/gamescope`. Full option reference: `scripts/README.md`.
+From a fresh clone, `./install.sh` at the repo root is the single entry
+point for install / update / remove — it builds and installs
+`gamescope-ritz` as its own binary, side by side with any distro-packaged
+`gamescope` (it never touches `/usr/bin/gamescope`). Full option reference:
+`./install.sh --help`; the shared build/privilege/submodule machinery it
+and the older per-action scripts below both use is documented in
+`scripts/README.md`.
 
 Prerequisites: the build dependencies listed under [Building](#building)
 below (meson, ninja, a compiler, and the Debian package list), plus `sudo`
 if `/usr/bin` isn't writable by your user. You do **not** need to run
 `git submodule update` yourself — the build step detects missing submodules
-and initialises them automatically.
+and initialises them automatically. Before building anything, `./install.sh`
+also checks that **wlroots** is actually usable the way this project's
+meson build asks for it (pkg-config for the exact module/version it
+requires, not just "some package manager says it's installed") and prints
+the fix if not — on Arch/CachyOS that's `sudo pacman -S wlroots0.20`; other
+distros get the pkg-config module name and version needed. If a system
+wlroots isn't found but this repo's vendored copy (`subprojects/wlroots`) is
+checked out, that's not a failure — meson just builds it instead (slower
+first build).
 
 From a clone of this repo:
 
 ```sh
-scripts/install-gamescope-ritz.sh
+./install.sh --install
 ```
 
 If no release build exists yet, this **builds one first** automatically
 (`--buildtype=release -Doptimization=3 -Db_lto=true`, into `build-release/`),
-then asks whether to symlink or copy the resulting binary to
+then asks whether to **symlink or copy** the resulting binary to
 `/usr/bin/gamescope-ritz`, and offers to install the `scripts/`, `looks/`
-and `reshade/` extras to `/usr/share/gamescope-ritz`. It asks for `sudo`
-only for the steps that write outside the repo. Run it non-interactively
-with:
+and `reshade/` extras to `/usr/share/gamescope-ritz`. Symlink mode means
+later updates need no root at all: the installed name points straight at
+the built binary in this repo, so `./install.sh --update` just rebuilds and
+the new binary is live immediately. It asks for `sudo` only for the steps
+that write outside the repo. Run it non-interactively with:
 
 ```sh
-scripts/install-gamescope-ritz.sh --link --yes   # or --copy --yes
+./install.sh --install --link --yes   # or --copy --yes
 ```
+
+Running `./install.sh` with no flags detects whatever state you're in
+(installed or not, symlink or copy, repo clean or dirty, wlroots
+satisfied or not) and offers install/update/remove as a numbered menu.
 
 Then run it:
 
@@ -51,21 +69,29 @@ Then run it:
 gamescope-ritz -- <game>
 ```
 
-To remove it later: `scripts/install-gamescope-ritz.sh --uninstall`.
+To remove it later: `./install.sh --remove`. This never touches your
+settings in `~/.config/gamescope-ritz` — only the binary/symlink and the
+`share/gamescope-ritz` extras it placed.
 
 ## Updating
 
 ```sh
-scripts/update-gamescope-ritz.sh
+./install.sh --update
 ```
 
-This requires a prior install from the script above. It runs
+This requires a prior install. It states the branch, runs
 `git pull --ff-only` (refusing on uncommitted local changes or a diverged
 remote — it never stashes or resets anything), rebuilds the release binary,
-and refreshes the install: a symlink install is already live once the
-rebuild finishes, a copy install gets the fresh binary copied over it. Pass
-`--yes` to skip prompts, or `--allow-dirty` to skip only this script's own
-uncommitted-changes check (`git pull`'s own safety check still applies).
+and reinstalls by whichever method is already in place: a symlink install
+is already live once the rebuild finishes, a copy install gets the fresh
+binary copied over it. Pass `--yes` to skip prompts, or `--allow-dirty` to
+skip only this script's own uncommitted-changes check (`git pull`'s own
+safety check still applies).
+
+`./install.sh` reuses the same `scripts/gamescope-ritz-common.sh` helpers as
+the older, single-purpose `scripts/install-gamescope-ritz.sh` and
+`scripts/update-gamescope-ritz.sh` (still present, still work the same way)
+— see `scripts/README.md` for the full shared-helper reference.
 
 ## Building
 
