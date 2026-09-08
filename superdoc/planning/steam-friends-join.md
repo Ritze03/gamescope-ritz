@@ -400,6 +400,60 @@ process doing so concurrently.
   because the output is committed to this repo. It is one flag away and is
   [§8](#8-steps-only-the-user-can-run)'s first step.
 
+### 6e. Correction — the published vtable order is wrong by one slot
+
+**Added 2026-09-08, when phases 1 and 2 were built and run against the live
+client with the user's permission. This supersedes the layout in §6c's probe.**
+
+`steamclient_probe.c` declared `ISteamFriends` from the order every write-up
+repeats — `GetPersonaName`, `SetPersonaName`, `GetPersonaState`,
+`GetFriendCount`, `GetFriendByIndex`, … — and phase 1 was built on the same
+declaration. **Against the real client it is off by one**, and the failure mode
+is the dangerous kind: not a crash, but a friends list that is silently and
+permanently **empty**, which reads exactly like *"nobody is in a joinable
+game"*. The first live run reported `RESULT friend count: 0` and looked like a
+correct answer.
+
+Measured on `SteamFriends018` with `tests/steam_friends_live_probe --diagnose`,
+by calling raw vtable slots in shapes that are read-only under *both* candidate
+layouts:
+
+| call | result |
+|---|---|
+| slot 2 as `GetFriendCount(flags)` | **varies with the flag** — 75 for Immediate, 140 for `0xFFFF`, 1 for FriendshipRequested |
+| slot 3 as `GetFriendCount(flags)` | 0 for every flag |
+| slot 3 as `GetFriendByIndex(0, Immediate)` | an id inside the individual-account SteamID64 band |
+| slot 4 as `GetFriendByIndex(0, Immediate)` | not a SteamID at all |
+
+So `GetFriendCount` is **slot 2**, `GetFriendByIndex` is **slot 3**, and
+everything after them shifts down by one. With that corrected the read works:
+75 friends, 5 in a game, app ids `730`, `252950`, `2483190`, `2357570` — all
+real Steam apps with CGameID type 0 — and every persona name printable.
+
+Three consequences worth carrying forward:
+
+- **`src/SteamFriends.cpp` declares the measurement, not the documentation**, and
+  says so at length. **Slots 0 and 1 are opaque `void*` and must never be
+  called**: under the published order slot 1 is `SetPersonaName`, a *write* on
+  the user's live account, and "call it and see" is not available for a setter.
+- **The version string is no longer the only guard.** `Snapshot()` range-checks
+  the first SteamID it gets back; a client whose layout moves again produces one
+  named log line and an empty list rather than nonsense. `tests/test_steam_friends.cpp`
+  has a case for it.
+- **A stub cannot catch this class of bug.** The unit tests all passed against
+  `tests/steamclient_stub.cpp` while the layout was wrong, because a fake built
+  from the same declaration agrees with itself. Layout is the live probe's job;
+  control flow is the stub's. Keep both.
+
+`Still unproven:` **`m_steamIDLobby`'s offset in `FriendGameInfo_t`.** Nobody in
+the friends list was in a joinable lobby at any moment sampled, and a wrong
+offset reads as zero just like an absent lobby does. `m_gameID`'s offset in the
+same struct *is* confirmed. The code deliberately does **not** filter on a
+lobby-id range — an unverified band check would silently hide exactly the
+friends this feature exists to show — and counts out-of-band ids into its debug
+line instead. To close it, run the probe while a friend is actually in a
+joinable lobby; that is now the first item of [§8](#8-steps-only-the-user-can-run).
+
 ### 6d. Robustness — the four failure modes, and the rule
 
 The compositor must never block or crash on any of these, and every one of them is a
@@ -466,6 +520,16 @@ Reviewable through a `friends_dump` ConCommand; no hotkey, no panel.
 build the URL by string-concatenating anything a friend controls (a persona name never
 enters it).
 
+**Phases 1 and 2 landed 2026-09-08** — `src/SteamFriends.{h,cpp}`,
+`src/SteamFriendsCmd.h`, `tests/test_steam_friends.cpp`,
+`tests/steamclient_stub.cpp`, `tests/steam_friends_live_probe.cpp`, and the
+`friends_dump` / `friends_join` ConCommands. Evidence:
+`build-release/verify-shots/steam-friends-phase12-2026-09-08/results.txt`.
+No `CHANGELOG.md` entry: nothing is user-visible until the UI exists, so the
+repo's rule ("purely internal work gets no entry") applies. **Read
+[§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot) before
+touching any of it.**
+
 **Phase 3 — the list in the Shell.** A `system.friends` area with the existing list
 control: one line per joinable friend (`persona` — `game`), Enter/click joins, with a
 confirm step **only** when the target app id differs from `config::SessionAppId()`.
@@ -492,13 +556,23 @@ client.
 
 Nothing here was run for them. Each is safe *when not in a match*.
 
-1. **The live half of the probe** — confirms the friends list and the joinable field:
+1. **The one thing phases 1 and 2 could not prove: a non-zero lobby id.**
+   Everything else in the read path is now confirmed live ([§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot));
+   this needs a friend who is *actually in a joinable lobby* at the moment you run it,
+   which never happened while it was being built.
    ```
-   build-release/verify-shots/steam-child-session-2026-09-08/steamclient_probe --connect
+   build-release/tests/steam_friends_live_probe --diagnose
    ```
-   Expect `RESULT pipe+global user: PASS`, a friend count, and one line per in-game friend
-   saying `lobby YES (joinable)` or `lobby no`. It prints **no names and no SteamIDs**.
-   Watch for: Steam behaving normally afterwards (it should — the probe only reads).
+   Expect `RESULT m_steamIDLobby: N non-zero, 0 outside the chat band -> PASS` with N
+   at least 1, and `RESULT joinable rows` above 0 from the plain
+   `steam_friends_live_probe`. It prints **no names, no SteamIDs and no lobby ids** —
+   counts, app ids and range verdicts only, and it is strictly read-only.
+   Watch for: `outside the chat band` being non-zero, which would mean
+   `m_steamIDLobby` is being read from the wrong offset and the join URL would carry
+   a wrong number.
+   (The study's own `steamclient_probe --connect` still exists but declares the
+   **superseded** vtable order, so it reports a friend count of 0 and should not be
+   trusted; §6e is why.)
 2. **The join URL, once, by hand** — with a friend in a joinable lobby of the game already
    running:
    ```
@@ -523,4 +597,5 @@ every command. That directory lives under the build tree and a clean rebuild wip
 |---|---|
 | `probe-nesting.sh` → `results-nesting.txt`, `01`–`03*.png` | §2a: a nested session keeps its own game; env inheritance is what decides, and it is escapable per process |
 | `probe-cdp.sh` + `cdp_client.py` → `results-cdp.txt`, `10`–`15*.png` | §3: CDP renders and drives a browser you do not own — and stops dead the moment its window is unmapped **or fully covered** |
-| `steamclient_probe.c` → `results-steamclient.txt` | §6c: the client's own `steamclient.so` loads and every symbol the friends path needs resolves, with no app id and nothing sent to the live client |
+| `steamclient_probe.c` → `results-steamclient.txt` | §6c: the client's own `steamclient.so` loads and every symbol the friends path needs resolves, with no app id and nothing sent to the live client. **Its `--connect` half declares the superseded vtable order — see [§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot).** |
+| `../steam-friends-phase12-2026-09-08/results.txt` | phases 1 and 2: the off-by-one correction, the live read after it, every fail-soft path, and the gate results |

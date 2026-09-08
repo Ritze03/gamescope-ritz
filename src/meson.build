@@ -151,6 +151,7 @@ src = [
   'SettingsOverlay.cpp',
   'Keybinds.cpp',
   'SteamCompanion.cpp',
+  'SteamFriends.cpp',
   'Overlay/Fonts.cpp',
   'Overlay/CursorArt.cpp',
   'Overlay/Palette.cpp',

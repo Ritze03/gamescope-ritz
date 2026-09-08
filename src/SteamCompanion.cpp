@@ -103,33 +103,11 @@ namespace gamescope::companion
 		// execvp() failing in the child is a message nobody sees: the child is
 		// already forked, its stderr goes wherever gamescope's does, and the
 		// user gets a hotkey that silently did nothing. So resolve argv[0] the
-		// same way execvp would, HERE, and turn a miss into a toast.
-		bool ExecutableExists( const std::string &sProgram )
-		{
-			if ( sProgram.find( '/' ) != std::string::npos )
-				return access( sProgram.c_str(), X_OK ) == 0;
-
-			const char *pszPath = getenv( "PATH" );
-			if ( !pszPath || !*pszPath )
-				pszPath = "/usr/local/bin:/usr/bin:/bin";
-
-			std::string sPath( pszPath );
-			size_t nPos = 0;
-			while ( nPos <= sPath.size() )
-			{
-				const size_t nColon = sPath.find( ':', nPos );
-				std::string sDir = sPath.substr( nPos,
-					nColon == std::string::npos ? std::string::npos : nColon - nPos );
-				if ( sDir.empty() )
-					sDir = ".";
-				if ( access( ( sDir + "/" + sProgram ).c_str(), X_OK ) == 0 )
-					return true;
-				if ( nColon == std::string::npos )
-					break;
-				nPos = nColon + 1;
-			}
-			return false;
-		}
+		// same way execvp would, HERE, and turn a miss into a toast. The search
+		// itself lives in Utils/Process.h -- SteamFriends.cpp's join needs the
+		// identical check before it fires `steam`, and one PATH walk with one
+		// test is better than two that can drift.
+		using Process::ExecutableExists;
 
 		void Toast( std::string sText, Notifications::Kind kind )
 		{

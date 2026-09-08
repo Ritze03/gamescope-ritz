@@ -239,6 +239,39 @@ namespace gamescope::Process
         return close( nFd ) == 0;
     }
 
+    // See the header for why a caller wants this BEFORE it forks.
+    bool ExecutableExists( const std::string &sProgram )
+    {
+        if ( sProgram.empty() )
+            return false;
+
+        if ( sProgram.find( '/' ) != std::string::npos )
+            return access( sProgram.c_str(), X_OK ) == 0;
+
+        const char *pszPath = getenv( "PATH" );
+        if ( !pszPath || !*pszPath )
+            pszPath = "/usr/local/bin:/usr/bin:/bin";
+
+        const std::string sPath( pszPath );
+        size_t nPos = 0;
+        while ( nPos <= sPath.size() )
+        {
+            const size_t nColon = sPath.find( ':', nPos );
+            std::string sDir = sPath.substr( nPos,
+                nColon == std::string::npos ? std::string::npos : nColon - nPos );
+            // An empty element in PATH means the current directory, which is
+            // what execvp() does with it too.
+            if ( sDir.empty() )
+                sDir = ".";
+            if ( access( ( sDir + "/" + sProgram ).c_str(), X_OK ) == 0 )
+                return true;
+            if ( nColon == std::string::npos )
+                break;
+            nPos = nColon + 1;
+        }
+        return false;
+    }
+
     void CloseAllFds( std::span<int> nExcludedFds )
     {
         DIR *pProcDir = opendir( "/proc/self/fd" );

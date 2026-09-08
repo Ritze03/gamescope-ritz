@@ -2,7 +2,7 @@ catch2_dep = dependency('catch2-with-main', required: true)
 
 srcdir = '../src'
 unittest_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp', 'Clipboard/ClipboardSync.cpp', 'Keybinds.cpp']
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp', 'Clipboard/ClipboardSync.cpp', 'Keybinds.cpp', 'SteamFriends.cpp']
 	unittest_src += srcdir / src
 endforeach
 
@@ -22,7 +22,7 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_companion.cpp'],
+	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_companion.cpp', 'test_steam_friends.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
 	cpp_args: gamescope_cpp_args,
@@ -47,6 +47,46 @@ test('effects_curve', gamescope_tests, args: ['[effects_curve]'])
 test('resolution', gamescope_tests, args: ['[resolution]'])
 test('keybinds', gamescope_tests, args: ['[keybinds]'])
 test('steam_companion', gamescope_tests, args: ['[steam_companion]'])
+test('steam_friends', gamescope_tests, args: ['[steam_friends]'])
+
+# ---------------------------------------------------------------------------
+#  The Steam client stand-ins, for test_steam_friends.cpp
+# ---------------------------------------------------------------------------
+# src/SteamFriends.cpp's loader has to survive five states a HEALTHY Steam is
+# never in (superdoc/planning/steam-friends-join.md §6d), so there is no way to
+# provoke them with the real client -- and the machine this fork is developed on
+# is usually mid-match. These two libraries provoke them instead. Neither is
+# installed, neither is linked into anything; the test dlopens them by path.
+#
+#   libsteamclient_stub.so  -- Steam-shaped: exports CreateInterface AND the
+#                              Steam_* fingerprint symbols. Its behaviour is
+#                              chosen by GS_RITZ_TEST_STEAMCLIENT_MODE.
+#   libnotsteam_stub.so     -- exports CreateInterface and nothing else, which
+#                              is the "that library is not Steam's client" path.
+#
+# They are built into this same directory as gamescope_tests, which is how the
+# test finds them (from /proc/self/exe) with no env plumbing.
+shared_library('steamclient_stub', ['steamclient_stub.cpp'], cpp_args: gamescope_cpp_args)
+shared_library('notsteam_stub', ['steamclient_stub.cpp'], cpp_args: gamescope_cpp_args + ['-DSTUB_NOT_STEAM'])
+
+# The live read check. Built, never registered as a test: it needs a Steam that
+# is installed, running and signed in, so as a test it would fail on every
+# machine without one. A fake built from the same declaration cannot prove the
+# declaration is right -- this can, against the real client, read-only. See the
+# file's own header.
+steam_friends_live_src = []
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'SteamFriends.cpp']
+	steam_friends_live_src += srcdir / src
+endforeach
+executable(
+	'steam_friends_live_probe',
+	steam_friends_live_src + ['steam_friends_live_probe.cpp'],
+	include_directories: [srcdir, sol2_include],
+	# convar_script.cpp reaches backend.h, which reaches drm_include.h -- hence
+	# the graphics deps on a binary that draws nothing.
+	dependencies: [luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep],
+	cpp_args: gamescope_cpp_args,
+)
 
 # scripts/pointer-regression.sh's test client -- not a meson test (it needs a
 # running gamescope), just built here so the script has a binary. See the

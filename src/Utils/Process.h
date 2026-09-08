@@ -3,6 +3,7 @@
 #include <optional>
 #include <functional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <sys/types.h>
@@ -29,6 +30,18 @@ namespace gamescope::Process
     bool WaitForAllChildren( std::optional<pid_t> onStopPid = std::nullopt );
 
     bool CloseFd( int nFd );
+
+    // Would execvp() find this program, and is it executable?
+    //
+    // `Why this exists at all:` execvp() failing inside a forked child is a
+    // message nobody sees -- the fork already happened, the child's stderr goes
+    // wherever gamescope's does, and the caller is left with a feature that
+    // silently did nothing. Resolving argv[0] the same way execvp would, BEFORE
+    // forking, is what lets a caller turn "that program isn't installed" into a
+    // sentence a user can act on. A name with a '/' in it is a path and is
+    // checked as one; anything else is searched along PATH (and along execvp's
+    // own fallback when PATH is unset or empty).
+    bool ExecutableExists( const std::string &sProgram );
 
     void RaiseFdLimit();
     void RestoreFdLimit();
