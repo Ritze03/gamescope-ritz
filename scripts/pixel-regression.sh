@@ -734,9 +734,9 @@ start_instance() {
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
-	# Same readiness recipe as overlay-test-harness.sh: poll the log for
-	# gamescope's own "wayland display '<name>'" line, then for the client's
-	# first presented frame ("refresh cycle") -- never a fixed sleep.
+	# Poll the log for gamescope's own "wayland display '<name>'" line, then
+	# for the client's first presented frame ("refresh cycle") -- never a
+	# fixed sleep.
 	local waited=0
 	GS_WL_NAME=""
 	while (( waited < READY_TIMEOUT_S * 10 )); do

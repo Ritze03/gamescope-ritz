@@ -2269,10 +2269,10 @@ static void gamescope_private_execute( struct wl_client *client, struct wl_resou
 	args.emplace_back( cvar_name );
 	// `value` is one wire string but may itself carry more than one
 	// space-separated argument (e.g. gamescopectl's "screenshot" command
-	// wants a path AND a screenshot_type -- see overlay-test-harness.sh's
-	// use of this for a full-composition capture that actually shows the
-	// M2 overlay, since gamescopectl's own CLI collapses everything after
-	// the command name into this single field). Split it the same way
+	// wants a path AND a screenshot_type, since gamescopectl's own CLI
+	// collapses everything after the command name into this single field --
+	// see the `never-interrupt-the-users-session` memory note for the
+	// quoted-single-argument form this requires). Split it the same way
 	// ConCommand::CallWithArgString() (convar.h) already splits a typed
 	// console/script command line, rather than inventing a second
 	// mini-parser here.
