@@ -41,10 +41,12 @@ The newest version below is the one this build reports.
   moment you open it, untouched on the left and with the effect applied on the right --
   which re-draws as you move the sliders, so you can judge a setting without hunting
   for a scene that shows it.
-- **Ritz launcher module**: a Ritz extension for this fork is now included
-  (`extensions/gamescope-ritz.json`) and offered by the installer -- profile, nested
-  resolution/refresh, fullscreen, force-maximize-nested-window, scaler and filter are
-  all settable from Ritz's own UI, no command line needed.
+- **Ritz launcher module: Profile field**: the repo now carries a copy of the
+  Gamescope-Ritz Ritz module with one field added -- a Profile text box right under
+  the enable toggle -- so a Ritz launch can pick a gamescope-ritz settings profile, no
+  command line needed. `install.sh` offers to install/update it, landing on the same
+  filename Ritz already uses for that module so this updates it in place instead of
+  adding a second one.
 
 ### Fixed
 - **Appearance and Cursor settings no longer undo each other**: changing something in

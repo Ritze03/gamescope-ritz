@@ -1,59 +1,56 @@
 # Ritz Extension
 
 A [Ritz](https://ritze03.github.io/ritz/extensions.html) launcher module that wraps
-**this fork's own binary** (`gamescope-ritz`, never upstream's `/usr/bin/gamescope`) so a
-Ritz user can launch a game through it, pick a settings profile for that launch, and set
-a handful of the fork's own and standard gamescope flags — all from Ritz's own UI,
-without typing a command line.
+**this fork's own binary** (`gamescope-ritz`, never upstream's `/usr/bin/gamescope`).
 
 Manifest: [`extensions/gamescope-ritz.json`](../../extensions/gamescope-ritz.json) (repo
-root, one file — the "single manifest" shape the docs allow, no scripts). Offered by the
-root installer (`install.sh`, see [build-and-tooling.md](build-and-tooling.md)) as an
-optional copy into `~/.config/ritz/extensions/` on `--install`/`--update`/`--remove`;
-never installed silently.
+root, one file — the "single manifest" shape the docs allow, no scripts).
 
-## Identity and why `ForkedFrom` is set
+## What this actually is
 
-`Extension.Author` is `Ritze`, `Name` is `Gamescope Ritz`, `Version` is `1.0` (this is a
-new module — nothing was shipped under this Author::Name before, so there is no upgrade
-path to protect and no reason to start above `1.0`; Ritz's config is keyed by
-`Author::Name::Version`, so a **future** version bump on this file, if the field set
-ever changes shape, would leave a user's already-saved values keyed under the *old*
-version and orphaned rather than migrated — bump the version only when that's actually
-intended, and prefer adding new fields with sensible `Requires`-gated defaults over
-bumping it for a compatible change).
+**This is the user's own, pre-existing "Gamescope-Ritz" Ritz module** (`Author` `Ritze`,
+`Name` `Gamescope-Ritz`, `Version` `1.1`) — the one they had already built for
+themselves in Ritz, covering every General/Resolution/Sync & Input/Upscaling/HDR/Nested
+Window/Embedded Display (DRM)/Cursor/Integration/ReShade/VR Overlay/Debug section this
+fork's `--help` exposes — with **exactly one field added**: a free-text **Profile**
+box, inserted right after the "Gamescope Enabled" toggle in the General section, plus
+the one `WRAPPERS` builder entry that makes it emit `--profile "<name>"`.
 
-`ForkedFrom` is set to `Ritze::Gamescope`, Ritz's own bundled module
-(`~/.config/ritz/extensions/default/gamescope.json`). The docs describe `ForkedFrom` as
-provenance/display only — it never affects config lookup — and it is honest here: this
-manifest's `WRAPPERS` shape (`"<binary> {OPTIONS} --"`, `Priority: 100`, the same
-`scaler`/`filter`/`fullscreen`/`force_windows_fullscreen` variable names) was copied
-directly from the bundled module's own pattern and adapted for a different, forked
-binary — the same relationship gamescope-ritz itself has to upstream gamescope.
+This is not the file's original history. A first pass (2026-09-08) misread the request
+and wrote a brand-new, deliberately minimal nine-field module from scratch instead of
+touching the user's real one — wrong instruction-following, corrected the same day. The
+lesson, so it isn't relearned: when asked to add one field to an *existing* module,
+start from that module verbatim and touch only what was asked, never redesign it.
+Nothing here is "kept tight" by choice — it is exactly as large as the user's own
+module always was.
 
-## Fields (UI section "Gamescope Ritz")
+## Fields (UI section "General")
 
-In display order — `enabled` and `profile` are pinned first by explicit request, so the
-profile field is always the second thing a user sees:
+In display order — `enabled` and `profile` are pinned first, so the profile field is
+always the second thing a user sees, directly under the enable toggle:
 
-| Field | Variable | Flag | Verified against |
-| --- | --- | --- | --- |
-| Gamescope Ritz Enabled | `enabled` | *(gates the wrapper)* | — |
-| Profile | `profile` | `--profile "<name>"` | `src/main.cpp`'s `profile` long option, handled by `ritz_prescan_profile_arg()`/`ritz_use_session_profile()` — see [profiles.md](profiles.md) |
-| Nested Width (-w) | `nested_width` | `-w <n>` / `--nested-width` | `src/main.cpp` option table |
-| Nested Height (-h) | `nested_height` | `-h <n>` / `--nested-height` | `src/main.cpp` option table |
-| Nested Refresh (-r) | `nested_refresh` | `-r <n>` / `--nested-refresh` | `src/main.cpp` option table |
-| Fullscreen (-f) | `fullscreen` | `-f` / `--fullscreen` | `src/main.cpp` option table |
-| Force Maximize Nested Window | `force_windows_fullscreen` | `--force-windows-fullscreen` | `src/main.cpp` option table; see TERMINOLOGY.md's "Nested window" entry |
-| Scaler (-S) | `scaler` | `-S <mode>` / `--scaler` | `src/main.cpp` usage string (`auto, integer, fit, fill, stretch`) |
-| Filter (-F) | `filter` | `-F <mode>` / `--filter` | `src/main.cpp` usage string (`linear, nearest, fsr, nis, pixel`) |
+| Field | Variable | Flag |
+| --- | --- | --- |
+| Gamescope Enabled | `enabled` | *(gates the wrapper)* |
+| Profile | `profile` | `--profile "<name>"` |
+| Fullscreen | `fullscreen` | `-f` |
+| Backend | `backend` | `--backend <mode>` |
+| Scaler | `scaler` | `-S <mode>` |
+| Mouse Sensitivity Multiplier | `mouse_sensitivity` | `--mouse-sensitivity <n>` |
+| MangoApp Overlay | `mangoapp` | `--mangoapp` |
 
-Kept deliberately tight — this is a launcher module, not a mirror of every ConVar the
-overlay exposes. Every field above maps to a flag confirmed present in this fork's own
-`--help` output and option table; nothing here emits an unknown flag.
+The remaining ~70 fields, across the other eleven UI sections (Resolution, Sync &
+Input, Upscaling, HDR, Nested Window, Embedded Display (DRM), Cursor, Integration,
+ReShade, VR Overlay, Debug), are the user's own pre-existing module content, unchanged
+— see the manifest itself for the full field list rather than duplicating it here.
 
-`--profile` and `--force-windows-fullscreen` are this fork's own additions over
-upstream's option table (the rest are standard gamescope flags this fork also accepts).
+## Version note
+
+`Version` stays `1.1` — the version the user's module already carried. Ritz keys stored
+per-user values by `Author::Name::Version`, so bumping it here would orphan every value
+they'd already set across their games; adding a field with a `Requires`-gated default
+(as done here) is the compatible way to extend a module without a version bump. Bump it
+only if a future change actually needs a fresh keyspace.
 
 ## The profile-name / shell-split constraint
 
@@ -65,42 +62,42 @@ would silently break on a profile name containing a space: `My Profile` renders 
 `Profile` — and gamescope-ritz would try to launch `Profile` as the game command.
 
 This manifest's builder entry instead emits `--profile "{profile}"` (the value is
-wrapped in literal double quotes in the template). Verified by construction — building
-the rendered string by hand and splitting it the way a shell would (`shlex.split`,
-matching the documented "shell-split into argv" behaviour) — confirms the quoted form
-keeps a spaced name as one token:
+wrapped in literal double quotes in the template, matching the style of this module's
+other quoted string fields like `--mura-map "{mura_map}"` and `--cursor
+"{cursor_image}"`). Verified by construction — building the rendered string by hand and
+splitting it the way a shell would (`shlex.split`, matching the documented "shell-split
+into argv" behaviour) — confirms the quoted form keeps a spaced name as one token:
 
 ```
 profile field: 'My Profile'
-  rendered wrapper text: gamescope-ritz --profile "My Profile" -w 1920 --
-  shell-split argv     : ['gamescope-ritz', '--profile', 'My Profile', '-w', '1920', '--']
+  rendered:    --profile "My Profile"
+  shlex.split: ['--profile', 'My Profile']
 ```
-
-Separately, gamescope-ritz's own argv parsing was exercised headlessly (isolated
-`XDG_CONFIG_HOME`, `--profile "My Profile" --ritz-dump-config --help`, no display
-needed since the profile is resolved before backend init) and correctly created and
-loaded `profiles/My Profile.json`.
 
 **Remaining constraint, stated in the field's own Description**: a profile name
 containing a literal double-quote character is not supported — it would prematurely
-close the quoted argument and break the launch. This wasn't testable through Ritz's own
-UI in this pass (see "Pending: a real Ritz GUI check" below); a person can confirm it in
-one try.
+close the quoted argument and break the launch.
 
 ## Installer integration
 
 `install.sh --install` detects Ritz by the presence of `~/.config/ritz/` and offers
 (prompt, skippable, and `--with-ritz-extension` / `--no-ritz-extension` for
-non-interactive use) to copy `extensions/gamescope-ritz.json` into
-`~/.config/ritz/extensions/gamescope-ritz.json`. `--update` refreshes that file only if
-it was previously installed and differs from the repo's copy. `--remove` offers to
-delete only that one file — nothing else in `~/.config/ritz/extensions/` is ever
-touched. See `install.sh`'s own `--help` for the exact flags.
+non-interactive use) to copy `extensions/gamescope-ritz.json` to
+**`~/.config/ritz/extensions/ritze__gamescope_ritz.json`**.
 
-## Pending: a real Ritz GUI check
+That destination name deliberately does **not** match the source file's own name. Ritz
+names an author's module file `<author>__<name>.json` (lowercased, spaces/hyphens to
+underscores), so the user's real "Gamescope-Ritz" module by "Ritze" already lives at
+`ritze__gamescope_ritz.json`. Installing under the source's own `gamescope-ritz.json`
+name instead would create a **second** module with the same `Author::Name::Version`
+identity sitting next to the first — exactly the duplication this fork is trying not to
+cause. Targeting the same filename makes an install an **in-place overwrite** of that
+one module rather than a second copy, and the prompt says so plainly (and defaults to
+declining) whenever a file is already there.
 
-`ritz --print %command%` needs its GUI and could not be driven headlessly in this pass
-— see `superdoc/planning/PENDING-USER-TESTS.md`'s Ritz extension entry for the short,
-concrete steps to confirm the assembled command in the real UI, including the one thing
-this pass could only prove by construction rather than by running Ritz itself: a
-profile name with a space surviving the wrapper's shell-split.
+`--update` refreshes that file only if it was previously installed and differs from the
+repo's copy. `--remove` offers to delete only that one file — nothing else in
+`~/.config/ritz/extensions/` is ever touched — and, because the destination name is
+shared with the user's own pre-existing module rather than something guaranteed to have
+been installed by this script, the remove prompt defaults to **declining** and says so,
+rather than assuming ownership. See `install.sh`'s own `--help` for the exact flags.

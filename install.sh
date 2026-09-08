@@ -35,10 +35,14 @@
 #                       launcher extension.
 #   --remove            uninstall the binary/symlink this installed, and any
 #                       extras (scripts/looks under share/gamescope-ritz).
-#                       Also offers to remove the Ritz extension manifest
-#                       this installed, if present — nothing else under
-#                       ~/.config/ritz/extensions is touched. Never touches
-#                       ~/.config/gamescope-ritz.
+#                       Also offers to remove the Ritz extension manifest at
+#                       ~/.config/ritz/extensions/ritze__gamescope_ritz.json,
+#                       if present — since that's the same path Ritz's own
+#                       "Gamescope-Ritz" module uses, it may be the user's
+#                       pre-existing module rather than one this installer
+#                       added, so this defaults to declining and says so.
+#                       Nothing else under ~/.config/ritz/extensions is
+#                       touched. Never touches ~/.config/gamescope-ritz.
 #   --update            git pull --ff-only (refuses on a dirty tree unless
 #                       --allow-dirty), rebuild, and reinstall by whichever
 #                       method (symlink/copy) is already in place — a
@@ -68,10 +72,16 @@
 #   --build-dir DIR     release build directory name, relative to the repo
 #                       root (default: build-release)
 #   --with-ritz-extension  copy this repo's Ritz launcher extension manifest
-#                       (extensions/gamescope-ritz.json) into
-#                       ~/.config/ritz/extensions/ (or refresh it there on
-#                       --update), no prompt. Only does anything if a Ritz
-#                       install is detected (~/.config/ritz exists, or the
+#                       (extensions/gamescope-ritz.json) to
+#                       ~/.config/ritz/extensions/ritze__gamescope_ritz.json
+#                       (or refresh it there on --update), no prompt. That
+#                       destination name is deliberate: it's the same name
+#                       Ritz's own "Gamescope-Ritz" module already uses, so
+#                       this OVERWRITES that module in place (same
+#                       Author/Name/Version, so stored per-user values in
+#                       Ritz survive) instead of adding a second, duplicate
+#                       module. Only does anything if a Ritz install is
+#                       detected (~/.config/ritz exists, or the
 #                       `ritz` binary is on PATH).
 #   --no-ritz-extension skip/decline the Ritz extension step, no prompt
 #
@@ -241,10 +251,11 @@ target_state() {
 }
 
 # --- Ritz launcher extension ---------------------------------------------
-# Optional, offered — never forced. This repo ships a Ritz
-# (https://ritze03.github.io/ritz/extensions.html) launcher module at
-# extensions/gamescope-ritz.json that wraps THIS binary (gamescope-ritz),
-# not upstream gamescope. See superdoc/features/ritz-extension.md.
+# Optional, offered — never forced. This repo ships the user's own Ritz
+# (https://ritze03.github.io/ritz/extensions.html) "Gamescope-Ritz" launcher
+# module at extensions/gamescope-ritz.json, with one field added (Profile)
+# so it can also pass --profile; everything else in it is unchanged from
+# what Ritz itself would have written. See superdoc/features/ritz-extension.md.
 #
 # Honours XDG_CONFIG_HOME (not just $HOME/.config) so a test run can point
 # this at a scratch directory instead of the user's real ~/.config/ritz.
@@ -262,7 +273,17 @@ gcr_ritz_present() {
 }
 
 ritz_manifest_src() { printf '%s/extensions/gamescope-ritz.json\n' "$REPO_ROOT"; }
-ritz_manifest_dst() { printf '%s/extensions/gamescope-ritz.json\n' "$(ritz_config_dir)"; }
+# The destination name is NOT the same as the source's — deliberately.
+# Ritz names an author's module file "<author>__<name>.json"
+# (lowercased, spaces/hyphens to underscores), so the user's existing
+# "Gamescope-Ritz" module by "Ritze" already lives at
+# ritze__gamescope_ritz.json. Landing our copy under the source's own
+# gamescope-ritz.json name would create a SECOND module with the same
+# Extension identity (Author::Name::Version) sitting next to the first —
+# exactly the duplication this is meant to avoid. Using the same
+# destination name makes this an in-place update of that one module
+# instead.
+ritz_manifest_dst() { printf '%s/extensions/ritze__gamescope_ritz.json\n' "$(ritz_config_dir)"; }
 
 # Offer to install (mode=install) or refresh (mode=update) the Ritz
 # extension manifest. Honours RITZ_EXT ("yes"/"no"/"" = ask). A no-op if
@@ -311,9 +332,14 @@ ritz_extension_prompt() {
 	if [ "$RITZ_EXT" != "yes" ]; then
 		echo
 		echo "A Ritz install was detected ($(ritz_config_dir))."
-		echo "This repo ships a Ritz launcher extension (extensions/gamescope-ritz.json)"
-		echo "wrapping gamescope-ritz — Profile, nested width/height/refresh,"
-		echo "fullscreen, force-windows-fullscreen, scaler and filter, all from Ritz's UI."
+		echo "This repo ships a Ritz launcher extension wrapping gamescope-ritz"
+		echo "(the same 'Gamescope-Ritz' module Ritz itself uses, plus a Profile field)."
+		if [ -f "$dst" ]; then
+			echo "$dst already exists and will be OVERWRITTEN."
+			echo "Author/Name/Version are unchanged, so Ritz's own stored per-game"
+			echo "values for this module carry over — but any hand-edits made"
+			echo "directly to that file will be lost."
+		fi
 		gcr_confirm "Install it to $dst?" n || {
 			gcr_info "skipped the Ritz extension. Re-run with --with-ritz-extension later if you want it."
 			return 0
@@ -324,8 +350,16 @@ ritz_extension_prompt() {
 	gcr_info "installed Ritz extension: $dst"
 }
 
-# Offer to remove exactly the one manifest this script may have installed.
-# Never touches anything else under ~/.config/ritz/extensions.
+# Offer to remove the Ritz extension manifest at $dst. Never touches
+# anything else under ~/.config/ritz/extensions.
+#
+# IMPORTANT: because ritz_manifest_dst() now names the SAME file Ritz's own
+# pre-existing "Gamescope-Ritz" module already lives at (see the comment on
+# ritz_manifest_dst above), $dst existing is not proof this installer ever
+# put it there — it is very possibly the user's own module, installed by
+# Ritz itself, that this repo never touched. So this defaults the confirm
+# to "no" and says so plainly, instead of assuming ownership the way a
+# script that only ever wrote this file itself safely could.
 ritz_extension_remove_prompt() {
 	local dst; dst=$(ritz_manifest_dst)
 	[ -f "$dst" ] || return 0
@@ -334,7 +368,15 @@ ritz_extension_remove_prompt() {
 		return 0
 	fi
 	gcr_info "found a Ritz extension manifest: $dst"
-	if [ "$RITZ_EXT" = "yes" ] || gcr_confirm "Remove it?" y; then
+	if [ "$RITZ_EXT" = "yes" ]; then
+		rm -f -- "$dst"
+		gcr_info "removed $dst."
+		return 0
+	fi
+	echo "This is the same path Ritz's own 'Gamescope-Ritz' module uses, so this"
+	echo "may be your pre-existing module rather than something this installer"
+	echo "added — removing it deletes it either way."
+	if gcr_confirm "Remove it?" n; then
 		rm -f -- "$dst"
 		gcr_info "removed $dst."
 	else
