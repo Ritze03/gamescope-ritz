@@ -151,6 +151,17 @@ namespace gamescope::keybinds
 			{ "launcher", "Open launcher", "LCtrl+RShift",
 			  "The chord that opens the command palette alone over the game -- and closes it "
 			  "again when it is already up." },
+			// Ctrl+Shift+Tab is Steam's own overlay chord for the friends
+			// list. That is deliberate, and it is not a conflict: gamescope
+			// swallows the key here, so neither the game nor Steam's overlay
+			// (which this fork's own users have switched off anyway -- see
+			// superdoc/planning/steam-friends-window.md §2) ever sees it, and
+			// the muscle memory is already the right one.
+			{ "companion", "Open Steam chat", "Ctrl+Shift+Tab",
+			  "The chord that opens Steam's web chat over the game, in a browser gamescope runs "
+			  "on its own display -- and hides it again when it is already up. The first press "
+			  "has to start the browser, so it takes a moment; after that it is instant. Set the "
+			  "browser and the page in Settings > System > Steam chat." },
 		};
 
 		// ---------------------------------------------------------------------

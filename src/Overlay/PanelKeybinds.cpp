@@ -147,7 +147,7 @@ namespace gamescope
 		a.Action( "keybinds.reset", "Reset every keybind", "Reset",
 			[]{ keybinds::ResetAll(); } )
 			.Confirm( "Reset all?" )
-			.Help( "Puts all three hotkeys back on the chords this build ships with, and removes "
+			.Help( "Puts every hotkey back on the chord this build ships with, and removes "
 			       "them from your saved settings." )
 			.Keywords( "reset default defaults restore" );
 	}

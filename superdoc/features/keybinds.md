@@ -1,8 +1,9 @@
 # Keybinds
 
 **2026-09-08.** This fork's own compositor hotkeys are the user's to change:
-three actions, one chord each, stored in `global.json` and edited from the
-settings shell's **Keybinds** area (`setup.keybinds`).
+one chord per action, stored in `global.json` and edited from the settings
+shell's **Keybinds** area (`setup.keybinds`). Three actions at the rework; a
+fourth (`companion`) landed the same day with the Steam chat overlay.
 
 Code: `src/Keybinds.{h,cpp}` (grammar, store, gesture engine, capture),
 `src/Overlay/PanelKeybinds.cpp` (the rows), `src/wlserver.cpp`'s
@@ -41,13 +42,22 @@ hotkey layer, and are keys inside an application rather than keys the
 compositor takes from the game. Making them configurable is a separate,
 larger job with a different risk profile.
 
-## The three actions
+## The actions
 
 | id | Title | Default |
 |---|---|---|
 | `shell` | Open settings | `RShift` |
 | `shell_alt` | Open settings (alternate) | `Ctrl+Shift+O` |
 | `launcher` | Open launcher | `LCtrl+RShift` |
+| `companion` | Open Steam chat | `Ctrl+Shift+Tab` |
+
+`companion` was added 2026-09-08 with the Steam chat overlay
+([steam-companion.md](steam-companion.md)). Its default is deliberately
+**Steam's own overlay chord for the friends list**: gamescope swallows the key
+before anything downstream sees it, so neither the game nor Steam's overlay can
+be reached by it here, and the muscle memory is already the right one. The
+chord is not reserved and not special — it is a row like the other three, and
+rebinding or reusing it follows exactly the same conflict rule.
 
 `Why two shell actions rather than one action with two chords:` the settings
 grammar is one row per value. A list-valued row would need a row per element

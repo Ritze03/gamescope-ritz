@@ -59,6 +59,7 @@ namespace gamescope::keybinds
 		Shell = 0,      // toggle the settings shell
 		ShellAlt,       // ... and its alternate chord; same effect
 		Launcher,       // the command palette alone over the game
+		Companion,      // the Steam chat overlay (src/SteamCompanion.h)
 		Count,
 	};
 

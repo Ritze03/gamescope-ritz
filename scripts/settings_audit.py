@@ -115,6 +115,16 @@ NOT_COVERED = {
                       "build-release/verify-shots/keybinds-2026-09-08/",
     "keybinds.shell_alt": "as keybinds.shell",
     "keybinds.launcher": "as keybinds.shell",
+    "keybinds.companion": "as keybinds.shell",
+    # The Steam chat overlay's two free-text rows (2026-09-08). Persisted --
+    # global.json's overlay.companion_command / companion_url -- but there is
+    # no "next value" for a browser command line, so the generic round trip
+    # cannot exercise them either. Named here rather than left to the blanket
+    # "text" reason, which claims the value is view state and is not persisted.
+    "overlay.companion_command": "a browser command line, not a value with a next step; the "
+                                 "grammar is pinned by tests/test_steam_companion.cpp and, live, "
+                                 "by build-release/verify-shots/steam-companion-2026-09-08/",
+    "overlay.companion_url": "as overlay.companion_command",
 }
 KIND_NOT_COVERED = {
     "facts": "read-only",

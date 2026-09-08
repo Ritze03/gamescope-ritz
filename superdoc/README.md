@@ -61,6 +61,14 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   `global.json`, the conflict rule, the two ways back from a binding that made the
   settings unreachable, and the capture chip.
 
+### Companion surfaces
+
+- [Steam chat companion](features/steam-companion.md) -- `Ctrl+Shift+Tab` opens Steam's
+  web chat over the game in a browser gamescope launches on its own Xwayland: the
+  STEAM_OVERLAY/STEAM_INPUT_FOCUS promotion, the hidden-but-still-swallowing-input trap
+  and the three checks that pin it, the command grammar, and the honest limitations
+  (a separate sign-in, no voice, no invites, no notifications).
+
 ### External surfaces
 
 - [Vulkan WSI layer](features/vk-wsi-layer.md) — `VkLayer_FROG_gamescope_wsi` swapchain redirection.

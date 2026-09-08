@@ -12,6 +12,11 @@ The newest version below is the one this build reports.
 ## [0.6.2] – 2026-09-08
 
 ### Added
+- **Steam chat over the game**: Ctrl+Shift+Tab opens Steam's web chat in a browser
+  gamescope runs on its own display, full screen over the game and fully clickable, and
+  press it again to hand the keyboard straight back. It is a separate sign-in from the
+  Steam client with no voice, invites or message alerts, and the browser, the page and
+  the hotkey are all yours to change under Settings > System > Steam chat.
 - **Editable keybinds**: a new Keybinds area under Settings changes the three chords
   gamescope-ritz binds for itself -- the one that opens the settings, its alternate,
   and the launcher -- by clicking a chord and pressing the one you want, saved once for

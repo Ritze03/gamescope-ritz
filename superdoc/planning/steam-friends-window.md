@@ -1,9 +1,14 @@
 # Steam's Friends window inside gamescope-ritz — feasibility
 
-**Status: research, 2026-09-08. Nothing in `src/` was changed.** The request was to
-show Steam's standalone Friends window (tray icon → Friends) over the game on
-`Ctrl+Shift+Tab`. This page records what was measured on this machine, what each
-candidate approach actually did when tried, and what should be built if anything.
+**Status: SETTLED and BUILT, 2026-09-08.** Approach 4 below was implemented the same
+day and shipped; the feature's own page is
+[`../features/steam-companion.md`](../features/steam-companion.md), and that is the page
+to read if you want to know how it works or what it cannot do. **This page is kept as
+the record of the measurements** — where the Friends window actually lives, and what
+each rejected approach did when it was tried — so nobody re-litigates a dead end.
+
+The request was to show Steam's standalone Friends window (tray icon → Friends) over the
+game on `Ctrl+Shift+Tab`.
 
 **The one-line answer.** The real Friends window **cannot** be shown inside
 gamescope-ritz on this setup — it belongs to the host's Xwayland and cannot be moved,
@@ -244,6 +249,32 @@ things they might have wanted are impossible and the third has a real cost:
 **Cost of doing nothing**: zero, and (2) may well cover it.
 
 Recommend: **ask first, build (3) only if the answer to (2) is no.**
+
+---
+
+## What actually happened
+
+The user's answer was "just try to implement it", so **(3) was built the same day**, on
+top of the keybind rework (`9651290`) this page's Phase 2 was waiting for. Point (2)
+above still stands and is repeated in the feature's own docs and in its settings help,
+because it is the first thing a user should be told: turning `clear_ld_preload` back off
+gives them voice, invites and message notifications, which this feature structurally
+cannot.
+
+What shipped, against the sketch below:
+
+| sketch | shipped |
+|---|---|
+| `src/Overlay/CompanionWindow.{h,cpp}` | `src/SteamCompanion.{h,cpp}` + `src/SteamCompanionCmd.h` — the second file is the pure half (property pair, toggle plan, command splitting), so `tests/test_steam_companion.cpp` runs it with no compositor. Not under `Overlay/`: it is a process and three X properties, not a drawn thing. |
+| a `GAMESCOPE_RITZ_COMPANION=1` marker property the wrapper sets | **process group** matching instead. A marker property needs a wrapper that can set it, i.e. it constrains the command the user is allowed to write; a pgid is a fact about the child and works for any browser. |
+| a `companion_toggle` ConCommand for review before the hotkey | dropped — the keybind landed first, so there was nothing to review it *without*. The verification harness drives the real chord through `wlserver_debug_key`, which is a better test than a private command anyway. |
+| Phase 2's `Companion` action, `Ctrl+Shift+Tab` | exactly as sketched. |
+| Phase 3's `system.companion` area, three rows, global | exactly as sketched, plus a read-only Status row that answers "is the browser you named actually installed". |
+
+The one thing the sketch understated is §5's trap. It is not a step in the hide path; it
+is the feature's central hazard, and it is now pinned at three levels (a `static_assert`,
+a named test, and a live watchdog that toasts). See the feature page's *"The trap"*
+section.
 
 ---
 

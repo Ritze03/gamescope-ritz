@@ -98,6 +98,10 @@
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
+// The Steam chat overlay: a browser on our own Xwayland, promoted with the
+// same STEAM_OVERLAY/STEAM_INPUT_FOCUS properties this file already reads.
+// Ticked from the main loop, torn down in steamcompmgr_exit().
+#include "SteamCompanion.h"
 #include "Overlay/CursorArt.h"
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
@@ -5531,6 +5535,16 @@ handle_desktop_window(steamcompmgr_win_t *w)
 	if ( win_maybe_a_dropdown( w ) || win_is_useless( w ) )
 		return;
 
+	// The Steam chat overlay sizes its own window to the root (see
+	// SteamCompanion.cpp's TrackWindow). Without this the rule below would
+	// fight it: a browser that specifies size hints -- chromium does -- would
+	// be pulled back to whatever size it asked for on every focus change, and
+	// the overlay would be a small rectangle in the corner. Guarded on the
+	// companion specifically rather than on isOverlay, so no other overlay
+	// client's behaviour changes.
+	if ( gamescope::companion::OwnsWindow( w ) )
+		return;
+
 	xwayland_ctx_t *ctx = w->xwayland().ctx;
 
 	if ( w->sizeHintsSpecified && !(window_is_fullscreen( w ) || ctx->force_windows_fullscreen) )
@@ -7600,6 +7614,13 @@ steamcompmgr_exit(void)
 	// stage in a plain journal read, without a debugger attached. Cheap and
 	// harmless to leave in; remove once the teardown is known clean.
 	xwm_log.infof( "teardown: steamcompmgr_exit begin" );
+
+	// Before anything else: the companion browser is a child process, and a
+	// child process that outlives the compositor it was opened inside is a
+	// window nobody can see on a display that no longer exists. First of the
+	// three guarantees it cannot -- see SteamCompanion.cpp's Shutdown().
+	gamescope::companion::Shutdown();
+
 	g_ImageWaiter.Shutdown();
 
 	// Clean up any commits.
@@ -9552,6 +9573,14 @@ steamcompmgr_main(int argc, char **argv)
 		g_SteamCompMgrWaiter.PollEvents();
 
 		gamescope_drain_pending_selection();
+
+		// The Steam chat overlay (src/SteamCompanion.h). Here, in the loop
+		// body, rather than in a timer or on the hotkey thread: this is the
+		// steamcompmgr thread with the window list in hand, which is what
+		// finding the browser's window and moving its X properties needs. It
+		// costs one waitpid(WNOHANG) and, while a browser is running, one walk
+		// of the window list; nothing in it can block.
+		gamescope::companion::Tick( root_ctx );
 
 		bool vblank = false;
 		if ( std::optional<gamescope::VBlankTime> pendingVBlank = GetVBlankTimer().ProcessVBlank() )

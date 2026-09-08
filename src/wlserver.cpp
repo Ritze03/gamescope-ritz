@@ -76,6 +76,9 @@
 // hotkeys() asks it which action a key event completed; the actions themselves
 // are performed by wlserver_check_ritz_keybinds() below.
 #include "Keybinds.h"
+// ... and one of those actions is the Steam chat overlay. Only RequestToggle()
+// is called from here: the work is all on the steamcompmgr thread.
+#include "SteamCompanion.h"
 // The crosshair's right-click auto-hide watches BTN_RIGHT on the game path
 // of wlserver_dispatch_mouse_button() -- see that function.
 #include "Overlay/Crosshair.h"
@@ -435,6 +438,15 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 				gamescope::ui::shell::RequestLauncher();
 			break;
 		}
+
+		case Action::Companion:
+			// The Steam chat overlay (src/SteamCompanion.h). Everything this
+			// action does -- reading the config, forking a browser, toasting,
+			// and moving two X properties -- happens on the steamcompmgr
+			// thread; this call only bumps an atomic and nudges it awake, so
+			// the key path never waits on a process launch.
+			gamescope::companion::RequestToggle();
+			break;
 
 		case Action::Count:
 			break;
