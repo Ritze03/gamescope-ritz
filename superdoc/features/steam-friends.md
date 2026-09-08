@@ -528,6 +528,12 @@ everything else:
 - The live probe prints range **verdicts** about ids, never the ids.
 - The verification harness asserts it: no fake persona name and no SteamID64
   appears in any gamescope log it produced.
+- **The one thing that leaves the machine carries none of it either.** The
+  game-name lookup sends app ids and nothing else — see
+  [Exactly what leaves the machine](#exactly-what-leaves-the-machine) — and the
+  test that pins it walks every byte of the URL after the `?`. The capture
+  harness checks the recorded request for a SteamID64 prefix and for the
+  hostile persona name the stub uses, and requires neither to appear.
 
 **One documented exception.** `overlay_e2_get friends.list` is the registry's
 generic "what is this row's value" debug command, and a list row's value is its
@@ -578,6 +584,9 @@ handle it. Nothing here throws, blocks or is fatal.
 | a client whose interface versions we do not know | The version lists in `SteamFriendsCmd.h` are **closed**: an unknown client disables the feature rather than guessing a layout. |
 | a client whose vtable moved again | `Snapshot()` range-checks the first SteamID it gets back. A number that is not a SteamID abandons the whole read with a named line, rather than handing `GetFriendGamePlayed` a garbage id. |
 | `steam` not on PATH | The join refuses with one sentence. |
+| `curl` not on PATH, or no network, or the endpoint is slow, blackholed or wrong | The lookup fails, **nothing is cached**, the whole lookup backs off for five minutes, one log line names the count, and unknown games read `App <id>`. Nothing on the frame path notices. |
+| no cache directory (no `HOME`, no `XDG_CACHE_HOME`) | No lookup and no file. Installed games are still named from their manifests. |
+| a corrupt or truncated `appnames.json` | Parses as empty, which is the same as a fresh machine. |
 
 Each failure logs its reason **exactly once** per distinct reason, and re-logs
 if the situation changes (Steam started, then signed out) — the panel polls
