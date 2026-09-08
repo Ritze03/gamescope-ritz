@@ -11,6 +11,7 @@
 #include "shaders/effects_curve.h"
 #include "Config/ConfigManager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -50,8 +51,8 @@ namespace
 		// lets flRatio sweep the whole 0.05..8 range below without
 		// ab_local_ratio()'s own clamp(localMean, 0, 1) truncating it first.
 		const float r = ab_local_shift( flRatio * 0.2f, 0.2f, flLocal );
-		const float gain  = ab_dyn_gain( sc.p98 * r, flMin, flMax );
-		const float gamma = ab_dyn_gamma( sc.p2 * r, sc.p50 * r, gain, flTarget, flMin );
+		const float gain  = ab_dyn_gain( sc.p98 * r, sc.p50 * r, flTarget, flMin, flMax );
+		const float gamma = ab_dyn_gamma( sc.p2 * r, sc.p50 * r, gain, flTarget, flMin, flMax );
 		const float y = ab_dyn_curve( x, gain, gamma );
 		return x + ( y - x ) * flStrength;
 	}
@@ -120,8 +121,8 @@ TEST_CASE( "dynamic curve: black stays black, and x = 1 reaches exactly 1 when t
 		{
 			REQUIRE_THAT( Apply( 0.0f, sc, 1.0f, t ), WithinAbs( 0.0f, 1e-7f ) );
 
-			const float gain  = ab_dyn_gain( sc.p98, kMinGain, kMaxGain );
-			const float gamma = ab_dyn_gamma( sc.p2, sc.p50, gain, t, kMinGain );
+			const float gain  = ab_dyn_gain( sc.p98, sc.p50, t, kMinGain, kMaxGain );
+			const float gamma = ab_dyn_gamma( sc.p2, sc.p50, gain, t, kMinGain, kMaxGain );
 			if ( std::pow( gain, gamma ) > 1.0f )
 				REQUIRE_THAT( ab_dyn_curve( 1.0f, gain, gamma ), WithinAbs( 1.0f, 1e-5f ) );
 		}
@@ -156,17 +157,22 @@ TEST_CASE( "dynamic curve: the dark reference scene is lifted, its highlights co
 	const float hi   = Apply( 240.0f / 255.0f, kDark, 1.0f ) * 255.0f;
 	const float wht  = Apply( 1.0f, kDark, 1.0f ) * 255.0f;
 	// At max_gain 4.0 (widened from 2.0, 2026-09-07) the darkest band lifts
-	// to ~71 rather than ~50 -- still well clear of the "readable" floor.
+	// well clear of the "readable" floor, and further still since 2026-09-08:
+	// the gamma floor is 1 / max_gain = 0.25 here, so the exponent the
+	// median asks for (0.374) is no longer clamped up to 0.5.
 	REQUIRE( p2 > 65.0f );          // the 2 % percentile becomes readable
 	REQUIRE( p50 > p2 );
 	REQUIRE( hi < 255.0f );         // a 240 highlight is not blown out
 	REQUIRE( hi > p50 );            // and keeps its rank
 	REQUIRE( wht <= 255.0f );
 	REQUIRE( hi < wht );            // 240 and 255 stay distinguishable
-	// The lift is bounded: the gain is max_gain and the gamma is the floor.
-	REQUIRE_THAT( ab_dyn_gain( kDark.p98, kMinGain, kMaxGain ), WithinAbs( kMaxGain, 1e-6f ) );
-	REQUIRE_THAT( ab_dyn_gamma( kDark.p2, kDark.p50, kMaxGain, kTarget, kMinGain ),
-	              WithinAbs( AB_DYN_GAMMA_MIN, 1e-6f ) );
+	// The lift is bounded: the gain is max_gain (the white point alone asks
+	// for 11.5 here) and the gamma sits between its floor and 1.
+	REQUIRE_THAT( ab_dyn_gain( kDark.p98, kDark.p50, kTarget, kMinGain, kMaxGain ),
+	              WithinAbs( kMaxGain, 1e-6f ) );
+	const float gDark = ab_dyn_gamma( kDark.p2, kDark.p50, kMaxGain, kTarget, kMinGain, kMaxGain );
+	REQUIRE( gDark >= ab_gamma_min( kMaxGain ) - 1e-6f );
+	REQUIRE( gDark < 1.0f );
 }
 
 TEST_CASE( "dynamic curve: the bright reference scene is dimmed and its shadows are not crushed", "[effects_curve]" )
@@ -197,12 +203,12 @@ TEST_CASE( "dynamic curve: min_gain 0.3 loosens the shadow cap relative to 0.5, 
 	// crushed" by the >= 8 counts a human can still distinguish from black,
 	// but 9 leaves much less headroom than 15 did.
 	constexpr float p2 = 30.0f / 255.0f, p50 = 225.0f / 255.0f, p98 = 250.0f / 255.0f;
-	const float gainOld = ab_dyn_gain( p98, 0.5f, 2.0f );
-	const float gainNew = ab_dyn_gain( p98, 0.3f, 4.0f );
+	const float gainOld = ab_dyn_gain( p98, p50, 0.5f, 0.5f, 2.0f );
+	const float gainNew = ab_dyn_gain( p98, p50, 0.5f, 0.3f, 4.0f );
 	REQUIRE_THAT( gainOld, WithinAbs( gainNew, 1e-6f ) );   // 0.918 either way, not clamped
 
-	const float gammaOld = ab_dyn_gamma( p2, p50, gainOld, 0.5f, 0.5f );
-	const float gammaNew = ab_dyn_gamma( p2, p50, gainNew, 0.5f, 0.3f );
+	const float gammaOld = ab_dyn_gamma( p2, p50, gainOld, 0.5f, 0.5f, 2.0f );
+	const float gammaNew = ab_dyn_gamma( p2, p50, gainNew, 0.5f, 0.3f, 4.0f );
 	REQUIRE( gammaNew > gammaOld );          // the looser cap permits more darkening
 	REQUIRE_THAT( gammaNew, WithinAbs( AB_DYN_GAMMA_MAX, 1e-3f ) );   // GAMMA_MAX now binds, not the cap
 
@@ -217,13 +223,16 @@ TEST_CASE( "dynamic curve: min_gain 0.3 loosens the shadow cap relative to 0.5, 
 
 TEST_CASE( "dynamic curve: the gamma is clamped to its bounds and the shadow cap holds", "[effects_curve]" )
 {
-	// Way below target: floor.
-	REQUIRE_THAT( ab_dyn_gamma( 0.001f, 0.002f, 2.0f, 0.9f, 0.5f ), WithinAbs( AB_DYN_GAMMA_MIN, 1e-6f ) );
+	// Way below target: the floor, which is 1 / max_gain since 2026-09-08.
+	REQUIRE_THAT( ab_dyn_gamma( 0.001f, 0.002f, 2.0f, 0.9f, 0.5f, 2.0f ),
+	              WithinAbs( ab_gamma_min( 2.0f ), 1e-6f ) );
+	REQUIRE_THAT( ab_dyn_gamma( 0.001f, 0.002f, 4.0f, 0.9f, 0.5f, 4.0f ),
+	              WithinAbs( AB_DYN_GAMMA_MIN, 1e-6f ) );
 	// Way above target with bright shadows: ceiling.
-	REQUIRE_THAT( ab_dyn_gamma( 0.9f, 0.95f, 1.0f, 0.1f, 0.5f ), WithinAbs( AB_DYN_GAMMA_MAX, 1e-6f ) );
+	REQUIRE_THAT( ab_dyn_gamma( 0.9f, 0.95f, 1.0f, 0.1f, 0.5f, 4.0f ), WithinAbs( AB_DYN_GAMMA_MAX, 1e-6f ) );
 	// Above target with dark shadows: the cap keeps p2 * gain ^ g >= p2 * min_gain.
 	const float p2 = 0.05f, gain = 0.918f, minGain = 0.5f;
-	const float g = ab_dyn_gamma( p2, 0.7f, gain, 0.5f, minGain );
+	const float g = ab_dyn_gamma( p2, 0.7f, gain, 0.5f, minGain, 4.0f );
 	REQUIRE( g > 1.0f );
 	REQUIRE( g < AB_DYN_GAMMA_MAX );
 	REQUIRE( std::pow( p2 * gain, g ) >= p2 * minGain - 1e-6f );
@@ -460,11 +469,162 @@ TEST_CASE( "local curve: the per-pixel gain never leaves the user's bounds", "[e
 					for ( float ls : kLocalStrengths )
 					{
 						const float shift = ab_local_shift( r, 1.0f, ls );
-						const float gain  = ab_dyn_gain( sc.p98 * shift, lo, hi );
-						const float gamma = ab_dyn_gamma( sc.p2 * shift, sc.p50 * shift, gain, kTarget, lo );
+						const float gain  = ab_dyn_gain( sc.p98 * shift, sc.p50 * shift, kTarget, lo, hi );
+						const float gamma = ab_dyn_gamma( sc.p2 * shift, sc.p50 * shift, gain, kTarget, lo, hi );
 						REQUIRE( gain >= lo - 1e-6f );
 						REQUIRE( gain <= hi + 1e-6f );
-						REQUIRE( gamma >= AB_DYN_GAMMA_MIN - 1e-6f );
-						REQUIRE( gamma <= AB_DYN_GAMMA_MAX + 1e-6f );
+						REQUIRE( gamma >= ab_gamma_min( hi ) - 1e-6f );
+						REQUIRE( gamma <= ab_gamma_max( lo ) + 1e-6f );
 					}
+}
+
+
+// ---------------------------------------------------------------------------
+// The 2026-09-08 ceiling fix. The user's report was *"anything above target
+// brightness 0.5 and max gain 2.0 [doesn't] do anything at all"*, and it was
+// true: Target reached the picture only through an exponent clamped to a
+// fixed [0.5, 1.5], and Max gain only through a white-point demand that a
+// realistic frame satisfies at about 2. These pin both halves of the fix.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	// A dark frame the way a real one measures, not the way a flat band
+	// chart does: enough bright content that the white point alone asks for
+	// only ~2.0 of gain (0.9 / 0.44), which is exactly what made Max gain an
+	// EXACT no-op above 2 before this fix. The numbers are the measured
+	// statistics of a dark photographic frame -- see shader-effects.md.
+	constexpr Scene kRealDark = { 0.01136f, 0.07596f, 0.43968f };
+
+	float OutCode( const Scene &sc, float t, float lo, float hi, float x )
+	{
+		const float gain  = ab_dyn_gain( sc.p98, sc.p50, t, lo, hi );
+		const float gamma = ab_dyn_gamma( sc.p2, sc.p50, gain, t, lo, hi );
+		return ab_dyn_curve( x, gain, gamma ) * 255.0f;
+	}
+}
+
+TEST_CASE( "gamma bounds come from the user's own gain bounds", "[effects_curve]" )
+{
+	// max_gain 2.0 reproduces the historical fixed floor exactly -- the
+	// anchor that keeps every pre-2026-09-08 measured number reproducible.
+	REQUIRE_THAT( ab_gamma_min( 2.0f ), WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( ab_gamma_min( 4.0f ), WithinAbs( AB_DYN_GAMMA_MIN, 1e-6f ) );
+	// "Do not brighten" really means it, in both channels.
+	REQUIRE_THAT( ab_gamma_min( 1.0f ), WithinAbs( 1.0f, 1e-6f ) );
+	// The mirror on the darkening side: "do not darken" leaves no exponent
+	// above 1 either, and at every shipped default the cap is slack.
+	REQUIRE_THAT( ab_gamma_max( 1.0f ), WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( ab_gamma_max( 0.3f ), WithinAbs( AB_DYN_GAMMA_MAX, 1e-6f ) );
+	// The pair can never invert, over the whole panel range.
+	for ( float lo : kMinGains )
+		for ( float hi : kMaxGains )
+		{
+			REQUIRE( ab_gamma_min( hi ) <= 1.0f + 1e-6f );
+			REQUIRE( ab_gamma_max( lo ) >= 1.0f - 1e-6f );
+			REQUIRE( ab_gamma_min( hi ) <= ab_gamma_max( lo ) );
+		}
+}
+
+TEST_CASE( "max_gain 1.0 does not brighten anything, at any target", "[effects_curve]" )
+{
+	// The lie this fix removed: before, "Max gain 1.0" still let the gamma
+	// lift a 20-code band to 71, because the floor was a fixed 0.5.
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( int i = 0; i <= 255; i++ )
+			{
+				const float x = i / 255.0f;
+				REQUIRE( OutCode( sc, t, kMinGain, 1.0f, x ) <= (float)i + 0.5f );
+			}
+}
+
+TEST_CASE( "Target brightness moves the picture, and says so when it stops", "[effects_curve]" )
+{
+	// The complaint, as an assertion: on a realistic dark frame at the
+	// shipped defaults, raising Target from 0.5 to 0.7 must visibly change
+	// the picture. Before the fix the two were bit-identical.
+	const float at50 = OutCode( kRealDark, 0.50f, kMinGain, kMaxGain, 20.0f / 255.0f );
+	const float at70 = OutCode( kRealDark, 0.70f, kMinGain, kMaxGain, 20.0f / 255.0f );
+	REQUIRE( at70 - at50 > 20.0f );
+
+	// And monotone in Target the whole way up to the point where a bound
+	// takes over -- which the classifier then names.
+	float flPrev = -1.0f;
+	for ( float t = 0.10f; t <= 0.751f; t += 0.05f )
+	{
+		const float v = OutCode( kRealDark, t, kMinGain, kMaxGain, 20.0f / 255.0f );
+		REQUIRE( v >= flPrev - 0.5f );
+		flPrev = v;
+	}
+	// Past the reachable range the readout must say the lift limit binds,
+	// rather than the picture silently going flat with no explanation.
+	REQUIRE( ab_dyn_binding( kRealDark.p2, kRealDark.p50, kRealDark.p98, 0.9f, kMinGain, kMaxGain )
+	         == AB_BIND_LIFT );
+}
+
+TEST_CASE( "Max gain moves the picture on a realistic dark frame", "[effects_curve]" )
+{
+	// The other half of the report. This frame's white-point demand is 2.05,
+	// so before the fix max_gain 2 / 3 / 4 produced the identical gain and
+	// the identical picture: an exact no-op over half the slider.
+	const float mg15 = OutCode( kRealDark, kTarget, kMinGain, 1.5f, 5.0f / 255.0f );
+	const float mg20 = OutCode( kRealDark, kTarget, kMinGain, 2.0f, 5.0f / 255.0f );
+	const float mg40 = OutCode( kRealDark, kTarget, kMinGain, 4.0f, 5.0f / 255.0f );
+	REQUIRE( mg20 - mg15 > 15.0f );
+	REQUIRE( mg40 - mg20 > 15.0f );   // this is the step that used to be zero
+	// Monotone in max_gain on this frame, over the whole panel range.
+	float flPrev = -1.0f;
+	for ( float hi : kMaxGains )
+	{
+		const float v = OutCode( kRealDark, kTarget, kMinGain, hi, 5.0f / 255.0f );
+		REQUIRE( v >= flPrev - 0.5f );
+		flPrev = v;
+	}
+}
+
+TEST_CASE( "the binding classifier names one limit, and always names something", "[effects_curve]" )
+{
+	// Every combination classifies, the code is in range, and the wording
+	// exists -- the panel row and the effects_ab_log trace both print this
+	// one function, so an unnamed code would show as an empty fact.
+	for ( const Scene &sc : kScenes )
+		for ( float t : kTargets )
+			for ( float lo : kMinGains )
+				for ( float hi : kMaxGains )
+				{
+					const int n = ab_dyn_binding( sc.p2, sc.p50, sc.p98, t, lo, hi );
+					REQUIRE( n >= AB_BIND_NONE );
+					REQUIRE( n <= AB_BIND_SHADOW );
+					REQUIRE( ab_binding_text( n )[0] != '\0' );
+				}
+
+	// A frame whose median already sits on the target, inside every bound:
+	// nothing binds, and the wording points at Target rather than at a knob
+	// that cannot help.
+	REQUIRE( ab_dyn_binding( 0.1f, 0.5f, 0.9f, 0.5f, 0.3f, 4.0f ) == AB_BIND_NONE );
+	// A flat dark chart wants 11.5x of gain: max_gain binds.
+	REQUIRE( ab_dyn_binding( kDark.p2, kDark.p50, kDark.p98, kTarget, kMinGain, kMaxGain )
+	         == AB_BIND_GAIN_MAX );
+	// The bright reference scene, asked to go far darker than it can: the
+	// darkening side, held by the shadow cap / the ceiling.
+	const int nBright = ab_dyn_binding( kBright.p2, kBright.p50, kBright.p98, 0.1f, kMinGain, kMaxGain );
+	REQUIRE( ( nBright == AB_BIND_DARKEN || nBright == AB_BIND_SHADOW ) );
+}
+
+TEST_CASE( "max_gain 2.0 reproduces the pre-2026-09-08 curve exactly", "[effects_curve]" )
+{
+	// The regression guard for every measured table taken before the fix:
+	// at max_gain 2.0 the gamma floor is the historical 0.5, and on a scene
+	// whose white point alone saturates the gain, the whole curve is
+	// unchanged. (The old code: gain = clamp(0.9/p98, lo, hi), gamma
+	// clamped to [0.5, 1.5].)
+	for ( const Scene &sc : { kDark, kRealDark } )
+	{
+		const float gain  = ab_dyn_gain( sc.p98, sc.p50, kTarget, kMinGain, 2.0f );
+		const float gamma = ab_dyn_gamma( sc.p2, sc.p50, gain, kTarget, kMinGain, 2.0f );
+		const float gainOld = std::min( std::max( 0.9f / sc.p98, kMinGain ), 2.0f );
+		REQUIRE_THAT( gain, WithinAbs( gainOld, 1e-6f ) );
+		REQUIRE_THAT( gamma, WithinAbs( 0.5f, 1e-6f ) );
+	}
 }

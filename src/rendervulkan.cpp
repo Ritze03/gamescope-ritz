@@ -3894,13 +3894,22 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	// map get, which bound every per-pixel gain in the frame.
 	namespace ec = gamescope::effects_curve;
 	float flGain, flGamma = 1.0f, flGainLo = 0.0f, flGainHi = 0.0f;
+	int nBinding = ec::AB_BIND_NONE;
 	if ( state.bAbDynamic )
 	{
 		const float flShift = ec::ab_local_shift( flLocalProbe, h[0], state.flAbLocal );
-		flGain  = ec::ab_dyn_gain( h[3] * flShift, state.flAbMinGain, state.flAbMaxGain );
-		flGamma = ec::ab_dyn_gamma( h[1] * flShift, h[2] * flShift, flGain, state.flAbTarget, state.flAbMinGain );
-		flGainLo = ec::ab_dyn_gain( h[3] * ec::ab_local_shift( flLocalMin, h[0], state.flAbLocal ), state.flAbMinGain, state.flAbMaxGain );
-		flGainHi = ec::ab_dyn_gain( h[3] * ec::ab_local_shift( flLocalMax, h[0], state.flAbLocal ), state.flAbMinGain, state.flAbMaxGain );
+		flGain  = ec::ab_dyn_gain( h[3] * flShift, h[2] * flShift, state.flAbTarget, state.flAbMinGain, state.flAbMaxGain );
+		flGamma = ec::ab_dyn_gamma( h[1] * flShift, h[2] * flShift, flGain, state.flAbTarget, state.flAbMinGain, state.flAbMaxGain );
+		const float flShiftLo = ec::ab_local_shift( flLocalMin, h[0], state.flAbLocal );
+		const float flShiftHi = ec::ab_local_shift( flLocalMax, h[0], state.flAbLocal );
+		flGainLo = ec::ab_dyn_gain( h[3] * flShiftLo, h[2] * flShiftLo, state.flAbTarget, state.flAbMinGain, state.flAbMaxGain );
+		flGainHi = ec::ab_dyn_gain( h[3] * flShiftHi, h[2] * flShiftHi, state.flAbTarget, state.flAbMinGain, state.flAbMaxGain );
+		// Which limit is currently stopping the picture, in the SAME words
+		// the settings panel's Diagnostics fact prints (effects_curve.h's
+		// ab_binding_text) -- one classifier, so a trace and the panel can
+		// never disagree about the same frame.
+		nBinding = ec::ab_dyn_binding( h[1] * flShift, h[2] * flShift, h[3] * flShift,
+		                               state.flAbTarget, state.flAbMinGain, state.flAbMaxGain );
 	}
 	else
 	{
@@ -3916,11 +3925,12 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	int y = s_nAbLogProbeY.load( std::memory_order_relaxed );
 	if ( x < 0 || y < 0 ) { x = uWidth / 2; y = uHeight / 2; }
 
-	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d local=%.3f lmin=%.5f lmax=%.5f lprobe=%.5f gainlo=%.5f gainhi=%.5f",
+	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d local=%.3f lmin=%.5f lmax=%.5f lprobe=%.5f gainlo=%.5f gainhi=%.5f bind=%d (%s)",
 		s_nAbLogIndex++, double( ulNow - s_ulAbLogFirstNs ) * 1e-6, double( flDt ) * 1e3,
 		!state.bAdaptiveBrightness ? "off" : ( state.bAbDynamic ? "dynamic" : "whole" ),
 		h[4], h[5], h[6], h[7], h[0], h[1], h[2], h[3], flGain, flGamma, x, y, r, g, b,
-		state.flAbLocal, flLocalMin, flLocalMax, flLocalProbe, flGainLo, flGainHi );
+		state.flAbLocal, flLocalMin, flLocalMax, flLocalProbe, flGainLo, flGainHi,
+		nBinding, ec::ab_binding_text( nBinding ) );
 
 	if ( s_nAbLogFrames.load( std::memory_order_relaxed ) > 0 )
 		s_nAbLogFrames.fetch_sub( 1, std::memory_order_relaxed );

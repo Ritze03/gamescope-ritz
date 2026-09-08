@@ -23,6 +23,18 @@ through this list, tell your assistant the results — answering it lets the tem
   dark scenes a lot further, but on a bright scene the honest trade-off measured here is
   that highlights come out slightly darker with deeper shadows than the old 0.5/2.0
   defaults. Worth it, or should the defaults move back partway?
+- [ ] **Target brightness and Max gain, swept end to end on a dark map (2026-09-08).**
+  This is the one you reported as doing nothing above 0.5 / 2.0, and both were genuinely
+  inert on a realistic frame. Adaptive Brightness on, Mode = Dynamic, Local adaptation 0
+  for this test. Drag **Target brightness** from 0.1 to 0.9 and say where it stops
+  changing the picture; then put it back to 0.5 and drag **Max gain** 1.0 → 4.0 and say
+  the same. Two things that are expected and are not the bug coming back: Max gain 1.0
+  should now do *nothing at all* (that is the point — it means "do not brighten"), and
+  once the picture has reached your Target, further Max gain stops brightening. The
+  Shaders area's **Pipeline** row (Details page, "adaptive limit") tells you which limit
+  is holding it at any moment — please say whether that line is actually useful or just
+  noise. Also: a dark map is now noticeably brighter than before at the same settings —
+  is that better, or is it too milky at the defaults?
 - [ ] **Crosshair gap at 1 px and 2 px.** Gap 1 should look like a solid plus with
   exactly one pixel missing at dead centre; gap 2 should open a small, visibly
   *symmetric* gap with no stagger between the two arms. Also check Apply Scaling at

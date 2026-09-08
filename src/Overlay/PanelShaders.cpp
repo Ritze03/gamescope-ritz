@@ -39,6 +39,7 @@
 
 #include "rendervulkan.hpp"
 #include "Config/ConfigManager.h"
+#include "EffectPreview.h"
 #include "Fonts.h"
 
 #include "imgui.h"
@@ -468,8 +469,9 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness.max_gain; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.max_gain, f ); } ) )
 				.Key( "reshade.adaptive_brightness.max_gain" )
-				.Help( "How bright the adjustment may make the picture. In Dynamic, the gain "
-				       "applied before the gamma lift takes over." )
+				.Help( "How bright the adjustment may make the picture. In Dynamic it caps both "
+				       "the gain and how far the mid-tones may be lifted on top of it, so 1.0 "
+				       "really does mean \"do not brighten\"." )
 				.Range( 1.0f, 4.0f )   // widened from 1.0..2.0, 2026-09-07 request
 				.Step( 0.1f )    // 31 positions; a finer 0.05 step would be 61, too fine
 				                 // over the wider span for a slider to feel graduated
@@ -515,6 +517,22 @@ namespace gamescope
 			} )
 			.Live( "effects", []{
 				return ui::Fact{ "effects", "built into this binary -- nothing is loaded from disk" };
+			} )
+			// WHICH LIMIT IS BINDING (2026-09-08). A clamped slider looks
+			// exactly like a working one: the user spent a session moving
+			// Target brightness and Max gain over ranges where the maths
+			// could not respond, because nothing on screen said so. This
+			// names the constraint in the same words `effects_ab_log`
+			// prints, classified by effects_curve.h's ab_dyn_binding() from
+			// the frame the Inspector's preview already captures -- one
+			// classifier, so the panel and a trace cannot disagree. It
+			// describes the FRAME's curve (Local adaptation redistributes
+			// inside these same bounds, it never widens them).
+			.Live( "adaptive limit", []{
+				std::string sLine;
+				if ( !gamescope::overlay::AbPreview_BindingLine( sLine ) )
+					sLine = "not measured -- turn Adaptive Brightness on over an SDR game";
+				return ui::Fact{ "adaptive limit", sLine };
 			} );
 	}
 

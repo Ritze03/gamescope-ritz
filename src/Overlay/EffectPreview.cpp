@@ -38,6 +38,7 @@
 
 #include "rendervulkan.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <memory>
@@ -237,6 +238,44 @@ namespace gamescope::overlay
 			pDl->AddRect( rcImage.Min, rcImage.Max, Col( Role::Line ) );
 			DrawCentredMessage( rcImage, pszMessage );
 		}
+	}
+
+	bool AbPreview_BindingLine( std::string &sOut )
+	{
+		State &st = St();
+
+		const bool bEnabled   = g_nativeEffects.bAdaptiveBrightness;
+		const bool bSupported = BaseLayerIsSdr();
+		if ( !bEnabled || !bSupported )
+			return false;
+
+		// Same capture the strip uses, same idempotent request. Asking here
+		// too is what lets the fact stand on its own: the row is in the same
+		// area as the Adaptive Brightness switch, so a frame is always a
+		// composite or two away.
+		vulkan_effects_preview_request();
+		if ( vulkan_effects_preview_fetch( &st.frame, st.frame.ulGeneration ) )
+			st.bHaveFrame = true;
+		if ( st.frame.ulGeneration == 0 )
+			return false;
+
+		const abpreview::Params p = CurrentParams();
+		if ( !p.bDynamic )
+		{
+			// Whole image has no curve to clamp: its single gain is
+			// target/mean inside the user's bounds, so name the bound that
+			// bites rather than pretending the Dynamic classifier applies.
+			const float flWant = p.flTarget / std::max( st.frame.flMean, 0.001f );
+			sOut = flWant > p.flMaxGain ? "gain is at Max gain"
+			     : flWant < p.flMinGain ? "gain is at Min gain"
+			                            : "none -- the average is on Target brightness";
+			return true;
+		}
+
+		namespace ec = gamescope::effects_curve;
+		sOut = ec::ab_binding_text( ec::ab_dyn_binding( st.frame.flP2, st.frame.flP50, st.frame.flP98,
+		                                               p.flTarget, p.flMinGain, p.flMaxGain ) );
+		return true;
 	}
 
 	void AbPreview_Draw( const ImRect &rcBlock )

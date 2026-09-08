@@ -112,10 +112,12 @@ void main()
                 float local = ab_local_sample((vec2(pos) + 0.5) / vec2(size));
                 rEff = ab_local_shift(local, history_read(HISTORY_MEAN), u_abLocal);
             }
-            float gain  = ab_dyn_gain(history_read(HISTORY_P98) * rEff, u_abMin, u_abMax);
+            float gain  = ab_dyn_gain(history_read(HISTORY_P98) * rEff,
+                                      history_read(HISTORY_P50) * rEff,
+                                      u_abTarget, u_abMin, u_abMax);
             float gamma = ab_dyn_gamma(history_read(HISTORY_P2) * rEff,
                                        history_read(HISTORY_P50) * rEff,
-                                       gain, u_abTarget, u_abMin);
+                                       gain, u_abTarget, u_abMin, u_abMax);
             vec3 graded = vec3(ab_dyn_curve(c.r, gain, gamma),
                                ab_dyn_curve(c.g, gain, gamma),
                                ab_dyn_curve(c.b, gain, gamma));

@@ -18,6 +18,8 @@
 // UI/Controls.h has the block's layout and its placeholder state machine.
 // See superdoc/features/shader-effects.md for the whole design.
 
+#include <string>
+
 #include "UI/Controls.h"
 
 namespace gamescope::overlay
@@ -27,4 +29,16 @@ namespace gamescope::overlay
 	// it captures only when it has to and re-grades only when a slider or the
 	// captured frame has actually changed.
 	void AbPreview_Draw( const ImRect &rcBlock );
+
+	// WHICH LIMIT IS BINDING, for the Shaders area's Diagnostics facts row
+	// (2026-09-08). A clamped slider looks exactly like a working one, which
+	// is what made "Target brightness above 0.5 does nothing" cost a session
+	// to find; this puts the answer on screen. Returns a short plain-words
+	// line -- effects_curve.h's ab_binding_text(), the SAME wording the
+	// `effects_ab_log` trace prints, classified from the same statistics --
+	// or false while nothing has been measured yet (the effect off, an HDR
+	// base layer, or the first frame or two after the panel opened). It arms
+	// a capture itself, so the row fills in on its own; the capture is
+	// idempotent and costs one 256x144 dispatch per Inspector open.
+	bool AbPreview_BindingLine( std::string &sOut );
 }

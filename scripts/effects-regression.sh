@@ -62,6 +62,12 @@
 #                       ring) and its amplitude within 12 counts
 #   local-pan-*      -- INFO: the same panning scene at three local strengths,
 #                       with the map's range and the extreme gains it produces
+#   target-moves     -- 2026-09-08: Target brightness 0.3 -> 0.5 -> 0.7 on the
+#   maxgain-moves       textured dark scene must brighten the frame by >= 15
+#                       counts of frame mean per step, and Max gain 1.5 -> 2
+#                       -> 3 likewise. Before the fix both had steps of
+#                       EXACTLY zero over the top of their range -- the
+#                       user's "does nothing at all", as a number
 #   Whole-image captures of every scene are taken too and reported as INFO
 #   lines (they show the clipping Dynamic exists to avoid), not asserted.
 #
@@ -97,6 +103,10 @@ ADAPT_SETTLE_S=5  # after a scene switch, > 4 tau (tau = 1 s) before a "settled"
 AB_ID="image.shaders.adaptive_brightness"        # Switch: on/off
 AB_MODE_ID="image.shaders.adaptive_brightness.mode"  # Param, a Choice: 0 Whole image, 1 Dynamic
 AB_LOCAL_ID="image.shaders.adaptive_brightness.local_strength"  # Param, 0.0..1.0 (Local adaptation)
+AB_TARGET_ID="image.shaders.adaptive_brightness.target"          # Param, 0.1..0.9 (Target brightness)
+AB_MAXGAIN_ID="image.shaders.adaptive_brightness.max_gain"       # Param, 1.0..4.0 (Max gain)
+AB_TARGET_DEFAULT=0.5   # == ConfigSchema.h's target_luminance
+AB_MAXGAIN_DEFAULT=4.0  # == ConfigSchema.h's max_gain
 AB_LOCAL_DEFAULT=0.5   # == ConfigSchema.h's ReshadeAdaptiveBrightnessSettings::local_strength
 
 KEEP=0
@@ -282,6 +292,16 @@ set_local() {   # Local adaptation strength, 0.0 .. 1.0
 	sleep "$SETTLE_S"
 }
 
+set_target() {   # Target brightness, 0.1 .. 0.9
+	gsctl overlay_e2_set "$AB_TARGET_ID $1" >/dev/null 2>&1 || true
+	sleep "$SETTLE_S"
+}
+
+set_maxgain() {   # Max gain, 1.0 .. 4.0
+	gsctl overlay_e2_set "$AB_MAXGAIN_ID $1" >/dev/null 2>&1 || true
+	sleep "$SETTLE_S"
+}
+
 next_scene() {
 	# Only ever the pid the client itself wrote -- never a name match.
 	kill -USR1 "$CLIENT_PID"
@@ -400,6 +420,40 @@ sleep "$ADAPT_SETTLE_S"
 arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-06-static.txt"
 run_sampler ablog "$OUT_DIR/ablog-06-static.txt" static
 take_screenshot 06-texdark-still-dynamic >/dev/null
+
+# ---------------------------------------------------------------------------
+# THE TWO SLIDERS ACTUALLY MOVE THE PICTURE (2026-09-08). The report was
+# *"anything above target brightness 0.5 and max gain 2.0 [doesn't] do
+# anything at all"*, and it was true: Target reached the picture only through
+# an exponent clamped to a fixed [0.5, 1.5], and Max gain only through a
+# white-point demand that a realistic frame satisfies at about 2. Both are
+# pinned here, on texdark -- the scene with a CONTINUOUS histogram, chosen
+# deliberately over the flat band charts, which hide the Max gain half of the
+# bug (their p98 is so low that every setting up to 4.0 bites).
+#
+# Measured before the fix, frame mean at max_gain 4: target 0.3 / 0.5 / 0.7
+# read 84.9 / 121.0 / 121.0 -- the last step was EXACTLY zero. And at target
+# 0.5, max_gain 1.5 / 2 / 3 read 89.1 / 102.4 / 121.0 with 3 -> 4 exactly
+# zero. After: 84.9 / 129.8 / 175.4 and 64.9 / 102.4 / 129.8.
+# ---------------------------------------------------------------------------
+set_local 0
+set_maxgain "$AB_MAXGAIN_DEFAULT"
+declare -a TARGET_SHOTS=()
+for T in 0.3 0.5 0.7; do
+	set_target "$T"
+	TARGET_SHOTS+=( "$(take_screenshot "06b-texdark-target-$T")" )
+done
+run_sampler slider target-moves 15 "${TARGET_SHOTS[@]}"
+set_target "$AB_TARGET_DEFAULT"
+
+declare -a MAXGAIN_SHOTS=()
+for G in 1.5 2.0 3.0; do
+	set_maxgain "$G"
+	MAXGAIN_SHOTS+=( "$(take_screenshot "06c-texdark-maxgain-$G")" )
+done
+run_sampler slider maxgain-moves 15 "${MAXGAIN_SHOTS[@]}"
+set_maxgain "$AB_MAXGAIN_DEFAULT"
+set_local "$AB_LOCAL_DEFAULT"
 
 # ---------------------------------------------------------------------------
 # Scenes 5-7: Local adaptation (2026-09-07). The measure pass writes a 16x16

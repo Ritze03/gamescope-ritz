@@ -57,6 +57,14 @@ The newest version below is the one this build reports.
   symmetric**: a gap of 1 leaves exactly one pixel missing at the centre, larger gaps
   split evenly on both sides with no stagger between the two arms of an axis, and a
   saved gap value now renders visibly tighter than before.
+- **Adaptive Brightness: Target brightness and Max gain now change the picture across
+  their whole range**: in Dynamic mode, raising Target brightness above about 0.5, or
+  Max gain above 2.0, used to do nothing at all on a real dark scene -- both sliders ran
+  into limits inside the maths that were not shown anywhere. Target brightness now moves
+  the picture from one end of its travel to the other, Max gain sets how far the lift
+  may go in Dynamic (1.0 really does mean "do not brighten" now), and the Shaders area's
+  Pipeline readout says in plain words which limit is stopping it. Dark scenes come out
+  brighter than before at the same settings; bright and mid scenes are unchanged.
 - **Adaptive Brightness no longer pulses in Dynamic mode**: the picture no longer
   breathes brighter and darker on a dark scene with a few lights, or on a half-sky
   view, while the camera moves; the highlight, mid-tone and shadow readings the curve

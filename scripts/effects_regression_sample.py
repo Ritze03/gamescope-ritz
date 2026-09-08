@@ -295,6 +295,34 @@ def cmd_halo(args):
                        + f"monotone={monotone} " + body) else 1)
 
 
+def frame_mean(path):
+    """The whole frame's mean grey, at a 160x90 downsample. The cheapest
+    honest "did the picture move" measure there is: it is what a person sees
+    change when a brightness control works, it does not depend on any scene's
+    band geometry, and it is monotone in every knob these checks sweep."""
+    img = load(path).resize((160, 90), Image.BILINEAR)
+    px = list(img.getdata())
+    return sum(grey(p) for p in px) / len(px)
+
+
+def cmd_slider(args):
+    """slider <label> <min-step> <img...> -- the check that pins the
+    2026-09-08 report: *"anything above target brightness 0.5 and max gain
+    2.0 does [not do] anything at all"*. The images are one knob swept in
+    increasing order; every adjacent step must brighten the frame by at
+    least <min-step> counts. Before the fix, the pairs this is run on were
+    bit-identical (a step of 0.00), which is exactly what an inert slider
+    looks like from the outside."""
+    label, step = args[0], float(args[1])
+    vals = [frame_mean(p) for p in args[2:]]
+    steps = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
+    ok = all(d >= step for d in steps)
+    emit(ok, label,
+         "frame mean " + " -> ".join(f"{v:.1f}" for v in vals)
+         + "; steps " + " ".join(f"{d:+.1f}" for d in steps)
+         + f" (each must be >= {step:.1f})")
+
+
 def cmd_temporal(args):
     settled, t1, t2, t3, band = args
     settled, t1, t2, t3 = (float(x) for x in (settled, t1, t2, t3))
@@ -444,7 +472,7 @@ def main():
         sys.exit(2)
     cmd, args = sys.argv[1], sys.argv[2:]
     {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
-     "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo}[cmd](args)
+     "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider}[cmd](args)
 
 
 if __name__ == "__main__":

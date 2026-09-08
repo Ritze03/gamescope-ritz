@@ -88,9 +88,10 @@ namespace gamescope::overlay::abpreview
 			float flREff = 1.0f;
 			if ( p.flLocal > 0.0f && st.pflLocal )
 				flREff = ec::ab_local_shift( LocalSample( st.pflLocal, st.nGrid, u, v ), st.flMean, p.flLocal );
-			const float flGain  = ec::ab_dyn_gain( st.flP98 * flREff, p.flMinGain, p.flMaxGain );
+			const float flGain  = ec::ab_dyn_gain( st.flP98 * flREff, st.flP50 * flREff,
+			                                       p.flTarget, p.flMinGain, p.flMaxGain );
 			const float flGamma = ec::ab_dyn_gamma( st.flP2 * flREff, st.flP50 * flREff,
-			                                        flGain, p.flTarget, p.flMinGain );
+			                                        flGain, p.flTarget, p.flMinGain, p.flMaxGain );
 			for ( int i = 0; i < 3; i++ )
 			{
 				const float flGraded = ec::ab_dyn_curve( flRgb[i], flGain, flGamma );

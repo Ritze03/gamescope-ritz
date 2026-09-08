@@ -420,9 +420,13 @@ same text, so the properties below are asserted on the code the GPU runs. Encode
 in, encoded out, per channel, from the smoothed `p2 / p50 / p98`:
 
 ```
-1. GAIN      G = clamp(0.9 / p98, min_gain, max_gain)            // levels: p98 -> WHITE
-2. GAMMA     g = ln(target) / ln(p50 * G), clamped to [0.5, 1.5]   // median -> target
-             if g > 1: g = min(g, ln(p2 * min_gain) / ln(p2 * G))  // shadow cap
+   gmin = clamp(1 / max_gain, 0.25, 1.0)     // the gamma bounds are the user's own
+   gmax = max(min(1.5, 1 / min_gain), 1.0)   //   gain bounds -- see "The ceiling" below
+1. GAIN      G = clamp(max(0.9 / p98,             // levels: p98 -> WHITE
+                           target^(1/gmin) / p50), //   ... or what Target needs
+                       min_gain, max_gain)
+2. GAMMA     g = ln(target) / ln(p50 * G), clamped to [gmin, gmax]  // median -> target
+             if g > 1: g = min(g, ln(p2 * min_gain) / ln(p2 * G))   // shadow cap
 3. SHOULDER  y = (x * G)^g;  top = G^g
              if top > 1 and y > 0.7:  u = y - 0.7;  y = 0.7 + u / (1 + u / c)
              with c = (top - 0.7)(0.3) / (top - 1), so x = 1 lands exactly on 1.0
@@ -435,15 +439,26 @@ out = mix(c, curve(c), strength)
   crushes the deepest shadows, which is the opposite of what a dark map needs, and capped
   small enough to be harmless on a mid scene it is also too small to do anything. Every
   step passes through (0, 0), so black stays black without a floor being needed.
+- **Target's own demand on the gain** (2026-09-08): `target^(1/gmin) / p50` — the exposure
+  the gain must supply so that the gamma, *at its floor*, can still land the median on the
+  target. The **larger** of it and the white point wins, so the white point is a floor on
+  the gain (a bright scene is never dimmed past putting p98 at 0.9) and Target keeps moving
+  the picture once the gamma floor is reached instead of going flat. See
+  [The ceiling](#the-ceiling-target-brightness-and-max-gain-went-inert-2026-09-08).
 - **Gamma**: the exponent that lands the smoothed **median** on `target` after the gain,
-  bounded to `[0.5, 1.5]`. `Why 0.5:` a sqrt lift — the same floor Shadow Control uses —
-  and with `max_gain` 4 (widened from 2, see below) it takes a 5..20-code scene to the
-  71..143 range, up from 50..101. `Why 1.5:` a darkening gamma crushes shadows by nature;
-  beyond 1.5 the shadow cap is all that keeps detail. **The shadow cap** is `min_gain`'s
-  Dynamic meaning: a darkening gamma may not push the smoothed 2nd percentile below
-  `p2 × min_gain` — "how dark may it go", applied to the shadows. `max_gain` bounds the
-  levels gain only; the gamma lift on top is what lets a *super* dark map get further than
-  Whole image's 2× ever could.
+  bounded to `[gmin, gmax]`, both derived from the user's own gain bounds. `Why
+  gmin = 1/max_gain:` Max gain then means "how bright may it go" in *both* channels — the
+  exact mirror of `min_gain`, which already means "how dark may it go" through the shadow
+  cap — and `max_gain` 2.0 reproduces the historical fixed floor 0.5 exactly, which is why
+  every pre-2026-09-08 measured number is still reproducible at that setting. It is clamped
+  to `[0.25, 1.0]`: below 0.25 a single code of near-black lands above 90 and sensor noise
+  is all you see; 1.0 is "no lift at all", so `max_gain` 1.0 really does not brighten.
+  `Why gmax = min(1.5, 1/min_gain):` a darkening gamma crushes shadows by nature and beyond
+  1.5 the shadow cap is all that keeps detail; the `1/min_gain` half is the mirror again
+  (`min_gain` 1.0 = "do not darken") and is slack at every shipped default (1/0.3 = 3.33),
+  so it changes no measured number. **The shadow cap** is `min_gain`'s Dynamic meaning: a
+  darkening gamma may not push the smoothed 2nd percentile below `p2 × min_gain` — "how
+  dark may it go", applied to the shadows.
 
 #### Why min_gain 0.3, max_gain 4.0 (2026-09-07 request: *"make min gain 0.3, max gain
 4.0"*)
@@ -496,7 +511,7 @@ Two consequences checked by measurement rather than assumed:
   user-facing "Max gain" should mean. The hard properties (monotonic, bounded, 0 → 0) hold
   in either space.
 
-**Properties asserted on the CPU** (`[effects_curve]`, 12 cases, 2.80 M assertions over
+**Properties asserted on the CPU** (`[effects_curve]`, 25 cases, 7.94 M assertions over
 seven scenes × five targets × twenty gain-bound pairs — widened 2026-09-07 from nine
 pairs / 1.26 M assertions to cover the full 0.3..1.0 / 1.0..4.0 panel ranges, gain 4.0
 included at every gamma in range): output in
@@ -504,8 +519,13 @@ included at every gamma in range): output in
 shoulder is active; identity at strength 0; the mid reference scene is the identity; the
 gamma clamps and the shadow cap hold; the shoulder is C0/C1-continuous at the knee; the
 shadow cap at min_gain 0.3 is measurably looser than at 0.5 yet still holds its own
-invariant (new 2026-09-07 case). Plus the config round-trip of `mode` and its
-unknown-value fallback.
+invariant (2026-09-07 case). Plus, from 2026-09-08: the gamma bounds come from the gain
+bounds and can never invert; `max_gain` 2.0 reproduces the pre-2026-09-08 curve exactly;
+`max_gain` 1.0 brightens **nothing**, at any target, on any scene; Target moves a realistic
+dark frame monotonically and by more than 20 counts from 0.5 to 0.7; Max gain moves it by
+more than 15 counts per step and monotonically over the whole panel range; and
+`ab_dyn_binding()` returns exactly one in-range code with a non-empty wording for every
+combination. Plus the config round-trip of `mode` and its unknown-value fallback.
 
 #### Measured (desktop, headless, `scripts/effects-regression.sh`, re-measured 2026-09-07
 at the new min_gain 0.3 / max_gain 4.0 defaults; superseded numbers at the old 0.5 / 2.0
@@ -522,10 +542,16 @@ strength 1.0. Captures: `build-release/verify-shots/effects-regression/20260907-
 and, for a direct old-vs-new side-by-side at fixed scenes,
 `build-release/verify-shots/adaptive-gain-2026-09-07/`.
 
+> **2026-09-08 note.** The `Dynamic (new)` column below is the **2026-09-07** curve. The
+> ceiling fix ([The ceiling](#the-ceiling-target-brightness-and-max-gain-went-inert-2026-09-08))
+> changed exactly one row of it — the dark scene's bands, which now read
+> **88 / 107 / 127 / 143 / 157** with the 240 highlights and pure black unchanged at 254
+> and 0. Every other row here was re-measured after the fix and is bit-identical.
+
 | Scene / region (input) | Off | Whole image (new) | **Dynamic (new)** | Dynamic (old 0.5/2.0) | Dynamic must |
 | --- | --- | --- | --- | --- | --- |
-| dark: darkest band (5) | 5 | 20 | **71** | 50 | be readable: ≥ 30 |
-| dark: bands 8 / 12 / 16 / 20 | 8/12/16/20 | 32/48/64/80 | **90 / 111 / 128 / 143** | 64/78/90/101 | keep their order |
+| dark: darkest band (5) | 5 | 20 | **71** → 88 (2026-09-08) | 50 | be readable: ≥ 30 |
+| dark: bands 8 / 12 / 16 / 20 | 8/12/16/20 | 32/48/64/80 | **90 / 111 / 128 / 143** → 107 / 127 / 143 / 157 | 64/78/90/101 | keep their order |
 | dark: 240 highlights | 240 | **255 — clipped** | **254** | 253 | stay < 255, above every band |
 | dark: pure black | 0 | 0 | **0** | 0 | stay ≤ 2 |
 | bright: bands 200 / 215 / 230 | 200/215/230 | 115/124/132 | **152 / 169 / 187** | 165/180/196 | keep their order |
@@ -577,7 +603,14 @@ at 3.9 s (the shoulder holds it near white while the gain is still above 1). The
 EMA's numbers and the 2026-09-07 estimator change did not touch the EMA, so they are the
 same before and after that fix.
 
-#### Does Dynamic actually work above `max_gain` 2.0? (2026-09-07 — measured, yes)
+#### Does Dynamic actually work above `max_gain` 2.0? (2026-09-07 — measured, yes, **on this scene only** — superseded 2026-09-08)
+
+> **Superseded.** Everything below is still true *of the flat dark band chart*, and that
+> is the problem: the answer generalised from a scene whose statistics are nothing like a
+> game's. See [The ceiling](#the-ceiling-target-brightness-and-max-gain-went-inert-2026-09-08)
+> immediately after it. The numbers in the table below are the pre-2026-09-08 curve's and
+> are kept as the "before" side of that measurement.
+
 
 Asked directly (*"Does the adaptive brightness even work above 2.0 gain? Check that."*),
 and answered by sweeping the knob on the dark reference scene rather than by reading the
@@ -609,6 +642,143 @@ That is the honest shape of "does it work above 2" — it works, and each furthe
 gain buys 41 % rather than 100 %, because the *gamma floor is already saturated*, not because
 anything clamps the gain. Raising `GAMMA_MIN` would be the lever there, and it is deliberately
 not touched (see the constant's note in `effects_curve.h`).
+
+#### The ceiling: Target brightness and Max gain went inert (2026-09-08)
+
+> *"It still feels like anything above target brightness 0.5 and max gain 2.0 does
+> anything at all"* — read with the missing negation: raising either appears to do
+> nothing. Reported straight after the table above had "proved" Max gain works.
+
+Both halves were true, for two independent reasons, and the section above is exactly how
+the second one stayed hidden: **a flat band chart flatters this operator.**
+
+##### What was measured, before anything was changed
+
+`effects_curve.h` was evaluated on the CPU — the same header text the GPU compiles — over
+seven scenes × the whole 0.1..0.9 Target range × Max gain 1.5/2/3/4, with a mirror of
+`cs_effects_measure.comp`'s tap grid, 64-bin histogram and rank-window means producing each
+scene's statistics. The harness reproduces the GPU's dark-scene capture **code for code**
+(71/90/111/128/143), which is what makes the rest of its numbers usable. Beside the four
+synthetic scenes it was run on two **real photographs** resized to 1280×720 — a night-city
+frame and a moonlit one — because a continuous histogram is the thing the band charts do
+not have; no real game frame existed under `build-release/verify-shots/` to use instead.
+
+| scene (measured p50 / p98) | `0.9/p98` — all Max gain ever saw | Target inert above | which clamp binds there |
+| --- | --- | --- | --- |
+| dark band chart (0.047 / 0.153) | **5.90** | 0.436 | gamma at its 0.5 floor |
+| textured dark, 2 % lights (0.075 / 0.318) | **2.83** | 0.461 | gamma floor |
+| night-city photograph (0.141 / 0.378) | **2.38** | 0.581 | gamma floor |
+| moonlit photograph (0.076 / 0.440) | **2.05** | 0.394 | gamma floor |
+| half-dark/half-bright (0.449 / 1.000) | 0.90 | 0.635 | gamma floor |
+| mid (0.502 / 0.902) | 1.00 | 0.708 | gamma floor |
+| bright (0.898 / 1.000) | 0.90 | 0.899 (and inert *below* 0.726) | shadow cap / `GAMMA_MAX` |
+
+- **Target** reached the picture *only* through `g = ln(target) / ln(p50·G)`, clamped to a
+  fixed `[0.5, 1.5]`. Solving `g = 0.5` gives `target = sqrt(p50·G)` — every target above
+  that produces the identical clamped gamma. The shipped default 0.5 already sat on the
+  dead side of that threshold on three of the four dark scenes.
+- **Max gain** only ever fed `clamp(0.9/p98, min, max)`. A realistic frame has enough
+  bright content that the demand is ~2, so **above it the clamp never binds and the slider
+  is an exact no-op** — not diminishing returns, zero. The band chart's p98 of 0.15 asks
+  for 5.9, which is why every setting up to 4.0 bit there and the 2026-09-07 table read as
+  a clean pass.
+
+Confirmed on the GPU with the *old* binary, `effects-regression.sh` on the textured dark
+scene, frame mean: Target 0.3 / 0.5 / 0.7 read **83.0 / 112.1 / 112.1** (the last step
+`+0.0`), and Max gain 3 vs 4 read **112.06 vs 112.06** — byte-identical.
+
+##### The fix, and why this shape and not the obvious ones
+
+1. **`gamma_min = clamp(1 / max_gain, 0.25, 1.0)`** replaces the fixed 0.5. Max gain now
+   governs "how bright may it go" in both channels — the exact mirror of `min_gain` through
+   the shadow cap — and this is what makes Max gain move a *realistic* frame, whose
+   white-point demand saturates around 2. On the moonlit frame a 5-code input reads
+   24 / 50 / 77 / 77 at Max gain 1.5 / 2 / 3 / 4 where it read **51 at every one of them**
+   before. `Why 2.0 is the anchor:` `1/2.0` is exactly the old floor, so every measured
+   number taken before this change is still reproducible at that setting — asserted in
+   `tests/test_effects_curve.cpp`. `Why the 0.25 floor:` at 0.25 with a 4× gain, one code
+   of near-black lands at 90; lower than that and shadow noise is the whole picture.
+   `Why the 1.0 ceiling:` it removes a real lie — at Max gain 1.0, "do not brighten", the
+   old gamma still lifted a 20-code band to **71**.
+2. **The gain also carries `target^(1/gamma_min) / p50`**, the smallest exposure that
+   leaves the target reachable at the gamma floor, and the larger of it and the white point
+   wins. Past the floor the gain takes over, so Target keeps moving the picture.
+   `Why not the simpler target / p50:` that is a *bigger* gain, and moving lift out of the
+   toe into a linear gain darkens the shadows at the same median — measured, it dropped the
+   half-dark/half-bright scene's dark half from 12/17/23/28/34 to **6/9/13/18/22**. The
+   smallest-sufficient form leaves that scene bit-identical.
+3. **`ab_dyn_binding()`** — see [Which limit is binding](#which-limit-is-binding-2026-09-08)
+   below. Rejected alternatives: *lowering `GAMMA_MIN` alone* fixes neither half (Max gain
+   stays inert wherever the gamma is free, and a fourth-root floor for everyone is milky);
+   *making Target a direct exposure* costs the bright scene its highlights (245-band
+   206 → ~142, the blown-out look Dynamic exists to avoid) and the split scene its shadow
+   lift; *a new control* was refused on the parameter budget (`kParamBudget` is at 8 and
+   already owes a rail-area split) and would not have been honest anyway — the sliders that
+   say they do this had to start doing it.
+
+##### After: what each slider is worth now (GPU, `effects-regression.sh`, frame mean)
+
+| sweep, textured dark scene | before | after |
+| --- | --- | --- |
+| Target 0.3 → 0.5 → 0.7 (Max gain 4) | 83.0 → 112.1 → **112.1** | 82.8 → 129.4 → **175.4** |
+| Max gain 1.5 → 2 → 3 (Target 0.5) | 90.0 → 103.1 → 112.1 | 65.7 → 103.0 → 129.4 |
+| Max gain 3 → 4 (Target 0.5) | 112.06 → 112.06 | 129.39 → 129.39 (**still equal** — see below) |
+
+And the reference scenes at the shipped defaults, off the same two runs:
+
+| scene | before | after |
+| --- | --- | --- |
+| dark: bands 5/8/12/16/20 | 71 / 90 / 111 / 128 / 143 | **88 / 107 / 127 / 143 / 157** |
+| dark: 240 highlights, pure black | 254, 0 | 254, 0 — unchanged |
+| bright: 200/215/230/245/255, 30-shadows | 152/169/187/205/218, 9 | **identical** |
+| mid: 26/77/128/179/230 | 26/77/128/178/229 | **identical** |
+| halfsplit at Local 0 and 50 % | 12/17/23/28/34 · 195/207/217/228/235 | **identical** |
+| halo amplitude, halobox / haloinv at 50 % and 100 % | +8 / +15, −7 / −14 | **identical** |
+| still-frame peak-to-peak at Local 0 / 50 / 100 | 0 | **0** |
+| panning gain spread (300 frames) | 0.0324 | 0.0191 |
+
+The dark scene is the only thing that moved, and it moved brighter: at Max gain 4 the
+gamma the median asks for (0.417) is no longer clamped up to 0.5.
+
+##### The residual ceiling, stated plainly
+
+**Once the mid-tones are on Target, Max gain is no longer a brightness control.** The
+median is pinned by construction, so a higher Max gain only shifts the same mid-tone level
+out of the toe and into the linear gain: the deepest shadows come out slightly darker and
+everything above the mid-tones slightly brighter (dark chart at target 0.5, inputs 5 / 20:
+Max gain 3 → 93 / 152, Max gain 4 → 84 / 157). That is why Max gain 3 and 4 still produce
+the same textured-dark picture at the default target, and why the readout below names
+**Target brightness** in that state — it is the control that can still move the picture.
+Target itself is limited by the user's own Max gain: on the flat dark chart at Max gain 4
+it stops mattering above 0.70 (up from 0.436), on the moonlit frame above 0.75.
+
+##### Which limit is binding (2026-09-08)
+
+The most expensive part of this was never the ceiling — it was that **a clamped slider
+looks exactly like a working one**, so a session went into dragging controls that could
+not respond. `ab_dyn_binding()` classifies, from the same three statistics and the same
+bounds the curve uses, which constraint is currently stopping the picture, and
+`ab_binding_text()` is the single wording of the six codes:
+
+| code | shown as |
+| --- | --- |
+| `AB_BIND_NONE` | `none -- the mid-tones are on Target brightness` |
+| `AB_BIND_GAIN_MAX` | `gain is at Max gain` |
+| `AB_BIND_GAIN_MIN` | `gain is at Min gain` |
+| `AB_BIND_LIFT` | `Max gain -- Target brightness does no more here` |
+| `AB_BIND_DARKEN` | `the darkening limit -- Target brightness does no more here` |
+| `AB_BIND_SHADOW` | `Min gain, holding the shadows up` |
+
+It appears twice, from one function, so a trace and the panel cannot disagree: appended to
+every `effects_ab_log` line as `bind=<n> (<text>)`, and as a third `LIVE` line —
+`adaptive limit` — on the Shaders area's **Pipeline** facts row
+(`AbPreview_BindingLine()`, which classifies the frame the Inspector's before/after preview
+already captures and arms that capture itself, so the row fills in on its own).
+`Why the frame's global curve and not the pixel's:` Local adaptation redistributes gain
+*inside* these same bounds and never widens them, so the frame's answer is the one that
+tells the user which knob to reach for. In Whole image mode the row names that mode's own
+single gain bound instead of pretending the Dynamic classifier applies. Captured at three
+settings in `build-release/verify-shots/adaptive-ceiling-2026-09-08/`.
 
 #### Local adaptation (`local_strength`, 2026-09-07) — one curve per neighbourhood
 
@@ -655,8 +825,8 @@ wrong.
 ```
 r      = clamp(local_mean / mean, 0.25, 4.0)      // effects_curve.h, ab_local_ratio
 r_eff  = r ^ local_strength                       //                  ab_local_shift
-gain   = ab_dyn_gain (p98 * r_eff, min_gain, max_gain)
-gamma  = ab_dyn_gamma(p2 * r_eff, p50 * r_eff, gain, target, min_gain)
+gain   = ab_dyn_gain (p98 * r_eff, p50 * r_eff, target, min_gain, max_gain)
+gamma  = ab_dyn_gamma(p2 * r_eff, p50 * r_eff, gain, target, min_gain, max_gain)
 ```
 
 - `Why shift the global histogram rather than measure a local one:` a 16×16 cell holds one
@@ -667,7 +837,7 @@ gamma  = ab_dyn_gamma(p2 * r_eff, p50 * r_eff, gain, target, min_gain)
   The apply pass's `if (u_abLocal > 0.0)` skips only the four map fetches; it is not what
   makes the identity hold. Pinned in `tests/test_effects_curve.cpp`.
 - **The user's bounds are never widened.** `ab_dyn_gain` still clamps to
-  `[min_gain, max_gain]` and `ab_dyn_gamma` to `[0.5, 1.5]` *after* the shift, so a
+  `[min_gain, max_gain]` and `ab_dyn_gamma` to `[gmin, gmax]` *after* the shift, so a
   locally-adapted pixel can never leave the range the user set — local adaptation
   redistributes gain **inside** those bounds. Asserted over every scene × bound × ratio ×
   strength combination on the CPU.

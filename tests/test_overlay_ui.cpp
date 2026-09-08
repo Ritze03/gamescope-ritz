@@ -3100,8 +3100,8 @@ TEST_CASE( "ab preview: Compose leaves the left half untouched and lifts the rig
 	// And the right half is EXACTLY effects_curve.h's answer -- the same
 	// text the GPU compiles, not an approximation of it.
 	namespace ec = gamescope::effects_curve;
-	const float flGain  = ec::ab_dyn_gain( st.flP98, p.flMinGain, p.flMaxGain );
-	const float flGamma = ec::ab_dyn_gamma( st.flP2, st.flP50, flGain, p.flTarget, p.flMinGain );
+	const float flGain  = ec::ab_dyn_gain( st.flP98, st.flP50, p.flTarget, p.flMinGain, p.flMaxGain );
+	const float flGamma = ec::ab_dyn_gamma( st.flP2, st.flP50, flGain, p.flTarget, p.flMinGain, p.flMaxGain );
 	const int nExpect = (int)std::lround( ec::ab_dyn_curve( 20.0f / 255.0f, flGain, flGamma ) * 255.0f );
 	REQUIRE( (int)dst[ ( 0 * kW + nSplit ) * 4 ] == nExpect );
 }
