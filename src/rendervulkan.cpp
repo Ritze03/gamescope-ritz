@@ -4485,16 +4485,22 @@ struct EffectsPushData_t
 {
 	// Bit assignments are the contract with the shader's EFFECT_* consts.
 	static constexpr uint32_t kShadowLift        = 1u << 0;
-	static constexpr uint32_t kVibrancy          = 1u << 1;
-	static constexpr uint32_t kVibrancySkin      = 1u << 2;
+	// Renamed from kVibrancy/kVibrancySkin 2026-09-08 -- see
+	// NativeEffectsState_t's comment. Same bit values, maths unchanged.
+	static constexpr uint32_t kSaturation        = 1u << 1;
+	static constexpr uint32_t kSaturationSkin    = 1u << 2;
 	static constexpr uint32_t kPreSharpen        = 1u << 3;
 	static constexpr uint32_t kAdaptiveBrightness = 1u << 4;
 	static constexpr uint32_t kAbDynamic         = 1u << 5;
+	// NEW 2026-09-08: the "punchy colours punchier" effect. A new bit
+	// rather than reusing one of the above -- see NativeEffectsState_t.
+	static constexpr uint32_t kVibrancy          = 1u << 6;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
 
 	uint32_t u_flags;
+	float    u_saturation;
 	float    u_vibrancy;
 	float    u_shadowLift;
 	uint32_t u_rcasCon;
@@ -4524,14 +4530,16 @@ struct EffectsPushData_t
 	EffectsPushData_t( const NativeEffectsState_t &s, float flAbDtSeconds, bool bResetHistory )
 	{
 		u_flags = 0;
-		if ( s.bShadowLift )          u_flags |= kShadowLift;
-		if ( s.bVibrancy )            u_flags |= kVibrancy;
-		if ( s.bVibrancyProtectSkin ) u_flags |= kVibrancySkin;
-		if ( s.bPreSharpen )          u_flags |= kPreSharpen;
-		if ( s.bAdaptiveBrightness )  u_flags |= kAdaptiveBrightness;
-		if ( s.bAbDynamic )           u_flags |= kAbDynamic;
-		if ( bResetHistory )          u_flags |= kResetHistory;
+		if ( s.bShadowLift )            u_flags |= kShadowLift;
+		if ( s.bSaturation )            u_flags |= kSaturation;
+		if ( s.bSaturationProtectSkin ) u_flags |= kSaturationSkin;
+		if ( s.bVibrancy )              u_flags |= kVibrancy;
+		if ( s.bPreSharpen )            u_flags |= kPreSharpen;
+		if ( s.bAdaptiveBrightness )    u_flags |= kAdaptiveBrightness;
+		if ( s.bAbDynamic )             u_flags |= kAbDynamic;
+		if ( bResetHistory )            u_flags |= kResetHistory;
 
+		u_saturation = s.flSaturation;
 		u_vibrancy   = s.flVibrancy;
 		u_shadowLift = s.flShadowLift;
 		const float flCon = s.bPreSharpen ? RcasConX( s.flPreSharpen ) : 0.0f;

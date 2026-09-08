@@ -228,12 +228,31 @@ namespace gamescope::config
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
+                // Renamed from "vibrancy" 2026-09-08 (ConfigSchema.h's
+                // kCurrentSchemaVersion 3->4 comment). Any raw JSON reaching
+                // this function has already been through ParseConfigFile's
+                // migration chain (Migrate_3_to_4 renamed an old file's
+                // "vibrancy" object to "saturation" before this runs), so
+                // only the new key needs reading here -- same pattern as
+                // Migrate_1_to_2's value transform not needing a fallback
+                // read either.
+                if ( const nlohmann::json *pSaturation = JGetObject( *pReshade, "saturation" ) )
+                {
+                    auto &v = s.reshade.saturation;
+                    v.enabled = JGetBool( *pSaturation, "enabled", v.enabled );
+                    v.strength = JGetFloat( *pSaturation, "strength", v.strength );
+                    v.protect_skin_tones = JGetBool( *pSaturation, "protect_skin_tones", v.protect_skin_tones );
+                }
+
+                // NEW 2026-09-08: the "punchy colours punchier" effect --
+                // see ConfigSchema.h's ReshadeVibrancySettings. Additive key;
+                // an old config has none and resolves to these defaults
+                // (off, strength 0.0).
                 if ( const nlohmann::json *pVibrancy = JGetObject( *pReshade, "vibrancy" ) )
                 {
-                    auto &v = s.reshade.vibrancy;
-                    v.enabled = JGetBool( *pVibrancy, "enabled", v.enabled );
-                    v.strength = JGetFloat( *pVibrancy, "strength", v.strength );
-                    v.protect_skin_tones = JGetBool( *pVibrancy, "protect_skin_tones", v.protect_skin_tones );
+                    auto &vb = s.reshade.vibrancy;
+                    vb.enabled = JGetBool( *pVibrancy, "enabled", vb.enabled );
+                    vb.strength = JGetFloat( *pVibrancy, "strength", vb.strength );
                 }
 
                 if ( const nlohmann::json *pPreSharpen = JGetObject( *pReshade, "pre_sharpen" ) )
@@ -452,10 +471,14 @@ namespace gamescope::config
             jCross[ "hide_animate_back" ] = c.hide_animate_back;
             jCross[ "apply_scaling" ] = c.apply_scaling;
 
+            nlohmann::json jSaturation = nlohmann::json::object();
+            jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
+            jSaturation[ "strength" ] = s.reshade.saturation.strength;
+            jSaturation[ "protect_skin_tones" ] = s.reshade.saturation.protect_skin_tones;
+
             nlohmann::json jVibrancy = nlohmann::json::object();
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
             jVibrancy[ "strength" ] = s.reshade.vibrancy.strength;
-            jVibrancy[ "protect_skin_tones" ] = s.reshade.vibrancy.protect_skin_tones;
 
             nlohmann::json jPreSharpen = nlohmann::json::object();
             jPreSharpen[ "enabled" ] = s.reshade.pre_sharpen.enabled;
@@ -481,6 +504,7 @@ namespace gamescope::config
             jShadowLift[ "strength" ] = sl.strength;
 
             nlohmann::json jReshade = nlohmann::json::object();
+            jReshade[ "saturation" ] = std::move( jSaturation );
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
@@ -616,6 +640,35 @@ namespace gamescope::config
             ( *itVibrancy )[ "strength" ] = flNew;
         }
 
+        // Schema 3 -> 4 (2026-09-08): reshade.vibrancy renamed to
+        // reshade.saturation -- the effect kept its exact maths, only the
+        // name changed (see ConfigSchema.h's kCurrentSchemaVersion comment
+        // and superdoc/features/shader-effects.md). A NEW, unrelated
+        // "vibrancy" effect was added in the same change, so this step must
+        // not simply leave the old key alone: once that key exists, an old
+        // file's "reshade.vibrancy" object would otherwise be silently
+        // reread as the brand new effect's settings -- wrong shape (no
+        // protect_skin_tones there), wrong meaning (a different strength
+        // scale entirely). Renaming the JSON object in place carries an old
+        // file's enabled/strength/protect_skin_tones forward exactly; the
+        // new Vibrancy effect has no old data to migrate and simply takes
+        // its compiled-in defaults (off, strength 0.0). Runs after
+        // Migrate_1_to_2 in ParseConfigFile below, since that step still
+        // expects to find its value under the OLD "vibrancy" key.
+        void Migrate_3_to_4( nlohmann::json &j )
+        {
+            auto itReshade = j.find( "reshade" );
+            if ( itReshade == j.end() || !itReshade->is_object() )
+                return;
+
+            auto itOld = itReshade->find( "vibrancy" );
+            if ( itOld == itReshade->end() || !itOld->is_object() )
+                return;
+
+            ( *itReshade )[ "saturation" ] = *itOld;
+            itReshade->erase( "vibrancy" );
+        }
+
         // Parses `sText` as JSON without ever throwing/aborting on malformed
         // input, validates schema_version, and returns std::nullopt - having
         // already logged loudly - on any failure. `svContext` is only used for
@@ -646,6 +699,12 @@ namespace gamescope::config
             // predate the vibrancy rename, so both take this step.
             if ( nVersion < 2 )
                 Migrate_1_to_2( j );
+            // Every version below 4 (0..3 -- schema 3 is the common real
+            // case, every profile file on disk before this change) predates
+            // the vibrancy -> saturation key rename; must run AFTER
+            // Migrate_1_to_2, which still expects the old key.
+            if ( nVersion < 4 )
+                Migrate_3_to_4( j );
 
             return j;
         }

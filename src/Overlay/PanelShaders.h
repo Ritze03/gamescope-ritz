@@ -1,6 +1,9 @@
 // Milestone M6 -- the "Shaders" panel of the settings overlay: the bundled
-// effects (Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness) and
-// their live controls. Since 2026-09-05 (DECISIONS.md #27) the effects are a
+// effects (Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Adaptive
+// Brightness) and their live controls. "Vibrancy" was renamed to
+// "Saturation" and a new "Vibrancy" added 2026-09-08 -- see
+// superdoc/features/shader-effects.md's "Saturation / Vibrancy split".
+// Since 2026-09-05 (DECISIONS.md #27) the effects are a
 // native compute pre-pass compiled into the binary
 // (src/shaders/cs_effects_layer0.comp, dispatched from vulkan_composite()),
 // not a runtime-compiled ReShade .fx -- this panel writes g_nativeEffects
@@ -20,7 +23,7 @@
 
 namespace gamescope
 {
-	// E2 (P3). This panel's four effects, DECLARED rather than drawn: one
+	// E2 (P3). This panel's five effects, DECLARED rather than drawn: one
 	// `image.shaders` area whose switch rows each own their effect's
 	// parameters. Same config keys, same ranges; every write lands in
 	// g_nativeEffects -- see PanelShaders.cpp's "E2 (P3)" section. Called

@@ -54,7 +54,9 @@
 // the picture will be dimmed), `down` while it FALLS (the scene got darker,
 // the picture will be lifted). Each tap is graded exactly as the apply pass
 // grades its pixels (effects_common.h's grade() -- the .fx measured its
-// post-Shadow-Control/Vibrancy texture, so this matches its input).
+// post-Shadow-Control/Saturation texture, so this matches its input; the
+// NEW Vibrancy effect, added 2026-09-08, runs inside grade() too, so its
+// output is measured the same way).
 //
 // Every statistic is tracked whatever the mode, and this pass never looks at
 // EFFECT_ADAPTIVE_BRIGHTNESS or EFFECT_AB_DYNAMIC -- only the apply pass

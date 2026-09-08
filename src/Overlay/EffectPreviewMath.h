@@ -15,10 +15,10 @@
 //
 // WHAT IT DELIBERATELY DOES NOT MODEL. Pre-Sharpen (a 5-tap cross at source
 // resolution -- invisible after the ~7x downscale, and it does not move the
-// statistics either). Shadow Control and Vibrancy are already baked into the
-// captured pixels by cs_effects_preview.comp's grade() call, so both halves
-// carry them and the strip isolates Adaptive Brightness alone -- which is
-// what it is for.
+// statistics either). Shadow Control, Saturation and Vibrancy are already
+// baked into the captured pixels by cs_effects_preview.comp's grade() call,
+// so both halves carry them and the strip isolates Adaptive Brightness
+// alone -- which is what it is for.
 
 #include <algorithm>
 #include <cmath>

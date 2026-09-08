@@ -1,7 +1,7 @@
-# Shaders settings area — Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness
+# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
-four independent effects. Since 2026-09-05 they are **one native compute pre-pass compiled
+five independent effects. Since 2026-09-05 they are **one native compute pre-pass compiled
 into the binary at build time** — `src/shaders/cs_effects_layer0.comp`, dispatched from
 `vulkan_composite()` (`src/rendervulkan.cpp`) on the base/game layer at source resolution
 before any scaling. They used to be gated passes inside a runtime-compiled ReShade file,
@@ -18,6 +18,14 @@ existing configs and palette state for a purely cosmetic change. So the id
 `image.shaders.shadow_lift` and the config struct `ReshadeShadowLiftSettings` keep the
 old spelling. Expect the code and this page to say "shadow lift" where it means the
 identifier and "Shadow Control" where it means the label.
+
+**The Saturation / Vibrancy split (2026-09-08).** This one *did* move the id and the
+config key, deliberately — see that section below for why a rename this time was
+worth breaking the usual rule. What used to be the only "Vibrancy" effect is now
+**Saturation** (`image.shaders.saturation`, `ReshadeSaturationSettings`), and
+**Vibrancy** (`image.shaders.vibrancy`, `ReshadeVibrancySettings`) names a brand new,
+second effect built beside it. Expect an old commit, an old capture, or an old test
+name in this doc's history to say "Vibrancy" and mean what is now Saturation.
 
 ## Why a native pre-pass, not the `.fx` (2026-09-05)
 
@@ -146,13 +154,15 @@ device supports it as an optimal-tiled storage+sampled image (so a 10-bit game s
 `EffectsPushData_t` (`src/rendervulkan.cpp`, inside the `#pragma pack(push,1)` region,
 beside `EasuPushData_t`) mirrors the `effects_t` block in `src/shaders/effects_common.h`
 field-for-field. That header is shared by both shaders and also holds the flag bits, the
-per-tap `grade()` (Shadow Control + Vibrancy) and the history pack/unpack helpers, so the
-measure pass grades its taps with exactly the code the per-pixel pass grades its pixels.
+per-tap `grade()` (Shadow Control + Saturation + Vibrancy) and the history pack/unpack
+helpers, so the measure pass grades its taps with exactly the code the per-pixel pass
+grades its pixels.
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Vibrancy, `1<<2` protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
-| `float u_vibrancy` | 0..3, 1 neutral |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
+| `float u_saturation` | 0..3, 1 neutral (renamed from `u_vibrancy` 2026-09-08 — same meaning, see below) |
+| `float u_vibrancy` | 0..2, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
 | `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six original parameters, straight from config (both modes read all six — see the Dynamic section for what each means there) |
@@ -166,7 +176,7 @@ the steamcompmgr thread, same discipline as `g_upscaleFilterSharpness`. `Why the
 apply:` under E2 nothing in `PanelShaders.cpp` runs per frame, so without it saved effects
 would only switch on the first time the Shaders area was drawn.
 
-`NativeEffectsState_t::AnyEnabled()` counts all four switches, Adaptive Brightness
+`NativeEffectsState_t::AnyEnabled()` counts all five switches, Adaptive Brightness
 included, so any one of them forces the full composite the pre-pass needs.
 
 ## Backends
@@ -176,11 +186,17 @@ Every backend already forced a full composite for `!g_reshade_effect.empty()`
 `vulkan_native_effects_active()`; without that, direct scanout would skip the pre-pass and
 the effects would silently vanish whenever the base layer could be scanned out directly.
 
-## The four effects
+## The five effects
 
-The maths is ported 1:1 from the retired `.fx`, applied **per tap, in this order**:
-Shadow Control → Vibrancy → (Pre-Sharpen) → Adaptive Brightness (Whole image's gain, or
-Dynamic's curve) → `saturate`.
+Shadow Control, Saturation and Pre-Sharpen's maths is ported 1:1 from the retired `.fx`;
+Vibrancy is new (2026-09-08). Applied **per tap, in this order**: Shadow Control →
+Saturation → Vibrancy → (Pre-Sharpen) → Adaptive Brightness (Whole image's gain, or
+Dynamic's curve) → `saturate`. `Why Vibrancy right after Saturation:` both are colour-
+intensity effects and belong next to each other in the pipeline the same way they sit
+next to each other in the panel (see the Vibrancy section's own note on Effects-band
+ordering); Vibrancy reads the *already-saturated* colour Saturation just produced, the
+conventional "adjust overall saturation first, then add a further boost on top" grading
+order.
 
 ### Shadow Control (`image.shaders.shadow_lift`)
 
@@ -203,12 +219,21 @@ strength). The exponent floor of 0.5 is the same shape a "raise gamma to ~2.0" b
 applies. `Why first:` a tone/exposure adjustment; lift-before-saturate is the conventional
 grading order, and it means Vibrancy's grey target is computed from the lifted colour.
 
-### Vibrancy (`image.shaders.vibrancy`)
+### Saturation (`image.shaders.saturation`) — renamed from "Vibrancy" 2026-09-08
 
-Adaptive saturation with an optional skin-tone damper.
+Adaptive saturation with an optional skin-tone damper. **Renamed from "Vibrancy"
+2026-09-08** — the user's own observation: this effect is a flat multiplier, the same
+relative boost applied to every pixel regardless of how saturated it already is, which
+is what an iPhone "Saturation" slider does, not that app's "Vibrancy". The maths below
+is **byte-for-byte unchanged** by the rename — only the id, the config key and the
+label moved. See [the Vibrancy section](#vibrancy-imageshadersvibrancy--new-2026-09-08)
+below for the new effect that took the freed-up "Vibrancy" name, and
+["Verified: the rename changed nothing"](#verified-the-rename-changed-nothing-2026-09-08)
+for the measurement that backs "byte-for-byte" up.
 
-**Config**: `ReshadeVibrancySettings` — `enabled`, `strength` (float),
-`protect_skin_tones` (default true).
+**Config**: `ReshadeSaturationSettings` — `enabled`, `strength` (float),
+`protect_skin_tones` (default true). (`ReshadeVibrancySettings` is now a *different*
+struct — the new effect's, below.)
 
 **`strength` — a true saturation multiplier, 0.0..3.0, neutral at 1.0** (changed
 2026-09-04, request #2, from an additive -1.0..+1.0 boost):
@@ -223,15 +248,156 @@ output = lerp(luma, color, mix + boost)
 toward luma, carrying none of the adaptive shaping — at 0.0 *every* pixel must land on the
 same grey. `boost` is zero at and below neutral and picks up the adaptive shape above it.
 `Why 0.0..3.0 with neutral at 1.0:` the user chose to keep desaturation reachable
-(`requests-2026-09-04.md` #2).
+(`requests-2026-09-04.md` #2). Note that `boost`'s own `(1.0 - saturation)` term means
+that *above* neutral (`strength` > 1), this effect already leans muted-first — an
+already-saturated pixel picks up less of the extra boost than a duller one does; only
+the `mix`-only regime (`strength` <= 1) is a genuinely flat, saturation-independent
+multiplier. See the measured ratio table below.
 
-#### Migration: an existing config's old value
+#### Migration: an existing config's old value, twice
 
 `kCurrentSchemaVersion` 1 → 2; `Migrate_1_to_2()` (`src/Config/ConfigManager.cpp`)
 transforms `reshade.vibrancy.strength` once, on load: `new = clamp(old + 1.0, 0.0, 3.0)`.
 `Why +1.0:` it carries old-neutral (0.0) onto new-neutral (1.0), so an untouched config
 does not open in black and white; a customised value keeps its displacement from neutral.
 A config saved under schema 2 round-trips unmigrated — `tests/test_config.cpp`.
+
+`kCurrentSchemaVersion` 3 → 4 (2026-09-08): `Migrate_3_to_4()` renames the JSON object
+`reshade.vibrancy` to `reshade.saturation` in place, once, on load — a pure key rename,
+no value transform (the 1→2 step already handled the value's meaning; this step only
+runs *after* it, so an ancient schema-0/1 file gets both in the right order). `Why not
+just leave the old key readable too:` the new "Vibrancy" effect below needed the
+`reshade.vibrancy` key for itself, so an old file's `reshade.vibrancy` object had to
+stop meaning the old effect **before** it could start meaning the new one, or an old
+config would silently load as the wrong effect (a saturation multiplier reread as a
+punch-boost strength — wrong shape, wrong scale, no crash to notice it by). The general
+policy this follows: **migrate on load, not "just ignore the old key"** — an old file's
+saved value is real user data (their `strength`, their `protect_skin_tones`), and
+dropping it silently would be a bigger surprise than a one-line rename. Saving after
+load naturally rewrites the file under the new key (`SectionsToJson()` only ever emits
+the current field names), so an old profile self-heals the first time anything saves it
+— it does not need to be touched by hand. `tests/test_config.cpp`'s "a schema-3
+profile's vibrancy key renames to saturation on load and rewrites on save" pins this;
+so does the fact that this session's own real `~/.config/gamescope-ritz/profiles/*.json`
+files were rewritten this way (by hand, with the user's explicit permission, since only
+the key needed to change and a full save-through-the-app round trip risked touching
+unrelated formatting) — see the CHANGELOG.md Info entry and this doc's own history.
+
+### Vibrancy (`image.shaders.vibrancy`) — NEW 2026-09-08
+
+The user's request, verbatim: *"Our current 'Vibrancy' behaves like 'Saturation' when
+editing images on an iphone. The color highlighter should make already punchier colors
+even more punchy. So it should behave more like the 'Vibrancy' option on an iphone."*
+Built exactly as described: this effect's boost **rises with a pixel's own existing
+saturation** — a near-neutral pixel is left close to untouched, and an already-punchy
+pixel is pushed further.
+
+**Discrepancy, flagged rather than silently resolved:** on Apple's own Photos app, the
+control actually named *Vibrance* conventionally does the **opposite** of what is built
+here — it boosts *muted* colours more and *protects* already-saturated ones (skin tones
+in particular), which is precisely the shape [Saturation](#saturation-imageshaderssaturation--renamed-from-vibrancy-2026-09-08)'s
+`boost` term already had, above neutral, *before* this rename. So the user's stated
+definition of "Vibrancy" is the inverse of the word's usual photo-editing meaning. This
+doc builds exactly what was asked — more boost the more saturated a colour already is —
+and says so plainly rather than "correcting" it to match Apple's convention. If the
+direction ever feels backwards in practice, that is the thing to revisit; the maths
+below is not a misunderstanding, it is the literal spec.
+
+**Config**: `ReshadeVibrancySettings` — `enabled` (default false), `strength` (float,
+0.0..2.0, default 0.0/neutral). One param — no skin-tone toggle: skin tones sit at a
+moderate, not extreme, saturation, so this effect already gives them a moderate rather
+than maximal boost on its own; adding a second toggle to suppress an effect this mild on
+skin was not worth a second control (see the panel's own comment for the same point).
+
+```
+sat  = max(c.r, c.g, c.b) - min(c.r, c.g, c.b)   // 0..1, the pixel's own chroma
+gain = 1.0 + strength * sat                       // >= 1.0 always
+out  = clamp(luma + (c - luma) * gain, 0.0, 1.0)
+```
+
+`Why this shape:` `gain` is `1.0` (identity) at `sat = 0` regardless of `strength` — a
+grey pixel has `c == luma` exactly, so it is an *exact* no-op there, not an
+approximation, at every strength. `gain` grows linearly with the pixel's own saturation,
+so the punchiest colours (`sat` near 1) get pushed by up to `1 + strength`, while a
+barely-tinted colour (`sat` near 0) gets almost no push — "already punchier colors even
+more punchy" stated as a formula. `Why linear in `sat`, not `sat²` or a curve:` this is
+the cheapest shape that satisfies the request (one multiply, one madd inside a function
+already computing `luma` and `sat` for other reasons — see `effects_common.h`'s
+`grade()`), it is monotonic by construction, and the measured table below shows it
+already produces a clearly increasing boost across four bands without needing a steeper
+curve. `Why `1.0 + strength * sat` and not, say, `strength ^ sat`:` the additive-gain
+form keeps `strength = 0` an exact identity at every saturation (multiplying by `0^sat`
+would not), which is what "0 is off" has to mean for a switch's paired param.
+`Why the final clamp, and why it can slightly desaturate the punchiest colours:` the
+same reason every other effect in `grade()` ends on `clamp(..., 0.0, 1.0)` — `c - luma`
+scaled by a `gain` > 1 can overshoot 0 or 1 on a channel that started near the gamut
+edge, and clamping is what "never wraps hue" means in practice: the *direction* away
+from `luma` is preserved exactly (each channel's sign never flips), only the *magnitude*
+is capped. A pixel that is already at the sRGB gamut boundary for its hue (one channel
+at 0, one at 255 — `sat = 1.0` exactly) is *already as saturated as an 8-bit encoding can
+represent*, so no `strength` can push its measured chroma any further; this is not a bug,
+it is the ceiling every colour effect in this pipeline runs into eventually.
+
+**Why `0.0..2.0`, not `0.0..3.0` like Saturation's range:** at `strength = 2.0` the most
+saturated pixels get triple their original chroma before clamping (`gain = 3`), already
+enough headroom to push a moderately-saturated colour hard; `strength` is additive on top
+of the always-present `1.0`, unlike Saturation's `0.0..3.0` multiplier which has to reach
+all the way down to `0.0` (full grey) as one of its endpoints. `0.0` here is simply "off",
+not a second special value to reach.
+
+**Where it sits in the Effects band, and why:** registered immediately after Saturation
+(`PanelShaders.cpp`), so the two colour-intensity effects read together — a user
+comparing "the old slider" against "the new one" finds them adjacent rather than
+scattered among Shadow Control / Pre-Sharpen / Adaptive Brightness. The Effects band went
+from 4 switch rows to **5**; this row's own Inspector column has **1** param (`strength`),
+nowhere near `kParamBudget`'s 8 (Adaptive Brightness still owns that ceiling, unchanged).
+
+#### Verified: the rename changed nothing, and the new effect works as designed (2026-09-08)
+
+Measured with `scripts/effects-regression.sh`'s `colors` scene (added for this change:
+`tests/effects_scene_client.c`'s `kColorBands`, five horizontal RGB bands instead of the
+grey levels every other scene there uses — grey has `sat = 0`, so it is an exact no-op
+for both colour effects and could never have tested either one). Every scene capture
+sampled and checked against the closed-form formulas above by
+`scripts/effects_regression_sample.py`'s `colorcheck`/`colorshape` subcommands — not eyeballed:
+
+| band (input RGB, `sat`) | off | Saturation 1.0 (unchanged) | Saturation 2.0 | Vibrancy 0.5 | Vibrancy 1.0 |
+| --- | --- | --- | --- | --- | --- |
+| 0: (128,128,128), 0.000 | (128,128,128) | (128,128,128) | (128,128,128) | (128,128,128) | (128,128,128) |
+| 1: (148,134,120), 0.110 | (148,134,120) | (148,134,120) | (158,132,105) | (149,134,119) | (149,134,118) |
+| 2: (178,140,92), 0.337 | (178,140,92) | (178,140,92) | (199,136,56) | (183,139,83) | (189,138,74) |
+| 3: (214,118,54), 0.627 | (214,118,54) | (214,118,54) | (242,110,22) | (237,111,27) | (255,105,0) |
+| 4: (255,60,0), 1.000 | (255,60,0) | (255,60,0) | (255,60,0) | (255,34,0) | (255,9,0) |
+
+Every one of those 25 cells matched its formula's prediction to within capture rounding
+(worst deviation 0.5 of 255 counts, `colors-saturation-*`/`colors-vibrancy-*`, all PASS)
+— **Saturation at 1.0 reproduces the input exactly** (the identity case, proving the
+rename moved nothing), and the pure-grey band (0) is untouched by either effect at every
+strength tested, including Vibrancy at 2.0 (not shown above) — confirming the "grey stays
+grey" invariant both formulas share.
+
+**The headline shape check** (`colors-shape`, PASS) makes the qualitative difference a
+number rather than an impression: captured saturation ÷ input saturation, per band —
+
+| | band 1 | band 2 | band 3 | band 4 |
+| --- | --- | --- | --- | --- |
+| Saturation @ 0.5 (pure `mix`, no `boost`) | 0.50 | 0.50 | 0.50 | 0.50 |
+| Vibrancy @ 1.0 | 1.11 | 1.34 | 1.59 | 1.00 |
+
+Saturation's ratio is **exactly flat** (spread 0.00) — the same relative change for
+every pixel regardless of its own saturation, which is the literal meaning of "behaves
+like Saturation." Vibrancy's ratio **strictly increases** across bands 1-3 — the more
+saturated the input, the larger the relative boost — before band 4 lands back at 1.00,
+which is the gamut-clamp ceiling described above, not a break in the trend: band 4's
+input, `(255, 60, 0)`, already has a channel at each end of the 0..255 range, so its
+chroma cannot be measured any higher than 255 no matter how large `gain` gets. (Note the
+comparison deliberately uses Saturation at `0.5`, its pure-multiplier `mix`-only regime,
+rather than a strength above neutral — see the formula section above for why `boost`
+would make even the *old, renamed* effect's own ratio non-flat there, which would have
+muddied exactly the comparison this check exists to make.)
+
+Captures: `build-release/verify-shots/vibrancy-split-2026-09-08/effects-regression-captures/10-colors-*.png`;
+full numeric results: that directory's `results.txt`.
 
 ### Pre-Sharpen (`image.shaders.presharpen`) — now RCAS
 
@@ -1357,7 +1523,8 @@ raised from six 2026-09-06 (request #17, see the
 [Adaptive Brightness budget decision](#the-budget-decision-seven-params-not-six-2026-0607)
 for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below). See
 `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
-Vibrancy 2, Pre-Sharpen 1, Adaptive Brightness 8 (zero headroom), Shadow Control 1.
+Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Adaptive Brightness 8 (zero
+headroom), Shadow Control 1.
 
 **The second raise, 7 → 8 (2026-09-07), and the debt it books.** The note left after the
 first raise said the next param was the signal to **promote** Adaptive Brightness to its own
@@ -1424,6 +1591,8 @@ about. `scripts/effects-regression.sh` drives it for its per-frame checks
   Shadow Control; `requests-2026-09-06.md` item #16 — Adaptive Brightness's modes;
   `requests-2026-09-07.md` item 7 — the mode moved into the Inspector and the Six
   Budget raised to 7.
-- `scripts/effects-regression.sh` — the headless measurement gate for both modes.
+- `scripts/effects-regression.sh` — the headless measurement gate for Adaptive
+  Brightness's both modes, and (2026-09-08) the `colors` scene pinning Saturation and
+  Vibrancy against their closed-form formulas.
 - `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed;
   and the Local adaptation item — the split-scene, halo and gain-sweep evidence.

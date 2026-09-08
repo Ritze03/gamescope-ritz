@@ -79,9 +79,12 @@ namespace gamescope
 		e.bShadowLift  = r.shadow_lift.enabled;
 		e.flShadowLift = r.shadow_lift.strength;
 
-		e.bVibrancy            = r.vibrancy.enabled;
-		e.flVibrancy           = r.vibrancy.strength;
-		e.bVibrancyProtectSkin = r.vibrancy.protect_skin_tones;
+		e.bSaturation            = r.saturation.enabled;
+		e.flSaturation           = r.saturation.strength;
+		e.bSaturationProtectSkin = r.saturation.protect_skin_tones;
+
+		e.bVibrancy  = r.vibrancy.enabled;
+		e.flVibrancy = r.vibrancy.strength;
 
 		e.bPreSharpen  = r.pre_sharpen.enabled;
 		e.flPreSharpen = r.pre_sharpen.strength.value_or( 0.5f );
@@ -159,12 +162,15 @@ namespace gamescope
 	// one decision ("is this on") with tuning behind it, so the sheet stays
 	// one row per effect deep no matter how many knobs an effect grows.
 	// (index.html declared three at E2's original writing; Shadow Control
-	// (request #3, 2026-09-04) is the fourth, added the same shape.)
+	// (request #3, 2026-09-04) is the fourth, added the same shape; Vibrancy
+	// (2026-09-08, alongside the Vibrancy -> Saturation rename) is the
+	// fifth.)
 	//
 	// THE SIX BUDGET (now eight), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
-	// ON IT. Vibrancy has 2 params, Pre-Sharpen 1, Adaptive Brightness 8,
-	// Shadow Control 1 -- the maximum a row may own before Registry.cpp
-	// aborts registration and tells the author to promote it to a category.
+	// ON IT. Saturation has 2 params, Vibrancy 1, Pre-Sharpen 1, Adaptive
+	// Brightness 8, Shadow Control 1 -- the maximum a row may own before
+	// Registry.cpp aborts registration and tells the author to promote it
+	// to a category.
 	// Adaptive Brightness fits, but with zero headroom, and that is worth
 	// saying out loud: the NEXT parameter added to this effect does not
 	// "just" overflow a limit, it is the signal that Adaptive Brightness has
@@ -269,11 +275,12 @@ namespace gamescope
 		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness exposure shadow control lift darkness" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
-			const int n = ( r.vibrancy.enabled ? 1 : 0 )
+			const int n = ( r.saturation.enabled ? 1 : 0 )
+			            + ( r.vibrancy.enabled ? 1 : 0 )
 			            + ( r.pre_sharpen.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 4 effects on";
+			return std::to_string( n ) + " of 5 effects on";
 		} );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
@@ -283,20 +290,27 @@ namespace gamescope
 		// (SPEC §3.12's governing rule).
 		a.GroupCount( "Effects" );
 
-		a.Switch( "image.shaders.vibrancy", "Vibrancy",
+		// Renamed from "Vibrancy" 2026-09-08 (see this file's Vibrancy switch
+		// just below, and superdoc/features/shader-effects.md's "Saturation
+		// / Vibrancy split"): the user pointed out this effect behaves like
+		// an iPhone "Saturation" slider -- a flat multiplier, the same
+		// relative boost for every pixel no matter how saturated it already
+		// is -- not that app's "Vibrancy". The id, config key and maths are
+		// otherwise unchanged.
+		a.Switch( "image.shaders.saturation", "Saturation",
 			ui::AnyBind::Of<bool>(
-				[]{ return Cfg().reshade.vibrancy.enabled; },
-				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, b ); } ) )
-			.Key( "reshade.vibrancy.enabled" )
+				[]{ return Cfg().reshade.saturation.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.saturation.enabled, b ); } ) )
+			.Key( "reshade.saturation.enabled" )
 			.Help( "Makes dull colours more vivid, while leaving already-vivid colours alone." )
 			.Default( false )
-			.Keywords( "vibrancy saturation colour vividness" )
+			.Keywords( "saturation vibrancy colour vividness" )
 			.DisabledUnless( EffectsUsable, kSdrOnly )
 			.Param( "strength", "Saturation",
 				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.vibrancy.strength; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, f ); } ) )
-				.Key( "reshade.vibrancy.strength" )
+					[]{ return Cfg().reshade.saturation.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.saturation.strength, f ); } ) )
+				.Key( "reshade.saturation.strength" )
 				.Help( "Colour intensity. 1x is unchanged, 0x is black and white, 3x is maximum boost." )
 				.Range( 0.0f, 3.0f )
 				.Step( 0.05f )   // 61 positions; 1.00, the default, is the neutral notch
@@ -304,11 +318,40 @@ namespace gamescope
 				.Default( 1.0f )
 			.Param( "protect_skin", "Protect skin tones",
 				ui::AnyBind::Of<bool>(
-					[]{ return Cfg().reshade.vibrancy.protect_skin_tones; },
-					[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.protect_skin_tones, b ); } ) )
-				.Key( "reshade.vibrancy.protect_skin_tones" )
+					[]{ return Cfg().reshade.saturation.protect_skin_tones; },
+					[]( bool b ) { SetEffectEnabled( &Cfg().reshade.saturation.protect_skin_tones, b ); } ) )
+				.Key( "reshade.saturation.protect_skin_tones" )
 				.Help( "Keeps the saturation boost off skin tones, so faces don't turn orange." )
 				.Default( true );
+
+		// NEW 2026-09-08: the effect the user actually meant by "Vibrancy"
+		// -- boosts a pixel's saturation IN PROPORTION to how saturated it
+		// already is, so punchy colours get punchier and near-neutral
+		// colours are left close to alone. Placed directly after Saturation
+		// so the two read together. `Why no "protect skin tones" here:`
+		// skin tones sit at a moderate, not extreme, saturation, so this
+		// effect already gives them a moderate rather than maximal boost --
+		// the shape Saturation's protect-skin toggle exists to force onto a
+		// FLAT multiplier is closer to this effect's default behaviour.
+		a.Switch( "image.shaders.vibrancy", "Vibrancy",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.vibrancy.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.vibrancy.enabled, b ); } ) )
+			.Key( "reshade.vibrancy.enabled" )
+			.Help( "Makes already-punchy colours even punchier, while leaving dull, near-grey "
+			       "colours close to alone." )
+			.Default( false )
+			.Keywords( "vibrancy saturation colour punch pop" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.vibrancy.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, f ); } ) )
+				.Key( "reshade.vibrancy.strength" )
+				.Help( "How much punchier the already-punchy colours get. 0 is unchanged." )
+				.Range( 0.0f, 2.0f )
+				.Step( 0.05f )   // 41 positions; 0.00, the default, is neutral
+				.Default( 0.0f );
 
 		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",
 			ui::AnyBind::Of<bool>(

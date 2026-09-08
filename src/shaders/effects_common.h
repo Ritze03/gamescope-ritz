@@ -16,10 +16,11 @@
 // the two in step.
 layout(binding = 0, scalar)
 uniform effects_t {
-    uint  u_flags;        // EFFECT_* bits below
-    float u_vibrancy;     // 0.0..3.0, 1.0 neutral
-    float u_shadowLift;   // 0.0..1.0, 0.0 neutral
-    uint  u_rcasCon;      // floatBitsToUint(con.x) for FsrRcasF; 0 = no sharpen
+    uint  u_flags;         // EFFECT_* bits below
+    float u_saturation;    // 0.0..3.0, 1.0 neutral -- renamed from u_vibrancy 2026-09-08
+    float u_vibrancy;      // 0.0..2.0, 0.0 neutral -- NEW 2026-09-08, see grade() below
+    float u_shadowLift;    // 0.0..1.0, 0.0 neutral
+    uint  u_rcasCon;       // floatBitsToUint(con.x) for FsrRcasF; 0 = no sharpen
 
     // ---- Adaptive Brightness ----
     float u_abTarget;     // target luminance, 0.1..0.9
@@ -97,8 +98,10 @@ const int AB_PREVIEW_H = 144;
 
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
-const uint EFFECT_VIBRANCY            = 1u << 1;
-const uint EFFECT_VIBRANCY_SKIN       = 1u << 2;
+// Renamed from EFFECT_VIBRANCY/EFFECT_VIBRANCY_SKIN 2026-09-08 -- see
+// grade() below. Same bit values, maths unchanged.
+const uint EFFECT_SATURATION          = 1u << 1;
+const uint EFFECT_SATURATION_SKIN     = 1u << 2;
 const uint EFFECT_PRE_SHARPEN         = 1u << 3;
 const uint EFFECT_ADAPTIVE_BRIGHTNESS = 1u << 4;
 // Adaptive Brightness's Dynamic mode (effects_curve.h's percentile tone
@@ -106,6 +109,8 @@ const uint EFFECT_ADAPTIVE_BRIGHTNESS = 1u << 4;
 // measure pass tracks every statistic regardless of mode, so switching
 // modes is instant.
 const uint EFFECT_AB_DYNAMIC          = 1u << 5;
+// NEW 2026-09-08: the "punchy colours punchier" effect -- see grade() below.
+const uint EFFECT_VIBRANCY            = 1u << 6;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;
@@ -118,11 +123,12 @@ float effects_luma(vec3 c)
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-// Per-tap colour grade: steps 1 and 2 of the effect order. Both are pure
-// per-pixel operations on one sample, so the apply pass runs them inside
-// RCAS's load (every one of its 5 taps is graded) and the measure pass runs
-// them on each of its taps -- a separate graded intermediate would cost a
-// texture round trip and change nothing.
+// Per-tap colour grade: steps 1-3 of the effect order (Pre-Sharpen and
+// Adaptive Brightness are not part of grade() -- see cs_effects_layer0.comp).
+// All are pure per-pixel operations on one sample, so the apply pass runs
+// them inside RCAS's load (every one of its 5 taps is graded) and the
+// measure pass runs them on each of its taps -- a separate graded
+// intermediate would cost a texture round trip and change nothing.
 vec3 grade(vec3 c)
 {
     // 1. Shadow Control: a gamma curve on the low end, exponent 1.0
@@ -134,14 +140,19 @@ vec3 grade(vec3 c)
         c = pow(clamp(c, 0.0, 1.0), vec3(e));
     }
 
-    // 2. Vibrancy: `m` alone walks 0.0 (grey) .. 1.0 (unchanged) uniformly;
-    //    `boost` carries the adaptive/skin-tone shape only above neutral.
-    if ((u_flags & EFFECT_VIBRANCY) != 0u)
+    // 2. Saturation (renamed from "Vibrancy" 2026-09-08 -- see
+    //    superdoc/features/shader-effects.md's "Saturation / Vibrancy
+    //    split"; maths UNCHANGED by the rename). `m` alone walks 0.0
+    //    (grey) .. 1.0 (unchanged) uniformly, the same relative boost for
+    //    every pixel regardless of how saturated it already is -- exactly
+    //    what an iPhone "Saturation" slider does; `boost` carries the
+    //    adaptive/skin-tone shape only above neutral.
+    if ((u_flags & EFFECT_SATURATION) != 0u)
     {
         float luma = effects_luma(c);
         float sat  = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
         float skin = 0.0;
-        if ((u_flags & EFFECT_VIBRANCY_SKIN) != 0u)
+        if ((u_flags & EFFECT_SATURATION_SKIN) != 0u)
         {
             // Warm hues where red clearly leads blue and green sits
             // roughly between them -- a cheap, deliberately approximate
@@ -150,9 +161,32 @@ vec3 grade(vec3 c)
                  * clamp(1.0 - abs(c.g - (c.r + c.b) * 0.5) * 4.0, 0.0, 1.0);
         }
         float prot  = mix(1.0, 0.3, skin);
-        float m     = min(u_vibrancy, 1.0);
-        float boost = max(u_vibrancy - 1.0, 0.0) * (1.0 - sat) * prot;
+        float m     = min(u_saturation, 1.0);
+        float boost = max(u_saturation - 1.0, 0.0) * (1.0 - sat) * prot;
         c = clamp(mix(vec3(luma), c, m + boost), 0.0, 1.0);
+    }
+
+    // 3. Vibrancy (NEW 2026-09-08): boosts a pixel's saturation IN
+    //    PROPORTION to how saturated it already is -- the more `sat` (the
+    //    pixel's own chroma), the larger the gain applied to it, so already-
+    //    punchy colours get pushed further and near-neutral colours (small
+    //    sat) are left close to untouched. A pure grey pixel has c == luma
+    //    exactly, so it is an exact no-op there at ANY strength -- no
+    //    epsilon needed. `Why this is the INVERSE of Apple Photos'
+    //    "Vibrance":` that control does the opposite (protects saturated
+    //    colours, boosts muted ones -- the shape step 2 above already had).
+    //    This is the user's own, deliberate definition; see the doc.
+    //      gain = 1.0 + strength * sat        // sat: 0..1, >= 1.0 always
+    //      out  = luma + (c - luma) * gain
+    //    Monotonic in strength and in sat; never wraps hue (c - luma keeps
+    //    its sign per channel, only its magnitude scales); the final clamp
+    //    is the only clipping, exactly like every other step here.
+    if ((u_flags & EFFECT_VIBRANCY) != 0u)
+    {
+        float luma = effects_luma(c);
+        float sat  = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+        float gain = 1.0 + u_vibrancy * sat;
+        c = clamp(luma + (c - luma) * gain, 0.0, 1.0);
     }
 
     return c;

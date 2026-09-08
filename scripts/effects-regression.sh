@@ -70,6 +70,14 @@
 #                       user's "does nothing at all", as a number
 #   Whole-image captures of every scene are taken too and reported as INFO
 #   lines (they show the clipping Dynamic exists to avoid), not asserted.
+#   colors-*         2026-09-08, the Saturation/Vibrancy split: Saturation
+#                     (renamed from "Vibrancy") and the new Vibrancy each
+#                     pinned against their closed-form formula on a scene
+#                     with actual colour (every scene above is greyscale,
+#                     where both are a no-op); colors-shape is the headline
+#                     check that the two have different SHAPES, not just
+#                     different names -- see effects-regression.sh's own
+#                     comment above that block and shader-effects.md.
 #
 # USAGE
 #   scripts/effects-regression.sh                # run everything
@@ -203,16 +211,21 @@ start_sway() {
 write_config() {
 	mkdir -p "$CONFIGHOME/gamescope-ritz/profiles"
 	cat > "$CONFIGHOME/gamescope-ritz/global.json" <<-EOF
-		{ "schema_version": 3, "profiles": { "last_general": "Effects", "games": {} } }
+		{ "schema_version": 4, "profiles": { "last_general": "Effects", "games": {} } }
 	EOF
+	# "saturation" (renamed from "vibrancy" 2026-09-08) has protect_skin_tones
+	# forced off: the "colors" scene's checks compare captures against
+	# grade()'s closed-form formula, which is only exact when the skin-tone
+	# damper (a separate, approximate mask) is out of the picture.
 	cat > "$CONFIGHOME/gamescope-ritz/profiles/Effects.json" <<-EOF
 		{
-		    "schema_version": 3,
+		    "schema_version": 4,
 		    "name": "Effects",
 		    "kind": "general",
 		    "fps_display": { "enabled": false },
 		    "crosshair": { "enabled": false },
 		    "reshade": {
+		        "saturation": { "enabled": false, "protect_skin_tones": false },
 		        "vibrancy": { "enabled": false },
 		        "pre_sharpen": { "enabled": false },
 		        "shadow_lift": { "enabled": false },
@@ -232,14 +245,14 @@ start_instance() {
 	CLIENT_LOG="$OUT_DIR/client.log"
 	: > "$CLIENT_LOG"
 	rm -f "$PIDFILE"
-	log "starting gamescope + effects_scene_client (dark,bright,mid,texdark)"
+	log "starting gamescope + effects_scene_client (dark,bright,mid,texdark,colors)"
 	# texdark: 2 % lights so the 98th percentile sits in the histogram's gap,
 	# --periodic so the 3 px/frame pan changes nothing but where the taps
 	# land (the stability checks). --motion only moves the textured scene.
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
 		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" \
 		--force-windows-fullscreen -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid,texdark,halfsplit,halobox,haloinv --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
+		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid,texdark,halfsplit,halobox,haloinv,colors --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -515,6 +528,83 @@ for pair in "08 halobox" "09 haloinv"; do
 	run_sampler halo "$SH1" "$scene" on 18    # 100 %:            measured 15 counts
 done
 set_local "$AB_LOCAL_DEFAULT"
+
+# ---------------------------------------------------------------------------
+# Scene 8: colors -- the Saturation/Vibrancy split (2026-09-08). Every scene
+# above is greyscale, where both colour effects are an exact no-op, so this
+# is the only place either is actually exercised. Adaptive Brightness is
+# switched off for all of it: these checks compare a capture against
+# grade()'s Saturation/Vibrancy formula alone, and AB's gain/gamma running
+# on top would confound that.
+#   colors-off               identity (the capture path itself is honest)
+#   colors-saturation-<S>    Saturation at strength S matches the formula
+#                             exactly (protect_skin_tones is off in
+#                             write_config(), see its comment) -- pins that
+#                             the 2026-09-08 rename left the maths untouched
+#   colors-vibrancy-<S>      Vibrancy (NEW) at strength S matches its own
+#                             formula; the grey band (saturation 0) is
+#                             untouched at every strength, both effects
+#   colors-shape              THE HEADLINE CHECK: Saturation's per-band
+#                             boost ratio (captured saturation / input
+#                             saturation) is FLAT across bands -- the same
+#                             relative boost for every pixel, exactly what
+#                             an iPhone "Saturation" slider does -- while
+#                             Vibrancy's ratio strictly INCREASES with the
+#                             pixel's own existing saturation. Numeric proof
+#                             the two effects are shaped differently, not
+#                             just differently named.
+# ---------------------------------------------------------------------------
+SAT_ID="image.shaders.saturation"
+SAT_STRENGTH_ID="image.shaders.saturation.strength"
+VIB_ID="image.shaders.vibrancy"
+VIB_STRENGTH_ID="image.shaders.vibrancy.strength"
+
+set_saturation() {   # 0 off, or a strength 0.0..3.0
+	if [[ "$1" == "0" ]]; then
+		gsctl overlay_e2_set "$SAT_ID 0" >/dev/null 2>&1 || true
+	else
+		gsctl overlay_e2_set "$SAT_STRENGTH_ID $1" >/dev/null 2>&1 || true
+		gsctl overlay_e2_set "$SAT_ID 1" >/dev/null 2>&1 || true
+	fi
+	sleep "$SETTLE_S"
+}
+set_vibrancy() {   # 0 off, or a strength 0.0..2.0
+	if [[ "$1" == "0" ]]; then
+		gsctl overlay_e2_set "$VIB_ID 0" >/dev/null 2>&1 || true
+	else
+		gsctl overlay_e2_set "$VIB_STRENGTH_ID $1" >/dev/null 2>&1 || true
+		gsctl overlay_e2_set "$VIB_ID 1" >/dev/null 2>&1 || true
+	fi
+	sleep "$SETTLE_S"
+}
+
+set_ab 0
+next_scene   # haloinv -> colors (last scene in --scenes)
+sleep "$ADAPT_SETTLE_S"
+
+set_saturation 0; set_vibrancy 0
+run_sampler colorcheck "$(take_screenshot 10-colors-off)" off 0
+
+for S in 0.0 0.5 1.0 2.0; do
+	set_saturation "$S"
+	SHOT="$(take_screenshot "10-colors-saturation-$S")"
+	run_sampler colorcheck "$SHOT" saturation "$S"
+	# 0.5, not 2.0: colorshape wants Saturation's PURE "m" regime (strength
+	# <= 1.0, no adaptive "boost" term -- see cmd_colorshape's own comment)
+	# so its ratio is genuinely flat, not just muted-first-shaped.
+	[[ "$S" == "0.5" ]] && SHOT_SAT_SHAPE="$SHOT"
+done
+set_saturation 0
+
+for S in 0.5 1.0 2.0; do
+	set_vibrancy "$S"
+	SHOT="$(take_screenshot "10-colors-vibrancy-$S")"
+	run_sampler colorcheck "$SHOT" vibrancy "$S"
+	[[ "$S" == "1.0" ]] && SHOT_VIB_SHAPE="$SHOT"
+done
+set_vibrancy 0
+
+run_sampler colorshape "$SHOT_SAT_SHAPE" "$SHOT_VIB_SHAPE"
 
 END_TS=$(date +%s)
 {

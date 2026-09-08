@@ -559,9 +559,16 @@ struct NativeEffectsState_t
 	bool  bShadowLift = false;
 	float flShadowLift = 0.0f;           // 0..1, 0 neutral
 
+	// Renamed from bVibrancy/flVibrancy/bVibrancyProtectSkin 2026-09-08 --
+	// see ConfigSchema.h's ReshadeSaturationSettings. Maths unchanged.
+	bool  bSaturation = false;
+	float flSaturation = 1.0f;           // 0..3, 1 neutral
+	bool  bSaturationProtectSkin = true;
+
+	// NEW 2026-09-08 (ConfigSchema.h's ReshadeVibrancySettings): boosts a
+	// pixel's saturation in proportion to how saturated it already is.
 	bool  bVibrancy = false;
-	float flVibrancy = 1.0f;             // 0..3, 1 neutral
-	bool  bVibrancyProtectSkin = true;
+	float flVibrancy = 0.0f;             // 0..2, 0 neutral
 
 	bool  bPreSharpen = false;
 	float flPreSharpen = 0.5f;           // 0..2, the panel's slider scale
@@ -588,7 +595,7 @@ struct NativeEffectsState_t
 
 	bool AnyEnabled() const
 	{
-		return bShadowLift || bVibrancy || bPreSharpen || bAdaptiveBrightness;
+		return bShadowLift || bSaturation || bVibrancy || bPreSharpen || bAdaptiveBrightness;
 	}
 };
 extern NativeEffectsState_t g_nativeEffects;

@@ -34,6 +34,14 @@
 //           and haloinv the inverse (a 220 box on a 15 field). A local tone
 //           operator's classic artefact is a rim around such a box; the
 //           script samples a line out from the box's edge to measure it.
+//   colors  ADDED 2026-09-08 for the Saturation/Vibrancy split (shader-
+//           effects.md): five horizontal COLOUR bands (not the grey levels
+//           above) at known saturations, so the two colour effects have
+//           something to measure -- every other scene here is greyscale,
+//           where both effects are an exact no-op. Band 0 is pure grey
+//           (saturation 0, the invariant "left alone" case); bands 1-4 walk
+//           a warm hue from near-neutral to fully saturated. See
+//           PaintSpecial()'s nSpecial==4 case for the exact RGB values.
 //   --lights PCT (default 1.5) sets texdark's share of light cells; at 2.0
 //   the 98th percentile sits exactly in that scene's gap. --periodic makes
 //   the textures repeat every 80 cells (one 1280-wide frame), so under
@@ -69,7 +77,8 @@ static void OnUsr2( int sig ) { (void)sig; s_nMotionToggle++; }
 
 // nSpecial: 0 the flat band scenes below, 1 halfsplit, 2 halobox,
 // 3 haloinv -- the three scenes Local adaptation (2026-09-07) is measured
-// on. See PaintSpecial().
+// on -- 4 colors, the Saturation/Vibrancy colour bands (2026-09-08). See
+// PaintSpecial().
 typedef struct
 {
 	const char *pszName;
@@ -90,6 +99,20 @@ static const Scene kScenes[] = {
 	{ "halfsplit",{   0,   0,   0,   0,   0 },   0,   0,   0, 0, 1 },
 	{ "halobox",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 2 },
 	{ "haloinv",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 3 },
+	{ "colors",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 4 },
+};
+
+// colors (2026-09-08): five horizontal bands, top to bottom, RGB. Band 0 is
+// pure grey (saturation 0); 1-4 walk a warm hue from near-neutral to fully
+// saturated (max(c)-min(c) = 0, 28, 86, 160, 255). Mirrored in
+// scripts/effects_regression_sample.py's COLOR_BANDS -- change one,
+// change both.
+static const unsigned char kColorBands[5][3] = {
+	{ 128, 128, 128 },
+	{ 148, 134, 120 },
+	{ 178, 140,  92 },
+	{ 214, 118,  54 },
+	{ 255,  60,   0 },
 };
 
 // The three Local-adaptation scenes, in the same 1280x720 reference frame
@@ -113,6 +136,13 @@ static void FillRect( SDL_Surface *pSurface, int x, int y, int w, int h, unsigne
 {
 	SDL_Rect r = { x, y, w, h };
 	SDL_FillRect( pSurface, &r, SDL_MapRGB( pSurface->format, v, v, v ) );
+}
+
+static void FillRectRGB( SDL_Surface *pSurface, int x, int y, int w, int h,
+                         unsigned char r8, unsigned char g8, unsigned char b8 )
+{
+	SDL_Rect r = { x, y, w, h };
+	SDL_FillRect( pSurface, &r, SDL_MapRGB( pSurface->format, r8, g8, b8 ) );
 }
 
 static int s_nMotionPx = 0;      // --motion: horizontal scroll per frame (textured scenes)
@@ -177,6 +207,17 @@ static void PaintSpecial( SDL_Surface *pSurface, int nSpecial )
 			const int y0 = i * H / 5, y1 = ( i + 1 ) * H / 5;
 			FillRect( pSurface, 0, y0, nMid, y1 - y0, kLeft[i] );
 			FillRect( pSurface, nMid, y0, W - nMid, y1 - y0, kRight[i] );
+		}
+		return;
+	}
+
+	if ( nSpecial == 4 )
+	{
+		for ( int i = 0; i < 5; i++ )
+		{
+			const int y0 = i * H / 5, y1 = ( i + 1 ) * H / 5;
+			FillRectRGB( pSurface, 0, y0, W, y1 - y0,
+			            kColorBands[i][0], kColorBands[i][1], kColorBands[i][2] );
 		}
 		return;
 	}
@@ -253,7 +294,7 @@ int main( int argc, char **argv )
 			for ( char *tok = strtok( psz, "," ); tok && nList < 12; tok = strtok( NULL, "," ) )
 			{
 				const Scene *p = FindScene( tok );
-				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|halfsplit|halobox|haloinv)\n", tok ); return 2; }
+				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|halfsplit|halobox|haloinv|colors)\n", tok ); return 2; }
 				pList[nList++] = p;
 			}
 			free( psz );
@@ -268,7 +309,7 @@ int main( int argc, char **argv )
 		else if ( !strcmp( argv[i], "--periodic" ) )                 s_bPeriodic = 1;
 		else
 		{
-			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,halfsplit,halobox,haloinv] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
+			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,halfsplit,halobox,haloinv,colors] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
 			return 2;
 		}
 	}

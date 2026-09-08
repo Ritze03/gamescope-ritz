@@ -6,7 +6,7 @@ grading, sharpening, CRT-style filters) chosen by the user at runtime.
 
 **Scope since 2026-09-05:** this loader serves a user's *own* `.fx` files —
 `--reshade-effect`, the `gamescope_reshade` protocol, and the four-path search below all
-still work. The fork's **bundled** effects (Vibrancy, Shadow Control, Pre-Sharpen,
+still work. The fork's **bundled** effects (Saturation, Vibrancy, Shadow Control, Pre-Sharpen,
 Adaptive Brightness) no longer run through it: they are a native compute pre-pass compiled
 into the binary, see [shader-effects](shader-effects.md) and
 `superdoc/planning/DECISIONS.md` #27. `reshade/Shaders/gamescope-ritz.fx` and the
@@ -104,4 +104,4 @@ enables it, and optionally pushes uniform variable values to drive runtime param
 - [scaling-filters](scaling-filters.md) — the separate, built-in FSR/NIS upscale/sharpen path this feature is not part of.
 - [compositing-vulkan](compositing-vulkan.md) — the Vulkan composite path ReShade pipelines execute within.
 - [wayland-protocols](wayland-protocols.md) — conventions for Gamescope's custom protocols, including `gamescope-reshade.xml`.
-- [shader-effects](shader-effects.md) — the fork's bundled effects (Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness), a native compute pre-pass that *replaced* the combined `.fx` this loader used to run.
+- [shader-effects](shader-effects.md) — the fork's bundled effects (Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness), a native compute pre-pass that *replaced* the combined `.fx` this loader used to run.

@@ -82,14 +82,14 @@ A game profile inheriting from it (`profiles/Rust.json`) -- only what differs:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "name": "Rust",
   "kind": "game",
   "app_id": "252490",
   "game_name": "Rust",
   "inherits": "Comp",
   "gamescope": { "sharpness": 9 },
-  "reshade": { "vibrancy": { "enabled": true } }
+  "reshade": { "saturation": { "enabled": true } }
 }
 ```
 
@@ -225,7 +225,7 @@ coding discipline every panel must keep (load before you mutate the whole struct
 hand to `EnqueueRoutedWrite()`), not a guarantee the config layer itself enforces.
 
 `OverriddenKeys()` is the set of dotted keys the session profile stores itself
-(`"reshade.vibrancy.strength"`, `"fps_display.enabled"`), cached on the write
+(`"reshade.saturation.strength"`, `"fps_display.enabled"`), cached on the write
 sequence so the UI can ask every frame; `ResetKeyToInherited(key)` drops one and bumps
 the generation.
 

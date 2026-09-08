@@ -25,6 +25,17 @@ Subcommands
                                          must approach the settled value monotonically
     ablog   <file> <what>                per-frame `effects_ab_log` lines (gamescope's
                                          console log); `what` is static | pan | transition
+    colorcheck <image> <effect> <strength>
+                                         the "colors" scene (2026-09-08): pins one
+                                         effect's per-band output against the closed-
+                                         form formula; `effect` is off | saturation |
+                                         vibrancy
+    colorshape <image-saturation> <image-vibrancy>
+                                         the same "colors" capture under Saturation and
+                                         under Vibrancy at the same nominal strength:
+                                         Saturation's per-band boost RATIO must be flat
+                                         across bands, Vibrancy's must strictly increase
+                                         -- the headline shape difference between the two
 """
 import re
 import sys
@@ -60,6 +71,20 @@ SPLIT_RIGHT = [200, 215, 230, 245, 255]
 HALO_BOX_W, HALO_BOX_H = 320, 320
 HALO_EDGE_X = 1280 // 2 + HALO_BOX_W // 2
 HALO_DISTANCES = [12, 24, 48, 96, 160, 240, 360, 460]
+
+# ---- The "colors" scene (2026-09-08, Saturation/Vibrancy split) -----------
+#
+# Five horizontal RGB bands -- mirrors tests/effects_scene_client.c's
+# kColorBands exactly; change one, change both. Band 0 is pure grey
+# (saturation 0); 1-4 walk a warm hue from near-neutral to fully saturated
+# (max(c)-min(c) = 0, 28, 86, 160, 255).
+COLOR_BANDS = [
+    (128, 128, 128),
+    (148, 134, 120),
+    (178, 140,  92),
+    (214, 118,  54),
+    (255,  60,   0),
+]
 HALO_FIELDS = {"halobox": 200, "haloinv": 15}
 
 
@@ -466,13 +491,151 @@ def cmd_ablog(args):
     sys.exit(0 if emit(ok, name, detail) else 1)
 
 
+# ---- "colors" scene: Saturation and Vibrancy, pinned against the closed-
+# form formula each effect uses (src/shaders/effects_common.h's grade()) ---
+#
+# The captures this runs against are always taken with Saturation's
+# protect_skin_tones OFF, so `prot` is always 1.0 here and the formula below
+# is exact rather than an approximation -- see effects-regression.sh's
+# write_config().
+
+def color_regions(img):
+    """Every one of the 5 "colors" bands, as its mean (r, g, b) -- sampled
+    well inside the band (10 %..90 % of the width) since, unlike the grey
+    scenes, this one has no rectangles to dodge."""
+    sx = img.width / W
+    out = []
+    for i in range(5):
+        y0, y1 = int(i * img.height / 5), int((i + 1) * img.height / 5)
+        out.append(region_mean(img, (int(0.10 * W * sx), y0, int(0.90 * W * sx), y1), inset=6))
+    return out
+
+
+def rgb_luma(rgb):
+    r, g, b = rgb
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def rgb_sat01(rgb):
+    """max(c)-min(c) normalised to 0..1, matching grade()'s `sat` exactly
+    (c there is 0..1 encoded; here rgb is 0..255)."""
+    return (max(rgb) - min(rgb)) / 255.0
+
+
+def clamp255(x):
+    return max(0.0, min(255.0, x))
+
+
+def expected_saturation(rgb, strength):
+    """effects_common.h's grade(), EFFECT_SATURATION block, protect_skin
+    OFF (prot = 1.0): m = min(strength,1); boost = max(strength-1,0)*(1-sat);
+    out = luma + (c-luma)*(m+boost)."""
+    l = rgb_luma(rgb)
+    s = rgb_sat01(rgb)
+    k = min(strength, 1.0) + max(strength - 1.0, 0.0) * (1.0 - s)
+    return tuple(clamp255(l + (c - l) * k) for c in rgb)
+
+
+def expected_vibrancy(rgb, strength):
+    """effects_common.h's grade(), EFFECT_VIBRANCY block (NEW 2026-09-08):
+    gain = 1 + strength*sat; out = luma + (c-luma)*gain."""
+    l = rgb_luma(rgb)
+    s = rgb_sat01(rgb)
+    gain = 1.0 + strength * s
+    return tuple(clamp255(l + (c - l) * gain) for c in rgb)
+
+
+def cmd_colorcheck(args):
+    image, effect, strength_s = args
+    strength = float(strength_s)
+    bands = color_regions(load(image))
+    name = f"colors-{effect}-{strength_s}"
+
+    if effect == "off":
+        worst = max(abs(bands[i][c] - COLOR_BANDS[i][c]) for i in range(5) for c in range(3))
+        detail = f"identity, worst deviation {worst:.1f} counts; " + \
+            " ".join(f"b{i}=({bands[i][0]:.0f},{bands[i][1]:.0f},{bands[i][2]:.0f})" for i in range(5))
+        sys.exit(0 if emit(worst <= 3.0, name, detail) else 1)
+
+    if effect not in ("saturation", "vibrancy"):
+        print(f"FAIL\t{name}\tunknown effect '{effect}'", file=sys.stderr)
+        sys.exit(2)
+    fn = expected_saturation if effect == "saturation" else expected_vibrancy
+
+    checks = []
+    worst = 0.0
+    for i in range(5):
+        exp = fn(COLOR_BANDS[i], strength)
+        got = bands[i]
+        d = max(abs(got[c] - exp[c]) for c in range(3))
+        worst = max(worst, d)
+        checks.append((f"band{i} matches the formula (delta {d:.1f})", d <= 4.0))
+    # The invariant BOTH effects share: a pure grey pixel (saturation 0) has
+    # c == luma exactly, so it must be untouched at ANY strength.
+    grey_d = max(abs(bands[0][c] - 128.0) for c in range(3))
+    checks.append((f"grey band0 stays ~128 (delta {grey_d:.1f})", grey_d <= 2.0))
+
+    failed = [c for c, ok in checks if not ok]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + \
+        f"worst delta {worst:.1f} counts; " + \
+        " ".join(f"b{i}=({bands[i][0]:.0f},{bands[i][1]:.0f},{bands[i][2]:.0f})" for i in range(5))
+    sys.exit(0 if emit(not failed, name, detail) else 1)
+
+
+def cmd_colorshape(args):
+    """THE HEADLINE CHECK for the Saturation/Vibrancy split: the same
+    "colors" scene, captured once under Saturation (at a strength <= 1.0,
+    the pure "m" regime -- see grade()'s EFFECT_SATURATION block: below
+    neutral there is no adaptive "boost" term, only the flat multiplier
+    `m`, so this is the genuinely shape-revealing case) and once under
+    Vibrancy, compared by the RATIO each band's captured saturation
+    (max-min) came out to versus its input saturation. Saturation
+    multiplies every pixel's chroma by the SAME factor regardless of how
+    saturated it already was, so that ratio is FLAT across every band,
+    band 4 included -- shrinking chroma never clips. Vibrancy's gain rises
+    with the pixel's own saturation, so its ratio strictly increases across
+    bands 1-3; band 4 is deliberately excluded from that assertion and
+    reported instead, because band 4 (255, 60, 0) already sits AT the
+    sRGB gamut boundary -- one channel at 0, one at 255 -- so growing its
+    chroma further is mathematically impossible without clipping a
+    channel, and the clamp (grade()'s final `clamp(..., 0.0, 1.0)`, the
+    same one every effect in this file ends on) is exactly what stops it.
+    That is the "clamped so nothing wraps hue or clips a channel"
+    property working as designed, not a measurement artefact."""
+    img_sat, img_vib = args
+    sat_bands = color_regions(load(img_sat))
+    vib_bands = color_regions(load(img_vib))
+    input_sats = [max(c) - min(c) for c in COLOR_BANDS]  # 0, 28, 86, 160, 255
+
+    def ratios(bands):
+        return [(max(bands[i]) - min(bands[i])) / input_sats[i] for i in range(1, 5)]
+
+    sat_r, vib_r = ratios(sat_bands), ratios(vib_bands)
+    sat_spread = max(sat_r) - min(sat_r)
+    vib_spread = max(vib_r) - min(vib_r)
+    # Bands 1-3 only: band 4 (index 3) is the gamut-clipped case above.
+    vib_increasing = all(vib_r[i] < vib_r[i + 1] - 0.01 for i in range(2))
+    checks = [
+        ("Saturation's per-band ratio is flat (spread <= 0.15)", sat_spread <= 0.15),
+        ("Vibrancy's per-band ratio strictly increases (bands 1-3)", vib_increasing),
+        ("Vibrancy's band-3 ratio exceeds Saturation's flat one", vib_r[2] > sat_r[0] + 0.1),
+    ]
+    failed = [c for c, ok in checks if not ok]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + \
+        "saturation ratios " + " ".join(f"{r:.2f}" for r in sat_r) + \
+        " (spread " + f"{sat_spread:.2f}" + "); vibrancy ratios " + \
+        " ".join(f"{r:.2f}" for r in vib_r) + " (spread " + f"{vib_spread:.2f}" + ")"
+    sys.exit(0 if emit(not failed, "colors-shape", detail) else 1)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)
     cmd, args = sys.argv[1], sys.argv[2:]
     {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
-     "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider}[cmd](args)
+     "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider,
+     "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape}[cmd](args)
 
 
 if __name__ == "__main__":

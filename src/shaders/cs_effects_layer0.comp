@@ -1,9 +1,9 @@
 #version 460
 
 // cs_effects_layer0.comp -- the bundled "Shaders" area effects (Shadow
-// Control, Vibrancy, Pre-Sharpen, Adaptive Brightness) as one native compute
-// pre-pass over the base/game layer, at source resolution, before any
-// scaling. Compiled at BUILD time by src/meson.build's glsl_generator into
+// Control, Saturation, Vibrancy, Pre-Sharpen, Adaptive Brightness) as one
+// native compute pre-pass over the base/game layer, at source resolution,
+// before any scaling. Compiled at BUILD time by src/meson.build's glsl_generator into
 // cs_effects_layer0.h -- a GLSL error here fails the build, which is the
 // whole point of this port (superdoc/planning/DECISIONS.md #27): the
 // previous ReShade .fx was compiled at runtime from whichever copy won a

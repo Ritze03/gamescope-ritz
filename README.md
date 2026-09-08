@@ -7,8 +7,8 @@ diverged from upstream anywhere below that commit; everything past it is this fo
 additive work. That work is a settings-and-presentation layer on top of gamescope's own
 compositor: an in-game settings overlay (the **Shell**) and a standalone command-palette
 launcher, an on-screen FPS counter, a compositor-drawn crosshair, a profile / per-game
-settings system, a set of native post-process shader effects (vibrancy, shadow lift,
-sharpening and adaptive brightness), host clipboard sync, and live-adjustable nested
+settings system, a set of native post-process shader effects (saturation, vibrancy,
+shadow lift, sharpening and adaptive brightness), host clipboard sync, and live-adjustable nested
 resolution and refresh. See [Features added by this fork](#features-added-by-this-fork)
 below for what each of those does, and `superdoc/` for the fuller documentation this fork
 maintains alongside the code (start at `superdoc/architecture/overview.md`).
@@ -123,8 +123,8 @@ Each of these is this fork's own, on top of upstream gamescope; depth lives in
   rest. `--profile <name>` and `GS_RITZ_PROFILE` pick a profile for a single session; see
   [Command-line options](#this-forks-command-line-options) below.
   [`superdoc/features/profiles.md`](superdoc/features/profiles.md)
-- **Native shader effects.** Vibrancy, Shadow Control, Pre-Sharpen and Adaptive Brightness
-  (with Whole image and Dynamic modes, and per-region local adaptation) run as one compute
+- **Native shader effects.** Saturation, Vibrancy, Shadow Control, Pre-Sharpen and Adaptive
+  Brightness (with Whole image and Dynamic modes, and per-region local adaptation) run as one compute
   pre-pass compiled into the binary at build time, not a runtime-compiled shader file — see
   [Reshade support](#reshade-support) below for why that distinction matters.
   [`superdoc/features/shader-effects.md`](superdoc/features/shader-effects.md)
@@ -265,7 +265,7 @@ Gamescope supports a subset of Reshade effects/shaders using the `--reshade-effe
 This provides an easy way to do shader effects (ie. CRT shader, film grain, debugging HDR with histograms, etc) on top of whatever is being displayed in Gamescope without having to hook into the underlying process.
 
 **In this fork, this pipeline is for a user's own `.fx` files only.** This fork's bundled
-effects — Vibrancy, Shadow Control, Pre-Sharpen and Adaptive Brightness, see
+effects — Saturation, Vibrancy, Shadow Control, Pre-Sharpen and Adaptive Brightness, see
 [Native shader effects](#features-added-by-this-fork) above — used to run through this same
 runtime-compiled `.fx` pipeline, but a stale copy of that file on disk could silently shadow
 the current one and no-op two of the four effects with no error. They were rewritten as a

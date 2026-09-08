@@ -80,9 +80,9 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 - [Reshade effects](features/reshade-effects.md) — the ReShade-compatible post-process
   pipeline, for users' own `.fx` files.
-- [Shader effects (Shaders settings area)](features/shader-effects.md) — Vibrancy, Shadow
-  Control, Pre-Sharpen and Adaptive Brightness: the settings panel and the native
-  build-time compute pre-pass that implements them.
+- [Shader effects (Shaders settings area)](features/shader-effects.md) — Saturation,
+  Vibrancy, Shadow Control, Pre-Sharpen and Adaptive Brightness: the settings panel and
+  the native build-time compute pre-pass that implements them.
 - [Screen capture (PipeWire)](features/screen-capture-pipewire.md) — screen capture via PipeWire.
 
 ### Tooling & runtime

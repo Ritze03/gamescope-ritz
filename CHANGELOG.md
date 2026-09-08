@@ -47,6 +47,10 @@ The newest version below is the one this build reports.
   command line needed. `install.sh` offers to install/update it, landing on the same
   filename Ritz already uses for that module so this updates it in place instead of
   adding a second one.
+- **Vibrancy**: a new Shaders effect, right next to Saturation. It boosts an
+  already-punchy colour's saturation further, in proportion to how saturated that
+  colour already is, and leaves near-grey colours close to untouched -- the more a
+  colour pops already, the more this pushes it. Off by default.
 
 ### Fixed
 - **Appearance and Cursor settings no longer undo each other**: changing something in
@@ -97,6 +101,11 @@ The newest version below is the one this build reports.
   (was 0.5) and Max gain up to 4.0 (was 2.0); both sliders now default to their new
   extreme instead of the old one. An existing config keeps whatever value it already
   had saved.
+- **Vibrancy renamed to Saturation**: the existing colour-intensity effect -- a flat
+  multiplier, the same relative boost for every pixel regardless of how saturated it
+  already was -- is now called Saturation; "Vibrancy" names the new effect above
+  instead. Behaviour, range and your saved value are unchanged, only the name moved;
+  an existing config is updated automatically the first time it is next saved.
 
 ## [0.6.1] – 2026-09-06
 

@@ -10,8 +10,9 @@
 // on the CPU, from this capture, by effects_curve.h. For the two halves to
 // be comparable with each other AND with what is actually on screen, the
 // captured image has to be exactly what cs_effects_layer0.comp's Adaptive
-// Brightness block sees: the base layer with grade() applied (Shadow Control
-// then Vibrancy, effects_common.h), in encoded space. So this pass calls the
+// Brightness block sees: the base layer with grade() applied (Shadow
+// Control, then Saturation, then Vibrancy -- effects_common.h), in encoded
+// space. So this pass calls the
 // SAME grade() the apply pass and the measure pass call, on the same slot-0
 // binding (raw UNORM view, unnormalised nearest sampler) the host has
 // already set up for those two dispatches. Pre-Sharpen is deliberately not

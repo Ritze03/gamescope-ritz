@@ -37,7 +37,20 @@ namespace gamescope::config
     // no longer read. ConfigManager.cpp's MigrateV2ToV3() moves an old
     // global.json's sections into a general profile and each games/ file
     // into a game profile (see superdoc/features/profiles.md, "Migration").
-    inline constexpr int kCurrentSchemaVersion = 3;
+    //
+    // 3 -> 4 (2026-09-08): reshade.vibrancy renamed to reshade.saturation --
+    // the effect's maths is UNCHANGED, only the name (the user's own
+    // observation: it behaved like an iPhone "Saturation" slider, not a
+    // "Vibrancy" one). A brand new "vibrancy" effect was added in the same
+    // change (ReshadeVibrancySettings below), so the old key could not just
+    // be left alone: it would be silently reread as the new effect's
+    // settings once that key exists. ConfigManager.cpp's Migrate_3_to_4()
+    // renames the JSON object in place, carrying an old file's
+    // enabled/strength/protect_skin_tones forward exactly; the new Vibrancy
+    // effect has no old data to migrate and takes its compiled-in defaults
+    // (off, strength 0.0). See superdoc/features/shader-effects.md's
+    // "Saturation / Vibrancy split" section.
+    inline constexpr int kCurrentSchemaVersion = 4;
 
     struct GamescopeSettings
     {
@@ -274,7 +287,15 @@ namespace gamescope::config
         bool apply_scaling = false;
     };
 
-    struct ReshadeVibrancySettings
+    // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
+    // 3->4 comment above): the user pointed out this effect behaves like an
+    // iPhone "Saturation" slider (a flat multiplier, same relative boost for
+    // every pixel regardless of how saturated it already is), not that
+    // app's "Vibrancy" -- so the NAME moved to match what the effect
+    // actually does, and "Vibrancy" was freed up for a new effect built to
+    // the user's own definition (ReshadeVibrancySettings below). The maths
+    // here is byte-for-byte unchanged by the rename.
+    struct ReshadeSaturationSettings
     {
         bool enabled = false;
         // True saturation multiplier, 0.0..3.0, neutral (image unchanged) at
@@ -287,6 +308,31 @@ namespace gamescope::config
         // has no file to migrate at all).
         float strength = 1.0f;
         bool protect_skin_tones = true;
+    };
+
+    // NEW 2026-09-08 (superdoc/features/shader-effects.md's "Saturation /
+    // Vibrancy split"): boosts a pixel's saturation in proportion to how
+    // saturated it already is -- punchy colours get punchier, near-neutral
+    // colours are left alone -- exactly the user's own stated definition of
+    // "Vibrancy". FLAGGED, not silently resolved: this is the INVERSE of
+    // Apple Photos' usual "Vibrance", which protects already-saturated
+    // colours and boosts muted ones more (the shape ReshadeSaturationSettings
+    // above already had, before this rename). Built exactly as asked; see
+    // the doc for the full discrepancy note.
+    struct ReshadeVibrancySettings
+    {
+        bool enabled = false;
+        // 0.0..2.0, 0.0 neutral (identity, for every pixel, regardless of
+        // its own saturation -- unlike Saturation's multiplier, 0.0 here is
+        // NOT greyscale). Applied in src/shaders/cs_effects_layer0.comp
+        // (effects_common.h's grade()) as:
+        //   gain = 1.0 + strength * saturation      // saturation: 0..1, max(c)-min(c)
+        //   out  = luma + (c - luma) * gain
+        // A grey pixel (saturation 0) has c == luma already, so it is
+        // untouched at any strength; a fully saturated pixel (1.0) gets the
+        // full 1.0 + strength gain. See shader-effects.md for the range
+        // choice and the measured numbers.
+        float strength = 0.0f;
     };
 
     struct ReshadeShadowLiftSettings
@@ -354,6 +400,7 @@ namespace gamescope::config
 
     struct ReshadeSettings
     {
+        ReshadeSaturationSettings saturation;
         ReshadeVibrancySettings vibrancy;
         ReshadePreSharpenSettings pre_sharpen;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;

@@ -909,8 +909,14 @@ TEST_CASE( "a config carrying the removed dock_scale key loads cleanly, and drop
 }
 
 // ---- Requests #2/#3, 2026-09-04: vibrancy range + shadow lift -----------
+//
+// The field under test here is reshade.SATURATION as of 2026-09-08 (renamed
+// from reshade.vibrancy -- see ConfigSchema.h's kCurrentSchemaVersion 3->4
+// comment and shader-effects.md's "Saturation / Vibrancy split"). These
+// cases predate that rename and still describe the 1->2 multiplier-range
+// migration; only the struct field/JSON key they assert into moved.
 
-TEST_CASE( "a fresh config (no file at all) resolves vibrancy strength to neutral (1.0), not greyscale", "[config]" )
+TEST_CASE( "a fresh config (no file at all) resolves saturation strength to neutral (1.0), not greyscale", "[config]" )
 {
     TempConfigHome home;
 
@@ -921,38 +927,38 @@ TEST_CASE( "a fresh config (no file at all) resolves vibrancy strength to neutra
     // to move to 1.0 along with the semantic change, or a fresh install
     // would open with a desaturated screen.
     Settings s = ResolvedSettings();
-    REQUIRE( s.reshade.vibrancy.strength == 1.0f );
+    REQUIRE( s.reshade.saturation.strength == 1.0f );
 }
 
-TEST_CASE( "reshade.vibrancy.strength round-trips across the whole 0.0-3.0 multiplier range", "[config]" )
+TEST_CASE( "reshade.saturation.strength round-trips across the whole 0.0-3.0 multiplier range", "[config]" )
 {
     for ( float flValue : { 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f } )
     {
         TempConfigHome home;
 
         Settings s{};
-        s.reshade.vibrancy.strength = flValue;
+        s.reshade.saturation.strength = flValue;
 
         REQUIRE( SaveSections( s ) );
 
         Settings loaded = LoadSections();
-        REQUIRE( loaded.reshade.vibrancy.strength == flValue );
+        REQUIRE( loaded.reshade.saturation.strength == flValue );
     }
 }
 
 // A freshly-saved config already carries the current schema_version, so it
 // takes the "nothing to migrate" path through Migrate_1_to_2 - this pins
 // that a same-version round trip is a true no-op, not just "close enough".
-TEST_CASE( "a config saved under the current schema round-trips vibrancy strength unmigrated", "[config]" )
+TEST_CASE( "a config saved under the current schema round-trips saturation strength unmigrated", "[config]" )
 {
     TempConfigHome home;
 
     Settings s{};
-    s.reshade.vibrancy.strength = 0.0f; // greyscale under the CURRENT meaning
+    s.reshade.saturation.strength = 0.0f; // greyscale under the CURRENT meaning
     REQUIRE( SaveSections( s ) );
 
     Settings loaded = LoadSections();
-    REQUIRE( loaded.reshade.vibrancy.strength == 0.0f ); // not bumped to 1.0 again
+    REQUIRE( loaded.reshade.saturation.strength == 0.0f ); // not bumped to 1.0 again
 }
 
 // Request #2's actual concern: a schema-1 file (the only schema this fork
@@ -960,8 +966,11 @@ TEST_CASE( "a config saved under the current schema round-trips vibrancy strengt
 // silently reread as full greyscale under the new 0.0-3.0 meaning.
 // Migrate_1_to_2 (ConfigManager.cpp) shifts the whole old range onto the
 // new one by the constant that carries old-neutral to new-neutral (+1.0),
-// then clamps into 0.0..3.0 - exercised here at old min/neutral/max.
-TEST_CASE( "a schema-1 config's vibrancy.strength migrates from the old additive scale to the new multiplier scale", "[config]" )
+// then clamps into 0.0..3.0 - exercised here at old min/neutral/max. The
+// file below still writes the OLD "vibrancy" key (that is what a real
+// schema-1 file has); Migrate_3_to_4 renames it to "saturation" in the
+// same load, after Migrate_1_to_2 has already rescaled the value under it.
+TEST_CASE( "a schema-1 config's vibrancy.strength migrates from the old additive scale to the new multiplier scale, under the renamed key", "[config]" )
 {
     struct Case { float flOld; float flExpectedNew; };
     for ( const Case &c : { Case{ 0.0f, 1.0f }, Case{ -1.0f, 0.0f }, Case{ 1.0f, 2.0f }, Case{ -0.4f, 0.6f } } )
@@ -975,15 +984,20 @@ TEST_CASE( "a schema-1 config's vibrancy.strength migrates from the old additive
         })";
 
         Settings s = ResolvedSettings();
-        REQUIRE( s.reshade.vibrancy.enabled == true );        // unrelated field untouched
-        REQUIRE( s.reshade.vibrancy.strength == c.flExpectedNew );
+        REQUIRE( s.reshade.saturation.enabled == true );        // unrelated field untouched
+        REQUIRE( s.reshade.saturation.strength == c.flExpectedNew );
+        // The NEW Vibrancy effect has no old data to migrate: it must not
+        // pick up the old vibrancy object's fields (wrong shape, wrong
+        // scale) -- it simply takes its own compiled-in defaults.
+        REQUIRE( s.reshade.vibrancy.enabled == false );
+        REQUIRE( s.reshade.vibrancy.strength == 0.0f );
     }
 }
 
 // A config with no schema_version key at all (predates the field itself)
 // takes the same migration path as an explicit schema_version 1 - both
 // predate the vibrancy rename.
-TEST_CASE( "a config with no schema_version field at all also migrates vibrancy.strength", "[config]" )
+TEST_CASE( "a config with no schema_version field at all also migrates vibrancy.strength under the renamed key", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() );
@@ -993,7 +1007,47 @@ TEST_CASE( "a config with no schema_version field at all also migrates vibrancy.
     })";
 
     Settings s = ResolvedSettings();
-    REQUIRE( s.reshade.vibrancy.strength == 1.0f );
+    REQUIRE( s.reshade.saturation.strength == 1.0f );
+}
+
+// The 2026-09-08 rename itself: a schema-3 PROFILE file (the shape every
+// profile on disk was in immediately before this change -- post value-
+// rescale, pre key-rename; Profiles v2 means the "reshade" section lives in
+// profiles/<Name>.json, never in global.json, so the file under test here
+// is a profile file written directly, not global.json) with the OLD
+// "vibrancy" key must load into the renamed "saturation" field without
+// error, and the file must be rewritten under the new key the next time
+// anything saves it (the general "an old config carrying the old key loads
+// fine, and self-heals on next write" contract). Uses SaveSections/
+// LoadSections's own profile name ("T") so this needs no extra helper.
+TEST_CASE( "a schema-3 profile's vibrancy key renames to saturation on load and rewrites on save", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ConfigRoot() + "/profiles/T.json" ) << R"({
+        "schema_version": 3,
+        "name": "T",
+        "kind": "general",
+        "reshade": { "vibrancy": { "enabled": true, "strength": 2.5, "protect_skin_tones": false } }
+    })";
+
+    Settings s = LoadSections();
+    REQUIRE( s.reshade.saturation.enabled == true );
+    REQUIRE( s.reshade.saturation.strength == 2.5f );
+    REQUIRE( s.reshade.saturation.protect_skin_tones == false );
+    REQUIRE( s.reshade.vibrancy.enabled == false );   // new effect, no old data
+    REQUIRE( s.reshade.vibrancy.strength == 0.0f );
+
+    // Self-heal: saving what was just loaded rewrites the profile file
+    // under the current (schema 4) shape -- checked by round-tripping
+    // through the struct, since "vibrancy" now legitimately appears in the
+    // file too (the new effect's own, separate, empty object).
+    REQUIRE( SaveSections( s ) );
+    Settings resaved = LoadSections();
+    REQUIRE( resaved.reshade.saturation.strength == 2.5f );
+    REQUIRE( resaved.reshade.saturation.protect_skin_tones == false );
+    REQUIRE( resaved.reshade.vibrancy.strength == 0.0f );
 }
 
 // Request #3: neutral (disabled, strength 0.0) is the default, so an
@@ -1229,7 +1283,8 @@ TEST_CASE( "global.json carries overlay and the profile pointers, and no per-lay
     const std::string sText = ReadText( GlobalConfigPath() );
     REQUIRE( sText.find( "\"overlay\"" ) != std::string::npos );
     REQUIRE( sText.find( "\"profiles\"" ) != std::string::npos );
-    REQUIRE( sText.find( "\"schema_version\": 3" ) != std::string::npos );
+    // schema 4 (2026-09-08's vibrancy -> saturation rename bumped this from 3).
+    REQUIRE( sText.find( "\"schema_version\": 4" ) != std::string::npos );
     REQUIRE( sText.find( "\"gamescope\"" ) == std::string::npos );
     REQUIRE( sText.find( "FSR" ) == std::string::npos );
 
@@ -1277,12 +1332,12 @@ TEST_CASE( "an inheriting game profile stores only the diff and follows its pare
     Settings comp{};
     comp.gamescope.filter = "FSR";
     comp.gamescope.sharpness = 5;
-    comp.reshade.vibrancy.strength = 1.4f;
+    comp.reshade.saturation.strength = 1.4f;
     REQUIRE( SaveProfile( General( "Comp" ), comp ) );
 
     Settings rust = comp;
     rust.gamescope.sharpness = 9;
-    rust.reshade.vibrancy.enabled = true; // one nested key differs
+    rust.reshade.saturation.enabled = true; // one nested key differs
     REQUIRE( SaveProfile( Game( "Rust", "252490", "Comp" ), rust ) );
 
     // The file holds the two differing keys and nothing else of those
@@ -1298,8 +1353,8 @@ TEST_CASE( "an inheriting game profile stores only the diff and follows its pare
     REQUIRE( oRust.has_value() );
     REQUIRE( oRust->gamescope.filter == "FSR" );
     REQUIRE( oRust->gamescope.sharpness == 9 );
-    REQUIRE( oRust->reshade.vibrancy.strength == 1.4f );
-    REQUIRE( oRust->reshade.vibrancy.enabled );
+    REQUIRE( oRust->reshade.saturation.strength == 1.4f );
+    REQUIRE( oRust->reshade.saturation.enabled );
 
     // Inheritance is live: edit the parent, the child follows -- except
     // where it overrides.
@@ -1435,7 +1490,8 @@ TEST_CASE( "migration: an old global.json's sections become the Default profile,
     REQUIRE( oDefault->notifications.muted );
 
     const std::string sGlobal = ReadText( GlobalConfigPath() );
-    REQUIRE( sGlobal.find( "\"schema_version\": 3" ) != std::string::npos );
+    // schema 4 (2026-09-08's vibrancy -> saturation rename bumped this from 3).
+    REQUIRE( sGlobal.find( "\"schema_version\": 4" ) != std::string::npos );
     REQUIRE( sGlobal.find( "\"last_general\": \"Default\"" ) != std::string::npos );
     REQUIRE( sGlobal.find( "active_profile" ) == std::string::npos );
     REQUIRE( sGlobal.find( "last_applied_profile" ) == std::string::npos );
@@ -1903,7 +1959,7 @@ TEST_CASE( "OverriddenKeys and ResetKeyToInherited track the session profile's o
     ScopedSessionAppId scopedAppId( "252490" );
 
     Settings comp{};
-    comp.reshade.vibrancy.strength = 1.0f;
+    comp.reshade.saturation.strength = 1.0f;
     REQUIRE( SaveProfile( General( "Comp" ), comp ) );
     REQUIRE( SaveProfile( Game( "Rust", "252490", "Comp" ), comp ) );
 
@@ -1915,21 +1971,21 @@ TEST_CASE( "OverriddenKeys and ResetKeyToInherited track the session profile's o
     REQUIRE( SelectProfile( "Rust" ) );
     REQUIRE( OverriddenKeys().empty() );
     Settings edit = ResolvedSettings();
-    edit.reshade.vibrancy.strength = 2.0f;
+    edit.reshade.saturation.strength = 2.0f;
     edit.fps_display.enabled = !edit.fps_display.enabled;
     EnqueueRoutedWrite( edit );
-    REQUIRE( OverriddenKeys() == std::set<std::string>{ "fps_display.enabled", "reshade.vibrancy.strength" } );
+    REQUIRE( OverriddenKeys() == std::set<std::string>{ "fps_display.enabled", "reshade.saturation.strength" } );
 
     const uint64_t ulBefore = ConfigGeneration();
-    REQUIRE( ResetKeyToInherited( "reshade.vibrancy.strength" ) );
+    REQUIRE( ResetKeyToInherited( "reshade.saturation.strength" ) );
     REQUIRE( ConfigGeneration() > ulBefore );
     REQUIRE( OverriddenKeys() == std::set<std::string>{ "fps_display.enabled" } );
-    REQUIRE( ResolvedSettings().reshade.vibrancy.strength == 1.0f );
+    REQUIRE( ResolvedSettings().reshade.saturation.strength == 1.0f );
     REQUIRE( ResolvedSettings().fps_display.enabled == edit.fps_display.enabled );
     FlushPendingWrites();
-    REQUIRE( LoadProfile( "Rust" )->reshade.vibrancy.strength == 1.0f );
-    REQUIRE( ReadText( ProfilePath( "Rust" ) ).find( "vibrancy" ) == std::string::npos );
-    REQUIRE_FALSE( ResetKeyToInherited( "reshade.vibrancy.strength" ) ); // not overridden any more
+    REQUIRE( LoadProfile( "Rust" )->reshade.saturation.strength == 1.0f );
+    REQUIRE( ReadText( ProfilePath( "Rust" ) ).find( "saturation" ) == std::string::npos );
+    REQUIRE_FALSE( ResetKeyToInherited( "reshade.saturation.strength" ) ); // not overridden any more
     REQUIRE_FALSE( ResetKeyToInherited( "nonsense.key" ) );
 
     // Survives a fresh process: read from the file, not the mirror.
