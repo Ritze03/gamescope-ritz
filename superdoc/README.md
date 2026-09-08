@@ -120,6 +120,10 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   claim of conformance.
 - [Profiles concept](planning/profiles-concept.md) — v2 (2026-09-06, file layer implemented): a profile is the file you edit, general and game profiles, live inheritance, `--profile <name>` for the session; why each decision, what it deleted, the UI still to build.
 - [Feature ideas 2026-09-05](planning/feature-ideas-2026-09-05.md) — prioritised filters (native pre-pass and colour management) and features, with a Top 5.
+- [Steam's Friends window inside gamescope](planning/steam-friends-window.md) — 2026-09-08:
+  the real Friends window belongs to the host's Xwayland and cannot be moved, captured
+  usefully, or clicked from a nested compositor; what *does* work (an interactive overlay
+  on gamescope's own Xwayland, proven end to end) and why Shift+Tab may cover it already.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.
