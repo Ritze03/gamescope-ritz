@@ -228,7 +228,11 @@ namespace gamescope
 		const Friend *pTarget = nullptr;
 		for ( const Friend &f : v.vecFriends )
 		{
-			if ( f.ulSteamId == s_ulPendingSteamId && f.CanJoin() )
+			// The app id is checked as well as the SteamID: a friend who
+			// left one game for another between the click and this frame is
+			// not the row that was clicked, and joining them anyway would
+			// launch a game the user never picked.
+			if ( f.ulSteamId == s_ulPendingSteamId && f.uAppId == s_uPendingAppId && f.CanJoin() )
 			{
 				pTarget = &f;
 				break;
