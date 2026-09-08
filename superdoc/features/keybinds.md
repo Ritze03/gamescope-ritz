@@ -49,15 +49,29 @@ larger job with a different risk profile.
 | `shell` | Open settings | `RShift` |
 | `shell_alt` | Open settings (alternate) | `Ctrl+Shift+O` |
 | `launcher` | Open launcher | `LCtrl+RShift` |
-| `companion` | Open Steam chat | `Ctrl+Shift+Tab` |
+| `companion` | Open Steam chat | `Ctrl+Shift+C` |
+| `friends` | Open friends list | `Ctrl+Shift+Tab` |
 
 `companion` was added 2026-09-08 with the Steam chat overlay
-([steam-companion.md](steam-companion.md)). Its default is deliberately
-**Steam's own overlay chord for the friends list**: gamescope swallows the key
-before anything downstream sees it, so neither the game nor Steam's overlay can
-be reached by it here, and the muscle memory is already the right one. The
-chord is not reserved and not special — it is a row like the other three, and
-rebinding or reusing it follows exactly the same conflict rule.
+([steam-companion.md](steam-companion.md)), and `friends` later the same day
+with the join list ([steam-friends.md](steam-friends.md)).
+
+**`Ctrl+Shift+Tab` belongs to `friends`, and that is the whole reason
+`companion` moved to `Ctrl+Shift+C`.** That chord is Steam's own overlay chord
+for the friends list, so the muscle memory is already right — and until the
+join list existed it was held by a browser that explicitly *cannot* join
+anybody. Using it here is not a conflict with Steam: gamescope swallows the key
+before anything downstream sees it, so neither the game nor Steam's own overlay
+can be reached by it. Neither chord is reserved or special — both are rows like
+the other three, and swapping them back means moving `friends` off
+`Ctrl+Shift+Tab` first, because the conflict rule refuses two actions on one
+chord.
+
+`Why the friends binding is a toggle rather than an opener:` pressed again
+while the friends area is the one on screen, it closes the overlay instead of
+re-selecting what is already selected. A key that can only open would leave the
+user hunting for a second key to get their game back. `wlserver.cpp` asks
+`ui::shell::AreaActive( "system.friends" )` to tell the two cases apart.
 
 `Why two shell actions rather than one action with two chords:` the settings
 grammar is one row per value. A list-valued row would need a row per element

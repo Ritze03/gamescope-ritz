@@ -40,8 +40,6 @@
 #include "UI/Colors.h"
 #include "UI/Controls.h"
 
-#include "imgui.h"
-
 namespace gamescope
 {
 	namespace
@@ -49,31 +47,16 @@ namespace gamescope
 		using steamfriends::Friend;
 		using steamfriends::Joinability;
 
-		// ---- the cached view -------------------------------------------------
-		// steamfriends::CurrentView() never blocks (it copies what the poller
-		// thread published), but it is asked once per frame and the answer is
-		// wanted by Items(), the verbs, the summary and the facts -- so it is
-		// read once into here and shared. `Why not just call it four times:`
-		// four calls in one frame could see four different lists, and the
-		// index a click produced would then be looked up in a list that had
-		// already moved.
-		steamfriends::View s_View;
-		uint64_t           s_ulViewFrame = 0;
-
-		const steamfriends::View &ViewNow()
-		{
-			// One read per frame, keyed on ImGui's own frame counter. Outside
-			// a frame (the console thread's `overlay_e2_get`) the counter does
-			// not move, which is exactly right: a script reads the same list
-			// the last frame drew.
-			const uint64_t ulFrame = (uint64_t)ImGui::GetFrameCount();
-			if ( ulFrame != s_ulViewFrame || !s_View.bPolled )
-			{
-				s_ulViewFrame = ulFrame;
-				s_View = steamfriends::CurrentView();
-			}
-			return s_View;
-		}
+		// ---- reading the poller ----------------------------------------------
+		// EVERY read goes through steamfriends::CurrentView(), which copies
+		// the poller's published rows under its own lock and returns. This
+		// file keeps NO cache of its own, deliberately: the getters here run
+		// on the draw thread AND -- through `overlay_e2_get` / `overlay_e2_set`
+		// -- on the console thread, and a std::vector<Friend> cached in a
+		// static would be written by one while the other reads it. Copying a
+		// few dozen small rows a handful of times a frame is not a cost worth
+		// buying a data race with.
+		steamfriends::View ViewNow() { return steamfriends::CurrentView(); }
 
 		// ---- selection and the pending join ---------------------------------
 		// -1 is "nothing selected". The index addresses ViewNow().vecFriends,
@@ -90,12 +73,14 @@ namespace gamescope
 
 		bool ListIsEmpty() { return ViewNow().vecFriends.empty(); }
 
-		const Friend *SelectedFriend()
+		// By VALUE, not by pointer: the view it came out of is a temporary,
+		// and a pointer into it would dangle the moment the caller used it.
+		std::optional<Friend> SelectedFriend()
 		{
-			const steamfriends::View &v = ViewNow();
+			const steamfriends::View v = ViewNow();
 			if ( s_nSelected < 0 || (size_t)s_nSelected >= v.vecFriends.size() )
-				return nullptr;
-			return &v.vecFriends[ (size_t)s_nSelected ];
+				return std::nullopt;
+			return v.vecFriends[ (size_t)s_nSelected ];
 		}
 
 		// The app id this session is running under, as a number. nullopt when
@@ -131,7 +116,7 @@ namespace gamescope
 		// short.
 		std::vector<ui::ListItem> Items()
 		{
-			const steamfriends::View &v = ViewNow();
+			const steamfriends::View v = ViewNow();
 
 			std::vector<ui::ListItem> items;
 			if ( v.vecFriends.empty() )
@@ -170,7 +155,7 @@ namespace gamescope
 		// modal are both illegal, so the acting is Tick()'s job.
 		void ActivateRow( int nIndex )
 		{
-			const steamfriends::View &v = ViewNow();
+			const steamfriends::View v = ViewNow();
 			if ( nIndex < 0 || (size_t)nIndex >= v.vecFriends.size() )
 			{
 				// The placeholder row (an empty list is one item of text).
@@ -215,11 +200,11 @@ namespace gamescope
 		{
 			if ( ListIsEmpty() )
 				return steamfriends::CurrentView().sStatus;
-			const Friend *pSel = SelectedFriend();
-			if ( !pSel )
+			const std::optional<Friend> oSel = SelectedFriend();
+			if ( !oSel )
 				return "Pick somebody in the list first.";
-			if ( !pSel->CanJoin() )
-				return "They're " + std::string( steamfriends::JoinabilityText( pSel->eJoinable ) ) + ".";
+			if ( !oSel->CanJoin() )
+				return "They're " + std::string( steamfriends::JoinabilityText( oSel->eJoinable ) ) + ".";
 			return "";
 		}
 	}
@@ -239,7 +224,7 @@ namespace gamescope
 		// Find the row the click was AIMED at, not the row at that index now:
 		// the poller may have replaced the list in between, and joining
 		// whoever happened to land on index 2 is the bug that would produce.
-		const steamfriends::View &v = ViewNow();
+		const steamfriends::View v = ViewNow();
 		const Friend *pTarget = nullptr;
 		for ( const Friend &f : v.vecFriends )
 		{
@@ -339,12 +324,12 @@ namespace gamescope
 				} )
 			.Live( "selected", []
 				{
-					const Friend *p = SelectedFriend();
-					if ( !p )
+					const std::optional<Friend> o = SelectedFriend();
+					if ( !o )
 						return ui::Fact{ "selected", "nobody" };
 					return ui::Fact{ "selected",
-						p->sGame + ( p->CanJoin() ? " - joinable"
-							: " - " + std::string( steamfriends::JoinabilityText( p->eJoinable ) ) ) };
+						o->sGame + ( o->CanJoin() ? " - joinable"
+							: " - " + std::string( steamfriends::JoinabilityText( o->eJoinable ) ) ) };
 				} )
 			.Live( "updated", []
 				{

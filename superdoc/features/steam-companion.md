@@ -1,9 +1,23 @@
 # Steam chat companion overlay
 
-**2026-09-08.** `Ctrl+Shift+Tab` opens Steam's web chat over the game, in a
+**2026-09-08.** `Ctrl+Shift+C` opens Steam's web chat over the game, in a
 browser gamescope launches on its **own** Xwayland and then promotes to a
 fullscreen, clickable, typeable overlay. Press it again and it goes away and the
 game has the keyboard back.
+
+> **The chord moved, later the same day.** This used to be `Ctrl+Shift+Tab`.
+> That is Steam's own friends-list muscle memory, and this fork now *has* a
+> friends list you can actually join people from —
+> **[steam-friends.md](steam-friends.md)** — so the chord went to the feature
+> that can use it. This one is `Ctrl+Shift+C`, for Chat. Both are editable
+> under **Setup > Keybinds**; swapping them back means moving `friends` off
+> `Ctrl+Shift+Tab` first, because the conflict rule refuses two actions on one
+> chord.
+
+> **If what you want is to JOIN a friend, this is the wrong page.** The web
+> chat client has no join button and never will — see
+> [steam-friends.md](steam-friends.md), which reads the running Steam client
+> directly and can. This page is for *talking*.
 
 Code: `src/SteamCompanion.{h,cpp}` (the runtime),
 `src/SteamCompanionCmd.h` (the pure rules), `src/Keybinds.cpp`'s `companion`
@@ -31,7 +45,7 @@ interactive page, hosted as an overlay. The honest limitations, all of them:
 |---|---|
 | **A separate sign-in** | The browser profile is not the Steam client's session. You sign in once, with Steam Guard, and tick *Remember me*. Easiest done on your desktop against the same profile folder (`~/.config/gamescope-ritz/companion-browser`) before you ever open it in a game. |
 | **No voice** | It is the web client. There is no voice chat in it. |
-| **No game invites** | Same reason. You can talk; you cannot invite or join from here. |
+| **No game invites** | Same reason. You can talk; you cannot invite or join from here. **[The friends list](steam-friends.md) can join** — it does not go through a browser at all. |
 | **No message notifications** | A new message does not raise a toast in gamescope. You find out when you open it. |
 | **It is a browser** | A few hundred MB of RSS and some GPU work while your game runs, from the first press until gamescope exits. |
 
@@ -141,7 +155,7 @@ that.
 ## Settings
 
 **Settings → System → Steam chat** (`system.companion`), and the hotkey under
-**Setup → Keybinds** (`companion`, default `Ctrl+Shift+Tab` —
+**Setup → Keybinds** (`companion`, default `Ctrl+Shift+C` —
 [keybinds.md](keybinds.md)).
 
 | row | key | default |
@@ -161,7 +175,7 @@ too.
 
 `Why the switch defaults to on:` the chord is bound by default and is swallowed
 whatever the switch says — the hotkey layer fires before any of this is
-consulted. Defaulting to off would make `Ctrl+Shift+Tab` a key that is taken
+consulted. Defaulting to off would make `Ctrl+Shift+C` a key that is taken
 from the game *and* does nothing. Off still answers the press, with a toast
 naming this switch and the Keybinds area, rather than silence.
 

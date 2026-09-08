@@ -445,7 +445,8 @@ Three consequences worth carrying forward:
   from the same declaration agrees with itself. Layout is the live probe's job;
   control flow is the stub's. Keep both.
 
-`Still unproven:` **`m_steamIDLobby`'s offset in `FriendGameInfo_t`.** Nobody in
+`Still unproven, and phase 3 was designed around it:` **`m_steamIDLobby`'s
+offset in `FriendGameInfo_t`.** Nobody in
 the friends list was in a joinable lobby at any moment sampled, and a wrong
 offset reads as zero just like an absent lobby does. `m_gameID`'s offset in the
 same struct *is* confirmed. The code deliberately does **not** filter on a
@@ -545,6 +546,35 @@ Phase 3 is visible, not before.
 **Phase 5 — docs.** `superdoc/features/steam-friends.md`, a line in `superdoc/README.md`,
 a `CHANGELOG.md` bullet under **Added**, and — if the user then wants the browser companion
 gone — a separate commit for that, never folded into this one.
+
+**Phases 3, 4 and 5 landed 2026-09-08** — `src/Overlay/PanelFriends.{h,cpp}`, the
+poller in `src/SteamFriends.{h,cpp}`, `ui::shell::RequestArea()`/`AreaActive()`,
+the `friends` keybind action, and
+[`../features/steam-friends.md`](../features/steam-friends.md). Evidence:
+`build-release/verify-shots/steam-friends-phase345-2026-09-08/results.txt`
+(43 checks, 0 failed). **Three things went differently from the sketch above,
+and each is recorded where it was decided:**
+
+- **The list shows EVERY friend in a game, not only the joinable ones.** The
+  sketch's filter would make an empty panel and a broken read
+  indistinguishable, because a wrong `m_steamIDLobby` offset — the one thing
+  [§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot) says
+  is still unproven — reads as zero exactly like "not in a lobby". Rows that
+  cannot be joined carry the reason instead. See the feature doc's *"Why the
+  list shows every friend in a game"*.
+- **The chord question in phase 4 was decided rather than deferred.**
+  `friends` takes `Ctrl+Shift+Tab` (Steam's own friends-list muscle memory,
+  and the chord the user asked for), and `companion` — a browser that
+  explicitly cannot join anybody ([§4](#4-what-the-shipped-companion-is-actually-worth))
+  — moved to `Ctrl+Shift+C`.
+- **The poll is a worker thread, not a slow tick on steamcompmgr.** §6d's
+  threading rule said "on the steamcompmgr thread at a low poll rate, or on a
+  worker"; the first of those is the frame path, so it had to be the second.
+  The panel reads a published `View` under a different mutex from the one
+  `Snapshot()` holds, which is what makes "the panel blocks on Steam"
+  unrepresentable. Measured against a stub that sleeps 1.5 s per call: under
+  15 ms worst case in a unit test, and 12 frames in six seconds either way in
+  the live harness.
 
 **Deliberately not in the sketch:** no Web API key anywhere, no bundled Steamworks SDK
 headers, no `SteamAPI_Init` (route B), no browser, no capture protocol, no second Steam

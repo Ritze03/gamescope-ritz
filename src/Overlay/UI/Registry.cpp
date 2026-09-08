@@ -887,8 +887,18 @@ namespace gamescope::ui
 			{ "system.hud",            RailGroup::Misc },
 			{ "audio.mixer",           RailGroup::Misc },
 			{ "system.crosshair",      RailGroup::Misc },
+			// The friends list sits with the other things that appear OVER
+			// the game on a hotkey rather than with the configuration pages;
+			// it is a surface you use mid-match, not a page you set up once.
+			{ "system.friends",        RailGroup::Misc },
 			{ "setup.profiles",        RailGroup::Settings },
 			{ "system.general",        RailGroup::Settings },
+			// system.companion was registered on 2026-09-08 and never placed
+			// here, so it fell through to OTHER at the bottom of the rail with
+			// the Log and the Changelog. It is a settings page for a browser
+			// command, so it belongs next to the clipboard bridge above it --
+			// the other "gamescope talking to something outside itself" page.
+			{ "system.companion",      RailGroup::Settings },
 			{ "setup.appearance",      RailGroup::Settings },
 			{ "setup.cursor",          RailGroup::Settings },
 			{ "setup.keybinds",        RailGroup::Settings },

@@ -12,6 +12,11 @@ The newest version below is the one this build reports.
 ## [0.6.2] – 2026-09-08
 
 ### Added
+- **Friends you can join**: Ctrl+Shift+Tab opens a list of the friends who are in a
+  game, read straight from the Steam client already running on your machine -- no
+  second sign-in, no browser and nothing to set up. A friend in a lobby you can join
+  is marked, and clicking them asks Steam to move you in; joining somebody in the game
+  you are already in happens straight away, while joining a different game asks first.
 - **Bloom**: a new Shaders effect that adds a soft glow around bright areas -- a look
   for atmospheric games rather than for competitive clarity -- with Threshold, Intensity
   and Radius to tune it, off by default, and blended so it can never blow a bright area
@@ -115,6 +120,10 @@ The newest version below is the one this build reports.
   letterboxed picture instead of the full screen.
 
 ### Info
+- **The Steam chat hotkey moved to Ctrl+Shift+C**: Ctrl+Shift+Tab now opens the new
+  friends list instead, since that is Steam's own friends-list shortcut and the web
+  chat cannot join anybody. Both are yours to change under Settings > Setup >
+  Keybinds.
 - **Adaptive Brightness min/max gain range widened**: Min gain now goes down to 0.3
   (was 0.5) and Max gain up to 4.0 (was 2.0); both sliders now default to their new
   extreme instead of the old one. An existing config keeps whatever value it already
