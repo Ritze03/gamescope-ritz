@@ -1,9 +1,9 @@
 #version 460
 
 // cs_effects_layer0.comp -- the bundled "Shaders" area effects (Shadow
-// Control, Saturation, Vibrancy, Pre-Sharpen, Adaptive Brightness, Adaptive
-// Gamma) as one native compute pre-pass over the base/game layer, at source
-// resolution,
+// Control, Saturation, Vibrancy, Pre-Sharpen, Bloom, Adaptive Brightness,
+// Adaptive Gamma) as one native compute pre-pass over the base/game layer, at
+// source resolution,
 // before any scaling. Compiled at BUILD time by src/meson.build's glsl_generator into
 // cs_effects_layer0.h -- a GLSL error here fails the build, which is the
 // whole point of this port (superdoc/planning/DECISIONS.md #27): the
@@ -80,7 +80,44 @@ void main()
     else
         c = FsrRcasLoadF(ivec2(pos)).rgb;
 
-    // 4. Adaptive Brightness. The statistics are what cs_effects_measure.comp
+    // 4. Bloom (NEW 2026-09-08): the glow. Everything expensive already
+    //    happened -- three dispatches built an eighth-resolution buffer of
+    //    the blurred bright pass (cs_effects_bloom_down.comp, then
+    //    effects_bloom_blur.h horizontally and vertically) -- so all that is
+    //    left here is one bilinear read of it and the composite.
+    //
+    //    SCREEN, NOT ADD, and Intensity as an exponent on the transmitted
+    //    light rather than a multiplier on the glow:
+    //      out = 1 - (1 - base) * (1 - glow)^intensity
+    //    which maps [0,1] back into [0,1] at EVERY intensity, so adding
+    //    light cannot clip -- see effects_curve.h's BLOOM block, including
+    //    what the obvious screen(base, glow * intensity) would have done to
+    //    the same frames. It also puts the light where it belongs:
+    //    the amount added is scaled by the headroom the pixel underneath
+    //    still has, so the bright source at the centre of a glow (the thing
+    //    a naive additive bloom always blows out) keeps its own value while
+    //    the dark field around it takes the light.
+    //
+    //    WHERE IT SITS, AND WHY HERE. After Pre-Sharpen, before both
+    //    adaptive effects. The glow is built from grade()'s output, so it
+    //    carries the same colour grade the picture does; it is not sharpened
+    //    (a 5-tap cross is invisible after an 8x reduction); and putting it
+    //    BEFORE the adaptive block means the adaptive operators treat the
+    //    bloomed picture as the picture -- the glow scales with the exposure
+    //    they choose instead of floating on top at a fixed level, and
+    //    Dynamic's shoulder rolls the added highlights off for free. There
+    //    is no feedback: cs_effects_measure.comp reads the RAW base layer
+    //    and grades its taps with grade() alone, so the statistics never see
+    //    the glow and a brighter frame can never turn its own bloom down.
+    if ((u_flags & EFFECT_BLOOM) != 0u)
+    {
+        vec3 glow = bloom_sample(vec2(pos) + 0.5);
+        c = vec3(bloom_apply(c.r, glow.r, u_bloomIntensity),
+                 bloom_apply(c.g, glow.g, u_bloomIntensity),
+                 bloom_apply(c.b, glow.b, u_bloomIntensity));
+    }
+
+    // 5. Adaptive Brightness. The statistics are what cs_effects_measure.comp
     //    wrote to the history THIS frame (the host orders and barriers the
     //    two dispatches); the reset frame writes the measurements directly,
     //    so a fresh texture is never read here, and the measure pass
@@ -135,7 +172,7 @@ void main()
         }
     }
 
-    // 5. Adaptive Gamma (NEW 2026-09-08). The same smoothed statistics, and
+    // 6. Adaptive Gamma (NEW 2026-09-08). The same smoothed statistics, and
     //    ONE exponent: no levels gain, no shoulder, no white point. For an
     //    encoded value in 0..1 a pure exponent lands back in 0..1 with 0 and
     //    1 as exact fixed points, so this operator cannot clip at any

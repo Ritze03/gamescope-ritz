@@ -12,6 +12,10 @@ The newest version below is the one this build reports.
 ## [0.6.2] – 2026-09-08
 
 ### Added
+- **Bloom**: a new Shaders effect that adds a soft glow around bright areas -- a look
+  for atmospheric games rather than for competitive clarity -- with Threshold, Intensity
+  and Radius to tune it, off by default, and blended so it can never blow a bright area
+  out to pure white however high Intensity goes.
 - **Adaptive Gamma**: a new Shaders effect that adapts the picture's contrast with a
   single gamma curve instead of a brightness gain, so black and white stay exactly where
   they are and highlights can never blow out. Turning it on turns Adaptive Brightness

@@ -25,10 +25,12 @@ Subcommands
                                          must approach the settled value monotonically
     ablog   <file> <what>                per-frame `effects_ab_log` lines (gamescope's
                                          console log); `what` is static | pan | transition
-                                         | panlocal | agstatic | agpan | bind (the last
-                                         three are Adaptive Gamma's, 2026-09-08: the same
-                                         stability bars applied to its ONE exponent, plus
-                                         an INFO line naming the binding limit)
+                                         | panlocal | agstatic | agpan | bind | bloomstatic
+                                         (agstatic/agpan/bind are Adaptive Gamma's,
+                                         2026-09-08: the same stability bars applied to
+                                         its ONE exponent, plus an INFO line naming the
+                                         binding limit; bloomstatic is Bloom's -- a still
+                                         frame must produce a bit-identical output pixel)
     noclip  <image> <scene> <label>      Adaptive Gamma's no-clipping property: bands stay
                                          ordered and apart, near-white highlights stay
                                          below white, black stays black
@@ -38,6 +40,26 @@ Subcommands
                                          effect's per-band output against the closed-
                                          form formula; `effect` is off | saturation |
                                          vibrancy
+    bloomflat <image>                    BLOOM (2026-09-08): the control -- with the
+                                         effect off, haloinv's flat field must come out
+                                         flat, which is what makes every profile below
+                                         a statement about the glow and not the capture
+    bloomline <label> <mode> <img...>    the line profile out from haloinv's bright box,
+                                         over one swept knob; `mode` is extent (the glow
+                                         must reach further each step), amp-up (it must
+                                         get brighter) or amp-down (dimmer)
+    bloomnoclip <image> <scene> <label>  Bloom's no-clip property: the bands stay
+                                         strictly ordered and nothing whose input was
+                                         below white comes out ON white
+    bloomsame <image-a> <image-b> <scene>
+                                         two captures of the same scene must agree on
+                                         every region away from a bright source -- the
+                                         "bloom changes nothing it should not" check
+    bloomjitter <label> <n-off> <img...> the first n-off captures are bloom-off and the
+                                         rest bloom-on, all of one PANNING --periodic
+                                         scene: turning bloom on must not widen the
+                                         frame mean's frame-to-frame spread (the
+                                         threshold-shimmer question, as a number)
     colorshape <image-saturation> <image-vibrancy>
                                          the same "colors" capture under Saturation and
                                          under Vibrancy at the same nominal strength:
@@ -383,6 +405,203 @@ def cmd_noclip(args):
     sys.exit(0 if emit(not failed, f"noclip-{scene}-{label}", detail) else 1)
 
 
+# ---- Bloom (2026-09-08) ---------------------------------------------------
+#
+# Measured on the `haloinv` scene, which is already exactly what a bloom test
+# wants and was built for something else: one flat 220 box, 320x320, centred
+# on a flat 15 field. A distinct bright source on a dark field, with a hard
+# straight edge at a known x -- so the glow can be walked out from that edge
+# along the box's own centre line and reported as a profile rather than as an
+# impression.
+#
+# Its own distance list, finer than the halo checks' near the edge, because
+# the quantity of interest is where the glow FALLS OFF: at Radius 0 the blur
+# sigma is 8 source pixels and at Radius 1 it is 24, so the interesting range
+# is 4..128 px and everything past that is the far field.
+BLOOM_DISTANCES = [4, 8, 16, 32, 64, 128, 256, 460]
+BLOOM_FLOOR = 2.0   # counts over the far field that still count as "glowing"
+
+
+def bloom_profile(img):
+    """The field's value at each BLOOM_DISTANCES step out from the bright
+    box's right edge, along its centre line."""
+    sx, sy = img.width / W, img.height / H
+    cy = img.height // 2
+    out = []
+    for d in BLOOM_DISTANCES:
+        x = int((HALO_EDGE_X + d) * sx)
+        out.append(grey(region_mean(img, (x - 5, cy - 9, x + 5, cy + 9), inset=1)))
+    return out
+
+
+def bloom_extent(prof):
+    """How far the glow reaches, in source pixels: the distance at which the
+    profile last falls to BLOOM_FLOOR counts above the far field, linearly
+    interpolated between the two samples that straddle it. 0 when nothing
+    ever rises that far above the field."""
+    far = prof[-1]
+    amps = [v - far for v in prof]
+    if amps[0] < BLOOM_FLOOR:
+        return 0.0
+    for i in range(1, len(amps)):
+        if amps[i] < BLOOM_FLOOR:
+            a, b = amps[i - 1], amps[i]
+            da, db = BLOOM_DISTANCES[i - 1], BLOOM_DISTANCES[i]
+            f = (a - BLOOM_FLOOR) / max(a - b, 1e-6)
+            return da + f * (db - da)
+    return float(BLOOM_DISTANCES[-1])
+
+
+def cmd_bloomflat(args):
+    """The control. haloinv's field is flat by construction, so with Bloom
+    off it must come out flat -- if it does not, every profile below is
+    measuring the capture path rather than the effect."""
+    prof = bloom_profile(load(args[0]))
+    spread = max(prof) - min(prof)
+    body = " ".join(f"d{d}={v:.1f}" for d, v in zip(BLOOM_DISTANCES, prof))
+    sys.exit(0 if emit(spread <= 1.5, "bloom-off-flat",
+                       f"flat field stays flat, spread {spread:.1f} counts; {body}") else 1)
+
+
+def cmd_bloomline(args):
+    """bloomline <label> <mode> <img...> -- one knob swept in increasing
+    order, measured as the glow's line profile out from the bright box.
+
+    Three different statements, because the three params do three different
+    things and a single "the picture changed" bar would not distinguish them:
+
+      extent    Radius. The glow must reach FURTHER at every step -- the
+                distance at which it falls back into the field, not its
+                brightness, which barely moves (a wider Gaussian spreads the
+                same light).
+      amp-up    Intensity. The glow must get BRIGHTER right beside the source
+                at every step, while its reach does not have to change.
+      amp-down  Threshold. Raising it must make less of the source count as
+                emitting, so the glow beside it must get DIMMER at every
+                step. Reported alongside the extent so a threshold that
+                accidentally acted like a radius would be visible.
+    """
+    label, mode = args[0], args[1]
+    profs = [bloom_profile(load(p)) for p in args[2:]]
+    fars = [p[-1] for p in profs]
+    near = [p[0] - p[-1] for p in profs]
+    extents = [bloom_extent(p) for p in profs]
+    body = ("near-edge amplitude " + " -> ".join(f"{v:+.1f}" for v in near)
+            + "; extent " + " -> ".join(f"{v:.0f}px" for v in extents)
+            + "; far field " + " ".join(f"{v:.1f}" for v in fars)
+            + "; profiles " + " | ".join(" ".join(f"{v:.1f}" for v in p) for p in profs))
+    if mode == "extent":
+        steps = [extents[i + 1] - extents[i] for i in range(len(extents) - 1)]
+        ok = all(d > 0.0 for d in steps)
+        detail = f"(each step must reach further) {body}"
+    elif mode == "amp-up":
+        steps = [near[i + 1] - near[i] for i in range(len(near) - 1)]
+        ok = all(d > 1.0 for d in steps)
+        detail = f"(each step must add > 1 count beside the source) {body}"
+    elif mode == "amp-down":
+        steps = [near[i + 1] - near[i] for i in range(len(near) - 1)]
+        ok = all(d < -1.0 for d in steps)
+        detail = f"(each step must remove > 1 count beside the source) {body}"
+    else:
+        print(f"FAIL\t{label}\tunknown bloomline mode '{mode}'", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0 if emit(ok, label, detail) else 1)
+
+
+def cmd_bloomsame(args):
+    """bloomsame <image-a> <image-b> <scene> -- every sampled region of the
+    two captures must agree. Used to state, as a measurement rather than as
+    an argument, that turning Bloom on leaves the parts of the picture that
+    are away from any bright source exactly where they were: the `dark`
+    scene's five bands are sampled at x 1150..1270, and its nearest 240
+    highlight ends at x = 1070 -- 80 source pixels away, five sigma at the
+    default Radius. Its pure-black corner is further still."""
+    a, b, scene = load(args[0]), load(args[1]), args[2]
+    va, vb = regions(a, scene), regions(b, scene)
+    keys = [f"band{i}" for i in range(5)] + (["black"] if "black" in va else [])
+    diffs = {k: vb[k] - va[k] for k in keys}
+    worst = max(abs(d) for d in diffs.values())
+    sys.exit(0 if emit(worst <= 1.0, f"bloom-unchanged-{scene}",
+                       f"worst change away from a source {worst:.2f} counts (<= 1.0); "
+                       + " ".join(f"{k}={va[k]:.1f}->{vb[k]:.1f}" for k in keys)) else 1)
+
+
+def cmd_bloomnoclip(args):
+    """bloomnoclip <image> <scene> <label> -- BLOOM's no-clip property,
+    stated as exactly what the composite promises and no more.
+
+    It is deliberately NOT `noclip` above, which Adaptive Gamma uses: that
+    check also demands every band stay >= 2 counts from its neighbour, which
+    is a statement about an exponent that leaves the ends alone, not about an
+    operator whose whole job is to ADD light. Bloom at the top of its
+    Intensity slider legitimately pushes a 245 band to within a count of the
+    255 one; what it must never do is put something that was below white ON
+    white. So this asserts:
+
+      * the bands stay strictly ordered -- nothing is compressed INTO its
+        neighbour, even where the gap narrows;
+      * every region whose INPUT was below 255 reads at most 254 -- the
+        no-clip statement itself;
+      * the `dark` scene's 240 highlights stay above every band and its pure
+        black corner stays black (a glow far from any source adds nothing);
+      * the `bright` scene's 30-code shadows stay below every band.
+    """
+    image, scene, label = args
+    sc = SCENES[scene]
+    vals = regions(load(image), scene)
+    bands = [vals[f"band{i}"] for i in range(5)]
+    checks = []
+    for i in range(4):
+        checks.append((f"band{i} < band{i + 1} ({bands[i]:.1f} vs {bands[i + 1]:.1f})",
+                       bands[i + 1] > bands[i]))
+    for i in range(5):
+        if sc["bands"][i] < 255:
+            checks.append((f"band{i} (input {sc['bands'][i]}) stays off white "
+                           f"({bands[i]:.1f} <= 254)", bands[i] <= 254.0))
+    if "rect" in vals:
+        if sc["rect"] > max(sc["bands"]):
+            checks.append((f"the {sc['rect']} highlights stay off white ({vals['rect']:.1f} <= 254)",
+                           vals["rect"] <= 254.0))
+            checks.append((f"the {sc['rect']} highlights stay above every band "
+                           f"({vals['rect']:.1f} > {bands[4]:.1f})", vals["rect"] > bands[4]))
+        else:
+            checks.append((f"the {sc['rect']} shadows stay below every band "
+                           f"({vals['rect']:.1f} < {bands[0]:.1f})", vals["rect"] < bands[0]))
+    if "black" in vals:
+        checks.append((f"pure black stays black ({vals['black']:.1f} <= 2)", vals["black"] <= 2.0))
+
+    failed = [c for c, ok in checks if not ok]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(vals)
+    sys.exit(0 if emit(not failed, f"bloom-noclip-{scene}-{label}", detail) else 1)
+
+
+def cmd_bloomjitter(args):
+    """bloomjitter <label> <n-off> <img...> -- THE SHIMMER QUESTION, as a
+    number. A threshold effect can flicker when a pixel sits on the boundary:
+    under camera motion the pixel crosses the cut, its whole contribution
+    switches, and a field of such switches crawls.
+
+    The captures are of one PANNING --periodic scene, so the frame's true
+    light population is identical every frame and only the layout moves. The
+    first <n-off> are with Bloom off and are the baseline: they carry the
+    capture path's own noise plus whatever the pan itself does to the frame
+    mean. The rest are with Bloom on. If the bright pass shimmered, the "on"
+    spread would be the larger of the two -- so the check is that it is not
+    (within half a count of tolerance), which is a statement about the
+    effect rather than about the harness."""
+    label, n_off = args[0], int(args[1])
+    vals = [frame_mean(p) for p in args[2:]]
+    off, on = vals[:n_off], vals[n_off:]
+    s_off = max(off) - min(off)
+    s_on = max(on) - min(on)
+    ok = s_on <= s_off + 0.5
+    emit(ok, label,
+         f"{len(off)} frames off: spread {s_off:.3f} counts ("
+         + " ".join(f"{v:.2f}" for v in off) + "); "
+         + f"{len(on)} frames on: spread {s_on:.3f} counts ("
+         + " ".join(f"{v:.2f}" for v in on) + ") -- on must not exceed off + 0.5")
+
+
 def frame_mean(path):
     """The whole frame's mean grey, at a 160x90 downsample. The cheapest
     honest "did the picture move" measure there is: it is what a person sees
@@ -574,6 +793,20 @@ def cmd_ablog(args):
                   f"px p2p={d['px']:.1f} {bounds}; gamma={last['gamma']:.4f} px={last['px']:.0f}; "
                   f"local={last['local']:.2f} map {last['lmin'] * 255:.1f}..{last['lmax'] * 255:.1f} codes "
                   f"exponent {last['gainlo']:.3f}..{last['gainhi']:.3f}; bind={last['bindtext']}")
+    elif what in ("bloomstatic",):
+        # BLOOM on a perfectly still frame. Bloom reads none of the measure
+        # pass's statistics, so nothing here is about adaptation -- what is
+        # being asserted is that the three extra dispatches are a
+        # deterministic function of the frame: same input, same output, every
+        # composite, to the code value. A bright pass that sampled the source
+        # sparsely, or a blur whose weights depended on anything but the
+        # uniform, would show up here as a moving probe pixel.
+        last = rows[-1]
+        d = dict(rp98=p2p(rows, "rp98"), px=p2p(rows, "px"))
+        name = "bloom-stability-static"
+        ok = d["rp98"] <= 0.0 and d["px"] <= 0.0
+        detail = (f"{len(rows)} frames: raw p98 p2p={d['rp98']:.6f} (must be 0), "
+                  f"px p2p={d['px']:.1f} (must be 0); px={last['px']:.0f}")
     elif what == "bind":
         # INFO only: WHICH LIMIT the frame's own classifier says is binding,
         # in the panel's exact words (effects_curve.h names them once and
@@ -761,7 +994,10 @@ def main():
     {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
      "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider,
      "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape, "noclip": cmd_noclip,
-     "means": cmd_means}[cmd](args)
+     "means": cmd_means,
+     "bloomflat": cmd_bloomflat, "bloomline": cmd_bloomline,
+     "bloomsame": cmd_bloomsame, "bloomjitter": cmd_bloomjitter,
+     "bloomnoclip": cmd_bloomnoclip}[cmd](args)
 
 
 if __name__ == "__main__":

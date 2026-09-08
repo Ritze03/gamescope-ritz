@@ -335,6 +335,50 @@ namespace gamescope::config
         float strength = 0.0f;
     };
 
+    // NEW 2026-09-08 (the user: "Add a bloom shader for more casual games").
+    // A glow around bright areas -- aimed at looking good rather than at
+    // competitive clarity, which is why it ships OFF and why its default
+    // Intensity is well under the top of its range. The only SPATIAL effect
+    // in the pre-pass: three extra compute dispatches build an
+    // eighth-resolution blurred bright pass and cs_effects_layer0.comp
+    // SCREENS it back onto the picture (so it cannot clip -- see
+    // src/shaders/effects_curve.h's BLOOM block and
+    // superdoc/features/shader-effects.md).
+    //
+    // Purely additive keys: an old config has none of them, gets these
+    // compiled-in defaults, and needs no schema bump or migration -- the
+    // same shape ReshadeShadowLiftSettings and ReshadeAdaptiveGammaSettings
+    // were added in.
+    struct ReshadeBloomSettings
+    {
+        bool enabled = false;
+        // 0.0..1.0 -- the encoded luma at which a pixel starts to
+        // contribute to the glow. A pixel's contribution is the SQUARE of
+        // how far it is above this, as a fraction of the headroom left
+        // (effects_curve.h's bloom_weight), so it is zero and flat at the
+        // threshold itself -- which is what keeps a pixel sitting on the
+        // boundary from flickering under a pan -- and reaches its full
+        // colour only at pure white.
+        //
+        // 0.75 by default, and the reason it is high is that this pipeline
+        // is SDR: in an HDR renderer only values above 1.0 emit, so a
+        // threshold has something unambiguous to mean. Here every pixel is
+        // already inside 0..1, so a low threshold makes an ordinary bright
+        // wall emit as hard as a lamp. At 0.75 a 200-code surface
+        // contributes about 2 % of its colour and a 240-code light about
+        // 59 %.
+        float threshold = 0.75f;
+        // 0.0..2.0 -- how much of the blurred bright pass is screened back
+        // on. 0.8 by default: enough to read clearly as a glow on a lamp
+        // against a dark room, low enough that a uniformly bright scene
+        // only warms rather than washing out.
+        float intensity = 0.8f;
+        // 0.0..1.0 -- how far the glow spreads. Maps to a blur sigma of
+        // 1..3 glow-buffer texels (effects_curve.h's bloom_sigma), i.e.
+        // 8..24 SOURCE pixels, a visible glow roughly 24..72 pixels across.
+        float radius = 0.5f;
+    };
+
     struct ReshadeShadowLiftSettings
     {
         // Request #3 (2026-09-04): "a darkness booster for dark games" --
@@ -455,6 +499,7 @@ namespace gamescope::config
         ReshadeSaturationSettings saturation;
         ReshadeVibrancySettings vibrancy;
         ReshadePreSharpenSettings pre_sharpen;
+        ReshadeBloomSettings bloom;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
         ReshadeAdaptiveGammaSettings adaptive_gamma;
         ReshadeShadowLiftSettings shadow_lift;

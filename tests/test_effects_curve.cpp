@@ -968,6 +968,247 @@ TEST_CASE( "adaptive gamma: local adaptation is the same operator, inside the sa
 	REQUIRE( gDark <= gGlobal + 1e-6f );
 }
 
+// ===========================================================================
+//  BLOOM (2026-09-08) -- the scalar half of the glow.
+// ===========================================================================
+//
+// Bloom is a SPATIAL effect, so most of it lives in three compute passes and
+// cannot be asserted here. What can be, and is, are the three scalar
+// functions the whole effect is built out of -- the bright-pass gate, the
+// Radius -> sigma mapping and the composite -- because those carry the
+// properties the user is promised: raising Threshold shrinks what glows,
+// raising Radius spreads it further, and adding light can never clip.
+
+TEST_CASE( "bloom: the bright-pass weight is 0 at the threshold, 1 at white, rising between",
+           "[effects_curve]" )
+{
+	for ( int nT = 0; nT <= 19; nT++ )
+	{
+		const float t = (float)nT / 20.0f;
+		REQUIRE_THAT( bloom_weight( 0.0f, t ), WithinAbs( 0.0f, 1e-6f ) );
+		REQUIRE_THAT( bloom_weight( t, t ), WithinAbs( 0.0f, 1e-6f ) );
+		REQUIRE_THAT( bloom_weight( 1.0f, t ), WithinAbs( 1.0f, 1e-6f ) );
+
+		// Monotone increasing in luma, inside [0, 1] everywhere, and still
+		// rising right up to white (no plateau -- a 250-code pixel must not
+		// emit the same as a 255-code one; see the header's note on why not
+		// a smoothstep).
+		float flPrev = -1.0f;
+		for ( int i = 0; i <= 255; i++ )
+		{
+			const float w = bloom_weight( (float)i / 255.0f, t );
+			REQUIRE( w >= -1e-6f );
+			REQUIRE( w <= 1.0f + 1e-6f );
+			REQUIRE( w >= flPrev - 1e-6f );
+			flPrev = w;
+		}
+		REQUIRE( bloom_weight( 1.0f, t ) > bloom_weight( 250.0f / 255.0f, t ) );
+	}
+
+	// THE TOP OF THE SLIDER: at Threshold 1.0 nothing glows at any luma,
+	// which is the right meaning for "the threshold is above everything the
+	// picture can contain" and is what BLOOM_HEADROOM_MIN's guarded divide
+	// produces rather than a NaN.
+	for ( int i = 0; i <= 255; i++ )
+		REQUIRE_THAT( bloom_weight( (float)i / 255.0f, 1.0f ), WithinAbs( 0.0f, 1e-6f ) );
+}
+
+TEST_CASE( "bloom: raising the threshold can only shrink what glows", "[effects_curve]" )
+{
+	// The user-facing statement of the Threshold slider, as an inequality
+	// over every (luma, threshold) pair the panel can produce. Anything else
+	// would make the control ambiguous: a value that starts glowing MORE as
+	// the threshold rises is a bug no capture would obviously catch.
+	for ( int i = 0; i <= 255; i++ )
+	{
+		const float flLuma = (float)i / 255.0f;
+		float flPrev = 2.0f;
+		for ( int nT = 0; nT <= 20; nT++ )
+		{
+			const float w = bloom_weight( flLuma, (float)nT / 20.0f );
+			REQUIRE( w <= flPrev + 1e-6f );
+			flPrev = w;
+		}
+	}
+
+	// And it is a STRICT shrink in the middle, not a flat line: a mid-bright
+	// pixel emits most of its colour at threshold 0.2 and none at 0.9.
+	REQUIRE( bloom_weight( 0.6f, 0.2f ) > 0.2f );
+	REQUIRE_THAT( bloom_weight( 0.6f, 0.9f ), WithinAbs( 0.0f, 1e-6f ) );
+	REQUIRE( bloom_weight( 0.6f, 0.5f ) > 0.0f );
+	REQUIRE( bloom_weight( 0.6f, 0.5f ) < bloom_weight( 0.6f, 0.2f ) );
+}
+
+TEST_CASE( "bloom: the weight is flat at the threshold, which is what keeps it from shimmering",
+           "[effects_curve]" )
+{
+	// A hard threshold changes a pixel's whole contribution the instant it
+	// crosses it; a linear ramp changes it at a constant rate from the very
+	// first code above it. This weight is zero AND has zero slope there, so
+	// a pixel wandering across the boundary under a pan -- the case the
+	// shimmer question is about -- moves by a second-order amount. Asserted
+	// as a Lipschitz bound plus a local flatness check, so a later "sharper
+	// threshold" change fails here rather than in a capture nobody looks at
+	// twice.
+	for ( int nT = 0; nT <= 18; nT++ )
+	{
+		const float t = (float)nT / 20.0f;
+		const float flMaxSlope = 2.0f / ( 1.0f - t );   // d/dx of x^2 at x = 1
+		const float flStep = 1.0f / 4096.0f;
+		for ( int i = 0; i < 4096; i++ )
+		{
+			const float a = bloom_weight( (float)i * flStep, t );
+			const float b = bloom_weight( (float)( i + 1 ) * flStep, t );
+			REQUIRE( std::fabs( b - a ) <= flMaxSlope * flStep + 1e-5f );
+		}
+		// One code above the threshold contributes essentially nothing. A
+		// plain gate would make that first step 1.0 and a linear ramp would
+		// make it x = (1/255)/(1-t); the quadratic makes it x squared, which
+		// is at most a twentieth of the linear ramp's anywhere in this
+		// range. That factor IS the anti-shimmer margin, so it is what gets
+		// asserted rather than an absolute number that would drift with the
+		// threshold.
+		const float flLinear = ( 1.0f / 255.0f ) / ( 1.0f - t );
+		REQUIRE( bloom_weight( t + 1.0f / 255.0f, t ) <= 0.05f * flLinear + 1e-9f );
+	}
+}
+
+TEST_CASE( "bloom: Radius maps monotonically onto the blur's sigma", "[effects_curve]" )
+{
+	REQUIRE_THAT( bloom_sigma( 0.0f ), WithinAbs( BLOOM_SIGMA_MIN, 1e-6f ) );
+	REQUIRE_THAT( bloom_sigma( 1.0f ), WithinAbs( BLOOM_SIGMA_MAX, 1e-6f ) );
+	float flPrev = -1.0f;
+	for ( int i = 0; i <= 20; i++ )
+	{
+		const float s = bloom_sigma( (float)i / 20.0f );
+		REQUIRE( s > flPrev );
+		REQUIRE( s >= BLOOM_SIGMA_MIN );
+		REQUIRE( s <= BLOOM_SIGMA_MAX );
+		flPrev = s;
+	}
+	// Out-of-range inputs clamp rather than extrapolating into a negative or
+	// unbounded sigma (the blur divides by it).
+	REQUIRE_THAT( bloom_sigma( -1.0f ), WithinAbs( BLOOM_SIGMA_MIN, 1e-6f ) );
+	REQUIRE_THAT( bloom_sigma( 5.0f ), WithinAbs( BLOOM_SIGMA_MAX, 1e-6f ) );
+}
+
+TEST_CASE( "bloom: the composite can never clip, at any Intensity, over every 8-bit pair",
+           "[effects_curve]" )
+{
+	// THE HEADLINE PROPERTY. Adding light is the one operation in this
+	// pipeline that naturally blows highlights out, and the composite's
+	// shape is how it is prevented -- not by a clamp afterwards, which would
+	// flatten detail into white, but by an operator whose range IS [0, 1] at
+	// every setting of every knob. Checked exhaustively over all 65,536
+	// 8-bit (base, glow) pairs at each end and the middle of the Intensity
+	// slider: the result is in range, never darkens the picture, is monotone
+	// in the glow, and stays STRICTLY below white wherever the picture was
+	// below white -- which is the statement that failed for the obvious
+	// screen(base, glow * intensity) at intensity 2 and is why this shape
+	// exists (see effects_curve.h's BLOOM block).
+	for ( float flIntensity : { 0.0f, 0.05f, 0.5f, 1.0f, 1.5f, 2.0f } )
+	{
+		for ( int nBase = 0; nBase <= 255; nBase++ )
+		{
+			const float a = (float)nBase / 255.0f;
+			float flPrev = -1.0f;
+			for ( int nGlow = 0; nGlow <= 255; nGlow++ )
+			{
+				const float b = (float)nGlow / 255.0f;
+				const float y = bloom_apply( a, b, flIntensity );
+				REQUIRE( y >= a - 1e-6f );              // never darkens
+				REQUIRE( y <= 1.0f );                   // never clips
+				REQUIRE( y >= flPrev - 1e-6f );         // monotone in the glow
+				if ( nBase < 255 )
+					REQUIRE( y < 1.0f );                // strictly below white
+				flPrev = y;
+			}
+		}
+	}
+
+	// Monotone in the base, and in the Intensity, at a fixed glow.
+	for ( int nGlow = 0; nGlow <= 255; nGlow += 17 )
+	{
+		float flPrev = -1.0f;
+		for ( int nBase = 0; nBase <= 255; nBase++ )
+		{
+			const float y = bloom_apply( (float)nBase / 255.0f, (float)nGlow / 255.0f, 1.0f );
+			REQUIRE( y >= flPrev - 1e-6f );
+			flPrev = y;
+		}
+		float flPrevK = -1.0f;
+		for ( int nK = 0; nK <= 40; nK++ )
+		{
+			const float y = bloom_apply( 0.25f, (float)nGlow / 255.0f, (float)nK / 20.0f );
+			REQUIRE( y >= flPrevK - 1e-6f );
+			flPrevK = y;
+		}
+	}
+
+	// Intensity 0 is an EXACT identity for every base and every glow, which
+	// is what "0 is off" has to mean for the paired param of a switch -- the
+	// pow(0, 0) case (a fully-lit neighbourhood at intensity 0) included,
+	// which is why bloom_apply floors its base.
+	for ( int nBase = 0; nBase <= 255; nBase++ )
+		for ( int nGlow = 0; nGlow <= 255; nGlow += 51 )
+			REQUIRE_THAT( bloom_apply( (float)nBase / 255.0f, (float)nGlow / 255.0f, 0.0f ),
+			              WithinAbs( (float)nBase / 255.0f, 1e-6f ) );
+
+	// Zero glow is likewise an exact identity, at every intensity: a pixel
+	// with nothing glowing near it is untouched however hard the slider is
+	// pushed.
+	for ( float flIntensity : { 0.0f, 0.5f, 1.0f, 2.0f } )
+		for ( int nBase = 0; nBase <= 255; nBase++ )
+			REQUIRE_THAT( bloom_apply( (float)nBase / 255.0f, 0.0f, flIntensity ),
+			              WithinAbs( (float)nBase / 255.0f, 1e-6f ) );
+
+	// At Intensity 1 it IS the plain screen, so the shape is a
+	// generalisation of the familiar operator rather than a different one.
+	for ( int nBase = 0; nBase <= 255; nBase += 5 )
+		for ( int nGlow = 0; nGlow <= 255; nGlow += 5 )
+		{
+			const float a = (float)nBase / 255.0f, b = (float)nGlow / 255.0f;
+			REQUIRE_THAT( bloom_apply( a, b, 1.0f ), WithinAbs( a + b * ( 1.0f - a ), 1e-5f ) );
+		}
+
+	// And it is LINEAR in the intensity where the glow is faint -- the
+	// regime a dark scene with a small light actually lives in -- so the
+	// slider still feels like a gain rather than like a saturating curve.
+	for ( int nGlow = 1; nGlow <= 20; nGlow++ )
+	{
+		const float b = (float)nGlow / 255.0f;
+		const float flLinear = bloom_apply( 0.0f, b, 1.0f ) * 2.0f;
+		REQUIRE_THAT( bloom_apply( 0.0f, b, 2.0f ), WithinAbs( flLinear, 0.01f ) );
+	}
+}
+
+TEST_CASE( "reshade.bloom defaults and round-trip", "[effects_curve][config]" )
+{
+	TempConfigHome home;
+
+	Settings s{};
+	REQUIRE( s.reshade.bloom.enabled == false );
+	REQUIRE_THAT( s.reshade.bloom.threshold, WithinAbs( 0.75f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.bloom.intensity, WithinAbs( 0.8f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.bloom.radius, WithinAbs( 0.5f, 1e-6f ) );
+
+	s.reshade.bloom.enabled = true;
+	s.reshade.bloom.threshold = 0.55f;
+	s.reshade.bloom.intensity = 1.35f;
+	s.reshade.bloom.radius = 0.85f;
+	ProfileMeta meta;
+	meta.name = "Bloom";
+	REQUIRE( SaveProfile( meta, s ) );
+
+	std::optional<Settings> loaded = LoadProfile( "Bloom" );
+	REQUIRE( loaded.has_value() );
+	const auto &bl = loaded->reshade.bloom;
+	REQUIRE( bl.enabled == true );
+	REQUIRE_THAT( bl.threshold, WithinAbs( 0.55f, 1e-6f ) );
+	REQUIRE_THAT( bl.intensity, WithinAbs( 1.35f, 1e-6f ) );
+	REQUIRE_THAT( bl.radius, WithinAbs( 0.85f, 1e-6f ) );
+}
+
 TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][config]" )
 {
 	TempConfigHome home;

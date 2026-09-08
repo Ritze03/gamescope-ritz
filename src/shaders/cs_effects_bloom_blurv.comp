@@ -1,0 +1,28 @@
+#version 460
+
+// cs_effects_bloom_blurv.comp -- the second (vertical) half of Bloom's separable
+// Gaussian, over the eighth-resolution glow buffer. Reads the horizontal pass's output on
+// VKR_EFFECTS_BLOOM_SLOT and writes back into the bright pass's buffer; the host ping-pongs the
+// two textures between the passes (rendervulkan.cpp's pre-pass block).
+//
+// The body, the tap count, the sigma and every "why" are in
+// effects_bloom_blur.h -- this file exists only to name the axis, because
+// the direction cannot be a uniform (see that header).
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+#include "effects_bloom_blur.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+void main()
+{
+    bloom_blur_main(ivec2(0, 1));
+}

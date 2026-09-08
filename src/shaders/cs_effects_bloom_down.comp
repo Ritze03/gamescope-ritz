@@ -1,0 +1,69 @@
+#version 460
+
+// cs_effects_bloom_down.comp -- Bloom's BRIGHT PASS and downsample, the first
+// of the three dispatches the effect adds (2026-09-08; the user's request,
+// verbatim: *"Add a bloom shader for more casual games"*).
+//
+// WHAT IT WRITES. One texel per BLOOM_DOWN x BLOOM_DOWN block of the base
+// layer: the mean of that block's colours, each first multiplied by
+// effects_curve.h's bloom_weight() -- the smoothstep gate that decides how
+// much of a pixel glows. So the buffer holds "how much light this
+// neighbourhood emits", already at the resolution the blur will run at.
+//
+// WHY THE GATE IS APPLIED PER TAP AND THE AVERAGE TAKEN AFTER, not the other
+// way round: gating the block MEAN would make a single 250-code lamp inside
+// an otherwise black 8x8 block fall under any useful threshold and vanish,
+// while a uniformly mid-grey block would sail over it. Gate-then-average is
+// the physically right order -- each pixel contributes the light it actually
+// emits -- and it is also the stable one, since a block's value then changes
+// continuously as the content slides through it.
+//
+// WHY EVERY SOURCE PIXEL IS READ (64 texelFetches per output texel, i.e.
+// exactly one per source pixel) rather than a handful of taps inside each
+// block: a sparse sampling of the source makes a small bright object appear
+// and disappear as the sampling grid slides over it under camera motion. See
+// effects_common.h's BLOOM_DOWN note.
+//
+// It calls the SAME grade() the per-pixel pass, the measure pass and the
+// preview pass call, on the same slot-0 raw-UNORM binding, so the glow
+// inherits Shadow Control / Saturation / Vibrancy exactly as the picture it
+// will be composited onto does -- a boosted-red lamp glows the boosted red.
+// Pre-Sharpen is deliberately not applied: a 5-tap cross is invisible after
+// an 8x box reduction, the same argument cs_effects_preview.comp makes.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+void main()
+{
+    ivec2 p       = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 srcSize = textureSize(s_samplers[0], 0);
+    ivec2 dstSize = (srcSize + ivec2(BLOOM_DOWN - 1)) / BLOOM_DOWN;
+    if (p.x >= dstSize.x || p.y >= dstSize.y)
+        return;
+
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < BLOOM_DOWN; j++)
+    {
+        for (int i = 0; i < BLOOM_DOWN; i++)
+        {
+            // clamp, not skip: on the last block of a size that is not a
+            // multiple of BLOOM_DOWN this reads the edge pixel again, which
+            // keeps the divisor constant and the buffer's border honest.
+            ivec2 t = clamp(p * BLOOM_DOWN + ivec2(i, j), ivec2(0), srcSize - ivec2(1));
+            vec3  c = grade(texelFetch(s_samplers[0], t, 0).rgb);
+            sum += c * bloom_weight(effects_luma(c), u_bloomThreshold);
+        }
+    }
+
+    imageStore(dst, p, vec4(sum / float(BLOOM_DOWN * BLOOM_DOWN), 1.0));
+}

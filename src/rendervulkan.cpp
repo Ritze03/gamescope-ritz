@@ -51,6 +51,9 @@
 #include "cs_composite_rcas.h"
 #include "cs_easu.h"
 #include "cs_easu_fp16.h"
+#include "cs_effects_bloom_blurh.h"
+#include "cs_effects_bloom_blurv.h"
+#include "cs_effects_bloom_down.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -1001,6 +1004,9 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_LAYER0, cs_effects_layer0);
 	SHADER(EFFECTS_MEASURE, cs_effects_measure);
 	SHADER(EFFECTS_PREVIEW, cs_effects_preview);
+	SHADER(EFFECTS_BLOOM_DOWN, cs_effects_bloom_down);
+	SHADER(EFFECTS_BLOOM_BLURH, cs_effects_bloom_blurh);
+	SHADER(EFFECTS_BLOOM_BLURV, cs_effects_bloom_blurv);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1221,7 +1227,20 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 {
 	pthread_setname_np( pthread_self(), "gamescope-shdr" );
 
-	std::array<PipelineInfo_t, SHADER_TYPE_COUNT> pipelineInfos;
+	// VALUE-initialised, not default-initialised, and that braced pair is
+	// load-bearing: PipelineInfo_t is a plain aggregate with no member
+	// initialisers, so `std::array<PipelineInfo_t, N> x;` leaves every field
+	// indeterminate and the entries the SHADER() lines below do NOT set are
+	// then read as a shader type and three loop bounds. SHADER_TYPE_EFFECTS_
+	// PREVIEW has been such an entry since 2026-09-07 and got away with it
+	// (whatever its layerCount happened to be was usually 0, so the loops
+	// never ran); adding Bloom's three shader types made one of them come up
+	// non-zero and the run aborted inside compilePipeline() on
+	// m_shaderModules[garbage]. With `{}` an unlisted entry is all zeroes,
+	// its `layerCount <= 0` loop body never executes, and the pipeline is
+	// simply compiled on first use like any other -- which is what "not
+	// listed here" was always meant to mean.
+	std::array<PipelineInfo_t, SHADER_TYPE_COUNT> pipelineInfos{};
 #define SHADER(type, layer_count, max_ycbcr, blur_layers) pipelineInfos[SHADER_TYPE_##type] = {SHADER_TYPE_##type, layer_count, max_ycbcr, blur_layers}
 	SHADER(BLIT, k_nMaxLayers, k_nMaxYcbcrMask_ToPreCompile, 1);
 	SHADER(BLUR, k_nMaxLayers, k_nMaxYcbcrMask_ToPreCompile, k_nMaxBlurLayers);
@@ -1233,6 +1252,14 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	SHADER(RGB_TO_NV12, 1, 1, 1);
 	SHADER(EFFECTS_LAYER0, 1, 1, 1);
 	SHADER(EFFECTS_MEASURE, 1, 1, 1);
+	// Bloom's three (2026-09-08). Precompiled like the other two per-frame
+	// effect passes so that switching Bloom on mid-game does not compile
+	// three pipelines on the render thread; the Inspector's preview pass is
+	// deliberately still absent, since it runs once when a settings page is
+	// opened rather than per frame.
+	SHADER(EFFECTS_BLOOM_DOWN, 1, 1, 1);
+	SHADER(EFFECTS_BLOOM_BLURH, 1, 1, 1);
+	SHADER(EFFECTS_BLOOM_BLURV, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -3684,6 +3711,59 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 	return true;
 }
 
+// Bloom's two glow buffers (2026-09-08), sized 1/kEffectsBloomDown of the
+// base layer in each axis and pooled the same way effectsOutput is:
+// re-created only when the source size changes, never freed. Both are pure
+// scratch -- cs_effects_bloom_down.comp rewrites every texel of A each frame
+// and the horizontal blur rewrites every texel of B -- so, unlike the
+// history, there is nothing here whose contents have to survive a barrier,
+// and prepareDestImage()'s UNDEFINED discard on first sight is exactly right.
+//
+// Format: ABGR8888, the one storage format Vulkan makes mandatory (the same
+// reason update_effects_history() gives). `What 8 bits costs here:` the glow
+// is stored in 1/255 steps, so a contribution below that quantises to zero --
+// in practice a single isolated bright pixel inside an 8x8 block, whose glow
+// would be invisible anyway and whose appearing and disappearing under a pan
+// is the shimmer the smoothstep gate exists to avoid. Above that the
+// bilinear upsample interpolates BETWEEN quantised texels, so the falloff
+// the user sees is continuous rather than stepped; there is no banding to
+// trade against.
+static constexpr uint32_t kEffectsBloomDown = 8;   // == effects_common.h's BLOOM_DOWN
+
+static bool update_effects_bloom_images( uint32_t uSrcWidth, uint32_t uSrcHeight )
+{
+	const uint32_t uWidth  = std::max( 1u, ( uSrcWidth  + kEffectsBloomDown - 1 ) / kEffectsBloomDown );
+	const uint32_t uHeight = std::max( 1u, ( uSrcHeight + kEffectsBloomDown - 1 ) / kEffectsBloomDown );
+
+	if ( g_output.effectsBloomA != nullptr
+			&& g_output.effectsBloomB != nullptr
+			&& uWidth == g_output.effectsBloomA->width()
+			&& uHeight == g_output.effectsBloomA->height() )
+	{
+		return true;
+	}
+
+	CVulkanTexture::createFlags createFlags;
+	createFlags.bSampled = true;
+	createFlags.bStorage = true;
+
+	gamescope::OwningRc<CVulkanTexture> pA = new CVulkanTexture();
+	gamescope::OwningRc<CVulkanTexture> pB = new CVulkanTexture();
+	if ( !pA->BInit( uWidth, uHeight, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr )
+		|| !pB->BInit( uWidth, uHeight, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
+	{
+		vk_log.errorf( "failed to create native effects bloom buffers" );
+		// Both or neither: a half-allocated pair would let the ping-pong
+		// read a texture the other pass never wrote.
+		g_output.effectsBloomA = nullptr;
+		g_output.effectsBloomB = nullptr;
+		return false;
+	}
+	g_output.effectsBloomA = std::move( pA );
+	g_output.effectsBloomB = std::move( pB );
+	return true;
+}
+
 // Adaptive Brightness's persistent history -- kEffectsHistoryWidth x
 // kEffectsHistoryHeight. Row 0 is one smoothed statistic per texel (mean,
 // p2, p50, p98, then the same four raw; the shader's HISTORY_* indices),
@@ -4519,6 +4599,10 @@ struct EffectsPushData_t
 	static constexpr uint32_t kVibrancy          = 1u << 6;
 	// NEW 2026-09-08: Adaptive Gamma (effects_curve.h's ag_* block).
 	static constexpr uint32_t kAdaptiveGamma     = 1u << 7;
+	// NEW 2026-09-08: Bloom. Gates only the composite in
+	// cs_effects_layer0.comp -- the three dispatches that build the glow
+	// buffer are simply not recorded when this is clear.
+	static constexpr uint32_t kBloom             = 1u << 8;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -4544,6 +4628,10 @@ struct EffectsPushData_t
 	float    u_agStrength;
 	float    u_agLocal;
 
+	float    u_bloomThreshold;
+	float    u_bloomIntensity;
+	float    u_bloomRadius;
+
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
 	// exp2(-sharpness_in_stops)); mapping k -> k / (0.75 * (1 + k)) keeps
@@ -4565,6 +4653,7 @@ struct EffectsPushData_t
 		if ( s.bSaturationProtectSkin ) u_flags |= kSaturationSkin;
 		if ( s.bVibrancy )              u_flags |= kVibrancy;
 		if ( s.bPreSharpen )            u_flags |= kPreSharpen;
+		if ( s.bBloom )                 u_flags |= kBloom;
 		if ( s.bAdaptiveBrightness )    u_flags |= kAdaptiveBrightness;
 		if ( s.bAbDynamic )             u_flags |= kAbDynamic;
 		// ADAPTIVE GAMMA IS DROPPED WHEN ADAPTIVE BRIGHTNESS IS ON. Both aim
@@ -4611,6 +4700,17 @@ struct EffectsPushData_t
 		u_agMaxDarken = bAdaptiveGamma ? s.flAgMaxDarken : 1.0f;
 		u_agStrength  = bAdaptiveGamma ? std::clamp( s.flAgStrength, 0.0f, 1.0f ) : 0.0f;
 		u_agLocal     = bAdaptiveGamma ? std::clamp( s.flAgLocal, 0.0f, 1.0f ) : 0.0f;
+
+		// Bloom. Threshold and Radius are read by the two dispatches that
+		// build the glow buffer, Intensity only by the composite; all three
+		// are masked to their neutral values when the effect is off, for the
+		// same "the uniform says exactly what the frame did" reason as
+		// u_abLocal above. Neutral for the threshold is 1.0 -- nothing at
+		// all glows -- so even a stray dispatch would produce a black glow
+		// buffer rather than an unexpected one.
+		u_bloomThreshold = s.bBloom ? std::clamp( s.flBloomThreshold, 0.0f, 1.0f ) : 1.0f;
+		u_bloomIntensity = s.bBloom ? std::max( s.flBloomIntensity, 0.0f ) : 0.0f;
+		u_bloomRadius    = s.bBloom ? std::clamp( s.flBloomRadius, 0.0f, 1.0f ) : 0.0f;
 	}
 };
 
@@ -5059,6 +5159,17 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						state.bAdaptiveGamma = false;   // reads the same history
 					}
 
+					// BLOOM (2026-09-08). Decided BEFORE the upload below,
+					// not after, because the uniform has to say what the
+					// frame actually did: if the glow buffers cannot be
+					// allocated the effect is dropped for this frame, and
+					// the per-pixel pass must then not be told to sample a
+					// slot nothing was bound to. Same shape as the
+					// !bHaveHistory masking just above.
+					const bool bBloom = state.bBloom
+						&& update_effects_bloom_images( uWidth, uHeight );
+					state.bBloom = bBloom;
+
 					// One upload for both dispatches: the measure pass and the
 					// per-pixel pass read the same effects_t block, and the
 					// descriptor offset uploadConstants() records persists until
@@ -5164,16 +5275,84 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 							effects_preview_record( cmdBuffer.get() );
 					}
 
+					// BLOOM'S THREE DISPATCHES. Bloom is the only effect in
+					// this pass that is not a per-pixel function, so it is
+					// the only one that needs work of its own before the
+					// per-pixel pass runs:
+					//
+					//   1. bright pass + 8x downsample  layer0 -> bloomA
+					//   2. separable Gaussian, horizontal  bloomA -> bloomB
+					//   3. ... and vertical                bloomB -> bloomA
+					//
+					// and cs_effects_layer0.comp below then samples bloomA
+					// bilinearly and screens it on. Everything after the
+					// first pass runs at 1/64 of the frame's pixels, which is
+					// what makes a wide, genuinely Gaussian glow affordable
+					// here; see superdoc/features/shader-effects.md's Bloom
+					// section for the cost breakdown.
+					//
+					// The ping-pong needs no hand-written barriers: every
+					// dispatch() calls prepareSrcImage() on each bound
+					// texture and prepareDestImage() on the target, and
+					// insertBarrier() emits the read-after-write between them
+					// (and, unconditionally, an ALL_COMMANDS execution
+					// dependency, which is what orders the write-after-read
+					// when pass 3 writes the texture pass 2 was reading).
+					// Nothing here is cross-frame state, so a first-sight
+					// UNDEFINED discard on either texture is correct: pass 1
+					// writes every texel of A and pass 2 every texel of B.
+					//
+					// Slot 0 is still the base layer from the bind above --
+					// pass 1 needs exactly that, with the same raw UNORM view
+					// and the same unnormalised nearest sampler grade()'s
+					// taps use everywhere else.
+					if ( bBloom )
+					{
+						const uint32_t uBloomW = g_output.effectsBloomA->width();
+						const uint32_t uBloomH = g_output.effectsBloomA->height();
+						const int nBloomGroup = 8;   // == the bloom shaders' local_size
+						const uint32_t uGroupsX = div_roundup( uBloomW, nBloomGroup );
+						const uint32_t uGroupsY = div_roundup( uBloomH, nBloomGroup );
+
+						auto BindBloomSource = [&]( const gamescope::OwningRc<CVulkanTexture> &tex )
+						{
+							cmdBuffer->bindTexture( VKR_EFFECTS_BLOOM_SLOT, tex );
+							cmdBuffer->setTextureSrgb( VKR_EFFECTS_BLOOM_SLOT, true );
+							cmdBuffer->setSamplerUnnormalized( VKR_EFFECTS_BLOOM_SLOT, true );
+							cmdBuffer->setSamplerNearest( VKR_EFFECTS_BLOOM_SLOT, true );
+						};
+
+						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_BLOOM_DOWN ) );
+						cmdBuffer->bindTarget( g_output.effectsBloomA );
+						cmdBuffer->dispatch( uGroupsX, uGroupsY );
+
+						BindBloomSource( g_output.effectsBloomA );
+						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_BLOOM_BLURH ) );
+						cmdBuffer->bindTarget( g_output.effectsBloomB );
+						cmdBuffer->dispatch( uGroupsX, uGroupsY );
+
+						BindBloomSource( g_output.effectsBloomB );
+						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_BLOOM_BLURV ) );
+						cmdBuffer->bindTarget( g_output.effectsBloomA );
+						cmdBuffer->dispatch( uGroupsX, uGroupsY );
+
+						// ... and leave the finished glow bound for the
+						// per-pixel pass below.
+						BindBloomSource( g_output.effectsBloomA );
+					}
+
 					cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
 					cmdBuffer->bindTarget( g_output.effectsOutput );
 
 					const int nPixelsPerGroup = 8;
 					cmdBuffer->dispatch( div_roundup( uWidth, nPixelsPerGroup ), div_roundup( uHeight, nPixelsPerGroup ) );
 
-					// Leave slot 1 clear for the FSR/NIS/blit dispatches that
-					// follow; they bind layers 0..n-1 and would otherwise
-					// carry a stray history descriptor on single-layer frames.
+					// Leave slots 1 and 2 clear for the FSR/NIS/blit
+					// dispatches that follow; they bind layers 0..n-1 and
+					// would otherwise carry a stray history or glow
+					// descriptor on single-layer frames.
 					cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
+					cmdBuffer->bindTexture( VKR_EFFECTS_BLOOM_SLOT, nullptr );
 
 					// `effects_ab_log` debug readback (see the command above).
 					if ( bHaveHistory )

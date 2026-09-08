@@ -267,6 +267,18 @@ namespace gamescope::config
                         s.reshade.pre_sharpen.strength = flStrength;
                 }
 
+                // NEW 2026-09-08: Bloom -- see ConfigSchema.h's
+                // ReshadeBloomSettings. Additive keys; an old config has
+                // none and resolves to the compiled-in defaults (off).
+                if ( const nlohmann::json *pBloom = JGetObject( *pReshade, "bloom" ) )
+                {
+                    auto &bl = s.reshade.bloom;
+                    bl.enabled = JGetBool( *pBloom, "enabled", bl.enabled );
+                    bl.threshold = JGetFloat( *pBloom, "threshold", bl.threshold );
+                    bl.intensity = JGetFloat( *pBloom, "intensity", bl.intensity );
+                    bl.radius = JGetFloat( *pBloom, "radius", bl.radius );
+                }
+
                 if ( const nlohmann::json *pAdaptive = JGetObject( *pReshade, "adaptive_brightness" ) )
                 {
                     auto &ab = s.reshade.adaptive_brightness;
@@ -528,6 +540,13 @@ namespace gamescope::config
                 ? nlohmann::json( *s.reshade.pre_sharpen.strength )
                 : nlohmann::json( nullptr );
 
+            const auto &bl = s.reshade.bloom;
+            nlohmann::json jBloom = nlohmann::json::object();
+            jBloom[ "enabled" ] = bl.enabled;
+            jBloom[ "threshold" ] = bl.threshold;
+            jBloom[ "intensity" ] = bl.intensity;
+            jBloom[ "radius" ] = bl.radius;
+
             const auto &ab = s.reshade.adaptive_brightness;
             nlohmann::json jAdaptive = nlohmann::json::object();
             jAdaptive[ "enabled" ] = ab.enabled;
@@ -558,6 +577,7 @@ namespace gamescope::config
             jReshade[ "saturation" ] = std::move( jSaturation );
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
+            jReshade[ "bloom" ] = std::move( jBloom );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
             jReshade[ "adaptive_gamma" ] = std::move( jAdaptiveGamma );
             jReshade[ "shadow_lift" ] = std::move( jShadowLift );

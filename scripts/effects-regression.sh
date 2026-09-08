@@ -79,6 +79,14 @@
 #                     ag-exclusive (turning either adaptive effect on turns
 #                     the other off). See the block at the bottom of this
 #                     script for what each one is measuring and why.
+#   bloom-*          2026-09-08, BLOOM: the control on a flat field, then the
+#                     three knobs each pinned to a DIFFERENT statement about
+#                     the line profile out from a bright box on a dark field
+#                     (Radius -> reach, Intensity -> brightness, Threshold ->
+#                     less glows), the no-clip property at the default and at
+#                     the extremes, that nothing away from a source moves,
+#                     and the shimmer question as a number. See the block at
+#                     the bottom of this script.
 #   colors-*         2026-09-08, the Saturation/Vibrancy split: Saturation
 #                     (renamed from "Vibrancy") and the new Vibrancy each
 #                     pinned against their closed-form formula on a scene
@@ -238,6 +246,7 @@ write_config() {
 		        "vibrancy": { "enabled": false },
 		        "pre_sharpen": { "enabled": false },
 		        "shadow_lift": { "enabled": false },
+		        "bloom": { "enabled": false },
 		        "adaptive_brightness": { "enabled": false, "mode": "whole_image", "strength": 1.0,
 		                                 "local_strength": 0.0 }
 		    }
@@ -807,6 +816,161 @@ else
 	record_line "FAIL	ag-exclusive	expected both 'off'; got adaptive_gamma='$AG_AFTER_AB' adaptive_brightness='$AB_AFTER_AG'"
 fi
 set_ag 0
+
+# ---------------------------------------------------------------------------
+# BLOOM (2026-09-08). "Add a bloom shader for more casual games." A glow
+# around bright areas: a bright pass at 1/8 resolution, a separable Gaussian
+# over it, and a SCREEN composite back onto the picture. Five things have to
+# be measured rather than argued:
+#
+#   bloom-off-flat     the control. haloinv's flat 15 field with the effect
+#                      off must come out flat, so every profile below is a
+#                      statement about the glow and not about the capture.
+#   bloom-radius       the glow's spatial EXTENT grows with Radius -- measured
+#                      as the distance at which the line profile out from the
+#                      bright box falls back into the field, not as "the
+#                      picture changed".
+#   bloom-intensity    its BRIGHTNESS beside the source grows with Intensity.
+#   bloom-threshold    and raising Threshold SHRINKS what glows, so the same
+#                      amplitude comes back down. Three different statements,
+#                      because the three knobs do three different things.
+#   bloom-unchanged-*  nothing away from a bright source moves: the dark
+#                      scene's bands are sampled 80 px from the nearest
+#                      highlight, five sigma at the default Radius.
+#   bloom-noclip-*     the no-clip property: the bands stay strictly ordered
+#                      and nothing whose input was below white comes out ON
+#                      white, at the default AND at Intensity 2.0, the top of
+#                      the slider. Adding light is the one operation here
+#                      that naturally blows highlights out; the composite's
+#                      shape is what stops it. (`noclip-*-bloom-default` runs
+#                      Adaptive Gamma's stricter check at the shipped
+#                      defaults on top of it; the pair at threshold 0 +
+#                      Intensity 2.0 is REPORTED, not asserted -- see the
+#                      block at the bottom of this script.)
+#   bloom-stability-*  a still frame must produce a bit-identical output
+#                      pixel, and turning Bloom on must not widen the frame
+#                      mean's frame-to-frame spread on a PANNING --periodic
+#                      scene -- the shimmer question a thresholded effect
+#                      always has to answer.
+# ---------------------------------------------------------------------------
+BLOOM_ID="image.shaders.bloom"
+BLOOM_THRESHOLD_ID="image.shaders.bloom.threshold"
+BLOOM_INTENSITY_ID="image.shaders.bloom.intensity"
+BLOOM_RADIUS_ID="image.shaders.bloom.radius"
+BLOOM_THRESHOLD_DEFAULT=0.75   # == ConfigSchema.h's ReshadeBloomSettings
+BLOOM_INTENSITY_DEFAULT=0.8
+BLOOM_RADIUS_DEFAULT=0.5
+
+set_bloom() { gsctl overlay_e2_set "$BLOOM_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+set_bloom_param() { gsctl overlay_e2_set "$1 $2" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+bloom_defaults() {
+	set_bloom_param "$BLOOM_THRESHOLD_ID" "$BLOOM_THRESHOLD_DEFAULT"
+	set_bloom_param "$BLOOM_INTENSITY_ID" "$BLOOM_INTENSITY_DEFAULT"
+	set_bloom_param "$BLOOM_RADIUS_ID" "$BLOOM_RADIUS_DEFAULT"
+}
+
+# Still first, then panning -- the same polarity trap the Adaptive Gamma
+# block above documents: the section before this one leaves the client's
+# motion PAUSED, so the still measurement needs no toggle.
+bloom_defaults
+set_bloom 1
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-16-bloom-static.txt"
+run_sampler ablog "$OUT_DIR/ablog-16-bloom-static.txt" bloomstatic
+
+# The shimmer question: the same panning --periodic frame, six captures with
+# the effect off and six with it on. --periodic fixes the frame's light
+# population, so the frame mean's spread across captures is the noise, and
+# turning Bloom on must not add to it.
+toggle_motion
+sleep 1
+declare -a BLOOM_JIT=()
+set_bloom 0
+for k in 1 2 3 4 5 6; do BLOOM_JIT+=( "$(take_screenshot "16-texdark-bloom-off-$k")" ); done
+set_bloom 1
+for k in 1 2 3 4 5 6; do BLOOM_JIT+=( "$(take_screenshot "16-texdark-bloom-on-$k")" ); done
+run_sampler bloomjitter bloom-stability-pan 6 "${BLOOM_JIT[@]}"
+toggle_motion   # leave the client as it was found
+
+# Scenes 13-15: texdark -> halfsplit -> halobox -> haloinv, the bright box on
+# a dark field the line profiles are measured on.
+#
+# ONE SIGUSR1 PER FRAME, NOT THREE IN A ROW. effects_scene_client.c advances
+# by exactly ONE scene per repaint when it notices its counter moved -- it
+# does not consume a backlog -- and SIGUSR1 is a plain (non-realtime) signal,
+# so several delivered inside one 16 ms frame collapse into a single advance.
+# Every existing next_scene in this script happens to be followed by a sleep;
+# the bloom section was the first to want three in a row, got one, and
+# measured halfsplit's flat right half while calling it haloinv. If you add a
+# multi-scene skip, keep the sleeps.
+advance_scenes() { for _ in $(seq 1 "$1"); do next_scene; sleep 0.5; done; }
+advance_scenes 3
+sleep "$ADAPT_SETTLE_S"
+
+set_bloom 0
+run_sampler bloomflat "$(take_screenshot 17-haloinv-bloom-off)"
+set_bloom 1
+
+declare -a BLOOM_RADIUS_SHOTS=()
+for R in 0.0 0.5 1.0; do
+	set_bloom_param "$BLOOM_RADIUS_ID" "$R"
+	BLOOM_RADIUS_SHOTS+=( "$(take_screenshot "17-haloinv-bloom-radius-$R")" )
+done
+run_sampler bloomline bloom-radius extent "${BLOOM_RADIUS_SHOTS[@]}"
+bloom_defaults
+
+declare -a BLOOM_INTENSITY_SHOTS=()
+for I in 0.4 0.8 1.6; do
+	set_bloom_param "$BLOOM_INTENSITY_ID" "$I"
+	BLOOM_INTENSITY_SHOTS+=( "$(take_screenshot "17-haloinv-bloom-intensity-$I")" )
+done
+run_sampler bloomline bloom-intensity amp-up "${BLOOM_INTENSITY_SHOTS[@]}"
+bloom_defaults
+
+# Threshold swept UPWARD, so the glow must come DOWN. haloinv's box is 220
+# (0.863 encoded), so 0.85 is above almost all of its emission and 0.5 well
+# below it -- the slider's whole useful span on this source.
+declare -a BLOOM_THRESHOLD_SHOTS=()
+for T in 0.5 0.7 0.85; do
+	set_bloom_param "$BLOOM_THRESHOLD_ID" "$T"
+	BLOOM_THRESHOLD_SHOTS+=( "$(take_screenshot "17-haloinv-bloom-threshold-$T")" )
+done
+run_sampler bloomline bloom-threshold amp-down "${BLOOM_THRESHOLD_SHOTS[@]}"
+bloom_defaults
+
+# Scenes 16-17: haloinv -> colors -> dark, then bright. The no-clip pair, and
+# the "nothing away from a source moved" pair.
+advance_scenes 2
+sleep "$ADAPT_SETTLE_S"
+set_bloom 0; B_DARK_OFF="$(take_screenshot 18-dark-bloom-off)"
+set_bloom 1; B_DARK_ON="$(take_screenshot 18-dark-bloom-default)"
+run_sampler bloomsame "$B_DARK_OFF" "$B_DARK_ON" dark
+run_sampler bloomnoclip "$B_DARK_ON" dark default
+run_sampler noclip "$B_DARK_ON" dark bloom-default
+set_bloom_param "$BLOOM_INTENSITY_ID" 2.0
+run_sampler bloomnoclip "$(take_screenshot 18-dark-bloom-intensity-2.0)" dark intensity-2.0
+# THE WORST CASE, REPORTED RATHER THAN ASSERTED: threshold 0 makes EVERY
+# pixel emit and Intensity 2.0 is the top of the slider, so this is the most
+# light the effect can possibly add. On the dark scene the result is still
+# comfortably inside the range; on the bright scene below it is not, and the
+# numbers are printed either way rather than a bar being chosen that both
+# happen to clear. See shader-effects.md's "what it costs" note.
+set_bloom_param "$BLOOM_THRESHOLD_ID" 0.0
+run_sampler regions "$(take_screenshot 18-dark-bloom-worstcase)" dark
+record_line "INFO	bloom-worst-dark	(above: threshold 0.0 + Intensity 2.0, every pixel emitting)"
+bloom_defaults
+
+advance_scenes 1
+sleep "$ADAPT_SETTLE_S"
+B_BRIGHT_ON="$(take_screenshot 19-bright-bloom-default)"
+run_sampler bloomnoclip "$B_BRIGHT_ON" bright default
+run_sampler noclip "$B_BRIGHT_ON" bright bloom-default
+set_bloom_param "$BLOOM_INTENSITY_ID" 2.0
+run_sampler bloomnoclip "$(take_screenshot 19-bright-bloom-intensity-2.0)" bright intensity-2.0
+set_bloom_param "$BLOOM_THRESHOLD_ID" 0.0
+run_sampler regions "$(take_screenshot 19-bright-bloom-worstcase)" bright
+record_line "INFO	bloom-worst-bright	(above: threshold 0.0 + Intensity 2.0 on the brightest scene -- the honest limit)"
+bloom_defaults
+set_bloom 0
 
 END_TS=$(date +%s)
 {

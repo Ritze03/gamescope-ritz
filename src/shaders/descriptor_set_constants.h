@@ -17,6 +17,14 @@
 // cannot disagree.
 #define VKR_EFFECTS_HISTORY_SLOT 1u
 
+// cs_effects_bloom_*.comp / cs_effects_layer0.comp (Bloom, 2026-09-08): the
+// eighth-resolution glow buffer. The two blur passes read the buffer they
+// are blurring here and write the other one (a ping-pong pair), and the
+// per-pixel pass reads the finished one here to add the glow. Named via this
+// constant on both sides, exactly like the history slot above, so the
+// shaders and vulkan_composite()'s pre-pass block cannot disagree.
+#define VKR_EFFECTS_BLOOM_SLOT 2u
+
 #define VKR_LUT3D_COUNT 2 // Must match EOTF_Count
 
 #endif

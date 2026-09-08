@@ -44,6 +44,20 @@ uniform effects_t {
     float u_agMaxDarken;  // 1.0..4.0; the exponent ceiling IS this
     float u_agStrength;   // dry/wet mix, 0.0..1.0
     float u_agLocal;      // Local adaptation, 0.0..1.0 -- the SAME operator
+
+    // ---- Bloom (NEW 2026-09-08) ----
+    // The only SPATIAL effect in this pass: three extra dispatches build an
+    // eighth-resolution glow buffer (cs_effects_bloom_down.comp, then
+    // effects_bloom_blur.h twice), and cs_effects_layer0.comp screens it
+    // back onto the picture. The scalar half of the maths -- the bright
+    // pass's gate, the Radius -> sigma mapping and the screen composite --
+    // is in effects_curve.h's BLOOM block, so the unit tests assert it on
+    // the same text. Every field is masked to its neutral value by the host
+    // when the effect is off, for the same "the uniform says what the frame
+    // did" reason as u_abLocal.
+    float u_bloomThreshold;   // 0.0..1.0, where a pixel starts to glow
+    float u_bloomIntensity;   // 0.0..2.0, how bright the glow is; 0 = off
+    float u_bloomRadius;      // 0.0..1.0 -> effects_curve.h's bloom_sigma()
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -109,6 +123,29 @@ const int HISTORY_TEX_H = AB_LOCAL_ROW + AB_LOCAL_GRID;
 const int AB_PREVIEW_W = 256;
 const int AB_PREVIEW_H = 144;
 
+// ---- Bloom's glow buffer (2026-09-08) -------------------------------------
+//
+// The glow is built at 1 / BLOOM_DOWN of the base layer's size in each axis
+// and sampled back bilinearly. Mirrored by kEffectsBloomDown in
+// rendervulkan.cpp, which sizes the two textures -- keep the two in step.
+//
+// `Why 8 and not 2 or 4:` the blur is what costs, and it costs per glow
+// texel, so every doubling of this number takes three quarters off both blur
+// passes. 8 is the largest reduction that still leaves the falloff smooth:
+// the buffer's own texels are an 8-pixel box, the smallest sigma the slider
+// can ask for is one texel (effects_curve.h's BLOOM_SIGMA_MIN), and the
+// bilinear upsample then interpolates between values that already differ by
+// less than the eye resolves. A glow has no high frequencies to lose -- that
+// is what makes it the one effect here that can be computed small.
+//
+// `Why the bright pass still reads EVERY source pixel` (an 8x8 box, i.e.
+// one fetch per source pixel, rather than a few taps inside each block):
+// skipping pixels would make a small bright source appear and disappear as
+// the sampling grid slid over it under camera motion -- the same shimmer the
+// smoothstep gate exists to avoid, reintroduced at a different scale. The
+// box mean is also exactly the right prefilter for a reduction this large.
+const int BLOOM_DOWN = 8;
+
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
 // Renamed from EFFECT_VIBRANCY/EFFECT_VIBRANCY_SKIN 2026-09-08 -- see
@@ -129,6 +166,12 @@ const uint EFFECT_VIBRANCY            = 1u << 6;
 // cs_effects_layer0.comp after Adaptive Brightness; the host never sets
 // both bits at once, so the order between them is a formality.
 const uint EFFECT_ADAPTIVE_GAMMA      = 1u << 7;
+// NEW 2026-09-08: Bloom -- a glow around bright areas. The only effect here
+// that reads more than one pixel; the bright pass and the two blur passes
+// are separate dispatches and this bit gates only the final composite in
+// cs_effects_layer0.comp (the host simply does not record the three
+// dispatches when it is clear).
+const uint EFFECT_BLOOM               = 1u << 8;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;
@@ -265,6 +308,36 @@ float ab_local_sample(vec2 uv)
     float b = history_read_at(ivec2(i1.x, AB_LOCAL_ROW + i0.y));
     float c = history_read_at(ivec2(i0.x, AB_LOCAL_ROW + i1.y));
     float d = history_read_at(ivec2(i1.x, AB_LOCAL_ROW + i1.y));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// ---- Bloom's glow buffer, sampled ----------------------------------------
+//
+// Bilinear BY HAND over texelFetch, for the same reason ab_local_sample()
+// above is: the slot is bound with the unnormalised nearest sampler the
+// other two dispatches need for slot 0, so there is no filtering hardware to
+// ask. Four fetches of a tiny, fully cache-resident texture plus three
+// mixes, and only on the frames Bloom is on.
+//
+// Clamp-to-edge at the border: a glow at the edge of the picture continues
+// off it rather than fading, which is what a light half out of frame does.
+vec3 bloom_fetch(ivec2 t, ivec2 sz)
+{
+    return texelFetch(s_samplers[VKR_EFFECTS_BLOOM_SLOT],
+                      clamp(t, ivec2(0), sz - ivec2(1)), 0).rgb;
+}
+
+// `pos` is in SOURCE pixels (the base layer's own grid).
+vec3 bloom_sample(vec2 pos)
+{
+    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_BLOOM_SLOT], 0);
+    vec2  g  = pos / float(BLOOM_DOWN) - 0.5;
+    ivec2 i0 = ivec2(floor(g));
+    vec2  f  = g - vec2(i0);
+    vec3 a = bloom_fetch(i0,                  sz);
+    vec3 b = bloom_fetch(i0 + ivec2(1, 0),    sz);
+    vec3 c = bloom_fetch(i0 + ivec2(0, 1),    sz);
+    vec3 d = bloom_fetch(i0 + ivec2(1, 1),    sz);
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 

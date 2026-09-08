@@ -607,9 +607,26 @@ struct NativeEffectsState_t
 	float flAgStrength = 1.0f;
 	float flAgLocal = 0.0f;
 
+	// Bloom (NEW 2026-09-08, ConfigSchema.h's ReshadeBloomSettings): a glow
+	// around bright areas, for the look rather than for clarity. The only
+	// SPATIAL effect in the pre-pass -- when it is on, vulkan_composite()
+	// records three extra dispatches (bright pass + downsample, then a
+	// separable Gaussian) over a pair of eighth-resolution scratch textures
+	// before the per-pixel pass screens the result back on. It reads none of
+	// the measure pass's statistics, so it moves AnyEnabled() and NOT
+	// NeedsStatistics() below. See superdoc/features/shader-effects.md.
+	bool  bBloom = false;
+	float flBloomThreshold = 0.75f;   // 0..1, where a pixel starts to glow
+	float flBloomIntensity = 0.8f;    // 0..2, how bright the glow is
+	float flBloomRadius = 0.5f;       // 0..1 -> effects_curve.h's bloom_sigma()
+
 	// True when some effect needs the measure pass's statistics, i.e. when
 	// the history texture has to be kept alive and the measure dispatch
-	// recorded. Both adaptive effects read it; the other four do not.
+	// recorded. Both adaptive effects read it; the other five do not --
+	// Bloom included, deliberately: its bright pass gates on the pixel's own
+	// luma against a fixed threshold, never on the frame's statistics, so it
+	// neither needs the history warm nor has any reason to keep the measure
+	// dispatch alive.
 	bool NeedsStatistics() const
 	{
 		return bAdaptiveBrightness || bAdaptiveGamma;
@@ -617,7 +634,7 @@ struct NativeEffectsState_t
 
 	bool AnyEnabled() const
 	{
-		return bShadowLift || bSaturation || bVibrancy || bPreSharpen
+		return bShadowLift || bSaturation || bVibrancy || bPreSharpen || bBloom
 			|| bAdaptiveBrightness || bAdaptiveGamma;
 	}
 };
@@ -837,6 +854,18 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsDebugHistory;
 	gamescope::OwningRc<CVulkanTexture> effectsDebugPixel;
 
+	// Bloom's glow buffers (2026-09-08): a ping-pong pair at 1/8 of the base
+	// layer's size in each axis. cs_effects_bloom_down.comp writes A, the
+	// horizontal blur A -> B, the vertical blur B -> A, and
+	// cs_effects_layer0.comp samples A. Pure scratch -- every texel is
+	// rewritten each frame Bloom runs, so nothing here is cross-frame state
+	// and neither needs the discard-safety contract effectsHistory does.
+	// Created by update_effects_bloom_images() and re-created only when the
+	// base layer's source size changes; freed by nothing, exactly like
+	// tmpOutput and effectsOutput.
+	gamescope::OwningRc<CVulkanTexture> effectsBloomA;
+	gamescope::OwningRc<CVulkanTexture> effectsBloomB;
+
 	// The settings Inspector's Adaptive Brightness before/after strip
 	// (cs_effects_preview.comp, src/Overlay/EffectPreview.cpp). The storage
 	// target the preview pass writes, plus host-mappable staging for it and
@@ -865,6 +894,9 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_LAYER0, // cs_effects_layer0.comp: the bundled Shaders-area effects, pre-scale, on layer 0
 	SHADER_TYPE_EFFECTS_MEASURE, // cs_effects_measure.comp: Adaptive Brightness's one-workgroup measure/adapt pass
 	SHADER_TYPE_EFFECTS_PREVIEW, // cs_effects_preview.comp: one downscaled graded copy for the Inspector's before/after strip
+	SHADER_TYPE_EFFECTS_BLOOM_DOWN,  // cs_effects_bloom_down.comp: Bloom's bright pass + 8x downsample
+	SHADER_TYPE_EFFECTS_BLOOM_BLURH, // cs_effects_bloom_blurh.comp: Bloom's separable Gaussian, horizontal
+	SHADER_TYPE_EFFECTS_BLOOM_BLURV, // cs_effects_bloom_blurv.comp: ... and vertical
 
 	SHADER_TYPE_COUNT
 };

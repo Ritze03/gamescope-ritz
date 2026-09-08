@@ -89,6 +89,14 @@ namespace gamescope
 		e.bPreSharpen  = r.pre_sharpen.enabled;
 		e.flPreSharpen = r.pre_sharpen.strength.value_or( 0.5f );
 
+		// Bloom (2026-09-08). The three dispatches that build the glow are
+		// recorded by vulkan_composite() only while bBloom is set, so the
+		// switch is genuinely "do this work or don't", not a masked uniform.
+		e.bBloom          = r.bloom.enabled;
+		e.flBloomThreshold = r.bloom.threshold;
+		e.flBloomIntensity = r.bloom.intensity;
+		e.flBloomRadius    = r.bloom.radius;
+
 		// Adaptive Brightness: consumed by cs_effects_measure.comp (the
 		// adapt maths) and cs_effects_layer0.comp (the visible gain).
 		e.bAdaptiveBrightness = r.adaptive_brightness.enabled;
@@ -176,11 +184,15 @@ namespace gamescope
 	// (index.html declared three at E2's original writing; Shadow Control
 	// (request #3, 2026-09-04) is the fourth, added the same shape; Vibrancy
 	// (2026-09-08, alongside the Vibrancy -> Saturation rename) is the
-	// fifth; Adaptive Gamma (2026-09-08) is the sixth.)
+	// fifth; Adaptive Gamma (2026-09-08) is the sixth; Bloom (2026-09-08) is
+	// the seventh -- and the first one that is not a per-pixel function, so
+	// it is also the first whose switch turns extra DISPATCHES on rather
+	// than only a flag bit.)
 	//
 	// THE SIX BUDGET (now eight), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
-	// ON IT. Saturation has 2 params, Vibrancy 1, Pre-Sharpen 1, Adaptive
-	// Brightness 8, Adaptive Gamma 5, Shadow Control 1 -- the maximum a row
+	// ON IT. Saturation has 2 params, Vibrancy 1, Pre-Sharpen 1, Bloom 3
+	// (2026-09-08), Adaptive Brightness 8, Adaptive Gamma 5, Shadow Control
+	// 1 -- the maximum a row
 	// may own before Registry.cpp aborts registration and tells the author
 	// to promote it to a category. The budget was NOT raised again for
 	// Adaptive Gamma and did not need to be: it has fewer knobs because it
@@ -328,16 +340,17 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
 		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness gamma contrast "
-		            "exposure shadow control lift darkness" );
+		            "exposure shadow control lift darkness bloom glow" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.saturation.enabled ? 1 : 0 )
 			            + ( r.vibrancy.enabled ? 1 : 0 )
 			            + ( r.pre_sharpen.enabled ? 1 : 0 )
+			            + ( r.bloom.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
 			            + ( r.adaptive_gamma.enabled ? 1 : 0 )
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 6 effects on";
+			return std::to_string( n ) + " of 7 effects on";
 		} );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
@@ -442,6 +455,74 @@ namespace gamescope
 				.Range( 0.0f, 2.0f )
 				.Step( 0.05f )   // 41 positions
 				.Default( 0.5f );
+
+		// BLOOM -- NEW 2026-09-08. The user's request, verbatim: "Add a
+		// bloom shader for more casual games." A glow around bright areas,
+		// aimed at looking good rather than at competitive clarity -- so it
+		// is off by default and its help text says what it is for.
+		//
+		// `Where it sits in this band, and why:` immediately after
+		// Pre-Sharpen, because those two are the only SPATIAL effects here
+		// (the only ones that read a pixel's neighbours), and because the
+		// pipeline runs Pre-Sharpen and then Bloom -- so the pair reads in
+		// pipeline order in the panel too. Everything above it is a
+		// per-pixel colour operation and everything below it is tone.
+		//
+		// THREE PARAMS, and no more. Threshold, Intensity and Radius are
+		// the three questions a bloom actually has ("what glows", "how
+		// much", "how far"); the two obvious candidates for a fourth were
+		// weighed and rejected. A KNEE / falloff shape was rejected because
+		// the bright pass has no separate knee to expose -- the
+		// contribution is already a smooth function of how far above the
+		// threshold a pixel is (effects_curve.h's bloom_weight), and the
+		// only thing a control there could do is make it harder, which is
+		// the setting that shimmers. A SEPARATE COLOUR/TINT was rejected
+		// because the glow is built from grade()'s own output, so it
+		// already carries the picture's colour -- a tint would be a second,
+		// contradicting answer to a question Saturation and Vibrancy above
+		// already own.
+		using BloomDefaults = config::ReshadeBloomSettings;
+		a.Switch( "image.shaders.bloom", "Bloom",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.bloom.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.bloom.enabled, b ); } ) )
+			.Key( "reshade.bloom.enabled" )
+			.Help( "Adds a soft glow around bright things, the way a camera does -- a look for "
+			       "atmospheric games rather than for competitive clarity. Off by default." )
+			.Default( BloomDefaults{}.enabled )
+			.Keywords( "bloom glow light halo haze soft dreamy cinematic" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "threshold", "Threshold",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.bloom.threshold; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.bloom.threshold, f ); } ) )
+				.Key( "reshade.bloom.threshold" )
+				.Help( "How bright something has to be before it glows, and how quickly it "
+				       "picks up once it is. Higher means only the brightest lights glow; "
+				       "lower makes more of the picture hazy." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions; 0.75, the default, is on the grid
+				.Default( BloomDefaults{}.threshold )
+			.Param( "intensity", "Intensity",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.bloom.intensity; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.bloom.intensity, f ); } ) )
+				.Key( "reshade.bloom.intensity" )
+				.Help( "How strong the glow is. The glow is blended so it can never blow a "
+				       "bright area out to pure white, however high this goes." )
+				.Range( 0.0f, 2.0f )
+				.Step( 0.05f )   // 41 positions, the same grid Pre-Sharpen's Strength uses
+				.Default( BloomDefaults{}.intensity )
+			.Param( "radius", "Radius",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.bloom.radius; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.bloom.radius, f ); } ) )
+				.Key( "reshade.bloom.radius" )
+				.Help( "How far the glow spreads out from a bright area -- a tight halo at 0, a "
+				       "wide soft haze at 1." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )   // 21 positions
+				.Default( BloomDefaults{}.radius );
 
 		// Request #3 (2026-09-04): "a darkness booster for dark games" --
 		// titled "Shadow Control" (renamed from "Shadow lift" 2026-09-05);

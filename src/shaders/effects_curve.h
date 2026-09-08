@@ -445,6 +445,126 @@ EC_FUNC int ag_binding( float p50, float target, float maxLift, float maxDarken,
 	return AG_BIND_NONE;
 }
 
+// ===========================================================================
+//  BLOOM (2026-09-08) -- the scalar half of the glow. The user's request,
+//  verbatim: *"Add a bloom shader for more casual games"*.
+// ===========================================================================
+//
+// Bloom is the first effect in this pre-pass that is NOT a per-pixel
+// function: it needs a bright pass, a blur at reduced resolution, and a
+// composite (see cs_effects_bloom_down.comp and effects_bloom_blur.h). What
+// lives here is the part that IS scalar, and therefore the part
+// tests/test_effects_curve.cpp can assert on the same text the GPU compiles:
+// how a pixel's luma turns into a bright-pass weight, how the Radius slider
+// turns into a blur sigma, and how the glow is put back onto the picture.
+//
+// `Why the weight is proportional to how far ABOVE the threshold a pixel is,
+// rather than a gate that is simply on above it:` this pipeline is SDR
+// (DECISIONS.md #15). In an HDR renderer a bloom threshold has an
+// unambiguous meaning -- only values above 1.0 emit, and an ordinary lit
+// surface never reaches one -- but here every pixel is already inside
+// [0, 1], so a plain "above this, glow fully" gate makes a bright wall emit
+// exactly as hard as a lamp does, and a scene that is mostly bright turns
+// into uniform haze. Arithmetic, at the shipped threshold of 0.75: a
+// 200-code surface contributes 2 % of its colour under the weight below and
+// would contribute 100 % under a gate whose knee ended beneath it. Measured
+// consequence of the shipped weight on the reference `bright` scene: its
+// 30-code shadow rectangles read 48 rather than being washed most of the way
+// to the bands above them. Scaling with the excess restores the distinction
+// the missing HDR range would have given.
+//
+// `Why x squared and not x, and not a smoothstep:` the shape has to be zero
+// AND flat at the threshold, because that is where the shimmer question is
+// decided -- a pixel wandering across the boundary under a pan must not
+// change its contribution abruptly. x is zero there but not flat (its slope
+// is a constant 1/headroom, so a pixel crossing the cut jumps). A smoothstep
+// is flat at BOTH ends, which would put a plateau at the top: a 250-code
+// pixel and a 255-code one would emit identically, throwing away the
+// "brighter things glow more" the whole effect is about. x squared is flat
+// where it must be and still rising where it must be.
+//
+// `Why the glow is SCREENed onto the picture and not added:`
+// screen(a, b) = a + b(1 - a) is, for a and b in [0, 1], again in [0, 1]
+// -- with a = 1 and b = 1 as exact fixed points, so it CANNOT clip, which a
+// plain add cannot promise. It is also the physically nicer of the two here:
+// the amount of light a glow adds is scaled by how much headroom the pixel
+// underneath still has, so the bright source at the centre of the glow (the
+// one thing a naive additive bloom always blows out) is left essentially
+// where it was while the dark field around it takes the light. Every other
+// effect in this pipeline is careful never to blow a highlight; this is how
+// the one operation that naturally would, does not.
+//
+// `Why Intensity is an EXPONENT on the transmitted light rather than a
+// multiplier on the glow -- the version that was built first, and dropped:`
+// the obvious composite is screen(base, glow x intensity), and it clips.
+// Above intensity 1 the product runs past 1.0, the clamp that has to follow
+// pins it there, and every neighbourhood whose blurred glow exceeds
+// 1/intensity goes to pure white. Worked back out of the shipped form's own
+// captures (shader-effects.md's tables; the glow at each region is recovered
+// from the output, then both composites evaluated on it): on the reference
+// `bright` scene at Intensity 2.0 the 245-code band would land on a clipped
+// 255 where this form gives 254, and at Threshold 0 with Intensity 2.0 four
+// of its five bands would merge onto white instead of two. So the intensity
+// is applied where it cannot leave the range:
+//
+//     out = 1 - (1 - base) * (1 - glow)^intensity
+//
+// which is exactly "screen the glow on `intensity` times over". It is
+// linear in intensity for small glows -- (1-g)^k ~ 1 - kg, so on the dark
+// field where the glow is faint this is the multiply, to within a fraction
+// of a code -- and it saturates instead of clipping where the glow is
+// strong. Intensity 0 is an exact identity, intensity 1 is the plain screen,
+// and no setting of any of the three params can put a pixel on 1.0 unless
+// it was already there. The price is one pow per channel instead of one
+// multiply, on the frames Bloom is on.
+const float BLOOM_HEADROOM_MIN = 0.001f;  // guards 1 - threshold at threshold 1.0
+const float BLOOM_SIGMA_MIN    = 1.0f;    // blur sigma at Radius 0, in glow-buffer texels
+const float BLOOM_SIGMA_MAX    = 3.0f;    // ... and at Radius 1
+
+// How much of a pixel's colour reaches the glow buffer: 0 at and below the
+// threshold, 1 at pure white, and the square of the fraction of the
+// remaining headroom in between. Monotone increasing in `luma` and monotone
+// DECREASING in `threshold` -- which is exactly the two properties "a
+// brighter pixel glows more" and "raise the threshold and less glows", both
+// asserted exhaustively on the CPU. At threshold 1.0 nothing glows at all,
+// at any luma, which is the right meaning for the top of that slider.
+EC_FUNC float bloom_weight( float luma, float threshold )
+{
+	float t = clamp( threshold, 0.0f, 1.0f );
+	float x = clamp( ( clamp( luma, 0.0f, 1.0f ) - t ) / max( 1.0f - t, BLOOM_HEADROOM_MIN ),
+	                 0.0f, 1.0f );
+	return x * x;
+}
+
+// Radius 0..1 -> the separable blur's sigma, in glow-buffer texels. The glow
+// buffer is BLOOM_DOWN (8) times smaller than the game's own image, so this
+// is 8..24 SOURCE pixels of sigma, i.e. a visible glow roughly 24..72 source
+// pixels across. `Why the floor is 1 and not 0:` the buffer is built by an
+// 8x8 box average, so its own texels are already an 8-pixel-wide feature; a
+// sigma below one texel would leave that box structure visible as blocking
+// after the bilinear upsample instead of a smooth falloff.
+EC_FUNC float bloom_sigma( float radius )
+{
+	return BLOOM_SIGMA_MIN + ( BLOOM_SIGMA_MAX - BLOOM_SIGMA_MIN ) * clamp( radius, 0.0f, 1.0f );
+}
+
+// One channel of the composite: the picture, the blurred bright pass at that
+// pixel, and the Intensity slider. See the header note above for why this
+// shape and not screen(base, glow * intensity).
+//
+// The 1e-6 floor is not cosmetic: GLSL's pow is UNDEFINED for pow(0, 0), and
+// glow = 1 with intensity = 0 reaches exactly that. With the floor,
+// intensity 0 returns `base` unchanged for every glow, which is what "0 is
+// off" has to mean -- and it also makes the "never reaches 1.0 unless the
+// base already was" claim strict rather than approximate.
+EC_FUNC float bloom_apply( float base, float glow, float intensity )
+{
+	float a = clamp( base, 0.0f, 1.0f );
+	float g = clamp( glow, 0.0f, 1.0f );
+	float k = max( intensity, 0.0f );
+	return 1.0f - ( 1.0f - a ) * pow( max( 1.0f - g, 1e-6f ), k );
+}
+
 #ifdef __cplusplus
 // The one wording of ab_dyn_binding()'s codes: the settings panel's
 // Diagnostics fact and the `effects_ab_log` trace both print this, so the
