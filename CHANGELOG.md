@@ -25,7 +25,7 @@ The newest version below is the one this build reports.
   single gamma curve instead of a brightness gain, so black and white stay exactly where
   they are and highlights can never blow out. Turning it on turns Adaptive Brightness
   off, since both aim the mid-tones at the same target.
-- **Steam chat over the game**: Ctrl+Shift+Tab opens Steam's web chat in a browser
+- **Steam chat over the game**: Ctrl+Shift+C opens Steam's web chat in a browser
   gamescope runs on its own display, full screen over the game and fully clickable, and
   press it again to hand the keyboard straight back. It is a separate sign-in from the
   Steam client with no voice, invites or message alerts, and the browser, the page and
