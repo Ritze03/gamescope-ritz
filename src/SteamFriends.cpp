@@ -260,6 +260,16 @@ namespace gamescope::steamfriends
 		// under g_Mutex, drained by the poller between snapshots.
 		std::set<uint32_t> g_setUnresolved;
 
+		// Ids that WERE asked about, in a request that succeeded, and that
+		// Steam's answer did not mention at all. Session-only, and not the
+		// same thing as the cache's empty-name entry: that one is Steam
+		// saying "there is no name for this id", which is an answer worth
+		// keeping forever. This is Steam saying nothing, which is not an
+		// answer -- but re-asking it every three seconds for as long as the
+		// panel is open would be a request loop, so it is asked at most once
+		// per session and reconsidered on the next launch.
+		std::set<uint32_t> g_setAskedUnanswered;
+
 		// THE SWITCH, and the reason it is an atomic here rather than a
 		// config::LoadGlobal() call: this is read on the POLLER thread, and
 		// gamescope's config generation counter is a plain uint64_t that the
@@ -503,6 +513,15 @@ namespace gamescope::steamfriends
 		}
 
 		// Caller must hold g_Mutex.
+		//
+		// ONLY CALLED AFTER A SUCCESSFUL LOOKUP, deliberately. AppNameFor()
+		// also marks the cache dirty when it touches an entry's nSeen, but a
+		// save per touch would be a file write every poll for the whole time
+		// the panel is open, to record something nobody reads until the cache
+		// is full. So touches ride along and land with the next real write.
+		// The cost is that the timestamps on disk can be stale, which can
+		// evict a slightly wrong entry once the cap is reached -- suboptimal,
+		// never incorrect, and the alternative is a write per three seconds.
 		void SaveNetCache()
 		{
 			if ( !g_bNetCacheDirty )
@@ -577,7 +596,8 @@ namespace gamescope::steamfriends
 				return it->second.sName;   // "" == Steam has no name for it
 			}
 
-			if ( g_bLookupNames.load( std::memory_order_relaxed ) )
+			if ( g_bLookupNames.load( std::memory_order_relaxed ) &&
+			     !g_setAskedUnanswered.count( uAppId ) )
 				g_setUnresolved.insert( uAppId );
 			return {};
 		}
@@ -1036,6 +1056,11 @@ namespace gamescope::steamfriends
 			EnsureNetCacheLoaded();
 			for ( const auto &[ uAppId, entry ] : mapAnswer )
 				g_mapNetNames[ uAppId ] = entry;
+			// Anything we asked about that the answer did not mention is not
+			// asked about again this session -- see g_setAskedUnanswered.
+			for ( uint32_t uAppId : vecAsk )
+				if ( !mapAnswer.count( uAppId ) )
+					g_setAskedUnanswered.insert( uAppId );
 			g_bNetCacheDirty = true;
 			g_nNamesResolved += mapAnswer.size();
 			SaveNetCache();

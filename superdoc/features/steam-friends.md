@@ -220,6 +220,7 @@ leaves the machine.
 | **corrupt** | Truncated, half-written, hand-edited, a wrong type in one entry, a future `version`, a megabyte of zeroes — **all parse as empty**, which is indistinguishable from a fresh machine. A cache is a thing the program must work without. |
 | **written** | Through a temporary and renamed, so a crash or a full disk leaves the *old* cache rather than half of a new one. |
 | **failure** | A timeout, no network or an HTTP error is **never written**. It is not an answer about the app, and storing it would bake a temporary outage into a permanent wrong label. A failed fetch backs the *whole* lookup off for five minutes — failures are network-wide, not per-app. |
+| **silence** | An id that was asked about, in a request that *succeeded*, and that the answer did not mention at all is not asked about again **this session** — and not cached either. Steam saying nothing is not an answer worth keeping forever, but re-asking every three seconds for as long as the panel is open would be a request loop. |
 
 #### It cannot stall a frame
 
