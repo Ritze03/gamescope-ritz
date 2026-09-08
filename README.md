@@ -1,3 +1,25 @@
+## gamescope-ritz
+
+**gamescope-ritz** is a fork of Valve's [gamescope](https://github.com/ValveSoftware/gamescope),
+built from upstream commit
+[`fcc1341`](https://github.com/ValveSoftware/gamescope/commit/fcc1341) — this fork has not
+diverged from upstream anywhere below that commit; everything past it is this fork's own,
+additive work. That work is a settings-and-presentation layer on top of gamescope's own
+compositor: an in-game settings overlay (the **Shell**) and a standalone command-palette
+launcher, an on-screen FPS counter, a compositor-drawn crosshair, a profile / per-game
+settings system, a set of native post-process shader effects (vibrancy, shadow lift,
+sharpening and adaptive brightness), host clipboard sync, and live-adjustable nested
+resolution and refresh. See [Features added by this fork](#features-added-by-this-fork)
+below for what each of those does, and `superdoc/` for the fuller documentation this fork
+maintains alongside the code (start at `superdoc/architecture/overview.md`).
+
+It installs as its own binary, `gamescope-ritz`, side by side with a distro-packaged
+`gamescope` — it never touches `/usr/bin/gamescope`.
+
+The rest of this page is upstream gamescope's own description of the project it forks,
+kept in place below because a reader needs both halves — what this fork adds, and what it
+is built on:
+
 ## gamescope: the micro-compositor formerly known as steamcompmgr
 
 In an embedded session usecase, gamescope does the same thing as steamcompmgr, but with less extra copies and latency:
@@ -73,6 +95,77 @@ To remove it later: `./install.sh --remove`. This never touches your
 settings in `~/.config/gamescope-ritz` — only the binary/symlink and the
 `share/gamescope-ritz` extras it placed.
 
+## Features added by this fork
+
+Each of these is this fork's own, on top of upstream gamescope; depth lives in
+`superdoc/features/` — this is the map, not the manual.
+
+- **Settings overlay — the Shell and the Launcher.** A full in-game settings surface (the
+  **Shell**: slab, rail, sheet and inspector) toggles with a tap of **Right Shift**, or with
+  **Ctrl+Shift+O**. A standalone command-palette (the **Launcher**) — the same searchable
+  index of every setting, drawn alone over the game with no shell behind it — toggles with
+  **Left Ctrl + Right Shift**; the same palette can also be opened layered over an already-open
+  Shell. See `superdoc/architecture/overview.md` to orient, and
+  `superdoc/planning/redesign/round-2/e2-inspector-plus/` for the implemented design.
+- **FPS HUD.** A single on-screen FPS integer, positioned by a 9-point anchor plus pixel
+  margins, at a chosen font size: an inverted-vs-fixed text colour mode (with a dedicated
+  fixed number colour and text opacity when Fixed is picked), a black outline, hide-above-X
+  with hysteresis, and a lag-spike colour reaction.
+  [`superdoc/features/fps-display.md`](superdoc/features/fps-display.md)
+- **Crosshair.** A compositor-drawn crosshair — four arms, an optional centre dot, an
+  optional outline, auto-hide while right-click is held (with an optional reverse-on-release
+  animation), and a per-axis "Apply Scaling" stretch to match a stretched game. It composites
+  *after* an external frame-generation layer such as `lsfg-vk`, so unlike an in-game
+  crosshair it never smears. [`superdoc/features/crosshair.md`](superdoc/features/crosshair.md)
+- **Profiles and per-game settings.** A profile is the settings file being edited, with every
+  change saved into it immediately — no separate load/save step. A game profile can inherit
+  from a general one, storing only the values that differ and following the parent for the
+  rest. `--profile <name>` and `GS_RITZ_PROFILE` pick a profile for a single session; see
+  [Command-line options](#this-forks-command-line-options) below.
+  [`superdoc/features/profiles.md`](superdoc/features/profiles.md)
+- **Native shader effects.** Vibrancy, Shadow Control, Pre-Sharpen and Adaptive Brightness
+  (with Whole image and Dynamic modes, and per-region local adaptation) run as one compute
+  pre-pass compiled into the binary at build time, not a runtime-compiled shader file — see
+  [Reshade support](#reshade-support) below for why that distinction matters.
+  [`superdoc/features/shader-effects.md`](superdoc/features/shader-effects.md)
+- **Clipboard sync.** One `CLIPBOARD` value kept in step across every Xwayland game,
+  gamescope's own native Wayland clients, and — when gamescope runs nested — the host
+  session outside it. [`superdoc/features/clipboard-sync.md`](superdoc/features/clipboard-sync.md)
+- **Runtime nested resolution and refresh.** The game's own resolution and paced refresh rate
+  can be changed live from the Shell's Resolution area, with nothing restarting — not
+  gamescope, not Xwayland, not the game.
+  [`superdoc/features/resolution-and-refresh.md`](superdoc/features/resolution-and-refresh.md)
+
+## This fork's command-line options
+
+Every upstream option still works (see [Options](#options) below); these are what this fork
+adds to the option table, or gives new meaning to:
+
+- **`--profile <name>`** — use this settings profile for the session only. It's created,
+  from what the session would otherwise have used, if it doesn't exist yet; the assignment on
+  disk is left untouched, so the next flagless launch is back on it. Same effect as setting
+  the `GS_RITZ_PROFILE` environment variable — the flag wins if both are given. See
+  [`superdoc/features/profiles.md`](superdoc/features/profiles.md).
+- **`--force-windows-fullscreen`** — force every window inside gamescope's own embedded
+  Xwayland session to open at the full nested-canvas size, regardless of its own requested
+  size. The flag itself is upstream's; this fork is the first to give it a live in-session
+  effect and a "Force maximize nested window" switch in the Shell (Display > General).
+- **`--ritz-dump-config`** — print which app id and profile the session resolved to (and
+  why), its parent, its launch option, and the settings it would run with — useful for
+  checking a profile/launch-option resolution without starting a game.
+
+## Ritz extension
+
+`extensions/gamescope-ritz.json` is a module for
+[Ritz](https://ritze03.github.io/ritz/extensions.html), the user's own game launcher: it
+wraps this fork's own `gamescope-ritz` binary (never upstream's `/usr/bin/gamescope`) so a
+Ritz user can launch a game through it, pick a settings profile for that launch, and set a
+handful of flags — profile, nested width/height/refresh, fullscreen, force-maximize-nested-
+window, scaler and filter — all from Ritz's own UI, with no command line to type.
+`./install.sh` offers to copy the manifest into `~/.config/ritz/extensions/` on
+`--install`/`--update`/`--remove` whenever it detects a Ritz install; it's never installed
+silently. See [`superdoc/features/ritz-extension.md`](superdoc/features/ritz-extension.md).
+
 ## Updating
 
 ```sh
@@ -126,6 +219,12 @@ meson install -C build/ --skip-subprojects
 * **Super + S** : Take screenshot (currently goes to `/tmp/gamescope_$DATE.png`)
 * **Super + G** : Toggle keyboard grab
 
+The list above is upstream's own (unchanged by this fork) and depends on something else —
+Steam, or another `gamescope_control` client — having registered these bindings; gamescope
+itself does not bind them out of the box. This fork's own settings overlay uses a separate
+set of bindings not listed here: see
+[Settings overlay — the Shell and the Launcher](#features-added-by-this-fork) above.
+
 ## Examples
 
 On any X11 or Wayland desktop, you can set the Steam launch arguments of your game as follows:
@@ -156,11 +255,24 @@ See `gamescope --help` for a full list of options.
 * `-b`: create a border-less window.
 * `-f`: create a full-screen window.
 
+This fork's own additions to the option table are covered separately above under
+[This fork's command-line options](#this-forks-command-line-options).
+
 ## Reshade support
 
 Gamescope supports a subset of Reshade effects/shaders using the `--reshade-effect [path]` and `--reshade-technique-idx [idx]` command line parameters.
 
 This provides an easy way to do shader effects (ie. CRT shader, film grain, debugging HDR with histograms, etc) on top of whatever is being displayed in Gamescope without having to hook into the underlying process.
+
+**In this fork, this pipeline is for a user's own `.fx` files only.** This fork's bundled
+effects — Vibrancy, Shadow Control, Pre-Sharpen and Adaptive Brightness, see
+[Native shader effects](#features-added-by-this-fork) above — used to run through this same
+runtime-compiled `.fx` pipeline, but a stale copy of that file on disk could silently shadow
+the current one and no-op two of the four effects with no error. They were rewritten as a
+native compute pre-pass compiled directly into the binary, so there is nothing on disk left
+for a stale copy to shadow; a shader error now fails the build instead of failing silently at
+runtime. See [`superdoc/features/shader-effects.md`](superdoc/features/shader-effects.md) and
+[`superdoc/features/reshade-effects.md`](superdoc/features/reshade-effects.md).
 
 Uniform/shader options can be modified programmatically via the `gamescope-reshade` wayland interface. Otherwise, they will just use their initializer values.
 
