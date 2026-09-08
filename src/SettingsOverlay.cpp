@@ -55,6 +55,7 @@
 #include "Overlay/UI/Tokens.h"
 #include "Overlay/Notifications.h"
 #include "Config/ConfigManager.h"
+#include "Keybinds.h"   // the startup toast names the LIVE shell chord
 
 #include <algorithm>
 #include <atomic>
@@ -144,8 +145,9 @@ namespace gamescope
 
 	static ConVar<bool> cv_settings_overlay_visible(
 		"settings_overlay_visible", false,
-		"Show/hide the settings overlay. A Right Shift tap toggles it too, and Ctrl+Shift+O still does. "
-		"Left Ctrl + Right Shift opens the launcher, which uses this same layer.",
+		"Show/hide the settings overlay. The keyboard chords that do the same thing are the "
+		"user's to change now -- `ritz_keybinds` lists them, `ritz_keybind` sets one, and the "
+		"settings shell's own Keybinds area edits them.",
 		[]( ConVar<bool> &cv )
 		{
 			g_bSettingsOverlayCapturing.store( cv.Get(), std::memory_order_release );
@@ -754,8 +756,16 @@ namespace gamescope
 		//
 		// 2026-09-01: rebound from Right Ctrl to Right Shift (see D22's own
 		// comment in wlserver.cpp for why); this line updated to match.
+		//
+		// 2026-09-08: read from the LIVE binding rather than written out, now
+		// that the chord is the user's to change (src/Keybinds.cpp). A toast
+		// that named a chord the user had rebound away from would teach the
+		// one thing that is certainly wrong. Cached in a static so the string
+		// this points at outlives the frame.
 		const char *pszHint = "opens the settings overlay";
-		const char *pszHotkey = "RIGHT SHIFT";
+		static std::string s_sHotkey;
+		s_sHotkey = gamescope::keybinds::ChordTextFor( gamescope::keybinds::Action::Shell );
+		const char *pszHotkey = s_sHotkey.c_str();
 
 		ImFont *pTitleFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		ImFont *pHintFont = gamescope::fonts::Get( gamescope::fonts::Style::Meta );

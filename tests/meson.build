@@ -2,7 +2,7 @@ catch2_dep = dependency('catch2-with-main', required: true)
 
 srcdir = '../src'
 unittest_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp', 'Clipboard/ClipboardSync.cpp']
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Audio/Volume.cpp', 'Clipboard/ClipboardSync.cpp', 'Keybinds.cpp']
 	unittest_src += srcdir / src
 endforeach
 
@@ -22,9 +22,9 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp'],
+	unittest_src + font_headers + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp'],
 	include_directories: [srcdir, sol2_include],
-	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep],
+	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
 	cpp_args: gamescope_cpp_args,
 )
 test('convar', gamescope_tests, args: ['[convar]'])
@@ -45,6 +45,7 @@ test('fps_counter', gamescope_tests, args: ['[fps_counter]'])
 test('pointer_mapping', gamescope_tests, args: ['[pointer_mapping]'])
 test('effects_curve', gamescope_tests, args: ['[effects_curve]'])
 test('resolution', gamescope_tests, args: ['[resolution]'])
+test('keybinds', gamescope_tests, args: ['[keybinds]'])
 
 # scripts/pointer-regression.sh's test client -- not a meson test (it needs a
 # running gamescope), just built here so the script has a binary. See the

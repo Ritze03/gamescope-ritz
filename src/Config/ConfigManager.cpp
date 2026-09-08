@@ -376,6 +376,24 @@ namespace gamescope::config
                 s.overlay.cursor_inlay_color = JGetInt( *pOverlay, "cursor_inlay_color", s.overlay.cursor_inlay_color );
                 s.overlay.cursor_everywhere = JGetBool( *pOverlay, "cursor_everywhere", s.overlay.cursor_everywhere );
                 s.overlay.cursor_override_game = JGetBool( *pOverlay, "cursor_override_game", s.overlay.cursor_override_game );
+
+                // Keybinds (2026-09-08) -- action id -> chord string. Only the
+                // actions the user changed are on disk (ConfigSchema.h), so an
+                // absent object is the normal, fresh-install case rather than
+                // an error. Nothing is validated here: this layer does not own
+                // the chord grammar, and src/Keybinds.cpp's ApplyFromConfig()
+                // is what falls a bad or conflicting entry back to its default
+                // -- so a hand-edited file loads instead of failing, and the
+                // string round-trips untouched if this build does not know the
+                // action it names.
+                if ( const nlohmann::json *pKeybinds = JGetObject( *pOverlay, "keybinds" ) )
+                {
+                    for ( auto it = pKeybinds->begin(); it != pKeybinds->end(); ++it )
+                    {
+                        if ( it->is_string() )
+                            s.overlay.keybinds[ it.key() ] = it->get<std::string>();
+                    }
+                }
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -588,6 +606,17 @@ namespace gamescope::config
             jOverlay[ "cursor_inlay_color" ] = o.cursor_inlay_color;
             jOverlay[ "cursor_everywhere" ] = o.cursor_everywhere;
             jOverlay[ "cursor_override_game" ] = o.cursor_override_game;
+
+            // Keybinds -- see the parse side above. Always emitted, empty on a
+            // fresh config: the per-field merge in EnqueueGlobalWrite/
+            // EnqueueOverlayWrite compares this one key as a whole object, so
+            // an absent key would read as "this caller did not change it" and
+            // a reset-to-defaults (which empties the map) could never be
+            // written back.
+            nlohmann::json jKeybinds = nlohmann::json::object();
+            for ( const auto &[ sAction, sChord ] : o.keybinds )
+                jKeybinds[ sAction ] = sChord;
+            jOverlay[ "keybinds" ] = std::move( jKeybinds );
 
             return jOverlay;
         }

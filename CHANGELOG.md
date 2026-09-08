@@ -12,6 +12,11 @@ The newest version below is the one this build reports.
 ## [0.6.2] – 2026-09-08
 
 ### Added
+- **Editable keybinds**: a new Keybinds area under Settings changes the three chords
+  gamescope-ritz binds for itself -- the one that opens the settings, its alternate,
+  and the launcher -- by clicking a chord and pressing the one you want, saved once for
+  every game and profile. Ctrl+Alt+Shift+O always opens the settings and can never be
+  taken, so a binding you can no longer press is never a dead end.
 - **`install.sh`**: a single install/update/remove entry point at the repo root
   (`--install` / `--update` / `--remove`, or no flag for an interactive menu). It
   checks that wlroots is actually usable before building -- not just that a package

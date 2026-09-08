@@ -68,9 +68,14 @@
 #include "main.hpp"
 #include "steamcompmgr.hpp"
 #include "SettingsOverlay.h"
-// D22: the Left Ctrl + Right Shift palette shortcut lives in this file's
-// hotkey table, so it needs the shell's one-line request API.
+// D22: the launcher shortcut's POLICY lives in this file's hotkey table, so it
+// needs the shell's one-line request API. Which chord means which action does
+// not: that is Keybinds.h, below.
 #include "Overlay/UI/Shell.h"
+// 2026-09-08: this fork's own hotkeys, as editable data. wlserver_process_
+// hotkeys() asks it which action a key event completed; the actions themselves
+// are performed by wlserver_check_ritz_keybinds() below.
+#include "Keybinds.h"
 // The crosshair's right-click auto-hide watches BTN_RIGHT on the game path
 // of wlserver_dispatch_mouse_button() -- see that function.
 #include "Overlay/Crosshair.h"
@@ -304,295 +309,138 @@ static void bump_input_counter()
 }
 
 // ============================================================================
-// M2: settings overlay input capture and release.
-//
-// See superdoc/planning/SPEC.md's "Input capture and release" section and
-// superdoc/planning/ISSUES.md issues #5-#7. Everything in this section runs
-// on the MAIN thread (wlserver_run()'s event loop calls every listener in
-// this file) -- it never touches ImGuiIO directly, only
-// gamescope::SettingsOverlay_Queue*() (SettingsOverlay.cpp), which appends
-// to a mutex-guarded queue the steamcompmgr thread drains once per frame.
-// See the matching file-level comment in SettingsOverlay.cpp for why.
+// M2 / D22: this fork's own hotkeys -- now DATA, not three hand-written ifs.
 // ============================================================================
-
-// Ctrl+Shift+O toggles the overlay (DECISIONS.md #6). Detected here, inside
-// wlserver_process_hotkeys(), rather than as a separate check in each of
-// wlserver_handle_key()/wlserver_key(), because this is the one place that
-// already tracks a reliable per-keyboard "which syms are currently held"
-// set (wlserver.mapPressedHotkeyKeys) that works identically across every
-// backend. A naive xkb_state_mod_name_is_active(keyboard->xkb_state, ...)
-// check would NOT work uniformly here: wlserver.wlr.virtual_keyboard_device
-// -- the device wlserver_key() (SDL, Wayland-nested, OpenVR, ime,
-// InputEmulation) attributes every event to -- is a *member* of
-// wlserver.keyboard_group (grouped in wlserver_new_input() like any real
-// keyboard), and wlr_keyboard_group forwards a member's own
+// Everything that used to live here in two functions
+// (wlserver_check_settings_overlay_toggle and wlserver_check_shell_shortcuts,
+// ~290 lines of chord matching and gesture arming) is now
+// src/Keybinds.cpp, because the chords are user-editable as of 2026-09-08:
+// `overlay.keybinds` in global.json, edited from the settings shell's
+// Keybinds area. See superdoc/features/keybinds.md, which also carries the
+// full history of why the shell binding is a RELEASE-fired tap and why a
+// modifier is acted on but never swallowed -- the reasoning that used to be
+// written out here, moved with the code it explains rather than dropped.
+//
+// WHAT STAYED HERE, AND WHY. Keybinds.cpp answers exactly one question --
+// "which action did this key event complete, and must the key be swallowed"
+// -- and knows nothing about the overlay. The POLICY below (what "open the
+// shell" means when the launcher is already up, and what the launcher combo
+// does the second time it is pressed) is unchanged and stays in this file,
+// where it always was: it is about the settings overlay's own state, not
+// about keyboards.
+//
+// DETECTED HERE, inside wlserver_process_hotkeys(), rather than as a separate
+// check in each of wlserver_handle_key()/wlserver_key(), because this is the
+// one place that already tracks a reliable per-keyboard "which syms are
+// currently held" set (wlserver.mapPressedHotkeyKeys) that works identically
+// across every backend. A naive xkb_state_mod_name_is_active(
+// keyboard->xkb_state, ...) check would NOT work uniformly here:
+// wlserver.wlr.virtual_keyboard_device -- the device wlserver_key() (SDL,
+// Wayland-nested, OpenVR, ime, InputEmulation) attributes every event to --
+// is a *member* of wlserver.keyboard_group (grouped in wlserver_new_input()
+// like any real keyboard), and wlr_keyboard_group forwards a member's own
 // wlr_keyboard_notify_key()/notify_modifiers() on to the *group's* keyboard
-// as a second, synchronous emission. So even though wlserver_key() does
-// keep this device's xkb_state genuinely live (see its own comment for how
-// and why -- needed for correct text resolution), calling
-// wlr_keyboard_notify_key() on it directly would re-enter
-// wlserver_handle_key() for the same physical transition under the
-// *group's* wlr_keyboard pointer, i.e. process every key twice under two
-// different {keyboard, keycode} identities. wlserver_key() therefore never
-// calls wlr_keyboard_notify_key() on this device (it advances xkb_state and
-// the device's keycode/modifier bookkeeping by hand instead -- see its
-// comment) and, like every non-DRM path, only ever calls
-// wlr_seat_keyboard_notify_key() to actually deliver the event to a client.
-// The already-existing pressed-syms set is what lets this function detect
-// the combo without needing to trust any device's live modifier bits.
-static bool s_bOverlayHotkeyOwnsO = false;
-
-static bool wlserver_check_settings_overlay_toggle( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
+// as a second, synchronous emission. The already-existing pressed-syms set is
+// what lets this detect a chord without needing to trust any device's live
+// modifier bits.
+static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool press,
+                                          const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
 {
-	if ( press )
+	using namespace gamescope::keybinds;
+
+	const KeyResult res = ProcessKey( normalizedKeysym, press, setPressedKeySyms );
+	if ( !res.bFired )
+		return res.bConsume;
+
+	switch ( res.eAction )
 	{
-		if ( normalizedKeysym != XKB_KEY_O )
-			return false;
+		case Action::Shell:
+		case Action::ShellAlt:
+			gamescope::SettingsOverlay_ToggleVisible();
+			break;
 
-		const bool bCtrl = setPressedKeySyms.contains( XKB_KEY_Control_L ) || setPressedKeySyms.contains( XKB_KEY_Control_R );
-		const bool bShift = setPressedKeySyms.contains( XKB_KEY_Shift_L ) || setPressedKeySyms.contains( XKB_KEY_Shift_R );
-		if ( !bCtrl || !bShift )
-			return false;
-
-		// Own this physical key's eventual release too (below), regardless
-		// of whether Ctrl/Shift are still held by then -- otherwise the
-		// release would fall through to wlserver_dispatch_key() and get
-		// forwarded/queued as an ordinary (unmatched) 'O' release.
-		s_bOverlayHotkeyOwnsO = true;
-		gamescope::SettingsOverlay_ToggleVisible();
-		return true;
-	}
-
-	if ( normalizedKeysym == XKB_KEY_O && s_bOverlayHotkeyOwnsO )
-	{
-		s_bOverlayHotkeyOwnsO = false;
-		return true;
-	}
-
-	return false;
-}
-
-// ---------------------------------------------------------------------------
-// D22: Right Shift opens the overlay; Left Ctrl + Right Shift opens the palette.
-// ---------------------------------------------------------------------------
-// 2026-09-01: rebound from Right Ctrl / Left Ctrl + Right Ctrl to Right Shift /
-// Left Ctrl + Right Shift -- off of Ctrl and Shift, which see constant
-// press/release traffic in games that bind crouch/walk to them, and onto Right
-// Shift, which almost nothing else binds.
-//
-// ---------------------------------------------------------------------------
-// 2026-09-02: BOTH BINDINGS NOW FIRE ON RIGHT SHIFT'S RELEASE. Nothing here
-// acts on a press any more. This is the fourth time this binding has broken,
-// and every previous break came out of the same structural crack, so the crack
-// is what is being closed rather than the individual symptom.
-//
-// THE CRACK. The lone binding always fired on Right Shift's RELEASE (see "why
-// a tap" below). The combo used to fire on the PRESS of whichever of its two
-// keys went down second. Two gestures over the same physical key, resolving at
-// two different moments, and every past bug was one of the two ways that can
-// go wrong:
-//
-//   * the chord fires on press AND the tap fires on the same key's release --
-//     two UIs open from one gesture. Guarded against by disarming the tap
-//     wherever the chord fired, which is a guard somebody has to remember at
-//     every new exit; and
-//   * the chord fires on press and thereby EATS a longer gesture that has not
-//     finished being typed. `Ctrl+Shift+O` -- the overlay's own documented
-//     binding -- begins with exactly `Left Ctrl + Right Shift`, so with the
-//     right-hand Shift the launcher opened the instant Shift went down and the
-//     `O` then arrived at an overlay that was already up, toggling it straight
-//     back off. The binding advertised in the ConCommand help did nothing at
-//     all, and no amount of care at the chord's exits could have fixed it: on
-//     the press, the keystroke that decides between the two gestures has not
-//     been typed yet.
-//
-// THE RESOLUTION. Decide on the release, when the whole gesture is known.
-// Right Shift's press only ARMS -- recording which of the two gestures the
-// keys currently down say this is -- and Right Shift's release fires exactly
-// that one and clears the arming. So:
-//
-//   * exactly one gesture can fire per press/release of Right Shift, by
-//     construction rather than by a guard. "The chord already fired, so do not
-//     also fire the tap" is not a rule that can be forgotten, because the
-//     chord no longer fires at a moment when the tap could still be pending;
-//   * any other key pressed while Right Shift is held disarms, so `Ctrl+Shift
-//     +O` reaches its own handler with nothing else having happened first; and
-//   * ARMING IS STILL UNCONDITIONAL on Right Shift's press -- the property
-//     Issue #102 was fixed to get. A modifier the ledger wrongly believes is
-//     held can still change *which* gesture is armed (that is what the binding
-//     means), but it cannot make the press arm nothing, which is the failure
-//     mode that broke the Shell binding repeatedly. The ledger being right
-//     about that modifier is the reconcile-against-keyboard->keycodes fix
-//     above, and is a separate mechanism from this one.
-//
-// Left Ctrl arriving while Right Shift is already down UPGRADES the armed
-// gesture from Shell to Launcher instead of firing, which is what keeps the
-// combo working in either key order.
-//
-// WHY A TAP AND NOT A PRESS. Right Shift is a modifier, and a modifier that
-// fires on its own PRESS cannot be used as a modifier any more -- Right
-// Shift + C would open the overlay every time. So the overlay fires on
-// RELEASE, and only if nothing else was pressed while it was held: the
-// "tap" gesture, which is the only way to give a modifier its own binding
-// without taking away its day job.
-//
-// WHY NOTHING HERE IS CONSUMED. Every branch below returns false, so the key
-// still travels its normal path, and that is deliberate rather than an
-// oversight. These are MODIFIERS: swallowing Right Shift's release while its
-// press was already delivered would leave the game (or the overlay) holding a
-// Shift that is physically up -- a stuck modifier, which is worse than any
-// binding is worth. Acting on a key and forwarding it are independent, and
-// for a modifier the answer is always "act, and forward".
-//
-// LEFT AND RIGHT ARE GENUINELY DISTINCT HERE. NormalizeKeysymForHotkey()
-// upper-cases and applies k_mapKeysymRemapping, and neither operation merges
-// Shift_L with Shift_R, or Control_L with Control_R (the table only folds
-// Meta->Super, ISO_Left_Tab->Tab and friends). So setPressedKeySyms really
-// does tell the two apart, and this binding is not quietly "either Shift".
-// Verified against real key events, not just the table -- see D22 in
-// AUTONOMOUS-DECISIONS.md.
-//
-// WHAT RIGHT SHIFT'S PRESS ARMED, to be fired by its release. `Disarmed` is
-// also the resting state: some other key was pressed while Right Shift was
-// held, so Right Shift was being used as the modifier it is. Spelled
-// `Disarmed` rather than `None` because X11's `None` is a macro, and this file
-// includes Xlib.
-enum class RightShiftGesture
-{
-	Disarmed,
-	Shell,		// lone Right Shift -- toggle the settings overlay.
-	Launcher,	// Left Ctrl + Right Shift -- the command palette alone.
-};
-static RightShiftGesture s_eRightShiftGesture = RightShiftGesture::Disarmed;
-
-static bool wlserver_check_shell_shortcuts( xkb_keysym_t normalizedKeysym, bool press, const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
-{
-	const bool bLeftCtrlHeld   = setPressedKeySyms.contains( XKB_KEY_Control_L );
-	const bool bRightShiftHeld = setPressedKeySyms.contains( XKB_KEY_Shift_R );
-
-	if ( press )
-	{
-		if ( normalizedKeysym == XKB_KEY_Shift_R )
+		case Action::Launcher:
 		{
-			// ARM, unconditionally -- see the 2026-09-02 note above for why
-			// this press can never decline to arm. Which gesture is armed is
-			// read off the keys that are down right now; Left Ctrl arriving
-			// later upgrades it, just below.
-			s_eRightShiftGesture = bLeftCtrlHeld
-				? RightShiftGesture::Launcher
-				: RightShiftGesture::Shell;
-			return false;
-		}
-
-		if ( normalizedKeysym == XKB_KEY_Control_L )
-		{
-			// The combo typed in the other order. An UPGRADE rather than a
-			// firing: the gesture is still Right Shift's to complete, and
-			// completing it here is exactly the press-time decision that ate
-			// `Ctrl+Shift+O`.
+			// D25: THIS BINDING DOES NOT OPEN THE SHELL.
 			//
-			// Only Shell is upgraded. `Disarmed` stays disarmed --
-			// Right Shift is either not down or was already spent as a
-			// modifier, and Left Ctrl cannot revive it.
-			if ( bRightShiftHeld && s_eRightShiftGesture == RightShiftGesture::Shell )
-				s_eRightShiftGesture = RightShiftGesture::Launcher;
+			// It used to call SetVisible(true) and then ask for the palette,
+			// which meant the rail, the sheet and the inspector came up
+			// underneath it every time -- the user asked for one setting and
+			// got the whole settings surface, which is precisely what the
+			// launcher was kept as a feature to avoid.
+			//
+			// The two situations are genuinely different and get different
+			// answers:
+			//
+			//   * shell already open -- the palette over the shell, exactly
+			//     as before. Nothing is being dragged in that the user did
+			//     not already have on screen.
+			//   * otherwise -- the LAUNCHER: the palette alone, over the
+			//     game, and Esc goes straight back to the game.
+			//
+			// LauncherOnlyActive() is what tells the two apart, because
+			// settings_overlay_visible is true in both cases -- the launcher
+			// needs the overlay's layer and its input capture just as much as
+			// the shell does. Without it, pressing the binding a second time
+			// while the launcher was up would read as "the shell is open" and
+			// summon the shell.
+			const bool bLauncherOnly = gamescope::ui::shell::LauncherOnlyActive();
 
-			return false;
+			// Issue #88: THE COMBO CLOSES what it opened, instead of only
+			// ever being able to open. PaletteActive() is true exactly when
+			// this combo (or PaletteJump promoting it) put the palette on
+			// screen -- as the launcher, or over the shell -- so a second
+			// gesture while that is still true is unambiguously "put it away
+			// again", not "open something else".
+			//
+			// The two closing situations get different answers, mirroring the
+			// two opening ones above:
+			//
+			//   * it was the LAUNCHER (nothing else was on screen) -- take
+			//     the whole overlay down, the same hide path the shell
+			//     binding's own tap uses.
+			//   * it was the palette OVER a shell the user opened separately
+			//     -- close only the palette. Hiding the overlay here would
+			//     also blank a shell the combo never opened and has no
+			//     business closing.
+			if ( gamescope::ui::shell::PaletteActive() )
+			{
+				if ( bLauncherOnly )
+				{
+					// Item 2: this combo is the one route the user asked to
+					// keep the query on -- the shell binding and Escape close
+					// the launcher too, through different paths, and neither
+					// of those asks for this.
+					gamescope::ui::shell::RequestLauncherClosePreservingQuery();
+					gamescope::SettingsOverlay_SetVisible( false );
+				}
+				else
+					gamescope::ui::shell::RequestClosePalette();
+
+				break;
+			}
+
+			const bool bShellOpen = gamescope::SettingsOverlay_IsCapturingInput() &&
+			                        !bLauncherOnly;
+
+			// Either way the overlay's layer has to be drawing and capturing:
+			// the launcher is a search field, so it needs the keyboard, and it
+			// is clickable, so it needs the pointer. SetVisible rather than
+			// Toggle, because toggling would close the overlay in the very
+			// common case where the shortcut is used while it is open.
+			gamescope::SettingsOverlay_SetVisible( true );
+			if ( bShellOpen )
+				gamescope::ui::shell::RequestPalette();
+			else
+				gamescope::ui::shell::RequestLauncher();
+			break;
 		}
 
-		// Any other key while Right Shift is held means it was being used as
-		// a modifier, not tapped -- and, crucially, that this keystroke may
-		// be part of a LONGER binding whose first two keys happen to be this
-		// combo. `Ctrl+Shift+O` is precisely that binding, and disarming here
-		// is what lets its own handler see it.
-		s_eRightShiftGesture = RightShiftGesture::Disarmed;
-		return false;
+		case Action::Count:
+			break;
 	}
 
-	if ( normalizedKeysym != XKB_KEY_Shift_R )
-		return false;
-
-	const RightShiftGesture eGesture = s_eRightShiftGesture;
-	s_eRightShiftGesture = RightShiftGesture::Disarmed;
-
-	if ( eGesture == RightShiftGesture::Shell )
-	{
-		gamescope::SettingsOverlay_ToggleVisible();
-		return false;
-	}
-
-	if ( eGesture != RightShiftGesture::Launcher )
-		return false;
-
-	// D25: THIS BINDING NO LONGER OPENS THE SHELL.
-	//
-	// It used to call SetVisible(true) and then ask for the palette, which
-	// meant the rail, the sheet and the inspector came up underneath it every
-	// time -- the user asked for one setting and got the whole settings
-	// surface, which is precisely what the launcher was kept as a feature to
-	// avoid.
-	//
-	// The two situations are genuinely different and get different answers:
-	//
-	//   * shell already open -- the palette over the shell, exactly as
-	//     before. Nothing is being dragged in that the user did not already
-	//     have on screen.
-	//   * otherwise -- the LAUNCHER: the palette alone, over the game, and
-	//     Esc goes straight back to the game.
-	//
-	// LauncherOnlyActive() is what tells the two apart, because
-	// settings_overlay_visible is true in both cases -- the launcher needs
-	// the overlay's layer and its input capture just as much as the shell
-	// does. Without it, pressing the binding a second time while the launcher
-	// was up would read as "the shell is open" and summon the shell.
-	const bool bLauncherOnly = gamescope::ui::shell::LauncherOnlyActive();
-
-	// Issue #88: THE COMBO CLOSES what it opened, instead of only ever being
-	// able to open. PaletteActive() is true exactly when this combo (or
-	// PaletteJump promoting it) put the palette on screen -- as the launcher,
-	// or over the shell -- so a second gesture while that is still true is
-	// unambiguously "put it away again", not "open something else".
-	//
-	// The two closing situations get different answers, mirroring the two
-	// opening ones above:
-	//
-	//   * it was the LAUNCHER (nothing else was on screen) -- take the whole
-	//     overlay down, the same hide path Right Shift's lone tap uses.
-	//   * it was the palette OVER a shell the user opened separately -- close
-	//     only the palette. Hiding the overlay here would also blank a shell
-	//     the combo never opened and has no business closing.
-	if ( gamescope::ui::shell::PaletteActive() )
-	{
-		if ( bLauncherOnly )
-		{
-			// Item 2: this combo is the one route the user asked to keep the
-			// query on -- Right Shift's lone tap and Escape close the
-			// launcher too, but through different paths, and neither of
-			// those asks for this.
-			gamescope::ui::shell::RequestLauncherClosePreservingQuery();
-			gamescope::SettingsOverlay_SetVisible( false );
-		}
-		else
-			gamescope::ui::shell::RequestClosePalette();
-
-		return false;
-	}
-
-	const bool bShellOpen = gamescope::SettingsOverlay_IsCapturingInput() &&
-	                        !bLauncherOnly;
-
-	// Either way the overlay's layer has to be drawing and capturing: the
-	// launcher is a search field, so it needs the keyboard, and it is
-	// clickable, so it needs the pointer. SetVisible rather than Toggle,
-	// because toggling would close the overlay in the very common case where
-	// the shortcut is used while it is open.
-	gamescope::SettingsOverlay_SetVisible( true );
-	if ( bShellOpen )
-		gamescope::ui::shell::RequestPalette();
-	else
-		gamescope::ui::shell::RequestLauncher();
-
-	return false;
+	return res.bConsume;
 }
 
 // Issue #102: drop the whole held-key record, and any half-finished gesture
@@ -608,11 +456,12 @@ static bool wlserver_check_shell_shortcuts( xkb_keysym_t normalizedKeysym, bool 
 //
 // A leaked MODIFIER does not merely add a phantom key: it silently rewrites
 // every binding that reads the held-key set. A stale Control_L turns each
-// later lone Right Shift tap into the Left Ctrl + Right Shift launcher combo (see
-// wlserver_check_shell_shortcuts above: the combo is tested first, and taking
-// it also disarms the tap), so Right Shift stops opening the shell and starts
-// toggling the launcher instead -- while the real Left Ctrl + Right Shift combo goes
-// on working, because it was already the branch being taken. Reproduced
+// later lone Right Shift tap into the Left Ctrl + Right Shift launcher combo
+// (the two chords differ by exactly that one key, so a phantom Control_L
+// turns one gesture into the other), so Right Shift stops opening the shell
+// and starts toggling the launcher instead -- while the real Left Ctrl +
+// Right Shift combo goes on working, because it was already what matched.
+// Reproduced
 // exactly that way: with one unreleased Left Ctrl in the ledger, three lone
 // Right Shift taps drew 'L' (launcher) on every frame and never 'S' (shell).
 //
@@ -688,11 +537,11 @@ void wlserver_clear_pressed_hotkeys()
 
 	wlserver.mapPressedHotkeyKeys.clear();
 
-	// The two gestures that carry state across events are mid-flight by
-	// definition if focus moved while they were armed, and neither can be
-	// completed now: the release that would finish them went somewhere else.
-	s_eRightShiftGesture = RightShiftGesture::Disarmed;
-	s_bOverlayHotkeyOwnsO = false;
+	// A gesture that carries state across events (every tap binding, and any
+	// armed rebind capture) is mid-flight by definition if focus moved while
+	// it was armed, and none of them can be completed now: the release that
+	// would finish them went somewhere else.
+	gamescope::keybinds::ClearGestureState();
 }
 
 // D22. A key event on THIS compositor's own keyboard, from a script.
@@ -3483,25 +3332,24 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
 		setPressedKeySyms.emplace( uKeySym );
 
-	// D22: Right Shift / Left Ctrl + Right Shift. Never returns true (see the
-	// function's own comment on why a modifier is acted on but not consumed),
-	// so the call is a statement rather than a condition -- writing it as an
-	// `if` would suggest it can swallow a key, which is exactly the thing it
-	// must never do.
+	// This fork's own bindings (src/Keybinds.cpp), checked before the
+	// external-binding search below so they always win the combo regardless
+	// of what a client might have registered.
 	//
-	// Issue #102: FIRST, and unconditionally. It consumes nothing, so nothing
-	// below can be ordered ahead of it for correctness -- and being last is
-	// what let the two guards above decide, silently, that the shell's own
-	// binding would not be offered this keystroke at all.
-	wlserver_check_shell_shortcuts( normalizedKeysym, press, setPressedKeySyms );
+	// Issue #102: FIRST, and unconditionally -- ahead of the two guards
+	// below. A tap binding is defined by its own key's RELEASE, and being
+	// ordered after those guards is what let them decide, silently, that the
+	// shell's own binding would not be offered this keystroke at all.
+	//
+	// The return value is "swallow this key": true only for a chord that
+	// contains a real key (Ctrl+Shift+O), never for a modifier tap. See
+	// Keybinds.cpp's engine comment for why a modifier is acted on but always
+	// forwarded.
+	if ( wlserver_check_ritz_keybinds( normalizedKeysym, press, setPressedKeySyms ) )
+		return true;
 
 	if ( bReleaseWithoutRecordedPress || bSymStillHeldElsewhere )
 		return false;
-
-	// M2: Ctrl+Shift+O, checked before the external-binding search below so
-	// it always wins the combo regardless of what else might be registered.
-	if ( wlserver_check_settings_overlay_toggle( normalizedKeysym, press, setPressedKeySyms ) )
-		return true;
 
 	if ( log_binding.Enabled( LOG_DEBUG ) )
 	{

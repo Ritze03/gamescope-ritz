@@ -103,13 +103,27 @@ NOT_COVERED = {
     "audio.stream.volume.mute": "a live PipeWire node mute, not a config value",
     "log.autoscroll": "Log view state; deliberately not persisted (profiles.md: the Log's rows "
                       "resolve to no key)",
+    # Keybinds (2026-09-08). These ARE persisted -- global.json's
+    # overlay.keybinds -- but the generic round trip cannot exercise them:
+    # "a different valid value" for a chord is not a step or a next option,
+    # and any string that is not a chord is refused by design
+    # (src/Keybinds.cpp's SetChord). Naming them here rather than letting the
+    # blanket "text" reason below claim them, because that reason ("Log view
+    # state, deliberately not persisted") would be false for these.
+    "keybinds.shell": "a key chord, not a value with a next step; the round trip is pinned by "
+                      "tests/test_keybinds.cpp and, live, by "
+                      "build-release/verify-shots/keybinds-2026-09-08/",
+    "keybinds.shell_alt": "as keybinds.shell",
+    "keybinds.launcher": "as keybinds.shell",
 }
 KIND_NOT_COVERED = {
     "facts": "read-only",
     "meter": "read-only",
     "action": "an Action has no value",
     "bank": "Log view state (bit set); deliberately not persisted",
-    "text": "needs typed input; Log view state, deliberately not persisted",
+    "text": "needs typed input. The Log's filter is view state and deliberately not "
+            "persisted; the Keybinds rows ARE persisted and are named individually in "
+            "NOT_COVERED above with what covers them",
 }
 
 # Gate-openers: a row whose SETTER only applies while another row is in a
@@ -702,14 +716,19 @@ def run_situation(sit_key, inst, cfg, out_dir, only_ids, steps):
         r = Result(sit_key, row)
         if only_ids and row["id"] not in only_ids:
             continue
-        if row["kind"] in KIND_NOT_COVERED:
-            r.covered = False
-            r.reason = KIND_NOT_COVERED[row["kind"]]
-            results.append(r)
-            continue
+        # An id-specific reason wins over the blanket kind one: a kind that
+        # is usually not a setting can still contain rows that are (the
+        # Keybinds chords are Kind::Text and genuinely persisted), and
+        # reporting those under the kind's generic reason would print
+        # something false about them.
         if row["id"] in NOT_COVERED:
             r.covered = False
             r.reason = NOT_COVERED[row["id"]]
+            results.append(r)
+            continue
+        if row["kind"] in KIND_NOT_COVERED:
+            r.covered = False
+            r.reason = KIND_NOT_COVERED[row["kind"]]
             results.append(r)
             continue
         if row["id"].startswith("audio."):

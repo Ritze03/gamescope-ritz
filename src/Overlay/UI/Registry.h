@@ -452,6 +452,28 @@ namespace gamescope::ui
 		Entry &Dropdown() { m_bDropdownStyle = true; return *this; }
 		bool  DropdownStyle() const { return m_bDropdownStyle; }
 
+		// ---- presentation flag: capture a key chord (2026-09-08) ----------
+		// A Kind::Text row whose value is a KEY CHORD. Exactly the same shape
+		// as Dropdown() above and for the same reason: the row is still a
+		// plain Kind::Text with a std::string binding everywhere that matters
+		// (the palette, overlay_e2_set/get, the Inspector, persistence and
+		// reset all keep reading it as before), and only the Sheet/Inspector
+		// row painter's choice of atom changes -- controls::Chord() instead of
+		// controls::Text().
+		//
+		// WHY A CAPTURE FIELD AND NOT A TEXT FIELD. The chord grammar
+		// (`LCtrl+RShift`) is writable, and the console can still write it --
+		// that is what `overlay_e2_set` and `ritz_keybind` are for, and it is
+		// how the binding tests drive one. But asking a player to TYPE a
+		// keysym name in order to change a keyboard shortcut is the wrong
+		// question: they know the chord as a thing their hands do. So the
+		// field listens instead, and the typed form stays as the scriptable
+		// and documented fallback rather than as the interface. The listening
+		// itself is not this file's business -- Keybinds.cpp arms it, swallows
+		// the keys while it is armed, and hands back the chord.
+		Entry &Chord() { m_bChordStyle = true; return *this; }
+		bool  ChordStyle() const { return m_bChordStyle; }
+
 		// ---- the Inspector's live preview block (2026-09-07) -------------
 		// A row may ask the Inspector to draw ONE named picture above its
 		// VALUES block. Named, not a callback: the registry stays a
@@ -639,6 +661,7 @@ namespace gamescope::ui
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
+		bool        m_bChordStyle         = false;   // Chord() -- keybinds, 2026-09-08
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;

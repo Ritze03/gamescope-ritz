@@ -55,6 +55,11 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   formats, the resolution order, the Profiles area (the list, the four modals, the
   inherited/overridden markers, the session badge), the API it calls, `--profile` /
   `ritz_profile`, and the schema 2 -> 3 migration table (the v1 model as history).
+- [Keybinds](features/keybinds.md) -- the editable compositor hotkeys: the inventory of
+  what this fork binds (and what it deliberately leaves alone), the chord grammar, the
+  tap-vs-press firing rules and the peak set behind them, `overlay.keybinds` in
+  `global.json`, the conflict rule, the two ways back from a binding that made the
+  settings unreachable, and the capture chip.
 
 ### External surfaces
 

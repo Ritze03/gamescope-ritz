@@ -652,6 +652,31 @@ namespace gamescope::config
         // at all then, for any compositor. See
         // superdoc/features/cursor-pipeline.md.
         bool cursor_override_game = false;
+
+        // ---- Keybinds -- src/Keybinds.{h,cpp}, area `setup.keybinds` -------
+        // (2026-09-08.) This fork's own compositor hotkeys, as data: action id
+        // ("shell", "shell_alt", "launcher") -> the chord string that action
+        // is bound to ("RShift", "Ctrl+Shift+O", "LCtrl+RShift").
+        //
+        // ONLY THE ACTIONS THAT DIFFER from their compiled-in default appear
+        // here, so a fresh config carries no keybind keys at all and behaves
+        // exactly as every build before this one did -- and clearing a row
+        // (which removes its key) is what "reset to the default" means. That
+        // is deliberately the same nullable shape fade_ms and
+        // cursor_outline_color use for "unset means follow the built-in",
+        // expressed as absence-from-a-map rather than std::optional because
+        // the set of actions is open: an action added later must not need a
+        // schema change, and an entry for an action this build no longer has
+        // is simply never looked up -- the same graceful path
+        // panel_geometry's own comment describes.
+        //
+        // GLOBAL, LIKE EVERY OTHER FIELD IN THIS STRUCT, and for that same
+        // reason (superdoc/features/profiles.md): which key opens your
+        // settings is a fact about the player's keyboard, not about the game.
+        // A per-profile keybind would also mean the chord that opens the
+        // settings changed when you launched a different game -- i.e. the one
+        // control you need in order to fix it would move on its own.
+        std::map<std::string, std::string> keybinds;
     };
 
     // Toast notification system (this fork's own addition, see

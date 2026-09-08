@@ -171,6 +171,21 @@ namespace gamescope::ui
 			Line( { 7.5f, 12.0f }, { 4.0f, 12.0f } ),
 			Line( { 16.5f, 12.0f }, { 20.0f, 12.0f } ) } },
 
+		{ "setup.keybinds", 5, {
+			// A keyboard: one wide, shallow outline with three filled keycaps
+			// in a row and one long bar under them -- the spacebar. The
+			// SILHOUETTE is the identity, which is why the caps are filled
+			// (SPEC 8.0's licensed fill, same argument as the HUD's bars):
+			// three stroked cap outlines inside a stroked body reads as a
+			// hatched rectangle at 12 px. Distinct from Mixer (stroked caps
+			// on lines, no enclosing body) and from system.general's chip
+			// (a square with pins radiating OFF its edges, nothing inside).
+			Rect( 2.5f, 6.5f, 21.5f, 17.5f ),
+			Bar( 5.0f, 9.0f, 8.0f, 11.5f ),
+			Bar( 10.5f, 9.0f, 13.5f, 11.5f ),
+			Bar( 16.0f, 9.0f, 19.0f, 11.5f ),
+			Bar( 7.0f, 13.5f, 17.0f, 15.5f ) } },
+
 		{ "audio.mixer", 6, {
 			// Two faders: a track above and below each cap. The cap is a
 			// stroked rectangle, NOT a filled one, which is the single

@@ -1449,6 +1449,60 @@ namespace gamescope::ui
 		}
 
 		// =================================================================
+		//  Chord -- a keybind, captured rather than typed (2026-09-08)
+		// =================================================================
+		// Text()'s closed state with two differences that both come from what
+		// the value IS. A chord is a thing you press, so (a) it is drawn as a
+		// KEYCAP-shaped chip rather than as right-aligned prose with a pencil
+		// -- the same chip grammar the launcher already uses for a shortcut
+		// glyph -- and (b) the armed state is loud: an accent border and a
+		// standing instruction, because while it is armed every keystroke in
+		// the session is being swallowed and the user has to be able to see
+		// that and know how to get out of it.
+		bool Chord( const RowCtx &row, const char *pszId, const char *pszChord, bool bCapturing )
+		{
+			const float flPadX = Px( tok::kVerbPadX );
+
+			// The armed label carries its own escape hatch ("Esc cancels"),
+			// because while a capture is armed EVERY key in the session is
+			// being swallowed and a user who cannot see the way out is stuck.
+			// It is dropped only when the zone genuinely cannot hold it -- the
+			// Inspector's VALUES copy of the same row is much narrower than
+			// the sheet's, and a clipped "Press a chord (E..." says less than
+			// the short form does. Measured, not guessed at per host: the two
+			// hosts differ only in width, so width is what decides.
+			const char *pszLong  = "Press a chord   (Esc cancels)";
+			const char *pszShort = "Press a chord";
+			const char *pszShown = pszChord && *pszChord ? pszChord : "unbound";
+			if ( bCapturing )
+			{
+				const float flLong = MeasureText( TypeRole::Meta, pszLong ).x + flPadX * 2.0f;
+				pszShown = flLong <= row.CtlWidthPx() ? pszLong : pszShort;
+			}
+
+			const float flW = MeasureText( TypeRole::Meta, pszShown ).x + flPadX * 2.0f;
+			const ImRect rc = row.PlacePx( std::min( flW, row.CtlWidthPx() ) );
+
+			ImGui::PushID( pszId );
+			const Atom a = Begin( rc, "chord" );
+			const bool bPressed = a && a.bPressed;
+
+			// While armed the chip reads as live, not as hovered: Accent fill
+			// and border, the same pair every other "this control is currently
+			// doing something" state uses.
+			const ImU32 colFill = bCapturing ? Accent( 0.22f )
+			                                 : ( a.bHovered ? palette::White( 0.11f ) : palette::White( 0.05f ) );
+			Dl()->AddRectFilled( rc.Min, rc.Max, colFill );
+			Boundary( rc, bCapturing ? Accent( 0.85f ) : Col( Role::LineControl ) );
+			DrawText( rc, TypeRole::Meta,
+				bCapturing ? Col( Role::AccentSeg ) : Col( Role::TextPrimary ),
+				pszShown, TextAlign::Center );
+
+			ImGui::PopID();
+			return bPressed;
+		}
+
+		// =================================================================
 		//  Chip bank -- SPEC §3.12
 		// =================================================================
 		bool Bank( const RowCtx &row, const char *pszId, uint32_t *pnMask,

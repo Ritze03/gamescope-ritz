@@ -38,6 +38,7 @@
 #include "Overlay/Notifications.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelSystem.h"
+#include "Overlay/PanelKeybinds.h"
 
 #include "backends.h"
 #include "refresh_rate.h"
@@ -589,6 +590,12 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// g_nativeEffects): saved effects are on from the first frame, not from
 	// the first time the overlay is opened.
 	gamescope::PanelShaders_ApplyStartupConfig( config );
+
+	// This fork's own hotkeys (overlay.keybinds, src/Keybinds.cpp). Above the
+	// bStartup early-out on purpose: a saved rebind has to be in force from
+	// the first key event of the process, not from the first time the settings
+	// shell is drawn -- the shell is the thing the binding OPENS.
+	gamescope::PanelKeybinds_SeedFromConfig( config );
 
 	cv_adaptive_sync = config.gamescope.vrr_enabled;
 	cv_hdr_enabled = config.gamescope.hdr_enabled;

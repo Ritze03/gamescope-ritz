@@ -1805,7 +1805,9 @@ TEST_CASE( "reset: a float default survives a round-trip comparison", "[overlay_
 // matter how it is drawn.
 TEST_CASE( "icons: every registered area has one, and no two are the same drawing", "[overlay_ui]" )
 {
-	// The fifteen this build registers (setup.pergame left with Profiles v2,
+	// setup.keybinds is the newest (2026-09-08) -- the editable-hotkey area;
+	// see PanelKeybinds.cpp and Icons.cpp's own keyboard glyph for it.
+	// The sixteen this build registers (setup.pergame left with Profiles v2,
 	// 2026-09-06 -- a game's settings are a profile now, so the area and its
 	// glyph went together). Written out rather than walked off
 	// the live registry because the areas are declared in the panel files,
@@ -1833,7 +1835,7 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		"display.frame_limiter", "display.hdr", "image.shaders", "system.general",
 		"audio.mixer", "system.hud", "system.crosshair", "system.log",
 		"system.changelog", "setup.profiles", "setup.appearance",
-		"setup.cursor",
+		"setup.cursor", "setup.keybinds",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -1967,6 +1969,7 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
 		{ "setup.cursor",          ui::RailGroup::Settings },
+		{ "setup.keybinds",        ui::RailGroup::Settings },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
 	};

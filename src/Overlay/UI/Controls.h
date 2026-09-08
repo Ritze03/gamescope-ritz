@@ -532,6 +532,21 @@ namespace gamescope::ui
 		           bool *pbEditing, const char *pszPlaceholder = nullptr,
 		           const char *pszError = nullptr );
 
+		// ---- a key chord, captured rather than typed (2026-09-08) ----------
+		// The atom for Entry::Chord() (a Kind::Text row holding a keybind).
+		// Draws the chord the way a keyboard shortcut is drawn -- a chip, in
+		// the mono face, the same treatment the launcher already gives a
+		// shortcut glyph -- and returns true on the press that means "listen
+		// for a new one".
+		//
+		// It owns NO state and starts no listening of its own: `bCapturing`
+		// is asked, not set. Whether a capture is armed is compositor state
+		// (src/Keybinds.cpp swallows the keys while it is), not a bit an
+		// ImGui atom could keep, and an atom that armed it would be an atom
+		// that could arm it off the render thread.
+		bool Chord( const RowCtx &row, const char *pszId, const char *pszChord,
+		            bool bCapturing );
+
 		// ---- SPEC §3.12 -- a multi-select whose value is a set -------------
 		// One setting whose value is a set. N independent binaries are still N
 		// switch rows -- that rule, not the bank, is what a reviewer holds.

@@ -891,6 +891,7 @@ namespace gamescope::ui
 			{ "system.general",        RailGroup::Settings },
 			{ "setup.appearance",      RailGroup::Settings },
 			{ "setup.cursor",          RailGroup::Settings },
+			{ "setup.keybinds",        RailGroup::Settings },
 			{ "system.log",            RailGroup::Other },
 			{ "system.changelog",      RailGroup::Other },
 		};

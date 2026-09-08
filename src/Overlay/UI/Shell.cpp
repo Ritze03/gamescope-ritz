@@ -51,6 +51,7 @@
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelSystem.h"
+#include "Overlay/PanelKeybinds.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Crosshair.h"
 
@@ -62,6 +63,7 @@
 // D18: overlay_e2_key pushes onto the overlay's OWN input queue, which is
 // what makes a real key event reachable from a script. See cc_overlay_e2_key.
 #include "SettingsOverlay.h"
+#include "Keybinds.h"   // Entry::Chord()'s capture state, and the Keybinds area
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -833,6 +835,12 @@ namespace gamescope::ui::shell
 			// is a different, concurrently-edited file's scope; this is its
 			// own panel, PanelCursor.cpp, following the same pattern.
 			PanelCursor_RegisterArea( reg );
+			// The Keybinds area (2026-09-08). Setup's third global-only
+			// preference area, alongside Appearance and Cursor and for the
+			// same reason: which key opens the settings is about the
+			// player's keyboard, not about the game. See
+			// superdoc/features/keybinds.md.
+			PanelKeybinds_RegisterArea( reg );
 		}
 
 		Registry &Reg()
@@ -2458,6 +2466,38 @@ namespace gamescope::ui::shell
 				{
 					std::string s = std::holds_alternative<std::string>( v )
 						? std::get<std::string>( v ) : std::string();
+
+					// Entry::Chord(): a Kind::Text row whose value is a key
+					// chord, drawn as a capture chip instead of an input
+					// field. Still the same string binding underneath, so
+					// overlay_e2_set/get, the palette and reset all keep
+					// working on it unchanged -- see Registry.h's Chord().
+					//
+					// The atom reports the PRESS; arming (and disarming) the
+					// capture is Keybinds.cpp's, because the swallowing that
+					// makes a capture safe happens on the wlserver thread and
+					// no atom can reach it.
+					if constexpr ( std::is_same_v<TDecl, Entry> )
+					{
+						if ( decl.ChordStyle() )
+						{
+							gamescope::keybinds::Action eArmed{};
+							const bool bCapturing =
+								gamescope::keybinds::CaptureActive( &eArmed ) &&
+								decl.Id() == std::string( "keybinds." ) +
+									gamescope::keybinds::Info( eArmed ).pszId;
+							if ( controls::Chord( row, pszId, s.c_str(), bCapturing ) )
+							{
+								if ( bCapturing )
+									gamescope::keybinds::CancelCapture();
+								else if ( const auto oAction = gamescope::keybinds::ActionFromId(
+										std::string_view( decl.Id() ).substr(
+											std::string_view( decl.Id() ).find( '.' ) + 1 ) ) )
+									gamescope::keybinds::BeginCapture( *oAction );
+							}
+							return false;
+						}
+					}
 					// Region-qualified for the same reason the Stepper case
 					// above is -- see s_eEditingRegion's comment.
 					bool bEditing = ( s_sEditingText == sPopupKey && s_eEditingRegion == eRegion );
