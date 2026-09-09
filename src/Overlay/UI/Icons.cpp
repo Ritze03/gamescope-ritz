@@ -59,11 +59,9 @@ namespace gamescope::ui
 		// fifteenth and sixteenth (2026-09-05, requests item 12): both areas
 		// had shipped drawing the rail's letter fallback (`R`, `C`) and were
 		// drawn freehand here in the set's own style -- see their entries.
-		// system.friends and system.companion are the seventeenth and
-		// eighteenth (2026-09-08), for exactly the same reason a third time:
-		// both shipped on the letter fallback (`F`, `S` -- and `S` is one of
-		// the three collisions this file was written to remove), and both are
-		// later than the mockup, so both are freehand too.
+		// system.friends is the seventeenth (2026-09-08), for exactly the
+		// same reason a third time: it shipped on the letter fallback (`F`),
+		// and it is later than the mockup, so it is freehand too.
 		//
 		// THE ACCEPTANCE CRITERION THIS TABLE IS WRITTEN AGAINST is not
 		// "does it look like the thing" -- it is "is it ONE SILHOUETTE at 12
@@ -246,20 +244,6 @@ namespace gamescope::ui
 			Circ( 12.0f, 8.0f, 4.0f ),
 			IconShape{ IconOp::Polyline, 4, 0.0f, { { 3.5f, 20.5f }, { 6.5f, 14.5f },
 			                                        { 17.5f, 14.5f }, { 20.5f, 20.5f } } } } },
-
-		{ "system.companion", 2, {
-			// A SPEECH BUBBLE: a box with a tail off its bottom edge. Also
-			// freehand (2026-09-08), and also fixing a letter fallback --
-			// system.companion shipped drawing `S`, the exact collision this
-			// file exists to remove (Shaders and Shell are the other two).
-			//
-			// The tail is the whole identity. Without it this is a plain
-			// rectangle, which display.frame_limiter's and setup.profiles'
-			// outlines already occupy; with it, no other glyph in the set has
-			// a closed shape with a spur hanging off one side.
-			Rect( 3.5f, 4.0f, 20.5f, 15.0f ),
-			IconShape{ IconOp::Polyline, 3, 0.0f, { { 8.0f, 15.0f }, { 7.0f, 20.5f },
-			                                        { 13.5f, 15.0f } } } } },
 
 		{ "system.log", 4, {
 			// Four rules of decreasing length: lines of text, ragged right.

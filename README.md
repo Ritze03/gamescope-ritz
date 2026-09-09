@@ -131,7 +131,6 @@ initialises them automatically.
 | **Clipboard sync** | One `CLIPBOARD` value kept in step across every Xwayland game, gamescope's own Wayland clients, and the host session when nested. | [`features/clipboard-sync.md`](superdoc/features/clipboard-sync.md) |
 | **Runtime nested resolution & refresh** | Change a game's own resolution and paced refresh rate live from the Shell — nothing restarts, not even Xwayland. | [`features/resolution-and-refresh.md`](superdoc/features/resolution-and-refresh.md) |
 | **Steam friends list** | `Ctrl+Shift+Tab` lists friends who are in a game right now, read straight from the Steam client already running — join one marked `[Join]` with a click. | [`features/steam-friends.md`](superdoc/features/steam-friends.md) |
-| **Steam chat companion** | `Ctrl+Shift+C` opens Steam's web chat full-screen over the game, in a browser gamescope runs on its own display. | [`features/steam-companion.md`](superdoc/features/steam-companion.md) |
 | **Ritz launcher extension** | A module for the user's own [Ritz](https://ritze03.github.io/ritz/extensions.html) launcher that drives `gamescope-ritz` — profile, resolution, scaler and more — from Ritz's own GUI. | [`features/ritz-extension.md`](superdoc/features/ritz-extension.md) |
 
 ## Keyboard shortcuts
@@ -146,7 +145,6 @@ goes wrong):
 | `Ctrl+Shift+O` | Open/close the Shell (alternate — for when Right Shift alone is inconvenient) |
 | `Left Ctrl` + `Right Shift` | Open/close the Launcher (the command palette, alone over the game) |
 | `Ctrl+Shift+Tab` | Open/close the Steam friends list (join a friend marked `[Join]`) |
-| `Ctrl+Shift+C` | Open/close the Steam chat companion |
 | `Ctrl+Alt+Shift+O` | Always opens the Shell — reserved, cannot be rebound or taken by another action |
 
 Upstream gamescope also has its own `Super`-prefixed shortcuts (fullscreen, filtering,

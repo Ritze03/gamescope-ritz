@@ -1,9 +1,7 @@
 // The "System" tab -- see PanelSystem.h for what this is and why it exists.
 //
-// This file owns two areas. `system.general` is the clipboard sync switch and
-// its status readout; `system.companion` (2026-09-08) is the Steam chat
-// overlay's three settings -- see the second registration at the bottom of
-// this file for what those are and why they live here.
+// This file owns `system.general`: the clipboard sync switch and its status
+// readout.
 //
 // The runtime flag the clipboard switch flips,
 // gamescope::g_bClipboardSyncEnabled, lives in Clipboard/ClipboardSync.h --
@@ -31,7 +29,6 @@
 #include "backend.h"
 #include "Clipboard/ClipboardSync.h"
 #include "Config/ConfigManager.h"
-#include "SteamCompanion.h"
 
 namespace gamescope
 {
@@ -75,129 +72,6 @@ namespace gamescope
 			s_ulLoadedGeneration = ulGeneration;
 			s_bConfigLoaded = true;
 			g_bClipboardSyncEnabled.store( s_Settings.system.clipboard_sync, std::memory_order_relaxed );
-		}
-
-		// =====================================================================
-		//  `system.companion` -- the Steam chat overlay (2026-09-08)
-		// =====================================================================
-		// THREE SETTINGS, ALL GLOBAL, and that is the reason they need their
-		// own cache rather than sharing s_Settings above: `overlay.*` is
-		// global.json-only (ConfigSchema.h's OverlaySettings comment), so it
-		// has to be read with LoadGlobal() and written with
-		// EnqueueGlobalWrite() -- exactly the split PanelConfig.cpp's
-		// Appearance area makes, for the same reason and with the same
-		// per-field merge protecting a stale copy from clobbering a sibling
-		// area's write.
-		//
-		// WHY THEY ARE HERE AND NOT IN APPEARANCE OR A NEW SECTION. The rail
-		// has three sections (Display, System, Setup). Appearance is how the
-		// overlay LOOKS; Setup is how this fork is configured to run. A
-		// browser gamescope launches on its own display, on a hotkey, is a
-		// machine-level capability of the running system -- the same shelf the
-		// clipboard bridge sits on, which is also "gamescope talking to
-		// something outside itself". So: System, next to it.
-		bool     s_bGlobalLoaded = false;
-		uint64_t s_ulGlobalGeneration = 0;
-		config::Settings s_Global;
-
-		void EnsureGlobalLoaded()
-		{
-			const uint64_t ulGeneration = config::ConfigGeneration();
-			if ( s_bGlobalLoaded && ulGeneration == s_ulGlobalGeneration )
-				return;
-			s_Global = config::LoadGlobal();
-			s_ulGlobalGeneration = ulGeneration;
-			s_bGlobalLoaded = true;
-		}
-
-		void SaveGlobal()
-		{
-			config::EnqueueGlobalWrite( s_Global );
-		}
-
-		void RegisterCompanionArea( ui::Registry &reg )
-		{
-			ui::Area &a = reg.Add( "system.companion", "Steam chat", ui::Section::System );
-			a.Keywords( "steam chat friends message browser companion overlay web chromium "
-			            "firefox url page talk friend list" );
-			// Same badge Appearance, Cursor and Keybinds carry, and for the
-			// same reason: these rows write global.json whatever profile the
-			// session is editing.
-			a.Badge( []{ return std::string( "global only" ); } );
-			a.Summary( []{ return companion::StatusText(); } );
-
-			a.Group( "Steam chat" );
-
-			a.Switch( "overlay.companion_enabled", "Steam chat overlay",
-				ui::AnyBind::Of<bool>(
-					[]
-					{
-						EnsureGlobalLoaded();
-						return s_Global.overlay.companion_enabled;
-					},
-					[]( bool b )
-					{
-						EnsureGlobalLoaded();
-						s_Global.overlay.companion_enabled = b;
-						SaveGlobal();
-					} ) )
-				.Help( "Opens Steam's web chat over the game on the Steam chat hotkey, in a "
-				       "browser gamescope runs on its own display. It is a separate sign-in from "
-				       "the Steam client, and it has no voice, no invites and no new-message "
-				       "alerts - see the Steam chat page in the docs. Off, the hotkey says so "
-				       "instead of opening anything; the key is still taken from the game, so "
-				       "rebind it under Setup if you want it back." )
-				.Key( "overlay.companion_enabled" )
-				.Default( config::OverlaySettings{}.companion_enabled )
-				.Keywords( "steam chat friends enable browser overlay" );
-
-			a.Facts( "system.companion_status", "Status",
-				[]{ return companion::StatusText(); } )
-				.Help( "The hotkey that opens it, the browser it would run, and whether that "
-				       "browser is actually installed. Read-only." )
-				.Keywords( "status hotkey browser installed running" );
-
-			a.Group( "Browser" );
-
-			a.Text( "overlay.companion_command", "Browser command",
-				ui::AnyBind::Of<std::string>(
-					[]
-					{
-						EnsureGlobalLoaded();
-						return s_Global.overlay.companion_command;
-					},
-					[]( std::string s )
-					{
-						EnsureGlobalLoaded();
-						s_Global.overlay.companion_command = std::move( s );
-						SaveGlobal();
-					} ) )
-				.Help( "The command that opens the chat window. {url} is replaced by the page "
-				       "below and {profile} by a private browser profile folder - keep {profile}, "
-				       "or a second copy of your browser will just open a tab on your desktop "
-				       "instead. A command with no {url} gets the page added at the end." )
-				.Key( "overlay.companion_command" )
-				.Default( std::string( config::OverlaySettings{}.companion_command ) )
-				.Keywords( "browser command chromium firefox executable arguments flags" );
-
-			a.Text( "overlay.companion_url", "Page",
-				ui::AnyBind::Of<std::string>(
-					[]
-					{
-						EnsureGlobalLoaded();
-						return s_Global.overlay.companion_url;
-					},
-					[]( std::string s )
-					{
-						EnsureGlobalLoaded();
-						s_Global.overlay.companion_url = std::move( s );
-						SaveGlobal();
-					} ) )
-				.Help( "The page it opens. Steam's own web chat by default; any page works, so "
-				       "this can be a wiki or a guide instead." )
-				.Key( "overlay.companion_url" )
-				.Default( std::string( config::OverlaySettings{}.companion_url ) )
-				.Keywords( "url page address link steamcommunity chat" );
 		}
 	}
 
@@ -256,7 +130,5 @@ namespace gamescope
 			.Help( "Which protocol clipboard sync with the host is actually using, or why it "
 			       "isn't syncing at all. Read-only, nothing here can be changed." )
 			.Keywords( "clipboard protocol status ext_data_control zwlr wl_data_device sdl" );
-
-		RegisterCompanionArea( reg );
 	}
 }

@@ -817,12 +817,11 @@ namespace gamescope::steamfriends
 			vecArgv.push_back( s.data() );
 		vecArgv.push_back( nullptr );
 
-		// The same spawn discipline as the companion browser
-		// (SteamCompanion.cpp's Spawn): its own process group so it can never
-		// be signalled as part of ours by accident, and PR_SET_PDEATHSIG so a
-		// gamescope that is killed outright takes it with it. This child only
-		// forwards the URL over ~/.steam/steam.pipe and exits, so nothing here
-		// waits for it -- the compositor is never blocked by a join.
+		// Its own process group so it can never be signalled as part of ours
+		// by accident, and PR_SET_PDEATHSIG so a gamescope that is killed
+		// outright takes it with it. This child only forwards the URL over
+		// ~/.steam/steam.pipe and exits, so nothing here waits for it -- the
+		// compositor is never blocked by a join.
 		const pid_t nPid = Process::SpawnProcess( vecArgv.data(), []()
 			{
 				setpgid( 0, 0 );
@@ -972,9 +971,8 @@ namespace gamescope::steamfriends
 			vecArgv.push_back( nullptr );
 
 			// Its own process group, and SIGKILL on our death: the same spawn
-			// discipline Join() and the companion browser use, for the same
-			// reason -- a gamescope that is killed outright must not leave a
-			// network client behind.
+			// discipline Join() uses, for the same reason -- a gamescope that
+			// is killed outright must not leave a network client behind.
 			const pid_t nPid = Process::SpawnProcess( vecArgv.data(), []()
 				{
 					setpgid( 0, 0 );

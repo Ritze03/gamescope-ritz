@@ -61,7 +61,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   `global.json`, the conflict rule, the two ways back from a binding that made the
   settings unreachable, and the capture chip.
 
-### Companion surfaces
+### Steam surfaces
 
 - [Steam friends you can join](features/steam-friends.md) -- `Ctrl+Shift+Tab` lists the
   friends who are in a game, read from the running Steam client with no sign-in, and
@@ -69,12 +69,6 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   offset), why the list shows everyone in a game rather than only the joinable ones,
   the background poller that keeps Steam off the frame path, the confirmation for a
   different game, and the privacy rule.
-- [Steam chat companion](features/steam-companion.md) -- `Ctrl+Shift+C` opens Steam's
-  web chat over the game in a browser gamescope launches on its own Xwayland: the
-  STEAM_OVERLAY/STEAM_INPUT_FOCUS promotion, the hidden-but-still-swallowing-input trap
-  and the three checks that pin it, the command grammar, and the honest limitations
-  (a separate sign-in, no voice, no invites, no notifications -- and no joining, which
-  is what the friends list above is for).
 
 ### External surfaces
 

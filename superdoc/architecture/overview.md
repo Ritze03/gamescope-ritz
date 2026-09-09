@@ -249,12 +249,6 @@ covered in depth on their own pages rather than repeated here:
   [clipboard-sync](../features/clipboard-sync.md): four separate clipboard holders
   funnelled through `gamescope_broadcast_clipboard()` (`src/steamcompmgr.cpp`), fed by
   the data-control protocols in `src/Backends/WaylandBackend.cpp`.
-- **"How does something that is not the game get drawn on top of it, with input?"** —
-  [steam-companion](../features/steam-companion.md): the `STEAM_OVERLAY` +
-  `STEAM_INPUT_FOCUS` + `_NET_WM_WINDOW_OPACITY` promotion that
-  `DetermineAndApplyFocus()` (`src/steamcompmgr.cpp`) already reads, driven for an
-  arbitrary X11 client from `src/SteamCompanion.cpp`. Read its *"The trap"* section
-  before touching any hide path: input focus is not opacity-conditional.
 - **"Where does a new build/feature flag get wired up?"** —
   [build-and-tooling](../features/build-and-tooling.md)'s Meson options table.
 - New to the codebase entirely: read this page top to bottom, then

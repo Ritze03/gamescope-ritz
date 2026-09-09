@@ -776,54 +776,6 @@ namespace gamescope::config
         // control you need in order to fix it would move on its own.
         std::map<std::string, std::string> keybinds;
 
-        // ---- Steam chat companion -- src/SteamCompanion.{h,cpp}, area
-        // ---- `system.companion` (2026-09-08) ------------------------------
-        // A browser window on gamescope's OWN Xwayland, pointed at Steam's web
-        // chat and promoted to a fullscreen interactive overlay by the
-        // STEAM_OVERLAY/STEAM_INPUT_FOCUS properties steamcompmgr already
-        // reads. See superdoc/features/steam-companion.md, and
-        // superdoc/planning/steam-friends-window.md for why it is a browser
-        // and not Steam's real Friends window (that window lives on the HOST's
-        // X server; nothing on this host can route a click back into it).
-        //
-        // GLOBAL, like every other field in this struct, and for a reason
-        // specific to these three: WHICH BROWSER EXISTS IS A FACT ABOUT THE
-        // MACHINE, not about the game -- a per-profile browser command would
-        // mean "chat works in CS2 and does nothing in Rust" with no visible
-        // cause. The enable switch goes with them rather than being split off
-        // per profile for the same reason the keybinds map above is global:
-        // the chord that opens it is one setting for the whole install, so
-        // whether it opens anything must be too.
-        //
-        // Default ON. `Why:` the chord is bound by default and is swallowed
-        // whatever this says (the hotkey layer fires before any of this is
-        // consulted), so defaulting to off would make Ctrl+Shift+Tab a key
-        // that is taken from the game AND does nothing -- the worst of both.
-        // Off still answers the press, with a toast naming this switch and the
-        // Keybinds area, rather than silence.
-        bool companion_enabled = true;
-
-        // The command that opens it. Split like a command line (quotes and
-        // backslashes honoured, no shell, no globbing -- SteamCompanionCmd.h's
-        // SplitCommand), then `{url}` and `{profile}` are substituted INTO the
-        // already-split arguments, so neither can ever become an extra
-        // argument however they are punctuated. A command with no `{url}` gets
-        // the URL appended as a final argument.
-        //
-        // `{profile}` is not decoration: without a private user-data-dir a
-        // second chromium hands its URL to the user's existing one on the host
-        // and exits, so nothing ever appears inside gamescope. It expands to
-        // <config dir>/companion-browser, which is also where the one-time
-        // Steam login is remembered.
-        std::string companion_command =
-            "chromium --ozone-platform=x11 --user-data-dir={profile} --no-first-run "
-            "--no-default-browser-check --app={url}";
-
-        // Where it points. Steam's own web chat by default; any page works
-        // (a wiki, a guide, a second-screen tool), which is the reason this is
-        // a setting rather than a constant.
-        std::string companion_url = "https://steamcommunity.com/chat";
-
         // ---- Friends list: look game names up online -- src/SteamAppNames.h,
         // ---- area `system.friends` (2026-09-09) ---------------------------
         // THE ONLY SETTING IN THIS WHOLE FORK THAT DECIDES WHETHER THE
@@ -857,10 +809,10 @@ namespace gamescope::config
         // person -- and by the switch being one row away, in the same area, with
         // its Help line naming exactly what leaves the machine.
         //
-        // GLOBAL, like the three companion fields above and for the same
-        // reason: "may this machine reach the network" is a fact about the
-        // machine, not about which game is running. A per-profile version
-        // would mean names appear in CS2 and not in Rust with no visible cause.
+        // GLOBAL, for the same reason every other `overlay.*` field is: "may
+        // this machine reach the network" is a fact about the machine, not
+        // about which game is running. A per-profile version would mean names
+        // appear in CS2 and not in Rust with no visible cause.
         bool friends_lookup_names = true;
     };
 

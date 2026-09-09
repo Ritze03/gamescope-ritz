@@ -8,12 +8,15 @@
 > one approach this page never considered (Steam's own CEF remote-debugging endpoint:
 > mechanically proven, then killed by an occlusion measurement).
 
-**Status: SETTLED and BUILT, 2026-09-08.** Approach 4 below was implemented the same
-day and shipped; the feature's own page is
-[`../features/steam-companion.md`](../features/steam-companion.md), and that is the page
-to read if you want to know how it works or what it cannot do. **This page is kept as
-the record of the measurements** — where the Friends window actually lives, and what
-each rejected approach did when it was tried — so nobody re-litigates a dead end.
+**Status: SETTLED and BUILT, 2026-09-08 — then REMOVED, 2026-09-09.** Approach 4 below
+was implemented the same day and shipped as the Steam chat companion
+(`src/SteamCompanion.{h,cpp}`, `system.companion`). It was removed once
+[`steam-friends-join.md`](steam-friends-join.md)'s friends list proved it could join a
+friend for real, which the companion never could; see `CHANGELOG.md`'s 2026-09-09 entry
+and [`../features/steam-friends.md`](../features/steam-friends.md)'s *"History: the
+browser companion it replaced"* section. **This page is kept as the record of the
+measurements** — where the Friends window actually lives, and what each rejected
+approach did when it was tried — so nobody re-litigates a dead end.
 
 The request was to show Steam's standalone Friends window (tray icon → Friends) over the
 game on `Ctrl+Shift+Tab`.

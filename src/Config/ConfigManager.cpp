@@ -421,15 +421,6 @@ namespace gamescope::config
                     }
                 }
 
-                // Steam chat companion (2026-09-08) -- see ConfigSchema.h.
-                // Nothing is validated here for the same reason the keybinds
-                // above are not: this layer does not own the command grammar,
-                // and SteamCompanionCmd.h's BuildArgv() reports a bad command
-                // as a toast when the user presses the key, which is where
-                // they can act on it.
-                s.overlay.companion_enabled = JGetBool( *pOverlay, "companion_enabled", s.overlay.companion_enabled );
-                s.overlay.companion_command = JGetString( *pOverlay, "companion_command", s.overlay.companion_command );
-                s.overlay.companion_url = JGetString( *pOverlay, "companion_url", s.overlay.companion_url );
                 s.overlay.friends_lookup_names = JGetBool( *pOverlay, "friends_lookup_names", s.overlay.friends_lookup_names );
             }
 
@@ -673,10 +664,6 @@ namespace gamescope::config
                 jKeybinds[ sAction ] = sChord;
             jOverlay[ "keybinds" ] = std::move( jKeybinds );
 
-            // Steam chat companion -- see the parse side above.
-            jOverlay[ "companion_enabled" ] = o.companion_enabled;
-            jOverlay[ "companion_command" ] = o.companion_command;
-            jOverlay[ "companion_url" ] = o.companion_url;
             jOverlay[ "friends_lookup_names" ] = o.friends_lookup_names;
 
             return jOverlay;

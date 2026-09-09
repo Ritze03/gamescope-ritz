@@ -312,8 +312,8 @@ TEST_CASE( "a hostile persona name cannot influence the join command", "[steam_f
 
 TEST_CASE( "the join argv is the program and one URL, and nothing is split", "[steam_friends]" )
 {
-	// Unlike the companion's browser command, this is not a user-editable
-	// string, so there is no splitting step for anything to hide inside.
+	// Not a user-editable string, so there is no splitting step for anything
+	// to hide inside.
 	const std::vector<std::string> vecArgv = BuildJoinArgv( "steam://joinlobby/730/555/1" );
 	REQUIRE( vecArgv.size() == 2 );
 	REQUIRE( vecArgv[ 0 ] == "steam" );

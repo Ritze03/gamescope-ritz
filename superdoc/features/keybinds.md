@@ -3,7 +3,9 @@
 **2026-09-08.** This fork's own compositor hotkeys are the user's to change:
 one chord per action, stored in `global.json` and edited from the settings
 shell's **Keybinds** area (`setup.keybinds`). Three actions at the rework; a
-fourth (`companion`) landed the same day with the Steam chat overlay.
+fourth (`friends`) landed the same day with the friends-you-can-join list. A
+fifth (`companion`), for a Steam chat overlay that landed alongside it, was
+removed 2026-09-09 — see [History: `companion`](#history-companion) below.
 
 Code: `src/Keybinds.{h,cpp}` (grammar, store, gesture engine, capture),
 `src/Overlay/PanelKeybinds.cpp` (the rows), `src/wlserver.cpp`'s
@@ -49,23 +51,21 @@ larger job with a different risk profile.
 | `shell` | Open settings | `RShift` |
 | `shell_alt` | Open settings (alternate) | `Ctrl+Shift+O` |
 | `launcher` | Open launcher | `LCtrl+RShift` |
-| `companion` | Open Steam chat | `Ctrl+Shift+C` |
 | `friends` | Open friends list | `Ctrl+Shift+Tab` |
 
-`companion` was added 2026-09-08 with the Steam chat overlay
-([steam-companion.md](steam-companion.md)), and `friends` later the same day
-with the join list ([steam-friends.md](steam-friends.md)).
+`friends` was added 2026-09-08 with the join list
+([steam-friends.md](steam-friends.md)).
 
-**`Ctrl+Shift+Tab` belongs to `friends`, and that is the whole reason
-`companion` moved to `Ctrl+Shift+C`.** That chord is Steam's own overlay chord
-for the friends list, so the muscle memory is already right — and until the
-join list existed it was held by a browser that explicitly *cannot* join
-anybody. Using it here is not a conflict with Steam: gamescope swallows the key
-before anything downstream sees it, so neither the game nor Steam's own overlay
-can be reached by it. Neither chord is reserved or special — both are rows like
-the other three, and swapping them back means moving `friends` off
-`Ctrl+Shift+Tab` first, because the conflict rule refuses two actions on one
-chord.
+**`Ctrl+Shift+Tab` belongs to `friends`.** That chord is Steam's own overlay
+chord for the friends list, so the muscle memory is already right — and for
+part of 2026-09-08 it was held by a `companion` action (a browser that
+explicitly *could not* join anybody — see [History: `companion`](#history-companion)
+below) before that action gave it up. Using it here is not a conflict with
+Steam: gamescope swallows the key before anything downstream sees it, so
+neither the game nor Steam's own overlay can be reached by it. The chord is
+not reserved or special — it is a row like the other three, and rebinding it
+means moving whatever else uses it first, because the conflict rule refuses
+two actions on one chord.
 
 `Why the friends binding is a toggle rather than an opener:` pressed again
 while the friends area is the one on screen, it closes the overlay instead of
@@ -78,6 +78,22 @@ grammar is one row per value. A list-valued row would need a row per element
 and an answer to "which of my two shell chords is this row" — a worse question
 than "what is my alternate shell chord". One chord per action also makes the
 conflict rule a plain comparison rather than a set intersection.
+
+## History: `companion`
+
+From 2026-09-08 to 2026-09-09 there was a fifth action, `companion` (Open
+Steam chat, default `Ctrl+Shift+C`), for a browser window gamescope launched
+on its own Xwayland pointed at Steam's web chat. It briefly held
+`Ctrl+Shift+Tab` before giving that chord up to `friends` the same day, since
+`friends` is the feature that can actually use Steam's own friends-list
+muscle memory — the companion could talk but, unlike the friends list, could
+never join anybody. It was removed entirely on 2026-09-09 once the friends
+list proved it could join a friend for real; see `CHANGELOG.md`'s 2026-09-09
+entry and [steam-friends.md](steam-friends.md)'s *"History: the browser
+companion it replaced"*. A `global.json` left over from before the removal may
+still carry `overlay.keybinds.companion`: it is simply ignored on load (the
+action no longer exists to look it up) and dropped from the file the next time
+settings are saved.
 
 ## The chord grammar
 

@@ -332,7 +332,7 @@ namespace gamescope::steamfriends
 	//   * --max-time is a hard bound somebody else enforces, so "the network
 	//     hung" is a process that exits rather than a thread we have to learn
 	//     to interrupt;
-	//   * it is the same spawn discipline Join() and the companion already use.
+	//   * it is the same spawn discipline Join() already uses.
 	//
 	// EVERY FLAG IS A PRIVACY OR SAFETY DECISION, not a default:
 	//   -q                 ignore ~/.curlrc, which could add headers, a proxy

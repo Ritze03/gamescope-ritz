@@ -1836,11 +1836,10 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		"audio.mixer", "system.hud", "system.crosshair", "system.log",
 		"system.changelog", "setup.profiles", "setup.appearance",
 		"setup.cursor", "setup.keybinds",
-		// The seventeenth and eighteenth (2026-09-08): the friends list and
-		// the Steam chat companion. Both had shipped on the letter fallback
-		// -- and the companion's `S` collided with Shaders and Shell, which
-		// is the original bug this whole file exists to catch.
-		"system.friends", "system.companion",
+		// The seventeenth (2026-09-08): the friends list. It had shipped on
+		// the letter fallback (`F`), which is the original bug this whole
+		// file exists to catch.
+		"system.friends",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -1973,7 +1972,6 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 		{ "system.friends",        ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },
-		{ "system.companion",      ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
 		{ "setup.cursor",          ui::RailGroup::Settings },
 		{ "setup.keybinds",        ui::RailGroup::Settings },

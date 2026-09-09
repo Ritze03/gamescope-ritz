@@ -81,13 +81,6 @@ through this list, tell your assistant the results — answering it lets the tem
   then restart gamescope-ritz and confirm the rebind is still there. Also check the
   recovery path still works: `Ctrl+Alt+Shift+O` should always open the settings, even
   if you've rebound everything else to something odd.
-- [ ] **Steam chat companion, on `Ctrl+Shift+C` (moved off `Ctrl+Shift+Tab` when the
-  friends list below took that chord).** Is it worth keeping, given it needs its own
-  separate login from your Steam client, has no notifications, costs you a browser, and
-  — unlike the friends list — cannot join anybody? The alternative: turning off your
-  Ritz `clear_ld_preload` setting for your gamescope titles would restore Steam's own
-  overlay instead — with voice, invites and notifications — at the cost of it smearing
-  under frame generation. Which would you rather have?
 - [ ] **Friends list: prove the lobby offset, out of a match, with a friend actually in a
   joinable lobby.** Run `build-release/tests/steam_friends_live_probe --diagnose`.
   Expect at least one non-zero lobby and zero outside the expected range — a non-zero

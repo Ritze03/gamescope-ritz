@@ -11,8 +11,6 @@
 // tests/test_steam_friends.cpp can hold the rules with no Steam installed, no
 // compositor and no child process.
 //
-// Same split, and the same reason, as SteamCompanionCmd.h next door.
-//
 // WHAT LIVES HERE:
 //   * Friend              -- the one row the feature is about.
 //   * the interface version lists, newest-first, and the order's reasoning.
@@ -338,10 +336,9 @@ namespace gamescope::steamfriends
 
 	// The argv Process::SpawnProcess() execvp()s. Two arguments, both of them
 	// ours: the program, and one URL built by BuildJoinUrl() above. Nothing is
-	// split, nothing is substituted and there is no shell -- unlike the
-	// companion's browser command (SteamCompanionCmd.h's BuildArgv), this
-	// command line is not a setting the user can type into, so it needs none of
-	// that machinery.
+	// split, nothing is substituted and there is no shell -- this command line
+	// is not a setting the user can type into, so it needs none of that
+	// machinery.
 	inline constexpr std::string_view kSteamProgram = "steam";
 
 	inline std::vector<std::string> BuildJoinArgv( std::string_view svUrl )

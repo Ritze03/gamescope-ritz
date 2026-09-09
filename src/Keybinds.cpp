@@ -151,21 +151,6 @@ namespace gamescope::keybinds
 			{ "launcher", "Open launcher", "LCtrl+RShift",
 			  "The chord that opens the command palette alone over the game -- and closes it "
 			  "again when it is already up." },
-			// MOVED OFF Ctrl+Shift+Tab ON 2026-09-08, and the reason is worth
-			// stating: that chord is Steam's own "friends list" muscle memory,
-			// and this fork now HAS a friends list (the row below). The chat
-			// companion is a browser that explicitly cannot join anybody
-			// (superdoc/planning/steam-friends-join.md §4), so it was holding
-			// the chord the user actually wanted for the other feature.
-			// Ctrl+Shift+C for Chat: free in this table, not the reserved
-			// chord, and not a combination a game is likely to want, since
-			// Ctrl+Shift+<letter> is a browser/tooling shape rather than a
-			// gameplay one.
-			{ "companion", "Open Steam chat", "Ctrl+Shift+C",
-			  "The chord that opens Steam's web chat over the game, in a browser gamescope runs "
-			  "on its own display -- and hides it again when it is already up. The first press "
-			  "has to start the browser, so it takes a moment; after that it is instant. Set the "
-			  "browser and the page in Settings > System > Steam chat." },
 			// Ctrl+Shift+Tab is Steam's own overlay chord for the friends
 			// list, and this is a friends list -- so the muscle memory is
 			// already the right one. That is deliberate and is not a conflict:

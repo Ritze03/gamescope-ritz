@@ -2,10 +2,13 @@
 
 **2026-09-08, research only. Nothing under `src/` was changed.**
 Sibling of [`steam-friends-window.md`](steam-friends-window.md), which settled *"can we
-show Steam's Friends window"* (no) and shipped
-[`../features/steam-companion.md`](../features/steam-companion.md) instead. This page is
-what happened when the question was re-asked four times in one session and the target
-moved each time, ending somewhere much better than where it started.
+show Steam's Friends window"* (no) and shipped a Steam chat companion instead — later
+removed, 2026-09-09, once this page's friends list proved it could do the one thing the
+companion never could: actually join somebody (see
+[`../features/steam-friends.md`](../features/steam-friends.md)'s *"History: the browser
+companion it replaced"*). This page is what happened when the question was re-asked four
+times in one session and the target moved each time, ending somewhere much better than
+where it started.
 
 Everything here was measured on the user's own machine **while they were in a CS2 match**,
 so every test is headless (private `sway` on the wlroots headless backend, isolated

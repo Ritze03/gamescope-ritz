@@ -495,11 +495,12 @@ overlay: gamescope swallows the key, so neither the game nor Steam's overlay
 (which this fork's users have switched off anyway) ever sees it.
 
 **The Steam chat companion moved off that chord to `Ctrl+Shift+C`** on the same
-day. The companion is a browser that explicitly *cannot join anybody* — the one
-thing the user actually wanted — so it was holding the binding for the feature
-that could not deliver it. Anyone who prefers the old arrangement can set it
-back under **Setup > Keybinds**; the conflict rule will make them move
-`friends` off `Ctrl+Shift+Tab` first, which is the correct order.
+day, because it was a browser that explicitly *could not join anybody* — the
+one thing the user actually wanted — so it was holding the binding for the
+feature that could not deliver it. It was removed entirely on 2026-09-09 once
+this list proved it could join for real; see
+[History: the browser companion it replaced](#history-the-browser-companion-it-replaced)
+below.
 
 The binding is a **toggle on its own area**: pressed again while the friends
 area is the one on screen, it closes the overlay rather than re-selecting what
@@ -544,29 +545,22 @@ in a log they made that way.
 
 ---
 
-## Its relationship to the browser companion
+## History: the browser companion it replaced
 
-[`steam-companion.md`](steam-companion.md) is the other half of "gamescope
-talking to Steam", and the two do genuinely different things:
+For part of 2026-09-08 this fork also shipped a Steam chat companion: a
+browser window on gamescope's own Xwayland, pointed at Steam's web chat and
+promoted to a fullscreen overlay the same way this list's own window is. It
+could chat but, unlike this list, could never join a friend — the web client
+has no join button. Once this list proved it could actually join somebody, the
+companion was earning nothing a browser tab on the host couldn't already do,
+and it was removed on 2026-09-09 (see `CHANGELOG.md`). Its measurements and
+the reasoning behind the design live on in
+[`../planning/steam-friends-join.md`](../planning/steam-friends-join.md) and
+[`../planning/steam-friends-window.md`](../planning/steam-friends-window.md).
 
-| | friends list (this page) | [chat companion](steam-companion.md) |
-|---|---|---|
-| **can join a friend** | **yes** — the whole point | **no**, and never could: the web client has no join button |
-| separate sign-in | none | yes |
-| resident cost | a `dlopen` and one sleeping thread | a browser, a few hundred MB, for the life of the session |
-| chat | no | yes |
-| voice, invites, notifications | no | no |
-| chord | `Ctrl+Shift+Tab` | `Ctrl+Shift+C` |
-
-If it turns out you only ever wanted to join, the companion is a resident
-browser earning nothing and should be **reduced or removed rather than
-maintained**. That call is the user's, and it should be put to them once this
-list has been seen working against a real lobby — not before.
-
-Steam's own overlay would still beat both at voice, invites and notifications;
-it is off for these games only because Ritz's `clear_ld_preload` module empties
-`LD_PRELOAD`. That trade is stated in the companion's own page and has not
-changed.
+Steam's own overlay would still beat this list at voice, invites and
+notifications; it is off for these games only because Ritz's
+`clear_ld_preload` module empties `LD_PRELOAD`. That trade has not changed.
 
 ---
 

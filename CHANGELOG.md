@@ -28,6 +28,11 @@ The newest version below is the one this build reports.
   person you picked when the list reorders itself, instead of staying on a row number
   and quietly selecting somebody else.
 
+### Removed
+- **The Steam chat companion**: yesterday's `Ctrl+Shift+C` browser overlay for Steam's
+  web chat is gone, superseded by the friends list above, which can actually join a
+  friend. Its settings area, its keybind and its browser process are all removed.
+
 ### Info
 - **Invites are not in the friends list, and cannot be**: Steam offers no way to tell
   this list about an invite you have been sent, so there is no invite row and no
