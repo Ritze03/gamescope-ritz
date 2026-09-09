@@ -14,9 +14,7 @@
 #   scripts/update-gamescope-ritz.sh [options]
 #
 # Options:
-#   --yes, -y           assume "yes" to all prompts (extras included)
-#   --extras            also refresh scripts+looks extras, no prompt
-#   --no-extras         skip the extras step, no prompt
+#   --yes, -y           assume "yes" to all prompts
 #   --prefix DIR        install directory to look for gamescope-ritz in (default: /usr/bin)
 #   --build-dir DIR     release build directory, copy-mode only (default: build-release;
 #                       symlink mode always rebuilds whatever the link already points at)
@@ -31,18 +29,15 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 source "$SCRIPT_DIR/gamescope-ritz-common.sh"
 
 GCR_ASSUME_YES=0
-EXTRAS=""
 PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
 ALLOW_DIRTY=0
 
-print_help() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--yes|-y) GCR_ASSUME_YES=1 ;;
-		--extras) EXTRAS="yes" ;;
-		--no-extras) EXTRAS="no" ;;
 		--prefix) PREFIX_DIR="$2"; shift ;;
 		--build-dir) BUILD_DIR_NAME="$2"; shift ;;
 		--allow-dirty) ALLOW_DIRTY=1 ;;
@@ -124,22 +119,6 @@ else
 	gcr_info "copy mode: copying $RELEASE_BIN -> $TARGET"
 	GCR_PRIV_DIR="$PREFIX_DIR"
 	gcr_as_priv cp -f -- "$RELEASE_BIN" "$TARGET"
-fi
-
-# --- extras -------------------------------------------------------------
-PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
-if [ -z "$EXTRAS" ]; then
-	echo
-	echo "Also refresh scripts/ and looks/ in ${PREFIX_ROOT}/share/gamescope-ritz?"
-	echo "(namespaced by binary name — never touches a distro-packaged"
-	echo "/usr/bin/gamescope's own share/gamescope — see install-gamescope-ritz.sh"
-	echo "for details.)"
-	if gcr_confirm "Run default_extras_install.sh now?" n; then EXTRAS="yes"; else EXTRAS="no"; fi
-fi
-if [ "$EXTRAS" = "yes" ]; then
-	gcr_install_extras "$REPO_ROOT" "$PREFIX_ROOT"
-else
-	gcr_info "skipped extras refresh. Re-run with --extras later if needed."
 fi
 
 echo

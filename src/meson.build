@@ -100,6 +100,25 @@ font_headers = font_embed_gen.process([
   'Overlay/fonts/GeistMono-SemiBold.ttf',
 ])
 
+# The licence texts the About area renders (2026-09-09). Same script, same
+# byte-array shape, different symbol prefix -- the fonts' glyph outlines and
+# these notices are both "a file that has to be inside the binary", and the
+# OFL is only satisfied by the fonts travelling WITH their licence, so the
+# licence has to be embedded exactly as the fonts are rather than installed
+# beside them where an installer could decline to copy it (which is what
+# used to happen; see the deleted default_extras_install.sh).
+asset_embed_gen = generator(
+  find_program('Overlay/fonts/embed_font.py'),
+  output    : ['@BASENAME@.h'],
+  arguments : ['@INPUT@', '@OUTPUT@', 'g_Asset_'],
+)
+
+license_headers = asset_embed_gen.process([
+  '../LICENSE',
+  '../THIRD-PARTY-LICENSES.md',
+  'Overlay/fonts/LICENSE-OFL.txt',
+])
+
 reshade_src = [
   'reshade/source/effect_codegen_spirv.cpp',
   'reshade/source/effect_expression.cpp',
@@ -221,6 +240,7 @@ gamescope_cpp_args += '-DHAVE_SCRIPTING=1'
 
 src += spirv_shaders
 src += font_headers
+src += license_headers
 src += protocols_server_src
 src += protocols_client_src
 
@@ -359,9 +379,44 @@ changelog_header = custom_target(
   depend_files : changelog_deps,
 )
 
+# The bundled Lua tree (scripts/00-gamescope), embedded as byte arrays plus
+# an ordered table -- the known-displays database and the modegen helpers
+# that DRMBackend looks a panel up in. Compiled in as of 2026-09-09 because
+# it used to be COPIED to $prefix/share/gamescope-ritz/scripts by an install
+# step install.sh prompted for and defaulted to declining, which silently
+# produced installs with no display database. See Script/embed_scripts.py.
+#
+# The directory is an argument (the script walks it in RunFolder's own
+# order, which is a behavioural contract); depend_files carries the rebuild
+# dependency on the files themselves. A new display .lua needs adding to
+# this list, deliberately -- meson has no glob, and a script that silently
+# stops being embedded because nobody listed it is the failure mode this
+# whole change is about.
+bundled_scripts_dir = ritz_src_root / 'scripts' / '00-gamescope'
+bundled_scripts_header = custom_target(
+  'BundledScripts.h',
+  output       : 'BundledScripts.h',
+  command      : [find_program('Script/embed_scripts.py'), bundled_scripts_dir, '@OUTPUT@'],
+  depend_files : files(
+    '../scripts/00-gamescope/common/inspect.lua',
+    '../scripts/00-gamescope/common/modegen.lua',
+    '../scripts/00-gamescope/common/util.lua',
+    '../scripts/00-gamescope/displays/asus.rogally.lcd.lua',
+    '../scripts/00-gamescope/displays/deckhd.steamdeck.deckhd-lcd.lua',
+    '../scripts/00-gamescope/displays/gpd.win4.lcd.lua',
+    '../scripts/00-gamescope/displays/lenovo.legiongo.lcd.lua',
+    '../scripts/00-gamescope/displays/lenovo.legiongos.lcd.lua',
+    '../scripts/00-gamescope/displays/onexplayer.f1.oled.lua',
+    '../scripts/00-gamescope/displays/valve.steamdeck.lcd.lua',
+    '../scripts/00-gamescope/displays/valve.steamdeck.oled.lua',
+    '../scripts/00-gamescope/displays/zotac.zone.oled.lua',
+  ),
+)
+
   executable(
     'gamescope',
     src, reshade_src, gamescope_version, ritz_version, changelog_header,
+    bundled_scripts_header,
     include_directories : [reshade_include, sol2_include],
     dependencies: [
       dep_wayland, dep_x11, dep_xdamage, dep_xcomposite, dep_xrender, dep_xext, dep_xfixes,

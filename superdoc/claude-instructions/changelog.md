@@ -3,9 +3,10 @@
 **Mandatory working rule for agents, linked (force-loaded) from the repo-root `CLAUDE.md`.**
 
 `CHANGELOG.md` in the **repo root** is the user-facing "what changed" — shown in the
-settings overlay's **Changelog** area (`src/Overlay/PanelChangelog.cpp`, parsed by
-`src/Overlay/ChangelogParse.cpp`). It is for users, so write entries in plain
-user-facing language, not implementation detail.
+settings overlay's **About** area (`src/Overlay/PanelChangelog.cpp`, parsed by
+`src/Overlay/ChangelogParse.cpp`; the area was labelled "Changelog" until
+2026-09-09 and its id is still `system.changelog`). It is for users, so write
+entries in plain user-facing language, not implementation detail.
 
 ## The shape
 
@@ -69,7 +70,7 @@ each other.
 
 So the number is not copied anywhere. `Overlay/embed_changelog.py` reads the **top
 block's** version at build time and emits it beside the embedded text, and the overlay's
-Changelog area displays that. The version in the binary is therefore *derived from* this
+About area displays that. The version in the binary is therefore *derived from* this
 file rather than kept in sync with it, and the two cannot disagree.
 
 What that means when you write here:
@@ -80,7 +81,7 @@ What that means when you write here:
   bracketed, three-part, all-numeric version on the first `## ` line. A heading it
   cannot read makes the build **fail loudly** rather than ship a binary whose version is
   a guess.
-- **The version is not the whole identity.** The Changelog area shows three
+- **The version is not the whole identity.** The About area shows three
   things and none substitutes for another: this semver (what the fork calls itself), the
   upstream gamescope commit it is built on (what it is a fork *of*), and HEAD's commit
   date (which build of it you are running). Those last two come from git via

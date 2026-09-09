@@ -77,6 +77,11 @@ endif
 add_project_arguments(
   '-DHAVE_PIPEWIRE=@0@'.format(pipewire_dep.found().to_int()),
   '-DHAVE_OPENVR=@0@'.format(openvr_dep.found().to_int()),
+  # Where a packager may place a REPLACEMENT for the Lua tree that is
+  # compiled into the binary (see src/Script/embed_scripts.py). Nothing
+  # installs it; when it is absent -- the normal case -- the embedded copies
+  # are used. Namespaced to gamescope-ritz so it can never collide with a
+  # distro-packaged gamescope's own share/gamescope/scripts.
   '-DSCRIPT_DIR="@0@"'.format(prefix / data_dir / 'gamescope-ritz/scripts'),
   language: 'cpp',
 )
@@ -111,8 +116,16 @@ if get_option('enable_tests') and get_option('enable_gamescope')
 endif
 
 
-# Handle default script/config/looks stuff
-meson.add_install_script('default_extras_install.sh')
+# NOTHING IS INSTALLED BESIDE THE BINARY ANY MORE (2026-09-09).
+# There used to be a meson.add_install_script('default_extras_install.sh')
+# here that copied scripts/, looks/ and the font licence into
+# $prefix/share/gamescope-ritz. The scripts and the licence are compiled into
+# the binary now (src/Script/embed_scripts.py, src/meson.build's
+# asset_embed_gen), and looks/ has no runtime lookup at all -- `set_look`
+# takes a path the caller supplies and gamescope_control's set_look takes
+# file descriptors, so nothing ever searched an installed looks directory.
+# SCRIPT_DIR below is therefore a place a PACKAGER may put a replacement
+# script tree, not a place this build fills in.
 
 devenv = environment()
 devenv.set('GAMESCOPE_SCRIPT_PATH', join_paths(meson.current_source_dir(), 'scripts'))

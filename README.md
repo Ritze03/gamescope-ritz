@@ -169,5 +169,7 @@ Every upstream option still works (see [`README.upstream.md`](README.upstream.md
 ./install.sh --remove
 ```
 
-Never touches `~/.config/gamescope-ritz` — only the binary/symlink and the extras
-(`scripts/`, `looks/`) it placed under `/usr/share/gamescope-ritz`.
+Never touches `~/.config/gamescope-ritz` — only the binary/symlink it installed. If
+an older install left a `/usr/share/gamescope-ritz` directory behind, it offers to
+clear that too; nothing needs one any more, since the bundled display scripts and the
+licence texts are compiled into the binary.

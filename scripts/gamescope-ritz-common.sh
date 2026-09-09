@@ -268,31 +268,3 @@ gcr_build_release() {
 	gcr_build "$repo_root" "$build_dir" release
 }
 
-# Run default_extras_install.sh (installs scripts/ and looks/)
-# against $prefix_root/share/gamescope-ritz. Namespaced by binary name so it
-# is its own directory, never $prefix_root/share/gamescope -- that path
-# belongs to any other gamescope install on the system, including a
-# distro-packaged /usr/bin/gamescope, and default_extras_install.sh's own
-# safety guard now refuses to rm -rf anything outside share/gamescope-ritz.
-gcr_install_extras() {
-	local repo_root="$1" prefix_root="$2"
-	local script="$repo_root/default_extras_install.sh"
-	if [ ! -f "$script" ]; then
-		gcr_warn "default_extras_install.sh not found at $script, skipping extras."
-		return 0
-	fi
-	gcr_info "installing scripts/, looks/ and the font license to ${prefix_root}/share/gamescope-ritz ..."
-	GCR_PRIV_DIR="$prefix_root" gcr_as_priv env \
-		MESON_SOURCE_ROOT="$repo_root" \
-		MESON_INSTALL_PREFIX="$prefix_root" \
-		DESTDIR="" \
-		sh "$script"
-}
-
-# Path to gamescope-ritz's own namespaced data directory under a given
-# prefix root -- what --uninstall removes, and nothing else (never plain
-# $prefix_root/share/gamescope, which may belong to a different install).
-gcr_extras_dir() {
-	local prefix_root="$1"
-	printf '%s/share/gamescope-ritz\n' "$prefix_root"
-}

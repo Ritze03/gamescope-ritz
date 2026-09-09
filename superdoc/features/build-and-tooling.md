@@ -36,19 +36,50 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
 - `enable_gamescope_wsi_layer` and `enable_gamescope` gate whole build targets in
   `meson.build:97,101`; `enable_tests` only takes effect when `enable_gamescope` is also
   true (`meson.build:105`).
-- `default_extras_install.sh` is a Meson install-time hook (invoked with `MESON_SOURCE_ROOT`/
-  `MESON_INSTALL_PREFIX`/`DESTDIR` env vars set by Meson) that replaces any previously
-  installed `scripts`/`looks`/`reshade`/`fonts` directories under `share/gamescope-ritz`
-  (namespaced, not plain `share/gamescope` — this fork installs alongside a packaged
-  `/usr/bin/gamescope` and must never touch its data dir; the script's own `rm -rf` calls
-  are guarded to refuse any path outside `share/gamescope-ritz`) with the ones from the
-  source tree, so a reinstall doesn't leave stale default assets behind. The `fonts/`
-  entry (added by issue #53) installs only `LICENSE-OFL.txt` — the Geist Sans/Mono TTFs
-  themselves are compiled directly into the binary (`src/Overlay/fonts/embed_font.py`),
-  not copied at install time, but the OFL requires its license to travel with any
-  redistribution of the font, and a compositor binary with the glyphs baked into its atlas
-  counts, so the license is still installed to `share/gamescope-ritz/fonts/` alongside
-  everything else.
+- **Nothing is installed beside the binary** (2026-09-09). There is no
+  `meson.add_install_script` any more; `default_extras_install.sh`, which used to copy
+  `scripts/`, `looks/` and the font licence into `share/gamescope-ritz`, is deleted, and
+  so are `install.sh`'s `--extras`/`--no-extras` flags and its prompt. **Why:** that
+  prompt defaulted to *no*, while `meson.build` baked the same path in as `SCRIPT_DIR`
+  and `Script.cpp` loaded it at startup — so taking the default silently produced an
+  install with no known-displays database at all, reported only as a `warnf` in a log
+  nobody reads. A step whose default answer breaks the product should not exist.
+
+### What is compiled into the binary, and by which rule
+
+  All four use the same "generated header holding a byte array" shape `glsl_generator`
+  already used for shaders — one build-time pattern, not four:
+
+  | Data | Generator | Meson rule | Consumed by |
+  |---|---|---|---|
+  | Geist Sans/Mono `.ttf` | `src/Overlay/fonts/embed_font.py` | `font_embed_gen` | `Overlay/Fonts.cpp` |
+  | `CHANGELOG.md` | `src/Overlay/embed_changelog.py` | `changelog_header` | `Overlay/PanelChangelog.cpp` |
+  | `LICENSE`, `THIRD-PARTY-LICENSES.md`, `LICENSE-OFL.txt` | `embed_font.py` again, with a `g_Asset_` symbol prefix | `asset_embed_gen` | `Overlay/PanelChangelog.cpp` |
+  | `scripts/00-gamescope/**.lua` | `src/Script/embed_scripts.py` | `bundled_scripts_header` | `Script/Script.cpp` |
+
+- `embed_scripts.py` emits one byte array per `.lua` file plus an ordered table
+  (`g_BundledScripts`). The **order is part of the contract**: `common/util.lua` and
+  `common/modegen.lua` define globals the `displays/*.lua` files call at load time, so
+  the generator reproduces `CScriptManager::RunFolder`'s traversal exactly — every `.lua`
+  in a directory sorted, then every subdirectory sorted, recursively. An empty scripts
+  tree fails the build loudly rather than shipping a binary with no display database.
+  Adding a display file means adding it to `bundled_scripts_header`'s `depend_files`
+  list; meson has no glob, and that is deliberate here.
+- `SCRIPT_DIR` (`meson.build:80`, `$prefix/share/gamescope-ritz/scripts`) survives as a
+  place a **packager** may put a replacement tree. Nothing fills it; when it is absent —
+  the normal case — the embedded copies run. See
+  [scripting-convars.md](scripting-convars.md) for the full precedence order.
+- `looks/` is **not** embedded and never was loadable from an install: `cc_set_look` takes
+  a path the caller supplies and `gamescope_control`'s `set_look` takes file descriptors,
+  so no code ever searched an installed `looks` directory. It stays in the source tree as
+  `.cube` files a user can point `set_look` at.
+- The OFL requires (clause 2) that each copy of the Font Software distributed with other
+  software contain the copyright notice and the licence, "either as stand-alone text
+  files, human-readable headers or in the appropriate machine-readable metadata fields
+  within text or binary files **as long as those fields can be easily viewed by the
+  user**". The Geist glyph data is inside the binary, so the licence is too — and the
+  About area prints it, which is what makes it "easily viewed". `LICENSE-OFL.txt` also
+  stays in the source tree.
 
 ### SteamOS device tooling (`tools/`)
 
@@ -96,14 +127,14 @@ ISA used: x86-64-baseline`. So the desktop builds once (fast, on real hardware t
 maintainer games on anyway) and `scripts/remote-test.sh sync` ships the compiled binary
 over rather than repeating the build on weaker hardware.
 
-- `scripts/remote-test.sh sync [--extras] [--no-build]` — builds locally
+- `scripts/remote-test.sh sync [--no-build]` — builds locally
   (`nice -n 19`, release) and rsyncs `build-release/src/gamescope` to
   `~/gamescope-ritz-remote/gamescope-ritz` on the laptop, then runs `--version` there to
   confirm the transferred binary actually starts (catches both an ISA mismatch and
-  missing shared libraries immediately, rather than mid-investigation later). `--extras`
-  also syncs `scripts/`/`looks/`/`reshade/` for Lua-config or ReShade-effect testing;
-  omitted by default since gamescope fails safe (not a crash) when those directories
-  don't exist and most smoke tests don't need them. `gamescopectl` is not synced — it's
+  missing shared libraries immediately, rather than mid-investigation later). There is
+  nothing else to sync: the Lua scripts, the shader effects and the licence texts are all
+  compiled into the binary, which is why the old `--extras` flag is gone. `gamescopectl`
+  is not synced — it's
   a separate binary owned by the `gamescope-git` pacman package, already present on the
   laptop the same way it is on the desktop.
 - `scripts/remote-test.sh run [--wait] -- <command...>` — runs a command on the laptop

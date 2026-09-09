@@ -57,6 +57,12 @@ namespace gamescope
 
         void RunDefaultScripts();
 
+        // The bundled scripts/00-gamescope tree, compiled into the binary by
+        // Script/embed_scripts.py. Run by RunDefaultScripts() when no
+        // on-disk default-scripts directory supplied them -- see the
+        // precedence comment on that function in Script.cpp.
+        void RunBundledScripts();
+
         void RunScriptText( std::string_view svContents );
 
         void RunFile( std::string_view svPath );

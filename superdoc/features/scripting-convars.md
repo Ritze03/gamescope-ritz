@@ -36,7 +36,47 @@ the codebase to expose runtime-tunable state and debug commands, optionally boun
   keyed by hook name so multiple scripts can bind the same hook. `RunScriptText`, `RunFile`,
   and `RunFolder` load Lua source from a string, a single file, or (optionally recursively)
   a directory tree; `RunDefaultScripts()` runs whatever Gamescope treats as its built-in
-  script set.
+  script set, and `RunBundledScripts()` runs the copies compiled into the binary.
+
+## Where the default scripts come from (precedence, 2026-09-09)
+
+`scripts/00-gamescope/` — the known-displays database (`gamescope.config.known_displays`,
+which `DRMBackend.cpp` looks a panel up in) and the `gamescope.modegen` helpers those
+display files call — is **compiled into the binary** by `src/Script/embed_scripts.py` and
+needs nothing installed beside it. `CScriptManager::RunDefaultScripts()` resolves, in
+order:
+
+1. `script_use_local_scripts` (convar, dev builds) → `../scripts`
+2. `$GAMESCOPE_SCRIPT_PATH` → each `:`-separated directory
+3. `SCRIPT_DIR` → `$prefix/share/gamescope-ritz/scripts`
+4. **the copies compiled into the binary** — the default
+
+1 and 2 are mutually exclusive with 3; whichever applies, the embedded set runs **only**
+if that source produced no readable directory. So a real tree on disk (or an env var
+pointing at one) replaces the bundled data wholesale, and an existing-but-empty directory
+means "run no defaults" and is honoured as such rather than backfilled from the binary.
+`/etc/gamescope-ritz/scripts`, `/etc/gamescope/scripts` and the two user config
+directories are read *after* all of the above (in the no-override case) exactly as
+before: those are additions, not replacements.
+
+**Why embedded rather than installed.** Until 2026-09-09 the tree reached disk only via
+`default_extras_install.sh`, an install step `install.sh` prompted for and defaulted to
+*declining* — so the ordinary install produced a binary with no display database at all,
+and said so only in a `scriptmgr` warning. The load order is preserved by construction:
+`embed_scripts.py` walks the tree in `RunFolder`'s own order (files sorted, then
+subdirectories sorted, recursively), so `common/` still runs before `displays/` and an
+on-disk replacement behaves identically. Chunk names are the script's path within the
+tree, so a Lua error still names the file it came from.
+
+**They can run from memory because they are self-contained.** Every file under
+`scripts/00-gamescope/` was checked for `require`, `dofile`, `loadfile` or a relative
+include: the only hit is `common/inspect.lua`'s `pcall(require, 'compat53.module')`, a
+`pcall`-guarded optional shim for Lua < 5.3 that fails harmlessly under LuaJIT and is not
+a filesystem dependency. Nothing else touches `io`, `os.getenv` or `package.path`. So
+there was no need for the auto-export alternative (writing the copies into
+`XDG_DATA_HOME` on first run and loading from there), which would have added a
+first-run write, a corruption-recovery path and a directory to keep in step with the
+binary.
 
 ## Using it
 

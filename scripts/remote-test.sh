@@ -18,10 +18,11 @@
 #   Only build-release/src/gamescope itself by default. gamescopectl is a separate,
 #   distro-packaged binary (owned by the `gamescope-git` pacman package, not this
 #   repo's meson build) and is already present on the laptop the same way it is
-#   here — nothing to transfer. Lua config scripts and looks are optional at
-#   runtime (gamescope fails safe if their directories don't exist) so they are
-#   not shipped unless --extras is given. The bundled shader effects are compiled
-#   into the binary, so there is no reshade/ tree to ship.
+#   here — nothing to transfer. The bundled Lua scripts, the licence texts and
+#   the shader effects are all compiled into the binary (2026-09-09), so there
+#   is nothing beside it to ship either; looks/ has no runtime lookup at all.
+#   The old --extras flag, which rsynced scripts/ and looks/, is gone with the
+#   install step it mirrored.
 #
 # TWO SSH FACTS THIS SCRIPT EXISTS TO HIDE
 #   1. Every `ssh host 'cmd'` is a fresh, non-interactive shell — none of the
@@ -35,12 +36,11 @@
 #      process keeps going after this script exits.
 #
 # USAGE
-#   scripts/remote-test.sh sync [--extras] [--no-build]
+#   scripts/remote-test.sh sync [--no-build]
 #       Build locally (release; niced +10 / ionice idle by the shared build
 #       helper — see gcr_build in gamescope-ritz-common.sh), then rsync the
-#       binary (and, with --extras, scripts/looks) to the remote test
-#       dir. --no-build skips the local build and ships whatever's already
-#       there.
+#       binary to the remote test dir. --no-build skips the local build and
+#       ships whatever's already there.
 #
 #   scripts/remote-test.sh run [--wait] -- <command...>
 #       Run <command> on the remote host with the compositor's env exported and
@@ -119,11 +119,10 @@ remote_env_exports() {
 cmd_env() { remote_env_exports; }
 
 cmd_sync() {
-	local do_build=1 extras=0
+	local do_build=1
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--no-build) do_build=0 ;;
-			--extras) extras=1 ;;
 			*) gcr_err "sync: unknown option: $1"; exit 1 ;;
 		esac
 		shift
@@ -139,13 +138,6 @@ cmd_sync() {
 	"${SSH[@]}" "mkdir -p $REMOTE_DIR/captures"
 	rsync -avz --progress "$LOCAL_BIN" "$REMOTE_HOST:$REMOTE_DIR/gamescope-ritz"
 	"${SSH[@]}" "chmod +x $REMOTE_DIR/gamescope-ritz"
-
-	if [ "$extras" = "1" ]; then
-		gcr_info "rsyncing scripts/looks extras..."
-		for d in scripts looks; do
-			[ -d "$REPO_ROOT/$d" ] && rsync -avz --delete "$REPO_ROOT/$d/" "$REMOTE_HOST:$REMOTE_DIR/$d/"
-		done
-	fi
 
 	gcr_info "verifying the transferred binary actually runs..."
 	local ver

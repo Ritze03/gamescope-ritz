@@ -21,14 +21,13 @@
 # Options:
 #   --link              symlink mode, non-interactive
 #   --copy              copy mode, non-interactive
-#   --yes, -y           assume "yes" to all prompts (extras included)
-#   --extras            install/update scripts+looks extras, no prompt
-#   --no-extras         skip the extras step, no prompt
+#   --yes, -y           assume "yes" to all prompts
 #   --rebuild           rebuild even if a release binary already exists
 #   --prefix DIR        install directory (default: /usr/bin)
 #   --build-dir DIR     release build directory (default: build-release)
-#   --uninstall         remove /usr/bin/gamescope-ritz and its
-#                       share/gamescope-ritz data dir, and exit
+#   --uninstall         remove /usr/bin/gamescope-ritz, and offer to clear a
+#                       leftover share/gamescope-ritz directory from an
+#                       older install, then exit
 #   -h, --help          show this help and exit
 #
 # Examples:
@@ -44,21 +43,18 @@ source "$SCRIPT_DIR/gamescope-ritz-common.sh"
 
 MODE=""            # "link" or "copy"
 GCR_ASSUME_YES=0
-EXTRAS=""           # "" = ask, "yes", "no"
 REBUILD=0
 PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
 DO_UNINSTALL=0
 
-print_help() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--link) MODE="link" ;;
 		--copy) MODE="copy" ;;
 		--yes|-y) GCR_ASSUME_YES=1 ;;
-		--extras) EXTRAS="yes" ;;
-		--no-extras) EXTRAS="no" ;;
 		--rebuild) REBUILD=1 ;;
 		--prefix) PREFIX_DIR="$2"; shift ;;
 		--build-dir) BUILD_DIR_NAME="$2"; shift ;;
@@ -80,11 +76,15 @@ TARGET="$PREFIX_DIR/$GCR_BIN_NAME"
 gcr_check_target_safety "$TARGET"
 
 if [ "$DO_UNINSTALL" = "1" ]; then
+	# A LEFTOVER, NOT AN INSTALL: nothing writes share/gamescope-ritz any
+	# more (2026-09-09; the bundled Lua and the licence texts are compiled
+	# into the binary), but installs made before that did, so uninstall
+	# still offers to clear it rather than orphaning it forever.
 	PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
-	EXTRAS_DIR=$(gcr_extras_dir "$PREFIX_ROOT")
+	DATA_DIR="$PREFIX_ROOT/share/gamescope-ritz"
 
-	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && [ ! -e "$EXTRAS_DIR" ]; then
-		gcr_info "$TARGET does not exist and $EXTRAS_DIR does not exist, nothing to uninstall."
+	if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && [ ! -e "$DATA_DIR" ]; then
+		gcr_info "$TARGET does not exist and $DATA_DIR does not exist, nothing to uninstall."
 		exit 0
 	fi
 
@@ -100,27 +100,26 @@ if [ "$DO_UNINSTALL" = "1" ]; then
 		gcr_info "removed $TARGET."
 	fi
 
-	if [ -e "$EXTRAS_DIR" ]; then
+	if [ -e "$DATA_DIR" ]; then
 		# Safety check mirrors gcr_check_target_safety's spirit: only ever
 		# remove our own namespaced data directory, never plain
 		# $PREFIX_ROOT/share/gamescope (a distro-packaged gamescope's).
-		case "$EXTRAS_DIR" in
+		case "$DATA_DIR" in
 			*/share/gamescope-ritz)
-				if gcr_confirm "Also remove $EXTRAS_DIR (scripts/looks extras)?" y; then
+				gcr_info "found $DATA_DIR — a leftover from an older install; nothing needs it now."
+				if gcr_confirm "Also remove $DATA_DIR?" y; then
 					GCR_PRIV_DIR="$PREFIX_ROOT"
-					gcr_as_priv rm -rf -- "$EXTRAS_DIR"
-					gcr_info "removed $EXTRAS_DIR."
+					gcr_as_priv rm -rf -- "$DATA_DIR"
+					gcr_info "removed $DATA_DIR."
 				else
-					gcr_info "left $EXTRAS_DIR in place."
+					gcr_info "left $DATA_DIR in place."
 				fi
 				;;
 			*)
-				gcr_err "internal error: refusing to remove unexpected extras dir '$EXTRAS_DIR'"
+				gcr_err "internal error: refusing to remove unexpected data dir '$DATA_DIR'"
 				exit 1
 				;;
 		esac
-	else
-		gcr_info "$EXTRAS_DIR does not exist, nothing to remove there."
 	fi
 	exit 0
 fi
@@ -186,23 +185,6 @@ case "$MODE" in
 		;;
 esac
 gcr_info "installed: $TARGET ($MODE mode)"
-
-PREFIX_ROOT=$(dirname -- "$PREFIX_DIR")
-if [ -z "$EXTRAS" ]; then
-	echo
-	echo "default_extras_install.sh copies this repo's scripts/, looks/ and"
-	echo "the bundled font license into ${PREFIX_ROOT}/share/gamescope-ritz"
-	echo "— namespaced by binary name, so it never touches a distro-packaged"
-	echo "/usr/bin/gamescope's own share/gamescope. Needed for gamescope-ritz's"
-	echo "scripts/looks features to find their files, and for the Geist"
-	echo "font's OFL license to travel with the install."
-	if gcr_confirm "Run it now?" n; then EXTRAS="yes"; else EXTRAS="no"; fi
-fi
-if [ "$EXTRAS" = "yes" ]; then
-	gcr_install_extras "$REPO_ROOT" "$PREFIX_ROOT"
-else
-	gcr_info "skipped extras (scripts/looks). Re-run with --extras later if needed."
-fi
 
 echo
 gcr_info "done. Run: $TARGET --help"

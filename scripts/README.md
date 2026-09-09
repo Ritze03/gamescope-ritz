@@ -325,12 +325,23 @@ Scripts and configs working between revisions is not guaranteed to work, it shou
 
 Gamescope uses Lua for it's configuration and scripting system.
 
+**This fork's own `00-gamescope/` tree — the known-displays database and the `modegen` helpers — is compiled into the binary and needs nothing installed beside it.** It runs first, always, unless a replacement is found on disk (see the precedence list below).
+
 Scripts ending in `.lua` are executed recursively in alphabetical order from the following directories:
- - `/usr/share/gamescope-ritz`
- - `/etc/gamescope-ritz`
- - `$XDG_CONFIG_DIR/gamescope-ritz`
+ - `/usr/share/gamescope-ritz` — a **replacement** for the compiled-in tree, if a packager puts one there. Present means the compiled-in copies do not run at all.
+ - `/etc/gamescope-ritz` — an admin's own additions, always read, never a replacement.
+ - `$XDG_CONFIG_DIR/gamescope-ritz` — your own additions, always read, never a replacement.
 
 ...and, as a fallback so an existing plain-gamescope script setup keeps working, also from the unnamespaced `/usr/share/gamescope`, `/etc/gamescope` and `$XDG_CONFIG_DIR/gamescope`.
+
+### Where the default scripts come from, in precedence order
+
+1. `script_use_local_scripts` (convar) → `../scripts`, for development.
+2. `$GAMESCOPE_SCRIPT_PATH` → each `:`-separated directory.
+3. `/usr/share/gamescope-ritz/scripts` (`SCRIPT_DIR`, set from meson's prefix).
+4. **The copies compiled into the binary** — the default, and the only source that always exists.
+
+Whichever of 1–3 applies, the compiled-in copies run **only** if that source produced no readable directory. A directory that exists but is empty therefore means "run no defaults", and is honoured as such rather than being backfilled from the binary.
 
 You can develop easily without overriding your installation by setting `script_use_local_scripts` which will eliminate all of the above from being read, and instead read from `../config` of where Gamescope is run instead of those.
 

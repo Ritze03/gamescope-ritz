@@ -12,6 +12,14 @@ The newest version below is the one this build reports.
 ## [0.7.0] – 2026-09-09
 
 ### Added
+- **The display database now ships inside gamescope-ritz**: the bundled screen
+  profiles that set HDR, colour and refresh timings for known handhelds are compiled
+  into the program, so they are always there -- there is nothing to install beside it
+  and nothing to remember to run.
+- **Licences are readable in the overlay**: the Changelog page is now called About and
+  prints, under the changelog, the licences of everything built into gamescope-ritz --
+  gamescope itself, the ReShade effect compiler, Dear ImGui, sol2, stb, GLM,
+  nlohmann/json, SPIRV-Headers and the Geist fonts.
 - **The friends list shows who you can join, here, now**: it lists the friends who
   are in the game you are running and in a lobby you can walk into, alphabetically.
   Click one and Steam moves you in without relaunching anything.
@@ -22,6 +30,10 @@ The newest version below is the one this build reports.
   and quietly selecting somebody else.
 
 ### Removed
+- **The "install extras" question**: the installer no longer asks whether to copy
+  scripts and licences next to the binary, because nothing needs them there any more.
+  The `--extras` and `--no-extras` options are gone with it, and removing
+  gamescope-ritz now offers to clear the leftover folder an older install left behind.
 - **Friends in other games, and friends you cannot join**: the list no longer shows
   them, and the whole Friends page is hidden when you are not in a Steam game. The
   Status line still says how many friends are in this game and how many of those you
@@ -34,6 +46,8 @@ The newest version below is the one this build reports.
   friend. Its settings area, its keybind and its browser process are all removed.
 
 ### Info
+- **"Changelog" is now "About"**: same page, same place in the list, with the licences
+  added underneath. Searching the command palette for either word finds it.
 - **Invites are not in the friends list, and cannot be**: Steam offers no way to tell
   this list about an invite you have been sent, so there is no invite row and no
   accept/deny -- accept invites in Steam itself. The Friends area's Status says so

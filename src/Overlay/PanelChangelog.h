@@ -1,5 +1,7 @@
-// The CHANGELOG area: this build's version identity, and the fork's
-// changelog as a scrolling content body.
+// The ABOUT area (rail label "About"; its id is still "system.changelog",
+// see PanelChangelog.cpp for why): this build's version identity, the fork's
+// changelog, and the licences of everything compiled into the binary, all as
+// one scrolling content body.
 //
 // It is the Log's shape reused rather than a new kind of screen -- version
 // facts as ordinary rows, prose beneath them via Area::Content(), which is
@@ -11,7 +13,8 @@ namespace gamescope
 {
 	namespace ui { class Registry; }
 
-	// Declares the Changelog area: the base-gamescope and gamescope-ritz
-	// version rows, and the embedded CHANGELOG.md as content lines.
+	// Declares the About area: the base-gamescope and gamescope-ritz version
+	// rows, a Licences row, and the embedded CHANGELOG.md plus the embedded
+	// licence texts as content lines.
 	void PanelChangelog_RegisterArea( ui::Registry &reg );
 }
