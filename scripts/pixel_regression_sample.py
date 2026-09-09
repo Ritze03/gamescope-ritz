@@ -120,11 +120,18 @@ def cmd_margin(a):
     translated back to full-image coordinates and read off whichever of
     the image's own four edges `edges` names (a comma list drawn from
     left/right/top/bottom -- only the side(s) the anchor under test
-    actually hugs an edge on). `tol` is 0 for a drawn backdrop (a crisp,
-    non-antialiased rect edge, exact by construction) and 1 otherwise (a
-    real antialiasing fringe right at the ink/outline edge -- see
-    fps-display.md and the zoom captures under build-release/verify-shots/
-    hud-margin-2026-09-07/)."""
+    actually hugs an edge on).
+
+    `diff_thresh` and `tol` come as a PAIR, and pixel-regression.sh runs
+    both on every capture (its HUD_MARGIN_* comment has the reasoning): at
+    diff_thresh 0 the bounding box includes the glyph's sub-count
+    antialiasing fringe, which is the ink's true geometric boundary, so the
+    margin is exact and tol is 0; at the script's usual "not the
+    background" threshold the box is the solid ink, one fringe pixel
+    further in, so tol is 1. The exact case used to be a drawn backdrop's
+    crisp AddRectFilled edge -- there is no backdrop since 2026-09-09.
+    See fps-display.md and the zoom captures under
+    build-release/verify-shots/hud-backdrop-removal-2026-09-09/."""
     img = load(a.image)
     box = (a.x0, a.y0, a.x1, a.y1)
     if not (0 <= box[0] < box[2] <= img.width and 0 <= box[1] < box[3] <= img.height):
@@ -190,8 +197,8 @@ def coverage_blend_expected(color, alpha, bg, bits):
     So a 50 % crosshair lands at c * a * a + bg * (1 - a) in linear light --
     (0,255,0) over (51,51,51) measures (35, 99, 35), not the (26,153,26) or
     (35,190,35) an ideal encoded/linear half-blend would give. That is the
-    HUD's long-standing look (the backdrop has always been composited the
-    same way) and NOT something this check may "fix" by itself.
+    HUD's long-standing look (the backdrop, while there was one, composited
+    the same way) and NOT something this check may "fix" by itself.
     """
     q = (1 << bits) - 1
     texel_a = round(q * alpha) / q

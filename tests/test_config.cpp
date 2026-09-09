@@ -374,47 +374,59 @@ TEST_CASE( "a config carrying the removed shadow_strength falls back to the outl
     REQUIRE( loaded.fps_display.outline_strength == Settings{}.fps_display.outline_strength );
 }
 
-TEST_CASE( "fps_display.backdrop_opacity round-trips at every UI-reachable value", "[config]" )
-{
-    for ( float flValue : { 0.0f, 0.05f, 0.5f, 1.0f } )
-    {
-        TempConfigHome home;
-
-        Settings s{};
-        s.fps_display.backdrop_opacity = flValue;
-
-        REQUIRE( SaveSections( s ) );
-
-        Settings loaded = LoadSections();
-        REQUIRE( loaded.fps_display.backdrop_opacity == flValue );
-    }
-}
-
 // Phase 2 removed backdrop_enabled/backdrop_rounding/blend_mode outright
-// (ConfigSchema.h's own comment) rather than deprecating them -- an old
-// config that still has those keys on disk must load cleanly, simply
-// ignoring them, exactly like any other removed field this project has
-// dropped (dock_scale, opacity_background, ...).
-TEST_CASE( "a config predating Phase 2 ignores the removed backdrop/blend_mode keys", "[config]" )
+// (ConfigSchema.h's own comment) rather than deprecating them, and
+// 2026-09-09 removed backdrop_opacity/backdrop_padding the same way when
+// the backdrop itself went -- a config that still has any of those keys on
+// disk must load cleanly, simply ignoring them, exactly like any other
+// removed field this project has dropped (friends_lookup_names, dock_scale,
+// opacity_background, ...).
+TEST_CASE( "a config carrying the removed backdrop keys loads and drops them", "[config]" )
 {
     TempConfigHome home;
 
-    std::filesystem::create_directories( ConfigRoot() );
-    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {
-        "enabled": true,
-        "backdrop_enabled": false,
-        "backdrop_rounding": 4.0,
-        "blend_mode": "additive"
-    }})";
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 3,
+        "name": "T",
+        "kind": "general",
+        "fps_display": {
+            "enabled": true,
+            "font_size": 42.0,
+            "outline_strength": 2.0,
+            "backdrop_enabled": false,
+            "backdrop_rounding": 4.0,
+            "backdrop_opacity": 0.75,
+            "backdrop_padding": 6.0,
+            "blend_mode": "additive"
+        }
+    })";
 
-    Settings loaded = ResolvedSettings();
+    Settings loaded = LoadSections();
+    // The keys the reader still knows survive the file's stale company --
+    // an unknown key is skipped, it does not derail the object.
     REQUIRE( loaded.fps_display.enabled == true );
-    // Compiled-in defaults for every Phase 2 field the old file never wrote.
+    REQUIRE( loaded.fps_display.font_size == 42.0f );
+    REQUIRE( loaded.fps_display.outline_strength == 2.0f );
+    // Compiled-in defaults for every field this file never wrote.
     REQUIRE( loaded.fps_display.update_mode == "smoothing" );
     REQUIRE( loaded.fps_display.color_mode == "fixed" );
     REQUIRE( loaded.fps_display.hide_above_enabled == false );
-    REQUIRE( loaded.fps_display.outline_strength == 0.0f );
     REQUIRE( loaded.fps_display.lag_detection_enabled == true );
+
+    // ...and the next write drops every removed key, rather than carrying a
+    // value nothing reads forward forever.
+    REQUIRE( SaveSections( loaded ) );
+    std::ifstream in( ProfilePath( "T" ) );
+    const std::string sWritten( ( std::istreambuf_iterator<char>( in ) ),
+                                  std::istreambuf_iterator<char>() );
+    REQUIRE( sWritten.find( "backdrop_opacity" ) == std::string::npos );
+    REQUIRE( sWritten.find( "backdrop_padding" ) == std::string::npos );
+    REQUIRE( sWritten.find( "backdrop_enabled" ) == std::string::npos );
+    REQUIRE( sWritten.find( "backdrop_rounding" ) == std::string::npos );
+    REQUIRE( sWritten.find( "blend_mode" ) == std::string::npos );
+    // Not a blanket "the file shrank" assertion -- the live keys are still there.
+    REQUIRE( sWritten.find( "outline_strength" ) != std::string::npos );
 }
 
 TEST_CASE( "queued writes flush to disk without blocking the caller inline", "[config]" )

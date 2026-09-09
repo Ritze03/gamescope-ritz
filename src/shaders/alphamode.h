@@ -37,18 +37,19 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
         //
         // The layer carries BOTH kinds of content at once: texels that
         // must invert the destination (the digits' fill) and texels that
-        // must composite normally (the HUD's backdrop and black outline,
-        // and the crosshair in whatever colour the user picked). They are
+        // must composite normally (the HUD's black outline, and the
+        // crosshair in whatever colour the user picked). They are
         // told apart by a MARKER the HUD encodes into the texel itself:
         //
         //   the digits are drawn in pure magenta, (1, 0, 1), and every
         //   other HUD element that can sit under a digit's antialiased
-        //   edge (the outline, the backdrop, the clear colour) is pure
+        //   edge (the outline and the clear colour -- and, until
+        //   2026-09-09, the backdrop) is pure
         //   black -- so after ImGui's straight-alpha blend a texel with
         //   G == 0 is exactly  d * (1,0,1) + (a - d) * black,  where d is
         //   the digit coverage and a the texel's alpha. G == 0 therefore
         //   marks "digit (plus black)", R recovers d, and (a - d) is how
-        //   much black outline/backdrop shows around it: the shader
+        //   much black outline shows around it: the shader
         //   reconstructs the layering exactly. Anything with G > 0 is not
         //   a digit and blends bit-for-bit as alpha_mode_coverage would.
         //   The crosshair keeps every colour it can be given at any
@@ -137,7 +138,7 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
             }
 
             // Digit share inverts; the remaining covered share is black
-            // (outline / backdrop) and contributes nothing; the rest of the
+            // (the outline) and contributes nothing; the rest of the
             // pixel is the background, untouched. A pure-black texel
             // (outline only, d == 0) is therefore exactly the coverage
             // blend of black, and a full digit texel (d == a == 1) is

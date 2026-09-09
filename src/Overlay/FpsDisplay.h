@@ -8,8 +8,8 @@
 // This file draws exactly one thing: the FPS integer, positioned by a
 // 9-point anchor plus pixel margins. Phase 2 (2026-09-03, same day) rebuilt
 // the `system.hud` settings area on top of what Phase 1 left -- update
-// modes, hide-above-X, a plain backdrop, a two-way text-colour choice and a
-// lag-spike reaction, a drop shadow -- see
+// modes, hide-above-X, a plain backdrop (removed again 2026-09-09), a
+// two-way text-colour choice and a lag-spike reaction, a drop shadow -- see
 // superdoc/features/fps-display.md for the whole feature as it stands now.
 //
 // Lifetime note (the subtlety that milestone is most likely to get wrong):
@@ -127,28 +127,33 @@ namespace gamescope
 		// "Margin" section carry the full reasoning): how far to shift the
 		// digits, along one axis, so that the OUTERMOST drawn pixel on the
 		// side facing the anchored edge -- glyph ink, or the outline's
-		// ink-plus-radius when an outline is drawn instead of a backdrop --
-		// lands exactly `flMargin`'s own configured distance from the
-		// screen edge, when there is no backdrop rect to pin it there
-		// instead (a drawn backdrop needs no correction at all: its own
-		// edge already sits exactly at the margin by construction, see
-		// ResolveAnchoredOrigin()).
+		// ink-plus-radius when an outline is drawn -- lands exactly the
+		// configured margin's own distance from the screen edge. Nothing
+		// else pins it there: the readout's box is invisible (the backdrop
+		// that used to fill it is gone, 2026-09-09) and a glyph's ink sits
+		// inside its advance cell by its own side bearing.
 		//
 		// `nSide` is ParsePlacement's own axis numbering: 0 = the near
 		// edge (left/top), 2 = the far edge (right/bottom), 1 = centred
-		// (no edge to hug, so no shift). `flPadding` is backdrop_padding
-		// (always added whether or not a backdrop is actually drawn --
-		// see MeasureFpsModule()'s comment for why); `flBearing` is the
-		// glyph's own ink offset on this side (MeasureInkExtent()'s
-		// left/top, or the numSize-relative right/bottom gap) -- rounded
-		// to a whole pixel by the caller, see that comment for why;
-		// `flOutlineGeomRadius` is the outline's actual geometric reach
-		// (0 when no outline is drawn).
-		inline float EdgeShift( bool bDrawBackdrop, int nSide, float flPadding, float flBearing, float flOutlineGeomRadius )
+		// (no edge to hug, so no shift). `flBearing` is the glyph's own
+		// ink offset on this side (MeasureInkExtent()'s left/top, or the
+		// numSize-relative right/bottom gap) -- rounded to a whole pixel
+		// by the caller, see that comment for why; `flOutlineGeomRadius`
+		// is the outline's actual geometric reach (0 when no outline is
+		// drawn), which the ink must sit that far inside of so the ring
+		// itself lands on the margin.
+		//
+		// Until 2026-09-09 this also took the drawn-backdrop flag (a
+		// backdrop pinned the margin with its own crisp rect edge, so the
+		// correction had to be 0 there) and backdrop_padding, which the
+		// draw origin added and the box's size subtracted again -- it
+		// cancelled out of this expression exactly, which is why dropping
+		// it moved no pixel.
+		inline float EdgeShift( int nSide, float flBearing, float flOutlineGeomRadius )
 		{
-			if ( bDrawBackdrop || nSide == 1 )
+			if ( nSide == 1 )
 				return 0.0f;
-			const float flInset = flPadding + flBearing - flOutlineGeomRadius;
+			const float flInset = flBearing - flOutlineGeomRadius;
 			return ( nSide == 0 ) ? -flInset : flInset;
 		}
 	}
@@ -156,7 +161,7 @@ namespace gamescope
 	// Called once per paint_all(), on the steamcompmgr thread. Reads
 	// gamescope-ritz's fps_display config (loaded lazily on first call) and,
 	// when enabled and not currently hidden by "hide above X", draws the
-	// readout (game frame rate, backdrop, text-colour treatment per config)
+	// readout (game frame rate, outline, text-colour treatment per config)
 	// into its own offscreen texture and appends a Layer_t for it to
 	// *pFrameInfo. A no-op when disabled.
 	void FpsDisplay_AddLayer( FrameInfo_t *pFrameInfo );
@@ -189,7 +194,7 @@ namespace gamescope
 
 	// Declares this feature's settings as the E2 `system.hud` area: the
 	// master switch, placement (anchor + margins), font size, update mode,
-	// hide-above-X, backdrop opacity, text colour and shadow strength -- see
+	// hide-above-X, text colour and outline size -- see
 	// this file's header comment and superdoc/features/fps-display.md.
 	//
 	// This REPLACED FpsDisplay_DrawSettingsPanel(), the six-tab panel issue

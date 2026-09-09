@@ -82,10 +82,12 @@
 #                            colour exactly
 #   outline                -- the HUD's own black digit outline, on and off
 #   hud-margin             -- the configured margin lands the outermost
-#                            drawn pixel (backdrop rect, exact; ink/outline
-#                            otherwise, within 1px of AA fringe) exactly
-#                            that far from the screen edge, at all four
-#                            corners and two margins, backdrop off and on,
+#                            drawn pixel exactly that far from the screen
+#                            edge -- asserted twice per capture: the AA
+#                            fringe's own outer pixel EXACTLY on the margin
+#                            (any-difference threshold, tol 0) and the solid
+#                            ink within 1px of it -- at all four corners and
+#                            two margins, outline off and on,
 #                            plus a 4-digit reading (2026-09-07 fix; see
 #                            build-release/verify-shots/hud-margin-2026-09-07/
 #                            for the full matrix this is a compact subset of)
@@ -203,19 +205,39 @@ HUD_OUTLINE_MIN_BLACK_PX=8   # a 2px outline ring around two glyphs is easily
 
 # HUD margin fix (2026-09-07, superdoc/features/fps-display.md's "Margin"):
 # compact permanent subset of the full verification matrix (build-release/
-# verify-shots/hud-margin-2026-09-07/ has the rest) -- all four corners at
-# two margins, backdrop off (ink only) and on, plus one 4-digit reading.
+# verify-shots/hud-backdrop-removal-2026-09-09/ has the rest) -- all four
+# corners at two margins, outline off (ink only) and on, plus one 4-digit
+# reading.
 # hud.anchor's Composite binding only exposes its VERTICAL axis under a
 # console id (Registry.cpp's own "Prefix Law" comment -- the horizontal
 # half, m_BindB, has none), so switching CORNER needs a fresh config file;
-# margin_x/margin_y and backdrop_opacity are plain Params/Sliders and stay
+# margin_x/margin_y and outline_strength are plain Params/Sliders and stay
 # live-settable via overlay_e2_set within that corner's own instance.
+#
+# TWO assertions per capture, and the pair is the point (2026-09-09). Until
+# the backdrop was removed, the exact case was the backdrop's own crisp
+# AddRectFilled edge at tol 0, and the ink-only case carried tol 1 for the
+# font's antialiasing fringe. With nothing but antialiased glyphs left, a
+# lone tol-1 check would silently accept a 1px drift in either direction --
+# so the slack was not loosened, it was SPLIT:
+#
+#   *-edge  measures the outermost pixel that differs from the flat
+#           background AT ALL (diff_thresh 0, so the sub-count AA fringe
+#           counts) and demands it land EXACTLY on the margin, tol 0. That
+#           fringe pixel IS the glyph's true geometric boundary, so this is
+#           an exact measurement of the thing the old backdrop case measured
+#           exactly -- it just needed a sensitive enough threshold to see.
+#   *-ink   measures the solid ink at the usual "not the background"
+#           threshold and allows the 1px the fringe accounts for. Alone it
+#           is loose; together with *-edge it pins both ends of the fringe,
+#           so the ink cannot drift inward while the fringe alone lands right.
 HUD_MARGIN_CORNERS=(top-left top-right bottom-left bottom-right)
 HUD_MARGIN_VALUES=(0 8)
 HUD_MARGIN_DIGITS_FPS=1234        # the 4-digit case's own forced reading
 HUD_MARGIN_BOX_SPAN=140           # search box span from the corner, generous around the "60"/"1234" glyphs
-HUD_MARGIN_TOL_BACKDROP=0         # a crisp AddRectFilled edge -- exact by construction
-HUD_MARGIN_TOL_INK=1              # a real, sub-count font AA fringe right at the edge -- see fps-display.md
+HUD_MARGIN_DIFF_EXACT=0           # "differs from the flat background at all" -- sees the AA fringe
+HUD_MARGIN_TOL_EXACT=0            # ...which sits exactly on the margin, by construction
+HUD_MARGIN_TOL_INK=1              # the solid ink, one AA fringe pixel further in -- see fps-display.md
 
 # Dark and mid-tone backgrounds, and the reference digit values measured
 # 2026-09-05 (superdoc/features/fps-display.md, "Verifying Inverted mode").
@@ -628,7 +650,6 @@ write_config() {
 		    "fps_display": {
 		        "enabled": true,
 		        "font_size": $FONT_SIZE,
-		        "backdrop_opacity": 0.0,
 		        "text_opacity": 1.0,
 		        "update_mode": "smoothing",
 		        "hide_above_enabled": false,
@@ -689,7 +710,6 @@ write_config_hud_margin() {
 		    "fps_display": {
 		        "enabled": true,
 		        "font_size": $FONT_SIZE,
-		        "backdrop_opacity": 0.0,
 		        "text_opacity": 1.0,
 		        "update_mode": "smoothing",
 		        "hide_above_enabled": false,
@@ -970,20 +990,33 @@ check_outline() {
 }
 
 # HUD margin fix (2026-09-07): the configured margin is the distance from
-# the screen edge to the OUTERMOST drawn pixel -- exact (tol 0) when the
-# backdrop is drawn, within a 1px font-AA fringe (tol 1) otherwise. See the
-# HUD_MARGIN_* constants' own comment for why this restarts the instance
-# once per corner, and build-release/verify-shots/hud-margin-2026-09-07/
-# for the full matrix this is a compact, permanent subset of. Manages its
-# own instance restarts (not the shared "dark" instance the checks above
-# use), and restores the standard config at its own end.
+# the screen edge to the OUTERMOST drawn pixel -- the AA fringe's own outer
+# pixel exactly on it (tol 0 at HUD_MARGIN_DIFF_EXACT), the solid ink within
+# 1px. See the HUD_MARGIN_* constants' own comment for both assertions and
+# for why this restarts the instance once per corner, and
+# build-release/verify-shots/hud-backdrop-removal-2026-09-09/ for the full
+# matrix this is a compact, permanent subset of. Manages its own instance
+# restarts (not the shared "dark" instance the checks above use), and
+# restores the standard config at its own end.
 #
-# Uses BG_MID, not BG_DARK: the near-black backdrop (9,11,14) at opacity
-# 0.5 blended over BG_DARK (51,51,51) measures too close to BG_DARK itself
-# (empirically under DIFF_THRESH), which silently degenerated the
-# backdrop-on cases into re-measuring the ink underneath. Over BG_MID
-# (148,148,148) the same blend measures ~(108,108,108) -- a safely
-# separated ~40.
+# Uses BG_MID, not BG_DARK: a black outline over BG_DARK (51,51,51) is only
+# 51 counts of separation and its own antialiased skirt lands inside
+# DIFF_THRESH, which would blur exactly the edge this measures. Over BG_MID
+# (148,148,148) both the black outline and the bright digits separate
+# cleanly in both directions.
+# The two assertions one margin capture always gets -- see the
+# HUD_MARGIN_* constants' comment for why it is a pair and not one loose
+# check. Args: shot, box x0 y0 x1 y1, edges, expect_x, expect_y, name.
+assert_hud_margin() {
+	local shot="$1" bx0="$2" by0="$3" bx1="$4" by1="$5" edges="$6" ex="$7" ey="$8" name="$9"
+	run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
+		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$HUD_MARGIN_DIFF_EXACT" "$edges" \
+		"$ex" "$ey" "$HUD_MARGIN_TOL_EXACT" "${name}-edge"
+	run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
+		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$edges" \
+		"$ex" "$ey" "$HUD_MARGIN_TOL_INK" "${name}-ink"
+}
+
 check_hud_margin() {
 	should_run hud-margin || { skip_check hud-margin "--only excluded it"; return; }
 
@@ -1003,16 +1036,18 @@ check_hud_margin() {
 			apply_fps_force
 
 			shot="$(take_screenshot "20-hud-margin-${anchor}-m${mval}-ink")"
-			run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
-				"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$edges" \
-				"$mval" "$mval" "$HUD_MARGIN_TOL_INK" "hud-margin-${anchor}-m${mval}-ink"
+			assert_hud_margin "$shot" "$bx0" "$by0" "$bx1" "$by1" "$edges" \
+				"$mval" "$mval" "hud-margin-${anchor}-m${mval}"
 
-			set_val "hud.backdrop_opacity" 0.5
-			shot="$(take_screenshot "21-hud-margin-${anchor}-m${mval}-bd")"
-			run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
-				"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$edges" \
-				"$mval" "$mval" "$HUD_MARGIN_TOL_BACKDROP" "hud-margin-${anchor}-m${mval}-bd"
-			set_val "hud.backdrop_opacity" 0
+			# Outline on: the outermost drawn pixel is now the outline's own
+			# outer ring, not the digits' ink, and MeasureFpsModule() has to
+			# subtract its reach for the margin to still land. This is the
+			# case that replaced the retired backdrop-on one.
+			set_val "hud.outline_strength" "$HUD_OUTLINE_STRENGTH"
+			shot="$(take_screenshot "21-hud-margin-${anchor}-m${mval}-outline")"
+			assert_hud_margin "$shot" "$bx0" "$by0" "$bx1" "$by1" "$edges" \
+				"$mval" "$mval" "hud-margin-${anchor}-m${mval}-outline"
+			set_val "hud.outline_strength" 0
 		done
 	done
 
@@ -1024,9 +1059,8 @@ check_hud_margin() {
 	gsctl fps_display_force "$HUD_MARGIN_DIGITS_FPS" >/dev/null 2>&1 || true
 	sleep "$SETTLE_S"
 	shot="$(take_screenshot "22-hud-margin-digits4")"
-	run_sampler margin "$shot" 0 0 "$HUD_MARGIN_BOX_SPAN" "$HUD_MARGIN_BOX_SPAN" \
-		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "left,top" \
-		"$MARGIN_X" "$MARGIN_Y" "$HUD_MARGIN_TOL_INK" "hud-margin-digits4"
+	assert_hud_margin "$shot" 0 0 "$HUD_MARGIN_BOX_SPAN" "$HUD_MARGIN_BOX_SPAN" "left,top" \
+		"$MARGIN_X" "$MARGIN_Y" "hud-margin-digits4"
 
 	# Every check above restarted the instance with its own config -- put
 	# the standard one back so anything run after this in the same

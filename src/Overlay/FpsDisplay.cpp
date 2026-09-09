@@ -429,8 +429,8 @@ namespace gamescope
 	}
 
 	// Whether a detected spike's hold window is still open. Read from
-	// MeasureFpsModule() to decide the text/backdrop treatment for this
-	// frame -- see that function's own comment.
+	// MeasureFpsModule() to decide the text treatment for this frame --
+	// see that function's own comment.
 	static bool IsSpikeActive()
 	{
 		return s_ulLastSpikeDetectedNanos != 0
@@ -738,13 +738,11 @@ namespace gamescope
 	}
 
 	// -------------------------------------------------------------------
-	// Colour/backdrop helpers. Issue #29 originally built these for a
-	// three-way blend_mode (alpha/additive/inverted); Phase 2 (2026-09-03)
-	// replaced that with the user's actual ask -- a plain backdrop whose
-	// opacity alone decides whether it's drawn, and a text-colour mode
-	// (Fixed/Inverted) that is orthogonal to it, so the backdrop is now
-	// always drawn whenever its opacity is nonzero regardless of colour
-	// mode (there is no more "additive" to auto-disable it for).
+	// Colour helpers. Issue #29 originally built these for a three-way
+	// blend_mode (alpha/additive/inverted); Phase 2 (2026-09-03) replaced
+	// that with a plain backdrop plus a text-colour mode (Fixed/Inverted)
+	// orthogonal to it, and 2026-09-09 removed the backdrop outright at
+	// the user's request -- so all that is left here is the text colour.
 	// -------------------------------------------------------------------
 
 	// Unpacks the 0xRRGGBB int config::FpsDisplaySettings::color_fps stores
@@ -784,26 +782,12 @@ namespace gamescope
 		return col;
 	}
 
-	// Shared box backdrop (issue #28: factored out so a future module would
-	// draw an identical backdrop rather than a second copy of the same four
-	// lines -- kept even with only one module left, since the FPS module
-	// still uses it). `backdropColor` is resolved by the caller (Fixed
-	// mode's plain neutral, or Inverted mode's spike-tinted variant -- see
-	// MeasureFpsModule()) rather than recomputed here.
-	//
-	// Phase 2 (2026-09-03): NEVER rounds the corners -- the user was
-	// explicit that this is a plain rectangle. backdrop_rounding (a Phase 1
-	// config field) is gone; this always passes 0.0f, not a config read.
-	static void DrawModuleBackdrop( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, bool bDrawBackdrop, ImU32 backdropColor )
-	{
-		if ( !bDrawBackdrop )
-			return;
-
-		const ImVec2 rectMin = origin;
-		const ImVec2 rectMax( origin.x + boxSize.x, origin.y + boxSize.y );
-		pDrawList->AddRectFilled( rectMin, rectMax, backdropColor, 0.0f );
-		pDrawList->AddRect( rectMin, rectMax, ImGui::GetColorU32( gamescope::palette::White( 0.12f ) ), 0.0f );
-	}
+	// DrawModuleBackdrop() lived here until 2026-09-09: a plain
+	// unrounded AddRectFilled behind the digits with a 12 %-white border,
+	// drawn whenever fps_display.backdrop_opacity was nonzero. The user
+	// asked for the backdrop to go, so the HUD draws the digits and their
+	// outline and nothing else now -- what opacity 0 already did, made the
+	// only behaviour. See superdoc/features/fps-display.md.
 
 	// -------------------------------------------------------------------
 	// Placement: 9 anchor positions (issue #26/#27's shared 3x3 grid
@@ -880,7 +864,7 @@ namespace gamescope
 	}
 
 	// -------------------------------------------------------------------
-	// The FPS module: number, unit label, backdrop, colour treatment.
+	// The FPS module: number, outline, colour treatment.
 	// Everything that made this a small profiler (CPU/GPU load, the
 	// frametime graph, the percentile row, Now Playing) is gone -- see
 	// this file's header comment.
@@ -891,10 +875,8 @@ namespace gamescope
 	// draws into it.
 	struct FpsModuleLayout
 	{
-		bool bDrawBackdrop = false;
 		bool bDrawOutline = false;
 		float flOutlineRadius = 0.0f; // px, 0 = no outline
-		ImU32 backdropColor = 0;
 		ImU32 outlineColor = 0;
 		ImU32 textColor = 0;
 		char szNum[8] = ""; // unpadded digits actually drawn -- see flTextOffsetX
@@ -909,12 +891,12 @@ namespace gamescope
 		// own comment (2026-09-06: was always half this gap, i.e. always
 		// centred, regardless of anchor).
 		float flTextOffsetX = 0.0f;
-		// 2026-09-07 margin fix: the extra shift (on top of flTextOffsetX/
-		// backdrop_padding) that pulls the digits toward the anchor's facing
-		// edge when there is no backdrop to pin the margin to instead -- see
+		// 2026-09-07 margin fix: the extra shift (on top of flTextOffsetX)
+		// that pulls the digits toward the anchor's facing edge, since
+		// nothing else pins them to the readout's own invisible box -- see
 		// MeasureFpsModule()'s own comment below and fps-display.md's
-		// "Margin" section. Zero whenever the backdrop is drawn, or on an
-		// axis the anchor centres rather than hugs an edge on.
+		// "Margin" section. Zero on an axis the anchor centres rather than
+		// hugs an edge on.
 		float flEdgeShiftX = 0.0f;
 		float flEdgeShiftY = 0.0f;
 	};
@@ -930,8 +912,8 @@ namespace gamescope
 	// own ink actually occupies -- the two differ by each glyph's side
 	// bearing (left/right) and by how far short of the font's full
 	// ascent/descent a digit's cap-height/no-descender ink falls (top/
-	// bottom). That gap is exactly what let a margin with no backdrop to
-	// visually pin it to land wrong -- see MeasureFpsModule()'s own
+	// bottom). That gap is exactly what let the margin land wrong before
+	// 2026-09-07 -- see MeasureFpsModule()'s own
 	// comment for how this is used to correct it, and fps-display.md's
 	// "Margin" section for the measured numbers.
 	struct InkExtent { float left, top, right, bottom; };
@@ -959,13 +941,13 @@ namespace gamescope
 		return bAny ? ext : InkExtent{ 0.0f, 0.0f, 0.0f, 0.0f };
 	}
 
-	// Phase 2's spike-reaction colours. A muted warning red rather than a
-	// saturated alarm red -- this is a HUD digit, not a klaxon, and it only
-	// needs to read as "different from normal" for kSpikeHoldNs.
-	static constexpr ImVec4 kSpikeTintColor( 0.85f, 0.20f, 0.20f, 1.0f );
-	// Inverted mode's variant of the same tint with no green at all -- see
-	// MeasureFpsModule()'s backdrop note for why G must stay 0 there.
-	static constexpr ImVec4 kSpikeTintColorInverted( 0.85f, 0.0f, 0.20f, 1.0f );
+	// Phase 2's spike reaction used to have two halves: Fixed mode inverts
+	// the number's own colour (below, still there), and Inverted mode --
+	// which cannot invert an already-inverted digit against itself --
+	// tinted the backdrop a muted warning red instead. That half went with
+	// the backdrop on 2026-09-09, so Inverted mode has no spike indication
+	// at all now; it already had none whenever the backdrop was switched
+	// off, which was the setting's default-adjacent state.
 
 	// M8 part 1 (issue #13, typeface swapped to Geist by #53): Geist Mono
 	// is genuinely monospaced, so a fixed-cell-count string is tabular by
@@ -993,53 +975,13 @@ namespace gamescope
 		FpsModuleLayout L;
 
 		// The whole spike reaction hangs off the user's own switch: off
-		// means no colour flip in Fixed mode and no backdrop tint in
-		// Inverted mode, ever. The detector itself keeps running (see
+		// means no colour flip in Fixed mode, ever (Inverted mode has had
+		// no spike reaction since the backdrop it tinted was removed,
+		// 2026-09-09). The detector itself keeps running (see
 		// ConfigSchema.h's lag_detection_enabled comment) so turning it
 		// back on reacts immediately.
 		const bool bSpike = cfg.lag_detection_enabled && IsSpikeActive();
 		const bool bInvertedMode = cfg.color_mode == "inverted";
-
-		// ---- backdrop -----------------------------------------------
-		// Opacity 0 IS "no backdrop" (ConfigSchema.h's own comment) -- no
-		// separate enabled flag any more, and NOTHING may override it.
-		L.bDrawBackdrop = cfg.backdrop_opacity > 0.0f;
-
-		// Inverted mode draws the backdrop PURE black rather than the
-		// Fixed-mode near-black (9,11,14): the digits' antialiased edges
-		// blend into whatever is under them, and alphamode.h's marker
-		// (below) only reconstructs an edge exactly when that something is
-		// black. On screen the two are within a count of each other (the
-		// near-black is linear ~0.003 before the opacity even applies).
-		ImVec4 backdropBase = bInvertedMode
-			? ImVec4( 0.0f, 0.0f, 0.0f, cfg.backdrop_opacity )
-			: ImVec4( 0x09 / 255.0f, 0x0b / 255.0f, 0x0e / 255.0f, cfg.backdrop_opacity );
-		if ( bInvertedMode && bSpike && L.bDrawBackdrop )
-		{
-			// Inverted mode can't "invert" already-inverted text to signal
-			// a spike -- doing that would show nothing against itself (the
-			// PLAN's own reasoning). Tint the backdrop toward a warning
-			// colour instead.
-			//
-			// This used to FORCE the backdrop visible for the hold window
-			// even at opacity 0, which is the bug the user reported as
-			// "backdrop opacity 0 doesn't turn the backdrop off in
-			// Inverted mode": a console-command hitch was enough to make a
-			// backdrop they had switched off appear. Opacity 0 now wins
-			// outright -- with no backdrop there is simply no spike
-			// indication in Inverted mode, which is the honest cost of
-			// letting the setting mean what it says.
-			// G stays 0 -- the tint is (0.85, 0, 0.20), not kSpikeTintColor's
-			// (0.85, 0.20, 0.20): the tinted backdrop sits under the digits'
-			// edges too, and any green in it would un-mark them (see the
-			// backdrop note above). Reads as the same muted warning red.
-			constexpr float kTintMix = 0.55f;
-			backdropBase.x = backdropBase.x * ( 1.0f - kTintMix ) + kSpikeTintColorInverted.x * kTintMix;
-			backdropBase.y = backdropBase.y * ( 1.0f - kTintMix ) + kSpikeTintColorInverted.y * kTintMix;
-			backdropBase.z = backdropBase.z * ( 1.0f - kTintMix ) + kSpikeTintColorInverted.z * kTintMix;
-			backdropBase.w = std::max( cfg.backdrop_opacity, 0.35f );
-		}
-		L.backdropColor = ImGui::ColorConvertFloat4ToU32( backdropBase );
 
 		// ---- text colour + technique ----------------------------------
 		if ( bInvertedMode )
@@ -1057,10 +999,10 @@ namespace gamescope
 			// reads (2026-09-06): a texel with G == 0 is "digit plus
 			// black", its R is the digit's own coverage, and G > 0 means
 			// "not a digit, composite normally". That is what lets the
-			// backdrop, the black outline AND the crosshair -- in any colour
-			// the user picks -- share this one layer. The contract on this
-			// side: the outline is pure black, the backdrop (and its spike
-			// tint) has no green, and the crosshair nudges a G of 0 to 1
+			// black outline AND the crosshair -- in any colour the user
+			// picks -- share this one layer. The contract on this
+			// side: the outline is pure black (as the backdrop was too,
+			// while there was one), and the crosshair nudges a G of 0 to 1
 			// (Crosshair.cpp, CrosshairFrame::bReserveInvertMarker). It
 			// replaced opaque white plus a luma selector, which could not
 			// tell a white digit from a white crosshair and so needed a
@@ -1133,33 +1075,29 @@ namespace gamescope
 		// ---- margin fix (2026-09-07) -----------------------------------
 		// The rule (fps-display.md's "Margin"): the configured margin is
 		// the distance from the screen edge to the OUTERMOST drawn pixel --
-		// the backdrop's if it is drawn, else the outline's if it is drawn,
-		// else the glyph ink's. ResolveAnchoredOrigin()/boxSize already put
-		// the BOX's own edge exactly `margin` px from the screen edge (that
-		// math is exact regardless of any of this -- boxSize cancels out of
-		// a far-edge placement algebraically, and an integer margin plus an
-		// integer origin never leaves AddRectFilled's crisp, unantialiased
-		// fast path anything to round). So when the backdrop IS drawn, nothing
-		// below applies: the backdrop rect IS that box edge, and the margin
-		// is already exactly right.
+		// the outline's outer ring if an outline is drawn, else the glyph
+		// ink's. ResolveAnchoredOrigin()/boxSize already put the BOX's own
+		// edge exactly `margin` px from the screen edge (that math is exact
+		// regardless of any of this -- boxSize cancels out of a far-edge
+		// placement algebraically), but the box is INVISIBLE: nothing is
+		// drawn behind the digits any more (the backdrop that used to fill
+		// it went 2026-09-09), so nothing pins their own ink to it.
 		//
-		// With no backdrop, though, the box is invisible and nothing pins
-		// the digits' own ink to it -- they sit inset from it by
-		// backdrop_padding (always added, backdrop or not, so the digits
-		// don't hug the very edge of an invisible box either) PLUS each
-		// glyph's own side bearing / cap-height-vs-ascent gap, since
-		// CalcTextSizeA measures the ADVANCE box, not the tight ink
-		// MeasureInkExtent() above returns. Measured 2026-09-07 at font
-		// size 36, backdrop off, outline off, margin 24 (build-release/
-		// verify-shots/hud-margin-2026-09-07/): the digit ink actually
-		// landed at 31px from the left/right edges and 37-38px from the
-		// top/bottom -- padding (6px) plus ~1px of horizontal bearing and
-		// ~7-8px of vertical headroom the digits' own cap-height/no-
-		// descender ink never uses.
+		// They sit inset from it by each glyph's own side bearing /
+		// cap-height-vs-ascent gap, since CalcTextSizeA measures the
+		// ADVANCE box, not the tight ink MeasureInkExtent() above returns.
+		// Measured 2026-09-07 at font size 36, outline off, margin 24
+		// (build-release/verify-shots/hud-margin-2026-09-07/): the digit
+		// ink landed at 31px from the left/right edges and 37-38px from the
+		// top/bottom -- the 6px backdrop_padding of the time plus ~1px of
+		// horizontal bearing and ~7-8px of vertical headroom the digits'
+		// own cap-height/no-descender ink never uses. (That padding is gone
+		// too; it cancelled out of this correction and out of the centred
+		// axis alike, so removing it moved no pixel.)
 		//
 		// The correction: on whichever axis the anchor hugs an edge (not
 		// centred), shift the digits by exactly enough to cancel that
-		// padding+bearing gap, so the outermost drawn pixel -- ink, or the
+		// bearing gap, so the outermost drawn pixel -- ink, or the
 		// outline's ink-plus-radius when the outline is on and drawn
 		// instead -- lands exactly `margin` px out. Measured with the
 		// glyph baked at '0' (MeasureInkExtent's own szPadded argument
@@ -1197,21 +1135,20 @@ namespace gamescope
 		// sides' own bearings per axis.
 		const float flBearingHoriz = ( nHoriz == 0 ) ? flBearingLeft : flBearingRight;
 		const float flBearingVert  = ( nVert  == 0 ) ? flBearingTop  : flBearingBottom;
-		L.flEdgeShiftX = fpsmath::EdgeShift( L.bDrawBackdrop, nHoriz, cfg.backdrop_padding, flBearingHoriz, flOutlineGeomRadius );
-		L.flEdgeShiftY = fpsmath::EdgeShift( L.bDrawBackdrop, nVert,  cfg.backdrop_padding, flBearingVert,  flOutlineGeomRadius );
+		L.flEdgeShiftX = fpsmath::EdgeShift( nHoriz, flBearingHoriz, flOutlineGeomRadius );
+		L.flEdgeShiftY = fpsmath::EdgeShift( nVert,  flBearingVert,  flOutlineGeomRadius );
 
 		return L;
 	}
 
-	// Draws the FPS module's backdrop + content into the box
-	// [origin, origin+boxSize).
+	// Draws the FPS module's content into the box [origin, origin+boxSize).
 	//
-	// Backdrop, outline and digits all go into the SAME layer, drawn in
-	// that order. Inverted mode does not change that: alphamode.h's invert
-	// blend tells the digits apart from the rest by their brightness (see
-	// MeasureFpsModule()'s textColor note), so there is nothing to split
-	// across two layers -- and splitting it was what broke the inversion,
-	// see FpsDisplay_AddLayer().
+	// Outline and digits both go into the SAME layer, drawn in that order.
+	// Inverted mode does not change that: alphamode.h's invert blend tells
+	// the digits apart from the black outline by the marker in the texel
+	// (see MeasureFpsModule()'s textColor note), so there is nothing to
+	// split across two layers -- and splitting it was what broke the
+	// inversion, see FpsDisplay_AddLayer().
 	static void DrawFpsModuleContent( ImDrawList *pDrawList, ImVec2 origin, ImVec2 boxSize, const FpsModuleLayout &L )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -1220,16 +1157,12 @@ namespace gamescope
 		// L.flTextOffsetX places the unpadded digits within the pinned
 		// field width, on the side the anchor faces -- see
 		// MeasureFpsModule()'s own comment. L.flEdgeShiftX/Y is the
-		// 2026-09-07 margin fix's own correction, zero whenever the
-		// backdrop is drawn (see that comment for why only the no-backdrop
-		// case needs one).
-		const ImVec2 textPos( rectMin.x + cfg.backdrop_padding + L.flTextOffsetX + L.flEdgeShiftX,
-		                       rectMin.y + cfg.backdrop_padding + L.flEdgeShiftY );
+		// 2026-09-07 margin fix's own correction (zero on a centred axis).
+		const ImVec2 textPos( rectMin.x + L.flTextOffsetX + L.flEdgeShiftX,
+		                       rectMin.y + L.flEdgeShiftY );
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size;
-
-		DrawModuleBackdrop( pDrawList, origin, boxSize, L.bDrawBackdrop, L.backdropColor );
 
 		// ---- outline --------------------------------------------------
 		// The digits stamped again in black, offset onto a set of rings
@@ -1399,15 +1332,19 @@ namespace gamescope
 		ImDrawList *pDrawList = ImGui::GetBackgroundDrawList();
 
 		// nHoriz/nVert decide which side(s) of the pinned-width box the
-		// digits hug (and, since 2026-09-07, which side(s) get the no-
-		// backdrop margin correction) -- see MeasureFpsModule()'s own
+		// digits hug (and, since 2026-09-07, which side(s) get the margin
+		// correction) -- see MeasureFpsModule()'s own
 		// comment. ResolveAnchoredOrigin() re-parses the same anchor string
 		// for the box's own placement.
 		int nVert = 0, nHoriz = 2;
 		ParsePlacement( cfg.anchor, nVert, nHoriz );
 
 		const FpsModuleLayout L = MeasureFpsModule( nFps, nVert, nHoriz );
-		const ImVec2 boxSize( L.flContentWidth + cfg.backdrop_padding * 2.0f, L.flContentHeight + cfg.backdrop_padding * 2.0f );
+		// The box is the pinned text field itself -- it used to be that
+		// plus backdrop_padding on every side, which the draw origin then
+		// added back in; both went with the backdrop (2026-09-09), and the
+		// two cancelled exactly, so the digits land where they always did.
+		const ImVec2 boxSize( L.flContentWidth, L.flContentHeight );
 		const ImVec2 origin = ResolveAnchoredOrigin( cfg.anchor, (float)cfg.margin_x, (float)cfg.margin_y, boxSize, io_display );
 
 		DrawFpsModuleContent( pDrawList, origin, boxSize, L );
@@ -1697,8 +1634,8 @@ namespace gamescope
 
 		if ( bInvertedMode )
 		{
-			// ONE layer carries the whole readout, backdrop and outline
-			// included, and the crosshair: alphamode.h's alpha_mode_invert
+			// ONE layer carries the whole readout, outline included, and
+			// the crosshair: alphamode.h's alpha_mode_invert
 			// separates the digits (drawn opaque magenta, G == 0) from
 			// everything else (which keeps G > 0, or is black) by that
 			// marker, and blends the rest exactly as
@@ -2040,19 +1977,11 @@ namespace gamescope
 				.Key( "fps_display.hide_above_fps" )
 				.Help( "The frame rate the HUD disappears above." );
 
-		a.Slider( "hud.backdrop_opacity", "Backdrop opacity",
-			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.backdrop_opacity; },
-				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.backdrop_opacity = f; PersistSettings(); } ) )
-			.Key( "fps_display.backdrop_opacity" )
-			.Help( "How solid the plain backdrop behind the number is. All the way down turns the "
-			       "backdrop off." )
-			.Range( 0.0f, 1.0f )
-			.Step( 0.05f )
-			.ZeroMeans( "Off" )
-			.Default( config::FpsDisplaySettings{}.backdrop_opacity )
-			.Keywords( "backdrop background opacity box panel" )
-			.DisabledUnless( MonitorOn, kOffReason );
+		// "Backdrop opacity" (hud.backdrop_opacity) sat here until
+		// 2026-09-09. The user asked for the backdrop to go, so the row
+		// went with the drawing rather than being defaulted to 0 -- see
+		// superdoc/features/fps-display.md. "Outline size" below is what
+		// makes the number read over busy content now.
 
 		a.Choice( "hud.color_mode", "Text colour",
 			ui::AnyBind::Of<int>(
@@ -2129,8 +2058,8 @@ namespace gamescope
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.lag_detection_enabled = b; PersistSettings(); } ) )
 			.Key( "fps_display.lag_detection_enabled" )
 			.Help( "Reacts for a moment when a frame takes far longer than the ones around it. "
-			       "With Fixed text the number flips colour; with Inverted text the backdrop "
-			       "turns red instead, so it does nothing there unless the backdrop is on." )
+			       "The number flips colour for a moment. Only in Fixed text mode -- an "
+			       "inverted number has no second colour to flip to." )
 			.Default( config::FpsDisplaySettings{}.lag_detection_enabled )
 			.Keywords( "lag spike stutter hitch detection warning frametime" )
 			.DisabledUnless( MonitorOn, kOffReason );

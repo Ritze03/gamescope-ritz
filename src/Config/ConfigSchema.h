@@ -107,21 +107,30 @@ namespace gamescope::config
         bool enabled = false;
         float font_size = 18.0f;
 
-        // Backdrop (Phase 2, 2026-09-03 -- see CHANGELOG.md and
-        // superdoc/features/fps-display.md): a plain rectangle behind the
-        // number, sized to the text plus backdrop_padding. Collapsed to a
-        // single opacity rather than an "enabled" bool plus an opacity --
-        // 0 IS "off" (the user's own spec: "opacity configurable"), so
-        // there is exactly one control instead of two that can disagree.
-        // backdrop_rounding (a Phase 1 field, 4.0f corners) is REMOVED
-        // outright rather than deprecated-and-kept: the user was explicit
-        // that this backdrop never rounds its corners, so a leftover
-        // nonzero value on an old config would silently contradict that
-        // the moment anything looked at it again -- better gone than
-        // ignored. FpsDisplay.cpp's DrawModuleBackdrop() always draws with
-        // 0.0f rounding now, not a config-read value.
-        float backdrop_opacity = 0.5f;
-        float backdrop_padding = 6.0f; // px -- not user-facing, just hugs the text
+        // ---- The HUD has no backdrop any more (2026-09-09) --------------
+        // `backdrop_opacity` (Phase 2's plain rectangle behind the number,
+        // 0 meaning "off") and `backdrop_padding` (never user-facing; it
+        // only gave that rectangle breathing room around the text) both
+        // lived here until the user asked for the backdrop to go. The HUD
+        // now draws the digits and their outline and nothing else, so
+        // opacity 0's behaviour is the only behaviour.
+        //
+        // The padding went with it rather than being kept at 6px: with
+        // nothing drawn behind the text it had no job left. The readout's
+        // invisible box grew by 2*padding and the draw origin moved in by
+        // padding, so the padding cancelled out of every placement it took
+        // part in -- exactly (see FpsDisplay.cpp's MeasureFpsModule() and
+        // fpsmath::EdgeShift()) -- and removing it is a pixel-for-pixel
+        // no-op on where the digits land.
+        //
+        // A stale `"backdrop_opacity"` / `"backdrop_padding"` in somebody's
+        // profile is simply not read: Load() asks for the keys it knows and
+        // ignores the rest, so the file loads unchanged and the keys drop
+        // out the next time it is written -- the same precedent
+        // `friends_lookup_names`, `backdrop_enabled`, `backdrop_rounding`
+        // and `shadow_strength` already set. Covered by test_config.cpp's
+        // "a config carrying the removed backdrop keys loads and drops
+        // them".
         float text_opacity = 1.0f;
 
         // The update-mode choice (FpsDisplay.cpp's UpdateAndGetDisplayFps(),
@@ -172,16 +181,22 @@ namespace gamescope::config
         // second dead key. The setting is labelled "Outline size" in the
         // UI, which is what the user actually sees.
         //
-        // 4px is the top of the range because backdrop_padding is 6px:
-        // the outline stays inside the backdrop box at any setting, so
-        // growing it never changes the readout's footprint.
+        // 4px is the top of the range because the user asked for exactly
+        // that ("the max outline size should be 4.0"). It used to be
+        // justified by backdrop_padding's 6px instead -- the outline stayed
+        // inside the backdrop box at any setting -- but with the backdrop
+        // gone (above) there is no box to stay inside, and nothing about
+        // the range needs one: MeasureFpsModule() feeds the outline's own
+        // geometric reach into fpsmath::EdgeShift(), so a thicker outline
+        // moves the digits in rather than pushing past the margin.
         float outline_strength = 0.0f;
 
         // Whether lag-spike detection does anything at all. Default on,
         // which is what this HUD has always done, so an existing config
-        // keeps the behaviour it had. When off there is no spike reaction
-        // of any kind: Fixed mode never flips the number's colour and
-        // Inverted mode never tints the backdrop. The frametime history
+        // keeps the behaviour it had. When off, Fixed mode never flips the
+        // number's colour -- which is now the whole of the spike reaction,
+        // since Inverted mode's own reaction was a tint on the backdrop and
+        // went with it (2026-09-09). The frametime history
         // that feeds the detector keeps being collected either way (it is
         // a handful of floats per frame and is wanted for later work), so
         // switching this back on works immediately instead of needing to

@@ -22,8 +22,9 @@ user-chosen font size. Those three settings (Placement, Font size) are
 unchanged since Phase 1.
 
 **Phase 2** (this page) added everything else, following the user's own
-spec verbatim: hide-above-X, update modes (three then, two since 2026-09-05), a plain backdrop, a
-two-way text-colour choice with lag-spike reactions, and a black outline
+spec verbatim: hide-above-X, update modes (three then, two since 2026-09-05),
+a plain backdrop (removed again 2026-09-09 — see [Backdrop: removed](#backdrop-removed)),
+a two-way text-colour choice with lag-spike reactions, and a black outline
 sized in pixels (a drop shadow until 2026-09-03, when the outline
 replaced it).
 The user's own framing: *"it is nice, instead of feature bloat"* — one
@@ -40,7 +41,6 @@ number, drawn well, not a second profiler.
 | Font size | `font_size` | Text size in px. |
 | Update mode | `update_mode` | Smoothing / Immediate — see below. ("Update every second" was folded into Smoothing 2026-09-05.) |
 | Hide above X | `hide_above_enabled`, `hide_above_fps` | Switch + threshold `.Param()` — see Hysteresis below. |
-| Backdrop opacity | `backdrop_opacity` | 0–1; **0 means no backdrop at all**, not a separate switch. |
 | Text colour | `color_mode` | Fixed / Inverted — see below. |
 | Number colour | `color_fps` | Fixed mode only — see "Number colour and Text opacity" below. |
 | Text opacity | `text_opacity` | Fixed mode only — see "Number colour and Text opacity" below. |
@@ -206,22 +206,42 @@ can't retrigger it. The 5 fps band is a fixed constant in
 `FpsDisplay.cpp`, not a setting — the user asked for hysteresis, not a
 second number to tune.
 
-## Backdrop
+## Backdrop: removed (2026-09-09)
 
-A plain rectangle behind the number, sized to the text plus a fixed
-padding (`backdrop_padding`, not user-facing). **Never rounds its
-corners** — the user was explicit about this being a plain rectangle, so
-`DrawModuleBackdrop()` always draws with `0.0f` rounding, not a config
-value; Phase 1's `backdrop_rounding` field is gone outright rather than
-kept-but-unwired, so an old config's stale value can never silently
-contradict this.
+The HUD used to draw a plain unrounded rectangle behind the number, sized
+to the text plus a fixed 6 px padding, at a configurable opacity where 0
+meant "no backdrop". The user asked for it to go, so it is gone outright —
+the drawing (`DrawModuleBackdrop()`), the "Backdrop opacity" row, and both
+schema fields (`backdrop_opacity`, `backdrop_padding`). What opacity 0
+already did is now the only behaviour: the HUD draws the digits and their
+outline and nothing else.
 
-`backdrop_opacity` (0–1) is the only control: 0 **is** "no backdrop",
-folding what used to be a separate `backdrop_enabled` switch into a
-single number. An old config that had the backdrop switched off via that
-removed field will show the backdrop again after upgrading if its opacity
-was left non-zero — a deliberate behaviour change, noted in
-`CHANGELOG.md`, not an oversight.
+**A saved backdrop setting no longer does anything.** A profile written by
+an older build still carries `"backdrop_opacity"` and `"backdrop_padding"`;
+neither is read any more, the file loads unchanged, and both keys disappear
+the first time anything writes that profile — the same "just stop reading
+an old key" precedent `friends_lookup_names`, `backdrop_enabled`,
+`backdrop_rounding` and `shadow_strength` set. Pinned by `test_config.cpp`'s
+"a config carrying the removed backdrop keys loads and drops them", which
+asserts both halves: the live keys in that same file still load, and the
+removed ones are absent after the next write.
+
+> **Why `backdrop_padding` went too, rather than staying at 6 px.** With
+> nothing drawn behind the text it had no job left — it existed to give
+> the rectangle breathing room around the digits. It was also a pure no-op
+> on placement, provably: the readout's box grew by `2 × padding` and the
+> draw origin moved in by `padding`, so on a centred axis the two cancel
+> (`(display − content − 2p)/2 + p == (display − content)/2`) and on a
+> hugging axis `EdgeShift()` cancelled it again by construction. Removing
+> it moved no pixel — the margin matrix below measures identically with and
+> without it.
+
+> **What the removal cost.** Two things, both accepted. Inverted mode has
+> **no lag-spike indication at all** now: it cannot invert an
+> already-inverted digit against itself, so its spike reaction was a red
+> tint *on the backdrop* — see the Inverted section below. And the number
+> has nothing but its outline to separate it from bright, busy content;
+> "Outline size" is the control that job belongs to now.
 
 ## Text colour: Fixed vs. Inverted
 
@@ -246,8 +266,7 @@ pass:
   Opaque, not `text_opacity`-scaled — a partial alpha here would only dilute
   the invert, mixing in un-inverted background (see the gating rule below).
   Magenta specifically: its **zero green channel** is the marker the shader
-  uses to tell the digits apart from the backdrop, the outline and the
-  crosshair, see
+  uses to tell the digits apart from the outline and the crosshair, see
   [What Inverted mode does *not* invert](#what-inverted-mode-does-not-invert).
   (Opaque white until 2026-09-06, when the marker replaced a brightness
   selector — same section.)
@@ -326,35 +345,35 @@ pass:
   and mura correction) alone** — it no longer sees or inverts the Shell,
   which composites on top of the HUD now.
 
-Inverted mode can't "invert" already-inverted text to signal a lag spike
-— doing that would show nothing against itself. Instead, **a spike tints
-the backdrop** toward a muted warning red for the hold window. It only
-does so when a backdrop is actually being drawn: with `backdrop_opacity`
-at 0 there is no spike indication in Inverted mode at all.
-
-> **Why:** this used to *force* a faint backdrop visible for the hold
-> window even at opacity 0, so an ordinary frame hitch made a backdrop
-> the user had switched off appear on screen — reported as "backdrop
-> opacity 0 doesn't turn the backdrop off in Inverted mode" and fixed
-> 2026-09-03. Losing the spike hint when there is no backdrop is the
-> honest price of letting the opacity setting mean what it says.
+**Inverted mode has no lag-spike indication (2026-09-09).** It can't
+"invert" already-inverted text to signal a spike — doing that would show
+nothing against itself — so its reaction used to be a muted warning red
+tinted into the backdrop, and only when one was actually drawn. With the
+backdrop gone there is nothing left to tint, so a spike does nothing in
+this mode; "Lag spike detection" is a Fixed-mode feature now, which its
+help text says. That is the second thing removing the backdrop cost (see
+[Backdrop: removed](#backdrop-removed)), and the same trade the setting
+already made at opacity 0 since 2026-09-03.
 
 ### What Inverted mode does *not* invert
 
-Only the **digits' fill**. The backdrop composites normally and the
-outline stays black — neither is inverted (both were, until 2026-09-03) —
-and so does the [crosshair](crosshair.md), in whatever colour and opacity
-it was given.
+Only the **digits' fill**. The outline stays black and is not inverted
+(it was, until 2026-09-03), and neither is the
+[crosshair](crosshair.md), in whatever colour and opacity it was given.
+(The backdrop was a third such element until it was removed, 2026-09-09.)
 
 All of it lives in **one** composite layer, and the shader tells the
 digits apart from everything else by a **marker in the texel** (2026-09-06):
 
 - The digits' fill is drawn pure opaque **magenta**, `(255, 0, 255)`, and
   everything that may end up *under a digit's antialiased edge* is pure
-  **black**: the outline stamps, the backdrop (pure black in this mode, not
-  Fixed mode's near-black `(9, 11, 14)` — within a count on screen), the
-  backdrop's spike tint (`(0.85, 0, 0.20)` here instead of
-  `kSpikeTintColor`'s `(0.85, 0.20, 0.20)`), and the cleared texture.
+  **black**: the outline stamps and the cleared texture. Removing the
+  backdrop (2026-09-09) took one such element away — it was drawn pure
+  black in this mode, with a green-free spike tint, precisely to satisfy
+  this rule — so it can only have made the marker safer, never weaker:
+  the set of things a digit's edge can mix with shrank, and everything
+  left in it still has `G == 0`. Re-measured after the removal; see
+  [Verifying Inverted mode](#verifying-inverted-mode-pixel-recipe).
 - ImGui's straight-alpha blend over black or clear therefore leaves a digit
   texel as `d · (1, 0, 1) + (a − d) · black` with **G exactly 0**, where
   `d` is the digit's own coverage and `a` the texel's alpha. So in
@@ -363,12 +382,12 @@ digits apart from everything else by a **marker in the texel** (2026-09-06):
   contributing nothing. That reconstructs the layering **exactly** —
   an edge over the outline is a clean ramp from black to the inverted
   colour (measured: `0, 22, 45, 46` across a stroke over encoded 148 with
-  a 2 px outline and a 50 % backdrop), a full digit texel is exactly the
+  a 2 px outline, back when a 50 % backdrop sat under it too), a full digit texel is exactly the
   inverted colour, and an outline-only texel is exactly the coverage
   blend of black.
 - `G > 0` ⇒ not a digit; the texel blends **bit-for-bit as
-  `alpha_mode_coverage`** would. That is the backdrop's 12 %-white border
-  and, above all, the crosshair. A crosshair colour with no green at all
+  `alpha_mode_coverage`** would. That is the crosshair (and, until
+  2026-09-09, the backdrop's 12 %-white border). A crosshair colour with no green at all
   (pure red, blue, magenta, black) is nudged from `G = 0` to `G = 1` while
   it shares an Inverted layer (`CrosshairFrame::bReserveInvertMarker`,
   `Crosshair.cpp`'s `ReserveInvertMarker()`) — one count, not visible —
@@ -478,7 +497,7 @@ the one accepted on 2026-09-04 (`verify-shots/crosshair/16-inverted-hud.png`)
 was exactly that. Over a **bright** background the two diverge completely,
 so that is the check. On the laptop (`scripts/remote-test.sh`), with a
 scratch `XDG_CONFIG_HOME` holding `fps_display.color_mode = "inverted"`,
-`backdrop_opacity 0`, `outline_strength 0`, `font_size 48`, anchor
+`outline_strength 0`, `font_size 48`, anchor
 `top-center`:
 
 ```
@@ -555,9 +574,14 @@ three glyphs.
 > before the ring closes, and an outline that fades as it grows reads as
 > blur, which is exactly what the drop shadow was rejected for.
 >
-> **Why 4px is the ceiling:** `backdrop_padding` is 6px, so the outline
-> stays inside the backdrop box at any setting and growing it never
-> changes the readout's footprint.
+> **Why 4px is the ceiling:** the user asked for exactly that ("the max
+> outline size should be 4.0"). It used to be justified by
+> `backdrop_padding`'s 6px — the outline stayed inside the backdrop box at
+> any setting — but with the backdrop gone (2026-09-09) there is no box to
+> stay inside, and the range needs no such justification: `EdgeShift()`
+> takes the outline's own geometric reach, so a thicker outline pulls the
+> digits *in* rather than pushing past the margin. Verified at outline 2 at
+> every corner in the margin matrix below.
 
 > **Why each stamp's offset is rounded to a whole pixel (2026-09-04
 > fix):** the stamp angles are a full, evenly-spaced sweep, so the *ideal*
@@ -598,8 +622,9 @@ three glyphs.
 Switchable (`lag_detection_enabled`, row "Lag spike detection", default
 **on** so an existing config keeps today's behaviour). With it **off**
 there is no spike reaction of any kind: Fixed mode never flips the
-number's colour and Inverted mode never tints the backdrop. Nothing else
-in the tab depends on it, so no row greys out when it is off.
+number's colour — which since 2026-09-09 is the whole of the reaction, the
+Inverted-mode backdrop tint having gone with the backdrop. Nothing else in
+the tab depends on it, so no row greys out when it is off.
 
 > **Why the detector keeps running while the switch is off:** the
 > frametime history is a handful of floats per frame, later work wants it
@@ -689,19 +714,24 @@ outermost in the current configuration. With margin 0 that outermost pixel
 touches the screen edge exactly; with margin 10 there are exactly 10 blank
 pixels between the edge and it. Same rule on both axes, at every anchor.
 
-**Which element the measurement lands on, per configuration:**
+**Which element the measurement lands on:**
 
-| Backdrop | Outline | Outermost element | Exact? |
-|---|---|---|---|
-| on | either | the backdrop rect | **Exact.** `AddRectFilled` with no rounding takes ImGui's `PrimRect` fast path — no antialiasing fringe — and `ResolveAnchoredOrigin()`'s box placement puts that rect's own edge at exactly `margin` regardless of anything else (`boxSize` cancels out algebraically for a far-edge placement: `origin + boxSize == display - margin` no matter what `boxSize` is). |
-| off | on | the outline's outer ring | Within 1px — a real, sub-1-count font antialiasing fringe sits right at the true edge (see below); this is the AA a rendered glyph always carries, not a placement error. |
-| off | off | the glyph ink | Within 1px, same reason. |
+| Outline | Outermost element | How exact |
+|---|---|---|
+| on | the outline's outer ring | Exact at the ink's true (antialiased) boundary; the *solid* ring starts one AA-fringe pixel further in — see the two-assertion scheme below. |
+| off | the glyph ink | Same. |
 
-**The bug (fixed 2026-09-07):** with the backdrop off, nothing pinned the
-digits' own ink to the invisible box at all. They sat inset from it by
-`backdrop_padding` (6px, **always** added whether or not a backdrop is
-actually drawn — it is also what gives the backdrop breathing room around
-the text when one *is* drawn) plus each glyph's own **side bearing** /
+There is no third row any more. A drawn backdrop used to be one — its
+`AddRectFilled` edge took ImGui's `PrimRect` fast path with no antialiasing
+fringe at all, so it landed on the margin exactly and pinned it for
+everything else — and it was the only configuration with a crisp edge. It
+went with the backdrop (2026-09-09), which is why the checks had to change
+shape rather than just lose a case; see below.
+
+**The bug (fixed 2026-09-07):** nothing pinned the digits' own ink to the
+invisible box at all. They sat inset from it by `backdrop_padding` (6px,
+always added whether or not a backdrop was actually drawn; removed
+altogether 2026-09-09) plus each glyph's own **side bearing** /
 **cap-height gap**: `ImFont::CalcTextSizeA()` measures the ADVANCE box (pen
 cell width, full ascent-to-descent line height), not the tight box the
 glyph's own ink occupies, and a digit's ink starts a little in from the
@@ -717,7 +747,8 @@ left of its cell and stops a little short of the font's full ascent — gaps
 
 — i.e. +7px horizontally (`padding(6) + ~1px` bearing) and +14px vertically
 (`padding(6) + ~8px` of cap-height headroom the digits' own ink never
-reaches). Both **before-fix screenshots showed the readout sitting visibly
+reaches). The padding half of that is gone now; the bearing half is what
+`EdgeShift()` still cancels. Both **before-fix screenshots showed the readout sitting visibly
 off the corner even at margin 0**, when it should have been flush.
 
 **The fix:** `MeasureFpsModule()` measures the true ink bounding box
@@ -728,38 +759,71 @@ sizing already uses, so this stays as jitter-free as that scheme: every
 digit shares this font's tabular bearings by construction). On whichever
 axis the anchor actually hugs an edge — not the centred axis, which has no
 margin claim to satisfy — it shifts the digits by exactly enough to cancel
-`padding + bearing`, so the ink (or the outline's own outer ring, when one
-is drawn instead) lands flush at the margin. The pure arithmetic is
+that bearing (and, until 2026-09-09, the padding with it), so the ink (or
+the outline's own outer ring, when one is drawn) lands flush at the margin. The pure arithmetic is
 `fpsmath::EdgeShift()` (`FpsDisplay.h`), covered by
 `tests/test_fps_counter.cpp`; `MeasureFpsModule()` supplies the font's own
 measured bearings and the outline's geometric reach (never less than 1px
 once an outline is drawn at all, matching the sub-pixel-radius path's own
 whole-pixel ring — see the Outline section above).
 
-**Why 1px, not 0px, remains for the ink/outline cases:** a rendered glyph's
-edge is antialiased, so the true boundary carries a fractional-coverage
-fringe (measured: a pixel differing from its flat background by a single
-count, right where the ink is supposed to start) that a purely geometric
-placement cannot make crisper without changing how fonts rasterize. The
-backdrop rect has no such fringe (see the table above), which is why it
-alone gets an exact-0 tolerance in both the tests and
-`scripts/pixel-regression.sh`'s `check_hud_margin()`.
+**The antialiasing fringe, and how the check stays exact without a
+backdrop (2026-09-09).** A rendered glyph's edge is antialiased, so its true
+boundary carries a fractional-coverage fringe — a pixel differing from its
+flat background by a single count, right where the ink is supposed to
+start. Until the backdrop was removed, the backdrop rect was the one
+fringe-free case and therefore the one measured at tolerance 0, with the
+ink and outline cases allowed 1px.
 
-**Measured after the fix** (same configuration as the table above):
+With every case now a fringe case, the answer was **not** to leave
+everything at tolerance 1 — that accepts a real 1px drift in either
+direction. `pixel-regression.sh`'s `check_hud_margin()` **splits** the
+assertion instead, running both on the same capture:
+
+- **`*-edge`** — the bounding box of every pixel that differs from the flat
+  background *at all* (`diff_thresh 0`, so the sub-count fringe counts).
+  That fringe pixel **is** the glyph's true geometric boundary, so this is
+  asserted at **tolerance 0** — exactly the standard the backdrop rect used
+  to meet, it just needed a sensitive enough threshold to see.
+- **`*-ink`** — the solid ink at the usual "not the background" threshold,
+  one fringe pixel further in, at tolerance 1.
+
+Together they pin *both* ends of the fringe: the ink cannot creep inward
+while the fringe alone lands right, and the fringe cannot creep outward.
+`tests/test_fps_counter.cpp` pins `EdgeShift()`'s arithmetic exactly, as
+before.
+
+**One known 1px case, and why it is left alone.** `MeasureFpsModule()` takes
+its bearings from the **pinned `'0'`-run reference**, and a round glyph like
+`'0'` carries the font's cap-height *overshoot* — its ink starts about a
+pixel higher than a flat-topped `'1'` or `'4'`. So a reading made only of
+flat-topped digits (`144`, `1147`, …) sits up to 1px further **in** than the
+reference predicts on the vertical axis; `60` and `1234` both contain a
+round glyph and measure exactly. The direction is the safe one — the
+reference is the *maximum* ink extent, so a reading never pokes *outside*
+the margin. Measuring the digits actually drawn instead would fix the pixel
+and reintroduce exactly the jitter the pinned scheme exists to prevent (the
+readout would bob vertically as the number crossed `144` → `155`), so the
+pin stays. Measured and recorded in
+`build-release/verify-shots/hud-backdrop-removal-2026-09-09/results.txt`.
+
+**Measured after the fix**, and re-measured after the backdrop removal
+(font 36, flat 148 background, `*-edge` — the fringe's own outer pixel):
 
 | margin | measured left | measured top |
 |---|---|---|
-| 0 | 0 | 1 |
-| 5 | 5 | 6 |
+| 0 | 0 | 0 |
+| 5 | 5 | 5 |
 
 Verified across all four corners, all four edge-centre anchors, margins
-0/1/5/20, all four backdrop×outline combinations, and 2-/3-/4-digit
-readings (97/97 checks passing) — `build-release/verify-shots/
-hud-margin-2026-09-07/` has the full table, the before/after screenshots,
-and 8×-zoomed corner crops at margin 0 and margin 5.
-`scripts/pixel-regression.sh`'s `check_hud_margin()` keeps a compact,
-permanent subset of that matrix green: all four corners at margins 0 and
-8, backdrop off and on, plus one 4-digit reading.
+0/1/5/20, outline off and on, and 2-/3-/4-digit readings — 152 assertions,
+148 exact and the 4 flat-digit ones above. `build-release/verify-shots/
+hud-backdrop-removal-2026-09-09/` has the full table, the raw log and
+8×-zoomed corner crops at margin 0 and margin 5, with and without the
+outline. `scripts/pixel-regression.sh`'s `check_hud_margin()` keeps a
+compact, permanent subset of that matrix green: all four corners at margins
+0 and 8, outline off and on (the outline-on case replaced the retired
+backdrop-on one), plus one 4-digit reading.
 
 ## Warm-up: `FpsDisplay_WarmUp()`
 

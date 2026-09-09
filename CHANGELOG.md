@@ -61,6 +61,10 @@ The newest version below is the one this build reports.
 - **The Steam chat companion**: yesterday's `Ctrl+Shift+C` browser overlay for Steam's
   web chat is gone, superseded by the friends list above, which can actually join a
   friend. Its settings area, its keybind and its browser process are all removed.
+- **The FPS HUD's backdrop**: the number no longer draws a box behind itself, and the
+  Backdrop opacity slider is gone with it -- use Outline size to keep the digits
+  readable over bright content. Lag spike detection now only reacts in Fixed text
+  colour, since the reaction in Inverted mode was a tint on that box.
 
 ### Info
 - **"Changelog" is now "About"**: same page, same place in the list, with the licences

@@ -158,8 +158,6 @@ namespace gamescope::config
             {
                 s.fps_display.enabled = JGetBool( *pFps, "enabled", s.fps_display.enabled );
                 s.fps_display.font_size = JGetFloat( *pFps, "font_size", s.fps_display.font_size );
-                s.fps_display.backdrop_opacity = JGetFloat( *pFps, "backdrop_opacity", s.fps_display.backdrop_opacity );
-                s.fps_display.backdrop_padding = JGetFloat( *pFps, "backdrop_padding", s.fps_display.backdrop_padding );
                 s.fps_display.text_opacity = JGetFloat( *pFps, "text_opacity", s.fps_display.text_opacity );
                 // fps_enabled/fps_label_enabled removed 2026-09-03 -- `enabled`
                 // above already covers the module, and the unit-label suffix
@@ -173,12 +171,12 @@ namespace gamescope::config
                 // deliberately not read here any more, same precedent as
                 // dock_scale/opacity_background's own removal below.
                 // backdrop_enabled/backdrop_rounding/blend_mode removed
-                // Phase 2 (2026-09-03, see ConfigSchema.h's own comment) --
-                // same "just stop reading an old key" precedent, not a
-                // migration: an old config with backdrop_enabled=false and
-                // a nonzero backdrop_opacity now shows that backdrop, which
-                // is a deliberate behaviour change (documented in
-                // CHANGELOG.md), not an oversight.
+                // Phase 2 (2026-09-03), and backdrop_opacity/backdrop_padding
+                // 2026-09-09 when the backdrop itself was removed (see
+                // ConfigSchema.h's own comment) -- same "just stop reading an
+                // old key" precedent every time, not a migration. A profile
+                // that still carries any of them loads unchanged and loses
+                // them the next time anything writes that file.
                 s.fps_display.color_fps = JGetOptInt( *pFps, "color_fps" );
                 // Placement (scope reduction 2026-09-03): 9-point anchor +
                 // pixel margins, see ConfigSchema.h's own comment.
@@ -478,8 +476,6 @@ namespace gamescope::config
             nlohmann::json jFps = nlohmann::json::object();
             jFps[ "enabled" ] = s.fps_display.enabled;
             jFps[ "font_size" ] = s.fps_display.font_size;
-            jFps[ "backdrop_opacity" ] = s.fps_display.backdrop_opacity;
-            jFps[ "backdrop_padding" ] = s.fps_display.backdrop_padding;
             jFps[ "text_opacity" ] = s.fps_display.text_opacity;
             // No fps_enabled/fps_label_enabled/graph_enabled/percentiles_enabled/
             // cpu_enabled/gpu_enabled/
@@ -487,7 +483,9 @@ namespace gamescope::config
             // color_media/layout_name/backdrop_enabled/backdrop_rounding/
             // blend_mode: removed 2026-09-03 (Phase 1's perf-stats/layout
             // removal, then Phase 2's backdrop/colour rework -- see the
-            // parse side above and ConfigSchema.h). This serializer emits
+            // parse side above and ConfigSchema.h), and no backdrop_opacity/
+            // backdrop_padding either: the backdrop itself is gone
+            // (2026-09-09). This serializer emits
             // the struct's fields, so an old file's leftover keys are
             // dropped the first time anything writes this file -- same
             // accepted-for-a-removed-feature precedent as dock_scale below.
