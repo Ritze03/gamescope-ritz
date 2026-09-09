@@ -617,8 +617,9 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// system.clipboard_sync: PanelSystem reloads on the bump, but only when
 	// it next draws; seed the runtime flag now, as at startup.
 	gamescope::PanelSystem_SeedFromConfig();
-	// overlay.friends_lookup_names, same shape: the friends poller reads an
-	// atomic, not the config file, so a config reload has to push it.
+	// The friends list's session app id, same shape: the poller reads an
+	// atomic rather than calling config::SessionAppId() from its own thread,
+	// so anything that re-reads the config has to push it.
 	gamescope::PanelFriends_SeedFromConfig();
 }
 

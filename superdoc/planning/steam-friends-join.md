@@ -325,6 +325,19 @@ something you are not" problem cannot occur, and the "second `SteamAPI_Init` for
 already in use" question never has to be answered. It is also the only route whose library
 is guaranteed to be present.
 
+> **Corrected 2026-09-09 — "no app id supplied anywhere" is true of the code and
+> false of the process.** Measured with `ISteamUtils::GetAppID()` on a pipe made
+> exactly the way `src/SteamFriends.cpp` makes one: **0** from a plain shell,
+> **730** when `SteamAppId=730` is in the environment — and Steam puts exactly
+> that in gamescope-ritz's environment (§6b measured it live). So
+> `steamclient.so` picks the app id up from the environment at pipe creation,
+> and the running compositor's pipe already reports 730. What route B genuinely
+> buys is that **we never call `SteamAPI_Init`**, and that the id the pipe does
+> carry is the game the user is actually playing. Nothing registers a *play
+> session* either way — that is the reaper's job, not a pipe's. Evidence and
+> consequences (it is what makes an invite possible at all):
+> [`steam-invite-and-vtable-layout.md`](steam-invite-and-vtable-layout.md) §4.
+
 Its cost is honest and should be stated: `CreateInterface` + `ConnectToGlobalUser` +
 `GetISteamFriends` is **the undocumented low-level entry** (it is what `SteamAPI_Init`
 does internally). We declare the leading vtable entries ourselves. What makes that
@@ -407,6 +420,17 @@ process doing so concurrently.
 
 **Added 2026-09-08, when phases 1 and 2 were built and run against the live
 client with the user's permission. This supersedes the layout in §6c's probe.**
+
+> **Refined 2026-09-09 — read
+> [`steam-invite-and-vtable-layout.md`](steam-invite-and-vtable-layout.md) §2–§3
+> before acting on the "one slot" rule below.** Everything measured here is
+> confirmed. The *explanation* is not: `SteamFriends018` is `SteamFriends017`
+> with **two** methods removed (`SetPersonaName` at 017's slot 1 and
+> `GetUserRestrictions` at 017's slot 42), so the shift is 0 for one slot, −1
+> for forty, and **−2 for the remaining thirty-seven**. Deriving a far slot by
+> subtracting one is therefore wrong — for `InviteUserToGame` it lands on
+> `GetCoplayFriendCount`. The whole 78-slot map is now named outright, four
+> independent ways, and slot 1 is `GetPersonaState`, a read.
 
 `steamclient_probe.c` declared `ISteamFriends` from the order every write-up
 repeats — `GetPersonaName`, `SetPersonaName`, `GetPersonaState`,
@@ -582,6 +606,24 @@ and each is recorded where it was decided:**
 **Deliberately not in the sketch:** no Web API key anywhere, no bundled Steamworks SDK
 headers, no `SteamAPI_Init` (route B), no browser, no capture protocol, no second Steam
 client.
+
+### 7c. Phase 6 — the other direction: *inviting* a friend
+
+Asked 2026-09-09 and answered on its own page:
+[**`steam-invite-and-vtable-layout.md`**](steam-invite-and-vtable-layout.md).
+The short version, because both halves change what is written above:
+
+- **`ISteamFriends::InviteUserToGame` is slot 47 of `SteamFriends018`**, named
+  outright by four independent sources rather than derived — which is what makes
+  a *write* defensible where §6e's inference could not. It also **corrects
+  §6e's uniform −1 rule** (the shift is −1 for forty slots and −2 for
+  thirty-seven) and **§6a's "no app id" claim** (the pipe carries 730 from the
+  environment).
+- **One read stands between this and an Invite verb**, and only the user can
+  take it: whether `GetFriendGamePlayed(self)` returns our own lobby id while a
+  game is running.
+- **Receiving invites stays a no**, now with the complete 78-method interface
+  map as the evidence that no call enumerates a pending one.
 
 ---
 

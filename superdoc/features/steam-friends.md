@@ -92,7 +92,7 @@ walk that builds the rows.
 
 | | status |
 |---|---|
-| **Loading the Steam client's own `steamclient.so` with no app id** | **Proven live** on this machine. Every symbol resolves, `Steam_CreateSteamPipe` + `Steam_ConnectToGlobalUser` attach to the already-signed-in user, and nothing registers a game. |
+| **Loading the Steam client's own `steamclient.so` without `SteamAPI_Init`** | **Proven live** on this machine. Every symbol resolves, `Steam_CreateSteamPipe` + `Steam_ConnectToGlobalUser` attach to the already-signed-in user, and nothing registers a game. *This row used to say "with no app id"; measured 2026-09-09, `steamclient.so` reads `SteamAppId` out of the environment at pipe creation, and Steam sets it — so a compositor Steam launched reports app 730 on its pipe. What we never do is `SteamAPI_Init`. See [`../planning/steam-invite-and-vtable-layout.md`](../planning/steam-invite-and-vtable-layout.md) §4.* |
 | **Reading the friends list** | **Proven live.** 75 friends on the first run, 28 after the signed-in account changed; persona names all printable. |
 | **Reading what each friend is playing** | **Proven live.** App ids came back as real Steam apps (730, 252950, 2483190, 2357570, 736220), CGameID type 0 for every one — so `m_gameID`'s offset in `FriendGameInfo_t` is anchored correctly, which is what the same-game filter rests on. |
 | **The corrected vtable offsets** | **Measured, not quoted.** The published `ISteamFriends` order every write-up repeats is **wrong by one slot** against the real client; `GetFriendCount` is slot 2 and `GetFriendByIndex` is slot 3. See [§6e](../planning/steam-friends-join.md#6e-correction-the-published-vtable-order-is-wrong-by-one-slot). |
