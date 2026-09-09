@@ -42,8 +42,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 - [Notifications](features/notifications.md) — toasts: the independent-context shape, the lazy glyph-bake/QueueWaitIdle hazard, the launch warm-up and why it never pushes a layer, the HUD seam.
 - [FPS display](features/fps-display.md) — the single-integer FPS HUD: update modes,
-  hide-above-X, backdrop, text-colour modes (with the Inverted-mode limitation stated
-  plainly), shadow, and the lag-spike heuristic.
+  hide-above-X, text-colour modes (with the Inverted-mode limitation stated plainly),
+  the outline, the margin rule, and the lag-spike heuristic.
 - [Crosshair](features/crosshair.md) — the compositor-drawn crosshair (line / dot /
   outline / right-click auto-hide / Apply Scaling): why it lives in the HUD's layer, the
   centre and 1px snapping rules, the hide modes' maths, and the `BTN_RIGHT` hook's gating.

@@ -635,8 +635,8 @@ texture cleared to `(0,0,0,0)`, i.e. the HUD texture ends up
 **premultiplied**, while the layer composites as
 `ALPHA_BLENDING_MODE_COVERAGE` (straight alpha). A pixel at opacity `a`
 therefore lands at `c·a·a + bg·(1−a)`, slightly darker and thinner than
-`a` says. This is the HUD's existing behaviour (its backdrop at 0.5 has
-always been affected the same way); the crosshair's opacity sliders
+`a` says. This is the HUD's existing behaviour (its backdrop, while there
+was one, was affected the same way at 0.5); the crosshair's opacity sliders
 inherit it. Switching the layer to `ALPHA_BLENDING_MODE_PREMULTIPLIED`
 would fix both but changes the HUD's look, so it is left for a deliberate
 HUD-level decision. The raster path (Apply Scaling on) reproduces it on
