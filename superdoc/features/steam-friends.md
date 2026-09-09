@@ -301,7 +301,10 @@ A stale `"friends_lookup_names": true` left in somebody's `global.json` from a
 build before this one is **ignored**: `ConfigManager.cpp` reads named keys and
 never rejects a file for carrying one it does not know, so the config loads
 unchanged and the key is dropped the next time that file is rewritten. This is
-verified rather than assumed — see the capture set's `stale-key.txt`.
+verified rather than assumed, both halves: a config still carrying it **loads**
+unchanged (the capture set's `stalekey/` case) and the key **is gone** from the
+file after the next write to any global-only row, with the settings beside it
+intact (`stale-key/results.txt`).
 
 ---
 
