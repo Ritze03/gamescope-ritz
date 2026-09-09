@@ -252,19 +252,45 @@ namespace gamescope::ui
 			Line( { 3.5f, 15.5f }, { 14.5f, 15.5f } ),
 			Line( { 3.5f, 20.5f }, { 10.5f, 20.5f } ) } },
 
-		{ "system.changelog", 6, {
-			// Three DATED ENTRIES: a filled bullet with a rule beside it,
-			// three times. Deliberately read against its two neighbours --
-			// Log is four ragged rules with no bullets (a stream of text),
-			// Per-game is a page outline with a folded corner (a file). This
-			// is neither: it is a LIST of discrete entries, which is what a
-			// changelog is, and the bullets are what say so at 12 px.
-			Bar( 4.0f, 5.0f, 6.5f, 7.5f ),
-			Line( { 9.5f, 6.25f }, { 20.5f, 6.25f } ),
-			Bar( 4.0f, 10.75f, 6.5f, 13.25f ),
-			Line( { 9.5f, 12.0f }, { 20.5f, 12.0f } ),
-			Bar( 4.0f, 16.5f, 6.5f, 19.0f ),
-			Line( { 9.5f, 17.75f }, { 16.5f, 17.75f } ) } },
+		{ "system.changelog", 3, {
+			// REDRAWN 2026-09-09: the area's label changed from
+			// "Changelog" to "About" (version rows, the changelog and
+			// the licences all live here now), and the old six-shape
+			// "three dated entries" bullet-list mark stopped fitting an
+			// area that isn't just a list of dated bullets any more --
+			// the id stayed `system.changelog` (see PanelChangelog.cpp's
+			// own comment on that), only the glyph needed to change.
+			//
+			// The conventional information mark: a circle, a dot near
+			// the top, a short stem below it. Built from the same two
+			// primitives the rest of the set already leans on rather
+			// than a new one -- the outer ring is the exact Circ(12,12,
+			// 8.5) display.hdr and display.frame_limiter already use
+			// (so it reads as "one of this set's circles", not a new
+			// weight of line), and the dot is a FillRect the same
+			// 2.5x2.5 size as this glyph's own former bullet, not a
+			// circle -- there is no filled-circle op in this set (see
+			// Icons.h's IconOp), and a tiny stroked ring for the dot
+			// would vanish against the stroked outer ring at 12 px.
+			// The stem is a second, taller FillRect rather than a
+			// stroked line for the same reason HUD's bars and this
+			// glyph's own former bullets are filled: a 1.7-unit stroked
+			// line reads as a hairline crack at small sizes, where a
+			// filled block of the same width reads as a clean stem.
+			//
+			// The 2-unit gap between the dot's bottom (9.0) and the
+			// stem's top (11.0) is the whole answer to "must the dot
+			// and stem stay distinct at small sizes" -- at the 24-unit
+			// grid's own default scale that gap is roughly a tenth of
+			// the glyph's diameter, wide enough that the two blocks
+			// never anti-alias into one blob the way a smaller gap did
+			// when first tried. Read against its neighbours: Log (just
+			// above) is four ragged rules with no round shape at all,
+			// and no other glyph in the set pairs a full outer ring
+			// with two small filled blocks on its own centreline.
+			Circ( 12.0f, 12.0f, 8.5f ),
+			Bar( 10.75f, 6.5f, 13.25f, 9.0f ),
+			Bar( 10.75f, 11.0f, 13.25f, 17.0f ) } },
 
 		// ---- SETUP --------------------------------------------------------
 		{ "setup.profiles", 2, {
