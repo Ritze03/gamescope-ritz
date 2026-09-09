@@ -3982,7 +3982,10 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	// and brightest cells of the map produce, and `bind` is ag_binding()'s
 	// code in ag_binding_text()'s words. One line format for both effects, so
 	// effects_regression_sample.py's ablog parser needs no second shape.
-	if ( state.bAdaptiveGamma && !state.bAdaptiveBrightness )
+	// The one place this file asks "is Adaptive Gamma the effect running" --
+	// the same condition EffectsPushData_t drops the flag on.
+	const bool bAgActive = state.bAdaptiveGamma && !state.bAdaptiveBrightness;
+	if ( bAgActive )
 	{
 		const float flShift   = ec::ab_local_shift( flLocalProbe, h[0], state.flAgLocal );
 		const float flShiftLo = ec::ab_local_shift( flLocalMin, h[0], state.flAgLocal );
@@ -4025,14 +4028,22 @@ static void effects_ab_log_flush( uint64_t ulSequence, const NativeEffectsState_
 	int y = s_nAbLogProbeY.load( std::memory_order_relaxed );
 	if ( x < 0 || y < 0 ) { x = uWidth / 2; y = uHeight / 2; }
 
-	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d local=%.3f lmin=%.5f lmax=%.5f lprobe=%.5f gainlo=%.5f gainhi=%.5f bind=%d (%s)",
+	console_log.infof( "ab_log n=%d t=%.1f dt=%.2f %s raw mean=%.5f p2=%.5f p50=%.5f p98=%.5f smooth mean=%.5f p2=%.5f p50=%.5f p98=%.5f gain=%.5f gamma=%.5f px(%d,%d)=%d,%d,%d local=%.3f lmin=%.5f lmax=%.5f lprobe=%.5f gainlo=%.5f gainhi=%.5f bind=%d (%s) tau=%.3f/%.3f",
 		s_nAbLogIndex++, double( ulNow - s_ulAbLogFirstNs ) * 1e-6, double( flDt ) * 1e3,
 		state.bAdaptiveBrightness ? ( state.bAbDynamic ? "dynamic" : "whole" )
 		                          : ( state.bAdaptiveGamma ? "gamma" : "off" ),
 		h[4], h[5], h[6], h[7], h[0], h[1], h[2], h[3], flGain, flGamma, x, y, r, g, b,
-		state.bAdaptiveGamma && !state.bAdaptiveBrightness ? state.flAgLocal : state.flAbLocal,
+		bAgActive ? state.flAgLocal : state.flAbLocal,
 		flLocalMin, flLocalMax, flLocalProbe, flGainLo, flGainHi,
-		nBinding, pszBindText ? pszBindText : ec::ab_binding_text( nBinding ) );
+		nBinding, pszBindText ? pszBindText : ec::ab_binding_text( nBinding ),
+		// The two EMA time constants the frame ACTUALLY used (2026-09-09).
+		// Appended, so an older parser's regex still matches: this is the
+		// evidence that a settling-time measurement was taken at the speeds
+		// it claims, and it names WHOSE pair -- the active effect's, which
+		// since Adaptive Gamma got its own is no longer always Adaptive
+		// Brightness's.
+		double( bAgActive ? state.flAgUpSpeed   : state.flAbUpSpeed ),
+		double( bAgActive ? state.flAgDownSpeed : state.flAbDownSpeed ) );
 
 	if ( s_nAbLogFrames.load( std::memory_order_relaxed ) > 0 )
 		s_nAbLogFrames.fetch_sub( 1, std::memory_order_relaxed );
@@ -4614,8 +4625,10 @@ struct EffectsPushData_t
 	uint32_t u_rcasCon;
 
 	float    u_abTarget;
-	float    u_abUp;
-	float    u_abDown;
+	// The ACTIVE adaptive effect's EMA time constants -- renamed from
+	// u_abUp/u_abDown 2026-09-09, see the constructor.
+	float    u_adaptUp;
+	float    u_adaptDown;
 	float    u_abMin;
 	float    u_abMax;
 	float    u_abStrength;
@@ -4679,8 +4692,6 @@ struct EffectsPushData_t
 		u_rcasCon = std::bit_cast<uint32_t>( flCon );
 
 		u_abTarget   = s.flAbTarget;
-		u_abUp       = s.flAbUpSpeed;
-		u_abDown     = s.flAbDownSpeed;
 		u_abMin      = s.flAbMinGain;
 		u_abMax      = s.flAbMaxGain;
 		u_abStrength = s.flAbStrength;
@@ -4700,6 +4711,28 @@ struct EffectsPushData_t
 		u_agMaxDarken = bAdaptiveGamma ? s.flAgMaxDarken : 1.0f;
 		u_agStrength  = bAdaptiveGamma ? std::clamp( s.flAgStrength, 0.0f, 1.0f ) : 0.0f;
 		u_agLocal     = bAdaptiveGamma ? std::clamp( s.flAgLocal, 0.0f, 1.0f ) : 0.0f;
+
+		// ADAPTATION SPEED: whichever effect is running supplies it (2026-09-09,
+		// "For adaptive gamma, there should also be some value, to adjust the
+		// speed of it"). The measure pass runs ONE EMA over statistics neither
+		// effect owns, and the two effects cannot both be on -- so giving
+		// Adaptive Gamma its own speeds needs no second EMA, no second history
+		// and no extra dispatch, only this choice. Before it, the EMA always
+		// used Adaptive Brightness's pair, which meant Adaptive Gamma adapted
+		// at a rate set by sliders that are unreachable while it is the active
+		// effect. Neither effect on: keep Adaptive Brightness's, so the history
+		// a user warms with some other effect running keeps tracking at the
+		// speed the row they can actually see says. Clamped to the panel's own
+		// slider floor, the same way u_agStrength / u_agLocal / u_abLocal and
+		// the Bloom fields just above are: this block's rule is that the
+		// uniform says exactly what the frame did, and a hand-edited value
+		// below what any slider can reach would otherwise be a speed no user
+		// can see or set. ema_alpha() floors tau again in the shader, so even
+		// a 0 is "as fast as the control goes", never a frozen history and
+		// never a divide by zero.
+		const float flSpeedFloor = 0.1f;   // == the panel's Range() floor
+		u_adaptUp    = std::max( bAdaptiveGamma ? s.flAgUpSpeed   : s.flAbUpSpeed,   flSpeedFloor );
+		u_adaptDown  = std::max( bAdaptiveGamma ? s.flAgDownSpeed : s.flAbDownSpeed, flSpeedFloor );
 
 		// Bloom. Threshold and Radius are read by the two dispatches that
 		// build the glow buffer, Intensity only by the composite; all three

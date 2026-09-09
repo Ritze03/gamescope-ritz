@@ -119,6 +119,8 @@ namespace gamescope
 		e.flAgMaxLift    = r.adaptive_gamma.max_lift;
 		e.flAgMaxDarken  = r.adaptive_gamma.max_darken;
 		e.flAgStrength   = r.adaptive_gamma.strength;
+		e.flAgUpSpeed    = r.adaptive_gamma.adapt_up_speed;
+		e.flAgDownSpeed  = r.adaptive_gamma.adapt_down_speed;
 		e.flAgLocal      = r.adaptive_gamma.local_strength;
 	}
 
@@ -762,6 +764,44 @@ namespace gamescope
 				.Range( 1.0f, 4.0f )
 				.Step( 0.1f )    // 31 positions, the same grid as Max lift
 				.Default( AgDefaults{}.max_darken )
+			// ADAPTATION SPEED, this row's own pair -- 2026-09-09, the user:
+			// "For adaptive gamma, there should also be some value, to
+			// adjust the speed of it". Until now the measure pass's EMA was
+			// driven unconditionally by Adaptive Brightness's two speeds,
+			// i.e. by sliders that are not even reachable while this effect
+			// is the one running (the two are mutually exclusive). TWO, not
+			// the one "some value" literally asks for, because this row
+			// already pairs its directions everywhere else (Max lift / Max
+			// darken) and because "react quickly when the scene brightens,
+			// ease slowly into darkness" is a setting one number cannot
+			// express -- exactly the argument that kept Adaptive
+			// Brightness's own pair intact when the budget was tight. Same
+			// range, step, unit and defaults as that row's, so switching
+			// between the two effects does not change how fast the picture
+			// follows the scene. That takes this row to 7 params of
+			// kParamBudget's 8; the budget was NOT raised.
+			.Param( "up_speed", "Adapt to brighter",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.adapt_up_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.adapt_up_speed, f ); } ) )
+				.Key( "reshade.adaptive_gamma.adapt_up_speed" )
+				.Help( "How long it takes to settle after the scene gets brighter (the mid-tones "
+				       "are darkened). Shorter reacts faster; longer is calmer." )
+				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )    // 50 positions, one per tenth of a second
+				.Unit( "s" )
+				.Default( AgDefaults{}.adapt_up_speed )
+			.Param( "down_speed", "Adapt to darker",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_gamma.adapt_down_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_gamma.adapt_down_speed, f ); } ) )
+				.Key( "reshade.adaptive_gamma.adapt_down_speed" )
+				.Help( "How long it takes to settle after the scene gets darker (the mid-tones are "
+				       "lifted). Shorter reacts faster; longer is calmer." )
+				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )    // 50 positions, as above
+				.Unit( "s" )
+				.Default( AgDefaults{}.adapt_down_speed )
 			.Param( "local_strength", "Local adaptation",
 				ui::AnyBind::Of<float>(
 					[]{ return Cfg().reshade.adaptive_gamma.local_strength; },

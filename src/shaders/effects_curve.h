@@ -128,6 +128,37 @@ namespace gamescope::effects_curve
 #define EC_FUNC
 #endif
 
+// ---- THE ADAPTATION SPEED (the EMA both adaptive effects share) --------
+//
+// cs_effects_measure.comp smooths every statistic with one exponential
+// moving average whose time constant is the ACTIVE effect's "adapt to
+// brighter" / "adapt to darker" seconds (Adaptive Brightness's pair, or --
+// since 2026-09-09 -- Adaptive Gamma's own; they are mutually exclusive, so
+// one EMA serves both). This is the whole of "how fast does the picture
+// follow the scene", and it lives here rather than inline in the shader so
+// tests/test_effects_curve.cpp asserts it on the same text the GPU runs.
+//
+// tau is SECONDS TO ~63 % of a step, which is what makes the settling time
+// predictable and the slider honest: a step is within 5 % of its new value
+// after 3 tau, whatever dt is and however the frames are spaced. The
+// per-frame form below composes to exactly that because
+// (1 - alpha(dt1)) * (1 - alpha(dt2)) = exp(-(dt1 + dt2) / tau) -- so the
+// adaptation over an interval depends on the elapsed TIME and not on how
+// many composites the interval happened to get.
+//
+// EC_TAU_MIN is a floor, not a clamp of taste: the panel's own slider stops
+// at 0.1 s, and this stops a hand-edited 0 (or a negative) from becoming a
+// division by zero. It is deliberately small enough that hitting it means
+// "as fast as the control goes", never "frozen" -- there is no setting of
+// this pair that stops the picture adapting, which is why the binding
+// readout has no code for it.
+const float EC_TAU_MIN = 0.001f;
+
+EC_FUNC float ema_alpha( float dt, float tau )
+{
+	return clamp( 1.0f - exp( -max( dt, 0.0f ) / max( tau, EC_TAU_MIN ) ), 0.0f, 1.0f );
+}
+
 const float AB_DYN_WHITE     = 0.9f;   // where p98 is pulled toward (encoded)
 const float AB_DYN_KNEE      = 0.7f;   // shoulder starts here (encoded)
 const float AB_DYN_GAMMA_MIN = 0.25f;  // hardest lift any max_gain may ask for

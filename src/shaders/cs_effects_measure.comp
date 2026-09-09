@@ -48,11 +48,20 @@
 // + PS_AdaptiveBrightnessAdapt), which was measured live to converge on its
 // own model, so the ADAPT maths is unchanged and applied per statistic:
 //   tau   = measured > adapted ? up : down
-//   alpha = 1 - exp(-dt / max(tau, 0.001))
+//   alpha = ema_alpha(dt, tau)          -- effects_curve.h, unit-tested
 //   adapted' = lerp(adapted, measured, alpha)
 // `up` is the time constant while a statistic RISES (the scene got brighter,
 // the picture will be dimmed), `down` while it FALLS (the scene got darker,
-// the picture will be lifted). Each tap is graded exactly as the apply pass
+// the picture will be lifted).
+//
+// WHOSE up AND down (2026-09-09). ONE EMA, whichever adaptive effect is on.
+// The pair arrives as u_adaptUp/u_adaptDown (renamed from u_abUp/u_abDown),
+// and the host picks Adaptive Brightness's or Adaptive Gamma's according to
+// which one is running -- they are MUTUALLY EXCLUSIVE, so there is never a
+// frame that wants both and never a reason to smooth the same statistic
+// twice. Before Adaptive Gamma had speeds of its own, this EMA always used
+// Adaptive Brightness's, i.e. sliders unreachable while Adaptive Gamma was
+// the active effect. Each tap is graded exactly as the apply pass
 // grades its pixels (effects_common.h's grade() -- the .fx measured its
 // post-Shadow-Control/Saturation texture, so this matches its input; the
 // NEW Vibrancy effect, added 2026-09-08, runs inside grade() too, so its
@@ -92,6 +101,7 @@
 
 #include "descriptor_set.h"
 #include "effects_common.h"
+#include "effects_curve.h"   // ema_alpha(), shared with tests/test_effects_curve.cpp
 
 layout(
   local_size_x = 16,
@@ -245,9 +255,10 @@ float adapt_at(ivec2 texel, float measured)
         adapted = measured;
     adapted = clamp(adapted, 0.0, 1.0);
 
-    float tau   = (measured > adapted) ? u_abUp : u_abDown;
-    float alpha = clamp(1.0 - exp(-u_abDt / max(tau, 0.001)), 0.0, 1.0);
-    return mix(adapted, measured, alpha);
+    // Whichever adaptive effect is on supplied these two (they are
+    // mutually exclusive, so one EMA serves both) -- effects_common.h.
+    float tau   = (measured > adapted) ? u_adaptUp : u_adaptDown;
+    return mix(adapted, measured, ema_alpha(u_abDt, tau));
 }
 
 float adapt(int which, float measured)

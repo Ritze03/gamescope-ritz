@@ -306,6 +306,11 @@ namespace gamescope::config
                     ag.max_lift = JGetFloat( *pAdaptiveGamma, "max_lift", ag.max_lift );
                     ag.max_darken = JGetFloat( *pAdaptiveGamma, "max_darken", ag.max_darken );
                     ag.strength = JGetFloat( *pAdaptiveGamma, "strength", ag.strength );
+                    // Additive 2026-09-09, same shape as everything above:
+                    // a profile written before this row had its own speeds
+                    // has neither key and takes the compiled-in defaults.
+                    ag.adapt_up_speed = JGetFloat( *pAdaptiveGamma, "adapt_up_speed", ag.adapt_up_speed );
+                    ag.adapt_down_speed = JGetFloat( *pAdaptiveGamma, "adapt_down_speed", ag.adapt_down_speed );
                     ag.local_strength = JGetFloat( *pAdaptiveGamma, "local_strength", ag.local_strength );
                 }
 
@@ -562,6 +567,8 @@ namespace gamescope::config
             jAdaptiveGamma[ "max_lift" ] = ag.max_lift;
             jAdaptiveGamma[ "max_darken" ] = ag.max_darken;
             jAdaptiveGamma[ "strength" ] = ag.strength;
+            jAdaptiveGamma[ "adapt_up_speed" ] = ag.adapt_up_speed;
+            jAdaptiveGamma[ "adapt_down_speed" ] = ag.adapt_down_speed;
             jAdaptiveGamma[ "local_strength" ] = ag.local_strength;
 
             const auto &sl = s.reshade.shadow_lift;

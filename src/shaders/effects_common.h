@@ -24,8 +24,14 @@ uniform effects_t {
 
     // ---- Adaptive Brightness ----
     float u_abTarget;     // target luminance, 0.1..0.9
-    float u_abUp;         // brighten time constant, seconds
-    float u_abDown;       // darken time constant, seconds
+    // THE ACTIVE ADAPTIVE EFFECT'S EMA time constants, not necessarily
+    // Adaptive Brightness's -- renamed from u_abUp/u_abDown 2026-09-09,
+    // when Adaptive Gamma got its own pair. The two effects are mutually
+    // exclusive, so the host (EffectsPushData_t) picks whichever one is
+    // running and the measure pass keeps ONE EMA. They stay in this block
+    // because dt and the statistics they smooth do too.
+    float u_adaptUp;      // brighten time constant, seconds
+    float u_adaptDown;    // darken time constant, seconds
     float u_abMin;        // min gain, 0.3..1.0
     float u_abMax;        // max gain, 1.0..4.0
     float u_abStrength;   // dry/wet mix, 0.0..1.0

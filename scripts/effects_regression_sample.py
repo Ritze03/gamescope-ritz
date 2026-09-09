@@ -35,6 +35,18 @@ Subcommands
                                          ordered and apart, near-white highlights stay
                                          below white, black stays black
     means   <label> <img...>             INFO: each capture's frame mean, in order
+    agsettle <name> <min-ratio> <label:tau:file>...
+                                         ADAPTIVE GAMMA'S SPEED (2026-09-09): the time
+                                         each `ab_log` trace takes to come within 5 % of
+                                         where it settles after a scene switch, for the
+                                         exponent and for the statistic under it. The
+                                         traces must settle in the order given and the
+                                         last must take >= min-ratio times the first --
+                                         i.e. the slider really does change the settling
+                                         time. Each trace's own tau= field is checked
+                                         against the tau the spec claims, so a slider
+                                         that did not take reads as a wrong tau rather
+                                         than as a mysterious time
     colorcheck <image> <effect> <strength>
                                          the "colors" scene (2026-09-08): pins one
                                          effect's per-band output against the closed-
@@ -68,6 +80,7 @@ Subcommands
                                          -- the headline shape difference between the two
 """
 import re
+import math
 import sys
 
 try:
@@ -674,7 +687,11 @@ AB_LOG_RE = re.compile(
     r"smooth mean=([\d.]+) p2=([\d.]+) p50=([\d.]+) p98=([\d.]+) "
     r"gain=([\d.]+) gamma=([\d.]+) px\((\d+),(\d+)\)=(\d+),(\d+),(\d+)"
     r"(?: local=([\d.]+) lmin=([\d.]+) lmax=([\d.]+) lprobe=([\d.]+) gainlo=([\d.]+) gainhi=([\d.]+))?"
-    r"(?: bind=(\d+) \(([^)]*)\))?")
+    r"(?: bind=(\d+) \(([^)]*)\))?"
+    # The two EMA time constants the frame actually used (2026-09-09), so a
+    # settling-time measurement can prove it ran at the speeds it claims.
+    # Optional like everything after `px`: an older binary's line lacks it.
+    r"(?: tau=([\d.]+)/([\d.]+))?")
 
 
 def parse_ablog(path):
@@ -689,6 +706,9 @@ def parse_ablog(path):
             # The binding readout (2026-09-08). Optional for the same reason
             # the local fields are: an older binary's line does not carry it.
             row.update(bind=int(g[25]) if g[25] else -1, bindtext=g[26] or "")
+            row.update(dt=float(g[2]) / 1000.0,
+                       tau_up=float(g[27]) if g[27] else 0.0,
+                       tau_down=float(g[28]) if g[28] else 0.0)
             # The Local-adaptation fields (2026-09-07). Absent on a line from
             # a binary predating them, so every consumer must tolerate that.
             row.update(local=float(g[19]) if g[19] else 0.0,
@@ -703,6 +723,30 @@ def parse_ablog(path):
 def p2p(rows, key):
     v = [r[key] for r in rows]
     return max(v) - min(v)
+
+
+# How much of the measurement's own sampling noise an EMA lets through, as a
+# multiple of what it lets through at tau = 1 s (the speed every threshold in
+# this file was calibrated at). Needed since 2026-09-09, when Adaptive Gamma
+# got its own adaptation speeds and the stability checks started being run at
+# the FAST end of the slider as well as the default.
+#
+# WHY A FORMULA AND NOT A FIXED NUMBER. For x' = (1 - a) x + a m with white
+# measurement noise, the settled output's standard deviation is
+# sigma * sqrt(a / (2 - a)) -- so a smoothed statistic's spread is a property
+# of the SMOOTHING, not of the estimator underneath it. Holding a tau = 0.1 s
+# trace to a tau = 1 s bound would therefore fail the EMA for doing exactly
+# what the slider asked, and would say "pulse" about a number that is not the
+# picture. What must not move at any speed is the picture -- the exponent and
+# the output pixel -- and those keep their absolute bounds. The RAW spread
+# keeps its absolute bound too: it is the estimator's, and the EMA is not in
+# it. See shader-effects.md's "Stability at the fast end".
+def ema_noise_gain(tau, dt, tau_ref=1.0):
+    if tau <= 0.0 or dt <= 0.0:
+        return 1.0
+    a = 1.0 - math.exp(-dt / tau)
+    a_ref = 1.0 - math.exp(-dt / tau_ref)
+    return math.sqrt((a / (2.0 - a)) / (a_ref / (2.0 - a_ref)))
 
 
 def cmd_ablog(args):
@@ -785,8 +829,17 @@ def cmd_ablog(args):
             # exponent standing in for the gain (the exponent's own scale is
             # smaller, so this is if anything the tighter bar).
             name = f"ag-stability-pan-local{last['local']:.2f}"
-            ok = d["gamma"] <= 0.06 and d["p98"] <= 3.0 and d["rp98"] * 255.0 <= 40.0
-            bounds = "(gamma <= 0.06, smoothed p98 <= 3 codes, raw p98 <= 40 codes)"
+            # The smoothed statistic's bound scales with the speed the trace
+            # ran at (ema_noise_gain above); the exponent's and the raw
+            # estimator's do not, because neither is a function of the
+            # smoothing. At the default 1 s this is exactly the old 3 codes.
+            tau = (last["tau_up"] + last["tau_down"]) / 2.0 or 1.0
+            dt = sum(r["dt"] for r in rows) / len(rows)
+            gain = ema_noise_gain(tau, dt)
+            p98_bound = 3.0 * gain
+            ok = d["gamma"] <= 0.06 and d["p98"] <= p98_bound and d["rp98"] * 255.0 <= 40.0
+            bounds = (f"(gamma <= 0.06, smoothed p98 <= {p98_bound:.1f} codes "
+                      f"= 3 x {gain:.2f} for tau {tau:.2f}s, raw p98 <= 40 codes)")
             d["rp98"] *= 255.0
         detail = (f"{len(rows)} frames, mode={last['mode']}: raw p98 p2p={d['rp98']:.6f}, "
                   f"gamma p2p={d['gamma']:.6f}, smoothed p98 p2p={d['p98']:.4f} codes, "
@@ -846,6 +899,75 @@ def cmd_ablog(args):
                   f"within 5% at {t_settle_px if t_settle_px is None else round(t_settle_px)} ms")
     else:
         sys.exit(2)
+    sys.exit(0 if emit(ok, name, detail) else 1)
+
+
+# ---- ADAPTIVE GAMMA's adaptation speed (2026-09-09) --------------------
+#
+# "For adaptive gamma, there should also be some value, to adjust the speed
+# of it." The control is only real if the settling time actually MOVES with
+# it, so that is what is measured -- on the same per-frame `effects_ab_log`
+# trace across the same scene switch the Adaptive Brightness `transition`
+# check uses, and against the same 5 %-of-final definition of "settled".
+#
+# WHAT SETTLING TIME MEANS HERE. Adaptive Gamma's entire state is the one
+# exponent, so the exponent is what is timed (the Adaptive Brightness checks
+# time the gain). t0 is the frame the raw statistics jump -- the scene
+# switch itself, found in the data rather than assumed from a sleep -- and
+# t95 is the first frame after it whose exponent is within 5 % of where the
+# trace ends up. The closed form is 3 tau (tests/test_effects_curve.cpp
+# asserts that on ema_alpha directly), so the measured numbers are reported
+# beside it rather than only against each other.
+
+
+def settle_ms(rows, key="gamma"):
+    """(t95_ms, first, settled, tau_up, tau_down) for one transition trace."""
+    i0 = next((i for i, r in enumerate(rows) if abs(r["rp98"] - rows[0]["rp98"]) > 0.1), 0)
+    t0 = rows[i0]["t"]
+    rows = rows[i0:]
+    vals = [r[key] for r in rows]
+    settled = vals[-1]
+    span = abs(vals[0] - settled)
+    t95 = next((r["t"] - t0 for r in rows if abs(r[key] - settled) <= 0.05 * span), None)
+    return t95, vals[0], settled, rows[-1]["tau_up"], rows[-1]["tau_down"]
+
+
+def cmd_agsettle(args):
+    # agsettle <name> <min-ratio> <label:tau:file> ...
+    # The traces must settle in the order given, and the last must take at
+    # least <min-ratio> times as long as the first.
+    name, min_ratio, specs = args[0], float(args[1]), args[2:]
+    table, times, bad = [], [], []
+    for spec in specs:
+        label, tau, path = spec.split(":", 2)
+        rows = parse_ablog(path)
+        if len(rows) < 50:
+            sys.exit(0 if emit(False, name, f"only {len(rows)} ab_log lines in {path}") else 1)
+        t95, first, settled, tau_up, tau_down = settle_ms(rows, "gamma")
+        # The smoothed median the exponent is derived from -- the EMA's own
+        # output, with no clamp on it. Reported beside the exponent because
+        # the two answer different questions: p50's t95 IS the closed form
+        # (3 tau), while the exponent can arrive EARLIER because it saturates
+        # against Max lift / Max darken on the way. A table showing only the
+        # exponent would look like the EMA was faster than its own maths.
+        t95_stat = settle_ms(rows, "p50")[0]
+        times.append(t95)
+        if t95 is None:
+            bad.append(f"{label} never settled")
+        # The trace's own tau, so a mis-set slider shows up as a wrong
+        # number here instead of as a mysterious settling time.
+        if abs(tau_up - float(tau)) > 1e-3 and abs(tau_down - float(tau)) > 1e-3:
+            bad.append(f"{label} ran at tau={tau_up:.2f}/{tau_down:.2f}, expected {tau}")
+        table.append(f"{label} (tau {tau}s, 3tau={3000 * float(tau):.0f} ms): "
+                     f"exponent {first:.3f} -> {settled:.3f}, "
+                     f"t95={'--' if t95 is None else round(t95)} ms "
+                     f"(statistic {'--' if t95_stat is None else round(t95_stat)} ms)")
+    ok = not bad and all(t is not None for t in times)
+    if ok:
+        ok = all(b > a for a, b in zip(times, times[1:])) and times[-1] >= min_ratio * times[0]
+        if not ok:
+            bad.append(f"expected strictly increasing and last >= {min_ratio}x first")
+    detail = "; ".join(table) + ("" if not bad else "  -- " + "; ".join(bad))
     sys.exit(0 if emit(ok, name, detail) else 1)
 
 
@@ -994,7 +1116,7 @@ def main():
     {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
      "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider,
      "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape, "noclip": cmd_noclip,
-     "means": cmd_means,
+     "means": cmd_means, "agsettle": cmd_agsettle,
      "bloomflat": cmd_bloomflat, "bloomline": cmd_bloomline,
      "bloomsame": cmd_bloomsame, "bloomjitter": cmd_bloomjitter,
      "bloomnoclip": cmd_bloomnoclip}[cmd](args)

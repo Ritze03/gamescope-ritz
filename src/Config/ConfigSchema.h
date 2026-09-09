@@ -484,6 +484,23 @@ namespace gamescope::config
         // stops. A user who wants a harder darken can have it.
         float max_darken = 1.5f;   // 1.0..4.0; exponent ceiling = max_darken
         float strength = 1.0f;     // 0.0..1.0 dry/wet mix
+        // HOW FAST IT ADAPTS -- this effect's OWN pair, added 2026-09-09
+        // ("For adaptive gamma, there should also be some value, to adjust
+        // the speed of it"). Until then the measure pass's EMA was driven
+        // unconditionally by adaptive_brightness's adapt_up_speed /
+        // adapt_down_speed, so Adaptive Gamma's adaptation rate was set by
+        // an effect that is MUTUALLY EXCLUSIVE with it -- i.e. by sliders
+        // that are not even reachable while this row is the one running.
+        // Two, not one, for the same reason Adaptive Brightness has two:
+        // "react quickly when the scene gets brighter, ease slowly into
+        // darkness" is a real setting a single number cannot express, and
+        // this row already pairs its directions everywhere else (max_lift /
+        // max_darken). Same range, same units and same defaults as
+        // Adaptive Brightness's, so switching between the two effects does
+        // not change how fast the picture follows the scene.
+        // Additive keys: an old config has neither and gets these.
+        float adapt_up_speed = 1.0f;     // 0.1..5.0 seconds to ~63% of target
+        float adapt_down_speed = 1.0f;   // 0.1..5.0
         // The SAME local operator Adaptive Brightness uses (the measure
         // pass's 16x16 map, ab_local_shift), shifting the median each
         // pixel's exponent is fitted to. Defaults to 0, unlike Adaptive

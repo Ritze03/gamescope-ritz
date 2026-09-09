@@ -1209,6 +1209,100 @@ TEST_CASE( "reshade.bloom defaults and round-trip", "[effects_curve][config]" )
 	REQUIRE_THAT( bl.radius, WithinAbs( 0.85f, 1e-6f ) );
 }
 
+// ---- THE ADAPTATION SPEED (ema_alpha) --------------------------------
+//
+// The EMA cs_effects_measure.comp smooths every statistic with, asserted on
+// the same header text the GPU compiles. This is the whole of what an
+// "adaptation speed" slider means, for BOTH adaptive effects: Adaptive
+// Gamma got its own pair on 2026-09-09, and because the two effects are
+// mutually exclusive the shader still runs exactly one EMA -- so a property
+// proven here is a property of both rows' sliders at once.
+TEST_CASE( "ema_alpha: a step is within 5% after 3 tau, at every speed", "[effects_curve]" )
+{
+	// The panel's slider ends, and the default. tau is SECONDS TO ~63%, so
+	// the settling time the user actually observes is 3 tau -- which is the
+	// number scripts/effects-regression.sh's ag-speed check measures on a
+	// real capture, and this is its closed form.
+	for ( float tau : { 0.1f, 0.3f, 1.0f, 3.0f, 5.0f } )
+	{
+		// Integrated in 120 Hz steps: the residual after t seconds is
+		// exp(-t / tau) however the frames are spaced (see below), so the
+		// step size must not change the answer.
+		float flResidual = 1.0f;
+		const float flDt = 1.0f / 120.0f;
+		for ( int i = 0; i < int( 3.0f * tau * 120.0f ); i++ )
+			flResidual *= ( 1.0f - ema_alpha( flDt, tau ) );
+		REQUIRE( flResidual <= 0.05f );
+		// ...and NOT already there a third of the way: the slider has to
+		// mean something at each end, not saturate immediately.
+		float flEarly = 1.0f;
+		for ( int i = 0; i < int( 1.0f * tau * 120.0f ); i++ )
+			flEarly *= ( 1.0f - ema_alpha( flDt, tau ) );
+		REQUIRE( flEarly > 0.05f );
+	}
+}
+
+TEST_CASE( "ema_alpha: slower tau is always slower, and the range spans", "[effects_curve]" )
+{
+	// Monotone in tau at a fixed dt -- the property that makes the slider a
+	// speed control rather than a number that happens to correlate with one.
+	const float flDt = 1.0f / 60.0f;
+	float flPrev = 2.0f;
+	for ( float tau = 0.1f; tau <= 5.0001f; tau += 0.1f )
+	{
+		const float a = ema_alpha( flDt, tau );
+		REQUIRE( a < flPrev );
+		REQUIRE( a > 0.0f );
+		REQUIRE( a <= 1.0f );
+		flPrev = a;
+	}
+	// The two ends of the slider are a factor of ~50 apart in settling
+	// time, so "fast" and "slow" are genuinely different pictures rather
+	// than two names for the same one.
+	REQUIRE( ema_alpha( flDt, 0.1f ) / ema_alpha( flDt, 5.0f ) > 20.0f );
+}
+
+TEST_CASE( "ema_alpha: elapsed time, not frame count", "[effects_curve]" )
+{
+	// The reason rendervulkan.cpp can feed this a wall-clock dt and let a
+	// screenshot re-composite take its own tiny step: composing per-frame
+	// alphas over an interval must depend only on the interval. Two very
+	// different frame paces over the same 1.0 s must leave the same residual.
+	// nSteps steps that exactly tile flTotal, so the two paces cover the
+	// same interval and the comparison is about the maths, not about
+	// truncating a step count.
+	auto Residual = [] ( int nSteps, float flTotal, float tau )
+	{
+		float r = 1.0f;
+		for ( int i = 0; i < nSteps; i++ )
+			r *= ( 1.0f - ema_alpha( flTotal / float( nSteps ), tau ) );
+		return r;
+	};
+	for ( float tau : { 0.2f, 1.0f, 4.0f } )
+	{
+		REQUIRE_THAT( Residual( 240, 1.0f, tau ),
+		              WithinAbs( Residual( 30, 1.0f, tau ), 1e-5f ) );
+		REQUIRE_THAT( Residual( 60, 1.0f, tau ),
+		              WithinAbs( std::exp( -1.0f / tau ), 1e-5f ) );
+	}
+}
+
+TEST_CASE( "ema_alpha: no setting can freeze the history", "[effects_curve]" )
+{
+	// The floor exists so a hand-edited 0 (or a negative) is "as fast as the
+	// control goes", never a division by zero and never a stuck picture.
+	// That is WHY the binding readout needs no code for an extreme speed:
+	// unlike Max lift or Max darken, no value of this pair makes anything
+	// inert -- see ag_binding() and shader-effects.md.
+	for ( float tau : { 0.0f, -1.0f, 1e-9f } )
+		REQUIRE_THAT( ema_alpha( 1.0f / 60.0f, tau ), WithinAbs( 1.0f, 1e-6f ) );
+	// And at the slowest end it still moves every frame -- slow is slow,
+	// not off.
+	REQUIRE( ema_alpha( 1.0f / 60.0f, 5.0f ) > 0.0f );
+	// dt 0 is the only "nothing happens" case, and it is time not settings.
+	REQUIRE_THAT( ema_alpha( 0.0f, 1.0f ), WithinAbs( 0.0f, 1e-6f ) );
+}
+
 TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][config]" )
 {
 	TempConfigHome home;
@@ -1219,6 +1313,15 @@ TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][co
 	REQUIRE_THAT( s.reshade.adaptive_gamma.max_lift, WithinAbs( 4.0f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.adaptive_gamma.max_darken, WithinAbs( 1.5f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.adaptive_gamma.strength, WithinAbs( 1.0f, 1e-6f ) );
+	// 2026-09-09: this row's own adaptation speeds, defaulting to exactly
+	// Adaptive Brightness's, so switching between the two mutually exclusive
+	// effects does not change how fast the picture follows the scene.
+	REQUIRE_THAT( s.reshade.adaptive_gamma.adapt_up_speed, WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.adapt_down_speed, WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.adapt_up_speed,
+	              WithinAbs( s.reshade.adaptive_brightness.adapt_up_speed, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.adapt_down_speed,
+	              WithinAbs( s.reshade.adaptive_brightness.adapt_down_speed, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.adaptive_gamma.local_strength, WithinAbs( 0.0f, 1e-6f ) );
 
 	s.reshade.adaptive_gamma.enabled = true;
@@ -1226,6 +1329,8 @@ TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][co
 	s.reshade.adaptive_gamma.max_lift = 2.5f;
 	s.reshade.adaptive_gamma.max_darken = 2.0f;
 	s.reshade.adaptive_gamma.strength = 0.8f;
+	s.reshade.adaptive_gamma.adapt_up_speed = 0.3f;
+	s.reshade.adaptive_gamma.adapt_down_speed = 2.7f;
 	s.reshade.adaptive_gamma.local_strength = 0.35f;
 	ProfileMeta meta;
 	meta.name = "Effects";
@@ -1239,6 +1344,12 @@ TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][co
 	REQUIRE_THAT( ag.max_lift, WithinAbs( 2.5f, 1e-6f ) );
 	REQUIRE_THAT( ag.max_darken, WithinAbs( 2.0f, 1e-6f ) );
 	REQUIRE_THAT( ag.strength, WithinAbs( 0.8f, 1e-6f ) );
+	REQUIRE_THAT( ag.adapt_up_speed, WithinAbs( 0.3f, 1e-6f ) );
+	REQUIRE_THAT( ag.adapt_down_speed, WithinAbs( 2.7f, 1e-6f ) );
+	// Adaptive BRIGHTNESS's own pair is untouched by writing this row's --
+	// two independent settings, not one aliased under two names.
+	REQUIRE_THAT( loaded->reshade.adaptive_brightness.adapt_up_speed, WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( loaded->reshade.adaptive_brightness.adapt_down_speed, WithinAbs( 1.0f, 1e-6f ) );
 	REQUIRE_THAT( ag.local_strength, WithinAbs( 0.35f, 1e-6f ) );
 
 	// An old profile with no adaptive_gamma object at all resolves to the

@@ -605,6 +605,14 @@ struct NativeEffectsState_t
 	float flAgMaxLift = 4.0f;
 	float flAgMaxDarken = 1.5f;
 	float flAgStrength = 1.0f;
+	// This effect's OWN adaptation speeds (2026-09-09). The measure pass
+	// runs one EMA whose two time constants used to come unconditionally
+	// from flAbUpSpeed/flAbDownSpeed above -- so Adaptive Gamma adapted at
+	// a rate set by the effect it is mutually exclusive with. Because they
+	// cannot both be on, EffectsPushData_t simply hands the shader
+	// whichever active effect's pair applies; there is no second EMA.
+	float flAgUpSpeed = 1.0f;
+	float flAgDownSpeed = 1.0f;
 	float flAgLocal = 0.0f;
 
 	// Bloom (NEW 2026-09-08, ConfigSchema.h's ReshadeBloomSettings): a glow

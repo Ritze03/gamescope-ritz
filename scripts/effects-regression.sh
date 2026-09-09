@@ -34,6 +34,12 @@
 #                       the probe pixel come down monotonically, never
 #                       overshoot where they settle, and are within 5 % of
 #                       settled inside 4 s
+#   ag-speed-*       -- ADAPTIVE GAMMA'S OWN ADAPTATION SPEED (2026-09-09):
+#                       the same dark -> bright step at a fast, a default and
+#                       a slow setting must settle at increasing times, and
+#                       with the two directions set differently a brightening
+#                       and a darkening step must settle far apart. See the
+#                       block near the bottom of this script
 #   stability-pan    -- a textured dark scene with 2 % lights (the 98th
 #                       percentile sits in the histogram's gap) panning under
 #                       the tap grid with --periodic, so its true statistics
@@ -660,9 +666,16 @@ AG_STRENGTH_ID="image.shaders.adaptive_gamma.strength"
 AG_LIFT_ID="image.shaders.adaptive_gamma.max_lift"
 AG_DARKEN_ID="image.shaders.adaptive_gamma.max_darken"
 AG_LOCAL_ID="image.shaders.adaptive_gamma.local_strength"
+# This row's own adaptation speeds (2026-09-09). Before them the measure
+# pass's EMA always ran on adaptive_brightness's pair -- sliders that are
+# unreachable while Adaptive Gamma is the effect that is on, because the two
+# are mutually exclusive.
+AG_UP_ID="image.shaders.adaptive_gamma.up_speed"
+AG_DOWN_ID="image.shaders.adaptive_gamma.down_speed"
 AG_TARGET_DEFAULT=0.5   # == ConfigSchema.h's ReshadeAdaptiveGammaSettings
 AG_LIFT_DEFAULT=4.0
 AG_DARKEN_DEFAULT=1.5
+AG_SPEED_DEFAULT=1.0   # == adaptive_brightness's, deliberately
 
 set_ag() { gsctl overlay_e2_set "$AG_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
 set_ag_param() { gsctl overlay_e2_set "$1 $2" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
@@ -682,7 +695,10 @@ ag_defaults() {
 	set_ag_param "$AG_LIFT_ID" "$AG_LIFT_DEFAULT"
 	set_ag_param "$AG_DARKEN_ID" "$AG_DARKEN_DEFAULT"
 	set_ag_param "$AG_LOCAL_ID" 0.0
+	set_ag_param "$AG_UP_ID" "$AG_SPEED_DEFAULT"
+	set_ag_param "$AG_DOWN_ID" "$AG_SPEED_DEFAULT"
 }
+set_ag_speed() { set_ag_param "$AG_UP_ID" "$1"; set_ag_param "$AG_DOWN_ID" "$2"; }
 
 set_saturation 0; set_vibrancy 0; set_ab 0
 ag_defaults
@@ -784,6 +800,15 @@ set_ag_param "$AG_STRENGTH_ID" 1.0
 # this comment exists to stop the next author repeating.
 for L in 0.0 1.0; do
 	set_ag_param "$AG_LOCAL_ID" "$L"
+	# LET THE EMA FINISH BEFORE ASKING IT TO HOLD STILL. This check demands
+	# a peak-to-peak of exactly ZERO on the output pixel over 300 frames,
+	# which is only meaningful once the history has arrived; the sweeps
+	# above leave it a fraction of a percent short, and one run in two that
+	# tail was still worth a single code of output during the measurement
+	# (measured 2026-09-09: px p2p 0 on one run, 1 on the next, from a
+	# gamma p2p of 6e-5). The bar is right -- a settled still frame really
+	# must not move at all -- so the fix is to wait, not to loosen it.
+	sleep "$ADAPT_SETTLE_S"
 	arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-14-ag-static-local$L.txt"
 	run_sampler ablog "$OUT_DIR/ablog-14-ag-static-local$L.txt" agstatic
 done
@@ -971,6 +996,102 @@ run_sampler regions "$(take_screenshot 19-bright-bloom-worstcase)" bright
 record_line "INFO	bloom-worst-bright	(above: threshold 0.0 + Intensity 2.0 on the brightest scene -- the honest limit)"
 bloom_defaults
 set_bloom 0
+
+# ---------------------------------------------------------------------------
+# ADAPTIVE GAMMA'S ADAPTATION SPEED (2026-09-09). The user: "For adaptive
+# gamma, there should also be some value, to adjust the speed of it."
+#
+# Until this row had its own pair, the measure pass's EMA ran unconditionally
+# on adaptive_brightness's adapt_up_speed / adapt_down_speed -- so Adaptive
+# Gamma's adaptation rate was set by an effect it is MUTUALLY EXCLUSIVE with,
+# i.e. by two sliders a user cannot reach while this is the effect that is
+# on. Three things are measured, because three different things could break:
+#
+#   ag-speed-brighten   THE POINT OF THE FEATURE. The same dark -> bright
+#                       step at a fast, a default and a slow setting: the
+#                       time for the exponent to come within 5 % of where it
+#                       lands must grow with the slider. Reported against
+#                       the closed form (3 tau) rather than only against
+#                       each other, and each trace carries the tau the frame
+#                       actually used (`ab_log`'s tau= field), so a slider
+#                       that silently did not take shows up as a wrong tau
+#                       instead of a mysterious time.
+#   ag-speed-asymmetry  WHY THERE ARE TWO of them. With "adapt to brighter"
+#                       fast and "adapt to darker" slow, a brightening step
+#                       and a darkening step must settle at visibly
+#                       different times -- the capability a single combined
+#                       speed could not express.
+#   ag-stability-*-fast STABILITY MUST NOT REGRESS AT THE FAST END. The
+#                       2026-09-07 pulse fix's own bar (a still frame moves
+#                       by nothing at all, a --periodic pan by noise), rerun
+#                       at the FASTEST setting the slider reaches -- where
+#                       an oscillation would appear first, because that is
+#                       where the EMA hides the least.
+# ---------------------------------------------------------------------------
+set_bloom 0
+set_ab 0
+ag_defaults
+set_ag 1
+
+# 800 composites is ~13 s at 60 Hz: 3 tau at the slowest setting tested here
+# is 9 s, so the trace outlives the transition it is timing. The log wait has
+# to outlive the trace, hence the timeout bump.
+AG_SETTLE_FRAMES=800
+AB_LOG_TIMEOUT_S=60
+
+# The client's scene ring is dark,bright,mid,texdark,halfsplit,halobox,
+# haloinv,colors and the Bloom block above left it on `bright`, so 7 single
+# advances wrap back round to `dark` -- one per frame, per advance_scenes'
+# own warning about collapsing signals.
+declare -a AG_SPEED_SPECS=()
+for spec in "fast 0.3" "default 1.0" "slow 3.0"; do
+	L="${spec%% *}"; T="${spec##* }"
+	set_ag_speed "$T" "$T"
+	advance_scenes 7          # -> dark
+	# Settle INTO dark at this same tau before timing the step out of it:
+	# an unsettled start would make the first frame's exponent, and so the
+	# 5 %-of-span target, a different number for every speed.
+	sleep "$(python3 -c "print(max(6.0, 7.0 * $T))")"
+	arm_ab_log "$AG_SETTLE_FRAMES"
+	next_scene                # -> bright: the statistics RISE, so `up` applies
+	wait_ab_log "$AG_SETTLE_FRAMES" "$OUT_DIR/ablog-20-ag-speed-$L.txt"
+	AG_SPEED_SPECS+=( "$L:$T:$OUT_DIR/ablog-20-ag-speed-$L.txt" )
+done
+run_sampler agsettle ag-speed-brighten 3.0 "${AG_SPEED_SPECS[@]}"
+
+# The asymmetry, on the two directions of the same ring: dark -> bright
+# rises (so `up` is the constant in play) and bright -> mid falls (`down`).
+# Both are SINGLE hops, so each trace times one clean step.
+set_ag_speed 0.3 3.0
+advance_scenes 7             # -> dark
+sleep 24                     # settling into dark is a FALL, i.e. at down=3.0
+arm_ab_log "$AG_SETTLE_FRAMES"
+next_scene                   # -> bright
+wait_ab_log "$AG_SETTLE_FRAMES" "$OUT_DIR/ablog-20-ag-asym-up.txt"
+arm_ab_log "$AG_SETTLE_FRAMES"
+next_scene                   # -> mid
+wait_ab_log "$AG_SETTLE_FRAMES" "$OUT_DIR/ablog-20-ag-asym-down.txt"
+run_sampler agsettle ag-speed-asymmetry 3.0 \
+	"brighten:0.3:$OUT_DIR/ablog-20-ag-asym-up.txt" \
+	"darken:3.0:$OUT_DIR/ablog-20-ag-asym-down.txt"
+
+# Stability at the FASTEST the slider goes. Still first, then panning --
+# the same polarity trap the two blocks above document: the sections before
+# this one leave the client's motion PAUSED.
+set_ag_speed 0.1 0.1
+advance_scenes 1             # -> texdark, the continuous-histogram scene
+sleep "$ADAPT_SETTLE_S"      # the same "let the EMA arrive" wait as above
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-20-ag-fast-static.txt"
+run_sampler ablog "$OUT_DIR/ablog-20-ag-fast-static.txt" agstatic
+toggle_motion
+sleep "$ADAPT_SETTLE_S"
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-20-ag-fast-pan.txt"
+run_sampler ablog "$OUT_DIR/ablog-20-ag-fast-pan.txt" agpan
+toggle_motion                # leave the client as it was found
+take_screenshot 20-texdark-ag-fast >/dev/null   # the picture behind the numbers
+
+ag_defaults
+set_ag 0
 
 END_TS=$(date +%s)
 {

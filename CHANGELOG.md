@@ -12,6 +12,10 @@ The newest version below is the one this build reports.
 ## [0.7.0] – 2026-09-09
 
 ### Added
+- **Adaptive Gamma has its own adaptation speed**: two sliders, Adapt to brighter and
+  Adapt to darker, set how long it takes to settle after the scene changes, exactly as
+  Adaptive Brightness's do, and can be set differently so it reacts quickly one way and
+  eases slowly the other.
 - **The display database now ships inside gamescope-ritz**: the bundled screen
   profiles that set HDR, colour and refresh timings for known handhelds are compiled
   into the program, so they are always there -- there is nothing to install beside it
@@ -25,6 +29,10 @@ The newest version below is the one this build reports.
   Click one and Steam moves you in without relaunching anything.
 
 ### Fixed
+- **Adaptive Gamma no longer adapts at Adaptive Brightness's speed**: it used to follow
+  that effect's two speed sliders even though turning one effect on turns the other off,
+  so the only way to change how fast it reacted was to switch effects, move a slider
+  there and switch back. It now uses its own.
 - **The friends list no longer moves under you**: the highlighted row now follows the
   person you picked when the list reorders itself, instead of staying on a row number
   and quietly selecting somebody else.

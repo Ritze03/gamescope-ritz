@@ -172,11 +172,12 @@ grades its pixels.
 | `float u_vibrancy` | 0..2, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
-| `float u_abTarget, u_abUp, u_abDown, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's six original parameters, straight from config (both modes read all six — see the Dynamic section for what each means there) |
+| `float u_abTarget, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's own parameters, straight from config (both modes read all of them — see the Dynamic section for what each means there) |
+| `float u_adaptUp, u_adaptDown` | The EMA's two time constants, seconds — **the ACTIVE adaptive effect's**, not necessarily Adaptive Brightness's (renamed from `u_abUp`/`u_abDown` 2026-09-09, when Adaptive Gamma got its own pair). The two effects cannot both be on, so one EMA serves both and the host picks; clamped to the panel's own 0.1 s floor, and floored again by `ema_alpha()` |
 | `float u_abDt` | seconds since the previous effects dispatch, host-measured and clamped (see Adaptive Brightness) |
 | `float u_abLocal` | Local adaptation, 0..1. **Masked to 0 by the host in Whole image mode** (`EffectsPushData_t`'s constructor) rather than in the shader, so the uniform says exactly what the frame did — which is what `effects_ab_log` prints |
 | `float u_bloomThreshold, u_bloomIntensity, u_bloomRadius` | Bloom's three parameters (added 2026-09-08). Threshold and Radius are read by the two dispatches that build the glow, Intensity only by the composite; all three are masked to their neutral values (1.0 / 0.0 / 0.0) when the effect is off, for the same "the uniform says what the frame did" reason as `u_abLocal` |
-| `float u_agTarget, u_agMaxLift, u_agMaxDarken, u_agStrength, u_agLocal` | Adaptive Gamma's five parameters (added 2026-09-08). **All masked to their neutral values by the host whenever Adaptive Brightness is also on**, for the same "the uniform says what the frame did" reason as `u_abLocal` — see [the exclusion](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive) |
+| `float u_agTarget, u_agMaxLift, u_agMaxDarken, u_agStrength, u_agLocal` | Adaptive Gamma's five *curve* parameters (added 2026-09-08; its two speeds reach the shader through `u_adaptUp`/`u_adaptDown` above instead, because the EMA is shared). **All masked to their neutral values by the host whenever Adaptive Brightness is also on**, for the same "the uniform says what the frame did" reason as `u_abLocal` — see [the exclusion](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive) |
 
 Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
 struct written by `PanelShaders.cpp` and by `main.cpp`'s startup config apply, read by
@@ -992,13 +993,25 @@ image, the 25..75 % window by neither (anything in the top quarter is outside it
 
 ```
 tau      = measured > adapted ? up_speed : down_speed
-alpha    = clamp(1 - exp(-dt / max(tau, 0.001)), 0, 1)
+alpha    = ema_alpha(dt, tau)                     // effects_curve.h, unit-tested
 adapted' = mix(adapted, measured, alpha)          // written to its history texel
 ```
 
+**Whose `up_speed` / `down_speed`: the *active* effect's** (`u_adaptUp` / `u_adaptDown`,
+renamed from `u_abUp` / `u_abDown` 2026-09-09). There is **one** EMA over statistics
+neither effect owns, and the two adaptive effects are mutually exclusive, so the host
+simply hands the shader whichever pair applies — see
+[Adaptation speed](#adaptation-speed-2026-09-09--adaptive-gammas-own-pair) for the
+correction this was, and note that it is *not* a case of Adaptive Gamma "sharing"
+Adaptive Brightness's speeds deliberately: until 2026-09-09 it had none of its own and
+was driven by sliders unreachable while it was the effect that was on.
+
 `up_speed` is the time constant while a statistic **rises** (the scene got brighter; the
 picture will be dimmed), `down_speed` while it **falls** (the scene got darker; the picture
-will be lifted). The panel now says exactly that — "Adapt to brighter" / "Adapt to darker",
+will be lifted). `tau` is **seconds to ~63 % of a step**, so the settling time a user
+observes is **3 tau** — measured at 907 / 3000 / 8511 ms for tau 0.3 / 1.0 / 3.0 s
+([the table below](#measured-the-speed-control-2026-09-09)) against a closed form of
+900 / 3000 / 9000. The panel now says exactly that — "Adapt to brighter" / "Adapt to darker",
 retitled 2026-09-06 from "Brighten speed" / "Darken speed", whose help text described the
 opposite direction to the one the code used. Defaults are symmetric (1 s / 1 s); the eye
 adapts to brightness faster than to darkness, and a game wants the blown-out case fixed
@@ -1970,6 +1983,8 @@ thing that a gain cannot be, for a reason that is arithmetic rather than taste (
 
 **Config**: `ReshadeAdaptiveGammaSettings` (`ConfigSchema.h`) — `enabled` (false),
 `target_luminance` (0.5), `max_lift` (4.0), `max_darken` (1.5), `strength` (1.0),
+`adapt_up_speed` (1.0) and `adapt_down_speed` (1.0) (both added 2026-09-09, see
+[Adaptation speed](#adaptation-speed-2026-09-09--adaptive-gammas-own-pair)),
 `local_strength` (0.0). Purely additive keys, so `kCurrentSchemaVersion` stays **4** and
 there is no migration: an old profile has none of them and takes these compiled-in
 defaults, exactly the shape [Shadow Control](#shadow-control-imageshadersshadow_lift) was
@@ -2145,6 +2160,166 @@ leaves `image.shaders.adaptive_brightness` reading **off**. The three captures e
 of those flips read frame means **128.2 | 129.1 | 128.3** — one effect's picture or the
 other's, and back again, never the ~212 a compounded frame would be.
 
+#### Adaptation speed (2026-09-09) — Adaptive Gamma's own pair
+
+The user's request, verbatim: *"For adaptive gamma, there should also be some value, to
+adjust the speed of it."*
+
+**First, the correction, because the previous text implied something that was not true.**
+Adaptive Gamma shipped on 2026-09-08 with no speed setting at all. It was not sharing
+Adaptive Brightness's on purpose, and it was not "using the defaults" — the measure pass's
+EMA simply read `u_abUp` / `u_abDown` unconditionally, i.e. `reshade.adaptive_brightness`'s
+`adapt_up_speed` / `adapt_down_speed`, whatever effect was on. Because the two effects are
+[mutually exclusive](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive), that meant
+Adaptive Gamma's adaptation rate was governed by **two sliders that are not reachable while
+Adaptive Gamma is the effect running**: to change how fast it followed the scene you had to
+turn it off, switch to Adaptive Brightness, move a slider there, and switch back — and
+nothing in the panel said so. That is an omission with a user-visible consequence, so it is
+filed under *Fixed* as well as *Added* in the changelog.
+
+**Two controls, not one.** The request says "some value", singular, and Adaptive Gamma's
+whole identity is being the effect with fewer knobs — so this was decided against that
+grain rather than by symmetry with Adaptive Brightness:
+
+- The **plumbing is free either way.** The EMA already takes two time constants; a single
+  combined speed would be implemented as `up = down = one_value`, i.e. a *restriction* of
+  what the shader can already express, not a simplification of anything. Shipping one
+  would cost a capability and save no code.
+- The **asymmetry is measurable and large.** With `Adapt to brighter` at 0.3 s and
+  `Adapt to darker` at 3.0 s, a brightening step settles in **320 ms** and a darkening step
+  in **10 495 ms** — a factor of 33 on the same picture
+  ([`ag-speed-asymmetry`](#measured-the-speed-control-2026-09-09)). "Quick to react when a
+  light comes on, slow to open up as it goes dark" is a real setting; one number cannot
+  express it, and it is precisely the argument that kept Adaptive Brightness's own pair
+  intact when [the budget was tight](#the-budget-decision-seven-params-not-six-2026-0607).
+- **This row already pairs its directions.** `Max lift` and `Max darken` are one bound
+  each way, deliberately, for exactly the reason a floor and a ceiling are not one number.
+  A single speed would have been the only control on the row that collapsed a direction.
+- **What one would have cost, stated rather than waved at:** nothing in code, and the
+  whole of the 33× above in behaviour. What *two* costs is one Inspector row.
+
+**The params**: `Adapt to brighter` (`up_speed`) and `Adapt to darker` (`down_speed`),
+both `0.1 .. 5.0 s`, step 0.1, default **1.0** — the same range, step, unit, titles and
+help wording as Adaptive Brightness's, and the same defaults **on purpose**: switching
+between the two mutually exclusive effects must not change how fast the picture follows
+the scene, and a user who has tuned one row's feel should find the other starting from the
+same place. `test_effects_curve.cpp` asserts the two defaults are equal to Adaptive
+Brightness's rather than just equal to 1.0, so they cannot drift apart silently.
+
+**The plumbing: one EMA, the host picks.** `EffectsPushData_t` sets
+`u_adaptUp` / `u_adaptDown` from Adaptive Gamma's pair when Adaptive Gamma is the effect
+running and from Adaptive Brightness's otherwise. `Why that is safe and not a race:` the
+measure pass smooths statistics **neither effect owns** (it grades its taps and knows
+nothing about either), the exclusion is resolved in the same constructor that drops
+Adaptive Gamma's flag, and `g_nativeEffects` is read once into a local `state` per
+composite on the steamcompmgr thread — so there is no frame that wants both pairs and no
+torn read that could produce one. A second EMA, a second history row and a second dispatch
+were all avoidable, and were avoided. **With neither effect on**, the EMA keeps Adaptive
+Brightness's pair: the history is still tracked whenever any effect runs the pre-pass, and
+that is the row whose sliders a user can see. Both values are clamped to the panel's own
+0.1 s floor in the host — the same rule `u_agStrength`, `u_agLocal`, `u_abLocal` and the
+three Bloom fields already follow in that constructor, so the uniform says exactly what
+the frame did and a hand-edited value below any reachable slider position cannot become a
+speed nobody can see or set — and `ema_alpha()` floors tau again in the shader, so even a
+`0` is "as fast as the control goes", never a frozen history and never a divide by zero.
+
+**The binding readout is unchanged, and that is a decision.** [`ag_binding()`](#which-limit-is-binding)
+has four codes because every control on the row *could be inert*: Target when the exponent
+clamps, the two limits when it does not, Strength at 0. **A speed cannot be inert.** It
+clamps nothing and gates nothing — it only decides *when* the exponent arrives at a value
+the other controls already determined, and the slider's own floor of 0.1 s (with the host's
+and `ema_alpha()`'s floors under it) means no reachable setting stops the picture adapting.
+`test_effects_curve.cpp`'s "no setting can freeze the history" case pins that, including
+for a hand-edited `0` or a negative. So there is no fifth code: adding one would have to
+say "your speed is fine", which is not a limit and is not something the row's other
+controls need warning about. The trace *does* now report the pair (`tau=<up>/<down>` on
+every `effects_ab_log` line), because "what speed did this frame actually run at" is a
+measurement question, not a UI one.
+
+##### Measured: the speed control (2026-09-09)
+
+`scripts/effects-regression.sh`'s new `ag-speed-*` checks, same headless recipe as
+everything else here. The step is the client's `dark` → `bright` switch; `t0` is the frame
+the raw statistics jump (found in the data, not assumed from a sleep) and **t95** is the
+first frame after it within 5 % of where the trace lands. Captures and traces:
+`build-release/verify-shots/adaptive-gamma-speed-2026-09-09/`.
+
+| `Adapt to brighter` = `Adapt to darker` | closed form (3 tau) | **statistic** (smoothed p50) | **picture** (the exponent) |
+| --- | --- | --- | --- |
+| 0.3 s (fast) | 900 ms | **907 ms** | **336 ms** |
+| 1.0 s (default) | 3000 ms | **3000 ms** | **1094 ms** |
+| 3.0 s (slow) | 9000 ms | **8511 ms** | **3319 ms** |
+
+Two columns because they answer two questions, and reporting only one of them would
+mislead. The **statistic** is the EMA's own output and lands **exactly** on the closed
+form at the default (3000 against 3000) and within 1 % at the fast end; the slow row reads
+5 % short only because an 800-frame trace is 13 s and the reference "settled" value is the
+last frame of it. The
+**picture** arrives *sooner* than the statistic on this particular step because the
+exponent saturates against `Max darken` (1.5) partway through — the frame is on the
+brightest reference scene, where the target asks for an exponent of about 6.4 — so the
+visible change is over before the median has finished moving. That is the clamp working,
+not the EMA running fast, and it is why the exponent's times come out at a near-constant
+**1.1 × tau** rather than 3 ×. What matters for the control is that both columns scale
+**linearly with the slider**, which they do: 336 / 1094 / 3319 is 1.12, 1.09, 1.11 seconds
+of settling per second of tau.
+
+**The asymmetry** (`ag-speed-asymmetry`, PASS), with the two set differently — brightening
+measured on `dark` → `bright` (the statistics **rise**, so `Adapt to brighter` applies) and
+darkening on `bright` → `mid` (they **fall**), both single scene hops:
+
+| direction | setting | closed form | **picture** t95 |
+| --- | --- | --- | --- |
+| brightening (`Adapt to brighter` 0.3 s) | fast | 900 ms | **319 ms** |
+| darkening (`Adapt to darker` 3.0 s) | slow | 9000 ms | **10 495 ms** |
+
+A factor of **33** between the two directions of the same effect, from two sliders — the
+capability a single combined speed could not have. (The darkening leg reads slightly
+*above* its closed form because its exponent starts pinned at `Max darken` and has to come
+off the clamp before it starts moving; the brightening leg reads below it for the mirror
+reason.)
+
+Every trace carries the time constants the frame actually used, appended to each
+`effects_ab_log` line as `tau=<up>/<down>`, and the check **asserts** that they match the
+setting it claims to have measured — so a slider that silently did not take shows up as a
+wrong tau rather than as a mysterious settling time.
+
+##### Stability at the fast end
+
+The [2026-09-07 pulse fix](#the-pulse-rank-cuts-on-a-bimodal-histogram-2026-09-07)'s bar,
+rerun at **0.1 s — the fastest the slider goes**, which is where an oscillation would
+appear first because that is where the EMA hides the least:
+
+| `texdark`, Local 0 % | raw p98 p2p | exponent p2p | output pixel p2p | smoothed p98 p2p |
+| --- | --- | --- | --- | --- |
+| still frame, tau 0.1 s | **0** | **0.000000** | **0** | 0.000 codes |
+| panning (`--periodic`), tau 0.1 s | 11.3 codes | **0.00051** | 76 (the probe moves with the texture) | 3.41 codes |
+| panning, tau 1.0 s (for comparison) | 11.3 codes | 0.00007 | 147 | 0.57 codes |
+
+A still frame is **exactly constant at the fastest setting** — peak-to-peak zero on the
+raw measurement, on the exponent and on the output pixel — and under a pan the exponent
+moves by five ten-thousandths, two orders of magnitude below the check's own bound and
+three below what the pulse looked like. **No pulse at any speed.**
+
+The one number that does grow is the **smoothed p98's** spread, 0.57 → 3.41 codes, and
+that is arithmetic rather than a regression: for `x' = (1 - a) x + a m` with white
+measurement noise the settled output's standard deviation is `sigma * sqrt(a / (2 - a))`,
+so a smoothed statistic's spread is a property of **the smoothing**, and asking for a
+tenth of the smoothing gets about 3.2 × the noise through (measured 6 × on peak-to-peak,
+which is the noisier statistic of the two). Holding a 0.1 s trace to a 1 s bound would
+therefore have failed the EMA for doing exactly what the slider asked. So
+`effects_regression_sample.py`'s `agpan` check **scales that one bound by the trace's own
+tau** (`ema_noise_gain()`), and leaves the exponent's and the raw estimator's bounds
+absolute — the picture must not move at any speed, and the raw measurement has no EMA in
+it. At the default 1 s the scaled bound is exactly the 3 codes it always was, so nothing
+about the existing checks changed.
+
+**Adaptive Brightness is unaffected**, measured rather than assumed: its `transition-gain`,
+`temporal-band2`, `stability-pan` and three `stability-static-local*` checks all pass with
+the same numbers as before this change, and its own two sliders still drive it — the host
+only ever hands the shader Adaptive Gamma's pair on a frame where Adaptive Gamma is the
+effect running.
+
 #### The Inspector's before/after preview
 
 The row declares the **same** `PreviewKind::AdaptiveBrightness` strip, deliberately: the
@@ -2241,11 +2416,13 @@ the switch, which is the shape rejected above; and an audit that reports the sam
 intentional write as a bug on every future run trains people to ignore it.
 
 **Row count and the parameter budget.** The Effects band went from 5 switch rows to
-**6**. Adaptive Gamma owns **5** params (Strength, Target brightness, Max lift, Max
-darken, Local adaptation) against `kParamBudget`'s 8 — comfortably inside it, and
-deliberately: it has fewer knobs because it has fewer mechanisms (no gain to bound, no
-shadow cap, no mode). Adaptive Brightness is still the only row in the registry above two
-params, and the budget was **not** raised for this change. The Effects band's row count
+**6**. Adaptive Gamma owns **7** params — Strength, Target brightness, Max lift, Max
+darken, **Adapt to brighter**, **Adapt to darker** (both added 2026-09-09) and Local
+adaptation — against `kParamBudget`'s 8. It was **5** when the effect shipped on
+2026-09-08; the two speeds took it to seven, one under the ceiling, and **the budget was
+not raised** for either change. It still has fewer knobs than Adaptive Brightness because
+it has fewer mechanisms (no gain to bound, no shadow cap, no mode), and the two rows now
+differ by exactly the one param Adaptive Brightness has and this one cannot: Mode. The Effects band's row count
 went from 6 to **7** the same day, when [Bloom](#bloom-imageshadersbloom--new-2026-09-08)
 landed after it.
 
@@ -2257,9 +2434,10 @@ raised from six 2026-09-06 (request #17, see the
 for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below). See
 `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
 Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Bloom 3 (new 2026-09-08),
-Adaptive Brightness 8 (zero headroom), Adaptive Gamma 5 (new 2026-09-08), Shadow Control
-1. **The budget was not raised again** for Adaptive Gamma or for Bloom and did not need
-to be — see each effect's own section for why five and three params are their honest
+Adaptive Brightness 8 (zero headroom), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two
+adaptation speeds 2026-09-09), Shadow Control
+1. **The budget was not raised again** for Adaptive Gamma, for Bloom or for Adaptive
+Gamma's speeds, and did not need to be — see each effect's own section for why five and three params are their honest
 counts rather than a squeeze.
 
 **The second raise, 7 → 8 (2026-09-07), and the debt it books.** The note left after the
@@ -2291,10 +2469,16 @@ Adaptive Brightness's state for the next N composites, one line each on `console
 (so `gamescopectl effects_ab_log 300` shows it live, and it lands in gamescope's log):
 
 ```
-ab_log n=<i> t=<ms> dt=<ms> <off|whole|dynamic> raw mean=… p2=… p50=… p98=…
+ab_log n=<i> t=<ms> dt=<ms> <off|whole|dynamic|gamma> raw mean=… p2=… p50=… p98=…
        smooth mean=… p2=… p50=… p98=… gain=… gamma=… px(<x>,<y>)=<r>,<g>,<b>
-       local=… lmin=… lmax=… lprobe=… gainlo=… gainhi=…
+       local=… lmin=… lmax=… lprobe=… gainlo=… gainhi=… bind=<n> (<text>)
+       tau=<up>/<down>
 ```
+
+`tau` (2026-09-09) is the EMA's two time constants **as the frame actually used them** —
+the active effect's, which since Adaptive Gamma got [its own pair](#adaptation-speed-2026-09-09--adaptive-gammas-own-pair)
+is no longer always Adaptive Brightness's. Appended at the end, so a parser written
+against an older line still matches.
 
 `raw` is this frame's measurement, `smooth` the history the pixel pass read, `gain` and
 `gamma` are recomputed on the host with the same `effects_curve.h` the shader compiles,
