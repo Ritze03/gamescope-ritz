@@ -92,8 +92,12 @@ underscores), so the user's real "Gamescope-Ritz" module by "Ritze" already live
 name instead would create a **second** module with the same `Author::Name::Version`
 identity sitting next to the first — exactly the duplication this fork is trying not to
 cause. Targeting the same filename makes an install an **in-place overwrite** of that
-one module rather than a second copy, and the prompt says so plainly (and defaults to
-declining) whenever a file is already there.
+one module rather than a second copy, and the prompt says so plainly whenever a file is
+already there. The install offer itself defaults to **accepting** (2026-09-09) — Ritz
+being detected means installing this module is part of a normal working install for
+this user, and `n` still declines it — while the **remove** prompt below keeps
+defaulting to declining, since deleting is the one direction Enter must never take by
+surprise.
 
 `--update` refreshes that file only if it was previously installed and differs from the
 repo's copy. `--remove` offers to delete only that one file — nothing else in

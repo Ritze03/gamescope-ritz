@@ -28,6 +28,15 @@ The newest version below is the one this build reports.
 - **The friends list no longer moves under you**: the highlighted row now follows the
   person you picked when the list reorders itself, instead of staying on a row number
   and quietly selecting somebody else.
+- **The About page's rail icon is an info symbol now**: the old changelog-style list
+  icon stopped making sense once the page became About, so it was replaced with a
+  circled "i".
+- **Pressing Enter through the installer now gives a working install**: every prompt
+  shows and defaults to the choice that finishes a normal install -- the top-level
+  menu, the symlink/copy choice, and (when Ritz is detected) installing its launcher
+  extension. A destination that already matched now says so plainly instead of
+  reading like a step had just run, and the remove path's own prompts still default
+  to declining, so Enter there deletes nothing.
 
 ### Removed
 - **The "install extras" question**: the installer no longer asks whether to copy

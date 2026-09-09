@@ -27,12 +27,13 @@
 # Usage:
 #   ./install.sh [--install|--remove|--update] [options]
 #
-# Actions (choose at most one; no action = interactive menu):
+# Actions (choose at most one; no action = interactive menu, Enter defaults
+# to Install/reinstall):
 #   --install           check deps, build a release binary if needed, install
 #                       it (symlink or copy — asked interactively unless
-#                       --link/--copy is given). If a Ritz install is
-#                       detected, also offers to install this repo's Ritz
-#                       launcher extension.
+#                       --link/--copy is given; Enter defaults to symlink).
+#                       If a Ritz install is detected, also offers to install
+#                       this repo's Ritz launcher extension (Enter accepts).
 #   --remove            uninstall the binary/symlink this installed. Also
 #                       offers to delete a leftover share/gamescope-ritz
 #                       directory from an older install (nothing needs one
@@ -114,7 +115,7 @@ RITZ_EXT=""         # "" = ask, "yes", "no" (--with-ritz-extension / --no-ritz-e
 # --no-ritz-extension and the Examples block were documented in the file and
 # unreachable from --help. Corrected here because this line had to be touched
 # anyway (the --extras/--no-extras entries above it are gone).
-print_help() { sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 set_action() {
 	if [ -n "$ACTION" ] && [ "$ACTION" != "$1" ]; then
@@ -306,7 +307,7 @@ ritz_extension_prompt() {
 			return 0
 		fi
 		if cmp -s -- "$src" "$dst" 2>/dev/null; then
-			gcr_info "Ritz extension: $dst is already up to date."
+			gcr_info "Ritz extension: $dst already matches this repo's copy — nothing to refresh."
 			return 0
 		fi
 		if [ "$RITZ_EXT" = "no" ]; then
@@ -326,7 +327,7 @@ ritz_extension_prompt() {
 
 	# mode = "install"
 	if [ -f "$dst" ] && cmp -s -- "$src" "$dst" 2>/dev/null; then
-		gcr_info "Ritz extension: $dst is already up to date."
+		gcr_info "Ritz extension: $dst already matches this repo's copy — nothing to install."
 		return 0
 	fi
 	if [ "$RITZ_EXT" = "no" ]; then
@@ -344,7 +345,7 @@ ritz_extension_prompt() {
 			echo "values for this module carry over — but any hand-edits made"
 			echo "directly to that file will be lost."
 		fi
-		gcr_confirm "Install it to $dst?" n || {
+		gcr_confirm "Install it to $dst?" y || {
 			gcr_info "skipped the Ritz extension. Re-run with --with-ritz-extension later if you want it."
 			return 0
 		}
@@ -425,7 +426,8 @@ do_install() {
 			echo "     live immediately, no root required again). Breaks if you"
 			echo "     move or delete this repo."
 			echo "  2) copy (independent of this repo; --update copies again)"
-			read -r -p "Choose [1/2]: " choice
+			read -r -p "Choose [1/2, default 1]: " choice
+			choice="${choice:-1}"
 			case "$choice" in
 				1) MODE="link" ;;
 				2) MODE="copy" ;;
@@ -482,7 +484,7 @@ do_remove() {
 		else
 			gcr_info "$TARGET is a regular file ($(du -h -- "$TARGET" | cut -f1))."
 		fi
-		gcr_confirm "Remove $TARGET?" y || { gcr_info "aborted, nothing removed."; exit 1; }
+		gcr_confirm "Remove $TARGET?" n || { gcr_info "aborted, nothing removed."; exit 1; }
 		GCR_PRIV_DIR="$PREFIX_DIR"
 		gcr_as_priv rm -f -- "$TARGET"
 		gcr_info "removed $TARGET."
@@ -496,7 +498,7 @@ do_remove() {
 			*/share/gamescope-ritz)
 				gcr_info "found $data_dir — a leftover from an install made before the"
 				gcr_info "bundled scripts and licences moved inside the binary. Nothing needs it."
-				if gcr_confirm "Also remove $data_dir?" y; then
+				if gcr_confirm "Also remove $data_dir?" n; then
 					GCR_PRIV_DIR="$prefix_root"
 					gcr_as_priv rm -rf -- "$data_dir"
 					gcr_info "removed $data_dir."
@@ -622,12 +624,13 @@ interactive_menu() {
 	echo "  2) Update (git pull + rebuild + reinstall in place)"
 	echo "  3) Remove"
 	echo "  4) Quit"
-	read -r -p "Choose [1-4]: " choice
+	read -r -p "Choose [1-4, default 1]: " choice
+	choice="${choice:-1}"
 	case "$choice" in
 		1) do_install ;;
 		2) do_update ;;
 		3) do_remove ;;
-		4|"") gcr_info "nothing to do." ;;
+		4) gcr_info "nothing to do." ;;
 		*) gcr_err "invalid choice: $choice"; exit 1 ;;
 	esac
 }
