@@ -64,6 +64,24 @@ uniform effects_t {
     float u_bloomThreshold;   // 0.0..1.0, where a pixel starts to glow
     float u_bloomIntensity;   // 0.0..2.0, how bright the glow is; 0 = off
     float u_bloomRadius;      // 0.0..1.0 -> effects_curve.h's bloom_sigma()
+
+    // ---- Brightness Map (NEW 2026-09-09, EXPERIMENTAL) ----
+    // The second SPATIAL effect, and the only one that reads a low-pass of
+    // the frame's own luminance rather than a statistic of it: three extra
+    // dispatches build the map (cs_effects_bmap_down.comp, then
+    // effects_bmap_blur.h twice) and cs_effects_layer0.comp divides the
+    // picture by it against u_bmapTarget. It touches NOTHING the measure
+    // pass produces -- no histogram, no percentile, no EMA -- which is why
+    // it has no exclusion with either adaptive effect. The scalar half of
+    // the maths is effects_curve.h's BRIGHTNESS MAP block, so the unit
+    // tests assert it on the same text. Every field is masked to its
+    // neutral value by the host when the effect is off, the same rule the
+    // Bloom fields above follow.
+    float u_bmapTarget;       // 0.1..0.9, the level everything is flattened toward
+    float u_bmapStrength;     // 0.0..1.0, the map's opacity; 0 = exact identity
+    float u_bmapMin;          // 0.02..0.50, the map's floor (see bmap_level())
+    float u_bmapMax;          // 0.50..0.90, the map's ceiling
+    float u_bmapRadius;       // 0.0..1.0 -> effects_curve.h's bmap_sigma()
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -152,6 +170,30 @@ const int AB_PREVIEW_H = 144;
 // box mean is also exactly the right prefilter for a reduction this large.
 const int BLOOM_DOWN = 8;
 
+// ---- The brightness map's buffer (2026-09-09) -----------------------------
+//
+// The map is built at 1 / BMAP_DOWN of the base layer's size in each axis
+// and sampled back bilinearly, exactly as the glow buffer is. Mirrored by
+// kEffectsBmapDown in rendervulkan.cpp -- keep the two in step.
+//
+// `Why the same 8 as Bloom, and why that is fine enough here:` this effect's
+// whole reason to exist is resolving a PLAYER-SIZED object, so the reduction
+// is the one number that had to be justified rather than inherited. At 1/8 a
+// 1920x1080 frame gives a 240x135 map -- about 25x finer per axis than the
+// 16x16 grid Adaptive Gamma's local adaptation uses, whose blur reaches
+// sigma ~565 px at that resolution and so cannot see a player at all. The
+// map's own texel is an 8-pixel box, i.e. a feature already smaller than
+// anything the operator is meant to correct individually, and the Radius
+// slider's floor (BMAP_SIGMA_MIN, one texel) sits exactly there. Going to
+// 1/4 would quadruple both blur passes to resolve features the blur is
+// deliberately removing anyway.
+//
+// `Why the down pass still reads EVERY source pixel:` the same argument
+// BLOOM_DOWN gives -- a sparse sampling would make the map of a small object
+// appear and disappear as the grid slid over it under camera motion, which
+// on a TONE operator is a pumping exposure rather than a flickering glow.
+const int BMAP_DOWN = 8;
+
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
 // Renamed from EFFECT_VIBRANCY/EFFECT_VIBRANCY_SKIN 2026-09-08 -- see
@@ -178,6 +220,12 @@ const uint EFFECT_ADAPTIVE_GAMMA      = 1u << 7;
 // cs_effects_layer0.comp (the host simply does not record the three
 // dispatches when it is clear).
 const uint EFFECT_BLOOM               = 1u << 8;
+// NEW 2026-09-09: Brightness Map (EXPERIMENTAL) -- the second spatial
+// effect. Like Bloom's bit this gates only the composite in
+// cs_effects_layer0.comp; the three dispatches that build the map are
+// simply not recorded when it is clear (and the host clears it when the
+// strength is 0, so "strength 0" costs nothing as well as changing nothing).
+const uint EFFECT_BRIGHTNESS_MAP      = 1u << 9;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;

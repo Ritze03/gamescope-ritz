@@ -277,6 +277,21 @@ namespace gamescope::config
                     bl.radius = JGetFloat( *pBloom, "radius", bl.radius );
                 }
 
+                // NEW 2026-09-09: Brightness Map (EXPERIMENTAL) -- see
+                // ConfigSchema.h's ReshadeBrightnessMapSettings. Additive
+                // keys; an old config has none of them and keeps the
+                // compiled-in defaults, so no schema bump.
+                if ( const nlohmann::json *pBmap = JGetObject( *pReshade, "brightness_map" ) )
+                {
+                    auto &bm = s.reshade.brightness_map;
+                    bm.enabled = JGetBool( *pBmap, "enabled", bm.enabled );
+                    bm.strength = JGetFloat( *pBmap, "strength", bm.strength );
+                    bm.radius = JGetFloat( *pBmap, "radius", bm.radius );
+                    bm.target_luminance = JGetFloat( *pBmap, "target_luminance", bm.target_luminance );
+                    bm.min_brightness = JGetFloat( *pBmap, "min_brightness", bm.min_brightness );
+                    bm.max_brightness = JGetFloat( *pBmap, "max_brightness", bm.max_brightness );
+                }
+
                 if ( const nlohmann::json *pAdaptive = JGetObject( *pReshade, "adaptive_brightness" ) )
                 {
                     auto &ab = s.reshade.adaptive_brightness;
@@ -546,6 +561,15 @@ namespace gamescope::config
             jBloom[ "intensity" ] = bl.intensity;
             jBloom[ "radius" ] = bl.radius;
 
+            const auto &bm = s.reshade.brightness_map;
+            nlohmann::json jBmap = nlohmann::json::object();
+            jBmap[ "enabled" ] = bm.enabled;
+            jBmap[ "strength" ] = bm.strength;
+            jBmap[ "radius" ] = bm.radius;
+            jBmap[ "target_luminance" ] = bm.target_luminance;
+            jBmap[ "min_brightness" ] = bm.min_brightness;
+            jBmap[ "max_brightness" ] = bm.max_brightness;
+
             const auto &ab = s.reshade.adaptive_brightness;
             nlohmann::json jAdaptive = nlohmann::json::object();
             jAdaptive[ "enabled" ] = ab.enabled;
@@ -579,6 +603,7 @@ namespace gamescope::config
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "bloom" ] = std::move( jBloom );
+            jReshade[ "brightness_map" ] = std::move( jBmap );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
             jReshade[ "adaptive_gamma" ] = std::move( jAdaptiveGamma );
             jReshade[ "shadow_lift" ] = std::move( jShadowLift );

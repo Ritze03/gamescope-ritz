@@ -394,6 +394,67 @@ namespace gamescope::config
         float radius = 0.5f;
     };
 
+    // NEW 2026-09-09, EXPERIMENTAL. The user: *"Adaptive Gamma: When the
+    // world is rather bright and player models are rather dark, the player
+    // models turn almost black... Lets add an experimental mode, that
+    // creates a brightness map of the whole image and then adjusts based on
+    // that. It should invert that map and then apply it to the image... The
+    // 'opacity' of this map (strength) should be adjustable. It should also
+    // make it easier, to adjust the min and max brightness within the
+    // image. It should be a seperate shader in the GUI"*
+    //
+    // A purely spatial local tone operator -- src/shaders/effects_curve.h's
+    // BRIGHTNESS MAP block has the formula and every "why". Purely additive
+    // keys, so kCurrentSchemaVersion stays 4 and there is no migration: an
+    // old profile has none of them and takes these compiled-in defaults,
+    // exactly the shape Bloom and Adaptive Gamma were added in.
+    struct ReshadeBrightnessMapSettings
+    {
+        bool enabled = false;
+        // 0.0..1.0 -- the map's OPACITY, which is the request's own word.
+        // 0 is exactly the original image (the host does not even record the
+        // three dispatches there), 1 is the fully flattened one, where every
+        // neighbourhood is pulled onto `target_luminance`. 0.5 by default:
+        // full flattening is a real look but a strong one, and 0.5 already
+        // makes a dark player model on a bright field clearly readable while
+        // the frame still looks like the game rather than like a diagram.
+        float strength = 0.5f;
+        // 0.0..1.0 -- how coarse the map is. Maps to a blur sigma of 1..6
+        // map texels (effects_curve.h's bmap_sigma), i.e. 8..48 SOURCE
+        // pixels at any resolution, so the smallest object that gets even
+        // half of its own correction is roughly 11 px across at 0 and 67 px
+        // at 1. THIS IS THE HALO CONTROL and it is deliberately the user's:
+        // a finer map corrects a smaller object and puts a brighter rim
+        // around a hard edge, and the mistake this effect exists to avoid is
+        // widening the radius until the halo goes away and the operator can
+        // no longer see a player (which is exactly where Adaptive Gamma's
+        // own local adaptation ended up).
+        float radius = 0.5f;
+        // 0.1..0.9 -- the level every neighbourhood is flattened toward, and
+        // also the operator's exact neutral point: where the map already
+        // reads this, the exponent is exactly 1 and the pixel is untouched.
+        float target_luminance = 0.5f;
+        // THE TWO GUARD RAILS, and they clamp the MAP, not the output: a
+        // neighbourhood darker than min_brightness is treated as if it were
+        // AT min_brightness (so it is not lifted any further) and one
+        // brighter than max_brightness as if it were at max_brightness. That
+        // makes them a bound on how far any pixel may be pushed -- exactly a
+        // gain bound, since they pin the exponent to
+        // [ln(target)/ln(max), ln(target)/ln(min)] -- expressed in the same
+        // units as the picture, which is what "the min and max brightness
+        // within the image" asked for. A floor/ceiling on the OUTPUT was the
+        // alternative and was rejected: a clamp flattens every value past it
+        // into one, so a lifted player model would come out as a silhouette
+        // instead of a readable object.
+        //
+        // The two ranges do not overlap except at their shared 0.50
+        // endpoint, so no reachable pair inverts; bmap_level() floors the
+        // ceiling at the floor as well, so a hand-edited config cannot
+        // invert them either.
+        float min_brightness = 0.10f;   // 0.02..0.50
+        float max_brightness = 0.80f;   // 0.50..0.90
+    };
+
     struct ReshadeShadowLiftSettings
     {
         // Request #3 (2026-09-04): "a darkness booster for dark games" --
@@ -532,6 +593,7 @@ namespace gamescope::config
         ReshadeVibrancySettings vibrancy;
         ReshadePreSharpenSettings pre_sharpen;
         ReshadeBloomSettings bloom;
+        ReshadeBrightnessMapSettings brightness_map;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
         ReshadeAdaptiveGammaSettings adaptive_gamma;
         ReshadeShadowLiftSettings shadow_lift;

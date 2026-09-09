@@ -596,6 +596,221 @@ EC_FUNC float bloom_apply( float base, float glow, float intensity )
 	return 1.0f - ( 1.0f - a ) * pow( max( 1.0f - g, 1e-6f ), k );
 }
 
+// ===========================================================================
+//  BRIGHTNESS MAP (2026-09-09) -- EXPERIMENTAL. The user's request, verbatim:
+//  *"Adaptive Gamma: When the world is rather bright and player models are
+//  rather dark, the player models turn almost black. It should be more fine
+//  grained and needs some type of way, to adjust it super smooth and
+//  dynamic. Lets add an experimental mode, that creates a brightness map of
+//  the whole image and then adjusts based on that. It should invert that map
+//  and then apply it to the image. This should make a really uniform image.
+//  The 'opacity' of this map (strength) should be adjustable. It should also
+//  make it easier, to adjust the min and max brightness within the image. It
+//  should be a seperate shader in the GUI"*
+// ===========================================================================
+//
+// WHAT IT IS. A purely SPATIAL local tone operator. Three extra dispatches
+// build a low-pass of the frame's own luminance -- the "brightness map" --
+// at 1/BMAP_DOWN of the base layer in each axis (cs_effects_bmap_down.comp,
+// then effects_bmap_blur.h horizontally and vertically), and the per-pixel
+// pass then divides the picture by that map against a mid-grey target. It
+// reads NOTHING from cs_effects_measure.comp: no histogram, no percentile,
+// no EMA. That is why it is independent of the Adaptive Brightness /
+// Adaptive Gamma exclusion and can be stacked with either.
+//
+// WHY IT EXISTS SEPARATELY FROM ADAPTIVE GAMMA'S LOCAL ADAPTATION. That
+// operator's map is a 16x16 grid blurred to sigma ~4.7 cells -- about
+// 565 x 317 px at 1080p -- and shader-effects.md says outright that it is
+// "deliberately incapable of resolving an object's outline, and just capable
+// of resolving which half of the screen you are in". A player model is far
+// smaller than that, so it is averaged into its bright background and
+// receives the background's correction: the exact defect the request
+// describes. This operator's map is 1/8 of the frame with a user-controlled
+// blur of 8..48 SOURCE pixels of sigma, i.e. roughly 15..70x finer per axis,
+// which is what lets a player-sized object have a correction of its own.
+// The price is halos, and the radius is the user's dial for them rather
+// than a constant widened until the effect stops working.
+//
+// THE FORMULA, AND THE DOMAIN. Everything here is encoded (gamma) 0..1 code
+// values, like the rest of this pre-pass (cs_effects_layer0.comp's header).
+// With `x` the pixel, `L` the map under it and `t` the target:
+//
+//     Lc  = clamp(L, min_brightness, max_brightness)     // the guard rails
+//     g   = ln(t) / ln(Lc)                               // the INVERTED map
+//     out = x + (x^g - x) * strength
+//
+// `Why an exponent and not out = x * t / L, the literal division:` they are
+// the same operation in two different domains, and only one of them is safe
+// here. Write the division in log-luminance and it is a SUBTRACTION,
+// ln(out) = ln(x) + ln(t) - ln(L) -- the conventional form the request
+// describes. Write it in LOG-LOG, i.e. scale log-luminance instead of
+// shifting it, and it is ln(out) = ln(x) * ln(t)/ln(L), which is the
+// exponent above. Both put a pixel sitting AT the local level exactly on the
+// target (x = L gives out = t in both, exactly), which is the whole content
+// of "invert the map and apply it" -- but the multiplicative form leaves
+// [0, 1] the moment the gain exceeds 1/x, and clipping is precisely the
+// failure Adaptive Brightness's Whole-image mode is documented for ("the
+// blown-out parts", shader-effects.md). The exponent form has 0 and 1 as
+// EXACT fixed points and maps [0, 1] onto [0, 1] at every setting of every
+// control, so a bright region comes down and a dark region comes up without
+// anything being able to clip. Adaptive Gamma reaches the same conclusion
+// from the same arithmetic; the difference here is only where the exponent
+// comes from -- a fine spatial map instead of the frame's smoothed median.
+//
+// STRENGTH IS THE MAP'S OPACITY, and 0 is an EXACT identity: the blend is
+// written x + (curve - x) * s rather than mix() so that s = 0 returns the
+// input's own bits in both GLSL and C++, and the host does not even record
+// the three dispatches at that setting.
+//
+// MIN / MAX BRIGHTNESS -- what they mean, and why this meaning. They clamp
+// the MAP, not the output: a neighbourhood darker than Min brightness is
+// treated as if it were at Min brightness (so it is not lifted any
+// further), and one brighter than Max brightness as if it were at Max.
+//
+// `Why the map and not the output:` a floor and a ceiling on the OUTPUT is a
+// clamp, and a clamp destroys exactly what this effect exists to reveal --
+// every value under the floor lands ON the floor, so a lifted player model
+// comes out as a flat silhouette instead of a readable one, and the control
+// would also break the "strength 0 is the original image" promise (a clamp
+// applies whatever the strength is). Clamping the map instead is a bound on
+// HOW FAR ANY PIXEL MAY BE PUSHED -- it is exactly equivalent to a gain
+// bound, since it pins the exponent to [ln(t)/ln(max), ln(t)/ln(min)] -- and
+// it is expressed in the same units as the picture and the target, which is
+// what the request asked for ("the min and max brightness within the
+// image"). Nothing is ever flattened by it; it only stops the correction.
+//
+// `Why they cannot invert:` the panel's two ranges do not overlap except at
+// their shared endpoint (Min 0.02..0.50, Max 0.50..0.90), so no reachable
+// pair inverts, and bmap_level() below additionally floors the ceiling at
+// the floor -- so a hand-edited config cannot produce an inverted pair
+// either. When they meet exactly at the target the operator is the exact
+// identity, whatever the strength.
+const float BMAP_SIGMA_MIN = 1.0f;    // blur sigma at Radius 0, in map texels
+const float BMAP_SIGMA_MAX = 6.0f;    // ... and at Radius 1
+// The reachable ends of the two rails: == PanelShaders.cpp's Range() ends
+// for Min brightness and Max brightness, asserted equal in
+// tests/test_effects_curve.cpp so a slider always reaches the bound it says
+// it does and there is no second, hidden ceiling underneath it.
+const float BMAP_LEVEL_MIN = 0.02f;
+const float BMAP_LEVEL_MAX = 0.90f;
+// Guards on the exponent, and NOT a second hidden ceiling: they sit outside
+// everything the panel can ask for. Sweeping Target over its whole 0.1..0.9
+// range against the widest reachable rails gives an exponent between
+// ln(0.9)/ln(0.02) = 0.027 and ln(0.1)/ln(0.90) = 21.9, both strictly
+// inside the pair below -- asserted over the full grid in
+// tests/test_effects_curve.cpp, so if a slider range ever widens past what
+// these cover the test fails rather than the clamp silently binding. What
+// they are actually for is a NaN, an infinity or a hand-edited target of 0
+// reaching pow().
+const float BMAP_GAMMA_MIN = 0.02f;
+const float BMAP_GAMMA_MAX = 24.0f;
+
+// Radius 0..1 -> the separable blur's sigma, in map texels. The map is
+// BMAP_DOWN (8) times smaller than the game's own image, so this is 8..48
+// SOURCE pixels of sigma at every resolution (the reduction is a fixed
+// factor, not a fixed size). A Gaussian passes about erf(w / (2*sigma*
+// sqrt(2))) of a feature `w` wide, so the smallest object that gets even
+// half of its own correction is roughly 1.4 sigma across: ~11 px at Radius
+// 0, ~39 px at the default 0.5, ~67 px at Radius 1, all at any resolution.
+// That is the number that matters -- it is what decides whether a player
+// model gets its own exposure or its background's.
+EC_FUNC float bmap_sigma( float radius )
+{
+	return BMAP_SIGMA_MIN + ( BMAP_SIGMA_MAX - BMAP_SIGMA_MIN ) * clamp( radius, 0.0f, 1.0f );
+}
+
+// The map value this pixel's exponent is fitted to, after the two guard
+// rails. The ceiling is floored at the floor, so the pair can never invert
+// however the config was edited; both are held inside the reachable range
+// so a garbage value cannot reach the log below.
+EC_FUNC float bmap_level( float local, float minBright, float maxBright )
+{
+	float lo = clamp( minBright, BMAP_LEVEL_MIN, BMAP_LEVEL_MAX );
+	float hi = clamp( maxBright, lo, BMAP_LEVEL_MAX );
+	return clamp( local, lo, hi );
+}
+
+// The inverted map, as an exponent: ln(target) / ln(level). Exactly 1.0 when
+// the neighbourhood is already ON the target (a value divided by itself),
+// below 1 (a lift) where it is darker, above 1 (a darken) where it is
+// brighter -- so it is monotone INCREASING in `level`, which is what makes
+// it "the map, inverted": the brighter the neighbourhood, the harder the
+// pixel is pulled down. `level` has already
+// been through bmap_level(), so it is inside [0.02, 0.95] and its log is
+// never 0.
+EC_FUNC float bmap_gamma( float level, float target )
+{
+	float m = clamp( level, BMAP_LEVEL_MIN, BMAP_LEVEL_MAX );
+	float t = clamp( target, 0.01f, 0.99f );
+	return clamp( log( t ) / log( m ), BMAP_GAMMA_MIN, BMAP_GAMMA_MAX );
+}
+
+// One channel. x in [0, 1] and g > 0 give x^g in [0, 1] with 0 and 1 exact
+// fixed points, so there is nothing to clip and no shoulder to fit -- the
+// same property Adaptive Gamma's ag_curve() has, for the same reason.
+EC_FUNC float bmap_curve( float x, float gamma )
+{
+	return pow( clamp( x, 0.0f, 1.0f ), gamma );
+}
+
+// The whole operator on one channel, so the shader and the unit tests run
+// the same text. `x + (y - x) * s` and NOT mix(x, y, s): at s = 0 this
+// returns x's own bits in both languages, which is what "strength 0 is
+// exactly the original image" has to mean.
+EC_FUNC float bmap_apply( float x, float level, float target,
+                          float minBright, float maxBright, float strength )
+{
+	float s = clamp( strength, 0.0f, 1.0f );
+	if ( s <= 0.0f )
+		return x;
+	float g = bmap_gamma( bmap_level( level, minBright, maxBright ), target );
+	return x + ( bmap_curve( x, g ) - x ) * s;
+}
+
+// ---- The map's 16-bit storage, as three scalar functions ------------------
+//
+// The map texture is RGBA8 (descriptor_set.h's `dst` is rgba8 and
+// dispatch() binds one RGB target, the same constraint the history and the
+// glow buffers work under), and one byte is not enough for this operator:
+// the exponent's sensitivity to the map is d(g)/d(L) = -ln(t)/(L ln^2 L),
+// which at L = 0.1 is about 1.3 -- so a 1/255 step of the map is a 0.005
+// step of the exponent and roughly a code of output. That is a visible
+// contour on a smooth gradient, which is the ONE thing a brightness map
+// must not have. So each texel carries the luma as a 16-bit fixed-point
+// number spread over its R and G lanes: 1/65535 of map, i.e. two orders of
+// magnitude below anything the output can resolve.
+//
+// Scalar and here rather than as vec4 helpers in effects_common.h so
+// tests/test_effects_curve.cpp can assert the round trip for all 65536
+// codes on the same text the GPU compiles. Exactness: the value is floored
+// to an integer code FIRST, so both lanes are whole numbers in [0, 255];
+// UNORM8 storage of `n / 255` returns `n` (round-to-nearest by spec), and
+// the fetch gives `n / 255` back.
+//
+// `Why the divisions are written / 255.0 and not * (1.0/255.0):` the
+// reciprocal is not exact in binary32, so 255 * (1/255) evaluates to
+// 1.0000001 -- just over the top of the UNORM range, where the storage
+// image would clamp it and the round trip would lose the top code. The
+// exhaustive test in tests/test_effects_curve.cpp caught exactly that.
+EC_FUNC float bmap_pack_hi( float v )
+{
+	float u = floor( clamp( v, 0.0f, 1.0f ) * 65535.0f + 0.5f );
+	return floor( u * ( 1.0f / 256.0f ) ) / 255.0f;
+}
+
+EC_FUNC float bmap_pack_lo( float v )
+{
+	float u = floor( clamp( v, 0.0f, 1.0f ) * 65535.0f + 0.5f );
+	return ( u - floor( u * ( 1.0f / 256.0f ) ) * 256.0f ) / 255.0f;
+}
+
+EC_FUNC float bmap_unpack2( float hi, float lo )
+{
+	float n = floor( clamp( hi, 0.0f, 1.0f ) * 255.0f + 0.5f ) * 256.0f
+	        + floor( clamp( lo, 0.0f, 1.0f ) * 255.0f + 0.5f );
+	return clamp( n / 65535.0f, 0.0f, 1.0f );
+}
+
 #ifdef __cplusplus
 // The one wording of ab_dyn_binding()'s codes: the settings panel's
 // Diagnostics fact and the `effects_ab_log` trace both print this, so the

@@ -12,6 +12,7 @@
 #include "Config/ConfigManager.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -1355,4 +1356,320 @@ TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][co
 	// An old profile with no adaptive_gamma object at all resolves to the
 	// compiled-in defaults -- purely additive keys, no migration.
 	REQUIRE( loaded->reshade.adaptive_brightness.enabled == false );
+}
+
+// ===========================================================================
+//  BRIGHTNESS MAP (2026-09-09, EXPERIMENTAL) -- effects_curve.h's
+//  BRIGHTNESS MAP block. The operator is spatial, so most of what it does
+//  can only be measured on a real frame (scripts/effects-regression.sh's
+//  bmap-* checks). What IS scalar -- and therefore assertable on the same
+//  header text the GPU compiles -- is everything the user's request named:
+//  strength 0 is exactly the original image, the map is inverted (darker
+//  neighbourhood -> more lift), the two rails bound how far a pixel can be
+//  pushed and cannot invert, and nothing can clip.
+// ===========================================================================
+
+TEST_CASE( "brightness map: strength 0 is EXACTLY the original image, bit for bit",
+           "[effects_curve]" )
+{
+	// The request's own wording is "the 'opacity' of this map", so 0 has to
+	// be the untouched picture and not "the untouched picture to within
+	// rounding". bmap_apply() is written x + (curve - x) * s precisely so
+	// that this is a bit-for-bit identity in both GLSL and C++ -- asserted
+	// over every 8-bit input against a sweep of map levels that would
+	// otherwise move the pixel a long way.
+	for ( int i = 0; i <= 255; i++ )
+	{
+		const float x = i / 255.0f;
+		for ( float flLevel : { 0.01f, 0.05f, 0.2f, 0.5f, 0.8f, 0.99f } )
+		{
+			const float y = bmap_apply( x, flLevel, 0.5f, 0.10f, 0.80f, 0.0f );
+			REQUIRE( std::bit_cast<uint32_t>( y ) == std::bit_cast<uint32_t>( x ) );
+		}
+	}
+	// A negative strength (a hand-edited config) is the same identity, not
+	// an inverted effect.
+	REQUIRE( std::bit_cast<uint32_t>( bmap_apply( 0.3f, 0.05f, 0.5f, 0.10f, 0.80f, -1.0f ) )
+	         == std::bit_cast<uint32_t>( 0.3f ) );
+}
+
+TEST_CASE( "brightness map: the map is INVERTED -- darker neighbourhood, more lift",
+           "[effects_curve]" )
+{
+	// The headline property, as a monotonicity: the exponent must fall as
+	// the neighbourhood gets brighter (so a dark area is lifted and a bright
+	// one is brought down), and it must be EXACTLY 1 where the neighbourhood
+	// already sits on the target.
+	for ( float flTarget : { 0.3f, 0.5f, 0.7f } )
+	{
+		float flPrev = -1.0f;
+		for ( int i = 2; i <= 90; i++ )
+		{
+			// Strictly INCREASING in the level: a darker neighbourhood gets a
+			// smaller exponent (a lift), a brighter one a larger exponent (a
+			// darken). That is the inversion, as a monotonicity.
+			const float g = bmap_gamma( i / 100.0f, flTarget );
+			REQUIRE( g > flPrev );
+			REQUIRE( g > 0.0f );
+			REQUIRE( std::isfinite( g ) );
+			flPrev = g;
+		}
+		// Exactly on the target: ln(t)/ln(t), a value divided by itself.
+		REQUIRE_THAT( bmap_gamma( flTarget, flTarget ), WithinAbs( 1.0f, 1e-6f ) );
+		// ... and the pixel is then untouched at every strength.
+		for ( float flStrength : { 0.25f, 0.5f, 1.0f } )
+			REQUIRE_THAT( bmap_apply( 0.2f, flTarget, flTarget, 0.02f, 0.90f, flStrength ),
+			              WithinAbs( 0.2f, 1e-5f ) );
+		// A neighbourhood BELOW the target lifts, one above darkens -- the
+		// division, stated on the picture rather than on the exponent.
+		REQUIRE( bmap_apply( 0.12f, 0.12f, flTarget, 0.02f, 0.90f, 1.0f ) > 0.12f + 1e-4f );
+		REQUIRE( bmap_apply( 0.85f, 0.85f, flTarget, 0.02f, 0.90f, 1.0f ) < 0.85f - 1e-4f );
+	}
+}
+
+TEST_CASE( "brightness map: a pixel at its neighbourhood's own level lands ON the target",
+           "[effects_curve]" )
+{
+	// This is what "invert the map and apply it" means quantitatively, and
+	// it is the property that makes strength 1 "the fully flattened image":
+	// wherever the picture equals the map, the output is the target, so a
+	// frame of flat regions comes out uniform. Checked across the whole
+	// reachable range of levels, at every target the panel offers.
+	for ( float flTarget : { 0.1f, 0.3f, 0.5f, 0.7f, 0.9f } )
+	{
+		for ( int i = 2; i <= 90; i++ )
+		{
+			const float L = i / 100.0f;
+			// Rails wide open, so the clamp is not what is being measured.
+			REQUIRE_THAT( bmap_apply( L, L, flTarget, 0.02f, 0.90f, 1.0f ),
+			              WithinAbs( flTarget, 2e-3f ) );
+		}
+	}
+}
+
+TEST_CASE( "brightness map: it cannot clip, and black stays black, white stays white",
+           "[effects_curve]" )
+{
+	// An exponent on [0, 1] has 0 and 1 as exact fixed points -- the same
+	// property Adaptive Gamma has, and the reason the literal multiplicative
+	// division was not built. Swept over the whole parameter space, in range
+	// and monotone in the input at every point of it.
+	for ( float flTarget : { 0.1f, 0.5f, 0.9f } )
+	for ( float flMin : { 0.02f, 0.10f, 0.50f } )
+	for ( float flMax : { 0.50f, 0.80f, 0.90f } )
+	for ( float flStrength : { 0.25f, 0.5f, 1.0f } )
+	for ( float flLevel : { 0.01f, 0.05f, 0.2f, 0.5f, 0.8f, 0.95f, 1.0f } )
+	{
+		REQUIRE_THAT( bmap_apply( 0.0f, flLevel, flTarget, flMin, flMax, flStrength ),
+		              WithinAbs( 0.0f, 1e-6f ) );
+		REQUIRE_THAT( bmap_apply( 1.0f, flLevel, flTarget, flMin, flMax, flStrength ),
+		              WithinAbs( 1.0f, 1e-6f ) );
+		float flPrev = -1.0f;
+		for ( int i = 0; i <= 255; i++ )
+		{
+			const float y = bmap_apply( i / 255.0f, flLevel, flTarget, flMin, flMax, flStrength );
+			REQUIRE( std::isfinite( y ) );
+			REQUIRE( y >= 0.0f );
+			REQUIRE( y <= 1.0f );
+			REQUIRE( y >= flPrev - 1e-6f );   // monotone in the input
+			flPrev = y;
+		}
+	}
+}
+
+TEST_CASE( "brightness map: Min and Max brightness clamp the MAP and can never invert",
+           "[effects_curve]" )
+{
+	// WHAT THEY MEAN, asserted rather than described: a neighbourhood below
+	// Min brightness behaves exactly as if it were AT Min brightness (so
+	// raising Min stops the darkest corners being lifted any further), and
+	// one above Max behaves as if it were at Max.
+	for ( float flLevel : { 0.001f, 0.01f, 0.05f } )
+		REQUIRE_THAT( bmap_apply( 0.2f, flLevel, 0.5f, 0.10f, 0.80f, 1.0f ),
+		              WithinAbs( bmap_apply( 0.2f, 0.10f, 0.5f, 0.10f, 0.80f, 1.0f ), 1e-6f ) );
+	for ( float flLevel : { 0.85f, 0.95f, 1.0f } )
+		REQUIRE_THAT( bmap_apply( 0.9f, flLevel, 0.5f, 0.10f, 0.80f, 1.0f ),
+		              WithinAbs( bmap_apply( 0.9f, 0.80f, 0.5f, 0.10f, 0.80f, 1.0f ), 1e-6f ) );
+
+	// They therefore bound HOW FAR ANY PIXEL MAY BE PUSHED, which is the
+	// same statement as a gain bound: the exponent can never leave
+	// [ln(t)/ln(max), ln(t)/ln(min)], whatever the map says.
+	const float gLift   = bmap_gamma( 0.10f, 0.5f );   // ln(0.5)/ln(0.10) = 0.301
+	const float gDarken = bmap_gamma( 0.80f, 0.5f );   // ln(0.5)/ln(0.80) = 3.106
+	REQUIRE( gLift < 1.0f );
+	REQUIRE( gDarken > 1.0f );
+	for ( int i = 0; i <= 100; i++ )
+	{
+		const float g = bmap_gamma( bmap_level( i / 100.0f, 0.10f, 0.80f ), 0.5f );
+		REQUIRE( g >= gLift - 1e-6f );
+		REQUIRE( g <= gDarken + 1e-6f );
+	}
+
+	// CANNOT INVERT. The panel's two ranges only touch at 0.50, so no
+	// reachable pair inverts -- but a hand-edited config can hold anything,
+	// and bmap_level() floors the ceiling at the floor for exactly that.
+	for ( float a : { -1.0f, 0.0f, 0.02f, 0.3f, 0.5f, 0.9f, 2.0f } )
+	for ( float b : { -1.0f, 0.0f, 0.02f, 0.3f, 0.5f, 0.9f, 2.0f } )
+	for ( float flLevel : { 0.0f, 0.05f, 0.4f, 0.95f, 1.0f } )
+	{
+		const float v = bmap_level( flLevel, a, b );
+		REQUIRE( std::isfinite( v ) );
+		REQUIRE( v >= BMAP_LEVEL_MIN - 1e-6f );
+		REQUIRE( v <= BMAP_LEVEL_MAX + 1e-6f );
+		// An inverted pair collapses onto the floor rather than producing an
+		// empty interval -- the result is always inside SOME valid range.
+		REQUIRE( std::isfinite( bmap_gamma( v, 0.5f ) ) );
+	}
+
+	// Min == Max == Target is the exact identity, whatever the strength:
+	// every neighbourhood then reads as being on the target already.
+	for ( float flStrength : { 0.3f, 1.0f } )
+	for ( int i = 0; i <= 255; i++ )
+		REQUIRE_THAT( bmap_apply( i / 255.0f, 0.02f, 0.5f, 0.5f, 0.5f, flStrength ),
+		              WithinAbs( i / 255.0f, 1e-5f ) );
+}
+
+TEST_CASE( "brightness map: the exponent guards never bind at any reachable setting",
+           "[effects_curve]" )
+{
+	// BMAP_GAMMA_MIN / _MAX are NaN guards, not a second hidden ceiling
+	// underneath the sliders -- the lesson of 2026-09-08's "a clamped slider
+	// looks exactly like a working one". Swept over the whole panel grid:
+	// Target 0.1..0.9 against the two rails' own reachable ends.
+	for ( int t = 10; t <= 90; t++ )
+	for ( float flLevel : { BMAP_LEVEL_MIN, 0.10f, 0.50f, 0.80f, BMAP_LEVEL_MAX } )
+	{
+		const float raw = std::log( t / 100.0f ) / std::log( flLevel );
+		REQUIRE( raw > BMAP_GAMMA_MIN );
+		REQUIRE( raw < BMAP_GAMMA_MAX );
+		REQUIRE_THAT( bmap_gamma( flLevel, t / 100.0f ), WithinAbs( raw, 1e-4f ) );
+	}
+	// And the rails themselves ARE the panel's Range() ends -- so a slider
+	// always reaches the bound it says it does. Change one, this fails.
+	REQUIRE_THAT( BMAP_LEVEL_MIN, WithinAbs( 0.02f, 1e-9f ) );
+	REQUIRE_THAT( BMAP_LEVEL_MAX, WithinAbs( 0.90f, 1e-9f ) );
+}
+
+TEST_CASE( "brightness map: Radius maps monotonically onto the blur's sigma",
+           "[effects_curve]" )
+{
+	// The halo control. Its two ends are quoted all over the docs as 8..48
+	// SOURCE pixels, which is BMAP_DOWN (8) times the texel sigma here.
+	REQUIRE_THAT( bmap_sigma( 0.0f ), WithinAbs( BMAP_SIGMA_MIN, 1e-6f ) );
+	REQUIRE_THAT( bmap_sigma( 1.0f ), WithinAbs( BMAP_SIGMA_MAX, 1e-6f ) );
+	REQUIRE_THAT( bmap_sigma( 0.5f ), WithinAbs( 3.5f, 1e-6f ) );
+	REQUIRE_THAT( bmap_sigma( -1.0f ), WithinAbs( BMAP_SIGMA_MIN, 1e-6f ) );
+	REQUIRE_THAT( bmap_sigma( 9.0f ), WithinAbs( BMAP_SIGMA_MAX, 1e-6f ) );
+	float flPrev = -1.0f;
+	for ( int i = 0; i <= 100; i++ )
+	{
+		const float s = bmap_sigma( i / 100.0f );
+		REQUIRE( s > flPrev );
+		REQUIRE( s >= 1.0f );
+		flPrev = s;
+	}
+}
+
+TEST_CASE( "brightness map: the map's 16-bit storage round-trips exactly, all 65536 codes",
+           "[effects_curve]" )
+{
+	// Why this is worth an exhaustive test: the map's precision IS the
+	// operator's precision. One byte would put a visible contour on a smooth
+	// gradient (the exponent moves about a code of output per 1/255 of map),
+	// so the value rides in two UNORM8 lanes -- and a packing that is
+	// off-by-one anywhere would show up as exactly the banding it exists to
+	// remove. Both lanes must also be storable: a value outside [0, 1] would
+	// be silently clamped by the storage image.
+	for ( int n = 0; n <= 65535; n++ )
+	{
+		const float v = n / 65535.0f;
+		const float hi = bmap_pack_hi( v );
+		const float lo = bmap_pack_lo( v );
+		REQUIRE( hi >= 0.0f );
+		REQUIRE( hi <= 1.0f );
+		REQUIRE( lo >= 0.0f );
+		REQUIRE( lo <= 1.0f );
+		// Each lane is an exact 8-bit code, so UNORM8 storage is lossless.
+		REQUIRE_THAT( hi * 255.0f, WithinAbs( std::round( hi * 255.0f ), 1e-3f ) );
+		REQUIRE_THAT( lo * 255.0f, WithinAbs( std::round( lo * 255.0f ), 1e-3f ) );
+		REQUIRE_THAT( bmap_unpack2( hi, lo ), WithinAbs( v, 1e-6f ) );
+	}
+	// Out-of-range inputs saturate rather than wrapping.
+	REQUIRE_THAT( bmap_unpack2( bmap_pack_hi( -1.0f ), bmap_pack_lo( -1.0f ) ),
+	              WithinAbs( 0.0f, 1e-6f ) );
+	REQUIRE_THAT( bmap_unpack2( bmap_pack_hi( 2.0f ), bmap_pack_lo( 2.0f ) ),
+	              WithinAbs( 1.0f, 1e-6f ) );
+}
+
+TEST_CASE( "brightness map: strength is monotone, and 1.0 is the flattest",
+           "[effects_curve]" )
+{
+	// "Opacity" has to behave like one: every step of the slider moves the
+	// picture further in the same direction, and never past the fully
+	// applied result.
+	for ( float flLevel : { 0.08f, 0.25f, 0.75f } )
+	for ( int i = 0; i <= 255; i += 5 )
+	{
+		const float x = i / 255.0f;
+		const float full = bmap_apply( x, flLevel, 0.5f, 0.10f, 0.80f, 1.0f );
+		float flPrev = x;
+		for ( int s = 0; s <= 20; s++ )
+		{
+			const float y = bmap_apply( x, flLevel, 0.5f, 0.10f, 0.80f, s / 20.0f );
+			if ( full > x )
+			{
+				REQUIRE( y >= flPrev - 1e-6f );
+				REQUIRE( y <= full + 1e-6f );
+			}
+			else
+			{
+				REQUIRE( y <= flPrev + 1e-6f );
+				REQUIRE( y >= full - 1e-6f );
+			}
+			flPrev = y;
+		}
+	}
+}
+
+TEST_CASE( "reshade.brightness_map defaults and round-trip", "[effects_curve][config]" )
+{
+	TempConfigHome home;
+
+	Settings s{};
+	REQUIRE( s.reshade.brightness_map.enabled == false );
+	REQUIRE_THAT( s.reshade.brightness_map.strength, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.brightness_map.radius, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.brightness_map.target_luminance, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.brightness_map.min_brightness, WithinAbs( 0.10f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.brightness_map.max_brightness, WithinAbs( 0.80f, 1e-6f ) );
+	// The shipped defaults must not invert, and must not be the identity
+	// either -- a switch that does nothing when you turn it on is a bug.
+	REQUIRE( s.reshade.brightness_map.min_brightness < s.reshade.brightness_map.max_brightness );
+
+	s.reshade.brightness_map.enabled = true;
+	s.reshade.brightness_map.strength = 0.75f;
+	s.reshade.brightness_map.radius = 0.2f;
+	s.reshade.brightness_map.target_luminance = 0.45f;
+	s.reshade.brightness_map.min_brightness = 0.06f;
+	s.reshade.brightness_map.max_brightness = 0.7f;
+	ProfileMeta meta;
+	meta.name = "Effects";
+	REQUIRE( SaveProfile( meta, s ) );
+
+	std::optional<Settings> loaded = LoadProfile( "Effects" );
+	REQUIRE( loaded.has_value() );
+	const auto &bm = loaded->reshade.brightness_map;
+	REQUIRE( bm.enabled == true );
+	REQUIRE_THAT( bm.strength, WithinAbs( 0.75f, 1e-6f ) );
+	REQUIRE_THAT( bm.radius, WithinAbs( 0.2f, 1e-6f ) );
+	REQUIRE_THAT( bm.target_luminance, WithinAbs( 0.45f, 1e-6f ) );
+	REQUIRE_THAT( bm.min_brightness, WithinAbs( 0.06f, 1e-6f ) );
+	REQUIRE_THAT( bm.max_brightness, WithinAbs( 0.7f, 1e-6f ) );
+
+	// It is independent of every other effect: writing this row moved
+	// neither adaptive effect, which is the config-level statement of "no
+	// exclusion" (unlike Adaptive Gamma, whose row genuinely does turn
+	// Adaptive Brightness off).
+	REQUIRE( loaded->reshade.adaptive_brightness.enabled == false );
+	REQUIRE( loaded->reshade.adaptive_gamma.enabled == false );
 }

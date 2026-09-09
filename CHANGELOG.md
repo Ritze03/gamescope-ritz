@@ -12,6 +12,11 @@ The newest version below is the one this build reports.
 ## [0.7.0] – 2026-09-09
 
 ### Added
+- **Brightness Map, an experimental new shader**: it measures how bright each small
+  patch of the picture is and evens the frame out from that map, so a dark player model
+  on a bright background stops sinking to black; Strength, Radius, Target brightness and
+  a Min/Max brightness pair control it, and it can be used alongside Adaptive Brightness
+  or Adaptive Gamma.
 - **Adaptive Gamma has its own adaptation speed**: two sliders, Adapt to brighter and
   Adapt to darker, set how long it takes to settle after the scene changes, exactly as
   Adaptive Brightness's do, and can be set differently so it reacts quickly one way and

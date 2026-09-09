@@ -1,0 +1,81 @@
+#version 460
+
+// cs_effects_bmap_down.comp -- Brightness Map's DOWNSAMPLE, the first of the
+// three dispatches the effect adds (2026-09-09, EXPERIMENTAL; the user's
+// request is quoted in full at the head of effects_curve.h's BRIGHTNESS MAP
+// block).
+//
+// WHAT IT WRITES. One texel per BMAP_DOWN x BMAP_DOWN block of the base
+// layer: the arithmetic mean of that block's graded Rec.601 luma, as a
+// 16-bit fixed-point number spread over the texel's R and G lanes
+// (effects_curve.h's bmap_pack_hi/lo). So the buffer holds "how bright this
+// neighbourhood is", already at the resolution the blur will run at.
+//
+// WHY LUMA AND NOT COLOUR, unlike the glow buffer this mirrors: the operator
+// divides the picture by ONE number per neighbourhood -- a per-channel map
+// would white-balance each region toward grey, which is a colour effect
+// nobody asked for and which Saturation and Vibrancy already own. Storing
+// one channel is also what buys the 16-bit precision: two lanes for the
+// value instead of one lane each for three of them.
+//
+// WHY THE ARITHMETIC MEAN OF THE ENCODED LUMA, not a log/geometric mean --
+// which is the textbook local-adaptation estimator: this whole pre-pass
+// works on gamma-encoded code values on purpose (cs_effects_layer0.comp's
+// header), and an encoded value is ALREADY perceptually spaced, so a log of
+// it applies a second perceptual curve. effects_common.h's AB_LOCAL_* block
+// made exactly this call for the 16x16 map; making the opposite one here
+// would give this project two different answers to "how bright is this part
+// of the frame". A geometric mean also needs a floor to keep pure black out
+// of ln(0), and that floor would then be a hidden control.
+//
+// WHY EVERY SOURCE PIXEL IS READ (64 texelFetches per output texel, i.e.
+// exactly one per source pixel) rather than a handful of taps inside each
+// block: a sparse sampling makes a small object's contribution appear and
+// disappear as the grid slides over it under camera motion. On a glow that
+// is a shimmer; on a TONE operator it is the neighbourhood's exposure
+// pumping, which is far more visible. See effects_common.h's BMAP_DOWN note.
+//
+// It calls the SAME grade() the per-pixel pass, the measure pass, the bloom
+// bright pass and the preview pass call, on the same slot-0 raw-UNORM
+// binding, so the map describes exactly the image the per-pixel pass is
+// about to divide -- Shadow Control / Saturation / Vibrancy already applied.
+// Pre-Sharpen is deliberately not applied: a 5-tap cross is invisible after
+// an 8x box reduction, the same argument cs_effects_bloom_down.comp and
+// cs_effects_preview.comp both make.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+#include "effects_bmap.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+void main()
+{
+    ivec2 p       = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 srcSize = textureSize(s_samplers[0], 0);
+    ivec2 dstSize = (srcSize + ivec2(BMAP_DOWN - 1)) / BMAP_DOWN;
+    if (p.x >= dstSize.x || p.y >= dstSize.y)
+        return;
+
+    float sum = 0.0;
+    for (int j = 0; j < BMAP_DOWN; j++)
+    {
+        for (int i = 0; i < BMAP_DOWN; i++)
+        {
+            // clamp, not skip: on the last block of a size that is not a
+            // multiple of BMAP_DOWN this reads the edge pixel again, which
+            // keeps the divisor constant and the map's border honest.
+            ivec2 t = clamp(p * BMAP_DOWN + ivec2(i, j), ivec2(0), srcSize - ivec2(1));
+            sum += effects_luma(grade(texelFetch(s_samplers[0], t, 0).rgb));
+        }
+    }
+
+    imageStore(dst, p, bmap_pack(sum / float(BMAP_DOWN * BMAP_DOWN)));
+}
