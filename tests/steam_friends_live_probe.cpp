@@ -34,7 +34,6 @@
 // and safe to paste into an issue, which is the rule src/SteamFriends.cpp's own
 // logging follows for the same reason.
 
-#include "SteamAppNames.h"
 #include "SteamFriends.h"
 #include "SteamFriendsCmd.h"
 #include "convar.h"
@@ -370,61 +369,6 @@ namespace callbacks
 	}
 }
 
-// ---------------------------------------------------------------------------
-//  --names N: does a game this machine does not have get a name, and is it
-//  remembered?
-// ---------------------------------------------------------------------------
-// The one thing the unit tests genuinely cannot answer, because they answer it
-// against a shim `curl` and a fake friends list: does the REAL endpoint, asked
-// about the REAL app ids the user's real friends are in, come back with names?
-//
-// It drives the POLLER (CurrentView()), not Snapshot(), because the lookup
-// happens between snapshots and on the poller's own thread -- which is the
-// arrangement being checked.
-//
-// Point GS_RITZ_APPNAME_CACHE somewhere scratch before running it, so a live
-// check never writes into the user's real cache.
-namespace names
-{
-	using namespace gamescope::steamfriends;
-
-	int Run( int nSeconds )
-	{
-		printf( "RESULT name cache file: %s\n", AppNameCachePath().c_str() );
-		printf( "RESULT online lookup: %s\n", LookupNamesEnabled() ? "on" : "off" );
-
-		View v;
-		const time_t tEnd = time( nullptr ) + nSeconds;
-		while ( time( nullptr ) < tEnd )
-		{
-			v = CurrentView();
-			struct timespec ts = { 0, 200 * 1000 * 1000 };
-			nanosleep( &ts, nullptr );
-		}
-		Shutdown();
-
-		int nNamed = 0, nBare = 0;
-		for ( const Friend &f : v.vecFriends )
-		{
-			const bool bBare = f.sGame.rfind( "App ", 0 ) == 0;
-			nBare += bBare;
-			nNamed += !bBare;
-			// The app id and the words Steam uses for it. No persona, no
-			// SteamID, no lobby id -- this file's standing rule.
-			printf( "  appid %-8u %-9s %s\n", f.uAppId,
-				f.CanJoin() ? "JOINABLE" : "in a game", f.sGame.c_str() );
-		}
-
-		const NameCacheInfo info = NameCache();
-		printf( "RESULT rows: %zu (%d named, %d still \"App <id>\")\n",
-			v.vecFriends.size(), nNamed, nBare );
-		printf( "RESULT cache entries after the run: %zu of %zu\n", info.nEntries, info.nMax );
-		printf( "RESULT names resolved online: %s\n",
-			info.nEntries > 0 ? "YES" : "none needed or none answered" );
-		return 0;
-	}
-}
-
 using namespace gamescope;
 using namespace gamescope::steamfriends;
 
@@ -465,15 +409,27 @@ int main( int argc, char **argv )
 	printf( "== gamescope-ritz phase 1 live read, against the running Steam client ==\n" );
 	printf( "   read-only: no join, no invite, no message, no steam:// URL fired.\n\n" );
 
+	// THE APP ID THE LIST IS SCOPED BY (2026-09-09). Snapshot() only returns
+	// friends who are in THIS session's game, so a probe with no app id would
+	// correctly -- and uselessly -- report nothing. It is taken from
+	// GS_RITZ_APPID, the same variable config::ResolveAppId() reads first, or
+	// from --appid <n>; the shipping binary seeds it from
+	// config::SessionAppId() in PanelFriends_SeedFromConfig().
+	uint32_t uAppId = 0;
+	if ( const char *pszEnv = getenv( "GS_RITZ_APPID" ); pszEnv && *pszEnv )
+		uAppId = (uint32_t)strtoul( pszEnv, nullptr, 10 );
+
 	// `--watch N` snapshots N times, a second apart, before reporting on the
 	// last one. `Why it exists:` the first read after a fresh
 	// ConnectToGlobalUser can come back with an EMPTY friends list while the
-	// client is still filling its cache -- which looks identical to "you have
-	// no friends in a joinable game" and is not. Watching says which it was,
-	// and it is the measurement phase 3's poll interval has to be chosen from.
+	// client is still filling its cache -- which looks identical to "nobody
+	// you can join is here" and is not. Watching says which it was, and it is
+	// the measurement the poll interval was chosen from.
 	int nWatch = 1;
 	for ( int i = 1; i < argc; i++ )
 	{
+		if ( std::string_view( argv[ i ] ) == "--appid" && i + 1 < argc )
+			uAppId = (uint32_t)strtoul( argv[ i + 1 ], nullptr, 10 );
 		if ( std::string_view( argv[ i ] ) == "--watch" && i + 1 < argc )
 			nWatch = atoi( argv[ i + 1 ] );
 		if ( std::string_view( argv[ i ] ) == "--find" && i + 1 < argc )
@@ -482,9 +438,11 @@ int main( int argc, char **argv )
 			return diag::Run();
 		if ( std::string_view( argv[ i ] ) == "--callbacks" )
 			return callbacks::Run( i + 1 < argc ? atoi( argv[ i + 1 ] ) : 30 );
-		if ( std::string_view( argv[ i ] ) == "--names" )
-			return names::Run( i + 1 < argc ? atoi( argv[ i + 1 ] ) : 12 );
 	}
+
+	SetSessionAppId( uAppId );
+	printf( "   this session's app id: %u%s\n\n", uAppId,
+		uAppId ? "" : "  (set GS_RITZ_APPID or pass --appid <n>; with 0 the list is always empty)" );
 
 	std::vector<Friend> vec;
 	for ( int i = 0; i < nWatch; i++ )
@@ -494,18 +452,11 @@ int main( int argc, char **argv )
 		vec = Snapshot();
 	}
 
-	size_t nJoinable = 0;
-	for ( const Friend &f : vec )
-		if ( f.CanJoin() )
-			nJoinable++;
-
 	printf( "\nRESULT status: %s\n", StatusText().c_str() );
-	// PHASE 3: Snapshot() returns everyone IN A GAME now, not only the
-	// joinable ones, so these are two numbers rather than one -- and
-	// "joinable rows" is still the line the planning doc's §8 step 1 asks the
-	// user to read.
-	printf( "RESULT in-game rows: %zu\n", vec.size() );
-	printf( "RESULT joinable rows: %zu\n", nJoinable );
+	// Since 2026-09-09 every row IS joinable and IS in this session's game, so
+	// the row count is the joinable count. "joinable rows" is still the line
+	// the planning doc's §8 step 1 asks the user to read.
+	printf( "RESULT joinable rows: %zu\n", vec.size() );
 
 	int nBadSteamId = 0, nBadLobby = 0, nBadAppId = 0, nBadName = 0;
 
@@ -514,13 +465,12 @@ int main( int argc, char **argv )
 		const Friend &f = vec[ i ];
 
 		const bool bSteamIdOk = f.ulSteamId >= kIndividualMin && f.ulSteamId <= kIndividualMax;
-		// Only a row that CLAIMS a lobby is range-checked. A friend simply
-		// not in a lobby has m_steamIDLobby == 0, which is outside the chat
-		// band and is not a fault -- counting it would make every ordinary
-		// run report FAIL.
-		const bool bLobbyOk   = !f.CanJoin() ||
-		                        ( f.ulLobbyId >= kChatMin && f.ulLobbyId <= kChatMax );
-		const bool bAppIdOk   = f.uAppId > 0 && f.uAppId < ( 1u << 24 );
+		// Every row claims a lobby now, so every row is range-checked. A
+		// number outside the chat band here is the signal that
+		// m_steamIDLobby's offset is wrong -- the one thing about this feature
+		// that has never been observed working.
+		const bool bLobbyOk   = f.ulLobbyId >= kChatMin && f.ulLobbyId <= kChatMax;
+		const bool bAppIdOk   = f.uAppId > 0 && f.uAppId < ( 1u << 24 ) && f.uAppId == uAppId;
 		const bool bNameOk    = LooksPrintable( f.sPersona );
 
 		nBadSteamId += !bSteamIdOk;
@@ -528,13 +478,12 @@ int main( int argc, char **argv )
 		nBadAppId   += !bAppIdOk;
 		nBadName    += !bNameOk;
 
-		// App id and the game's NAME -- a name Steam wrote into its own
-		// appmanifest on this machine, never anything a friend controls.
-		printf( "  #%zu  appid %-8u %-12s steamid:%s  lobby:%s  persona:%s (%zu chars)\n",
+		// App id and range verdicts only -- never a SteamID, a lobby id or a
+		// persona name.
+		printf( "  #%zu  appid %-8u steamid:%s  lobby:%s  persona:%s (%zu chars)\n",
 			i, f.uAppId,
-			f.CanJoin() ? "JOINABLE" : "not joinable",
 			bSteamIdOk ? "individual-range OK" : "OUT OF RANGE",
-			f.CanJoin() ? ( bLobbyOk ? "chat-range OK" : "OUT OF RANGE" ) : "none",
+			bLobbyOk   ? "chat-range OK"       : "OUT OF RANGE",
 			bNameOk    ? "printable"           : "NOT PRINTABLE",
 			f.sPersona.size() );
 
@@ -542,11 +491,7 @@ int main( int argc, char **argv )
 		// NOTHING IS FIRED: this only proves the builder accepts real live
 		// values and produces the documented shape.
 		std::string sUrl, sWhy;
-		if ( !f.CanJoin() )
-		{
-			printf( "       no URL: %s\n", std::string( JoinabilityText( f.eJoinable ) ).c_str() );
-		}
-		else if ( BuildJoinUrl( f, &sUrl, &sWhy ) )
+		if ( BuildJoinUrl( f, &sUrl, &sWhy ) )
 		{
 			const size_t nThird = sUrl.find( '/', sizeof( "steam://joinlobby" ) );
 			printf( "       would build: %s/<%zu-digit lobby id>/<%zu-digit steamid64>  (NOT fired)\n",

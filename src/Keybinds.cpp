@@ -158,9 +158,11 @@ namespace gamescope::keybinds
 			// own overlay (which this fork's users have switched off anyway --
 			// see superdoc/planning/steam-friends-window.md §2) ever sees it.
 			{ "friends", "Open friends list", "Ctrl+Shift+Tab",
-			  "The chord that opens the list of friends you can join, over the game -- and closes "
-			  "it again when it is already up. It reads the Steam client already running on this "
-			  "machine, so there is nothing to sign in to. See Settings > System > Friends." },
+			  "The chord that opens the list of friends who are in THIS game and can be joined, "
+			  "over the game -- and closes it again when it is already up. It reads the Steam "
+			  "client already running on this machine, so there is nothing to sign in to. It "
+			  "does nothing when this is not a Steam game, because there is then no Friends "
+			  "page to open at all. See Settings > System > Friends." },
 		};
 
 		// ---------------------------------------------------------------------

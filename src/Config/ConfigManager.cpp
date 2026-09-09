@@ -421,7 +421,11 @@ namespace gamescope::config
                     }
                 }
 
-                s.overlay.friends_lookup_names = JGetBool( *pOverlay, "friends_lookup_names", s.overlay.friends_lookup_names );
+                // NOTE (2026-09-09): "friends_lookup_names" used to be read
+                // here. It is gone, and a file that still carries it loads
+                // unchanged -- this reader asks for the keys it knows and
+                // ignores the rest, which is what makes deleting a setting a
+                // safe operation on somebody's existing global.json.
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )
@@ -663,8 +667,6 @@ namespace gamescope::config
             for ( const auto &[ sAction, sChord ] : o.keybinds )
                 jKeybinds[ sAction ] = sChord;
             jOverlay[ "keybinds" ] = std::move( jKeybinds );
-
-            jOverlay[ "friends_lookup_names" ] = o.friends_lookup_names;
 
             return jOverlay;
         }

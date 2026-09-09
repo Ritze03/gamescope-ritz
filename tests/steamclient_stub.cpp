@@ -89,8 +89,10 @@ namespace
 	//  The fake friends list
 	// ---------------------------------------------------------------------
 	// Deliberately a mix, so a test that only checked "we got rows back" would
-	// still fail: three of these five must be filtered out, each by a
-	// different clause of IsJoinable().
+	// still fail. The probe runs with THIS SESSION'S APP ID SET TO 730, and of
+	// these eight only two may become rows: the filter is "in app 730 AND in a
+	// lobby", and every other entry here fails one half of it for a different
+	// reason.
 	//
 	// CGameID packs the app id into bits 0..23 and the TYPE into bits 24..31.
 	struct FakeFriend
@@ -114,18 +116,30 @@ namespace
 	constexpr uint64_t kSteamIdBase = 76561197960265728ull;
 
 	const FakeFriend kFriends[] = {
-		// in CS2, but not in a joinable lobby        -> filtered on lobby id
-		{ kSteamIdBase + 100, GameId( 730 ), 0, "in a game, not joinable", true },
-		// in CS2 in a joinable lobby                 -> KEPT
+		// in CS2, NOT in a joinable lobby -> counted "in this game", no row.
+		// This is the entry the status line's first number exists for.
+		{ kSteamIdBase + 100, GameId( 730 ), 0, "in this game, not joinable", true },
+		// in CS2 in a joinable lobby                 -> A ROW
 		{ kSteamIdBase + 101, GameId( 730 ), 555, "joinable one", true },
 		// a non-Steam shortcut / mod (type 1)        -> filtered on CGameID type
 		{ kSteamIdBase + 102, GameId( 252490, 1 ), 777, "non-steam game", true },
 		// a lobby with no app behind it              -> filtered on app id 0
 		{ kSteamIdBase + 103, GameId( 0 ), 888, "no app", true },
-		// in TF2 in a joinable lobby, HOSTILE NAME   -> KEPT
-		{ kSteamIdBase + 104, GameId( 440 ), 999, "evil\";rm -rf $HOME;\" --kiosk", true },
+		// in TF2, joinable, but A DIFFERENT GAME     -> filtered on app id.
+		// Before 2026-09-09 this row was listed (and joining it opened a
+		// confirmation); it must not appear at all now.
+		{ kSteamIdBase + 104, GameId( 440 ), 999, "different game", true },
 		// not in a game at all
 		{ kSteamIdBase + 105, 0, 0, "offline", false },
+		// in CS2 in a joinable lobby, HOSTILE NAME   -> A ROW. The persona a
+		// remote person controls has to survive the whole path and change the
+		// join URL by nothing.
+		{ kSteamIdBase + 106, GameId( 730 ), 111, "evil\";rm -rf $HOME;\" --kiosk", true },
+		// A NON-STEAM SHORTCUT WHOSE LOW 24 BITS ARE OUR OWN APP ID, in a
+		// lobby. Filtered on the CGameID TYPE, and it is here because that is
+		// the one way the same-game filter could be fooled: without the type
+		// check this would look exactly like a friend in CS2.
+		{ kSteamIdBase + 107, GameId( 730, 1 ), 222, "shortcut wearing our app id", true },
 	};
 
 	constexpr int kFriendCount = (int)( sizeof( kFriends ) / sizeof( kFriends[ 0 ] ) );
@@ -170,7 +184,7 @@ namespace
 	bool FriendsGetFriendGamePlayed( ISteamFriends *, uint64_t ulSteamId, FriendGameInfo_t *pInfo )
 	{
 		// "idle": everybody is signed in and nobody is playing anything. The
-		// panel's "nobody's in a game right now" empty state.
+		// panel's "nobody else is in this game right now" empty state.
 		if ( ModeIs( "idle" ) )
 			return false;
 
@@ -183,8 +197,9 @@ namespace
 		pInfo->m_usQueryPort  = 0;
 		// "busy": everybody is playing and NOBODY is in a joinable lobby --
 		// which is also exactly what a wrong m_steamIDLobby offset would look
-		// like, and is why the panel lists them anyway rather than showing an
-		// empty box (superdoc/features/steam-friends.md).
+		// like. Since 2026-09-09 the list is EMPTY in this state and the
+		// status row is the only thing that tells the two apart, which is why
+		// it carries two counts (superdoc/features/steam-friends.md).
 		pInfo->m_steamIDLobby = ModeIs( "busy" ) ? 0 : p->ulLobbyId;
 		return true;
 	}

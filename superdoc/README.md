@@ -64,11 +64,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 ### Steam surfaces
 
 - [Steam friends you can join](features/steam-friends.md) -- `Ctrl+Shift+Tab` lists the
-  friends who are in a game, read from the running Steam client with no sign-in, and
-  joins one with a `steam://joinlobby` URL: what is proven and what is not (the lobby
-  offset), why the list shows everyone in a game rather than only the joinable ones,
-  the background poller that keeps Steam off the frame path, the confirmation for a
-  different game, and the privacy rule.
+  friends who are in **this** game and can be joined, read from the running Steam
+  client with no sign-in, and joins one with a `steam://joinlobby` URL: what is proven
+  and what is not (the lobby offset), why the Status row carries two counts, why the
+  area hides itself when this is not a Steam game, the background poller that keeps
+  Steam off the frame path, and the privacy rule -- including that this compositor now
+  makes no outbound network request at all.
 
 ### External surfaces
 
@@ -144,6 +145,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   endpoint were each rejected (with the measurements), and the approach that wins — a
   native join list reading the joinable lobby id out of the running client's own
   `steamclient.so`, with no API key, no browser and no app id.
+- [Inviting a friend, and the vtable layout that decides it](planning/steam-invite-and-vtable-layout.md)
+  — 2026-09-09: `InviteUserToGame` pinned to a **named** vtable slot four independent
+  ways (Proton's own bridge, CS2's shipped SDK, the live vtable lengths, and the live
+  client's own thunks), which corrects the join page's "uniform one-slot shift" and its
+  "no app id anywhere"; why no `steam://` invite URL exists; the one read the user must
+  take; and why *receiving* invites is still a no.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.

@@ -6928,9 +6928,20 @@ namespace gamescope::ui::shell
 		// driven through it would then be testing a state the product never
 		// reaches. An area that does not exist is ignored rather than
 		// clearing the selection.
+		//
+		// AN AREA THAT IS NOT Available() IS IGNORED TOO, and that is not
+		// belt-and-braces: SelectedArea() falls back to the first available
+		// area when the selected one is hidden, so honouring a request for a
+		// hidden area would silently drop the user on Display instead of
+		// telling them anything. The `system.friends` binding is the case that
+		// makes it concrete -- it hides itself when this is not a Steam game
+		// (PanelFriends.cpp's AvailableWhen) -- and wlserver.cpp declines to
+		// send the request at all in that state, so this is the second of two
+		// guards rather than the only one.
 		if ( const char *pszArea = s_pszAreaRequested.exchange( nullptr, std::memory_order_acq_rel ) )
 		{
-			if ( Reg().FindArea( pszArea ) )
+			const Area *pRequested = Reg().FindArea( pszArea );
+			if ( pRequested && pRequested->Available() )
 			{
 				s_sSelectedArea = pszArea;
 				Select( nullptr );

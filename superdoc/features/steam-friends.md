@@ -1,47 +1,103 @@
 # Steam friends you can join
 
-**2026-09-08, extended 2026-09-09.** `Ctrl+Shift+Tab` opens a list of the friends who are in a game
-right now, read straight out of the Steam client already running on this
-machine. A friend in a lobby you can join is marked **[Join]**; clicking them
-(or pressing Enter) hands the running Steam client a `steam://joinlobby/…`
-URL and it moves you in.
+**2026-09-08, narrowed 2026-09-09.** `Ctrl+Shift+Tab` opens a list of the friends who are
+**in the game you are running right now and in a lobby you can join**, read
+straight out of the Steam client already running on this machine. Click one (or
+press Enter) and gamescope hands the running Steam client a
+`steam://joinlobby/…` URL; it moves you in without relaunching anything.
 
 **No Web API key, no browser, no second Steam client, no second sign-in, no app
-id and no `SteamAPI_Init` anywhere.**
+id handed to Steam, no `SteamAPI_Init` — and, since the 2026-09-09 narrowing, no
+network at all. This compositor now makes no outbound request of any kind.**
 
-Code: `src/SteamFriends.{h,cpp}` (the Steam calls, the poller and the name
-lookup), `src/SteamFriendsCmd.h` (the pure rules — the joinability predicate,
-the URL builder, the status wording, the manifest readers, the row order),
-`src/SteamAppNames.h` (the game-name cache, the endpoint and the fetch),
-`src/Overlay/PanelFriends.{h,cpp}` (the `system.friends` area),
-`src/Keybinds.cpp`'s `friends` action, `src/wlserver.cpp`'s dispatch,
-`src/Overlay/UI/Shell.cpp`'s `RequestArea`/`AreaActive` and the per-frame
-`PanelFriends_Tick()`.
+Code: `src/SteamFriends.{h,cpp}` (the Steam calls and the poller),
+`src/SteamFriendsCmd.h` (the pure rules — the two predicates, the URL builder,
+the status wording, the row order), `src/Overlay/PanelFriends.{h,cpp}` (the
+`system.friends` area), `src/Keybinds.cpp`'s `friends` action,
+`src/wlserver.cpp`'s dispatch, `src/Overlay/UI/Shell.cpp`'s
+`RequestArea`/`AreaActive` and the per-frame `PanelFriends_Tick()`.
 Tests: `tests/test_steam_friends.cpp`, `tests/steamclient_stub.cpp`.
 Live check: `tests/steam_friends_live_probe.cpp`.
-Captures: `build-release/verify-shots/steam-friends-phase345-2026-09-08/`
-(phase 3–5), `…/steam-friends-phase12-2026-09-08/` (the read path) and
-`…/friends-names-invites-2026-09-09/` (the game-name lookup, the row order and
-the invite measurement).
+Captures: `build-release/verify-shots/friends-simplify-2026-09-09/` (the
+narrowed list, every empty state and the hidden area),
+`…/steam-friends-phase345-2026-09-08/` (phase 3–5) and
+`…/steam-friends-phase12-2026-09-08/` (the read path).
 The investigation that settled the whole design:
 [`../planning/steam-friends-join.md`](../planning/steam-friends-join.md).
 
 ---
 
-## What is proven, and what is not
+## What the list contains, and what it deliberately does not
 
-This is the first thing to read, because one part of this feature has never
-been observed working and the panel is built to fail honestly when it does not.
+**One row per friend who is in *this* game and is joinable.** Nothing else.
+Asked for on 2026-09-09, in these words:
+
+> *"lets simplify it to only showing friends, which are playing the same game as
+> the running one. So there is no unneeded stuff in the UI. … Just show joinable
+> friends in the UI. Also dont show the 'Friends' menu at all, if it isnt a
+> steam game"*
+
+Three things follow from it, and each removed code rather than adding it:
+
+- **A friend in a different game is not a row.** Joining them would close the
+  game you are in and launch theirs — which the panel used to offer behind a
+  confirmation dialog. The dialog is gone with the rows it existed for.
+- **A friend in this game who is not joinable is not a row either** — but they
+  are still *counted*, in the Status line. See the next section, which is the
+  one part of the old design this narrowing had to preserve on purpose.
+- **The whole area is hidden when this is not a Steam game.** Not a disabled
+  rail entry: no rail entry, no palette rows, no reachable sheet.
+
+`Why the row itself is just a name and a [Join]:` every row is by construction
+the game already running, so a game column would print the same words down the
+whole list. That was the "unneeded stuff" the request names.
+
+---
+
+## Why the Status row carries two counts
+
+This is the one piece of the previous design that survives the narrowing, and
+it is load-bearing.
+
+`m_steamIDLobby`'s offset inside `FriendGameInfo_t` is **still unproven**
+([§6e](../planning/steam-friends-join.md#6e-correction-the-published-vtable-order-is-wrong-by-one-slot)):
+nobody in the friends list has been in a joinable lobby at any moment the read
+path was measured, so the field has only ever read as **zero** — and a wrong
+offset reads as zero too. A joinable-only *list* is therefore, on its own,
+**indistinguishable from a broken read**: an empty box either way.
+
+Before the narrowing that was solved by listing everyone in a game and marking
+the joinable ones. That is exactly the clutter the user asked to remove, so the
+diagnosability moved into **one line of text**:
+
+```
+3 friends in this game, 0 you can join.
+```
+
+- **`0 friends in this game`** — nobody else is here. Nothing is claimed about
+  the lobby read at all.
+- **`3 friends in this game, 0 you can join`** — the friends read works, the
+  game match works, and *only* the lobby field is coming back empty. That is
+  either the honest answer (nobody is in a lobby) or the unproven offset, and
+  the user can now tell it apart from every other empty state.
+- **`3 friends in this game, 2 you can join`** — the day the offset is
+  confirmed, this is what it looks like.
+
+It costs no list clutter and no extra call: the count falls out of the same
+walk that builds the rows.
+
+---
+
+## What is proven, and what is not
 
 | | status |
 |---|---|
 | **Loading the Steam client's own `steamclient.so` with no app id** | **Proven live** on this machine. Every symbol resolves, `Steam_CreateSteamPipe` + `Steam_ConnectToGlobalUser` attach to the already-signed-in user, and nothing registers a game. |
 | **Reading the friends list** | **Proven live.** 75 friends on the first run, 28 after the signed-in account changed; persona names all printable. |
-| **Reading what each friend is playing** | **Proven live.** App ids came back as real Steam apps (730, 252950, 2483190, 2357570, 736220), CGameID type 0 for every one — so `m_gameID`'s offset in `FriendGameInfo_t` is anchored correctly. |
+| **Reading what each friend is playing** | **Proven live.** App ids came back as real Steam apps (730, 252950, 2483190, 2357570, 736220), CGameID type 0 for every one — so `m_gameID`'s offset in `FriendGameInfo_t` is anchored correctly, which is what the same-game filter rests on. |
 | **The corrected vtable offsets** | **Measured, not quoted.** The published `ISteamFriends` order every write-up repeats is **wrong by one slot** against the real client; `GetFriendCount` is slot 2 and `GetFriendByIndex` is slot 3. See [§6e](../planning/steam-friends-join.md#6e-correction-the-published-vtable-order-is-wrong-by-one-slot). |
-| **`m_steamIDLobby`'s offset** | **NOT PROVEN.** Nobody in the friends list was in a joinable lobby at any moment it was sampled, so the field has only ever read as zero — which is also exactly what a wrong offset would look like. |
+| **`m_steamIDLobby`'s offset** | **NOT PROVEN.** Nobody in the friends list was in a joinable lobby at any moment it was sampled, so the field has only ever read as zero — which is also exactly what a wrong offset would look like. The Status row above is what keeps that distinguishable. |
 | **Firing a join** | **Not run against a live client.** The URL builder is unit-tested, and the whole spawn path (build, PATH lookup, fork, argv) is proven end to end against a `steam` shim that records what it was handed. No `steam://joinlobby` URL has ever reached a real Steam. |
-| **Looking a game's name up online** | **Proven live**, 2026-09-09. Two of the seven friends in a game were in Rocket League (252950) and ULTRAKILL (1229490), neither installed here; both were bare `App <id>` before and both came back named, in **one** request, and were in the cache file afterwards. A second run made **no** request at all. |
 | **Reading a pending received invite** | **Established impossible** on this route, with the measurement in [Received invites](#received-invites). Not "unbuilt" — asked, measured, and answered no. |
 
 ### What the user has to run to close it
@@ -68,34 +124,7 @@ you are already running**:
 steam "steam://joinlobby/<appid>/<lobbyid>/<their steamid64>"
 ```
 
-Expect the running game to move you into the lobby with no relaunch. If it
-relaunches instead, the "different game" case in this doc needs rethinking.
-
----
-
-## Why the list shows every friend in a game, not only the joinable ones
-
-The implementation sketch said *"one line per joinable friend"*. **The shipped
-panel lists every friend who is in a game and marks which of them can be
-joined.** That is a deliberate departure, and the reason is the unproven offset
-above.
-
-A wrong `m_steamIDLobby` offset reads as **zero**, which is byte-for-byte
-identical to *"this friend is not in a lobby you can join"*. So a
-joinable-only list would be **indistinguishable from a completely broken
-one**: the user would open the panel, see an empty box, and have no way at all
-to tell whether their friends are simply all busy or the feature does not work
-on their client.
-
-Listing everyone in a game degrades honestly. Both worlds show the same thing —
-your friends, and what they are playing — and the only difference is whether
-any row carries a **[Join]** mark. Nothing is hidden, nothing is guessed, and
-on the day a real lobby id appears the marks light up with no other change.
-
-The same reasoning is why `LooksLikeLobbyId()` in `SteamFriends.cpp` only
-**counts** out-of-band lobby ids into a debug line and never **filters** on
-them: an unverified band check would silently hide exactly the friends this
-feature exists to show.
+Expect the running game to move you into the lobby with no relaunch.
 
 ---
 
@@ -107,150 +136,61 @@ than the pages you set up once.
 
 | row | kind | what it does |
 |---|---|---|
-| **Friends** (`friends.list`) | list + verbs | One line per friend in a game, joinable first. Click a row or press Enter to act on it. |
-| — verb **Join** | | Joins the selected row. Dimmed, with a reason, when the selection cannot be joined. |
+| **Friends** (`friends.list`) | list + verbs | One line per joinable friend in this game. Click a row or press Enter to join. |
+| — verb **Join** | | Joins the selected row. Dimmed, with a reason, when nothing is selected or the list is empty. |
 | — verb **Refresh** | | Polls Steam now instead of waiting for the next few seconds to elapse. |
-| **Look up game names online** (`overlay.friends_lookup_names`) | switch | Whether an app id the local files cannot name is looked up against Steam's public list. See [Where the game's name comes from](#where-the-games-name-comes-from). |
-| **Status** (`friends.status`) | read-only | Why the list is the length it is, the app id this session is running under, the standing note about the unproven lobby offset, and why invites are not here. |
+| **Status** (`friends.status`) | read-only | The two counts above, the app id this session is running under, the standing note about the unproven lobby offset, and why invites are not here. |
 
-The area carries the **`global only`** badge, like Appearance, Cursor and
-Keybinds: its one setting writes `global.json` whatever profile the session is
-editing, because *"may this machine reach the network"* is a fact about the
-machine and not about the game. (Until 2026-09-09 the area had no settings at
-all and deliberately carried no badge.) The other thing you can configure is
-the chord, under **Setup > Keybinds**.
+The area carries **no settings at all**, so it carries no profile badge either.
+It has nothing to store: the rows come from Steam and the only thing you can
+configure about the feature is the chord, under **Setup > Keybinds**.
 
 ### A row
 
 ```
-[Join]  atze                            Counter-Strike 2
-        Blendgranate       Rust · not in a lobby you can join
+[Join]  atze
+[Join]  Blendgranate
 ```
 
-- The **label** is the persona name, and it is never sacrificed to fit — that
-  priority is the list atom's own (`Controls.h`'s `LayoutListBoxItem`).
-- The **tag** is `[Join]` on a row that can be joined, and nothing otherwise.
-- The **secondary** is the game, and — on a row that cannot be joined — the
-  quiet reason, one of four: *not in a lobby you can join*, *not a Steam game*
-  (a mod, a shortcut or a non-Steam game they added), *no game to join*, *no
-  Steam ID*.
+The **label** is the persona name, and it is never sacrificed to fit — that
+priority is the list atom's own (`Controls.h`'s `LayoutListBoxItem`). The
+**tag** is `[Join]`, on every row, because every row is joinable. There is no
+secondary line.
 
-Clicking a row that cannot be joined selects it and toasts the same reason. It
-is never an error and never does nothing silently.
+### Hidden when this is not a Steam game
 
-### Where the game's name comes from
+`PanelFriends.cpp` declares
+`a.AvailableWhen([]{ return steamfriends::SessionAppId() != 0; })`, using the
+registry's existing area-level gate — the same one `system.display`'s
+nested-only rows use. `Registry::RailAreas()`, `CommandPalette.cpp`'s two index
+walks and `Shell.cpp`'s `SelectedArea()` all skip an area that is not
+`Available()`, so one predicate removes the rail entry, the palette rows and
+the sheet together.
 
-`ISteamFriends` hands back an **app id and no name**, so the name is looked up
-in two places, in this order, and the second is only ever asked what the first
-could not answer.
+`Why hidden rather than disabled:` with no app id every row would have to match
+an id that does not exist, so the page could only ever be empty. A disabled
+entry is a promise that something is there; there is nothing there.
 
-**1. Steam's own `appmanifest_<appid>.acf`** — the file the client writes for
-every **installed** game — under `~/.steam/steam/steamapps` plus every root
-`libraryfolders.vdf` lists. Free, offline, and authoritative about what this
-machine has.
-
-**2. Steam's keyless public endpoint**, for the ids the manifests cannot answer
-(2026-09-09). Until then those rows read `App 252490`, which was true but
-useless: measured live on this machine, three of the seven friends in a game
-were in Rocket League and ULTRAKILL, neither installed here, so nearly half the
-list was bare numbers.
-
-`Why the original "the manifest is enough" reasoning was wrong:` it argued that
-a game you can join is a game you have installed. That is true of the **join**
-and false of the **list** — the panel deliberately shows every friend in a
-game, joinable or not (see the section above), so most rows are about games you
-do *not* own.
-
-#### Which endpoint, and why
-
-Measured from this machine on 2026-09-09:
-
-| candidate | verdict |
-|---|---|
-| `api.steampowered.com/ISteamApps/GetAppList/v2` (and `/v0002`) | **HTTP 404** — `Method 'GetAppList' not found in interface 'ISteamApps'`. The "download the whole list once" option is not a size trade-off any more; the endpoint is **gone**. |
-| `store.steampowered.com/api/appdetails?appids=<id>` | 36 501 bytes for **one** app; 15 231 with `filters=basic`, which is still the whole store description. One request **per app**, on the rate-limited endpoint. (`filters=name` is not a thing — it answers `{"success":true,"data":[]}`.) |
-| **`api.steampowered.com/ICommunityService/GetApps/v1/`** | **chosen.** Keyless, **batched**, and **711 bytes for four apps**. |
-
-So one request per poll rather than one per app, ~50× smaller than the only
-alternative that still exists, and appdetails' rate limit never comes into
-play. An id Steam does not know comes back as `{"appid":N}` with no name —
-a clean, authoritative *"there is no name for this"*, which is cached so the
-id is never asked about again.
-
-#### Exactly what leaves the machine
-
-**A list of app ids. Nothing else.** `SteamAppNames.h`'s `BuildAppNamesUrl()`
-builds the whole query string out of `std::to_string()` over integers, so there
-is no string input for a SteamID, a persona name, a lobby id or an account name
-to travel in — the same property `BuildJoinUrl()` has, and for the same reason.
-The unit test walks every byte after the `?` and requires it to be a digit or
-punctuation this code wrote.
-
-Plus what any HTTP request unavoidably carries: **this machine's IP address**,
-and **curl's own version string** as the User-Agent. **No cookie** — the fetch
-passes no jar, and `-q` stops curl reading `~/.curlrc`, so nothing the user
-configured can attach an identity to it. The request cannot be tied to a Steam
-login.
-
-#### The switch, and why it defaults on
-
-**Friends → "Look up game names online"** (`overlay.friends_lookup_names`, in
-`global.json`). Off, no fetch is ever spawned and an unknown game stays
-`App 252490`.
-
-`Why on by default,` stated with its counter-argument because the opposite is
-defensible. **For:** the request contains nothing about the user; it happens
-only while the friends list is actually being looked at (the poller sleeps
-otherwise) and only for ids the disk could not answer, so an idle compositor
-and a user who never opens the panel make **zero** requests; and defaulting it
-off would ship the exact `App 252490` this exists to fix, behind a switch
-nobody knows to look for. **Against:** a compositor talking to the internet is
-a new class of behaviour, and consent is normally opt-in. The tie is broken by
-what is actually at stake — an app id is not a fact about a person — and by the
-switch being one row away, in the same area, with its Help line naming what
-leaves the machine.
-
-#### The cache
-
-| | |
-|---|---|
-| **where** | `$XDG_CACHE_HOME/gamescope-ritz/appnames.json`, else `~/.cache/gamescope-ritz/appnames.json`. **Never the config directory** — game names are not a setting, nothing here is the user's choice, and deleting the file must cost nothing but a few hundred bytes of traffic. |
-| **what** | `{"version":1,"apps":{"730":{"name":"Counter-Strike 2","seen":1788906836}}}`. An **empty name** is a real entry: *Steam was asked and has no name for this id*. |
-| **bound** | 512 entries, enforced on **read and on every write**. Past it, the least recently *seen* entries go — an LRU over "when was a friend last playing this", so the games your friends actually play stay. Eviction ties break on the app id, so the survivors are a function of the data and not of the machine. |
-| **corrupt** | Truncated, half-written, hand-edited, a wrong type in one entry, a future `version`, a megabyte of zeroes — **all parse as empty**, which is indistinguishable from a fresh machine. A cache is a thing the program must work without. |
-| **written** | Through a temporary and renamed, so a crash or a full disk leaves the *old* cache rather than half of a new one. |
-| **failure** | A timeout, no network or an HTTP error is **never written**. It is not an answer about the app, and storing it would bake a temporary outage into a permanent wrong label. A failed fetch backs the *whole* lookup off for five minutes — failures are network-wide, not per-app. |
-| **silence** | An id that was asked about, in a request that *succeeded*, and that the answer did not mention at all is not asked about again **this session** — and not cached either. Steam saying nothing is not an answer worth keeping forever, but re-asking every three seconds for as long as the panel is open would be a request loop. |
-
-#### It cannot stall a frame
-
-The fetch runs on the **poller thread**, after the view has already been
-published — so the rows are on screen (as `App <id>`) before the network is
-touched at all — and never inside `Snapshot()`'s lock. It is bounded twice:
-curl's own `--max-time`, and a wait loop that kills the child if it outlives
-it, because "somebody else enforces the timeout" is only true while that
-somebody is alive. `Shutdown()` cuts it short, so a wedged endpoint cannot
-delay gamescope's exit either.
-
-Measured, against a `curl` that sits there for five seconds: worst
-`CurrentView()` **under 15 ms** — the same threshold, and the same shape of
-test, as the slow-Steam case below. Measured again against the live client with
-a blackholed endpoint: every row still drew, the installed game still got its
-name from the manifest, the two unknown ones read `App <id>`, and nothing was
-written to the cache.
+The app id is `config::SessionAppId()`, resolved once at startup and **copied
+into `SteamFriends.cpp` as an integer** by `PanelFriends_SeedFromConfig()`
+(called from `main.cpp`). `Why a copy and not the getter:` `SessionAppId()`
+resolves lazily into a plain static with no lock, and the poller runs on its
+own thread — so calling it there would race the draw thread's first call. One
+seeded integer keeps the worker out of the config layer entirely, and makes it
+impossible for the panel and the poller to disagree about which game this is.
 
 ### The order the rows are drawn in
 
 Requested 2026-09-09: *"Joinable players should be sorted towards the top. And
-topmost should be invites."* Three bands, in that order, alphabetical inside a
-band:
+topmost should be invites."* Two bands survive the narrowing — everything in
+the list is joinable now, so the third band has nothing to hold:
 
 1. **invites** — see [Received invites](#received-invites) below: **nothing
-   produces one**, so this band is always empty today. The rule is written down
-   in full anyway (`SteamFriendsCmd.h`'s `FriendGroup`), and the panel draws no
-   invite row and offers no Accept/Deny, because there is nothing true to draw.
-2. **joinable** — the `[Join]` rows.
-3. **everyone else in a game.**
+   produces one**, so this band is always empty today. The rule is kept in full
+   anyway (`SteamFriendsCmd.h`'s `FriendGroup`) because it is the user's stated
+   order and costs ten lines; the panel draws no invite row and offers no
+   Accept/Deny, because there is nothing true to draw.
+2. **joinable** — every row there is.
 
 The tiebreak inside a band is the persona name folded to lower case (ASCII
 only — a locale-aware fold would make the order depend on the user's locale),
@@ -260,8 +200,8 @@ then the **SteamID**.
 friend can rename themselves into somebody else's name on purpose. Without a
 final tiebreak `std::sort` would be free to swap two same-named rows on every
 poll, and the list would flicker between two orders while nothing about it had
-changed. With it, the order is a function of the data, so an unchanged friends
-list draws identically forever — pinned by a test that sorts the same rows from
+changed. With it, the order is a function of the data, so an unchanged list
+draws identically forever — pinned by a test that sorts the same rows from
 three different starting permutations and requires three identical results.
 
 The sort lives in **`Snapshot()`**, not in the panel, so the panel,
@@ -275,14 +215,13 @@ each frame; `ActivateRow()` records a SteamID, and the list's getter answers
 with wherever that person is now.
 
 `Why that is not a detail:` the list sorts itself and the poller replaces it
-every three seconds. The moment one friend joins a lobby they jump to the
-joinable band and every row below them moves. With an index-based selection the
-outline would land on whoever slid into that slot — under a user who had not
-touched anything — and the **Join** verb would be aimed at them. That is the
-classic bug in a list that reorders itself, and storing the person instead of
-the row number is what makes it unrepresentable. A selection that genuinely
-stops existing (they quit, they went offline) reads as *nothing selected*,
-which is a different and honest state.
+every three seconds. The moment one friend leaves their lobby they drop out and
+every row below them moves. With an index-based selection the outline would
+land on whoever slid into that slot — under a user who had not touched anything
+— and the **Join** verb would be aimed at them. That is the classic bug in a
+list that reorders itself, and storing the person instead of the row number is
+what makes it unrepresentable. A selection that genuinely stops existing reads
+as *nothing selected*, which is a different and honest state.
 
 ### The empty states
 
@@ -297,12 +236,10 @@ true thing:
 | Steam installed but not running | *Steam isn't running.* |
 | running but signed out | *Steam is signed out.* |
 | the friends interface is not laid out as expected | *this Steam client's friends interface isn't laid out the way this build expects.* |
-| nobody playing anything | *Nobody's in a game right now.* |
+| no Steam app id (console only — the area is hidden) | *this isn't a Steam game, so there's nobody here to join.* |
+| nobody else in this game | *nobody else is in this game right now.* |
+| friends here, none joinable | *3 friends in this game, 0 you can join.* |
 | before the first poll finishes | *Asking Steam…* |
-
-The one state that is **not** empty is "friends in a game, none joinable" — the
-rows are all there, unmarked, and the status line reads *5 friends in a game,
-none you can join.*
 
 ---
 
@@ -320,27 +257,51 @@ nothing. That is a property of the types, not of an escaping routine somebody
 could forget, and `tests/test_steam_friends.cpp` pins it by building the same
 URL twice with two hostile names and requiring the bytes to be identical.
 
-### The confirmation, and exactly when it appears
-
-| the friend is in | what happens |
-|---|---|
-| **the game you are already running** (their app id == `config::SessionAppId()`) | It fires straight away, no dialog. Steam relaunches nothing: the running game receives the join through its own `GameLobbyJoinRequested` callback and moves you. Nothing about gamescope, Ritz or the wrapper is involved. |
-| **a different game** | A dialog first: *"Join Team Fortress 2? This leaves Counter-Strike 2 and starts Team Fortress 2."* Steam launches that game over this one — which is exactly what accepting an invite in Steam's own overlay does today, so this is not making anything worse; it is just worth stopping to ask about. |
-| **not a Steam game at all**, or gamescope was not launched by Steam | Every join is treated as a different game and gets the dialog. |
+**There is no confirmation dialog, and there is nothing left for one to ask.**
+It existed for the "this friend is in a different game, so Steam closes yours
+and starts theirs" case; that row cannot exist now. Joining somebody in the
+game you are already in relaunches nothing — the running game receives the join
+through its own `GameLobbyJoinRequested` callback and moves you — so a dialog
+would be a speed bump on the only path there is.
 
 ### A click only records; `Tick()` acts
 
 The list's setter is reachable two ways: a click or Enter on the draw thread,
 and `overlay_e2_set friends.list <n>` on the **console** thread. Forking a
-process and opening a modal are both illegal on the latter. So the setter only
-records a pending join, and `PanelFriends_Tick()` — called once per frame from
-the shell's own `Draw()` — is the single place a join is ever fired.
+process is illegal on the latter. So the setter only records a pending join,
+and `PanelFriends_Tick()` — called once per frame from the shell's own
+`Draw()` — is the single place a join is ever fired.
 
 The pending join stores the **SteamID it was aimed at**, not just the index.
 The poller can replace the list between the click and the tick, and joining
 whoever happens to land on index 2 afterwards is exactly the bug an index-only
 handoff produces. A row that is gone by the time the tick runs toasts *"That
 lobby is gone."*
+
+---
+
+## Nothing leaves this machine
+
+The 2026-09-09 narrowing deleted the game-name lookup — the only outbound
+network request this compositor ever made — because every row is now the game
+the user is already in, so there was nothing left to look a name up *for*.
+
+Gone with it: `src/SteamAppNames.h` in full, the `curl` invocation and its
+argv builder, the `ICommunityService/GetApps` endpoint, the on-disk cache under
+`$XDG_CACHE_HOME/gamescope-ritz/appnames.json`, the five-minute failure
+backoff, the local `appmanifest_<id>.acf` and `libraryfolders.vdf` readers, and
+the **`overlay.friends_lookup_names`** setting with its row in this area.
+
+So the plain statement, which is worth having: **gamescope-ritz opens no
+socket. There is no code path in the compositor that makes an HTTP request, and
+no setting that could enable one.** The only processes it ever spawns are
+`steam <url>` for a join and the game itself.
+
+A stale `"friends_lookup_names": true` left in somebody's `global.json` from a
+build before this one is **ignored**: `ConfigManager.cpp` reads named keys and
+never rejects a file for carrying one it does not know, so the config loads
+unchanged and the key is dropped the next time that file is rewritten. This is
+verified rather than assumed — see the capture set's `stale-key.txt`.
 
 ---
 
@@ -404,25 +365,25 @@ neighbours under the plausible layouts include `ClearRichPresence` — a **write
 on the user's live account**. There is no argument shape that is read-only
 under every candidate identity, which is precisely the case §6e's rule forbids.
 
+> **Updated 2026-09-09.** The whole `SteamFriends018` vtable has since been
+> named outright — see
+> [`../planning/steam-invite-and-vtable-layout.md`](../planning/steam-invite-and-vtable-layout.md).
+> `GetFriendRichPresence` is **slot 43**, not 44, and slot 42 really is
+> `ClearRichPresence`, so the instinct above was right about the neighbourhood
+> and one out on the arithmetic. It stays rejected on point 3's *first* ground
+> alone: it answers a question about **them**, and an invite is a fact about
+> **us**. The same page shows `SetListenForFriendsMessages` (slot 62) and
+> `GetFriendMessage` (slot 64) are now reachable too — and that the answer in
+> this section is still no, because an invite is a chat *message* rather than a
+> queryable pending list, because Accepting one is the `steam://joinlobby` this
+> panel's `[Join]` row already fires, and because listening would put every
+> private friend message through the compositor to catch it.
+
 **4. Not tested with a real invite, and that is stated rather than hidden.**
-Testing one means asking `Blendgranate` or `atze` to send it, and asking them
-means sending a Steam message — which is an `ISteamFriends` **write** at an
-unmeasured slot, the same wall as point 3. So the finding rests on points 1–3,
-not on having watched an invite arrive and be missed.
-
-### What would have to change
-
-- **Chat-carried invites:** `SetListenForFriendsMessages(true)` plus
-  `GetFriendMessage()`, i.e. two more vtable slots measured by a method that
-  does not call an unmeasured slot. Even then a chat invite is a
-  `k_EChatEntryTypeInviteGame` **message**, not a queryable pending list, so
-  "Deny" would still only be able to hide a row.
-- **Or** the flat `libsteam_api.so` route with an app id — which
-  [§6a](../planning/steam-friends-join.md#6a-two-routes-and-the-safer-one-needs-no-app-id-at-all)
-  rejected for the whole design, and which still would not enumerate pending
-  invites.
-- **Or** Steam's Web API, which needs a key — rejected on the user's own
-  instruction, and correctly.
+Testing one means asking a friend to send it, and asking them means sending a
+Steam message — which is an `ISteamFriends` **write** at an unmeasured slot,
+the same wall as point 3. So the finding rests on points 1–3, not on having
+watched an invite arrive and be missed.
 
 ### What the panel says instead
 
@@ -460,8 +421,8 @@ So:
   46 MB and loading it starts threads inside our process.
 - **The panel keeps no cache of its own.** Its getters run on the draw thread
   *and* on the console thread, and a `std::vector<Friend>` in a static would be
-  written by one while the other read it. Copying a few dozen small rows a
-  handful of times a frame is cheaper than that race.
+  written by one while the other read it. Copying a few small rows a handful of
+  times a frame is cheaper than that race.
 
 ### How that was proven
 
@@ -513,6 +474,36 @@ thread and is fine only for a debug surface driven by a script.
 **The key path makes no Steam call of any kind.** It sets one atomic; the first
 Steam call of the whole feature still happens later, on the poller's thread.
 
+### What it does when the area is hidden
+
+**Nothing on screen, and one `friends` log line.** `wlserver.cpp` checks
+`steamfriends::SessionAppId()` before it touches anything and returns —
+*before* `SetVisible()` and *before* `RequestArea()` — so the shell's state is
+bit-for-bit what it was: a closed shell stays closed, an open shell stays on
+whatever page it was on. There is no half-open state because there is no state
+change at all. `Shell.cpp` also declines a request for an unavailable area, so
+even a `RequestArea("system.friends")` from somewhere else cannot land the user
+on a hidden page (or, worse, silently redirect them to Display, which is what
+`SelectedArea()`'s fallback would otherwise do).
+
+`Why silence and not a toast,` because the alternative was seriously
+considered:
+
+- **The feature is comprehensively absent, not merely unavailable.** There is
+  no rail entry, no palette row and no sheet. A key that opens something which
+  is not in the UI at all doing nothing is *consistent* with the rest of the
+  UI, not a contradiction of it.
+- **A toast would have to be fired from the wrong thread.**
+  `Notifications::Show()` documents itself as steamcompmgr-thread-only and
+  keeps no lock; its `std::deque` is drained by `AddLayer()` on the render
+  thread. The keybind runs on the **wlserver** thread. Buying a data race in
+  the compositor to explain a hidden feature is a bad trade, and the plumbing
+  that would avoid the race (a third atomic consumed inside `paint_all()`) is
+  more machinery than the message is worth.
+- **It is not silent to somebody who looks.** The chord's own Help line under
+  **Setup > Keybinds** says it only works in a Steam game, and the press is
+  recorded once in the `friends` log scope.
+
 ---
 
 ## Privacy
@@ -523,18 +514,15 @@ everything else:
 - **Nothing in `src/SteamFriends.cpp` or `src/Overlay/PanelFriends.cpp` logs,
   toasts or writes a persona name, a SteamID or a lobby id.** The log lines
   carry counts, indices, app ids and interface version strings.
-- `friends_dump` prints **counts and app ids by index**, plus which rows are
-  joinable and why the others are not. `friends_join <n>` takes that index, so
-  a user never has to see or retype an id to use the feature from the console.
+- `friends_dump` prints **counts and app ids by index**. `friends_join <n>`
+  takes that index, so a user never has to see or retype an id to use the
+  feature from the console.
 - The live probe prints range **verdicts** about ids, never the ids.
 - The verification harness asserts it: no fake persona name and no SteamID64
   appears in any gamescope log it produced.
-- **The one thing that leaves the machine carries none of it either.** The
-  game-name lookup sends app ids and nothing else — see
-  [Exactly what leaves the machine](#exactly-what-leaves-the-machine) — and the
-  test that pins it walks every byte of the URL after the `?`. The capture
-  harness checks the recorded request for a SteamID64 prefix and for the
-  hostile persona name the stub uses, and requires neither to appear.
+- **Nothing leaves the machine at all** — see
+  [Nothing leaves this machine](#nothing-leaves-this-machine). The one outbound
+  request this fork ever had was deleted on 2026-09-09.
 
 **One documented exception.** `overlay_e2_get friends.list` is the registry's
 generic "what is this row's value" debug command, and a list row's value is its
@@ -571,6 +559,7 @@ handle it. Nothing here throws, blocks or is fatal.
 
 | situation | behaviour |
 |---|---|
+| not a Steam game (no app id) | The area is not offered at all, and the keybind does nothing. `friends_dump` on the console says so in one sentence. |
 | Steam not installed, or somewhere we do not look | `dlopen` fails once, at first use. One log line, and the list says so. |
 | a library loaded that is not Steam's | Six fingerprint symbols are checked before anything is cast to a vtable. One log line. |
 | Steam not running | `Steam_CreateSteamPipe` returns 0. |
@@ -578,9 +567,7 @@ handle it. Nothing here throws, blocks or is fatal.
 | a client whose interface versions we do not know | The version lists in `SteamFriendsCmd.h` are **closed**: an unknown client disables the feature rather than guessing a layout. |
 | a client whose vtable moved again | `Snapshot()` range-checks the first SteamID it gets back. A number that is not a SteamID abandons the whole read with a named line, rather than handing `GetFriendGamePlayed` a garbage id. |
 | `steam` not on PATH | The join refuses with one sentence. |
-| `curl` not on PATH, or no network, or the endpoint is slow, blackholed or wrong | The lookup fails, **nothing is cached**, the whole lookup backs off for five minutes, one log line names the count, and unknown games read `App <id>`. Nothing on the frame path notices. |
-| no cache directory (no `HOME`, no `XDG_CACHE_HOME`) | No lookup and no file. Installed games are still named from their manifests. |
-| a corrupt or truncated `appnames.json` | Parses as empty, which is the same as a fresh machine. |
+| a stale `friends_lookup_names` in `global.json` | Ignored; the config loads unchanged. |
 
 Each failure logs its reason **exactly once** per distinct reason, and re-logs
 if the situation changes (Steam started, then signed out) — the panel polls

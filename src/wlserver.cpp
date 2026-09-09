@@ -76,6 +76,10 @@
 // hotkeys() asks it which action a key event completed; the actions themselves
 // are performed by wlserver_check_ritz_keybinds() below.
 #include "Keybinds.h"
+// ... and one of those actions is the friends list, which is only offered in a
+// Steam game. Only SessionAppId() is read from here -- one relaxed atomic load,
+// no Steam call and no lock.
+#include "SteamFriends.h"
 // The crosshair's right-click auto-hide watches BTN_RIGHT on the game path
 // of wlserver_dispatch_mouse_button() -- see that function.
 #include "Overlay/Crosshair.h"
@@ -448,6 +452,38 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 			// Steam call of the whole feature is made later still, by the
 			// poller's own thread -- so this key path cannot wait on Steam
 			// even once.
+			//
+			// AND IT DOES NOTHING AT ALL WHEN THIS IS NOT A STEAM GAME
+			// (2026-09-09). The Friends area hides itself with no app id
+			// (PanelFriends.cpp's AvailableWhen), so there is no rail entry,
+			// no palette row and no sheet to open -- and this returns BEFORE
+			// SettingsOverlay_SetVisible() and before RequestArea(), so a
+			// closed shell stays closed and an open one stays exactly where it
+			// was. There is no half-open state because there is no state
+			// change.
+			//
+			// `Why silence rather than a toast:` a toast would have to be
+			// fired from THIS thread, and Notifications::Show() documents
+			// itself as steamcompmgr-thread-only and keeps no lock -- its
+			// queue is drained by the render thread. Buying a data race in the
+			// compositor to explain a feature that is comprehensively absent
+			// from the UI is a bad trade, and the plumbing that would avoid it
+			// is more machinery than the message is worth. The chord's own
+			// Help line under Setup > Keybinds says it only works in a Steam
+			// game, and this logs once. See superdoc/features/steam-friends.md,
+			// "What it does when the area is hidden".
+			if ( gamescope::steamfriends::SessionAppId() == 0 )
+			{
+				static bool s_bSaidSo = false;
+				if ( !s_bSaidSo )
+				{
+					s_bSaidSo = true;
+					wl_log.infof( "the friends list is only offered in a Steam game; "
+					              "this session has no app id." );
+				}
+				break;
+			}
+
 			if ( gamescope::SettingsOverlay_IsCapturingInput() &&
 			     !gamescope::ui::shell::LauncherOnlyActive() &&
 			     gamescope::ui::shell::AreaActive( "system.friends" ) )

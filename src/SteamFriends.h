@@ -4,20 +4,27 @@
 //  "Join a friend" -- the runtime half
 // =============================================================================
 // Reads the ALREADY-LOGGED-IN Steam client's friends list, locally, and offers
-// the ones sitting in a joinable lobby; acts on a choice by handing the running
-// client a steam://joinlobby/... URL. No Web API key, no browser, no second
-// Steam client, no app id and no SteamAPI_Init anywhere.
+// the ones sitting in a joinable lobby OF THE GAME THIS SESSION IS RUNNING;
+// acts on a choice by handing the running client a steam://joinlobby/... URL.
+// No Web API key, no browser, no second Steam client, no app id handed to
+// Steam, no SteamAPI_Init anywhere -- AND, since 2026-09-09, NO NETWORK AT ALL:
+// this compositor makes no outbound request of any kind.
 //
 // superdoc/planning/steam-friends-join.md is the investigation that settled all
 // of this -- §5 for the shape, §6a for why route B (the client's own
 // steamclient.so) rather than a per-game libsteam_api.so, §6c for the probe
 // that proved the library loads and every symbol resolves on this machine,
 // §6d for the failure modes this file has to survive.
+// superdoc/features/steam-friends.md is the feature as shipped.
 //
-// Phases 1 and 2 of §7b built the read and the join; phase 3 added the panel
-// (src/Overlay/PanelFriends.cpp, area `system.friends`) and the POLLER at the
-// bottom of this header, and phase 4 the `Ctrl+Shift+Tab` binding. The
-// `friends_dump` / `friends_join` ConCommands are still there and still work.
+// THE 2026-09-09 NARROWING, because it changes what Snapshot() means: the list
+// used to be every friend in any game, with a name looked up for each. It is
+// now only the friends who are IN THIS GAME AND JOINABLE -- the user's request
+// was "only showing friends which are playing the same game as the running one
+// ... just show joinable friends in the UI". Every row is therefore the game
+// you are already in, which is what let the whole game-name machinery (the
+// appmanifest reader, the disk cache and the one HTTP request this fork ever
+// made) be deleted rather than kept.
 //
 // THE RULES, AND THE PART OF SteamFriends.cpp THAT ENFORCES EACH:
 //
@@ -56,23 +63,38 @@
 
 #include "SteamFriendsCmd.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace gamescope::steamfriends
 {
-	// EVERY friend currently in a game, newest read every call, each carrying
-	// whether it can be joined and -- when it cannot -- the one reason why
-	// (Friend::eJoinable, SteamFriendsCmd.h's Joinability).
+	// =========================================================================
+	//  Which game we are in
+	// =========================================================================
+	// The app id this session is running under, 0 for "not a Steam game, or no
+	// game identified". EVERYTHING the feature does is scoped by it: with 0,
+	// Snapshot() is empty, StatusText() says why, and the panel's whole area is
+	// hidden (PanelFriends.cpp's AvailableWhen).
 	//
-	// `Why not only the joinable ones, which is what phase 1 returned:`
-	// m_steamIDLobby's offset is still unproven, and a wrong offset reads as
-	// zero exactly like "not in a lobby". A joinable-only list would be
-	// indistinguishable from a broken one. See Joinability's own comment.
+	// `Why an atomic here rather than a config::SessionAppId() call:` that
+	// getter resolves lazily into a plain static on first use, with no lock, so
+	// calling it from the POLLER thread would race the draw thread's first
+	// call. Seeding one integer from PanelFriends_SeedFromConfig() -- which
+	// runs on the main thread at startup -- keeps the worker away from the
+	// config layer entirely. It is exactly the arrangement the (now deleted)
+	// name-lookup switch used, and for the same reason.
+	void     SetSessionAppId( uint32_t uAppId );
+	uint32_t SessionAppId();
+
+	// The friends who are in THIS session's game AND in a lobby you can join,
+	// newest read every call, already in the order the panel draws them.
 	//
-	// Empty on every failure, and on "nobody is in a game" -- those two are
-	// deliberately indistinguishable to the caller; StatusText() is what tells
-	// them apart for a user.
+	// Empty on every failure, on "no app id", on "nobody else is in this game"
+	// and on "they are all here but none of them is joinable". Those are
+	// deliberately indistinguishable to this caller; StatusText() is what tells
+	// them apart for a user, and it is the reason the status line carries BOTH
+	// counts -- see StatusLine() in SteamFriendsCmd.h.
 	//
 	// BLOCKS. Never call it from a paint; call CurrentView() instead.
 	std::vector<Friend> Snapshot();
@@ -84,41 +106,9 @@ namespace gamescope::steamfriends
 	bool Join( const Friend &friendToJoin, std::string *psError );
 
 	// One line about why the list is the length it is: "Steam isn't running",
-	// "Steam is signed out.", "3 friends in a game, 1 you can join." For the
+	// "Steam is signed out.", "3 friends in this game, 0 you can join." For the
 	// panel's empty states and for `friends_dump`.
 	std::string StatusText();
-
-	// =========================================================================
-	//  Game names, and the one switch that lets this process open a socket
-	// =========================================================================
-	// A game's name comes from Steam's own appmanifest_<id>.acf first -- free,
-	// offline, and complete for everything INSTALLED here. For a friend playing
-	// something this machine does not have, the id is looked up once against
-	// Steam's keyless public endpoint and CACHED TO DISK FOREVER
-	// (SteamAppNames.h: the endpoint comparison, what exactly is sent, the file
-	// format and its bound).
-	//
-	// THIS IS THE COMPOSITOR'S ONLY OUTBOUND NETWORK REQUEST, so it has a
-	// switch, and the switch is honoured at the one place that matters: with it
-	// off, no fetch is ever spawned and an unknown game reads "App <id>".
-	// Seeded from OverlaySettings::friends_lookup_names by
-	// PanelFriends_SeedFromConfig(); safe from any thread.
-	void SetLookupNames( bool bEnabled );
-	bool LookupNamesEnabled();
-
-	// What the Friends area's "Look up game names online" row reports about the
-	// cache. LOCK-FREE, because it is read from a .Live() fact on the draw
-	// thread: the two counts come out of atomics the poller publishes, so they
-	// can be one poll stale but can never put a frame behind a wedged Steam.
-	struct NameCacheInfo
-	{
-		std::string sPath;          // "" when there is nowhere to put it
-		size_t      nEntries = 0;
-		size_t      nMax     = 0;
-		size_t      nPending = 0;   // ids waiting on the next lookup
-	};
-
-	NameCacheInfo NameCache();
 
 	// =========================================================================
 	//  The poller -- the only thing the panel is allowed to touch
@@ -138,9 +128,13 @@ namespace gamescope::steamfriends
 	// starts no thread and dlopens nothing, exactly as before phase 3.
 	struct View
 	{
-		std::vector<Friend> vecFriends;   // everyone in a game, joinable or not
+		// The rows the panel draws: joinable, in this game.
+		std::vector<Friend> vecFriends;
 		std::string         sStatus;      // StatusText() as of the last poll
-		size_t              nJoinable = 0;
+		// How many friends were in this game AT ALL, joinable or not. The
+		// panel does not draw them -- it is what makes "0 you can join"
+		// distinguishable from "the lobby read is broken". See StatusLine().
+		size_t              nInThisGame = 0;
 		bool                bPolled   = false;  // has a poll ever finished?
 		double              flAgeSec  = 0.0;    // how old the rows are
 	};

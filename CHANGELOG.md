@@ -12,16 +12,9 @@ The newest version below is the one this build reports.
 ## [0.7.0] – 2026-09-09
 
 ### Added
-- **Game names for games you do not own**: a friend playing something you have not
-  installed used to show as "App 252490"; the friends list now looks those names up
-  once against Steam's public list and remembers them on disk, so it happens once per
-  game ever. Only app ids are sent, nothing about you, and only while the list is
-  open.
-- **Look up game names online**: a new switch in the Friends area turns that lookup
-  off -- with it off, nothing leaves your machine and an unknown game stays
-  "App 252490".
-- **Joinable friends first**: the friends list is now ordered with the ones you can
-  join at the top and everyone else below, alphabetically within each group.
+- **The friends list shows who you can join, here, now**: it lists the friends who
+  are in the game you are running and in a lobby you can walk into, alphabetically.
+  Click one and Steam moves you in without relaunching anything.
 
 ### Fixed
 - **The friends list no longer moves under you**: the highlighted row now follows the
@@ -29,6 +22,13 @@ The newest version below is the one this build reports.
   and quietly selecting somebody else.
 
 ### Removed
+- **Friends in other games, and friends you cannot join**: the list no longer shows
+  them, and the whole Friends page is hidden when you are not in a Steam game. The
+  Status line still says how many friends are in this game and how many of those you
+  can join, so an empty list always tells you which it is.
+- **The online game-name lookup**: every row is now the game you are already in, so
+  the lookup, its saved list of names and the "Look up game names online" switch are
+  gone -- gamescope-ritz makes no network request of any kind.
 - **The Steam chat companion**: yesterday's `Ctrl+Shift+C` browser overlay for Steam's
   web chat is gone, superseded by the friends list above, which can actually join a
   friend. Its settings area, its keybind and its browser process are all removed.

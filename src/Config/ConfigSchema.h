@@ -776,44 +776,20 @@ namespace gamescope::config
         // control you need in order to fix it would move on its own.
         std::map<std::string, std::string> keybinds;
 
-        // ---- Friends list: look game names up online -- src/SteamAppNames.h,
-        // ---- area `system.friends` (2026-09-09) ---------------------------
-        // THE ONLY SETTING IN THIS WHOLE FORK THAT DECIDES WHETHER THE
-        // COMPOSITOR OPENS A SOCKET, so it gets the long comment.
+        // ---- The friends list has no settings (2026-09-09) ---------------
+        // `overlay.friends_lookup_names` used to live here: the one switch in
+        // this whole fork that decided whether the compositor opened a socket.
+        // The friends list is now scoped to the game this session is already
+        // running (superdoc/features/steam-friends.md), so every row is that
+        // game and there was nothing left to look a name up FOR -- the lookup,
+        // its disk cache, src/SteamAppNames.h and this switch were all deleted
+        // together. gamescope-ritz makes no outbound network request of any
+        // kind and has no setting that could enable one.
         //
-        // The friends list gets an app id out of Steam and looks the name up in
-        // Steam's own appmanifest_<id>.acf. That covers every game INSTALLED
-        // here and nothing else, so a friend playing something the user does
-        // not own read as "App 252490". With this on, ids the local files
-        // cannot answer are looked up once against Steam's keyless public
-        // endpoint and cached to disk forever.
-        //
-        // WHAT IS SENT: a list of app ids, and nothing else. No SteamID, no
-        // persona name, no lobby id, no account name, no identifier of any
-        // kind -- SteamAppNames.h's BuildAppNamesUrl() builds the whole query
-        // string out of std::to_string() over integers, so there is no string
-        // input for anything else to travel in. Plus what any HTTP request
-        // carries: this machine's IP, and curl's version as the User-Agent. No
-        // cookie, no curlrc, no netrc.
-        //
-        // DEFAULT ON, and the argument is worth writing down because the
-        // opposite is defensible. FOR: the request contains nothing about the
-        // user; it happens ONLY while the friends list is actually being
-        // looked at (the poller sleeps otherwise) and only for ids the disk
-        // could not answer, so an idle compositor and a user who never opens
-        // the panel make zero requests; and defaulting it off would ship the
-        // "App 252490" the feature exists to fix, behind a switch nobody knows
-        // to look for. AGAINST: a compositor talking to the internet is a new
-        // class of behaviour, and consent is normally opt-in. The tie is broken
-        // by what is actually at stake -- an app id is not a fact about a
-        // person -- and by the switch being one row away, in the same area, with
-        // its Help line naming exactly what leaves the machine.
-        //
-        // GLOBAL, for the same reason every other `overlay.*` field is: "may
-        // this machine reach the network" is a fact about the machine, not
-        // about which game is running. A per-profile version would mean names
-        // appear in CS2 and not in Rust with no visible cause.
-        bool friends_lookup_names = true;
+        // A stale `"friends_lookup_names"` left in somebody's global.json from
+        // an older build is simply not read: Load() below asks for named keys
+        // and ignores everything else, so the file loads unchanged and the key
+        // disappears the next time that file is rewritten.
     };
 
     // Toast notification system (this fork's own addition, see
