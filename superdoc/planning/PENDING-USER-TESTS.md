@@ -86,6 +86,13 @@ through this list, tell your assistant the results — answering it lets the tem
   Expect at least one non-zero lobby and zero outside the expected range — a non-zero
   "outside the band" means the lobby offset is wrong and a join link built from it would
   carry a wrong number.
+- [ ] **Steam invite: the one read that decides whether it's buildable at all.** While
+  CS2 is actually running, run
+  `build-release/verify-shots/steam-invite-2026-09-09/invite_probe`. Read the last few
+  lines: `GetFriendGamePlayed(self)` returning our own lobby id, present and in the
+  expected band, means an invite naming a lobby can be built; `false`, or an id outside
+  that band, means it can't and inviting would have to fall back to "join this game"
+  with no lobby.
 - [ ] **Then join once by hand**, for a friend in the game you already have running:
   `steam "steam://joinlobby/<appid>/<lobbyid>/<their steamid64>"`. Report whether the
   running game moves you in or relaunches — the "different game" case in
