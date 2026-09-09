@@ -422,14 +422,26 @@ namespace gamescope::config
         // 0.0..1.0 -- how coarse the map is. Maps to a blur sigma of 1..6
         // map texels (effects_curve.h's bmap_sigma), i.e. 8..48 SOURCE
         // pixels at any resolution, so the smallest object that gets even
-        // half of its own correction is roughly 11 px across at 0 and 67 px
-        // at 1. THIS IS THE HALO CONTROL and it is deliberately the user's:
-        // a finer map corrects a smaller object and puts a brighter rim
-        // around a hard edge, and the mistake this effect exists to avoid is
-        // widening the radius until the halo goes away and the operator can
-        // no longer see a player (which is exactly where Adaptive Gamma's
-        // own local adaptation ended up).
-        float radius = 0.5f;
+        // half of its own correction is roughly 11 px across at 0, 25 px at
+        // the shipped 0.25, 39 px at 0.5 and 67 px at 1. THIS IS THE HALO
+        // CONTROL and it is deliberately the user's: a finer map corrects a
+        // smaller object and puts a brighter rim around a hard edge, and the
+        // mistake this effect exists to avoid is widening the radius until
+        // the halo goes away and the operator can no longer see a player
+        // (which is exactly where Adaptive Gamma's own local adaptation
+        // ended up).
+        //
+        // `Why 0.25 and not the middle of the slider:` measured. On the
+        // four-object reference scene (scripts/effects-regression.sh's
+        // `models`, boxes 16 / 32 / 64 / 128 px wide) 0.5 resolves only the
+        // 64 and 128 px objects -- a 32 px one takes its bright background's
+        // correction and goes DARKER, which is the very defect this effect
+        // exists to fix, one size down. 0.25 pulls the threshold to about
+        // 25 px, which covers a player at the distances that matter, and its
+        // halo is both smaller and much tighter than a wide map's (measured:
+        // +32 counts confined to ~16 px at Radius 0, against +40 spread over
+        // 64 px at Radius 1). See shader-effects.md's size/radius table.
+        float radius = 0.25f;
         // 0.1..0.9 -- the level every neighbourhood is flattened toward, and
         // also the operator's exact neutral point: where the map already
         // reads this, the exponent is exactly 1 and the pixel is untouched.

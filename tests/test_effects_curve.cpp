@@ -1638,7 +1638,7 @@ TEST_CASE( "reshade.brightness_map defaults and round-trip", "[effects_curve][co
 	Settings s{};
 	REQUIRE( s.reshade.brightness_map.enabled == false );
 	REQUIRE_THAT( s.reshade.brightness_map.strength, WithinAbs( 0.5f, 1e-6f ) );
-	REQUIRE_THAT( s.reshade.brightness_map.radius, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.brightness_map.radius, WithinAbs( 0.25f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.brightness_map.target_luminance, WithinAbs( 0.5f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.brightness_map.min_brightness, WithinAbs( 0.10f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.brightness_map.max_brightness, WithinAbs( 0.80f, 1e-6f ) );

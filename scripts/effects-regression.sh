@@ -93,6 +93,13 @@
 #                     the extremes, that nothing away from a source moves,
 #                     and the shimmer question as a number. See the block at
 #                     the bottom of this script.
+#   bmap-*           2026-09-09, BRIGHTNESS MAP (EXPERIMENTAL): the control on
+#                     the four-object scene, strength-0 identity, THE HEADLINE
+#                     CHECK (a dark object on a bright field must lift, at four
+#                     object sizes), the same for the inverse, the halo out
+#                     from a hard edge across the strength and radius range,
+#                     and the shimmer question on a panning scene. See the
+#                     block at the bottom of this script.
 #   colors-*         2026-09-08, the Saturation/Vibrancy split: Saturation
 #                     (renamed from "Vibrancy") and the new Vibrancy each
 #                     pinned against their closed-form formula on a scene
@@ -253,6 +260,7 @@ write_config() {
 		        "pre_sharpen": { "enabled": false },
 		        "shadow_lift": { "enabled": false },
 		        "bloom": { "enabled": false },
+		        "brightness_map": { "enabled": false },
 		        "adaptive_brightness": { "enabled": false, "mode": "whole_image", "strength": 1.0,
 		                                 "local_strength": 0.0 }
 		    }
@@ -263,20 +271,31 @@ write_config() {
 GS_LOG=""
 GS_WL_NAME=""
 CLIENT_LOG=""
+# The client's scene ring, and the ONE reason it is a variable. Several checks
+# below navigate by "advance N to wrap back round to `dark`", so the ring's
+# LENGTH is load-bearing arithmetic scattered through this script -- appending
+# a scene to it silently walks every one of those to the wrong picture, and
+# the checks then measure a scene they were never written for and fail in ways
+# that look like the effect broke (measured, 2026-09-09: 28 pre-existing
+# checks went red the first time two scenes were appended here). So a block
+# that wants new scenes RESTARTS the instance with its own ring instead of
+# extending this one -- see the Brightness Map block at the bottom.
+SCENES_DEFAULT="dark,bright,mid,texdark,halfsplit,halobox,haloinv,colors"
+SCENES="$SCENES_DEFAULT"
 start_instance() {
 	teardown_instance
 	GS_LOG="$RUNDIR/gamescope.log"
 	CLIENT_LOG="$OUT_DIR/client.log"
 	: > "$CLIENT_LOG"
 	rm -f "$PIDFILE"
-	log "starting gamescope + effects_scene_client (dark,bright,mid,texdark,colors)"
+	log "starting gamescope + effects_scene_client ($SCENES)"
 	# texdark: 2 % lights so the 98th percentile sits in the histogram's gap,
 	# --periodic so the 3 px/frame pan changes nothing but where the taps
 	# land (the stability checks). --motion only moves the textured scene.
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
 		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" \
 		--force-windows-fullscreen -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes dark,bright,mid,texdark,halfsplit,halobox,haloinv,colors --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
+		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes $SCENES --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -1092,6 +1111,200 @@ take_screenshot 20-texdark-ag-fast >/dev/null   # the picture behind the numbers
 
 ag_defaults
 set_ag 0
+
+# ---------------------------------------------------------------------------
+# BRIGHTNESS MAP (2026-09-09, EXPERIMENTAL). The user: "When the world is
+# rather bright and player models are rather dark, the player models turn
+# almost black... Lets add an experimental mode, that creates a brightness map
+# of the whole image and then adjusts based on that."
+#
+# THE HEADLINE CASE IS A SIZE QUESTION, so the scene is four objects at once.
+# Adaptive Gamma's local adaptation fails this request not because it is
+# switched off but because its map is blurred to sigma ~4.7 cells of a 16x16
+# grid and CANNOT SEE a player; the only honest way to show this operator does
+# better is to sweep the object size and say which sizes it reaches. Hence
+# `models` (16 / 32 / 64 / 128 px dark boxes on a bright field) and its
+# inverse, and hence a radius sweep reported as a table rather than as a
+# threshold nobody could pick honestly in advance.
+#
+# IT RUNS ON ITS OWN INSTANCE, with its own scene ring. Appending the two new
+# scenes to the shared ring instead broke 28 checks above it in one run: they
+# navigate by "advance N to wrap round to dark", so the ring's length is
+# arithmetic several blocks depend on. Restarting is a few seconds and it also
+# means this block starts from a known scene rather than from wherever the
+# previous one left the client.
+#
+#   bmap-models-off       the control: every box and the field read back what
+#                         the client painted, so every number below is about
+#                         the operator and not about the capture.
+#   bmap-models-identity  Strength 0 with the switch ON is identical to the
+#                         switch being off -- the request's "0 is the original
+#                         image", measured on real captures rather than only
+#                         asserted on the header text.
+#   bmap-headline         THE DELIVERABLE. A Strength sweep on the dark-on-
+#                         bright scene: every box lifts monotonically, the
+#                         largest by a real number of counts, and the field
+#                         does not overshoot the target.
+#   bmap-headline-inv     the same for a bright object on a dark field, where
+#                         the correction has to run the other way.
+#   bmap-size-radius      INFO: the per-size table at Radius 0 / 0.5 / 1, i.e.
+#                         WHICH OBJECT SIZES survive each setting of the halo
+#                         control. That is the trade-off, as a table.
+#   bmap-min/max-*        INFO: the same table across each guard rail, which is
+#                         how "what do Min and Max brightness actually do"
+#                         becomes numbers instead of a description.
+#   bmap-halo-*           the artefact: no ring at any setting (the map is a
+#                         non-negative blur of a step, so a turning point would
+#                         mean something is wrong), and the amplitude reported
+#                         at low / default / high strength and at both ends of
+#                         Radius.
+#   bmap-stability-*      a still frame must produce a bit-identical output
+#                         pixel, and turning the effect on must not widen the
+#                         frame mean's spread on a PANNING --periodic scene.
+#                         A fine spatial filter is more prone to this than the
+#                         coarse one, so it is measured rather than argued.
+# ---------------------------------------------------------------------------
+BMAP_ID="image.shaders.brightness_map"
+BMAP_STRENGTH_ID="image.shaders.brightness_map.strength"
+BMAP_RADIUS_ID="image.shaders.brightness_map.radius"
+BMAP_TARGET_ID="image.shaders.brightness_map.target"
+BMAP_MIN_ID="image.shaders.brightness_map.min_brightness"
+BMAP_MAX_ID="image.shaders.brightness_map.max_brightness"
+BMAP_STRENGTH_DEFAULT=0.5   # == ConfigSchema.h's ReshadeBrightnessMapSettings
+BMAP_RADIUS_DEFAULT=0.25
+BMAP_TARGET_DEFAULT=0.5
+BMAP_MIN_DEFAULT=0.10
+BMAP_MAX_DEFAULT=0.80
+
+set_bmap() { gsctl overlay_e2_set "$BMAP_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+set_bmap_param() { gsctl overlay_e2_set "$1 $2" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+bmap_defaults() {
+	set_bmap_param "$BMAP_STRENGTH_ID" "$BMAP_STRENGTH_DEFAULT"
+	set_bmap_param "$BMAP_RADIUS_ID" "$BMAP_RADIUS_DEFAULT"
+	set_bmap_param "$BMAP_TARGET_ID" "$BMAP_TARGET_DEFAULT"
+	set_bmap_param "$BMAP_MIN_ID" "$BMAP_MIN_DEFAULT"
+	set_bmap_param "$BMAP_MAX_ID" "$BMAP_MAX_DEFAULT"
+}
+
+SCENES="models,modelsinv,halobox,haloinv,texdark"
+start_instance
+sleep "$ADAPT_SETTLE_S"
+
+# --- models: the control, the identity, and THE HEADLINE ---------------------
+BMAP_MODELS_OFF="$(take_screenshot 21-models-bmap-off)"
+run_sampler modelsoff "$BMAP_MODELS_OFF" models
+set_bmap_param "$BMAP_STRENGTH_ID" 0.0
+set_bmap 1
+run_sampler modelsid "$BMAP_MODELS_OFF" "$(take_screenshot 21-models-bmap-strength-0.0)" models
+declare -a BMAP_LIFT=()
+for X in 0.25 0.5 0.75 1.0; do
+	set_bmap_param "$BMAP_STRENGTH_ID" "$X"
+	BMAP_LIFT+=( "$(take_screenshot "21-models-bmap-strength-$X")" )
+done
+run_sampler modelslift bmap-headline models 25 "${BMAP_LIFT[@]}"
+bmap_defaults
+
+# WHICH SIZES SURVIVE EACH RADIUS -- reported, not asserted. There is no bar
+# anybody could set honestly here: a wider map SHOULD lose the smaller
+# objects, that is precisely what the control does.
+declare -a BMAP_SIZE=()
+for R in 0.0 0.25 0.5 1.0; do
+	set_bmap_param "$BMAP_RADIUS_ID" "$R"
+	BMAP_SIZE+=( "$(take_screenshot "21-models-bmap-radius-$R")" )
+done
+run_sampler modelsinfo bmap-size-radius "${BMAP_SIZE[@]}"
+bmap_defaults
+
+# The two guard rails, at full strength so their effect is at its largest:
+# raising Min must SHRINK the lift the dark objects get (their neighbourhood
+# is treated as brighter than it is), and raising Max must let the bright
+# field be pulled down harder.
+set_bmap_param "$BMAP_STRENGTH_ID" 1.0
+declare -a BMAP_RAILS=()
+for M in 0.02 0.10 0.30 0.50; do
+	set_bmap_param "$BMAP_MIN_ID" "$M"
+	BMAP_RAILS+=( "$(take_screenshot "21-models-bmap-min-$M")" )
+done
+run_sampler modelsinfo bmap-min-brightness "${BMAP_RAILS[@]}"
+set_bmap_param "$BMAP_MIN_ID" "$BMAP_MIN_DEFAULT"
+declare -a BMAP_RAILS2=()
+for M in 0.50 0.70 0.90; do
+	set_bmap_param "$BMAP_MAX_ID" "$M"
+	BMAP_RAILS2+=( "$(take_screenshot "21-models-bmap-max-$M")" )
+done
+run_sampler modelsinfo bmap-max-brightness "${BMAP_RAILS2[@]}"
+bmap_defaults
+set_bmap 0
+
+# --- modelsinv: the inverse, a bright object on a dark field ----------------
+advance_scenes 1
+sleep "$ADAPT_SETTLE_S"
+run_sampler modelsoff "$(take_screenshot 22-modelsinv-bmap-off)" modelsinv
+set_bmap 1
+declare -a BMAP_LIFT_I=()
+for X in 0.25 0.5 0.75 1.0; do
+	set_bmap_param "$BMAP_STRENGTH_ID" "$X"
+	BMAP_LIFT_I+=( "$(take_screenshot "22-modelsinv-bmap-strength-$X")" )
+done
+run_sampler modelslift bmap-headline-inv modelsinv 25 "${BMAP_LIFT_I[@]}"
+bmap_defaults
+set_bmap 0
+
+# --- halobox / haloinv: the artefact ----------------------------------------
+advance_scenes 1
+sleep "$ADAPT_SETTLE_S"
+set_bmap 1
+declare -a BMAP_HALO_S=()
+for X in 0.25 0.5 1.0; do
+	set_bmap_param "$BMAP_STRENGTH_ID" "$X"
+	BMAP_HALO_S+=( "$(take_screenshot "23-halobox-bmap-strength-$X")" )
+done
+run_sampler bmapline bmap-halo-strength-halobox "${BMAP_HALO_S[@]}"
+bmap_defaults
+run_sampler bmaphalo bmap-halo-halobox-default "$(take_screenshot 23-halobox-bmap-default)" halobox 50
+declare -a BMAP_HALO_R=()
+for R in 0.0 0.5 1.0; do
+	set_bmap_param "$BMAP_RADIUS_ID" "$R"
+	BMAP_HALO_R+=( "$(take_screenshot "23-halobox-bmap-radius-$R")" )
+done
+run_sampler bmapline bmap-halo-radius-halobox "${BMAP_HALO_R[@]}"
+bmap_defaults
+
+advance_scenes 1   # -> haloinv, the inverse edge
+sleep "$ADAPT_SETTLE_S"
+run_sampler bmaphalo bmap-halo-haloinv-default "$(take_screenshot 24-haloinv-bmap-default)" haloinv 50
+set_bmap_param "$BMAP_STRENGTH_ID" 1.0
+# The budget rises with strength ON PURPOSE, and this one is generous: at
+# full strength on a hard-edged 320 px box the rim is the operator working,
+# not a defect (measured -82 counts at Radius 0.5). What the bar catches is a
+# regression, and what the user acts on is the number at the shipped default
+# a few lines above -- so both are printed and both are asserted, at their own
+# honest sizes rather than at one bar chosen so that both happen to clear.
+run_sampler bmaphalo bmap-halo-haloinv-full "$(take_screenshot 24-haloinv-bmap-full)" haloinv 95
+bmap_defaults
+set_bmap 0
+
+# --- texdark: stability, still and then panning ------------------------------
+advance_scenes 1
+sleep "$ADAPT_SETTLE_S"
+toggle_motion      # this instance starts with --motion 3 RUNNING; pause it
+sleep 1
+set_bmap 1
+arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-25-bmap-static.txt"
+run_sampler ablog "$OUT_DIR/ablog-25-bmap-static.txt" bmapstatic
+
+# The shimmer question. --periodic fixes the frame's light population, so the
+# frame mean's spread across captures is the harness's own noise, and a map
+# this fine must not add to it.
+toggle_motion
+sleep 1
+declare -a BMAP_JIT=()
+set_bmap 0
+for k in 1 2 3 4 5 6; do BMAP_JIT+=( "$(take_screenshot "25-texdark-bmap-off-$k")" ); done
+set_bmap 1
+for k in 1 2 3 4 5 6; do BMAP_JIT+=( "$(take_screenshot "25-texdark-bmap-on-$k")" ); done
+run_sampler bloomjitter bmap-stability-pan 6 "${BMAP_JIT[@]}"
+set_bmap 0
 
 END_TS=$(date +%s)
 {

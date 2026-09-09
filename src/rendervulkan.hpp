@@ -641,7 +641,7 @@ struct NativeEffectsState_t
 	// superdoc/features/shader-effects.md.
 	bool  bBrightnessMap = false;
 	float flBmapStrength = 0.5f;      // 0..1, the map's opacity; 0 = exact identity
-	float flBmapRadius = 0.5f;        // 0..1 -> effects_curve.h's bmap_sigma()
+	float flBmapRadius = 0.25f;       // 0..1 -> effects_curve.h's bmap_sigma()
 	float flBmapTarget = 0.5f;        // 0.1..0.9, what the frame is flattened toward
 	float flBmapMin = 0.10f;          // 0.02..0.50, the map's floor
 	float flBmapMax = 0.80f;          // 0.50..0.90, the map's ceiling
