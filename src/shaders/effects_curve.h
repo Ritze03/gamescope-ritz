@@ -611,7 +611,8 @@ EC_FUNC float bloom_apply( float base, float glow, float intensity )
 //
 // WHAT IT IS. A purely SPATIAL local tone operator. Three extra dispatches
 // build a low-pass of the frame's own luminance -- the "brightness map" --
-// at 1/BMAP_DOWN of the base layer in each axis (cs_effects_bmap_down.comp,
+// at 1/4, 1/8 or 1/16 of the base layer in each axis -- the reduction is
+// chosen per frame from the Radius, see bmap_down() (cs_effects_bmap_down.comp,
 // then effects_bmap_blur.h horizontally and vertically), and the per-pixel
 // pass then divides the picture by that map against a mid-grey target. It
 // reads NOTHING from cs_effects_measure.comp: no histogram, no percentile,
@@ -625,8 +626,9 @@ EC_FUNC float bloom_apply( float base, float glow, float intensity )
 // of resolving which half of the screen you are in". A player model is far
 // smaller than that, so it is averaged into its bright background and
 // receives the background's correction: the exact defect the request
-// describes. This operator's map is 1/8 of the frame with a user-controlled
-// blur of 8..48 SOURCE pixels of sigma, i.e. roughly 15..70x finer per axis,
+// describes. This operator's map is a quarter to a sixteenth of the frame
+// with a user-controlled blur of 4..96 SOURCE pixels of sigma, i.e. roughly
+// 6..140x finer per axis,
 // which is what lets a player-sized object have a correction of its own.
 // The price is halos, and the radius is the user's dial for them rather
 // than a constant widened until the effect stops working.
@@ -685,8 +687,52 @@ EC_FUNC float bloom_apply( float base, float glow, float intensity )
 // the floor -- so a hand-edited config cannot produce an inverted pair
 // either. When they meet exactly at the target the operator is the exact
 // identity, whatever the strength.
-const float BMAP_SIGMA_MIN = 1.0f;    // blur sigma at Radius 0, in map texels
-const float BMAP_SIGMA_MAX = 6.0f;    // ... and at Radius 1
+// ---- Radius: the blur's reach, in SOURCE pixels ---------------------------
+//
+// Widened and re-floored 2026-09-10, from the user: *"Cant we make it, so a
+// Radius of 0 is actually pixel perfect? It looks like there is a small
+// radius still"* and *"Also increase the max radius to 2.0 effectively"*.
+//
+// `Why a Radius of 0 CANNOT be pixel perfect, and why nobody should try
+// again:` the operator divides the picture by a low-pass OF ITSELF. If the
+// map equalled the picture, every pixel would divide by its own value and
+// the exponent ln(t)/ln(x) would land EVERY pixel exactly on the target --
+// a uniformly flat frame at Target brightness, with the image gone. The
+// blur is not an implementation artefact to be minimised away; it IS the
+// mechanism, and the distance between the picture and its own low-pass is
+// the entire output. So the floor is a question of "how small before the
+// picture dies", not of "how close to zero can we get".
+//
+// What the floor is now, and how it was picked. These four numbers are in
+// SOURCE PIXELS (not map texels, which is what they meant before this
+// change) because the map's own reduction is no longer fixed -- see
+// bmap_down() below. The mapping is piecewise linear with its two knots at
+// exactly the two Radius values that had to keep their meaning:
+//
+//     Radius 0.00 -> sigma  4 px   the new floor (was 8)
+//     Radius 0.25 -> sigma 18 px   THE SHIPPED DEFAULT, unchanged
+//     Radius 1.00 -> sigma 48 px   the old top of the slider, unchanged
+//     Radius 2.00 -> sigma 96 px   the new top: exactly twice the old one
+//
+// so every stored Radius from 0.25 up means EXACTLY what it meant before
+// (the segment between the knots is the old line 8 + 40r, evaluated at the
+// same points), values below 0.25 get finer -- which is the request -- and
+// 2.0 is new range rather than a rescaling of the old.
+//
+// `Why 4 px and not 2 or 1:` measured, on the same reference scenes the
+// regression gate uses. Halving the map's reduction to 1/4 halves the floor
+// and lets the operator resolve a ~6 px object (against ~11 px before); a
+// further halving to 1/2 would buy ~3 px but costs SIXTEEN times the map
+// memory and, measured on a 16 px-cell textured frame, removes a third of
+// the picture's own local contrast against a quarter at 1/4. That is the
+// "picture dies" boundary arriving, and it arrives faster than the
+// resolution gain does. See shader-effects.md's Radius section.
+const float BMAP_SIGMA_MIN  = 4.0f;    // blur sigma at Radius 0, in SOURCE pixels
+const float BMAP_SIGMA_DEF  = 18.0f;   // ... at Radius 0.25, the shipped default
+const float BMAP_SIGMA_KNEE = 48.0f;   // ... at Radius 1, the old top of the slider
+const float BMAP_SIGMA_MAX  = 96.0f;   // ... and at the new Radius 2
+const float BMAP_RADIUS_DEF = 0.25f;   // == ConfigSchema.h's shipped radius
+const float BMAP_RADIUS_MAX = 2.0f;    // == PanelShaders.cpp's Range() top
 // The reachable ends of the two rails: == PanelShaders.cpp's Range() ends
 // for Min brightness and Max brightness, asserted equal in
 // tests/test_effects_curve.cpp so a slider always reaches the bound it says
@@ -705,18 +751,104 @@ const float BMAP_LEVEL_MAX = 0.90f;
 const float BMAP_GAMMA_MIN = 0.02f;
 const float BMAP_GAMMA_MAX = 24.0f;
 
-// Radius 0..1 -> the separable blur's sigma, in map texels. The map is
-// BMAP_DOWN (8) times smaller than the game's own image, so this is 8..48
-// SOURCE pixels of sigma at every resolution (the reduction is a fixed
-// factor, not a fixed size). A Gaussian passes about erf(w / (2*sigma*
-// sqrt(2))) of a feature `w` wide, so the smallest object that gets even
-// half of its own correction is roughly 1.4 sigma across: ~11 px at Radius
-// 0, ~39 px at the default 0.5, ~67 px at Radius 1, all at any resolution.
-// That is the number that matters -- it is what decides whether a player
-// model gets its own exposure or its background's.
+// Radius 0..2 -> the separable blur's sigma, in SOURCE pixels -- the same
+// number at every output resolution, because the map's reduction is a
+// factor rather than a size. Piecewise linear through the four points in
+// the block above; the two interior knots are the shipped default and the
+// old top of the slider, which is what makes every stored Radius >= 0.25
+// mean exactly what it meant before 2026-09-10.
+//
+// A Gaussian passes about erf(w / (2*sigma*sqrt(2))) of a feature `w` wide,
+// so the smallest object that gets even half of its own correction is
+// roughly 1.4 sigma across: ~6 px at Radius 0, ~25 px at the default 0.25,
+// ~67 px at Radius 1 and ~134 px at Radius 2. That is the number that
+// matters -- it is what decides whether a player model gets its own
+// exposure or its background's.
 EC_FUNC float bmap_sigma( float radius )
 {
-	return BMAP_SIGMA_MIN + ( BMAP_SIGMA_MAX - BMAP_SIGMA_MIN ) * clamp( radius, 0.0f, 1.0f );
+	float r = clamp( radius, 0.0f, BMAP_RADIUS_MAX );
+	if ( r <= BMAP_RADIUS_DEF )
+		return BMAP_SIGMA_MIN + ( BMAP_SIGMA_DEF - BMAP_SIGMA_MIN ) * ( r / BMAP_RADIUS_DEF );
+	if ( r <= 1.0f )
+		return BMAP_SIGMA_DEF + ( BMAP_SIGMA_KNEE - BMAP_SIGMA_DEF )
+		     * ( ( r - BMAP_RADIUS_DEF ) / ( 1.0f - BMAP_RADIUS_DEF ) );
+	return BMAP_SIGMA_KNEE + ( BMAP_SIGMA_MAX - BMAP_SIGMA_KNEE )
+	     * ( ( r - 1.0f ) / ( BMAP_RADIUS_MAX - 1.0f ) );
+}
+
+// ---- The map's reduction, and the kernel that runs on it ------------------
+//
+// THE PYRAMID, and why the kernel was not simply widened (2026-09-10). The
+// blur has to cover sigma 4..96 source pixels now, a 24:1 range, and a
+// fixed 33-tap kernel on a fixed 1/8 map covers exactly one point of it
+// well. The three ways out, and why this one:
+//
+//   * MORE TAPS on a fixed fine map. Honest but quadratic where it hurts:
+//     at 1/4 and sigma 96 an untruncated kernel is +-72 taps, about 18 taps
+//     per source pixel per frame -- nine times today's cost, and all of it
+//     paid at the setting a user is most likely to leave on.
+//   * A STRIDED (a-trous) kernel, the trick cs_effects_measure.comp uses.
+//     Cheap, but it samples the map through a comb, and a comb passes map
+//     detail at exactly the stride's own period straight through the
+//     "blur". On a static frame that is a rim that should not be there; on
+//     a moving one it is the neighbourhood's exposure pumping as content
+//     slides across the comb -- the very failure the down pass reads every
+//     source pixel to avoid.
+//   * A COARSER GRID for a wider blur -- this one. The reduction is chosen
+//     per frame from the sigma so the blur is always the SAME modest number
+//     of texels wide, whatever the Radius. It needs no new anti-aliasing
+//     argument, because the down pass's box mean over the whole reduction
+//     block IS the prefilter that makes the coarser sampling legal, and it
+//     is already there for its own reasons.
+//
+// The result is a tap count that barely moves across the whole slider (1.9
+// taps per source pixel at Radius 0, 5.6 at the worst point, 1.3 at Radius
+// 2, against a flat 2.0 before) and a kernel that is never truncated.
+//
+// BMAP_TEXEL_SIGMA_MIN is the band: the reduction is doubled while the blur
+// would still be at least this many texels wide afterwards, so sigma in
+// texels always lands in [1, 2 * this). 3.5 rather than a rounder number
+// because it puts Radius 1.0 -- the value whose behaviour had to be
+// preserved exactly -- on a 1/8 map at sigma 6 texels, which is bit for bit
+// the configuration that shipped.
+//
+// THE FLOOR IS STILL ONE TEXEL, and that is measured rather than inherited:
+// on a textured reference frame, dropping the blur to half a texel roughly
+// triples the map's reconstruction error against a true full-resolution
+// Gaussian, and the error that appears is periodic at the reduction's own
+// grid -- the downsample's blocks, showing through. Getting a smaller sigma
+// by halving the GRID instead costs about a third as much error as getting
+// it by halving the TEXEL sigma. So: a finer floor means a finer map, never
+// a sub-texel kernel.
+const float BMAP_TEXEL_SIGMA_MIN = 3.5f;
+const float BMAP_DOWN_MIN = 4.0f;   // == kEffectsBmapDownMin in rendervulkan.cpp
+const float BMAP_DOWN_MAX = 16.0f;
+
+// The reduction this sigma runs at: 4, 8 or 16. Doubled while the blur
+// stays at least BMAP_TEXEL_SIGMA_MIN texels wide. Written as a loop rather
+// than a log2 so it reads the same in GLSL and C++ and cannot round the
+// wrong way at a boundary.
+EC_FUNC float bmap_down( float sigmaSrc )
+{
+	float s = clamp( sigmaSrc, BMAP_SIGMA_MIN, BMAP_SIGMA_MAX );
+	float d = BMAP_DOWN_MIN;
+	for ( int i = 0; i < 4; i++ )
+	{
+		if ( d * 2.0f > BMAP_DOWN_MAX || s / ( d * 2.0f ) < BMAP_TEXEL_SIGMA_MIN )
+			break;
+		d = d * 2.0f;
+	}
+	return d;
+}
+
+// The blur's half-width in texels: ceil(3 sigma), i.e. the kernel is never
+// truncated at more than 0.3 % of its mass. Bounded by construction --
+// bmap_down() keeps sigma under 2 * BMAP_TEXEL_SIGMA_MIN texels, so this is
+// never more than 21 -- but clamped anyway so a hand-edited uniform cannot
+// turn a compute dispatch into a hang.
+EC_FUNC float bmap_taps( float sigmaTexels )
+{
+	return clamp( ceil( 3.0f * sigmaTexels ), 1.0f, 24.0f );
 }
 
 // The map value this pixel's exponent is fitted to, after the two guard

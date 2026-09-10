@@ -5,7 +5,7 @@
 // request is quoted in full at the head of effects_curve.h's BRIGHTNESS MAP
 // block).
 //
-// WHAT IT WRITES. One texel per BMAP_DOWN x BMAP_DOWN block of the base
+// WHAT IT WRITES. One texel per u_bmapDown x u_bmapDown block of the base
 // layer: the arithmetic mean of that block's graded Rec.601 luma, as a
 // 16-bit fixed-point number spread over the texel's R and G lanes
 // (effects_curve.h's bmap_pack_hi/lo). So the buffer holds "how bright this
@@ -33,7 +33,10 @@
 // block: a sparse sampling makes a small object's contribution appear and
 // disappear as the grid slides over it under camera motion. On a glow that
 // is a shimmer; on a TONE operator it is the neighbourhood's exposure
-// pumping, which is far more visible. See effects_common.h's BMAP_DOWN note.
+// pumping, which is far more visible. It earns its keep a second time since
+// 2026-09-10: the block mean is also the prefilter that lets the reduction
+// itself be the way a wider Radius is reached. See effects_common.h's
+// brightness-map buffer note and effects_curve.h's bmap_down().
 //
 // It calls the SAME grade() the per-pixel pass, the measure pass, the bloom
 // bright pass and the preview pass call, on the same slot-0 raw-UNORM
@@ -60,22 +63,23 @@ void main()
 {
     ivec2 p       = ivec2(gl_GlobalInvocationID.xy);
     ivec2 srcSize = textureSize(s_samplers[0], 0);
-    ivec2 dstSize = (srcSize + ivec2(BMAP_DOWN - 1)) / BMAP_DOWN;
+    int   down    = max(int(u_bmapDown), 1);
+    ivec2 dstSize = bmap_map_size();
     if (p.x >= dstSize.x || p.y >= dstSize.y)
         return;
 
     float sum = 0.0;
-    for (int j = 0; j < BMAP_DOWN; j++)
+    for (int j = 0; j < down; j++)
     {
-        for (int i = 0; i < BMAP_DOWN; i++)
+        for (int i = 0; i < down; i++)
         {
             // clamp, not skip: on the last block of a size that is not a
-            // multiple of BMAP_DOWN this reads the edge pixel again, which
-            // keeps the divisor constant and the map's border honest.
-            ivec2 t = clamp(p * BMAP_DOWN + ivec2(i, j), ivec2(0), srcSize - ivec2(1));
+            // multiple of the reduction this reads the edge pixel again,
+            // which keeps the divisor constant and the map's border honest.
+            ivec2 t = clamp(p * down + ivec2(i, j), ivec2(0), srcSize - ivec2(1));
             sum += effects_luma(grade(texelFetch(s_samplers[0], t, 0).rgb));
         }
     }
 
-    imageStore(dst, p, bmap_pack(sum / float(BMAP_DOWN * BMAP_DOWN)));
+    imageStore(dst, p, bmap_pack(sum / float(down * down)));
 }

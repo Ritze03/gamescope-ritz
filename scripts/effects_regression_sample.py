@@ -85,6 +85,10 @@ Subcommands
                                         <min-lift> counts, and the far field never
                                         overshoots the target
     modelsinfo <label> <img...>         INFO: the same per-object-size table, no verdict
+    modelspin <label> <image> <b16> <b32> <b64> <b128> <far> <tol>
+                                        the COMPATIBILITY PIN: an existing Radius must
+                                        still produce the picture it produced before
+                                        the slider was widened (2026-09-10)
     bmaphalo <label> <image> <scene> <max-amp>
                                         Brightness Map's halo out from a hard edge: no
                                         ring (the profile must be monotone) and the
@@ -792,7 +796,11 @@ def ema_noise_gain(tau, dt, tau_ref=1.0):
 
 
 def cmd_ablog(args):
-    path, what = args
+    # The optional third argument is a name suffix, for the cases where the
+    # same check is run more than once in a session at different settings and
+    # the results table would otherwise carry two rows with one name.
+    path, what = args[0], args[1]
+    suffix = args[2] if len(args) > 2 else ""
     rows = parse_ablog(path)
     name = f"stability-{what}" if what != "transition" else "transition-gain"
     if what == "static" and rows and rows[-1]["local"] > 0.0:
@@ -902,7 +910,8 @@ def cmd_ablog(args):
         # breathing rather than a glow flickering.
         last = rows[-1]
         d = dict(rp98=p2p(rows, "rp98"), px=p2p(rows, "px"))
-        name = "bloom-stability-static" if what == "bloomstatic" else "bmap-stability-static"
+        name = ("bloom-stability-static" if what == "bloomstatic"
+                else "bmap-stability-static") + suffix
         ok = d["rp98"] <= 0.0 and d["px"] <= 0.0
         detail = (f"{len(rows)} frames: raw p98 p2p={d['rp98']:.6f} (must be 0), "
                   f"px p2p={d['px']:.1f} (must be 0); px={last['px']:.0f}")
@@ -1276,6 +1285,33 @@ def cmd_modelsinfo(args):
     sys.exit(0)
 
 
+def cmd_modelspin(args):
+    """modelspin <label> <image> <b16> <b32> <b64> <b128> <far> <tol> -- THE
+    COMPATIBILITY PIN (2026-09-10).
+
+    The Radius slider was widened to 0..2 and its floor made finer, and the
+    promise made to every saved profile is that a stored Radius from 0.25 up
+    still produces the same picture. The unit tests pin the sigma the curve
+    returns; this pins the PICTURE, against numbers measured on the shipped
+    build before the change (build-release/verify-shots/
+    brightness-map-2026-09-09/captures/21-models-bmap-radius-*.png). If a
+    later change to the map's reduction, its kernel or its sigma curve moves
+    what an existing setting looks like, it fails here."""
+    label, image = args[0], args[1]
+    want = [float(x) for x in args[2:7]]
+    tol = float(args[7])
+    v = model_regions(load(image))
+    got = [v[f"box{w}"] for w in MODEL_W] + [v["far"]]
+    names = [f"box{w}" for w in MODEL_W] + ["far"]
+    failed = [f"{n} {g:.1f} != {w:.1f}" for n, g, w in zip(names, got, want)
+              if abs(g - w) > tol]
+    worst = max(abs(g - w) for g, w in zip(got, want))
+    sys.exit(0 if emit(not failed, label,
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "")
+                       + f"worst deviation {worst:.1f} of {tol:.1f} counts allowed; "
+                       + fmt_models(v)) else 1)
+
+
 def cmd_bmaphalo(args):
     """bmaphalo <label> <image> <scene> <max-amp> -- the halo, on the same
     hard-edged 320 px box the Local-adaptation checks use, but sampled on
@@ -1335,6 +1371,7 @@ def main():
      "bloomnoclip": cmd_bloomnoclip,
      "modelsoff": cmd_modelsoff, "modelsid": cmd_modelsid,
      "modelslift": cmd_modelslift, "modelsinfo": cmd_modelsinfo,
+     "modelspin": cmd_modelspin,
      "bmaphalo": cmd_bmaphalo, "bmapline": cmd_bmapline}[cmd](args)
 
 

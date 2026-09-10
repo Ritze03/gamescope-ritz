@@ -625,9 +625,22 @@ namespace gamescope
 				.Key( "reshade.brightness_map.radius" )
 				.Help( "How large an area counts as \"here\". Small sees small objects but "
 				       "leaves a visible glow around hard edges; large is cleaner but stops "
-				       "being able to see anything player-sized." )
-				.Range( 0.0f, 1.0f )
-				.Step( 0.05f )   // 21 positions
+				       "being able to see anything player-sized. 0 is as fine as it goes -- "
+				       "it cannot be pixel-sharp, because the effect works by comparing the "
+				       "picture with a blurred copy of itself." )
+				// 0..2 since 2026-09-10: the top was doubled ("Also increase
+				// the max radius to 2.0 effectively") and the bottom halved
+				// ("Cant we make it, so a Radius of 0 is actually pixel
+				// perfect? It looks like there is a small radius still").
+				// effects_curve.h's bmap_sigma() keeps every value from 0.25
+				// up meaning exactly what it did, so a saved profile is
+				// untouched.
+				.Range( 0.0f, 2.0f )
+				// 41 positions. Not widened to keep the count down: the fine
+				// end is the half of this slider the user is actually
+				// choosing in, and 0.25 -- the default -- has to stay on the
+				// grid.
+				.Step( 0.05f )
 				.Default( BmapDefaults{}.radius )
 			.Param( "target", "Target brightness",
 				ui::AnyBind::Of<float>(

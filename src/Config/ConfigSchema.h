@@ -419,28 +419,41 @@ namespace gamescope::config
         // makes a dark player model on a bright field clearly readable while
         // the frame still looks like the game rather than like a diagram.
         float strength = 0.5f;
-        // 0.0..1.0 -- how coarse the map is. Maps to a blur sigma of 1..6
-        // map texels (effects_curve.h's bmap_sigma), i.e. 8..48 SOURCE
-        // pixels at any resolution, so the smallest object that gets even
-        // half of its own correction is roughly 11 px across at 0, 25 px at
-        // the shipped 0.25, 39 px at 0.5 and 67 px at 1. THIS IS THE HALO
-        // CONTROL and it is deliberately the user's: a finer map corrects a
-        // smaller object and puts a brighter rim around a hard edge, and the
-        // mistake this effect exists to avoid is widening the radius until
-        // the halo goes away and the operator can no longer see a player
-        // (which is exactly where Adaptive Gamma's own local adaptation
-        // ended up).
+        // 0.0..2.0 -- how coarse the map is. Maps to a blur sigma of
+        // 4..96 SOURCE pixels at any resolution (effects_curve.h's
+        // bmap_sigma), so the smallest object that gets even half of its own
+        // correction is roughly 6 px across at 0, 25 px at the shipped 0.25,
+        // 67 px at 1 and 134 px at 2. THIS IS THE HALO CONTROL and it is
+        // deliberately the user's: a finer map corrects a smaller object and
+        // puts a brighter rim around a hard edge, and the mistake this
+        // effect exists to avoid is widening the radius until the halo goes
+        // away and the operator can no longer see a player (which is exactly
+        // where Adaptive Gamma's own local adaptation ended up).
         //
-        // `Why 0.25 and not the middle of the slider:` measured. On the
-        // four-object reference scene (scripts/effects-regression.sh's
+        // `Why the range is 0..2 and the default is still 0.25`
+        // (2026-09-10): the user asked for both ends -- *"Cant we make it,
+        // so a Radius of 0 is actually pixel perfect? It looks like there is
+        // a small radius still"* and *"Also increase the max radius to 2.0
+        // effectively"*. Pixel perfect is impossible by construction (a map
+        // equal to the picture flattens every pixel onto the target and the
+        // image is gone), but the floor was halved from 8 to 4 source pixels
+        // by building the map at 1/4 of the frame instead of 1/8, and the
+        // top doubled from 48 to 96. bmap_sigma() is piecewise linear with
+        // its knots at exactly 0.25 and 1.0, so EVERY STORED VALUE FROM 0.25
+        // UP MEANS EXACTLY WHAT IT MEANT BEFORE -- no migration, and a saved
+        // profile's picture does not change.
+        //
+        // `Why 0.25 and not the middle of the slider, and not 0:` measured.
+        // On the four-object reference scene (scripts/effects-regression.sh's
         // `models`, boxes 16 / 32 / 64 / 128 px wide) 0.5 resolves only the
         // 64 and 128 px objects -- a 32 px one takes its bright background's
         // correction and goes DARKER, which is the very defect this effect
         // exists to fix, one size down. 0.25 pulls the threshold to about
         // 25 px, which covers a player at the distances that matter, and its
-        // halo is both smaller and much tighter than a wide map's (measured:
-        // +32 counts confined to ~16 px at Radius 0, against +40 spread over
-        // 64 px at Radius 1). See shader-effects.md's size/radius table.
+        // halo is both smaller and much tighter than a wide map's. Shipping
+        // the extreme of a slider is a smell besides: it leaves a user who
+        // finds the look too aggressive able to move in only one direction.
+        // See shader-effects.md's size/radius table.
         float radius = 0.25f;
         // 0.1..0.9 -- the level every neighbourhood is flattened toward, and
         // also the operator's exact neutral point: where the map already

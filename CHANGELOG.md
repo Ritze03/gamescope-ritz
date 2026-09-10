@@ -9,6 +9,25 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.7.1] – 2026-09-10
+
+### Added
+- **Brightness Map's Radius reaches twice as far**: the slider now runs to 2.0, so the
+  effect can be told to treat a much larger area as "here" -- useful when a scene's
+  bright and dark regions are hundreds of pixels across.
+
+### Fixed
+- **Brightness Map's Radius 0 is much finer**: the smallest setting now averages half
+  the area it used to, so it lifts small objects a player-model's size or below that it
+  previously smeared into their background, and its halo is a thin outline instead of a
+  glow. It cannot be made pixel-sharp -- the effect works by comparing the picture with
+  a blurred copy of itself, so a sharp copy would flatten the frame to one colour.
+
+### Info
+- **Saved Brightness Map profiles are unaffected**: every Radius from 0.25 -- the
+  default -- upwards produces exactly the picture it produced before, and only settings
+  below it get finer.
+
 ## [0.7.0] – 2026-09-09
 
 ### Added

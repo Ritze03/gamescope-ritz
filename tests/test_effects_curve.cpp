@@ -1553,21 +1553,103 @@ TEST_CASE( "brightness map: the exponent guards never bind at any reachable sett
 TEST_CASE( "brightness map: Radius maps monotonically onto the blur's sigma",
            "[effects_curve]" )
 {
-	// The halo control. Its two ends are quoted all over the docs as 8..48
-	// SOURCE pixels, which is BMAP_DOWN (8) times the texel sigma here.
+	// The halo control. Since 2026-09-10 its ends are 4..96 SOURCE pixels
+	// (they were 1..6 MAP TEXELS, i.e. 8..48 source pixels at the then-fixed
+	// 1/8 reduction), and the mapping is piecewise linear with knots at
+	// exactly the two values that had to keep their meaning.
 	REQUIRE_THAT( bmap_sigma( 0.0f ), WithinAbs( BMAP_SIGMA_MIN, 1e-6f ) );
-	REQUIRE_THAT( bmap_sigma( 1.0f ), WithinAbs( BMAP_SIGMA_MAX, 1e-6f ) );
-	REQUIRE_THAT( bmap_sigma( 0.5f ), WithinAbs( 3.5f, 1e-6f ) );
+	REQUIRE_THAT( bmap_sigma( BMAP_RADIUS_MAX ), WithinAbs( BMAP_SIGMA_MAX, 1e-6f ) );
 	REQUIRE_THAT( bmap_sigma( -1.0f ), WithinAbs( BMAP_SIGMA_MIN, 1e-6f ) );
 	REQUIRE_THAT( bmap_sigma( 9.0f ), WithinAbs( BMAP_SIGMA_MAX, 1e-6f ) );
+
+	// THE COMPATIBILITY PROMISE, as an assertion rather than as a sentence
+	// in a changelog: the widening must not move any Radius a user already
+	// has stored. Before 2026-09-10 the sigma was 8 + 40 r source pixels
+	// over 0..1; every value from the shipped default up must still be
+	// exactly that. If a later change to the curve breaks a saved profile's
+	// picture, it breaks here first.
+	for ( int i = 25; i <= 100; i++ )
+	{
+		const float r = i / 100.0f;
+		REQUIRE_THAT( bmap_sigma( r ), WithinAbs( 8.0f + 40.0f * r, 1e-4f ) );
+	}
+	REQUIRE_THAT( bmap_sigma( 0.25f ), WithinAbs( 18.0f, 1e-4f ) );   // the shipped default
+	REQUIRE_THAT( bmap_sigma( 1.0f ), WithinAbs( 48.0f, 1e-4f ) );    // the old top
+	// ... and the new top is exactly twice the old one, which is what "make
+	// the max radius 2.0 effectively" asked for.
+	REQUIRE_THAT( bmap_sigma( 2.0f ), WithinAbs( 2.0f * bmap_sigma( 1.0f ), 1e-4f ) );
+	// Below the default the curve is allowed -- required -- to be finer than
+	// it was, because that half of the request is "Radius 0 should be finer".
+	REQUIRE( bmap_sigma( 0.0f ) < 8.0f );
+	REQUIRE( bmap_sigma( 0.1f ) < 8.0f + 40.0f * 0.1f );
+
 	float flPrev = -1.0f;
-	for ( int i = 0; i <= 100; i++ )
+	for ( int i = 0; i <= 200; i++ )
 	{
 		const float s = bmap_sigma( i / 100.0f );
 		REQUIRE( s > flPrev );
-		REQUIRE( s >= 1.0f );
+		REQUIRE( s >= BMAP_SIGMA_MIN );
 		flPrev = s;
 	}
+}
+
+TEST_CASE( "brightness map: the reduction keeps the blur inside one kernel's reach",
+           "[effects_curve]" )
+{
+	// The pyramid (2026-09-10). The Radius covers a 24:1 range of blur
+	// widths; bmap_down() picks the map's reduction so that the blur is
+	// always a modest number of TEXELS wide, which is what lets one small
+	// kernel serve the whole slider without ever being truncated into a box.
+	// Three properties, over the whole slider at the granularity a user can
+	// actually set:
+	for ( int i = 0; i <= 200; i++ )
+	{
+		const float r     = i / 100.0f;
+		const float sigma = bmap_sigma( r );
+		const float down  = bmap_down( sigma );
+		const float tex   = sigma / down;
+
+		// 1. The reduction is one of the three the host allocates for.
+		REQUIRE( ( down == 4.0f || down == 8.0f || down == 16.0f ) );
+		REQUIRE( down >= BMAP_DOWN_MIN );
+		REQUIRE( down <= BMAP_DOWN_MAX );
+
+		// 2. THE ANTI-BLOCKING FLOOR: never a sub-texel blur. Measured
+		//    rather than assumed -- halving the texel sigma roughly triples
+		//    the map's reconstruction error against a true full-resolution
+		//    Gaussian, and the error that appears is periodic at the
+		//    downsample's own grid. A finer floor means a finer map.
+		REQUIRE( tex >= 1.0f - 1e-5f );
+
+		// 3. The kernel is never truncated: +-3 sigma fits, and the loop
+		//    bound stays small enough that the pass is affordable.
+		REQUIRE( tex < 2.0f * BMAP_TEXEL_SIGMA_MIN );
+		REQUIRE( bmap_taps( tex ) >= 3.0f * tex );
+		REQUIRE( bmap_taps( tex ) <= 21.0f );
+	}
+
+	// The two ends, named, because the docs quote them.
+	REQUIRE_THAT( bmap_down( bmap_sigma( 0.0f ) ), WithinAbs( 4.0f, 1e-6f ) );
+	REQUIRE_THAT( bmap_down( bmap_sigma( 2.0f ) ), WithinAbs( 16.0f, 1e-6f ) );
+	// Radius 1.0 must land on the SAME configuration that shipped -- a 1/8
+	// map at sigma 6 texels -- so "1.0 is unchanged" is true of the
+	// arithmetic and not only of the source-pixel number.
+	REQUIRE_THAT( bmap_down( bmap_sigma( 1.0f ) ), WithinAbs( 8.0f, 1e-6f ) );
+	REQUIRE_THAT( bmap_sigma( 1.0f ) / bmap_down( bmap_sigma( 1.0f ) ),
+	              WithinAbs( 6.0f, 1e-4f ) );
+	// The reduction only ever grows with the Radius: a coarser grid for a
+	// wider blur, never the other way about.
+	float flPrevDown = 0.0f;
+	for ( int i = 0; i <= 200; i++ )
+	{
+		const float d = bmap_down( bmap_sigma( i / 100.0f ) );
+		REQUIRE( d >= flPrevDown );
+		flPrevDown = d;
+	}
+	// bmap_taps() is bounded even for a hand-edited nonsense sigma, so a
+	// stray uniform cannot turn a compute dispatch into a hang.
+	REQUIRE( bmap_taps( 0.0f ) >= 1.0f );
+	REQUIRE( bmap_taps( 1e9f ) <= 24.0f );
 }
 
 TEST_CASE( "brightness map: the map's 16-bit storage round-trips exactly, all 65536 codes",

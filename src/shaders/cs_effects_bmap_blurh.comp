@@ -1,7 +1,8 @@
 #version 460
 
 // cs_effects_bmap_blurh.comp -- the first (horizontal) half of Brightness
-// Map's separable Gaussian, over the eighth-resolution map. Reads the downsample pass's buffer
+// Map's separable Gaussian, over the reduced-resolution map (1/4, 1/8 or 1/16 of the frame,
+// chosen from the Radius -- see effects_curve.h's bmap_down()). Reads the downsample pass's buffer
 // on VKR_EFFECTS_BMAP_SLOT and writes the other one; the host ping-pongs the two
 // textures between the passes (rendervulkan.cpp's pre-pass block).
 //

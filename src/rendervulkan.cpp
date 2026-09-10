@@ -3745,7 +3745,14 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 // note) that happen to have landed on the same answer, so a future change to
 // one must not silently move the other.
 static constexpr uint32_t kEffectsBloomDown = 8;
-static constexpr uint32_t kEffectsBmapDown  = 8;
+// Brightness Map's is the FINEST reduction it can ask for, not the only one:
+// since 2026-09-10 the map is built at 1/4, 1/8 or 1/16 depending on the
+// Radius (effects_curve.h's bmap_down(), and its "THE PYRAMID" note for why
+// the grid moves instead of the kernel). The pair is allocated once at this
+// finest size and a coarser frame writes and reads only its top-left corner,
+// so dragging the Radius slider never reallocates anything.
+// == effects_curve.h's BMAP_DOWN_MIN.
+static constexpr uint32_t kEffectsBmapDownMin = 4;
 
 // The shared allocator for both spatial effects' ping-pong pairs. Bloom's
 // glow buffers and Brightness Map's map buffers differ only in their name in
@@ -3807,7 +3814,7 @@ static bool update_effects_bloom_images( uint32_t uSrcWidth, uint32_t uSrcHeight
 static bool update_effects_bmap_images( uint32_t uSrcWidth, uint32_t uSrcHeight )
 {
 	return update_effects_scratch_pair( g_output.effectsBmapA, g_output.effectsBmapB,
-	                                    uSrcWidth, uSrcHeight, kEffectsBmapDown, "brightness map" );
+	                                    uSrcWidth, uSrcHeight, kEffectsBmapDownMin, "brightness map" );
 }
 
 // Adaptive Brightness's persistent history -- kEffectsHistoryWidth x
@@ -4702,6 +4709,7 @@ struct EffectsPushData_t
 	float    u_bmapMin;
 	float    u_bmapMax;
 	float    u_bmapRadius;
+	float    u_bmapDown;
 
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
@@ -4821,7 +4829,19 @@ struct EffectsPushData_t
 		u_bmapStrength = bBrightnessMap ? std::clamp( s.flBmapStrength, 0.0f, 1.0f ) : 0.0f;
 		u_bmapMin      = bBrightnessMap ? std::clamp( s.flBmapMin, 0.02f, 0.50f ) : u_bmapTarget;
 		u_bmapMax      = bBrightnessMap ? std::clamp( s.flBmapMax, 0.50f, 0.90f ) : u_bmapTarget;
-		u_bmapRadius   = bBrightnessMap ? std::clamp( s.flBmapRadius, 0.0f, 1.0f ) : 0.0f;
+		// 0..2 since 2026-09-10 (was 0..1). effects_curve.h's bmap_sigma()
+		// is piecewise linear with its knots at 0.25 and 1.0 precisely so
+		// that every stored value from 0.25 up still means what it meant.
+		u_bmapRadius   = bBrightnessMap
+			? std::clamp( s.flBmapRadius, 0.0f, gamescope::effects_curve::BMAP_RADIUS_MAX )
+			: 0.0f;
+		// The reduction this frame's map is built at. Derived from the very
+		// same two functions the shaders call, so the host's dispatch grid
+		// and the shaders' idea of the map's size cannot drift apart.
+		u_bmapDown     = bBrightnessMap
+			? gamescope::effects_curve::bmap_down(
+				gamescope::effects_curve::bmap_sigma( u_bmapRadius ) )
+			: gamescope::effects_curve::BMAP_DOWN_MIN;
 	}
 };
 
@@ -5475,11 +5495,18 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					//   3. ... and vertical                   bmapB -> bmapA
 					//
 					// and cs_effects_layer0.comp above samples bmapA
-					// bilinearly and divides the picture by it. Everything
-					// after the first pass runs at 1/64 of the frame's
-					// pixels, which is what makes a 33-tap kernel -- wide
-					// enough for the Radius slider to reach 48 source pixels
-					// of sigma -- affordable at all.
+					// bilinearly and divides the picture by it.
+					//
+					// THE MAP'S SIZE IS PER FRAME (2026-09-10). The
+					// reduction is 4, 8 or 16 depending on the Radius
+					// (effects_curve.h's bmap_down()), so the dispatch grid
+					// is computed from the base layer's size and that, NOT
+					// from the texture's own extent -- the pair is allocated
+					// once at the finest reduction and a coarser frame uses
+					// only its top-left corner. The shaders derive the same
+					// rectangle from the same uniform (effects_bmap.h's
+					// bmap_map_size()), so nothing can read a texel the down
+					// pass did not write this frame.
 					//
 					// It reads slot 0, still the base layer from the bind
 					// above, so this block has to sit after Bloom's (which
@@ -5488,8 +5515,12 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					// for the ping-pong, for the reason Bloom's note gives.
 					if ( bBmap )
 					{
-						const uint32_t uBmapW = g_output.effectsBmapA->width();
-						const uint32_t uBmapH = g_output.effectsBmapA->height();
+						namespace ec = gamescope::effects_curve;
+						const uint32_t uBmapDown = uint32_t( ec::bmap_down(
+							ec::bmap_sigma( std::clamp( state.flBmapRadius,
+								0.0f, ec::BMAP_RADIUS_MAX ) ) ) );
+						const uint32_t uBmapW = std::max( 1u, div_roundup( uWidth, uBmapDown ) );
+						const uint32_t uBmapH = std::max( 1u, div_roundup( uHeight, uBmapDown ) );
 						const int nBmapGroup = 8;   // == the bmap shaders' local_size
 						const uint32_t uGroupsX = div_roundup( uBmapW, nBmapGroup );
 						const uint32_t uGroupsY = div_roundup( uBmapH, nBmapGroup );

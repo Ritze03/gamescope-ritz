@@ -9,20 +9,23 @@
 // a frame and a field whose value differs between two dispatches documented
 // to share one.
 //
-// `Why separable at all:` a 33x33 two-dimensional kernel is 1089 taps per
-// texel; two 33-tap passes are 66. At the map's 1/64 of the frame's pixels
-// that is about one tap per source pixel, which is what makes a blur this
-// WIDE affordable -- and width is the whole halo control here.
+// `Why separable at all:` a two-dimensional kernel of the same reach is the
+// square of the taps a separable pair costs -- 41x41 = 1681 against 2 x 41.
+// At the map's small fraction of the frame's pixels that is what makes a
+// blur this WIDE affordable, and width is the whole halo control here.
 //
-// `Why 33 taps (+-16) where Bloom uses 17:` this effect's Radius reaches
-// sigma 6 map texels against Bloom's 3 (effects_curve.h's BMAP_SIGMA_MAX),
-// because a tone operator needs the option of a much softer map than a glow
-// does. +-16 is +-2.67 sigma at that top end -- the same truncation Bloom
-// accepts at ITS top end -- so under 1 % of the Gaussian's mass falls
-// outside, and the weights are renormalised by their own sum so what is left
-// is still a proper average. At the low end (sigma 1) the outer taps weigh
-// essentially nothing and the pass costs the same; taps are not the
-// expensive part at this resolution.
+// `The kernel, since 2026-09-10 -- +-ceil(3 sigma) taps, not a fixed 33:`
+// the Radius now covers sigma 4..96 SOURCE pixels, a 24:1 range, and no
+// fixed tap count covers that. It does not have to: effects_curve.h's
+// bmap_down() picks the map's reduction so that the blur is always between
+// 1 and 7 TEXELS wide whatever the Radius, and +-3 sigma of that is at most
+// +-21 taps. So the kernel here is never truncated at more than 0.3 % of
+// its mass -- where a fixed 33 taps would have been +-0.7 sigma at the top
+// of the new slider, which is a box with a Gaussian's name on it, and
+// visibly so. At the fine end the loop is +-3 taps and this pass costs less
+// than it used to. effects_curve.h's "THE PYRAMID" note has the argument
+// for solving it this way rather than by widening the kernel or by striding
+// it.
 //
 // `Why the map is unpacked and repacked around the blur:` the texels carry a
 // 16-bit fixed-point luma over two UNORM8 lanes (effects_curve.h's
@@ -37,21 +40,23 @@
 #ifndef EFFECTS_BMAP_BLUR_H_
 #define EFFECTS_BMAP_BLUR_H_
 
-const int BMAP_BLUR_TAPS = 16;   // +-16, i.e. 33 taps
-
 void bmap_blur_main(ivec2 dir)
 {
     ivec2 p  = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_BMAP_SLOT], 0);
+    // The LIVE map size, not the allocated one -- the pair is allocated at
+    // the finest reduction and a coarser frame uses only its corner.
+    ivec2 sz = bmap_map_size();
     if (p.x >= sz.x || p.y >= sz.y)
         return;
 
-    float sigma = bmap_sigma(u_bmapRadius);
+    // Sigma is authored in SOURCE pixels; the pass runs in map texels.
+    float sigma = bmap_sigma(u_bmapRadius) / max(u_bmapDown, 1.0);
     float inv2s = 1.0 / (2.0 * sigma * sigma);
+    int   taps  = int(bmap_taps(sigma));
 
     float sum  = 0.0;
     float wsum = 0.0;
-    for (int i = -BMAP_BLUR_TAPS; i <= BMAP_BLUR_TAPS; i++)
+    for (int i = -taps; i <= taps; i++)
     {
         float w = exp(-float(i * i) * inv2s);
         sum  += w * bmap_fetch(p + dir * i, sz);

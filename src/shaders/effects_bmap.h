@@ -30,6 +30,19 @@ float bmap_unpack( vec4 t )
     return bmap_unpack2( t.r, t.g );
 }
 
+// The map's LIVE size this frame -- ceil(base layer / u_bmapDown), which is
+// what the down pass wrote. NOT textureSize() of the map slot: the pair is
+// allocated once at the finest reduction (effects_common.h's note) and a
+// coarser frame fills only its top-left corner, so textureSize() would
+// report a rectangle three quarters of which is last frame's leftovers.
+// Every pass that touches the map asks this, so they cannot disagree.
+ivec2 bmap_map_size()
+{
+    ivec2 src = textureSize( s_samplers[0], 0 );
+    int   d   = max( int( u_bmapDown ), 1 );
+    return max( ivec2( 1 ), ( src + ivec2( d - 1 ) ) / d );
+}
+
 float bmap_fetch( ivec2 t, ivec2 sz )
 {
     return bmap_unpack( texelFetch( s_samplers[VKR_EFFECTS_BMAP_SLOT],
@@ -51,8 +64,8 @@ float bmap_fetch( ivec2 t, ivec2 sz )
 // `pos` is in SOURCE pixels (the base layer's own grid).
 float bmap_sample( vec2 pos )
 {
-    ivec2 sz = textureSize( s_samplers[VKR_EFFECTS_BMAP_SLOT], 0 );
-    vec2  g  = pos / float( BMAP_DOWN ) - 0.5;
+    ivec2 sz = bmap_map_size();
+    vec2  g  = pos / max( u_bmapDown, 1.0 ) - 0.5;
     ivec2 i0 = ivec2( floor( g ) );
     vec2  f  = g - vec2( i0 );
     float a = bmap_fetch( i0,                  sz );

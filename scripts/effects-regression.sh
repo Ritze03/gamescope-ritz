@@ -100,6 +100,12 @@
 #                     from a hard edge across the strength and radius range,
 #                     and the shimmer question on a panning scene. See the
 #                     block at the bottom of this script.
+#                     2026-09-10: the Radius sweep runs to 2.0, the halo and
+#                     the two stability checks are repeated at BOTH ends of
+#                     it, and bmap-radius-0.25-unchanged /
+#                     bmap-radius-1.0-unchanged pin an existing setting's
+#                     picture against what the build before the widening
+#                     measured -- the promise made to every saved profile.
 #   colors-*         2026-09-08, the Saturation/Vibrancy split: Saturation
 #                     (renamed from "Vibrancy") and the new Vibrancy each
 #                     pinned against their closed-form formula on a scene
@@ -1206,13 +1212,33 @@ bmap_defaults
 
 # WHICH SIZES SURVIVE EACH RADIUS -- reported, not asserted. There is no bar
 # anybody could set honestly here: a wider map SHOULD lose the smaller
-# objects, that is precisely what the control does.
+# objects, that is precisely what the control does. The sweep runs to 2.0
+# since 2026-09-10, when the slider was widened ("Also increase the max
+# radius to 2.0 effectively") and its floor made finer ("Cant we make it, so
+# a Radius of 0 is actually pixel perfect?" -- it cannot be, see
+# shader-effects.md, but 0 now averages 4 source pixels rather than 8).
 declare -a BMAP_SIZE=()
-for R in 0.0 0.25 0.5 1.0; do
+declare -A BMAP_SIZE_SHOT=()
+for R in 0.0 0.25 0.5 1.0 1.5 2.0; do
 	set_bmap_param "$BMAP_RADIUS_ID" "$R"
-	BMAP_SIZE+=( "$(take_screenshot "21-models-bmap-radius-$R")" )
+	BMAP_SIZE_SHOT[$R]="$(take_screenshot "21-models-bmap-radius-$R")"
+	BMAP_SIZE+=( "${BMAP_SIZE_SHOT[$R]}" )
 done
 run_sampler modelsinfo bmap-size-radius "${BMAP_SIZE[@]}"
+
+# THE COMPATIBILITY PIN. Widening a slider must not change what the values
+# already stored in every saved profile look like. These two rows are the
+# numbers the SHIPPED build measured on this same scene before the change
+# (build-release/verify-shots/brightness-map-2026-09-09/captures/), so if the
+# map's reduction, its kernel or the Radius -> sigma curve ever moves an
+# existing setting's picture, it fails here rather than in a user's game.
+# 2 counts of tolerance: the map is built at a different reduction now (1/4
+# at the default, where it used to be 1/8) and reconstructed through a
+# correspondingly finer bilinear upsample, which is worth a few tenths.
+run_sampler modelspin bmap-radius-0.25-unchanged "${BMAP_SIZE_SHOT[0.25]}" \
+	20.7 37.2 61.9 76.1 164.0 2.0
+run_sampler modelspin bmap-radius-1.0-unchanged "${BMAP_SIZE_SHOT[1.0]}" \
+	16.0 17.8 29.0 52.9 164.0 2.0
 bmap_defaults
 
 # The two guard rails, at full strength so their effect is at its largest:
@@ -1263,11 +1289,21 @@ run_sampler bmapline bmap-halo-strength-halobox "${BMAP_HALO_S[@]}"
 bmap_defaults
 run_sampler bmaphalo bmap-halo-halobox-default "$(take_screenshot 23-halobox-bmap-default)" halobox 50
 declare -a BMAP_HALO_R=()
-for R in 0.0 0.5 1.0; do
+for R in 0.0 0.5 1.0 2.0; do
 	set_bmap_param "$BMAP_RADIUS_ID" "$R"
 	BMAP_HALO_R+=( "$(take_screenshot "23-halobox-bmap-radius-$R")" )
 done
 run_sampler bmapline bmap-halo-radius-halobox "${BMAP_HALO_R[@]}"
+# THE TWO EXTREMES, ASSERTED, not only printed: both ends of the widened
+# slider are worse than the middle and they are worse in DIFFERENT ways --
+# the fine end puts a tall, tight rim right at the edge, the wide end a low
+# one smeared over a hundred pixels. Both must still be monotone (a
+# non-negative blur of a step cannot ring), and each carries its own honest
+# amplitude budget rather than one bar picked so that both happen to clear.
+set_bmap_param "$BMAP_RADIUS_ID" 0.0
+run_sampler bmaphalo bmap-halo-halobox-radius-0 "$(take_screenshot 23-halobox-bmap-radius-min)" halobox 50
+set_bmap_param "$BMAP_RADIUS_ID" 2.0
+run_sampler bmaphalo bmap-halo-halobox-radius-2 "$(take_screenshot 23-halobox-bmap-radius-max)" halobox 50
 bmap_defaults
 
 advance_scenes 1   # -> haloinv, the inverse edge
@@ -1282,6 +1318,13 @@ set_bmap_param "$BMAP_STRENGTH_ID" 1.0
 # honest sizes rather than at one bar chosen so that both happen to clear.
 run_sampler bmaphalo bmap-halo-haloinv-full "$(take_screenshot 24-haloinv-bmap-full)" haloinv 95
 bmap_defaults
+declare -a BMAP_HALO_RI=()
+for R in 0.0 0.5 1.0 2.0; do
+	set_bmap_param "$BMAP_RADIUS_ID" "$R"
+	BMAP_HALO_RI+=( "$(take_screenshot "24-haloinv-bmap-radius-$R")" )
+done
+run_sampler bmapline bmap-halo-radius-haloinv "${BMAP_HALO_RI[@]}"
+bmap_defaults
 set_bmap 0
 
 # --- texdark: stability, still and then panning ------------------------------
@@ -1292,18 +1335,41 @@ sleep 1
 set_bmap 1
 arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-25-bmap-static.txt"
 run_sampler ablog "$OUT_DIR/ablog-25-bmap-static.txt" bmapstatic
+# ... and at BOTH ENDS of the widened slider (2026-09-10). The fine end is
+# the one that could pulse -- it is the setting whose map can resolve the
+# scene's own 16 px cells -- and the wide end changes the map's reduction, so
+# neither is covered by the default's run above.
+for R in 0.0 2.0; do
+	set_bmap_param "$BMAP_RADIUS_ID" "$R"
+	arm_ab_log "$AB_FRAMES"; wait_ab_log "$AB_FRAMES" "$OUT_DIR/ablog-25-bmap-static-r$R.txt"
+	run_sampler ablog "$OUT_DIR/ablog-25-bmap-static-r$R.txt" bmapstatic "-radius-$R"
+done
+bmap_defaults
 
 # The shimmer question. --periodic fixes the frame's light population, so the
 # frame mean's spread across captures is the harness's own noise, and a map
 # this fine must not add to it.
 toggle_motion
 sleep 1
-declare -a BMAP_JIT=()
+declare -a BMAP_OFF_JIT=()
 set_bmap 0
-for k in 1 2 3 4 5 6; do BMAP_JIT+=( "$(take_screenshot "25-texdark-bmap-off-$k")" ); done
+for k in 1 2 3 4 5 6; do BMAP_OFF_JIT+=( "$(take_screenshot "25-texdark-bmap-off-$k")" ); done
 set_bmap 1
+declare -a BMAP_JIT=( "${BMAP_OFF_JIT[@]}" )
 for k in 1 2 3 4 5 6; do BMAP_JIT+=( "$(take_screenshot "25-texdark-bmap-on-$k")" ); done
 run_sampler bloomjitter bmap-stability-pan 6 "${BMAP_JIT[@]}"
+# ... and at BOTH ENDS of the widened Radius (2026-09-10), against the same
+# effect-off baseline. The fine end is the one that could pulse: it is the
+# only setting whose map can resolve this scene's own 16 px cells, so if a
+# finer map were going to make the exposure breathe under a pan, it would
+# breathe here.
+for R in 0.0 2.0; do
+	set_bmap_param "$BMAP_RADIUS_ID" "$R"
+	declare -a BMAP_JIT_R=( "${BMAP_OFF_JIT[@]}" )
+	for k in 1 2 3 4 5 6; do BMAP_JIT_R+=( "$(take_screenshot "25-texdark-bmap-on-r$R-$k")" ); done
+	run_sampler bloomjitter "bmap-stability-pan-radius-$R" 6 "${BMAP_JIT_R[@]}"
+done
+bmap_defaults
 set_bmap 0
 
 END_TS=$(date +%s)
