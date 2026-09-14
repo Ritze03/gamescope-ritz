@@ -155,6 +155,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   client's own thunks), which corrects the join page's "uniform one-slot shift" and its
   "no app id anywhere"; why no `steam://` invite URL exists; the one read the user must
   take; and why *receiving* invites is still a no.
+- [Adaptive Brightness v2 plan](planning/adaptive-brightness-v2-plan.md) — 2026-09-14: research survey, the diagnosis of why every `x^g` lift binarises a near-black frame, and the bounded-slope toe-gamma + guided-filter base/detail operator that replaces Adaptive Brightness, Adaptive Gamma and the Brightness Map, with a staged delivery and harness pass criteria.
 - [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
   call made while the user was away, with its alternative and its reasoning, so
   disagreeing is cheap.
