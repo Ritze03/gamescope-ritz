@@ -33,6 +33,9 @@ The newest version below is the one this build reports.
   button, actually joins them, and either way closes the settings overlay right away.
 - **Zoom**: pressing or releasing a keyboard key no longer closes the zoom while the
   mouse button held for it is still down.
+- **Shell separator line**: Added the missing divider between the settings sheet and
+  the inspector, and fixed rule lines drawing doubled where they crossed or tinted by
+  a selected rail item.
 
 ## [0.7.1] – 2026-09-10
 
