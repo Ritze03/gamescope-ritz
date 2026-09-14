@@ -904,10 +904,14 @@ cover a wide range of blur widths from one small separable kernel.
 ### Adaptive Brightness (`image.shaders.adaptive_brightness`)
 
 **A near-black scene has a floor of its own** (2026-09-14) — see
-[Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--shared-by-adaptive-brightness-and-adaptive-gamma)
-near the bottom of this page, shared with Adaptive Gamma: below `dark_floor` (a standalone
-panel row, not one of this effect's own params) the whole curve fades to the untouched
-picture, so a truly dark scene is not driven to its gain/gamma ceiling by a median near zero.
+[Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--one-per-effect)
+near the bottom of this page: below this effect's own `dark_floor` (a standalone panel row
+labelled "Leave dark scenes alone (Adaptive Brightness)", not one of this effect's own
+`Param`s — that row is already at the eight-param budget) the whole curve fades to the
+untouched picture, so a truly dark scene is not driven to its gain/gamma ceiling by a
+median near zero. Adaptive Gamma has the identical control (its own field, its own row) —
+the two started as one shared control and split into independent ones the same day; see
+that section for why.
 
 **A plain switch, with Mode as a Param** (request #17, 2026-09-07,
 `requests-2026-09-07.md` item 7: *"the adaptive brightness mode selector should be
@@ -2024,10 +2028,13 @@ shoulder, no shadow cap. It is not a cheaper Adaptive Brightness — it is a dif
 thing that a gain cannot be, for a reason that is arithmetic rather than taste (below).
 
 **A near-black scene has a floor of its own** (2026-09-14) — see
-[Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--shared-by-adaptive-brightness-and-adaptive-gamma)
-near the bottom of this page, shared with Adaptive Brightness: below `dark_floor` the
-exponent fades to 1 (the identity) rather than being driven to its floor by a median near
-zero, which is exactly the shape a near-black scene forced it into before this existed.
+[Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--one-per-effect)
+near the bottom of this page: below this effect's own `dark_floor` param (its eighth,
+"Leave dark scenes alone") the exponent fades to 1 (the identity) rather than being driven
+to its floor by a median near zero, which is exactly the shape a near-black scene forced it
+into before this existed. Adaptive Brightness has the identical control, as its own
+standalone row instead of a param — the two started as one shared control and split into
+independent ones the same day; see that section for why.
 
 **Config**: `ReshadeAdaptiveGammaSettings` (`ConfigSchema.h`) — `enabled` (false),
 `target_luminance` (0.5), `max_lift` (4.0), `max_darken` (1.5), `strength` (1.0),
@@ -2474,7 +2481,25 @@ differ by exactly the one param Adaptive Brightness has and this one cannot: Mod
 went from 6 to **7** the same day, when [Bloom](#bloom-imageshadersbloom--new-2026-09-08)
 landed after it.
 
-### Leave dark scenes alone (2026-09-14) — shared by Adaptive Brightness and Adaptive Gamma
+### Leave dark scenes alone (2026-09-14) — one per effect
+
+`Split into two fields the same day:` shipped as ONE field shared by both effects (below,
+kept as the historical record of why the feature exists and how the shared version was
+built and measured), then split into `adaptive_brightness.dark_floor` and
+`adaptive_gamma.dark_floor` a few hours later at the user's own follow-up request, quoted
+verbatim: *"Make the 'Leave dark scenes alone' part individual settings for both Adaptive
+Gamma and Adaptive Brightness."* Nothing about the FORMULA or the SHADER changed — see
+`src/shaders/effects_curve.h`'s `dark_weight()`, still the one function both effects call,
+and the shader's `u_darkFloor` uniform, still a single number per frame — only where the
+number is STORED and how it reaches the panel did. `rendervulkan.cpp`'s
+`EffectsPushData_t` is the one place that now resolves "whichever effect is running" into
+that shared uniform, reading `NativeEffectsState_t::flAbDarkFloor` or `::flAgDarkFloor`
+depending on `s.bAdaptiveBrightness` / `bAdaptiveGamma`. `ConfigSchema.h`'s
+`kCurrentSchemaVersion` went 4 → 5 for the split; `ConfigManager.cpp`'s `Migrate_4_to_5()`
+copies an old schema-4 file's single shared value into BOTH new keys, so a profile tuned
+before the split keeps exactly that strength under whichever effect the user re-enables,
+rather than silently resetting to the compiled-in default. See "The panel rows" below for
+where each of the two ended up and why they differ.
 
 `Why:` the user, verbatim: *"the adaptive brightness and the adaptive gamma both completely
 destroy REALLY dark images. ... Is there some kind of filter, that keeps really dark stuff
@@ -2612,18 +2637,26 @@ breaks that continuity for everything from Bloom onward (measured: 15 unrelated 
 the first time this landed there). Last is the only position that restarts a ring nothing
 downstream depends on.
 
-**The panel row.** One standalone `Slider` (`image.shaders.dark_floor`, "Leave dark scenes
-alone", `src/Overlay/PanelShaders.cpp`) — **not** a `Param` under either Switch above.
-Adaptive Brightness is already at `kParamBudget`'s ceiling of 8, and that constant's own
-comment says the next param on that row is the signal to stop adding params there, not raise
-the shared ceiling a third time (see "Row count and the parameter budget" in each effect's
-own section). A standalone row also matches the maths: `ConfigSchema.h`'s `dark_floor` is
-**one** field, `reshade.dark_floor`, a bare top-level key on `ReshadeSettings` rather than a
-copy inside each of the two adaptive structs — the two effects are mutually exclusive, share
-one EMA and one set of smoothed statistics already, and a second copy would only be a chance
-for a hand-edited file to hold two different numbers for a control the panel only ever shows
-once. Range 0.0–0.5, step 0.01, `ZeroMeans("Off")`; disabled, with a reason, unless one of
-the two effects above is on.
+**The panel rows (post-split).** The two copies ended up in DIFFERENT places in the panel,
+for a reason that has nothing to do with what either control does: it is purely which row
+had a spare slot in `kParamBudget`'s ceiling of 8 at the moment of the split.
+
+- **Adaptive Gamma's copy** (`image.shaders.adaptive_gamma.dark_floor`) is a normal
+  `Param` under that Switch, exactly like its other seven — that row was at 7 params, so
+  the eighth (this one) fit inside the budget with zero left over. Same name, help text,
+  range (0.0–0.5, step 0.01, `ZeroMeans("Off")`) and default (0.03) as before the split.
+- **Adaptive Brightness's copy** (`image.shaders.adaptive_brightness_dark_floor`) stays a
+  standalone `Slider` entry, placed directly under the Adaptive Brightness Switch's own
+  rows (above Adaptive Gamma's) — **not** a `Param` under that Switch, because that row
+  was already AT the budget ceiling (8 of 8) with nothing spare; a ninth `Param` is
+  unrepresentable (`Registry.cpp`'s `AddParam()` refuses it, the SixBudget law). Labelled
+  "Leave dark scenes alone (Adaptive Brightness)" so it reads unambiguously next to
+  Adaptive Gamma's own copy of the same control just below it, and `DisabledUnless`s on
+  Adaptive Brightness specifically (not "either effect", the way the pre-split shared row
+  did) — same range, step, `ZeroMeans` and default as Adaptive Gamma's copy.
+
+Both are config-schema fields on their own effect's struct now (`ReshadeAdaptiveBrightnessSettings::dark_floor` / `ReshadeAdaptiveGammaSettings::dark_floor`), not a bare
+top-level key on `ReshadeSettings` — see the split note above this section.
 
 ### Adaptive Brightness V2 (`image.shaders.adaptive_brightness_v2`) — NEW 2026-09-14
 
@@ -2793,7 +2826,7 @@ same target from the same pre-effect statistics (V2's own content-only anchor is
 statistic of the SAME graded frame the other two measure), so running more than one
 would apply the correction twice.
 
-**Params** (eight, `Adaptive brightness V2` / `image.shaders.adaptive_brightness_v2`,
+**Params** (eight, `Adaptive Brightness V2` / `image.shaders.adaptive_brightness_v2`,
 default OFF): **Shape** (Toe / Knee, default Toe) · **Target brightness** (0.1..0.9,
 default 0.35 — lower than the older effects' 0.5, since the anchor here is the content
 and 0.5 reads milky) · **Max lift** (1..8, default 4 — the slope cap `S`, wider than the
@@ -2976,7 +3009,7 @@ section 5.2 for what was predicted.
 **GUI capture** (`build-release/verify-shots/abv2-2026-09-14/gui/`): the Shaders area
 with V2 selected in the Inspector shows all eight rows (Shape, Target brightness, Max
 lift, Lift, Adaptation, Adapt speed, Detail, Clarity), "PARAMETERS 8 of 8", the title
-reading exactly "Adaptive brightness V2", and the before/after strip; a second capture
+reading "Adaptive Brightness V2", and the before/after strip; a second capture
 of the Pipeline Facts row's DETAILS tab shows the new **pre-pass** line reading its
 measured time live.
 

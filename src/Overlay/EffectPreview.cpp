@@ -412,7 +412,7 @@ namespace gamescope::overlay
 		// unavailable reason outranks which) is the part worth keeping in
 		// one tested place, and it is untouched.
 		if ( status.eState != controls::ComparePreviewState::Ready && bSupported && !bEnabled )
-			status.pszMessage = "Turn Adaptive Brightness, Adaptive Gamma or Adaptive brightness V2 on to preview it.";
+			status.pszMessage = "Turn Adaptive Brightness, Adaptive Gamma or Adaptive Brightness V2 on to preview it.";
 		if ( status.eState != controls::ComparePreviewState::Ready )
 		{
 			DrawPlaceholder( lay.rcImage, status.pszMessage );

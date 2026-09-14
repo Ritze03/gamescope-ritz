@@ -50,7 +50,19 @@ namespace gamescope::config
     // effect has no old data to migrate and takes its compiled-in defaults
     // (off, strength 0.0). See superdoc/features/shader-effects.md's
     // "Saturation / Vibrancy split" section.
-    inline constexpr int kCurrentSchemaVersion = 4;
+    //
+    // 4 -> 5 (2026-09-14, the user: "Make the 'Leave dark scenes alone' part
+    // individual settings for both Adaptive Gamma and Adaptive Brightness"):
+    // the shared reshade.dark_floor key (added earlier the SAME day, as
+    // schema 4) splits into reshade.adaptive_brightness.dark_floor and
+    // reshade.adaptive_gamma.dark_floor -- one field per effect instead of
+    // one bare key both effects read. See ReshadeAdaptiveBrightnessSettings
+    // / ReshadeAdaptiveGammaSettings below. ConfigManager.cpp's
+    // Migrate_4_to_5() copies a schema-4 file's single value into BOTH new
+    // keys, so whichever effect the user re-enables keeps exactly the
+    // strength the shared slider had, rather than silently resetting to the
+    // compiled-in default.
+    inline constexpr int kCurrentSchemaVersion = 5;
 
     struct GamescopeSettings
     {
@@ -490,6 +502,30 @@ namespace gamescope::config
         // The default is 0.5, chosen from captures, not taste: see
         // shader-effects.md's split-scene and halo tables.
         float local_strength = 0.5f;     // 0.0..1.0
+
+        // Leave dark scenes alone (added 2026-09-14 as a SHARED
+        // reshade.dark_floor key; split into this per-effect field the
+        // SAME day, the user: "Make the 'Leave dark scenes alone' part
+        // individual settings for both Adaptive Gamma and Adaptive
+        // Brightness" -- see kCurrentSchemaVersion's 4->5 comment above).
+        // Fades this effect toward the untouched picture once the smoothed
+        // median is darker than this -- see src/shaders/effects_curve.h's
+        // DARK FLOOR block for the formula and superdoc/features/
+        // shader-effects.md for the measured default. Independent of
+        // ReshadeAdaptiveGammaSettings::dark_floor below even though the
+        // two effects are mutually exclusive and only one is ever read in
+        // a frame (rendervulkan.cpp's EffectsPushData_t resolves "whichever
+        // is running" into the shader's one shared uniform) -- a user who
+        // tunes this while on Adaptive Brightness should not find Adaptive
+        // Gamma's floor silently moved too when they switch.
+        //
+        // 0.0..1.0, encoded (the same units as p50/target_luminance). 0.0
+        // disables it -- byte-identical to no floor at all. 0.03 by
+        // default: measured small enough that neither of the existing
+        // `dark` (median code 12) nor `texdark` (median code 20) reference
+        // scenes loses any lift, while a genuinely near-black scene comes
+        // out fully neutralised. See shader-effects.md's measured table.
+        float dark_floor = 0.03f;
     };
 
     // NEW 2026-09-08 (the user: "Make something similar, but make it gamma
@@ -559,6 +595,24 @@ namespace gamescope::config
         // path costs four texture fetches and a pow per pixel and is opted
         // into. See shader-effects.md.
         float local_strength = 0.0f;   // 0.0..1.0
+
+        // Leave dark scenes alone (added 2026-09-14 as a SHARED
+        // reshade.dark_floor key; split into this per-effect field the
+        // SAME day, the user: "Make the 'Leave dark scenes alone' part
+        // individual settings for both Adaptive Gamma and Adaptive
+        // Brightness" -- see kCurrentSchemaVersion's 4->5 comment above).
+        // The exponent's own copy of ReshadeAdaptiveBrightnessSettings::
+        // dark_floor -- same formula, same units, same default -- kept as
+        // an independent field even though the two effects are mutually
+        // exclusive and only one is ever read in a frame
+        // (rendervulkan.cpp's EffectsPushData_t resolves "whichever is
+        // running" into the shader's one shared uniform), so tuning one
+        // effect's floor never silently moves the other's.
+        //
+        // 0.0..1.0, encoded. 0.0 disables it -- byte-identical to no floor
+        // at all. 0.03 by default -- see shader-effects.md's measured
+        // table.
+        float dark_floor = 0.03f;
     };
 
     // NEW 2026-09-14 (Adaptive Brightness V2, superdoc/planning/adaptive-
@@ -656,50 +710,22 @@ namespace gamescope::config
         ReshadeAdaptiveBrightnessV2Settings adaptive_brightness_v2;
         ReshadeShadowLiftSettings shadow_lift;
 
-        // NEW 2026-09-14 (the user: "the adaptive brightness and the
-        // adaptive gamma both completely destroy REALLY dark images ... Is
-        // there some kind of filter, that keeps really dark stuff really
-        // dark or something?"). Fades whichever of the two ABOVE adaptive
-        // effects is running toward the untouched image once the smoothed
-        // scene is darker than this -- see src/shaders/effects_curve.h's
-        // DARK FLOOR block for the formula and
-        // superdoc/features/shader-effects.md for the measured default and
-        // why it is small.
-        //
-        // A SHARED, top-level field rather than one copy inside EACH of the
-        // two structs above, for three reasons. First, the two effects are
-        // MUTUALLY EXCLUSIVE (adaptive_brightness.enabled and
-        // adaptive_gamma.enabled can never both be true -- see either
-        // struct's own comment), so there is never a frame where two
-        // independent copies could even disagree about which one the user
-        // meant; a duplicate would only be a chance for a hand-edited file
-        // to hold two different numbers for no reason a user could see.
-        // Second, the panel offers exactly ONE row for it -- a standalone
-        // Slider, not a Param under either Switch (src/Overlay/
-        // PanelShaders.cpp's Adaptive Brightness row is already AT
-        // Registry.cpp's kParamBudget of 8, and that constant's own comment
-        // says the answer to "one more param" is to stop adding params to
-        // that row, not raise the shared ceiling a third time -- see
-        // PanelShaders.cpp's own header note on the budget). Third, the two
-        // effects already share their EMA and their smoothed statistics
-        // (cs_effects_measure.comp runs one measure pass regardless of
-        // which is on), so a field that answers "how dark counts as dark"
-        // fits the same shared-infrastructure shape as target_luminance
-        // very nearly does -- each effect HAS its own target because the two
-        // scales (a gain's target vs. a gamma's target) read the same
-        // number differently, but this floor is read identically by both.
-        //
-        // 0.0..1.0, encoded (the same units as p50/target_luminance). 0.0
-        // disables it -- today's pre-2026-09-14 behaviour, byte-identical
-        // (effects_curve.h's dark_weight() returns exactly 1.0 there). 0.03
-        // by default: measured small enough that neither of the existing
-        // `dark` (median code 12) nor `texdark` (median code 20) reference
-        // scenes loses any lift, while the report's own near-black capture
-        // (median a fraction of a code) and the `blackout` scene added for
-        // this feature (median ~2, ~90% of pixels at code 0..6) both come
-        // out fully neutralised. See shader-effects.md's measured table for
-        // the full sweep this default was picked from.
-        float dark_floor = 0.03f;
+        // HISTORY: "Leave dark scenes alone" (the user: "the adaptive
+        // brightness and the adaptive gamma both completely destroy REALLY
+        // dark images ...") shipped 2026-09-14 as a bare `dark_floor` field
+        // HERE -- one number shared by the two adaptive effects above,
+        // because they are mutually exclusive and the panel offered exactly
+        // one row for it. Split, the SAME day, into a per-effect field on
+        // EACH of the two structs above (ReshadeAdaptiveBrightnessSettings::
+        // dark_floor / ReshadeAdaptiveGammaSettings::dark_floor) at the
+        // user's own follow-up request: "Make the 'Leave dark scenes alone'
+        // part individual settings for both Adaptive Gamma and Adaptive
+        // Brightness." See kCurrentSchemaVersion's 4->5 comment for the
+        // migration that carries an old shared value into both new keys.
+        // rendervulkan.cpp's EffectsPushData_t still resolves "whichever
+        // effect is running" into the shader's one shared uniform
+        // (u_darkFloor) -- only the config-side storage split, not the
+        // shader.
     };
 
     // Issue #35: one panel window's saved screen position/size, restored on

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cstdlib>
 #include <cstring>
@@ -428,6 +429,95 @@ TEST_CASE( "a config carrying the removed backdrop keys loads and drops them", "
     REQUIRE( sWritten.find( "blend_mode" ) == std::string::npos );
     // Not a blanket "the file shrank" assertion -- the live keys are still there.
     REQUIRE( sWritten.find( "outline_strength" ) != std::string::npos );
+}
+
+// Schema 4 -> 5 (2026-09-14, the user's follow-up: "Make the 'Leave dark
+// scenes alone' part individual settings for both Adaptive Gamma and
+// Adaptive Brightness"). Schema 4 -- the version this key was born at,
+// earlier the SAME day -- had ONE shared "reshade.dark_floor" key read by
+// both effects; ConfigManager.cpp's Migrate_4_to_5() must copy that single
+// value into BOTH of the new per-effect keys, not just one, and not drop it
+// on the floor. See ConfigSchema.h's kCurrentSchemaVersion comment.
+TEST_CASE( "a schema-4 file's shared reshade.dark_floor migrates into both per-effect keys", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 4,
+        "name": "T",
+        "kind": "general",
+        "reshade": {
+            "dark_floor": 0.12,
+            "adaptive_gamma": {
+                "max_lift": 3.5
+            }
+        }
+    })";
+
+    Settings loaded = LoadSections();
+    // Both new keys take the OLD shared value -- not the compiled-in
+    // default, and not only whichever effect object happened to already
+    // exist in the file (adaptive_gamma's did, above; adaptive_brightness's
+    // did not, and still must get it).
+    REQUIRE_THAT( loaded.reshade.adaptive_brightness.dark_floor, Catch::Matchers::WithinAbs( 0.12, 1e-6 ) );
+    REQUIRE_THAT( loaded.reshade.adaptive_gamma.dark_floor, Catch::Matchers::WithinAbs( 0.12, 1e-6 ) );
+    // A field the file DID set under the effect the old key's sibling
+    // object already had survives the migration untouched.
+    REQUIRE_THAT( loaded.reshade.adaptive_gamma.max_lift, Catch::Matchers::WithinAbs( 3.5, 1e-6 ) );
+
+    // ...and the next write drops the old shared key for good, never
+    // carrying it forward once both new ones hold the value.
+    REQUIRE( SaveSections( loaded ) );
+    std::ifstream in( ProfilePath( "T" ) );
+    const std::string sWritten( ( std::istreambuf_iterator<char>( in ) ),
+                                  std::istreambuf_iterator<char>() );
+    // The two NEW per-effect keys are present (as substrings of their own
+    // object -- "dark_floor" appears twice, once per effect).
+    size_t nCount = 0;
+    for ( size_t pos = sWritten.find( "dark_floor" ); pos != std::string::npos;
+          pos = sWritten.find( "dark_floor", pos + 1 ) )
+        ++nCount;
+    REQUIRE( nCount == 2 );
+}
+
+// A file with NO dark_floor key anywhere (schema 0..3, or a schema-4/5 file
+// that never touched it) resolves both per-effect fields to their
+// compiled-in default -- the ordinary "absent key -> default" story every
+// additive field in this schema follows, unaffected by the migration above.
+TEST_CASE( "a file with no dark_floor key at all resolves both per-effect fields to the default", "[config]" )
+{
+    TempConfigHome home;
+
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 3,
+        "name": "T",
+        "kind": "general",
+        "gamescope": { "filter": "FSR" }
+    })";
+
+    Settings loaded = LoadSections();
+    REQUIRE_THAT( loaded.reshade.adaptive_brightness.dark_floor, Catch::Matchers::WithinAbs( 0.03, 1e-6 ) );
+    REQUIRE_THAT( loaded.reshade.adaptive_gamma.dark_floor, Catch::Matchers::WithinAbs( 0.03, 1e-6 ) );
+    REQUIRE( loaded.gamescope.filter == "FSR" );   // the file loaded at all
+}
+
+// Both new fields round-trip independently through SaveProfile/LoadProfile
+// at values that DIFFER from each other and from the default -- the split
+// itself, exercised the ordinary way rather than through a migration.
+TEST_CASE( "reshade.adaptive_{brightness,gamma}.dark_floor round-trip independently", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.reshade.adaptive_brightness.dark_floor = 0.08f;
+    s.reshade.adaptive_gamma.dark_floor = 0.25f;
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE_THAT( loaded.reshade.adaptive_brightness.dark_floor, Catch::Matchers::WithinAbs( 0.08, 1e-6 ) );
+    REQUIRE_THAT( loaded.reshade.adaptive_gamma.dark_floor, Catch::Matchers::WithinAbs( 0.25, 1e-6 ) );
 }
 
 TEST_CASE( "queued writes flush to disk without blocking the caller inline", "[config]" )
@@ -1053,7 +1143,7 @@ TEST_CASE( "a schema-3 profile's vibrancy key renames to saturation on load and 
     REQUIRE( s.reshade.vibrancy.strength == 0.0f );
 
     // Self-heal: saving what was just loaded rewrites the profile file
-    // under the current (schema 4) shape -- checked by round-tripping
+    // under the current schema shape -- checked by round-tripping
     // through the struct, since "vibrancy" now legitimately appears in the
     // file too (the new effect's own, separate, empty object).
     REQUIRE( SaveSections( s ) );
@@ -1435,8 +1525,9 @@ TEST_CASE( "global.json carries overlay and the profile pointers, and no per-lay
     const std::string sText = ReadText( GlobalConfigPath() );
     REQUIRE( sText.find( "\"overlay\"" ) != std::string::npos );
     REQUIRE( sText.find( "\"profiles\"" ) != std::string::npos );
-    // schema 4 (2026-09-08's vibrancy -> saturation rename bumped this from 3).
-    REQUIRE( sText.find( "\"schema_version\": 4" ) != std::string::npos );
+    // schema 5 (2026-09-14's dark-floor per-effect split bumped this from 4;
+    // 4 was 2026-09-08's vibrancy -> saturation rename, from 3).
+    REQUIRE( sText.find( "\"schema_version\": 5" ) != std::string::npos );
     REQUIRE( sText.find( "\"gamescope\"" ) == std::string::npos );
     REQUIRE( sText.find( "FSR" ) == std::string::npos );
 
@@ -1642,8 +1733,9 @@ TEST_CASE( "migration: an old global.json's sections become the Default profile,
     REQUIRE( oDefault->notifications.muted );
 
     const std::string sGlobal = ReadText( GlobalConfigPath() );
-    // schema 4 (2026-09-08's vibrancy -> saturation rename bumped this from 3).
-    REQUIRE( sGlobal.find( "\"schema_version\": 4" ) != std::string::npos );
+    // schema 5 (2026-09-14's dark-floor per-effect split bumped this from 4;
+    // 4 was 2026-09-08's vibrancy -> saturation rename, from 3).
+    REQUIRE( sGlobal.find( "\"schema_version\": 5" ) != std::string::npos );
     REQUIRE( sGlobal.find( "\"last_general\": \"Default\"" ) != std::string::npos );
     REQUIRE( sGlobal.find( "active_profile" ) == std::string::npos );
     REQUIRE( sGlobal.find( "last_applied_profile" ) == std::string::npos );

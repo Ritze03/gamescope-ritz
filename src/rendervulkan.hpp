@@ -632,13 +632,19 @@ struct NativeEffectsState_t
 	float flAgDownSpeed = 1.0f;
 	float flAgLocal = 0.0f;
 
-	// Dark floor (NEW 2026-09-14, ConfigSchema.h's ReshadeSettings::
-	// dark_floor): SHARED between Adaptive Brightness and Adaptive Gamma --
-	// one number, since the two are mutually exclusive and the panel offers
-	// one row for it. 0.0..1.0, 0 = off. See src/shaders/effects_curve.h's
+	// Dark floor (NEW 2026-09-14; split into a per-effect field the SAME
+	// day, the user's follow-up: "Make the 'Leave dark scenes alone' part
+	// individual settings for both Adaptive Gamma and Adaptive Brightness"
+	// -- see ConfigSchema.h's ReshadeAdaptiveBrightnessSettings::dark_floor
+	// / ReshadeAdaptiveGammaSettings::dark_floor). Two independent fields
+	// here too, so a config edit to one never silently moves the other's;
+	// EffectsPushData_t (rendervulkan.cpp) is the one place that resolves
+	// "whichever effect is running" into the shader's single shared
+	// uniform. 0.0..1.0 each, 0 = off. See src/shaders/effects_curve.h's
 	// DARK FLOOR block for the formula and superdoc/features/shader-effects.md
 	// for the measured default.
-	float flDarkFloor = 0.03f;
+	float flAbDarkFloor = 0.03f;
+	float flAgDarkFloor = 0.03f;
 
 	// Bloom (NEW 2026-09-08, ConfigSchema.h's ReshadeBloomSettings): a glow
 	// around bright areas, for the look rather than for clarity. The only

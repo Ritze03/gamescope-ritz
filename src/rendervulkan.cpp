@@ -5022,18 +5022,21 @@ struct EffectsPushData_t
 		u_agStrength  = bAdaptiveGamma ? std::clamp( s.flAgStrength, 0.0f, 1.0f ) : 0.0f;
 		u_agLocal     = bAdaptiveGamma ? std::clamp( s.flAgLocal, 0.0f, 1.0f ) : 0.0f;
 
-		// Dark floor (NEW 2026-09-14): SHARED between the two adaptive
-		// effects (ConfigSchema.h's ReshadeSettings::dark_floor is one
-		// field), so it is masked to 0 -- effects_curve.h's dark_weight()
-		// reads that as "off", i.e. weight always 1 -- only when NEITHER
-		// effect is the one running this frame, for the same "the uniform
-		// says exactly what the frame did" reason as u_abLocal above. While
-		// either is active it is read inside that effect's own gated branch
-		// in the shader, so masking it there too would be redundant, not
-		// wrong -- this keeps the discipline consistent with every other
-		// field in this struct.
-		u_darkFloor = ( s.bAdaptiveBrightness || bAdaptiveGamma )
-			? std::clamp( s.flDarkFloor, 0.0f, 1.0f ) : 0.0f;
+		// Dark floor (NEW 2026-09-14; split into a per-effect config field
+		// the SAME day -- ConfigSchema.h's ReshadeAdaptiveBrightnessSettings
+		// / ReshadeAdaptiveGammaSettings each carry their own dark_floor
+		// now). This is the ONE place that resolves "whichever effect is
+		// running" into the single u_darkFloor the shader reads -- the
+		// shader and the uniform block are unchanged, since neither ever
+		// cared which config field the number came from, only that there
+		// is exactly one of it per frame. Masked to 0 -- effects_curve.h's
+		// dark_weight() reads that as "off", i.e. weight always 1 -- when
+		// NEITHER effect is the one running this frame, for the same "the
+		// uniform says exactly what the frame did" reason as u_abLocal
+		// above.
+		u_darkFloor = s.bAdaptiveBrightness ? std::clamp( s.flAbDarkFloor, 0.0f, 1.0f )
+			: bAdaptiveGamma               ? std::clamp( s.flAgDarkFloor, 0.0f, 1.0f )
+			: 0.0f;
 
 		// ADAPTATION SPEED: whichever effect is running supplies it (2026-09-09,
 		// "For adaptive gamma, there should also be some value, to adjust the

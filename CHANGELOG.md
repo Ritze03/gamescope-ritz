@@ -25,10 +25,11 @@ The newest version below is the one this build reports.
   mouse button entirely, so the game never receives the click.
 - **Zoom**: a "Scroll to change zoom level" switch that lets the mouse wheel adjust the
   zoom level, in steps of 0.25, while zoomed.
-- **Adaptive Brightness / Adaptive Gamma**: a new "Leave dark scenes alone" slider fades
-  either effect back to the untouched picture on a genuinely dark scene, instead of
-  driving it to its brightness ceiling and washing the picture toward grey or white.
-- **Adaptive brightness V2**: a new Shaders effect, alongside Adaptive Brightness and
+- **Adaptive Brightness / Adaptive Gamma**: a new "Leave dark scenes alone" slider, one
+  for each effect, fades it back to the untouched picture on a genuinely dark scene,
+  instead of driving it to its brightness ceiling and washing the picture toward grey
+  or white.
+- **Adaptive Brightness V2**: a new Shaders effect, alongside Adaptive Brightness and
   Adaptive Gamma (not replacing either), that lifts dark scenes without ever binarising
   a near-black one — its lift is capped by a Max lift slider instead of an exponent
   with no bottom, plus a Detail control that keeps texture visible inside the lift, and

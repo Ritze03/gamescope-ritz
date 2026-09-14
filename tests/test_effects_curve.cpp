@@ -1142,26 +1142,40 @@ TEST_CASE( "dark floor: at the shipped default, the report's near-black capture 
 	REQUIRE( dark_weight( kMid.p50, kDarkFloorDefault ) > 0.999f );
 }
 
-TEST_CASE( "reshade.dark_floor: default and round-trip", "[effects_curve][config]" )
+// Split 2026-09-14 (the user's follow-up: "Make the 'Leave dark scenes
+// alone' part individual settings for both Adaptive Gamma and Adaptive
+// Brightness") from a single shared reshade.dark_floor field into one per
+// effect. The schema-4 -> 5 MIGRATION that carries an old shared value
+// forward is tested in tests/test_config.cpp (it needs raw on-disk JSON,
+// which that file already has the fixtures for); this test only pins the
+// two new fields' own default and round-trip, independently of each other.
+TEST_CASE( "reshade.adaptive_{brightness,gamma}.dark_floor: default and round-trip, independently",
+           "[effects_curve][config]" )
 {
 	TempConfigHome home;
 
 	Settings s{};
-	REQUIRE_THAT( s.reshade.dark_floor, WithinAbs( 0.03f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness.dark_floor, WithinAbs( 0.03f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_gamma.dark_floor, WithinAbs( 0.03f, 1e-6f ) );
 
-	s.reshade.dark_floor = 0.12f;
+	// Set to two DIFFERENT values -- proves the split, not just that a
+	// single number still round-trips under a new name.
+	s.reshade.adaptive_brightness.dark_floor = 0.12f;
+	s.reshade.adaptive_gamma.dark_floor = 0.20f;
 	ProfileMeta meta;
 	meta.name = "DarkFloor";
 	REQUIRE( SaveProfile( meta, s ) );
 
 	std::optional<Settings> loaded = LoadProfile( "DarkFloor" );
 	REQUIRE( loaded.has_value() );
-	REQUIRE_THAT( loaded->reshade.dark_floor, WithinAbs( 0.12f, 1e-6f ) );
+	REQUIRE_THAT( loaded->reshade.adaptive_brightness.dark_floor, WithinAbs( 0.12f, 1e-6f ) );
+	REQUIRE_THAT( loaded->reshade.adaptive_gamma.dark_floor, WithinAbs( 0.20f, 1e-6f ) );
 
-	// An old profile with no "dark_floor" key at all (every OTHER field
-	// present, this one simply absent) resolves to the compiled-in default
-	// -- purely additive key, no migration, the same shape every other
-	// field added since ReshadeShadowLiftSettings follows.
+	// An old profile with no "dark_floor" key at all under either effect
+	// (every OTHER field present, this one simply absent) resolves both to
+	// their compiled-in default -- purely additive key, no migration
+	// needed for a file that never had ANY dark_floor, the same shape
+	// every other field added since ReshadeShadowLiftSettings follows.
 	REQUIRE( loaded->reshade.adaptive_gamma.max_lift > 0.0f );   // the file round-tripped at all
 }
 

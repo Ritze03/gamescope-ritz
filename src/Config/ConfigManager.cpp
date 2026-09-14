@@ -311,6 +311,14 @@ namespace gamescope::config
                     ab.max_gain = JGetFloat( *pAdaptive, "max_gain", ab.max_gain );
                     ab.strength = JGetFloat( *pAdaptive, "strength", ab.strength );
                     ab.local_strength = JGetFloat( *pAdaptive, "local_strength", ab.local_strength );
+                    // Split from the shared reshade.dark_floor key
+                    // 2026-09-14 (see ConfigSchema.h's kCurrentSchemaVersion
+                    // 4->5 comment) -- Migrate_4_to_5() has already copied a
+                    // schema-4 file's shared value in under this same key by
+                    // the time this reads it, so no fallback logic is
+                    // needed here beyond the usual "absent -> compiled-in
+                    // default".
+                    ab.dark_floor = JGetFloat( *pAdaptive, "dark_floor", ab.dark_floor );
                 }
 
                 // NEW 2026-09-08: Adaptive Gamma -- see ConfigSchema.h's
@@ -330,6 +338,9 @@ namespace gamescope::config
                     ag.adapt_up_speed = JGetFloat( *pAdaptiveGamma, "adapt_up_speed", ag.adapt_up_speed );
                     ag.adapt_down_speed = JGetFloat( *pAdaptiveGamma, "adapt_down_speed", ag.adapt_down_speed );
                     ag.local_strength = JGetFloat( *pAdaptiveGamma, "local_strength", ag.local_strength );
+                    // Split from the shared reshade.dark_floor key
+                    // 2026-09-14 -- see the ab.dark_floor comment just above.
+                    ag.dark_floor = JGetFloat( *pAdaptiveGamma, "dark_floor", ag.dark_floor );
                 }
 
                 // NEW 2026-09-14: Adaptive Brightness V2 -- see
@@ -364,15 +375,6 @@ namespace gamescope::config
                     sl.enabled = JGetBool( *pShadowLift, "enabled", sl.enabled );
                     sl.strength = JGetFloat( *pShadowLift, "strength", sl.strength );
                 }
-
-                // NEW 2026-09-14: the dark floor, SHARED between
-                // adaptive_brightness and adaptive_gamma above -- a bare
-                // top-level key on "reshade" itself (ConfigSchema.h's
-                // ReshadeSettings::dark_floor), not nested in either
-                // sub-object, since it is one number for both. Additive
-                // key; an old config has none and resolves to the
-                // compiled-in default.
-                s.reshade.dark_floor = JGetFloat( *pReshade, "dark_floor", s.reshade.dark_floor );
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
@@ -625,6 +627,7 @@ namespace gamescope::config
             jAdaptive[ "max_gain" ] = ab.max_gain;
             jAdaptive[ "strength" ] = ab.strength;
             jAdaptive[ "local_strength" ] = ab.local_strength;
+            jAdaptive[ "dark_floor" ] = ab.dark_floor;
 
             const auto &ag = s.reshade.adaptive_gamma;
             nlohmann::json jAdaptiveGamma = nlohmann::json::object();
@@ -636,6 +639,7 @@ namespace gamescope::config
             jAdaptiveGamma[ "adapt_up_speed" ] = ag.adapt_up_speed;
             jAdaptiveGamma[ "adapt_down_speed" ] = ag.adapt_down_speed;
             jAdaptiveGamma[ "local_strength" ] = ag.local_strength;
+            jAdaptiveGamma[ "dark_floor" ] = ag.dark_floor;
 
             const auto &v2 = s.reshade.adaptive_brightness_v2;
             nlohmann::json jV2 = nlohmann::json::object();
@@ -664,9 +668,6 @@ namespace gamescope::config
             jReshade[ "adaptive_gamma" ] = std::move( jAdaptiveGamma );
             jReshade[ "adaptive_brightness_v2" ] = std::move( jV2 );
             jReshade[ "shadow_lift" ] = std::move( jShadowLift );
-            // NEW 2026-09-14: bare top-level key, SHARED between the two
-            // adaptive effects above -- see ConfigSchema.h.
-            jReshade[ "dark_floor" ] = s.reshade.dark_floor;
 
             nlohmann::json jNotifications = nlohmann::json::object();
             jNotifications[ "muted" ] = s.notifications.muted;
@@ -839,6 +840,50 @@ namespace gamescope::config
             itReshade->erase( "vibrancy" );
         }
 
+        // Schema 4 -> 5 (2026-09-14, the user's follow-up request: "Make the
+        // 'Leave dark scenes alone' part individual settings for both
+        // Adaptive Gamma and Adaptive Brightness"): the shared
+        // reshade.dark_floor key -- added earlier the SAME day, as schema 4
+        // -- splits into reshade.adaptive_brightness.dark_floor and
+        // reshade.adaptive_gamma.dark_floor, one field per effect (see
+        // ConfigSchema.h's kCurrentSchemaVersion comment and
+        // ReshadeAdaptiveBrightnessSettings/ReshadeAdaptiveGammaSettings).
+        //
+        // A schema-4 file's single value is copied into BOTH new keys
+        // rather than left for the reader to fall back on the compiled-in
+        // default: the user had already tuned the shared slider by the
+        // time this split landed, and whichever effect they re-enable next
+        // should keep that exact strength, not silently reset to 0.03.
+        // Only runs when the old key is actually present and numeric --
+        // most files reaching this step are schema 0..3 and never had a
+        // dark_floor of any kind, in which case there is nothing to carry
+        // and the two structs simply take their compiled-in defaults like
+        // any other purely additive field.
+        void Migrate_4_to_5( nlohmann::json &j )
+        {
+            auto itReshade = j.find( "reshade" );
+            if ( itReshade == j.end() || !itReshade->is_object() )
+                return;
+
+            auto itOld = itReshade->find( "dark_floor" );
+            if ( itOld == itReshade->end() || !itOld->is_number() )
+                return;
+
+            const float flOld = itOld->get<float>();
+
+            auto CopyInto = [ & ]( const char *pszEffectKey )
+            {
+                nlohmann::json &jEffect = ( *itReshade )[ pszEffectKey ];
+                if ( !jEffect.is_object() )
+                    jEffect = nlohmann::json::object();
+                jEffect[ "dark_floor" ] = flOld;
+            };
+            CopyInto( "adaptive_brightness" );
+            CopyInto( "adaptive_gamma" );
+
+            itReshade->erase( "dark_floor" );
+        }
+
         // Parses `sText` as JSON without ever throwing/aborting on malformed
         // input, validates schema_version, and returns std::nullopt - having
         // already logged loudly - on any failure. `svContext` is only used for
@@ -875,6 +920,13 @@ namespace gamescope::config
             // Migrate_1_to_2, which still expects the old key.
             if ( nVersion < 4 )
                 Migrate_3_to_4( j );
+            // Every version below 5 (0..4) may carry the shared
+            // reshade.dark_floor key schema 4 introduced (0..3 simply have
+            // no such key, so this is a no-op for them); must run AFTER
+            // Migrate_3_to_4, which is unrelated but shares the "reshade"
+            // object.
+            if ( nVersion < 5 )
+                Migrate_4_to_5( j );
 
             return j;
         }

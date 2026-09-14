@@ -52,14 +52,20 @@ uniform effects_t {
     float u_agLocal;      // Local adaptation, 0.0..1.0 -- the SAME operator
 
     // ---- Dark floor (NEW 2026-09-14) ----
-    // SHARED between Adaptive Brightness and Adaptive Gamma (one number, one
-    // panel row -- see ConfigSchema.h's ReshadeSettings::dark_floor for why
-    // it is not two fields). 0.0..1.0, 0 = off (today's pre-2026-09-14
-    // behaviour, byte-identical). effects_curve.h's dark_weight() turns this
-    // and the smoothed median into a 0..1 blend weight that fades whichever
-    // effect is running toward the identity on a scene far darker than the
-    // weight's own half-point -- see that header's DARK FLOOR block for the
-    // formula and every "why".
+    // ONE shared uniform, read by whichever of Adaptive Brightness / Adaptive
+    // Gamma is running -- the two are mutually exclusive, so there is never a
+    // frame that needs both. The CONFIG side is two independent fields
+    // (ConfigSchema.h's ReshadeAdaptiveBrightnessSettings::dark_floor /
+    // ReshadeAdaptiveGammaSettings::dark_floor, split 2026-09-14 so tuning
+    // one effect's floor never moves the other's); rendervulkan.cpp's
+    // EffectsPushData_t is the one place that resolves "whichever effect is
+    // running" into this single number, which is why this header and the
+    // shader that reads it never had to change for that split. 0.0..1.0,
+    // 0 = off. effects_curve.h's dark_weight() turns this and the smoothed
+    // median into a 0..1 blend weight that fades whichever effect is running
+    // toward the identity on a scene far darker than the weight's own
+    // half-point -- see that header's DARK FLOOR block for the formula and
+    // every "why".
     float u_darkFloor;
 
     // ---- Bloom (NEW 2026-09-08) ----
