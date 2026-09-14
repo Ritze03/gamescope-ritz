@@ -400,10 +400,9 @@ namespace gamescope
 					[]{ return Cfg().reshade.saturation.strength; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.saturation.strength, f ); } ) )
 				.Key( "reshade.saturation.strength" )
-				.Help( "Colour intensity. 1x is unchanged, 0x is black and white, 3x is maximum boost." )
+				.Help( "Colour intensity. 1 is unchanged, 0 is black and white, 3 is maximum boost." )
 				.Range( 0.0f, 3.0f )
 				.Step( 0.05f )   // 61 positions; 1.00, the default, is the neutral notch
-				.Unit( "x" )
 				.Default( 1.0f )
 			.Param( "protect_skin", "Protect skin tones",
 				ui::AnyBind::Of<bool>(

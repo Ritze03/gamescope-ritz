@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.7.2] – 2026-09-14
+
+### Fixed
+- **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders
+  slider carries one.
+
 ## [0.7.1] – 2026-09-10
 
 ### Added
