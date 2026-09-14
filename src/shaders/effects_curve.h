@@ -859,10 +859,12 @@ EC_FUNC float abv2_g( float lift, float target, float anchorSmoothed, bool bScen
 //
 //    f''(x) has the SAME SIGN as (g - 1)
 //
-//  (worked out fully by writing f = A(x)*B(x) with A = ((1+t)/(x+t))^(1-g),
-//  B = 1 - x(1-g)/(x+t), differentiating both, and simplifying -- every
-//  term but the sign of (1-g) cancels, because x(1-g) + 2t > 0 for x in
-//  [0,1], t > 0 and g in this pipeline's whole range). So the family is
+//  (worked out fully: with c = (1+t)^-(g-1), f = c * x * (x+t)^(g-1), so
+//  f'' = c * (g-1) * (x+t)^(g-3) * (g*x + 2t), and g*x + 2t > 0 for x in
+//  [0,1], t > 0 and g > 0 -- the whole of this pipeline's range -- so only
+//  the sign of (g-1) survives. V2 darken QC, 2026-09-15: the factor used to
+//  be written "x(1-g) + 2t", which is not what the algebra gives; the
+//  conclusion was right, the stated factor was not). So the family is
 //  CONCAVE for g < 1 (the toe -- lift, proven/tested above) and, by the
 //  same formula, CONVEX for g > 1: swap the roles of the two endpoints and
 //  rewrite the exponent as positive (gg - 1 instead of 1 - gg) to avoid a
@@ -995,9 +997,14 @@ EC_FUNC float abv2_g_dark( float darken, float target, float anchorSmoothed, boo
 // require RESCALING the lift half into [0, Target] too, which would change
 // its values for x < Target and break the byte-identical guarantee above.
 // L(Target) is the closest honest pivot height that keeps the lift half
-// completely untouched; see shader-effects.md for the measured gap (a few
-// hundredths at the shipped defaults) and why this is the deliberate
-// trade, not an oversight.
+// completely untouched; see shader-effects.md for the measured gap and why
+// this is the deliberate trade, not an oversight. The gap is NOT small at
+// the shipped Lift 0.5 / Max lift 4 / Target 0.35: L(0.35) = 0.477 (code
+// 122 against Target's own code 89 -- V2 darken QC, 2026-09-15), which is
+// also the floor NOTHING above Target can be darkened below while Lift is
+// on, whatever D says: the darken half only ever acts on L's continuation
+// above L(Target). At Lift 0 (g == 1) L is the identity and the pivot sits
+// on Target exactly.
 //
 // CONTINUITY (C0, required): both branches give exactly L(Target) at
 // x = Target (the x <= Target branch by definition; the x > Target branch
