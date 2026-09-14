@@ -22,11 +22,12 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + [bundled_scripts_header] + ['test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp'],
+	unittest_src + font_headers + [bundled_scripts_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp'],
 	include_directories: [srcdir, sol2_include],
 	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
 	cpp_args: gamescope_cpp_args,
 )
+test('isolation', gamescope_tests, args: ['[isolation]'])
 test('convar', gamescope_tests, args: ['[convar]'])
 test('process', gamescope_tests, args: ['[process]'])
 test('config', gamescope_tests, args: ['[config]'])

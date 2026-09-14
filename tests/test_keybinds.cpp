@@ -9,10 +9,14 @@
 // event was applied to the ledger -- so what these tests hold is the same
 // function the compositor runs, not a model of it.
 //
-// The one thing NOT covered here is persistence: SetChord() writes global.json
-// and there is no config home in this binary's environment. That half is
-// covered by scripts' live verification (build-release/verify-shots/
-// keybinds-2026-09-08) and by tests/test_config.cpp's own overlay round trip.
+// The one thing NOT covered here is persistence CONTENT: SetChord() writes
+// global.json, and this file makes no assertion about what lands in it (that
+// half is covered by scripts' live verification -- build-release/verify-shots/
+// keybinds-2026-09-08 -- and by tests/test_config.cpp's own overlay round
+// trip). Successful SetChord()/ResetAll() calls below DO persist, same as
+// the real compositor -- safely, since the whole binary is isolated from the
+// real config home by tests/test_global_isolation.cpp's process-wide Catch2
+// listener (found missing 2026-09-15, see that file's header for the story).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -187,9 +191,11 @@ TEST_CASE( "the reserved chord is a chord no action can hold", "[keybinds]" )
 // ---------------------------------------------------------------------------
 //  Conflicts
 // ---------------------------------------------------------------------------
-// SetChord() persists, which needs a config home this binary does not have --
-// so the CHECK is on the refusal, which happens before any write. A refused
-// set must leave the store untouched, which is the property that matters.
+// Every SetChord() call in this particular test is one that must be
+// REFUSED, so the CHECK is on the refusal, which happens before any write --
+// a refused set must leave the store untouched, which is the property that
+// matters here. (Other test cases further down this file do call SetChord()
+// successfully; see the file header above.)
 TEST_CASE( "two actions cannot share a chord", "[keybinds]" )
 {
 	const std::string sBefore = ChordTextFor( Action::Launcher );
@@ -217,11 +223,10 @@ TEST_CASE( "two actions cannot share a chord", "[keybinds]" )
 	CHECK_FALSE( SetChord( Action::Launcher, "Ctrl+Wumpus" ).empty() );
 	CHECK( ChordTextFor( Action::Launcher ) == sBefore );
 
-	// NOTE: no successful SetChord() anywhere in this file, deliberately. A
-	// success persists, and a test binary has no isolated config home -- it
-	// would write the developer's own ~/.config/gamescope-ritz. Every call
-	// here is one that must be REFUSED, and the refusal is checked to have
-	// left the store untouched, which is the property that matters.
+	// NOTE: no successful SetChord() in THIS test case, deliberately -- every
+	// call above is one that must be REFUSED, and the refusal is checked to
+	// have left the store untouched, which is the property this test cares
+	// about. (Persistence itself is safe process-wide; see the file header.)
 }
 
 // ---------------------------------------------------------------------------
