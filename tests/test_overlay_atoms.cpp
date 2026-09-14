@@ -1273,6 +1273,23 @@ TEST_CASE( "atoms: listbox tells a genuine double-click apart from two lone clic
 	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
 	h.MouseButton( false );
 
+	// This test shares one ImGui context -- and its accumulated internal
+	// clock (g.Time) -- with every other TEST_CASE in this binary. Several
+	// other ListBox atom tests click at this exact rcBody's row-1 pixel
+	// too, and Catch2's registry does not run cases in a fixed order run to
+	// run (confirmed: `--list-tests` output for this binary changes order
+	// between invocations of the very same executable). So occasionally
+	// another test's click at that identical pixel lands only a few frames
+	// before this test's own first click -- well inside ImGui's default
+	// 0.30s double-click window -- and THIS test's supposedly lone click
+	// gets misread as the second half of THAT click, purely from leftover
+	// state. Reset ImGui's own double-click bookkeeping for the mouse
+	// button up front so the result depends only on the clicks this test
+	// itself issues, never on what ran before it.
+	ImGuiIO &io = ImGui::GetIO();
+	io.MouseClickedTime[ 0 ]      = -1000.0;
+	io.MouseClickedLastCount[ 0 ] = 0;
+
 	int nSelected = -1;
 	const float flRowH = ui::Px( ui::tok::kControlH );
 	const ImRect rcBody( 40.0f, 200.0f, 40.0f + ui::Px( 300.0f ), 200.0f + flRowH * 10.0f );
