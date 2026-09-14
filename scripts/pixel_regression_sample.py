@@ -123,15 +123,26 @@ def cmd_margin(a):
     actually hugs an edge on).
 
     `diff_thresh` and `tol` come as a PAIR, and pixel-regression.sh runs
-    both on every capture (its HUD_MARGIN_* comment has the reasoning): at
-    diff_thresh 0 the bounding box includes the glyph's sub-count
-    antialiasing fringe, which is the ink's true geometric boundary, so the
-    margin is exact and tol is 0; at the script's usual "not the
-    background" threshold the box is the solid ink, one fringe pixel
-    further in, so tol is 1. The exact case used to be a drawn backdrop's
-    crisp AddRectFilled edge -- there is no backdrop since 2026-09-09.
-    See fps-display.md and the zoom captures under
-    build-release/verify-shots/hud-backdrop-removal-2026-09-09/."""
+    both on every capture (its HUD_MARGIN_* comment has the reasoning): the
+    "-edge" call passes a diff_thresh derived from the code's own
+    visibility floor (fpsmath::InkCoverageFloor(), 2026-09-14, commit
+    b07badd) -- the first row/column MeasureInkExtent() now considers part
+    of the glyph -- converted to a pixel-count delta for this check's own
+    colour/background: for the Fixed-digit path (a single coverage-squared
+    blend) via coverage_blend_expected() below; the outline ring is not
+    that same model (its stamped-edge blend darkens by more than its raw
+    coverage, per b07badd's own measurements) so its threshold is instead
+    the sub-floor fringe measured directly on this check's own captures --
+    see pixel-regression.sh's HUD_MARGIN_DIFF_EDGE_OUTLINE comment. Either
+    way the bounding box lands on the ink's true geometric boundary BY THE
+    CODE'S RULE, and tol is 0; the "-ink" call uses the script's usual "not
+    the background" threshold, one fringe pixel further in, so tol is 1.
+    Before 2026-09-14 diff_thresh 0 (any difference at all) served the same
+    purpose, because the margin was then measured to the metric box's every
+    sub-count AA pixel; it no longer is. See fps-display.md's "2026-09-14:
+    the margin is measured to the first row that can be seen" and the zoom
+    captures under build-release/verify-shots/hud-backdrop-removal-2026-09-09/
+    and fps-hud-bottom-2026-09-14/."""
     img = load(a.image)
     box = (a.x0, a.y0, a.x1, a.y1)
     if not (0 <= box[0] < box[2] <= img.width and 0 <= box[1] < box[3] <= img.height):

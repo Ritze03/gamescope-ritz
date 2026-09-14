@@ -83,11 +83,12 @@
 #   outline                -- the HUD's own black digit outline, on and off
 #   hud-margin             -- the configured margin lands the outermost
 #                            drawn pixel exactly that far from the screen
-#                            edge -- asserted twice per capture: the AA
-#                            fringe's own outer pixel EXACTLY on the margin
-#                            (any-difference threshold, tol 0) and the solid
-#                            ink within 1px of it -- at all four corners and
-#                            two margins, outline off and on,
+#                            edge -- asserted twice per capture: the first
+#                            visible-per-floor pixel EXACTLY on the margin
+#                            (2026-09-14: a coverage-visibility-floor
+#                            threshold, tol 0 -- see the HUD_MARGIN_* comment)
+#                            and the solid ink within 1px of it -- at all
+#                            four corners and two margins, outline off and on,
 #                            plus a 4-digit reading (2026-09-07 fix; see
 #                            build-release/verify-shots/hud-margin-2026-09-07/
 #                            for the full matrix this is a compact subset of)
@@ -222,21 +223,66 @@ HUD_OUTLINE_MIN_BLACK_PX=8   # a 2px outline ring around two glyphs is easily
 # so the slack was not loosened, it was SPLIT:
 #
 #   *-edge  measures the outermost pixel that differs from the flat
-#           background AT ALL (diff_thresh 0, so the sub-count AA fringe
-#           counts) and demands it land EXACTLY on the margin, tol 0. That
-#           fringe pixel IS the glyph's true geometric boundary, so this is
-#           an exact measurement of the thing the old backdrop case measured
-#           exactly -- it just needed a sensitive enough threshold to see.
+#           background by more than the VISIBILITY FLOOR (see below) and
+#           demands it land EXACTLY on the margin, tol 0. That pixel is the
+#           glyph's true geometric boundary BY THE CODE'S OWN RULE, so this
+#           is an exact measurement of the thing the old backdrop case
+#           measured exactly.
 #   *-ink   measures the solid ink at the usual "not the background"
 #           threshold and allows the 1px the fringe accounts for. Alone it
 #           is loose; together with *-edge it pins both ends of the fringe,
 #           so the ink cannot drift inward while the fringe alone lands right.
+#
+# Why *-edge is not diff_thresh 0 any more (2026-09-14, commit b07badd):
+# MeasureInkExtent() now measures the margin to the first glyph row/column
+# whose coverage clears a VISIBILITY FLOOR -- fpsmath::InkCoverageFloor(),
+# 47/255 for Fixed digits through the coverage blend, 16/255 for the outline
+# ring -- not to the metric box's every sub-count AA pixel (see
+# superdoc/features/fps-display.md's "2026-09-14: the margin is measured to
+# the first row that can be seen"). A diff_thresh of 0 still sees whatever
+# fringe row sits just below that floor -- e.g. the 36px case's 8/255 top
+# row, a one-count darkening on this check's own BG_MID -- one pixel
+# OUTSIDE where the code now places the margin, and fails a check that is
+# correctly green. *-edge has to apply the SAME floor to be measuring the
+# same boundary the code draws.
+#
+# The floor is a coverage (an alpha the rasteriser produced), not a pixel
+# count, so it has to be converted to "how many counts does floor-coverage
+# change this check's own colour over this check's own BG_MID". For the
+# Fixed digits (coverage blend, colour already multiplied by coverage once
+# and multiplied again on composite) pixel_regression_sample.py's own
+# coverage_blend_expected() -- the exact blend model already used elsewhere
+# in this script for the crosshair's blended-line checks -- gives the
+# number directly at FIXED_COLOR_HEX/BG_MID_HEX/8-bit texel: floor 47/255 ->
+# chebyshev 13 (46/255, one coverage unit below the floor -> 12), hence
+# HUD_MARGIN_DIFF_EDGE_DIGIT=12.
+#
+# The outline ring is NOT the same single-multiply model: b07badd's own
+# measurements over white show it darkening by MORE than its coverage
+# (27/255 -> 42 counts, not ~27), because the ring is several offset stamps
+# of the glyph's antialiased edge, not one flat-alpha shape -- so it isn't
+# derivable from one clean formula the way the digit path is. Measured
+# directly instead, on this check's own capture (size 36, margin 8,
+# outline on, top anchor -- the exact case the task brief named): the
+# excluded sub-floor row is a real, uniform chebyshev-6 darkening (the
+# whole ring is still `#000` under `#949494`, so every channel moves
+# together) immediately followed by the genuine ring at chebyshev 148 --
+# no intermediate step, at either top corner. HUD_MARGIN_DIFF_EDGE_OUTLINE
+# =16 sits comfortably above that 6-count fringe and far below the cliff to
+# genuine ink, with headroom to spare (the bottom edge's own ring border has
+# no fringe at all: background steps straight to chebyshev 71).
+#
+# Both thresholds leave a wide margin to the next real row up (the
+# genuine, near-full-coverage ink), which is tens to over a hundred counts
+# away -- so a real 1px margin regression, which moves that whole row, still
+# fails loudly.
 HUD_MARGIN_CORNERS=(top-left top-right bottom-left bottom-right)
 HUD_MARGIN_VALUES=(0 8)
 HUD_MARGIN_DIGITS_FPS=1234        # the 4-digit case's own forced reading
 HUD_MARGIN_BOX_SPAN=140           # search box span from the corner, generous around the "60"/"1234" glyphs
-HUD_MARGIN_DIFF_EXACT=0           # "differs from the flat background at all" -- sees the AA fringe
-HUD_MARGIN_TOL_EXACT=0            # ...which sits exactly on the margin, by construction
+HUD_MARGIN_DIFF_EDGE_DIGIT=12     # visible-per-floor Fixed-digit ink -- see derivation above
+HUD_MARGIN_DIFF_EDGE_OUTLINE=16   # visible-per-floor outline-ring ink -- see derivation above
+HUD_MARGIN_TOL_EXACT=0            # the visible-per-floor pixel sits exactly on the margin, by construction
 HUD_MARGIN_TOL_INK=1              # the solid ink, one AA fringe pixel further in -- see fps-display.md
 
 # Dark and mid-tone backgrounds, and the reference digit values measured
@@ -1006,11 +1052,16 @@ check_outline() {
 # cleanly in both directions.
 # The two assertions one margin capture always gets -- see the
 # HUD_MARGIN_* constants' comment for why it is a pair and not one loose
-# check. Args: shot, box x0 y0 x1 y1, edges, expect_x, expect_y, name.
+# check. Args: shot, box x0 y0 x1 y1, edges, expect_x, expect_y, name,
+# [outline: 1 if this capture has the outline ring on, selects which of
+# HUD_MARGIN_DIFF_EDGE_DIGIT/_OUTLINE floor the *-edge check uses -- default
+# 0 (digit floor), since most callers are the outline-off case].
 assert_hud_margin() {
-	local shot="$1" bx0="$2" by0="$3" bx1="$4" by1="$5" edges="$6" ex="$7" ey="$8" name="$9"
+	local shot="$1" bx0="$2" by0="$3" bx1="$4" by1="$5" edges="$6" ex="$7" ey="$8" name="$9" outline="${10:-0}"
+	local diff_edge="$HUD_MARGIN_DIFF_EDGE_DIGIT"
+	[[ "$outline" == "1" ]] && diff_edge="$HUD_MARGIN_DIFF_EDGE_OUTLINE"
 	run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
-		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$HUD_MARGIN_DIFF_EXACT" "$edges" \
+		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$diff_edge" "$edges" \
 		"$ex" "$ey" "$HUD_MARGIN_TOL_EXACT" "${name}-edge"
 	run_sampler margin "$shot" "$bx0" "$by0" "$bx1" "$by1" \
 		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$edges" \
@@ -1037,7 +1088,7 @@ check_hud_margin() {
 
 			shot="$(take_screenshot "20-hud-margin-${anchor}-m${mval}-ink")"
 			assert_hud_margin "$shot" "$bx0" "$by0" "$bx1" "$by1" "$edges" \
-				"$mval" "$mval" "hud-margin-${anchor}-m${mval}"
+				"$mval" "$mval" "hud-margin-${anchor}-m${mval}" 0
 
 			# Outline on: the outermost drawn pixel is now the outline's own
 			# outer ring, not the digits' ink, and MeasureFpsModule() has to
@@ -1046,7 +1097,7 @@ check_hud_margin() {
 			set_val "hud.outline_strength" "$HUD_OUTLINE_STRENGTH"
 			shot="$(take_screenshot "21-hud-margin-${anchor}-m${mval}-outline")"
 			assert_hud_margin "$shot" "$bx0" "$by0" "$bx1" "$by1" "$edges" \
-				"$mval" "$mval" "hud-margin-${anchor}-m${mval}-outline"
+				"$mval" "$mval" "hud-margin-${anchor}-m${mval}-outline" 1
 			set_val "hud.outline_strength" 0
 		done
 	done
@@ -1060,7 +1111,7 @@ check_hud_margin() {
 	sleep "$SETTLE_S"
 	shot="$(take_screenshot "22-hud-margin-digits4")"
 	assert_hud_margin "$shot" 0 0 "$HUD_MARGIN_BOX_SPAN" "$HUD_MARGIN_BOX_SPAN" "left,top" \
-		"$MARGIN_X" "$MARGIN_Y" "hud-margin-digits4"
+		"$MARGIN_X" "$MARGIN_Y" "hud-margin-digits4" 0
 
 	# Every check above restarted the instance with its own config -- put
 	# the standard one back so anything run after this in the same

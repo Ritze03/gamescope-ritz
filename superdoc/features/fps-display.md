@@ -941,11 +941,16 @@ listed in `measurements.txt`.
 find the excluded fringe one pixel *outside* the margin on backgrounds
 where it registers at all (a one-count darkening on mid grey, +1 to +4 on
 dark). That is the trade: the row is placed where a person would say the
-digits start. `scripts/pixel-regression.sh`'s `check_hud_margin()` asserts
-its `*-edge` box at tolerance 0 on flat 148 grey, where the 36 px top row
-shows as exactly that one-count darkening; it needs the same rule (or its
-`*-edge` tolerance raised to 1) — not changed in this pass, which owned
-only the HUD's own files.
+digits start. `scripts/pixel-regression.sh`'s `check_hud_margin()` used to
+assert its `*-edge` box at tolerance 0 on flat 148 grey, where the 36 px top
+row showed as exactly that one-count darkening one pixel outside the
+margin — not changed in this pass, which owned only the HUD's own files.
+**Fixed 2026-09-14 (separate pass):** `*-edge` now applies the same
+visibility floor, converted to a pixel-count delta for its own
+colour/background via `pixel_regression_sample.py`'s
+`coverage_blend_expected()` (`HUD_MARGIN_DIFF_EDGE_DIGIT`/`_OUTLINE` in the
+script) — see that script's own comment above `assert_hud_margin()` for the
+derivation.
 
 ## Warm-up: `FpsDisplay_WarmUp()`
 
