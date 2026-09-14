@@ -777,3 +777,18 @@ value was `(0,5,9)` (the plain background -- no line drawn at all, the ChildBg-l
 bug). After the fix both read `(56,60,63)`, matching the plain single-draw value
 everywhere else on the same row.
 
+**QC round 2 (same day): two more sites found the same way.** `DrawSlabBar()`'s bottom
+rule and the command palette's query-divider and footer-divider `HLine`s each ran the
+rule's full `rc.x0..rc.x1` straight into the frame's own border stroke (the slab
+window's `ImGuiCol_Border` for the bar, the palette's own `AddRect` outline for the
+two dividers) -- the identical corner-square defect this section already named, just
+at a frame border instead of another in-house rule. Fixed the same way: each `HLine`
+now starts at `rc.x0 + Hairline()` and ends at `rc.x1 - Hairline()`, yielding its two
+end columns to the border rather than drawing over them. The palette's two dividers
+measured a clear before/after change (the footer corners read a doubled `(50,102,115)`
+before, the single-draw border value `(27,85,99)` after); the slab-bar corners
+measured no change at this window's exact pixel geometry (content already starts one
+whole pixel inset from the border column at 1920x1080 centred), so the inset is a
+no-op here and a guard against the same defect at a geometry where the two do land on
+the same column.
+

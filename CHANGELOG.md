@@ -34,8 +34,8 @@ The newest version below is the one this build reports.
 - **Zoom**: pressing or releasing a keyboard key no longer closes the zoom while the
   mouse button held for it is still down.
 - **Shell separator line**: Added the missing divider between the settings sheet and
-  the inspector, and fixed rule lines drawing doubled where they crossed or tinted by
-  a selected rail item.
+  the inspector, and fixed rule lines drawing doubled where they crossed each other,
+  a frame border, or tinted by a selected rail item.
 
 ## [0.7.1] – 2026-09-10
 

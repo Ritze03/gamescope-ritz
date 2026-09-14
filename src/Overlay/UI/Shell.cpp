@@ -5062,7 +5062,16 @@ namespace gamescope::ui::shell
 			// The mockup is the tiebreaker where the design is silent; it is
 			// not the tiebreaker against the user looking at the result and
 			// saying the line is the wrong colour.
-			HLine( rc.x0, rc.x1, rc.y1 - Hairline(), Accent( 0.42f ) );
+			//
+			// Insetting both ends by Hairline() (2026-09-14 QC round 2): the
+			// slab window's own ImGuiCol_Border (Accent(0.42f), same colour,
+			// pushed where "##e2slab" is opened) runs along all four window
+			// edges, including this bar's left and right corners at this
+			// same y -- an uninset rule doubled that one corner pixel on each
+			// side. The border is ImGui's own window-border draw and cannot
+			// be split into segments the way an in-house rule can, so this
+			// rule yields the corner column to it instead.
+			HLine( rc.x0 + Hairline(), rc.x1 - Hairline(), rc.y1 - Hairline(), Accent( 0.42f ) );
 
 			const float flDot = Px( 6.0f );
 			Fill( { rc.x0 + Px( tok::kM ), rc.y0 + ( rc.Height() - flDot ) * 0.5f,
@@ -5721,7 +5730,11 @@ namespace gamescope::ui::shell
 				Label( { rcQ.x0, rcQ.y0, rcQ.x1 - flPad, rcQ.y1 }, TypeRole::Meta,
 				       Col( Role::TextMeta ), sz, TextAlign::Right );
 			}
-			HLine( rc.x0, rc.x1, rcQ.y1, Col( Role::Line ) );
+			// Inset by Hairline() on each end (2026-09-14 QC round 2): this
+			// divider spans the full rc.x0..rc.x1 and would otherwise double
+			// the panel's own AddRect border (Accent(0.42f), drawn above)
+			// where the two meet at the left and right edges.
+			HLine( rc.x0 + Hairline(), rc.x1 - Hairline(), rcQ.y1, Col( Role::Line ) );
 
 			// ---- results ---------------------------------------------------
 			const Rect rcList = { rc.x0, rcQ.y1, rc.x1, rcQ.y1 + flListH };
@@ -5953,7 +5966,9 @@ namespace gamescope::ui::shell
 			// Esc's wording changes too, because in launcher mode Esc gives
 			// the GAME back rather than uncovering a shell.
 			const Rect rcFoot = { rc.x0, rc.y1 - flFootH, rc.x1, rc.y1 };
-			HLine( rc.x0, rc.x1, rcFoot.y0, Col( Role::Line ) );
+			// Same inset as the query divider above, against the same
+			// panel border (2026-09-14 QC round 2).
+			HLine( rc.x0 + Hairline(), rc.x1 - Hairline(), rcFoot.y0, Col( Role::Line ) );
 
 			const bool bSelAdjustable =
 				nShown > 0 && s_nPaletteSel >= 0 && s_nPaletteSel < nShown &&
