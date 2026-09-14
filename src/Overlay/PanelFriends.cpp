@@ -35,6 +35,7 @@
 #include "Config/ConfigManager.h"
 #include "Keybinds.h"
 #include "Notifications.h"
+#include "SettingsOverlay.h"
 #include "SteamFriends.h"
 #include "UI/Colors.h"
 #include "UI/Controls.h"
@@ -142,27 +143,25 @@ namespace gamescope
 		}
 
 		// A click, an Enter, or `overlay_e2_set system.friends friends.list N`.
-		// ALL IT DOES IS RECORD. See PanelFriends.h's second rule: this can
-		// arrive on the console thread, where forking a process is illegal, so
-		// the acting is Tick()'s job.
+		// SELECTS -- NEVER JOINS. Requested 2026-09-14, in the user's own
+		// words: "Clicking once should just select a user in the UI,
+		// double-clicking should join them." Before this it also queued a
+		// join on every activation, single click included -- exactly the
+		// reported bug (a single click instantly joined). Joining now needs
+		// RequestJoinSelected() below, reached only from the Join verb or a
+		// genuine double-click (Registry.h's ListVerb::bOnDoubleClick,
+		// dispatched by Shell.cpp's List case).
 		void ActivateRow( int nIndex )
 		{
 			const steamfriends::View v = ViewNow();
 			if ( nIndex < 0 || (size_t)nIndex >= v.vecFriends.size() )
 			{
 				// The placeholder row (an empty list is one item of text).
-				// Selecting it is not an error and is not a join.
+				// Selecting it is not an error.
 				s_ulSelectedSteamId = 0;
 				return;
 			}
-
-			// Every row in this list is joinable by construction, so there is
-			// no "you cannot join that" branch here any more -- the rows that
-			// would have needed one are not drawn at all.
-			const Friend &f = v.vecFriends[ (size_t)nIndex ];
-			s_ulSelectedSteamId = f.ulSteamId;
-			s_bJoinPending      = true;
-			s_ulPendingSteamId  = f.ulSteamId;
+			s_ulSelectedSteamId = v.vecFriends[ (size_t)nIndex ].ulSteamId;
 		}
 
 		void FireJoin( const Friend &f )
@@ -190,15 +189,49 @@ namespace gamescope
 				return "Pick somebody in the list first.";
 			return "";
 		}
+
+		// The one place a join is actually REQUESTED (Tick(), below, is the
+		// one place it is actually FIRED -- see that function's own comment
+		// for why the two are split). Reached from the Join verb, and -- via
+		// its ListAction() call's bOnDoubleClick flag, dispatched generically
+		// by Shell.cpp's List case -- from a genuine double-click on a row.
+		// Both paths join the SELECTED friend, never "whatever index the
+		// click happened to land on": a double-click's own single click
+		// already ran ActivateRow() and updated the selection first (Shell.cpp
+		// commits res.bActivated before checking res.bDoubleClicked), so by
+		// the time this runs the selection already IS the row that was
+		// double-clicked.
+		void RequestJoinSelected()
+		{
+			if ( !JoinBlocker().empty() )
+				return;
+			const std::optional<Friend> o = SelectedFriend();
+			if ( !o )
+				return;
+
+			s_bJoinPending     = true;
+			s_ulPendingSteamId = o->ulSteamId;
+
+			// "joining ... should instantly close the GUI" -- the user's own
+			// words, 2026-09-14, true of the Join verb and a double-click
+			// alike. The close happens here, the moment a join is QUEUED, not
+			// whenever Tick() gets around to firing it a frame later: from the
+			// person clicking, this IS the join. If the lobby turns out to be
+			// gone by the time Tick() runs, it still toasts that -- toasts
+			// draw over the game regardless of whether the shell is open.
+			SettingsOverlay_SetVisible( false );
+		}
 	}
 
 	// =========================================================================
 	//  Tick -- the only place a join is actually fired
 	// =========================================================================
 	// Once per frame from Shell.cpp's Draw(), on the steamcompmgr thread. Every
-	// caller of ActivateRow() -- a click, Enter, or a ConCommand on the console
-	// thread -- lands here, so forking `steam` happens on the one thread that
-	// is allowed to do it.
+	// caller of RequestJoinSelected() -- the Join verb, a genuine double-click,
+	// or a ConCommand on the console thread -- lands here, so forking `steam`
+	// happens on the one thread that is allowed to do it. ActivateRow() (a
+	// plain click, Enter, or `overlay_e2_set`) never reaches Tick() at all any
+	// more: it only selects.
 	//
 	// THERE IS NO CONFIRMATION DIALOG ANY MORE, and its absence is the point:
 	// it existed only for the "this friend is in a DIFFERENT game, so Steam
@@ -272,20 +305,21 @@ namespace gamescope
 				[]{ return SelectedIndex(); },
 				[]( int n ) { ActivateRow( n ); } ) )
 			.Items( []{ return Items(); } )
-			.ListAction( "Join", []
-				{
-					const int nIndex = SelectedIndex();
-					if ( JoinBlocker().empty() && nIndex >= 0 )
-						ActivateRow( nIndex );
-				}, /* bDanger */ false, JoinBlocker )
+			// bOnDoubleClick = true: a genuine double-click on a row joins,
+			// exactly as this button does, on top of a single click (or
+			// Enter) only ever selecting. 2026-09-14, see ActivateRow()'s and
+			// RequestJoinSelected()'s own comments for the full story.
+			.ListAction( "Join", RequestJoinSelected, /* bDanger */ false, JoinBlocker,
+			             /* bOnDoubleClick */ true )
 			.ListAction( "Refresh", []{ steamfriends::RequestRefresh(); } )
 			.Help( "The friends who are in this game right now and in a lobby you can walk "
 			       "into, read straight from the Steam client already running on this machine "
-			       "- no separate sign-in and nothing leaves this machine. Click somebody, or "
-			       "press Enter, and Steam moves you into their lobby without relaunching "
-			       "anything. Friends in other games are not listed, because joining one would "
-			       "close this game and start theirs. If the list is empty, the Status line "
-			       "below says whether nobody is here or nobody here is joinable." )
+			       "- no separate sign-in and nothing leaves this machine. Click somebody to "
+			       "select them, or press Enter while hovering the list; double-click, or press "
+			       "Join, to actually move into their lobby - either way the overlay closes the "
+			       "moment you do. Friends in other games are not listed, because joining one "
+			       "would close this game and start theirs. If the list is empty, the Status "
+			       "line below says whether nobody is here or nobody here is joinable." )
 			.Keywords( "friends list join lobby joinable playing game persona refresh order sort" )
 			.Live( "status", []
 				{

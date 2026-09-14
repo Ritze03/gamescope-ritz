@@ -15,11 +15,13 @@
 //     SteamFriends.h's poller section. A Steam that has stopped answering must
 //     cost this panel a stale list, never a dropped frame.
 //
-//   * NEVER JOIN FROM A GETTER. A click sets a PENDING id; Tick(), which runs
-//     once per frame on the steamcompmgr thread, is what acts on it. That is
-//     what keeps `overlay_e2_set friends.list 2` -- which arrives on the
-//     CONSOLE thread -- from forking a process on a thread that is not allowed
-//     to.
+//   * NEVER JOIN FROM A GETTER. A click only selects (2026-09-14: it used to
+//     also queue a join, which was the "single click instantly joins" bug).
+//     Joining -- the Join verb, or a genuine double-click -- sets a PENDING
+//     id; Tick(), which runs once per frame on the steamcompmgr thread, is
+//     what acts on it. That is what keeps a script driving the list from the
+//     CONSOLE thread from ever forking a process on a thread that is not
+//     allowed to.
 //
 //   * NEVER BE OFFERED WHEN THERE IS NO GAME TO JOIN. The area declares
 //     AvailableWhen( a Steam app id exists ), so a non-Steam game (or a
@@ -42,6 +44,7 @@ namespace gamescope
 	void PanelFriends_SeedFromConfig();
 
 	// Once per frame, from Overlay/UI/Shell.cpp's Draw(), on the steamcompmgr
-	// thread. Fires a join a click or a script asked for.
+	// thread. Fires a join the Join verb, a double-click, or a script asked
+	// for.
 	void PanelFriends_Tick();
 }

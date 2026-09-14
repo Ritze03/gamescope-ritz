@@ -2553,6 +2553,13 @@ TEST_CASE( "list composite: its value steps across its items and its verbs are d
 	REQUIRE( nCreate == 1 );
 	REQUIRE( nDelete == 0 );
 
+	// bOnDoubleClick defaults to false for a verb that never asked for it --
+	// Profiles' own Create/Delete, exactly as declared just above, are not
+	// wired to a double-click, and are not meant to be (2026-09-14: added for
+	// the Friends list's Join verb, opt-in per verb, off everywhere else).
+	REQUIRE_FALSE( list.ListActionAt( 0 ).bOnDoubleClick );
+	REQUIRE_FALSE( list.ListActionAt( 1 ).bOnDoubleClick );
+
 	// Left/Right on the band step the index like a Choice steps its
 	// options: one item, stopping at the ends, -1 landing on the first.
 	const ui::Adjustable adj = ui::Adjustable::Of( list );
@@ -2569,6 +2576,34 @@ TEST_CASE( "list composite: its value steps across its items and its verbs are d
 	// Graph, is offered by the palette.
 	REQUIRE_FALSE( list.ReadOnly() );
 	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "list composite: a verb can opt into firing on a double-click too", "[overlay_ui]" )
+{
+	// The Friends list's own shape (2026-09-14): Join is the one verb marked
+	// bOnDoubleClick, Refresh is not -- see superdoc/features/steam-friends.md
+	// and Shell.cpp's CompositeKind::List case, which is what actually reads
+	// this flag at draw time. This is the declaration half only: that a verb
+	// asking for it gets it, one that does not stays false, and nothing about
+	// an ordinary verb's own fn()/bDanger/fnDisabledReason changes underneath.
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "system.friends", "Friends", ui::Section::System );
+
+	int nJoin = 0, nRefresh = 0;
+	ui::Entry &list = a.Composite( "friends.list", "Friends", ui::CompositeKind::List, ui::Bind( &nJoin ) )
+		.Items( []{ return std::vector<ui::ListItem>{ { "atze", "[Join]", "" } }; } )
+		.ListAction( "Join", [ & ]{ ++nJoin; }, /* bDanger */ false, {}, /* bOnDoubleClick */ true )
+		.ListAction( "Refresh", [ & ]{ ++nRefresh; } )
+		.Help( "h" );
+
+	REQUIRE( list.ListActionCount() == 2 );
+	REQUIRE( list.ListActionAt( 0 ).sLabel == "Join" );
+	REQUIRE( list.ListActionAt( 0 ).bOnDoubleClick );
+	REQUIRE_FALSE( list.ListActionAt( 1 ).bOnDoubleClick );
+
+	list.ListActionAt( 0 ).fn();
+	REQUIRE( nJoin == 1 );
+	REQUIRE( nRefresh == 0 );
 }
 
 // =========================================================================

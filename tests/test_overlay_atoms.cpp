@@ -1259,6 +1259,104 @@ TEST_CASE( "atoms: listbox selects and activates the row that was clicked", "[ov
 	h.BeginFrame(); Draw(); h.EndFrame();
 }
 
+TEST_CASE( "atoms: listbox tells a genuine double-click apart from two lone clicks",
+           "[overlay_atoms]" )
+{
+	// 2026-09-14: the Friends list needs "select on one click, join on two"
+	// (superdoc/features/steam-friends.md), and this is the bit Controls.cpp
+	// grew to make that representable -- ImGui's own
+	// io.MouseClickedLastCount, read at the same a.bPressed site bActivated
+	// already uses. A single, unhurried click must never trip it; two rapid
+	// clicks on the SAME row must.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	int nSelected = -1;
+	const float flRowH = ui::Px( ui::tok::kControlH );
+	const ImRect rcBody( 40.0f, 200.0f, 40.0f + ui::Px( 300.0f ), 200.0f + flRowH * 10.0f );
+
+	auto Draw = [ & ]
+	{
+		return ui::controls::ListBox( rcBody, "friends", &nSelected,
+		                              kProfileItems, IM_ARRAYSIZE( kProfileItems ) );
+	};
+
+	// One lone click on row 1: activates and selects, but is not a double-click.
+	const ImVec2 vRow1Center( rcBody.GetCenter().x, rcBody.Min.y + flRowH * 1.5f );
+	h.MoveMouse( vRow1Center );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame();
+	const ui::controls::ListBoxResult resLone = Draw();
+	h.EndFrame();
+
+	REQUIRE( nSelected == 1 );
+	REQUIRE( resLone.bActivated );
+	REQUIRE_FALSE( resLone.bDoubleClicked );
+
+	// Immediately click the SAME row again -- ImGui's own double-click
+	// timing/distance window (default 0.30s, a few 1/60s frames apart here)
+	// makes this the second half of a double-click.
+	h.MoveMouse( vRow1Center );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	h.MouseButton( false );
+	h.BeginFrame();
+	const ui::controls::ListBoxResult resDouble = Draw();
+	h.EndFrame();
+
+	REQUIRE( nSelected == 1 );          // still the same row -- a re-click, not a move
+	REQUIRE( resDouble.bActivated );    // a double-click is still, among other things, a click
+	REQUIRE( resDouble.bDoubleClicked );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+}
+
+TEST_CASE( "atoms: listbox Enter activates but is never a double-click", "[overlay_atoms]" )
+{
+	// Requested 2026-09-14: Enter keeps the Profiles convention of selecting
+	// (superdoc/meta/TERMINOLOGY.md's Chord entry aside, this is the plain
+	// list widget) -- it must never masquerade as the double-click that joins
+	// in the Friends list, since a script or a keyboard-only user pressing
+	// Enter repeatedly is not asking to join anything.
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MouseButton( false );
+
+	int nSelected = 0;
+	const float flRowH = ui::Px( ui::tok::kControlH );
+	const ImRect rcBody( 40.0f, 200.0f, 40.0f + ui::Px( 300.0f ), 200.0f + flRowH * 10.0f );
+
+	auto Draw = [ & ]
+	{
+		return ui::controls::ListBox( rcBody, "friends-enter", &nSelected,
+		                              kProfileItems, IM_ARRAYSIZE( kProfileItems ) );
+	};
+
+	h.MoveMouse( rcBody.GetCenter() );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Enter, true );
+	h.BeginFrame();
+	const ui::controls::ListBoxResult res = Draw();
+	h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Enter, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	REQUIRE( res.bActivated );
+	REQUIRE_FALSE( res.bDoubleClicked );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); Draw(); h.EndFrame();
+}
+
 TEST_CASE( "atoms: listbox keyboard nav applies only while the pointer hovers it", "[overlay_atoms]" )
 {
 	ScopedScale s( 1.0f );

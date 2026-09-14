@@ -3013,6 +3013,27 @@ namespace gamescope::ui::shell
 					if ( res.bActivated )
 						entry.Binding().Set( Value{ nSel } );
 
+					// A genuine double-click ALSO fires whichever one verb (at most
+					// one, by convention -- see ListVerb's own comment) opted into it
+					// via bOnDoubleClick, gated by the same disabled-reason rule the
+					// strip below uses. Added 2026-09-14 for the Friends list: a
+					// single click only selects (the Set() above), a double-click
+					// also acts -- and no List composite that never sets the flag is
+					// affected, Profiles' Create/Copy/Edit/Delete included.
+					if ( res.bDoubleClicked )
+					{
+						for ( size_t i = 0; i < entry.ListActionCount(); ++i )
+						{
+							const ListVerb &la = entry.ListActionAt( i );
+							if ( !la.bOnDoubleClick )
+								continue;
+							const std::string sReason = la.fnDisabledReason ? la.fnDisabledReason() : std::string();
+							if ( sReason.empty() && la.fn )
+								la.fn();
+							break;
+						}
+					}
+
 					// The verb strip -- equal chips, declaration order.
 					std::vector<controls::VerbSpec> verbs;
 					std::vector<std::string> reasons;

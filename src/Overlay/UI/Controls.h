@@ -634,8 +634,18 @@ namespace gamescope::ui
 
 		struct ListBoxResult
 		{
-			bool bChanged   = false;  // *pnSelected moved this frame (click or Up/Down/Home/End)
-			bool bActivated = false;  // a click, or Enter on the current selection -- "open/act on this"
+			bool bChanged      = false;  // *pnSelected moved this frame (click or Up/Down/Home/End)
+			bool bActivated    = false;  // a click, or Enter on the current selection -- "open/act on this"
+			// A GENUINE double-click (ImGui's own MouseClickedLastCount == 2,
+			// which survives from the second press through to that press's
+			// release), never Enter and never a lone click -- bActivated is
+			// still true alongside this, since a double-click is two clicks.
+			// Added 2026-09-14 so a List composite can tell "select" apart from
+			// "select and also act on it twice" (Registry.h's
+			// ListVerb::bOnDoubleClick, dispatched by Shell.cpp) without
+			// changing what a single click or Enter already do to every
+			// existing caller of this widget.
+			bool bDoubleClicked = false;
 		};
 
 		// Draws N items inside rcBody, one row `tok::kControlH` tall each,

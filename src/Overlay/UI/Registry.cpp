@@ -401,10 +401,10 @@ namespace gamescope::ui
 	Entry &Entry::Key( const char *psz )             { m_sKey = psz ? psz : ""; return *this; }
 	Entry &Entry::Items( std::function<std::vector<ListItem>()> fn ) { m_Items = std::move( fn ); return *this; }
 	Entry &Entry::ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger,
-	                          std::function<std::string()> fnDisabledReason )
+	                          std::function<std::string()> fnDisabledReason, bool bOnDoubleClick )
 	{
 		m_ListActions.push_back( ui::ListVerb{ pszLabel ? pszLabel : "", std::move( fn ), bDanger,
-		                                         std::move( fnDisabledReason ) } );
+		                                         std::move( fnDisabledReason ), bOnDoubleClick } );
 		return *this;
 	}
 	Entry &Entry::Validate( std::function<std::string( const std::string & )> fn ) { m_Validate = std::move( fn ); return *this; }

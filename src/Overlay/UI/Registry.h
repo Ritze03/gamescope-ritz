@@ -274,6 +274,15 @@ namespace gamescope::ui
 		std::function<void()>        fn;
 		bool                         bDanger = false;
 		std::function<std::string()> fnDisabledReason;
+		// Opt-in, defaults false for every existing call site: when true,
+		// Shell.cpp also fires this verb on a genuine double-click of a row
+		// (Controls.h's ListBoxResult::bDoubleClicked), on top of whatever a
+		// single click or Enter already did through the composite's own
+		// binding. At most one verb per list should set this -- added
+		// 2026-09-14 for the Friends list's Join verb, so a list that wants
+		// "double-click acts, single click only selects" can say so without
+		// changing what any other List composite's click already does.
+		bool                         bOnDoubleClick = false;
 	};
 
 	// Profiles v2 (2026-09-06): a row's relation to the session profile's
@@ -519,7 +528,8 @@ namespace gamescope::ui
 		// order. Not a fifth generator: these are the list's own actions, as
 		// Action()'s verb is the row's, and a category still places no pixel.
 		Entry &ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger = false,
-		                   std::function<std::string()> fnDisabledReason = {} );
+		                   std::function<std::string()> fnDisabledReason = {},
+		                   bool bOnDoubleClick = false );
 		size_t ListActionCount() const { return m_ListActions.size(); }
 		const ListVerb &ListActionAt( size_t i ) const { return m_ListActions[ i ]; }
 

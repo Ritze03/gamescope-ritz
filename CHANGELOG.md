@@ -25,6 +25,8 @@ The newest version below is the one this build reports.
 ### Fixed
 - **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders
   slider carries one.
+- **Friends list**: a single click now only selects a friend; double-click, or the Join
+  button, actually joins them, and either way closes the settings overlay right away.
 
 ## [0.7.1] – 2026-09-10
 

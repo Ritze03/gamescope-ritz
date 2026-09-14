@@ -2182,6 +2182,17 @@ namespace gamescope::ui
 					// Click == activate (Controls.h: "Enter = activate = same
 					// as click"), whether or not the selection actually moved.
 					out.bActivated = true;
+
+					// MouseClickedLastCount, not MouseClickedCount: the latter
+					// is only nonzero on the DOWN frame (imgui.cpp zeroes it
+					// every frame and fills it only on the click transition),
+					// and a.bPressed fires on RELEASE (ButtonBehavior's own
+					// default) -- a different frame. MouseClickedLastCount is
+					// imgui.h's own "stays valid after mouse release" field,
+					// so checking it here reads the click that just completed,
+					// not a stale zero.
+					if ( ImGui::GetIO().MouseClickedLastCount[ ImGuiMouseButton_Left ] >= 2 )
+						out.bDoubleClicked = true;
 				}
 
 				// requests-2026-09-06.md item 5: an outline alone (below)

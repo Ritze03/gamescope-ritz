@@ -1,10 +1,12 @@
 # Steam friends you can join
 
-**2026-09-08, narrowed 2026-09-09.** `Ctrl+Shift+Tab` opens a list of the friends who are
-**in the game you are running right now and in a lobby you can join**, read
-straight out of the Steam client already running on this machine. Click one (or
-press Enter) and gamescope hands the running Steam client a
-`steam://joinlobby/…` URL; it moves you in without relaunching anything.
+**2026-09-08, narrowed 2026-09-09, click model split 2026-09-14.** `Ctrl+Shift+Tab` opens a
+list of the friends who are **in the game you are running right now and in a lobby you can
+join**, read straight out of the Steam client already running on this machine. A single click
+(or Enter) only **selects** a row; a **double-click**, or the **Join** verb on the selected
+row, is what actually hands the running Steam client a `steam://joinlobby/…` URL and moves you
+in without relaunching anything. Either way the overlay closes the instant the join fires — see
+[The click model](#the-click-model-single-click-selects-double-click-or-join-joins) below.
 
 **No Web API key, no browser, no second Steam client, no second sign-in, no app
 id handed to Steam, no `SteamAPI_Init` — and, since the 2026-09-09 narrowing, no
@@ -136,8 +138,8 @@ than the pages you set up once.
 
 | row | kind | what it does |
 |---|---|---|
-| **Friends** (`friends.list`) | list + verbs | One line per joinable friend in this game. Click a row or press Enter to join. |
-| — verb **Join** | | Joins the selected row. Dimmed, with a reason, when nothing is selected or the list is empty. |
+| **Friends** (`friends.list`) | list + verbs | One line per joinable friend in this game. Click a row, or press Enter while hovering the list, to select it; double-click to join. |
+| — verb **Join** | | Joins the selected row. Also fires on a double-click of any row (`ui::ListVerb::bOnDoubleClick`). Dimmed, with a reason, when nothing is selected or the list is empty. |
 | — verb **Refresh** | | Polls Steam now instead of waiting for the next few seconds to elapse. |
 | **Status** (`friends.status`) | read-only | The two counts above, the app id this session is running under, the standing note about the unproven lobby offset, and why invites are not here. |
 
@@ -264,16 +266,73 @@ game you are already in relaunches nothing — the running game receives the joi
 through its own `GameLobbyJoinRequested` callback and moves you — so a dialog
 would be a speed bump on the only path there is.
 
+### The click model: single click selects, double-click (or Join) joins
+
+**2026-09-14, the user's own words:** *"Right now, when I click a user in the
+UI, it instantly joins, but should only instantly join on a double-click.
+Clicking once should just select a user in the UI, double-clicking should
+join them, and joining, no matter if it's for a double-click or the join
+button, should instantly close the GUI."* Before this, a single click (via the
+list's own `AnyBind` setter, `ActivateRow()`) queued a join immediately — the
+reported bug.
+
+The split:
+
+- **A single click, Enter while hovering the list, or `overlay_e2_set
+  friends.list <n>`** all reach `ActivateRow()`, which now **only** records
+  which SteamID is selected. It never queues a join.
+- **A double-click, or the Join verb**, reach `RequestJoinSelected()`, which
+  queues the pending join (see *A click only records; `Tick()` acts* below)
+  **and closes the settings overlay right there**, on the same call —
+  `SettingsOverlay_SetVisible(false)`, the same call the `friends` keybind
+  itself closes the overlay with (`src/wlserver.cpp`). `Why closing happens at
+  request time, not at Tick() a frame later:` from the person clicking, the
+  double-click or the button press **is** the join; if the targeted lobby
+  turns out to be gone by the time `Tick()` actually runs, it still toasts
+  that — toasts draw over the game regardless of whether the shell is open, so
+  nothing is lost by closing a frame early.
+
+**Double-click needed a signal the shared list widget did not have.**
+`Controls.h`'s `ListBoxResult` gained `bDoubleClicked`, computed in
+`ListBox()` from ImGui's own `io.MouseClickedLastCount` (not
+`MouseClickedCount`, which imgui.cpp zeroes every frame except the mouse-DOWN
+transition — a different frame from where this list's own `a.bPressed`, and
+therefore `bActivated`, fires, since `ButtonBehavior`'s default is
+press-on-release). `Registry.h`'s `ListVerb` gained a matching **opt-in**
+`bOnDoubleClick` flag (default `false`), and `Shell.cpp`'s `CompositeKind::List`
+case fires whichever verb sets it whenever `bDoubleClicked` is true, on top of
+whatever the single click already committed through the composite's own
+binding. `Why opt-in per verb, not a change to what a click already does
+everywhere:` this list widget is shared with the Profiles list
+(`profiles.list`), whose own convention — a single click both selects *and*
+loads — is unrelated and is not this bug; the Friends list is the only
+`ListAction()` call site that passes `bOnDoubleClick = true` (on **Join**),
+so Profiles' Create/Copy/Edit/Delete verbs, and any future list that never
+asks for it, are byte-for-byte unaffected.
+
+Verified headlessly (private sway + a stub `steamclient.so`, real
+`overlay_e2_pointer` clicks — not `overlay_e2_set`, which bypasses the widget
+entirely) in
+`build-release/verify-shots/friends-click-2026-09-14/`: a single click selects
+the row and leaves the sheet open (`02-single-click-selects-does-not-join.png`),
+a double-click on that row fires the join and leaves nothing on screen but the
+game and a toast (`03-double-click-joins-and-closes-overlay.png`), and the Join
+button does the same from a row selected by a prior single click
+(`04-selected-before-join-button.png`, `05-join-button-joins-and-closes-overlay.png`).
+
 ### A click only records; `Tick()` acts
 
-The list's setter is reachable two ways: a click or Enter on the draw thread,
-and `overlay_e2_set friends.list <n>` on the **console** thread. Forking a
-process is illegal on the latter. So the setter only records a pending join,
-and `PanelFriends_Tick()` — called once per frame from the shell's own
-`Draw()` — is the single place a join is ever fired.
+The list's setter is reachable two ways: `RequestJoinSelected()` (a
+double-click or the Join verb) on the draw thread, and a `friends_join <n>`
+ConCommand on the **console** thread. Forking a process is illegal on the
+latter. So the draw-thread path only records a pending join, and
+`PanelFriends_Tick()` — called once per frame from the shell's own `Draw()` —
+is the single place a join is ever fired. (A plain click or Enter —
+`ActivateRow()` — never reaches this at all any more: see *The click model*
+above.)
 
 The pending join stores the **SteamID it was aimed at**, not just the index.
-The poller can replace the list between the click and the tick, and joining
+The poller can replace the list between the request and the tick, and joining
 whoever happens to land on index 2 afterwards is exactly the bug an index-only
 handoff produces. A row that is gone by the time the tick runs toasts *"That
 lobby is gone."*
