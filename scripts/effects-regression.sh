@@ -1434,6 +1434,62 @@ run_sampler abv2capture "$V2_CAP_OFF" "$V2_CAP_ON" noclip
 
 set_v2 0
 
+# ---------------------------------------------------------------------------
+# PREVIEW (SPLIT SCREEN) -- NEW 2026-09-14. The user's own testing aid,
+# verbatim: "Create a feature for the shaders itself, that's called
+# something like preview mode. It should only apply the shader to the right
+# half of the screen ... so you can judge what an effect you can actually
+# achieve." Own restarted instance, LAST, for the same reason the Dark
+# Floor and Adaptive Brightness V2 blocks above are (SCENES_DEFAULT's own
+# comment): the checks below want exactly two scenes and nothing downstream
+# depends on this ring.
+#
+# THE CONTRACT under test (cs_effects_layer0.comp's final store, the LAST
+# thing the shader does): every effect above it already ran on the WHOLE
+# frame, and the split is a display-only override of the left half with the
+# RAW input texel. So a capture with the split on must be BYTE-EXACT, half
+# by half, to two ordinary captures at the SAME settings: effect off (the
+# left half) and effect on with the split OFF (the right half).
+#
+#   preview-split-saturation  Saturation at a strong setting (2.5) on the
+#                             `colors` scene -- a plain per-pixel effect,
+#                             the simplest case.
+#   preview-split-v2          Adaptive Brightness V2 at its defaults,
+#                             Scene mode, on the `dark` scene: the split
+#                             must not disturb an ADAPTIVE effect's own
+#                             statistics either, since cs_effects_measure.comp
+#                             taps the whole frame regardless of the split.
+# ---------------------------------------------------------------------------
+PREVIEW_SPLIT_ID="image.shaders.preview_split"
+set_preview_split() { gsctl overlay_e2_set "$PREVIEW_SPLIT_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+
+SCENES="colors,dark"
+start_instance
+sleep "$ADAPT_SETTLE_S"
+set_saturation 0; set_vibrancy 0; set_ab 0; set_ag 0; set_v2 0; set_preview_split 0
+
+PS_SAT_OFF="$(take_screenshot 36-colors-preview-off)"
+set_saturation 2.5
+PS_SAT_ON="$(take_screenshot 36-colors-preview-on)"
+set_preview_split 1
+PS_SAT_SPLIT="$(take_screenshot 36-colors-preview-split)"
+set_preview_split 0
+set_saturation 0
+run_sampler previewsplit "$PS_SAT_OFF" "$PS_SAT_ON" "$PS_SAT_SPLIT" preview-split-saturation
+
+next_scene   # colors -> dark
+sleep "$ADAPT_SETTLE_S"
+PS_V2_OFF="$(take_screenshot 37-dark-preview-off)"
+v2_defaults
+set_v2 1
+sleep "$ADAPT_SETTLE_S"   # let V2's own Scene-mode anchor converge
+PS_V2_ON="$(take_screenshot 37-dark-preview-on)"
+set_preview_split 1
+PS_V2_SPLIT="$(take_screenshot 37-dark-preview-split)"
+set_preview_split 0
+set_v2 0
+run_sampler previewsplit "$PS_V2_OFF" "$PS_V2_ON" "$PS_V2_SPLIT" preview-split-v2
+
 END_TS=$(date +%s)
 {
 	echo "effects-regression.sh -- $TS"

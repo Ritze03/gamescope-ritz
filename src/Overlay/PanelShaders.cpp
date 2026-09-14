@@ -76,6 +76,11 @@ namespace gamescope
 		const auto &r = settings.reshade;
 		NativeEffectsState_t &e = g_nativeEffects;
 
+		// Preview (split screen) (NEW 2026-09-14): a bare bool, no
+		// exclusion logic -- see rendervulkan.hpp's bPreviewSplit comment
+		// for why it is deliberately outside AnyEnabled().
+		e.bPreviewSplit = r.preview_split;
+
 		e.bShadowLift  = r.shadow_lift.enabled;
 		e.flShadowLift = r.shadow_lift.strength;
 
@@ -427,6 +432,31 @@ namespace gamescope
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
 			return std::to_string( n ) + " of 8 effects on";
 		} );
+
+		// PREVIEW (SPLIT SCREEN) -- NEW 2026-09-14, the user's own testing
+		// aid: "Create a feature for the shaders itself, that's called
+		// something like preview mode. It should only apply the shader to
+		// the right half of the screen ... so you can judge what an effect
+		// you can actually achieve." Deliberately the FIRST row in the
+		// area, above the "Effects" band -- it is not itself one of the
+		// eight effects the Summary/GroupCount above count, it applies to
+		// whichever of them are already on. An empty Group() first: without
+		// it this row's own m_nGroup (0, the "no Group() call yet" default)
+		// would coincide with the "Effects" GroupCount band pushed right
+		// below, which would draw the EFFECTS header above this row and
+		// count it as a ninth switch in that band's on/total badge.
+		a.Group( "" );
+		a.Switch( "image.shaders.preview_split", "Preview (split screen)",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.preview_split; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.preview_split, b ); } ) )
+			.Key( "reshade.preview_split" )
+			.Help( "Shows the untouched game on the left half and every effect below on the "
+			       "right half, so you can judge what an effect really does. The whole frame is "
+			       "still processed, only what is displayed differs. A user ReShade .fx file is "
+			       "not included in the split." )
+			.Default( false )
+			.Keywords( "preview split half compare before after side by side" );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
 		// for a switch set, and the shell computes it from the band's own

@@ -241,6 +241,12 @@ namespace gamescope::config
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
+                // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
+                // a sub-object: see ConfigSchema.h's ReshadeSettings::
+                // preview_split. Additive; an old config has none and
+                // resolves to the compiled-in default (off).
+                s.reshade.preview_split = JGetBool( *pReshade, "preview_split", s.reshade.preview_split );
+
                 // Renamed from "vibrancy" 2026-09-08 (ConfigSchema.h's
                 // kCurrentSchemaVersion 3->4 comment). Any raw JSON reaching
                 // this function has already been through ParseConfigFile's
@@ -660,6 +666,7 @@ namespace gamescope::config
             jShadowLift[ "strength" ] = sl.strength;
 
             nlohmann::json jReshade = nlohmann::json::object();
+            jReshade[ "preview_split" ] = s.reshade.preview_split;
             jReshade[ "saturation" ] = std::move( jSaturation );
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );

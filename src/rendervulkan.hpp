@@ -682,6 +682,19 @@ struct NativeEffectsState_t
 	// rendervulkan.cpp), so "off" costs nothing extra.
 	float flV2Clarity = 0.0f;
 
+	// Preview (split screen) (NEW 2026-09-14, ConfigSchema.h's
+	// ReshadeSettings::preview_split): the user's own testing aid -- "It
+	// should only apply the shader to the right half of the screen ... so
+	// you can judge what an effect really does". A display-only override:
+	// cs_effects_layer0.comp's final store overwrites the left half with
+	// the raw input texel after every effect above has already run on the
+	// WHOLE frame, so turning this on never changes what any adaptive
+	// effect measures or adapts to. Deliberately NOT in AnyEnabled() below
+	// -- this switch must never be what makes the pre-pass run: with every
+	// other effect off there is nothing to preview, and the split must show
+	// raw|raw at zero cost rather than force a dispatch on its own.
+	bool bPreviewSplit = false;
+
 	// True when some effect needs the measure pass's statistics, i.e. when
 	// the history texture has to be kept alive and the measure dispatch
 	// recorded. The three adaptive effects read it (V2 only in Scene mode --

@@ -310,5 +310,20 @@ void main()
 
     c = clamp(c, 0.0, 1.0);
 
+    // 8. Preview (split screen) (NEW 2026-09-14) -- the user's own testing
+    //    aid: "It should only apply the shader to the right half of the
+    //    screen ... so you can judge what an effect really does". Every
+    //    step above (1-7, plus the measure pass and Bloom's three passes
+    //    this dispatch does not itself run) already processed the WHOLE
+    //    frame -- this is deliberately the LAST thing in the shader, a
+    //    display-only override of the left half with the raw input texel
+    //    (the slot-0 sample before grade(), same encoding), so the right
+    //    half is byte-identical to the effect running normally and the
+    //    adaptive effects' statistics (fed from the whole, unsplit frame)
+    //    are never disturbed by which half is on screen. No marker line at
+    //    the split boundary, on purpose -- see the panel's own Help text.
+    if ((u_flags & EFFECT_PREVIEW_SPLIT) != 0u && pos.x < size.x / 2u)
+        c = texelFetch(s_samplers[0], ivec2(pos), 0).rgb;
+
     imageStore(dst, ivec2(pos), vec4(c, 1.0));
 }

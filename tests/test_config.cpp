@@ -1191,6 +1191,43 @@ TEST_CASE( "reshade.shadow_lift.enabled and strength round-trip", "[config]" )
 }
 
 // ---------------------------------------------------------------------
+// Preview (split screen) (2026-09-14, superdoc/features/shader-effects.md):
+// a bare bool, not its own settings struct -- same "additive key, old
+// config has none, resolves to the compiled-in default" shape as
+// shadow_lift's own tests just above.
+
+TEST_CASE( "an existing config with no preview_split key resolves to the neutral default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "schema_version": 2,
+        "gamescope": { "filter": "FSR" }
+    })";
+
+    Settings s = ResolvedSettings();
+    REQUIRE( s.reshade.preview_split == false );
+    REQUIRE( s.gamescope.filter == "FSR" ); // unrelated section untouched
+}
+
+TEST_CASE( "reshade.preview_split round-trips", "[config]" )
+{
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.reshade.preview_split = bValue;
+
+        REQUIRE( SaveSections( s ) );
+
+        Settings loaded = LoadSections();
+        REQUIRE( loaded.reshade.preview_split == bValue );
+    }
+}
+
+// ---------------------------------------------------------------------
 // Adaptive Brightness V2 (2026-09-14, superdoc/planning/adaptive-brightness-
 // v2-plan.md / superdoc/features/shader-effects.md): a NEW, ADDITIVE effect
 // -- ConfigSchema.h's ReshadeAdaptiveBrightnessV2Settings sits alongside the

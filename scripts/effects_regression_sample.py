@@ -85,6 +85,16 @@ Subcommands
                                          Saturation's per-band boost RATIO must be flat
                                          across bands, Vibrancy's must strictly increase
                                          -- the headline shape difference between the two
+    previewsplit <img-off> <img-on> <img-split> <label>
+                                         Preview (split screen) (2026-09-14): the SAME
+                                         scene captured effect-off, effect-on (no
+                                         split), and effect-on-with-preview-split-on.
+                                         The split capture's left half must be
+                                         BYTE-EXACT to the off capture's left half and
+                                         its right half BYTE-EXACT to the on capture's
+                                         right half -- the shader writes the raw input
+                                         texel on the left, the fully-graded pixel on
+                                         the right, nothing in between.
 """
 import re
 import math
@@ -1140,6 +1150,43 @@ def cmd_colorshape(args):
     sys.exit(0 if emit(not failed, "colors-shape", detail) else 1)
 
 
+def cmd_previewsplit(args):
+    """Preview (split screen) (2026-09-14). Three captures of the SAME
+    scene/settings: effect off, effect on (no split), effect on with
+    Preview (split screen) also on. The shader's own contract
+    (cs_effects_layer0.comp's final store) is that the split capture's left
+    half is the raw input texel and its right half is the ordinary graded
+    pixel -- i.e. BYTE-EXACT to the other two captures' matching halves,
+    not merely close. A max abs per-channel diff of 0 is the assertion;
+    anything else means either half saw the wrong pixels."""
+    off_img, on_img, split_img = load(args[0]), load(args[1]), load(args[2])
+    label = args[3] if len(args) > 3 else "preview-split"
+
+    if off_img.size != split_img.size or on_img.size != split_img.size:
+        sys.exit(0 if emit(False, label,
+                           f"size mismatch off={off_img.size} on={on_img.size} "
+                           f"split={split_img.size}") else 1)
+
+    w, h = split_img.size
+    mid = w // 2
+
+    def max_diff(a, b, box):
+        pa = list(a.crop(box).getdata())
+        pb = list(b.crop(box).getdata())
+        return max(max(abs(x - y) for x, y in zip(p1, p2)) for p1, p2 in zip(pa, pb))
+
+    left_diff = max_diff(split_img, off_img, (0, 0, mid, h))
+    right_diff = max_diff(split_img, on_img, (mid, 0, w, h))
+    checks = [
+        ("left half byte-exact to the raw (effect-off) capture", left_diff == 0),
+        ("right half byte-exact to the full-effect capture", right_diff == 0),
+    ]
+    failed = [c for c, ok in checks if not ok]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + \
+        f"left max diff {left_diff}, right max diff {right_diff}"
+    sys.exit(0 if emit(not failed, label, detail) else 1)
+
+
 def cmd_darkfloor(args):
     """darkfloor <image-off> <image-on> <label> -- the DARK FLOOR headline
     property (2026-09-14) on the near-black `blackout` scene
@@ -1520,6 +1567,7 @@ def main():
      "abv2slope": cmd_abv2_slope, "abv2black": cmd_abv2_black, "abv2sky": cmd_abv2_sky,
      "abv2static": cmd_abv2_static, "abv2pan": cmd_abv2_pan, "abv2cut": cmd_abv2_cut,
      "abv2colour": cmd_abv2_colour, "abv2capture": cmd_abv2_capture,
+     "previewsplit": cmd_previewsplit,
      }[cmd](args)
 
 

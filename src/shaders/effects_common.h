@@ -253,6 +253,19 @@ const uint EFFECT_BLOOM               = 1u << 8;
 // Adaptive Gamma above are untouched). Mutually exclusive with BOTH of
 // them -- see PanelShaders.cpp's three-way exclusion.
 const uint EFFECT_ADAPTIVE_V2         = 1u << 9;
+// Preview (split screen) (NEW 2026-09-14): the user's own testing aid,
+// "should only apply the shader to the right half of the screen ... so you
+// can judge what an effect really does". Read only by
+// cs_effects_layer0.comp's final store -- see that file's end for the
+// x < width/2 check that overwrites the left half with the raw input
+// texel. Every dispatch upstream of that check (the measure pass, Bloom's
+// three passes, V2's guided filter) runs over the WHOLE frame unchanged, so
+// the right half is byte-identical to the effect running normally and the
+// adaptive effects' statistics are never disturbed by the split. Not part
+// of NativeEffectsState_t::AnyEnabled() (rendervulkan.hpp): this switch
+// alone must never turn the pre-pass on, so with every other effect off the
+// split shows raw|raw and costs nothing.
+const uint EFFECT_PREVIEW_SPLIT       = 1u << 10;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;

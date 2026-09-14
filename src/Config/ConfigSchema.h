@@ -710,6 +710,21 @@ namespace gamescope::config
         ReshadeAdaptiveBrightnessV2Settings adaptive_brightness_v2;
         ReshadeShadowLiftSettings shadow_lift;
 
+        // Preview (split screen) (NEW 2026-09-14) -- the user's own testing
+        // aid: "Create a feature for the shaders itself, that's called
+        // something like preview mode. It should only apply the shader to
+        // the right half of the screen ... so you can judge what an effect
+        // really does." A bare field here, not its own settings struct: it
+        // has no tuning of its own, only on/off, and it applies to whatever
+        // effect(s) above are already on rather than being an effect of its
+        // own. Purely additive, compiled-in default off -- needs no schema
+        // bump or migration, the same shape ReshadeBloomSettings/
+        // ReshadeVibrancySettings were added in. See
+        // rendervulkan.hpp's NativeEffectsState_t::bPreviewSplit and
+        // effects_common.h's EFFECT_PREVIEW_SPLIT for where this actually
+        // takes effect.
+        bool preview_split = false;
+
         // HISTORY: "Leave dark scenes alone" (the user: "the adaptive
         // brightness and the adaptive gamma both completely destroy REALLY
         // dark images ...") shipped 2026-09-14 as a bare `dark_floor` field

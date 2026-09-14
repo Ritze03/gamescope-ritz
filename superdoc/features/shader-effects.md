@@ -38,6 +38,37 @@ worth breaking the usual rule. What used to be the only "Vibrancy" effect is now
 second effect built beside it. Expect an old commit, an old capture, or an old test
 name in this doc's history to say "Vibrancy" and mean what is now Saturation.
 
+## Preview (split screen) (`image.shaders.preview_split`, new 2026-09-14)
+
+A Switch row at the very TOP of the area, above the Effects band — the user's own
+request, verbatim: *"Create a feature for the shaders itself, that's called something
+like preview mode. It should only apply the shader to the right half of the screen. If
+it's simpler for the implementation, it would be fine if the whole image is processed
+and only the displaying part differs, so it's mainly for testing and seeing how much of
+an effect you can actually achieve."* That second sentence is exactly what shipped: the
+pre-pass (measure, Bloom, V2's guided filter, everything) still runs over the **whole**
+frame unchanged, and `cs_effects_layer0.comp`'s final store — the very last thing the
+shader does, after every effect above it — overwrites only the LEFT half's pixels with
+the raw input texel (the slot-0 sample before `grade()`, same gamma-encoded space) when
+the switch is on. The right half is whatever the effects below already produce; nothing
+about them changes. No marker line is drawn at the split boundary.
+
+`Why display-only, not a second dispatch over half the frame:` the simpler shape the
+user explicitly sanctioned, and it has a real property the cheaper one would not: an
+adaptive effect's statistics (Adaptive Brightness/Gamma/V2's smoothed percentiles and
+content anchor) come from taps over the WHOLE frame, so turning the split on or off
+never moves what the picture is adapting to — the right half looks exactly like the
+effect running normally, at any moment, because that is what it is.
+
+`Cost when nothing else is on:` the switch is a bare bool on `NativeEffectsState_t`,
+deliberately kept OUT of `AnyEnabled()` (`rendervulkan.hpp`) — it must never be what
+makes the pre-pass run. With every other effect off, the pass does not dispatch at all
+and both halves are the same raw frame (raw|raw), at zero extra cost.
+
+`Not included:` a user's own ReShade `.fx` file (the separate, runtime-compiled loader —
+see [reshade-effects](reshade-effects.md)) is unaffected; the split only touches this
+native pre-pass's own final store.
+
 ## Why a native pre-pass, not the `.fx` (2026-09-05)
 
 The `.fx` was compiled at runtime from whichever copy won a four-directory search

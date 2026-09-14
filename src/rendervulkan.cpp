@@ -4896,6 +4896,10 @@ struct EffectsPushData_t
 	// removed 2026-09-14) -- REUSED the same day for Adaptive Brightness V2,
 	// matching effects_common.h's own EFFECT_ADAPTIVE_V2.
 	static constexpr uint32_t kAdaptiveV2        = 1u << 9;
+	// NEW 2026-09-14: Preview (split screen) -- a display-only override the
+	// shader applies LAST, after every effect above; see
+	// effects_common.h's EFFECT_PREVIEW_SPLIT.
+	static constexpr uint32_t kPreviewSplit      = 1u << 10;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -4993,6 +4997,12 @@ struct EffectsPushData_t
 		// bAdaptiveGamma's own drop does.
 		const bool bAdaptiveV2 = s.bAdaptiveV2 && !s.bAdaptiveBrightness && !bAdaptiveGamma;
 		if ( bAdaptiveV2 )              u_flags |= kAdaptiveV2;
+		// PREVIEW (SPLIT SCREEN) -- NEW 2026-09-14. No exclusion, no
+		// masking: this constructor only ever runs while AnyEnabled() is
+		// true (see vulkan_composite()), so there is always some effect to
+		// preview by the time this bit could matter, and the bit itself
+		// carries exactly what the config says either way.
+		if ( s.bPreviewSplit )          u_flags |= kPreviewSplit;
 		if ( bResetHistory )            u_flags |= kResetHistory;
 
 		u_saturation = s.flSaturation;

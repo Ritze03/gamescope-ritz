@@ -36,6 +36,9 @@ The newest version below is the one this build reports.
   a Clarity control that makes a silhouette's own outline pop without touching exposure.
 - **Shaders**: a Diagnostics row and an `effects_timing` command now show how long the
   Shaders pre-pass actually takes on your GPU, in milliseconds.
+- **Preview (split screen)**: a new switch at the top of the Shaders area shows the
+  untouched game on the left half and every effect on the right half, so you can judge
+  how strong an effect really is.
 
 ### Fixed
 - **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders
