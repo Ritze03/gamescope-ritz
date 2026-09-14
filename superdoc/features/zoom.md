@@ -33,6 +33,8 @@ group after Crosshair). Default **off**.
 | | Activation | `mode` | `"hold"` (zoomed while the chord is down) or `"toggle"` (press in, press out). Int-backed Choice like `crosshair.hide_mode`: `overlay_e2_set zoom.mode 1` is Toggle. |
 | | Zoom level | `factor` | 1.5–5.0, step 0.1, default 2.0. |
 | | Match mouse speed | `mouse_scale` | Multiplies relative mouse motion by `1 / factor` while zoomed. See below. |
+| | Keep the button from the game | `consume_button` | Default off. Swallows the zoom chord's own mouse button, press and release, instead of forwarding it. See below. |
+| | Scroll to change zoom level | `scroll_adjust` | Default off. While zoomed, the wheel steps `factor` by 0.25 instead of reaching the game. See below. |
 | Projection | Shape | `shape` | `"circle"`, `"rectangle"`, `"square"`. |
 | | Size | `size` | Circle diameter / square side, as a fraction (0.05–1) of the game's on-screen **height**. Greyed for a rectangle. |
 | | Width / Height | `width`, `height` | The rectangle, as fractions of the on-screen width and height. Greyed unless the shape is a rectangle. |
@@ -155,12 +157,88 @@ with `mouse_scale` on `wlserver_mousemotion()` multiplies the relative delta by
 covers every relative-motion source the sensitivity option covers and nothing
 else; absolute (windowed) motion is untouched.
 
+## Keep the button from the game (`consume_button`)
+
+> **Why (2026-09-14):** the user's request, verbatim: *"Add a switch, to
+> consume the right mouse click, so the game never sees it."*
+
+Off by default. When on, and the zoom's own chord is a mouse button (`RMB` by
+default; the switch text does not say "right" because the chord is whatever
+the user has bound), that button's press and release never reach the seat at
+all -- `wlserver_dispatch_mouse_button()`'s game branch runs the zoom's hotkey
+check **before** `wlr_seat_pointer_notify_button()`, and if the press
+completed the zoom's chord with the switch on, the notify is skipped and the
+button is tracked in its own set (`s_setSwallowedButtons`, not
+`s_setMouseButtonsForwardedToGame`) so the matching release is skipped too.
+`Zoom_ConsumesButton()` is the read: true only when the zoom is enabled AND
+this switch is on.
+
+Applies to **toggle mode** the same way as hold: both the zoom-in press and
+the zoom-out press (and each one's release) are swallowed, because each is a
+fresh completion of the chord.
+
+`Why the crosshair's auto-hide is skipped, not delayed, on a swallowed press:`
+`Crosshair_NotifyRightButton( true )` exists to hide the crosshair while the
+game is aiming down sights on a real click -- there is no ADS to hide it for
+when the game never receives the click at all, so that call is skipped
+entirely on the swallowed path rather than reordered around it.
+
+**What this does NOT touch:** a keyboard-key chord (`F`) is already kept from
+the game by the keybind engine's own swallow rule regardless of this switch,
+and a modifier-only chord (`Alt`) is never swallowed by design (Keybinds.h:
+"a mouse button is never swallowed [by the engine]... a modifier keeps its
+day job"). This switch only ever changes what happens to a *mouse button*,
+which is the one case the engine itself always leaves alone. The Switch row's
+help text says all three cases so the behaviour is legible from the setting
+alone.
+
+## Scroll to change zoom level (`scroll_adjust`)
+
+> **Why (2026-09-14):** the user's request, verbatim: *"Add another switch
+> for on demand zoom level adjustment. If enabled, the user should be able to
+> scroll while zoomed, to change how big the zoom actually is."*
+
+Off by default. When on, and the zoom is active, the mouse wheel steps
+`factor` by **0.25 per notch** (clamped 1.5..5.0) instead of reaching the
+game -- both `wlserver_mousewheel()` (the SDL/nested-Wayland/IME/
+InputEmulation path) and `wlserver_handle_pointer_axis()` (the raw libinput/
+DRM listener, which bypasses that function) gate on `Zoom_IsActive() &&
+Zoom_ScrollAdjustEnabled()` on their **game** branch and drop the event
+entirely rather than forwarding it -- dropping the whole event, not just the
+vertical component, so a horizontal-scroll binding (e.g. a weapon cycle)
+cannot fire while zoomed either. One notch is `1.0` in the units these
+functions already use (`flY`/120 upstream, or `delta_discrete` /
+`WLR_POINTER_AXIS_DISCRETE_STEP`); a device with no discrete report falls
+back to the sign of the continuous delta as one notch.
+
+`Why the picture reacts on the very next frame, and where the setting
+persists:` `Zoom_OnScroll()` runs on the **wlserver thread** and only ever
+touches atomics -- `config::` is documented single-threaded (Keybinds.h's
+threading note) and the wlserver thread is not that thread. So a scroll
+notch steps the LIVE `s_flFactor` atomic (via the header-only
+`Zoom_StepFactor()` helper) and sets `s_bFactorDirty`; `Zoom_FillRequest()`
+(steamcompmgr thread, called unconditionally every frame from `paint_all()`)
+flushes that flag into `s_Settings.zoom.factor` and calls
+`PersistAndRepaint()` at most once per frame no matter how many notches
+arrived since the last one, coalescing a fast scroll into one config write.
+The composite's `req.flFactor` and `Zoom_MouseScale()` both read the live
+atomic directly rather than the persisted copy, so the magnification and the
+mouse-speed divisor change immediately; the **Zoom level** slider reads
+`s_Settings.zoom.factor` like every other row, so it shows the new value once
+the same-frame flush has run.
+
 ## Threading
 
-`Zoom_OnChord()` and `Zoom_MouseScale()` run on the wlserver thread and touch
-atomics only; the settings they need (enabled, mode, factor, mouse_scale) are
+`Zoom_OnChord()`, `Zoom_MouseScale()`, `Zoom_ConsumesButton()`,
+`Zoom_IsActive()`, `Zoom_ScrollAdjustEnabled()` and `Zoom_OnScroll()` all run
+on the wlserver thread and touch atomics only; the settings they need
+(enabled, mode, factor, mouse_scale, consume_button, scroll_adjust) are
 mirrored into atomics by the steamcompmgr thread whenever the config cache is
-(re)loaded. Everything else is the steamcompmgr thread, like Crosshair.cpp.
+(re)loaded. `Zoom_OnScroll()` is the one exception that writes an atomic the
+steamcompmgr thread later reads back (`s_flFactor`, `s_bFactorDirty`) rather
+than only reading mirrored ones -- see "Scroll to change zoom level" above
+for why the persist itself has to happen on the other thread. Everything else
+is the steamcompmgr thread, like Crosshair.cpp.
 
 ## Verified
 
@@ -185,3 +263,13 @@ mirrored into atomics by the steamcompmgr thread whenever the config cache is
   in between: the zoom circle is present and byte-identical across the held
   and both tap frames, and gone (byte-identical to the pre-zoom frame) only
   after the RMB release.
+- `tests/test_config.cpp` — `Zoom_StepFactor()`'s clamp-and-step arithmetic
+  (0.25 per notch, 1.5..5.0 both ends), with no Zoom.cpp/compositor link.
+- `consume-*.png` and `scroll-*.png` in the same directory (2026-09-14): with
+  `consume_button` on, RMB still zooms (the circle appears) and the
+  `log_binding` debug channel logs "button 273 swallowed ... never reached
+  the seat" for the press -- the release is silent because it is never
+  forwarded either, by the same tracking-set path. With `scroll_adjust` on,
+  RMB held at the default 2.0× and two `wlserver_debug_mouse_wheel "-1 -1"`
+  notches (scroll up) produce a visibly larger circle and
+  `overlay_e2_get zoom.factor` reads `2.5`.

@@ -325,6 +325,16 @@ namespace gamescope::config
         float height = 0.5f;
         float factor = 2.0f;          // magnification, 1.5..5.0
         bool mouse_scale = false;     // divide mouse speed by `factor` while zoomed (on top of --mouse-sensitivity)
+        // "Keep the button from the game" (2026-09-14): the zoom chord's own
+        // mouse button (RMB by default) is swallowed -- press AND release --
+        // instead of reaching the game. Only ever applies to a mouse button;
+        // a keyboard-key chord is already swallowed by the keybind engine,
+        // and a modifier-only chord never is. See Zoom_ConsumesButton().
+        bool consume_button = false;
+        // "Scroll to change zoom level" (2026-09-14): while zoomed, the
+        // mouse wheel steps `factor` by 0.25 per notch (1.5..5.0) instead of
+        // reaching the game. See Zoom_OnScroll()/Zoom_ScrollAdjustEnabled().
+        bool scroll_adjust = false;
     };
 
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's

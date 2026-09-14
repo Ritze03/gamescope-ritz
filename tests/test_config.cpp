@@ -14,6 +14,7 @@
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/FpsDisplay.h"
+#include "Overlay/Zoom.h"
 
 using namespace gamescope::config;
 
@@ -1205,6 +1206,8 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     s.zoom.height = 0.25f;
     s.zoom.factor = 3.5f;
     s.zoom.mouse_scale = true;
+    s.zoom.consume_button = true;
+    s.zoom.scroll_adjust = true;
     REQUIRE( SaveSections( s ) );
 
     const Settings loaded = LoadSections();
@@ -1216,6 +1219,30 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     REQUIRE( loaded.zoom.height == 0.25f );
     REQUIRE( loaded.zoom.factor == 3.5f );
     REQUIRE( loaded.zoom.mouse_scale == true );
+    REQUIRE( loaded.zoom.consume_button == true );
+    REQUIRE( loaded.zoom.scroll_adjust == true );
+
+    REQUIRE( Settings{}.zoom.consume_button == false );
+    REQUIRE( Settings{}.zoom.scroll_adjust == false );
+}
+
+// zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
+// no compositor deps, so it needs no Zoom.cpp link at all -- see that
+// header's own comment.
+TEST_CASE( "Zoom_StepFactor: 0.25 per notch, clamped to 1.5..5.0", "[config]" )
+{
+    using gamescope::Zoom_StepFactor;
+
+    REQUIRE( Zoom_StepFactor( 2.0f, 1 ) == 2.25f );
+    REQUIRE( Zoom_StepFactor( 2.0f, -1 ) == 1.75f );
+    REQUIRE( Zoom_StepFactor( 2.0f, 0 ) == 2.0f );
+    REQUIRE( Zoom_StepFactor( 2.0f, 2 ) == 2.5f );
+
+    // Clamped at both ends rather than wrapping or asserting.
+    REQUIRE( Zoom_StepFactor( 4.9f, 1 ) == 5.0f );
+    REQUIRE( Zoom_StepFactor( 1.6f, -1 ) == 1.5f );
+    REQUIRE( Zoom_StepFactor( 5.0f, 100 ) == 5.0f );
+    REQUIRE( Zoom_StepFactor( 1.5f, -100 ) == 1.5f );
 }
 
 TEST_CASE( "crosshair.hide_mode round-trips across all three modes", "[config]" )

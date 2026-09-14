@@ -192,7 +192,11 @@ action opts into with `ActionInfo::bHeld` rather than one the chord decides:
   chord"*.
 - A modifier-only chord is a plain press here, never a tap (`Alt` to zoom is
   legitimate). Swallowed only when the completing key is a real key: a
-  modifier keeps its day job and a mouse button belongs to the game.
+  modifier keeps its day job and a mouse button belongs to the game **by
+  default** -- the zoom can opt its own mouse button into being swallowed
+  instead, press and release, with its own switch (`zoom.consume_button`,
+  "Keep the button from the game", 2026-09-14); see
+  [zoom.md](zoom.md#keep-the-button-from-the-game-consume_button).
 
 Mouse buttons reach the engine from `wlserver_dispatch_mouse_button()` on the
 **game** branch (and on the overlay branch only while a rebind capture is

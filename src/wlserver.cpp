@@ -349,7 +349,8 @@ static void bump_input_counter()
 // what lets this detect a chord without needing to trust any device's live
 // modifier bits.
 static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool press,
-                                          const std::unordered_set<xkb_keysym_t> &setPressedKeySyms )
+                                          const std::unordered_set<xkb_keysym_t> &setPressedKeySyms,
+                                          bool *pbSwallowButtonForZoom = nullptr )
 {
 	using namespace gamescope::keybinds;
 
@@ -360,6 +361,18 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 	// never fires anything else that matters here.
 	if ( res.bReleased && res.eReleased == Action::Zoom )
 		gamescope::Zoom_OnChord( false );
+
+	// "Keep the button from the game" (zoom.consume_button,
+	// superdoc/features/zoom.md): true only for the PRESS that completes
+	// the zoom's own chord, with the switch on. This is deliberately NOT
+	// res.bConsume -- the engine itself never swallows a mouse button (a
+	// button belongs to the game by default, per Keybinds.h's held-action
+	// comment); this is a zoom-specific opt-in the caller
+	// (wlserver_ritz_mouse_hotkey) asks for on top of that, only ever from
+	// the mouse-button call site.
+	if ( pbSwallowButtonForZoom )
+		*pbSwallowButtonForZoom = press && res.bFired && res.eAction == Action::Zoom
+			&& gamescope::Zoom_ConsumesButton();
 
 	if ( !res.bFired )
 		return res.bConsume;
@@ -632,13 +645,20 @@ void wlserver_clear_pressed_hotkeys()
 // the buttons down, so `Shift+RMB` is a chord; the keyboard path's set
 // carries no buttons, which is what keeps a Right Shift tap opening the
 // shell while the player is aiming. The engine's swallow verdict is ignored:
-// a mouse button is never taken from the game.
+// a mouse button is never taken from the game BY THE ENGINE.
+//
+// Return value (2026-09-14, zoom.consume_button): true when this press is
+// the one that completed the zoom's chord and "Keep the button from the
+// game" is on -- see wlserver_check_ritz_keybinds()'s own comment. Always
+// false for a release; the caller (wlserver_dispatch_mouse_button) decides
+// whether to swallow a release from its own s_setSwallowedButtons bookkeeping
+// instead, since a release completes no chord for the engine to judge.
 static std::unordered_set<xkb_keysym_t> s_setHeldButtonSyms;
-static void wlserver_ritz_mouse_hotkey( uint32_t uLinuxButton, bool bPressed )
+static bool wlserver_ritz_mouse_hotkey( uint32_t uLinuxButton, bool bPressed )
 {
 	const xkb_keysym_t uSym = gamescope::keybinds::ButtonKeysym( uLinuxButton );
 	if ( uSym == XKB_KEY_NoSymbol )
-		return;
+		return false;
 
 	if ( bPressed )
 		s_setHeldButtonSyms.insert( uSym );
@@ -649,7 +669,9 @@ static void wlserver_ritz_mouse_hotkey( uint32_t uLinuxButton, bool bPressed )
 	for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
 		setHeld.emplace( uKeySym );
 
-	wlserver_check_ritz_keybinds( uSym, bPressed, setHeld );
+	bool bSwallowForZoom = false;
+	wlserver_check_ritz_keybinds( uSym, bPressed, setHeld, &bSwallowForZoom );
+	return bSwallowForZoom;
 }
 
 // D22. A key event on THIS compositor's own keyboard, from a script.
@@ -830,6 +852,55 @@ static gamescope::ConCommand cc_wlserver_debug_mouse_button(
 			wlserver_unlock();
 	} );
 
+// The wheel half of the debug button command above, and confined the same
+// way: it enters at wlserver_mousewheel(), the same function every real
+// backend (SDL, Wayland, libinput, IME, input emulation) calls for a
+// notch-scaled scroll, so it exercises the settings overlay's capture gate
+// and the zoom's "Scroll to change zoom level" drop-the-event path alike; it
+// cannot reach the host's pointer.
+//
+// Added for zoom.scroll_adjust (superdoc/features/zoom.md), whose headless
+// proof otherwise had no way to drive a wheel notch at all. <delta> is in
+// the same units wlserver_mousewheel()'s own callers already use -- one full
+// notch is 1.0, and (matching Wayland's axis sign, negated for ImGui
+// elsewhere) POSITIVE is scroll DOWN / zoom OUT, negative is scroll UP /
+// zoom IN. Vertical only: nothing here needs a horizontal-scroll test.
+static gamescope::ConCommand cc_wlserver_debug_mouse_wheel(
+	"wlserver_debug_mouse_wheel",
+	"Send vertical wheel notches on gamescope's OWN seat: wlserver_debug_mouse_wheel <delta> "
+	"[<delta> ...]. One notch is 1.0; negative is scroll UP (zoom in with zoom.scroll_adjust on), "
+	"positive is scroll DOWN (zoom out). Enters at wlserver_mousewheel(), the same function a real "
+	"wheel notch does; it cannot reach the host's pointer. Through gamescopectl the arguments must "
+	"be ONE quoted argument: gamescopectl wlserver_debug_mouse_wheel \"-1 -1\".",
+	[]( std::span<std::string_view> args )
+	{
+		if ( args.size() < 2 )
+		{
+			console_log.errorf( "usage: wlserver_debug_mouse_wheel <delta> [<delta> ...]" );
+			return;
+		}
+
+		// Same conditional lock as wlserver_debug_mouse_button: gamescopectl
+		// already dispatches this with the lock held, the script console
+		// does not.
+		const bool bNeedLock = !wlserver_is_lock_held();
+		if ( bNeedLock )
+			wlserver_lock();
+		for ( size_t i = 1; i < args.size(); i++ )
+		{
+			const std::optional<double> odDelta = gamescope::Parse<double>( args[ i ] );
+			if ( !odDelta )
+			{
+				console_log.errorf( "wlserver_debug_mouse_wheel: bad delta \"%.*s\"",
+				                    (int)args[ i ].size(), args[ i ].data() );
+				break;
+			}
+			wlserver_mousewheel( 0.0, *odDelta, get_time_in_milliseconds() );
+		}
+		if ( bNeedLock )
+			wlserver_unlock();
+	} );
+
 // Item 10 (superdoc/planning/requests-2026-09-05.md): drives the exact
 // absolute-pointer path a real nested backend takes for a host pointer with
 // force grab off -- SDLBackend.cpp's SDL_MOUSEMOTION case and
@@ -936,6 +1007,11 @@ static std::unordered_set<uint32_t> s_setKeysForwardedToGame;
 static std::unordered_set<uint32_t> s_setKeysForwardedToOverlay;
 static std::unordered_set<uint32_t> s_setMouseButtonsForwardedToGame;
 static std::unordered_set<uint32_t> s_setMouseButtonsForwardedToOverlay;
+// A press the zoom's "Keep the button from the game" switch swallowed
+// (zoom.consume_button, superdoc/features/zoom.md): never in
+// s_setMouseButtonsForwardedToGame, so its matching release is tracked here
+// instead and must not reach the seat either.
+static std::unordered_set<uint32_t> s_setSwallowedButtons;
 
 // Resolves one key PRESS into the text it actually produces on the
 // keyboard's current layout, level and modifier state -- using the real,
@@ -1034,19 +1110,40 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 		}
 		else
 		{
-			s_setMouseButtonsForwardedToGame.insert( uLinuxButton );
-			wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_PRESSED );
-			wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
+			// The zoom's hotkey check runs BEFORE the seat is told about
+			// the press (2026-09-14, zoom.consume_button): only that
+			// ordering lets "Keep the button from the game" decide to
+			// swallow the press before the game ever sees it. The return
+			// value is true only for a press that completed the zoom's own
+			// chord with the switch on -- see wlserver_check_ritz_keybinds()'s
+			// comment.
+			if ( wlserver_ritz_mouse_hotkey( uLinuxButton, true ) )
+			{
+				// Swallowed: never inserted into
+				// s_setMouseButtonsForwardedToGame, so the release below
+				// must look here instead. There is no ADS to hide the
+				// crosshair for when the game never receives the click, so
+				// Crosshair_NotifyRightButton is skipped on this path
+				// entirely (not just delayed).
+				s_setSwallowedButtons.insert( uLinuxButton );
+				if ( log_binding.Enabled( LOG_DEBUG ) )
+					log_binding.debugf( "zoom: button %u swallowed by zoom.consume_button (never reached the seat).", uLinuxButton );
+			}
+			else
+			{
+				s_setMouseButtonsForwardedToGame.insert( uLinuxButton );
+				wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_PRESSED );
+				wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 
-			// Crosshair auto-hide (superdoc/features/crosshair.md): observe
-			// -- never consume or alter -- a right-click that is going TO
-			// THE GAME. Placed on this branch only, so a click the Shell or
-			// Launcher captured above is invisible to it, and after the
-			// notify so nothing here can delay the game's own event.
-			if ( uLinuxButton == BTN_RIGHT )
-				gamescope::Crosshair_NotifyRightButton( true );
-			// The zoom chord, on the same terms (see the function's note).
-			wlserver_ritz_mouse_hotkey( uLinuxButton, true );
+				// Crosshair auto-hide (superdoc/features/crosshair.md):
+				// observe -- never consume or alter -- a right-click that is
+				// going TO THE GAME. Placed on this branch only, so a click
+				// the Shell or Launcher captured above, or the zoom
+				// swallowed just above, is invisible to it, and after the
+				// notify so nothing here can delay the game's own event.
+				if ( uLinuxButton == BTN_RIGHT )
+					gamescope::Crosshair_NotifyRightButton( true );
+			}
 		}
 	}
 	else
@@ -1056,6 +1153,16 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 			gamescope::SettingsOverlay_QueueMouseButton( uLinuxButton, false );
 			if ( s_setHeldButtonSyms.count( gamescope::keybinds::ButtonKeysym( uLinuxButton ) ) )
 				wlserver_ritz_mouse_hotkey( uLinuxButton, false );
+		}
+		else if ( s_setSwallowedButtons.erase( uLinuxButton ) )
+		{
+			// The matching press never reached the game, so the release
+			// must not either -- but the hotkey engine still needs to see
+			// it: a held zoom's release is what ends the hold
+			// (Keybinds.h's ActionInfo::bHeld). The return value is
+			// ignored -- a release never completes a chord, so it can
+			// never ask to be swallowed itself.
+			wlserver_ritz_mouse_hotkey( uLinuxButton, false );
 		}
 		else if ( s_setMouseButtonsForwardedToGame.erase( uLinuxButton ) )
 		{
@@ -1191,6 +1298,33 @@ static void wlserver_handle_pointer_axis(struct wl_listener *listener, void *dat
 		const double flX = event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? event->delta : 0.0;
 		const double flY = event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL ? event->delta : 0.0;
 		gamescope::SettingsOverlay_QueueMouseWheel( flX, flY );
+		return;
+	}
+
+	// "Scroll to change zoom level" (zoom.scroll_adjust, superdoc/features/
+	// zoom.md), on the GAME branch only -- same rule as wlserver_mousewheel()
+	// below, and this raw libinput/DRM listener path bypasses that function
+	// entirely (M2's comment above), so it is gated here too. Only the
+	// vertical axis drives the level; either axis is dropped rather than
+	// reaching the game, or a horizontal-scroll-bound action (e.g. a weapon
+	// switch) would still fire while zoomed.
+	if ( gamescope::Zoom_IsActive() && gamescope::Zoom_ScrollAdjustEnabled() )
+	{
+		if ( event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL )
+		{
+			// delta_discrete is in WLR_POINTER_AXIS_DISCRETE_STEP (120) units
+			// per notch, same convention as the v120 API wlserver_mousewheel()'s
+			// callers already divide by -- prefer it when a device reports it.
+			// Falls back to the sign of the continuous delta for a device that
+			// reports only that. Wayland's axis sign is positive = scroll
+			// DOWN (SettingsOverlay_QueueMouseWheel negates it for ImGui's
+			// up-positive convention), so scroll up (zoom in) is negative.
+			const double flNotches = event->delta_discrete != 0
+				? -(double)event->delta_discrete / (double)WLR_POINTER_AXIS_DISCRETE_STEP
+				: ( event->delta != 0.0 ? ( event->delta > 0.0 ? -1.0 : 1.0 ) : 0.0 );
+			if ( flNotches != 0.0 )
+				gamescope::Zoom_OnScroll( flNotches );
+		}
 		return;
 	}
 
@@ -4069,6 +4203,22 @@ void wlserver_mousewheel( double flX, double flY, uint32_t time )
 	if ( gamescope::SettingsOverlay_IsCapturingInput() )
 	{
 		gamescope::SettingsOverlay_QueueMouseWheel( flX, flY );
+		return;
+	}
+
+	// "Scroll to change zoom level" (zoom.scroll_adjust, superdoc/features/
+	// zoom.md), on the GAME branch only: while zoomed with the switch on,
+	// the wheel drives the zoom factor instead of the game -- dropped
+	// entirely (not just the vertical component) so a horizontal-scroll
+	// binding cannot fire while zoomed either. flY here is already in
+	// notches (every caller divides its raw units by 120 before calling
+	// this), and positive is scroll DOWN -- same convention as
+	// SettingsOverlay_QueueMouseWheel, which negates it for ImGui's
+	// up-positive axis -- so scroll up (zoom in) is -flY.
+	if ( gamescope::Zoom_IsActive() && gamescope::Zoom_ScrollAdjustEnabled() )
+	{
+		if ( flY != 0.0 )
+			gamescope::Zoom_OnScroll( -flY );
 		return;
 	}
 

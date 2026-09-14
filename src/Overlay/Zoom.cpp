@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <string>
 
 #include "rendervulkan.hpp"
@@ -26,10 +27,18 @@ namespace gamescope
 		std::atomic<bool>  s_bToggle{ false };
 		std::atomic<bool>  s_bMouseScale{ false };
 		std::atomic<float> s_flFactor{ 2.0f };
+		std::atomic<bool>  s_bConsumeButton{ false };
+		std::atomic<bool>  s_bScrollAdjust{ false };
 
 		// Zoomed in right now. Written on the wlserver thread (the chord),
 		// read by paint_all() and by the mouse path.
 		std::atomic<bool> s_bActive{ false };
+
+		// Set by Zoom_OnScroll() (wlserver thread) when it has stepped
+		// s_flFactor and not yet written that back into s_Settings/config;
+		// cleared and flushed by Zoom_FillRequest() (steamcompmgr thread).
+		// Coalesces a fast scroll into one config write per frame.
+		std::atomic<bool> s_bFactorDirty{ false };
 
 		void Mirror()
 		{
@@ -38,6 +47,8 @@ namespace gamescope
 			s_bToggle.store( z.mode == "toggle", std::memory_order_relaxed );
 			s_bMouseScale.store( z.mouse_scale, std::memory_order_relaxed );
 			s_flFactor.store( std::clamp( z.factor, 1.5f, 5.0f ), std::memory_order_relaxed );
+			s_bConsumeButton.store( z.consume_button, std::memory_order_relaxed );
+			s_bScrollAdjust.store( z.scroll_adjust, std::memory_order_relaxed );
 		}
 
 		void EnsureConfigLoaded()
@@ -105,9 +116,55 @@ namespace gamescope
 		return 1.0f / s_flFactor.load( std::memory_order_relaxed );
 	}
 
+	bool Zoom_ConsumesButton()
+	{
+		return s_bEnabled.load( std::memory_order_relaxed )
+			&& s_bConsumeButton.load( std::memory_order_relaxed );
+	}
+
+	bool Zoom_IsActive()
+	{
+		return s_bActive.load( std::memory_order_relaxed );
+	}
+
+	bool Zoom_ScrollAdjustEnabled()
+	{
+		return s_bEnabled.load( std::memory_order_relaxed )
+			&& s_bScrollAdjust.load( std::memory_order_relaxed );
+	}
+
+	void Zoom_OnScroll( double flNotches )
+	{
+		if ( !s_bActive.load( std::memory_order_relaxed ) )
+			return;
+		const int nNotches = (int)std::lround( flNotches );
+		if ( nNotches == 0 )
+			return;
+		const float flNew = Zoom_StepFactor( s_flFactor.load( std::memory_order_relaxed ), nNotches );
+		s_flFactor.store( flNew, std::memory_order_relaxed );
+		s_bFactorDirty.store( true, std::memory_order_relaxed );
+		force_repaint();
+	}
+
 	void Zoom_FillRequest( FrameInfo_t *pFrameInfo )
 	{
 		EnsureConfigLoaded();
+
+		// Scroll-to-adjust (zoom.scroll_adjust) steps the LIVE s_flFactor
+		// atomic on the wlserver thread so the picture reacts next frame;
+		// config:: is single-threaded (Keybinds.h's threading note), so the
+		// persisted copy is written here instead, on the steamcompmgr
+		// thread that owns s_Settings, coalesced to at most one write per
+		// frame no matter how many notches arrived since the last one. Runs
+		// every frame (this function is called unconditionally from
+		// paint_all()), not just while still zoomed, so a scroll followed
+		// immediately by letting go of the zoom button still gets saved.
+		if ( s_bFactorDirty.exchange( false, std::memory_order_relaxed ) )
+		{
+			s_Settings.zoom.factor = s_flFactor.load( std::memory_order_relaxed );
+			PersistAndRepaint();
+		}
+
 		const config::ZoomSettings &z = s_Settings.zoom;
 		if ( !z.enabled || !s_bActive.load( std::memory_order_relaxed ) )
 			return;
@@ -115,7 +172,12 @@ namespace gamescope
 		FrameInfo_t::Zoom_t &req = pFrameInfo->zoom;
 		req.bActive = true;
 		req.bCircle = z.shape == "circle";
-		req.flFactor = std::clamp( z.factor, 1.5f, 5.0f );
+		// The LIVE atomic, not z.factor: a scroll-adjust step must show up
+		// in the picture on the very next frame, not wait for the persist
+		// flush above (which, in practice, already ran first this same
+		// frame -- reading the atomic directly is what makes that true
+		// regardless of ordering).
+		req.flFactor = std::clamp( s_flFactor.load( std::memory_order_relaxed ), 1.5f, 5.0f );
 		if ( z.shape == "rectangle" )
 		{
 			req.flWidth = std::clamp( z.width, 0.05f, 1.0f );
@@ -210,6 +272,20 @@ namespace gamescope
 			       "gamescope's own --mouse-sensitivity." )
 			.Default( S{}.mouse_scale )
 			.Keywords( "zoom mouse speed sensitivity scale aim" )
+			.DisabledUnless( On, kOffReason );
+
+		a.Switch( "zoom.consume_button", "Keep the button from the game", ZOOM_BIND( bool, consume_button ) )
+			.Help( "The game never receives the zoom chord's mouse button press or release. A "
+			       "keyboard key is always kept from the game; a modifier such as Alt is never." )
+			.Default( S{}.consume_button )
+			.Keywords( "zoom consume swallow button eat hide rmb ads click" )
+			.DisabledUnless( On, kOffReason );
+
+		a.Switch( "zoom.scroll_adjust", "Scroll to change zoom level", ZOOM_BIND( bool, scroll_adjust ) )
+			.Help( "While zoomed, the mouse wheel changes the zoom level in steps of 0.25 and is "
+			       "not passed to the game. The new level is saved as the Zoom level above." )
+			.Default( S{}.scroll_adjust )
+			.Keywords( "zoom scroll wheel adjust level factor mouse" )
 			.DisabledUnless( On, kOffReason );
 
 		a.Group( "Projection" );

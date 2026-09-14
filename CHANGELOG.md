@@ -21,6 +21,10 @@ The newest version below is the one this build reports.
   part of any chord.
 - **Match mouse speed**: an option on the Zoom area that divides the mouse speed by the
   zoom level while zoomed, on top of `--mouse-sensitivity`.
+- **Zoom**: a "Keep the button from the game" switch that swallows the zoom chord's own
+  mouse button entirely, so the game never receives the click.
+- **Zoom**: a "Scroll to change zoom level" switch that lets the mouse wheel adjust the
+  zoom level, in steps of 0.25, while zoomed.
 
 ### Fixed
 - **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders
