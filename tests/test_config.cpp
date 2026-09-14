@@ -1101,6 +1101,85 @@ TEST_CASE( "reshade.shadow_lift.enabled and strength round-trip", "[config]" )
 }
 
 // ---------------------------------------------------------------------
+// Adaptive Brightness V2 (2026-09-14, superdoc/planning/adaptive-brightness-
+// v2-plan.md / superdoc/features/shader-effects.md): a NEW, ADDITIVE effect
+// -- ConfigSchema.h's ReshadeAdaptiveBrightnessV2Settings sits alongside the
+// original adaptive_brightness/adaptive_gamma sections, unchanged. Purely
+// additive keys, same "an old config has none and resolves to the
+// compiled-in defaults" story as shadow_lift above.
+
+TEST_CASE( "an existing config with no adaptive_brightness_v2 key resolves to the neutral default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "schema_version": 2,
+        "gamescope": { "filter": "FSR" }
+    })";
+
+    Settings s = ResolvedSettings();
+    REQUIRE( s.reshade.adaptive_brightness_v2.enabled == false );
+    REQUIRE( s.reshade.adaptive_brightness_v2.mode == "scene" );
+    REQUIRE( s.reshade.adaptive_brightness_v2.shape == "toe" );
+    REQUIRE( s.reshade.adaptive_brightness_v2.lift == 0.5f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.target_luminance == 0.35f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.max_lift == 4.0f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.detail == 1.0f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.scale == 1.5f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.adapt_speed == 0.5f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.clarity == 0.0f );
+    REQUIRE( s.gamescope.filter == "FSR" ); // unrelated section untouched
+}
+
+TEST_CASE( "reshade.adaptive_brightness_v2: every field round-trips through a profile file", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.reshade.adaptive_brightness_v2.enabled = true;
+    s.reshade.adaptive_brightness_v2.mode = "off";
+    s.reshade.adaptive_brightness_v2.shape = "knee";
+    s.reshade.adaptive_brightness_v2.lift = 0.75f;
+    s.reshade.adaptive_brightness_v2.target_luminance = 0.2f;
+    s.reshade.adaptive_brightness_v2.max_lift = 6.5f;
+    s.reshade.adaptive_brightness_v2.detail = 1.5f;
+    s.reshade.adaptive_brightness_v2.scale = 2.5f;
+    s.reshade.adaptive_brightness_v2.adapt_speed = 1.5f;
+    s.reshade.adaptive_brightness_v2.clarity = 0.6f;
+
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    const auto &v2 = loaded.reshade.adaptive_brightness_v2;
+    REQUIRE( v2.enabled == true );
+    REQUIRE( v2.mode == "off" );
+    REQUIRE( v2.shape == "knee" );
+    REQUIRE( v2.lift == 0.75f );
+    REQUIRE( v2.target_luminance == 0.2f );
+    REQUIRE( v2.max_lift == 6.5f );
+    REQUIRE( v2.detail == 1.5f );
+    REQUIRE( v2.scale == 2.5f );
+    REQUIRE( v2.adapt_speed == 1.5f );
+    REQUIRE( v2.clarity == 0.6f );
+}
+
+TEST_CASE( "reshade.adaptive_brightness_v2.mode and .shape reject unknown strings the same way the older effects do", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "schema_version": 2,
+        "reshade": { "adaptive_brightness_v2": { "mode": "bogus", "shape": "bogus" } }
+    })";
+
+    Settings s = ResolvedSettings();
+    REQUIRE( s.reshade.adaptive_brightness_v2.mode == "scene" );
+    REQUIRE( s.reshade.adaptive_brightness_v2.shape == "toe" );
+}
+
+// ---------------------------------------------------------------------
 // Crosshair (2026-09-05, superdoc/features/crosshair.md): a normal
 // per-layer section, serialised under the "crosshair" key. Every field
 // round-trips; an old config with no such key resolves to the defaults

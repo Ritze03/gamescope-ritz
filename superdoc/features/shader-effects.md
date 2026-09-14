@@ -2928,7 +2928,8 @@ for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below
 `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
 Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Bloom 3 (new 2026-09-08),
 Adaptive Brightness 8 (zero headroom), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two
-adaptation speeds 2026-09-09), Shadow Control
+adaptation speeds 2026-09-09), Adaptive Brightness V2 8 (zero headroom, new 2026-09-14 —
+see its own section above), Shadow Control
 1. **The budget was not raised again** for Adaptive Gamma, for Bloom, or for Adaptive
 Gamma's speeds, and did not need to be — see each effect's own section for why five and three params are their honest
 counts rather than a squeeze.
