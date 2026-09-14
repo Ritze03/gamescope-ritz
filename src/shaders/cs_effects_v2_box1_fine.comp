@@ -1,0 +1,68 @@
+#version 460
+
+// cs_effects_v2_box1_fine.comp -- Adaptive Brightness V2's Stage 3 Clarity
+// (2026-09-14): BYTE-IDENTICAL to cs_effects_v2_box1.comp except for the
+// radius uniform (u_v2RadiusFine instead of u_v2Radius). A separate file
+// rather than a per-dispatch uniform or push constant on purpose -- this
+// pipeline's own convention (cs_effects_bloom_blurh.comp / _blurv.comp are
+// separate files for direction, not one file with a direction uniform)
+// exists because EffectsPushData_t is uploaded ONCE per frame and read by
+// every dispatch of the pre-pass; a value that had to differ between two
+// dispatches of the "same" shader within one frame would need a second
+// upload, which the Bloom blur pair's own header explicitly rejected for
+// the same reason.
+//
+// Produces the FINER guided-filter coefficients (r2 = r/4, plan section
+// 4.9's "second guided coefficient pair") from the SAME quarter-res Y4
+// buffer the coarse box1 pass reads -- see rendervulkan.cpp's dispatch
+// order: this pass runs BEFORE the coarse box2 pass overwrites Y4 in
+// effectsV2A, so both box1 passes see the same, still-intact Y4.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+const float V2_EDGE_EPS = 0.06 * 0.06;   // == cs_effects_v2_box1.comp's own EDGE^2
+
+float v2_y4_fetch(ivec2 t, ivec2 sz)
+{
+    return texelFetch(s_samplers[VKR_EFFECTS_V2_SLOT], clamp(t, ivec2(0), sz - ivec2(1)), 0).r;
+}
+
+void main()
+{
+    ivec2 p  = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_V2_SLOT], 0);
+    if (p.x >= sz.x || p.y >= sz.y)
+        return;
+
+    int r = max(int(u_v2RadiusFine), 0);
+    float sum = 0.0, sum2 = 0.0;
+    float n = 0.0;
+    for (int j = -r; j <= r; j++)
+    {
+        for (int i = -r; i <= r; i++)
+        {
+            float y = v2_y4_fetch(p + ivec2(i, j), sz);
+            sum  += y;
+            sum2 += y * y;
+            n    += 1.0;
+        }
+    }
+
+    float mean = sum / max(n, 1.0);
+    float corr = sum2 / max(n, 1.0);
+    float var  = max(corr - mean * mean, 0.0);
+    float a    = var / (var + V2_EDGE_EPS);
+    float b    = (1.0 - a) * mean;
+
+    imageStore(dst, p, vec4(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0), 0.0, 1.0));
+}

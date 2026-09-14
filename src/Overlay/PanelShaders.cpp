@@ -139,6 +139,7 @@ namespace gamescope
 		e.flV2Detail    = r.adaptive_brightness_v2.detail;
 		e.flV2Scale     = r.adaptive_brightness_v2.scale;
 		e.flV2AdaptSpeed = r.adaptive_brightness_v2.adapt_speed;
+		e.flV2Clarity   = r.adaptive_brightness_v2.clarity;   // Stage 3, 2026-09-14
 
 		// Dark floor (2026-09-14): SHARED between the two rows above --
 		// r.dark_floor is a bare field on ReshadeSettings, not nested in
@@ -903,9 +904,11 @@ namespace gamescope
 		// amplification anywhere in the frame is S, by construction --
 		// black can never be pushed past white the way it could before.
 		//
-		// SEVEN PARAMS (Shape, Target, Max lift, Lift, Adaptation, Adapt
-		// speed, Detail), inside kParamBudget's 8 -- one spare left for a
-		// future Clarity row (plan's Stage 3, not built in this pass).
+		// EIGHT PARAMS (Shape, Target, Max lift, Lift, Adaptation, Adapt
+		// speed, Detail, Clarity), at kParamBudget's 8 -- zero headroom, the
+		// same ceiling Adaptive Brightness's own row sits at. Clarity
+		// (Stage 3, plan section 4.9) is the last of the seven that were
+		// left spare when Stage 1+2 shipped 2026-09-14.
 		using V2Defaults = config::ReshadeAdaptiveBrightnessV2Settings;
 		enum V2ShapeChoice : int { kV2Toe = 0, kV2Knee = 1 };
 		static const ui::Option kV2ShapeOptions[] = {
@@ -1014,7 +1017,28 @@ namespace gamescope
 				       "higher boosts it, 0 flattens lifted regions to a plain wash." )
 				.Range( 0.0f, 2.0f )
 				.Step( 0.05f )
-				.Default( V2Defaults{}.detail );
+				.Default( V2Defaults{}.detail )
+			// CLARITY -- Stage 3 (NEW 2026-09-14), the row the seven params
+			// above left spare in kParamBudget. A second, FINER guided-
+			// filter pair (r2 = r/4) gives the 4..16px "silhouette band" --
+			// the one term in this whole effect that targets an object's
+			// OWN outline rather than exposure, edge-aware and bounded the
+			// same way Detail is (a hard edge has a ~= 1 in both filters,
+			// so nothing is added there -- no rim). See
+			// superdoc/planning/adaptive-brightness-v2-plan.md section 4.9
+			// and effects_common.h's v2_coef_sample_fine().
+			.Param( "clarity", "Clarity",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.clarity; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.clarity, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.clarity" )
+				.Help( "Makes a silhouette's own outline pop without touching exposure -- a second, "
+				       "finer filter than Detail's, at the scale a limb or a weapon reads at. 0 is "
+				       "off; a hard, already-visible edge is left alone either way, so this cannot "
+				       "turn into an unsharp-mask rim." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )
+				.Default( V2Defaults{}.clarity );
 
 		// DARK FLOOR -- NEW 2026-09-14. The user, verbatim: "the adaptive
 		// brightness and the adaptive gamma both completely destroy REALLY
@@ -1066,6 +1090,22 @@ namespace gamescope
 			} )
 			.Live( "effects", []{
 				return ui::Fact{ "effects", "built into this binary -- nothing is loaded from disk" };
+			} )
+			// PRE-PASS TIMING (NEW 2026-09-14, Stage 0). Every cost figure
+			// this page used to state ("sub-millisecond", "~0.2-0.3ms") was
+			// an ESTIMATE -- vulkan_composite() had no GPU timing until this
+			// pass added a vkCmdWriteTimestamp pair around the whole
+			// pre-pass. -1.0 (vulkan_effects_gpu_us()'s "no measurement")
+			// covers both "the device does not support timestamps" and
+			// "the pre-pass has not run yet", so this reads that once
+			// rather than asking two questions.
+			.Live( "pre-pass", []{
+				const float flUs = vulkan_effects_gpu_us();
+				if ( flUs < 0.0f )
+					return ui::Fact{ "pre-pass", "not measured -- GPU timestamps are unsupported here, or nothing has run yet" };
+				char szLine[64];
+				snprintf( szLine, sizeof( szLine ), "%.2f ms (%.0f us)", flUs / 1000.0f, flUs );
+				return ui::Fact{ "pre-pass", std::string( szLine ) };
 			} )
 			// WHICH LIMIT IS BINDING (2026-09-08). A clamped slider looks
 			// exactly like a working one: the user spent a session moving

@@ -284,10 +284,17 @@ start_instance() {
 	# texdark: 2 % lights so the 98th percentile sits in the histogram's gap,
 	# --periodic so the 3 px/frame pan changes nothing but where the taps
 	# land (the stability checks). --motion only moves the textured scene.
+	# CLIENT_EXTRA_ARGS (NEW 2026-09-14, Adaptive Brightness V2's harness):
+	# empty for every existing block, so this line is unchanged for them;
+	# the abv2-* block below sets it to "--image <path> --flash N" for its
+	# own restarted instance, per the SCENES-ring rule's own "new scenes go
+	# in a separately restarted instance" -- new CLIENT ARGS follow the
+	# same rule for the same reason (a --image/--flash meant for one block's
+	# scenes must not silently apply to every other block's ring).
 	WAYLAND_DISPLAY="$SWAY_WL_NAME" XDG_RUNTIME_DIR="$RUNDIR" XDG_CONFIG_HOME="$CONFIGHOME" \
 		"$GAMESCOPE_BIN" --backend wayland -w "$OUT_W" -h "$OUT_H" -W "$OUT_W" -H "$OUT_H" \
 		--force-windows-fullscreen -- \
-		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes $SCENES --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' > '$CLIENT_LOG' 2>&1" \
+		sh -c "SDL_VIDEODRIVER=x11 exec '$CLIENT_BIN' --scenes $SCENES --motion 3 --lights 2.0 --periodic --width $OUT_W --height $OUT_H --seconds 900 --pidfile '$PIDFILE' ${CLIENT_EXTRA_ARGS:-} > '$CLIENT_LOG' 2>&1" \
 		> "$GS_LOG" 2>&1 9>&- &
 	GS_PID=$!
 
@@ -1182,6 +1189,225 @@ set_ab 0
 set_dark_floor "$DARK_FLOOR_DEFAULT"
 
 run_sampler means dark-floor-means "$DF_OFF" "$DF_AG_ZERO" "$DF_AG_DEFAULT" "$DF_AB_ZERO" "$DF_AB_DEFAULT"
+
+# ---------------------------------------------------------------------------
+# ADAPTIVE BRIGHTNESS V2 -- Stage 0 (GPU timestamp) + Stage 3 (Clarity)
+# verification, 2026-09-14 (superdoc/planning/adaptive-brightness-v2-plan.md
+# section 7, "the 13 checks"). Its own restarted instance, and LAST for the
+# same reason the Dark Floor block above is: `silhouette`/`skyfore`/`capture`
+# are not in the default ring, and this is now the position that restarts a
+# ring nothing downstream depends on (the Dark Floor block's own comment on
+# why a new-scenes block does not append to SCENES_DEFAULT applies here
+# unchanged).
+#
+#   abv2-nobinarise        `silhouette` at V2 defaults: the raw order
+#                          (fig3 < field < fig10) survives (a toe-gamma is
+#                          monotone by construction) and nothing is slammed
+#                          to white -- the qualitative anti-binarisation
+#                          statement, on the scene built for it.
+#   abv2-silhouette        the SAME figure's Weber contrast against its
+#                          surround must not decrease between Max lift 1
+#                          (an exact identity) and the shipped default --
+#                          "can I see the enemy", as a number.
+#   abv2-slope              guarantee 1 on the EXISTING `dark` scene's five
+#                          known bands: every adjacent pair's amplification
+#                          <= S * Detail + 0.05.
+#   abv2-black             guarantee 2: the silhouette's own void (70% of
+#                          the frame, literal 0) reads EXACTLY 0 after V2.
+#   abv2-pan / abv2-static  the 2026-09-07 pulse must not return: `texdark`
+#                          panning under --periodic (pan) and held still
+#                          (static, byte-identical repeats) under V2 Scene
+#                          mode.
+#   abv2-sky               the highlight guard on `skyfore`: both cloud
+#                          bands stay separated from the sky and from each
+#                          other, and both ground figures stay ordered.
+#   halo-halobox-*/haloinv-*  REUSED from Adaptive Gamma's own block (same
+#                          sampler function, same scenes): guarantee 4, at
+#                          the defaults (<= 4 codes) and at Max lift 8 /
+#                          Detail 2 / Clarity 1 (<= 8 codes).
+#   abv2-cut               the scene-cut detector SNAPS: silhouette -> the
+#                          EXISTING `bright` scene (a plain SIGUSR1 hop, not
+#                          the `flash` scene's own internal --flash timer --
+#                          see the check's own docstring for why a
+#                          script-driven hop is the more deterministic of
+#                          the two sanctioned designs the plan's wording
+#                          allows, "driven by SIGUSR1 or a --flash timer").
+#                          The `flash` scene itself IS built in
+#                          tests/effects_scene_client.c per the plan and is
+#                          available for manual testing (`--flash N`); nothing
+#                          in this script exercises its own timer, since a
+#                          screenshot-polling harness cannot land on a
+#                          frame-counted phase boundary deterministically.
+#   abv2-colour            hue angle within 2 degrees on the `colors` scene.
+#   abv2-gpu-time           Stage 0: `effects_timing`'s measured mean is
+#                          asserted under a stated budget (2000 us) --
+#                          the actual number replaces every "sub-
+#                          millisecond, unmeasured" estimate in the doc.
+#   abv2-capture-nobinarise / abv2-capture-noclip  the Stage-1 acceptance
+#                          bar on the user's own real capture, through the
+#                          GPU (`--image`, the `capture` scene).
+# ---------------------------------------------------------------------------
+V2_ID="image.shaders.adaptive_brightness_v2"
+V2_SHAPE_ID="$V2_ID.shape"
+V2_TARGET_ID="$V2_ID.target"
+V2_MAXLIFT_ID="$V2_ID.max_lift"
+V2_LIFT_ID="$V2_ID.lift"
+V2_MODE_ID="$V2_ID.mode"
+V2_ADAPTSPEED_ID="$V2_ID.adapt_speed"
+V2_DETAIL_ID="$V2_ID.detail"
+V2_CLARITY_ID="$V2_ID.clarity"
+V2_TARGET_DEFAULT=0.35
+V2_MAXLIFT_DEFAULT=4.0
+V2_LIFT_DEFAULT=0.5
+V2_DETAIL_DEFAULT=1.0
+CAPTURE_IMAGE="/home/mo/Pictures/Screenshots/2026-09-14-053516_hyprshot.png"
+
+set_v2() { gsctl overlay_e2_set "$V2_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+set_v2_param() { gsctl overlay_e2_set "$1 $2" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+v2_defaults() {
+	set_v2_param "$V2_SHAPE_ID" 0
+	set_v2_param "$V2_TARGET_ID" "$V2_TARGET_DEFAULT"
+	set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
+	set_v2_param "$V2_LIFT_ID" "$V2_LIFT_DEFAULT"
+	set_v2_param "$V2_MODE_ID" 1
+	set_v2_param "$V2_ADAPTSPEED_ID" 0.5
+	set_v2_param "$V2_DETAIL_ID" "$V2_DETAIL_DEFAULT"
+	set_v2_param "$V2_CLARITY_ID" 0.0
+}
+
+# The ring, ordered so every check below is a SINGLE forward hop from the
+# one before it: silhouette (0) -> bright (1, the cut test's target) ->
+# dark (2, slope) -> texdark (3, pan/static) -> skyfore (4, sky) ->
+# halobox (5) -> haloinv (6) -> colors (7, hue) -> capture (8, the real
+# image). `--image`/`--flash` only apply to THIS instance (CLIENT_EXTRA_ARGS,
+# see start_instance's own comment on why).
+SCENES="silhouette,bright,dark,texdark,skyfore,halobox,haloinv,colors,capture"
+CLIENT_EXTRA_ARGS="--image '$CAPTURE_IMAGE' --flash 999999"
+start_instance
+CLIENT_EXTRA_ARGS=""
+toggle_motion   # this instance starts with --motion 3 running; pause it for the flat/still checks below
+sleep 1
+
+set_saturation 0; set_vibrancy 0; set_ab 0; set_ag 0
+v2_defaults
+set_v2 1
+sleep "$ADAPT_SETTLE_S"
+
+V2_SIL_DEFAULT="$(take_screenshot 27-silhouette-v2-default)"
+run_sampler abv2nobinarise "$V2_SIL_DEFAULT"
+
+set_v2_param "$V2_MAXLIFT_ID" 1.0
+V2_SIL_IDENTITY="$(take_screenshot 27-silhouette-v2-maxlift1)"
+set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
+run_sampler abv2silhouette "$V2_SIL_IDENTITY" "$V2_SIL_DEFAULT"
+run_sampler abv2black "$V2_SIL_DEFAULT"
+
+# THE CUT: silhouette -> bright, one hop, one SIGUSR1 -- see the block
+# header on why this replaces the `flash` scene's own internal timer here.
+V2_CUT_BEFORE="$(take_screenshot 27-silhouette-v2-cut-before)"
+next_scene   # -> bright
+sleep "$SETTLE_S"
+V2_CUT_FIRST="$(take_screenshot 28-bright-v2-cut-first)"
+sleep "$ADAPT_SETTLE_S"
+V2_CUT_SETTLED="$(take_screenshot 28-bright-v2-cut-settled)"
+run_sampler abv2cut "$V2_CUT_BEFORE" "$V2_CUT_FIRST" "$V2_CUT_SETTLED"
+
+advance_scenes 1   # bright -> dark
+sleep "$ADAPT_SETTLE_S"
+V2_DARK_DEFAULT="$(take_screenshot 29-dark-v2-default)"
+run_sampler abv2slope "$V2_DARK_DEFAULT" "$V2_MAXLIFT_DEFAULT" "$V2_DETAIL_DEFAULT"
+
+advance_scenes 1   # dark -> texdark
+sleep "$ADAPT_SETTLE_S"
+toggle_motion   # resume panning for the pan check
+sleep 1
+declare -a V2_PAN_SHOTS=()
+for k in 1 2 3 4 5 6; do V2_PAN_SHOTS+=( "$(take_screenshot "30-texdark-v2-pan-$k")" ); done
+run_sampler abv2pan v2-scene "${V2_PAN_SHOTS[@]}"
+toggle_motion   # pause again for the still check
+sleep 1
+declare -a V2_STATIC_SHOTS=()
+for k in 1 2 3 4 5 6; do V2_STATIC_SHOTS+=( "$(take_screenshot "30-texdark-v2-static-$k")" ); done
+run_sampler abv2static texdark "${V2_STATIC_SHOTS[@]}"
+toggle_motion   # leave the client as it was found (running)
+
+advance_scenes 1   # texdark -> skyfore
+sleep "$ADAPT_SETTLE_S"
+V2_SKY_DEFAULT="$(take_screenshot 31-skyfore-v2-default)"
+run_sampler abv2sky "$V2_SKY_DEFAULT"
+
+# HALO, reusing Adaptive Gamma's own sampler function: guarantee 4, at
+# the shipped defaults (<= 4 codes) and at the widened bound the plan
+# states for Max lift 8 / Detail 2 / Clarity 1 (<= 8 codes).
+advance_scenes 1   # skyfore -> halobox
+sleep "$ADAPT_SETTLE_S"
+set_v2_param "$V2_MAXLIFT_ID" 1.0
+run_sampler halo "$(take_screenshot 32-halobox-v2-off)" halobox off
+set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
+run_sampler halo "$(take_screenshot 32-halobox-v2-default)" halobox on 4.0
+set_v2_param "$V2_MAXLIFT_ID" 8.0
+set_v2_param "$V2_DETAIL_ID" 2.0
+set_v2_param "$V2_CLARITY_ID" 1.0
+run_sampler halo "$(take_screenshot 32-halobox-v2-extreme)" halobox on 8.0
+set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
+set_v2_param "$V2_DETAIL_ID" "$V2_DETAIL_DEFAULT"
+set_v2_param "$V2_CLARITY_ID" 0.0
+
+advance_scenes 1   # halobox -> haloinv
+sleep "$ADAPT_SETTLE_S"
+set_v2_param "$V2_MAXLIFT_ID" 1.0
+run_sampler halo "$(take_screenshot 33-haloinv-v2-off)" haloinv off
+set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
+run_sampler halo "$(take_screenshot 33-haloinv-v2-default)" haloinv on 4.0
+set_v2_param "$V2_MAXLIFT_ID" 8.0
+set_v2_param "$V2_DETAIL_ID" 2.0
+set_v2_param "$V2_CLARITY_ID" 1.0
+run_sampler halo "$(take_screenshot 33-haloinv-v2-extreme)" haloinv on 8.0
+set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
+set_v2_param "$V2_DETAIL_ID" "$V2_DETAIL_DEFAULT"
+set_v2_param "$V2_CLARITY_ID" 0.0
+
+advance_scenes 1   # haloinv -> colors
+sleep "$ADAPT_SETTLE_S"
+V2_COLORS_ON="$(take_screenshot 34-colors-v2-on)"
+set_v2 0
+sleep "$SETTLE_S"
+V2_COLORS_OFF="$(take_screenshot 34-colors-v2-off)"
+set_v2 1
+sleep "$SETTLE_S"
+run_sampler abv2colour "$V2_COLORS_OFF" "$V2_COLORS_ON"
+
+# STAGE 0: the GPU timestamp. V2 has been dispatching for the whole block
+# above, so `effects_timing`'s history has real frames in it by now.
+gsctl effects_timing >/dev/null 2>&1 || true
+sleep 0.5
+V2_GPU_LINE="$(grep 'effects_timing:' "$GS_LOG" | tail -1 || true)"
+V2_GPU_MEAN_US="$(printf '%s\n' "$V2_GPU_LINE" | grep -oP 'mean=\K[0-9.]+' || true)"
+if [[ -n "$V2_GPU_MEAN_US" ]]; then
+	V2_GPU_BUDGET_US=2000
+	if awk -v m="$V2_GPU_MEAN_US" -v b="$V2_GPU_BUDGET_US" 'BEGIN{exit !(m<b)}'; then
+		record_line "PASS	abv2-gpu-time	$V2_GPU_LINE (budget <${V2_GPU_BUDGET_US}us)"
+	else
+		record_line "FAIL	abv2-gpu-time	$V2_GPU_LINE (budget <${V2_GPU_BUDGET_US}us)"
+	fi
+else
+	record_line "FAIL	abv2-gpu-time	no measurement in '$V2_GPU_LINE' -- GPU timestamps unsupported on this device, or effects_timing did not run"
+fi
+
+advance_scenes 1   # colors -> capture
+sleep "$ADAPT_SETTLE_S"
+V2_CAP_ON="$(take_screenshot 35-capture-v2-on)"
+set_v2 0
+sleep "$SETTLE_S"
+V2_CAP_OFF="$(take_screenshot 35-capture-v2-off)"
+# TWO calls, not one printing two lines: run_sampler/record_line (like
+# every other sampler command here) expect exactly one PASS/FAIL line per
+# invocation -- see cmd_abv2_capture's own docstring for the bug a single
+# combined call produced (the second line silently dropped).
+run_sampler abv2capture "$V2_CAP_OFF" "$V2_CAP_ON" nobinarise
+run_sampler abv2capture "$V2_CAP_OFF" "$V2_CAP_ON" noclip
+
+set_v2 0
 
 END_TS=$(date +%s)
 {

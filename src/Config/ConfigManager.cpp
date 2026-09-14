@@ -353,6 +353,9 @@ namespace gamescope::config
                     v2.detail = JGetFloat( *pV2, "detail", v2.detail );
                     v2.scale = JGetFloat( *pV2, "scale", v2.scale );
                     v2.adapt_speed = JGetFloat( *pV2, "adapt_speed", v2.adapt_speed );
+                    // Stage 3 (2026-09-14): additive, same "an old file has
+                    // none and resolves to the compiled-in default" story.
+                    v2.clarity = JGetFloat( *pV2, "clarity", v2.clarity );
                 }
 
                 if ( const nlohmann::json *pShadowLift = JGetObject( *pReshade, "shadow_lift" ) )
@@ -645,6 +648,7 @@ namespace gamescope::config
             jV2[ "detail" ] = v2.detail;
             jV2[ "scale" ] = v2.scale;
             jV2[ "adapt_speed" ] = v2.adapt_speed;
+            jV2[ "clarity" ] = v2.clarity;
 
             const auto &sl = s.reshade.shadow_lift;
             nlohmann::json jShadowLift = nlohmann::json::object();

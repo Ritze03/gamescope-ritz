@@ -671,6 +671,10 @@ struct NativeEffectsState_t
 	float flV2Detail = 1.0f;     // 0..2 (Stage 2), scales the Weber-preserving secant
 	float flV2Scale = 1.5f;      // 0.5..4 (Stage 2), % of frame height -> the guided filter's radius
 	float flV2AdaptSpeed = 0.5f; // 0.1..5.0 seconds; this row's own single time constant
+	// 0..1 (Stage 3, NEW 2026-09-14) -- the silhouette band's gain. 0 skips
+	// the fine guided-filter pair outright (update_effects_v2_fine_images(),
+	// rendervulkan.cpp), so "off" costs nothing extra.
+	float flV2Clarity = 0.0f;
 
 	// True when some effect needs the measure pass's statistics, i.e. when
 	// the history texture has to be kept alive and the measure dispatch
@@ -928,6 +932,15 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsV2A;
 	gamescope::OwningRc<CVulkanTexture> effectsV2B;
 
+	// Adaptive Brightness V2's Stage 3 Clarity (NEW 2026-09-14): a SECOND
+	// ping-pong pair, same size as effectsV2A/B above, holding the FINER
+	// guided-filter coefficients (radius r2 = r/4) -- plan section 4.9's
+	// "second guided coefficient pair". Allocated only while Clarity > 0
+	// (update_effects_v2_fine_images()); v2_coef_sample_fine() then reads
+	// FineA bilinearly, exactly as v2_coef_sample() reads A.
+	gamescope::OwningRc<CVulkanTexture> effectsV2FineA;
+	gamescope::OwningRc<CVulkanTexture> effectsV2FineB;
+
 	// The zoom's own texture (FrameInfo_t::Zoom_t): the projection at its
 	// on-screen size, ABGR8888, rewritten every zoomed frame by cs_zoom.comp
 	// and pushed as layer 1. Pooled like the effects buffers: re-created
@@ -947,6 +960,18 @@ struct VulkanOutput_t
 	// NIS
 	gamescope::OwningRc<CVulkanTexture> nisScalerImage;
 	gamescope::OwningRc<CVulkanTexture> nisUsmImage;
+
+	// GPU timestamp pair around the whole effects pre-pass (NEW 2026-09-14,
+	// adaptive-brightness-v2-plan.md Stage 0). FOUR queries, not two: a
+	// double-buffered pair of pairs, so the query pair the CPU reads back
+	// (last frame's) is never the one the GPU is concurrently resetting and
+	// rewriting (this frame's) -- see effects_gpu_timer_collect() in
+	// rendervulkan.cpp for why that matters without VK_EXT_host_query_reset.
+	// VK_NULL_HANDLE when unsupported (no timestampComputeAndGraphics, no
+	// valid bits on the compute queue family, or creation failed) or not yet
+	// created; nothing here is destroyed early -- same "freed by nothing"
+	// pooling story as effectsOutput/effectsBloomA above.
+	VkQueryPool effectsTimerPool = VK_NULL_HANDLE;
 };
 
 
@@ -969,6 +994,11 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_V2_DOWN, // cs_effects_v2_down.comp: Adaptive Brightness V2's quarter-res luma down pass
 	SHADER_TYPE_EFFECTS_V2_BOX1, // cs_effects_v2_box1.comp: ... the guided filter's first box (mean/corr -> a, b)
 	SHADER_TYPE_EFFECTS_V2_BOX2, // cs_effects_v2_box2.comp: ... and its second (smoothing a, b)
+	// Stage 3 Clarity (NEW 2026-09-14): the SAME two passes, at u_v2RadiusFine
+	// instead of u_v2Radius, into the effectsV2Fine* pair -- see
+	// cs_effects_v2_box1_fine.comp / cs_effects_v2_box2_fine.comp.
+	SHADER_TYPE_EFFECTS_V2_BOX1_FINE,
+	SHADER_TYPE_EFFECTS_V2_BOX2_FINE,
 
 	SHADER_TYPE_COUNT
 };
@@ -1127,6 +1157,11 @@ static inline uint32_t div_roundup(uint32_t x, uint32_t y)
 	VK_FUNC(DestroySampler) \
 	VK_FUNC(DestroySwapchainKHR) \
 	VK_FUNC(EndCommandBuffer) \
+	VK_FUNC(CreateQueryPool) \
+	VK_FUNC(DestroyQueryPool) \
+	VK_FUNC(CmdResetQueryPool) \
+	VK_FUNC(CmdWriteTimestamp) \
+	VK_FUNC(GetQueryPoolResults) \
 	VK_FUNC(FreeCommandBuffers) \
 	VK_FUNC(FreeDescriptorSets) \
 	VK_FUNC(FreeMemory) \
@@ -1223,6 +1258,14 @@ public:
 	inline dev_t primaryDevId() {return m_drmPrimaryDevId;}
 	inline bool supportsFp16() {return m_bSupportsFp16;}
 	inline std::vector<VkExtensionProperties>& supportedExtensions() {return m_supportedExts;}
+	// GPU timestamps (NEW 2026-09-14, adaptive-brightness-v2-plan.md Stage
+	// 0): true only when the device advertises timestampComputeAndGraphics
+	// AND the queue family this device actually dispatches compute on has
+	// nonzero timestampValidBits -- see selectPhysDev(). No-op everywhere
+	// else in the codebase when false, per the plan's own "no-op if
+	// unsupported" instruction.
+	inline bool supportsTimestamps() {return m_bTimestampsSupported;}
+	inline float timestampPeriodNs() {return m_flTimestampPeriodNs;}
 
 	inline std::pair<void *, uint32_t> uploadBufferData(uint32_t size)
 	{
@@ -1287,6 +1330,10 @@ protected:
 	bool m_bHasDrmPrimaryDevId = false;
 	bool m_bSupportsModifiers = false;
 	bool m_bInitialized = false;
+
+	// GPU timestamps (NEW 2026-09-14) -- see supportsTimestamps() above.
+	bool  m_bTimestampsSupported = false;
+	float m_flTimestampPeriodNs = 0.0f;
 
 
 	VkPhysicalDeviceMemoryProperties m_memoryProperties;
@@ -1425,6 +1472,14 @@ uint32_t DRMFormatGetBPP( uint32_t nDRMFormat );
 gamescope::OwningRc<CVulkanTexture> vulkan_create_flat_texture( uint32_t width, uint32_t height, uint8_t r, uint8_t g, uint8_t b, uint8_t a );
 
 bool vulkan_supports_hdr10();
+
+// The effects pre-pass's last measured GPU time in microseconds (NEW
+// 2026-09-14, adaptive-brightness-v2-plan.md Stage 0) -- see
+// rendervulkan.cpp's effects_gpu_timer_* functions. -1.0 means "no
+// measurement yet, or GPU timestamps are unsupported on this device";
+// PanelShaders.cpp's Diagnostics fact and the `effects_timing` ConCommand
+// are the two readers.
+float vulkan_effects_gpu_us();
 
 void vulkan_wait_idle();
 

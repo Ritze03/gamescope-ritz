@@ -31,7 +31,10 @@ The newest version below is the one this build reports.
 - **Adaptive brightness V2**: a new Shaders effect, alongside Adaptive Brightness and
   Adaptive Gamma (not replacing either), that lifts dark scenes without ever binarising
   a near-black one — its lift is capped by a Max lift slider instead of an exponent
-  with no bottom, plus a Detail control that keeps texture visible inside the lift.
+  with no bottom, plus a Detail control that keeps texture visible inside the lift, and
+  a Clarity control that makes a silhouette's own outline pop without touching exposure.
+- **Shaders**: a Diagnostics row and an `effects_timing` command now show how long the
+  Shaders pre-pass actually takes on your GPU, in milliseconds.
 
 ### Fixed
 - **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders

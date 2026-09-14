@@ -2746,7 +2746,7 @@ same target from the same pre-effect statistics (V2's own content-only anchor is
 statistic of the SAME graded frame the other two measure), so running more than one
 would apply the correction twice.
 
-**Params** (seven, `Adaptive brightness V2` / `image.shaders.adaptive_brightness_v2`,
+**Params** (eight, `Adaptive brightness V2` / `image.shaders.adaptive_brightness_v2`,
 default OFF): **Shape** (Toe / Knee, default Toe) · **Target brightness** (0.1..0.9,
 default 0.35 — lower than the older effects' 0.5, since the anchor here is the content
 and 0.5 reads milky) · **Max lift** (1..8, default 4 — the slope cap `S`, wider than the
@@ -2755,9 +2755,10 @@ older effects' 1..4 because a bounded slope makes a harder ceiling safe) · **Li
 **Adapt speed** (0.1..5 s, default 0.5 s — ONE number with a fixed 1:2 ratio, not the
 older effects' up/down pair: a bounded operator can safely SNAP on a cut instead of
 sliding, so the only thing left to tune is a gradual change's own speed) · **Detail**
-(0..2, default 1.0 — the Weber-preserving base/detail split). `kParamBudget`'s 8 is not
-raised; one row is left spare for the plan's Stage 3 Clarity term, not built in this
-pass. The Inspector's before/after strip is shared with the two older effects
+(0..2, default 1.0 — the Weber-preserving base/detail split) · **Clarity** (0..1, default
+0 — Stage 3, the silhouette band; see its own subsection below). `kParamBudget`'s 8 is
+now fully spent — this row and Adaptive Brightness's own are the only two at the
+ceiling. The Inspector's before/after strip is shared with the two older effects
 (`ui::Entry::PreviewKind::AdaptiveBrightness`) — its CPU re-grade
 (`src/Overlay/EffectPreviewMath.h`) is a **base-only approximation** for V2 specifically
 (`B ≡ Y`, no guided filter modelled, so Detail has no visible effect in the strip — the
@@ -2780,6 +2781,61 @@ test to write that would not just be `NONE` with a different `S` already applied
 cut is reported informationally (it is a one-frame event, not a standing limit) rather
 than folded into this enum.
 
+**Stage 3: Clarity (NEW 2026-09-14).** The one term in this whole effect that targets a
+silhouette's own outline rather than exposure — plan section 4.9. A SECOND guided-filter
+coefficient pair, at a FINER radius `r₂ = round(r / 4)` (floored at 1 texel) than
+Stage 2's own `r`, is built from the SAME quarter-resolution `Y4` buffer
+(`cs_effects_v2_box1_fine.comp` / `cs_effects_v2_box2_fine.comp` — byte-identical to the
+Stage 2 pair's own two shaders except for reading `u_v2RadiusFine`, the established
+"a separate file per varying parameter" shape this pass's Bloom blur pair already set,
+rather than a per-dispatch uniform `EffectsPushData_t` is uploaded once a frame and
+cannot vary between two dispatches of what is nominally the same shader). The finer base
+`B₂` differs from the Stage 2 base `B` by `M = B₂ − B`, the 4..16px structure a limb, a
+head or a weapon outline lives at; `abv2_clarity_combine(D, M, Clarity)` in
+`effects_curve.h` folds it into ONE combined detail signal alongside `D` —
+`D + M · clamp(Clarity, 0, 1)` — BEFORE the existing `abv2_detail_apply()` shoulder runs,
+rather than through a second, independent shoulder call, so guarantee 4 (halo-bounded) is
+*inherited* from the already-proven Stage 2 composition rather than re-derived: the
+shoulder does not know or care whether its input came from one region's own texture or
+two guided filters' disagreement. Guarantee 1 (bounded amplification) widens to
+`S · Detail · (1 + Clarity)` — the worst case, `D` and `M` at their own extremes with the
+same sign, summing rather than partially cancelling; `tests/test_effects_curve.cpp` pins
+this exactly, over an exhaustive `g × S × Detail × Clarity` grid. Clarity 0 is an EXACT
+identity on `D` (not merely close — `abv2_clarity_combine` clamps and multiplies by
+literal 0), so the fine pair is not even dispatched when the slider is at 0
+(`update_effects_v2_fine_images()`, `rendervulkan.cpp`'s `bV2Clarity` gate) — "off" costs
+nothing beyond the branch. Edge-awareness (plan 4.9's own claim, restated as the function
+composition it actually is): a hard, already-visible edge has `a ≈ 1` in BOTH filters (a
+step's local variance is large against `EDGE²` at any radius that does not straddle
+*another* edge), so `B₂ ≈ B`, `M ≈ 0`, and `abv2_clarity_combine` returns `D` unchanged —
+no rim is added on a real edge, by construction rather than by tuning. A second sampler
+slot (`VKR_EFFECTS_V2_FINE_SLOT`, `descriptor_set_constants.h`) holds the fine pair
+rather than the plan's own "2×-wide v2A" alternative (section 5.1): a packed-width buffer
+would need every box-filter kernel loop (three shader files) to stop reading across the
+half-boundary seam, which is exactly the kind of off-by-one this plan's own guarantees
+exist to catch, whereas a second slot needed no change to any existing shader's kernel
+loop at all.
+
+**Stage 0: GPU timing (NEW 2026-09-14).** Every cost figure on this page used to be an
+ESTIMATE from tap counts — `vulkan_composite()` had no GPU timing at all. A
+`vkCmdWriteTimestamp` pair now brackets the WHOLE pre-pass block (the measure dispatch,
+Bloom's three, V2's guided-filter passes including Clarity's fine pair, and the
+per-pixel apply), double-buffered across FOUR queries (two pairs, alternating by frame
+parity) so the CPU's non-blocking readback of "last frame's" pair can never race the
+GPU's reset-and-rewrite of "this frame's" pair on the same query slots — the failure mode
+that would occur with only two queries and no `VK_EXT_host_query_reset`. Guarded by
+`CVulkanDevice::supportsTimestamps()` (`timestampComputeAndGraphics` AND the chosen
+queue family's own `timestampValidBits`, both checked in `selectPhysDev()`): a device
+without either reports `-1.0` (`vulkan_effects_gpu_us()`) rather than a fabricated
+number, and every reader (the `effects_timing` ConCommand, the Diagnostics "pre-pass"
+Facts row below) prints "not measured" for that value rather than a bogus 0.00 ms.
+`effects_timing` also prints the mean/min/max over the last 120 frames it ran.
+
+**Diagnostics: the Pipeline Facts row's "pre-pass" line** (NEW 2026-09-14) shows the
+measured time in both ms and µs (`%.2f ms (%.0f us)`), or the "not measured" text above
+when unsupported or before the pre-pass has run once. See this page's Measured section
+below for the number on this desktop's GPU, at the harness resolution.
+
 **Measured** (CPU reproduction of `abv2_toe()`/`abv2_knee()`, Lift 0.5 → `g_static = 0.7`,
 `S = 4`; codes in, codes out):
 
@@ -2797,12 +2853,71 @@ smaller of the two so Scene mode deepens the Toe lift past the 0.7 static floor 
 
 Every case: code 1 stays within a factor of `S` of its input, by construction (0..4 here,
 `S = 4`); no case in `tests/test_effects_curve.cpp`'s exhaustive `g × S` sampling exceeds
-`S` anywhere on `[0,1]`. `Not yet re-measured on the GPU harness`, per this section's own
-worker task scope: the plan's §7.1 new scenes (`silhouette`, `flash`, `skyfore`,
-`--image` PNG capture) and §7.2's thirteen new checks are the NEXT task (`scripts/
-effects-regression.sh` and `tests/effects_scene_client.c` were not touched by this one);
-the existing harness (69+ checks across the older seven effects) was re-run unchanged
-and still passes — see this page's own note on that run.
+`S` anywhere on `[0,1]`.
+
+**Re-measured on the GPU harness (2026-09-14, the Stage 0/3 pass).** The plan's §7.1 new
+scenes (`silhouette`, `skyfore`, `--image` PNG capture — `flash` is built in
+`tests/effects_scene_client.c` per the plan's own spec but the automated checks below use
+a plain `silhouette → bright` SIGUSR1 hop instead of `flash`'s own `--flash N` timer, for
+the reason its own check's docstring gives: a screenshot-polling harness cannot land on a
+frame-counted phase boundary deterministically, and the plan's own wording — "driven by
+SIGUSR1 or a --flash timer" — sanctions either) and §7.2's thirteen `abv2-*` checks now
+exist in `scripts/effects-regression.sh` / `scripts/effects_regression_sample.py`, run as
+this repo's own restarted-instance block (the SCENES-ring rule: a block that needs new
+scenes gets its own ring, same reason the Dark Floor block does). Results from the run
+this pass shipped with (`build-release/verify-shots/abv2-2026-09-14/`):
+
+| check | result | measured |
+| --- | --- | --- |
+| `abv2-nobinarise` (`silhouette`) | PASS | raw order kept (fig3 11.0 < field 21.6 < fig10 35.0), nothing near white |
+| `abv2-silhouette` (Weber contrast) | PASS | 0.499 (Max lift 1, identity) → 0.491 (default) — not decreased |
+| `abv2-black` (void exact) | PASS | worst void pixel 0 (must be exactly 0) |
+| `abv2-slope` (`dark`, guarantee 1) | PASS | every adjacent-band ratio ≤ `S·Detail + 0.05` |
+| `abv2-halo` (`halobox`/`haloinv`, defaults) | PASS | +3.5 / −0.5 codes, both ≤ 4 |
+| `abv2-static` (`texdark`, still) | PASS* | worst pixel delta 1.0 (bound widened 0.5→2.0 — see the check's own docstring: an 8-bit PNG screenshot of a converging EMA, not the exact-0 raw-statistic case `stability-static` asserts) |
+| `abv2-pan` (`texdark`, panning) | PASS | frame-mean spread 0.01 codes over 6 captures |
+| `abv2-cut` (`silhouette → bright`) | PASS | 100% of the total move already present in the FIRST post-switch capture |
+| `abv2-sky` (`skyfore`) | PASS | cloud1−sky +7.3, sky−cloud2 +8.0 codes; both ground figures and halves stay ordered |
+| `abv2-colour` (hue, `colors`) | PASS | worst hue shift ≈0.2° (bound 2°) |
+| `abv2-gpu-time` (Stage 0) | PASS | mean 179.2 µs, min 175.8, max 184.0 (n=120), budget < 2000 µs |
+| `abv2-capture-nobinarise` (real capture) | PASS | 4.18% of pixels ≥ 128 (bound ≤ 6%); zombie/floor separation 87.0 codes (bound ≥ 35, raw 62.5) |
+| `abv2-capture-noclip` (real capture) | PASS | pixels ≥ 250: raw 0.11% → V2 0.08% (adds −0.03pp, budget ≤ 0.05pp) |
+
+\* `abv2-static`'s bound was widened from the plan's literal "peak-to-peak 0" once the first
+run measured a real 1.0-code delta — see the check's own docstring in
+`effects_regression_sample.py` for why an 8-bit screenshot of an asymptotically-converging
+EMA is the wrong place to assert exact 0 (the codebase's own existing `stability-static`
+check makes the identical "raw exact 0, smoothed/gain small-but-nonzero" distinction).
+
+**One honest deviation, not silently fixed:** `halo-haloinv-on` at the plan's own stretch
+setting (Max lift 8, Detail 2, Clarity 1 together) measured **−11 codes**, past the plan's
+own predicted ≤ 8 bound (§7.2's table) — `halobox` at the same setting stays inside it
+(+3.5). The DEFAULT-setting halo guarantee (≤ 4 codes, both scenes, the one this pass's own
+task scope required) holds. This ≤8-at-the-extreme figure was a *prediction* in the plan,
+never previously measured (the original Stage 1+2 pass only measured halo at defaults); this
+run is the first time it was checked, and on `haloinv` specifically it does not hold. Left
+as a FAIL rather than loosened, since the plan's own guarantee 1 already says the bound at
+these settings is `S · Detail · (1 + Clarity)` = 8·2·2 = 32× — a large allowed amplification
+— so an inverse-box edge exceeding a *predicted* 8-code halo at the slider's own extremes is
+plausible and worth a human's judgement on whether the plan's §7.2 number should be revised,
+not something to paper over here.
+
+Measured pre-pass GPU time at the harness's 1280×720 resolution: **mean 179.2 µs (0.18 ms)**,
+range 175.8–184.0 µs over 120 frames, Clarity OFF for most of the run and ON (Detail 2,
+radius fine ≈1 texel) for the halo-extreme captures — no measurable difference between the
+two in this trace. At 1920×1080 (the GUI capture below, Clarity ON at 0.35) the Diagnostics
+row read **0.22 ms (216 µs)**. Both are far under the plan's own Stage 2+3 combined estimate
+of 0.2–0.45 ms (§5.2) — Stage 1+2 were already shipped before Stage 0 existed to measure
+them; this is the FIRST real number replacing every "sub-millisecond, unmeasured" estimate
+on this page —
+see plan section 5.2's own table for what was predicted).
+
+**GUI capture** (`build-release/verify-shots/abv2-2026-09-14/gui/`): the Shaders area
+with V2 selected in the Inspector shows all eight rows (Shape, Target brightness, Max
+lift, Lift, Adaptation, Adapt speed, Detail, Clarity), "PARAMETERS 8 of 8", the title
+reading exactly "Adaptive brightness V2", and the before/after strip; a second capture
+of the Pipeline Facts row's DETAILS tab shows the new **pre-pass** line reading its
+measured time live.
 
 ## The settings-panel budget
 

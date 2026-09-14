@@ -1149,6 +1149,327 @@ def cmd_darkfloor(args):
     sys.exit(0 if emit(ok, f"dark-floor-{label}", detail) else 1)
 
 
+# ---- Adaptive Brightness V2 (NEW 2026-09-14) ------------------------------
+#
+# tests/effects_scene_client.c's own `silhouette`, `skyfore` and `flash`
+# scenes, mirrored here exactly -- change one, change both. All three are
+# authored in the same 1280x720 reference frame every scene above uses.
+#
+#   silhouette  70% of the frame literal 0; a 30%-of-frame band (y 252..468)
+#               of a 6-code field with 1-code hashed noise; an 8%-of-frame
+#               "lit floor" patch (40..60, textured) at x 100..484,
+#               y 264..456; a 24x48 3-code figure at x 544..568, y 272..320;
+#               a 24x48 10-code figure at x 644..668, y 272..320.
+#   skyfore     top 55% (y 0..396) a 225 sky with cloud bands at 235
+#               (y 108..144) and 215 (y 252..288); bottom 45% ground, 14
+#               (x 0..640) / 20 (x 640..1280); an 8-code 30x30 figure at
+#               200,436 and a 26-code 60x60 figure at 900,436.
+#   flash       alternates the silhouette frame above with a 230-code frame
+#               carrying two 200-code 40x40 shapes at (300,300)/(900,400).
+#
+# Regions below are sampled with a margin inside each shape's true edges
+# (region_mean()'s own `inset` plus a further pull-in here), the same
+#"never sample right at a boundary" discipline halo_profile()/regions()
+# already follow.
+SILHOUETTE = dict(
+    field=(700, 300, 1000, 400),
+    patch=(150, 300, 430, 400),
+    fig3=(546, 276, 566, 316),
+    fig10=(646, 276, 666, 316),
+    void=(50, 50, 200, 150),
+)
+
+SKYFORE = dict(
+    sky=(100, 50, 1180, 100),
+    cloud1=(100, 112, 1180, 140),
+    cloud2=(100, 256, 1180, 284),
+    ground_l=(100, 620, 550, 690),
+    ground_r=(750, 620, 1180, 690),
+    fig8=(204, 440, 226, 462),
+    fig26=(904, 440, 956, 492),
+)
+
+
+def abv2_sample(img, layout):
+    sx, sy = img.width / W, img.height / H
+    out = {}
+    for name, (x0, y0, x1, y1) in layout.items():
+        out[name] = grey(region_mean(img, (int(x0 * sx), int(y0 * sy), int(x1 * sx), int(y1 * sy)), inset=2))
+    return out
+
+
+def cmd_abv2_nobinarise(args):
+    """abv2-nobinarise <image> -- the silhouette scene under V2 at its
+    shipped defaults (Lift 0.5, Target 0.35, Max lift 4). The anti-
+    binarisation guarantee stated qualitatively on a scene built for it: the
+    three known-ordered raw values (fig3=3 < field=6 < fig10=10) must STAY
+    ordered (a toe-gamma is monotone by construction, so this is "did
+    anything invert", not a tuning question), and none of the lifted content
+    may be slammed all the way to white -- the failure mode x^0.25 produces
+    on the real capture (plan section 3.1: code 4 -> 90, i.e. next to white)."""
+    v = abv2_sample(load(args[0]), SILHOUETTE)
+    checks = [
+        ("fig3 < field (raw order kept)", v["fig3"] < v["field"]),
+        ("field < fig10 (raw order kept)", v["field"] < v["fig10"]),
+        ("fig10 not slammed to white (< 220)", v["fig10"] < 220.0),
+        ("field not slammed to white (< 220)", v["field"] < 220.0),
+    ]
+    failed = [c for c, ok in checks if not ok]
+    sys.exit(0 if emit(not failed, "abv2-nobinarise",
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
+
+
+def cmd_abv2_silhouette(args):
+    """abv2-silhouette <image-maxlift1> <image-default> -- "can I see the
+    enemy", as a number: the fig3 figure's Weber contrast against its own
+    surround (the field) must not DECREASE between Max lift 1 (an exact
+    identity -- abv2_toe(x,g,1) === x, the guarantee's own zero point) and
+    the shipped default. A lift that helped exposure but flattened the
+    figure into its background would fail this while passing every other
+    check here."""
+    off, on = abv2_sample(load(args[0]), SILHOUETTE), abv2_sample(load(args[1]), SILHOUETTE)
+    def weber(v):
+        return (v["field"] - v["fig3"]) / max(v["field"], 1e-3)
+    w_off, w_on = weber(off), weber(on)
+    ok = w_on >= w_off - 0.02
+    sys.exit(0 if emit(ok, "abv2-silhouette",
+                       f"Weber contrast off(maxlift1)={w_off:.3f} on(default)={w_on:.3f} "
+                       f"(raw fig3={off['fig3']:.1f} field={off['field']:.1f}; "
+                       f"lifted fig3={on['fig3']:.1f} field={on['field']:.1f})") else 1)
+
+
+def cmd_abv2_slope(args):
+    """abv2-slope <image> <S> <detail> -- guarantee 1 on the existing `dark`
+    scene's five KNOWN bands (5/8/12/16/20 raw): every adjacent pair's
+    amplification ratio must be <= S * Detail + 0.05, the exact statement
+    the plan's own v2-slope check makes, reusing a scene already in the
+    default ring rather than a new one."""
+    image, s_str, detail_str = args
+    S, Detail = float(s_str), float(detail_str)
+    v = regions(load(image), "dark")
+    raw = [5, 8, 12, 16, 20]
+    bound = S * Detail + 0.05 * 255.0   # the plan's 0.05 is in 0..1 code units
+    checks = []
+    for i in range(4):
+        d_in = raw[i + 1] - raw[i]
+        d_out = v[f"band{i + 1}"] - v[f"band{i}"]
+        slope = d_out / d_in
+        checks.append((f"band{i}->{i + 1} slope {slope:.2f} <= {S * Detail + 0.05:.2f}", d_out <= bound))
+    failed = [c for c, ok in checks if not ok]
+    sys.exit(0 if emit(not failed, "abv2-slope",
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
+
+
+def cmd_abv2_black(args):
+    """abv2-black <image> -- guarantee 2 on a coarse grid of the silhouette
+    scene's own void (70% of the frame, literal 0): every sampled texel must
+    read EXACTLY 0, not merely close -- the black floor (ABV2_BLACK) is a
+    hard floor, not a soft one."""
+    img = load(args[0])
+    sx, sy = img.width / W, img.height / H
+    x0, y0, x1, y1 = int(20 * sx), int(20 * sy), int(1260 * sx), int(230 * sy)   # well above the band
+    px = img.load()
+    worst = 0
+    for y in range(y0, y1, 8):
+        for x in range(x0, x1, 8):
+            worst = max(worst, grey(px[x, y]))
+    sys.exit(0 if emit(worst == 0, "abv2-black", f"worst void pixel = {worst:.0f} (must be exactly 0)") else 1)
+
+
+def cmd_abv2_sky(args):
+    """abv2-sky <image> -- the highlight guard on `skyfore`: the two cloud
+    bands must stay separated from the sky and from each other after V2's
+    toe compresses the whole upper range by ~g. A monotone toe cannot
+    invert this order; the check is that it does not also MERGE it."""
+    v = abv2_sample(load(args[0]), SKYFORE)
+    checks = [
+        ("cloud1 (235) stays above sky (225) by >= 3", v["cloud1"] - v["sky"] >= 3.0),
+        ("sky (225) stays above cloud2 (215) by >= 3", v["sky"] - v["cloud2"] >= 3.0),
+        ("ground figures still ordered (8 < fig8, 26 < fig26 raw; "
+         "fig8 < fig26 lifted)", v["fig8"] < v["fig26"]),
+        ("ground_l (14) < ground_r (20) order kept", v["ground_l"] < v["ground_r"]),
+    ]
+    failed = [c for c, ok in checks if not ok]
+    sys.exit(0 if emit(not failed, "abv2-sky",
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
+
+
+def cmd_abv2_static(args):
+    """abv2-static <label> <img...> -- guarantee 5's still-frame half: N
+    captures of the SAME still frame (Scene mode, motion paused) must be
+    close to BYTE IDENTICAL. Scene-agnostic (a coarse whole-image grid,
+    like darkfloor's), so it runs on whichever still scene the caller
+    already has on screen rather than needing its own.
+
+    Bound is <= 2 counts, not 0: unlike `stability-static`'s own RAW
+    statistic (read as an exact float via `effects_ab_log`, which this
+    check does not use), this reads the SMOOTHED anchor's effect on the
+    picture through an 8-bit PNG screenshot. The measure pass's raw
+    measurement of a truly still scene is bit-identical every frame, but
+    the EMA that tracks it (effects_curve.h's mix()) only approaches that
+    value asymptotically -- it does not reach it exactly in finite time --
+    so a residual sub-code drift can still tip one 8-bit output pixel
+    across a rounding boundary between two captures even after the
+    ADAPT_SETTLE_S wait. That is exactly why the codebase's OWN existing
+    checks on the SMOOTHED (not raw) side of this same EMA use a small
+    nonzero tolerance too (`stability-static`'s "smoothed p98 p2p <= 0.1
+    codes", "gain p2p <= 0.002") rather than demanding exact 0 -- this
+    check is that same family, just observed through a screenshot instead
+    of the float trace."""
+    label, paths = args[0], args[1:]
+    imgs = [load(p) for p in paths]
+    w, h = imgs[0].size
+    stride = 8
+    base = imgs[0].load()
+    worst = 0.0
+    for img in imgs[1:]:
+        px = img.load()
+        for y in range(0, h, stride):
+            for x in range(0, w, stride):
+                worst = max(worst, abs(grey(px[x, y]) - grey(base[x, y])))
+    sys.exit(0 if emit(worst <= 2.0, f"abv2-static-{label}", f"worst pixel delta {worst:.2f} over {len(paths)} captures") else 1)
+
+
+def cmd_abv2_pan(args):
+    """abv2-pan <label> <img...> -- the 2026-09-07 pulse must not return, on
+    `texdark` panning under --periodic (its true statistics never change).
+    A snap (the scene-cut detector firing on ordinary camera motion) would
+    show up here as a jump much bigger than sampling noise between
+    consecutive captures; this is the same frame-to-frame SPREAD statement
+    bloomjitter makes for Bloom, applied to V2's own content anchor via the
+    frame mean."""
+    label, paths = args[0], args[1:]
+    means = [grey(region_mean(load(p), (0, 0, 1280, 720), inset=0)) for p in paths]
+    spread = max(means) - min(means)
+    # A real cut only fires on a >= 2x brightness swing (the plan's own
+    # |ln(raw/smoothed)| > ln 2); a pan's frame-to-frame mean noise is a
+    # fraction of a count once the anchor has settled, so a generous 6-count
+    # budget still catches a cut firing by mistake without being a hair-
+    # trigger on capture noise.
+    sys.exit(0 if emit(spread <= 6.0, f"abv2-pan-{label}",
+                       f"frame-mean spread {spread:.2f} counts over {len(paths)} captures (means: "
+                       + " ".join(f"{m:.1f}" for m in means) + ")") else 1)
+
+
+def cmd_abv2_cut(args):
+    """abv2-cut <image-before> <image-first-after> <image-settled> -- the
+    scene-cut detector SNAPS instead of sliding across `flash`'s dark ->
+    bright transition. Screenshot round-trips in this harness (a `stat`
+    poll every 50ms) cannot resolve individual composited frames, so this
+    checks the property the plan's "<= 2 composites" bound exists to state
+    for a human: the FIRST post-switch capture must already be close to the
+    settled value, not partway through a multi-second slide the way the
+    pre-bounded operators' 1s EMA would produce."""
+    before, first, settled = (grey(region_mean(load(p), (0, 0, 1280, 720), inset=0)) for p in args)
+    total_move = settled - before
+    first_move = first - before
+    ratio = first_move / total_move if abs(total_move) > 1.0 else 1.0
+    ok = ratio >= 0.8
+    sys.exit(0 if emit(ok, "abv2-cut",
+                       f"before={before:.1f} first-after={first:.1f} settled={settled:.1f} "
+                       f"({ratio * 100:.0f}% of the move already present in the first capture)") else 1)
+
+
+def cmd_abv2_colour(args):
+    """abv2-colour <image-off> <image-on> -- plan 4.7's hue-preservation: V2
+    reconstructs colour by luma RATIO, so every band's HUE ANGLE must be
+    unchanged (within capture rounding) even though its brightness moved.
+    Reuses the `colors` scene's own five bands."""
+    off, on = color_regions(load(args[0])), color_regions(load(args[1]))
+    def hue_deg(rgb):
+        r, g, b = (c / 255.0 for c in rgb)
+        mx, mn = max(r, g, b), min(r, g, b)
+        d = mx - mn
+        if d < 1e-4:
+            return None   # grey has no hue
+        if mx == r:
+            h = 60.0 * (((g - b) / d) % 6.0)
+        elif mx == g:
+            h = 60.0 * (((b - r) / d) + 2.0)
+        else:
+            h = 60.0 * (((r - g) / d) + 4.0)
+        return h
+    checks = []
+    for i in range(1, 5):   # band 0 is grey -- no hue to compare
+        h0, h1 = hue_deg(off[i]), hue_deg(on[i])
+        if h0 is None or h1 is None:
+            continue
+        d = min(abs(h0 - h1), 360.0 - abs(h0 - h1))
+        checks.append((f"band{i} hue shift {d:.1f} deg <= 2", d <= 2.0))
+    failed = [c for c, ok in checks if not ok]
+    sys.exit(0 if emit(not failed, "abv2-colour", ("FAILED: " + "; ".join(failed) + "; " if failed else "")
+                       + "; ".join(f"band{i}: {hue_deg(off[i])}->{hue_deg(on[i])}" for i in range(1, 5))) else 1)
+
+
+CAPTURE_ZOMBIE = (440, 346, 520, 506)   # (660..780, 520..760) in the 1920x1080 original, x2/3 to 1280x720
+# "The floor beside it": measured directly on the source PNG rather than
+# guessed -- (950..1150, 580..650) in the 1920x1080 original is the bright
+# grated walkway visible between the two zombie clusters (mean 70.1 raw vs
+# the zombie's own 8.5, a clean floor read with no character or blood-decal
+# pixels in it), x2/3 to this harness's 1280x720 capture size.
+CAPTURE_FLOOR = (633, 387, 767, 433)
+
+
+def _frac_ge(img, thresh, stride=4):
+    px = img.load()
+    w, h = img.size
+    n = ge = 0
+    for y in range(0, h, stride):
+        for x in range(0, w, stride):
+            n += 1
+            if grey(px[x, y]) >= thresh:
+                ge += 1
+    return 100.0 * ge / max(n, 1)
+
+
+def cmd_abv2_capture(args):
+    """abv2-capture <image-off> <image-on> <which> -- the Stage-1 acceptance
+    bar (plan section 6), on the user's own capture, through the REAL GPU
+    path (not a CPU re-application of the formula). `which` is one of two
+    (the plan's own "13 checks" count treats them separately, since they
+    measure two different failure modes, and run_sampler()/record_line() in
+    effects-regression.sh -- like every OTHER sampler command here -- expect
+    exactly one PASS/FAIL line per python invocation, so this is called
+    TWICE rather than printing two lines from one call: a first version of
+    this check printed both from a single call and record_line()'s `read`
+    silently dropped the second, a bug caught only by inspecting the raw
+    results file after a real run rather than by the exit code):
+
+      nobinarise  pixels >= 128 <= 6% (raw 1.1%, x^0.25 today 21%) AND the
+                 zombie/floor separation >= 35 codes (raw 24.7) -- "is the
+                 corridor readable without turning grey-white".
+      noclip     the >= 250 population adds <= 0.05 percentage points over
+                 RAW's own -- the plan's own corrected bar, since the
+                 capture already has a lit lamp at ~0.09% >= 250 and
+                 "0% >= 250" is therefore not the right bar for THIS frame.
+    """
+    off_path, on_path, which = args
+    off, on = load(off_path), load(on_path)
+
+    if which == "nobinarise":
+        pct128_on = _frac_ge(on, 128.0)
+        sep_off = grey(region_mean(off, CAPTURE_FLOOR)) - grey(region_mean(off, CAPTURE_ZOMBIE))
+        sep_on = grey(region_mean(on, CAPTURE_FLOOR)) - grey(region_mean(on, CAPTURE_ZOMBIE))
+        checks = [
+            (f"pixels >= 128 <= 6% (got {pct128_on:.1f}%)", pct128_on <= 6.0),
+            (f"zombie/floor separation >= 35 codes (got {sep_on:.1f}, raw {sep_off:.1f})", sep_on >= 35.0),
+        ]
+        failed = [c for c, ok in checks if not ok]
+        sys.exit(0 if emit(not failed, "abv2-capture-nobinarise",
+                           ("FAILED: " + "; ".join(failed) + "; " if failed else "")
+                           + f"pct128={pct128_on:.2f}% sep off={sep_off:.1f} on={sep_on:.1f}") else 1)
+
+    if which == "noclip":
+        pct250_off = _frac_ge(off, 250.0)
+        pct250_on = _frac_ge(on, 250.0)
+        sys.exit(0 if emit(pct250_on <= pct250_off + 0.05, "abv2-capture-noclip",
+                           f"pixels >= 250: raw {pct250_off:.2f}% -> V2 {pct250_on:.2f}% (adds "
+                           f"{pct250_on - pct250_off:+.2f}pp, budget <= 0.05pp)") else 1)
+
+    print(f"FAIL\tabv2-capture\tunknown which '{which}'", file=sys.stderr)
+    sys.exit(2)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -1161,7 +1482,12 @@ def main():
      "bloomflat": cmd_bloomflat, "bloomline": cmd_bloomline,
      "bloomsame": cmd_bloomsame, "bloomjitter": cmd_bloomjitter,
      "bloomnoclip": cmd_bloomnoclip,
-     "darkfloor": cmd_darkfloor}[cmd](args)
+     "darkfloor": cmd_darkfloor,
+     "abv2nobinarise": cmd_abv2_nobinarise, "abv2silhouette": cmd_abv2_silhouette,
+     "abv2slope": cmd_abv2_slope, "abv2black": cmd_abv2_black, "abv2sky": cmd_abv2_sky,
+     "abv2static": cmd_abv2_static, "abv2pan": cmd_abv2_pan, "abv2cut": cmd_abv2_cut,
+     "abv2colour": cmd_abv2_colour, "abv2capture": cmd_abv2_capture,
+     }[cmd](args)
 
 
 if __name__ == "__main__":

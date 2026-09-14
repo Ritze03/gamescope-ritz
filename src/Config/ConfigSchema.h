@@ -632,6 +632,17 @@ namespace gamescope::config
         // direction uses this value; darken-on uses 2x it (fixed ratio,
         // computed on the host -- see EffectsPushData_t).
         float adapt_speed = 0.5f;
+        // 0.0..1.0 (Stage 3), default 0.0/off -- the silhouette band
+        // ("Clarity"): a second, FINER guided-filter coefficient pair
+        // (r2 = r/4) gives a second base B2; M = B2 - B is the 4..16px
+        // structure a limb or a weapon outline lives at, added into the
+        // detail term with its own gain (plan 4.9). Edge-aware like Detail
+        // above: a hard, already-visible edge has a ~= 1 in BOTH filters,
+        // so M ~= 0 there and no rim is added -- only low-contrast
+        // mid-scale structure is boosted. At 0.0, byte-identical to
+        // Stage 2 (the fine filter is not even dispatched -- see
+        // update_effects_v2_fine_images() in rendervulkan.cpp).
+        float clarity = 0.0f;
     };
 
     struct ReshadeSettings

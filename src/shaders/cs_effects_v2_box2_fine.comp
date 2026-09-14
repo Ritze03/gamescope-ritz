@@ -1,0 +1,54 @@
+#version 460
+
+// cs_effects_v2_box2_fine.comp -- Adaptive Brightness V2's Stage 3 Clarity
+// (2026-09-14): the fine pair's smoothing pass, BYTE-IDENTICAL to
+// cs_effects_v2_box2.comp except for the radius uniform (u_v2RadiusFine).
+// See cs_effects_v2_box1_fine.comp's header for why this is a separate
+// file rather than a per-dispatch uniform.
+//
+// Reads the raw fine (a, b) cs_effects_v2_box1_fine.comp wrote into
+// effectsV2FineB (bound to VKR_EFFECTS_V2_SLOT by the host for this
+// dispatch, exactly as the coarse box2 pass gets rebound to whichever
+// buffer is its own current source) and writes the smoothed (a-bar, b-bar)
+// to effectsV2FineA; cs_effects_layer0.comp's v2_coef_sample_fine() then
+// reads THAT one, bilinearly, as B2(p) = a-bar2 * Y(p) + b-bar2.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+vec2 v2_ab_fetch(ivec2 t, ivec2 sz)
+{
+    return texelFetch(s_samplers[VKR_EFFECTS_V2_SLOT], clamp(t, ivec2(0), sz - ivec2(1)), 0).rg;
+}
+
+void main()
+{
+    ivec2 p  = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_V2_SLOT], 0);
+    if (p.x >= sz.x || p.y >= sz.y)
+        return;
+
+    int r = max(int(u_v2RadiusFine), 0);
+    vec2 sum = vec2(0.0);
+    float n = 0.0;
+    for (int j = -r; j <= r; j++)
+    {
+        for (int i = -r; i <= r; i++)
+        {
+            sum += v2_ab_fetch(p + ivec2(i, j), sz);
+            n   += 1.0;
+        }
+    }
+
+    vec2 ab = sum / max(n, 1.0);
+    imageStore(dst, p, vec4(clamp(ab.x, 0.0, 1.0), clamp(ab.y, 0.0, 1.0), 0.0, 1.0));
+}

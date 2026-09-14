@@ -1796,6 +1796,7 @@ TEST_CASE( "reshade.adaptive_brightness_v2 defaults and round-trip, and the olde
 	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.detail, WithinAbs( 1.0f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.scale, WithinAbs( 1.5f, 1e-6f ) );
 	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.adapt_speed, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.clarity, WithinAbs( 0.0f, 1e-6f ) );
 
 	s.reshade.adaptive_brightness_v2.enabled = true;
 	s.reshade.adaptive_brightness_v2.mode = "off";
@@ -1806,6 +1807,7 @@ TEST_CASE( "reshade.adaptive_brightness_v2 defaults and round-trip, and the olde
 	s.reshade.adaptive_brightness_v2.detail = 1.5f;
 	s.reshade.adaptive_brightness_v2.scale = 2.0f;
 	s.reshade.adaptive_brightness_v2.adapt_speed = 1.2f;
+	s.reshade.adaptive_brightness_v2.clarity = 0.6f;
 	// The user's own instruction, pinned as a test: the OLDER two effects
 	// stay exactly as they were, alongside V2 being configured.
 	s.reshade.adaptive_brightness.enabled = true;
@@ -1826,6 +1828,7 @@ TEST_CASE( "reshade.adaptive_brightness_v2 defaults and round-trip, and the olde
 	REQUIRE_THAT( v2.detail, WithinAbs( 1.5f, 1e-6f ) );
 	REQUIRE_THAT( v2.scale, WithinAbs( 2.0f, 1e-6f ) );
 	REQUIRE_THAT( v2.adapt_speed, WithinAbs( 1.2f, 1e-6f ) );
+	REQUIRE_THAT( v2.clarity, WithinAbs( 0.6f, 1e-6f ) );
 
 	// Adaptive Brightness (the OLDER effect) is UNTOUCHED -- this is the
 	// user's explicit "DO NOT REMOVE THE ORIGINAL" requirement, pinned.
@@ -1845,4 +1848,146 @@ TEST_CASE( "reshade.adaptive_brightness_v2 defaults and round-trip, and the olde
 	REQUIRE( loadedOld.has_value() );
 	REQUIRE( loadedOld->reshade.adaptive_brightness_v2.enabled == false );
 	REQUIRE( loadedOld->reshade.adaptive_brightness_v2.mode == "scene" );
+}
+
+// ===========================================================================
+//  STAGE 3 CLARITY (NEW 2026-09-14, plan section 4.9) -- the silhouette
+//  band. abv2_clarity_combine() is the one pure function this stage adds;
+//  every guarantee it must keep flows through the ALREADY-tested
+//  abv2_detail_apply()/abv2_secant(), so these cases pin abv2_clarity_combine
+//  itself and its composition with those, on synthetic edges, exactly as the
+//  worker task requires.
+// ===========================================================================
+
+TEST_CASE( "abv2_clarity_combine: exact identity on D at clarity 0, D + M at clarity 1, "
+           "linear in between", "[effects_curve][abv2][clarity]" )
+{
+	for ( float D = -0.4f; D <= 0.4f; D += 0.05f )
+	{
+		for ( float M = -0.4f; M <= 0.4f; M += 0.05f )
+		{
+			REQUIRE_THAT( abv2_clarity_combine( D, M, 0.0f ), WithinAbs( D, 1e-6f ) );
+			REQUIRE_THAT( abv2_clarity_combine( D, M, 1.0f ), WithinAbs( D + M, 1e-6f ) );
+			REQUIRE_THAT( abv2_clarity_combine( D, M, 0.5f ), WithinAbs( D + 0.5f * M, 1e-6f ) );
+			// Out-of-range clarity is clamped, not extrapolated -- a
+			// hand-edited config above the panel's own 0..1 range must not
+			// widen the guarantee below past what the panel can reach.
+			REQUIRE_THAT( abv2_clarity_combine( D, M, 2.0f ), WithinAbs( D + M, 1e-6f ) );
+			REQUIRE_THAT( abv2_clarity_combine( D, M, -1.0f ), WithinAbs( D, 1e-6f ) );
+		}
+	}
+}
+
+TEST_CASE( "abv2_clarity_combine + abv2_detail_apply: guarantee 1 widens to EXACTLY "
+           "S * Detail * (1 + Clarity), on synthetic step edges", "[effects_curve][abv2][clarity]" )
+{
+	// A synthetic silhouette step: D and M each up to one step's worth of
+	// contrast (the plan's own bound for "an object's own level differs
+	// from its surround by at most `step`"), independently signed -- the
+	// bound must hold whether or not the two filters agree, since a
+	// hand-edited or adversarial scene is not required to be the aligned
+	// case Clarity is tuned for.
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 1.0f )
+		{
+			for ( float flDetail = 0.0f; flDetail <= 2.0f; flDetail += 0.5f )
+			{
+				for ( float clarity = 0.0f; clarity <= 1.0f; clarity += 0.25f )
+				{
+					for ( float B = 0.02f; B < 1.0f; B += 0.1f )
+					{
+						const float fB = abv2_toe( B, g, S );
+						const float sec = abv2_secant( B, g, S, false ) * flDetail;
+						for ( float step = 0.05f; step <= 0.4f; step += 0.1f )
+						{
+							for ( int sD = -1; sD <= 1; sD += 2 )
+							{
+								for ( int sM = -1; sM <= 1; sM += 2 )
+								{
+									const float D = sD * step;
+									const float M = sM * step;
+									const float Dtotal = abv2_clarity_combine( D, M, clarity );
+									const float Yp = abv2_detail_apply( fB, Dtotal, sec );
+									const float flBound = S * flDetail * ( 1.0f + clarity ) * step;
+									REQUIRE( std::fabs( Yp - fB ) <= flBound + 1e-4f );
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_clarity_combine + abv2_detail_apply: Weber contrast never decreases "
+           "when the fine and coarse filters AGREE (the edge-aware case Clarity is built "
+           "for), and Clarity 0 reproduces Stage 2 exactly", "[effects_curve][abv2][clarity]" )
+{
+	// Near a real silhouette edge the finer base B2 tracks the step more
+	// closely than the coarser B does, so M = B2 - B and D = Y - B point
+	// the SAME direction (the standard unsharp-mask property of two box
+	// filters at different radii on a monotone step -- see plan 4.9's own
+	// "edge-awareness ... M ~= 0 [at a hard edge], only low-contrast
+	// mid-scale structure is boosted", which is the SAME-sign case for any
+	// structure that is not already at a=1 in both filters). Modelled here
+	// directly by construction (D, M same sign) rather than by simulating
+	// the guided filter's box passes -- the guarantee is about the
+	// function composition, and the box filters' own halo/edge-awareness
+	// properties are covered separately by the GPU regression harness
+	// (v2-halo, v2-silhouette in scripts/effects-regression.sh).
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.15f )
+	{
+		for ( float S = 2.0f; S <= 8.0f; S += 2.0f )
+		{
+			for ( float B = 0.05f; B < 0.95f; B += 0.1f )
+			{
+				const float fB = abv2_toe( B, g, S );
+				const float sec = abv2_secant( B, g, S, false );   // Detail == 1
+				for ( float D = 0.05f; D <= 0.3f; D += 0.05f )
+				{
+					const float baselineYp = abv2_detail_apply( fB, D, sec );
+					const float baselineWeber = ( baselineYp - fB ) / std::max( fB, 1e-4f );
+
+					for ( float M = 0.0f; M <= D; M += 0.05f )   // same sign, |M| <= |D|
+					{
+						for ( float clarity = 0.0f; clarity <= 1.0f; clarity += 0.25f )
+						{
+							const float Dtotal = abv2_clarity_combine( D, M, clarity );
+							const float Yp = abv2_detail_apply( fB, Dtotal, sec );
+							const float weber = ( Yp - fB ) / std::max( fB, 1e-4f );
+
+							if ( clarity <= 1e-6f )
+							{
+								// Exact identity to Stage 2 -- not just "close".
+								REQUIRE_THAT( Yp, WithinAbs( baselineYp, 1e-5f ) );
+							}
+							else
+							{
+								// Same-sign M can only add magnitude to a
+								// positive step, so the output Weber
+								// contrast is >= the Clarity-off baseline.
+								REQUIRE( weber >= baselineWeber - 1e-5f );
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_clarity_combine: a hard edge (a ~= 1 in both filters) contributes nothing",
+           "[effects_curve][abv2][clarity]" )
+{
+	// plan 4.9: "a hard, already-visible edge has a ~= 1 in BOTH filters,
+	// so M ~= 0 there and no rim is added". At the function level that is
+	// simply M == 0 -- both guided filters agree exactly on B, so B2 == B
+	// -- and the combine must then be an identity on D regardless of
+	// Clarity, which is the "no rim on a real edge" guarantee restated as
+	// one line.
+	for ( float D = -0.5f; D <= 0.5f; D += 0.05f )
+		for ( float clarity = 0.0f; clarity <= 1.0f; clarity += 0.1f )
+			REQUIRE_THAT( abv2_clarity_combine( D, 0.0f, clarity ), WithinAbs( D, 1e-6f ) );
 }

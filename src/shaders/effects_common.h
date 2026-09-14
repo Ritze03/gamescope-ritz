@@ -92,6 +92,15 @@ uniform effects_t {
     float u_v2Radius;      // guided-filter box radius, in v2-buffer TEXELS
     uint  u_v2Mode;        // 0 = Off (static only), 1 = Scene (adapts)
     uint  u_v2Knee;        // 0 = toe shape, 1 = knee shape
+    // ---- Adaptive Brightness V2, Stage 3 Clarity (NEW 2026-09-14) ----
+    // plan section 4.9's "silhouette band": a SECOND, finer guided-filter
+    // coefficient pair (radius u_v2RadiusFine = round(u_v2Radius / 4),
+    // floored at 1 texel) sampled by v2_coef_sample_fine() below. 0 gain
+    // is an exact identity (cs_effects_layer0.comp's branch skips the fine
+    // sample outright), and the host does not even dispatch the two extra
+    // passes that build it -- see update_effects_v2_fine_images().
+    float u_v2RadiusFine;
+    float u_v2Clarity;     // 0.0..1.0, the band's gain; 0 = off
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -436,6 +445,32 @@ vec2 v2_coef_sample(vec2 pos)
     vec2 b = v2_coef_fetch(i0 + ivec2(1, 0),   sz);
     vec2 c = v2_coef_fetch(i0 + ivec2(0, 1),   sz);
     vec2 d = v2_coef_fetch(i0 + ivec2(1, 1),   sz);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// ---- Stage 3 Clarity's FINER guided-filter coefficients (NEW 2026-09-14) --
+//
+// The exact same buffer shape and reduction as v2_coef_fetch()/
+// v2_coef_sample() above, sampling the SECOND pair (VKR_EFFECTS_V2_FINE_SLOT,
+// cs_effects_v2_box1_fine.comp / _box2_fine.comp's output) that
+// update_effects_v2_fine_images() allocates only while Clarity > 0 -- plan
+// section 4.9's "second guided coefficient pair" at radius r2 = r/4.
+vec2 v2_coef_fine_fetch(ivec2 t, ivec2 sz)
+{
+    return texelFetch(s_samplers[VKR_EFFECTS_V2_FINE_SLOT],
+                      clamp(t, ivec2(0), sz - ivec2(1)), 0).rg;
+}
+
+vec2 v2_coef_sample_fine(vec2 pos)
+{
+    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_V2_FINE_SLOT], 0);
+    vec2  g  = pos / 4.0 - 0.5;   // == V2_DOWN -- same quarter-res grid as the coarse pair
+    ivec2 i0 = ivec2(floor(g));
+    vec2  f  = g - vec2(i0);
+    vec2 a = v2_coef_fine_fetch(i0,               sz);
+    vec2 b = v2_coef_fine_fetch(i0 + ivec2(1, 0), sz);
+    vec2 c = v2_coef_fine_fetch(i0 + ivec2(0, 1), sz);
+    vec2 d = v2_coef_fine_fetch(i0 + ivec2(1, 1), sz);
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 

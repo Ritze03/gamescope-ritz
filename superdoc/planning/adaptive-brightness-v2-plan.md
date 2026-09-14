@@ -38,6 +38,32 @@ pipeline (Bloom, Adaptive Gamma, the dark floor) was added in.
 6. **Stage 3 Clarity:** **will be built**, as the next task, not this one. `kParamBudget`
    has one row spare on v2's own Switch for it.
 
+**Status update (2026-09-14, second pass): Stage 0 (GPU timestamp) and Stage 3 (Clarity)
+are now BOTH built**, on top of the Stage 1+2 pass below. Stage 0: a `vkCmdWriteTimestamp`
+pair, double-buffered across four queries, brackets the whole pre-pass; exposed as the
+`effects_timing` ConCommand and the Shaders area's Diagnostics "pre-pass" fact. Stage 3:
+the silhouette band, as a SECOND guided-filter coefficient pair at `r₂ = r/4` rather than
+the plan's own "widen v2A to 2× the width" alternative (§5.1) — a second sampler slot
+needed no change to any existing kernel loop, where the widened-buffer alternative would
+have needed every box filter's loop (three shader files) to stop reading across a half-
+boundary seam. `kParamBudget`'s 8 is now fully spent on this row. §7's new harness scenes
+(`silhouette`, `skyfore`, `flash`, `--image`) and its thirteen checks are also built, in
+`scripts/effects-regression.sh` / `effects_regression_sample.py` — see
+`shader-effects.md`'s own "Measured" section for the numbers and every deliberate
+deviation (the `flash` scene's own `--flash` timer is built but the automated `abv2-cut`
+check uses a plain `silhouette → bright` SIGUSR1 hop instead, since a screenshot-polling
+harness cannot land on a frame-counted phase boundary deterministically — the plan's own
+"driven by SIGUSR1 or a --flash timer" wording sanctions either). §6's shadow-chroma and
+knee-variant extras remain not built; nothing else in this plan changed.
+
+**Measured vs. predicted cost (§5.2's table).** Stage 1+2's own predicted range was
+"≈ 0" (Stage 1) plus 0.2–0.3 ms (Stage 2); Stage 3 added another predicted +0.1 ms. The
+FIRST real GPU measurement (this pass, harness resolution 1280×720, desktop GPU) is
+**mean 179.2 µs (0.18 ms) at 1280×720, 0.22 ms at 1920×1080** — see `shader-effects.md`
+for the full table this number came from, how it was captured, and the one honest
+deviation the same run found (`halo-haloinv-on` exceeds this doc's own predicted ≤8-code
+bound at the Max lift 8 / Detail 2 / Clarity 1 stretch setting — not fixed, reported).
+
 **Stage 1 + Stage 2 are both implemented in this pass** (the curve, the content anchor,
 the scene-cut snap, AND the guided-filter base/detail split) — not staged across separate
 commits the way §6 below sketches; see `shader-effects.md` for two DOCUMENTED

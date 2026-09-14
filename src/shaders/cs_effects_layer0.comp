@@ -237,9 +237,11 @@ void main()
     //    bit if a hand-edited config asks for more than one; see
     //    EffectsPushData_t). Base/detail split (the guided filter's a, b
     //    from cs_effects_v2_box2.comp) through a bounded toe/knee curve, a
-    //    Weber-preserving detail term, then colour by luma ratio. See
-    //    effects_curve.h's "ADAPTIVE BRIGHTNESS V2" block for every formula
-    //    and superdoc/planning/adaptive-brightness-v2-plan.md for the design.
+    //    Weber-preserving detail term (Stage 3: plus the Clarity silhouette
+    //    band, a SECOND finer base from cs_effects_v2_box2_fine.comp), then
+    //    colour by luma ratio. See effects_curve.h's "ADAPTIVE BRIGHTNESS
+    //    V2" block for every formula and
+    //    superdoc/planning/adaptive-brightness-v2-plan.md for the design.
     if ((u_flags & EFFECT_ADAPTIVE_V2) != 0u)
     {
         float Y = clamp(effects_luma(c), 0.0, 1.0);
@@ -261,7 +263,29 @@ void main()
             bool bKnee = u_v2Knee != 0u;
             float fB  = abv2_curve(B, g, u_v2MaxLift, bKnee);
             float sec = abv2_secant(B, g, u_v2MaxLift, bKnee) * clamp(u_v2Detail, 0.0, 2.0);
-            Yp = abv2_detail_apply(fB, D, sec);
+
+            // STAGE 3 CLARITY (NEW 2026-09-14, plan section 4.9): the
+            // silhouette band. A second, FINER base B2 (from the second
+            // guided-filter pair, u_v2RadiusFine) gives M = B2 - B, the
+            // 4..16px structure a limb or a weapon outline lives at.
+            // Combined into ONE detail signal with D before the shoulder --
+            // not applied through a second, independent shoulder call --
+            // so guarantee 4 (halo-bounded) still holds by the same proof
+            // abv2_detail_apply() already carries: Dtotal is just a
+            // differently-sized D, and the shoulder does not care where its
+            // input came from. Clarity 0 == 0 contribution, so Dtotal == D
+            // and this is byte-identical to Stage 2; guarantee 1 becomes
+            // S * Detail * (1 + Clarity) at Clarity 1 (D and M both at
+            // their own worst case, same sign, sum instead of cancel).
+            float Dtotal = D;
+            if (u_v2Clarity > 0.0)
+            {
+                vec2  coef2 = v2_coef_sample_fine(vec2(pos) + 0.5);
+                float B2 = clamp(coef2.x * Y + coef2.y, 0.0, 1.0);
+                float M  = B2 - B;
+                Dtotal = abv2_clarity_combine(D, M, u_v2Clarity);
+            }
+            Yp = abv2_detail_apply(fB, Dtotal, sec);
         }
         Yp = clamp(Yp, 0.0, 1.0);
 

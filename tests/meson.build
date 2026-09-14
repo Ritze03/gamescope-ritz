@@ -98,10 +98,18 @@ if sdl2_dep.found()
 		dependencies: [sdl2_dep],
 	)
 	# scripts/effects-regression.sh's synthetic-scene client, same shape.
+	# stb_dep (2026-09-14, Adaptive Brightness V2's harness): --image <png>
+	# loads the user's own capture through stb_image, the same vendored
+	# single-header decoder src/steamcompmgr.cpp already links for the
+	# gamescope binary itself -- nothing new to vendor. libm: stb_image's
+	# PNG path calls pow() for gamma-scaled 16-bit depth handling, which a
+	# plain C link does not pull in automatically the way C++'s does.
+	cc = meson.get_compiler('c')
+	libm_dep = cc.find_library('m', required: false)
 	executable(
 		'effects_scene_client',
 		['effects_scene_client.c'],
-		dependencies: [sdl2_dep],
+		dependencies: [sdl2_dep, stb_dep, libm_dep],
 	)
 endif
 

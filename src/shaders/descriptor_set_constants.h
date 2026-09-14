@@ -32,6 +32,21 @@
 // EFFECT_ADAPTIVE_V2 bit reusing that effect's flag bit.
 #define VKR_EFFECTS_V2_SLOT 3u
 
+// cs_effects_v2_box1_fine.comp / cs_effects_v2_box2_fine.comp /
+// cs_effects_layer0.comp (Adaptive Brightness V2's Stage 3 Clarity,
+// 2026-09-14): the SECOND, finer guided-filter coefficient pair
+// (v2_coef_sample_fine() in effects_common.h). A separate slot rather than
+// widening effectsV2A/B to hold both pairs side by side in one texture --
+// the plan's own "or a 2x-wide v2A holding both" alternative (section 5.1)
+// -- because a second slot needs no per-kernel half-boundary clamping in
+// EVERY box-filter tap (down/box1/box2 all loop a radius of taps around
+// each texel; a packed-width buffer would have to stop that loop from
+// reading across the seam into the other half, in three shader files,
+// which is exactly the kind of off-by-one this plan's own guarantees exist
+// to catch). One more slot, allocated and bound only while Clarity > 0, is
+// the cheaper of the two to get right.
+#define VKR_EFFECTS_V2_FINE_SLOT 4u
+
 #define VKR_LUT3D_COUNT 2 // Must match EOTF_Count
 
 #endif

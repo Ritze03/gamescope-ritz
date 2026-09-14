@@ -76,6 +76,8 @@ shader_src = [
   'shaders/cs_effects_v2_down.comp',
   'shaders/cs_effects_v2_box1.comp',
   'shaders/cs_effects_v2_box2.comp',
+  'shaders/cs_effects_v2_box1_fine.comp',
+  'shaders/cs_effects_v2_box2_fine.comp',
   'shaders/cs_gaussian_blur_horizontal.comp',
   'shaders/cs_nis.comp',
   'shaders/cs_nis_fp16.comp',

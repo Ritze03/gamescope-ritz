@@ -54,10 +54,15 @@ amend the entry here.
   that snaps the anchor instead of sliding across a flash or a door. **Stage 2** (a fast
   guided filter on luma, quarter resolution) splits the picture into base and detail so a
   lifted region keeps its own texture/outline contrast (**Detail**) instead of the flat
-  wash a global curve leaves. Mutually exclusive with **both** Adaptive Brightness and
-  Adaptive Gamma (turning any one of the three on turns the other two off) — all three
-  aim the same mid-tones at the same target from the same pre-effect statistics. See
-  `superdoc/features/shader-effects.md`'s own section for the formulas and measurements.
+  wash a global curve leaves. **Stage 3** (added the same day) adds **Clarity**: a SECOND,
+  finer guided-filter pair (radius `r/4`) whose difference from the Stage-2 base is the
+  4..16px "silhouette band" — a limb or weapon outline's own scale — added into the
+  detail term with its own gain; a hard, already-visible edge has `a ≈ 1` in *both*
+  filters, so the band is `≈ 0` there and nothing rims. Mutually exclusive with **both**
+  Adaptive Brightness and Adaptive Gamma (turning any one of the three on turns the other
+  two off) — all three aim the same mid-tones at the same target from the same
+  pre-effect statistics. See `superdoc/features/shader-effects.md`'s own section for the
+  formulas and measurements.
 - **About** — the settings overlay's `system.changelog` area, labelled "Changelog" until 2026-09-09 and **"About"** since (the id was left alone: it keys the rail grouping, the icon table, palette state and every settings-audit row, and no user ever sees it). It answers three questions on one page: what am I running (the gamescope-ritz semver, the upstream base commit, HEAD's date), what changed (`CHANGELOG.md`, compiled in), and what is it made of (the licences of everything compiled into the binary — the fork's own `LICENSE`, `THIRD-PARTY-LICENSES.md` and the Geist fonts' OFL, all compiled in and printed below the changelog). Searching the command palette for either "changelog" or "about" finds it. Code: `src/Overlay/PanelChangelog.cpp`.
 - **Brightness Map** — the experimental spatial local-tone effect (`image.shaders.brightness_map`), added 2026-09-09 and removed 2026-09-14 at the user's request ("You can actually remove the brightness map experimental shader, I don't need it anymore."). It divided the picture by a low-pass of the frame's own luminance against a mid-grey target, so a dark object on a bright field was lifted independently of the object's size — the case Adaptive Gamma's Local adaptation is too coarse to resolve. **Adaptive brightness V2**'s guided-filter base/detail operator (added the same day, see that entry above) supersedes the idea, edge-aware where this was a plain Gaussian. See `superdoc/features/shader-effects.md`'s History note.
 - **Zoom** — this fork's compositor-drawn magnifier (2026-09-14; `src/Overlay/Zoom.{h,cpp}`, `src/shaders/cs_zoom.comp`, settings area `system.zoom` under MISC, keybind action `zoom` bound to `RMB` by default): a copy of the middle of the game at 1.5–5×, cut to a circle, rectangle or square with a 1 px black outline, shown while the chord is held or toggled. Built *inside* `vulkan_composite()` as layer 1 — after the bundled shaders, before the upscaler — so it carries the effects and is never scaled. The user's "projection" is the shape-cut picture; its sizes are 0..1 fractions of the game's on-screen rect. **Not** upstream's `zoomScaleRatio` (Steam's whole-screen magnifier via the `screenZoom` X property), which scales the entire output. See `superdoc/features/zoom.md`.

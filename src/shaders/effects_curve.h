@@ -874,6 +874,31 @@ EC_FUNC float abv2_detail_apply( float fB, float D, float sec )
 	return fB + u;
 }
 
+// ---- Stage 3 Clarity (plan 4.9): the silhouette band ---------------------
+//
+// M = B2 - B, the difference between two guided-filter bases at two radii
+// (r and r/4 -- cs_effects_layer0.comp computes M from the two coefficient
+// samples; this is the part that is a pure function of the two numbers).
+// Folded into ONE combined detail signal ALONGSIDE D, before the shoulder
+// -- not through a second, independent abv2_detail_apply() call -- so
+// guarantee 4 (halo-bounded) is inherited rather than re-derived: the
+// shoulder does not know or care whether its input came from one region's
+// texture or two guided filters' disagreement, so the same range and
+// monotonicity proof abv2_detail_apply() already carries covers Dtotal
+// exactly as it covers D alone.
+//
+// clarity in [0, 1]; clamped here (not just by the caller) so a hand-typed
+// config value outside the panel's own range cannot exceed the guarantee
+// this function exists to keep: clarity == 0 makes this an EXACT identity
+// on D (byte-identical to Stage 2, not an approximation of one), and
+// clarity == 1 is the worst case the "S * Detail * (1 + Clarity)" guarantee
+// in shader-effects.md is stated against (D and M at their own extremes,
+// same sign, summing rather than partially cancelling).
+EC_FUNC float abv2_clarity_combine( float D, float M, float clarity )
+{
+	return D + M * clamp( clarity, 0.0f, 1.0f );
+}
+
 // ---- The black floor (plan 4.6) ------------------------------------------
 //
 // B <= ABV2_BLACK: Y' = Y exactly, never touched by the curve at all. The

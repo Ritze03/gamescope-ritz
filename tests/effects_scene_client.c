@@ -59,6 +59,29 @@
 //   --motion the image's true statistics never change and every frame-to-
 //   frame difference in the measurement is sampling noise alone.
 //
+//   ADDED 2026-09-14 for Adaptive Brightness V2 (plan section 7.1):
+//   silhouette a near-black field: 70% of the frame literal 0 (the map's
+//           own void), a middle band (30% of the frame) of a 6-code field
+//           with 1-code hashed noise, an 8%-of-frame "lit floor" patch
+//           (40..60-code, textured) inside that band, and two flat
+//           player-sized figures (24x48) at 3 and 10 codes -- the capture's
+//           own shape: a near-black scene with a darker-than-surround
+//           player and a lighter one, on a void.
+//   flash   alternates between the silhouette frame above and a bright
+//           frame (230-code field, two 200-code shapes) every --flash N
+//           composites (default 120) -- a flashbang or a door into
+//           daylight, and the scene-cut detector's own test case. Both
+//           phases still scroll under --motion.
+//   skyfore a half-split scene WITH objects in it: the top 55% a 225-code
+//           sky with 235/215 cloud bands, the bottom 45% a 14/20-code
+//           ground (left/right) with a 30px 8-code figure and a 60px
+//           26-code figure -- bright skybox above a dark foreground.
+//   capture --image <PATH> replaces this scene's content with a real PNG
+//           (stb_image), stretched to fill the window exactly like every
+//           synthetic scene's own 1280x720 reference is -- the user's own
+//           capture, replayed through the real GPU path. Never moves under
+//           --motion (it is a still).
+//
 // --motion PX scrolls the TEXTURED scenes horizontally by PX pixels every
 // frame (the flat scenes never move, so their sampled regions stay put), so
 // the tap grid lands on different pixels each frame the way it does under
@@ -81,6 +104,14 @@
 #include <string.h>
 #include <unistd.h>
 
+// Adaptive Brightness V2's harness scenes (NEW 2026-09-14, plan section
+// 7.1) -- `--image <png>` replays a real capture (the user's own dark CS2
+// screenshot, in particular) through the actual GPU path rather than a
+// synthetic stand-in. The same vendored single-header decoder
+// src/steamcompmgr.cpp already links into the gamescope binary itself.
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 static volatile sig_atomic_t s_nAdvance = 0;
 static volatile sig_atomic_t s_nMotionToggle = 0;
 static void OnUsr1( int sig ) { (void)sig; s_nAdvance++; }
@@ -92,7 +123,11 @@ static void OnUsr2( int sig ) { (void)sig; s_nMotionToggle++; }
 // were `models` and `modelsinv`, the player-sized-object scenes the
 // experimental Brightness Map effect was measured on; removed with that
 // effect 2026-09-14 (superdoc/features/shader-effects.md's History note).
-// See PaintSpecial().
+// REUSED the same day (2026-09-14) for Adaptive Brightness V2's own
+// `silhouette` (5) and `skyfore` (6) -- see PaintSpecial(). `flash` and
+// `capture` are not table-driven (their content is either time-varying or
+// loaded from disk) and are special-cased by name in Paint() instead,
+// exactly like the `tex*`/`blackout` scenes already are.
 typedef struct
 {
 	const char *pszName;
@@ -115,6 +150,13 @@ static const Scene kScenes[] = {
 	{ "halobox",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 2 },
 	{ "haloinv",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 3 },
 	{ "colors",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 4 },
+	{ "silhouette", {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 5 },
+	{ "skyfore",    {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 6 },
+	// flash and capture: no static content here (see the header comment
+	// above and Paint()'s own name-based special cases), but a table row
+	// is still needed so --scenes flash,capture and FindScene() work.
+	{ "flash",      {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
+	{ "capture",    {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
 };
 
 // colors (2026-09-08): five horizontal bands, top to bottom, RGB. Band 0 is
@@ -166,6 +208,10 @@ static float s_flLights = 1.5f;  // --lights: % of texdark cells that are a ligh
 static float s_flSplit = 50.0f;  // --split: % of texsplit cells that are bright
 static int s_bPeriodic = 0;      // --periodic: the texture repeats every 80 cells (one frame width), so a pan changes nothing but which pixels the taps land on
 static long s_nFrame = 0;
+
+// Adaptive Brightness V2's harness (NEW 2026-09-14, plan 7.1).
+static int s_nFlashPeriod = 120;      // --flash N: composites per phase, default 120
+static SDL_Surface *s_pCaptureSurface = NULL;   // --image PATH, loaded once at startup
 
 // A cheap integer hash for the textured scenes: the same (cx, cy) always
 // gives the same cell, so a scrolled frame is the SAME texture moved, not
@@ -246,6 +292,59 @@ static void PaintSpecial( SDL_Surface *pSurface, int nSpecial )
 		return;
 	}
 
+	// silhouette (NEW 2026-09-14, plan 7.1): the capture's own shape. 70%
+	// of the 1280x720 reference frame is literal 0 (top 35% + bottom 35%,
+	// each exactly 322560 of the 921600 total px); the middle 30% band
+	// (y 0.35H..0.65H, 276480 px) is a 6-code field with 1-code hashed
+	// noise; an 8%-of-frame "lit floor" patch (384x192 = 73728 px, textured
+	// 40..60) sits inside that band; two flat player-sized figures
+	// (24x48) at 3 and 10 codes sit beside it, well clear of the patch.
+	if ( nSpecial == 5 )
+	{
+		const int CELL = 8;
+		FillRect( pSurface, 0, 0, W, H, 0 );
+		const int by0 = (int)( 0.35f * H ), by1 = (int)( 0.65f * H );
+		for ( int y = by0; y < by1; y += CELL )
+		{
+			for ( int x = 0; x < W; x += CELL )
+			{
+				const unsigned h = Hash( (unsigned)( x / CELL ), (unsigned)( y / CELL ) );
+				const int noise = (int)( h % 3u ) - 1;   // -1, 0, +1
+				FillRect( pSurface, x, y, CELL, by1 - y < CELL ? by1 - y : CELL, (unsigned char)( 6 + noise ) );
+			}
+		}
+		const int pw = (int)( 384 * sx ), ph = (int)( 192 * sy );
+		const int px = (int)( 100 * sx ), py = by0 + (int)( 12 * sy );
+		for ( int y = 0; y < ph; y += CELL )
+			for ( int x = 0; x < pw; x += CELL )
+			{
+				const unsigned h = Hash( (unsigned)( x / CELL ), (unsigned)( y / CELL ) + 9001u );
+				FillRect( pSurface, px + x, py + y, CELL, CELL, (unsigned char)( 40 + ( h % 21u ) ) );
+			}
+		const int fw = (int)( 24 * sx ), fh = (int)( 48 * sy );
+		FillRect( pSurface, px + pw + (int)( 60 * sx ), by0 + (int)( 20 * sy ), fw, fh, 3 );
+		FillRect( pSurface, px + pw + (int)( 160 * sx ), by0 + (int)( 20 * sy ), fw, fh, 10 );
+		return;
+	}
+
+	// skyfore (NEW 2026-09-14, plan 7.1): a half-split scene WITH objects
+	// in it -- top 55% sky (225, with two cloud bands at 235/215), bottom
+	// 45% ground (14 left half / 20 right half), a 30px 8-code figure and
+	// a 60px 26-code figure in the ground.
+	if ( nSpecial == 6 )
+	{
+		const int gy0 = (int)( 0.55f * H );
+		FillRect( pSurface, 0, 0, W, gy0, 225 );
+		FillRect( pSurface, 0, (int)( 0.15f * H ), W, (int)( 0.05f * H ), 235 );
+		FillRect( pSurface, 0, (int)( 0.35f * H ), W, (int)( 0.05f * H ), 215 );
+		FillRect( pSurface, 0, gy0, W / 2, H - gy0, 14 );
+		FillRect( pSurface, W / 2, gy0, W - W / 2, H - gy0, 20 );
+		const int s30 = (int)( 30 * sx ), s60 = (int)( 60 * sx );
+		FillRect( pSurface, (int)( 200 * sx ), gy0 + (int)( 40 * sy ), s30, s30, 8 );
+		FillRect( pSurface, (int)( 900 * sx ), gy0 + (int)( 40 * sy ), s60, s60, 26 );
+		return;
+	}
+
 	{
 		const unsigned char field = ( nSpecial == 2 ) ? 200 : 15;
 		const unsigned char box   = ( nSpecial == 2 ) ?  10 : 220;
@@ -285,6 +384,46 @@ static void Paint( SDL_Surface *pSurface, const Scene *pScene )
 		return;
 	}
 
+	// flash (NEW 2026-09-14, plan 7.1): alternates between the silhouette
+	// frame and a bright frame every s_nFlashPeriod composites -- a
+	// flashbang or a door into daylight, driven by a frame counter (rather
+	// than a signal) so a capture script can land on either phase by
+	// timing alone. Still scrolls under --motion via s_nFrame like every
+	// other scene here.
+	if ( !strcmp( pScene->pszName, "flash" ) )
+	{
+		const long nPhase = ( s_nFrame / ( s_nFlashPeriod > 0 ? s_nFlashPeriod : 1 ) ) % 2;
+		if ( nPhase == 0 )
+		{
+			PaintSpecial( pSurface, 5 );   // the silhouette frame
+		}
+		else
+		{
+			FillRect( pSurface, 0, 0, W, H, 230 );
+			const int s40 = (int)( 40 * sx ), s40h = (int)( 40 * sy );
+			FillRect( pSurface, (int)( 300 * sx ), (int)( 300 * sy ), s40, s40h, 200 );
+			FillRect( pSurface, (int)( 900 * sx ), (int)( 400 * sy ), s40, s40h, 200 );
+		}
+		return;
+	}
+
+	// capture (NEW 2026-09-14, plan 7.1): a real PNG (--image PATH),
+	// stretched to fill the window -- the "shown at native size, scaled
+	// like the others" every synthetic scene above already gets (each is
+	// authored at 1280x720 and scaled by sx/sy to the actual window). A
+	// still: it never moves under --motion. Falls back to a flat mid-grey
+	// with a one-time stderr note if no --image was given -- the script's
+	// own check on the result would then fail loudly rather than this
+	// client silently doing nothing.
+	if ( !strcmp( pScene->pszName, "capture" ) )
+	{
+		if ( s_pCaptureSurface )
+			SDL_BlitScaled( s_pCaptureSurface, NULL, pSurface, NULL );
+		else
+			FillRect( pSurface, 0, 0, W, H, 128 );
+		return;
+	}
+
 	for ( int i = 0; i < 5; i++ )
 	{
 		const int y0 = i * H / 5, y1 = ( i + 1 ) * H / 5;
@@ -310,7 +449,8 @@ int main( int argc, char **argv )
 {
 	int nW = 1280, nH = 720, nSeconds = 600;
 	const char *pszPidFile = NULL;   // so the script can SIGUSR1 exactly this process
-	const Scene *pList[12];
+	const char *pszImagePath = NULL;   // --image PATH
+	const Scene *pList[16];
 	int nList = 0;
 
 	for ( int i = 1; i < argc; i++ )
@@ -318,10 +458,10 @@ int main( int argc, char **argv )
 		if ( !strcmp( argv[i], "--scenes" ) && i + 1 < argc )
 		{
 			char *psz = strdup( argv[++i] );
-			for ( char *tok = strtok( psz, "," ); tok && nList < 12; tok = strtok( NULL, "," ) )
+			for ( char *tok = strtok( psz, "," ); tok && nList < 16; tok = strtok( NULL, "," ) )
 			{
 				const Scene *p = FindScene( tok );
-				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|blackout|halfsplit|halobox|haloinv|colors)\n", tok ); return 2; }
+				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|blackout|halfsplit|halobox|haloinv|colors|silhouette|flash|skyfore|capture)\n", tok ); return 2; }
 				pList[nList++] = p;
 			}
 			free( psz );
@@ -334,14 +474,54 @@ int main( int argc, char **argv )
 		else if ( !strcmp( argv[i], "--lights" ) && i + 1 < argc )  s_flLights = (float)atof( argv[++i] );
 		else if ( !strcmp( argv[i], "--split" ) && i + 1 < argc )   s_flSplit = (float)atof( argv[++i] );
 		else if ( !strcmp( argv[i], "--periodic" ) )                 s_bPeriodic = 1;
+		else if ( !strcmp( argv[i], "--flash" ) && i + 1 < argc )   s_nFlashPeriod = atoi( argv[++i] );
+		else if ( !strcmp( argv[i], "--image" ) && i + 1 < argc )   pszImagePath = argv[++i];
 		else
 		{
-			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,blackout,halfsplit,halobox,haloinv,colors] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
+			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,blackout,halfsplit,halobox,haloinv,colors,silhouette,flash,skyfore,capture] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic] [--flash N] [--image PATH]\n" );
 			return 2;
 		}
 	}
 	if ( nList == 0 )
 		pList[nList++] = &kScenes[0];
+
+	// --image PATH (plan 7.1's `capture` scene): decode once at startup
+	// into an SDL_Surface Paint() blits every frame -- a still, never
+	// re-decoded, exactly like every other scene's content here is fixed
+	// once painted. stb_image always returns tightly-packed 8-bit
+	// channels, so an RGB (3) or RGBA (4) load maps directly onto an SDL
+	// surface with a matching mask; anything else (a paletted/grey PNG)
+	// is asked to be widened to RGB.
+	if ( pszImagePath )
+	{
+		int nImgW = 0, nImgH = 0, nImgChannels = 0;
+		unsigned char *pPixels = stbi_load( pszImagePath, &nImgW, &nImgH, &nImgChannels, 3 );
+		if ( !pPixels )
+		{
+			fprintf( stderr, "effects_scene_client: --image '%s': %s\n", pszImagePath, stbi_failure_reason() );
+			return 2;
+		}
+		SDL_Surface *pLoaded = SDL_CreateRGBSurfaceFrom( pPixels, nImgW, nImgH, 24, nImgW * 3,
+			0x000000FFu, 0x0000FF00u, 0x00FF0000u, 0 );
+		if ( !pLoaded )
+		{
+			fprintf( stderr, "effects_scene_client: SDL_CreateRGBSurfaceFrom: %s\n", SDL_GetError() );
+			stbi_image_free( pPixels );
+			return 2;
+		}
+		// Convert to a format the surface owns a copy of (SDL_BlitScaled
+		// needs a real format, not the borrowed byte layout above), then
+		// free stb's buffer -- pLoaded itself does not own pPixels.
+		s_pCaptureSurface = SDL_ConvertSurfaceFormat( pLoaded, SDL_PIXELFORMAT_RGB24, 0 );
+		SDL_FreeSurface( pLoaded );
+		stbi_image_free( pPixels );
+		if ( !s_pCaptureSurface )
+		{
+			fprintf( stderr, "effects_scene_client: SDL_ConvertSurfaceFormat: %s\n", SDL_GetError() );
+			return 2;
+		}
+		fprintf( stderr, "effects_scene_client: loaded '%s' (%dx%d)\n", pszImagePath, nImgW, nImgH );
+	}
 
 	setvbuf( stdout, NULL, _IOLBF, 0 );
 	signal( SIGUSR1, OnUsr1 );

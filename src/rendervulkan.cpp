@@ -61,6 +61,8 @@
 #include "cs_effects_v2_down.h"
 #include "cs_effects_v2_box1.h"
 #include "cs_effects_v2_box2.h"
+#include "cs_effects_v2_box1_fine.h"
+#include "cs_effects_v2_box2_fine.h"
 #include "shaders/effects_curve.h"
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_nis.h"
@@ -447,6 +449,27 @@ bool CVulkanDevice::selectPhysDev(VkSurfaceKHR surface)
 	VkPhysicalDeviceProperties props;
 	vk.GetPhysicalDeviceProperties( m_physDev, &props );
 	vk_log.infof( "selecting physical device '%s': queue family %x (general queue family %x)", props.deviceName, m_queueFamily, m_generalQueueFamily );
+
+	// GPU TIMESTAMPS (NEW 2026-09-14, adaptive-brightness-v2-plan.md Stage
+	// 0): both halves of the guard the plan asks for -- the device-wide
+	// timestampComputeAndGraphics bit AND the CHOSEN queue family's own
+	// timestampValidBits (a compute-only queue family is not guaranteed the
+	// same validBits a graphics-capable one gets) -- re-queried here rather
+	// than reused from the selection loop above because that loop's
+	// queueFamilyProperties vector is local to each candidate device and
+	// the loop may keep iterating after finding one that matches.
+	m_flTimestampPeriodNs = props.limits.timestampPeriod;
+	m_bTimestampsSupported = false;
+	if ( props.limits.timestampComputeAndGraphics && m_flTimestampPeriodNs > 0.0f )
+	{
+		uint32_t uQueueFamilyCount = 0;
+		vk.GetPhysicalDeviceQueueFamilyProperties( m_physDev, &uQueueFamilyCount, nullptr );
+		std::vector<VkQueueFamilyProperties> queueFamilyProperties( uQueueFamilyCount );
+		vk.GetPhysicalDeviceQueueFamilyProperties( m_physDev, &uQueueFamilyCount, queueFamilyProperties.data() );
+		if ( m_queueFamily < uQueueFamilyCount && queueFamilyProperties[ m_queueFamily ].timestampValidBits > 0 )
+			m_bTimestampsSupported = true;
+	}
+	vk_log.infof( "GPU timestamps: %s (period %.3f ns)", m_bTimestampsSupported ? "supported" : "unsupported", m_flTimestampPeriodNs );
 
 	return true;
 }
@@ -1015,6 +1038,8 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_V2_DOWN, cs_effects_v2_down);
 	SHADER(EFFECTS_V2_BOX1, cs_effects_v2_box1);
 	SHADER(EFFECTS_V2_BOX2, cs_effects_v2_box2);
+	SHADER(EFFECTS_V2_BOX1_FINE, cs_effects_v2_box1_fine);
+	SHADER(EFFECTS_V2_BOX2_FINE, cs_effects_v2_box2_fine);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1278,6 +1303,9 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	SHADER(EFFECTS_V2_DOWN, 1, 1, 1);
 	SHADER(EFFECTS_V2_BOX1, 1, 1, 1);
 	SHADER(EFFECTS_V2_BOX2, 1, 1, 1);
+	// Stage 3 Clarity's two (2026-09-14), same reason.
+	SHADER(EFFECTS_V2_BOX1_FINE, 1, 1, 1);
+	SHADER(EFFECTS_V2_BOX2_FINE, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -3808,6 +3836,17 @@ static bool update_effects_v2_images( uint32_t uSrcWidth, uint32_t uSrcHeight )
 	                                    uSrcWidth, uSrcHeight, kEffectsV2Down, "v2" );
 }
 
+// Stage 3 Clarity's own pair (NEW 2026-09-14) -- same reduction, same
+// allocator, at the SAME size as effectsV2A/B (both pairs sample the same
+// quarter-res Y4 grid, just at two different box radii). Called only while
+// Clarity > 0 -- see vulkan_composite()'s bV2Clarity -- so "off" allocates
+// nothing extra and dispatches nothing extra.
+static bool update_effects_v2_fine_images( uint32_t uSrcWidth, uint32_t uSrcHeight )
+{
+	return update_effects_scratch_pair( g_output.effectsV2FineA, g_output.effectsV2FineB,
+	                                    uSrcWidth, uSrcHeight, kEffectsV2Down, "v2 fine" );
+}
+
 // The zoom's projection texture (FrameInfo_t::Zoom_t), at the projection's
 // own on-screen size. ABGR8888 for the reason Bloom's buffers are; pure
 // scratch, every texel rewritten per zoomed frame (the shape's outside is
@@ -3885,6 +3924,158 @@ static bool update_effects_history( bool &bCreated )
 	return true;
 }
 
+
+// ---- GPU timestamps around the effects pre-pass (NEW 2026-09-14) ----------
+//
+// adaptive-brightness-v2-plan.md Stage 0: every cost figure in
+// shader-effects.md has been an ESTIMATE from tap counts, never a
+// measurement, because vulkan_composite() had no GPU timing at all. This adds
+// exactly one vkCmdWriteTimestamp pair, bracketing the WHOLE pre-pass block
+// (measure, Bloom's three dispatches, V2's guided-filter passes, the
+// per-pixel apply), read back through the `effects_timing` ConCommand and the
+// Shaders area's Diagnostics "pre-pass" fact.
+//
+// FOUR queries, not two: a double-buffered pair of pairs (indices 0,1 one
+// frame, 2,3 the next), so the CPU's readback of "last frame's" pair never
+// races the GPU's reset+write of "this frame's" pair on the SAME two query
+// slots -- without VK_EXT_host_query_reset, resetting/writing a query while
+// another submission's read of it may still be in flight is undefined by the
+// spec (a query pool has no equivalent of a texture's execution-dependency
+// barrier). A full frame boundary between "written" and "read" is what makes
+// the read genuinely non-blocking: by the time this frame's collect() call
+// runs, the pair it is reading is from a submission at least one whole frame
+// old, essentially always complete.
+static constexpr uint32_t kEffectsTimerHistory = 120;   // ~2s at 60fps
+static std::atomic<float> g_flEffectsGpuUs{ -1.0f };     // -1 = "no measurement yet / unsupported"
+static float    s_flEffectsGpuUsHistory[ kEffectsTimerHistory ] = {};
+static uint32_t s_nEffectsTimerHistoryCount = 0;   // render thread only
+static uint32_t s_nEffectsTimerWriteIdx = 0;       // render thread only
+static uint32_t s_nEffectsTimerFrame = 0;          // render thread only -- which pair is "this frame's"
+
+static bool update_effects_gpu_timer()
+{
+	if ( g_output.effectsTimerPool != VK_NULL_HANDLE )
+		return true;
+	if ( !g_device.supportsTimestamps() )
+		return false;
+
+	VkQueryPoolCreateInfo createInfo = {
+		.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+		.queryType = VK_QUERY_TYPE_TIMESTAMP,
+		.queryCount = 4,
+	};
+	VkResult res = g_device.vk.CreateQueryPool( g_device.device(), &createInfo, nullptr, &g_output.effectsTimerPool );
+	if ( res != VK_SUCCESS )
+	{
+		vk_log.errorf( "failed to create the effects pre-pass GPU timer query pool" );
+		g_output.effectsTimerPool = VK_NULL_HANDLE;
+		return false;
+	}
+
+	// Every query must be reset before its first vkCmdWriteTimestamp (and
+	// reading an unreset query without VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
+	// is undefined, not just "not ready") -- reset all four right here, once,
+	// on a throwaway command buffer, rather than special-casing "the first
+	// couple of frames" in effects_gpu_timer_collect()'s reader.
+	auto cmdBuffer = g_device.commandBuffer();
+	g_device.vk.CmdResetQueryPool( cmdBuffer->rawBuffer(), g_output.effectsTimerPool, 0, 4 );
+	g_device.submit( std::move( cmdBuffer ) );
+	return true;
+}
+
+// Reads back the OTHER pair from the one this frame is about to (re)write --
+// i.e. last time's -- with no VK_QUERY_RESULT_WAIT_BIT, so a not-yet-signalled
+// result (VK_NOT_READY, or any other non-VK_SUCCESS) just keeps the previous
+// reading rather than stalling. Called from effects_gpu_timer_begin(), before
+// this frame's reset, so it can never observe its own frame's in-flight pair.
+static void effects_gpu_timer_collect()
+{
+	if ( g_output.effectsTimerPool == VK_NULL_HANDLE )
+		return;
+
+	const uint32_t uPrevPair = ( ( s_nEffectsTimerFrame + 1u ) % 2u ) * 2u;
+	uint64_t results[2] = { 0, 0 };
+	VkResult res = g_device.vk.GetQueryPoolResults(
+		g_device.device(), g_output.effectsTimerPool, uPrevPair, 2,
+		sizeof( results ), results, sizeof( uint64_t ), VK_QUERY_RESULT_64_BIT );
+	if ( res != VK_SUCCESS )   // VK_NOT_READY (first two frames) or an error
+		return;
+
+	const double flPeriodNs = double( g_device.timestampPeriodNs() );
+	const float flUs = float( double( results[1] - results[0] ) * flPeriodNs / 1000.0 );
+	// Sanity, not a real bound: a wrapped/torn counter pair (a wrapped
+	// 64-bit tick counter is theoretical, not measured) must not become a
+	// silent negative-looking spike in the history the ConCommand prints.
+	if ( flUs < 0.0f || flUs > 1'000'000.0f )
+		return;
+
+	g_flEffectsGpuUs.store( flUs, std::memory_order_relaxed );
+	s_flEffectsGpuUsHistory[ s_nEffectsTimerWriteIdx % kEffectsTimerHistory ] = flUs;
+	s_nEffectsTimerWriteIdx++;
+	s_nEffectsTimerHistoryCount = std::min( s_nEffectsTimerHistoryCount + 1u, kEffectsTimerHistory );
+}
+
+// Called once, right after slot 0 is bound and before the measure dispatch --
+// i.e. the very top of the pre-pass block.
+static void effects_gpu_timer_begin( CVulkanCmdBuffer *cmdBuffer )
+{
+	if ( !update_effects_gpu_timer() )
+		return;
+	effects_gpu_timer_collect();
+
+	const uint32_t uPair = ( s_nEffectsTimerFrame % 2u ) * 2u;
+	g_device.vk.CmdResetQueryPool( cmdBuffer->rawBuffer(), g_output.effectsTimerPool, uPair, 2 );
+	g_device.vk.CmdWriteTimestamp( cmdBuffer->rawBuffer(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g_output.effectsTimerPool, uPair );
+}
+
+// Called once, right after the per-pixel apply dispatch -- i.e. the very
+// bottom of the pre-pass block, before the sampler slots are cleared.
+static void effects_gpu_timer_end( CVulkanCmdBuffer *cmdBuffer )
+{
+	if ( g_output.effectsTimerPool == VK_NULL_HANDLE )
+		return;
+	const uint32_t uPair = ( s_nEffectsTimerFrame % 2u ) * 2u;
+	g_device.vk.CmdWriteTimestamp( cmdBuffer->rawBuffer(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_output.effectsTimerPool, uPair + 1 );
+	s_nEffectsTimerFrame++;
+}
+
+// The Shaders area's Diagnostics/Pipeline fact reads this (PanelShaders.cpp);
+// -1.0 means "no measurement yet, or the device does not support
+// timestamps" -- the caller prints "unmeasured", never a bogus 0.00 ms.
+float vulkan_effects_gpu_us()
+{
+	return g_flEffectsGpuUs.load( std::memory_order_relaxed );
+}
+
+static gamescope::ConCommand cc_effects_timing(
+	"effects_timing",
+	"Print the effects pre-pass's measured GPU time: the last reading, and the mean/min/max "
+	"over whatever history is available (up to the last 120 frames it ran). Unsupported on "
+	"this device (no GPU timestamps) prints that instead of a number.",
+	[]( std::span<std::string_view> args )
+	{
+		if ( !g_device.supportsTimestamps() )
+		{
+			console_log.infof( "effects_timing: GPU timestamps are not supported on this device" );
+			return;
+		}
+		const float flLast = g_flEffectsGpuUs.load( std::memory_order_relaxed );
+		if ( flLast < 0.0f || s_nEffectsTimerHistoryCount == 0 )
+		{
+			console_log.infof( "effects_timing: no measurement yet -- the pre-pass hasn't run" );
+			return;
+		}
+		float flSum = 0.0f, flMin = s_flEffectsGpuUsHistory[0], flMax = s_flEffectsGpuUsHistory[0];
+		for ( uint32_t i = 0; i < s_nEffectsTimerHistoryCount; i++ )
+		{
+			const float v = s_flEffectsGpuUsHistory[i];
+			flSum += v;
+			flMin = std::min( flMin, v );
+			flMax = std::max( flMax, v );
+		}
+		console_log.infof( "effects_timing: last=%.1fus mean=%.1fus min=%.1fus max=%.1fus (n=%u)",
+			flLast, flSum / float( s_nEffectsTimerHistoryCount ), flMin, flMax, s_nEffectsTimerHistoryCount );
+	} );
 
 // ---- `effects_ab_log` -- Adaptive Brightness's per-frame debug readback ----
 //
@@ -4747,6 +4938,11 @@ struct EffectsPushData_t
 	float    u_v2Radius;
 	uint32_t u_v2Mode;
 	uint32_t u_v2Knee;
+	// Stage 3 Clarity (NEW 2026-09-14) -- see effects_common.h's own comment
+	// on these two fields; must stay LAST and in this order, mirroring the
+	// GLSL side's own append.
+	float    u_v2RadiusFine;
+	float    u_v2Clarity;
 
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
@@ -4901,6 +5097,20 @@ struct EffectsPushData_t
 		u_v2Radius = bAdaptiveV2
 			? std::clamp( std::round( flScalePixels / 4.0f ), 2.0f, 12.0f )
 			: 4.0f;
+
+		// STAGE 3 CLARITY (NEW 2026-09-14, plan section 4.9): the finer
+		// pair's radius, r2 = r/4, floored at 1 texel (never 0 -- a 0-radius
+		// box is the single texel itself, which is a valid, if degenerate,
+		// "no smoothing at all" filter, not a divide-by-zero, but 1 keeps
+		// the fine pass a genuine box rather than a same-texel no-op).
+		// Masked to 0 the same way every other field here is when the
+		// caller has already decided (in vulkan_composite(), BEFORE this
+		// constructor runs) that the fine buffers could not be allocated or
+		// the slider is at 0 -- s.flV2Clarity already carries that decision.
+		u_v2RadiusFine = bAdaptiveV2
+			? std::max( std::round( u_v2Radius / 4.0f ), 1.0f )
+			: 1.0f;
+		u_v2Clarity = bAdaptiveV2 ? std::clamp( s.flV2Clarity, 0.0f, 1.0f ) : 0.0f;
 	}
 };
 
@@ -5370,6 +5580,16 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						&& update_effects_v2_images( uWidth, uHeight );
 					state.bAdaptiveV2 = bV2;
 
+					// STAGE 3 CLARITY (NEW 2026-09-14): decided the same way,
+					// for the same reason -- the uniform must say what the
+					// frame actually did, so a failed allocation (or the
+					// slider genuinely at 0) masks flV2Clarity to 0 BEFORE
+					// EffectsPushData_t's constructor runs, not after.
+					const bool bV2Clarity = bV2 && state.flV2Clarity > 1e-4f
+						&& update_effects_v2_fine_images( uWidth, uHeight );
+					if ( !bV2Clarity )
+						state.flV2Clarity = 0.0f;
+
 					// One upload for every dispatch this block records: the
 					// measure pass and the per-pixel pass (and, on the frames
 					// it runs, V2's three guided-filter passes) all read the
@@ -5386,6 +5606,15 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					cmdBuffer->setTextureSrgb( 0, true );
 					cmdBuffer->setSamplerUnnormalized( 0, true );
 					cmdBuffer->setSamplerNearest( 0, true );
+
+					// GPU TIMESTAMP (NEW 2026-09-14, Stage 0): brackets the
+					// WHOLE pre-pass -- measure, Bloom, V2's guided filter
+					// (Clarity's fine pair included), and the per-pixel
+					// apply below -- with effects_gpu_timer_end() at the
+					// other end, right before the sampler slots are
+					// cleared. No-op if the device does not support
+					// timestamps.
+					effects_gpu_timer_begin( cmdBuffer.get() );
 
 					if ( bHaveHistory )
 					{
@@ -5592,14 +5821,56 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						cmdBuffer->bindTarget( g_output.effectsV2B );
 						cmdBuffer->dispatch( uGroupsX, uGroupsY );
 
+						// STAGE 3 CLARITY'S FINE BOX1 (NEW 2026-09-14): reads
+						// the SAME Y4 the coarse box1 just read -- v2A is
+						// still untouched by anything downstream at this
+						// point (box1 wrote to v2B, not v2A), so this MUST
+						// run here, before the coarse box2 dispatch below
+						// overwrites v2A with (a, b) and destroys Y4. See
+						// update_effects_v2_fine_images()'s own comment for
+						// why this is a second buffer pair, not a widened
+						// v2A/B.
+						if ( bV2Clarity )
+						{
+							BindV2Source( g_output.effectsV2A );
+							cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_V2_BOX1_FINE ) );
+							cmdBuffer->bindTarget( g_output.effectsV2FineB );
+							cmdBuffer->dispatch( uGroupsX, uGroupsY );
+						}
+
 						BindV2Source( g_output.effectsV2B );
 						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_V2_BOX2 ) );
 						cmdBuffer->bindTarget( g_output.effectsV2A );
 						cmdBuffer->dispatch( uGroupsX, uGroupsY );
 
+						// ... and the fine pair's own second box, smoothing
+						// what box1_fine wrote -- independent of the coarse
+						// box2 above (different source, different target),
+						// so the order between these two is a formality.
+						if ( bV2Clarity )
+						{
+							BindV2Source( g_output.effectsV2FineB );
+							cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_V2_BOX2_FINE ) );
+							cmdBuffer->bindTarget( g_output.effectsV2FineA );
+							cmdBuffer->dispatch( uGroupsX, uGroupsY );
+						}
+
 						// ... and leave the finished coefficients bound for
-						// the per-pixel pass below.
+						// the per-pixel pass below: the coarse pair on its
+						// usual slot, the fine pair (if built this frame) on
+						// its own second slot -- cs_effects_layer0.comp reads
+						// BOTH at once (v2_coef_sample() and
+						// v2_coef_sample_fine()), unlike every other ping-
+						// pong pair here, which only ever needs its last
+						// write.
 						BindV2Source( g_output.effectsV2A );
+						if ( bV2Clarity )
+						{
+							cmdBuffer->bindTexture( VKR_EFFECTS_V2_FINE_SLOT, g_output.effectsV2FineA );
+							cmdBuffer->setTextureSrgb( VKR_EFFECTS_V2_FINE_SLOT, true );
+							cmdBuffer->setSamplerUnnormalized( VKR_EFFECTS_V2_FINE_SLOT, true );
+							cmdBuffer->setSamplerNearest( VKR_EFFECTS_V2_FINE_SLOT, true );
+						}
 					}
 
 					cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
@@ -5608,6 +5879,10 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					const int nPixelsPerGroup = 8;
 					cmdBuffer->dispatch( div_roundup( uWidth, nPixelsPerGroup ), div_roundup( uHeight, nPixelsPerGroup ) );
 
+					// GPU TIMESTAMP (NEW 2026-09-14, Stage 0): the other
+					// half of the pair opened above.
+					effects_gpu_timer_end( cmdBuffer.get() );
+
 					// Leave slots 1 and 2 clear for the FSR/NIS/blit
 					// dispatches that follow; they bind layers 0..n-1 and
 					// would otherwise carry a stray history or glow
@@ -5615,6 +5890,7 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
 					cmdBuffer->bindTexture( VKR_EFFECTS_BLOOM_SLOT, nullptr );
 					cmdBuffer->bindTexture( VKR_EFFECTS_V2_SLOT, nullptr );
+					cmdBuffer->bindTexture( VKR_EFFECTS_V2_FINE_SLOT, nullptr );
 
 					// `effects_ab_log` debug readback (see the command above).
 					if ( bHaveHistory )
