@@ -1905,7 +1905,12 @@ namespace gamescope::ui::shell
 		void DrawRail( const Rect &rc, bool bIcons )
 		{
 			Fill( rc, Col( Role::SurfaceRail ) );
-			VLine( rc.x1 - Hairline(), rc.y0, rc.y1, Col( Role::LineRegion ) );
+			// The divider is drawn at the BOTTOM of this function now, not
+			// here -- see the comment down there (2026-09-14) for why: an
+			// active row's accent band used to paint over this exact column
+			// after the line was already down, which is what made the
+			// selected row's divider read as "coloured according to the
+			// backdrop" (the user's report).
 
 			const float flItemH = Px( 40.0f );        // index.html's .ri
 			const float flPadX  = Px( 16.0f );
@@ -2020,9 +2025,22 @@ namespace gamescope::ui::shell
 				const bool bHovered = ImGui::IsItemHovered();
 				ImGui::PopID();
 
+				// Both washes below stop one Hairline() short of rc.x1 rather
+				// than filling the item's full width: that column is the
+				// divider's, drawn once at the very end of this function over
+				// the PLAIN rail background. Reaching the wash into it would
+				// leave a translucent-over-translucent result that depends on
+				// which colour sat underneath -- accent-tinted for the
+				// selected row, plain for every other -- which is what made
+				// the divider "coloured according to the backdrop" beside a
+				// selected entry (the user's report). Insetting the wash
+				// keeps that backdrop the same rail colour everywhere, so the
+				// one draw of the divider composites identically regardless
+				// of which row, if any, is selected or hovered.
+				const Rect rcWash { rcItem.x0, rcItem.y0, rc.x1 - Hairline(), rcItem.y1 };
 				if ( bActive )
 				{
-					Fill( rcItem, Accent( 0.10f ) );
+					Fill( rcWash, Accent( 0.10f ) );
 					// The 2px accent left edge "survives the icon collapse"
 					// (SPEC §8.1) -- so it is drawn from the item's rect,
 					// which both rail widths share, and never from a
@@ -2031,7 +2049,7 @@ namespace gamescope::ui::shell
 				}
 				else if ( bHovered )
 				{
-					Fill( rcItem, IM_COL32( 255, 255, 255, 13 ) );
+					Fill( rcWash, IM_COL32( 255, 255, 255, 13 ) );
 				}
 
 				// SPEC §8.0's icon set (D20.1). The rail drew the area
@@ -2079,6 +2097,17 @@ namespace gamescope::ui::shell
 			} );
 
 			ImGui::PopClipRect();
+
+			// The rail/sheet divider (moved here 2026-09-14 -- see the
+			// comment at the top of this function). Drawn AFTER every row's
+			// own fill (the active row's Accent(0.10f) band and the hovered
+			// row's wash both span the row's full width, this column
+			// included), so the divider is always the top-most thing at this
+			// x regardless of which row -- if any -- is selected or hovered.
+			// It does not need the clip rect above: it is not part of the
+			// scrolling item list, and its own extent (rc.y0..rc.y1) never
+			// depends on scroll.
+			VLine( rc.x1 - Hairline(), rc.y0, rc.y1, Col( Role::LineRegion ) );
 
 			// A scrollable rail says so: a thumb proportional to the visible
 			// fraction, on the rail's own divider line. Without it the only
@@ -4775,8 +4804,28 @@ namespace gamescope::ui::shell
 				ImGuiWindowFlags_NoScrollWithMouse );
 			if ( bOpen )
 			{
-				VLine( regions.rcInspector.x0, regions.rcInspector.y0, regions.rcInspector.y1,
-				       bDrawer ? Col( Role::AccentBase ) : Col( Role::LineRegion ) );
+				// The sheet/Inspector divider (2026-09-14 -- the user's report:
+				// "no separator line in the click GUI between the options and
+				// the inspector rail"). It IS one line, drawn once, split in
+				// two around the mode strip's own bottom rule rather than run
+				// as a single rect through it -- DrawModeStrip/
+				// DrawContentModeStrip both paint an HLine across this exact
+				// row (Col(Role::LineRegion), same translucent white), and a
+				// vertical rect spanning straight through it would composite
+				// that one row with itself: two 22%-white draws stacked read
+				// as ~39%, a visibly brighter dot exactly where the two rules
+				// cross. Stopping the first segment one row above the rule and
+				// resuming the second one row below it means every pixel of
+				// the frame is painted by exactly one draw call -- the same
+				// "adjacent, never overlapping" rule DrawRail's own right-edge
+				// line already uses against the slab bar's bottom rule
+				// (issue #96's fix), applied here to a mid-column T-junction
+				// instead of a corner.
+				const ImU32 colDivider = bDrawer ? Col( Role::AccentBase ) : Col( Role::LineRegion );
+				VLine( regions.rcInspector.x0, regions.rcInspector.y0,
+				       regions.rcModeStrip.y1 - Hairline(), colDivider );
+				VLine( regions.rcInspector.x0, regions.rcModeStrip.y1,
+				       regions.rcInspector.y1, colDivider );
 
 				// P6. A content area whose rows live here shows LINE/FILTER
 				// instead of CONFIGURE/DETAILS -- see DrawContentModeStrip.
@@ -4789,6 +4838,19 @@ namespace gamescope::ui::shell
 					DrawModeStrip( regions.rcModeStrip, pEntry );
 
 				ImGui::SetCursorScreenPos( ImVec2( regions.rcInspectorBody.x0, regions.rcInspectorBody.y0 ) );
+				// ChildBg is still the fill pushed above for "##insp" --
+				// PushStyleColor's scope is the style stack, not the BeginChild
+				// call it sat next to, so without this override "##inspbody"
+				// silently re-painted the SAME translucent fill a second time
+				// over its own rect (its draw list runs after "##insp"'s own,
+				// being the later-begun nested child). That is what was
+				// erasing the new divider above for the entire body height --
+				// the divider is drawn once, on "##insp"'s list, then
+				// "##inspbody" repainted straight over that whole column the
+				// instant it opened. One fill for the region, drawn once, is
+				// what "a real region of the slab" (the comment above) meant;
+				// this restores that rather than adding a second one.
+				ImGui::PushStyleColor( ImGuiCol_ChildBg, IM_COL32( 0, 0, 0, 0 ) );
 				if ( ImGui::BeginChild( "##inspbody",
 					ImVec2( regions.rcInspectorBody.Width(), regions.rcInspectorBody.Height() ),
 					ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
@@ -4850,6 +4912,7 @@ namespace gamescope::ui::shell
 						view.ContentHeight( flBottom, Px( tok::kInspectorPad ) ) ) );
 				}
 				ImGui::EndChild();
+				ImGui::PopStyleColor();   // the transparent "##inspbody" ChildBg pushed above
 			}
 			ImGui::EndChild();
 			ImGui::PopStyleVar();

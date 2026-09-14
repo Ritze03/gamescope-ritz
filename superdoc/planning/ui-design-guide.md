@@ -712,3 +712,68 @@ sites (the slab's `ImGuiCol_WindowBg` and the Inspector's `ImGuiCol_ChildBg`) no
 Pinned in `test_overlay_atoms.cpp` ("colors: WithAlpha..." / "colors: window_opacity
 1.0 renders the slab fully opaque").
 
+### The frame rule: every rule pixel is drawn exactly once (2026-09-14)
+
+The user's report, verbatim: "there is no separator line in the click GUI between the
+options and the inspector rail. Add a separator line and also make sure that on the
+spots where it intersects, the line doesn't draw on top of another line because right
+now the color is basically doubled since it's transparent. Also, when selecting
+something in the left tab selector, the right separator line is colored according to
+the backdrop."
+
+**The rule, going forward: every hairline/region-boundary pixel is painted by exactly
+one draw call.** `Role::Line`/`Role::LineRegion` are translucent white (10%/22%) *by
+design*, so they can sit over any surface colour in the kit -- but that same
+translucency means two of them stacked on the same pixel do not "still look like a
+line", they composite to a visibly different, brighter tone. The existing
+`DrawRail()`/`DrawSheetHead()` boundary (issue #96, pre-dates this fork's own history
+in this doc) already followed the discipline of keeping adjacent rules on disjoint
+pixel columns/rows rather than double-drawing a corner; 2026-09-14 extended the same
+discipline to the sheet/Inspector divider and fixed two ways it was breaking it:
+
+- **The divider was invisible almost everywhere it mattered.** `DrawInspector()`
+  pushes one `ImGuiCol_ChildBg` for the whole Inspector column (the docked fill --
+  see the transparency section above) and does not pop it until after BOTH the outer
+  `"##insp"` child AND the nested, scrollable `"##inspbody"` child have closed. Since
+  `PushStyleColor`'s scope is the style stack, not the `BeginChild` call it sat next
+  to, `"##inspbody"` silently re-painted the *same* translucent fill a second time
+  over its own rect -- which is most of the column's height -- erasing whatever had
+  been drawn on the parent's draw list first, divider included. Fixed by pushing a
+  transparent `ChildBg` around `"##inspbody"` specifically, so the region gets its one
+  intended fill and nothing repaints over it.
+- **The divider crossed the mode strip's own bottom rule.** Both `DrawModeStrip()` and
+  `DrawContentModeStrip()` draw an `HLine` across the Inspector's full width at the
+  strip's bottom edge, in the same `Role::LineRegion` the divider itself uses. A single
+  vertical rect run through that row double-composited with it. Fixed by splitting the
+  vertical into two segments -- one stopping a Hairline() above the rule, one resuming
+  a Hairline() below it -- so the rule supplies that one row's pixel and the two
+  segments supply the rest.
+- **The rail's own divider took the selected row's accent tint.** `DrawRail()` filled
+  each row's accent/hover wash across the row's *full* width, including the column the
+  divider already occupied, and did so *after* the divider had been drawn for that
+  frame -- so a selected row's `Accent(0.10f)` band painted over the line, and it read
+  as "coloured by the backdrop" exactly where a row was selected. Fixed two ways
+  together: the row washes now stop one `Hairline()` short of the rail's right edge
+  (never touching the divider's column at all), and the divider itself moved to draw
+  *after* every row in the walk, so it is the top-most thing at that x regardless.
+
+**Why this approach and not baking every rule as a pre-composited opaque colour:** the
+opaque-colour approach (draw the "final blended" tone directly, so a repeat draw is a
+harmless no-op) would also fix any future double-draw, but it means a rule's colour has
+to be authored per background it can appear over -- rail bg, sheet bg, Inspector bg,
+whatever a future region adds -- multiplying one token into several. The
+"never-overlapping segments" approach keeps the single translucent token
+(`Role::Line`/`Role::LineRegion`) working over any surface, matches the discipline the
+rail/sheet boundary already established (issue #96), and is what this pass used. A
+future rule that crosses another one only needs to ask the same question this fix did:
+which of the two pixel ranges yields, so the shared cell is painted once.
+
+Verified headless (`build-release/verify-shots/shell-separators-2026-09-14/`):
+before/after screenshots and pixel samples at every intersection named above, plus the
+1280x720 narrow-slab case. `Role::LineRegion` blended once over the Inspector's own
+background reads `(56,60,63)`; before the fix, the mode-strip intersection read
+`(100,103,105)` (visibly brighter, the doubled composite) and the divider's mid-run
+value was `(0,5,9)` (the plain background -- no line drawn at all, the ChildBg-leak
+bug). After the fix both read `(56,60,63)`, matching the plain single-draw value
+everywhere else on the same row.
+
