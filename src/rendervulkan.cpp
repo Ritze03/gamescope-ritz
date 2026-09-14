@@ -58,6 +58,9 @@
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
+#include "cs_effects_v2_down.h"
+#include "cs_effects_v2_box1.h"
+#include "cs_effects_v2_box2.h"
 #include "shaders/effects_curve.h"
 #include "cs_gaussian_blur_horizontal.h"
 #include "cs_nis.h"
@@ -1009,6 +1012,9 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_BLOOM_BLURH, cs_effects_bloom_blurh);
 	SHADER(EFFECTS_BLOOM_BLURV, cs_effects_bloom_blurv);
 	SHADER(ZOOM, cs_zoom);
+	SHADER(EFFECTS_V2_DOWN, cs_effects_v2_down);
+	SHADER(EFFECTS_V2_BOX1, cs_effects_v2_box1);
+	SHADER(EFFECTS_V2_BOX2, cs_effects_v2_box2);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1266,6 +1272,12 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	// by a keypress mid-game, the one moment a pipeline compile must not
 	// happen on the render thread.
 	SHADER(ZOOM, 1, 1, 1);
+	// Adaptive Brightness V2's three (2026-09-14), precompiled for the same
+	// reason Bloom's are: switching it on mid-game must not compile
+	// pipelines on the render thread.
+	SHADER(EFFECTS_V2_DOWN, 1, 1, 1);
+	SHADER(EFFECTS_V2_BOX1, 1, 1, 1);
+	SHADER(EFFECTS_V2_BOX2, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -3785,6 +3797,17 @@ static bool update_effects_bloom_images( uint32_t uSrcWidth, uint32_t uSrcHeight
 	                                    uSrcWidth, uSrcHeight, kEffectsBloomDown, "bloom" );
 }
 
+// Adaptive Brightness V2's guided-filter pair (NEW 2026-09-14) -- the same
+// shared allocator, at 1/4 of the base layer's size (effects_common.h's
+// v2_coef_sample() divisor; plan section 4.5's "quarter resolution").
+static constexpr uint32_t kEffectsV2Down = 4;
+
+static bool update_effects_v2_images( uint32_t uSrcWidth, uint32_t uSrcHeight )
+{
+	return update_effects_scratch_pair( g_output.effectsV2A, g_output.effectsV2B,
+	                                    uSrcWidth, uSrcHeight, kEffectsV2Down, "v2" );
+}
+
 // The zoom's projection texture (FrameInfo_t::Zoom_t), at the projection's
 // own on-screen size. ABGR8888 for the reason Bloom's buffers are; pure
 // scratch, every texel rewritten per zoomed frame (the shape's outside is
@@ -3833,7 +3856,9 @@ static bool update_zoom_image( uint32_t uWidth, uint32_t uHeight )
 // was judged more plumbing than four exact byte lanes.
 // == HISTORY_TEX_W / HISTORY_TEX_H in effects_common.h -- keep in step.
 static constexpr uint32_t kEffectsHistoryWidth  = 16;  // >= HISTORY_COUNT (8) and == AB_LOCAL_GRID
-static constexpr uint32_t kEffectsHistoryHeight = 17;  // row 0 statistics + AB_LOCAL_GRID map rows
+// +1 (NEW 2026-09-14): Adaptive Brightness V2's scene-cut histogram row
+// (effects_common.h's V2_HIST_PREV_ROW) -- == HISTORY_TEX_H there, keep in step.
+static constexpr uint32_t kEffectsHistoryHeight = 18;  // row 0 statistics + AB_LOCAL_GRID map rows + V2's cut row
 static constexpr uint32_t kEffectsLocalGrid     = 16;  // == AB_LOCAL_GRID
 static constexpr uint32_t kEffectsLocalRow      = 1;   // == AB_LOCAL_ROW
 static constexpr uint32_t kEffectsHistoryStats  = 8;   // == HISTORY_COUNT (4 smoothed + 4 raw), row 0
@@ -4677,8 +4702,9 @@ struct EffectsPushData_t
 	// buffer are simply not recorded when this is clear.
 	static constexpr uint32_t kBloom             = 1u << 8;
 	// Bit 1u << 9 was kBrightnessMap (the experimental Brightness Map effect,
-	// removed 2026-09-14) -- left unused rather than reassigned, matching
-	// effects_common.h's own EFFECT_* bits.
+	// removed 2026-09-14) -- REUSED the same day for Adaptive Brightness V2,
+	// matching effects_common.h's own EFFECT_ADAPTIVE_V2.
+	static constexpr uint32_t kAdaptiveV2        = 1u << 9;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -4712,6 +4738,16 @@ struct EffectsPushData_t
 	float    u_bloomIntensity;
 	float    u_bloomRadius;
 
+	float    u_v2Lift;
+	float    u_v2Target;
+	float    u_v2MaxLift;
+	float    u_v2Detail;
+	float    u_v2AdaptUp;
+	float    u_v2AdaptDown;
+	float    u_v2Radius;
+	uint32_t u_v2Mode;
+	uint32_t u_v2Knee;
+
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
 	// exp2(-sharpness_in_stops)); mapping k -> k / (0.75 * (1 + k)) keeps
@@ -4725,7 +4761,7 @@ struct EffectsPushData_t
 		return std::clamp( k / ( 0.75f * ( 1.0f + k ) ), 0.0f, 1.0f );
 	}
 
-	EffectsPushData_t( const NativeEffectsState_t &s, float flAbDtSeconds, bool bResetHistory )
+	EffectsPushData_t( const NativeEffectsState_t &s, float flAbDtSeconds, bool bResetHistory, uint32_t uSrcHeight )
 	{
 		u_flags = 0;
 		if ( s.bShadowLift )            u_flags |= kShadowLift;
@@ -4750,6 +4786,17 @@ struct EffectsPushData_t
 		// Brightness".
 		const bool bAdaptiveGamma = s.bAdaptiveGamma && !s.bAdaptiveBrightness;
 		if ( bAdaptiveGamma )           u_flags |= kAdaptiveGamma;
+		// ADAPTIVE BRIGHTNESS V2 -- a THIRD choice in the same exclusion,
+		// added 2026-09-14. It aims the same mid-tones at the same target
+		// from the same pre-effect statistics as the two above, so the same
+		// "only one may apply the correction" rule extends to it: dropped if
+		// EITHER older effect is on. The panel makes this unreachable
+		// (PanelShaders.cpp's three-way exclusion); this only ever fires for
+		// a hand-edited config, and the two OLDER effects win for the same
+		// "richer effect, every existing config refers to it" reason
+		// bAdaptiveGamma's own drop does.
+		const bool bAdaptiveV2 = s.bAdaptiveV2 && !s.bAdaptiveBrightness && !bAdaptiveGamma;
+		if ( bAdaptiveV2 )              u_flags |= kAdaptiveV2;
 		if ( bResetHistory )            u_flags |= kResetHistory;
 
 		u_saturation = s.flSaturation;
@@ -4824,6 +4871,36 @@ struct EffectsPushData_t
 		u_bloomThreshold = s.bBloom ? std::clamp( s.flBloomThreshold, 0.0f, 1.0f ) : 1.0f;
 		u_bloomIntensity = s.bBloom ? std::max( s.flBloomIntensity, 0.0f ) : 0.0f;
 		u_bloomRadius    = s.bBloom ? std::clamp( s.flBloomRadius, 0.0f, 1.0f ) : 0.0f;
+
+		// Adaptive Brightness V2 (NEW 2026-09-14). Masked to neutral values
+		// when it is not the effect running this frame, for the same "the
+		// uniform says exactly what the frame did" reason every other
+		// masked field above is. Neutral: Lift 0 (no static floor), Target
+		// irrelevant (Mode Off below makes it unread), Max lift 1 (no lift
+		// at all -- effects_curve.h's abv2_toe()/abv2_knee() are then exact
+		// identities), Detail 0, Mode Off, Knee toe (0).
+		u_v2Lift      = bAdaptiveV2 ? std::clamp( s.flV2Lift, 0.0f, 1.0f ) : 0.0f;
+		u_v2Target    = bAdaptiveV2 ? std::clamp( s.flV2Target, 0.1f, 0.9f ) : 0.5f;
+		u_v2MaxLift   = bAdaptiveV2 ? std::max( s.flV2MaxLift, 1.0f ) : 1.0f;
+		u_v2Detail    = bAdaptiveV2 ? std::max( s.flV2Detail, 0.0f ) : 0.0f;
+		u_v2Mode      = ( bAdaptiveV2 && s.bV2Scene ) ? 1u : 0u;
+		u_v2Knee      = ( bAdaptiveV2 && s.bV2Knee ) ? 1u : 0u;
+		// This row's OWN adapt speed: ONE slider, Adapt speed, with a fixed
+		// 1:2 ratio (plan 4.8 -- "a bounded operator needs one number", not
+		// the older effects' up/down pair). Floored the same way
+		// u_adaptUp/u_adaptDown above are.
+		const float flV2SpeedFloor = 0.1f;   // == the panel's Range() floor
+		u_v2AdaptUp   = std::max( s.flV2AdaptSpeed, flV2SpeedFloor );
+		u_v2AdaptDown = u_v2AdaptUp * 2.0f;
+		// The guided filter's box radius, in QUARTER-resolution texels:
+		// round(Scale% * srcHeight / 4), bounded 2..12 -- plan 4.5. Computed
+		// here (not in PanelShaders.cpp) because it needs the frame's own
+		// height, which this constructor is the first point in the pipeline
+		// to have.
+		const float flScalePixels = ( s.flV2Scale * 0.01f ) * float( std::max( uSrcHeight, 1u ) );
+		u_v2Radius = bAdaptiveV2
+			? std::clamp( std::round( flScalePixels / 4.0f ), 2.0f, 12.0f )
+			: 4.0f;
 	}
 };
 
@@ -5283,11 +5360,23 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						&& update_effects_bloom_images( uWidth, uHeight );
 					state.bBloom = bBloom;
 
-					// One upload for both dispatches: the measure pass and the
-					// per-pixel pass read the same effects_t block, and the
-					// descriptor offset uploadConstants() records persists until
-					// the next upload.
-					cmdBuffer->uploadConstants<EffectsPushData_t>( state, flAbDt, bResetHistory );
+					// ADAPTIVE BRIGHTNESS V2's guided-filter pair (NEW
+					// 2026-09-14), decided the same way and for the same
+					// reason as Bloom's just above: if the buffers cannot be
+					// allocated, the effect is dropped for this frame before
+					// the uniform is built, not after.
+					const bool bV2 = state.bAdaptiveV2
+						&& !state.bAdaptiveBrightness && !state.bAdaptiveGamma
+						&& update_effects_v2_images( uWidth, uHeight );
+					state.bAdaptiveV2 = bV2;
+
+					// One upload for every dispatch this block records: the
+					// measure pass and the per-pixel pass (and, on the frames
+					// it runs, V2's three guided-filter passes) all read the
+					// same effects_t block, and the descriptor offset
+					// uploadConstants() records persists until the next
+					// upload.
+					cmdBuffer->uploadConstants<EffectsPushData_t>( state, flAbDt, bResetHistory, uHeight );
 
 					// Encoded in, encoded out: setTextureSrgb(0, true) selects the
 					// raw UNORM view (srgbView() == "values still sRGB-encoded";
@@ -5384,7 +5473,13 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						// on a frame neither is on for -- Adaptive Gamma
 						// shares the strip (they are mutually exclusive,
 						// so only one of them can ever be previewing).
-						if ( state.NeedsStatistics() )
+						// Adaptive Brightness V2 (2026-09-14) is armed here
+						// too, in EITHER Adaptation mode: its own preview
+						// re-derives the content anchor from the captured
+						// pixels directly (EffectPreviewMath.h), so it does
+						// not need NeedsStatistics()'s "Scene mode only"
+						// gate the way the GPU pass's history dependency does.
+						if ( state.NeedsStatistics() || state.bAdaptiveV2 )
 							effects_preview_record( cmdBuffer.get() );
 					}
 
@@ -5454,6 +5549,59 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						BindBloomSource( g_output.effectsBloomA );
 					}
 
+					// ADAPTIVE BRIGHTNESS V2's THREE DISPATCHES (NEW
+					// 2026-09-14) -- Stage 2's guided filter, the same
+					// ping-pong shape as Bloom's block just above:
+					//
+					//   1. quarter-res luma down pass     layer0 -> v2A.r
+					//   2. guided filter's first box      v2A    -> v2B.rg
+					//   3. ... and its second (smoothing)  v2B    -> v2A.rg
+					//
+					// and cs_effects_layer0.comp below then samples v2A
+					// bilinearly for the base B(p) = a * Y(p) + b. Slot 0 is
+					// still the base layer from the bind far above -- pass 1
+					// needs exactly that, same raw UNORM view, same
+					// unnormalised nearest sampler grade()'s taps use
+					// everywhere else. No hand-written barriers needed, for
+					// the same reason Bloom's ping-pong needs none: every
+					// dispatch() calls prepareSrcImage()/prepareDestImage()
+					// and insertBarrier() orders the read-after-write
+					// between them.
+					if ( bV2 )
+					{
+						const uint32_t uV2W = g_output.effectsV2A->width();
+						const uint32_t uV2H = g_output.effectsV2A->height();
+						const int nV2Group = 8;   // == the v2 shaders' local_size
+						const uint32_t uGroupsX = div_roundup( uV2W, nV2Group );
+						const uint32_t uGroupsY = div_roundup( uV2H, nV2Group );
+
+						auto BindV2Source = [&]( const gamescope::OwningRc<CVulkanTexture> &tex )
+						{
+							cmdBuffer->bindTexture( VKR_EFFECTS_V2_SLOT, tex );
+							cmdBuffer->setTextureSrgb( VKR_EFFECTS_V2_SLOT, true );
+							cmdBuffer->setSamplerUnnormalized( VKR_EFFECTS_V2_SLOT, true );
+							cmdBuffer->setSamplerNearest( VKR_EFFECTS_V2_SLOT, true );
+						};
+
+						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_V2_DOWN ) );
+						cmdBuffer->bindTarget( g_output.effectsV2A );
+						cmdBuffer->dispatch( uGroupsX, uGroupsY );
+
+						BindV2Source( g_output.effectsV2A );
+						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_V2_BOX1 ) );
+						cmdBuffer->bindTarget( g_output.effectsV2B );
+						cmdBuffer->dispatch( uGroupsX, uGroupsY );
+
+						BindV2Source( g_output.effectsV2B );
+						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_V2_BOX2 ) );
+						cmdBuffer->bindTarget( g_output.effectsV2A );
+						cmdBuffer->dispatch( uGroupsX, uGroupsY );
+
+						// ... and leave the finished coefficients bound for
+						// the per-pixel pass below.
+						BindV2Source( g_output.effectsV2A );
+					}
+
 					cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
 					cmdBuffer->bindTarget( g_output.effectsOutput );
 
@@ -5466,6 +5614,7 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					// descriptor on frames with fewer layers than that.
 					cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
 					cmdBuffer->bindTexture( VKR_EFFECTS_BLOOM_SLOT, nullptr );
+					cmdBuffer->bindTexture( VKR_EFFECTS_V2_SLOT, nullptr );
 
 					// `effects_ab_log` debug readback (see the command above).
 					if ( bHaveHistory )

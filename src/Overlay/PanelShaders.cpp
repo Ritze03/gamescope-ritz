@@ -123,6 +123,23 @@ namespace gamescope
 		e.flAgDownSpeed  = r.adaptive_gamma.adapt_down_speed;
 		e.flAgLocal      = r.adaptive_gamma.local_strength;
 
+		// Adaptive Brightness V2 (2026-09-14): a NEW, ADDITIVE effect --
+		// see ConfigSchema.h's ReshadeAdaptiveBrightnessV2Settings. The
+		// three-way exclusion with the two effects above is NOT applied
+		// here either, for the same reason it is not applied to Adaptive
+		// Gamma's own fields just above: this struct carries what the
+		// config says, and EffectsPushData_t (rendervulkan.cpp) drops
+		// whichever loses for the frame.
+		e.bAdaptiveV2   = r.adaptive_brightness_v2.enabled;
+		e.bV2Scene      = r.adaptive_brightness_v2.mode != "off";
+		e.bV2Knee       = r.adaptive_brightness_v2.shape == "knee";
+		e.flV2Lift      = r.adaptive_brightness_v2.lift;
+		e.flV2Target    = r.adaptive_brightness_v2.target_luminance;
+		e.flV2MaxLift   = r.adaptive_brightness_v2.max_lift;
+		e.flV2Detail    = r.adaptive_brightness_v2.detail;
+		e.flV2Scale     = r.adaptive_brightness_v2.scale;
+		e.flV2AdaptSpeed = r.adaptive_brightness_v2.adapt_speed;
+
 		// Dark floor (2026-09-14): SHARED between the two rows above --
 		// r.dark_floor is a bare field on ReshadeSettings, not nested in
 		// either adaptive struct. See ConfigSchema.h and this file's own
@@ -324,7 +341,13 @@ namespace gamescope
 		auto &r = Cfg().reshade;
 		r.adaptive_brightness.enabled = bOn;
 		if ( bOn )
+		{
 			r.adaptive_gamma.enabled = false;
+			// THREE-WAY, 2026-09-14: Adaptive Brightness V2 joins the same
+			// exclusion (see this file's header note on the row itself for
+			// why -- same mid-tones, same target, same statistics).
+			r.adaptive_brightness_v2.enabled = false;
+		}
 		PushAllToRenderer();
 		QueueSave();
 	}
@@ -334,7 +357,31 @@ namespace gamescope
 		auto &r = Cfg().reshade;
 		r.adaptive_gamma.enabled = bOn;
 		if ( bOn )
+		{
 			r.adaptive_brightness.enabled = false;
+			r.adaptive_brightness_v2.enabled = false;   // three-way, 2026-09-14
+		}
+		PushAllToRenderer();
+		QueueSave();
+	}
+
+	// ADAPTIVE BRIGHTNESS V2 (NEW 2026-09-14) joins the SAME three-way
+	// exclusion as the two setters above: it aims the same mid-tones at the
+	// same target from the same pre-effect statistics (its own content-only
+	// anchor is still a statistic of the SAME graded frame), so running it
+	// alongside either of the older two would correct the picture twice.
+	// The user's decision was explicit that the older two are UNCHANGED and
+	// this is a THIRD, additive choice -- not a replacement -- so the
+	// exclusion widens to three rather than the older two being retired.
+	static void SetAdaptiveV2Enabled( bool bOn )
+	{
+		auto &r = Cfg().reshade;
+		r.adaptive_brightness_v2.enabled = bOn;
+		if ( bOn )
+		{
+			r.adaptive_brightness.enabled = false;
+			r.adaptive_gamma.enabled = false;
+		}
 		PushAllToRenderer();
 		QueueSave();
 	}
@@ -374,8 +421,9 @@ namespace gamescope
 			            + ( r.bloom.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
 			            + ( r.adaptive_gamma.enabled ? 1 : 0 )
+			            + ( r.adaptive_brightness_v2.enabled ? 1 : 0 )
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 7 effects on";
+			return std::to_string( n ) + " of 8 effects on";
 		} );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
@@ -835,6 +883,138 @@ namespace gamescope
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions, as Adaptive Brightness's own has
 				.Default( AgDefaults{}.local_strength );
+
+		// ADAPTIVE BRIGHTNESS V2 -- NEW 2026-09-14. A NEW, ADDITIVE effect --
+		// the user's decision, verbatim: "Call it 'Adaptive brightness V2'
+		// in the GUI. Implement it fully, so I can test it later. DO NOT
+		// REMOVE THE ORIGINAL!" -- so Adaptive Brightness and Adaptive
+		// Gamma above are UNCHANGED, and this is a THIRD choice, alongside
+		// them, not a replacement. See superdoc/planning/adaptive-
+		// brightness-v2-plan.md for the whole design and
+		// src/shaders/effects_curve.h's own block for every formula.
+		//
+		// WHY IT EXISTS ALONGSIDE THE OTHER TWO. Every operator shipped so
+		// far lifts with x^g, and x^g for g < 1 has an INFINITE slope at
+		// black -- on a near-black scene (the user's own capture, 73.5% at
+		// code 0..1) the exponent is driven to its floor and code 4 lands
+		// on 90: structural binarisation, not a tuning error (plan section
+		// 3.2). This effect's curve bends into a straight line of slope S
+		// (the user's own Max lift) at black instead, so the LARGEST
+		// amplification anywhere in the frame is S, by construction --
+		// black can never be pushed past white the way it could before.
+		//
+		// SEVEN PARAMS (Shape, Target, Max lift, Lift, Adaptation, Adapt
+		// speed, Detail), inside kParamBudget's 8 -- one spare left for a
+		// future Clarity row (plan's Stage 3, not built in this pass).
+		using V2Defaults = config::ReshadeAdaptiveBrightnessV2Settings;
+		enum V2ShapeChoice : int { kV2Toe = 0, kV2Knee = 1 };
+		static const ui::Option kV2ShapeOptions[] = {
+			{ kV2Toe,  "Toe" },
+			{ kV2Knee, "Knee" },
+		};
+		enum V2ModeChoice : int { kV2Off = 0, kV2Scene = 1 };
+		static const ui::Option kV2ModeOptions[] = {
+			{ kV2Off,   "Off" },
+			{ kV2Scene, "Scene" },
+		};
+		a.Switch( "image.shaders.adaptive_brightness_v2", "Adaptive brightness V2",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.adaptive_brightness_v2.enabled; },
+				[]( bool b ) { SetAdaptiveV2Enabled( b ); } ) )
+			.Key( "reshade.adaptive_brightness_v2.enabled" )
+			.Help( "A newer take on Adaptive Brightness: lifts dark scenes without ever turning "
+			       "them into flat grey, even on a near-black map. Turning this on turns Adaptive "
+			       "Brightness and Adaptive Gamma off -- all three aim the same mid-tones at the "
+			       "same target." )
+			.Default( V2Defaults{}.enabled )
+			.Keywords( "adaptive brightness v2 shadow lift toe knee gamma dark scene contrast "
+			           "binarise binarize black clarity see enemies pvp" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Preview( ui::Entry::PreviewKind::AdaptiveBrightness )
+			.Param( "shape", "Shape",
+				ui::AnyBind::Of<int>(
+					[]{ return (int)( Cfg().reshade.adaptive_brightness_v2.shape == "knee" ? kV2Knee : kV2Toe ); },
+					[]( int n ) {
+						Cfg().reshade.adaptive_brightness_v2.shape = ( n == kV2Knee ) ? "knee" : "toe";
+						PushAllToRenderer();
+						QueueSave();
+					} ),
+				kV2ShapeOptions, std::size( kV2ShapeOptions ) )
+				.Key( "reshade.adaptive_brightness_v2.shape" )
+				.Help( "Toe compresses highlights a little everywhere, so nothing ever clips. Knee "
+				       "leaves highlights exactly alone and puts the trade in the mid-tones just "
+				       "above the lifted shadows instead -- closer to a monitor's Shadow Boost." )
+				.Default( (int)( V2Defaults{}.shape == "knee" ? kV2Knee : kV2Toe ) )
+			.Param( "target", "Target brightness",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.target_luminance; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.target_luminance, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.target_luminance" )
+				.Help( "Where the CONTENT median is put on a dark scene (black itself is excluded, "
+				       "so a mostly-void frame doesn't chase the void). Lower than the older effects' "
+				       "default -- this reads the content, not the void, and 0.5 reads milky." )
+				.Range( 0.1f, 0.9f )
+				.Step( 0.05f )
+				.Default( V2Defaults{}.target_luminance )
+			.Param( "max_lift", "Max lift",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.max_lift; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.max_lift, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.max_lift" )
+				.Help( "The hardest any dark step may be amplified, anywhere in the frame. This is "
+				       "the anti-binarisation guarantee: 1.0 means \"do not lift at all\"; 8.0 makes "
+				       "a 3-code shape readable at the cost of visible dither on flat walls." )
+				.Range( 1.0f, 8.0f )
+				.Step( 0.5f )
+				.Default( V2Defaults{}.max_lift )
+			.Param( "lift", "Lift",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.lift; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.lift, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.lift" )
+				.Help( "The lift that is ALWAYS there, whatever Adaptation says: how much a dark "
+				       "shape on a bright world is raised. The control that fixes a dark player "
+				       "model turning almost invisible on a sunny map." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )
+				.Default( V2Defaults{}.lift )
+			.Param( "mode", "Adaptation",
+				ui::AnyBind::Of<int>(
+					[]{ return (int)( Cfg().reshade.adaptive_brightness_v2.mode == "off" ? kV2Off : kV2Scene ); },
+					[]( int n ) {
+						Cfg().reshade.adaptive_brightness_v2.mode = ( n == kV2Off ) ? "off" : "scene";
+						PushAllToRenderer();
+						QueueSave();
+					} ),
+				kV2ModeOptions, std::size( kV2ModeOptions ) )
+				.Key( "reshade.adaptive_brightness_v2.mode" )
+				.Help( "Off: a purely static shadow lift with no exposure movement at all -- the "
+				       "mode to pick if you never want the picture to shift. Scene: a genuinely dark "
+				       "map deepens the lift toward Target brightness as you play." )
+				.Default( (int)( V2Defaults{}.mode == "off" ? kV2Off : kV2Scene ) )
+			.Param( "adapt_speed", "Adapt speed",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.adapt_speed; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.adapt_speed, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.adapt_speed" )
+				.Help( "In Scene mode, how fast a GRADUAL scene change is followed. A flashbang or "
+				       "walking through a door is not gradual -- this effect snaps instantly for "
+				       "those instead of sliding, so there is only one speed to tune here." )
+				.Range( 0.1f, 5.0f )
+				.Step( 0.1f )
+				.Unit( "s" )
+				.Default( V2Defaults{}.adapt_speed )
+			.Param( "detail", "Detail",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.detail; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.detail, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.detail" )
+				.Help( "Texture and outline contrast inside lifted regions. 1.0 preserves it exactly "
+				       "as it was before the lift (Weber contrast, the cue a silhouette needs); "
+				       "higher boosts it, 0 flattens lifted regions to a plain wash." )
+				.Range( 0.0f, 2.0f )
+				.Step( 0.05f )
+				.Default( V2Defaults{}.detail );
 
 		// DARK FLOOR -- NEW 2026-09-14. The user, verbatim: "the adaptive
 		// brightness and the adaptive gamma both completely destroy REALLY

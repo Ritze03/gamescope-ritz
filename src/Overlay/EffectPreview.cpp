@@ -118,23 +118,36 @@ namespace gamescope::overlay
 				&& a.flStrength == b.flStrength
 				&& a.flLocal == b.flLocal
 				&& a.flMaxLift == b.flMaxLift
-				&& a.flMaxDarken == b.flMaxDarken;
+				&& a.flMaxDarken == b.flMaxDarken
+				&& a.bV2 == b.bV2
+				&& a.bV2Scene == b.bV2Scene
+				&& a.bV2Knee == b.bV2Knee
+				&& a.flV2Lift == b.flV2Lift
+				&& a.flV2Target == b.flV2Target
+				&& a.flV2MaxLift == b.flV2MaxLift;
 		}
 
-		// Which of the two adaptive effects the strip is showing. They are
-		// mutually exclusive (PanelShaders.cpp's setters make turning one on
-		// turn the other off, and the host drops Adaptive Gamma if a
-		// hand-edited config asks for both), so "whichever is on" is
-		// unambiguous, and Adaptive Brightness is checked first for the same
-		// reason the host prefers it. False when neither is on -- the strip
-		// then draws its placeholder rather than a picture.
+		// Which of the THREE mutually exclusive adaptive effects (Adaptive
+		// Brightness V2, NEW 2026-09-14) the strip is showing. They are
+		// mutually exclusive (PanelShaders.cpp's three-way exclusion, and
+		// the host drops the losers if a hand-edited config asks for more
+		// than one), so "whichever is on" is unambiguous; Adaptive
+		// Brightness is checked first, then Adaptive Gamma, matching the
+		// same preference order the host's own drop rule uses. False when
+		// none is on -- the strip then draws its placeholder.
 		bool GammaIsTheOneOn()
 		{
 			return g_nativeEffects.bAdaptiveGamma && !g_nativeEffects.bAdaptiveBrightness;
 		}
+		bool V2IsTheOneOn()
+		{
+			return g_nativeEffects.bAdaptiveV2
+				&& !g_nativeEffects.bAdaptiveBrightness && !g_nativeEffects.bAdaptiveGamma;
+		}
 		bool EitherIsOn()
 		{
-			return g_nativeEffects.bAdaptiveBrightness || g_nativeEffects.bAdaptiveGamma;
+			return g_nativeEffects.bAdaptiveBrightness || g_nativeEffects.bAdaptiveGamma
+				|| g_nativeEffects.bAdaptiveV2;
 		}
 
 		// The parameters the pre-pass is running with right now, for whichever
@@ -142,9 +155,22 @@ namespace gamescope::overlay
 		// the config: that struct IS what the shader was handed, it is written
 		// by PanelShaders.cpp on this same (steamcompmgr) thread, and reading
 		// it means the strip can never disagree with the frame about what
-		// "current" means.
-		abpreview::Params CurrentParams()
+		// "current" means. `frame`'s pixels are needed for V2's own anchor
+		// (EffectPreviewMath.h's V2AnchorFromPixels() -- not threaded
+		// through the GPU capture, see that function's comment).
+		abpreview::Params CurrentParams( const AbPreviewFrame_t &frame )
 		{
+			if ( V2IsTheOneOn() )
+			{
+				abpreview::Params p;
+				p.bV2         = true;
+				p.bV2Scene    = g_nativeEffects.bV2Scene;
+				p.bV2Knee     = g_nativeEffects.bV2Knee;
+				p.flV2Lift    = g_nativeEffects.flV2Lift;
+				p.flV2Target  = g_nativeEffects.flV2Target;
+				p.flV2MaxLift = g_nativeEffects.flV2MaxLift;
+				return p;
+			}
 			if ( GammaIsTheOneOn() )
 			{
 				abpreview::Params p;
@@ -209,6 +235,8 @@ namespace gamescope::overlay
 			stats.flP98  = st.frame.flP98;
 			stats.pflLocal = st.frame.flLocal;
 			stats.nGrid  = (int)kAbPreviewLocalGrid;
+			if ( p.bV2 )
+				stats.flV2Anchor = abpreview::V2AnchorFromPixels( st.frame.rgb, kW, kH );
 
 			abpreview::Compose( st.frame.rgb, kW, kH, stats, p,
 			                    (uint8_t *)st.tex.Pixels );
@@ -291,8 +319,16 @@ namespace gamescope::overlay
 		if ( st.frame.ulGeneration == 0 )
 			return false;
 
-		const abpreview::Params p = CurrentParams();
+		const abpreview::Params p = CurrentParams( st.frame );
 		namespace ecg = gamescope::effects_curve;
+		if ( p.bV2 )
+		{
+			bool bVoid = false;
+			const float flAnchor = abpreview::V2AnchorFromPixels( st.frame.rgb, kW, kH, &bVoid );
+			sOut = ecg::abv2_binding_text( ecg::abv2_binding( p.flV2Lift, p.flV2Target, flAnchor,
+			                                                 p.bV2Scene, bVoid ) );
+			return true;
+		}
 		if ( p.bGamma )
 		{
 			// Adaptive Gamma's own classifier and its own wording: naming
@@ -376,14 +412,14 @@ namespace gamescope::overlay
 		// unavailable reason outranks which) is the part worth keeping in
 		// one tested place, and it is untouched.
 		if ( status.eState != controls::ComparePreviewState::Ready && bSupported && !bEnabled )
-			status.pszMessage = "Turn Adaptive Brightness or Adaptive Gamma on to preview it.";
+			status.pszMessage = "Turn Adaptive Brightness, Adaptive Gamma or Adaptive brightness V2 on to preview it.";
 		if ( status.eState != controls::ComparePreviewState::Ready )
 		{
 			DrawPlaceholder( lay.rcImage, status.pszMessage );
 			return;
 		}
 
-		const abpreview::Params p = CurrentParams();
+		const abpreview::Params p = CurrentParams( st.frame );
 		if ( !st.bComposedValid || st.ulComposedGeneration != st.frame.ulGeneration
 		     || !SameParams( st.composed, p ) )
 		{

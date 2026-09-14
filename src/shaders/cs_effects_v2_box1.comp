@@ -1,0 +1,76 @@
+#version 460
+
+// cs_effects_v2_box1.comp -- Adaptive Brightness V2's Stage 2, second pass
+// (2026-09-14): the fast guided filter's coefficients, plan section 4.5.
+//
+//   mean = box_r(Y4);  corr = box_r(Y4^2)
+//   var  = corr - mean^2
+//   a    = var / (var + EDGE^2);  b = (1 - a) * mean
+//
+// reading V2_DOWN's quarter-resolution Y4 buffer (cs_effects_v2_down.comp's
+// output) and writing (a, b) to the OTHER half of the ping-pong pair.
+//
+// `Why one 2D box and not the plan's own separable h/v pair:` this buffer
+// is already quarter-resolution -- a few hundred thousand texels at most --
+// so a single non-separable box (2r+1)^2 taps per texel is still well under
+// a millisecond at the radii this effect uses (2..12 texels), and it is one
+// dispatch and one shader file instead of two of each. A deliberate,
+// documented simplification of the plan's own separable sketch, not a
+// change to the maths: mean and corr are exactly the box means the plan
+// specifies, just computed in one pass instead of via an intermediate
+// texture.
+//
+// EDGE = 0.06 (encoded, plan 4.5): NOT a param -- it is the contrast an
+// object needs to count as its own region, measured against the capture's
+// own player-vs-floor contrast (0.095) and the pipes' texture std (0.12),
+// and it interacts with Detail and Scale in a way three independent spatial
+// knobs made untunable in the retired Brightness Map (see shader-effects.md).
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+const float V2_EDGE_EPS = 0.06 * 0.06;
+
+float v2_y4_fetch(ivec2 t, ivec2 sz)
+{
+    return texelFetch(s_samplers[VKR_EFFECTS_V2_SLOT], clamp(t, ivec2(0), sz - ivec2(1)), 0).r;
+}
+
+void main()
+{
+    ivec2 p  = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_V2_SLOT], 0);
+    if (p.x >= sz.x || p.y >= sz.y)
+        return;
+
+    int r = max(int(u_v2Radius), 0);
+    float sum = 0.0, sum2 = 0.0;
+    float n = 0.0;
+    for (int j = -r; j <= r; j++)
+    {
+        for (int i = -r; i <= r; i++)
+        {
+            float y = v2_y4_fetch(p + ivec2(i, j), sz);
+            sum  += y;
+            sum2 += y * y;
+            n    += 1.0;
+        }
+    }
+
+    float mean = sum / max(n, 1.0);
+    float corr = sum2 / max(n, 1.0);
+    float var  = max(corr - mean * mean, 0.0);
+    float a    = var / (var + V2_EDGE_EPS);
+    float b    = (1.0 - a) * mean;
+
+    imageStore(dst, p, vec4(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0), 0.0, 1.0));
+}

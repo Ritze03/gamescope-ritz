@@ -653,22 +653,42 @@ struct NativeEffectsState_t
 	float flBloomIntensity = 0.8f;    // 0..2, how bright the glow is
 	float flBloomRadius = 0.5f;       // 0..1 -> effects_curve.h's bloom_sigma()
 
+	// Adaptive Brightness V2 (NEW 2026-09-14, ConfigSchema.h's
+	// ReshadeAdaptiveBrightnessV2Settings): a NEW, ADDITIVE effect -- the
+	// user, verbatim: "Call it 'Adaptive brightness V2' in the GUI.
+	// Implement it fully ... DO NOT REMOVE THE ORIGINAL!". Mutually
+	// exclusive with BOTH bAdaptiveBrightness and bAdaptiveGamma above
+	// (PanelShaders.cpp's three-way exclusion); see
+	// src/shaders/effects_curve.h's "ADAPTIVE BRIGHTNESS V2" block for the
+	// whole operator and superdoc/planning/adaptive-brightness-v2-plan.md
+	// for the design.
+	bool  bAdaptiveV2 = false;
+	bool  bV2Scene = true;       // Adaptation: Off (static only) vs Scene (adapts)
+	bool  bV2Knee = false;       // Shape: toe (default) vs knee
+	float flV2Lift = 0.5f;       // 0..1 -> the static floor, g_static
+	float flV2Target = 0.35f;    // 0.1..0.9, the content anchor's target
+	float flV2MaxLift = 4.0f;    // 1..8, the toe/knee's slope cap S
+	float flV2Detail = 1.0f;     // 0..2 (Stage 2), scales the Weber-preserving secant
+	float flV2Scale = 1.5f;      // 0.5..4 (Stage 2), % of frame height -> the guided filter's radius
+	float flV2AdaptSpeed = 0.5f; // 0.1..5.0 seconds; this row's own single time constant
+
 	// True when some effect needs the measure pass's statistics, i.e. when
 	// the history texture has to be kept alive and the measure dispatch
-	// recorded. Both adaptive effects read it; the other five do not --
-	// Bloom included, deliberately: its bright pass gates on the pixel's own
-	// luma against a fixed threshold, never on the frame's statistics, so it
-	// neither needs the history warm nor has any reason to keep the measure
-	// dispatch alive.
+	// recorded. The three adaptive effects read it (V2 only in Scene mode --
+	// Off is a purely static curve with nothing to measure); the other five
+	// do not -- Bloom included, deliberately: its bright pass gates on the
+	// pixel's own luma against a fixed threshold, never on the frame's
+	// statistics, so it neither needs the history warm nor has any reason to
+	// keep the measure dispatch alive.
 	bool NeedsStatistics() const
 	{
-		return bAdaptiveBrightness || bAdaptiveGamma;
+		return bAdaptiveBrightness || bAdaptiveGamma || ( bAdaptiveV2 && bV2Scene );
 	}
 
 	bool AnyEnabled() const
 	{
 		return bShadowLift || bSaturation || bVibrancy || bPreSharpen || bBloom
-			|| bAdaptiveBrightness || bAdaptiveGamma;
+			|| bAdaptiveBrightness || bAdaptiveGamma || bAdaptiveV2;
 	}
 };
 extern NativeEffectsState_t g_nativeEffects;
@@ -899,6 +919,15 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsBloomA;
 	gamescope::OwningRc<CVulkanTexture> effectsBloomB;
 
+	// Adaptive Brightness V2's guided-filter ping-pong pair (NEW
+	// 2026-09-14), at 1/4 of the base layer's size in each axis: the down
+	// pass writes A (Y4, its R lane), box1 writes B (a, b), box2 writes A
+	// again (a-bar, b-bar) -- cs_effects_layer0.comp's v2_coef_sample()
+	// then reads A. Pure scratch, same pooling and discard-safety story as
+	// effectsBloomA/B just above.
+	gamescope::OwningRc<CVulkanTexture> effectsV2A;
+	gamescope::OwningRc<CVulkanTexture> effectsV2B;
+
 	// The zoom's own texture (FrameInfo_t::Zoom_t): the projection at its
 	// on-screen size, ABGR8888, rewritten every zoomed frame by cs_zoom.comp
 	// and pushed as layer 1. Pooled like the effects buffers: re-created
@@ -937,6 +966,9 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_BLOOM_BLURH, // cs_effects_bloom_blurh.comp: Bloom's separable Gaussian, horizontal
 	SHADER_TYPE_EFFECTS_BLOOM_BLURV, // cs_effects_bloom_blurv.comp: ... and vertical
 	SHADER_TYPE_ZOOM,                // cs_zoom.comp: the zoom's magnified, shaped, outlined copy of the base layer
+	SHADER_TYPE_EFFECTS_V2_DOWN, // cs_effects_v2_down.comp: Adaptive Brightness V2's quarter-res luma down pass
+	SHADER_TYPE_EFFECTS_V2_BOX1, // cs_effects_v2_box1.comp: ... the guided filter's first box (mean/corr -> a, b)
+	SHADER_TYPE_EFFECTS_V2_BOX2, // cs_effects_v2_box2.comp: ... and its second (smoothing a, b)
 
 	SHADER_TYPE_COUNT
 };

@@ -1,5 +1,69 @@
 # Adaptive Brightness v2 — a visibility-first local tone operator
 
+## Decisions (2026-09-14)
+
+**The plan below proposed REPLACING Adaptive Brightness, Adaptive Gamma and the
+Brightness Map with one operator (§0, §5.3, §6, §8.1). The user overrode that, verbatim:**
+
+> Call it "Adaptive brightness V2" in the GUI. Implement it fully, so I can test it
+> later. DO NOT REMOVE THE ORIGINAL!
+
+So: **v2 is a NEW, ADDITIVE effect.** Adaptive Brightness, Adaptive Gamma and the dark
+floor (added the same day, `1a40b9e`) stay **exactly as they are** — untouched code,
+untouched config, untouched panel rows. Every place below that says "replaces" or
+"removed" for those three describes the ORIGINAL proposal, not what was built; §5.3's
+table and §8.1's "Recommended decisions" are **superseded** in full, and §5's own
+schema-bump/migration (§8.1's "Config keys" row) was **not executed** — there is no
+`kCurrentSchemaVersion` bump, because v2's keys are purely additive
+(`reshade.adaptive_brightness_v2`), the same shape every other additive effect in this
+pipeline (Bloom, Adaptive Gamma, the dark floor) was added in.
+
+**Open questions (§8.2), answered by the lead, as defaults a later session can revisit:**
+
+1. **Toe or knee?** Toe is the default; **Knee is offered as a `Shape` Choice row**, not
+   dropped — one formula each (see `shader-effects.md`'s own section for the knee
+   construction actually shipped, which is NOT the plan's unspecified placeholder).
+2. **Adaptation default:** **Scene** (not Off) — a fresh profile deepens the lift on a
+   genuinely dark map by default; a competitive player who wants zero exposure movement
+   switches to Off.
+3. **Max lift ceiling:** **1..8**, default **4** — wider than Adaptive Gamma's 1..4,
+   since a bounded slope makes a harder ceiling safe (the plan's own §0 argument for why
+   binarisation cannot recur here).
+4. **Colour:** v2 **preserves chroma ratios** (`RGB′ = RGB · Y′/Y`), as the plan's §4.7
+   specifies. Adaptive Brightness and Adaptive Gamma's own per-channel convention is
+   **unchanged** — this pass does not touch either.
+5. **HUD/crosshair exclusion:** **not built** in this pass. The measure pass's statistics
+   (and v2's own content anchor) read the whole graded frame, HUD and crosshair included,
+   exactly as Adaptive Brightness/Gamma already do.
+6. **Stage 3 Clarity:** **will be built**, as the next task, not this one. `kParamBudget`
+   has one row spare on v2's own Switch for it.
+
+**Stage 1 + Stage 2 are both implemented in this pass** (the curve, the content anchor,
+the scene-cut snap, AND the guided-filter base/detail split) — not staged across separate
+commits the way §6 below sketches; see `shader-effects.md` for two DOCUMENTED
+simplifications made to fit the existing pipeline without widening the shared history
+texture or adding a fifth new shader file: the scene-cut histogram is 16 bins (grouping
+the measure pass's existing 64), not the plan's own 64-column widening, and the guided
+filter's two box passes are non-separable 2D boxes (one dispatch each) rather than the
+plan's separable h/v pairs. Neither changes the underlying maths, only the dispatch
+shape; both are cheap at the resolution the guided filter runs at (quarter of the base
+layer).
+
+**One thing this plan states that a straightforward implementation of §4.3's own formula
+does not reproduce:** §4.3's worked-numbers table (`g = 0.566, t = 0.043`) does not match
+evaluating `f(x;g,S) = x·((1+t)/(x+t))^(1−g)` at that `g` and `S = 4` — the table's own
+`t = 0.043` is correct (verified: `t = 1/(S^(1/(1−g))−1) ≈ 0.0428`, and `f'(0) = ((1+t)/t)
+^(1−g) = 4.0` exactly, both algebraically and numerically), but the table's OTHER entries
+(code 4 → 15, code 128 → 158, etc.) do not follow from that `t`/`g`/formula on a direct
+evaluation (a from-scratch check gives 14/170 instead). The closed-form property this
+plan actually needs — `f'(0) = S` exactly, `f` concave, bounded slope everywhere — holds
+and is what `tests/test_effects_curve.cpp` pins; the table itself looks like a rounding
+or transcription artefact in the prototype's own numpy script, not a defect in the
+formula the rest of this page relies on, and the shipped code follows the formula in
+§4.3's prose, not the table's specific numbers. Flagged here rather than silently
+"corrected", per this doc's own preamble ("the numbers ... should be re-measured ...
+before anything is claimed").
+
 **2026-09-14, design plan. Nothing under `src/`, `tests/` or `scripts/` was changed for
 this page.** The user's brief, verbatim: *"create a plan for a really good adaptive
 brightness shader. He should be creative and search the web for state of the art

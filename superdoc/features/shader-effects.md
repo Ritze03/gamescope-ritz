@@ -1,8 +1,12 @@
-# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma
+# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma, Adaptive Brightness V2
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
-seven effects — six independent, plus **Adaptive Gamma** (new 2026-09-08), which is
-mutually exclusive with Adaptive Brightness and with nothing else. Since 2026-09-05 they are **one native compute pre-pass compiled
+eight effects — five independent, plus **Adaptive Brightness**, **Adaptive Gamma** (new
+2026-09-08) and **Adaptive Brightness V2** (new 2026-09-14), which are mutually exclusive
+with EACH OTHER and with nothing else — see
+[Adaptive Brightness V2](#adaptive-brightness-v2-imageshadersadaptive_brightness_v2--new-2026-09-14)
+for why a third choice was added ALONGSIDE the first two rather than replacing them
+(the user's own decision, quoted there). Since 2026-09-05 they are **one native compute pre-pass compiled
 into the binary at build time** — `src/shaders/cs_effects_layer0.comp`, dispatched from
 `vulkan_composite()` (`src/rendervulkan.cpp`) on the base/game layer at source resolution
 before any scaling. **Bloom** (new 2026-09-08) is the one effect that needs more than
@@ -2620,6 +2624,185 @@ one EMA and one set of smoothed statistics already, and a second copy would only
 for a hand-edited file to hold two different numbers for a control the panel only ever shows
 once. Range 0.0–0.5, step 0.01, `ZeroMeans("Off")`; disabled, with a reason, unless one of
 the two effects above is on.
+
+### Adaptive Brightness V2 (`image.shaders.adaptive_brightness_v2`) — NEW 2026-09-14
+
+**Decision (2026-09-14), quoted:** *"Call it 'Adaptive brightness V2' in the GUI.
+Implement it fully, so I can test it later. DO NOT REMOVE THE ORIGINAL!"* — so this is a
+**third**, mutually-exclusive choice ALONGSIDE Adaptive Brightness and Adaptive Gamma
+above, not a replacement for either. `superdoc/planning/adaptive-brightness-v2-plan.md`
+is the design doc this section implements; its own §Removals and schema-bump/migration
+sections are **superseded** by this decision and were not executed.
+
+**Why it exists.** Every operator above lifts with `x^g` (or a levels gain feeding one),
+and `x^g` for `g < 1` has an **infinite slope at x = 0** — on the user's own near-black
+capture (73.5% of the frame at code 0..1, median 0.0003), the exponent is driven to its
+floor and code 4 lands on 90: structural binarisation, not a tuning error (the plan's
+§3.2 has the full derivation). V2's curve bends into a **straight line of slope S** (the
+user's own **Max lift**) at black instead, so the largest amplification anywhere in the
+frame is `S`, by construction — the anti-binarisation guarantee holds at every setting.
+
+**The curve.** A toe-gamma, `f(x; g, S) = x · ((1+t)/(x+t))^(1−g)` with
+`t = 1 / (S^(1/(1−g)) − 1)` solved so `f'(0) = S` exactly; `f(x; 1, S) ≡ x` and
+`f(x; g, 1) ≡ x` (either alone disables the lift, and `abv2_toe()`/`abv2_knee()` in
+`src/shaders/effects_curve.h` return the identity directly rather than solving for an
+infinite `t`). `f(0)=0`, `f(1)=1`, concave, so the slope — and the secant `f(x)/x` — never
+exceed `S`. A **Shape** choice offers a second curve, **Knee**: below a fixed knee point
+(`ABV2_KNEE_X = 0.5`) it is the SAME toe formula rescaled into `[0, 0.5]²` so it lands
+exactly on the identity line at the knee; above it, the plain identity. Toe compresses
+the WHOLE upper range by about `g` (the film trade — highlights lose a little contrast,
+nothing can clip); Knee leaves highlights **exactly** untouched (`f'(1) ≡ 1`) and puts
+the trade in the mid-tones just above the lifted shadows instead (the monitor "Shadow
+Boost" trade). `Why this exact knee construction:` the plan's §8.2 Q1 leaves the formula
+open (toe vs. knee was flagged as a question, not specified); a single cubic Hermite
+matching both endpoint values and slopes was tried first and rejected — a monotone
+cubic Hermite on `[0,1]` with unit secant cannot have an endpoint slope above `3` (the
+classical Fritsch–Carlson bound), so it inverts for any `S > 3`, which is inside this
+row's own 1..8 range. The rescaled-toe construction has no such ceiling (verified by
+exhaustive sampling in `tests/test_effects_curve.cpp`, `g × S` grid, `S` to 8).
+
+**Choosing `g`.** `g_static = 1 − 0.6·Lift` (Lift 0..1 → 1.0..0.4 — the lift that is
+ALWAYS there, regardless of Adaptation); in **Scene** mode,
+`g_adapt = ln(Target) / ln(anchor_smoothed)` and `g = clamp(min(g_static, g_adapt),
+G_MIN, 1)` — `min`, not `max`, because adaptation can only make the lift STRONGER on a
+dark scene (no global statistic can find a 1%-of-frame object on a bright one, plan
+§3.5); in **Off** mode `g = clamp(g_static, G_MIN, 1)`, a purely static shadow lift with
+zero temporal behaviour. `G_MIN` (0.2) is not user-facing — it only keeps `t` finite.
+
+**The content anchor.** A rank-window mean (ranks 25..75%) over taps **above the black
+floor** (`ABV2_BLACK = 2/255`) — "the median of the void is not the median of the
+content" (plan §3.3). `cs_effects_measure.comp` keeps a SECOND, parallel histogram
+(`s_histC`/`s_histSumC`) alongside Adaptive Brightness/Gamma's own (which must keep every
+tap, black included, for their `p2`/`p50`/`p98`), excluded only when a tap's luma is
+above the floor. Below 1% of the frame qualifying (a loading screen), the anchor **holds
+its previous smoothed value** rather than swinging on a handful of taps.
+
+**Temporal.** One EMA on the anchor alone (the base layer is spatial and deterministic
+per frame, so it cannot flicker), asymmetric 1:2 — the row's own **Adapt speed** is the
+brighten-off time constant, darken-on is `2×` it (the eye's own light adaptation is
+faster than its dark adaptation) — plus a **scene-cut detector** that SNAPS instead of
+sliding: `|ln(raw/smoothed)| > ln 2` AND a histogram L1 distance `> 0.35` against last
+frame. `Deviation from the plan:` the L1 test reuses the measure pass's own 16 buckets
+(grouping its existing 64-bin histogram four-at-a-time) rather than widening the shared
+history texture to a 64-column, bin-for-bin copy as the plan's §5.1 sketches — the
+history texture gained one row (`V2_HIST_PREV_ROW`, height 17→18) instead of also
+growing to 64 columns. A documented simplification, not a change to the 35% threshold's
+own meaning; `effects_common.h`'s own comment states the trade.
+
+**Base/detail.** A fast guided filter, self-guided on luma, at **quarter resolution**
+(`cs_effects_v2_down.comp` → `cs_effects_v2_box1.comp` → `cs_effects_v2_box2.comp`,
+reusing `update_effects_scratch_pair()` the way Bloom's own buffers do):
+`mean = box_r(Y4)`, `corr = box_r(Y4²)`, `a = var/(var+EDGE²)` (`EDGE = 0.06` encoded,
+a constant, not a param), `b = (1−a)·mean`, smoothed a second time over the same radius.
+`Deviation from the plan:` §5.1 sketches FIVE separable dispatches (down, box1h/v,
+box2h/v); this ships as **three non-separable 2D box passes** instead — the buffer is
+already quarter-resolution (a few hundred thousand texels), so `(2r+1)²` taps per texel
+at this effect's radii (2..12 texels) is still comfortably sub-millisecond, and one
+non-separable box also let `mean`/`corr`/`a`/`b` collapse into ONE pass instead of a
+mean/corr texture followed by a separate `a`/`b` pass. The maths — the guided filter's
+own formula — is unchanged; only the dispatch shape is simpler. `Scale` (0.5..4% of
+frame height → the box radius, computed on the host once the frame's own size is known)
+is a config field but is **not** exposed as a GUI row in this pass (the lead's explicit
+row list omits it); it defaults to 1.5%. `a`/`b` are stored as plain 8-bit values (not
+the retired Brightness Map's packed-16-bit scheme) — they are themselves already
+fractions in `[0,1]`, with no float-bits round-trip to protect.
+
+`B(p) = ā·Y(p) + b̄` (bilinearly sampled, `v2_coef_sample()` in `effects_common.h`);
+`D = Y − B`; `sec = min(f(B)/B, S) · Detail` (the SECANT, not the tangent — it preserves
+the region's Weber contrast exactly, which is the entire point of a base/detail split at
+these compression ratios); positive detail gets a Reinhard-shaped soft shoulder into the
+remaining headroom (`abv2_shoulder()`), negative does not (it cannot go below `−f(B)`,
+i.e. `Y′` cannot go negative). `Detail` 0 flattens to the base alone; 1 preserves Weber
+contrast exactly; above 1 boosts it (and widens guarantee 1 to `S · Detail`).
+
+**Black floor.** `B ≤ ABV2_BLACK` (2/255): `Y′ = Y`, exactly, never touched — literal
+black, letterbox bars and 1-code dither stay untouched rather than "close".
+
+**Colour.** `k = Y′ / max(Y, ε)`, `RGB′ = RGB · k` — hue-preserving, unlike every other
+effect in this pass (which is per-channel): a per-channel exponent desaturates lifted
+shadows, and colour is the detection channel that survives darkness best. Compressed
+back into range by mixing toward the achromatic `Y′` if any channel would otherwise
+exceed 1 (the same shape this pass's other clamps avoid needing, because they are
+per-channel and Adaptive Brightness's own shoulder already protects the top).
+
+**Pipeline.** `EFFECT_ADAPTIVE_V2` reuses the bit and the sampler slot the retired
+Brightness Map left free (`1u << 9`, `VKR_EFFECTS_V2_SLOT = 3u`) — the same "reused the
+same day" precedent that bit's own comment already documents. Three new dispatches sit
+in `vulkan_composite()`'s pre-pass block, after Bloom's, before the per-pixel pass, with
+the identical barrier-free ping-pong reasoning Bloom's own block documents (every
+`dispatch()` call's `prepareSrcImage()`/`prepareDestImage()` plus `insertBarrier()`'s
+unconditional execution dependency order the read-after-write and write-after-read
+between passes). `EffectsPushData_t`/`NativeEffectsState_t` carry the new uniforms; the
+host computes the guided filter's box radius from `Scale` and the frame's own height
+(the constructor is the first point in the pipeline that knows it).
+
+**Exclusion.** A THIRD entrant in the existing mutual-exclusion mechanism: turning V2 on
+turns Adaptive Brightness AND Adaptive Gamma off, and turning either of those on turns
+V2 off (`PanelShaders.cpp`'s three setters, and `EffectsPushData_t`'s own drop rule for a
+hand-edited config carrying more than one — the two OLDER effects win, for the same
+"richer effect, every existing config refers to it" reason Adaptive Gamma's own drop
+over Adaptive Brightness already had). **Why:** all three aim the same mid-tones at the
+same target from the same pre-effect statistics (V2's own content-only anchor is still a
+statistic of the SAME graded frame the other two measure), so running more than one
+would apply the correction twice.
+
+**Params** (seven, `Adaptive brightness V2` / `image.shaders.adaptive_brightness_v2`,
+default OFF): **Shape** (Toe / Knee, default Toe) · **Target brightness** (0.1..0.9,
+default 0.35 — lower than the older effects' 0.5, since the anchor here is the content
+and 0.5 reads milky) · **Max lift** (1..8, default 4 — the slope cap `S`, wider than the
+older effects' 1..4 because a bounded slope makes a harder ceiling safe) · **Lift**
+(0..1, default 0.5 — the static floor) · **Adaptation** (Off / Scene, default Scene) ·
+**Adapt speed** (0.1..5 s, default 0.5 s — ONE number with a fixed 1:2 ratio, not the
+older effects' up/down pair: a bounded operator can safely SNAP on a cut instead of
+sliding, so the only thing left to tune is a gradual change's own speed) · **Detail**
+(0..2, default 1.0 — the Weber-preserving base/detail split). `kParamBudget`'s 8 is not
+raised; one row is left spare for the plan's Stage 3 Clarity term, not built in this
+pass. The Inspector's before/after strip is shared with the two older effects
+(`ui::Entry::PreviewKind::AdaptiveBrightness`) — its CPU re-grade
+(`src/Overlay/EffectPreviewMath.h`) is a **base-only approximation** for V2 specifically
+(`B ≡ Y`, no guided filter modelled, so Detail has no visible effect in the strip — the
+comment there says so): the strip's own content-anchor is recomputed directly from the
+captured 256×144 frame's pixels (a plain sorted rank-window mean) rather than threaded
+through the GPU history texture, since the strip runs at a cadence (once per Inspector
+open, or per slider tick) where a full sort of 36,864 samples costs nothing.
+
+**Diagnostics.** The existing "adaptive limit" Facts row (shared across all three
+mutually-exclusive effects) gains V2's own classifier, `abv2_binding()`: `NONE` (the
+content median is on Target), `LIFT_FLOOR` (Lift's own static floor is stronger than
+Target asks for), `G_MIN` ("as much lift as this shape allows" — this floor exists only
+to keep `t` finite, so it is reachable in practice only via a very dark Scene-mode
+anchor, never via Lift alone: `g_static`'s own range, 0.4..1.0, never reaches `G_MIN`
+0.2), `VOID` (under 1% of the frame above the black floor — the anchor is holding its
+last reading). `Deviation from the plan:` the plan's §4.11 also proposes a fifth code,
+`MAX_LIFT`; it is not implemented — `S` (Max lift) is an independent shape parameter,
+not a second ceiling on the exponent `g`, so there is no clean "is `S` what's binding"
+test to write that would not just be `NONE` with a different `S` already applied. A scene
+cut is reported informationally (it is a one-frame event, not a standing limit) rather
+than folded into this enum.
+
+**Measured** (CPU reproduction of `abv2_toe()`/`abv2_knee()`, Lift 0.5 → `g_static = 0.7`,
+`S = 4`; codes in, codes out):
+
+| shape | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 200 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Toe | 4 | 7 | 12 | 21 | 35 | 59 | 96 | 157 | 215 |
+| Knee | 3 | 6 | 10 | 18 | 29 | 48 | 79 | 128 | 200 |
+
+and, on a `texdark`-like content anchor of 0.08 with Target 0.35 (`g_adapt ≈ 0.416`, the
+smaller of the two so Scene mode deepens the Toe lift past the 0.7 static floor above):
+
+| shape | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 200 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Toe (Scene, deepened) | 4 | 8 | 15 | 27 | 49 | 80 | 124 | 182 | 227 |
+
+Every case: code 1 stays within a factor of `S` of its input, by construction (0..4 here,
+`S = 4`); no case in `tests/test_effects_curve.cpp`'s exhaustive `g × S` sampling exceeds
+`S` anywhere on `[0,1]`. `Not yet re-measured on the GPU harness`, per this section's own
+worker task scope: the plan's §7.1 new scenes (`silhouette`, `flash`, `skyfore`,
+`--image` PNG capture) and §7.2's thirteen new checks are the NEXT task (`scripts/
+effects-regression.sh` and `tests/effects_scene_client.c` were not touched by this one);
+the existing harness (69+ checks across the older seven effects) was re-run unchanged
+and still passes — see this page's own note on that run.
 
 ## The settings-panel budget
 

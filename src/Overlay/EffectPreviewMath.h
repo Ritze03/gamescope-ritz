@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 #include "shaders/effects_curve.h"
 
@@ -40,6 +41,11 @@ namespace gamescope::overlay::abpreview
 		float flP98  = 0.0f;
 		const float *pflLocal = nullptr;   // nGrid * nGrid, row-major; may be null
 		int   nGrid  = 16;
+		// Adaptive Brightness V2's own content-median anchor (NEW
+		// 2026-09-14) -- filled by V2AnchorFromPixels() above, NOT by the
+		// GPU capture (this effect's anchor is not threaded through the
+		// history readback the other four statistics are).
+		float flV2Anchor = 0.5f;
 	};
 
 	// The slider positions, straight from the panel. Names match
@@ -63,7 +69,63 @@ namespace gamescope::overlay::abpreview
 		float flLocal    = 0.0f;
 		float flMaxLift   = 4.0f;   // Adaptive Gamma only: exponent floor = 1/this
 		float flMaxDarken = 1.5f;   // Adaptive Gamma only: exponent ceiling
+
+		// Adaptive Brightness V2 (NEW 2026-09-14) -- a THIRD choice, mutually
+		// exclusive with the two above (bGamma/bDynamic are then both
+		// false). flTarget/flStrength are NOT reused here: V2 has no
+		// dry/wet mix (dropped per the plan -- Lift is the always-on
+		// strength) and its own Target is a separate field below, because
+		// it means something different (the CONTENT median, not the whole
+		// frame's).
+		bool  bV2       = false;
+		bool  bV2Scene  = true;    // Adaptation: Off vs Scene
+		bool  bV2Knee   = false;   // Shape: toe vs knee
+		float flV2Lift    = 0.5f;
+		float flV2Target  = 0.35f;
+		float flV2MaxLift = 4.0f;
 	};
+
+	// Adaptive Brightness V2's own content-median anchor (plan 4.4), computed
+	// directly from the CAPTURED strip's pixels rather than from a GPU-side
+	// history texel -- a BASE-ONLY approximation, same as ApplyPixel()'s own
+	// v2 branch below (no guided filter on the CPU preview; see that
+	// function's comment). Good enough to judge a slider by on a
+	// 256x144 strip, not a substitute for the GPU's own measure pass.
+	inline float V2AnchorFromPixels( const uint8_t *pRgb, int nWidth, int nHeight, bool *pbVoid = nullptr )
+	{
+		if ( pbVoid ) *pbVoid = false;
+		if ( !pRgb || nWidth <= 0 || nHeight <= 0 )
+			return 0.5f;
+		// A plain sorted-vector rank window (this runs once per Inspector
+		// open/param change, not per pixel) -- 256*144 luma samples is a
+		// trivial sort at this cadence.
+		std::vector<float> vContent;
+		vContent.reserve( (size_t)nWidth * nHeight );
+		for ( int i = 0; i < nWidth * nHeight; i++ )
+		{
+			const uint8_t *p = pRgb + (size_t)i * 3;
+			const float luma = ( 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2] ) / 255.0f;
+			if ( luma > gamescope::effects_curve::ABV2_BLACK )
+				vContent.push_back( luma );
+		}
+		if ( vContent.size() < (size_t)( 0.01 * nWidth * nHeight ) )
+		{
+			if ( pbVoid ) *pbVoid = true;
+			return 0.5f;   // "void" -- see the shader's own handling
+		}
+		std::sort( vContent.begin(), vContent.end() );
+		const size_t n = vContent.size();
+		const size_t lo = (size_t)( 0.25 * n ), hi = (size_t)( 0.75 * n );
+		double total = 0.0;
+		size_t taps = 0;
+		for ( size_t i = lo; i < std::max( hi, lo + 1 ); i++ )
+		{
+			if ( i >= n ) break;
+			total += vContent[i];
+			taps++;
+		}
+		return taps > 0 ? (float)std::clamp( total / (double)taps, 0.0, 1.0 ) : 0.5f;
+	}
 
 	// The local map, sampled bilinearly at normalised image position (u, v).
 	// A line-for-line port of effects_common.h's ab_local_sample(), including
@@ -96,6 +158,24 @@ namespace gamescope::overlay::abpreview
 		const float flStrength = Cl( p.flStrength, 0.0f, 1.0f );
 
 		namespace ec = gamescope::effects_curve;
+		if ( p.bV2 )
+		{
+			// BASE-ONLY APPROXIMATION (Stage 2's guided filter is not
+			// modelled here -- B == Y, D == 0 always, i.e. exactly what
+			// the shader itself falls back to for a void pixel). Good
+			// enough to judge Shape/Target/Lift/Max lift by; Detail has no
+			// visible effect in this strip, which is the one thing this
+			// approximation cannot show -- said so in this file's header.
+			const float Y = std::clamp( 0.299f * flRgb[0] + 0.587f * flRgb[1] + 0.114f * flRgb[2], 0.0f, 1.0f );
+			if ( ec::abv2_is_void( Y ) )
+				return;
+			const float g = ec::abv2_g( p.flV2Lift, p.flV2Target, st.flV2Anchor, p.bV2Scene );
+			const float Yp = ec::abv2_curve( Y, g, p.flV2MaxLift, p.bV2Knee );
+			const float k = Yp / std::max( Y, 1e-4f );
+			for ( int i = 0; i < 3; i++ )
+				flRgb[i] = Cl( flRgb[i] * k, 0.0f, 1.0f );
+			return;
+		}
 		if ( p.bGamma )
 		{
 			// Adaptive Gamma: a port of cs_effects_layer0.comp's step 5, in
@@ -150,6 +230,12 @@ namespace gamescope::overlay::abpreview
 	// comment.
 	inline bool IsUniform( const Stats &st, const Params &p )
 	{
+		// Adaptive Brightness V2's base-only approximation has NO spatial
+		// dependency at all (B == Y everywhere, no guided filter modelled),
+		// so it is uniform unconditionally -- unlike the other two, it has
+		// no per-pixel branch to ask about.
+		if ( p.bV2 )
+			return true;
 		const bool bPerPixel = ( p.bGamma || p.bDynamic )
 			&& p.flLocal > 0.0f && st.pflLocal != nullptr;
 		return !bPerPixel;

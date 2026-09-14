@@ -25,6 +25,13 @@
 // shaders and vulkan_composite()'s pre-pass block cannot disagree.
 #define VKR_EFFECTS_BLOOM_SLOT 2u
 
+// cs_effects_v2_*.comp / cs_effects_layer0.comp (Adaptive Brightness V2,
+// 2026-09-14): the quarter-resolution guided-filter coefficient buffer
+// (a, b in R, G). Slot 3 was VKR_EFFECTS_BMAP_SLOT (the removed Brightness
+// Map effect); reused the same day, same reasoning as effects_common.h's
+// EFFECT_ADAPTIVE_V2 bit reusing that effect's flag bit.
+#define VKR_EFFECTS_V2_SLOT 3u
+
 #define VKR_LUT3D_COUNT 2 // Must match EOTF_Count
 
 #endif

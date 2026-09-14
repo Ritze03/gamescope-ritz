@@ -561,6 +561,79 @@ namespace gamescope::config
         float local_strength = 0.0f;   // 0.0..1.0
     };
 
+    // NEW 2026-09-14 (Adaptive Brightness V2, superdoc/planning/adaptive-
+    // brightness-v2-plan.md). A NEW, ADDITIVE effect -- the user's decision,
+    // verbatim: "Call it 'Adaptive brightness V2' in the GUI. Implement it
+    // fully, so I can test it later. DO NOT REMOVE THE ORIGINAL!" -- so
+    // ReshadeAdaptiveBrightnessSettings and ReshadeAdaptiveGammaSettings
+    // above are UNCHANGED, and this sits alongside them as a THIRD,
+    // mutually exclusive choice (PanelShaders.cpp's three-way exclusion).
+    //
+    // Where the older two fit gain/gamma to a WHOLE-frame statistic, this
+    // one's curve has a bounded slope (never binarises a near-black scene,
+    // the plan's whole reason for existing) and its own content-only anchor
+    // (the median of the void is not the median of the content). See
+    // src/shaders/effects_curve.h's "ADAPTIVE BRIGHTNESS V2" block for the
+    // formulas and superdoc/features/shader-effects.md for the measured
+    // numbers.
+    //
+    // Purely additive keys: an old config has none of them, gets these
+    // compiled-in defaults (off), and needs no schema bump or migration --
+    // the same shape ReshadeShadowLiftSettings/ReshadeAdaptiveGammaSettings
+    // were added in, and the plan's own proposed schema bump (which assumed
+    // this REPLACED the older two) is explicitly superseded by the user's
+    // decision above -- see the plan page's own "Decisions" section.
+    struct ReshadeAdaptiveBrightnessV2Settings
+    {
+        bool enabled = false;
+        // Adaptation: "off" is a purely static shadow lift with zero
+        // temporal behaviour (the mode a competitive player who hates any
+        // exposure movement should use); "scene" lets a dark scene deepen
+        // the lift toward target_luminance via the content-only anchor.
+        std::string mode = "scene";   // off | scene
+        // Shape: "toe" (default) compresses the WHOLE upper range by about
+        // g (the film trade -- never clips, highlights lose a little
+        // contrast); "knee" leaves highlights EXACTLY untouched and puts
+        // the compression in the mid-tones just above the lifted shadows
+        // instead (the monitor "Shadow Boost" trade). See
+        // effects_curve.h's abv2_toe()/abv2_knee().
+        std::string shape = "toe";   // toe | knee
+        // 0.0..1.0 -> g_static = 1 - 0.6*lift (1.0..0.4). The lift that is
+        // ALWAYS there regardless of Adaptation: how much a dark shape on a
+        // bright world is raised (plan 3.5 -- no global statistic can find
+        // a 1%-of-frame object; a static floor is the only thing that can).
+        float lift = 0.5f;
+        // 0.1..0.9 -- where the CONTENT median (black excluded) is put on a
+        // dark scene, in "scene" mode. Lower than the older effects' 0.5
+        // default: the anchor here is the content, not the void, and 0.5
+        // reads milky on a corridor (plan 4.10).
+        float target_luminance = 0.35f;
+        // 1.0..8.0 -- the slope cap S: the hardest any dark step may be
+        // amplified anywhere in the frame. THE anti-binarisation guarantee.
+        // 1.0 = "do not lift at all"; wider than the older effects' 1..4
+        // range because a bounded slope makes a harder ceiling safe (plan
+        // 8.2 Q3 -- the lead's own resolution: 1..8, default 4).
+        float max_lift = 4.0f;
+        // 0.0..2.0 (Stage 2) -- texture/outline contrast inside lifted
+        // regions relative to Weber-preserving: 1 keeps it exactly, > 1
+        // boosts, 0 flattens to the base alone.
+        float detail = 1.0f;
+        // 0.5..4.0 (Stage 2, % of frame height) -- the guided filter's
+        // radius: what counts as "an object's own level" vs its surround.
+        // Converted to a box radius in quarter-resolution texels on the
+        // host (rendervulkan.cpp's EffectsPushData_t, which is where the
+        // frame's own height is known).
+        float scale = 1.5f;
+        // 0.1..5.0 seconds -- how fast a GRADUAL scene change is followed
+        // ("scene" mode only). ONE number, not the older effects' up/down
+        // pair: the operator is bounded, so a scene cut can safely SNAP
+        // instead of sliding (plan 4.8), and the only thing left to tune is
+        // how fast an ordinary gradual change is tracked. The brighten-off
+        // direction uses this value; darken-on uses 2x it (fixed ratio,
+        // computed on the host -- see EffectsPushData_t).
+        float adapt_speed = 0.5f;
+    };
+
     struct ReshadeSettings
     {
         ReshadeSaturationSettings saturation;
@@ -569,6 +642,7 @@ namespace gamescope::config
         ReshadeBloomSettings bloom;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
         ReshadeAdaptiveGammaSettings adaptive_gamma;
+        ReshadeAdaptiveBrightnessV2Settings adaptive_brightness_v2;
         ReshadeShadowLiftSettings shadow_lift;
 
         // NEW 2026-09-14 (the user: "the adaptive brightness and the

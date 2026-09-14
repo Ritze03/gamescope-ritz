@@ -1553,3 +1553,296 @@ TEST_CASE( "reshade.adaptive_gamma defaults and round-trip", "[effects_curve][co
 	// compiled-in defaults -- purely additive keys, no migration.
 	REQUIRE( loaded->reshade.adaptive_brightness.enabled == false );
 }
+
+// ===========================================================================
+//  ADAPTIVE BRIGHTNESS V2 (2026-09-14) -- superdoc/planning/
+//  adaptive-brightness-v2-plan.md. A NEW, ADDITIVE effect (the user's own
+//  words: "DO NOT REMOVE THE ORIGINAL"), so every test above this point --
+//  Adaptive Brightness, Adaptive Gamma, the dark floor -- is UNCHANGED and
+//  still has to pass. These cases pin the plan's five guarantees (section
+//  4.1) on the same abv2_* text the GPU compiles.
+// ===========================================================================
+
+TEST_CASE( "abv2_toe/abv2_knee: f(0) = 0 and f(1) = 1, over the whole g x S grid",
+           "[effects_curve][abv2]" )
+{
+	for ( float g = ABV2_G_MIN; g <= 1.0f; g += 0.05f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 0.5f )
+		{
+			REQUIRE_THAT( abv2_toe( 0.0f, g, S ), WithinAbs( 0.0f, 1e-5f ) );
+			REQUIRE_THAT( abv2_toe( 1.0f, g, S ), WithinAbs( 1.0f, 1e-4f ) );
+			REQUIRE_THAT( abv2_knee( 0.0f, g, S ), WithinAbs( 0.0f, 1e-5f ) );
+			REQUIRE_THAT( abv2_knee( 1.0f, g, S ), WithinAbs( 1.0f, 1e-4f ) );
+		}
+	}
+}
+
+TEST_CASE( "abv2_toe/abv2_knee: guarantee 1 -- no local slope anywhere exceeds S",
+           "[effects_curve][abv2]" )
+{
+	const float h = 1e-4f;
+	for ( float g = ABV2_G_MIN; g <= 1.0f; g += 0.1f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 0.5f )
+		{
+			float flMaxSlopeToe = 0.0f, flMaxSlopeKnee = 0.0f;
+			for ( float x = 0.0f; x <= 1.0f - h; x += 0.005f )
+			{
+				flMaxSlopeToe  = std::max( flMaxSlopeToe,  ( abv2_toe( x + h, g, S )  - abv2_toe( x, g, S ) )  / h );
+				flMaxSlopeKnee = std::max( flMaxSlopeKnee, ( abv2_knee( x + h, g, S ) - abv2_knee( x, g, S ) ) / h );
+			}
+			// A little slack for the finite-difference sampling itself
+			// (the true maximum is exactly S at x = 0, proven algebraically
+			// in effects_curve.h's own comment; this just checks the CODE
+			// matches the proof).
+			REQUIRE( flMaxSlopeToe <= S + 0.05f );
+			REQUIRE( flMaxSlopeKnee <= S + 0.05f );
+		}
+	}
+}
+
+TEST_CASE( "abv2_toe/abv2_knee: guarantee 3 -- monotone, no two samples invert",
+           "[effects_curve][abv2]" )
+{
+	for ( float g = ABV2_G_MIN; g <= 1.0f; g += 0.1f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 0.5f )
+		{
+			float flPrevToe = -1.0f, flPrevKnee = -1.0f;
+			for ( float x = 0.0f; x <= 1.0f; x += 0.01f )
+			{
+				const float yToe = abv2_toe( x, g, S );
+				const float yKnee = abv2_knee( x, g, S );
+				REQUIRE( yToe >= flPrevToe - 1e-6f );
+				REQUIRE( yKnee >= flPrevKnee - 1e-6f );
+				flPrevToe = yToe;
+				flPrevKnee = yKnee;
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_toe: identity when g == 1 (no lift requested) or S == 1 (Max lift at its floor)",
+           "[effects_curve][abv2]" )
+{
+	for ( float x = 0.0f; x <= 1.0f; x += 0.05f )
+	{
+		REQUIRE_THAT( abv2_toe( x, 1.0f, 6.0f ), WithinAbs( x, 1e-5f ) );
+		REQUIRE_THAT( abv2_toe( x, 0.4f, 1.0f ), WithinAbs( x, 1e-5f ) );
+		REQUIRE_THAT( abv2_knee( x, 1.0f, 6.0f ), WithinAbs( x, 1e-5f ) );
+		REQUIRE_THAT( abv2_knee( x, 0.4f, 1.0f ), WithinAbs( x, 1e-5f ) );
+	}
+}
+
+TEST_CASE( "abv2_toe: f'(0) equals S -- the closed-form identity abv2_solve_t() exists to guarantee",
+           "[effects_curve][abv2]" )
+{
+	// f'(0) = ((1+t)/t)^(1-g) by direct differentiation of the toe formula
+	// (effects_curve.h's own header comment carries the derivation); this
+	// checks the CODE reproduces that identity, algebraically, rather than
+	// sampling near x = 0 -- t itself can be far smaller than any fixed
+	// finite-difference step once g is close to 1 or S is large, so a
+	// numerical derivative near zero is not a stable way to test this.
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.05f )
+	{
+		for ( float S = 1.5f; S <= 8.0f; S += 0.25f )
+		{
+			const float t = abv2_solve_t( g, S );
+			REQUIRE( t > 0.0f );
+			const float flSlope = std::pow( ( 1.0f + t ) / t, 1.0f - g );
+			REQUIRE_THAT( flSlope, WithinAbs( S, S * 1e-3f ) );
+		}
+	}
+}
+
+TEST_CASE( "abv2_g: min(g_static, g_adapt) in Scene mode, g_static alone in Off mode",
+           "[effects_curve][abv2]" )
+{
+	// Lift 0.5 -> g_static = 1 - 0.6*0.5 = 0.7.
+	REQUIRE_THAT( abv2_g_static( 0.5f ), WithinAbs( 0.7f, 1e-6f ) );
+	REQUIRE_THAT( abv2_g_static( 0.0f ), WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( abv2_g_static( 1.0f ), WithinAbs( 0.4f, 1e-6f ) );
+
+	// A DARK anchor: g_adapt < g_static, so Scene mode deepens the lift
+	// past what Lift alone would give.
+	{
+		const float g = abv2_g( 0.5f, 0.35f, 0.02f, true );
+		REQUIRE( g < 0.7f - 1e-4f );
+		REQUIRE( g >= ABV2_G_MIN );
+	}
+	// A BRIGHT anchor: g_adapt > g_static (the anchor is already above
+	// target), so `min` keeps the STATIC floor -- Scene mode never RELAXES
+	// the lift on a bright scene (plan 3.5's "no global statistic can find
+	// a 1%-of-frame object").
+	{
+		const float g = abv2_g( 0.5f, 0.35f, 0.8f, true );
+		REQUIRE_THAT( g, WithinAbs( 0.7f, 1e-4f ) );
+	}
+	// Off mode ignores the anchor entirely, even a very dark one.
+	{
+		const float g = abv2_g( 0.5f, 0.35f, 0.001f, false );
+		REQUIRE_THAT( g, WithinAbs( 0.7f, 1e-4f ) );
+	}
+}
+
+TEST_CASE( "abv2_g: the content anchor ignores an all-black frame -- caller holds the previous value",
+           "[effects_curve][abv2]" )
+{
+	// This is the contract cs_effects_measure.comp's void-frame branch
+	// implements (holding the previous smoothed anchor rather than feeding
+	// a near-zero raw measurement into g_adapt, which would otherwise pin
+	// g at its floor exactly like the retired gamma-based operators did on
+	// the report's own capture -- plan section 3.2/3.3). abv2_g_adapt()
+	// itself is a pure function of whatever anchor it is given; this pins
+	// that an anchor near zero WOULD drive g toward the floor, i.e. that
+	// the caller-side exclusion is doing real work and not guarding
+	// against a no-op.
+	const float gFromVoid = abv2_g_adapt( 0.0005f, 0.35f );
+	REQUIRE( gFromVoid < ABV2_G_MIN );   // unclamped -- abv2_g() clamps it
+	const float gClamped = abv2_g( 0.5f, 0.35f, 0.0005f, true );
+	REQUIRE_THAT( gClamped, WithinAbs( ABV2_G_MIN, 1e-4f ) );
+}
+
+TEST_CASE( "abv2_secant: bounded by S, and matches the curve's own secant off the floor",
+           "[effects_curve][abv2]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.1f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 0.5f )
+		{
+			for ( float B = 0.01f; B <= 1.0f; B += 0.02f )
+			{
+				const float secToe  = abv2_secant( B, g, S, false );
+				const float secKnee = abv2_secant( B, g, S, true );
+				REQUIRE( secToe  <= S + 1e-4f );
+				REQUIRE( secKnee <= S + 1e-4f );
+				REQUIRE_THAT( secToe,  WithinAbs( abv2_toe( B, g, S ) / B, 1e-4f ) );
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_shoulder: never exceeds the headroom, unit slope at u = 0, 0 when h <= 0",
+           "[effects_curve][abv2]" )
+{
+	REQUIRE_THAT( abv2_shoulder( 0.0f, 0.3f ), WithinAbs( 0.0f, 1e-6f ) );
+	REQUIRE_THAT( abv2_shoulder( 5.0f, 0.0f ), WithinAbs( 0.0f, 1e-6f ) );
+	for ( float h = 0.05f; h <= 1.0f; h += 0.05f )
+	{
+		for ( float u = 0.0f; u <= 5.0f; u += 0.05f )
+			REQUIRE( abv2_shoulder( u, h ) < h + 1e-5f );
+		// Unit slope at u = 0: a small step in u produces (almost) the
+		// same step in the shoulder, i.e. invisible wherever nothing
+		// would clip.
+		const float flEps = 1e-4f;
+		REQUIRE_THAT( abv2_shoulder( flEps, h ) / flEps, WithinAbs( 1.0f, 0.01f ) );
+	}
+}
+
+TEST_CASE( "abv2_detail_apply: negative detail never goes below 0, positive never reaches 1 "
+           "unless the base already was", "[effects_curve][abv2]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.15f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 1.0f )
+		{
+			for ( float B = 0.02f; B < 1.0f; B += 0.05f )
+			{
+				const float fB = abv2_toe( B, g, S );
+				const float sec = abv2_secant( B, g, S, false );
+				REQUIRE( abv2_detail_apply( fB, -B, sec ) >= -1e-5f );        // D = -B, the darkest possible
+				REQUIRE( abv2_detail_apply( fB, 1.0f - B, sec ) <= 1.0f + 1e-5f );   // D = 1-B, the brightest
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_binding: VOID when the frame is void, otherwise exactly one code",
+           "[effects_curve][abv2]" )
+{
+	REQUIRE( abv2_binding( 0.5f, 0.35f, 0.02f, true, true ) == ABV2_BIND_VOID );
+	// A bright anchor with Scene on: the static floor is the stronger of
+	// the two, so LIFT_FLOOR.
+	REQUIRE( abv2_binding( 0.5f, 0.35f, 0.9f, true, false ) == ABV2_BIND_LIFT_FLOOR );
+	// A dark anchor pushing g below G_MIN: G_MIN.
+	REQUIRE( abv2_binding( 0.0f, 0.35f, 0.0005f, true, false ) == ABV2_BIND_G_MIN );
+	// Off mode never reaches NONE (there is no adapt target to reach): it is
+	// LIFT_FLOOR at every Lift, since g_static's own range (0.4..1.0) never
+	// touches ABV2_G_MIN (0.2) -- the internal floor exists only to keep
+	// `t` finite in Scene mode's g_adapt, not as a reachable Off-mode state.
+	REQUIRE( abv2_binding( 1.0f, 0.35f, 0.5f, false, false ) == ABV2_BIND_LIFT_FLOOR );
+	REQUIRE( abv2_binding( 0.1f, 0.35f, 0.5f, false, false ) == ABV2_BIND_LIFT_FLOOR );
+	for ( const char *psz : { "x" } )   // every code has non-empty wording
+	{
+		(void)psz;
+		for ( int n = 0; n <= ABV2_BIND_VOID; n++ )
+			REQUIRE( std::string( abv2_binding_text( n ) ).size() > 0 );
+	}
+}
+
+TEST_CASE( "reshade.adaptive_brightness_v2 defaults and round-trip, and the older two effects "
+           "are untouched by its presence", "[effects_curve][config][abv2]" )
+{
+	TempConfigHome home;
+
+	Settings s{};
+	REQUIRE( s.reshade.adaptive_brightness_v2.enabled == false );
+	REQUIRE( s.reshade.adaptive_brightness_v2.mode == "scene" );
+	REQUIRE( s.reshade.adaptive_brightness_v2.shape == "toe" );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.lift, WithinAbs( 0.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.target_luminance, WithinAbs( 0.35f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.max_lift, WithinAbs( 4.0f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.detail, WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.scale, WithinAbs( 1.5f, 1e-6f ) );
+	REQUIRE_THAT( s.reshade.adaptive_brightness_v2.adapt_speed, WithinAbs( 0.5f, 1e-6f ) );
+
+	s.reshade.adaptive_brightness_v2.enabled = true;
+	s.reshade.adaptive_brightness_v2.mode = "off";
+	s.reshade.adaptive_brightness_v2.shape = "knee";
+	s.reshade.adaptive_brightness_v2.lift = 0.8f;
+	s.reshade.adaptive_brightness_v2.target_luminance = 0.4f;
+	s.reshade.adaptive_brightness_v2.max_lift = 6.0f;
+	s.reshade.adaptive_brightness_v2.detail = 1.5f;
+	s.reshade.adaptive_brightness_v2.scale = 2.0f;
+	s.reshade.adaptive_brightness_v2.adapt_speed = 1.2f;
+	// The user's own instruction, pinned as a test: the OLDER two effects
+	// stay exactly as they were, alongside V2 being configured.
+	s.reshade.adaptive_brightness.enabled = true;
+	s.reshade.adaptive_brightness.target_luminance = 0.6f;
+	ProfileMeta meta;
+	meta.name = "EffectsV2";
+	REQUIRE( SaveProfile( meta, s ) );
+
+	std::optional<Settings> loaded = LoadProfile( "EffectsV2" );
+	REQUIRE( loaded.has_value() );
+	const auto &v2 = loaded->reshade.adaptive_brightness_v2;
+	REQUIRE( v2.enabled == true );
+	REQUIRE( v2.mode == "off" );
+	REQUIRE( v2.shape == "knee" );
+	REQUIRE_THAT( v2.lift, WithinAbs( 0.8f, 1e-6f ) );
+	REQUIRE_THAT( v2.target_luminance, WithinAbs( 0.4f, 1e-6f ) );
+	REQUIRE_THAT( v2.max_lift, WithinAbs( 6.0f, 1e-6f ) );
+	REQUIRE_THAT( v2.detail, WithinAbs( 1.5f, 1e-6f ) );
+	REQUIRE_THAT( v2.scale, WithinAbs( 2.0f, 1e-6f ) );
+	REQUIRE_THAT( v2.adapt_speed, WithinAbs( 1.2f, 1e-6f ) );
+
+	// Adaptive Brightness (the OLDER effect) is UNTOUCHED -- this is the
+	// user's explicit "DO NOT REMOVE THE ORIGINAL" requirement, pinned.
+	REQUIRE( loaded->reshade.adaptive_brightness.enabled == true );
+	REQUIRE_THAT( loaded->reshade.adaptive_brightness.target_luminance, WithinAbs( 0.6f, 1e-6f ) );
+	REQUIRE( loaded->reshade.adaptive_gamma.enabled == false );
+
+	// An old profile with no adaptive_brightness_v2 object at all (an
+	// on-disk file predating this feature) resolves to the compiled-in
+	// defaults -- purely additive keys, no migration.
+	ProfileMeta meta2;
+	meta2.name = "EffectsPreV2";
+	Settings sOld{};
+	sOld.reshade.adaptive_brightness.enabled = true;
+	REQUIRE( SaveProfile( meta2, sOld ) );
+	std::optional<Settings> loadedOld = LoadProfile( "EffectsPreV2" );
+	REQUIRE( loadedOld.has_value() );
+	REQUIRE( loadedOld->reshade.adaptive_brightness_v2.enabled == false );
+	REQUIRE( loadedOld->reshade.adaptive_brightness_v2.mode == "scene" );
+}

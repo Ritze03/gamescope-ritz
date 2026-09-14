@@ -75,6 +75,23 @@ uniform effects_t {
     float u_bloomThreshold;   // 0.0..1.0, where a pixel starts to glow
     float u_bloomIntensity;   // 0.0..2.0, how bright the glow is; 0 = off
     float u_bloomRadius;      // 0.0..1.0 -> effects_curve.h's bloom_sigma()
+
+    // ---- Adaptive Brightness V2 (NEW 2026-09-14) ----
+    // A NEW, ADDITIVE effect -- the user, verbatim: "Call it 'Adaptive
+    // brightness V2' in the GUI. Implement it fully ... DO NOT REMOVE THE
+    // ORIGINAL!" -- so this sits alongside u_ab*/u_ag* above, untouched, as
+    // a third, mutually-exclusive choice. See effects_curve.h's own
+    // "ADAPTIVE BRIGHTNESS V2" block for the whole operator and
+    // superdoc/planning/adaptive-brightness-v2-plan.md for the design.
+    float u_v2Lift;        // 0.0..1.0 -> effects_curve.h's abv2_g_static()
+    float u_v2Target;      // 0.1..0.9, the content anchor's target
+    float u_v2MaxLift;     // 1.0..8.0, the toe/knee's slope cap S
+    float u_v2Detail;      // 0.0..2.0, scales the Weber-preserving secant
+    float u_v2AdaptUp;     // seconds, this row's OWN adapt speed pair
+    float u_v2AdaptDown;   // == u_v2AdaptUp * 2 (plan 4.8's fixed 1:2 ratio)
+    float u_v2Radius;      // guided-filter box radius, in v2-buffer TEXELS
+    uint  u_v2Mode;        // 0 = Off (static only), 1 = Scene (adapts)
+    uint  u_v2Knee;        // 0 = toe shape, 1 = knee shape
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -93,6 +110,16 @@ const int HISTORY_P98   = 3;   // 98th percentile (highlights)
 // next to smoothed and tell sampling noise from adaptation dynamics.
 const int HISTORY_RAW   = 4;
 const int HISTORY_COUNT = 8;
+
+// ---- Adaptive Brightness V2's own row-0 texels (NEW 2026-09-14) ----------
+//
+// Texels 8..11, still row 0, still within HISTORY_TEX_W (16) -- see this
+// effect's own block in effects_curve.h and cs_effects_measure.comp's
+// header for what each one is measured from.
+const int HISTORY_V2_ANCHOR     = 8;    // smoothed content-median anchor (EMA'd, scene-cut snapped)
+const int HISTORY_V2_ANCHOR_RAW = 9;    // this frame's raw anchor, before the EMA/snap -- debug only
+const int HISTORY_V2_VOID       = 10;   // 1.0 if under 1% of taps were above the black floor
+const int HISTORY_V2_CUT        = 11;   // 1.0 if a scene cut snapped the anchor THIS frame
 
 // ---- The local luminance map (Local adaptation, 2026-09-07) ----
 //
@@ -121,10 +148,25 @@ const int HISTORY_COUNT = 8;
 // same quantity, so local/global is a pure ratio of like for like.
 const int AB_LOCAL_GRID = 16;
 const int AB_LOCAL_ROW  = 1;
+
+// Adaptive Brightness V2's scene-cut histogram, ONE new row under the local
+// map (NEW 2026-09-14). 16 bins -- coarser than the measure pass's own
+// 64-bin internal histogram, deliberately: this row only has to answer
+// "did at least 35% of the frame's mass move to a different bin since last
+// frame", and grouping the existing 64 bins four-at-a-time costs nothing
+// extra and needs no width change to the shared history texture (the
+// plan's own sketch widens it to 64 columns for a bin-for-bin copy; this
+// reuses the existing 16-wide layout instead -- a deliberate, documented
+// simplification, not a shortfall the plan's 35% threshold itself cares
+// about the difference between 16 and 64 buckets).
+const int V2_HIST_PREV_ROW = AB_LOCAL_ROW + AB_LOCAL_GRID;   // == 17
+const int V2_HIST_BINS     = 16;
+
 // The whole history texture. Mirrored by kEffectsHistoryWidth/Height in
 // rendervulkan.cpp -- keep the two in step.
-const int HISTORY_TEX_W = 16;   // max(HISTORY_COUNT, AB_LOCAL_GRID)
-const int HISTORY_TEX_H = AB_LOCAL_ROW + AB_LOCAL_GRID;
+const int HISTORY_TEX_W = 16;   // max(HISTORY_COUNT, AB_LOCAL_GRID, V2_HIST_BINS)
+// +1 (NEW 2026-09-14): V2_HIST_PREV_ROW, the scene-cut histogram's own row.
+const int HISTORY_TEX_H = V2_HIST_PREV_ROW + 1;
 
 // ---- The Inspector's before/after preview capture (2026-09-07) ----
 //
@@ -190,8 +232,12 @@ const uint EFFECT_ADAPTIVE_GAMMA      = 1u << 7;
 // dispatches when it is clear).
 const uint EFFECT_BLOOM               = 1u << 8;
 // Bit 1u << 9 was EFFECT_BRIGHTNESS_MAP (removed 2026-09-14, see
-// superdoc/features/shader-effects.md's History note) -- left unused rather
-// than reassigned, since nothing here requires the bits to be contiguous.
+// superdoc/features/shader-effects.md's History note) -- REUSED the same
+// day for Adaptive Brightness V2 (also 2026-09-14), a NEW, ADDITIVE effect
+// (the user: "DO NOT REMOVE THE ORIGINAL" -- Adaptive Brightness and
+// Adaptive Gamma above are untouched). Mutually exclusive with BOTH of
+// them -- see PanelShaders.cpp's three-way exclusion.
+const uint EFFECT_ADAPTIVE_V2         = 1u << 9;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;
@@ -358,6 +404,38 @@ vec3 bloom_sample(vec2 pos)
     vec3 b = bloom_fetch(i0 + ivec2(1, 0),    sz);
     vec3 c = bloom_fetch(i0 + ivec2(0, 1),    sz);
     vec3 d = bloom_fetch(i0 + ivec2(1, 1),    sz);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// ---- Adaptive Brightness V2's guided-filter coefficients (Stage 2) ------
+//
+// cs_effects_v2_box2.comp writes the smoothed guided-filter pair (a, b) --
+// B(p) = a * Y(p) + b, effects_curve.h's own header and
+// superdoc/planning/adaptive-brightness-v2-plan.md section 4.5 -- into the
+// R and G lanes of a QUARTER-resolution buffer (V2_DOWN == 4, plain 8-bit
+// UNORM; unlike Bloom's/the retired Brightness Map's PACKED 16-bit floats,
+// a and b are themselves already fractions in [0, 1] with no float-bits
+// round-trip to protect, so a plain byte each is enough precision for an
+// interpolation coefficient -- see the plan's own note on why the packing
+// bmap used does NOT need reviving here).
+vec2 v2_coef_fetch(ivec2 t, ivec2 sz)
+{
+    return texelFetch(s_samplers[VKR_EFFECTS_V2_SLOT],
+                      clamp(t, ivec2(0), sz - ivec2(1)), 0).rg;
+}
+
+// `pos` is in SOURCE pixels. Bilinear by hand, same reason bloom_sample()
+// is: the slot is bound with the unnormalised nearest sampler slot 0 needs.
+vec2 v2_coef_sample(vec2 pos)
+{
+    ivec2 sz = textureSize(s_samplers[VKR_EFFECTS_V2_SLOT], 0);
+    vec2  g  = pos / 4.0 - 0.5;   // == V2_DOWN
+    ivec2 i0 = ivec2(floor(g));
+    vec2  f  = g - vec2(i0);
+    vec2 a = v2_coef_fetch(i0,                 sz);
+    vec2 b = v2_coef_fetch(i0 + ivec2(1, 0),   sz);
+    vec2 c = v2_coef_fetch(i0 + ivec2(0, 1),   sz);
+    vec2 d = v2_coef_fetch(i0 + ivec2(1, 1),   sz);
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 

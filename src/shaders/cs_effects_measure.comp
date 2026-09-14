@@ -73,6 +73,13 @@
 // is instant. The host dispatches this pass whenever the pre-pass runs (any
 // effect on); see rendervulkan.cpp for the reset-on-resume rule.
 //
+// ADAPTIVE BRIGHTNESS V2 (NEW 2026-09-14) adds its OWN anchor (a content-
+// only rank-window mean, excluding taps at or below the black floor) and
+// its own scene-cut test (a full-stop anchor change AND a 16-bin histogram
+// L1 distance against last frame), at the very end of the invocation-0-only
+// block below -- see effects_curve.h's "ADAPTIVE BRIGHTNESS V2" block and
+// superdoc/planning/adaptive-brightness-v2-plan.md sections 4.4/4.8.
+//
 // THE LOCAL MAP (Local adaptation, 2026-09-07). Besides the four global
 // statistics this pass also writes a 16x16 grid of smoothed LOCAL mean
 // luminances into rows 1..16 of the same history texture (effects_common.h's
@@ -119,6 +126,17 @@ shared float s_sum[THREAD_COUNT];
 shared uint  s_hist[HIST_BINS];      // taps per bin
 shared uint  s_histSum[HIST_BINS];   // sum of the taps' luma per bin, fixed point (x LUMA_FIXED)
 
+// Adaptive Brightness V2's OWN histogram (NEW 2026-09-14): the same 64 bins,
+// but counting only taps ABOVE the black floor (effects_curve.h's
+// ABV2_BLACK) -- "the median of the void is not the median of the content"
+// (the plan's own words). A parallel set rather than reusing s_hist/
+// s_histSum: Adaptive Brightness and Adaptive Gamma above still need every
+// tap, black included, for their own p2/p50/p98 (p2 in particular IS
+// shadows, which black is part of), so their statistics must not lose taps
+// this effect's own anchor wants to exclude.
+shared uint  s_histC[HIST_BINS];
+shared uint  s_histSumC[HIST_BINS];
+
 // The local luminance map (effects_common.h's AB_LOCAL_*). One cell per
 // THREAD -- thread (tx, ty) owns exactly the 8x8 tap block covering image
 // cell (tx, ty), so its own tap sum is the cell's mean and the map costs no
@@ -137,20 +155,27 @@ const float LUMA_FIXED = 65535.0;
 // assumed, so on a dense histogram this IS the interpolated percentile of
 // the window's centre. Where the histogram has a gap, it is continuous in
 // the counts where a rank cut is not (see the header).
-float histogram_window_mean(float lo, float hi)
+// `bContent`: false walks s_hist/s_histSum (every tap, AB/AG's own inputs);
+// true walks s_histC/s_histSumC (Adaptive Brightness V2's content-only
+// taps, above ABV2_BLACK). One function, a bool, rather than two near-
+// duplicates -- GLSL has no reference/pointer to pick an array at runtime,
+// so the branch is inside the loop instead of around the whole function;
+// the loop runs at most 64 times either way, so the extra compare is free.
+float histogram_window_mean_(float lo, float hi, bool bContent)
 {
     float cum = 0.0;
     float total = 0.0;
     float taps = 0.0;
     for (uint b = 0u; b < HIST_BINS; b++)
     {
-        float n = float(s_hist[b]);
+        float n = bContent ? float(s_histC[b]) : float(s_hist[b]);
         if (n > 0.0)
         {
             float k = clamp(min(cum + n, hi) - max(cum, lo), 0.0, n);
             if (k > 0.0)
             {
-                total += k * (float(s_histSum[b]) / (LUMA_FIXED * n));
+                float sum = bContent ? float(s_histSumC[b]) : float(s_histSum[b]);
+                total += k * (sum / (LUMA_FIXED * n));
                 taps += k;
             }
             cum += n;
@@ -159,6 +184,11 @@ float histogram_window_mean(float lo, float hi)
             break;
     }
     return (taps > 0.0) ? clamp(total / taps, 0.0, 1.0) : 0.0;
+}
+
+float histogram_window_mean(float lo, float hi)
+{
+    return histogram_window_mean_(lo, hi, false);
 }
 
 // ---- The local map's spatial smoothing -------------------------------
@@ -274,6 +304,8 @@ void main()
     {
         s_hist[gl_LocalInvocationIndex] = 0u;
         s_histSum[gl_LocalInvocationIndex] = 0u;
+        s_histC[gl_LocalInvocationIndex] = 0u;
+        s_histSumC[gl_LocalInvocationIndex] = 0u;
     }
     memoryBarrierShared();
     barrier();
@@ -295,6 +327,13 @@ void main()
             uint bin = min(uint(luma * float(HIST_BINS)), HIST_BINS - 1u);
             atomicAdd(s_hist[bin], 1u);
             atomicAdd(s_histSum[bin], uint(luma * LUMA_FIXED + 0.5));
+            // Adaptive Brightness V2's own content-only histogram (NEW
+            // 2026-09-14) -- see s_histC's declaration above.
+            if (luma > ABV2_BLACK)
+            {
+                atomicAdd(s_histC[bin], 1u);
+                atomicAdd(s_histSumC[bin], uint(luma * LUMA_FIXED + 0.5));
+            }
         }
     }
 
@@ -350,4 +389,66 @@ void main()
     imageStore(dst, ivec2(HISTORY_RAW + HISTORY_P2,   0), history_pack(p2));
     imageStore(dst, ivec2(HISTORY_RAW + HISTORY_P50,  0), history_pack(p50));
     imageStore(dst, ivec2(HISTORY_RAW + HISTORY_P98,  0), history_pack(p98));
+
+    // ---- ADAPTIVE BRIGHTNESS V2's own anchor and scene-cut (NEW
+    // 2026-09-14) -- plan sections 4.4 and 4.8. Computed unconditionally,
+    // like every other statistic here, so switching V2 on (or between its
+    // two Adaptation modes) needs no re-convergence.
+    //
+    // THE ANCHOR: a rank-window mean over ranks 25..75% of the CONTENT-ONLY
+    // taps (s_histC/s_histSumC, above ABV2_BLACK) -- "the median of the void
+    // is not the median of the content" (plan 3.3). Below 1% of the frame
+    // above the floor (an all-black loading screen), the anchor holds its
+    // previous smoothed value rather than swinging on a handful of taps.
+    float contentCount = 0.0;
+    for (uint b = 0u; b < HIST_BINS; b++)
+        contentCount += float(s_histC[b]);
+    const bool bVoid = contentCount < 0.01 * N;
+
+    float v2AdaptedPrev = history_read(HISTORY_V2_ANCHOR);
+    if (isnan(v2AdaptedPrev) || isinf(v2AdaptedPrev))
+        v2AdaptedPrev = 0.5;
+    v2AdaptedPrev = clamp(v2AdaptedPrev, 0.0, 1.0);
+
+    float v2AnchorRaw = bVoid
+        ? v2AdaptedPrev
+        : histogram_window_mean_(0.25 * contentCount, 0.75 * contentCount, true);
+
+    // THE SCENE CUT (plan 4.8): a full-stop change in the anchor AND at
+    // least 35% of the frame's mass moved to a different bin since last
+    // frame. The second test reuses s_hist (ALL taps, not content-only --
+    // a flash or a door changes how much of the frame is black too, and
+    // that is exactly the signal a content-only histogram would throw
+    // away) grouped four-at-a-time into V2_HIST_BINS (16) coarser buckets;
+    // effects_common.h's own note explains why 16 and not the plan's 64.
+    float l1 = 0.0;
+    float fracNow[V2_HIST_BINS];
+    for (int k = 0; k < V2_HIST_BINS; k++)
+    {
+        float n = float(s_hist[4 * k] + s_hist[4 * k + 1] + s_hist[4 * k + 2] + s_hist[4 * k + 3]);
+        fracNow[k] = n / N;
+        float prev = history_read_at(ivec2(k, V2_HIST_PREV_ROW));
+        if (isnan(prev) || isinf(prev)) prev = fracNow[k];
+        l1 += abs(fracNow[k] - clamp(prev, 0.0, 1.0));
+    }
+    const bool bFullStop = abs(log(max(v2AnchorRaw, 1e-4) / max(v2AdaptedPrev, 1e-4))) > log(2.0);
+    const bool bCut = !bVoid && bFullStop && (l1 > 0.35);
+
+    float v2Smoothed;
+    if ((u_flags & EFFECT_RESET_HISTORY) != 0u || bCut)
+        v2Smoothed = v2AnchorRaw;
+    else
+    {
+        float tau = (v2AnchorRaw > v2AdaptedPrev) ? u_v2AdaptUp : u_v2AdaptDown;
+        v2Smoothed = mix(v2AdaptedPrev, v2AnchorRaw, ema_alpha(u_abDt, tau));
+    }
+
+    imageStore(dst, ivec2(HISTORY_V2_ANCHOR,     0), history_pack(clamp(v2Smoothed, 0.0, 1.0)));
+    imageStore(dst, ivec2(HISTORY_V2_ANCHOR_RAW, 0), history_pack(clamp(v2AnchorRaw, 0.0, 1.0)));
+    imageStore(dst, ivec2(HISTORY_V2_VOID,       0), history_pack(bVoid ? 1.0 : 0.0));
+    imageStore(dst, ivec2(HISTORY_V2_CUT,        0), history_pack(bCut  ? 1.0 : 0.0));
+
+    // This frame's 16-bin fractions, for NEXT frame's cut test.
+    for (int k = 0; k < V2_HIST_BINS; k++)
+        imageStore(dst, ivec2(k, V2_HIST_PREV_ROW), history_pack(clamp(fracNow[k], 0.0, 1.0)));
 }

@@ -1,0 +1,51 @@
+#version 460
+
+// cs_effects_v2_down.comp -- Adaptive Brightness V2's Stage 2 down pass
+// (2026-09-14): a 4x4 box mean of the graded luma, at quarter resolution --
+// plan section 4.5/5.1's "Y4 = box4x4(Y)". The first of V2's three
+// dispatches (down, then cs_effects_v2_box1.comp, then
+// cs_effects_v2_box2.comp), mirroring Bloom's own down+blur shape
+// (cs_effects_bloom_down.comp) for the same reason: every source pixel is
+// read once here so a small bright or dark object cannot appear/disappear
+// as the sampling grid slides over it under camera motion.
+//
+// Pre-Sharpen is not applied, same argument cs_effects_bloom_down.comp's
+// header makes: invisible after a 4x reduction that itself gets boxed twice
+// more downstream.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+#include "effects_common.h"
+#include "effects_curve.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+const int V2_DOWN = 4;   // == effects_common.h's v2_coef_sample()'s divisor
+
+void main()
+{
+    ivec2 p       = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 srcSize = textureSize(s_samplers[0], 0);
+    ivec2 dstSize = (srcSize + ivec2(V2_DOWN - 1)) / V2_DOWN;
+    if (p.x >= dstSize.x || p.y >= dstSize.y)
+        return;
+
+    float sum = 0.0;
+    for (int j = 0; j < V2_DOWN; j++)
+    {
+        for (int i = 0; i < V2_DOWN; i++)
+        {
+            ivec2 t = clamp(p * V2_DOWN + ivec2(i, j), ivec2(0), srcSize - ivec2(1));
+            vec3  c = grade(texelFetch(s_samplers[0], t, 0).rgb);
+            sum += effects_luma(c);
+        }
+    }
+
+    float y4 = clamp(sum / float(V2_DOWN * V2_DOWN), 0.0, 1.0);
+    imageStore(dst, p, vec4(y4, 0.0, 0.0, 1.0));
+}

@@ -701,6 +701,226 @@ EC_FUNC float bloom_apply( float base, float glow, float intensity )
 	return 1.0f - ( 1.0f - a ) * pow( max( 1.0f - g, 1e-6f ), k );
 }
 
+// ===========================================================================
+//  ADAPTIVE BRIGHTNESS V2 (2026-09-14) -- a NEW, ADDITIVE effect. The user's
+//  decision, verbatim: *"Call it 'Adaptive brightness V2' in the GUI.
+//  Implement it fully, so I can test it later. DO NOT REMOVE THE ORIGINAL!"*
+//  So this sits ALONGSIDE ab_dyn_*/ag_* above (both untouched), as a third,
+//  mutually-exclusive choice -- see superdoc/planning/adaptive-brightness-v2-
+//  plan.md for the whole design and superdoc/features/shader-effects.md for
+//  the measured numbers.
+//
+//  THE PROBLEM THIS SOLVES (plan section 3.2): x^g for g < 1 has an INFINITE
+//  slope at x = 0. On a near-black scene the exponent is driven to its floor
+//  and a single code of near-black is amplified by dozens of stops --
+//  structural binarisation, not a tuning error. v2's base curve bends into a
+//  straight line of slope S (the user's own Max lift) at black instead, so
+//  the largest amplification ANYWHERE in the picture is S, by construction.
+//
+//  THE TOE CURVE (plan 4.3):
+//
+//    f(x; g, S) = x * ((1 + t) / (x + t)) ^ (1 - g),  t solved so f'(0) = S
+//
+//  for 0 < g < 1; f(x; 1, S) == x and f(x; g, 1) == x (both are "no lift at
+//  all", one via the exponent, one via the slope cap -- either alone is
+//  enough to disable the effect, and abv2_toe() below returns the identity
+//  directly rather than solving for an infinite t). Closed-form: f(0) = 0,
+//  f(1) = 1, f is concave so f' is DECREASING from S at x = 0 -- the slope
+//  is bounded by S everywhere, and so is the secant f(x)/x, which is what
+//  makes this curve safe to build a Weber-preserving detail term on (see
+//  abv2_secant() below).
+const float ABV2_BLACK  = 2.0f / 255.0f;   // == cs_effects_layer0.comp's hard floor, effects_curve.h's own dark floor is a SEPARATE, older feature
+const float ABV2_G_MIN  = 0.2f;            // not user-facing -- see abv2_g() below
+const float ABV2_S_MIN  = 1.0f;            // Max lift's own floor: "do not lift at all"
+const float ABV2_T_EPS  = 1e-4f;
+
+// Solves t so that f'(0) == S exactly (plan 4.3's closed form). Callers
+// guard the "no lift" cases (g >= 1 or S <= 1) before calling this -- see
+// abv2_toe() -- because t -> infinity there and (1+t)/(x+t) would evaluate
+// as inf/inf (NaN) rather than the identity the caller actually wants.
+EC_FUNC float abv2_solve_t( float g, float S )
+{
+	float gg = clamp( g, ABV2_G_MIN, 0.999f );
+	float s  = max( S, ABV2_S_MIN );
+	float p  = 1.0f / ( 1.0f - gg );
+	float denom = pow( s, p ) - 1.0f;
+	return 1.0f / max( denom, ABV2_T_EPS );
+}
+
+// The toe-gamma itself, guarding both "no lift" degenerate cases as an exact
+// identity (see the header note above -- this is what makes g == 1 or
+// S == 1 a byte-exact no-op rather than a near-miss).
+EC_FUNC float abv2_toe( float x, float g, float S )
+{
+	float xx = clamp( x, 0.0f, 1.0f );
+	float gg = clamp( g, ABV2_G_MIN, 1.0f );
+	float s  = max( S, ABV2_S_MIN );
+	if ( gg >= 0.999f || s <= 1.0f + ABV2_T_EPS )
+		return xx;
+	float t = abv2_solve_t( gg, s );
+	return xx * pow( ( 1.0f + t ) / ( xx + t ), 1.0f - gg );
+}
+
+// THE KNEE VARIANT (the "monitor" trade, plan 8.2 Q1 -- the plan leaves the
+// exact formula open; this is the lead's own resolution, verified by
+// exhaustive sampling in tests/test_effects_curve.cpp against the same five
+// guarantees the toe carries). Where the toe compresses the WHOLE upper
+// range by about g (f'(1) ~= g, the highlight guard), the knee leaves
+// highlights EXACTLY untouched (f'(1) == 1 always) and puts the whole
+// compression into the mid-tones just above the lifted shadows instead --
+// the monitor "Shadow Boost" trade (plan 2.4) rather than the film trade.
+//
+// Construction: below the knee point ABV2_KNEE_X, a toe curve RESCALED into
+// the box [0, KNEE_X] x [0, KNEE_X] (so it still lands exactly on the
+// identity line at the knee); above it, the plain identity. Both halves are
+// independently monotone and bounded by S (the rescaled toe by the same
+// proof as abv2_toe() -- rescaling a bounded-slope curve into a smaller box
+// cannot raise its slope; the identity trivially is), so the whole curve is
+// too, even though the two halves' slopes do not match AT the knee (a jump
+// from the toe's own highlight slope, ~g, up to 1) -- guarantee 3 (monotone)
+// only asks for non-negative slope, not a smooth derivative, and a jump
+// from a smaller positive slope to a larger one cannot invert anything.
+const float ABV2_KNEE_X = 0.5f;
+
+EC_FUNC float abv2_knee( float x, float g, float S )
+{
+	float xx = clamp( x, 0.0f, 1.0f );
+	if ( xx >= ABV2_KNEE_X )
+		return xx;
+	return ABV2_KNEE_X * abv2_toe( xx / ABV2_KNEE_X, g, S );
+}
+
+// The dispatch both the shader and the tests use, so "which shape" is one
+// switch, not two copies of an if/else.
+EC_FUNC float abv2_curve( float x, float g, float S, bool bKnee )
+{
+	return bKnee ? abv2_knee( x, g, S ) : abv2_toe( x, g, S );
+}
+
+// ---- Choosing g (plan 4.4): a static floor, deepened by adaptation -------
+//
+//   g_static = 1 - 0.6 * Lift                      // Lift 0..1 -> 1.0..0.4
+//   g_adapt  = ln(Target) / ln(anchor_smoothed)     // < 1 when content is dark
+//   g        = clamp(min(g_static, g_adapt), G_MIN, 1)   // Adaptation "Scene"
+//   g        = clamp(g_static, G_MIN, 1)                 // Adaptation "Off"
+//
+// `min`, not `max`: adaptation can only make the lift STRONGER on a dark
+// scene (a smaller g); on a bright scene the STATIC curve is what lifts the
+// one dark thing in it (plan 3.5 -- no global statistic can find a 1%-of-
+// frame object), so the floor must never be relaxed by "the scene looks
+// bright". G_MIN (0.2) is not a user-facing bound -- it exists only so `t`
+// stays finite and the highlight compression stays above a fifth; Lift and
+// Max lift are the controls that actually reach the user.
+EC_FUNC float abv2_g_static( float lift )
+{
+	return 1.0f - 0.6f * clamp( lift, 0.0f, 1.0f );
+}
+
+EC_FUNC float abv2_g_adapt( float anchorSmoothed, float target )
+{
+	float m = clamp( anchorSmoothed, 0.001f, 0.999f );
+	float t = clamp( target, 0.01f, 0.99f );
+	return log( t ) / log( m );
+}
+
+EC_FUNC float abv2_g( float lift, float target, float anchorSmoothed, bool bSceneMode )
+{
+	float gStatic = clamp( abv2_g_static( lift ), ABV2_G_MIN, 1.0f );
+	if ( !bSceneMode )
+		return gStatic;
+	float gAdapt = abv2_g_adapt( anchorSmoothed, target );
+	return clamp( min( gStatic, gAdapt ), ABV2_G_MIN, 1.0f );
+}
+
+// ---- Base/detail (Stage 2, plan 4.5): the secant and the soft shoulder ---
+//
+// The secant f(B)/B, clamped to S -- what a per-pixel curve would apply to a
+// region's OWN texture if it scaled it by the tangent (flattening it); using
+// the secant instead preserves the region's Weber contrast exactly, which is
+// the entire content of "local tone mapping" at these compression ratios
+// (plan 4.5's worked numbers). Guarded at B near 0 (where the secant's own
+// limit is f'(0) == S) so a divide by a near-zero base never produces a
+// stray large or NaN value the shoulder would then have to absorb.
+EC_FUNC float abv2_secant( float B, float g, float S, bool bKnee )
+{
+	if ( B <= 1e-4f )
+		return S;
+	return min( abv2_curve( B, g, S, bKnee ) / B, S );
+}
+
+// The Reinhard-shaped soft shoulder on POSITIVE detail only (plan 4.5):
+// D <= 0 needs nothing (sec <= f(B)/B keeps u >= -f(B), so f(B) + u >= 0
+// already); D > 0 could push f(B) + u past 1, and this maps any u >= 0 into
+// the remaining headroom h = 1 - f(B) with unit slope at u = 0 (so it is
+// invisible wherever nothing would clip) and asymptotes to h (never
+// reaching 1) as u grows. h <= 0 (the base is already at 1) can lift
+// nothing further, so the shoulder is 0 there rather than a 0/0.
+EC_FUNC float abv2_shoulder( float u, float h )
+{
+	if ( h <= 1e-4f )
+		return 0.0f;
+	float uu = max( u, 0.0f );
+	return uu * h / ( h + uu );
+}
+
+// One channel's detail step, base already through the curve (plan 4.5):
+// D = Y - B; positive detail gets the shoulder, negative does not (it
+// cannot go below -f(B), i.e. Y' cannot go negative, because sec <= f(B)/B).
+EC_FUNC float abv2_detail_apply( float fB, float D, float sec )
+{
+	float u = D * sec;
+	if ( D > 0.0f )
+		return fB + abv2_shoulder( u, 1.0f - fB );
+	return fB + u;
+}
+
+// ---- The black floor (plan 4.6) ------------------------------------------
+//
+// B <= ABV2_BLACK: Y' = Y exactly, never touched by the curve at all. The
+// toe already keeps these near-untouched (at most S * BLACK further from
+// zero), but a HARD floor is what makes literal black, letterbox bars and
+// 1-code dither EXACTLY unchanged rather than "close" -- see the header
+// note on ab_dyn's own reasoning for why a floor is a separate guarantee
+// from a bounded slope, not a consequence of one.
+EC_FUNC bool abv2_is_void( float B )
+{
+	return B <= ABV2_BLACK;
+}
+
+// ---- The binding readout (plan 4.11) -------------------------------------
+//
+// Which of the effect's own controls is the one actually holding the
+// picture back right now -- the same "a clamped slider looks exactly like a
+// working one" lesson ab_dyn_binding()/ag_binding() above exist for. Four
+// codes here, not the plan's five: VOID and NONE/LIFT_FLOOR/G_MIN classify
+// cleanly from g_static vs g_adapt alone (exactly what the plan's wording
+// for each of them describes), but the plan's fifth code, MAX_LIFT, would
+// require attributing a LIMIT to the slope cap S -- and S does not clamp g
+// at all (it is an independent shape parameter, not a second ceiling on the
+// same exponent), so there is no clean "S is what's binding" test to write
+// that could not just be NONE with a different S already applied. Left out
+// rather than faked; CUT is reported as its own fact (see the panel row),
+// not folded into this enum, because a scene cut is a one-frame EVENT, not
+// a standing limit the way the other three are.
+const int ABV2_BIND_NONE       = 0;   // g_adapt is what's binding -- Target does the work
+const int ABV2_BIND_LIFT_FLOOR = 1;   // g_static (Lift's own floor) is stronger than Target asks for
+const int ABV2_BIND_G_MIN      = 2;   // the internal floor -- effectively "as much lift as this shape allows"
+const int ABV2_BIND_VOID       = 3;   // under 1% of the frame is above the black floor -- anchor frozen
+
+EC_FUNC int abv2_binding( float lift, float target, float anchorSmoothed, bool bSceneMode, bool bVoid )
+{
+	if ( bVoid )
+		return ABV2_BIND_VOID;
+	float gStatic = clamp( abv2_g_static( lift ), ABV2_G_MIN, 1.0f );
+	if ( !bSceneMode )
+		return gStatic <= ABV2_G_MIN + 1e-4f ? ABV2_BIND_G_MIN : ABV2_BIND_LIFT_FLOOR;
+	float gAdapt = abv2_g_adapt( anchorSmoothed, target );
+	float g = min( gStatic, gAdapt );
+	if ( g <= ABV2_G_MIN + 1e-4f )
+		return ABV2_BIND_G_MIN;
+	return ( gStatic <= gAdapt ) ? ABV2_BIND_LIFT_FLOOR : ABV2_BIND_NONE;
+}
+
 #ifdef __cplusplus
 // The one wording of ab_dyn_binding()'s codes: the settings panel's
 // Diagnostics fact and the `effects_ab_log` trace both print this, so the
@@ -731,6 +951,21 @@ inline const char *ag_binding_text( int nBinding )
 		case AG_BIND_DARKEN:   return "Max darken -- Target brightness does no more here";
 		case AG_BIND_STRENGTH: return "Strength is 0 -- nothing is applied";
 		default:               return "none -- the mid-tones are on Target brightness";
+	}
+}
+
+// Adaptive Brightness V2's own wording (abv2_binding() above). "Scene
+// void"/"floor" are this row's own vocabulary, not AB's/AG's, because
+// nothing in this effect is called a gain or a gamma from the user's side --
+// Lift and Max lift are the names on the row.
+inline const char *abv2_binding_text( int nBinding )
+{
+	switch ( nBinding )
+	{
+		case ABV2_BIND_LIFT_FLOOR: return "Lift -- Target brightness does no more here";
+		case ABV2_BIND_G_MIN:      return "as much lift as this shape allows";
+		case ABV2_BIND_VOID:       return "scene mostly void -- holding the last reading";
+		default:                   return "none -- the content median is on Target brightness";
 	}
 }
 } // namespace gamescope::effects_curve

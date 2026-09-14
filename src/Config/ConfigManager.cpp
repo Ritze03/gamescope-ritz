@@ -332,6 +332,29 @@ namespace gamescope::config
                     ag.local_strength = JGetFloat( *pAdaptiveGamma, "local_strength", ag.local_strength );
                 }
 
+                // NEW 2026-09-14: Adaptive Brightness V2 -- see
+                // ConfigSchema.h's ReshadeAdaptiveBrightnessV2Settings. A
+                // NEW, ADDITIVE effect (the older two above are UNCHANGED);
+                // additive keys, an old config has none and resolves to the
+                // compiled-in defaults (off).
+                if ( const nlohmann::json *pV2 = JGetObject( *pReshade, "adaptive_brightness_v2" ) )
+                {
+                    auto &v2 = s.reshade.adaptive_brightness_v2;
+                    v2.enabled = JGetBool( *pV2, "enabled", v2.enabled );
+                    v2.mode = JGetString( *pV2, "mode", v2.mode );
+                    if ( v2.mode != "off" )
+                        v2.mode = "scene";
+                    v2.shape = JGetString( *pV2, "shape", v2.shape );
+                    if ( v2.shape != "knee" )
+                        v2.shape = "toe";
+                    v2.lift = JGetFloat( *pV2, "lift", v2.lift );
+                    v2.target_luminance = JGetFloat( *pV2, "target_luminance", v2.target_luminance );
+                    v2.max_lift = JGetFloat( *pV2, "max_lift", v2.max_lift );
+                    v2.detail = JGetFloat( *pV2, "detail", v2.detail );
+                    v2.scale = JGetFloat( *pV2, "scale", v2.scale );
+                    v2.adapt_speed = JGetFloat( *pV2, "adapt_speed", v2.adapt_speed );
+                }
+
                 if ( const nlohmann::json *pShadowLift = JGetObject( *pReshade, "shadow_lift" ) )
                 {
                     auto &sl = s.reshade.shadow_lift;
@@ -611,6 +634,18 @@ namespace gamescope::config
             jAdaptiveGamma[ "adapt_down_speed" ] = ag.adapt_down_speed;
             jAdaptiveGamma[ "local_strength" ] = ag.local_strength;
 
+            const auto &v2 = s.reshade.adaptive_brightness_v2;
+            nlohmann::json jV2 = nlohmann::json::object();
+            jV2[ "enabled" ] = v2.enabled;
+            jV2[ "mode" ] = v2.mode;
+            jV2[ "shape" ] = v2.shape;
+            jV2[ "lift" ] = v2.lift;
+            jV2[ "target_luminance" ] = v2.target_luminance;
+            jV2[ "max_lift" ] = v2.max_lift;
+            jV2[ "detail" ] = v2.detail;
+            jV2[ "scale" ] = v2.scale;
+            jV2[ "adapt_speed" ] = v2.adapt_speed;
+
             const auto &sl = s.reshade.shadow_lift;
             nlohmann::json jShadowLift = nlohmann::json::object();
             jShadowLift[ "enabled" ] = sl.enabled;
@@ -623,6 +658,7 @@ namespace gamescope::config
             jReshade[ "bloom" ] = std::move( jBloom );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
             jReshade[ "adaptive_gamma" ] = std::move( jAdaptiveGamma );
+            jReshade[ "adaptive_brightness_v2" ] = std::move( jV2 );
             jReshade[ "shadow_lift" ] = std::move( jShadowLift );
             // NEW 2026-09-14: bare top-level key, SHARED between the two
             // adaptive effects above -- see ConfigSchema.h.
