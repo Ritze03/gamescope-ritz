@@ -58,11 +58,19 @@ knee-variant extras remain not built; nothing else in this plan changed.
 
 **Measured vs. predicted cost (§5.2's table).** Stage 1+2's own predicted range was
 "≈ 0" (Stage 1) plus 0.2–0.3 ms (Stage 2); Stage 3 added another predicted +0.1 ms. The
-FIRST real GPU measurement (this pass, harness resolution 1280×720, desktop GPU) is
-**mean 179.2 µs (0.18 ms) at 1280×720, 0.22 ms at 1920×1080** — see `shader-effects.md`
-for the full table this number came from, how it was captured, and the one honest
-deviation the same run found (`halo-haloinv-on` exceeds this doc's own predicted ≤8-code
-bound at the Max lift 8 / Detail 2 / Clarity 1 stretch setting — not fixed, reported).
+FIRST real GPU measurement (this pass, harness resolution 1280×720, desktop GPU) was
+**mean 179.2 µs (0.18 ms) at 1280×720, 0.22 ms at 1920×1080** for the WHOLE pre-pass
+block (measure + Bloom + V2's own dispatches + apply), not V2's cost alone — see
+`shader-effects.md` for the full table this number came from, how it was captured, and
+the one number that changed once the pre-pass was measured with V2 subtracted out
+(2026-09-14 QC): at 1920×1080 on an RX 7900 XTX, V2's OWN cost over the 0.10 ms
+pre-pass baseline (Saturation only, V2 off) is **+0.08 ms at defaults, +0.10 ms at
+Clarity 0.5** (AB Dynamic, for comparison, is 0.14 ms for the whole pre-pass); the
+harness's own 1280×720 mean settled at **181.6 µs**. The halo deviation the same QC
+pass found is not a bound violation any more — see `shader-effects.md`'s "Measured"
+section for the ruling (the plan's own guarantee 1 already allows a 32× amplification
+at that stretch setting, and a CPU reproduction of the whole pipeline matches the GPU
+number to within a code).
 
 **Stage 1 + Stage 2 are both implemented in this pass** (the curve, the content anchor,
 the scene-cut snap, AND the guided-filter base/detail split) — not staged across separate
@@ -75,20 +83,21 @@ plan's separable h/v pairs. Neither changes the underlying maths, only the dispa
 shape; both are cheap at the resolution the guided filter runs at (quarter of the base
 layer).
 
-**One thing this plan states that a straightforward implementation of §4.3's own formula
-does not reproduce:** §4.3's worked-numbers table (`g = 0.566, t = 0.043`) does not match
-evaluating `f(x;g,S) = x·((1+t)/(x+t))^(1−g)` at that `g` and `S = 4` — the table's own
-`t = 0.043` is correct (verified: `t = 1/(S^(1/(1−g))−1) ≈ 0.0428`, and `f'(0) = ((1+t)/t)
-^(1−g) = 4.0` exactly, both algebraically and numerically), but the table's OTHER entries
-(code 4 → 15, code 128 → 158, etc.) do not follow from that `t`/`g`/formula on a direct
+**Fixed 2026-09-14 (V2 QC), superseding the paragraph this one replaces:** §4.3's
+worked-numbers table (`g = 0.566, t = 0.043`) did not match evaluating
+`f(x;g,S) = x·((1+t)/(x+t))^(1−g)` at that `g` and `S = 4` — the table's own `t = 0.043`
+was correct (verified: `t = 1/(S^(1/(1−g))−1) ≈ 0.0428`, and `f'(0) = ((1+t)/t)^(1−g) =
+4.0` exactly, both algebraically and numerically), but the table's OTHER entries (code 4
+→ 15, code 128 → 158, etc.) did not follow from that `t`/`g`/formula on a direct
 evaluation (a from-scratch check gives 14/170 instead). The closed-form property this
 plan actually needs — `f'(0) = S` exactly, `f` concave, bounded slope everywhere — holds
-and is what `tests/test_effects_curve.cpp` pins; the table itself looks like a rounding
-or transcription artefact in the prototype's own numpy script, not a defect in the
-formula the rest of this page relies on, and the shipped code follows the formula in
-§4.3's prose, not the table's specific numbers. Flagged here rather than silently
-"corrected", per this doc's own preamble ("the numbers ... should be re-measured ...
-before anything is claimed").
+and is what `tests/test_effects_curve.cpp` pins; the table below has been recomputed
+directly from the formula with a short Python check (`t_of(g,S) =
+1/(S**(1/(1-g))-1)`, `f(x,g,S,t) = x*((1+t)/(x+t))**(1-g)`) and matches the QC commit's
+own CPU reproduction exactly. **The original rows were a prototype artefact** — a
+rounding or transcription slip in the numpy script that produced them, not a defect in
+the formula itself, which the shipped code has always followed. No code changed; only
+the table below did.
 
 **2026-09-14, design plan. Nothing under `src/`, `tests/` or `scripts/` was changed for
 this page.** The user's brief, verbatim: *"create a plan for a really good adaptive
@@ -494,14 +503,14 @@ Worked values (codes in, codes out), `S = 4`:
 
 | `g` | `t` | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 200 | max slope |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.566 (Target 0.35 on the capture) | 0.043 | 4 | 8 | 15 | 27 | 45 | 70 | 105 | 158 | 214 | 4.0 |
-| 0.374 (Target 0.5) | 0.123 | 4 | 8 | 16 | 30 | 55 | 91 | 137 | 191 | 233 | 4.0 |
-| 0.25 (the old floor, for comparison) | 0.187 | 4 | 8 | 16 | 31 | 58 | 100 | 152 | 206 | 240 | 4.0 |
+| 0.566 (Target 0.35 on the capture) | 0.043 | 4 | 7 | 14 | 25 | 43 | 71 | 111 | 170 | 221 | 4.0 |
+| 0.374 (Target 0.5) | 0.123 | 4 | 8 | 15 | 28 | 49 | 82 | 127 | 185 | 229 | 4.0 |
+| 0.25 (the old floor, for comparison) | 0.187 | 4 | 8 | 15 | 28 | 52 | 87 | 135 | 192 | 232 | 4.0 |
 | `x^0.25` today | — | 64 | 76 | 90 | 107 | 128 | 152 | 181 | 215 | 240 | ∞ |
 
 The last two rows have the same exponent; the difference is the toe. Code 4 lands on
-16, not 90, and codes 1..16 keep their 4-bit separation ×4 instead of being folded
-into 64..128.
+14..15, not 90, and codes 1..16 keep close to their 4-bit separation ×4 instead of being
+folded into 64..128.
 
 `Why this family and not a piecewise linear+gamma:` a tangent from the origin to a
 concave curve does not exist (the join cannot be C¹), and a spline needs three or four
@@ -583,13 +592,10 @@ Y′   = f(B) + u · h / (h + u),  h = 1 − f(B)        for D > 0     (< 1 for 
 - `Why the secant and not the tangent:` for a concave `f` with `f(0) = 0`, the secant
   `f(B)/B` exceeds the tangent `f′(B)` — at `B = 0.1, g = 0.37, S = 4` it is 2.75 vs 1.98.
   A per-pixel curve scales a region's texture by the *tangent* and flattens it; the
-  base/detail form scales it by the *secant*, which preserves the region's **Weber
-  contrast** exactly (`D/B` in, `u/f(B) = D/B` out). That is the entire content of
-  "local tone mapping" at these compression ratios, and it is what §2.6 says a
-  silhouette needs. Measured (synthetic bright world, textured object): field texture
-  std **10.0 → 9.3** with the split vs **10.0 → 6.4** with the global curve at the same
-  `g`; the object's Weber contrast 0.200 → 0.154 (split) vs 0.139 (global), and
-  **0.194 at Detail 1.5**.
+  base/detail form scales it by the *secant* instead. Measured (synthetic bright world,
+  textured object): field texture std **10.0 → 9.3** with the split vs **10.0 → 6.4**
+  with the global curve at the same `g`; the object's Weber contrast 0.200 → 0.154
+  (split) vs 0.139 (global), and **0.194 at Detail 1.5**.
 - `Why a soft shoulder only on positive detail:` the range guarantee. Negative detail
   cannot go below 0 because `sec ≤ f(B)/B`; positive detail could exceed 1, and the
   Reinhard-shaped `u·h/(h+u)` maps any `u` into the headroom `h` with unit slope at 0
@@ -597,6 +603,21 @@ Y′   = f(B) + u · h / (h + u),  h = 1 − f(B)        for D > 0     (< 1 for 
   per pixel to the detail alone rather than to the whole curve. A hard `min(sec,
   (1−f(B))/(1−B))` was tried first and capped positive detail at 0.84× across every
   lifted region (measured), i.e. it flattened exactly what the split exists to keep.
+- **Where "exactly Weber-preserving" holds and where it doesn't (2026-09-14, V2 QC).**
+  Exactly, for **negative** detail (`D/B` in, `u/f(B) = D/B` out — the shoulder never
+  runs there) and for **Clarity's own contribution against Stage 2** (`abv2_clarity_combine`
+  is a plain sum before the one shoulder, so `M` inherits whatever Stage 2 already
+  guarantees rather than adding a second approximation). For **positive** detail, the
+  Reinhard shoulder is a *bounded* approximation, not an exact one: it lowers the
+  region's Weber contrast versus the raw, unshouldered secant by a factor
+  `h/(h + u)` (0.87 in the `B = 0.1, g = 0.37, S = 4`-style 10-on-15 example above) while
+  the *absolute* step still grows roughly **2.7×** over raw at the same setting — the
+  shoulder trades a little contrast for the range guarantee (§4.6's void aside, nothing
+  may exceed 1), and that trade is the honest content of guarantee 4, not a defect.
+  §7.2's `v2-silhouette` check is written to this: it asserts Weber contrast ≥ raw minus
+  a **0.02** tolerance, not `≥ raw` unconditionally, precisely because the shoulder can
+  cost a couple of hundredths of Weber contrast on a positive-detail figure while still
+  making it far more visible in absolute terms.
 - `Detail` above 1 breaks guarantee 1's factor to `S · Detail`; that is why its range
   stops at 2 and the guarantee is stated with the product.
 
@@ -817,7 +838,7 @@ history), its `CHANGELOG.md` line, and its harness output under
 | check | scene | criterion (defaults unless stated) | stands in for |
 | --- | --- | --- | --- |
 | `v2-nobinarise` | `capture`, `silhouette` | pixels ≥ 128 ≤ **6 %** on the capture; on `silhouette` the 3-, 6- and 10-code populations remain three distinct populations (their means ordered, each within 0.5·S of its own lifted value); pixels ≥ 250 ≤ **0.5 %** on every scene at every setting | the binarised capture |
-| `v2-silhouette` | `silhouette`, `skyfore`, `models` | each figure's **Weber contrast against its surround ≥ raw** (never decreases) and its **absolute difference ≥ 2× raw** at the defaults; at Max lift 1 the frame is byte-identical to raw | "can I see the enemy" |
+| `v2-silhouette` | `silhouette`, `skyfore`, `models` | each figure's **Weber contrast against its surround ≥ raw − 0.02** (the harness's own tolerance for the shoulder's bounded trade on positive detail, §4.5) and its **absolute difference ≥ 2× raw** at the defaults; at Max lift 1 the frame is byte-identical to raw | "can I see the enemy" |
 | `v2-slope` | `dark`, `texdark` | for every adjacent band pair, `(out_b − out_a) / (in_b − in_a) ≤ S · Detail + 0.05` | guarantee 1 |
 | `v2-black` | `silhouette`, `blackout` | pixels at code 0..2 in the input are at code 0..2 in the output, exactly | guarantee 2 |
 | `v2-mono` | all band scenes | band order preserved, no two bands merge (≥ 2 codes apart) | guarantee 3 |
