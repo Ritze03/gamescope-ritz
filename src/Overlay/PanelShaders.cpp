@@ -136,6 +136,12 @@ namespace gamescope
 		e.flAgUpSpeed    = r.adaptive_gamma.adapt_up_speed;
 		e.flAgDownSpeed  = r.adaptive_gamma.adapt_down_speed;
 		e.flAgLocal      = r.adaptive_gamma.local_strength;
+
+		// Dark floor (2026-09-14): SHARED between the two rows above --
+		// r.dark_floor is a bare field on ReshadeSettings, not nested in
+		// either adaptive struct. See ConfigSchema.h and this file's own
+		// standalone "Leave dark scenes alone" row below.
+		e.flDarkFloor = r.dark_floor;
 	}
 
 	static void PushAllToRenderer()
@@ -276,6 +282,19 @@ namespace gamescope
 	static constexpr const char *kSdrOnly =
 		"effects are SDR-only for now -- the focused app is presenting HDR or scRGB content, "
 		"whose values these passes would clip. A deliberate v1 limitation, not a bug";
+
+	// Dark floor (2026-09-14): usable whenever either of the two mutually
+	// exclusive adaptive effects is the one that would read it -- see the
+	// standalone row below for why this is one shared control rather than a
+	// Param under either Switch.
+	static bool EitherAdaptiveEnabled()
+	{
+		return EffectsUsable()
+			&& ( Cfg().reshade.adaptive_brightness.enabled || Cfg().reshade.adaptive_gamma.enabled );
+	}
+	static constexpr const char *kNeedsAnAdaptiveEffect =
+		"turn on Adaptive Brightness or Adaptive Gamma above to use this -- it fades "
+		"whichever one is running, and does nothing on its own";
 
 	static void SetEffectEnabled( bool *pbField, bool bOn )
 	{
@@ -961,6 +980,36 @@ namespace gamescope
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions, as Adaptive Brightness's own has
 				.Default( AgDefaults{}.local_strength );
+
+		// DARK FLOOR -- NEW 2026-09-14. The user, verbatim: "the adaptive
+		// brightness and the adaptive gamma both completely destroy REALLY
+		// dark images ... Is there some kind of filter, that keeps really
+		// dark stuff really dark or something?" A standalone row, not a
+		// Param under either Switch above: Adaptive Brightness is already AT
+		// kParamBudget (8), and that constant's own comment (Registry.cpp)
+		// says the next param on that row is the signal to stop adding
+		// params there, not raise the shared ceiling a third time. One row
+		// also matches the maths -- ConfigSchema.h's dark_floor is ONE
+		// number read by whichever of the two mutually exclusive effects is
+		// running, so a second copy under Adaptive Gamma would just be a
+		// second control for the same value.
+		using ReshadeDefaults = config::ReshadeSettings;
+		a.Slider( "image.shaders.dark_floor", "Leave dark scenes alone",
+			ui::AnyBind::Of<float>(
+				[]{ return Cfg().reshade.dark_floor; },
+				[]( float f ) { SetEffectFloat( &Cfg().reshade.dark_floor, f ); } ) )
+			.Key( "reshade.dark_floor" )
+			.Help( "Below this scene brightness the effect fades out, so a truly dark scene "
+			       "stays dark instead of being lifted to grey. Affects whichever of Adaptive "
+			       "Brightness or Adaptive Gamma is on -- they never run together. 0 turns "
+			       "this off." )
+			.Range( 0.0f, 0.5f )
+			.Step( 0.01f )
+			.ZeroMeans( "Off" )
+			.Default( ReshadeDefaults{}.dark_floor )
+			.Keywords( "dark floor black crush destroy binarise binarize adaptive brightness "
+			           "gamma near black" )
+			.DisabledUnless( EitherAdaptiveEnabled, kNeedsAnAdaptiveEffect );
 
 		a.Group( "Diagnostics" );
 

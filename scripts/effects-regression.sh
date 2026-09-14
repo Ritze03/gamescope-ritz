@@ -1372,6 +1372,85 @@ done
 bmap_defaults
 set_bmap 0
 
+# ---------------------------------------------------------------------------
+# DARK FLOOR (2026-09-14). The user, verbatim: "the adaptive brightness and
+# the adaptive gamma both completely destroy REALLY dark images ... Is there
+# some kind of filter, that keeps really dark stuff really dark or
+# something?" -- shown on a real capture as a near-black CS2 corridor
+# BINARISED: black held, everything else slammed toward white. See
+# src/shaders/effects_curve.h's DARK FLOOR block and shader-effects.md's
+# "Leave dark scenes alone" section.
+#
+# IT RUNS ON ITS OWN INSTANCE, AND LAST, because `blackout` (added for this
+# feature) is not in the default ring -- see SCENES_DEFAULT's own comment on
+# why a block that wants a new scene restarts rather than appending -- and
+# because Bloom's block right after Adaptive Gamma's, above, CONTINUES the
+# previous instance rather than restarting (it needs the client already on
+# `texdark` with motion paused, exactly where Adaptive Gamma's block leaves
+# it); putting this block there instead, ahead of Bloom, broke that -- every
+# check from Bloom onward read the wrong scene and failed (measured,
+# 2026-09-14: 15 checks). Last is the only position that restarts a ring
+# nothing downstream depends on. The EXISTING `dark` scene's own contract
+# (`dark-dynamic`, captured near the top of this script under the default
+# ring) already proves the shipped default does not touch it, since
+# ConfigSchema.h's dark_floor default (0.03) is what that earlier capture ran
+# under too -- nothing here repeats that check.
+#
+# `blackout` is a TEXTURED scene (tests/effects_scene_client.c's PaintTexture,
+# like texdark/texmid/texsplit), so -- like them, and unlike the flat
+# scenes -- it SCROLLS under this harness's `--motion 3` unless paused; every
+# capture below needs `toggle_motion` first or "off" and "on" are two
+# different frames of a moving picture, not one frame graded two ways
+# (measured, 2026-09-14: without the pause, a single coarse-grid cell read
+# raw=5/graded=203 -- not a real effect, the picture had scrolled between the
+# two captures).
+#
+#   dark-floor-blackout-ag-default   the near-black `blackout` scene, held
+#                     still, under Adaptive Gamma at every default INCLUDING
+#                     the shipped dark_floor: graded must stay within 3
+#                     counts of raw (coarse grid) and nothing under 64 may
+#                     come out at 128+ -- the binarisation the report
+#                     described.
+#   dark-floor-blackout-ab-default   the same, Adaptive Brightness Dynamic.
+#   dark-floor-means  INFO: frame mean at every capture, floor 0 (today's
+#                     pre-2026-09-14 arithmetic, i.e. the reported failure)
+#                     beside the shipped default -- so the "default" checks
+#                     above read as a measured fix rather than as a scene
+#                     too mild to have triggered the failure either way.
+# ---------------------------------------------------------------------------
+DARK_FLOOR_ID="image.shaders.dark_floor"
+DARK_FLOOR_DEFAULT=0.03   # == ConfigSchema.h's ReshadeSettings::dark_floor
+set_dark_floor() { gsctl overlay_e2_set "$DARK_FLOOR_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
+
+SCENES="blackout,dark,mid"
+start_instance
+sleep "$ADAPT_SETTLE_S"
+toggle_motion   # this instance starts with --motion 3 RUNNING; pause it
+sleep 1
+
+DF_OFF="$(take_screenshot 26-blackout-off)"
+
+ag_defaults
+set_ag 1
+set_dark_floor 0.0
+DF_AG_ZERO="$(take_screenshot 26-blackout-ag-floor-zero)"
+set_dark_floor "$DARK_FLOOR_DEFAULT"
+DF_AG_DEFAULT="$(take_screenshot 26-blackout-ag-floor-default)"
+run_sampler darkfloor "$DF_OFF" "$DF_AG_DEFAULT" blackout-ag-default
+set_ag 0
+
+set_target 0.5; set_maxgain 4.0; set_local "$AB_LOCAL_DEFAULT"
+set_ab 2
+set_dark_floor 0.0
+DF_AB_ZERO="$(take_screenshot 26-blackout-ab-floor-zero)"
+set_dark_floor "$DARK_FLOOR_DEFAULT"
+DF_AB_DEFAULT="$(take_screenshot 26-blackout-ab-floor-default)"
+run_sampler darkfloor "$DF_OFF" "$DF_AB_DEFAULT" blackout-ab-default
+set_ab 0
+set_dark_floor "$DARK_FLOOR_DEFAULT"
+
+run_sampler means dark-floor-means "$DF_OFF" "$DF_AG_ZERO" "$DF_AG_DEFAULT" "$DF_AB_ZERO" "$DF_AB_DEFAULT"
+
 END_TS=$(date +%s)
 {
 	echo "effects-regression.sh -- $TS"

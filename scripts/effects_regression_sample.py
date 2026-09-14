@@ -94,6 +94,10 @@ Subcommands
                                         ring (the profile must be monotone) and the
                                         amplitude within <max-amp> counts
     bmapline <label> <img...>           INFO: the halo profile of each capture in a sweep
+    darkfloor <image-off> <image-on> <label>
+                                        Dark Floor (2026-09-14) on the `blackout` scene:
+                                        graded stays within 3 counts of raw on a coarse
+                                        grid, and nothing under 64 comes out at 128+
     colorshape <image-saturation> <image-vibrancy>
                                          the same "colors" capture under Saturation and
                                          under Vibrancy at the same nominal strength:
@@ -1343,6 +1347,39 @@ def cmd_bmaphalo(args):
                        + f"monotone={monotone} " + body) else 1)
 
 
+def cmd_darkfloor(args):
+    """darkfloor <image-off> <image-on> <label> -- the DARK FLOOR headline
+    property (2026-09-14) on the near-black `blackout` scene
+    (tests/effects_scene_client.c): with the floor active at its shipped
+    default, the graded frame must be close to identity -- sampled on a
+    coarse grid (stride 8, ~14400 samples of a 1280x720 frame) rather than
+    every pixel, for speed -- and nothing that started under 64 may come out
+    at 128 or above, which is the "binarised toward white" failure this
+    feature exists to stop (superdoc/features/shader-effects.md has the real
+    capture that reported it)."""
+    off_path, on_path, label = args
+    off, on = load(off_path), load(on_path)
+    w, h = off.size
+    stride = 8
+    po, pn = off.load(), on.load()
+    worst = 0.0
+    violation = None
+    for y in range(0, h, stride):
+        for x in range(0, w, stride):
+            go, gn = grey(po[x, y]), grey(pn[x, y])
+            d = abs(gn - go)
+            if d > worst:
+                worst = d
+            if go < 64.0 and gn >= 128.0 and violation is None:
+                violation = (x, y, go, gn)
+    ok = worst <= 3.0 and violation is None
+    detail = f"worst deviation {worst:.1f} counts"
+    if violation:
+        x, y, go, gn = violation
+        detail += f"; BINARISED at {x},{y}: raw={go:.1f} graded={gn:.1f}"
+    sys.exit(0 if emit(ok, f"dark-floor-{label}", detail) else 1)
+
+
 def cmd_bmapline(args):
     """bmapline <label> <img...> -- INFO: the halo profile of each capture in
     a sweep, one line, so the radius/strength trade can be read as a table
@@ -1372,7 +1409,8 @@ def main():
      "modelsoff": cmd_modelsoff, "modelsid": cmd_modelsid,
      "modelslift": cmd_modelslift, "modelsinfo": cmd_modelsinfo,
      "modelspin": cmd_modelspin,
-     "bmaphalo": cmd_bmaphalo, "bmapline": cmd_bmapline}[cmd](args)
+     "bmaphalo": cmd_bmaphalo, "bmapline": cmd_bmapline,
+     "darkfloor": cmd_darkfloor}[cmd](args)
 
 
 if __name__ == "__main__":

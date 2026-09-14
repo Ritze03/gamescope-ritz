@@ -27,6 +27,17 @@
 //           sits in the empty gap between the modes. Note this scatters the
 //           two populations over the WHOLE frame -- it is a histogram test,
 //           not a spatial one. halfsplit below is the spatial version.
+//   blackout ADDED 2026-09-14 for the Dark Floor feature (shader-effects.md,
+//           "Leave dark scenes alone"): the near-black shape the user's own
+//           report was about, NOT the flat `dark` scene above -- ~90% of
+//           cells hashed 0..6 (a near-literal-black majority), ~9% a
+//           textured 10..40 band ("slightly above black" surfaces: pipes,
+//           grating), ~1% lights 200..255. Measured median (rank-window
+//           mean, matching cs_effects_measure.comp's own statistic) ~2
+//           encoded -- an order of magnitude darker than the existing
+//           `dark` scene's ~12, which is the whole point: `dark`'s own
+//           regression contract (band 5 lifted to >= 30) must survive this
+//           feature's default, and only a scene this much darker may not.
 //   halfsplit the left half of the frame is the dark scene's bands, the
 //           right half the bright scene's: a genuine "dark interior, bright
 //           sky" frame, and the case Local adaptation exists for.
@@ -103,6 +114,7 @@ static const Scene kScenes[] = {
 	{ "texdark",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
 	{ "texmid",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
 	{ "texsplit", {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
+	{ "blackout", {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 0 },
 	{ "halfsplit",{   0,   0,   0,   0,   0 },   0,   0,   0, 0, 1 },
 	{ "halobox",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 2 },
 	{ "haloinv",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 3 },
@@ -198,7 +210,10 @@ static unsigned Hash( unsigned x, unsigned y )
 // kind: 0 texdark (dark cells, `s_flLights` % lights 160..255), 1 texmid
 // (cells 40..220), 2 texsplit (`s_flSplit` % bright cells 150..230, the
 // rest dark -- a bimodal "sky and ground" histogram whose median sits in
-// the gap between the two modes when the split is 50 %).
+// the gap between the two modes when the split is 50 %), 3 blackout (ADDED
+// 2026-09-14, Dark Floor: ~90% of cells hashed 0..6, ~9% a textured 10..40
+// band, ~1% lights 200..255 -- see the header comment for why this is a
+// different shape from texdark's, not just a darker version of it).
 static void PaintTexture( SDL_Surface *pSurface, int nKind, int nScroll )
 {
 	const int W = pSurface->w, H = pSurface->h, CELL = 16;
@@ -217,6 +232,12 @@ static void PaintTexture( SDL_Surface *pSurface, int nKind, int nScroll )
 				v = (unsigned char)( 150.0f + 80.0f * r );
 			else if ( nKind == 0 && light < s_flLights * 0.01f )
 				v = (unsigned char)( 160.0f + 95.0f * r );
+			else if ( nKind == 3 && light < 0.01f )
+				v = (unsigned char)( 200.0f + 55.0f * r );          // ~1% lights
+			else if ( nKind == 3 && light < 0.10f )
+				v = (unsigned char)( 10.0f + 30.0f * r );           // ~9% textured 10..40
+			else if ( nKind == 3 )
+				v = (unsigned char)( 6.0f * r * r );                // ~90% near-black 0..6
 			else
 				v = (unsigned char)( 6.0f + 50.0f * r * r );
 			const int x = ( cx - nFirst ) * CELL - ( nScroll % CELL );
@@ -304,10 +325,13 @@ static void Paint( SDL_Surface *pSurface, const Scene *pScene )
 		PaintSpecial( pSurface, pScene->nSpecial );
 		return;
 	}
-	if ( !strncmp( pScene->pszName, "tex", 3 ) )
+	if ( !strncmp( pScene->pszName, "tex", 3 ) || !strcmp( pScene->pszName, "blackout" ) )
 	{
 		const int nScroll = (int)( ( s_nFrame * (long)s_nMotionPx ) % 100000L );
-		PaintTexture( pSurface, !strcmp( pScene->pszName, "texmid" ) ? 1 : !strcmp( pScene->pszName, "texsplit" ) ? 2 : 0, nScroll );
+		const int nKind = !strcmp( pScene->pszName, "texmid" ) ? 1
+			: !strcmp( pScene->pszName, "texsplit" ) ? 2
+			: !strcmp( pScene->pszName, "blackout" ) ? 3 : 0;
+		PaintTexture( pSurface, nKind, nScroll );
 		return;
 	}
 
@@ -347,7 +371,7 @@ int main( int argc, char **argv )
 			for ( char *tok = strtok( psz, "," ); tok && nList < 12; tok = strtok( NULL, "," ) )
 			{
 				const Scene *p = FindScene( tok );
-				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|halfsplit|halobox|haloinv|colors)\n", tok ); return 2; }
+				if ( !p ) { fprintf( stderr, "unknown scene '%s' (dark|bright|mid|texdark|texmid|texsplit|blackout|halfsplit|halobox|haloinv|colors)\n", tok ); return 2; }
 				pList[nList++] = p;
 			}
 			free( psz );
@@ -362,7 +386,7 @@ int main( int argc, char **argv )
 		else if ( !strcmp( argv[i], "--periodic" ) )                 s_bPeriodic = 1;
 		else
 		{
-			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,halfsplit,halobox,haloinv,colors] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
+			fprintf( stderr, "usage: effects_scene_client --scenes dark[,bright,mid,texdark,texmid,texsplit,blackout,halfsplit,halobox,haloinv,colors] [--width W] [--height H] [--seconds N] [--pidfile PATH] [--motion PX] [--lights PCT] [--split PCT] [--periodic]\n" );
 			return 2;
 		}
 	}

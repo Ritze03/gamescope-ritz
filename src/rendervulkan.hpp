@@ -632,6 +632,14 @@ struct NativeEffectsState_t
 	float flAgDownSpeed = 1.0f;
 	float flAgLocal = 0.0f;
 
+	// Dark floor (NEW 2026-09-14, ConfigSchema.h's ReshadeSettings::
+	// dark_floor): SHARED between Adaptive Brightness and Adaptive Gamma --
+	// one number, since the two are mutually exclusive and the panel offers
+	// one row for it. 0.0..1.0, 0 = off. See src/shaders/effects_curve.h's
+	// DARK FLOOR block for the formula and superdoc/features/shader-effects.md
+	// for the measured default.
+	float flDarkFloor = 0.03f;
+
 	// Bloom (NEW 2026-09-08, ConfigSchema.h's ReshadeBloomSettings): a glow
 	// around bright areas, for the look rather than for clarity. The only
 	// SPATIAL effect in the pre-pass -- when it is on, vulkan_composite()

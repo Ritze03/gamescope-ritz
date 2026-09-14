@@ -477,6 +477,111 @@ EC_FUNC int ag_binding( float p50, float target, float maxLift, float maxDarken,
 }
 
 // ===========================================================================
+//  DARK FLOOR (2026-09-14) -- keeps a genuinely dark scene dark under either
+//  adaptive effect. The user's report, verbatim: *"the adaptive brightness
+//  and the adaptive gamma both completely destroy REALLY dark images. ...
+//  Is there some kind of filter, that keeps really dark stuff really dark or
+//  something?"* -- shown on a real capture: a near-black CS2 corridor (the
+//  smoothed median a fraction of a code above zero) came out BINARISED --
+//  pure black held, and everything even slightly above it slammed toward
+//  white. That is not a rounding error: with the median that close to zero,
+//  BOTH operators are already doing exactly what their own bounds say. AG's
+//  exponent is ln(target)/ln(p50), which for p50 -> 0 is driven to its
+//  floor (1 / max_lift) regardless of how dark the actual pixel is; AB's
+//  Dynamic gain is pinned to max_gain by the same p50 -> 0 limit and its
+//  gamma to the same floor. Both floors are already honoured correctly (see
+//  ag_gamma_min() / ab_gamma_min() and their callers' own clamp()s -- this
+//  header's own tests sweep p50 -> 0 and assert neither exponent nor gain
+//  ever exceeds the user's bound), so the fix is not a clamp fix: it is
+//  this, a THIRD control that fades the whole operator out, rather than
+//  bounding it, when the scene itself is the thing that is dark.
+//
+//  THE FORMULA. Let `m` be the SAME smoothed statistic each operator
+//  already keys its curve on -- p50, the median both AG's gamma and AB
+//  Dynamic's gamma are fitted to (AB's own gain reads p98 too, but p50 is
+//  what discriminates a scene that is dark BECAUSE it is mostly literal
+//  black, which is exactly the case this exists for, from one that is
+//  merely dim throughout -- see "why p50 and not the mean" below). Then:
+//
+//    w = smoothstep(dark_floor / 2, dark_floor, m)
+//    dark_floor <= 0  =>  w = 1                      -- the floor is off
+//
+//  and each operator blends its own parameter(s) toward the identity by w
+//  rather than being clamped:
+//
+//    AG:            gamma_eff = mix(1, gamma, w)     -- x^gamma_eff
+//    AB Whole image: gain_eff = mix(1, gain,  w)      -- c * gain_eff
+//    AB Dynamic:    gain_eff = mix(1, gain,  w), gamma_eff = mix(1, gamma, w)
+//                   -- BOTH parameters, so the curve itself (not just one
+//                   half of it) becomes y = x at w = 0: ab_dyn_curve(x, 1, 1)
+//                   is the identity by construction (its own top is exactly
+//                   1, so the shoulder never engages either).
+//
+//  `Why smoothstep, and why centred so it spans dark_floor/2 .. dark_floor
+//  rather than 0 .. dark_floor:` the ramp's SLOPE has to reach zero at both
+//  ends, for the same reason the bloom weight and the AB shoulder do -- the
+//  scene's smoothed statistic drifting across the floor under the EMA must
+//  never produce a kink a panning camera could reveal, and smoothstep is
+//  exactly the cubic that is flat at both ends. Splitting the span in half
+//  around dark_floor, rather than running it 0..dark_floor, means the
+//  slider's own value is the point the effect is HALFWAY restored, which is
+//  the reading that matches what the number does when the user drags it.
+//
+//  `Why the WEIGHT is computed from the RAW, un-shifted statistic, not the
+//  one Local adaptation shifts per pixel:` "leave dark SCENES alone" is a
+//  question about the frame as a whole. Feeding the locally-shifted value in
+//  would make the floor's own strength vary across the image under Local
+//  adaptation -- a second, hidden halo control nobody asked for, layered on
+//  top of the one Local adaptation already owns. Local adaptation still
+//  reaches every pixel exactly as before once the weight has decided the
+//  scene qualifies; the two are independent.
+//
+//  `Why p50 and not the mean, for AB Whole image too, even though its OWN
+//  gain reads the mean:` measured directly on the report's own capture (see
+//  shader-effects.md) -- a corridor that is genuinely black over most of its
+//  area but carries a HUD, a lamp and chat text reads p50 = 0.0003 (a
+//  literal black majority) but MEAN = 0.055, because scattered small bright
+//  regions pull an average up far more than they move a median. A floor keyed
+//  on the mean would barely engage on exactly the frame this feature exists
+//  for. p50 is computed unconditionally every frame regardless of mode (see
+//  cs_effects_measure.comp's header), so using it for Whole image's floor
+//  costs nothing extra and is a strictly better discriminator of "is this
+//  scene dark" than the statistic that mode's own gain happens to use.
+//
+//  `Why 0 must be an EXACT identity, not merely a very small number:` this is
+//  the "0 turns it off" contract every switch/param pair in this pipeline
+//  follows, and dividing by (dark_floor - dark_floor/2) at dark_floor = 0
+//  would be 0/0, not a small number -- so it is its own branch rather than a
+//  falling-out of the general formula.
+//
+//  THE DEFAULT, AND WHY IT IS SMALL (measured, shader-effects.md has the
+//  full table). 0.03 (encoded), i.e. the ramp runs code 4..8. Two existing
+//  regression scenes bracket it: tests/effects_scene_client.c's `dark`
+//  scene -- five bands 5..20, no large black area -- measures p50 = 0.047
+//  (code 12), and scripts/effects-regression.sh already has a PRE-EXISTING
+//  contract on it (`dark-dynamic`: band 5 must lift to >= 30) that predates
+//  this feature and must keep passing; `texdark`, the textured dark-game
+//  stand-in, measures p50 = 0.078 (code 20). Both sit comfortably above
+//  0.03's full-weight point, so neither loses any lift by default -- this
+//  floor is deliberately narrow enough to catch only scenes far darker than
+//  either, i.e. the majority-black case the report was actually about, not
+//  "any dark scene". The report's own capture (p50 = 0.0003) and the
+//  `blackout` scene added for this feature (p50 ~= 0.008, ~90% of pixels at
+//  code 0..6) both sit far below 0.03's half-point and come out fully
+//  neutralised.
+const float DARK_FLOOR_MIN_T = 0.0001f;   // guards a hand-edited negative span
+
+EC_FUNC float dark_weight( float m, float darkFloor )
+{
+	if ( darkFloor <= 0.0f )
+		return 1.0f;
+	const float lo = darkFloor * 0.5f;
+	const float hi = darkFloor;
+	const float t = clamp( ( m - lo ) / max( hi - lo, DARK_FLOOR_MIN_T ), 0.0f, 1.0f );
+	return t * t * ( 3.0f - 2.0f * t );   // smoothstep
+}
+
+// ===========================================================================
 //  BLOOM (2026-09-08) -- the scalar half of the glow. The user's request,
 //  verbatim: *"Add a bloom shader for more casual games"*.
 // ===========================================================================

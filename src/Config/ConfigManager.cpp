@@ -348,6 +348,15 @@ namespace gamescope::config
                     sl.enabled = JGetBool( *pShadowLift, "enabled", sl.enabled );
                     sl.strength = JGetFloat( *pShadowLift, "strength", sl.strength );
                 }
+
+                // NEW 2026-09-14: the dark floor, SHARED between
+                // adaptive_brightness and adaptive_gamma above -- a bare
+                // top-level key on "reshade" itself (ConfigSchema.h's
+                // ReshadeSettings::dark_floor), not nested in either
+                // sub-object, since it is one number for both. Additive
+                // key; an old config has none and resolves to the
+                // compiled-in default.
+                s.reshade.dark_floor = JGetFloat( *pReshade, "dark_floor", s.reshade.dark_floor );
             }
 
             if ( const nlohmann::json *pOverlay = JGetObject( j, "overlay" ) )
@@ -635,6 +644,9 @@ namespace gamescope::config
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );
             jReshade[ "adaptive_gamma" ] = std::move( jAdaptiveGamma );
             jReshade[ "shadow_lift" ] = std::move( jShadowLift );
+            // NEW 2026-09-14: bare top-level key, SHARED between the two
+            // adaptive effects above -- see ConfigSchema.h.
+            jReshade[ "dark_floor" ] = s.reshade.dark_floor;
 
             nlohmann::json jNotifications = nlohmann::json::object();
             jNotifications[ "muted" ] = s.notifications.muted;

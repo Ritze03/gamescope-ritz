@@ -175,6 +175,13 @@ void main()
     if ((u_flags & EFFECT_ADAPTIVE_BRIGHTNESS) != 0u)
     {
         float strength = clamp(u_abStrength, 0.0, 1.0);
+        // DARK FLOOR (NEW 2026-09-14). Computed from the RAW, un-shifted
+        // smoothed median -- "is this SCENE dark", not "is this pixel's own
+        // neighbourhood dark" (Local adaptation already owns that question;
+        // see effects_curve.h's DARK FLOOR block for why the two must not be
+        // conflated). Both branches below blend their own operator toward
+        // the identity by this weight rather than being clamped.
+        float wDark = dark_weight(history_read(HISTORY_P50), u_darkFloor);
         if ((u_flags & EFFECT_AB_DYNAMIC) != 0u)
         {
             // Dynamic: effects_curve.h's levels-gain + median gamma + soft
@@ -206,9 +213,15 @@ void main()
             float gamma = ab_dyn_gamma(history_read(HISTORY_P2) * rEff,
                                        history_read(HISTORY_P50) * rEff,
                                        gain, u_abTarget, u_abMin, u_abMax);
-            vec3 graded = vec3(ab_dyn_curve(c.r, gain, gamma),
-                               ab_dyn_curve(c.g, gain, gamma),
-                               ab_dyn_curve(c.b, gain, gamma));
+            // Both parameters, not just the gain: ab_dyn_curve(x, 1, 1) is
+            // the identity by construction (its own top is exactly 1, so the
+            // shoulder never engages), so blending both toward 1 is what
+            // makes wDark = 0 an EXACT no-op rather than a partial one.
+            float gainFloored  = mix(1.0, gain, wDark);
+            float gammaFloored = mix(1.0, gamma, wDark);
+            vec3 graded = vec3(ab_dyn_curve(c.r, gainFloored, gammaFloored),
+                               ab_dyn_curve(c.g, gainFloored, gammaFloored),
+                               ab_dyn_curve(c.b, gainFloored, gammaFloored));
             c = mix(c, graded, strength);
         }
         else
@@ -218,7 +231,13 @@ void main()
             // to the min/max bounds. The max(., 0.001) guards the divide.
             float adapted = history_read(HISTORY_MEAN);
             float gain = clamp(u_abTarget / max(adapted, 0.001), u_abMin, u_abMax);
-            c = mix(c, c * gain, strength);
+            // DARK FLOOR, keyed on p50 even here -- see wDark above and
+            // effects_curve.h's "why p50 and not the mean" note: a scene
+            // that is mostly literal black but carries a HUD or a small
+            // light moves the MEAN far less than the median, which is
+            // exactly the case this floor exists for.
+            float gainFloored = mix(1.0, gain, wDark);
+            c = mix(c, c * gainFloored, strength);
         }
     }
 
@@ -251,9 +270,15 @@ void main()
         }
         float gamma = ag_gamma(history_read(HISTORY_P50) * rEff,
                                u_agTarget, u_agMaxLift, u_agMaxDarken);
-        vec3 graded = vec3(ag_curve(c.r, gamma),
-                           ag_curve(c.g, gamma),
-                           ag_curve(c.b, gamma));
+        // DARK FLOOR (NEW 2026-09-14): blend the exponent toward 1 (the
+        // identity, x^1 = x) on the RAW, un-shifted median -- see
+        // effects_curve.h's DARK FLOOR block. Same wDark computation as
+        // Adaptive Brightness's above; only one of the two ever runs.
+        float wDark = dark_weight(history_read(HISTORY_P50), u_darkFloor);
+        float gammaFloored = mix(1.0, gamma, wDark);
+        vec3 graded = vec3(ag_curve(c.r, gammaFloored),
+                           ag_curve(c.g, gammaFloored),
+                           ag_curve(c.b, gammaFloored));
         c = mix(c, graded, clamp(u_agStrength, 0.0, 1.0));
     }
 

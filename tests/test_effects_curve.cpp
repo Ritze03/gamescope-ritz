@@ -970,6 +970,202 @@ TEST_CASE( "adaptive gamma: local adaptation is the same operator, inside the sa
 }
 
 // ===========================================================================
+//  DARK FLOOR (2026-09-14) -- effects_curve.h's dark_weight(), shared by
+//  both adaptive effects. See that header's own DARK FLOOR block for the
+//  formula and every "why"; asserted here is its CONTRACT (exactly 1 at
+//  dark_floor 0 -- today's pre-2026-09-14 behaviour, byte-identical -- and a
+//  smoothstep ramp with no kink at either end), that it is wired into BOTH
+//  of Adaptive Brightness Dynamic's parameters (not just the gain) and into
+//  Adaptive Gamma's one exponent exactly as cs_effects_layer0.comp wires
+//  them, that the pre-existing exponent/gain bounds already hold as the
+//  median goes to zero (so the floor is a THIRD control, not a bound fix),
+//  and -- at the shipped default -- an exact identity on the report's own
+//  near-black capture while the existing `dark` reference scene, whose own
+//  pre-existing regression contract this feature must not break, keeps
+//  full strength.
+// ===========================================================================
+
+namespace
+{
+	// The report's own capture (superdoc/features/shader-effects.md has the
+	// full PIL measurement): a near-black CS2 corridor with a HUD, a lamp
+	// and chat text. p50 is a fraction of a code above zero -- most of the
+	// frame is literal black -- while the scattered bright UI pulls the
+	// MEAN to 0.055, which is why the floor is keyed on the median and not
+	// the mean (effects_curve.h's "why p50 and not the mean").
+	constexpr Scene kRealBlackout = { 0.0f, 0.0003f, 0.4336f };
+
+	// tests/effects_scene_client.c's `blackout` scene, added for this
+	// feature: ~90% of pixels at code 0..6, ~9% a textured 10..40 band, ~1%
+	// lights 200+. Measured off the same rank-window-mean the GPU computes
+	// (a Python simulation of the client's own paint, not eyeballed).
+	constexpr Scene kBlackout = { 0.0001f, 0.0078f, 0.88f };
+
+	// The EXISTING `dark` reference scene (tests/effects_scene_client.c's
+	// five bands 5/8/12/16/20 plus the six 240 rectangles and the black
+	// corner), measured the same careful way -- NOT the simplified kDark
+	// stand-in above (p50 10/255) this file already uses for generic
+	// sweeps, which is close but not what the real capture pipeline
+	// produces. scripts/effects-regression.sh's `dark-dynamic` check
+	// already requires band 5 to lift to >= 30 on this exact scene, so the
+	// floor's default must leave it at full weight.
+	constexpr Scene kDarkSceneReal = { 4.0f / 255.0f, 12.1f / 255.0f, 24.6f / 255.0f };
+
+	// `texdark`, the textured dark-game stand-in (tests/effects_scene_client.c,
+	// ~1.5% light cells), measured the same way -- the other existing scene
+	// the default must not touch.
+	constexpr Scene kTexdarkReal = { 6.0f / 255.0f, 20.0f / 255.0f, 85.0f / 255.0f };
+
+	// == ConfigSchema.h's ReshadeSettings::dark_floor default.
+	const float kDarkFloorDefault = 0.03f;
+	const float kDarkFloors[] = { 0.01f, 0.02f, 0.03f, 0.05f, 0.10f, 0.15f };
+
+	float Mix( float a, float b, float t ) { return a + ( b - a ) * t; }
+}
+
+TEST_CASE( "dark floor: 0 is an EXACT identity, at every scene", "[effects_curve]" )
+{
+	for ( const Scene &sc : kScenes )
+		REQUIRE_THAT( dark_weight( sc.p50, 0.0f ), WithinAbs( 1.0f, 1e-7f ) );
+	REQUIRE_THAT( dark_weight( 0.0f, 0.0f ), WithinAbs( 1.0f, 1e-7f ) );
+	REQUIRE_THAT( dark_weight( 1.0f, 0.0f ), WithinAbs( 1.0f, 1e-7f ) );
+	// A negative, hand-edited value reads the same as "off" -- never a
+	// divide that could turn a bad config into a NaN.
+	REQUIRE_THAT( dark_weight( 0.02f, -1.0f ), WithinAbs( 1.0f, 1e-7f ) );
+}
+
+TEST_CASE( "dark floor: a smoothstep ramp -- 0 at/below half, 1 at/above the full value, monotone "
+           "and flat-sloped at both ends", "[effects_curve]" )
+{
+	for ( float floor : kDarkFloors )
+	{
+		REQUIRE_THAT( dark_weight( 0.0f, floor ), WithinAbs( 0.0f, 1e-6f ) );
+		REQUIRE_THAT( dark_weight( floor * 0.5f, floor ), WithinAbs( 0.0f, 1e-6f ) );
+		REQUIRE_THAT( dark_weight( floor, floor ), WithinAbs( 1.0f, 1e-6f ) );
+		REQUIRE_THAT( dark_weight( 1.0f, floor ), WithinAbs( 1.0f, 1e-6f ) );
+
+		float flPrev = -1.0f;
+		for ( int i = 0; i <= 200; i++ )
+		{
+			const float m = floor * 2.0f * i / 200.0f;
+			const float w = dark_weight( m, floor );
+			REQUIRE( w >= 0.0f );
+			REQUIRE( w <= 1.0f );
+			REQUIRE( w >= flPrev - 1e-6f );   // monotone in m
+			flPrev = w;
+		}
+
+		// The slope at each end of the ramp is 0: a step of h off lo/hi
+		// moves w by O(h^2), not O(h) -- "no kink" as a number, not an
+		// eyeball on a graph.
+		const float lo = floor * 0.5f, hi = floor, h = ( hi - lo ) * 0.001f;
+		REQUIRE( dark_weight( lo + h, floor ) < h );
+		REQUIRE( ( 1.0f - dark_weight( hi - h, floor ) ) < h );
+	}
+}
+
+TEST_CASE( "dark floor: blends BOTH of Adaptive Brightness Dynamic's parameters, so w = 0 is a "
+           "bit-exact identity and not merely a small number", "[effects_curve]" )
+{
+	// ab_dyn_curve(x, 1, 1) is y = x exactly -- its own top (gain^gamma) is
+	// exactly 1, so the shoulder never engages -- which is the property
+	// that makes blending BOTH gain and gamma toward 1 (not just the gain)
+	// what cs_effects_layer0.comp relies on.
+	const float gain  = ab_dyn_gain( kRealBlackout.p98, kRealBlackout.p50, kTarget, kMinGain, kMaxGain );
+	const float gamma = ab_dyn_gamma( kRealBlackout.p2, kRealBlackout.p50, gain, kTarget, kMinGain, kMaxGain );
+	// A sanity check that this scene really does hit the reported failure
+	// shape absent the floor: the gamma is driven to its floor (maximum
+	// lift) and the gain to its ceiling.
+	REQUIRE_THAT( gain, WithinAbs( kMaxGain, 1e-5f ) );
+	REQUIRE_THAT( gamma, WithinAbs( ab_gamma_min( kMaxGain ), 1e-5f ) );
+
+	for ( int i = 0; i <= 255; i++ )
+	{
+		const float x = i / 255.0f;
+		const float y = ab_dyn_curve( x, Mix( 1.0f, gain, 0.0f ), Mix( 1.0f, gamma, 0.0f ) );
+		REQUIRE_THAT( y, WithinAbs( x, 1e-6f ) );
+	}
+}
+
+TEST_CASE( "dark floor: blends Adaptive Gamma's one exponent, so w = 0 is a bit-exact identity",
+           "[effects_curve]" )
+{
+	const float gamma = ag_gamma( kRealBlackout.p50, kTarget, kAgLift, kAgDarken );
+	REQUIRE_THAT( gamma, WithinAbs( ag_gamma_min( kAgLift ), 1e-5f ) );   // the same failure shape
+
+	for ( int i = 0; i <= 255; i++ )
+	{
+		const float x = i / 255.0f;
+		REQUIRE_THAT( ag_curve( x, Mix( 1.0f, gamma, 0.0f ) ), WithinAbs( x, 1e-6f ) );
+	}
+}
+
+TEST_CASE( "dark floor: the pre-existing exponent/gain bounds already hold as the median -> 0 -- "
+           "the floor is a THIRD control, not a bound fix", "[effects_curve]" )
+{
+	for ( float lift : kAgLifts )
+		for ( float darken : kAgDarkens )
+		{
+			const float g = ag_gamma( 0.0f, kTarget, lift, darken );
+			REQUIRE( g >= ag_gamma_min( lift ) - 1e-6f );
+			REQUIRE( g <= ag_gamma_max( darken ) + 1e-6f );
+			REQUIRE( std::isfinite( g ) );
+		}
+	for ( float lo : kMinGains )
+		for ( float hi : kMaxGains )
+		{
+			const float gain = ab_dyn_gain( 0.0f, 0.0f, kTarget, lo, hi );
+			REQUIRE( gain >= lo - 1e-6f );
+			REQUIRE( gain <= hi + 1e-6f );
+			const float gamma = ab_dyn_gamma( 0.0f, 0.0f, gain, kTarget, lo, hi );
+			REQUIRE( gamma >= ab_gamma_min( hi ) - 1e-6f );
+			REQUIRE( gamma <= ab_gamma_max( lo ) + 1e-6f );
+			REQUIRE( std::isfinite( gamma ) );
+		}
+}
+
+TEST_CASE( "dark floor: at the shipped default, the report's near-black capture and the `blackout` "
+           "scene are fully neutralised while the existing `dark` and `texdark` reference scenes "
+           "keep full strength", "[effects_curve]" )
+{
+	// The two scenes this feature exists for: essentially zero weight.
+	REQUIRE( dark_weight( kRealBlackout.p50, kDarkFloorDefault ) < 1e-3f );
+	REQUIRE( dark_weight( kBlackout.p50, kDarkFloorDefault ) < 1e-3f );
+
+	// The two EXISTING scenes scripts/effects-regression.sh already has a
+	// contract on (dark-dynamic's ">= 30" among them): full weight, so this
+	// feature changes nothing about them at its default.
+	REQUIRE( dark_weight( kDarkSceneReal.p50, kDarkFloorDefault ) > 0.999f );
+	REQUIRE( dark_weight( kTexdarkReal.p50, kDarkFloorDefault ) > 0.999f );
+
+	// And the untouched-picture scene, trivially.
+	REQUIRE( dark_weight( kMid.p50, kDarkFloorDefault ) > 0.999f );
+}
+
+TEST_CASE( "reshade.dark_floor: default and round-trip", "[effects_curve][config]" )
+{
+	TempConfigHome home;
+
+	Settings s{};
+	REQUIRE_THAT( s.reshade.dark_floor, WithinAbs( 0.03f, 1e-6f ) );
+
+	s.reshade.dark_floor = 0.12f;
+	ProfileMeta meta;
+	meta.name = "DarkFloor";
+	REQUIRE( SaveProfile( meta, s ) );
+
+	std::optional<Settings> loaded = LoadProfile( "DarkFloor" );
+	REQUIRE( loaded.has_value() );
+	REQUIRE_THAT( loaded->reshade.dark_floor, WithinAbs( 0.12f, 1e-6f ) );
+
+	// An old profile with no "dark_floor" key at all (every OTHER field
+	// present, this one simply absent) resolves to the compiled-in default
+	// -- purely additive key, no migration, the same shape every other
+	// field added since ReshadeShadowLiftSettings follows.
+	REQUIRE( loaded->reshade.adaptive_gamma.max_lift > 0.0f );   // the file round-tripped at all
+}
+
+// ===========================================================================
 //  BLOOM (2026-09-08) -- the scalar half of the glow.
 // ===========================================================================
 //

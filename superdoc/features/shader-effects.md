@@ -1550,6 +1550,12 @@ can make.
 
 ### Adaptive Brightness (`image.shaders.adaptive_brightness`)
 
+**A near-black scene has a floor of its own** (2026-09-14) — see
+[Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--shared-by-adaptive-brightness-and-adaptive-gamma)
+near the bottom of this page, shared with Adaptive Gamma: below `dark_floor` (a standalone
+panel row, not one of this effect's own params) the whole curve fades to the untouched
+picture, so a truly dark scene is not driven to its gain/gamma ceiling by a median near zero.
+
 **A plain switch, with Mode as a Param** (request #17, 2026-09-07,
 `requests-2026-09-07.md` item 7: *"the adaptive brightness mode selector should be
 inside of the inspector rail. In the main view, it should still only be a switch."*
@@ -2664,6 +2670,12 @@ statistics, and the whole effect is *one exponent*. No levels gain, no white poi
 shoulder, no shadow cap. It is not a cheaper Adaptive Brightness — it is a different
 thing that a gain cannot be, for a reason that is arithmetic rather than taste (below).
 
+**A near-black scene has a floor of its own** (2026-09-14) — see
+[Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--shared-by-adaptive-brightness-and-adaptive-gamma)
+near the bottom of this page, shared with Adaptive Brightness: below `dark_floor` the
+exponent fades to 1 (the identity) rather than being driven to its floor by a median near
+zero, which is exactly the shape a near-black scene forced it into before this existed.
+
 **Config**: `ReshadeAdaptiveGammaSettings` (`ConfigSchema.h`) — `enabled` (false),
 `target_luminance` (0.5), `max_lift` (4.0), `max_darken` (1.5), `strength` (1.0),
 `adapt_up_speed` (1.0) and `adapt_down_speed` (1.0) (both added 2026-09-09, see
@@ -3108,6 +3120,157 @@ it has fewer mechanisms (no gain to bound, no shadow cap, no mode), and the two 
 differ by exactly the one param Adaptive Brightness has and this one cannot: Mode. The Effects band's row count
 went from 6 to **7** the same day, when [Bloom](#bloom-imageshadersbloom--new-2026-09-08)
 landed after it.
+
+### Leave dark scenes alone (2026-09-14) — shared by Adaptive Brightness and Adaptive Gamma
+
+`Why:` the user, verbatim: *"the adaptive brightness and the adaptive gamma both completely
+destroy REALLY dark images. ... Is there some kind of filter, that keeps really dark stuff
+really dark or something?"* — with a real capture attached: a near-black CS2 zombie-mode
+corridor, a hanging lamp and a HUD. With either effect on, the frame did not merely wash out
+— it **binarised**: pure black held exactly where it was, and everything even slightly above
+it (the pipes, the floor grating, the character silhouettes) was slammed toward white, like a
+threshold rather than a grade.
+
+That is not a rounding error, and it is not a missing clamp. Measured off the raw capture
+with PIL, on the same rank-window-mean statistic `cs_effects_measure.comp` computes (Rec.601
+luma on the encoded picture, mean of the taps ranked 25–75 % for the median):
+
+| statistic | value (0–1) | encoded (0–255) |
+| --- | --- | --- |
+| mean | 0.0552 | 14.1 |
+| p2 | 0.0000 | 0.0 |
+| **p50 (median)** | **0.0003** | **0.1** |
+| p98 | 0.4336 | 110.6 |
+
+With the median a fraction of a code above zero, **both** operators were already doing
+exactly what their own user-facing bounds say to do. Adaptive Gamma's exponent is
+`ln(target)/ln(p50)`, which for `p50 -> 0` is driven straight to its floor, `1 / max_lift`
+(0.25 at the shipped `max_lift` 4.0), regardless of how dark any individual pixel is —
+`ag_gamma(0.0003, 0.5, 4.0, 1.5)` clamps to 0.25, and `0.02^0.25 = 0.376` (code 96) for a
+1-code input. Adaptive Brightness Dynamic's gain is pinned to `max_gain` by the same
+`p50 -> 0` limit (`ab_dyn_binding()` returns `AB_BIND_LIFT`) and its gamma to the same
+floor, and its `top = gain^gamma` then exceeds 1.0, so the shoulder engages and compresses
+everything above its knee toward white as well. Both floors were already **honoured
+correctly** — `ag_gamma_min()` / `ab_gamma_min()` and their callers' own `clamp()`s hold even
+as `p50 -> 0` (`tests/test_effects_curve.cpp`'s "the pre-existing exponent/gain bounds
+already hold as the median -> 0" sweeps every `(min_gain, max_gain)` / `(max_lift,
+max_darken)` pair at `p50 = p2 = p98 = 0` and asserts neither exponent nor gain ever leaves
+the user's own range) — so the fix could not be a bound fix. It needed a **third** control
+that fades the whole operator toward the untouched picture on a scene this dark, rather than
+a fourth clamp on an already-correctly-clamped one.
+
+**The formula.** Let `m` be the same smoothed statistic each operator already keys its curve
+on — the median, `HISTORY_P50` — and `dark_floor` the new user-facing parameter (encoded
+units, same scale as Target brightness):
+
+```
+w = smoothstep(dark_floor / 2, dark_floor, m)      // 0 below half, 1 at/above the full value
+dark_floor <= 0  =>  w = 1                          // the floor is off
+```
+
+and each operator blends its own parameter(s) toward the identity by `w`, rather than being
+clamped:
+
+```
+Adaptive Gamma:              gamma_eff = mix(1, gamma, w)     // x ^ gamma_eff
+Adaptive Brightness Whole image:  gain_eff  = mix(1, gain,  w)     // c * gain_eff
+Adaptive Brightness Dynamic:      gain_eff  = mix(1, gain,  w), gamma_eff = mix(1, gamma, w)
+```
+
+Dynamic blends **both** of its parameters, not only the gain: `ab_dyn_curve(x, 1, 1)` is
+`y = x` exactly (its own top, `1^1`, never exceeds 1.0, so the shoulder never engages), which
+is what makes `w = 0` a bit-exact identity for the whole curve rather than a partial one.
+`src/shaders/effects_curve.h`'s `dark_weight()` is the one function both effects call
+(`cs_effects_layer0.comp`); it and its whole derivation — why a `smoothstep`, why the span is
+centred on `dark_floor` rather than running `0..dark_floor`, why the weight is computed from
+the **raw**, un-shifted median rather than the one Local adaptation shifts per pixel, and why
+Adaptive Brightness Whole image is keyed on the median too even though its own gain reads the
+mean — are documented in that header's own DARK FLOOR block; this page states the outcome,
+that header carries the proof.
+
+**Why p50 and not the mean, even for Whole image's own gain:** the capture above is the
+concrete counter-example. Its median is 0.0003 (a literal-black majority) but its **mean is
+0.055** — 180× larger — because a lamp, a HUD and chat text are small in area but pull an
+*average* far more than they move a *median*. A floor keyed on the mean would barely engage
+on the exact frame this feature exists for. `p50` is computed unconditionally every frame
+regardless of mode (`cs_effects_measure.comp`'s own header), so reading it for Whole image's
+floor too costs nothing extra and is a strictly better "is this scene dark" discriminator
+than the statistic that mode's own gain happens to use.
+
+**The default, and why it is small.** `0.03` (encoded — the ramp runs code 4 to 8), measured
+against the two existing reference scenes that already have their own regression contracts:
+
+| scene | p50 (encoded) | at `dark_floor` 0 (today) | 0.03 (shipped) | 0.05 | 0.10 | 0.15 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dark` (bands 5/8/12/16/20 + 240 highlights) | 12.1 | full effect | **full effect** | full | ~62 % | 0 |
+| `texdark` (textured dark-game stand-in) | 20.0 | full effect | **full effect** | full | full | ~56 % |
+| `mid` (0.1..0.9 bands) | 128.0 | untouched | **untouched** | untouched | untouched | untouched |
+| report's own capture | 0.1 | destroyed | **neutralised** | neutralised | neutralised | neutralised |
+| `blackout` (new, see below) | 1.5 | destroyed | **neutralised** | neutralised | neutralised | neutralised |
+
+(the `w` weight at each setting, computed by `dark_weight()` on the measured `p50` above, is
+what "full effect" / "untouched" / "neutralised" means in this table —
+`tests/test_effects_curve.cpp`'s "at the shipped default, the report's near-black capture and
+the `blackout` scene are fully neutralised while the existing `dark` and `texdark` reference
+scenes keep full strength" pins the four numbers that matter.) `0.10` was the original
+candidate — it sits inside the brief's own "probably 0.05–0.10" guess — but it would have
+put `scripts/effects-regression.sh`'s **pre-existing** `dark-dynamic` contract ("band 5 must
+lift to ≥ 30") at only 62 % strength, silently softening an existing regression check as a
+side effect of a new feature it was never told about. `0.03` leaves both existing scenes at
+their full, unmodified behaviour and still fully neutralises anything anywhere near the
+report's own capture — deliberately narrow, because the report was about scenes far darker
+than "any dark map", not about dark maps in general.
+
+**The `blackout` reference scene** (`tests/effects_scene_client.c`, added for this feature,
+its own ring — it is not in `SCENES_DEFAULT`, for the reason that comment gives: a scene
+appended to the shared ring shifts every `advance N` a later block depends on). Unlike the
+existing `dark` scene (five equal-sized bands, no large black area — its own median, 12.1,
+turned out to be an order of magnitude brighter than the report's capture), `blackout`
+reproduces the report's actual *shape*: ~90 % of pixels hashed to code 0–6 (a near-literal-
+black majority, matching a genuinely dark corridor), ~9 % a textured 10–40 band (the "slightly
+above black" surfaces — pipes, grating), ~1 % lights 200–255. Measured off the real GPU
+capture (`scripts/effects-regression.sh`, `darkfloor-2026-09-14`): median 1.5 (0.0058
+encoded), mean 5.8 — safely inside the fully-neutralised regime at the shipped default, and
+close to the report's own capture's own 0.1/14.1. `scripts/effects_regression_sample.py`'s
+`darkfloor` subcommand asserts the two properties the report actually named on this scene, at
+the shipped default: graded stays within 3 counts of raw on a coarse sampling grid, and
+nothing that started under code 64 comes out at 128 or above — the "binarised toward white"
+failure, as a number rather than an impression. `scripts/effects-regression.sh`'s
+`dark-floor-blackout-ag-default` / `-ab-default` checks run it for both effects and both
+passed at **0.0 counts** worst deviation (the floor is an EXACT identity here, not merely
+close); `dark-floor-means` reports the frame mean at `dark_floor` 0 beside the shipped
+default as INFO — **5.8 unfloored-off / 57.4 Adaptive Gamma floor-0 / 5.8 Adaptive Gamma
+floor-default / 79.8 Adaptive Brightness floor-0 / 5.8 Adaptive Brightness floor-default** —
+so the fix is legible as a measured before/after (57.4 and 79.8 are the reported failure,
+reproduced on demand) rather than only as a pass. Full run: 87 checks, 0 failed, 578 s
+wall time.
+
+**A scene-motion trap this check fell into once, worth recording:** `blackout` is a TEXTURED
+scene (`PaintTexture()`, like `texdark`), so — unlike the flat `dark` scene — it scrolls
+under this harness's `--motion 3` unless paused. The first version of this check did not
+pause it, and the "off" and "on" captures were therefore two different frames of a moving
+picture graded two different ways, not one frame graded two ways: one coarse-grid cell read
+raw 5 / graded 203, which looked exactly like a binarisation bug and was not one. `Why this
+block runs LAST, its own restarted instance, after Brightness Map:` Bloom's block
+(immediately after Adaptive Gamma's) continues the PREVIOUS instance rather than restarting
+— it needs the client already sitting on `texdark` with motion paused, exactly where Adaptive
+Gamma's block leaves it — so a block placed between them that restarts with a different ring
+breaks that continuity for everything from Bloom onward (measured: 15 unrelated checks failed
+the first time this landed there). Last is the only position that restarts a ring nothing
+downstream depends on.
+
+**The panel row.** One standalone `Slider` (`image.shaders.dark_floor`, "Leave dark scenes
+alone", `src/Overlay/PanelShaders.cpp`) — **not** a `Param` under either Switch above.
+Adaptive Brightness is already at `kParamBudget`'s ceiling of 8, and that constant's own
+comment says the next param on that row is the signal to stop adding params there, not raise
+the shared ceiling a third time (see "Row count and the parameter budget" in each effect's
+own section). A standalone row also matches the maths: `ConfigSchema.h`'s `dark_floor` is
+**one** field, `reshade.dark_floor`, a bare top-level key on `ReshadeSettings` rather than a
+copy inside each of the two adaptive structs — the two effects are mutually exclusive, share
+one EMA and one set of smoothed statistics already, and a second copy would only be a chance
+for a hand-edited file to hold two different numbers for a control the panel only ever shows
+once. Range 0.0–0.5, step 0.01, `ZeroMeans("Off")`; disabled, with a reason, unless one of
+the two effects above is on.
 
 ## The settings-panel budget
 

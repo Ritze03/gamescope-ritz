@@ -657,6 +657,51 @@ namespace gamescope::config
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;
         ReshadeAdaptiveGammaSettings adaptive_gamma;
         ReshadeShadowLiftSettings shadow_lift;
+
+        // NEW 2026-09-14 (the user: "the adaptive brightness and the
+        // adaptive gamma both completely destroy REALLY dark images ... Is
+        // there some kind of filter, that keeps really dark stuff really
+        // dark or something?"). Fades whichever of the two ABOVE adaptive
+        // effects is running toward the untouched image once the smoothed
+        // scene is darker than this -- see src/shaders/effects_curve.h's
+        // DARK FLOOR block for the formula and
+        // superdoc/features/shader-effects.md for the measured default and
+        // why it is small.
+        //
+        // A SHARED, top-level field rather than one copy inside EACH of the
+        // two structs above, for three reasons. First, the two effects are
+        // MUTUALLY EXCLUSIVE (adaptive_brightness.enabled and
+        // adaptive_gamma.enabled can never both be true -- see either
+        // struct's own comment), so there is never a frame where two
+        // independent copies could even disagree about which one the user
+        // meant; a duplicate would only be a chance for a hand-edited file
+        // to hold two different numbers for no reason a user could see.
+        // Second, the panel offers exactly ONE row for it -- a standalone
+        // Slider, not a Param under either Switch (src/Overlay/
+        // PanelShaders.cpp's Adaptive Brightness row is already AT
+        // Registry.cpp's kParamBudget of 8, and that constant's own comment
+        // says the answer to "one more param" is to stop adding params to
+        // that row, not raise the shared ceiling a third time -- see
+        // PanelShaders.cpp's own header note on the budget). Third, the two
+        // effects already share their EMA and their smoothed statistics
+        // (cs_effects_measure.comp runs one measure pass regardless of
+        // which is on), so a field that answers "how dark counts as dark"
+        // fits the same shared-infrastructure shape as target_luminance
+        // very nearly does -- each effect HAS its own target because the two
+        // scales (a gain's target vs. a gamma's target) read the same
+        // number differently, but this floor is read identically by both.
+        //
+        // 0.0..1.0, encoded (the same units as p50/target_luminance). 0.0
+        // disables it -- today's pre-2026-09-14 behaviour, byte-identical
+        // (effects_curve.h's dark_weight() returns exactly 1.0 there). 0.03
+        // by default: measured small enough that neither of the existing
+        // `dark` (median code 12) nor `texdark` (median code 20) reference
+        // scenes loses any lift, while the report's own near-black capture
+        // (median a fraction of a code) and the `blackout` scene added for
+        // this feature (median ~2, ~90% of pixels at code 0..6) both come
+        // out fully neutralised. See shader-effects.md's measured table for
+        // the full sweep this default was picked from.
+        float dark_floor = 0.03f;
     };
 
     // Issue #35: one panel window's saved screen position/size, restored on

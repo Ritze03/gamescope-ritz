@@ -51,6 +51,17 @@ uniform effects_t {
     float u_agStrength;   // dry/wet mix, 0.0..1.0
     float u_agLocal;      // Local adaptation, 0.0..1.0 -- the SAME operator
 
+    // ---- Dark floor (NEW 2026-09-14) ----
+    // SHARED between Adaptive Brightness and Adaptive Gamma (one number, one
+    // panel row -- see ConfigSchema.h's ReshadeSettings::dark_floor for why
+    // it is not two fields). 0.0..1.0, 0 = off (today's pre-2026-09-14
+    // behaviour, byte-identical). effects_curve.h's dark_weight() turns this
+    // and the smoothed median into a 0..1 blend weight that fades whichever
+    // effect is running toward the identity on a scene far darker than the
+    // weight's own half-point -- see that header's DARK FLOOR block for the
+    // formula and every "why".
+    float u_darkFloor;
+
     // ---- Bloom (NEW 2026-09-08) ----
     // The only SPATIAL effect in this pass: three extra dispatches build an
     // eighth-resolution glow buffer (cs_effects_bloom_down.comp, then

@@ -4747,6 +4747,8 @@ struct EffectsPushData_t
 	float    u_agStrength;
 	float    u_agLocal;
 
+	float    u_darkFloor;
+
 	float    u_bloomThreshold;
 	float    u_bloomIntensity;
 	float    u_bloomRadius;
@@ -4832,6 +4834,19 @@ struct EffectsPushData_t
 		u_agMaxDarken = bAdaptiveGamma ? s.flAgMaxDarken : 1.0f;
 		u_agStrength  = bAdaptiveGamma ? std::clamp( s.flAgStrength, 0.0f, 1.0f ) : 0.0f;
 		u_agLocal     = bAdaptiveGamma ? std::clamp( s.flAgLocal, 0.0f, 1.0f ) : 0.0f;
+
+		// Dark floor (NEW 2026-09-14): SHARED between the two adaptive
+		// effects (ConfigSchema.h's ReshadeSettings::dark_floor is one
+		// field), so it is masked to 0 -- effects_curve.h's dark_weight()
+		// reads that as "off", i.e. weight always 1 -- only when NEITHER
+		// effect is the one running this frame, for the same "the uniform
+		// says exactly what the frame did" reason as u_abLocal above. While
+		// either is active it is read inside that effect's own gated branch
+		// in the shader, so masking it there too would be redundant, not
+		// wrong -- this keeps the discipline consistent with every other
+		// field in this struct.
+		u_darkFloor = ( s.bAdaptiveBrightness || bAdaptiveGamma )
+			? std::clamp( s.flDarkFloor, 0.0f, 1.0f ) : 0.0f;
 
 		// ADAPTATION SPEED: whichever effect is running supplies it (2026-09-09,
 		// "For adaptive gamma, there should also be some value, to adjust the
