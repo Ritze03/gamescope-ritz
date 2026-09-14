@@ -132,6 +132,16 @@ chord; toggle flips on the press and ignores the release. A focus boundary
 (`wlserver_clear_pressed_hotkeys()`) releases a held zoom, because the release
 that would have ended it went somewhere else.
 
+**A held chord is broken only by the release of one of its own keys** — see
+[keybinds.md](keybinds.md)'s "Held actions and mouse buttons" for the rule and
+its `Why:`. `Why (2026-09-14):` the user's report, verbatim: *"Pressing keys
+closes the zoom overlay. It should stay open while the right mouse button is
+pressed, no matter what."* Releasing an ordinary gameplay key (`W`, `Shift`,
+…) while `RMB` was held for the zoom used to end it, because the engine's
+release check couldn't tell "an unrelated key came up" from "the chord's own
+key came up" once the chord was a mouse button the keyboard path's held set
+never carries.
+
 `Why RMB by default:` the zoom is an aim-down-sights stand-in, and the right
 button is where shooters put that. With the master switch off by default the
 binding is inert until the user opts in.
@@ -157,7 +167,11 @@ mirrored into atomics by the steamcompmgr thread whenever the config cache is
 - `tests/test_keybinds.cpp` — mouse-button terms parse and format; the zoom
   fires as a subset, is not swallowed on a button, reports its release, does
   not re-fire while down, is swallowed on a real key, is a plain press on a
-  modifier, loses to an exact chord, and is dropped by a focus boundary.
+  modifier, loses to an exact chord, and is dropped by a focus boundary. A
+  regression case models wlserver's two real held-set paths separately (a
+  mouse event's set is keyboard-ledger ∪ buttons-down, a keyboard event's is
+  the keyboard ledger alone) and proves an unrelated key's press and release
+  no longer end a mouse-button-held zoom (2026-09-14).
 - `tests/test_config.cpp` — every `zoom` field round-trips; absent means
   defaults.
 - `tests/test_overlay_ui.cpp` — the area has an icon and sits in MISC.
@@ -166,4 +180,8 @@ mirrored into atomics by the steamcompmgr thread whenever the config cache is
   circle/hold on the `colors` bands shows the bands at exactly 2× inside a
   360 px ring with the ring drawn, and before/released captures are
   byte-identical; rectangle/toggle on `texdark` stays zoomed across the
-  release and clears on the second press.
+  release and clears on the second press. `keypress-while-held-*.png` — RMB
+  held, then a `W` tap and a `LShift` tap injected with `wlserver_debug_key`
+  in between: the zoom circle is present and byte-identical across the held
+  and both tap frames, and gone (byte-identical to the pre-zoom frame) only
+  after the RMB release.

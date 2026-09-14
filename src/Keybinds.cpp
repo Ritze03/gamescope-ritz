@@ -865,11 +865,29 @@ namespace gamescope::keybinds
 		// ---- releases --------------------------------------------------------
 		res.bConsume = g_setOwnedPress.erase( normalizedKeysym ) > 0;
 
-		if ( g_oHeld && !ChordHeld( g_Chords[ (size_t)*g_oHeld ], setHeld ) )
+		// A held chord is broken only by the RELEASE OF ONE OF ITS OWN KEYS
+		// (2026-09-14, Issue: "pressing keys closes the zoom overlay"). The
+		// keyboard path's setHeld carries no mouse buttons by design (see the
+		// held-action rule above and keybinds.md's "Held actions and mouse
+		// buttons"), so ChordHeld() on a button-only chord is UNCONDITIONALLY
+		// false for every keyboard-path event -- releasing an unrelated key
+		// such as W was reported as breaking an RMB-held zoom because the
+		// !ChordHeld(...) check alone can't tell "the chord's own key came up"
+		// from "this event's held-set simply never contains that term". Gating
+		// on "does this chord even have a term for the key that just came up"
+		// fixes both paths at once without letting buttons into the keyboard
+		// ledger.
+		if ( g_oHeld )
 		{
-			res.bReleased = true;
-			res.eReleased = *g_oHeld;
-			g_oHeld.reset();
+			bool bOwnKey = false;
+			for ( const ChordTerm &t : g_Chords[ (size_t)*g_oHeld ].terms )
+				bOwnKey = bOwnKey || t.Accepts( normalizedKeysym );
+			if ( bOwnKey && !ChordHeld( g_Chords[ (size_t)*g_oHeld ], setHeld ) )
+			{
+				res.bReleased = true;
+				res.eReleased = *g_oHeld;
+				g_oHeld.reset();
+			}
 		}
 
 		for ( size_t i = 0; i < (size_t)Action::Count; i++ )

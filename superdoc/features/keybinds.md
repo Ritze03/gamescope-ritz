@@ -172,6 +172,24 @@ action opts into with `ActionInfo::bHeld` rather than one the chord decides:
 - Reports the **release** that breaks the chord (`KeyResult::bReleased`), which
   is what makes "hold to zoom" possible. `ClearGestureState()` drops a held
   chord too, and `wlserver_clear_pressed_hotkeys()` tells the zoom so.
+- **A held chord is broken only by the release of one of its own keys.** The
+  release path first checks whether the chord has a term for the key that just
+  came up at all, and only then falls back to `!ChordHeld(...)` to see whether
+  that was the term's last holder.
+
+  `Why (2026-09-14):` the user's report, verbatim: *"Pressing keys closes the
+  zoom overlay. It should stay open while the right mouse button is pressed,
+  no matter what."* `RMB`'s held set on the **keyboard** path never contains a
+  button sym (by design, one item up: a Right Shift tap must still open the
+  shell while aiming), so `!ChordHeld(RMB-chord, setHeld)` was true on *every*
+  keyboard release while the zoom was held — releasing `W`, or any other key
+  that had nothing to do with the chord, read as "the chord's last holder let
+  go" and ended the zoom. Gating on "does this chord even have a term for the
+  key that just came up" is what tells "an unrelated key came up" apart from
+  "the chord's own key came up", on both the keyboard and the mouse path, with
+  no button ever added to the keyboard ledger. See `tests/test_keybinds.cpp`'s
+  *"a keyboard key elsewhere in the ledger cannot release a held mouse-button
+  chord"*.
 - A modifier-only chord is a plain press here, never a tap (`Alt` to zoom is
   legitimate). Swallowed only when the completing key is a real key: a
   modifier keeps its day job and a mouse button belongs to the game.

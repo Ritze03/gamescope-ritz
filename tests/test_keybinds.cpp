@@ -518,3 +518,58 @@ TEST_CASE( "a held action on a real key is swallowed and never taps; a focus bou
 
 	ResetAll();
 }
+
+TEST_CASE( "a keyboard key elsewhere in the ledger cannot release a held mouse-button chord", "[keybinds]" )
+{
+	// Regression for the 2026-09-14 report: "pressing keys closes the zoom
+	// overlay. It should stay open while the right mouse button is pressed,
+	// no matter what." The `Keyboard` helper above keeps ONE combined held
+	// set for keys and buttons, which is why the two zoom tests above never
+	// caught this: releasing W out of a combined set still leaves the button
+	// sym in it. The real compositor does not share one set -- wlserver's
+	// keyboard path (wlserver_process_hotkeys, driven off
+	// wlserver.mapPressedHotkeyKeys) never carries a button sym at all, and
+	// only the mouse path (wlserver_ritz_mouse_hotkey) unions the keyboard
+	// ledger with the buttons down -- so this models the two paths
+	// separately, the way wlserver actually calls ProcessKey().
+	ClearGestureState();
+	REQUIRE( ChordTextFor( Action::Zoom ) == "RMB" );
+
+	std::unordered_set<xkb_keysym_t> keyboardHeld;
+	std::unordered_set<xkb_keysym_t> buttonsHeld;
+
+	auto ButtonEvent = [&]( xkb_keysym_t uSym, bool bPress )
+	{
+		if ( bPress )
+			buttonsHeld.insert( uSym );
+		else
+			buttonsHeld.erase( uSym );
+		std::unordered_set<xkb_keysym_t> setHeld = keyboardHeld;
+		setHeld.insert( buttonsHeld.begin(), buttonsHeld.end() );
+		return ProcessKey( uSym, bPress, setHeld );
+	};
+	auto KeyEvent = [&]( xkb_keysym_t uSym, bool bPress )
+	{
+		if ( bPress )
+			keyboardHeld.insert( uSym );
+		else
+			keyboardHeld.erase( uSym );
+		return ProcessKey( uSym, bPress, keyboardHeld );   // no buttons, ever
+	};
+
+	KeyResult r = ButtonEvent( XKB_KEY_Pointer_Button3, true );    // RMB press
+	CHECK( r.bFired );
+	CHECK( r.eAction == Action::Zoom );
+
+	CHECK_FALSE( KeyEvent( XKB_KEY_W, true ).bReleased );
+	CHECK_FALSE( KeyEvent( XKB_KEY_W, false ).bReleased );         // the bug: W's release used to end the zoom
+
+	CHECK_FALSE( KeyEvent( XKB_KEY_Shift_L, true ).bReleased );
+	CHECK_FALSE( KeyEvent( XKB_KEY_Shift_L, false ).bReleased );
+
+	r = ButtonEvent( XKB_KEY_Pointer_Button3, false );             // RMB release: this is the one that ends it
+	CHECK( r.bReleased );
+	CHECK( r.eReleased == Action::Zoom );
+
+	ResetAll();
+}
