@@ -249,14 +249,14 @@ void main()
         float B = clamp(coef.x * Y + coef.y, 0.0, 1.0);
         float D = Y - B;
 
-        float Yp;
-        if (abv2_is_void(B))
-        {
-            // The black floor (plan 4.6): literal black, letterbox bars and
-            // dither stay EXACTLY untouched, never "close".
-            Yp = Y;
-        }
-        else
+        float Yp = Y;
+        // The black floor (plan 4.6): literal black, letterbox bars and
+        // dither stay EXACTLY untouched, never "close" -- the colour step
+        // below is skipped too (V2 QC, 2026-09-14), since k = Y / max(Y,
+        // 1e-4) is below 1 for a luma under 1e-4 and would darken such a
+        // pixel; unreachable from an 8-bit source (its smallest non-zero
+        // luma is 0.114/255 ~= 4.5e-4) but not from a float one.
+        if (!abv2_is_void(B))
         {
             bool bScene = u_v2Mode != 0u;
             float g = abv2_g(u_v2Lift, u_v2Target, history_read(HISTORY_V2_ANCHOR), bScene);
@@ -285,25 +285,27 @@ void main()
                 float M  = B2 - B;
                 Dtotal = abv2_clarity_combine(D, M, u_v2Clarity);
             }
-            Yp = abv2_detail_apply(fB, Dtotal, sec);
-        }
-        Yp = clamp(Yp, 0.0, 1.0);
+            Yp = clamp(abv2_detail_apply(fB, Dtotal, sec), 0.0, 1.0);
 
-        // Colour (plan 4.7): scale RGB by the luma ratio -- hue-preserving,
-        // unlike every other effect in this pass, which is per-channel (see
-        // that section's own "why" -- a per-channel exponent desaturates
-        // lifted shadows, and colour is the detection channel that survives
-        // darkness best). Compressed back into range if any channel would
-        // otherwise exceed 1, by mixing toward the achromatic Yp itself --
-        // the same hue-preserving shape Bloom's screen composite and this
-        // pass's own final clamp elsewhere in this file avoid needing, but
-        // that a pure per-channel multiply here does not get for free.
-        float k = Yp / max(Y, 1e-4);
-        vec3 graded = c * k;
-        float m = max(graded.r, max(graded.g, graded.b));
-        if (m > 1.0 && m > Yp)
-            graded = mix(graded, vec3(Yp), clamp((m - 1.0) / max(m - Yp, 1e-4), 0.0, 1.0));
-        c = graded;
+            // Colour (plan 4.7): scale RGB by the luma ratio -- hue-
+            // preserving, unlike every other effect in this pass, which is
+            // per-channel (see that section's own "why" -- a per-channel
+            // exponent desaturates lifted shadows, and colour is the
+            // detection channel that survives darkness best). Compressed
+            // back into range if any channel would otherwise exceed 1, by
+            // mixing toward the achromatic Yp itself -- the same hue-
+            // preserving shape Bloom's screen composite and this pass's
+            // own final clamp elsewhere in this file avoid needing, but
+            // that a pure per-channel multiply here does not get for free.
+            // (Luma is linear in RGB, so the mix keeps luma at Yp exactly
+            // and lands the largest channel on exactly 1.0.)
+            float k = Yp / max(Y, 1e-4);
+            vec3 graded = c * k;
+            float m = max(graded.r, max(graded.g, graded.b));
+            if (m > 1.0 && m > Yp)
+                graded = mix(graded, vec3(Yp), clamp((m - 1.0) / max(m - Yp, 1e-4), 0.0, 1.0));
+            c = graded;
+        }
     }
 
     c = clamp(c, 0.0, 1.0);

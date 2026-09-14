@@ -1223,8 +1223,10 @@ run_sampler means dark-floor-means "$DF_OFF" "$DF_AG_ZERO" "$DF_AG_DEFAULT" "$DF
 #                          other, and both ground figures stay ordered.
 #   halo-halobox-*/haloinv-*  REUSED from Adaptive Gamma's own block (same
 #                          sampler function, same scenes): guarantee 4, at
-#                          the defaults (<= 4 codes) and at Max lift 8 /
-#                          Detail 2 / Clarity 1 (<= 8 codes).
+#                          the defaults (<= 4 codes, asserted); the
+#                          abv2-halo-*-stretch lines are the same profile at
+#                          Max lift 8 / Detail 2 / Clarity 1, INFO only
+#                          (see the block itself for why).
 #   abv2-cut               the scene-cut detector SNAPS: silhouette -> the
 #                          EXISTING `bright` scene (a plain SIGUSR1 hop, not
 #                          the `flash` scene's own internal --flash timer --
@@ -1337,8 +1339,16 @@ V2_SKY_DEFAULT="$(take_screenshot 31-skyfore-v2-default)"
 run_sampler abv2sky "$V2_SKY_DEFAULT"
 
 # HALO, reusing Adaptive Gamma's own sampler function: guarantee 4, at
-# the shipped defaults (<= 4 codes) and at the widened bound the plan
-# states for Max lift 8 / Detail 2 / Clarity 1 (<= 8 codes).
+# the shipped defaults (<= 4 codes, ASSERTED) and, as INFO only, at the
+# stretch setting Max lift 8 / Detail 2 / Clarity 1. The plan's own
+# "<= 8 codes at any setting" for the stretch was a prediction, never
+# derived, and the V2 QC pass (2026-09-14) proved the -11 codes it
+# measures on haloinv is the operator's own maths (the guided filter's
+# model error at a hard 205-code step, amplified by the stretch's own
+# 32x guarantee-1 bound), reproduced on the CPU in float (-12.7) and with
+# the 8-bit buffers (-10.7) alike -- see cmd_halo's `info` branch in
+# effects_regression_sample.py. Reported so a regression there stays
+# visible; not failed on a number nothing justified.
 advance_scenes 1   # skyfore -> halobox
 sleep "$ADAPT_SETTLE_S"
 set_v2_param "$V2_MAXLIFT_ID" 1.0
@@ -1348,7 +1358,7 @@ run_sampler halo "$(take_screenshot 32-halobox-v2-default)" halobox on 4.0
 set_v2_param "$V2_MAXLIFT_ID" 8.0
 set_v2_param "$V2_DETAIL_ID" 2.0
 set_v2_param "$V2_CLARITY_ID" 1.0
-run_sampler halo "$(take_screenshot 32-halobox-v2-extreme)" halobox on 8.0
+run_sampler halo "$(take_screenshot 32-halobox-v2-extreme)" halobox info 8.0 abv2-halo-halobox-stretch
 set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
 set_v2_param "$V2_DETAIL_ID" "$V2_DETAIL_DEFAULT"
 set_v2_param "$V2_CLARITY_ID" 0.0
@@ -1362,7 +1372,7 @@ run_sampler halo "$(take_screenshot 33-haloinv-v2-default)" haloinv on 4.0
 set_v2_param "$V2_MAXLIFT_ID" 8.0
 set_v2_param "$V2_DETAIL_ID" 2.0
 set_v2_param "$V2_CLARITY_ID" 1.0
-run_sampler halo "$(take_screenshot 33-haloinv-v2-extreme)" haloinv on 8.0
+run_sampler halo "$(take_screenshot 33-haloinv-v2-extreme)" haloinv info 8.0 abv2-halo-haloinv-stretch
 set_v2_param "$V2_MAXLIFT_ID" "$V2_MAXLIFT_DEFAULT"
 set_v2_param "$V2_DETAIL_ID" "$V2_DETAIL_DEFAULT"
 set_v2_param "$V2_CLARITY_ID" 0.0

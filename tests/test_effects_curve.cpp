@@ -1635,6 +1635,36 @@ TEST_CASE( "abv2_toe: identity when g == 1 (no lift requested) or S == 1 (Max li
 	}
 }
 
+TEST_CASE( "abv2_toe/abv2_knee: finite everywhere, and f(0) == 0, where float32 makes t underflow to 0 "
+           "(g within ~0.02 of 1 at Max lift 8 -- Lift below ~0.04)", "[effects_curve][abv2]" )
+{
+	// V2 QC (2026-09-14): abv2_solve_t()'s S^(1/(1-g)) overflows float32 to
+	// inf for g >= ~0.977 at S = 8 (>= ~0.984 at S = 4), so t == 0 exactly
+	// and the unguarded formula evaluated 0 * pow(1/0, 1-g) == NaN at x == 0.
+	// The grid steps the older cases use (0.05 from 0.2) never land in that
+	// band; this one does, on purpose.
+	for ( float g = 0.95f; g < 1.0f; g += 0.005f )
+	{
+		for ( float S = 1.5f; S <= 8.0f; S += 0.5f )
+		{
+			REQUIRE( std::isfinite( abv2_solve_t( g, S ) ) );
+			REQUIRE( abv2_toe( 0.0f, g, S ) == 0.0f );
+			REQUIRE( abv2_knee( 0.0f, g, S ) == 0.0f );
+			float flPrev = 0.0f;
+			for ( float x = 0.0f; x <= 1.0f; x += 0.01f )
+			{
+				const float y = abv2_toe( x, g, S );
+				REQUIRE( std::isfinite( y ) );
+				REQUIRE( y >= flPrev - 1e-6f );
+				flPrev = y;
+			}
+			// The secant guard at B ~ 0 hands back S, never the NaN.
+			REQUIRE( std::isfinite( abv2_secant( 0.0f, g, S, false ) ) );
+			REQUIRE( std::isfinite( abv2_secant( 0.0f, g, S, true ) ) );
+		}
+	}
+}
+
 TEST_CASE( "abv2_toe: f'(0) equals S -- the closed-form identity abv2_solve_t() exists to guarantee",
            "[effects_curve][abv2]" )
 {

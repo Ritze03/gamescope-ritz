@@ -757,6 +757,14 @@ EC_FUNC float abv2_toe( float x, float g, float S )
 	float s  = max( S, ABV2_S_MIN );
 	if ( gg >= 0.999f || s <= 1.0f + ABV2_T_EPS )
 		return xx;
+	// f(0) == 0 by construction -- returned directly rather than evaluated,
+	// because in float32 abv2_solve_t()'s S^(1/(1-g)) overflows to inf once
+	// g is within ~0.02 of 1 at S = 8 (Lift below ~0.04), which makes t
+	// exactly 0 and 0 * pow(1/0, 1-g) a NaN. (V2 QC, 2026-09-14: the GPU
+	// never reaches x == 0 here -- the black floor runs first -- but the
+	// shared header must not hand a NaN to any caller that does.)
+	if ( xx <= 0.0f )
+		return 0.0f;
 	float t = abv2_solve_t( gg, s );
 	return xx * pow( ( 1.0f + t ) / ( xx + t ), 1.0f - gg );
 }

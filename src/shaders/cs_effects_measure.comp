@@ -405,7 +405,16 @@ void main()
         contentCount += float(s_histC[b]);
     const bool bVoid = contentCount < 0.01 * N;
 
-    float v2AdaptedPrev = history_read(HISTORY_V2_ANCHOR);
+    // On a reset frame (the texture was just created -- undefined contents
+    // -- or the pre-pass resumed after a gap) there IS no previous value to
+    // hold: a void reset frame would otherwise seed the EMA with whatever
+    // bytes the fresh texture happened to contain (adapt_at() above reads
+    // the same garbage but always discards it on a reset; this path is the
+    // one that could USE it). Seed with Target instead: g_adapt is then
+    // exactly 1, i.e. the static floor alone -- Adaptation "Off" behaviour
+    // -- until the first frame with content, which snaps. (V2 QC, 2026-09-14.)
+    const bool bV2Reset = (u_flags & EFFECT_RESET_HISTORY) != 0u;
+    float v2AdaptedPrev = bV2Reset ? clamp(u_v2Target, 0.01, 0.99) : history_read(HISTORY_V2_ANCHOR);
     if (isnan(v2AdaptedPrev) || isinf(v2AdaptedPrev))
         v2AdaptedPrev = 0.5;
     v2AdaptedPrev = clamp(v2AdaptedPrev, 0.0, 1.0);
@@ -427,15 +436,18 @@ void main()
     {
         float n = float(s_hist[4 * k] + s_hist[4 * k + 1] + s_hist[4 * k + 2] + s_hist[4 * k + 3]);
         fracNow[k] = n / N;
-        float prev = history_read_at(ivec2(k, V2_HIST_PREV_ROW));
+        // Same reset rule as the anchor above: the row is unwritten on a
+        // reset frame, so read nothing from it (l1 stays 0 -- no cut can be
+        // reported off undefined bytes; the reset itself already snaps).
+        float prev = bV2Reset ? fracNow[k] : history_read_at(ivec2(k, V2_HIST_PREV_ROW));
         if (isnan(prev) || isinf(prev)) prev = fracNow[k];
         l1 += abs(fracNow[k] - clamp(prev, 0.0, 1.0));
     }
     const bool bFullStop = abs(log(max(v2AnchorRaw, 1e-4) / max(v2AdaptedPrev, 1e-4))) > log(2.0);
-    const bool bCut = !bVoid && bFullStop && (l1 > 0.35);
+    const bool bCut = !bV2Reset && !bVoid && bFullStop && (l1 > 0.35);
 
     float v2Smoothed;
-    if ((u_flags & EFFECT_RESET_HISTORY) != 0u || bCut)
+    if (bV2Reset || bCut)
         v2Smoothed = v2AnchorRaw;
     else
     {
