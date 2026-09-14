@@ -83,6 +83,9 @@ namespace gamescope::overlay::abpreview
 		float flV2Lift    = 0.5f;
 		float flV2Target  = 0.35f;
 		float flV2MaxLift = 4.0f;
+		// DARKENING (NEW 2026-09-14) -- the mirror pair; see effects_curve.h.
+		float flV2MaxDarken = 1.0f;
+		float flV2Darken    = 0.0f;
 	};
 
 	// Adaptive Brightness V2's own content-median anchor (plan 4.4), computed
@@ -170,7 +173,14 @@ namespace gamescope::overlay::abpreview
 			if ( ec::abv2_is_void( Y ) )
 				return;
 			const float g = ec::abv2_g( p.flV2Lift, p.flV2Target, st.flV2Anchor, p.bV2Scene );
-			const float Yp = ec::abv2_curve( Y, g, p.flV2MaxLift, p.bV2Knee );
+			// DARKENING (NEW 2026-09-14): the same two-sided curve the GPU
+			// runs (effects_curve.h's abv2_curve2()) -- see that block for
+			// the pivot construction. Byte-identical to the lift-only line
+			// above at the darkening params' own defaults (Max darken 1,
+			// Darken 0).
+			const float gDark = ec::abv2_g_dark( p.flV2Darken, p.flV2Target, st.flV2Anchor, p.bV2Scene );
+			const float Yp = ec::abv2_curve2( Y, g, p.flV2MaxLift, p.bV2Knee,
+			                                   gDark, p.flV2MaxDarken, p.flV2Target );
 			const float k = Yp / std::max( Y, 1e-4f );
 			for ( int i = 0; i < 3; i++ )
 				flRgb[i] = Cl( flRgb[i] * k, 0.0f, 1.0f );

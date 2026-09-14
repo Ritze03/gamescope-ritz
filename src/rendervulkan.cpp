@@ -4947,6 +4947,10 @@ struct EffectsPushData_t
 	// GLSL side's own append.
 	float    u_v2RadiusFine;
 	float    u_v2Clarity;
+	// DARKENING (NEW 2026-09-14) -- must stay LAST, mirroring the GLSL
+	// side's own append (effects_common.h).
+	float    u_v2MaxDarken;
+	float    u_v2Darken;
 
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
@@ -5124,6 +5128,12 @@ struct EffectsPushData_t
 			? std::max( std::round( u_v2Radius / 4.0f ), 1.0f )
 			: 1.0f;
 		u_v2Clarity = bAdaptiveV2 ? std::clamp( s.flV2Clarity, 0.0f, 1.0f ) : 0.0f;
+
+		// DARKENING (NEW 2026-09-14). Neutral: Max darken 1 (no darken at
+		// all -- abv2_toe_dark()'s own identity guard), Darken 0 (no static
+		// floor), same masking discipline as every other field above.
+		u_v2MaxDarken = bAdaptiveV2 ? std::max( s.flV2MaxDarken, 1.0f ) : 1.0f;
+		u_v2Darken    = bAdaptiveV2 ? std::clamp( s.flV2Darken, 0.0f, 1.0f ) : 0.0f;
 	}
 };
 

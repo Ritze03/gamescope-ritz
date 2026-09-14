@@ -239,8 +239,11 @@ void main()
     //    from cs_effects_v2_box2.comp) through a bounded toe/knee curve, a
     //    Weber-preserving detail term (Stage 3: plus the Clarity silhouette
     //    band, a SECOND finer base from cs_effects_v2_box2_fine.comp), then
-    //    colour by luma ratio. See effects_curve.h's "ADAPTIVE BRIGHTNESS
-    //    V2" block for every formula and
+    //    colour by luma ratio. DARKENING (NEW 2026-09-14): the SAME base
+    //    curve is now two-sided -- lift below Target, a bounded darken
+    //    mirror above it -- so a bright region's base is pulled down while
+    //    a dark region's is lifted, in the same frame. See effects_curve.h's
+    //    "ADAPTIVE BRIGHTNESS V2" block for every formula and
     //    superdoc/planning/adaptive-brightness-v2-plan.md for the design.
     if ((u_flags & EFFECT_ADAPTIVE_V2) != 0u)
     {
@@ -259,10 +262,18 @@ void main()
         if (!abv2_is_void(B))
         {
             bool bScene = u_v2Mode != 0u;
-            float g = abv2_g(u_v2Lift, u_v2Target, history_read(HISTORY_V2_ANCHOR), bScene);
+            float anchor = history_read(HISTORY_V2_ANCHOR);
+            float g     = abv2_g(u_v2Lift, u_v2Target, anchor, bScene);
+            // DARKENING (NEW 2026-09-14): the two-sided curve's own dark-
+            // side exponent, mirroring g above -- see effects_curve.h's
+            // DARKENING block. Byte-identical below when u_v2MaxDarken is
+            // 1 and u_v2Darken is 0 (abv2_curve2()/abv2_secant2() both
+            // telescope back to abv2_curve()/abv2_secant() exactly then).
+            float gDark = abv2_g_dark(u_v2Darken, u_v2Target, anchor, bScene);
             bool bKnee = u_v2Knee != 0u;
-            float fB  = abv2_curve(B, g, u_v2MaxLift, bKnee);
-            float sec = abv2_secant(B, g, u_v2MaxLift, bKnee) * clamp(u_v2Detail, 0.0, 2.0);
+            float fB  = abv2_curve2(B, g, u_v2MaxLift, bKnee, gDark, u_v2MaxDarken, u_v2Target);
+            float sec = abv2_secant2(B, g, u_v2MaxLift, bKnee, gDark, u_v2MaxDarken, u_v2Target)
+                        * clamp(u_v2Detail, 0.0, 2.0);
 
             // STAGE 3 CLARITY (NEW 2026-09-14, plan section 4.9): the
             // silhouette band. A second, FINER base B2 (from the second
@@ -299,6 +310,13 @@ void main()
             // that a pure per-channel multiply here does not get for free.
             // (Luma is linear in RGB, so the mix keeps luma at Yp exactly
             // and lands the largest channel on exactly 1.0.)
+            // DARKENING (V2 QC, 2026-09-14): this guard is a NO-OP whenever
+            // k <= 1 (Yp <= Y, which darkening always gives -- abv2_curve2()
+            // never lifts above Target), since graded = c * k is then <= c
+            // component-wise and c itself is already in [0,1]: m can never
+            // exceed 1 on the darkening side, so the branch below simply
+            // does not fire there. It exists for the LIFT case (k > 1),
+            // unchanged.
             float k = Yp / max(Y, 1e-4);
             vec3 graded = c * k;
             float m = max(graded.r, max(graded.g, graded.b));

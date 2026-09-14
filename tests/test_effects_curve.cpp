@@ -1767,6 +1767,271 @@ TEST_CASE( "abv2_secant: bounded by S, and matches the curve's own secant off th
 	}
 }
 
+// ===========================================================================
+//  DARKENING (2026-09-14) -- the user: "Make it able to make the image
+//  darker (both full and on parts of the image)". abv2_toe_dark() is the
+//  convex mirror of abv2_toe() (same family, f''(x) flips sign with g),
+//  abv2_g_dark()/abv2_g_static_dark() choose its exponent the mirrored way,
+//  and abv2_curve2()/abv2_secant2() are the two-sided combiner. See
+//  effects_curve.h's own DARKENING block for the closed-form proofs these
+//  tests exercise numerically.
+// ===========================================================================
+
+TEST_CASE( "abv2_toe_dark: f(0) = 0 and f(1) = 1, over the whole g x D grid",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float g = 1.0f; g <= ABV2_G_MAX; g += 0.2f )
+	{
+		for ( float D = 1.0f; D <= 4.0f; D += 0.25f )
+		{
+			REQUIRE_THAT( abv2_toe_dark( 0.0f, g, D ), WithinAbs( 0.0f, 1e-5f ) );
+			REQUIRE_THAT( abv2_toe_dark( 1.0f, g, D ), WithinAbs( 1.0f, 1e-4f ) );
+		}
+	}
+}
+
+TEST_CASE( "abv2_toe_dark: identity when g == 1 (no darken requested) or D == 1 "
+           "(Max darken at its floor)", "[effects_curve][abv2][darken]" )
+{
+	for ( float x = 0.0f; x <= 1.0f; x += 0.05f )
+	{
+		REQUIRE_THAT( abv2_toe_dark( x, 1.0f, 3.0f ), WithinAbs( x, 1e-5f ) );
+		REQUIRE_THAT( abv2_toe_dark( x, 2.5f, 1.0f ), WithinAbs( x, 1e-5f ) );
+	}
+}
+
+TEST_CASE( "abv2_toe_dark: f'(0) equals 1/D -- the closed-form abv2_solve_t_dark() "
+           "exists to guarantee", "[effects_curve][abv2][darken]" )
+{
+	// Same reasoning as abv2_toe's own "f'(0) equals S" test just above:
+	// checked ALGEBRAICALLY against the closed form
+	// (t/(1+t))^(g-1) == 1/D, not by a numerical derivative near zero --
+	// t itself can be far smaller than any fixed finite-difference step.
+	for ( float g = 1.05f; g <= ABV2_G_MAX; g += 0.1f )
+	{
+		for ( float D = 1.25f; D <= 4.0f; D += 0.25f )
+		{
+			const float t = abv2_solve_t_dark( g, D );
+			REQUIRE( t > 0.0f );
+			const float flSlope = std::pow( t / ( 1.0f + t ), g - 1.0f );
+			REQUIRE_THAT( flSlope, WithinAbs( 1.0f / D, ( 1.0f / D ) * 1e-3f ) );
+		}
+	}
+}
+
+TEST_CASE( "abv2_toe_dark: guarantee -- never lifts, secant never below 1/D, "
+           "convex-through-the-origin monotone, over the whole g x D grid",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float g = 1.0f; g <= ABV2_G_MAX; g += 0.25f )
+	{
+		for ( float D = 1.0f; D <= 4.0f; D += 0.25f )
+		{
+			float flPrevSecant = 0.0f;
+			float flPrevY = 0.0f;
+			for ( float x = 0.01f; x <= 1.0f; x += 0.01f )
+			{
+				const float y = abv2_toe_dark( x, g, D );
+				REQUIRE( std::isfinite( y ) );
+				REQUIRE( y >= -1e-5f );
+				REQUIRE( y <= 1.0f + 1e-4f );
+				REQUIRE( y <= x + 1e-4f );               // never lifts
+				const float flSecant = y / x;
+				REQUIRE( flSecant >= 1.0f / D - 1e-3f );  // never darkens past 1/D
+				REQUIRE( flSecant >= flPrevSecant - 1e-3f );   // secant non-decreasing (convex)
+				REQUIRE( y >= flPrevY - 1e-5f );          // monotone
+				flPrevSecant = flSecant;
+				flPrevY = y;
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_toe_dark: finite everywhere, no NaN/inf, near every degenerate edge "
+           "(g -> 1, D -> 1, and the ABV2_G_MAX ceiling)", "[effects_curve][abv2][darken]" )
+{
+	const float gEdges[] = { 1.0001f, 1.001f, 1.02f, ABV2_G_MAX - 0.001f, ABV2_G_MAX, ABV2_G_MAX + 1.0f };
+	const float dEdges[] = { 1.0f, 1.0001f, 1.001f, 1.02f, 4.0f, 8.0f };
+	for ( float g : gEdges )
+	{
+		for ( float D : dEdges )
+		{
+			REQUIRE( std::isfinite( abv2_solve_t_dark( g, D ) ) );
+			REQUIRE( abv2_toe_dark( 0.0f, g, D ) == 0.0f );
+			for ( float x = 0.0f; x <= 1.0f; x += 0.05f )
+			{
+				const float y = abv2_toe_dark( x, g, D );
+				REQUIRE( std::isfinite( y ) );
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_g_static_dark/abv2_g_dark: max(g_static_dark, g_adapt) in Scene mode, "
+           "g_static_dark alone in Off mode", "[effects_curve][abv2][darken]" )
+{
+	REQUIRE_THAT( abv2_g_static_dark( 0.0f ), WithinAbs( 1.0f, 1e-6f ) );
+	REQUIRE_THAT( abv2_g_static_dark( 0.5f ), WithinAbs( 1.3f, 1e-6f ) );
+	REQUIRE_THAT( abv2_g_static_dark( 1.0f ), WithinAbs( 1.6f, 1e-6f ) );
+
+	// A bright scene (anchor > target) drives g_adapt above 1; Scene mode
+	// may only DEEPEN the darken (max), never relax it below the static
+	// floor -- the mirror of abv2_g()'s own min().
+	{
+		const float g = abv2_g_dark( 0.0f, 0.35f, 0.9f, true );
+		REQUIRE( g > 1.0f );   // g_adapt alone (static floor is 1, off)
+	}
+	// A dark scene (anchor < target) must NOT relax the static floor.
+	{
+		const float g = abv2_g_dark( 0.5f, 0.35f, 0.02f, true );
+		REQUIRE_THAT( g, WithinAbs( abv2_g_static_dark( 0.5f ), 1e-4f ) );
+	}
+	// Off mode: static floor alone, whatever the anchor says.
+	{
+		const float g = abv2_g_dark( 0.5f, 0.35f, 0.9f, false );
+		REQUIRE_THAT( g, WithinAbs( abv2_g_static_dark( 0.5f ), 1e-4f ) );
+	}
+	// The internal ceiling holds.
+	{
+		const float g = abv2_g_dark( 1.0f, 0.35f, 0.999f, true );
+		REQUIRE( g <= ABV2_G_MAX + 1e-4f );
+	}
+}
+
+TEST_CASE( "abv2_curve2: byte-identical to abv2_curve at Max darken 1 / Darken 0, "
+           "over a wide grid", "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.1f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 1.0f )
+		{
+			for ( bool bKnee : { false, true } )
+			{
+				for ( float target = 0.1f; target <= 0.9f; target += 0.1f )
+				{
+					// gDark/D at their OWN "off" defaults (1.0 g, D 1.0), as
+					// the host always passes when Darken == 0 / Max darken
+					// == 1 -- see cs_effects_layer0.comp / EffectsPushData_t.
+					for ( float x = 0.0f; x <= 1.0f; x += 0.02f )
+					{
+						const float flOld = abv2_curve( x, g, S, bKnee );
+						const float flNew = abv2_curve2( x, g, S, bKnee, 1.0f, 1.0f, target );
+						REQUIRE_THAT( flNew, WithinAbs( flOld, 1e-5f ) );
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_secant2: byte-identical to abv2_secant at Max darken 1 / Darken 0",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.15f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 1.5f )
+		{
+			for ( float B = 0.0f; B <= 1.0f; B += 0.02f )
+			{
+				const float flOld = abv2_secant( B, g, S, false );
+				const float flNew = abv2_secant2( B, g, S, false, 1.0f, 1.0f, 0.35f );
+				REQUIRE_THAT( flNew, WithinAbs( flOld, 1e-5f ) );
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_curve2: continuous at the pivot (C0), bounded, monotone, no NaN/inf, "
+           "over the whole g x S x gDark x D x target grid", "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 2.0f )
+		{
+			for ( float gDark = 1.0f; gDark <= ABV2_G_MAX; gDark += 1.0f )
+			{
+				for ( float D = 1.0f; D <= 4.0f; D += 1.0f )
+				{
+					for ( bool bKnee : { false, true } )
+					{
+						for ( float target = 0.1f; target <= 0.9f; target += 0.2f )
+						{
+							// C0 at the pivot: the two branches must agree at x == target.
+							const float flBelow = abv2_curve2( target, g, S, bKnee, gDark, D, target );
+							const float flJustAbove = abv2_curve2( target + 1e-5f, g, S, bKnee, gDark, D, target );
+							REQUIRE_THAT( flJustAbove, WithinAbs( flBelow, 1e-3f ) );
+
+							float flPrev = -1.0f;
+							for ( float x = 0.0f; x <= 1.0f; x += 0.02f )
+							{
+								const float y = abv2_curve2( x, g, S, bKnee, gDark, D, target );
+								REQUIRE( std::isfinite( y ) );
+								REQUIRE( y >= -1e-4f );
+								REQUIRE( y <= 1.0f + 1e-4f );
+								REQUIRE( y >= flPrev - 1e-4f );   // monotone
+								flPrev = y;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_secant2: bounded by max(S, D)*Detail (task guarantee), over the "
+           "whole grid, no NaN/inf", "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 2.0f )
+		{
+			for ( float gDark = 1.0f; gDark <= ABV2_G_MAX; gDark += 1.0f )
+			{
+				for ( float D = 1.0f; D <= 4.0f; D += 1.0f )
+				{
+					for ( float target = 0.1f; target <= 0.9f; target += 0.2f )
+					{
+						for ( float flDetail = 0.0f; flDetail <= 2.0f; flDetail += 0.5f )
+						{
+							for ( float B = 0.0f; B <= 1.0f; B += 0.05f )
+							{
+								const float sec = abv2_secant2( B, g, S, false, gDark, D, target );
+								REQUIRE( std::isfinite( sec ) );
+								const float flBound = std::max( S, D ) * flDetail;
+								REQUIRE( sec * flDetail <= flBound + 1e-3f );
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_binding_dark: mirrors abv2_binding()'s codes for the darken side",
+           "[effects_curve][abv2][darken]" )
+{
+	REQUIRE( abv2_binding_dark( 0.5f, 0.35f, 0.02f, true, true ) == ABV2_BIND_VOID );
+
+	// A bright scene deepens past the static floor -> NONE (g_adapt binds).
+	// anchor 0.5 vs target 0.35 gives g_adapt = ln(0.35)/ln(0.5) ~= 1.51,
+	// comfortably inside (1, ABV2_G_MAX) -- an anchor much closer to 1
+	// (e.g. 0.95) drives g_adapt past the internal ceiling instead, which
+	// is a different, already-covered case (ABV2_BIND_G_MAX).
+	REQUIRE( abv2_binding_dark( 0.0f, 0.35f, 0.5f, true, false ) == ABV2_BIND_NONE );
+
+	// A dark scene: the static floor is stronger than the (irrelevant)
+	// adaptive pull toward darken, so the floor is what's binding.
+	REQUIRE( abv2_binding_dark( 0.5f, 0.35f, 0.1f, true, false ) == ABV2_BIND_DARKEN_FLOOR );
+
+	// Off mode: the static floor alone.
+	REQUIRE( abv2_binding_dark( 0.5f, 0.35f, 0.9f, false, false ) == ABV2_BIND_DARKEN_FLOOR );
+
+	for ( int n = 0; n <= ABV2_BIND_G_MAX; n++ )
+		REQUIRE( std::string( abv2_binding_dark_text( n ) ).size() > 0 );
+}
+
 TEST_CASE( "abv2_shoulder: never exceeds the headroom, unit slope at u = 0, 0 when h <= 0",
            "[effects_curve][abv2]" )
 {

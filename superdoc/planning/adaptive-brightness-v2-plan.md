@@ -723,6 +723,50 @@ toe than Max lift allows: the toe is doing the work and raising Target changes o
 upper range), `VOID` (fewer than 1 % of taps above the black floor — the anchor is
 holding its last value), `CUT` (a scene cut snapped this frame; informational).
 
+### 4.12 Darkening (2026-09-14 addendum) — the two-sided curve
+
+The user's own request, verbatim: *"Make it able to make the image darker (both full and
+on parts of the image)"*. Everything in §4.3–4.11 above describes ONE direction only
+(`f(x) >= x`, concave, `S` the lift's own slope cap) — this addendum is the mirror,
+shipped the same day, and it answers §4.3's own open question — *"A knee variant remains
+an open question (§8)"* — for the DARKEN direction specifically: **toe, unconditionally**;
+no darkening-knee construction was built (see below for why, and why that is the honest
+answer rather than a deferral).
+
+**The closed form is exact, not approximate.** `abv2_toe(x; g, t)`'s general derivative
+has `f''(x)` sharing the sign of `(g - 1)` at every `x` — concave (lift) for `g < 1`,
+CONVEX for `g > 1`, one sign flip, same family. Writing the convex branch with a positive
+exponent gives `f_dark(x; g, t) = x * ((x+t)/(1+t))^(g-1)`, solved so `f_dark'(0) = 1/D`
+exactly (`abv2_solve_t_dark()`, literally `abv2_solve_t()`'s own derivation with the
+target reciprocated). Convexity plus `f(0)=0, f(1)=1` gives `f(x) <= x` by Jensen's
+inequality directly; the tangent-line inequality at the origin gives the secant
+`f(x)/x` non-decreasing, so its floor over `(0,1]` is its own limit at `x -> 0`, which is
+`1/D` by construction — the EXACT mirror of the toe's own `S` proof.
+
+**The pivot (local, per-pixel, in one frame).** The per-pixel base `B` already varies
+spatially; making its curve two-sided — `F(x) = L(x)` for `x <= Target`, a rescaled
+`f_dark` above it — is what lets a bright region darken while a dark region lifts, in the
+same frame, without a second global statistic or a second EMA. The rescale composes on
+`L(x)`'s own continuation (not on raw `x`), which is what makes the WHOLE curve telescope
+back to `L(x)` exactly at Max darken 1 — the byte-identical guarantee that keeps §4.3's
+lift half completely untouched, algebraically, not merely by measurement.
+
+**Why toe-only for darken, and why that answers the open question honestly.** A
+darkening-knee mirror (leave shadows exactly untouched, compress only the mid-tones just
+above the pivot) is structurally a different curve family than the toe mirror above — it
+would need its own rescale-into-a-box construction the way §4.3's knee variant does for
+lift, doubled for the opposite direction. It was not built: the plan's own escape hatch
+for exactly this case (*"if that is genuinely awkward, make Knee use the toe-mirror for
+darkening and say so"*) is what shipped, and this note is the "say so". `Detail`'s secant
+bound widens to `max(S, D) * Detail` (a SAFE, not tight, bound — the composite mixes the
+lift curve's own continuation with the darken mirror's rescale, so no single closed form
+bounds it as tightly as `S` alone bounds the toe's own secant). Two new Params, **Max
+darken** (1..4, default 1 = off) and **Darken** (0..1, default 0), took the row's own
+`kParamBudget` from 8 to 10 the same day Stage 3 (Clarity) had just spent the last of the
+old 8 — see `superdoc/features/shader-effects.md`'s own "Darkening" section for the
+row-budget reasoning, the measured tables, and the harness checks
+(`abv2-darken-bright`/`abv2-darken-sky`).
+
 ---
 
 ## 5. Cost and pipeline

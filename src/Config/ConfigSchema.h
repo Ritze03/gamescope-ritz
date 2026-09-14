@@ -697,6 +697,22 @@ namespace gamescope::config
         // Stage 2 (the fine filter is not even dispatched -- see
         // update_effects_v2_fine_images() in rendervulkan.cpp).
         float clarity = 0.0f;
+        // DARKENING (NEW 2026-09-14) -- the user: "Make it able to make the
+        // image darker (both full and on parts of the image)". The mirror
+        // of max_lift/lift above: 1.0..4.0, default 1.0 (OFF -- effects_
+        // curve.h's abv2_toe_dark() is then an exact identity, byte-
+        // identical to before this feature). Bounds the hardest anything
+        // may be darkened, anywhere in the frame -- see effects_curve.h's
+        // DARKENING block for the exact secant proof (the mirror of Max
+        // lift's own S bound).
+        float max_darken = 1.0f;
+        // 0.0..1.0, default 0.0 (off) -- the static darken floor that is
+        // ALWAYS there regardless of Adaptation, mirroring Lift: how much a
+        // bright shape (a washed-out sky, an overexposed wall) is pulled
+        // down so a dark model or object in front of it keeps its own
+        // contrast. Adaptation can only DEEPEN it (never relax it) toward
+        // Target on a bright scene -- see abv2_g_dark() in effects_curve.h.
+        float darken = 0.0f;
     };
 
     struct ReshadeSettings

@@ -54,7 +54,27 @@ namespace gamescope::ui
 		// two params in the whole registry, so this constant exists for it
 		// alone -- which is exactly why promoting it, not raising it a third
 		// time, is what happens next.
-		constexpr size_t kParamBudget = 8;
+		// RAISED AGAIN 8 -> 10, 2026-09-14 (Adaptive Brightness V2's own
+		// darkening -- superdoc/features/shader-effects.md's "Adaptive
+		// Brightness V2" section, the user: "Make it able to make the
+		// image darker (both full and on parts of the image)"). The
+		// warning just above is about ADAPTIVE BRIGHTNESS specifically
+		// not raising this constant a THIRD time for its OWN growth --
+		// it stands, and Adaptive Brightness has not asked for a ninth
+		// param. This raise is a DIFFERENT row (Adaptive Brightness V2)
+		// adding two genuinely new params (Max darken, Darken) for a
+		// real new capability, not a repeat of the same row's padding.
+		// Checked, not assumed, before raising: P3b's own tests
+		// (tests/test_overlay_shell.cpp, "an entry at the six-param
+		// budget overflows the drawer at 2.0x") already prove the
+		// Inspector's Configure body SCROLLS past whatever this
+		// constant is -- that test reads ui::ParamBudget() live, so it
+		// keeps proving the same thing at 10 with no edit needed -- so a
+		// taller row costs a scrollbar, not a layout break, at every
+		// scale already pinned. See PanelShaders.cpp's V2 row for why
+		// folding an existing param (the alternative that avoids a
+		// raise) was rejected instead.
+		constexpr size_t kParamBudget = 10;
 	}
 
 	size_t ParamBudget() { return kParamBudget; }

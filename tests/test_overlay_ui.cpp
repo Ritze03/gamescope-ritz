@@ -856,7 +856,7 @@ TEST_CASE( "law: a Param leaf containing a dot is rejected -- the One-Level Rule
 	REQUIRE( e.ParamCount() == 0 );
 }
 
-TEST_CASE( "law: the ninth Param aborts registration -- the Six Budget", "[overlay_ui]" )
+TEST_CASE( "law: the eleventh Param aborts registration -- the Six Budget", "[overlay_ui]" )
 {
 	// SPEC §5.2 clause 3 originally put this ceiling at 6; Registry.cpp's
 	// kParamBudget was raised 6 -> 7 on 2026-09-06 (requests-2026-09-07.md
@@ -865,35 +865,38 @@ TEST_CASE( "law: the ninth Param aborts registration -- the Six Budget", "[overl
 	// seventh Param and no honest merge of the existing six avoided it, and
 	// 7 -> 8 on 2026-09-07 when the same row gained "Local adaptation" (see
 	// Registry.cpp's comment for why the promotion it owes is tracked
-	// instead of done there). The law's name and enum (Law::SixBudget) are
-	// unchanged; only the number is.
+	// instead of done there), and 8 -> 10 on 2026-09-14 when Adaptive
+	// Brightness V2 grew a ninth and tenth param (Max darken, Darken) for
+	// its own darkening feature -- a DIFFERENT row than the one the 2026-
+	// 09-07 comment warns against raising a third time for its own growth
+	// (see Registry.cpp's kParamBudget comment). The law's name and enum
+	// (Law::SixBudget) are unchanged; only the number is.
 	ui::Registry reg;
 	ui::Area &area = reg.Add( "system.monitor", "Monitor", ui::Section::System );
 	bool b = false;
 	ui::Entry &e = area.Switch( "monitor.modules", "Modules", ui::Bind( &b ) ).Help( "h" );
 
-	// Eight is the budget, and exactly eight must be legal -- Adaptive
-	// Brightness registers at exactly eight on purpose (the same "intended
-	// pressure" API.md §8 describes, two params higher now).
+	// Ten is the budget, and exactly ten must be legal -- Adaptive
+	// Brightness V2 registers at exactly ten on purpose.
 	{
 		ui::LawRecorder rec;
-		for ( int i = 0; i < 8; ++i )
+		for ( int i = 0; i < 10; ++i )
 		{
 			char szLeaf[ 16 ];
 			snprintf( szLeaf, sizeof( szLeaf ), "p%d", i );
 			e.Param( szLeaf, "P", ui::Bind( &b ) ).Help( "h" );
 		}
 		REQUIRE( rec.Count() == 0 );
-		REQUIRE( e.ParamCount() == 8 );
+		REQUIRE( e.ParamCount() == 10 );
 	}
 
-	// The ninth fires, and is not added.
+	// The eleventh fires, and is not added.
 	{
 		ui::LawRecorder rec;
-		e.Param( "ninth", "Ninth", ui::Bind( &b ) ).Help( "h" );
+		e.Param( "eleventh", "Eleventh", ui::Bind( &b ) ).Help( "h" );
 		REQUIRE( rec.Caught( ui::Law::SixBudget ) );
-		REQUIRE( e.ParamCount() == 8 );
-		REQUIRE( rec.Violations().front().sMessage.find( "at most 8" ) != std::string::npos );
+		REQUIRE( e.ParamCount() == 10 );
+		REQUIRE( rec.Violations().front().sMessage.find( "at most 10" ) != std::string::npos );
 	}
 }
 
@@ -2174,11 +2177,16 @@ TEST_CASE( "hue swatches: a pathologically small gap never inverts a cell", "[ov
 TEST_CASE( "parameters header: reads the live budget, not a hardcoded 6",
            "[overlay_ui]" )
 {
-	REQUIRE( ui::ParamBudget() == 8 );
-	REQUIRE( ui::controls::ParametersHeaderText( 8, ui::ParamBudget() ) ==
-	         "PARAMETERS   8 of 8" );
+	// Raised 8 -> 10, 2026-09-14 (Adaptive Brightness V2's darkening --
+	// Registry.cpp's kParamBudget comment). Still a live read, not a
+	// second hand-copied literal: this test's own job is to notice if the
+	// two ever disagree again, so it is updated to the NEW number rather
+	// than made to tolerate either.
+	REQUIRE( ui::ParamBudget() == 10 );
+	REQUIRE( ui::controls::ParametersHeaderText( 10, ui::ParamBudget() ) ==
+	         "PARAMETERS   10 of 10" );
 	REQUIRE( ui::controls::ParametersHeaderText( 3, ui::ParamBudget() ) ==
-	         "PARAMETERS   3 of 8" );
+	         "PARAMETERS   3 of 10" );
 }
 
 // =========================================================================

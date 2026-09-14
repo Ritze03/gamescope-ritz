@@ -39,6 +39,9 @@ The newest version below is the one this build reports.
 - **Preview (split screen)**: a new switch at the top of the Shaders area shows the
   untouched game on the left half and every effect on the right half, so you can judge
   how strong an effect really is.
+- **Adaptive Brightness V2**: two new sliders, Max darken and Darken, let it pull down a
+  washed-out bright area (sky, a lit wall) while still lifting dark areas in the same
+  frame, so a dark enemy silhouette keeps its contrast against the glare behind it.
 
 ### Fixed
 - **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders

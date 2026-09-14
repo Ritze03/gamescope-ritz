@@ -681,6 +681,13 @@ struct NativeEffectsState_t
 	// the fine guided-filter pair outright (update_effects_v2_fine_images(),
 	// rendervulkan.cpp), so "off" costs nothing extra.
 	float flV2Clarity = 0.0f;
+	// DARKENING (NEW 2026-09-14, ConfigSchema.h's max_darken/darken): the
+	// mirror of flV2MaxLift/flV2Lift above. 1.0 / 0.0 are each independently
+	// "off" -- effects_curve.h's abv2_toe_dark() and abv2_curve2() both
+	// degenerate to an exact identity/no-op at either default, which is
+	// what makes the lift half byte-identical to before this feature.
+	float flV2MaxDarken = 1.0f;  // 1..4, the darkening mirror of Max lift's slope cap S
+	float flV2Darken = 0.0f;     // 0..1, the darkening mirror of the static Lift floor
 
 	// Preview (split screen) (NEW 2026-09-14, ConfigSchema.h's
 	// ReshadeSettings::preview_split): the user's own testing aid -- "It

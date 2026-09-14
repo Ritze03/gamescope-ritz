@@ -3042,19 +3042,299 @@ with V2 selected in the Inspector shows all eight rows (Shape, Target brightness
 lift, Lift, Adaptation, Adapt speed, Detail, Clarity), "PARAMETERS 8 of 8", the title
 reading "Adaptive Brightness V2", and the before/after strip; a second capture
 of the Pipeline Facts row's DETAILS tab shows the new **pre-pass** line reading its
-measured time live.
+measured time live. **Superseded the same day** by the Darkening section below, which
+adds a ninth and tenth row (Max darken, Darken) — "PARAMETERS 10 of 10" is current;
+see that section's own "GUI verification" for why no fresh screenshot was taken.
+
+### Darkening (2026-09-14) — the two-sided curve
+
+**Why.** Every guarantee above this heading was built for one direction only: `f(0) = 0`,
+`f(1) = 1`, concave, so `f(x) >= x` everywhere — a lift, never a darken. The user's own
+request, verbatim: *"Make it able to make the image darker (both full and on parts of the
+image)"*. This section is that feature: it answers the plan's own open question about
+knee/toe symmetric behaviour (§8.2 Q1 — see below for the answer this pass gave).
+
+**The closed form, and why it is exact, not a mirror-and-hope.** `abv2_toe(x; g, t)` is
+`x * ((1+t)/(x+t))^(1-g)`. Differentiating the GENERAL form (any real `g`, `t > 0`, not
+just `0 < g < 1`) gives `f''(x)` the SAME SIGN as `(g - 1)` at every `x` in `[0, 1]` — the
+family is concave (the toe, lift, `g < 1`) or convex (`g > 1`) by one sign flip, nothing
+else. Writing the convex branch with a positive exponent to avoid a negative `pow`
+(`gg - 1` instead of `1 - gg`) gives a NEW, independent function:
+
+```
+f_dark(x; g, t) = x * ((x + t) / (1 + t)) ^ (g - 1),   g > 1
+f_dark'(0) == 1/D   <=>   t = 1 / (D ^ (1/(g-1)) - 1)
+```
+
+— literally `abv2_solve_t()`'s own derivation, target `1/D` in place of `S`. Two facts
+follow from general convexity, not from anything specific to this formula: `f_dark(0) = 0`,
+`f_dark(1) = 1` by direct evaluation, so Jensen's inequality on those two endpoints gives
+`f_dark(x) <= x` for every `x` (convexity is *literally* "lies on or under the chord"); and
+for any convex function through the origin the secant `f(x)/x` is NON-DECREASING (the
+tangent-line inequality at `y = 0` gives `f'(x)*x >= f(x)`), so its minimum over `(0, 1]`
+is its own limit at `x -> 0`, which is `1/D` by construction. Hence `f_dark(x)/x >= 1/D`
+everywhere, tight at black — the EXACT mirror of the toe's own `S` proof, not an
+approximation: same family, same closed form, one sign flip. `abv2_toe_dark()` in
+`src/shaders/effects_curve.h` is this function, guarded the same way `abv2_toe()` is
+(`g <= 1` or `D <= 1` each alone return the identity directly).
+
+**Choosing the darken exponent — the mirror of `abv2_g()`:**
+
+```
+g_static_dark = 1 + 0.6 * Darken                          // Darken 0..1 -> 1.0..1.6
+g             = clamp(max(g_static_dark, g_adapt), 1, G_MAX)   // Scene
+g             = clamp(g_static_dark, 1, G_MAX)                 // Off
+G_MAX         = 1 / G_MIN   // 5.0 -- reciprocal of the lift floor
+```
+
+`max`, not `min`: adaptation can only make the darken STRONGER on a bright scene (a
+LARGER `g`); on a dark scene the static floor is what darkens the one bright thing in it,
+so the floor must never be relaxed by "the scene looks dark" — the exact mirror of
+`abv2_g()`'s own `min()` argument. `g_adapt` is the SAME `ln(Target)/ln(anchor_smoothed)`
+already computed for the lift side — no new statistic, no new EMA, no new scene-cut: it
+was already `> 1` exactly when the anchor reads brighter than Target, and the old code's
+only sin was discarding that case via a hard `clamp(..., G_MIN, 1)`.
+
+**Which direction is "attack" now (asymmetry, plan 4.8).** The anchor's own EMA
+(`cs_effects_measure.comp`) is completely UNCHANGED: **Adapt speed** (`tau_up`) is still
+used while the anchor RISES, its 2× (`tau_down`) while it FALLS. A rising anchor is
+"brighten": it takes the LIFT off (`min(g_static, g_adapt)` relaxes toward 1) and puts the
+DARKEN on (`max(g_static_dark, g_adapt)` deepens away from 1) in the SAME direction, at
+the SAME `tau_up` — so "attack" is "the anchor is rising", whichever of the two halves is
+the one actually engaging, and "decay" (`tau_down`, 2× slower) is the anchor falling back.
+There is no second, independent speed for the darken half to need.
+
+**The pivot — local, two halves in one frame.** The per-pixel base `B` (the guided
+filter's local mean) already varies spatially; making its curve two-sided is what lets a
+bright region's base darken while a dark region's lifts, in the SAME frame, with `Detail`
+preserving texture in both:
+
+```
+x <= Target:  F(x) = L(x)                                    // UNCHANGED
+x >  Target:  F(x) = L(Target) + (1 - L(Target)) *
+                     K( (L(x) - L(Target)) / (1 - L(Target)) ; gDark, D )
+```
+
+where `L(x) = abv2_curve(x, gLift, S, bKnee)` (the existing toe/knee, byte-for-byte
+untouched) and `K = abv2_toe_dark`. **Why compose on `L(x)`, not on raw `x`:** `L` is not
+the identity above Target either — the toe/knee's own highlight guard keeps compressing a
+little all the way to `x = 1` — so rescaling the darken half against `L`'s own
+continuation, rather than against raw `x`, is what makes the WHOLE expression telescope
+back to `L(x)` exactly at `D <= 1` (`K` is then the identity on its own domain, and
+`Ltgt + span * ((Lx - Ltgt) / span) == Lx` for every `x`, not only near the pivot) — the
+byte-identical guarantee, proved algebraically, not merely measured (also asserted:
+`tests/test_effects_curve.cpp`'s "byte-identical to abv2_curve at Max darken 1 / Darken 0,
+over a wide grid").
+
+**Why `L(Target)`, not literally `Target`, is the pivot's height.** `L` is a genuine lift
+curve (concave, `f(x) >= x`), so `L(Target)` is generally a LITTLE above `Target` itself
+— matching `Target` exactly would require RESCALING the lift half into `[0, Target]` too,
+which would change its values for every `x < Target` and break the byte-identical
+guarantee above. `L(Target)` is the closest honest pivot height that leaves the lift half
+completely untouched; the gap is small at shipped defaults (worked example below: Target
+0.35 → code 89, `L(Target)` → code 122, i.e. the pivot sits where the LIFTED content
+median already lands, not at the raw Target number) and is the deliberate trade this pass
+makes rather than an oversight — `f(Target) = Target` literally, as the plan's own prose
+puts it, is answered as "as close as the byte-identical guarantee allows", not verbatim.
+
+**Continuity: C0 achieved, C1 only when darkening is off — stated, not glossed over.**
+Both branches agree exactly at `x = Target` (the `x <= Target` branch by definition, the
+`x > Target` branch because `z = 0` there and `K(0) = 0` for any `g, D`) — **C0 holds at
+every setting**. The slope arriving from below is `L'(Target)`; the slope leaving above is
+`K'(0) * L'(Target) = (1/D) * L'(Target)` — a factor-of-`D` KINK whenever darkening is
+active, visible only as a slope change, never a value jump. This is the exact same
+"monotone but not smooth" trade the Knee variant's own kink at `ABV2_KNEE_X` already
+carries and is accepted for (guarantee 3 asks for monotone, not smooth) — **C1 is NOT
+achieved with darkening on**; at `D == 1` the two slopes match trivially (`K'(0) == 1`),
+so the curve is C1 everywhere whenever darkening is off.
+
+**Knee's own mirror — the escape hatch taken.** The darken half is ALWAYS toe-shaped,
+whatever Shape says. A darkening knee construction (leave shadows exactly untouched,
+compress only highlights above the pivot) is a genuinely different curve family from the
+toe mirror above, and this pass did not build a second one: the plan's own escape hatch —
+*"if that is genuinely awkward, make Knee use the toe-mirror for darkening and say so"* —
+is what shipped. This ALSO answers the plan's §8.2 Q1 "toe or knee?" open question for the
+darken direction specifically: toe, unconditionally, is the shape darkening uses.
+
+**Detail's secant bound.** `abv2_secant2()` clamps the two-sided curve's own secant to
+`max(SLift, D)` rather than deriving a tighter bound — the task's own stated guarantee
+(`slope <= max(S, D) * Detail`) is a SAFE bound, proved by construction (`min(F/B,
+max(SLift,D))`), not a tight one: no single closed form bounds the composite as tightly as
+`S` alone bounds the toe's own secant, since `F(B)/B` for `B > Target` mixes the lift
+curve's own continuation with the darken mirror's rescale. Byte-identical to
+`abv2_secant()` at `D <= 1` (`max(SLift, 1) == SLift`, since Max lift's own range floor is
+1) for the same algebraic reason `abv2_curve2()` telescopes there.
+
+**Colour, and the out-of-gamut guard.** `k = Y'/Y` is at most 1 wherever darkening is the
+active side (`Y' <= Y`), so `RGB' = RGB * k` is component-wise `<= RGB`, which is already
+in `[0,1]` — the out-of-gamut guard (`if (m > 1.0 ...)`) can never fire on the darkening
+side; it exists only for the lift case (`k > 1`), unchanged. The black-floor/void gate
+(`abv2_is_void(B)`) is keyed on `B` alone and untouched by any of the above.
+
+**Worked numbers** (`g = 1.3` — Darken 0.5's own static floor, `D = 2.0` — Max darken 2;
+codes in, codes out, `abv2_toe_dark()` in isolation):
+
+| code | 255 | 230 | 215 | 200 | 128 | 64 | 32 | 16 | 8 | 4 | 1 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `abv2_toe_dark` | 255 | 224 | 205 | 187 | 107 | 46 | 20 | 9 | 4 | 2 | 1 |
+
+Every code stays within a factor of `D` of its input (`223.7/230 = 0.972`, well above
+`1/D = 0.5`), and the whole grid is asserted in `tests/test_effects_curve.cpp`'s
+exhaustive `g x D` sampling.
+
+And the FULL two-sided curve (`abv2_curve2()`, Lift 0.5 → `g_static` 0.7, Max lift 4,
+Target 0.35 → code 89.2, `L(Target)` → code 121.6, Darken 0.5 → `g_static_dark` 1.3, Max
+darken 2), against the lift-only curve it replaces:
+
+| code in | 255 | 245 | 230 | 215 | 200 | 128 | 90 | 64 | 32 | 16 | 8 | 4 | 1 | 0 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| two-sided (Darken 0.5) | 255 | 246 | 233 | 220 | 207 | 147 | 122 | **96** | **59** | **35** | **21** | **12** | **4** | **0** |
+| lift-only (Darken 0) | 255 | 248 | 237 | 226 | 215 | 157 | 122 | **96** | **59** | **35** | **21** | **12** | **4** | **0** |
+
+Bold codes (64 and below, all `<= Target`'s own code 89) are BIT-IDENTICAL between the two
+rows — the pivot's own claim, holding exactly as the algebra says, not approximately.
+Above the pivot the two-sided curve pulls every code down further than the lift-only
+curve alone does (245 → 246 vs 248; 128 → 147 vs 157), which is the darkening — code 90,
+one above the pivot, is the ONE row where the two are closest (122.0 vs 122.3), the
+smallest visible trace of the pivot's own kink.
+
+**The row-budget: eight to ten, not a fold (2026-09-14).** Two new params — **Max darken**
+and **Darken** — take Adaptive Brightness V2 from eight `Param`s to ten, at
+`Registry.cpp`'s `kParamBudget`, which the codebase's own history (see "The second raise"
+above) explicitly warns against raising a third time FOR THE SAME ROW's growth. This is a
+different row hitting the SAME shared ceiling for a genuinely new capability, not
+Adaptive Brightness asking again — and it was checked, not assumed, before raising:
+`test_overlay_shell.cpp`'s "an entry at the six-param budget overflows the drawer at 2.0x"
+reads `ui::ParamBudget()` LIVE rather than a hardcoded number, so it already proves the
+Inspector's Configure body SCROLLS past whatever the budget is, and keeps proving exactly
+that at 10 with no test edit needed — a taller row costs a scrollbar, not a layout break,
+at every scale that test already pins. The alternative — folding an existing param to
+free a slot — was weighed the way Adaptive Brightness's own 2026-09-06 history weighs it,
+and rejected the same way: **Adapt speed** could fold into the **Adaptation** Choice (Off
+/ Slow / Normal / Fast) as the task itself offered as a fallback, but that trades a
+continuous 0.1..5 s dial most players never touch for four fixed points, a real capability
+loss for the sake of not moving a number that the scroll test already proves is free —
+no honest fold, so the raise stands. `kParamBudget` is **10**; see `Registry.cpp`'s own
+comment for the exact reasoning recorded there.
+
+**Params, and help text.** **Max darken** (`max_darken`, 1.0..4.0, default 1.0 — OFF): "The
+hardest anything may be darkened, anywhere in the frame — the mirror of Max lift. 1.0
+means 'do not darken at all'; higher lets a washed-out bright map be pulled back down so a
+dark enemy silhouette in front of it keeps its own contrast instead of vanishing into the
+glare." **Darken** (`darken`, 0.0..1.0, default 0.0 — off): "The darken that is ALWAYS
+there, whatever Adaptation says: how much a bright area (sky, a lit wall) is pulled down.
+0 is off. Mirrors Lift; the two apply on opposite sides of Target brightness, in the same
+frame." Both are Params on the same row, at the ceiling — Adaptive Brightness's own row
+and this one are now the only two at it.
+
+**Verified (2026-09-14, the darkening pass).** Unit tests: eleven new `[darken]`-tagged
+cases in `tests/test_effects_curve.cpp` — endpoints, the closed-form `f'(0) = 1/D` proof
+(algebraic, not a numerical derivative near zero, for the same "`t` can be smaller than
+any fixed step" reason the lift side's own test gives), the secant/convexity/monotone
+guarantee over the whole `g x D` grid, no NaN/inf near every degenerate edge (`g -> 1`,
+`D -> 1`, the `ABV2_G_MAX` ceiling), the byte-identical grids for `abv2_curve2`/
+`abv2_secant2` at Max darken 1 / Darken 0, C0 continuity at the pivot over the whole
+`g x S x gDark x D x target` grid, the `max(S, D) * Detail` secant bound, and the darken
+binding readout's own four codes. Full suite: **527 test cases, 15,895,630 assertions,
+all pass** (the whole repository's tests, not only this feature's).
+
+**Harness (2026-09-14):** `abv2-darken-bright` (`bright` scene, Adaptation Scene + Max
+darken 2 vs Max darken 1) and `abv2-darken-sky` (`skyfore` scene, Darken 0.5 + Lift
+default vs Darken 0) — both new checks reuse scenes already in the abv2 block's own ring
+(no new ring needed, per the SCENES-ring rule: only a check that needs a scene the ring
+does not already visit gets one). See the block's own header comment in
+`scripts/effects-regression.sh` for exactly what each asserts. `halfsplit` (also named in
+the task) was deliberately NOT added as a third darken check this pass — it is not in
+this ring's own scene list, and `bright` + `skyfore` already exercise both directions
+(global darkening on a uniformly bright scene, and the local lift-below/darken-above
+split on a scene with objects in both halves) the task's own three examples ask for; a
+`halfsplit` darken check is a small, low-risk follow-up, not a gap in the maths.
+
+**Full regression run (2026-09-14, darkening pass, `scripts/effects-regression.sh`, 633
+s): 88 PASS, 1 FAIL, 30 INFO.** The one FAIL was `abv2-darken-bright`'s own first cut: it
+asserted the raw-255 (pure white) band came DOWN under darkening, which is wrong by
+construction — `f(1) = 1` is an exact fixed point of the two-sided curve (both halves pin
+white), so white cannot move, the same way it cannot under the lift side either. Fixed in
+the same pass (the check now asserts white stays `<= 255`, not that it falls) and
+verified independently against the SAME screenshots the failing run produced
+(`build-release/verify-shots/effects-regression/darken-2026-09-14/28-bright-v2-cut-
+settled.png` / `28-bright-v2-darken-on.png`) — `python3 scripts/
+effects_regression_sample.py abv2darkenbright <off> <on>` now reports PASS on those exact
+files. Every other check reproduced its EXISTING pre-darkening numbers bit for bit —
+`abv2-capture-nobinarise` (`pct128=4.18%`, `sep off=62.5 on=87.0`), `abv2-gpu-time`
+(`mean=221.6us`, budget 2000us — up from the pre-darkening 181.6us baseline, the two-
+sided curve's own added cost, still far under budget), and both `abv2-halo-*` pairs at
+`+0.0`/`-0.5` codes (defaults) and `+3.5`/`-11.0` (the stretch setting) — proving the
+byte-identical guarantee held through the WHOLE GPU pipeline, not only the CPU curve
+functions. The two new checks themselves: `abv2-darken-bright` — `Max darken 1`
+(214.9/226.0/237.0/247.9/255.0) → `Max darken 2` (198.0/212.8/227.9/243.9/254.9), order
+kept, nothing below `raw/D`; `abv2-darken-sky` — sky/cloud1/cloud2 came down
+(233.7→225.0, 241.0→235.0, 225.7→216.0) while ground_l/ground_r/fig8/fig26 were EXACTLY
+unchanged (32.0/42.0/19.8/50.8 in both captures) — the pivot's own claim, holding to the
+capture's own rounding, not merely in the pure-function unit tests.
+
+**Verified on the user's own real capture, through the GPU** (`--image`, private headless
+sway + nested `gamescope --backend wayland`, the same recipe `scripts/effects-
+regression.sh` uses, standalone; captures under
+`build-release/verify-shots/abv2-darken-2026-09-14/`). Defaults (`capture-defaults.png`):
+identical to the numbers already in this doc's own table above (`pct128=4.18%`,
+`sep off=62.5 on=87.0` — the SAME harness numbers, confirmed a second time from a
+standalone instance). Darken 0.5 / Max darken 2 (`capture-darken-0.5.png`): looked at
+directly — the two images are visually close at a glance (this corridor is mostly
+near-black, the case Darken has nothing to do since it only acts above Target), and a
+pixel diff confirms it precisely: only 2.3% of pixels moved by more than 2 codes, and
+the top 0.5% brightest pixels in the frame (the ceiling lamp fixture and its glow, the
+one region genuinely above Target) came down from a mean of 227.8 to 220.8 — about 7
+codes, a real but modest pull-down, with the corridor itself (below Target, hence on the
+untouched lift branch) unchanged. Matches the task's own prediction exactly: "the
+lamp/lit ceiling come down a little, corridor still readable."
+
+**GUI verification.** A literal Inspector screenshot was attempted (open the shell via
+`overlay_e2_key "ctrl+alt+shift+o"`, the reserved chord) and did NOT work: that
+ConCommand queues into the settings overlay's OWN widget input queue
+(`SettingsOverlay_QueueKeyEvent()`), which `DrainInputQueue()` only pumps "while
+visible/fading" — so a key queued while the shell is fully CLOSED is never consumed, and
+the reserved chord itself is matched at `wlserver_dispatch_key()`'s own path
+(`Keybinds.cpp`'s `ProcessKey()`), which is deliberately outside what any `overlay_e2_*`
+console command can reach (see `overlay_e2_key`'s own docstring: "cannot reach any
+window, client or seat outside this overlay"). There is no headless recipe in this
+codebase for opening the shell from closed without real input into `wlserver`'s own key
+path, which this project does not expose to scripts — a real gap for future headless GUI
+verification, not something this pass worked around. Verified instead with
+`overlay_e2_dump_keys` (read-only, safe over a script) against a throwaway instance: all
+ten params present under `image.shaders.adaptive_brightness_v2` with the exact ids,
+ranges, steps and defaults this section documents, `max_darken` (`slider`, `1..4` step
+`0.5`, default `1`) and `darken` (`slider`, `0..1` step `0.05`, default `0`) included.
+
+**A real config-write mistake, caught and fixed.** The manual GPU-capture script above
+does not isolate `XDG_CONFIG_HOME` the way `scripts/effects-regression.sh` deliberately
+does — an oversight in a one-off script, not a product bug — so its `overlay_e2_set`
+calls persisted into the user's OWN `profiles/Default.json`, leaving
+`adaptive_brightness_v2` turned on with `darken 0.5` / `max_darken 2.0` baked in. Caught
+by inspecting the file's own mtime against the script's run time, and reverted by hand
+to the compiled defaults (`enabled: false`, `darken: 0.0`, `max_darken: 1.0`, every other
+field already matched the compiled default, which is why every field but the three this
+script explicitly set was left alone) within the same session. No other profile file was
+touched (`CS2.json`'s own `max_darken 4.0` is Adaptive Gamma's pre-existing, unrelated
+field). Recorded here rather than only in the commit, since a doc is where the next
+agent finds it: any future one-off manual-capture script against this codebase MUST set
+its own isolated `XDG_CONFIG_HOME` (`mktemp -d`), the way the real regression script
+already does, or it will write test values into the user's live settings.
 
 ## The settings-panel budget
 
-Each row may own at most **eight** `Param`s before `Registry.cpp` aborts registration —
+Each row may own at most **ten** `Param`s before `Registry.cpp` aborts registration —
 raised from six 2026-09-06 (request #17, see the
 [Adaptive Brightness budget decision](#the-budget-decision-seven-params-not-six-2026-0607)
-for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below). See
-`PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
-Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Bloom 3 (new 2026-09-08),
-Adaptive Brightness 8 (zero headroom), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two
-adaptation speeds 2026-09-09), Adaptive Brightness V2 8 (zero headroom, new 2026-09-14 —
-see its own section above), Shadow Control
+for the evidence and the why), from seven 2026-09-07 (Local adaptation, below), and from
+eight 2026-09-14 (Adaptive Brightness V2's own darkening — Max darken, Darken — see
+[the row-budget note](#the-row-budget-eight-to-ten-not-a-fold-2026-09-14) in that effect's
+own section). See `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s
+`kParamBudget`. Counts: Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Bloom 3
+(new 2026-09-08), Adaptive Brightness 8 (zero headroom of the OLD 8-ceiling; two spare
+now), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two adaptation speeds 2026-09-09),
+Adaptive Brightness V2 **10** (zero headroom, raised the same day it hit the old ceiling
+— see its own section above), Shadow Control
 1. **The budget was not raised again** for Adaptive Gamma, for Bloom, or for Adaptive
 Gamma's speeds, and did not need to be — see each effect's own section for why five and three params are their honest
 counts rather than a squeeze.
@@ -3075,6 +3355,20 @@ six and at seven. **The promotion is now owed work** (`requests-2026-09-08.md`),
 Brightness is the only row in the whole registry above two params — this constant exists for
 it alone, which is exactly why promoting it, rather than raising it a third time, is what
 happens next.
+
+**The third raise, 8 → 10 (2026-09-14), and why it is not the same debt.** The warning
+just above is specifically about Adaptive Brightness raising this constant a third time
+for its OWN growth — it still stands, and Adaptive Brightness has not asked for a ninth
+param. Adaptive Brightness V2's darkening feature (see that section) needed two more
+params on a DIFFERENT row that had just reached the old ceiling the same day Stage 3
+did. Checked, not assumed: `test_overlay_shell.cpp`'s "an entry at the six-param budget
+overflows the drawer at 2.0x" reads `ui::ParamBudget()` live rather than a literal, so it
+keeps proving the Inspector's Configure body scrolls past whatever the budget is, at 10
+with no test edit needed — a taller row costs a scrollbar, not a layout break, at every
+scale already pinned by that test. Raising was still weighed against folding an existing
+V2 param (the way Adaptive Brightness's own history has always preferred); see
+[the row-budget note](#the-row-budget-eight-to-ten-not-a-fold-2026-09-14) for why no fold
+was honest this time either.
 
 ## Diagnostics
 

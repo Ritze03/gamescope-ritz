@@ -107,6 +107,16 @@ uniform effects_t {
     // passes that build it -- see update_effects_v2_fine_images().
     float u_v2RadiusFine;
     float u_v2Clarity;     // 0.0..1.0, the band's gain; 0 = off
+
+    // ---- Adaptive Brightness V2, DARKENING (NEW 2026-09-14) ----
+    // The user, verbatim: "Make it able to make the image darker (both
+    // full and on parts of the image)". The mirror of u_v2MaxLift/u_v2Lift
+    // above -- see effects_curve.h's DARKENING block (abv2_toe_dark(),
+    // abv2_g_dark(), abv2_curve2()) for the whole operator. Each is
+    // independently "off" at its own default (1.0 / 0.0), same masking
+    // discipline as every other field here.
+    float u_v2MaxDarken;   // 1.0..4.0, the darkening mirror of the toe/knee's slope cap S
+    float u_v2Darken;      // 0.0..1.0 -> effects_curve.h's abv2_g_static_dark()
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed

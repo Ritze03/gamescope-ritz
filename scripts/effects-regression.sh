@@ -1263,6 +1263,16 @@ run_sampler means dark-floor-means "$DF_OFF" "$DF_AG_ZERO" "$DF_AG_DEFAULT" "$DF
 #   abv2-capture-nobinarise / abv2-capture-noclip  the Stage-1 acceptance
 #                          bar on the user's own real capture, through the
 #                          GPU (`--image`, the `capture` scene).
+#   abv2-darken-bright     DARKENING (NEW 2026-09-14): Adaptation Scene +
+#                          Max darken 2 on `bright` -- the 245/255 bands
+#                          come down further than Max darken 1, order
+#                          preserved, nothing darkened past raw/D.
+#   abv2-darken-sky        DARKENING (NEW 2026-09-14): Darken 0.5 + Lift at
+#                          its own default on `skyfore` -- the sky/cloud
+#                          bands (above Target) come down further; the
+#                          ground and both figures (below Target) are
+#                          UNCHANGED by Darken, proving the pivot's own
+#                          claim that the lift half is untouched.
 # ---------------------------------------------------------------------------
 V2_ID="image.shaders.adaptive_brightness_v2"
 V2_SHAPE_ID="$V2_ID.shape"
@@ -1273,10 +1283,15 @@ V2_MODE_ID="$V2_ID.mode"
 V2_ADAPTSPEED_ID="$V2_ID.adapt_speed"
 V2_DETAIL_ID="$V2_ID.detail"
 V2_CLARITY_ID="$V2_ID.clarity"
+# DARKENING (NEW 2026-09-14) -- the mirror pair.
+V2_MAXDARKEN_ID="$V2_ID.max_darken"
+V2_DARKEN_ID="$V2_ID.darken"
 V2_TARGET_DEFAULT=0.35
 V2_MAXLIFT_DEFAULT=4.0
 V2_LIFT_DEFAULT=0.5
 V2_DETAIL_DEFAULT=1.0
+V2_MAXDARKEN_DEFAULT=1.0
+V2_DARKEN_DEFAULT=0.0
 CAPTURE_IMAGE="/home/mo/Pictures/Screenshots/2026-09-14-053516_hyprshot.png"
 
 set_v2() { gsctl overlay_e2_set "$V2_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
@@ -1290,6 +1305,8 @@ v2_defaults() {
 	set_v2_param "$V2_ADAPTSPEED_ID" 0.5
 	set_v2_param "$V2_DETAIL_ID" "$V2_DETAIL_DEFAULT"
 	set_v2_param "$V2_CLARITY_ID" 0.0
+	set_v2_param "$V2_MAXDARKEN_ID" "$V2_MAXDARKEN_DEFAULT"
+	set_v2_param "$V2_DARKEN_ID" "$V2_DARKEN_DEFAULT"
 }
 
 # The ring, ordered so every check below is a SINGLE forward hop from the
@@ -1329,6 +1346,18 @@ sleep "$ADAPT_SETTLE_S"
 V2_CUT_SETTLED="$(take_screenshot 28-bright-v2-cut-settled)"
 run_sampler abv2cut "$V2_CUT_BEFORE" "$V2_CUT_FIRST" "$V2_CUT_SETTLED"
 
+# DARKENING (NEW 2026-09-14): Adaptation Scene deepens the darken past its
+# static floor on a scene that reads brighter than Target -- the mirror of
+# Dynamic's own dark-scene lift-deepening. V2_CUT_SETTLED above is already
+# the "off" (Max darken 1) capture on this exact scene; only Max darken
+# needs to move.
+set_v2_param "$V2_MAXDARKEN_ID" 2.0
+sleep "$ADAPT_SETTLE_S"
+V2_DARKEN_BRIGHT_ON="$(take_screenshot 28-bright-v2-darken-on)"
+set_v2_param "$V2_MAXDARKEN_ID" "$V2_MAXDARKEN_DEFAULT"
+sleep "$ADAPT_SETTLE_S"
+run_sampler abv2darkenbright "$V2_CUT_SETTLED" "$V2_DARKEN_BRIGHT_ON"
+
 advance_scenes 1   # bright -> dark
 sleep "$ADAPT_SETTLE_S"
 V2_DARK_DEFAULT="$(take_screenshot 29-dark-v2-default)"
@@ -1352,6 +1381,19 @@ advance_scenes 1   # texdark -> skyfore
 sleep "$ADAPT_SETTLE_S"
 V2_SKY_DEFAULT="$(take_screenshot 31-skyfore-v2-default)"
 run_sampler abv2sky "$V2_SKY_DEFAULT"
+
+# DARKENING (NEW 2026-09-14): a static Darken (0.5) with Lift at its own
+# default -- the sky (above Target) comes down further while the ground and
+# the two figures (below Target) are UNCHANGED by Darken, still lifted by
+# Lift alone. V2_SKY_DEFAULT above is already the "off" (Darken 0) capture.
+set_v2_param "$V2_MAXDARKEN_ID" 2.0
+set_v2_param "$V2_DARKEN_ID" 0.5
+sleep "$ADAPT_SETTLE_S"
+V2_DARKEN_SKY_ON="$(take_screenshot 31-skyfore-v2-darken-on)"
+set_v2_param "$V2_MAXDARKEN_ID" "$V2_MAXDARKEN_DEFAULT"
+set_v2_param "$V2_DARKEN_ID" "$V2_DARKEN_DEFAULT"
+sleep "$ADAPT_SETTLE_S"
+run_sampler abv2darkensky "$V2_SKY_DEFAULT" "$V2_DARKEN_SKY_ON"
 
 # HALO, reusing Adaptive Gamma's own sampler function: guarantee 4, at
 # the shipped defaults (<= 4 codes, ASSERTED) and, as INFO only, at the

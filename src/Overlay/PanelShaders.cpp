@@ -153,6 +153,8 @@ namespace gamescope
 		e.flV2Scale     = r.adaptive_brightness_v2.scale;
 		e.flV2AdaptSpeed = r.adaptive_brightness_v2.adapt_speed;
 		e.flV2Clarity   = r.adaptive_brightness_v2.clarity;   // Stage 3, 2026-09-14
+		e.flV2MaxDarken = r.adaptive_brightness_v2.max_darken; // DARKENING, 2026-09-14
+		e.flV2Darken    = r.adaptive_brightness_v2.darken;     // DARKENING, 2026-09-14
 	}
 
 	static void PushAllToRenderer()
@@ -997,11 +999,15 @@ namespace gamescope
 		// amplification anywhere in the frame is S, by construction --
 		// black can never be pushed past white the way it could before.
 		//
-		// EIGHT PARAMS (Shape, Target, Max lift, Lift, Adaptation, Adapt
-		// speed, Detail, Clarity), at kParamBudget's 8 -- zero headroom, the
-		// same ceiling Adaptive Brightness's own row sits at. Clarity
-		// (Stage 3, plan section 4.9) is the last of the seven that were
-		// left spare when Stage 1+2 shipped 2026-09-14.
+		// TEN PARAMS (Shape, Target, Max lift, Lift, Adaptation, Adapt
+		// speed, Detail, Clarity, Max darken, Darken), at kParamBudget's 10
+		// -- zero headroom again. Clarity (Stage 3, plan section 4.9) used
+		// to be the last of the seven left spare when Stage 1+2 shipped
+		// 2026-09-14; Max darken/Darken (the SAME day, later) needed a
+		// ninth and tenth, so Registry.cpp's kParamBudget went 8 -> 10 --
+		// see that constant's own comment and shader-effects.md's row-
+		// budget note for why raising it, not folding an existing param,
+		// was the right call this time.
 		using V2Defaults = config::ReshadeAdaptiveBrightnessV2Settings;
 		enum V2ShapeChoice : int { kV2Toe = 0, kV2Knee = 1 };
 		static const ui::Option kV2ShapeOptions[] = {
@@ -1131,7 +1137,42 @@ namespace gamescope
 				       "turn into an unsharp-mask rim." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )
-				.Default( V2Defaults{}.clarity );
+				.Default( V2Defaults{}.clarity )
+			// DARKENING -- NEW 2026-09-14. The user's own request: "Make it
+			// able to make the image darker (both full and on parts of the
+			// image)". Everything above this row is UNCHANGED; these two
+			// are the darkening mirror of Max lift/Lift, at their own "off"
+			// defaults (1.0 / 0.0) -- see effects_curve.h's DARKENING block
+			// for the exact secant proof and superdoc/features/shader-
+			// effects.md for the row-budget decision (kParamBudget raised
+			// 8 -> 10 rather than folding an existing param, since the
+			// Inspector's Configure body already scrolls past its own
+			// budget -- P3b, tests/test_overlay_shell.cpp -- so a taller
+			// row costs nothing this row's own precedent (2026-09-06's
+			// 6 -> 7 raise) had to argue for from scratch).
+			.Param( "max_darken", "Max darken",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.max_darken; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.max_darken, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.max_darken" )
+				.Help( "The hardest anything may be darkened, anywhere in the frame -- the mirror of "
+				       "Max lift. 1.0 means \"do not darken at all\"; higher lets a washed-out bright "
+				       "map be pulled back down so a dark enemy silhouette in front of it keeps its "
+				       "own contrast instead of vanishing into the glare." )
+				.Range( 1.0f, 4.0f )
+				.Step( 0.5f )
+				.Default( V2Defaults{}.max_darken )
+			.Param( "darken", "Darken",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness_v2.darken; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.darken, f ); } ) )
+				.Key( "reshade.adaptive_brightness_v2.darken" )
+				.Help( "The darken that is ALWAYS there, whatever Adaptation says: how much a bright "
+				       "area (sky, a lit wall) is pulled down. 0 is off. Mirrors Lift; the two apply "
+				       "on opposite sides of Target brightness, in the same frame." )
+				.Range( 0.0f, 1.0f )
+				.Step( 0.05f )
+				.Default( V2Defaults{}.darken );
 
 		a.Group( "Diagnostics" );
 

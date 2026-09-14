@@ -1374,6 +1374,72 @@ def cmd_abv2_sky(args):
                        ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
 
 
+def cmd_abv2_darken_bright(args):
+    """abv2-darken-bright <image-off> <image-on> -- DARKENING (2026-09-14):
+    on `bright`, Adaptation Scene deepens the darken past its static floor
+    on a scene that reads brighter than Target (the mirror of Dynamic's own
+    dark-scene lift-deepening). `off` is V2 at defaults (Max darken 1, i.e.
+    darkening disabled); `on` is the same scene with Adaptation Scene and
+    Max darken 2 -- the scene the task itself names."""
+    off, on = regions(load(args[0]), "bright"), regions(load(args[1]), "bright")
+    raw = SCENES["bright"]["bands"]
+    D = 2.0
+    checks = [
+        ("order preserved (on)", on["band0"] < on["band1"] < on["band2"] < on["band3"] <= on["band4"]),
+        ("245 band (band3) comes down vs Max darken 1", on["band3"] < off["band3"] - 1.0),
+        # band4 (raw 255, pure white) is NOT expected to move: f(1) == 1 is
+        # an exact fixed point of the two-sided curve by construction (both
+        # halves pin white), so "comes down" does not apply to it -- see
+        # effects_curve.h's own closed-form proof. Only that it stays <= 255.
+        ("255 band (band4) still <= 255 -- the fixed point, not clipped", on["band4"] <= 255.0 + 0.5),
+    ]
+    # Nothing below raw/D (guarantee: secant >= 1/D everywhere), 1 code of
+    # 8-bit rounding slack, the same style bright-dynamic's own min_gain
+    # floor check uses.
+    for i, rawv in enumerate(raw):
+        checks.append((f"band{i} ({rawv}) not darkened past raw/D={rawv / D:.1f}",
+                       on[f"band{i}"] >= rawv / D - 1.0))
+    failed = [c for c, ok in checks if not ok]
+    v = {"off_" + k: val for k, val in off.items()}
+    v.update(on)
+    sys.exit(0 if emit(not failed, "abv2-darken-bright",
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
+
+
+def cmd_abv2_darken_sky(args):
+    """abv2-darken-sky <image-off> <image-on> -- DARKENING (2026-09-14):
+    on `skyfore`, a static Darken (0.5) with Lift at its own default. `off`
+    is V2 at Lift default with Darken 0 (Max darken 1); `on` is the same
+    Lift default with Darken 0.5, Max darken >= 2. Checks the SAME frame's
+    two halves move in OPPOSITE directions (sky down, ground/figures up,
+    both from raw) and that the below-Target half (ground, figures) is
+    UNCHANGED by Darken -- the pivot construction's own claim (effects_
+    curve.h's abv2_curve2(): the x <= Target branch is the untouched lift
+    curve, never rescaled by the darken side)."""
+    off, on = abv2_sample(load(args[0]), SKYFORE), abv2_sample(load(args[1]), SKYFORE)
+    raw = dict(sky=225.0, cloud1=235.0, cloud2=215.0, ground_l=14.0, ground_r=20.0, fig8=8.0, fig26=26.0)
+    checks = [
+        ("sky (225) comes down further with Darken 0.5", on["sky"] < off["sky"] - 1.0),
+        ("cloud1 (235) comes down further with Darken 0.5", on["cloud1"] < off["cloud1"] - 1.0),
+        ("cloud2 (215) comes down further with Darken 0.5", on["cloud2"] < off["cloud2"] - 1.0),
+        ("sky still above raw ground/figures (order preserved)",
+         on["sky"] > on["ground_r"] and on["sky"] > on["fig26"]),
+    ]
+    # Below Target (ground, figures): Darken must be a NO-OP, within 8-bit
+    # capture rounding -- the pivot's x <= Target branch is byte-identical
+    # to the Lift-only curve regardless of Darken/Max darken.
+    for name in ("ground_l", "ground_r", "fig8", "fig26"):
+        checks.append((f"{name} unchanged by Darken (below Target, pivot's own claim)",
+                       abs(on[name] - off[name]) <= 2.0))
+        checks.append((f"{name} lifted above its raw value ({raw[name]:.0f}) by Lift",
+                       on[name] > raw[name] + 3.0))
+    failed = [c for c, ok in checks if not ok]
+    v = {"off_" + k: val for k, val in off.items()}
+    v.update(on)
+    sys.exit(0 if emit(not failed, "abv2-darken-sky",
+                       ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
+
+
 def cmd_abv2_static(args):
     """abv2-static <label> <img...> -- guarantee 5's still-frame half: N
     captures of the SAME still frame (Scene mode, motion paused) must be
@@ -1567,6 +1633,7 @@ def main():
      "abv2slope": cmd_abv2_slope, "abv2black": cmd_abv2_black, "abv2sky": cmd_abv2_sky,
      "abv2static": cmd_abv2_static, "abv2pan": cmd_abv2_pan, "abv2cut": cmd_abv2_cut,
      "abv2colour": cmd_abv2_colour, "abv2capture": cmd_abv2_capture,
+     "abv2darkenbright": cmd_abv2_darken_bright, "abv2darkensky": cmd_abv2_darken_sky,
      "previewsplit": cmd_previewsplit,
      }[cmd](args)
 

@@ -1256,6 +1256,9 @@ TEST_CASE( "an existing config with no adaptive_brightness_v2 key resolves to th
     REQUIRE( s.reshade.adaptive_brightness_v2.scale == 1.5f );
     REQUIRE( s.reshade.adaptive_brightness_v2.adapt_speed == 0.5f );
     REQUIRE( s.reshade.adaptive_brightness_v2.clarity == 0.0f );
+    // DARKENING (NEW 2026-09-14) -- additive, off by default.
+    REQUIRE( s.reshade.adaptive_brightness_v2.max_darken == 1.0f );
+    REQUIRE( s.reshade.adaptive_brightness_v2.darken == 0.0f );
     REQUIRE( s.gamescope.filter == "FSR" ); // unrelated section untouched
 }
 
@@ -1274,6 +1277,9 @@ TEST_CASE( "reshade.adaptive_brightness_v2: every field round-trips through a pr
     s.reshade.adaptive_brightness_v2.scale = 2.5f;
     s.reshade.adaptive_brightness_v2.adapt_speed = 1.5f;
     s.reshade.adaptive_brightness_v2.clarity = 0.6f;
+    // DARKENING (NEW 2026-09-14).
+    s.reshade.adaptive_brightness_v2.max_darken = 2.5f;
+    s.reshade.adaptive_brightness_v2.darken = 0.35f;
 
     REQUIRE( SaveSections( s ) );
 
@@ -1289,6 +1295,8 @@ TEST_CASE( "reshade.adaptive_brightness_v2: every field round-trips through a pr
     REQUIRE( v2.scale == 2.5f );
     REQUIRE( v2.adapt_speed == 1.5f );
     REQUIRE( v2.clarity == 0.6f );
+    REQUIRE( v2.max_darken == 2.5f );
+    REQUIRE( v2.darken == 0.35f );
 }
 
 TEST_CASE( "reshade.adaptive_brightness_v2.mode and .shape reject unknown strings the same way the older effects do", "[config]" )

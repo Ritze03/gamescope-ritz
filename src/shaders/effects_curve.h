@@ -840,6 +840,196 @@ EC_FUNC float abv2_g( float lift, float target, float anchorSmoothed, bool bScen
 	return clamp( min( gStatic, gAdapt ), ABV2_G_MIN, 1.0f );
 }
 
+// ===========================================================================
+//  DARKENING (2026-09-14) -- the two-sided curve. The user's request,
+//  verbatim: "Make it able to make the image darker (both full and on parts
+//  of the image)". Everything above this block (the toe/knee, g_static,
+//  abv2_g) is UNCHANGED -- not one line touched -- which is what makes the
+//  lift half byte-identical at Max darken 1 / Darken 0 (asserted below and
+//  in the harness): the combiner at the bottom of this block degenerates
+//  algebraically to exactly the old single-sided curve at those defaults,
+//  it is not merely close.
+//
+//  THE CLOSED FORM. abv2_toe(x; g, S) is
+//
+//    f(x; g, t) = x * ((1 + t) / (x + t)) ^ (1 - g),  0 < g < 1
+//
+//  and abv2_solve_t() picks t so f'(0) == S exactly. Differentiating the
+//  GENERAL form (any real g, t > 0) gives, at every x in [0, 1]:
+//
+//    f''(x) has the SAME SIGN as (g - 1)
+//
+//  (worked out fully by writing f = A(x)*B(x) with A = ((1+t)/(x+t))^(1-g),
+//  B = 1 - x(1-g)/(x+t), differentiating both, and simplifying -- every
+//  term but the sign of (1-g) cancels, because x(1-g) + 2t > 0 for x in
+//  [0,1], t > 0 and g in this pipeline's whole range). So the family is
+//  CONCAVE for g < 1 (the toe -- lift, proven/tested above) and, by the
+//  same formula, CONVEX for g > 1: swap the roles of the two endpoints and
+//  rewrite the exponent as positive (gg - 1 instead of 1 - gg) to avoid a
+//  negative-exponent pow, and the SAME algebra that solves t for a target
+//  slope at x = 0 works unchanged, now targeting 1/D instead of S:
+//
+//    f_dark(x; g, t) = x * ((x + t) / (1 + t)) ^ (g - 1),   g > 1
+//    f_dark'(0) == 1/D  <=>  t = 1 / (D ^ (1/(g-1)) - 1)
+//
+//  (abv2_solve_t_dark() below -- literally abv2_solve_t()'s own derivation,
+//  target 1/D in place of S, p = 1/(g-1) in place of 1/(1-g)).
+//
+//  THE BOUND, exactly, not approximately. f_dark(0) = 0, f_dark(1) = 1 (by
+//  construction, checked directly), and f_dark is CONVEX (sign(g-1) > 0),
+//  so by Jensen's inequality on the two endpoints, f_dark(x) <= x for every
+//  x in [0,1] -- "never lifts" is a consequence of convexity plus matching
+//  endpoints, not a separate clamp. And for any convex g with g(0) = 0, the
+//  tangent-line inequality g(y) >= g(x) + g'(x)(y-x) at y = 0 gives
+//  g'(x)*x >= g(x), i.e. the secant g(x)/x is NON-DECREASING in x -- so its
+//  minimum over (0,1] is its limit at x -> 0, which is g'(0) = 1/D by
+//  construction. Hence f_dark(x)/x >= 1/D everywhere, tight in the limit at
+//  black: the darkest anything is ever pushed, anywhere in the frame, is a
+//  factor of D. This is the exact mirror of the toe's own S proof, not an
+//  approximation of it -- same family, same closed form, one sign flip.
+const float ABV2_D_MIN = 1.0f;              // Max darken's own floor: "do not darken at all"
+const float ABV2_G_MAX = 1.0f / ABV2_G_MIN; // 5.0 -- reciprocal of the lift floor; see abv2_g_dark()
+
+// Solves t so f_dark'(0) == 1/D exactly, for g > 1 -- the darkening mirror
+// of abv2_solve_t(). Same EPS floor on the denominator, same reason: D very
+// close to 1 (Darken near "off") makes the denominator near 0, i.e. t huge
+// rather than infinite, which is the correct limit (a huge t makes
+// (x+t)/(1+t) -> 1, i.e. the identity) -- not a divide that needs guarding
+// against NaN, just against float overflow turning "huge" into "inf".
+EC_FUNC float abv2_solve_t_dark( float g, float D )
+{
+	float gg = clamp( g, 1.001f, ABV2_G_MAX );
+	float d  = max( D, ABV2_D_MIN );
+	float p  = 1.0f / ( gg - 1.0f );   // positive: gg > 1
+	float denom = pow( d, p ) - 1.0f;
+	return 1.0f / max( denom, ABV2_T_EPS );
+}
+
+// The darkening curve itself. Always toe-shaped (the "monitor" knee mirror
+// the design doc sketches as an option is NOT built here -- a darkening
+// knee is a structurally different curve than this toe mirror, and this
+// shipped the plan's own escape hatch instead: "if that is genuinely
+// awkward, make Knee use the toe-mirror for darkening and say so" -- this
+// comment is the "say so"; see shader-effects.md's "Darkening" section).
+// Guards both degenerate "no darken" cases as an EXACT identity, same
+// pattern as abv2_toe(): g <= 1 (no darkening exponent requested) or
+// D <= 1 (Max darken at its floor) each alone disable it.
+EC_FUNC float abv2_toe_dark( float x, float g, float D )
+{
+	float xx = clamp( x, 0.0f, 1.0f );
+	float gg = clamp( g, 1.0f, ABV2_G_MAX );
+	float d  = max( D, ABV2_D_MIN );
+	if ( gg <= 1.0f + ABV2_T_EPS || d <= 1.0f + ABV2_T_EPS )
+		return xx;
+	if ( xx <= 0.0f )
+		return 0.0f;
+	float t = abv2_solve_t_dark( gg, d );
+	return xx * pow( ( xx + t ) / ( 1.0f + t ), gg - 1.0f );
+}
+
+// ---- Choosing g_dark: a static floor, deepened by adaptation (mirror of
+// abv2_g_static()/abv2_g() above) ------------------------------------------
+//
+//   g_static_dark = 1 + 0.6 * Darken                       // Darken 0..1 -> 1.0..1.6
+//   g             = clamp(max(g_static_dark, g_adapt), 1, G_MAX)   // Scene
+//   g             = clamp(g_static_dark, 1, G_MAX)                 // Off
+//
+// `max`, not `min`: adaptation can only make the darken STRONGER on a
+// bright scene (a LARGER g here); on a dark scene the static floor is what
+// darkens the one bright thing in it (the mirror of plan 3.5's own
+// argument), so the floor must never be relaxed by "the scene looks dark".
+// `Why the SAME g_adapt, unchanged:` abv2_g_adapt() = ln(target)/ln(anchor)
+// is already > 1 exactly when anchor > target (the scene reads brighter
+// than Target) -- no new statistic, no new EMA, no new scene-cut: the
+// measure pass's existing anchor/EMA/scene-cut already produce a usable
+// signal in both directions, it was only ever the CONSUMER (this g
+// selection) that discarded the > 1 case. `Which direction is "attack"
+// now:` the anchor's own EMA (cs_effects_measure.comp) is unchanged --
+// Adapt speed (tau_up) is still used while the anchor RISES and its 2x
+// (tau_down) while it FALLS. A rising anchor is "brighten": it both takes
+// the lift OFF (min(g_static,g_adapt) relaxes toward 1) and puts the
+// darken ON (max(g_static_dark,g_adapt) deepens away from 1) in the SAME
+// direction, at the SAME tau_up -- so "attack" is "the anchor is rising",
+// whichever of the two operators is the one actually engaging, and "decay"
+// (tau_down, 2x slower) is the anchor falling back. There is no second,
+// independent asymmetry for the darken half to gain or need.
+EC_FUNC float abv2_g_static_dark( float darken )
+{
+	return 1.0f + 0.6f * clamp( darken, 0.0f, 1.0f );
+}
+
+EC_FUNC float abv2_g_dark( float darken, float target, float anchorSmoothed, bool bSceneMode )
+{
+	float gStatic = clamp( abv2_g_static_dark( darken ), 1.0f, ABV2_G_MAX );
+	if ( !bSceneMode )
+		return gStatic;
+	float gAdapt = abv2_g_adapt( anchorSmoothed, target );
+	return clamp( max( gStatic, gAdapt ), 1.0f, ABV2_G_MAX );
+}
+
+// ---- The two-sided curve: lift below the pivot, darken above it ---------
+//
+// Local (plan/task point 3): the SAME per-pixel base B feeds ONE combined
+// curve, so a bright region's base is darkened while a dark region's base
+// is lifted IN THE SAME FRAME, with the pivot at Target (Scene mode's own
+// aim point -- the number the whole effect is already built around).
+//
+//   x <= Target:  F(x) = L(x)                                  -- UNCHANGED
+//   x >  Target:  F(x) = L(Target) + (1 - L(Target)) *
+//                        K( (L(x) - L(Target)) / (1 - L(Target)) ; gDark, D )
+//
+// where L(x) = abv2_curve(x, gLift, SLift, bKnee) (the existing toe/knee,
+// untouched) and K = abv2_toe_dark. `Why compose on L(x), not on x itself:`
+// L is not the identity above Target either (the toe/knee's own highlight
+// guard keeps compressing a little all the way to x = 1) -- rescaling the
+// DARKEN half against L's own continuation, rather than against raw x,
+// means that at D <= 1 (Max darken "off") K is the identity on ITS domain
+// and the whole expression telescopes EXACTLY back to L(x):
+//
+//   Ltgt + span * ((Lx - Ltgt) / span) == Ltgt + (Lx - Ltgt) == Lx
+//
+// -- for every x, not only near the pivot -- which is the byte-identical
+// guarantee. `Why L(Target), not literally Target, as the pivot's height:`
+// L is a genuine lift curve (concave, f(x) >= x), so L(Target) is generally
+// a little ABOVE Target, not equal to it -- matching Target exactly would
+// require RESCALING the lift half into [0, Target] too, which would change
+// its values for x < Target and break the byte-identical guarantee above.
+// L(Target) is the closest honest pivot height that keeps the lift half
+// completely untouched; see shader-effects.md for the measured gap (a few
+// hundredths at the shipped defaults) and why this is the deliberate
+// trade, not an oversight.
+//
+// CONTINUITY (C0, required): both branches give exactly L(Target) at
+// x = Target (the x <= Target branch by definition; the x > Target branch
+// because z = 0 there and K(0) = 0 for any g, D). C1 (preferred) is NOT
+// achieved when darkening is active: the slope arriving at the pivot from
+// below is L'(Target), and the slope leaving it above is
+// K'(0) * L'(Target) = (1/D) * L'(Target) -- a factor-of-D kink, visible
+// only as a slope change, never a value jump, exactly the same "monotone
+// but not smooth" trade the Knee variant's own kink at ABV2_KNEE_X already
+// carries and is accepted for (guarantee 3 asks for monotone, not smooth).
+// At D == 1 the two slopes match trivially (K'(0) == 1), so the curve is
+// C1 everywhere whenever darkening is off.
+//
+// BOUNDED, MONOTONE: F is a monotone rescale of L (x <= Target) composed
+// with a monotone rescale of K (x > Target), and 1 - L(Target) > 0 for any
+// Target < 1 with a proper lift curve, so F maps [0,1] into [0,1] with no
+// clamp doing any work (checked exhaustively in the unit tests below).
+EC_FUNC float abv2_curve2( float x, float gLift, float SLift, bool bKnee,
+                            float gDark, float D, float target )
+{
+	float xx  = clamp( x, 0.0f, 1.0f );
+	float tgt = clamp( target, 0.001f, 0.999f );
+	if ( xx <= tgt )
+		return abv2_curve( xx, gLift, SLift, bKnee );
+	float Ltgt = abv2_curve( tgt, gLift, SLift, bKnee );
+	float span = max( 1.0f - Ltgt, 1e-4f );
+	float Lx   = abv2_curve( xx, gLift, SLift, bKnee );
+	float z    = clamp( ( Lx - Ltgt ) / span, 0.0f, 1.0f );
+	float K    = abv2_toe_dark( z, gDark, D );
+	return clamp( Ltgt + span * K, 0.0f, 1.0f );
+}
+
 // ---- Base/detail (Stage 2, plan 4.5): the secant and the soft shoulder ---
 //
 // The secant f(B)/B, clamped to S -- what a per-pixel curve would apply to a
@@ -854,6 +1044,30 @@ EC_FUNC float abv2_secant( float B, float g, float S, bool bKnee )
 	if ( B <= 1e-4f )
 		return S;
 	return min( abv2_curve( B, g, S, bKnee ) / B, S );
+}
+
+// The two-sided curve's own secant (task point 3: "Detail's secant scaling
+// remains bounded on the darkening side -- slope <= max(S, D)*Detail").
+// `max(SLift, D)`, not a tighter derived bound: F(B)/B for B > Target is a
+// composite of the lift curve's own continuation and the darken mirror's
+// rescale, and no single closed form bounds it as tightly as S alone
+// bounds the toe's own secant -- clamping to max(SLift, D) is a SAFE
+// guarantee (F(B) <= L(B) <= B*S always holds, by abv2_curve2's own
+// telescoping and the toe's existing secant bound, and separately
+// F(B) >= B/D from the darken mirror's own proof above applied to the
+// RESCALED z, so max(SLift, D) covers whichever side is looser) rather
+// than a tight one, exactly the way the task itself states the guarantee.
+// Byte-identical to abv2_secant() at D <= 1: max(SLift, 1) == SLift (Max
+// lift's own range floor is 1), and abv2_curve2() itself already
+// telescopes to abv2_curve() there, so this returns exactly the same
+// number the one-sided function does.
+EC_FUNC float abv2_secant2( float B, float gLift, float SLift, bool bKnee,
+                             float gDark, float D, float target )
+{
+	if ( B <= 1e-4f )
+		return SLift;
+	float F = abv2_curve2( B, gLift, SLift, bKnee, gDark, D, target );
+	return min( F / B, max( SLift, D ) );
 }
 
 // The Reinhard-shaped soft shoulder on POSITIVE detail only (plan 4.5):
@@ -954,6 +1168,30 @@ EC_FUNC int abv2_binding( float lift, float target, float anchorSmoothed, bool b
 	return ( gStatic <= gAdapt ) ? ABV2_BIND_LIFT_FLOOR : ABV2_BIND_NONE;
 }
 
+// The darkening mirror (2026-09-14), additive: abv2_binding() above is
+// UNCHANGED and still the whole answer whenever the scene is not in a
+// darken-dominant state (g_adapt <= 1). This is the Darken-side twin,
+// called by the host only when g_adapt > 1 (the bright-scene case) --
+// PanelShaders.cpp's Diagnostics row still reports the lift-side reading
+// today; this exists for the unit tests and for a later panel pass to wire
+// in, per shader-effects.md's own note on the scope of this change.
+const int ABV2_BIND_DARKEN_FLOOR = 4;   // g_static_dark (Darken's own floor) is stronger than Target asks for
+const int ABV2_BIND_G_MAX        = 5;   // the internal ceiling -- "as much darken as this shape allows"
+
+EC_FUNC int abv2_binding_dark( float darken, float target, float anchorSmoothed, bool bSceneMode, bool bVoid )
+{
+	if ( bVoid )
+		return ABV2_BIND_VOID;
+	float gStatic = clamp( abv2_g_static_dark( darken ), 1.0f, ABV2_G_MAX );
+	if ( !bSceneMode )
+		return gStatic >= ABV2_G_MAX - 1e-4f ? ABV2_BIND_G_MAX : ABV2_BIND_DARKEN_FLOOR;
+	float gAdapt = abv2_g_adapt( anchorSmoothed, target );
+	float g = max( gStatic, gAdapt );
+	if ( g >= ABV2_G_MAX - 1e-4f )
+		return ABV2_BIND_G_MAX;
+	return ( gStatic >= gAdapt ) ? ABV2_BIND_DARKEN_FLOOR : ABV2_BIND_NONE;
+}
+
 #ifdef __cplusplus
 // The one wording of ab_dyn_binding()'s codes: the settings panel's
 // Diagnostics fact and the `effects_ab_log` trace both print this, so the
@@ -999,6 +1237,18 @@ inline const char *abv2_binding_text( int nBinding )
 		case ABV2_BIND_G_MIN:      return "as much lift as this shape allows";
 		case ABV2_BIND_VOID:       return "scene mostly void -- holding the last reading";
 		default:                   return "none -- the content median is on Target brightness";
+	}
+}
+
+// abv2_binding_dark()'s own wording (2026-09-14), the darkening mirror.
+inline const char *abv2_binding_dark_text( int nBinding )
+{
+	switch ( nBinding )
+	{
+		case ABV2_BIND_DARKEN_FLOOR: return "Darken -- Target brightness does no more here";
+		case ABV2_BIND_G_MAX:        return "as much darken as this shape allows";
+		case ABV2_BIND_VOID:         return "scene mostly void -- holding the last reading";
+		default:                     return "none -- the content median is on Target brightness";
 	}
 }
 } // namespace gamescope::effects_curve

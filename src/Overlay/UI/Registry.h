@@ -7,8 +7,8 @@
 //
 //   1. THE PREFIX LAW      a Param's id is synthesised as "<parent>.<leaf>",
 //                          so it cannot name an unrelated setting.
-//   2. THE SIX BUDGET      a row owns at most 7 Params (raised from 6,
-//                          2026-09-06 -- see Registry.cpp's kParamBudget
+//   2. THE SIX BUDGET      a row owns at most 10 Params (raised 6 -> 7 -> 8
+//                          -> 10, most recently 2026-09-14 -- see Registry.cpp's kParamBudget
 //                          comment); the next one past that aborts.
 //   3. ID UNIQUENESS       every Entry and every Param id is unique registry-wide.
 //   4. HELP IS REQUIRED    .Help() must be called with non-empty text.

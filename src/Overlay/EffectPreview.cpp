@@ -124,7 +124,9 @@ namespace gamescope::overlay
 				&& a.bV2Knee == b.bV2Knee
 				&& a.flV2Lift == b.flV2Lift
 				&& a.flV2Target == b.flV2Target
-				&& a.flV2MaxLift == b.flV2MaxLift;
+				&& a.flV2MaxLift == b.flV2MaxLift
+				&& a.flV2MaxDarken == b.flV2MaxDarken
+				&& a.flV2Darken == b.flV2Darken;
 		}
 
 		// Which of the THREE mutually exclusive adaptive effects (Adaptive
@@ -169,6 +171,8 @@ namespace gamescope::overlay
 				p.flV2Lift    = g_nativeEffects.flV2Lift;
 				p.flV2Target  = g_nativeEffects.flV2Target;
 				p.flV2MaxLift = g_nativeEffects.flV2MaxLift;
+				p.flV2MaxDarken = g_nativeEffects.flV2MaxDarken;
+				p.flV2Darken    = g_nativeEffects.flV2Darken;
 				return p;
 			}
 			if ( GammaIsTheOneOn() )
