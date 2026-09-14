@@ -19,6 +19,7 @@
 #include "log.hpp"
 
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <linux/input-event-codes.h>
 
 namespace gamescope::keybinds
 {
@@ -88,6 +89,37 @@ namespace gamescope::keybinds
 			{ "LSuper", XKB_KEY_Super_L,   XKB_KEY_NoSymbol,  3 },
 			{ "RSuper", XKB_KEY_Super_R,   XKB_KEY_NoSymbol,  3 },
 		};
+
+		// ---------------------------------------------------------------------
+		//  Mouse buttons (2026-09-14)
+		// ---------------------------------------------------------------------
+		// Named the way a game's own bind menu names them. The keysyms are
+		// X11's own pointer-button syms, which no keyboard produces, so they
+		// can share the held set with real keys without ambiguity.
+		struct ButtonToken
+		{
+			const char  *pszName;
+			xkb_keysym_t uSym;
+			uint32_t     uLinuxButton;
+		};
+
+		constexpr ButtonToken kButtons[] {
+			{ "LMB",    XKB_KEY_Pointer_Button1, BTN_LEFT },
+			{ "MMB",    XKB_KEY_Pointer_Button2, BTN_MIDDLE },
+			{ "RMB",    XKB_KEY_Pointer_Button3, BTN_RIGHT },
+			{ "Mouse4", XKB_KEY_Pointer_Button4, BTN_SIDE },
+			{ "Mouse5", XKB_KEY_Pointer_Button5, BTN_EXTRA },
+		};
+
+		const char *ButtonName( xkb_keysym_t u )
+		{
+			for ( const ButtonToken &b : kButtons )
+			{
+				if ( b.uSym == u )
+					return b.pszName;
+			}
+			return nullptr;
+		}
 
 		bool IsModifierSym( xkb_keysym_t u )
 		{
@@ -163,6 +195,18 @@ namespace gamescope::keybinds
 			  "client already running on this machine, so there is nothing to sign in to. It "
 			  "does nothing when this is not a Steam game, because there is then no Friends "
 			  "page to open at all. See Settings > System > Friends." },
+			// RMB by default: the zoom is an aim-down-sights stand-in, and
+			// the right button is where every shooter already puts that. It
+			// does nothing until the Zoom area's own switch is on, and it
+			// never swallows the button -- the game gets its right-click
+			// exactly as before. Mouse buttons are LMB, RMB, MMB, Mouse4,
+			// Mouse5; keys and modifiers work here too.
+			{ "zoom", "Zoom", "RMB",
+			  "The key or mouse button that zooms in on the middle of the game (Settings > Zoom "
+			  "decides hold-or-toggle, the shape and the size). Fires while other keys are held, "
+			  "so it works mid-movement, and a mouse button is never taken away from the game. "
+			  "Mouse buttons are LMB, RMB, MMB, Mouse4 and Mouse5.",
+			  true },
 		};
 
 		// ---------------------------------------------------------------------
@@ -178,6 +222,7 @@ namespace gamescope::keybinds
 		// The gesture engine's memory (see ProcessKey).
 		std::unordered_set<xkb_keysym_t> g_setPeak;        // biggest held-set of the gesture in flight
 		std::unordered_set<xkb_keysym_t> g_setOwnedPress;  // presses we swallowed; their releases are ours too
+		std::optional<Action> g_oHeld;                      // the HELD action whose chord is down right now
 
 		// Capture.
 		bool          g_bCapturing = false;
@@ -336,10 +381,25 @@ namespace gamescope::keybinds
 				}
 			}
 
+			const ButtonToken *pButton = nullptr;
+			for ( const ButtonToken &b : kButtons )
+			{
+				if ( IEquals( svTok, b.pszName ) )
+				{
+					pButton = &b;
+					break;
+				}
+			}
+
 			if ( pMod )
 			{
 				term.uA = pMod->uA;
 				term.uB = pMod->uB;
+			}
+			else if ( pButton )
+			{
+				term.uA = pButton->uSym;
+				term.uB = XKB_KEY_NoSymbol;
 			}
 			else
 			{
@@ -402,6 +462,11 @@ namespace gamescope::keybinds
 				s += pMod->pszName;
 				continue;
 			}
+			if ( const char *pszButton = ButtonName( term.uA ) )
+			{
+				s += pszButton;
+				continue;
+			}
 			char szName[ 64 ] = "";
 			if ( xkb_keysym_get_name( term.uA, szName, sizeof( szName ) ) <= 0 )
 				snprintf( szName, sizeof( szName ), "0x%x", term.uA );
@@ -456,6 +521,36 @@ namespace gamescope::keybinds
 				return false;
 		}
 		return true;
+	}
+
+	bool ChordHeld( const Chord &chord, const std::unordered_set<xkb_keysym_t> &setHeld )
+	{
+		if ( chord.terms.empty() )
+			return false;
+		for ( const ChordTerm &term : chord.terms )
+		{
+			bool bHeld = false;
+			for ( xkb_keysym_t uSym : setHeld )
+				bHeld = bHeld || term.Accepts( uSym );
+			if ( !bHeld )
+				return false;
+		}
+		return true;
+	}
+
+	xkb_keysym_t ButtonKeysym( uint32_t uLinuxButton )
+	{
+		for ( const ButtonToken &b : kButtons )
+		{
+			if ( b.uLinuxButton == uLinuxButton )
+				return b.uSym;
+		}
+		return XKB_KEY_NoSymbol;
+	}
+
+	bool IsButtonSym( xkb_keysym_t uSym )
+	{
+		return ButtonName( uSym ) != nullptr;
 	}
 
 	// =========================================================================
@@ -730,7 +825,7 @@ namespace gamescope::keybinds
 		{
 			for ( size_t i = 0; i < (size_t)Action::Count; i++ )
 			{
-				if ( IsModifierOnly( g_Chords[ i ] ) || !ChordMatches( g_Chords[ i ], setHeld ) )
+				if ( kActions[ i ].bHeld || IsModifierOnly( g_Chords[ i ] ) || !ChordMatches( g_Chords[ i ], setHeld ) )
 					continue;
 				g_setOwnedPress.insert( normalizedKeysym );
 				return KeyResult{ true, (Action)i, true };
@@ -742,15 +837,44 @@ namespace gamescope::keybinds
 				g_setOwnedPress.insert( normalizedKeysym );
 				return KeyResult{ true, Action::Shell, true };
 			}
+
+			// HELD actions last, so an exact chord above always wins over a
+			// subset here. The press must be one of the chord's own keys
+			// (W arriving while RMB is down completes nothing), and a chord
+			// already down does not fire again (key repeat, a second
+			// keyboard). Swallowed only when it is a real key: a modifier
+			// keeps its day job and a mouse button belongs to the game.
+			for ( size_t i = 0; i < (size_t)Action::Count; i++ )
+			{
+				if ( !kActions[ i ].bHeld || g_oHeld == (Action)i )
+					continue;
+				bool bOwnKey = false;
+				for ( const ChordTerm &t : g_Chords[ i ].terms )
+					bOwnKey = bOwnKey || t.Accepts( normalizedKeysym );
+				if ( !bOwnKey || !ChordHeld( g_Chords[ i ], setHeld ) )
+					continue;
+				g_oHeld = (Action)i;
+				const bool bConsume = !IsModifierSym( normalizedKeysym ) && !IsButtonSym( normalizedKeysym );
+				if ( bConsume )
+					g_setOwnedPress.insert( normalizedKeysym );
+				return KeyResult{ true, (Action)i, bConsume };
+			}
 			return res;
 		}
 
 		// ---- releases --------------------------------------------------------
 		res.bConsume = g_setOwnedPress.erase( normalizedKeysym ) > 0;
 
+		if ( g_oHeld && !ChordHeld( g_Chords[ (size_t)*g_oHeld ], setHeld ) )
+		{
+			res.bReleased = true;
+			res.eReleased = *g_oHeld;
+			g_oHeld.reset();
+		}
+
 		for ( size_t i = 0; i < (size_t)Action::Count; i++ )
 		{
-			if ( !IsModifierOnly( g_Chords[ i ] ) || !ChordMatches( g_Chords[ i ], g_setPeak ) )
+			if ( kActions[ i ].bHeld || !IsModifierOnly( g_Chords[ i ] ) || !ChordMatches( g_Chords[ i ], g_setPeak ) )
 				continue;
 			g_setPeak.clear();   // one tap per gesture, by construction
 			res.bFired  = true;
@@ -769,6 +893,7 @@ namespace gamescope::keybinds
 		std::scoped_lock lock( g_Mutex );
 		g_setPeak.clear();
 		g_setOwnedPress.clear();
+		g_oHeld.reset();
 		if ( g_bCapturing )
 		{
 			g_bCapturing = false;
@@ -803,7 +928,7 @@ namespace gamescope::keybinds
 		"ritz_keybind",
 		"Rebind one hotkey: ritz_keybind <action> <chord>, e.g. ritz_keybind shell_alt "
 		"\"Ctrl+Shift+P\". Chords are '+'-separated: Ctrl/Shift/Alt/Super take either side, "
-		"LCtrl/RShift/... name one. An empty chord restores that action's default. Through "
+		"LCtrl/RShift/... name one; LMB/RMB/MMB/Mouse4/Mouse5 are mouse buttons. An empty chord restores that action's default. Through "
 		"gamescopectl the arguments must be ONE quoted argument.",
 		[]( std::span<std::string_view> args )
 		{

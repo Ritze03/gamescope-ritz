@@ -1184,6 +1184,40 @@ TEST_CASE( "crosshair: the defaults round-trip too, and the master switch defaul
     RequireCrosshairEquals( LoadGlobal().crosshair, CrosshairSettings{} );
 }
 
+// ---------------------------------------------------------------------
+// Zoom (2026-09-14, superdoc/features/zoom.md): the same shape as the
+// crosshair's section -- per-layer, under "zoom", defaults when absent.
+// ---------------------------------------------------------------------
+
+TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( Settings{}.zoom.enabled == false );
+    REQUIRE( Settings{}.zoom.mode == "hold" );
+
+    Settings s{};
+    s.zoom.enabled = true;
+    s.zoom.mode = "toggle";
+    s.zoom.shape = "rectangle";
+    s.zoom.size = 0.35f;
+    s.zoom.width = 0.8f;
+    s.zoom.height = 0.25f;
+    s.zoom.factor = 3.5f;
+    s.zoom.mouse_scale = true;
+    REQUIRE( SaveSections( s ) );
+
+    const Settings loaded = LoadSections();
+    REQUIRE( loaded.zoom.enabled == true );
+    REQUIRE( loaded.zoom.mode == "toggle" );
+    REQUIRE( loaded.zoom.shape == "rectangle" );
+    REQUIRE( loaded.zoom.size == 0.35f );
+    REQUIRE( loaded.zoom.width == 0.8f );
+    REQUIRE( loaded.zoom.height == 0.25f );
+    REQUIRE( loaded.zoom.factor == 3.5f );
+    REQUIRE( loaded.zoom.mouse_scale == true );
+}
+
 TEST_CASE( "crosshair.hide_mode round-trips across all three modes", "[config]" )
 {
     for ( const char *pszValue : { "fade", "focus", "shrink" } )

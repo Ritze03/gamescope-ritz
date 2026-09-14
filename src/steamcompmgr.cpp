@@ -102,6 +102,7 @@
 #include "Overlay/CursorArt.h"
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
+#include "Overlay/Zoom.h"
 #include "Overlay/Notifications.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
@@ -3328,6 +3329,12 @@ paint_all( global_focus_t *pFocus, bool async )
 		// below (see FpsDisplay.h) -- it renders every frame the readout is
 		// enabled, whether or not the settings panel itself is open.
 		gamescope::FpsDisplay_AddLayer( &frameInfo );
+
+		// The zoom (Overlay/Zoom.h): not a layer pushed here but a request
+		// vulkan_composite() turns into layer 1 itself -- the picture in it
+		// has to be the base AFTER the effects pre-pass, which only exists
+		// in there. Beneath everything pushed in this block by construction.
+		gamescope::Zoom_FillRequest( &frameInfo );
 
 		// Toast notifications: same independent-lifetime reasoning as the FPS
 		// display above (see Overlay/Notifications.h) -- drawn above the HUD

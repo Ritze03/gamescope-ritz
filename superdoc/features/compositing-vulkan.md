@@ -119,6 +119,13 @@ it — an earlier version pushed the settings overlay first (so it composited
 the push order and the `g_zpos*` values were corrected together so they can't
 drift apart again.
 
+One layer is **not** pushed by `paint_all()` at all: the [zoom](zoom.md)
+(2026-09-14). `vulkan_composite()` inserts it itself as layer 1 of its private
+copy of the frame — after the effects pre-pass, so it can sample the graded
+base, and before the scaling passes, so it is never upscaled — shifting every
+pushed overlay up one index. It carries `g_zposBase`, exists only on zoomed
+frames, and forces a full composite through `bNeedsDestinationBlend`.
+
 ## Using it
 
 There's no direct end-user control surface here — this is the render core other

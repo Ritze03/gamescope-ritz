@@ -47,6 +47,10 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Crosshair](features/crosshair.md) — the compositor-drawn crosshair (line / dot /
   outline / right-click auto-hide / Apply Scaling): why it lives in the HUD's layer, the
   centre and 1px snapping rules, the hide modes' maths, and the `BTN_RIGHT` hook's gating.
+- [Zoom](features/zoom.md) — the hold-or-toggle magnifier (circle / rectangle / square,
+  1 px outline, 1.5–5× level, match-mouse-speed): why it is built inside
+  `vulkan_composite()` as layer 1 after the effects and before the upscaler, and the
+  held-action / mouse-button rules it added to the keybind engine.
 
 ### Settings & config
 

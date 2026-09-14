@@ -302,6 +302,31 @@ namespace gamescope::config
         bool apply_scaling = false;
     };
 
+    // The zoom (2026-09-14, this fork's own addition -- see
+    // superdoc/features/zoom.md): a magnified copy of the middle of the game,
+    // drawn as its own layer right above the game and beneath everything
+    // else, while its chord (Keybinds, `zoom`, RMB by default) is held or
+    // toggled. Built inside vulkan_composite() from the base layer AFTER the
+    // effects pre-pass, at output resolution, so it carries the shaders and
+    // is not run through the upscaler. A normal per-layer section, like
+    // CrosshairSettings.
+    struct ZoomSettings
+    {
+        bool enabled = false;         // master switch, default off -- the chord does nothing until this is on
+        std::string mode = "hold";    // "hold": zoomed while the chord is down; "toggle": press to zoom, press to leave
+        std::string shape = "circle"; // "circle" | "rectangle" | "square"
+        // Sizes are fractions of the game's on-screen rect, 0..1 (the user
+        // asked for percentages "hidden behind 0 to 1 values"). `size` is
+        // the circle's diameter and the square's side, as a fraction of the
+        // on-screen HEIGHT; the rectangle uses width x height of the
+        // on-screen width and height.
+        float size = 0.5f;
+        float width = 0.5f;
+        float height = 0.5f;
+        float factor = 2.0f;          // magnification, 1.5..5.0
+        bool mouse_scale = false;     // divide mouse speed by `factor` while zoomed (on top of --mouse-sensitivity)
+    };
+
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
     // 3->4 comment above): the user pointed out this effect behaves like an
     // iPhone "Saturation" slider (a flat multiplier, same relative boost for
@@ -954,6 +979,7 @@ namespace gamescope::config
         GamescopeSettings gamescope;
         FpsDisplaySettings fps_display;
         CrosshairSettings crosshair;
+        ZoomSettings zoom;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

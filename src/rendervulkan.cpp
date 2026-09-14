@@ -56,6 +56,7 @@
 #include "cs_effects_bloom_down.h"
 #include "cs_effects_bmap_blurh.h"
 #include "cs_effects_bmap_blurv.h"
+#include "cs_zoom.h"
 #include "cs_effects_bmap_down.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
@@ -1013,6 +1014,7 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_BMAP_DOWN, cs_effects_bmap_down);
 	SHADER(EFFECTS_BMAP_BLURH, cs_effects_bmap_blurh);
 	SHADER(EFFECTS_BMAP_BLURV, cs_effects_bmap_blurv);
+	SHADER(ZOOM, cs_zoom);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1272,6 +1274,10 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	SHADER(EFFECTS_BMAP_DOWN, 1, 1, 1);
 	SHADER(EFFECTS_BMAP_BLURH, 1, 1, 1);
 	SHADER(EFFECTS_BMAP_BLURV, 1, 1, 1);
+	// The zoom's one (2026-09-14): precompiled because it is switched on
+	// by a keypress mid-game, the one moment a pipeline compile must not
+	// happen on the render thread.
+	SHADER(ZOOM, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -3817,6 +3823,31 @@ static bool update_effects_bmap_images( uint32_t uSrcWidth, uint32_t uSrcHeight 
 	                                    uSrcWidth, uSrcHeight, kEffectsBmapDownMin, "brightness map" );
 }
 
+// The zoom's projection texture (FrameInfo_t::Zoom_t), at the projection's
+// own on-screen size. ABGR8888 for the reason Bloom's buffers are; pure
+// scratch, every texel rewritten per zoomed frame (the shape's outside is
+// written transparent), so the first-sight UNDEFINED discard is right.
+static bool update_zoom_image( uint32_t uWidth, uint32_t uHeight )
+{
+	if ( g_output.zoomOutput != nullptr
+			&& uWidth == g_output.zoomOutput->width()
+			&& uHeight == g_output.zoomOutput->height() )
+		return true;
+
+	CVulkanTexture::createFlags createFlags;
+	createFlags.bSampled = true;
+	createFlags.bStorage = true;
+
+	g_output.zoomOutput = new CVulkanTexture();
+	if ( !g_output.zoomOutput->BInit( uWidth, uHeight, 1u, DRM_FORMAT_ABGR8888, createFlags, nullptr ) )
+	{
+		vk_log.errorf( "failed to create the zoom's texture" );
+		g_output.zoomOutput = nullptr;
+		return false;
+	}
+	return true;
+}
+
 // Adaptive Brightness's persistent history -- kEffectsHistoryWidth x
 // kEffectsHistoryHeight. Row 0 is one smoothed statistic per texel (mean,
 // p2, p50, p98, then the same four raw; the shader's HISTORY_* indices),
@@ -4641,6 +4672,22 @@ struct EasuPushData_t
 	EasuPushData_t(uint32_t inputX, uint32_t inputY, uint32_t tempX, uint32_t tempY)
 	{
 		FsrEasuCon(&Const0.x, &Const1.x, &Const2.x, &Const3.x, inputX, inputY, inputX, inputY, tempX, tempY);
+	}
+};
+
+// cs_zoom.comp's block (src/shaders/cs_zoom.comp's zoom_t), field for field.
+struct ZoomPushData_t
+{
+	float    flSrcCenterX, flSrcCenterY;   // source texel of the projection's centre
+	float    flSrcPerDstX, flSrcPerDstY;   // source texels per projection pixel (layer scale / magnification)
+	uint32_t uWidth, uHeight;              // the projection, pixels
+	uint32_t uCircle;
+	uint32_t uOutlinePx;
+
+	ZoomPushData_t( float cx, float cy, float sx, float sy, uint32_t w, uint32_t h, bool bCircle, uint32_t uOutline )
+		: flSrcCenterX( cx ), flSrcCenterY( cy ), flSrcPerDstX( sx ), flSrcPerDstY( sy )
+		, uWidth( w ), uHeight( h ), uCircle( bCircle ? 1u : 0u ), uOutlinePx( uOutline )
+	{
 	}
 };
 
@@ -5585,6 +5632,84 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 		}
 
 		s_bEffectsPassRanLastTime = bMeasureRanThisTime;
+	}
+
+	// THE ZOOM (2026-09-14, FrameInfo_t::Zoom_t, superdoc/features/zoom.md).
+	// After the effects pre-pass, so the picture inside it is the graded
+	// one, and before the scaling passes, so it is never upscaled: one
+	// dispatch samples layer 0 bilinearly around its centre at
+	// scale/magnification source texels per output pixel, masks the shape,
+	// draws the 1 px black ring, and the result goes in as LAYER 1 of this
+	// call's private copy -- above the game, beneath every overlay
+	// paint_all() pushed. Encoded in, encoded out, exactly as the effects
+	// pass: slot 0 on the raw view, written through the UNORM view, and the
+	// layer carries layer 0's own colorspace so the composite decodes it the
+	// same way. Skipped, with a rate-limited line, when the layer budget is
+	// full; the frame then draws without it rather than without something
+	// else. YCbCr and HDR bases are skipped too, as the effects pass skips
+	// them -- the sampler would not give encoded RGB back.
+	if ( frameInfo->zoom.bActive && frameInfo->layers.count() > 0 && frameInfo->layers.get( 0 ).tex )
+	{
+		const FrameInfo_t::Layer_t &base = frameInfo->layers.get( 0 );
+		const bool bSdr = !ColorspaceIsHDR( base.colorspace )
+			&& base.colorspace != GAMESCOPE_APP_TEXTURE_COLORSPACE_PASSTHRU;
+		if ( bSdr && !base.isYcbcr() && base.scale.x > 0.0f && base.scale.y > 0.0f )
+		{
+			const float flOnScreenW = (float)base.tex->width() / base.scale.x;
+			const float flOnScreenH = (float)base.tex->height() / base.scale.y;
+			const uint32_t uW = std::clamp( (uint32_t)lroundf( frameInfo->zoom.flWidth * flOnScreenW ), 4u, currentOutputWidth );
+			const uint32_t uH = std::clamp( (uint32_t)lroundf( frameInfo->zoom.flHeight * flOnScreenH ), 4u, currentOutputHeight );
+			const float flFactor = std::max( frameInfo->zoom.flFactor, 1.0f );
+
+			if ( frameInfo->layers.count() >= k_nMaxLayers )
+			{
+				static uint32_t s_nDropped = 0;
+				if ( ( ++s_nDropped % 600 ) == 1 )
+					vk_log.warnf( "zoom layer dropped: layer budget full (%d/%d), %u drop(s) so far",
+						frameInfo->layers.count(), k_nMaxLayers, s_nDropped );
+			}
+			else if ( update_zoom_image( uW, uH ) )
+			{
+				cmdBuffer->uploadConstants<ZoomPushData_t>(
+					(float)base.tex->width() * 0.5f, (float)base.tex->height() * 0.5f,
+					base.scale.x / flFactor, base.scale.y / flFactor,
+					uW, uH, frameInfo->zoom.bCircle, 1u );
+				cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_ZOOM ) );
+				cmdBuffer->bindTexture( 0, base.tex );
+				cmdBuffer->setTextureSrgb( 0, true );
+				cmdBuffer->setSamplerUnnormalized( 0, false );
+				cmdBuffer->setSamplerNearest( 0, false );
+				cmdBuffer->bindTarget( g_output.zoomOutput );
+				cmdBuffer->dispatch( div_roundup( uW, 8 ), div_roundup( uH, 8 ) );
+
+				// Centred on the game's on-screen rect, at whole pixels so
+				// the composite copies it texel for texel (isScreenSize()).
+				const float flCenterX = -base.offset.x + flOnScreenW * 0.5f;
+				const float flCenterY = -base.offset.y + flOnScreenH * 0.5f;
+
+				if ( frameInfo != &effectsFrameInfo )
+				{
+					effectsFrameInfo = *pCallerFrameInfo;
+					frameInfo = &effectsFrameInfo;
+				}
+				effectsFrameInfo.layers.push();
+				for ( int i = effectsFrameInfo.layers.count() - 1; i > 1; i-- )
+					effectsFrameInfo.layers.get( i ) = effectsFrameInfo.layers.get( i - 1 );
+
+				FrameInfo_t::Layer_t &z = effectsFrameInfo.layers.get( 1 );
+				z = FrameInfo_t::Layer_t{};
+				z.tex = g_output.zoomOutput;
+				z.zpos = effectsFrameInfo.layers.get( 0 ).zpos;
+				z.offset = { -std::floor( flCenterX - (float)uW * 0.5f ), -std::floor( flCenterY - (float)uH * 0.5f ) };
+				z.scale = { 1.0f, 1.0f };
+				z.opacity = 1.0f;
+				z.filter = GamescopeUpscaleFilter::LINEAR;
+				z.blackBorder = false;
+				z.applyColorMgmt = effectsFrameInfo.layers.get( 0 ).applyColorMgmt;
+				z.eAlphaBlendingMode = ALPHA_BLENDING_MODE_PREMULTIPLIED;
+				z.colorspace = effectsFrameInfo.layers.get( 0 ).colorspace;
+			}
+		}
 	}
 
 	if ( frameInfo->useFSRLayer0 )

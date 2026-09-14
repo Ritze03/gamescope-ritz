@@ -18,6 +18,8 @@
 
 #include <unordered_set>
 
+#include <linux/input-event-codes.h>
+
 #include "Keybinds.h"
 
 using namespace gamescope::keybinds;
@@ -421,4 +423,98 @@ TEST_CASE( "a capture cancelled from the UI leaves the binding alone", "[keybind
 	CHECK_FALSE( CaptureActive() );
 	CHECK( TakeCaptureResult().eStatus == CaptureStatus::Cancelled );
 	CHECK( ChordTextFor( Action::Shell ) == "RShift" );
+}
+
+// ---------------------------------------------------------------------------
+//  Mouse buttons and the HELD action (2026-09-14, the zoom)
+// ---------------------------------------------------------------------------
+TEST_CASE( "mouse buttons are chord terms with their own names", "[keybinds]" )
+{
+	CHECK( FormatChord( Parse( "rmb" ) ) == "RMB" );
+	CHECK( FormatChord( Parse( "Shift+LMB" ) ) == "Shift+LMB" );
+	CHECK( FormatChord( Parse( "mouse4" ) ) == "Mouse4" );
+	CHECK( ButtonKeysym( BTN_RIGHT ) == XKB_KEY_Pointer_Button3 );
+	CHECK( ButtonKeysym( BTN_LEFT ) == XKB_KEY_Pointer_Button1 );
+	CHECK( ButtonKeysym( 0x999 ) == XKB_KEY_NoSymbol );
+	CHECK( IsButtonSym( XKB_KEY_Pointer_Button3 ) );
+	CHECK_FALSE( IsButtonSym( XKB_KEY_O ) );
+	CHECK( Parse( "RMB" ).terms[ 0 ].uA == ButtonKeysym( BTN_RIGHT ) );
+}
+
+TEST_CASE( "the zoom's chord fires as a subset, is not swallowed on a button, and reports its release", "[keybinds]" )
+{
+	ClearGestureState();
+	REQUIRE( Info( Action::Zoom ).bHeld );
+	REQUIRE( ChordTextFor( Action::Zoom ) == "RMB" );
+	Keyboard kb;
+
+	// Walking forward, then the button: W does not complete anything, and
+	// RMB completes the zoom despite W being held.
+	CHECK_FALSE( kb.Press( XKB_KEY_W ).bFired );
+	KeyResult r = kb.Press( XKB_KEY_Pointer_Button3 );
+	CHECK( r.bFired );
+	CHECK( r.eAction == Action::Zoom );
+	CHECK_FALSE( r.bConsume );           // the game keeps its right-click
+
+	// More keys while zoomed neither re-fire nor release it.
+	r = kb.Press( XKB_KEY_A );
+	CHECK_FALSE( r.bFired );
+	CHECK_FALSE( r.bReleased );
+	r = kb.Release( XKB_KEY_W );
+	CHECK_FALSE( r.bReleased );
+
+	// Letting go of the button is the release.
+	r = kb.Release( XKB_KEY_Pointer_Button3 );
+	CHECK( r.bReleased );
+	CHECK( r.eReleased == Action::Zoom );
+	CHECK_FALSE( r.bConsume );
+
+	// And a second press fires again (the "already down" guard cleared).
+	CHECK( kb.Press( XKB_KEY_Pointer_Button3 ).bFired );
+	CHECK( kb.Release( XKB_KEY_Pointer_Button3 ).bReleased );
+	kb.Release( XKB_KEY_A );
+}
+
+TEST_CASE( "a held action on a real key is swallowed and never taps; a focus boundary drops it", "[keybinds]" )
+{
+	ClearGestureState();
+	REQUIRE( SetChord( Action::Zoom, "C" ).empty() );
+	Keyboard kb;
+
+	KeyResult r = kb.Press( XKB_KEY_C );
+	CHECK( r.bFired );
+	CHECK( r.eAction == Action::Zoom );
+	CHECK( r.bConsume );                 // the letter must not reach the game
+
+	// Repeat presses of a chord already down do nothing (key repeat).
+	CHECK_FALSE( ProcessKey( XKB_KEY_C, true, kb.held ).bFired );
+
+	ClearGestureState();                 // focus moved: the release is lost
+	r = kb.Release( XKB_KEY_C );
+	CHECK_FALSE( r.bReleased );          // nothing left to release
+	CHECK_FALSE( r.bConsume );
+
+	// A modifier-only chord on a held action is a plain press, not a tap.
+	REQUIRE( SetChord( Action::Zoom, "LAlt" ).empty() );
+	r = kb.Press( XKB_KEY_Alt_L );
+	CHECK( r.bFired );
+	CHECK_FALSE( r.bConsume );
+	r = kb.Release( XKB_KEY_Alt_L );
+	CHECK( r.bReleased );
+	CHECK_FALSE( r.bFired );
+
+	// An exact chord wins over a subset: Ctrl+Shift+C is the shell's own
+	// alternate below, and zoom on C must not also fire from it.
+	REQUIRE( SetChord( Action::ShellAlt, "Ctrl+Shift+C" ).empty() );
+	REQUIRE( SetChord( Action::Zoom, "C" ).empty() );
+	kb.Press( XKB_KEY_Control_L );
+	kb.Press( XKB_KEY_Shift_L );
+	r = kb.Press( XKB_KEY_C );
+	CHECK( r.bFired );
+	CHECK( r.eAction == Action::ShellAlt );
+	kb.Release( XKB_KEY_C );
+	kb.Release( XKB_KEY_Shift_L );
+	kb.Release( XKB_KEY_Control_L );
+
+	ResetAll();
 }

@@ -887,6 +887,7 @@ namespace gamescope::ui
 			{ "system.hud",            RailGroup::Misc },
 			{ "audio.mixer",           RailGroup::Misc },
 			{ "system.crosshair",      RailGroup::Misc },
+			{ "system.zoom",           RailGroup::Misc },
 			// The friends list sits with the other things that appear OVER
 			// the game on a hotkey rather than with the configuration pages;
 			// it is a surface you use mid-match, not a page you set up once.

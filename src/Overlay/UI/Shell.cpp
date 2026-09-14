@@ -55,6 +55,7 @@
 #include "Overlay/PanelKeybinds.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Crosshair.h"
+#include "Overlay/Zoom.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
 #include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
@@ -851,6 +852,9 @@ namespace gamescope::ui::shell
 			// HUD layer but declared as its own area, right after the HUD it
 			// shares that layer with. See Overlay/Crosshair.h.
 			Crosshair_RegisterArea( reg );
+			// The zoom (2026-09-14): drawn inside vulkan_composite() as its
+			// own layer, declared here as its own MISC area. See Overlay/Zoom.h.
+			Zoom_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
 			// P6. The second content area: version identity + the embedded
 			// CHANGELOG.md. Sits next to Log because both answer a question

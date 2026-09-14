@@ -9,7 +9,18 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
-## [0.7.2] – 2026-09-14
+## [0.8.0] – 2026-09-14
+
+### Added
+- **Zoom**: a new MISC area that magnifies the middle of the game (1.5–5×) while a key
+  or mouse button is held or toggled, cut to a circle, rectangle or square with a
+  one-pixel black outline, drawn after the shaders and never upscaled.
+- **Zoom keybind**: a `Zoom` hotkey under Keybinds, right mouse button by default, that
+  fires while other keys are held and never takes the button away from the game.
+- **Mouse buttons as hotkeys**: `LMB`, `RMB`, `MMB`, `Mouse4` and `Mouse5` can now be
+  part of any chord.
+- **Match mouse speed**: an option on the Zoom area that divides the mouse speed by the
+  zoom level while zoomed, on top of `--mouse-sensitivity`.
 
 ### Fixed
 - **Saturation slider**: dropped the "x" suffix from its value, since no other Shaders

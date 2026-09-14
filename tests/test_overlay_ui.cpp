@@ -1840,6 +1840,8 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// the letter fallback (`F`), which is the original bug this whole
 		// file exists to catch.
 		"system.friends",
+		// The eighteenth (2026-09-14): the zoom. See Zoom.cpp and Icons.cpp.
+		"system.zoom",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -1969,6 +1971,7 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 		{ "system.hud",            ui::RailGroup::Misc },
 		{ "audio.mixer",           ui::RailGroup::Misc },
 		{ "system.crosshair",      ui::RailGroup::Misc },
+		{ "system.zoom",           ui::RailGroup::Misc },
 		{ "system.friends",        ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },

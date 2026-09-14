@@ -224,6 +224,19 @@ namespace gamescope::config
                 c.apply_scaling = JGetBool( *pCross, "apply_scaling", c.apply_scaling );
             }
 
+            if ( const nlohmann::json *pZoom = JGetObject( j, "zoom" ) )
+            {
+                auto &z = s.zoom;
+                z.enabled = JGetBool( *pZoom, "enabled", z.enabled );
+                z.mode = JGetString( *pZoom, "mode", z.mode );
+                z.shape = JGetString( *pZoom, "shape", z.shape );
+                z.size = JGetFloat( *pZoom, "size", z.size );
+                z.width = JGetFloat( *pZoom, "width", z.width );
+                z.height = JGetFloat( *pZoom, "height", z.height );
+                z.factor = JGetFloat( *pZoom, "factor", z.factor );
+                z.mouse_scale = JGetBool( *pZoom, "mouse_scale", z.mouse_scale );
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Renamed from "vibrancy" 2026-09-08 (ConfigSchema.h's
@@ -539,6 +552,17 @@ namespace gamescope::config
             jCross[ "hide_animate_back" ] = c.hide_animate_back;
             jCross[ "apply_scaling" ] = c.apply_scaling;
 
+            const auto &z = s.zoom;
+            nlohmann::json jZoom = nlohmann::json::object();
+            jZoom[ "enabled" ] = z.enabled;
+            jZoom[ "mode" ] = z.mode;
+            jZoom[ "shape" ] = z.shape;
+            jZoom[ "size" ] = z.size;
+            jZoom[ "width" ] = z.width;
+            jZoom[ "height" ] = z.height;
+            jZoom[ "factor" ] = z.factor;
+            jZoom[ "mouse_scale" ] = z.mouse_scale;
+
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
             jSaturation[ "strength" ] = s.reshade.saturation.strength;
@@ -618,6 +642,7 @@ namespace gamescope::config
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
             j[ "crosshair" ] = std::move( jCross );
+            j[ "zoom" ] = std::move( jZoom );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );

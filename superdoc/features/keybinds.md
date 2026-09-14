@@ -52,9 +52,13 @@ larger job with a different risk profile.
 | `shell_alt` | Open settings (alternate) | `Ctrl+Shift+O` |
 | `launcher` | Open launcher | `LCtrl+RShift` |
 | `friends` | Open friends list | `Ctrl+Shift+Tab` |
+| `zoom` | Zoom | `RMB` |
 
 `friends` was added 2026-09-08 with the join list
-([steam-friends.md](steam-friends.md)).
+([steam-friends.md](steam-friends.md)). `zoom` was added 2026-09-14 with the
+magnifier ([zoom.md](zoom.md)); it is the one **held** action — see
+[Held actions](#held-actions-and-mouse-buttons) below — and it is inert until
+the Zoom area's own switch is on.
 
 **`Ctrl+Shift+Tab` belongs to `friends`.** That chord is Steam's own overlay
 chord for the friends list, so the muscle memory is already right — and for
@@ -106,6 +110,12 @@ Super order, then the remaining keys).
 - **Either-side modifiers**: `Ctrl`, `Alt`, `Shift`, `Super` — either hand.
 - **Sided modifiers**: `LCtrl`, `RCtrl`, `LShift`, `RShift`, `LAlt`, `RAlt`,
   `LSuper`, `RSuper` — that hand only.
+- **Mouse buttons** (2026-09-14): `LMB`, `MMB`, `RMB`, `Mouse4`, `Mouse5`,
+  carried as the `XKB_KEY_Pointer_Button1..5` keysyms (which no keyboard
+  produces) so the held set stays one set. A chord containing one completes
+  on the **button's** press only — the keyboard path's held set carries no
+  buttons — and a button is never swallowed. See
+  [Held actions](#held-actions-and-mouse-buttons).
 - **Anything else**: an xkb keysym name (`O`, `F5`, `Tab`, `Escape`), matched
   case-insensitively and normalised the way the hotkey layer normalises a real
   key event (upper-cased, `Meta`→`Super`, `ISO_Left_Tab`→`Tab`, …).
@@ -145,6 +155,33 @@ Not a flag anyone sets. `Keybinds.cpp`'s `ProcessKey()`:
 - **Any other chord** (`Ctrl+Shift+O`) fires on the **press** that completes it
   and **is** swallowed, so the letter never reaches the game. Its own release
   is swallowed too, tracked per key so the modifiers around it are unaffected.
+
+### Held actions and mouse buttons
+
+Added 2026-09-14 for the zoom ([zoom.md](zoom.md)), as a third rule that an
+action opts into with `ActionInfo::bHeld` rather than one the chord decides:
+
+- Fires on the **press** that completes its chord **as a subset** of the held
+  keys — `RMB` still zooms while `W` is held, because a gameplay key is pressed
+  mid-movement and the whole-set rule above would make it dead in practice.
+  Only a press of one of the chord's *own* keys completes it (`W` arriving
+  while `RMB` is down completes nothing), and a chord already down does not
+  fire again (key repeat, a second device).
+- Checked **after** every exact chord and the reserved one, so an exact
+  `Ctrl+Shift+C` on another action always wins over a held `C`.
+- Reports the **release** that breaks the chord (`KeyResult::bReleased`), which
+  is what makes "hold to zoom" possible. `ClearGestureState()` drops a held
+  chord too, and `wlserver_clear_pressed_hotkeys()` tells the zoom so.
+- A modifier-only chord is a plain press here, never a tap (`Alt` to zoom is
+  legitimate). Swallowed only when the completing key is a real key: a
+  modifier keeps its day job and a mouse button belongs to the game.
+
+Mouse buttons reach the engine from `wlserver_dispatch_mouse_button()` on the
+**game** branch (and on the overlay branch only while a rebind capture is
+armed, since the Shell is open then), with a held set of the keyboard ledger
+plus the buttons down. `Why not in the keyboard path's set as well:` a Right
+Shift *tap* while aiming (RMB held) must still open the shell, and it would
+not if the peak set carried the button.
 
 ### The peak set, and what it replaced
 

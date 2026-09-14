@@ -60,6 +60,7 @@ namespace gamescope::keybinds
 		ShellAlt,       // ... and its alternate chord; same effect
 		Launcher,       // the command palette alone over the game
 		Friends,        // the friends-you-can-join list (src/SteamFriends.h)
+		Zoom,           // the magnifier (src/Overlay/Zoom.h) -- a HELD action, see ActionInfo::bHeld
 		Count,
 	};
 
@@ -69,6 +70,15 @@ namespace gamescope::keybinds
 		const char *pszTitle;     // the row's label
 		const char *pszDefault;   // the compiled-in chord
 		const char *pszHelp;      // the row's required help text
+
+		// A HELD action (2026-09-14, the zoom): fires on the press that
+		// completes its chord and reports the RELEASE that breaks it
+		// (KeyResult::bReleased), so "hold to zoom" is possible. Because it
+		// is pressed mid-game, its chord matches as a SUBSET of the held
+		// keys -- RMB still zooms while W is held -- where every other
+		// action wants the exact set. A modifier-only chord is a plain
+		// press here, never a tap, and a mouse button is never swallowed.
+		bool bHeld = false;
 	};
 
 	const ActionInfo &Info( Action eAction );
@@ -126,6 +136,19 @@ namespace gamescope::keybinds
 
 	// Does this exact set of held keysyms complete the chord?
 	bool ChordMatches( const Chord &chord, const std::unordered_set<xkb_keysym_t> &setHeld );
+
+	// Is every term of the chord satisfied by SOME held keysym? Extra keys
+	// are ignored -- the held-action rule (ActionInfo::bHeld).
+	bool ChordHeld( const Chord &chord, const std::unordered_set<xkb_keysym_t> &setHeld );
+
+	// Mouse buttons are chord terms too (2026-09-14): `LMB`, `RMB`, `MMB`,
+	// `Mouse4`, `Mouse5`, carried as the XKB_KEY_Pointer_Button* keysyms so
+	// the held set stays one set. wlserver feeds a button press/release to
+	// ProcessKey() with this sym, and a chord containing one completes on
+	// the BUTTON's press only (the keyboard path's held set carries no
+	// buttons, so a tap on RShift while aiming still opens the shell).
+	xkb_keysym_t ButtonKeysym( uint32_t uLinuxButton );   // NoSymbol if not one of the five
+	bool IsButtonSym( xkb_keysym_t uSym );
 
 	// -------------------------------------------------------------------------
 	//  The reserved chord -- the way back from a bad binding
@@ -201,6 +224,8 @@ namespace gamescope::keybinds
 		bool   bFired   = false;   // an action completed on this event
 		Action eAction  = Action::Shell;
 		bool   bConsume = false;   // swallow the key: it must not reach the game
+		bool   bReleased = false;  // a HELD action's chord broke on this release (ActionInfo::bHeld)
+		Action eReleased = Action::Shell;
 	};
 
 	// `normalizedKeysym` is NormalizeKeysymForHotkey()'s output for this event,

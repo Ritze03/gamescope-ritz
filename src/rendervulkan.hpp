@@ -366,6 +366,23 @@ struct FrameInfo_t
 	// vulkan_composite(). (Was bBaseLayerReshaded.)
 	bool bBaseLayerEffectsApplied;
 
+	// THE ZOOM (2026-09-14, Overlay/Zoom.h, superdoc/features/zoom.md). A
+	// request, not a layer: paint_all() fills it and vulkan_composite()
+	// builds the layer itself, because the picture inside it has to be
+	// the base layer AFTER the effects pre-pass -- which exists only inside
+	// that function, in its private copy of this struct. It is inserted as
+	// layer 1, right above the game and beneath every overlay pushed here.
+	// Sizes are fractions of layer 0's on-screen rect, so nothing here
+	// depends on the output size; the composite resolves them.
+	struct Zoom_t
+	{
+		bool  bActive = false;
+		bool  bCircle = false;
+		float flWidth = 0.0f;    // of the on-screen width
+		float flHeight = 0.0f;   // of the on-screen height
+		float flFactor = 2.0f;   // magnification
+	} zoom;
+
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];
 	gamescope::Rc<CVulkanTexture> lut3D[EOTF_Count];
 
@@ -902,6 +919,12 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsBmapA;
 	gamescope::OwningRc<CVulkanTexture> effectsBmapB;
 
+	// The zoom's own texture (FrameInfo_t::Zoom_t): the projection at its
+	// on-screen size, ABGR8888, rewritten every zoomed frame by cs_zoom.comp
+	// and pushed as layer 1. Pooled like the effects buffers: re-created
+	// only when the projection's size changes.
+	gamescope::OwningRc<CVulkanTexture> zoomOutput;
+
 	// The settings Inspector's Adaptive Brightness before/after strip
 	// (cs_effects_preview.comp, src/Overlay/EffectPreview.cpp). The storage
 	// target the preview pass writes, plus host-mappable staging for it and
@@ -936,6 +959,7 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_BMAP_DOWN,   // cs_effects_bmap_down.comp: Brightness Map's 8x luma downsample
 	SHADER_TYPE_EFFECTS_BMAP_BLURH,  // cs_effects_bmap_blurh.comp: Brightness Map's separable Gaussian, horizontal
 	SHADER_TYPE_EFFECTS_BMAP_BLURV,  // cs_effects_bmap_blurv.comp: ... and vertical
+	SHADER_TYPE_ZOOM,                // cs_zoom.comp: the zoom's magnified, shaped, outlined copy of the base layer
 
 	SHADER_TYPE_COUNT
 };

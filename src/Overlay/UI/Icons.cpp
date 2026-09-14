@@ -227,6 +227,16 @@ namespace gamescope::ui
 			Line( { 2.5f, 12.0f }, { 9.0f, 12.0f } ),
 			Line( { 15.0f, 12.0f }, { 21.5f, 12.0f } ) } },
 
+		{ "system.zoom", 2, {
+			// A MAGNIFYING GLASS: a ring with a handle running off it to the
+			// lower right. Freehand (2026-09-14), later than the mockup like
+			// the three before it. Read against system.crosshair, its
+			// nearest neighbour: that one's arms cross the ring on all four
+			// sides and stop at an open centre; this ring is whole, and the
+			// one stroke leaves it at a single diagonal.
+			Circ( 10.0f, 10.0f, 6.5f ),
+			Line( { 14.8f, 14.8f }, { 21.0f, 21.0f } ) } },
+
 		{ "system.friends", 2, {
 			// A PERSON: a head over a pair of shoulders. Freehand
 			// (2026-09-08), like the crosshair and resolution glyphs before

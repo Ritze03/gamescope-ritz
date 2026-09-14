@@ -83,6 +83,7 @@
 // The crosshair's right-click auto-hide watches BTN_RIGHT on the game path
 // of wlserver_dispatch_mouse_button() -- see that function.
 #include "Overlay/Crosshair.h"
+#include "Overlay/Zoom.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -353,11 +354,24 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 	using namespace gamescope::keybinds;
 
 	const KeyResult res = ProcessKey( normalizedKeysym, press, setPressedKeySyms );
+
+	// A HELD action's chord came apart (Keybinds.h's ActionInfo::bHeld).
+	// Reported on the release, before the fired check, because a release
+	// never fires anything else that matters here.
+	if ( res.bReleased && res.eReleased == Action::Zoom )
+		gamescope::Zoom_OnChord( false );
+
 	if ( !res.bFired )
 		return res.bConsume;
 
 	switch ( res.eAction )
 	{
+		case Action::Zoom:
+			// The magnifier (Overlay/Zoom.cpp): hold or toggle is that
+			// module's own setting, so the press is all it needs to know.
+			gamescope::Zoom_OnChord( true );
+			break;
+
 		case Action::Shell:
 		case Action::ShellAlt:
 			gamescope::SettingsOverlay_ToggleVisible();
@@ -603,6 +617,39 @@ void wlserver_clear_pressed_hotkeys()
 	// it was armed, and none of them can be completed now: the release that
 	// would finish them went somewhere else.
 	gamescope::keybinds::ClearGestureState();
+
+	// The held zoom chord is one of those gestures: its release may never
+	// arrive here, so a hold-to-zoom must let go now rather than stay
+	// zoomed until the next press. A no-op in toggle mode.
+	gamescope::Zoom_OnChord( false );
+}
+
+// Mouse buttons as chord keys (2026-09-14, Keybinds.h's ButtonKeysym).
+// Only the five named buttons, and only when the press is going TO THE GAME
+// or a rebind capture is armed (the Shell is open then, so the button is on
+// the overlay branch) -- a click inside the Shell must not zoom the game
+// behind it. The held set handed to the engine is the keyboard ledger plus
+// the buttons down, so `Shift+RMB` is a chord; the keyboard path's set
+// carries no buttons, which is what keeps a Right Shift tap opening the
+// shell while the player is aiming. The engine's swallow verdict is ignored:
+// a mouse button is never taken from the game.
+static std::unordered_set<xkb_keysym_t> s_setHeldButtonSyms;
+static void wlserver_ritz_mouse_hotkey( uint32_t uLinuxButton, bool bPressed )
+{
+	const xkb_keysym_t uSym = gamescope::keybinds::ButtonKeysym( uLinuxButton );
+	if ( uSym == XKB_KEY_NoSymbol )
+		return;
+
+	if ( bPressed )
+		s_setHeldButtonSyms.insert( uSym );
+	else
+		s_setHeldButtonSyms.erase( uSym );
+
+	std::unordered_set<xkb_keysym_t> setHeld = s_setHeldButtonSyms;
+	for ( const auto &[ deviceKey, uKeySym ] : wlserver.mapPressedHotkeyKeys )
+		setHeld.emplace( uKeySym );
+
+	wlserver_check_ritz_keybinds( uSym, bPressed, setHeld );
 }
 
 // D22. A key event on THIS compositor's own keyboard, from a script.
@@ -982,6 +1029,8 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 		{
 			s_setMouseButtonsForwardedToOverlay.insert( uLinuxButton );
 			gamescope::SettingsOverlay_QueueMouseButton( uLinuxButton, true );
+			if ( gamescope::keybinds::CaptureActive() )
+				wlserver_ritz_mouse_hotkey( uLinuxButton, true );
 		}
 		else
 		{
@@ -996,6 +1045,8 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 			// notify so nothing here can delay the game's own event.
 			if ( uLinuxButton == BTN_RIGHT )
 				gamescope::Crosshair_NotifyRightButton( true );
+			// The zoom chord, on the same terms (see the function's note).
+			wlserver_ritz_mouse_hotkey( uLinuxButton, true );
 		}
 	}
 	else
@@ -1003,6 +1054,8 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 		if ( s_setMouseButtonsForwardedToOverlay.erase( uLinuxButton ) )
 		{
 			gamescope::SettingsOverlay_QueueMouseButton( uLinuxButton, false );
+			if ( s_setHeldButtonSyms.count( gamescope::keybinds::ButtonKeysym( uLinuxButton ) ) )
+				wlserver_ritz_mouse_hotkey( uLinuxButton, false );
 		}
 		else if ( s_setMouseButtonsForwardedToGame.erase( uLinuxButton ) )
 		{
@@ -1014,6 +1067,7 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 			// released after the Shell opened still restores the crosshair.
 			if ( uLinuxButton == BTN_RIGHT )
 				gamescope::Crosshair_NotifyRightButton( false );
+			wlserver_ritz_mouse_hotkey( uLinuxButton, false );
 		}
 		// else: unmatched release, drop -- see wlserver_dispatch_key()'s comment.
 	}
@@ -3871,6 +3925,14 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 
 	dx *= g_mouseSensitivity;
 	dy *= g_mouseSensitivity;
+
+	// The zoom's "match mouse speed" (Overlay/Zoom.h): while zoomed in the
+	// picture moves N times as far per count, so the motion is divided by N
+	// here, on top of --mouse-sensitivity, to keep the aim's feel. 1.0
+	// whenever the zoom is off.
+	const float flZoom = gamescope::Zoom_MouseScale();
+	dx *= flZoom;
+	dy *= flZoom;
 
 	// M2: the relative/grabbed-pointer path (SDL relative mouse mode, real
 	// libinput pointer motion via wlserver_handle_pointer_motion(), OpenVR,
