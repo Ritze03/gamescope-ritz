@@ -1,7 +1,7 @@
 #version 460
 
 // cs_effects_layer0.comp -- the bundled "Shaders" area effects (Shadow
-// Control, Saturation, Vibrancy, Pre-Sharpen, Brightness Map, Bloom, Adaptive
+// Control, Saturation, Vibrancy, Pre-Sharpen, Bloom, Adaptive
 // Brightness, Adaptive Gamma) as one native compute pre-pass over the base/game layer, at
 // source resolution,
 // before any scaling. Compiled at BUILD time by src/meson.build's glsl_generator into
@@ -41,7 +41,6 @@
 #include "descriptor_set.h"
 #include "effects_common.h"
 #include "effects_curve.h"
-#include "effects_bmap.h"
 
 layout(
   local_size_x = 8,
@@ -81,56 +80,7 @@ void main()
     else
         c = FsrRcasLoadF(ivec2(pos)).rgb;
 
-    // 4. Brightness Map (NEW 2026-09-09, EXPERIMENTAL). A purely SPATIAL
-    //    local tone operator: three dispatches already built a low-pass of
-    //    this frame's own luma at 1/8 resolution (cs_effects_bmap_down.comp,
-    //    then effects_bmap_blur.h horizontally and vertically), so all that
-    //    is left here is one bilinear read of it and one exponent.
-    //
-    //    THE OPERATOR, in one line: divide the picture by the map against a
-    //    mid-grey target, in the LOG-LOG domain rather than the linear one --
-    //
-    //      out = x ^ ( ln(target) / ln(clamp(map, min, max)) )
-    //
-    //    which puts a pixel sitting AT its neighbourhood's own level exactly
-    //    on the target, i.e. flattens the frame, while keeping 0 and 1 as
-    //    exact fixed points so nothing can clip. effects_curve.h's
-    //    BRIGHTNESS MAP block has the whole argument, including why the
-    //    literal out = x * target / map was not built (it leaves [0, 1] the
-    //    moment the gain exceeds 1/x, which is the blown-out failure
-    //    Adaptive Brightness's Whole-image mode is documented for).
-    //
-    //    WHERE IT SITS, AND WHY HERE. After Pre-Sharpen, BEFORE Bloom and
-    //    before both adaptive effects. Before Bloom because the map's own
-    //    dispatch reads the raw base layer through grade() alone, so putting
-    //    the operator here makes the map an exact description of the pixels
-    //    it is dividing rather than of a picture the glow has since changed.
-    //    Before the adaptive block for the reason Bloom's own note gives:
-    //    there is no feedback either way (cs_effects_measure.comp reads the
-    //    RAW layer), and the adaptive operators should treat whatever this
-    //    produced as the picture.
-    //
-    //    NO EXCLUSION WITH EITHER ADAPTIVE EFFECT, deliberately: this one
-    //    reads none of the measure pass's statistics, so it cannot fit a
-    //    curve to a median another effect has already moved -- the arithmetic
-    //    that forced the Adaptive Brightness / Adaptive Gamma exclusion
-    //    simply does not arise. See shader-effects.md for what stacking them
-    //    does and does not do.
-    //
-    //    The host clears this bit whenever the strength is 0 (and then does
-    //    not record the three dispatches at all), so the branch below is
-    //    also the "strength 0 is free as well as exact" path.
-    if ((u_flags & EFFECT_BRIGHTNESS_MAP) != 0u)
-    {
-        float level = bmap_level(bmap_sample(vec2(pos) + 0.5), u_bmapMin, u_bmapMax);
-        float gamma = bmap_gamma(level, u_bmapTarget);
-        float s     = clamp(u_bmapStrength, 0.0, 1.0);
-        c = vec3(c.r + (bmap_curve(c.r, gamma) - c.r) * s,
-                 c.g + (bmap_curve(c.g, gamma) - c.g) * s,
-                 c.b + (bmap_curve(c.b, gamma) - c.b) * s);
-    }
-
-    // 5. Bloom (NEW 2026-09-08): the glow. Everything expensive already
+    // 4. Bloom (NEW 2026-09-08): the glow. Everything expensive already
     //    happened -- three dispatches built an eighth-resolution buffer of
     //    the blurred bright pass (cs_effects_bloom_down.comp, then
     //    effects_bloom_blur.h horizontally and vertically) -- so all that is
@@ -167,7 +117,7 @@ void main()
                  bloom_apply(c.b, glow.b, u_bloomIntensity));
     }
 
-    // 6. Adaptive Brightness. The statistics are what cs_effects_measure.comp
+    // 5. Adaptive Brightness. The statistics are what cs_effects_measure.comp
     //    wrote to the history THIS frame (the host orders and barriers the
     //    two dispatches); the reset frame writes the measurements directly,
     //    so a fresh texture is never read here, and the measure pass
@@ -241,7 +191,7 @@ void main()
         }
     }
 
-    // 7. Adaptive Gamma (NEW 2026-09-08). The same smoothed statistics, and
+    // 6. Adaptive Gamma (NEW 2026-09-08). The same smoothed statistics, and
     //    ONE exponent: no levels gain, no shoulder, no white point. For an
     //    encoded value in 0..1 a pure exponent lands back in 0..1 with 0 and
     //    1 as exact fixed points, so this operator cannot clip at any

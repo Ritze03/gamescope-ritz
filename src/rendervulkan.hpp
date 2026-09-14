@@ -653,24 +653,6 @@ struct NativeEffectsState_t
 	float flBloomIntensity = 0.8f;    // 0..2, how bright the glow is
 	float flBloomRadius = 0.5f;       // 0..1 -> effects_curve.h's bloom_sigma()
 
-	// Brightness Map (NEW 2026-09-09, EXPERIMENTAL -- ConfigSchema.h's
-	// ReshadeBrightnessMapSettings): a low-pass of the frame's own luminance,
-	// inverted and applied, so a dark object on a bright field gets its own
-	// exposure instead of the field's. The SECOND spatial effect: when it is
-	// on, vulkan_composite() records three more dispatches (an 8x downsample
-	// of the graded luma, then a separable Gaussian) over its own pair of
-	// eighth-resolution scratch textures. It reads none of the measure pass's
-	// statistics -- no histogram, no EMA -- so, like Bloom, it moves
-	// AnyEnabled() and NOT NeedsStatistics(), and unlike Adaptive Gamma it
-	// has NO exclusion with Adaptive Brightness. See
-	// superdoc/features/shader-effects.md.
-	bool  bBrightnessMap = false;
-	float flBmapStrength = 0.5f;      // 0..1, the map's opacity; 0 = exact identity
-	float flBmapRadius = 0.25f;       // 0..2 -> effects_curve.h's bmap_sigma()
-	float flBmapTarget = 0.5f;        // 0.1..0.9, what the frame is flattened toward
-	float flBmapMin = 0.10f;          // 0.02..0.50, the map's floor
-	float flBmapMax = 0.80f;          // 0.50..0.90, the map's ceiling
-
 	// True when some effect needs the measure pass's statistics, i.e. when
 	// the history texture has to be kept alive and the measure dispatch
 	// recorded. Both adaptive effects read it; the other five do not --
@@ -686,7 +668,7 @@ struct NativeEffectsState_t
 	bool AnyEnabled() const
 	{
 		return bShadowLift || bSaturation || bVibrancy || bPreSharpen || bBloom
-			|| bBrightnessMap || bAdaptiveBrightness || bAdaptiveGamma;
+			|| bAdaptiveBrightness || bAdaptiveGamma;
 	}
 };
 extern NativeEffectsState_t g_nativeEffects;
@@ -917,16 +899,6 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsBloomA;
 	gamescope::OwningRc<CVulkanTexture> effectsBloomB;
 
-	// Brightness Map's own ping-pong pair (2026-09-09), at 1/8 of the base
-	// layer's size in each axis and used exactly the way the glow buffers
-	// above are: cs_effects_bmap_down.comp writes A, the horizontal blur
-	// A -> B, the vertical blur B -> A, and cs_effects_layer0.comp samples A.
-	// A SECOND pair rather than sharing Bloom's, because the two effects are
-	// independent and both can be on in the same frame. Pure scratch, so the
-	// same first-sight UNDEFINED discard is correct here too.
-	gamescope::OwningRc<CVulkanTexture> effectsBmapA;
-	gamescope::OwningRc<CVulkanTexture> effectsBmapB;
-
 	// The zoom's own texture (FrameInfo_t::Zoom_t): the projection at its
 	// on-screen size, ABGR8888, rewritten every zoomed frame by cs_zoom.comp
 	// and pushed as layer 1. Pooled like the effects buffers: re-created
@@ -964,9 +936,6 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_BLOOM_DOWN,  // cs_effects_bloom_down.comp: Bloom's bright pass + 8x downsample
 	SHADER_TYPE_EFFECTS_BLOOM_BLURH, // cs_effects_bloom_blurh.comp: Bloom's separable Gaussian, horizontal
 	SHADER_TYPE_EFFECTS_BLOOM_BLURV, // cs_effects_bloom_blurv.comp: ... and vertical
-	SHADER_TYPE_EFFECTS_BMAP_DOWN,   // cs_effects_bmap_down.comp: Brightness Map's 8x luma downsample
-	SHADER_TYPE_EFFECTS_BMAP_BLURH,  // cs_effects_bmap_blurh.comp: Brightness Map's separable Gaussian, horizontal
-	SHADER_TYPE_EFFECTS_BMAP_BLURV,  // cs_effects_bmap_blurv.comp: ... and vertical
 	SHADER_TYPE_ZOOM,                // cs_zoom.comp: the zoom's magnified, shaped, outlined copy of the base layer
 
 	SHADER_TYPE_COUNT

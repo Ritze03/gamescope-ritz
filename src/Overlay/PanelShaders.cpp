@@ -97,20 +97,6 @@ namespace gamescope
 		e.flBloomIntensity = r.bloom.intensity;
 		e.flBloomRadius    = r.bloom.radius;
 
-		// Brightness Map (2026-09-09, EXPERIMENTAL). Like Bloom, the three
-		// dispatches that build the map are recorded only while this is set,
-		// so the switch is genuinely "do this work or don't". No exclusion
-		// with either adaptive effect is applied here or anywhere else --
-		// this one reads none of the measure pass's statistics, so the
-		// double-correction argument that forced the Adaptive Brightness /
-		// Adaptive Gamma radio does not apply to it.
-		e.bBrightnessMap = r.brightness_map.enabled;
-		e.flBmapStrength = r.brightness_map.strength;
-		e.flBmapRadius   = r.brightness_map.radius;
-		e.flBmapTarget   = r.brightness_map.target_luminance;
-		e.flBmapMin      = r.brightness_map.min_brightness;
-		e.flBmapMax      = r.brightness_map.max_brightness;
-
 		// Adaptive Brightness: consumed by cs_effects_measure.comp (the
 		// adapt maths) and cs_effects_layer0.comp (the visible gain).
 		e.bAdaptiveBrightness = r.adaptive_brightness.enabled;
@@ -209,12 +195,14 @@ namespace gamescope
 	// fifth; Adaptive Gamma (2026-09-08) is the sixth; Bloom (2026-09-08) is
 	// the seventh -- and the first one that is not a per-pixel function, so
 	// it is also the first whose switch turns extra DISPATCHES on rather
-	// than only a flag bit; Brightness Map (2026-09-09) is the eighth and
-	// the second of those.)
+	// than only a flag bit. An eighth, the experimental Brightness Map
+	// effect (2026-09-09), briefly held the second spatial slot; it was
+	// removed 2026-09-14 at the user's request -- see
+	// superdoc/features/shader-effects.md's History note.)
 	//
-	// THE SIX BUDGET (now eight), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
+	// THE SIX BUDGET (now seven), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
 	// ON IT. Saturation has 2 params, Vibrancy 1, Pre-Sharpen 1, Bloom 3
-	// (2026-09-08), Brightness Map 5 (2026-09-09), Adaptive Brightness 8,
+	// (2026-09-08), Adaptive Brightness 8,
 	// Adaptive Gamma 7, Shadow Control
 	// 1 -- the maximum a row
 	// may own before Registry.cpp aborts registration and tells the author
@@ -377,18 +365,17 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
 		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness gamma contrast "
-		            "exposure shadow control lift darkness bloom glow brightness map local tone" );
+		            "exposure shadow control lift darkness bloom glow local tone" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.saturation.enabled ? 1 : 0 )
 			            + ( r.vibrancy.enabled ? 1 : 0 )
 			            + ( r.pre_sharpen.enabled ? 1 : 0 )
 			            + ( r.bloom.enabled ? 1 : 0 )
-			            + ( r.brightness_map.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
 			            + ( r.adaptive_gamma.enabled ? 1 : 0 )
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 8 effects on";
+			return std::to_string( n ) + " of 7 effects on";
 		} );
 
 		// GroupCount, not Group: SPEC §2.5 lets a band carry a `n / m` count
@@ -560,138 +547,6 @@ namespace gamescope
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )   // 21 positions
 				.Default( BloomDefaults{}.radius );
-
-		// BRIGHTNESS MAP -- NEW 2026-09-09, EXPERIMENTAL. The user's
-		// request, verbatim: "Adaptive Gamma: When the world is rather
-		// bright and player models are rather dark, the player models turn
-		// almost black. It should be more fine grained and needs some type
-		// of way, to adjust it super smooth and dynamic. Lets add an
-		// experimental mode, that creates a brightness map of the whole
-		// image and then adjusts based on that. It should invert that map
-		// and then apply it to the image. This should make a really uniform
-		// image. The 'opacity' of this map (strength) should be adjustable.
-		// It should also make it easier, to adjust the min and max
-		// brightness within the image. It should be a seperate shader in
-		// the GUI"
-		//
-		// `Why "(experimental)" is in the TITLE and not only in the help:`
-		// the sheet row shows the title and nothing else until a user hovers
-		// or selects it, and the request itself calls this an experimental
-		// mode. A caveat that only appears on hover is a caveat most people
-		// never see. It is also honest: this is the only effect here whose
-		// signature artefact (a halo) is exposed as a control rather than
-		// engineered away, so the label is doing real work.
-		//
-		// `Where it sits in this band, and why:` immediately after Bloom,
-		// because Bloom and this are the two effects that add DISPATCHES
-		// rather than a flag bit, and because the pipeline runs Brightness
-		// Map and then Bloom -- so the spatial pair reads together, the way
-		// Saturation/Vibrancy and Pre-Sharpen/Bloom already do. It sits
-		// above the two adaptive rows for the same reason: everything below
-		// it is tone driven by the frame's STATISTICS, and this one is
-		// driven by the frame's LAYOUT.
-		//
-		// `Why no exclusion with Adaptive Brightness or Adaptive Gamma:`
-		// those two exclude each other because they aim the same mid-tones
-		// at a target from the SAME pre-effect statistics, so the second
-		// fits its curve to a median the first has already moved. This
-		// effect reads none of those statistics -- its reference is the
-		// local map under each pixel, which is a property of the frame's
-		// layout rather than of its histogram -- so there is no double
-		// correction to prevent. Stacking is documented rather than blocked;
-		// see shader-effects.md for what it does and the one combination it
-		// warns about (this at high strength on top of Adaptive Gamma's own
-		// Local adaptation, which is two local operators at two scales).
-		//
-		// FIVE PARAMS, against kParamBudget's 8. Strength, Radius, Target
-		// brightness, Min brightness and Max brightness. The request names
-		// three of them (strength, min, max); Radius is here because the
-		// halo is unavoidable and the user must own the trade rather than
-		// have it hidden in a constant; Target because it is both what
-		// "uniform" means and the operator's exact neutral point, and
-		// because both sibling tone rows already have one under that name.
-		// THE BUDGET WAS NOT RAISED.
-		using BmapDefaults = config::ReshadeBrightnessMapSettings;
-		a.Switch( "image.shaders.brightness_map", "Brightness Map (experimental)",
-			ui::AnyBind::Of<bool>(
-				[]{ return Cfg().reshade.brightness_map.enabled; },
-				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.brightness_map.enabled, b ); } ) )
-			.Key( "reshade.brightness_map.enabled" )
-			.Help( "Experimental. Evens the picture out: it measures how bright each small "
-			       "area of the frame is and lifts the dark ones while bringing the bright "
-			       "ones down, so a dark player model on a bright background stops turning "
-			       "black. Fine enough to see an object rather than half the screen." )
-			.Default( BmapDefaults{}.enabled )
-			.Keywords( "brightness map experimental local tone flatten uniform even dark "
-			           "models silhouette exposure" )
-			.DisabledUnless( EffectsUsable, kSdrOnly )
-			.Param( "strength", "Strength",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.brightness_map.strength; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.brightness_map.strength, f ); } ) )
-				.Key( "reshade.brightness_map.strength" )
-				.Help( "How much of the evening-out is applied. 0 leaves the picture exactly "
-				       "as it was; 1 flattens every area onto Target brightness, which is "
-				       "uniform but can look washed out." )
-				.Range( 0.0f, 1.0f )
-				.Step( 0.05f )   // 21 positions; 0.50, the default, is on the grid
-				.Default( BmapDefaults{}.strength )
-			.Param( "radius", "Radius",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.brightness_map.radius; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.brightness_map.radius, f ); } ) )
-				.Key( "reshade.brightness_map.radius" )
-				.Help( "How large an area counts as \"here\". Small sees small objects but "
-				       "leaves a visible glow around hard edges; large is cleaner but stops "
-				       "being able to see anything player-sized. 0 is as fine as it goes -- "
-				       "it cannot be pixel-sharp, because the effect works by comparing the "
-				       "picture with a blurred copy of itself." )
-				// 0..2 since 2026-09-10: the top was doubled ("Also increase
-				// the max radius to 2.0 effectively") and the bottom halved
-				// ("Cant we make it, so a Radius of 0 is actually pixel
-				// perfect? It looks like there is a small radius still").
-				// effects_curve.h's bmap_sigma() keeps every value from 0.25
-				// up meaning exactly what it did, so a saved profile is
-				// untouched.
-				.Range( 0.0f, 2.0f )
-				// 41 positions. Not widened to keep the count down: the fine
-				// end is the half of this slider the user is actually
-				// choosing in, and 0.25 -- the default -- has to stay on the
-				// grid.
-				.Step( 0.05f )
-				.Default( BmapDefaults{}.radius )
-			.Param( "target", "Target brightness",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.brightness_map.target_luminance; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.brightness_map.target_luminance, f ); } ) )
-				.Key( "reshade.brightness_map.target_luminance" )
-				.Help( "The brightness every area is evened out toward. An area already this "
-				       "bright is left exactly alone." )
-				.Range( 0.1f, 0.9f )
-				.Step( 0.05f )   // 17 positions; 0.50, the default, is on the grid
-				.Default( BmapDefaults{}.target_luminance )
-			.Param( "min_brightness", "Min brightness",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.brightness_map.min_brightness; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.brightness_map.min_brightness, f ); } ) )
-				.Key( "reshade.brightness_map.min_brightness" )
-				.Help( "How dark an area is allowed to count as. Anything darker than this is "
-				       "treated as this bright, so raising it stops the very darkest corners "
-				       "from being lifted -- and from bringing their noise up with them." )
-				.Range( 0.02f, 0.50f )
-				.Step( 0.02f )   // 25 positions; 0.10, the default, is on the grid
-				.Default( BmapDefaults{}.min_brightness )
-			.Param( "max_brightness", "Max brightness",
-				ui::AnyBind::Of<float>(
-					[]{ return Cfg().reshade.brightness_map.max_brightness; },
-					[]( float f ) { SetEffectFloat( &Cfg().reshade.brightness_map.max_brightness, f ); } ) )
-				.Key( "reshade.brightness_map.max_brightness" )
-				.Help( "How bright an area is allowed to count as. Anything brighter is "
-				       "treated as this bright, so lowering it stops the brightest areas from "
-				       "being pulled down as hard. It can never go below Min brightness." )
-				.Range( 0.50f, 0.90f )
-				.Step( 0.02f )   // 21 positions; 0.80, the default, is on the grid
-				.Default( BmapDefaults{}.max_brightness );
 
 		// Request #3 (2026-09-04): "a darkness booster for dark games" --
 		// titled "Shadow Control" (renamed from "Shadow lift" 2026-09-05);

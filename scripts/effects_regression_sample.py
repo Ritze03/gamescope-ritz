@@ -25,8 +25,7 @@ Subcommands
                                          must approach the settled value monotonically
     ablog   <file> <what>                per-frame `effects_ab_log` lines (gamescope's
                                          console log); `what` is static | pan | transition
-                                         | panlocal | agstatic | agpan | bind | bloomstatic |
-                                         bmapstatic
+                                         | panlocal | agstatic | agpan | bind | bloomstatic
                                          (agstatic/agpan/bind are Adaptive Gamma's,
                                          2026-09-08: the same stability bars applied to
                                          its ONE exponent, plus an INFO line naming the
@@ -73,27 +72,6 @@ Subcommands
                                          scene: turning bloom on must not widen the
                                          frame mean's frame-to-frame spread (the
                                          threshold-shimmer question, as a number)
-    modelsoff <image> <scene>           the `models` / `modelsinv` control: every box and
-                                        the field read back what the client painted
-    modelsid <image-off> <image-on-0> <scene>
-                                        Brightness Map at strength 0, with the switch ON,
-                                        is bit-identical to the switch being off
-    modelslift <label> <scene> <min-lift> <img...>
-                                        THE HEADLINE CHECK: a sweep of Strength on the
-                                        four-object scene -- every box moves toward the
-                                        target monotonically, the largest by at least
-                                        <min-lift> counts, and the far field never
-                                        overshoots the target
-    modelsinfo <label> <img...>         INFO: the same per-object-size table, no verdict
-    modelspin <label> <image> <b16> <b32> <b64> <b128> <far> <tol>
-                                        the COMPATIBILITY PIN: an existing Radius must
-                                        still produce the picture it produced before
-                                        the slider was widened (2026-09-10)
-    bmaphalo <label> <image> <scene> <max-amp>
-                                        Brightness Map's halo out from a hard edge: no
-                                        ring (the profile must be monotone) and the
-                                        amplitude within <max-amp> counts
-    bmapline <label> <img...>           INFO: the halo profile of each capture in a sweep
     darkfloor <image-off> <image-on> <label>
                                         Dark Floor (2026-09-14) on the `blackout` scene:
                                         graded stays within 3 counts of raw on a coarse
@@ -155,30 +133,6 @@ COLOR_BANDS = [
     (255,  60,   0),
 ]
 HALO_FIELDS = {"halobox": 200, "haloinv": 15}
-
-
-# ---- The "models" scenes (2026-09-09, Brightness Map) ---------------------
-#
-# A flat field with four boxes whose widths step 16 / 32 / 64 / 128 px in the
-# 1280x720 reference frame, each three times as tall as it is wide (a
-# player's proportions). Mirrors tests/effects_scene_client.c's kModelW /
-# kModelCX / kModelCY exactly; change one, change both.
-#
-# `models` is the user's reported case -- dark (30) objects on a bright (200)
-# world -- and `modelsinv` its inverse. Four sizes because "the smallest
-# feature the map can resolve" is a curve: the halo scenes' single 320 px box
-# is trivially resolvable by every operator here and so says nothing about a
-# player model.
-MODEL_W = [16, 32, 64, 128]
-MODEL_CX = [200, 440, 720, 1060]
-MODEL_CY = 360
-MODEL_FIELDS = {"models": (200, 30), "modelsinv": (30, 200)}
-# The far field: the top-left corner, clear of every box even at the tallest.
-MODEL_FAR_BOX = (40, 40, 160, 140)
-# The near field: the flat gap between box 0 and box 1, on the boxes' own
-# centre line -- close enough to both to carry whatever halo the operator
-# leaves, which is the point of sampling it.
-MODEL_NEAR_BOX = (300, 340, 380, 380)
 
 
 def emit(ok, name, detail):
@@ -900,22 +854,17 @@ def cmd_ablog(args):
                   f"px p2p={d['px']:.1f} {bounds}; gamma={last['gamma']:.4f} px={last['px']:.0f}; "
                   f"local={last['local']:.2f} map {last['lmin'] * 255:.1f}..{last['lmax'] * 255:.1f} codes "
                   f"exponent {last['gainlo']:.3f}..{last['gainhi']:.3f}; bind={last['bindtext']}")
-    elif what in ("bloomstatic", "bmapstatic"):
-        # A SPATIAL effect on a perfectly still frame. Neither Bloom nor
-        # Brightness Map reads any of the measure pass's statistics, so
-        # nothing here is about adaptation -- what is being asserted is that
-        # the three extra dispatches are a deterministic function of the
-        # frame: same input, same output, every composite, to the code value.
-        # A downsample that sampled the source sparsely, or a blur whose
-        # weights depended on anything but the uniform, would show up here as
-        # a moving probe pixel. It is the sharper test for Brightness Map,
-        # whose map is one to two orders of magnitude finer than the glow's
-        # and which is a TONE operator, so any wobble is the exposure
-        # breathing rather than a glow flickering.
+    elif what == "bloomstatic":
+        # A SPATIAL effect on a perfectly still frame. Bloom reads none of
+        # the measure pass's statistics, so nothing here is about adaptation
+        # -- what is being asserted is that the three extra dispatches are a
+        # deterministic function of the frame: same input, same output,
+        # every composite, to the code value. A downsample that sampled the
+        # source sparsely, or a blur whose weights depended on anything but
+        # the uniform, would show up here as a moving probe pixel.
         last = rows[-1]
         d = dict(rp98=p2p(rows, "rp98"), px=p2p(rows, "px"))
-        name = ("bloom-stability-static" if what == "bloomstatic"
-                else "bmap-stability-static") + suffix
+        name = "bloom-stability-static" + suffix
         ok = d["rp98"] <= 0.0 and d["px"] <= 0.0
         detail = (f"{len(rows)} frames: raw p98 p2p={d['rp98']:.6f} (must be 0), "
                   f"px p2p={d['px']:.1f} (must be 0); px={last['px']:.0f}")
@@ -1167,186 +1116,6 @@ def cmd_colorshape(args):
     sys.exit(0 if emit(not failed, "colors-shape", detail) else 1)
 
 
-def model_regions(img):
-    """Every box's interior mean, plus the near and far field. The inset is
-    deliberately large relative to the smallest box (16 px wide -> a 6 px
-    core) so a one-pixel scaling slip cannot let the field into the sample."""
-    sx, sy = img.width / W, img.height / H
-    out = {}
-    for i, w in enumerate(MODEL_W):
-        bw = int(w * sx)
-        bh = min(int(w * 3 * sy), img.height)
-        cx, cy = int(MODEL_CX[i] * sx), int(MODEL_CY * sy)
-        out[f"box{w}"] = grey(region_mean(
-            img, (cx - bw // 2, cy - bh // 2, cx + bw // 2, cy + bh // 2),
-            inset=max(2, bw // 5)))
-    x0, y0, x1, y1 = MODEL_FAR_BOX
-    out["far"] = grey(region_mean(img, (int(x0 * sx), int(y0 * sy), int(x1 * sx), int(y1 * sy))))
-    x0, y0, x1, y1 = MODEL_NEAR_BOX
-    out["near"] = grey(region_mean(img, (int(x0 * sx), int(y0 * sy), int(x1 * sx), int(y1 * sy))))
-    return out
-
-
-def fmt_models(v):
-    return " ".join(f"box{w}={v[f'box{w}']:.1f}" for w in MODEL_W) + \
-        f" far={v['far']:.1f} near={v['near']:.1f}"
-
-
-def cmd_modelsoff(args):
-    """modelsoff <image> <scene> -- the control. With the effect off every box
-    and the field must read back what the client painted, so every number the
-    checks below produce is a statement about the operator rather than about
-    the capture path or the box geometry."""
-    image, scene = args
-    field, box = MODEL_FIELDS[scene]
-    v = model_regions(load(image))
-    checks = [(f"far field is {field} ({v['far']:.1f})", abs(v["far"] - field) <= 2.0),
-              (f"near field is {field} ({v['near']:.1f})", abs(v["near"] - field) <= 2.0)]
-    for w in MODEL_W:
-        checks.append((f"box{w} is {box} ({v[f'box{w}']:.1f})", abs(v[f"box{w}"] - box) <= 3.0))
-    failed = [c for c, ok in checks if not ok]
-    sys.exit(0 if emit(not failed, f"bmap-{scene}-off",
-                       ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt_models(v)) else 1)
-
-
-def cmd_modelsid(args):
-    """modelsid <image-off> <image-on-strength0> <scene> -- STRENGTH 0 IS THE
-    ORIGINAL IMAGE, on real captures rather than only in the unit tests. The
-    switch is ON in the second capture and the strength is 0, which is the
-    state a user reaches by dragging the slider to the bottom; every region
-    must be identical to the effect being off outright."""
-    a, b, scene = args
-    va, vb = model_regions(load(a)), model_regions(load(b))
-    worst = max(abs(va[k] - vb[k]) for k in va)
-    sys.exit(0 if emit(worst <= 0.05, f"bmap-{scene}-identity",
-                       f"worst difference {worst:.3f} counts; off: {fmt_models(va)} | "
-                       f"strength 0: {fmt_models(vb)}") else 1)
-
-
-def cmd_modelslift(args):
-    """modelslift <label> <scene> <min-lift> <img...> -- THE HEADLINE CHECK.
-
-    The user's report is that a dark player model on a bright world "turns
-    almost black". These captures are the same scene at increasing Strength,
-    and three things have to be true of them:
-
-      * EVERY box moves MONOTONICALLY. That is the "opacity" property and it
-        holds for every object size, including the ones the map is too coarse
-        to see -- those move the other way (they take their background's
-        correction), which is a resolution limit and not a broken slider, and
-        the direction is printed per box so the limit is visible rather than
-        hidden.
-      * The LARGEST box -- the one the map certainly resolves at every
-        Radius -- moves toward the target by at least <min-lift> counts. This
-        is "the effect does the thing", and it is asserted on the size that
-        does not depend on where the Radius slider happens to sit.
-      * The far field, which has no object anywhere near it, does not
-        OVERSHOOT the target: this operator flattens toward the target, so a
-        field that crossed it would mean the sign of the correction is wrong.
-
-    The per-size numbers are printed whatever the verdict, because "which
-    sizes did it reach" is the measurement this scene exists to produce.
-    """
-    label, scene, min_lift = args[0], args[1], float(args[2])
-    field, box = MODEL_FIELDS[scene]
-    tgt = 0.5 * 255.0
-    vals = [model_regions(load(p)) for p in args[3:]]
-    checks = []
-    resolved, missed = [], []
-    for w in MODEL_W:
-        seq = [v[f"box{w}"] for v in vals]
-        up = seq[-1] >= seq[0]
-        mono = all((b >= a - 0.6) if up else (b <= a + 0.6) for a, b in zip(seq, seq[1:]))
-        checks.append((f"box{w} is monotone in Strength ({' -> '.join(f'{x:.1f}' for x in seq)})",
-                       mono))
-        # "Resolved" = the box moved toward the target, i.e. the map saw the
-        # object rather than its background.
-        toward = (seq[-1] > seq[0]) == (box < tgt)
-        (resolved if toward else missed).append(w)
-    big = [v[f"box{MODEL_W[-1]}"] for v in vals]
-    moved = (big[-1] - big[0]) if box < tgt else (big[0] - big[-1])
-    checks.append((f"box{MODEL_W[-1]} moves toward the target by >= {min_lift:.0f} counts "
-                   f"({moved:+.1f})", moved >= min_lift))
-    far = [v["far"] for v in vals]
-    checks.append((f"the far field does not overshoot the target "
-                   f"({' -> '.join(f'{x:.1f}' for x in far)})",
-                   all(x >= tgt - 12.0 for x in far) if field > tgt
-                   else all(x <= tgt + 12.0 for x in far)))
-    failed = [c for c, ok in checks if not ok]
-    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + \
-        f"map resolved {resolved} px, missed {missed} px; " + \
-        " | ".join(fmt_models(v) for v in vals)
-    sys.exit(0 if emit(not failed, label, detail) else 1)
-
-
-def cmd_modelsinfo(args):
-    """modelsinfo <label> <img...> -- INFO: the same per-size table, printed
-    without a verdict. For the radius sweep, where the interesting statement
-    is WHICH SIZES the map still resolves at each setting rather than a
-    threshold anybody could pick honestly in advance."""
-    label = args[0]
-    print(f"INFO\t{label}\t" + " | ".join(fmt_models(model_regions(load(p))) for p in args[1:]))
-    sys.exit(0)
-
-
-def cmd_modelspin(args):
-    """modelspin <label> <image> <b16> <b32> <b64> <b128> <far> <tol> -- THE
-    COMPATIBILITY PIN (2026-09-10).
-
-    The Radius slider was widened to 0..2 and its floor made finer, and the
-    promise made to every saved profile is that a stored Radius from 0.25 up
-    still produces the same picture. The unit tests pin the sigma the curve
-    returns; this pins the PICTURE, against numbers measured on the shipped
-    build before the change (build-release/verify-shots/
-    brightness-map-2026-09-09/captures/21-models-bmap-radius-*.png). If a
-    later change to the map's reduction, its kernel or its sigma curve moves
-    what an existing setting looks like, it fails here."""
-    label, image = args[0], args[1]
-    want = [float(x) for x in args[2:7]]
-    tol = float(args[7])
-    v = model_regions(load(image))
-    got = [v[f"box{w}"] for w in MODEL_W] + [v["far"]]
-    names = [f"box{w}" for w in MODEL_W] + ["far"]
-    failed = [f"{n} {g:.1f} != {w:.1f}" for n, g, w in zip(names, got, want)
-              if abs(g - w) > tol]
-    worst = max(abs(g - w) for g, w in zip(got, want))
-    sys.exit(0 if emit(not failed, label,
-                       ("FAILED: " + "; ".join(failed) + "; " if failed else "")
-                       + f"worst deviation {worst:.1f} of {tol:.1f} counts allowed; "
-                       + fmt_models(v)) else 1)
-
-
-def cmd_bmaphalo(args):
-    """bmaphalo <label> <image> <scene> <max-amp> -- the halo, on the same
-    hard-edged 320 px box the Local-adaptation checks use, but sampled on
-    Bloom's finer distance list because this operator's map is one to two
-    orders of magnitude tighter than that one's.
-
-    Two things, and they are different things. NO RING is the hard property:
-    the map is a non-negative, symmetric, unimodal blur of the image, and such
-    a kernel maps a step to a MONOTONE ramp, so a turning point in the profile
-    would mean something is wrong -- this is the check that would catch a
-    later "improvement" (an edge-aware or sharpened map) reintroducing a rim.
-    AMPLITUDE is the soft one and its budget is per capture, because it is
-    exactly the trade-off the Radius slider exists to let the user make."""
-    label, image, scene, max_amp = args[0], args[1], args[2], float(args[3])
-    prof = bloom_profile(load(image))
-    far = prof[-1]
-    amp = prof[0] - far
-    diffs = [b - a for a, b in zip(prof, prof[1:])]
-    signs = [1 if d > 0.75 else (-1 if d < -0.75 else 0) for d in diffs]
-    nz = [x for x in signs if x != 0]
-    monotone = all(x == nz[0] for x in nz) if nz else True
-    body = f"far={far:.1f} amp={amp:+.1f} counts; " + \
-        " ".join(f"d{d}={v:.1f}" for d, v in zip(BLOOM_DISTANCES, prof))
-    checks = [("no ring (the profile is monotone out from the edge)", monotone),
-              (f"halo amplitude within {max_amp:.0f} counts", abs(amp) <= max_amp)]
-    failed = [c for c, ok in checks if not ok]
-    sys.exit(0 if emit(not failed, label,
-                       ("FAILED: " + "; ".join(failed) + "; " if failed else "")
-                       + f"monotone={monotone} " + body) else 1)
-
-
 def cmd_darkfloor(args):
     """darkfloor <image-off> <image-on> <label> -- the DARK FLOOR headline
     property (2026-09-14) on the near-black `blackout` scene
@@ -1380,20 +1149,6 @@ def cmd_darkfloor(args):
     sys.exit(0 if emit(ok, f"dark-floor-{label}", detail) else 1)
 
 
-def cmd_bmapline(args):
-    """bmapline <label> <img...> -- INFO: the halo profile of each capture in
-    a sweep, one line, so the radius/strength trade can be read as a table
-    rather than as a pass or a fail."""
-    label = args[0]
-    out = []
-    for p in args[1:]:
-        prof = bloom_profile(load(p))
-        out.append(f"amp={prof[0] - prof[-1]:+.1f} far={prof[-1]:.1f} d4={prof[0]:.1f} "
-                   f"d16={prof[2]:.1f} d64={prof[4]:.1f}")
-    print(f"INFO\t{label}\t" + " | ".join(out))
-    sys.exit(0)
-
-
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -1406,10 +1161,6 @@ def main():
      "bloomflat": cmd_bloomflat, "bloomline": cmd_bloomline,
      "bloomsame": cmd_bloomsame, "bloomjitter": cmd_bloomjitter,
      "bloomnoclip": cmd_bloomnoclip,
-     "modelsoff": cmd_modelsoff, "modelsid": cmd_modelsid,
-     "modelslift": cmd_modelslift, "modelsinfo": cmd_modelsinfo,
-     "modelspin": cmd_modelspin,
-     "bmaphalo": cmd_bmaphalo, "bmapline": cmd_bmapline,
      "darkfloor": cmd_darkfloor}[cmd](args)
 
 

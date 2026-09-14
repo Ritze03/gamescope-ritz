@@ -25,15 +25,6 @@
 // shaders and vulkan_composite()'s pre-pass block cannot disagree.
 #define VKR_EFFECTS_BLOOM_SLOT 2u
 
-// cs_effects_bmap_*.comp / cs_effects_layer0.comp (Brightness Map,
-// 2026-09-09): the eighth-resolution BRIGHTNESS MAP -- a low-pass of the
-// frame's own luma that the per-pixel pass divides the picture by. Built by
-// its own ping-pong pair exactly the way the glow buffer above is, and a
-// SEPARATE slot rather than sharing that one because the two effects are
-// independent and can both be on in the same frame. Named via this constant
-// on both sides so the shaders and vulkan_composite() cannot disagree.
-#define VKR_EFFECTS_BMAP_SLOT 3u
-
 #define VKR_LUT3D_COUNT 2 // Must match EOTF_Count
 
 #endif

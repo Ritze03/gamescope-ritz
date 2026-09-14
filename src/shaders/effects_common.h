@@ -75,33 +75,6 @@ uniform effects_t {
     float u_bloomThreshold;   // 0.0..1.0, where a pixel starts to glow
     float u_bloomIntensity;   // 0.0..2.0, how bright the glow is; 0 = off
     float u_bloomRadius;      // 0.0..1.0 -> effects_curve.h's bloom_sigma()
-
-    // ---- Brightness Map (NEW 2026-09-09, EXPERIMENTAL) ----
-    // The second SPATIAL effect, and the only one that reads a low-pass of
-    // the frame's own luminance rather than a statistic of it: three extra
-    // dispatches build the map (cs_effects_bmap_down.comp, then
-    // effects_bmap_blur.h twice) and cs_effects_layer0.comp divides the
-    // picture by it against u_bmapTarget. It touches NOTHING the measure
-    // pass produces -- no histogram, no percentile, no EMA -- which is why
-    // it has no exclusion with either adaptive effect. The scalar half of
-    // the maths is effects_curve.h's BRIGHTNESS MAP block, so the unit
-    // tests assert it on the same text. Every field is masked to its
-    // neutral value by the host when the effect is off, the same rule the
-    // Bloom fields above follow.
-    float u_bmapTarget;       // 0.1..0.9, the level everything is flattened toward
-    float u_bmapStrength;     // 0.0..1.0, the map's opacity; 0 = exact identity
-    float u_bmapMin;          // 0.02..0.50, the map's floor (see bmap_level())
-    float u_bmapMax;          // 0.50..0.90, the map's ceiling
-    float u_bmapRadius;       // 0.0..2.0 -> effects_curve.h's bmap_sigma()
-    // The map's reduction THIS FRAME -- 4, 8 or 16, chosen by the host from
-    // the Radius with effects_curve.h's bmap_down(). It is a uniform rather
-    // than a constant because a 24:1 range of blur widths is covered by
-    // moving the GRID, not by widening the kernel; the whole argument is in
-    // effects_curve.h's "THE PYRAMID" note. Every pass that touches the map
-    // derives the map's size from it and the base layer's own size, so
-    // there is nothing else to keep in step. Masked to BMAP_DOWN_MIN when
-    // the effect is off, like every other field in this block.
-    float u_bmapDown;
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -190,45 +163,6 @@ const int AB_PREVIEW_H = 144;
 // box mean is also exactly the right prefilter for a reduction this large.
 const int BLOOM_DOWN = 8;
 
-// ---- The brightness map's buffer (2026-09-09, re-scaled 2026-09-10) -------
-//
-// The map is built at 1 / u_bmapDown of the base layer's size in each axis
-// and sampled back bilinearly, exactly as the glow buffer is -- but unlike
-// the glow buffer the reduction is NOT a constant: it is 4, 8 or 16,
-// chosen per frame from the Radius by effects_curve.h's bmap_down(), so the
-// blur is always the same modest number of texels wide however far the
-// Radius reaches. effects_curve.h's "THE PYRAMID" note has the argument for
-// that and for the two alternatives it beat (more taps; a strided kernel).
-//
-// `What that means for this buffer:` the PAIR IS ALLOCATED AT THE FINEST
-// reduction (BMAP_DOWN_MIN, mirrored by kEffectsBmapDownMin in
-// rendervulkan.cpp) and a coarser frame simply uses the top-left corner of
-// it. Nothing reads outside the part the down pass wrote, because every
-// pass computes the live size the same way, from the base layer's size and
-// u_bmapDown -- see effects_bmap.h's bmap_map_size(). So the Radius slider
-// never reallocates a texture and never has to.
-//
-// `Why 1/4 is the finest, and why the map got finer at all:` the user, on
-// the shipped 1/8 map: *"Cant we make it, so a Radius of 0 is actually
-// pixel perfect? It looks like there is a small radius still"*. It cannot
-// be pixel perfect -- a map equal to the picture flattens the frame to a
-// single value, see effects_curve.h -- but the floor was much coarser than
-// it needed to be: 1/8 puts an 8-pixel box under a one-texel blur, about
-// 8 source pixels of neighbourhood before the slider does anything. 1/4
-// halves that to 4, which resolves a ~6 px object against ~11 px before.
-// 1/2 was measured and rejected: sixteen times the memory to reach ~3 px,
-// while removing a third of a textured frame's own local contrast against
-// a quarter at 1/4 -- the picture starts dying faster than the resolution
-// improves.
-//
-// `Why the down pass still reads EVERY source pixel:` the same argument
-// BLOOM_DOWN gives -- a sparse sampling would make the map of a small object
-// appear and disappear as the grid slid over it under camera motion, which
-// on a TONE operator is a pumping exposure rather than a flickering glow.
-// It matters twice over here: the box mean over the whole reduction block
-// is also the prefilter that makes a coarser grid a legitimate way to widen
-// the blur.
-
 // Bit assignments are the contract with EffectsPushData_t's constructor.
 const uint EFFECT_SHADOW_LIFT         = 1u << 0;
 // Renamed from EFFECT_VIBRANCY/EFFECT_VIBRANCY_SKIN 2026-09-08 -- see
@@ -255,12 +189,9 @@ const uint EFFECT_ADAPTIVE_GAMMA      = 1u << 7;
 // cs_effects_layer0.comp (the host simply does not record the three
 // dispatches when it is clear).
 const uint EFFECT_BLOOM               = 1u << 8;
-// NEW 2026-09-09: Brightness Map (EXPERIMENTAL) -- the second spatial
-// effect. Like Bloom's bit this gates only the composite in
-// cs_effects_layer0.comp; the three dispatches that build the map are
-// simply not recorded when it is clear (and the host clears it when the
-// strength is 0, so "strength 0" costs nothing as well as changing nothing).
-const uint EFFECT_BRIGHTNESS_MAP      = 1u << 9;
+// Bit 1u << 9 was EFFECT_BRIGHTNESS_MAP (removed 2026-09-14, see
+// superdoc/features/shader-effects.md's History note) -- left unused rather
+// than reassigned, since nothing here requires the bits to be contiguous.
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;

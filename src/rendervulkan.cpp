@@ -54,10 +54,7 @@
 #include "cs_effects_bloom_blurh.h"
 #include "cs_effects_bloom_blurv.h"
 #include "cs_effects_bloom_down.h"
-#include "cs_effects_bmap_blurh.h"
-#include "cs_effects_bmap_blurv.h"
 #include "cs_zoom.h"
-#include "cs_effects_bmap_down.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -1011,9 +1008,6 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_BLOOM_DOWN, cs_effects_bloom_down);
 	SHADER(EFFECTS_BLOOM_BLURH, cs_effects_bloom_blurh);
 	SHADER(EFFECTS_BLOOM_BLURV, cs_effects_bloom_blurv);
-	SHADER(EFFECTS_BMAP_DOWN, cs_effects_bmap_down);
-	SHADER(EFFECTS_BMAP_BLURH, cs_effects_bmap_blurh);
-	SHADER(EFFECTS_BMAP_BLURV, cs_effects_bmap_blurv);
 	SHADER(ZOOM, cs_zoom);
 #undef SHADER
 
@@ -1268,12 +1262,6 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	SHADER(EFFECTS_BLOOM_DOWN, 1, 1, 1);
 	SHADER(EFFECTS_BLOOM_BLURH, 1, 1, 1);
 	SHADER(EFFECTS_BLOOM_BLURV, 1, 1, 1);
-	// Brightness Map's three (2026-09-09), precompiled for the same reason
-	// Bloom's are: flipping the switch mid-game must not compile pipelines
-	// on the render thread.
-	SHADER(EFFECTS_BMAP_DOWN, 1, 1, 1);
-	SHADER(EFFECTS_BMAP_BLURH, 1, 1, 1);
-	SHADER(EFFECTS_BMAP_BLURV, 1, 1, 1);
 	// The zoom's one (2026-09-14): precompiled because it is switched on
 	// by a keypress mid-game, the one moment a pipeline compile must not
 	// happen on the render thread.
@@ -3746,24 +3734,14 @@ static bool update_effects_image( uint32_t width, uint32_t height, uint32_t uInp
 // bilinear upsample interpolates BETWEEN quantised texels, so the falloff
 // the user sees is continuous rather than stepped; there is no banding to
 // trade against.
-// == effects_common.h's BLOOM_DOWN and BMAP_DOWN. Two names for one number
-// on purpose: they are two independent decisions (see each shader's own
-// note) that happen to have landed on the same answer, so a future change to
-// one must not silently move the other.
+// == effects_common.h's BLOOM_DOWN.
 static constexpr uint32_t kEffectsBloomDown = 8;
-// Brightness Map's is the FINEST reduction it can ask for, not the only one:
-// since 2026-09-10 the map is built at 1/4, 1/8 or 1/16 depending on the
-// Radius (effects_curve.h's bmap_down(), and its "THE PYRAMID" note for why
-// the grid moves instead of the kernel). The pair is allocated once at this
-// finest size and a coarser frame writes and reads only its top-left corner,
-// so dragging the Radius slider never reallocates anything.
-// == effects_curve.h's BMAP_DOWN_MIN.
-static constexpr uint32_t kEffectsBmapDownMin = 4;
 
-// The shared allocator for both spatial effects' ping-pong pairs. Bloom's
-// glow buffers and Brightness Map's map buffers differ only in their name in
-// a log line: same reduction, same format, same pooling rule, same
-// both-or-neither failure handling.
+// The shared allocator for a spatial effect's ping-pong pair -- Bloom's own,
+// today; the Brightness Map effect (removed 2026-09-14) also used to go
+// through this. Kept generic on purpose: same reduction, same format, same
+// pooling rule, same both-or-neither failure handling for whichever effect
+// needs a scratch pair next.
 static bool update_effects_scratch_pair( gamescope::OwningRc<CVulkanTexture> &pOutA,
                                          gamescope::OwningRc<CVulkanTexture> &pOutB,
                                          uint32_t uSrcWidth, uint32_t uSrcHeight,
@@ -3805,22 +3783,6 @@ static bool update_effects_bloom_images( uint32_t uSrcWidth, uint32_t uSrcHeight
 {
 	return update_effects_scratch_pair( g_output.effectsBloomA, g_output.effectsBloomB,
 	                                    uSrcWidth, uSrcHeight, kEffectsBloomDown, "bloom" );
-}
-
-// Brightness Map's pair (2026-09-09). Same size and format as Bloom's, and a
-// SEPARATE pair rather than a shared scratch buffer: the two effects are
-// independent and both can be on in the same frame, so one would overwrite
-// the other's map between the dispatches that build it and the pass that
-// samples it. `What 16 bits per texel buys, and why the two lanes:` the
-// texel carries the neighbourhood's luma as a 16-bit fixed-point number over
-// its R and G channels (effects_curve.h's bmap_pack_hi/lo) rather than one
-// byte, because the exponent this map produces moves by roughly a code of
-// output per 1/255 of map -- which on a smooth gradient is a visible
-// contour, the one artefact a brightness map must not have.
-static bool update_effects_bmap_images( uint32_t uSrcWidth, uint32_t uSrcHeight )
-{
-	return update_effects_scratch_pair( g_output.effectsBmapA, g_output.effectsBmapB,
-	                                    uSrcWidth, uSrcHeight, kEffectsBmapDownMin, "brightness map" );
 }
 
 // The zoom's projection texture (FrameInfo_t::Zoom_t), at the projection's
@@ -4714,12 +4676,9 @@ struct EffectsPushData_t
 	// cs_effects_layer0.comp -- the three dispatches that build the glow
 	// buffer are simply not recorded when this is clear.
 	static constexpr uint32_t kBloom             = 1u << 8;
-	// NEW 2026-09-09: Brightness Map (EXPERIMENTAL). Gates only the
-	// composite in cs_effects_layer0.comp, exactly like kBloom -- the three
-	// dispatches that build the map are simply not recorded when it is
-	// clear, which is also what makes "strength 0" free rather than merely
-	// harmless (the constructor clears the bit at that setting).
-	static constexpr uint32_t kBrightnessMap     = 1u << 9;
+	// Bit 1u << 9 was kBrightnessMap (the experimental Brightness Map effect,
+	// removed 2026-09-14) -- left unused rather than reassigned, matching
+	// effects_common.h's own EFFECT_* bits.
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -4753,13 +4712,6 @@ struct EffectsPushData_t
 	float    u_bloomIntensity;
 	float    u_bloomRadius;
 
-	float    u_bmapTarget;
-	float    u_bmapStrength;
-	float    u_bmapMin;
-	float    u_bmapMax;
-	float    u_bmapRadius;
-	float    u_bmapDown;
-
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
 	// exp2(-sharpness_in_stops)); mapping k -> k / (0.75 * (1 + k)) keeps
@@ -4782,14 +4734,6 @@ struct EffectsPushData_t
 		if ( s.bVibrancy )              u_flags |= kVibrancy;
 		if ( s.bPreSharpen )            u_flags |= kPreSharpen;
 		if ( s.bBloom )                 u_flags |= kBloom;
-		// STRENGTH 0 CLEARS THE BIT, and the caller then records none of the
-		// three map dispatches: "0 is exactly the original image" is the
-		// request's own wording, and the cheapest way to make that exact
-		// rather than approximate is for the frame not to do the work at
-		// all. The shader's blend would be exact anyway (x + (y - x) * 0),
-		// so this is about cost, not about correctness.
-		const bool bBrightnessMap = s.bBrightnessMap && s.flBmapStrength > 0.0f;
-		if ( bBrightnessMap )           u_flags |= kBrightnessMap;
 		if ( s.bAdaptiveBrightness )    u_flags |= kAdaptiveBrightness;
 		if ( s.bAbDynamic )             u_flags |= kAbDynamic;
 		// ADAPTIVE GAMMA IS DROPPED WHEN ADAPTIVE BRIGHTNESS IS ON. Both aim
@@ -4880,30 +4824,6 @@ struct EffectsPushData_t
 		u_bloomThreshold = s.bBloom ? std::clamp( s.flBloomThreshold, 0.0f, 1.0f ) : 1.0f;
 		u_bloomIntensity = s.bBloom ? std::max( s.flBloomIntensity, 0.0f ) : 0.0f;
 		u_bloomRadius    = s.bBloom ? std::clamp( s.flBloomRadius, 0.0f, 1.0f ) : 0.0f;
-
-		// Brightness Map. Masked to neutral when the effect is not running,
-		// for the same "the uniform says exactly what the frame did" reason
-		// as u_abLocal and the Bloom fields above. Neutral for the strength
-		// is 0 -- the exact identity -- and the two rails are neutralised to
-		// the target itself, which makes the exponent exactly 1 even if a
-		// stray dispatch ever put a map in the slot.
-		u_bmapTarget   = bBrightnessMap ? std::clamp( s.flBmapTarget, 0.1f, 0.9f ) : 0.5f;
-		u_bmapStrength = bBrightnessMap ? std::clamp( s.flBmapStrength, 0.0f, 1.0f ) : 0.0f;
-		u_bmapMin      = bBrightnessMap ? std::clamp( s.flBmapMin, 0.02f, 0.50f ) : u_bmapTarget;
-		u_bmapMax      = bBrightnessMap ? std::clamp( s.flBmapMax, 0.50f, 0.90f ) : u_bmapTarget;
-		// 0..2 since 2026-09-10 (was 0..1). effects_curve.h's bmap_sigma()
-		// is piecewise linear with its knots at 0.25 and 1.0 precisely so
-		// that every stored value from 0.25 up still means what it meant.
-		u_bmapRadius   = bBrightnessMap
-			? std::clamp( s.flBmapRadius, 0.0f, gamescope::effects_curve::BMAP_RADIUS_MAX )
-			: 0.0f;
-		// The reduction this frame's map is built at. Derived from the very
-		// same two functions the shaders call, so the host's dispatch grid
-		// and the shaders' idea of the map's size cannot drift apart.
-		u_bmapDown     = bBrightnessMap
-			? gamescope::effects_curve::bmap_down(
-				gamescope::effects_curve::bmap_sigma( u_bmapRadius ) )
-			: gamescope::effects_curve::BMAP_DOWN_MIN;
 	}
 };
 
@@ -5363,21 +5283,6 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						&& update_effects_bloom_images( uWidth, uHeight );
 					state.bBloom = bBloom;
 
-					// BRIGHTNESS MAP (2026-09-09), decided here for exactly
-					// the same reasons as Bloom one line above: the uniform
-					// must say what the frame did, and the per-pixel pass
-					// must never be told to sample a slot nothing was bound
-					// to. Note the strength test is NOT repeated here --
-					// EffectsPushData_t owns the "strength 0 clears the bit"
-					// rule and `bBmap` below reads the flag it produced, so
-					// the two cannot disagree about whether this frame has a
-					// map.
-					const bool bBmapWanted = state.bBrightnessMap
-						&& state.flBmapStrength > 0.0f;
-					const bool bBmap = bBmapWanted
-						&& update_effects_bmap_images( uWidth, uHeight );
-					state.bBrightnessMap = bBmap;
-
 					// One upload for both dispatches: the measure pass and the
 					// per-pixel pass read the same effects_t block, and the
 					// descriptor offset uploadConstants() records persists until
@@ -5549,85 +5454,18 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 						BindBloomSource( g_output.effectsBloomA );
 					}
 
-					// BRIGHTNESS MAP'S THREE DISPATCHES. The same shape as
-					// Bloom's, on its own slot and its own pair:
-					//
-					//   1. 8x downsample of the graded luma  layer0 -> bmapA
-					//   2. separable Gaussian, horizontal     bmapA -> bmapB
-					//   3. ... and vertical                   bmapB -> bmapA
-					//
-					// and cs_effects_layer0.comp above samples bmapA
-					// bilinearly and divides the picture by it.
-					//
-					// THE MAP'S SIZE IS PER FRAME (2026-09-10). The
-					// reduction is 4, 8 or 16 depending on the Radius
-					// (effects_curve.h's bmap_down()), so the dispatch grid
-					// is computed from the base layer's size and that, NOT
-					// from the texture's own extent -- the pair is allocated
-					// once at the finest reduction and a coarser frame uses
-					// only its top-left corner. The shaders derive the same
-					// rectangle from the same uniform (effects_bmap.h's
-					// bmap_map_size()), so nothing can read a texel the down
-					// pass did not write this frame.
-					//
-					// It reads slot 0, still the base layer from the bind
-					// above, so this block has to sit after Bloom's (which
-					// leaves the GLOW bound on its own slot, not on slot 0)
-					// and before the per-pixel pass. No hand-written barriers
-					// for the ping-pong, for the reason Bloom's note gives.
-					if ( bBmap )
-					{
-						namespace ec = gamescope::effects_curve;
-						const uint32_t uBmapDown = uint32_t( ec::bmap_down(
-							ec::bmap_sigma( std::clamp( state.flBmapRadius,
-								0.0f, ec::BMAP_RADIUS_MAX ) ) ) );
-						const uint32_t uBmapW = std::max( 1u, div_roundup( uWidth, uBmapDown ) );
-						const uint32_t uBmapH = std::max( 1u, div_roundup( uHeight, uBmapDown ) );
-						const int nBmapGroup = 8;   // == the bmap shaders' local_size
-						const uint32_t uGroupsX = div_roundup( uBmapW, nBmapGroup );
-						const uint32_t uGroupsY = div_roundup( uBmapH, nBmapGroup );
-
-						auto BindBmapSource = [&]( const gamescope::OwningRc<CVulkanTexture> &tex )
-						{
-							cmdBuffer->bindTexture( VKR_EFFECTS_BMAP_SLOT, tex );
-							cmdBuffer->setTextureSrgb( VKR_EFFECTS_BMAP_SLOT, true );
-							cmdBuffer->setSamplerUnnormalized( VKR_EFFECTS_BMAP_SLOT, true );
-							cmdBuffer->setSamplerNearest( VKR_EFFECTS_BMAP_SLOT, true );
-						};
-
-						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_BMAP_DOWN ) );
-						cmdBuffer->bindTarget( g_output.effectsBmapA );
-						cmdBuffer->dispatch( uGroupsX, uGroupsY );
-
-						BindBmapSource( g_output.effectsBmapA );
-						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_BMAP_BLURH ) );
-						cmdBuffer->bindTarget( g_output.effectsBmapB );
-						cmdBuffer->dispatch( uGroupsX, uGroupsY );
-
-						BindBmapSource( g_output.effectsBmapB );
-						cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_BMAP_BLURV ) );
-						cmdBuffer->bindTarget( g_output.effectsBmapA );
-						cmdBuffer->dispatch( uGroupsX, uGroupsY );
-
-						// ... and leave the finished map bound for the
-						// per-pixel pass below.
-						BindBmapSource( g_output.effectsBmapA );
-					}
-
 					cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_EFFECTS_LAYER0 ) );
 					cmdBuffer->bindTarget( g_output.effectsOutput );
 
 					const int nPixelsPerGroup = 8;
 					cmdBuffer->dispatch( div_roundup( uWidth, nPixelsPerGroup ), div_roundup( uHeight, nPixelsPerGroup ) );
 
-					// Leave slots 1, 2 and 3 clear for the FSR/NIS/blit
+					// Leave slots 1 and 2 clear for the FSR/NIS/blit
 					// dispatches that follow; they bind layers 0..n-1 and
-					// would otherwise carry a stray history, glow or
-					// brightness-map descriptor on frames with fewer layers
-					// than that.
+					// would otherwise carry a stray history or glow
+					// descriptor on frames with fewer layers than that.
 					cmdBuffer->bindTexture( VKR_EFFECTS_HISTORY_SLOT, nullptr );
 					cmdBuffer->bindTexture( VKR_EFFECTS_BLOOM_SLOT, nullptr );
-					cmdBuffer->bindTexture( VKR_EFFECTS_BMAP_SLOT, nullptr );
 
 					// `effects_ab_log` debug readback (see the command above).
 					if ( bHaveHistory )

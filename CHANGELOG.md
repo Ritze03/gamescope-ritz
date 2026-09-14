@@ -43,6 +43,10 @@ The newest version below is the one this build reports.
   actually be seen, so the readout no longer sits one pixel further from the edge
   than configured at font sizes such as 12, 14, 18 and 36.
 
+### Removed
+- **Brightness Map**: removed the experimental shader that evened out bright and dark
+  areas of the picture.
+
 ## [0.7.1] – 2026-09-10
 
 ### Added

@@ -45,12 +45,6 @@
 //           and haloinv the inverse (a 220 box on a 15 field). A local tone
 //           operator's classic artefact is a rim around such a box; the
 //           script samples a line out from the box's edge to measure it.
-//   models  ADDED 2026-09-09 for Brightness Map (shader-effects.md): a flat
-//           200 field with four flat 30 boxes on it, 16 / 32 / 64 / 128 px
-//           wide and three times as tall -- the user's own reported case, a
-//           dark player model on a bright world, at four sizes so "what can
-//           this operator actually see" is a curve rather than a yes/no.
-//           modelsinv is the inverse (200 boxes on a 30 field).
 //   colors  ADDED 2026-09-08 for the Saturation/Vibrancy split (shader-
 //           effects.md): five horizontal COLOUR bands (not the grey levels
 //           above) at known saturations, so the two colour effects have
@@ -94,9 +88,11 @@ static void OnUsr2( int sig ) { (void)sig; s_nMotionToggle++; }
 
 // nSpecial: 0 the flat band scenes below, 1 halfsplit, 2 halobox,
 // 3 haloinv -- the three scenes Local adaptation (2026-09-07) is measured
-// on -- 4 colors, the Saturation/Vibrancy colour bands (2026-09-08), 5
-// models and 6 modelsinv, the player-sized-object scenes Brightness Map
-// (2026-09-09) is measured on. See PaintSpecial().
+// on -- 4 colors, the Saturation/Vibrancy colour bands (2026-09-08). 5 and 6
+// were `models` and `modelsinv`, the player-sized-object scenes the
+// experimental Brightness Map effect was measured on; removed with that
+// effect 2026-09-14 (superdoc/features/shader-effects.md's History note).
+// See PaintSpecial().
 typedef struct
 {
 	const char *pszName;
@@ -119,33 +115,7 @@ static const Scene kScenes[] = {
 	{ "halobox",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 2 },
 	{ "haloinv",  {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 3 },
 	{ "colors",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 4 },
-	{ "models",   {   0,   0,   0,   0,   0 },   0,   0,   0, 0, 5 },
-	{ "modelsinv",{   0,   0,   0,   0,   0 },   0,   0,   0, 0, 6 },
 };
-
-// models / modelsinv (2026-09-09, for Brightness Map): a flat field with
-// FOUR boxes on it whose widths step 16 / 32 / 64 / 128 px in the 1280x720
-// reference frame, each three times as tall as it is wide (a player's
-// proportions, clamped to the frame). `models` is the case the user
-// reported -- dark objects on a bright world -- and `modelsinv` its inverse.
-//
-// `Why four sizes and not one:` a local tone operator's whole question is
-// WHAT SIZE OF OBJECT it can see, and that is a curve, not a yes/no. The
-// existing halobox / haloinv scenes have a 320 px box, which any of these
-// operators resolves trivially and which therefore says nothing about a
-// player. Sampling four sizes in one frame turns "the smallest feature it
-// can resolve" into a measurement, at one capture per setting.
-//
-// The centres are spaced so the widest kernel this effect offers (sigma 48
-// source px) still has more than four sigma of flat field between any two
-// boxes, and the top-left corner is clear of all of them -- that is where
-// the far field is sampled. Mirrored in
-// scripts/effects_regression_sample.py's MODEL_BOXES; change one, change
-// both.
-#define MODEL_COUNT 4
-static const int kModelW[MODEL_COUNT] = { 16, 32, 64, 128 };
-static const int kModelCX[MODEL_COUNT] = { 200, 440, 720, 1060 };
-static const int kModelCY = 360;
 
 // colors (2026-09-08): five horizontal bands, top to bottom, RGB. Band 0 is
 // pure grey (saturation 0); 1-4 walk a warm hue from near-neutral to fully
@@ -272,26 +242,6 @@ static void PaintSpecial( SDL_Surface *pSurface, int nSpecial )
 			const int y0 = i * H / 5, y1 = ( i + 1 ) * H / 5;
 			FillRectRGB( pSurface, 0, y0, W, y1 - y0,
 			            kColorBands[i][0], kColorBands[i][1], kColorBands[i][2] );
-		}
-		return;
-	}
-
-	if ( nSpecial == 5 || nSpecial == 6 )
-	{
-		// A flat field with four boxes of stepping width. The values are the
-		// `bright` and `dark` scenes' own field/rectangle levels (200 and
-		// 30), so a number measured here is directly comparable with the
-		// tables those scenes already produce.
-		const unsigned char field = ( nSpecial == 5 ) ? 200 : 30;
-		const unsigned char box   = ( nSpecial == 5 ) ?  30 : 200;
-		FillRect( pSurface, 0, 0, W, H, field );
-		for ( int i = 0; i < MODEL_COUNT; i++ )
-		{
-			int bw = (int)( kModelW[i] * sx );
-			int bh = (int)( kModelW[i] * 3 * sy );
-			if ( bh > H ) bh = H;
-			FillRect( pSurface, (int)( kModelCX[i] * sx ) - bw / 2,
-			          (int)( kModelCY * sy ) - bh / 2, bw, bh, box );
 		}
 		return;
 	}

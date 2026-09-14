@@ -54,7 +54,7 @@ fractions, factor — and `vulkan_composite()` builds the layer itself.
 
 > **Why there and nowhere else.** Two of the user's requirements pin the
 > place. *"After the game, the shaders"*: the bundled effects (Adaptive
-> Brightness, Bloom, Brightness Map, …) run as a pre-pass **inside**
+> Brightness, Bloom, …) run as a pre-pass **inside**
 > `vulkan_composite()` on a private copy of the frame, and the graded base
 > layer exists only there — a magnifier sampling the base in `paint_all()`
 > would show the raw game. *"Not affected by the scaling"*: the FSR/NIS/blit

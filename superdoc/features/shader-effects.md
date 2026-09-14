@@ -1,16 +1,16 @@
-# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Brightness Map, Adaptive Brightness, Adaptive Gamma
+# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
-eight effects — seven independent, plus **Adaptive Gamma** (new 2026-09-08), which is
+seven effects — six independent, plus **Adaptive Gamma** (new 2026-09-08), which is
 mutually exclusive with Adaptive Brightness and with nothing else. Since 2026-09-05 they are **one native compute pre-pass compiled
 into the binary at build time** — `src/shaders/cs_effects_layer0.comp`, dispatched from
 `vulkan_composite()` (`src/rendervulkan.cpp`) on the base/game layer at source resolution
-before any scaling. **Bloom** (new 2026-09-08) and **Brightness Map** (new 2026-09-09)
-are the two effects that need more than that one dispatch — they are spatial, so each
-brings three of its own; see
-[Bloom](#bloom-imageshadersbloom--new-2026-09-08) and
-[Brightness Map](#brightness-map-imageshadersbrightness_map--new-2026-09-09-experimental).
-They used to be gated passes
+before any scaling. **Bloom** (new 2026-09-08) is the one effect that needs more than
+that one dispatch — it is spatial, so it brings three of its own; see
+[Bloom](#bloom-imageshadersbloom--new-2026-09-08). A second spatial effect, the
+experimental **Brightness Map**, lived here 2026-09-09 to 2026-09-14; see its
+[History](#brightness-map--history-2026-09-09-to-2026-09-14) entry below. They used to be
+gated passes
 inside a runtime-compiled ReShade file, `reshade/Shaders/gamescope-ritz.fx`; that file,
 and the install step that copied it, are gone (`superdoc/planning/DECISIONS.md` #27).
 The ReShade loader itself stays, for users' own `.fx` files — see
@@ -61,9 +61,6 @@ layer0.tex (game, source res)
 cs_effects_measure ──► g_output.effectsHistory  (8×1, persistent; one 16×16 workgroup,
    │                    ▲   reads last frame's value, writes this frame's)
    │                    │
-   │  [Brightness Map, if on: cs_effects_bmap_down ─► bmapA, then blurh A─►B,
-   │   blurv B─►A, all at W/d × H/d where d is 4, 8 or 16 depending on the
-   │   Radius -- see the Brightness Map section]
    │  [Bloom, if on: cs_effects_bloom_down ─► bloomA, then blurh A─►B, blurv B─►A,
    │   all at W/8 × H/8 -- see the Bloom section]
    ▼                    │
@@ -173,7 +170,7 @@ grades its pixels.
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<7` Adaptive Gamma (added 2026-09-08), `1<<8` Bloom (added 2026-09-08 — gates only the composite; the three dispatches that build the glow are simply not recorded when it is clear), `1<<9` Brightness Map (added 2026-09-09 — the same arrangement, and additionally cleared whenever its Strength is 0, so "0 is the original image" costs nothing as well as changing nothing), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<7` Adaptive Gamma (added 2026-09-08), `1<<8` Bloom (added 2026-09-08 — gates only the composite; the three dispatches that build the glow are simply not recorded when it is clear); `1<<9` was the experimental Brightness Map effect (removed 2026-09-14, left unused rather than reassigned), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
 | `float u_saturation` | 0..3, 1 neutral (renamed from `u_vibrancy` 2026-09-08 — same meaning, see below) |
 | `float u_vibrancy` | 0..2, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
 | `float u_shadowLift` | 0..1, 0 neutral |
@@ -183,8 +180,6 @@ grades its pixels.
 | `float u_abDt` | seconds since the previous effects dispatch, host-measured and clamped (see Adaptive Brightness) |
 | `float u_abLocal` | Local adaptation, 0..1. **Masked to 0 by the host in Whole image mode** (`EffectsPushData_t`'s constructor) rather than in the shader, so the uniform says exactly what the frame did — which is what `effects_ab_log` prints |
 | `float u_bloomThreshold, u_bloomIntensity, u_bloomRadius` | Bloom's three parameters (added 2026-09-08). Threshold and Radius are read by the two dispatches that build the glow, Intensity only by the composite; all three are masked to their neutral values (1.0 / 0.0 / 0.0) when the effect is off, for the same "the uniform says what the frame did" reason as `u_abLocal` |
-| `float u_bmapTarget, u_bmapStrength, u_bmapMin, u_bmapMax, u_bmapRadius` | Brightness Map's five parameters (added 2026-09-09; Radius is 0..**2** since 2026-09-10). Target/Strength/Min/Max are read by the composite, Radius by the two blur dispatches; all five are masked to their neutral values when the effect is off — Strength to 0 and *both rails to the target itself*, so the exponent is exactly 1 even if a stray dispatch ever left a map in the slot |
-| `float u_bmapDown` | The map's **reduction this frame** — 4, 8 or 16 (added 2026-09-10). Not a constant, because the Radius now covers a 24:1 range of blur widths and that is served by moving the *grid* rather than by widening the kernel; every pass derives the map's live size from this and the base layer's own size ([why](#the-map-resolution-the-pyramid-and-what-it-can-resolve)). Masked to 4 when the effect is off |
 | `float u_agTarget, u_agMaxLift, u_agMaxDarken, u_agStrength, u_agLocal` | Adaptive Gamma's five *curve* parameters (added 2026-09-08; its two speeds reach the shader through `u_adaptUp`/`u_adaptDown` above instead, because the EMA is shared). **All masked to their neutral values by the host whenever Adaptive Brightness is also on**, for the same "the uniform says what the frame did" reason as `u_abLocal` — see [the exclusion](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive) |
 
 Host state is `g_nativeEffects` (`NativeEffectsState_t`, `src/rendervulkan.hpp`): a plain
@@ -194,14 +189,13 @@ the steamcompmgr thread, same discipline as `g_upscaleFilterSharpness`. `Why the
 apply:` under E2 nothing in `PanelShaders.cpp` runs per frame, so without it saved effects
 would only switch on the first time the Shaders area was drawn.
 
-`NativeEffectsState_t::AnyEnabled()` counts all eight switches, both adaptive effects,
-Bloom and Brightness Map included, so any one of them forces the full composite the
+`NativeEffectsState_t::AnyEnabled()` counts all seven switches, both adaptive effects
+and Bloom included, so any one of them forces the full composite the
 pre-pass needs. `NeedsStatistics()` is the narrower question — "does anything read the
 measure pass's history" — and is true for Adaptive Brightness and Adaptive Gamma alone.
-**Bloom and Brightness Map move the first and not the second**, deliberately: Bloom's
-bright pass gates on each pixel's own luma against a fixed threshold and Brightness Map
-divides by a low-pass of the frame's own luminance — neither ever reads the frame's
-statistics, so neither needs the history warm nor has any reason to keep the measure
+**Bloom moves the first and not the second**, deliberately: its
+bright pass gates on each pixel's own luma against a fixed threshold, never on the frame's
+statistics, so it neither needs the history warm nor has any reason to keep the measure
 dispatch alive.
 
 ## Backends
@@ -211,14 +205,12 @@ Every backend already forced a full composite for `!g_reshade_effect.empty()`
 `vulkan_native_effects_active()`; without that, direct scanout would skip the pre-pass and
 the effects would silently vanish whenever the base layer could be scanned out directly.
 
-## The eight effects
+## The seven effects
 
 Shadow Control, Saturation and Pre-Sharpen's maths is ported 1:1 from the retired `.fx`;
-Vibrancy, Adaptive Gamma and Bloom are new (2026-09-08) and Brightness Map is new
-(2026-09-09). Applied **per tap, in this
-order**: Shadow Control → Saturation → Vibrancy → (Pre-Sharpen) → Brightness Map (one
-exponent per pixel, from its own three dispatches) → Bloom (the glow, from its own three
-dispatches) → Adaptive Brightness (Whole image's gain, or Dynamic's curve)
+Vibrancy, Adaptive Gamma and Bloom are new (2026-09-08). Applied **per tap, in this
+order**: Shadow Control → Saturation → Vibrancy → (Pre-Sharpen) → Bloom (the glow, from
+its own three dispatches) → Adaptive Brightness (Whole image's gain, or Dynamic's curve)
 → Adaptive Gamma (one exponent) → `saturate`. The last
 two can never both run — see
 [Adaptive Gamma vs Adaptive Brightness](#adaptive-gamma-vs-adaptive-brightness-mutually-exclusive)
@@ -659,8 +651,9 @@ own texels are already an 8-pixel-wide feature; a σ below one texel would leave
 structure visible as blocking after the bilinear upsample instead of a smooth falloff.
 
 **The Effects band went from 6 switch rows to 7** (Saturation, Vibrancy, Pre-Sharpen,
-Bloom, Shadow Control, Adaptive Brightness, Adaptive Gamma), and the area's summary read
-`n of 7 effects on` (it is **8** since Brightness Map landed 2026-09-09). Bloom is registered immediately after Pre-Sharpen because
+Bloom, Shadow Control, Adaptive Brightness, Adaptive Gamma), and the area's summary reads
+`n of 7 effects on` (it briefly read **8** while the now-removed Brightness Map effect was
+shipped, 2026-09-09 to 2026-09-14). Bloom is registered immediately after Pre-Sharpen because
 those two are the only **spatial** effects in the band — the only ones that read a
 pixel's neighbours — and because the pipeline runs Pre-Sharpen and then Bloom, so the
 pair reads in pipeline order in the panel too. The budget was **not** raised.
@@ -877,676 +870,32 @@ checklist:
   defaults goes near it.
 
 
-### Brightness Map (`image.shaders.brightness_map`) — NEW 2026-09-09, EXPERIMENTAL
-
-The user's request, verbatim: *"Adaptive Gamma: When the world is rather bright and
-player models are rather dark, the player models turn almost black. It should be more
-fine grained and needs some type of way, to adjust it super smooth and dynamic. Lets add
-an experimental mode, that creates a brightness map of the whole image and then adjusts
-based on that. It should invert that map and then apply it to the image. This should
-make a really uniform image. The 'opacity' of this map (strength) should be adjustable.
-It should also make it easier, to adjust the min and max brightness within the image. It
-should be a seperate shader in the GUI"*
-
-A **purely spatial local tone operator**: it builds a low-pass of the frame's own
-luminance — the *brightness map* — and divides the picture by it against a mid-grey
-target. Shipped **off**, and **marked experimental in the row's own title** rather than
-only in its help text, because the sheet shows the title and nothing else until a row is
-hovered, and because this is the only effect here whose signature artefact (a halo) is
-exposed as a control rather than engineered away.
-
-**Config**: `ReshadeBrightnessMapSettings` (`ConfigSchema.h`) — `enabled` (false),
-`strength` (0.5), `radius` (0.25, on a **0..2** slider since 2026-09-10),
-`target_luminance` (0.5), `min_brightness` (0.10), `max_brightness` (0.80). Purely
-additive keys, so `kCurrentSchemaVersion` stays **4** and there is no migration — and
-[the Radius widening](#radius-the-floor-the-ceiling-and-why-zero-is-impossible) changed
-no stored value's meaning either, so there is nothing to migrate there.
-
-#### Why it exists separately from Adaptive Gamma's Local adaptation
-
-That operator's map is a **16×16** grid blurred to σ ≈ 4.7 cells, which at 1080p is
-roughly **565 × 317 px**, and
-[its own section](#halo-control-the-make-or-break-and-what-the-radius-actually-buys)
-says outright that it is *"deliberately incapable of resolving an object's outline, and
-just capable of resolving which half of the screen you are in"*. That width was chosen
-to kill halos — a narrow map measured a 57-count glow around a bright box where the
-shipped one measures 8. A player model is far smaller than 565 px, so it is averaged
-into its bright background and receives the **background's** correction. That is exactly
-the defect the request describes, and no setting of that effect can fix it, because the
-coarseness *is* its design.
-
-So this is a new effect rather than a mode of that one. Its map is **a quarter to a
-sixteenth of the frame** with a user-controlled blur of **4..96 source pixels** of σ —
-6× to 140× finer per axis — and its halo is correspondingly larger and is the user's own
-dial. The two operators are the two ends of one trade-off, and shipping both, each
-honest about which end it is on, is better than one compromise that does neither job.
-
-#### The formula, and the domain
-
-`src/shaders/effects_curve.h`'s `bmap_*` block — the same header the GLSL pass and
-`tests/test_effects_curve.cpp` both compile. Encoded (gamma) space in, encoded out, per
-channel, exactly like the rest of the pre-pass:
-
-```
-Lc  = clamp(map, min_brightness, max_brightness)     // the two guard rails
-g   = ln(target) / ln(Lc)                            // the map, INVERTED
-out = x + (x^g - x) * strength
-```
-
-`Why an exponent and not the literal out = x · target / map:` they are the same
-operation in two different domains, and only one of them is safe here.
-
-- Write the division in **log-luminance** and it is a *subtraction*,
-  `ln(out) = ln(x) + ln(target) − ln(map)` — the conventional form, and the one the
-  request describes.
-- Write it in **log-log** — scaling log-luminance instead of shifting it — and it is
-  `ln(out) = ln(x) · ln(target)/ln(map)`, which is the exponent above.
-
-Both put a pixel sitting **at** its neighbourhood's own level exactly on the target
-(`x = map` gives `out = target` in both, exactly), which is the whole content of "invert
-that map and then apply it" — and it is what makes strength 1 "a really uniform image":
-wherever the picture equals the map, the output is the target. Only the exponent form
-keeps **0 and 1 as exact fixed points** and maps `[0, 1]` onto `[0, 1]` at every setting
-of every control, so nothing can clip. The multiplicative form leaves the range the
-moment the gain exceeds `1/x`, which is precisely the blown-out failure
-[Whole image mode](#whole-image-mode-whole_image--the-original-behaviour) is documented
-for. Adaptive Gamma reaches the same conclusion from the same arithmetic; the difference
-here is only where the exponent comes from — a fine spatial map instead of the frame's
-smoothed median. Both properties are asserted exhaustively on the CPU.
-
-`Why per channel, and what that costs:` an exponent applied per channel changes
-saturation slightly as it changes tone, the same way Shadow Control and Adaptive Gamma
-already do. Applying it to luma alone and rescaling the chroma would preserve saturation
-but is a second, different answer to a question Saturation and Vibrancy own; three
-effects in this pass already take the per-channel route, so this one matches them.
-
-#### The map: resolution, the pyramid, and what it can resolve
-
-Three extra dispatches, mirroring **Bloom's** pipeline rather than inventing a second
-mechanism (`update_effects_bloom_images()` was refactored into a shared
-`update_effects_scratch_pair()` the two now use):
-
-```
-layer0.tex (game, source res)
-   │                                       d = 4, 8 or 16, from the Radius
-   ├─► cs_effects_bmap_down.comp   ─► bmapA   (⌈W/d⌉ × ⌈H/d⌉)
-   │      grade() + Rec.601 luma, d×d box mean per output texel, 16-bit packed
-   │
-   ├─► cs_effects_bmap_blurh.comp  bmapA ─► bmapB   (±⌈3σ⌉-tap Gaussian, x)
-   ├─► cs_effects_bmap_blurv.comp  bmapB ─► bmapA   (±⌈3σ⌉-tap Gaussian, y)
-   │
-   ▼
-cs_effects_layer0.comp  ── samples bmapA bilinearly, applies the exponent
-```
-
-The pair is **allocated once at the finest reduction** (⌈W/4⌉ × ⌈H/4⌉) and a coarser
-frame writes and reads only its top-left corner, so dragging the Radius slider never
-reallocates a texture. Every pass derives the map's *live* rectangle the same way, from
-the base layer's size and `u_bmapDown` (`effects_bmap.h`'s `bmap_map_size()`), so
-nothing can read a texel this frame's down pass did not write.
-
-##### Radius: the floor, the ceiling, and why zero is impossible
-
-Widened and re-floored **2026-09-10**, from the user: *"Cant we make it, so a Radius of
-0 is actually pixel perfect? It looks like there is a small radius still"* and *"Also
-increase the max radius to 2.0 effectively"*.
-
-**A pixel-perfect map is degenerate, not merely undesirable — do not try again.** This
-operator divides the picture by a low-pass **of itself**. If the map equalled the
-picture, every pixel would divide by its own value, the exponent `ln(t)/ln(x)` would put
-*every* pixel exactly on the target, and the output would be one flat grey field with
-the image gone. The blur is not an implementation artefact to be minimised away; **it is
-the mechanism**, and the distance between the picture and its own low-pass is the entire
-output. The floor is therefore a question of "how small before the picture dies", never
-of "how close to zero can we get".
-
-What *was* real in the report is that the floor was much coarser than it needed to be.
-At the old Radius 0 there were two blurs stacked: the 1/8 downsample's own 8×8 box, and
-`BMAP_SIGMA_MIN` = 1 map texel on top — about **8 source pixels** of neighbourhood
-before the slider did anything. **The shipped minimum now averages 4 source pixels** at
-any resolution (a 1/4 map's 4×4 box under a one-texel blur), which resolves an object of
-about **6 px** against ~11 px before.
-
-`Why 1/4 and not 1/2 or 1/1:` measured, not preferred. Halving again would buy a ~3 px
-floor for **sixteen times** the map memory, and it costs the picture faster than it buys
-resolution — on a mid-tone 16 px-cell textured frame a σ = 4 px map removes about a
-quarter of the frame's own local contrast and a σ = 2 px map about a third. 1/1 is the
-degenerate case above.
-
-`Why the sigma floor is still one map texel, verified rather than inherited:` a scratch
-build forcing the old 1/8 map was captured on the same still `texdark` frame as the
-shipped 1/4 one, both at σ = 4 source pixels, so the only difference was one texel of
-blur against half a texel:
-
-| | error vs an ideal full-res Gaussian (sd) | max | energy at the reduction grid's own frequency |
-| --- | --- | --- | --- |
-| shipped, 1/4 map, **1.00** texel | 0.60 counts | 9.1 | **2.5×** the noise floor |
-| forced, 1/8 map, **0.50** texel | 1.24 counts | 26.1 | **7.5×** the noise floor |
-
-Half a texel doubles the error, nearly triples its peak, and puts what it adds at the
-downsample's own grid frequency — the blocks showing through, exactly as the original
-comment claimed. **So a finer floor means a finer map, never a sub-texel kernel.**
-
-**The mapping is piecewise linear, and its two knots are the two values that had to keep
-their meaning**: the shipped default (0.25) and the old top of the slider (1.0).
-
-| Radius | σ (source px) | before 2026-09-10 |
-| --- | --- | --- |
-| 0.00 | **4** | 8 |
-| 0.10 | 10 | 12 |
-| **0.25 (shipped)** | **18** | **18** — unchanged |
-| 0.50 | 28 | 28 — unchanged |
-| **1.00** | **48** | **48** — unchanged |
-| 1.50 | 72 | *unreachable* |
-| **2.00** | **96** | *unreachable* |
-
-So **every stored Radius from 0.25 up produces exactly the picture it produced before**
-— the segment between the knots *is* the old line `8 + 40r` — values below 0.25 get
-finer, which is the request, and 2.0 is new range rather than a rescaling of the old.
-Pinned three ways: `bmap_sigma(r) == 8 + 40r` over the whole 0.25..1.0 range in
-`tests/test_effects_curve.cpp`, and `bmap-radius-0.25-unchanged` /
-`bmap-radius-1.0-unchanged` in `effects-regression.sh`, which compare this build's
-captures against the numbers the *shipped* build measured on the same scene (worst
-deviation **0.4** and **0.3** counts).
-
-##### The kernel: a pyramid, not a wider filter
-
-The blur must now cover σ 4..96 source pixels — **24:1** — and a fixed 33-tap kernel on
-a fixed 1/8 map covers exactly one point of that well. At the top of the new slider it
-would be ±0.7 σ: a box with a Gaussian's name on it. Three ways out, and why the third:
-
-- **More taps on a fixed fine map.** Honest but quadratic where it hurts: at 1/4 and
-  σ = 96 an untruncated kernel is ±72 taps, about **18 taps per source pixel** per
-  frame — nine times the old cost, and all of it paid at a setting a user may well
-  leave on.
-- **A strided (à trous) kernel**, the trick `cs_effects_measure.comp` uses. Cheap, but
-  it samples the map through a comb, and a comb passes map detail at exactly the
-  stride's own period *straight through* the blur. On a static frame that is a rim that
-  should not be there; on a moving one it is the neighbourhood's exposure pumping as
-  content slides across the comb — the very failure the down pass reads every source
-  pixel to avoid.
-- **A coarser grid for a wider blur** — what shipped. `bmap_down()` picks the reduction
-  (4, 8 or 16) so that the blur is always **1..7 texels** wide whatever the Radius, and
-  the kernel is `±⌈3σ⌉` taps — never truncated at more than 0.3 % of its mass. It needs
-  no new anti-aliasing argument, because **the down pass's box mean over the whole
-  reduction block is the prefilter that makes the coarser sampling legal**, and that box
-  is already there for its own reasons.
-
-The band is `BMAP_TEXEL_SIGMA_MIN` = 3.5 — the reduction doubles while the blur would
-still be at least that many texels wide afterwards. 3.5 rather than a rounder number
-because it puts **Radius 1.0 on a 1/8 map at σ = 6 texels, bit for bit the configuration
-that shipped**, which is what makes "1.0 is unchanged" true of the arithmetic and not
-only of the source-pixel number.
-
-##### What it can resolve
-
-A Gaussian passes about `erf(w / (2σ√2))` of a feature `w` wide, so **the smallest
-object that gets even half of its own correction is roughly 1.4 σ**:
-
-| Radius | σ (source px) | map | σ (texels) | smallest object it can see |
-| --- | --- | --- | --- | --- |
-| 0.00 | 4 | 1/4 | 1.00 | **~6 px** |
-| **0.25 (shipped)** | **18** | 1/4 | 4.50 | **~25 px** |
-| 0.50 | 28 | 1/8 | 3.50 | ~39 px |
-| 1.00 | 48 | 1/8 | 6.00 | ~67 px |
-| 2.00 | 96 | 1/16 | 6.00 | ~134 px |
-
-Against Adaptive Gamma's local map, which resolves about **790 px** at 1080p. The model
-is confirmed by capture: at Radius 0.5 the reference scene's 32 px object is *missed*
-and the 64 px one resolved, exactly where 39 px predicts the cut.
-
-`Why 16 bits per texel and not 8, unlike the glow buffer:` the exponent's sensitivity to
-the map is `d(g)/d(L) = −ln(t)/(L·ln²L)`, which at `L = 0.1` is about 1.3 — so a 1/255
-step of the map is worth roughly a code of output. On a smooth gradient that is a
-visible contour, which is the one artefact a brightness map must not have. Each texel
-therefore carries the luma as a 16-bit fixed-point number over its **R and G** lanes
-(`bmap_pack_hi` / `bmap_pack_lo` / `bmap_unpack2`, scalar so the round trip is asserted
-for all 65,536 codes). That exhaustive test earned its keep immediately: it caught
-`255 * (1.0f/255.0f)` evaluating to just above 1.0 in binary32, where the storage image
-would have clamped the top code away.
-
-`Why the down pass still reads every source pixel:` the same argument `BLOOM_DOWN`
-makes, with a sharper consequence — a sparse sampling would make a small object's
-contribution appear and disappear as the grid slid over it under camera motion, and on a
-**tone** operator that is the neighbourhood's exposure pumping rather than a glow
-flickering. Since 2026-09-10 it earns its keep twice, as the prefilter above.
-
-`Why luma and not colour:` the operator divides by one number per neighbourhood; a
-per-channel map would white-balance each region toward grey, which nobody asked for.
-Storing one channel is also what pays for the 16 bits.
-
-`Why the arithmetic mean of the ENCODED luma, not a log/geometric mean` — which is the
-textbook local-adaptation estimator: the pre-pass works on gamma-encoded values on
-purpose and an encoded value is already perceptually spaced, so a log of it applies a
-second perceptual curve. `effects_common.h`'s `AB_LOCAL_*` block made exactly this call
-for the 16×16 map; making the opposite one here would give this project two different
-answers to "how bright is this part of the frame". A geometric mean also needs a floor to
-keep pure black out of `ln(0)`, and that floor would be a hidden control.
-
-
-#### Strength — the map's opacity, and 0 is exact
-
-`x + (x^g − x) · s`, written that way and **not** `mix(x, x^g, s)`, so `s = 0` returns
-the input's own bits in both GLSL and C++. The host additionally clears the flag bit and
-records **none of the three dispatches** when the strength is 0, so "0 is exactly the
-original image" costs nothing as well as changing nothing. Pinned two ways: a
-`std::bit_cast` comparison over all 256 input codes × 6 map levels in
-`test_effects_curve.cpp`, and `bmap-models-identity` on real captures (worst difference
-over every region **0.000 counts**).
-
-#### Min and max brightness — they clamp the MAP, not the output
-
-A neighbourhood darker than **Min brightness** is treated as if it were *at* Min
-brightness, and one brighter than **Max brightness** as if it were at Max. Equivalently:
-they pin the exponent to `[ln(t)/ln(max), ln(t)/ln(min)]`, i.e. they are a **bound on
-how far any pixel may be pushed**, expressed in the same units as the picture and the
-target — which is what *"adjust the min and max brightness within the image"* asked for.
-
-`Why the map and not the output:` a floor and a ceiling on the **output** is a clamp,
-and a clamp destroys exactly what this effect exists to reveal — every value under the
-floor lands *on* the floor, so a lifted player model comes out as a flat silhouette
-instead of a readable one. It would also break the "strength 0 is the original image"
-promise, since a clamp applies whatever the strength is. Clamping the map instead never
-flattens anything; it only stops the correction.
-
-`Why they cannot invert:` the panel's two ranges (**0.02..0.50** and **0.50..0.90**) do
-not overlap except at their shared endpoint, so no reachable pair inverts, and
-`bmap_level()` floors the ceiling at the floor as well, so a hand-edited config cannot
-invert them either. When they meet exactly at the target the operator is the **exact
-identity**, whatever the strength — asserted over every input code.
-
-`Why the exponent guards (BMAP_GAMMA_MIN 0.02 / _MAX 24) are not a second hidden
-ceiling:` sweeping Target over its whole 0.1..0.9 range against the widest reachable
-rails gives an exponent between 0.027 and 21.9, both strictly inside them — asserted
-over the full grid, so if a slider range ever widens past what they cover the test fails
-rather than the clamp silently binding. They exist for a NaN, an infinity, or a
-hand-edited target of 0 reaching `pow()`. This is the
-[2026-09-08 lesson](#the-ceiling-target-brightness-and-max-gain-went-inert-2026-09-08)
-applied up front: a clamped slider looks exactly like a working one.
-
-#### Where it sits in the order, and why
-
-> Shadow Control → Saturation → Vibrancy → (Pre-Sharpen) → **Brightness Map** → Bloom →
-> Adaptive Brightness *or* Adaptive Gamma → `saturate`
-
-- **Before Bloom.** The map's own dispatch reads the raw base layer through `grade()`
-  alone, so putting the operator here makes the map an *exact* description of the pixels
-  it is dividing rather than of a picture the glow has since changed. (Pre-Sharpen is
-  not in the map either, and does not need to be — a 5-tap cross is invisible after an
-  8× box reduction, the same argument the bloom bright pass and the preview pass make.)
-- **Before the adaptive block**, for the reason Bloom's own note gives: there is no
-  feedback either way, because `cs_effects_measure.comp` reads the **raw** layer, and
-  the adaptive operators should treat whatever this produced as the picture.
-
-#### No exclusion with either adaptive effect — and what stacking actually does
-
-**Decided, not left undefined.** Adaptive Brightness and Adaptive Gamma exclude each
-other because they aim the same mid-tones at a target *from the same pre-effect
-statistics*, so the second fits its curve to a median the first has already moved and
-the correction lands twice. **None of that arithmetic applies here**: this effect reads
-no statistic at all — no histogram, no percentile, no EMA — and its reference is the
-local map under each pixel, which is a property of the frame's *layout* rather than of
-its histogram. So the switch is independent and the config round-trip asserts that
-turning it on moves neither adaptive row.
-
-What stacking does, stated rather than discovered:
-
-- **With Adaptive Brightness or Adaptive Gamma at their defaults:** sensible and the
-  intended combination. The adaptive row sets the frame's overall level from its
-  statistics; this one then evens out what remains *within* the frame. Because this runs
-  first, the adaptive row's statistics are still measured on the raw frame, so it does
-  not chase its own tail.
-- **With Adaptive Gamma's own Local adaptation raised:** two local operators at two very
-  different scales, compounding. The picture goes flat and it is not a look worth
-  having. If Brightness Map is on, leave Adaptive Gamma's Local adaptation at its
-  default of 0 — that is what the coarse operator is *for*, and this one supersedes it.
-
-#### Halos — the known enemy, measured rather than argued
-
-This operator is far more prone to halos than the coarse one, **by construction**: it is
-deliberately 6–140× finer, and the halo is the price of that. It is reported here at
-full size rather than tuned away.
-
-Measured on **`halobox`** (a flat 200 field with a flat 10 box, 320 × 320) and
-**`haloinv`** (a 220 box on a 15 field), along a line out from the box's right edge.
-"amp" is the field 4 px from the edge minus the far field.
-
-**Strength** (Radius at the shipped 0.25) — the halo scales almost exactly linearly:
-
-| Strength | amp | far field | d4 | d16 | d64 |
-| --- | --- | --- | --- | --- | --- |
-| 0.25 | **+18.9** | 182 | 200.9 | 193.6 | 182.0 |
-| **0.50 (shipped)** | **+37.5** | 164 | 201.5 | 187.0 | 164.0 |
-| 1.00 | **+75.0** | 128 | 203.0 | 174.2 | 128.0 |
-
-**Radius** (Strength 0.5) — and this is the important table. Re-measured 2026-09-10 on
-the widened slider:
-
-| Radius | σ | amp | d4 | d8 | d16 | d32 | d64 | d128 | d256 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.00 | 4 px | **+21.6** | 185.6 | 170.5 | 164.0 | 164.0 | 164.0 | 164.0 | 164.0 |
-| **0.25 (shipped)** | 18 px | **+37.5** | 201.5 | 197.0 | 186.9 | 170.0 | 164.0 | 164.0 | 164.0 |
-| 0.50 | 28 px | **+39.0** | 203.0 | — | 194.1 | — | 165.6 | — | — |
-| 1.00 | 48 px | **+40.1** | 204.1 | — | 199.4 | — | 176.9 | — | — |
-| **2.00** | 96 px | **+38.6** | 202.6 | 202.0 | 200.5 | 197.4 | 190.2 | 175.9 | 164.0 |
-
-**What Radius buys is width, not amplitude** — over most of the slider. From 0.25 up the
-amplitude barely moves (+37.5 → +38.6) while the reach goes from about 64 px to 256 px.
-That inverts the intuition the coarse operator's own halo section built: there,
-*widening* the kernel was what removed the halo, because the kernel became much larger
-than the object. Here the object is a quarter of the frame across, so no reachable
-radius is larger than it and widening only spreads the same rim further. A tight rim is
-far less objectionable than a broad glow, and a fine map also sees smaller objects —
-which is why the shipped Radius is near the *fine* end, and why **widening the radius is
-the wrong answer to "the halo bothers me"; lowering Strength is the right one.**
-
-**The new floor is the exception, and it is the good kind.** Radius 0.00 has the
-*smallest* amplitude of any setting (**+21.6**, below the shipped default's +37.5) and
-its rim is gone within 16 px — it reads as a thin outline around an object rather than
-as a glow. That is new: at the old floor (σ 8 px on a 1/8 map) the same measurement was
-+31.9 spread over ~16 px. Going finer made the halo both smaller and tighter.
-
-**The new ceiling is the bad kind, and it is worth saying plainly.** At Radius 2.00 the
-rim is as tall as the default's and 256 px wide, *and the object it surrounds is no
-longer lifted at all* — on the reference scene a 128 px object goes 30 → 28.8, i.e.
-nowhere. **At the top of the slider this stops being a tone operator and becomes a glow
-generator.** It is a legitimate setting for a scene whose bright and dark regions really
-are hundreds of pixels across; it is not the setting for a player model, and nothing in
-the UI can say that better than this paragraph can.
-
-**There is no ring, at any setting**, and that is guaranteed rather than observed: the
-map is a non-negative, symmetric, unimodal blur of the image, and such a kernel maps a
-step to a *monotone* ramp. `effects-regression.sh` asserts monotonicity at every setting
-tested, precisely so that a later "improvement" — a sharper map, an edge-aware filter —
-that reintroduced a rim fails loudly.
-
-`haloinv` mirrors it with the sign flipped: **−38.5** counts at the shipped defaults,
-**−77.1** at Strength 1.0, and across the widened Radius **−17.9** (0.00, gone by d16),
-−40.5 (1.00) and **−40.5** at 2.00 (still −23 at d64) — monotone at every one.
-
-**For scale:** Adaptive Gamma's local adaptation measures **+8** counts at its own
-default on the same scene where this measures **+37.5**. Five times worse, twenty times
-finer. That is the trade, as two numbers, and it is the reason this ships as a separate,
-experimental effect rather than as a setting of the other one.
-
-#### Measured (desktop, headless, `scripts/effects-regression.sh`, 2026-09-09)
-
-Same recipe as everything above, 1280 × 720. The scene is new:
-`tests/effects_scene_client.c`'s **`models`** — four flat 30-code boxes, **16 / 32 / 64 /
-128 px wide** and three times as tall (a player's proportions), on a flat 200 field —
-and **`modelsinv`**, its inverse. `Why four sizes:` the operator's whole question is
-*what size of object it can see*, and that is a curve, not a yes/no; the existing 320 px
-halo box is trivially resolvable by every operator here and says nothing about a player.
-
-**The headline case — a dark object on a bright field.** Defaults except Strength:
-
-| Strength | box16 | box32 | box64 | box128 | field |
-| --- | --- | --- | --- | --- | --- |
-| off | 30.0 | 30.0 | 30.0 | 30.0 | 200.0 |
-| 0.25 | 25.4 | 33.6 | 45.9 | 53.0 | 182.0 |
-| **0.50 (shipped)** | 20.7 | **37.2** | **61.9** | **76.1** | 164.0 |
-| 0.75 | 16.1 | 40.8 | 77.8 | 99.2 | 146.0 |
-| 1.00 | 11.4 | 44.4 | 93.8 | 122.2 | 128.0 |
-
-At the shipped defaults a 64 px object goes **30 → 62** and a 128 px one **30 → 76** —
-from "almost black" to a clearly readable grey — while the field comes down 200 → 164.
-The **16 px** box goes the other way (30 → 21): the map is too coarse to see it, so it
-takes the field's darkening correction. That is the resolution limit, and it is why
-Radius is a control — at Radius 0.0 the same box reads **40.3**.
-
-**The inverse — a bright object on a dark field:**
-
-| Strength | box16 | box32 | box64 | box128 | field |
-| --- | --- | --- | --- | --- | --- |
-| off | 200.0 | 200.0 | 200.0 | 200.0 | 30.0 |
-| **0.50 (shipped)** | 211.7 | 201.7 | **182.7** | **167.1** | 79.0 |
-| 1.00 | 223.4 | 203.4 | 165.2 | 134.2 | 128.0 |
-
-The correction runs the other way, as it must. Note it resolves one size *worse* here
-(64 and 128 px, against 32 / 64 / 128 in the direct case): a bright object on a dark
-field is dragged up by its background's strong lift before the map can pull it down.
-
-**Radius — which sizes survive each setting** (Strength 0.5). Re-measured 2026-09-10 on
-the widened slider; the two greyed rows are what the *previous* build measured at the
-same settings, and the identical numbers from 0.25 down the table are the compatibility
-promise as a measurement:
-
-| Radius | box16 | box32 | box64 | box128 | field |
-| --- | --- | --- | --- | --- | --- |
-| off | 30.0 | 30.0 | 30.0 | 30.0 | 200.0 |
-| **0.00 (new floor, σ 4 px)** | **64.4** | **76.8** | **79.0** | 79.0 | 164.0 |
-| *0.00 (old floor, σ 8 px)* | *40.3* | *64.3* | *76.9* | *79.0* | *164.0* |
-| **0.25 (shipped)** | 20.8 | **37.5** | **62.3** | 76.5 | 164.0 |
-| 0.50 | 17.0 | 25.1 | **46.5** | 69.2 | 164.0 |
-| 1.00 | 16.0 | 17.8 | 28.8 | **52.6** | 164.0 |
-| 1.50 | 15.0 | 16.0 | 20.8 | **37.5** | 164.0 |
-| **2.00** | 15.0 | 16.0 | 17.8 | 28.8 | 164.0 |
-
-**The 16 px box lifts at the new floor, and lifts much further**: 30 → 64.4, where the
-old floor reached 40.3. Full correction on this scene is 79.0, so it now gets **70 %** of
-its own correction against **21 %** before. That became possible at the 1/4 map and only
-there — reaching σ 4 px on a 1/8 map would need a sub-texel blur, which
-[blocks](#radius-the-floor-the-ceiling-and-why-zero-is-impossible).
-
-**Radius 2.00's row is Radius 1.00's row shifted one box to the left.** That is what
-"twice the neighbourhood" looks like as a measurement, and it is also the honest picture
-of what the top of the slider is for: it moves the size the operator can see from ~67 px
-to ~134 px, and it corrects nothing smaller.
-
-`Why the default is 0.25 and not 0.0, when 0.0 measures better on every line of this
-table and looks better too:` shipping the extreme of a slider is a smell — it leaves a
-user who finds the look too aggressive able to move in only one direction, and it makes
-the shipped picture the most aggressive one the effect can produce. 0.25 still resolves
-a 25 px object, which covers a player at the distances that matter, and **Radius 0.0
-remains the setting to reach for if a player still reads as a silhouette** — said here
-rather than left to be discovered. It is a stronger recommendation since 2026-09-10 than
-it was before: the new floor lifts every object size on this scene *and* has the
-smallest halo of any setting.
-
-**Where the picture stops looking like a picture: the fine end, and the table says so
-before the eye does.** At Radius 0.00 the 32, 64 and 128 px boxes come out within **2.2
-counts** of each other (76.8 / 79.0 / 79.0) against **39 counts** apart at the default —
-the operator has stopped distinguishing sizes and is flattening everything above its
-resolution onto one value. All large-scale tonal composition is gone and only detail
-finer than ~6 px survives. On the textured `texdark` frame at Strength 1.0 the 16 px-scale
-local contrast falls **9 %** against the effect being off (23.75 → 26.00), where the
-shipped default *raises* it (27.89). That is the measurement that decided against a 1/2
-map: a σ 2 px floor removes about a third of a mid-tone textured frame's local contrast
-to buy ~3 px of resolution. At the *wide* end nothing goes flat at all — the far field
-measures 164.0 at every radius — the picture instead acquires a broad low-frequency wash
-around every large object, which is its own kind of "not a picture".
-
-**Min brightness** (Strength 1.0) — the lift guard rail:
-
-| Min | box16 | box32 | box64 | box128 | field |
-| --- | --- | --- | --- | --- | --- |
-| 0.02 | 11.4 | 44.4 | 93.8 | 122.2 | 128.0 |
-| **0.10 (shipped)** | 11.4 | 44.4 | 93.8 | 122.2 | 128.0 |
-| 0.30 | 11.4 | 44.4 | 73.4 | 74.0 | 128.0 |
-| 0.50 | 11.4 | 29.7 | **30.0** | **30.0** | 128.0 |
-
-At 0.50 — where it meets Target brightness — the objects are back at their input value
-of 30 and the effect is the exact identity for them. 0.02 and 0.10 read the same because
-the boxes' own blurred map level is already above 0.10.
-
-**Max brightness** (Strength 1.0) — the darken guard rail:
-
-| Max | box16 | box128 | field |
-| --- | --- | --- | --- |
-| 0.50 | **30.0** | 122.2 | **200.0** |
-| 0.70 | 11.4 | 122.2 | 159.0 |
-| **0.80 (shipped)** | 11.4 | 122.2 | 128.0 |
-| 0.90 | 11.4 | 122.2 | 128.0 |
-
-At 0.50 the 200-code field is left completely alone (its map is clamped to the target,
-so the exponent is exactly 1) and the 16 px box, whose map *is* the field, with it. 0.80
-and 0.90 read the same because the field's map level (0.784) is below both.
-
-##### Stability: no pulse, no shimmer
-
-| | raw p98 p2p | output pixel p2p |
-| --- | --- | --- |
-| still frame, 300 composites (`texdark`) | **0** | **0** |
-| the same at Radius 0.00 | **0** | **0** |
-| the same at Radius 2.00 | **0** | **0** |
-
-`bmap-stability-pan`: six captures of the same `texdark` scene panning at 3 px/frame
-with `--periodic` — so the frame's light population is identical every frame and only
-the layout moves:
-
-| | frame means | peak-to-peak |
-| --- | --- | --- |
-| off | 25.73 25.79 25.75 25.73 25.85 25.73 | **0.126 counts** |
-| on (shipped defaults) | 70.51 70.48 70.48 70.55 70.49 70.47 | **0.076 counts** |
-| on at Radius **0.00** | 69.33 69.36 69.34 69.36 69.34 69.32 | **0.038 counts** |
-| on at Radius **2.00** | 71.20 71.56 71.47 71.57 71.29 71.43 | **0.368 counts** |
-
-At the shipped defaults and at the new fine floor the effect is *quieter* than the
-capture path's own noise with the effect off — a fine spatial filter is more prone to
-this than a coarse one, which is why it was measured rather than argued, and it does not
-pulse. The wide end is the one number in this whole change that got worse: **0.368
-counts of 255**, a quarter of one code, three times the off-case spread. It is well
-inside the gate's bar and invisible, but it is stated rather than buried — a 1/16 map
-under a pan is the coarsest grid this effect has ever sampled and it is the one that
-moves.
-
-##### Cost, stated plainly
-
-- **Dispatches added: 3**, recorded only on frames the effect is on *and* the strength is
-  above 0. Unchanged by the 2026-09-10 widening.
-- **Memory added: two `ABGR8888` textures at ⌈W/4⌉ × ⌈H/4⌉** — the *finest* reduction the
-  Radius can ask for, since a coarser frame uses the top-left corner of the same pair. At
-  1920×1080 that is 480×270×4 = 518 KB each, **1.04 MB** for the pair; at 2560×1440,
-  **1.84 MB**. Four times what it was before 2026-09-10 (259 KB / 461 KB), and the price
-  of halving the Radius floor. Pooled exactly like `effectsOutput` and Bloom's pair —
-  re-created only when the base layer's source size changes, never freed, and **never on
-  a Radius change**.
-- **Work added, in taps**, and it now depends on where the Radius sits — but far less
-  than the 24:1 range of blur widths would suggest, because the reduction moves with it:
-
-  | Radius | σ (src px) | map | σ (texels) | taps | taps per source px |
-  | --- | --- | --- | --- | --- | --- |
-  | 0.00 | 4 | 1/4 | 1.00 | 7 | **1.88** |
-  | 0.10 | 10 | 1/4 | 2.40 | 17 | 3.12 |
-  | **0.25 (shipped)** | 18 | 1/4 | 4.50 | 29 | **4.62** |
-  | 0.40 | 24 | 1/4 | 6.00 | 37 | **5.62** ← the worst point |
-  | 0.50 | 28 | 1/8 | 3.50 | 23 | 1.72 |
-  | 1.00 | 48 | 1/8 | 6.00 | 37 | 2.16 |
-  | 2.00 | 96 | 1/16 | 6.00 | 37 | **1.29** |
-
-  The downsample reads every source pixel exactly once at every setting (a d×d box, d²
-  `texelFetch`es per map texel), which is the 1.0 all these figures start from; the rest
-  is the two blur passes. Against a flat **2.03** before, the new floor is *cheaper*, the
-  top of the slider is *cheaper*, and the worst point — just below the 1/4→1/8 switch —
-  is 2.8× dearer. The per-pixel pass is unchanged: four cached fetches of a small
-  texture, three mixes, one `log` and three `pow`s.
-- **There is still no GPU-timestamp instrumentation in `vulkan_composite()`**, so there
-  is no measured microsecond figure for any of this and none is claimed — the same
-  statement Bloom's and Local adaptation's cost sections make.
-
-##### The Inspector's before/after preview: deliberately not extended
-
-The row declares **no** `Preview`, for the same three reasons
-[Bloom's section](#the-inspectors-beforeafter-preview-deliberately-not-extended) gives,
-and one of its own. `EffectPreviewMath.h`'s contract is per-pixel and its 256-entry LUT
-fast path exists because the adaptive effects are a pure function of one byte; a spatial
-operator breaks that at the root. The capture is a fixed 256×144 downscale of a frame of
-unknown source size, and Radius is defined in **source pixels**, so a CPU mirror would
-have to guess the reduction factor and would draw a map of the wrong width — worse here
-than for Bloom, because the map's width is the whole feature. And the capture pass is
-armed by the adaptive effects' own `NeedsStatistics()`. Like Bloom, this effect needs the
-strip least: the result is visible on the game the moment the switch is flipped.
-
-##### Row count, the parameter budget, and the settings audit
-
-The Effects band went from 7 switch rows to **8**, and the area's summary now reads
-`n of 8 effects on`. Verified by capture at 2560×1440
-(`build-release/verify-shots/brightness-map-2026-09-09/captures/ui-shaders-area-2560x1440.png`):
-the row reads **"Brightness Map (experimental)" in full, no truncation**, sits between
-Bloom and Shadow Control, and the Overview pane reports
-`sheet 9 rows · inspector 28 params · 0 unreachable` — 28 being every effect's params
-added up, so all five new ones registered without tripping `kParamBudget` and every one
-is reachable.
-
-`scripts/settings-audit.sh` then drove all six new keys through the real binding in all
-three routing situations: **430 settings audited (144 unique ids across 3 situations,
-430 rows), 330 passed, 0 failed, 100 not covered** — up from 412 / 138 / 412 / 312, i.e.
-the eighteen new rows all pass. It needed **no** change to the audit itself and no
-`SIBLING_KEYS` entry, because every write touches exactly its own declared key: this
-effect has no exclusion rule with anything (unlike Adaptive Gamma, whose switch
-legitimately writes Adaptive Brightness's key and had to be declared).
-
-Brightness Map owns **5** params — Strength, Radius, Target
-brightness, Min brightness, Max brightness — against `kParamBudget`'s 8, and **the
-budget was not raised**. The request names three of them (strength, min, max); Radius is
-there because the halo is unavoidable and the user must own the trade rather than have
-it hidden in a constant; Target because it is both what "uniform" means and the
-operator's exact neutral point, and because both sibling tone rows already have one under
-that name.
-
-##### Looked at, not just measured
-
-Captures in `build-release/verify-shots/brightness-map-2026-09-09/`, with the full
-numeric results in that directory's `results.txt`. Graded by eye:
-
-- **`21-models-bmap-strength-0.5.png`** — the answer to the request. The 64 and 128 px
-  bars are unmistakably lifted into a readable dark grey; you can see their shape and
-  their interior, not just their outline. *And* each bar has an obvious **white glow**
-  around it, brightest at the edge and fading over ~30 px, which on this flat field is
-  the most conspicuous thing in the picture. The picture is **not** washed out — the
-  field is still clearly lighter than the objects — but it is visibly processed.
-- **`21-models-bmap-strength-1.0.png`** — the unflattering one, kept on purpose. The
-  field is exactly mid-grey and the 128 px bar's interior is very nearly the *same* mid-
-  grey: "uniform", yes, and the large object has almost vanished into the background,
-  readable only by its dark edge and its halo. **This is washed out, and it also defeats
-  the purpose** — full strength flattens a big object into its field. The useful range
-  for spotting things is the middle of the slider.
-- **`21-models-bmap-radius-0.0.png`** — better than the default, honestly. All four
-  bars, the 16 px one included, lifted to an even readable grey, with the halo reduced to
-  a thin bright rim a few pixels wide. The best-looking capture in the set.
-- **`23-halobox-bmap-default.png`** — the adversarial case: a hard, straight,
-  high-contrast edge on a perfectly flat field. The square is lifted from black to a
-  readable dark grey, and the white glow around it is strong, with a matching dark band
-  just inside its own edge. Nothing rings; the glow falls off monotonically.
-- **`25-texdark-bmap-off-1.png`** vs **`25-texdark-bmap-on-1.png`** — the closest thing
-  here to a game frame, and by a wide margin the best the effect looks. Off, a nearly
-  black textured field with white specks. On, at the shipped defaults, the texture is a
-  clearly readable dark grey with its structure visible, the specks stay bright and
-  distinct, and there is **no visible halo or ring anywhere** — because a textured frame
-  has no large flat region for one to sit on. This is the capture most predictive of a
-  real game.
-
-**The widened Radius, graded by eye (2026-09-10).** Captures in
-`build-release/verify-shots/bmap-radius-2026-09-10/`, with `results.txt` and two contact
-sheets (`models-sheet.png`, `halo-sheet.png`) beside them:
-
-- **`captures/21-models-bmap-radius-0.0.png`** — **the end I would actually play with.**
-  All four bars, the 16 px one included, come up to a readable grey, and the halo is a
-  *hairline stroke* around each rather than a glow. Against the same capture on the
-  previous build it is unambiguously better: the two smallest bars used to be only
-  partly lifted, and the rim used to be a soft band rather than an outline.
-- **`captures/21-models-bmap-radius-2.0.png`** — the new top, and the unflattering one.
-  It barely lifts anything and washes roughly a third of the frame in haze; the big bar
-  is surrounded by a huge soft glow while its own interior stays dark. **A look, not a
-  fix** — legitimate for a scene whose bright and dark regions really are hundreds of
-  pixels across, wrong for a player model, and the docs say so rather than leaving it to
-  be discovered.
-- **`captures/23-halobox-bmap-radius-min.png`** vs **`-max.png`**, side by side in
-  `halo-sheet.png` — the same story on one hard-edged box. At Radius 0 the box's interior
-  is evenly lifted and the halo is a one-or-two-pixel outline; at Radius 2 the interior is
-  *not* lifted and the halo is an enormous white cloud. Two pictures that make the
-  trade-off obvious in a way no table does.
-- **`blocking-strip.png`** — the sub-texel experiment, at 3× nearest: off, one texel,
-  half a texel. Honestly, **the two processed strips are hard to tell apart by eye** on
-  this scene. The evidence for keeping the floor at one texel is the numbers (the error
-  at the grid's own frequency goes from 2.5× to 7.5× the noise floor), not a screenshot
-  that screams — which is exactly why it was worth measuring rather than trusting the
-  comment.
-
-**What was not measured:** a real game frame. Everything here is the synthetic client at
-1280×720 on this desktop's GPU. The flat-field halo numbers are a worst case that real
-content does not contain, and how it looks on a real game is a judgement only the user
-can make.
+### Brightness Map — History (2026-09-09 to 2026-09-14)
+
+An experimental spatial local tone operator, `image.shaders.brightness_map`
+(`ReshadeBrightnessMapSettings`): it built a low-pass of the frame's own luminance — the
+*brightness map*, at a user-controlled blur of 4..96 source pixels — and divided the
+picture by it against a mid-grey target, so a dark player model on a bright field got its
+own exposure instead of the field's, at a scale Adaptive Gamma's Local adaptation (a much
+coarser 16×16 grid) could not resolve. Five params: Strength, Radius, Target brightness,
+Min brightness, Max brightness.
+
+**Removed 2026-09-14** at the user's request ("You can actually remove the brightness map
+experimental shader, I don't need it anymore.") — old profiles carrying a `brightness_map`
+object are simply no longer read, the same precedent the removed HUD backdrop keys
+followed. The Adaptive Brightness V2 plan's guided-filter base/detail split
+(`superdoc/planning/adaptive-brightness-v2-plan.md`) supersedes the idea: a base/detail
+decomposition serves the same "correct an object independently of its background" goal
+without a dedicated effect, a separate halo dial, or a second spatial pipeline running
+alongside Bloom's.
+
+**What was measured, worth keeping in mind for that plan:** the halo/resolution trade-off
+was real and unavoidable by construction (a finer map resolves smaller objects but rings
+harder around a hard edge; a map equal to the picture is not "pixel perfect", it is the
+image gone, since the operator divides the picture by a blur of itself); a 16-bit packed
+map was necessary because an 8-bit one produced a visible contour on smooth gradients; and
+a coarser downsample grid (rather than a wider blur kernel) was the affordable way to
+cover a wide range of blur widths from one small separable kernel.
 
 ### Adaptive Brightness (`image.shaders.adaptive_brightness`)
 
@@ -3251,7 +2600,7 @@ under this harness's `--motion 3` unless paused. The first version of this check
 pause it, and the "off" and "on" captures were therefore two different frames of a moving
 picture graded two different ways, not one frame graded two ways: one coarse-grid cell read
 raw 5 / graded 203, which looked exactly like a binarisation bug and was not one. `Why this
-block runs LAST, its own restarted instance, after Brightness Map:` Bloom's block
+block runs LAST, its own restarted instance:` Bloom's block
 (immediately after Adaptive Gamma's) continues the PREVIOUS instance rather than restarting
 — it needs the client already sitting on `texdark` with motion paused, exactly where Adaptive
 Gamma's block leaves it — so a block placed between them that restarts with a different ring
@@ -3280,11 +2629,10 @@ raised from six 2026-09-06 (request #17, see the
 for the evidence and the why) and from seven 2026-09-07 (Local adaptation, below). See
 `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s `kParamBudget`. Counts:
 Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Bloom 3 (new 2026-09-08),
-Brightness Map 5 (new 2026-09-09),
 Adaptive Brightness 8 (zero headroom), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two
 adaptation speeds 2026-09-09), Shadow Control
-1. **The budget was not raised again** for Adaptive Gamma, for Bloom, for Adaptive
-Gamma's speeds or for Brightness Map, and did not need to be — see each effect's own section for why five and three params are their honest
+1. **The budget was not raised again** for Adaptive Gamma, for Bloom, or for Adaptive
+Gamma's speeds, and did not need to be — see each effect's own section for why five and three params are their honest
 counts rather than a squeeze.
 
 **The second raise, 7 → 8 (2026-09-07), and the debt it books.** The note left after the
@@ -3364,12 +2712,12 @@ about. `scripts/effects-regression.sh` drives it for its per-frame checks
   Adaptive Gamma's sliders, its no-clipping property, its stability and the exclusion
   with Adaptive Brightness, plus the `bloom-*` checks pinning Bloom's three sliders to
   three different statements about a line profile, its own no-clip property and its
-  frame-to-frame stability under a pan. 2026-09-09 added the `models` / `modelsinv`
-  scenes and the `bmap-*` checks pinning Brightness Map's headline lift, its strength-0
-  identity, its halo bound and its stability. **That block runs on its own gamescope
-  instance with its own scene ring**, and the comment there says why: several checks
-  above it navigate by "advance N to wrap round to `dark`", so the ring's *length* is
-  arithmetic they depend on — appending two scenes to the shared ring turned 28 passing
-  checks red in one run before the block was isolated.
+  frame-to-frame stability under a pan. A block measuring the now-removed Brightness Map
+  effect (`models`/`modelsinv` scenes, `bmap-*` checks) ran here 2026-09-09 to 2026-09-14
+  on its own gamescope instance with its own scene ring, for a reason worth keeping in
+  mind for the next block that needs new scenes: several checks in this script navigate
+  by "advance N to wrap round to `dark`", so the shared ring's *length* is arithmetic
+  they depend on — appending two scenes to it turned 28 passing checks red in one run
+  before that block was isolated onto its own instance.
 - `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed;
   and the Local adaptation item — the split-scene, halo and gain-sweep evidence.
