@@ -36,6 +36,9 @@ The newest version below is the one this build reports.
 - **Shell separator line**: Added the missing divider between the settings sheet and
   the inspector, and fixed rule lines drawing doubled where they crossed each other,
   a frame border, or tinted by a selected rail item.
+- **FPS HUD**: the margin is now measured to the first row of the digits that can
+  actually be seen, so the readout no longer sits one pixel further from the edge
+  than configured at font sizes such as 12, 14, 18 and 36.
 
 ## [0.7.1] – 2026-09-10
 

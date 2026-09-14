@@ -26,6 +26,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -155,6 +156,107 @@ namespace gamescope
 				return 0.0f;
 			const float flInset = flBearing - flOutlineGeomRadius;
 			return ( nSide == 0 ) ? -flInset : flInset;
+		}
+
+		// ---- the visibility floor (2026-09-14) ---------------------------
+		//
+		// The bearing EdgeShift() cancels used to be read straight off the
+		// glyph's metric box (ImFontGlyph::X0/Y0/X1/Y1). That box is the
+		// rasteriser's tight bitmap, and its edge row is whatever slice of
+		// the outline's curve fell into the last pixel -- for a round '0'
+		// (the pinned reference) that is the cap-height / baseline
+		// OVERSHOOT, which at some sizes clips one pixel row by only a few
+		// percent: at 36 px the top row peaks at 8/255 coverage, at 12 px
+		// the bottom row at 15/255, at 18 px the top row at 2/255. Such a
+		// row exists in the atlas and in the HUD's own texture, and yet
+		// never reaches the screen in the default configuration: ImGui's
+		// straight-alpha blend stores the texel as colour x coverage, and
+		// the composite's COVERAGE blend then multiplies by the coverage
+		// again, so a white row of coverage c lands on a dark game at
+		// roughly c^2 -- 8/255 becomes +0.1 of a count and rounds back into
+		// the background. The margin was being measured to a row nobody
+		// could see, and the digits sat 1 px further from the edge than
+		// configured at exactly the sizes whose overshoot phase produced
+		// such a row (12, 14 at the bottom; 18, 36 at the top; and the same
+		// on the horizontal axis at 26-28, where the '0' bakes an empty
+		// left column). See fps-display.md's "Margin" section, 2026-09-14.
+		//
+		// The rule now: the margin is measured to the first row / column
+		// that can actually SHOW -- one whose strongest pixel can change
+		// what is on screen by at least 1/16 of full scale over its most
+		// favourable background. That one criterion gives a different
+		// coverage floor per blend path, because the three paths turn
+		// coverage into on-screen change differently:
+		//
+		//   Fixed digits, no outline  -- white over black through the
+		//     coverage blend: encode( decode(c) * c ) >= 16/255, first
+		//     true at c = 47/255. (The premultiplied colour is decoded from
+		//     sRGB by the sampler and multiplied by the raw alpha.)
+		//   An outline (either mode)  -- the outermost drawn pixel is the
+		//     black ring, which is straight alpha over the game: a white
+		//     pixel darkens by 255 * c, so c >= 16/255.
+		//   Inverted digits, no outline -- alphamode.h recovers the
+		//     coverage and applies it in LINEAR light, so on black the row
+		//     lands at encode( c ): 16/255 is reached at c = 2/255. Any
+		//     real ink shows, exactly as the metric box always assumed.
+		//
+		// tests/test_fps_counter.cpp derives all three from the blend
+		// formulae, so a change to either the floors or the shaders that
+		// disagrees with the other fails a test rather than moving a pixel.
+		inline constexpr int kInkFloorFixed    = 47;
+		inline constexpr int kInkFloorOutline  = 16;
+		inline constexpr int kInkFloorInverted = 2;
+
+		inline int InkCoverageFloor( bool bInvertedMode, bool bOutline )
+		{
+			if ( bOutline )
+				return kInkFloorOutline;
+			return bInvertedMode ? kInkFloorInverted : kInkFloorFixed;
+		}
+
+		// The bounding box, in bitmap pixels and half-open, of every pixel
+		// in an 8-bit coverage bitmap whose value reaches `nFloor`. `pAlpha`
+		// is the top-left coverage byte, `nStride` the byte distance between
+		// rows, and `nStep` the byte distance between neighbouring pixels
+		// in a row (1 for an Alpha8 atlas, 4 for an RGBA32 one pointed at
+		// its alpha byte). `bAny` is false when nothing reaches the floor,
+		// and the box is then all zeros. This is the whole of the
+		// measurement above; MeasureInkExtent() only supplies the atlas
+		// rect of each pinned-reference glyph.
+		struct InkBox
+		{
+			int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+			bool bAny = false;
+		};
+
+		inline InkBox ScanInk( const uint8_t *pAlpha, int nWidth, int nHeight, int nStride, int nStep, int nFloor )
+		{
+			InkBox box;
+			if ( !pAlpha || nWidth <= 0 || nHeight <= 0 )
+				return box;
+			nFloor = std::max( nFloor, 1 ); // a floor of 0 would count the padding as ink
+			int x0 = nWidth, y0 = nHeight, x1 = -1, y1 = -1;
+			for ( int y = 0; y < nHeight; y++ )
+			{
+				const uint8_t *pRow = pAlpha + (ptrdiff_t)y * nStride;
+				for ( int x = 0; x < nWidth; x++ )
+				{
+					if ( pRow[(ptrdiff_t)x * nStep] < nFloor )
+						continue;
+					x0 = std::min( x0, x );
+					x1 = std::max( x1, x );
+					y0 = std::min( y0, y );
+					y1 = std::max( y1, y );
+				}
+			}
+			if ( x1 < 0 )
+				return box;
+			box.x0 = x0;
+			box.y0 = y0;
+			box.x1 = x1 + 1;
+			box.y1 = y1 + 1;
+			box.bAny = true;
+			return box;
 		}
 	}
 

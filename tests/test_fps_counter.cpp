@@ -206,3 +206,160 @@ TEST_CASE( "EdgeShift with an outline reduces the correction by the outline's ow
     REQUIRE( EdgeShift( 0, 1.0f, 4.0f ) == 3.0f );
     REQUIRE( EdgeShift( 2, 1.0f, 4.0f ) == -3.0f );
 }
+
+// ---- the visibility floor (2026-09-14) -------------------------------------
+// fps-display.md's "Margin" section, 2026-09-14: the bearing is measured to
+// the first glyph row/column that can actually show on screen, not to the
+// metric box, because a round glyph's overshoot can clip a row at a few
+// percent coverage that the composite's blend rounds back into the game.
+// ScanInk() is the measurement; InkCoverageFloor() is what "can show" means
+// per blend path, derived here from the blends themselves.
+
+namespace
+{
+    // sRGB transfer, as src/shaders' srgbToLinear / linearToSrgb.
+    double Decode( double v ) { return v <= 0.04045 ? v / 12.92 : std::pow( ( v + 0.055 ) / 1.055, 2.4 ); }
+    double Encode( double l ) { return l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow( l, 1.0 / 2.4 ) - 0.055; }
+
+    // What one glyph pixel of coverage c (0..255) does to the screen, in
+    // 8-bit counts, on the background where it shows best.
+    //
+    // Fixed digits, white, no outline: ImGui's straight-alpha blend stores
+    // the texel as (c, c, c, c) over the cleared texture; the composite's
+    // ALPHA_BLENDING_MODE_COVERAGE (alphamode.h) decodes the colour from
+    // sRGB and multiplies it by the raw alpha, over black.
+    double FixedOverBlack( int c )
+    {
+        const double a = c / 255.0;
+        return Encode( Decode( a ) * a ) * 255.0;
+    }
+    // The outline: black stamps in straight alpha over white. Measured on
+    // the bright scene (measurements.txt, 2026-09-14) the ring's outer row
+    // darkens white by about its edge coverage in counts (15 -> 13, 27 ->
+    // 42, 54 -> 65, 89 -> 119), so the model is the darkening 255 * c.
+    double OutlineOverWhite( int c )
+    {
+        return 255.0 * ( c / 255.0 );
+    }
+    // Inverted digits over black: alphamode.h's invert path recovers the
+    // coverage d = c and applies `inverted * d` in linear light, where
+    // inverted = white over black.
+    double InvertedOverBlack( int c )
+    {
+        return Encode( c / 255.0 ) * 255.0;
+    }
+
+    // The smallest coverage whose on-screen change reaches 1/16 of full
+    // scale (16 counts), for a monotonic response.
+    template <typename F>
+    int SmallestVisible( F response )
+    {
+        for ( int c = 1; c <= 255; c++ )
+            if ( response( c ) >= 16.0 )
+                return c;
+        return 256;
+    }
+}
+
+TEST_CASE( "ink floors are the 1/16-of-full-scale rule under each blend path", "[fps_counter][margin]" )
+{
+    // The three constants are not tuned by eye: each is the first coverage
+    // at which that path can change a pixel by 16/255. If a shader's blend
+    // changes, this is what moves.
+    REQUIRE( SmallestVisible( FixedOverBlack ) == kInkFloorFixed );
+    REQUIRE( SmallestVisible( OutlineOverWhite ) == kInkFloorOutline );
+    REQUIRE( SmallestVisible( InvertedOverBlack ) == kInkFloorInverted );
+
+    // The rows this exists for: the pinned '0' at 36 px tops out at 8/255
+    // on its first row, at 12 px bottoms out at 15/255 (measured 2026-09-14,
+    // build-release/verify-shots/fps-hud-bottom-2026-09-14/). Under the
+    // coverage blend those are under a quarter of a count -- invisible on
+    // any background -- while the 36 px bottom row (89/255) is a plain
+    // grey that must keep counting.
+    REQUIRE( FixedOverBlack( 8 ) < 0.5 );
+    REQUIRE( FixedOverBlack( 15 ) < 1.0 );
+    REQUIRE( FixedOverBlack( 89 ) > 40.0 );
+    REQUIRE( 8 < kInkFloorFixed );
+    REQUIRE( 15 < kInkFloorFixed );
+    REQUIRE( 89 >= kInkFloorFixed );
+    // In Inverted mode that same 8/255 row lands near 50/255 on black --
+    // very much visible -- so it has to keep counting there.
+    REQUIRE( InvertedOverBlack( 8 ) > 40.0 );
+    REQUIRE( 8 >= kInkFloorInverted );
+}
+
+TEST_CASE( "InkCoverageFloor picks the floor of the outermost drawn element", "[fps_counter][margin]" )
+{
+    REQUIRE( InkCoverageFloor( false, false ) == kInkFloorFixed );
+    REQUIRE( InkCoverageFloor( true,  false ) == kInkFloorInverted );
+    // With an outline the ring is the outermost pixel in either mode.
+    REQUIRE( InkCoverageFloor( false, true ) == kInkFloorOutline );
+    REQUIRE( InkCoverageFloor( true,  true ) == kInkFloorOutline );
+}
+
+TEST_CASE( "ScanInk boxes the pixels at or above the floor", "[fps_counter][margin]" )
+{
+    // A 6x5 synthetic '0': a faint overshoot row on top (peak 8), a strong
+    // body, a faint bottom row (peak 15), an empty left column and a
+    // faint right column (peak 3) -- every edge shape the real atlas
+    // showed at 12 / 36 / 28 / 33 px.
+    const uint8_t glyph[5][6] = {
+        {   0,   0,   8,   6,   0,   0 },
+        {   0, 200, 255, 255, 180,   3 },
+        {   0, 255,  40,  40, 255,   2 },
+        {   0, 210, 255, 255, 190,   3 },
+        {   0,   0,  15,  12,   0,   0 },
+    };
+    const uint8_t *p = &glyph[0][0];
+
+    SECTION( "the Fixed floor drops the faint rows and columns" )
+    {
+        const InkBox b = ScanInk( p, 6, 5, 6, 1, kInkFloorFixed );
+        REQUIRE( b.bAny );
+        REQUIRE( b.x0 == 1 );
+        REQUIRE( b.y0 == 1 );
+        REQUIRE( b.x1 == 5 );
+        REQUIRE( b.y1 == 4 );
+    }
+    SECTION( "the Inverted floor keeps the overshoot rows but not the empty column" )
+    {
+        const InkBox b = ScanInk( p, 6, 5, 6, 1, kInkFloorInverted );
+        REQUIRE( b.bAny );
+        REQUIRE( b.x0 == 1 );
+        REQUIRE( b.y0 == 0 );
+        REQUIRE( b.x1 == 6 );
+        REQUIRE( b.y1 == 5 );
+    }
+    SECTION( "a floor of 0 is treated as 1: padding is never ink" )
+    {
+        const InkBox b = ScanInk( p, 6, 5, 6, 1, 0 );
+        REQUIRE( b.x0 == 1 );
+        REQUIRE( b.x1 == 6 );
+    }
+    SECTION( "nothing at the floor reports no box" )
+    {
+        const InkBox b = ScanInk( p, 6, 5, 6, 1, 256 ); // above every 8-bit value
+        REQUIRE_FALSE( b.bAny );
+        REQUIRE( b.x0 == 0 );
+        REQUIRE( b.y1 == 0 );
+    }
+    SECTION( "RGBA32 layout: alpha byte every fourth, row stride in bytes" )
+    {
+        // The same glyph, interleaved as RGBA with the coverage in A.
+        uint8_t rgba[5][6][4] = {};
+        for ( int y = 0; y < 5; y++ )
+            for ( int x = 0; x < 6; x++ )
+                rgba[y][x][3] = glyph[y][x];
+        const InkBox b = ScanInk( &rgba[0][0][3], 6, 5, 6 * 4, 4, kInkFloorFixed );
+        REQUIRE( b.bAny );
+        REQUIRE( b.x0 == 1 );
+        REQUIRE( b.y0 == 1 );
+        REQUIRE( b.x1 == 5 );
+        REQUIRE( b.y1 == 4 );
+    }
+    SECTION( "empty input is safe" )
+    {
+        REQUIRE_FALSE( ScanInk( nullptr, 6, 5, 6, 1, 1 ).bAny );
+        REQUIRE_FALSE( ScanInk( p, 0, 5, 6, 1, 1 ).bAny );
+    }
+}

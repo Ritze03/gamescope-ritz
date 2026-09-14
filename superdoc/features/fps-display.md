@@ -752,8 +752,10 @@ reaches). The padding half of that is gone now; the bearing half is what
 off the corner even at margin 0**, when it should have been flush.
 
 **The fix:** `MeasureFpsModule()` measures the true ink bounding box
-directly off the font's own glyph metrics — `ImFontGlyph::X0/Y0/X1/Y1`, via
-`ImFont::GetFontBaked()` (public API, no `imgui_internal.h` needed) — for
+directly off the font's own baked glyphs — until 2026-09-14 the metric box
+`ImFontGlyph::X0/Y0/X1/Y1`, since then the glyph's atlas bitmap through a
+visibility floor (see *2026-09-14* below), both via `ImFont::GetFontBaked()`
+(public API, no `imgui_internal.h` needed) — for
 the pinned `'0'`-run string (the same reference the pinned-width box
 sizing already uses, so this stays as jitter-free as that scheme: every
 digit shares this font's tabular bearings by construction). On whichever
@@ -817,13 +819,133 @@ pin stays. Measured and recorded in
 
 Verified across all four corners, all four edge-centre anchors, margins
 0/1/5/20, outline off and on, and 2-/3-/4-digit readings — 152 assertions,
-148 exact and the 4 flat-digit ones above. `build-release/verify-shots/
+148 exact and the 4 flat-digit ones above. **That "exact" held only for the
+one font size and the one background it was measured on** (36 px on flat
+148 grey, where a faint glyph row still registers as a one-count
+*darkening*); on a dark game the same row vanishes and the digits sit 1 px
+in from the margin — see *2026-09-14* below. `build-release/verify-shots/
 hud-backdrop-removal-2026-09-09/` has the full table, the raw log and
 8×-zoomed corner crops at margin 0 and margin 5, with and without the
 outline. `scripts/pixel-regression.sh`'s `check_hud_margin()` keeps a
 compact, permanent subset of that matrix green: all four corners at margins
 0 and 8, outline off and on (the outline-on case replaced the retired
 backdrop-on one), plus one 4-digit reading.
+
+### 2026-09-14: the margin is measured to the first row that can be seen
+
+**The report.** The user: the HUD sits 1 px too far from the bottom edge at
+a bottom anchor. A font-size sweep (margin 8, outline 0, zero-tolerance diff
+of the on-screen capture against a no-HUD capture of the same `dark` scene,
+`build-release/verify-shots/fps-hud-bottom-2026-09-14/measurements.txt`)
+made it a property of the size, not the edge: sizes 12 and 14 → bottom gap
+9 (top exact); 18 and 36 → top gap 9 (bottom exact); every other size from
+16 to 72 exact on both. Outline 2 changed nothing about which sizes flip.
+In every off case the on-screen ink was exactly **one row shorter** than
+`MeasureInkExtent()` predicted, never taller — so not a whole-layer shift
+(that would move both edges), but one edge row going missing.
+
+**The cause.** The missing row is a real row of the baked glyph that cannot
+survive the composite. The pinned reference `'0'` is round, so it carries
+the font's cap-height and baseline *overshoot*; at each size the rasteriser
+clips whatever slice of that curve falls into the last pixel row, and at
+some sizes that slice is a few percent. Read straight out of the ImGui CPU
+atlas (Geist Mono SemiBold, `PixelSnapH`, the shipping configuration —
+peak alpha of the `'0'`'s edge rows, out of 255):
+
+| size | top row | next row | last row | row before |
+|---|---|---|---|---|
+| 12 | 152 | 234 | **15** | 245 |
+| 14 | 181 | 253 | **19** | 252 |
+| 18 | **2** | 235 | 27 | 254 |
+| 20 | 21 | 255 | 41 | 255 |
+| 36 | **8** | 249 | 89 | 255 |
+| 48 | 189 | 255 | 134 | 255 |
+
+The same happens horizontally: at 26–28 px the `'0'` bakes a left column
+of 7, 3 and **0** (an entirely empty column inside its metric box), at
+33/40/47/54 px a right column of 3. The metric box `X0/Y0/X1/Y1` includes
+all of these.
+
+Such a row is in the HUD's own texture (a GPU readback of
+`s_pOverlayTexture` shows it), but in the default configuration — Fixed
+colour, no outline — it never reaches the screen. ImGui's straight-alpha
+pipeline blends the glyph over the cleared texture with
+`(SRC_ALPHA, ONE_MINUS_SRC_ALPHA)`, so the texel is stored as *colour ×
+coverage* with alpha = coverage; the composite's
+`ALPHA_BLENDING_MODE_COVERAGE` (`alphamode.h`) then decodes that colour from
+sRGB and multiplies it by the alpha *again*. A white row of coverage `c`
+lands on a dark game at roughly `encode(decode(c)·c)`: for 8/255 that is
++0.1 of a count over the scene's 5-grey, for 15/255 −0.3 of a count over
+20-grey — both round back to the background. The model reproduces every
+capture pixel-for-pixel (at 20 px the `'0'`'s 41/255 bottom row predicts
++10.2 over 5-grey and measures +10; the `'6'`'s 49/255 predicts +15 and
+measures +15). The margin was being measured to a row nobody could see.
+
+**Not the compositor.** The previous pass concluded `rendervulkan.cpp`
+shifts the layer. It does not: `FpsDisplay_AddLayer()` pushes the HUD at
+offset 0, scale 1, and a shift would move both edges. The data — ink one
+row *shorter*, on whichever end the overshoot phase made faint — is the
+signature of a faint edge row, and the atlas numbers above are that row.
+
+**The rule.** The margin is now measured to the first row / column of the
+reference glyph that can *actually show*: one whose strongest pixel can
+change what is on screen by at least **1/16 of full scale** over its most
+favourable background. That one criterion gives a different coverage floor
+per blend path, because the three paths turn coverage into on-screen change
+differently (`fpsmath::InkCoverageFloor()`, `FpsDisplay.h`):
+
+| outermost element | blend | on-screen change of coverage `c` | floor |
+|---|---|---|---|
+| Fixed digits, no outline | coverage blend, colour already × coverage | `encode(decode(c)·c)` over black | **47/255** |
+| the outline ring (either mode) | black stamps, straight alpha | measured on white: darkens by about `c` counts (15→13, 27→42, 54→65, 89→119) | **16/255** |
+| Inverted digits, no outline | `alphamode.h` recovers `c`, applies it in linear light | `encode(c)` over black | **2/255** |
+
+Why the floor has to depend on the mode: in Inverted mode that same 8/255
+top row at 36 px lands near **49/255** on black — plainly visible — because
+the invert path applies coverage as a linear-light mixing ratio, which is
+what coverage is; only the Fixed path multiplies it in twice. One floor for
+all three would either keep placing Fixed digits a pixel in, or start
+placing Inverted ones a pixel out. `tests/test_fps_counter.cpp` derives all
+three constants from the blend formulae, so a change to either the floors
+or the shaders that disagrees with the other fails a test.
+
+**The measurement.** `MeasureInkExtent()` now takes the floor and boxes the
+atlas pixels at or above it — `fpsmath::ScanInk()`, a pure function over an
+8-bit coverage bitmap (Alpha8 or the alpha byte of RGBA32), unit-tested on
+a synthetic glyph with a faint top row, a faint bottom row, an empty left
+column and a faint right column. The glyph's atlas rect comes from its UVs
+(`ImTextureData::GetPixelsAt()`, CPU pixels ImGui keeps for its dynamic
+atlas), and the box is mapped back onto the metric box, which stays as the
+fallback for a glyph whose bitmap cannot be read. With an outline the ring
+is the same bitmap stamped out by the radius, so its visible edge is the
+same floor on the same bitmap and `EdgeShift()` adds the radius as before.
+
+**Measured after the fix** (`build-release/verify-shots/
+fps-hud-bottom-2026-09-14/after/`, table in `measurements.txt`): sizes 12,
+14, 16, 18, 20, 24, 36 and 48 at margins 0 and 8, outline 0 (dark scene)
+and 2 (bright scene — a black ring cannot register on near-black),
+top-left and bottom-left, plus bottom-right at 12 and 36. The harness
+measures by the code's own rule translated to the screen — a pixel is ink
+when it differs from the no-HUD baseline by at least what the floor
+coverage produces on that background pixel — and prints the zero-tolerance
+gap beside it with the peak change of every excluded row, so the fringe it
+discounts is on record: on the dark scene those rows are at most a few
+counts. 67 of the 72 visible-rule gaps equal their margin; the 5 others are
+the reference-glyph limitation above straddling the floor (the `'6'`'s
+bottom row is 49/255 at 20 px where the `'0'`'s is 41, its left column
+50/255 at 24 px where the `'0'`'s is 29; the `'0'`'s right column at 12 px
+is 17/255 against the ring's 16) — a 7–16-count fringe one pixel off,
+listed in `measurements.txt`.
+
+**What is deliberately not exact.** Zero-tolerance diff tools will still
+find the excluded fringe one pixel *outside* the margin on backgrounds
+where it registers at all (a one-count darkening on mid grey, +1 to +4 on
+dark). That is the trade: the row is placed where a person would say the
+digits start. `scripts/pixel-regression.sh`'s `check_hud_margin()` asserts
+its `*-edge` box at tolerance 0 on flat 148 grey, where the 36 px top row
+shows as exactly that one-count darkening; it needs the same rule (or its
+`*-edge` tolerance raised to 1) — not changed in this pass, which owned
+only the HUD's own files.
 
 ## Warm-up: `FpsDisplay_WarmUp()`
 

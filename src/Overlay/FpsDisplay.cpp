@@ -916,8 +916,21 @@ namespace gamescope
 	// 2026-09-07 -- see MeasureFpsModule()'s own
 	// comment for how this is used to correct it, and fps-display.md's
 	// "Margin" section for the measured numbers.
+	//
+	// 2026-09-14: "ink" is no longer the glyph's metric box
+	// (ImFontGlyph::X0/Y0/X1/Y1) but the box of the atlas pixels whose
+	// coverage reaches `nFloor` -- fpsmath::ScanInk() over the glyph's own
+	// baked bitmap, fpsmath::InkCoverageFloor() for why the floor depends
+	// on how the readout is blended. The metric box is the rasteriser's
+	// tight bitmap and its edge row can be a few-percent sliver of a round
+	// glyph's overshoot that never survives the composite's blend, which
+	// put the digits 1 px further in than the margin at the sizes where
+	// the overshoot's pixel phase produced such a row (FpsDisplay.h's own
+	// comment above the floors carries the numbers). The metric box is
+	// kept as the fallback for a glyph whose bitmap cannot be read (no
+	// CPU pixels, or an empty rect) so the correction never disappears.
 	struct InkExtent { float left, top, right, bottom; };
-	static InkExtent MeasureInkExtent( ImFont *pFont, float flFontSize, const char *text )
+	static InkExtent MeasureInkExtent( ImFont *pFont, float flFontSize, const char *text, int nFloor )
 	{
 		ImFontBaked *pBaked = pFont->GetFontBaked( flFontSize );
 		const float flScale = pBaked->Size > 0.0f ? flFontSize / pBaked->Size : 1.0f;
@@ -927,13 +940,54 @@ namespace gamescope
 		bool bAny = false;
 		for ( const char *p = text; *p; ++p )
 		{
+			// FindGlyph() bakes the glyph on demand, so its atlas rect is
+			// live in the atlas's current texture by the time it returns.
 			ImFontGlyph *pGlyph = pBaked->FindGlyph( (ImWchar)(unsigned char)*p );
 			if ( pGlyph && pGlyph->Visible )
 			{
-				ext.left   = std::min( ext.left,   flPenX + pGlyph->X0 * flScale );
-				ext.right  = std::max( ext.right,  flPenX + pGlyph->X1 * flScale );
-				ext.top    = std::min( ext.top,    pGlyph->Y0 * flScale );
-				ext.bottom = std::max( ext.bottom, pGlyph->Y1 * flScale );
+				// The metric box: what this measured until 2026-09-14, and
+				// the fallback below.
+				float flX0 = pGlyph->X0, flY0 = pGlyph->Y0, flX1 = pGlyph->X1, flY1 = pGlyph->Y1;
+
+				ImFontAtlas *pAtlas = pFont->OwnerAtlas;
+				ImTextureData *pTex = pAtlas ? pAtlas->TexData : nullptr;
+				if ( pTex && pTex->Pixels && pTex->Width > 0 && pTex->Height > 0 )
+				{
+					// The glyph's rect in the atlas, from its UVs (the same
+					// texels the quad samples; U/V are texel-edge aligned
+					// so rounding recovers the packed rect exactly).
+					const int nTexX0 = (int)std::lround( pGlyph->U0 * (float)pTex->Width );
+					const int nTexX1 = (int)std::lround( pGlyph->U1 * (float)pTex->Width );
+					const int nTexY0 = (int)std::lround( pGlyph->V0 * (float)pTex->Height );
+					const int nTexY1 = (int)std::lround( pGlyph->V1 * (float)pTex->Height );
+					const int nRectW = nTexX1 - nTexX0;
+					const int nRectH = nTexY1 - nTexY0;
+					if ( nRectW > 0 && nRectH > 0 && nTexX0 >= 0 && nTexY0 >= 0 && nTexX1 <= pTex->Width && nTexY1 <= pTex->Height )
+					{
+						const int nBpp = pTex->BytesPerPixel;
+						// RGBA32 keeps coverage in the alpha byte; Alpha8 is
+						// coverage alone.
+						const uint8_t *pAlpha = (const uint8_t *)pTex->GetPixelsAt( nTexX0, nTexY0 ) + ( nBpp == 4 ? 3 : 0 );
+						const fpsmath::InkBox box = fpsmath::ScanInk( pAlpha, nRectW, nRectH, pTex->Width * nBpp, nBpp, nFloor );
+						if ( box.bAny )
+						{
+							// Map bitmap pixels back onto the metric box: the
+							// quad stretches the rect linearly onto
+							// [X0,X1) x [Y0,Y1), 1:1 when baked at this size.
+							const float flPxW = ( pGlyph->X1 - pGlyph->X0 ) / (float)nRectW;
+							const float flPxH = ( pGlyph->Y1 - pGlyph->Y0 ) / (float)nRectH;
+							flX1 = pGlyph->X0 + (float)box.x1 * flPxW;
+							flY1 = pGlyph->Y0 + (float)box.y1 * flPxH;
+							flX0 = pGlyph->X0 + (float)box.x0 * flPxW;
+							flY0 = pGlyph->Y0 + (float)box.y0 * flPxH;
+						}
+					}
+				}
+
+				ext.left   = std::min( ext.left,   flPenX + flX0 * flScale );
+				ext.right  = std::max( ext.right,  flPenX + flX1 * flScale );
+				ext.top    = std::min( ext.top,    flY0 * flScale );
+				ext.bottom = std::max( ext.bottom, flY1 * flScale );
 				bAny = true;
 			}
 			flPenX += pGlyph ? pGlyph->AdvanceX * flScale : 0.0f;
@@ -1117,13 +1171,20 @@ namespace gamescope
 		// position to a pixel before adding each glyph's (unrounded) X0/Y0,
 		// so a fractional bearing here would otherwise carry a fractional
 		// pen position through that truncation and land the ink a
-		// sub-pixel off from the intended column/row -- a font glyph's own
-		// anti-aliased edge already blurs across about a pixel of its own
-		// accord (this is the one place that residual AA softness cannot
-		// be engineered away, see fps-display.md's "Margin"), so there is
-		// nothing to gain from keeping this sub-pixel-precise and a whole
-		// pixel to lose from not rounding it.
-		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szPadded );
+		// sub-pixel off from the intended column/row, so there is nothing
+		// to gain from keeping this sub-pixel-precise and a whole pixel to
+		// lose from not rounding it.
+		//
+		// 2026-09-14: the ink is measured to the first row/column that can
+		// actually show on screen, not to the glyph's metric box -- the
+		// floor depends on how this configuration blends (FpsDisplay.h's
+		// InkCoverageFloor() and the comment above it). With an outline
+		// the outermost drawn pixel is the ring, i.e. the same glyph
+		// bitmap shifted out by the radius, so the ring's own visible edge
+		// is this floor applied to the same bitmap: one measurement covers
+		// both, and EdgeShift() adds the radius as before.
+		const int nInkFloor = fpsmath::InkCoverageFloor( bInvertedMode, L.bDrawOutline );
+		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szPadded, nInkFloor );
 		const float flBearingLeft   = std::round( inkPinned.left );
 		const float flBearingRight  = std::round( L.numSize.x - inkPinned.right );
 		const float flBearingTop    = std::round( inkPinned.top );
