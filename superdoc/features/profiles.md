@@ -100,6 +100,46 @@ can name the game (`Rust · inherits Comp`) while it is not running; before that
 shows the app id. **The label is always the profile's name** (`[Game] Rust Ranked`),
 never `game_name` -- see the label rule under the Profiles area.
 
+## App id
+
+**2026-09-15.** A game profile's `app_id` is an **opaque string**, everywhere this
+fork owns it -- it does not have to be a Steam app id, or numeric at all. Asked for in
+these words:
+
+> *"Make it fully compatible with string based IDs (for different games and setting
+> the ID manually). Make sure that it takes those too, when in the GUI and creating a
+> profile."*
+
+**The validation rule (`SanitizeAppId()`, `Config/AppId.h`):** trim leading/trailing
+whitespace, then reject the id if what's left is empty, or contains `/`, `\`, or a
+control character (0x00-0x1F or 0x7F); accept everything else verbatim, digits
+included. `Why those three and nothing more:` the id is never used to build a
+filesystem path today -- it is only ever a JSON value and a JSON object key under
+`profiles.games` in `global.json`, and a JSON string tolerates spaces, dots, and
+anything else UTF-8. `/` and `\` are refused anyway, defensively, on the chance a
+future caller ever path-joins it; nothing else is restricted, so a Steam app id
+(`252490`), a hand-picked slug (`my-game`), an id with a space (`my game`), or a
+reverse-DNS-style id (`com.example.Game`) are all legal. The Create/Edit modal's
+`GameID` field (`CheckProfileForm()`, `Overlay/PanelConfig.h`) holds every game
+profile to this same rule, inline, before the id ever reaches `ConfigManager`.
+
+**Numeric-only consumers degrade cleanly, not incorrectly.** The one place a string
+app id cannot be used as-is is the Friends list, which matches against Steam's own
+numeric friend/game data (`FriendGameInfo_t`) -- see
+[`steam-friends.md`](steam-friends.md)'s app-id gate. A non-numeric session app id
+there degrades to "not a Steam game" (the area hides), exactly as no app id at all
+does; it is never misread as some other game's id. Auto-detection
+(`STEAM_COMPAT_APP_ID`, `SteamAppId`, the `STEAM_COMPAT_DATA_PATH` basename) stays
+numeric-validated as always -- those are Steam's own signals and are only ever
+going to be numeric; the string-id path is for the explicit override and the GUI
+field.
+
+**The env var override renamed** from `GS_RITZ_APPID` to `RITZ_GS_APPID` the same
+day. The old name is still accepted as a fallback for one release: if only the old
+name is set, gamescope-ritz uses it and logs one warning naming the new variable; if
+both are set, `RITZ_GS_APPID` wins silently. See `Config/AppId.h`'s `ResolveAppId()`
+for the full precedence order.
+
 ## Which profile a session edits (`SessionProfile()`)
 
 1. the **session override** -- `--profile`, `GS_RITZ_PROFILE`, or the `ritz_profile`
@@ -345,7 +385,8 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
      Inspector's CONFIGURE page says why (`DeleteBlocker()`): deleting the only profile
      would recreate `Default` from the built-in defaults behind the user's back.
    Validation (`CheckProfileForm()`): the name must survive `SanitizeProfileName()`
-   unchanged and be free; the app id is digits only. **Every refusal is inline** -- the
+   unchanged and be free; the app id is any string `SanitizeAppId()` accepts (see
+   [App id](#app-id) below -- **not** digits-only since 2026-09-15). **Every refusal is inline** -- the
    offending field gets the Text atom's red boundary and its sentence sits under the
    form, a config-layer refusal (a parent with children turned into a game profile, a
    name collision the check missed) is printed the same way, and the modal stays open

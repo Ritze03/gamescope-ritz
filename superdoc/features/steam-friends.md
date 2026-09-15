@@ -181,6 +181,20 @@ own thread — so calling it there would race the draw thread's first call. One
 seeded integer keeps the worker out of the config layer entirely, and makes it
 impossible for the panel and the poller to disagree about which game this is.
 
+**The explicit numeric gate (2026-09-15).** `config::SessionAppId()` is an
+opaque **string** — this fork also accepts a manually-set or non-Steam app id
+now (see [`profiles.md`](profiles.md#app-id)'s `SanitizeAppId()`), and Steam's
+own friend/game data (`FriendGameInfo_t`) is unavoidably numeric. The copy
+above is where the two meet: `PanelFriends_SeedFromConfig()` runs the string
+through `steamfriends::AppIdGateFromString()` (`SteamFriendsCmd.h`), which
+returns 0 for anything that is not a plain nonzero decimal number. A string id
+therefore degrades to exactly the same 0 that "no app id at all" produces, so
+`AvailableWhen()` above hides the area for it — not a special case, the same
+path. `f.uAppId` in `SteamFriendsCmd.h`'s `Friend`/`BuildJoinUrl()` never sees
+this string id at all: it is sourced only from Steam's own
+`FriendGameInfo_t.m_gameID`, so a `steam://joinlobby/...` URL can never be
+built from a non-numeric id in the first place.
+
 ### The order the rows are drawn in
 
 Requested 2026-09-09: *"Joinable players should be sorted towards the top. And

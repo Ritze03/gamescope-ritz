@@ -9,6 +9,17 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.8.1] – 2026-09-15
+
+### Added
+- **String app ids**: a game profile's app id can now be any text, not only digits —
+  set it manually in the Profiles area's Create/Edit form for a non-Steam or
+  otherwise undetected game.
+
+### Info
+- **App id env var renamed**: `GS_RITZ_APPID` is now `RITZ_GS_APPID`. The old name
+  still works for now, with a one-time warning to rename it in your launch options.
+
 ## [0.8.0] – 2026-09-14
 
 ### Added

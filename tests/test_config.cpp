@@ -16,6 +16,7 @@
 #include "Config/ConfigManager.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Zoom.h"
+#include "log.hpp"
 
 using namespace gamescope::config;
 
@@ -80,14 +81,52 @@ namespace
 
 TEST_CASE( "ResolveAppId precedence", "[config]" )
 {
-    SECTION( "GS_RITZ_APPID always wins" )
+    SECTION( "RITZ_GS_APPID always wins" )
     {
         auto lookup = MakeLookup( {
-            { "GS_RITZ_APPID", "42" },
+            { "RITZ_GS_APPID", "42" },
             { "STEAM_COMPAT_APP_ID", "100" },
             { "SteamAppId", "200" },
         } );
         REQUIRE( ResolveAppId( lookup ) == "42" );
+    }
+
+    // Renamed from GS_RITZ_APPID 2026-09-15 -- the old name is still
+    // accepted as a fallback for one release, and the new name wins when
+    // both are set.
+    SECTION( "old GS_RITZ_APPID name still works when RITZ_GS_APPID is unset" )
+    {
+        auto lookup = MakeLookup( {
+            { "GS_RITZ_APPID", "42" },
+            { "STEAM_COMPAT_APP_ID", "100" },
+        } );
+        REQUIRE( ResolveAppId( lookup ) == "42" );
+    }
+
+    SECTION( "RITZ_GS_APPID wins when both the new and old names are set" )
+    {
+        auto lookup = MakeLookup( {
+            { "RITZ_GS_APPID", "42" },
+            { "GS_RITZ_APPID", "999" },
+        } );
+        REQUIRE( ResolveAppId( lookup ) == "42" );
+    }
+
+    SECTION( "the old name logs exactly one warning naming the new variable" )
+    {
+        std::vector<std::string> vecWarnings;
+        uintptr_t ulListener = LogScope::AddGlobalLoggingListener(
+            [ & ]( LogPriority ePriority, std::string_view, std::string_view svText )
+            {
+                if ( ePriority == LOG_WARNING && svText.find( "RITZ_GS_APPID" ) != std::string_view::npos )
+                    vecWarnings.emplace_back( svText );
+            } );
+
+        auto lookup = MakeLookup( { { "GS_RITZ_APPID", "42" } } );
+        REQUIRE( ResolveAppId( lookup ) == "42" );
+
+        LogScope::RemoveGlobalLoggingListener( ulListener );
+        REQUIRE( vecWarnings.size() == 1 );
     }
 
     SECTION( "STEAM_COMPAT_APP_ID wins over SteamAppId" )
@@ -127,7 +166,7 @@ TEST_CASE( "ResolveAppId precedence", "[config]" )
     }
 
     // Persistent-session topology (DECISIONS.md #21's "topology split"):
-    // gamescope's process predates the game, so none of GS_RITZ_APPID/
+    // gamescope's process predates the game, so none of RITZ_GS_APPID/
     // STEAM_COMPAT_APP_ID/SteamAppId/STEAM_COMPAT_DATA_PATH were ever set on
     // it - this is indistinguishable from "nothing set" above, and that's
     // deliberate, not a gap: it must resolve to nothing, never to a stale or
@@ -534,7 +573,7 @@ TEST_CASE( "queued writes flush to disk without blocking the caller inline", "[c
 
 namespace
 {
-    // Points GS_RITZ_APPID at `sAppId` (highest-precedence env var,
+    // Points RITZ_GS_APPID at `sAppId` (highest-precedence env var,
     // ResolveAppId's decision 21 order) for the lifetime of the object, and
     // resets ConfigManager's session-routing cache (SessionAppId/
     // IsSessionOverrideActive/ConfigGeneration) on both construction and
@@ -547,14 +586,14 @@ namespace
         {
             ResetSessionRoutingForTests();
             if ( pszAppId )
-                setenv( "GS_RITZ_APPID", pszAppId, 1 );
+                setenv( "RITZ_GS_APPID", pszAppId, 1 );
             else
-                unsetenv( "GS_RITZ_APPID" );
+                unsetenv( "RITZ_GS_APPID" );
         }
 
         ~ScopedSessionAppId()
         {
-            unsetenv( "GS_RITZ_APPID" );
+            unsetenv( "RITZ_GS_APPID" );
             ResetSessionRoutingForTests();
         }
     };
@@ -1613,6 +1652,48 @@ TEST_CASE( "ProfileMeta round-trips for general, game and inheriting profiles, a
     REQUIRE( sComp.find( "inherits" ) == std::string::npos );
 }
 
+// 2026-09-15: "Make it fully compatible with string based IDs (for different
+// games and setting the ID manually)." An app id is an opaque string
+// everywhere this fork owns it -- verify a non-numeric id (including a
+// space and a dot, the two characters most likely to trip up something
+// that quietly assumed digits) round-trips through the profile file, the
+// games map key, SelectProfile/GameEntry and SessionAppId.
+TEST_CASE( "a string app id (with a space, and with a dot) round-trips through profiles and the games map", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( SaveProfile( General( "Comp" ), Settings{} ) );
+    REQUIRE( SaveProfile( Game( "My Game", "my game", "Comp" ), Settings{} ) );
+    REQUIRE( SaveProfile( Game( "Dotted", "com.example.Game" ), Settings{} ) );
+
+    std::optional<ProfileMeta> oSpace = LoadProfileMeta( "My Game" );
+    REQUIRE( oSpace.has_value() );
+    REQUIRE( oSpace->app_id == "my game" );
+
+    std::optional<ProfileMeta> oDot = LoadProfileMeta( "Dotted" );
+    REQUIRE( oDot.has_value() );
+    REQUIRE( oDot->app_id == "com.example.Game" );
+
+    {
+        ScopedSessionAppId scoped( "my game" );
+        REQUIRE( SelectProfile( "My Game" ) );
+        REQUIRE( GameEntry( "my game" ).selected == "My Game" );
+        REQUIRE( SessionProfile() == "My Game" );
+    }
+    {
+        ScopedSessionAppId scoped( "com.example.Game" );
+        REQUIRE( SelectProfile( "Dotted" ) );
+        REQUIRE( GameEntry( "com.example.Game" ).selected == "Dotted" );
+        REQUIRE( SessionProfile() == "Dotted" );
+    }
+
+    // The games map key survives a save/load through global.json verbatim.
+    FlushPendingWrites();
+    const std::string sGlobal = ReadText( GlobalConfigPath() );
+    REQUIRE( sGlobal.find( "\"my game\"" ) != std::string::npos );
+    REQUIRE( sGlobal.find( "\"com.example.Game\"" ) != std::string::npos );
+}
+
 TEST_CASE( "an inheriting game profile stores only the diff and follows its parent live", "[config]" )
 {
     TempConfigHome home;
@@ -1952,24 +2033,24 @@ TEST_CASE( "SessionProfile: override, then this game's selection, then last_gene
     REQUIRE( SaveProfile( General( "Comp" ), Settings{} ) );
     REQUIRE( SelectProfile( "Comp" ) );
     ResetSessionRoutingForTests();
-    setenv( "GS_RITZ_APPID", "570", 1 ); // a game never seen before
+    setenv( "RITZ_GS_APPID", "570", 1 ); // a game never seen before
     REQUIRE( SessionProfile() == "Comp" );
 
     // This game's own selection wins over last_general.
     REQUIRE( SaveProfile( Game( "Dota", "570", "Comp" ), Settings{} ) );
     REQUIRE( SelectProfile( "Dota" ) );
     ResetSessionRoutingForTests();
-    setenv( "GS_RITZ_APPID", "570", 1 );
+    setenv( "RITZ_GS_APPID", "570", 1 );
     REQUIRE( SessionProfile() == "Dota" );
     REQUIRE( SessionProfileParent() == std::optional<std::string>( "Comp" ) );
     // ... and did not move last_general.
     ResetSessionRoutingForTests();
-    setenv( "GS_RITZ_APPID", "999", 1 );
+    setenv( "RITZ_GS_APPID", "999", 1 );
     REQUIRE( SessionProfile() == "Comp" );
 
     // The override beats everything and persists nothing.
     ResetSessionRoutingForTests();
-    setenv( "GS_RITZ_APPID", "570", 1 );
+    setenv( "RITZ_GS_APPID", "570", 1 );
     SessionProfileResult r = UseSessionProfile( "Comp" );
     REQUIRE( r.ok );
     REQUIRE_FALSE( r.created );
@@ -1977,7 +2058,7 @@ TEST_CASE( "SessionProfile: override, then this game's selection, then last_gene
     REQUIRE( SessionProfileOverride() == std::optional<std::string>( "Comp" ) );
     REQUIRE( GameEntry( "570" ).selected == "Dota" );
     ResetSessionRoutingForTests();
-    setenv( "GS_RITZ_APPID", "570", 1 );
+    setenv( "RITZ_GS_APPID", "570", 1 );
     REQUIRE( SessionProfile() == "Dota" );
 }
 
@@ -2279,7 +2360,7 @@ TEST_CASE( "OverriddenKeys and ResetKeyToInherited track the session profile's o
 
     // Survives a fresh process: read from the file, not the mirror.
     ResetSessionRoutingForTests();
-    setenv( "GS_RITZ_APPID", "252490", 1 );
+    setenv( "RITZ_GS_APPID", "252490", 1 );
     REQUIRE( OverriddenKeys() == std::set<std::string>{ "fps_display.enabled" } );
 }
 

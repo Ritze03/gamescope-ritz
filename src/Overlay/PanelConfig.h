@@ -13,6 +13,7 @@
 
 #include "Config/ConfigSchema.h"
 #include "Config/ConfigManager.h"   // SanitizeProfileName(), for the form check
+#include "Config/AppId.h"           // SanitizeAppId(), for the form check
 
 namespace gamescope
 {
@@ -181,19 +182,10 @@ namespace gamescope
 		{
 			std::string sName;         // the sanitized name, when sNameError is empty
 			std::string sNameError;
+			std::string sAppId;        // the sanitized (trimmed) app id, when sAppIdError is empty
 			std::string sAppIdError;
 			bool ok() const { return sNameError.empty() && sAppIdError.empty(); }
 		};
-
-		inline bool AllDigits( std::string_view sv )
-		{
-			if ( sv.empty() )
-				return false;
-			for ( char c : sv )
-				if ( c < '0' || c > '9' )
-					return false;
-			return true;
-		}
 
 		inline FormCheck CheckProfileForm( bool bGame, std::string_view svAppId, std::string_view svRawName,
 		                                   const std::vector<config::ProfileMeta> &existing,
@@ -214,10 +206,20 @@ namespace gamescope
 			}
 			if ( bGame )
 			{
-				if ( svAppId.empty() )
+				// App ids are opaque strings now, not digits-only (2026-09-15,
+				// "Make it fully compatible with string based IDs ... for
+				// setting the ID manually") -- Steam app ids happen to be
+				// numeric, but a manually-set or non-Steam id is any string
+				// SanitizeAppId() (Config/AppId.h) accepts. Distinguish "blank"
+				// from "has a rejected character" up front, since
+				// SanitizeAppId() collapses both to nullopt.
+				const bool bBlank = svAppId.find_first_not_of( " \t\r\n" ) == std::string_view::npos;
+				if ( bBlank )
 					out.sAppIdError = "Enter the game's app id";
-				else if ( !AllDigits( svAppId ) )
-					out.sAppIdError = "The app id is digits only";
+				else if ( const std::optional<std::string> oAppId = config::SanitizeAppId( svAppId ) )
+					out.sAppId = *oAppId;
+				else
+					out.sAppIdError = "The app id can't contain '/', '\\', or control characters";
 			}
 			return out;
 		}

@@ -287,6 +287,14 @@ namespace gamescope
 		// It reads the SEEDED id rather than config::SessionAppId() so that
 		// the panel and the poller can never disagree about which game this
 		// is; PanelFriends_SeedFromConfig() below is what puts it there.
+		//
+		// EXPLICIT NUMERIC GATE (2026-09-15): the session app id this fork
+		// resolves is an opaque STRING (Config/AppId.h) -- a manually-set or
+		// non-Steam game's id included -- but Steam's own friend/game data
+		// is unavoidably numeric, so a string id that isn't a plain decimal
+		// number has nothing to match against and degrades to 0 here
+		// (AppIdGateFromString(), SteamFriendsCmd.h) exactly like no app id
+		// at all: this area hides, the keybind does nothing.
 		a.AvailableWhen( []{ return steamfriends::SessionAppId() != 0; } );
 
 		// NO BADGE, deliberately. The badge answers "where does what I change
@@ -406,18 +414,13 @@ namespace gamescope
 	// first Steam call of the process, not before the first draw.
 	void PanelFriends_SeedFromConfig()
 	{
-		// strtoul, not stoul: this build has exceptions off (meson.build's
-		// -fno-exceptions), and an app id that is not a number is a "no app
-		// id" answer rather than an error.
-		uint32_t uAppId = 0;
+		// The session app id is an opaque STRING now (Config/AppId.h,
+		// 2026-09-15) -- a manually-set or non-Steam game's id included.
+		// AppIdGateFromString() (SteamFriendsCmd.h) is the explicit,
+		// tested numeric gate: a non-numeric id degrades to 0, the same
+		// as no app id at all, which is what makes AvailableWhen() below
+		// hide the whole Friends area for a non-Steam game.
 		const std::optional<std::string> &oId = config::SessionAppId();
-		if ( oId && !oId->empty() )
-		{
-			char *pszEnd = nullptr;
-			const unsigned long ul = strtoul( oId->c_str(), &pszEnd, 10 );
-			if ( pszEnd && *pszEnd == '\0' && ul != 0 && ul <= 0xFFFFFFFFul )
-				uAppId = (uint32_t)ul;
-		}
-		steamfriends::SetSessionAppId( uAppId );
+		steamfriends::SetSessionAppId( oId ? steamfriends::AppIdGateFromString( *oId ) : 0 );
 	}
 }

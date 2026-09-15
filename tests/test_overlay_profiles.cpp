@@ -200,12 +200,25 @@ TEST_CASE( "the form refuses a bad name or app id, inline and per field", "[over
 	// Editing Comp may keep the name Comp.
 	REQUIRE( CheckProfileForm( false, "", "Comp", all, "Comp" ).ok() );
 
-	// The app id: only asked for a game profile, digits only.
+	// The app id: only asked for a game profile, and it's an opaque string
+	// now (2026-09-15), not digits-only -- a manually-set or non-Steam id
+	// can be anything SanitizeAppId() (Config/AppId.h) accepts.
 	REQUIRE( CheckProfileForm( false, "abc", "New", all ).ok() );
 	REQUIRE( CheckProfileForm( true, "", "New", all ).sAppIdError == "Enter the game's app id" );
-	REQUIRE( CheckProfileForm( true, "25x", "New", all ).sAppIdError == "The app id is digits only" );
+	REQUIRE( CheckProfileForm( true, "   ", "New", all ).sAppIdError == "Enter the game's app id" );
+	// A non-numeric string id is legal and comes back trimmed.
+	{
+		const FormCheck stringId = CheckProfileForm( true, "25x", "New", all );
+		REQUIRE( stringId.ok() );
+		REQUIRE( stringId.sAppId == "25x" );
+	}
+	// A rejected character (path separator / control char) is still refused.
+	REQUIRE( CheckProfileForm( true, "a/b", "New", all ).sAppIdError ==
+	         "The app id can't contain '/', '\\', or control characters" );
+	REQUIRE( CheckProfileForm( true, "a\\b", "New", all ).sAppIdError ==
+	         "The app id can't contain '/', '\\', or control characters" );
 	// Both fields wrong: both errors, so the user fixes them in one round.
-	const FormCheck both = CheckProfileForm( true, "x", "Comp", all );
+	const FormCheck both = CheckProfileForm( true, "a/b", "Comp", all );
 	REQUIRE_FALSE( both.sNameError.empty() );
 	REQUIRE_FALSE( both.sAppIdError.empty() );
 }

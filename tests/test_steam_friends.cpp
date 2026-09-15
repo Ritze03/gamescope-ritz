@@ -152,6 +152,29 @@ TEST_CASE( "in this game means the same app id, as a real Steam app", "[steam_fr
 	REQUIRE_FALSE( InThisGame( 440, 0 ) );
 }
 
+// 2026-09-15: this fork's own session app id is an opaque STRING (Config/
+// AppId.h) -- a manually-set or non-Steam game's id included -- but Steam's
+// friend/game data is unavoidably numeric. AppIdGateFromString() is the
+// explicit, tested boundary between the two: a non-numeric string id must
+// degrade to 0, the same as no app id at all, so PanelFriends.cpp's
+// AvailableWhen() gate (which reads this same rule) hides the area for a
+// non-Steam or manually-tagged game rather than misbehaving.
+TEST_CASE( "AppIdGateFromString: a string app id degrades to 0 exactly like no app id", "[steam_friends]" )
+{
+	// A real Steam app id, as a string, is unaffected.
+	REQUIRE( AppIdGateFromString( "730" ) == 730u );
+
+	// The cases this fork's string app ids introduce: a manually-set or
+	// non-Steam id has nothing numeric to match against Steam's own data.
+	REQUIRE( AppIdGateFromString( "my-game" ) == 0u );
+	REQUIRE( AppIdGateFromString( "my game" ) == 0u );
+	REQUIRE( AppIdGateFromString( "com.example.Game" ) == 0u );
+	REQUIRE( AppIdGateFromString( "25x" ) == 0u );      // digits, but not ALL digits
+	REQUIRE( AppIdGateFromString( "" ) == 0u );
+	REQUIRE( AppIdGateFromString( "0" ) == 0u );        // literal zero is "absent", as elsewhere
+	REQUIRE( AppIdGateFromString( "-1" ) == 0u );       // strtoul on a leading '-' is not a real id
+}
+
 // ===========================================================================
 //  The status line
 // ===========================================================================

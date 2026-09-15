@@ -406,10 +406,10 @@ namespace gamescope
 			meta.kind = f.bGame ? config::ProfileKind::Game : config::ProfileKind::General;
 			if ( f.bGame )
 			{
-				meta.app_id = f.sAppId;
+				meta.app_id = check.sAppId;
 				// The running game's title, when the id is the running game's.
-				if ( config::SessionAppId() && *config::SessionAppId() == f.sAppId &&
-				     config::SessionGameName() != f.sAppId )
+				if ( config::SessionAppId() && *config::SessionAppId() == check.sAppId &&
+				     config::SessionGameName() != check.sAppId )
 					meta.game_name = config::SessionGameName();
 				if ( f.eKind != FormKind::Edit )
 				{

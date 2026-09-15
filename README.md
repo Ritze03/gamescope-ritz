@@ -91,6 +91,20 @@ gamescope-ritz --profile Competitive -- %command%
 GS_RITZ_PROFILE=Competitive gamescope-ritz -- %command%   # same effect; the flag wins if both are set
 ```
 
+### Setting a game's app id manually
+
+A [game profile](superdoc/features/profiles.md#app-id) is keyed by an app id, normally
+detected automatically from Steam's own launch environment. `RITZ_GS_APPID` overrides
+that detection and always wins when set — useful for a non-Steam game, or any game this
+fork can't auto-detect. It's any string, not only a number:
+
+```sh
+RITZ_GS_APPID=my-game gamescope-ritz -- ./my-game.sh
+```
+
+(Renamed from `GS_RITZ_APPID` — the old name still works for now, with a one-time
+warning to rename it.)
+
 ### Dependencies
 
 Before building anything, `./install.sh` checks that **wlroots** is actually usable the

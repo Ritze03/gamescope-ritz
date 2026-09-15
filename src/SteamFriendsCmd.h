@@ -31,12 +31,37 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace gamescope::steamfriends
 {
+	// Turns this fork's own session app id -- an OPAQUE STRING (see
+	// Config/AppId.h's SanitizeAppId(), added 2026-09-15 for a manually-set
+	// or non-Steam game) -- into the numeric gate this whole feature runs
+	// on. Steam's own friend/game data is unavoidably numeric (CGameID,
+	// m_gameID), so a non-numeric session app id has nothing to match
+	// against here and correctly reads as "not a Steam game", i.e. 0 --
+	// the same value "no app id at all" produces, so a string id hides the
+	// Friends area exactly as no app id does (PanelFriends.cpp's
+	// AvailableWhen(), gated on this being nonzero).
+	inline uint32_t AppIdGateFromString( std::string_view svAppId )
+	{
+		if ( svAppId.empty() )
+			return 0;
+
+		// strtoul, not stoul: this build has exceptions off (meson.build's
+		// -fno-exceptions), and an app id that doesn't parse as a plain
+		// nonzero decimal is a "no app id" answer, not an error.
+		const std::string sAppId( svAppId );
+		char *pszEnd = nullptr;
+		const unsigned long ul = strtoul( sAppId.c_str(), &pszEnd, 10 );
+		if ( pszEnd && *pszEnd == '\0' && ul != 0 && ul <= 0xFFFFFFFFul )
+			return (uint32_t)ul;
+		return 0;
+	}
 	// =========================================================================
 	//  One friend you can join
 	// =========================================================================
@@ -279,6 +304,15 @@ namespace gamescope::steamfriends
 	// id of 0 means "this friend is not joinable", and firing
 	// steam://joinlobby/730/0/... at the client is a nonsense request we should
 	// never make. Same for an app id or a SteamID of 0.
+	//
+	// `f.uAppId` can NEVER be a non-numeric string: it is `uint32_t`, sourced
+	// only from Steam's own `FriendGameInfo_t.m_gameID` via AppIdFromGameId()
+	// (Snapshot(), SteamFriends.cpp) -- never from this fork's own opaque-
+	// string session app id (Config/AppId.h). The two app id concepts never
+	// meet at this function; a manually-set/non-Steam string id is filtered
+	// out earlier, at the numeric gate (AppIdGateFromString() above / the
+	// AvailableWhen() comment in PanelFriends.cpp), long before a Friend
+	// struct exists to build a URL from.
 	inline bool BuildJoinUrl( const Friend &f, std::string *pOut, std::string *psError )
 	{
 		auto Fail = [ & ]( const char *pszWhy ) {
