@@ -1045,17 +1045,16 @@ EC_FUNC float abv2_g_dark( float darken, float target, float anchorSmoothed, boo
 //
 // `Why this is a NEW function and not a change to abv2_g() above:` abv2_g()
 // still feeds the OLD, un-rescaled path directly whenever Max darken is at
-// its floor (the byte-identical guarantee -- see abv2_curve2() below), and
-// it is also the exact function Overlay/EffectPreviewMath.h's split-screen
-// preview calls today (outside this change's own scope) -- changing
-// abv2_g()'s formula in place would move the OLD path's numbers too, not
-// just the new one's. abv2_g_lift_scurve() below is what the compute
-// shader calls instead once Max darken is active; it falls back to
-// abv2_g() itself byte-for-byte when it is not, so there is exactly one
-// formula for the old regime and one additional one for the new -- the
-// preview keeps using abv2_g()'s own (slightly different, pre-existing)
-// aim on this half only, a documented, narrow gap rather than an unowned
-// file's silent behaviour change.
+// its floor (the byte-identical guarantee -- see abv2_curve2() below).
+// abv2_g_lift_scurve() below is what the compute shader calls instead once
+// Max darken is active; it falls back to abv2_g() itself byte-for-byte when
+// it is not, so there is exactly one formula for the old regime and one
+// additional one for the new. FIXED (V2 darken QC, 2026-09-15):
+// Overlay/EffectPreviewMath.h's split-screen preview now calls
+// abv2_g_lift_scurve() too, so the CPU preview and the GPU agree on this
+// half's aim whenever darkening is active, instead of the preview's own
+// (slightly different) plain-abv2_g() approximation this used to note as a
+// documented gap.
 EC_FUNC float abv2_g_adapt_lift_z( float anchorSmoothed, float target )
 {
 	float t = clamp( target, 0.01f, 0.99f );
@@ -1331,13 +1330,13 @@ EC_FUNC int abv2_binding( float lift, float target, float anchorSmoothed, bool b
 // today; this exists for the unit tests and for a later panel pass to wire
 // in, per shader-effects.md's own note on the scope of this change.
 //
-// KNOWN GAP (V2 darken QC, 2026-09-15 S-curve redesign): this still calls
-// the OLD, un-rescaled abv2_g_adapt() below, not abv2_g_adapt_dark_z() that
-// abv2_g_dark() itself was moved onto above -- so this diagnostic can
-// classify a frame slightly differently than the curve that actually ran
-// on it. Left alone because it is unwired to the panel today (see the
-// paragraph above) and is informational only; whoever wires the dark side
-// into the panel should switch this to abv2_g_adapt_dark_z() first.
+// FIXED (V2 darken QC, 2026-09-15 S-curve redesign): now calls
+// abv2_g_adapt_dark_z(), the SAME rescaled aim abv2_g_dark() itself runs on
+// (see that function above) -- so this diagnostic classifies a frame
+// exactly the way the curve that actually ran on it did, instead of the
+// OLD, un-rescaled abv2_g_adapt() this used to call. Still unwired to the
+// panel today (see the paragraph above); informational only until a later
+// pass wires the dark side into the Diagnostics row.
 const int ABV2_BIND_DARKEN_FLOOR = 4;   // g_static_dark (Darken's own floor) is stronger than Target asks for
 const int ABV2_BIND_G_MAX        = 5;   // the internal ceiling -- "as much darken as this shape allows"
 
@@ -1348,7 +1347,7 @@ EC_FUNC int abv2_binding_dark( float darken, float target, float anchorSmoothed,
 	float gStatic = clamp( abv2_g_static_dark( darken ), 1.0f, ABV2_G_MAX );
 	if ( !bSceneMode )
 		return gStatic >= ABV2_G_MAX - 1e-4f ? ABV2_BIND_G_MAX : ABV2_BIND_DARKEN_FLOOR;
-	float gAdapt = abv2_g_adapt( anchorSmoothed, target );
+	float gAdapt = abv2_g_adapt_dark_z( anchorSmoothed, target );
 	float g = max( gStatic, gAdapt );
 	if ( g >= ABV2_G_MAX - 1e-4f )
 		return ABV2_BIND_G_MAX;

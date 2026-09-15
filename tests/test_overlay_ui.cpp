@@ -3318,3 +3318,70 @@ TEST_CASE( "ag preview: Adaptive Gamma takes the same fast path, and the same id
 	pLocal.flLocal = 0.5f;
 	REQUIRE_FALSE( IsUniform( stMap, pLocal ) );
 }
+
+TEST_CASE( "abv2 preview: the lift half's aim agrees with the GPU once darkening is active",
+           "[overlay_ui][abv2][darken]" )
+{
+	// V2 darken QC (2026-09-15 S-curve redesign): ApplyPixel()'s bV2 branch
+	// used to feed abv2_curve2() the plain abv2_g() aim on the lift half
+	// even with Max darken active, while the GPU (cs_effects_layer0.comp)
+	// already called abv2_g_lift_scurve() there -- see EffectPreviewMath.h's
+	// own comment next to the fix. This asserts the preview now reproduces
+	// the GPU's own aim exactly, and that this actually moves a pixel
+	// relative to the old (wrong) aim, so a regression back to abv2_g() on
+	// this half would be caught here rather than passing silently.
+	using namespace gamescope::overlay::abpreview;
+	namespace ec = gamescope::effects_curve;
+
+	Stats st;
+	st.flV2Anchor = 0.05f;   // a dark content anchor, well below Target -- the
+	                          // lift half's own domain, where the rescaled
+	                          // aim (z = anchor/target) and the old raw-anchor
+	                          // aim disagree most.
+
+	Params p;
+	p.bV2 = true;
+	p.bV2Scene = true;
+	p.flV2Lift = 0.5f;
+	p.flV2Target = 0.35f;
+	p.flV2MaxLift = 4.0f;
+	p.flV2MaxDarken = 2.0f;   // darkening genuinely active
+	p.flV2Darken = 0.5f;
+
+	// Below Target -- the LIFT half's own domain, the one abv2_g_lift_scurve()
+	// actually feeds into abv2_curve2() (a pixel above Target never reads
+	// gLift at all, only gDark, so the divergence this test is guarding
+	// against would not show up there).
+	const float Y = 0.15f;
+	float rgb[3] = { Y, Y, Y };
+	ApplyPixel( 0.5f, 0.5f, st, p, rgb );
+
+	const float gRight = ec::abv2_g_lift_scurve( p.flV2Lift, p.flV2Target, st.flV2Anchor,
+	                                               p.bV2Scene, p.flV2MaxDarken );
+	const float gDark  = ec::abv2_g_dark( p.flV2Darken, p.flV2Target, st.flV2Anchor, p.bV2Scene );
+	const float YpRef  = ec::abv2_curve2( Y, gRight, p.flV2MaxLift, p.bV2Knee,
+	                                        gDark, p.flV2MaxDarken, p.flV2Target );
+	REQUIRE_THAT( rgb[0], WithinAbs( YpRef, 1e-6f ) );
+
+	// The OLD (wrong) aim -- plain abv2_g(), ignoring Max darken -- gives a
+	// DIFFERENT number here, since the two functions only agree at Max
+	// darken's own floor (D <= 1). If this ever equals YpRef the fix above
+	// has regressed back to the old call.
+	const float gWrong = ec::abv2_g( p.flV2Lift, p.flV2Target, st.flV2Anchor, p.bV2Scene );
+	const float YpWrong = ec::abv2_curve2( Y, gWrong, p.flV2MaxLift, p.bV2Knee,
+	                                         gDark, p.flV2MaxDarken, p.flV2Target );
+	REQUIRE( std::abs( YpRef - YpWrong ) > 1e-4f );
+
+	// Off switch: at Max darken's own floor (D <= 1) abv2_g_lift_scurve()
+	// delegates to abv2_g() byte-for-byte, so the preview's old and new
+	// call sites agree there -- no behaviour change at the shipped default.
+	Params pOff = p;
+	pOff.flV2MaxDarken = 1.0f;
+	float rgbOff[3] = { Y, Y, Y };
+	ApplyPixel( 0.5f, 0.5f, st, pOff, rgbOff );
+	const float gOff = ec::abv2_g( p.flV2Lift, p.flV2Target, st.flV2Anchor, p.bV2Scene );
+	const float gDarkOff = ec::abv2_g_dark( pOff.flV2Darken, pOff.flV2Target, st.flV2Anchor, pOff.bV2Scene );
+	const float YpOff = ec::abv2_curve2( Y, gOff, pOff.flV2MaxLift, pOff.bV2Knee,
+	                                       gDarkOff, pOff.flV2MaxDarken, pOff.flV2Target );
+	REQUIRE_THAT( rgbOff[0], WithinAbs( YpOff, 1e-6f ) );
+}

@@ -172,7 +172,17 @@ namespace gamescope::overlay::abpreview
 			const float Y = std::clamp( 0.299f * flRgb[0] + 0.587f * flRgb[1] + 0.114f * flRgb[2], 0.0f, 1.0f );
 			if ( ec::abv2_is_void( Y ) )
 				return;
-			const float g = ec::abv2_g( p.flV2Lift, p.flV2Target, st.flV2Anchor, p.bV2Scene );
+			// V2 darken QC (2026-09-15 S-curve redesign): the lift half's own
+			// aim must be abv2_g_lift_scurve(), not plain abv2_g() -- the GPU
+			// (cs_effects_layer0.comp) already calls the former once Max
+			// darken is active, because the rescaled curve's domain on this
+			// half is x/Target, not raw x (see that function's own comment
+			// in effects_curve.h). Delegates to abv2_g() byte-for-byte
+			// whenever Max darken is at its floor, so this is a strict
+			// superset of the old call, not a behaviour change at the
+			// shipped default (Max darken 1).
+			const float g = ec::abv2_g_lift_scurve( p.flV2Lift, p.flV2Target, st.flV2Anchor,
+			                                          p.bV2Scene, p.flV2MaxDarken );
 			// DARKENING (NEW 2026-09-14): the same two-sided curve the GPU
 			// runs (effects_curve.h's abv2_curve2()) -- see that block for
 			// the pivot construction. Byte-identical to the lift-only line

@@ -15,6 +15,9 @@ The newest version below is the one this build reports.
 - **String app ids**: a game profile's app id can now be any text, not only digits —
   set it manually in the Profiles area's Create/Edit form for a non-Steam or
   otherwise undetected game.
+- **Adaptive Brightness V2**: Darkening is now a true S-curve fixed exactly at Target
+  brightness — highlights above Target can end up genuinely darker than the raw scene
+  (previously they could only be pulled back toward it, never below).
 
 ### Info
 - **App id env var renamed**: `GS_RITZ_APPID` is now `RITZ_GS_APPID`. The old name

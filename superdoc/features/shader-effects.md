@@ -3136,15 +3136,17 @@ closed forms, their boundary-limit proofs and worked numbers live in
 `src/shaders/effects_curve.h`'s own comments next to `abv2_g_adapt_dark_z()` /
 `abv2_g_adapt_lift_z()`.
 
-**A scoped exception, honestly stated:** the compute shader (`cs_effects_layer0.comp`)
-calls a NEW function, `abv2_g_lift_scurve()`, for the lift side's exponent — it delegates
-byte-for-byte to the unchanged `abv2_g()` whenever Max darken is at its floor, and only
-switches to the rescaled `g_adapt_z` once darkening is genuinely active. The settings
-overlay's own split-screen Preview (`Overlay/EffectPreviewMath.h`, outside this pass's
-owned files) still calls the plain `abv2_g()` on this half even with darkening on, since it
-was already an approximation before this change (it does not model Stage 2's guided filter
-either) — a documented, narrow gap between the Preview's picture and the GPU's, not a
-silent behaviour change to a file this pass did not touch.
+**The compute shader** (`cs_effects_layer0.comp`) calls a NEW function,
+`abv2_g_lift_scurve()`, for the lift side's exponent — it delegates byte-for-byte to the
+unchanged `abv2_g()` whenever Max darken is at its floor, and only switches to the
+rescaled `g_adapt_z` once darkening is genuinely active. **FIXED (V2 darken QC,
+2026-09-15, same day):** the settings overlay's own split-screen Preview
+(`Overlay/EffectPreviewMath.h`) now calls `abv2_g_lift_scurve()` too — it had briefly
+called the plain `abv2_g()` on this half even with darkening on, a documented, narrow gap
+between the Preview's picture and the GPU's noted the same day this section was written;
+closed before it shipped in a release. It still does not model Stage 2's guided filter
+(the same base-only approximation as the lift-only picture), which is unrelated to this
+gap and remains open.
 
 **Which direction is "attack" now (asymmetry, plan 4.8).** The anchor's own EMA
 (`cs_effects_measure.comp`) is completely UNCHANGED: **Adapt speed** (`tau_up`) is still

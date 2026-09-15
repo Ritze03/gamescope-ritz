@@ -2015,11 +2015,16 @@ TEST_CASE( "abv2_binding_dark: mirrors abv2_binding()'s codes for the darken sid
 	REQUIRE( abv2_binding_dark( 0.5f, 0.35f, 0.02f, true, true ) == ABV2_BIND_VOID );
 
 	// A bright scene deepens past the static floor -> NONE (g_adapt binds).
-	// anchor 0.5 vs target 0.35 gives g_adapt = ln(0.35)/ln(0.5) ~= 1.51,
-	// comfortably inside (1, ABV2_G_MAX) -- an anchor much closer to 1
-	// (e.g. 0.95) drives g_adapt past the internal ceiling instead, which
-	// is a different, already-covered case (ABV2_BIND_G_MAX).
-	REQUIRE( abv2_binding_dark( 0.0f, 0.35f, 0.5f, true, false ) == ABV2_BIND_NONE );
+	// This now reads on the RESCALED aim, abv2_g_adapt_dark_z() (V2 darken
+	// QC, 2026-09-15 -- see effects_curve.h's own note by abv2_binding_dark()):
+	// anchor 0.7 vs target 0.35 gives w = (1 - 0.7) / 0.65 ~= 0.4615, g_adapt_z
+	// = ln(0.4615) / ln(0.65) ~= 1.795, comfortably inside (1, ABV2_G_MAX) --
+	// the OLD un-rescaled abv2_g_adapt(0.5, 0.35) ~= 1.51 that this test used
+	// to exercise at anchor 0.5 now lands at g_adapt_z ~= 0.61 (below the
+	// static floor of 1.0, i.e. DARKEN_FLOOR, not NONE), which is exactly the
+	// bug this fix closes -- so the NONE case needs a deeper anchor to still
+	// land past the static floor under the rescaled aim.
+	REQUIRE( abv2_binding_dark( 0.0f, 0.35f, 0.7f, true, false ) == ABV2_BIND_NONE );
 
 	// A dark scene: the static floor is stronger than the (irrelevant)
 	// adaptive pull toward darken, so the floor is what's binding.
