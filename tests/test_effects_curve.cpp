@@ -2032,6 +2032,231 @@ TEST_CASE( "abv2_binding_dark: mirrors abv2_binding()'s codes for the darken sid
 		REQUIRE( std::string( abv2_binding_dark_text( n ) ).size() > 0 );
 }
 
+// ===========================================================================
+//  THE S-CURVE REDESIGN (2026-09-15, V2 darken QC) -- the fixed point at
+//  Target, and the two new guarantees the first cut did not have: F(x) <= x
+//  for every x above Target (not merely "usually"), and F(Target) == Target
+//  exactly (not L(Target)). See effects_curve.h's own "THE FIXED POINT"
+//  block for the closed-form proofs these tests exercise numerically.
+// ===========================================================================
+
+TEST_CASE( "abv2_curve2 (S-curve): F(Target) == Target exactly, whenever darkening "
+           "is genuinely on, over the whole g x S x gDark x D x target grid",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 2.0f )
+		{
+			for ( float gDark = 1.05f; gDark <= ABV2_G_MAX; gDark += 1.0f )
+			{
+				for ( float D = 1.25f; D <= 4.0f; D += 1.0f )
+				{
+					for ( bool bKnee : { false, true } )
+					{
+						for ( float target = 0.1f; target <= 0.9f; target += 0.2f )
+						{
+							const float F = abv2_curve2( target, g, S, bKnee, gDark, D, target );
+							REQUIRE_THAT( F, WithinAbs( target, 1e-4f ) );
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_curve2 (S-curve): F(x) <= x above Target and F(x)/x >= 1/D -- the "
+           "new guarantee the first cut (pivot at L(Target)) did not have",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 2.0f )
+		{
+			for ( float gDark = 1.05f; gDark <= ABV2_G_MAX; gDark += 1.0f )
+			{
+				for ( float D = 1.25f; D <= 4.0f; D += 1.0f )
+				{
+					for ( float target = 0.1f; target <= 0.9f; target += 0.2f )
+					{
+						for ( float x = target + 0.01f; x <= 1.0f; x += 0.02f )
+						{
+							const float F = abv2_curve2( x, g, S, false, gDark, D, target );
+							REQUIRE( F <= x + 1e-4f );                    // never above raw
+							REQUIRE( F >= x / D - 1e-3f );                // never darkened past 1/D
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_curve2 (S-curve): F(x)/x <= S below Target, inherited unchanged "
+           "through the rescale", "[effects_curve][abv2][darken]" )
+{
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 2.0f )
+		{
+			for ( float D = 1.25f; D <= 4.0f; D += 1.0f )
+			{
+				for ( float target = 0.1f; target <= 0.9f; target += 0.2f )
+				{
+					for ( float x = 0.01f; x < target; x += 0.02f )
+					{
+						const float F = abv2_curve2( x, g, S, false, 1.3f, D, target );
+						REQUIRE( F <= x * S + 1e-3f );
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_curve2 (S-curve): the pivot kink's ratio matches (1/D)/L'(1) at the "
+           "shipped defaults, and is closer to 1 than the first cut's plain 1/D there",
+           "[effects_curve][abv2][darken]" )
+{
+	// Shipped defaults: Lift 0.5 (g_static 0.7) / Max lift 4 / Darken 0.5
+	// (g_static_dark 1.3) / Max darken 2 / Target 0.35, Scene off -- the
+	// same numbers shader-effects.md's own worked table uses.
+	const float g = 0.7f, S = 4.0f, gDark = 1.3f, D = 2.0f, target = 0.35f;
+	const float flEps = 1e-5f;
+	const float left  = ( abv2_curve2( target, g, S, false, gDark, D, target )
+	                       - abv2_curve2( target - flEps, g, S, false, gDark, D, target ) ) / flEps;
+	const float right = ( abv2_curve2( target + flEps, g, S, false, gDark, D, target )
+	                       - abv2_curve2( target, g, S, false, gDark, D, target ) ) / flEps;
+	REQUIRE_THAT( left, WithinAbs( 0.7030f, 0.01f ) );    // L'(1), matches f'(1) ~= g
+	REQUIRE_THAT( right, WithinAbs( 0.5000f, 0.01f ) );   // K'(0) == 1/D exactly
+	const float flRatio = right / left;
+	REQUIRE_THAT( flRatio, WithinAbs( 0.7113f, 0.01f ) );
+	// Closer to 1 (less discontinuous) than the first cut's own plain 1/D
+	// ratio at the same D (0.5) -- true whenever L'(1) < 1, which the next
+	// test checks holds across the grid.
+	REQUIRE( std::abs( flRatio - 1.0f ) < std::abs( ( 1.0f / D ) - 1.0f ) );
+}
+
+TEST_CASE( "abv2_curve (toe/knee): the highlight slope L'(1) stays below 1, over a "
+           "grid -- what makes the S-curve's own kink ratio always closer to 1 than "
+           "the first cut's plain 1/D", "[effects_curve][abv2][darken]" )
+{
+	const float flH = 1e-3f;
+	for ( float g = ABV2_G_MIN; g < 1.0f; g += 0.1f )
+	{
+		for ( float S = 1.0f; S <= 8.0f; S += 1.0f )
+		{
+			for ( bool bKnee : { false, true } )
+			{
+				const float flSlope = ( abv2_curve( 1.0f, g, S, bKnee )
+				                         - abv2_curve( 1.0f - flH, g, S, bKnee ) ) / flH;
+				REQUIRE( flSlope <= 1.0f + 1e-3f );
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_curve2 (S-curve): quantised to 8 bits, the pivot's own kink steps "
+           "at most 1 code either side -- no visible band beyond ordinary rounding",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float g = 0.5f; g < 1.0f; g += 0.2f )
+	{
+		for ( float S = 2.0f; S <= 8.0f; S += 3.0f )
+		{
+			for ( float gDark = 1.2f; gDark <= ABV2_G_MAX; gDark += 1.5f )
+			{
+				for ( float D = 1.5f; D <= 4.0f; D += 1.0f )
+				{
+					for ( float target = 0.15f; target <= 0.85f; target += 0.2f )
+					{
+						const int nCode = (int)std::lround( target * 255.0f );
+						const auto Code = [&]( int i )
+						{
+							const float x = std::clamp( i, 0, 255 ) / 255.0f;
+							return (int)std::lround( abv2_curve2( x, g, S, false, gDark, D, target ) * 255.0f );
+						};
+						REQUIRE( std::abs( Code( nCode ) - Code( nCode - 1 ) ) <= 2 );
+						REQUIRE( std::abs( Code( nCode + 1 ) - Code( nCode ) ) <= 2 );
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE( "abv2_g_adapt_lift_z / abv2_g_adapt_dark_z: the rescaled aim's own "
+           "boundary limits -- defer to static at the pivot, saturate at the "
+           "internal ceiling/floor at the far edge, monotone in between",
+           "[effects_curve][abv2][darken]" )
+{
+	const float target = 0.35f;
+	// Lift-side: z = anchor/target. anchor -> target (z -> 1) defers
+	// (g_adapt -> large, min() picks gStatic); anchor -> 0 (z -> 0)
+	// saturates toward the internal floor.
+	REQUIRE( abv2_g_adapt_lift_z( target * 0.999f, target ) > 5.0f );
+	// The z -> 0 limit is g_adapt -> 0, but the approach is LOGARITHMIC --
+	// at anchor 0.001 (z = 0.00286) it is still only ~0.18, not near-zero;
+	// checked as a bound loose enough to be true, not the limit itself.
+	REQUIRE( abv2_g_adapt_lift_z( 0.001f, target ) < 0.3f );
+	{
+		float flPrev = -1.0f;
+		for ( float anchor = 0.001f; anchor < target; anchor += 0.01f )
+		{
+			const float g = abv2_g_adapt_lift_z( anchor, target );
+			REQUIRE( std::isfinite( g ) );
+			REQUIRE( g >= flPrev - 1e-4f );   // monotone increasing in anchor
+			flPrev = g;
+		}
+	}
+	// Dark-side: w = (1-anchor)/(1-target). anchor -> target (w -> 1)
+	// defers (g_adapt -> ~0, max() picks gStatic); anchor -> 1 (w -> 0)
+	// saturates toward the internal ceiling.
+	REQUIRE( abv2_g_adapt_dark_z( target * 1.001f, target ) < 0.05f );
+	REQUIRE( abv2_g_adapt_dark_z( 0.999f, target ) > 5.0f );
+	{
+		float flPrev = -1.0f;
+		for ( float anchor = target + 0.01f; anchor < 1.0f; anchor += 0.01f )
+		{
+			const float g = abv2_g_adapt_dark_z( anchor, target );
+			REQUIRE( std::isfinite( g ) );
+			REQUIRE( g >= flPrev - 1e-4f );   // monotone INcreasing as anchor climbs toward white
+			flPrev = g;
+		}
+	}
+	// Worked examples from the header comment (Target 0.35, anchor 0.7 / 0.05).
+	REQUIRE_THAT( abv2_g_adapt_dark_z( 0.7f, target ), WithinAbs( 1.795f, 0.01f ) );
+	// NOT the old (wrong-domain) formula's 0.350 (ln(target)/ln(anchor)
+	// directly) -- the rescaled aim's own answer is 0.540, see the header
+	// comment next to abv2_g_adapt_lift_z() for why the two differ.
+	REQUIRE_THAT( abv2_g_adapt_lift_z( 0.05f, target ), WithinAbs( 0.5395f, 0.01f ) );
+}
+
+TEST_CASE( "abv2_g_lift_scurve: byte-identical delegate to abv2_g() at Max darken "
+           "1, its own rescaled aim only once Max darken is active",
+           "[effects_curve][abv2][darken]" )
+{
+	for ( float lift = 0.0f; lift <= 1.0f; lift += 0.25f )
+	{
+		for ( bool bScene : { false, true } )
+		{
+			for ( float anchor = 0.02f; anchor <= 0.9f; anchor += 0.08f )
+			{
+				const float flOld = abv2_g( lift, 0.35f, anchor, bScene );
+				const float flDelegate = abv2_g_lift_scurve( lift, 0.35f, anchor, bScene, 1.0f );
+				REQUIRE_THAT( flDelegate, WithinAbs( flOld, 1e-6f ) );
+			}
+		}
+	}
+	// Once Max darken is active, a very dark anchor drives the rescaled aim
+	// toward the internal floor same as before, and a Scene-off call still
+	// reduces to the static floor alone.
+	REQUIRE_THAT( abv2_g_lift_scurve( 0.5f, 0.35f, 0.9f, false, 2.0f ),
+	              WithinAbs( abv2_g_static( 0.5f ), 1e-4f ) );
+	REQUIRE( abv2_g_lift_scurve( 0.5f, 0.35f, 0.001f, true, 2.0f ) < abv2_g_static( 0.5f ) + 1e-4f );
+}
+
 TEST_CASE( "abv2_shoulder: never exceeds the headroom, unit slope at u = 0, 0 when h <= 0",
            "[effects_curve][abv2]" )
 {

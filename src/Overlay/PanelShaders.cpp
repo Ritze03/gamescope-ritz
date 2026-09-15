@@ -1052,9 +1052,11 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness_v2.target_luminance; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.target_luminance, f ); } ) )
 				.Key( "reshade.adaptive_brightness_v2.target_luminance" )
-				.Help( "Where the CONTENT median is put on a dark scene (black itself is excluded, "
-				       "so a mostly-void frame doesn't chase the void). Lower than the older effects' "
-				       "default -- this reads the content, not the void, and 0.5 reads milky." )
+				.Help( "The one brightness this effect leaves EXACTLY alone -- everything darker is "
+				       "lifted toward it, everything brighter is darkened toward it once Darken is on "
+				       "(2026-09-15). Where the CONTENT median is put on a dark scene (black itself is "
+				       "excluded, so a mostly-void frame doesn't chase the void). Lower than the older "
+				       "effects' default -- this reads the content, not the void, and 0.5 reads milky." )
 				.Range( 0.1f, 0.9f )
 				.Step( 0.05f )
 				.Default( V2Defaults{}.target_luminance )
@@ -1075,8 +1077,9 @@ namespace gamescope
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.lift, f ); } ) )
 				.Key( "reshade.adaptive_brightness_v2.lift" )
 				.Help( "The lift that is ALWAYS there, whatever Adaptation says: how much a dark "
-				       "shape on a bright world is raised. The control that fixes a dark player "
-				       "model turning almost invisible on a sunny map." )
+				       "shape on a bright world is raised, on the darker side of Target brightness. "
+				       "The control that fixes a dark player model turning almost invisible on a "
+				       "sunny map. Everything darker than Target moves; Target itself never does." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )
 				.Default( V2Defaults{}.lift )
@@ -1155,10 +1158,17 @@ namespace gamescope
 					[]{ return Cfg().reshade.adaptive_brightness_v2.max_darken; },
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.max_darken, f ); } ) )
 				.Key( "reshade.adaptive_brightness_v2.max_darken" )
-				.Help( "The hardest anything may be darkened, anywhere in the frame -- the mirror of "
-				       "Max lift. 1.0 means \"do not darken at all\"; higher lets a washed-out bright "
-				       "map be pulled back down so a dark enemy silhouette in front of it keeps its "
-				       "own contrast instead of vanishing into the glare." )
+				.Help( "The hardest anything above Target may be darkened, anywhere in the frame -- "
+				       "the mirror of Max lift, on the OTHER side of Target. 1.0 means \"do not darken "
+				       "at all\", and this whole row is a no-op, whatever Darken is set to; higher lets "
+				       "a washed-out bright map be pulled back down, never below raw/Max-darken, so a "
+				       "dark enemy silhouette in front of it keeps its own contrast instead of "
+				       "vanishing into the glare. Above 1.0, the picture above Target can end up "
+				       "DARKER than the raw scene, not merely less bright than the lift curve alone "
+				       "would have made it -- and Target becomes the exact brightness nothing ever "
+				       "moves past, which pins the shadows below it a hair differently than at 1.0 "
+				       "even at Darken 0 (both sides of Target are now measured against Target itself, "
+				       "not against the lift curve's own continuation past it)." )
 				.Range( 1.0f, 4.0f )
 				.Step( 0.5f )
 				.Default( V2Defaults{}.max_darken )
@@ -1168,8 +1178,14 @@ namespace gamescope
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness_v2.darken, f ); } ) )
 				.Key( "reshade.adaptive_brightness_v2.darken" )
 				.Help( "The darken that is ALWAYS there, whatever Adaptation says: how much a bright "
-				       "area (sky, a lit wall) is pulled down. 0 is off. Mirrors Lift; the two apply "
-				       "on opposite sides of Target brightness, in the same frame." )
+				       "area (sky, a lit wall) is pulled down below its own raw value, once Max darken "
+				       "is raised above 1.0 (like Lift, this needs its own Max slider off the floor to "
+				       "do anything -- at Max darken 1.0 this is a no-op, whatever it is set to). 0 is "
+				       "off. Mirrors Lift; the two apply on opposite sides of Target brightness, in "
+				       "the same frame, and Target itself never moves either way. With Max darken "
+				       "raised, going above 0 here is still its own visible change: everything "
+				       "brighter than Target starts being COMPRESSED toward it instead of merely "
+				       "having its own lift-curve overshoot undone." )
 				.Range( 0.0f, 1.0f )
 				.Step( 0.05f )
 				.Default( V2Defaults{}.darken );

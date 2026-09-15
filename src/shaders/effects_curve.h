@@ -841,16 +841,30 @@ EC_FUNC float abv2_g( float lift, float target, float anchorSmoothed, bool bScen
 }
 
 // ===========================================================================
-//  DARKENING (2026-09-14) -- the two-sided curve. The user's request,
-//  verbatim: "Make it able to make the image darker (both full and on parts
-//  of the image)". Everything above this block (the toe/knee, g_static,
-//  abv2_g) is UNCHANGED -- not one line touched -- which is what makes the
-//  lift half byte-identical at Max darken 1 / Darken 0 (asserted below and
-//  in the harness): the combiner at the bottom of this block degenerates
-//  algebraically to exactly the old single-sided curve at those defaults,
-//  it is not merely close.
+//  DARKENING (2026-09-14; REDESIGNED 2026-09-15 -- the true S-curve) -- the
+//  two-sided curve, now fixed exactly AT Target rather than at the lift
+//  curve's own continuation above it. The user's request, verbatim: "Make it
+//  able to make the image darker (both full and on parts of the image)".
 //
-//  THE CLOSED FORM. abv2_toe(x; g, S) is
+//  WHY THE REDESIGN. The first cut (2026-09-14) composed the darken half on
+//  L(x)'s own CONTINUATION above Target -- L(Target) was the pivot's height,
+//  not Target itself, and L(Target) is a REAL number above Target (0.477
+//  against Target 0.35 at the shipped Lift 0.5 / Max lift 4, i.e. code 122
+//  vs 89 -- V2 darken QC, 2026-09-15). Two consequences, both measured on
+//  the shipped defaults: (1) F(x) >= x for EVERY x above Target -- so
+//  "darkening" only ever undid the lift curve's own highlight raise, never
+//  took a pixel below its own raw value (skyfore's sky band read 225 raw,
+//  233.7 lift-only, 225.0 with Darken 0.5 / Max darken 2 -- back to raw, not
+//  below it); (2) L(Target) was a FLOOR nothing above Target could be
+//  darkened past, whatever D said. Fixing the pivot's height to Target
+//  itself is what buys a real "F(x) <= x above Target" guarantee, and that
+//  requires rescaling the LIFT half into [0, Target] too (composing on raw
+//  x, not on L's continuation) -- see THE FIXED POINT below for why that is
+//  unavoidable once the pivot must sit exactly on Target, and why it costs
+//  an off switch instead of the first cut's own pivot gap.
+//
+//  THE CLOSED FORM (unchanged from the first cut -- only where it is
+//  EVALUATED changes, not the family itself). abv2_toe(x; g, S) is
 //
 //    f(x; g, t) = x * ((1 + t) / (x + t)) ^ (1 - g),  0 < g < 1
 //
@@ -929,35 +943,80 @@ EC_FUNC float abv2_toe_dark( float x, float g, float D )
 	return xx * pow( ( xx + t ) / ( 1.0f + t ), gg - 1.0f );
 }
 
-// ---- Choosing g_dark: a static floor, deepened by adaptation (mirror of
-// abv2_g_static()/abv2_g() above) ------------------------------------------
+// ---- Choosing g_dark: a static floor (unchanged), adaptation re-derived on
+// the RESCALED variable (V2 darken QC, 2026-09-15) -------------------------
 //
 //   g_static_dark = 1 + 0.6 * Darken                       // Darken 0..1 -> 1.0..1.6
-//   g             = clamp(max(g_static_dark, g_adapt), 1, G_MAX)   // Scene
-//   g             = clamp(g_static_dark, 1, G_MAX)                 // Off
+//   g             = clamp(max(g_static_dark, g_adapt_z), 1, G_MAX)   // Scene
+//   g             = clamp(g_static_dark, 1, G_MAX)                  // Off
 //
 // `max`, not `min`: adaptation can only make the darken STRONGER on a
 // bright scene (a LARGER g here); on a dark scene the static floor is what
 // darkens the one bright thing in it (the mirror of plan 3.5's own
 // argument), so the floor must never be relaxed by "the scene looks dark".
-// `Why the SAME g_adapt, unchanged:` abv2_g_adapt() = ln(target)/ln(anchor)
-// is already > 1 exactly when anchor > target (the scene reads brighter
-// than Target) -- no new statistic, no new EMA, no new scene-cut: the
-// measure pass's existing anchor/EMA/scene-cut already produce a usable
-// signal in both directions, it was only ever the CONSUMER (this g
-// selection) that discarded the > 1 case. `Which direction is "attack"
-// now:` the anchor's own EMA (cs_effects_measure.comp) is unchanged --
-// Adapt speed (tau_up) is still used while the anchor RISES and its 2x
-// (tau_down) while it FALLS. A rising anchor is "brighten": it both takes
-// the lift OFF (min(g_static,g_adapt) relaxes toward 1) and puts the
-// darken ON (max(g_static_dark,g_adapt) deepens away from 1) in the SAME
-// direction, at the SAME tau_up -- so "attack" is "the anchor is rising",
-// whichever of the two operators is the one actually engaging, and "decay"
-// (tau_down, 2x slower) is the anchor falling back. There is no second,
-// independent asymmetry for the darken half to gain or need.
+//
+// `g_adapt_z, not the old g_adapt = ln(target)/ln(anchor):` that formula
+// solves anchor^g == target directly on RAW x -- correct reasoning for a
+// curve whose own domain IS [0,1], wrong once the darken half's own domain
+// is the RESCALED w = (1 - anchor) / (1 - target) (the combiner below runs
+// f_dark on THAT w, not on anchor itself). Worked example, Target 0.35,
+// anchor 0.7 (a scene reading twice Target): the OLD formula gives
+// g = ln(0.35)/ln(0.7) = 2.943 -- the exponent for a curve that maps 0.7
+// straight to 0.35, which is not what f_dark's own w-domain does with it
+// at all. The derivation below solves the equation THIS curve actually
+// evaluates:
+//
+//   w = (1 - anchor) / (1 - target)   // anchor's own position in the
+//                                      // darken half's domain -- w == 1 at
+//                                      // anchor == target (the pivot, no
+//                                      // extra darken needed), w == 0 at
+//                                      // anchor == 1 (white, the deepest
+//                                      // darken needed)
+//   g_adapt_z = ln(w) / ln(1 - target)
+//
+// chosen so the boundary limits are the ones adaptation actually needs:
+// w -> 1 (anchor -> target) gives g_adapt_z -> 0, LESS than 1, so
+// max(g_static_dark, g_adapt_z) falls back to the static floor right at
+// the pivot -- "no adaptive darken needed, the scene IS at Target" -- and
+// w -> 0 (anchor -> white) gives g_adapt_z -> +infinity, saturating at
+// ABV2_G_MAX through the outer clamp -- "as much darken as this shape
+// allows" at the brightest a scene can read. (Same anchor 0.7 / Target
+// 0.35: w = 0.4615, g_adapt_z = ln(0.4615)/ln(0.65) = 1.795 -- already a
+// meaningfully deeper exponent than the static-only floor at Darken 0, and
+// it keeps climbing toward ABV2_G_MAX as anchor approaches 1, unlike the
+// old formula's g = 2.943, which was neither derived from nor bounded by
+// this curve's own domain.) Monotone in anchor by construction (w is
+// monotone in anchor; ln is monotone; dividing by the FIXED negative
+// ln(1 - target) flips the sign back to increasing) -- checked
+// exhaustively in the unit tests below alongside the lift-side mirror.
+//
+// `Which direction is "attack":` unchanged from the first cut -- the
+// anchor's own EMA (cs_effects_measure.comp) still uses Adapt speed
+// (tau_up) while the anchor RISES and its 2x (tau_down) while it FALLS. A
+// rising anchor is "brighten": it both takes the lift OFF (relaxes toward
+// its own neutral) and puts the darken ON (deepens away from its own
+// neutral) at the SAME tau_up, so "attack" is "the anchor is rising"
+// whichever operator is the one actually engaging, and "decay" (tau_down,
+// 2x slower) is the anchor falling back. No second, independent speed.
 EC_FUNC float abv2_g_static_dark( float darken )
 {
 	return 1.0f + 0.6f * clamp( darken, 0.0f, 1.0f );
+}
+
+// The rescaled aim itself, split out so the unit tests can sweep it alone.
+// See the derivation above for why w, not raw anchor, is the input, and why
+// the two clamps below are not cosmetic: an anchor AT OR BELOW target (this
+// half's own domain does not cover it -- the lift half does) makes w >= 1,
+// clamped to just under 1, which saturates g_adapt_z toward 0 -- exactly
+// the "defer to static" limit, so calling this with an anchor on the wrong
+// side of Target is harmless, not undefined.
+EC_FUNC float abv2_g_adapt_dark_z( float anchorSmoothed, float target )
+{
+	float t    = clamp( target, 0.01f, 0.99f );
+	float a    = clamp( anchorSmoothed, 0.0001f, 0.9999f );
+	float span = max( 1.0f - t, ABV2_T_EPS );
+	float w    = clamp( ( 1.0f - a ) / span, ABV2_T_EPS, 1.0f - ABV2_T_EPS );
+	return log( w ) / log( span );
 }
 
 EC_FUNC float abv2_g_dark( float darken, float target, float anchorSmoothed, bool bSceneMode )
@@ -965,76 +1024,160 @@ EC_FUNC float abv2_g_dark( float darken, float target, float anchorSmoothed, boo
 	float gStatic = clamp( abv2_g_static_dark( darken ), 1.0f, ABV2_G_MAX );
 	if ( !bSceneMode )
 		return gStatic;
-	float gAdapt = abv2_g_adapt( anchorSmoothed, target );
+	float gAdapt = abv2_g_adapt_dark_z( anchorSmoothed, target );
 	return clamp( max( gStatic, gAdapt ), 1.0f, ABV2_G_MAX );
 }
 
-// ---- The two-sided curve: lift below the pivot, darken above it ---------
+// ---- The lift half's OWN scene aim, re-derived the same way (V2 darken QC,
+// 2026-09-15) -- the mirror of abv2_g_adapt_dark_z() above and for the SAME
+// reason: once the lift half is rescaled into [0, Target] (below), its own
+// scene term must be solved on z = anchor / target, not on raw anchor, or
+// it under-shoots. Worked example, Target 0.35, anchor 0.05 (a scene a
+// fourteenth of Target): the OLD g = ln(0.35)/ln(0.05) = 0.350 fed straight
+// into the RESCALED curve gives F(anchor) = 0.35 * (0.05/0.35)^0.35 ~=
+// 0.177, not the ~0.35 the old formula's own equation (anchor^g == target)
+// was solving for -- the QC's "does not land the anchor near Target" on
+// this half too. z = anchor / target has the same two boundary limits as
+// w above, mirrored: z -> 1 (anchor -> target) gives g_adapt_z ->
+// +infinity, i.e. "defer to static" through min(); z -> 0 (anchor ->
+// black) gives g_adapt_z -> 0, i.e. ABV2_G_MIN through the outer clamp,
+// "as much lift as this shape allows" at the darkest a scene can read.
 //
-// Local (plan/task point 3): the SAME per-pixel base B feeds ONE combined
-// curve, so a bright region's base is darkened while a dark region's base
-// is lifted IN THE SAME FRAME, with the pivot at Target (Scene mode's own
-// aim point -- the number the whole effect is already built around).
+// `Why this is a NEW function and not a change to abv2_g() above:` abv2_g()
+// still feeds the OLD, un-rescaled path directly whenever Max darken is at
+// its floor (the byte-identical guarantee -- see abv2_curve2() below), and
+// it is also the exact function Overlay/EffectPreviewMath.h's split-screen
+// preview calls today (outside this change's own scope) -- changing
+// abv2_g()'s formula in place would move the OLD path's numbers too, not
+// just the new one's. abv2_g_lift_scurve() below is what the compute
+// shader calls instead once Max darken is active; it falls back to
+// abv2_g() itself byte-for-byte when it is not, so there is exactly one
+// formula for the old regime and one additional one for the new -- the
+// preview keeps using abv2_g()'s own (slightly different, pre-existing)
+// aim on this half only, a documented, narrow gap rather than an unowned
+// file's silent behaviour change.
+EC_FUNC float abv2_g_adapt_lift_z( float anchorSmoothed, float target )
+{
+	float t = clamp( target, 0.01f, 0.99f );
+	float a = clamp( anchorSmoothed, 0.0001f, 0.9999f );
+	float z = clamp( a / t, ABV2_T_EPS, 1.0f - ABV2_T_EPS );
+	return log( t ) / log( z );
+}
+
+EC_FUNC float abv2_g_lift_scurve( float lift, float target, float anchorSmoothed, bool bSceneMode, float D )
+{
+	if ( D <= ABV2_D_MIN + ABV2_T_EPS )
+		return abv2_g( lift, target, anchorSmoothed, bSceneMode );   // byte-identical delegate
+	float gStatic = clamp( abv2_g_static( lift ), ABV2_G_MIN, 1.0f );
+	if ( !bSceneMode )
+		return gStatic;
+	float gAdapt = abv2_g_adapt_lift_z( anchorSmoothed, target );
+	return clamp( min( gStatic, gAdapt ), ABV2_G_MIN, 1.0f );
+}
+
+// ---- THE FIXED POINT (2026-09-15 redesign): lift below Target rescaled
+// into [0, Target], darken above it rescaled into [Target, 1], identity
+// EXACTLY at Target ---------------------------------------------------------
 //
-//   x <= Target:  F(x) = L(x)                                  -- UNCHANGED
-//   x >  Target:  F(x) = L(Target) + (1 - L(Target)) *
-//                        K( (L(x) - L(Target)) / (1 - L(Target)) ; gDark, D )
+//   x <= Target:  F(x) = Target * L(x / Target)
+//   x >  Target:  F(x) = Target + (1 - Target) *
+//                        K( (x - Target) / (1 - Target) ; gDark, D )
 //
 // where L(x) = abv2_curve(x, gLift, SLift, bKnee) (the existing toe/knee,
-// untouched) and K = abv2_toe_dark. `Why compose on L(x), not on x itself:`
-// L is not the identity above Target either (the toe/knee's own highlight
-// guard keeps compressing a little all the way to x = 1) -- rescaling the
-// DARKEN half against L's own continuation, rather than against raw x,
-// means that at D <= 1 (Max darken "off") K is the identity on ITS domain
-// and the whole expression telescopes EXACTLY back to L(x):
+// untouched) and K = abv2_toe_dark (also untouched). Both halves are the
+// SAME primitives as the first cut -- what changed is that L now runs on
+// x / Target, a curve of its OWN, rather than on x itself continued past
+// Target: L(1) == 1 by construction, so F(Target) == Target * 1 == Target
+// EXACTLY (not L(Target), which was >= Target -- the first cut's own pivot
+// gap, gone by construction rather than merely bounded). The x > Target
+// branch is unchanged in SHAPE (K on a rescale of the excess above the
+// pivot) but now rescales the excess against (1 - Target) directly rather
+// than against (1 - L(Target)); K(0) == 0 for any g, D, so it too gives
+// exactly Target at x == Target.
 //
-//   Ltgt + span * ((Lx - Ltgt) / span) == Ltgt + (Lx - Ltgt) == Lx
+// `Why rescaling the LIFT half is unavoidable once the pivot must be
+// Target itself, not the first cut's L(Target):` L is concave with
+// L(x) >= x, so unless L is itself the identity (Lift 0), continuing L past
+// Target and starting K's rescale from L(Target) was the only way to keep
+// x <= Target's own values byte-identical to the single-sided curve. Moving
+// the pivot down to Target instead requires the x <= Target branch to land
+// ON Target at x == Target, which the un-rescaled L does not do
+// (L(Target) > Target for any real lift) -- so a fixed point at Target and
+// byte-identical un-rescaled shadows are mutually exclusive once darkening
+// is genuinely active. This redesign picks the fixed point (the explicit
+// ask) and pays for it with the OFF SWITCH below instead of with the old
+// pivot gap.
 //
-// -- for every x, not only near the pivot -- which is the byte-identical
-// guarantee. `Why L(Target), not literally Target, as the pivot's height:`
-// L is a genuine lift curve (concave, f(x) >= x), so L(Target) is generally
-// a little ABOVE Target, not equal to it -- matching Target exactly would
-// require RESCALING the lift half into [0, Target] too, which would change
-// its values for x < Target and break the byte-identical guarantee above.
-// L(Target) is the closest honest pivot height that keeps the lift half
-// completely untouched; see shader-effects.md for the measured gap and why
-// this is the deliberate trade, not an oversight. The gap is NOT small at
-// the shipped Lift 0.5 / Max lift 4 / Target 0.35: L(0.35) = 0.477 (code
-// 122 against Target's own code 89 -- V2 darken QC, 2026-09-15), which is
-// also the floor NOTHING above Target can be darkened below while Lift is
-// on, whatever D says: the darken half only ever acts on L's continuation
-// above L(Target). At Lift 0 (g == 1) L is the identity and the pivot sits
-// on Target exactly.
+// THE BOUND, both halves, exactly:
+//   x <= Target:  F(x)/x = Target * L(z) / x = L(z)/z  (z = x/Target)
+//                 <= S     -- L's own secant bound, inherited unchanged
+//                 through the rescale (L(z) <= S*z for all z in [0,1], so
+//                 Target*L(z) <= Target*S*z == S*x).
+//   x >  Target:  F(x) <= x     -- K(z) <= z (K convex, matching endpoints
+//                 -- the SAME Jensen argument as the un-rescaled f_dark
+//                 above, now on z = (x-Target)/(1-Target)), so
+//                 F(x) = Target + span*K(z) <= Target + span*z == x. And
+//                 F(x)/x >= 1/D by the same non-decreasing-secant argument,
+//                 tight in the limit at x -> Target+ -- so nothing above
+//                 Target is ever pushed darker than a factor of D below its
+//                 raw value, and nothing above Target can exceed its own
+//                 raw value any more (the first cut's "never below raw"
+//                 gap -- closed).
 //
-// CONTINUITY (C0, required): both branches give exactly L(Target) at
-// x = Target (the x <= Target branch by definition; the x > Target branch
-// because z = 0 there and K(0) = 0 for any g, D). C1 (preferred) is NOT
-// achieved when darkening is active: the slope arriving at the pivot from
-// below is L'(Target), and the slope leaving it above is
-// K'(0) * L'(Target) = (1/D) * L'(Target) -- a factor-of-D kink, visible
-// only as a slope change, never a value jump, exactly the same "monotone
-// but not smooth" trade the Knee variant's own kink at ABV2_KNEE_X already
-// carries and is accepted for (guarantee 3 asks for monotone, not smooth).
-// At D == 1 the two slopes match trivially (K'(0) == 1), so the curve is
-// C1 everywhere whenever darkening is off.
+// THE OFF SWITCH, exactly (the backward-compatibility rule): D <= 1 (Max
+// darken at its own floor) returns abv2_curve(x, gLift, SLift, bKnee)
+// DIRECTLY -- the plain, un-rescaled single-sided curve, not a limit of the
+// two-sided one. `Why gate on D alone, not also on Darken:` abv2_toe_dark()
+// already returns the exact identity whenever D <= 1 REGARDLESS of gDark,
+// so the x > Target branch already telescopes to F(x) == x there for any
+// gDark -- but the x <= Target branch would STILL be the RESCALED
+// Target*L(x/Target), which is NOT byte-identical to the un-rescaled L(x)
+// whenever Lift > 0. Gating the WHOLE dispatch on D, not just K, is what
+// keeps the shadows byte-identical too -- the stated requirement is "Max
+// darken 1 AND Darken 0"; gating on D alone is a STRICTLY STRONGER
+// guarantee (Darken's own value cannot matter once D has already turned
+// the whole feature off), which subsumes the stated requirement rather
+// than merely meeting it. Verified in the unit tests below as an exact
+// float comparison against abv2_curve(), not an approximation.
 //
-// BOUNDED, MONOTONE: F is a monotone rescale of L (x <= Target) composed
-// with a monotone rescale of K (x > Target), and 1 - L(Target) > 0 for any
-// Target < 1 with a proper lift curve, so F maps [0,1] into [0,1] with no
-// clamp doing any work (checked exhaustively in the unit tests below).
+// CONTINUITY: C0 by construction (both branches give exactly Target at
+// x == Target, not merely close). C1 is NOT achieved when darkening is
+// active: the slope arriving at the pivot from below is L'(1) (the
+// toe/knee's OWN highlight slope, x/Target having reached 1), and the
+// slope leaving it above is K'(0) == 1/D exactly -- a kink whose RATIO is
+// (1/D) / L'(1), not the first cut's plain 1/D (L'(1) is a different point
+// on L than the first cut's L'(Target), since the rescale moves WHERE on L
+// the pivot's left slope is read from). Measured at the shipped Lift 0.5
+// (g_lift 0.7, Scene off) / Max lift 4 / Darken 0.5 (g_dark 1.3) / Max
+// darken 2 / Target 0.35: left slope 0.7030 (L'(1), matching this file's
+// own f'(1) ~= g approximation), right slope 0.5000 (1/D exactly), ratio
+// 0.7113 -- CLOSER to 1 (less discontinuous) than the first cut's own
+// plain-1/D ratio of 0.5 at the same D, so the kink this redesign carries
+// is, if anything, tighter at these defaults, not looser. (General D, g:
+// the ratio is (1/D)/L'(1), and L'(1) < 1 for any real lift, so the new
+// ratio is always LARGER, i.e. closer to 1, than the old plain 1/D.) At
+// D == 1 the two slopes match trivially (K'(0) == 1), because the whole
+// dispatch has already returned the un-rescaled L, whose own continuity is
+// unaffected by any of this.
+//
+// BOUNDED, MONOTONE: F is a monotone rescale of L (x <= Target, L itself
+// monotone, L(0) == 0, L(1) == 1, so Target*L(x/Target) covers [0, Target]
+// monotonically) composed with a monotone rescale of K (x > Target,
+// likewise covering [Target, 1] monotonically) -- checked exhaustively in
+// the unit tests below.
 EC_FUNC float abv2_curve2( float x, float gLift, float SLift, bool bKnee,
                             float gDark, float D, float target )
 {
-	float xx  = clamp( x, 0.0f, 1.0f );
+	float xx = clamp( x, 0.0f, 1.0f );
+	if ( D <= ABV2_D_MIN + ABV2_T_EPS )
+		return abv2_curve( xx, gLift, SLift, bKnee );   // the off switch -- see above
 	float tgt = clamp( target, 0.001f, 0.999f );
 	if ( xx <= tgt )
-		return abv2_curve( xx, gLift, SLift, bKnee );
-	float Ltgt = abv2_curve( tgt, gLift, SLift, bKnee );
-	float span = max( 1.0f - Ltgt, 1e-4f );
-	float Lx   = abv2_curve( xx, gLift, SLift, bKnee );
-	float z    = clamp( ( Lx - Ltgt ) / span, 0.0f, 1.0f );
+		return tgt * abv2_curve( xx / tgt, gLift, SLift, bKnee );
+	float span = max( 1.0f - tgt, 1e-4f );
+	float z    = clamp( ( xx - tgt ) / span, 0.0f, 1.0f );
 	float K    = abv2_toe_dark( z, gDark, D );
-	return clamp( Ltgt + span * K, 0.0f, 1.0f );
+	return clamp( tgt + span * K, 0.0f, 1.0f );
 }
 
 // ---- Base/detail (Stage 2, plan 4.5): the secant and the soft shoulder ---
@@ -1053,21 +1196,26 @@ EC_FUNC float abv2_secant( float B, float g, float S, bool bKnee )
 	return min( abv2_curve( B, g, S, bKnee ) / B, S );
 }
 
-// The two-sided curve's own secant (task point 3: "Detail's secant scaling
-// remains bounded on the darkening side -- slope <= max(S, D)*Detail").
-// `max(SLift, D)`, not a tighter derived bound: F(B)/B for B > Target is a
-// composite of the lift curve's own continuation and the darken mirror's
-// rescale, and no single closed form bounds it as tightly as S alone
-// bounds the toe's own secant -- clamping to max(SLift, D) is a SAFE
-// guarantee (F(B) <= L(B) <= B*S always holds, by abv2_curve2's own
-// telescoping and the toe's existing secant bound, and separately
-// F(B) >= B/D from the darken mirror's own proof above applied to the
-// RESCALED z, so max(SLift, D) covers whichever side is looser) rather
-// than a tight one, exactly the way the task itself states the guarantee.
-// Byte-identical to abv2_secant() at D <= 1: max(SLift, 1) == SLift (Max
-// lift's own range floor is 1), and abv2_curve2() itself already
-// telescopes to abv2_curve() there, so this returns exactly the same
-// number the one-sided function does.
+// The two-sided curve's own secant. The clamp below still reads
+// `max(SLift, D)` (unchanged code -- a SAFE, if no longer the tightest,
+// ceiling), but the redesigned combiner's own bound is tighter than that
+// expression suggests: F(B)/B <= S everywhere now, on BOTH sides of
+// Target, not only below it -- below Target from L's own secant bound,
+// inherited unchanged through the rescale (see THE BOUND above); above
+// Target because F(B) <= B itself there (the fixed-point redesign's own
+// guarantee), so F(B)/B <= 1 <= S always, S being at least 1 by Max lift's
+// own range floor. So "S * Detail" is the bound that actually holds now,
+// not "max(S, D) * Detail" -- the latter is simply a looser number the
+// same clamp expression also happens to satisfy, kept as-is because
+// changing the clamp buys nothing (S alone already bounds it). A darkened
+// region's detail SHRINKS in step with its own base: F(B)/B <= 1 there, so
+// this function's sec factor is at most Detail on the darkening side,
+// proportionally smaller the darker the region gets (down to
+// sec >= Detail/D at the darkest, from the same non-decreasing-secant
+// argument as F(x) >= x/D above). Byte-identical to abv2_secant() at
+// D <= 1: max(SLift, 1) == SLift (Max lift's own range floor is 1), and
+// abv2_curve2() itself already telescopes to abv2_curve() there, so this
+// returns exactly the same number the one-sided function does.
 EC_FUNC float abv2_secant2( float B, float gLift, float SLift, bool bKnee,
                              float gDark, float D, float target )
 {
@@ -1182,6 +1330,14 @@ EC_FUNC int abv2_binding( float lift, float target, float anchorSmoothed, bool b
 // PanelShaders.cpp's Diagnostics row still reports the lift-side reading
 // today; this exists for the unit tests and for a later panel pass to wire
 // in, per shader-effects.md's own note on the scope of this change.
+//
+// KNOWN GAP (V2 darken QC, 2026-09-15 S-curve redesign): this still calls
+// the OLD, un-rescaled abv2_g_adapt() below, not abv2_g_adapt_dark_z() that
+// abv2_g_dark() itself was moved onto above -- so this diagnostic can
+// classify a frame slightly differently than the curve that actually ran
+// on it. Left alone because it is unwired to the panel today (see the
+// paragraph above) and is informational only; whoever wires the dark side
+// into the panel should switch this to abv2_g_adapt_dark_z() first.
 const int ABV2_BIND_DARKEN_FLOOR = 4;   // g_static_dark (Darken's own floor) is stronger than Target asks for
 const int ABV2_BIND_G_MAX        = 5;   // the internal ceiling -- "as much darken as this shape allows"
 

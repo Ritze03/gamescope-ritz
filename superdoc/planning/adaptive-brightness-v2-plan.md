@@ -767,6 +767,71 @@ old 8 — see `superdoc/features/shader-effects.md`'s own "Darkening" section fo
 row-budget reasoning, the measured tables, and the harness checks
 (`abv2-darken-bright`/`abv2-darken-sky`).
 
+### 4.13 Darkening REDESIGNED (2026-09-15) — a true S-curve fixed at Target
+
+§4.12's own pivot — composing the darken mirror on `L(x)`'s CONTINUATION above Target,
+at height `L(Target)` rather than `Target` itself — was QC'd the day after it shipped and
+found to be the wrong pivot, not merely an approximation of the right one. Two
+consequences, both measured: `F(x) >= x` for EVERY `x` above Target (so "darkening" only
+ever undid the lift curve's own highlight raise — a sky band read 225 raw, 233.7
+lift-only, 225.0 with Darken 0.5 / Max darken 2, i.e. back to raw, never below it), and
+`L(Target)` (code 122 against Target's own code 89 at the shipped defaults) was a FLOOR
+nothing above Target could be darkened past, whatever `D` said. §4.12 is left in place
+above as the historical record of what shipped first and why; this section supersedes its
+pivot construction, not its closed form (`f_dark` itself — the convex mirror, the `1/D`
+secant proof — is untouched, verified byte-for-byte).
+
+**The fix: rescale BOTH halves against Target itself, not against `L`'s continuation.**
+
+```
+x <= Target:  F(x) = Target · L(x / Target)
+x >  Target:  F(x) = Target + (1 - Target) · K( (x - Target) / (1 - Target) ; gDark, D )
+```
+
+`L(1) = 1` by construction, so `F(Target) = Target` EXACTLY — the fixed point the plan's
+own §4.3 prose ("`f(Target) = Target` literally") asked for, closed rather than merely
+approached. `K(0) = 0` for any `g, D`, so the two branches agree at `x = Target` too:
+C0 everywhere, not merely at the defaults. And now, by Jensen's inequality on `K`
+(convex, matching endpoints) composed with the SAME rescale, `F(x) <= x` for every `x`
+above Target — the guarantee §4.12's own pivot could not make, closed this time by
+construction rather than left as a documented gap. `F(x) >= x/D` still holds (the
+non-decreasing-secant argument, unchanged). Below Target, `F(x)/x <= S` is inherited
+through the rescale unchanged (`L(z) <= S·z` for `z` in `[0,1]` gives
+`Target·L(z) <= Target·S·z = S·x`).
+
+**The price: an explicit off switch, not a documented pivot gap.** Rescaling the LIFT half
+too is unavoidable once the fixed point must be Target exactly (§4.12's own gap analysis
+already said as much: "matching Target exactly would require RESCALING the lift half into
+`[0, Target]` too, which would change its values for every `x < Target`"). So the
+byte-identical-at-Max-darken-1 guarantee that keeps the shadows untouched when darkening
+is off can no longer come from an algebraic telescoping that holds at every `x` regardless
+of the dispatch — it comes from an explicit `if (D <= 1) return abv2_curve(...)` branch
+instead, gating on **Max darken alone** (a strictly stronger guarantee than the stated
+"Max darken 1 AND Darken 0", since `abv2_toe_dark()`'s own `D <= 1` identity guard already
+made Darken irrelevant whenever Max darken is at its floor).
+
+**Scene adaptation's aim, re-derived on the rescaled variable.** §4.4's `g_adapt =
+ln(Target)/ln(anchor)` (reused for the darken side too, per §4.12) solves "raw anchor to
+the `g`-th power lands on Target" — correct reasoning when the curve's own domain IS
+`[0, 1]`, wrong once each half's domain is a rescaled sub-interval: fed straight into the
+rescaled lift curve, a Target-0.35 / anchor-0.05 scene's old `g = 0.350` gives
+`F(anchor) ≈ 0.177`, not the ≈0.35 the old equation was solving for — the QC's "does not
+land the anchor near Target", reproduced on this half too, not only the darken side. The
+fix solves the SAME kind of equation on each half's OWN rescaled coordinate instead —
+`z = anchor/Target` for the lift side, `w = (1-anchor)/(1-Target)` for the darken side —
+chosen so the boundary limits are the ones adaptation actually needs (defer to the static
+floor exactly at the pivot, saturate at the internal ceiling/floor at the far edge). See
+`src/shaders/effects_curve.h`'s own `abv2_g_adapt_lift_z()` / `abv2_g_adapt_dark_z()` for
+the closed forms and worked numbers, and `superdoc/features/shader-effects.md`'s
+Darkening section for the measured kink/quantisation numbers this redesign carries.
+
+**What did NOT change:** the closed-form `f_dark` family, its `1/D` secant proof, the
+static floors (`g_static`/`g_static_dark`), the EMA/scene-cut/attack-direction design
+(§4.8, §4.12's own "attack" note), the Knee-mirror decision (still toe-only for darken,
+§4.12's own answer stands), and the Detail secant's own clamp expression (though the bound
+it ACTUALLY holds to is now tighter — `S · Detail` on both sides of Target, not
+`max(S, D) · Detail` — since `F(x) <= x` above Target now holds unconditionally).
+
 ---
 
 ## 5. Cost and pipeline

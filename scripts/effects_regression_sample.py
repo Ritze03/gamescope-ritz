@@ -1375,12 +1375,17 @@ def cmd_abv2_sky(args):
 
 
 def cmd_abv2_darken_bright(args):
-    """abv2-darken-bright <image-off> <image-on> -- DARKENING (2026-09-14):
-    on `bright`, Adaptation Scene deepens the darken past its static floor
-    on a scene that reads brighter than Target (the mirror of Dynamic's own
-    dark-scene lift-deepening). `off` is V2 at defaults (Max darken 1, i.e.
-    darkening disabled); `on` is the same scene with Adaptation Scene and
-    Max darken 2 -- the scene the task itself names."""
+    """abv2-darken-bright <image-off> <image-on> -- DARKENING (2026-09-14;
+    REDESIGNED 2026-09-15 -- the true S-curve). On `bright`, Adaptation
+    Scene deepens the darken past its static floor on a scene that reads
+    brighter than Target (the mirror of Dynamic's own dark-scene lift-
+    deepening). `off` is V2 at defaults (Max darken 1, i.e. darkening
+    disabled); `on` is the same scene with Adaptation Scene and Max darken
+    2 -- the scene the task itself names. All five bands sit above Target
+    (raw 200..255 vs Target's own code ~89), so ALL of them must now end AT
+    OR BELOW their raw value -- the redesign's own new guarantee (the first
+    cut only ever undid its own lift-only curve's highlight raise, never
+    reached below raw; see effects_curve.h's own "WHY THE REDESIGN" note)."""
     off, on = regions(load(args[0]), "bright"), regions(load(args[1]), "bright")
     raw = SCENES["bright"]["bands"]
     D = 2.0
@@ -1399,6 +1404,12 @@ def cmd_abv2_darken_bright(args):
     for i, rawv in enumerate(raw):
         checks.append((f"band{i} ({rawv}) not darkened past raw/D={rawv / D:.1f}",
                        on[f"band{i}"] >= rawv / D - 1.0))
+    # THE NEW GUARANTEE (S-curve redesign, 2026-09-15): F(x) <= x for every x
+    # above Target, not just "usually" -- every band here ends AT OR BELOW
+    # its own raw value, 1 code of capture-rounding slack.
+    for i, rawv in enumerate(raw):
+        checks.append((f"band{i} ({rawv}) at or below its own raw value (new guarantee)",
+                       on[f"band{i}"] <= rawv + 1.0))
     failed = [c for c, ok in checks if not ok]
     v = {"off_" + k: val for k, val in off.items()}
     v.update(on)
@@ -1407,37 +1418,109 @@ def cmd_abv2_darken_bright(args):
 
 
 def cmd_abv2_darken_sky(args):
-    """abv2-darken-sky <image-off> <image-on> -- DARKENING (2026-09-14):
-    on `skyfore`, a static Darken (0.5) with Lift at its own default. `off`
-    is V2 at Lift default with Darken 0 (Max darken 1); `on` is the same
-    Lift default with Darken 0.5, Max darken >= 2. Checks the SAME frame's
-    two halves move in OPPOSITE directions (sky down, ground/figures up,
-    both from raw) and that the below-Target half (ground, figures) is
-    UNCHANGED by Darken -- the pivot construction's own claim (effects_
-    curve.h's abv2_curve2(): the x <= Target branch is the untouched lift
-    curve, never rescaled by the darken side)."""
+    """abv2-darken-sky <image-off> <image-on> -- DARKENING (2026-09-14;
+    REDESIGNED 2026-09-15 -- the true S-curve). On `skyfore`, a static
+    Darken (0.5) with Lift at its own default. `off` is V2 at Lift default
+    with Darken 0 (Max darken 1); `on` is the same Lift default with Darken
+    0.5, Max darken >= 2. Checks the SAME frame's two halves move in
+    OPPOSITE directions (sky down BELOW its own raw value -- the redesign's
+    new guarantee, not merely below the lift-only `off` capture -- ground/
+    figures still lifted above raw) and that the below-Target half (ground,
+    figures) keeps its raw ordering. It is NOT byte-identical to `off` any
+    more (that was the FIRST CUT's claim, when Max darken could not move
+    the lift half at all): this redesign rescales the lift half into
+    [0, Target] too once Max darken is above its floor, so crossing that
+    off switch (comparing against `off`, Max darken 1) moves these values
+    by design -- see the per-region comment below for the measured amount."""
     off, on = abv2_sample(load(args[0]), SKYFORE), abv2_sample(load(args[1]), SKYFORE)
     raw = dict(sky=225.0, cloud1=235.0, cloud2=215.0, ground_l=14.0, ground_r=20.0, fig8=8.0, fig26=26.0)
+    D = 2.0
     checks = [
         ("sky (225) comes down further with Darken 0.5", on["sky"] < off["sky"] - 1.0),
         ("cloud1 (235) comes down further with Darken 0.5", on["cloud1"] < off["cloud1"] - 1.0),
         ("cloud2 (215) comes down further with Darken 0.5", on["cloud2"] < off["cloud2"] - 1.0),
         ("sky still above raw ground/figures (order preserved)",
          on["sky"] > on["ground_r"] and on["sky"] > on["fig26"]),
+        # THE NEW GUARANTEE (S-curve redesign): the sky/cloud bands, all
+        # above Target, must now end AT OR BELOW their own raw value -- the
+        # first cut only ever undid its own lift-only raise (never reached
+        # below raw; see effects_curve.h's "WHY THE REDESIGN" note) -- and
+        # never darkened past raw/D either.
+        ("sky (225) at or below its own raw value", on["sky"] <= raw["sky"] + 1.0),
+        ("sky (225) not darkened past raw/D", on["sky"] >= raw["sky"] / D - 1.0),
+        ("cloud1 (235) at or below its own raw value", on["cloud1"] <= raw["cloud1"] + 1.0),
+        ("cloud2 (215) at or below its own raw value", on["cloud2"] <= raw["cloud2"] + 1.0),
     ]
-    # Below Target (ground, figures): Darken must be a NO-OP, within 8-bit
-    # capture rounding -- the pivot's x <= Target branch is byte-identical
-    # to the Lift-only curve regardless of Darken/Max darken.
+    # Below Target (ground, figures): NOT unchanged any more (V2 darken QC,
+    # 2026-09-15 S-curve redesign) -- the "pivot's own claim" this comment
+    # used to name was the FIRST CUT's claim (composing the darken half on
+    # L(Target), leaving L(x) itself for x <= Target byte-for-byte alone
+    # regardless of Max darken/Darken). The redesign rescales the LIFT half
+    # into [0, Target] too, once Max darken is above its floor, so it is a
+    # NO-OP only when Max darken is AT its floor (1.0) -- comparing this
+    # capture (Max darken 2) against `off` (Max darken 1) crosses that OFF
+    # SWITCH, and a real, predicted, DOCUMENTED shift is exactly what a
+    # "still unchanged" assertion would be checking for the wrong thing
+    # (measured, this run: ground_l 32.0 -> 24.0, ground_r 42.0 -> 31.0,
+    # fig8 19.8 -> 15.0, fig26 50.8 -> 37.8 -- a consistent ~25% pull,
+    # matching Target*L(x/Target) vs L(x) at these low, well-under-Target
+    # inputs, not a leak of the darken exponent). What DOES still hold: the
+    # region is still LIFTED well above its raw value (Lift's own effect,
+    # now on the rescaled curve) and the four regions keep their raw
+    # ordering (fig8 < ground_l < ground_r < fig26).
     for name in ("ground_l", "ground_r", "fig8", "fig26"):
-        checks.append((f"{name} unchanged by Darken (below Target, pivot's own claim)",
-                       abs(on[name] - off[name]) <= 2.0))
-        checks.append((f"{name} lifted above its raw value ({raw[name]:.0f}) by Lift",
+        checks.append((f"{name} still lifted above its raw value ({raw[name]:.0f}) by Lift",
                        on[name] > raw[name] + 3.0))
+    checks.append(("ground/figure ordering preserved under the rescale",
+                    on["fig8"] < on["ground_l"] < on["ground_r"] < on["fig26"]))
     failed = [c for c, ok in checks if not ok]
     v = {"off_" + k: val for k, val in off.items()}
     v.update(on)
     sys.exit(0 if emit(not failed, "abv2-darken-sky",
                        ("FAILED: " + "; ".join(failed) + "; " if failed else "") + fmt(v)) else 1)
+
+
+def cmd_abv2_darken_halo(args):
+    """abv2-darken-halo <image-off> <image-on> -- DARKENING (2026-09-15
+    S-curve redesign): a vertical profile across `skyfore`'s own horizon (a
+    HARD step at y = 0.55*H from sky/225 to ground/14-20 -- see
+    tests/effects_scene_client.c's PaintSpecial(), nSpecial == 6 -- which
+    straddles Target). `off`/`on` are the SAME two captures
+    abv2-darken-sky already took (Max darken 1 vs Darken 0.5 / Max darken
+    2). The guided filter's own box (~1.5% of the frame height by default)
+    blends sky and ground into one base B within that distance of the
+    line, which is exactly where a pixel's base can cross Target and
+    switch which HALF of the two-sided curve it is on -- this checks that
+    switch does not show up as an EXTRA halo: the on-vs-off delta close to
+    the line must not exceed the delta the sky/ground bands already show
+    FAR from it (already asserted by abv2-darken-sky) by more than 4
+    codes -- the same bound the lift-only halobox/haloinv checks use."""
+    off_img, on_img = load(args[0]), load(args[1])
+    w, h = off_img.width, off_img.height
+    y0 = int(0.55 * h)
+    offsets = [-240, -120, -60, -30, -15, -6, 6, 15, 30, 60, 120, 240]
+
+    def profile(img):
+        out = []
+        for d in offsets:
+            y = min(max(y0 + int(d * h / 720.0), 4), h - 5)
+            # inset=0: the strip is already a deliberate 8px-tall band, no
+            # extra margin needed the way a box-shaped region wants one to
+            # dodge an anti-aliased edge -- and insetting a THIN strip is
+            # exactly what divided its own height to 0 the first time
+            # (region_mean's default inset=4 on a naive box here).
+            out.append(grey(region_mean(img, (0, y - 4, w, y + 4), inset=0)))
+        return out
+
+    off_p, on_p = profile(off_img), profile(on_img)
+    delta = [b - a for a, b in zip(off_p, on_p)]
+    far_sky, far_ground = delta[0], delta[-1]   # -240 (deep sky), +240 (deep ground)
+    near = delta[4:8]                            # -15, -6, +6, +15 -- straddling the line
+    excess = max(abs(d - (far_sky if i < 2 else far_ground)) for i, d in enumerate(near))
+    ok = excess <= 4.0
+    detail = (f"far_sky_delta={far_sky:+.1f} far_ground_delta={far_ground:+.1f} "
+              f"near_line_deltas=" + " ".join(f"{d:+.1f}" for d in near) + f" excess={excess:.1f} codes")
+    sys.exit(0 if emit(ok, "abv2-darken-halo", detail) else 1)
 
 
 def cmd_abv2_static(args):
@@ -1634,6 +1717,7 @@ def main():
      "abv2static": cmd_abv2_static, "abv2pan": cmd_abv2_pan, "abv2cut": cmd_abv2_cut,
      "abv2colour": cmd_abv2_colour, "abv2capture": cmd_abv2_capture,
      "abv2darkenbright": cmd_abv2_darken_bright, "abv2darkensky": cmd_abv2_darken_sky,
+     "abv2darkenhalo": cmd_abv2_darken_halo,
      "previewsplit": cmd_previewsplit,
      }[cmd](args)
 

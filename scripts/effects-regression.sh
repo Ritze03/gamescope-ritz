@@ -1263,16 +1263,28 @@ run_sampler means dark-floor-means "$DF_OFF" "$DF_AG_ZERO" "$DF_AG_DEFAULT" "$DF
 #   abv2-capture-nobinarise / abv2-capture-noclip  the Stage-1 acceptance
 #                          bar on the user's own real capture, through the
 #                          GPU (`--image`, the `capture` scene).
-#   abv2-darken-bright     DARKENING (NEW 2026-09-14): Adaptation Scene +
-#                          Max darken 2 on `bright` -- the 245/255 bands
-#                          come down further than Max darken 1, order
+#   abv2-darken-bright     DARKENING (NEW 2026-09-14; REDESIGNED 2026-09-15
+#                          -- the true S-curve): Adaptation Scene + Max
+#                          darken 2 on `bright` -- every band (all above
+#                          Target) ends AT OR BELOW its own raw value (the
+#                          redesign's new guarantee -- the first cut only
+#                          ever undid its own lift-only raise), order
 #                          preserved, nothing darkened past raw/D.
-#   abv2-darken-sky        DARKENING (NEW 2026-09-14): Darken 0.5 + Lift at
-#                          its own default on `skyfore` -- the sky/cloud
-#                          bands (above Target) come down further; the
-#                          ground and both figures (below Target) are
-#                          UNCHANGED by Darken, proving the pivot's own
-#                          claim that the lift half is untouched.
+#   abv2-darken-sky        DARKENING (NEW 2026-09-14; REDESIGNED
+#                          2026-09-15): Darken 0.5 + Lift at its own
+#                          default on `skyfore` -- the sky/cloud bands
+#                          (above Target) end AT OR BELOW raw (not merely
+#                          below the lift-only capture) and no darker than
+#                          raw/D; the ground and both figures (below
+#                          Target) are UNCHANGED by Darken, proving the
+#                          fixed-point construction's own claim.
+#   abv2-darken-halo       DARKENING (NEW 2026-09-15): a vertical profile
+#                          across `skyfore`'s own hard sky/ground step,
+#                          which straddles Target -- the guided filter's
+#                          box can blend a pixel's base across the pivot
+#                          near the line; checked that this shows no MORE
+#                          halo than the sky/ground bands already show far
+#                          from it (<= 4 codes excess).
 # ---------------------------------------------------------------------------
 V2_ID="image.shaders.adaptive_brightness_v2"
 V2_SHAPE_ID="$V2_ID.shape"
@@ -1390,10 +1402,18 @@ set_v2_param "$V2_MAXDARKEN_ID" 2.0
 set_v2_param "$V2_DARKEN_ID" 0.5
 sleep "$ADAPT_SETTLE_S"
 V2_DARKEN_SKY_ON="$(take_screenshot 31-skyfore-v2-darken-on)"
+run_sampler abv2darkensky "$V2_SKY_DEFAULT" "$V2_DARKEN_SKY_ON"
+run_sampler abv2darkenhalo "$V2_SKY_DEFAULT" "$V2_DARKEN_SKY_ON"
+# STATIC (guarantee 5), with darkening genuinely engaged: a second still of
+# the SAME frame while Darken/Max darken are on, same <= 2 count bound
+# abv2-static already uses for the lift-only picture -- the EMA that feeds
+# gDark's own Scene term is a fresh source of drift the lift-only checks
+# above never exercised.
+V2_DARKEN_SKY_ON_2="$(take_screenshot 31-skyfore-v2-darken-on-2)"
+run_sampler abv2static darken-on "$V2_DARKEN_SKY_ON" "$V2_DARKEN_SKY_ON_2"
 set_v2_param "$V2_MAXDARKEN_ID" "$V2_MAXDARKEN_DEFAULT"
 set_v2_param "$V2_DARKEN_ID" "$V2_DARKEN_DEFAULT"
 sleep "$ADAPT_SETTLE_S"
-run_sampler abv2darkensky "$V2_SKY_DEFAULT" "$V2_DARKEN_SKY_ON"
 
 # HALO, reusing Adaptive Gamma's own sampler function: guarantee 4, at
 # the shipped defaults (<= 4 codes, ASSERTED) and, as INFO only, at the

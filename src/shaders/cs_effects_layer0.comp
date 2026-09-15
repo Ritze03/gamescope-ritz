@@ -242,9 +242,14 @@ void main()
     //    colour by luma ratio. DARKENING (NEW 2026-09-14): the SAME base
     //    curve is now two-sided -- lift below Target, a bounded darken
     //    mirror above it -- so a bright region's base is pulled down while
-    //    a dark region's is lifted, in the same frame. See effects_curve.h's
-    //    "ADAPTIVE BRIGHTNESS V2" block for every formula and
-    //    superdoc/planning/adaptive-brightness-v2-plan.md for the design.
+    //    a dark region's is lifted, in the same frame. REDESIGNED
+    //    2026-09-15 into a true S-curve fixed exactly at Target (not at
+    //    the lift curve's own continuation above it) -- see
+    //    effects_curve.h's "DARKENING" block for every formula, the
+    //    fixed-point proof and the off-switch that keeps this
+    //    byte-identical to the lift-only curve whenever Max darken is at
+    //    its floor. superdoc/planning/adaptive-brightness-v2-plan.md has
+    //    the original design.
     if ((u_flags & EFFECT_ADAPTIVE_V2) != 0u)
     {
         float Y = clamp(effects_luma(c), 0.0, 1.0);
@@ -263,12 +268,22 @@ void main()
         {
             bool bScene = u_v2Mode != 0u;
             float anchor = history_read(HISTORY_V2_ANCHOR);
-            float g     = abv2_g(u_v2Lift, u_v2Target, anchor, bScene);
-            // DARKENING (NEW 2026-09-14): the two-sided curve's own dark-
-            // side exponent, mirroring g above -- see effects_curve.h's
-            // DARKENING block. Byte-identical below when u_v2MaxDarken is
-            // 1 and u_v2Darken is 0 (abv2_curve2()/abv2_secant2() both
-            // telescope back to abv2_curve()/abv2_secant() exactly then).
+            // abv2_g_lift_scurve(), not plain abv2_g(): once the S-curve is
+            // active (Max darken > 1) the lift half is RESCALED into
+            // [0, Target] and its own scene-adaptive aim must be solved on
+            // that rescaled variable too, or it under-shoots -- see
+            // effects_curve.h's own derivation next to abv2_g_lift_scurve().
+            // Delegates to abv2_g() itself, byte-for-byte, whenever Max
+            // darken is at its floor.
+            float g = abv2_g_lift_scurve(u_v2Lift, u_v2Target, anchor, bScene, u_v2MaxDarken);
+            // DARKENING (NEW 2026-09-14; REDESIGNED 2026-09-15 -- the true
+            // S-curve): the two-sided curve's own dark-side exponent,
+            // mirroring g above, its own scene aim ALSO solved on the
+            // rescaled variable -- see effects_curve.h's DARKENING block.
+            // Byte-identical below when u_v2MaxDarken is 1 (regardless of
+            // u_v2Darken -- abv2_curve2()/abv2_secant2() both gate the
+            // WHOLE two-sided formula on Max darken alone, a strictly
+            // stronger guarantee than "Max darken 1 AND Darken 0").
             float gDark = abv2_g_dark(u_v2Darken, u_v2Target, anchor, bScene);
             bool bKnee = u_v2Knee != 0u;
             float fB  = abv2_curve2(B, g, u_v2MaxLift, bKnee, gDark, u_v2MaxDarken, u_v2Target);
