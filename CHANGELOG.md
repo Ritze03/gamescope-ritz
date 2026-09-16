@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.8.2] – 2026-09-16
+
+### Fixed
+- **Adaptive Brightness**: its "Leave dark scenes alone" slider is now one of the
+  effect's own parameters in the Inspector, like every other tunable, instead of a
+  separate dimmed row sitting under the switch.
+
 ## [0.8.1] – 2026-09-15
 
 ### Added

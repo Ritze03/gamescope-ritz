@@ -299,15 +299,16 @@ namespace gamescope
 		"whose values these passes would clip. A deliberate v1 limitation, not a bug";
 
 	// Dark floor, Adaptive Brightness's own copy (2026-09-14; split from a
-	// shared control into two per-effect ones the SAME day) -- see the
-	// standalone row below for why this one is a standalone row rather than
-	// a Param under the Switch.
+	// shared control into two per-effect ones the SAME day) -- the row's
+	// ninth Param since 2026-09-16, and the only one of the nine that does
+	// nothing whatever while the effect itself is off, so it alone carries
+	// a gate.
 	static bool AdaptiveBrightnessEnabled()
 	{
 		return EffectsUsable() && Cfg().reshade.adaptive_brightness.enabled;
 	}
 	static constexpr const char *kNeedsAdaptiveBrightness =
-		"turn on Adaptive Brightness above to use this -- it fades that effect specifically, "
+		"turn Adaptive Brightness on to use this -- it fades that effect specifically, "
 		"and does nothing on its own";
 
 	static void SetEffectEnabled( bool *pbField, bool bOn )
@@ -659,12 +660,14 @@ namespace gamescope
 				.Step( 0.05f )   // 21 positions
 				.Default( 0.0f );
 
-		// EIGHT PARAMS -- the budget again, exactly (see this section's
-		// header comment for both raises and why each one happened).
+		// NINE PARAMS of kParamBudget's 10 (see this section's header
+		// comment for the raises and why each one happened; the ninth,
+		// "Leave dark scenes alone", folded in here 2026-09-16 once V2's
+		// 8 -> 10 raise freed the slot it had been denied).
 		// Back in the Effects GroupCount band as a plain Switch (request
 		// #17, 2026-09-07): the mode is now the row's first Param instead of
 		// the row's own value, so it shows in the Inspector's params column
-		// like the other seven.
+		// like the other eight.
 		//
 		// The .Default()s below read the compiled-in ConfigSchema.h values
 		// (as PanelCursor.cpp's rows do) rather than repeating literals:
@@ -783,42 +786,39 @@ namespace gamescope
 				                 // Unit, exactly as Strength has none: both
 				                 // are 0..1 dry/wet mixes, and a "%" suffix
 				                 // on a 0..1 range would read "0.50 %"
-				.Default( AbDefaults{}.local_strength );
-
-		// DARK FLOOR (ADAPTIVE BRIGHTNESS) -- this effect's own copy, split
-		// 2026-09-14 from a single shared reshade.dark_floor field into one
-		// per effect (the user's follow-up request: "Make the 'Leave dark
-		// scenes alone' part individual settings for both Adaptive Gamma
-		// and Adaptive Brightness" -- see ConfigSchema.h's
-		// kCurrentSchemaVersion 4->5 comment for the migration). A
-		// standalone row placed directly under Adaptive Brightness's own
-		// group, NOT a Param under the Switch above: that row is already
-		// AT kParamBudget (8, "zero headroom" per its own header comment),
-		// so a ninth Param is unrepresentable -- Registry.cpp's
-		// AddParam() refuses it outright (SixBudget). Adaptive Gamma's
-		// identical control, just below, IS a normal Param instead,
-		// because that row had a spare eighth slot; the two ended up in
-		// different places in the panel for that reason alone, not a
-		// difference in what either control does. Labelled "(Adaptive
-		// Brightness)" so the two rows are never mistaken for the shared
-		// control this replaces.
-		using AbDarkFloorDefaults = config::ReshadeAdaptiveBrightnessSettings;
-		a.Slider( "image.shaders.adaptive_brightness_dark_floor",
-			"Leave dark scenes alone (Adaptive Brightness)",
-			ui::AnyBind::Of<float>(
-				[]{ return Cfg().reshade.adaptive_brightness.dark_floor; },
-				[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.dark_floor, f ); } ) )
-			.Key( "reshade.adaptive_brightness.dark_floor" )
-			.Help( "Below this scene brightness Adaptive Brightness fades out, so a truly dark "
-			       "scene stays dark instead of being lifted to grey. 0 turns this off. Does "
-			       "nothing while Adaptive Brightness itself is off." )
-			.Range( 0.0f, 0.5f )
-			.Step( 0.01f )
-			.ZeroMeans( "Off" )
-			.Default( AbDarkFloorDefaults{}.dark_floor )
-			.Keywords( "dark floor black crush destroy binarise binarize adaptive brightness "
-			           "near black" )
-			.DisabledUnless( AdaptiveBrightnessEnabled, kNeedsAdaptiveBrightness );
+				.Default( AbDefaults{}.local_strength )
+			// DARK FLOOR (2026-09-14, split from a single shared
+			// reshade.dark_floor field into one per effect -- the user:
+			// "Make the 'Leave dark scenes alone' part individual settings
+			// for both Adaptive Gamma and Adaptive Brightness"; see
+			// ConfigSchema.h's kCurrentSchemaVersion 4->5 comment for the
+			// migration). This shipped that day as a STANDALONE row
+			// (`image.shaders.adaptive_brightness_dark_floor`) purely
+			// because this row was then at kParamBudget's ceiling of 8 with
+			// nothing spare, so a ninth Param was unrepresentable -- while
+			// Adaptive Gamma's identical control, having one slot free, was
+			// a normal Param. That read on screen as a dimmed, full-width
+			// slider sitting under this effect's switch like a peer effect,
+			// which it never was. Adaptive Brightness V2 took kParamBudget
+			// 8 -> 10 on 2026-09-14/15 for its own two darkening params, so
+			// the constraint is gone and this is a ninth Param of ten here,
+			// matching Adaptive Gamma exactly -- same label, help, range,
+			// step and default. The gate stays: unlike the other params
+			// this one does nothing at all while the effect is off, and it
+			// said so before the move.
+			.Param( "dark_floor", "Leave dark scenes alone",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.adaptive_brightness.dark_floor; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.adaptive_brightness.dark_floor, f ); } ) )
+				.Key( "reshade.adaptive_brightness.dark_floor" )
+				.Help( "Below this scene brightness the effect fades out, so a truly dark scene "
+				       "stays dark instead of being lifted to grey. 0 turns this off." )
+				.Range( 0.0f, 0.5f )
+				.Step( 0.01f )
+				.ZeroMeans( "Off" )
+				.Default( AbDefaults{}.dark_floor )
+				.Keywords( "dark floor black crush destroy binarise binarize near black" )
+				.DisabledUnless( AdaptiveBrightnessEnabled, kNeedsAdaptiveBrightness );
 
 		// ADAPTIVE GAMMA -- NEW 2026-09-08. The user's request, verbatim:
 		// "Make something similar, but make it gamma based. Call it adaptive
@@ -832,9 +832,9 @@ namespace gamescope
 		// EIGHT PARAMS as of 2026-09-14 -- Strength, Target brightness, Max
 		// lift, Max darken, Adapt to brighter/darker (2026-09-09), Local
 		// adaptation, and Leave dark scenes alone (2026-09-14, this row's
-		// own copy of the dark-floor split below) -- at Registry.cpp's
-		// kParamBudget of 8, zero headroom, the same ceiling Adaptive
-		// Brightness's own row sits at. Fewer MECHANISMS than Adaptive
+		// own copy of the dark-floor split) -- of Registry.cpp's
+		// kParamBudget, which was 8 with zero headroom when they landed and
+		// is 10 since Adaptive Brightness V2. Fewer MECHANISMS than Adaptive
 		// Brightness even so: there is no gain to bound and no shadow cap,
 		// so min_gain/max_gain/mode have no counterpart here -- the params
 		// this row does have are Target's own bounds and its adaptation

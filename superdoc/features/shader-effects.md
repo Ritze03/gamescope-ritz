@@ -936,9 +936,9 @@ cover a wide range of blur widths from one small separable kernel.
 
 **A near-black scene has a floor of its own** (2026-09-14) — see
 [Leave dark scenes alone](#leave-dark-scenes-alone-2026-09-14--one-per-effect)
-near the bottom of this page: below this effect's own `dark_floor` (a standalone panel row
-labelled "Leave dark scenes alone (Adaptive Brightness)", not one of this effect's own
-`Param`s — that row is already at the eight-param budget) the whole curve fades to the
+near the bottom of this page: below this effect's own `dark_floor` (its ninth `Param`,
+"Leave dark scenes alone" — a standalone panel row from 2026-09-14 to 2026-09-16, see
+that section's placement note) the whole curve fades to the
 untouched picture, so a truly dark scene is not driven to its gain/gamma ceiling by a
 median near zero. Adaptive Gamma has the identical control (its own field, its own row) —
 the two started as one shared control and split into independent ones the same day; see
@@ -2063,9 +2063,9 @@ thing that a gain cannot be, for a reason that is arithmetic rather than taste (
 near the bottom of this page: below this effect's own `dark_floor` param (its eighth,
 "Leave dark scenes alone") the exponent fades to 1 (the identity) rather than being driven
 to its floor by a median near zero, which is exactly the shape a near-black scene forced it
-into before this existed. Adaptive Brightness has the identical control, as its own
-standalone row instead of a param — the two started as one shared control and split into
-independent ones the same day; see that section for why.
+into before this existed. Adaptive Brightness has the identical control, as its own ninth
+param since 2026-09-16 (a standalone row before that) — the two started as one shared
+control and split into independent ones the same day; see that section for why.
 
 **Config**: `ReshadeAdaptiveGammaSettings` (`ConfigSchema.h`) — `enabled` (false),
 `target_luminance` (0.5), `max_lift` (4.0), `max_darken` (1.5), `strength` (1.0),
@@ -2668,23 +2668,33 @@ breaks that continuity for everything from Bloom onward (measured: 15 unrelated 
 the first time this landed there). Last is the only position that restarts a ring nothing
 downstream depends on.
 
-**The panel rows (post-split).** The two copies ended up in DIFFERENT places in the panel,
-for a reason that has nothing to do with what either control does: it is purely which row
-had a spare slot in `kParamBudget`'s ceiling of 8 at the moment of the split.
+**The panel rows (post-split).** Both copies are a normal `Param` under their own effect's
+Switch, and read identically — same label ("Leave dark scenes alone"), help text, range
+(0.0–0.5, step 0.01, `ZeroMeans("Off")`) and default (0.03) as the shared control had
+before the split.
 
-- **Adaptive Gamma's copy** (`image.shaders.adaptive_gamma.dark_floor`) is a normal
-  `Param` under that Switch, exactly like its other seven — that row was at 7 params, so
-  the eighth (this one) fit inside the budget with zero left over. Same name, help text,
-  range (0.0–0.5, step 0.01, `ZeroMeans("Off")`) and default (0.03) as before the split.
-- **Adaptive Brightness's copy** (`image.shaders.adaptive_brightness_dark_floor`) stays a
-  standalone `Slider` entry, placed directly under the Adaptive Brightness Switch's own
-  rows (above Adaptive Gamma's) — **not** a `Param` under that Switch, because that row
-  was already AT the budget ceiling (8 of 8) with nothing spare; a ninth `Param` is
-  unrepresentable (`Registry.cpp`'s `AddParam()` refuses it, the SixBudget law). Labelled
-  "Leave dark scenes alone (Adaptive Brightness)" so it reads unambiguously next to
-  Adaptive Gamma's own copy of the same control just below it, and `DisabledUnless`s on
-  Adaptive Brightness specifically (not "either effect", the way the pre-split shared row
-  did) — same range, step, `ZeroMeans` and default as Adaptive Gamma's copy.
+- **Adaptive Gamma's copy** (`image.shaders.adaptive_gamma.dark_floor`) has been one since
+  the split: that row was at 7 params, so the eighth (this one) fit inside
+  `kParamBudget`'s then-ceiling of 8 with zero left over.
+- **Adaptive Brightness's copy** (`image.shaders.adaptive_brightness.dark_floor`) became
+  one on **2026-09-16**. From 2026-09-14 to then it was a standalone `Slider` entry
+  (`image.shaders.adaptive_brightness_dark_floor`) sitting directly under the Adaptive
+  Brightness Switch and labelled "Leave dark scenes alone (Adaptive Brightness)" — **not**
+  because it differed from Adaptive Gamma's in any way, but purely because that row was
+  already AT the ceiling (8 of 8) and a ninth `Param` was unrepresentable
+  (`Registry.cpp`'s `AddParam()` refuses it, the SixBudget law). *Why it moved:* Adaptive
+  Brightness V2 raised `kParamBudget` 8 → 10 on 2026-09-14/15 for its own two darkening
+  params, which freed the slot this control had been denied — so the constraint that
+  forced the standalone row no longer existed, while the cost of it did: on screen a
+  dimmed, full-width slider row under the switch read as a peer *effect* rather than as
+  one of Adaptive Brightness's own tunables. It is now this row's ninth `Param` of ten,
+  and drops the "(Adaptive Brightness)" disambiguator, which is redundant inside the row.
+  It keeps its `DisabledUnless` on Adaptive Brightness specifically (not "either effect",
+  the way the pre-split shared row did) — it is the one param of the nine that does
+  nothing at all while the effect is off.
+
+Neither the config key (`reshade.adaptive_brightness.dark_floor`), the schema version, nor
+the shader changed in that move: it was a UI placement fix only.
 
 Both are config-schema fields on their own effect's struct now (`ReshadeAdaptiveBrightnessSettings::dark_floor` / `ReshadeAdaptiveGammaSettings::dark_floor`), not a bare
 top-level key on `ReshadeSettings` — see the split note above this section.
@@ -2857,7 +2867,7 @@ same target from the same pre-effect statistics (V2's own content-only anchor is
 statistic of the SAME graded frame the other two measure), so running more than one
 would apply the correction twice.
 
-**Params** (eight, `Adaptive Brightness V2` / `image.shaders.adaptive_brightness_v2`,
+**Params** (ten, `Adaptive Brightness V2` / `image.shaders.adaptive_brightness_v2`,
 default OFF): **Shape** (Toe / Knee, default Toe) · **Target brightness** (0.1..0.9,
 default 0.35 — lower than the older effects' 0.5, since the anchor here is the content
 and 0.5 reads milky) · **Max lift** (1..8, default 4 — the slope cap `S`, wider than the
@@ -2867,9 +2877,18 @@ older effects' 1..4 because a bounded slope makes a harder ceiling safe) · **Li
 older effects' up/down pair: a bounded operator can safely SNAP on a cut instead of
 sliding, so the only thing left to tune is a gradual change's own speed) · **Detail**
 (0..2, default 1.0 — the Weber-preserving base/detail split) · **Clarity** (0..1, default
-0 — Stage 3, the silhouette band; see its own subsection below). `kParamBudget`'s 8 is
-now fully spent — this row and Adaptive Brightness's own are the only two at the
-ceiling. The Inspector's before/after strip is shared with the two older effects
+0 — Stage 3, the silhouette band; see its own subsection below) · **Max darken** (1..4,
+default 1.0 = off — the darkening mirror of Max lift, bounding the hardest anything above
+Target may be pulled down) · **Darken** (0..1, default 0 = off — the static darken floor,
+the mirror of Lift; see the Darkening section below for both). That is **10 of 10**
+against `kParamBudget`. *(Correction, 2026-09-16: this paragraph shipped 2026-09-14 listing
+the **eight** params up to Clarity and saying `kParamBudget`'s 8 was "now fully spent —
+this row and Adaptive Brightness's own are the only two at the ceiling", which was true
+that day. The Darkening section below then took `kParamBudget` 8 → 10 for the last two
+params above — redesigned 2026-09-15 into a true S-curve fixed at Target — so this row is
+10 of 10, and Adaptive Brightness's own row is 9 of 10 since 2026-09-16, when its dark
+floor folded back in as a `Param`; see "The panel rows (post-split)" above.)* The
+Inspector's before/after strip is shared with the two older effects
 (`ui::Entry::PreviewKind::AdaptiveBrightness`) — its CPU re-grade
 (`src/Overlay/EffectPreviewMath.h`) is a **base-only approximation** for V2 specifically
 (`B ≡ Y`, no guided filter modelled, so Detail has no visible effect in the strip — the
@@ -3043,8 +3062,9 @@ lift, Lift, Adaptation, Adapt speed, Detail, Clarity), "PARAMETERS 8 of 8", the 
 reading "Adaptive Brightness V2", and the before/after strip; a second capture
 of the Pipeline Facts row's DETAILS tab shows the new **pre-pass** line reading its
 measured time live. **Superseded the same day** by the Darkening section below, which
-adds a ninth and tenth row (Max darken, Darken) — "PARAMETERS 10 of 10" is current;
-see that section's own "GUI verification" for why no fresh screenshot was taken.
+adds a ninth and tenth row (Max darken, Darken) — "PARAMETERS 10 of 10" is current, and
+the 2026-09-15 redesign's own "GUI verification" below carries the fresh Inspector
+captures showing all ten rows at that header.
 
 ### Darkening (2026-09-14; REDESIGNED 2026-09-15 — a true S-curve fixed at Target)
 
@@ -3369,8 +3389,11 @@ opposite sides of Target brightness, in the same frame, and Target itself never 
 either way. With Max darken raised, going above 0 here is still its own visible change:
 everything brighter than Target starts being COMPRESSED toward it instead of merely having
 its own lift-curve overshoot undone."* — the switch-point the task asked this row's own
-help to name. Both are Params on the same row, at the ceiling — Adaptive Brightness's own
-row and this one are now the only two at it.
+help to name. Both are Params on the same row, which this raise puts at the ceiling: 10
+of 10. *(Correction, 2026-09-16: "Adaptive Brightness's own row and this one are now the
+only two at it" was written on 2026-09-14, when that row was 8 of the then-ceiling 8;
+since its dark floor folded back in as a `Param` on 2026-09-16 it is 9 of 10, so this row
+is the only one at the ceiling — see "The panel rows (post-split)" above.)*
 
 **Verified (2026-09-14, the darkening pass; ADDED TO 2026-09-15, the S-curve redesign).**
 The 2026-09-14 pass's eleven `[darken]`-tagged cases in `tests/test_effects_curve.cpp`

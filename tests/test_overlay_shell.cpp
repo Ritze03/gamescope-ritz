@@ -428,9 +428,9 @@ TEST_CASE( "an area is found by id, and an unknown id is not", "[overlay_shell]"
 TEST_CASE( "an entry at the six-param budget overflows the drawer at 2.0x", "[overlay_shell]" )
 {
 	// D13.4's case, and the one that found the bug: adaptive brightness
-	// sits on exactly eight params (the Six Budget's ceiling, raised 6 -> 7
-	// 2026-09-06 and 7 -> 8 2026-09-07 -- see Registry.cpp's kParamBudget
-	// comment).
+	// sits on nine params (it was eight until its "Leave dark scenes alone"
+	// control folded in from a standalone row 2026-09-16), against the Six
+	// Budget's ceiling of ten -- see Registry.cpp's kParamBudget comment.
 	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 2.0f );
 	const ui::LadderResult ladder = ui::Solve( slab, ui::InspectorHost::Column, 9 );
 	const ui::Regions regions = ui::Regions::For( slab, ladder );

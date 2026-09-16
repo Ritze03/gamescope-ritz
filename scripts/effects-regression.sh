@@ -1122,13 +1122,13 @@ set_ag 0
 #
 # SPLIT INTO TWO PER-EFFECT ROWS the SAME DAY (the user's follow-up: "Make
 # the 'Leave dark scenes alone' part individual settings for both Adaptive
-# Gamma and Adaptive Brightness"). Adaptive Gamma's copy is a normal Param
-# under its own Switch (id ends ".adaptive_gamma.dark_floor" -- that row had
-# a spare eighth slot); Adaptive Brightness's is a standalone row (id
-# "adaptive_brightness_dark_floor", no dot before the leaf) because that
-# row was already at kParamBudget with none spare -- see PanelShaders.cpp's
-# own comment on the two ending up in different places for that reason
-# alone. Each check below sets ONLY the id for the effect it is testing;
+# Gamma and Adaptive Brightness"). Both copies are a normal Param under
+# their own Switch, so both ids end ".<effect>.dark_floor". Adaptive
+# Brightness's was a standalone row (id "adaptive_brightness_dark_floor",
+# no dot before the leaf) from 2026-09-14 to 2026-09-16, only because that
+# row was at kParamBudget with none spare; V2's 8 -> 10 raise freed a slot
+# and it was folded in where it belongs. Each check below sets ONLY the id
+# for the effect it is testing;
 # the two are independent config fields now; a check that set the other
 # effect's id here would silently test nothing.
 #
@@ -1171,7 +1171,7 @@ set_ag 0
 #                     too mild to have triggered the failure either way.
 # ---------------------------------------------------------------------------
 AG_DARK_FLOOR_ID="image.shaders.adaptive_gamma.dark_floor"          # Param
-AB_DARK_FLOOR_ID="image.shaders.adaptive_brightness_dark_floor"     # standalone row
+AB_DARK_FLOOR_ID="image.shaders.adaptive_brightness.dark_floor"     # Param
 DARK_FLOOR_DEFAULT=0.03   # == both structs' dark_floor compiled-in default
 set_ag_dark_floor() { gsctl overlay_e2_set "$AG_DARK_FLOOR_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
 set_ab_dark_floor() { gsctl overlay_e2_set "$AB_DARK_FLOOR_ID $1" >/dev/null 2>&1 || true; sleep "$SETTLE_S"; }
