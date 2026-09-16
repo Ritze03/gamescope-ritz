@@ -11,6 +11,11 @@ The newest version below is the one this build reports.
 
 ## [0.8.2] – 2026-09-16
 
+### Added
+- **Zoom fade**: the zoom now eases in — the outline appears at its final size
+  first, then the picture inside it magnifies, and letting go plays the same thing
+  backwards — over a new Fade duration slider on the Zoom area (0 zooms instantly).
+
 ### Fixed
 - **Adaptive Brightness**: its "Leave dark scenes alone" slider is now one of the
   effect's own parameters in the Inspector, like every other tunable, instead of a

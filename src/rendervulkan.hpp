@@ -380,7 +380,12 @@ struct FrameInfo_t
 		bool  bCircle = false;
 		float flWidth = 0.0f;    // of the on-screen width
 		float flHeight = 0.0f;   // of the on-screen height
-		float flFactor = 2.0f;   // magnification
+		float flFactor = 2.0f;   // magnification, already ramped by the fade
+		// The shape's opacity (Overlay/Zoom.h's staged fade): the zoom
+		// layer's own `opacity`, so the premultiplied blend fades the whole
+		// projection -- outline included -- against the untouched frame
+		// beneath it. 1.0 is the unfaded picture.
+		float flAlpha = 1.0f;
 	} zoom;
 
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];

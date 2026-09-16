@@ -35,6 +35,7 @@ group after Crosshair). Default **off**.
 | | Match mouse speed | `mouse_scale` | Multiplies relative mouse motion by `1 / factor` while zoomed. See below. |
 | | Keep the button from the game | `consume_button` | Default off. Swallows the zoom chord's own mouse button, press and release, instead of forwarding it. See below. |
 | | Scroll to change zoom level | `scroll_adjust` | Default off. While zoomed, the wheel steps `factor` by 0.25 instead of reaching the game. See below. |
+| | Fade duration | `fade_ms` | 0–2000 ms, step 10, default **200**. `ZeroMeans("Instant")`. One duration for the whole staged reveal — see below. |
 | Projection | Shape | `shape` | `"circle"`, `"rectangle"`, `"square"`. |
 | | Size | `size` | Circle diameter / square side, as a fraction (0.05–1) of the game's on-screen **height**. Greyed for a rectangle. |
 | | Width / Height | `width`, `height` | The rectangle, as fractions of the on-screen width and height. Greyed unless the shape is a rectangle. |
@@ -157,6 +158,15 @@ with `mouse_scale` on `wlserver_mousemotion()` multiplies the relative delta by
 covers every relative-motion source the sensitivity option covers and nothing
 else; absolute (windowed) motion is untouched.
 
+`Why the RAMPED factor, not the configured one (2026-09-16):` with the fade on
+there are frames where the shape is on screen but the magnification is still
+1.0×, and more where it is part-way up. Dividing the mouse by the full factor
+there would slow the aim before anything had been magnified, so
+`Zoom_MouseScale()` divides by `s_flLiveFactor` — the magnification
+`Zoom_FillRequest()` actually put on screen this frame — which is exactly the
+configured factor once the ramp has finished, and exactly 1.0 when nothing is
+zoomed.
+
 ## Keep the button from the game (`consume_button`)
 
 > **Why (2026-09-14):** the user's request, verbatim: *"Add a switch, to
@@ -227,6 +237,117 @@ mouse-speed divisor change immediately; the **Zoom level** slider reads
 `s_Settings.zoom.factor` like every other row, so it shows the new value once
 the same-frame flush has run.
 
+## Fade in / fade out (`fade_ms`)
+
+> **Why (2026-09-16):** the user's request, verbatim: *"For the Zoom feature,
+> add a fade in/fade out. It should fade in the projector outline and then zoom
+> inside of that projector gradually. It is important, that this zoom in is
+> configurable through the UI (see the crosshair auto-hide feature)."*
+
+The reveal is **two staged phases, not one crossfade**, and that is the whole
+point of the request: the user wants to see *where* the projection is before
+its contents start moving. So one progress float drives both, split at
+`Zoom.h`'s `kZoomFadeSplit` (0.5):
+
+| Progress | What moves |
+| --- | --- |
+| `0 → 0.5` | The shape's opacity, 0 → 1, **at its final size**. The outline and the picture inside it fade up together; the magnification is pinned at exactly 1.0×, so what appears is the projector drawn over unmagnified content. |
+| `0.5 → 1` | The magnification, `mix(1.0, factor, t)`, *inside* the already-solid shape. |
+
+Releasing the chord runs the same progress back down, so the zoom ramps out
+first and the shape fades away second — the reveal backwards, not a separate
+animation.
+
+`Why one Param and not three:` the two phases are one reveal the user times as
+a whole. A second slider would only let them disagree, and a split of the one
+duration expresses the staging without a knob to get wrong. `kZoomFadeSplit` is
+an even 0.5 so neither phase reads as the fast one — both are plain linear
+ramps of the same length.
+
+`Why 1.0× is invisible:` at factor 1.0 `cs_zoom.comp` samples
+`u_srcPerDst = base.scale`, i.e. one source texel per projection pixel when the
+game is rendered at output resolution. The projection is placed at **whole**
+pixels — `floor(centre - uW*0.5)`, so the composite copies it texel for texel
+rather than resampling it — and the shader is handed that same floored origin
+back as its fetch centre
+(`u_srcCenter = (dstX + uW*0.5 + base.offset) * base.scale`, `rendervulkan.cpp`).
+Projection pixel `p` therefore lands on `dstX + p + 0.5`: the **centre** of the
+very texel it is drawn over, **whatever the projection's size** — the identity no
+longer depends on the size's parity, which is what the rest of this section is
+about.
+
+> The one remaining precondition is `base.scale == 1`. A game rendered *below*
+> output resolution samples at `scale/factor` source texels per projection pixel,
+> so factor 1.0 is not a texel centre — but that frame's base is being resampled
+> by the upscaler underneath the shape anyway, so there is no sharp original to
+> be identical *to*. Inherent to magnifying a scaled source, not a defect.
+
+> Measured (2026-09-16, headless captures diffed against a zoom-off frame). In
+> every case the *only* pixels that differ during phase 1 are the ring's own:
+> 360 px square on 1280×720 — 0 delta over all 128 164 interior pixels; 361 px
+> on 1280×720 — 0 over 128 881; 77 px on 1366×768 (Size 0.10) — 0 over 5 625;
+> 38 px on 1366×768 (Size 0.05, the slider minimum) — 0 over 1 296. Each at
+> four alphas spanning phase 1.
+>
+> **Do not "simplify" the fetch centre back to `texW*0.5`.** That was the
+> original code, and it is right only when `texW - uW` and `texH - uH` are both
+> **even**: the half-texel disagreement between a centre computed from the base's
+> exact middle and a layer placed at a floored origin puts the fetch on a texel
+> *boundary* for an odd difference, and bilinear then returns the average of two
+> neighbours. Measured before the fix: 361 px on 1280×720 softened 15 196–15 461
+> of its 128 881 interior pixels (up to 85/255), and 77 px on 1366×768 — Size
+> 0.10, one plain slider step — softened 725 of 5 625 (up to 65/255). Reachable
+> sizes are all even at 720p/1080p/1440p, so this only ever showed on bases that
+> are not a multiple of 40 (768, 1366, …). The fade is what made it *visible*,
+> by being the first thing to ever put a 1.0× frame on screen; the geometry
+> quirk predated it.
+>
+> Deriving the centre from the floored origin was chosen over rounding the
+> projection to an even size (which would move every size slider's result by a
+> pixel) and over dropping the `floor` (which would make the composite resample
+> the projection layer itself, blurring it at *every* magnification). It is one
+> expression, changes nothing when the difference is already even, and above
+> 1.0× it moves the aim by at most half a source texel — onto a texel centre
+> rather than a boundary, so the magnified picture is if anything sharper.
+
+`Why the shader was not touched:` the fade is the zoom layer's own `opacity`.
+`Zoom_FillRequest()` writes `FrameInfo_t::Zoom_t::flAlpha`,
+`vulkan_composite()` copies it into the layer's `opacity`, and
+`alphamode.h`'s premultiplied `BlendLayer()` already does
+`layerColor * opacity + dst * (1 - a*opacity)` — the correct fade of the whole
+projection, outline included, against the untouched frame beneath. The 1 px
+ring keeps its **geometry** at every alpha and only loses opacity, which is
+what a fading outline should do; scaling the shape instead would have made the
+ring sub-pixel and blurred it.
+
+`Why real elapsed time:` `Zoom_FillRequest()` advances the progress by
+`get_time_in_nanos()` deltas — the compositor's own monotonic clock, the same
+one everything else here is timed against — divided by `fade_ms`, not by a
+per-frame constant. The compositor runs at whatever rate the game gives it, so
+a per-frame step would make the fade twice as fast at 120 fps as at 60.
+`Zoom_AdvanceFade()` is a plain integrator, as `crosshair::AdvanceHide()` is
+and for the same reason: the state is the progress itself, so a **re-press
+mid-fade-out reverses from where it got to** instead of snapping to 0 and
+restarting.
+
+`fade_ms = 0` is instant in both directions — the progress is forced straight
+to 1 or 0 — which is byte-for-byte the pre-2026-09-16 behaviour.
+
+Two smaller consequences worth knowing:
+
+- While the progress is still moving, `Zoom_FillRequest()` calls
+  `force_repaint()`, exactly as `Crosshair_Draw()` does for its hide animation:
+  a paused game commits no frames of its own, and without this the fade would
+  stall halfway. It is called **only** while moving — parked at 0 or at 1 it is
+  not, so a static screen costs nothing.
+- The last-advanced timestamp is **cleared whenever the progress parks**, at 0
+  *or* at 1, so the frame that starts moving again measures a zero delta rather
+  than however long the game happened to sit idle beforehand. Both ends need it
+  for the same reason: `force_repaint()` stops at both, so both can be followed
+  by an arbitrarily long gap. `Why (QC, 2026-09-16):` clearing it only at 0
+  left the release after an idle spell at full zoom measuring the whole gap in
+  one delta, which snapped the fade-out out of existence instead of playing it.
+
 ## Threading
 
 `Zoom_OnChord()`, `Zoom_MouseScale()`, `Zoom_ConsumesButton()`,
@@ -239,6 +360,12 @@ steamcompmgr thread later reads back (`s_flFactor`, `s_bFactorDirty`) rather
 than only reading mirrored ones -- see "Scroll to change zoom level" above
 for why the persist itself has to happen on the other thread. Everything else
 is the steamcompmgr thread, like Crosshair.cpp.
+
+The fade's own state (`s_flFadeProgress`, `s_ulLastFadeNs`) is **steamcompmgr
+thread only** — it is read and advanced in `Zoom_FillRequest()` and nowhere
+else. The one value it publishes across the boundary is `s_flLiveFactor`, the
+magnification actually on screen this frame, which `Zoom_MouseScale()` reads on
+the wlserver thread (see "Match mouse speed" above).
 
 ## Verified
 
@@ -253,6 +380,20 @@ is the steamcompmgr thread, like Crosshair.cpp.
 - `tests/test_config.cpp` — every `zoom` field round-trips; absent means
   defaults.
 - `tests/test_overlay_ui.cpp` — the area has an icon and sits in MISC.
+- `tests/test_config.cpp` — `zoom.fade_ms` round-trips with the rest of the
+  section (2026-09-16); a file without the key takes the 200 ms default, so no
+  schema bump or migration was needed.
+- Headless capture run 2026-09-16 (`--backend headless`, `vkcube`, isolated
+  `XDG_CONFIG_HOME`, `screenshot <path> 3` for a full composition, RMB driven
+  by `wlserver_debug_mouse_button "273 1"`): at `fade_ms 1000`, `factor 4`,
+  `size 0.5`, the ring's darkness against its surroundings climbs monotonically
+  from ~0 to full over the first ~500 ms while the content discontinuity across
+  the ring stays at its unzoomed baseline, and only then does the
+  discontinuity jump — the staged order, at the split. Release reverses it:
+  the discontinuity returns to baseline by ~650 ms and the ring is gone by
+  ~900 ms, ~1000 ms for the whole cycle. At `fade_ms 0` the first captured
+  frame after the press is already fully zoomed and the first after the
+  release already clear.
 - `build-release/verify-shots/zoom-2026-09-14/` — headless captures (private
   sway, `effects_scene_client`, `wlserver_debug_mouse_button "273 1"`):
   circle/hold on the `colors` bands shows the bands at exactly 2× inside a

@@ -77,4 +77,48 @@ namespace gamescope
 	{
 		return std::clamp( flCur + 0.25f * (float)nNotches, 1.5f, 5.0f );
 	}
+
+	// ---- the staged fade (2026-09-16) --------------------------------
+	// One progress float, 0 = no zoom .. 1 = fully zoomed, advanced by real
+	// elapsed time and split into TWO phases so the user sees WHERE the
+	// projection is before its content starts moving: the shape and its
+	// outline fade in at their final size over the first half, then the
+	// magnification ramps 1.0 -> factor inside that already-visible shape
+	// over the second. Reversed on release. See superdoc/features/zoom.md.
+
+	// Where the shape's fade ends and the magnification ramp begins, as a
+	// fraction of the progress. An even split: both phases are a plain
+	// linear ramp of the same duration, so neither reads as the fast one.
+	inline constexpr float kZoomFadeSplit = 0.5f;
+
+	// The new progress after ulDeltaNs of real time, moving towards 1 while
+	// bWanted and towards 0 once released -- from wherever it currently is,
+	// so a re-press mid-fade-out reverses instead of restarting (the same
+	// integrator shape crosshair::AdvanceHide() uses, and for the same
+	// reason: the state is the progress itself, not a timestamp). A
+	// non-positive duration means "instant", i.e. exactly the pre-fade
+	// behaviour. Pure, so it can be checked without linking Zoom.cpp.
+	inline float Zoom_AdvanceFade( float flCur, bool bWanted, uint64_t ulDeltaNs, int nDurationMs )
+	{
+		if ( nDurationMs <= 0 )
+			return bWanted ? 1.0f : 0.0f;
+		const float d = (float)( double( ulDeltaNs ) / 1e6 / double( nDurationMs ) );
+		return bWanted ? std::min( 1.0f, flCur + d ) : std::max( 0.0f, flCur - d );
+	}
+
+	// The shape's opacity at this progress: 0 .. 1 over the first phase,
+	// then fully opaque while the magnification ramps.
+	inline float Zoom_FadeAlpha( float flProgress )
+	{
+		return std::clamp( flProgress / kZoomFadeSplit, 0.0f, 1.0f );
+	}
+
+	// The magnification at this progress: exactly 1.0 (a picture identical
+	// to no zoom at all) until the shape is fully faded in, then a linear
+	// ramp to flFactor.
+	inline float Zoom_FadeFactor( float flProgress, float flFactor )
+	{
+		const float t = std::clamp( ( flProgress - kZoomFadeSplit ) / ( 1.0f - kZoomFadeSplit ), 0.0f, 1.0f );
+		return 1.0f + ( flFactor - 1.0f ) * t;
+	}
 }

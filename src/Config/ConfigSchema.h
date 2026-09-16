@@ -347,6 +347,15 @@ namespace gamescope::config
         // mouse wheel steps `factor` by 0.25 per notch (1.5..5.0) instead of
         // reaching the game. See Zoom_OnScroll()/Zoom_ScrollAdjustEnabled().
         bool scroll_adjust = false;
+        // "Fade duration" (2026-09-16): how long the staged reveal takes,
+        // in milliseconds. ONE duration covers BOTH phases -- the shape and
+        // its outline fade in at their final size over the first half, then
+        // the magnification ramps 1.0 -> factor inside it over the second
+        // (Overlay/Zoom.h's kZoomFadeSplit) -- because the two phases are
+        // one reveal the user times as a whole, not two independent knobs.
+        // 0 means instant, exactly the pre-2026-09-16 behaviour. A release
+        // plays the same thing backwards from wherever it had got to.
+        int fade_ms = 200;
     };
 
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's

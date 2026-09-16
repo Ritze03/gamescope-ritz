@@ -40,6 +40,22 @@ namespace gamescope
 		// Coalesces a fast scroll into one config write per frame.
 		std::atomic<bool> s_bFactorDirty{ false };
 
+		// The staged fade (2026-09-16, Zoom.h's kZoomFadeSplit): 0 = no
+		// zoom, 1 = fully zoomed. steamcompmgr thread only -- advanced once
+		// per frame in Zoom_FillRequest() from the compositor's own clock.
+		// s_ulLastFadeNs is 0 whenever the fade is parked at 0 with nothing
+		// wanted, so the first frame of a new press measures a zero delta
+		// rather than however long the game happened to sit idle.
+		float s_flFadeProgress = 0.0f;
+		uint64_t s_ulLastFadeNs = 0;
+
+		// The magnification actually on screen this frame (1.0 while not
+		// zoomed). Written by Zoom_FillRequest(), read by the wlserver
+		// thread's Zoom_MouseScale() so the mouse slows down WITH the ramp
+		// instead of snapping to the full divisor before the picture has
+		// moved.
+		std::atomic<float> s_flLiveFactor{ 1.0f };
+
 		void Mirror()
 		{
 			const config::ZoomSettings &z = s_Settings.zoom;
@@ -109,11 +125,13 @@ namespace gamescope
 
 	float Zoom_MouseScale()
 	{
-		if ( !s_bActive.load( std::memory_order_relaxed )
-			|| !s_bEnabled.load( std::memory_order_relaxed )
+		if ( !s_bEnabled.load( std::memory_order_relaxed )
 			|| !s_bMouseScale.load( std::memory_order_relaxed ) )
 			return 1.0f;
-		return 1.0f / s_flFactor.load( std::memory_order_relaxed );
+		// The RAMPED magnification, not the configured one: during the
+		// fade the picture is still at 1.0x, so dividing by the full factor
+		// there would slow the aim before anything had been magnified.
+		return 1.0f / std::max( 1.0f, s_flLiveFactor.load( std::memory_order_relaxed ) );
 	}
 
 	bool Zoom_ConsumesButton()
@@ -166,18 +184,47 @@ namespace gamescope
 		}
 
 		const config::ZoomSettings &z = s_Settings.zoom;
-		if ( !z.enabled || !s_bActive.load( std::memory_order_relaxed ) )
+
+		// THE STAGED FADE (2026-09-16, Zoom.h's Zoom_AdvanceFade and
+		// kZoomFadeSplit). Advanced from the compositor's own monotonic
+		// clock -- the same get_time_in_nanos() every other timed thing
+		// here uses -- so the reveal takes the configured wall-clock time
+		// at any framerate, rather than a fixed step per frame.
+		const bool bWanted = z.enabled && s_bActive.load( std::memory_order_relaxed );
+		const uint64_t ulNow = get_time_in_nanos();
+		const uint64_t ulDelta = ( s_ulLastFadeNs != 0 && ulNow > s_ulLastFadeNs ) ? ulNow - s_ulLastFadeNs : 0;
+		s_flFadeProgress = Zoom_AdvanceFade( s_flFadeProgress, bWanted, ulDelta, z.fade_ms );
+		// Parked at EITHER end, the timestamp is forgotten: force_repaint()
+		// below only runs while the progress is moving, so at rest there may
+		// be no next frame for however long the game sits idle, and the frame
+		// that starts moving again must measure a zero delta rather than that
+		// whole gap (which would snap the fade straight past its animation).
+		const bool bMoving = bWanted ? s_flFadeProgress < 1.0f : s_flFadeProgress > 0.0f;
+		s_ulLastFadeNs = bMoving ? ulNow : 0;
+
+		if ( !bWanted && s_flFadeProgress <= 0.0f )
+		{
+			s_flLiveFactor.store( 1.0f, std::memory_order_relaxed );
 			return;
+		}
+		// Still moving: the game may have no frame of its own coming (a
+		// pause, a menu), so keep asking for one until the fade settles --
+		// the crosshair's hide animation does exactly this.
+		if ( bMoving )
+			force_repaint();
 
 		FrameInfo_t::Zoom_t &req = pFrameInfo->zoom;
 		req.bActive = true;
 		req.bCircle = z.shape == "circle";
+		req.flAlpha = Zoom_FadeAlpha( s_flFadeProgress );
 		// The LIVE atomic, not z.factor: a scroll-adjust step must show up
 		// in the picture on the very next frame, not wait for the persist
 		// flush above (which, in practice, already ran first this same
 		// frame -- reading the atomic directly is what makes that true
 		// regardless of ordering).
-		req.flFactor = std::clamp( s_flFactor.load( std::memory_order_relaxed ), 1.5f, 5.0f );
+		req.flFactor = Zoom_FadeFactor( s_flFadeProgress,
+			std::clamp( s_flFactor.load( std::memory_order_relaxed ), 1.5f, 5.0f ) );
+		s_flLiveFactor.store( req.flFactor, std::memory_order_relaxed );
 		if ( z.shape == "rectangle" )
 		{
 			req.flWidth = std::clamp( z.width, 0.05f, 1.0f );
@@ -286,6 +333,17 @@ namespace gamescope
 			       "not passed to the game. The new level is saved as the Zoom level above." )
 			.Default( S{}.scroll_adjust )
 			.Keywords( "zoom scroll wheel adjust level factor mouse" )
+			.DisabledUnless( On, kOffReason );
+
+		a.Slider( "zoom.fade", "Fade duration", ZOOM_BIND( int, fade_ms ) )
+			.Key( "zoom.fade_ms" )
+			.Help( "How long the zoom takes to appear, in milliseconds. The outline fades in at "
+			       "its final size first, then the picture inside it magnifies; letting go plays "
+			       "the same thing backwards. 0 zooms instantly." )
+			.Range( 0.0f, 2000.0f ).Step( 10.0f ).Unit( "ms" )
+			.ZeroMeans( "Instant" )
+			.Default( S{}.fade_ms )
+			.Keywords( "zoom fade duration time animation ramp smooth speed" )
 			.DisabledUnless( On, kOffReason );
 
 		a.Group( "Projection" );

@@ -237,6 +237,7 @@ namespace gamescope::config
                 z.mouse_scale = JGetBool( *pZoom, "mouse_scale", z.mouse_scale );
                 z.consume_button = JGetBool( *pZoom, "consume_button", z.consume_button );
                 z.scroll_adjust = JGetBool( *pZoom, "scroll_adjust", z.scroll_adjust );
+                z.fade_ms = JGetInt( *pZoom, "fade_ms", z.fade_ms );
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -602,6 +603,7 @@ namespace gamescope::config
             jZoom[ "mouse_scale" ] = z.mouse_scale;
             jZoom[ "consume_button" ] = z.consume_button;
             jZoom[ "scroll_adjust" ] = z.scroll_adjust;
+            jZoom[ "fade_ms" ] = z.fade_ms;
 
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;

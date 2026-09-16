@@ -1461,6 +1461,7 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     s.zoom.mouse_scale = true;
     s.zoom.consume_button = true;
     s.zoom.scroll_adjust = true;
+    s.zoom.fade_ms = 350;
     REQUIRE( SaveSections( s ) );
 
     const Settings loaded = LoadSections();
@@ -1474,6 +1475,7 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     REQUIRE( loaded.zoom.mouse_scale == true );
     REQUIRE( loaded.zoom.consume_button == true );
     REQUIRE( loaded.zoom.scroll_adjust == true );
+    REQUIRE( loaded.zoom.fade_ms == 350 );
 
     REQUIRE( Settings{}.zoom.consume_button == false );
     REQUIRE( Settings{}.zoom.scroll_adjust == false );
@@ -1496,6 +1498,65 @@ TEST_CASE( "Zoom_StepFactor: 0.25 per notch, clamped to 1.5..5.0", "[config]" )
     REQUIRE( Zoom_StepFactor( 1.6f, -1 ) == 1.5f );
     REQUIRE( Zoom_StepFactor( 5.0f, 100 ) == 5.0f );
     REQUIRE( Zoom_StepFactor( 1.5f, -100 ) == 1.5f );
+}
+
+// The staged fade's pure arithmetic (Overlay/Zoom.h, 2026-09-16), pinned for
+// the same reason Zoom_StepFactor above is: no compositor deps, and the whole
+// staging rests on the first phase magnifying by EXACTLY 1.0.
+TEST_CASE( "zoom staged fade: phase 1 is exactly 1.0x, phase 2 ramps", "[config]" )
+{
+    using gamescope::kZoomFadeSplit;
+    using gamescope::Zoom_FadeAlpha;
+    using gamescope::Zoom_FadeFactor;
+
+    // THE load-bearing property: anywhere in the first phase the magnification
+    // is bit-exactly 1.0, so the picture inside the shape is the frame beneath
+    // it. Not "close to 1" -- a value a hair off shifts every texel.
+    for ( float t : { 0.0f, 0.001f, 0.25f, kZoomFadeSplit } )
+        REQUIRE( Zoom_FadeFactor( t, 3.0f ) == 1.0f );
+
+    // ... and the shape is fully opaque by the time it starts moving, so the
+    // outline is solid before the content ramps (the user's actual ask).
+    REQUIRE( Zoom_FadeAlpha( 0.0f ) == 0.0f );
+    REQUIRE( Zoom_FadeAlpha( kZoomFadeSplit ) == 1.0f );
+    REQUIRE( Zoom_FadeAlpha( 1.0f ) == 1.0f );
+    REQUIRE( Zoom_FadeAlpha( kZoomFadeSplit * 0.5f ) == 0.5f );
+
+    // Phase 2 ends on the configured factor exactly, and is monotone in between.
+    REQUIRE( Zoom_FadeFactor( 1.0f, 3.0f ) == 3.0f );
+    REQUIRE( Zoom_FadeFactor( 0.75f, 3.0f ) == 2.0f );
+    REQUIRE( Zoom_FadeFactor( 1.0f, 1.5f ) == 1.5f );
+}
+
+TEST_CASE( "Zoom_AdvanceFade: real-time integrator, reversible, clamped", "[config]" )
+{
+    using gamescope::Zoom_AdvanceFade;
+    constexpr uint64_t kMs = 1'000'000;
+
+    // A duration of 0 (or less) is instant in both directions -- the
+    // pre-2026-09-16 behaviour, and what the "Instant" slider label promises.
+    REQUIRE( Zoom_AdvanceFade( 0.0f, true, 0, 0 ) == 1.0f );
+    REQUIRE( Zoom_AdvanceFade( 1.0f, false, 0, 0 ) == 0.0f );
+    REQUIRE( Zoom_AdvanceFade( 0.0f, true, 0, -5 ) == 1.0f );
+
+    // Framerate independence: the same wall-clock time in 100 small steps and
+    // in one big one reach the same place.
+    float flStepped = 0.0f;
+    for ( int i = 0; i < 100; i++ )
+        flStepped = Zoom_AdvanceFade( flStepped, true, 2 * kMs, 1000 );
+    REQUIRE_THAT( flStepped, Catch::Matchers::WithinAbs( Zoom_AdvanceFade( 0.0f, true, 200 * kMs, 1000 ), 1e-4 ) );
+    REQUIRE_THAT( flStepped, Catch::Matchers::WithinAbs( 0.2, 1e-4 ) );
+
+    // Clamped at both ends, never overshooting into a wrapped or negative
+    // progress no matter how long the delta was.
+    REQUIRE( Zoom_AdvanceFade( 0.9f, true, 10'000 * kMs, 200 ) == 1.0f );
+    REQUIRE( Zoom_AdvanceFade( 0.1f, false, 10'000 * kMs, 200 ) == 0.0f );
+
+    // A re-press mid-fade-out reverses from where it got to instead of
+    // restarting: the state is the progress, not a start timestamp.
+    const float flHalfOut = Zoom_AdvanceFade( 1.0f, false, 100 * kMs, 200 );
+    REQUIRE_THAT( flHalfOut, Catch::Matchers::WithinAbs( 0.5, 1e-4 ) );
+    REQUIRE_THAT( Zoom_AdvanceFade( flHalfOut, true, 100 * kMs, 200 ), Catch::Matchers::WithinAbs( 1.0, 1e-4 ) );
 }
 
 TEST_CASE( "crosshair.hide_mode round-trips across all three modes", "[config]" )

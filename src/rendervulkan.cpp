@@ -5962,6 +5962,21 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 			const uint32_t uH = std::clamp( (uint32_t)lroundf( frameInfo->zoom.flHeight * flOnScreenH ), 4u, currentOutputHeight );
 			const float flFactor = std::max( frameInfo->zoom.flFactor, 1.0f );
 
+			// The projection is placed at WHOLE pixels (the composite then
+			// copies it texel for texel), so the fetch has to be centred on
+			// where it actually lands rather than on the base's exact
+			// middle. The two disagree by up to half a pixel, and at
+			// magnification 1.0 that half pixel makes every interior texel
+			// the average of two neighbours instead of the texel itself --
+			// exact only when (base - projection) happens to be even per
+			// axis. Deriving the centre from the floored origin makes the
+			// 1.0x identity unconditional; above 1.0 it moves the view by
+			// at most half a source texel, which is not visible.
+			const float flCenterX = -base.offset.x + flOnScreenW * 0.5f;
+			const float flCenterY = -base.offset.y + flOnScreenH * 0.5f;
+			const float flDstX = std::floor( flCenterX - (float)uW * 0.5f );
+			const float flDstY = std::floor( flCenterY - (float)uH * 0.5f );
+
 			if ( frameInfo->layers.count() >= k_nMaxLayers )
 			{
 				static uint32_t s_nDropped = 0;
@@ -5972,7 +5987,8 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 			else if ( update_zoom_image( uW, uH ) )
 			{
 				cmdBuffer->uploadConstants<ZoomPushData_t>(
-					(float)base.tex->width() * 0.5f, (float)base.tex->height() * 0.5f,
+					( flDstX + (float)uW * 0.5f + base.offset.x ) * base.scale.x,
+					( flDstY + (float)uH * 0.5f + base.offset.y ) * base.scale.y,
 					base.scale.x / flFactor, base.scale.y / flFactor,
 					uW, uH, frameInfo->zoom.bCircle, 1u );
 				cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_ZOOM ) );
@@ -5982,11 +5998,6 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 				cmdBuffer->setSamplerNearest( 0, false );
 				cmdBuffer->bindTarget( g_output.zoomOutput );
 				cmdBuffer->dispatch( div_roundup( uW, 8 ), div_roundup( uH, 8 ) );
-
-				// Centred on the game's on-screen rect, at whole pixels so
-				// the composite copies it texel for texel (isScreenSize()).
-				const float flCenterX = -base.offset.x + flOnScreenW * 0.5f;
-				const float flCenterY = -base.offset.y + flOnScreenH * 0.5f;
 
 				if ( frameInfo != &effectsFrameInfo )
 				{
@@ -6001,9 +6012,11 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 				z = FrameInfo_t::Layer_t{};
 				z.tex = g_output.zoomOutput;
 				z.zpos = effectsFrameInfo.layers.get( 0 ).zpos;
-				z.offset = { -std::floor( flCenterX - (float)uW * 0.5f ), -std::floor( flCenterY - (float)uH * 0.5f ) };
+				// Placed at exactly the whole-pixel origin the fetch above
+				// was centred on, so the composite copies it texel for texel.
+				z.offset = { -flDstX, -flDstY };
 				z.scale = { 1.0f, 1.0f };
-				z.opacity = 1.0f;
+				z.opacity = std::clamp( frameInfo->zoom.flAlpha, 0.0f, 1.0f );
 				z.filter = GamescopeUpscaleFilter::LINEAR;
 				z.blackBorder = false;
 				z.applyColorMgmt = effectsFrameInfo.layers.get( 0 ).applyColorMgmt;
