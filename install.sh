@@ -100,6 +100,25 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 # shellcheck source=./scripts/gamescope-ritz-common.sh
 source "$SCRIPT_DIR/scripts/gamescope-ritz-common.sh"
 
+# --- basic build-tool check ---------------------------------------------
+# meson and cmake are required by every action below (build, reconfigure,
+# even the openvr cmake subproject) -- checked first, before argument
+# parsing or anything else, so a missing tool fails fast with one clear
+# message instead of a confusing error hundreds of lines into a build.
+# Reports every missing command in one run rather than one at a time.
+gcr_check_build_tools() {
+	local missing=() cmd
+	for cmd in meson cmake; do
+		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+	done
+	if [ "${#missing[@]}" -gt 0 ]; then
+		gcr_err "missing required command(s): ${missing[*]}"
+		gcr_err "install them first (e.g. Arch/CachyOS: sudo pacman -S ${missing[*]}; Debian/Ubuntu: sudo apt install ${missing[*]})."
+		exit 1
+	fi
+}
+gcr_check_build_tools
+
 ACTION=""           # "install", "remove" or "update"; "" = interactive menu
 MODE=""             # "link" or "copy" (--install only)
 GCR_ASSUME_YES=0
