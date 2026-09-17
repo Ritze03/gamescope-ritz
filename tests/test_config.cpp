@@ -2204,7 +2204,7 @@ TEST_CASE( "ResolvedSettings reflects a queued routed write before it is flushed
     REQUIRE( LoadProfile( SessionProfile() )->gamescope.sharpness == 3 );
 }
 
-TEST_CASE( "UseSessionProfile creates a missing profile from what the session would have used, sanitized", "[config]" )
+TEST_CASE( "UseSessionProfile creates a missing profile empty, sanitized", "[config]" )
 {
     TempConfigHome home;
     ScopedSessionAppId scopedAppId( "252490" );
@@ -2218,9 +2218,13 @@ TEST_CASE( "UseSessionProfile creates a missing profile from what the session wo
     REQUIRE( r.ok );
     REQUIRE( r.name == "Tourney" );
     REQUIRE( r.created );
-    REQUIRE( r.copied_from == "Comp" );
     REQUIRE( LoadProfileMeta( "Tourney" )->kind == ProfileKind::General );
-    REQUIRE( LoadProfile( "Tourney" )->gamescope.filter == "FSR" );
+    // Empty: nothing from "Comp", nothing on disk but the version and the
+    // metadata, so every setting is the compiled-in default.
+    REQUIRE( LoadProfile( "Tourney" )->gamescope.filter == Settings{}.gamescope.filter );
+    const std::string sFile = ReadText( ProfilePath( "Tourney" ) );
+    REQUIRE( sFile.find( "gamescope" ) == std::string::npos ); // no sections at all
+    REQUIRE( sFile.find( "filter" ) == std::string::npos );
     REQUIRE( SessionProfile() == "Tourney" );
     REQUIRE( GameEntry( "252490" ).selected == "Comp" ); // the assignment is untouched
 

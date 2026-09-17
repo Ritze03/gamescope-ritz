@@ -458,7 +458,7 @@ does not have yet, flagged rather than faked.
 | Create / Copy / Edit / Delete | `CreateProfile(meta, from=nullptr)`, `CopyProfile(src, meta)`, `EditProfileMeta(old, meta)`, `DeleteProfile(name)` -- each returns a `ProfileOp` (`ok`, `error` text for the modal) |
 | markers | `OverriddenKeys()`, `ResetKeyToInherited(dottedKey)` |
 | the game entry | `GameEntry(appId)` -> `{ selected, audio_node }`, `SetGameAudioNode(appId, binary)` |
-| launch option / live switch | `UseSessionProfile(rawName)` -> `{ ok, name, created, copied_from }` |
+| launch option / live switch | `UseSessionProfile(rawName)` -> `{ ok, name, created }` (a missing name is created empty) |
 | writes | `EnqueueRoutedWrite(settings)` (every panel), `SaveProfile(meta, settings)` (sync), `EnqueueProfileWrite(meta, settings)` |
 
 Rules the CRUD enforces (each refusal comes back as `ProfileOp::error`): a name must
@@ -506,11 +506,11 @@ gamescopectl ritz_profile <name>             # live switch, same code path
 
 Selects `<name>` **for this session only**: the assignment on disk is untouched, the
 next flagless launch is back on it. Any profile, even another game's. Edits during the
-session go into `<name>`. A name that does not exist is **created** as a general
-profile copied from what the session would otherwise have used, with a toast
-(`Created profile 'Tourney' from '252490'`); a name that sanitizes to nothing is
-refused with a toast. `main.cpp` pre-scans `argv` for `--profile`/`--profile=` (stopping
-at `--`) before `apply_ritz_config_to_startup_state()`, for the same reason
+session go into `<name>`. A name that does not exist is **created empty** -- schema
+version and metadata, no settings at all, so every key falls back to its compiled-in
+default -- with a toast (`Created empty profile 'Tourney'`); a name that sanitizes to
+nothing is refused with a toast. `main.cpp` pre-scans `argv` for `--profile`/`--profile=`
+(stopping at `--`) before `apply_ritz_config_to_startup_state()`, for the same reason
 `-w`/`-h`/`-r` win over `nested_width`; `ritz_use_session_profile()` is the one path
 behind the flag, the env var and the `ritz_profile` ConCommand (a later hotkey binds to
 it). `--ritz-dump-config` prints `resolved_app_id`, `session_profile`, `kind`,
@@ -520,6 +520,23 @@ it). `--ritz-dump-config` prints `resolved_app_id`, `session_profile`, `kind`,
 launch option that silently changed the next flagless launch is hidden state, and a
 typo that fell back to the shared profile would send the session's edits into the
 wrong file.
+
+`Why an EMPTY profile (2026-09-17):` naming a profile on the command line is a
+deliberate fresh start, and the user asked for exactly that -- *"if Gamescope Ritz is
+invoked with the profile argument and the given profile doesn't exist yet, we should
+just create it without any presets, just an empty profile."* Seeding it made a
+brand-new profile arrive looking already configured, with no way to tell which values
+the user had set in it from which ones it had inherited at birth. An absent key is a
+fully supported file shape -- `JGetInt`/`JGetBool` take a compiled-in default, which is
+how `zoom.fade_ms` could be added without a schema bump -- so the file really is just
+`{ "kind", "name", "schema_version" }`.
+
+*History:* until 2026-09-17 the missing name was created as a general profile **copied
+from what the session would otherwise have used** (`ResolveAssignedProfile()`, i.e. the
+game's selected profile, else `last_general`, else `Default`), and the toast named the
+source (`Created profile 'Tourney' from '252490'`). Only the seeding changed; the
+override is still session-only, still becomes the session profile, still carries the
+`Casual (launch)` badge, and the file is still written immediately.
 
 ## Migration (schema 2 -> 3)
 

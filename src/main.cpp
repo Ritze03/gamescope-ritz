@@ -193,7 +193,7 @@ const char usage[] =
 	"                                     nis => NVIDIA Image Scaling v1.0.3\n"
 	"  --sharpness, --fsr-sharpness   upscaler sharpness from 0 (max) to 20 (min)\n"
 	"  --profile <name>               use this gamescope-ritz profile for this session only\n"
-	"                                     (created if missing; env: GS_RITZ_PROFILE; the flag wins)\n"
+	"                                     (created empty if missing; env: GS_RITZ_PROFILE; the flag wins)\n"
 	"  --expose-wayland               support wayland clients using xdg-shell\n"
 	"  -s, --mouse-sensitivity        multiply mouse movement by given decimal number\n"
 	"  --backend                      select rendering backend\n"
@@ -503,8 +503,8 @@ static void ritz_use_session_profile( const std::string &sName, bool bFromConsol
 	}
 	if ( r.created )
 	{
-		fprintf( stderr, "gamescope: --profile: created profile '%s' from '%s'\n", r.name.c_str(), r.copied_from.c_str() );
-		gamescope::Notifications::Show( "Created profile '" + r.name + "' from '" + r.copied_from + "'.", gamescope::Notifications::Kind::Ok );
+		fprintf( stderr, "gamescope: --profile: created empty profile '%s'\n", r.name.c_str() );
+		gamescope::Notifications::Show( "Created empty profile '" + r.name + "'.", gamescope::Notifications::Kind::Ok );
 	}
 	else if ( bFromConsole )
 	{
@@ -513,7 +513,7 @@ static void ritz_use_session_profile( const std::string &sName, bool bFromConsol
 	fprintf( stderr, "gamescope: --profile: using profile '%s' for this session\n", r.name.c_str() );
 }
 
-static gamescope::ConCommand cc_ritz_profile( "ritz_profile", "Use a gamescope-ritz profile for this session only (created if missing)",
+static gamescope::ConCommand cc_ritz_profile( "ritz_profile", "Use a gamescope-ritz profile for this session only (created empty if missing)",
 []( std::span<std::string_view> svArgs )
 {
 	if ( svArgs.size() < 2 )
@@ -983,8 +983,8 @@ int main(int argc, char **argv)
 	//
 	// --profile / GS_RITZ_PROFILE: the flag wins if both are given
 	// (ritz_prescan_profile_arg()'s own comment explains why this can't just
-	// be a getopt case). A name that does not exist is created as a general
-	// profile copied from what the session would otherwise have used, with a
+	// be a getopt case). A name that does not exist is created as an empty
+	// general profile -- every setting at its compiled-in default -- with a
 	// toast -- a plain in-memory push (Notifications::Show()) that is safely
 	// visible to steamcompmgr's later paint loop without a lock, since it
 	// happens-before that thread is even spawned.

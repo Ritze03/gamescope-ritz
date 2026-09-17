@@ -1701,6 +1701,22 @@ namespace gamescope::config
             return WriteFileAtomic( sPath, sText );
         }
 
+        // A profile with nothing in it: schema version and metadata only,
+        // no sections at all. Every key is absent, so a load falls back to
+        // its compiled-in default (JGetInt/JGetBool take one) -- which is
+        // also what the mirror is told the file holds.
+        bool WriteEmptyProfileNow( const ProfileMeta &meta )
+        {
+            nlohmann::json j = nlohmann::json::object();
+            j[ "schema_version" ] = kCurrentSchemaVersion;
+            MetaToJson( j, meta );
+            const std::string sText = DumpJson( j );
+            RememberProfileWrite( meta, Settings{}, std::move( j ) );
+            const std::string sPath = ProfilePath( meta.name );
+            DiscardQueuedWrite( sPath );
+            return WriteFileAtomic( sPath, sText );
+        }
+
         // Rewrites a profile file in place with `edit` applied to its JSON
         // (metadata or single-key edits that must not re-diff anything).
         template <typename Fn>
@@ -2362,11 +2378,14 @@ namespace gamescope::config
         EnsureGlobalLoaded();
         if ( !ProfileExists( r.name ) )
         {
-            const char *pszUnused = "";
-            r.copied_from = ResolveAssignedProfile( &pszUnused );
+            // A name given on the command line is a deliberate fresh start,
+            // so it is created EMPTY (2026-09-17). Seeding it from what the
+            // session would otherwise have used made a brand-new profile
+            // look already configured, and hid which values the user had
+            // actually set in it.
             r.created = true;
-            WriteProfileNow( ProfileMeta{ r.name }, ProfileSettingsNow( r.copied_from ).value_or( Settings{} ), nullptr );
-            s_ConfigLog.infof( "created profile '%s' from '%s'", r.name.c_str(), r.copied_from.c_str() );
+            WriteEmptyProfileNow( ProfileMeta{ r.name } );
+            s_ConfigLog.infof( "created empty profile '%s' -- every setting is at its default", r.name.c_str() );
         }
         s_oSessionOverride = r.name;
         InvalidateSession();

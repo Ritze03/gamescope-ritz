@@ -236,7 +236,8 @@ retired: a game's settings are a profile.
   inheriting game profile, and *Reset to inherited* in the inspector.
 - **Every area shows the profile** as its badge (`Rust`, or `Tourney (launch option)`).
 
-Toasts: switching profile, creating one, and the launch case (`Created profile
+Toasts: switching profile, creating one, and the launch case (`Created empty profile
+'Tourney'`; until 2026-09-17 it named the source it was copied from, `Created profile
 'Tourney' from '252490'`). Everything else is silent, as edits are today.
 
 ---
@@ -263,13 +264,16 @@ awkward (a wrapper script that owns argv), `GS_RITZ_PROFILE=Comp gamescope --
    (`apply_ritz_config_to_startup_state()` runs, then getopt overrides).
 3. **Edits during the session go into that profile**, like any session. Nothing is
    session-only; nothing is lost at quit.
-4. **If the name does not exist, it is created** as a general profile copied from
-   what the session would otherwise have used (the game's selection, else
-   `last_general`, else `Default`), with a toast. `Why create:` `--profile Comp` in a
-   launch option is the natural way to say "give this game a Comp setup"; a fallback
-   would send that session's edits into the wrong file, the exact failure this design
-   exists to remove. A typo produces a visible, deletable profile rather than an
-   invisible fallback.
+4. **If the name does not exist, it is created empty** -- schema version and metadata
+   only, so every setting sits at its compiled-in default -- with a toast. `Why create:`
+   `--profile Comp` in a launch option is the natural way to say "give this game a Comp
+   setup"; a fallback would send that session's edits into the wrong file, the exact
+   failure this design exists to remove. A typo produces a visible, deletable profile
+   rather than an invisible fallback. `Why empty (2026-09-17):` naming a profile on the
+   command line is a deliberate fresh start. Until then it was created as a general
+   profile copied from what the session would otherwise have used (the game's selection,
+   else `last_general`, else `Default`), which made a brand-new profile arrive looking
+   already configured, hiding which values the user had actually set in it.
 5. Any profile, even another game's game profile, can be named.
 6. `ritz_profile <name>` (a `ConCommand` in `main.cpp`) calls the same
    `ritz_use_session_profile()`, which a future hotkey binds to.

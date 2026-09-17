@@ -115,16 +115,15 @@ namespace gamescope::config
     // `--profile <name>` / GS_RITZ_PROFILE / the `ritz_profile` ConCommand:
     // selects a profile for THIS SESSION ONLY -- the assignment on disk is
     // untouched, the next flagless launch is back on it. Any profile, even
-    // another game's. A name that does not exist is CREATED as a general
-    // profile copied from what the session would otherwise have used
-    // (`created` and `copied_from` say so, for the caller's toast). The raw
-    // name is sanitized; `ok` is false only when it sanitizes to nothing.
+    // another game's. A name that does not exist is CREATED as an EMPTY
+    // general profile -- no settings at all, so every key is at its
+    // compiled-in default (`created` says so, for the caller's toast). The
+    // raw name is sanitized; `ok` is false only when it sanitizes to nothing.
     struct SessionProfileResult
     {
         bool ok = false;
         std::string name;
         bool created = false;
-        std::string copied_from;
     };
     SessionProfileResult UseSessionProfile( std::string_view svRawName );
 

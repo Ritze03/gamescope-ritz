@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.8.3] – 2026-09-17
+
+### Fixed
+- **Launch profiles start empty**: a profile named at launch that does not exist yet is
+  now created with nothing in it, so every setting starts at its default instead of
+  arriving pre-filled with the values of the profile you would otherwise have used.
+
 ## [0.8.2] – 2026-09-16
 
 ### Added
