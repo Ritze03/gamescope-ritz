@@ -2,8 +2,8 @@
 # update-gamescope-ritz.sh — pull, rebuild release, and refresh the install
 # made by install-gamescope-ritz.sh.
 #
-# 1. git pull --ff-only (refuses on local changes or a non-fast-forward
-#    remote; never stashes, resets, or otherwise discards your work).
+# 1. git pull --ff-only (a dirty tree only warns; the pull itself refuses a
+#    non-fast-forward and never stashes, resets, or discards your work).
 # 2. rebuilds the release binary (--buildtype=release -Doptimization=3
 #    -Db_lto=true) into its build directory.
 # 3. if /usr/bin/gamescope-ritz is a symlink, does nothing more — it already
@@ -18,8 +18,6 @@
 #   --prefix DIR        install directory to look for gamescope-ritz in (default: /usr/bin)
 #   --build-dir DIR     release build directory, copy-mode only (default: build-release;
 #                       symlink mode always rebuilds whatever the link already points at)
-#   --allow-dirty       proceed even with uncommitted local changes (git pull may still
-#                       refuse; this only skips this script's own pre-check)
 #   -h, --help          show this help and exit
 
 set -euo pipefail
@@ -31,16 +29,14 @@ source "$SCRIPT_DIR/gamescope-ritz-common.sh"
 GCR_ASSUME_YES=0
 PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
-ALLOW_DIRTY=0
 
-print_help() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--yes|-y) GCR_ASSUME_YES=1 ;;
 		--prefix) PREFIX_DIR="$2"; shift ;;
 		--build-dir) BUILD_DIR_NAME="$2"; shift ;;
-		--allow-dirty) ALLOW_DIRTY=1 ;;
 		-h|--help) print_help; exit 0 ;;
 		*) gcr_err "unknown option: $1"; print_help; exit 1 ;;
 	esac
@@ -77,14 +73,10 @@ fi
 gcr_info "detected install mode: $INSTALL_MODE"
 
 # --- step 1: git pull, refusing to discard anything ------------------------
-if [ "$ALLOW_DIRTY" != "1" ]; then
-	if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
-		gcr_err "uncommitted changes in $REPO_ROOT — refusing to pull over them."
-		gcr_err "Commit or stash your changes, or re-run with --allow-dirty to skip only this check"
-		gcr_err "(git pull --ff-only below will still refuse a non-fast-forward on its own)."
-		git -C "$REPO_ROOT" status --short >&2
-		exit 1
-	fi
+if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
+	gcr_warn "uncommitted changes in $REPO_ROOT — pulling anyway."
+	gcr_warn "git pull --ff-only below refuses on its own if the update would clobber anything."
+	git -C "$REPO_ROOT" status --short >&2
 fi
 
 gcr_info "git pull --ff-only ..."

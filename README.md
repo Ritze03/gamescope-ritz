@@ -75,8 +75,8 @@ install/update/remove as a menu instead.
 
 `git pull --ff-only`, rebuild, reinstall in place — a symlink install is live
 the instant the rebuild finishes; a copy install gets the fresh binary copied
-over it. It refuses on a dirty tree or a diverged remote rather than stashing
-or resetting anything for you.
+over it. Local changes are only reported, never discarded: the pull itself
+refuses a diverged remote or anything it would have to overwrite.
 
 ### Picking a profile per launch
 

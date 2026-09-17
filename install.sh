@@ -47,13 +47,14 @@
 #                       added, so this defaults to declining and says so.
 #                       Nothing else under ~/.config/ritz/extensions is
 #                       touched. Never touches ~/.config/gamescope-ritz.
-#   --update            git pull --ff-only (refuses on a dirty tree unless
-#                       --allow-dirty), rebuild, and reinstall by whichever
-#                       method (symlink/copy) is already in place — a
-#                       symlink install needs no copy step, the rebuilt
-#                       binary is live immediately. Also offers to refresh
-#                       the Ritz extension manifest if this previously
-#                       installed one and the repo's copy has changed.
+#   --update            git pull --ff-only (a dirty tree only warns; the pull
+#                       itself refuses anything unsafe), rebuild, and
+#                       reinstall by whichever method (symlink/copy) is
+#                       already in place — a symlink install needs no copy
+#                       step, the rebuilt binary is live immediately. Also
+#                       offers to refresh the Ritz extension manifest if this
+#                       previously installed one and the repo's copy has
+#                       changed.
 #   -h, --help          show this help and exit
 #
 # Options:
@@ -66,8 +67,6 @@
 #                       independent of this repo; --update copies again)
 #   --yes, -y           assume "yes" to all confirmation prompts
 #   --rebuild           (--install) rebuild even if a release binary exists
-#   --allow-dirty       (--update) proceed despite uncommitted local changes
-#                       (git pull --ff-only can still refuse on its own)
 #   --prefix DIR        install directory (default: /usr/bin) — override to
 #                       install/remove/update into a scratch prefix, e.g. for
 #                       testing this script without touching the real system
@@ -125,7 +124,6 @@ GCR_ASSUME_YES=0
 REBUILD=0
 PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
-ALLOW_DIRTY=0
 RITZ_EXT=""         # "" = ask, "yes", "no" (--with-ritz-extension / --no-ritz-extension)
 
 # The whole header comment above, minus the shebang and the trailing blank.
@@ -134,7 +132,7 @@ RITZ_EXT=""         # "" = ask, "yes", "no" (--with-ritz-extension / --no-ritz-e
 # --no-ritz-extension and the Examples block were documented in the file and
 # unreachable from --help. Corrected here because this line had to be touched
 # anyway (the --extras/--no-extras entries above it are gone).
-print_help() { sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 set_action() {
 	if [ -n "$ACTION" ] && [ "$ACTION" != "$1" ]; then
@@ -153,7 +151,6 @@ while [ $# -gt 0 ]; do
 		--copy) MODE="copy" ;;
 		--yes|-y) GCR_ASSUME_YES=1 ;;
 		--rebuild) REBUILD=1 ;;
-		--allow-dirty) ALLOW_DIRTY=1 ;;
 		--with-ritz-extension) RITZ_EXT="yes" ;;
 		--no-ritz-extension) RITZ_EXT="no" ;;
 		--prefix) PREFIX_DIR="$2"; shift ;;
@@ -560,14 +557,10 @@ do_update() {
 	branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)
 	gcr_info "branch: $branch"
 
-	if [ "$ALLOW_DIRTY" != "1" ]; then
-		if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
-			gcr_err "uncommitted changes in $REPO_ROOT — refusing to pull over them."
-			gcr_err "Commit or stash your changes, or re-run with --allow-dirty to skip only this check"
-			gcr_err "(git pull --ff-only below will still refuse a non-fast-forward on its own)."
-			git -C "$REPO_ROOT" status --short >&2
-			exit 1
-		fi
+	if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
+		gcr_warn "uncommitted changes in $REPO_ROOT — pulling anyway."
+		gcr_warn "git pull --ff-only below refuses on its own if the update would clobber anything."
+		git -C "$REPO_ROOT" status --short >&2
 	fi
 
 	gcr_info "git pull --ff-only (branch $branch) ..."
