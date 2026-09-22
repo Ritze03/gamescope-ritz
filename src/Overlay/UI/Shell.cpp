@@ -2553,18 +2553,19 @@ namespace gamescope::ui::shell
 					{
 						if ( decl.ChordStyle() )
 						{
+							// Every chip bound to the armed action shows the
+							// capture -- the Keybinds copy and the feature
+							// tab's own copy of a row are the same chord.
 							gamescope::keybinds::Action eArmed{};
 							const bool bCapturing =
 								gamescope::keybinds::CaptureActive( &eArmed ) &&
-								decl.Id() == std::string( "keybinds." ) +
-									gamescope::keybinds::Info( eArmed ).pszId;
+								decl.ChordAction() == gamescope::keybinds::Info( eArmed ).pszId;
 							if ( controls::Chord( row, pszId, s.c_str(), bCapturing ) )
 							{
 								if ( bCapturing )
 									gamescope::keybinds::CancelCapture();
-								else if ( const auto oAction = gamescope::keybinds::ActionFromId(
-										std::string_view( decl.Id() ).substr(
-											std::string_view( decl.Id() ).find( '.' ) + 1 ) ) )
+								else if ( const auto oAction =
+										gamescope::keybinds::ActionFromId( decl.ChordAction() ) )
 									gamescope::keybinds::BeginCapture( *oAction );
 							}
 							return false;

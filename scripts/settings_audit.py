@@ -116,6 +116,12 @@ NOT_COVERED = {
     "keybinds.shell_alt": "as keybinds.shell",
     "keybinds.launcher": "as keybinds.shell",
     "keybinds.friends": "as keybinds.shell",
+    "keybinds.zoom": "as keybinds.shell",
+    "keybinds.autoclicker": "as keybinds.shell",
+    # The same two chords again, as their own areas' copy of the row
+    # (2026-09-22): one binding, global.json, whichever row wrote it.
+    "zoom.bind": "as keybinds.shell (the Zoom area's copy of keybinds.zoom)",
+    "autoclicker.bind": "as keybinds.shell (the Autoclicker area's copy of keybinds.autoclicker)",
     # The friends list (2026-09-08). Bound to an int index, but that index is
     # not a persisted value: selecting a line ACTS on it (it joins, or says
     # why it cannot), the list's contents come from the running Steam client

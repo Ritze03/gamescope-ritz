@@ -12,6 +12,7 @@
 #include "Config/ConfigManager.h"
 #include "Keybinds.h"
 #include "UI/Registry.h"
+#include "PanelKeybinds.h"
 
 namespace gamescope
 {
@@ -285,15 +286,20 @@ namespace gamescope
 		a.Switch( "zoom.enabled", "Enable zoom", ZOOM_BIND( bool, enabled ) )
 			.Help( "Magnifies the middle of the game while the zoom key is held (or toggled). "
 			       "Drawn by gamescope over the finished picture, shaders included, so it is "
-			       "never blurred by the upscaler. The key itself is set under Keybinds." )
+			       "never blurred by the upscaler. The key is set just below." )
 			.Default( S{}.enabled )
 			.Keywords( "zoom enable show magnify" );
 
-		a.Facts( "zoom.bind", "Zoom key",
-			[]{ return keybinds::ChordTextFor( keybinds::Action::Zoom ); } )
-			.Help( "The key or mouse button that zooms. Change it under Settings > Keybinds > "
-			       "Zoom; mouse buttons are LMB, RMB, MMB, Mouse4 and Mouse5." )
-			.Keywords( "zoom key bind keybind chord button rmb" );
+		// The zoom's own hotkey row, editable here since 2026-09-22 (the user:
+		// "Move the auto-clicker hotkey and the zoom hotkey into their
+		// respective tabs"). The same chord as Keybinds' `keybinds.zoom` --
+		// PanelKeybinds_ChordRow() gives both the one binding -- so it is
+		// shared by every profile even though the rest of this area is not.
+		PanelKeybinds_ChordRow( a, "zoom.bind", "Zoom key", keybinds::Action::Zoom )
+			.Help( "The key or mouse button that zooms. Click it, then press the new key; mouse "
+			       "buttons are LMB, RMB, MMB, Mouse4 and Mouse5. Shared by every profile, and "
+			       "also listed under Keybinds." )
+			.Keywords( "zoom key bind keybind hotkey chord button rmb rebind" );
 
 		a.Choice( "zoom.mode", "Activation",
 			ui::AnyBind::Of<int>(

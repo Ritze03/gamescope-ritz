@@ -11,6 +11,7 @@
 
 #include "UI/Registry.h"
 #include "Config/ConfigSchema.h"
+#include "Keybinds.h"
 
 namespace gamescope
 {
@@ -22,4 +23,13 @@ namespace gamescope
 	// startup apply and from its live-apply hook -- the same shape (and the
 	// same reason) as PanelSystem_SeedFromConfig().
 	void PanelKeybinds_SeedFromConfig( const config::Settings &settings );
+
+	// One action's chord row -- a capture chip over the action's chord, the
+	// same binding (and the same capture pump) wherever it is declared. The
+	// Keybinds area declares one per action; since 2026-09-22 the Zoom and
+	// Autoclicker areas also declare a copy of their own action's row, so a
+	// feature's hotkey is set where the feature is. Both copies are the one
+	// chord in global.json: a rebind in either shows in the other.
+	ui::Entry &PanelKeybinds_ChordRow( ui::Area &a, const char *pszId, const char *pszLabel,
+	                                   keybinds::Action eAction );
 }

@@ -29,7 +29,7 @@ group after Crosshair). Default **off**.
 | Group | Row | Config field | Notes |
 | --- | --- | --- | --- |
 | Zoom | Enable zoom | `enabled` | Master switch, default off. The chord does nothing while this is off. |
-| | Zoom key | — | Read-only: the `zoom` action's chord, `RMB` by default. Rebound under **Keybinds**, like every other hotkey ([keybinds.md](keybinds.md)). |
+| | Zoom key | — | The `zoom` action's chord, `RMB` by default, as a capture chip (row id `zoom.bind`). Editable here since 2026-09-22; the same chord as Keybinds' **In-game hotkeys** row, so it is stored in `global.json` and shared by every profile ([keybinds.md](keybinds.md#two-groups-and-a-copy-in-the-features-own-area-2026-09-22)). |
 | | Activation | `mode` | `"hold"` (zoomed while the chord is down) or `"toggle"` (press in, press out). Int-backed Choice like `crosshair.hide_mode`: `overlay_e2_set zoom.mode 1` is Toggle. |
 | | Zoom level | `factor` | 1.5–5.0, step 0.1, default 2.0. |
 | | Match mouse speed | `mouse_scale` | Multiplies relative mouse motion by `1 / factor` while zoomed. See below. |

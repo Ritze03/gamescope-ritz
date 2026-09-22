@@ -33,12 +33,12 @@ object resolves to them — the precedent `ZoomSettings` itself set.
 | Group | Row | Config field | Notes |
 | --- | --- | --- | --- |
 | Autoclicker | Enable autoclicker | `enabled` | Master switch, default **off**. The chord does nothing at all while this is off, and turning it off stops a run in progress. |
-| | Autoclicker key | — | Read-only Facts row: the `autoclicker` action's chord, `Mouse4` by default. Rebound under **Keybinds**, like every other hotkey ([keybinds.md](keybinds.md)). |
+| | Autoclicker key | — | The `autoclicker` action's chord, `Mouse4` by default, as a capture chip (row id `autoclicker.bind`). Editable here since 2026-09-22; the same chord as Keybinds' **In-game hotkeys** row, so it is stored in `global.json` and shared by every profile ([keybinds.md](keybinds.md#two-groups-and-a-copy-in-the-features-own-area-2026-09-22)). |
 | | Clicks per second | `cps` | 1–1000, step 1, unit `/s`, default **10**. Live: re-read every cycle, so a change takes effect on the next click rather than the next press. |
 | | Activation | `mode` | `"hold"` (clicking while the chord is down) or `"toggle"` (press to start, press to stop). Int-backed Choice like `zoom.mode`: `overlay_e2_set autoclicker.mode 1` is Toggle. |
 | | Button | `button` | Which button the **game** receives: `"left"` / `"right"` / `"middle"` → `BTN_LEFT` / `BTN_RIGHT` / `BTN_MIDDLE`. Int-backed Choice, default Left. |
 
-Every row but the master switch and the read-only key row is
+Every row but the master switch and the key row is
 `DisabledUnless(enabled, "the autoclicker is off")`, so an off autoclicker greys
 out its own knobs instead of offering settings that do nothing.
 
@@ -204,7 +204,11 @@ grouping is `{ "system.autoclicker", RailGroup::Misc }` in
 (`src/Overlay/UI/Icons.cpp`) is a mouse seen from above with its left button
 filled solid — SPEC 8.0's "only where a fill carries meaning": the identity of
 this area is "a button is being held", and a solid quarter is what says that at
-12 px where a second outline would just be noise.
+12 px where a second outline would just be noise. Redrawn 2026-09-22: the body
+is a pill (`IconOp::RoundRect`, added for it — ImGui's `AddRect` with rounding)
+instead of a square-cornered rectangle, which the user said *"looks kind of
+weird and not really like a mouse"*, and the fill follows the rounded corner
+instead of a plain `Bar` that would poke out past it.
 
 Area keywords are broad on purpose (`autoclicker auto click clicker turbo rapid
 fire spam macro cps`), so the command palette finds it under whatever the user

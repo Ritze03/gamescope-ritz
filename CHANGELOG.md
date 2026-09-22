@@ -23,6 +23,9 @@ The newest version below is the one this build reports.
 - **Autoclicker**: hold (or toggle) a key or mouse button to send 1–1000 clicks per
   second on left, right or middle click, set up under MISC › Autoclicker and bound to
   `Mouse4` by default; it starts switched off.
+- **Set the zoom and autoclicker keys in their own tabs**: the Zoom and Autoclicker
+  pages now let you rebind their hotkey directly, and the change also shows under
+  Keybinds.
 
 ### Fixed
 - **Install and update find wlroots again**: `install.sh --install` and
@@ -36,6 +39,8 @@ The newest version below is the one this build reports.
   compiler as well as the libraries.
 
 ### Info
+- **Keybinds are split into two groups**: Global hotkeys (settings, launcher, friends
+  list) and In-game hotkeys (zoom, autoclicker).
 - **Dependencies are listed in the README**: copy-paste install commands for Arch
   and Fedora, plus which extra packages each optional feature needs.
 

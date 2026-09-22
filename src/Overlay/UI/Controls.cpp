@@ -406,6 +406,15 @@ namespace gamescope::ui
 						Dl()->PathStroke( col, ImDrawFlags_Closed, flStroke );
 						break;
 					}
+
+					case IconOp::RoundRect:
+						// The autoclicker's mouse body (2026-09-22). ImGui
+						// clamps the rounding to half the shorter side, so a
+						// radius of half the width is a pill -- which is
+						// what the glyph asks for.
+						Dl()->AddRect( pts[ 0 ], pts[ 1 ], col, s.flRadius * k,
+							ImDrawFlags_RoundCornersAll, flStroke );
+						break;
 				}
 			}
 		}

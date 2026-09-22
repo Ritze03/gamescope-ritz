@@ -1927,6 +1927,12 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 				case ui::IconOp::FillRect:
 					REQUIRE( sh.nPoints == 2 );
 					break;
+				case ui::IconOp::RoundRect:
+					// Corners, not a centre: the radius is INSIDE the box,
+					// so the plain corner check below is the right bound.
+					REQUIRE( sh.flRadius > 0.0f );
+					REQUIRE( sh.nPoints == 2 );
+					break;
 				default:
 					REQUIRE( sh.nPoints >= 2 );
 					break;

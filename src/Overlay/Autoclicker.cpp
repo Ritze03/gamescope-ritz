@@ -17,6 +17,7 @@
 #include "Config/ConfigManager.h"
 #include "Keybinds.h"
 #include "UI/Registry.h"
+#include "PanelKeybinds.h"
 
 namespace gamescope
 {
@@ -305,15 +306,18 @@ namespace gamescope
 		a.Switch( "autoclicker.enabled", "Enable autoclicker", AUTOCLICKER_BIND( bool, enabled ) )
 			.Help( "Holds down a mouse button for you, over and over, while the autoclicker key "
 			       "is held (or toggled). The clicks go to the game exactly as real ones do. The "
-			       "key itself is set under Keybinds." )
+			       "key is set just below." )
 			.Default( S{}.enabled )
 			.Keywords( "autoclicker enable click auto" );
 
-		a.Facts( "autoclicker.bind", "Autoclicker key",
-			[]{ return keybinds::ChordTextFor( keybinds::Action::Autoclicker ); } )
-			.Help( "The key or mouse button that clicks. Change it under Settings > Keybinds > "
-			       "Autoclicker; mouse buttons are LMB, RMB, MMB, Mouse4 and Mouse5." )
-			.Keywords( "autoclicker key bind keybind chord button mouse4" );
+		// Editable here since 2026-09-22 -- the same shared row as Zoom.cpp's
+		// `zoom.bind`; see that comment.
+		PanelKeybinds_ChordRow( a, "autoclicker.bind", "Autoclicker key",
+		                        keybinds::Action::Autoclicker )
+			.Help( "The key or mouse button that clicks. Click it, then press the new key; mouse "
+			       "buttons are LMB, RMB, MMB, Mouse4 and Mouse5. Shared by every profile, and "
+			       "also listed under Keybinds." )
+			.Keywords( "autoclicker key bind keybind hotkey chord button mouse4 rebind" );
 
 		a.Slider( "autoclicker.cps", "Clicks per second", AUTOCLICKER_BIND( int, cps ) )
 			.Help( "How many clicks a second. Each click holds the button down for half that "

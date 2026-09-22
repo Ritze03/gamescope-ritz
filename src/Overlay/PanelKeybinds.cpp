@@ -2,8 +2,8 @@
 // for the design.
 //
 // One row per action, each a Kind::Text row holding that action's chord string
-// and marked .Chord() so the shell draws it as a capture chip rather than an
-// input field (Registry.h's Chord()). The binding is an ordinary string
+// and marked .Chord( <action id> ) so the shell draws it as a capture chip
+// rather than an input field (Registry.h's Chord()). The binding is an ordinary string
 // getter/setter pair, which is what keeps `overlay_e2_set setup.keybinds
 // keybinds.shell "Ctrl+Shift+P"` and the palette working on these rows exactly
 // as on every other -- the capture chip is a nicer way to produce the same
@@ -34,9 +34,11 @@ namespace gamescope
 		// back on this thread, because committing means writing global.json
 		// and config:: is documented as single-threaded.
 		//
-		// So it is pumped from the row getters, which run every frame the
-		// area is on screen -- and the area is necessarily on screen,
-		// because arming the capture requires clicking one of its own rows.
+		// So it is pumped from the row getters, which run every frame their
+		// area is on screen -- and that area is necessarily on screen,
+		// because arming the capture requires clicking a chord row, and
+		// every chord row (Keybinds' own, and the Zoom/Autoclicker copies
+		// PanelKeybinds_ChordRow() declares) is bound through ChordBind().
 		// A dedicated per-frame hook would be a second mechanism for a
 		// situation that cannot arise without this one already running.
 		void PumpCapture()
@@ -85,6 +87,17 @@ namespace gamescope
 		}
 	}
 
+	ui::Entry &PanelKeybinds_ChordRow( ui::Area &a, const char *pszId, const char *pszLabel,
+	                                   Action eAction )
+	{
+		const keybinds::ActionInfo &info = keybinds::Info( eAction );
+		return a.Text( pszId, pszLabel, ChordBind( eAction ) )
+			.Chord( info.pszId )
+			.Help( info.pszHelp )
+			.Default( ui::Value{ std::string( info.pszDefault ) } )
+			.Keywords( "keybind hotkey shortcut chord rebind" );
+	}
+
 	void PanelKeybinds_SeedFromConfig( const config::Settings &settings )
 	{
 		keybinds::ApplyFromConfig( settings.overlay );
@@ -110,24 +123,31 @@ namespace gamescope
 				return keybinds::ChordTextFor( Action::Shell ) + " opens the settings";
 			} );
 
-		a.Group( "Hotkeys" );
-
-		for ( size_t i = 0; i < (size_t)Action::Count; i++ )
+		// TWO GROUPS (2026-09-22, the user: "one for global hotkeys and one
+		// for game-specific hotkeys"). Global: the chords that open this
+		// fork's own surfaces -- settings, launcher, friends. In-game: the
+		// chords that do something TO the game while you play (zoom,
+		// autoclicker), which also have a copy of their row in their own
+		// area. Both groups are the same global.json section; the split is
+		// what a hotkey is for, not where it is stored.
+		// ponytail: split on ActionInfo::bHeld, which is exactly the in-game
+		// set today (a held action is by definition pressed mid-game). A
+		// future in-game action that is NOT held would land under Global --
+		// give ActionInfo its own flag then.
+		for ( const bool bInGame : { false, true } )
 		{
-			const Action eAction = (Action)i;
-			const keybinds::ActionInfo &info = keybinds::Info( eAction );
+			a.Group( bInGame ? "In-game hotkeys" : "Global hotkeys" );
 
-			// The row id is "keybinds.<action id>" -- the shell's chord case
-			// splits it back at the first dot to find the action, so the two
-			// halves of that contract are here and in Shell.cpp's Kind::Text
-			// case and nowhere else.
-			const std::string sId = std::string( "keybinds." ) + info.pszId;
+			for ( size_t i = 0; i < (size_t)Action::Count; i++ )
+			{
+				const Action eAction = (Action)i;
+				const keybinds::ActionInfo &info = keybinds::Info( eAction );
+				if ( info.bHeld != bInGame )
+					continue;
 
-			a.Text( sId.c_str(), info.pszTitle, ChordBind( eAction ) )
-				.Chord()
-				.Help( info.pszHelp )
-				.Default( ui::Value{ std::string( info.pszDefault ) } )
-				.Keywords( "keybind hotkey shortcut chord rebind" );
+				const std::string sId = std::string( "keybinds." ) + info.pszId;
+				PanelKeybinds_ChordRow( a, sId.c_str(), info.pszTitle, eAction );
+			}
 		}
 
 		a.Group( "If you get stuck" );

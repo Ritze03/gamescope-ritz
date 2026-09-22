@@ -480,8 +480,17 @@ namespace gamescope::ui
 		// and documented fallback rather than as the interface. The listening
 		// itself is not this file's business -- Keybinds.cpp arms it, swallows
 		// the keys while it is armed, and hands back the chord.
-		Entry &Chord() { m_bChordStyle = true; return *this; }
-		bool  ChordStyle() const { return m_bChordStyle; }
+		//
+		// `pszAction` is the keybinds::ActionInfo id the chip arms (a plain
+		// string, so this file still knows nothing of Keybinds.h). Named on
+		// the row rather than parsed out of its id since 2026-09-22: the
+		// Zoom and Autoclicker tabs carry their own copy of their hotkey row
+		// (`zoom.bind`, `autoclicker.bind`) beside the Keybinds area's
+		// `keybinds.<action>`, and ids are unique registry-wide, so the id
+		// can no longer be what says which action a chip belongs to.
+		Entry &Chord( const char *pszAction ) { m_sChordAction = pszAction; return *this; }
+		bool  ChordStyle() const { return !m_sChordAction.empty(); }
+		const std::string &ChordAction() const { return m_sChordAction; }
 
 		// ---- the Inspector's live preview block (2026-09-07) -------------
 		// A row may ask the Inspector to draw ONE named picture above its
@@ -671,7 +680,7 @@ namespace gamescope::ui
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
-		bool        m_bChordStyle         = false;   // Chord() -- keybinds, 2026-09-08
+		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;

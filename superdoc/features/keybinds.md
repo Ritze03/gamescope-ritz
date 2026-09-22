@@ -299,8 +299,12 @@ second machine. Each covers the other's gap, and neither costs anything.
 ## The editing control
 
 A chord row is a `Kind::Text` row (a plain string binding) carrying the
-presentation flag `Entry::Chord()` — exactly the shape `Entry::Dropdown()`
-already had. The shell draws it as a **capture chip** instead of an input
+presentation flag `Entry::Chord( <action id> )` — exactly the shape
+`Entry::Dropdown()` already had. The flag names the action the chip arms.
+`Why on the row and not parsed from its id:` until 2026-09-22 the Shell read the
+action out of the row id (`keybinds.<action>`), which stopped working the
+moment the same action got a second row with a different id (below) — ids are
+unique registry-wide. The shell draws it as a **capture chip** instead of an input
 field: clicking it arms a capture, the chip reads `Press a chord (Esc
 cancels)`, and the next chord you press becomes the value.
 
@@ -310,6 +314,33 @@ how the tests drive one. But asking a player to type a keysym name in order to
 change a keyboard shortcut is the wrong question: they know the chord as a
 thing their hands do. So the field listens, and the typed form stays as the
 scriptable and documented fallback rather than as the interface.
+
+### Two groups, and a copy in the feature's own area (2026-09-22)
+
+The Keybinds area lists its rows in two groups: **Global hotkeys** (`shell`,
+`shell_alt`, `launcher`, `friends` — the chords that open this fork's own
+surfaces) and **In-game hotkeys** (`zoom`, `autoclicker` — the chords that do
+something *to* the game while you play). The user's words: *"one for global
+hotkeys and one for game-specific hotkeys or something like that ... a zoom and
+auto-clicker should be their own things."* The split is `ActionInfo::bHeld`,
+which is exactly the in-game set today; a future in-game action that is *not*
+held needs its own flag (the `ponytail:` note in `PanelKeybinds.cpp`).
+
+Both groups are still the one `overlay.keybinds` section of `global.json`.
+"In-game" names what the hotkey is *for*, not where it is stored — the zoom and
+autoclicker **settings** are per profile, their **chords** are not.
+
+The in-game actions' rows also appear in their own areas — `zoom.bind` in Zoom,
+`autoclicker.bind` in Autoclicker — so a feature's hotkey is set where the
+feature is (*"Move the auto-clicker hotkey and the zoom hotkey into their
+respective tabs and make sure that there is a copy of them in the keybinds"*).
+Before this those rows were read-only Facts pointing at Keybinds. Every copy is
+declared by `PanelKeybinds_ChordRow()`, so both copies of a row share one
+binding and one capture pump: a rebind in either reads back in the other on the
+next frame, and a capture armed from the Zoom tab is committed by the Zoom
+tab's own getter. Verified live 2026-09-22 (private headless sway):
+`overlay_e2_set zoom.bind Mouse5` read back as `keybinds.zoom = Mouse5` and
+landed in `global.json`, and the reverse through `keybinds.autoclicker`.
 
 `Why a presentation flag and not a new Kind:` the row stays an ordinary string
 row everywhere that matters — the palette, `overlay_e2_set`/`get`, the

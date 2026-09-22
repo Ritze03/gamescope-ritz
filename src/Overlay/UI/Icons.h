@@ -60,6 +60,7 @@ namespace gamescope::ui
 		FillPoly,   // filled closed path through nPoints points
 		HalfDisc,   // filled right half; pt[0] centre, flRadius radius -- HDR
 		Teardrop,   // stroked; pt[0] apex, pt[1] centre, flRadius radius
+		RoundRect,  // stroked; pt[0] min corner, pt[1] max corner, flRadius corner radius
 	};
 
 	// Six points is the most any glyph below needs (Profiles' back card). A
