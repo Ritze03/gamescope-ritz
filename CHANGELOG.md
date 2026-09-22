@@ -20,6 +20,9 @@ The newest version below is the one this build reports.
   Your packaged gamescope keeps using its own and is unaffected.
 - **`./install.sh --force`**: forces a full recompile instead of only rebuilding
   what changed, for when a build looks stale.
+- **Autoclicker**: hold (or toggle) a key or mouse button to send 1–1000 clicks per
+  second on left, right or middle click, set up under MISC › Autoclicker and bound to
+  `Mouse4` by default; it starts switched off.
 
 ### Fixed
 - **Install and update find wlroots again**: `install.sh --install` and

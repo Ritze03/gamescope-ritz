@@ -11,16 +11,12 @@ the wanted flag, the worker thread), `keybinds::Action::Autoclicker`
 `system.autoclicker` ("Autoclicker", in the rail's MISC group after Zoom).
 Default **off**.
 
-> **HIDDEN FROM THE UI since 2026-09-22, and that is the current state.** The
-> code below all exists and is compiled in, but the area is registered with
-> `AvailableWhen([]{ return false; })` (`Autoclicker.cpp`) and the `autoclicker`
-> hotkey row is skipped in `PanelKeybinds.cpp`, so there is no rail entry, no
-> palette row, no hotkey row and no way in from the shell. `Why:` the click
-> train has never been tested against a real game, and an untested input
-> injector is not something to hand a user by accident. Everything else — the
-> config section, the chord, the worker, the guards, the tests — is live, so
-> re-enabling it is deleting those two lines. A config edited by hand still
-> works, which is how it gets tested.
+> **In the UI since 2026-09-22.** It first landed hidden the same day
+> (`AvailableWhen([]{ return false; })` on the area, plus a skipped `autoclicker`
+> row in `PanelKeybinds.cpp`) because it had never been tested against a real
+> game. The user asked for it to be switched on in the GUI so they could use it;
+> both lines were deleted, nothing else changed. It is still off by default, so
+> the chord does nothing until **Autoclicker** is turned on.
 
 The click is not a special path: `Emit()` calls `wlserver_mousebutton()`, the
 same entry point every real backend uses (`OpenVRBackend.cpp` brackets its own

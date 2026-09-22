@@ -284,16 +284,6 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "system.autoclicker", "Autoclicker", ui::Section::System );
 
-		// HIDDEN FROM THE UI (2026-09-22), until the click train has been
-		// tested against a real game: no rail entry, no palette rows, no way
-		// in from the shell -- the same one-predicate hiding the friends list
-		// uses when there is no Steam app id (PanelFriends.cpp). The area is
-		// still REGISTERED, so its rows, icon and config keys keep existing
-		// and the settings audit still sees them.
-		// ponytail: a constant false rather than a debug ConVar or a build
-		// flag. Delete this line to ship it; that is the whole re-enable.
-		a.AvailableWhen( []{ return false; } );
-
 		a.Keywords( "autoclicker auto click clicker turbo rapid fire spam macro cps" );
 		a.Summary( []
 		{
