@@ -1545,9 +1545,9 @@ TEST_CASE( "Zoom_SharpenAmount: 0 at k=0, kZoomSharpenMaxAmount at k=1, monotoni
 
     // The curve itself, not just its endpoints (values from the same
     // formula computed independently -- see Zoom.h's comment table).
-    REQUIRE_THAT( Zoom_SharpenAmount( 0.25f ), Catch::Matchers::WithinAbs( 0.4380, 1e-3 ) );
-    REQUIRE_THAT( Zoom_SharpenAmount( 0.5f ), Catch::Matchers::WithinAbs( 1.2789, 1e-3 ) );
-    REQUIRE_THAT( Zoom_SharpenAmount( 0.75f ), Catch::Matchers::WithinAbs( 3.5527, 1e-3 ) );
+    REQUIRE_THAT( Zoom_SharpenAmount( 0.25f ), Catch::Matchers::WithinAbs( 0.1910, 1e-3 ) );
+    REQUIRE_THAT( Zoom_SharpenAmount( 0.5f ), Catch::Matchers::WithinAbs( 0.4429, 1e-3 ) );
+    REQUIRE_THAT( Zoom_SharpenAmount( 0.75f ), Catch::Matchers::WithinAbs( 0.7903, 1e-3 ) );
 
     // Monotonically increasing -- a higher slider position never sharpens
     // less.

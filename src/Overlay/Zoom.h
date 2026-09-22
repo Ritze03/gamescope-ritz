@@ -174,13 +174,34 @@ namespace gamescope
 	// the chosen ceiling of the reachable gain instead of bunching near
 	// the top. kZoomSharpenHalfK is that fit's K (half-saturation amount,
 	// least-squares over the table above with Ginf fixed at the measured
-	// 25.12 asymptote); kZoomSharpenMaxAmount is amount(k=1) -- picked as
-	// the smallest MEASURED amount reaching ~95% of Ginf (32 reaches
-	// 23.7/25.12 = 94.5%; 64 only adds another ~2.4pp for double the
-	// amount), not 64, so the top of the slider is not wasted headroom.
-	// The formula is exact at both ends by construction regardless of fit
-	// error: amount(0) = 0, amount(1) = kZoomSharpenMaxAmount.
-	inline constexpr float kZoomSharpenMaxAmount = 32.0f;
+	// 25.12 asymptote). The formula is exact at both ends by construction
+	// regardless of fit error: amount(0) = 0, amount(1) = kZoomSharpenMaxAmount.
+	//
+	// kZoomSharpenMaxAmount was RETUNED 2026-09-22 from 32 down to 1.3 (a
+	// visual QC pass, not a second gradient-energy measurement -- see
+	// superdoc/features/zoom.md's "Sharpen" section for the full writeup).
+	// The per-channel min/max clamp this operator applies (cs_zoom.comp)
+	// stops it *overshooting* past the local neighbourhood, but not
+	// *collapsing onto* it: at large amounts, mid-grey pixels inside a
+	// glyph stroke get pulled all the way down to the neighbourhood
+	// minimum, gouging apertures to black and stair-stepping curves at the
+	// 3px magnification period -- and gradient-energy REWARDS this (it's a
+	// bigger gradient), so the metric that picked 32 as "94.5% of
+	// asymptotic gain" was measuring the wrong thing. 1.3 is amount(k=0.5)
+	// under the OLD ceiling of 32 -- the strength a human grader found
+	// clean and clearly crisper than off, with objectionable gouging
+	// already visible by the old k=0.75 (amount ~3.55). Reusing the same
+	// Michaelis-Menten formula and kZoomSharpenHalfK with this new,
+	// smaller ceiling keeps the same "slider spreads gain evenly toward
+	// the ceiling" property (gain(amount(k)) = k * gain(kZoomSharpenMaxAmount)
+	// exactly, by construction, independent of the ceiling's value) and
+	// amount(0) = 0 exactly (sharpen 0 stays byte-identical -- the shader
+	// branches out on amount == 0). If a stronger ceiling is wanted later,
+	// prefer tightening the clamp itself (lerp the min/max bounds toward
+	// the original pixel as amount grows) over raising this number again --
+	// that targets the actual failure (collapse-to-rail) instead of
+	// trading it for less overall sharpening.
+	inline constexpr float kZoomSharpenMaxAmount = 1.3f;
 	inline constexpr float kZoomSharpenHalfK = 1.39f;
 
 	inline float Zoom_SharpenAmount( float k )

@@ -559,6 +559,61 @@ given.
 > captures behind the tables above); the RCAS-era measurements are
 > preserved in `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
 
+**Third retune (2026-09-22): the ceiling was lowered by visual QC, not
+gradient energy — gradient energy was measuring the wrong thing.** A
+grader looking at real text inside the projector at `sharpen 1.0`
+(`amount = kZoomSharpenMaxAmount = 32`) found the top of the range
+destructive: `e`'s aperture gouged to black, `4`/`2`'s diagonals
+fragmented, and curves stair-stepped at the 3px magnification period. The
+per-channel min/max clamp (see "Why the FULL 3x3" above) stops the
+operator *overshooting* past its 3x3-source-texel neighbourhood, but it
+does not stop it *collapsing onto* that neighbourhood's own extremes — a
+mid-grey stroke pixel surrounded by darker background can be pulled all
+the way down to the neighbourhood minimum, which raises gradient energy
+(a bigger local difference) while visibly destroying the glyph. That is
+exactly why the metric that picked `32` as "94.5% of asymptotic gain"
+approved of a range a human grader rejected: it rewards binarising an
+antialiased edge as if it were legitimate sharpening. By the old
+`sharpen 0.75` (`amount ≈ 3.55`) the gouging was already objectionable;
+`sharpen 0.4–0.5` under the OLD ceiling (`amount ≈ 1.0–1.3`) read as
+clean and clearly crisper than off.
+
+`kZoomSharpenMaxAmount` was cut from `32.0` to **`1.3`** — exactly the old
+`amount(k=0.5)`, the grader's clean point — reusing the same
+Michaelis-Menten formula and `kZoomSharpenHalfK = 1.39` unchanged. This
+keeps the slider-evenness property exactly (`gain(amount(k)) = k ·
+gain(kZoomSharpenMaxAmount)` by construction, independent of the
+ceiling's value) and `amount(0) = 0` exactly (`sharpen 0` stays
+byte-identical — the shader still branches out on `amount == 0`). Since
+`1.3 < kZoomSharpenHalfK`, the new curve sits in the fitted gain curve's
+near-linear low end rather than its saturating top, so `amount(k)` itself
+is now close to linear in `k` — a coincidence of where the new ceiling
+lands, not a change of approach:
+
+| k | 0.25 | 0.5 | 0.75 | 1.0 |
+| --- | --- | --- | --- | --- |
+| `amount(k)` | 0.191 | 0.443 | 0.790 | 1.3 |
+| gain (from the MM fit, not re-measured) | +3.0% | +6.1% | +9.1% | +12.1% |
+
+The gain row is computed from the same fitted curve as the table above
+(`Ginf = 25.12`, `K = 1.39`), not a fresh gradient-energy sweep — this
+retune's own evidence is the visual QC grade, not a metric, per the
+finding above that the metric itself was misleading at the top of the
+old range. Evidence: `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/v4/`
+(crops and a `sweep-stack.png`-style vertical stack for the default
+client at k = 0/0.25/0.5/0.75/1.0, plus k = 0/1.0 for both mid-tone
+clients; `README.txt` has the numbers). `sharpen 0` remains
+byte-identical to every earlier build (`amount(0) = 0` regardless of the
+ceiling), and 0 pixels differ outside the projector between `sharpen 0`
+and `sharpen 1` under the new ceiling either.
+
+**If a stronger ceiling is wanted later**, the QC finding points at a
+different fix than raising this number again: tighten the *clamp*
+itself — lerp its min/max bounds toward the original pixel as `amount`
+grows, so the operator can no longer collapse a stroke onto its
+neighbourhood's extreme value — rather than trading visible strength for
+less gouging by picking a number partway up the same curve.
+
 ## Threading
 
 `Zoom_OnChord()`, `Zoom_MouseScale()`, `Zoom_ConsumesButton()`,
@@ -641,5 +696,8 @@ the wlserver thread (see "Match mouse speed" above).
   1px outline. `shots/` and `README.txt` are the first retune (the linear
   map); `sweep/` and `v3/README.txt` are the slider remapping's amount- and
   k-sweeps and its own re-confirmation captures (default, midtone,
-  darklight, all three checked). The RCAS-era measurements (superseded) are
-  preserved in `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
+  darklight, all three checked); `v4/README.txt` is the ceiling-lowering
+  retune (ceiling `32 -> 1.3`) with the default client's full k-sweep and
+  its vertical stack image, plus k=0/1.0 re-confirmation for both mid-tone
+  clients. The RCAS-era measurements (superseded) are preserved in
+  `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
