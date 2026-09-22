@@ -358,21 +358,21 @@ namespace gamescope
 			.Keywords( "zoom fade duration time animation ramp smooth speed" )
 			.DisabledUnless( On, kOffReason );
 
-		// Sharpen (2026-09-22). The user: "add an option to add a
-		// sharpening filter on top of the projector area only, so the zoom
-		// content doesn't look as blurry as it does right now." Reuses FSR1
-		// RCAS inside cs_zoom.comp -- see that file and ZoomPushData_t
-		// (rendervulkan.cpp) for the con.x mapping, and Zoom.h's
-		// Zoom_SharpenRamp for why it never applies during the fade's
-		// pinned-at-1.0x first phase. 0 (default) is off and byte-identical
-		// to before this row existed.
+		// Sharpen (2026-09-22, retuned 2026-09-22). The user: "add an option
+		// to add a sharpening filter on top of the projector area only, so
+		// the zoom content doesn't look as blurry as it does right now." A
+		// contrast-clamped unsharp mask inside cs_zoom.comp -- see that file
+		// and ZoomPushData_t (rendervulkan.cpp) for the amount mapping, and
+		// Zoom.h's Zoom_SharpenRamp for why it never applies during the
+		// fade's pinned-at-1.0x first phase. 0 (default) is off and
+		// byte-identical to before this row existed.
 		a.Slider( "zoom.sharpen", "Sharpen", ZOOM_BIND( float, sharpen ) )
 			.Help( "Sharpens the magnified picture inside the projector, so it looks less blurry. "
 			       "Only the projector is affected, never the rest of the screen. 0 is off." )
 			.Range( 0.0f, 1.0f ).Step( 0.05f )
 			.ZeroMeans( "Off" )
 			.Default( S{}.sharpen )
-			.Keywords( "zoom sharpen sharpness crisp clarity rcas blur blurry" )
+			.Keywords( "zoom sharpen sharpness crisp clarity unsharp blur blurry" )
 			.DisabledUnless( On, kOffReason );
 
 		a.Group( "Projection" );

@@ -356,63 +356,101 @@ Two smaller consequences worth knowing:
 > zoom content doesn't look as blurry as it does right now."*
 
 The projector's blur is `cs_zoom.comp`'s one hardware-bilinear fetch per output
-pixel (`textureLod(s_samplers[0], uv, 0)`, line ~60): at 1.5–5x magnification
-that interpolation is the softness. `sharpen` (0–1, default **0**, off)
-applies FSR1 RCAS to the projector's own picture to counter it — the same
-sharpening the Shaders area's **Pre-Sharpen** effect applies to the whole
-frame (`cs_effects_layer0.comp`), reused here rather than reinvented, because
-RCAS is already clip-limited: it cannot ring past the local min/max the way a
-plain unsharp mask can.
+pixel (`textureLod(s_samplers[0], uv, 0)`): at 1.5–5x magnification that
+interpolation is the softness. `sharpen` (0–1, default **0**, off) applies a
+**contrast-clamped unsharp mask** to the projector's own picture to counter
+it.
 
-**Taps are spaced in projector-pixel space, not source-texel space.** RCAS's
-5-tap cross (`FsrRcasLoadF`) has to sample the *magnified* picture one output
-pixel apart, because the blur it is correcting lives at that scale — a tap one
-source texel apart would barely move under a 3x zoom. `cs_zoom.comp`'s
-`FsrRcasLoadF` is therefore main()'s own `d -> uv` mapping (source centre +
-offset * scale-per-output-pixel), parameterised on an arbitrary tap instead of
-the invocation's own pixel, so a tap at `p + (1,0)` lands one MAGNIFIED pixel
-to the right in source space, exactly where the plain bilinear fetch at `p`
-was interpolating from.
+**History — first cut used FSR1 RCAS, replaced the same day.** The first
+version reused the Shaders area's Pre-Sharpen operator (FSR1 RCAS,
+`cs_effects_layer0.comp`), with its 5-tap cross spaced in *projector-pixel*
+space (one MAGNIFIED pixel apart, via a `d -> uv` remap of `FsrRcasLoadF`).
+A QC pass measured that raising edge-gradient energy inside the projector by
+only **+4.3%** at the top of the slider — invisible at normal viewing size,
+"just as blurry as the user's complaint describes" at 1.0. Two design faults,
+diagnosed and fixed the same day:
 
-**Applied before the shape's `fill`/alpha**, so the ring's own antialiasing
-and the outline are never sharpened — only the picture inside the ring is
-fed through RCAS, and the multiply by `fill` that masks the shape happens
-after. `sharpen == 0` (0's own float bit pattern, checked as a real `uint32_t`
-zero in the shader) branches around RCAS entirely rather than calling it with
-a no-op `con.x`, so the shader is byte-for-byte identical to before this
-feature existed at the default — measured (below), not just argued.
+1. **Wrong spatial scale.** The blur being corrected is bilinear
+   interpolation *between source texels*, which sit `factor` projector pixels
+   apart (3px at 3x). A 1-projector-pixel-spaced tap sees almost no gradient
+   inside a 3px-wide interpolation ramp — it was measuring the wrong scale
+   entirely.
+2. **RCAS is a touch-up, not a de-blur.** Its negative lobe is capped at
+   `FSR_RCAS_LIMIT` (0.1875) times `con.x`, and the old `con.x` mapping
+   topped out at 0.667 (short of RCAS's own 1.0 ceiling) — so the *effective*
+   lobe was capped at ≤0.125 regardless of the slider. RCAS is designed as a
+   mild post-upscale polish, not something that can meaningfully de-blur a 3x
+   magnification.
 
-**The con.x mapping** (`ZoomPushData_t::SharpenConX`, `rendervulkan.cpp`, next
-to `ZoomPushData_t`) reuses Pre-Sharpen's own saturating shape,
-`k / (0.75 * (1 + k))`, rescaled to *this* slider's 0..1 domain instead of
-Pre-Sharpen's 0..2:
+**The operator (`cs_zoom.comp`).** Taps are spaced **one SOURCE texel**
+apart — `uv ± 1/textureSize` per axis, the scale the blur actually lives at,
+not the projector-pixel scale the first cut used:
 
-| Sharpen | con.x |
-| --- | --- |
-| 0 | 0 (off, RCAS branched out) |
-| 0.5 | 0.444 |
-| 1.0 | 0.667 |
+```
+c              = bilinear(uv)
+n,s,e,w,
+ne,nw,se,sw    = bilinear(uv ± 1 source texel, all 8 directions — the full 3x3)
+blur           = mean(n,s,e,w,ne,nw,se,sw)
+out            = c + amount * (c - blur)
+lo             = min(c, n,s,e,w,ne,nw,se,sw)   -- per channel
+hi             = max(c, n,s,e,w,ne,nw,se,sw)   -- per channel
+out            = clamp(out, lo, hi)
+```
 
-Deliberately **short of RCAS's own ceiling (con.x 1.0)** — 0.667 is where
-Pre-Sharpen's own slider sits at its *midpoint* (1.0 of its 0..2 range), so
-"fully sharpened" here reads as a strong-but-controlled sharpen rather than
-Pre-Sharpen's own top third (con.x up to 0.889, reachable only past its
-slider's midpoint), which is more prone to ringing on hard edges. Kept as a
-private duplicate of the formula rather than a shared helper: the two sliders
-have different domains and Pre-Sharpen's own `RcasConX()` is private to
-`EffectsPushData_t`.
+**The per-channel clamp to the local 3x3-source-texel neighbourhood's own
+min/max is what makes a large `amount` safe.** The result can never leave the
+range of values already present in that neighbourhood, so there is no
+overshoot — no halo, no new dark or bright fringe — no matter how large
+`amount` gets; it only makes edges steeper, never wrong. This is a stronger,
+more direct guarantee than RCAS's own clip limiting, and it is why the new
+operator can run at an `amount` far past anything RCAS's `con.x` could
+safely reach.
 
-**The fade-identity invariant governs it too.** The fade's first phase (see
-above) is a *measured* guarantee that the projector is byte-identical to the
-unzoomed frame while the magnification is pinned at exactly 1.0x; sharpening
-during that phase would break it (even at 1.0x, RCAS's cross would perturb
-rounding right at the shape's antialiased edge). So the configured `sharpen`
-is scaled by `Zoom_SharpenRamp()` (`Overlay/Zoom.h`, next to the fade
-helpers) — `clamp((curFactor - 1) / (targetFactor - 1), 0, 1)`, guarded for a
-target at or below 1.0 — computed in `Zoom_FillRequest()` from the SAME ramped
-`flFactor` the picture's own magnification uses, so the two finish together at
-the top of the fade instead of disagreeing about when the picture is "fully
-zoomed":
+**Why the FULL 3x3 (8 taps: cross + diagonals), not just the 4-tap cross.**
+Measured directly (`amount` swept 3 → 2000 with the clamp active, so the
+result sits at its true asymptote — the ceiling any *finite* `amount` can
+approach, since the clamp bounds the result regardless of how large `amount`
+gets): a 4-tap cross plateaus at +19.7% / +22.7% (midtone / darklight test
+clients, below), short of target. Adding the four diagonal taps — the full
+3x3 the brief's own halo-check wording describes — raised the ceiling to
++24.1% / +29.0%. Widening the tap radius further (2, 3, 4 source texels,
+same sweep) did **not** raise the ceiling any further; it plateaued at the
+same figures and fell at radius 4. The content's own local contrast at this
+magnification, not the window size past one texel, is what bounds the
+result — this is a hard ceiling of the "genuinely zero-overshoot" family of
+operators on this content, not a tuning miss.
+
+**Applied before the shape's `fill`/alpha**, exactly as the first cut was —
+only the picture inside the ring is ever fed through the unsharp mask, the
+ring's own antialiasing and the outline are provably untouched (their `rgb`
+is multiplied by `fill == 0` regardless of what upstream sharpening computed
+for them). `sharpen == 0` (`u_sharpenAmount == 0.0`, a plain float — no
+bit-cast trick needed since nothing here packs it for FFX's uint-SIMD
+constants any more) branches around the whole block entirely, so the shader
+is byte-for-byte identical to before this feature existed at the default —
+measured, not just argued (below).
+
+**The amount mapping** (`ZoomPushData_t::kMaxAmount`, `rendervulkan.cpp`,
+next to `ZoomPushData_t`) is a **plain linear map**, `amount = kMaxAmount *
+sharpen`, with `kMaxAmount = 64.0` — the one place that number lives. Chosen
+by measurement to sit close to the operator's own asymptote (23.5% / 28.3%
+at `amount = 64` vs 24.1% / 29.0% at `amount = 2000`) rather than picked
+arbitrarily; there is no "ringing past this point" ceiling to respect the
+way RCAS's `con.x` had; the clamp is what keeps any `amount` safe. One
+consequence of being this close to the asymptote: `sharpen 0.5` (`amount =
+32`) lands close to `sharpen 1.0` rather than at the midpoint of the total
+gain — most edge pixels are already saturated to their local `lo`/`hi` well
+before `amount` reaches half of `kMaxAmount`, so there is little gradient
+energy left to gain between the two.
+
+**The fade-identity invariant governs it too**, unchanged from the first
+cut. The fade's first phase (see above) is a *measured* guarantee that the
+projector is byte-identical to the unzoomed frame while the magnification is
+pinned at exactly 1.0x; sharpening during that phase would break it. So the
+configured `sharpen` is scaled by `Zoom_SharpenRamp()` (`Overlay/Zoom.h`,
+next to the fade helpers) — `clamp((curFactor - 1) / (targetFactor - 1), 0,
+1)`, guarded for a target at or below 1.0 — computed in `Zoom_FillRequest()`
+from the SAME ramped `flFactor` the picture's own magnification uses:
 
 ```
 req.flSharpen = clamp(z.sharpen, 0, 1) * Zoom_SharpenRamp(req.flFactor, targetFactor);
@@ -423,19 +461,44 @@ req.flSharpen = clamp(z.sharpen, 0, 1) * Zoom_SharpenRamp(req.flFactor, targetFa
 `ZoomPushData_t`'s constructor — no further ramping logic lives in
 `rendervulkan.cpp`.
 
-> **Measured (2026-09-22, headless captures, `--backend wayland`, isolated
-> `XDG_CONFIG_HOME`, kitty printing this repo's README for text/edge detail,
-> `screenshot <path> 3`, RMB via `wlserver_debug_mouse_button "273 1"`,
-> `zoom.fade 0`, factor 3.0, circle, size 0.5):** a capture built from db1ad15
-> (before this feature existed) is **byte-identical** to this build's capture
-> at `sharpen 0` — 0 of 921 600 pixels differ. Between `sharpen 0` and
-> `sharpen 1`, 8 472 pixels differ (max delta 63/255), **every one of them**
-> within the 360px-diameter circle's own radius — 0 differ outside a 220px
-> margin around its centre — and a difference heatmap traces the magnified
-> text's glyph edges, consistent with an edge-sharpening filter rather than a
-> uniform or random change. `sharpen 0.5` sits between the two (7 847 / 6 746
-> pixels differ from 0 / 1 respectively). `build-release/verify-shots/
-> zoom-sharpen-2026-09-22/` has the captures, crops and the diff heatmap.
+> **Measured (2026-09-22 retune, headless captures, `--backend wayland`,
+> isolated `XDG_CONFIG_HOME`, `screenshot <path> 3`, RMB via
+> `wlserver_debug_mouse_button "273 1"`, `zoom.fade 0`, factor 3.0, circle,
+> size 0.5):** mean gradient magnitude (central-difference on luma) inside
+> the projector mask, three test clients — kitty's own default colours
+> printing this repo's README (the same client the +4.3% baseline used),
+> and two mid-tone clients chosen so clipping can't hide a halo
+> (`#707070`/`#e0e0e0` and `#d8d8d8`/`#202020`):
+>
+> | Client | sharpen 0 | sharpen 0.5 | sharpen 1.0 |
+> | --- | --- | --- | --- |
+> | default (README text) | 8.783 | 10.866 (+23.7%) | 10.920 (**+24.3%**) |
+> | midtone (#707070/#e0e0e0) | 4.360 | 5.358 (+22.9%) | 5.385 (**+23.5%**) |
+> | darklight (#d8d8d8/#202020) | 5.901 | 7.531 (+27.6%) | 7.570 (**+28.3%**) |
+>
+> A Sobel cross-check on the default client agrees in direction (+21.2% at
+> sharpen 1.0). **The target of +30% was not reached** by any client — see
+> "Why the FULL 3x3" above for the measured ceiling and why a genuinely
+> zero-overshoot operator cannot cross it on this content; this is still a
+> ~5.5–6.6x improvement over the RCAS-era +4.3%. **Zero halo violations** on
+> both mid-tone clients (comparing `sharpen 1.0` against a per-channel 3x3
+> -source-texel min/max filter of that same client's own `sharpen 0`
+> capture — the brief's own halo-check method — with a 1-level tolerance for
+> 8-bit rounding): 0 of 94,548 masked pixels violate it either client.
+> **Containment**: 0 of 921,600 pixels differ between `sharpen 0` and
+> `sharpen 1` outside the circle's own radius, for both clients — the
+> projector's centre was measured from the unzoomed-vs-`sharpen 0` diff each
+> time, not assumed. **The 1px black outline is unchanged**: its
+> fully-opaque pure-black locus (16 pixels per client, at pixel-quantised
+> resolution around a ~360px circle) is bit-identical between `sharpen 0`
+> and `sharpen 1` for both clients — also provable algebraically, since
+> `rgb` there is multiplied by `fill == 0` regardless of any upstream
+> sharpening. **`sharpen 0` is byte-identical to a capture built from master
+> `d259cae`** (the pre-retune, RCAS-era commit) for both mid-tone clients: 0
+> of 921,600 pixels differ, max delta 0. `build-release/verify-shots/
+> zoom-sharpen-v2-2026-09-22/` has the captures, 4x crops, diff heatmaps and
+> full numbers (`README.txt`); the RCAS-era measurements above this note are
+> preserved in `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
 
 ## Threading
 
@@ -507,8 +570,10 @@ the wlserver thread (see "Match mouse speed" above).
   section; `Zoom_SharpenRamp()`'s arithmetic (0 at factor 1.0, 1 at the
   target, linear between, clamped past both ends, safe for a target at or
   below 1.0) with no Zoom.cpp/compositor link (2026-09-22).
-- `build-release/verify-shots/zoom-sharpen-2026-09-22/` — see the "Sharpen"
-  section above for the numbers: `sharpen 0` byte-identical to a pre-feature
-  build, every differing pixel between `sharpen 0` and `sharpen 1` inside the
-  projector's own radius, and a diff heatmap tracing the sharpened text's
-  glyph edges.
+- `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/` — see the
+  "Sharpen" section above for the numbers: `sharpen 0` byte-identical to
+  master `d259cae` (the pre-retune build), every differing pixel between
+  `sharpen 0` and `sharpen 1` inside the projector's own radius, zero halo
+  violations against a 3x3-source-texel min/max filter, and the unchanged
+  1px outline. The RCAS-era measurements (superseded) are preserved in
+  `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
