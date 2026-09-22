@@ -221,9 +221,18 @@ gcr_meson_configure() {
 # stays on. If a future LTO bump ever regresses build time or breaks the
 # build, drop -Db_lto=true here rather than fighting it: working beats maximal.
 #
-# Which ninja target to build defaults to just the gamescope binary; set
-# GCR_NINJA_TARGET="" before calling to build everything (needed for tests).
-# Set GCR_NINJA_JOBS to cap parallelism (passed to ninja -j).
+# Which ninja targets to build defaults to the gamescope binary AND this
+# fork's own Vulkan WSI layer; set GCR_NINJA_TARGET="" before calling to build
+# everything (needed for tests). Set GCR_NINJA_JOBS to cap parallelism.
+#
+# THE LAYER HAS TO BE IN THE DEFAULT SET. install.sh installs it beside the
+# binary, and the compositor only uses its own layer when that manifest is on
+# disk -- so a build that skips it silently leaves every game on whatever the
+# distro ships, which is the exact version-skew this fork's own layer exists
+# to avoid. Found the hard way: the manifest is written by configure_file() at
+# CONFIGURE time, so it appeared in the build dir and looked installed-ready
+# while the .so beside it had never been linked, and gcr_install_wsi_layer()
+# quietly skipped the whole thing.
 gcr_build() {
 	local repo_root="$1" build_dir="$2" buildtype="$3"; shift 3
 	local extra_opts=("$@")
@@ -241,7 +250,21 @@ gcr_build() {
 
 	local ninja_args=(-C "$build_dir")
 	[ -n "${GCR_NINJA_JOBS:-}" ] && ninja_args+=(-j "$GCR_NINJA_JOBS")
-	local ninja_target="${GCR_NINJA_TARGET-src/gamescope}"
+	# A list, not one string: the layer is a second default target. Its name
+	# is asked of ninja rather than hardcoded, so renaming it in
+	# layer/meson.build cannot leave a stale target name here -- and a tree
+	# built with -Denable_gamescope_wsi_layer=false simply has no match and
+	# builds the binary alone.
+	local ninja_targets=()
+	if [ -n "${GCR_NINJA_TARGET+x}" ]; then
+		[ -n "$GCR_NINJA_TARGET" ] && ninja_targets=("$GCR_NINJA_TARGET")
+	else
+		ninja_targets=(src/gamescope)
+		local layer_target
+		layer_target=$(ninja -C "$build_dir" -t targets all 2>/dev/null \
+			| sed -n 's|^\(layer/lib[A-Za-z0-9_]*gamescope_wsi[A-Za-z0-9_]*\.so\):.*|\1|p' | head -n1)
+		[ -n "$layer_target" ] && ninja_targets+=("$layer_target")
+	fi
 	# Run ninja (and therefore every compiler/linker process it spawns —
 	# niceness is inherited by children, verified empirically 2026-09-02) at
 	# nice +10, so a build never contends with the user's games or desktop.
@@ -253,9 +276,9 @@ gcr_build() {
 	# at each call site.
 	local nice_cmd=(nice -n 10)
 	command -v ionice >/dev/null 2>&1 && nice_cmd=(ionice -c3 "${nice_cmd[@]}")
-	if [ -n "$ninja_target" ]; then
-		gcr_info "building (${nice_cmd[*]} ninja ${ninja_args[*]} $ninja_target)..."
-		"${nice_cmd[@]}" ninja "${ninja_args[@]}" "$ninja_target"
+	if [ "${#ninja_targets[@]}" -gt 0 ]; then
+		gcr_info "building (${nice_cmd[*]} ninja ${ninja_args[*]} ${ninja_targets[*]})..."
+		"${nice_cmd[@]}" ninja "${ninja_args[@]}" "${ninja_targets[@]}"
 	else
 		gcr_info "building (${nice_cmd[*]} ninja ${ninja_args[*]})..."
 		"${nice_cmd[@]}" ninja "${ninja_args[@]}"
