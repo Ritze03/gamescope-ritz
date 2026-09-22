@@ -1845,6 +1845,9 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		"system.friends",
 		// The eighteenth (2026-09-14): the zoom. See Zoom.cpp and Icons.cpp.
 		"system.zoom",
+		// The nineteenth (2026-09-18): the autoclicker. See Autoclicker.cpp
+		// and Icons.cpp.
+		"system.autoclicker",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -1975,6 +1978,7 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 		{ "audio.mixer",           ui::RailGroup::Misc },
 		{ "system.crosshair",      ui::RailGroup::Misc },
 		{ "system.zoom",           ui::RailGroup::Misc },
+		{ "system.autoclicker",    ui::RailGroup::Misc },
 		{ "system.friends",        ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },

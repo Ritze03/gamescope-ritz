@@ -117,6 +117,14 @@ namespace gamescope
 			const Action eAction = (Action)i;
 			const keybinds::ActionInfo &info = keybinds::Info( eAction );
 
+			// The autoclicker is hidden from the UI until it has been tested
+			// (Autoclicker.cpp's AvailableWhen), and a hotkey row for a
+			// feature with no settings page is worse than no row at all. The
+			// action itself still exists and still binds; only the row is
+			// gone. Delete this to ship it.
+			if ( eAction == Action::Autoclicker )
+				continue;
+
 			// The row id is "keybinds.<action id>" -- the shell's chord case
 			// splits it back at the first dot to find the action, so the two
 			// halves of that contract are here and in Shell.cpp's Kind::Text

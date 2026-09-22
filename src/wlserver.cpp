@@ -84,6 +84,7 @@
 // of wlserver_dispatch_mouse_button() -- see that function.
 #include "Overlay/Crosshair.h"
 #include "Overlay/Zoom.h"
+#include "Overlay/Autoclicker.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -361,6 +362,8 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 	// never fires anything else that matters here.
 	if ( res.bReleased && res.eReleased == Action::Zoom )
 		gamescope::Zoom_OnChord( false );
+	else if ( res.bReleased && res.eReleased == Action::Autoclicker )
+		gamescope::Autoclicker_OnChord( false );
 
 	// "Keep the button from the game" (zoom.consume_button,
 	// superdoc/features/zoom.md): true only for the PRESS that completes
@@ -383,6 +386,13 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 			// The magnifier (Overlay/Zoom.cpp): hold or toggle is that
 			// module's own setting, so the press is all it needs to know.
 			gamescope::Zoom_OnChord( true );
+			break;
+
+		case Action::Autoclicker:
+			// The click train (Overlay/Autoclicker.cpp): same shape as the
+			// zoom above -- hold or toggle is that module's own setting, so
+			// the press is all it needs to know.
+			gamescope::Autoclicker_OnChord( true );
 			break;
 
 		case Action::Shell:
@@ -656,6 +666,26 @@ void wlserver_clear_pressed_hotkeys()
 static std::unordered_set<xkb_keysym_t> s_setHeldButtonSyms;
 static bool wlserver_ritz_mouse_hotkey( uint32_t uLinuxButton, bool bPressed )
 {
+	// THE AUTOCLICKER'S FEEDBACK-LOOP GUARD (2026-09-18,
+	// Overlay/Autoclicker.h). Its worker calls wlserver_mousebutton(), which
+	// reaches wlserver_dispatch_mouse_button() and so lands right here --
+	// a synthetic click really does re-enter the keybind engine. With the
+	// autoclicker's chord bound to LMB and its button set to Left, every
+	// click it emits would re-fire (or, in toggle mode, cancel) the action
+	// that is emitting them.
+	//
+	// Returning BEFORE s_setHeldButtonSyms is touched is the whole guard,
+	// and it has to be before: leaving a synthetic press in the held set
+	// would let it complete somebody else's chord on the next real key.
+	// Chosen over calling a lower entry point because there is no lower
+	// entry point to call -- the game-path notify is inline in
+	// wlserver_dispatch_mouse_button() together with the forwarded-button
+	// bookkeeping and the crosshair hook, so bypassing this function would
+	// mean duplicating all three. Two lines here, or a second copy of that
+	// branch that has to be kept in step forever.
+	if ( gamescope::Autoclicker_IsInjecting() )
+		return false;
+
 	const xkb_keysym_t uSym = gamescope::keybinds::ButtonKeysym( uLinuxButton );
 	if ( uSym == XKB_KEY_NoSymbol )
 		return false;

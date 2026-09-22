@@ -240,6 +240,18 @@ namespace gamescope::config
                 z.fade_ms = JGetInt( *pZoom, "fade_ms", z.fade_ms );
             }
 
+            // The autoclicker (2026-09-18). Same shape as the zoom above;
+            // additive, so an older config has no section and keeps the
+            // compiled-in defaults.
+            if ( const nlohmann::json *pAuto = JGetObject( j, "autoclicker" ) )
+            {
+                auto &a = s.autoclicker;
+                a.enabled = JGetBool( *pAuto, "enabled", a.enabled );
+                a.cps = JGetInt( *pAuto, "cps", a.cps );
+                a.mode = JGetString( *pAuto, "mode", a.mode );
+                a.button = JGetString( *pAuto, "button", a.button );
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
@@ -605,6 +617,13 @@ namespace gamescope::config
             jZoom[ "scroll_adjust" ] = z.scroll_adjust;
             jZoom[ "fade_ms" ] = z.fade_ms;
 
+            const auto &ac = s.autoclicker;
+            nlohmann::json jAutoclicker = nlohmann::json::object();
+            jAutoclicker[ "enabled" ] = ac.enabled;
+            jAutoclicker[ "cps" ] = ac.cps;
+            jAutoclicker[ "mode" ] = ac.mode;
+            jAutoclicker[ "button" ] = ac.button;
+
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
             jSaturation[ "strength" ] = s.reshade.saturation.strength;
@@ -694,6 +713,7 @@ namespace gamescope::config
             j[ "fps_display" ] = std::move( jFps );
             j[ "crosshair" ] = std::move( jCross );
             j[ "zoom" ] = std::move( jZoom );
+            j[ "autoclicker" ] = std::move( jAutoclicker );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );

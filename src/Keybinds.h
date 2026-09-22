@@ -61,6 +61,7 @@ namespace gamescope::keybinds
 		Launcher,       // the command palette alone over the game
 		Friends,        // the friends-you-can-join list (src/SteamFriends.h)
 		Zoom,           // the magnifier (src/Overlay/Zoom.h) -- a HELD action, see ActionInfo::bHeld
+		Autoclicker,    // the click train (src/Overlay/Autoclicker.h) -- also HELD
 		Count,
 	};
 

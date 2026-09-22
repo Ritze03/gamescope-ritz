@@ -237,6 +237,23 @@ namespace gamescope::ui
 			Circ( 10.0f, 10.0f, 6.5f ),
 			Line( { 14.8f, 14.8f }, { 21.0f, 21.0f } ) } },
 
+		{ "system.autoclicker", 3, {
+			// A MOUSE SEEN FROM ABOVE with its left button held down: a tall
+			// body, the seam between the two buttons running down from the
+			// top edge, and the left button filled solid. Freehand
+			// (2026-09-18), later than the mockup like the four before it.
+			//
+			// The fill is SPEC 8.0's "only where a fill carries meaning"
+			// again: the whole identity of this area is "a button is being
+			// held", and a solid quarter is what says that at 12 px where a
+			// second outline would just be noise. Read against its nearest
+			// neighbours: audio.mixer is two WIDE rectangles on tracks and
+			// system.hud is three bars on a baseline -- no other glyph is a
+			// single TALL outline with a filled corner inside it.
+			Rect( 7.0f, 2.5f, 17.0f, 21.5f ),
+			Line( { 12.0f, 2.5f }, { 12.0f, 10.0f } ),
+			Bar( 7.0f, 2.5f, 12.0f, 10.0f ) } },
+
 		{ "system.friends", 2, {
 			// A PERSON: a head over a pair of shoulders. Freehand
 			// (2026-09-08), like the crosshair and resolution glyphs before

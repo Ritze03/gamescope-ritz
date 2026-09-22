@@ -56,6 +56,7 @@
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Crosshair.h"
 #include "Overlay/Zoom.h"
+#include "Overlay/Autoclicker.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
 #include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
@@ -855,6 +856,10 @@ namespace gamescope::ui::shell
 			// The zoom (2026-09-14): drawn inside vulkan_composite() as its
 			// own layer, declared here as its own MISC area. See Overlay/Zoom.h.
 			Zoom_RegisterArea( reg );
+			// The autoclicker (2026-09-18): a click train on a chord, its
+			// own MISC area next to the zoom because both are things a
+			// hotkey does to the game. See Overlay/Autoclicker.h.
+			Autoclicker_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
 			// P6. The second content area: version identity + the embedded
 			// CHANGELOG.md. Sits next to Log because both answer a question

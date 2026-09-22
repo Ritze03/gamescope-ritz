@@ -358,6 +358,24 @@ namespace gamescope::config
         int fade_ms = 200;
     };
 
+    // The autoclicker (2026-09-18, this fork's own addition -- see
+    // Overlay/Autoclicker.h): a paced synthetic click train emitted while its
+    // chord (Keybinds, `autoclicker`, Mouse4 by default) is held or toggled.
+    // ADDITIVE, so no schema bump: every field has a compiled-in default, an
+    // older config simply has no "autoclicker" object and resolves to them --
+    // the same precedent ZoomSettings itself set.
+    struct AutoclickerSettings
+    {
+        bool enabled = false;         // master switch, default off -- the chord does nothing until this is on
+        int cps = 10;                 // clicks per second, 1..1000 (Autoclicker.h's kAutoclickerMin/MaxCps)
+        std::string mode = "hold";    // "hold": clicking while the chord is down; "toggle": press to start, press to stop
+        // Which button the GAME receives: "left" | "right" | "middle",
+        // mapped to BTN_LEFT/BTN_RIGHT/BTN_MIDDLE. Deliberately independent
+        // of the chord -- clicking LMB from a Mouse4 chord is the normal
+        // case, not the exception.
+        std::string button = "left";
+    };
+
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
     // 3->4 comment above): the user pointed out this effect behaves like an
     // iPhone "Saturation" slider (a flat multiplier, same relative boost for
@@ -1099,6 +1117,7 @@ namespace gamescope::config
         FpsDisplaySettings fps_display;
         CrosshairSettings crosshair;
         ZoomSettings zoom;
+        AutoclickerSettings autoclicker;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

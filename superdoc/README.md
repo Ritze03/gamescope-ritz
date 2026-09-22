@@ -51,6 +51,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   1 px outline, 1.5–5× level, match-mouse-speed): why it is built inside
   `vulkan_composite()` as layer 1 after the effects and before the upscaler, and the
   held-action / mouse-button rules it added to the keybind engine.
+- [Autoclicker](features/autoclicker.md) — **hidden from the UI, untested**: the
+  hold-or-toggle synthetic click train
+  (1–1000 CPS, left / right / middle, `Mouse4` by default): why the pacing is its own
+  absolute-deadline worker thread rather than the frame loop or a Wayland timer, the
+  feedback-loop guard that keeps a synthetic click out of the keybind engine, and the
+  RAII release that makes a stuck button unreachable.
 
 ### Settings & config
 

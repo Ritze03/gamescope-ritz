@@ -16,6 +16,7 @@
 #include "Config/ConfigManager.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Zoom.h"
+#include "Overlay/Autoclicker.h"
 #include "log.hpp"
 
 using namespace gamescope::config;
@@ -1498,6 +1499,34 @@ TEST_CASE( "Zoom_StepFactor: 0.25 per notch, clamped to 1.5..5.0", "[config]" )
     REQUIRE( Zoom_StepFactor( 1.6f, -1 ) == 1.5f );
     REQUIRE( Zoom_StepFactor( 5.0f, 100 ) == 5.0f );
     REQUIRE( Zoom_StepFactor( 1.5f, -100 ) == 1.5f );
+}
+
+// The autoclicker's pacing arithmetic (Autoclicker_HalfPeriodNs,
+// Overlay/Autoclicker.h, 2026-09-18): pinned for the same reason
+// Zoom_StepFactor above is -- no compositor deps, so it needs no
+// Autoclicker.cpp link at all.
+//
+// It is half a period, not a whole one, because the click has a 50% duty
+// cycle: press, sleep this, release, sleep this. A game that polls button
+// state rather than reading the event stream sees nothing at all if the
+// press and the release land in the same instant.
+TEST_CASE( "Autoclicker_HalfPeriodNs: 500ms/N, N clamped to 1..1000", "[config]" )
+{
+    using gamescope::Autoclicker_HalfPeriodNs;
+
+    REQUIRE( Autoclicker_HalfPeriodNs( 1 ) == 500'000'000ull );
+    REQUIRE( Autoclicker_HalfPeriodNs( 10 ) == 50'000'000ull );
+    REQUIRE( Autoclicker_HalfPeriodNs( 1000 ) == 500'000ull );
+
+    // Clamped at both ends rather than dividing by zero or running away.
+    REQUIRE( Autoclicker_HalfPeriodNs( 0 ) == Autoclicker_HalfPeriodNs( 1 ) );
+    REQUIRE( Autoclicker_HalfPeriodNs( -50 ) == Autoclicker_HalfPeriodNs( 1 ) );
+    REQUIRE( Autoclicker_HalfPeriodNs( 100000 ) == Autoclicker_HalfPeriodNs( 1000 ) );
+
+    // The config's own default is inside the slider's range, so the
+    // compiled-in default never needs clamping to be usable.
+    REQUIRE( Settings{}.autoclicker.cps >= gamescope::kAutoclickerMinCps );
+    REQUIRE( Settings{}.autoclicker.cps <= gamescope::kAutoclickerMaxCps );
 }
 
 // The staged fade's pure arithmetic (Overlay/Zoom.h, 2026-09-16), pinned for
