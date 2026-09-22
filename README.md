@@ -36,6 +36,11 @@ It installs as its own binary, `gamescope-ritz`, side by side with a distro-pack
 
 ## Quick start
 
+> **First time on this machine?** Install the build dependencies first —
+> see **[Dependencies](#dependencies)** for copy-paste commands for Arch and Fedora.
+> `./install.sh` checks them before it builds and names anything missing, so you can
+> also just run it and let it tell you.
+
 ```sh
 # 1. Get the code
 git clone https://github.com/Ritze03/gamescope-ritz.git
@@ -66,6 +71,10 @@ already pointing at the fresh binary):
 Running `./install.sh` with no flags detects whatever state you're in
 (installed or not, symlink or copy, wlroots satisfied or not) and offers
 install/update/remove as a menu instead.
+
+If a build stops on a missing package, that is the dependency check doing its job —
+it prints the exact install command for your distro. [Dependencies](#dependencies)
+lists the same thing up front.
 
 ### Updating
 
