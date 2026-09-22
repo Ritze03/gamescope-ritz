@@ -248,6 +248,22 @@ gcr_build() {
 
 	gcr_meson_configure "$repo_root" "$build_dir" "${opts[@]}"
 
+	# GCR_FORCE_CLEAN=1 (install.sh --force): throw the compiled output away
+	# so the next step genuinely recompiles everything.
+	#
+	# `ninja -t clean` rather than rm -rf on the build dir: it removes exactly
+	# the files ninja produced and leaves the configure results, the fetched
+	# subprojects and the cached compiler checks alone -- so a forced rebuild
+	# costs a compile, not a reconfigure plus re-downloading Catch2 and the
+	# wraps. A tree so broken that the CONFIGURE is wrong is a different
+	# problem, and gcr_meson_configure() above already falls back to a wipe
+	# for that.
+	if [ "${GCR_FORCE_CLEAN:-0}" = "1" ] && [ -f "$build_dir/build.ninja" ]; then
+		gcr_info "--force: cleaning compiled output in $build_dir ..."
+		ninja -C "$build_dir" -t clean >/dev/null || \
+			gcr_warn "ninja -t clean failed; building anyway (it will just be incremental)."
+	fi
+
 	local ninja_args=(-C "$build_dir")
 	[ -n "${GCR_NINJA_JOBS:-}" ] && ninja_args+=(-j "$GCR_NINJA_JOBS")
 	# A list, not one string: the layer is a second default target. Its name

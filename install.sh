@@ -67,6 +67,11 @@
 #                       independent of this repo; --update copies again)
 #   --yes, -y           assume "yes" to all confirmation prompts
 #   --rebuild           (--install) rebuild even if a release binary exists
+#   --force             force a full recompile: throws away the build
+#                       directory's compiled output first, so everything is
+#                       rebuilt even when nothing changed. Use when a build
+#                       looks stale or you want to be certain what you are
+#                       running was built from the tree in front of you.
 #   --prefix DIR        install directory (default: /usr/bin) — override to
 #                       install/remove/update into a scratch prefix, e.g. for
 #                       testing this script without touching the real system
@@ -177,6 +182,8 @@ ACTION=""           # "install", "remove" or "update"; "" = interactive menu
 MODE=""             # "link" or "copy" (--install only)
 GCR_ASSUME_YES=0
 REBUILD=0
+# --force: a full recompile. gcr_build() reads this via GCR_FORCE_CLEAN.
+FORCE_CLEAN=0
 PREFIX_DIR="$GCR_DEFAULT_PREFIX_DIR"
 BUILD_DIR_NAME="$GCR_DEFAULT_BUILD_DIR_NAME"
 RITZ_EXT=""         # "" = ask, "yes", "no" (--with-ritz-extension / --no-ritz-extension)
@@ -187,7 +194,7 @@ RITZ_EXT=""         # "" = ask, "yes", "no" (--with-ritz-extension / --no-ritz-e
 # --no-ritz-extension and the Examples block were documented in the file and
 # unreachable from --help. Corrected here because this line had to be touched
 # anyway (the --extras/--no-extras entries above it are gone).
-print_help() { sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+print_help() { sed -n '2,99p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 set_action() {
 	if [ -n "$ACTION" ] && [ "$ACTION" != "$1" ]; then
@@ -206,6 +213,7 @@ while [ $# -gt 0 ]; do
 		--copy) MODE="copy" ;;
 		--yes|-y) GCR_ASSUME_YES=1 ;;
 		--rebuild) REBUILD=1 ;;
+		--force) FORCE_CLEAN=1 ;;
 		--with-ritz-extension) RITZ_EXT="yes" ;;
 		--no-ritz-extension) RITZ_EXT="no" ;;
 		--prefix) PREFIX_DIR="$2"; shift ;;
@@ -215,6 +223,11 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+
+# One export rather than a flag threaded through every call site: gcr_build()
+# is the single place a build happens, and it is reached from --install,
+# --update and the interactive menu alike.
+[ "$FORCE_CLEAN" = "1" ] && export GCR_FORCE_CLEAN=1
 export GCR_ASSUME_YES
 
 REPO_ROOT=$(gcr_repo_root)

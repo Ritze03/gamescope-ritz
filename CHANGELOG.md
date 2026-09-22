@@ -18,6 +18,8 @@ The newest version below is the one this build reports.
   load, instead of relying on the one your distro's gamescope package provides —
   which on some distros was too old and made every game start and instantly quit.
   Your packaged gamescope keeps using its own and is unaffected.
+- **`./install.sh --force`**: forces a full recompile instead of only rebuilding
+  what changed, for when a build looks stale.
 
 ### Fixed
 - **Install and update find wlroots again**: `install.sh --install` and

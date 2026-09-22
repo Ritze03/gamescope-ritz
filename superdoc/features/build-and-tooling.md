@@ -24,6 +24,16 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
     with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
     a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
+- **`install.sh --force`** forces a full recompile: `gcr_build()` runs `ninja -t clean`
+  after configuring, so everything is rebuilt even when nothing changed. Plumbed as one
+  `export GCR_FORCE_CLEAN=1` after the option parse rather than an argument threaded
+  through every call site, because `gcr_build()` is the single place a build happens and
+  is reached from `--install`, `--update` and the menu alike. *Why `ninja -t clean` and
+  not `rm -rf` the build dir:* it removes exactly what ninja produced (258 files here)
+  and leaves the configure results, fetched subprojects and cached compiler checks
+  alone, so a forced rebuild costs a compile rather than a reconfigure plus re-fetching
+  Catch2 and the wraps. A tree whose *configure* is wrong is a different problem, and
+  `gcr_meson_configure()` already falls back to a wipe for that.
 - **`--update` re-execs itself when the pull changes the installer.** bash has already
   read `install.sh`, and `scripts/gamescope-ritz-common.sh` is sourced at startup —
   *before* the `git pull` — so an update that changes either one would otherwise run the
