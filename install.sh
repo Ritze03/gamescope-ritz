@@ -169,6 +169,10 @@ gcr_check_build_tools() {
 }
 gcr_check_build_tools
 
+# Kept so do_update() can re-exec this script verbatim after a pull that
+# changed it -- see the re-exec note there.
+GCR_ORIGINAL_ARGS=("$@")
+
 ACTION=""           # "install", "remove" or "update"; "" = interactive menu
 MODE=""             # "link" or "copy" (--install only)
 GCR_ASSUME_YES=0
@@ -965,11 +969,34 @@ do_update() {
 		git -C "$REPO_ROOT" status --short >&2
 	fi
 
+	local head_before head_after
+	head_before=$(git -C "$REPO_ROOT" rev-parse HEAD)
+
 	gcr_info "git pull --ff-only (branch $branch) ..."
 	if ! git -C "$REPO_ROOT" pull --ff-only; then
 		gcr_err "git pull failed (conflict, diverged history, or network error)."
 		gcr_err "Nothing was built or installed. Resolve the git state by hand and re-run."
 		exit 1
+	fi
+
+	# RE-EXEC WHEN THE PULL CHANGED THIS SCRIPT OR ITS HELPERS.
+	#
+	# bash has already read this file, and scripts/gamescope-ritz-common.sh
+	# was sourced at startup -- before the pull above. So an update that
+	# changes either of them does NOT take effect on the run that pulls it;
+	# the rest of this run executes the OLD code against the NEW tree.
+	#
+	# Seen for real: the commit that made the WSI layer a default ninja
+	# target was pulled by an --update that then built with the old function
+	# and skipped the layer entirely. It looked like the fix had not worked.
+	#
+	# GCR_REEXECED guards against a loop: the second run cannot pull anything
+	# new, but a broken HEAD comparison must never be able to re-exec forever.
+	head_after=$(git -C "$REPO_ROOT" rev-parse HEAD)
+	if [ "$head_before" != "$head_after" ] && [ -z "${GCR_REEXECED:-}" ]; then
+		gcr_info "the update changed the installer itself — restarting it on the new version."
+		export GCR_REEXECED=1
+		exec "$REPO_ROOT/install.sh" "${GCR_ORIGINAL_ARGS[@]}"
 	fi
 
 	run_dependency_checks fatal "$BUILD_DIR"

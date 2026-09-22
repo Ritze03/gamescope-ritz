@@ -24,6 +24,14 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
     with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
     a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
+- **`--update` re-execs itself when the pull changes the installer.** bash has already
+  read `install.sh`, and `scripts/gamescope-ritz-common.sh` is sourced at startup —
+  *before* the `git pull` — so an update that changes either one would otherwise run the
+  **old** code against the **new** tree for the rest of that run. Seen for real: the
+  commit making the WSI layer a default ninja target was pulled by an `--update` that
+  then built with the previous `gcr_build()` and skipped the layer, so the fix looked
+  like it had not worked. `do_update()` compares HEAD before and after the pull and
+  `exec`s itself with the original argv; `GCR_REEXECED` guards against a loop.
 - **This fork installs its OWN Vulkan WSI layer, under its own name** (2026-09-22).
   `layer/meson.build` builds `libVkLayer_RITZ_gamescope_wsi_<family>.so` with the layer
   name `VK_LAYER_RITZ_gamescope_wsi_<family>`, activated by
