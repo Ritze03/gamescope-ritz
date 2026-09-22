@@ -24,6 +24,31 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
     with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
     a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
+- **`install.sh` gates on the hard dependencies before meson runs**
+  (`gcr_hard_pkgconfig_modules` / `gcr_check_pkgconfig_deps`, 2026-09-22). It scrapes
+  every `dependency('...')` in `meson.build`, `src/meson.build`, `protocol/meson.build`
+  and `layer/meson.build`, drops the ones gated by `required: false` or
+  `required: get_option(...)`, and checks the rest with pkg-config. *Why scraped, not a
+  hardcoded list:* a hand-kept copy drifts from meson.build and then lies — the same
+  reasoning as the wlroots check above.
+  - Three names are excluded by hand: `threads` (a meson builtin), `openvr_api` (a
+    subproject dependency object) and `vkroots` (pinned to the vendored copy by
+    `force_fallback_for`). `wlroots-*` is excluded too, having its own multi-version
+    check.
+  - *Why `required: true` must NOT be treated as optional:* `src/meson.build`'s
+    `libinput` says it out loud, and a filter that drops every line matching "required"
+    silently skips it. `dependency( 'luajit' )`'s space after the paren is the matching
+    trap on the regex side. Both were live gaps in the first cut.
+  - *Why it exists:* without it the failure lands hundreds of lines into `meson setup`.
+    A real report (Fedora 44) died at `protocol/meson.build:7` with
+    "Neither a subproject directory nor a wayland-protocols.wrap file was found" —
+    after a full compiler probe and an openvr cmake configure — which reads like a build
+    bug rather than a missing package.
+  - On Fedora/RHEL the hint is exact, because dnf resolves `pkgconfig(foo)` virtual
+    provides: the module name *is* the package name, so no lookup table is needed.
+    pacman and apt get a file-search command instead. *Why no module→package map:* three
+    distro tables is exactly the kind of thing that rots; the search command answers the
+    same question and stays true on its own.
 - **The embedded version can go stale, and the scripts are what prevent it.**
   `src/meson.build` derives `k_szRitzCommit` / `k_szRitzPatchDate` with `run_command()`
   feeding a `configure_file()`; both run at *configure* time, and meson re-runs configure

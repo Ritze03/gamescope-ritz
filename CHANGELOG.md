@@ -21,6 +21,9 @@ The newest version below is the one this build reports.
   their dependency check with a nonsense package name.
 - **Builds report the commit they were built from**: the build scripts now print
   the version the binary carries and warn when it has gone stale.
+- **Missing build dependencies are named up front**: install and update now check
+  for them before starting and tell you exactly what to install, instead of
+  failing part-way through the build.
 
 ## [0.8.3] – 2026-09-17
 

@@ -310,6 +310,104 @@ run_wlroots_check() {
 	fi
 }
 
+# --- hard pkg-config dependency check ---------------------------------------
+# wlroots gets its own check above because it has several acceptable versions
+# and a vendored fallback. Everything here is the opposite: a flat list of
+# pkg-config modules meson has no fallback for, so a missing one is a hard
+# stop. Without this the failure lands hundreds of lines into `meson setup`
+# (a real report: wayland-protocols missing on Fedora 44 failed at
+# protocol/meson.build:7 after a full compiler probe and an openvr cmake
+# configure), which reads like a build bug rather than a missing package.
+#
+# The list is SCRAPED, not hardcoded, for the same reason the wlroots check
+# scrapes: a hand-kept copy drifts from meson.build and then lies. A
+# dependency() whose line carries `required` is gated by a meson option or is
+# optional, so it is not a hard stop and is skipped.
+gcr_hard_pkgconfig_modules() {
+	local repo_root="$1" f mod
+	for f in meson.build src/meson.build protocol/meson.build layer/meson.build; do
+		[ -f "$repo_root/$f" ] || continue
+		# Only `required: false` and `required: get_option(...)` mean optional.
+		# `required: true` is a HARD dependency that happens to say so out loud
+		# (src/meson.build's libinput), and dropping every line matching
+		# "required" would silently skip it. The [ ]* allows `dependency( 'x' )`.
+		grep -hE "dependency\([ ]*'[a-zA-Z0-9._-]+'" "$repo_root/$f" \
+			| grep -vE "required[ ]*:[ ]*(false|get_option)"
+	done \
+		| grep -oE "dependency\([ ]*'[a-zA-Z0-9._-]+'" | sed "s/dependency([ ]*'//; s/'//" \
+		| while IFS= read -r mod; do
+			case "$mod" in
+				# Not pkg-config modules: a meson builtin, a subproject
+				# dependency object, and one that force_fallback_for pins to
+				# the vendored copy no matter what the system has.
+				threads|openvr_api|vkroots) ;;
+				# wlroots has its own multi-version check above.
+				wlroots-*) ;;
+				*) printf '%s\n' "$mod" ;;
+			esac
+		done | sort -u
+}
+
+# Print the distro-appropriate command for installing the missing modules.
+# Fedora/RHEL is exact: dnf resolves `pkgconfig(foo)` virtual provides, so the
+# pkg-config module name IS the package name and no lookup table is needed.
+# ponytail: no module->package map for the others. Maintaining one for three
+# distros is exactly the kind of table that rots; the file-search command
+# below answers the same question and stays true on its own.
+gcr_pkgconfig_install_hint() {
+	local mods=("$@") m out=""
+	if command -v dnf >/dev/null 2>&1; then
+		for m in "${mods[@]}"; do out="$out 'pkgconfig($m)'"; done
+		printf 'sudo dnf install%s' "$out"
+	elif command -v pacman >/dev/null 2>&1; then
+		for m in "${mods[@]}"; do out="$out /usr/lib/pkgconfig/$m.pc"; done
+		printf 'find the packages with: pacman -F%s' "$out"
+	elif command -v apt-get >/dev/null 2>&1; then
+		for m in "${mods[@]}"; do out="$out $m.pc"; done
+		printf 'find the packages with: apt-file search%s' "$out"
+	else
+		printf 'install whatever your distro calls the -dev/-devel packages providing those modules'
+	fi
+}
+
+gcr_check_pkgconfig_deps() {
+	local repo_root="$1" mod missing=()
+
+	if ! command -v pkg-config >/dev/null 2>&1; then
+		gcr_err "'pkg-config' is not installed, so the build's dependencies cannot be checked."
+		return 1
+	fi
+
+	while IFS= read -r mod; do
+		[ -n "$mod" ] || continue
+		pkg-config --exists "$mod" 2>/dev/null || missing+=("$mod")
+	done < <(gcr_hard_pkgconfig_modules "$repo_root")
+
+	[ "${#missing[@]}" = "0" ] && return 0
+
+	gcr_err "missing required development package(s) — pkg-config cannot find: ${missing[*]}"
+	gcr_err "$(gcr_pkgconfig_install_hint "${missing[@]}")"
+	return 1
+}
+
+run_pkgconfig_check() {
+	# $1: "fatal" (about to build) or "info" (just reporting).
+	local when="$1"
+	gcr_info "checking build dependencies..."
+	if gcr_check_pkgconfig_deps "$REPO_ROOT"; then
+		gcr_info "build dependencies: all present."
+	elif [ "$when" = "fatal" ]; then
+		exit 1
+	fi
+}
+
+# Every pre-build dependency gate, in one call so the two build sites cannot
+# drift apart on which checks they run.
+run_dependency_checks() {
+	run_pkgconfig_check "$1"
+	run_wlroots_check "$1"
+}
+
 # --- state detection (used by the interactive menu, and by --update) --------
 target_state() {
 	if [ -L "$TARGET" ]; then
@@ -465,7 +563,7 @@ do_install() {
 
 	local release_bin; release_bin=$(gcr_release_binary "$BUILD_DIR")
 	if [ ! -x "$release_bin" ] || [ "$REBUILD" = "1" ]; then
-		run_wlroots_check fatal
+		run_dependency_checks fatal
 		if [ ! -x "$release_bin" ]; then
 			gcr_info "no release build found at $release_bin — building one now."
 		else
@@ -473,7 +571,7 @@ do_install() {
 		fi
 		gcr_build_release "$REPO_ROOT" "$BUILD_DIR"
 	else
-		run_wlroots_check info
+		run_dependency_checks info
 		gcr_info "found existing release build: $release_bin (pass --rebuild to force a rebuild)"
 	fi
 
@@ -622,7 +720,7 @@ do_update() {
 		exit 1
 	fi
 
-	run_wlroots_check fatal
+	run_dependency_checks fatal
 
 	local build_dir
 	if [ "$install_mode" = "symlink" ]; then
