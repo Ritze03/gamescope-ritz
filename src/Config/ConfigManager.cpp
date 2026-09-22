@@ -238,6 +238,7 @@ namespace gamescope::config
                 z.consume_button = JGetBool( *pZoom, "consume_button", z.consume_button );
                 z.scroll_adjust = JGetBool( *pZoom, "scroll_adjust", z.scroll_adjust );
                 z.fade_ms = JGetInt( *pZoom, "fade_ms", z.fade_ms );
+                z.sharpen = std::clamp( JGetFloat( *pZoom, "sharpen", z.sharpen ), 0.0f, 1.0f );
             }
 
             // The autoclicker (2026-09-18). Same shape as the zoom above;
@@ -616,6 +617,7 @@ namespace gamescope::config
             jZoom[ "consume_button" ] = z.consume_button;
             jZoom[ "scroll_adjust" ] = z.scroll_adjust;
             jZoom[ "fade_ms" ] = z.fade_ms;
+            jZoom[ "sharpen" ] = z.sharpen;
 
             const auto &ac = s.autoclicker;
             nlohmann::json jAutoclicker = nlohmann::json::object();

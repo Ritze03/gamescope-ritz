@@ -356,6 +356,15 @@ namespace gamescope::config
         // 0 means instant, exactly the pre-2026-09-16 behaviour. A release
         // plays the same thing backwards from wherever it had got to.
         int fade_ms = 200;
+        // "Sharpen" (2026-09-22): FSR1 RCAS applied to the projector's own
+        // picture only, so the magnified area looks less blurry than a
+        // plain bilinear fetch leaves it. 0..1, default 0 (off, and
+        // byte-identical to the pre-2026-09-22 shader). Scaled to RCAS's
+        // con.x by ZoomPushData_t::SharpenConX (rendervulkan.cpp), and
+        // scaled again, per frame, by the fade ramp (Overlay/Zoom.h's
+        // Zoom_SharpenRamp) so it never applies while the fade's first
+        // phase is still pinned at exactly 1.0x magnification.
+        float sharpen = 0.0f;
     };
 
     // The autoclicker (2026-09-18, this fork's own addition -- see

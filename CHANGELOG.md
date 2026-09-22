@@ -26,6 +26,8 @@ The newest version below is the one this build reports.
 - **Set the zoom and autoclicker keys in their own tabs**: the Zoom and Autoclicker
   pages now let you rebind their hotkey directly, and the change also shows under
   Keybinds.
+- **Zoom sharpening**: a new Sharpen slider in the Zoom settings sharpens the
+  magnified picture inside the projector, so zoomed-in content looks less blurry.
 
 ### Fixed
 - **Install and update find wlroots again**: `install.sh --install` and

@@ -1463,6 +1463,7 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     s.zoom.consume_button = true;
     s.zoom.scroll_adjust = true;
     s.zoom.fade_ms = 350;
+    s.zoom.sharpen = 0.65f;
     REQUIRE( SaveSections( s ) );
 
     const Settings loaded = LoadSections();
@@ -1477,9 +1478,11 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     REQUIRE( loaded.zoom.consume_button == true );
     REQUIRE( loaded.zoom.scroll_adjust == true );
     REQUIRE( loaded.zoom.fade_ms == 350 );
+    REQUIRE( loaded.zoom.sharpen == 0.65f );
 
     REQUIRE( Settings{}.zoom.consume_button == false );
     REQUIRE( Settings{}.zoom.scroll_adjust == false );
+    REQUIRE( Settings{}.zoom.sharpen == 0.0f );
 }
 
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
@@ -1499,6 +1502,29 @@ TEST_CASE( "Zoom_StepFactor: 0.25 per notch, clamped to 1.5..5.0", "[config]" )
     REQUIRE( Zoom_StepFactor( 1.6f, -1 ) == 1.5f );
     REQUIRE( Zoom_StepFactor( 5.0f, 100 ) == 5.0f );
     REQUIRE( Zoom_StepFactor( 1.5f, -100 ) == 1.5f );
+}
+
+// zoom.sharpen's ramp (Zoom_SharpenRamp, Overlay/Zoom.h, 2026-09-22): 0 for
+// as long as the fade's phase 1 holds the current factor at 1.0, 1 once the
+// current factor reaches the target, and safe (0, no division by zero) when
+// the target itself is not actually magnified. No compositor deps, as
+// Zoom_StepFactor above.
+TEST_CASE( "Zoom_SharpenRamp: 0 at factor 1.0, 1 at target, linear between", "[config]" )
+{
+    using gamescope::Zoom_SharpenRamp;
+
+    REQUIRE( Zoom_SharpenRamp( 1.0f, 3.0f ) == 0.0f );
+    REQUIRE( Zoom_SharpenRamp( 2.0f, 3.0f ) == 0.5f );
+    REQUIRE( Zoom_SharpenRamp( 3.0f, 3.0f ) == 1.0f );
+
+    // Clamped, not extrapolated, past either end.
+    REQUIRE( Zoom_SharpenRamp( 0.5f, 3.0f ) == 0.0f );
+    REQUIRE( Zoom_SharpenRamp( 4.0f, 3.0f ) == 1.0f );
+
+    // A target at or below 1.0 is never actually magnified -- no division
+    // by zero, and no sharpening either.
+    REQUIRE( Zoom_SharpenRamp( 1.0f, 1.0f ) == 0.0f );
+    REQUIRE( Zoom_SharpenRamp( 1.0f, 0.5f ) == 0.0f );
 }
 
 // The autoclicker's pacing arithmetic (Autoclicker_HalfPeriodNs,

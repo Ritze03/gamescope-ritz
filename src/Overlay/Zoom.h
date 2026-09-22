@@ -121,4 +121,26 @@ namespace gamescope
 		const float t = std::clamp( ( flProgress - kZoomFadeSplit ) / ( 1.0f - kZoomFadeSplit ), 0.0f, 1.0f );
 		return 1.0f + ( flFactor - 1.0f ) * t;
 	}
+
+	// ---- sharpen (2026-09-22) ------------------------------------------
+	// The Sharpen slider (zoom.sharpen) has to be scaled to 0 for as long
+	// as the fade's phase 1 holds the picture at exactly 1.0x -- that phase
+	// is a measured, documented guarantee (zoom.md's fade-identity
+	// invariant) that the projector is byte-identical to the unzoomed
+	// frame beneath it, and sharpening at 1.0x (where RCAS's 5-tap cross
+	// samples the SAME texel five times, since u_srcPerDst is source texels
+	// per output pixel and at 1.0x that is one texel per pixel) would still
+	// perturb rounding at the shape's own edges and break it. So the ramp
+	// rides the SAME progress as the magnification: 0 while flCurFactor is
+	// still 1.0, 1 once it reaches flTargetFactor, in between exactly the
+	// magnification's own fraction of the way there -- the two finish
+	// together at the top of the fade instead of disagreeing about when
+	// the picture is "fully zoomed". Pure, so it needs no Zoom.cpp link, as
+	// the fade helpers above do not.
+	inline float Zoom_SharpenRamp( float flCurFactor, float flTargetFactor )
+	{
+		if ( flTargetFactor <= 1.0f )
+			return 0.0f;
+		return std::clamp( ( flCurFactor - 1.0f ) / ( flTargetFactor - 1.0f ), 0.0f, 1.0f );
+	}
 }

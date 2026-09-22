@@ -15,6 +15,22 @@
 // distance is exact, a circle's is exact when it is a circle (the host
 // makes the circle's texture square), and the ellipse a non-square would
 // give is close enough for a 1 px ring.
+//
+// SHARPEN (2026-09-22, zoom.sharpen, superdoc/features/zoom.md's "Sharpen"
+// section) -- the user: "add an option to add a sharpening filter on top of
+// the projector area only, so the zoom content doesn't look as blurry as it
+// does right now." Bilinear magnification is what blurs the projector (one
+// hardware-filtered fetch per output pixel, softer the higher u_srcPerDst
+// goes), so this reuses FSR1 RCAS exactly as the Shaders area's Pre-Sharpen
+// effect does (cs_effects_layer0.comp) -- clip-limited so it cannot ring
+// past the local min/max the way a plain unsharp mask can. The one
+// difference from that effect: RCAS's 5-tap cross has to be spaced in
+// PROJECTOR-pixel space, not source-texel space, because the blur being
+// fixed lives at the magnified scale -- FsrRcasLoadF below is main()'s own
+// d -> uv mapping, parameterised on an arbitrary tap instead of the
+// invocation's own pixel. u_sharpenCon == 0u (off) branches around RCAS
+// entirely, so the shader is byte-identical to before this feature existed
+// whenever the slider is at its default.
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_scalar_block_layout : require
@@ -34,7 +50,28 @@ uniform zoom_t {
     uvec2 u_size;        // the projection, pixels
     uint  u_circle;
     uint  u_outlinePx;
+    uint  u_sharpenCon;  // RCAS con.x, floatBitsToUint; 0u (bits of 0.0) = off
 };
+
+// RCAS con.x is 0 (0.0's own bit pattern) to mean off, so the check below
+// costs nothing and the branch it guards is never taken at the default.
+#define A_GPU 1
+#define A_GLSL 1
+#include "ffx_a.h"
+#define FSR_RCAS_F 1
+vec4 FsrRcasLoadF(ivec2 tap)
+{
+    // main()'s own d -> uv mapping, for an arbitrary projector-pixel tap
+    // instead of gl_GlobalInvocationID -- so RCAS's cross taps are one
+    // MAGNIFIED pixel apart in output space, the scale the blur lives at.
+    vec2 td = vec2(tap) + 0.5 - vec2(u_size) * 0.5;
+    vec2 tuv = (u_srcCenter + td * u_srcPerDst) / vec2(textureSize(s_samplers[0], 0));
+    return vec4(textureLod(s_samplers[0], tuv, 0).rgb, 1.0);
+}
+// Input is already sRGB-encoded (see the file header) -- same as
+// cs_effects_layer0.comp, no transform.
+void FsrRcasInputF(inout float r, inout float g, inout float b) {}
+#include "ffx_fsr1.h"
 
 void main()
 {
@@ -57,8 +94,20 @@ void main()
     float inside = clamp(0.5 - edge, 0.0, 1.0);                         // coverage of the shape
     float fill   = clamp(0.5 - (edge + float(u_outlinePx)), 0.0, 1.0);  // coverage of the picture inside the ring
 
-    vec2 uv = (u_srcCenter + d * u_srcPerDst) / vec2(textureSize(s_samplers[0], 0));
-    vec3 rgb = textureLod(s_samplers[0], uv, 0).rgb;
+    // Sharpen applied BEFORE fill/alpha, so the ring's own antialiasing and
+    // the outline are untouched by it -- only the picture inside is ever
+    // fed through RCAS. When off, this is byte-for-byte the pre-2026-09-22
+    // fetch: the branch is not a no-op RCAS call, it is skipped entirely.
+    vec3 rgb;
+    if (u_sharpenCon != 0u)
+    {
+        FsrRcasF(rgb.r, rgb.g, rgb.b, p, uvec4(u_sharpenCon, 0u, 0u, 0u));
+    }
+    else
+    {
+        vec2 uv = (u_srcCenter + d * u_srcPerDst) / vec2(textureSize(s_samplers[0], 0));
+        rgb = textureLod(s_samplers[0], uv, 0).rgb;
+    }
 
     imageStore(dst, ivec2(p), vec4(rgb * fill, inside));
 }
