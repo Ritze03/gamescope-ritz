@@ -11,6 +11,31 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
   subprojects are pulled in at specific forked/patched commits Gamescope depends on, so
   Meson silently falling back to a system package would be a correctness bug, not just a
   packaging inconvenience.
+- **wlroots is probed in three steps** (`src/meson.build`, 2026-09-22): a system
+  `wlroots-0.20`, then a system `wlroots-0.19`, then the pinned submodule (0.20.2) as
+  meson's `fallback:`. *Why three separate `dependency()` calls* rather than
+  `dependency()`'s multi-name form: the two minors need different version ranges, and
+  the multi-name form needs meson >= 0.60 while this project declares >= 0.58. 0.19 is
+  **system-only** — there is no second wrap, and none is worth adding until something
+  actually needs to build 0.19 from source.
+  - `install.sh`'s pre-flight check (`gcr_wlroots_candidates` / `gcr_check_wlroots`)
+    scrapes those probes out of `src/meson.build` so it cannot drift from what the build
+    really asks for, and accepts the first module pkg-config satisfies — the same order
+    meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
+    with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
+    a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
+- **The embedded version can go stale, and the scripts are what prevent it.**
+  `src/meson.build` derives `k_szRitzCommit` / `k_szRitzPatchDate` with `run_command()`
+  feeding a `configure_file()`; both run at *configure* time, and meson re-runs configure
+  only when a `meson.build` changes — git HEAD moving is invisible to it. Every script
+  here funnels through `gcr_build()`, which always calls `gcr_meson_configure()`
+  (`meson setup --reconfigure`), so a scripted build always re-reads git. A bare
+  `ninja -C <dir>` in a hand-made build directory does **not**, and silently produces a
+  binary reporting an old commit. `gcr_report_version()` prints the embedded version
+  after every scripted build and warns when it disagrees with HEAD, which turns that
+  silent case into a visible one. *Why not fix it in meson:* `vcs_tag()` /
+  `build_always_stale` would, but no supported path is affected — see the `ponytail:`
+  note on that function for the upgrade path.
 - All boolean/feature options live in `meson_options.txt` (11 options total, read
   directly):
   | Option | Type | Meaning |

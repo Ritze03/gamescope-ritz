@@ -260,6 +260,47 @@ gcr_build() {
 		gcr_info "building (${nice_cmd[*]} ninja ${ninja_args[*]})..."
 		"${nice_cmd[@]}" ninja "${ninja_args[@]}"
 	fi
+
+	GCR_REPO_ROOT_FOR_VERSION="$repo_root"
+	gcr_report_version "$build_dir"
+}
+
+# Report the version identity the binary just got, and shout if it went stale.
+#
+# src/meson.build derives k_szRitzCommit/k_szRitzPatchDate with run_command()
+# feeding a configure_file(), which both run at CONFIGURE time. Meson only
+# re-runs configure when a meson.build changes -- git HEAD moving is invisible
+# to it. Every script here funnels through gcr_build(), which always calls
+# gcr_meson_configure() (meson setup --reconfigure), so the embedded version is
+# regenerated on every scripted build and this is only ever a confirmation.
+#
+# It is worth printing anyway because the ONE path that does go stale -- a bare
+# `ninja -C <dir>` in a hand-made build directory -- is silent otherwise: the
+# binary reports an old commit and nothing says so. This turns that into a
+# visible warning the moment the tree is next built properly.
+# ponytail: a printed check, not a meson fix. If bare-ninja staleness ever
+# matters for real, the fix is vcs_tag()/build_always_stale in src/meson.build.
+gcr_report_version() {
+	# Two statements, not one `local a=.. b="$a/.."`: the local builtin expands
+	# every word BEFORE assigning any of them, so $build_dir would still be
+	# unset there and `set -u` would abort. It only looked fine when called
+	# from gcr_build(), whose own local of the same name dynamic-scoping found.
+	local build_dir="$1"
+	local header="$build_dir/src/RitzVersion.h"
+	[ -f "$header" ] || return 0
+
+	local embedded_commit embedded_date head_commit
+	embedded_commit=$(sed -n 's/.*k_szRitzCommit\[\] = "\([^"]*\)".*/\1/p' "$header")
+	embedded_date=$(sed -n 's/.*k_szRitzPatchDate\[\] = "\([^"]*\)".*/\1/p' "$header")
+	[ -n "$embedded_commit" ] || return 0
+
+	gcr_info "version:    $embedded_commit ($embedded_date)"
+
+	head_commit=$(git -C "$GCR_REPO_ROOT_FOR_VERSION" rev-parse --short HEAD 2>/dev/null || true)
+	if [ -n "$head_commit" ] && [ "$head_commit" != "$embedded_commit" ]; then
+		gcr_warn "the built binary reports commit $embedded_commit but this tree is at $head_commit."
+		gcr_warn "run this script (not a bare 'ninja') so meson reconfigures and re-reads git."
+	fi
 }
 
 # Back-compat wrapper: the release build exactly as install/update need it.

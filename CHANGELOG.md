@@ -15,6 +15,13 @@ The newest version below is the one this build reports.
 - **wlroots 0.19 support**: gamescope-ritz now builds against a system wlroots 0.19
   install, in addition to the previously supported wlroots 0.20.
 
+### Fixed
+- **Install and update find wlroots again**: `install.sh --install` and
+  `install.sh --update` now recognise either wlroots version instead of failing
+  their dependency check with a nonsense package name.
+- **Builds report the commit they were built from**: the build scripts now print
+  the version the binary carries and warn when it has gone stale.
+
 ## [0.8.3] – 2026-09-17
 
 ### Fixed

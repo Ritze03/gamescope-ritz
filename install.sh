@@ -172,63 +172,115 @@ TARGET="$PREFIX_DIR/$GCR_BIN_NAME"
 gcr_check_target_safety "$TARGET"
 
 # --- wlroots dependency check ------------------------------------------------
-# Reads the pkg-config module name and version constraints straight out of
-# src/meson.build's `wlroots_dep = dependency(...)` call, so this can't drift
-# from what the build actually asks for. Sets GCR_WLROOTS_STATE to one of
-# "ok" (system package satisfies it), "vendored-fallback" (not satisfied, but
-# meson's own fallback subproject is checked out and will be built instead —
-# not a failure) or "fail" (neither available — must not proceed to a build).
-# GCR_WLROOTS_MSG is the human-readable status/explanation to print.
-gcr_wlroots_pc_module() {
-	awk '/wlroots_dep[ \t]*=[ \t]*dependency\(/ { getline; gsub(/[ \t,\x27]/, ""); print; exit }' \
-		"$1/src/meson.build" 2>/dev/null
-}
+# Reads the pkg-config module names and version constraints straight out of
+# src/meson.build's `wlroots_dep = dependency(...)` probes, so this can't drift
+# from what the build actually asks for. Since 2026-09-22 there is more than
+# one probe (system 0.20, then system 0.19, then the vendored fallback), so
+# this enumerates ALL of them and accepts the first one pkg-config satisfies --
+# exactly the order meson itself tries them in.
+#
+# Sets GCR_WLROOTS_STATE to one of "ok" (a system package satisfies it),
+# "vendored-fallback" (none did, but meson's own fallback subproject is checked
+# out and will be built instead -- not a failure) or "fail" (neither available
+# -- must not proceed to a build). GCR_WLROOTS_MSG is the human-readable
+# status/explanation to print.
 
-gcr_wlroots_pc_constraints() {
-	# One bare constraint per line, e.g. ">= 0.20.0"
-	local meson_file="$1/src/meson.build"
-	awk '/wlroots_dep[ \t]*=[ \t]*dependency\(/ { f=1 } f && /version:/ { print; exit }' "$meson_file" 2>/dev/null \
-		| grep -oE "'[^']+'" | tr -d "'"
+# Every wlroots probe src/meson.build makes, in the order meson tries them, one
+# per line as "module<TAB>constraint,constraint" (constraints may be empty).
+#
+# Newlines are flattened to spaces FIRST so that both spellings parse: the
+# one-line `dependency('wlroots-0.20', version: [...], required: false)` and
+# the multi-line fallback block. Scraping line-by-line is what broke when the
+# 0.19 probe landed -- the old awk did `getline` and read `if not
+# wlroots_dep.found()` as the module name.
+#
+# `[^)]*` stops each chunk at its own closing paren, which is safe because no
+# wlroots probe contains a nested `(`. The only quoted strings inside a chunk
+# that start with a comparison operator are the version constraints, so
+# grepping for those needs no position tracking.
+gcr_wlroots_candidates() {
+	local chunk mod cons seen=""
+	while IFS= read -r chunk; do
+		mod=$(printf '%s' "$chunk" | grep -oE "wlroots-[0-9]+\.[0-9]+" | head -n1)
+		[ -n "$mod" ] || continue
+		# The vendored fallback repeats a module already probed; one line each.
+		case " $seen " in *" $mod "*) continue ;; esac
+		seen="$seen $mod"
+		cons=$(printf '%s' "$chunk" | grep -oE "'(>=|<=|==|!=|>|<)[^']*'" | tr -d "'" | paste -sd, -)
+		printf '%s\t%s\n' "$mod" "$cons"
+	done < <(tr '\n' ' ' < "$1/src/meson.build" 2>/dev/null \
+		| grep -oE "dependency\([ ]*'wlroots-[0-9]+\.[0-9]+'[^)]*")
 }
 
 gcr_check_wlroots() {
-	local repo_root="$1" module constraints=() c args=() line ver
+	local repo_root="$1" line mod cons c args need ver tried=()
 
-	module=$(gcr_wlroots_pc_module "$repo_root")
-	[ -n "$module" ] || module="wlroots-0.20"   # meson.build changed shape; degrade gracefully
-
-	while IFS= read -r c; do
-		[ -n "$c" ] && constraints+=("$c") && args+=("$module $c")
-	done < <(gcr_wlroots_pc_constraints "$repo_root")
-	[ "${#args[@]}" -gt 0 ] || args=("$module")
-	local need; need=$(IFS=', '; printf '%s' "${constraints[*]:-any version}")
-
-	if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists "${args[@]}"; then
-		ver=$(pkg-config --modversion "$module" 2>/dev/null || true)
-		GCR_WLROOTS_STATE="ok"
-		GCR_WLROOTS_MSG="OK — pkg-config finds '$module'${ver:+ ($ver)}, satisfying $need."
+	if ! command -v pkg-config >/dev/null 2>&1; then
+		GCR_WLROOTS_STATE="fail"
+		GCR_WLROOTS_MSG="'pkg-config' itself is not installed, so this cannot even check. Install pkg-config (or pkgconf) first."
+		[ -f "$repo_root/subprojects/wlroots/meson.build" ] || return 1
+		GCR_WLROOTS_STATE="vendored-fallback"
 		return 0
 	fi
 
-	local howto
-	if ! command -v pkg-config >/dev/null 2>&1; then
-		howto="'pkg-config' itself is not installed, so this cannot even check. Install pkg-config (or pkgconf) first."
-	elif command -v pacman >/dev/null 2>&1; then
-		if pacman -Q wlroots0.20 >/dev/null 2>&1; then
-			local pv; pv=$(pacman -Q wlroots0.20 2>/dev/null | awk '{print $2}')
-			howto="pacman shows wlroots0.20 ($pv) installed, but pkg-config cannot find '$module' satisfying $need. Check PKG_CONFIG_PATH/PKG_CONFIG_LIBDIR, and that the installed .pc file's Version actually falls in that range."
-		elif pacman -Si wlroots0.20 >/dev/null 2>&1; then
-			howto="not installed — install it with: sudo pacman -S wlroots0.20"
+	while IFS=$'\t' read -r mod cons; do
+		[ -n "$mod" ] || continue
+		args=()
+		if [ -n "$cons" ]; then
+			# "a,b" -> pkg-config args "mod a" "mod b"
+			local IFS_SAVE="$IFS"; IFS=','
+			for c in $cons; do args+=("$mod $c"); done
+			IFS="$IFS_SAVE"
+			need="$mod ($(printf '%s' "$cons" | tr ',' ' '))"
 		else
-			howto="not installed, and 'wlroots0.20' isn't in your configured pacman repos — check the AUR, or see the vendored-fallback note below."
+			args=("$mod")
+			need="$mod (any version)"
+		fi
+		tried+=("$need")
+
+		if pkg-config --exists "${args[@]}" 2>/dev/null; then
+			ver=$(pkg-config --modversion "$mod" 2>/dev/null || true)
+			GCR_WLROOTS_STATE="ok"
+			GCR_WLROOTS_MSG="OK — pkg-config finds '$mod'${ver:+ ($ver)}; the build will use it."
+			return 0
+		fi
+	done < <(gcr_wlroots_candidates "$repo_root")
+
+	if [ "${#tried[@]}" = "0" ]; then
+		# meson.build changed shape and nothing parsed; degrade gracefully
+		# rather than claiming the dependency is missing.
+		tried=("wlroots-0.20" "wlroots-0.19")
+	fi
+
+	local howto="none of the wlroots versions this build accepts were found by pkg-config.
+    Tried, in the order meson does: $(printf '%s; ' "${tried[@]}")"
+	if command -v pacman >/dev/null 2>&1; then
+		local pkg pv installed=""
+		for pkg in wlroots0.20 wlroots0.19; do
+			if pacman -Q "$pkg" >/dev/null 2>&1; then
+				pv=$(pacman -Q "$pkg" 2>/dev/null | awk '{print $2}')
+				installed="$installed $pkg ($pv)"
+			fi
+		done
+		if [ -n "$installed" ]; then
+			howto="$howto
+    pacman shows$installed installed, but pkg-config cannot see a matching
+    module. Check PKG_CONFIG_PATH/PKG_CONFIG_LIBDIR, and that the installed
+    .pc file's Version really falls in the range above."
+		else
+			howto="$howto
+    Install one with: sudo pacman -S wlroots0.20   (or wlroots0.19)"
 		fi
 	else
-		howto="pkg-config cannot find '$module' satisfying $need. This script only knows the Arch/CachyOS package name (wlroots0.20 via pacman); on other distros, install whatever package provides a wlroots 0.20.x pkg-config file (module name '$module') through your own package manager."
+		howto="$howto
+    This script only knows the Arch/CachyOS package names (wlroots0.20 /
+    wlroots0.19 via pacman); on another distro install whatever package
+    provides one of those pkg-config modules."
 	fi
 
 	if [ -f "$repo_root/subprojects/wlroots/meson.build" ]; then
 		GCR_WLROOTS_STATE="vendored-fallback"
-		GCR_WLROOTS_MSG="system package $howto
+		GCR_WLROOTS_MSG="$howto
     Not a failure: this repo's vendored copy (subprojects/wlroots) is checked
     out, and meson's fallback will build that instead (slower first build).
     To use the faster system package next time, fix the above."
@@ -236,7 +288,7 @@ gcr_check_wlroots() {
 	fi
 
 	GCR_WLROOTS_STATE="fail"
-	GCR_WLROOTS_MSG="system package $howto
+	GCR_WLROOTS_MSG="$howto
     No vendored fallback available either (subprojects/wlroots is not
     checked out here). The build cannot proceed until one of these is
     fixed."
