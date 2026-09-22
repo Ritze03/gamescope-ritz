@@ -430,36 +430,78 @@ constants any more) branches around the whole block entirely, so the shader
 is byte-for-byte identical to before this feature existed at the default —
 measured, not just argued (below).
 
-**The amount mapping** (`ZoomPushData_t::kMaxAmount`, `rendervulkan.cpp`,
-next to `ZoomPushData_t`) is a **plain linear map**, `amount = kMaxAmount *
-sharpen`, with `kMaxAmount = 64.0` — the one place that number lives. Chosen
-by measurement to sit close to the operator's own asymptote (23.5% / 28.3%
-at `amount = 64` vs 24.1% / 29.0% at `amount = 2000`) rather than picked
-arbitrarily; there is no "ringing past this point" ceiling to respect the
-way RCAS's `con.x` had; the clamp is what keeps any `amount` safe. One
-consequence of being this close to the asymptote: `sharpen 0.5` (`amount =
-32`) lands close to `sharpen 1.0` rather than at the midpoint of the total
-gain — most edge pixels are already saturated to their local `lo`/`hi` well
-before `amount` reaches half of `kMaxAmount`, so there is little gradient
-energy left to gain between the two.
+**The amount mapping is NOT linear** (retuned a second time, same day, once
+a linear map was shipped and found to leave the slider nearly dead — see
+below). `Zoom_SharpenAmount()` (`Overlay/Zoom.h`, the one place this
+mapping lives) inverts a fitted curve of the operator's own gain instead:
+
+```
+amount(k) = (kZoomSharpenMaxAmount * kZoomSharpenHalfK * k)
+          / (kZoomSharpenMaxAmount * (1 - k) + kZoomSharpenHalfK)
+
+kZoomSharpenMaxAmount = 32.0   -- amount at k = 1.0
+kZoomSharpenHalfK     = 1.39   -- Michaelis-Menten half-saturation amount
+```
+
+**Why not linear.** The first cut used a plain `amount = kMaxAmount *
+sharpen` with `kMaxAmount = 64` — chosen (correctly) to sit near the
+operator's own asymptote, but that revealed a UX problem the +30% target
+had been hiding: because the clamped-unsharp-mask's gain saturates fast
+(see "Why the FULL 3x3" above), `sharpen 0.5` (`amount = 32`) already
+reached **97%** of what `sharpen 1.0` (`amount = 64`) did. The bottom half
+of the slider did almost nothing; the whole 0..1 range should be doing
+something the user can feel.
+
+**How the curve was found.** Mean gradient-energy gain vs raw `amount`,
+swept and measured directly (default test client, `zoom.sharpen` forced to
+`1.0` with `kZoomSharpenMaxAmount` temporarily overridden to each value):
+
+| amount | 0.5 | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 2000 (asymptote) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gain | 7.9% | 11.2% | 14.4% | 17.7% | 20.7% | 22.7% | 23.7% | 24.3% | 25.1% |
+
+A Michaelis-Menten curve, `gain(a) = Ginf·a/(a+K)`, fits this table well
+with `Ginf = 25.12` (the measured asymptote) and `K = 1.39` (least-squares
+over the table, `Ginf` held fixed) — `kZoomSharpenHalfK` above is that `K`.
+`kZoomSharpenMaxAmount = 32` is the **smallest** amount in the table
+reaching **~95% of `Ginf`** (23.726 / 25.120 = 94.5%; `64` only adds
+another 2.4 percentage points for double the amount — wasted headroom at
+the top of the slider), per the instruction to pick the smallest amount
+that gets there rather than defaulting to a bigger, safer-feeling number.
+
+`amount(k)` is the inversion of that fitted curve, rescaled so that
+`gain(amount(k))` tracks `k · gain(kZoomSharpenMaxAmount)` — i.e. the
+SLIDER, not the raw amount, grows roughly linearly in its own effect. The
+formula is exact at both ends **by construction**, independent of the
+curve fit's own error: `amount(0) = 0`, `amount(1) = kZoomSharpenMaxAmount`
+always. `amount(0.25) ≈ 0.438`, `amount(0.5) ≈ 1.279`, `amount(0.75) ≈
+3.553`.
+
+Unit-tested (`tests/test_config.cpp`, `"Zoom_SharpenAmount: 0 at k=0,
+kZoomSharpenMaxAmount at k=1, monotonic, clamped"`): the two exact
+endpoints, the three intermediate values above (independently computed),
+monotonicity, and clamping outside `[0, 1]`.
 
 **The fade-identity invariant governs it too**, unchanged from the first
 cut. The fade's first phase (see above) is a *measured* guarantee that the
 projector is byte-identical to the unzoomed frame while the magnification is
 pinned at exactly 1.0x; sharpening during that phase would break it. So the
-configured `sharpen` is scaled by `Zoom_SharpenRamp()` (`Overlay/Zoom.h`,
-next to the fade helpers) — `clamp((curFactor - 1) / (targetFactor - 1), 0,
-1)`, guarded for a target at or below 1.0 — computed in `Zoom_FillRequest()`
-from the SAME ramped `flFactor` the picture's own magnification uses:
+MAPPED amount is scaled by `Zoom_SharpenRamp()` (`Overlay/Zoom.h`, next to
+`Zoom_SharpenAmount()` and the fade helpers) — `clamp((curFactor - 1) /
+(targetFactor - 1), 0, 1)`, guarded for a target at or below 1.0 — computed
+in `Zoom_FillRequest()` from the SAME ramped `flFactor` the picture's own
+magnification uses:
 
 ```
-req.flSharpen = clamp(z.sharpen, 0, 1) * Zoom_SharpenRamp(req.flFactor, targetFactor);
+req.flSharpen = Zoom_SharpenAmount(clamp(z.sharpen, 0, 1)) * Zoom_SharpenRamp(req.flFactor, targetFactor);
 ```
 
-`FrameInfo_t::Zoom_t::flSharpen` carries the already-ramped value into
+`FrameInfo_t::Zoom_t::flSharpen` now carries the already-mapped,
+already-ramped **amount** (shader units, not the 0..1 slider value) into
 `vulkan_composite()`'s zoom block, which passes it straight to
-`ZoomPushData_t`'s constructor — no further ramping logic lives in
-`rendervulkan.cpp`.
+`ZoomPushData_t`'s constructor — no mapping or ramping logic lives in
+`rendervulkan.cpp` any more; `ZoomPushData_t` just forwards the float it is
+given.
 
 > **Measured (2026-09-22 retune, headless captures, `--backend wayland`,
 > isolated `XDG_CONFIG_HOME`, `screenshot <path> 3`, RMB via
@@ -468,36 +510,53 @@ req.flSharpen = clamp(z.sharpen, 0, 1) * Zoom_SharpenRamp(req.flFactor, targetFa
 > the projector mask, three test clients — kitty's own default colours
 > printing this repo's README (the same client the +4.3% baseline used),
 > and two mid-tone clients chosen so clipping can't hide a halo
-> (`#707070`/`#e0e0e0` and `#d8d8d8`/`#202020`):
+> (`#707070`/`#e0e0e0` and `#d8d8d8`/`#202020`), through the REAL
+> `zoom.sharpen` slider (not a raw `amount` override):
 >
 > | Client | sharpen 0 | sharpen 0.5 | sharpen 1.0 |
 > | --- | --- | --- | --- |
-> | default (README text) | 8.783 | 10.866 (+23.7%) | 10.920 (**+24.3%**) |
-> | midtone (#707070/#e0e0e0) | 4.360 | 5.358 (+22.9%) | 5.385 (**+23.5%**) |
-> | darklight (#d8d8d8/#202020) | 5.901 | 7.531 (+27.6%) | 7.570 (**+28.3%**) |
+> | default (README text) | 8.783 | 9.866 (+12.3%) | 10.866 (**+23.7%**) |
+> | midtone (#707070/#e0e0e0) | 4.360 | 4.891 (+12.2%) | 5.358 (**+22.9%**) |
+> | darklight (#d8d8d8/#202020) | 5.901 | 6.809 (+15.4%) | 7.531 (**+27.6%**) |
 >
-> A Sobel cross-check on the default client agrees in direction (+21.2% at
-> sharpen 1.0). **The target of +30% was not reached** by any client — see
-> "Why the FULL 3x3" above for the measured ceiling and why a genuinely
-> zero-overshoot operator cannot cross it on this content; this is still a
-> ~5.5–6.6x improvement over the RCAS-era +4.3%. **Zero halo violations** on
-> both mid-tone clients (comparing `sharpen 1.0` against a per-channel 3x3
-> -source-texel min/max filter of that same client's own `sharpen 0`
-> capture — the brief's own halo-check method — with a 1-level tolerance for
-> 8-bit rounding): 0 of 94,548 masked pixels violate it either client.
-> **Containment**: 0 of 921,600 pixels differ between `sharpen 0` and
-> `sharpen 1` outside the circle's own radius, for both clients — the
-> projector's centre was measured from the unzoomed-vs-`sharpen 0` diff each
-> time, not assumed. **The 1px black outline is unchanged**: its
-> fully-opaque pure-black locus (16 pixels per client, at pixel-quantised
-> resolution around a ~360px circle) is bit-identical between `sharpen 0`
-> and `sharpen 1` for both clients — also provable algebraically, since
-> `rgb` there is multiplied by `fill == 0` regardless of any upstream
-> sharpening. **`sharpen 0` is byte-identical to a capture built from master
-> `d259cae`** (the pre-retune, RCAS-era commit) for both mid-tone clients: 0
-> of 921,600 pixels differ, max delta 0. `build-release/verify-shots/
-> zoom-sharpen-v2-2026-09-22/` has the captures, 4x crops, diff heatmaps and
-> full numbers (`README.txt`); the RCAS-era measurements above this note are
+> `sharpen 1.0`'s numbers match the first retune's measurement exactly
+> (`amount(1.0) = kZoomSharpenMaxAmount = 32` by construction, the same
+> amount that build used). `sharpen 0.5` now lands at roughly **half** of
+> `sharpen 1.0`'s gain, not 97% of it as the interim linear map (`amount =
+> 64·sharpen`) had it — the fix the remapping above set out to make. The
+> default client's full curve, all four reported slider positions:
+>
+> | k | 0.25 | 0.5 | 0.75 | 1.0 |
+> | --- | --- | --- | --- | --- |
+> | gain | +7.3% (31% of max) | +12.3% (52% of max) | +17.2% (72% of max) | +23.7% (100%) |
+>
+> A Sobel cross-check on the default client at `sharpen 1.0` agrees in
+> direction (+21.2%). **The target of +30% was not reached** by any client
+> — see "Why the FULL 3x3" above for the measured ceiling and why a
+> genuinely zero-overshoot operator cannot cross it on this content; this
+> is still a ~5.5–6.6x improvement over the RCAS-era +4.3%, now spread
+> across the whole slider instead of bunched at the top. **Zero halo
+> violations** on all three clients (comparing `sharpen 1.0` against a
+> per-channel 3x3-source-texel min/max filter of that same client's own
+> `sharpen 0` capture — the brief's own halo-check method — with a 1-level
+> tolerance for 8-bit rounding): 0 of 92,944–94,548 masked pixels violate
+> it, any client. **Containment**: 0 of 921,600 pixels differ between
+> `sharpen 0` and `sharpen 1` outside the circle's own radius, for all
+> three clients — the projector's centre was measured from the
+> unzoomed-vs-`sharpen 0` diff each time, not assumed. **The 1px black
+> outline is unchanged**: its fully-opaque pure-black locus (16 pixels per
+> mid-tone client, at pixel-quantised resolution around a ~360px circle) is
+> bit-identical between `sharpen 0` and `sharpen 1` — also provable
+> algebraically, since `rgb` there is multiplied by `fill == 0` regardless
+> of any upstream sharpening. **`sharpen 0` is byte-identical to a capture
+> built from master `d259cae`** (the pre-retune, RCAS-era commit) for both
+> mid-tone clients: 0 of 921,600 pixels differ, max delta 0 — unaffected by
+> this second retune, since `amount(k=0) = 0` exactly regardless of the
+> mapping curve, so the off-path never changed shape.
+> `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/` has the first
+> retune's captures (`shots/`, `README.txt`) and this remapping's
+> (`v3/README.txt`, plus `sweep/` for the raw amount- and k-sweep
+> captures behind the tables above); the RCAS-era measurements are
 > preserved in `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
 
 ## Threading
@@ -569,11 +628,18 @@ the wlserver thread (see "Match mouse speed" above).
 - `tests/test_config.cpp` — `zoom.sharpen` round-trips with the rest of the
   section; `Zoom_SharpenRamp()`'s arithmetic (0 at factor 1.0, 1 at the
   target, linear between, clamped past both ends, safe for a target at or
-  below 1.0) with no Zoom.cpp/compositor link (2026-09-22).
+  below 1.0) with no Zoom.cpp/compositor link (2026-09-22);
+  `Zoom_SharpenAmount()`'s curve (exact at both ends by construction,
+  monotonic, matches three independently-computed intermediate values,
+  clamped past both ends) with the same no-Zoom.cpp-link property
+  (2026-09-22, the slider remapping).
 - `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/` — see the
   "Sharpen" section above for the numbers: `sharpen 0` byte-identical to
   master `d259cae` (the pre-retune build), every differing pixel between
   `sharpen 0` and `sharpen 1` inside the projector's own radius, zero halo
   violations against a 3x3-source-texel min/max filter, and the unchanged
-  1px outline. The RCAS-era measurements (superseded) are preserved in
-  `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
+  1px outline. `shots/` and `README.txt` are the first retune (the linear
+  map); `sweep/` and `v3/README.txt` are the slider remapping's amount- and
+  k-sweeps and its own re-confirmation captures (default, midtone,
+  darklight, all three checked). The RCAS-era measurements (superseded) are
+  preserved in `build-release/verify-shots/zoom-sharpen-2026-09-22/`.

@@ -57,9 +57,11 @@ uniform zoom_t {
     uvec2 u_size;        // the projection, pixels
     uint  u_circle;
     uint  u_outlinePx;
-    // Unsharp-mask amount, 0..kMaxAmount (ZoomPushData_t, rendervulkan.cpp).
-    // 0.0 (the exact float, no bit tricks needed since nothing here packs
-    // it for FFX's uint-SIMD macros any more) means off.
+    // Unsharp-mask amount, already mapped from the 0..1 UI slider by a
+    // nonlinear curve (Zoom_SharpenAmount(), Overlay/Zoom.h -- the shader
+    // only ever sees the resulting shader-units amount, never the raw
+    // slider value). 0.0 (the exact float, no bit tricks needed since
+    // nothing here packs it for FFX's uint-SIMD macros any more) means off.
     float u_sharpenAmount;
 };
 

@@ -143,4 +143,50 @@ namespace gamescope
 			return 0.0f;
 		return std::clamp( ( flCurFactor - 1.0f ) / ( flTargetFactor - 1.0f ), 0.0f, 1.0f );
 	}
+
+	// ---- sharpen amount mapping (2026-09-22, retuned same day) ---------
+	// zoom.sharpen is 0..1 in the UI, but cs_zoom.comp's unsharp-mask
+	// u_sharpenAmount is NOT a linear rescale of it -- the operator's own
+	// gain saturates fast (its per-channel min/max clamp is what stops a
+	// large amount from ever ringing, but it also means a large amount
+	// stops buying anything once most edge pixels are already pinned to
+	// their local lo/hi). Mean gradient-energy gain vs amount, measured on
+	// the default test client (headless captures, factor 3.0, circle, size
+	// 0.5 -- see superdoc/features/zoom.md's "Sharpen" section for the full
+	// rig and both mid-tone clients):
+	//
+	//   amount   0.5    1     2     4     8     16    32    64   2000(*)
+	//   gain %   7.9   11.2  14.4  17.7  20.7  22.7  23.7  24.3  25.1
+	//
+	// (*) 2000 is the measured ASYMPTOTE -- amount -> infinity is safe
+	// (the clamp bounds it) but buys almost nothing past a few dozen.
+	//
+	// A LINEAR amount = kMax * k spends almost the whole slider in the flat
+	// top of that curve -- the first cut shipped exactly that, with
+	// kMax=64, and k=0.5 already reached ~97% of k=1.0's effect, so the
+	// bottom half of the slider all looked the same. This inverts a
+	// Michaelis-Menten fit
+	// of the table above, gain(amount) = Ginf*amount/(amount+K), instead:
+	// solving amount(k) so that gain(amount(k)) lands at roughly k of the
+	// gain reached at k=1 (kZoomSharpenMaxAmount itself) makes the SLIDER,
+	// not just the amount, roughly linear in its own effect --
+	// k=0.25/0.5/0.75/1.0 land at roughly a quarter/half/three-quarters/
+	// the chosen ceiling of the reachable gain instead of bunching near
+	// the top. kZoomSharpenHalfK is that fit's K (half-saturation amount,
+	// least-squares over the table above with Ginf fixed at the measured
+	// 25.12 asymptote); kZoomSharpenMaxAmount is amount(k=1) -- picked as
+	// the smallest MEASURED amount reaching ~95% of Ginf (32 reaches
+	// 23.7/25.12 = 94.5%; 64 only adds another ~2.4pp for double the
+	// amount), not 64, so the top of the slider is not wasted headroom.
+	// The formula is exact at both ends by construction regardless of fit
+	// error: amount(0) = 0, amount(1) = kZoomSharpenMaxAmount.
+	inline constexpr float kZoomSharpenMaxAmount = 32.0f;
+	inline constexpr float kZoomSharpenHalfK = 1.39f;
+
+	inline float Zoom_SharpenAmount( float k )
+	{
+		k = std::clamp( k, 0.0f, 1.0f );
+		return ( kZoomSharpenMaxAmount * kZoomSharpenHalfK * k )
+			/ ( kZoomSharpenMaxAmount * ( 1.0f - k ) + kZoomSharpenHalfK );
+	}
 }

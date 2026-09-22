@@ -386,12 +386,17 @@ struct FrameInfo_t
 		// projection -- outline included -- against the untouched frame
 		// beneath it. 1.0 is the unfaded picture.
 		float flAlpha = 1.0f;
-		// Sharpen (2026-09-22, zoom.sharpen), 0..1, 0 = off. Already scaled
-		// by Zoom_FillRequest() (Overlay/Zoom.h's Zoom_SharpenRamp) so it is
-		// exactly 0 for as long as flFactor is pinned at 1.0 during the
-		// fade's first phase -- sharpening then would break the phase's
-		// byte-identical-to-unzoomed guarantee (see zoom.md). Mapped to
-		// RCAS's con.x by ZoomPushData_t::SharpenConX (rendervulkan.cpp).
+		// Sharpen (2026-09-22, zoom.sharpen; retuned 2026-09-22), a
+		// cs_zoom.comp unsharp-mask AMOUNT (shader units, NOT the 0..1
+		// slider value) -- Zoom_FillRequest() maps the slider through
+		// Zoom_SharpenAmount() (Overlay/Zoom.h, the one place that
+		// nonlinear curve lives) before this field is ever written. Also
+		// already scaled by Zoom_SharpenRamp() (same file) so it is exactly
+		// 0 for as long as flFactor is pinned at 1.0 during the fade's
+		// first phase -- sharpening then would break the phase's
+		// byte-identical-to-unzoomed guarantee (see zoom.md). Passed
+		// straight to ZoomPushData_t's constructor (rendervulkan.cpp) with
+		// no further mapping.
 		float flSharpen = 0.0f;
 	} zoom;
 

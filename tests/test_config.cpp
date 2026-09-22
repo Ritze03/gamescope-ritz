@@ -1527,6 +1527,39 @@ TEST_CASE( "Zoom_SharpenRamp: 0 at factor 1.0, 1 at target, linear between", "[c
     REQUIRE( Zoom_SharpenRamp( 1.0f, 0.5f ) == 0.0f );
 }
 
+// zoom.sharpen's 0..1 -> shader-units-amount curve (Zoom_SharpenAmount,
+// Overlay/Zoom.h, retuned 2026-09-22): exact at both ends by construction
+// (0 at k=0, kZoomSharpenMaxAmount at k=1, regardless of the curve-fit
+// constant kZoomSharpenHalfK), monotonically increasing, and NOT linear --
+// see that function's own comment for the measured gradient-energy-vs-
+// amount table this inverts. No compositor deps, as the other Zoom.h
+// helpers above.
+TEST_CASE( "Zoom_SharpenAmount: 0 at k=0, kZoomSharpenMaxAmount at k=1, monotonic, clamped", "[config]" )
+{
+    using gamescope::Zoom_SharpenAmount;
+    using gamescope::kZoomSharpenMaxAmount;
+    using gamescope::kZoomSharpenHalfK;
+
+    REQUIRE( Zoom_SharpenAmount( 0.0f ) == 0.0f );
+    REQUIRE_THAT( Zoom_SharpenAmount( 1.0f ), Catch::Matchers::WithinAbs( kZoomSharpenMaxAmount, 1e-4 ) );
+
+    // The curve itself, not just its endpoints (values from the same
+    // formula computed independently -- see Zoom.h's comment table).
+    REQUIRE_THAT( Zoom_SharpenAmount( 0.25f ), Catch::Matchers::WithinAbs( 0.4380, 1e-3 ) );
+    REQUIRE_THAT( Zoom_SharpenAmount( 0.5f ), Catch::Matchers::WithinAbs( 1.2789, 1e-3 ) );
+    REQUIRE_THAT( Zoom_SharpenAmount( 0.75f ), Catch::Matchers::WithinAbs( 3.5527, 1e-3 ) );
+
+    // Monotonically increasing -- a higher slider position never sharpens
+    // less.
+    REQUIRE( Zoom_SharpenAmount( 0.25f ) < Zoom_SharpenAmount( 0.5f ) );
+    REQUIRE( Zoom_SharpenAmount( 0.5f ) < Zoom_SharpenAmount( 0.75f ) );
+    REQUIRE( Zoom_SharpenAmount( 0.75f ) < Zoom_SharpenAmount( 1.0f ) );
+
+    // Clamped, not extrapolated, past either end.
+    REQUIRE( Zoom_SharpenAmount( -1.0f ) == 0.0f );
+    REQUIRE_THAT( Zoom_SharpenAmount( 2.0f ), Catch::Matchers::WithinAbs( kZoomSharpenMaxAmount, 1e-4 ) );
+}
+
 // The autoclicker's pacing arithmetic (Autoclicker_HalfPeriodNs,
 // Overlay/Autoclicker.h, 2026-09-18): pinned for the same reason
 // Zoom_StepFactor above is -- no compositor deps, so it needs no

@@ -4865,27 +4865,18 @@ struct ZoomPushData_t
 	// features/zoom.md's "Sharpen" section): the contrast-clamped
 	// unsharp-mask amount cs_zoom.comp applies, a plain float -- no bit-cast
 	// needed, since nothing here packs it into FFX's uint-SIMD constants the
-	// way RCAS did. Exactly 0.0f is off.
+	// way RCAS did. Exactly 0.0f is off. Already mapped from the 0..1
+	// slider AND ramped by the fade -- see Zoom_SharpenAmount() (Overlay/
+	// Zoom.h, the one place the nonlinear 0..1 -> amount curve lives) and
+	// Zoom_FillRequest() (Overlay/Zoom.cpp), which computes
+	// FrameInfo_t::Zoom_t::flSharpen and hands it straight to this
+	// constructor -- no mapping logic lives in rendervulkan.cpp any more.
 	float    uSharpenAmount;
 
-	// The amount at the TOP of the 0..1 slider. The one place this number
-	// lives -- everything else (Zoom.cpp's slider, Zoom.h's fade ramp) works
-	// in the 0..1 domain and this is where it becomes shader units. Sized by
-	// measurement (superdoc/features/zoom.md's "Sharpen" section) to sit
-	// close to the operator's own asymptote -- past a certain amount the
-	// per-channel min/max clamp in cs_zoom.comp saturates almost every edge
-	// pixel to its local lo/hi and a larger amount buys almost nothing
-	// (measured up to 2000, +0.6pp over 64) -- rather than being picked to
-	// hit a specific target: there is no larger, unmeasured value that
-	// would have cleared the QC's +30% edge-gradient-energy target, because
-	// the clamp itself, not the amount, is what bounds the result on this
-	// content (see zoom.md for the full sweep and the measured ceiling).
-	static constexpr float kMaxAmount = 64.0f;
-
-	ZoomPushData_t( float cx, float cy, float sx, float sy, uint32_t w, uint32_t h, bool bCircle, uint32_t uOutline, float flSharpen )
+	ZoomPushData_t( float cx, float cy, float sx, float sy, uint32_t w, uint32_t h, bool bCircle, uint32_t uOutline, float flSharpenAmount )
 		: flSrcCenterX( cx ), flSrcCenterY( cy ), flSrcPerDstX( sx ), flSrcPerDstY( sy )
 		, uWidth( w ), uHeight( h ), uCircle( bCircle ? 1u : 0u ), uOutlinePx( uOutline )
-		, uSharpenAmount( kMaxAmount * std::clamp( flSharpen, 0.0f, 1.0f ) )
+		, uSharpenAmount( flSharpenAmount )
 	{
 	}
 };

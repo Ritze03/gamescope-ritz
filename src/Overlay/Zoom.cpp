@@ -226,11 +226,16 @@ namespace gamescope
 		const float flTargetFactor = std::clamp( s_flFactor.load( std::memory_order_relaxed ), 1.5f, 5.0f );
 		req.flFactor = Zoom_FadeFactor( s_flFadeProgress, flTargetFactor );
 		s_flLiveFactor.store( req.flFactor, std::memory_order_relaxed );
-		// Sharpen (2026-09-22, Zoom.h's Zoom_SharpenRamp): scaled to 0 for
-		// as long as req.flFactor is still pinned at 1.0 by the fade's
-		// phase 1, then ramps in step with the magnification itself -- see
-		// that helper's own comment for why.
-		req.flSharpen = std::clamp( z.sharpen, 0.0f, 1.0f )
+		// Sharpen (2026-09-22, retuned 2026-09-22): the 0..1 slider maps to
+		// a shader-units amount through Zoom_SharpenAmount() (Zoom.h, next
+		// to this ramp -- see its own comment for the measured curve and
+		// why it is not linear), and THAT amount is what the fade ramp
+		// scales -- 0 for as long as req.flFactor is still pinned at 1.0 by
+		// the fade's phase 1, ramping to the full mapped amount in step
+		// with the magnification itself, exactly as before this retune.
+		// req.flSharpen carries the already-mapped, already-ramped AMOUNT
+		// from here on, not a 0..1 fraction.
+		req.flSharpen = Zoom_SharpenAmount( std::clamp( z.sharpen, 0.0f, 1.0f ) )
 			* Zoom_SharpenRamp( req.flFactor, flTargetFactor );
 		if ( z.shape == "rectangle" )
 		{
