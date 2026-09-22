@@ -71,6 +71,13 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     a grep and not a version comparison:* nothing in a `.so` says which gamescope built
     it, and the signature IS what has to match; `grep -a` rather than `strings(1)` so it
     needs no binutils.
+  - **Installing the layer is never fatal.** It happens *after* the binary is already
+    in place, so a failure there must not abort the run — `set -e` on a failed `sudo`
+    would leave a working install half-finished and skip everything after it. Seen for
+    real: `./install.sh --update` from a non-TTY shell, where sudo cannot prompt
+    (*"a terminal is required to read the password"*), took down the rest of the update.
+    It now warns, prints the two `sudo install` lines to finish by hand, and continues —
+    the compositor's fallback means the install is still usable without it.
   - `gcr_remove_wsi_layer()` only ever deletes a manifest whose basename contains
     `RITZ_gamescope_wsi`, and `--remove` defaults that confirmation to **no** — unlike
     the binary, these are files in a shared system directory.

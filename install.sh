@@ -508,10 +508,32 @@ gcr_install_wsi_layer() {
 	gcr_info "installing the gamescope-ritz WSI layer:"
 	gcr_info "  $target_so"
 	gcr_info "  $target_json"
+
+	# NOT fatal, and the `|| { ... }` is the whole reason: this runs AFTER the
+	# binary is already installed, so aborting here (set -e would, on a failed
+	# sudo) leaves a working install half-finished and skips everything after
+	# it. Seen for real -- `./install.sh --update` from a non-TTY shell, where
+	# sudo cannot prompt: "a terminal is required to read the password".
+	# The compositor falls back to the system layer when ours is missing, so
+	# the install is still usable; say what is missing and how to finish it.
+	local failed=0
 	GCR_PRIV_DIR=$(dirname -- "$target_so")
-	gcr_as_priv install -Dm755 -- "$built_so" "$target_so"
-	GCR_PRIV_DIR=$(dirname -- "$target_json")
-	gcr_as_priv install -Dm644 -- "$built_json" "$target_json"
+	gcr_as_priv install -Dm755 -- "$built_so" "$target_so" || failed=1
+	if [ "$failed" = "0" ]; then
+		GCR_PRIV_DIR=$(dirname -- "$target_json")
+		gcr_as_priv install -Dm644 -- "$built_json" "$target_json" || failed=1
+	fi
+
+	if [ "$failed" != "0" ]; then
+		gcr_warn "could not install the WSI layer (no permission, or sudo could not prompt)."
+		gcr_warn "Everything else is installed and works -- gamescope-ritz just falls back to"
+		gcr_warn "your distro's layer. To finish it, run these in a terminal:"
+		gcr_warn "  sudo install -Dm755 '$built_so' '$target_so'"
+		gcr_warn "  sudo install -Dm644 '$built_json' '$target_json'"
+		return 0
+	fi
+
+	gcr_info "WSI layer installed; gamescope-ritz will use its own from now on."
 }
 
 # Only ever removes files whose manifest names OUR layer -- never the distro's.
