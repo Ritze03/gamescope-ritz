@@ -452,11 +452,78 @@ run_pkgconfig_check() {
 	fi
 }
 
+# --- Gamescope WSI layer compatibility --------------------------------------
+# NOT a build dependency -- a RUNTIME one, and the only one that fails after a
+# completely successful build. install.sh places /usr/bin/gamescope-ritz and
+# nothing else, so the Vulkan layer every game loads is whichever
+# VkLayer_FROG_gamescope_wsi the distro's own gamescope package ships. When
+# that package is older than this tree, the layer speaks an older revision of
+# the gamescope_swapchain protocol and the compositor kills its connection:
+#
+#   wlserver: [wayland] message too short, object (46), message swapchain_feedback(uuuuuus)
+#   wlserver: [wayland] error in client communication (pid ...)
+#   [Gamescope WSI] Failed to get Wayland objects      <- then forever, per surface
+#
+# Upstream 6a4d150 ("mangoapp: plumb engineName", 2024-12-04) added a 7th
+# argument to swapchain_feedback. A layer built before that sends six and the
+# message is short. Diagnosed on Nobara/Fedora 44 against a distro gamescope
+# predating it; Arch's gamescope 3.16.25 layer is known-good.
+#
+# The check greps the layer binary for the 7-argument signature literal that
+# wayland-scanner bakes in. ponytail: a grep for one string, not a version
+# comparison -- there is no reliable way to ask a .so which gamescope built
+# it, and the signature IS the thing that has to match. grep -a rather than
+# strings(1) so this needs no binutils.
+gcr_wsi_layer_so() {
+	local json
+	for json in /usr/local/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.x86_64.json \
+	            /usr/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.x86_64.json; do
+		[ -f "$json" ] || continue
+		sed -n 's/.*"library_path"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$json" | head -n1
+		return 0
+	done
+}
+
+run_wsi_layer_check() {
+	local so
+	so=$(gcr_wsi_layer_so)
+
+	if [ -z "$so" ] || [ ! -f "$so" ]; then
+		gcr_warn "no Gamescope WSI Vulkan layer found on this system."
+		gcr_warn "Games will still run, but without the Xwayland-bypass layer. It normally"
+		gcr_warn "comes with your distro's 'gamescope' package -- install that alongside this."
+		return 0
+	fi
+
+	if grep -qa 'uuuuuus' "$so" 2>/dev/null; then
+		gcr_info "Gamescope WSI layer: $so (protocol matches)."
+		return 0
+	fi
+
+	gcr_warn "the installed Gamescope WSI layer is OLDER than this build and will not work:"
+	gcr_warn "  $so"
+	gcr_warn "Games will start and then die with '[Gamescope WSI] Failed to get Wayland objects',"
+	gcr_warn "because that layer predates the 7-argument swapchain_feedback this compositor"
+	gcr_warn "expects (upstream 6a4d150, 2024-12-04)."
+	gcr_warn "Fix: update your distro's 'gamescope' package (Arch 3.16.25 is known-good), or"
+	gcr_warn "install this tree's own layer over it:"
+	gcr_warn "  sudo install -Dm755 <builddir>/layer/libVkLayer_FROG_gamescope_wsi_x86_64.so \\"
+	gcr_warn "                      /usr/local/lib/libVkLayer_FROG_gamescope_wsi_x86_64.so"
+	gcr_warn "  sudo install -Dm644 <builddir>/layer/VkLayer_FROG_gamescope_wsi.x86_64.json \\"
+	gcr_warn "                      /usr/local/share/vulkan/implicit_layer.d/"
+	gcr_warn "(that shadows the distro layer for the packaged gamescope too -- see"
+	gcr_warn " superdoc/features/build-and-tooling.md before doing it.)"
+	return 0
+}
+
 # Every pre-build dependency gate, in one call so the two build sites cannot
 # drift apart on which checks they run.
 run_dependency_checks() {
 	run_pkgconfig_check "$1"
 	run_wlroots_check "$1"
+	# Never fatal: this one is about RUNNING, not building, and a warning at
+	# the end of a successful install is exactly where it is useful.
+	run_wsi_layer_check
 }
 
 # --- state detection (used by the interactive menu, and by --update) --------

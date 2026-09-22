@@ -24,6 +24,36 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
     with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
     a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
+- **The Gamescope WSI layer is a RUNTIME dependency `install.sh` does not install**, and
+  the only one that fails *after* a completely successful build. `install.sh` places
+  `/usr/bin/gamescope-ritz` and nothing else, so the Vulkan layer every game loads is
+  whichever `VkLayer_FROG_gamescope_wsi` the distro's own `gamescope` package ships.
+  `layer/meson.build` marks it `install: true`, but nothing here ever runs
+  `meson install`.
+  - **The failure mode**, diagnosed on Nobara/Fedora 44 (2026-09-22): upstream
+    `6a4d150` ("mangoapp: plumb engineName", 2024-12-04) added a 7th argument
+    (`vk_engine_name`, a string) to `swapchain_feedback`. A layer built before that
+    sends six, the compositor reads a short message and kills the connection —
+    `[wayland] message too short, object (46), message swapchain_feedback(uuuuuus)`
+    followed by `error in client communication` — after which *every* surface fails
+    with `[Gamescope WSI] Failed to get Wayland objects`, forever. Every Vulkan client
+    dies, and it reproduces on any gamescope newer than the installed layer, not just
+    this fork. This fork has never touched `protocol/gamescope-swapchain.xml` or
+    `layer/`.
+  - `run_wsi_layer_check()` greps the active layer binary for the 7-argument signature
+    literal `uuuuuus` that wayland-scanner bakes in, and warns (never fatally — this is
+    about running, not building). *Why a grep and not a version comparison:* there is no
+    reliable way to ask a `.so` which gamescope built it, and the signature IS the thing
+    that must match. `grep -a` rather than `strings(1)`, so it needs no binutils.
+  - **Why install.sh does not just install the layer:** both JSONs declare the layer
+    name `VK_LAYER_FROG_gamescope_wsi_x86_64`, and `/usr/local/share/vulkan` is searched
+    before `/usr/share/vulkan` — so installing this tree's copy shadows the distro one
+    for the *packaged* gamescope too, which may then break in the opposite direction.
+    That cuts against this project's rule about never disturbing the user's known-good
+    gamescope, so it stays a warning with instructions. The clean fix, if it is ever
+    needed, is for the compositor to give its layer its own name and point only its own
+    children at it with `VK_ADD_LAYER_PATH`, next to where it already sets
+    `ENABLE_GAMESCOPE_WSI=1` (`steamcompmgr.cpp:9276`).
 - **The program check is separate from the library check, and both are needed.**
   `gcr_check_build_tools()` covers `meson`, `cmake`, `ninja`, `pkg-config`, `git` and
   the glslang shader compiler; the pkg-config gate below covers the `dependency()`

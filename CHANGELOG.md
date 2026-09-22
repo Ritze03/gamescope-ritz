@@ -27,6 +27,9 @@ The newest version below is the one this build reports.
   compiler as well as the libraries.
 
 ### Info
+- **Warning when the system Gamescope WSI layer is too old**: install and update
+  now spot the mismatch that makes every game start and immediately quit, and say
+  how to fix it.
 - **Dependencies are listed in the README**: copy-paste install commands for Arch
   and Fedora, plus which extra packages each optional feature needs.
 
