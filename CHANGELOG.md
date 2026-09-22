@@ -28,6 +28,9 @@ The newest version below is the one this build reports.
   Keybinds.
 - **Zoom sharpening**: a new Sharpen slider in the Zoom settings sharpens the
   magnified picture inside the projector, so zoomed-in content looks less blurry.
+- **FSR and NIS now sharpen at native resolution**: choosing FSR or NIS keeps sharpening
+  the picture even when the game is already at the display's native resolution, instead
+  of only doing anything while actually upscaling.
 
 ### Fixed
 - **Install and update find wlroots again**: `install.sh --install` and
@@ -39,6 +42,9 @@ The newest version below is the one this build reports.
   for them before starting and tell you exactly what to install, instead of
   failing part-way through the build. This covers the build tools and the shader
   compiler as well as the libraries.
+- **Switching the upscaling filter no longer resets Sharpness**: the slider keeps its
+  value across FSR/NIS/Linear/Nearest/Pixel changes and just greys out while the current
+  filter has no sharpening pass, instead of jumping to 0% on every switch.
 
 ### Info
 - **Keybinds are split into two groups**: Global hotkeys (settings, launcher, friends
