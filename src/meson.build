@@ -24,12 +24,24 @@ avif_dep = dependency('libavif', version: '>=1.0.0', required: get_option('avif_
 pixman_dep = dependency('pixman-1')
 udev_dep = dependency('libudev')
 
-wlroots_dep = dependency(
-  'wlroots-0.20',
-  version: ['>= 0.20.0', '< 0.21.0'],
-  fallback: 'wlroots',
-  default_options: ['default_library=static', 'examples=false', 'xwayland=enabled', 'backends=libinput', 'renderers=[]', 'allocators=[]', 'session=enabled'],
-)
+# Prefer a system wlroots-0.20, then a system wlroots-0.19, then the pinned
+# submodule (0.20.2). Separate probes rather than dependency()'s multi-name
+# form: the two minors need different version ranges, and multi-name needs
+# meson >=0.60 while this project declares >=0.58.
+# ponytail: system-only 0.19 support. If a 0.19 submodule is ever needed,
+# add a second wrap and a version option then, not now.
+wlroots_dep = dependency('wlroots-0.20', version: ['>= 0.20.0', '< 0.21.0'], required: false)
+if not wlroots_dep.found()
+  wlroots_dep = dependency('wlroots-0.19', version: ['>= 0.19.0', '< 0.20.0'], required: false)
+endif
+if not wlroots_dep.found()
+  wlroots_dep = dependency(
+    'wlroots-0.20',
+    version: ['>= 0.20.0', '< 0.21.0'],
+    fallback: 'wlroots',
+    default_options: ['default_library=static', 'examples=false', 'xwayland=enabled', 'backends=libinput', 'renderers=[]', 'allocators=[]', 'session=enabled'],
+  )
+endif
 
 displayinfo_dep = dependency(
   'libdisplay-info',
@@ -188,6 +200,7 @@ src = [
   'Overlay/FpsDisplay.cpp',
   'Overlay/Crosshair.cpp',
   'Overlay/Zoom.cpp',
+  'Overlay/Autoclicker.cpp',
   'Overlay/EffectPreview.cpp',
   'Overlay/Notifications.cpp',
   'Overlay/PanelShaders.cpp',

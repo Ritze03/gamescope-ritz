@@ -2,3 +2,7 @@
 # agent scratch — never committed
 .claude/
 .playwright-mcp/
+.omp/
+
+# meson/ninja build trees — build/, build-release/, one-off build019/ etc.
+/build*/

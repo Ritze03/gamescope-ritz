@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.8.4] – 2026-09-22
+
+### Added
+- **wlroots 0.19 support**: gamescope-ritz now builds against a system wlroots 0.19
+  install, in addition to the previously supported wlroots 0.20.
+
 ## [0.8.3] – 2026-09-17
 
 ### Fixed
