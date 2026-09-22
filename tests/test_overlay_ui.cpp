@@ -32,6 +32,7 @@
 #include "Overlay/UI/Registry.h"
 #include "Overlay/UI/Row.h"
 #include "Overlay/UI/Tokens.h"
+#include "UpscaleFilterGate.h"
 
 #include <cstdio>
 #include <string>
@@ -3394,4 +3395,39 @@ TEST_CASE( "abv2 preview: the lift half's aim agrees with the GPU once darkening
 	const float YpOff = ec::abv2_curve2( Y, gOff, pOff.flV2MaxLift, pOff.bV2Knee,
 	                                       gDarkOff, pOff.flV2MaxDarken, pOff.flV2Target );
 	REQUIRE_THAT( rgbOff[0], WithinAbs( YpOff, 1e-6f ) );
+}
+
+// =========================================================================
+//  FSR/NIS native-resolution gate (2026-09-22)
+// =========================================================================
+TEST_CASE( "FilterPassApplies: FSR/NIS run at native res, not on downscale", "[upscale_filter_gate]" )
+{
+	// The user: "make sure that FreeSync and NIST upscaling works even at
+	// the native resolution, so it behaves more like a filter instead of an
+	// actual upscaler" -- see UpscaleFilterGate.h and
+	// superdoc/features/scaling-filters.md's "FSR/NIS apply at native
+	// resolution too".
+
+	// Upscaling (scale < 1 on both axes) -- always applied, unchanged from
+	// before this change.
+	REQUIRE( FilterPassApplies( 0.5f, 0.5f ) );
+
+	// Exact native resolution (scale == 1) -- the new case: must now apply,
+	// where before the gate required scale strictly < 1 and skipped both
+	// passes here.
+	REQUIRE( FilterPassApplies( 1.0f, 1.0f ) );
+
+	// Just inside the epsilon band above 1.0 (float rounding at "native"
+	// landing a hair over 1.0 rather than exactly on it) -- still applies.
+	REQUIRE( FilterPassApplies( 1.0005f, 1.0005f ) );
+
+	// A real downscale on both axes -- stays excluded: EASU is documented
+	// 1x-4x UPsampling only, and NIS's NVScalerUpdateConfig() rejects
+	// kScale > 1.
+	REQUIRE_FALSE( FilterPassApplies( 1.5f, 1.5f ) );
+
+	// Mixed axes -- one axis downscaling is enough to exclude the whole
+	// layer (the gate is an AND over both axes, not an OR).
+	REQUIRE_FALSE( FilterPassApplies( 0.5f, 1.5f ) );
+	REQUIRE_FALSE( FilterPassApplies( 1.5f, 0.5f ) );
 }

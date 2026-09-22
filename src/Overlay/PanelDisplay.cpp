@@ -43,9 +43,10 @@
 // One sharpness, not two (2026-08-24): the storage was always single -- one
 // global, one `gamescope.sharpness` key. The now-removed direction flip is
 // what made it read as two per-filter values, because the displayed percent
-// jumped whenever the filter changed. SetFilter() also resets the percent to 0
-// on an actual filter change, which is the user's own wording for "combine
-// them". See SetFilter().
+// jumped whenever the filter changed. SetFilter() used to also reset the
+// percent to 0 on an actual filter change; the user reversed that 2026-09-22
+// -- switching filters now KEEPS the value (greyed out, via DisabledUnless,
+// while the selected filter has no sharpening pass). See SetFilter().
 #include "PanelDisplay.h"
 
 #include <algorithm>
@@ -353,42 +354,38 @@ namespace gamescope
 			[ nRaw ] { g_upscaleFilterSharpness = nRaw; } );
 	}
 
-	// Changing the filter RESETS sharpness to 0% (the user, 2026-08-24: "The
-	// FSR/NIS sharpness are individual values right now. Combine them, so it
-	// is just the sharpness (when switching between filters, it resets to
-	// 0%)").
+	// Changing the filter KEEPS the sharpness value (REVERSED 2026-09-22 --
+	// the user: "combine the sharpness value for both, so switching in
+	// between filters and especially FSR and NIST doesn't set it to zero
+	// again... And when selecting another filter, the slider should keep
+	// its value, but it should just be grayed out... to indicate that it
+	// doesn't have an effect for that filter mode").
 	//
-	// There has only ever been ONE stored sharpness -- one global
-	// (g_upscaleFilterSharpness), one config key (gamescope.sharpness). What
-	// made it *look* like two per-filter values is the direction flip
-	// documented at the top of this file: the same raw 16 reads as 80% under
-	// FSR and 20% under NIS, so the number visibly jumped every time the
-	// filter changed and each filter appeared to remember its own setting.
+	// This reverses the 2026-08-24 decision recorded here previously, which
+	// had SetFilter() reset the percent to 0% on every actual filter change
+	// ("Combine them, so it is just the sharpness (when switching between
+	// filters, it resets to 0%)") -- the user's own request that day too.
+	// Same underlying storage both times: there has only ever been ONE
+	// stored sharpness -- one global (g_upscaleFilterSharpness), one config
+	// key (gamescope.sharpness) -- and the 2026-08-24 note's "combine them"
+	// was about collapsing what *looked* like two per-filter values (the
+	// direction flip documented at the top of this file made the same raw
+	// value read as a different percent under FSR vs NIS) into that single
+	// stored value, not about resetting it on every switch. The reset was
+	// the deliberate part of that day's request; today's request removes
+	// exactly that part and nothing else -- the single stored value stays.
 	//
-	// Rejected: making the percent survive the switch (re-encode the old
-	// percent into the new filter's raw value). That keeps the two filters
-	// coupled through a number whose *meaning* differs -- 80% of RCAS and 80%
-	// of NIS are not the same amount of sharpening, and carrying one over
-	// silently applies a value the user never chose for that pass. Resetting
-	// is the one behaviour that is unambiguous at both ends, and it is what
-	// was asked for.
-	//
-	// Only on an actual change: re-selecting the current filter (a click on
-	// the already-active segment, a config push that resolves to the same
-	// value) must not wipe a sharpness the user just set.
+	// Do NOT reintroduce the reset: the row itself already reads the live
+	// g_upscaleFilterSharpness regardless of which filter is selected and is
+	// greyed via .DisabledUnless( SharpnessApplies, ... ) (RegisterUpscaling()
+	// below) rather than hidden or zeroed, so the value is visible-but-inert
+	// while a filter with no sharpening pass (Linear/Nearest/Pixel) is
+	// active, and takes effect again the instant FSR or NIS is reselected.
 	static void SetFilter( GamescopeUpscaleFilter eFilter )
 	{
-		// Cfg() before the comparison, not just before the write: on a
-		// generation bump it re-pushes the resolved filter into
-		// g_wantedUpscaleFilter, so asking "did the filter actually change?"
-		// any earlier would answer against a value about to be replaced.
-		Cfg();
-		const bool bFilterChanged = ( eFilter != g_wantedUpscaleFilter );
 		ApplyEdit(
 			[ eFilter ]( config::Settings &cfg ) { cfg.gamescope.filter = FilterToString( eFilter ); },
 			[ eFilter ] { g_wantedUpscaleFilter = eFilter; } );
-		if ( bFilterChanged )
-			SetSharpnessUiPercent( 0 ); // QueueSave()s on its own
 	}
 
 	static void SetScaler( GamescopeUpscaleScaler eScaler )

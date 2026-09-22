@@ -86,6 +86,7 @@
 #include "PointerMapping.h"
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
+#include "UpscaleFilterGate.h"
 #include "vblankmanager.hpp"
 #include "log.hpp"
 #include "Utils/Defer.h"
@@ -2990,9 +2991,23 @@ paint_all( global_focus_t *pFocus, bool async )
 					// Just draw focused window as normal, be it Steam or the game
 					paint_window(w, w, &frameInfo, pFocus->cursor, PaintWindowFlag::BasePlane | PaintWindowFlag::DrawBorders, 1.0f, override);
 
-					bool needsScaling = frameInfo.layers.get( 0 ).scale.x < 0.999f && frameInfo.layers.get( 0 ).scale.y < 0.999f;
-					frameInfo.useFSRLayer0 = g_upscaleFilter == GamescopeUpscaleFilter::FSR && needsScaling;
-					frameInfo.useNISLayer0 = g_upscaleFilter == GamescopeUpscaleFilter::NIS && needsScaling;
+					// FSR/NIS run whenever they're selected and NOT downscaling --
+					// including at exact native resolution (scale == 1), where EASU's
+					// input->input dispatch is a near-identity and RCAS (or NIS's own
+					// USM pass) still sharpens. The user, 2026-09-22: "make sure that
+					// FreeSync and NIST upscaling works even at the native resolution,
+					// so it behaves more like a filter instead of an actual upscaler."
+					// Before this, the gate required scale strictly < 1 on both axes,
+					// so at 1:1 neither pass ran at all and the plain blit path (no
+					// sharpening) silently took over.
+					//
+					// Downscaling (scale > 1) stays excluded: EASU's documented range
+					// is 1x-4x UPsampling only (ffx_fsr1.h), and NIS's own
+					// NVScalerUpdateConfig() rejects kScaleX/kScaleY > 1
+					// (NIS_Config.h) -- neither filter is designed to run backwards.
+					bool bFilterPassApplies = FilterPassApplies( frameInfo.layers.get( 0 ).scale.x, frameInfo.layers.get( 0 ).scale.y );
+					frameInfo.useFSRLayer0 = g_upscaleFilter == GamescopeUpscaleFilter::FSR && bFilterPassApplies;
+					frameInfo.useNISLayer0 = g_upscaleFilter == GamescopeUpscaleFilter::NIS && bFilterPassApplies;
 				}
 				if ( pFocus == GetCurrentFocus() )
 					update_touch_scaling( &frameInfo );
