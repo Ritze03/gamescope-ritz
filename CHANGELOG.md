@@ -23,7 +23,8 @@ The newest version below is the one this build reports.
   the version the binary carries and warn when it has gone stale.
 - **Missing build dependencies are named up front**: install and update now check
   for them before starting and tell you exactly what to install, instead of
-  failing part-way through the build.
+  failing part-way through the build. This covers the build tools and the shader
+  compiler as well as the libraries.
 
 ### Info
 - **Dependencies are listed in the README**: copy-paste install commands for Arch

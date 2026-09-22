@@ -24,6 +24,22 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
     with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
     a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
+- **The program check is separate from the library check, and both are needed.**
+  `gcr_check_build_tools()` covers `meson`, `cmake`, `ninja`, `pkg-config`, `git` and
+  the glslang shader compiler; the pkg-config gate below covers the `dependency()`
+  calls. *Why both:* a `find_program()` is invisible to a pkg-config scan — a Fedora 44
+  report cleared every library check and then died at `src/meson.build:55` with
+  "Program 'glslang glslangValidator' not found", because the shader compiler is a
+  binary, not a module. Only two external programs are hard-required: `wayland-scanner`
+  (which arrives with its own pkg-config module, so the library gate already covers it)
+  and glslang. The rest of the `find_program()` calls are this repo's own Python
+  scripts. Meson accepts *either* `glslang` or `glslangValidator`, so only the absence
+  of both is a failure.
+  - This one carries a small command→package map (Fedora ships `/usr/bin/ninja` in a
+    package called `ninja-build`). *Why a map is acceptable here but not for the
+    libraries:* five build-tool names that essentially never change, versus twenty-five
+    library names across three distros that would rot — which is why the library list is
+    scraped instead.
 - **`install.sh` gates on the hard dependencies before meson runs**
   (`gcr_hard_pkgconfig_modules` / `gcr_check_pkgconfig_deps`, 2026-09-22). It scrapes
   every `dependency('...')` in `meson.build`, `src/meson.build`, `protocol/meson.build`

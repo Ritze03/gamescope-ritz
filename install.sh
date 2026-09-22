@@ -105,16 +105,67 @@ source "$SCRIPT_DIR/scripts/gamescope-ritz-common.sh"
 # parsing or anything else, so a missing tool fails fast with one clear
 # message instead of a confusing error hundreds of lines into a build.
 # Reports every missing command in one run rather than one at a time.
+#
+# The programs, not the libraries: the pkg-config gate further down covers
+# every dependency()' in the meson files, but a find_program() is invisible to
+# it. A real report (Fedora 44) got past every library check and then died at
+# src/meson.build:55 with "Program 'glslang glslangValidator' not found",
+# because the shader compiler is a BINARY, not a pkg-config module.
+#
+# Only two external programs are hard-required by the meson files:
+# wayland-scanner (which arrives with its own pkg-config module, so the
+# dependency gate already covers it) and the glslang compiler here. The other
+# find_program() calls are this repo's own Python scripts.
+#
+# The command name and the package name are not the same thing on every
+# distro (Fedora ships /usr/bin/ninja in a package called ninja-build), so
+# this carries a small map. ponytail: a 5-entry map is fine where a 25-entry
+# one would rot -- these are build tools whose names essentially never change,
+# unlike the library list, which is scraped for exactly that reason.
+gcr_tool_package() {
+	local cmd="$1" mgr="$2"
+	case "$mgr:$cmd" in
+		dnf:ninja)    printf 'ninja-build' ;;
+		dnf:pkg-config) printf 'pkgconf' ;;
+		apt:ninja)    printf 'ninja-build' ;;
+		apt:glslang)  printf 'glslang-tools' ;;
+		apt:pkg-config) printf 'pkg-config' ;;
+		pacman:pkg-config) printf 'pkgconf' ;;
+		*)            printf '%s' "$cmd" ;;
+	esac
+}
+
 gcr_check_build_tools() {
-	local missing=() cmd
-	for cmd in meson cmake; do
+	local missing=() cmd mgr pkgs=""
+
+	for cmd in meson cmake ninja pkg-config git; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 	done
-	if [ "${#missing[@]}" -gt 0 ]; then
-		gcr_err "missing required command(s): ${missing[*]}"
-		gcr_err "install them first (e.g. Arch/CachyOS: sudo pacman -S ${missing[*]}; Debian/Ubuntu: sudo apt install ${missing[*]})."
-		exit 1
+
+	# The shader compiler: meson accepts EITHER name (src/meson.build:55
+	# lists both), so only the absence of both is a failure.
+	if ! command -v glslang >/dev/null 2>&1 && ! command -v glslangValidator >/dev/null 2>&1; then
+		missing+=("glslang")
 	fi
+
+	[ "${#missing[@]}" = "0" ] && return 0
+
+	if command -v dnf >/dev/null 2>&1; then mgr="dnf"
+	elif command -v pacman >/dev/null 2>&1; then mgr="pacman"
+	elif command -v apt-get >/dev/null 2>&1; then mgr="apt"
+	else mgr="none"
+	fi
+
+	for cmd in "${missing[@]}"; do pkgs="$pkgs $(gcr_tool_package "$cmd" "$mgr")"; done
+
+	gcr_err "missing required command(s): ${missing[*]}"
+	case "$mgr" in
+		dnf)    gcr_err "install them with: sudo dnf install$pkgs" ;;
+		pacman) gcr_err "install them with: sudo pacman -S --needed$pkgs" ;;
+		apt)    gcr_err "install them with: sudo apt install$pkgs" ;;
+		*)      gcr_err "install them through your distro's package manager first." ;;
+	esac
+	exit 1
 }
 gcr_check_build_tools
 
