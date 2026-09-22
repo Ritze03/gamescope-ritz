@@ -243,24 +243,30 @@ namespace gamescope::ui
 
 		{ "system.autoclicker", 3, {
 			// A MOUSE SEEN FROM ABOVE with its left button held down: a
-			// rounded vertical body, the left button filled solid, and the
-			// line under the right one. Freehand
-			// (2026-09-18), later than the mockup like the four before it.
+			// rounded vertical body, a line across under the two buttons,
+			// and the left button filled solid. Freehand (2026-09-18),
+			// later than the mockup like the four before it.
 			//
 			// REDRAWN 2026-09-22: the user found the first cut's square-
 			// cornered body "looks kind of weird and not really like a mouse,
 			// just use a rounded vertical rectangle". The body is now a pill
 			// (radius = half its 11-unit width, so the top and bottom are
-			// semicircles -- IconOp::RoundRect exists for this), and the fill
-			// follows the top-left quarter-circle, so it can no longer poke
-			// out past the outline's rounded corner the way a plain Bar
-			// would. The fill's arc is the body's own corner arc, centre
-			// (12, 8) radius 5.5, sampled at 0/30/60/90 degrees: six points,
-			// exactly kIconMaxPts. The fill's own right and bottom edges ARE
-			// the seam and the left half of the button line: stroking them
-			// again double-draws in the rail's translucent idle colour and
-			// shows as a brighter seam (seen in the 2026-09-22 capture), so
-			// only the right button's line is stroked.
+			// semicircles -- IconOp::RoundRect exists for this).
+			//
+			// NOTHING IS DRAWN TWICE, and every edge meets another edge
+			// exactly. The rail's idle colour is translucent, so any overlap
+			// shows as a brighter seam, and a stroke is centred on its path:
+			// a line at y=10 covers 9.15..10.85 (kIconStroke 1.7). So the
+			// button line runs all the way across between the outline's
+			// INNER edges (x 7.35..16.65), and the fill stops at the line's
+			// TOP edge (y 9.15) and at the outline's inner edge -- its arc
+			// is the body's corner arc shrunk by half a stroke (centre
+			// (12, 8), radius 5.5 - 0.85 = 4.65), sampled at 0/30/60/90
+			// degrees: six points, exactly kIconMaxPts. Its right edge is
+			// the seam between the buttons. The same day's earlier cut
+			// ended the fill at the line's CENTRE and stroked only the right
+			// half of the line, which left that half hanging half a stroke
+			// below the filled button: "offset and thus look weird".
 			//
 			// The fill is SPEC 8.0's "only where a fill carries meaning"
 			// again: the whole identity of this area is "a button is being
@@ -271,9 +277,9 @@ namespace gamescope::ui
 			// single TALL rounded outline with a filled corner inside it.
 			RoundRect( 6.5f, 2.5f, 17.5f, 21.5f, 5.5f ),
 			IconShape{ IconOp::FillPoly, 6, 0.0f,
-				{ { 12.0f, 10.0f }, { 6.5f, 10.0f }, { 6.5f, 8.0f },
-				  { 7.24f, 5.25f }, { 9.25f, 3.24f }, { 12.0f, 2.5f } } },
-			Line( { 12.0f, 10.0f }, { 17.5f, 10.0f } ) } },
+				{ { 12.0f, 9.15f }, { 7.35f, 9.15f }, { 7.35f, 8.0f },
+				  { 7.97f, 5.68f }, { 9.68f, 3.97f }, { 12.0f, 3.35f } } },
+			Line( { 7.35f, 10.0f }, { 16.65f, 10.0f } ) } },
 
 		{ "system.friends", 2, {
 			// A PERSON: a head over a pair of shoulders. Freehand
