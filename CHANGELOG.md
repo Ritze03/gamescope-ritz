@@ -25,6 +25,10 @@ The newest version below is the one this build reports.
   for them before starting and tell you exactly what to install, instead of
   failing part-way through the build.
 
+### Info
+- **Dependencies are listed in the README**: copy-paste install commands for Arch
+  and Fedora, plus which extra packages each optional feature needs.
+
 ## [0.8.3] – 2026-09-17
 
 ### Fixed

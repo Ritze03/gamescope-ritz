@@ -107,26 +107,79 @@ warning to rename it.)
 
 ### Dependencies
 
-Before building anything, `./install.sh` checks that **wlroots** is actually usable the
-way this project's meson build asks for it — pkg-config for the exact module and
-version, not just "some package manager says it's installed" — and prints the fix if
-not. On Arch/CachyOS that's `sudo pacman -S wlroots0.20`; other distros get the
-pkg-config module name and version needed. If a system wlroots isn't found but this
-repo's vendored copy (`subprojects/wlroots`) is checked out, that's not a failure —
-meson just builds it instead (slower first build).
+`./install.sh` checks every hard dependency **before** it starts building, and names the
+ones you are missing along with the command that installs them — so a missing package
+fails in a second, not several minutes into a compile. You do **not** need to run
+`git submodule update` yourself; `install.sh` initialises missing submodules for you.
 
-For the rest of the build toolchain, this repo tracks a verified **Debian/Ubuntu**
-package list: `sudo apt install meson ninja-build pkg-config cmake libpipewire-0.3-dev
-hwdata libx11-dev libwayland-dev libvulkan-dev wayland-protocols libx11-xcb-dev
-libxdamage-dev libxcomposite-dev libxcursor-dev libxxf86vm-dev libxtst-dev libxres-dev
-libxmu-dev libxkbcommon-dev libcap-dev libsdl2-dev libavif-dev libpixman-1-dev
-liblcms2-dev libseat-dev libinput-dev xwayland libxcb-composite0-dev libxcb-ewmh-dev
-libxcb-icccm4-dev libxcb-res0-dev glslang-tools libluajit-5.1-dev libcatch2-dev` (on
-other distros, install the equivalents through your own package manager — see
-[`README.upstream.md`](README.upstream.md#building) for upstream's own build
-instructions, which this still follows underneath `install.sh`). You do **not** need to
-run `git submodule update` yourself — `install.sh` detects missing submodules and
-initialises them automatically.
+**Arch / CachyOS**
+
+```sh
+sudo pacman -S --needed meson ninja cmake pkgconf git glslang \
+  wlroots0.20 wayland wayland-protocols libdecor libinput libxkbcommon \
+  vulkan-headers vulkan-icd-loader pixman luajit systemd-libs \
+  libx11 libxcb libxcomposite libxcursor libxdamage libxext libxfixes \
+  libxi libxmu libxrender libxres libxtst libxxf86vm
+```
+
+**Fedora**
+
+```sh
+sudo dnf install meson ninja-build cmake pkgconf git glslang wlroots-devel \
+  'pkgconfig(wayland-client)' 'pkgconfig(wayland-server)' \
+  'pkgconfig(wayland-protocols)' 'pkgconfig(wayland-scanner)' \
+  'pkgconfig(libdecor-0)' 'pkgconfig(libinput)' 'pkgconfig(libudev)' \
+  'pkgconfig(xkbcommon)' 'pkgconfig(vulkan)' 'pkgconfig(pixman-1)' \
+  'pkgconfig(luajit)' 'pkgconfig(x11)' 'pkgconfig(x11-xcb)' 'pkgconfig(xcb)' \
+  'pkgconfig(xcomposite)' 'pkgconfig(xcursor)' 'pkgconfig(xdamage)' \
+  'pkgconfig(xext)' 'pkgconfig(xfixes)' 'pkgconfig(xi)' 'pkgconfig(xmu)' \
+  'pkgconfig(xrender)' 'pkgconfig(xres)' 'pkgconfig(xtst)' 'pkgconfig(xxf86vm)'
+```
+
+The `pkgconfig(...)` spelling is not a workaround — dnf resolves those as virtual
+provides, so the pkg-config module name the build asks for *is* the package name, and
+the list cannot drift out of step with `meson.build` the way a hand-written one does.
+
+**Optional** — each enables a feature and is skipped silently if absent:
+
+| Feature | Arch | Fedora |
+| --- | --- | --- |
+| Screen capture (PipeWire) | `libpipewire` | `pkgconfig(libpipewire-0.3)` |
+| Monitor PNP id names | `hwdata` | `hwdata` |
+| DRM/KMS backend | `libdrm` | `pkgconfig(libdrm)` |
+| Nested SDL2 backend | `sdl2-compat` | `pkgconfig(sdl2)` |
+| Real-time priority | `libcap` | `pkgconfig(libcap)` |
+| AVIF screenshots | `libavif` | `pkgconfig(libavif)` |
+| Input emulation | `libei` | `pkgconfig(libeis-1.0)` |
+
+#### wlroots
+
+wlroots is checked separately because more than one version is acceptable: a system
+**wlroots 0.20** is preferred, a system **wlroots 0.19** is accepted, and failing both,
+meson builds this repo's vendored copy (`subprojects/wlroots`) instead — slower on the
+first build, but not a failure. The check goes through pkg-config for the exact module
+and version the build asks for, rather than trusting that a package manager says
+something is installed.
+
+Arch/CachyOS ships these as `wlroots0.20` and `wlroots0.19`; Fedora as `wlroots-devel`.
+
+<details>
+<summary>Debian / Ubuntu (older list, not re-verified recently)</summary>
+
+```sh
+sudo apt install meson ninja-build pkg-config cmake libpipewire-0.3-dev hwdata \
+  libx11-dev libwayland-dev libvulkan-dev wayland-protocols libx11-xcb-dev \
+  libxdamage-dev libxcomposite-dev libxcursor-dev libxxf86vm-dev libxtst-dev \
+  libxres-dev libxmu-dev libxkbcommon-dev libcap-dev libsdl2-dev libavif-dev \
+  libpixman-1-dev liblcms2-dev libseat-dev libinput-dev xwayland \
+  libxcb-composite0-dev libxcb-ewmh-dev libxcb-icccm4-dev libxcb-res0-dev \
+  glslang-tools libluajit-5.1-dev libcatch2-dev
+```
+
+See [`README.upstream.md`](README.upstream.md#building) for upstream's own build
+instructions, which `install.sh` still follows underneath.
+
+</details>
 
 ## What this fork adds
 
