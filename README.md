@@ -161,6 +161,22 @@ the list cannot drift out of step with `meson.build` the way a hand-written one 
 | AVIF screenshots | `libavif` | `pkgconfig(libavif)` |
 | Input emulation | `libei` | `pkgconfig(libeis-1.0)` |
 
+#### The Vulkan WSI layer
+
+gamescope-ritz builds and installs its **own** Vulkan layer
+(`VK_LAYER_RITZ_gamescope_wsi`), and `./install.sh` puts it in place alongside the
+binary. It deliberately does *not* share a name with the layer your distro's `gamescope`
+package ships, so the two coexist and neither overrides the other — your packaged
+gamescope keeps using its own.
+
+`Why it matters:` that layer is loaded into the **game's** process and is one half of a
+protocol whose other half is the compositor. If a game starts and instantly quits with
+`[Gamescope WSI] Failed to get Wayland objects`, it is loading a layer older than the
+gamescope running it. `./install.sh` detects this and says so.
+
+`GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` makes gamescope-ritz use your distro's layer instead
+of its own, should you ever need it.
+
 #### wlroots
 
 wlroots is checked separately because more than one version is acceptable: a system

@@ -452,6 +452,89 @@ run_pkgconfig_check() {
 	fi
 }
 
+# --- this fork's own WSI layer ----------------------------------------------
+# Since 2026-09-22 this repo builds its layer under its OWN name
+# (VK_LAYER_RITZ_gamescope_wsi, activated by ENABLE_GAMESCOPE_RITZ_WSI) so it
+# cannot collide with the distro gamescope package's VK_LAYER_FROG_*. Both can
+# sit in the loader's search path; the compositor sets only our enable var, so
+# ours activates for our children and the distro's stays dormant for us and
+# untouched for the packaged gamescope. See layer/meson.build.
+#
+# The compositor tests for the manifest at its compiled-in path and falls back
+# to the system layer when it is absent, so installing these two files is what
+# turns the fork's own layer on. Paths come out of the BUILT manifest rather
+# than being hardcoded here, so they cannot drift from what the binary was
+# compiled to look for.
+gcr_layer_built_json() {
+	local build_dir="$1" j
+	for j in "$build_dir"/layer/VkLayer_RITZ_gamescope_wsi.*.json; do
+		[ -f "$j" ] && { printf '%s' "$j"; return 0; }
+	done
+	return 1
+}
+
+# The absolute path the built manifest names for its .so.
+gcr_layer_target_so() {
+	sed -n 's/.*"library_path"[ ]*:[ ]*"\([^"]*\)".*/\1/p' "$1" | head -n1
+}
+
+# <prefix>/share/vulkan/implicit_layer.d/<same basename>, derived from the .so
+# path's own prefix so a non-default --prefix still lands consistently.
+gcr_layer_target_json() {
+	local built_json="$1" so prefix_root
+	so=$(gcr_layer_target_so "$built_json")
+	[ -n "$so" ] || return 1
+	prefix_root=$(dirname -- "$(dirname -- "$so")")
+	printf '%s/share/vulkan/implicit_layer.d/%s' "$prefix_root" "$(basename -- "$built_json")"
+}
+
+gcr_install_wsi_layer() {
+	local build_dir="$1" built_json built_so target_so target_json
+
+	built_json=$(gcr_layer_built_json "$build_dir") || {
+		gcr_warn "no built WSI layer found in $build_dir/layer -- skipping it."
+		gcr_warn "(built with -Denable_gamescope_wsi_layer=false? games will use the system layer.)"
+		return 0
+	}
+	target_so=$(gcr_layer_target_so "$built_json")
+	target_json=$(gcr_layer_target_json "$built_json")
+	built_so="$build_dir/layer/$(basename -- "$target_so")"
+
+	if [ ! -f "$built_so" ]; then
+		gcr_warn "built manifest names $built_so, which does not exist -- skipping the layer."
+		return 0
+	fi
+
+	gcr_info "installing the gamescope-ritz WSI layer:"
+	gcr_info "  $target_so"
+	gcr_info "  $target_json"
+	GCR_PRIV_DIR=$(dirname -- "$target_so")
+	gcr_as_priv install -Dm755 -- "$built_so" "$target_so"
+	GCR_PRIV_DIR=$(dirname -- "$target_json")
+	gcr_as_priv install -Dm644 -- "$built_json" "$target_json"
+}
+
+# Only ever removes files whose manifest names OUR layer -- never the distro's.
+gcr_remove_wsi_layer() {
+	local build_dir="$1" built_json target_so target_json
+
+	built_json=$(gcr_layer_built_json "$build_dir") || return 0
+	target_so=$(gcr_layer_target_so "$built_json")
+	target_json=$(gcr_layer_target_json "$built_json")
+
+	local f
+	for f in "$target_json" "$target_so"; do
+		[ -n "$f" ] && [ -e "$f" ] || continue
+		case "$(basename -- "$f")" in
+			*RITZ_gamescope_wsi*) ;;
+			*) gcr_warn "refusing to remove '$f' -- not this fork's layer."; continue ;;
+		esac
+		GCR_PRIV_DIR=$(dirname -- "$f")
+		gcr_as_priv rm -f -- "$f"
+		gcr_info "removed $f"
+	done
+}
+
 # --- Gamescope WSI layer compatibility --------------------------------------
 # NOT a build dependency -- a RUNTIME one, and the only one that fails after a
 # completely successful build. install.sh places /usr/bin/gamescope-ritz and
@@ -485,34 +568,40 @@ gcr_wsi_layer_so() {
 }
 
 run_wsi_layer_check() {
-	local so
+	local build_dir="${1:-}" built_json ours so
+
+	# Ours, if this build installed it: the compositor prefers it and the
+	# whole version-skew problem is gone, whatever the distro ships.
+	if [ -n "$build_dir" ] && built_json=$(gcr_layer_built_json "$build_dir"); then
+		ours=$(gcr_layer_target_json "$built_json")
+		if [ -n "$ours" ] && [ -f "$ours" ]; then
+			gcr_info "Gamescope WSI layer: this fork's own ($ours)."
+			return 0
+		fi
+	fi
+
+	# Otherwise the compositor falls back to the system layer, so it is the
+	# one that has to be protocol-compatible.
 	so=$(gcr_wsi_layer_so)
 
 	if [ -z "$so" ] || [ ! -f "$so" ]; then
 		gcr_warn "no Gamescope WSI Vulkan layer found on this system."
-		gcr_warn "Games will still run, but without the Xwayland-bypass layer. It normally"
-		gcr_warn "comes with your distro's 'gamescope' package -- install that alongside this."
+		gcr_warn "Games will still run, but without the Xwayland-bypass layer."
 		return 0
 	fi
 
 	if grep -qa 'uuuuuus' "$so" 2>/dev/null; then
-		gcr_info "Gamescope WSI layer: $so (protocol matches)."
+		gcr_info "Gamescope WSI layer: system layer $so (protocol matches)."
 		return 0
 	fi
 
-	gcr_warn "the installed Gamescope WSI layer is OLDER than this build and will not work:"
+	gcr_warn "the system Gamescope WSI layer is OLDER than this build and will not work:"
 	gcr_warn "  $so"
-	gcr_warn "Games will start and then die with '[Gamescope WSI] Failed to get Wayland objects',"
-	gcr_warn "because that layer predates the 7-argument swapchain_feedback this compositor"
-	gcr_warn "expects (upstream 6a4d150, 2024-12-04)."
-	gcr_warn "Fix: update your distro's 'gamescope' package (Arch 3.16.25 is known-good), or"
-	gcr_warn "install this tree's own layer over it:"
-	gcr_warn "  sudo install -Dm755 <builddir>/layer/libVkLayer_FROG_gamescope_wsi_x86_64.so \\"
-	gcr_warn "                      /usr/local/lib/libVkLayer_FROG_gamescope_wsi_x86_64.so"
-	gcr_warn "  sudo install -Dm644 <builddir>/layer/VkLayer_FROG_gamescope_wsi.x86_64.json \\"
-	gcr_warn "                      /usr/local/share/vulkan/implicit_layer.d/"
-	gcr_warn "(that shadows the distro layer for the packaged gamescope too -- see"
-	gcr_warn " superdoc/features/build-and-tooling.md before doing it.)"
+	gcr_warn "Games start and immediately quit with '[Gamescope WSI] Failed to get Wayland"
+	gcr_warn "objects', because that layer predates the 7-argument swapchain_feedback this"
+	gcr_warn "compositor expects (upstream 6a4d150, 2024-12-04)."
+	gcr_warn "Fix: re-run ./install.sh --install, which installs this fork's own layer"
+	gcr_warn "under its own name so it cannot clash with your distro's."
 	return 0
 }
 
@@ -522,8 +611,10 @@ run_dependency_checks() {
 	run_pkgconfig_check "$1"
 	run_wlroots_check "$1"
 	# Never fatal: this one is about RUNNING, not building, and a warning at
-	# the end of a successful install is exactly where it is useful.
-	run_wsi_layer_check
+	# the end of a successful install is exactly where it is useful. $2 is the
+	# build dir, when the caller has one -- it lets the check see whether this
+	# build's own layer is installed before it judges the system's.
+	run_wsi_layer_check "${2:-}"
 }
 
 # --- state detection (used by the interactive menu, and by --update) --------
@@ -681,7 +772,7 @@ do_install() {
 
 	local release_bin; release_bin=$(gcr_release_binary "$BUILD_DIR")
 	if [ ! -x "$release_bin" ] || [ "$REBUILD" = "1" ]; then
-		run_dependency_checks fatal
+		run_dependency_checks fatal "$BUILD_DIR"
 		if [ ! -x "$release_bin" ]; then
 			gcr_info "no release build found at $release_bin — building one now."
 		else
@@ -689,7 +780,7 @@ do_install() {
 		fi
 		gcr_build_release "$REPO_ROOT" "$BUILD_DIR"
 	else
-		run_dependency_checks info
+		run_dependency_checks info "$BUILD_DIR"
 		gcr_info "found existing release build: $release_bin (pass --rebuild to force a rebuild)"
 	fi
 
@@ -734,6 +825,11 @@ do_install() {
 		copy) gcr_as_priv cp -f -- "$release_bin" "$TARGET" ;;
 	esac
 	gcr_info "installed: $TARGET ($MODE mode)"
+
+	# The layer goes in with the binary: the compositor only uses its own
+	# layer if this manifest is actually on disk, so installing one without
+	# the other silently falls back to whatever the distro ships.
+	gcr_install_wsi_layer "$BUILD_DIR"
 
 	ritz_extension_prompt install
 	echo
@@ -797,6 +893,22 @@ do_remove() {
 		esac
 	fi
 
+	# This fork's own Vulkan layer, if this build installed one. Confirmed
+	# separately and defaulted to NO: unlike the binary, the layer is a file
+	# in a shared system directory, and gcr_remove_wsi_layer() will only ever
+	# touch a manifest whose name is this fork's -- never the distro's.
+	if gcr_layer_built_json "$BUILD_DIR" >/dev/null 2>&1; then
+		local ours; ours=$(gcr_layer_target_json "$(gcr_layer_built_json "$BUILD_DIR")")
+		if [ -n "$ours" ] && [ -f "$ours" ]; then
+			gcr_info "this fork's Vulkan WSI layer is installed at $ours."
+			if gcr_confirm "Also remove the gamescope-ritz WSI layer?" n; then
+				gcr_remove_wsi_layer "$BUILD_DIR"
+			else
+				gcr_info "left the WSI layer in place."
+			fi
+		fi
+	fi
+
 	ritz_extension_remove_prompt
 
 	echo
@@ -838,7 +950,7 @@ do_update() {
 		exit 1
 	fi
 
-	run_dependency_checks fatal
+	run_dependency_checks fatal "$BUILD_DIR"
 
 	local build_dir
 	if [ "$install_mode" = "symlink" ]; then
@@ -866,6 +978,10 @@ do_update() {
 		GCR_PRIV_DIR="$PREFIX_DIR"
 		gcr_as_priv cp -f -- "$release_bin" "$TARGET"
 	fi
+
+	# Refresh the layer too -- a rebuilt compositor with a stale layer beside
+	# it is exactly the skew this whole arrangement exists to prevent.
+	gcr_install_wsi_layer "$build_dir"
 
 	ritz_extension_prompt update
 	echo

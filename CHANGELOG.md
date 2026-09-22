@@ -9,11 +9,15 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
-## [0.8.4] – 2026-09-22
+## [0.9.0] – 2026-09-22
 
 ### Added
 - **wlroots 0.19 support**: gamescope-ritz now builds against a system wlroots 0.19
   install, in addition to the previously supported wlroots 0.20.
+- **Its own Vulkan layer**: gamescope-ritz now ships and installs the layer games
+  load, instead of relying on the one your distro's gamescope package provides —
+  which on some distros was too old and made every game start and instantly quit.
+  Your packaged gamescope keeps using its own and is unaffected.
 
 ### Fixed
 - **Install and update find wlroots again**: `install.sh --install` and
@@ -27,9 +31,6 @@ The newest version below is the one this build reports.
   compiler as well as the libraries.
 
 ### Info
-- **Warning when the system Gamescope WSI layer is too old**: install and update
-  now spot the mismatch that makes every game start and immediately quit, and say
-  how to fix it.
 - **Dependencies are listed in the README**: copy-paste install commands for Arch
   and Fedora, plus which extra packages each optional feature needs.
 

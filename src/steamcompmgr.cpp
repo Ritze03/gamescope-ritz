@@ -9273,7 +9273,36 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 
 		unsetenv( "ENABLE_VKBASALT" );
 		// Enable Gamescope WSI by default for nested.
+		//
+		// WHICH layer, though. This fork builds and installs its own, under
+		// its own name and its own enable var (layer/meson.build), because
+		// sharing upstream's name with the distro's gamescope package meant
+		// the Vulkan loader picked one of the two by search order -- and an
+		// older distro layer talking to this compositor is a protocol error
+		// that kills every Vulkan client on the machine (the Nobara/Fedora 44
+		// report; see superdoc/features/build-and-tooling.md).
+		//
+		// Setting ONLY our enable var leaves the distro's layer dormant for
+		// our children (its own enable var is never set) and completely
+		// untouched for the packaged gamescope. If our layer is not installed
+		// we fall back to upstream's var so the system layer is still used --
+		// no layer at all would be worse than the skew this avoids.
+		//
+		// GAMESCOPE_RITZ_USE_SYSTEM_WSI=1 forces the fallback by hand. It
+		// exists because a bad layer cannot be worked around from inside a
+		// game: the layer is loaded into the game's process, so the only
+		// place to turn it off is out here, before the game starts.
+#ifdef GAMESCOPE_RITZ_WSI_LAYER_JSON
+		const char *pszForceSystemWsi = getenv( "GAMESCOPE_RITZ_USE_SYSTEM_WSI" );
+		const bool bForceSystemWsi = pszForceSystemWsi && *pszForceSystemWsi && strcmp( pszForceSystemWsi, "0" ) != 0;
+
+		if ( !bForceSystemWsi && access( GAMESCOPE_RITZ_WSI_LAYER_JSON, R_OK ) == 0 )
+			setenv( GAMESCOPE_RITZ_WSI_ENABLE_ENV, "1", 0 );
+		else
+			setenv( "ENABLE_GAMESCOPE_WSI", "1", 0 );
+#else
 		setenv( "ENABLE_GAMESCOPE_WSI", "1", 0 );
+#endif
 
 		// Unset this to avoid it leaking to Proton apps, etc.
 		unsetenv( "SDL_VIDEODRIVER" );

@@ -998,7 +998,7 @@ namespace GamescopeWSILayer {
       }};
 
       if (pLayerName) {
-        if (pLayerName == "VK_LAYER_FROG_gamescope_wsi"sv) {
+        if (pLayerName == "VK_LAYER_RITZ_gamescope_wsi"sv) {
           return vkroots::helpers::array(s_LayerExposedExts, pPropertyCount, pProperties);
         } else {
           return pDispatch->EnumerateDeviceExtensionProperties(physicalDevice, pLayerName, pPropertyCount, pProperties);

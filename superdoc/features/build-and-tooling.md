@@ -24,36 +24,56 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
     with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
     a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
-- **The Gamescope WSI layer is a RUNTIME dependency `install.sh` does not install**, and
-  the only one that fails *after* a completely successful build. `install.sh` places
-  `/usr/bin/gamescope-ritz` and nothing else, so the Vulkan layer every game loads is
-  whichever `VkLayer_FROG_gamescope_wsi` the distro's own `gamescope` package ships.
-  `layer/meson.build` marks it `install: true`, but nothing here ever runs
-  `meson install`.
-  - **The failure mode**, diagnosed on Nobara/Fedora 44 (2026-09-22): upstream
-    `6a4d150` ("mangoapp: plumb engineName", 2024-12-04) added a 7th argument
-    (`vk_engine_name`, a string) to `swapchain_feedback`. A layer built before that
-    sends six, the compositor reads a short message and kills the connection —
+- **This fork installs its OWN Vulkan WSI layer, under its own name** (2026-09-22).
+  `layer/meson.build` builds `libVkLayer_RITZ_gamescope_wsi_<family>.so` with the layer
+  name `VK_LAYER_RITZ_gamescope_wsi_<family>`, activated by
+  `ENABLE_GAMESCOPE_RITZ_WSI` and suppressed by `DISABLE_GAMESCOPE_RITZ_WSI`. `install.sh`
+  installs it beside the binary (`gcr_install_wsi_layer`), and `--remove` offers to take
+  it away again.
+  - **The bug it fixes.** The layer is loaded into the *game's* process, not gamescope's,
+    and the compositor and the layer are two halves of one protocol that must be
+    version-matched. Before this, the fork shipped no layer of its own, so games loaded
+    whichever `VkLayer_FROG_gamescope_wsi` the distro's `gamescope` package provided.
+    Upstream `6a4d150` ("mangoapp: plumb engineName", 2024-12-04) added a 7th argument
+    (`vk_engine_name`) to `swapchain_feedback`; a layer built before that sends six, so
+    the compositor read a short message, logged
     `[wayland] message too short, object (46), message swapchain_feedback(uuuuuus)`
-    followed by `error in client communication` — after which *every* surface fails
-    with `[Gamescope WSI] Failed to get Wayland objects`, forever. Every Vulkan client
-    dies, and it reproduces on any gamescope newer than the installed layer, not just
-    this fork. This fork has never touched `protocol/gamescope-swapchain.xml` or
-    `layer/`.
-  - `run_wsi_layer_check()` greps the active layer binary for the 7-argument signature
-    literal `uuuuuus` that wayland-scanner bakes in, and warns (never fatally — this is
-    about running, not building). *Why a grep and not a version comparison:* there is no
-    reliable way to ask a `.so` which gamescope built it, and the signature IS the thing
-    that must match. `grep -a` rather than `strings(1)`, so it needs no binutils.
-  - **Why install.sh does not just install the layer:** both JSONs declare the layer
-    name `VK_LAYER_FROG_gamescope_wsi_x86_64`, and `/usr/local/share/vulkan` is searched
-    before `/usr/share/vulkan` — so installing this tree's copy shadows the distro one
-    for the *packaged* gamescope too, which may then break in the opposite direction.
-    That cuts against this project's rule about never disturbing the user's known-good
-    gamescope, so it stays a warning with instructions. The clean fix, if it is ever
-    needed, is for the compositor to give its layer its own name and point only its own
-    children at it with `VK_ADD_LAYER_PATH`, next to where it already sets
-    `ENABLE_GAMESCOPE_WSI=1` (`steamcompmgr.cpp:9276`).
+    followed by `error in client communication`, and **dropped that client's
+    connection**. From then on every surface failed with
+    `[Gamescope WSI] Failed to get Wayland objects`, once per `xid`, forever. Diagnosed
+    on Nobara/Fedora 44 where *every* Vulkan client — vkcube and Rocket League alike —
+    started and instantly quit. It reproduced on stock gamescope built from source too,
+    because the fault is the layer being old, not the compositor being this fork: the
+    fork has never touched `protocol/gamescope-swapchain.xml` or `layer/`.
+  - *Why a distinct name and not just installing over the distro's:* both manifests
+    would claim `VK_LAYER_FROG_gamescope_wsi_<family>`, and the loader resolves a
+    duplicate name by search order — `/usr/local/share/vulkan` is read before
+    `/usr/share/vulkan`, so ours would silently shadow the distro's for the *packaged*
+    gamescope as well, breaking it in the mirror-image direction. Distinct names let
+    both sit in the search path, each dormant unless its own enable var is set. That
+    also keeps the project's standing rule that the user's packaged gamescope is never
+    disturbed.
+  - **The fallback, and why it must exist.** `steamcompmgr.cpp` sets *only*
+    `ENABLE_GAMESCOPE_RITZ_WSI` — but just when our manifest is really on disk, tested
+    with `access()` against the path `src/meson.build` bakes in as
+    `GAMESCOPE_RITZ_WSI_LAYER_JSON`. If it is absent (a binary copied somewhere without
+    the layer, or `-Denable_gamescope_wsi_layer=false`) it sets upstream's
+    `ENABLE_GAMESCOPE_WSI` instead, so the system layer is still used. Without that,
+    a missing layer would mean *no* WSI layer at all — a worse regression than the skew
+    this exists to fix.
+  - `GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` forces the fallback by hand. *Why an escape
+    hatch:* the layer runs inside the game's process, so a bad one cannot be worked
+    around from in there — the only place to turn it off is in the environment, before
+    the game starts.
+  - `run_wsi_layer_check()` reports which layer is in play. If ours is installed it says
+    so and stops; otherwise it greps the system layer for the 7-argument signature
+    literal `uuuuuus` that wayland-scanner bakes in, and warns when it is missing. *Why
+    a grep and not a version comparison:* nothing in a `.so` says which gamescope built
+    it, and the signature IS what has to match; `grep -a` rather than `strings(1)` so it
+    needs no binutils.
+  - `gcr_remove_wsi_layer()` only ever deletes a manifest whose basename contains
+    `RITZ_gamescope_wsi`, and `--remove` defaults that confirmation to **no** — unlike
+    the binary, these are files in a shared system directory.
 - **The program check is separate from the library check, and both are needed.**
   `gcr_check_build_tools()` covers `meson`, `cmake`, `ninja`, `pkg-config`, `git` and
   the glslang shader compiler; the pkg-config gate below covers the `dependency()`

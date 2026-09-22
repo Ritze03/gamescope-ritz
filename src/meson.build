@@ -258,6 +258,19 @@ gamescope_cpp_args += '-DHAVE_LIBCAP=@0@'.format(cap_dep.found().to_int())
 gamescope_cpp_args += '-DHAVE_LIBEIS=@0@'.format(eis_dep.found().to_int())
 gamescope_cpp_args += '-DHAVE_SCRIPTING=1'
 
+# THIS FORK'S OWN WSI LAYER (layer/meson.build): its installed manifest path
+# and the env var that activates it, baked in so steamcompmgr.cpp can tell at
+# runtime whether our layer is actually present on this machine. When it is,
+# we point our children at it; when it is not -- a binary copied somewhere
+# without `meson install`, or a build with the layer disabled -- we fall back
+# to upstream's ENABLE_GAMESCOPE_WSI so the system layer still gets used.
+# Without that fallback a missing layer would mean NO WSI layer at all, which
+# is a worse regression than the version skew this whole thing exists to fix.
+if get_option('enable_gamescope_wsi_layer')
+  gamescope_cpp_args += '-DGAMESCOPE_RITZ_WSI_LAYER_JSON="@0@"'.format(ritz_layer_json_path)
+  gamescope_cpp_args += '-DGAMESCOPE_RITZ_WSI_ENABLE_ENV="@0@"'.format(ritz_layer_enable_env)
+endif
+
 src += spirv_shaders
 src += font_headers
 src += license_headers
