@@ -386,6 +386,13 @@ struct FrameInfo_t
 		// projection -- outline included -- against the untouched frame
 		// beneath it. 1.0 is the unfaded picture.
 		float flAlpha = 1.0f;
+		// Sharpen (2026-09-22, zoom.sharpen), 0..1, 0 = off. Already scaled
+		// by Zoom_FillRequest() (Overlay/Zoom.h's Zoom_SharpenRamp) so it is
+		// exactly 0 for as long as flFactor is pinned at 1.0 during the
+		// fade's first phase -- sharpening then would break the phase's
+		// byte-identical-to-unzoomed guarantee (see zoom.md). Mapped to
+		// RCAS's con.x by ZoomPushData_t::SharpenConX (rendervulkan.cpp).
+		float flSharpen = 0.0f;
 	} zoom;
 
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];

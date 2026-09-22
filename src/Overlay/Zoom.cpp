@@ -223,9 +223,15 @@ namespace gamescope
 		// flush above (which, in practice, already ran first this same
 		// frame -- reading the atomic directly is what makes that true
 		// regardless of ordering).
-		req.flFactor = Zoom_FadeFactor( s_flFadeProgress,
-			std::clamp( s_flFactor.load( std::memory_order_relaxed ), 1.5f, 5.0f ) );
+		const float flTargetFactor = std::clamp( s_flFactor.load( std::memory_order_relaxed ), 1.5f, 5.0f );
+		req.flFactor = Zoom_FadeFactor( s_flFadeProgress, flTargetFactor );
 		s_flLiveFactor.store( req.flFactor, std::memory_order_relaxed );
+		// Sharpen (2026-09-22, Zoom.h's Zoom_SharpenRamp): scaled to 0 for
+		// as long as req.flFactor is still pinned at 1.0 by the fade's
+		// phase 1, then ramps in step with the magnification itself -- see
+		// that helper's own comment for why.
+		req.flSharpen = std::clamp( z.sharpen, 0.0f, 1.0f )
+			* Zoom_SharpenRamp( req.flFactor, flTargetFactor );
 		if ( z.shape == "rectangle" )
 		{
 			req.flWidth = std::clamp( z.width, 0.05f, 1.0f );
@@ -350,6 +356,23 @@ namespace gamescope
 			.ZeroMeans( "Instant" )
 			.Default( S{}.fade_ms )
 			.Keywords( "zoom fade duration time animation ramp smooth speed" )
+			.DisabledUnless( On, kOffReason );
+
+		// Sharpen (2026-09-22). The user: "add an option to add a
+		// sharpening filter on top of the projector area only, so the zoom
+		// content doesn't look as blurry as it does right now." Reuses FSR1
+		// RCAS inside cs_zoom.comp -- see that file and ZoomPushData_t
+		// (rendervulkan.cpp) for the con.x mapping, and Zoom.h's
+		// Zoom_SharpenRamp for why it never applies during the fade's
+		// pinned-at-1.0x first phase. 0 (default) is off and byte-identical
+		// to before this row existed.
+		a.Slider( "zoom.sharpen", "Sharpen", ZOOM_BIND( float, sharpen ) )
+			.Help( "Sharpens the magnified picture inside the projector, so it looks less blurry. "
+			       "Only the projector is affected, never the rest of the screen. 0 is off." )
+			.Range( 0.0f, 1.0f ).Step( 0.05f )
+			.ZeroMeans( "Off" )
+			.Default( S{}.sharpen )
+			.Keywords( "zoom sharpen sharpness crisp clarity rcas blur blurry" )
 			.DisabledUnless( On, kOffReason );
 
 		a.Group( "Projection" );

@@ -4861,10 +4861,31 @@ struct ZoomPushData_t
 	uint32_t uWidth, uHeight;              // the projection, pixels
 	uint32_t uCircle;
 	uint32_t uOutlinePx;
+	// Sharpen (2026-09-22, zoom.sharpen, superdoc/features/zoom.md). RCAS
+	// con.x, bit-cast to uint32_t the same way EffectsPushData_t::u_rcasCon
+	// is -- 0u is the float bit pattern of exactly 0.0f, so "off" is a real
+	// zero the shader can branch on rather than a no-op RCAS call.
+	uint32_t uSharpenCon;
 
-	ZoomPushData_t( float cx, float cy, float sx, float sy, uint32_t w, uint32_t h, bool bCircle, uint32_t uOutline )
+	// 0..1 slider -> RCAS con.x. Same saturating shape as Pre-Sharpen's own
+	// RcasConX() (EffectsPushData_t above), rescaled to THIS slider's 0..1
+	// domain rather than Pre-Sharpen's 0..2: k / (0.75 * (1 + k)) keeps
+	// 0 -> 0 (off) and reaches con.x 0.667 at the top of the slider -- short
+	// of RCAS's own ceiling (1.0) on purpose, so "fully sharpened" here
+	// cannot ring the way Pre-Sharpen's top third (con.x up to 0.889) can.
+	// Kept as a private duplicate of the formula rather than a shared
+	// helper: the two sliders have different domains (0..1 here, 0..2
+	// there) and RcasConX() is private to EffectsPushData_t.
+	static float SharpenConX( float flStrength )
+	{
+		const float k = std::clamp( flStrength, 0.0f, 1.0f );
+		return std::clamp( k / ( 0.75f * ( 1.0f + k ) ), 0.0f, 1.0f );
+	}
+
+	ZoomPushData_t( float cx, float cy, float sx, float sy, uint32_t w, uint32_t h, bool bCircle, uint32_t uOutline, float flSharpen )
 		: flSrcCenterX( cx ), flSrcCenterY( cy ), flSrcPerDstX( sx ), flSrcPerDstY( sy )
 		, uWidth( w ), uHeight( h ), uCircle( bCircle ? 1u : 0u ), uOutlinePx( uOutline )
+		, uSharpenCon( std::bit_cast<uint32_t>( SharpenConX( flSharpen ) ) )
 	{
 	}
 };
@@ -5990,7 +6011,11 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 					( flDstX + (float)uW * 0.5f + base.offset.x ) * base.scale.x,
 					( flDstY + (float)uH * 0.5f + base.offset.y ) * base.scale.y,
 					base.scale.x / flFactor, base.scale.y / flFactor,
-					uW, uH, frameInfo->zoom.bCircle, 1u );
+					uW, uH, frameInfo->zoom.bCircle, 1u,
+					// Already ramped to 0 through the fade's phase 1 by
+					// Zoom_FillRequest() (Zoom_SharpenRamp, Zoom.h) -- see
+					// zoom.md's fade-identity invariant this preserves.
+					frameInfo->zoom.flSharpen );
 				cmdBuffer->bindPipeline( g_device.pipeline( SHADER_TYPE_ZOOM ) );
 				cmdBuffer->bindTexture( 0, base.tex );
 				cmdBuffer->setTextureSrgb( 0, true );
