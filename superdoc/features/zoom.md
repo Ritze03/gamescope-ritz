@@ -248,12 +248,12 @@ the same-frame flush has run.
 The reveal is **two staged phases, not one crossfade**, and that is the whole
 point of the request: the user wants to see *where* the projection is before
 its contents start moving. So one progress float drives both, split at
-`Zoom.h`'s `kZoomFadeSplit` (0.5):
+`Zoom.h`'s `kZoomFadeSplit` (0.1 since 2026-09-23; was an even 0.5 before):
 
 | Progress | What moves |
 | --- | --- |
-| `0 → 0.5` | The shape's opacity, 0 → 1, **at its final size**. The outline and the picture inside it fade up together; the magnification is pinned at exactly 1.0×, so what appears is the projector drawn over unmagnified content. |
-| `0.5 → 1` | The magnification, `mix(1.0, factor, t)`, *inside* the already-solid shape. |
+| `0 → 0.1` | The shape's opacity, 0 → 1, **at its final size**. The outline and the picture inside it fade up together; the magnification is pinned at exactly 1.0×, so what appears is the projector drawn over unmagnified content. |
+| `0.1 → 1` | The magnification, `mix(1.0, factor, t)`, *inside* the already-solid shape. |
 
 Releasing the chord runs the same progress back down, so the zoom ramps out
 first and the shape fades away second — the reveal backwards, not a separate
@@ -261,9 +261,18 @@ animation.
 
 `Why one Param and not three:` the two phases are one reveal the user times as
 a whole. A second slider would only let them disagree, and a split of the one
-duration expresses the staging without a knob to get wrong. `kZoomFadeSplit` is
-an even 0.5 so neither phase reads as the fast one — both are plain linear
-ramps of the same length.
+duration expresses the staging without a knob to get wrong.
+
+> **Why 0.1 and not an even split (2026-09-23):** the user's words, verbatim:
+> *"The outline of the projector should fade in in the first 10% of the set
+> time and the other 90% should be used for increasing the zoom inside of the
+> projector."* The original 2026-09-16 design used an even 0.5 split "so
+> neither phase reads as the fast one" — that reasoning still holds for *why
+> the split is a single named constant and not two independent durations*,
+> but the user decided the outline itself should read as near-instant and
+> the magnification should get almost the whole budget. At the default
+> `fade_ms` of 200 the outline now appears in **20 ms** and the zoom-in takes
+> the remaining **180 ms**, versus 100/100 before.
 
 `Why 1.0× is invisible:` at factor 1.0 `cs_zoom.comp` samples
 `u_srcPerDst = base.scale`, i.e. one source texel per projection pixel when the

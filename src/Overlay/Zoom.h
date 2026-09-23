@@ -78,18 +78,22 @@ namespace gamescope
 		return std::clamp( flCur + 0.25f * (float)nNotches, 1.5f, 5.0f );
 	}
 
-	// ---- the staged fade (2026-09-16) --------------------------------
+	// ---- the staged fade (2026-09-16, re-split 2026-09-23) -----------
 	// One progress float, 0 = no zoom .. 1 = fully zoomed, advanced by real
 	// elapsed time and split into TWO phases so the user sees WHERE the
 	// projection is before its content starts moving: the shape and its
-	// outline fade in at their final size over the first half, then the
+	// outline fade in at their final size over the first phase, then the
 	// magnification ramps 1.0 -> factor inside that already-visible shape
 	// over the second. Reversed on release. See superdoc/features/zoom.md.
 
 	// Where the shape's fade ends and the magnification ramp begins, as a
-	// fraction of the progress. An even split: both phases are a plain
-	// linear ramp of the same duration, so neither reads as the fast one.
-	inline constexpr float kZoomFadeSplit = 0.5f;
+	// fraction of the progress. 2026-09-23: the user asked for the outline
+	// to be quick and the zoom-in to get the rest of the time -- *"The
+	// outline of the projector should fade in in the first 10% of the set
+	// time and the other 90% should be used for increasing the zoom inside
+	// of the projector."* Was an even 0.5 split (both phases the same
+	// linear-ramp duration) until this change.
+	inline constexpr float kZoomFadeSplit = 0.1f;
 
 	// The new progress after ulDeltaNs of real time, moving towards 1 while
 	// bWanted and towards 0 once released -- from wherever it currently is,

@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.9.1] – 2026-09-23
+
+### Info
+- **Faster zoom outline**: the zoom's outline now fades in during the first 10% of the
+  fade duration, leaving the other 90% for the zoom-in itself.
+
 ## [0.9.0] – 2026-09-22
 
 ### Added

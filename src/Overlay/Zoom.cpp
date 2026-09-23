@@ -355,8 +355,9 @@ namespace gamescope
 		a.Slider( "zoom.fade", "Fade duration", ZOOM_BIND( int, fade_ms ) )
 			.Key( "zoom.fade_ms" )
 			.Help( "How long the zoom takes to appear, in milliseconds. The outline fades in at "
-			       "its final size first, then the picture inside it magnifies; letting go plays "
-			       "the same thing backwards. 0 zooms instantly." )
+			       "its final size over the first 10% of that time, then the picture inside it "
+			       "magnifies over the other 90%; letting go plays the same thing backwards. 0 "
+			       "zooms instantly." )
 			.Range( 0.0f, 2000.0f ).Step( 10.0f ).Unit( "ms" )
 			.ZeroMeans( "Instant" )
 			.Default( S{}.fade_ms )

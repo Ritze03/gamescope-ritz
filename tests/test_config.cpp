@@ -1600,7 +1600,7 @@ TEST_CASE( "zoom staged fade: phase 1 is exactly 1.0x, phase 2 ramps", "[config]
     // THE load-bearing property: anywhere in the first phase the magnification
     // is bit-exactly 1.0, so the picture inside the shape is the frame beneath
     // it. Not "close to 1" -- a value a hair off shifts every texel.
-    for ( float t : { 0.0f, 0.001f, 0.25f, kZoomFadeSplit } )
+    for ( float t : { 0.0f, 0.001f, 0.05f, kZoomFadeSplit } )
         REQUIRE( Zoom_FadeFactor( t, 3.0f ) == 1.0f );
 
     // ... and the shape is fully opaque by the time it starts moving, so the
@@ -1610,9 +1610,14 @@ TEST_CASE( "zoom staged fade: phase 1 is exactly 1.0x, phase 2 ramps", "[config]
     REQUIRE( Zoom_FadeAlpha( 1.0f ) == 1.0f );
     REQUIRE( Zoom_FadeAlpha( kZoomFadeSplit * 0.5f ) == 0.5f );
 
-    // Phase 2 ends on the configured factor exactly, and is monotone in between.
+    // 2026-09-23: the split moved from an even 0.5 to 0.1 -- the user's
+    // words, *"The outline of the projector should fade in in the first 10%
+    // of the set time and the other 90% should be used for increasing the
+    // zoom inside of the projector."* Phase 2 ends on the configured factor
+    // exactly, and is monotone in between; a midpoint of the (now much
+    // longer) second phase lands at exactly half the factor's range.
     REQUIRE( Zoom_FadeFactor( 1.0f, 3.0f ) == 3.0f );
-    REQUIRE( Zoom_FadeFactor( 0.75f, 3.0f ) == 2.0f );
+    REQUIRE_THAT( Zoom_FadeFactor( 0.55f, 3.0f ), Catch::Matchers::WithinAbs( 2.0, 1e-4 ) );
     REQUIRE( Zoom_FadeFactor( 1.0f, 1.5f ) == 1.5f );
 }
 
