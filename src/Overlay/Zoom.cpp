@@ -27,6 +27,7 @@ namespace gamescope
 		std::atomic<bool>  s_bEnabled{ false };
 		std::atomic<bool>  s_bToggle{ false };
 		std::atomic<bool>  s_bMouseScale{ false };
+		std::atomic<bool>  s_bMouseScaleHiddenOnly{ false };
 		std::atomic<float> s_flFactor{ 2.0f };
 		std::atomic<bool>  s_bConsumeButton{ false };
 		std::atomic<bool>  s_bScrollAdjust{ false };
@@ -63,6 +64,7 @@ namespace gamescope
 			s_bEnabled.store( z.enabled, std::memory_order_relaxed );
 			s_bToggle.store( z.mode == "toggle", std::memory_order_relaxed );
 			s_bMouseScale.store( z.mouse_scale, std::memory_order_relaxed );
+			s_bMouseScaleHiddenOnly.store( z.mouse_scale_hidden_only, std::memory_order_relaxed );
 			s_flFactor.store( std::clamp( z.factor, 1.5f, 5.0f ), std::memory_order_relaxed );
 			s_bConsumeButton.store( z.consume_button, std::memory_order_relaxed );
 			s_bScrollAdjust.store( z.scroll_adjust, std::memory_order_relaxed );
@@ -124,10 +126,18 @@ namespace gamescope
 		force_repaint();
 	}
 
-	float Zoom_MouseScale()
+	float Zoom_MouseScale( bool bCursorHidden )
 	{
 		if ( !s_bEnabled.load( std::memory_order_relaxed )
 			|| !s_bMouseScale.load( std::memory_order_relaxed ) )
+			return 1.0f;
+		// "Only while the cursor is hidden" (2026-09-25): opt-in, off by
+		// default -- the user's own reason: "it will probably be buggy in
+		// some games" (a game whose hidden-cursor signalling this fork
+		// misreads would otherwise slow the mouse somewhere the user did
+		// not ask for it). See Zoom.h's Zoom_MouseScale() for what
+		// `bCursorHidden` means.
+		if ( s_bMouseScaleHiddenOnly.load( std::memory_order_relaxed ) && !bCursorHidden )
 			return 1.0f;
 		// The RAMPED magnification, not the configured one: during the
 		// fade the picture is still at 1.0x, so dividing by the full factor
@@ -333,10 +343,23 @@ namespace gamescope
 		a.Switch( "zoom.mouse_scale", "Match mouse speed", ZOOM_BIND( bool, mouse_scale ) )
 			.Help( "Divides the mouse speed by the zoom level while zoomed, so the aim moves "
 			       "the same distance on screen as it does unzoomed. Applied on top of "
-			       "gamescope's own --mouse-sensitivity." )
+			       "gamescope's own --mouse-sensitivity. Never applied to the settings overlay's "
+			       "own mouse, even while it is open over a zoomed game." )
 			.Default( S{}.mouse_scale )
 			.Keywords( "zoom mouse speed sensitivity scale aim" )
 			.DisabledUnless( On, kOffReason );
+
+		auto MouseScaleOn = []{ EnsureConfigLoaded(); return s_Settings.zoom.enabled && s_Settings.zoom.mouse_scale; };
+		constexpr const char *kMouseScaleOffReason = "\"Match mouse speed\" is off";
+
+		a.Switch( "zoom.mouse_scale_hidden_only", "Only while the cursor is hidden", ZOOM_BIND( bool, mouse_scale_hidden_only ) )
+			.Help( "Leaves the mouse speed alone whenever the game shows a cursor (menus, "
+			       "inventories) and only divides it while the game's own cursor is hidden. Off "
+			       "by default: this may misjudge some games, so it is opt-in rather than always "
+			       "on." )
+			.Default( S{}.mouse_scale_hidden_only )
+			.Keywords( "zoom mouse speed hidden cursor visible menu only" )
+			.DisabledUnless( MouseScaleOn, kMouseScaleOffReason );
 
 		a.Switch( "zoom.consume_button", "Keep the button from the game", ZOOM_BIND( bool, consume_button ) )
 			.Help( "The game never receives the zoom chord's mouse button press or release. A "

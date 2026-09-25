@@ -4090,23 +4090,39 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 	dx *= g_mouseSensitivity;
 	dy *= g_mouseSensitivity;
 
-	// The zoom's "match mouse speed" (Overlay/Zoom.h): while zoomed in the
-	// picture moves N times as far per count, so the motion is divided by N
-	// here, on top of --mouse-sensitivity, to keep the aim's feel. 1.0
-	// whenever the zoom is off.
-	const float flZoom = gamescope::Zoom_MouseScale();
-	dx *= flZoom;
-	dy *= flZoom;
-
 	// M2: the relative/grabbed-pointer path (SDL relative mouse mode, real
 	// libinput pointer motion via wlserver_handle_pointer_motion(), OpenVR,
 	// etc). Windowed SDL mouse motion instead goes through
 	// wlserver_touchmotion() below -- see that function's own gate.
+	//
+	// The zoom's "match mouse speed" scaling below must NOT apply here: this
+	// branch feeds the settings overlay's own pointer (Shell/Launcher), not
+	// the game, and the overlay's cursor is never hidden by the zoom's
+	// hidden-cursor rule. Before 2026-09-25 the scale was applied above this
+	// gate, so opening the overlay while zoomed with "Match mouse speed" on
+	// left the UI's own mouse moving at the divided (slowed) speed -- the
+	// user's report. See superdoc/features/zoom.md, "Match mouse speed".
 	if ( gamescope::SettingsOverlay_IsCapturingInput() )
 	{
 		gamescope::SettingsOverlay_QueueMouseMotionDelta( dx, dy );
 		return;
 	}
+
+	// "Only while the cursor is hidden" (zoom.mouse_scale_hidden_only,
+	// 2026-09-25): hidden means either the game set an empty cursor image
+	// (bCursorHasImage false -- a real FPS hides its own cursor this way)
+	// OR the pointer is constraint-LOCKED (an FPS grabbing the mouse via
+	// zwp_locked_pointer_v1, which almost always also hides the cursor, but
+	// checking both covers a game that locks a frame or two before the
+	// image update lands). Deliberately NOT wlserver.bCursorHidden: that
+	// flag is also set by gamescope's own idle auto-hide
+	// (wlserver_check_cursor_dirty/timeout), which would false-positive on
+	// a menu with a visible-but-idle cursor and leave the mouse divided
+	// there too.
+	const bool bCursorHidden = !wlserver.bCursorHasImage || wlserver_pointer_is_locked();
+	const float flZoom = gamescope::Zoom_MouseScale( bCursorHidden );
+	dx *= flZoom;
+	dy *= flZoom;
 
 	// Item 10: relative motion is now the freshest input, so the last absolute
 	// sample no longer says where the host pointer is (a grab hides and pins

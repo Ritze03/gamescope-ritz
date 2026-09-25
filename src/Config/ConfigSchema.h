@@ -337,6 +337,14 @@ namespace gamescope::config
         float height = 0.5f;
         float factor = 2.0f;          // magnification, 1.5..5.0
         bool mouse_scale = false;     // divide mouse speed by `factor` while zoomed (on top of --mouse-sensitivity)
+        // "Only while the cursor is hidden" (2026-09-25): when `mouse_scale`
+        // is also on, only apply the divide while the game's own cursor is
+        // hidden (a real FPS grab), never while it shows one (a menu). Off
+        // by default -- opt-in because the hidden-cursor signal this reads
+        // can misjudge a game. ADDITIVE (like every ZoomSettings field
+        // above/below it), so no schema bump: an older config simply has no
+        // "mouse_scale_hidden_only" key and resolves to false.
+        bool mouse_scale_hidden_only = false;
         // "Keep the button from the game" (2026-09-14): the zoom chord's own
         // mouse button (RMB by default) is swallowed -- press AND release --
         // instead of reaching the game. Only ever applies to a mouse button;

@@ -235,6 +235,7 @@ namespace gamescope::config
                 z.height = JGetFloat( *pZoom, "height", z.height );
                 z.factor = JGetFloat( *pZoom, "factor", z.factor );
                 z.mouse_scale = JGetBool( *pZoom, "mouse_scale", z.mouse_scale );
+                z.mouse_scale_hidden_only = JGetBool( *pZoom, "mouse_scale_hidden_only", z.mouse_scale_hidden_only );
                 z.consume_button = JGetBool( *pZoom, "consume_button", z.consume_button );
                 z.scroll_adjust = JGetBool( *pZoom, "scroll_adjust", z.scroll_adjust );
                 z.fade_ms = JGetInt( *pZoom, "fade_ms", z.fade_ms );
@@ -614,6 +615,7 @@ namespace gamescope::config
             jZoom[ "height" ] = z.height;
             jZoom[ "factor" ] = z.factor;
             jZoom[ "mouse_scale" ] = z.mouse_scale;
+            jZoom[ "mouse_scale_hidden_only" ] = z.mouse_scale_hidden_only;
             jZoom[ "consume_button" ] = z.consume_button;
             jZoom[ "scroll_adjust" ] = z.scroll_adjust;
             jZoom[ "fade_ms" ] = z.fade_ms;

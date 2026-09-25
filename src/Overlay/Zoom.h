@@ -43,8 +43,16 @@ namespace gamescope
 	void Zoom_FillRequest( FrameInfo_t *pFrameInfo );
 
 	// The factor to multiply relative mouse motion by: 1 / magnification
-	// while zoomed with "Match mouse speed" on, 1.0 otherwise.
-	float Zoom_MouseScale();
+	// while zoomed with "Match mouse speed" on, 1.0 otherwise. `bCursorHidden`
+	// is the caller's own read of whether the game's cursor is hidden right
+	// now (wlserver.cpp computes it -- see wlserver_mousemotion()'s own
+	// comment for the exact rule); when "Only while the cursor is hidden"
+	// (zoom.mouse_scale_hidden_only) is on, the scale is 1.0 whenever
+	// `bCursorHidden` is false, so a game menu's own visible cursor is never
+	// slowed. Ignored (the parameter is simply unread) while that switch is
+	// off, which is why every caller may pass a cheap-to-compute bool
+	// unconditionally rather than short-circuiting first.
+	float Zoom_MouseScale( bool bCursorHidden );
 
 	// True only when the zoom is enabled AND "Keep the button from the
 	// game" (zoom.consume_button) is on. Read on the wlserver thread, from

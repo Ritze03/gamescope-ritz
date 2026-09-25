@@ -9,6 +9,20 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.9.2] – 2026-09-25
+
+### Added
+- **Zoom: scale mouse speed only while the cursor is hidden**: a new switch under
+  "Match mouse speed" leaves the mouse speed alone whenever the game shows its own
+  cursor (menus, inventories), and only divides it while that cursor is hidden. Off
+  by default, since it may misjudge some games.
+
+### Fixed
+- **Zoom: the settings overlay's own mouse no longer slows down**: opening the
+  settings while zoomed with "Match mouse speed" on used to slow the overlay's
+  own pointer along with the game's; the overlay's mouse now always moves at
+  normal speed.
+
 ## [0.9.1] – 2026-09-23
 
 ### Info

@@ -33,6 +33,7 @@ group after Crosshair). Default **off**.
 | | Activation | `mode` | `"hold"` (zoomed while the chord is down) or `"toggle"` (press in, press out). Int-backed Choice like `crosshair.hide_mode`: `overlay_e2_set zoom.mode 1` is Toggle. |
 | | Zoom level | `factor` | 1.5–5.0, step 0.1, default 2.0. |
 | | Match mouse speed | `mouse_scale` | Multiplies relative mouse motion by `1 / factor` while zoomed. See below. |
+| | Only while the cursor is hidden | `mouse_scale_hidden_only` | Default off. When `mouse_scale` is also on, only divides the mouse speed while the game's own cursor is hidden. See below. |
 | | Keep the button from the game | `consume_button` | Default off. Swallows the zoom chord's own mouse button, press and release, instead of forwarding it. See below. |
 | | Scroll to change zoom level | `scroll_adjust` | Default off. While zoomed, the wheel steps `factor` by 0.25 instead of reaching the game. See below. |
 | | Fade duration | `fade_ms` | 0–2000 ms, step 10, default **200**. `ZeroMeans("Instant")`. One duration for the whole staged reveal — see below. |
@@ -167,6 +168,47 @@ there would slow the aim before anything had been magnified, so
 `Zoom_FillRequest()` actually put on screen this frame — which is exactly the
 configured factor once the ramp has finished, and exactly 1.0 when nothing is
 zoomed.
+
+`Why overlay-captured motion is never scaled (2026-09-25):` `wlserver_mousemotion()`
+gates the settings overlay's own pointer (`SettingsOverlay_IsCapturingInput()`,
+Shell/Launcher) *before* applying `Zoom_MouseScale()` now, not after. Before this
+date the scale was applied first, so opening the Shell or Launcher while zoomed
+with `mouse_scale` on left the overlay's own mouse cursor moving at the divided
+(slowed) speed — reported by the user as *"my mouse gets slower in the actual
+UI, which is just wrong."* The overlay's cursor is never hidden by any of this
+fork's own zoom logic, so there was never a case where slowing it was correct.
+
+### Only while the cursor is hidden (`mouse_scale_hidden_only`)
+
+> **Why (2026-09-25):** the user, in the same report above: *"You should also
+> make sure that it only adjusts the mouse speed when the cursor is actually
+> invisible. You could hide that behind the switch, so it isn't just a general
+> behavior, so the user has to actually opt into it, because it will probably
+> be buggy in some games."*
+
+Off by default, and only reachable (`DisabledUnless`) while `mouse_scale` is
+also on. When on, `wlserver_mousemotion()` computes
+`bCursorHidden = !wlserver.bCursorHasImage || wlserver_pointer_is_locked()` and
+passes it into `Zoom_MouseScale( bCursorHidden )`, which returns `1.0` whenever
+`mouse_scale_hidden_only` is on and `bCursorHidden` is false — a game menu or
+inventory screen with its own visible cursor is left at full, unscaled mouse
+speed, and only a hidden-cursor FPS-style grab gets the divided speed.
+
+`Why this signal, not wlserver.bCursorHidden:` `bCursorHidden` is *also* set by
+gamescope's own idle auto-hide (the cursor-dirty timeout in `wlserver.cpp`), so
+a menu with a cursor that simply hasn't moved in a while would read as "hidden"
+and get scaled anyway — exactly the false positive the switch exists to avoid.
+`wlserver.bCursorHasImage` is instead a direct mirror of the game's own
+zero-size/empty cursor image (`steamcompmgr.cpp`'s
+`wlserver.bCursorHasImage = !m_imageEmpty`), which is how a game actually says
+"I've hidden my own cursor and I'm drawing my own crosshair" — the real
+FPS-grab case this switch is for. `wlserver_pointer_is_locked()` (true while
+`zwp_locked_pointer_v1` is held, the same constraint a mouse-grabbing FPS
+requests) is OR'd in alongside it to cover a game that locks the pointer a
+frame or two before its cursor-image update lands, since per the user's own
+"it will probably be buggy in some games" this is explicitly a best-effort
+heuristic, not a guarantee — which is exactly why it stayed opt-in instead of
+becoming the default behaviour of `mouse_scale` itself.
 
 ## Keep the button from the game (`consume_button`)
 

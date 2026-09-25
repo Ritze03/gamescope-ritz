@@ -1460,6 +1460,7 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     s.zoom.height = 0.25f;
     s.zoom.factor = 3.5f;
     s.zoom.mouse_scale = true;
+    s.zoom.mouse_scale_hidden_only = true;
     s.zoom.consume_button = true;
     s.zoom.scroll_adjust = true;
     s.zoom.fade_ms = 350;
@@ -1475,11 +1476,13 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     REQUIRE( loaded.zoom.height == 0.25f );
     REQUIRE( loaded.zoom.factor == 3.5f );
     REQUIRE( loaded.zoom.mouse_scale == true );
+    REQUIRE( loaded.zoom.mouse_scale_hidden_only == true );
     REQUIRE( loaded.zoom.consume_button == true );
     REQUIRE( loaded.zoom.scroll_adjust == true );
     REQUIRE( loaded.zoom.fade_ms == 350 );
     REQUIRE( loaded.zoom.sharpen == 0.65f );
 
+    REQUIRE( Settings{}.zoom.mouse_scale_hidden_only == false );
     REQUIRE( Settings{}.zoom.consume_button == false );
     REQUIRE( Settings{}.zoom.scroll_adjust == false );
     REQUIRE( Settings{}.zoom.sharpen == 0.0f );
