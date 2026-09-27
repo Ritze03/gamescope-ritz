@@ -24,6 +24,7 @@
 // Everything else is the steamcompmgr thread. See superdoc/features/zoom.md.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 struct FrameInfo_t;
@@ -222,4 +223,101 @@ namespace gamescope
 		return ( kZoomSharpenMaxAmount * kZoomSharpenHalfK * k )
 			/ ( kZoomSharpenMaxAmount * ( 1.0f - k ) + kZoomSharpenHalfK );
 	}
+
+	// ---- clicks land on what the projector shows (2026-09-27) ----------
+	// The user's bug report: "the position of the mouse on screen and what
+	// is being selected in the game doesn't match up" while zoomed. Fix
+	// (their own pick, (b) over moving the drawn arrow): while the cursor
+	// is visible AND sits inside the projector's shape, the ABSOLUTE
+	// pointer position handed to the game becomes centre + (p-centre) /
+	// liveFactor -- the point the projector is showing under the arrow --
+	// instead of the arrow's own on-screen position. The drawn arrow
+	// itself is untouched; only the copy sent to the client changes. See
+	// superdoc/features/zoom.md's "Clicks land on what the projector
+	// shows" for the full writeup, the accepted edge-of-shape jump, and
+	// why this works in the game SURFACE's own coordinate space rather
+	// than output pixels.
+	//
+	// Everything below is pure -- no atomics, no globals, no Zoom.cpp link
+	// -- so it is unit-testable on its own (tests/test_pointer_mapping.cpp)
+	// even though that test binary never links Zoom.cpp. Zoom_MapPointerForGame()
+	// (declared at the bottom, defined in Zoom.cpp) is the runtime
+	// accessor that fills a ZoomRemapGeometry from this frame's published
+	// atomics and calls ZoomRemapPoint() with it -- the one thing that DOES
+	// need Zoom.cpp, so wlserver.cpp calls that instead of these directly.
+
+	enum class ZoomShape { Circle, Box };  // Box covers both rectangle and square: same test, equal half-extents for a square.
+
+	// A projector's shape and placement, entirely in the game SURFACE's own
+	// coordinate space (the space wlserver.mouse_surface_cursorx/y live in)
+	// -- NOT output pixels. flHalfW/flHalfH are therefore the on-screen
+	// shape's half-extents divided by "output pixels per surface pixel"
+	// per axis, so a circle that is round on screen can be an ELLIPSE here
+	// whenever the game is scaled non-uniformly per axis (letterboxed to a
+	// different aspect than it renders at) -- ZoomPointInsideShape() tests
+	// it as one on purpose.
+	struct ZoomRemapGeometry
+	{
+		bool      bVisible = false;          // a projector is actually being drawn this frame (not just "enabled")
+		ZoomShape shape = ZoomShape::Box;
+		double    flCenterX = 0.0, flCenterY = 0.0;   // surface px
+		double    flHalfW = 0.0, flHalfH = 0.0;       // surface px, half-extents, at the shape's FINAL size (unaffected by the fade's alpha)
+		double    flFactor = 1.0;            // the LIVE, already fade-ramped magnification (1.0 = no-op by construction)
+	};
+
+	// True when (x,y) -- surface px -- falls inside the shape `geo`
+	// describes. Mirrors cs_zoom.comp's own edge test: a circle is the
+	// normalized-ellipse form (exact when flHalfW == flHalfH, which is
+	// what an on-screen circle normally gives), a box is a plain per-axis
+	// bound (correct for both a rectangle and a square).
+	inline bool ZoomPointInsideShape( double x, double y, const ZoomRemapGeometry &geo )
+	{
+		if ( geo.flHalfW <= 0.0 || geo.flHalfH <= 0.0 )
+			return false;
+		const double dx = x - geo.flCenterX;
+		const double dy = y - geo.flCenterY;
+		if ( geo.shape == ZoomShape::Circle )
+		{
+			const double nx = dx / geo.flHalfW;
+			const double ny = dy / geo.flHalfH;
+			return ( nx * nx + ny * ny ) <= 1.0;
+		}
+		return std::abs( dx ) <= geo.flHalfW && std::abs( dy ) <= geo.flHalfH;
+	}
+
+	// The remap itself. Leaves (x,y) untouched -- zero cost, zero risk of
+	// a wrong answer -- whenever the cursor isn't genuinely visible, no
+	// projector is being drawn this frame, the point is outside the shape,
+	// or the live magnification is at/under 1.0 (not zoomed, or still in
+	// the fade's pinned-at-1.0x first phase: a no-op by construction, not
+	// a special case). Otherwise: centre + (p - centre) / factor. Points
+	// exactly on the shape's edge (or one frame apart from it) map on
+	// different sides of the divide by design -- the accepted cost the
+	// user signed off on in exchange for (b) over (a).
+	inline void ZoomRemapPoint( double &x, double &y, bool bCursorVisible, const ZoomRemapGeometry &geo )
+	{
+		if ( !bCursorVisible || !geo.bVisible || geo.flFactor <= 1.0 )
+			return;
+		if ( !ZoomPointInsideShape( x, y, geo ) )
+			return;
+		x = geo.flCenterX + ( x - geo.flCenterX ) / geo.flFactor;
+		y = geo.flCenterY + ( y - geo.flCenterY ) / geo.flFactor;
+	}
+
+	// The runtime accessor wlserver.cpp actually calls, from the ONE place
+	// a wl_pointer.motion leaves for the client
+	// (wlserver_send_absolute_motion(), which both wlserver_mousemotion()
+	// and wlserver_mousewarp() funnel through): remaps the copy of
+	// (x,y) -- already in surface space -- about to be sent to the game,
+	// leaving wlserver.mouse_surface_cursorx/y (the accumulator the drawn
+	// cursor and every relative-motion delta read) untouched.
+	// `bCursorVisible` is the caller's own
+	// `wlserver.bCursorHasImage && !wlserver_pointer_is_locked()` --
+	// deliberately NOT `wlserver.bCursorHidden`, which also covers
+	// gamescope's own idle auto-hide and would suppress the remap on an
+	// idle-but-visible menu cursor. Defined in Zoom.cpp (needs this
+	// frame's published atomics); a no-op, including while Zoom.cpp is
+	// never linked at all (nothing here calls it), for anything that only
+	// wants the pure functions above.
+	void Zoom_MapPointerForGame( double &x, double &y, bool bCursorVisible );
 }

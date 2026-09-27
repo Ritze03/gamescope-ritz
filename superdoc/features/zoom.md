@@ -665,24 +665,182 @@ grows, so the operator can no longer collapse a stroke onto its
 neighbourhood's extreme value — rather than trading visible strength for
 less gouging by picking a number partway up the same curve.
 
+## Clicks land on what the projector shows
+
+> **Why (2026-09-27):** the user's bug report, verbatim: *"When zoom is
+> active and the user is moving around his mouse, the position of the mouse
+> on screen and what is being selected in the game doesn't match up. You
+> should write a fix for that, but make sure to only make it active while
+> the mouse or like the cursor is actually visible."* Two fixes were
+> offered — (a) move the drawn arrow to track the magnified content, or (b)
+> remap the click to the point the magnified content actually shows under
+> the arrow's own (unmoved) position — and the user picked **(b)**. `Why
+> not (a):` moving the drawn arrow means it travels `factor` times as fast
+> inside the shape and then has to jump/disappear the instant it crosses
+> the shape's edge back to normal speed, which is a stranger and more
+> visible thing to watch than a pointer that occasionally warps on click.
+> (b) leaves the arrow doing exactly what it always did — plain 1:1 motion,
+> matching the user's own screen — and only changes where a **click**
+> lands.
+
+**The rule.** While the cursor is genuinely visible AND its on-screen
+position falls inside the projector's shape, the ABSOLUTE pointer position
+handed to the game becomes
+
+```
+centre + (p - centre) / liveFactor
+```
+
+instead of `p` itself — `centre` is the projector's own centre (the centre
+of the game's on-screen rect, the same point the magnification is built
+around), `p` is the raw, unmapped position the drawn arrow is actually at,
+and `liveFactor` is `s_flLiveFactor` (see "Match mouse speed" above) — the
+RAMPED magnification actually on screen this frame, not the configured
+target. Outside the shape, or whenever the projector isn't being drawn at
+all, `p` is sent unchanged. The drawn cursor itself
+(`MouseCursor::paint()`, `steamcompmgr.cpp`) and the raw accumulator
+(`wlserver.mouse_surface_cursorx/y`, which every relative-motion delta and
+the drawn cursor both read) are **never** touched — only the outgoing copy
+handed to `wlr_seat_pointer_notify_motion()` is remapped. This is exactly
+what "remap the click, not the arrow" means: the mismatch the user reported
+is turned into a deliberate, narrow one (the game sees a different point
+than the arrow visually sits on) instead of eliminated by making the arrow
+itself behave strangely.
+
+**Why `liveFactor`, not the configured factor:** during the fade's phase 1
+(see "Fade in / fade out" above) the shape is visible but the magnification
+is still pinned at exactly 1.0× — `centre + (p-centre)/1.0 == p`, an
+identity by construction, so the remap is correctly a no-op for as long as
+there is nothing yet to remap *to*. The remap ramps up smoothly in step
+with the visible magnification, never snapping to the full divisor the
+instant the ring appears.
+
+**Where the code lives.** `ZoomRemapPoint()`/`ZoomPointInsideShape()`
+(`Overlay/Zoom.h`) are the pure math — a `ZoomRemapGeometry` (shape, centre,
+half-extents, live factor, all in the game **surface**'s own coordinate
+space) in, the possibly-remapped point out, no atomics, no globals, so they
+are unit-tested with no `Zoom.cpp` link at all
+(`tests/test_pointer_mapping.cpp`). `Zoom_MapPointerForGame()` (`Zoom.h`
+declares it, `Zoom.cpp` defines it) is the runtime accessor: it fills a
+`ZoomRemapGeometry` from atomics `Zoom_FillRequest()` publishes every frame
+and calls the pure function. `wlserver.cpp`'s `wlserver_send_absolute_motion()`
+— already documented above as "the one place a `wl_pointer.motion` leaves
+for the client" — is the single call site: both `wlserver_mousemotion()`
+(the relative/grabbed path) and `wlserver_mousewarp()` (host absolute
+samples, the locked-pointer resync, focus-reset-to-centre warps) funnel
+through it, so hooking this one function covers every real motion path
+without duplicating the remap at each caller. A button carries no position
+of its own (Wayland protocol), so whichever motion path last ran through
+this function is what a click lands on — exactly the invariant a click
+needs.
+
+**Coordinate spaces — why surface space, not output pixels.**
+`wlserver.mouse_surface_cursorx/y` are in the game Xwayland **surface**'s
+own coordinate space (the game's committed buffer size,
+`g_uBaseLayerSourceWidth/Height`), while the projector's geometry is most
+naturally computed in **output** pixels (what `rendervulkan.cpp`'s THE ZOOM
+block actually draws to). Converting the pointer to output space, remapping
+there, and converting back would work too — the two are related by a fixed
+per-axis affine map (the same one `Overlay/Crosshair.h`'s `CrosshairFrame`
+and `Overlay/FpsDisplay.cpp`'s `ResolveCrosshairFrame()` already use for
+exactly this reason: `flCenterX/Y`, `flGamePixelScaleX/Y`) — but the algebra
+works out to the *same* `centre + (p-centre)/factor` formula applied
+directly in surface space, because that formula commutes with any fixed
+affine map about its own centre. So `Zoom_FillRequest()` publishes the
+shape directly in surface units instead: `req.flWidth`/`req.flHeight` are
+already the exact on-screen-rect FRACTION `rendervulkan.cpp` turns into
+projector pixels, and that same fraction applied to
+`g_uBaseLayerSourceWidth/Height` gives the shape's surface-space
+half-extents with no separate scale factor needed. **A circle that is
+round on screen can be an ELLIPSE in surface space** whenever the game is
+scaled non-uniformly per axis — `ZoomPointInsideShape()` tests it as one on
+purpose (a normalized-distance ellipse test, matching `cs_zoom.comp`'s own
+edge formula), not as a special case but as the general one that happens to
+degenerate to a circle test when the two half-extents are equal.
+
+**Visibility — why `bCursorHasImage && !locked`, not `bCursorHidden`.**
+`wlserver.bCursorHidden` also covers gamescope's own idle auto-hide
+(`wlserver_check_cursor_dirty`/timeout, see cursor-pipeline.md), which would
+false-positive on a menu with a visible-but-momentarily-idle cursor and
+wrongly suppress the remap there. The visibility test used here —
+`wlserver.bCursorHasImage && !wlserver_pointer_is_locked()` — is the same
+distinction `wlserver_mousemotion()`'s own local `bCursorHidden` already
+draws for "Match mouse speed"'s "Only while the cursor is hidden" switch,
+just inlined at the one call site that needs it instead of named
+separately.
+
+**Geometry validity — mirroring rendervulkan.cpp's own gate.**
+`Zoom_FillRequest()` only publishes the geometry (and marks it valid) under
+the same conditions `rendervulkan.cpp`'s THE ZOOM block requires before it
+actually draws a projector: an SDR, non-YCbCr, non-PASSTHRU base layer, and
+`g_uBaseLayerSourceWidth/Height` known. This is duplicated rather than read
+back from `rendervulkan.cpp` because that block runs later, inside
+`vulkan_composite()`, by which point `Zoom_FillRequest()` has already
+returned for the frame — keep the two gates in sync if either one changes.
+**Known gap:** the layer-budget-full case (`k_nMaxLayers` is 6; a very busy
+frame can make `rendervulkan.cpp` silently drop the projector for that one
+frame, see the "Where the picture is made" section above) is not detected
+here, since the budget isn't known until the composite runs — the remap
+could very rarely apply on a frame where no ring was actually drawn. Judged
+acceptable: rare, one frame, and the projector reappears immediately on the
+next frame that has room.
+
+**Accepted cost — the edge jump.** A point just inside the shape's boundary
+maps through the divide; a neighbouring point just outside does not — the
+user's own trade-off in picking (b), stated in the bug report itself. The
+two can be far apart in game space (a factor-3 zoom's edge moves the
+mapped point by roughly `(1 - 1/factor)` times the shape's radius in one
+step). `tests/test_pointer_mapping.cpp`'s "a point just inside vs just
+outside the edge diverges" case documents this deliberately, so a future
+change that tries to "smooth" the boundary is a conscious decision, not an
+accident.
+
+**What is deliberately NOT remapped**, to keep the change small and
+localized to the path the bug report is about:
+
+- `wlserver_mousefocus()`'s `wlr_seat_pointer_warp()` +
+  `wlr_seat_pointer_notify_enter()` (a focus-change placement, not
+  continuous user-driven motion — and unlike ongoing motion, this call sets
+  `wlserver.mouse_surface_cursorx/y` and notifies the client from the SAME
+  value in one step, so remapping only the outgoing half would put the
+  drawn cursor and the client's idea of the pointer at different places
+  the instant focus changes, the opposite of what a click needs).
+- `wlserver_warp_to_constraint_hint()`'s warp (the CLIENT's own requested
+  hint position after an unlock — remapping a position the game itself
+  asked to be put at would be backwards).
+- `wlserver_update_cursor_constraint()`'s confine-region clamp warp (bounds
+  correction, not a reported movement).
+- `wlserver_fake_mouse_pos()` (explicitly a fake position "for eg. hiding
+  true cursor state from Steam" — not the real cursor at all, so there is
+  nothing for the remap to be consistent *with*).
+- `wlr_seat_touch_notify_motion()` inside `wlserver_touchmotion()`'s
+  Passthrough branch — a touch event, not the mouse pointer; the bug
+  report and the "cursor visible" precondition are both about the mouse.
+
 ## Threading
 
 `Zoom_OnChord()`, `Zoom_MouseScale()`, `Zoom_ConsumesButton()`,
-`Zoom_IsActive()`, `Zoom_ScrollAdjustEnabled()` and `Zoom_OnScroll()` all run
-on the wlserver thread and touch atomics only; the settings they need
-(enabled, mode, factor, mouse_scale, consume_button, scroll_adjust) are
-mirrored into atomics by the steamcompmgr thread whenever the config cache is
-(re)loaded. `Zoom_OnScroll()` is the one exception that writes an atomic the
-steamcompmgr thread later reads back (`s_flFactor`, `s_bFactorDirty`) rather
-than only reading mirrored ones -- see "Scroll to change zoom level" above
-for why the persist itself has to happen on the other thread. Everything else
-is the steamcompmgr thread, like Crosshair.cpp.
+`Zoom_IsActive()`, `Zoom_ScrollAdjustEnabled()`, `Zoom_OnScroll()` and
+`Zoom_MapPointerForGame()` all run on the wlserver thread and touch atomics
+only; the settings they need (enabled, mode, factor, mouse_scale,
+consume_button, scroll_adjust) are mirrored into atomics by the
+steamcompmgr thread whenever the config cache is (re)loaded, and the
+projector's surface-space geometry (`s_bGeomValid`, `s_bGeomCircle`,
+`s_flGeomCenterX/Y`, `s_flGeomHalfW/H`) is mirrored the same way, every
+frame, by `Zoom_FillRequest()`. `Zoom_OnScroll()` is the one exception that
+writes an atomic the steamcompmgr thread later reads back (`s_flFactor`,
+`s_bFactorDirty`) rather than only reading mirrored ones -- see "Scroll to
+change zoom level" above for why the persist itself has to happen on the
+other thread. Everything else is the steamcompmgr thread, like
+Crosshair.cpp.
 
 The fade's own state (`s_flFadeProgress`, `s_ulLastFadeNs`) is **steamcompmgr
 thread only** — it is read and advanced in `Zoom_FillRequest()` and nowhere
-else. The one value it publishes across the boundary is `s_flLiveFactor`, the
-magnification actually on screen this frame, which `Zoom_MouseScale()` reads on
-the wlserver thread (see "Match mouse speed" above).
+else. The values it publishes across the boundary are `s_flLiveFactor` (the
+magnification actually on screen this frame, which `Zoom_MouseScale()` and
+`Zoom_MapPointerForGame()` both read on the wlserver thread — see "Match
+mouse speed" above) and the geometry atomics `Zoom_MapPointerForGame()`
+alone reads.
 
 ## Verified
 
@@ -752,3 +910,18 @@ the wlserver thread (see "Match mouse speed" above).
   its vertical stack image, plus k=0/1.0 re-confirmation for both mid-tone
   clients. The RCAS-era measurements (superseded) are preserved in
   `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
+- `tests/test_pointer_mapping.cpp` (2026-09-27) — `ZoomRemapPoint()`/
+  `ZoomPointInsideShape()` (`Overlay/Zoom.h`), no `Zoom.cpp` link needed:
+  visible + inside a circle divides toward the centre; outside the shape is
+  left raw; a hidden cursor is left raw even well inside the shape; no
+  geometry (zoom off) is left raw; factor 1.0 (the fade's pinned first
+  phase) is a no-op even inside the shape; a rectangle uses its own
+  per-axis half-extents (and a point inside on one axis but outside on the
+  other is left fully raw, not remapped on one axis only); a square is a
+  box test with equal half-extents; the shape's centre always maps to
+  itself for both shapes; and a point just inside the edge diverges sharply
+  from its neighbour just outside it (the accepted jump). Build- and
+  runtime-verified: a headless `--backend headless` capture through an
+  actual RMB-held zoom plus injected motion is the user's own check to run,
+  since it needs a live gamescope instance and this task's brief asked that
+  no test disturb the user's running session.

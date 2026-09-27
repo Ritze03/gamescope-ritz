@@ -8,10 +8,13 @@
 // output -> surface formula wlserver_touchmotion() applies with its inverse.
 // The live re-sync on a mapping change (wlserver_resync_absolute_pointer())
 // needs a compositor and is the laptop check's job.
+#include <cmath>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "../src/PointerMapping.h"
+#include "../src/Overlay/Zoom.h"
 
 using namespace gamescope;
 using Catch::Matchers::WithinAbs;
@@ -247,4 +250,151 @@ TEST_CASE( "the mapping compares equal to itself and different after a real chan
 	OutputToSurface( autoNow, kOutW / 4.0, kOutH / 4.0, &ax, &ay );
 	OutputToSurface( stretch, kOutW / 4.0, kOutH / 4.0, &sx, &sy );
 	CHECK( ax != sx );
+}
+
+// ---- Zoom: "clicks land on what the projector shows" (2026-09-27) --------
+// The user's bug report: with the zoom active, "the position of the mouse
+// on screen and what is being selected in the game doesn't match up". Fix
+// (their own pick, (b) over moving the drawn arrow): while the cursor is
+// visible AND inside the projector's shape, the absolute pointer handed to
+// the game becomes centre + (p-centre)/liveFactor instead of the arrow's
+// own on-screen position. superdoc/features/zoom.md has the full writeup;
+// this pins ZoomPointInsideShape()/ZoomRemapPoint() (Overlay/Zoom.h), the
+// pure math Zoom_MapPointerForGame() wraps around the live atomics --
+// Zoom.cpp itself is never linked into this test binary, and doesn't need
+// to be: everything exercised here is header-only.
+namespace
+{
+	// A 1280x960 game surface, a 2x zoom centred on it. Half-extents chosen
+	// distinct per axis on purpose (300x150 for the rectangle, 150x150 for
+	// the square/circle) so a test that transposed x/y anywhere would fail.
+	constexpr double kSurfW = 1280.0, kSurfH = 960.0;
+	constexpr double kCx = kSurfW / 2.0, kCy = kSurfH / 2.0;
+
+	ZoomRemapGeometry MakeGeo( ZoomShape shape, double flHalfW, double flHalfH, double flFactor = 2.0 )
+	{
+		ZoomRemapGeometry geo;
+		geo.bVisible = true;
+		geo.shape = shape;
+		geo.flCenterX = kCx;
+		geo.flCenterY = kCy;
+		geo.flHalfW = flHalfW;
+		geo.flHalfH = flHalfH;
+		geo.flFactor = flFactor;
+		return geo;
+	}
+}
+
+TEST_CASE( "zoom remap: visible and inside a circle divides toward the centre", "[pointer_mapping][zoom]" )
+{
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Circle, 150.0, 150.0 );
+	double x = kCx + 40.0, y = kCy + 20.0;
+	ZoomRemapPoint( x, y, /*bCursorVisible=*/true, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 20.0, 1e-9 ) );  // 40 / factor(2)
+	CHECK_THAT( y, WithinAbs( kCy + 10.0, 1e-9 ) );  // 20 / factor(2)
+}
+
+TEST_CASE( "zoom remap: outside the shape is left raw", "[pointer_mapping][zoom]" )
+{
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Circle, 150.0, 150.0 );
+	// Well outside the 150px-radius circle.
+	double x = kCx + 500.0, y = kCy;
+	ZoomRemapPoint( x, y, true, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 500.0, 1e-9 ) );
+	CHECK_THAT( y, WithinAbs( kCy, 1e-9 ) );
+}
+
+TEST_CASE( "zoom remap: a hidden cursor is left raw even well inside the shape", "[pointer_mapping][zoom]" )
+{
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Circle, 150.0, 150.0 );
+	double x = kCx + 10.0, y = kCy + 10.0;
+	ZoomRemapPoint( x, y, /*bCursorVisible=*/false, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 10.0, 1e-9 ) );
+	CHECK_THAT( y, WithinAbs( kCy + 10.0, 1e-9 ) );
+}
+
+TEST_CASE( "zoom remap: zoom off (no geometry) is left raw", "[pointer_mapping][zoom]" )
+{
+	ZoomRemapGeometry geo = MakeGeo( ZoomShape::Circle, 150.0, 150.0 );
+	geo.bVisible = false;   // nothing drawn this frame -- e.g. the zoom master switch is off
+	double x = kCx + 10.0, y = kCy + 10.0;
+	ZoomRemapPoint( x, y, true, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 10.0, 1e-9 ) );
+	CHECK_THAT( y, WithinAbs( kCy + 10.0, 1e-9 ) );
+}
+
+TEST_CASE( "zoom remap: factor 1.0 (unramped fade) is a no-op even inside the shape", "[pointer_mapping][zoom]" )
+{
+	// The fade's phase 1 pins the live magnification at exactly 1.0 while
+	// the shape is still fading in -- the remap must be an identity then,
+	// not merely "close to one".
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Circle, 150.0, 150.0, /*flFactor=*/1.0 );
+	double x = kCx + 10.0, y = kCy - 5.0;
+	ZoomRemapPoint( x, y, true, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 10.0, 1e-9 ) );
+	CHECK_THAT( y, WithinAbs( kCy - 5.0, 1e-9 ) );
+}
+
+TEST_CASE( "zoom remap: a rectangle uses its own per-axis half-extents", "[pointer_mapping][zoom]" )
+{
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Box, 300.0, 150.0 );
+	// Inside on X (250 < 300) and Y (100 < 150): remapped.
+	double x = kCx + 250.0, y = kCy + 100.0;
+	ZoomRemapPoint( x, y, true, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 125.0, 1e-9 ) );
+	CHECK_THAT( y, WithinAbs( kCy + 50.0, 1e-9 ) );
+
+	// Inside on X but outside on Y (200 > 150): the whole point is raw, not
+	// remapped on one axis only.
+	double x2 = kCx + 10.0, y2 = kCy + 200.0;
+	ZoomRemapPoint( x2, y2, true, geo );
+	CHECK_THAT( x2, WithinAbs( kCx + 10.0, 1e-9 ) );
+	CHECK_THAT( y2, WithinAbs( kCy + 200.0, 1e-9 ) );
+}
+
+TEST_CASE( "zoom remap: a square is a box with equal half-extents", "[pointer_mapping][zoom]" )
+{
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Box, 150.0, 150.0 );
+	double x = kCx + 100.0, y = kCy + 100.0;   // inside (100 < 150 on both axes)
+	ZoomRemapPoint( x, y, true, geo );
+	CHECK_THAT( x, WithinAbs( kCx + 50.0, 1e-9 ) );
+	CHECK_THAT( y, WithinAbs( kCy + 50.0, 1e-9 ) );
+
+	// Just outside the corner along the diagonal (160,160 vs a 150 box).
+	double cornerX = kCx + 160.0, cornerY = kCy + 160.0;
+	ZoomRemapPoint( cornerX, cornerY, true, geo );
+	CHECK_THAT( cornerX, WithinAbs( kCx + 160.0, 1e-9 ) );  // untouched: outside the box
+}
+
+TEST_CASE( "zoom remap: the centre always maps to itself", "[pointer_mapping][zoom]" )
+{
+	for ( ZoomShape shape : { ZoomShape::Circle, ZoomShape::Box } )
+	{
+		const ZoomRemapGeometry geo = MakeGeo( shape, 150.0, 150.0 );
+		double x = kCx, y = kCy;
+		ZoomRemapPoint( x, y, true, geo );
+		CHECK_THAT( x, WithinAbs( kCx, 1e-9 ) );
+		CHECK_THAT( y, WithinAbs( kCy, 1e-9 ) );
+	}
+}
+
+TEST_CASE( "zoom remap: a point just inside vs just outside the edge diverges (the accepted jump)", "[pointer_mapping][zoom]" )
+{
+	// D3/D7's accepted cost: the game's pointer jumps as the drawn arrow
+	// crosses the shape's edge, because the remap is only ever applied on
+	// one side of it. Documented here, not just asserted, so a future
+	// change that quietly "smooths" the boundary is a deliberate decision
+	// and not an accident.
+	const ZoomRemapGeometry geo = MakeGeo( ZoomShape::Circle, 150.0, 150.0, /*flFactor=*/3.0 );
+
+	double xIn = kCx + 149.0, yIn = kCy;    // just inside the 150px radius
+	ZoomRemapPoint( xIn, yIn, true, geo );
+	CHECK_THAT( xIn, WithinAbs( kCx + 149.0 / 3.0, 1e-6 ) );
+
+	double xOut = kCx + 151.0, yOut = kCy;  // one pixel further out: raw
+	ZoomRemapPoint( xOut, yOut, true, geo );
+	CHECK_THAT( xOut, WithinAbs( kCx + 151.0, 1e-9 ) );
+
+	// The two neighbouring points land far apart in game space -- the jump.
+	CHECK( std::abs( xOut - xIn ) > 90.0 );
 }
