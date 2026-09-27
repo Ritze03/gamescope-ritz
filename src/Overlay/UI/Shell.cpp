@@ -1904,10 +1904,26 @@ namespace gamescope::ui::shell
 			}
 		}
 
-		void Fill( const Rect &r, ImU32 col )
+		// `flRounding` defaults to 0 (every existing call site's flat fill,
+		// unchanged) -- I3 (2026-09-27) added the parameter for the rail
+		// accordion's header pills, the guide's own "chip/badge" allowance
+		// for a 1-2px radius against its otherwise-hard "controls are square"
+		// rule (see ui-design-guide.md's Component styling section).
+		void Fill( const Rect &r, ImU32 col, float flRounding = 0.0f )
 		{
 			if ( !r.Empty() )
-				ImGui::GetWindowDrawList()->AddRectFilled( ImVec2( r.x0, r.y0 ), ImVec2( r.x1, r.y1 ), col );
+				ImGui::GetWindowDrawList()->AddRectFilled( ImVec2( r.x0, r.y0 ), ImVec2( r.x1, r.y1 ), col, flRounding );
+		}
+
+		// A stroked (unfilled) rect at the same rounding -- Controls.cpp's
+		// own Boundary() does the identical draw but is private to that
+		// file, so this is the DrawRail()-local twin of it rather than a
+		// second, differently-named copy of the same one line reused from a
+		// header no one exposed it through.
+		void Outline( const Rect &r, ImU32 col, float flRounding = 0.0f )
+		{
+			if ( !r.Empty() )
+				ImGui::GetWindowDrawList()->AddRect( ImVec2( r.x0, r.y0 ), ImVec2( r.x1, r.y1 ), col, flRounding, 0, Hairline() );
 		}
 
 		// Every rule in the shell goes through here, so SPEC §8.3's
@@ -2081,7 +2097,26 @@ namespace gamescope::ui::shell
 				{
 					const float y      = yRaw - s_flRailScroll;
 					const float flHdrH = bIcons ? flItemH : flSecH;
-					const Rect  rcHdr  { rc.x0, y, rc.x1, y + flHdrH };
+
+					// I3 (2026-09-27, post-QC -- see this section's own
+					// ui-design-guide.md entry): a header used to be a
+					// full-bleed rc.x0..rc.x1 rectangle, flush with the rail
+					// edges and the next header, which is exactly why QC
+					// read the accordion as "section dividers" rather than
+					// tabs. Insetting it off BOTH rail edges (icon mode
+					// stays full-width -- a 60px column has no edge to
+					// spare, and IconForRailGroup()'s glyph already reads
+					// against the item icons' own centred box) plus the
+					// small rounding the guide's "chip/badge" allowance
+					// (1-2px against the hard "controls are square" rule --
+					// this pill is closer kin to a badge than a slider or a
+					// switch) is what turns the band into a floating
+					// button. The interactive rect is the SAME inset one,
+					// not a wider hit target behind a narrower fill: a real
+					// tab's click area is its own visible bounds.
+					const float flHdrInset = bIcons ? 0.0f : Px( tok::kS );
+					const float flHdrRound = bIcons ? 0.0f : Px( 2.0f );
+					const Rect  rcHdr { rc.x0 + flHdrInset, y, rc.x1 - Hairline() - flHdrInset, y + flHdrH };
 					const bool  bOpen  = ( eGroup == s_eOpenRailGroup );
 
 					ImGui::SetCursorScreenPos( ImVec2( rcHdr.x0, rcHdr.y0 ) );
@@ -2091,16 +2126,21 @@ namespace gamescope::ui::shell
 					const bool bHovered = ImGui::IsItemHovered();
 					ImGui::PopID();
 
-					// Same wash/left-bar language an active ITEM gets
-					// (below) -- "the accent/active look marks the open
-					// group" is one convention, not a second one invented
-					// for headers. Inset short of rc.x1 for the same reason
-					// an item's wash is: that column is the divider's.
-					const Rect rcWash { rcHdr.x0, rcHdr.y0, rc.x1 - Hairline(), rcHdr.y1 };
 					if ( bOpen )
 					{
-						Fill( rcWash, Accent( 0.10f ) );
-						Fill( { rcHdr.x0, rcHdr.y0, rcHdr.x0 + Px( 2.0f ), rcHdr.y1 }, Col( Role::AccentBase ) );
+						// Fill + a full outline, not fill alone: exactly the
+						// ListBox's own precedent (this guide's "The outline-
+						// only look shipped first and read as under-
+						// selected... the fill was added, keeping the
+						// outline rather than replacing it") applied the
+						// other way around, because a header's first cut had
+						// the opposite gap -- a left BAR, not a full ring, so
+						// nothing but that one 2px sliver differed from a
+						// hovered row at a glance. A closed header never
+						// gets this outline, which is the other half of "the
+						// open group is unmistakable".
+						Fill( rcHdr, Accent( 0.16f ), flHdrRound );
+						Outline( rcHdr, Col( Role::AccentBase ), flHdrRound );
 					}
 					else
 					{
@@ -2108,10 +2148,14 @@ namespace gamescope::ui::shell
 						// Role::SurfaceRaised ("control boxes, inactive
 						// segments") -- is what makes a closed header read
 						// as a pressable tab rather than as plain text, even
-						// before the chevron/icon gives it away.
-						Fill( rcWash, Col( Role::SurfaceRaised ) );
+						// before the chevron/icon gives it away. Quieter
+						// than the open pill by construction (a flat 6%
+						// white wash against a filled+outlined accent one),
+						// which is the other half of QC's "collapsed headers
+						// should be quieter".
+						Fill( rcHdr, Col( Role::SurfaceRaised ), flHdrRound );
 						if ( bHovered )
-							Fill( rcWash, IM_COL32( 255, 255, 255, 13 ) );
+							Fill( rcHdr, IM_COL32( 255, 255, 255, 13 ), flHdrRound );
 					}
 
 					const ImU32 colHdr = bOpen ? Col( Role::AccentIcon ) : Col( Role::TextMeta );
@@ -2123,6 +2167,25 @@ namespace gamescope::ui::shell
 							glyph::RailIcon( *pGroupIcon,
 								ImVec2( ( rcHdr.x0 + rcHdr.x1 ) * 0.5f, ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
 								Px( tok::kIconBox ), colHdr );
+
+						// A tiny corner chevron -- the same ▸/▾ disclosure
+						// mark the full-width header draws at its label,
+						// miniaturised into the icon box's bottom-right
+						// corner -- is the group-vs-area cue finding 3
+						// asked for: an area's own icon-mode row (below)
+						// never draws one, so this corner mark alone says
+						// "this button opens a group" before the viewer has
+						// even registered which glyph is which. The
+						// tooltip is the same ImGui::SetTooltip() path the
+						// guide's own Tooltips section already styles
+						// (Widgets.cpp) -- no area icon in this rail uses a
+						// tooltip yet, so this is the mechanism's first
+						// caller, not a divergent second one.
+						const float flCorner = Px( 6.0f );
+						glyph::Chevron( ImVec2( rcHdr.x1 - flCorner * 0.7f, rcHdr.y1 - flCorner * 0.7f ),
+						                flCorner, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdr );
+						if ( bHovered )
+							ImGui::SetTooltip( "%s", RailGroupName( eGroup ) );
 					}
 					else
 					{
@@ -2155,6 +2218,21 @@ namespace gamescope::ui::shell
 				const bool bHovered = ImGui::IsItemHovered();
 				ImGui::PopID();
 
+				// I3 (2026-09-27, post-QC finding 1: "child rows visually
+				// belong to [the open group] (e.g. a subtle indent)"). Every
+				// row on screen already belongs to the one open group --
+				// VisibleRailAreas()/the Walk's own gate guarantee that --
+				// so indenting is unconditional here, not a per-row
+				// decision. The indent matches the header pill's OWN inset
+				// (flHdrInset in the section lambda above) so a row's
+				// content lines up under its header's left edge exactly,
+				// reading as "these rows are inside that tab" rather than
+				// merely below it. Icon mode is unchanged (0): a 60px
+				// column already centres its glyph in the full slot, same
+				// as the header buttons above it, and has no room to spare
+				// for a second margin.
+				const float flGroupIndent = bIcons ? 0.0f : Px( tok::kS );
+
 				// Both washes below stop one Hairline() short of rc.x1 rather
 				// than filling the item's full width: that column is the
 				// divider's, drawn once at the very end of this function over
@@ -2167,15 +2245,18 @@ namespace gamescope::ui::shell
 				// keeps that backdrop the same rail colour everywhere, so the
 				// one draw of the divider composites identically regardless
 				// of which row, if any, is selected or hovered.
-				const Rect rcWash { rcItem.x0, rcItem.y0, rc.x1 - Hairline(), rcItem.y1 };
+				const Rect rcWash { rcItem.x0 + flGroupIndent, rcItem.y0, rc.x1 - Hairline(), rcItem.y1 };
 				if ( bActive )
 				{
 					Fill( rcWash, Accent( 0.10f ) );
 					// The 2px accent left edge "survives the icon collapse"
 					// (SPEC §8.1) -- so it is drawn from the item's rect,
 					// which both rail widths share, and never from a
-					// per-mode constant.
-					Fill( { rcItem.x0, rcItem.y0, rcItem.x0 + Px( 2.0f ), rcItem.y1 }, Col( Role::AccentBase ) );
+					// per-mode constant. Moved in by the same indent as the
+					// wash above it (2026-09-27) so it sits against the
+					// icon/label it flags rather than dangling in the new
+					// margin next to nothing.
+					Fill( { rcItem.x0 + flGroupIndent, rcItem.y0, rcItem.x0 + flGroupIndent + Px( 2.0f ), rcItem.y1 }, Col( Role::AccentBase ) );
 				}
 				else if ( bHovered )
 				{
@@ -2219,8 +2300,9 @@ namespace gamescope::ui::shell
 				}
 				else
 				{
-					DrawMark( { rcItem.x0 + flPadX, rcItem.y0, rcItem.x0 + flPadX + flIcon, rcItem.y1 } );
-					Label( { rcItem.x0 + flPadX + flIcon + Px( tok::kM ), rcItem.y0, rcItem.x1 - Px( tok::kM ), rcItem.y1 },
+					const float flX0 = rcItem.x0 + flGroupIndent + flPadX;
+					DrawMark( { flX0, rcItem.y0, flX0 + flIcon, rcItem.y1 } );
+					Label( { flX0 + flIcon + Px( tok::kM ), rcItem.y0, rcItem.x1 - Px( tok::kM ), rcItem.y1 },
 					       TypeRole::Label, bActive ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 					       area.Title().c_str() );
 				}
@@ -3966,6 +4048,39 @@ namespace gamescope::ui::shell
 			if ( ImGui::BeginChild( "##sheetrows", ImVec2( rcRegion.Width(), rcRegion.Height() ),
 				ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings ) )
 			{
+				// I3 (2026-09-27, rail-polish task finding 4). D26 below made
+				// the SHEET'S CONTENT follow its own scroll offset once ImGui
+				// applies one -- but nothing ever made ImGui apply one from a
+				// mouse wheel here in the first place, so a sheet taller than
+				// its region was reachable by nothing at all: no wheel, no
+				// scrollbar drag (SPEC never draws one over the sheet), stuck
+				// forever with its tail end painted UNDER the footer bar.
+				// Confirmed live (a private headless sway + nested gamescope
+				// instance, `overlay_e2_pointer scroll` -- see
+				// AUTONOMOUS-DECISIONS / this task's own report for the
+				// repro): with the mouse hovering "##sheetrows" and a
+				// genuinely nonzero `ImGui::GetScrollMaxY()`, a wheel event
+				// correctly reaches `io.MouseWheel` as nonzero on the very
+				// frame BeginChild runs -- and Dear ImGui's own automatic
+				// "apply wheel to the hovered scrollable window" pass
+				// (`UpdateMouseWheel()`, called once from `NewFrame()`) never
+				// moves `GetScrollY()` off zero, through this overlay's
+				// queued/drained input path. The DIAGNOSIS stops there --
+				// why ImGui's own pass does not fire is unproven, and the
+				// Inspector body a few hundred lines down (D26's other half)
+				// has the identical gap and the identical reliance on that
+				// same native pass, so this is not sheet-specific. The FIX
+				// here does not depend on the diagnosis: apply the wheel by
+				// hand, exactly the way DrawRail() already does for its own
+				// (never-a-BeginChild, always hand-rolled) scroll -- three
+				// rows per notch, a plain desktop-scroll amount for a body
+				// whose rows come in 44px bands. `SetScrollY()` clamps to
+				// [0, ScrollMax] internally, so an initial 0-vs-stale
+				// ScrollMax race on the child's first frame cannot send this
+				// negative or past the bottom.
+				if ( ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f )
+					ImGui::SetScrollY( ImGui::GetScrollY() - ImGui::GetIO().MouseWheel * Px( tok::kRowH ) * 3.0f );
+
 				// D26: THE SHEET SCROLLS BY THE SAME ONE MECHANISM THE
 				// INSPECTOR DOES -- see ScrollView in Layout.h.
 				//

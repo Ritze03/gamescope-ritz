@@ -408,7 +408,7 @@ namespace gamescope::ui
 		constexpr size_t kIconN = sizeof( kIcons ) / sizeof( kIcons[ 0 ] );
 
 		// =================================================================
-		//  RAIL GROUPS (I2, 2026-09-27) -- the accordion's icon-rail buttons
+		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3, 2026-09-27 post-QC)
 		// =================================================================
 		// Four glyphs, one per RailGroup (Display/Misc/Settings/Other, in
 		// that order -- see the switch in IconForRailGroup() below, which is
@@ -422,20 +422,49 @@ namespace gamescope::ui
 		// test_overlay_ui.cpp's "every registered area has exactly one
 		// icon, IconCount() == the area count" bijection.
 		//
-		// Each is a new silhouette, distinct from every glyph in kIcons[]
-		// and from the other three here:
+		// I3 REDRAW: the I2 cut's Misc (three dots) and Settings (a ring
+		// with four DETACHED tick marks) read, per the QC pass this
+		// implements, as "more/overflow" and "a dim target" respectively --
+		// both borrowed an existing UI convention (an overflow ellipsis, a
+		// crosshair reticle) for an unrelated meaning, and Settings'
+		// silhouette in particular sat close to system.crosshair's own
+		// AREA icon (a big ring with four lines through it), which the two
+		// can appear on screen together (a closed Settings header beside an
+		// open Misc group's Crosshair row). Other's box-with-tab was judged
+		// legible enough as a shape but not as "everything left over" --
+		// QC's plainer "a card" read was closer to setup.profiles' own two-
+		// offset-cards glyph than intended. Each is a new silhouette,
+		// distinct from every glyph in kIcons[] and from the other three
+		// here:
 		//   Display  a monitor on a stand -- one rect with a neck and base
 		//            below it, unlike display.resolution's two CONCENTRIC
 		//            rects (nothing else in the set draws a rect with legs).
-		//   Misc     three same-size dots in a row -- the plain "more/grab
-		//            bag" mark; no other glyph in either table repeats one
-		//            shape three times at one size.
-		//   Settings a ring with four straight spokes -- a dial/gear read,
-		//            distinct from system.general's SQUARE chip with pins
-		//            radiating off its corners.
-		//   Other    a two-compartment box with a pull tab -- an archive/
-		//            drawer read for "everything left over" (Log, About),
-		//            distinct from setup.profiles' two OFFSET full rects.
+		//            Unchanged by the I3 redraw -- QC did not flag it.
+		//   Misc     a six-ray asterisk (three lines crossing through one
+		//            centre point) -- the plain "extras/sparkle" mark. No
+		//            other glyph in either table draws crossing diameters;
+		//            three SEPARATE same-size dots (the I2 shape) is the
+		//            standard overflow-menu glyph almost everywhere else,
+		//            which is exactly the wrong association for a group
+		//            that opens INLINE, not into a hidden menu.
+		//   Settings a hex-nut: a six-sided outline with a round hole at
+		//            its centre -- the bolt-head/mechanism read "settings"
+		//            already carries elsewhere in this app's own iconography
+		//            (Windows/GNOME "gear" is a hex-nut with teeth
+		//            simplified; six shapes was I2's own kIconMaxShapes
+		//            ceiling, so this drops the teeth and keeps the
+		//            silhouette). Two shapes (one Loop, one Circle) reads
+		//            unambiguously as hardware/adjustment, not a target --
+		//            no other glyph anywhere in either table draws a
+		//            hexagon.
+		//   Other    a folder: a small tab rect sitting on a larger body
+		//            rect, the plain filesystem "everything else" mark --
+		//            distinct from setup.profiles' two FULL-SIZE offset
+		//            cards (a folder's tab is a fraction of its body's
+		//            width; Profiles' back card is nearly the same size as
+		//            the front one) and from system.log's ragged text
+		//            lines / system.changelog's info-circle, its two new
+		//            group-mates in the icon rail.
 		constexpr Icon kGroupIcons[] = {
 			{ "railgroup.display", 3, {
 				Rect( 3.5f, 4.5f, 20.5f, 15.5f ),
@@ -443,21 +472,19 @@ namespace gamescope::ui
 				Line( { 7.5f, 19.5f }, { 16.5f, 19.5f } ) } },
 
 			{ "railgroup.misc", 3, {
-				Circ( 6.5f, 12.0f, 2.0f ),
-				Circ( 12.0f, 12.0f, 2.0f ),
-				Circ( 17.5f, 12.0f, 2.0f ) } },
+				Line( { 5.0f, 12.0f }, { 19.0f, 12.0f } ),
+				Line( { 8.5f, 5.9f },  { 15.5f, 18.1f } ),
+				Line( { 15.5f, 5.9f }, { 8.5f, 18.1f } ) } },
 
-			{ "railgroup.settings", 5, {
-				Circ( 12.0f, 12.0f, 4.0f ),
-				Line( { 12.0f, 2.5f }, { 12.0f, 6.0f } ),
-				Line( { 12.0f, 18.0f }, { 12.0f, 21.5f } ),
-				Line( { 2.5f, 12.0f }, { 6.0f, 12.0f } ),
-				Line( { 18.0f, 12.0f }, { 21.5f, 12.0f } ) } },
+			{ "railgroup.settings", 2, {
+				IconShape{ IconOp::Loop, 6, 0.0f, {
+					{ 12.0f, 3.0f }, { 19.8f, 7.5f }, { 19.8f, 16.5f },
+					{ 12.0f, 21.0f }, { 4.2f, 16.5f }, { 4.2f, 7.5f } } },
+				Circ( 12.0f, 12.0f, 3.5f ) } },
 
-			{ "railgroup.other", 3, {
-				Rect( 3.5f, 7.5f, 20.5f, 19.5f ),
-				Line( { 3.5f, 12.5f }, { 20.5f, 12.5f } ),
-				Bar( 10.0f, 11.5f, 14.0f, 13.5f ) } },
+			{ "railgroup.other", 2, {
+				Rect( 3.5f, 5.5f, 10.5f, 8.5f ),
+				Rect( 3.5f, 8.5f, 20.5f, 19.5f ) } },
 		};
 	}
 

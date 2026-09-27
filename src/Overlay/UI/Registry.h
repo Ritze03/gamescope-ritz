@@ -1215,7 +1215,17 @@ namespace gamescope::ui
 	{
 		inline constexpr float kItemH     = 40.0f;   // index.html's .ri
 		inline constexpr float kHeaderH   = 26.0f;   // the group header/tab
-		inline constexpr float kHeaderGap = 4.0f;    // tok::kXS, after a header
+		// I3 (2026-09-27, post-QC): 4 -> 8 (tok::kXS -> tok::kS). At 4px a
+		// closed header's own SurfaceRaised tint sat close enough to the next
+		// header's that the QC pass ("Open and closed headers barely differ
+		// ... they read as section dividers") could not tell two adjacent
+		// PILLS apart from one continuous band with an internal rule. There
+		// is no height budget pressure to weigh against this: the accordion
+		// only ever draws ONE group's rows at once, so the busiest real
+		// group (MISC, 6-7 areas) still lands at ~376px against an 878px
+		// budget at 1080p/scale 1 (see the "busiest group still fits" test)
+		// -- the four extra px per header change is nowhere near the limit.
+		inline constexpr float kHeaderGap = 8.0f;    // tok::kS, after a header
 		inline constexpr float kPad       = 8.0f;    // tok::kS, top and bottom of the rail
 	}
 

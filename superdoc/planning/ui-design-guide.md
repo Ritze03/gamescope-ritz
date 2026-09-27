@@ -625,10 +625,10 @@ persisted across a close, by design (see that function's own comment): the next 
 land on the area you were last looking at, not on whichever group you happened to be poking at
 before you closed the overlay.
 
-**Look.** A header is a pill/button, visually distinct from an area row: a `▸`/`▾` chevron
-(the same drawn-disclosure convention an inline-expandable Sheet row already uses -- right
-while closed, down while open), the group's own name, a flat `Role::SurfaceRaised` tint at
-rest (the same "control box, inactive segment" tone Controls.h already uses, so a closed
+**Look (I2 first cut).** A header is a pill/button, visually distinct from an area row: a
+`▸`/`▾` chevron (the same drawn-disclosure convention an inline-expandable Sheet row already
+uses -- right while closed, down while open), the group's own name, a flat `Role::SurfaceRaised`
+tint at rest (the same "control box, inactive segment" tone Controls.h already uses, so a closed
 header reads as pressable even before you notice the chevron), and the SAME accent
 wash-plus-2px-left-bar an active area row gets when it is the OPEN one -- one "this is the
 active thing" convention, not two. The icon-collapsed (60px) rail replaces its old bare
@@ -638,7 +638,135 @@ divider rule with one icon BUTTON per group, sized like an area's own icon-mode 
 DISPLAY, three dots for MISC, a four-spoke dial for SETTINGS, a two-compartment archive box
 for OTHER) rather than being folded into the area icon table, because these are group buttons,
 not areas, and mixing them in would break `test_overlay_ui.cpp`'s "every registered area has
-exactly one icon" bijection.
+exactly one icon" bijection. **Superseded by the I3 polish pass immediately below** -- the
+paragraph above is kept as the record of what I2 actually shipped, since the QC finding that
+triggered I3 is only legible against it.
+
+### Rail accordion polish (2026-09-27, I3, post-QC)
+
+A vision-QC pass over I2's own captures (`build-release/verify-shots/rail-accordion-2026-09-27/`)
+found the accordion "genuinely more compact and less cluttered, but it does not yet read as
+tabs," with four concrete complaints. Each is addressed here, in the same file the accordion
+itself lives in (`Shell.cpp`'s `DrawRail()`), plus one unrelated bug the QC pass's own fourth
+finding led to (see "Sheet body: the mouse wheel now scrolls it" below).
+
+**1. Open vs. closed barely differed.** I2's open header used the SAME `Accent(0.10f)` wash
+an active area row gets, at the same alpha -- correct in principle ("one 'this is the active
+thing' convention, not two") but too faint against the rail's own already-dark background to
+read as unmistakably accent-coloured, and a closed header's `SurfaceRaised` tint (a flat 6%
+white wash) was close enough in luminance that only the chevron direction told the two apart.
+Fixed two ways: the open header's wash rose to `Accent(0.16f)` AND gained a full 1px accent
+`Outline()` around the whole pill (not just the 2px left bar) -- the SAME "fill alone
+under-read, add the outline too" fix this guide's own `ListBox` section already records
+(*"The outline-only look shipped first and read as under-selected... the fill was added,
+keeping the outline rather than replacing it"*), applied in the opposite direction here since
+the header's first cut had the gap in the other place (a bar, not a ring). The open group's
+child rows also gained an unconditional left indent (`tok::kS`, 8px in non-icon mode, 0 in icon
+mode) matching the header pill's own inset, so the rows read as nested UNDER their open tab
+rather than merely drawn below it -- the "subtle indent or grouping" the finding asked for.
+The active-row accent bar moved in by the same indent so it stays attached to the icon/label it
+flags instead of dangling in the new margin.
+
+**2. Headers read as dividers, not tabs.** I2's header was a full-bleed `rc.x0..rc.x1`
+rectangle with square corners, flush against the rail edges and (nearly) flush against its
+neighbours -- SPEC's general "control corner radius: 0px" hard rule, correctly followed, but a
+tab needs SOME visual separation from the surface it sits on to read as a button rather than a
+rule. Fixed: every header (non-icon mode only -- the 60px icon rail has no edge to spare, and
+its group buttons already read as buttons via IconForRailGroup()'s own box) is now inset
+`tok::kS` off both the left and right rail edges, and drawn with a small `2px` corner radius --
+treated as the guide's own **chip/badge** allowance (*"a few chip/badge elements (1-2px)"*)
+rather than a violation of the flat-control rule, since a rail-group header is closer kin to a
+badge than to a slider or a switch. `railmetrics::kHeaderGap` doubled `4 -> 8` (`tok::kXS` ->
+`tok::kS`) for a visible gap between adjacent pills; there was no height budget to weigh this
+against -- the accordion only ever draws ONE group's rows, so even the busiest real group
+(MISC, 6-7 areas) lands at roughly a third of the rail's available height at 1080p/scale 1 (see
+the "busiest group still fits" test), nowhere near the ceiling this constant is checked against.
+Both the fill and the interactive `InvisibleButton` use the SAME inset rect -- a real tab's
+click area is its own visible bounds, not a wider hit target behind a narrower pill.
+
+**3. Icon-rail group glyphs were guesswork.** `IconForRailGroup()`'s I2 table redrawn:
+**Misc**'s three same-size dots (the standard overflow-menu glyph almost everywhere else, the
+wrong association for a group that opens INLINE rather than into a hidden menu) became a
+six-ray asterisk/sparkle (three lines crossing through one centre point -- no other glyph in
+either icon table draws crossing diameters). **Settings**'s ring-with-four-detached-ticks (read
+as "a dim target," and sat close to `system.crosshair`'s own AREA icon -- a big ring with four
+lines through it, which CAN appear on screen at the same time as a closed Settings header)
+became a hex-nut: a six-sided outline with a round hole at its centre, the bolt-head/mechanism
+read "settings" already carries elsewhere, two shapes total (one `Loop`, one `Circle`) and no
+other glyph anywhere draws a hexagon. **Other**'s two-compartment archive box (read as "a card,"
+too close to `setup.profiles`' own two-offset-cards glyph) became a folder: a small tab rect
+sitting on a larger body rect, the plain filesystem "everything else" mark. **Display**'s
+monitor-on-a-stand is unchanged -- QC did not flag it. Every closed group's icon box also grew
+a small drawn corner chevron (`▸`, `▾` once open -- `glyph::Chevron` at a sixth of the box's
+size, bottom-right corner) that no AREA icon draws, so "this is a GROUP button" is legible from
+the glyph's own box before the viewer has matched the silhouette to a name at all; hovering a
+group's icon button now shows `ImGui::SetTooltip( RailGroupName( eGroup ) )` -- the same
+tooltip mechanism the guide's own Tooltips styling (`Widgets.cpp`) already sets up for
+`ImGui::SetTooltip()` generally, and this is that mechanism's first caller in the icon rail (no
+AREA icon had a hover tooltip before this, or has one now -- only the four group buttons do,
+since only they lose their label entirely in icon mode).
+
+**4. Sheet clipped/no scrollbar at the c2 (1100x900) capture size.** Investigated and fixed --
+see the dedicated section immediately below, since the root cause and the fix are not rail code
+at all and stand on their own.
+
+**Verification.** Recaptured all four I2 views plus a pointer-hover shot of a closed header in
+each rail width (`overlay_e2_pointer move <x> <y>`, then a screenshot) under
+`build-release/verify-shots/rail-polish-2026-09-27/`: open vs. closed now reads unmistakably at
+a glance (filled+outlined accent pill vs. flat quiet tint), the pills read as inset, rounded,
+gapped buttons rather than a continuous banded divider, the icon-rail tooltip fires correctly on
+hover ("SETTINGS" over the hex-nut glyph), and the sheet-scroll fix is visible directly in the
+`g`/`i2` pair (identical view, before/after a wheel scroll, now showing the previously-clipped
+"Lag spike detection"/"Outline size" rows). `575` test cases / `15,953,226` assertions still
+pass (`tests/gamescope_tests`) -- none of I3's own tests changed shape, since the polish is
+presentation-only over the SAME `AccordionOnHeaderClicked`/`VisibleRailAreas`/
+`RailContentHeightPx` logic I2 already pinned.
+
+### Sheet body: the mouse wheel now scrolls it (2026-09-27, I3, found via rail-polish finding 4)
+
+Pre-existing, unrelated to the accordion (confirmed via `git log` -- the "make the sheet
+actually scroll" commit and D26's `ScrollView` mechanism both predate the accordion by several
+commits, and neither the accordion nor this fix touches the other's code) but found while
+investigating this task's own finding 4 (the c2-size capture showing the Sheet's "Lag spike
+detection" row clipped by the footer bar, with no reachable scrollbar). D26 (see the section
+below) made the Sheet's ROWS follow a scroll offset once ImGui applies one, via the same
+`ScrollView` the Inspector body uses -- but nothing ever made ImGui actually apply one here from
+a mouse wheel, so a Sheet taller than its region was reachable by NOTHING: no wheel, no drag (no
+scrollbar is ever drawn over the Sheet), permanently clipped.
+
+**Confirmed live**, not just read off the code: a private headless sway + nested gamescope
+instance (this task's own harness, modelled on `scripts/pixel-regression.sh`), `system.hud`
+selected at a forced 1100x500 output (severe, unmissable overflow), a temporary debug log inside
+`DrawSheetBody()` showing `wheel=30.00 hovered=1 scrollY=0.00 scrollMaxY=421.00` on the SAME
+frame `BeginChild` ran -- the wheel event correctly reaches `io.MouseWheel` as nonzero, the
+child IS the hovered window, `ScrollMaxY` is genuinely nonzero (a real overflow, correctly
+measured) -- and `GetScrollY()` never leaves `0.00`. Dear ImGui's own automatic "apply the wheel
+to the hovered scrollable window" pass (`UpdateMouseWheel()`, called once from `NewFrame()`)
+does not move this child's scroll through this overlay's queued/drained input path. **The
+diagnosis stops there** -- why that native pass does not fire is unproven, and the Inspector
+body (D26's other half, a few hundred lines down in the same file) has the IDENTICAL structure
+and the IDENTICAL reliance on that same native pass, with only `cv_overlay_e2_scroll` (a debug
+convar, *"so the Inspector's scrolling is verifiable without pointer input"*) as a working
+bypass -- so this is not proven to be Sheet-specific, and a next agent chasing the Inspector's
+own wheel behaviour should start from that convar's own existence as a clue, not assume it was
+only ever a testability convenience.
+
+**The fix does not depend on the diagnosis.** `DrawSheetBody()` now applies the wheel BY HAND,
+the same way `DrawRail()` already does for its own (never-a-`BeginChild`, always hand-rolled)
+scroll: `ImGui::SetScrollY( ImGui::GetScrollY() - ImGui::GetIO().MouseWheel * Px( tok::kRowH )
+* 3.0f )` while the child is hovered and the wheel is nonzero -- three 44px rows per notch, a
+plain desktop-scroll amount. `SetScrollY()` clamps to `[0, ScrollMax]` internally, so this
+cannot send the view negative or past the bottom even on the child's first frame, before its own
+`ScrollMax` has settled. Verified by the same live instance: the identical wheel command that
+previously left the view frozen now reveals the previously-clipped rows (`build-release/
+verify-shots/rail-polish-2026-09-27/g-sheet-after-scroll.png` and `i2-forced-overflow-after-
+scrolldown.png`).
+
+**Not fixed, and not a bug:** the Placement row's `24 / 24` secondary text degrading to `...`
+at the c2 width is `Controls.cpp`'s own D27 ellipsis mechanism (see this guide's "Component
+styling" -- *"a string overflowing... reads as 'there is more' instead of stopping mid-word"*)
+doing exactly its documented job at a genuinely narrow lane. The QC finding's own wording named
+it alongside the clipping bug, but it is unrelated and working as designed.
 
 **Keyboard.** Up/Down in the rail and Ctrl+Left/Right both still call the one `StepArea()`
 they always did, walking every area in `RailOrder()`'s order (not just the open group's) --
