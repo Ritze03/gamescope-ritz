@@ -2244,9 +2244,31 @@ namespace gamescope::ui::shell
 					// button. The interactive rect is the SAME inset one,
 					// not a wider hit target behind a narrower fill: a real
 					// tab's click area is its own visible bounds.
+					//
+					// I6 (2026-09-27, post-QC round 3): icon mode gets a
+					// pill too, and it is the WHOLE of QC finding 4b ("category
+					// cells and module icons have the same size and weight, so
+					// the hierarchy is lost"). A 60px column has no edge to
+					// spare for the full-width pill's 8px inset, but it has
+					// 4px: a tok::kXS inset all round, filled and outlined
+					// exactly like the full-width pill, is a visibly BOXED
+					// cell against an area row's bare centred glyph. The
+					// interactive rect stays the FULL cell here, unlike the
+					// full-width pill's "a real tab's click area is its own
+					// visible bounds" rule -- in a 60px column that rule
+					// would spend 8 of 60px of target width on a margin that
+					// draws nothing, and there is no neighbouring control it
+					// could steal a click from.
 					const float flHdrInset = bIcons ? 0.0f : Px( tok::kS );
-					const float flHdrRound = bIcons ? 0.0f : Px( 2.0f );
+					const float flHdrRound = Px( 2.0f );
 					const Rect  rcHdr { rc.x0 + flHdrInset, y, rc.x1 - Hairline() - flHdrInset, y + flHdrH };
+					// What actually gets PAINTED. Identical to rcHdr in
+					// full-width mode; in icon mode it is rcHdr pulled in by
+					// tok::kXS on every side, which is the visible pill
+					// inside the full-cell hit target described above.
+					const float flPillIn = bIcons ? Px( tok::kXS ) : 0.0f;
+					const Rect  rcPill { rcHdr.x0 + flPillIn, rcHdr.y0 + flPillIn,
+					                     rcHdr.x1 - flPillIn, rcHdr.y1 - flPillIn };
 					const bool  bOpen  = ( eGroup == s_eOpenRailGroup );
 
 					ImGui::SetCursorScreenPos( ImVec2( rcHdr.x0, rcHdr.y0 ) );
@@ -2263,30 +2285,60 @@ namespace gamescope::ui::shell
 					const bool bPressed = ImGui::IsItemActive();
 					ImGui::PopID();
 
+					// =================================================
+					//  I6 (2026-09-27, post-QC round 3): the state fills
+					// =================================================
+					// QC finding 1 -- the user's own "dull", third time of
+					// asking -- and finding 2 ("the hover state is barely
+					// perceptible"). Both are one defect: every state this
+					// pill had differed from the last by a few percent of
+					// WHITE, and a few percent of white on a near-black rail
+					// is a difference nobody sees without a colour picker.
+					// Every rung below now differs from its neighbour by an
+					// accent TINT (a hue change, not an alpha change) or by
+					// an outline ROLE change -- both survive a glance:
+					//   closed, rest     SurfaceRaised + LineControl ring
+					//   closed, hover    + Accent(0.14), ring -> AccentBase
+					//   closed, pressed  + Accent(0.26), ring -> AccentBase
+					//   open             Accent(0.22/0.28/0.34) + AccentBase
+					//                    ring + a 3px accent tab bar
+					// Role::LineControl (white 42%) is SPEC §7.1's own role
+					// for "EVERY interactive boundary"; I5 drew the resting
+					// ring in Role::Line (white 10%, "row separators ...
+					// decorative"), which is the role for a thing you are
+					// NOT meant to click. A closed header is a button, so it
+					// now draws the button's boundary -- that alone is most
+					// of why the resting pill stops dissolving into the rail.
+					const float flBarInset = Px( tok::kXS );
 					if ( bOpen )
 					{
 						// Fill + a full outline, not fill alone: exactly the
 						// ListBox's own precedent (this guide's "The outline-
 						// only look shipped first and read as under-
 						// selected... the fill was added, keeping the
-						// outline rather than replacing it") applied the
-						// other way around, because a header's first cut had
-						// the opposite gap -- a left BAR, not a full ring, so
-						// nothing but that one 2px sliver differed from a
-						// hovered row at a glance. A closed header never
-						// gets this outline, which is the other half of "the
-						// open group is unmistakable".
+						// outline rather than replacing it").
 						//
-						// I5: even the OPEN pill now answers hover/press --
-						// it stayed static under the pointer before, which
-						// read as "a label", not "a button you could press
-						// again". Three accent alphas, one direction
-						// (brighter = more pressed), all through the same
-						// Accent() helper the rest of the kit already uses
-						// for state fills.
-						const float flAccentA = bPressed ? 0.26f : ( bHovered ? 0.20f : 0.16f );
-						Fill( rcHdr, Accent( flAccentA ), flHdrRound );
-						Outline( rcHdr, Col( Role::AccentBase ), flHdrRound );
+						// I5: even the OPEN pill answers hover/press -- it
+						// stayed static under the pointer before, which read
+						// as "a label", not "a button you could press
+						// again". I6 raises all three rungs by 6 points so
+						// the open tab clears its own hovered-closed
+						// neighbour (0.14) by a comfortable margin at rest.
+						const float flAccentA = bPressed ? 0.34f : ( bHovered ? 0.28f : 0.22f );
+						Fill( rcPill, Accent( flAccentA ), flHdrRound );
+						Outline( rcPill, Col( Role::AccentBase ), flHdrRound );
+						// I6: the open tab's own accent bar -- the SAME 2px
+						// accent state edge (SPEC §8.1) an ACTIVE area row
+						// already draws, at the SAME x (both start at the
+						// group indent, which is exactly the header pill's
+						// left edge) -- so "the open category" and "the
+						// selected module inside it" read as one continuous
+						// accent column down the rail instead of as two
+						// unrelated marks. Shortened by kXS top and bottom
+						// so it never fights the pill's rounded corners.
+						Fill( { rcPill.x0, rcPill.y0 + flBarInset,
+						        rcPill.x0 + Px( 3.0f ), rcPill.y1 - flBarInset },
+						      Col( Role::AccentBase ) );
 					}
 					else
 					{
@@ -2294,80 +2346,77 @@ namespace gamescope::ui::shell
 						// Role::SurfaceRaised ("control boxes, inactive
 						// segments") -- is what makes a closed header read
 						// as a pressable tab rather than as plain text, even
-						// before the chevron/icon gives it away. Quieter
-						// than the open pill by construction (a flat 6%
-						// white wash against a filled+outlined accent one),
-						// which is the other half of QC's "collapsed headers
-						// should be quieter".
-						Fill( rcHdr, Col( Role::SurfaceRaised ), flHdrRound );
-						// I5: a resting hairline (Role::Line, the same quiet
-						// 10% white every other separator in the kit uses)
-						// so a CLOSED pill reads as its own bounded shape
-						// even before it is touched -- the user's "the
-						// categories look a bit dull" -- rather than only
-						// gaining a visible edge once open. Still well under
-						// the open pill's full accent outline, so "which
-						// one is open" stays unambiguous.
-						Outline( rcHdr, Col( Role::Line ), flHdrRound );
+						// before the chevron/icon gives it away.
+						Fill( rcPill, Col( Role::SurfaceRaised ), flHdrRound );
 						if ( bPressed )
 							// A preview of what this header becomes on
-							// release -- Accent(), not a second hard-coded
-							// wash, so pressing a closed header already
-							// reads as "about to open".
-							Fill( rcHdr, Accent( 0.22f ), flHdrRound );
+							// release, so pressing already reads as "about
+							// to open".
+							Fill( rcPill, Accent( 0.26f ), flHdrRound );
 						else if ( bHovered )
-							// The SAME white-13 hover wash every area row
-							// below already uses (rcWash's own Fill call,
-							// further down this function) -- reused for
-							// consistency with the rest of the rail, not a
-							// fresh literal.
-							Fill( rcHdr, IM_COL32( 255, 255, 255, 13 ), flHdrRound );
+							// I6: an accent tint, NOT I5's white-13 wash.
+							// An area row can afford a white wash because it
+							// sits on the plain rail; a header pill already
+							// carries SurfaceRaised's own 6% white beneath
+							// it, so white-13-on-white-6 was exactly the
+							// "only just" difference QC could not see.
+							Fill( rcPill, Accent( 0.14f ), flHdrRound );
+						// Touched -> the ring goes accent too, so even where
+						// the fill is subtle the pointer's target is
+						// unmistakable.
+						Outline( rcPill, ( bHovered || bPressed ) ? Col( Role::AccentBase )
+						                                         : Col( Role::LineControl ),
+						         flHdrRound );
 					}
 
-					// I5: TextLabel (68%), not TextMeta (52%) -- SPEC §7.1's
-					// own contrast table. TextMeta is the kit's quietest
-					// text role (units, placeholders); the closed header's
-					// name is a first-class control label, the same
-					// contrast tier an area row's own inactive label draws
-					// at, not a caption on top of a colourless divider,
-					// which is a real part of the "dull" read.
-					const ImU32 colHdr = bOpen ? Col( Role::AccentIcon ) : Col( Role::TextLabel );
+					// I6: Role::TextPrimary (92%), not I5's TextLabel (68%)
+					// -- QC finding 1 in one line. A category header drawing
+					// DIMMER than the module labels it owns has the
+					// hierarchy upside down; 92% is the kit's brightest text
+					// role, one tier above even an ACTIVE module row's own
+					// label, so a header is now the brightest thing in the
+					// rail whether it is open or closed. The ICON keeps the
+					// rail's existing state rule (AccentIcon on the open
+					// group) so the accent still says WHICH one is open.
+					const ImU32 colHdrIcon = bOpen ? Col( Role::AccentIcon ) : Col( Role::TextPrimary );
+					const ImU32 colHdr     = Col( Role::TextPrimary );
 
 					if ( bIcons )
 					{
+						// =============================================
+						//  I6 (2026-09-27, post-QC round 3), findings 4a
+						//  and 4b -- the icon rail's own category cells.
+						// =============================================
+						// 4a: the tiny corner chevron badge is GONE, not
+						// re-inset again. I4 already moved it once and QC
+						// still read it as "a clipped artifact ... on or
+						// over the cell border" at four separate y's: a 6px
+						// glyph parked in the corner of a 60px cell has no
+						// inset at which it looks deliberate rather than
+						// like something that fell off, because at that size
+						// the mark carries no shape -- it is three lit
+						// pixels near an edge. The cue it was meant to give
+						// ("this button opens a group") is now carried by
+						// the CELL, not by a badge on it.
+						// 4b: that cell is a boxed PILL -- a tok::kXS inset
+						// all round, filled and outlined by the exact same
+						// state ladder the full-width header just ran (the
+						// code above this branch is shared, which is the
+						// point: one ladder, two rail widths). An area row
+						// in icon mode draws a bare, unboxed, full-size
+						// glyph on the plain rail, so "boxed = category,
+						// bare = module" is now the hierarchy, readable
+						// without reading a single glyph.
+						// The group glyph is drawn a notch DOWN from an area
+						// row's own tok::kIconBox (24 -> 20) so the pill it
+						// sits in stays visible around it; the pill, not the
+						// glyph, is what has to carry the weight here.
 						const Icon *pGroupIcon = IconForRailGroup( eGroup );
 						if ( pGroupIcon )
 							glyph::RailIcon( *pGroupIcon,
 								ImVec2( ( rcHdr.x0 + rcHdr.x1 ) * 0.5f, ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
-								Px( tok::kIconBox ), colHdr );
+								Px( 20.0f ), colHdrIcon );
 
-						// A tiny corner chevron -- the same ▸/▾ disclosure
-						// mark the full-width header draws at its label,
-						// miniaturised into the icon box's bottom-right
-						// corner -- is the group-vs-area cue finding 3
-						// asked for: an area's own icon-mode row (below)
-						// never draws one, so this corner mark alone says
-						// "this button opens a group" before the viewer has
-						// even registered which glyph is which.
-						const float flCorner = Px( 6.0f );
-						// I4 (2026-09-27, post-QC finding 1): a single fixed
-						// inset (the old `flCorner * 0.7`) only clears
-						// Chevron()'s SHORT half-extent (its 0.26 axis) --
-						// whichever axis carries the LONG one (0.50) for a
-						// given direction (height for the sideways Right
-						// glyph, width for the downward Down one) ran past
-						// that inset and read as clipped against the rail's
-						// right edge / the row divider below it. Insetting
-						// by the glyph's own longer half-extent
-						// (flCorner * 0.5) plus a real margin -- rather
-						// than an arbitrary fraction of the corner size --
-						// is what keeps the WHOLE glyph inside the cell at
-						// BOTH chevron directions; it lands well clear of
-						// the centred icon glyph too (that one never
-						// reaches this far into the corner).
-						const float flChevronInset = flCorner * 0.5f + Px( 3.0f );
-						glyph::Chevron( ImVec2( rcHdr.x1 - flChevronInset, rcHdr.y1 - flChevronInset ),
-						                flCorner, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdr );
 						if ( bHovered )
 						{
 							// I4 (2026-09-27, post-QC finding 2): plain
@@ -2404,39 +2453,68 @@ namespace gamescope::ui::shell
 					}
 					else
 					{
-						// ▸ collapsed / ▾ open -- the same drawn-chevron
-						// disclosure convention DrawAffordance() already
-						// uses for an inline-expandable row (D20.3): right
-						// while closed, down while open.
-						const float flChevron = Px( 10.0f );
-						const float flCy      = ( rcHdr.y0 + rcHdr.y1 ) * 0.5f;
-						glyph::Chevron( ImVec2( rcHdr.x0 + flPadX * 0.5f, flCy ),
-						                flChevron, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdr );
+						const float flCy = ( rcHdr.y0 + rcHdr.y1 ) * 0.5f;
 
-						// I5 (2026-09-27, item 1): the full-width rail never
-						// drew a group glyph at all -- chevron and text
-						// only -- unlike every area row below it, which is
-						// exactly the asymmetry this task's brief names
-						// ("Add icons for the individual categories"). Same
-						// table the icon-collapsed rail already draws from
-						// (IconForRailGroup()), same tint rule an area
-						// row's own icon uses (AccentIcon when active,
-						// TextLabel at rest -- colHdr already carries that
-						// distinction from a few lines above). Sized a
-						// notch under tok::kIconBox (24, the area rows' own
-						// size): kHeaderH is 26px, and a full 24px glyph
-						// would leave almost no margin inside it.
-						const float  flIconSize = Px( 18.0f );
+						// =============================================
+						//  I6 (2026-09-27, post-QC round 3), finding 3:
+						//  ONE icon column and ONE label column, shared
+						//  by the header and the rows it owns.
+						// =============================================
+						// QC measured "header icons at x~177 with text at
+						// x~197, module icons at x~180 with text at x~204:
+						// a 3-7px stagger down the whole rail". Both causes
+						// are here. (a) I5 drew the header glyph at 18px
+						// against an area row's 24px tok::kIconBox, so two
+						// glyphs whose BOXES started at the same x had
+						// centres 3px apart and labels 6px apart; kHeaderH
+						// is now 30 (Registry.h) precisely so the header can
+						// afford the rows' own box. (b) the chevron sat
+						// BEFORE the icon and ate part of the left pad.
+						//
+						// So: the header's icon box is now literally the
+						// same arithmetic the item lambda below runs --
+						//   x0 = <pill/indent left edge> + flPadX,
+						//   box = tok::kIconBox wide, glyph centred in it,
+						//   label at x0 + tok::kIconBox + tok::kM
+						// -- and, since the header pill's own inset
+						// (flHdrInset) equals the rows' own flGroupIndent
+						// (both Px(tok::kS)), the two columns coincide
+						// EXACTLY rather than nearly. Not an intentional
+						// offset: a category and its modules reading off one
+						// left edge is what makes the rail a list rather
+						// than a stack of unrelated bands.
+						const float  flIconBox  = Px( tok::kIconBox );
 						const float  flIconX0   = rcHdr.x0 + flPadX;
 						const Icon  *pGroupIcon = IconForRailGroup( eGroup );
 						if ( pGroupIcon )
 							glyph::RailIcon( *pGroupIcon,
-								ImVec2( flIconX0 + flIconSize * 0.5f, flCy ), flIconSize, colHdr );
+								ImVec2( flIconX0 + flIconBox * 0.5f, flCy ), Px( 20.0f ), colHdrIcon );
 
-						const float flLabelX0 = flIconX0 + flIconSize + Px( tok::kM );
-						Label( { flLabelX0, rcHdr.y0, rcHdr.x1 - Px( tok::kM ), rcHdr.y1 },
-						       TypeRole::Section, bOpen ? Col( Role::TextPrimary ) : colHdr,
-						       RailGroupName( eGroup ) );
+						// ▸ collapsed / ▾ open -- the same drawn-chevron
+						// disclosure convention DrawAffordance() already
+						// uses for an inline-expandable row (D20.3): right
+						// while closed, down while open. I6 moves it from
+						// the pill's LEFT edge to its RIGHT edge: on the
+						// left it occupied the very column the icon column
+						// above had to start in (finding 3), and on the
+						// right it matches the disclosure convention every
+						// other expandable thing in the kit already uses.
+						const float flChevron = Px( 10.0f );
+						glyph::Chevron( ImVec2( rcHdr.x1 - Px( tok::kM ) - flChevron * 0.5f, flCy ),
+						                flChevron, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdrIcon );
+
+						// I6: TypeRole::Title (Mono 600 14.5 UPPER), not
+						// Section (Mono 500 13.5). QC asked for headers
+						// "stronger in weight or size" than the module
+						// labels; this is both -- a heavier weight AND a
+						// bigger size than I5's Section -- and it is the
+						// role SPEC already gives to "slab title, region
+						// titles", which is exactly the tier a rail
+						// category sits at. Nothing hard-coded: the whole
+						// change is which existing TypeRole is named.
+						const float flLabelX0 = flIconX0 + flIconBox + Px( tok::kM );
+						Label( { flLabelX0, rcHdr.y0, rcHdr.x1 - Px( tok::kM ) - flChevron, rcHdr.y1 },
+						       TypeRole::Title, colHdr, RailGroupName( eGroup ) );
 					}
 				},
 				[ & ]( size_t i, const Area &area, float yRaw, float flVisibleH )

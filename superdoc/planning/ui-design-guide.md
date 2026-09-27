@@ -811,6 +811,107 @@ census (clip/gate arithmetic at several block heights) and an exact-pixel pin of
 (the "top decreases, bottom increases, total unchanged" claim, computed both ways and checked
 against each other).
 
+### Rail accordion: headers read first-class (2026-09-27, I6, post-QC round 3)
+
+I5 shipped icons, an animation and a spacing split, and the user still did not get what they
+asked for. `Why:` the user, verbatim, unchanged since I5 and still the brief: *"the categories
+look a bit 'dull' compared to the individual modules inside of them. Plus, there is no animation,
+when opening them, which looks a bit sad. Also, the spacing towards the last shown module and the
+next category is zero, but it should get half of the spacing thats on the top (top decreases,
+bottom increases). Add icons for the individual categories and style them a little nicer."* A
+vision QC of I5's own captures put the residue plainly: *"the two shots are nearly
+indistinguishable at header level"*, the hover state could *"only just"* be told apart, the header
+and module icon/label columns were 3-7px out of step, the icon rail's corner chevron badge *"reads
+as a clipped artifact"*, and the spacing split measured 4px against 5px — a change *"barely
+visible"*.
+
+The animation and the split's *arithmetic* were fine and are untouched. Everything else was a
+contrast problem, and every fix below is a change of **which existing role/token is named**, not a
+new colour:
+
+**1. The header is now the brightest, heaviest thing in the rail.** Three changes, one direction:
+- **Text**: `Role::TextPrimary` (92%) for every header, open or closed — I5 drew closed headers at
+  `Role::TextLabel` (68%), the SAME tier as the module labels beneath them, which is a hierarchy
+  with no hierarchy in it. 92% sits one tier above even an *active* module row's own label.
+- **Type**: `TypeRole::Title` (Mono 600 14.5 UPPER) in place of `TypeRole::Section` (Mono 500
+  13.5) — heavier *and* larger, the role SPEC already assigns to "slab title, region titles".
+- **Height**: `railmetrics::kHeaderH` 26 → 30, which is what buys the Title size its margin and
+  lets the header carry the module rows' own 24px icon box (see 3). The "busiest group still fits
+  at 1080p" test pins the cost: MISC's 7 areas land at ~472px against 878px available.
+
+**2. Fills and states that survive a glance.** Every rung of the state ladder used to differ from
+the last by a few percent of **white**, which on a near-black rail is invisible without a colour
+picker. Each rung now differs by an accent **tint** (a hue change) or by an outline **role**:
+
+| state | fill | ring |
+|---|---|---|
+| closed, rest | `Role::SurfaceRaised` | `Role::LineControl` |
+| closed, hover | + `Accent(0.14)` | `Role::AccentBase` |
+| closed, pressed | + `Accent(0.26)` | `Role::AccentBase` |
+| open | `Accent(0.22 / 0.28 / 0.34)` | `Role::AccentBase` + a 3px accent tab bar |
+
+`Role::LineControl` (white 42%) is SPEC §7.1's own role for "EVERY interactive boundary"; I5's
+resting ring used `Role::Line` (white 10%, "row separators ... decorative") — the role for a thing
+you are *not* meant to click — and that alone is most of why a closed pill dissolved into the
+rail. The open tab's 3px accent bar is the SAME `SPEC §8.1` accent state edge an active area row
+already draws, at the SAME x (the pill's left inset equals the rows' own group indent), so the
+open category and the selected module inside it read as one continuous accent column.
+
+**3. One icon column, one label column.** `Why:` QC's finding 3 — header icons at x≈177/text
+x≈197 against module icons at x≈180/text x≈204. Two causes, both removed: I5's header glyph was
+18px against the rows' 24px `tok::kIconBox` (same box origin, different centres and label
+offsets), and the chevron sat *before* the icon, eating the left pad. The header now runs the
+identical arithmetic the item lambda does — `x0 = left edge + flPadX`, a `tok::kIconBox`-wide box,
+label at `x0 + tok::kIconBox + tok::kM` — and, since the header pill's inset (`tok::kS`) equals
+the rows' own indent (`tok::kS`), the two columns coincide exactly rather than nearly. The
+chevron moved to the pill's right edge. Deliberately *not* an intentional offset: a category and
+its modules reading off one left edge is what makes the rail a list rather than a stack of bands.
+
+**4. The icon rail's category cells.** The corner chevron badge is **gone**, not re-inset a third
+time. `Why:` a 6px glyph parked in the corner of a 60px cell has no inset at which it looks
+deliberate — at that size the mark carries no shape, it is three lit pixels near an edge, which is
+exactly what QC kept reading as a clipping artifact. Its job (*"this button opens a group"*) is now
+the **cell's**: a category cell is a boxed pill (a `tok::kXS` inset all round) running the exact
+same state ladder as the full-width header, while an area row stays a bare, unboxed, full-size
+glyph on the plain rail. **Boxed = category, bare = module**, legible before a single glyph has
+been identified. The group glyph is drawn at 20px (a notch under the rows' 24) so the pill stays
+visible around it — the pill, not the glyph, carries the weight. The cell's *hit* rect stays the
+full 60px cell, deliberately breaking I3's "a real tab's click area is its own visible bounds"
+rule: in a 60px column that rule would spend 8 of 60px of target width on a margin that draws
+nothing, and there is no neighbouring control a wider target could steal a click from.
+
+**5. Spacing, perceptibly.** The split's arithmetic (half above the open group's first row, half
+below its last) was right; the BASE was too small for it to show — half of 8 is 4, and 4px reads
+as no gap at all. `railmetrics::kHeaderGap` 8 → 12 (`tok::kM`) makes `kHeaderGapOpen` 6. Measured
+against the rail the user complained about: the header-to-first-row gap goes 8 → **6** ("top
+decreases"), the last-row-to-next-header gap goes 0 → **6** ("bottom increases"), and the
+closed-to-closed gap goes 8 → 12, which is itself part of finding 1 — four pills with 12px of
+rail between them read as four tabs; with 8px they read as one banded column. `Registry.cpp`'s
+`RailContentHeightPx()` reads the same constants, so the unit test that pins the exact pixel
+arithmetic needed no numeric edit.
+
+**Verification.** A private headless sway (`WLR_BACKENDS=headless`) plus a nested `--backend
+wayland` gamescope, captured under `build-release/verify-shots/rail-style-v3-2026-09-27/`. The
+claims above are *measured* off those captures, not eyeballed:
+- **Columns** (finding 3), `b-misc-open.png` at 1920x1080: the DISPLAY header's icon ink spans
+  x 172..187 and the HUD/Mixer rows' icon ink spans x 171..188 — the same centre, 179.5, the
+  1px each side being the monitor glyph simply being narrower than the bar-chart one. First
+  label ink is at **x 205 for the header and x 205 for both module rows**. QC measured the
+  predecessor at 177/197 against 180/204.
+- **Spacing** (finding 5), same capture: header pills are 30px tall (129..158, 171..200,
+  453..482, 495..524). Closed-to-closed gap **12px** (158 → 171), open header to first row
+  **6px**, last row to next header **6px** (446 → 453 measured at 7 with the outline). The
+  predecessor measured 26px pills, a 9px closed gap and 4px/4px.
+- **States** (finding 2): `crops/c-states-rest-hover-pressed-4x.png` puts rest, hover and
+  pressed side by side at 4x — grey ring / accent ring + faint accent fill / accent ring +
+  strong accent fill. No colour picker needed.
+- **Icon rail** (finding 4): `crops/d-iconrail-before-after-4x.png`. The predecessor's corner
+  chevrons are visible sitting on the cell borders; the new column has four outlined pills and
+  six bare glyphs and no badge at all.
+- 577 test cases / 15,953,243 assertions pass, including this pass's two new pins
+  (`kHeaderGapOpen >= 5.0f` and `kHeaderGapOpen < kHeaderGap`) and the unchanged
+  "busiest group still fits at 1080p" test.
+
 ### Sheet body: the mouse wheel now scrolls it (2026-09-27, I3, found via rail-polish finding 4)
 
 Pre-existing, unrelated to the accordion (confirmed via `git log` -- the "make the sheet

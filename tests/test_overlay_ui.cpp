@@ -2342,6 +2342,22 @@ TEST_CASE( "rail accordion: I5 spacing splits the open group's gap top/bottom, t
 	// spacing thats on the top" the user asked for, pinned so a future
 	// edit to either constant cannot silently drift the two apart.
 	REQUIRE_THAT( kHeaderGapOpen, Catch::Matchers::WithinAbs( kHeaderGap * 0.5f, 1e-6f ) );
+
+	// I6 (2026-09-27, post-QC round 3): the ratio above was already true at
+	// I5's kHeaderGap = 8, and QC still measured the result as "barely
+	// visible" -- half of 8 is 4, and a 4px gap does not read as a gap at
+	// scale 1. So the RATIO alone is not the property worth pinning; the
+	// resulting gap being big enough to SEE is. 5px is the floor this pass
+	// judged perceptible (the shipped value is 6); a future edit shrinking
+	// kHeaderGap back toward 8 re-opens the user's own complaint, and now
+	// fails here rather than in another round of vision QC.
+	REQUIRE( kHeaderGapOpen >= 5.0f );
+
+	// ... and an open group's header-to-row gap stays TIGHTER than the gap
+	// between two CLOSED headers, which is what makes its rows read as
+	// belonging to the header above them rather than as a separate band
+	// (QC's "a slightly tighter gap under the open header").
+	REQUIRE( kHeaderGapOpen < kHeaderGap );
 }
 
 // =========================================================================

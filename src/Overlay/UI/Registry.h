@@ -1215,7 +1215,22 @@ namespace gamescope::ui
 	namespace railmetrics
 	{
 		inline constexpr float kItemH     = 40.0f;   // index.html's .ri
-		inline constexpr float kHeaderH   = 26.0f;   // the group header/tab
+		// I6 (2026-09-27, post-QC round 3): 26 -> 30. QC's finding 1 ("the
+		// headers still read dimmer and smaller than the module labels under
+		// them ... the two shots are nearly indistinguishable at header
+		// level") is only half a colour problem: a 26px band could not hold
+		// the module rows' OWN tok::kIconBox (24px) glyph with any margin at
+		// all, which is why I5 had to shrink the header glyph to 18px -- and
+		// an 18px glyph in its own narrower column is exactly what put the
+		// header icon/label columns 3-7px off the module rows' below them
+		// (QC finding 3). 30px holds a full 24px icon box with 3px of margin
+		// each side, so the header draws its glyph in the SAME box, at the
+		// SAME x, as the rows it owns, and has room for TypeRole::Title
+		// (Mono 600 14.5) instead of the smaller Section (Mono 500 13.5).
+		// The fit budget is nowhere near this: the busiest real group (MISC,
+		// 7 areas) lands at ~472px against 878px at 1080p/scale 1 -- see the
+		// "busiest group still fits" test, which is what pins that claim.
+		inline constexpr float kHeaderH   = 30.0f;   // the group header/tab
 		// I3 (2026-09-27, post-QC): 4 -> 8 (tok::kXS -> tok::kS). At 4px a
 		// closed header's own SurfaceRaised tint sat close enough to the next
 		// header's that the QC pass ("Open and closed headers barely differ
@@ -1226,7 +1241,18 @@ namespace gamescope::ui
 		// group (MISC, 6-7 areas) still lands at ~376px against an 878px
 		// budget at 1080p/scale 1 (see the "busiest group still fits" test)
 		// -- the four extra px per header change is nowhere near the limit.
-		inline constexpr float kHeaderGap = 8.0f;    // tok::kS, after a CLOSED header (I3)
+		//
+		// I6 (2026-09-27, post-QC round 3): 8 -> 12 (tok::kM). QC measured
+		// I5's split as "about 4px above the first row and 5px below the
+		// last one ... the old top gap was only about 6px, so the change is
+		// barely visible" -- correct, and the cause is the BASE, not the
+		// split: half of 8 is 4, and 4px at scale 1 is under the threshold
+		// where an eye reads a gap as a gap at all. Raising the base to
+		// tok::kM makes the halves 6px each, which IS a visible breathing
+		// gap, and the wider closed-to-closed gap is itself part of QC's
+		// finding 1 (four pills with 12px of rail between them read as four
+		// tabs; with 8px they read as one banded column).
+		inline constexpr float kHeaderGap = 12.0f;   // tok::kM, after a CLOSED header (I3, I6)
 		// I5 (2026-09-27, spacing): half of kHeaderGap. The user, on I3's own
 		// result: "the spacing towards the last shown module and the next
 		// category is zero, but it should get half of the spacing thats on
@@ -1239,7 +1265,13 @@ namespace gamescope::ui
 		// gaps use this -- a CLOSED header's gap to its neighbour is
 		// untouched (still the full kHeaderGap, I3's own "visible gap
 		// between adjacent pills" fix, which this must not undo).
-		inline constexpr float kHeaderGapOpen = kHeaderGap * 0.5f;   // 4.0f
+		// I6: still exactly half of kHeaderGap, so the user's own "half of
+		// the spacing thats on the top" survives the base change -- but now
+		// 6.0f rather than 4.0f. Measured against the ORIGINAL (pre-I5) rail
+		// that the user was looking at when they complained: top 8 -> 6
+		// ("top decreases"), bottom 0 -> 6 ("bottom increases"), and 6px is
+		// above the perceptibility floor 4px sat under.
+		inline constexpr float kHeaderGapOpen = kHeaderGap * 0.5f;   // 6.0f
 		inline constexpr float kPad       = 8.0f;    // tok::kS, top and bottom of the rail
 	}
 
