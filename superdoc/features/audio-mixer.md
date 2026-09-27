@@ -20,6 +20,13 @@ control surface only. What IS persisted, per game, is the manual stream
 `config::GameEntry(appId).audio_node`) — a different thing from a volume
 value, since WirePlumber has no concept of "which stream did the user mean."
 
+**Hotkey** (2026-09-27) — the `mixer` **keybind action**, default
+`Ctrl+Shift+M`, opens the settings shell directly on this area (or switches
+it here if the shell is already open elsewhere), and closes the shell again
+if it is already showing Mixer. Global, editable from Setup > Keybinds
+alongside every other action — see
+[keybinds.md](keybinds.md#the-actions).
+
 ## Rows
 
 - **`audio.stream`** ("Stream", a `Choice`) — "Automatic" (index 0, the

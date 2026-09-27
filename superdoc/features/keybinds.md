@@ -52,13 +52,30 @@ larger job with a different risk profile.
 | `shell_alt` | Open settings (alternate) | `Ctrl+Shift+O` |
 | `launcher` | Open launcher | `LCtrl+RShift` |
 | `friends` | Open friends list | `Ctrl+Shift+Tab` |
+| `mixer` | Open mixer | `Ctrl+Shift+M` |
 | `zoom` | Zoom | `RMB` |
+| `autoclicker` | Autoclicker | `Mouse4` |
 
 `friends` was added 2026-09-08 with the join list
 ([steam-friends.md](steam-friends.md)). `zoom` was added 2026-09-14 with the
-magnifier ([zoom.md](zoom.md)); it is the one **held** action — see
+magnifier ([zoom.md](zoom.md)); it is one of the two **held** actions — see
 [Held actions](#held-actions-and-mouse-buttons) below — and it is inert until
-the Zoom area's own switch is on.
+the Zoom area's own switch is on. `autoclicker` was added 2026-09-18 with the
+click train, the other held action ([autoclicker.md](autoclicker.md)).
+`mixer` was added 2026-09-27 alongside the Mixer's dynamic stream-name row
+([audio-mixer.md](audio-mixer.md)), from the user's *"Add a keybind for the
+'Mixer' tab."* — `Ctrl+Shift+M` was picked because it collides with none of
+the existing defaults or the reserved chord.
+
+`mixer` opens the settings shell directly on `audio.mixer`, mirroring
+`friends` (below) rather than `launcher`'s palette-only behaviour — the
+Mixer is an ordinary settings area, not something meant to float alone over
+the game. Pressed again while the shell is already showing Mixer, it closes
+the overlay, the same toggle rule `friends` uses; pressed while the shell is
+open on something else, it just switches the shell to Mixer (`RequestArea()`
+is read on the shell's very next frame regardless of what is currently
+open). Unlike `friends` it has no Steam/app-id gate — the Mixer area is
+always available, so this chord always does something.
 
 **`Ctrl+Shift+Tab` belongs to `friends`.** That chord is Steam's own overlay
 chord for the friends list, so the muscle memory is already right — and for
@@ -318,9 +335,9 @@ scriptable and documented fallback rather than as the interface.
 ### Two groups, and a copy in the feature's own area (2026-09-22)
 
 The Keybinds area lists its rows in two groups: **Global hotkeys** (`shell`,
-`shell_alt`, `launcher`, `friends` — the chords that open this fork's own
-surfaces) and **In-game hotkeys** (`zoom`, `autoclicker` — the chords that do
-something *to* the game while you play). The user's words: *"one for global
+`shell_alt`, `launcher`, `friends`, `mixer` — the chords that open this
+fork's own surfaces) and **In-game hotkeys** (`zoom`, `autoclicker` — the
+chords that do something *to* the game while you play). The user's words: *"one for global
 hotkeys and one for game-specific hotkeys or something like that ... a zoom and
 auto-clicker should be their own things."* The split is `ActionInfo::bHeld`,
 which is exactly the in-game set today; a future in-game action that is *not*

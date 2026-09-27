@@ -102,10 +102,18 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   own Wayland clients and the host session: the data-control event hook and its fallback
   chain, the loop guard, and why every pipe transfer runs on a worker thread.
 
+### Audio
+
+- [Mixer](features/audio-mixer.md) — per-app PipeWire volume: detection strategies, the
+  dynamic volume row title, the Mixer hotkey.
+
 ### Input
 
 - [Input emulation](features/input-emulation.md) — synthetic input injection.
 - [Input method / IME](features/input-method-ime.md) — input method editor support.
+- [Input › General](features/input-general.md) — force grab cursor and force grab
+  keyboard: per-backend behaviour and why neither can lock you out of gamescope's own
+  hotkeys.
 
 ### Effects & capture
 

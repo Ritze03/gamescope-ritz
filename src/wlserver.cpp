@@ -535,6 +535,31 @@ static bool wlserver_check_ritz_keybinds( xkb_keysym_t normalizedKeysym, bool pr
 			}
 			break;
 
+		case Action::Mixer:
+			// Opens the Shell on the Mixer area (audio.mixer). Mirrors
+			// Action::Friends immediately above: a TOGGLE on its own area --
+			// pressing it again while the shell is open and already showing
+			// Mixer closes the overlay, rather than re-selecting what is
+			// already selected and leaving the user with no way back out on
+			// the same key. If the shell is open on something else, RequestArea()
+			// below just switches it to Mixer, since it is picked up on the
+			// shell's next frame regardless of what is currently showing.
+			//
+			// Unlike Friends, there is no Steam/app-id gate: the Mixer area is
+			// always available, so this key always does something.
+			if ( gamescope::SettingsOverlay_IsCapturingInput() &&
+			     !gamescope::ui::shell::LauncherOnlyActive() &&
+			     gamescope::ui::shell::AreaActive( "audio.mixer" ) )
+			{
+				gamescope::SettingsOverlay_SetVisible( false );
+			}
+			else
+			{
+				gamescope::SettingsOverlay_SetVisible( true );
+				gamescope::ui::shell::RequestArea( "audio.mixer" );
+			}
+			break;
+
 		case Action::Count:
 			break;
 	}

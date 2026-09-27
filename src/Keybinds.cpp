@@ -195,6 +195,13 @@ namespace gamescope::keybinds
 			  "client already running on this machine, so there is nothing to sign in to. It "
 			  "does nothing when this is not a Steam game, because there is then no Friends "
 			  "page to open at all. See Settings > System > Friends." },
+			// Ctrl+Shift+M: collides with none of the defaults above (RShift,
+			// Ctrl+Shift+O, LCtrl+RShift, Ctrl+Shift+Tab, RMB, Mouse4) nor with
+			// the reserved Ctrl+Alt+Shift+O.
+			{ "mixer", "Open mixer", "Ctrl+Shift+M",
+			  "The chord that opens the settings shell on the Mixer -- and closes it again "
+			  "when it is already there. If the shell is open on something else, this switches "
+			  "it to the Mixer instead of closing it." },
 			// RMB by default: the zoom is an aim-down-sights stand-in, and
 			// the right button is where every shooter already puts that. It
 			// does nothing until the Zoom area's own switch is on, and it

@@ -12,9 +12,15 @@ The newest version below is the one this build reports.
 ## [0.10.0] – 2026-09-27
 
 ### Added
-- **Null binds for WASD**: a new Null binds area (MISC) makes only the most recently
+- **Null binds for WASD**: a new Null binds area (INPUT) makes only the most recently
   pressed key of A/D and W/S reach the game, with an adjustable delay and
   randomization between switches, off by default since some anti-cheat may flag it.
+- **Input › General**: a new area holds Force grab cursor (moved out of Display ›
+  General) and a new Force grab keyboard switch that stops the desktop's own
+  shortcuts while gamescope has focus, works live on both nested backends, and
+  reapplies automatically when you switch profiles.
+- **Mixer hotkey**: a new `Ctrl+Shift+M` shortcut opens the settings on the Mixer, or
+  closes them again if the Mixer is already showing.
 
 ### Fixed
 - **Zoom: clicks land on what the projector shows**: while the zoom is up and the
@@ -26,17 +32,23 @@ The newest version below is the one this build reports.
 - **Settings pages scroll with the mouse wheel**: long settings pages and the
   inspector panel now scroll with the wheel instead of cutting off rows at small
   window sizes.
-- **Icon rail: group corner badge and hover tooltip cleaned up**: the small arrow
-  badge on a collapsed/expanded group icon no longer looks clipped against the
-  rail edge, and hovering a group now shows its name in a properly padded label
-  instead of an unstyled sliver.
+- **Icon rail: group hover tooltip cleaned up**: hovering a collapsed category's icon
+  now shows its name in a properly padded label instead of an unstyled sliver.
 - **Keybinds: the autoclicker's hotkey is just "Autoclicker"**: it no longer says
   "toggle", since the autoclicker can be set to hold or toggle.
+- **Rail: opening a category below the open one now animates too**: it eases open the
+  same way opening one above it always has, instead of jumping straight open.
+- **Rail: the open category's accent bar runs its full height**: it no longer stops
+  short of the category's own rounded corners.
+- **Mixer shows the detected stream's name**: while Stream is set to Automatic, the
+  volume row is now titled after the stream it found instead of always reading "Game
+  volume".
 
 ### Info
-- **Settings rail groups are now expandable tabs**: DISPLAY/MISC/SETTINGS/OTHER open
-  one at a time, with the group holding the current page opening automatically, so
-  the rail no longer overflows.
+- **Settings rail has six groups now**: Display, Overlay, Input, Misc, Settings and
+  Other, each an expandable tab that opens on its own so the rail no longer
+  overflows; HUD, Crosshair, Zoom and Cursor moved into Overlay, Autoclicker and Null
+  binds moved into Input, and Misc now holds only Friends and Mixer.
 
 ## [0.9.2] – 2026-09-25
 

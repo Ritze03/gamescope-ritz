@@ -160,10 +160,12 @@ TEST_CASE( "an unset binding is the compiled-in default", "[keybinds]" )
 	CHECK( ChordTextFor( Action::Shell )     == "RShift" );
 	CHECK( ChordTextFor( Action::ShellAlt )  == "Ctrl+Shift+O" );
 	CHECK( ChordTextFor( Action::Launcher )  == "LCtrl+RShift" );
+	CHECK( ChordTextFor( Action::Mixer )     == "Ctrl+Shift+M" );
 
 	CHECK( IsDefault( Action::Shell ) );
 	CHECK( IsDefault( Action::ShellAlt ) );
 	CHECK( IsDefault( Action::Launcher ) );
+	CHECK( IsDefault( Action::Mixer ) );
 
 	// ...and every default is exactly what the action table declares, so the
 	// row's Default() (its reset target) cannot drift from what a fresh
@@ -178,6 +180,7 @@ TEST_CASE( "an unset binding is the compiled-in default", "[keybinds]" )
 	// Ids round-trip, since they are both the on-disk key and half the row id.
 	CHECK( ActionFromId( "shell" ).value() == Action::Shell );
 	CHECK( ActionFromId( "launcher" ).value() == Action::Launcher );
+	CHECK( ActionFromId( "mixer" ).value() == Action::Mixer );
 	CHECK_FALSE( ActionFromId( "nope" ).has_value() );
 }
 
@@ -222,6 +225,37 @@ TEST_CASE( "two actions cannot share a chord", "[keybinds]" )
 	// Nonsense is refused by the grammar, not by the conflict rule.
 	CHECK_FALSE( SetChord( Action::Launcher, "Ctrl+Wumpus" ).empty() );
 	CHECK( ChordTextFor( Action::Launcher ) == sBefore );
+
+	// Every action's compiled-in DEFAULT is distinct from every other's --
+	// the invariant Mixer's own "Ctrl+Shift+M" pick has to satisfy against
+	// the existing RShift / Ctrl+Shift+O / LCtrl+RShift / Ctrl+Shift+Tab /
+	// RMB / Mouse4 defaults and the reserved chord. Table-level, not a live
+	// SetChord() (which would conflict with each action's OWN already-live
+	// default before it ever got there).
+	for ( size_t i = 0; i < (size_t)Action::Count; i++ )
+	{
+		const Chord ci = Parse( Info( (Action)i ).pszDefault );
+		CHECK( ci != ReservedChord() );
+		for ( size_t j = i + 1; j < (size_t)Action::Count; j++ )
+		{
+			INFO( Info( (Action)i ).pszId << " vs " << Info( (Action)j ).pszId );
+			CHECK( ci != Parse( Info( (Action)j ).pszDefault ) );
+		}
+	}
+
+	// Mixer follows the same live conflict/undo rule as every other action:
+	// refused against another action's already-live chord, and reversible
+	// once it takes a genuinely free one.
+	{
+		const std::string sMixerBefore = ChordTextFor( Action::Mixer );
+		CHECK_FALSE( SetChord( Action::Mixer, ChordTextFor( Action::ShellAlt ) ).empty() );
+		CHECK( ChordTextFor( Action::Mixer ) == sMixerBefore );
+
+		REQUIRE( SetChord( Action::Mixer, "F5" ).empty() );
+		CHECK( ChordTextFor( Action::Mixer ) == "F5" );
+		REQUIRE( SetChord( Action::Mixer, sMixerBefore ).empty() );   // back to default
+		CHECK( IsDefault( Action::Mixer ) );
+	}
 
 	// NOTE: no successful SetChord() in THIS test case, deliberately -- every
 	// call above is one that must be REFUSED, and the refusal is checked to
