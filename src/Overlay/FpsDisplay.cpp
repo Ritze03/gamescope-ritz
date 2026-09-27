@@ -1040,14 +1040,19 @@ namespace gamescope
 		// ---- text colour + technique ----------------------------------
 		if ( bInvertedMode )
 		{
-			// True per-pixel invert (rendervulkan's
-			// ALPHA_BLENDING_MODE_INVERT, wired up in FpsDisplay_AddLayer()):
-			// the compute-composite shader takes the actual game colour
-			// under each glyph pixel and inverts it (alphamode.h's
-			// BlendLayer(), with a perceptual contrast guard so it can't
-			// vanish over a mid-grey surface). The glyph pass hands the
-			// shader coverage, not a colour: opaque, ignoring text_opacity
-			// (a partial alpha would only dilute the invert).
+			// Single-sample invert (rendervulkan's ALPHA_BLENDING_MODE_INVERT,
+			// wired up in FpsDisplay_AddLayer(), REDESIGNED 2026-09-27): the
+			// compute-composite shader samples the game's own colour ONCE, at
+			// the readout box's centre (FrameInfo_t::invertSamplePos), and
+			// colours the WHOLE digit with that one inverted sample
+			// (alphamode.h's g_hudInvertColor) -- not each glyph pixel
+			// inverting its own spot, which is what used to happen here and
+			// which the user reported as "just stays white" (see
+			// alphamode.h's g_hudInvertColor comment for the root cause this
+			// found, and superdoc/features/fps-display.md for the full
+			// write-up). The glyph pass still hands the shader coverage, not
+			// a colour: opaque, ignoring text_opacity (a partial alpha would
+			// only dilute the invert).
 			//
 			// Pure opaque MAGENTA, (255, 0, 255), is the marker alphamode.h
 			// reads (2026-09-06): a texel with G == 0 is "digit plus
@@ -1350,8 +1355,16 @@ namespace gamescope
 	// 2026-09-06), when the texture was twice the output's height; the two
 	// are equal again now, and the parameter stays because it keeps this
 	// function independent of the texture's shape.
-	static void DrawReadout( ImVec2 io_display )
+	// Returns the readout box's own centre, in the same OUTPUT pixel space
+	// as io_display (i.e. FrameInfo_t::invertSamplePos's own convention) --
+	// the point the single-sample Inverted colour mode samples layer 0 at
+	// (FpsDisplay_AddLayer()). {-1,-1} when nothing was drawn this frame
+	// (hidden for high FPS): harmless, since there are then no digit pixels
+	// for alphamode.h's marker to colour.
+	static ImVec2 DrawReadout( ImVec2 io_display )
 	{
+		const ImVec2 kNotDrawn( -1.0f, -1.0f );
+
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 
 		// Still called even while forced: keeps the smoothing/immediate
@@ -1386,7 +1399,7 @@ namespace gamescope
 		}
 
 		if ( s_bHiddenForHighFps )
-			return; // frame rate is comfortably high -- draw nothing this frame
+			return kNotDrawn; // frame rate is comfortably high -- draw nothing this frame
 
 		const int nFps = (int)std::lround( flDisplayFps );
 
@@ -1409,6 +1422,8 @@ namespace gamescope
 		const ImVec2 origin = ResolveAnchoredOrigin( cfg.anchor, (float)cfg.margin_x, (float)cfg.margin_y, boxSize, io_display );
 
 		DrawFpsModuleContent( pDrawList, origin, boxSize, L );
+
+		return ImVec2( origin.x + boxSize.x * 0.5f, origin.y + boxSize.y * 0.5f );
 	}
 
 	static bool RenderAndSubmit()
@@ -1637,8 +1652,15 @@ namespace gamescope
 			frame.bReserveInvertMarker = bCrosshairSharesInvert;
 			bCrosshairAnimating = Crosshair_Draw( ImGui::GetBackgroundDrawList(), frame, ulNowNanos );
 		}
+		// The readout box's own centre, in output pixel space -- the single-
+		// sample Inverted colour mode's sample point (below). {-1,-1} (the
+		// default) is never used as a real point: it only survives to the
+		// layer push below when bReadout is false, and bInvertedMode
+		// implies bReadout (its own definition, above), so a real Inverted-
+		// mode layer always overwrites it with DrawReadout()'s real answer.
+		ImVec2 vReadoutCenter( -1.0f, -1.0f );
 		if ( bReadout )
-			DrawReadout( ImVec2( (float)g_nOutputWidth, (float)g_nOutputHeight ) );
+			vReadoutCenter = DrawReadout( ImVec2( (float)g_nOutputWidth, (float)g_nOutputHeight ) );
 
 		ImGui::Render();
 
@@ -1713,10 +1735,13 @@ namespace gamescope
 			// near-white no matter what the game was showing. Keep this in
 			// one layer.
 			layer->eAlphaBlendingMode = ALPHA_BLENDING_MODE_INVERT;
-			// A true per-pixel invert reads the composited destination, so
-			// the frame MUST go through the full compute-composite path --
-			// see bNeedsDestinationBlend's own comment in rendervulkan.hpp.
+			// A single sample of layer 0 still only happens inside a real
+			// compute-composite dispatch, so the frame MUST go through the
+			// full path -- see bNeedsDestinationBlend's own comment in
+			// rendervulkan.hpp (its name predates the 2026-09-27 redesign;
+			// its job -- force full composite -- did not change).
 			pFrameInfo->bNeedsDestinationBlend = true;
+			pFrameInfo->invertSamplePos = { vReadoutCenter.x, vReadoutCenter.y };
 		}
 		else
 		{

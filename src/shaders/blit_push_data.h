@@ -18,5 +18,14 @@ uniform layers_t {
     float u_itmTargetNits;
 
     uint u_rotation;
+
+    // The FPS HUD's single-sample Inverted colour mode (2026-09-27,
+    // superdoc/features/fps-display.md): the point, in this same output
+    // pixel space, to sample layer 0 at once and invert -- see
+    // alphamode.h's alpha_mode_invert branch. u_hasInvertSample is 0 on
+    // every frame that doesn't have an Inverted-mode HUD layer, in which
+    // case u_invertSamplePos is unused.
+    vec2 u_invertSamplePos;
+    uint u_hasInvertSample;
 };
 

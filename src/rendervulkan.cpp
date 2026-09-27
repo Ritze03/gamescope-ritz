@@ -4736,11 +4736,18 @@ struct BlitPushData_t
 
 	uint32_t u_rotation;
 
+	// The FPS HUD's single-sample Inverted colour mode -- see
+	// FrameInfo_t::invertSamplePos's own comment and blit_push_data.h.
+	vec2_t u_invertSamplePos;
+	uint32_t u_hasInvertSample;
+
 	explicit BlitPushData_t(const struct FrameInfo_t *frameInfo, uint32_t rotation = 0)
 	{
 		u_shaderFilter = 0;
 		u_alphaMode = 0;
 		u_rotation = rotation;
+		u_invertSamplePos = frameInfo->invertSamplePos;
+		u_hasInvertSample = frameInfo->bNeedsDestinationBlend ? 1u : 0u;
 
 		for (int i = 0; i < frameInfo->layers.count(); i++) {
 			const FrameInfo_t::Layer_t *layer = &frameInfo->layers.get( i );
@@ -4786,6 +4793,8 @@ struct BlitPushData_t
         u_shaderFilter = (uint32_t)GamescopeUpscaleFilter::LINEAR;
 		u_alphaMode = 0;
 		u_rotation = 0;
+		u_invertSamplePos = { 0.0f, 0.0f };
+		u_hasInvertSample = 0;
 		ctm[0] = glm::mat3x4
 		{
 			1, 0, 0, 0,
@@ -5170,6 +5179,11 @@ struct RcasPushData_t
 
 	uint32_t u_rotation;
 
+	// The FPS HUD's single-sample Inverted colour mode -- see
+	// FrameInfo_t::invertSamplePos's own comment.
+	vec2_t u_invertSamplePos;
+	uint32_t u_hasInvertSample;
+
 	RcasPushData_t(const struct FrameInfo_t *frameInfo, float sharpness, uint32_t rotation = 0)
 	{
 		uvec4_t tmp;
@@ -5182,6 +5196,8 @@ struct RcasPushData_t
 		u_c1 = tmp.x;
 		u_shaderFilter = 0;
 		u_alphaMode = 0;
+		u_invertSamplePos = frameInfo->invertSamplePos;
+		u_hasInvertSample = frameInfo->bNeedsDestinationBlend ? 1u : 0u;
 
 		for (int i = 0; i < frameInfo->layers.count(); i++)
 		{

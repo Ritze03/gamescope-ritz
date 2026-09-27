@@ -12,6 +12,43 @@ uint get_layer_alphamode(uint layerIdx) {
     return bitfieldExtract(u_alphaMode, int(layerIdx) * alpha_mode_max_bits, alpha_mode_max_bits);
 }
 
+// The FPS HUD's single-sample Inverted colour mode (REDESIGNED 2026-09-27,
+// superdoc/features/fps-display.md's Inverted section). The whole digit is
+// coloured with ONE sample of layer 0 -- taken at the readout box's own
+// centre, inverted -- rather than each glyph pixel inverting the real
+// composited colour underneath it (the previous, true per-pixel invert).
+// Set once per invocation by the calling .comp file, from its own layer-0
+// sampling convention (each composite path reads layer 0 differently --
+// see each file's own comment next to where it assigns this), before the
+// layer loop that calls BlendLayer() runs; alpha_mode_invert below just
+// reads it. A plain global rather than a BlendLayer() parameter: several
+// of these files already call BlendLayer() from more than one place (both
+// blur passes loop over every layer twice under different conditions), and
+// threading a new argument through every call site is more invasive than
+// setting one shared value at the top of main().
+//
+// Why single-sample and not per-pixel: the user's own report was "the
+// inverted color mode ... doesn't work at the moment, it just stays
+// white" -- and separately, once told the code already inverted the real
+// pixel underneath, asked for exactly this instead: "It should capture a
+// single pixel of the color below it and just invert it and use that
+// color so it constantly changes. it's more like an OLED thingy." Code
+// review of the old per-pixel path (superdoc/features/fps-display.md's
+// "Root cause" note) found the maths itself intact and unchanged since its
+// 2026-09-09 fix, but also a genuine bug in cs_composite_blur_cond.comp's
+// ordering (BLUR_MODE_COND blends every layer at or above
+// c_blur_layer_count -- where the HUD always sits -- BEFORE layer 0 is
+// blended in, so the old code's "invert the destination" read pure black
+// there and produced a constant white independent of the game or of any
+// Shaders toggle); a locally-uniform patch of game content under the
+// readout (a dark HUD corner, say) would look the same way even where the
+// maths was correct, since a per-pixel invert of a uniform patch IS a
+// uniform colour. This redesign sidesteps both: it never reads the
+// composited destination at all, so neither cause can reproduce it, and
+// the one sample it does take changes with the frame instead of holding
+// steady over a static patch of chrome.
+vec3 g_hudInvertColor = vec3(0.0);
+
 vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity )
 {
     float layerAlpha = opacity * layerColor.a;
@@ -32,11 +69,13 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
     }
     else if ( alphaMode == alpha_mode_invert )
     {
-        // True per-pixel "invert what's underneath" mode -- the FPS HUD's
-        // Inverted text-colour option (superdoc/features/fps-display.md).
+        // The FPS HUD's single-sample Inverted text-colour option
+        // (superdoc/features/fps-display.md) -- see g_hudInvertColor's own
+        // comment above for the technique and why it replaced a true
+        // per-pixel invert of the destination.
         //
         // The layer carries BOTH kinds of content at once: texels that
-        // must invert the destination (the digits' fill) and texels that
+        // must take g_hudInvertColor (the digits' fill) and texels that
         // must composite normally (the HUD's black outline, and the
         // crosshair in whatever colour the user picked). They are
         // told apart by a MARKER the HUD encodes into the texel itself:
@@ -86,64 +125,24 @@ vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity
             // back. Never more than the texel's alpha (rounding guard).
             float flDigit = min( linearToSrgb( vec3( layerColor.r ) ).r, layerAlpha );
 
-            // This runs after apply_layer_color_mgmt() and before
-            // encodeOutputColor(), so `outputValue` is a LINEAR-light
-            // blend-space colour that, under HDR/PQ, is not bounded to [0,1] --
-            // clamp before inverting, or an HDR background can push the
-            // inverted result negative/out-of-range.
-            vec3 bg = clamp( outputValue.rgb, 0.0f, 1.0f );
-            vec3 inverted = 1.0f - bg;
-
-            // Contrast guard, judged in ENCODED (sRGB) space. A literal invert
-            // is 1 - bg in linear light, but the eye judges the gap between
-            // the digit and the background on the encoded (gamma) scale, and
-            // the two disagree badly in the mid-tones: a background of
-            // encoded 148 is linear 0.30, its true invert is linear 0.70,
-            // and that encodes to ~218 -- a faint light grey over mid grey
-            // that reads as "white text ignoring the background". The
-            // earlier guard measured the gap in linear light (floor 0.40,
-            // engaging only for linear luma in (0.30, 0.70)) and so left
-            // exactly those backgrounds alone. Encoded luma (Rec.709
-            // weights on the encoded channels, i.e. Y') is the quantity the
-            // eye actually compares, so measure there and push there.
+            // No contrast guard, on purpose: the user asked for a plain
+            // invert of one pixel ("It should capture a single pixel of
+            // the color below it and just invert it and use that color"),
+            // and a mid-grey sample inverting to mid-grey is the honest
+            // OLED-style behaviour that was asked for, not a defect to
+            // guard against -- see g_hudInvertColor's own comment for the
+            // full "why". g_hudInvertColor is already clamped to [0,1]
+            // before inverting by whichever .comp file set it (the HDR/PQ
+            // caveat the old per-pixel invert had here applies equally to
+            // that one sample).
             //
-            // The rule: if |Y'(inverted) - Y'(bg)| < kMinEncodedSeparation,
-            // move the inverted colour uniformly (all channels, so whatever
-            // hue survives is kept) to sit exactly that far from the
-            // background's Y' on the side AWAY from the background --
-            // below it for backgrounds brighter than perceptual mid grey
-            // (Y' > 0.5), above it for darker ones. Where the true invert
-            // already clears the floor it is left exactly as it is.
-            //
-            // Why 0.40: at Y'(bg) == 0.5 the true invert's Y' is ~0.896, a
-            // gap of ~0.40, so this floor is precisely "what a true invert
-            // gives you at perceptual mid grey" -- the true inversion
-            // survives untouched for EVERY background darker than encoded
-            // 128, and the push only ever engages on the bright side
-            // (encoded ~128..229 for greys), where it pulls the digit down
-            // to bg - 0.40 (encoded 148 -> ~46, 188 -> ~86, 219 -> ~117).
-            // See superdoc/features/fps-display.md's expected table.
-            const vec3 kLumaWeights = vec3( 0.2126f, 0.7152f, 0.0722f );
-            const float kMinEncodedSeparation = 0.40f;
-            vec3 invertedEnc = linearToSrgb( inverted );
-            float flBgLumaEnc = dot( linearToSrgb( bg ), kLumaWeights );
-            float flInvLumaEnc = dot( invertedEnc, kLumaWeights );
-            if ( abs( flInvLumaEnc - flBgLumaEnc ) < kMinEncodedSeparation )
-            {
-                float flTargetLumaEnc = flBgLumaEnc > 0.5f
-                    ? flBgLumaEnc - kMinEncodedSeparation
-                    : flBgLumaEnc + kMinEncodedSeparation;
-                invertedEnc = clamp( invertedEnc + ( flTargetLumaEnc - flInvLumaEnc ), 0.0f, 1.0f );
-                inverted = srgbToLinear( invertedEnc );
-            }
-
-            // Digit share inverts; the remaining covered share is black
-            // (the outline) and contributes nothing; the rest of the
-            // pixel is the background, untouched. A pure-black texel
-            // (outline only, d == 0) is therefore exactly the coverage
-            // blend of black, and a full digit texel (d == a == 1) is
-            // exactly the inverted colour.
-            outputValue.rgb = outputValue.rgb * ( 1.0f - layerAlpha ) + inverted * flDigit;
+            // Digit share takes g_hudInvertColor; the remaining covered
+            // share is black (the outline) and contributes nothing; the
+            // rest of the pixel is the background, untouched. A pure-black
+            // texel (outline only, d == 0) is therefore exactly the
+            // coverage blend of black, and a full digit texel (d == a == 1)
+            // is exactly g_hudInvertColor.
+            outputValue.rgb = outputValue.rgb * ( 1.0f - layerAlpha ) + g_hudInvertColor * flDigit;
         }
         else
         {

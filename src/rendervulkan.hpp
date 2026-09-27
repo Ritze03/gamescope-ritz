@@ -307,7 +307,8 @@ enum AlphaBlendingMode_t
 	ALPHA_BLENDING_MODE_PREMULTIPLIED,
 	ALPHA_BLENDING_MODE_COVERAGE,
 	ALPHA_BLENDING_MODE_NONE,
-	// True per-pixel "invert what's underneath" (src/shaders/alphamode.h's
+	// The FPS HUD's single-sample Inverted colour mode -- colours the whole
+	// digit with one sample of layer 0, inverted (src/shaders/alphamode.h's
 	// alpha_mode_invert) -- shader-only, not a real DRM plane blend enum,
 	// so it must never reach liftoff's "pixel blend mode" property; see
 	// DRMBackend.cpp's drm_prepare_liftoff().
@@ -327,17 +328,35 @@ struct FrameInfo_t
 	int blurRadius;
 
 	// Set whenever a layer this frame uses ALPHA_BLENDING_MODE_INVERT (the
-	// FPS HUD's true per-pixel Inverted colour mode). That mode reads the
-	// real composited colour underneath each glyph pixel, so it only
-	// produces a correct result when this frame is actually running
-	// through the full compute-composite path -- DRM's partial-composition
-	// shortcut (DRMBackend.cpp's bWantsPartialComposite) removes the base
-	// game layer and composites overlays alone onto a plane ABOVE the
-	// game, which would invert transparent black instead of the game's
-	// colour. Backends OR this into their own bNeedsFullComposite decision
-	// (DRMBackend.cpp/WaylandBackend.cpp/OpenVRBackend.cpp's Present()) so
-	// the cost is paid only on the frames that actually need it.
+	// FPS HUD's Inverted colour mode). REDESIGNED 2026-09-27
+	// (superdoc/features/fps-display.md's Inverted section): this used to
+	// mean "reads the real composited colour underneath each glyph pixel",
+	// i.e. a true per-pixel invert of the destination. It is now a single
+	// sample of layer 0 (see invertSamplePos below), read once and used for
+	// every digit pixel -- but a plain compute dispatch over layer 0's own
+	// sampler is STILL only reachable through the full compute-composite
+	// path, so the flag's job (force that path) is unchanged even though
+	// what runs there no longer touches the destination at all. DRM's
+	// partial-composition shortcut (DRMBackend.cpp's bWantsPartialComposite)
+	// removes the base game layer and composites overlays alone onto a
+	// plane ABOVE the game, which would sample transparent black instead of
+	// the game's colour. Backends OR this into their own bNeedsFullComposite
+	// decision (DRMBackend.cpp/WaylandBackend.cpp/OpenVRBackend.cpp's
+	// Present()) so the cost is paid only on the frames that actually need
+	// it.
 	bool bNeedsDestinationBlend = false;
+
+	// The point (in OUTPUT/screen pixel coordinates -- the same space
+	// FrameInfo_t::Layer_t::offset/scale place layer 0 in, and what
+	// composite.h's `uv`/`coord` locals already are) that the FPS HUD's
+	// Inverted colour mode samples layer 0 at: the centre of the readout's
+	// own box. Only meaningful when bNeedsDestinationBlend is set (the HUD
+	// is the only producer of either field); FpsDisplay.cpp computes it
+	// from the same box the digits are drawn into. Read once per frame by
+	// each composite shader (alphamode.h's alpha_mode_invert branch), never
+	// per-pixel -- one texel fetch of layer 0's own sampler, not a CPU
+	// readback, so there is no extra frame of lag.
+	vec2_t invertSamplePos = { 0.0f, 0.0f };
 
 	// Issue #20 fix, generalised for the native effects pre-pass: "layer 0's
 	// texture already carries the layer-0 effects". Set by steamcompmgr

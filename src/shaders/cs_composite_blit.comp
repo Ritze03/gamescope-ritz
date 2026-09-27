@@ -36,6 +36,18 @@ void main() {
         outputValue = sampleLayer(0, uv) * u_opacity[0];
     }
 
+    // The FPS HUD's single-sample Inverted colour mode (alphamode.h's
+    // g_hudInvertColor) -- one extra fetch of layer 0's OWN sampler, at the
+    // readout box's centre instead of this invocation's own pixel, reusing
+    // the exact same sampleLayer() (so it inherits layer 0's own colorspace/
+    // colour-management/offset-scale handling for free). Gated on
+    // u_hasInvertSample so a frame with no Inverted-mode HUD layer pays
+    // nothing extra.
+    if (c_layerCount > 0 && u_hasInvertSample != 0u) {
+        vec3 invertSample = clamp(sampleLayer(0, u_invertSamplePos).rgb * u_opacity[0], 0.0f, 1.0f);
+        g_hudInvertColor = 1.0f - invertSample;
+    }
+
     for (int i = 1; i < c_layerCount; i++) {
         vec4 layerColor = sampleLayer(i, uv);
         outputValue = BlendLayer( i, outputValue, layerColor, u_opacity[i] );
