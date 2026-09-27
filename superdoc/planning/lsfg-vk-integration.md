@@ -3,6 +3,83 @@
 **Status: PLANNING ONLY.** No code, no prototypes, nothing installed. This document is
 the deliverable.
 
+## Update 2026-09-27 — project moved, licence changed, feature dropped
+
+A fresh web scout (2026-09-27) found lsfg-vk has moved off GitHub entirely since this
+doc's 2026-08-21 research, and the licence terms this whole doc's option (a) recommendation
+was weighed against have changed. **Net effect: option (a) — gamescope as config/launch UI
+only — is unaffected as an architecture (it never touched lsfg-vk's source or license), but
+the project decided not to build it this round.**
+
+- **New home:** `github.com/PancakeTAS/lsfg-vk` now carries only a README pointing
+  elsewhere — the wiki this doc cited (`Quirks wiki`) is gone. The real project lives at
+  **`lsfg-vk.dev`** (docs at `lsfg-vk.dev/docs/`), with its own self-hosted git at
+  `git.lsfg-vk.dev` (an `lsfg-vk-archive` holds the old GitHub history; stable is tagged
+  `v1.0.0`, dev is `v2.0.0-dev`) and prebuilt binaries at `builds.lsfg-vk.dev`. The
+  Codeberg mirror some forks referenced has also been removed. Source:
+  [lsfg-vk.dev/blog/important-changes-to-lsfg-vk/](https://lsfg-vk.dev/blog/important-changes-to-lsfg-vk/).
+- **Licence changed GPLv3 → CC BY-NC-ND 4.0** (non-commercial, no-derivatives). This
+  **supersedes** every "LSFG-VK is GPLv3" statement in this doc (Section 1's "Licensing/
+  distribution" bullet, the Risks section's "License/distribution risk" bullet) — not
+  because those statements were wrong when written (they were correct for the
+  `8b0da266`/GPLv3-era snapshot), but because the current upstream is a fundamentally
+  different licence. Practical consequence for gamescope-ritz: option (a)'s
+  "gamescope never touches lsfg-vk source, just writes its config/env vars" shape was
+  already licence-agnostic and remains fine under CC BY-NC-ND 4.0; what closes is the
+  sibling doc's escape hatch (a separately-installed component whose source a permissive
+  licence made comfortable to depend on) — a **no-derivatives** licence forecloses even
+  wrapping/adapting lsfg-vk code in any form, not just vendoring it. See the parallel
+  update in `lsfg-in-tree-port.md`.
+- **Env vars renamed/expanded**, prefix now `LSFGVK_` (was `LSFG_*` in older forks/docs);
+  source: [lsfg-vk.dev/docs/configuration/environment-variables/](https://lsfg-vk.dev/docs/configuration/environment-variables/).
+  Startup-only: `DISABLE_LSFGVK`, `LSFGVK_CONFIG`, `LSFGVK_PROFILE`. Gated behind
+  `LSFGVK_ENV=1`: `LSFGVK_DLL_PATH`, `LSFGVK_NO_FP16`, `LSFGVK_LOG_LEVEL`,
+  `LSFGVK_LOG_FILE`, `LSFGVK_MULTIPLIER`, `LSFGVK_FLOW_SCALE`, `LSFGVK_PERFORMANCE_MODE`,
+  `LSFGVK_PACING_MODE`, `LSFGVK_OVERRIDE_PRESENT_MODE`,
+  `LSFGVK_PRESERVE_SWAPCHAIN_IMAGE_COUNT`. Section 7's field list (multiplier, flow
+  scale, performance mode, dll path, allow_fp16, gpu, pacing) is still the right shape
+  but should be re-read against the current
+  [configuration-options](https://lsfg-vk.dev/docs/configuration/configuration-options/)
+  page before implementing — it now documents `[global]` (dll, allow_fp16, log_level,
+  log_file — none hot-reloadable) and `[[profile]]` (name, active_in, multiplier default
+  `2`, flow_scale default `1.0`, performance_mode default `false` — these three
+  hot-reloadable — pacing_mode default `vsync`, override_present_mode default `true`,
+  preserve_swapchain_image_count default `false` — not hot-reloadable).
+- **v2.0.0-rc1** (per a fork's docs referencing it): FP16 acceleration, ~30% less
+  memory, Vulkan 1.2 requirement (down from 1.3), a Qt6 UI, a new CLI — broadly
+  consistent with this doc's `develop`-branch snapshot, not a contradiction.
+- **Gamescope troubleshooting note still current**: with `pacing_mode = vsync` on
+  Gamescope/Steam Deck, upstream still says to set `ENABLE_GAMESCOPE_WSI=0`
+  ([basic-troubleshooting-steps](https://lsfg-vk.dev/docs/troubleshooting/basic-troubleshooting-steps/)),
+  matching Section 4's "layer-ordering hazard" finding below. **New wrinkle**: since
+  2026-09-22 this fork ships its own WSI layer under a different enable var,
+  `ENABLE_GAMESCOPE_RITZ_WSI` (see `superdoc/meta/TERMINOLOGY.md`'s "WSI layer (FROG)"
+  entry) — a game running under gamescope-ritz would need `ENABLE_GAMESCOPE_RITZ_WSI=0`
+  or `GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` considered instead of (or alongside) the upstream
+  var, if this workaround is ever needed. Not verified against lsfg-vk itself — flagging
+  as a consideration for whoever revisits this, not a tested fix.
+- **Backend re-check (2026-09-27, this repo's current HEAD `b15fdd6`):**
+  `UsesVulkanSwapchain()` is still `true` only for SDL
+  (`src/Backends/SDLBackend.cpp:497`) and `false` for Wayland
+  (`src/Backends/WaylandBackend.cpp:2296`) — the DRM/Headless/OpenVR findings in the
+  table below were not re-verified line-by-line but nothing in the 2026-09-27 scout
+  suggests they've changed. **The user runs gamescope-ritz's nested Wayland backend**
+  (no `--backend` flag, under Hyprland) — the one backend among the two re-checked that
+  has *no* swapchain to hook, so a compositor-side layer attach has nothing to attach to
+  in the user's own actual setup, independent of the licence question. The Shell/HUD/
+  crosshair/zoom overlays are composited into the same presented image the game occupies
+  (Section 6 above already covers the resulting ghosting risk for a hypothetical
+  compositor-side frame-gen); nothing in that analysis changed.
+- **Decision: dropped for this round.** After being told (a) the licence now forecloses
+  even the lighter "separately-installed component" escape hatch the sibling doc
+  proposed, and (b) the user's own backend (Wayland, nested) has no swapchain for a
+  layer to hook regardless of licence, the user said, verbatim: **"Just forget about the
+  lsfg-vk part, then."** No settings page, no layer, no GUI work was built or is
+  planned this round. This doc and its sibling remain as reference if the topic comes
+  back — re-verify all URLs and the licence again before acting, since lsfg-vk.dev is a
+  fast-moving, actively-developed project that already changed both its home and its
+  licence once since this doc's original research.
+
 ## Verdict
 
 **Not feasible as literally described ("hook gamescope instead of the game") on four
@@ -59,7 +136,9 @@ model.
   Lossless Scaling license (Steam, ~$7) and point LSFG-VK at their own copy
   (`docs/Configuration.md`: global `dll` option / `LSFGVK_DLL_PATH` env var).
 - **Licensing/distribution:** LSFG-VK itself is GPLv3
-  (`LICENSE.md`). `Lossless.dll` is proprietary, third-party, Steam-distributed —
+  (`LICENSE.md`) *(superseded 2026-09-27 — see the Update section above: current
+  upstream is CC BY-NC-ND 4.0, not GPLv3)*. `Lossless.dll` is proprietary, third-party,
+  Steam-distributed —
   **gamescope-ritz must never bundle, download, or embed it**, must only accept a
   user-supplied filesystem path, and any UI copy should say so explicitly (mirrors
   LSFG-VK's own README: "make sure you have Lossless Scaling downloaded on Steam"
@@ -291,7 +370,11 @@ Source: [docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da
   Treat the Q7 field list as a snapshot, not a stable contract.
 - **License/distribution risk:** any code path that downloads, caches, or bundles
   `Lossless.dll` (even "for convenience") would violate its proprietary licensing and
-  must be avoided; the UI must only ever accept a user-supplied local path.
+  must be avoided; the UI must only ever accept a user-supplied local path. *(The
+  GPLv3-specific framing this bullet originally had is superseded — see the Update
+  2026-09-27 section: lsfg-vk itself is CC BY-NC-ND 4.0 now, which raises the stakes
+  further since it forecloses any adaptation of lsfg-vk's own code, not just the
+  `Lossless.dll` distribution question this bullet was already about.)*
 - **Latency risk:** frame generation adds a frame of delay by construction (Q3);
   gamescope is used heavily for latency-sensitive gaming (Steam Deck, VR via OpenVR
   backend). Even the low-risk option (a) inherits this from LSFG-VK itself — it is not

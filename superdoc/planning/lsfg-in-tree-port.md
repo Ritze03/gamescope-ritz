@@ -8,6 +8,54 @@ swapchain to hook on DRM/Wayland/Headless/OpenVR), but "port LSFG-VK's *frame-ge
 functionality itself* into gamescope, discarding the layer machinery entirely." Do not
 re-litigate the layer-hooking conclusion; it stands.
 
+## Update 2026-09-27 — licence change closes the "separate GPLv3 component" escape hatch
+
+A fresh web scout (2026-09-27; see `lsfg-vk-integration.md`'s own Update section for the
+full findings and URLs — not re-quoted here) found lsfg-vk moved off GitHub to
+`lsfg-vk.dev` and, critically for this doc specifically, **relicensed from GPLv3 to
+CC BY-NC-ND 4.0 (non-commercial, no derivatives).**
+
+- **This doc's Licence gate section is superseded, not just refined.** Everything below
+  it was written to route *around* a GPLv3 "if you vendor it, you must relicense your
+  whole binary" problem, by proposing "run `lsfg-vk-backend` as a separate,
+  optionally-installed **GPLv3** component the user builds themselves, and talk to it
+  over dma-buf fds — this keeps gamescope-ritz's own source 100% BSD-2-Clause." That
+  proposal assumed a copyleft-but-permissive-to-depend-on-at-arm's-length licence.
+  **CC BY-NC-ND 4.0 is a no-derivatives licence** — it doesn't merely require the
+  *combined* binary to relicense (GPLv3's concern), it restricts making or distributing
+  **any adapted/derivative version of lsfg-vk's own code at all**, which is a strictly
+  harder bar than the GPLv3 case this doc analyzed. Whether a small IPC/dlopen client
+  gamescope-ritz writes *against* an unmodified, separately-installed lsfg-vk binary
+  counts as a "derivative work" of lsfg-vk is a real legal question this scout cannot
+  resolve — but the clean "vendor `lsfg-vk-backend`'s source into a separate component
+  we build" reading this doc's escape hatch relied on (Section headed "There is one
+  architecturally-clean way...", which explicitly says "a small subprocess... that the
+  user builds/installs themselves") is foreclosed outright: building lsfg-vk source at
+  all, in any component, is what CC BY-NC-ND 4.0's no-derivatives term restricts.
+- **The rest of this doc's technical findings (Sections 1-4: the backend/layer split,
+  the dma-buf/fd API shape, gamescope's already-enabled Vulkan feature match, the
+  presentation-cadence/VRR problem) are not licence-dependent and are unaffected** — they
+  describe what the algorithm needs mechanically, which the licence change doesn't
+  touch. They remain useful if lsfg-vk ever changes licence terms again or if the
+  project revisits building an equivalent frame-gen pipeline from scratch (not derived
+  from lsfg-vk's code) — a "**reimplement the idea, not the code**" path this doc never
+  separately scoped, since Section 6's recommendation to just ship option (a) made it
+  moot at the time.
+- **Env var / config schema note:** lsfg-vk's env vars are now `LSFGVK_*`-prefixed
+  (`LSFGVK_ENV=1` gate for most of them) and config lives in
+  `~/.config/lsfg-vk/conf.toml` — see `lsfg-vk-integration.md`'s Update section for the
+  full current list; this doc's own Section 5/Milestone plan never depended on specific
+  var names so nothing else here needs correcting for that.
+- **Decision: dropped for this round.** The user asked for an lsfg-vk settings page
+  running "on GameScope instead of the game." After being told the licence now
+  forecloses even this doc's own separate-component escape hatch, and that the user's
+  actual backend (Wayland, nested — see `lsfg-vk-integration.md`'s Update section) has
+  no swapchain to attach anything to regardless, the user said, verbatim: **"Just forget
+  about the lsfg-vk part, then."** Milestone 0 (the cheap `lsfg-vk-cli debug` quality
+  check this doc recommended as the first step) was never run. This doc stands as
+  reference only; re-verify the licence and the backend/API shape again before reviving
+  this topic.
+
 ## Verdict
 
 **Feasible-with-caveats.** The single reason this isn't a clean "yes": **the licence
@@ -29,6 +77,13 @@ right times without wrecking latency or fighting VRR, a problem LSFG-VK's own ma
 in-process implementation still hasn't fully solved either.
 
 ## Licence gate
+
+*(Superseded 2026-09-27 — see the Update section above. Upstream lsfg-vk has since
+relicensed to CC BY-NC-ND 4.0; every "GPLv3" statement below reflects the licence at the
+`develop`-branch snapshot this section was checked against and is no longer current.
+The escape-hatch this section proposes — a separately-built GPLv3 component — is
+foreclosed by a no-derivatives licence, which is a stricter bar than the GPLv3
+relicensing problem this section was written to route around.)*
 
 **LSFG-VK is GPLv3** (`LICENSE.md`, full GPLv3 text; every source file carries
 `SPDX-License-Identifier: GPL-3.0-or-later`; GitHub's own detection reports
