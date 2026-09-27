@@ -722,6 +722,95 @@ pass (`tests/gamescope_tests`) -- none of I3's own tests changed shape, since th
 presentation-only over the SAME `AccordionOnHeaderClicked`/`VisibleRailAreas`/
 `RailContentHeightPx` logic I2 already pinned.
 
+### Rail accordion: icons, livelier styling, animated expand, even spacing (2026-09-27, I5)
+
+I3's own polish pass made open vs. closed unmistakable, but the user came back with a fuller
+list. `Why:` the user, verbatim: *"the categories look a bit 'dull' compared to the individual
+modules inside of them. Plus, there is no animation, when opening them, which looks a bit sad.
+Also, the spacing towards the last shown module and the next category is zero, but it should get
+half of the spacing thats on the top (top decreases, bottom increases). Add icons for the
+individual categories and style them a little nicer."* Five things, all in `Shell.cpp`'s
+`DrawRail()` plus `Registry.h`/`.cpp`'s pure half:
+
+**1. Icons in the full-width rail.** A header now draws its group's own glyph -- the SAME
+`IconForRailGroup()` table the icon-collapsed rail already used (I2) -- between the chevron and
+the label, at `Px(18.0f)` (a notch under an area row's own `tok::kIconBox` = 24, since `kHeaderH`
+is only 26px and a full-size glyph would leave almost no margin). Tinted the same rule an area
+row's own icon already follows: `Role::AccentIcon` on the OPEN header, the header's own text
+colour (see below) at rest otherwise -- one state job, not a second convention.
+
+**2. Livelier styling.** Three changes, all through existing tokens/roles, nothing hard-coded:
+- **Label colour**: `Role::TextLabel` (68%) in place of `Role::TextMeta` (52%) for a closed
+  header's icon and text -- SPEC §7.1's own contrast table names `TextMeta` for "units, marks,
+  chips, placeholders", not a first-class control label; a closed header sitting at that alpha
+  next to an area row's own 68% label is a real part of what read as "dull".
+- **A resting outline.** A closed header now draws a quiet `Role::Line` (10% white) hairline
+  around its own pill at rest, not only once hovered or open -- so it reads as its own bounded
+  shape (a real tab) from the first frame, rather than only gaining an edge once touched.
+- **Hover and pressed states.** The open pill's accent alpha now steps `0.16 -> 0.20 (hover) ->
+  0.26 (pressed, IsItemActive())` instead of sitting static -- even the OPEN tab now answers the
+  pointer. A closed header keeps the existing white-13 hover wash (the SAME literal every area
+  row's own hover already uses, reused rather than re-invented) and gains a matching
+  `Accent(0.22f)` press fill, a preview of what release turns it into.
+
+**3. Expand/collapse animation.** Reuses Tokens.h's existing "one easing, three durations" motion
+system verbatim -- `tok::kDurRegion` (160ms, SPEC §8.4 already names this duration for "rail
+collapse") and the `Approach()`/`Ease()` pair `s_flRailAnim` already drives the rail's own WIDTH
+with -- rather than inventing a new duration or easing. One ABSOLUTE pixel height
+(`s_flRowsBlockAnim`, not a 0..1 fraction: switching groups mid-transition has to ease
+continuously from whatever height was already on screen, and a fraction re-based against a
+DIFFERENT group's full height would jump) `Approach()`es whichever group's rows are meant to be
+showing, every frame. `s_eDisplayedRowsGroup` can lag `s_eOpenRailGroup`: closing a group must not
+blank its rows the instant the click lands, so the DISPLAYED group stays put and shrinks to
+nothing before the state clears; opening a DIFFERENT group swaps the displayed rows immediately
+and only the height keeps easing, so the same physical "slot" both shrinks and grows in one
+motion. Per-row consequence: `Registry.h`'s `RowVisibleHeightPx()` (pure, unit-tested) turns that
+one animated height into "how much of THIS row, at this position in its group, is on screen right
+now" -- 0 (skipped entirely), a partial clip (drawn, but cut off, and NOT interactive -- "hit-
+testing only for fully visible rows", the simpler of the two options the brief offered, since
+`VisibleRailAreas()`/keyboard nav never see a mid-animation frame at all), or the full row.
+Repaint: gamescope does not free-run (`SettingsOverlay.cpp`'s own Issue #100 comment spells out
+why), so `DrawRail()` now calls `force_repaint()` whenever the animated height has not yet landed
+on its target, the identical idiom `UpdateFadeAlpha()` already uses for the overlay's own open/
+close fade -- self-terminating the moment the snap-to-target threshold lands, never re-arming
+after. Selection-follow scrolling (the rail's own wheel/keyboard-follow) reads a SEPARATE, REST-
+state pass of the same `Walk()` (every row of `s_eOpenRailGroup` at its full, unanimated height) --
+so it never jitters against the animation in flight, and `RailContentHeightPx()` (the "does the
+busiest group fit" test) stays exactly the rest-state number it always was.
+
+**4. Spacing.** `Why:` the user's own words above. `railmetrics::kHeaderGapOpen` (`kHeaderGap *
+0.5`) replaces the OLD behaviour -- the full gap sat entirely above an open group's first row,
+and nothing at all sat between its last row and the next header -- with half above and half
+below: the open header's own row-block advance uses `kHeaderGapOpen` instead of `kHeaderGap`, and
+a NEW `kHeaderGapOpen` gap is inserted after an open group's own rows, before the next header (no
+trailing gap when the open group is the LAST one in the table -- there is no next header to space
+it from). A closed-to-closed header gap is untouched (`kHeaderGap`, I3's own "visible gap between
+adjacent pills" fix) -- only the OPEN group's own two edges move. `Registry.cpp`'s
+`RailContentHeightPx()` mirrors the identical arithmetic, so the "top decreases, bottom increases,
+total stays the same" property is pinned by a unit test (`tests/test_overlay_ui.cpp`) working out
+the exact pixel heights both ways, not merely eyeballed off a screenshot.
+
+**5. The icon-only rail.** Unaffected in structure (I2's icon-mode header/row sizing, and 184a04a's
+badge/tooltip fixes, are untouched code paths) but gets the SAME `Walk()`-level animation and
+spacing logic passed through it (icon mode's own zero-gap header advance is preserved -- the
+`bIcons` guard on every new gap constant above).
+
+**Verification.** A private headless sway (`WLR_BACKENDS=headless`) plus a nested `--backend
+wayland` gamescope, this task's own harness modelled on `scripts/pixel-regression.sh`, captured
+under `build-release/verify-shots/rail-style-2026-09-27/`: DISPLAY open and MISC open at
+1920x1080 (both show the new icons, the brighter closed-header text, the visible top/bottom
+spacing split around the open group), a closed-header hover (the DISPLAY pill visibly lighter
+than the untouched MISC pill beside it, zoomed crop confirms it), and the 1100x900 icon rail with
+MISC open. A mid-animation capture was attempted (switch group, screenshot with no settle delay,
+relying on the async screenshot pipeline's own ~50-150ms latency against the 160ms duration) but
+landed on the settled frame both times tried -- the brief's own "otherwise skip it and say so"
+clause; no debug convar was added to slow the animation down for a guaranteed catch, since that
+would be scaffolding kept for one verification pass. `577` test cases / `15,953,241` assertions
+pass (`tests/gamescope_tests`), including two new ones this pass added: a pure `RowVisibleHeightPx()`
+census (clip/gate arithmetic at several block heights) and an exact-pixel pin of the spacing split
+(the "top decreases, bottom increases, total unchanged" claim, computed both ways and checked
+against each other).
+
 ### Sheet body: the mouse wheel now scrolls it (2026-09-27, I3, found via rail-polish finding 4)
 
 Pre-existing, unrelated to the accordion (confirmed via `git log` -- the "make the sheet

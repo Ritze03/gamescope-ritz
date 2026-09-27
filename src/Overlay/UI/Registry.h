@@ -34,6 +34,7 @@
 // the design most worth testing (tests/test_overlay_ui.cpp).
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -1225,7 +1226,20 @@ namespace gamescope::ui
 		// group (MISC, 6-7 areas) still lands at ~376px against an 878px
 		// budget at 1080p/scale 1 (see the "busiest group still fits" test)
 		// -- the four extra px per header change is nowhere near the limit.
-		inline constexpr float kHeaderGap = 8.0f;    // tok::kS, after a header
+		inline constexpr float kHeaderGap = 8.0f;    // tok::kS, after a CLOSED header (I3)
+		// I5 (2026-09-27, spacing): half of kHeaderGap. The user, on I3's own
+		// result: "the spacing towards the last shown module and the next
+		// category is zero, but it should get half of the spacing thats on
+		// the top (top decreases, bottom increases)." I3 put the WHOLE gap
+		// above an open group's first row and none below its last one; this
+		// splits that one T into T/2 above and T/2 below, so the open
+		// group's own row block now sits centred in its gap on both sides
+		// instead of hugging the header above it and the next header below.
+		// Only the OPEN group's own header-to-row and row-to-next-header
+		// gaps use this -- a CLOSED header's gap to its neighbour is
+		// untouched (still the full kHeaderGap, I3's own "visible gap
+		// between adjacent pills" fix, which this must not undo).
+		inline constexpr float kHeaderGapOpen = kHeaderGap * 0.5f;   // 4.0f
 		inline constexpr float kPad       = 8.0f;    // tok::kS, top and bottom of the rail
 	}
 
@@ -1237,7 +1251,57 @@ namespace gamescope::ui
 	// ask "does the busiest group still fit the rail at 1080p" without an
 	// ImGui context. `railAreas` is RailOrder() order, already filtered to
 	// Available() -- pass Registry::RailAreas()'s own return.
+	//
+	// This is the RAIL AT REST -- eOpen's rows fully grown, every other
+	// group fully collapsed -- never the mid-animation state I5's own
+	// per-frame block height (Shell.cpp's s_flRowsBlockAnim) passes through.
+	// Selection-follow scrolling (DrawRail()'s own flActiveTop) and this
+	// function both read the SAME rest arithmetic on purpose, so the rail's
+	// scroll offset never jitters with the accordion's own in-flight
+	// animation -- see this task's own ui-design-guide.md entry.
 	float RailContentHeightPx( const std::vector<const Area *> &railAreas, RailGroup eOpen );
+
+	// =====================================================================
+	//  The rail accordion's row reveal (2026-09-27, I5)
+	// =====================================================================
+	// The open/close MOTION itself reuses Tokens.h's existing "one easing,
+	// three durations" system verbatim (tok::kDurRegion, the same 160 ms
+	// SPEC §8.4 already spends on "rail collapse" -- literally named for
+	// this -- and the same Approach()/Ease() pair s_flRailAnim already
+	// drives the rail's WIDTH with): Shell.cpp Approach()es one absolute
+	// pixel height (not a 0..1 fraction) toward whichever group's rows are
+	// meant to be showing, every frame, so switching groups mid-animation
+	// eases smoothly from whatever height was on screen rather than
+	// snapping. That is already a pure, already-tested helper (Approach()'s
+	// own Ease() unit tests, tests/test_overlay_ui.cpp) -- reused rather
+	// than re-derived here, per this doc's own instruction to look for an
+	// existing motion token before inventing one.
+	//
+	// What is NEW is the per-ROW consequence of that one animated block
+	// height: as it grows or shrinks, whole rows reveal or hide top-down,
+	// and the row straddling the current height is a PARTIAL reveal, not a
+	// pop. This is the pure arithmetic for that -- no ImGui, so a test can
+	// pin it -- used by DrawRail()'s own Walk() for both the visual clip
+	// height (a partial row is drawn but cut off, not skipped) and for
+	// which rows may be interacted with (only a FULLY visible row gets an
+	// InvisibleButton -- "hit-testing only for fully visible rows", the
+	// simpler of the two options this task's brief offered).
+	//
+	// `flRowsBlockH` is the animated block's current height in px;
+	// `nRowIndexInGroup` is the row's own 0-based position within its
+	// group (0 = the row directly under the header); `flItemH` is
+	// railmetrics::kItemH, passed rather than read from the namespace so
+	// this stays a plain function of its arguments. Returns 0 (not drawn,
+	// not hit-tested) .. flItemH (fully visible, hit-tested) -- clamped, so
+	// a negative or over-long block height cannot produce a negative or
+	// over-tall row.
+	inline float RowVisibleHeightPx( float flRowsBlockH, int nRowIndexInGroup, float flItemH )
+	{
+		if ( nRowIndexInGroup < 0 || flItemH <= 0.0f )
+			return 0.0f;
+		const float flRemaining = flRowsBlockH - (float)nRowIndexInGroup * flItemH;
+		return std::clamp( flRemaining, 0.0f, flItemH );
+	}
 
 	// =====================================================================
 	//  Adjustable -- "step this declaration's value by one"

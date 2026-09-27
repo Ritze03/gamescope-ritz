@@ -64,6 +64,14 @@
 
 #include "convar.h"
 
+// I5 (2026-09-27): force_repaint(), for the rail accordion's own animation
+// -- see DrawRail()'s own comment on why an in-flight animation has to ask
+// for its own next frame. The same header every other Overlay/*.cpp file
+// that calls force_repaint() already includes (PanelConfig.cpp, Zoom.cpp,
+// Crosshair.cpp, ...); this is that pattern's first use inside Shell.cpp
+// itself.
+#include "steamcompmgr.hpp"
+
 // D18: overlay_e2_key pushes onto the overlay's OWN input queue, which is
 // what makes a real key event reachable from a script. See cc_overlay_e2_key.
 #include "SettingsOverlay.h"
@@ -218,6 +226,21 @@ namespace gamescope::ui::shell
 		// The one animated quantity: SPEC §8.4's 160 ms region duration,
 		// used for the rail's collapse so the icon rail does not snap.
 		float s_flRailAnim = shelltok::kRailFull;
+
+		// I5 (2026-09-27): the rail accordion's own open/close animation --
+		// see DrawRail()'s own comment on both of these for the full
+		// mechanism. s_flRowsBlockAnim is an ABSOLUTE pixel height (not a
+		// fraction), so switching groups mid-animation eases continuously
+		// from whatever height was already on screen. s_eDisplayedRowsGroup
+		// is which group's rows that height currently belongs to, which can
+		// lag s_eOpenRailGroup (above) by design while a group is shrinking
+		// closed. Both start at RailGroup::Other's own rest state, matching
+		// s_eOpenRailGroup's own default just above -- the very first draw
+		// of the rail animates OTHER's rows in from nothing, the same as
+		// every later open does, rather than needing a special first-frame
+		// case.
+		float     s_flRowsBlockAnim     = 0.0f;
+		RailGroup s_eDisplayedRowsGroup = RailGroup::Nothing;
 
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
@@ -1989,9 +2012,13 @@ namespace gamescope::ui::shell
 			// the same named constant in both places is what makes that
 			// true by construction instead of by two numbers happening to
 			// agree today.
-			const float flItemH = Px( railmetrics::kItemH );
-			const float flPadX  = Px( 16.0f );
-			const float flSecH  = Px( railmetrics::kHeaderH );
+			const float flItemH       = Px( railmetrics::kItemH );
+			const float flPadX        = Px( 16.0f );
+			const float flSecH        = Px( railmetrics::kHeaderH );
+			const float flHdrGapOpen  = Px( railmetrics::kHeaderGapOpen );
+			const float flHdrGapShut  = Px( railmetrics::kHeaderGap );
+
+			const std::vector<const Area *> railAreas = RailAreas();
 
 			// ---- the rail's vertical walk, defined ONCE ------------------
 			//
@@ -2010,24 +2037,41 @@ namespace gamescope::ui::shell
 			// I2: in icon mode a header is now a full icon BUTTON (one per
 			// group, see fnSection below), not the old bare divider rule --
 			// so it takes a full item slot, same as an icon-mode area row.
-			const float flSecAdvance = bIcons ? flItemH : ( flSecH + Px( railmetrics::kHeaderGap ) );
-
-			const std::vector<const Area *> railAreas = RailAreas();
-
-			// D2/D6, THE ACCORDION'S ONE ENFORCEMENT POINT: a header is
-			// drawn on every group change regardless of open state (every
-			// group's tab is always visible), but an ITEM only advances the
-			// walk -- and only gets drawn at all -- when its group is the
-			// open one. A collapsed group's rows are not drawn and take no
-			// height, which is the whole of D2/D6's "collapsed groups...
-			// take no height" and is also why RailContentHeightPx() in
-			// Registry.cpp mirrors this exact `eGroup == s_eOpenRailGroup`
-			// gate rather than the old "every item always" one.
-			const auto Walk = [ & ]( auto &&fnSection, auto &&fnItem ) -> float
+			//
+			// I5 (2026-09-27, animation + spacing): the walk now takes the
+			// group whose ROWS are being shown (`eRowsGroup`) and that
+			// group's current row-BLOCK height in px (`flRowsBlockH`) as
+			// explicit parameters, instead of reading s_eOpenRailGroup and
+			// a fixed `count * flItemH` directly. One arithmetic, two
+			// callers:
+			//   - the REST calls just below (content height, active-item Y)
+			//     pass s_eOpenRailGroup and ITS FULL rest height (every row
+			//     open) -- exactly what this function always computed
+			//     before I5, unchanged, which is what keeps
+			//     selection-follow scrolling jitter-free while the
+			//     accordion is mid-animation (see this task's own
+			//     ui-design-guide.md entry and Registry.h's
+			//     RailContentHeightPx() comment).
+			//   - the DRAW call at the bottom of this function passes
+			//     s_eDisplayedRowsGroup (which lags s_eOpenRailGroup while
+			//     a group is shrinking closed) and the ANIMATED height
+			//     (s_flRowsBlockAnim), so headers after the animating
+			//     group visibly slide as it grows or shrinks.
+			// A row beyond the block's current height is not drawn at all
+			// (RowVisibleHeightPx() returns 0 for it); a row straddling it
+			// is drawn but reports a PARTIAL visible height back to
+			// fnItem() for the draw pass to clip and to gate hit-testing
+			// with ("hit-testing only for fully visible rows" -- the
+			// simpler of the two options this task's brief offered).
+			const auto Walk = [ & ]( RailGroup eRowsGroup, float flRowsBlockH,
+			                         auto &&fnSection, auto &&fnItem ) -> float
 			{
-				float     y          = rc.y0 + Px( railmetrics::kPad );
-				RailGroup eLastGroup = RailGroup::Other;
-				bool      bFirst     = true;
+				float     y               = rc.y0 + Px( railmetrics::kPad );
+				RailGroup eLastGroup      = RailGroup::Other;
+				bool      bFirst          = true;
+				bool      bPrevShowedRows = false;
+				int       nRowIndex       = 0;
+				float     yRowsStart      = 0.0f;
 
 				for ( size_t i = 0; i < railAreas.size(); ++i )
 				{
@@ -2036,28 +2080,63 @@ namespace gamescope::ui::shell
 
 					if ( bFirst || eGroup != eLastGroup )
 					{
+						// I5 (spacing): the group just finished owes its own
+						// row-block height, plus the trailing half-gap
+						// before THIS new header -- railmetrics::
+						// kHeaderGapOpen's own comment has the full story.
+						// Icon mode keeps its old zero-gap, flItemH-only
+						// advance untouched (bIcons guards below).
+						if ( !bFirst && bPrevShowedRows )
+						{
+							y += flRowsBlockH;
+							y += bIcons ? 0.0f : flHdrGapOpen;
+						}
 						eLastGroup = eGroup;
 						bFirst = false;
 						fnSection( eGroup, y );
-						y += flSecAdvance;
+
+						const bool bThisShowsRows = ( eGroup == eRowsGroup );
+						y += bIcons ? flItemH
+						            : ( flSecH + ( bThisShowsRows ? flHdrGapOpen : flHdrGapShut ) );
+						bPrevShowedRows = bThisShowsRows;
+						nRowIndex  = 0;
+						yRowsStart = y;
 					}
 
-					if ( eGroup == s_eOpenRailGroup )
+					if ( eGroup == eRowsGroup )
 					{
-						fnItem( i, area, y );
-						y += flItemH;
+						const float flVisibleH = RowVisibleHeightPx( flRowsBlockH, nRowIndex, flItemH );
+						if ( flVisibleH > 0.0f )
+							fnItem( i, area, yRowsStart + (float)nRowIndex * flItemH, flVisibleH );
+						++nRowIndex;
 					}
 				}
+
+				// The table ends mid-group: the last group's own row block
+				// still counts, but -- same as every OTHER group boundary
+				// above -- earns no trailing gap since there is no next
+				// header to space it from.
+				if ( bPrevShowedRows )
+					y += flRowsBlockH;
 				return y;
 			};
 
 			const auto NoSection = []( RailGroup, float ) {};
-			const auto NoItem    = []( size_t, const Area &, float ) {};
+			const auto NoItem    = []( size_t, const Area &, float, float ) {};
+
+			// The OPEN group's full REST row-block height (every one of its
+			// rows fully open) -- used by every REST call below, and as the
+			// animated height's own Approach() TARGET further down. 0 when
+			// s_eOpenRailGroup is RailGroup::Nothing (VisibleRailAreas()
+			// already returns empty for it).
+			const float flOpenGroupRestRowsH =
+				(float)VisibleRailAreas( railAreas, s_eOpenRailGroup ).size() * flItemH;
 
 			// Measure, then decide the scroll offset. Content height carries
 			// the same top pad at the bottom so the last item does not sit
 			// flush against the edge when the rail is scrolled fully down.
-			const float flContentH  = ( Walk( NoSection, NoItem ) - rc.y0 ) + Px( railmetrics::kPad );
+			const float flContentH  = ( Walk( s_eOpenRailGroup, flOpenGroupRestRowsH, NoSection, NoItem )
+			                             - rc.y0 ) + Px( railmetrics::kPad );
 			const float flMaxScroll = std::max( 0.0f, flContentH - rc.Height() );
 
 			// Keep the ACTIVE item on screen. StepArea() moves the selection
@@ -2070,7 +2149,8 @@ namespace gamescope::ui::shell
 				s_flRailScroll -= ImGui::GetIO().MouseWheel * flItemH;
 
 			float flActiveTop = -1.0f;
-			Walk( NoSection, [ & ]( size_t, const Area &area, float y ) {
+			Walk( s_eOpenRailGroup, flOpenGroupRestRowsH, NoSection,
+			      [ & ]( size_t, const Area &area, float y, float ) {
 				if ( &area == SelectedArea() )
 					flActiveTop = y - rc.y0;      // RailScroll() works rail-relative
 			} );
@@ -2078,12 +2158,62 @@ namespace gamescope::ui::shell
 			s_flRailScroll = RailScroll( s_flRailScroll, flContentH, rc.Height(),
 			                             flActiveTop, flItemH, Px( tok::kS ) );
 
+			// =============================================================
+			//  I5 (2026-09-27): the accordion's own open/close ANIMATION.
+			// =============================================================
+			// One absolute pixel height (not a 0..1 fraction -- see
+			// Registry.h's RowVisibleHeightPx() comment) that Approach()es
+			// whichever group's rows are meant to be showing, every frame,
+			// using the SAME motion system (tok::kDurRegion, 160 ms --
+			// SPEC §8.4 already names this exact duration for "rail
+			// collapse" -- and the Approach()/Ease() pair) s_flRailAnim
+			// above already drives the rail's own WIDTH with. Reused, not
+			// reinvented, per this task's own brief ("check ... for an
+			// existing motion token ... and reuse it").
+			//
+			// s_eDisplayedRowsGroup can lag s_eOpenRailGroup on purpose:
+			// closing a group (s_eOpenRailGroup -> Nothing) must not blank
+			// its rows on the SAME frame the click lands -- they still have
+			// to shrink to nothing on screen first, so the group whose rows
+			// are DRAWN stays put until the animated height actually
+			// reaches 0. Switching from one open group straight to another
+			// (A -> B, never through Nothing) swaps the displayed rows to
+			// B immediately; only the animated HEIGHT keeps easing from A's
+			// old value toward B's, so the same physical "slot" both
+			// shrinks and grows in one motion instead of drawing two
+			// independently-positioned row blocks at once.
+			if ( s_eOpenRailGroup != RailGroup::Nothing )
+				s_eDisplayedRowsGroup = s_eOpenRailGroup;
+
+			const float flTargetRowsH = flOpenGroupRestRowsH;   // 0 when Nothing is open
+			s_flRowsBlockAnim = Approach( s_flRowsBlockAnim, flTargetRowsH, tok::kDurRegion,
+			                              ImGui::GetIO().DeltaTime );
+			// Snap once the remainder is under a physical pixel -- the same
+			// idiom s_flRailAnim's own snap uses just below this function,
+			// for the same reason: an exponential approach never arrives on
+			// its own, and a row block forever 0.3 units short keeps
+			// force_repaint()ing (next line) and keeps its last row on a
+			// fractional-pixel clip forever.
+			if ( std::abs( s_flRowsBlockAnim - flTargetRowsH ) < 1.0f / std::max( Scale(), 0.01f ) )
+				s_flRowsBlockAnim = flTargetRowsH;
+			if ( s_flRowsBlockAnim <= 0.0f )
+				s_eDisplayedRowsGroup = RailGroup::Nothing;   // fully collapsed -- nothing left to lag
+
+			// Issue #100's own idiom (SettingsOverlay.cpp's UpdateFadeAlpha):
+			// an in-flight animation has to keep asking for its own next
+			// frame, self-terminating the instant it lands exactly on the
+			// snap above -- gamescope does not free-run, so nothing else
+			// here would ever ask for the frames this animation needs while
+			// the game itself sits idle.
+			if ( s_flRowsBlockAnim != flTargetRowsH )
+				force_repaint();
+
 			// Clip so an off-screen item is neither painted over the sheet
 			// nor clickable -- ImGui culls an InvisibleButton outside the
 			// window clip rect, which is exactly the wanted hit-test.
 			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
 
-			Walk(
+			Walk( s_eDisplayedRowsGroup, s_flRowsBlockAnim,
 				// I2 (2026-09-27): the group header is now a real tab/button,
 				// not a static label -- SPEC's old bare section divider. A
 				// press toggles the accordion (AccordionOnHeaderClicked --
@@ -2124,6 +2254,13 @@ namespace gamescope::ui::shell
 					if ( ImGui::InvisibleButton( "##railhdr", ImVec2( rcHdr.Width(), rcHdr.Height() ) ) )
 						s_eOpenRailGroup = AccordionOnHeaderClicked( s_eOpenRailGroup, eGroup );
 					const bool bHovered = ImGui::IsItemHovered();
+					// I5 (2026-09-27, livelier styling): a PRESSED state --
+					// the one interaction state I3's headers never grew --
+					// asked for by this task's own brief ("a visible hover
+					// state and a pressed state"). IsItemActive() is true
+					// for the whole mouse-down-inside span, same lifetime
+					// ImGui gives every other button in the kit.
+					const bool bPressed = ImGui::IsItemActive();
 					ImGui::PopID();
 
 					if ( bOpen )
@@ -2139,7 +2276,16 @@ namespace gamescope::ui::shell
 						// hovered row at a glance. A closed header never
 						// gets this outline, which is the other half of "the
 						// open group is unmistakable".
-						Fill( rcHdr, Accent( 0.16f ), flHdrRound );
+						//
+						// I5: even the OPEN pill now answers hover/press --
+						// it stayed static under the pointer before, which
+						// read as "a label", not "a button you could press
+						// again". Three accent alphas, one direction
+						// (brighter = more pressed), all through the same
+						// Accent() helper the rest of the kit already uses
+						// for state fills.
+						const float flAccentA = bPressed ? 0.26f : ( bHovered ? 0.20f : 0.16f );
+						Fill( rcHdr, Accent( flAccentA ), flHdrRound );
 						Outline( rcHdr, Col( Role::AccentBase ), flHdrRound );
 					}
 					else
@@ -2154,11 +2300,38 @@ namespace gamescope::ui::shell
 						// which is the other half of QC's "collapsed headers
 						// should be quieter".
 						Fill( rcHdr, Col( Role::SurfaceRaised ), flHdrRound );
-						if ( bHovered )
+						// I5: a resting hairline (Role::Line, the same quiet
+						// 10% white every other separator in the kit uses)
+						// so a CLOSED pill reads as its own bounded shape
+						// even before it is touched -- the user's "the
+						// categories look a bit dull" -- rather than only
+						// gaining a visible edge once open. Still well under
+						// the open pill's full accent outline, so "which
+						// one is open" stays unambiguous.
+						Outline( rcHdr, Col( Role::Line ), flHdrRound );
+						if ( bPressed )
+							// A preview of what this header becomes on
+							// release -- Accent(), not a second hard-coded
+							// wash, so pressing a closed header already
+							// reads as "about to open".
+							Fill( rcHdr, Accent( 0.22f ), flHdrRound );
+						else if ( bHovered )
+							// The SAME white-13 hover wash every area row
+							// below already uses (rcWash's own Fill call,
+							// further down this function) -- reused for
+							// consistency with the rest of the rail, not a
+							// fresh literal.
 							Fill( rcHdr, IM_COL32( 255, 255, 255, 13 ), flHdrRound );
 					}
 
-					const ImU32 colHdr = bOpen ? Col( Role::AccentIcon ) : Col( Role::TextMeta );
+					// I5: TextLabel (68%), not TextMeta (52%) -- SPEC §7.1's
+					// own contrast table. TextMeta is the kit's quietest
+					// text role (units, placeholders); the closed header's
+					// name is a first-class control label, the same
+					// contrast tier an area row's own inactive label draws
+					// at, not a caption on top of a colourless divider,
+					// which is a real part of the "dull" read.
+					const ImU32 colHdr = bOpen ? Col( Role::AccentIcon ) : Col( Role::TextLabel );
 
 					if ( bIcons )
 					{
@@ -2236,29 +2409,79 @@ namespace gamescope::ui::shell
 						// uses for an inline-expandable row (D20.3): right
 						// while closed, down while open.
 						const float flChevron = Px( 10.0f );
-						glyph::Chevron( ImVec2( rcHdr.x0 + flPadX * 0.5f, ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
+						const float flCy      = ( rcHdr.y0 + rcHdr.y1 ) * 0.5f;
+						glyph::Chevron( ImVec2( rcHdr.x0 + flPadX * 0.5f, flCy ),
 						                flChevron, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdr );
-						Label( { rcHdr.x0 + flPadX, rcHdr.y0, rcHdr.x1 - Px( tok::kM ), rcHdr.y1 },
+
+						// I5 (2026-09-27, item 1): the full-width rail never
+						// drew a group glyph at all -- chevron and text
+						// only -- unlike every area row below it, which is
+						// exactly the asymmetry this task's brief names
+						// ("Add icons for the individual categories"). Same
+						// table the icon-collapsed rail already draws from
+						// (IconForRailGroup()), same tint rule an area
+						// row's own icon uses (AccentIcon when active,
+						// TextLabel at rest -- colHdr already carries that
+						// distinction from a few lines above). Sized a
+						// notch under tok::kIconBox (24, the area rows' own
+						// size): kHeaderH is 26px, and a full 24px glyph
+						// would leave almost no margin inside it.
+						const float  flIconSize = Px( 18.0f );
+						const float  flIconX0   = rcHdr.x0 + flPadX;
+						const Icon  *pGroupIcon = IconForRailGroup( eGroup );
+						if ( pGroupIcon )
+							glyph::RailIcon( *pGroupIcon,
+								ImVec2( flIconX0 + flIconSize * 0.5f, flCy ), flIconSize, colHdr );
+
+						const float flLabelX0 = flIconX0 + flIconSize + Px( tok::kM );
+						Label( { flLabelX0, rcHdr.y0, rcHdr.x1 - Px( tok::kM ), rcHdr.y1 },
 						       TypeRole::Section, bOpen ? Col( Role::TextPrimary ) : colHdr,
 						       RailGroupName( eGroup ) );
 					}
 				},
-				[ & ]( size_t i, const Area &area, float yRaw )
+				[ & ]( size_t i, const Area &area, float yRaw, float flVisibleH )
 			{
 				const float y = yRaw - s_flRailScroll;
 				const Rect rcItem { rc.x0, y, rc.x1, y + flItemH };
 				const bool bActive = ( &area == SelectedArea() );
 
-				ImGui::SetCursorScreenPos( ImVec2( rcItem.x0, rcItem.y0 ) );
-				ImGui::PushID( (int)i );
-				if ( ImGui::InvisibleButton( "##railitem", ImVec2( rcItem.Width(), rcItem.Height() ) ) )
+				// I5 (2026-09-27): a row the accordion's own animation has
+				// only partly revealed (growing) or is about to hide
+				// (shrinking) is drawn -- clipped to however much of it is
+				// currently on screen -- but is not interactive:
+				// "hit-testing only for fully visible rows", the simpler of
+				// the two options this task's own brief offered. Nothing
+				// else needs to know: StepArea()/keyboard nav walk the REST
+				// layout (VisibleRailAreas()), never this draw pass, so a
+				// mid-animation frame is never the one a Down-arrow or a
+				// palette jump has to reason about.
+				const bool bFullyVisible = flVisibleH >= flItemH - 0.5f;
+				bool       bHovered      = false;
+
+				if ( bFullyVisible )
 				{
-					SetSelectedArea( area.Id() );
-					Select( nullptr );          // a new category starts at Overview
-					s_eFocusRegion = Region::Sheet;
+					ImGui::SetCursorScreenPos( ImVec2( rcItem.x0, rcItem.y0 ) );
+					ImGui::PushID( (int)i );
+					if ( ImGui::InvisibleButton( "##railitem", ImVec2( rcItem.Width(), rcItem.Height() ) ) )
+					{
+						SetSelectedArea( area.Id() );
+						Select( nullptr );          // a new category starts at Overview
+						s_eFocusRegion = Region::Sheet;
+					}
+					bHovered = ImGui::IsItemHovered();
+					ImGui::PopID();
 				}
-				const bool bHovered = ImGui::IsItemHovered();
-				ImGui::PopID();
+
+				// A partially-revealed row still needs its own clip -- the
+				// outer PushClipRect at the top of this function bounds the
+				// whole rail, not this one row's currently-animated slice
+				// of it -- so its icon/label do not draw past whatever
+				// sliver flVisibleH allows, which is what makes the reveal
+				// read as a smooth wipe rather than a row popping in whole.
+				const bool bRowClipped = !bFullyVisible;
+				if ( bRowClipped )
+					ImGui::PushClipRect( ImVec2( rcItem.x0, rcItem.y0 ),
+					                     ImVec2( rcItem.x1, rcItem.y0 + flVisibleH ), true );
 
 				// I3 (2026-09-27, post-QC finding 1: "child rows visually
 				// belong to [the open group] (e.g. a subtle indent)"). Every
@@ -2348,6 +2571,9 @@ namespace gamescope::ui::shell
 					       TypeRole::Label, bActive ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 					       area.Title().c_str() );
 				}
+
+				if ( bRowClipped )
+					ImGui::PopClipRect();
 			} );
 
 			ImGui::PopClipRect();

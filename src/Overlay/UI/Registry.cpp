@@ -956,9 +956,17 @@ namespace gamescope::ui
 	{
 		using namespace railmetrics;
 
-		float     y          = kPad;
-		RailGroup eLastGroup = RailGroup::Nothing;
-		bool      bFirst     = true;
+		float     y              = kPad;
+		RailGroup eLastGroup     = RailGroup::Nothing;
+		bool      bFirst         = true;
+		// I5 (2026-09-27, spacing): whether the group we just FINISHED
+		// walking was the open one -- if so its own row block still owes
+		// the trailing half-gap (kHeaderGapOpen) before the NEXT header,
+		// mirrored exactly against DrawRail()'s own Walk() in Shell.cpp
+		// (see that function's own comment on why the gap moved here
+		// instead of staying entirely above the first row).
+		bool      bPrevShowedRows  = false;
+		int       nRowsInPrevGroup = 0;
 
 		for ( const Area *pArea : railAreas )
 		{
@@ -971,16 +979,37 @@ namespace gamescope::ui
 			// own Walk() decides where to call fnSection().
 			if ( bFirst || eGroup != eLastGroup )
 			{
-				eLastGroup = eGroup;
-				bFirst     = false;
-				y += kHeaderH + kHeaderGap;
+				if ( !bFirst && bPrevShowedRows )
+				{
+					// The group just finished: its own row block (rest
+					// height, every row fully open) plus the trailing
+					// half-gap before THIS new header.
+					y += (float)nRowsInPrevGroup * kItemH;
+					y += kHeaderGapOpen;
+				}
+				eLastGroup       = eGroup;
+				bFirst           = false;
+				nRowsInPrevGroup = 0;
+
+				// I5: the OPEN group's own header gets the halved gap above
+				// its first row (kHeaderGapOpen); a closed header keeps the
+				// full kHeaderGap to its neighbour, I3's own fix untouched.
+				const bool bThisShowsRows = ( eGroup == eOpen );
+				y += kHeaderH + ( bThisShowsRows ? kHeaderGapOpen : kHeaderGap );
+				bPrevShowedRows = bThisShowsRows;
 			}
 
 			// Only the OPEN group's rows take height -- a collapsed group's
 			// areas are not drawn and take no height (D2/D6).
 			if ( eGroup == eOpen )
-				y += kItemH;
+				++nRowsInPrevGroup;
 		}
+
+		// The table ends mid-group: if the LAST group was the open one, its
+		// row block still counts (but earns no trailing gap -- there is no
+		// next header to space it from).
+		if ( bPrevShowedRows )
+			y += (float)nRowsInPrevGroup * kItemH;
 
 		return y + kPad;
 	}
