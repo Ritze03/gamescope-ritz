@@ -888,15 +888,15 @@ off the corner even at margin 0**, when it should have been flush.
 directly off the font's own baked glyphs — until 2026-09-14 the metric box
 `ImFontGlyph::X0/Y0/X1/Y1`, since then the glyph's atlas bitmap through a
 visibility floor (see *2026-09-14* below), both via `ImFont::GetFontBaked()`
-(public API, no `imgui_internal.h` needed) — for
-the pinned `'0'`-run string (the same reference the pinned-width box
-sizing already uses, so this stays as jitter-free as that scheme: every
-digit shares this font's tabular bearings by construction). On whichever
-axis the anchor actually hugs an edge — not the centred axis, which has no
-margin claim to satisfy — it shifts the digits by exactly enough to cancel
-that bearing (and, until 2026-09-09, the padding with it), so the ink (or
-the outline's own outer ring, when one is drawn) lands flush at the margin. The pure arithmetic is
-`fpsmath::EdgeShift()` (`FpsDisplay.h`), covered by
+(public API, no `imgui_internal.h` needed) — for **the actual digits being
+drawn** (`L.szNum`; a separate, still-pinned `'0'`-run reference remains,
+but only for the box-*width* jitter-prevention scheme two sections up — see
+*2026-09-28* below for why the two had to split). On whichever axis the
+anchor actually hugs an edge — not the centred axis, which has no margin
+claim to satisfy — it shifts the digits by exactly enough to cancel that
+bearing (and, until 2026-09-09, the padding with it), so the ink (or the
+outline's own outer ring, when one is drawn) lands flush at the margin. The
+pure arithmetic is `fpsmath::EdgeShift()` (`FpsDisplay.h`), covered by
 `tests/test_fps_counter.cpp`; `MeasureFpsModule()` supplies the font's own
 measured bearings and the outline's geometric reach (never less than 1px
 once an outline is drawn at all, matching the sub-pixel-radius path's own
@@ -928,19 +928,15 @@ while the fringe alone lands right, and the fringe cannot creep outward.
 `tests/test_fps_counter.cpp` pins `EdgeShift()`'s arithmetic exactly, as
 before.
 
-**One known 1px case, and why it is left alone.** `MeasureFpsModule()` takes
-its bearings from the **pinned `'0'`-run reference**, and a round glyph like
-`'0'` carries the font's cap-height *overshoot* — its ink starts about a
-pixel higher than a flat-topped `'1'` or `'4'`. So a reading made only of
-flat-topped digits (`144`, `1147`, …) sits up to 1px further **in** than the
-reference predicts on the vertical axis; `60` and `1234` both contain a
-round glyph and measure exactly. The direction is the safe one — the
-reference is the *maximum* ink extent, so a reading never pokes *outside*
-the margin. Measuring the digits actually drawn instead would fix the pixel
-and reintroduce exactly the jitter the pinned scheme exists to prevent (the
-readout would bob vertically as the number crossed `144` → `155`), so the
-pin stays. Measured and recorded in
+**One known 1px case — RESOLVED 2026-09-28, see that section below.** Until
+then, `MeasureFpsModule()` took its bearings from the **pinned `'0'`-run
+reference** rather than the actual digits, on the theory that `'0'`'s
+cap-height/baseline overshoot was the font's deepest, so any other digit
+would sit a *safe* pixel further **in**, never further out. Measured and
+recorded in
 `build-release/verify-shots/hud-backdrop-removal-2026-09-09/results.txt`.
+2026-09-28 found the theory itself false (see below) and replaced the pinned
+reference with the actual drawn string for this measurement.
 
 **Measured after the fix**, and re-measured after the backdrop removal
 (font 36, flat 148 background, `*-edge` — the fringe's own outer pixel):
@@ -1084,6 +1080,112 @@ colour/background via `pixel_regression_sample.py`'s
 `coverage_blend_expected()` (`HUD_MARGIN_DIFF_EDGE_DIGIT`/`_OUTLINE` in the
 script) — see that script's own comment above `assert_hud_margin()` for the
 derivation.
+
+### 2026-09-28: the pinned `'0'` reference wasn't always the deepest digit
+
+**The report.** The user, verbatim: *"When the FPS display is at the bottom
+edge of the screen it is one pixel too high, at the top it is perfectly
+aligned, but at the bottom it's one pixel too high, so there is a single
+pixel gap below the FPS display... Should be 0px."*
+
+**What margin-0/near-edge testing found first.** `ResolveAnchoredOrigin()`'s
+far-edge origin (`ioDisplay − margin − boxSize`) looked like the obvious
+suspect — a *fractional* `boxSize` there, with Dear ImGui's own pen-position
+snap (`IM_TRUNC`, a floor, not a round — `imgui_draw.cpp`) landing on
+whichever whole pixel is at or below it, would explain a far edge (bottom,
+right) losing a pixel that a near edge (top, left, whose origin is just
+`margin`, no `boxSize` term at all) never could. It is not what is
+happening here: `L.numSize.x` is always whole because `ImFontConfig`'s
+`PixelSnapH` (`Fonts.cpp`) rounds every glyph's *advance* to a whole pixel at
+bake time, and `L.numSize.y` is always whole because Dear ImGui's own
+`ImFontCalcTextSizeEx()` sets a single line's height to the *nominal*
+`size` argument (`cfg.font_size`, an integer here — the Font size slider's
+own `.Range(10,48).Step(1.0f)`), never to any measured ascent/descent.
+Pixel-verified across every valid font size (10–48) with a round-glyph
+forced reading (`fps_display_force 88`; 8 has no flat side to expose a
+mismatch — see next paragraph): margin 0 is exact, no-outline and
+outline-on, at all four corners, at every one of those sizes, with zero
+exceptions. There is no far-edge arithmetic bug.
+
+**The real cause.** `MeasureFpsModule()` measured its EdgeShift bearings
+(`flBearingLeft/Right/Top/Bottom`) from a **pinned `'0'`-run string**
+(`szPadded`) rather than the digits actually on screen (`L.szNum`), on the
+theory recorded in the *"One known 1px case"* section above: `'0'`, being
+round, has the deepest cap-height/baseline overshoot of any digit, so any
+other digit's real ink sits a *safe* pixel further **in** than the
+correction assumes — a gap, never a poke-past. Dumping every digit's own
+ink extent at a representative size
+(`RITZ_DUMP_DIGIT_INK=1`, a temporary env-gated log line added and removed
+for this investigation; sample kept at
+`build-release/verify-shots/hud-flush-2026-09-27/digit-ink-22px.txt`) showed
+the theory itself was wrong — `'0'` is not reliably the extreme digit on
+every axis:
+
+| size 22px, floor 47 (Fixed, no outline) | left | top | right | bottom |
+|---|---|---|---|---|
+| `0` (the old reference) | 1 | **6** | 10 | 18 |
+| `2` / `6` / `8` / `9` | 0–1 | **5** | 10 | 18–19 |
+
+`'0'`'s `top=6` sits in the *shallow* group (matching `1/3/4/5/7`); `2`, `6`,
+`8` and `9` overshoot one row further (`top=5`), and `8`/`9` also overshoot
+the *bottom* by one row (`19` vs `'0'`'s `18`). A reading containing one of
+those digits on the outermost side therefore didn't just occasionally sit a
+pixel further **in** than configured (the accepted, documented trade-off) —
+at sizes where the actual digit overshoots `'0'`, it poked a pixel **past**
+the margin instead, silently breaking this very section's own "never pokes
+outside" claim. Reproduced directly: `fps_display_force 1234` at font size
+22px, top-left, margin 24, measured `top=23` (one pixel *closer* to the edge
+than configured) before this fix — `'2'`'s own `top=5` overshooting the
+`'0'`-run reference's `top=6` by exactly the row this predicts.
+
+**The fix.** `MeasureFpsModule()` now measures `inkActual` off `L.szNum` (the
+real digits) instead of `inkPinned` off `szPadded`, for the horizontal and
+vertical bearings alike; the right/bottom bearings are taken relative to
+`unpaddedSize` (that same real string's own advance box), not the wider/
+taller padded one, since that is the box the real ink actually sits inside.
+**The box-*width* pin is untouched** — `L.numSize` (what
+`ResolveAnchoredOrigin()` places, and what prevents the 1–3-digit box from
+resizing as the reading changes within one digit count) still measures
+`szPadded`; only the sub-pixel edge-hugging nudge changed, and that nudge
+was already a function of the real digits on the horizontal axis before
+this (`flTextOffsetX`, from `unpaddedSize`) — this brings the vertical axis,
+and the outline-geometry axis, in line with that existing precedent instead
+of leaving them on the disproven proxy.
+
+**What this costs, on purpose.** The edge-hugging nudge can now move by up
+to 1px when the specific digit sitting outermost on an axis crosses from one
+overshoot class to the other (e.g. a topmost `'1'` giving way to a `'6'`) —
+at most once per *displayed* value, so at most once a second in the default
+Smoothing update mode, and not distinguishable from the glide itself. This
+is the "reintroduces jitter" trade-off the 2026-09-09 write-up explicitly
+declined for exactly this reason; it is accepted here because the
+alternative — a fixed proxy — has now been shown to get the *direction* of
+its own error wrong often enough to matter, not just its magnitude.
+
+**Verified**, `fps_display_force`'d, margin 0, no outline unless noted, both
+corners of both axes, output 1280×720
+(`build-release/verify-shots/hud-flush-2026-09-27/`):
+
+| forced reading | sizes checked | result |
+|---|---|---|
+| `88` (round, self-referencing) | 12–48 step ~4, every 4px slider position | exact everywhere, before and after (this reading was never affected) |
+| `1234` (flat, margin 24, top-left) | 22 | **was** `top=23` (1px short); **now** `top=24` exact |
+| `14` (flat) | 12, 14, 16, 20, 22, 36, 48 | exact everywhere, all four corners, outline off |
+
+**One separate, narrower residual — not fixed here, not caused by this
+fix.** With the **outline on**, a handful of (font size, digit, axis)
+triples still land 1px off (e.g. `14` at font 14px, outline on: the right
+edge only, both top-right and bottom-right, `right=1` instead of `0`) —
+present identically before and after this change, so it is not a reference-
+digit mismatch (this fix makes the reference and the real digit the *same*
+string). It is consistent with the same *kind* of issue the 2026-09-14
+section above already fixed for the Fixed-mode floor (`kInkFloorFixed`,
+`47`) — a coverage-floor visibility check landing on the wrong side of an
+exact discrete boundary at specific sizes — just not (yet) covered for the
+outline floor (`kInkFloorOutline`, `16`)'s own overshoot phases. Flagged for
+a separate, narrower follow-up rather than folded into this fix, since it
+needs its own per-floor measurement the way *2026-09-14* did for Fixed mode,
+not a change to which string is measured.
 
 ## Warm-up: `FpsDisplay_WarmUp()`
 
