@@ -384,6 +384,59 @@ namespace gamescope::ui
 		};
 
 		constexpr size_t kIconN = sizeof( kIcons ) / sizeof( kIcons[ 0 ] );
+
+		// =================================================================
+		//  RAIL GROUPS (I2, 2026-09-27) -- the accordion's icon-rail buttons
+		// =================================================================
+		// Four glyphs, one per RailGroup (Display/Misc/Settings/Other, in
+		// that order -- see the switch in IconForRailGroup() below, which is
+		// what actually binds each entry to its group rather than array
+		// position). Freehand, like every icon added after index.html: there
+		// is no group tab in the mockup to transcribe, because the mockup
+		// predates the accordion entirely.
+		//
+		// Kept in a SEPARATE table from kIcons[] above -- these are group
+		// buttons, not areas, and mixing them in would break
+		// test_overlay_ui.cpp's "every registered area has exactly one
+		// icon, IconCount() == the area count" bijection.
+		//
+		// Each is a new silhouette, distinct from every glyph in kIcons[]
+		// and from the other three here:
+		//   Display  a monitor on a stand -- one rect with a neck and base
+		//            below it, unlike display.resolution's two CONCENTRIC
+		//            rects (nothing else in the set draws a rect with legs).
+		//   Misc     three same-size dots in a row -- the plain "more/grab
+		//            bag" mark; no other glyph in either table repeats one
+		//            shape three times at one size.
+		//   Settings a ring with four straight spokes -- a dial/gear read,
+		//            distinct from system.general's SQUARE chip with pins
+		//            radiating off its corners.
+		//   Other    a two-compartment box with a pull tab -- an archive/
+		//            drawer read for "everything left over" (Log, About),
+		//            distinct from setup.profiles' two OFFSET full rects.
+		constexpr Icon kGroupIcons[] = {
+			{ "railgroup.display", 3, {
+				Rect( 3.5f, 4.5f, 20.5f, 15.5f ),
+				Line( { 12.0f, 15.5f }, { 12.0f, 18.5f } ),
+				Line( { 7.5f, 19.5f }, { 16.5f, 19.5f } ) } },
+
+			{ "railgroup.misc", 3, {
+				Circ( 6.5f, 12.0f, 2.0f ),
+				Circ( 12.0f, 12.0f, 2.0f ),
+				Circ( 17.5f, 12.0f, 2.0f ) } },
+
+			{ "railgroup.settings", 5, {
+				Circ( 12.0f, 12.0f, 4.0f ),
+				Line( { 12.0f, 2.5f }, { 12.0f, 6.0f } ),
+				Line( { 12.0f, 18.0f }, { 12.0f, 21.5f } ),
+				Line( { 2.5f, 12.0f }, { 6.0f, 12.0f } ),
+				Line( { 18.0f, 12.0f }, { 21.5f, 12.0f } ) } },
+
+			{ "railgroup.other", 3, {
+				Rect( 3.5f, 7.5f, 20.5f, 19.5f ),
+				Line( { 3.5f, 12.5f }, { 20.5f, 12.5f } ),
+				Bar( 10.0f, 11.5f, 14.0f, 13.5f ) } },
+		};
 	}
 
 	const Icon *IconSet()   { return kIcons; }
@@ -396,6 +449,19 @@ namespace gamescope::ui
 		for ( size_t i = 0; i < kIconN; ++i )
 			if ( std::strcmp( kIcons[ i ].pszKey, pszAreaId ) == 0 )
 				return &kIcons[ i ];
+		return nullptr;
+	}
+
+	const Icon *IconForRailGroup( RailGroup eGroup )
+	{
+		switch ( eGroup )
+		{
+			case RailGroup::Display:  return &kGroupIcons[ 0 ];
+			case RailGroup::Misc:     return &kGroupIcons[ 1 ];
+			case RailGroup::Settings: return &kGroupIcons[ 2 ];
+			case RailGroup::Other:    return &kGroupIcons[ 3 ];
+			case RailGroup::Nothing:     return nullptr;
+		}
 		return nullptr;
 	}
 }

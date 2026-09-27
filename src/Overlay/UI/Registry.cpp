@@ -891,6 +891,10 @@ namespace gamescope::ui
 			case RailGroup::Misc:     return "MISC";
 			case RailGroup::Settings: return "SETTINGS";
 			case RailGroup::Other:    return "OTHER";
+			// RailGroupForId() never returns this -- it is the accordion's
+			// own "every group closed" value (see that section below) --
+			// but the switch stays exhaustive rather than falling through.
+			case RailGroup::Nothing:     return "";
 		}
 		return "";
 	}
@@ -932,6 +936,52 @@ namespace gamescope::ui
 			if ( sAreaId == kRailOrder[ i ].pszAreaId )
 				return kRailOrder[ i ].eGroup;
 		return RailGroup::Other;   // an area not yet placed in the table
+	}
+
+	// =========================================================================
+	//  The rail accordion -- see the declarations' own comment in Registry.h
+	// =========================================================================
+	std::vector<const Area *> VisibleRailAreas( const std::vector<const Area *> &railAreas,
+	                                             RailGroup eOpen )
+	{
+		std::vector<const Area *> out;
+		for ( const Area *pArea : railAreas )
+			if ( pArea && RailGroupFor( *pArea ) == eOpen )
+				out.push_back( pArea );
+		return out;
+	}
+
+	float RailContentHeightPx( const std::vector<const Area *> &railAreas, RailGroup eOpen )
+	{
+		using namespace railmetrics;
+
+		float     y          = kPad;
+		RailGroup eLastGroup = RailGroup::Nothing;
+		bool      bFirst     = true;
+
+		for ( const Area *pArea : railAreas )
+		{
+			if ( !pArea )
+				continue;
+			const RailGroup eGroup = RailGroupFor( *pArea );
+
+			// A header is drawn on every group change -- ALWAYS, regardless
+			// of which group (if any) is open, exactly the way DrawRail()'s
+			// own Walk() decides where to call fnSection().
+			if ( bFirst || eGroup != eLastGroup )
+			{
+				eLastGroup = eGroup;
+				bFirst     = false;
+				y += kHeaderH + kHeaderGap;
+			}
+
+			// Only the OPEN group's rows take height -- a collapsed group's
+			// areas are not drawn and take no height (D2/D6).
+			if ( eGroup == eOpen )
+				y += kItemH;
+		}
+
+		return y + kPad;
 	}
 
 	bool Registry::ClaimId( const std::string &sId )
