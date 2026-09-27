@@ -17,6 +17,7 @@
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
+#include "Overlay/NullBinds.h"
 #include "log.hpp"
 
 using namespace gamescope::config;
@@ -1486,6 +1487,53 @@ TEST_CASE( "zoom: every field round-trips, and an absent section is the defaults
     REQUIRE( Settings{}.zoom.consume_button == false );
     REQUIRE( Settings{}.zoom.scroll_adjust == false );
     REQUIRE( Settings{}.zoom.sharpen == 0.0f );
+}
+
+// ---------------------------------------------------------------------
+// Null binds (2026-09-27, superdoc/features/null-binds.md): the same shape
+// as the autoclicker's section above -- per-layer, under "null_binds",
+// defaults (off) when absent.
+// ---------------------------------------------------------------------
+
+TEST_CASE( "null_binds: every field round-trips, and an absent section is off by default", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( Settings{}.null_binds.enabled == false );
+    REQUIRE( Settings{}.null_binds.pair_ad == true );
+    REQUIRE( Settings{}.null_binds.pair_ws == true );
+    REQUIRE( Settings{}.null_binds.delay_ms == 5 );
+    REQUIRE( Settings{}.null_binds.jitter_ms == 3 );
+
+    Settings s{};
+    s.null_binds.enabled = true;
+    s.null_binds.pair_ad = false;
+    s.null_binds.pair_ws = true;
+    s.null_binds.delay_ms = 20;
+    s.null_binds.jitter_ms = 7;
+    REQUIRE( SaveSections( s ) );
+
+    const Settings loaded = LoadSections();
+    REQUIRE( loaded.null_binds.enabled == true );
+    REQUIRE( loaded.null_binds.pair_ad == false );
+    REQUIRE( loaded.null_binds.pair_ws == true );
+    REQUIRE( loaded.null_binds.delay_ms == 20 );
+    REQUIRE( loaded.null_binds.jitter_ms == 7 );
+}
+
+TEST_CASE( "null_binds: delay_ms and jitter_ms are clamped to their sliders' ranges on load", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.null_binds.enabled = true;
+    s.null_binds.delay_ms = 999;   // above gamescope::nullbinds::kMaxDelayMs (50)
+    s.null_binds.jitter_ms = -5;   // below gamescope::nullbinds::kMinJitterMs (0)
+    REQUIRE( SaveSections( s ) );
+
+    const Settings loaded = LoadSections();
+    REQUIRE( loaded.null_binds.delay_ms == gamescope::nullbinds::kMaxDelayMs );
+    REQUIRE( loaded.null_binds.jitter_ms == gamescope::nullbinds::kMinJitterMs );
 }
 
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):

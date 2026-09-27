@@ -201,6 +201,7 @@ src = [
   'Overlay/Crosshair.cpp',
   'Overlay/Zoom.cpp',
   'Overlay/Autoclicker.cpp',
+  'Overlay/NullBinds.cpp',
   'Overlay/EffectPreview.cpp',
   'Overlay/Notifications.cpp',
   'Overlay/PanelShaders.cpp',
