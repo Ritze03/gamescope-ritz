@@ -9,6 +9,17 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.10.1] – 2026-09-28
+
+### Added
+- **Crosshair: hide when cursor visible**: a new switch hides the crosshair whenever the
+  game shows a mouse cursor, such as in menus, and brings it back once the game hides
+  its cursor again.
+
+### Fixed
+- **HUD sits flush with the bottom edge**: at a 0 margin, a bottom-anchored FPS
+  number no longer leaves a one-pixel gap below it.
+
 ## [0.10.0] – 2026-09-27
 
 ### Added
@@ -46,8 +57,6 @@ The newest version below is the one this build reports.
 - **Mixer shows the detected stream's name**: while Stream is set to Automatic, the
   volume row is now titled after the stream it found instead of always reading "Game
   volume".
-- **HUD sits flush with the bottom edge**: at a 0 margin, a bottom-anchored FPS
-  number no longer leaves a one-pixel gap below it.
 
 ### Info
 - **Settings rail has six groups now**: Display, Overlay, Input, Misc, Settings and
