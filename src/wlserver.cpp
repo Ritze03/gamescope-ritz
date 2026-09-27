@@ -4072,14 +4072,38 @@ static bool wlserver_pointer_is_locked()
 }
 
 // The one place a wl_pointer.motion leaves for the client, so the
-// regression counters (wlserver_pointer_stats) see every one of them.
+// regression counters (wlserver_pointer_stats) see every one of them --
+// and, since 2026-09-27, the one place the Zoom's click remap needs to
+// touch: both wlserver_mousemotion() and wlserver_mousewarp() funnel
+// through here, so hooking this single site covers every real motion path
+// without duplicating the remap at each caller.
 static void wlserver_send_absolute_motion( uint32_t time )
 {
 	assert( wlserver_is_lock_held() );
 	wlserver.ulAbsoluteMotionsSent.fetch_add( 1, std::memory_order_relaxed );
-	if ( wlserver_pointer_is_locked() )
+	const bool bLocked = wlserver_pointer_is_locked();
+	if ( bLocked )
 		wlserver.ulAbsoluteMotionsSentLocked.fetch_add( 1, std::memory_order_relaxed );
-	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
+
+	// Zoom: "clicks land on what the projector shows" (superdoc/features/
+	// zoom.md). While the cursor is genuinely visible and sits inside the
+	// projector's shape, the GAME gets the point the projector is showing
+	// under the drawn arrow instead of the arrow's own screen position --
+	// centre + (p-centre)/liveFactor. Only this outgoing copy is touched:
+	// wlserver.mouse_surface_cursorx/y (what the drawn cursor and every
+	// relative-motion delta read) are never written back. "Visible" is
+	// deliberately `bCursorHasImage && !locked`, not
+	// `wlserver.bCursorHidden` -- that flag also covers gamescope's own
+	// idle auto-hide and would wrongly suppress the remap over an
+	// idle-but-visible menu cursor (the same distinction
+	// wlserver_mousemotion()'s own `bCursorHidden` local already draws for
+	// the "Match mouse speed" feature, just inlined here instead of named,
+	// since this is the only place that needs it).
+	double flGameX = wlserver.mouse_surface_cursorx;
+	double flGameY = wlserver.mouse_surface_cursory;
+	gamescope::Zoom_MapPointerForGame( flGameX, flGameY, wlserver.bCursorHasImage && !bLocked );
+
+	wlr_seat_pointer_notify_motion( wlserver.wlr.seat, time, flGameX, flGameY );
 	wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 }
 

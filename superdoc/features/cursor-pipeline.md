@@ -33,6 +33,20 @@ added on top of that history rather than replacing it.
 one place that picks between (2) and (3) for the overlay; **the invariant matters
 more than which one wins: exactly one cursor is visible, and never zero.**
 
+**Under the Zoom (`Overlay/Zoom.{h,cpp}`), the drawn cursor and the position the
+GAME receives can legitimately disagree, by design (2026-09-27).** While the
+cursor is visible and sits inside the zoom's projector, `wlserver.cpp`'s
+`wlserver_send_absolute_motion()` sends the game a remapped point -- the spot the
+magnified picture is showing under the arrow -- while the arrow drawn by source
+(1) above keeps moving at plain, unmapped, 1:1 speed. This is the one place in
+the whole pipeline where "what's drawn" and "what the client was told" are
+deliberately different values, rather than the same value read from two places.
+See `superdoc/features/zoom.md`'s "Clicks land on what the projector shows" for
+the user's report, the formula, and why (never touching
+`wlserver.mouse_surface_cursorx/y` itself, so this invariant's "exactly one
+cursor is visible" still holds -- the disagreement is only about where a CLICK
+lands, never about what is drawn or how many cursors there are).
+
 ## Why "the default cursor while force-grab is on" isn't a substitution
 
 `force_grab_cursor` (`g_bForceRelativeMouse`) does **not** swap in a different cursor

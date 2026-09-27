@@ -58,6 +58,24 @@ namespace gamescope
 		// moved.
 		std::atomic<float> s_flLiveFactor{ 1.0f };
 
+		// The projector's shape and placement, in the game SURFACE's own
+		// coordinate space -- mirrored every frame by Zoom_FillRequest()
+		// (steamcompmgr thread) for Zoom_MapPointerForGame() (wlserver
+		// thread) to read. See Zoom.h's ZoomRemapGeometry for what each
+		// field means and superdoc/features/zoom.md's "Clicks land on what
+		// the projector shows" for why surface space and not output pixels.
+		// s_bGeomValid is false whenever no projector is actually being
+		// drawn this frame (zoom off, no base layer yet, or a base the
+		// zoom itself would skip -- HDR, YCbCr, PASSTHRU -- mirroring
+		// rendervulkan.cpp's own THE ZOOM gate so the remap never acts on
+		// geometry nothing is drawn to justify).
+		std::atomic<bool>  s_bGeomValid{ false };
+		std::atomic<bool>  s_bGeomCircle{ false };
+		std::atomic<double> s_flGeomCenterX{ 0.0 };
+		std::atomic<double> s_flGeomCenterY{ 0.0 };
+		std::atomic<double> s_flGeomHalfW{ 0.0 };
+		std::atomic<double> s_flGeomHalfH{ 0.0 };
+
 		void Mirror()
 		{
 			const config::ZoomSettings &z = s_Settings.zoom;
@@ -145,6 +163,25 @@ namespace gamescope
 		return 1.0f / std::max( 1.0f, s_flLiveFactor.load( std::memory_order_relaxed ) );
 	}
 
+	void Zoom_MapPointerForGame( double &x, double &y, bool bCursorVisible )
+	{
+		// Cheap early-out for the overwhelmingly common case (zoom off, or
+		// on but nothing drawn this frame): one relaxed atomic load, no
+		// further reads. Mirrors the same short-circuit shape
+		// Zoom_MouseScale() already uses.
+		if ( !bCursorVisible || !s_bGeomValid.load( std::memory_order_relaxed ) )
+			return;
+		ZoomRemapGeometry geo;
+		geo.bVisible = true;
+		geo.shape = s_bGeomCircle.load( std::memory_order_relaxed ) ? ZoomShape::Circle : ZoomShape::Box;
+		geo.flCenterX = s_flGeomCenterX.load( std::memory_order_relaxed );
+		geo.flCenterY = s_flGeomCenterY.load( std::memory_order_relaxed );
+		geo.flHalfW = s_flGeomHalfW.load( std::memory_order_relaxed );
+		geo.flHalfH = s_flGeomHalfH.load( std::memory_order_relaxed );
+		geo.flFactor = (double)s_flLiveFactor.load( std::memory_order_relaxed );
+		ZoomRemapPoint( x, y, bCursorVisible, geo );
+	}
+
 	bool Zoom_ConsumesButton()
 	{
 		return s_bEnabled.load( std::memory_order_relaxed )
@@ -216,6 +253,7 @@ namespace gamescope
 		if ( !bWanted && s_flFadeProgress <= 0.0f )
 		{
 			s_flLiveFactor.store( 1.0f, std::memory_order_relaxed );
+			s_bGeomValid.store( false, std::memory_order_relaxed );
 			return;
 		}
 		// Still moving: the game may have no frame of its own coming (a
@@ -278,6 +316,45 @@ namespace gamescope
 		// the nested backends' direct scanout both take it out. Same flag,
 		// same reason as the HUD's Inverted mode (rendervulkan.hpp).
 		pFrameInfo->bNeedsDestinationBlend = true;
+
+		// Mirror the projector's geometry in SURFACE space for
+		// Zoom_MapPointerForGame() (the wlserver thread), so a click lands
+		// on what the projector shows -- superdoc/features/zoom.md's
+		// "Clicks land on what the projector shows". Gated the same way
+		// rendervulkan.cpp's THE ZOOM block gates actually drawing one
+		// (SDR, non-YCbCr base; g_uBaseLayerSourceWidth/Height known) --
+		// duplicated here rather than read back from there because that
+		// block runs later, in vulkan_composite(), by which point this
+		// function has already returned; keep the two gates in sync if
+		// either one changes. req.flWidth/flHeight are already the exact
+		// on-screen-rect FRACTION rendervulkan.cpp turns into pixels, so
+		// applying that same fraction to the game's own SURFACE size
+		// (g_uBaseLayerSourceWidth/Height) gives the shape's surface-space
+		// half-extents directly -- no separate "output pixels per surface
+		// pixel" factor needed, and no risk of it disagreeing with the
+		// pixel geometry's own rounding/clamping (that clamp only ever
+		// bites at extreme sizes rendervulkan.cpp also clamps to
+		// [4, output], irrelevant at the surface-space precision a click
+		// needs).
+		bool bGeomValid = false;
+		if ( pFrameInfo->layers.count() > 0 && g_uBaseLayerSourceWidth > 0 && g_uBaseLayerSourceHeight > 0 )
+		{
+			const FrameInfo_t::Layer_t &base = pFrameInfo->layers.get( 0 );
+			const bool bSdr = base.tex
+				&& !ColorspaceIsHDR( base.colorspace )
+				&& base.colorspace != GAMESCOPE_APP_TEXTURE_COLORSPACE_PASSTHRU
+				&& !base.isYcbcr();
+			if ( bSdr )
+			{
+				s_flGeomCenterX.store( (double)g_uBaseLayerSourceWidth * 0.5, std::memory_order_relaxed );
+				s_flGeomCenterY.store( (double)g_uBaseLayerSourceHeight * 0.5, std::memory_order_relaxed );
+				s_flGeomHalfW.store( (double)req.flWidth * (double)g_uBaseLayerSourceWidth * 0.5, std::memory_order_relaxed );
+				s_flGeomHalfH.store( (double)req.flHeight * (double)g_uBaseLayerSourceHeight * 0.5, std::memory_order_relaxed );
+				s_bGeomCircle.store( req.bCircle, std::memory_order_relaxed );
+				bGeomValid = true;
+			}
+		}
+		s_bGeomValid.store( bGeomValid, std::memory_order_relaxed );
 	}
 
 	void Zoom_RegisterArea( ui::Registry &reg )
