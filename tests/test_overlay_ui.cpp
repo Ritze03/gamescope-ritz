@@ -2236,6 +2236,115 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 }
 
 // =========================================================================
+//  The rail accordion's row-reveal animation -- I5 (2026-09-27)
+// =========================================================================
+// The user, on I3's own result: "the spacing towards the last shown module
+// and the next category is zero, but it should get half of the spacing
+// thats on the top (top decreases, bottom increases)."
+TEST_CASE( "rail accordion: RowVisibleHeightPx clips and gates a growing/shrinking row block", "[overlay_ui]" )
+{
+	const float flItemH = ui::railmetrics::kItemH;   // 40
+
+	// A block shorter than one row: nothing of row 0 is visible yet, and a
+	// later row (fully past the block) is not visible at all.
+	REQUIRE( ui::RowVisibleHeightPx( 0.0f, 0, flItemH ) == 0.0f );
+	REQUIRE( ui::RowVisibleHeightPx( 15.0f, 0, flItemH ) == 15.0f );      // row 0, mid-reveal
+	REQUIRE( ui::RowVisibleHeightPx( 15.0f, 1, flItemH ) == 0.0f );       // row 1, not reached yet
+
+	// A block exactly two rows tall: both fully visible, a third is not.
+	REQUIRE( ui::RowVisibleHeightPx( flItemH * 2.0f, 0, flItemH ) == flItemH );
+	REQUIRE( ui::RowVisibleHeightPx( flItemH * 2.0f, 1, flItemH ) == flItemH );
+	REQUIRE( ui::RowVisibleHeightPx( flItemH * 2.0f, 2, flItemH ) == 0.0f );
+
+	// A block two-and-a-half rows tall: row 2 is the PARTIAL one, clipped
+	// to exactly the remainder -- this is the "hit-testing only for fully
+	// visible rows" line DrawRail() draws: bFullyVisible is this value
+	// compared against flItemH, and only a whole row passes.
+	REQUIRE_THAT( ui::RowVisibleHeightPx( flItemH * 2.5f, 2, flItemH ),
+	              Catch::Matchers::WithinAbs( flItemH * 0.5f, 1e-4f ) );
+
+	// Clamped, not extrapolated: a block "taller" than a row's own share
+	// still reports at most flItemH for that row (RailContentHeightPx()'s
+	// own rest-state call always passes an EXACT `count * kItemH`, so this
+	// only matters for a caller that passes something looser).
+	REQUIRE( ui::RowVisibleHeightPx( flItemH * 99.0f, 0, flItemH ) == flItemH );
+
+	// A negative row index (should never happen -- Walk()'s own nRowIndex
+	// starts at 0 and only increments) reports not-visible rather than
+	// underflowing the subtraction.
+	REQUIRE( ui::RowVisibleHeightPx( flItemH, -1, flItemH ) == 0.0f );
+}
+
+TEST_CASE( "rail accordion: I5 spacing splits the open group's gap top/bottom, total unchanged", "[overlay_ui]" )
+{
+	using namespace ui::railmetrics;
+	using ui::RailGroup;
+
+	// A small synthetic rail: two areas in Display, one in Misc, one in
+	// Settings -- real ids (RailGroupForId() keys off them), a shape small
+	// enough to hand-derive the expected height from railmetrics'
+	// constants directly, alongside RailContentHeightPx()'s own answer.
+	ui::Registry reg;
+	reg.Add( "display.general",    "General",   ui::Section::Display );
+	reg.Add( "display.resolution", "Res",       ui::Section::Display );
+	reg.Add( "audio.mixer",        "Mixer",     ui::Section::System );
+	reg.Add( "setup.profiles",     "Profiles",  ui::Section::Setup );
+	const std::vector<const ui::Area *> railAreas = reg.RailAreas();
+	REQUIRE( railAreas.size() == 4 );
+
+	// Misc (1 area) open, with a group BEFORE it (Display, closed) and a
+	// group AFTER it (Settings, closed) -- the ordinary case, where the
+	// trailing half-gap I5 adds has a next header to be measured against.
+	// kPad + Display-header(kHeaderH+kHeaderGap, closed) +
+	// Misc-header(kHeaderH+kHeaderGapOpen) + Misc-rows(1*kItemH) +
+	// trailing-half-gap(kHeaderGapOpen) + Settings-header(kHeaderH+
+	// kHeaderGap, closed) + kPad.
+	const float flExpectedMiscOpen =
+		kPad
+		+ ( kHeaderH + kHeaderGap )
+		+ ( kHeaderH + kHeaderGapOpen )
+		+ 1.0f * kItemH
+		+ kHeaderGapOpen
+		+ ( kHeaderH + kHeaderGap )
+		+ kPad;
+	REQUIRE_THAT( ui::RailContentHeightPx( railAreas, RailGroup::Misc ),
+	              Catch::Matchers::WithinAbs( flExpectedMiscOpen, 1e-4f ) );
+
+	// Total stays the same as the OLD (pre-I5) formula would have given for
+	// this shape -- kHeaderGap above the first row, nothing below the
+	// last, uniformly -- "top decreases, bottom increases", not "shorter
+	// overall": (kHeaderH+kHeaderGap) x2 [Display, Settings, both closed,
+	// unaffected by I5] + (kHeaderH+kHeaderGap) [Misc's header, the OLD
+	// full gap] + 1*kItemH [Misc's rows] + kPad*2.
+	const float flOldFormulaMiscOpen =
+		kPad + ( kHeaderH + kHeaderGap ) + ( kHeaderH + kHeaderGap ) + 1.0f * kItemH
+		+ ( kHeaderH + kHeaderGap ) + kPad;
+	REQUIRE_THAT( flExpectedMiscOpen, Catch::Matchers::WithinAbs( flOldFormulaMiscOpen, 1e-4f ) );
+
+	// Settings (the LAST group in this synthetic table) open instead: there
+	// is no following header to spend the trailing half-gap against, so
+	// I5's own total is exactly kHeaderGapOpen SHORTER than the old
+	// formula -- "top decreases" with nothing on the far side left to
+	// "increase" against.
+	const float flExpectedSettingsOpen =
+		kPad
+		+ ( kHeaderH + kHeaderGap )        // Display, closed
+		+ ( kHeaderH + kHeaderGap )        // Misc, closed
+		+ ( kHeaderH + kHeaderGapOpen )    // Settings, open -- halved gap above its row
+		+ 1.0f * kItemH                    // Settings' one row -- no trailing gap, nothing follows
+		+ kPad;
+	REQUIRE_THAT( ui::RailContentHeightPx( railAreas, RailGroup::Settings ),
+	              Catch::Matchers::WithinAbs( flExpectedSettingsOpen, 1e-4f ) );
+	REQUIRE_THAT( flExpectedSettingsOpen,
+	              Catch::Matchers::WithinAbs( flOldFormulaMiscOpen - kHeaderGapOpen, 1e-4f ) );
+
+	// And kHeaderGapOpen really is half of kHeaderGap -- the "half of the
+	// spacing thats on the top" the user asked for, pinned so a future
+	// edit to either constant cannot silently drift the two apart.
+	REQUIRE_THAT( kHeaderGapOpen, Catch::Matchers::WithinAbs( kHeaderGap * 0.5f, 1e-6f ) );
+}
+
+// =========================================================================
 //  Slider handle width -- requests-2026-09-06.md item 4
 // =========================================================================
 // "Outline Width", "Dot > Size" and "Line > Width" all drew a grab far
