@@ -37,6 +37,21 @@ void main() {
 
     float finalRevAlpha = 1.0f;
 
+    // The FPS HUD's single-sample Inverted colour mode (alphamode.h's
+    // g_hudInvertColor) -- set BEFORE this loop, which is what blends the
+    // HUD's own layer in this shader: c_blur_layer_count..c_layerCount runs
+    // ahead of layer 0 being folded in below, so the old true-per-pixel
+    // invert read pure black here (see g_hudInvertColor's own "why" for
+    // where that came from). One plain tap of the pre-blurred proxy
+    // texture, matching the "finalRevAlpha < 0.95" branch below -- the one
+    // fixed point does not need this shader's own per-pixel blurred/raw
+    // choice, which exists to decide THIS pixel's blend, not to pick a
+    // colour to sample.
+    if (c_layerCount > 0 && u_hasInvertSample != 0u) {
+        vec3 invertSample = clamp(textureLod(s_samplers[VKR_BLUR_EXTRA_SLOT], u_invertSamplePos, 0.0f).rgb, 0.0f, 1.0f);
+        g_hudInvertColor = InvertEncodedSample(invertSample);
+    }
+
     for (int i = c_blur_layer_count; i < c_layerCount; i++) {
         vec4 layerColor = sampleLayer(i, uv);
         float opacity = u_opacity[i];

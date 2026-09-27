@@ -31,6 +31,14 @@ uniform layers_t {
     float u_itmTargetNits;
 
     uint u_rotation;
+
+    // The FPS HUD's single-sample Inverted colour mode (2026-09-27) -- see
+    // blit_push_data.h's own comment; identical fields, duplicated here
+    // because this file declares its own layers_t rather than including
+    // that header (its u_scale/u_offset arrays are shifted by one, see
+    // sampleLayer() below).
+    vec2 u_invertSamplePos;
+    uint u_hasInvertSample;
 };
 
 #include "composite.h"
@@ -97,8 +105,46 @@ void rcasComposite(uvec2 pos)
         compositing_debug(pos, u_rotation);
 }
 
+// The FPS HUD's single-sample Inverted colour mode (alphamode.h's
+// g_hudInvertColor). Layer 0 under RCAS has no scale/offset entry in
+// u_scale/u_offset (they're shifted down one, see sampleLayer() above --
+// RCAS only ever runs 1:1, positioned by u_layer0Offset alone), so this
+// mirrors rcasComposite()'s own non-RCAS layer-0 block (degamma, ctm,
+// colour management, opacity) at the fixed point instead of the current
+// pixel, but with a plain texelFetch in place of FsrRcasF's sharpen -- one
+// tap, not a second RCAS filter re-run for a value every invocation would
+// compute identically anyway. Called once from main(), not from inside
+// rcasComposite() (which runs four times per invocation for the same
+// pixel group), so it isn't redone for nothing.
+void SetHudInvertSample()
+{
+    if (c_layerCount == 0 || u_hasInvertSample == 0u)
+        return;
+
+    ivec2 samplePix = ivec2(u_invertSamplePos) + ivec2(u_layer0Offset);
+    ivec2 layer0Extent = ivec2(textureSize(s_samplers[0], 0));
+    if (any(lessThan(samplePix, ivec2(0))) || any(greaterThanEqual(samplePix, layer0Extent)))
+        return;
+
+    vec3 raw = texelFetch(s_samplers[0], samplePix, 0).rgb;
+    uint colorspace = get_layer_colorspace(0);
+    if (colorspace == colorspace_linear)
+    {
+        // Same substitution rcasComposite() makes: no sRGB view for FSR.
+        colorspace = colorspace_sRGB;
+    }
+    raw = colorspace_plane_degamma_tf(raw, colorspace);
+    raw = (vec4(raw, 1.0f) * u_ctm[0]).rgb;
+    raw = apply_layer_color_mgmt(raw, 0, colorspace);
+    raw *= u_opacity[0];
+
+    g_hudInvertColor = InvertEncodedSample(clamp(raw, 0.0f, 1.0f));
+}
+
 void main()
 {
+    SetHudInvertSample();
+
     // AMD recommends to use this swizzle and to process 4 pixel per invocation
     // for better cache utilisation
     uvec2 pos = ARmp8x8(gl_LocalInvocationID.x) + uvec2(gl_WorkGroupID.x << 4u, gl_WorkGroupID.y << 4u);

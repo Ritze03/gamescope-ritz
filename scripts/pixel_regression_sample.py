@@ -47,9 +47,11 @@ def chebyshev(a, b):
 
 def luma(c):
     # Rec.709 weights on the encoded (sRGB 8-bit) channel values -- an
-    # approximation of encoded Y', matching the quantity
-    # src/shaders/alphamode.h's contrast guard judges "too close" on. See
-    # superdoc/features/fps-display.md's "Text colour: Fixed vs. Inverted".
+    # approximation of encoded Y'. Used by cmd_digit()'s reported "gap" for
+    # a human reading the output; no check asserts a minimum any more (the
+    # 2026-09-05 contrast guard this once measured for was retired
+    # 2026-09-27 along with the per-pixel invert it belonged to -- see
+    # superdoc/features/fps-display.md's "Text colour: Fixed vs. Inverted").
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 
 
